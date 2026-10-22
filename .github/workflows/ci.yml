@@ -23,6 +23,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: vet the other systems
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          GOOS=darwin go vet ./...
+          GOOS=windows go vet ./...
       - name: the suite (tests/green.sh)
         shell: bash
         run: tests/green.sh
@@ -47,8 +53,10 @@ jobs:
           sudo apt-get install -y bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: probe the sandbox first
-        # Fails the job unless the hive runs a sandboxed command through bwrap here, so the
-        # suite below can't go green on bare or on the build's own namespaces.
+        # Fails the job unless the hive runs a sandboxed command through bwrap here (Select runs
+        # the sandbox's Check, which forks one), so the suite below can't go green on bare or on
+        # the build's own namespaces.
+        shell: bash
         run: |
           go build -o "$RUNNER_TEMP/hive" ./cmd/hive
           "$RUNNER_TEMP/hive" sandbox-probe | grep -x "ok bubblewrap"
