@@ -41,6 +41,23 @@ type Message struct {
 	At     time.Time `json:"at"`
 }
 
+// File is an attachment the person pasted or dropped into a message.
+type File struct {
+	Name string `json:"name"`
+	Data []byte `json:"data"`
+}
+
+// MaxFile caps one attachment, so a stray drop can't flood a run's dir.
+const MaxFile = 10 << 20
+
+// TooBig says why an attachment of n bytes can't go, or nil if it can.
+func TooBig(name string, n int64) error {
+	if n <= MaxFile {
+		return nil
+	}
+	return fmt.Errorf("%s is %.1f MB; an attachment can be at most %d MB", name, float64(n)/(1<<20), MaxFile>>20)
+}
+
 // Module holds chats.
 type Module struct {
 	C      *core.Core
@@ -143,10 +160,20 @@ func (m *Module) add(msg Message) Message {
 }
 
 // Post is the person writing in a chat; it reaches the chat's lead or agent.
-func (m *Module) Post(chatID, thread, text string) (Message, error) {
+// Files go into the run's own dir ($HIVE_RUN/attach), and the prompt names
+// their paths: the agent reads them with its own tools, and Claude's Read
+// shows an image as an image.
+func (m *Module) Post(chatID, thread, text string, files ...File) (Message, error) {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(files) == 0 {
 		return Message{}, fmt.Errorf("empty message")
+	}
+	shown := text
+	for _, f := range files {
+		if err := TooBig(f.Name, int64(len(f.Data))); err != nil {
+			return Message{}, err
+		}
+		shown += "\n📎 " + filepath.Base(f.Name)
 	}
 	m.mu.Lock()
 	ch := m.chats[chatID]
@@ -161,20 +188,44 @@ func (m *Module) Post(chatID, thread, text string) (Message, error) {
 			return Message{}, core.ErrNotFound
 		}
 	}
-	msg := m.add(Message{Chat: chatID, Thread: thread, From: "person", Name: "you", Text: text})
+	msg := m.add(Message{Chat: chatID, Thread: thread, From: "person", Name: "you", Text: strings.TrimSpace(shown)})
 	switch ch.Kind {
 	case "agent":
-		if err := m.C.Runs.Send(ch.Lead, "[the person, in your chat] "+text); err != nil {
+		note, err := m.attach(ch.Lead, files)
+		if err == nil {
+			err = m.C.Runs.Send(ch.Lead, "[the person, in your chat] "+text+note)
+		}
+		if err != nil {
 			return msg, err
 		}
 	default:
 		m.syncFor(ch)
 		prompt := fmt.Sprintf("[chat %s · thread %s · %s] Person: %s", chatID, msg.Thread, time.Now().Format("Mon 15:04"), text)
-		if err := m.deliverToLead(ch, prompt); err != nil {
+		if err := m.deliverToLead(ch, prompt, files...); err != nil {
 			return msg, err
 		}
 	}
 	return msg, nil
+}
+
+// attach writes files into a run's dir and returns the note naming them.
+func (m *Module) attach(run string, files []File) (string, error) {
+	if len(files) == 0 {
+		return "", nil
+	}
+	dir := filepath.Join(m.C.WS.RunRO(run), "attach")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	note := "\n[attached; open each with your Read tool, which shows images as images:"
+	for i, f := range files {
+		name := fmt.Sprintf("%s-%d-%s", core.NewID(), i, filepath.Base(f.Name))
+		if err := os.WriteFile(filepath.Join(dir, name), f.Data, 0o644); err != nil {
+			return "", err
+		}
+		note += "\n" + m.C.Runs.RunPath(run) + "/attach/" + name
+	}
+	return note + "]", nil
 }
 
 // syncWait bounds the sync that runs before a person's post reaches its lead.
@@ -214,7 +265,8 @@ func (m *Module) syncFor(ch *Chat) {
 // current ($HIVE_PROJECTS). An isolated project's lead can't see that, so it
 // works in a checkout of its own, and before each message its run dir gets
 // main.bundle, the clone's tip, to fetch: host git never runs in its checkout.
-func (m *Module) deliverToLead(ch *Chat, text string) error {
+// Files go in the lead's run dir once its id is known.
+func (m *Module) deliverToLead(ch *Chat, text string, files ...File) error {
 	var p core.Project
 	if ch.Kind == "project" {
 		var ok bool
@@ -226,10 +278,19 @@ func (m *Module) deliverToLead(ch *Chat, text string) error {
 	if ch.Lead != "" {
 		if r, ok := m.C.Runs.Get(ch.Lead); ok && (!r.Terminal()) {
 			bundle(r.ID)
-			return m.C.Runs.Send(r.ID, text)
+			note, err := m.attach(r.ID, files)
+			if err != nil {
+				return err
+			}
+			return m.C.Runs.Send(r.ID, text+note)
 		}
 	}
 	id := "lead-" + strings.NewReplacer(":", "-").Replace(ch.ID) + "-" + core.NewID()[14:]
+	note, err := m.attach(id, files)
+	if err != nil {
+		return err
+	}
+	text += note
 	name, project := "lead", ""
 	dir := filepath.Join(m.C.WS.Hive(), "leads", "main")
 	if ch.Kind == "project" {

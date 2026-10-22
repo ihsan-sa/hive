@@ -281,7 +281,11 @@ func (m *model) viewChats() []string {
 			target = "reply"
 		}
 		c, _ := m.currentChat()
-		out = append(out, stDim.Render(fmt.Sprintf("  to %s · %s", c.Title, target)), m.input.View())
+		chips := ""
+		for _, f := range m.files {
+			chips += stDim.Render(" · ") + stAccent.Render("📎 "+f.Name)
+		}
+		out = append(out, stDim.Render(fmt.Sprintf("  to %s · %s", c.Title, target))+chips, m.input.View())
 	}
 	return out
 }

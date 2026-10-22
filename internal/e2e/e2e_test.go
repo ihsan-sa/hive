@@ -8,9 +8,14 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -745,4 +750,47 @@ func TestLiveTribunal(t *testing.T) {
 	if panels == 0 {
 		t.Error("no tribunal convened")
 	}
+}
+
+// redSquare is a small PNG for the attachment tests.
+func redSquare() []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	draw.Draw(img, img.Bounds(), &image.Uniform{color.RGBA{255, 0, 0, 255}}, image.Point{}, draw.Src)
+	var b bytes.Buffer
+	png.Encode(&b, img)
+	return b.Bytes()
+}
+
+// TestChatAttachment: a pasted image and a dropped file reach the lead as
+// files in its run dir, named in its prompt, and it opens both.
+func TestChatAttachment(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	files := []chat.File{{Name: "shot.png", Data: redSquare()}, {Name: "notes.txt", Data: []byte("hello from a file\n")}}
+	var sent chat.Message
+	h.post("/api/chat", map[string]any{"chat": "lead", "text": "what are these?", "files": files}, &sent)
+	if !strings.Contains(sent.Text, "📎 shot.png") || !strings.Contains(sent.Text, "📎 notes.txt") {
+		t.Fatalf("the message shows no attachments: %q", sent.Text)
+	}
+	h.wait("the lead to open both", 2*minute, h.replied("lead", "shot.png (image/png"))
+	h.wait("the lead to open the text", minute, h.replied("lead", "notes.txt (text/plain"))
+}
+
+// TestLiveAttachment is TestChatAttachment's host probe: run it with
+// HIVE_E2E_HARNESS=claude. A real lead is sent a red square and names its colour.
+func TestLiveAttachment(t *testing.T) {
+	if os.Getenv("HIVE_E2E_HARNESS") == "" {
+		t.Skip("set HIVE_E2E_HARNESS=claude to run real agents")
+	}
+	h := start(t)
+	h.post("/api/chat", map[string]any{"chat": "lead", "text": "What colour is the attached image? Answer in one word.", "files": []chat.File{{Name: "square.png", Data: redSquare()}}}, nil)
+	h.wait("the lead to name the colour", 15*minute, func(api.State) bool {
+		for _, m := range h.messages("lead") {
+			if m.From != "person" && strings.Contains(strings.ToLower(m.Text), "red") {
+				t.Logf("lead: %q", m.Text)
+				return true
+			}
+		}
+		return false
+	})
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
@@ -208,14 +209,17 @@ func (s *server) routes() http.Handler {
 	h("/api/state", func(*http.Request) (any, error) { return s.state(), nil })
 	h("/api/chat", func(r *http.Request) (any, error) {
 		if r.Method == http.MethodPost {
-			var b struct{ Chat, Thread, Text string }
+			var b struct {
+				Chat, Thread, Text string
+				Files              []chat.File
+			}
 			if err := decode(r, &b); err != nil {
 				return nil, err
 			}
 			if b.Chat == "" {
 				b.Chat = "lead"
 			}
-			return a.Chat.Post(b.Chat, b.Thread, b.Text)
+			return a.Chat.Post(b.Chat, b.Thread, b.Text, b.Files...)
 		}
 		return a.Chat.Messages(r.URL.Query().Get("id")), nil
 	})

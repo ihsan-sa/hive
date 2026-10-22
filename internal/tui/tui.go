@@ -77,7 +77,8 @@ type model struct {
 	msgs      map[string][]chat.Message
 	input     textinput.Model
 	composing bool
-	reply     string // thread being replied to; "" = new thread
+	files     []chat.File // attached to the message being written
+	reply     string      // thread being replied to; "" = new thread
 
 	// dashboard and lists
 	dashSel int
@@ -355,9 +356,21 @@ func (m *model) keyDetail(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "esc":
-		m.composing, m.editing = false, false
+		m.composing, m.editing, m.files = false, false, nil
 		m.input.Blur()
 		return m, nil
+	case "ctrl+v", "alt+v":
+		// As in Claude Code: an image on the clipboard attaches; otherwise
+		// ctrl+v pastes text as before.
+		if m.composing {
+			if f, err := clipboardImage(); err != errNoImage {
+				if err != nil {
+					return m, flash(err.Error())
+				}
+				m.files = append(m.files, f)
+				return m, nil
+			}
+		}
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		m.input.SetValue("")
@@ -367,23 +380,48 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.saveSetting(text)
 		}
 		m.composing = false
-		if text == "" {
+		files := m.files
+		m.files = nil
+		if text == "" && len(files) == 0 {
 			return m, nil
 		}
 		id := m.currentChatID()
 		reply := m.reply
 		return m, func() tea.Msg {
 			var msg chat.Message
-			if err := m.c.Do("POST", "/api/chat", map[string]string{"chat": id, "thread": reply, "text": text}, &msg); err != nil {
+			if err := m.c.Do("POST", "/api/chat", map[string]any{"chat": id, "thread": reply, "text": text, "files": files}, &msg); err != nil {
 				return flashMsg("error: " + err.Error())
 			}
 			return flashMsg("sent")
+		}
+	}
+	if m.composing && k.Paste {
+		// A drop arrives as a pasted path; an empty paste may be an image.
+		if len(k.Runes) == 0 {
+			f, err := clipboardImage()
+			if err != nil {
+				return m, flash(err.Error())
+			}
+			m.files = append(m.files, f)
+			return m, nil
+		}
+		if paths := pastedPaths(string(k.Runes)); paths != nil {
+			for _, p := range paths {
+				f, err := readAttachment(p)
+				if err != nil {
+					return m, flash("error: " + err.Error())
+				}
+				m.files = append(m.files, f)
+			}
+			return m, nil
 		}
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
 	return m, cmd
 }
+
+func flash(s string) tea.Cmd { return func() tea.Msg { return flashMsg(s) } }
 
 func (m *model) bodyHeight() int { return max(3, m.h-4) }
 
@@ -464,6 +502,9 @@ func (m *model) View() string {
 
 func (m *model) footer() string {
 	if m.composing || m.editing {
+		if m.composing {
+			return "enter send · esc cancel · drop a file or ctrl+v an image to attach"
+		}
 		return "enter send · esc cancel"
 	}
 	if len(m.stack) > 0 {

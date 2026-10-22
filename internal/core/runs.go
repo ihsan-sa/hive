@@ -641,6 +641,14 @@ func (rs *Runs) launch(r Run) {
 	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume})
 }
 
+// RunPath is where a run's agent sees its run dir ($HIVE_RUN).
+func (rs *Runs) RunPath(id string) string {
+	if sb, err := rs.sandbox(); err == nil && sb.Isolated() {
+		return "/hive/run"
+	}
+	return rs.ws.RunRO(id)
+}
+
 // sandboxSpec lays out what the agent sees.
 func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn int, resume bool, promptFile string) (sandbox.Spec, error) {
 	home := sandbox.Mount{Host: rs.ws.RunHome(r.ID), Inside: "/hive/home", RW: true}

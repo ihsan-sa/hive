@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,6 +143,18 @@ func lead(prompt string) (string, error) {
 }
 
 func leadAsk(ask string) (string, error) {
+	if i := strings.Index(ask, "[attached;"); i >= 0 {
+		// Like Claude's Read: the lead opens each file the note names.
+		var got []string
+		for _, p := range strings.Split(strings.TrimSuffix(strings.TrimSpace(ask[i:]), "]"), "\n")[1:] {
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return "", err
+			}
+			got = append(got, fmt.Sprintf("%s (%s, %d bytes)", filepath.Base(p), http.DetectContentType(data), len(data)))
+		}
+		return "I opened " + strings.Join(got, ", ") + ".", nil
+	}
 	if pm := projectRe.FindStringSubmatch(ask); pm != nil {
 		_, err := call("create_project", map[string]any{"name": pm[2], "isolated": pm[1] != "", "description": ask, "goals": ask}, 3*time.Minute)
 		if err != nil {
