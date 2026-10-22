@@ -586,8 +586,8 @@ func (Linux) Run(s Spec, timeout time.Duration) (int, error) {
 	if err != nil {
 		return -1, err
 	}
-	specPath := s.Stdout + ".sandbox.json"
-	if err := WriteSpec(specPath, s); err != nil {
+	specPath, err := writeTempSpec(s)
+	if err != nil {
 		return -1, err
 	}
 	return runSync([]string{self, "sandbox-exec", "--spec", specPath}, os.Environ(), "/", "", "", timeout)

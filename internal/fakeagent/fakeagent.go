@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:needpackage, FAKE:rmoutside <path>, FAKE:inject, and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:needpackage, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -199,8 +199,8 @@ func worker(all, prompt, system string) (string, error) {
 		_, err := call("finish", map[string]string{"status": "blocked", "account": "FAKE: blocked on purpose"}, time.Minute)
 		return "blocked", err
 	}
-	if strings.Contains(all, "FAKE:peek") {
-		_, err := call("finish", map[string]string{"status": "done", "account": "FAKE: peek " + peek()}, time.Minute)
+	if m := peekWarden.FindStringSubmatch(all); m != nil {
+		_, err := call("finish", map[string]string{"status": "done", "account": "FAKE: peek " + peek(m[1])}, time.Minute)
 		return "done", err
 	}
 	m := outsidePath.FindStringSubmatch(all)
@@ -256,9 +256,9 @@ func worker(all, prompt, system string) (string, error) {
 }
 
 // peek reads what the rest of the Hive left in $HIVE_STATE (another run's log,
-// a chat, a warden's log, the journal), tries to open each for writing and to
+// a chat, the named warden's log, the journal), tries to open each for writing and to
 // make a new file, and counts the secrets it could read.
-func peek() string {
+func peek(warden string) string {
 	st := os.Getenv("HIVE_STATE")
 	var out []string
 	try := func(name, glob string) {
@@ -279,7 +279,7 @@ func peek() string {
 	}
 	try("log", "runs/*/host/turn-*.jsonl")
 	try("chat", "chats/*.jsonl")
-	try("warden", "runs/w-*/host/turn-*.jsonl")
+	try("warden", "runs/"+warden+"/host/turn-*.jsonl")
 	try("journal", "events.jsonl")
 	f, err := os.Create(filepath.Join(st, "runs", "peek-was-here"))
 	if err == nil {
@@ -300,6 +300,8 @@ func peek() string {
 	})
 	return strings.Join(out, ", ") + fmt.Sprintf(", create=%t, secrets=%d", err == nil, secrets)
 }
+
+var peekWarden = regexp.MustCompile(`FAKE:peek (\S+)`)
 
 // riskKeys steer the fake warden and panel; the worker passes them on in its request.
 var riskKeys = regexp.MustCompile(`FAKE:(warden|panel)[a-z]+`)

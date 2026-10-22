@@ -690,15 +690,17 @@ func TestAgentsReadTheHive(t *testing.T) {
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "hello"}, nil)
 	h.wait("the lead's reply", minute, h.replied("lead", ""))
 	h.post("/api/ask", map[string]string{"project": "peek", "title": "package", "known": "FAKE:needpackage"}, nil)
+	var warden string
 	h.wait("a warden to settle the step", 3*minute, func(st api.State) bool {
 		for _, r := range st.Requests {
 			if r.Kind == "request" && r.State == "done" {
+				warden = r.Warden
 				return true
 			}
 		}
 		return false
 	})
-	h.post("/api/ask", map[string]string{"project": "peek", "title": "peek", "known": "FAKE:peek"}, nil)
+	h.post("/api/ask", map[string]string{"project": "peek", "title": "peek", "known": "FAKE:peek " + warden}, nil)
 	var account string
 	h.wait("the peeking worker's account", 2*minute, func(st api.State) bool {
 		for _, r := range st.Runs {
