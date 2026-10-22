@@ -1,0 +1,173 @@
+name: install-smoke
+# A person's first hour on each OS: install with the one-liner from the site,
+# set up a Hive, ask the lead for a change and wait for it to land, check
+# status and doctor, update, shut down and uninstall. Agents use the fake
+# harness and a local forge, so no Claude or GitHub login is needed. The setup
+# writes the workspace config the first run's prompts would write: `hive`
+# itself opens the interactive control center, which a runner can't drive.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Where install.sh and install.ps1 are served
+        default: https://hive.ihsan.cc
+      tag:
+        description: Release the installer should bring (blank for the latest)
+        default: ''
+permissions:
+  contents: read
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      BASE: ${{ inputs.base_url || 'https://hive.ihsan.cc' }}
+      GIT_AUTHOR_NAME: smoke
+      GIT_AUTHOR_EMAIL: smoke@localhost
+      GIT_COMMITTER_NAME: smoke
+      GIT_COMMITTER_EMAIL: smoke@localhost
+    steps:
+      - name: which release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          # A release's own run waits for its binaries, which the release workflow attaches.
+          # A failed gh call (the release not visible yet) counts as no binaries, so the loop waits under bash -e.
+          for i in $(seq 60); do
+            t=${TAG:-$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName || true)}
+            n=$(gh release view "$t" -R "$GITHUB_REPOSITORY" --json assets -q '.assets | length') || n=0
+            [ "$n" -ge 6 ] && break
+            echo "waiting for $t's binaries ($n so far)"; sleep 20
+          done
+          [ "$n" -ge 6 ] || { echo "::error::release $t never got its binaries"; exit 1; }
+          if [ -n "$TAG" ] && [ "$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)" != "$TAG" ]; then
+            echo "::error::$TAG is not the latest release, and the installer always brings the latest"; exit 1
+          fi
+          echo "TAG=$t" >> "$GITHUB_ENV"
+          echo "HIVE_HOME=$RUNNER_TEMP/hive" >> "$GITHUB_ENV"
+          echo "HIVE_FORGE=local:$RUNNER_TEMP/forge" >> "$GITHUB_ENV"
+
+      - name: sandbox
+        if: runner.os == 'Linux'
+        run: |
+          # The runner's Ubuntu blocks unprivileged user namespaces through AppArmor, as ci.yml's sandboxed run says.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: no sandbox here
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            echo "::notice::Agents run unsandboxed: the Windows sandbox is WSL 2, which a hosted runner doesn't have, so the installer's WSL step is skipped too."
+          else
+            echo "::notice::Agents run unsandboxed: the macOS sandbox isn't proven on hosted runners yet."
+          fi
+
+      # The one-liner a person pastes, from a shell with no Hive on PATH.
+      - name: install (macOS, Linux)
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL "$BASE/install.sh" | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: install (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          HIVE_SKIP_WSL: '1'
+        run: |
+          irm "$env:BASE/install.ps1" | iex
+          Add-Content $env:GITHUB_PATH (Join-Path $env:LOCALAPPDATA 'Programs\hive')
+
+      - name: version
+        shell: bash
+        run: |
+          v=$(hive --version)
+          echo "$v"
+          [ "$v" = "hive $TAG" ] || { echo "::error::installed '$v', want hive $TAG"; exit 1; }
+
+      - name: set up a Hive without the prompts
+        shell: bash
+        run: |
+          mkdir -p "$HIVE_HOME/.hive" "$RUNNER_TEMP/forge"
+          if [ "$RUNNER_OS" = Linux ]; then sb='"sandbox": "auto"'; else sb='"sandbox": "bare", "bare_accepted": "smoke"'; fi
+          printf '{"harness": "fake", %s, "release_repo": "%s", "auto_update": false, "schedules": {"improve.sweep": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off"}}\n' "$sb" "$GITHUB_REPOSITORY" > "$HIVE_HOME/.hive/config.json"
+          # The local forge knows this release, so `update` has something to compare against.
+          printf '{"releases": {"%s": [{"tag": "%s"}]}}\n' "$GITHUB_REPOSITORY" "$TAG" > "$RUNNER_TEMP/forge/state.json"
+
+      - name: ask the lead for a project and a change, and wait for it to land
+        shell: bash
+        run: |
+          hive ask "create project smoke for the install test" --wait
+          hive ask "add a first feature" --project smoke --wait
+          for i in $(seq 150); do
+            grep -q '"MERGED"' "$RUNNER_TEMP/forge/state.json" && { echo "the change merged"; exit 0; }
+            sleep 2
+          done
+          echo "::error::the change didn't land within 5 minutes"
+          hive status || true
+          tail -50 "$HIVE_HOME/.hive/"*.log 2>/dev/null || true
+          exit 1
+
+      - name: status and doctor
+        shell: bash
+        run: |
+          hive status | tee status.txt
+          grep -qF "Hive $TAG " status.txt || { echo "::error::status doesn't report $TAG"; exit 1; }
+          grep -q "smoke (local/smoke)" status.txt || { echo "::error::status doesn't list the project"; exit 1; }
+          if [ "$RUNNER_OS" = Linux ] && grep -q '^sandbox: NOT' status.txt; then echo "::error::the sandbox isn't working"; exit 1; fi
+          # Doctor exits 1 here because Claude Code and the GitHub CLI have no login on a runner, by design.
+          hive doctor | tee doctor.txt || true
+          for want in "✓ workspace" "✓ running"; do
+            grep -q "$want" doctor.txt || { echo "::error::doctor didn't say '$want'"; exit 1; }
+          done
+          if [ "$RUNNER_OS" = Linux ] && grep -q "✗ sandbox" doctor.txt; then echo "::error::doctor says the sandbox is broken"; exit 1; fi
+          echo "::notice::Autostart isn't set up: the first run's interactive control center registers it, and a runner can't drive it."
+
+      - name: update
+        shell: bash
+        run: |
+          out=$(hive update)
+          echo "$out"
+          [ "$out" = "already on $TAG" ] || { echo "::error::update said '$out'"; exit 1; }
+
+      - name: reinstall over the running Hive (macOS, Linux)
+        if: runner.os != 'Windows'
+        run: curl -fsSL "$BASE/install.sh" | sh
+      - name: reinstall over the running Hive (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          HIVE_SKIP_WSL: '1'
+        run: irm "$env:BASE/install.ps1" | iex
+
+      - name: start again and shut down
+        shell: bash
+        run: |
+          # Not `status | grep -q`: grep quits at the first line, status dies of SIGPIPE on the next, and pipefail fails the step.
+          hive status > status.txt || true
+          grep -qF "Hive $TAG " status.txt || { cat status.txt; echo "::error::the reinstalled Hive didn't start"; exit 1; }
+          hive shutdown
+          sleep 2
+          hive doctor > doctor.txt || true
+          grep -q "· not running" doctor.txt || { cat doctor.txt; echo "::error::still running after shutdown"; exit 1; }
+
+      - name: uninstall (macOS, Linux)
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL "$BASE/uninstall.sh" | sh
+          [ ! -e "$HOME/.local/bin/hive" ] || { echo "::error::the binary is still there"; exit 1; }
+          [ -d "$HIVE_HOME/.hive" ] || { echo "::error::uninstall removed the person's folder"; exit 1; }
+      - name: uninstall (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          irm "$env:BASE/uninstall.ps1" | iex
+          if (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\hive')) { throw 'the install folder is still there' }
+          if (-not (Test-Path (Join-Path $env:HIVE_HOME '.hive'))) { throw "uninstall removed the person's folder" }

@@ -1,5 +1,5 @@
 # Uninstall the Hive (your folder, ~\hive by default, is left alone):
-#   irm https://raw.githubusercontent.com/ihsan-sa/hive/main/install/uninstall.ps1 | iex
+#   irm https://hive.ihsan.cc/uninstall.ps1 | iex
 # It removes hive and hive-v0, its name up to v0.1.2.
 $cmd = if ($env:HIVE_CMD) { $env:HIVE_CMD } else { 'hive' }
 foreach ($c in @($cmd, 'hive-v0')) {

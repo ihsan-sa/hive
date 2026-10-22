@@ -1,11 +1,12 @@
 # Install the Hive on Windows. One line:
-#   gh api repos/ihsan-sa/hive-standalone-build/contents/install/install.ps1 -H "Accept: application/vnd.github.raw" | Out-String | iex
-# (or, once the repo is public: irm https://raw.githubusercontent.com/ihsan-sa/hive-standalone-build/main/install/install.ps1 | iex)
+#   irm https://hive.ihsan.cc/install.ps1 | iex
 # Running it again reinstalls; $env:HIVE_VERSION = 'v0.1.2' installs that release
 # instead of the latest. Agents are sandboxed inside WSL 2, so the Linux
 # build is installed next to the Windows one, and Claude Code is installed or
 # updated inside WSL.
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'   # Windows PowerShell's progress bar makes downloads crawl
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $repo = if ($env:HIVE_REPO) { $env:HIVE_REPO } else { 'ihsan-sa/hive' }
 $cmd = if ($env:HIVE_CMD) { $env:HIVE_CMD } else { 'hive' }
 $version = if ($env:HIVE_VERSION) { $env:HIVE_VERSION } else { 'latest' }
@@ -28,17 +29,9 @@ function Invoke-Native([scriptblock]$Block, [switch]$Quiet) {
 }
 
 Write-Host "Downloading the Hive ($version) from $repo ..."
-$tag = @($version | Where-Object { $_ -ne 'latest' })
-$base = if ($tag) { "https://github.com/$repo/releases/download/$version" } else { "https://github.com/$repo/releases/latest/download" }
-$useGh = (Get-Command gh -ErrorAction SilentlyContinue) -and ((Invoke-Native { gh auth status } -Quiet) -eq 0)
+$base = if ($version -ne 'latest') { "https://github.com/$repo/releases/download/$version" } else { "https://github.com/$repo/releases/latest/download" }
 foreach ($a in $assets) {
-  if ($useGh) {
-    if ((Invoke-Native { gh release download @tag -R $repo --pattern $a --dir $tmp --clobber } -Quiet) -ne 0) {
-      throw "could not download $a from $repo (is there a release, and is the network up?)"
-    }
-  } else {
-    Invoke-WebRequest "$base/$a" -OutFile (Join-Path $tmp $a) -UseBasicParsing
-  }
+  Invoke-WebRequest "$base/$a" -OutFile (Join-Path $tmp $a) -UseBasicParsing
 }
 foreach ($a in $assets[1..2]) {
   $line = Select-String -Path (Join-Path $tmp 'checksums.txt') -Pattern " $([regex]::Escape($a))$" | Select-Object -First 1

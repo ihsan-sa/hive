@@ -85,7 +85,7 @@ func DefaultConfig() Config {
 }
 
 // DefaultReleaseRepo is where installs look for new releases; set at build time.
-var DefaultReleaseRepo = "ihsan-sa/hive-standalone-build"
+var DefaultReleaseRepo = "ihsan-sa/hive"
 
 var cfgMu sync.Mutex
 

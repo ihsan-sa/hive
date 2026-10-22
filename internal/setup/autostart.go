@@ -60,6 +60,24 @@ func EnableAutostartAt(exe, root string) error {
 	}
 }
 
+// cgroupFile names the systemd unit this process runs in, on Linux.
+var cgroupFile = "/proc/self/cgroup"
+
+// InUnit reports whether this process runs in the Hive's systemd user unit.
+func InUnit() bool {
+	raw, _ := os.ReadFile(cgroupFile)
+	return strings.Contains(string(raw), "/hive.service")
+}
+
+// RestartUnit rewrites the unit to start exe and has systemd restart it. A
+// unit from v0.1.2 or older lacks KillMode=process, so it kills a restart
+// child left in the unit when the old daemon exits; systemd's own restart
+// doesn't. It reports whether systemd took the restart.
+func RestartUnit(exe, root string) bool {
+	EnableAutostartAt(exe, root)
+	return exec.Command("systemctl", "--user", "restart", "--no-block", "hive.service").Run() == nil
+}
+
 // DisableAutostart undoes EnableAutostart.
 func DisableAutostart() {
 	home, _ := os.UserHomeDir()
