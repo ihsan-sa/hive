@@ -25,7 +25,8 @@ Three read-only runs (`modules/agents/tribunal.md`) spread over the `tribunal_mo
 
 1. The script must match the sha256 pinned when it was weighed, or it is refused.
 2. `core.CeilingGuard` refuses an always-the-person script unless the person said yes, whoever approved it; the step becomes a person ask that keeps the warden's or tribunal's reasoning. It is the same best-effort text check as above, a last check rather than enforcement.
-3. The narrow grant: `sh -c <script>` in `.hive/risk/<id>` (Git for Windows' `sh` on Windows), with a 10 minute timeout that kills the script's whole process group, and only PATH, HOME, USER, LANG and TMPDIR from the daemon's environment, so tokens in that environment never reach the script. The script runs as the daemon's user, though, and can read that user's files: a credential file it reads reaches the requesting agent through its output, and only the text check stands in the way.
+3. The narrow grant: `sh -c <script>` in `.hive/risk/<id>` (Git for Windows' `sh` on Windows), with a 10 minute timeout that kills the script's whole process group (on Windows it ends only `sh`, whose children may outlive it), and only PATH, HOME, USER, LANG and TMPDIR from the daemon's environment, so tokens in that environment never reach the script.
+4. The script runs as the daemon's user and can read that user's files, so its output never goes back to the agent: the agent hears only done or failed, and the output is kept on the request for the person. A scratch HOME would not close this, since a script can name the person's home outright, and it would break steps that need the person's own tool logins.
 
 A restart while a step runs marks it failed and doesn't run it again.
 

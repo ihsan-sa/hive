@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"testing"
 	"time"
 	"unsafe"
 
@@ -60,7 +61,7 @@ func (Linux) Start(s Spec) (Proc, error) {
 // fails here, once, and asks the built hive binary instead.
 func hiveBinary() (string, error) {
 	self, err := os.Executable()
-	if err == nil && strings.HasSuffix(self, ".test") {
+	if err == nil && testing.Testing() {
 		return "", fmt.Errorf("%s is a test binary and can't run sandbox-exec; run the built hive binary", filepath.Base(self))
 	}
 	return self, err
