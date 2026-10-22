@@ -109,8 +109,11 @@ func sandboxed() bool {
 // TestSandboxedAsksTheBinary: the live probes take the sandbox whenever the
 // built binary says it works.
 func TestSandboxedAsksTheBinary(t *testing.T) {
-	if runtime.GOOS != "linux" || exec.Command(bin, "sandbox-probe").Run() != nil {
-		t.Skip("no Linux sandbox here")
+	if runtime.GOOS != "linux" {
+		t.Skip("not Linux")
+	}
+	if exec.Command(bin, "sandbox-probe").Run() != nil {
+		t.Skip("the sandbox probe fails here")
 	}
 	if !sandboxed() {
 		t.Fatal("sandboxed() is false where `hive sandbox-probe` passes")
