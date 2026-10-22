@@ -11,7 +11,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 )
 
-// flakyForge fails its first fail closes, the way GitHub does on a 503.
+// flakyForge fails the first `fail` closes, the way GitHub does on a 503.
 type flakyForge struct {
 	*core.Local
 	fail   int
@@ -100,5 +100,29 @@ func TestNoCommitsDoneRetriesClose(t *testing.T) {
 	}
 	if task.Stage != StageDone || task.IssueOpen || len(forge.closed) != 1 || forge.closed[0] != 7 {
 		t.Fatalf("stage %q, issue open %v, closed %v", task.Stage, task.IssueOpen, forge.closed)
+	}
+}
+
+// A close that keeps failing backs off and gives up once, leaving the task done.
+func TestCloseIssueGivesUp(t *testing.T) {
+	m, forge, task, p := noCommitRig(t, 100)
+	task.Stage, task.IssueOpen = StageDone, true
+	for i := 0; i < 20 && task.IssueOpen; i++ {
+		m.closeIssue(task, p)
+	}
+	if task.Stage != StageDone || task.IssueOpen || forge.fail != 92 || !logged(task, "gave up closing the issue: HTTP 503") {
+		t.Fatalf("stage %q, issue open %v, attempts %d, log %v", task.Stage, task.IssueOpen, 100-forge.fail, task.Log)
+	}
+}
+
+// A done task whose project is gone drops its pending close and stays done.
+func TestDoneProjectGone(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage, task.IssueOpen, task.Project = StageDone, true, "gone"
+	if err := m.step(task); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageDone || task.IssueOpen || !logged(task, "project gone is gone, so issue #7 is left open") {
+		t.Fatalf("stage %q, issue open %v, log %v", task.Stage, task.IssueOpen, task.Log)
 	}
 }

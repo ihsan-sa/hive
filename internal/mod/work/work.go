@@ -290,6 +290,11 @@ func marker(id string) string { return "<!-- hive-task:" + id + " -->" }
 
 func (m *Module) step(t *Task) error {
 	p, err := m.project(t)
+	if err != nil && t.Stage == StageDone {
+		t.IssueOpen = false
+		m.save(t, fmt.Sprintf("%v, so issue #%d is left open", err, t.Issue.Number))
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -531,7 +536,7 @@ func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
 		steps, ok = m.Steps(r.ID)
 	}
 	if ok {
-		t.Stage, t.IssueOpen = StageDone, true
+		t.Stage, t.IssueOpen, t.Failures = StageDone, true, 0
 		m.save(t, "done outside the checkout, no commit:\n"+steps)
 		m.C.Effects.Forge.Comment(p.Repo, t.Issue.Number, "Done with no commit, so nothing to merge. What ran outside the checkout:\n\n"+steps+"\n\n"+finishText(r))
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q, with no commit, so nothing to merge. What ran:\n%s", t.Label(), steps))
@@ -546,10 +551,17 @@ func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
 }
 
 // closeIssue closes a done task's issue. A failure is journaled and a later
-// tick tries again; the task stays done either way.
+// tick tries again, waiting twice as long each time; after eight failures it
+// gives up. The task stays done either way.
 func (m *Module) closeIssue(t *Task, p core.Project) {
 	if err := m.C.Effects.Forge.CloseIssue(p.Repo, t.Issue.Number); err != nil {
-		t.Retry = time.Now().Add(time.Minute)
+		t.Failures++
+		if t.Failures >= 8 {
+			t.IssueOpen = false
+			m.save(t, "gave up closing the issue: "+core.Clip(err.Error(), 300))
+			return
+		}
+		t.Retry = time.Now().Add(time.Minute << t.Failures)
 		m.save(t, "closing the issue failed (will retry): "+core.Clip(err.Error(), 300))
 		return
 	}
