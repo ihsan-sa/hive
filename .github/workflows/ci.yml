@@ -9,7 +9,8 @@ on:
     types: [published]
   workflow_dispatch:
 concurrency:
-  group: ci-${{ github.ref }}
+  # Keyed by event too, so a push to main never cancels a manual three-system run on main.
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   test:
