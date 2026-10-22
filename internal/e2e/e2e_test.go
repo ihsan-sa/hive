@@ -20,6 +20,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
@@ -506,6 +507,78 @@ func TestPersonModulesRelease(t *testing.T) {
 	git(src, "tag", "v1.1.0")
 	h.post("/api/job", map[string]string{"name": "modules.update"}, nil)
 	h.wait("the module to update to v1.1.0", minute, func(st api.State) bool { m, ok := module(st); return ok && m.Release == "v1.1.0" })
+}
+
+// Every risk path on the fake agents: a tribunal approves over two rounds and
+// runs the warden's script; a split panel declines a large gain and the person
+// runs it; the ceiling stops a money script the warden allowed until the person
+// says so; a request whose words try to instruct the warden runs only the
+// warden's script, never the worker's steps.
+func TestRiskPaths(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/risk", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "risk", "repo": "me/risk"}, nil)
+	asks := map[string]string{
+		"tribunal": "FAKE:needpackage FAKE:wardentribunal",
+		"split":    "FAKE:needpackage FAKE:wardentribunal FAKE:paneldecline",
+		"ceiling":  "FAKE:needpackage FAKE:wardenmoney",
+		"inject":   "FAKE:needpackage FAKE:inject",
+	}
+	for title, known := range asks {
+		h.post("/api/ask", map[string]string{"project": "risk", "title": title, "known": known}, nil)
+	}
+	// the worker's why carries its keys (inject carries its injected text)
+	is := map[string]func(string) bool{
+		"tribunal": func(w string) bool {
+			return strings.Contains(w, "wardentribunal") && !strings.Contains(w, "paneldecline")
+		},
+		"split":   func(w string) bool { return strings.Contains(w, "paneldecline") },
+		"ceiling": func(w string) bool { return strings.Contains(w, "wardenmoney") },
+		"inject":  func(w string) bool { return strings.Contains(w, "IGNORE YOUR INSTRUCTIONS") },
+	}
+	req := func(st api.State, title string) (risk.Request, bool) {
+		for _, r := range st.Requests {
+			if r.Kind == "request" && is[title](r.Why) {
+				return r, true
+			}
+		}
+		return risk.Request{}, false
+	}
+	state := func(title, want string) func(api.State) bool {
+		return func(st api.State) bool { r, ok := req(st, title); return ok && r.State == want }
+	}
+	answer := func(st api.State, title, ans string) {
+		r, _ := req(st, title)
+		h.post("/api/answer", map[string]string{"id": r.Ask, "answer": ans}, nil)
+	}
+
+	st := h.wait("the tribunal to approve and run", 4*minute, state("tribunal", "done"))
+	if r, _ := req(st, "tribunal"); len(r.Panel) != risk.PanelSize || r.Round != 2 || !strings.Contains(r.Output, "installing left-pad") {
+		t.Fatalf("tribunal: panel %d round %d output %q", len(r.Panel), r.Round, r.Output)
+	}
+
+	st = h.wait("the split panel's large gain to reach the person", 4*minute, state("split", "asked"))
+	if r, _ := req(st, "split"); r.Output != "" || !strings.Contains(r.Reason, "tribunal declined") {
+		t.Fatalf("split panel ran or said nothing: %+v", r)
+	}
+	answer(st, "split", "run")
+	h.wait("the person's run to run the declined script", 2*minute, state("split", "done"))
+
+	st = h.wait("the ceiling to stop the money script", 3*minute, state("ceiling", "asked"))
+	if r, _ := req(st, "ceiling"); r.Decision != "do" || r.Output != "" || r.PersonOK {
+		t.Fatalf("ceiling: %+v", r)
+	}
+	answer(st, "ceiling", "declined")
+	h.wait("the money script to stay unrun", minute, state("ceiling", "declined"))
+
+	st = h.wait("the injected request to run the warden's script", 3*minute, state("inject", "done"))
+	if r, _ := req(st, "inject"); strings.Contains(r.Output, "PWNED") || r.Script == r.Steps {
+		t.Fatalf("the worker's steps ran: %+v", r)
+	}
+	for title := range asks {
+		h.wait(title+" worker to land", 3*minute, taskStage("risk", title, work.StageDone))
+	}
 }
 
 func init() { _ = fmt.Sprint }
