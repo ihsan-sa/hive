@@ -23,12 +23,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: vet the other systems
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
-        run: |
-          GOOS=darwin go vet ./...
-          GOOS=windows go vet ./...
       - name: the suite (tests/green.sh)
         shell: bash
         run: tests/green.sh
@@ -37,6 +31,13 @@ jobs:
           GIT_AUTHOR_EMAIL: ci@localhost
           GIT_COMMITTER_NAME: ci
           GIT_COMMITTER_EMAIL: ci@localhost
+      # After the suite, so a cross-system vet failure never hides the Linux result.
+      - name: vet the other systems
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          GOOS=darwin go vet ./...
+          GOOS=windows go vet ./...
   sandboxed-e2e:
     # The end to end with agents under bubblewrap, the default sandbox on Linux, so a sandbox
     # break goes red on a PR. The runner's Ubuntu blocks unprivileged user namespaces through

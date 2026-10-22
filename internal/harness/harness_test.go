@@ -66,3 +66,12 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+func TestClaudeMaxOutput(t *testing.T) {
+	if e := join(Claude{}.Env(Turn{MaxOutput: 16000})); !contains(e, "CLAUDE_CODE_MAX_OUTPUT_TOKENS=16000") {
+		t.Fatalf("env %q has no output cap", e)
+	}
+	if e := join(Claude{}.Env(Turn{})); contains(e, "MAX_OUTPUT") {
+		t.Fatalf("env %q caps output with none set", e)
+	}
+}
