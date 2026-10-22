@@ -90,15 +90,27 @@ func emit(v any) {
 	os.Stdout.Write(append(raw, '\n'))
 }
 
-var personRe = regexp.MustCompile(`(?s)Person: (.*)`)
+// Messages that queued during a turn arrive as one prompt, joined by "---".
+var personRe = regexp.MustCompile(`(?s)Person: (.*?)(?:\n\n---\n\n|\z)`)
 var projectRe = regexp.MustCompile(`create (?:a )?project (?:called |named )?([A-Za-z0-9_-]+)`)
 
 func lead(prompt string) (string, error) {
-	m := personRe.FindStringSubmatch(prompt)
-	if m == nil {
+	ms := personRe.FindAllStringSubmatch(prompt, -1)
+	if ms == nil {
 		return "NOOP", nil
 	}
-	ask := strings.TrimSpace(m[1])
+	var replies []string
+	for _, m := range ms {
+		reply, err := leadAsk(strings.TrimSpace(m[1]))
+		if err != nil {
+			return "", err
+		}
+		replies = append(replies, reply)
+	}
+	return strings.Join(replies, "\n"), nil
+}
+
+func leadAsk(ask string) (string, error) {
 	if pm := projectRe.FindStringSubmatch(ask); pm != nil {
 		_, err := agentcli.Call("create_project", map[string]string{"name": pm[1], "description": ask, "goals": ask}, 3*time.Minute)
 		if err != nil {
