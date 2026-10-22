@@ -25,11 +25,12 @@ import (
 
 // DaemonInfo is .hive/daemon.json.
 type DaemonInfo struct {
-	PID     int       `json:"pid"`
-	Started time.Time `json:"started"`
-	Port    int       `json:"port"`
-	Token   string    `json:"token"`
-	Version string    `json:"version"`
+	PID        int       `json:"pid"`
+	Started    time.Time `json:"started"`
+	Port       int       `json:"port"`
+	Token      string    `json:"token"`
+	Version    string    `json:"version"`
+	Restarting bool      `json:"restarting,omitempty"` // set by a daemon handing over to a new one
 }
 
 // State is everything the control center shows.
@@ -110,9 +111,10 @@ func StepsFrom(turn int, evs []harness.Event) []Step {
 
 // Client talks to a running daemon.
 type Client struct {
-	Info DaemonInfo
+	Info DaemonInfo // daemon.json as Dial read it; Do never changes it
 	ws   core.Workspace
-	mu   sync.Mutex // guards Info once Do follows a restarted daemon
+	mu   sync.Mutex
+	cur  DaemonInfo // the daemon Do last reached, which a restart moves
 	http *http.Client
 }
 
@@ -122,7 +124,7 @@ func Dial(ws core.Workspace) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{Info: info, ws: ws, http: &http.Client{Timeout: 60 * time.Second}}, nil
+	return &Client{Info: info, cur: info, ws: ws, http: &http.Client{Timeout: 60 * time.Second}}, nil
 }
 
 func readInfo(ws core.Workspace) (DaemonInfo, error) {
@@ -134,26 +136,40 @@ func readInfo(ws core.Workspace) (DaemonInfo, error) {
 	return info, json.Unmarshal(raw, &info)
 }
 
+// restartWait covers a restart: the new daemon waits up to 10s for the old
+// one to exit, then opens the workspace before it listens.
+const restartWait = 30 * time.Second
+
 // Do calls an endpoint; body may be nil; out may be nil. When the daemon
-// can't be reached (it restarted on a new port after an update), Do waits up
-// to 15s for daemon.json to name a new one and sends the request there.
+// can't be reached while a restart is under way (daemon.json says the old one
+// is restarting, or already names a new one), Do keeps dialling for up to
+// restartWait and sends the request to the new daemon. Otherwise a failed
+// dial is returned at once.
 func (c *Client) Do(method, path string, body, out any) error {
 	c.mu.Lock()
-	info := c.Info
+	info := c.cur
 	c.mu.Unlock()
-	err := c.do(info, method, path, body, out)
-	var op *net.OpError
-	for end := time.Now().Add(15 * time.Second); errors.As(err, &op) && op.Op == "dial" && time.Now().Before(end); {
-		time.Sleep(200 * time.Millisecond)
-		if next, e := readInfo(c.ws); e == nil && next.PID != info.PID {
-			info = next
-			c.mu.Lock()
-			c.Info = next
-			c.mu.Unlock()
-			err = c.do(info, method, path, body, out)
+	err, from := c.do(info, method, path, body, out), info.PID
+	for end := time.Now().Add(restartWait); dialFailed(err) && time.Now().Before(end); {
+		next, e := readInfo(c.ws)
+		if e != nil || (!next.Restarting && next.PID == from) {
+			break
 		}
+		time.Sleep(200 * time.Millisecond)
+		info = next
+		err = c.do(info, method, path, body, out)
+	}
+	if err == nil {
+		c.mu.Lock()
+		c.cur = info
+		c.mu.Unlock()
 	}
 	return err
+}
+
+func dialFailed(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
 }
 
 func (c *Client) do(info DaemonInfo, method, path string, body, out any) error {
@@ -187,10 +203,10 @@ func (c *Client) do(info DaemonInfo, method, path string, body, out any) error {
 	return nil
 }
 
-// Ping reports whether the daemon answers.
+// Ping reports whether the daemon Dial found answers, trying once.
 func (c *Client) Ping() bool {
 	var v map[string]any
-	return c.Do("GET", "/api/ping", nil, &v) == nil
+	return c.do(c.Info, "GET", "/api/ping", nil, &v) == nil
 }
 
 // State fetches the dashboard state.

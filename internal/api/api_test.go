@@ -2,9 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,39 +13,93 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
-// A daemon that restarted on a new port still gets the message: the client
-// re-reads daemon.json and sends it there instead of reporting the old port.
-func TestClientFollowsRestartedDaemon(t *testing.T) {
+func workspace(t *testing.T) (core.Workspace, func(DaemonInfo) error) {
 	ws := core.Workspace{Root: t.TempDir()}
-	write := func(info DaemonInfo) {
-		raw, _ := json.Marshal(info)
-		os.MkdirAll(filepath.Dir(ws.DaemonFile()), 0o755)
-		if err := os.WriteFile(ws.DaemonFile(), raw, 0o600); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.MkdirAll(filepath.Dir(ws.DaemonFile()), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
-	dead := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
-	write(DaemonInfo{PID: 1, Port: dead, Token: "old"})
+	return ws, func(info DaemonInfo) error {
+		raw, _ := json.Marshal(info)
+		return os.WriteFile(ws.DaemonFile(), raw, 0o600)
+	}
+}
+
+func deadPort(t *testing.T) int {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// A daemon that restarted on a new port still gets the message: the client
+// re-reads daemon.json and keeps dialling the new daemon until it listens.
+func TestClientFollowsRestartedDaemon(t *testing.T) {
+	ws, write := workspace(t)
+	next := deadPort(t)
+	if err := write(DaemonInfo{PID: 1, Port: deadPort(t), Token: "old", Restarting: true}); err != nil {
+		t.Fatal(err)
+	}
 	c, err := Dial(ws)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := ""
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.Header.Get("Authorization")
+	got := make(chan string, 1)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case got <- r.Header.Get("Authorization"):
+		default:
+		}
 		w.Write([]byte(`{}`))
-	}))
+	})}
 	defer srv.Close()
 	go func() {
+		// The new daemon is named a while before it listens.
+		time.Sleep(500 * time.Millisecond)
+		if err := write(DaemonInfo{PID: 2, Port: next, Token: "new"}); err != nil {
+			t.Error(err)
+			return
+		}
 		time.Sleep(time.Second)
-		write(DaemonInfo{PID: 2, Port: srv.Listener.Addr().(*net.TCPAddr).Port, Token: "new"})
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", next))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		srv.Serve(ln)
 	}()
 	if err := c.Do("POST", "/api/chat", map[string]string{"text": "hi"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got != "Bearer new" {
-		t.Fatalf("daemon got %q", got)
+	if a := <-got; a != "Bearer new" {
+		t.Fatalf("daemon got %q", a)
+	}
+}
+
+// With no restart under way (a dead port under a live-looking daemon.json, or
+// a daemon the person stopped), the client fails at once instead of waiting.
+func TestClientFailsFastWithoutRestart(t *testing.T) {
+	ws, write := workspace(t)
+	if err := write(DaemonInfo{PID: 1, Port: deadPort(t), Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Dial(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if c.Ping() {
+		t.Fatal("ping answered on a dead port")
+	}
+	if c.Do("GET", "/api/state", nil, nil) == nil {
+		t.Fatal("call answered on a dead port")
+	}
+	os.Remove(ws.DaemonFile())
+	if c.Do("GET", "/api/state", nil, nil) == nil {
+		t.Fatal("call answered after the daemon stopped")
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("failing took %v", d)
 	}
 }

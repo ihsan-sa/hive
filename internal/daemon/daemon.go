@@ -115,13 +115,14 @@ func Run(ws core.Workspace, waitFor int) error {
 		return err
 	}
 	defer func() {
-		if cur, err := api.Dial(ws); err == nil && cur.Info.PID == os.Getpid() {
+		// A restart leaves daemon.json for the control center to follow.
+		if cur, err := api.Dial(ws); err == nil && cur.Info.PID == os.Getpid() && !cur.Info.Restarting {
 			os.Remove(ws.DaemonFile())
 		}
 	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := &server{a: a, token: info.Token, cancel: cancel}
+	s := &server{a: a, info: info, cancel: cancel}
 	a.Release.Restart = func() { s.restart() }
 	a.C.J.Subscribe(s.onEvent)
 	a.C.J.MustAppend("hive.started", map[string]string{"version": core.Version, "pid": strconv.Itoa(os.Getpid())})
@@ -139,7 +140,7 @@ func Run(ws core.Workspace, waitFor int) error {
 
 type server struct {
 	a      *app.App
-	token  string
+	info   api.DaemonInfo
 	cancel func()
 	mu     sync.Mutex
 	alerts []api.Alert
@@ -159,9 +160,12 @@ func (s *server) onEvent(e core.Event) {
 	s.mu.Unlock()
 }
 
-// restart replaces this daemon with the (updated) binary on disk.
+var executable = os.Executable
+
+// restart replaces this daemon with the (updated) binary on disk, and marks
+// daemon.json so the control center waits for the new one.
 func (s *server) restart() {
-	exe, err := os.Executable()
+	exe, err := executable()
 	if err != nil {
 		return
 	}
@@ -169,6 +173,10 @@ func (s *server) restart() {
 	ws := s.a.C.WS
 	env := append(os.Environ(), "HIVE_HOME="+ws.Root)
 	if _, err := proc.StartDetached([]string{exe, "daemon", "--wait-for", strconv.Itoa(os.Getpid())}, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err == nil {
+		info := s.info
+		info.Restarting = true
+		raw, _ := json.Marshal(info)
+		core.WriteFileAtomic(ws.DaemonFile(), raw, 0o600)
 		s.cancel()
 	}
 }
@@ -181,7 +189,7 @@ func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	h := func(path string, fn func(r *http.Request) (any, error)) {
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Authorization") != "Bearer "+s.token {
+			if r.Header.Get("Authorization") != "Bearer "+s.info.Token {
 				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 				return
 			}

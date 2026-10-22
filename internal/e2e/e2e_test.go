@@ -326,6 +326,17 @@ func TestAskLandsAndProjects(t *testing.T) {
 	if prs := h.forge.PRs("local/alpha"); len(prs) != 1 || prs[0].State != "MERGED" {
 		t.Fatalf("alpha prs: %+v", prs)
 	}
+	// A live project lead sees the person's own pushes too.
+	h.seed("local/alpha", map[string]string{"OUTSIDE.md": "pushed by the person\n"})
+	h.post("/api/chat", map[string]string{"chat": "project:alpha", "text": "what's in the repo now?"}, nil)
+	h.wait("alpha's lead to see the push", 2*minute, func(api.State) bool {
+		for _, m := range h.messages("project:alpha") {
+			if m.From != "person" && strings.Contains(m.Text, "OUTSIDE.md") {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // M3 and M4: failing tests never merge; a merge that lowers the score is

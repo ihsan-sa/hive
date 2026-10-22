@@ -51,6 +51,7 @@ func EnableAutostart(root string) error {
 			return nil
 		}
 		// No systemd user session: fall back to the desktop autostart.
+		os.Remove(unit)
 		desk := filepath.Join(home, ".config", "autostart", "hive.desktop")
 		os.MkdirAll(filepath.Dir(desk), 0o755)
 		return os.WriteFile(desk, []byte(fmt.Sprintf("[Desktop Entry]\nType=Application\nName=Hive\nExec=env HIVE_HOME=%s %s daemon\nX-GNOME-Autostart-enabled=true\n", root, exe)), 0o644)

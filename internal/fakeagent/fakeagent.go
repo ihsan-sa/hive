@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/agentcli"
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
 // Main is `hive fake-agent --role R --session S [--resume] [--schema]`.
@@ -90,8 +91,8 @@ func emit(v any) {
 	os.Stdout.Write(append(raw, '\n'))
 }
 
-// Messages that queued during a turn arrive as one prompt, joined by "---".
-var personRe = regexp.MustCompile(`(?s)Person: (.*?)(?:\n\n---\n\n|\z)`)
+// Messages that queued during a turn arrive as one prompt, joined by core.PendingSep.
+var personRe = regexp.MustCompile(`(?s)Person: (.*?)(?:` + regexp.QuoteMeta(core.PendingSep) + `|\z)`)
 var projectRe = regexp.MustCompile(`create (?:a )?project (?:called |named )?([A-Za-z0-9_-]+)`)
 
 func lead(prompt string) (string, error) {
@@ -125,6 +126,9 @@ func leadAsk(ask string) (string, error) {
 		}
 		return "Asked you to approve installing it.", nil
 	}
+	if strings.Contains(strings.ToLower(ask), "what's in the repo") {
+		return "The repo has " + strings.Join(repoFiles(), ", ") + ".", nil
+	}
 	if strings.HasPrefix(strings.ToLower(ask), "hello") {
 		return "Hello. I'm the lead. Tell me what you'd like done.", nil
 	}
@@ -133,6 +137,21 @@ func leadAsk(ask string) (string, error) {
 		return "", err
 	}
 	return "Understood: " + clip(ask, 80) + ". I've started a piece of work on it.", nil
+}
+
+// repoFiles lists what a lead sees of its project: its checkout when it has
+// one, otherwise the project's clone in $HIVE_PROJECTS.
+func repoFiles() []string {
+	dir := "."
+	if _, err := os.Stat(".git"); err != nil {
+		dir = filepath.Join(os.Getenv("HIVE_PROJECTS"), os.Getenv("HIVE_PROJECT"))
+	}
+	entries, _ := os.ReadDir(dir)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
 }
 
 func worker(all, prompt string) (string, error) {

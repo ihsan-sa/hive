@@ -175,17 +175,42 @@ func (m *Module) Post(chatID, thread, text string) (Message, error) {
 	return msg, nil
 }
 
+// syncWait bounds the sync that runs before a person's post reaches its lead.
+var syncWait = 10 * time.Second
+
 // syncFor brings the clones a lead reads ($HIVE_PROJECTS) up to each remote's
-// default branch, so it sees what the person pushed since it last looked.
+// default branch, so it sees what the person pushed since it last looked. A
+// sync that fails or outlasts syncWait is journaled, and the post goes on
+// with what the clone has.
 func (m *Module) syncFor(ch *Chat) {
+	var wg sync.WaitGroup
 	for _, p := range m.C.Projects.List() {
-		if ch.Kind != "project" || p.Name == ch.Project {
-			m.C.Effects.Sync(p)
+		if ch.Kind == "project" && p.Name != ch.Project {
+			continue
 		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			done := make(chan error, 1)
+			go func() { _, err := m.C.Effects.Sync(p); done <- err }()
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(syncWait):
+				err = fmt.Errorf("no answer from the remote within %s", syncWait)
+			}
+			if err != nil {
+				m.C.J.MustAppend("chat.sync_failed", map[string]string{"chat": ch.ID, "project": p.Name, "error": err.Error()})
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // deliverToLead sends text to the chat's lead, starting the lead if needed.
+// A lead never pushes, so it reads its project in the clone syncFor keeps
+// current ($HIVE_PROJECTS); only an isolated project's lead, which can't see
+// that, gets a checkout of its own at what the clone has now.
 func (m *Module) deliverToLead(ch *Chat, text string) error {
 	if ch.Lead != "" {
 		if r, ok := m.C.Runs.Get(ch.Lead); ok && (!r.Terminal()) {
@@ -193,29 +218,25 @@ func (m *Module) deliverToLead(ch *Chat, text string) error {
 		}
 	}
 	id := "lead-" + strings.NewReplacer(":", "-").Replace(ch.ID) + "-" + core.NewID()[14:]
-	name := "lead"
-	var dir string
-	var err error
-	project := ""
+	name, project := "lead", ""
+	dir := filepath.Join(m.C.WS.Hive(), "leads", "main")
 	if ch.Kind == "project" {
-		project = ch.Project
-		name = "lead:" + project
+		project, name = ch.Project, "lead:"+ch.Project
 		p, ok := m.C.Projects.Get(project)
 		if !ok {
 			return fmt.Errorf("project %s not found", project)
 		}
-		base, err := m.C.Effects.Sync(p)
-		if err != nil {
-			return err
+		dir = filepath.Join(m.C.WS.Hive(), "leads", "project-"+project)
+		if p.Isolated {
+			base, _ := core.Git(m.C.WS.Project(project), "rev-parse", "-q", "--verify", "refs/heads/"+p.Branch)
+			var err error
+			if dir, err = m.C.Effects.NewCheckout(p, id, base); err != nil {
+				return err
+			}
 		}
-		if dir, err = m.C.Effects.NewCheckout(p, id, base); err != nil {
-			return err
-		}
-	} else {
-		dir = filepath.Join(m.C.WS.Hive(), "leads", "main")
-		if err = os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
 	}
 	spec := m.Agents.Spec(id, "lead", project, dir, text)
 	spec.Name, spec.Persistent = name, true
