@@ -206,6 +206,9 @@ func cmdOpen() int {
 		fmt.Fprintln(os.Stderr, core.Cmd+":", err)
 		return 1
 	}
+	if !setup.AutostartEnabled() {
+		setup.EnableAutostart(ws.Root)
+	}
 	if err := tui.Run(c, ws); err != nil {
 		fmt.Fprintln(os.Stderr, core.Cmd+":", err)
 		return 1

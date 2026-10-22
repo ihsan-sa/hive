@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -32,6 +34,7 @@ type Forge interface {
 	User() (string, error)
 	EnsureRepo(repo, description string) (created bool, err error)
 	Clone(repo, dir string) error
+	IsEmpty(repo string) (bool, error)
 	DefaultBranch(repo string) string
 	CreateIssue(repo, title, body, marker string) (Issue, error)
 	Comment(repo string, number int, body string) error
@@ -71,9 +74,35 @@ func (g GitHub) EnsureRepo(repo, description string) (bool, error) {
 	return true, nil
 }
 
+// ghHelper is git's credential helper backed by the person's gh login, so
+// git talks HTTPS whatever protocol gh is set to and whether or not SSH keys
+// work in this shell. The Hive never sees or stores the credential.
+func ghHelper() string {
+	p, err := exec.LookPath("gh")
+	if err != nil {
+		p = "gh"
+	}
+	return `!"` + filepath.ToSlash(p) + `" auth git-credential`
+}
+
+// Clone clones over HTTPS and leaves the clone set to authenticate through gh.
 func (GitHub) Clone(repo, dir string) error {
-	_, err := RunCmd(10*time.Minute, "", "gh", "repo", "clone", repo, dir)
+	url := "https://github.com/" + repo + ".git"
+	if _, err := GitT(10*time.Minute, "", "-c", "credential.helper=", "-c", "credential.helper="+ghHelper(), "clone", "-q", url, dir); err != nil {
+		return err
+	}
+	Git(dir, "config", "--local", "--unset-all", "credential.helper")
+	if _, err := Git(dir, "config", "--local", "--add", "credential.helper", ""); err != nil {
+		return err
+	}
+	_, err := Git(dir, "config", "--local", "--add", "credential.helper", ghHelper())
 	return err
+}
+
+// IsEmpty reports whether a repository has no commits.
+func (GitHub) IsEmpty(repo string) (bool, error) {
+	out, err := gh("repo", "view", repo, "--json", "isEmpty", "-q", ".isEmpty")
+	return out == "true", err
 }
 
 func (GitHub) DefaultBranch(repo string) string {

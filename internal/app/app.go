@@ -101,6 +101,7 @@ func (a *App) Tick() {
 	a.KB.Tick()
 	a.System.Tick()
 	a.Risk.Tick()
+	a.Projects.Tick()
 }
 
 // Run ticks until ctx ends.

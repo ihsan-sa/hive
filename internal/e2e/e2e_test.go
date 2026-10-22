@@ -269,6 +269,12 @@ func TestAskLandsAndProjects(t *testing.T) {
 		}
 		return false
 	})
+	// The lead reads the person's own pushes: its next message syncs the clone.
+	h.seed("local/textkit", map[string]string{"NOTES.md": "pushed by the person\n"})
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "hello again, I pushed some notes"}, nil)
+	if !core.Exists(filepath.Join(h.ws.Project("textkit"), "NOTES.md")) {
+		t.Fatal("the lead's view missed the person's push")
+	}
 	var sent chat.Message
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "implement capitalize_words with a test"}, &sent)
 	st := h.wait("the ask to merge", 3*minute, taskStage("textkit", "capitalize_words", work.StageDone))

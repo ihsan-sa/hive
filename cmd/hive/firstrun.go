@@ -94,10 +94,10 @@ func firstRun() int {
 	fmt.Println("Setting up the project...")
 	var p core.Project
 	if err := client.Do("POST", "/api/project", spec, &p); err != nil {
-		fmt.Fprintln(os.Stderr, "project setup:", err)
-		return 1
+		fmt.Printf("  project setup didn't finish: %s\n  The Hive keeps retrying in the background; the Dashboard shows how it's going.\n", core.Clip(err.Error(), 400))
+	} else {
+		fmt.Printf("✓ project %s (%s)\n", p.Name, p.Repo)
 	}
-	fmt.Printf("✓ project %s (%s)\n", p.Name, p.Repo)
 
 	if err := setup.EnableAutostart(root); err != nil {
 		fmt.Println("  couldn't register autostart:", err)

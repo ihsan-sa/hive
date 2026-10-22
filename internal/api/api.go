@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -109,34 +111,62 @@ func StepsFrom(turn int, evs []harness.Event) []Step {
 // Client talks to a running daemon.
 type Client struct {
 	Info DaemonInfo
+	ws   core.Workspace
+	mu   sync.Mutex // guards Info once Do follows a restarted daemon
 	http *http.Client
 }
 
 // Dial reads daemon.json and returns a client (without checking liveness).
 func Dial(ws core.Workspace) (*Client, error) {
-	raw, err := os.ReadFile(ws.DaemonFile())
+	info, err := readInfo(ws)
 	if err != nil {
-		return nil, errors.New("the Hive isn't running")
-	}
-	var info DaemonInfo
-	if err := json.Unmarshal(raw, &info); err != nil {
 		return nil, err
 	}
-	return &Client{Info: info, http: &http.Client{Timeout: 60 * time.Second}}, nil
+	return &Client{Info: info, ws: ws, http: &http.Client{Timeout: 60 * time.Second}}, nil
 }
 
-// Do calls an endpoint; body may be nil; out may be nil.
+func readInfo(ws core.Workspace) (DaemonInfo, error) {
+	var info DaemonInfo
+	raw, err := os.ReadFile(ws.DaemonFile())
+	if err != nil {
+		return info, errors.New("the Hive isn't running")
+	}
+	return info, json.Unmarshal(raw, &info)
+}
+
+// Do calls an endpoint; body may be nil; out may be nil. When the daemon
+// can't be reached (it restarted on a new port after an update), Do waits up
+// to 15s for daemon.json to name a new one and sends the request there.
 func (c *Client) Do(method, path string, body, out any) error {
+	c.mu.Lock()
+	info := c.Info
+	c.mu.Unlock()
+	err := c.do(info, method, path, body, out)
+	var op *net.OpError
+	for end := time.Now().Add(15 * time.Second); errors.As(err, &op) && op.Op == "dial" && time.Now().Before(end); {
+		time.Sleep(200 * time.Millisecond)
+		if next, e := readInfo(c.ws); e == nil && next.PID != info.PID {
+			info = next
+			c.mu.Lock()
+			c.Info = next
+			c.mu.Unlock()
+			err = c.do(info, method, path, body, out)
+		}
+	}
+	return err
+}
+
+func (c *Client) do(info DaemonInfo, method, path string, body, out any) error {
 	var rd io.Reader
 	if body != nil {
 		raw, _ := json.Marshal(body)
 		rd = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", c.Info.Port, path), rd)
+	req, err := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", info.Port, path), rd)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Info.Token)
+	req.Header.Set("Authorization", "Bearer "+info.Token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {

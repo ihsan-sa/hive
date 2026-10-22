@@ -12,16 +12,26 @@ $tmp = Join-Path $env:TEMP ('hive-install-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Force $dir, $tmp | Out-Null
 $assets = @('checksums.txt', 'hive-windows-amd64.exe', 'hive-linux-amd64')
 
-Write-Host "Downloading the Hive from $repo ..."
-$useGh = $false
-if (Get-Command gh -ErrorAction SilentlyContinue) {
-  & gh auth status *> $null
-  $useGh = ($LASTEXITCODE -eq 0)
+# Runs a program and returns its exit code. Windows PowerShell treats a
+# program's stderr as an error under 'Stop'; programs are judged by exit code.
+function Invoke-Native([scriptblock]$Block, [switch]$Quiet) {
+  $saved = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    if ($Quiet) { & $Block *> $null } else { & $Block 2>&1 | ForEach-Object { Write-Host $_ } }
+    return $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $saved
+  }
 }
+
+Write-Host "Downloading the Hive from $repo ..."
+$useGh = (Get-Command gh -ErrorAction SilentlyContinue) -and ((Invoke-Native { gh auth status } -Quiet) -eq 0)
 foreach ($a in $assets) {
   if ($useGh) {
-    & gh release download -R $repo --pattern $a --dir $tmp --clobber
-    if ($LASTEXITCODE -ne 0) { throw "could not download $a (is there a release?)" }
+    if ((Invoke-Native { gh release download -R $repo --pattern $a --dir $tmp --clobber } -Quiet) -ne 0) {
+      throw "could not download $a from $repo (is there a release, and is the network up?)"
+    }
   } else {
     Invoke-WebRequest "https://github.com/$repo/releases/latest/download/$a" -OutFile (Join-Path $tmp $a) -UseBasicParsing
   }
@@ -36,7 +46,9 @@ foreach ($a in $assets[1..2]) {
 
 $exe = Join-Path $dir "$cmd.exe"
 if (Test-Path $exe) {
-  & $exe shutdown *> $null   # the next start runs the new version; agents keep running
+  # Stop a running Hive so the next start runs the new version (agents keep running).
+  Invoke-Native { & $exe shutdown } -Quiet | Out-Null
+  Remove-Item "$exe.old" -Force -ErrorAction SilentlyContinue
   Move-Item $exe "$exe.old" -Force   # a running exe can be renamed, not overwritten
 }
 Copy-Item (Join-Path $tmp 'hive-windows-amd64.exe') $exe -Force
@@ -55,13 +67,12 @@ if (-not $env:HIVE_NO_PATH) {
 if (-not $env:HIVE_SKIP_WSL) {
   if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
     Write-Host 'Installing or updating Claude Code inside WSL (agents run there, sandboxed)...'
-    & wsl.exe --exec bash -lc 'if [ -x $HOME/.local/bin/claude ]; then $HOME/.local/bin/claude update; else curl -fsSL https://claude.ai/install.sh | bash; fi'
-    if ($LASTEXITCODE -ne 0) { Write-Warning "Claude Code inside WSL didn't install; `"$cmd doctor`" will say what to do." }
+    $code = Invoke-Native { wsl.exe --exec bash -lc 'if [ -x $HOME/.local/bin/claude ]; then $HOME/.local/bin/claude update; else curl -fsSL https://claude.ai/install.sh | bash; fi' }
+    if ($code -ne 0) { Write-Warning "Claude Code inside WSL didn't install; '$cmd doctor' will say what to do." }
   } else {
     Write-Warning "WSL 2 isn't installed. Agents need it for their sandbox: run 'wsl --install -d Ubuntu' (then restart), or opt into unsandboxed runs with '$cmd doctor --bare'."
   }
 }
 
-& $exe --version
 Write-Host ''
-Write-Host "Installed. Run: $cmd"
+Write-Host "Installed $(& $exe --version). Run: $cmd"

@@ -160,7 +160,7 @@ func (m *Module) Tick() {
 		return
 	}
 	for _, p := range m.C.Projects.List() {
-		if m.hasBaseline(p.Name) {
+		if !p.Ready || m.hasBaseline(p.Name) {
 			continue
 		}
 		m.mu.Lock()
@@ -179,6 +179,9 @@ func (m *Module) Tick() {
 func (m *Module) baseline(p core.Project) {
 	main, err := m.C.Effects.Sync(p)
 	if err != nil || main == "" {
+		m.mu.Lock()
+		m.retryAt[p.Name] = time.Now().Add(30 * time.Second) // nothing to measure yet
+		m.mu.Unlock()
 		return
 	}
 	cfg := m.C.Effects.Config(p, main)

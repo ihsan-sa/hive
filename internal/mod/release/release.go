@@ -50,6 +50,9 @@ func (m *Module) Check() (string, bool, error) {
 // processes and the daemon reattaches to them after it restarts, so live work
 // carries across.
 func (m *Module) Update() (string, error) {
+	if !strings.HasPrefix(core.Version, "v") {
+		return "this is a source build (" + core.Version + "); it doesn't update itself", nil
+	}
 	tag, newer, err := m.Check()
 	if err != nil {
 		return "", err

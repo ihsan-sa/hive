@@ -80,6 +80,12 @@ func (l *Local) Clone(repo, dir string) error {
 
 func (l *Local) DefaultBranch(string) string { return "main" }
 
+// IsEmpty reports whether the bare repository has no refs.
+func (l *Local) IsEmpty(repo string) (bool, error) {
+	out, err := Git(l.RepoPath(repo), "for-each-ref", "--count=1")
+	return strings.TrimSpace(out) == "", err
+}
+
 func (l *Local) CreateIssue(repo, title, body, marker string) (Issue, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
