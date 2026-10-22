@@ -653,7 +653,16 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 		{Host: rs.ws.Modules(), Inside: "/hive/modules"},
 	}
 	if !r.Isolated {
-		mounts = append(mounts, sandbox.Mount{Host: rs.ws.Projects(), Inside: "/hive/projects"})
+		mounts = append(mounts, sandbox.Mount{Host: rs.ws.Projects(), Inside: "/hive/projects"},
+			sandbox.Mount{Host: rs.ws.Hive(), Inside: "/hive/state"})
+		// Every agent reads the whole Hive but what grants access: the daemon's
+		// API token and the login pool's stored logins.
+		logins := filepath.Join(rs.ws.Hive(), "logins")
+		os.MkdirAll(logins, 0o700) // a login added mid-turn lands under the cover
+		mounts = append(mounts, sandbox.Mount{Host: logins, Inside: "/hive/state/logins", Hide: true})
+		if _, err := os.Stat(rs.ws.DaemonFile()); err == nil {
+			mounts = append(mounts, sandbox.Mount{Host: rs.ws.DaemonFile(), Inside: "/hive/state/daemon.json", Hide: true})
+		}
 	}
 	if r.Isolated && sb.Isolated() {
 		// Only granted modules are visible: mount each over an empty modules dir,
@@ -681,7 +690,7 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 		"GIT_AUTHOR_NAME=Hive " + r.Role, "GIT_AUTHOR_EMAIL=hive@localhost", "GIT_COMMITTER_NAME=Hive " + r.Role, "GIT_COMMITTER_EMAIL=hive@localhost",
 	}
 	if !r.Isolated {
-		env = append(env, "HIVE_PROJECTS="+in(mounts[6]))
+		env = append(env, "HIVE_PROJECTS="+in(mounts[6]), "HIVE_STATE="+in(mounts[7]))
 	}
 	if sb.Isolated() {
 		env = append(sandbox.InsideEnv("/hive/home", true), env...)
