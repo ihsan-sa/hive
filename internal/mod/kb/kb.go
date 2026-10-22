@@ -1,8 +1,10 @@
 // Package kb is the knowledge base: the Hive's memory across projects and
 // runs. Notes are plain markdown files in .hive/kb, kept in a local git
 // repository so a bad consolidation can be reverted. Agents read it directly
-// (read-only) and write through `hive agent remember`; a scheduled filer
-// consolidates it through the same take-commits-out path as any worker.
+// (read-only), search it with `hive agent search` and write through `hive
+// agent remember`; a scheduled filer consolidates the notes through the same
+// take-commits-out path as any worker. Every journal event is also filed
+// under kb/record on its own (record.go).
 package kb
 
 import (
@@ -65,6 +67,14 @@ func New(c *core.Core, a *agents.Agents) *Module {
 		}
 		return "saved as " + filepath.Base(path), nil
 	}})
+	c.Runs.Ops().Register(core.Op{Name: "search", Help: `{"query"}`, Fn: func(r core.Run, args json.RawMessage) (any, error) {
+		var q struct{ Query string }
+		if err := core.Bind(args, &q); err != nil {
+			return nil, err
+		}
+		return FormatHits(Search(c.WS.KB(), q.Query, 20)), nil
+	}})
+	m.startRecord()
 	c.J.Subscribe(func(e core.Event) {
 		if e.Kind == "kb.note" {
 			var n Note
@@ -80,9 +90,14 @@ func (m *Module) ensureRepo() {
 	os.MkdirAll(dir, 0o755)
 	if !core.Exists(filepath.Join(dir, ".git")) {
 		core.Git(dir, "init", "-q", "-b", "main")
-		os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Knowledge base\n\nOne note per file. Written by agents with `hive agent remember`; consolidated by the filer.\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Knowledge base\n\nOne note per file, written by agents with `hive agent remember` and consolidated by the filer. `record/` holds every event the Hive journaled, one file per task, request, run, chat or project, filed on its own.\n"), 0o644)
 		core.Git(dir, "add", "-A")
 		core.Git(dir, "commit", "-q", "-m", "Start the knowledge base")
+	}
+	if ignore := filepath.Join(dir, ".gitignore"); !core.Exists(ignore) {
+		os.WriteFile(ignore, []byte("record/\n"), 0o644)
+		core.Git(dir, "add", ".gitignore")
+		core.Git(dir, "commit", "-q", "-m", "Keep the record, rebuilt from the journal, out of the notes' history")
 	}
 }
 

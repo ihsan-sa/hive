@@ -19,6 +19,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/daemon"
 	"github.com/ihsan-sa/hive-standalone-build/internal/fakeagent"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 	"github.com/ihsan-sa/hive-standalone-build/internal/tui"
@@ -30,6 +31,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive ask "..."           ask the lead [--project name] [--wait]
   hive status              what the Hive is doing
   hive improve             run an improvement sweep now
+  hive kb [words]          search the knowledge base: notes and everything the Hive did
   hive answer <id> <opt>   answer something waiting on you
   hive login               log in to Claude Code and GitHub with their own logins
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
@@ -95,6 +97,18 @@ func run(args []string) int {
 		return cmdAsk(args)
 	case "status":
 		return cmdStatus()
+	case "kb":
+		ws, err := workspace()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, core.Cmd+":", err)
+			return 1
+		}
+		if len(args) == 0 {
+			fmt.Println("The knowledge base is the folder " + ws.KB() + "; its record/ has a file per task, request, run, chat and project.")
+			return 0
+		}
+		fmt.Println(kb.FormatHits(kb.Search(ws.KB(), strings.Join(args, " "), 20)))
+		return 0
 	case "improve":
 		return withClient(func(c *api.Client) error {
 			var s map[string]any
