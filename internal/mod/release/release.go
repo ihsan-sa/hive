@@ -13,7 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -25,6 +27,7 @@ type Module struct {
 	C *core.Core
 	// Restart is called after a new binary is in place (the daemon re-execs).
 	Restart func()
+	locks   sync.Map // project -> *sync.Mutex held while AfterKept runs
 }
 
 // AssetName is the release asset for an OS and architecture.
@@ -175,31 +178,39 @@ func fileSum(path string) (string, error) {
 
 // AfterKept cuts a release when a kept merge lands in the Hive's own project
 // and its dry run passes on that exact commit. The release names each change
-// merged since the last one and the reviewer runs that read its exact head; it
-// refuses if one has no read, and a change to a root path waits for the person.
+// merged since the last one and the reviewer runs that read its exact head. A
+// head with no read, or a change to a root path, waits for the person's word.
 func (m *Module) AfterKept(project, sha string) {
 	p, ok := m.C.Projects.Get(project)
 	if !ok || !p.Self {
 		return
 	}
+	// One at a time per project, so two callers never race for the same tag.
+	l, _ := m.locks.LoadOrStore(project, &sync.Mutex{})
+	l.(*sync.Mutex).Lock()
+	defer l.(*sync.Mutex).Unlock()
 	alert := func(text string) {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": project, "text": text})
 	}
+	list, stale := m.merges(project, sha)
+	if stale {
+		alert("no release at " + core.Short(sha) + ": a newer release already covers it")
+		return
+	}
 	var manifest strings.Builder
-	var root []string
-	for _, mg := range m.merges(project, sha) {
-		reads := m.C.Effects.Reads(project, mg.SHA)
-		if len(reads) == 0 {
-			alert(fmt.Sprintf("no release: PR #%d merged %s without a read of that exact commit", mg.PR, core.Short(mg.SHA)))
-			return
+	var root, unread []string
+	for _, mg := range list {
+		if reads := m.C.Effects.Reads(project, mg.SHA); len(reads) > 0 {
+			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
+		} else {
+			unread = append(unread, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
+			fmt.Fprintf(&manifest, "- #%d at %s, not read\n", mg.PR, core.Short(mg.SHA))
 		}
-		fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
 		root = append(root, mg.Root...)
 	}
-	if len(root) > 0 && !m.C.Effects.Approved(project, sha) {
-		m.C.Person.Ask(core.Ask{Kind: "release", Ref: project + "@" + sha, Project: project,
-			Title:  "Release the Hive at " + core.Short(sha) + "? It changes " + strings.Join(root, ", "),
-			Detail: strings.Join(root, ", ") + " run with elevated rights, so the release waits for you.\n\n" + manifest.String(), Options: []string{"release", "hold"}})
+	approved := m.C.Effects.Approved("release", project, sha)
+	if (len(root) > 0 || len(unread) > 0) && !approved {
+		m.hold(project, sha, root, unread, manifest.String())
 		return
 	}
 	cfg := m.C.Effects.Config(p, sha)
@@ -216,8 +227,8 @@ func (m *Module) AfterKept(project, sha string) {
 	}
 	next := bump(last)
 	body := "Released by the Hive after " + core.Short(sha) + " kept its tests and dry run green.\n\nWhat was read:\n\n" + manifest.String()
-	if len(root) > 0 {
-		body += "\nThe person released the change to " + strings.Join(root, ", ") + ".\n"
+	if approved {
+		body += "\nThe person released it.\n"
 	}
 	if err := m.C.Effects.Forge.CreateRelease(p.Repo, next, sha, body); err != nil {
 		alert("release failed: " + err.Error())
@@ -226,11 +237,33 @@ func (m *Module) AfterKept(project, sha string) {
 	m.C.J.MustAppend("hive.released", map[string]string{"project": project, "tag": next, "sha": sha})
 }
 
-// OnPerson is the person's word on a release held for a root path.
+// hold asks the person to release sha, and answers any older release ask for
+// the project, which this one covers, so a stale answer can't release.
+func (m *Module) hold(project, sha string, root, unread []string, manifest string) {
+	ref := project + "@" + sha
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "release" && a.Project == project && a.Ref != ref {
+			m.C.Person.Answer(a.ID, "superseded", "a release ask at "+core.Short(sha)+" covers it")
+		}
+	}
+	var why []string
+	if len(root) > 0 {
+		why = append(why, strings.Join(root, ", ")+" run with elevated rights")
+	}
+	if len(unread) > 0 {
+		why = append(why, strings.Join(unread, ", ")+" merged without a read of its exact commit")
+	}
+	m.C.Person.Ask(core.Ask{Kind: "release", Ref: ref, Project: project,
+		Title:  "Release the Hive at " + core.Short(sha) + "? " + strings.Join(why, "; "),
+		Detail: strings.Join(why, ", and ") + ", so the release waits for you.\n\n" + manifest, Options: []string{"release", "hold"}})
+}
+
+// OnPerson is the person's word on a held release; "release" also stands for
+// any unread head the ask named.
 func (m *Module) OnPerson(a core.Ask) {
 	project, sha, _ := strings.Cut(a.Ref, "@")
 	if a.Answer == "release" || a.Answer == "yes" {
-		m.C.Effects.Approve(project, sha)
+		m.C.Effects.Approve("release", project, sha)
 		m.AfterKept(project, sha)
 	}
 }
@@ -242,26 +275,39 @@ type merge struct {
 	Root     []string
 }
 
-// merges lists the project's merges after its last release, up to the one that made upTo.
-func (m *Module) merges(project, upTo string) []merge {
-	var out []merge
-	done := false
+// merges lists the project's merges after the one its last release was cut
+// at, up to the one that made upTo. stale means a release already covers upTo.
+func (m *Module) merges(project, upTo string) (out []merge, stale bool) {
+	var all []merge
+	from, at := 0, -1
 	m.C.J.Replay(func(e core.Event) {
 		var x struct {
 			merge
 			Project string
 		}
-		if done || (e.Kind != "effect.merged" && e.Kind != "hive.released") || e.Decode(&x) != nil || x.Project != project {
+		if (e.Kind != "effect.merged" && e.Kind != "hive.released") || e.Decode(&x) != nil || x.Project != project {
 			return
 		}
-		if e.Kind == "hive.released" {
-			out = nil
+		if e.Kind == "effect.merged" {
+			all = append(all, x.merge)
+			if x.MergeSHA == upTo {
+				at = len(all) - 1
+			}
 			return
 		}
-		out = append(out, x.merge)
-		done = x.MergeSHA == upTo
+		i := slices.IndexFunc(all, func(mg merge) bool { return mg.MergeSHA == x.SHA })
+		if i < 0 {
+			i = len(all) - 1 // a release at a commit this journal didn't merge
+		}
+		from = max(from, i+1)
 	})
-	return out
+	if at >= 0 && at < from {
+		return nil, true
+	}
+	if at < 0 {
+		at = len(all) - 1
+	}
+	return all[from : at+1], false
 }
 
 func bump(tag string) string {

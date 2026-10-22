@@ -111,9 +111,12 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			ev.Decode(&h)
 			e.hostMade[h.Project+"@"+h.SHA] = h
 		case "effect.approved":
-			var a struct{ Project, SHA string }
+			var a struct{ Kind, Project, SHA string }
 			ev.Decode(&a)
-			e.approvals[a.Project+"@"+a.SHA] = true
+			if a.Kind == "" {
+				a.Kind = "merge"
+			}
+			e.approvals[a.Kind+":"+a.Project+"@"+a.SHA] = true
 		}
 	}
 	j.Replay(apply)
@@ -488,16 +491,18 @@ func (e *Effects) Reads(project, sha string) []string {
 	return slices.Clone(e.lands[project+"@"+sha])
 }
 
-// Approve records the person's approval of a commit (protected paths, root releases).
-func (e *Effects) Approve(project, sha string) {
-	e.j.MustAppend("effect.approved", map[string]string{"project": project, "sha": sha})
+// Approve records the person's approval of a commit: kind "merge" for a head
+// that changes protected paths, "release" for a merge held before release.
+// The kinds stay apart, since a fast-forwarding forge merges a head as itself.
+func (e *Effects) Approve(kind, project, sha string) {
+	e.j.MustAppend("effect.approved", map[string]string{"kind": kind, "project": project, "sha": sha})
 }
 
-// Approved reports whether the person approved sha.
-func (e *Effects) Approved(project, sha string) bool {
+// Approved reports whether the person approved sha for kind.
+func (e *Effects) Approved(kind, project, sha string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.approvals[project+"@"+sha]
+	return e.approvals[kind+":"+project+"@"+sha]
 }
 
 // HostMade returns a host-authored commit record.
@@ -602,7 +607,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(ch.Protected) > 0 && !e.Approved(p.Name, m.SHA) {
+	if len(ch.Protected) > 0 && !e.Approved("merge", p.Name, m.SHA) {
 		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which the person merges"}
 	}
 	if !ch.Small && !e.readOK(p, ch, m.SHA) {

@@ -591,7 +591,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err
 	}
 	switch {
-	case len(ch.Protected) > 0 && !m.C.Effects.Approved(p.Name, t.SHA):
+	case len(ch.Protected) > 0 && !m.C.Effects.Approved("merge", p.Name, t.SHA):
 		t.Stage = StagePerson
 		m.save(t, "waiting on the person: changes "+strings.Join(ch.Protected, ", "))
 		m.C.Person.Ask(core.Ask{Kind: "merge", Ref: t.ID + "@" + t.SHA, Project: p.Name, From: t.Worker,
@@ -646,11 +646,15 @@ func (m *Module) review(t *Task, p core.Project) error {
 		}
 		c, _ := m.C.Effects.GetCheck(p.Name, t.SHA, "test")
 		w, _ := m.C.Runs.Get(t.Worker)
+		account := w.Brief + "\n\n## The worker's account\n\n" + finishText(w)
+		if t.Kind == "revert" {
+			account = fmt.Sprintf("The Hive made this revert itself; no worker wrote it. It reverts the merge %s because: %s\n\nIt also records that lesson in `.hive/lessons.md`. Check it undoes that merge and nothing else.", core.Short(t.RevertSHA), t.Lesson)
+		}
 		brief := fmt.Sprintf("Review round %d of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", t.Round+1, t.ID, t.Label())
 		spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
 		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": c.Output,
-			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + w.Brief + "\n\n## The worker's account\n\n" + finishText(w)}
+			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
 		}
@@ -698,17 +702,25 @@ func (m *Module) review(t *Task, p core.Project) error {
 }
 
 // sendBack returns findings to the same worker in the same checkout, a
-// bounded number of times, after which the work stops and says so.
+// bounded number of times, after which the work stops and says so. A revert
+// the Hive made has no worker, so it stops on the first findings.
 func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
 	max := m.C.WS.LoadConfig().ReviewRounds
 	if max <= 0 {
 		max = 3
 	}
-	if t.Round >= max {
-		t.Stage, t.Reason = StageStopped, fmt.Sprintf("stopped after %d rounds of fixes; what remains:\n\n%s", t.Round, core.Clip(findings, 1500))
-		m.save(t, "stopped after fix rounds")
+	reason := ""
+	switch {
+	case t.Worker == "": // a host-made revert: nobody to send it back to
+		reason = "the Hive made this commit itself, so no worker can fix it; what was found:\n\n" + core.Clip(findings, 1500)
+	case t.Round >= max:
+		reason = fmt.Sprintf("stopped after %d rounds of fixes; what remains:\n\n%s", t.Round, core.Clip(findings, 1500))
+	}
+	if reason != "" {
+		t.Stage, t.Reason = StageStopped, reason
+		m.save(t, "stopped: nothing more to send back")
 		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Stopping here. "+t.Reason+"\n\nThe pull request stays open.")
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Stopped %q after %d rounds; the PR stays open: %s", t.Label(), t.Round, t.PR.URL))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Stopped %q; the PR stays open: %s", t.Label(), t.PR.URL))
 		return nil
 	}
 	t.Round++
@@ -823,7 +835,7 @@ func (m *Module) onPersonMerge(a core.Ask) {
 		return
 	}
 	if a.Answer == "merge" || a.Answer == "yes" {
-		m.C.Effects.Approve(t.Project, sha)
+		m.C.Effects.Approve("merge", t.Project, sha)
 		t.Stage = StageTesting // test() routes to a read or the merge
 		m.save(&t, "the person approved")
 		return

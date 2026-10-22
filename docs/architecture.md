@@ -41,10 +41,10 @@ Run dir: `host/` (turn output, prompts, stop file; never mounted), `ro/` (system
 4. Effects.Extract: `git bundle` made **inside the sandbox**, fetched into the host clone with fsck, must descend from the recorded base → push `hive/<task>` → PR (idempotent by head branch).
 5. Effects.RunCheck: tests on the exact sha in a fresh clean clone, sandboxed; command read from **main's** `.hive/project.json`.
 6. Small (docs-only, ≤40 lines, no protected or high paths, not a self project) → merge. Else reviewer run (read-only tools, JSON-schema verdict) bound to the sha; a change to a `high` or `root` path in `.hive/project.json` needs a second land from a separate reviewer run on the same sha.
-7. Fix verdict / red tests → same worker, same checkout, bounded rounds (default 3) → stop with PR open.
+7. Fix verdict / red tests → same worker, same checkout, bounded rounds (default 3) → stop with PR open. A host-made revert has no worker: its reviewer gets a revert brief, and findings stop it with the PR open.
 8. Merge: main moved → host merges main into the branch (host-made commit; verdict carries) → retest. `gh pr merge --squash --match-head-commit <sha>`.
 9. improve: measure merge sha (tests + score), compare with best kept; worse → revert task (host-made revert + lessons line) → PR → merge; original PR commented.
-10. release (self projects): on a kept merge, list the merges since the last release with the reviewer runs that read each exact head; refuse if one has none; a change to a `root` path waits for the person's "release"; dry run; release with that list in its notes.
+10. release (self projects, one at a time per project): on a kept merge, list the merges after the one the last release was cut at, up to this one, with the reviewer runs that read each exact head; a merge a newer release already covers is refused with an alert; a head with no read or a change to a `root` path waits for the person's "release" (approval kind `release`, kept apart from a `merge` approval of the same sha), and a newer hold supersedes the older ask; dry run; release with that list in its notes.
 
 ## Invariants (enforced by structure)
 

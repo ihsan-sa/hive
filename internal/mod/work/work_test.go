@@ -126,3 +126,16 @@ func TestDoneProjectGone(t *testing.T) {
 		t.Fatalf("stage %q, issue open %v, log %v", task.Stage, task.IssueOpen, task.Log)
 	}
 }
+
+// A revert the Hive made has no worker, so findings on it stop the task
+// cleanly instead of reopening a run that doesn't exist.
+func TestRevertFindingsStop(t *testing.T) {
+	m, _, _, p := noCommitRig(t, 0)
+	task := &Task{ID: "t2", Project: "p", Title: "Revert: x", Kind: "revert", Stage: StageReviewing}
+	if err := m.sendBack(task, p, "it reverts too much"); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageStopped || task.Round != 0 || !strings.Contains(task.Reason, "it reverts too much") {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+}
