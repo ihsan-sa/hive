@@ -306,7 +306,10 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		return c
 	}
 	if strings.TrimSpace(command) == "" {
-		c.OK, c.Output = true, "no "+kind+" command configured"
+		c.OK, c.Output = !e.hadCommand(p.Name, kind), "no "+kind+" command configured"
+		if !c.OK {
+			c.Output = "the " + kind + " command was removed from main's settings; the person restores it"
+		}
 		return record()
 	}
 	sb, err := e.sandbox()
@@ -426,6 +429,19 @@ func WindowsShell() string {
 
 func shq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+// hadCommand reports whether a check of this kind ever ran a real command for
+// the project, so a command that later vanishes reads as red, not as none.
+func (e *Effects) hadCommand(project, kind string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, c := range e.checks {
+		if c.Project == project && c.Kind == kind && c.Output != "no "+kind+" command configured" {
+			return true
+		}
+	}
+	return false
+}
+
 // GetCheck returns the recorded check for a commit.
 func (e *Effects) GetCheck(project, sha, kind string) (Check, bool) {
 	e.mu.Lock()
@@ -496,7 +512,8 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		return Change{}, err
 	}
 	c := Change{Base: base}
-	stat, err := Git(dir, "diff", "--numstat", base, sha)
+	// No renames: a move out of a protected path must show as its deletion.
+	stat, err := Git(dir, "diff", "--numstat", "--no-renames", base, sha)
 	if err != nil {
 		return c, err
 	}

@@ -260,3 +260,33 @@ func TestScoreCheck(t *testing.T) {
 		t.Fatalf("score check: %+v", ch)
 	}
 }
+
+// A rename out of a protected path is still a change to it, and once main has
+// had a test command, losing it is red, not "no test command configured".
+func TestRenameOutOfProtectedPath(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	dir, err := c.Effects.NewCheckout(p, "w6", main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, dir, "mv", ".hive/project.json", "docs/project.md")
+	mustGit(t, dir, "commit", "-q", "-m", "move the settings to the docs")
+	r, err := c.Runs.Start(RunSpec{ID: "w6", Role: "worker", Project: p.Name, Checkout: dir, Harness: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha, err := c.Effects.Extract(p, r, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err := c.Effects.Classify(p, main, sha)
+	if err != nil || ch.Small || len(ch.Protected) == 0 {
+		t.Fatalf("a rename out of .hive/project.json must be protected: %+v %v", ch, err)
+	}
+	if ok := c.Effects.RunCheck(p, main, "test", c.Effects.Config(p, main).Test).OK; !ok {
+		t.Fatal("main's tests should pass")
+	}
+	if ok := c.Effects.RunCheck(p, sha, "test", c.Effects.Config(p, sha).Test).OK; ok {
+		t.Fatal("a vanished test command passed")
+	}
+}
