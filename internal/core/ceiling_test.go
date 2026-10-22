@@ -35,6 +35,11 @@ func TestCeilingHit(t *testing.T) {
 		"cloudflared tunnel run app":           "open",
 		"send an email to the client":          "outward",
 		"curl -X POST https://x/charge?usd=10": "money",
+		"renew it for $4.99":                   "money",
+		"awk '{print $1}' f | xargs echo $2":   "",
+		"dump secrets to a file":               "credential",
+		"cat ~/.config/gh/hosts.yml":           "credential",
+		"cat ~/.netrc":                         "credential",
 	} {
 		if got := CeilingHit(text); got != want {
 			t.Errorf("CeilingHit(%q) = %q, want %q", text, got, want)

@@ -12,7 +12,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 | `internal/proc` | Detached processes; liveness by pid + start time. |
 | `internal/agentcli` | `hive agent <op>`: what agents call from inside the sandbox. |
 | `internal/fakeagent` | `hive fake-agent`: scripted agent for tests and dry runs (FAKE:* keywords). |
-| `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb`, `system` (schedules, wake-ups), `risk` (requests past the sandbox → person), `projects`, `modules` (registry, installs, updates), `release` (self-update, self-release). |
+| `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb`, `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates), `release` (self-update, self-release). |
 | `internal/app` | Wires core + modules; tick loop. |
 | `internal/daemon` | `hive daemon`, control API (127.0.0.1, bearer token in `.hive/daemon.json`, 0600). |
 | `internal/api` | API types + client. |
@@ -52,7 +52,7 @@ Run dir: `host/` (turn output, prompts, stop file; never mounted), `ro/` (system
 - Only `hive/*` branches are pushed; main changes only by merge; `PushInitial` only into an empty repo with a host-made commit.
 - Merge requires: host-recorded passing test on that sha + (small | land verdict on that sha from a core-started read-only reviewer | host-made update of a reviewed sha | host-made revert/setup) + person approval if protected paths changed.
 - Files the sandbox can write are read with `SafeRead` (no symlinks, same-file check); the host decides what to kill/clean from its own records.
-- Nothing an agent requests runs outside the sandbox; requests go to the person (see [risk.md](risk.md)).
+- Nothing an agent requests runs outside the sandbox, except a script a warden or tribunal approved, run by the risk module in the daemon as exactly that digest-pinned script; what is always the person's goes to the person (see [risk.md](risk.md)).
 - Every state change is a journal event; restart = replay + reconcile; issue/PR/run creation is idempotent.
 
 ## Sandbox (Linux / WSL)

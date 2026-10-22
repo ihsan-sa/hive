@@ -255,7 +255,7 @@ var hostCheckout = regexp.MustCompile(`checkout is (\S+) `)
 func warden(all string) error {
 	dir := "/work"
 	if m := hostCheckout.FindStringSubmatch(all); m != nil {
-		dir = m[1]
+		dir = filepath.ToSlash(m[1]) // sh would eat a Windows path's backslashes
 	}
 	d, script := "do", "cp "+dir+"/.hive/goals.md . && echo installing left-pad"
 	if strings.Contains(all, "FAKE:wardentribunal") {

@@ -94,8 +94,7 @@ func contains(l []string, s string) bool {
 	return false
 }
 
-// eventually polls ok for up to four seconds. execute saves a step's end
-// before it tells anyone, so a test that sees the state must wait for the word.
+// eventually polls ok for up to four seconds.
 func eventually(ok func() bool) bool {
 	for i := 0; i < 200; i++ {
 		if ok() {
@@ -340,5 +339,56 @@ func TestRestartMidStepIsNotRerun(t *testing.T) {
 	g.m.Tick()
 	if got, _ := g.m.get(req.ID); got.State != "failed" {
 		t.Fatalf("got %s", got.State)
+	}
+}
+
+// The ceiling holds on a T3 step too: a tribunal majority for a money
+// script still leaves it to the person.
+func TestTribunalMajorityStillAsksForMoney(t *testing.T) {
+	g := newRig(t, 2)
+	req := g.request("tidy the build cache", "x", "T3")
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "the warden's case", "script": "echo charge > proof && stripe charges create"}); err != nil {
+		t.Fatal(err)
+	}
+	req, _ = g.m.get(req.ID)
+	g.vote(req, "approve", "approve", "approve")
+	g.m.Tick()
+	req, _ = g.m.get(req.ID)
+	g.vote(req, "approve", "approve", "approve")
+	got := g.settle(req.ID, "tribunal", "approved")
+	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+		t.Fatalf("a panel's yes ran a money step: %+v", got)
+	}
+	for _, a := range g.c.Person.Open() {
+		if a.Ref == req.ID && (!strings.Contains(a.Detail, "the warden's case") || !strings.Contains(a.Detail, "spends real money")) {
+			t.Fatalf("the person's ask lost the reasoning or the cause:\n%s", a.Detail)
+		}
+	}
+}
+
+// A warden that messages the requester waits for the reply instead of going
+// quiet, which would fail the request.
+func TestWardenAskingTheRequesterWaits(t *testing.T) {
+	g := newRig(t, 2)
+	req := g.request("install a tool", "x", "T2")
+	if _, err := g.call(g.run(req.Warden), "message", map[string]string{"to": g.worker.ID, "text": "which version?"}); err != nil {
+		t.Fatal(err)
+	}
+	if w := g.run(req.Warden); w.Waiting == "" {
+		t.Fatalf("the warden isn't waiting for the reply: %+v", w)
+	}
+}
+
+func TestTribunalThatCannotStartFails(t *testing.T) {
+	g := newRig(t, 2)
+	req := g.request("a hard step", "x", "T2")
+	cfg := g.c.WS.LoadConfig()
+	cfg.Harness = "none-such"
+	g.c.WS.SaveConfig(cfg)
+	if g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "script": "true"}) == nil {
+		t.Fatal("no error for a panel that never started")
+	}
+	if got, _ := g.m.get(req.ID); got.State != "failed" || !g.told("no tribunal") {
+		t.Fatalf("got %+v", got)
 	}
 }

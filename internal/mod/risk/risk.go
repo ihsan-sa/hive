@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -106,6 +105,14 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 	ops.Register(core.Op{Name: "install_module", Roles: []string{"lead"}, Help: `{"url","name"}`, Fn: m.opInstall})
 	c.Person.Handle("request", m.onAnswer)
 	c.Person.Handle("module", m.onModule)
+	// A warden that asks the requester ends its turn to wait for the reply,
+	// so it idles rather than going quiet, which Tick would read as failing.
+	ops.AddRouter(func(from core.Run, to, _ string) (bool, error) {
+		if from.Role == "warden" {
+			c.Runs.Wait(from.ID, "a reply from "+to)
+		}
+		return false, nil
+	})
 	return m
 }
 
@@ -318,6 +325,9 @@ func (m *Module) convene(req *Request) error {
 		s := m.Agents.Spec(id, "tribunal", req.Project, dir, m.panelBrief(*req, 1, i))
 		s.ReadOnly, s.Schema, s.Model, s.Inputs = true, VoteSchema, models[i%len(models)], map[string]string{"script.sh": req.Script}
 		if _, err := m.C.Runs.Start(s); err != nil {
+			req.State, req.Outcome = "failed", "no tribunal: "+err.Error()
+			m.save(req)
+			m.tell(*req, req.Outcome)
 			return err
 		}
 	}
@@ -393,7 +403,8 @@ func (m *Module) Tick() {
 					continue
 				}
 				if req.Round == 2 && !s.Again {
-					m.C.Runs.Reopen(s.Run, m.panelBrief(req, 2, i))
+					// Reopen fails only for a run that doesn't exist, and Get just found it.
+					_ = m.C.Runs.Reopen(s.Run, m.panelBrief(req, 2, i))
 					req.Panel[i].Again, moved = true, true
 					continue
 				}
@@ -454,8 +465,7 @@ func (m *Module) execute(id string) {
 		return
 	}
 	if err := core.CeilingGuard(req.Script, req.PersonOK); err != nil {
-		req.Reason = err.Error()
-		m.ask(&req, "Always yours", "The approved script does something that is always yours to decide. Run to run exactly this script; decline to leave it.", "run", "declined")
+		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.AlwaysPerson[core.CeilingHit(req.Script)]+", which is always yours to decide. Run to run exactly this script; decline to leave it.", "run", "declined")
 		m.act.Unlock()
 		m.tell(req, err.Error()+"; the person decides.")
 		return
@@ -465,24 +475,27 @@ func (m *Module) execute(id string) {
 	m.act.Unlock()
 
 	out, err := m.run(req)
-	m.act.Lock()
 	req.Output = core.Clip(out, 4000)
 	req.State, req.Outcome = "done", "done"
 	if err != nil {
 		req.State, req.Outcome = "failed", err.Error()
 	}
+	// Tell first, so the worker never sees the step settled before its word.
+	m.tell(req, fmt.Sprintf("%s: %q.\n%s", req.State, core.Clip(req.Want, 80), core.Clip(out, 1000)))
+	m.act.Lock()
 	m.save(&req)
 	m.act.Unlock()
-	m.tell(req, fmt.Sprintf("%s: %q.\n%s", req.State, core.Clip(req.Want, 80), core.Clip(out, 1000)))
 	if !req.PersonOK && m.C.WS.LoadConfig().Autonomy >= 3 { // "tell me after"
 		m.C.Person.Ask(core.Ask{Kind: "told", Ref: req.ID, Project: req.Project, From: req.Origin, Options: []string{"seen"},
 			Title: fmt.Sprintf("A %s step ran (%s): %s", req.Tier, req.State, core.Clip(req.Want, 100)), Detail: req.Script + "\n\n" + req.Output})
 	}
 }
 
-// run is the narrow grant: sh, the step's own empty directory, a timeout.
-// The script gets only a plain environment, so tokens in this process's
-// environment stay here and never reach an agent through its output.
+// run is the narrow grant: sh, the step's own empty directory, a timeout
+// that ends the whole process group. The script gets only a plain
+// environment, so tokens in this process's environment stay here. It runs as
+// the daemon's user, so files that user can read are guarded only by the
+// ceiling's text check (core.CeilingHit).
 func (m *Module) run(req Request) (string, error) {
 	dir := filepath.Join(m.C.WS.Hive(), "risk", req.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -490,9 +503,9 @@ func (m *Module) run(req Request) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ExecTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sh", "-c", req.Script)
+	cmd := shell(ctx, req.Script)
 	cmd.Dir = dir
-	cmd.Env = nil
+	cmd.Env = []string{} // nil would inherit everything
 	for _, k := range []string{"PATH", "HOME", "USER", "LANG", "TMPDIR"} {
 		if v, ok := os.LookupEnv(k); ok {
 			cmd.Env = append(cmd.Env, k+"="+v)
@@ -526,7 +539,7 @@ func (m *Module) onAnswer(a core.Ask) {
 		req.State, req.PersonOK = "approved", true
 		m.save(&req)
 		m.act.Unlock()
-		m.execute(req.ID)
+		go m.execute(req.ID)
 		return
 	}
 	req.State, req.Outcome = "declined", a.Answer

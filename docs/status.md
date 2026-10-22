@@ -19,7 +19,7 @@ Done:
 Not verified:
 - The tribunal with real models under bubblewrap: `TestLiveTribunal` passed on the tower bare (three models approved, the majority ran the warden's script). Under bubblewrap no tribunal formed, because the ask was clipped at 120 characters and a sandboxed worker read the hidden fixture as already gone; both are fixed (the whole ask reaches the agents, and the worker role says outside paths are hidden), and the live probes now run sandboxed when the sandbox works. Re-run under bubblewrap. Injection resistance by a real model is untested.
 - The bubblewrap path live: `TestProbeBothPaths` (non-short, `internal/sandbox`) runs `hive sandbox-probe` under each path, but skips both inside a nested sandbox. Run it on a stock Ubuntu host.
-- No Windows executor for approved steps: `execute` runs `sh -c`, so on a bare Windows host an approved step fails rather than running.
+- Approved steps on Windows: `execute` runs them with Git for Windows' `sh`, but only the three-system CI run exercises it, and a timeout there ends `sh` and not its children.
 - Live agents with real Claude Code (no plan usage spent yet). Sandboxed live runs read a short-lived token from Claude Code's credential file at run time; not exercised.
 - The GitHub forge path (gh issue/PR/merge) end to end; only the local forge is exercised.
 - Installers and self-update with real release assets (no repo/release published).

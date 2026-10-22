@@ -7,7 +7,8 @@ import (
 )
 
 // The hard ceiling. Everything inside it is judgement; these are limits, and
-// each is enforced by structure rather than by an agent's good behaviour:
+// each but the last check on a step is enforced by structure rather than by
+// an agent's good behaviour:
 //
 //   - Agents hold no credentials. Logins stay with the effects process and the
 //     harnesses' own stores; an agent gets only a short-lived token (Tokens).
@@ -20,7 +21,9 @@ import (
 //     (Effects.Classify marks them protected).
 //   - The core has no path that runs an agent's request outside the sandbox.
 //     Only the risk module does, and only as a warden's or a panel's exact,
-//     digest-pinned script, after CeilingGuard on that script.
+//     digest-pinned script, after CeilingGuard on that script. That guard is
+//     a best-effort text check that errs towards the person, not structure:
+//     a script that hides its words (a variable, base64) gets past it.
 //   - The records are append-only: the journal, chats, scores and run output
 //     live where agents can't write.
 //
@@ -28,7 +31,7 @@ import (
 // setting says.
 var AlwaysPerson = map[string]string{
 	"money":      "spends real money",
-	"credential": "mints or rotates a credential",
+	"credential": "reads, mints or rotates a credential",
 	"open":       "opens this machine to the network",
 	"outward":    "sends something outward in your name",
 }
@@ -37,8 +40,8 @@ var AlwaysPerson = map[string]string{
 // in the script that would run. It errs towards the person: a false match
 // costs one question, a miss would let a panel take the person's step.
 var alwaysPersonRe = map[string]*regexp.Regexp{
-	"money":      regexp.MustCompile(`(?i)\b(pay|payments?|purchases?|buy|spend|charges?|subscribe|subscriptions?|invoices?|billing|credit card|stripe|usd|eur)\b|\$\s?\d`),
-	"credential": regexp.MustCompile(`(?i)\b(api[ -]?key|token|secret|credential|password|ssh[ -]?key|ssh-keygen|oauth|rotate|mint|private key|keychain|gh auth)\b`),
+	"money":      regexp.MustCompile(`(?i)\b(pay|payments?|purchases?|buy|spend|charges?|subscribe|subscriptions?|invoices?|billing|credit card|stripe|usd|eur|dollars?)\b|\$\s?\d+(\.\d\d|,\d{3})|\$\d{2,}`), // not $1: a shell's positional parameter
+	"credential": regexp.MustCompile(`(?i)\b(api[ -]?keys?|tokens?|secrets?|credentials?|passwords?|ssh[ -]?keys?|ssh-keygen|oauth|rotate|mint|private keys?|keychain|gh auth)\b|\.ssh/|\.netrc|\.git-credentials|\.config/gh\b|\.aws/|\.docker/config|\.kube/config|\.gnupg|\.npmrc|\.pypirc`),
 	"open":       regexp.MustCompile(`(?i)\b(open (a |the )?port|listen on|0\.0\.0\.0|expose|port[ -]?forward|firewall|ufw|iptables|nft|public url|tunnel|ngrok|cloudflared|inbound)\b`),
 	"outward":    regexp.MustCompile(`(?i)\b(send (an? )?(e-?mail|mail|message|sms|text|dm)|email to|sendmail|tweet|post (to|on|as)|publish (as|in my name)|on my behalf|in my name)\b`),
 }
