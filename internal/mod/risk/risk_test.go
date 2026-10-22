@@ -2,6 +2,7 @@ package risk
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -261,6 +262,47 @@ func TestPanelWithoutAVoteDeclines(t *testing.T) {
 	}
 }
 
+// A seat that never reopens for round 2 counts as a decline after
+// ReopenTries ticks, so the request settles rather than sitting in tribunal.
+func TestSeatThatCannotReopenDeclines(t *testing.T) {
+	g := newRig(t, 2)
+	g.m.reopen = func(string, string) error { return errors.New("refused") }
+	req := g.request("a hard step", "x", "T2")
+	g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "script": "echo ran > proof"})
+	req, _ = g.m.get(req.ID)
+	g.vote(req, "approve", "approve", "approve")
+	for i := 1; i < ReopenTries; i++ {
+		g.m.Tick()
+	}
+	if got, _ := g.m.get(req.ID); got.State != "tribunal" || got.Panel[0].Fails != ReopenTries-1 {
+		t.Fatalf("settled before the last try: %+v", got)
+	}
+	g.m.Tick()
+	got, _ := g.m.get(req.ID)
+	if got.State != "asked" || got.Panel[0].Votes[1] != "decline" || !strings.Contains(got.Panel[0].Why[1], "could not be reopened: refused") {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// A failed step tells the agent only that it failed: what the script
+// printed, on either stream, stays with the person.
+func TestFailedStepKeepsOutputFromTheAgent(t *testing.T) {
+	g := newRig(t, 2)
+	req := g.request("a step", "x", "T2")
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "echo printed-out; echo printed-err 1>&2; exit 3"}); err != nil {
+		t.Fatal(err)
+	}
+	got := g.settle(req.ID, "approved", "running")
+	if got.State != "failed" || !strings.Contains(got.Output, "printed-err") || !g.told("exit status 3") {
+		t.Fatalf("got %+v", got)
+	}
+	for _, p := range g.run(g.worker.ID).Pending {
+		if strings.Contains(p, "printed-") {
+			t.Fatalf("the agent saw the script's output: %s", p)
+		}
+	}
+}
+
 // The warden's script runs on the host, so its brief names host paths.
 func TestWardenBriefNamesHostPaths(t *testing.T) {
 	g := newRig(t, 2)
@@ -373,14 +415,22 @@ func TestTribunalMajorityStillAsksForMoney(t *testing.T) {
 }
 
 // A warden that messages the requester waits for the reply: its turn ends
-// idle, not quiet, and the request stays weighing. A message to no agent
-// fails, and leaves the warden free to decide.
+// idle, not quiet, and the request stays weighing. A message that fails to
+// send (to no agent, or to one that has ended) leaves the warden free to decide.
 func TestWardenAskingTheRequesterWaits(t *testing.T) {
 	g := newRig(t, 2)
 	req := g.request("install a tool", "x", "T2")
 	g.c.J.MustAppend("run.turn_started", map[string]any{"id": req.Warden, "turn": 1})
 	if _, err := g.call(g.run(req.Warden), "message", map[string]string{"to": "nobody", "text": "hello?"}); err == nil || g.run(req.Warden).Waiting != "" {
 		t.Fatalf("a failed send left the warden waiting: %v", err)
+	}
+	ended, err := g.c.Runs.Start(core.RunSpec{Role: "worker", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.c.J.MustAppend("run.status", map[string]any{"id": ended.ID, "status": core.StatusDone})
+	if _, err := g.call(g.run(req.Warden), "message", map[string]string{"to": ended.ID, "text": "hello?"}); err == nil || g.run(req.Warden).Waiting != "" {
+		t.Fatalf("a send to an ended run left the warden waiting: %v", err)
 	}
 	if _, err := g.call(g.run(req.Warden), "message", map[string]string{"to": g.worker.ID, "text": "which version?"}); err != nil {
 		t.Fatal(err)

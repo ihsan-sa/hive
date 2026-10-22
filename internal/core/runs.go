@@ -44,7 +44,7 @@ type RunSpec struct {
 	Brief      string            `json:"brief"`
 	Persistent bool              `json:"persistent,omitempty"` // leads idle between turns instead of finishing
 	Isolated   bool              `json:"isolated,omitempty"`   // no view of other projects
-	Modules    []string          `json:"modules,omitempty"`    // granted modules; nil means all
+	Modules    []string          `json:"modules,omitempty"`    // modules an isolated run may see; others see all
 	Tools      []string          `json:"tools,omitempty"`      // explicit harness tool list
 	Inputs     map[string]string `json:"inputs,omitempty"`     // name -> content, placed read-only in /hive/run
 }
@@ -655,11 +655,12 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	if !r.Isolated {
 		mounts = append(mounts, sandbox.Mount{Host: rs.ws.Projects(), Inside: "/hive/projects"})
 	}
-	if r.Modules != nil && sb.Isolated() {
+	if r.Isolated && sb.Isolated() {
 		// Only granted modules are visible: mount each over an empty modules dir,
 		// which holds their mount points, since bwrap can't make them inside a
-		// read-only bind.
+		// read-only bind. No grants leaves it empty.
 		empty := filepath.Join(rs.ws.RunHost(r.ID), "modules")
+		os.MkdirAll(empty, 0o755)
 		mounts[5].Host = empty
 		for _, m := range r.Modules {
 			os.MkdirAll(filepath.Join(empty, m), 0o755)
