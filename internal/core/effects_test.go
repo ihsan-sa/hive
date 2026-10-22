@@ -269,6 +269,7 @@ func TestRenameOutOfProtectedPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	os.Mkdir(filepath.Join(dir, "docs"), 0o755)
 	mustGit(t, dir, "mv", ".hive/project.json", "docs/project.md")
 	mustGit(t, dir, "commit", "-q", "-m", "move the settings to the docs")
 	r, err := c.Runs.Start(RunSpec{ID: "w6", Role: "worker", Project: p.Name, Checkout: dir, Harness: "fake"})
