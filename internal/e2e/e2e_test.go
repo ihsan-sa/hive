@@ -449,8 +449,8 @@ func TestRecovery(t *testing.T) {
 	h.wait("the crashed run to be retried and land", 3*minute, taskStage("rec", "crash once", work.StageDone))
 }
 
-// A request past the sandbox reaches the person, and their answer reaches the
-// agent. A module installs from a git URL only on the person's approval and
+// A request past the sandbox goes to a warden, which runs its script, and the
+// outcome reaches the agent. A module installs from a git URL only on the person's approval and
 // updates when its source releases. The Hive releases itself after a kept merge.
 func TestPersonModulesRelease(t *testing.T) {
 	t.Parallel()
@@ -459,8 +459,6 @@ func TestPersonModulesRelease(t *testing.T) {
 	h.post("/api/project", map[string]any{"name": "self", "repo": "me/self", "self": true}, nil)
 
 	h.post("/api/ask", map[string]string{"project": "self", "title": "needs a package", "known": "FAKE:needpackage"}, nil)
-	st := h.wait("the request to reach the person", 2*minute, func(st api.State) bool { return len(st.Asks) == 1 && st.Asks[0].Kind == "request" })
-	h.post("/api/answer", map[string]string{"id": st.Asks[0].ID, "answer": "done", "note": "installed it"}, nil)
 	h.wait("the worker to continue and land", 3*minute, taskStage("self", "needs a package", work.StageDone))
 	h.wait("a release after the kept merge", 2*minute, func(api.State) bool {
 		rel, err := h.forge.LatestRelease("me/self")
@@ -480,7 +478,7 @@ func TestPersonModulesRelease(t *testing.T) {
 	git(src, "commit", "-q", "-m", "v1")
 	git(src, "tag", "v1.0.0")
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module " + src}, nil)
-	st = h.wait("the module install to reach the person", 2*minute, func(st api.State) bool {
+	st := h.wait("the module install to reach the person", 2*minute, func(st api.State) bool {
 		for _, a := range st.Asks {
 			if a.Kind == "module" {
 				return true

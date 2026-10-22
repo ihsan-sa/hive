@@ -51,7 +51,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Improve = improve.New(c, a.Agents, a.Work, a.Chat)
 	a.KB = kb.New(c, a.Agents)
 	a.System = system.New(c)
-	a.Risk = risk.New(c, a.Mods)
+	a.Risk = risk.New(c, a.Mods, a.Agents)
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = &release.Module{C: c}
 	a.Improve.OnKept = a.Release.AfterKept
@@ -100,6 +100,7 @@ func (a *App) Tick() {
 	a.Improve.TickSweeps()
 	a.KB.Tick()
 	a.System.Tick()
+	a.Risk.Tick()
 }
 
 // Run ticks until ctx ends.

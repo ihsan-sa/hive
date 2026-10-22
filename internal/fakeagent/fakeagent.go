@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:needpackage), so tests and the release
+// FAKE:limit, FAKE:needpackage, and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -65,6 +65,14 @@ func Main(argv []string) int {
 		structured = review(all)
 		raw, _ := json.Marshal(structured)
 		text = string(raw)
+	case "warden":
+		err = warden(all)
+	case "tribunal":
+		vote := "approve"
+		if strings.Contains(all, "FAKE:paneldecline") {
+			vote = "decline"
+		}
+		_, err = agentcli.Call("vote", map[string]string{"vote": vote, "reason": "FAKE panelist"}, time.Minute)
 	case "sweep":
 		_, err = agentcli.Call("brief", map[string]string{"title": "FAKE sweep: find the next real gain", "done": "score improves", "known": "evidence: fake"}, time.Minute)
 		if err == nil {
@@ -128,9 +136,10 @@ func worker(all, prompt string) (string, error) {
 		_, err := agentcli.Call("finish", map[string]string{"status": "blocked", "account": "FAKE: blocked on purpose"}, time.Minute)
 		return "blocked", err
 	}
-	if strings.Contains(all, "FAKE:needpackage") && !strings.Contains(prompt, "[the person answered") {
-		_, err := agentcli.Call("warden", map[string]string{"want": "install the left-pad package", "why": "the brief needs it", "steps": "echo installing left-pad"}, time.Minute)
-		return "waiting for the person", err
+	if strings.Contains(all, "FAKE:needpackage") && !strings.Contains(prompt, "[request ") {
+		why := "the brief needs it " + strings.Join(riskKeys.FindAllString(all, -1), " ")
+		_, err := agentcli.Call("warden", map[string]string{"want": "install the left-pad package", "why": why, "steps": "echo installing left-pad", "tier": "T2"}, time.Minute)
+		return "waiting for the warden", err
 	}
 	agentcli.Call("progress", map[string]string{"text": "making the change"}, time.Minute)
 	switch {
@@ -159,6 +168,26 @@ func worker(all, prompt string) (string, error) {
 	}
 	_, err := agentcli.Call("finish", map[string]string{"status": "done", "account": "FAKE: made the change", "tested": "ran nothing", "unsure": "everything"}, time.Minute)
 	return "done", err
+}
+
+// riskKeys steer the fake warden and panel; the worker passes them on in its request.
+var riskKeys = regexp.MustCompile(`FAKE:(warden|panel)[a-z]+`)
+
+func warden(all string) error {
+	d, script := "do", "echo installing left-pad"
+	for _, k := range []string{"safer", "decline", "tribunal"} {
+		if strings.Contains(all, "FAKE:warden"+k) {
+			d = k
+		}
+	}
+	if strings.Contains(all, "FAKE:wardenmoney") {
+		script = "echo buying && stripe charges create"
+	}
+	if _, err := agentcli.Call("decide", map[string]string{"decision": d, "reason": "FAKE warden: " + d, "script": script, "gain": "large"}, time.Minute); err != nil {
+		return err
+	}
+	_, err := agentcli.Call("finish", map[string]string{"status": "done", "account": "FAKE warden decided " + d}, time.Minute)
+	return err
 }
 
 func review(all string) map[string]any {

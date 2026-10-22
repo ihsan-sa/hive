@@ -19,8 +19,8 @@ import (
 //   - Goals, the score and the project's settings are the person's to merge
 //     (Effects.Classify marks them protected).
 //   - The core has no path that runs an agent's request outside the sandbox.
-//     A request past an agent's reach becomes a question for the person
-//     (Person); the risk module records it and relays the answer.
+//     Only the risk module does, and only as a warden's or a panel's exact,
+//     digest-pinned script, after CeilingGuard on that script.
 //   - The records are append-only: the journal, chats, scores and run output
 //     live where agents can't write.
 //

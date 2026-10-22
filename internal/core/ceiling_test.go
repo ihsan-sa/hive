@@ -16,8 +16,8 @@ func TestRouteByTierAndAutonomy(t *testing.T) {
 		{"T2", 1, "", "person-first"}, // turning autonomy down makes T2 ask first
 		{"T3", 2, "", "tribunal"},
 		{"T3", 1, "", "person-first"},
-		{"", 2, "", "warden"},            // unknown tier is T2
-		{"T1", 3, "money", "person"},     // the ceiling outranks a T1 label
+		{"", 2, "", "warden"},             // unknown tier is T2
+		{"T1", 3, "money", "person"},      // the ceiling outranks a T1 label
 		{"T3", 3, "credential", "person"}, // and every autonomy level
 	}
 	for _, c := range cases {
