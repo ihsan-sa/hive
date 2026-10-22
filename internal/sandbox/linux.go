@@ -153,6 +153,9 @@ func Exec(specPath string) int {
 		if err != nil {
 			return fail(err)
 		}
+		if visibleInside(t, p) {
+			continue
+		}
 		name := filepath.Base(t)
 		if strings.HasPrefix(name, "hive") {
 			name = "hive" // hive-linux-amd64 is `hive` inside
@@ -257,6 +260,22 @@ func findTool(t string) (string, error) {
 		t = p
 	}
 	return filepath.EvalSymlinks(t)
+}
+
+// visibleInside reports whether tool t, which resolves to p, is already on
+// the sandbox's PATH. Such a tool (Codex's Node launcher, say) may need its
+// package beside it, so it runs where it is instead of being bound alone.
+func visibleInside(t, p string) bool {
+	l, err := exec.LookPath(t)
+	if filepath.IsAbs(t) || err != nil || !strings.Contains(":"+insideBins+":", ":"+filepath.Dir(l)+":") {
+		return false
+	}
+	for _, d := range systemDirs {
+		if strings.HasPrefix(p, d+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // systemDirs are exposed read-only; everything else (home, /mnt, /run, /tmp,

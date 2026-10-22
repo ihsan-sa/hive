@@ -136,7 +136,7 @@ Failures, and what happens:
 - **A stuck worker.** Time and spend are ledgers that raise alerts. A quiet or overspending run is flagged on the dashboard, its checkout is kept, and the lead can hand it to a fresh agent on the same branch with the first one's notes.
 - **A red check.** The findings go back to the worker on the same branch. After a bounded number of rounds the work stops, says what remains, and leaves the pull request open.
 - **A conflict.** The branch is brought up to date with main, the worker resolves what collides, and the gate runs again.
-- **A usage limit.** The run is parked, and nothing marks it failed for that. The dashboard says which plan is limited and when it resets, and parked work resumes on its own.
+- **A usage limit.** The person can add several logins for each harness. A plan that hits its limit is parked until its reset and the other plans carry the work; only when every plan is limited is the run parked, and nothing marks it failed for that. The dashboard says which plan is limited and when it resets, and parked work resumes on its own.
 - **A crash, a kill, or the API down.** A run killed by something other than the Hive is retried on its checkout with its commits kept; one the Hive stopped on purpose isn't. When the API can't be reached, work waits and retries with growing gaps.
 
 ## 13. Platforms
@@ -145,7 +145,7 @@ Linux, macOS and Windows, with one install line each. Each platform needs a sand
 
 ## 14. What v1 leaves out
 
-Slack, mail and phone as channels (the chat module is the one channel). Several workspaces (the workspaces module). A module marketplace beyond installing from a git URL or an official source. GPU and server-resource management in the system module beyond schedules and wake-ups. The web mirror of the control center. Harnesses beyond Claude Code, though the adapter seam must exist and Codex is the first to add. Per-agent operating-system users; one user with a sandbox per run is enough on one machine.
+Slack, mail and phone as channels (the chat module is the one channel). Several workspaces (the workspaces module). A module marketplace beyond installing from a git URL or an official source. GPU and server-resource management in the system module beyond schedules and wake-ups. The web mirror of the control center. Harnesses beyond Claude Code and Codex. Per-agent operating-system users; one user with a sandbox per run is enough on one machine.
 
 ## 15. Milestones
 

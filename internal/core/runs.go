@@ -129,7 +129,7 @@ func (p Plan) Parked(now time.Time) bool {
 // TokenSource lists a harness's logins and hands out a login's short-lived credential.
 type TokenSource interface {
 	Logins(h string) []Login
-	AgentEnv(l Login) ([]string, error)
+	AgentEnv(l Login, home string) ([]string, error)
 }
 
 // Runs owns every agent run.
@@ -177,6 +177,7 @@ type turnEnded struct {
 	ID          string          `json:"id"`
 	Turn        int             `json:"turn"`
 	SessionLive bool            `json:"session_live"`
+	Session     string          `json:"session,omitempty"` // the id the harness reported
 	Result      *harness.Result `json:"result,omitempty"`
 	Status      string          `json:"status"`
 	Reason      string          `json:"reason,omitempty"`
@@ -236,6 +237,9 @@ func (rs *Runs) apply(e Event) {
 		var t turnEnded
 		e.Decode(&t)
 		r.SessionLive = r.SessionLive || t.SessionLive
+		if t.Session != "" {
+			r.Session = t.Session
+		}
 		r.Status, r.Reason, r.ParkedUntil = t.Status, t.Reason, t.ParkedUntil
 		r.Proc = proc.Handle{}
 		if t.Result != nil {
@@ -315,6 +319,9 @@ func (rs *Runs) Start(s RunSpec) (Run, error) {
 		}
 	}
 	files := map[string]string{"system.md": s.System, "brief.md": s.Brief}
+	if s.Schema != "" {
+		files["schema.json"] = s.Schema
+	}
 	for k, v := range s.Inputs {
 		files[k] = v
 	}
@@ -386,7 +393,7 @@ func (rs *Runs) Plans() []Plan {
 
 // pickLogin chooses the login for a run's next turn: of those not parked at
 // their usage limit, the least used, the machine's own first on a tie.
-func (rs *Runs) pickLogin(h string) (Login, []string, error) {
+func (rs *Runs) pickLogin(h, home string) (Login, []string, error) {
 	logins := rs.tokens.Logins(h)
 	now := time.Now()
 	rs.mu.Lock()
@@ -402,7 +409,7 @@ func (rs *Runs) pickLogin(h string) (Login, []string, error) {
 	err := fmt.Errorf("every %s login is at its usage limit", HarnessName(h))
 	for _, l := range open {
 		var env []string
-		if env, err = rs.tokens.AgentEnv(l); err == nil {
+		if env, err = rs.tokens.AgentEnv(l, home); err == nil {
 			return l, env, nil
 		}
 	}
@@ -544,6 +551,7 @@ func (rs *Runs) watch(r Run) {
 // TurnLog parses a turn's output file.
 type TurnLog struct {
 	SessionLive bool
+	Session     string
 	Result      *harness.Result
 	Limit       *harness.RateLimit
 	Steps       []harness.Event
@@ -557,7 +565,7 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 		for _, ev := range h.Parse(line) {
 			switch ev.Kind {
 			case "init":
-				tl.SessionLive = true
+				tl.SessionLive, tl.Session = true, ev.SessionID
 			case "result":
 				tl.Result = ev.Result
 			case "ratelimit":
@@ -568,6 +576,17 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 			}
 		}
 	})
+	// A harness whose result carries no text (Codex) answers with its last message.
+	if tl.Result != nil && !tl.Result.IsError && tl.Result.Text == "" {
+		for _, s := range tl.Steps {
+			if s.Kind == "text" {
+				tl.Result.Text = s.Text
+			}
+		}
+		if r.Schema != "" && tl.Result.Structured == nil && json.Valid([]byte(tl.Result.Text)) {
+			tl.Result.Structured = json.RawMessage(tl.Result.Text)
+		}
+	}
 	return tl
 }
 
@@ -589,7 +608,7 @@ func (rs *Runs) endTurn(r Run) {
 	if tl.Limit != nil {
 		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
 	}
-	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Result: tl.Result}
+	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Session: tl.Session, Result: tl.Result}
 	cur, _ := rs.Get(r.ID)
 	switch {
 	case cur.StopAsked:
@@ -704,7 +723,7 @@ func (rs *Runs) launch(r Run) {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(time.Minute)})
 		return
 	}
-	login, tok, err := rs.pickLogin(r.Harness)
+	login, tok, err := rs.pickLogin(r.Harness, rs.ws.RunHome(r.ID))
 	if err != nil {
 		until := rs.freeAt(r.Harness)
 		if !until.After(time.Now()) {
@@ -759,6 +778,13 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	}
 	if sb.Isolated() {
 		t.SystemFile = "/hive/run/system.md"
+	}
+	t.Home, t.Writable = in(home), []string{in(mounts[2]), in(home)}
+	if r.Schema != "" {
+		t.SchemaFile = filepath.Join(in(mounts[1]), "schema.json")
+		if sb.Isolated() {
+			t.SchemaFile = "/hive/run/schema.json"
+		}
 	}
 	env := []string{
 		"HIVE_ID=" + r.ID, "HIVE_ROLE=" + r.Role, "HIVE_PROJECT=" + r.Project, "HIVE_TASK=" + r.Task,

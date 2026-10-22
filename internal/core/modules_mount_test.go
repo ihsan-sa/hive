@@ -12,10 +12,12 @@ import (
 
 type isolatedBox struct{}
 
-func (isolatedBox) Name() string                                 { return "isolated" }
-func (isolatedBox) Isolated() bool                               { return true }
-func (isolatedBox) Check() error                                 { return nil }
-func (isolatedBox) Start(sandbox.Spec) (sandbox.Proc, error)     { return sandbox.Proc{}, errors.New("not started") }
+func (isolatedBox) Name() string   { return "isolated" }
+func (isolatedBox) Isolated() bool { return true }
+func (isolatedBox) Check() error   { return nil }
+func (isolatedBox) Start(sandbox.Spec) (sandbox.Proc, error) {
+	return sandbox.Proc{}, errors.New("not started")
+}
 func (isolatedBox) Run(sandbox.Spec, time.Duration) (int, error) { return 0, errors.New("not run") }
 
 // An isolated run sees only its granted modules, so none granted means none,
