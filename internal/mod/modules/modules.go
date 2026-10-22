@@ -274,7 +274,8 @@ func (r *Registry) record(url, name string) (Module, error) {
 	return m, nil
 }
 
-// Update moves git-sourced modules to their source's newest release.
+// Update moves git-sourced modules to their source's newest release, or its
+// newest commit when it has no releases.
 func (r *Registry) Update() []string {
 	var changed []string
 	for _, m := range r.List() {
@@ -285,6 +286,10 @@ func (r *Registry) Update() []string {
 			continue
 		}
 		tag := latestTag(m.Dir)
+		if tag == "" {
+			// A source with no releases is followed to its newest commit.
+			tag, _ = core.Git(m.Dir, "rev-parse", "--short", "origin/HEAD")
+		}
 		if tag == "" || tag == m.Source.Release {
 			continue
 		}

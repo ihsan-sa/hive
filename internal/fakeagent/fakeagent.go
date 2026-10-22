@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:needpackage, FAKE:rmoutside <path>, FAKE:inject, and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:needpackage, FAKE:module, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -92,7 +92,7 @@ func Main(argv []string) int {
 		}
 		structured = map[string]string{"vote": vote, "reason": "FAKE panelist"}
 	case "sweep":
-		_, err = call("brief", map[string]string{"title": "FAKE sweep: find the next real gain", "done": "score improves", "known": "evidence: fake"}, time.Minute)
+		_, err = call("brief", map[string]string{"title": "FAKE sweep: find the next real gain", "done": "score improves", "known": "evidence: fake FAKE:raisescore"}, time.Minute)
 		if err == nil {
 			_, err = call("finish", map[string]string{"status": "done", "account": "filed one ask"}, time.Minute)
 		}
@@ -230,6 +230,17 @@ func worker(all, prompt, system string) (string, error) {
 		os.WriteFile("score.txt", []byte("1\n"), 0o644)
 	case strings.Contains(all, "FAKE:raisescore"):
 		os.WriteFile("score.txt", []byte("9\n"), 0o644)
+	case moduleKey.MatchString(all):
+		m := moduleKey.FindStringSubmatch(all)
+		os.WriteFile("module.json", []byte(`{"name":"`+m[1]+`","description":"FAKE module: its skill says the codeword"}`), 0o644)
+		os.WriteFile("skill.md", []byte("The codeword is "+m[2]+".\n"), 0o644)
+	case useModuleKey.MatchString(all):
+		found, _ := filepath.Glob(filepath.Join(os.Getenv("HIVE_MODULES"), "*"+useModuleKey.FindStringSubmatch(all)[1], "skill.md"))
+		if len(found) == 0 {
+			return "", fmt.Errorf("no installed module's skill matches")
+		}
+		skill, _ := os.ReadFile(found[0])
+		os.WriteFile("USED.md", skill, 0o644)
 	case strings.Contains(all, "FAKE:docs"):
 		appendFile("NOTES.md", "- a small doc change\n")
 	case strings.Contains(prompt, "conflict"):
@@ -250,6 +261,12 @@ func worker(all, prompt, system string) (string, error) {
 	_, err := call("finish", map[string]string{"status": "done", "account": "FAKE: made the change", "tested": "ran nothing", "unsure": "everything"}, time.Minute)
 	return "done", err
 }
+
+// moduleKey makes the checkout a module named $1 whose skill says codeword $2;
+// useModuleKey copies the skill of the installed module whose folder ends in
+// $1 into USED.md.
+var moduleKey = regexp.MustCompile(`FAKE:module (\w+) (\w+)`)
+var useModuleKey = regexp.MustCompile(`FAKE:usemodule (\w+)`)
 
 // riskKeys steer the fake warden and panel; the worker passes them on in its request.
 var riskKeys = regexp.MustCompile(`FAKE:(warden|panel)[a-z]+`)

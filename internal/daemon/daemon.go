@@ -23,6 +23,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
@@ -53,6 +54,9 @@ func Start(ws core.Workspace) (*api.Client, error) {
 	if c, ok := Running(ws); ok {
 		return c, nil
 	}
+	if err := checkHarness(ws.LoadConfig()); err != nil {
+		return nil, err
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -69,6 +73,20 @@ func Start(ws core.Workspace) (*api.Client, error) {
 	}
 	log, _ := os.ReadFile(filepath.Join(ws.Hive(), "daemon.log.err"))
 	return nil, fmt.Errorf("the Hive didn't start: %s", core.Clip(string(log), 600))
+}
+
+// checkHarness refuses a harness the Hive can't run, so a bad name fails when
+// it is set or the Hive starts, not when the first agent does.
+func checkHarness(c core.Config) error {
+	if _, err := harness.Get(c.Harness); err != nil {
+		return err
+	}
+	for name, p := range c.Projects {
+		if _, err := harness.Get(p.Harness); err != nil {
+			return fmt.Errorf("project %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // Stop asks the daemon to shut down. Running agents are separate processes
@@ -97,6 +115,9 @@ func Run(ws core.Workspace, waitFor int) error {
 	}
 	if _, ok := Running(ws); ok {
 		return errors.New("the Hive is already running")
+	}
+	if err := checkHarness(ws.LoadConfig()); err != nil {
+		return err
 	}
 	a, err := app.New(ws, Forge())
 	if err != nil {
@@ -313,6 +334,9 @@ func (s *server) routes() http.Handler {
 			return nil, errors.New("bare runs need the warning read first (`" + core.Cmd + " doctor --bare`)")
 		}
 		c.BareAccepted = cur.BareAccepted
+		if err := checkHarness(c); err != nil {
+			return nil, err
+		}
 		if err := a.C.WS.SaveConfig(c); err != nil {
 			return nil, err
 		}
