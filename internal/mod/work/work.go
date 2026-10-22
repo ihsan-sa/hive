@@ -106,6 +106,10 @@ type Module struct {
 	// one ran and succeeded (the risk module).
 	Steps func(run string) (string, bool)
 
+	// Weigh settles a merge that changes protected paths as autonomy says
+	// (the risk module) and returns who decides; unset, the person does.
+	Weigh func(core.Ask) string
+
 	// OnMerged is called after a task's merge is recorded (the improve module measures).
 	OnMerged func(t Task)
 
@@ -593,11 +597,20 @@ func (m *Module) test(t *Task, p core.Project) error {
 	switch {
 	case len(ch.Protected) > 0 && !m.C.Effects.Approved(p.Name, t.SHA):
 		t.Stage = StagePerson
-		m.save(t, "waiting on the person: changes "+strings.Join(ch.Protected, ", "))
-		m.C.Person.Ask(core.Ask{Kind: "merge", Ref: t.ID + "@" + t.SHA, Project: p.Name, From: t.Worker,
+		diff, _ := core.Git(m.C.WS.Project(p.Name), append([]string{"diff", ch.Base, t.SHA, "--"}, ch.Protected...)...)
+		a := core.Ask{Kind: "merge", Ref: t.ID + "@" + t.SHA, Project: p.Name, From: t.Worker,
 			Title:  fmt.Sprintf("Merge %q? It changes %s", t.Label(), strings.Join(ch.Protected, ", ")),
-			Detail: fmt.Sprintf("%s\n\nPR: %s", strings.Join(ch.Protected, ", ")+" are yours to merge.", t.PR.URL), Options: []string{"merge", "leave open"}})
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q changes %s, which is yours to approve. It's waiting on you: %s", t.Label(), strings.Join(ch.Protected, ", "), t.PR.URL))
+			Detail: fmt.Sprintf("These hold the project's goals, score or settings. PR: %s\n\n%s", t.PR.URL, core.Clip(diff, 6000)), Options: []string{"merge", "leave open"}}
+		who := "person"
+		if m.Weigh != nil {
+			who = m.Weigh(a)
+		} else {
+			m.C.Person.Ask(a)
+		}
+		m.save(t, "waiting on the "+who+": changes "+strings.Join(ch.Protected, ", "))
+		if who == "person" {
+			m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q changes %s, which is yours to approve. It's waiting on you: %s", t.Label(), strings.Join(ch.Protected, ", "), t.PR.URL))
+		}
 	case ch.Small || m.C.Effects.Reviewed(p.Name, t.SHA):
 		t.Stage = StageMerging
 		m.save(t, "tests passed; "+map[bool]string{true: "small change, no read needed", false: "already read"}[ch.Small])
@@ -828,7 +841,7 @@ func (m *Module) onPersonMerge(a core.Ask) {
 		m.save(&t, "the person approved")
 		return
 	}
-	t.Stage, t.Reason = StageStopped, "the person left it open"
+	t.Stage, t.Reason = StageStopped, strings.TrimSuffix("left open: "+a.Note, ": ")
 	m.save(&t, t.Reason)
 }
 

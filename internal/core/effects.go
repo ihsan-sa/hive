@@ -472,12 +472,13 @@ func (e *Effects) GetVerdict(project, sha string) (Verdict, bool) {
 	return v, ok
 }
 
-// Approve records the person's approval of a commit (protected paths).
+// Approve records the approval of a commit that changes protected paths:
+// the person's, or a warden's when autonomy lets it decide.
 func (e *Effects) Approve(project, sha string) {
 	e.j.MustAppend("effect.approved", map[string]string{"project": project, "sha": sha})
 }
 
-// Approved reports whether the person approved sha.
+// Approved reports whether sha's protected changes were approved.
 func (e *Effects) Approved(project, sha string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -571,7 +572,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", err
 	}
 	if len(ch.Protected) > 0 && !e.Approved(p.Name, m.SHA) {
-		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which the person merges"}
+		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
 	}
 	if !ch.Small && !e.readOK(p.Name, m.SHA) {
 		return "", fmt.Errorf("refusing to merge %s: no land verdict bound to that exact commit", short(m.SHA))

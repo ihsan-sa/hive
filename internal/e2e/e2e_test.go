@@ -521,9 +521,22 @@ func TestRecovery(t *testing.T) {
 	h.wait("the crashed run to be retried and land", 3*minute, taskStage("rec", "crash once", work.StageDone))
 }
 
+// toldAbout waits for a "told" ask whose title names what was decided.
+func toldAbout(what string) func(api.State) bool {
+	return func(st api.State) bool {
+		for _, a := range st.Asks {
+			if a.Kind == "told" && strings.Contains(a.Title, what) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // A request past the sandbox goes to a warden, which runs its script, and the
-// outcome reaches the agent. A module installs from a git URL only on the person's approval and
-// updates when its source releases. The Hive releases itself after a kept merge.
+// outcome reaches the agent. At autonomy 2 a warden approves a module install
+// and a goals change, and the person is told after. A module updates when its
+// source releases. The Hive releases itself after a kept merge.
 func TestPersonModulesRelease(t *testing.T) {
 	t.Parallel()
 	h := start(t)
@@ -550,19 +563,6 @@ func TestPersonModulesRelease(t *testing.T) {
 	git(src, "commit", "-q", "-m", "v1")
 	git(src, "tag", "v1.0.0")
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module " + src}, nil)
-	st := h.wait("the module install to reach the person", 2*minute, func(st api.State) bool {
-		for _, a := range st.Asks {
-			if a.Kind == "module" {
-				return true
-			}
-		}
-		return false
-	})
-	for _, a := range st.Asks {
-		if a.Kind == "module" {
-			h.post("/api/answer", map[string]string{"id": a.ID, "answer": "install"}, nil)
-		}
-	}
 	module := func(st api.State) (api.ModuleView, bool) {
 		for _, m := range st.Modules {
 			if m.Name == "tools" {
@@ -571,7 +571,11 @@ func TestPersonModulesRelease(t *testing.T) {
 		}
 		return api.ModuleView{}, false
 	}
-	h.wait("the module to install at v1.0.0", minute, func(st api.State) bool { m, ok := module(st); return ok && m.Release == "v1.0.0" })
+	h.wait("a warden to install the module at v1.0.0", 2*minute, func(st api.State) bool { m, ok := module(st); return ok && m.Release == "v1.0.0" })
+	h.wait("the person to be told after", minute, toldAbout("Install module tools"))
+	h.post("/api/ask", map[string]string{"project": "self", "title": "write down a goal", "known": "FAKE:goals"}, nil)
+	h.wait("a warden to approve the goals change and it to merge", 3*minute, taskStage("self", "write down a goal", work.StageDone))
+	h.wait("the person to be told after", minute, toldAbout("write down a goal"))
 	os.WriteFile(filepath.Join(src, "tool.sh"), []byte("echo hi\n"), 0o644)
 	git(src, "add", "-A")
 	git(src, "commit", "-q", "-m", "v1.1")

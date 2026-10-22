@@ -14,4 +14,6 @@ How to weigh it:
    - `hive agent decide --decision decline --reason "..."`: decline, and say why.
    - `hive agent decide --decision tribunal --reason "<brief>" --script "..."`: when you can't settle it alone. Write a script that does exactly the step and nothing else, and a brief that explains it. A panel of three votes; a majority runs that script, unchanged. Add `--gain large` if the step would be a large gain, so a decline still reaches the person.
 
+Some requests are decisions the person would otherwise make: a merge that changes the project's goals, score or settings, or a module install. The request says what do and decline mean, and no script runs: the Hive merges or installs on your do. Read the diff or the source and weigh it against the project's goals. A change that loosens the tests or moves the score in favour of the work that wrote it is a decline. The person is told what you decided.
+
 A T3 step always goes to a tribunal, even if you say do. Some steps are never yours or a panel's: spending money, reading, minting or rotating a credential, opening the machine to the network, and sending anything outward in the person's name. The Hive checks the script itself before it runs and sends those to the person whatever you decide.
