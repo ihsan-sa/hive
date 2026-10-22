@@ -497,7 +497,7 @@ func (m *Module) land(t *Task, p core.Project) error {
 	if errors.Is(err, core.ErrNoChanges) {
 		// An ask whose whole job was a step outside the checkout has nothing to merge.
 		steps, ok := m.Steps(r.ID)
-		if false && ok {
+		if ok {
 			t.Stage = StageDone
 			m.save(t, "done outside the checkout:\n"+steps)
 			m.C.Effects.Forge.Comment(p.Repo, t.Issue.Number, "Done with nothing to merge. What ran outside the checkout:\n\n"+steps+"\n\n"+finishText(r))
