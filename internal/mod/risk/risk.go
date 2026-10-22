@@ -70,7 +70,12 @@ type Seat struct {
 	Votes [2]string `json:"votes"` // approve | decline, per round
 	Why   [2]string `json:"why"`
 	Again bool      `json:"again,omitempty"` // reopened for round 2
+	Fails int       `json:"fails,omitempty"` // failed reopens for round 2
 }
+
+// ReopenTries is how many times a seat may fail to reopen for round 2
+// before it counts as a decline.
+const ReopenTries = 3
 
 // Module weighs requests and relays what is the person's.
 type Module struct {
@@ -82,11 +87,13 @@ type Module struct {
 	mu   sync.Mutex
 	reqs map[string]*Request
 	busy map[string]bool // steps running in this process
+
+	reopen func(id, text string) error // the core's Reopen; a test swaps it
 }
 
 // New loads requests and registers ops.
 func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
-	m := &Module{C: c, Mod: mod, Agents: ag, reqs: map[string]*Request{}, busy: map[string]bool{}}
+	m := &Module{C: c, Mod: mod, Agents: ag, reqs: map[string]*Request{}, busy: map[string]bool{}, reopen: c.Runs.Reopen}
 	apply := func(e core.Event) {
 		if e.Kind != "risk.saved" {
 			return
@@ -106,14 +113,29 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 	c.Person.Handle("request", m.onAnswer)
 	c.Person.Handle("module", m.onModule)
 	// A warden that asks an agent ends its turn to wait for the reply, so it
-	// idles rather than going quiet, which Tick would read as failing. A
-	// message to no agent fails to send, so the warden isn't left waiting.
-	ops.AddRouter(func(from core.Run, to, _ string) (bool, error) {
-		if _, ok := c.Runs.Find(to); ok && from.Role == "warden" {
-			c.Runs.Wait(from.ID, "a reply from "+to)
+	// idles rather than going quiet, which Tick would read as failing. It
+	// waits only once the message is sent, so a failed send never leaves it
+	// waiting on a reply that won't come.
+	for _, op := range ops.List() {
+		if op.Name != "message" {
+			continue
 		}
-		return false, nil
-	})
+		send := op.Fn
+		op.Fn = func(r core.Run, a json.RawMessage) (any, error) {
+			out, err := send(r, a)
+			var msg struct{ To string }
+			if err == nil && r.Role == "warden" && core.Bind(a, &msg) == nil {
+				if msg.To == "parent" {
+					msg.To = r.Parent
+				}
+				if _, ok := c.Runs.Find(msg.To); ok {
+					c.Runs.Wait(r.ID, "a reply from "+msg.To)
+				}
+			}
+			return out, err
+		}
+		ops.Register(op)
+	}
 	return m
 }
 
@@ -428,9 +450,17 @@ func (m *Module) Tick() {
 					continue
 				}
 				if req.Round == 2 && !s.Again {
-					if m.C.Runs.Reopen(s.Run, m.panelBrief(req, 2, i)) == nil { // else the next tick tries again
-						req.Panel[i].Again, moved = true, true
+					err := m.reopen(s.Run, m.panelBrief(req, 2, i))
+					switch {
+					case err == nil:
+						req.Panel[i].Again = true
+					case s.Fails+1 < ReopenTries: // the next tick tries again
+						req.Panel[i].Fails++
+					default: // settle it rather than wait on a seat that never reopens
+						req.Panel[i].Again = true
+						req.Panel[i].Votes[1], req.Panel[i].Why[1] = "decline", "could not be reopened: "+err.Error()
 					}
+					moved = true
 					continue
 				}
 				if s.Votes[req.Round-1] == "" {
