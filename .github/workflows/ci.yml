@@ -31,3 +31,27 @@ jobs:
           GIT_AUTHOR_EMAIL: ci@localhost
           GIT_COMMITTER_NAME: ci
           GIT_COMMITTER_EMAIL: ci@localhost
+  sandboxed-e2e:
+    # The end to end with agents under bubblewrap, the default sandbox on Linux, so a sandbox
+    # break goes red on a PR. The runner's Ubuntu blocks unprivileged user namespaces through
+    # AppArmor; lifting that lets bwrap make them, and HIVE_SANDBOX_BWRAP=1 keeps the hive on
+    # the bwrap path it takes on a stock Ubuntu.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: bubblewrap and user namespaces
+        run: |
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: end to end under bubblewrap
+        run: go test ./internal/e2e/ -timeout 30m
+        env:
+          HIVE_E2E_SANDBOX: auto
+          HIVE_SANDBOX_BWRAP: "1"
+          GIT_AUTHOR_NAME: ci
+          GIT_AUTHOR_EMAIL: ci@localhost
+          GIT_COMMITTER_NAME: ci
+          GIT_COMMITTER_EMAIL: ci@localhost

@@ -112,7 +112,7 @@ func sandboxed() bool {
 // guard refuses, so sandboxed() would be false where the probe passes.
 func TestSandboxedAsksTheBinary(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		t.Skip("no Linux sandbox here")
+		t.Skip("not Linux")
 	}
 	if sandboxed() {
 		return
@@ -120,7 +120,7 @@ func TestSandboxedAsksTheBinary(t *testing.T) {
 	if exec.Command(bin, "sandbox-probe").Run() == nil {
 		t.Fatal("sandboxed() is false where `hive sandbox-probe` passes")
 	}
-	t.Skip("no Linux sandbox here")
+	t.Skip("the sandbox probe fails here")
 }
 
 // quiesce stops live agents and waits for their processes to end, so the
