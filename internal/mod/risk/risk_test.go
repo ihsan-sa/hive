@@ -94,13 +94,27 @@ func contains(l []string, s string) bool {
 	return false
 }
 
-func (g *rig) told(text string) bool {
-	for _, p := range g.run(g.worker.ID).Pending {
-		if strings.Contains(p, text) {
+// eventually polls ok for up to four seconds. execute saves a step's end
+// before it tells anyone, so a test that sees the state must wait for the word.
+func eventually(ok func() bool) bool {
+	for i := 0; i < 200; i++ {
+		if ok() {
 			return true
 		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	return false
+	return ok()
+}
+
+func (g *rig) told(text string) bool {
+	return eventually(func() bool {
+		for _, p := range g.run(g.worker.ID).Pending {
+			if strings.Contains(p, text) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // vote ends each panelist's turn with its structured vote, as a real
@@ -306,12 +320,14 @@ func TestAutonomyMovesT2(t *testing.T) {
 	req = g.request("install a tool", "x", "T2")
 	g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "true"})
 	g.settle(req.ID, "approved", "running")
-	time.Sleep(50 * time.Millisecond)
-	told := false
-	for _, a := range g.c.Person.Open() {
-		told = told || (a.Kind == "told" && a.Ref == req.ID)
-	}
-	if !told {
+	if !eventually(func() bool {
+		for _, a := range g.c.Person.Open() {
+			if a.Kind == "told" && a.Ref == req.ID {
+				return true
+			}
+		}
+		return false
+	}) {
 		t.Fatal("autonomy 3 didn't tell the person after")
 	}
 }
