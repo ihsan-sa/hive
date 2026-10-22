@@ -17,3 +17,4 @@ Gotchas hit while building. Append; don't rewrite.
 - **[wsl] Claude Code in WSL** lives in ~/.local/bin (not on non-login PATH), version 2.1.71 here; its help doesn't list `--append-system-prompt-file`, so inside sandboxes the prompt is passed inline.
 - **[go] exec.Cmd.Start can only be called once**, even after it failed ("exec: already started"); a retry with different flags needs a fresh Cmd. Bit us when Windows (GitHub Actions job objects) refuses CREATE_BREAKAWAY_FROM_JOB.
 - **[editing] Git Bash heredocs collapse a doubled backslash to one** even with a quoted delimiter here, so Python edits fed through them lose escapes; write the script to a file with the Write tool, or use Edit.
+- **[landing] the box that lands this repo has no Go**, so a local `tests/green.sh` or cc-green run there checks nothing (cc-green ran 0 checks). The evidence that the suite passed is GitHub CI on the PR's head, which runs the same vet, short tests and e2e.
