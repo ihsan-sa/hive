@@ -291,3 +291,20 @@ func TestRenameOutOfProtectedPath(t *testing.T) {
 		t.Fatal("a vanished test command passed")
 	}
 }
+
+// MainBundle leaves no temp file behind, whether it succeeds or the rename fails.
+func TestMainBundleLeavesNoTemp(t *testing.T) {
+	c, _, p, _ := setupProject(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.bundle")
+	if err := c.Effects.MainBundle(p, path); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(dir, "blocked", "x"), 0o755) // a non-empty directory can't be renamed over
+	if err := c.Effects.MainBundle(p, filepath.Join(dir, "blocked")); err == nil {
+		t.Fatal("rename over a directory should fail")
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(left) != 0 {
+		t.Fatalf("temp left behind: %v", left)
+	}
+}

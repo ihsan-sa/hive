@@ -3,11 +3,15 @@ package chat
 import (
 	"fmt"
 	"net"
+	"os"
+	"strings"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 )
 
 // A remote that never answers holds a person's post for syncWait at most,
@@ -63,4 +67,86 @@ func TestSyncBeforePostIsBounded(t *testing.T) {
 	}
 	ln.Close() // the held fetch ends; the next sync waits for it to let go
 	c.Effects.Sync(p)
+}
+
+// An isolated project's lead gets main.bundle in its run dir before each
+// message, and it survives Runs.Start. An empty repository is skipped
+// quietly; a real failure is journaled with the bundle: prefix.
+func TestLeadBundle(t *testing.T) {
+	dir := t.TempDir()
+	forge := &core.Local{Dir: filepath.Join(dir, "forge")}
+	ws := core.Workspace{Root: filepath.Join(dir, "hive")}
+	ws.Init()
+	cfg := ws.LoadConfig()
+	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
+	ws.SaveConfig(cfg)
+	c, err := core.Open(ws, forge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	m := &Module{C: c, Agents: &agents.Agents{C: c, Mod: modules.New(ws, c.J)}, chats: map[string]*Chat{}, msgs: map[string][]Message{}, read: map[string]int{}}
+	failures := func() (out []string) {
+		for _, e := range c.J.Since(0) {
+			if e.Kind == "chat.sync_failed" {
+				out = append(out, string(e.Data))
+			}
+		}
+		return
+	}
+	lead := func(name string) string {
+		forge.EnsureRepo("me/"+name, "")
+		p, err := c.Projects.Add(core.Project{Name: name, Repo: "me/" + name, Isolated: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Effects.Clone(p); err != nil {
+			t.Fatal(err)
+		}
+		return name
+	}
+	ch := func(name string) *Chat { return &Chat{ID: "project:" + name, Kind: "project", Project: name} }
+	bundleOf := func(name string) string {
+		r, ok := c.Runs.Find("lead-project-" + name)
+		if !ok {
+			t.Fatal("no lead started for", name)
+		}
+		return filepath.Join(ws.RunRO(r.ID), "main.bundle")
+	}
+
+	empty := lead("empty")
+	if err := m.deliverToLead(ch(empty), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(bundleOf(empty)); err == nil || len(failures()) != 0 {
+		t.Fatalf("an empty repository should skip the bundle quietly: %v %v", err, failures())
+	}
+
+	full := lead("full")
+	p, _ := c.Projects.Get(full)
+	seed := filepath.Join(dir, "seed")
+	core.Git(dir, "clone", "-q", forge.RepoPath("me/"+full), seed)
+	os.WriteFile(filepath.Join(seed, "a.txt"), []byte("a"), 0o644)
+	core.Git(seed, "add", ".")
+	core.Git(seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a")
+	core.Git(seed, "push", "-q", "origin", "HEAD:"+p.Branch)
+	if _, err := c.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.deliverToLead(ch(full), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(bundleOf(full)); err != nil {
+		t.Fatalf("main.bundle missing after Runs.Start: %v", err)
+	}
+	if len(failures()) != 0 {
+		t.Fatal(failures())
+	}
+
+	os.RemoveAll(ws.Project(full)) // a broken clone is a real failure
+	r, _ := c.Runs.Find("lead-project-" + full)
+	m.bundleFor(ch(full), p, r.ID)
+	if f := failures(); len(f) != 1 || !strings.Contains(f[0], "bundle:") {
+		t.Fatalf("want one bundle: failure, got %v", f)
+	}
 }

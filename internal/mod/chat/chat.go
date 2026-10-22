@@ -220,14 +220,7 @@ func (m *Module) deliverToLead(ch *Chat, text string) error {
 			return fmt.Errorf("project %s not found", ch.Project)
 		}
 	}
-	bundle := func(id string) {
-		if p.Isolated { // an empty repository has no main to bundle; the lead reads its checkout as is
-			os.MkdirAll(m.C.WS.RunRO(id), 0o755)
-			if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(id), "main.bundle")); err != nil {
-				m.C.J.MustAppend("chat.sync_failed", map[string]string{"chat": ch.ID, "project": p.Name, "error": "bundle: " + err.Error()})
-			}
-		}
-	}
+	bundle := func(id string) { m.bundleFor(ch, p, id) }
 	if ch.Lead != "" {
 		if r, ok := m.C.Runs.Get(ch.Lead); ok && (!r.Terminal()) {
 			bundle(r.ID)
@@ -264,6 +257,21 @@ func (m *Module) deliverToLead(ch *Chat, text string) error {
 	c.Lead = id
 	m.C.J.MustAppend("chat.updated", c)
 	return nil
+}
+
+// bundleFor puts main.bundle in an isolated project's run dir for its lead.
+func (m *Module) bundleFor(ch *Chat, p core.Project, id string) {
+	if !p.Isolated {
+		return
+	}
+	// An empty repository has no main to bundle; the lead reads its checkout as is.
+	if _, err := core.Git(m.C.WS.Project(p.Name), "rev-parse", "-q", "--verify", "refs/heads/"+p.Branch); err != nil {
+		return
+	}
+	os.MkdirAll(m.C.WS.RunRO(id), 0o755)
+	if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(id), "main.bundle")); err != nil {
+		m.C.J.MustAppend("chat.sync_failed", map[string]string{"chat": ch.ID, "project": p.Name, "error": "bundle: " + err.Error()})
+	}
 }
 
 // Notify posts an outcome into a thread and tells the chat's lead.

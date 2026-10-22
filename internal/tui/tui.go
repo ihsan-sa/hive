@@ -217,7 +217,7 @@ func summarize(evs []core.Event) []string {
 				if t.Kind == "revert" && t.Stage == work.StageMerged {
 					label = "reverted"
 				}
-				out = append(out, fmt.Sprintf("%s  %s: %s", e.At.Local().Format("Mon 15:04"), label, t.Title))
+				out = append(out, fmt.Sprintf("%s  %s: %s", e.At.Local().Format("Mon 15:04"), label, t.Label()))
 			}
 			tasks[t.ID] = t
 		case "person.asked":

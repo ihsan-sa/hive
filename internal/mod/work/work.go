@@ -236,7 +236,7 @@ func (m *Module) Revert(of Task, mergeSHA, reason string) (Task, error) {
 	for _, t := range m.List(func(t Task) bool { return t.Kind == "revert" && t.RevertSHA == mergeSHA }) {
 		return t, nil // already reverting
 	}
-	t := &Task{ID: core.NewID(), Project: of.Project, Title: "Revert: " + of.Label(), Kind: "revert", Stage: StageReverting,
+	t := &Task{ID: core.NewID(), Project: of.Project, Title: "Revert: " + core.Clip(of.Title, 112), Kind: "revert", Stage: StageReverting,
 		From: "improve", Chat: of.Chat, Thread: of.Thread, RevertOf: of.ID, RevertSHA: mergeSHA, Lesson: reason, Created: time.Now().UTC()}
 	m.save(t, "revert filed: "+reason)
 	return *t, nil

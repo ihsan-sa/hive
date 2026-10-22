@@ -730,7 +730,11 @@ func (e *Effects) MainBundle(p Project, path string) error {
 		os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func appendLine(path, header, line string) error {

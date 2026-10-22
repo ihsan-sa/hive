@@ -43,7 +43,7 @@ func TestHiddenOutsidePathIsFiled(t *testing.T) {
 		return nil, nil
 	}
 	defer func() { call = agentcli.Call }()
-	hidden := filepath.Join(t.TempDir(), "fixture")
+	hidden := filepath.Join(t.TempDir(), "my fixture")
 	brief := "# Brief: Delete it: FAKE:rmoutside " + hidden[:len(hidden)/2] + "\n\n## The ask\n\nDelete it: FAKE:rmoutside " + hidden + "\n\n## What done looks like\n\n(none)\n"
 	for _, c := range []struct{ system, want, steps string }{
 		{"", "finish", ""},

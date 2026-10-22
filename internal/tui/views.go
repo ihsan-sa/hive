@@ -68,7 +68,7 @@ func (m *model) dashRows() []row {
 		}
 		if add(row{key: "live:" + p.Name, depth: 1, text: fmt.Sprintf("work in flight (%d)", len(live)), expand: len(live) > 0, def: true}) {
 			for _, t := range live {
-				d := detail{kind: "task", id: t.ID, title: core.Clip(t.Title, 40)}
+				d := detail{kind: "task", id: t.ID, title: core.Clip(t.Label(), 40)}
 				if add(row{key: "task:" + t.ID, depth: 2, text: m.taskLine(t), expand: true, open: &d}) {
 					if r, ok := m.run(t.Worker); ok {
 						rd := detail{kind: "run", id: r.ID, title: runLabel(r)}
@@ -104,7 +104,7 @@ func (m *model) dashRows() []row {
 		}
 		if add(row{key: "done:" + p.Name, depth: 1, text: fmt.Sprintf("recent work (%d)", len(done)), expand: len(done) > 0}) {
 			for _, t := range done {
-				d := detail{kind: "task", id: t.ID, title: core.Clip(t.Title, 40)}
+				d := detail{kind: "task", id: t.ID, title: core.Clip(t.Label(), 40)}
 				add(row{key: "task:" + t.ID, depth: 2, text: m.taskLine(t), open: &d})
 			}
 		}
@@ -214,7 +214,7 @@ func (m *model) taskLine(t work.Task) string {
 	if t.PR.Number > 0 {
 		pr = fmt.Sprintf("  #%d", t.PR.Number)
 	}
-	return fmt.Sprintf("[%s] %s%s%s  %s", stage, t.Title, pr, progress, stDim.Render(ago(t.Updated)))
+	return fmt.Sprintf("[%s] %s%s%s  %s", stage, t.Label(), pr, progress, stDim.Render(ago(t.Updated)))
 }
 
 func (m *model) runLine(r core.Run) string {
@@ -444,7 +444,7 @@ func (m *model) viewDetail(d *detail) []string {
 		if !ok {
 			return []string{"", "  loading…"}
 		}
-		kv("task", t.Title)
+		kv("task", t.Label())
 		kv("stage", t.Stage+"  "+core.Clip(t.Reason, 200))
 		kv("project", t.Project)
 		if t.Issue.Number > 0 {

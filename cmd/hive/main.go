@@ -289,7 +289,7 @@ func cmdStatus() int {
 			fmt.Printf("\n%s (%s)  best score: %s\n", p.Name, p.Repo, best)
 			for _, t := range p.Tasks {
 				if !t.Terminal() {
-					fmt.Printf("  [%s] %s  %s\n", t.Stage, t.Title, t.PR.URL)
+					fmt.Printf("  [%s] %s  %s\n", t.Stage, t.Label(), t.PR.URL)
 				}
 			}
 		}
