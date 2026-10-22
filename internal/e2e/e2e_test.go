@@ -675,6 +675,28 @@ func TestOutsideStep(t *testing.T) {
 	h.wait("the worker to land", 3*minute, taskStage("out", title, work.StageDone))
 }
 
+// A helper a worker spawns ships like any worker: its commit gets a branch and
+// pull request of its own, no issue, and reaches main.
+func TestHelperShips(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/helpers", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "helpers", "repo": "me/helpers"}, nil)
+	h.post("/api/ask", map[string]string{"project": "helpers", "title": "split the work with a helper FAKE:spawnhelper"}, nil)
+	st := h.wait("the helper's work to merge", 4*minute, taskStage("helpers", "FAKE helper: write the helper part", work.StageDone))
+	tk, _ := task(st, "helpers", "FAKE helper: write the helper part")
+	parent, _ := task(st, "helpers", "split the work with a helper")
+	if tk.Issue.Number != 0 || tk.PR.Number == 0 || tk.MergeSHA == "" || tk.From != parent.Worker {
+		t.Fatalf("helper task %+v, parent %+v", tk, parent)
+	}
+	if _, err := core.Git(h.forge.RepoPath("me/helpers"), "merge-base", "--is-ancestor", tk.SHA, "main"); err != nil {
+		t.Fatalf("the helper's commit %s is not on main: %v", tk.SHA, err)
+	}
+	if n := h.forge.Issues("me/helpers"); n != 1 {
+		t.Fatalf("issues: %d, want the parent's only", n)
+	}
+}
+
 func init() { _ = fmt.Sprint }
 
 // TestLiveWarden is the host probe for a real harness: run it with

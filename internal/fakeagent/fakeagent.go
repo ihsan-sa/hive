@@ -223,6 +223,11 @@ func worker(all, prompt, system string) (string, error) {
 		return "waiting for the warden", err
 	}
 	call("progress", map[string]string{"text": "making the change"}, time.Minute)
+	if strings.Contains(prompt, "FAKE:spawnhelper") { // the first turn only
+		if _, err := call("spawn", map[string]string{"brief": "FAKE helper: write the helper part"}, time.Minute); err != nil {
+			return "", err
+		}
+	}
 	switch {
 	case strings.Contains(all, "FAKE:breaktests"):
 		os.WriteFile("BROKEN", []byte("tests fail while this exists\n"), 0o644)

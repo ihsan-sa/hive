@@ -557,6 +557,9 @@ func (rs *Runs) endTurn(r Run) {
 		if cur.Finish != nil {
 			account = fmt.Sprintf("status: %s\n%s\ntested: %s\nunsure: %s", cur.Finish.Status, cur.Finish.Account, cur.Finish.Tested, cur.Finish.Unsure)
 		}
+		if r.Task != "" {
+			account += "\nwhere its commits go: their own pull request, task " + r.Task + "; the thread hears when it merges"
+		}
 		if p, ok := rs.Get(r.Parent); ok && (!p.Terminal() || p.Persistent) {
 			rs.Send(p.ID, fmt.Sprintf("[%s %s finished]\n%s", r.Role, r.ID, account))
 		}

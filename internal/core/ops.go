@@ -193,14 +193,14 @@ func Bind(args json.RawMessage, v any) error {
 	return nil
 }
 
-// Spawner creates checkouts and system prompts for spawned agents; the agents
+// Spawner creates checkouts and system prompts for spawned agents; the work
 // module provides it.
 type Spawner func(parent Run, role, project, brief, model string) (RunSpec, error)
 
 // Router delivers a message to an address the core doesn't own (the person, a chat).
 type Router func(from Run, to, text string) (bool, error)
 
-// SetSpawner installs the agents module's spawner.
+// SetSpawner installs the work module's spawner.
 func (o *Ops) SetSpawner(s Spawner) { o.spawner = s }
 
 // AddRouter installs a message router (the chat module routes "person").
@@ -249,7 +249,7 @@ func (o *Ops) registerCore() {
 		}{r.ID, f})
 		return "recorded; end your turn now", nil
 	}})
-	o.Register(Op{Name: "spawn", Help: `{"role": "worker", "brief": "...", "project": "(default: yours)", "model": "(optional)"} -> a helper agent; its account comes back to you as a message`, Fn: func(r Run, a json.RawMessage) (any, error) {
+	o.Register(Op{Name: "spawn", Help: `{"role": "worker", "brief": "...", "project": "(default: yours)", "model": "(optional)"} -> a helper agent; its account comes back to you as a message, and a worker's commits get their own pull request`, Fn: func(r Run, a json.RawMessage) (any, error) {
 		var m struct{ Role, Brief, Project, Model string }
 		if err := Bind(a, &m); err != nil {
 			return nil, err
