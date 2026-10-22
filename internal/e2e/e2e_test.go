@@ -107,7 +107,9 @@ func sandboxed() bool {
 }
 
 // TestSandboxedAsksTheBinary: the live probes take the sandbox whenever the
-// built binary says it works.
+// built binary says it works. It proves sandboxed() runs the built binary and
+// not an in-process probe: that would exec this test binary, which the sandbox
+// guard refuses, so sandboxed() would be false where the probe passes.
 func TestSandboxedAsksTheBinary(t *testing.T) {
 	if runtime.GOOS != "linux" || exec.Command(bin, "sandbox-probe").Run() != nil {
 		t.Skip("no Linux sandbox here")
