@@ -460,6 +460,38 @@ func TestGateAndLoop(t *testing.T) {
 	})
 }
 
+// A worker isn't blamed for a failure main has too: its change waits with no
+// round spent, main's failure is one alert, and once main is fixed the change
+// is brought up to date and merges.
+func TestMainRedDoesNotBlameWorker(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/red", map[string]string{
+		".hive/project.json": `{"test": "grep -q green STATE"}`,
+		".hive/goals.md":     "# Goals\n",
+		".hive/lessons.md":   "# Lessons\n\n",
+		"STATE":              "red\n",
+	})
+	h.post("/api/project", map[string]any{"name": "red", "repo": "me/red"}, nil)
+	h.post("/api/ask", map[string]string{"project": "red", "title": "add a feature", "known": "a plain change"}, nil)
+	st := h.wait("the change to wait on main", 4*minute, func(st api.State) bool {
+		tk, ok := task(st, "red", "add a feature")
+		return ok && strings.HasPrefix(tk.Reason, "waiting on main")
+	})
+	tk, _ := task(st, "red", "add a feature")
+	alerts := 0
+	for _, a := range st.Alerts {
+		if a.Kind == "main-red" {
+			alerts++
+		}
+	}
+	if tk.Round != 0 || alerts != 1 {
+		t.Fatalf("round %d, %d main-red alerts; want 0 and 1", tk.Round, alerts)
+	}
+	h.seed("me/red", map[string]string{"STATE": "green\n"})
+	h.wait("the change to merge once main is green", 4*minute, taskStage("red", "add a feature", work.StageDone))
+}
+
 // M7: kill the Hive in the middle of an ask, restart, and get the same
 // outcome with no duplicate issue, run or PR. Usage limits park and resume;
 // a crashed turn is retried on its checkout.

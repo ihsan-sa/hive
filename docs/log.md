@@ -32,3 +32,6 @@
 
 ## 2026-10-22 System prompt inline inside sandboxes, file outside
 - Decision: sandboxed turns pass `--append-system-prompt <text>`; bare Windows turns pass a file | Why: Windows argv is capped at 32k; inside the sandbox argv goes via the spec file with Linux limits, and older Claude Code builds may lack the -file flag | Tradeoff: two code paths in the Claude adapter.
+
+## 2026-10-22 Red tests on a red main wait instead of going back
+- Decision: when a change's tests fail, the gate looks at main's own test result first; if main is red too, the change waits (no fix round spent) and main's failure is one alert per main commit; once main is green the branch is brought up to date and tested again, and only a failure then goes back to the worker | Why: workers were sent to fix main's environment, which they can't | Tradeoff: a change that adds its own failure on top of a red main isn't caught until main is green.

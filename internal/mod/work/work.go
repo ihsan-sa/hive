@@ -584,6 +584,12 @@ func (m *Module) test(t *Task, p core.Project) error {
 		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("Tests on %s: **%s**\n\n```\n%s\n```", core.Short(t.SHA), passFail(c.OK), core.Clip(c.Output, 1500)))
 	}
 	if !c.OK {
+		if mc := m.mainTests(p, main, cfg.Test); !mc.OK {
+			return m.waitOnMain(t, p, main, mc)
+		}
+		if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
+			return err
+		}
 		return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
 	}
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
@@ -606,6 +612,55 @@ func (m *Module) test(t *Task, p core.Project) error {
 		m.save(t, "tests passed; asking for a read")
 	}
 	return nil
+}
+
+// mainTests is main's own test result, measured once per main commit (the
+// baseline and the post-merge measurement usually already have it).
+func (m *Module) mainTests(p core.Project, main, command string) core.Check {
+	if c, ok := m.C.Effects.GetCheck(p.Name, main, "test"); ok {
+		return c
+	}
+	return m.C.Effects.RunCheck(p, main, "test", command)
+}
+
+// waitOnMain holds a red change while main's own tests are red, since the
+// failure can't be told apart from main's. Main's failure is raised once per
+// main commit, not once per waiting change; when main goes green the change
+// is brought up to date and tested again.
+func (m *Module) waitOnMain(t *Task, p core.Project, main string, mc core.Check) error {
+	reason := "waiting on main: its own tests fail at " + core.Short(main) + ", so this failure isn't the worker's"
+	if t.Reason == reason {
+		return nil
+	}
+	if len(m.List(func(o Task) bool { return o.Project == p.Name && o.Reason == reason })) == 0 {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name,
+			"text": "main's tests fail in " + p.Name + " at " + core.Short(main) + ", so changes with failing tests wait for main to go green: " + core.Clip(mc.Output, 300)})
+	}
+	t.Reason = reason
+	m.save(t, reason)
+	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Main's own tests fail too at "+core.Short(main)+", so this isn't sent back to the worker. It waits for main to go green, then is brought up to date and tested again.")
+	return nil
+}
+
+// catchUp brings t's branch up to date with main and sends it to be tested
+// again. It reports false when the branch already contains main.
+func (m *Module) catchUp(t *Task, p core.Project, main, why string) (bool, error) {
+	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
+		return false, nil
+	}
+	next, err := m.C.Effects.UpdateBranch(p, t.SHA, main)
+	if errors.Is(err, core.ErrConflict) {
+		return true, m.conflict(t, p)
+	}
+	if err != nil {
+		return true, err
+	}
+	if err := m.C.Effects.Push(p, t.Branch, next); err != nil {
+		return true, err
+	}
+	t.SHA, t.Stage, t.Reason = next, StageTesting, ""
+	m.save(t, why+"; branch brought up to date at "+core.Short(next)+", testing again")
+	return true, nil
 }
 
 func passFail(ok bool) string {
@@ -722,21 +777,8 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if err != nil {
 		return err
 	}
-	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err != nil {
-		// Main moved: bring the branch up to date and test again first.
-		next, err := m.C.Effects.UpdateBranch(p, t.SHA, main)
-		if errors.Is(err, core.ErrConflict) {
-			return m.conflict(t, p)
-		}
-		if err != nil {
-			return err
-		}
-		if err := m.C.Effects.Push(p, t.Branch, next); err != nil {
-			return err
-		}
-		t.SHA, t.Stage = next, StageTesting
-		m.save(t, "main moved; branch brought up to date at "+core.Short(next)+", testing again")
-		return nil
+	if ok, err := m.catchUp(t, p, main, "main moved"); ok || err != nil {
+		return err
 	}
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label()})
 	var np *core.NeedsPerson
