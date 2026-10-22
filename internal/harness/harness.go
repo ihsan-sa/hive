@@ -23,6 +23,7 @@ type Turn struct {
 	Tools      []string // explicit tool list; nil means the harness default
 	Schema     string   // JSON schema for a structured final answer
 	Sandboxed  bool     // inside a Hive sandbox (permission prompts are meaningless there)
+	MaxOutput  int      // cap on one reply's tokens; 0 is the harness default
 }
 
 // Event is a normalized line of harness output.
@@ -126,7 +127,11 @@ func (Claude) Args(t Turn) []string {
 }
 
 func (Claude) Env(t Turn) []string {
-	return []string{"DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"}
+	env := []string{"DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"}
+	if t.MaxOutput > 0 {
+		env = append(env, fmt.Sprintf("CLAUDE_CODE_MAX_OUTPUT_TOKENS=%d", t.MaxOutput))
+	}
+	return env
 }
 
 type claudeLine struct {

@@ -123,12 +123,13 @@ type Runs struct {
 	mu    sync.Mutex
 	runs  map[string]*Run
 	plans map[string]Plan
-	busy  map[string]bool // runs whose tick work is in flight
+	busy  map[string]bool    // runs whose tick work is in flight
+	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
 }
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens func(string) ([]string, error), tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -218,6 +219,7 @@ func (rs *Runs) apply(e Event) {
 		r.Proc = proc.Handle{}
 		if t.Result != nil {
 			r.Cost += t.Result.CostUSD
+			rs.spent[e.At.UTC().Format("2006-01")] += t.Result.CostUSD
 			if !t.Result.IsError {
 				r.Result, r.Structured = t.Result.Text, t.Result.Structured
 				r.Retries = 0
@@ -360,6 +362,13 @@ func (rs *Runs) Plans() []Plan {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Harness < out[j].Harness })
 	return out
+}
+
+// Spent is what runs cost in a month ("2006-01", UTC), from the harnesses' results.
+func (rs *Runs) Spent(month string) float64 {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.spent[month]
 }
 
 // Send queues a message for a run's next turn.
@@ -594,6 +603,13 @@ const PendingSep = "\n\n---\n\n"
 
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run) {
+	cfg := rs.ws.LoadConfig()
+	if why := Strained(cfg.MemFloorMB, cfg.PressureMax); why != "" {
+		if why = "waiting: " + why; r.Status != StatusQueued || r.Reason != why {
+			rs.append("run.status", runNote{ID: r.ID, Status: StatusQueued, Reason: why})
+		}
+		return
+	}
 	sb, err := rs.sandbox()
 	if err != nil {
 		if r.Status != StatusQueued || r.Reason != err.Error() {
@@ -671,6 +687,7 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	t := harness.Turn{
 		Role: r.Role, SessionID: r.Session, Resume: resume, Model: r.Model, Tools: r.Tools, SystemText: r.System,
 		SystemFile: filepath.Join(in(mounts[1]), "system.md"), ReadOnly: r.ReadOnly, RunDir: in(mounts[1]), Schema: r.Schema, Sandboxed: sb.Isolated(),
+		MaxOutput: rs.ws.LoadConfig().MaxOutputTokens,
 	}
 	if sb.Isolated() {
 		t.SystemFile = "/hive/run/system.md"

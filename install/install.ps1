@@ -1,11 +1,12 @@
 # Install the Hive on Windows. One line:
-#   gh api repos/ihsan-sa/hive-standalone-build/contents/install/install.ps1 -H "Accept: application/vnd.github.raw" | Out-String | iex
-# (or, once the repo is public: irm https://raw.githubusercontent.com/ihsan-sa/hive-standalone-build/main/install/install.ps1 | iex)
+#   irm https://hive.ihsan.cc/install.ps1 | iex
 # Running it again reinstalls. Agents are sandboxed inside WSL 2, so the Linux
 # build is installed next to the Windows one, and Claude Code is installed or
 # updated inside WSL.
 $ErrorActionPreference = 'Stop'
-$repo = if ($env:HIVE_REPO) { $env:HIVE_REPO } else { 'ihsan-sa/hive-standalone-build' }
+$ProgressPreference = 'SilentlyContinue'   # Windows PowerShell's progress bar makes downloads crawl
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+$repo = if ($env:HIVE_REPO) { $env:HIVE_REPO } else { 'ihsan-sa/hive' }
 $cmd = if ($env:HIVE_CMD) { $env:HIVE_CMD } else { 'hive-v0' }
 $dir = if ($env:HIVE_BIN_DIR) { $env:HIVE_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\$cmd" }
 $tmp = Join-Path $env:TEMP ('hive-install-' + [guid]::NewGuid())
@@ -26,15 +27,8 @@ function Invoke-Native([scriptblock]$Block, [switch]$Quiet) {
 }
 
 Write-Host "Downloading the Hive from $repo ..."
-$useGh = (Get-Command gh -ErrorAction SilentlyContinue) -and ((Invoke-Native { gh auth status } -Quiet) -eq 0)
 foreach ($a in $assets) {
-  if ($useGh) {
-    if ((Invoke-Native { gh release download -R $repo --pattern $a --dir $tmp --clobber } -Quiet) -ne 0) {
-      throw "could not download $a from $repo (is there a release, and is the network up?)"
-    }
-  } else {
-    Invoke-WebRequest "https://github.com/$repo/releases/latest/download/$a" -OutFile (Join-Path $tmp $a) -UseBasicParsing
-  }
+  Invoke-WebRequest "https://github.com/$repo/releases/latest/download/$a" -OutFile (Join-Path $tmp $a) -UseBasicParsing
 }
 foreach ($a in $assets[1..2]) {
   $line = Select-String -Path (Join-Path $tmp 'checksums.txt') -Pattern " $([regex]::Escape($a))$" | Select-Object -First 1

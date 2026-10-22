@@ -187,7 +187,7 @@ func (r *Registry) List() []Module {
 			m.Name = e.Name()
 		}
 		m.Source, _ = readSource(dir)
-		if len(m.Source.Projects) == 0 {
+		if m.Source.Projects == nil { // no record yet; an empty list means no project
 			m.Source.Projects = m.Manifest.Projects
 			if len(m.Source.Projects) == 0 {
 				m.Source.Projects = []string{"*"}
@@ -244,7 +244,7 @@ func (r *Registry) SetAccess(name, project string, allow bool) error {
 		return core.ErrNotFound
 	}
 	s := m.Source
-	var next []string
+	next := []string{}
 	for _, p := range s.Projects {
 		if p != project {
 			next = append(next, p)

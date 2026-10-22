@@ -55,6 +55,15 @@ type Config struct {
 	ReviewRounds int                        `json:"review_rounds"`
 	Projects     map[string]ProjectSettings `json:"projects,omitempty"`
 	Schedules    map[string]string          `json:"schedules,omitempty"` // name -> "every 12h" | "daily 03:00" | "off"
+
+	// MaxOutputTokens caps one reply (a budget is checked only between turns); 0 leaves the harness default.
+	MaxOutputTokens int `json:"max_output_tokens"`
+	// MonthlyUSD: once this month's runs cost more, the person is told once. Work goes on; 0 is off.
+	MonthlyUSD float64 `json:"monthly_usd,omitempty"`
+	// A turn waits while available memory is under MemFloorMB or memory
+	// pressure (Linux PSI "some avg10", percent) is over PressureMax; 0 turns a check off.
+	MemFloorMB  int     `json:"mem_floor_mb"`
+	PressureMax float64 `json:"pressure_max"`
 }
 
 // ProjectSettings override workspace defaults per project.
@@ -75,6 +84,10 @@ func DefaultConfig() Config {
 		ReleaseRepo:    DefaultReleaseRepo,
 		AutoUpdate:     true,
 		ReviewRounds:   3,
+
+		MaxOutputTokens: 16000,
+		MemFloorMB:      1024,
+		PressureMax:     40,
 		Schedules: map[string]string{
 			"improve.sweep":  "every 12h",
 			"kb.file":        "daily 04:00",
@@ -85,7 +98,7 @@ func DefaultConfig() Config {
 }
 
 // DefaultReleaseRepo is where installs look for new releases; set at build time.
-var DefaultReleaseRepo = "ihsan-sa/hive-standalone-build"
+var DefaultReleaseRepo = "ihsan-sa/hive"
 
 var cfgMu sync.Mutex
 

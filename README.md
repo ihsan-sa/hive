@@ -6,13 +6,15 @@ You talk to a lead in a chat. The lead turns what you say into briefs. Workers b
 
 ## Install
 
-Windows (PowerShell), with the GitHub CLI logged in:
-
-    gh api repos/ihsan-sa/hive-standalone-build/contents/install/install.ps1 -H "Accept: application/vnd.github.raw" | Out-String | iex
-
 macOS / Linux:
 
-    gh api repos/ihsan-sa/hive-standalone-build/contents/install/install.sh -H "Accept: application/vnd.github.raw" | sh
+    curl -fsSL https://hive.ihsan.cc/install.sh | sh
+
+Windows (PowerShell):
+
+    irm https://hive.ihsan.cc/install.ps1 | iex
+
+No GitHub login is needed to install. Running the line again reinstalls.
 
 Then run `hive`. (The installer puts it on your PATH as `hive-v0`, or the name in `HIVE_CMD`; a build from source is `hive`.) The first run checks for git, Claude Code and the GitHub CLI, offers their own logins, asks where to live (Enter for `~/hive`) and for a GitHub repository (Enter makes a small private demo project), and opens the control center with the lead's chat.
 
@@ -59,6 +61,12 @@ See [docs/architecture.md](docs/architecture.md) and [docs/risk.md](docs/risk.md
 
 ## Uninstall
 
-    gh api repos/ihsan-sa/hive-standalone-build/contents/install/uninstall.ps1 -H "Accept: application/vnd.github.raw" | Out-String | iex
+macOS / Linux:
+
+    curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh
+
+Windows (PowerShell):
+
+    irm https://hive.ihsan.cc/uninstall.ps1 | iex
 
 Your folder is left alone.
