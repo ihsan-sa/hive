@@ -67,6 +67,7 @@ type ProjectView struct {
 type Alert struct {
 	At   time.Time `json:"at"`
 	Kind string    `json:"kind"`
+	Key  string    `json:"key,omitempty"` // a later alert with the same key replaces it
 	Text string    `json:"text"`
 }
 

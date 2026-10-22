@@ -64,6 +64,9 @@ type Config struct {
 	// pressure (Linux PSI "some avg10", percent) is over PressureMax; 0 turns a check off.
 	MemFloorMB  int     `json:"mem_floor_mb"`
 	PressureMax float64 `json:"pressure_max"`
+	// StallFloorSeconds: nothing counts as stalled before this long without moving,
+	// however fast its stage usually is here; 0 is the default (20 minutes).
+	StallFloorSeconds int `json:"stall_floor_seconds,omitempty"`
 }
 
 // ProjectSettings override workspace defaults per project.

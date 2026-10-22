@@ -425,6 +425,13 @@ func (rs *Runs) Stop(id, reason string) {
 	rs.append("run.status", runNote{ID: id, Status: StatusStopped, Reason: reason})
 }
 
+// Interrupt ends a running turn's process. The turn ends like any interrupted
+// one and is retried on the same checkout, so nothing is started twice.
+func (rs *Runs) Interrupt(id string) bool {
+	r, ok := rs.Get(id)
+	return ok && r.Status == StatusRunning && proc.Alive(r.Proc) && proc.Kill(r.Proc) == nil
+}
+
 // Tick advances every run one step: mailboxes, finished turns, due turns.
 func (rs *Runs) Tick() {
 	for _, r := range rs.List(func(r *Run) bool { return !r.Terminal() || r.Status == StatusRunning }) {

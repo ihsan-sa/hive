@@ -44,6 +44,7 @@ Run dir: `host/` (turn output, prompts, stop file; never mounted), `ro/` (system
 7. Fix verdict / red tests → same worker, same checkout, bounded rounds (default 3) → stop with PR open.
 8. Merge: main moved → host merges main into the branch (host-made commit; verdict carries) → retest. `gh pr merge --squash --match-head-commit <sha>`.
 9. improve: measure merge sha (tests + score), compare with best kept; worse → revert task (host-made revert + lessons line) → PR → merge; original PR commented.
+10. Stalls (`improve/stalls.go`, every tick): a task stage, or a run no task owns (warden, tribunal seat, helper), that has gone longer without moving than `max(stall_floor_seconds, 3 × p90 of that stage's recent durations here)` gets its hung turn interrupted once (the core retries it on the same checkout), then is handed to the lead. Moving means the stage changed or the run started a turn or wrote output; parked, quiet and waiting runs and person-waiting tasks are left alone. Each decision is a `stall.saved` event with the limit and sample count, listed in the sweep's digest, and one `alert.raised` per thing, keyed so it updates in place.
 
 ## Invariants (enforced by structure)
 
