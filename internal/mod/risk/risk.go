@@ -26,6 +26,8 @@ type Request struct {
 	Want    string    `json:"want"`
 	Why     string    `json:"why"`
 	Steps   string    `json:"steps,omitempty"`
+	Tier    string    `json:"tier,omitempty"`
+	Route   string    `json:"route,omitempty"` // core.Route: person | person-first | warden | tribunal
 	URL     string    `json:"url,omitempty"`
 	Ask     string    `json:"ask"` // the person's queue item
 	Outcome string    `json:"outcome,omitempty"`
@@ -59,7 +61,7 @@ func New(c *core.Core, mod *modules.Registry) *Module {
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps"} -> your request goes to the person`, Fn: m.opRequest})
+	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3"} -> T1 you weigh yourself; T2/T3 go to the risk path`, Fn: m.opRequest})
 	ops.Register(core.Op{Name: "install_module", Roles: []string{"lead"}, Help: `{"url","name"}`, Fn: m.opInstall})
 	c.Person.Handle("request", m.onAnswer)
 	c.Person.Handle("module", m.onModule)
@@ -94,17 +96,22 @@ func (m *Module) get(id string) (Request, bool) {
 }
 
 func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
-	var a struct{ Want, Why, Steps string }
+	var a struct{ Want, Why, Steps, Tier string }
 	if err := core.Bind(args, &a); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(a.Want) == "" {
 		return nil, errors.New("say what you need (want)")
 	}
-	req := &Request{ID: core.NewID(), Kind: "request", Origin: r.ID, Project: r.Project, Want: a.Want, Why: a.Why, Steps: a.Steps, Created: time.Now().UTC()}
+	tier := core.Tier(a.Tier)
+	route := core.Route(tier, m.C.WS.LoadConfig().Autonomy, core.CeilingHit(a.Want, a.Why, a.Steps))
+	if route == "self" {
+		return map[string]string{"tier": tier, "route": route, "note": "T1 is inside the Hive: weigh it yourself and get on with it."}, nil
+	}
+	req := &Request{ID: core.NewID(), Kind: "request", Origin: r.ID, Project: r.Project, Want: a.Want, Why: a.Why, Steps: a.Steps, Tier: tier, Route: route, Created: time.Now().UTC()}
 	ask := m.C.Person.Ask(core.Ask{Kind: "request", Ref: req.ID, Project: r.Project, From: r.ID,
 		Title:   core.Clip(a.Want, 120),
-		Detail:  fmt.Sprintf("An agent (%s, %s) needs something outside its sandbox.\n\nWhy: %s\n\nIts proposed steps (not run by the Hive):\n%s", r.ID, r.Role, a.Why, a.Steps),
+		Detail:  fmt.Sprintf("An agent (%s, %s) needs something outside its sandbox (%s, route %s).\n\nWhy: %s\n\nIts proposed steps (not run by the Hive):\n%s", r.ID, r.Role, tier, route, a.Why, a.Steps),
 		Options: []string{"done", "declined"}})
 	req.Ask = ask.ID
 	m.save(req)
