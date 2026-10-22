@@ -10,31 +10,34 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
-type isolatedBox struct{ sandbox.Bare }
+// isolatedSB is a sandbox whose inside paths differ from host paths.
+type isolatedSB struct{ sandbox.Bare }
 
-func (isolatedBox) Isolated() bool { return true }
+func (isolatedSB) Isolated() bool { return true }
 
-// TestNestedMountPointsExist: bubblewrap can't make a mount point inside a
-// read-only mount, so every mount nested in one must find its point already
-// on the host. An isolated lead granted a module is the case that broke.
+// A mount nested in a read-only mount needs its mount point on the host,
+// because bwrap can't make it inside the read-only bind.
 func TestNestedMountPointsExist(t *testing.T) {
-	ws := Workspace{Root: t.TempDir()}
-	rs := &Runs{ws: ws, tokens: func(string) ([]string, error) { return nil, nil }, tools: func() []string { return nil }}
+	c, _ := testHive(t)
+	r := Run{ID: "r1", Role: "lead", Harness: "fake", Isolated: true, Modules: []string{"agents", "kb"}}
 	h, _ := harness.Get("fake")
-	r := Run{RunSpec: RunSpec{ID: "lead-1", Harness: "fake", Checkout: t.TempDir(), Isolated: true, Modules: []string{"agents"}}}
-	spec, err := rs.sandboxSpec(isolatedBox{}, h, r, 1, false, "")
+	spec, err := c.Runs.sandboxSpec(isolatedSB{}, h, r, 1, false, filepath.Join(t.TempDir(), "p"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, outer := range spec.Mounts {
-		for _, m := range spec.Mounts[i+1:] {
-			rel, ok := strings.CutPrefix(m.Inside, outer.Inside+"/")
-			if outer.RW || !ok {
+	nested := 0
+	for _, m := range spec.Mounts {
+		for _, ro := range spec.Mounts {
+			if ro.RW || !strings.HasPrefix(m.Inside, ro.Inside+"/") {
 				continue
 			}
-			if _, err := os.Stat(filepath.Join(outer.Host, rel)); err != nil {
-				t.Errorf("%s is mounted inside read-only %s but has no mount point: %v", m.Inside, outer.Inside, err)
+			nested++
+			if _, err := os.Stat(filepath.Join(ro.Host, strings.TrimPrefix(m.Inside, ro.Inside))); err != nil {
+				t.Errorf("%s has no mount point in read-only %s: %v", m.Inside, ro.Inside, err)
 			}
 		}
+	}
+	if nested != 2 {
+		t.Fatalf("nested mounts: %d, want 2 (%+v)", nested, spec.Mounts)
 	}
 }

@@ -101,6 +101,10 @@ type Module struct {
 	Agents *agents.Agents
 	Chat   *chat.Module
 
+	// Steps sums up the outside steps a worker asked for, and whether every
+	// one ran and succeeded (the risk module).
+	Steps func(run string) (string, bool)
+
 	// OnMerged is called after a task's merge is recorded (the improve module measures).
 	OnMerged func(t Task)
 
@@ -491,9 +495,20 @@ func (m *Module) land(t *Task, p core.Project) error {
 	r, _ := m.C.Runs.Get(t.Worker)
 	sha, err := m.C.Effects.Extract(p, r, t.Base)
 	if errors.Is(err, core.ErrNoChanges) {
-		t.Stage, t.Reason = StageBlocked, "the worker finished without any commits: "+core.Clip(finishText(r), 300)
+		// An ask whose whole job was a step outside the checkout has nothing to merge.
+		steps, ok := m.Steps(r.ID)
+		if ok {
+			t.Stage = StageDone
+			m.save(t, "done outside the checkout:\n"+steps)
+			m.C.Effects.Forge.Comment(p.Repo, t.Issue.Number, "Done with nothing to merge. What ran outside the checkout:\n\n"+steps+"\n\n"+finishText(r))
+			m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q, with nothing to merge. What ran:\n%s", t.Label(), steps))
+			return nil
+		} else if steps != "" {
+			steps = "\n\nNot every step outside the checkout ran:\n" + steps
+		}
+		t.Stage, t.Reason = StageBlocked, "the worker finished without any commits: "+core.Clip(finishText(r), 300)+steps
 		m.save(t, t.Reason)
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q finished with no change to merge. %s", t.Label(), core.Clip(finishText(r), 300)))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q finished with no change to merge. %s%s", t.Label(), core.Clip(finishText(r), 300), steps))
 		return nil
 	}
 	if err != nil {

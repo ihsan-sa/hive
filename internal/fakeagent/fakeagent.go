@@ -199,7 +199,13 @@ func worker(all, prompt, system string) (string, error) {
 		_, err := call("finish", map[string]string{"status": "blocked", "account": "FAKE: blocked on purpose"}, time.Minute)
 		return "blocked", err
 	}
-	if m := outsidePath.FindStringSubmatch(all); m != nil && !strings.Contains(prompt, "[request ") {
+	m := outsidePath.FindStringSubmatch(all)
+	if m != nil && strings.Contains(prompt, "[request ") {
+		// As a real worker does: the step was the whole job, so nothing to commit.
+		_, err := call("finish", map[string]string{"status": "done", "account": "FAKE: the step outside ran; nothing to commit"}, time.Minute)
+		return "done", err
+	}
+	if m != nil {
 		if _, err := os.Stat(m[1]); err != nil && !strings.Contains(system, "hidden, not gone") {
 			_, err := call("finish", map[string]string{"status": "done", "account": "FAKE: " + m[1] + " is already gone"}, time.Minute)
 			return "done", err

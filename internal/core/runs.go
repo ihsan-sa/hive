@@ -657,9 +657,9 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	}
 	if r.Modules != nil && sb.Isolated() {
 		// Only granted modules are visible: mount each over an empty modules dir,
-		// whose mount points exist on the host because it is read-only inside.
+		// which holds their mount points, since bwrap can't make them inside a
+		// read-only bind.
 		empty := filepath.Join(rs.ws.RunHost(r.ID), "modules")
-		os.MkdirAll(empty, 0o755)
 		mounts[5].Host = empty
 		for _, m := range r.Modules {
 			os.MkdirAll(filepath.Join(empty, m), 0o755)
