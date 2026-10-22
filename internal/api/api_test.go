@@ -20,7 +20,7 @@ func workspace(t *testing.T) (core.Workspace, func(DaemonInfo) error) {
 	}
 	return ws, func(info DaemonInfo) error {
 		raw, _ := json.Marshal(info)
-		return os.WriteFile(ws.DaemonFile(), raw, 0o600)
+		return core.WriteFileAtomic(ws.DaemonFile(), raw, 0o600)
 	}
 }
 
