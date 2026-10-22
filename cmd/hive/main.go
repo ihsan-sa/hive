@@ -32,6 +32,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive improve             run an improvement sweep now
   hive answer <id> <opt>   answer something waiting on you
   hive login               log in to Claude Code and GitHub with their own logins
+  hive login add <name>    add another Claude login to spread runs over
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
   hive update              install the newest release
   hive shutdown            stop the Hive (running agents finish their turn)
@@ -114,6 +115,15 @@ func run(args []string) int {
 			return c.Do("POST", "/api/answer", map[string]string{"id": args[0], "answer": args[1], "note": note}, nil)
 		})
 	case "login":
+		if len(args) > 1 && args[0] == "add" {
+			ws, _ := core.FindWorkspace()
+			if err := setup.AddLogin(ws, "claude", args[1]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			fmt.Printf("Added login %s; runs now spread over it too.\n", args[1])
+			return 0
+		}
 		if err := setup.Login(len(args) > 0 && args[0] == "--all"); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1

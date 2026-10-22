@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
@@ -68,6 +69,31 @@ func Login(all bool) error {
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("%s login: %v", t.Name, err)
 		}
+	}
+	return nil
+}
+
+// AddLogin runs harness h's own login into a config folder of its own under
+// the workspace, which adds it to the logins runs are spread over. Deleting
+// the folder removes it.
+func AddLogin(ws core.Workspace, h, name string) error {
+	h = core.HarnessName(h)
+	env := core.LoginDirEnv[h]
+	hn, err := harness.Get(h)
+	if env == "" || err != nil {
+		return fmt.Errorf("%s has no separate logins", h)
+	}
+	dir := filepath.Join(ws.LoginsDir(h), name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	argv := hn.LoginCommand()
+	fmt.Printf("\nLogging in to %s as %q with its own login. Follow its link or code in your browser.\n", h, name)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = append(os.Environ(), env+"="+dir)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s login: %v", h, err)
 	}
 	return nil
 }

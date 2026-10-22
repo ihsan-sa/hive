@@ -43,7 +43,7 @@ func Open(ws Workspace, forge Forge) (*Core, error) {
 	c := &Core{WS: ws, J: j, Tokens: NewTokens(ws)}
 	c.Projects = NewProjects(j)
 	c.Person = NewPerson(j)
-	c.Runs = NewRuns(ws, j, c.Sandbox, c.Tokens.AgentEnv, c.Tools)
+	c.Runs = NewRuns(ws, j, c.Sandbox, c.Tokens, c.Tools)
 	c.Effects = NewEffects(ws, j, forge, c.Sandbox, c.Tools, c.Runs)
 	return c, nil
 }

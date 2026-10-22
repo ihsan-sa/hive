@@ -74,6 +74,7 @@ type Run struct {
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
 	Retries     int             `json:"retries"`
 	Nudges      int             `json:"nudges"`
+	Login       string          `json:"login,omitempty"` // the login its latest turn went on
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
 	StopAsked   bool            `json:"stop_asked,omitempty"`
@@ -107,8 +108,28 @@ func (ws Workspace) TurnOut(id string, turn int) string {
 // Plan is the latest usage a harness reported for a login.
 type Plan struct {
 	Harness string            `json:"harness"`
+	Login   string            `json:"login,omitempty"` // Login.Key; empty is the machine's own
 	Limit   harness.RateLimit `json:"limit"`
 	At      time.Time         `json:"at"`
+}
+
+// Key names the plan's login.
+func (p Plan) Key() string {
+	if p.Login == "" {
+		return HarnessName(p.Harness)
+	}
+	return p.Login
+}
+
+// Parked reports whether the plan is at its usage limit until a reset still ahead.
+func (p Plan) Parked(now time.Time) bool {
+	return p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now)
+}
+
+// TokenSource lists a harness's logins and hands out a login's short-lived credential.
+type TokenSource interface {
+	Logins(h string) []Login
+	AgentEnv(l Login) ([]string, error)
 }
 
 // Runs owns every agent run.
@@ -116,7 +137,7 @@ type Runs struct {
 	ws      Workspace
 	j       *Journal
 	sandbox func() (sandbox.Sandbox, error)
-	tokens  func(h string) ([]string, error)
+	tokens  TokenSource
 	tools   func() []string // host programs to expose (hive binary for the sandbox's OS)
 	ops     *Ops
 
@@ -127,7 +148,7 @@ type Runs struct {
 }
 
 // NewRuns builds the run manager and replays its records.
-func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens func(string) ([]string, error), tools func() []string) *Runs {
+func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
 	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
@@ -149,6 +170,7 @@ type turnStarted struct {
 	Proc      proc.Handle `json:"proc"`
 	Delivered int         `json:"delivered"`
 	Resume    bool        `json:"resume"`
+	Login     string      `json:"login,omitempty"`
 }
 
 type turnEnded struct {
@@ -185,7 +207,7 @@ func (rs *Runs) apply(e Event) {
 	case "plan.usage":
 		var p Plan
 		e.Decode(&p)
-		rs.plans[p.Harness] = p
+		rs.plans[p.Key()] = p
 		return
 	}
 	var id struct {
@@ -201,7 +223,7 @@ func (rs *Runs) apply(e Event) {
 	case "run.turn_started":
 		var t turnStarted
 		e.Decode(&t)
-		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput = t.Turn, t.Proc, StatusRunning, e.At, e.At
+		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login
 		if t.Session != "" {
 			r.Session = t.Session
 		}
@@ -350,7 +372,7 @@ func (rs *Runs) List(fn func(*Run) bool) []Run {
 	return out
 }
 
-// Plans returns the latest usage per harness.
+// Plans returns the latest usage per login.
 func (rs *Runs) Plans() []Plan {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -358,8 +380,52 @@ func (rs *Runs) Plans() []Plan {
 	for _, p := range rs.plans {
 		out = append(out, p)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Harness < out[j].Harness })
+	sort.Slice(out, func(i, j int) bool { return out[i].Key() < out[j].Key() })
 	return out
+}
+
+// pickLogin chooses the login for a run's next turn: of those not parked at
+// their usage limit, the least used, the machine's own first on a tie.
+func (rs *Runs) pickLogin(h string) (Login, []string, error) {
+	logins := rs.tokens.Logins(h)
+	now := time.Now()
+	rs.mu.Lock()
+	use := func(l Login) float64 { return rs.plans[l.Key()].Limit.Utilization }
+	var open []Login
+	for _, l := range logins {
+		if !rs.plans[l.Key()].Parked(now) {
+			open = append(open, l)
+		}
+	}
+	sort.SliceStable(open, func(i, j int) bool { return use(open[i]) < use(open[j]) })
+	rs.mu.Unlock()
+	err := fmt.Errorf("every %s login is at its usage limit", HarnessName(h))
+	for _, l := range open {
+		var env []string
+		if env, err = rs.tokens.AgentEnv(l); err == nil {
+			return l, env, nil
+		}
+	}
+	return Login{}, nil, err
+}
+
+// freeAt is when a login for harness h next has room: now if one has, else
+// the earliest reset.
+func (rs *Runs) freeAt(h string) time.Time {
+	now := time.Now()
+	var at time.Time
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for _, l := range rs.tokens.Logins(h) {
+		p := rs.plans[l.Key()]
+		if !p.Parked(now) {
+			return now
+		}
+		if at.IsZero() || p.Limit.ResetsAt.Before(at) {
+			at = p.Limit.ResetsAt
+		}
+	}
+	return at.Add(15 * time.Second)
 }
 
 // Send queues a message for a run's next turn.
@@ -507,20 +573,30 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 
 func (rs *Runs) endTurn(r Run) {
 	tl := rs.ReadTurn(r, r.Turn)
+	limited := tl.Result != nil && tl.Result.Limited || (tl.Limit != nil && tl.Limit.Status == "rejected" && (tl.Result == nil || tl.Result.IsError))
+	if limited {
+		// Park the login until its reset (an hour when the harness didn't say).
+		l := harness.RateLimit{}
+		if tl.Limit != nil {
+			l = *tl.Limit
+		}
+		l.Status = "rejected"
+		if !l.ResetsAt.After(time.Now()) {
+			l.ResetsAt = time.Now().Add(time.Hour)
+		}
+		tl.Limit = &l
+	}
 	if tl.Limit != nil {
-		rs.append("plan.usage", Plan{Harness: r.Harness, Limit: *tl.Limit, At: time.Now().UTC()})
+		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
 	}
 	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Result: tl.Result}
 	cur, _ := rs.Get(r.ID)
-	limited := tl.Result != nil && tl.Result.Limited || (tl.Limit != nil && tl.Limit.Status == "rejected" && (tl.Result == nil || tl.Result.IsError))
 	switch {
 	case cur.StopAsked:
 		te.Status, te.Reason = StatusStopped, "stopped by the Hive"
 	case limited:
-		until := time.Now().Add(time.Hour)
-		if tl.Limit != nil && tl.Limit.ResetsAt.After(time.Now()) {
-			until = tl.Limit.ResetsAt.Add(15 * time.Second)
-		}
+		// Another login with room takes the next turn at once; else it waits for the first reset.
+		until := rs.freeAt(r.Harness)
 		te.Status, te.ParkedUntil = StatusParked, until
 		te.Reason = "usage limit; resumes " + until.Local().Format("Mon 15:04")
 		te.Queue = []string{"The usage limit has reset. Continue where you left off."}
@@ -628,7 +704,16 @@ func (rs *Runs) launch(r Run) {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(time.Minute)})
 		return
 	}
-	spec, err := rs.sandboxSpec(sb, h, r, turn, resume, promptFile)
+	login, tok, err := rs.pickLogin(r.Harness)
+	if err != nil {
+		until := rs.freeAt(r.Harness)
+		if !until.After(time.Now()) {
+			until = time.Now().Add(5 * time.Minute)
+		}
+		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: "login for " + HarnessName(r.Harness) + ": " + err.Error(), Until: until})
+		return
+	}
+	spec, err := rs.sandboxSpec(sb, h, r, turn, resume, promptFile, tok)
 	if err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(5 * time.Minute)})
 		return
@@ -638,11 +723,11 @@ func (rs *Runs) launch(r Run) {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: "start failed: " + err.Error(), Until: time.Now().Add(backoff(r.Retries))})
 		return
 	}
-	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume})
+	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key()})
 }
 
 // sandboxSpec lays out what the agent sees.
-func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn int, resume bool, promptFile string) (sandbox.Spec, error) {
+func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn int, resume bool, promptFile string, tok []string) (sandbox.Spec, error) {
 	home := sandbox.Mount{Host: rs.ws.RunHome(r.ID), Inside: "/hive/home", RW: true}
 	mounts := []sandbox.Mount{
 		{Host: r.Checkout, Inside: "/work", RW: !r.ReadOnly},
@@ -685,14 +770,10 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	}
 	if sb.Isolated() {
 		env = append(sandbox.InsideEnv("/hive/home", true), env...)
-		tok, err := rs.tokens(r.Harness)
-		if err != nil {
-			return sandbox.Spec{}, fmt.Errorf("login for %s: %w", r.Harness, err)
-		}
-		env = append(env, tok...)
 	} else {
 		env = append(env, "HIVE_WORKSPACE="+rs.ws.Root)
 	}
+	env = append(env, tok...)
 	env = append(env, h.Env(t)...)
 	tools := rs.tools()
 	if h.Program() != "hive" {
