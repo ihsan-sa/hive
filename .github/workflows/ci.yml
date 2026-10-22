@@ -53,9 +53,9 @@ jobs:
           sudo apt-get install -y bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: probe the sandbox first
-        # Fails the job unless the hive runs a sandboxed command through bwrap here (Select runs
-        # the sandbox's Check, which forks one), so the suite below can't go green on bare or on
-        # the build's own namespaces.
+        # Fails the job unless the hive runs a sandboxed command through bwrap here, so the
+        # suite below can't go green on bare or on the build's own namespaces.
+        # Select calls sb.Check() (internal/sandbox/sandbox.go:96), and Linux.Check is Probe(), which runs a sandboxed command.
         shell: bash
         run: |
           go build -o "$RUNNER_TEMP/hive" ./cmd/hive
