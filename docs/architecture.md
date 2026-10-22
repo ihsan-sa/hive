@@ -57,7 +57,7 @@ Run dir: `host/` (turn output, prompts, stop file; never mounted), `ro/` (system
 
 ## Sandbox (Linux / WSL)
 
-Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, stop-file watcher, starts init with `CLONE_NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|NEWUTS` (uid 0 → person's uid). Init (pid 1): tmpfs root; binds `/usr /bin /lib* /etc /opt /var /srv` read-only (nosuid, nodev, locked flags kept); fresh `/proc`, `/tmp`, minimal `/dev`; run mounts; tools at `/hive/bin`; `pivot_root`; root remounted ro; `lo` up; forwarder 127.0.0.1:3128 → egress socket. Command runs in a nested user namespace (no caps). Not present: `/home`, `/mnt` (Windows drives), `/run` (sockets), WSL interop. Egress refuses loopback/private/link-local/CGNAT/ULA and dials the IP it vetted.
+Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, stop-file watcher, starts init with `CLONE_NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|NEWUTS` (uid 0 → person's uid). Init (pid 1): tmpfs root; binds `/usr /bin /lib* /etc /opt /var /srv` read-only (nosuid, nodev, locked flags kept); fresh `/proc`, `/tmp`, minimal `/dev`; run mounts; tools at `/hive/bin`; `pivot_root`; root remounted ro; `lo` up; forwarder 127.0.0.1:3128 → egress socket. Command runs in a nested user namespace (no caps). Not present: `/home`, `/mnt` (Windows drives), `/run` (sockets), WSL interop. Egress refuses loopback/private/link-local/CGNAT/ULA and dials the IP it vetted; with an `egress` list for the run's role it also refuses every host off the list and records each refusal in `turn-NNN.jsonl.egress` (macOS runs one proxy per command for the same).
 
 ## Gaps (v1)
 

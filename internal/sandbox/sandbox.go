@@ -41,6 +41,7 @@ type Spec struct {
 	Stdout   string   `json:"stdout"`    // host path, appended
 	StopFile string   `json:"stop_file"` // host path; when present the command is killed
 	Network  bool     `json:"network"`   // outbound through the egress proxy
+	Allow    []string `json:"allow"`     // hosts the proxy lets through; empty is every public host
 	UID      int      `json:"uid"`
 	GID      int      `json:"gid"`
 }

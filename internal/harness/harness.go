@@ -74,6 +74,15 @@ type Harness interface {
 	LoginCommand() []string
 }
 
+// APIHosts are the hosts a harness's own client must reach, added to every
+// run's egress list. A harness lists them with an APIHosts method.
+func APIHosts(h Harness) []string {
+	if a, ok := h.(interface{ APIHosts() []string }); ok {
+		return a.APIHosts()
+	}
+	return nil
+}
+
 // Get returns a harness by name.
 func Get(name string) (Harness, error) {
 	switch name {
@@ -93,6 +102,7 @@ type Claude struct{}
 func (Claude) Name() string           { return "claude" }
 func (Claude) Program() string        { return "claude" }
 func (Claude) LoginCommand() []string { return []string{"claude", "auth", "login"} }
+func (Claude) APIHosts() []string     { return []string{"api.anthropic.com"} }
 
 func (Claude) Args(t Turn) []string {
 	a := []string{"-p", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--setting-sources", "project"}
