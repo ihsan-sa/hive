@@ -126,8 +126,9 @@ func TestLiveAskLands(t *testing.T) {
 	if out, _ := core.Git(repo, "grep", "-l", "capitalize_words", "main"); !strings.Contains(out, "test") {
 		t.Errorf("no test of capitalize_words on main: %q", out)
 	}
-	if out, _ := core.Git(repo, "log", "--format=%an", "main"); !strings.Contains(out, "Hive worker") {
-		t.Errorf("no worker commit on main: %q", out)
+	// The forge squash-merges as "Hive", so the worker's author is on the PR's own commits.
+	if out, _ := core.Git(repo, "log", "--format=%an", "main.."+tk.PR.HeadSHA); !strings.Contains(out, "Hive worker") {
+		t.Errorf("no worker commit on the PR: %q", out)
 	}
 	reviewed := false
 	for _, c := range h.forge.Comments("local/textkit", tk.PR.Number) {
