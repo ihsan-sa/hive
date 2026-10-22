@@ -229,7 +229,7 @@ func (l *Local) ClosePR(repo string, number int, comment string) error {
 	return nil
 }
 
-func (l *Local) CloseIssue(repo string, number int, comment string) error {
+func (l *Local) CloseIssue(repo string, number int) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	s := l.load()
@@ -238,8 +238,6 @@ func (l *Local) CloseIssue(repo string, number int, comment string) error {
 			s.Issues[repo][i].State = "CLOSED"
 		}
 	}
-	k := fmt.Sprintf("%s#%d", repo, number)
-	s.Comments[k] = append(s.Comments[k], comment)
 	l.save(s)
 	return nil
 }

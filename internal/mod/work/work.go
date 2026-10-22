@@ -71,6 +71,7 @@ type Task struct {
 	Failures  int        `json:"failures"`
 	Attempt   int        `json:"attempt"` // fresh workers handed this task
 	Retry     time.Time  `json:"retry,omitempty"`
+	IssueOpen bool       `json:"issue_open,omitempty"` // done, but its issue is still to close
 	Log       []Entry    `json:"log,omitempty"`
 	Created   time.Time  `json:"created"`
 	Updated   time.Time  `json:"updated"`
@@ -248,7 +249,7 @@ func (m *Module) Revert(of Task, mergeSHA, reason string) (Task, error) {
 
 // Tick advances every task that isn't already being worked on.
 func (m *Module) Tick() {
-	for _, t := range m.List(func(t Task) bool { return !t.Terminal() }) {
+	for _, t := range m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen }) {
 		if time.Now().Before(t.Retry) {
 			continue
 		}
@@ -316,6 +317,10 @@ func (m *Module) step(t *Task) error {
 	case StageMerged:
 		t.Stage = StageDone
 		m.save(t, "done")
+	case StageDone:
+		if t.IssueOpen {
+			m.closeIssue(t, p)
+		}
 	case StageReverting:
 		return m.prepareRevert(t, p)
 	case StagePerson:
@@ -495,24 +500,7 @@ func (m *Module) land(t *Task, p core.Project) error {
 	r, _ := m.C.Runs.Get(t.Worker)
 	sha, err := m.C.Effects.Extract(p, r, t.Base)
 	if errors.Is(err, core.ErrNoChanges) {
-		// An ask whose whole job was a step outside the checkout has nothing to merge.
-		var steps string
-		var ok bool
-		if m.Steps != nil {
-			steps, ok = m.Steps(r.ID)
-		}
-		if ok {
-			t.Stage = StageDone
-			m.save(t, "done outside the checkout, no commit:\n"+steps)
-			m.C.Effects.Forge.CloseIssue(p.Repo, t.Issue.Number, "Done with no commit, so nothing to merge. What ran outside the checkout:\n\n"+steps+"\n\n"+finishText(r))
-			m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q, with no commit, so nothing to merge. What ran:\n%s", t.Label(), steps))
-			return nil
-		} else if steps != "" {
-			steps = "\n\nSteps outside the checkout, not all done:\n" + steps
-		}
-		t.Stage, t.Reason = StageBlocked, "the worker finished without any commits: "+core.Clip(finishText(r), 300)+steps
-		m.save(t, t.Reason)
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q finished with no change to merge. %s%s", t.Label(), core.Clip(finishText(r), 300), steps))
+		m.noCommits(t, p, r)
 		return nil
 	}
 	if err != nil {
@@ -532,6 +520,41 @@ func (m *Module) land(t *Task, p core.Project) error {
 	t.PR, t.SHA, t.Stage, t.Failures = pr, sha, StageTesting, 0
 	m.save(t, fmt.Sprintf("pushed %s, PR #%d", core.Short(sha), pr.Number))
 	return nil
+}
+
+// noCommits ends a task whose worker made no commit. An ask whose whole job
+// was a step outside the checkout is done; anything else is blocked.
+func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
+	var steps string
+	var ok bool
+	if m.Steps != nil {
+		steps, ok = m.Steps(r.ID)
+	}
+	if ok {
+		t.Stage, t.IssueOpen = StageDone, true
+		m.save(t, "done outside the checkout, no commit:\n"+steps)
+		m.C.Effects.Forge.Comment(p.Repo, t.Issue.Number, "Done with no commit, so nothing to merge. What ran outside the checkout:\n\n"+steps+"\n\n"+finishText(r))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q, with no commit, so nothing to merge. What ran:\n%s", t.Label(), steps))
+		m.closeIssue(t, p)
+		return
+	} else if steps != "" {
+		steps = "\n\nSteps outside the checkout, not all done:\n" + steps
+	}
+	t.Stage, t.Reason = StageBlocked, "the worker finished without any commits: "+core.Clip(finishText(r), 300)+steps
+	m.save(t, t.Reason)
+	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q finished with no change to merge. %s%s", t.Label(), core.Clip(finishText(r), 300), steps))
+}
+
+// closeIssue closes a done task's issue. A failure is journaled and a later
+// tick tries again; the task stays done either way.
+func (m *Module) closeIssue(t *Task, p core.Project) {
+	if err := m.C.Effects.Forge.CloseIssue(p.Repo, t.Issue.Number); err != nil {
+		t.Retry = time.Now().Add(time.Minute)
+		m.save(t, "closing the issue failed (will retry): "+core.Clip(err.Error(), 300))
+		return
+	}
+	t.IssueOpen = false
+	m.save(t, fmt.Sprintf("closed issue #%d", t.Issue.Number))
 }
 
 func (m *Module) test(t *Task, p core.Project) error {
