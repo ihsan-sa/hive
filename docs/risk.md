@@ -32,4 +32,4 @@ A restart while a step runs marks it failed and doesn't run it again.
 
 A worker that finishes with no commits finishes its task done when every step it asked for ran and succeeded, and the person is told what ran; if any was declined or failed, the task is blocked with each step's state.
 
-Installing a module stays a fixed `git clone` into `.modules/` on the person's "install". A module that carries a program starts only after a read-only review run approves its code at the commit checked out, and again after each update (see [architecture.md](architecture.md#modules-that-run-a-program)).
+Installing a module stays a fixed `git clone` into `.modules/` on the person's "install". A module that carries a program starts only after a read-only review run approves its code at the commit checked out, and again after each update. The program runs as the person outside the sandbox, so that review is the trust boundary (see [architecture.md](architecture.md#modules-that-run-a-program)).

@@ -190,11 +190,12 @@ func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	h := func(path string, fn func(r *http.Request) (any, error)) {
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			if tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); tok != s.info.Token {
+			tok, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if !bearer || tok != s.info.Token {
 				name, known, allowed := s.a.Runner.Allowed(tok, path)
-				if !allowed {
+				if !bearer || !allowed {
 					code := http.StatusUnauthorized
-					if known {
+					if known && bearer {
 						code = http.StatusForbidden // a module calling outside its hooks
 					}
 					http.Error(w, `{"error":"unauthorized"}`, code)
@@ -227,7 +228,7 @@ func (s *server) routes() http.Handler {
 			if err := s.reaches(r, s.projectOf("chat", b.Chat)); err != nil {
 				return nil, err
 			}
-			return a.Chat.Post(b.Chat, b.Thread, b.Text)
+			return a.Chat.Post(b.Chat, b.Thread, moduleOf(r), b.Text)
 		}
 		id := r.URL.Query().Get("id")
 		if err := s.reaches(r, s.projectOf("chat", id)); err != nil {
@@ -319,6 +320,9 @@ func (s *server) routes() http.Handler {
 		if err := decode(r, &b); err != nil {
 			return nil, err
 		}
+		if b == nil {
+			return nil, errors.New("a report is a JSON object")
+		}
 		b["module"] = moduleOf(r)
 		a.C.J.MustAppend("module.reported", b)
 		return "ok", nil
@@ -378,22 +382,19 @@ func (s *server) routes() http.Handler {
 	h("/api/events", func(r *http.Request) (any, error) {
 		after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 		evs := a.C.J.Since(after)
-		if moduleOf(r) != "" { // a module sees only the projects that granted it
+		if moduleOf(r) != "" {
+			// A module reads on from its cursor, so it gets the first events
+			// after it, and only those of projects that granted it.
 			var mine []core.Event
 			for _, e := range evs {
-				var d struct{ Project, Run, Task, Chat, ID string }
-				e.Decode(&d)
-				p := d.Project
-				for _, ref := range [][2]string{{"run", d.Run}, {"task", d.Task}, {"chat", d.Chat}, {"run", d.ID}, {"task", d.ID}} {
-					if p == "" && ref[1] != "" {
-						p = s.projectOf(ref[0], ref[1])
-					}
+				if len(mine) == 2000 {
+					break
 				}
-				if p == "" || s.reaches(r, p) == nil { // workspace notices (hive.idle, alerts) reach every module
+				if p := s.eventProject(e); (p == "" && notice(e.Kind)) || s.reaches(r, p) == nil {
 					mine = append(mine, e)
 				}
 			}
-			evs = mine
+			return mine, nil
 		}
 		if len(evs) > 2000 {
 			evs = evs[len(evs)-2000:]
@@ -439,6 +440,30 @@ func (s *server) projectOf(kind, id string) string {
 		}
 	}
 	return ""
+}
+
+// eventProject names the project an event is about, from its own project or
+// the run, task or chat it names; "" is the whole workspace.
+func (s *server) eventProject(e core.Event) string {
+	var d struct{ Project, Run, Task, Chat, ID string }
+	e.Decode(&d)
+	p := d.Project
+	for _, ref := range [][2]string{{"run", d.Run}, {"task", d.Task}, {"chat", d.Chat}, {"run", d.ID}, {"task", d.ID}} {
+		if p == "" && ref[1] != "" {
+			p = s.projectOf(ref[0], ref[1])
+		}
+	}
+	return p
+}
+
+// notice says an event is a workspace notice every module may read; any other
+// event with no project (the lead's chat, the person's asks) needs a grant of "*".
+func notice(kind string) bool {
+	switch kind {
+	case "hive.idle", "hive.started", "hive.stopped", "alert.raised":
+		return true
+	}
+	return strings.HasPrefix(kind, "module.")
 }
 
 // moduleOf names the module that made a request, or "" for the person.

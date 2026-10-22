@@ -306,7 +306,11 @@ func (r *Registry) Install(url, name string) (Module, error) {
 		os.RemoveAll(dir)
 		return Module{}, err
 	}
-	return r.record(url, name)
+	m, err := r.record(url, name)
+	if err != nil { // a clone with no source record must not stay behind
+		os.RemoveAll(dir)
+	}
+	return m, err
 }
 
 func (r *Registry) record(url, name string) (Module, error) {

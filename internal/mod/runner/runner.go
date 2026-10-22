@@ -48,6 +48,7 @@ type Runner struct {
 	mu     sync.Mutex
 	procs  map[string]*child
 	status map[string]string
+	tries  map[string]int // reviews started this life, by module and commit
 	busy   bool
 }
 
@@ -76,7 +77,7 @@ func (r *Runner) Tick() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.procs == nil {
-		r.procs, r.status = map[string]*child{}, map[string]string{}
+		r.procs, r.status, r.tries = map[string]*child{}, map[string]string{}, map[string]int{}
 	}
 	seen := map[string]bool{}
 	for _, m := range r.Mods.List() {
@@ -114,13 +115,14 @@ func (r *Runner) Tick() {
 }
 
 // cleared returns the commit a module may run at, or why it may not run yet.
-// A module with no git source was put there by the person and runs as is.
+// A module with neither a git source nor a .git folder was put there by the
+// person and runs as is; a clone with no source record is read like any other.
 func (r *Runner) cleared(name string, m modules.Module) (string, string) {
-	if m.Source.Source == "" || m.Source.Source == "builtin" {
+	if (m.Source.Source == "" || m.Source.Source == "builtin") && !core.Exists(filepath.Join(m.Dir, ".git")) {
 		return "local", ""
 	}
 	commit := m.Source.Commit
-	if commit == "" { // installed before the commit was recorded
+	if commit == "" { // installed before the commit was recorded, or never recorded
 		var err error
 		if commit, err = core.Git(m.Dir, "rev-parse", "HEAD"); err != nil {
 			return "", "its commit is unknown: " + err.Error()
@@ -132,31 +134,50 @@ func (r *Runner) cleared(name string, m modules.Module) (string, string) {
 		}
 		return commit, ""
 	}
-	id := "mr-" + name + "-" + commit[:min(12, len(commit))]
-	run, ok := r.C.Runs.Get(id)
-	if !ok {
-		if err := r.review(id, m); err != nil {
-			return commit, "its review could not start: " + err.Error()
+	// A review that ends with no vote (it failed or crashed) is run again, up
+	// to three times in one life of the daemon; restarting it reads it again.
+	base := "mr-" + name + "-" + commit[:min(12, len(commit))]
+	for i := 1; ; i++ {
+		id := base
+		if i > 1 {
+			id = fmt.Sprintf("%s-%d", base, i)
 		}
-		return commit, "waiting for its code review"
+		run, ok := r.C.Runs.Get(id)
+		if !ok {
+			if r.tries[base] >= 3 {
+				why := "its review ended without a vote three times (run " + base + "); restart the Hive to read it again"
+				if r.status[name] != why {
+					r.C.J.MustAppend("alert.raised", map[string]string{"kind": "module", "module": name, "text": "module " + name + " was not started: " + why})
+				}
+				return commit, why
+			}
+			if err := r.review(id, commit, m); err != nil {
+				return commit, "its review could not start: " + err.Error()
+			}
+			r.tries[base]++
+			return commit, "waiting for its code review"
+		}
+		if !run.Terminal() {
+			return commit, "waiting for its code review"
+		}
+		var out struct{ Vote, Reason string }
+		if run.Status != core.StatusDone || json.Unmarshal(run.Structured, &out) != nil || (out.Vote != "approve" && out.Vote != "decline") {
+			continue
+		}
+		v := modules.Review{Commit: commit, Vote: out.Vote, Reason: core.Clip(out.Reason, 2000), Run: id}
+		if err := r.Mods.SetReview(name, v); err != nil {
+			return commit, "its review could not be recorded: " + err.Error()
+		}
+		if v.Vote != "approve" {
+			r.C.J.MustAppend("alert.raised", map[string]string{"kind": "module", "module": name, "text": "module " + name + " was not started: its review declined it: " + v.Reason})
+			return commit, "declined by its review: " + v.Reason
+		}
+		return commit, ""
 	}
-	if !run.Terminal() {
-		return commit, "waiting for its code review"
-	}
-	v := modules.Review{Commit: commit, Vote: "decline", Reason: "the review ended without a vote (" + run.Status + ")", Run: id}
-	var out struct{ Vote, Reason string }
-	if run.Status == core.StatusDone && json.Unmarshal(run.Structured, &out) == nil && (out.Vote == "approve" || out.Vote == "decline") {
-		v.Vote, v.Reason = out.Vote, core.Clip(out.Reason, 2000)
-	}
-	r.Mods.SetReview(name, v)
-	if v.Vote != "approve" {
-		r.C.J.MustAppend("alert.raised", map[string]string{"kind": "module", "module": name, "text": "module " + name + " was not started: its review declined it: " + v.Reason})
-	}
-	return commit, "waiting for its code review"
 }
 
-// review starts a read-only run over a copy of the module's files.
-func (r *Runner) review(id string, m modules.Module) error {
+// review starts a read-only run over a copy of the module's files at commit.
+func (r *Runner) review(id, commit string, m modules.Module) error {
 	dir, err := r.Agents.Scratch(id)
 	if err != nil {
 		return err
@@ -169,7 +190,7 @@ func (r *Runner) review(id string, m modules.Module) error {
 The Hive will run %q from that folder on the person's machine, outside the sandbox, as the person, with no forge credential in its environment and its HOME set to a folder of its own. It asks to serve these hooks: %s. Its manifest says: %q.
 
 Approve only if the code does what the manifest says and nothing else. Decline if it reads or sends credentials or logins (gh, git, ssh, cloud, browser), writes outside its own folder and HOME, starts other programs it does not need, fetches and runs code, or hides what it does. Your final answer is the structured vote: vote (approve or decline) and reason.`,
-		m.Source.Commit, m.Source.Source, strings.Join(m.Exec, " "), strings.Join(m.Hooks, ", "), m.Description)
+		commit, m.Source.Source, strings.Join(m.Exec, " "), strings.Join(m.Hooks, ", "), m.Description)
 	s := r.Agents.Spec(id, "module-reviewer", "", dir, brief)
 	s.ReadOnly, s.Schema = true, VoteSchema
 	_, err = r.C.Runs.Start(s)

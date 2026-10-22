@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +18,9 @@ import (
 // starts only after the person approves it and a read-only review run clears
 // its commit; it files an ask with where it came from, carries the lead's
 // conversation out and a steer line in, is refused outside its hooks, and is
-// started again when it dies.
+// started again when it dies. One the review declines stays stopped; one
+// granted a single project never reads the lead's chat or the person's asks;
+// and a module catching up past more events than one read holds misses none.
 func TestModuleSeam(t *testing.T) {
 	t.Parallel()
 	h := start(t)
@@ -66,7 +69,7 @@ func TestModuleSeam(t *testing.T) {
 	}
 
 	home := filepath.Join(h.ws.Hive(), "modules", "echo")
-	os.WriteFile(filepath.Join(home, "inbox"), []byte("ask p echo ask\nsay hello from the door\nforbidden\n"), 0o600)
+	os.WriteFile(filepath.Join(home, "inbox"), []byte("ask p echo ask\nsay hello from the door\nforbidden\nnull\nraw\n"), 0o600)
 	h.wait("the ask to be filed from the inbox", minute, func(st api.State) bool {
 		tk, ok := task(st, "p", "echo ask")
 		return ok && tk.From == "echo/inbox"
@@ -79,6 +82,15 @@ func TestModuleSeam(t *testing.T) {
 	}
 	h.wait("the lead's reply in the outbox", minute, outbox("lead: Hello. I'm the lead."))
 	h.wait("a call outside its hooks refused", minute, outbox("forbidden 403"))
+	h.wait("an empty report refused", minute, outbox("null 400"))
+	h.wait("a token without Bearer refused", minute, outbox("raw 401"))
+	tagged := false
+	for _, m := range h.messages("lead") {
+		tagged = tagged || (m.Text == "hello from the door" && m.From == "echo")
+	}
+	if !tagged {
+		t.Fatal("the module's line in the lead's chat is not tagged as the module")
+	}
 	if !h.journaled("module.reported", `"text":"started"`) {
 		t.Fatal("the module's report is not in the journal")
 	}
@@ -109,6 +121,70 @@ func TestModuleSeam(t *testing.T) {
 	f.WriteString("ask p not granted\nsay hello again\n")
 	f.Close()
 	h.wait("asks outside its grant refused", minute, outbox("ask 400\nsay 400"))
+
+	// A module its review declines stays stopped, with an alert. Installing it
+	// talks with the lead and asks the person, which echo must not read.
+	cut := h.state().Seq
+	nope := filepath.Join(t.TempDir(), "nope")
+	os.MkdirAll(nope, 0o755)
+	os.WriteFile(filepath.Join(nope, "module.json"), []byte(`{"name":"nope","description":"FAKE:paneldecline","exec":["./nope"],"hooks":["source"]}`), 0o644)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"commit", "-q", "-m", "v1"}, {"tag", "v1.0.0"}} {
+		if _, err := core.Git(nope, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module " + nope}, nil)
+	h.wait("the install to reach the person", 2*minute, func(st api.State) bool {
+		for _, a := range st.Asks {
+			if a.Kind == "module" && strings.Contains(a.Title+a.Detail, "nope") {
+				h.post("/api/answer", map[string]string{"id": a.ID, "answer": "install"}, nil)
+				return true
+			}
+		}
+		return false
+	})
+	h.wait("the review to decline it", 2*minute, func(st api.State) bool {
+		for _, m := range st.Modules {
+			if m.Name == "nope" {
+				return strings.HasPrefix(m.Status, "declined by its review")
+			}
+		}
+		return false
+	})
+	if !h.journaled("alert.raised", "module nope was not started") || h.journaled("module.started", `"module":"nope"`) {
+		t.Fatal("a declined module: want an alert and no start")
+	}
+	events := func() map[string]int64 { // the last seq echo read of each kind
+		raw, _ := os.ReadFile(filepath.Join(home, "events"))
+		last := map[string]int64{}
+		for _, l := range strings.Split(string(raw), "\n") {
+			var seq int64
+			var kind string
+			if n, _ := fmt.Sscan(l, &seq, &kind); n == 2 {
+				last[kind] = seq
+			}
+		}
+		return last
+	}
+	h.wait("echo to read the alert", minute, func(api.State) bool { return events()["alert.raised"] > cut })
+	for kind, seq := range events() {
+		if seq > cut && (strings.HasPrefix(kind, "chat.") || strings.HasPrefix(kind, "person.") || strings.HasPrefix(kind, "run.")) {
+			t.Fatalf("echo, granted one project, read %s", kind)
+		}
+	}
+
+	// Held while more events land than one read returns, it reads the first
+	// one after its cursor.
+	f, _ = os.OpenFile(filepath.Join(home, "inbox"), os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString("hold\n")
+	f.Close()
+	h.wait("echo to hold", minute, outbox("holding"))
+	h.post("/api/module/report", map[string]string{"text": "marker"}, nil)
+	for range 2001 {
+		h.post("/api/module/report", map[string]string{"text": "filler"}, nil)
+	}
+	os.WriteFile(filepath.Join(home, "release"), nil, 0o600)
+	h.wait("echo to read past the gap from its cursor", minute, outbox("report marker"))
 }
 
 // journaled says some event of kind carries text in its data.
