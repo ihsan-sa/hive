@@ -656,11 +656,13 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 		mounts = append(mounts, sandbox.Mount{Host: rs.ws.Projects(), Inside: "/hive/projects"})
 	}
 	if r.Modules != nil && sb.Isolated() {
-		// Only granted modules are visible: mount each over an empty modules dir.
+		// Only granted modules are visible: mount each over an empty modules dir,
+		// which holds their mount points, since bwrap can't make them inside a
+		// read-only bind.
 		empty := filepath.Join(rs.ws.RunHost(r.ID), "modules")
-		os.MkdirAll(empty, 0o755)
 		mounts[5].Host = empty
 		for _, m := range r.Modules {
+			os.MkdirAll(filepath.Join(empty, m), 0o755)
 			mounts = append(mounts, sandbox.Mount{Host: filepath.Join(rs.ws.Modules(), m), Inside: "/hive/modules/" + m})
 		}
 	}

@@ -274,6 +274,20 @@ func (m *Module) opDecide(r core.Run, args json.RawMessage) (any, error) {
 	return "recorded; finish now", nil
 }
 
+// Steps sums up the outside steps a run asked for, one line each, and
+// whether there was one and every one ran and succeeded.
+func (m *Module) Steps(run string) (string, bool) {
+	var lines []string
+	ok := true
+	for _, r := range m.List() {
+		if r.Origin == run {
+			lines = append(lines, fmt.Sprintf("- %s: %s", r.State, core.Clip(r.Want, 200)))
+			ok = ok && r.State == "done"
+		}
+	}
+	return strings.Join(lines, "\n"), ok && len(lines) > 0
+}
+
 func (m *Module) tell(req Request, text string) {
 	m.C.Runs.Send(req.Origin, "[request "+req.ID+"] "+text)
 }

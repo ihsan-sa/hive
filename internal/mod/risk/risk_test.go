@@ -163,6 +163,9 @@ func TestWardenDoRunsExactlyItsScript(t *testing.T) {
 	if !g.told("done") {
 		t.Fatal("the worker wasn't told")
 	}
+	if s, ok := g.m.Steps(g.worker.ID); !ok || s != "- done: install left-pad" {
+		t.Fatalf("steps: %q %v", s, ok)
+	}
 }
 
 func TestWardenSaferAndDecline(t *testing.T) {
@@ -173,6 +176,9 @@ func TestWardenSaferAndDecline(t *testing.T) {
 	}
 	if got, _ := g.m.get(req.ID); got.State != "declined" || !g.told("use a venv") {
 		t.Fatalf("safer route not sent back: %+v", got)
+	}
+	if s, ok := g.m.Steps(g.worker.ID); ok || s != "- declined: install a tool globally" {
+		t.Fatalf("steps: %q %v", s, ok)
 	}
 }
 
