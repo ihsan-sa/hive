@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:needpackage, FAKE:inject, and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:needpackage, FAKE:rmoutside <path>, FAKE:inject, and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -58,6 +58,7 @@ func Main(argv []string) int {
 		brief, _ = os.ReadFile(filepath.Join(os.Getenv("HIVE_RUN"), "brief.md"))
 	}
 	all := string(brief) + "\n" + prompt
+	system, _ := os.ReadFile(filepath.Join(os.Getenv("HIVE_RUN"), "system.md"))
 	emit(map[string]any{"type": "system", "subtype": "init", "session_id": session, "model": "fake"})
 
 	if strings.Contains(all, "FAKE:crash") && !resume {
@@ -77,7 +78,7 @@ func Main(argv []string) int {
 	case "lead":
 		text, err = lead(prompt)
 	case "worker":
-		text, err = worker(all, prompt)
+		text, err = worker(all, prompt, string(system))
 	case "reviewer":
 		structured = review(all)
 		raw, _ := json.Marshal(structured)
@@ -186,10 +187,24 @@ func repoFiles() []string {
 	return names
 }
 
-func worker(all, prompt string) (string, error) {
+// outsidePath is a path on the person's machine the ask wants deleted.
+var outsidePath = regexp.MustCompile(`FAKE:rmoutside (\S+)`)
+
+// worker reads its role doc (system) as a real one does: a path outside its
+// checkout that it can't see (as in a sandbox) is read as already gone unless
+// the doc says it is only hidden.
+func worker(all, prompt, system string) (string, error) {
 	if strings.Contains(all, "FAKE:block") {
 		_, err := call("finish", map[string]string{"status": "blocked", "account": "FAKE: blocked on purpose"}, time.Minute)
 		return "blocked", err
+	}
+	if m := outsidePath.FindStringSubmatch(all); m != nil && !strings.Contains(prompt, "[request ") {
+		if _, err := os.Stat(m[1]); err != nil && !strings.Contains(system, "hidden, not gone") {
+			_, err := call("finish", map[string]string{"status": "done", "account": "FAKE: " + m[1] + " is already gone"}, time.Minute)
+			return "done", err
+		}
+		_, err := call("warden", map[string]string{"want": "delete " + m[1], "why": "the ask names it", "steps": "rm -rf " + m[1], "tier": "T3"}, time.Minute)
+		return "waiting for the warden", err
 	}
 	if strings.Contains(all, "FAKE:needpackage") && !strings.Contains(prompt, "[request ") {
 		why, steps := "the brief needs it "+strings.Join(riskKeys.FindAllString(all, -1), " "), "echo installing left-pad"

@@ -76,6 +76,10 @@ type Task struct {
 	Updated   time.Time  `json:"updated"`
 }
 
+// Label is the title clipped for a heading, an issue, a PR or a message; the
+// agents get the whole ask.
+func (t Task) Label() string { return core.Clip(t.Title, 120) }
+
 // Entry is one step in a task's timeline.
 type Entry struct {
 	At   time.Time `json:"at"`
@@ -191,7 +195,7 @@ func (m *Module) File(b Brief) (Task, error) {
 	if _, ok := m.C.Projects.Get(b.Project); !ok {
 		return Task{}, fmt.Errorf("no project %q", b.Project)
 	}
-	t := &Task{ID: core.NewID(), Project: b.Project, Title: core.Clip(b.Title, 120), Done: b.Done, Known: b.Known,
+	t := &Task{ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
 		From: b.From, Chat: b.Chat, Thread: b.Thread, Kind: "work", Stage: StageNew, Created: time.Now().UTC()}
 	m.save(t, "filed by "+b.From)
 	return *t, nil
@@ -232,7 +236,7 @@ func (m *Module) Revert(of Task, mergeSHA, reason string) (Task, error) {
 	for _, t := range m.List(func(t Task) bool { return t.Kind == "revert" && t.RevertSHA == mergeSHA }) {
 		return t, nil // already reverting
 	}
-	t := &Task{ID: core.NewID(), Project: of.Project, Title: "Revert: " + of.Title, Kind: "revert", Stage: StageReverting,
+	t := &Task{ID: core.NewID(), Project: of.Project, Title: "Revert: " + of.Label(), Kind: "revert", Stage: StageReverting,
 		From: "improve", Chat: of.Chat, Thread: of.Thread, RevertOf: of.ID, RevertSHA: mergeSHA, Lesson: reason, Created: time.Now().UTC()}
 	m.save(t, "revert filed: "+reason)
 	return *t, nil
@@ -260,7 +264,7 @@ func (m *Module) Tick() {
 				if t.Failures >= 8 {
 					t.Stage, t.Reason = StageStopped, "gave up after repeated errors: "+msg
 					m.save(&t, t.Reason)
-					m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Stopped %q: %s", t.Title, core.Clip(msg, 300)))
+					m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Stopped %q: %s", t.Label(), core.Clip(msg, 300)))
 					return
 				}
 				m.save(&t, "error (will retry): "+core.Clip(msg, 300))
@@ -287,7 +291,7 @@ func (m *Module) step(t *Task) error {
 	switch t.Stage {
 	case StageNew:
 		body := fmt.Sprintf("%s\n\n**Done looks like:** %s\n\n**Already known:** %s\n\n_Filed by the Hive (%s)._", t.Title, orNone(t.Done), orNone(t.Known), t.From)
-		is, err := m.C.Effects.Forge.CreateIssue(p.Repo, t.Title, body, marker(t.ID))
+		is, err := m.C.Effects.Forge.CreateIssue(p.Repo, t.Label(), body, marker(t.ID))
 		if err != nil {
 			return err
 		}
@@ -365,7 +369,8 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	cfg := m.C.Effects.Config(p, base)
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Brief: %s\n\nTask %s · project %s · issue #%d\n\n", t.Title, t.ID, p.Name, t.Issue.Number)
+	fmt.Fprintf(&b, "# Brief: %s\n\nTask %s · project %s · issue #%d\n\n", t.Label(), t.ID, p.Name, t.Issue.Number)
+	fmt.Fprintf(&b, "## The ask\n\n%s\n\n", t.Title)
 	fmt.Fprintf(&b, "## What done looks like\n\n%s\n\n## What's already known\n\n%s\n\n", orNone(t.Done), orNone(t.Known))
 	b.WriteString("## The project\n\n")
 	b.WriteString("- Goals: `.hive/goals.md`. Read it; report against it.\n")
@@ -417,7 +422,7 @@ func (m *Module) priorBlocked(t *Task) string {
 	for _, o := range m.List(func(o Task) bool {
 		return o.Project == t.Project && o.ID != t.ID && o.Stage == StageBlocked && similar(o.Title, t.Title)
 	}) {
-		fmt.Fprintf(&b, "- %s (%s): %s\n", o.Title, o.ID, core.Clip(o.Reason, 300))
+		fmt.Fprintf(&b, "- %s (%s): %s\n", o.Label(), o.ID, core.Clip(o.Reason, 300))
 	}
 	return b.String()
 }
@@ -453,8 +458,8 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 		t.Stage, t.Reason = StageBlocked, finishText(r)
 		m.save(t, "blocked: "+core.Clip(t.Reason, 300))
 		m.C.Effects.Forge.Comment(p.Repo, t.Issue.Number, "The worker stopped:\n\n"+t.Reason)
-		m.C.J.MustAppend("kb.note", map[string]string{"title": "Blocked: " + t.Title, "text": t.Reason, "project": t.Project, "run": r.ID})
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Blocked: %q. %s", t.Title, core.Clip(t.Reason, 400)))
+		m.C.J.MustAppend("kb.note", map[string]string{"title": "Blocked: " + t.Label(), "text": t.Reason, "project": t.Project, "run": r.ID})
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Blocked: %q. %s", t.Label(), core.Clip(t.Reason, 400)))
 	case core.StatusStopped:
 		t.Stage, t.Reason = StageStopped, "worker stopped: "+r.Reason
 		m.save(t, t.Reason)
@@ -488,7 +493,7 @@ func (m *Module) land(t *Task, p core.Project) error {
 	if errors.Is(err, core.ErrNoChanges) {
 		t.Stage, t.Reason = StageBlocked, "the worker finished without any commits: "+core.Clip(finishText(r), 300)
 		m.save(t, t.Reason)
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q finished with no change to merge. %s", t.Title, core.Clip(finishText(r), 300)))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q finished with no change to merge. %s", t.Label(), core.Clip(finishText(r), 300)))
 		return nil
 	}
 	if err != nil {
@@ -498,7 +503,7 @@ func (m *Module) land(t *Task, p core.Project) error {
 		return err
 	}
 	body := finishText(r) + fmt.Sprintf("\n\nCloses #%d\n\n%s", t.Issue.Number, marker(t.ID))
-	pr, err := m.C.Effects.Forge.CreatePR(p.Repo, t.Branch, p.Branch, t.Title, body)
+	pr, err := m.C.Effects.Forge.CreatePR(p.Repo, t.Branch, p.Branch, t.Label(), body)
 	if err != nil {
 		return err
 	}
@@ -536,9 +541,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 		t.Stage = StagePerson
 		m.save(t, "waiting on the person: changes "+strings.Join(ch.Protected, ", "))
 		m.C.Person.Ask(core.Ask{Kind: "merge", Ref: t.ID + "@" + t.SHA, Project: p.Name, From: t.Worker,
-			Title:  fmt.Sprintf("Merge %q? It changes %s", t.Title, strings.Join(ch.Protected, ", ")),
+			Title:  fmt.Sprintf("Merge %q? It changes %s", t.Label(), strings.Join(ch.Protected, ", ")),
 			Detail: fmt.Sprintf("%s\n\nPR: %s", strings.Join(ch.Protected, ", ")+" are yours to merge.", t.PR.URL), Options: []string{"merge", "leave open"}})
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q changes %s, which is yours to approve. It's waiting on you: %s", t.Title, strings.Join(ch.Protected, ", "), t.PR.URL))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q changes %s, which is yours to approve. It's waiting on you: %s", t.Label(), strings.Join(ch.Protected, ", "), t.PR.URL))
 	case ch.Small || m.C.Effects.Reviewed(p.Name, t.SHA):
 		t.Stage = StageMerging
 		m.save(t, "tests passed; "+map[bool]string{true: "small change, no read needed", false: "already read"}[ch.Small])
@@ -584,7 +589,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 		}
 		c, _ := m.C.Effects.GetCheck(p.Name, t.SHA, "test")
 		w, _ := m.C.Runs.Get(t.Worker)
-		brief := fmt.Sprintf("Review round %d of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", t.Round+1, t.ID, t.Title)
+		brief := fmt.Sprintf("Review round %d of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", t.Round+1, t.ID, t.Label())
 		spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
 		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": c.Output,
@@ -645,7 +650,7 @@ func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
 		t.Stage, t.Reason = StageStopped, fmt.Sprintf("stopped after %d rounds of fixes; what remains:\n\n%s", t.Round, core.Clip(findings, 1500))
 		m.save(t, "stopped after fix rounds")
 		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Stopping here. "+t.Reason+"\n\nThe pull request stays open.")
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Stopped %q after %d rounds; the PR stays open: %s", t.Title, t.Round, t.PR.URL))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Stopped %q after %d rounds; the PR stays open: %s", t.Label(), t.Round, t.PR.URL))
 		return nil
 	}
 	t.Round++
@@ -679,7 +684,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		m.save(t, "main moved; branch brought up to date at "+core.Short(next)+", testing again")
 		return nil
 	}
-	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Title})
+	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label()})
 	var np *core.NeedsPerson
 	if errors.As(err, &np) {
 		t.Stage = StagePerson
@@ -692,9 +697,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	t.MergeSHA, t.Stage = merged, StageMerged
 	m.save(t, "merged as "+core.Short(merged))
 	if t.Kind == "revert" {
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Title, "Revert: "), t.Lesson))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Label(), "Revert: "), t.Lesson))
 	} else {
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Merged: %s %s", t.Title, t.PR.URL))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Merged: %s %s", t.Label(), t.PR.URL))
 	}
 	if m.OnMerged != nil {
 		m.OnMerged(*t)
@@ -729,7 +734,7 @@ func (m *Module) prepareRevert(t *Task, p core.Project) error {
 	}
 	of, _ := m.Get(t.RevertOf)
 	if t.SHA == "" {
-		lesson := fmt.Sprintf("%s: %q (PR #%d, %s) was reverted: %s", time.Now().Format("2006-01-02"), of.Title, of.PR.Number, core.Short(t.RevertSHA), t.Lesson)
+		lesson := fmt.Sprintf("%s: %q (PR #%d, %s) was reverted: %s", time.Now().Format("2006-01-02"), of.Label(), of.PR.Number, core.Short(t.RevertSHA), t.Lesson)
 		sha, err := m.C.Effects.Revert(p, main, t.RevertSHA, lesson)
 		if err != nil {
 			return err
@@ -741,7 +746,7 @@ func (m *Module) prepareRevert(t *Task, p core.Project) error {
 		return err
 	}
 	body := fmt.Sprintf("Reverts #%d (%s).\n\n%s\n\nThe lesson is recorded in `.hive/lessons.md`.\n\n%s", of.PR.Number, core.Short(t.RevertSHA), t.Lesson, marker(t.ID))
-	pr, err := m.C.Effects.Forge.CreatePR(p.Repo, t.Branch, p.Branch, t.Title, body)
+	pr, err := m.C.Effects.Forge.CreatePR(p.Repo, t.Branch, p.Branch, t.Label(), body)
 	if err != nil {
 		return err
 	}

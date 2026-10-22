@@ -364,7 +364,7 @@ func (m *Module) Digest(since int64) string {
 			if i >= 25 {
 				break
 			}
-			fmt.Fprintf(&b, "- [%s] %s (%s) %s\n", t.Stage, t.Title, t.ID, core.Clip(t.Reason+" "+t.Lesson, 300))
+			fmt.Fprintf(&b, "- [%s] %s (%s) %s\n", t.Stage, t.Label(), t.ID, core.Clip(t.Reason+" "+t.Lesson, 300))
 		}
 		b.WriteString("\n")
 	}

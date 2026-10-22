@@ -17,7 +17,7 @@ Done:
 - CI green on Windows, Ubuntu and macOS (vet, unit, e2e). Claude Code inside the WSL sandbox verified up to the API (invalid token → 401).
 
 Not verified:
-- The tribunal with real models after fix round 1: `TestLiveTribunal` is the probe. A real warden (`TestLiveWarden`) passed on the tower before it; injection resistance by a real model is untested.
+- The tribunal with real models under bubblewrap: `TestLiveTribunal` passed on the tower bare (three models approved, the majority ran the warden's script). Under bubblewrap no tribunal formed, because the ask was clipped at 120 characters and a sandboxed worker read the hidden fixture as already gone; both are fixed (the whole ask reaches the agents, and the worker role says outside paths are hidden), and the live probes now run sandboxed when the sandbox works. Re-run under bubblewrap. Injection resistance by a real model is untested.
 - The bubblewrap path live: `TestProbeBothPaths` (non-short, `internal/sandbox`) runs `hive sandbox-probe` under each path, but skips both inside a nested sandbox. Run it on a stock Ubuntu host.
 - No Windows executor for approved steps: `execute` runs `sh -c`, so on a bare Windows host an approved step fails rather than running.
 - Live agents with real Claude Code (no plan usage spent yet). Sandboxed live runs read a short-lived token from Claude Code's credential file at run time; not exercised.

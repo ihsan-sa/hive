@@ -209,7 +209,7 @@ func (m *Module) Status() map[string]any {
 			st.Best = &b
 		}
 		for i, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {
-			line := fmt.Sprintf("[%s] %s (%s)", t.Stage, t.Title, t.ID)
+			line := fmt.Sprintf("[%s] %s (%s)", t.Stage, t.Label(), t.ID)
 			if t.PR.URL != "" {
 				line += " " + t.PR.URL
 			}
