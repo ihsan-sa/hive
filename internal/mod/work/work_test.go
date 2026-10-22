@@ -60,7 +60,7 @@ func logged(t *Task, s string) bool {
 // did before outside steps existed, instead of panicking.
 func TestNoCommitsWithoutSteps(t *testing.T) {
 	m, forge, task, p := noCommitRig(t, 0)
-	m.noCommits(task, p, core.Run{ID: "w1", Result: "gave up"})
+	m.noCommits(task, p, core.Run{RunSpec: core.RunSpec{ID: "w1"}, Result: "gave up"})
 	if task.Stage != StageBlocked || !strings.Contains(task.Reason, "without any commits: gave up") {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
@@ -74,7 +74,7 @@ func TestNoCommitsWithoutSteps(t *testing.T) {
 func TestNoCommitsWithPendingStep(t *testing.T) {
 	m, forge, task, p := noCommitRig(t, 0)
 	m.Steps = func(string) (string, bool) { return "- restart: still pending (tribunal)", false }
-	m.noCommits(task, p, core.Run{ID: "w1"})
+	m.noCommits(task, p, core.Run{RunSpec: core.RunSpec{ID: "w1"}})
 	if task.Stage != StageBlocked || !strings.Contains(task.Reason, "not all done:\n- restart: still pending (tribunal)") {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
@@ -88,7 +88,7 @@ func TestNoCommitsWithPendingStep(t *testing.T) {
 func TestNoCommitsDoneRetriesClose(t *testing.T) {
 	m, forge, task, p := noCommitRig(t, 1)
 	m.Steps = func(string) (string, bool) { return "- restart: ran", true }
-	m.noCommits(task, p, core.Run{ID: "w1"})
+	m.noCommits(task, p, core.Run{RunSpec: core.RunSpec{ID: "w1"}})
 	if task.Stage != StageDone || !task.IssueOpen || !logged(task, "closing the issue failed (will retry): HTTP 503") {
 		t.Fatalf("stage %q, issue open %v, log %v", task.Stage, task.IssueOpen, task.Log)
 	}
