@@ -11,8 +11,10 @@ import (
 
 // EnableAutostart makes the Hive start whenever the machine (or the person's
 // session) starts, so an ask made in the evening is done in the morning.
-func EnableAutostart(root string) error {
-	exe := Executable()
+func EnableAutostart(root string) error { return EnableAutostartAt(Executable(), root) }
+
+// EnableAutostartAt starts the binary at exe for the Hive in root.
+func EnableAutostartAt(exe, root string) error {
 	switch runtime.GOOS {
 	case "windows":
 		return windowsAutostart(exe, root, true)
@@ -39,7 +41,7 @@ func EnableAutostart(root string) error {
 	default:
 		home, _ := os.UserHomeDir()
 		unit := filepath.Join(home, ".config", "systemd", "user", "hive.service")
-		content := fmt.Sprintf("[Unit]\nDescription=The Hive\nAfter=network-online.target\n\n[Service]\nEnvironment=HIVE_HOME=%s\nExecStart=%s daemon\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n", root, exe)
+		content := fmt.Sprintf("[Unit]\nDescription=The Hive\nAfter=network-online.target\n\n[Service]\nEnvironment=HIVE_HOME=%s\nExecStart=%s daemon\nKillMode=process\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n", root, exe)
 		os.MkdirAll(filepath.Dir(unit), 0o755)
 		if err := os.WriteFile(unit, []byte(content), 0o644); err != nil {
 			return err

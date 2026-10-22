@@ -24,6 +24,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
@@ -97,6 +98,11 @@ func Run(ws core.Workspace, waitFor int) error {
 	}
 	if _, ok := Running(ws); ok {
 		return errors.New("the Hive is already running")
+	}
+	if exe := release.Rename(ws.Root); exe != "" {
+		// This update renamed hive-v0 to hive: start the daemon under its new name.
+		_, err := proc.StartDetached([]string{exe, "daemon"}, append(os.Environ(), "HIVE_HOME="+ws.Root), ws.Root, "", filepath.Join(ws.Hive(), "daemon.log"))
+		return err
 	}
 	a, err := app.New(ws, Forge())
 	if err != nil {

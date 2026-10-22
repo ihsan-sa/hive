@@ -15,6 +15,7 @@ Done:
   - WSL sandbox isolation checked by hand: /mnt, /home, WSL interop hidden; /etc, /usr read-only; only checkout writable; public HTTPS via proxy 200; local services 403; no direct network.
 
 - Release v0.1.0 published with binaries (linux/darwin amd64+arm64, windows amd64). One-line install via `gh api …/install.ps1 | Out-String | iex` verified into a scratch dir; installs `hive-v0`.
+- Self-update over plain HTTPS (no gh login), through the repo's rename redirect; a running Hive rechecks every 6h and waits out a merge. The command is `hive`: an install called `hive-v0` (v0.1.2 and before) moves to `hive` on its next update and keeps `hive-v0` as an alias. `.github/workflows/update.yml` installs the previous release and v0.1.2 on all three systems and waits for each to update itself.
 - CI green on Windows, Ubuntu and macOS (vet, unit, e2e). Claude Code inside the WSL sandbox verified up to the API (invalid token → 401).
 
 Not verified:

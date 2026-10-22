@@ -78,6 +78,9 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 		}
 		return "updated " + join(changed), nil
 	}})
+	a.Release.Busy = func() bool {
+		return len(a.Work.List(func(t work.Task) bool { return t.Stage == work.StageMerging })) > 0
+	}
 	a.System.Register(system.Job{Name: "hive.update", AtStart: true, Fn: a.Release.AutoUpdate})
 	return a, nil
 }

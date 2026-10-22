@@ -14,7 +14,7 @@ macOS / Linux:
 
     gh api repos/ihsan-sa/hive-standalone-build/contents/install/install.sh -H "Accept: application/vnd.github.raw" | sh
 
-Then run `hive`. (The installer puts it on your PATH as `hive-v0`, or the name in `HIVE_CMD`; a build from source is `hive`.) The first run checks for git, Claude Code and the GitHub CLI, offers their own logins, asks where to live (Enter for `~/hive`) and for a GitHub repository (Enter makes a small private demo project), and opens the control center with the lead's chat.
+Then run `hive`. (The installer puts it on your PATH as `hive`, or the name in `HIVE_CMD`; `HIVE_VERSION=v0.1.2` installs an older release. Installs from v0.1.2 and before were called `hive-v0`; their next update renames them to `hive` and keeps `hive-v0` working.) The first run checks for git, Claude Code and the GitHub CLI, offers their own logins, asks where to live (Enter for `~/hive`) and for a GitHub repository (Enter makes a small private demo project), and opens the control center with the lead's chat.
 
 On Windows, agents are sandboxed inside WSL 2; the installer installs or updates Claude Code there.
 

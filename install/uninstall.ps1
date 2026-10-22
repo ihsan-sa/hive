@@ -1,11 +1,13 @@
 # Uninstall the Hive (your folder, ~\hive by default, is left alone):
-#   gh api repos/ihsan-sa/hive-standalone-build/contents/install/uninstall.ps1 -H "Accept: application/vnd.github.raw" | Out-String | iex
-$cmd = if ($env:HIVE_CMD) { $env:HIVE_CMD } else { 'hive-v0' }
-$dir = if ($env:HIVE_BIN_DIR) { $env:HIVE_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\$cmd" }
-$exe = Join-Path $dir "$cmd.exe"
-if (Test-Path $exe) { & $exe uninstall }
-Start-Sleep -Seconds 1
-Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-[Environment]::SetEnvironmentVariable('Path', (($userPath -split ';') | Where-Object { $_ -ne $dir }) -join ';', 'User')
+#   irm https://raw.githubusercontent.com/ihsan-sa/hive/main/install/uninstall.ps1 | iex
+# It removes hive and hive-v0, its name up to v0.1.2.
+$cmd = if ($env:HIVE_CMD) { $env:HIVE_CMD } else { 'hive' }
+foreach ($c in @($cmd, 'hive-v0')) {
+  $dir = if ($env:HIVE_BIN_DIR) { $env:HIVE_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\$c" }
+  $exe = Get-ChildItem $dir -Filter 'hive*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($exe) { & $exe.FullName uninstall; Start-Sleep -Seconds 1 }
+  Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  [Environment]::SetEnvironmentVariable('Path', (($userPath -split ';') | Where-Object { $_ -ne $dir }) -join ';', 'User')
+}
 Write-Host 'The Hive is uninstalled. Your folder and its projects are untouched.'

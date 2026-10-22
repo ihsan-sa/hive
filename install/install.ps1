@@ -1,12 +1,14 @@
 # Install the Hive on Windows. One line:
 #   gh api repos/ihsan-sa/hive-standalone-build/contents/install/install.ps1 -H "Accept: application/vnd.github.raw" | Out-String | iex
 # (or, once the repo is public: irm https://raw.githubusercontent.com/ihsan-sa/hive-standalone-build/main/install/install.ps1 | iex)
-# Running it again reinstalls. Agents are sandboxed inside WSL 2, so the Linux
+# Running it again reinstalls; $env:HIVE_VERSION = 'v0.1.2' installs that release
+# instead of the latest. Agents are sandboxed inside WSL 2, so the Linux
 # build is installed next to the Windows one, and Claude Code is installed or
 # updated inside WSL.
 $ErrorActionPreference = 'Stop'
-$repo = if ($env:HIVE_REPO) { $env:HIVE_REPO } else { 'ihsan-sa/hive-standalone-build' }
-$cmd = if ($env:HIVE_CMD) { $env:HIVE_CMD } else { 'hive-v0' }
+$repo = if ($env:HIVE_REPO) { $env:HIVE_REPO } else { 'ihsan-sa/hive' }
+$cmd = if ($env:HIVE_CMD) { $env:HIVE_CMD } else { 'hive' }
+$version = if ($env:HIVE_VERSION) { $env:HIVE_VERSION } else { 'latest' }
 $dir = if ($env:HIVE_BIN_DIR) { $env:HIVE_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\$cmd" }
 $tmp = Join-Path $env:TEMP ('hive-install-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Force $dir, $tmp | Out-Null
@@ -25,15 +27,17 @@ function Invoke-Native([scriptblock]$Block, [switch]$Quiet) {
   }
 }
 
-Write-Host "Downloading the Hive from $repo ..."
+Write-Host "Downloading the Hive ($version) from $repo ..."
+$tag = @($version | Where-Object { $_ -ne 'latest' })
+$base = if ($tag) { "https://github.com/$repo/releases/download/$version" } else { "https://github.com/$repo/releases/latest/download" }
 $useGh = (Get-Command gh -ErrorAction SilentlyContinue) -and ((Invoke-Native { gh auth status } -Quiet) -eq 0)
 foreach ($a in $assets) {
   if ($useGh) {
-    if ((Invoke-Native { gh release download -R $repo --pattern $a --dir $tmp --clobber } -Quiet) -ne 0) {
+    if ((Invoke-Native { gh release download @tag -R $repo --pattern $a --dir $tmp --clobber } -Quiet) -ne 0) {
       throw "could not download $a from $repo (is there a release, and is the network up?)"
     }
   } else {
-    Invoke-WebRequest "https://github.com/$repo/releases/latest/download/$a" -OutFile (Join-Path $tmp $a) -UseBasicParsing
+    Invoke-WebRequest "$base/$a" -OutFile (Join-Path $tmp $a) -UseBasicParsing
   }
 }
 foreach ($a in $assets[1..2]) {
@@ -45,6 +49,8 @@ foreach ($a in $assets[1..2]) {
 }
 
 $exe = Join-Path $dir "$cmd.exe"
+$old = Join-Path $env:LOCALAPPDATA 'Programs\hive-v0\hive-v0.exe'   # its name up to v0.1.2
+if ($old -ne $exe -and (Test-Path $old)) { Invoke-Native { & $old shutdown } -Quiet | Out-Null }
 if (Test-Path $exe) {
   # Stop a running Hive so the next start runs the new version (agents keep running).
   Invoke-Native { & $exe shutdown } -Quiet | Out-Null
