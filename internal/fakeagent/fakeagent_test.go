@@ -33,22 +33,26 @@ func TestHiddenOutsidePathIsFiled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ops []string
-	call = func(op string, args any, _ time.Duration) (json.RawMessage, error) {
-		raw, _ := json.Marshal(args)
-		ops = append(ops, op+" "+string(raw))
+	type op struct {
+		name string
+		args map[string]string
+	}
+	var ops []op
+	call = func(name string, args any, _ time.Duration) (json.RawMessage, error) {
+		ops = append(ops, op{name, args.(map[string]string)})
 		return nil, nil
 	}
 	defer func() { call = agentcli.Call }()
 	hidden := filepath.Join(t.TempDir(), "fixture")
-	for _, c := range []struct{ system, want string }{
-		{"", "finish "},
-		{string(doc), `warden {"steps":"rm -rf ` + hidden + `","tier":"T3"`},
+	brief := "# Brief: Delete it: FAKE:rmoutside " + hidden[:len(hidden)/2] + "\n\n## The ask\n\nDelete it: FAKE:rmoutside " + hidden + "\n\n## What done looks like\n\n(none)\n"
+	for _, c := range []struct{ system, want, steps string }{
+		{"", "finish", ""},
+		{string(doc), "warden", "rm -rf " + hidden},
 	} {
 		ops = nil
-		worker("Delete it: FAKE:rmoutside "+hidden, "go", c.system)
-		if len(ops) != 1 || !strings.HasPrefix(ops[0], c.want) {
-			t.Errorf("want %s, got %q", c.want, ops)
+		worker(brief, "go", c.system)
+		if len(ops) != 1 || ops[0].name != c.want || ops[0].args["steps"] != c.steps || (c.want == "warden" && ops[0].args["tier"] != "T3") {
+			t.Errorf("want %s %q, got %v", c.want, c.steps, ops)
 		}
 	}
 }

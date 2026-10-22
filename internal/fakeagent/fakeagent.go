@@ -187,8 +187,9 @@ func repoFiles() []string {
 	return names
 }
 
-// outsidePath is a path on the person's machine the ask wants deleted.
-var outsidePath = regexp.MustCompile(`FAKE:rmoutside (\S+)`)
+// outsidePath is a path on the person's machine the ask wants deleted. It is
+// read from the brief's ask section, since the heading's label may clip it.
+var outsidePath = regexp.MustCompile(`## The ask\n\n[^\n]*FAKE:rmoutside (\S+)`)
 
 // worker reads its role doc (system) as a real one does: a path outside its
 // checkout that it can't see (as in a sandbox) is read as already gone unless
