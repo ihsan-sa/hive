@@ -333,7 +333,7 @@ func (m *model) viewThreads(w int) []string {
 				h = stSel.Render(clip(h, w))
 			}
 			lines = append(lines, h)
-			lines = append(lines, indent(wrap(msg.Text, w-len(prefix)-2), prefix+"  ")...)
+			lines = append(lines, indent(markdown(msg.Text, w-len(prefix)-2), prefix+"  ")...)
 		}
 		lines = append(lines, "")
 	}

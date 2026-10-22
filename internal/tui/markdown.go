@@ -1,0 +1,76 @@
+package tui
+
+import (
+	"regexp"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+var (
+	stCode = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	stLink = lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Underline(true)
+	stBold = lipgloss.NewStyle().Bold(true)
+	stEm   = lipgloss.NewStyle().Italic(true)
+
+	reInline = regexp.MustCompile("`([^`]+)`|\\*\\*([^*]+)\\*\\*|\\[([^\\]]+)\\]\\(([^)\\s]+)\\)|(?:^|\\s)\\*([^*\\s][^*]*)\\*")
+	reBullet = regexp.MustCompile(`^(\s*)[-*+] `)
+	reHead   = regexp.MustCompile(`^#{1,6} +`)
+)
+
+// markdown renders a chat message's markdown to styled lines of at most w
+// cells. Styles are plain SGR codes, so a terminal without colour (NO_COLOR,
+// TERM=dumb) gets the text with the markers removed and nothing else.
+func markdown(s string, w int) []string {
+	var out []string
+	fence := false
+	for _, l := range strings.Split(strings.ReplaceAll(s, "\r", ""), "\n") {
+		switch {
+		case strings.HasPrefix(strings.TrimSpace(l), "```"):
+			fence = !fence
+		case fence:
+			for _, c := range wrap(l, w) {
+				out = append(out, stCode.Render(c))
+			}
+		case reHead.MatchString(l):
+			out = append(out, wrapStyled(stBold, reHead.ReplaceAllString(l, ""), w)...)
+		case reBullet.MatchString(l):
+			m := reBullet.FindStringSubmatch(l)
+			body := wrap(inline(l[len(m[0]):]), w-len(m[1])-2)
+			for i, c := range body {
+				p := m[1] + "  "
+				if i == 0 {
+					p = m[1] + "• "
+				}
+				out = append(out, p+c)
+			}
+		default:
+			out = append(out, wrap(inline(l), w)...)
+		}
+	}
+	return out
+}
+
+func wrapStyled(st lipgloss.Style, s string, w int) []string {
+	ls := wrap(inline(s), w)
+	for i := range ls {
+		ls[i] = st.Render(ls[i])
+	}
+	return ls
+}
+
+// inline styles `code`, **bold**, *italic* and [text](url) within one line.
+func inline(s string) string {
+	return reInline.ReplaceAllStringFunc(s, func(m string) string {
+		g := reInline.FindStringSubmatch(m)
+		switch {
+		case g[1] != "":
+			return stCode.Render(g[1])
+		case g[2] != "":
+			return stBold.Render(g[2])
+		case g[3] != "":
+			return stLink.Render(g[3]) + " (" + g[4] + ")"
+		}
+		return m[:len(m)-len(g[5])-2] + stEm.Render(g[5])
+	})
+}

@@ -113,3 +113,24 @@ func TestViewsFitTheScreen(t *testing.T) {
 		checkWidth(t, m.View(), w, h, "help")
 	}
 }
+
+func TestMarkdown(t *testing.T) {
+	src := "Use **bold** and `code` and [hive](https://x.io).\n- one item\n- two\n```\nfunc main() {}\n```"
+	got := strings.Join(markdown(src, 60), "\n")
+	plain := ansi.Strip(got)
+	for _, bad := range []string{"**", "`", "](", "```"} {
+		if strings.Contains(plain, bad) {
+			t.Errorf("raw %q left in %q", bad, plain)
+		}
+	}
+	for _, want := range []string{"Use bold and code and hive (https://x.io).", "• one item", "• two", "func main() {}"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("missing %q in %q", want, plain)
+		}
+	}
+	for _, l := range markdown(strings.Repeat("word ", 30)+"**bold words here**", 30) {
+		if ansi.StringWidth(l) > 30 {
+			t.Errorf("line too wide: %q", l)
+		}
+	}
+}
