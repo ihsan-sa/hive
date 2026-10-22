@@ -4,6 +4,7 @@ Done:
 - Full build per docs/spec.md, including milestone 6: risk tiers T1-T3, the warden, the tribunal and the always-the-person ceiling enforced at the point of effect (risk.md).
 - Gate: the change classifier reads diffs with `--no-renames`, so moving a protected file out is protected; an emptied test command on main is red once the project has run one.
 - Linux sandbox on stock Ubuntu 23.10+ (`apparmor_restrict_unprivileged_userns=1`): the same mounts, tools and egress run under bubblewrap; WSL keeps the build's own namespaces.
+- An isolated lead granted modules starts under bubblewrap: their mount points exist in the read-only modules dir. CI runs the e2e under bubblewrap on ubuntu-latest too (`sandboxed-e2e`), so a sandbox break goes red on a PR.
 - Core (~3k lines), Linux namespace sandbox (+WSL, +Seatbelt), Claude Code + fake harness, all default modules, daemon + API, CLI, TUI, first run, autostart, self-update/self-release, installers, CI + release workflows, demo project.
 - Tests passing:
   - unit: gate guarantees (pinned merge, check + verdict bound to sha, foreign git metadata refused, only hive/* pushed, protected paths), journal, harness parsing, egress filtering, schedules, TUI fits 50×16 to 120×40;
