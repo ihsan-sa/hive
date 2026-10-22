@@ -29,7 +29,7 @@ func GitT(timeout time.Duration, dir string, args ...string) (string, error) {
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
 	if err != nil {
-		return strings.TrimSpace(out.String()), fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
+		return strings.TrimSpace(out.String()), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}
 	return strings.TrimSpace(out.String()), nil
 }

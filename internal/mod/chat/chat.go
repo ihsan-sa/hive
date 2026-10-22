@@ -5,8 +5,10 @@ package chat
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -264,8 +266,10 @@ func (m *Module) bundleFor(ch *Chat, p core.Project, id string) {
 	if !p.Isolated {
 		return
 	}
-	// An empty repository has no main to bundle; the lead reads its checkout as is.
-	if _, err := core.Git(m.C.WS.Project(p.Name), "rev-parse", "-q", "--verify", "refs/heads/"+p.Branch); err != nil {
+	// An empty repository has no main to bundle (git ran and exited 1); the
+	// lead reads its checkout as is. Any other failure is journaled below.
+	var exit *exec.ExitError
+	if _, err := core.Git(m.C.WS.Project(p.Name), "rev-parse", "-q", "--verify", "refs/heads/"+p.Branch); errors.As(err, &exit) && exit.ExitCode() == 1 {
 		return
 	}
 	os.MkdirAll(m.C.WS.RunRO(id), 0o755)
