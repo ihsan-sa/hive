@@ -34,6 +34,8 @@ if [ -z "$want" ] || [ "$want" != "$got" ]; then echo "$CMD: checksum mismatch; 
 mkdir -p "$DIR"
 for c in "$CMD" hive-v0; do [ -x "$DIR/$c" ] && "$DIR/$c" shutdown >/dev/null 2>&1 || true; done
 install -m 755 "$tmp/$asset" "$DIR/$CMD"
+# The command was hive-v0 up to v0.1.2; an old binary left there becomes an alias.
+if [ "$CMD" != hive-v0 ] && [ -e "$DIR/hive-v0" ]; then ln -sf "$CMD" "$DIR/hive-v0"; fi
 
 case ":$PATH:" in
   *":$DIR:"*) ;;

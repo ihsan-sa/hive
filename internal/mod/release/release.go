@@ -166,15 +166,17 @@ func (m *Module) AutoUpdate() (string, error) {
 	return m.Update()
 }
 
-// Rename moves an install still called hive-v0 (v0.1.2 and older) to hive.
-// It copies this binary to hive beside it, leaves hive-v0 forwarding there,
-// points autostart at hive and returns the path the daemon should restart
-// from, or "" when there is nothing to move.
-func Rename(root string) string {
+// Rename moves an install still called hive-v0 to hive, when this daemon
+// replaces one of v0.1.2 or older (from), which updated its hive-v0 binary in
+// place; a hive-v0 installed on purpose (HIVE_CMD) keeps its name. It copies
+// this binary to hive beside it, leaves hive-v0 forwarding there, points
+// autostart at hive and returns the path the daemon should restart from, or
+// "" when there is nothing to move.
+func Rename(root, from string) string {
 	exe := executable()
 	dir, base := filepath.Split(exe)
 	ext := filepath.Ext(base)
-	if base != "hive-v0"+ext {
+	if base != "hive-v0"+ext || (from != "v0.1.0" && from != "v0.1.1" && from != "v0.1.2") {
 		os.Remove(filepath.Join(dir, "hive-v0"+ext+".old")) // left by a rename on Windows
 		return ""
 	}
@@ -190,10 +192,15 @@ func Rename(root string) string {
 		os.Remove(exe)
 		os.Symlink("hive", exe)
 	}
-	if setup.AutostartEnabled() {
-		setup.EnableAutostartAt(target, root)
-	}
+	autostart(target, root)
 	return target
+}
+
+// autostart points a registered autostart at exe.
+var autostart = func(exe, root string) {
+	if setup.AutostartEnabled() {
+		setup.EnableAutostartAt(exe, root)
+	}
 }
 
 // replace moves src over dst; a running Windows executable is renamed aside first.

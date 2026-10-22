@@ -93,7 +93,11 @@ func Stop(ws core.Workspace) error {
 // Run is `hive daemon`: the background process.
 func Run(ws core.Workspace, waitFor int) error {
 	inUnit := inHiveUnit()
+	from := "" // the version of the daemon this one replaces
 	if waitFor > 0 {
+		if c, err := api.Dial(ws); err == nil {
+			from = c.Info.Version
+		}
 		if inUnit {
 			// An old unit stops everything in it as the old daemon exits; outlive that and hand the restart to systemd below.
 			signal.Ignore(syscall.SIGTERM)
@@ -105,7 +109,7 @@ func Run(ws core.Workspace, waitFor int) error {
 	if _, ok := Running(ws); ok {
 		return errors.New("the Hive is already running")
 	}
-	exe := release.Rename(ws.Root)
+	exe := release.Rename(ws.Root, from)
 	if inUnit && (waitFor > 0 || exe != "") {
 		if exe == "" {
 			exe, _ = executable()

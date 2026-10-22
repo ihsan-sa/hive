@@ -127,10 +127,14 @@ func TestAutoUpdateWaitsOutAMerge(t *testing.T) {
 	}
 }
 
-// A binary still called hive-v0 copies itself to hive and leaves hive-v0
-// forwarding there; one called hive has nothing to move.
+// A binary still called hive-v0 that replaced a v0.1.2 daemon copies itself
+// to hive and leaves hive-v0 forwarding there; one called hive, or a hive-v0
+// that replaced a newer daemon (installed so on purpose), has nothing to move.
 func TestRenameMovesHiveV0ToHive(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // no autostart to rewrite
+	a := autostart
+	t.Cleanup(func() { autostart = a })
+	var started string
+	autostart = func(exe, _ string) { started = exe } // never the machine's own autostart
 	ext := filepath.Ext(AssetName(runtime.GOOS, "amd64"))
 	dir := t.TempDir()
 	old := filepath.Join(dir, "hive-v0"+ext)
@@ -138,10 +142,13 @@ func TestRenameMovesHiveV0ToHive(t *testing.T) {
 	e := executable
 	t.Cleanup(func() { executable = e })
 	executable = func() string { return old }
-	got := Rename(dir)
+	if got := Rename(dir, "v0.1.3"); got != "" || core.Exists(filepath.Join(dir, "hive"+ext)) {
+		t.Fatalf("a chosen hive-v0 renamed: %q", got)
+	}
+	got := Rename(dir, "v0.1.2")
 	hive := filepath.Join(dir, "hive"+ext)
-	if raw, _ := os.ReadFile(hive); got != hive || string(raw) != "bin" {
-		t.Fatalf("rename: %q, hive %q", got, raw)
+	if raw, _ := os.ReadFile(hive); got != hive || string(raw) != "bin" || started != hive {
+		t.Fatalf("rename: %q, hive %q, autostart %q", got, raw, started)
 	}
 	alias := old
 	if runtime.GOOS == "windows" {
@@ -153,7 +160,7 @@ func TestRenameMovesHiveV0ToHive(t *testing.T) {
 		t.Fatal("no hive-v0 alias")
 	}
 	executable = func() string { return hive }
-	if got := Rename(dir); got != "" {
+	if got := Rename(dir, "v0.1.2"); got != "" {
 		t.Fatalf("hive renamed again: %q", got)
 	}
 }

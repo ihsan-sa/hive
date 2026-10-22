@@ -36,6 +36,8 @@ func EnableAutostartAt(exe, root string) error {
 		if err := os.WriteFile(path, []byte(plist), 0o644); err != nil {
 			return err
 		}
+		// Unload first: load on a loaded label keeps its old path.
+		exec.Command("launchctl", "unload", path).Run()
 		exec.Command("launchctl", "load", "-w", path).Run()
 		return nil
 	default:

@@ -98,8 +98,6 @@ jobs:
           mkdir -p "$HIVE_HOME/.hive" "$RUNNER_TEMP/forge"
           if [ "$RUNNER_OS" = Linux ]; then sb='"sandbox": "auto"'; else sb='"sandbox": "bare", "bare_accepted": "smoke"'; fi
           printf '{"harness": "fake", %s, "release_repo": "%s", "auto_update": false, "schedules": {"improve.sweep": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off"}}\n' "$sb" "$GITHUB_REPOSITORY" > "$HIVE_HOME/.hive/config.json"
-          # The local forge knows this release, so `update` has something to compare against.
-          printf '{"releases": {"%s": [{"tag": "%s"}]}}\n' "$GITHUB_REPOSITORY" "$TAG" > "$RUNNER_TEMP/forge/state.json"
 
       - name: ask the lead for a project and a change, and wait for it to land
         shell: bash

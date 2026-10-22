@@ -42,8 +42,15 @@ foreach ($a in $assets[1..2]) {
 }
 
 $exe = Join-Path $dir "$cmd.exe"
-$old = Join-Path $env:LOCALAPPDATA 'Programs\hive-v0\hive-v0.exe'   # its name up to v0.1.2
-if ($old -ne $exe -and (Test-Path $old)) { Invoke-Native { & $old shutdown } -Quiet | Out-Null }
+# Up to v0.1.2 the Hive lived in Programs\hive-v0, as hive-v0.exe or, once updated, hive.exe:
+# stop it and take that folder off PATH, so `hive` finds this install.
+$oldDir = Join-Path $env:LOCALAPPDATA 'Programs\hive-v0'
+if ($oldDir -ne $dir) {
+  foreach ($old in Get-ChildItem $oldDir -Filter 'hive*.exe' -ErrorAction SilentlyContinue) { Invoke-Native { & $old.FullName shutdown } -Quiet | Out-Null }
+  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  [Environment]::SetEnvironmentVariable('Path', (($userPath -split ';') | Where-Object { $_ -ne $oldDir }) -join ';', 'User')
+  $env:Path = (($env:Path -split ';') | Where-Object { $_ -ne $oldDir }) -join ';'
+}
 if (Test-Path $exe) {
   # Stop a running Hive so the next start runs the new version (agents keep running).
   Invoke-Native { & $exe shutdown } -Quiet | Out-Null
