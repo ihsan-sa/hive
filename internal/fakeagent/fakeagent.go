@@ -179,10 +179,8 @@ var riskKeys = regexp.MustCompile(`FAKE:(warden|panel)[a-z]+`)
 
 func warden(all string) error {
 	d, script := "do", "echo installing left-pad"
-	for _, k := range []string{"safer", "decline", "tribunal"} {
-		if strings.Contains(all, "FAKE:warden"+k) {
-			d = k
-		}
+	if strings.Contains(all, "FAKE:wardentribunal") {
+		d = "tribunal"
 	}
 	if strings.Contains(all, "FAKE:wardenmoney") {
 		script = "echo buying && stripe charges create"

@@ -61,6 +61,6 @@ Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, 
 
 ## Gaps (v1)
 
-- Risk module is a relay to the person; the warden/tribunal design is in [risk.md](risk.md).
+- Risk module: tiers route a step to the worker, a warden, a tribunal or the person; approved scripts run in the daemon after a digest and ceiling check ([risk.md](risk.md)).
 - macOS Seatbelt profile untested.
 - Codex adapter: seam only.

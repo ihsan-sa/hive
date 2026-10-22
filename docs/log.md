@@ -18,8 +18,8 @@
 ## 2026-10-22 Checks use main's project.json; score/goals/settings are protected
 - Decision: test/score commands come from main, not the PR; changes to `.hive/project.json`, `.hive/goals.md` and declared `protected` paths need the person | Why: a change must not rewrite the check it's judged by | Tradeoff: bootstrapping a project's score needs one person approval.
 
-## 2026-10-22 Risk module ships as a relay to the person
-- Decision: no path runs an agent's request outside the sandbox; requests go to the Waiting queue; module installs are a fixed clone on approval | Why: two attempts at warden/tribunal host execution were stopped by a safety check; owner chose to build the rest and implement the warden/tribunal module themselves | Tradeoff: milestone 6 becomes "requests reach the person"; design kept in docs/risk.md.
+## 2026-10-22 Warden and tribunal run approved steps in the daemon
+- Decision: replaces the v1 relay. Tiers route a step (T1 worker, T2 warden, T3 tribunal, ceiling person; autonomy moves T2); an approved script runs as `sh -c` in `.hive/risk/<id>` in the daemon after a sha256 digest check and `core.CeilingGuard`; the tribunal is three read-only runs over `tribunal_models`, two rounds, majority | Why: spec milestone 6, ported from the box's Claude build of the same spec | Tradeoff: no per-step sandbox beyond sh, its own directory and a timeout; the warden's script is the only thing weighed, so the warden must keep it to exactly the step.
 
 ## 2026-10-22 Squash merges, best-kept comparison
 - Decision: squash merge pinned with `--match-head-commit`; measure each merge sha; compare with best kept score; revert via host-made commit + lessons line | Why: one commit per change makes reverts exact; best-kept stops drift under tolerance | Tradeoff: per-commit history of a branch isn't kept on main.

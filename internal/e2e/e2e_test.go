@@ -77,6 +77,9 @@ func start(t *testing.T) *hive {
 	}
 	cfg := h.ws.LoadConfig()
 	cfg.Harness, cfg.AutoUpdate = "fake", false
+	if hn := os.Getenv("HIVE_E2E_HARNESS"); hn != "" {
+		cfg.Harness = hn // a live probe: real agents, plan usage
+	}
 	if os.Getenv("HIVE_E2E_SANDBOX") == "auto" {
 		cfg.Sandbox = "auto"
 	} else {
@@ -582,3 +585,27 @@ func TestRiskPaths(t *testing.T) {
 }
 
 func init() { _ = fmt.Sprint }
+
+// TestLiveWarden is the host probe for a real harness: run it with
+// HIVE_E2E_HARNESS=claude. A worker that needs a package outside its checkout
+// should file a T2 step, and a real warden should settle it.
+func TestLiveWarden(t *testing.T) {
+	if os.Getenv("HIVE_E2E_HARNESS") == "" {
+		t.Skip("set HIVE_E2E_HARNESS=claude to run real agents")
+	}
+	h := start(t)
+	h.seed("me/live", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "live", "repo": "me/live"}, nil)
+	h.post("/api/ask", map[string]string{"project": "live", "title": "Install the cowsay tool for every user of this machine, outside your checkout, then note in NOTES.md that it is there"}, nil)
+	st := h.wait("a warden to settle a step", 30*minute, func(st api.State) bool {
+		for _, r := range st.Requests {
+			if r.Kind == "request" && r.Decision != "" {
+				return true
+			}
+		}
+		return false
+	})
+	for _, r := range st.Requests {
+		t.Logf("%s %s: decision %q state %q reason %q script %q", r.Tier, r.Want, r.Decision, r.State, r.Reason, r.Script)
+	}
+}

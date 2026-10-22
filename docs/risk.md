@@ -1,26 +1,32 @@
-# Risk: what v1 does, and the intended design
+# Risk: tiers, warden, tribunal, the person
 
-## v1 behaviour
+Built in `internal/mod/risk` (spec sections 4, 7 and 15, milestone 6).
 
-- Risk scoped to the Hive is the Hive's own business: workers act freely inside their checkout, modules, prompts and the knowledge base. Version control, the append-only journal, and records agents can't write protect it.
-- Anything past an agent's sandbox (`hive agent warden --want --why --steps`) becomes an item in the person's **Waiting** queue. The Hive runs nothing on the agent's behalf; the person acts (or declines) and the answer is sent back to the agent as a message.
-- Installing a module is the one Hive-performed action behind approval: on "install", the Hive clones the given git URL into `.modules/` (a fixed `git clone`, nothing agent-written).
-- Always the person's: money, new credentials, opening the machine to the network, anything outward in their name.
+## Tiers and routes
 
-## Intended design (owner's words, not built in v1)
+A worker asks with `hive agent warden --want --why --steps --tier T1|T2|T3`. `core.Route` picks who settles it:
 
-To be implemented by the owner; recorded here so the module can grow into it.
+- **T1** (inside the Hive, recoverable): the worker's own; nothing is filed.
+- **T2** (outside but recoverable, or load-bearing inside): a warden. At autonomy 1 the person says yes first; at autonomy 3 the warden settles it and the person is told after.
+- **T3** (outside and hard to undo): a warden, which always ends in a tribunal.
+- **Always the person** (`core.AlwaysPerson`: money, credentials, opening the machine to the network, outward in their name): straight to the person, at any tier and autonomy.
 
-- Risks are weighed by **scope**. Something can look risky but be fine if its effect is confined to the Hive, which version control and protected logs make recoverable.
-- Two kinds of risk: risk to the person, including acting against what they wanted (weigh against high-level goals and what's needed to reach them); and risk of interfering with external things.
-- **Warden**: privileged over a worker but still bounded; can't do anything fully dangerous. Handles the in-between: actions that reach outside the Hive but are needed and can be scoped (e.g. opening routes into the Hive). Must weigh safety thoroughly before acting.
-- **Tribunal**: higher-stakes questions. Researches and votes; does nothing itself. Gets a script to approve, sent by a worker or a warden.
-- **The person**: anything the tribunal can't decide. The person can also approve the script sent to the tribunal directly.
-- Autonomy setting shifts the lines; never removes the person from what is always theirs.
+## Warden
 
-## Where it plugs in
+An agent (`modules/agents/warden.md`) spawned per request in a scratch directory. The request reaches it as fenced, quoted data, so the worker's words are information, never instructions. It can research, spawn workers and message the requester, then calls `hive agent decide` once: `do` with a script, `safer` with a route the worker takes itself, `decline`, or `tribunal` with a script and a brief (`--gain large` sends a decline on to the person). A warden that ends, or goes quiet, without deciding fails the request, and nothing runs.
 
-- `internal/mod/risk`: the `warden` op and the person handlers (`request`, `module`).
-- `core.Person`: the queue and answer routing.
-- `core.Runs.Wait`: a requesting agent idles (not nudged) until the answer arrives.
-- The run sandbox (`internal/sandbox`) is where any wider, scoped grant would live.
+## Tribunal
+
+Three read-only runs (`modules/agents/tribunal.md`) spread over the `tribunal_models` setting, so the panel spans models where the config lists more than one (empty falls back to the main model). Each gets the step, the script (`script.sh`) and the warden's brief, investigates and votes; in round 2 each sees the others' votes and reasons and votes again. A majority of final votes approves. A decline with a large gain becomes a person ask whose "run" runs that same script.
+
+## Point of effect
+
+`execute` runs in the daemon (the effects process), never in an agent's sandbox:
+
+1. The script must match the sha256 pinned when it was weighed, or it is refused.
+2. `core.CeilingGuard` refuses an always-the-person script unless the person said yes, whoever approved it; the step becomes a person ask instead.
+3. The narrow grant: `sh -c <script>` in `.hive/risk/<id>`, with a 10 minute timeout and only PATH, HOME, USER, LANG and TMPDIR from the daemon's environment, so tokens it holds never reach the script or, through its output, an agent.
+
+A restart while a step runs marks it failed and doesn't run it again.
+
+Installing a module stays a fixed `git clone` into `.modules/` on the person's "install".
