@@ -23,10 +23,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go vet ./...
-      - run: go test -short ./...
-      - name: end-to-end (fake harness, local forge)
-        run: go test ./internal/e2e/ -timeout 30m
+      - name: the suite (tests/green.sh)
+        shell: bash
+        run: tests/green.sh
         env:
           GIT_AUTHOR_NAME: ci
           GIT_AUTHOR_EMAIL: ci@localhost

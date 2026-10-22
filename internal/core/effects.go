@@ -722,10 +722,15 @@ func (e *Effects) hostCommit(p Project, dir string, h HostCommit) (string, error
 }
 
 // MainBundle writes main as a bundle a worker can fetch to resolve conflicts.
+// It is written under a temp name and renamed, so a fetch running now sees the old or the new file whole.
 func (e *Effects) MainBundle(p Project, path string) error {
 	defer e.lock(p.Name)()
-	_, err := Git(e.ws.Project(p.Name), "bundle", "create", path, p.Branch)
-	return err
+	tmp := path + ".tmp"
+	if _, err := Git(e.ws.Project(p.Name), "bundle", "create", tmp, p.Branch); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func appendLine(path, header, line string) error {

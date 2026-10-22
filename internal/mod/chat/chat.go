@@ -223,7 +223,9 @@ func (m *Module) deliverToLead(ch *Chat, text string) error {
 	bundle := func(id string) {
 		if p.Isolated { // an empty repository has no main to bundle; the lead reads its checkout as is
 			os.MkdirAll(m.C.WS.RunRO(id), 0o755)
-			m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(id), "main.bundle"))
+			if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(id), "main.bundle")); err != nil {
+				m.C.J.MustAppend("chat.sync_failed", map[string]string{"chat": ch.ID, "project": p.Name, "error": "bundle: " + err.Error()})
+			}
 		}
 	}
 	if ch.Lead != "" {
@@ -239,7 +241,7 @@ func (m *Module) deliverToLead(ch *Chat, text string) error {
 		project, name = ch.Project, "lead:"+ch.Project
 		dir = filepath.Join(m.C.WS.Hive(), "leads", "project-"+project)
 		if p.Isolated {
-			bundle(id)
+			bundle(id) // Runs.Start only makes missing dirs, so this first-turn bundle survives it
 			// The clone's tip, or "" (an orphan branch) for an empty repository.
 			base, err := core.Git(m.C.WS.Project(project), "rev-parse", "-q", "--verify", "refs/heads/"+p.Branch)
 			if err != nil {
