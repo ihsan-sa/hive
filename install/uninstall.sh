@@ -1,6 +1,6 @@
 #!/bin/sh
 # Uninstall the Hive (your folder, ~/hive by default, is left alone):
-#   gh api repos/ihsan-sa/hive-standalone-build/contents/install/uninstall.sh -H "Accept: application/vnd.github.raw" | sh
+#   curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh
 set -eu
 CMD="${HIVE_CMD:-hive-v0}"
 DIR="${HIVE_BIN_DIR:-$HOME/.local/bin}"
