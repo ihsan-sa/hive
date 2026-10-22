@@ -166,12 +166,23 @@ func (m *Module) Post(chatID, thread, text string) (Message, error) {
 			return msg, err
 		}
 	default:
+		m.syncFor(ch)
 		prompt := fmt.Sprintf("[chat %s · thread %s · %s] Person: %s", chatID, msg.Thread, time.Now().Format("Mon 15:04"), text)
 		if err := m.deliverToLead(ch, prompt); err != nil {
 			return msg, err
 		}
 	}
 	return msg, nil
+}
+
+// syncFor brings the clones a lead reads ($HIVE_PROJECTS) up to each remote's
+// default branch, so it sees what the person pushed since it last looked.
+func (m *Module) syncFor(ch *Chat) {
+	for _, p := range m.C.Projects.List() {
+		if ch.Kind != "project" || p.Name == ch.Project {
+			m.C.Effects.Sync(p)
+		}
+	}
 }
 
 // deliverToLead sends text to the chat's lead, starting the lead if needed.

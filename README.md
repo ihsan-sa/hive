@@ -18,6 +18,23 @@ Then run `hive-v0`. The first run checks for git, Claude Code and the GitHub CLI
 
 On Windows, agents are sandboxed inside WSL 2; the installer installs or updates Claude Code there.
 
+First run also makes the Hive start with the machine. On Linux it installs a systemd user service (`~/.config/systemd/user/hive.service`) and turns on linger (`loginctl enable-linger`), so the Hive runs at boot even before you log in. On macOS it adds a launch agent, and on Windows a Run entry for your account.
+
+## A new project's test and score
+
+A repository you name that doesn't exist yet starts with no test and no score: `.hive/project.json` holds `{"test": ""}`. Changes still get reviewed, but nothing is tested, and the Hive can't keep or revert a merge until it has a score to measure. Add both to `.hive/project.json` on the default branch, or ask the lead to do it:
+
+    {
+      "test": "go test ./...",
+      "score": {"command": "./score.sh", "direction": "higher", "tolerance": 0.5}
+    }
+
+The score command's output ends with one number; `direction` says whether higher or lower is better, and `tolerance` is how much noise to ignore. The demo project comes with both.
+
+## Models
+
+The model workers and leads use and the reviewer's model are under **Settings** in the control center. They're stored in `.hive/config.json` in your Hive folder (`model` and `reviewer_model`), and `projects.<name>.model` overrides the model for one project.
+
 ## Use
 
     hive-v0               control center: Chats, Dashboard, Waiting, Modules, Settings
