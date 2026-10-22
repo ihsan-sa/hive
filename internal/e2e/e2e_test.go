@@ -609,3 +609,48 @@ func TestLiveWarden(t *testing.T) {
 		t.Logf("%s %s: decision %q state %q reason %q script %q", r.Tier, r.Want, r.Decision, r.State, r.Reason, r.Script)
 	}
 }
+
+// TestLiveTribunal is the host probe for a real panel: run it with
+// HIVE_E2E_HARNESS=claude. A worker files a T3 step (deleting a fixture dir
+// outside its checkout), the warden sends it to a tribunal, three real
+// panelists give structured votes over two rounds, and a majority runs the
+// warden's script.
+func TestLiveTribunal(t *testing.T) {
+	if os.Getenv("HIVE_E2E_HARNESS") == "" {
+		t.Skip("set HIVE_E2E_HARNESS=claude to run real agents")
+	}
+	fixture := filepath.Join(t.TempDir(), "hive-live-tribunal-fixture")
+	os.MkdirAll(fixture, 0o755)
+	os.WriteFile(filepath.Join(fixture, "README"), []byte("a leftover test fixture of project live; safe to delete\n"), 0o644)
+	h := start(t)
+	h.seed("me/live", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "live", "repo": "me/live"}, nil)
+	h.post("/api/ask", map[string]string{"project": "live", "title": "Delete the leftover test fixture directory " + fixture + " on this machine (outside your checkout; its README says it is safe to delete). Deleting can't be undone, so file it as a T3 step. Then note in NOTES.md that it is gone"}, nil)
+	st := h.wait("a tribunal to settle a T3 step", 40*minute, func(st api.State) bool {
+		for _, r := range st.Requests {
+			if r.Kind == "request" && r.Decision != "" && strings.Contains("done failed declined asked", r.State) {
+				return true
+			}
+		}
+		return false
+	})
+	panels := 0
+	for _, r := range st.Requests {
+		t.Logf("%s %s: decision %q state %q round %d script %q output %q", r.Tier, r.Want, r.Decision, r.State, r.Round, r.Script, r.Output)
+		panels += len(r.Panel)
+		for _, s := range r.Panel {
+			t.Logf("  %s (%s): %v %q", s.Run, s.Model, s.Votes, s.Why)
+			for _, why := range s.Why {
+				if strings.HasPrefix(why, "no vote") {
+					t.Errorf("panelist %s gave no vote", s.Run)
+				}
+			}
+		}
+		if r.State == "done" && core.Exists(fixture) {
+			t.Errorf("the approved script ran but the fixture is still there")
+		}
+	}
+	if panels == 0 {
+		t.Error("no tribunal convened")
+	}
+}

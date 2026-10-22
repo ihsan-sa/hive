@@ -35,12 +35,12 @@ func TestParseClaudeStream(t *testing.T) {
 }
 
 func TestClaudeArgs(t *testing.T) {
-	a := Claude{}.Args(Turn{SessionID: "u", ReadOnly: true, Schema: "{}"})
+	a := Claude{}.Args(Turn{SessionID: "u", ReadOnly: true, RunDir: "/hive/run", Schema: "{}"})
 	joined := ""
 	for _, x := range a {
 		joined += x + " "
 	}
-	for _, want := range []string{"--session-id u", "--tools Read,Grep,Glob", "--json-schema {}"} {
+	for _, want := range []string{"--session-id u", "--tools Read,Grep,Glob --add-dir /hive/run --permission-mode dontAsk", "--json-schema {}"} {
 		if !contains(joined, want) {
 			t.Fatalf("args %q missing %q", joined, want)
 		}

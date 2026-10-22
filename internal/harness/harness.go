@@ -19,6 +19,7 @@ type Turn struct {
 	SystemText string // the same prompt inline (used inside sandboxes, where argv has room)
 	Model      string
 	ReadOnly   bool     // no write or exec tools at all (reviewer, tribunal)
+	RunDir     string   // the run's inputs; a read-only turn may read them besides its checkout
 	Tools      []string // explicit tool list; nil means the harness default
 	Schema     string   // JSON schema for a structured final answer
 	Sandboxed  bool     // inside a Hive sandbox (permission prompts are meaningless there)
@@ -112,7 +113,7 @@ func (Claude) Args(t Turn) []string {
 	}
 	switch {
 	case t.ReadOnly:
-		a = append(a, "--tools", "Read,Grep,Glob", "--permission-mode", "dontAsk")
+		a = append(a, "--tools", "Read,Grep,Glob", "--add-dir", t.RunDir, "--permission-mode", "dontAsk")
 	case t.Tools != nil:
 		a = append(a, "--tools", strings.Join(t.Tools, ","), "--permission-mode", "bypassPermissions")
 	default:

@@ -9,6 +9,7 @@ Done:
   - unit: gate guarantees (pinned merge, check + verdict bound to sha, foreign git metadata refused, only hive/* pushed, protected paths), journal, harness parsing, egress filtering, schedules, TUI fits 50×16 to 120×40;
   - e2e (real daemon, fake harness, local forge): ask→merge with review, projects, failing tests stop with PR open, score drop → revert + lesson quoted in next brief, sweep files an ask, kill/restart at every stage with no duplicates, usage-limit park/resume, crash retry, request → warden → agent, module install + update, self-release.
   - risk on fakes (unit `internal/mod/risk`, e2e `TestRiskPaths`): T1 stays the worker's; warden do / safer / decline / ends silent; T3 → three-seat tribunal across models, two rounds, majority runs the warden's exact script; split panel declines a large gain → person "run" runs it; a script changed after the vote is refused by digest (unit only: e2e has no hook to swap it mid-flight); the ceiling holds a money script after a warden allow; a request with injected instructions to the warden runs only the warden's script; autonomy 1 asks first, 3 tells after; restart mid-step doesn't re-run.
+  - fix round 1, after a real Claude + GitHub run on the tower: the fake harness now behaves like Claude on a read-only turn (no shell tool; reads only its checkout and the dir it was given), so `TestRiskPaths` and `TestGateAndLoop` fail without the fixes. Panel votes come back as a structured answer; read-only turns get `--add-dir` for their run dir and a reviewer's land must carry a token from its brief.md; the warden's brief names the host paths of the checkout and home its script runs against.
   - rename hole: `TestRenameOutOfProtectedPath` fails on the old classifier, passes now. Passes both bare and inside the WSL sandbox.
   - WSL sandbox isolation checked by hand: /mnt, /home, WSL interop hidden; /etc, /usr read-only; only checkout writable; public HTTPS via proxy 200; local services 403; no direct network.
 
@@ -16,7 +17,7 @@ Done:
 - CI green on Windows, Ubuntu and macOS (vet, unit, e2e). Claude Code inside the WSL sandbox verified up to the API (invalid token → 401).
 
 Not verified:
-- The warden and tribunal with real models: only the scripted fake agents have played them, so the prompts' judgement (and injection resistance by a real model) is untested.
+- The tribunal with real models after fix round 1: `TestLiveTribunal` is the probe. A real warden (`TestLiveWarden`) passed on the tower before it; injection resistance by a real model is untested.
 - The bubblewrap path live: `TestProbeBothPaths` (non-short, `internal/sandbox`) runs `hive sandbox-probe` under each path, but skips both inside a nested sandbox. Run it on a stock Ubuntu host.
 - No Windows executor for approved steps: `execute` runs `sh -c`, so on a bare Windows host an approved step fails rather than running.
 - Live agents with real Claude Code (no plan usage spent yet). Sandboxed live runs read a short-lived token from Claude Code's credential file at run time; not exercised.
@@ -27,7 +28,7 @@ Not verified:
 
 Next:
 1. Owner decisions: publish the repo + first release (makes install lines work); live smoke run with real Claude (plan usage; bare vs sandboxed).
-2. Run `go test ./internal/sandbox/ -run TestProbeBothPaths -v` on a stock Ubuntu host, and `HIVE_E2E_HARNESS=claude go test ./internal/e2e/ -run TestLiveWarden -v` for a real warden (plan usage).
+2. Run `go test ./internal/sandbox/ -run TestProbeBothPaths -v` on a stock Ubuntu host, and `HIVE_E2E_HARNESS=claude go test ./internal/e2e/ -run 'TestLiveWarden|TestLiveTribunal' -v -timeout 90m` for a real warden and panel (plan usage).
 3. Codex adapter.
 
 Resume: read CLAUDE.md, then this file; run `go test -short ./...` and `go test ./internal/e2e/`.

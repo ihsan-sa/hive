@@ -21,6 +21,9 @@
 ## 2026-10-22 Warden and tribunal run approved steps in the daemon
 - Decision: replaces the v1 relay. Tiers route a step (T1 worker, T2 warden, T3 tribunal, ceiling person; autonomy moves T2); an approved script runs as `sh -c` in `.hive/risk/<id>` in the daemon after a sha256 digest check and `core.CeilingGuard`; the tribunal is three read-only runs over `tribunal_models`, two rounds, majority | Why: spec milestone 6, ported from the box's Claude build of the same spec | Tradeoff: no per-step sandbox beyond sh, its own directory and a timeout; the warden's script is the only thing weighed, so the warden must keep it to exactly the step.
 
+## 2026-10-22 Read-only turns answer in structured output and read their run dir
+- Decision: panelists vote through `--json-schema` like the reviewer; read-only turns get `--add-dir` for `/hive/run` and nothing else; a reviewer's land counts only with the token from its brief.md; the warden's brief gives host paths | Why: a real run found panelists had no shell to vote, reviewers couldn't read their inputs yet voted land, and warden scripts used sandbox paths on the host | Tradeoff: the fake harness now refuses shell and unlisted dirs on read-only turns, so it fails where Claude would.
+
 ## 2026-10-22 Squash merges, best-kept comparison
 - Decision: squash merge pinned with `--match-head-commit`; measure each merge sha; compare with best kept score; revert via host-made commit + lessons line | Why: one commit per change makes reverts exact; best-kept stops drift under tolerance | Tradeoff: per-commit history of a branch isn't kept on main.
 

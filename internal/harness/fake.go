@@ -15,6 +15,9 @@ func (Fake) Args(t Turn) []string {
 	if t.Resume {
 		a = append(a, "--resume")
 	}
+	if t.ReadOnly {
+		a = append(a, "--readonly", "--add-dir", t.RunDir)
+	}
 	if t.Schema != "" {
 		a = append(a, "--schema")
 	}

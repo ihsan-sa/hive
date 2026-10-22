@@ -2,6 +2,7 @@ package risk
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -102,14 +103,17 @@ func (g *rig) told(text string) bool {
 	return false
 }
 
-// vote casts one round of votes, then ends each panelist's turn.
+// vote ends each panelist's turn with its structured vote, as a real
+// read-only turn returns it ("" ends the turn with no answer), then ticks.
 func (g *rig) vote(req Request, votes ...string) {
 	for i, v := range votes {
-		if _, err := g.call(g.run(req.Panel[i].Run), "vote", map[string]string{"vote": v, "reason": "because"}); err != nil {
-			g.t.Fatal(err)
+		res := map[string]any{"text": "no shell tool"}
+		if v != "" {
+			res["structured"] = map[string]string{"vote": v, "reason": "because"}
 		}
-		g.c.Runs.SetStatus(req.Panel[i].Run, core.StatusDone, "")
+		g.c.J.MustAppend("run.turn_ended", map[string]any{"id": req.Panel[i].Run, "status": core.StatusDone, "result": res})
 	}
+	g.m.Tick()
 }
 
 func TestT1IsTheWorkers(t *testing.T) {
@@ -181,7 +185,7 @@ func TestT3GoesToATribunalEvenOnDo(t *testing.T) {
 	if got.State != "tribunal" || len(got.Panel) != PanelSize {
 		t.Fatalf("no tribunal: %+v", got)
 	}
-	if got.Panel[0].Model == got.Panel[1].Model || g.run(got.Panel[1].Run).Model != got.Panel[1].Model || !g.run(got.Panel[0].Run).ReadOnly {
+	if p := g.run(got.Panel[0].Run); got.Panel[0].Model == got.Panel[1].Model || g.run(got.Panel[1].Run).Model != got.Panel[1].Model || !p.ReadOnly || p.Schema != VoteSchema {
 		t.Fatalf("panel isn't read-only across the tribunal models: %+v", got.Panel)
 	}
 }
@@ -192,9 +196,6 @@ func TestTribunalMajorityRunsTheScript(t *testing.T) {
 	g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "script": "echo ran > proof"})
 	req, _ = g.m.get(req.ID)
 	g.vote(req, "approve", "approve", "decline")
-	if _, err := g.call(g.run(req.Panel[0].Run), "vote", map[string]string{"vote": "approve"}); err == nil {
-		t.Fatal("a round-2 vote was taken before the seat saw the others")
-	}
 	g.m.Tick() // reopens every seat for round 2
 	req, _ = g.m.get(req.ID)
 	if req.Round != 2 || g.run(req.Panel[0].Run).Status != core.StatusIdle || !strings.Contains(g.run(req.Panel[2].Run).Pending[0], "approve: because") {
@@ -215,13 +216,39 @@ func TestSplitPanelDeclinesAndBriefsThePerson(t *testing.T) {
 	g.m.Tick()
 	req, _ = g.m.get(req.ID)
 	g.vote(req, "approve", "decline", "decline")
-	got, _ := g.m.get(req.ID)
+	got := g.settle(req.ID, "tribunal")
 	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
 		t.Fatalf("a split panel ran it or didn't ask: %+v", got)
 	}
 	g.c.Person.Answer(got.Ask, "run", "")
 	if got = g.settle(req.ID, "asked", "approved", "running"); got.State != "done" {
 		t.Fatalf("the person's run didn't run: %+v", got)
+	}
+}
+
+// A panelist that ends its turn without a structured vote (a real Claude
+// turn asked to run a vote command it has no shell for) counts as decline.
+func TestPanelWithoutAVoteDeclines(t *testing.T) {
+	g := newRig(t, 2)
+	req := g.request("a hard step", "x", "T2")
+	g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "script": "echo ran > proof"})
+	req, _ = g.m.get(req.ID)
+	g.vote(req, "approve", "", "")
+	g.m.Tick()
+	req, _ = g.m.get(req.ID)
+	g.vote(req, "approve", "", "")
+	if got := g.settle(req.ID, "tribunal"); got.State != "asked" || got.Panel[1].Votes[1] != "decline" || !strings.Contains(got.Panel[1].Why[0], "no vote") {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// The warden's script runs on the host, so its brief names host paths.
+func TestWardenBriefNamesHostPaths(t *testing.T) {
+	g := newRig(t, 2)
+	home, _ := os.UserHomeDir()
+	req := g.request("copy README out of the checkout", "cp /work/README.md ~/out", "T2")
+	if b := g.run(req.Warden).Brief; !strings.Contains(b, "checkout is "+g.worker.Checkout+" ") || !strings.Contains(b, "home is "+home+" ") {
+		t.Fatalf("no host paths in the warden's brief:\n%s", b)
 	}
 }
 

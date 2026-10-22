@@ -664,7 +664,7 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	in := func(m sandbox.Mount) string { return sandbox.InsidePath(sb, m) }
 	t := harness.Turn{
 		Role: r.Role, SessionID: r.Session, Resume: resume, Model: r.Model, Tools: r.Tools, SystemText: r.System,
-		SystemFile: filepath.Join(in(mounts[1]), "system.md"), ReadOnly: r.ReadOnly, Schema: r.Schema, Sandboxed: sb.Isolated(),
+		SystemFile: filepath.Join(in(mounts[1]), "system.md"), ReadOnly: r.ReadOnly, RunDir: in(mounts[1]), Schema: r.Schema, Sandboxed: sb.Isolated(),
 	}
 	if sb.Isolated() {
 		t.SystemFile = "/hive/run/system.md"

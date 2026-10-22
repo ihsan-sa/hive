@@ -17,7 +17,7 @@ An agent (`modules/agents/warden.md`) spawned per request in a scratch directory
 
 ## Tribunal
 
-Three read-only runs (`modules/agents/tribunal.md`) spread over the `tribunal_models` setting, so the panel spans models where the config lists more than one (empty falls back to the main model). Each gets the step, the script (`script.sh`) and the warden's brief, investigates and votes; in round 2 each sees the others' votes and reasons and votes again. A majority of final votes approves. A decline with a large gain becomes a person ask whose "run" runs that same script.
+Three read-only runs (`modules/agents/tribunal.md`) spread over the `tribunal_models` setting, so the panel spans models where the config lists more than one (empty falls back to the main model). Each gets the step, the script (`script.sh`) and the warden's brief, investigates and votes, as a structured final answer (`VoteSchema`, the way the reviewer gives its verdict, since a read-only turn has no shell); in round 2 each sees the others' votes and reasons and votes again. A majority of final votes approves. A decline with a large gain becomes a person ask whose "run" runs that same script.
 
 ## Point of effect
 

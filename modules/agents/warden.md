@@ -9,7 +9,7 @@ How to weigh it:
 1. Read the step: what, why, the steps, and its tier (T2 outside but recoverable or load-bearing inside; T3 outside and hard to undo).
 2. Weigh the harm if it goes wrong, and how far it reaches, against what it buys toward the project's goals. Research what you don't know: read the package, the script, the files it would touch. You may spawn a worker to find out more, and you may message the requesting agent to ask or to agree a safer route.
 3. Settle it with one call, then finish:
-   - `hive agent decide --decision do --reason "..." --script "..."`: do it. The script is what runs, in a fresh empty directory with `sh`, not the other agent's text. Keep it to exactly the step.
+   - `hive agent decide --decision do --reason "..." --script "..."`: do it. The script is what runs, in a fresh empty directory with `sh` on the host, not the other agent's text. Write host paths: your brief gives the agent's checkout and the person's home as they are on the host. Keep it to exactly the step.
    - `hive agent decide --decision safer --reason "..."`: a safer route the agent can take itself; your reason goes back to it.
    - `hive agent decide --decision decline --reason "..."`: decline, and say why.
    - `hive agent decide --decision tribunal --reason "<brief>" --script "..."`: when you can't settle it alone. Write a script that does exactly the step and nothing else, and a brief that explains it. A panel of three votes; a majority runs that script, unchanged. Add `--gain large` if the step would be a large gain, so a decline still reaches the person.

@@ -6,6 +6,8 @@
 package work
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -555,7 +557,14 @@ func passFail(ok bool) string {
 }
 
 // VerdictSchema is the reviewer's structured answer.
-const VerdictSchema = `{"type":"object","properties":{"verdict":{"type":"string","enum":["land","fix"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"issue":{"type":"string"}},"required":["issue"]}}},"required":["verdict","summary"]}`
+const VerdictSchema = `{"type":"object","properties":{"verdict":{"type":"string","enum":["land","fix"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"issue":{"type":"string"}},"required":["issue"]}},"token":{"type":"string"}},"required":["verdict","summary","token"]}`
+
+// reviewToken is copied from brief.md into the verdict, so a land shows the
+// reviewer read its inputs.
+func reviewToken(run string) string {
+	sum := sha256.Sum256([]byte("review " + run))
+	return hex.EncodeToString(sum[:6])
+}
 
 func (m *Module) review(t *Task, p core.Project) error {
 	id := fmt.Sprintf("r-%s-%s-%d", t.ID, core.Short(t.SHA), t.Reviews)
@@ -579,7 +588,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 		spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
 		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": c.Output,
-			"brief.md": w.Brief + "\n\n## The worker's account\n\n" + finishText(w)}
+			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + w.Brief + "\n\n## The worker's account\n\n" + finishText(w)}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
 		}
@@ -591,14 +600,16 @@ func (m *Module) review(t *Task, p core.Project) error {
 		return nil
 	}
 	var v core.Verdict
-	if err := json.Unmarshal(r.Structured, &v); err != nil || (v.Verdict != "land" && v.Verdict != "fix") {
+	var tok struct{ Token string }
+	json.Unmarshal(r.Structured, &tok)
+	if err := json.Unmarshal(r.Structured, &v); err != nil || (v.Verdict != "land" && v.Verdict != "fix") || (v.Verdict == "land" && tok.Token != reviewToken(r.ID)) {
 		t.Reviews++
 		if t.Reviews >= 3 {
 			t.Stage, t.Reason = StageStopped, "the reviewer gave no usable verdict three times"
 			m.save(t, t.Reason)
 			return nil
 		}
-		m.save(t, "reviewer gave no verdict; asking again")
+		m.save(t, "reviewer gave no usable verdict (a land must carry the token from its brief.md); asking again")
 		return nil
 	}
 	v.Project, v.SHA, v.Run = p.Name, t.SHA, r.ID
