@@ -41,6 +41,7 @@ type Module struct {
 func New(c *core.Core, a *agents.Agents) *Module {
 	m := &Module{C: c, Agents: a}
 	m.ensureRepo()
+	m.filePractice()
 	c.J.Replay(func(e core.Event) {
 		var f struct{ Run string }
 		e.Decode(&f)
@@ -86,6 +87,24 @@ func (m *Module) ensureRepo() {
 	}
 }
 
+// filePractice copies the kb module's practice docs (how a Hive works) into
+// the store as practice-<name>.md, so a fresh install starts knowing them and
+// an update refreshes them. The module's copy wins over edits in the store.
+func (m *Module) filePractice() {
+	src := filepath.Join(m.C.WS.Modules(), "kb", "practice")
+	entries, _ := os.ReadDir(src)
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
+			continue
+		}
+		if raw, err := os.ReadFile(filepath.Join(src, e.Name())); err == nil {
+			os.WriteFile(filepath.Join(m.C.WS.KB(), "practice-"+e.Name()), raw, 0o644)
+		}
+	}
+	core.Git(m.C.WS.KB(), "add", "-A", "--", "practice-*.md")
+	core.Git(m.C.WS.KB(), "commit", "-q", "-m", "File how a Hive works")
+}
+
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
 // Write saves a note and commits it.
@@ -114,12 +133,12 @@ func (m *Module) Write(n Note) (string, error) {
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// Notes lists note files, newest first.
+// Notes lists note files, newest first; the filed practice docs aren't notes.
 func (m *Module) Notes() []string {
 	entries, _ := os.ReadDir(m.C.WS.KB())
 	var out []string
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".md") && e.Name() != "README.md" {
+		if strings.HasSuffix(e.Name(), ".md") && e.Name() != "README.md" && !strings.HasPrefix(e.Name(), "practice-") {
 			out = append(out, e.Name())
 		}
 	}
