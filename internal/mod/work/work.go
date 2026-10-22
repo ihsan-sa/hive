@@ -187,15 +187,11 @@ func (m *Module) File(b Brief) (Task, error) {
 		return Task{}, errors.New("a brief needs a title")
 	}
 	if b.Project == "" {
-		ps := m.C.Projects.List()
-		if len(ps) != 1 {
-			names := []string{}
-			for _, p := range ps {
-				names = append(names, p.Name)
-			}
-			return Task{}, fmt.Errorf("say which project (one of: %s)", strings.Join(names, ", "))
+		names := []string{}
+		for _, p := range m.C.Projects.List() {
+			names = append(names, p.Name)
 		}
-		b.Project = ps[0].Name
+		return Task{}, fmt.Errorf("say which project (one of: %s)", strings.Join(names, ", "))
 	}
 	if _, ok := m.C.Projects.Get(b.Project); !ok {
 		return Task{}, fmt.Errorf("no project %q", b.Project)

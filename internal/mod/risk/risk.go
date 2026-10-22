@@ -626,6 +626,9 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 		}
 		a.URL, a.Name = m.C.WS.Project(a.Project), a.Project
 	}
+	if p := strings.TrimPrefix(a.URL, "file://"); p == "/work" || strings.HasPrefix(p, "/work/") || strings.HasPrefix(p, "/hive/") {
+		return nil, errors.New("that path is inside your sandbox, and the install runs on the host where it doesn't exist: build the module as a project of its own and install it with --project <name>")
+	}
 	if !strings.HasPrefix(a.URL, "https://") && !strings.HasPrefix(a.URL, "git@") && !strings.HasPrefix(a.URL, "file://") && !core.Exists(a.URL) {
 		return nil, errors.New("give a git URL (https://, git@, file://) or a local repository path")
 	}
