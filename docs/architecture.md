@@ -12,8 +12,8 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 | `internal/proc` | Detached processes; liveness by pid + start time. |
 | `internal/agentcli` | `hive agent <op>`: what agents call from inside the sandbox. |
 | `internal/fakeagent` | `hive fake-agent`: scripted agent for tests and dry runs (FAKE:* keywords). |
-| `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb`, `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates), `release` (self-update, self-release). |
-| `internal/app` | Wires core + modules; tick loop. |
+| `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb`, `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates, the tick list), `runner` (modules that carry a program), `release` (self-update, self-release). |
+| `internal/app` | Wires core + modules; the tick loop steps the core, then each module the registry lists. |
 | `internal/daemon` | `hive daemon`, control API (127.0.0.1, bearer token in `.hive/daemon.json`, 0600). |
 | `internal/api` | API types + client. |
 | `internal/tui` | Control center (Bubble Tea): Chats, Dashboard, Waiting, Modules, Settings. |
@@ -45,8 +45,32 @@ Run dir: `host/` (turn output, prompts, stop file; never mounted), `ro/` (system
 8. Merge: main moved → host merges main into the branch (host-made commit; verdict carries) → retest. `gh pr merge --squash --match-head-commit <sha>`.
 9. improve: measure merge sha (tests + score), compare with best kept; worse → revert task (host-made revert + lessons line) → PR → merge; original PR commented.
 
+## Modules that run a program
+
+A module's `module.json` may name a program and the hooks it serves, so a door (a chat service, mail), voice or a resource lease can be added on top of the released binary instead of a fork of it:
+
+```json
+{"name": "door", "exec": ["./door", "--quiet"], "hooks": ["source", "channel"]}
+```
+
+The program can be in any language. The daemon starts it from the module's folder (a first word starting with `.` is relative to it) and keeps it running: one that exits is started again after a pause that doubles from a second up to five minutes, and resets once it has run a minute. Its output goes to `.hive/modules/<name>/module.log`. The daemon journals `module.started`, `module.exited` and whatever the module reports. Built-in modules stay in-process; the tick list is the registry's (`Registry.Builtin`), and the runner is one entry on it.
+
+**The module calls the API; the daemon never calls the module.** Each start gets a fresh random token in `HIVE_MODULE_TOKEN`, with the API's address in `HIVE_API`. The daemon keeps the token in memory only, and it dies with the process. A request with a module's token reaches only the endpoints its hooks name, and anything else gets 403. Its token also reaches only the projects the person granted the module (`.hive-source.json` `projects`, set from the Modules screen): an ask, a chat, a run or a task in another project is refused, `/api/events` leaves out their events, and the workspace's own lead chat needs a grant of `*`. The registry is the one list of which modules exist, what they serve and which projects they reach. Hooks are read off the journal (`/api/events?after=<seq>`), so a module that was down catches up from where it left off and the daemon never waits on a module. Calls the other way would mean the daemon blocking on a slow program, a second listener per module and a second protocol.
+
+| Hook | What it is for | API it may call |
+|---|---|---|
+| `source` | asks arrive from outside | `POST /api/ask`; the task's `from` is `<module>/<from it gave>`, so an ask carries where it came from |
+| `channel` | the lead's conversation and run notices out; steer and stop lines in | `/api/chat` (read and post), `/api/events`, `/api/run/stop`, `/api/task/stop` |
+| `after` | a step after a run or a merge ends | `/api/events` (`run.turn_ended`, `effect.merged`) |
+| `status` | read the journal's events | `/api/events` |
+| `idle` | act when nothing is running | `/api/events` (`hive.idle`, journaled when the last running or queued run ends) |
+| (every module) | | `/api/ping`, `POST /api/module/report` (journaled as `module.reported`) |
+
+**Trust.** A module's program is not sandboxed: a door needs the network and the API on localhost, and a lease needs devices. It runs as the person, so what guards it is who let it in. A module installed from git is cloned only on the person's "install", and its program starts only once a read-only review run (`module-reviewer`, scratch copy of its files, structured `approve`/`decline`) has read it at the commit checked out. An update moves the commit, so it stops and is read again before it runs. A decline raises an alert and the program stays stopped. A module the person put in `.modules/` by hand, with no git source, runs as it is. The program never holds the forge credential: its environment drops forge and model tokens and the person's config folders, `HOME` is its own `.hive/modules/<name>/`, and no scope pushes, merges or reads secrets, so effects stays the only holder.
+
 ## Invariants (enforced by structure)
 
+- A module program gets no credential, and its token reaches only its hooks' endpoints.
 - Agents hold no credentials. Sandbox gets `CLAUDE_CODE_OAUTH_TOKEN` = short-lived access token only, read fresh per turn.
 - Host git never runs in an agent's checkout (only in host clones and fresh gate clones; hooks disabled, fsck on fetch).
 - Only `hive/*` branches are pushed; main changes only by merge; `PushInitial` only into an empty repo with a host-made commit.
