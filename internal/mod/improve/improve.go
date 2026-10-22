@@ -344,6 +344,20 @@ func (m *Module) Digest(since int64) string {
 	b.WriteString("# Digest for the improvement sweep\n\n")
 	for _, p := range m.C.Projects.List() {
 		fmt.Fprintf(&b, "## Project %s (%s)\n\n", p.Name, p.Repo)
+		main, err := m.C.Effects.Sync(p)
+		if err != nil || main == "" {
+			main = p.Branch
+		}
+		goals := m.C.Effects.ReadFile(p, main, ".hive/goals.md")
+		if strings.TrimSpace(goals) == "" {
+			goals = p.Goals
+		}
+		fmt.Fprintf(&b, "Goals:\n%s\n\n", core.Clip(strings.TrimSpace(goals), 1500))
+		if sc := m.C.Effects.Config(p, main).Score; sc != nil {
+			fmt.Fprintf(&b, "Score: `%s`, %s is better.\n\n", sc.Command, sc.Direction)
+		} else {
+			b.WriteString("Score: none defined.\n\n")
+		}
 		ms := m.Scores(p.Name)
 		if len(ms) > 10 {
 			ms = ms[len(ms)-10:]
