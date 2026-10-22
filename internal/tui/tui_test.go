@@ -47,7 +47,7 @@ func sample() api.State {
 }
 
 func testModel(w, h int) *model {
-	m := &model{open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
+	m := &model{scroll: -1, open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
 		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, input: textinput.New()}
 	m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	m.Update(stateMsg{st: sample()})
@@ -111,5 +111,55 @@ func TestViewsFitTheScreen(t *testing.T) {
 		}
 		m.Update(keys("?")[0])
 		checkWidth(t, m.View(), w, h, "help")
+	}
+}
+
+func TestThreadPaneScrolls(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	h := m.paneH()
+	if lines, _ := m.threadLines(m.rightW()); len(lines) <= 2*h {
+		t.Fatalf("fixture too short: %d lines for a %d-row pane", len(lines), h)
+	}
+	last := "pull/3"
+	if strings.Contains(m.View(), last) {
+		t.Fatal("last line visible before scrolling")
+	}
+	for i := 0; i < 200 && !strings.Contains(m.View(), last); i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if !strings.Contains(m.View(), last) {
+		t.Fatal("down never reached the last line")
+	}
+	for i := 0; i < 200 && strings.Contains(m.View(), last); i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	if strings.Contains(m.View(), last) {
+		t.Fatal("up never left the last line")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if !strings.Contains(m.View(), last) {
+		t.Fatal("End did not reach the last line")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if strings.Contains(m.View(), last) {
+		t.Fatal("PgUp did not leave the last line")
+	}
+	top := m.scroll
+	m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.scroll-top != h-1 {
+		t.Fatalf("PgDn moved %d, want %d", m.scroll-top, h-1)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	if m.scroll != 0 || !strings.Contains(m.View(), "you") {
+		t.Fatal("Home did not reach the top")
+	}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	if m.scroll != 3 {
+		t.Fatalf("wheel down: scroll %d, want 3", m.scroll)
+	}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.scroll != 0 {
+		t.Fatalf("wheel up: scroll %d, want 0", m.scroll)
 	}
 }

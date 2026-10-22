@@ -72,6 +72,7 @@ type model struct {
 	chatSel   int
 	chatFocus int // 0 list, 1 threads
 	threadSel int
+	scroll    int             // thread pane top line; <0 follows the selection
 	open      map[string]bool // expanded threads and tree nodes
 	closed    map[string]bool // collapsed project groups
 	msgs      map[string][]chat.Message
@@ -115,9 +116,9 @@ func Run(c *api.Client, ws core.Workspace) error {
 	in.Placeholder = "write to the lead…"
 	in.Prompt = "› "
 	in.CharLimit = 8000
-	m := &model{c: c, ws: ws, open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
+	m := &model{scroll: -1, c: c, ws: ws, open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
 		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, input: in}
-	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
@@ -273,6 +274,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.fetchState()
 	case tea.KeyMsg:
 		return m.key(msg)
+	case tea.MouseMsg:
+		if m.section == secChats && len(m.stack) == 0 && !m.help && !m.showSince {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				m.scrollBy(-3)
+			case tea.MouseButtonWheelDown:
+				m.scrollBy(3)
+			}
+		}
 	}
 	return m, nil
 }
@@ -472,9 +482,9 @@ func (m *model) footer() string {
 	switch m.section {
 	case secChats:
 		if m.chatFocus == 0 {
-			return "↑↓ chat · type or enter to write · → threads · space collapse · tab section · q quit"
+			return "↑↓ chat · PgUp/PgDn scroll · type or enter to write · → threads · space collapse · q quit"
 		}
-		return "↑↓ thread · enter expand · r reply · n new · ← chats · q quit"
+		return "↑↓ scroll/thread · PgUp/PgDn Home/End · enter expand · r reply · n new · ← chats · q quit"
 	case secDash:
 		return "↑↓ move · → or enter open · ← collapse · tab section · q quit"
 	case secWaiting:
@@ -494,6 +504,9 @@ func helpLines() []string {
 		"  → or enter        go deeper, open, expand",
 		"  ← or esc          one level up",
 		"  space             expand or collapse",
+		"  PgUp PgDn         in Chats, scroll the thread pane a page",
+		"  Home End          in Chats, jump to the top or end of the thread pane",
+		"  mouse wheel       scroll the thread pane; Shift+drag selects text to copy",
 		"  typing            in Chats, starts a message to the selected chat",
 		"  r / n             reply in a thread / new thread",
 		"  q                 quit the control center; the Hive keeps working",

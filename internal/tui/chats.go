@@ -135,17 +135,33 @@ func threads(msgs []chat.Message) []thread {
 func (m *model) keyChats(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rows := m.chatRows()
 	s := k.String()
+	switch s {
+	case "pgup":
+		m.scrollBy(-(m.paneH() - 1))
+		return m, nil
+	case "pgdown":
+		m.scrollBy(m.paneH() - 1)
+		return m, nil
+	case "home":
+		m.scrollBy(-1 << 30)
+		return m, nil
+	case "end":
+		m.scrollBy(1 << 30)
+		return m, nil
+	}
 	if m.chatFocus == 0 {
 		switch s {
 		case "up", "k":
 			if m.chatSel > 0 {
 				m.chatSel--
 			}
+			m.scroll = -1
 			return m, m.fetchChat(m.currentChatID())
 		case "down", "j":
 			if m.chatSel < len(rows)-1 {
 				m.chatSel++
 			}
+			m.scroll = -1
 			return m, m.fetchChat(m.currentChatID())
 		case " ":
 			if m.chatSel < len(rows) && rows[m.chatSel].group {
@@ -154,7 +170,7 @@ func (m *model) keyChats(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "right", "l":
 			if m.chatSel < len(rows) && !rows[m.chatSel].group {
-				m.chatFocus, m.threadSel = 1, max(0, len(threads(m.msgs[rows[m.chatSel].chatID]))-1)
+				m.chatFocus, m.threadSel, m.scroll = 1, max(0, len(threads(m.msgs[rows[m.chatSel].chatID]))-1), -1
 				return m, m.markRead()
 			}
 			return m, nil
@@ -171,16 +187,24 @@ func (m *model) keyChats(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	ts := threads(m.msgs[m.currentChatID()])
+	lines, spans := m.threadLines(m.rightW())
+	top := m.top(len(lines), spans)
 	switch s {
 	case "esc", "left", "h":
-		m.chatFocus = 0
+		m.chatFocus, m.scroll = 0, -1
 	case "up", "k":
-		if m.threadSel > 0 {
+		if m.threadSel < len(spans) && spans[m.threadSel][0] < top {
+			m.scrollBy(-1)
+		} else if m.threadSel > 0 {
 			m.threadSel--
+			m.scroll = -1
 		}
 	case "down", "j":
-		if m.threadSel < len(ts)-1 {
+		if m.threadSel < len(spans) && spans[m.threadSel][1] > top+m.paneH() {
+			m.scrollBy(1)
+		} else if m.threadSel < len(ts)-1 {
 			m.threadSel++
+			m.scroll = -1
 		}
 	case "enter", " ", "right":
 		if m.threadSel < len(ts) {
@@ -227,7 +251,7 @@ func (m *model) isOpen(ts []thread, i int) bool {
 
 func (m *model) viewChats() []string {
 	rows := m.chatRows()
-	listW := min(28, max(16, m.w/4))
+	listW := m.listW()
 	unread := map[string]int{}
 	for _, c := range m.st.Chats {
 		unread[c.ID] = c.Unread
@@ -257,12 +281,9 @@ func (m *model) viewChats() []string {
 		}
 		left = append(left, pad(line, listW))
 	}
-	rightW := m.w - listW - 3
+	rightW := m.rightW()
 	right := m.viewThreads(rightW)
-	h := m.bodyHeight()
-	if m.composing {
-		h -= 2
-	}
+	h := m.paneH()
 	left = window(left, m.chatSel, h)
 	var out []string
 	for i := 0; i < h; i++ {
@@ -286,29 +307,65 @@ func (m *model) viewChats() []string {
 	return out
 }
 
+func (m *model) listW() int  { return min(28, max(16, m.w/4)) }
+func (m *model) rightW() int { return m.w - m.listW() - 3 }
+
+func (m *model) paneH() int {
+	if m.composing {
+		return m.bodyHeight() - 2
+	}
+	return m.bodyHeight()
+}
+
+// top is the first visible line of the thread pane. m.scroll < 0 follows the
+// selected thread (or the conversation's end when the list has focus).
+func (m *model) top(n int, spans [][2]int) int {
+	h := m.paneH()
+	maxTop := max(0, n-h)
+	if m.scroll >= 0 {
+		return min(m.scroll, maxTop)
+	}
+	if m.chatFocus == 1 && m.threadSel < len(spans) {
+		if sel := spans[m.threadSel][0]; sel >= h-2 {
+			return min(sel-h+3, maxTop)
+		}
+		return 0
+	}
+	return maxTop
+}
+
+func (m *model) scrollBy(d int) {
+	lines, spans := m.threadLines(m.rightW())
+	m.scroll = max(0, min(m.top(len(lines), spans)+d, max(0, len(lines)-m.paneH())))
+}
+
 func (m *model) viewThreads(w int) []string {
+	lines, spans := m.threadLines(w)
+	t := m.top(len(lines), spans)
+	return lines[t:min(len(lines), t+m.paneH())]
+}
+
+// threadLines renders the whole pane, plus the line span of each thread.
+func (m *model) threadLines(w int) (lines []string, spans [][2]int) {
 	c, ok := m.currentChat()
 	if !ok {
-		return []string{stDim.Render("select a chat")}
+		return []string{stDim.Render("select a chat")}, nil
 	}
 	header := stTitle.Render(c.Title)
 	if c.LeadStatus != "" {
 		header += "  " + stDim.Render(clip(c.LeadStatus, w/2))
 	}
-	lines := []string{header, ""}
+	lines = []string{header, ""}
 	ts := threads(m.msgs[c.ID])
 	if len(ts) == 0 {
 		hint := "Nothing here yet. Start typing to write to the lead."
 		if c.Kind == "agent" {
 			hint = "Write to this agent; it reads your message after its current turn."
 		}
-		return append(lines, stDim.Render(hint))
+		return append(lines, stDim.Render(hint)), nil
 	}
-	selLine := 0
 	for i, t := range ts {
-		if i == m.threadSel && m.chatFocus == 1 {
-			selLine = len(lines)
-		}
+		start := len(lines)
 		first := t.msgs[0]
 		head := fmt.Sprintf("%s %s  %s", who(first), stDim.Render(first.At.Local().Format("Mon 15:04")), "")
 		if !m.isOpen(ts, i) {
@@ -321,6 +378,7 @@ func (m *model) viewThreads(w int) []string {
 				line = stSel.Render(clip(line, w))
 			}
 			lines = append(lines, line)
+			spans = append(spans, [2]int{start, len(lines)})
 			continue
 		}
 		for j, msg := range t.msgs {
@@ -336,18 +394,9 @@ func (m *model) viewThreads(w int) []string {
 			lines = append(lines, indent(wrap(msg.Text, w-len(prefix)-2), prefix+"  ")...)
 		}
 		lines = append(lines, "")
+		spans = append(spans, [2]int{start, len(lines)})
 	}
-	h := m.bodyHeight()
-	if m.composing {
-		h -= 2
-	}
-	if m.chatFocus == 1 {
-		return window(lines, selLine, h)
-	}
-	if len(lines) > h { // follow the conversation's end
-		lines = append(lines[:2], lines[len(lines)-h+2:]...)
-	}
-	return lines
+	return lines, spans
 }
 
 func who(msg chat.Message) string {
