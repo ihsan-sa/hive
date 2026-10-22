@@ -46,3 +46,53 @@ func TestReleaseBuildUpdates(t *testing.T) {
 		t.Fatalf("the update didn't try to download v9.9.9: %v", err)
 	}
 }
+
+// notes keeps each release's notes, which the local forge drops.
+type notes struct {
+	*core.Local
+	got map[string]string
+}
+
+func (n *notes) CreateRelease(repo, tag, sha, body string) error {
+	n.got[tag] = body
+	return n.Local.CreateRelease(repo, tag, sha, body)
+}
+
+// A self project's release names what each merged head's reader read, refuses
+// a head that merged unread, and holds a root change for the person.
+func TestReleaseNamesItsReads(t *testing.T) {
+	m, _ := releaseAt(t, "v0.1.0")
+	n := &notes{Local: m.C.Effects.Forge.(*core.Local), got: map[string]string{}}
+	m.C.Effects.Forge = n
+	m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true})
+	merged := func(pr int, sha, mergeSHA string, root ...string) {
+		m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": pr, "sha": sha, "merge_sha": mergeSHA, "root": root})
+	}
+	land := func(sha, run string) {
+		m.C.J.MustAppend("effect.verdict", core.Verdict{Project: "hive", SHA: sha, Run: run, Verdict: "land"})
+	}
+
+	merged(1, "a1", "m1")
+	m.AfterKept("hive", "m1")
+	if len(n.got) != 0 {
+		t.Fatalf("released a head nobody read: %v", n.got)
+	}
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	if !strings.Contains(n.got["v0.0.1"], "#1 at a1, read by r1") {
+		t.Fatalf("the release doesn't name its read: %q", n.got["v0.0.1"])
+	}
+
+	merged(2, "a2", "m2", "install/root.sh")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	asks := m.C.Person.Open()
+	if len(n.got) != 1 || len(asks) != 1 || asks[0].Kind != "release" {
+		t.Fatalf("a root change released without the person: %v %+v", n.got, asks)
+	}
+	asks[0].Answer = "release"
+	m.OnPerson(asks[0])
+	if body := n.got["v0.0.2"]; !strings.Contains(body, "#2 at a2") || strings.Contains(body, "#1 ") {
+		t.Fatalf("the second release should name only #2: %q", body)
+	}
+}

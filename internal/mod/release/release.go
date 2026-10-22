@@ -174,17 +174,39 @@ func fileSum(path string) (string, error) {
 }
 
 // AfterKept cuts a release when a kept merge lands in the Hive's own project
-// and its dry run passes on that exact commit.
+// and its dry run passes on that exact commit. The release names each change
+// merged since the last one and the reviewer runs that read its exact head; it
+// refuses if one has no read, and a change to a root path waits for the person.
 func (m *Module) AfterKept(project, sha string) {
 	p, ok := m.C.Projects.Get(project)
 	if !ok || !p.Self {
+		return
+	}
+	alert := func(text string) {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": project, "text": text})
+	}
+	var manifest strings.Builder
+	var root []string
+	for _, mg := range m.merges(project, sha) {
+		reads := m.C.Effects.Reads(project, mg.SHA)
+		if len(reads) == 0 {
+			alert(fmt.Sprintf("no release: PR #%d merged %s without a read of that exact commit", mg.PR, core.Short(mg.SHA)))
+			return
+		}
+		fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
+		root = append(root, mg.Root...)
+	}
+	if len(root) > 0 && !m.C.Effects.Approved(project, sha) {
+		m.C.Person.Ask(core.Ask{Kind: "release", Ref: project + "@" + sha, Project: project,
+			Title:  "Release the Hive at " + core.Short(sha) + "? It changes " + strings.Join(root, ", "),
+			Detail: strings.Join(root, ", ") + " run with elevated rights, so the release waits for you.\n\n" + manifest.String(), Options: []string{"release", "hold"}})
 		return
 	}
 	cfg := m.C.Effects.Config(p, sha)
 	if cfg.DryRun != "" {
 		c := m.C.Effects.RunCheck(p, sha, "dryrun", cfg.DryRun)
 		if !c.OK {
-			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": project, "text": "dry run failed on " + core.Short(sha) + "; no release"})
+			alert("dry run failed on " + core.Short(sha) + "; no release")
 			return
 		}
 	}
@@ -193,11 +215,53 @@ func (m *Module) AfterKept(project, sha string) {
 		last = rel.Tag
 	}
 	next := bump(last)
-	if err := m.C.Effects.Forge.CreateRelease(p.Repo, next, sha, "Released by the Hive after "+core.Short(sha)+" kept its tests and dry run green."); err != nil {
-		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": project, "text": "release failed: " + err.Error()})
+	body := "Released by the Hive after " + core.Short(sha) + " kept its tests and dry run green.\n\nWhat was read:\n\n" + manifest.String()
+	if len(root) > 0 {
+		body += "\nThe person released the change to " + strings.Join(root, ", ") + ".\n"
+	}
+	if err := m.C.Effects.Forge.CreateRelease(p.Repo, next, sha, body); err != nil {
+		alert("release failed: " + err.Error())
 		return
 	}
 	m.C.J.MustAppend("hive.released", map[string]string{"project": project, "tag": next, "sha": sha})
+}
+
+// OnPerson is the person's word on a release held for a root path.
+func (m *Module) OnPerson(a core.Ask) {
+	project, sha, _ := strings.Cut(a.Ref, "@")
+	if a.Answer == "release" || a.Answer == "yes" {
+		m.C.Effects.Approve(project, sha)
+		m.AfterKept(project, sha)
+	}
+}
+
+type merge struct {
+	PR       int
+	SHA      string
+	MergeSHA string `json:"merge_sha"`
+	Root     []string
+}
+
+// merges lists the project's merges after its last release, up to the one that made upTo.
+func (m *Module) merges(project, upTo string) []merge {
+	var out []merge
+	done := false
+	m.C.J.Replay(func(e core.Event) {
+		var x struct {
+			merge
+			Project string
+		}
+		if done || (e.Kind != "effect.merged" && e.Kind != "hive.released") || e.Decode(&x) != nil || x.Project != project {
+			return
+		}
+		if e.Kind == "hive.released" {
+			out = nil
+			return
+		}
+		out = append(out, x.merge)
+		done = x.MergeSHA == upTo
+	})
+	return out
 }
 
 func bump(tag string) string {

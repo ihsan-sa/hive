@@ -308,3 +308,39 @@ func TestMainBundleLeavesNoTemp(t *testing.T) {
 		t.Fatalf("temp left behind: %v", left)
 	}
 }
+
+// A change to a high-class path merges only after two separate land reads of
+// its exact commit, and a fix in between starts the count again.
+func TestHighClassNeedsTwoReads(t *testing.T) {
+	c, f := testHive(t)
+	seedRepo(t, f, "me/high", map[string]string{".hive/project.json": `{"test": "true", "root": ["setup.sh"]}`})
+	p, _ := c.Projects.Add(Project{Name: "high", Repo: "me/high"})
+	main, _ := c.Effects.Sync(p)
+	r, _ := commitInCheckout(t, c, p, "w7", main, "setup.sh", "echo hi\n")
+	sha, _ := c.Effects.Extract(p, r, main)
+	c.Effects.Push(p, "hive/t7", sha)
+	pr, _ := f.CreatePR(p.Repo, "hive/t7", "main", "root", "body")
+	c.Effects.RunCheck(p, sha, "test", "true")
+	ch, _ := c.Effects.Classify(p, main, sha)
+	if len(ch.High) != 1 || len(ch.Root) != 1 || ch.Small {
+		t.Fatalf("a root path should class high and root: %+v", ch)
+	}
+	read := func(run, verdict string) {
+		c.Runs.Start(RunSpec{ID: run, Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha}})
+		if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: run, Verdict: verdict}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main}
+	read("r7a", "land")
+	read("r7b", "fix")
+	read("r7c", "land")
+	read("r7c", "land") // the same run twice is one read
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no land verdict") {
+		t.Fatalf("merged a high change on one read: %v", err)
+	}
+	read("r7d", "land")
+	if _, err := c.Effects.Merge(req); err != nil {
+		t.Fatalf("two separate reads should merge: %v", err)
+	}
+}

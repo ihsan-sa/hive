@@ -598,7 +598,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 			Title:  fmt.Sprintf("Merge %q? It changes %s", t.Label(), strings.Join(ch.Protected, ", ")),
 			Detail: fmt.Sprintf("%s\n\nPR: %s", strings.Join(ch.Protected, ", ")+" are yours to merge.", t.PR.URL), Options: []string{"merge", "leave open"}})
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q changes %s, which is yours to approve. It's waiting on you: %s", t.Label(), strings.Join(ch.Protected, ", "), t.PR.URL))
-	case ch.Small || m.C.Effects.Reviewed(p.Name, t.SHA):
+	case ch.Small || m.C.Effects.Reviewed(p, ch, t.SHA):
 		t.Stage = StageMerging
 		m.save(t, "tests passed; "+map[bool]string{true: "small change, no read needed", false: "already read"}[ch.Small])
 	default:
@@ -627,6 +627,9 @@ func reviewToken(run string) string {
 
 func (m *Module) review(t *Task, p core.Project) error {
 	id := fmt.Sprintf("r-%s-%s-%d", t.ID, core.Short(t.SHA), t.Reviews)
+	if n := len(m.C.Effects.Reads(p.Name, t.SHA)); n > 0 {
+		id += fmt.Sprintf("-read%d", n+1) // a separate run for each further read
+	}
 	r, ok := m.C.Runs.Get(id)
 	if !ok {
 		main, err := m.C.Effects.Sync(p)
@@ -686,7 +689,8 @@ func (m *Module) review(t *Task, p core.Project) error {
 	}
 	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fb.String())
 	if v.Verdict == "land" {
-		t.Stage = StageMerging
+		// Back through test(), which merges or asks a second, separate reader for a high class.
+		t.Stage = StageTesting
 		m.save(t, "reviewer: land")
 		return nil
 	}
@@ -820,11 +824,7 @@ func (m *Module) onPersonMerge(a core.Ask) {
 	}
 	if a.Answer == "merge" || a.Answer == "yes" {
 		m.C.Effects.Approve(t.Project, sha)
-		if m.C.Effects.Reviewed(t.Project, sha) {
-			t.Stage = StageMerging
-		} else {
-			t.Stage = StageReviewing
-		}
+		t.Stage = StageTesting // test() routes to a read or the merge
 		m.save(&t, "the person approved")
 		return
 	}
