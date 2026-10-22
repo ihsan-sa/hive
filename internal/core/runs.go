@@ -589,6 +589,9 @@ func tail(path string, n int) string {
 	return Clip(string(raw), n)
 }
 
+// PendingSep joins messages that queued during a turn into the next prompt.
+const PendingSep = "\n\n---\n\n"
+
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run) {
 	sb, err := rs.sandbox()
@@ -605,7 +608,7 @@ func (rs *Runs) launch(r Run) {
 	resume := r.SessionLive
 	session := r.Session
 	delivered := len(r.Pending)
-	pending := strings.Join(r.Pending, "\n\n---\n\n")
+	pending := strings.Join(r.Pending, PendingSep)
 	prompt := pending
 	if !resume {
 		if r.Turn > 0 {
@@ -613,7 +616,7 @@ func (rs *Runs) launch(r Run) {
 		}
 		prompt = r.Brief
 		if pending != "" && r.Turn == 0 {
-			prompt += "\n\n---\n\n" + pending
+			prompt += PendingSep + pending
 		}
 	}
 	if strings.TrimSpace(prompt) == "" {

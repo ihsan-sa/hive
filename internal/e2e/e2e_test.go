@@ -330,6 +330,37 @@ func TestAskLandsAndProjects(t *testing.T) {
 	if prs := h.forge.PRs("local/alpha"); len(prs) != 1 || prs[0].State != "MERGED" {
 		t.Fatalf("alpha prs: %+v", prs)
 	}
+	// A live project lead sees the person's own pushes too, and so does a live
+	// isolated project's lead, which reads a checkout of its own.
+	h.seed("local/alpha", map[string]string{"OUTSIDE.md": "pushed by the person\n"})
+	h.post("/api/chat", map[string]string{"chat": "project:alpha", "text": "what's in the repo now?"}, nil)
+	h.wait("alpha's lead to see the push", 2*minute, h.replied("project:alpha", "OUTSIDE.md"))
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "create isolated project beta for secrets"}, nil)
+	h.wait("project beta", 2*minute, func(st api.State) bool {
+		for _, c := range st.Chats {
+			if c.ID == "project:beta" {
+				return true
+			}
+		}
+		return false
+	})
+	h.post("/api/chat", map[string]string{"chat": "project:beta", "text": "what's in the repo?"}, nil)
+	h.wait("beta's lead to answer", 2*minute, h.replied("project:beta", "The repo has"))
+	h.seed("local/beta", map[string]string{"OUTSIDE.md": "pushed by the person\n"})
+	h.post("/api/chat", map[string]string{"chat": "project:beta", "text": "what's in the repo now?"}, nil)
+	h.wait("beta's live lead to see the push", 2*minute, h.replied("project:beta", "OUTSIDE.md"))
+}
+
+// replied is true once someone other than the person has said text in a chat.
+func (h *hive) replied(chat, text string) func(api.State) bool {
+	return func(api.State) bool {
+		for _, m := range h.messages(chat) {
+			if m.From != "person" && strings.Contains(m.Text, text) {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 // M3 and M4: failing tests never merge; a merge that lowers the score is

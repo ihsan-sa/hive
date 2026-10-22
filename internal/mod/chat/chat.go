@@ -175,47 +175,83 @@ func (m *Module) Post(chatID, thread, text string) (Message, error) {
 	return msg, nil
 }
 
+// syncWait bounds the sync that runs before a person's post reaches its lead.
+var syncWait = 10 * time.Second
+
 // syncFor brings the clones a lead reads ($HIVE_PROJECTS) up to each remote's
-// default branch, so it sees what the person pushed since it last looked.
+// default branch, so it sees what the person pushed since it last looked. A
+// sync that fails or outlasts syncWait is journaled, and the post goes on
+// with what the clone has.
 func (m *Module) syncFor(ch *Chat) {
+	var wg sync.WaitGroup
 	for _, p := range m.C.Projects.List() {
-		if ch.Kind != "project" || p.Name == ch.Project {
-			m.C.Effects.Sync(p)
+		if ch.Kind == "project" && p.Name != ch.Project {
+			continue
 		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			done := make(chan error, 1)
+			go func() { _, err := m.C.Effects.Sync(p); done <- err }()
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(syncWait):
+				err = fmt.Errorf("no answer from the remote within %s", syncWait)
+			}
+			if err != nil {
+				m.C.J.MustAppend("chat.sync_failed", map[string]string{"chat": ch.ID, "project": p.Name, "error": err.Error()})
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // deliverToLead sends text to the chat's lead, starting the lead if needed.
+// A lead never pushes, so it reads its project in the clone syncFor keeps
+// current ($HIVE_PROJECTS). An isolated project's lead can't see that, so it
+// works in a checkout of its own, and before each message its run dir gets
+// main.bundle, the clone's tip, to fetch: host git never runs in its checkout.
 func (m *Module) deliverToLead(ch *Chat, text string) error {
+	var p core.Project
+	if ch.Kind == "project" {
+		var ok bool
+		if p, ok = m.C.Projects.Get(ch.Project); !ok {
+			return fmt.Errorf("project %s not found", ch.Project)
+		}
+	}
+	bundle := func(id string) {
+		if p.Isolated { // an empty repository has no main to bundle; the lead reads its checkout as is
+			os.MkdirAll(m.C.WS.RunRO(id), 0o755)
+			m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(id), "main.bundle"))
+		}
+	}
 	if ch.Lead != "" {
 		if r, ok := m.C.Runs.Get(ch.Lead); ok && (!r.Terminal()) {
+			bundle(r.ID)
 			return m.C.Runs.Send(r.ID, text)
 		}
 	}
 	id := "lead-" + strings.NewReplacer(":", "-").Replace(ch.ID) + "-" + core.NewID()[14:]
-	name := "lead"
-	var dir string
-	var err error
-	project := ""
+	name, project := "lead", ""
+	dir := filepath.Join(m.C.WS.Hive(), "leads", "main")
 	if ch.Kind == "project" {
-		project = ch.Project
-		name = "lead:" + project
-		p, ok := m.C.Projects.Get(project)
-		if !ok {
-			return fmt.Errorf("project %s not found", project)
+		project, name = ch.Project, "lead:"+ch.Project
+		dir = filepath.Join(m.C.WS.Hive(), "leads", "project-"+project)
+		if p.Isolated {
+			bundle(id)
+			// The clone's tip, or "" (an orphan branch) for an empty repository.
+			base, err := core.Git(m.C.WS.Project(project), "rev-parse", "-q", "--verify", "refs/heads/"+p.Branch)
+			if err != nil {
+				base = ""
+			}
+			if dir, err = m.C.Effects.NewCheckout(p, id, base); err != nil {
+				return err
+			}
 		}
-		base, err := m.C.Effects.Sync(p)
-		if err != nil {
-			return err
-		}
-		if dir, err = m.C.Effects.NewCheckout(p, id, base); err != nil {
-			return err
-		}
-	} else {
-		dir = filepath.Join(m.C.WS.Hive(), "leads", "main")
-		if err = os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
 	}
 	spec := m.Agents.Spec(id, "lead", project, dir, text)
 	spec.Name, spec.Persistent = name, true
