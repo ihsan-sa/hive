@@ -229,6 +229,21 @@ func (l *Local) ClosePR(repo string, number int, comment string) error {
 	return nil
 }
 
+func (l *Local) CloseIssue(repo string, number int, comment string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	for i := range s.Issues[repo] {
+		if s.Issues[repo][i].Number == number {
+			s.Issues[repo][i].State = "CLOSED"
+		}
+	}
+	k := fmt.Sprintf("%s#%d", repo, number)
+	s.Comments[k] = append(s.Comments[k], comment)
+	l.save(s)
+	return nil
+}
+
 // PRs lists a repo's pull requests (tests read them).
 func (l *Local) PRs(repo string) []PR {
 	var out []PR

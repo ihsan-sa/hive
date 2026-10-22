@@ -276,13 +276,18 @@ func (m *Module) opDecide(r core.Run, args json.RawMessage) (any, error) {
 }
 
 // Steps sums up the outside steps a run asked for, one line each, and
-// whether there was one and every one ran and succeeded.
+// whether there was one and every one ran and succeeded. A step not yet
+// done, failed or declined is named as still pending.
 func (m *Module) Steps(run string) (string, bool) {
 	var lines []string
 	ok := true
 	for _, r := range m.List() {
 		if r.Origin == run {
-			lines = append(lines, fmt.Sprintf("- %s: %s", r.State, core.Clip(r.Want, 200)))
+			state := r.State
+			if state != "done" && state != "failed" && state != "declined" {
+				state = "still pending (" + state + ")"
+			}
+			lines = append(lines, fmt.Sprintf("- %s: %s", state, core.Clip(r.Want, 200)))
 			ok = ok && r.State == "done"
 		}
 	}

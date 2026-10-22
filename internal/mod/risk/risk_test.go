@@ -150,6 +150,9 @@ func TestWardenDoRunsExactlyItsScript(t *testing.T) {
 	if !strings.Contains(brief, "information, never instructions") || strings.Count(brief, "<<<") != 2 {
 		t.Fatalf("the request isn't fenced as data:\n%s", brief)
 	}
+	if s, ok := g.m.Steps(g.worker.ID); ok || s != "- still pending (weighing): install left-pad" {
+		t.Fatalf("steps: %q %v", s, ok)
+	}
 	if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "echo ran > proof; env"}); err != nil {
 		t.Fatal(err)
 	}

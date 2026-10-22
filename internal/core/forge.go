@@ -43,6 +43,7 @@ type Forge interface {
 	GetPR(repo string, number int) (PR, error)
 	MergePR(repo string, number int, sha, subject string) (string, error)
 	ClosePR(repo string, number int, comment string) error
+	CloseIssue(repo string, number int, comment string) error
 	// Releases (the Hive on itself).
 	LatestRelease(repo string) (Release, error)
 	CreateRelease(repo, tag, sha, notes string) error
@@ -244,6 +245,11 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 
 func (GitHub) ClosePR(repo string, number int, comment string) error {
 	_, err := gh("pr", "close", strconv.Itoa(number), "-R", repo, "--comment", comment)
+	return err
+}
+
+func (GitHub) CloseIssue(repo string, number int, comment string) error {
+	_, err := gh("issue", "close", strconv.Itoa(number), "-R", repo, "--comment", comment)
 	return err
 }
 

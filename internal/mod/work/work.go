@@ -496,15 +496,19 @@ func (m *Module) land(t *Task, p core.Project) error {
 	sha, err := m.C.Effects.Extract(p, r, t.Base)
 	if errors.Is(err, core.ErrNoChanges) {
 		// An ask whose whole job was a step outside the checkout has nothing to merge.
-		steps, ok := m.Steps(r.ID)
+		var steps string
+		var ok bool
+		if m.Steps != nil {
+			steps, ok = m.Steps(r.ID)
+		}
 		if ok {
 			t.Stage = StageDone
-			m.save(t, "done outside the checkout:\n"+steps)
-			m.C.Effects.Forge.Comment(p.Repo, t.Issue.Number, "Done with nothing to merge. What ran outside the checkout:\n\n"+steps+"\n\n"+finishText(r))
-			m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q, with nothing to merge. What ran:\n%s", t.Label(), steps))
+			m.save(t, "done outside the checkout, no commit:\n"+steps)
+			m.C.Effects.Forge.CloseIssue(p.Repo, t.Issue.Number, "Done with no commit, so nothing to merge. What ran outside the checkout:\n\n"+steps+"\n\n"+finishText(r))
+			m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q, with no commit, so nothing to merge. What ran:\n%s", t.Label(), steps))
 			return nil
 		} else if steps != "" {
-			steps = "\n\nNot every step outside the checkout ran:\n" + steps
+			steps = "\n\nSteps outside the checkout, not all done:\n" + steps
 		}
 		t.Stage, t.Reason = StageBlocked, "the worker finished without any commits: "+core.Clip(finishText(r), 300)+steps
 		m.save(t, t.Reason)
