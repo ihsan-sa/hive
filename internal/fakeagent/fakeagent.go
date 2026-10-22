@@ -93,7 +93,7 @@ func emit(v any) {
 
 // Messages that queued during a turn arrive as one prompt, joined by core.PendingSep.
 var personRe = regexp.MustCompile(`(?s)Person: (.*?)(?:` + regexp.QuoteMeta(core.PendingSep) + `|\z)`)
-var projectRe = regexp.MustCompile(`create (?:a )?project (?:called |named )?([A-Za-z0-9_-]+)`)
+var projectRe = regexp.MustCompile(`create (?:an? )?(isolated )?project (?:called |named )?([A-Za-z0-9_-]+)`)
 
 func lead(prompt string) (string, error) {
 	ms := personRe.FindAllStringSubmatch(prompt, -1)
@@ -113,11 +113,11 @@ func lead(prompt string) (string, error) {
 
 func leadAsk(ask string) (string, error) {
 	if pm := projectRe.FindStringSubmatch(ask); pm != nil {
-		_, err := agentcli.Call("create_project", map[string]string{"name": pm[1], "description": ask, "goals": ask}, 3*time.Minute)
+		_, err := agentcli.Call("create_project", map[string]any{"name": pm[2], "isolated": pm[1] != "", "description": ask, "goals": ask}, 3*time.Minute)
 		if err != nil {
 			return "", err
 		}
-		return "Created project " + pm[1] + ".", nil
+		return "Created project " + pm[2] + ".", nil
 	}
 	if mm := regexp.MustCompile(`install module (\S+)`).FindStringSubmatch(ask); mm != nil {
 		_, err := agentcli.Call("install_module", map[string]string{"url": mm[1]}, 3*time.Minute)
@@ -139,12 +139,15 @@ func leadAsk(ask string) (string, error) {
 	return "Understood: " + clip(ask, 80) + ". I've started a piece of work on it.", nil
 }
 
-// repoFiles lists what a lead sees of its project: its checkout when it has
-// one, otherwise the project's clone in $HIVE_PROJECTS.
+// repoFiles lists what a lead sees of its project: its checkout, brought to
+// main from $HIVE_RUN/main.bundle, when it has one (an isolated project's
+// lead), otherwise the project's clone in $HIVE_PROJECTS.
 func repoFiles() []string {
 	dir := "."
 	if _, err := os.Stat(".git"); err != nil {
 		dir = filepath.Join(os.Getenv("HIVE_PROJECTS"), os.Getenv("HIVE_PROJECT"))
+	} else if _, err := run("git", "fetch", "-q", filepath.Join(os.Getenv("HIVE_RUN"), "main.bundle"), "main"); err == nil {
+		run("git", "checkout", "-q", "-f", "FETCH_HEAD")
 	}
 	entries, _ := os.ReadDir(dir)
 	var names []string

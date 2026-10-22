@@ -209,11 +209,26 @@ func (m *Module) syncFor(ch *Chat) {
 
 // deliverToLead sends text to the chat's lead, starting the lead if needed.
 // A lead never pushes, so it reads its project in the clone syncFor keeps
-// current ($HIVE_PROJECTS); only an isolated project's lead, which can't see
-// that, gets a checkout of its own at what the clone has now.
+// current ($HIVE_PROJECTS). An isolated project's lead can't see that, so it
+// works in a checkout of its own, and before each message its run dir gets
+// main.bundle, the clone's tip, to fetch: host git never runs in its checkout.
 func (m *Module) deliverToLead(ch *Chat, text string) error {
+	var p core.Project
+	if ch.Kind == "project" {
+		var ok bool
+		if p, ok = m.C.Projects.Get(ch.Project); !ok {
+			return fmt.Errorf("project %s not found", ch.Project)
+		}
+	}
+	bundle := func(id string) {
+		if p.Isolated { // an empty repository has no main to bundle; the lead reads its checkout as is
+			os.MkdirAll(m.C.WS.RunRO(id), 0o755)
+			m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(id), "main.bundle"))
+		}
+	}
 	if ch.Lead != "" {
 		if r, ok := m.C.Runs.Get(ch.Lead); ok && (!r.Terminal()) {
+			bundle(r.ID)
 			return m.C.Runs.Send(r.ID, text)
 		}
 	}
@@ -222,14 +237,14 @@ func (m *Module) deliverToLead(ch *Chat, text string) error {
 	dir := filepath.Join(m.C.WS.Hive(), "leads", "main")
 	if ch.Kind == "project" {
 		project, name = ch.Project, "lead:"+ch.Project
-		p, ok := m.C.Projects.Get(project)
-		if !ok {
-			return fmt.Errorf("project %s not found", project)
-		}
 		dir = filepath.Join(m.C.WS.Hive(), "leads", "project-"+project)
 		if p.Isolated {
-			base, _ := core.Git(m.C.WS.Project(project), "rev-parse", "-q", "--verify", "refs/heads/"+p.Branch)
-			var err error
+			bundle(id)
+			// The clone's tip, or "" (an orphan branch) for an empty repository.
+			base, err := core.Git(m.C.WS.Project(project), "rev-parse", "-q", "--verify", "refs/heads/"+p.Branch)
+			if err != nil {
+				base = ""
+			}
 			if dir, err = m.C.Effects.NewCheckout(p, id, base); err != nil {
 				return err
 			}
