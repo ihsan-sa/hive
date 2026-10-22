@@ -3,6 +3,7 @@
 package risk
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,7 +29,17 @@ func TestTimeoutEndsTheWholeStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !eventually(func() bool { return syscall.Kill(pid, 0) != nil }) {
+	if !eventually(func() bool { return gone(pid) }) {
 		t.Fatalf("the step's child %d outlived the timeout", pid)
 	}
+}
+
+// gone is true once pid has exited, counting a zombie that nothing reaps (a
+// nested sandbox without a reaping init) as exited.
+func gone(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return true
+	}
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	return err == nil && strings.Contains(string(b), ") Z ")
 }

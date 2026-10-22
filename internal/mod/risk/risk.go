@@ -105,10 +105,11 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 	ops.Register(core.Op{Name: "install_module", Roles: []string{"lead"}, Help: `{"url","name"}`, Fn: m.opInstall})
 	c.Person.Handle("request", m.onAnswer)
 	c.Person.Handle("module", m.onModule)
-	// A warden that asks the requester ends its turn to wait for the reply,
-	// so it idles rather than going quiet, which Tick would read as failing.
+	// A warden that asks an agent ends its turn to wait for the reply, so it
+	// idles rather than going quiet, which Tick would read as failing. A
+	// message to no agent fails to send, so the warden isn't left waiting.
 	ops.AddRouter(func(from core.Run, to, _ string) (bool, error) {
-		if from.Role == "warden" {
+		if _, ok := c.Runs.Find(to); ok && from.Role == "warden" {
 			c.Runs.Wait(from.ID, "a reply from "+to)
 		}
 		return false, nil
@@ -312,24 +313,29 @@ func (m *Module) panelBrief(req Request, round int, seat int) string {
 	return b.String()
 }
 
+// convene seats a panel; if any seat can't start, the request fails and the
+// seats already started stop.
 func (m *Module) convene(req *Request) error {
 	req.State, req.Round, req.Panel = "tribunal", 1, nil
 	models := m.panelModels()
 	for i := 0; i < PanelSize; i++ {
 		id := fmt.Sprintf("t-%s-%d", req.ID, i)
 		dir, err := m.Agents.Scratch(id)
-		if err != nil {
-			return err
+		if err == nil {
+			s := m.Agents.Spec(id, "tribunal", req.Project, dir, m.panelBrief(*req, 1, i))
+			s.ReadOnly, s.Schema, s.Model, s.Inputs = true, VoteSchema, models[i%len(models)], map[string]string{"script.sh": req.Script}
+			_, err = m.C.Runs.Start(s)
 		}
-		req.Panel = append(req.Panel, Seat{Run: id, Model: models[i%len(models)]})
-		s := m.Agents.Spec(id, "tribunal", req.Project, dir, m.panelBrief(*req, 1, i))
-		s.ReadOnly, s.Schema, s.Model, s.Inputs = true, VoteSchema, models[i%len(models)], map[string]string{"script.sh": req.Script}
-		if _, err := m.C.Runs.Start(s); err != nil {
+		if err != nil {
+			for _, s := range req.Panel {
+				m.C.Runs.Stop(s.Run, "the tribunal could not convene")
+			}
 			req.State, req.Outcome = "failed", "no tribunal: "+err.Error()
 			m.save(req)
 			m.tell(*req, req.Outcome)
 			return err
 		}
+		req.Panel = append(req.Panel, Seat{Run: id, Model: models[i%len(models)]})
 	}
 	m.save(req)
 	return nil
@@ -403,9 +409,9 @@ func (m *Module) Tick() {
 					continue
 				}
 				if req.Round == 2 && !s.Again {
-					// Reopen fails only for a run that doesn't exist, and Get just found it.
-					_ = m.C.Runs.Reopen(s.Run, m.panelBrief(req, 2, i))
-					req.Panel[i].Again, moved = true, true
+					if m.C.Runs.Reopen(s.Run, m.panelBrief(req, 2, i)) == nil { // else the next tick tries again
+						req.Panel[i].Again, moved = true, true
+					}
 					continue
 				}
 				if s.Votes[req.Round-1] == "" {
@@ -481,7 +487,9 @@ func (m *Module) execute(id string) {
 		req.State, req.Outcome = "failed", err.Error()
 	}
 	// Tell first, so the worker never sees the step settled before its word.
-	m.tell(req, fmt.Sprintf("%s: %q.\n%s", req.State, core.Clip(req.Want, 80), core.Clip(out, 1000)))
+	// The output stays with the person: a script runs as the daemon's user, so
+	// what it prints may be that user's secrets, which the agent never sees.
+	m.tell(req, fmt.Sprintf("%s: %q. Its output is kept for the person.", req.Outcome, core.Clip(req.Want, 80)))
 	m.act.Lock()
 	m.save(&req)
 	m.act.Unlock()
@@ -494,8 +502,8 @@ func (m *Module) execute(id string) {
 // run is the narrow grant: sh, the step's own empty directory, a timeout
 // that ends the whole process group. The script gets only a plain
 // environment, so tokens in this process's environment stay here. It runs as
-// the daemon's user, so files that user can read are guarded only by the
-// ceiling's text check (core.CeilingHit).
+// the daemon's user and can read that user's files, so its output goes to the
+// person, never back to the agent.
 func (m *Module) run(req Request) (string, error) {
 	dir := filepath.Join(m.C.WS.Hive(), "risk", req.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

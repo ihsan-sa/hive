@@ -366,16 +366,32 @@ func TestTribunalMajorityStillAsksForMoney(t *testing.T) {
 	}
 }
 
-// A warden that messages the requester waits for the reply instead of going
-// quiet, which would fail the request.
+// A warden that messages the requester waits for the reply: its turn ends
+// idle, not quiet, and the request stays weighing. A message to no agent
+// fails, and leaves the warden free to decide.
 func TestWardenAskingTheRequesterWaits(t *testing.T) {
 	g := newRig(t, 2)
 	req := g.request("install a tool", "x", "T2")
+	g.c.J.MustAppend("run.turn_started", map[string]any{"id": req.Warden, "turn": 1})
+	if _, err := g.call(g.run(req.Warden), "message", map[string]string{"to": "nobody", "text": "hello?"}); err == nil || g.run(req.Warden).Waiting != "" {
+		t.Fatalf("a failed send left the warden waiting: %v", err)
+	}
 	if _, err := g.call(g.run(req.Warden), "message", map[string]string{"to": g.worker.ID, "text": "which version?"}); err != nil {
 		t.Fatal(err)
 	}
-	if w := g.run(req.Warden); w.Waiting == "" {
-		t.Fatalf("the warden isn't waiting for the reply: %+v", w)
+	out := g.c.WS.TurnOut(req.Warden, 1)
+	os.MkdirAll(filepath.Dir(out), 0o755)
+	os.WriteFile(out, []byte(`{"type":"result","subtype":"success","is_error":false,"result":"asked"}`+"\n"), 0o644)
+	g.c.Runs.Tick()
+	if !eventually(func() bool {
+		w := g.run(req.Warden)
+		return w.Status == core.StatusIdle && strings.HasPrefix(w.Reason, "waiting")
+	}) {
+		t.Fatalf("the warden's turn didn't end waiting: %+v", g.run(req.Warden))
+	}
+	g.m.Tick()
+	if got, _ := g.m.get(req.ID); got.State != "weighing" {
+		t.Fatalf("a waiting warden failed the request: %s", got.State)
 	}
 }
 
