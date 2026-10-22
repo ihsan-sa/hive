@@ -38,6 +38,15 @@ func TestBwrapArgsKeepReach(t *testing.T) {
 	}
 }
 
+// TestNoSelfExecInTests: a test that reaches the sandbox in-process gets an
+// error, never a re-run of its own test binary. It asks hiveBinary, not
+// Probe, so that without the guard it fails rather than forking.
+func TestNoSelfExecInTests(t *testing.T) {
+	if self, err := hiveBinary(); err == nil || !strings.Contains(err.Error(), "test binary") {
+		t.Fatalf("hiveBinary in a test = %q, %v; want a test binary refusal", self, err)
+	}
+}
+
 // TestProbeBothPaths runs the real probe through the built binary on each
 // path this host allows: the build's own namespaces and bubblewrap.
 func TestProbeBothPaths(t *testing.T) {

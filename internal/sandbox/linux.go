@@ -43,7 +43,7 @@ func (Linux) Isolated() bool { return true }
 func (Linux) Check() error { return Probe() }
 
 func (Linux) Start(s Spec) (Proc, error) {
-	self, err := os.Executable()
+	self, err := hiveBinary()
 	if err != nil {
 		return Proc{}, err
 	}
@@ -54,9 +54,21 @@ func (Linux) Start(s Spec) (Proc, error) {
 	return proc.StartDetached([]string{self, "sandbox-exec", "--spec", specPath}, os.Environ(), "/", "", "")
 }
 
+// hiveBinary is the running binary, which launches its own sandboxes. A Go
+// test binary can't: given `sandbox-exec` it would run its whole suite again,
+// and a suite that probes the sandbox forks itself without end. So a test
+// fails here, once, and asks the built hive binary instead.
+func hiveBinary() (string, error) {
+	self, err := os.Executable()
+	if err == nil && strings.HasSuffix(self, ".test") {
+		return "", fmt.Errorf("%s is a test binary and can't run sandbox-exec; run the built hive binary", filepath.Base(self))
+	}
+	return self, err
+}
+
 // Probe starts a minimal sandbox and checks isolation holds.
 func Probe() error {
-	self, err := os.Executable()
+	self, err := hiveBinary()
 	if err != nil {
 		return err
 	}
@@ -176,7 +188,7 @@ func Exec(specPath string) int {
 		Pdeathsig:                  syscall.SIGKILL,
 	}
 	if bw := bwrapPath(); bw != "" {
-		self, err := os.Executable()
+		self, err := hiveBinary()
 		if err != nil {
 			return fail(err)
 		}
@@ -560,7 +572,7 @@ func forward(ln net.Listener, sock string) {
 
 // Run runs s to completion; the exit code is the sandboxed command's.
 func (Linux) Run(s Spec, timeout time.Duration) (int, error) {
-	self, err := os.Executable()
+	self, err := hiveBinary()
 	if err != nil {
 		return -1, err
 	}

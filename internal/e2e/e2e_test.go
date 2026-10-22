@@ -95,10 +95,26 @@ func start(t *testing.T) *hive {
 	return h
 }
 
-// sandboxed says the platform sandbox (bubblewrap on Linux) works here.
+// sandboxed says the platform sandbox works here. On Linux it asks the built
+// binary, because an in-process probe would exec this test binary; the other
+// platforms' checks run system tools and are safe in-process.
 func sandboxed() bool {
+	if runtime.GOOS == "linux" {
+		return exec.Command(bin, "sandbox-probe").Run() == nil
+	}
 	_, err := sandbox.Select(sandbox.Options{Mode: "auto"})
 	return err == nil
+}
+
+// TestSandboxedAsksTheBinary: the live probes take the sandbox whenever the
+// built binary says it works.
+func TestSandboxedAsksTheBinary(t *testing.T) {
+	if runtime.GOOS != "linux" || exec.Command(bin, "sandbox-probe").Run() != nil {
+		t.Skip("no Linux sandbox here")
+	}
+	if !sandboxed() {
+		t.Fatal("sandboxed() is false where `hive sandbox-probe` passes")
+	}
 }
 
 // quiesce stops live agents and waits for their processes to end, so the
