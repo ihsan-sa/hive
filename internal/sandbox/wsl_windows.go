@@ -154,9 +154,10 @@ func decodeWSL(b []byte) string {
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 // Exec and Init only run on Linux.
-func Exec(string) int { fmt.Fprintln(os.Stderr, "sandbox-exec runs on Linux"); return 125 }
-func Init(string) int { return Exec("") }
-func Probe() error    { return errors.New("probe runs on Linux") }
+func Exec(string) int    { fmt.Fprintln(os.Stderr, "sandbox-exec runs on Linux"); return 125 }
+func Init(string) int    { return Exec("") }
+func Inner([]string) int { return Exec("") }
+func Probe() error       { return errors.New("probe runs on Linux") }
 
 // Run runs s to completion inside the distro's sandbox.
 func (w *WSL) Run(s Spec, timeout time.Duration) (int, error) {

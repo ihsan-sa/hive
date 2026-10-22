@@ -30,7 +30,13 @@ type Linux struct{}
 
 func platform(Options) Sandbox { return Linux{} }
 
-func (Linux) Name() string   { return "linux-namespaces" }
+func (Linux) Name() string {
+	if bwrapPath() != "" {
+		return "bubblewrap"
+	}
+	return "linux-namespaces"
+}
+
 func (Linux) Isolated() bool { return true }
 
 // Check runs a probe sandbox and requires it to succeed.
@@ -161,7 +167,6 @@ func Exec(specPath string) int {
 		out = f
 	}
 	cmd := exec.Command("/proc/self/exe", "sandbox-init", argPath)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errf
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS | syscall.CLONE_NEWPID |
 			syscall.CLONE_NEWNET | syscall.CLONE_NEWIPC | syscall.CLONE_NEWUTS,
@@ -170,8 +175,18 @@ func Exec(specPath string) int {
 		GidMappingsEnableSetgroups: false,
 		Pdeathsig:                  syscall.SIGKILL,
 	}
+	if bw := bwrapPath(); bw != "" {
+		self, err := os.Executable()
+		if err != nil {
+			return fail(err)
+		}
+		cmd = exec.Command(bw, bwrapArgs(args, self)...)
+		cmd.Env = s.Env
+		cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errf
 	if err := cmd.Start(); err != nil {
-		return fail(fmt.Errorf("start namespaces: %w (are unprivileged user namespaces allowed?)", err))
+		return fail(fmt.Errorf("start namespaces: %w (are unprivileged user namespaces allowed? on Ubuntu 23.10 and later install bubblewrap)", err))
 	}
 	stop := make(chan struct{})
 	go func() {

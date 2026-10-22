@@ -9,6 +9,9 @@
 ## 2026-10-22 In-house Linux sandbox instead of bwrap
 - Decision: namespaces built by the hive binary; egress through a host proxy that refuses local/private addresses | Why: no root, no packages (WSL Ubuntu had no bwrap, no sudo), and "no way to local services" needs filtering a plain shared netns can't give | Tradeoff: more code in `internal/sandbox`; macOS uses Seatbelt (untested).
 
+## 2026-10-22 bubblewrap where Ubuntu restricts user namespaces
+- Decision: when `kernel.apparmor_restrict_unprivileged_userns=1` (stock Ubuntu 23.10+), `sandbox-exec` hands the same mounts, tools and egress socket to `bwrap`, which runs `hive sandbox-inner` (loopback forwarder + command); WSL and other hosts keep the build's own namespaces | Why: the kernel refuses the hive binary's own user namespaces there, and bwrap's AppArmor profile is allowed them, so agents would otherwise fall back to bare runs | Tradeoff: two launch paths; `HIVE_SANDBOX_BWRAP=1` forces bwrap for tests.
+
 ## 2026-10-22 Commits leave checkouts as bundles made inside the sandbox
 - Decision: `git bundle` runs sandboxed; host fetches with fsck, verifies descent from the recorded base | Why: an agent controls its `.git` (gitfile redirects, hooks, fsmonitor); host git never runs there | Tradeoff: an extra sandboxed step per landing.
 

@@ -3,7 +3,8 @@
 // network outbound only, with no way to the machine's local services.
 //
 // Linux uses user/mount/pid/net namespaces built by the hive binary itself
-// (no root, no extra packages); Windows runs that inside WSL; macOS uses a
+// (no root, no extra packages), or bubblewrap where Ubuntu restricts
+// unprivileged user namespaces; Windows runs that inside WSL; macOS uses a
 // Seatbelt profile. Bare runs are a documented, opted-in state, never a
 // silent fallback.
 package sandbox

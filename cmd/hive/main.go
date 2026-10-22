@@ -68,6 +68,8 @@ func run(args []string) int {
 			return 2
 		}
 		return sandbox.Init(args[0])
+	case "sandbox-inner":
+		return sandbox.Inner(args)
 	case "sandbox-probe":
 		if err := sandbox.Probe(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
