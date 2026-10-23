@@ -18,7 +18,7 @@ func TestDeliverToParentWithNoParentFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer j.Close()
-	rs := NewRuns(ws, j, nil, func(string) ([]string, error) { return nil, nil }, func() []string { return nil })
+	rs := NewRuns(ws, j, nil, nil, func() []string { return nil })
 	rs.runs["other"] = &Run{RunSpec: RunSpec{ID: "other"}}
 	_, err = rs.ops.Deliver(Run{RunSpec: RunSpec{ID: "w1"}}, "parent", "hi")
 	if err == nil || !strings.Contains(err.Error(), "no parent") {

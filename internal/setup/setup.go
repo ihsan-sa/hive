@@ -5,6 +5,7 @@ package setup
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
@@ -72,6 +74,43 @@ func Login(all bool) error {
 	return nil
 }
 
+// AddLogin runs harness h's own login into a config folder of its own under
+// the workspace, which adds it to the logins runs are spread over. Deleting
+// the folder removes it. A new folder whose login failed or left no
+// credential is removed, so it never joins the pool.
+func AddLogin(ws core.Workspace, h, name string) error {
+	h = core.HarnessName(h)
+	env := core.LoginDirEnv[h]
+	hn, err := harness.Get(h)
+	if env == "" || err != nil {
+		return fmt.Errorf("%s has no separate logins", h)
+	}
+	if !filepath.IsLocal(name) || filepath.Base(name) != name || name == "." {
+		return fmt.Errorf("a login's name is one plain word, not %q", name)
+	}
+	dir := filepath.Join(ws.LoginsDir(h), name)
+	if err := os.MkdirAll(ws.LoginsDir(h), 0o700); err != nil {
+		return err
+	}
+	fresh := os.Mkdir(dir, 0o700) == nil
+	argv := hn.LoginCommand()
+	fmt.Printf("\nLogging in to %s as %q with its own login. Follow its link or code in your browser.\n", h, name)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = append(os.Environ(), env+"="+dir)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	err = cmd.Run()
+	if err == nil && !core.LoggedIn(core.Login{Harness: h, Name: name, Dir: dir}) {
+		err = errors.New("it left no credential")
+	}
+	if err != nil {
+		if fresh {
+			os.RemoveAll(dir)
+		}
+		return fmt.Errorf("%s login: %v", h, err)
+	}
+	return nil
+}
+
 // Prompt asks a question on the terminal.
 func Prompt(q, def string) string {
 	if def != "" {
@@ -108,6 +147,51 @@ func SandboxReport(ws core.Workspace, hiveLinux string) (string, error) {
 		hint = "Agents run under sandbox-exec, which ships with macOS."
 	}
 	return "", fmt.Errorf("%v\n%s", err, hint)
+}
+
+// CodexReport runs `codex --version` where agents run, when this Hive uses
+// Codex or the machine has it, so a Codex the sandbox can't run shows up
+// here rather than at the first turn. "" with no error: nothing to check.
+func CodexReport(ws core.Workspace, hiveLinux string) (string, error) {
+	cfg := ws.LoadConfig()
+	uses := core.HarnessName(cfg.Harness) == "codex" || len(core.NewTokens(ws).Logins("codex")) > 1
+	for _, s := range cfg.TribunalModels {
+		uses = uses || core.HarnessName(s.Harness) == "codex"
+	}
+	p, err := exec.LookPath("codex")
+	switch {
+	case err != nil && !uses:
+		return "", nil
+	case err != nil && runtime.GOOS != "windows": // on Windows Codex lives inside WSL
+		return "", errors.New("Codex is not installed. Install it system-wide, for example `sudo npm install -g @openai/codex` with the system's Node.")
+	}
+	mode := "auto"
+	if cfg.Sandbox == "bare" && cfg.BareAccepted != "" {
+		mode = "bare"
+	}
+	sb, err := sandbox.Select(sandbox.Options{Mode: mode, WSLDistro: cfg.WSLDistro, HiveLinux: hiveLinux})
+	if err != nil {
+		return "", nil // the sandbox line already says why
+	}
+	dir, err := os.MkdirTemp("", "hive-codex-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(dir)
+	work := sandbox.Mount{Host: dir, Inside: "/work", RW: true}
+	s := sandbox.Spec{
+		ID: "codex-check", Argv: []string{"codex", "--version"}, Env: sandbox.InsideEnv("/tmp", false),
+		Cwd: sandbox.InsidePath(sb, work), Mounts: []sandbox.Mount{work}, Tools: []string{"codex"},
+		Stdout: filepath.Join(dir, "out"), UID: os.Getuid(), GID: os.Getgid(),
+	}
+	if code, err := sb.Run(s, time.Minute); err == nil && code == 0 {
+		return "codex runs where agents run", nil
+	}
+	errOut, _ := os.ReadFile(s.Stdout + ".err")
+	if real, _ := filepath.EvalSymlinks(p); sb.Isolated() && strings.HasPrefix(real, core.HomeDir()+string(filepath.Separator)) {
+		return "", fmt.Errorf("Codex is installed under your home folder (%s, from nvm or an npm prefix there), which the sandbox doesn't show agents. Install it system-wide, for example `sudo npm install -g @openai/codex` with the system's Node.", real)
+	}
+	return "", fmt.Errorf("Codex doesn't run inside the sandbox: %s", strings.TrimSpace(core.Clip(string(errOut), 300)))
 }
 
 // AcceptBare records that the person read the warning and opted into bare runs.

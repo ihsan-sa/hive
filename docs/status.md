@@ -31,6 +31,6 @@ Not verified:
 Next:
 1. Owner decisions: publish the repo + first release (makes install lines work); live smoke run with real Claude (plan usage; bare vs sandboxed).
 2. Run `go test ./internal/sandbox/ -run TestProbeBothPaths -v` on a stock Ubuntu host, and `HIVE_E2E_HARNESS=claude go test ./internal/e2e/ -run 'TestLiveWarden|TestLiveTribunal' -v -timeout 90m` for a real warden and panel (plan usage).
-3. Codex adapter.
+3. A live Codex run with a real Codex login: a worker turn, a resume and a read-only reviewer seat, sandboxed.
 
 Resume: read CLAUDE.md, then this file; run `go test -short ./...` and `go test ./internal/e2e/`.
