@@ -3,6 +3,7 @@ package risk
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,7 +176,7 @@ func TestWardenDoRunsExactlyItsScript(t *testing.T) {
 		t.Fatal("a second decision was taken")
 	}
 	got := g.settle(req.ID, "approved", "running")
-	if got.State != "done" || !core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) || strings.Contains(got.Output, "secret-token") {
+	if got.State != "done" || !core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) || strings.Contains(got.Output, "secret-token") {
 		t.Fatalf("step didn't run: %+v", got)
 	}
 	if !g.told("done") {
@@ -200,15 +201,79 @@ func TestWardenSaferAndDecline(t *testing.T) {
 	}
 }
 
+// A warden that ends, goes quiet or runs out of time hands the request to
+// the person, who sees what was asked and does it or declines.
 func TestWardenEndsWithoutDeciding(t *testing.T) {
-	for _, status := range []string{core.StatusDone, core.StatusQuiet} {
+	for _, status := range []string{core.StatusDone, core.StatusQuiet, "late"} {
 		g := newRig(t, 2)
 		req := g.request("install a tool", "x", "T2")
-		g.c.Runs.SetStatus(req.Warden, status, "")
-		g.m.Tick()
-		if got, _ := g.m.get(req.ID); got.State != "failed" {
-			t.Fatalf("%s warden: got %s", status, got.State)
+		if status == "late" {
+			defer func(d time.Duration) { WardenTimeout = d }(WardenTimeout)
+			WardenTimeout = 0
+		} else {
+			g.c.Runs.SetStatus(req.Warden, status, "")
 		}
+		g.m.Tick()
+		got, _ := g.m.get(req.ID)
+		a, _ := g.c.Person.Get(got.Ask)
+		if got.State != "asked" || strings.Join(a.Options, "|") != "done|declined" || !strings.Contains(a.Detail, "the brief needs it") {
+			t.Fatalf("%s warden: %+v %+v", status, got, a)
+		}
+		if w := g.run(req.Warden); status == "late" && !w.Terminal() {
+			t.Fatal("the late warden still runs")
+		}
+	}
+}
+
+// A warden may pass a step to the person with its script: run runs exactly
+// that, decline tells the worker no and runs nothing.
+func TestWardenPassesToThePerson(t *testing.T) {
+	for _, answer := range []string{"run", "declined"} {
+		g := newRig(t, 2)
+		req := g.request("install a system package", "apt-get install -y x", "T2")
+		if err := g.decide(req, map[string]string{"decision": "person", "reason": "needs root", "script": "echo ran > proof"}); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := g.m.get(req.ID)
+		a, _ := g.c.Person.Get(got.Ask)
+		if got.State != "asked" || a.Answer != "" || strings.Join(a.Options, "|") != "run|declined" ||
+			!strings.Contains(a.Detail, "install a system package") || !strings.Contains(a.Detail, "needs root") || !strings.Contains(a.Detail, "echo ran > proof") {
+			t.Fatalf("not in front of the person: %+v %+v", got, a)
+		}
+		out, _ := g.call(g.worker, "requests", nil)
+		if b, _ := json.Marshal(out); !strings.Contains(string(b), "approve "+a.ID) {
+			t.Fatalf("the lead can't see it: %s", b)
+		}
+		g.c.Person.Answer(a.ID, answer, "")
+		got = g.settle(req.ID, "asked", "approved", "running")
+		ran := core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof"))
+		if answer == "run" && (got.State != "done" || !ran || !g.told("done")) || answer == "declined" && (got.State != "declined" || ran || !g.told("declined")) {
+			t.Fatalf("%s: %+v ran=%v", answer, got, ran)
+		}
+	}
+}
+
+// A sudo step where sudo can't run is refused when the warden says do, with
+// the reason. One a panel approves goes to the person to run themselves, and
+// nothing runs.
+func TestSudoWithPasswordGoesToThePerson(t *testing.T) {
+	defer func(f func() bool) { sudoOK = f }(sudoOK)
+	sudoOK = func() bool { return false }
+	g := newRig(t, 3)
+	req := g.request("install a system package", "apt-get install -y x", "T2")
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "sudo apt-get install -y x"}); err == nil || !strings.Contains(err.Error(), "sudo can't run here") {
+		t.Fatalf("do with sudo wasn't refused: %v", err)
+	}
+	g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "script": "sudo apt-get install -y x"})
+	req, _ = g.m.get(req.ID)
+	g.vote(req, "approve", "approve", "approve")
+	g.m.Tick()
+	req, _ = g.m.get(req.ID)
+	g.vote(req, "approve", "approve", "approve")
+	got := g.settle(req.ID, "tribunal", "approved", "running")
+	a, _ := g.c.Person.Get(got.Ask)
+	if got.State != "asked" || got.Output != "" || !strings.HasPrefix(a.Title, "Needs your password") || strings.Join(a.Options, "|") != "done|declined" {
+		t.Fatalf("%+v %+v", got, a)
 	}
 }
 
@@ -254,7 +319,7 @@ func TestSplitPanelDeclinesAndBriefsThePerson(t *testing.T) {
 	req, _ = g.m.get(req.ID)
 	g.vote(req, "approve", "decline", "decline")
 	got := g.settle(req.ID, "tribunal")
-	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("a split panel ran it or didn't ask: %+v", got)
 	}
 	g.c.Person.Answer(got.Ask, "run", "")
@@ -340,7 +405,7 @@ func TestSwappedScriptIsRefused(t *testing.T) {
 	g.m.save(&req)
 	g.m.execute(req.ID)
 	got, _ := g.m.get(req.ID)
-	if got.State != "failed" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+	if got.State != "failed" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("a swapped script ran: %+v", got)
 	}
 }
@@ -352,7 +417,7 @@ func TestCeilingRefusesAfterAnAllow(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := g.settle(req.ID, "approved")
-	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("the ceiling let a money step run: %+v", got)
 	}
 	g.c.Person.Answer(got.Ask, "declined", "")
@@ -421,7 +486,7 @@ func TestTribunalMajorityStillAsksForMoney(t *testing.T) {
 	req, _ = g.m.get(req.ID)
 	g.vote(req, "approve", "approve", "approve")
 	got := g.settle(req.ID, "tribunal", "approved")
-	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("a panel's yes ran a money step: %+v", got)
 	}
 	for _, a := range g.c.Person.Open() {
@@ -479,6 +544,65 @@ func TestTribunalThatCannotStartFails(t *testing.T) {
 	}
 	if got, _ := g.m.get(req.ID); got.State != "failed" || !g.told("no tribunal") {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// Five agents in one project needing the same step make one request with one
+// warden, and each hears its one verdict; asked again within the hour, the
+// step gets that verdict back with no new warden.
+func TestSameNeedOneVerdict(t *testing.T) {
+	g := newRig(t, 3)
+	runs := []core.Run{g.worker}
+	for i := 0; i < 4; i++ {
+		r, err := g.c.Runs.Start(core.RunSpec{Role: "worker", Harness: "fake", Checkout: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runs = append(runs, r)
+	}
+	for i, r := range runs {
+		want := "Install python3 on the host"
+		if i%2 == 1 {
+			want = "  install PYTHON3 on the   host "
+		}
+		if _, err := g.call(r, "warden", map[string]string{"want": want, "why": "tests need it", "steps": "apt-get install -y python3", "tier": "T2"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reqs := g.m.List()
+	if len(reqs) != 1 || len(reqs[0].Joined) != 4 {
+		t.Fatalf("want one request joined by four, got %+v", reqs)
+	}
+	if err := g.decide(reqs[0], map[string]string{"decision": "decline", "reason": "not needed"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range runs {
+		if !eventually(func() bool {
+			p := g.run(r.ID).Pending
+			return len(p) > 0 && strings.Contains(p[len(p)-1], "not needed")
+		}) {
+			t.Fatalf("%s never heard the verdict", r.ID)
+		}
+	}
+	out, err := g.call(runs[2], "warden", map[string]string{"want": "install python3 on the host", "why": "again", "tier": "T2"})
+	if err != nil || len(g.m.List()) != 1 || !strings.Contains(fmt.Sprint(out), "not needed") {
+		t.Fatalf("asked again: %v %v, %d requests", out, err, len(g.m.List()))
+	}
+}
+
+// The warden's brief says sandboxes share the host's system directories and
+// whether sudo can run, so it doesn't decline on a sandbox image that doesn't
+// exist or approve a script that can't run.
+func TestWardenBriefCarriesSandboxFacts(t *testing.T) {
+	defer func(f func() bool) { sudoOK = f }(sudoOK)
+	sudoOK = func() bool { return false }
+	g := newRig(t, 3)
+	req := g.request("install python3", "apt-get install -y python3", "T2")
+	brief := g.run(req.Warden).Brief
+	for _, fact := range []string{"/usr, /bin, /lib, /etc", "no separate sandbox image", "sudo can't run here"} {
+		if !strings.Contains(brief, fact) {
+			t.Errorf("brief lacks %q:\n%s", fact, brief)
+		}
 	}
 }
 
@@ -615,7 +739,7 @@ func TestFloorRaisesToThePerson(t *testing.T) {
 	if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "echo x > proof && cp new.pem old.pem"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := g.settle(req.ID, "approved"); got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+	if got := g.settle(req.ID, "approved"); got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("the floor let a warden's step run: %+v", got)
 	}
 }
@@ -655,6 +779,123 @@ func TestVoteMustBeClean(t *testing.T) {
 		if got, _ := voteOf(core.Run{Status: core.StatusDone, Structured: json.RawMessage(raw)}); got != want {
 			t.Errorf("voteOf(%s) = %s, want %s", raw, got, want)
 		}
+	}
+}
+
+func (g *rig) worker2() core.Run {
+	r, err := g.c.Runs.Start(core.RunSpec{Role: "worker", Harness: "fake", Checkout: g.t.TempDir()})
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	return r
+}
+
+// A run that joins while the step's script runs hears how it went.
+func TestJoinMidStepHearsTheResult(t *testing.T) {
+	g := newRig(t, 2)
+	gate := filepath.Join(t.TempDir(), "gate")
+	req := g.request("install a tool", "x", "T2")
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "while [ ! -e " + gate + " ]; do sleep 0.05; done"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.settle(req.ID, "approved"); got.State != "running" {
+		t.Fatalf("not running: %+v", got)
+	}
+	late := g.worker2()
+	if _, err := g.call(late, "warden", map[string]string{"want": "install a tool", "why": "me too", "tier": "T2"}); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(gate, nil, 0o644)
+	if !eventually(func() bool {
+		p := g.run(late.ID).Pending
+		return len(p) > 0 && strings.Contains(p[len(p)-1], "done")
+	}) {
+		t.Fatal("the run that joined mid-step never heard the result")
+	}
+	if s, ok := g.m.Steps(late.ID); !ok || s != "- done: install a tool" {
+		t.Fatalf("steps: %q %v", s, ok)
+	}
+}
+
+// One who asks after a verdict counts it among its steps without freshening
+// it; a failure answers nobody else, so asking again starts a new request.
+func TestLateAskerAndFailures(t *testing.T) {
+	g := newRig(t, 2)
+	req := g.request("install a tool", "x", "T2")
+	if err := g.decide(req, map[string]string{"decision": "decline", "reason": "no"}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := g.m.get(req.ID)
+	late := g.worker2()
+	if _, err := g.call(late, "warden", map[string]string{"want": "install a tool", "why": "me too", "tier": "T2"}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := g.m.get(req.ID)
+	if s, _ := g.m.Steps(late.ID); s != "- declined: install a tool" || !after.Updated.Equal(before.Updated) {
+		t.Fatalf("late asker: %q, updated %v -> %v", s, before.Updated, after.Updated)
+	}
+	req = g.request("run a flaky thing", "x", "T2")
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "exit 1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.settle(req.ID, "approved", "running"); got.State != "failed" {
+		t.Fatalf("not failed: %+v", got)
+	}
+	if again := g.request("run a flaky thing", "x", "T2"); again.ID == req.ID || again.State != "weighing" {
+		t.Fatalf("a failure answered the retry: %+v", again)
+	}
+}
+
+// Joining doesn't stretch the warden's time, and a warden whose run is gone
+// still times out.
+func TestWardenTimeoutHolds(t *testing.T) {
+	g := newRig(t, 2)
+	req := g.request("install a tool", "x", "T2")
+	if _, err := g.call(g.worker2(), "warden", map[string]string{"want": "install a tool", "why": "me too", "tier": "T2"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := g.m.get(req.ID); !got.Updated.Equal(req.Updated) {
+		t.Fatalf("a join moved the warden's clock: %v -> %v", req.Updated, got.Updated)
+	}
+	defer func(d time.Duration) { WardenTimeout = d }(WardenTimeout)
+	WardenTimeout = 0
+	gone := Request{ID: core.NewID(), Kind: "request", Origin: g.worker.ID, Want: "w", State: "weighing", Warden: "no-such-run", Created: time.Now().UTC()}
+	g.m.save(&gone)
+	g.m.Tick()
+	if got, _ := g.m.get(gone.ID); got.State != "asked" {
+		t.Fatalf("a warden with no run never timed out: %+v", got)
+	}
+}
+
+// An isolated project's lead asking to install a module files the ask under
+// its project, so other projects' agents don't see its title.
+func TestModuleInstallAskCarriesTheProject(t *testing.T) {
+	g := newRig(t, 2)
+	g.c.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	lead, err := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Project: "secret", Isolated: true, Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.call(lead, "install_module", map[string]string{"url": t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	filed := 0
+	for _, a := range g.c.Person.Open() {
+		if a.Kind == "module" {
+			filed++
+			if a.Project != "secret" {
+				t.Errorf("the install ask is filed under %q", a.Project)
+			}
+		}
+	}
+	for _, q := range g.m.List() {
+		filed++
+		if q.Project != "secret" {
+			t.Errorf("the install request is filed under %q", q.Project)
+		}
+	}
+	if filed == 0 {
+		t.Error("the install was neither asked nor weighed")
 	}
 }
 
@@ -704,5 +945,26 @@ func TestPersonAnswersASettledAsk(t *testing.T) {
 				t.Fatalf("%s, %s: the finished worker was sent %q", route, answer, p)
 			}
 		}
+	}
+}
+
+// An isolated project's code never becomes a module every project reads, and
+// no lead installs from a project out of its reach.
+func TestModuleInstallRefusesAnIsolatedProject(t *testing.T) {
+	g := newRig(t, 2)
+	g.c.Projects.Add(core.Project{Name: "open", Repo: "me/open"})
+	g.c.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	os.MkdirAll(g.c.WS.Project("secret"), 0o755)
+	for _, from := range []string{"secret", "open"} {
+		lead, err := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Project: from, Isolated: from == "secret", Checkout: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := g.call(lead, "install_module", map[string]string{"project": "secret"}); err == nil {
+			t.Errorf("a %s lead installed the isolated project as a module", from)
+		}
+	}
+	if len(g.c.Person.Open()) != 0 || len(g.m.List()) != 0 {
+		t.Error("a refused install was still asked or weighed")
 	}
 }

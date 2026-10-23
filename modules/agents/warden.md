@@ -8,10 +8,11 @@ Its tier: T2 is outside but recoverable, or load-bearing inside; T3 is outside a
 
 Settle it with one call, then finish:
 
-- `hive agent decide --decision do --reason "..." --script "..."`: the script runs, not the agent's steps, with `sh` on the host in a fresh empty directory. Use the host paths your brief gives, and do exactly the step.
+- `hive agent decide --decision do --reason "..." --script "..."`: the script runs, not the agent's steps, with `sh` on the host in a fresh empty directory. Use the host paths your brief gives, and do exactly the step. The Hive pins your script's text, not what it calls: a file it runs or sources from a place an agent can write (a checkout, a scratch directory, a download) can change after you weigh it. Put those lines in the script itself, or pin what it fetches by checksum.
 - `hive agent decide --decision safer --reason "..."`: a safer route the agent can take itself; your reason goes back to it.
 - `hive agent decide --decision decline --reason "..."`.
 - `hive agent decide --decision tribunal --reason "<brief>" --script "..."`: when you can't settle it alone. A panel of three votes on a script that does exactly the step and nothing else, explained by your brief; a majority runs it unchanged. Add `--gain large` if the gain is large, so a decline still reaches the person.
+- `hive agent decide --decision person --reason "..." [--script "..."]`: the step is the person's, such as an install needing root where your brief says sudo can't run; run runs exactly your script. Ending, going quiet or running out of time without deciding also sends it to them.
 
 A request that stands for the person's own decision (a merge changing goals, score or settings, or a module install) runs no script: your do merges or installs. Weigh it against the project's goals; a change that loosens the tests or moves the score in favour of the work that wrote it is a decline.
 

@@ -33,6 +33,8 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive improve             run an improvement sweep now
   hive kb [words]          search the knowledge base: notes and everything the Hive did [--limit n|all]
   hive answer <id> <opt>   answer something waiting on you
+  hive approve <id> [note] say yes to it (its first option)
+  hive refuse <id> [note]  say no to it (its last option)
   hive login               log in to Claude Code and GitHub with their own logins
   hive login add <name>    add another Claude login to spread runs over; add "codex" for Codex
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
@@ -128,6 +130,28 @@ func run(args []string) int {
 		return withClient(func(c *api.Client) error {
 			note := strings.Join(args[2:], " ")
 			return c.Do("POST", "/api/answer", map[string]string{"id": args[0], "answer": args[1], "note": note}, nil)
+		})
+	case "approve", "refuse":
+		if len(args) < 1 {
+			fmt.Fprintf(os.Stderr, "usage: hive %s <id> [note]\n", cmd)
+			return 2
+		}
+		return withClient(func(c *api.Client) error {
+			st, err := c.State()
+			if err != nil {
+				return err
+			}
+			for _, a := range st.Asks {
+				if a.ID == args[0] {
+					opt := a.Options[0]
+					if cmd == "refuse" {
+						opt = a.Options[len(a.Options)-1]
+					}
+					fmt.Println(cmd+"d:", a.Title, "->", opt)
+					return c.Do("POST", "/api/answer", map[string]string{"id": a.ID, "answer": opt, "note": strings.Join(args[1:], " ")}, nil)
+				}
+			}
+			return fmt.Errorf("nothing waiting on you has id %s (%s status lists them)", args[0], core.Cmd)
 		})
 	case "login":
 		if len(args) > 0 && args[0] == "add" {

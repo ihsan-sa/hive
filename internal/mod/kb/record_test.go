@@ -124,3 +124,34 @@ func TestSearch(t *testing.T) {
 		}
 	}
 }
+
+// The search op runs on the host, so it skips what the asking run's sandbox
+// covers: another isolated project's notes and, while one is isolated, the
+// record; the isolated project's own run still finds its notes.
+func TestSearchOpSkipsWhatIsolationCovers(t *testing.T) {
+	c, _ := open(t, t.TempDir())
+	for _, p := range []core.Project{{Name: "open", Repo: "me/open"}, {Name: "secret", Repo: "me/secret", Isolated: true}} {
+		if _, err := c.Projects.Add(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kb := c.WS.KB()
+	os.MkdirAll(filepath.Join(kb, "isolated", "secret"), 0o755)
+	os.WriteFile(filepath.Join(kb, "isolated", "secret", "plan.md"), []byte("zebra plan"), 0o644)
+	os.MkdirAll(filepath.Join(kb, "record", "task"), 0o755)
+	os.WriteFile(filepath.Join(kb, "record", "task", "t1.md"), []byte("# task t1\n\n### 2026-10-01 09:00 · task.saved · seq 1\n- title: zebra task\n"), 0o644)
+	os.WriteFile(filepath.Join(kb, "shared.md"), []byte("zebra shared"), 0o644)
+	search := func(project string) string {
+		out, err := c.Runs.Ops().Call(core.Run{RunSpec: core.RunSpec{ID: "r", Project: project}}, "search", []byte(`{"query":"zebra","limit":"all"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.(string)
+	}
+	if got := search("open"); strings.Contains(got, "isolated/") || strings.Contains(got, "record/") || !strings.Contains(got, "shared.md") {
+		t.Errorf("a normal run's search: %s", got)
+	}
+	if got := search("secret"); !strings.Contains(got, "isolated/secret/plan.md") {
+		t.Errorf("the isolated project's own search lost its notes: %s", got)
+	}
+}

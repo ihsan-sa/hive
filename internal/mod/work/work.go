@@ -236,9 +236,14 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 	if b.Project == "" {
 		names := []string{}
 		for _, p := range m.C.Projects.List() {
-			names = append(names, p.Name)
+			if m.C.Runs.Walled(r, p.Name) == nil {
+				names = append(names, p.Name)
+			}
 		}
 		return nil, fmt.Errorf("say which project with --project (one of: %s) and tell the person why; a new module gets a project of its own first (create_project), then install_module --project", strings.Join(names, ", "))
+	}
+	if err := m.C.Runs.Walled(r, b.Project); err != nil {
+		return nil, err
 	}
 	b.Chat, b.Thread = m.thread(r)
 	t, err := m.File(b)

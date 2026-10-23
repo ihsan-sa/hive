@@ -267,6 +267,9 @@ func (o *Ops) registerCore() {
 		if m.Project == "" {
 			m.Project = r.Project
 		}
+		if err := o.rs.Walled(r, m.Project); err != nil {
+			return nil, err
+		}
 		if o.spawner == nil {
 			return nil, errors.New("no spawner installed")
 		}
@@ -286,7 +289,7 @@ func (o *Ops) registerCore() {
 	}})
 	o.Register(Op{Name: "agents", Help: `{} -> live agents you can message`, Fn: func(r Run, _ json.RawMessage) (any, error) {
 		var out []map[string]string
-		for _, x := range o.rs.List(func(x *Run) bool { return !x.Terminal() }) {
+		for _, x := range o.rs.List(func(x *Run) bool { return !x.Terminal() && o.rs.Walled(r, x.Project) == nil }) {
 			out = append(out, map[string]string{"id": x.ID, "name": x.Name, "role": x.Role, "project": x.Project, "status": x.Status, "progress": x.Progress})
 		}
 		return out, nil
@@ -311,7 +314,7 @@ func (o *Ops) Deliver(from Run, to, text string) (any, error) {
 		}
 	}
 	target, ok := o.rs.Find(to)
-	if !ok {
+	if !ok || o.rs.Walled(from, target.Project) != nil {
 		return nil, fmt.Errorf("no agent %q (try op agents)", to)
 	}
 	label := from.Name

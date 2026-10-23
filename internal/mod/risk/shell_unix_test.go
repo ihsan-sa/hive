@@ -24,7 +24,7 @@ func TestTimeoutEndsTheWholeStep(t *testing.T) {
 	if got := g.settle(req.ID, "approved", "running"); got.State != "failed" {
 		t.Fatalf("got %+v", got)
 	}
-	b, _ := os.ReadFile(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "pid"))
+	b, _ := os.ReadFile(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "pid"))
 	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
 	if err != nil {
 		t.Fatal(err)

@@ -41,3 +41,10 @@ func StartTime(pid int) time.Time {
 	ticks, _ := strconv.ParseInt(f[19], 10, 64) // field 22 overall
 	return bootTime.Add(time.Duration(ticks) * time.Second / 100)
 }
+
+// zombie reports a process that has exited but not been reaped.
+func zombie(pid int) bool {
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	i := strings.LastIndexByte(string(raw), ')')
+	return err == nil && i >= 0 && strings.HasPrefix(string(raw[i+1:]), " Z")
+}

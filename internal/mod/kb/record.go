@@ -169,8 +169,8 @@ type Hit struct {
 
 // Search returns the pieces of the knowledge base under dir (notes whole,
 // record files entry by entry) that match the most words of query, newest
-// first among equals.
-func Search(dir, query string) []Hit {
+// first among equals, skipping the folders in hide (relative to dir).
+func Search(dir, query string, hide ...string) []Hit {
 	var terms []string
 	for _, w := range strings.Fields(strings.ToLower(query)) {
 		if len(w) > 1 {
@@ -182,13 +182,13 @@ func Search(dir, query string) []Hit {
 		if err != nil {
 			return nil // an unreadable folder has nothing to give; go on with the rest
 		}
-		if d.IsDir() && d.Name() == ".git" {
+		rel, _ := filepath.Rel(dir, path)
+		if d.IsDir() && (d.Name() == ".git" || slices.Contains(hide, filepath.ToSlash(rel))) {
 			return filepath.SkipDir
 		}
 		if d.IsDir() || !strings.HasSuffix(path, ".md") {
 			return nil
 		}
-		rel, _ := filepath.Rel(dir, path)
 		raw, _ := os.ReadFile(path)
 		whole := strings.ToLower(rel + " " + string(raw))
 		pieces := []string{string(raw)}
@@ -234,9 +234,9 @@ func Search(dir, query string) []Hit {
 
 // Find searches the knowledge base under dir and renders the best limit hits
 // ("all", or a number; 20 when empty) for an agent or a person to read,
-// saying how many more matched.
-func Find(dir, query, limit string) string {
-	hits := Search(dir, query)
+// saying how many more matched; hide is as for Search.
+func Find(dir, query, limit string, hide ...string) string {
+	hits := Search(dir, query, hide...)
 	if len(hits) == 0 {
 		return "nothing in the knowledge base matches; the record doesn't cover it"
 	}

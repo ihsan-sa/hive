@@ -237,3 +237,4 @@ figure { margin: 8px 0 !important; }
   a { transition: text-decoration-color 120ms ease; }
   .theme-switch::after { transition: transform 160ms ease; }
 }
+figcaption { margin-top: 8px; font-size: 15px; line-height: 1.5; color: var(--label); }

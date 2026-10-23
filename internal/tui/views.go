@@ -147,6 +147,9 @@ func (m *model) dashRows() []row {
 		for _, r := range m.st.Requests {
 			out := r.Outcome
 			if out == "" {
+				out = r.State // a warden or panel may still be weighing it
+			}
+			if out == "asked" {
 				out = "waiting on you"
 			}
 			add(row{key: "req:" + r.ID, depth: 1, text: fmt.Sprintf("%s  %s  %s", r.Created.Local().Format("Mon 15:04"), core.Clip(r.Want, 60), stDim.Render(out))})

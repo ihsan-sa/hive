@@ -149,6 +149,7 @@ type Runs struct {
 	tokens  TokenSource
 	tools   func() []string // host programs to expose (hive binary for the sandbox's OS)
 	ops     *Ops
+	projs   *Projects // for which projects' records to hide; nil hides none
 	// ModelFor is the model a persistent run's next turn takes, so a lead
 	// follows a changed setting; empty keeps the run's own.
 	ModelFor func(Run) string
@@ -991,6 +992,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 			mounts = append(mounts, sandbox.Mount{Host: d, Inside: "/hive/state/" + filepath.Base(d), Hide: true})
 		}
 	}
+	mounts = append(mounts, rs.hideIsolated(r)...)
 	if r.Isolated && sb.Isolated() {
 		// Only granted modules are visible: mount each over an empty modules dir,
 		// which holds their mount points, since bwrap can't make them inside a
@@ -1059,6 +1061,83 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		Stdin: promptFile, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
 		Network: true, Allow: allow, UID: os.Getuid(), GID: os.Getgid(),
 	}, nil
+}
+
+// Walled refuses r reaching project when either side is an isolated project:
+// an isolated project is reached only from its own runs, and its runs reach
+// no other project. Both come from the core's record of r, never from r.
+func (rs *Runs) Walled(r Run, project string) error {
+	if project == r.Project || rs.projs == nil {
+		return nil
+	}
+	for _, name := range []string{project, r.Project} {
+		if p, ok := rs.projs.Get(name); ok && p.Isolated {
+			return fmt.Errorf("project %q is out of reach of %s's agents", project, r.Project)
+		}
+	}
+	return nil
+}
+
+// hideIsolated covers what isolated projects other than r's own leave in the
+// shared Hive, so r reads none of their code, runs, chats, notes, checks or
+// scores. An isolated run sees only the knowledge base of what is shared, so
+// it gets just the notes covered. The journal holds every project's events in
+// one file, so it is covered whole while any project is isolated. The folders
+// are made first so what lands in them mid-turn is covered too; a run or chat
+// started mid-turn is not, until that agent's next turn.
+func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
+	if rs.projs == nil {
+		return nil
+	}
+	iso := map[string]bool{}
+	var out []sandbox.Mount
+	var rel []string
+	for _, p := range rs.projs.List() {
+		if !p.Isolated || p.Name == r.Project {
+			continue
+		}
+		iso[p.Name] = true
+		kb := filepath.Join(rs.ws.KB(), "isolated", p.Name)
+		rs.ws.IsolatedKB(p.Name) // never made through a link
+		out = append(out, sandbox.Mount{Host: kb, Inside: "/hive/kb/isolated/" + p.Name, Hide: true})
+		if r.Isolated {
+			continue
+		}
+		if Exists(rs.ws.Project(p.Name)) { // no clone yet: nothing to hide, and no mount point
+			out = append(out, sandbox.Mount{Host: rs.ws.Project(p.Name), Inside: "/hive/projects/" + p.Name, Hide: true})
+		}
+		for _, d := range []string{"checks", "gates", "risk"} {
+			os.MkdirAll(filepath.Join(rs.ws.Hive(), d, p.Name), 0o755)
+			rel = append(rel, d+"/"+p.Name)
+		}
+		rel = append(rel, "kb/isolated/"+p.Name, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl")
+	}
+	if len(iso) > 0 { // the kb's record is filed from the journal, so it is covered whole too
+		rec := filepath.Join(rs.ws.KB(), "record")
+		os.MkdirAll(rec, 0o755)
+		out = append(out, sandbox.Mount{Host: rec, Inside: "/hive/kb/record", Hide: true})
+		if !r.Isolated {
+			rel = append(rel, "kb/record")
+		}
+	}
+	if len(iso) == 0 || r.Isolated {
+		return out
+	}
+	rel = append(rel, "events.jsonl")
+	rs.mu.Lock()
+	for id, x := range rs.runs {
+		if iso[x.Project] {
+			rel = append(rel, "runs/"+id, "chats/agent_"+id+".jsonl", "scratch/"+id)
+		}
+	}
+	rs.mu.Unlock()
+	for _, f := range rel {
+		host := filepath.Join(rs.ws.Hive(), filepath.FromSlash(f))
+		if Exists(host) {
+			out = append(out, sandbox.Mount{Host: host, Inside: "/hive/state/" + f, Hide: true})
+		}
+	}
+	return out
 }
 
 // freshCodexHome makes the turn's CODEX_HOME: a new folder on the host side
