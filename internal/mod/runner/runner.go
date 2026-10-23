@@ -319,15 +319,25 @@ func (r *Runner) Allowed(token, path string) (string, bool, bool) {
 	return "", false, false
 }
 
-// Retry lets a module whose reviews ended without a vote be read again.
-func (r *Runner) Retry(name string) {
+// Retry lets a module whose reviews ended without a vote be read again. name
+// is the manifest's name or the folder's; tries are keyed by the folder. It
+// clears every commit's count, though only the current commit's is checked.
+func (r *Runner) Retry(name string) error {
+	m, ok := r.Mods.Get(name)
+	if !ok {
+		return core.ErrNotFound
+	}
+	prefix := "mr-" + filepath.Base(m.Dir) + "-"
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for k := range r.tries {
-		if strings.HasPrefix(k, "mr-"+name+"-") {
+		// What follows the prefix is the commit, which has no dash, so "echo"
+		// leaves "echo-door"'s count alone.
+		if rest, ok := strings.CutPrefix(k, prefix); ok && !strings.Contains(rest, "-") {
 			delete(r.tries, k)
 		}
 	}
+	return nil
 }
 
 // Status says what a module's program is doing, or why it is not running.

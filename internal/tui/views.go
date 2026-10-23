@@ -486,6 +486,7 @@ func (m *model) viewDetail(d *detail) []string {
 		lines = append(lines, indent(wrap(mod.Description, w-2), "  ")...)
 		lines = append(lines, "", stTitle.Render("projects that may use it"))
 		all := contains(mod.Projects, "*")
+		top := len(lines)
 		for i, p := range m.projectNames() {
 			mark := "[ ]"
 			if all || contains(mod.Projects, p) {
@@ -501,7 +502,7 @@ func (m *model) viewDetail(d *detail) []string {
 			lines = append(lines, line)
 		}
 		lines = append(lines, "", stDim.Render("space grant or remove · r read its code again"))
-		return lines
+		return window(lines, top+d.sel, m.bodyHeight())
 	default:
 		lines = append(lines, wrap(d.text, w)...)
 	}

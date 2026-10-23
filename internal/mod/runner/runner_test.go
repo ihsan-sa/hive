@@ -14,6 +14,11 @@ import (
 // newRunner is a workspace with one module, name, cloned from git with no
 // source record, and a runner that never ticks.
 func newRunner(t *testing.T, name string) (*Runner, modules.Module, string) {
+	return newRunnerIn(t, name, name)
+}
+
+// newRunnerIn is newRunner with the module in folder dir.
+func newRunnerIn(t *testing.T, dir, name string) (*Runner, modules.Module, string) {
 	ws := core.Workspace{Root: t.TempDir()}
 	if err := ws.Init(); err != nil {
 		t.Fatal(err)
@@ -30,7 +35,7 @@ func newRunner(t *testing.T, name string) (*Runner, modules.Module, string) {
 	if err := mods.InstallDefaults(); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(ws.Modules(), name)
+	dir = filepath.Join(ws.Modules(), dir)
 	os.MkdirAll(dir, 0o755)
 	os.WriteFile(filepath.Join(dir, "module.json"), []byte(`{"name":"`+name+`","exec":["./run"],"hooks":["source"]}`), 0o644)
 	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"commit", "-q", "-m", "v1"}} {
@@ -118,6 +123,35 @@ func TestRetryReadsItAgain(t *testing.T) {
 	}
 	if _, ok := r.C.Runs.Get(base + "-4"); !ok {
 		t.Fatalf("no fourth review run after Retry")
+	}
+}
+
+// The control center sends the manifest's name, which may differ from the
+// folder the tries are keyed by; a retry still reads it again, and leaves a
+// module whose folder only starts with the same name alone.
+func TestRetryByManifestName(t *testing.T) {
+	r, m, commit := newRunnerIn(t, "held-dir", "held")
+	base := "mr-held-dir-" + commit[:12]
+	for _, id := range []string{base, base + "-2", base + "-3"} {
+		r.check("held-dir", m)
+		r.C.Runs.Stop(id, "crashed")
+	}
+	neighbour := "mr-held-dir-door-" + commit[:12]
+	r.tries[neighbour] = 3
+	if err := r.Retry("held"); err != nil {
+		t.Fatal(err)
+	}
+	if why := r.check("held-dir", m); why != "waiting for its code review" {
+		t.Fatalf("after Retry by manifest name: %q", why)
+	}
+	if _, ok := r.C.Runs.Get(base + "-4"); !ok {
+		t.Fatalf("no fourth review run after Retry")
+	}
+	if r.tries[neighbour] != 3 {
+		t.Fatalf("Retry reset another module's tries")
+	}
+	if err := r.Retry("nobody"); err != core.ErrNotFound {
+		t.Fatalf("Retry of an unknown module: %v, want not found", err)
 	}
 }
 
