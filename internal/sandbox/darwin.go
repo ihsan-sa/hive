@@ -100,7 +100,9 @@ func (s *Seatbelt) profile(sp Spec, port string) string {
 	b.WriteString("(deny mach-lookup (global-name \"com.apple.SecurityServer\"))\n")
 	b.WriteString("(allow file-write* (subpath \"/private/tmp\") (subpath \"/private/var/folders\") (literal \"/dev/null\") (literal \"/dev/tty\"))\n")
 	for _, m := range sp.Mounts {
-		if m.RW {
+		if m.Hide {
+			fmt.Fprintf(&b, "(deny file-read* (subpath %q))\n", m.Host)
+		} else if m.RW {
 			fmt.Fprintf(&b, "(allow file-write* (subpath %q))\n", m.Host)
 		}
 	}

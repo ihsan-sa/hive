@@ -25,6 +25,13 @@ func TestBadSeatKeepsTheRestOfTheConfig(t *testing.T) {
 	if c.TribunalModels[0].Model != "opus" {
 		t.Fatalf("seats %+v", c.TribunalModels)
 	}
+	// A save that skips Check (setup's bare accept) writes the seat back as written.
+	if err := ws.SaveConfig(c); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ws.ReadConfig(); err == nil || !strings.Contains(err.Error(), `"model": 5`) {
+		t.Fatalf("after a save, error %v, want the bad seat still refused", err)
+	}
 }
 
 // A floor glob that can't match is refused; a good one and a plain entry pass.

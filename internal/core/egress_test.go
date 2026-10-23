@@ -17,7 +17,7 @@ func TestEgressListPerRole(t *testing.T) {
 	c, _ := testHive(t)
 	h, _ := harness.Get("claude")
 	allow := func(role string) []string {
-		spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), sandbox.Bare{}, h, Run{RunSpec: RunSpec{ID: "r-" + role, Role: role, Checkout: t.TempDir()}}, 1, false, "")
+		spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), sandbox.Bare{}, h, Run{RunSpec: RunSpec{ID: "r-" + role, Role: role, Checkout: t.TempDir()}}, 1, false, "", nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}

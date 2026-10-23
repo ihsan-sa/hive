@@ -503,10 +503,10 @@ func TestSeatsNameTheirHarness(t *testing.T) {
 	if got.Panel[0].Harness != "claude" || g.run(got.Panel[0].Run).Harness != "claude" || got.Panel[1].Harness != "fake" {
 		t.Fatalf("seats sat on the wrong harness: %+v", got.Panel)
 	}
-	cfg.TribunalModels = []core.TribunalSeat{{Harness: "codex", Model: "gpt-5"}}
+	cfg.TribunalModels = []core.TribunalSeat{{Harness: "no-such-harness", Model: "m"}}
 	g.c.WS.SaveConfig(cfg)
 	req = g.request("another hard step", "x", "T2")
-	if g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "script": "true"}) == nil || !g.told("codex") {
+	if g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "script": "true"}) == nil || !g.told("no-such-harness") {
 		t.Fatal("a seat on a missing harness convened")
 	}
 }

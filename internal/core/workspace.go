@@ -75,6 +75,9 @@ type Config struct {
 	MemFloorMB     int     `json:"mem_floor_mb"`
 	MemPressureMax float64 `json:"mem_pressure_max"`
 	CPUPressureMax float64 `json:"cpu_pressure_max"`
+	// PlateauMerges: a project whose best score hasn't moved in this many
+	// merges gets a step-back (besides the improve.stepback schedule); 0 is off.
+	PlateauMerges int `json:"plateau_merges"`
 }
 
 // ProjectSettings override workspace defaults per project.
@@ -105,8 +108,12 @@ func (t *TribunalSeat) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// MarshalJSON keeps a seat with no harness the plain string the person wrote.
+// MarshalJSON keeps a seat with no harness the plain string the person wrote,
+// and a seat it couldn't read exactly as written, so a save never blanks it.
 func (t TribunalSeat) MarshalJSON() ([]byte, error) {
+	if t.bad != "" {
+		return []byte(t.bad), nil
+	}
 	if t.Harness == "" {
 		return json.Marshal(t.Model)
 	}
@@ -169,11 +176,13 @@ func DefaultConfig() Config {
 		MemFloorMB:      1024,
 		MemPressureMax:  10,
 		CPUPressureMax:  40,
+		PlateauMerges:   3,
 		Schedules: map[string]string{
-			"improve.sweep":  "every 12h",
-			"kb.file":        "daily 04:00",
-			"modules.update": "every 24h",
-			"hive.update":    "every 6h",
+			"improve.sweep":    "every 12h",
+			"improve.stepback": "every 72h",
+			"kb.file":          "daily 04:00",
+			"modules.update":   "every 24h",
+			"hive.update":      "every 6h",
 		},
 	}
 }

@@ -87,6 +87,9 @@ func (o *Ops) Call(r Run, name string, args json.RawMessage) (any, error) {
 	if len(op.Roles) > 0 && !contains(op.Roles, r.Role) {
 		return nil, fmt.Errorf("op %q is not granted to a %s", name, r.Role)
 	}
+	if r.OneTurn && name != "finish" && name != "progress" {
+		return nil, fmt.Errorf("op %q is not granted to an experiment: it may only report on its own copy", name)
+	}
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
@@ -290,6 +293,10 @@ func (o *Ops) registerCore() {
 // Deliver routes a message from r to an address.
 func (o *Ops) Deliver(from Run, to, text string) (any, error) {
 	if to == "parent" {
+		// Find("") matches any run, so a run with no parent must fail here.
+		if from.Parent == "" {
+			return nil, fmt.Errorf("%s has no parent to message", from.ID)
+		}
 		to = from.Parent
 	}
 	for _, route := range o.routers {

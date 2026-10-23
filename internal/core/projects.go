@@ -29,6 +29,8 @@ type ProjectConfig struct {
 	Test      string   `json:"test,omitempty"`
 	Score     *Score   `json:"score,omitempty"`
 	Protected []string `json:"protected,omitempty"` // paths whose changes the person merges
+	High      []string `json:"high,omitempty"`      // paths whose changes need two separate reads
+	Root      []string `json:"root,omitempty"`      // paths that run with elevated rights: high, and the person says when they release
 	SmallMax  int      `json:"small_max_lines,omitempty"`
 	DryRun    string   `json:"dryrun,omitempty"` // for self-releasing projects: one ask, end to end
 }

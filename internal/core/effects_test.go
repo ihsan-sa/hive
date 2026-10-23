@@ -309,3 +309,90 @@ func TestMainBundleLeavesNoTemp(t *testing.T) {
 		t.Fatalf("temp left behind: %v", left)
 	}
 }
+
+// A change to a high-class path merges only after two separate land reads of
+// its exact commit, and a fix in between starts the count again.
+func TestHighClassNeedsTwoReads(t *testing.T) {
+	c, f := testHive(t)
+	seedRepo(t, f, "me/high", map[string]string{".hive/project.json": `{"test": "true", "root": ["setup.sh"]}`})
+	p, _ := c.Projects.Add(Project{Name: "high", Repo: "me/high"})
+	main, _ := c.Effects.Sync(p)
+	r, _ := commitInCheckout(t, c, p, "w7", main, "setup.sh", "echo hi\n")
+	sha, _ := c.Effects.Extract(p, r, main)
+	c.Effects.Push(p, "hive/t7", sha)
+	pr, _ := f.CreatePR(p.Repo, "hive/t7", "main", "root", "body")
+	c.Effects.RunCheck(p, sha, "test", "true")
+	ch, _ := c.Effects.Classify(p, main, sha)
+	if len(ch.High) != 1 || len(ch.Root) != 1 || ch.Small {
+		t.Fatalf("a root path should class high and root: %+v", ch)
+	}
+	read := func(run, verdict string) {
+		c.Runs.Start(RunSpec{ID: run, Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha}})
+		if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: run, Verdict: verdict}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main}
+	read("r7a", "land")
+	read("r7b", "fix")
+	read("r7c", "land")
+	read("r7c", "land") // the same run twice is one read
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no land verdict") {
+		t.Fatalf("merged a high change on one read: %v", err)
+	}
+	read("r7d", "land")
+	if _, err := c.Effects.Merge(req); err != nil {
+		t.Fatalf("two separate reads should merge: %v", err)
+	}
+}
+
+// In a self project a host-made update or revert carries no verdict from the
+// commit it came from: each needs a read of its own sha. Elsewhere it carries.
+func TestSelfHostCommitsNeedTheirOwnRead(t *testing.T) {
+	c, f, p, main := setupProject(t)
+	// The reviewer runs below are still running when the test ends; let them
+	// finish before the hive's temp dir is removed (cleanups run last-first).
+	t.Cleanup(func() {
+		for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+			if len(c.Runs.List(func(r *Run) bool { return r.Status == StatusRunning })) == 0 {
+				return
+			}
+		}
+	})
+	r, _ := commitInCheckout(t, c, p, "w8", main, "feature.go", "package demo\n")
+	sha, _ := c.Effects.Extract(p, r, main)
+	c.Runs.Start(RunSpec{ID: "r8", Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha}})
+	if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: "r8", Verdict: "land"}); err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	mustGit(t, "", "clone", "-q", f.RepoPath(p.Repo), tmp)
+	os.WriteFile(filepath.Join(tmp, "other.go"), []byte("package demo\n"), 0o644)
+	mustGit(t, tmp, "add", "-A")
+	mustGit(t, tmp, "commit", "-q", "-m", "main moves")
+	mustGit(t, tmp, "push", "-q", "origin", "HEAD:main")
+	main2, _ := c.Effects.Sync(p)
+	update, err := c.Effects.UpdateBranch(p, sha, main2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revert, err := c.Effects.Revert(p, main2, main2, "main moves: it didn't stay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	self := p
+	self.Self = true
+	for _, h := range []string{update, revert} {
+		if !c.Effects.Reviewed(p, Change{}, h) || c.Effects.Reviewed(self, Change{}, h) {
+			t.Fatalf("%s: a host commit should carry its read only outside a self project", h)
+		}
+		id := "r8-" + h[:7]
+		c.Runs.Start(RunSpec{ID: id, Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": h}})
+		if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: h, Run: id, Verdict: "land"}); err != nil {
+			t.Fatal(err)
+		}
+		if !c.Effects.Reviewed(self, Change{}, h) {
+			t.Fatalf("%s: a read of its own sha should do", h)
+		}
+	}
+}
