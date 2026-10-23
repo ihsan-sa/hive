@@ -186,8 +186,8 @@ func TestHelperFailedStartLeavesNoTask(t *testing.T) {
 	}
 }
 
-// A helper on a project with nothing on main yet still gets a checkout, with
-// no task, since there is no main to open a pull request against.
+// A helper worker on a project with nothing on main yet is refused, since no
+// task could land its commits; the parent files a brief instead.
 func TestHelperOnEmptyProject(t *testing.T) {
 	m, forge, _ := helperRig(t)
 	if _, err := forge.EnsureRepo("me/e", ""); err != nil {
@@ -196,9 +196,9 @@ func TestHelperOnEmptyProject(t *testing.T) {
 	if _, err := m.C.Projects.Add(core.Project{Name: "e", Repo: "me/e"}); err != nil {
 		t.Fatal(err)
 	}
-	spec, err := m.Spawn(core.Run{RunSpec: core.RunSpec{ID: "parent", Role: "worker"}}, "worker", "e", "start the project", "")
-	if err != nil || spec.Task != "" || len(m.List(nil)) != 0 {
-		t.Fatalf("spec %+v, err %v, tasks %+v", spec, err, m.List(nil))
+	_, err := m.Spawn(core.Run{RunSpec: core.RunSpec{ID: "parent", Role: "worker"}}, "worker", "e", "start the project", "")
+	if err == nil || !strings.Contains(err.Error(), "file a brief") || len(m.List(nil)) != 0 || len(m.C.Runs.List(nil)) != 0 {
+		t.Fatalf("err %v, tasks %+v", err, m.List(nil))
 	}
 }
 

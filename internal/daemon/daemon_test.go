@@ -113,10 +113,7 @@ func TestConfigAPIReportsALoadError(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer t")
 	rec := httptest.NewRecorder()
 	s.routes().ServeHTTP(rec, req)
-	var got struct {
-		core.Config
-		LoadError string `json:"load_error"`
-	}
+	var got api.ConfigView
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != http.StatusOK {
 		t.Fatalf("%d %s: %v", rec.Code, rec.Body, err)
 	}

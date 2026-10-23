@@ -268,8 +268,8 @@ func (m *Module) Spawn(parent core.Run, role, project, brief, model string) (cor
 	if err != nil {
 		return core.RunSpec{}, err
 	}
-	if base == "" { // nothing on main to branch from: a plain checkout, as before
-		return m.Agents.Spawner(parent, role, project, brief, model)
+	if base == "" { // no task can land a branch off an empty main, so its commits would go nowhere
+		return core.RunSpec{}, fmt.Errorf("project %s has no commit on main yet, so a helper worker's commits could never land; file a brief instead", p.Name)
 	}
 	t := &Task{ID: core.NewID(), Project: p.Name, Title: strings.TrimSpace(brief), From: parent.ID, Kind: "helper",
 		Stage: StageWorking, Base: base, Created: time.Now().UTC()}
