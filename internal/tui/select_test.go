@@ -43,8 +43,11 @@ func TestDragSelectsChatText(t *testing.T) {
 		t.Fatalf("copy %q, want the pane's lines %q", got, want)
 	}
 	m.Update(tea.MouseMsg{X: 0, Y: 6, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
-	if got := m.sel.text(strings.Split(m.View(), "\n")); strings.ContainsAny(got, "│▾●") || strings.Contains(got, "textkit") {
-		t.Fatalf("a drag into the chat list copied it: %q", got)
+	got := strings.Split(m.sel.text(strings.Split(m.View(), "\n")), "\n")
+	for i, l := range got {
+		if i >= len(want) || !strings.HasPrefix(want[i], l) {
+			t.Fatalf("a drag into the chat list copied more than the pane: %q", got)
+		}
 	}
 	_, cmd := m.Update(tea.MouseMsg{X: 0, Y: 6, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
 	if cmd == nil || m.sel.on || m.flash != "copied" {
