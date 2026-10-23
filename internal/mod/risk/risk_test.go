@@ -161,7 +161,7 @@ func TestWardenDoRunsExactlyItsScript(t *testing.T) {
 		t.Fatal("a second decision was taken")
 	}
 	got := g.settle(req.ID, "approved", "running")
-	if got.State != "done" || !core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) || strings.Contains(got.Output, "secret-token") {
+	if got.State != "done" || !core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) || strings.Contains(got.Output, "secret-token") {
 		t.Fatalf("step didn't run: %+v", got)
 	}
 	if !g.told("done") {
@@ -240,7 +240,7 @@ func TestSplitPanelDeclinesAndBriefsThePerson(t *testing.T) {
 	req, _ = g.m.get(req.ID)
 	g.vote(req, "approve", "decline", "decline")
 	got := g.settle(req.ID, "tribunal")
-	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("a split panel ran it or didn't ask: %+v", got)
 	}
 	g.c.Person.Answer(got.Ask, "run", "")
@@ -326,7 +326,7 @@ func TestSwappedScriptIsRefused(t *testing.T) {
 	g.m.save(&req)
 	g.m.execute(req.ID)
 	got, _ := g.m.get(req.ID)
-	if got.State != "failed" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+	if got.State != "failed" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("a swapped script ran: %+v", got)
 	}
 }
@@ -338,7 +338,7 @@ func TestCeilingRefusesAfterAnAllow(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := g.settle(req.ID, "approved")
-	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("the ceiling let a money step run: %+v", got)
 	}
 	g.c.Person.Answer(got.Ask, "declined", "")
@@ -407,7 +407,7 @@ func TestTribunalMajorityStillAsksForMoney(t *testing.T) {
 	req, _ = g.m.get(req.ID)
 	g.vote(req, "approve", "approve", "approve")
 	got := g.settle(req.ID, "tribunal", "approved")
-	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+	if got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("a panel's yes ran a money step: %+v", got)
 	}
 	for _, a := range g.c.Person.Open() {
@@ -482,7 +482,7 @@ func TestFloorRaisesToThePerson(t *testing.T) {
 	if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "echo x > proof && cp new.pem old.pem"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := g.settle(req.ID, "approved"); got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+	if got := g.settle(req.ID, "approved"); got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("the floor let a warden's step run: %+v", got)
 	}
 }

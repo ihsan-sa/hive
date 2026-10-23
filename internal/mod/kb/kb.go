@@ -84,6 +84,8 @@ func (m *Module) ensureRepo() {
 		core.Git(dir, "add", "-A")
 		core.Git(dir, "commit", "-q", "-m", "Start the knowledge base")
 	}
+	// An isolated project's notes stay out of git, where history would keep them.
+	os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("/isolated/\n"), 0o644)
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -99,13 +101,23 @@ func (m *Module) Write(n Note) (string, error) {
 	if len(slug) > 60 {
 		slug = slug[:60]
 	}
-	path := filepath.Join(m.C.WS.KB(), slug+".md")
+	// An isolated project's notes go in its own folder, which only isolated
+	// runs see, and the filer never reads.
+	dir := m.C.WS.KB()
+	if p, ok := m.C.Projects.Get(n.Project); ok && p.Isolated {
+		dir = filepath.Join(dir, "isolated", n.Project)
+		os.MkdirAll(dir, 0o755)
+	}
+	path := filepath.Join(dir, slug+".md")
 	for i := 2; core.Exists(path); i++ {
-		path = filepath.Join(m.C.WS.KB(), fmt.Sprintf("%s-%d.md", slug, i))
+		path = filepath.Join(dir, fmt.Sprintf("%s-%d.md", slug, i))
 	}
 	body := fmt.Sprintf("---\ntitle: %s\ntags: %s\nproject: %s\ndate: %s\nrun: %s\n---\n\n%s\n", oneLine(n.Title), oneLine(n.Tags), n.Project, time.Now().Format("2006-01-02"), n.Run, strings.TrimSpace(n.Text))
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return "", err
+	}
+	if dir != m.C.WS.KB() {
+		return path, nil
 	}
 	core.Git(m.C.WS.KB(), "add", filepath.Base(path))
 	core.Git(m.C.WS.KB(), "commit", "-q", "-m", "Note: "+oneLine(n.Title))

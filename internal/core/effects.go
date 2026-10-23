@@ -248,7 +248,7 @@ func (e *Effects) Snapshot(p Project, r Run, base string) (string, error) {
 	work := sandbox.Mount{Host: r.Checkout, Inside: "/work", RW: true}
 	git := "git -c safe.directory='*' -c core.hooksPath=/dev/null -c user.name=Hive -c user.email=hive@localhost -C " + shq(sandbox.InsidePath(sb, work))
 	script := git + " add -A && { " + git + " diff --cached --quiet || " + git + " commit -q --no-verify -m 'what the run left'; }"
-	if code, out, err := e.runSandboxed(sb, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute); err != nil || code != 0 {
+	if code, out, err := e.runSandboxed(sb, r.Project, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute); err != nil || code != 0 {
 		return "", fmt.Errorf("could not commit what the run left: %v %s", err, Clip(out, 300))
 	}
 	return e.Extract(p, r, base)
@@ -273,7 +273,7 @@ func (e *Effects) ExtractInto(dir, lockKey string, r Run, base string) (string, 
 		rangeSpec = base + "..HEAD"
 	}
 	script := fmt.Sprintf("git -c safe.directory='*' -C %s bundle create %s %s", shq(sandbox.InsidePath(sb, work)), shq(bundle), rangeSpec)
-	code, logText, err := e.runSandboxed(sb, r.ID+"-extract", []sandbox.Mount{work, outM}, script, false, 5*time.Minute)
+	code, logText, err := e.runSandboxed(sb, r.Project, r.ID+"-extract", []sandbox.Mount{work, outM}, script, false, 5*time.Minute)
 	if err != nil {
 		return "", err
 	}
@@ -351,7 +351,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		return c
 	}
 	defer os.RemoveAll(dir)
-	code, out, err := e.runSandboxed(sb, "gate-"+short(sha)+"-"+kind+"-"+NewID()[14:], []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}, command, true, 30*time.Minute)
+	code, out, err := e.runSandboxed(sb, p.Name, "gate-"+short(sha)+"-"+kind+"-"+NewID()[14:], []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}, command, true, 30*time.Minute)
 	c.Output = out
 	if err != nil {
 		c.Output = err.Error() + "\n" + out
@@ -384,7 +384,7 @@ func lastNumber(out string) (float64, error) {
 
 // cleanCheckout clones the host clone fresh and checks out sha.
 func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
-	dir := filepath.Join(e.ws.Gates(), fmt.Sprintf("%s-%s-%s-%s", p.Name, short(sha), kind, NewID()[14:]))
+	dir := filepath.Join(e.ws.Gates(), p.Name, fmt.Sprintf("%s-%s-%s", short(sha), kind, NewID()[14:]))
 	unlock := e.lock(p.Name)
 	_, err := GitT(10*time.Minute, "", "clone", "-q", "--no-local", "--no-hardlinks", "--no-checkout", e.ws.Project(p.Name), dir)
 	if err == nil {
@@ -401,9 +401,11 @@ func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
 	return dir, nil
 }
 
-// runSandboxed runs a shell command in the sandbox and returns its exit code and output.
-func (e *Effects) runSandboxed(sb sandbox.Sandbox, id string, mounts []sandbox.Mount, script string, network bool, timeout time.Duration) (int, string, error) {
-	logDir := filepath.Join(e.ws.Hive(), "checks")
+// runSandboxed runs a shell command in the sandbox and returns its exit code
+// and output. Its log goes in the project's own folder, which other runs
+// can't see when the project is isolated.
+func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []sandbox.Mount, script string, network bool, timeout time.Duration) (int, string, error) {
+	logDir := filepath.Join(e.ws.Hive(), "checks", project)
 	os.MkdirAll(logDir, 0o755)
 	logPath := filepath.Join(logDir, id+".log")
 	os.Remove(logPath)
@@ -720,7 +722,7 @@ func (e *Effects) Revert(p Project, mainSHA, mergeSHA, lesson string) (string, e
 // Setup writes files as a host-made commit on top of base (or as the first
 // commit of an empty repository).
 func (e *Effects) Setup(p Project, base string, files map[string]string, message string) (string, error) {
-	dir := filepath.Join(e.ws.Gates(), p.Name+"-setup-"+NewID()[14:])
+	dir := filepath.Join(e.ws.Gates(), p.Name, "setup-"+NewID()[14:])
 	var err error
 	if base != "" {
 		dir, err = e.cleanCheckout(p, base, "setup")

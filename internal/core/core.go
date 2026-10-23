@@ -45,6 +45,7 @@ func Open(ws Workspace, forge Forge) (*Core, error) {
 	c.Projects = NewProjects(j)
 	c.Person = NewPerson(j)
 	c.Runs = NewRuns(ws, j, c.Sandbox, c.Tokens, c.Tools)
+	c.Runs.projs = c.Projects
 	c.Effects = NewEffects(ws, j, forge, c.Sandbox, c.Tools, c.Runs)
 	return c, nil
 }

@@ -577,7 +577,7 @@ func (m *Module) execute(id string) {
 // the daemon's user and can read that user's files, so its output goes to the
 // person, never back to the agent.
 func (m *Module) run(req Request) (string, error) {
-	dir := filepath.Join(m.C.WS.Hive(), "risk", req.ID)
+	dir := filepath.Join(m.C.WS.Hive(), "risk", req.Project, req.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
