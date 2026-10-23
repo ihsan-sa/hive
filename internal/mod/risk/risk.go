@@ -657,8 +657,8 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 	if _, ok := m.Mod.Get(a.Name); ok {
 		return nil, fmt.Errorf("a module named %s is already installed", a.Name)
 	}
-	req := &Request{ID: core.NewID(), Kind: "module", Origin: r.ID, URL: a.URL, Want: "install module " + a.Name, Created: time.Now().UTC()}
-	ask := m.C.Person.Ask(core.Ask{Kind: "module", Ref: req.ID, From: r.ID,
+	req := &Request{ID: core.NewID(), Kind: "module", Origin: r.ID, Project: r.Project, URL: a.URL, Want: "install module " + a.Name, Created: time.Now().UTC()}
+	ask := m.C.Person.Ask(core.Ask{Kind: "module", Ref: req.ID, Project: r.Project, From: r.ID,
 		Title:   "Install module " + a.Name + "?",
 		Detail:  "From " + a.URL + ". It brings outside code onto this machine; agents will read and use it. The Hive clones it into .modules/" + a.Name + ".",
 		Options: []string{"install", "decline"}})

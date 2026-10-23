@@ -181,16 +181,23 @@ func (c *Core) moveOldChecks() {
 }
 
 // checkProject names the project an old check log belongs to: a gate's by the
-// clone that holds its commit, a snapshot's or extract's by its run.
+// clone that holds its commit, an isolated project's first when a fork is
+// shared, a snapshot's or extract's by its run.
 func (c *Core) checkProject(id string) string {
 	if rest, ok := strings.CutPrefix(id, "gate-"); ok {
 		sha, _, _ := strings.Cut(rest, "-")
+		found := ""
 		for _, p := range c.Projects.List() {
 			if _, err := Git(c.WS.Project(p.Name), "cat-file", "-e", sha+"^{commit}"); err == nil {
-				return p.Name
+				if p.Isolated {
+					return p.Name
+				}
+				if found == "" {
+					found = p.Name
+				}
 			}
 		}
-		return ""
+		return found
 	}
 	for _, suf := range []string{"-snapshot", "-extract"} {
 		if run, ok := strings.CutSuffix(id, suf); ok {

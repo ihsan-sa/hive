@@ -225,3 +225,27 @@ func TestOldCheckLogsMoveToTheirProject(t *testing.T) {
 		t.Error("a log with no known project moved")
 	}
 }
+
+// A fork an open and an isolated project share holds the same commits, so an
+// old gate log goes to the isolated one, where it stays covered.
+func TestOldGateLogOfASharedForkGoesToTheIsolatedProject(t *testing.T) {
+	c, _ := testHive(t)
+	c.Projects.Add(Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	c.Projects.Add(Project{Name: "open", Repo: "me/open"})
+	clone := c.WS.Project("secret")
+	os.MkdirAll(clone, 0o755)
+	Git(clone, "init", "-q")
+	Git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x")
+	if _, err := Git("", "clone", "-q", clone, c.WS.Project("open")); err != nil {
+		t.Fatal(err)
+	}
+	sha, _ := Git(clone, "rev-parse", "HEAD")
+	checks := filepath.Join(c.WS.Hive(), "checks")
+	os.MkdirAll(checks, 0o755)
+	log := "gate-" + short(strings.TrimSpace(sha)) + "-test-abc.log"
+	os.WriteFile(filepath.Join(checks, log), nil, 0o644)
+	c.moveOldChecks()
+	if !Exists(filepath.Join(checks, "secret", log)) {
+		t.Error("the shared fork's gate log went to the open project")
+	}
+}

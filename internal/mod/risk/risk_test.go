@@ -524,3 +524,25 @@ func TestVoteMustBeClean(t *testing.T) {
 		}
 	}
 }
+
+// An isolated project's lead asking to install a module files the ask under
+// its project, so other projects' agents don't see its title.
+func TestModuleInstallAskCarriesTheProject(t *testing.T) {
+	g := newRig(t, 2)
+	g.c.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	lead, err := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Project: "secret", Isolated: true, Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.call(lead, "install_module", map[string]string{"url": t.TempDir(), "name": "tool"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range g.c.Person.Open() {
+		if a.Kind == "module" && a.Project != "secret" {
+			t.Errorf("the install ask is filed under %q", a.Project)
+		}
+	}
+	if l := g.m.List(); len(l) != 1 || l[0].Project != "secret" {
+		t.Errorf("the install request is %+v", l)
+	}
+}

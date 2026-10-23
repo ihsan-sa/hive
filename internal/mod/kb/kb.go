@@ -101,9 +101,8 @@ func (m *Module) moveIsolated() {
 		for _, line := range strings.Split(head, "\n") {
 			proj, ok := strings.CutPrefix(line, "project: ")
 			if p, isProj := m.C.Projects.Get(proj); ok && isProj && p.Isolated {
-				dir := filepath.Join(kb, "isolated", p.Name)
-				os.MkdirAll(dir, 0o755)
-				if os.Rename(filepath.Join(kb, name), filepath.Join(dir, name)) == nil {
+				dir, err := m.isolatedDir(p.Name)
+				if err == nil && os.Rename(filepath.Join(kb, name), filepath.Join(dir, name)) == nil {
 					moved = append(moved, name)
 				}
 			}
@@ -132,8 +131,10 @@ func (m *Module) Write(n Note) (string, error) {
 	// runs see, and the filer never reads.
 	dir := m.C.WS.KB()
 	if p, ok := m.C.Projects.Get(n.Project); ok && p.Isolated {
-		dir = filepath.Join(dir, "isolated", n.Project)
-		os.MkdirAll(dir, 0o755)
+		var err error
+		if dir, err = m.isolatedDir(n.Project); err != nil {
+			return "", err
+		}
 	}
 	path := filepath.Join(dir, slug+".md")
 	for i := 2; core.Exists(path); i++ {
@@ -152,6 +153,44 @@ func (m *Module) Write(n Note) (string, error) {
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// isolatedDir makes and returns an isolated project's notes folder, refusing
+// one that isn't a real folder, such as a link the filer planted.
+func (m *Module) isolatedDir(project string) (string, error) {
+	dir := m.C.WS.KB()
+	for _, d := range []string{"isolated", project} {
+		dir = filepath.Join(dir, d)
+		os.Mkdir(dir, 0o755)
+		if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+			return "", fmt.Errorf("%s is not a real folder", dir)
+		}
+	}
+	return dir, nil
+}
+
+// checkFiled refuses a filer's commits that would reach isolated projects'
+// notes, which sit untracked in isolated/, or add a link anywhere.
+func checkFiled(kb, sha string) error {
+	names, err := core.Git(kb, "diff-tree", "-r", "-z", "--no-renames", "--name-only", "HEAD", sha)
+	if err != nil {
+		return err
+	}
+	for _, p := range strings.Split(names, "\x00") {
+		if p == "isolated" || strings.HasPrefix(p, "isolated/") {
+			return fmt.Errorf("refused: the filer touched %s", p)
+		}
+	}
+	tree, err := core.Git(kb, "ls-tree", "-r", "-z", sha)
+	if err != nil {
+		return err
+	}
+	for _, e := range strings.Split(tree, "\x00") {
+		if strings.HasPrefix(e, "120000 ") {
+			return fmt.Errorf("refused: the filer added a link: %s", e)
+		}
+	}
+	return nil
+}
 
 // Notes lists note files, newest first.
 func (m *Module) Notes() []string {
@@ -223,6 +262,10 @@ func (m *Module) Tick() {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := checkFiled(m.C.WS.KB(), sha); err != nil {
+		m.C.J.MustAppend("kb.filed", map[string]string{"run": id, "result": err.Error()})
+		return
+	}
 	if _, err := core.Git(m.C.WS.KB(), "merge", "-q", "--ff-only", sha); err != nil {
 		m.C.J.MustAppend("kb.filed", map[string]string{"run": id, "result": "not a fast-forward; new notes arrived meanwhile: " + err.Error()})
 		return
