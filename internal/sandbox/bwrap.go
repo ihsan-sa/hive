@@ -56,7 +56,14 @@ func bwrapArgs(a initArgs, self string) []string {
 		if m.RW {
 			flag = "--bind"
 		}
-		argv = append(argv, flag, m.Host, m.Inside)
+		switch fi, err := os.Stat(m.Host); {
+		case m.Hide && err == nil && fi.IsDir():
+			argv = append(argv, "--tmpfs", m.Inside, "--remount-ro", m.Inside)
+		case m.Hide:
+			argv = append(argv, "--ro-bind", "/dev/null", m.Inside)
+		default:
+			argv = append(argv, flag, m.Host, m.Inside)
+		}
 	}
 	for name, src := range a.Tools {
 		argv = append(argv, "--ro-bind", src, "/hive/bin/"+name)

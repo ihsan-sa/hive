@@ -48,8 +48,8 @@ func (Linux) Start(s Spec) (Proc, error) {
 	if err != nil {
 		return Proc{}, err
 	}
-	specPath := s.Stdout + ".sandbox.json"
-	if err := WriteSpec(specPath, s); err != nil {
+	specPath, err := writeTempSpec(s)
+	if err != nil {
 		return Proc{}, err
 	}
 	return proc.StartDetached([]string{self, "sandbox-exec", "--spec", specPath}, os.Environ(), "/", "", "")
@@ -315,7 +315,16 @@ func Init(argPath string) int {
 		return fail("tmp", err)
 	}
 	for _, m := range s.Mounts {
-		if err := bind(m.Host, root+m.Inside, m.RW); err != nil {
+		var err error
+		switch fi, serr := os.Stat(m.Host); {
+		case m.Hide && serr == nil && fi.IsDir():
+			err = unix.Mount("tmpfs", root+m.Inside, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_RDONLY, "mode=0555")
+		case m.Hide:
+			err = bind("/dev/null", root+m.Inside, false)
+		default:
+			err = bind(m.Host, root+m.Inside, m.RW)
+		}
+		if err != nil {
 			return fail("bind "+m.Inside, err)
 		}
 	}
@@ -432,7 +441,7 @@ func bindFlags(src, dst string, rw, device bool) error {
 		if err := os.MkdirAll(dst, 0o755); err != nil {
 			return err
 		}
-	} else {
+	} else if _, err := os.Stat(dst); err != nil {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
@@ -583,8 +592,8 @@ func (Linux) Run(s Spec, timeout time.Duration) (int, error) {
 	if err != nil {
 		return -1, err
 	}
-	specPath := s.Stdout + ".sandbox.json"
-	if err := WriteSpec(specPath, s); err != nil {
+	specPath, err := writeTempSpec(s)
+	if err != nil {
 		return -1, err
 	}
 	return runSync([]string{self, "sandbox-exec", "--spec", specPath}, os.Environ(), "/", "", "", timeout)

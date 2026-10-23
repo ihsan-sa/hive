@@ -31,7 +31,7 @@ projects/<name>/             host clone (effects process only)
 projects/<name>/.checkouts/  agents' own checkouts (excluded from the clone)
 ```
 
-Run dir: `host/` (turn output, prompts, stop file; never mounted), `ro/` (system prompt, brief, inputs; mounted read-only at `/hive/run`), `box/` (mailbox + notes; rw at `/hive/box`), `home/` (rw `$HOME`).
+Run dir: `host/` (turn output, prompts, stop file; never mounted on its own), `ro/` (system prompt, brief, inputs; mounted read-only at `/hive/run`), `box/` (mailbox + notes; rw at `/hive/box`), `home/` (rw `$HOME`). Every run but an isolated project's also gets the whole `.hive` read-only at `/hive/state` (`$HIVE_STATE`), so agents read one another's runs, chats and records; `logins/` and `daemon.json` are covered there (empty tmpfs, `/dev/null`; a Seatbelt deny on macOS), and a turn's spec, which carries its token, is written to the temp dir, not beside its output.
 
 ## Data flow: one ask
 

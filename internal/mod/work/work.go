@@ -69,6 +69,7 @@ type Task struct {
 	RevertSHA string     `json:"revert_sha,omitempty"` // the merge being reverted
 	Lesson    string     `json:"lesson,omitempty"`
 	Failures  int        `json:"failures"`
+	CloseFail int        `json:"close_fail,omitempty"` // failed tries to close the issue
 	Attempt   int        `json:"attempt"` // fresh workers handed this task
 	Retry     time.Time  `json:"retry,omitempty"`
 	IssueOpen bool       `json:"issue_open,omitempty"` // done, but its issue is still to close
@@ -555,13 +556,13 @@ func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
 // gives up. The task stays done either way.
 func (m *Module) closeIssue(t *Task, p core.Project) {
 	if err := m.C.Effects.Forge.CloseIssue(p.Repo, t.Issue.Number); err != nil {
-		t.Failures++
-		if t.Failures >= 8 {
+		t.CloseFail++
+		if t.CloseFail >= 8 {
 			t.IssueOpen = false
-			m.save(t, "gave up closing the issue: "+core.Clip(err.Error(), 300))
+			m.save(t, "gave up closing the issue, left open on the forge: "+core.Clip(err.Error(), 300))
 			return
 		}
-		t.Retry = time.Now().Add(time.Minute << t.Failures)
+		t.Retry = time.Now().Add(time.Minute << t.CloseFail)
 		m.save(t, "closing the issue failed (will retry): "+core.Clip(err.Error(), 300))
 		return
 	}

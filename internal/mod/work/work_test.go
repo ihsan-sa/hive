@@ -111,7 +111,7 @@ func TestCloseIssueGivesUp(t *testing.T) {
 	for i := 0; i < 20 && task.IssueOpen; i++ {
 		m.closeIssue(task, p)
 	}
-	if task.Stage != StageDone || task.IssueOpen || forge.fail != 92 || !logged(task, "gave up closing the issue: HTTP 503") {
+	if task.Stage != StageDone || task.IssueOpen || forge.fail != 92 || !logged(task, "gave up closing the issue, left open on the forge: HTTP 503") {
 		t.Fatalf("stage %q, issue open %v, attempts %d, log %v", task.Stage, task.IssueOpen, 100-forge.fail, task.Log)
 	}
 }

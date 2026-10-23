@@ -24,8 +24,10 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
+	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 )
 
 // Forge picks the forge: GitHub, or a local folder forge when HIVE_FORGE=local:<dir>.
@@ -90,13 +92,36 @@ func Stop(ws core.Workspace) error {
 
 // Run is `hive daemon`: the background process.
 func Run(ws core.Workspace, waitFor int) error {
+	inUnit := inHiveUnit()
+	from := "" // the version of the daemon this one replaces
 	if waitFor > 0 {
+		if c, err := api.Dial(ws); err == nil {
+			from = c.Info.Version
+		}
+		if inUnit {
+			// An old unit stops everything in it as the old daemon exits; outlive that and hand the restart to systemd below.
+			signal.Ignore(syscall.SIGTERM)
+		}
 		for i := 0; i < 100 && proc.Alive(proc.Handle{PID: waitFor}); i++ {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	if _, ok := Running(ws); ok {
 		return errors.New("the Hive is already running")
+	}
+	exe := release.Rename(ws.Root, from)
+	if inUnit && (waitFor > 0 || exe != "") {
+		if exe == "" {
+			exe, _ = executable()
+		}
+		if setup.RestartUnit(exe, ws.Root) {
+			return nil
+		}
+	}
+	if exe != "" {
+		// This update renamed hive-v0 to hive: start the daemon under its new name.
+		_, err := proc.StartDetached([]string{exe, "daemon"}, append(os.Environ(), "HIVE_HOME="+ws.Root), ws.Root, "", filepath.Join(ws.Hive(), "daemon.log"))
+		return err
 	}
 	a, err := app.New(ws, Forge())
 	if err != nil {
@@ -161,6 +186,9 @@ func (s *server) onEvent(e core.Event) {
 }
 
 var executable = os.Executable
+
+// inHiveUnit reports whether this daemon runs in the Hive's systemd unit.
+var inHiveUnit = setup.InUnit
 
 // restart replaces this daemon with the (updated) binary on disk, and marks
 // daemon.json so the control center waits for the new one.

@@ -23,9 +23,9 @@
   <h2>Install</h2>
   <p>macOS and Linux, in a terminal:</p>
   <pre><code>curl -fsSL https://hive.ihsan.cc/install.sh | sh</code></pre>
-  <p>Windows, in PowerShell:</p>
+  <p>Windows, in PowerShell. On Windows PowerShell 5.1, run <code>[Net.ServicePointManager]::SecurityProtocol = 'Tls12'</code> first so the download can use TLS 1.2.</p>
   <pre><code>irm https://hive.ihsan.cc/install.ps1 | iex</code></pre>
-  <p>Then run <code>hive-v0</code>. On Windows, agents are sandboxed inside WSL 2, and the installer sets up Claude Code there.</p>
+  <p>Then run <code>hive</code>. On Windows, agents are sandboxed inside WSL 2, and the installer sets up Claude Code there.</p>
 </section>
 
 <section id="use">
@@ -34,15 +34,15 @@
   <p>It checks for git, Claude Code and the GitHub CLI and offers their own logins. It asks where to live (Enter for <code>~/hive</code>) and for a GitHub repository (Enter makes a small private demo project). Then it opens the control center with the lead's chat, and from then on the Hive starts with your machine.</p>
   <h3>Every day</h3>
   <dl>
-    <dt><code>hive-v0</code></dt><dd>the control center: chats, dashboard, what's waiting on you</dd>
-    <dt><code>hive-v0 ask "..." --wait</code></dt><dd>ask the lead from a shell</dd>
-    <dt><code>hive-v0 status</code></dt><dd>what it's doing</dd>
-    <dt><code>hive-v0 doctor</code></dt><dd>check the install and sandbox</dd>
-    <dt><code>hive-v0 shutdown</code></dt><dd>stop it; <code>hive-v0</code> starts it again</dd>
+    <dt><code>hive</code></dt><dd>the control center: chats, dashboard, what's waiting on you</dd>
+    <dt><code>hive ask "..." --wait</code></dt><dd>ask the lead from a shell</dd>
+    <dt><code>hive status</code></dt><dd>what it's doing</dd>
+    <dt><code>hive doctor</code></dt><dd>check the install and sandbox</dd>
+    <dt><code>hive shutdown</code></dt><dd>stop it; <code>hive</code> starts it again</dd>
   </dl>
   <p>Closing the control center never stops work.</p>
   <h3>Updates</h3>
-  <p>The Hive updates itself to each new release when it starts. <code>hive-v0 update</code> does it now, and Settings turns it off.</p>
+  <p>The Hive looks for a new release when it starts and every few hours while it runs, and updates itself when one is out. <code>hive update</code> does it now, and Settings turns it off.</p>
   <h3>Uninstall</h3>
   <pre><code>curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh</code></pre>
   <pre><code>irm https://hive.ihsan.cc/uninstall.ps1 | iex</code></pre>
