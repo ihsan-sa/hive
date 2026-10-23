@@ -154,8 +154,8 @@ func (m *Module) StartStepBack(p core.Project, why string) error {
 	s.From = st.SHA
 	if s.Budget <= 0 {
 		s.Status, s.Note, s.Ended = "none", "the Hive has spent nothing on it since the last step-back, so a setup has nothing to spend", time.Now().UTC()
-		m.saveStepBack(s)
 		m.alert(p.Name, "the step-back on "+p.Name+" did not run: "+s.Note)
+		m.saveStepBack(s)
 		return nil
 	}
 	main, err := m.C.Effects.Sync(p)
@@ -429,7 +429,7 @@ func (m *Module) alert(project, text string) {
 // fail ends a step-back and says why in its project's step-back alert.
 func (m *Module) fail(s StepBack, why string) error {
 	s.Status, s.Note, s.Ended = "failed", why, time.Now().UTC()
+	m.alert(s.Project, "the step-back on "+s.Project+" could not finish: "+why) // first, so an ended step-back always shows its alert
 	m.saveStepBack(s)
-	m.alert(s.Project, "the step-back on "+s.Project+" could not finish: "+why)
 	return errors.New(why)
 }

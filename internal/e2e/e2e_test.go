@@ -598,14 +598,28 @@ func TestStalls(t *testing.T) {
 	for title := range asks {
 		h.wait(title+" to land", 4*minute, taskStage("stall", title, work.StageDone))
 	}
-	st := h.state()
-	alerts := map[string][]string{}
-	for _, a := range st.Alerts {
-		if a.Kind == "stall" {
-			alerts[a.Ref] = append(alerts[a.Ref], a.Text)
+	hung := map[string]string{"hung worker": "restarted its turn", "hung reviewer": "restarted its turn", "hung check": "handed it to the lead"}
+	stalls := func(st api.State) map[string][]string {
+		alerts := map[string][]string{}
+		for _, a := range st.Alerts {
+			if a.Kind == "stall" {
+				alerts[a.Ref] = append(alerts[a.Ref], a.Text)
+			}
 		}
+		return alerts
 	}
-	for title, did := range map[string]string{"hung worker": "restarted its turn", "hung reviewer": "restarted its turn", "hung check": "handed it to the lead"} {
+	// A task can land before the watcher's next pass says it moved on.
+	st := h.wait("every stall alert to say it moved on", minute, func(st api.State) bool {
+		for title := range hung {
+			tk, _ := task(st, "stall", title)
+			if got := stalls(st)["task:"+tk.ID]; len(got) == 0 || !strings.Contains(got[len(got)-1], "moved on") {
+				return false
+			}
+		}
+		return true
+	})
+	alerts := stalls(st)
+	for title, did := range hung {
 		tk, _ := task(st, "stall", title)
 		if got := alerts["task:"+tk.ID]; len(got) != 1 || !strings.Contains(got[0], did) || !strings.Contains(got[0], "moved on") {
 			t.Fatalf("%s: want one alert that says %q and that it moved on, got %q", title, did, got)
