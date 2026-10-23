@@ -82,6 +82,8 @@ type ModuleView struct {
 	Source      string   `json:"source"`
 	Release     string   `json:"release"`
 	Projects    []string `json:"projects"`
+	Hooks       []string `json:"hooks,omitempty"`
+	Status      string   `json:"status,omitempty"` // a module with a program: running, or why not
 }
 
 // ChatView is one chat in the list.

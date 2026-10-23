@@ -50,7 +50,7 @@ type Task struct {
 	From      string            `json:"from"` // run id, person, or sweep run
 	Chat      string            `json:"chat,omitempty"`
 	Thread    string            `json:"thread,omitempty"`
-	Kind      string            `json:"kind"` // work | revert
+	Kind      string            `json:"kind"` // work | revert | helper (spawned, no issue)
 	Stage     string            `json:"stage"`
 	Reason    string            `json:"reason,omitempty"`
 	Issue     core.Issue        `json:"issue"`
@@ -240,16 +240,63 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 		}
 		return nil, fmt.Errorf("say which project with --project (one of: %s) and tell the person why; a new module gets a project of its own first (create_project), then install_module --project", strings.Join(names, ", "))
 	}
-	if r.Role == "lead" {
-		b.Chat, b.Thread = m.Chat.CurrentThread(r)
-	} else if parent, ok := m.taskOf(r.ID); ok {
-		b.Chat, b.Thread = parent.Chat, parent.Thread
-	}
+	b.Chat, b.Thread = m.thread(r)
 	t, err := m.File(b)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]string{"task": t.ID, "note": "filed; it becomes an issue and a worker shortly"}, nil
+}
+
+// thread is the chat thread that hears about work r asks for: a lead's
+// current thread, or the thread of the task r works on.
+func (m *Module) thread(r core.Run) (string, string) {
+	if r.Role == "lead" {
+		return m.Chat.CurrentThread(r)
+	}
+	if parent, ok := m.taskOf(r.ID); ok {
+		return parent.Chat, parent.Thread
+	}
+	return "", ""
+}
+
+// Spawn is the core's spawn hook. A helper worker on a project ships like any
+// worker: it gets a task with no issue, so its commits go to their own branch
+// and pull request, are tested, reviewed and merged, and its parent's thread
+// hears how that went. It starts that run itself. Reviewers and helpers with no
+// project go to the agents module, and the spawn op starts those.
+func (m *Module) Spawn(parent core.Run, role, project, brief, model string) (core.RunSpec, error) {
+	p, ok := m.C.Projects.Get(project)
+	if role != "worker" || !ok {
+		return m.Agents.Spawner(parent, role, project, brief, model)
+	}
+	base, err := m.C.Effects.Sync(p)
+	if err != nil {
+		return core.RunSpec{}, err
+	}
+	if base == "" { // no task can land a branch off an empty main, so its commits would go nowhere
+		return core.RunSpec{}, fmt.Errorf("project %s has no commit on main yet, so a helper worker's commits could never land; file a brief instead", p.Name)
+	}
+	t := &Task{ID: core.NewID(), Project: p.Name, Title: strings.TrimSpace(brief), From: parent.ID, Kind: "helper",
+		Stage: StageWorking, Base: base, Created: time.Now().UTC()}
+	t.Chat, t.Thread = m.thread(parent)
+	t.Worker, t.Branch = "w-"+t.ID, "hive/"+t.ID
+	dir, err := m.C.Effects.NewCheckout(p, t.Worker, base)
+	if err != nil {
+		return core.RunSpec{}, err
+	}
+	s := m.Agents.Spec(t.Worker, "worker", p.Name, dir, brief+"\n\n(You are a helper spawned by "+parent.ID+"; your account goes back to it, and your commits get their own pull request as task "+t.ID+".)")
+	s.Task, s.Parent = t.ID, parent.ID
+	if model != "" {
+		s.Model = model
+	}
+	// Like startWorker, the run starts before the task names it, so a task
+	// never points at a run that doesn't exist.
+	if _, err := m.C.Runs.Start(s); err != nil {
+		return core.RunSpec{}, err
+	}
+	m.save(t, "helper of "+parent.ID+": worker "+t.Worker)
+	return s, nil
 }
 
 func (m *Module) taskOf(runID string) (Task, bool) {
@@ -502,7 +549,9 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 	case core.StatusBlocked:
 		t.Stage, t.Reason = StageBlocked, finishText(r)
 		m.save(t, "blocked: "+core.Clip(t.Reason, 300))
-		m.C.Effects.Forge.Comment(p.Repo, t.Issue.Number, "The worker stopped:\n\n"+t.Reason)
+		if t.Issue.Number != 0 {
+			m.C.Effects.Forge.Comment(p.Repo, t.Issue.Number, "The worker stopped:\n\n"+t.Reason)
+		}
 		m.C.J.MustAppend("kb.note", map[string]string{"title": "Blocked: " + t.Label(), "text": t.Reason, "project": t.Project, "run": r.ID})
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Blocked: %q. %s", t.Label(), core.Clip(t.Reason, 400)))
 	case core.StatusStopped:
@@ -545,7 +594,10 @@ func (m *Module) land(t *Task, p core.Project) error {
 	if err := m.C.Effects.Push(p, t.Branch, sha); err != nil {
 		return err
 	}
-	body := finishText(r) + fmt.Sprintf("\n\nCloses #%d\n\n%s", t.Issue.Number, marker(t.ID))
+	body := finishText(r) + "\n\n" + marker(t.ID)
+	if t.Issue.Number != 0 {
+		body = finishText(r) + fmt.Sprintf("\n\nCloses #%d\n\n%s", t.Issue.Number, marker(t.ID))
+	}
 	pr, err := m.C.Effects.Forge.CreatePR(p.Repo, t.Branch, p.Branch, t.Label(), body)
 	if err != nil {
 		return err
@@ -558,9 +610,15 @@ func (m *Module) land(t *Task, p core.Project) error {
 	return nil
 }
 
-// noCommits ends a task whose worker made no commit. An ask whose whole job
-// was a step outside the checkout is done; anything else is blocked.
+// noCommits ends a task whose worker made no commit. A helper's task is done, since its account already went to the agent that spawned it.
+// An ask whose whole job was a step outside the checkout is done; anything else
+// is blocked.
 func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
+	if t.Kind == "helper" {
+		t.Stage = StageDone
+		m.save(t, "the helper made no commits, so nothing to land")
+		return
+	}
 	var steps string
 	var ok bool
 	if m.Steps != nil {

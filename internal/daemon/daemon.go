@@ -24,6 +24,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
@@ -57,6 +58,9 @@ func Start(ws core.Workspace) (*api.Client, error) {
 	if c, ok := Running(ws); ok {
 		return c, nil
 	}
+	if err := checkHarness(ws.LoadConfig()); err != nil {
+		return nil, err
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -73,6 +77,20 @@ func Start(ws core.Workspace) (*api.Client, error) {
 	}
 	log, _ := os.ReadFile(filepath.Join(ws.Hive(), "daemon.log.err"))
 	return nil, fmt.Errorf("the Hive didn't start: %s", core.Clip(string(log), 600))
+}
+
+// checkHarness refuses a harness the Hive can't run, so a bad name fails when
+// it is set or the Hive starts, not when the first agent does.
+func checkHarness(c core.Config) error {
+	if _, err := harness.Get(c.Harness); err != nil {
+		return err
+	}
+	for name, p := range c.Projects {
+		if _, err := harness.Get(p.Harness); err != nil {
+			return fmt.Errorf("project %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // Stop asks the daemon to shut down. Running agents are separate processes
@@ -125,6 +143,10 @@ func Run(ws core.Workspace, waitFor int) error {
 		_, err := proc.StartDetached([]string{exe, "daemon"}, append(os.Environ(), "HIVE_HOME="+ws.Root), ws.Root, "", filepath.Join(ws.Hive(), "daemon.log"))
 		return err
 	}
+	// After the update hand-off: a renamed binary runs this check in its own daemon.
+	if err := checkHarness(ws.LoadConfig()); err != nil {
+		return err
+	}
 	a, err := app.New(ws, Forge())
 	if err != nil {
 		return err
@@ -160,6 +182,7 @@ func Run(ws core.Workspace, waitFor int) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s := &server{a: a, info: info, cancel: cancel}
+	a.Runner.API = fmt.Sprintf("http://127.0.0.1:%d", info.Port)
 	a.Release.Restart = func() { s.restart() }
 	a.C.J.Subscribe(s.onEvent)
 	a.C.J.MustAppend("hive.started", map[string]string{"version": core.Version, "pid": strconv.Itoa(os.Getpid())})
@@ -230,9 +253,18 @@ func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	h := func(path string, fn func(r *http.Request) (any, error)) {
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Authorization") != "Bearer "+s.info.Token {
-				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-				return
+			tok, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if !bearer || tok != s.info.Token {
+				name, known, allowed := s.a.Runner.Allowed(tok, path)
+				if !bearer || !allowed {
+					code := http.StatusUnauthorized
+					if known && bearer {
+						code = http.StatusForbidden // a module calling outside its hooks
+					}
+					http.Error(w, `{"error":"unauthorized"}`, code)
+					return
+				}
+				r = r.WithContext(context.WithValue(r.Context(), moduleKey{}, name))
 			}
 			out, err := fn(r)
 			w.Header().Set("Content-Type", "application/json")
@@ -260,9 +292,16 @@ func (s *server) routes() http.Handler {
 			if b.Chat == "" {
 				b.Chat = "lead"
 			}
-			return a.Chat.Post(b.Chat, b.Thread, b.Text, b.Files...)
+			if err := s.reaches(r, s.projectOf("chat", b.Chat)); err != nil {
+				return nil, err
+			}
+			return a.Chat.Post(b.Chat, b.Thread, moduleOf(r), b.Text, b.Files...)
 		}
-		return a.Chat.Messages(r.URL.Query().Get("id")), nil
+		id := r.URL.Query().Get("id")
+		if err := s.reaches(r, s.projectOf("chat", id)); err != nil {
+			return nil, err
+		}
+		return a.Chat.Messages(id), nil
 	})
 	h("/api/chat/read", func(r *http.Request) (any, error) {
 		var b struct{ Chat string }
@@ -298,6 +337,9 @@ func (s *server) routes() http.Handler {
 		if err := decode(r, &b); err != nil {
 			return nil, err
 		}
+		if err := s.reaches(r, s.projectOf("run", b.ID)); err != nil {
+			return nil, err
+		}
 		a.C.Runs.Stop(b.ID, orStr(b.Reason, "stopped by the person"))
 		return "ok", nil
 	})
@@ -311,6 +353,9 @@ func (s *server) routes() http.Handler {
 	h("/api/task/stop", func(r *http.Request) (any, error) {
 		var b struct{ ID, Reason string }
 		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		if err := s.reaches(r, s.projectOf("task", b.ID)); err != nil {
 			return nil, err
 		}
 		return "ok", a.Work.Stop(b.ID, orStr(b.Reason, "stopped by the person"))
@@ -327,8 +372,27 @@ func (s *server) routes() http.Handler {
 		if err := decode(r, &b); err != nil {
 			return nil, err
 		}
-		b.From = "person"
+		if mod := moduleOf(r); mod != "" {
+			if err := s.reaches(r, b.Project); err != nil {
+				return nil, err
+			}
+			b.From = strings.TrimSuffix(mod+"/"+b.From, "/") // the module, and where the ask came from
+		} else {
+			b.From = "person"
+		}
 		return a.Work.File(b)
+	})
+	h("/api/module/report", func(r *http.Request) (any, error) {
+		var b map[string]any
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		if b == nil {
+			return nil, errors.New("a report is a JSON object")
+		}
+		b["module"] = moduleOf(r)
+		a.C.J.MustAppend("module.reported", b)
+		return "ok", nil
 	})
 	h("/api/answer", func(r *http.Request) (any, error) {
 		var b struct{ ID, Answer, Note string }
@@ -364,6 +428,9 @@ func (s *server) routes() http.Handler {
 			return nil, errors.New("bare runs need the warning read first (`" + core.Cmd + " doctor --bare`)")
 		}
 		c.BareAccepted = cur.BareAccepted
+		if err := checkHarness(c); err != nil {
+			return nil, err
+		}
 		if err := c.Check(); err != nil {
 			return nil, err
 		}
@@ -383,6 +450,13 @@ func (s *server) routes() http.Handler {
 		}
 		return "ok", a.Mods.SetAccess(b.Module, b.Project, b.Allow)
 	})
+	h("/api/module/review", func(r *http.Request) (any, error) {
+		var b struct{ Module string }
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		return "ok", a.Runner.Retry(b.Module)
+	})
 	h("/api/project", func(r *http.Request) (any, error) {
 		var b projects.Spec
 		if err := decode(r, &b); err != nil {
@@ -394,6 +468,20 @@ func (s *server) routes() http.Handler {
 	h("/api/events", func(r *http.Request) (any, error) {
 		after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 		evs := a.C.J.Since(after)
+		if moduleOf(r) != "" {
+			// A module reads on from its cursor, so it gets the first events
+			// after it, and only those of projects that granted it.
+			var mine []core.Event
+			for _, e := range evs {
+				if len(mine) == 2000 {
+					break
+				}
+				if p := s.eventProject(e); (p == "" && notice(e.Kind)) || s.reaches(r, p) == nil {
+					mine = append(mine, e)
+				}
+			}
+			return mine, nil
+		}
 		if len(evs) > 2000 {
 			evs = evs[len(evs)-2000:]
 		}
@@ -405,6 +493,69 @@ func (s *server) routes() http.Handler {
 		return "stopping", nil
 	})
 	return mux
+}
+
+type moduleKey struct{}
+
+// reaches refuses a module's request that touches a project the person has not
+// granted it; "" is the whole workspace, which only a grant of "*" reaches.
+func (s *server) reaches(r *http.Request, project string) error {
+	if mod := moduleOf(r); mod != "" && !s.a.Mods.Reaches(mod, project) {
+		return fmt.Errorf("module %s is not granted %s", mod, orStr(project, "every project"))
+	}
+	return nil
+}
+
+// projectOf names the project a chat, run or task belongs to.
+func (s *server) projectOf(kind, id string) string {
+	switch kind {
+	case "chat":
+		if c, ok := s.a.Chat.Get(id); ok && c.Project != "" {
+			return c.Project
+		}
+		if run, ok := strings.CutPrefix(id, "agent:"); ok {
+			return s.projectOf("run", run)
+		}
+	case "run":
+		if run, ok := s.a.C.Runs.Get(id); ok {
+			return run.Project
+		}
+	case "task":
+		if t, ok := s.a.Work.Get(id); ok {
+			return t.Project
+		}
+	}
+	return ""
+}
+
+// eventProject names the project an event is about, from its own project or
+// the run, task or chat it names; "" is the whole workspace.
+func (s *server) eventProject(e core.Event) string {
+	var d struct{ Project, Run, Task, Chat, ID string }
+	e.Decode(&d)
+	p := d.Project
+	for _, ref := range [][2]string{{"run", d.Run}, {"task", d.Task}, {"chat", d.Chat}, {"run", d.ID}, {"task", d.ID}} {
+		if p == "" && ref[1] != "" {
+			p = s.projectOf(ref[0], ref[1])
+		}
+	}
+	return p
+}
+
+// notice says an event is a workspace notice every module may read; any other
+// event with no project (the lead's chat, the person's asks) needs a grant of "*".
+func notice(kind string) bool {
+	switch kind {
+	case "hive.idle", "hive.started", "hive.stopped", "alert.raised":
+		return true
+	}
+	return strings.HasPrefix(kind, "module.")
+}
+
+// moduleOf names the module that made a request, or "" for the person.
+func moduleOf(r *http.Request) string {
+	name, _ := r.Context().Value(moduleKey{}).(string)
+	return name
 }
 
 func orStr(s, d string) string {
@@ -481,7 +632,8 @@ func (s *server) state() api.State {
 	st.Jobs = a.System.Jobs()
 	st.Wakeups = a.System.Wakeups()
 	for _, m := range a.Mods.List() {
-		st.Modules = append(st.Modules, api.ModuleView{Name: m.Name, Description: m.Description, Source: m.Source.Source, Release: m.Source.Release, Projects: m.Source.Projects})
+		st.Modules = append(st.Modules, api.ModuleView{Name: m.Name, Description: m.Description, Source: m.Source.Source, Release: m.Source.Release, Projects: m.Source.Projects,
+			Hooks: m.Hooks, Status: a.Runner.Status(filepath.Base(m.Dir))})
 	}
 	for _, c := range a.Chat.Chats() {
 		cv := api.ChatView{Chat: c, Unread: a.Chat.Unread(c.ID)}

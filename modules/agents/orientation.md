@@ -22,7 +22,7 @@ Everything goes through `hive agent <op>` (`hive agent help` lists them):
 - `hive agent progress --text "..."`: a dashboard line.
 - `hive agent finish --status done|blocked --account "..." --tested "..." --unsure "..."`, then end your turn. A blocked reason goes on the record for the next agent.
 - `hive agent message --to <id|name|parent|lead|person> --text "..."` and `hive agent inbox`. Replies arrive as your next prompt; end your turn to wait.
-- `hive agent spawn --brief "..."`: a helper; its account comes back as a message.
+- `hive agent spawn --brief "..."`: a helper; its account comes back as a message, and its commits get a pull request of their own.
 - `hive agent brief --title "..." --done "..." --known "..."`: file new work (an issue, a worker, a pull request).
 - `hive agent remember --title "..." --text "..."`: write to the knowledge base.
 - `hive agent warden --want "..." --why "..." --steps "..." --tier T1|T2|T3`: for a step past your reach.

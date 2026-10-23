@@ -565,7 +565,7 @@ func (m *model) footer() string {
 		return "enter send · esc cancel"
 	}
 	if len(m.stack) > 0 && m.stack[len(m.stack)-1].kind == "module" {
-		return "↑↓ project · space grant or remove · esc back · q quit"
+		return "↑↓ project · space grant or remove · r review again · esc back · q quit"
 	}
 	if len(m.stack) > 0 {
 		return "↑↓ scroll · esc back · tab section · q quit (the Hive keeps running)"

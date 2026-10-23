@@ -14,6 +14,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/runner"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
@@ -31,6 +32,7 @@ type App struct {
 	Risk     *risk.Module
 	Projects *projects.Module
 	Release  *release.Module
+	Runner   *runner.Runner
 }
 
 // New opens the workspace and builds every module.
@@ -45,10 +47,10 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 		return nil, err
 	}
 	a.Agents = &agents.Agents{C: c, Mod: a.Mods}
-	c.Runs.Ops().SetSpawner(a.Agents.Spawner)
 	c.Runs.ModelFor = func(r core.Run) string { _, m := a.Agents.Model(r.Role, r.Project); return m }
 	a.Chat = chat.New(c, a.Agents)
 	a.Work = work.New(c, a.Agents, a.Chat)
+	c.Runs.Ops().SetSpawner(a.Work.Spawn)
 	a.Improve = improve.New(c, a.Agents, a.Work, a.Chat)
 	a.KB = kb.New(c, a.Agents)
 	a.System = system.New(c)
@@ -58,6 +60,10 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = &release.Module{C: c}
 	a.Improve.OnKept = a.Release.AfterKept
+	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
+	for _, tick := range []func(){a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Risk.Tick, a.Projects.Tick, a.Runner.Tick} {
+		a.Mods.Builtin(tick)
+	}
 	c.Person.Handle("release", a.Release.OnPerson)
 
 	a.System.Register(system.Job{Name: "improve.sweep", Fn: func() (string, error) {
@@ -103,14 +109,7 @@ func join(s []string) string {
 // Tick advances everything one step.
 func (a *App) Tick() {
 	a.C.Tick()
-	a.Work.Tick()
-	a.Improve.Tick()
-	a.Improve.TickSweeps()
-	a.Improve.TickStepBacks()
-	a.KB.Tick()
-	a.System.Tick()
-	a.Risk.Tick()
-	a.Projects.Tick()
+	a.Mods.Tick()
 }
 
 // Run ticks until ctx ends.
@@ -128,5 +127,8 @@ func (a *App) Run(ctx context.Context) {
 	}
 }
 
-// Close releases the journal.
-func (a *App) Close() error { return a.C.Close() }
+// Close stops module programs and releases the journal.
+func (a *App) Close() error {
+	a.Runner.Close()
+	return a.C.Close()
+}

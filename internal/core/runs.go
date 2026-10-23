@@ -834,6 +834,9 @@ func (rs *Runs) endTurn(r Run) {
 		if cur.Finish != nil {
 			account = fmt.Sprintf("status: %s\n%s\ntested: %s\nunsure: %s", cur.Finish.Status, cur.Finish.Account, cur.Finish.Tested, cur.Finish.Unsure)
 		}
+		if r.Task != "" && te.Status == StatusDone {
+			account += "\nwhere its commits go: their own pull request, task " + r.Task + "; the thread hears when it merges"
+		}
 		if p, ok := rs.Get(r.Parent); ok && (!p.Terminal() || p.Persistent) {
 			rs.Send(p.ID, fmt.Sprintf("[%s %s finished]\n%s", r.Role, r.ID, account))
 		}
@@ -979,10 +982,11 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		mounts = append(mounts, sandbox.Mount{Host: rs.ws.Projects(), Inside: "/hive/projects"},
 			sandbox.Mount{Host: rs.ws.Hive(), Inside: "/hive/state"})
 		// Every agent reads the whole Hive but what grants access: the login
-		// pool's stored logins and Private (the daemon's token, every run's home
-		// and CODEX_HOME). Both are folders, so what lands in them mid-turn
-		// lands under the cover.
-		for _, d := range []string{filepath.Join(rs.ws.Hive(), "logins"), rs.ws.Private()} {
+		// pool's stored logins, module programs' homes and logs (where a door
+		// module keeps its own service login), and Private (the daemon's token,
+		// every run's home and CODEX_HOME). All are folders, so what lands in
+		// them mid-turn lands under the cover.
+		for _, d := range []string{filepath.Join(rs.ws.Hive(), "logins"), filepath.Join(rs.ws.Hive(), "modules"), rs.ws.Private()} {
 			os.MkdirAll(d, 0o700)
 			mounts = append(mounts, sandbox.Mount{Host: d, Inside: "/hive/state/" + filepath.Base(d), Hide: true})
 		}

@@ -77,13 +77,15 @@ func TestLeadFollowsModelSetting(t *testing.T) {
 // Every run but an isolated project's reads the whole .hive at /hive/state,
 // writes none of it, and reads nothing there that grants access: no run's
 // home or CODEX_HOME (its own, another's, or one made after the turn
-// started), no stored login and not the daemon's token.
+// started), no stored login, no module program's home and not the daemon's token.
 func TestRunsReadTheStateButNoSecret(t *testing.T) {
 	c, _ := testHive(t)
 	os.WriteFile(c.WS.DaemonFile(), []byte(`{"token": "t"}`), 0o600)
 	login := filepath.Join(c.WS.Hive(), "logins", "codex", "spare", "auth.json")
 	os.MkdirAll(filepath.Dir(login), 0o700)
 	os.WriteFile(login, []byte(`{"refresh_token": "planted"}`), 0o600)
+	moduleHome := filepath.Join(c.WS.Hive(), "modules", "door", "home")
+	os.MkdirAll(moduleHome, 0o700)
 	h, _ := harness.Get("fake")
 	r := Run{RunSpec: RunSpec{ID: "r1", Role: "worker", Harness: "codex"}}
 	os.MkdirAll(c.WS.RunHome(r.ID), 0o755)
@@ -111,7 +113,7 @@ func TestRunsReadTheStateButNoSecret(t *testing.T) {
 		}
 	}
 	under := func(p, dir string) bool { return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator)) }
-	for _, p := range []string{c.WS.RunHome("r1"), codexHome, c.WS.RunHome("made-later"), c.WS.RunPrivate("made-later"), login, c.WS.DaemonFile()} {
+	for _, p := range []string{c.WS.RunHome("r1"), codexHome, c.WS.RunHome("made-later"), c.WS.RunPrivate("made-later"), login, moduleHome, c.WS.DaemonFile()} {
 		if state == "" || !under(p, state) {
 			t.Fatalf("%s is outside the state %q, so this test checks nothing", p, state)
 		}
