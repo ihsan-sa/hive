@@ -111,7 +111,7 @@ func TestCloseIssueGivesUp(t *testing.T) {
 	for i := 0; i < 20 && task.IssueOpen; i++ {
 		m.closeIssue(task, p)
 	}
-	if task.Stage != StageDone || task.IssueOpen || forge.fail != 92 || !logged(task, "gave up closing the issue: HTTP 503") {
+	if task.Stage != StageDone || task.IssueOpen || forge.fail != 92 || !logged(task, "gave up closing the issue, left open on the forge: HTTP 503") {
 		t.Fatalf("stage %q, issue open %v, attempts %d, log %v", task.Stage, task.IssueOpen, 100-forge.fail, task.Log)
 	}
 }
@@ -128,8 +128,27 @@ func TestDoneProjectGone(t *testing.T) {
 	}
 }
 
+// A revert the Hive made has no worker, so findings on it stop the task
+// cleanly instead of reopening a run that doesn't exist.
+func TestRevertFindingsStop(t *testing.T) {
+	m, _, _, p := noCommitRig(t, 0)
+	task := &Task{ID: "t2", Project: "p", Title: "Revert: x", Kind: "revert", Stage: StageReviewing}
+	if err := m.sendBack(task, p, "it reverts too much"); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageStopped || task.Round != 0 || !strings.Contains(task.Reason, "it reverts too much") {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+}
+
 // briefAt renders a brief for a project whose main holds config.
 func briefAt(t *testing.T, config string, task *Task) string {
+	m, p := rigAt(t, config)
+	return m.renderBrief(task, p, "HEAD")
+}
+
+// rigAt is a rig whose project's main holds config.
+func rigAt(t *testing.T, config string) (*Module, core.Project) {
 	m, _, _, p := noCommitRig(t, 0)
 	dir := m.C.WS.Project(p.Name)
 	os.MkdirAll(filepath.Join(dir, ".hive"), 0o755)
@@ -139,7 +158,7 @@ func briefAt(t *testing.T, config string, task *Task) string {
 			t.Fatal(out, err)
 		}
 	}
-	return m.renderBrief(task, p, "HEAD")
+	return m, p
 }
 
 // A scored project's worker gets the person's goal as written, with no bar an
@@ -161,5 +180,13 @@ func TestScoredBriefCarriesTheGoal(t *testing.T) {
 	b = briefAt(t, `{"test":"true"}`, task())
 	if !strings.Contains(b, "## What done looks like\n\nscore above 3.139\n") {
 		t.Fatalf("unscored brief:\n%s", b)
+	}
+	m, p := rigAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`)
+	if b := m.issueBody(task(), p); strings.Contains(b, "3.139") || !strings.Contains(b, "as far as you can take it") {
+		t.Fatalf("scored issue body:\n%s", b)
+	}
+	m, p = rigAt(t, `{"test":"true"}`)
+	if b := m.issueBody(task(), p); !strings.Contains(b, "score above 3.139") {
+		t.Fatalf("unscored issue body:\n%s", b)
 	}
 }
