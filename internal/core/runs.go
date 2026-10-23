@@ -160,9 +160,12 @@ func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), token
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	// A crash between writing a turn's token and starting the turn left it behind.
+	stuck := map[string]error{}
 	for _, r := range rs.runs {
 		if HarnessName(r.Harness) == "codex" && r.Status != StatusRunning {
-			rs.dropCodexHome(r.ID)
+			if err := rs.dropCodexHome(r.ID); err != nil {
+				stuck[r.ID] = err
+			}
 		}
 	}
 	j.Subscribe(func(e Event) {
@@ -170,6 +173,9 @@ func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), token
 		rs.apply(e)
 		rs.mu.Unlock()
 	})
+	for id, err := range stuck {
+		rs.SetStatus(id, StatusBlocked, "its Codex token could not be deleted: "+err.Error())
+	}
 	return rs
 }
 
