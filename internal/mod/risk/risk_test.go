@@ -39,6 +39,19 @@ func newRig(t *testing.T, autonomy int) *rig {
 		t.Fatal(err)
 	}
 	m := New(c, mods, &agents.Agents{C: c, Mod: mods})
+	// A step still running would write to the journal after Close; cleanups
+	// run last first, so this wait comes before it.
+	t.Cleanup(func() {
+		for i := 0; i < 250; i++ {
+			m.mu.Lock()
+			n := len(m.busy)
+			m.mu.Unlock()
+			if n == 0 {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
 	w, err := c.Runs.Start(core.RunSpec{Role: "worker", Harness: "fake", Checkout: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
