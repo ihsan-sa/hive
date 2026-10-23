@@ -125,21 +125,17 @@ func (m *Module) ensureRepo() {
 }
 
 // moveIsolated moves notes an isolated project left in the shared knowledge
-// base, from before they went in its own folder, into that folder. Earlier
-// commits and the filer's old clones still hold them, so it then starts the
-// knowledge base's history afresh from what it holds now; a clone made before
-// shares no history with it after.
-// It runs until every such note has moved, behind a marker in the Hive's own
-// state where the filer can't write. A note whose name is taken in the folder
-// moves under a free one, as Write picks it.
+// base into that project's folder, under a free name if theirs is taken, as
+// Write picks it. It runs at every start, so a note it couldn't move is moved
+// next time. Then, whenever any commit still holds a note naming an isolated
+// project, it starts the history afresh from what the knowledge base holds now
+// and drops the filer's old clones, which share that history. The old history
+// is set aside in one rename and deleted after, so a start cut short leaves
+// either the old history, checked again next start, or none.
 func (m *Module) moveIsolated() {
-	marker := filepath.Join(m.C.WS.Hive(), "kb-isolated-moved")
-	if core.Exists(marker) {
-		return
-	}
 	kb := m.C.WS.KB()
-	var moved []string
-	left := false
+	old := filepath.Join(m.C.WS.Hive(), "kb-old-git")
+	os.RemoveAll(old)
 	for _, name := range m.Notes() {
 		b, _ := os.ReadFile(filepath.Join(kb, name))
 		p, ok := m.isolatedIn(string(b))
@@ -151,23 +147,34 @@ func (m *Module) moveIsolated() {
 		for i := 2; err == nil && core.Exists(dst); i++ {
 			dst = filepath.Join(dir, fmt.Sprintf("%s-%d.md", strings.TrimSuffix(name, ".md"), i))
 		}
-		if err == nil && os.Rename(filepath.Join(kb, name), dst) == nil {
-			moved = append(moved, name)
-		} else {
-			left = true
+		if err == nil {
+			os.Rename(filepath.Join(kb, name), dst)
 		}
 	}
-	if len(moved) > 0 {
-		os.RemoveAll(filepath.Join(kb, ".git"))
-		m.ensureRepo()
-		old, _ := filepath.Glob(filepath.Join(m.C.WS.Hive(), "scratch", "filer-*"))
-		for _, d := range old {
-			os.RemoveAll(d)
+	if !m.historyHoldsIsolated() || os.Rename(filepath.Join(kb, ".git"), old) != nil {
+		return
+	}
+	m.ensureRepo()
+	os.RemoveAll(old)
+	clones, _ := filepath.Glob(filepath.Join(m.C.WS.Hive(), "scratch", "filer-*"))
+	for _, d := range clones {
+		os.RemoveAll(d)
+	}
+}
+
+// historyHoldsIsolated says whether any commit on main adds or removes a
+// note's header line naming an isolated project. The filer's refused commits
+// sit under their own refs and hold only the filer's text, so they don't count.
+func (m *Module) historyHoldsIsolated() bool {
+	for _, p := range m.C.Projects.List() {
+		if !p.Isolated {
+			continue
+		}
+		if out, _ := core.Git(m.C.WS.KB(), "log", "--format=%H", "-1", "-G", "^project: "+regexp.QuoteMeta(p.Name)+"$"); out != "" {
+			return true
 		}
 	}
-	if !left {
-		os.WriteFile(marker, nil, 0o644)
-	}
+	return false
 }
 
 // isolatedIn returns the isolated project a note's header names, if any.

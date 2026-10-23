@@ -317,8 +317,8 @@ func TestFilerConsolidates(t *testing.T) {
 }
 
 // Notes an isolated project left in the shared knowledge base move to its
-// folder once, at the first start, and never over a note already there.
-func TestMoveIsolatedOnceWithoutOverwriting(t *testing.T) {
+// folder, never over a note already there.
+func TestMoveIsolatedWithoutOverwriting(t *testing.T) {
 	c, m := newKB(t)
 	real, _ := m.Write(Note{Title: "plan", Text: "the real plan", Project: "secret"})
 	kb := c.WS.KB()
@@ -327,11 +327,6 @@ func TestMoveIsolatedOnceWithoutOverwriting(t *testing.T) {
 	}
 	core.Git(kb, "add", "-A")
 	core.Git(kb, "commit", "-q", "-m", "left over")
-	m.moveIsolated()
-	if !core.Exists(filepath.Join(kb, "old.md")) {
-		t.Fatal("notes moved again after the first start")
-	}
-	os.Remove(filepath.Join(c.WS.Hive(), "kb-isolated-moved"))
 	m.moveIsolated()
 	if b, _ := os.ReadFile(real); !strings.Contains(string(b), "the real plan") {
 		t.Errorf("the move replaced the isolated note: %q", b)
@@ -344,6 +339,70 @@ func TestMoveIsolatedOnceWithoutOverwriting(t *testing.T) {
 	}
 	if out, _ := core.Git(kb, "ls-files", "plan.md"); core.Exists(filepath.Join(kb, "plan.md")) || out != "" {
 		t.Error("the clashing note stayed in the shared knowledge base")
+	}
+	if out, _ := core.Git(kb, "log", "--all", "-p"); strings.Contains(out, "left over") {
+		t.Error("the knowledge base's history still holds the moved notes")
+	}
+}
+
+// A project made isolated after its notes were committed has them moved and
+// purged from history at the next start, and the filer's old clones dropped.
+func TestMadeIsolatedLaterPurgesHistory(t *testing.T) {
+	c, m := newKB(t)
+	c.Projects.Add(core.Project{Name: "later", Repo: "me/later"})
+	if _, err := m.Write(Note{Title: "plan", Text: "the later plan", Project: "later"}); err != nil {
+		t.Fatal(err)
+	}
+	clone := filepath.Join(c.WS.Hive(), "scratch", "filer-1")
+	os.MkdirAll(clone, 0o755)
+	p, _ := c.Projects.Get("later")
+	p.Isolated = true
+	c.Projects.Update(p)
+	m.moveIsolated()
+	kb := c.WS.KB()
+	if !core.Exists(filepath.Join(kb, "isolated", "later", "plan.md")) {
+		t.Error("the note didn't move")
+	}
+	if out, _ := core.Git(kb, "log", "--all", "-p"); strings.Contains(out, "the later plan") {
+		t.Error("the knowledge base's history still holds the note")
+	}
+	if core.Exists(clone) {
+		t.Error("the filer's old clone stayed")
+	}
+}
+
+// A start cut short, with the notes moved but the history not yet rebuilt or
+// with the old history set aside, is finished by the next start.
+func TestInterruptedPurgeFinishesNextStart(t *testing.T) {
+	c, m := newKB(t)
+	kb := c.WS.KB()
+	os.WriteFile(filepath.Join(kb, "plan.md"), []byte("---\ntitle: x\nproject: secret\n---\n\nleft over\n"), 0o644)
+	core.Git(kb, "add", "-A")
+	core.Git(kb, "commit", "-q", "-m", "left over")
+	dir, _ := c.WS.IsolatedKB("secret")
+	os.Rename(filepath.Join(kb, "plan.md"), filepath.Join(dir, "plan.md"))
+	core.Git(kb, "commit", "-q", "-am", "moved") // cut short here
+	m.moveIsolated()
+	if out, _ := core.Git(kb, "log", "--all", "-p"); strings.Contains(out, "left over") {
+		t.Error("the history kept the moved note")
+	}
+	old := filepath.Join(c.WS.Hive(), "kb-old-git")
+	os.MkdirAll(old, 0o755) // cut short after setting the old history aside
+	m.moveIsolated()
+	if core.Exists(old) {
+		t.Error("the old history set aside stayed")
+	}
+}
+
+// A clean history is left alone.
+func TestCleanHistoryIsKept(t *testing.T) {
+	c, m := newKB(t)
+	m.Write(Note{Title: "open", Text: "open", Project: "open"})
+	m.Write(Note{Title: "plan", Text: "the plan", Project: "secret"})
+	head, _ := core.Git(c.WS.KB(), "rev-parse", "HEAD")
+	m.moveIsolated()
+	if now, _ := core.Git(c.WS.KB(), "rev-parse", "HEAD"); now != head {
+		t.Error("a clean history was rebuilt")
 	}
 }
 
