@@ -42,39 +42,41 @@ const (
 
 // Task is one piece of work from ask to merge.
 type Task struct {
-	ID        string     `json:"id"`
-	Project   string     `json:"project"`
-	Title     string     `json:"title"`
-	Done      string     `json:"done"`
-	Known     string     `json:"known"`
-	From      string     `json:"from"` // run id, person, or sweep run
-	Chat      string     `json:"chat,omitempty"`
-	Thread    string     `json:"thread,omitempty"`
-	Kind      string     `json:"kind"` // work | revert
-	Stage     string     `json:"stage"`
-	Reason    string     `json:"reason,omitempty"`
-	Issue     core.Issue `json:"issue"`
-	Worker    string     `json:"worker,omitempty"`
-	Base      string     `json:"base,omitempty"`
-	Branch    string     `json:"branch,omitempty"`
-	SHA       string     `json:"sha,omitempty"`
-	PR        core.PR    `json:"pr"`
-	Round     int        `json:"round"`
-	Conflicts int        `json:"conflicts"`
-	Reviews   int        `json:"reviews"`
-	Reviewer  string     `json:"reviewer,omitempty"`
-	Findings  string     `json:"findings,omitempty"`
-	MergeSHA  string     `json:"merge_sha,omitempty"`
-	RevertOf  string     `json:"revert_of,omitempty"`  // task id
-	RevertSHA string     `json:"revert_sha,omitempty"` // the merge being reverted
-	Lesson    string     `json:"lesson,omitempty"`
-	Failures  int        `json:"failures"`
-	Attempt   int        `json:"attempt"` // fresh workers handed this task
-	Retry     time.Time  `json:"retry,omitempty"`
-	IssueOpen bool       `json:"issue_open,omitempty"` // done, but its issue is still to close
-	Log       []Entry    `json:"log,omitempty"`
-	Created   time.Time  `json:"created"`
-	Updated   time.Time  `json:"updated"`
+	ID        string            `json:"id"`
+	Project   string            `json:"project"`
+	Title     string            `json:"title"`
+	Done      string            `json:"done"`
+	Known     string            `json:"known"`
+	From      string            `json:"from"` // run id, person, or sweep run
+	Chat      string            `json:"chat,omitempty"`
+	Thread    string            `json:"thread,omitempty"`
+	Kind      string            `json:"kind"` // work | revert
+	Stage     string            `json:"stage"`
+	Reason    string            `json:"reason,omitempty"`
+	Issue     core.Issue        `json:"issue"`
+	Worker    string            `json:"worker,omitempty"`
+	Base      string            `json:"base,omitempty"`
+	Branch    string            `json:"branch,omitempty"`
+	SHA       string            `json:"sha,omitempty"`
+	PR        core.PR           `json:"pr"`
+	Round     int               `json:"round"`
+	Conflicts int               `json:"conflicts"`
+	Reviews   int               `json:"reviews"`
+	Reviewer  string            `json:"reviewer,omitempty"`
+	Findings  string            `json:"findings,omitempty"`
+	MergeSHA  string            `json:"merge_sha,omitempty"`
+	RevertOf  string            `json:"revert_of,omitempty"`  // task id
+	RevertSHA string            `json:"revert_sha,omitempty"` // the merge being reverted
+	Lesson    string            `json:"lesson,omitempty"`
+	Inputs    map[string]string `json:"inputs,omitempty"` // files its worker reads in $HIVE_RUN, kept off the issue
+	Failures  int               `json:"failures"`
+	CloseFail int               `json:"close_fail,omitempty"` // failed tries to close the issue
+	Attempt   int               `json:"attempt"`              // fresh workers handed this task
+	Retry     time.Time         `json:"retry,omitempty"`
+	IssueOpen bool              `json:"issue_open,omitempty"` // done, but its issue is still to close
+	Log       []Entry           `json:"log,omitempty"`
+	Created   time.Time         `json:"created"`
+	Updated   time.Time         `json:"updated"`
 }
 
 // Label is the title clipped for a heading, an issue, a PR or a message; the
@@ -106,18 +108,34 @@ type Module struct {
 	// one ran and succeeded (the risk module).
 	Steps func(run string) (string, bool)
 
+	// Weigh settles a merge that changes protected paths as autonomy says
+	// (the risk module) and returns who decides; unset, the person does.
+	Weigh func(core.Ask) string
+
 	// OnMerged is called after a task's merge is recorded (the improve module measures).
 	OnMerged func(t Task)
 
 	mu    sync.Mutex
 	tasks map[string]*Task
 	busy  map[string]bool
+	// mainRed holds project@sha for every main commit whose red tests were
+	// already raised, so each is raised once whatever the tasks say now.
+	mainRed map[string]bool
 }
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, mainRed: map[string]bool{}}
 	apply := func(e core.Event) {
+		if e.Kind == "alert.raised" {
+			var a struct{ Kind, Project, SHA string }
+			if e.Decode(&a) == nil && a.Kind == "main-red" {
+				m.mu.Lock()
+				m.mainRed[a.Project+"@"+a.SHA] = true
+				m.mu.Unlock()
+			}
+			return
+		}
 		if e.Kind != "task.saved" {
 			return
 		}
@@ -172,13 +190,14 @@ func (m *Module) List(fn func(Task) bool) []Task {
 
 // Brief files an ask.
 type Brief struct {
-	Project string `json:"project"`
-	Title   string `json:"title"`
-	Done    string `json:"done"`
-	Known   string `json:"known"`
-	From    string `json:"from"`
-	Chat    string `json:"chat"`
-	Thread  string `json:"thread"`
+	Project string            `json:"project"`
+	Title   string            `json:"title"`
+	Done    string            `json:"done"`
+	Known   string            `json:"known"`
+	From    string            `json:"from"`
+	Chat    string            `json:"chat"`
+	Thread  string            `json:"thread"`
+	Inputs  map[string]string `json:"-"`
 }
 
 // File creates a task from a brief.
@@ -201,7 +220,7 @@ func (m *Module) File(b Brief) (Task, error) {
 		return Task{}, fmt.Errorf("no project %q", b.Project)
 	}
 	t := &Task{ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
-		From: b.From, Chat: b.Chat, Thread: b.Thread, Kind: "work", Stage: StageNew, Created: time.Now().UTC()}
+		From: b.From, Chat: b.Chat, Thread: b.Thread, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Created: time.Now().UTC()}
 	m.save(t, "filed by "+b.From)
 	return *t, nil
 }
@@ -300,8 +319,7 @@ func (m *Module) step(t *Task) error {
 	}
 	switch t.Stage {
 	case StageNew:
-		body := fmt.Sprintf("%s\n\n**Done looks like:** %s\n\n**Already known:** %s\n\n_Filed by the Hive (%s)._", t.Title, orNone(t.Done), orNone(t.Known), t.From)
-		is, err := m.C.Effects.Forge.CreateIssue(p.Repo, t.Label(), body, marker(t.ID))
+		is, err := m.C.Effects.Forge.CreateIssue(p.Repo, t.Label(), m.issueBody(t, p), marker(t.ID))
 		if err != nil {
 			return err
 		}
@@ -364,7 +382,7 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 			return err
 		}
 		spec := m.Agents.Spec(id, "worker", p.Name, dir, m.renderBrief(t, p, base))
-		spec.Task = t.ID
+		spec.Task, spec.Inputs = t.ID, t.Inputs
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
 		}
@@ -378,6 +396,13 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 	return nil
 }
 
+// issueBody is the issue a task is filed as. Its done line follows the brief's,
+// read from the project's last synced main.
+func (m *Module) issueBody(t *Task, p core.Project) string {
+	done := doneFor(t, m.C.Effects.Config(p, "HEAD").Score != nil)
+	return fmt.Sprintf("%s\n\n**Done looks like:** %s\n\n**Already known:** %s\n\n_Filed by the Hive (%s)._", t.Title, done, orNone(t.Known), t.From)
+}
+
 // renderBrief is the worker's first prompt. It quotes the project's lessons so
 // an idea that was reverted isn't tried again blind.
 func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
@@ -385,7 +410,7 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Brief: %s\n\nTask %s · project %s · issue #%d\n\n", t.Label(), t.ID, p.Name, t.Issue.Number)
 	fmt.Fprintf(&b, "## The ask\n\n%s\n\n", t.Title)
-	fmt.Fprintf(&b, "## What done looks like\n\n%s\n\n## What's already known\n\n%s\n\n", orNone(t.Done), orNone(t.Known))
+	fmt.Fprintf(&b, "## What done looks like\n\n%s\n\n## What's already known\n\n%s\n\n", doneFor(t, cfg.Score != nil), orNone(t.Known))
 	b.WriteString("## The project\n\n")
 	b.WriteString("- Goals: `.hive/goals.md`. Read it; report against it.\n")
 	fmt.Fprintf(&b, "- Tests: `%s`\n", orNone(cfg.Test))
@@ -555,13 +580,13 @@ func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
 // gives up. The task stays done either way.
 func (m *Module) closeIssue(t *Task, p core.Project) {
 	if err := m.C.Effects.Forge.CloseIssue(p.Repo, t.Issue.Number); err != nil {
-		t.Failures++
-		if t.Failures >= 8 {
+		t.CloseFail++
+		if t.CloseFail >= 8 {
 			t.IssueOpen = false
-			m.save(t, "gave up closing the issue: "+core.Clip(err.Error(), 300))
+			m.save(t, "gave up closing the issue, left open on the forge: "+core.Clip(err.Error(), 300))
 			return
 		}
-		t.Retry = time.Now().Add(time.Minute << t.Failures)
+		t.Retry = time.Now().Add(time.Minute << t.CloseFail)
 		m.save(t, "closing the issue failed (will retry): "+core.Clip(err.Error(), 300))
 		return
 	}
@@ -584,6 +609,16 @@ func (m *Module) test(t *Task, p core.Project) error {
 		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("Tests on %s: **%s**\n\n```\n%s\n```", core.Short(t.SHA), passFail(c.OK), core.Clip(c.Output, 1500)))
 	}
 	if !c.OK {
+		mc, err := m.mainTests(p, main, cfg.Test)
+		if err != nil {
+			return err
+		}
+		if !mc.OK {
+			return m.waitOnMain(t, p, main, mc)
+		}
+		if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
+			return err
+		}
 		return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
 	}
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
@@ -591,14 +626,24 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err
 	}
 	switch {
-	case len(ch.Protected) > 0 && !m.C.Effects.Approved(p.Name, t.SHA):
+	case len(ch.Protected) > 0 && !m.C.Effects.Approved("merge", p.Name, t.SHA):
 		t.Stage = StagePerson
-		m.save(t, "waiting on the person: changes "+strings.Join(ch.Protected, ", "))
-		m.C.Person.Ask(core.Ask{Kind: "merge", Ref: t.ID + "@" + t.SHA, Project: p.Name, From: t.Worker,
+		diff, _ := core.Git(m.C.WS.Project(p.Name), append([]string{"diff", ch.Base, t.SHA, "--"}, ch.Protected...)...)
+		a := core.Ask{Kind: "merge", Ref: t.ID + "@" + t.SHA, Project: p.Name, From: t.Worker,
 			Title:  fmt.Sprintf("Merge %q? It changes %s", t.Label(), strings.Join(ch.Protected, ", ")),
-			Detail: fmt.Sprintf("%s\n\nPR: %s", strings.Join(ch.Protected, ", ")+" are yours to merge.", t.PR.URL), Options: []string{"merge", "leave open"}})
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q changes %s, which is yours to approve. It's waiting on you: %s", t.Label(), strings.Join(ch.Protected, ", "), t.PR.URL))
-	case ch.Small || m.C.Effects.Reviewed(p.Name, t.SHA):
+			Detail: fmt.Sprintf("These hold the project's goals, score or settings. PR: %s\n\n%s", t.PR.URL, core.Clip(diff, 6000)), Options: []string{"merge", "leave open"}}
+		// Saved before Weigh: a warden's answer may reach onPersonMerge first.
+		m.save(t, "waiting for an approval: changes "+strings.Join(ch.Protected, ", "))
+		who := "person"
+		if m.Weigh != nil {
+			who = m.Weigh(a)
+		} else {
+			m.C.Person.Ask(a)
+		}
+		if who == "person" {
+			m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q changes %s, which is yours to approve. It's waiting on you: %s", t.Label(), strings.Join(ch.Protected, ", "), t.PR.URL))
+		}
+	case ch.Small || m.C.Effects.Reviewed(p, ch, t.SHA):
 		t.Stage = StageMerging
 		m.save(t, "tests passed; "+map[bool]string{true: "small change, no read needed", false: "already read"}[ch.Small])
 	default:
@@ -606,6 +651,62 @@ func (m *Module) test(t *Task, p core.Project) error {
 		m.save(t, "tests passed; asking for a read")
 	}
 	return nil
+}
+
+// mainTests is main's own test result, measured once per main commit (the
+// baseline and the post-merge measurement usually already have it).
+func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
+	if c, ok := m.C.Effects.GetCheck(p.Name, main, "test"); ok {
+		return c, nil
+	}
+	if _, err := m.C.Sandbox(); err != nil {
+		return core.Check{}, err
+	}
+	return m.C.Effects.RunCheck(p, main, "test", command), nil
+}
+
+// waitOnMain holds a red change while main's own tests are red, since the
+// failure can't be told apart from main's. Main's failure is raised once per
+// main commit, not once per waiting change; when main goes green the change
+// is brought up to date and tested again.
+func (m *Module) waitOnMain(t *Task, p core.Project, main string, mc core.Check) error {
+	reason := "waiting on main: its own tests fail at " + core.Short(main) + ", so this failure isn't the worker's"
+	if t.Reason == reason {
+		return nil
+	}
+	m.mu.Lock()
+	raised := m.mainRed[p.Name+"@"+main]
+	m.mu.Unlock()
+	if !raised {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": main,
+			"text": "main's tests fail in " + p.Name + " at " + core.Short(main) + ", so changes with failing tests wait for main to go green: " + core.Clip(mc.Output, 300)})
+	}
+	t.Reason = reason
+	m.save(t, reason)
+	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Main's own tests fail too at "+core.Short(main)+", so this isn't sent back to the worker. It waits for main to go green, then is brought up to date and tested again.")
+	return nil
+}
+
+// catchUp brings t's branch up to date with main and sends it to be tested
+// again. It reports false when the branch already contains main.
+func (m *Module) catchUp(t *Task, p core.Project, main, why string) (bool, error) {
+	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
+		return false, nil
+	}
+	next, err := m.C.Effects.UpdateBranch(p, t.SHA, main)
+	if errors.Is(err, core.ErrConflict) {
+		t.Reason = ""
+		return true, m.conflict(t, p)
+	}
+	if err != nil {
+		return true, err
+	}
+	if err := m.C.Effects.Push(p, t.Branch, next); err != nil {
+		return true, err
+	}
+	t.SHA, t.Stage, t.Reason = next, StageTesting, ""
+	m.save(t, why+"; branch brought up to date at "+core.Short(next)+", testing again")
+	return true, nil
 }
 
 func passFail(ok bool) string {
@@ -627,6 +728,9 @@ func reviewToken(run string) string {
 
 func (m *Module) review(t *Task, p core.Project) error {
 	id := fmt.Sprintf("r-%s-%s-%d", t.ID, core.Short(t.SHA), t.Reviews)
+	if n := len(m.C.Effects.Reads(p.Name, t.SHA)); n > 0 {
+		id += fmt.Sprintf("-read%d", n+1) // a separate run for each further read
+	}
 	r, ok := m.C.Runs.Get(id)
 	if !ok {
 		main, err := m.C.Effects.Sync(p)
@@ -643,11 +747,15 @@ func (m *Module) review(t *Task, p core.Project) error {
 		}
 		c, _ := m.C.Effects.GetCheck(p.Name, t.SHA, "test")
 		w, _ := m.C.Runs.Get(t.Worker)
+		account := w.Brief + "\n\n## The worker's account\n\n" + finishText(w)
+		if t.Kind == "revert" {
+			account = fmt.Sprintf("The Hive made this revert itself; no worker wrote it. It reverts the merge %s because: %s\n\nIt also records that lesson in `.hive/lessons.md`. Check it undoes that merge and nothing else.", core.Short(t.RevertSHA), t.Lesson)
+		}
 		brief := fmt.Sprintf("Review round %d of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", t.Round+1, t.ID, t.Label())
 		spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
 		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": c.Output,
-			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + w.Brief + "\n\n## The worker's account\n\n" + finishText(w)}
+			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
 		}
@@ -686,7 +794,8 @@ func (m *Module) review(t *Task, p core.Project) error {
 	}
 	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fb.String())
 	if v.Verdict == "land" {
-		t.Stage = StageMerging
+		// Back through test(), which merges or asks a second, separate reader for a high class.
+		t.Stage = StageTesting
 		m.save(t, "reviewer: land")
 		return nil
 	}
@@ -694,17 +803,25 @@ func (m *Module) review(t *Task, p core.Project) error {
 }
 
 // sendBack returns findings to the same worker in the same checkout, a
-// bounded number of times, after which the work stops and says so.
+// bounded number of times, after which the work stops and says so. A revert
+// the Hive made has no worker, so it stops on the first findings.
 func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
 	max := m.C.WS.LoadConfig().ReviewRounds
 	if max <= 0 {
 		max = 3
 	}
-	if t.Round >= max {
-		t.Stage, t.Reason = StageStopped, fmt.Sprintf("stopped after %d rounds of fixes; what remains:\n\n%s", t.Round, core.Clip(findings, 1500))
-		m.save(t, "stopped after fix rounds")
+	reason := ""
+	switch {
+	case t.Worker == "": // a host-made revert: nobody to send it back to
+		reason = "the Hive made this commit itself, so no worker can fix it; what was found:\n\n" + core.Clip(findings, 1500)
+	case t.Round >= max:
+		reason = fmt.Sprintf("stopped after %d rounds of fixes; what remains:\n\n%s", t.Round, core.Clip(findings, 1500))
+	}
+	if reason != "" {
+		t.Stage, t.Reason = StageStopped, reason
+		m.save(t, "stopped: nothing more to send back")
 		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Stopping here. "+t.Reason+"\n\nThe pull request stays open.")
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Stopped %q after %d rounds; the PR stays open: %s", t.Label(), t.Round, t.PR.URL))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Stopped %q; the PR stays open: %s", t.Label(), t.PR.URL))
 		return nil
 	}
 	t.Round++
@@ -722,21 +839,8 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if err != nil {
 		return err
 	}
-	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err != nil {
-		// Main moved: bring the branch up to date and test again first.
-		next, err := m.C.Effects.UpdateBranch(p, t.SHA, main)
-		if errors.Is(err, core.ErrConflict) {
-			return m.conflict(t, p)
-		}
-		if err != nil {
-			return err
-		}
-		if err := m.C.Effects.Push(p, t.Branch, next); err != nil {
-			return err
-		}
-		t.SHA, t.Stage = next, StageTesting
-		m.save(t, "main moved; branch brought up to date at "+core.Short(next)+", testing again")
-		return nil
+	if ok, err := m.catchUp(t, p, main, "main moved"); ok || err != nil {
+		return err
 	}
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label()})
 	var np *core.NeedsPerson
@@ -819,17 +923,14 @@ func (m *Module) onPersonMerge(a core.Ask) {
 		return
 	}
 	if a.Answer == "merge" || a.Answer == "yes" {
-		m.C.Effects.Approve(t.Project, sha)
-		if m.C.Effects.Reviewed(t.Project, sha) {
-			t.Stage = StageMerging
-		} else {
-			t.Stage = StageReviewing
-		}
+		m.C.Effects.Approve("merge", t.Project, sha)
+		t.Stage = StageTesting // test() routes to a read or the merge
 		m.save(&t, "the person approved")
 		return
 	}
-	t.Stage, t.Reason = StageStopped, "the person left it open"
+	t.Stage, t.Reason = StageStopped, strings.TrimSuffix("left open: "+a.Note, ": ")
 	m.save(&t, t.Reason)
+	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q was %s: %s", t.Label(), t.Reason, t.PR.URL))
 }
 
 // Stop ends a task on purpose (from the control center).
@@ -862,4 +963,14 @@ func (m *Module) Retry(id string) error {
 	t.Stage, t.Worker, t.Reason, t.Failures, t.Round = StageIssued, "", "", 0, 0
 	m.save(&t, "handed to a fresh worker")
 	return nil
+}
+
+// doneFor is the done line a brief carries. On a scored project an agent's own
+// bar would cap the work, so the ask stands as done; the Hive's own setup brief
+// keeps its line.
+func doneFor(t *Task, scored bool) string {
+	if scored && t.From != "hive" {
+		return "What the ask says, as far as you can take it."
+	}
+	return orNone(t.Done)
 }

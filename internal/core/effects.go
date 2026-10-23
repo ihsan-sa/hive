@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +27,9 @@ import (
 //   - checks run on the exact commit in a clean checkout the agent can't touch;
 //   - a merge is pinned to the commit that passed and was read;
 //   - changes to protected paths (goals, the score, the project's settings)
-//     are the person's to merge.
+//     are the person's to merge;
+//   - a change to a high-class path needs two separate land reads of its
+//     exact commit, and so does every change to a self project (one read).
 type Effects struct {
 	ws      Workspace
 	j       *Journal
@@ -40,6 +43,7 @@ type Effects struct {
 	mu        sync.Mutex
 	checks    map[string]Check
 	verdicts  map[string]Verdict
+	lands     map[string][]string // project@sha -> reviewer runs that said land, since the last fix
 	hostMade  map[string]HostCommit
 	approvals map[string]bool
 }
@@ -84,7 +88,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}}
 	apply := func(ev Event) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -97,14 +101,22 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var v Verdict
 			ev.Decode(&v)
 			e.verdicts[v.Project+"@"+v.SHA] = v
+			if k := v.Project + "@" + v.SHA; v.Verdict == "land" && !slices.Contains(e.lands[k], v.Run) {
+				e.lands[k] = append(e.lands[k], v.Run)
+			} else if v.Verdict != "land" {
+				delete(e.lands, k)
+			}
 		case "effect.hostcommit":
 			var h HostCommit
 			ev.Decode(&h)
 			e.hostMade[h.Project+"@"+h.SHA] = h
 		case "effect.approved":
-			var a struct{ Project, SHA string }
+			var a struct{ Kind, Project, SHA string }
 			ev.Decode(&a)
-			e.approvals[a.Project+"@"+a.SHA] = true
+			if a.Kind == "" {
+				a.Kind = "merge"
+			}
+			e.approvals[a.Kind+":"+a.Project+"@"+a.SHA] = true
 		}
 	}
 	j.Replay(apply)
@@ -224,6 +236,22 @@ var ErrNoChanges = errors.New("no new commits")
 // checking, and the result must descend from base.
 func (e *Effects) Extract(p Project, r Run, base string) (string, error) {
 	return e.ExtractInto(e.ws.Project(p.Name), p.Name, r, base)
+}
+
+// Snapshot commits whatever a run left in its checkout, from inside the
+// sandbox with no network, and then takes it out as Extract does.
+func (e *Effects) Snapshot(p Project, r Run, base string) (string, error) {
+	sb, err := e.sandbox()
+	if err != nil {
+		return "", err
+	}
+	work := sandbox.Mount{Host: r.Checkout, Inside: "/work", RW: true}
+	git := "git -c safe.directory='*' -c core.hooksPath=/dev/null -c user.name=Hive -c user.email=hive@localhost -C " + shq(sandbox.InsidePath(sb, work))
+	script := git + " add -A && { " + git + " diff --cached --quiet || " + git + " commit -q --no-verify -m 'what the run left'; }"
+	if code, out, err := e.runSandboxed(sb, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute); err != nil || code != 0 {
+		return "", fmt.Errorf("could not commit what the run left: %v %s", err, Clip(out, 300))
+	}
+	return e.Extract(p, r, base)
 }
 
 // ExtractInto is Extract into any host-owned repository (the knowledge base uses it).
@@ -390,7 +418,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, id string, mounts []sandbox.M
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, Network: network, UID: os.Getuid(), GID: os.Getgid()}
+		Stdout: logPath, Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), UID: os.Getuid(), GID: os.Getgid()}
 	code, err := sb.Run(spec, timeout)
 	raw, _ := os.ReadFile(logPath)
 	errRaw, _ := os.ReadFile(logPath + ".err")
@@ -472,16 +500,26 @@ func (e *Effects) GetVerdict(project, sha string) (Verdict, bool) {
 	return v, ok
 }
 
-// Approve records the person's approval of a commit (protected paths).
-func (e *Effects) Approve(project, sha string) {
-	e.j.MustAppend("effect.approved", map[string]string{"project": project, "sha": sha})
-}
-
-// Approved reports whether the person approved sha.
-func (e *Effects) Approved(project, sha string) bool {
+// Reads returns the reviewer runs that said land on exactly sha since its last fix.
+func (e *Effects) Reads(project, sha string) []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.approvals[project+"@"+sha]
+	return slices.Clone(e.lands[project+"@"+sha])
+}
+
+// Approve records the approval of a commit (the person's, or a warden's
+// when autonomy lets it decide): kind "merge" for a head
+// that changes protected paths, "release" for a merge held before release.
+// The kinds stay apart, since a fast-forwarding forge merges a head as itself.
+func (e *Effects) Approve(kind, project, sha string) {
+	e.j.MustAppend("effect.approved", map[string]string{"kind": kind, "project": project, "sha": sha})
+}
+
+// Approved reports whether the person approved sha for kind.
+func (e *Effects) Approved(kind, project, sha string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.approvals[kind+":"+project+"@"+sha]
 }
 
 // HostMade returns a host-authored commit record.
@@ -499,6 +537,8 @@ type Change struct {
 	Lines     int      `json:"lines"`
 	Small     bool     `json:"small"`
 	Protected []string `json:"protected,omitempty"`
+	High      []string `json:"high,omitempty"` // files in a high or root class
+	Root      []string `json:"root,omitempty"` // files that run with elevated rights
 	Diff      string   `json:"-"`
 }
 
@@ -530,10 +570,14 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		file := strings.Join(f[2:], " ")
 		c.Files = append(c.Files, file)
 		c.Lines += add + del
-		for _, pp := range protected {
-			if file == pp || strings.HasPrefix(file, strings.TrimSuffix(pp, "/")+"/") {
-				c.Protected = append(c.Protected, file)
-			}
+		if under(file, protected) {
+			c.Protected = append(c.Protected, file)
+		}
+		if under(file, cfg.Root) {
+			c.Root = append(c.Root, file)
+		}
+		if under(file, cfg.High) || under(file, cfg.Root) {
+			c.High = append(c.High, file)
 		}
 		isDoc := strings.HasPrefix(file, "docs/") || file == ".hive/lessons.md"
 		for _, x := range docExt {
@@ -545,9 +589,19 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 			docsOnly = false
 		}
 	}
-	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0
+	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && !p.Self
 	c.Diff, _ = Git(dir, "diff", base, sha)
 	return c, nil
+}
+
+// under reports whether file is one of paths or inside one of them.
+func under(file string, paths []string) bool {
+	for _, pp := range paths {
+		if file == pp || strings.HasPrefix(file, strings.TrimSuffix(pp, "/")+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // MergeRequest is everything the gate needs to merge a pull request.
@@ -570,17 +624,17 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(ch.Protected) > 0 && !e.Approved(p.Name, m.SHA) {
-		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which the person merges"}
+	if len(ch.Protected) > 0 && !e.Approved("merge", p.Name, m.SHA) {
+		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
 	}
-	if !ch.Small && !e.readOK(p.Name, m.SHA) {
+	if !ch.Small && !e.readOK(p, ch, m.SHA) {
 		return "", fmt.Errorf("refusing to merge %s: no land verdict bound to that exact commit", short(m.SHA))
 	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
 	if err != nil {
 		return "", err
 	}
-	e.j.MustAppend("effect.merged", map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged})
+	e.j.MustAppend("effect.merged", map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root})
 	return merged, nil
 }
 
@@ -589,7 +643,17 @@ type NeedsPerson struct{ Reason string }
 
 func (n *NeedsPerson) Error() string { return "needs the person: " + n.Reason }
 
-func (e *Effects) readOK(project, sha string) bool {
+func (e *Effects) readOK(p Project, ch Change, sha string) bool {
+	project := p.Name
+	if p.Self || len(ch.High) > 0 {
+		// A release names the read of each merged head, so no verdict carries
+		// over from another commit; a high class needs a second, separate read.
+		need := 1
+		if len(ch.High) > 0 {
+			need = 2
+		}
+		return len(e.Reads(project, sha)) >= need
+	}
 	if v, ok := e.GetVerdict(project, sha); ok {
 		return v.Verdict == "land"
 	}
@@ -607,8 +671,8 @@ func (e *Effects) readOK(project, sha string) bool {
 	return false
 }
 
-// Reviewed reports whether sha has the read it needs to merge.
-func (e *Effects) Reviewed(project, sha string) bool { return e.readOK(project, sha) }
+// Reviewed reports whether sha, classified as ch, has the reads it needs to merge.
+func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.readOK(p, ch, sha) }
 
 // UpdateBranch merges main into the reviewed commit in a clean host checkout.
 // The result is host-made, so the verdict on the reviewed commit carries, but

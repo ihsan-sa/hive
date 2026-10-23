@@ -61,12 +61,17 @@ type Module struct {
 	spells   map[string]spell     // task id -> its current stage and since when
 	took     map[string][]float64 // task stage -> seconds its recent spells took
 	stalls   map[string]*Stall
+
+	stepbacks map[string]*StepBack
+	busy      map[string]bool
+	alerted   map[string]string // project -> the step-back alert last raised
+	startMu   sync.Mutex        // one step-back starts at a time
 }
 
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -83,6 +88,10 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			if s.Status == "running" {
 				m.lastSeen = e.Seq
 			}
+		case "stepback.saved":
+			var s StepBack
+			e.Decode(&s)
+			m.stepbacks[s.ID] = &s
 		}
 	}
 	c.J.Replay(apply)
@@ -303,7 +312,7 @@ func (m *Module) StartSweep(force bool) (Sweep, error) {
 		return Sweep{}, err
 	}
 	spec := m.Agents.Spec(id, "sweep", "", dir, "Sweep the records in $HIVE_RUN/digest.md for the next real gains, write sweep.md, file asks with evidence, and finish.")
-	spec.Inputs = map[string]string{"digest.md": m.Digest(since)}
+	spec.Inputs = map[string]string{"digest.md": m.Digest(since, "")}
 	if _, err := m.C.Runs.Start(spec); err != nil {
 		return Sweep{}, err
 	}
@@ -344,11 +353,21 @@ func (m *Module) TickSweeps() {
 	}
 }
 
-// Digest summarizes scores, reverts, failures, chats and notes since seq.
-func (m *Module) Digest(since int64) string {
+// Digest summarizes scores, reverts, failures, chats and notes since seq,
+// across every project but the isolated ones, or from project only alone when
+// only is set. An isolated project's records reach only its own step-back.
+func (m *Module) Digest(since int64, only string) string {
+	isolated := map[string]bool{}
+	for _, p := range m.C.Projects.List() {
+		isolated[p.Name] = p.Isolated
+	}
+	mine := func(project string) bool { return project == only || only == "" && !isolated[project] }
 	var b strings.Builder
 	b.WriteString("# Digest for the improvement sweep\n\n")
 	for _, p := range m.C.Projects.List() {
+		if !mine(p.Name) {
+			continue
+		}
 		fmt.Fprintf(&b, "## Project %s (%s)\n\n", p.Name, p.Repo)
 		ms := m.Scores(p.Name)
 		if len(ms) > 10 {
@@ -376,7 +395,7 @@ func (m *Module) Digest(since int64) string {
 	}
 	b.WriteString("## Runs that stopped, blocked or were flagged\n\n")
 	for i, r := range m.C.Runs.List(func(r *core.Run) bool {
-		return r.Status == core.StatusBlocked || r.Status == core.StatusQuiet || r.Status == core.StatusStopped || r.Retries > 0
+		return mine(r.Project) && (r.Status == core.StatusBlocked || r.Status == core.StatusQuiet || r.Status == core.StatusStopped || r.Retries > 0)
 	}) {
 		if i >= 20 {
 			break
@@ -391,7 +410,7 @@ func (m *Module) Digest(since int64) string {
 		fmt.Fprintf(&b, "- %s %s in %s: limit %.0fs from %d samples; %s\n", s.At.Format("01-02 15:04"), s.What, s.Stage, s.Limit, s.Samples, s.Did)
 	}
 	b.WriteString("\n## Agents' notes\n\n")
-	for i, r := range m.C.Runs.List(nil) {
+	for i, r := range m.C.Runs.List(func(r *core.Run) bool { return mine(r.Project) }) {
 		if i >= 30 {
 			break
 		}
@@ -401,6 +420,9 @@ func (m *Module) Digest(since int64) string {
 	}
 	b.WriteString("## Recent chat\n\n")
 	for _, ch := range m.Chat.Chats() {
+		if !mine(ch.Project) {
+			continue
+		}
 		msgs := m.Chat.Messages(ch.ID)
 		if len(msgs) > 12 {
 			msgs = msgs[len(msgs)-12:]

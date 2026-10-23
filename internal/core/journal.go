@@ -86,10 +86,12 @@ func (j *Journal) Append(kind string, data any) (Event, error) {
 }
 
 // MustAppend appends and panics only on a disk failure, which leaves the Hive
-// unable to keep its guarantees anyway.
+// unable to keep its guarantees anyway. A step still running when the Hive
+// shuts down writes to a closed journal: that write is dropped, as it would be
+// a moment later when the process exits, and the step resumes from the record.
 func (j *Journal) MustAppend(kind string, data any) Event {
 	e, err := j.Append(kind, data)
-	if err != nil {
+	if err != nil && !errors.Is(err, os.ErrClosed) {
 		panic("journal: " + err.Error())
 	}
 	return e

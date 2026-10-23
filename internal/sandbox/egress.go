@@ -8,21 +8,27 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
 // Egress is the host-side proxy that is a sandbox's only way out. It accepts
 // HTTP CONNECT and plain HTTP proxy requests, resolves the destination itself,
 // refuses anything that resolves to this machine or a private network, and
-// dials the exact address it vetted (so DNS rebinding can't swap it).
+// dials the exact address it vetted (so DNS rebinding can't swap it). With an
+// allow list it also refuses every host not on it.
 type Egress struct {
 	ln       net.Listener
 	resolver *net.Resolver
+	allow    []string
+	mu       sync.Mutex
+	refused  io.Writer // one line per refused host; nil keeps none
 }
 
-// ServeEgress serves the proxy on ln until it is closed.
-func ServeEgress(ln net.Listener) *Egress {
-	e := &Egress{ln: ln, resolver: net.DefaultResolver}
+// ServeEgress serves the proxy on ln until it is closed. A nil allow list
+// lets every public host through; refused, if set, gets each refused host.
+func ServeEgress(ln net.Listener, allow []string, refused io.Writer) *Egress {
+	e := &Egress{ln: ln, resolver: net.DefaultResolver, allow: allow, refused: refused}
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -35,8 +41,13 @@ func ServeEgress(ln net.Listener) *Egress {
 	return e
 }
 
-// Close stops the proxy.
-func (e *Egress) Close() error { return e.ln.Close() }
+// Close stops the proxy and closes where refusals go.
+func (e *Egress) Close() error {
+	if c, ok := e.refused.(io.Closer); ok {
+		c.Close()
+	}
+	return e.ln.Close()
+}
 
 func (e *Egress) handle(c net.Conn) {
 	defer c.Close()
@@ -103,6 +114,10 @@ func (e *Egress) dial(hostport string) (net.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bad destination %q", hostport)
 	}
+	if !Allowed(e.allow, host) {
+		e.refuse(host)
+		return nil, fmt.Errorf("%s is not on this run's egress list", host)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	ips, err := e.resolver.LookupIPAddr(ctx, host)
@@ -111,6 +126,7 @@ func (e *Egress) dial(hostport string) (net.Conn, error) {
 	}
 	for _, ip := range ips {
 		if !Public(ip.IP) {
+			e.refuse(host)
 			return nil, fmt.Errorf("destination %s (%s) is local or private; sandboxes reach the network outbound only", host, ip.IP)
 		}
 	}
@@ -123,6 +139,31 @@ func (e *Egress) dial(hostport string) (net.Conn, error) {
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+func (e *Egress) refuse(host string) {
+	if e.refused == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	fmt.Fprintln(e.refused, host)
+}
+
+// Allowed reports whether host is on allow: an entry matches itself and its
+// subdomains. A nil list allows every host; an empty one, none.
+func Allowed(allow []string, host string) bool {
+	if allow == nil {
+		return true
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, a := range allow {
+		a = strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(a, "*."), "."))
+		if host == a || strings.HasSuffix(host, "."+a) {
+			return true
+		}
+	}
+	return false
 }
 
 var blocked = func() []*net.IPNet {

@@ -1,5 +1,5 @@
 // Package harness is the adapter seam between the core and a coding harness
-// (Claude Code today; Codex is the first to add). A harness turns a Turn into
+// (Claude Code and OpenAI's Codex). A harness turns a Turn into
 // a command line and turns its output stream into Events.
 package harness
 
@@ -12,18 +12,22 @@ import (
 
 // Turn is one invocation of an agent session.
 type Turn struct {
-	Role       string
-	SessionID  string
-	Resume     bool   // continue SessionID instead of starting it
-	SystemFile string // appended system prompt, as a path the agent process sees
-	SystemText string // the same prompt inline (used inside sandboxes, where argv has room)
-	Model      string
-	ReadOnly   bool     // no write or exec tools at all (reviewer, tribunal)
-	RunDir     string   // the run's inputs; a read-only turn may read them besides its checkout
-	Tools      []string // explicit tool list; nil means the harness default
-	Schema     string   // JSON schema for a structured final answer
-	Sandboxed  bool     // inside a Hive sandbox (permission prompts are meaningless there)
-	MaxOutput  int      // cap on one reply's tokens; 0 is the harness default
+	Role         string
+	SessionID    string
+	Resume       bool   // continue SessionID instead of starting it
+	SystemFile   string // appended system prompt, as a path the agent process sees
+	SystemText   string // the same prompt inline (used inside sandboxes, where argv has room)
+	Model        string
+	ReadOnly     bool     // no write or exec tools at all (reviewer, tribunal)
+	RunDir       string   // the run's inputs; a read-only turn may read them besides its checkout
+	Tools        []string // explicit tool list; nil means the harness default
+	Schema       string   // JSON schema for a structured final answer
+	SchemaFile   string   // the same schema as a path the agent process sees
+	ConfigDir    string   // the harness's own config folder the Hive made for this turn, if any
+	Writable     []string // folders besides the checkout the agent may write
+	Sandboxed    bool     // inside a Hive sandbox (permission prompts are meaningless there)
+	MaxOutput    int      // cap on one reply's tokens; 0 is the harness default
+	MaxBudgetUSD float64  // cap on the turn's spend; 0 is none
 }
 
 // Event is a normalized line of harness output.
@@ -75,6 +79,24 @@ type Harness interface {
 	LoginCommand() []string
 }
 
+// APIHosts are the hosts a harness's own client must reach, added to every
+// run's egress list. A harness lists them with an APIHosts method.
+func APIHosts(h Harness) []string {
+	if a, ok := h.(interface{ APIHosts() []string }); ok {
+		return a.APIHosts()
+	}
+	return nil
+}
+
+// Capped is nil when h holds a turn to budget USD itself (Turn.MaxBudgetUSD).
+// A harness says it does with a CapsSpend method; 0 is no budget.
+func Capped(h Harness, budget float64) error {
+	if _, ok := h.(interface{ CapsSpend() }); budget > 0 && !ok {
+		return fmt.Errorf("the %s harness can't hold a run to a budget, so a run with one won't start on it", h.Name())
+	}
+	return nil
+}
+
 // Get returns a harness by name.
 func Get(name string) (Harness, error) {
 	switch name {
@@ -83,7 +105,7 @@ func Get(name string) (Harness, error) {
 	case "fake":
 		return Fake{}, nil
 	case "codex":
-		return nil, fmt.Errorf("harness codex: the adapter seam exists but Codex is not in v1")
+		return Codex{}, nil
 	}
 	return nil, fmt.Errorf("unknown harness %q", name)
 }
@@ -92,8 +114,10 @@ func Get(name string) (Harness, error) {
 type Claude struct{}
 
 func (Claude) Name() string           { return "claude" }
+func (Claude) CapsSpend()             {}
 func (Claude) Program() string        { return "claude" }
 func (Claude) LoginCommand() []string { return []string{"claude", "auth", "login"} }
+func (Claude) APIHosts() []string     { return []string{"api.anthropic.com"} }
 
 func (Claude) Args(t Turn) []string {
 	a := []string{"-p", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--setting-sources", "project"}
@@ -122,6 +146,9 @@ func (Claude) Args(t Turn) []string {
 	}
 	if t.Schema != "" {
 		a = append(a, "--json-schema", t.Schema)
+	}
+	if t.MaxBudgetUSD > 0 {
+		a = append(a, "--max-budget-usd", fmt.Sprintf("%.2f", t.MaxBudgetUSD))
 	}
 	return a
 }

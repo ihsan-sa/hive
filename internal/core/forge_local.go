@@ -270,7 +270,3 @@ func (l *Local) CreateRelease(repo, tag, sha, notes string) error {
 	l.save(s)
 	return nil
 }
-
-func (l *Local) DownloadAsset(repo, tag, pattern, dir string) error {
-	return fmt.Errorf("local forge has no release assets")
-}

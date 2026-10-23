@@ -27,11 +27,15 @@ func TestLeadAnswersEveryQueuedPost(t *testing.T) {
 
 // A sandboxed worker can't see a path outside its checkout. With nothing
 // saying it is only hidden, it reads it as gone and finishes, as Claude did;
-// the worker's role doc must make it file the deletion as a T3 step instead.
+// the worker's system prompt (orientation and role) must make it file the deletion as a T3 step instead.
 func TestHiddenOutsidePathIsFiled(t *testing.T) {
-	doc, err := os.ReadFile("../../modules/agents/worker.md")
-	if err != nil {
-		t.Fatal(err)
+	var doc []byte
+	for _, f := range []string{"orientation.md", "worker.md"} {
+		b, err := os.ReadFile("../../modules/agents/" + f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc = append(doc, b...)
 	}
 	type op struct {
 		name string

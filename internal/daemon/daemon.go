@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,8 +25,10 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
+	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 )
 
 // Forge picks the forge: GitHub, or a local folder forge when HIVE_FORGE=local:<dir>.
@@ -90,7 +93,16 @@ func Stop(ws core.Workspace) error {
 
 // Run is `hive daemon`: the background process.
 func Run(ws core.Workspace, waitFor int) error {
+	inUnit := inHiveUnit()
+	from := "" // the version of the daemon this one replaces
 	if waitFor > 0 {
+		if c, err := api.Dial(ws); err == nil {
+			from = c.Info.Version
+		}
+		if inUnit {
+			// An old unit stops everything in it as the old daemon exits; outlive that and hand the restart to systemd below.
+			signal.Ignore(syscall.SIGTERM)
+		}
 		for i := 0; i < 100 && proc.Alive(proc.Handle{PID: waitFor}); i++ {
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -98,11 +110,28 @@ func Run(ws core.Workspace, waitFor int) error {
 	if _, ok := Running(ws); ok {
 		return errors.New("the Hive is already running")
 	}
+	exe := release.Rename(ws.Root, from)
+	if inUnit && (waitFor > 0 || exe != "") {
+		if exe == "" {
+			exe, _ = executable()
+		}
+		if setup.RestartUnit(exe, ws.Root) {
+			return nil
+		}
+	}
+	if exe != "" {
+		// This update renamed hive-v0 to hive: start the daemon under its new name.
+		_, err := proc.StartDetached([]string{exe, "daemon"}, append(os.Environ(), "HIVE_HOME="+ws.Root), ws.Root, "", filepath.Join(ws.Hive(), "daemon.log"))
+		return err
+	}
 	a, err := app.New(ws, Forge())
 	if err != nil {
 		return err
 	}
 	defer a.Close()
+	if _, err := ws.ReadConfig(); err != nil {
+		fmt.Fprintln(os.Stderr, "settings:", err)
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -150,16 +179,11 @@ func (s *server) onEvent(e core.Event) {
 	if e.Kind != "alert.raised" {
 		return
 	}
-	var a struct{ Kind, Key, Text string }
+	var a struct{ Kind, Text, Ref string }
 	e.Decode(&a)
 	s.mu.Lock()
-	for i := range s.alerts {
-		if a.Key != "" && s.alerts[i].Key == a.Key { // one alert per key, updated in place
-			s.alerts = append(s.alerts[:i], s.alerts[i+1:]...)
-			break
-		}
-	}
-	s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Key: a.Key, Text: a.Text})
+	s.alerts = slices.DeleteFunc(s.alerts, func(x api.Alert) bool { return a.Ref != "" && x.Ref == a.Ref })
+	s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text, Ref: a.Ref})
 	if len(s.alerts) > 50 {
 		s.alerts = s.alerts[len(s.alerts)-50:]
 	}
@@ -167,6 +191,9 @@ func (s *server) onEvent(e core.Event) {
 }
 
 var executable = os.Executable
+
+// inHiveUnit reports whether this daemon runs in the Hive's systemd unit.
+var inHiveUnit = setup.InUnit
 
 // restart replaces this daemon with the (updated) binary on disk, and marks
 // daemon.json so the control center waits for the new one.
@@ -308,7 +335,16 @@ func (s *server) routes() http.Handler {
 	})
 	h("/api/config", func(r *http.Request) (any, error) {
 		if r.Method != http.MethodPost {
-			return a.C.WS.LoadConfig(), nil
+			// What config.json got wrong rides beside every setting that did read.
+			c, err := a.C.WS.ReadConfig()
+			out := struct {
+				core.Config
+				LoadError string `json:"load_error,omitempty"`
+			}{Config: c}
+			if err != nil {
+				out.LoadError = err.Error()
+			}
+			return out, nil
 		}
 		var c core.Config
 		if err := decode(r, &c); err != nil {
@@ -319,6 +355,9 @@ func (s *server) routes() http.Handler {
 			return nil, errors.New("bare runs need the warning read first (`" + core.Cmd + " doctor --bare`)")
 		}
 		c.BareAccepted = cur.BareAccepted
+		if err := c.Check(); err != nil {
+			return nil, err
+		}
 		if err := a.C.WS.SaveConfig(c); err != nil {
 			return nil, err
 		}
@@ -375,7 +414,8 @@ func decode(r *http.Request, v any) error {
 
 func (s *server) state() api.State {
 	a := s.a
-	st := api.State{Version: core.Version, Seq: a.C.J.Seq(), Workspace: a.C.WS.Root, Config: a.C.WS.LoadConfig()}
+	cfg, cfgErr := a.C.WS.ReadConfig()
+	st := api.State{Version: core.Version, Seq: a.C.J.Seq(), Workspace: a.C.WS.Root, Config: cfg}
 	if sb, err := a.C.Sandbox(); err != nil {
 		st.SandboxErr = err.Error()
 	} else {
@@ -420,10 +460,14 @@ func (s *server) state() api.State {
 		sw = sw[:10]
 	}
 	st.Sweeps = sw
+	st.StepBacks = a.Improve.StepBacks("")
 	st.Asks = a.C.Person.Open()
 	s.mu.Lock()
 	st.Alerts = append([]api.Alert{}, s.alerts...)
 	s.mu.Unlock()
+	if cfgErr != nil { // live, so it goes once the file is fixed
+		st.Alerts = append(st.Alerts, api.Alert{At: time.Now(), Kind: "settings", Text: cfgErr.Error()})
+	}
 	st.Jobs = a.System.Jobs()
 	st.Wakeups = a.System.Wakeups()
 	for _, m := range a.Mods.List() {

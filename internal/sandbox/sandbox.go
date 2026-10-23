@@ -22,11 +22,14 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
-// Mount exposes a host path inside the sandbox.
+// Mount exposes a host path inside the sandbox. A Hide mount does the
+// opposite: it covers Inside, a path an earlier mount exposes, so that Host (a
+// secret) can't be read there. Bare runs can't hide anything.
 type Mount struct {
 	Host   string `json:"host"`
 	Inside string `json:"inside"`
 	RW     bool   `json:"rw"`
+	Hide   bool   `json:"hide,omitempty"`
 }
 
 // Spec is one sandboxed command.
@@ -41,6 +44,7 @@ type Spec struct {
 	Stdout   string   `json:"stdout"`    // host path, appended
 	StopFile string   `json:"stop_file"` // host path; when present the command is killed
 	Network  bool     `json:"network"`   // outbound through the egress proxy
+	Allow    []string `json:"allow"`     // hosts the proxy lets through; nil is every public host
 	UID      int      `json:"uid"`
 	GID      int      `json:"gid"`
 }
@@ -146,6 +150,18 @@ func WriteSpec(path string, s Spec) error {
 	return os.WriteFile(path, raw, 0o600)
 }
 
+// writeTempSpec writes a spec for sandbox-exec, which deletes it, to the
+// temp dir rather than beside the run's output: it carries a token, and every
+// agent can read the runs.
+func writeTempSpec(s Spec) (string, error) {
+	f, err := os.CreateTemp("", "hive-spec-*.json")
+	if err != nil {
+		return "", err
+	}
+	f.Close()
+	return f.Name(), WriteSpec(f.Name(), s)
+}
+
 // ReadSpec loads a spec.
 func ReadSpec(path string) (Spec, error) {
 	var s Spec
@@ -160,7 +176,7 @@ func ReadSpec(path string) (Spec, error) {
 func InsideEnv(home string, network bool) []string {
 	env := []string{
 		"HOME=" + home,
-		"PATH=/hive/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"PATH=/hive/bin:" + insideBins,
 		"LANG=C.UTF-8",
 		"TERM=dumb",
 		"TMPDIR=/tmp",
@@ -172,6 +188,9 @@ func InsideEnv(home string, network bool) []string {
 	}
 	return env
 }
+
+// insideBins are the system folders on the sandbox's PATH.
+const insideBins = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 // ProxyPort is where the egress forwarder listens inside the sandbox.
 const ProxyPort = "3128"

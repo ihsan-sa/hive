@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"net"
 	"net/http"
@@ -33,7 +34,7 @@ func TestEgressRefusesLocal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := ServeEgress(ln)
+	e := ServeEgress(ln, nil, nil)
 	defer e.Close()
 	for _, dest := range []string{target.Addr().String(), "localhost:" + strings.Split(target.Addr().String(), ":")[1]} {
 		c, err := net.Dial("tcp", ln.Addr().String())
@@ -61,7 +62,7 @@ func TestEgressReachesPublic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := ServeEgress(ln)
+	e := ServeEgress(ln, nil, nil)
 	defer e.Close()
 	c, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -75,5 +76,47 @@ func TestEgressReachesPublic(t *testing.T) {
 	}
 	if resp.StatusCode != 200 {
 		t.Fatalf("CONNECT github.com: %s", resp.Status)
+	}
+}
+
+func TestAllowed(t *testing.T) {
+	allow := []string{"github.com", "*.pypi.org", "API.Anthropic.com"}
+	for host, want := range map[string]bool{
+		"github.com": true, "codeload.github.com": true, "files.pypi.org": true, "pypi.org": true,
+		"api.anthropic.com.": true, "evilgithub.com": false, "github.com.evil.net": false, "example.com": false,
+	} {
+		if got := Allowed(allow, host); got != want {
+			t.Errorf("Allowed(%s) = %v, want %v", host, got, want)
+		}
+	}
+	if !Allowed(nil, "example.com") {
+		t.Error("no list should allow every host")
+	}
+	if Allowed([]string{}, "example.com") {
+		t.Error("an empty list should allow no host")
+	}
+}
+
+// A host off the run's list is refused before it is resolved, and recorded.
+func TestEgressHoldsToItsList(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refused bytes.Buffer
+	e := ServeEgress(ln, []string{"github.com"}, &refused)
+	defer e.Close()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "CONNECT paste.example:443 HTTP/1.1\r\nHost: paste.example:443\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusForbidden || refused.String() != "paste.example\n" {
+		t.Fatalf("CONNECT paste.example: %s, recorded %q", resp.Status, refused.String())
 	}
 }

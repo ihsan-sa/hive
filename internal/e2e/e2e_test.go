@@ -22,6 +22,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
@@ -80,6 +81,7 @@ func start(t *testing.T) *hive {
 	}
 	cfg := h.ws.LoadConfig()
 	cfg.Harness, cfg.AutoUpdate = "fake", false
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0 // a loaded CI runner mustn't hold fake turns
 	if hn := os.Getenv("HIVE_E2E_HARNESS"); hn != "" {
 		cfg.Harness = hn // a live probe: real agents, plan usage
 	}
@@ -88,7 +90,8 @@ func start(t *testing.T) *hive {
 	} else {
 		cfg.Sandbox, cfg.BareAccepted = "bare", time.Now().Format(time.RFC3339)
 	}
-	cfg.Schedules = map[string]string{"improve.sweep": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off"}
+	cfg.PlateauMerges = 0 // TestStepBack turns it on
+	cfg.Schedules = map[string]string{"improve.sweep": "off", "improve.stepback": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off"}
 	h.ws.SaveConfig(cfg)
 	h.launch()
 	t.Cleanup(func() { h.quiesce(); h.kill() })
@@ -460,6 +463,38 @@ func TestGateAndLoop(t *testing.T) {
 	})
 }
 
+// A worker isn't blamed for a failure main has too: its change waits with no
+// round spent, main's failure is one alert, and once main is fixed the change
+// is brought up to date and merges.
+func TestMainRedDoesNotBlameWorker(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/red", map[string]string{
+		".hive/project.json": `{"test": "grep -q green STATE"}`,
+		".hive/goals.md":     "# Goals\n",
+		".hive/lessons.md":   "# Lessons\n\n",
+		"STATE":              "red\n",
+	})
+	h.post("/api/project", map[string]any{"name": "red", "repo": "me/red"}, nil)
+	h.post("/api/ask", map[string]string{"project": "red", "title": "add a feature", "known": "a plain change"}, nil)
+	st := h.wait("the change to wait on main", 4*minute, func(st api.State) bool {
+		tk, ok := task(st, "red", "add a feature")
+		return ok && strings.HasPrefix(tk.Reason, "waiting on main")
+	})
+	tk, _ := task(st, "red", "add a feature")
+	alerts := 0
+	for _, a := range st.Alerts {
+		if a.Kind == "main-red" {
+			alerts++
+		}
+	}
+	if tk.Round != 0 || alerts != 1 {
+		t.Fatalf("round %d, %d main-red alerts; want 0 and 1", tk.Round, alerts)
+	}
+	h.seed("me/red", map[string]string{"STATE": "green\n"})
+	h.wait("the change to merge once main is green", 4*minute, taskStage("red", "add a feature", work.StageDone))
+}
+
 // M7: kill the Hive in the middle of an ask, restart, and get the same
 // outcome with no duplicate issue, run or PR. Usage limits park and resume;
 // a crashed turn is retried on its checkout.
@@ -521,6 +556,18 @@ func TestRecovery(t *testing.T) {
 	h.wait("the crashed run to be retried and land", 3*minute, taskStage("rec", "crash once", work.StageDone))
 }
 
+// toldAbout waits for a "told" ask whose title names what was decided.
+func toldAbout(what string) func(api.State) bool {
+	return func(st api.State) bool {
+		for _, a := range st.Asks {
+			if a.Kind == "told" && strings.Contains(a.Title, what) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // The Hive notices its own stalls. A worker, a reviewer and a check that stop
 // moving for longer than their stage takes in this Hive are restarted or
 // handed to the lead, each with one alert that updates when it moves on; a
@@ -529,17 +576,17 @@ func TestStalls(t *testing.T) {
 	t.Parallel()
 	h := start(t)
 	cfg := h.ws.LoadConfig()
-	cfg.StallFloorSeconds = 15
+	cfg.StallFloorSeconds = 20
 	h.ws.SaveConfig(cfg)
 	h.seed("me/stall", map[string]string{".hive/project.json": `{"test": "if [ -f STALL ]; then sleep 60; fi"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "stall", "repo": "me/stall"}, nil)
-	// History: a worker here has taken 12 seconds, so the limit is about 36 without moving.
-	for title, known := range map[string]string{"history one": "FAKE:slowworker:12", "history two": ""} {
+	// History: a worker here has taken about 13 seconds (8 asleep), so the limit is about 39 without moving.
+	for title, known := range map[string]string{"history one": "FAKE:slowworker:8", "history two": ""} {
 		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
 		h.wait(title+" to land", 3*minute, taskStage("stall", title, work.StageDone))
 	}
 
-	asks := map[string]string{"hung worker": "FAKE:stallworker", "hung reviewer": "FAKE:stallreviewer", "hung check": "FAKE:stallcheck", "slow worker": "FAKE:slowworker:20"}
+	asks := map[string]string{"hung worker": "FAKE:stallworker", "hung reviewer": "FAKE:stallreviewer", "hung check": "FAKE:stallcheck", "slow worker": "FAKE:slowworker:22"}
 	for title, known := range asks {
 		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
 	}
@@ -550,7 +597,7 @@ func TestStalls(t *testing.T) {
 	alerts := map[string][]string{}
 	for _, a := range st.Alerts {
 		if a.Kind == "stall" {
-			alerts[a.Key] = append(alerts[a.Key], a.Text)
+			alerts[a.Ref] = append(alerts[a.Ref], a.Text)
 		}
 	}
 	for title, did := range map[string]string{"hung worker": "restarted its turn", "hung reviewer": "restarted its turn", "hung check": "handed it to the lead"} {
@@ -581,8 +628,9 @@ func TestStalls(t *testing.T) {
 }
 
 // A request past the sandbox goes to a warden, which runs its script, and the
-// outcome reaches the agent. A module installs from a git URL only on the person's approval and
-// updates when its source releases. The Hive releases itself after a kept merge.
+// outcome reaches the agent. At autonomy 2 a warden approves a module install
+// and a goals change, and the person is told after. A module updates when its
+// source releases. The Hive releases itself after a kept merge.
 func TestPersonModulesRelease(t *testing.T) {
 	t.Parallel()
 	h := start(t)
@@ -609,19 +657,6 @@ func TestPersonModulesRelease(t *testing.T) {
 	git(src, "commit", "-q", "-m", "v1")
 	git(src, "tag", "v1.0.0")
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module " + src}, nil)
-	st := h.wait("the module install to reach the person", 2*minute, func(st api.State) bool {
-		for _, a := range st.Asks {
-			if a.Kind == "module" {
-				return true
-			}
-		}
-		return false
-	})
-	for _, a := range st.Asks {
-		if a.Kind == "module" {
-			h.post("/api/answer", map[string]string{"id": a.ID, "answer": "install"}, nil)
-		}
-	}
 	module := func(st api.State) (api.ModuleView, bool) {
 		for _, m := range st.Modules {
 			if m.Name == "tools" {
@@ -630,7 +665,11 @@ func TestPersonModulesRelease(t *testing.T) {
 		}
 		return api.ModuleView{}, false
 	}
-	h.wait("the module to install at v1.0.0", minute, func(st api.State) bool { m, ok := module(st); return ok && m.Release == "v1.0.0" })
+	h.wait("a warden to install the module at v1.0.0", 2*minute, func(st api.State) bool { m, ok := module(st); return ok && m.Release == "v1.0.0" })
+	h.wait("the person to be told after", minute, toldAbout("Install module tools"))
+	h.post("/api/ask", map[string]string{"project": "self", "title": "write down a goal", "known": "FAKE:goals"}, nil)
+	h.wait("a warden to approve the goals change and it to merge", 3*minute, taskStage("self", "write down a goal", work.StageDone))
+	h.wait("the person to be told after", minute, toldAbout("write down a goal"))
 	os.WriteFile(filepath.Join(src, "tool.sh"), []byte("echo hi\n"), 0o644)
 	git(src, "add", "-A")
 	git(src, "commit", "-q", "-m", "v1.1")
@@ -734,6 +773,59 @@ func TestOutsideStep(t *testing.T) {
 	h.wait("the worker to land", 3*minute, taskStage("out", title, work.StageDone))
 }
 
+// TestAgentsReadTheHive: a worker reads another run's log, a chat, a warden's
+// log and the journal from $HIVE_STATE. Under the sandbox (HIVE_E2E_SANDBOX=auto)
+// it can change none of them and reads no secret; a bare run is unsandboxed by
+// the person's choice, so there only the reads are checked.
+func TestAgentsReadTheHive(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	login := filepath.Join(h.ws.Hive(), "logins", "codex", "spare")
+	os.MkdirAll(login, 0o700)
+	os.WriteFile(filepath.Join(login, "auth.json"), []byte(`{"refresh_token": "planted"}`), 0o600)
+	h.seed("me/peek", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "peek", "repo": "me/peek"}, nil)
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "hello"}, nil)
+	h.wait("the lead's reply", minute, h.replied("lead", ""))
+	h.post("/api/ask", map[string]string{"project": "peek", "title": "package", "known": "FAKE:needpackage"}, nil)
+	var warden string
+	h.wait("a warden to settle the step", 3*minute, func(st api.State) bool {
+		for _, r := range st.Requests {
+			if r.Kind == "request" && r.State == "done" {
+				warden = r.Warden
+				return true
+			}
+		}
+		return false
+	})
+	h.post("/api/ask", map[string]string{"project": "peek", "title": "peek", "known": "FAKE:peek " + warden}, nil)
+	var account string
+	h.wait("the peeking worker's account", 2*minute, func(st api.State) bool {
+		for _, r := range st.Runs {
+			if r.Finish != nil && strings.Contains(r.Finish.Account, "peek") {
+				account = r.Finish.Account
+				return true
+			}
+		}
+		return false
+	})
+	for _, want := range []string{"log read=true", "chat read=true", "warden read=true", "journal read=true"} {
+		if !strings.Contains(account, want) {
+			t.Errorf("account lacks %q: %s", want, account)
+		}
+	}
+	if h.ws.LoadConfig().Sandbox == "auto" {
+		for _, bad := range []string{"write=true", "create=true"} {
+			if strings.Contains(account, bad) {
+				t.Errorf("sandboxed worker could change the Hive: %q in %s", bad, account)
+			}
+		}
+		if !strings.Contains(account, "secrets=0") {
+			t.Errorf("sandboxed worker read a secret: %s", account)
+		}
+	}
+}
+
 func init() { _ = fmt.Sprint }
 
 // TestLiveWarden is the host probe for a real harness: run it with
@@ -803,5 +895,113 @@ func TestLiveTribunal(t *testing.T) {
 	}
 	if panels == 0 {
 		t.Error("no tribunal convened")
+	}
+}
+
+// A score that stops moving gets a step-back: the agent designs a simpler
+// setup, the Hive runs it as a worker in a copy of the project at its start
+// and scores it, spending no more than the Hive spent there. A win files a
+// fault with both scores, a loss files nothing, a setup that spends its
+// budget stops there, and a step-back that can't run or count says why in
+// one alert.
+func TestStepBack(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	cfg := h.ws.LoadConfig()
+	cfg.PlateauMerges = 1
+	h.ws.SaveConfig(cfg)
+	names := []string{"win", "lose", "fail", "spend", "rig", "none", "zero"}
+	for _, name := range names {
+		protected, paid := "", " FAKE:paid"
+		if name == "rig" {
+			protected = `, "protected": ["score.txt"]`
+		}
+		if name == "zero" {
+			paid = ""
+		}
+		h.seed("me/"+name, map[string]string{
+			".hive/project.json": `{"test": "true", "score": {"command": "cat score.txt", "direction": "higher", "tolerance": 0}` + protected + `}`,
+			"score.txt":          "5\n",
+		})
+		h.post("/api/project", map[string]any{"name": name, "repo": "me/" + name, "isolated": name == "lose", "goals": "Make the score high. FAKE:stepback" + name}, nil)
+		h.post("/api/ask", map[string]string{"project": name, "title": "tidy " + name, "known": "a change that leaves the score alone" + paid}, nil)
+	}
+	stepback := func(st api.State, project string) (improve.StepBack, bool) {
+		for _, s := range st.StepBacks {
+			if s.Project == project && s.Ended.After(s.Started) {
+				return s, true
+			}
+		}
+		return improve.StepBack{}, false
+	}
+	st := h.wait("every step-back to end", 8*minute, func(st api.State) bool {
+		for _, name := range names {
+			if _, ok := stepback(st, name); !ok {
+				return false
+			}
+		}
+		return true
+	})
+	sb := map[string]improve.StepBack{}
+	for _, name := range names {
+		sb[name], _ = stepback(st, name)
+	}
+	runs := map[string]core.Run{}
+	for _, r := range st.Runs {
+		runs[r.ID] = r
+	}
+	win, lose := sb["win"], sb["lose"]
+	if !strings.Contains(win.Why, "has not moved in") {
+		t.Fatalf("the plateau didn't start it: %q", win.Why)
+	}
+	if win.Status != "won" || *win.Score != 9 || win.Best != 5 || win.Fault == "" || win.Budget <= 0 {
+		t.Fatalf("a winning setup must file a fault: %+v", win)
+	}
+	var fault core.Ask
+	for _, a := range st.Asks {
+		if a.ID == win.Fault {
+			fault = a
+		}
+	}
+	if !strings.Contains(fault.Title, "9 against 5") || !strings.Contains(fault.Detail, win.Exp) || !strings.Contains(fault.Detail, "FAKE:raisescore") || strings.Contains(fault.Detail, h.ws.Hive()) {
+		t.Fatalf("the fault must carry both scores, the setup and its run, and no host path: %+v", fault)
+	}
+	if lose.Status != "lost" || *lose.Score != 1 || lose.Fault != "" {
+		t.Fatalf("a losing setup files nothing: %+v", lose)
+	}
+	if r := runs[lose.Run]; r.Project != "lose" || !r.Isolated {
+		t.Fatalf("a step-back on an isolated project must run isolated under it: %+v", r.RunSpec)
+	}
+	if s := sb["fail"]; s.Status != "failed" || !strings.Contains(s.Note, "blocked") {
+		t.Fatalf("a failed experiment must say why: %+v", s)
+	}
+	if s, r := sb["spend"], runs[sb["spend"].Exp]; s.Status != "lost" || s.Asked != 1 || *s.Score != 5 || r.Reason != "spent its budget" || r.Budget != s.Budget {
+		t.Fatalf("a setup that spends its budget must stop there: %+v %+v", s, r)
+	}
+	if s := sb["rig"]; s.Status != "failed" || !strings.Contains(s.Note, "score.txt") {
+		t.Fatalf("a setup that changes what scores it must not count: %+v", s)
+	}
+	if s := sb["none"]; s.Status != "none" || s.Exp != "" || !strings.Contains(s.Note, "designed no experiment") {
+		t.Fatalf("a step-back that designs nothing runs nothing: %+v", s)
+	}
+	if s, ran := sb["zero"], runs[sb["zero"].Run].ID != ""; s.Status != "none" || ran || !strings.Contains(s.Note, "spent nothing") {
+		t.Fatalf("a step-back with nothing to spend must not run: %+v", s)
+	}
+	alerts := map[string]int{}
+	for _, a := range st.Alerts {
+		alerts[a.Ref]++
+	}
+	for _, name := range names {
+		if want := map[bool]int{true: 1}[name == "fail" || name == "rig" || name == "zero"]; alerts["stepback:"+name] != want {
+			t.Fatalf("want %d step-back alert on %s, got %d: %+v", want, name, alerts["stepback:"+name], st.Alerts)
+		}
+	}
+	r, ok := runs[win.Exp]
+	if !ok || r.Role != "worker" || !r.Isolated || !r.OneTurn || r.System != "" || r.Brief != "FAKE:raisescore" || r.Budget != win.Budget ||
+		!strings.HasPrefix(r.Checkout, h.ws.Checkouts("win")+string(filepath.Separator)) {
+		t.Fatalf("the experiment must run as a bare worker in a copy, held to the Hive's spend: %+v", r.RunSpec)
+	}
+	if score, _ := core.Git(h.ws.Project("win"), "show", "origin/main:score.txt"); strings.TrimSpace(score) != "5" {
+		t.Fatalf("the experiment reached the project's own tree: score.txt on main is %q", score)
 	}
 }

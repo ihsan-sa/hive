@@ -27,7 +27,8 @@ func newRig(t *testing.T, autonomy int) *rig {
 		t.Fatal(err)
 	}
 	cfg := ws.LoadConfig()
-	cfg.Harness, cfg.Autonomy, cfg.TribunalModels = "fake", autonomy, []string{"opus", "sonnet"}
+	cfg.Harness, cfg.Autonomy, cfg.TribunalModels = "fake", autonomy, []core.TribunalSeat{{Model: "opus"}, {Model: "sonnet"}}
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0
 	ws.SaveConfig(cfg)
 	c, err := core.Open(ws, nil)
 	if err != nil {
@@ -208,8 +209,8 @@ func TestT3GoesToATribunalEvenOnDo(t *testing.T) {
 	if got.State != "tribunal" || len(got.Panel) != PanelSize {
 		t.Fatalf("no tribunal: %+v", got)
 	}
-	if p := g.run(got.Panel[0].Run); got.Panel[0].Model == got.Panel[1].Model || g.run(got.Panel[1].Run).Model != got.Panel[1].Model || !p.ReadOnly || p.Schema != VoteSchema {
-		t.Fatalf("panel isn't read-only across the tribunal models: %+v", got.Panel)
+	if p := g.run(got.Panel[0].Run); got.Panel[0].Model == got.Panel[1].Model || g.run(got.Panel[1].Run).Model != got.Panel[1].Model || !p.ReadOnly || !p.Isolated || p.Schema != VoteSchema {
+		t.Fatalf("panel isn't read-only and isolated across the tribunal models: %+v", got.Panel)
 	}
 }
 
@@ -441,7 +442,7 @@ func TestWardenAskingTheRequesterWaits(t *testing.T) {
 	out := g.c.WS.TurnOut(req.Warden, 1)
 	os.MkdirAll(filepath.Dir(out), 0o755)
 	os.WriteFile(out, []byte(`{"type":"result","subtype":"success","is_error":false,"result":"asked"}`+"\n"), 0o644)
-	g.c.Runs.Tick()
+	g.c.Runs.Tick(g.c.WS.LoadConfig())
 	if !eventually(func() bool {
 		w := g.run(req.Warden)
 		return w.Status == core.StatusIdle && strings.HasPrefix(w.Reason, "waiting")
@@ -465,5 +466,197 @@ func TestTribunalThatCannotStartFails(t *testing.T) {
 	}
 	if got, _ := g.m.get(req.ID); got.State != "failed" || !g.told("no tribunal") {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// A merge that changes the goals, the score or a setting, and a module
+// install, follow autonomy like any step: at 1 the person decides; above it a
+// warden does, its answer reaches the ask's handler as the person's would,
+// and the person is told after.
+func TestAutonomyDecidesProtectedChanges(t *testing.T) {
+	src := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "v1"}, {"tag", "v1.0.0"}} {
+		if _, err := core.Git(src, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changes := map[string]string{
+		"goal":    "+- ship the beta to the three testers",
+		"score":   `+"score": {"command": "cat score.txt", "direction": "higher"}`,
+		"setting": `+"test": "go test ./..."`,
+		"module":  "",
+	}
+	for autonomy := 1; autonomy <= 3; autonomy++ {
+		for what, diff := range changes {
+			g := newRig(t, autonomy)
+			answered, lead := make(chan core.Ask, 1), core.Run{}
+			kind := "merge"
+			if what == "module" {
+				kind = "module"
+				lead, _ = g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir()})
+				if _, err := g.call(lead, "install_module", map[string]string{"url": src}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				g.c.Person.Handle("merge", func(a core.Ask) { answered <- a })
+				g.m.Weigh(core.Ask{Kind: "merge", Ref: what, From: g.worker.ID, Title: "Merge? It changes " + what, Detail: diff, Options: []string{"merge", "leave open"}})
+			}
+			open := func(k string) bool {
+				for _, a := range g.c.Person.Open() {
+					if a.Kind == k {
+						return true
+					}
+				}
+				return false
+			}
+			if autonomy == 1 {
+				if !open(kind) || len(g.m.List()) != 0 {
+					t.Fatalf("autonomy 1, %s: the person should decide", what)
+				}
+				continue
+			}
+			req := g.m.List()[0]
+			if open(kind) || req.State != "weighing" || g.run(req.Warden).Role != "warden" {
+				t.Fatalf("autonomy %d, %s: a warden should decide: %+v", autonomy, what, req)
+			}
+			if err := g.decide(req, map[string]string{"decision": "do", "reason": "fits the goals"}); err != nil {
+				t.Fatal(err)
+			}
+			if what == "module" {
+				if !eventually(func() bool {
+					r, _ := g.c.Runs.Get(lead.ID)
+					return len(r.Pending) > 0 && strings.Contains(r.Pending[len(r.Pending)-1], "installed at")
+				}) {
+					t.Fatalf("autonomy %d: the warden's yes didn't install the module", autonomy)
+				}
+			} else if a := <-answered; a.Answer != "merge" || !strings.Contains(a.Note, "fits the goals") {
+				t.Fatalf("autonomy %d, %s: handler got %+v", autonomy, what, a)
+			}
+			if !eventually(func() bool { return open("told") }) {
+				t.Fatalf("autonomy %d, %s: the person wasn't told after", autonomy, what)
+			}
+		}
+	}
+}
+
+// A warden's decline leaves the change out, and what touches the ceiling
+// still goes to the person whatever the autonomy.
+func TestWeighDeclineAndCeiling(t *testing.T) {
+	g := newRig(t, 3)
+	answered := make(chan core.Ask, 1)
+	g.c.Person.Handle("merge", func(a core.Ask) { answered <- a })
+	g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@1", From: g.worker.ID, Title: "Merge? It changes .hive/project.json", Detail: `+"test": "true"`, Options: []string{"merge", "leave open"}})
+	req := g.m.List()[0]
+	if err := g.decide(req, map[string]string{"decision": "decline", "reason": "it switches the tests off"}); err != nil {
+		t.Fatal(err)
+	}
+	if a := <-answered; a.Answer != "leave open" {
+		t.Fatalf("decline answered %+v", a)
+	}
+	if who := g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@2", Title: "Merge? It changes .hive/project.json", Detail: "+the deploy token lives in ~/.netrc", Options: []string{"merge", "leave open"}}); who != "person" {
+		t.Fatalf("a ceiling change went to the %s", who)
+	}
+}
+
+// A step that touches the person's floor goes to them, as asked or as a
+// script a warden approved.
+func TestFloorRaisesToThePerson(t *testing.T) {
+	g := newRig(t, 3)
+	cfg := g.c.WS.LoadConfig()
+	cfg.Floor = []string{"/srv/app", "*.pem"}
+	g.c.WS.SaveConfig(cfg)
+	if req := g.request("refresh the site", "rsync -a build/ /srv/app/", "T2"); req.Route != "person" || req.Warden != "" {
+		t.Fatalf("a floor step reached a warden: %+v", req)
+	}
+	req := g.request("renew the certificate", "x", "T2")
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "echo x > proof && cp new.pem old.pem"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.settle(req.ID, "approved"); got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+		t.Fatalf("the floor let a warden's step run: %+v", got)
+	}
+}
+
+// A seat names its harness; one the Hive doesn't have keeps the panel from
+// convening and says why.
+func TestSeatsNameTheirHarness(t *testing.T) {
+	g := newRig(t, 2)
+	cfg := g.c.WS.LoadConfig()
+	cfg.TribunalModels = []core.TribunalSeat{{Harness: "claude", Model: "opus"}, {Model: "sonnet"}}
+	g.c.WS.SaveConfig(cfg)
+	req := g.request("a hard step", "x", "T2")
+	if err := g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "script": "true"}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := g.m.get(req.ID)
+	if got.Panel[0].Harness != "claude" || g.run(got.Panel[0].Run).Harness != "claude" || got.Panel[1].Harness != "fake" {
+		t.Fatalf("seats sat on the wrong harness: %+v", got.Panel)
+	}
+	cfg.TribunalModels = []core.TribunalSeat{{Harness: "no-such-harness", Model: "m"}}
+	g.c.WS.SaveConfig(cfg)
+	req = g.request("another hard step", "x", "T2")
+	if g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "script": "true"}) == nil || !g.told("no-such-harness") {
+		t.Fatal("a seat on a missing harness convened")
+	}
+}
+
+// Only exactly one clean vote counts; anything else is a decline.
+func TestVoteMustBeClean(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"vote":"approve","reason":"fine"}`:              "approve",
+		`{"vote":"approve","reason":"fine","extra":true}`: "decline",
+		`{"vote":true,"reason":"fine"}`:                   "decline",
+		`{"vote":"yes","reason":"fine"}`:                  "decline",
+		`{"vote":"approve"}{"vote":"approve"}`:            "decline",
+	} {
+		if got, _ := voteOf(core.Run{Status: core.StatusDone, Structured: json.RawMessage(raw)}); got != want {
+			t.Errorf("voteOf(%s) = %s, want %s", raw, got, want)
+		}
+	}
+}
+
+// When a settled ask reaches the person after all, through a tribunal's
+// declined large gain or the ceiling guard, their answer goes to the ask's
+// handler as their own: run is its yes, anything else its no.
+func TestPersonAnswersASettledAsk(t *testing.T) {
+	for _, route := range []string{"large gain", "ceiling"} {
+		for answer, want := range map[string]string{"run": "merge", "declined": "leave open"} {
+			g := newRig(t, 2)
+			answered := make(chan core.Ask, 1)
+			g.c.Person.Handle("merge", func(a core.Ask) { answered <- a })
+			g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@1", From: g.worker.ID, Title: "Merge? It changes the goals", Detail: "+- deploy to /srv/app nightly", Options: []string{"merge", "leave open"}})
+			req := g.m.List()[0]
+			if route == "large gain" {
+				g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "gain": "large"})
+				req, _ = g.m.get(req.ID)
+				g.vote(req, "decline", "decline", "decline")
+				g.m.Tick()
+				req, _ = g.m.get(req.ID)
+				g.vote(req, "decline", "decline", "decline")
+			} else {
+				cfg := g.c.WS.LoadConfig()
+				cfg.Floor = []string{"/srv/app"}
+				g.c.WS.SaveConfig(cfg)
+				g.decide(req, map[string]string{"decision": "do", "reason": "fits the goals"})
+			}
+			got := g.settle(req.ID, "weighing", "tribunal", "approved")
+			if got.State != "asked" {
+				t.Fatalf("%s: the person wasn't asked: %+v", route, got)
+			}
+			g.c.Person.Answer(got.Ask, answer, "my call")
+			select {
+			case a := <-answered:
+				if a.Answer != want || a.Note != "my call" {
+					t.Fatalf("%s, %s: handler got %+v", route, answer, a)
+				}
+			case <-time.After(4 * time.Second):
+				t.Fatalf("%s, %s: the merge ask was never answered", route, answer)
+			}
+			for _, a := range g.c.Person.Open() {
+				if a.Kind == "told" {
+					t.Fatalf("%s, %s: told the person about their own answer: %+v", route, answer, a)
+				}
+			}
+		}
 	}
 }

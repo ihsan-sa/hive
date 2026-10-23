@@ -111,7 +111,7 @@ func (m *Module) Watch() {
 		if s.Moved.IsZero() && now[s.Key] != s.Stage {
 			s.Moved = time.Now().UTC()
 			m.C.J.MustAppend("stall.saved", s)
-			m.alert(s)
+			m.alertStall(s)
 		}
 	}
 }
@@ -149,20 +149,20 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 	}
 	s.Did += did + " at " + s.At.Local().Format("15:04")
 	m.C.J.MustAppend("stall.saved", *s)
-	text := m.alert(*s)
+	text := m.alertStall(*s)
 	if s.Told {
 		m.Chat.Notify(chat, thread, "Stuck: "+text)
 	}
 }
 
-// alert raises or updates the one alert for s.
-func (m *Module) alert(s Stall) string {
+// alertStall raises or updates the one alert for s.
+func (m *Module) alertStall(s Stall) string {
 	text := fmt.Sprintf("%s stopped moving in %s at %s, longer than the %s limit for that stage here (from %d past runs); I %s",
 		s.What, s.Stage, s.Since.Local().Format("Mon 15:04"), time.Duration(s.Limit*float64(time.Second)).Round(time.Second), s.Samples, s.Did)
 	if !s.Moved.IsZero() {
 		text += "; it moved on at " + s.Moved.Local().Format("15:04")
 	}
-	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "stall", "key": s.Key, "project": s.Project, "text": text})
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "stall", "ref": s.Key, "project": s.Project, "text": text})
 	return text
 }
 

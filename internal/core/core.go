@@ -44,7 +44,7 @@ func Open(ws Workspace, forge Forge) (*Core, error) {
 	c := &Core{WS: ws, J: j, Tokens: NewTokens(ws)}
 	c.Projects = NewProjects(j)
 	c.Person = NewPerson(j)
-	c.Runs = NewRuns(ws, j, c.Sandbox, c.Tokens.AgentEnv, c.Tools)
+	c.Runs = NewRuns(ws, j, c.Sandbox, c.Tokens, c.Tools)
 	c.Effects = NewEffects(ws, j, forge, c.Sandbox, c.Tools, c.Runs)
 	return c, nil
 }
@@ -132,16 +132,18 @@ func (c *Core) agentBinary(exe string) string {
 	return exe
 }
 
-// Tick advances runs; modules tick themselves from the daemon loop.
+// Tick advances runs on one read of the config; modules tick themselves
+// from the daemon loop.
 func (c *Core) Tick() {
-	c.Runs.Tick()
-	c.tellSpend()
+	cfg := c.WS.LoadConfig()
+	c.Runs.Tick(cfg)
+	c.tellSpend(cfg.MonthlyUSD)
 }
 
 // tellSpend tells the person once a month when runs have cost more than the
-// monthly figure they set. It is a notice: work goes on.
-func (c *Core) tellSpend() {
-	limit := c.WS.LoadConfig().MonthlyUSD
+// monthly figure they set. It is a notice: work goes on. Once a month holds
+// because Person.Get finds the ask after it's answered too.
+func (c *Core) tellSpend(limit float64) {
 	month := time.Now().UTC().Format("2006-01")
 	id := "spend-" + month
 	if spent := c.Runs.Spent(month); limit <= 0 || spent <= limit {

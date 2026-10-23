@@ -134,12 +134,12 @@ func (m *model) dashRows() []row {
 			if status == "rejected" {
 				status = stBad.Render("limited") + ", resets " + p.Limit.ResetsAt.Local().Format("Mon 15:04")
 			}
-			text := fmt.Sprintf("%s  %s", p.Harness, status)
+			text := fmt.Sprintf("%s  %s", p.Key(), status)
 			for _, k := range sortedKeys(p.Limit.Windows) {
 				wnd := p.Limit.Windows[k]
 				text += fmt.Sprintf("  %s %.0f%%", k, wnd.Utilization*100)
 			}
-			add(row{key: "plan:" + p.Harness, depth: 1, text: text})
+			add(row{key: "plan:" + p.Key(), depth: 1, text: text})
 		}
 	}
 	add(row{key: "waiting", text: fmt.Sprintf("waiting on you (%d)", len(m.st.Asks)), jump: secWaiting})
@@ -484,6 +484,7 @@ func (m *model) viewDetail(d *detail) []string {
 		lines = append(lines, indent(wrap(mod.Description, w-2), "  ")...)
 		lines = append(lines, "", stTitle.Render("projects that may use it"))
 		all := contains(mod.Projects, "*")
+		top := len(lines)
 		for i, p := range m.projectNames() {
 			mark := "[ ]"
 			if all || contains(mod.Projects, p) {
@@ -499,7 +500,7 @@ func (m *model) viewDetail(d *detail) []string {
 			lines = append(lines, line)
 		}
 		lines = append(lines, "", stDim.Render("space grant or remove"))
-		return lines
+		return window(lines, top+d.sel, m.bodyHeight())
 	default:
 		lines = append(lines, wrap(d.text, w)...)
 	}
