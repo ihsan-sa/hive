@@ -294,7 +294,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case d == 0 || msg.Action != tea.MouseActionPress || m.help || m.showSince:
 		case len(m.stack) > 0:
-			if top := &m.stack[len(m.stack)-1]; top.kind == "module" { // the list follows the selection
+			top := &m.stack[len(m.stack)-1]
+			if top.kind == "module" { // the list follows the selection
 				key := "up"
 				if d > 0 {
 					key = "down"
