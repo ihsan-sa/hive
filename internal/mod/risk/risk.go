@@ -9,6 +9,7 @@
 package risk
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -65,13 +66,14 @@ type Request struct {
 
 // Seat is one panelist and its votes by round.
 type Seat struct {
-	Run   string    `json:"run"`
-	Model string    `json:"model,omitempty"`
-	Votes [2]string `json:"votes"` // approve | decline, per round
-	Why   [2]string `json:"why"`
-	Again bool      `json:"again,omitempty"` // reopened for round 2
-	Gave  bool      `json:"gave,omitempty"`  // settled as a decline after ReopenTries failed reopens
-	Fails int       `json:"fails,omitempty"` // failed reopens for round 2
+	Run     string    `json:"run"`
+	Harness string    `json:"harness,omitempty"`
+	Model   string    `json:"model,omitempty"`
+	Votes   [2]string `json:"votes"` // approve | decline, per round
+	Why     [2]string `json:"why"`
+	Again   bool      `json:"again,omitempty"` // reopened for round 2
+	Gave    bool      `json:"gave,omitempty"`  // settled as a decline after ReopenTries failed reopens
+	Fails   int       `json:"fails,omitempty"` // failed reopens for round 2
 }
 
 // ReopenTries is how many times a seat may fail to reopen for round 2
@@ -195,7 +197,8 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 		return nil, errors.New("say what you need (want)")
 	}
 	tier := core.Tier(a.Tier)
-	route := core.Route(tier, m.C.WS.LoadConfig().Autonomy, core.CeilingHit(a.Want, a.Why, a.Steps))
+	cfg := m.C.WS.LoadConfig()
+	route := core.Route(tier, cfg.Autonomy, core.Ceiling(cfg.Floor, a.Want, a.Why, a.Steps))
 	if route == "self" {
 		return map[string]string{"tier": tier, "route": route, "note": "T1 is inside the Hive: weigh it yourself and get on with it."}, nil
 	}
@@ -323,21 +326,25 @@ func (m *Module) tell(req Request, text string) {
 	m.C.Runs.Send(req.Origin, "[request "+req.ID+"] "+text)
 }
 
-// panelModels are the tribunal models setting, falling back to the default model.
-func (m *Module) panelModels() []string {
+// panelSeats are the tribunal models setting, falling back to the default
+// model; a seat with no harness sits on the one its project uses.
+func (m *Module) panelSeats() ([]core.TribunalSeat, error) {
 	cfg := m.C.WS.LoadConfig()
-	var out []string
-	seen := map[string]bool{}
+	if err := cfg.Check(); err != nil {
+		return nil, err
+	}
+	var out []core.TribunalSeat
+	seen := map[core.TribunalSeat]bool{}
 	for _, x := range cfg.TribunalModels {
-		if x != "" && !seen[x] {
+		if x.Model != "" && !seen[x] {
 			seen[x] = true
 			out = append(out, x)
 		}
 	}
 	if len(out) == 0 {
-		out = []string{cfg.Model}
+		out = []core.TribunalSeat{{Model: cfg.Model}}
 	}
-	return out
+	return out, nil
 }
 
 func (m *Module) panelBrief(req Request, round int, seat int) string {
@@ -361,14 +368,23 @@ func (m *Module) panelBrief(req Request, round int, seat int) string {
 // seats already started stop.
 func (m *Module) convene(req *Request) error {
 	req.State, req.Round, req.Panel = "tribunal", 1, nil
-	models := m.panelModels()
+	seats, err := m.panelSeats()
 	for i := 0; i < PanelSize; i++ {
 		id := fmt.Sprintf("t-%s-%d", req.ID, i)
-		dir, err := m.Agents.Scratch(id)
+		var s core.RunSpec
 		if err == nil {
-			s := m.Agents.Spec(id, "tribunal", req.Project, dir, m.panelBrief(*req, 1, i))
-			s.ReadOnly, s.Schema, s.Model, s.Inputs = true, VoteSchema, models[i%len(models)], map[string]string{"script.sh": req.Script}
-			_, err = m.C.Runs.Start(s)
+			var dir string
+			if dir, err = m.Agents.Scratch(id); err == nil {
+				seat := seats[i%len(seats)]
+				s = m.Agents.Spec(id, "tribunal", req.Project, dir, m.panelBrief(*req, 1, i))
+				// The seat sees the case and nothing else: no other project, no module.
+				s.ReadOnly, s.Isolated, s.Modules = true, true, nil
+				s.Schema, s.Model, s.Inputs = VoteSchema, seat.Model, map[string]string{"script.sh": req.Script}
+				if seat.Harness != "" {
+					s.Harness = seat.Harness
+				}
+				_, err = m.C.Runs.Start(s)
+			}
 		}
 		if err != nil {
 			for _, s := range req.Panel {
@@ -379,7 +395,7 @@ func (m *Module) convene(req *Request) error {
 			m.tell(*req, req.Outcome)
 			return err
 		}
-		req.Panel = append(req.Panel, Seat{Run: id, Model: models[i%len(models)]})
+		req.Panel = append(req.Panel, Seat{Run: id, Harness: s.Harness, Model: s.Model})
 	}
 	m.save(req)
 	return nil
@@ -389,10 +405,13 @@ func (m *Module) convene(req *Request) error {
 const VoteSchema = `{"type":"object","properties":{"vote":{"type":"string","enum":["approve","decline"]},"reason":{"type":"string"}},"required":["vote","reason"]}`
 
 // voteOf reads a panelist's answer for the turn that just ended; anything
-// but a clean structured vote counts as decline.
+// but exactly one clean structured vote, with no field it doesn't name,
+// counts as decline.
 func voteOf(p core.Run) (string, string) {
 	var v struct{ Vote, Reason string }
-	if p.Status != core.StatusDone || json.Unmarshal(p.Structured, &v) != nil || (v.Vote != "approve" && v.Vote != "decline") {
+	d := json.NewDecoder(bytes.NewReader(p.Structured))
+	d.DisallowUnknownFields()
+	if p.Status != core.StatusDone || d.Decode(&v) != nil || d.More() || (v.Vote != "approve" && v.Vote != "decline") {
 		return "decline", "no vote (" + p.Status + ")"
 	}
 	return v.Vote, core.Clip(v.Reason, 2000)
@@ -522,8 +541,9 @@ func (m *Module) execute(id string) {
 		m.tell(req, req.Outcome)
 		return
 	}
-	if err := core.CeilingGuard(req.Script, req.PersonOK); err != nil {
-		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.AlwaysPerson[core.CeilingHit(req.Script)]+", which is always yours to decide. Run to run exactly this script; decline to leave it.", "run", "declined")
+	floor := m.C.WS.LoadConfig().Floor
+	if err := core.CeilingGuard(req.Script, floor, req.PersonOK); err != nil {
+		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.Ceiling(floor, req.Script)+", which is always yours to decide. Run to run exactly this script; decline to leave it.", "run", "declined")
 		m.act.Unlock()
 		m.tell(req, err.Error()+"; the person decides.")
 		return

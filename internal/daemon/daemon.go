@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,8 +26,10 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
+	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 )
 
 // Forge picks the forge: GitHub, or a local folder forge when HIVE_FORGE=local:<dir>.
@@ -108,7 +111,16 @@ func Stop(ws core.Workspace) error {
 
 // Run is `hive daemon`: the background process.
 func Run(ws core.Workspace, waitFor int) error {
+	inUnit := inHiveUnit()
+	from := "" // the version of the daemon this one replaces
 	if waitFor > 0 {
+		if c, err := api.Dial(ws); err == nil {
+			from = c.Info.Version
+		}
+		if inUnit {
+			// An old unit stops everything in it as the old daemon exits; outlive that and hand the restart to systemd below.
+			signal.Ignore(syscall.SIGTERM)
+		}
 		for i := 0; i < 100 && proc.Alive(proc.Handle{PID: waitFor}); i++ {
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -116,6 +128,21 @@ func Run(ws core.Workspace, waitFor int) error {
 	if _, ok := Running(ws); ok {
 		return errors.New("the Hive is already running")
 	}
+	exe := release.Rename(ws.Root, from)
+	if inUnit && (waitFor > 0 || exe != "") {
+		if exe == "" {
+			exe, _ = executable()
+		}
+		if setup.RestartUnit(exe, ws.Root) {
+			return nil
+		}
+	}
+	if exe != "" {
+		// This update renamed hive-v0 to hive: start the daemon under its new name.
+		_, err := proc.StartDetached([]string{exe, "daemon"}, append(os.Environ(), "HIVE_HOME="+ws.Root), ws.Root, "", filepath.Join(ws.Hive(), "daemon.log"))
+		return err
+	}
+	// After the update hand-off: a renamed binary runs this check in its own daemon.
 	if err := checkHarness(ws.LoadConfig()); err != nil {
 		return err
 	}
@@ -171,10 +198,11 @@ func (s *server) onEvent(e core.Event) {
 	if e.Kind != "alert.raised" {
 		return
 	}
-	var a struct{ Kind, Text string }
+	var a struct{ Kind, Text, Ref string }
 	e.Decode(&a)
 	s.mu.Lock()
-	s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text})
+	s.alerts = slices.DeleteFunc(s.alerts, func(x api.Alert) bool { return a.Ref != "" && x.Ref == a.Ref })
+	s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text, Ref: a.Ref})
 	if len(s.alerts) > 50 {
 		s.alerts = s.alerts[len(s.alerts)-50:]
 	}
@@ -182,6 +210,9 @@ func (s *server) onEvent(e core.Event) {
 }
 
 var executable = os.Executable
+
+// inHiveUnit reports whether this daemon runs in the Hive's systemd unit.
+var inHiveUnit = setup.InUnit
 
 // restart replaces this daemon with the (updated) binary on disk, and marks
 // daemon.json so the control center waits for the new one.
@@ -337,6 +368,9 @@ func (s *server) routes() http.Handler {
 		if err := checkHarness(c); err != nil {
 			return nil, err
 		}
+		if err := c.Check(); err != nil {
+			return nil, err
+		}
 		if err := a.C.WS.SaveConfig(c); err != nil {
 			return nil, err
 		}
@@ -438,6 +472,7 @@ func (s *server) state() api.State {
 		sw = sw[:10]
 	}
 	st.Sweeps = sw
+	st.StepBacks = a.Improve.StepBacks("")
 	st.Asks = a.C.Person.Open()
 	s.mu.Lock()
 	st.Alerts = append([]api.Alert{}, s.alerts...)

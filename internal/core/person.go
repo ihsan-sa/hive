@@ -9,7 +9,7 @@ import (
 // Ask is something waiting on the person: a decision that is really theirs.
 type Ask struct {
 	ID       string    `json:"id"`
-	Kind     string    `json:"kind"` // step | merge | baseline | question | bare
+	Kind     string    `json:"kind"` // step | merge | release | baseline | question | bare
 	Title    string    `json:"title"`
 	Detail   string    `json:"detail"`
 	Options  []string  `json:"options"`

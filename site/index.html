@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Hive · Ihsan Salari</title>
+<meta name="description" content="A small team of AI agents that lives in a folder on your computer and works on your projects.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#faf7f1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#15140f" media="(prefers-color-scheme: dark)">
+<link rel="preload" href="fonts/Newsreader-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script>
+// Apply a saved theme before first paint, as ihsan.cc does (same key).
+try { var t = localStorage.getItem('ihsan-theme'); if (t) document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
+</head>
+<body>
+<main class="page">
+<nav class="top" aria-label="Site">
+  <span class="top__crumbs">
+    <a href="https://ihsan.cc/">ihsan.cc</a>
+    <span class="top__sep" aria-hidden="true">/</span>
+    <span class="top__here" aria-current="page">The Hive</span>
+  </span>
+  <button type="button" class="theme-switch" role="switch" aria-checked="false" aria-label="Dark theme" title="Dark theme"></button>
+</nav>
+
+<header class="head">
+  <h1 class="title">The Hive</h1>
+  <p class="standfirst">A small team of AI agents that lives in a folder on your computer and works on your projects while you do other things.</p>
+  <nav class="jump" aria-label="On this page"><a href="#install">Install</a><span class="jump__sep" aria-hidden="true">·</span><a href="#use">How to use it</a><span class="jump__sep" aria-hidden="true">·</span><a href="https://ihsan.cc/writing/the-hive/">How it works</a><span class="jump__sep" aria-hidden="true">·</span><a href="https://github.com/ihsan-sa/hive">GitHub</a></nav>
+</header>
+
+<div class="body">
+<p>You talk to a lead in a chat. Workers build each piece in their own sandbox, tests run where they can't touch them, a reviewer reads the exact commit, and the change merges on GitHub. After every merge the Hive measures the project and keeps the change or reverts it.</p>
+
+<figure>
+  <div class="figure__frame"><a class="figure__zoom" href="hive.svg" aria-label="Open the diagram full size"><img src="hive.svg" width="699" height="357" alt="The Hive's system: you talk to a lead, workers build in sandboxes, a gate tests and reviews, and changes merge on GitHub."></a></div>
+</figure>
+
+<section id="install">
+  <h2>Install</h2>
+  <p>macOS and Linux, in a terminal:</p>
+  <pre><code>curl -fsSL https://hive.ihsan.cc/install.sh | sh</code></pre>
+  <p>Windows, in PowerShell. On Windows PowerShell 5.1, run <code>[Net.ServicePointManager]::SecurityProtocol = 'Tls12'</code> first so the download can use TLS 1.2.</p>
+  <pre><code>irm https://hive.ihsan.cc/install.ps1 | iex</code></pre>
+  <p>Then run <code>hive</code>. On Windows, agents are sandboxed inside WSL 2, and the installer sets up Claude Code there.</p>
+</section>
+
+<section id="use">
+  <h2>How to use it</h2>
+  <h3>The first run</h3>
+  <p>It checks for git, Claude Code and the GitHub CLI and offers their own logins. It asks where to live (Enter for <code>~/hive</code>) and for a GitHub repository (Enter makes a small private demo project). Then it opens the control center with the lead's chat, and from then on the Hive starts with your machine.</p>
+  <h3>Every day</h3>
+  <dl>
+    <dt><code>hive</code></dt><dd>the control center: chats, dashboard, what's waiting on you</dd>
+    <dt><code>hive ask "..." --wait</code></dt><dd>ask the lead from a shell</dd>
+    <dt><code>hive status</code></dt><dd>what it's doing</dd>
+    <dt><code>hive doctor</code></dt><dd>check the install and sandbox</dd>
+    <dt><code>hive shutdown</code></dt><dd>stop it; <code>hive</code> starts it again</dd>
+  </dl>
+  <p>Closing the control center never stops work.</p>
+  <h3>Updates</h3>
+  <p>The Hive looks for a new release when it starts and every few hours while it runs, and updates itself when one is out. <code>hive update</code> does it now, and Settings turns it off.</p>
+  <h3>Uninstall</h3>
+  <p>macOS and Linux:</p>
+  <pre><code>curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh</code></pre>
+  <p>Windows:</p>
+  <pre><code>irm https://hive.ihsan.cc/uninstall.ps1 | iex</code></pre>
+  <p>Your folder and its projects are left alone.</p>
+</section>
+</div>
+
+<footer class="foot">
+  <a class="foot__link" href="https://ihsan.cc/writing/the-hive/"><span class="foot__label">The essay</span><span class="foot__title">Read how it works</span></a>
+  <a class="foot__link foot__link--end" href="https://github.com/ihsan-sa/hive"><span class="foot__label">The source</span><span class="foot__title">github.com/ihsan-sa/hive</span></a>
+  <p class="foot__home">Made by Ihsan Salari · <a href="https://ihsan.cc/">ihsan.cc</a></p>
+</footer>
+</main>
+<script>
+// A copy button on each command block. Copies only the command.
+for (const pre of document.querySelectorAll('pre')) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'copy'; b.textContent = 'Copy';
+  b.addEventListener('click', async () => {
+    const text = pre.querySelector('code').textContent;
+    try { await navigator.clipboard.writeText(text); }
+    catch (e) {
+      const t = document.createElement('textarea');
+      t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.opacity = '0';
+      document.body.appendChild(t); t.select(); t.setSelectionRange(0, text.length);
+      document.execCommand('copy'); t.remove();
+    }
+    b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500);
+  });
+  pre.prepend(b);
+}
+
+// The theme switch, as on ihsan.cc: an explicit choice wins and is kept; with none, the OS decides.
+(function () {
+  const sw = document.querySelector('.theme-switch');
+  const query = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  const isDark = () => {
+    const choice = document.documentElement.getAttribute('data-theme');
+    return choice ? choice === 'dark' : !!(query && query.matches);
+  };
+  const show = () => sw.setAttribute('aria-checked', String(isDark()));
+  sw.addEventListener('click', () => {
+    const next = isDark() ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('ihsan-theme', next); } catch (e) {}
+    show();
+  });
+  if (query && query.addEventListener) query.addEventListener('change', show);
+  show();
+})();
+</script>
+</body>
+</html>

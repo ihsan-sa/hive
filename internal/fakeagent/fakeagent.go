@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:needpackage, FAKE:module, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:needpackage, FAKE:module, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -28,6 +28,7 @@ var call = agentcli.Call
 // current directory and the dir it was given.
 func Main(argv []string) int {
 	var role, session, addDir string
+	var budget float64
 	resume, schema, readonly := false, false, false
 	for i := 0; i < len(argv); i++ {
 		switch argv[i] {
@@ -46,6 +47,9 @@ func Main(argv []string) int {
 		case "--add-dir":
 			i++
 			addDir = argv[i]
+		case "--max-budget-usd":
+			i++
+			fmt.Sscan(argv[i], &budget)
 		}
 	}
 	in, _ := io.ReadAll(os.Stdin)
@@ -71,6 +75,10 @@ func Main(argv []string) int {
 		return 0
 	}
 	emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "allowed", "resetsAt": time.Now().Add(5 * time.Hour).Unix(), "rateLimitType": "five_hour", "utilization": 0.1}})
+	if budget > 0 && strings.Contains(all, "FAKE:spendall") { // as Claude does at --max-budget-usd
+		emit(map[string]any{"type": "result", "subtype": "error_max_budget_usd", "is_error": true, "session_id": session, "total_cost_usd": budget + 0.01})
+		return 0
+	}
 
 	text, structured := "ok", any(nil)
 	var err error
@@ -97,13 +105,27 @@ func Main(argv []string) int {
 			_, err = call("finish", map[string]string{"status": "done", "account": "filed one ask"}, time.Minute)
 		}
 		text = "swept"
+	case "stepback":
+		// The goal steers the setup it designs; with no key it designs none.
+		for key, asks := range map[string][]string{"FAKE:stepbackwin": {"FAKE:raisescore"}, "FAKE:stepbacklose": {"FAKE:lowerscore"}, "FAKE:stepbackfail": {"FAKE:block"},
+			"FAKE:stepbackrig": {"FAKE:raisescore"}, "FAKE:stepbackspend": {"FAKE:spendall", "FAKE:raisescore"}} {
+			if strings.Contains(all, key) {
+				raw, _ := json.Marshal(map[string]any{"why": "FAKE: a simpler setup", "system": "", "asks": asks})
+				os.WriteFile(filepath.Join(os.Getenv("HIVE_BOX"), "experiment.json"), raw, 0o644)
+			}
+		}
+		_, err = call("finish", map[string]string{"status": "done", "account": "stepped back"}, time.Minute)
 	default:
 		_, err = call("finish", map[string]string{"status": "done", "account": "fake " + role + " done"}, time.Minute)
 	}
 	if err != nil {
 		text = "error: " + err.Error()
 	}
-	res := map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": text, "session_id": session, "total_cost_usd": 0.0}
+	cost := 0.0
+	if strings.Contains(all, "FAKE:paid") {
+		cost = 0.25
+	}
+	res := map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": text, "session_id": session, "total_cost_usd": cost}
 	if schema && structured != nil {
 		res["structured_output"] = structured
 	}
@@ -199,6 +221,10 @@ func worker(all, prompt, system string) (string, error) {
 		_, err := call("finish", map[string]string{"status": "blocked", "account": "FAKE: blocked on purpose"}, time.Minute)
 		return "blocked", err
 	}
+	if m := peekWarden.FindStringSubmatch(all); m != nil {
+		_, err := call("finish", map[string]string{"status": "done", "account": "FAKE: peek " + peek(m[1])}, time.Minute)
+		return "done", err
+	}
 	m := outsidePath.FindStringSubmatch(all)
 	if m != nil && strings.Contains(prompt, "[request ") {
 		// As a real worker does: the step was the whole job, so nothing to commit.
@@ -267,6 +293,54 @@ func worker(all, prompt, system string) (string, error) {
 // $1 into USED.md.
 var moduleKey = regexp.MustCompile(`FAKE:module (\w+) (\w+)`)
 var useModuleKey = regexp.MustCompile(`FAKE:usemodule (\w+)`)
+
+// peek reads what the rest of the Hive left in $HIVE_STATE (another run's log,
+// a chat, the named warden's log, the journal), tries to open each for writing and to
+// make a new file, and counts the secrets it could read.
+func peek(warden string) string {
+	st := os.Getenv("HIVE_STATE")
+	var out []string
+	try := func(name, glob string) {
+		paths, _ := filepath.Glob(filepath.Join(st, glob))
+		for _, p := range paths {
+			if strings.Contains(p, os.Getenv("HIVE_ID")) {
+				continue
+			}
+			_, rerr := os.ReadFile(p)
+			f, werr := os.OpenFile(p, os.O_WRONLY|os.O_APPEND, 0)
+			if werr == nil {
+				f.Close()
+			}
+			out = append(out, fmt.Sprintf("%s read=%t write=%t", name, rerr == nil, werr == nil))
+			return
+		}
+		out = append(out, name+" missing")
+	}
+	try("log", "runs/*/host/turn-*.jsonl")
+	try("chat", "chats/*.jsonl")
+	try("warden", "runs/"+warden+"/host/turn-*.jsonl")
+	try("journal", "events.jsonl")
+	f, err := os.Create(filepath.Join(st, "runs", "peek-was-here"))
+	if err == nil {
+		f.Close()
+		os.Remove(f.Name())
+	}
+	secrets := 0
+	if raw, _ := os.ReadFile(filepath.Join(st, "daemon.json")); strings.Contains(string(raw), "token") {
+		secrets++
+	}
+	filepath.WalkDir(filepath.Join(st, "logins"), func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			if _, err := os.ReadFile(p); err == nil {
+				secrets++
+			}
+		}
+		return nil
+	})
+	return strings.Join(out, ", ") + fmt.Sprintf(", create=%t, secrets=%d", err == nil, secrets)
+}
+
+var peekWarden = regexp.MustCompile(`FAKE:peek (\S+)`)
 
 // riskKeys steer the fake warden and panel; the worker passes them on in its request.
 var riskKeys = regexp.MustCompile(`FAKE:(warden|panel)[a-z]+`)

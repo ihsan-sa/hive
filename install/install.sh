@@ -1,12 +1,13 @@
 #!/bin/sh
 # Install the Hive on Linux or macOS. One line:
-#   gh api repos/ihsan-sa/hive-standalone-build/contents/install/install.sh -H "Accept: application/vnd.github.raw" | sh
-# (or, once the repo is public: curl -fsSL https://raw.githubusercontent.com/ihsan-sa/hive-standalone-build/main/install/install.sh | sh)
-# Running it again reinstalls. The binary is static; no runtime is needed.
+#   curl -fsSL https://hive.ihsan.cc/install.sh | sh
+# Running it again reinstalls. HIVE_VERSION=v0.1.2 installs that release instead
+# of the latest. The binary is static; no runtime is needed.
 set -eu
 
-REPO="${HIVE_REPO:-ihsan-sa/hive-standalone-build}"
-CMD="${HIVE_CMD:-hive-v0}"
+REPO="${HIVE_REPO:-ihsan-sa/hive}"
+CMD="${HIVE_CMD:-hive}"
+VERSION="${HIVE_VERSION:-latest}"
 DIR="${HIVE_BIN_DIR:-$HOME/.local/bin}"
 
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -21,27 +22,27 @@ asset="hive-$os-$arch"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-echo "Downloading the Hive ($asset) from $REPO ..."
-if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  gh release download -R "$REPO" --pattern "$asset" --pattern checksums.txt --dir "$tmp" --clobber
-else
-  base="https://github.com/$REPO/releases/latest/download"
-  curl -fsSL "$base/$asset" -o "$tmp/$asset"
-  curl -fsSL "$base/checksums.txt" -o "$tmp/checksums.txt"
-fi
+echo "Downloading the Hive ($asset, $VERSION) from $REPO ..."
+base="https://github.com/$REPO/releases/download/$VERSION"
+[ "$VERSION" = latest ] && base="https://github.com/$REPO/releases/latest/download"
+curl -fsSL "$base/$asset" -o "$tmp/$asset"
+curl -fsSL "$base/checksums.txt" -o "$tmp/checksums.txt"
 want=$(grep " $asset\$" "$tmp/checksums.txt" | awk '{print $1}')
 if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$tmp/$asset" | awk '{print $1}'); else got=$(shasum -a 256 "$tmp/$asset" | awk '{print $1}'); fi
 if [ -z "$want" ] || [ "$want" != "$got" ]; then echo "$CMD: checksum mismatch; not installing" >&2; exit 1; fi
 
 mkdir -p "$DIR"
-[ -x "$DIR/$CMD" ] && "$DIR/$CMD" shutdown >/dev/null 2>&1 || true
+for c in "$CMD" hive-v0; do [ -x "$DIR/$c" ] && "$DIR/$c" shutdown >/dev/null 2>&1 || true; done
 install -m 755 "$tmp/$asset" "$DIR/$CMD"
+# The command was hive-v0 up to v0.1.2; an old binary left there becomes an alias.
+if [ "$CMD" != hive-v0 ] && [ -e "$DIR/hive-v0" ]; then ln -sf "$CMD" "$DIR/hive-v0"; fi
 
 case ":$PATH:" in
   *":$DIR:"*) ;;
   *)
+    # macOS opens zsh, which never reads .profile, so .zshrc is written there.
     for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
-      [ -f "$rc" ] || [ "$rc" = "$HOME/.profile" ] || continue
+      [ -f "$rc" ] || [ "$rc" = "$HOME/.profile" ] || [ "$rc:$os" = "$HOME/.zshrc:darwin" ] || continue
       grep -qs "$DIR" "$rc" || printf '\nexport PATH="%s:$PATH"\n' "$DIR" >> "$rc"
     done
     echo "Added $DIR to your PATH (open a new terminal)."
