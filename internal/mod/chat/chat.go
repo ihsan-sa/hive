@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,14 +50,26 @@ type File struct {
 	Data []byte `json:"data"`
 }
 
-// MaxFile caps one attachment and MaxFiles a message's count, so a stray
-// drop can't flood a run's dir. MaxBody follows from them: each file goes as
-// base64 in JSON, plus room for the text.
-const (
-	MaxFile  = 10 << 20
-	MaxFiles = 10
-	MaxBody  = MaxFiles*((MaxFile+2)/3*4+1<<10) + 1<<20
-)
+// Limit caps a posted message's body at mb megabytes (the chat_max_mb
+// setting), so the daemon never buffers an unbounded POST, and going over
+// says which setting raises it.
+func Limit(body io.ReadCloser, mb int) io.ReadCloser {
+	return limited{http.MaxBytesReader(nil, body, int64(mb)<<20), mb}
+}
+
+type limited struct {
+	io.ReadCloser
+	mb int
+}
+
+func (l limited) Read(p []byte) (int, error) {
+	n, err := l.ReadCloser.Read(p)
+	var over *http.MaxBytesError
+	if errors.As(err, &over) {
+		err = fmt.Errorf("the message is over the %d MB limit; chat_max_mb in .hive/config.json raises it", l.mb)
+	}
+	return n, err
+}
 
 // cleanName is the base name with control characters and brackets dropped,
 // so a file's name can't break the prompt's note or add text to it.
@@ -70,14 +84,6 @@ func cleanName(n string) string {
 		return "file"
 	}
 	return n
-}
-
-// TooBig says why an attachment of n bytes can't go, or nil if it can.
-func TooBig(name string, n int64) error {
-	if n <= MaxFile {
-		return nil
-	}
-	return fmt.Errorf("%s is %.1f MB; an attachment can be at most %d MB", name, float64(n)/(1<<20), MaxFile>>20)
 }
 
 // Module holds chats.
@@ -189,15 +195,9 @@ func (m *Module) Post(chatID, thread, text string, files ...File) (Message, erro
 	if text == "" && len(files) == 0 {
 		return Message{}, fmt.Errorf("empty message")
 	}
-	if len(files) > MaxFiles {
-		return Message{}, fmt.Errorf("%d files; a message can carry at most %d", len(files), MaxFiles)
-	}
 	shown := text
 	for i, f := range files {
 		files[i].Name = cleanName(f.Name)
-		if err := TooBig(files[i].Name, int64(len(f.Data))); err != nil {
-			return Message{}, err
-		}
 		shown += "\n📎 " + files[i].Name
 	}
 	m.mu.Lock()

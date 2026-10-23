@@ -213,7 +213,7 @@ func (s *server) routes() http.Handler {
 				Chat, Thread, Text string
 				Files              []chat.File
 			}
-			r.Body = http.MaxBytesReader(nil, r.Body, chat.MaxBody)
+			r.Body = chat.Limit(r.Body, a.C.WS.LoadConfig().ChatMaxMB)
 			if err := decode(r, &b); err != nil {
 				return nil, err
 			}

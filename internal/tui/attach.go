@@ -120,15 +120,8 @@ func isFile(p string) bool {
 	return err == nil && fi.Mode().IsRegular()
 }
 
-// readAttachment reads a pasted file, within the size cap.
+// readAttachment reads a pasted file.
 func readAttachment(p string) (chat.File, error) {
-	fi, err := os.Stat(p)
-	if err != nil {
-		return chat.File{}, err
-	}
-	if err := chat.TooBig(filepath.Base(p), fi.Size()); err != nil {
-		return chat.File{}, err
-	}
 	data, err := os.ReadFile(p)
 	return chat.File{Name: filepath.Base(p), Data: data}, err
 }
@@ -185,7 +178,7 @@ func clipboardImage() (chat.File, error) {
 		err = errNoImage
 		out, _ := exec.Command(t.argv[0], t.argv[1:]...).Output()
 		if img, e := t.decode(out); e == nil && bytes.HasPrefix(img, pngMagic) {
-			return chat.File{Name: "pasted.png", Data: img}, chat.TooBig("the clipboard image", int64(len(img)))
+			return chat.File{Name: "pasted.png", Data: img}, nil
 		}
 	}
 	return chat.File{}, err

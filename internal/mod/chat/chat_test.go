@@ -1,7 +1,9 @@
 package chat
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -151,8 +153,8 @@ func TestLeadBundle(t *testing.T) {
 	}
 }
 
-// A file's name can't add text to the prompt, a message carries at most
-// MaxFiles, and files for a run that can't take them are never written.
+// A file's name can't add text to the prompt, a post over chat_max_mb says
+// so, and files for a run that can't take them are never written.
 func TestAttachRules(t *testing.T) {
 	for in, want := range map[string]string{
 		"shot.png":                     "shot.png",
@@ -172,8 +174,14 @@ func TestAttachRules(t *testing.T) {
 	}
 	defer c.Close()
 	m := &Module{C: c, chats: map[string]*Chat{"agent:gone": {ID: "agent:gone", Kind: "agent", Lead: "gone"}}, msgs: map[string][]Message{}}
-	if _, err := m.Post("agent:gone", "", "", make([]File, MaxFiles+1)...); err == nil || !strings.Contains(err.Error(), "at most") {
-		t.Fatalf("too many files: %v", err)
+	var b struct{ Text string }
+	big := io.NopCloser(strings.NewReader(`{"text":"` + strings.Repeat("x", 2<<20) + `"}`))
+	if err := json.NewDecoder(Limit(big, 1)).Decode(&b); err == nil || !strings.Contains(err.Error(), "1 MB limit; chat_max_mb") {
+		t.Fatalf("over the limit: %v", err)
+	}
+	small := io.NopCloser(strings.NewReader(`{"text":"hi"}`))
+	if err := json.NewDecoder(Limit(small, 1)).Decode(&b); err != nil || b.Text != "hi" {
+		t.Fatalf("under the limit: %v %q", err, b.Text)
 	}
 	if _, err := m.Post("agent:gone", "", "look", File{Name: "a.txt", Data: []byte("x")}); err != core.ErrNotFound {
 		t.Fatalf("dead run: %v", err)

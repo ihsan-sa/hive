@@ -55,6 +55,7 @@ type Config struct {
 	ReviewRounds int                        `json:"review_rounds"`
 	Projects     map[string]ProjectSettings `json:"projects,omitempty"`
 	Schedules    map[string]string          `json:"schedules,omitempty"` // name -> "every 12h" | "daily 03:00" | "off"
+	ChatMaxMB    int                        `json:"chat_max_mb"`         // the most one chat message, files and all, may be
 }
 
 // ProjectSettings override workspace defaults per project.
@@ -75,6 +76,7 @@ func DefaultConfig() Config {
 		ReleaseRepo:    DefaultReleaseRepo,
 		AutoUpdate:     true,
 		ReviewRounds:   3,
+		ChatMaxMB:      300,
 		Schedules: map[string]string{
 			"improve.sweep":  "every 12h",
 			"kb.file":        "daily 04:00",
