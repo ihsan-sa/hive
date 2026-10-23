@@ -12,6 +12,13 @@ import (
 // testHive is a workspace with a local forge and bare (opted-in) runs.
 func testHive(t *testing.T) (*Core, *Local) {
 	t.Helper()
+	// git detaches a background gc/maintenance after commit and fetch; it can
+	// still be writing into .git/objects/pack when TempDir is removed.
+	t.Setenv("GIT_CONFIG_COUNT", "2")
+	t.Setenv("GIT_CONFIG_KEY_0", "gc.auto")
+	t.Setenv("GIT_CONFIG_VALUE_0", "0")
+	t.Setenv("GIT_CONFIG_KEY_1", "maintenance.auto")
+	t.Setenv("GIT_CONFIG_VALUE_1", "false")
 	dir := t.TempDir()
 	ws := Workspace{Root: filepath.Join(dir, "hive")}
 	if err := ws.Init(); err != nil {
@@ -19,6 +26,7 @@ func testHive(t *testing.T) (*Core, *Local) {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0 // a loaded CI runner mustn't hold fake turns
 	ws.SaveConfig(cfg)
 	forge := &Local{Dir: filepath.Join(dir, "forge")}
 	c, err := Open(ws, forge)
