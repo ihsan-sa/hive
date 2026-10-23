@@ -1,5 +1,7 @@
 package harness
 
+import "fmt"
+
 // Fake is a scripted stand-in for a coding harness. It runs `hive fake-agent`,
 // which speaks the same stream-json protocol and uses the same mailbox as a
 // real agent, so tests and the release dry run exercise the real path without
@@ -7,6 +9,7 @@ package harness
 type Fake struct{}
 
 func (Fake) Name() string           { return "fake" }
+func (Fake) CapsSpend()             {}
 func (Fake) Program() string        { return "hive" }
 func (Fake) LoginCommand() []string { return nil }
 
@@ -20,6 +23,9 @@ func (Fake) Args(t Turn) []string {
 	}
 	if t.Schema != "" {
 		a = append(a, "--schema")
+	}
+	if t.MaxBudgetUSD > 0 {
+		a = append(a, "--max-budget-usd", fmt.Sprintf("%.2f", t.MaxBudgetUSD))
 	}
 	return a
 }

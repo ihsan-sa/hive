@@ -87,6 +87,9 @@ func (o *Ops) Call(r Run, name string, args json.RawMessage) (any, error) {
 	if len(op.Roles) > 0 && !contains(op.Roles, r.Role) {
 		return nil, fmt.Errorf("op %q is not granted to a %s", name, r.Role)
 	}
+	if r.OneTurn && name != "finish" && name != "progress" {
+		return nil, fmt.Errorf("op %q is not granted to an experiment: it may only report on its own copy", name)
+	}
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}

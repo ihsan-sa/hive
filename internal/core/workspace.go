@@ -74,6 +74,9 @@ type Config struct {
 	// pressure (Linux PSI "some avg10", percent) is over PressureMax; 0 turns a check off.
 	MemFloorMB  int     `json:"mem_floor_mb"`
 	PressureMax float64 `json:"pressure_max"`
+	// PlateauMerges: a project whose best score hasn't moved in this many
+	// merges gets a step-back (besides the improve.stepback schedule); 0 is off.
+	PlateauMerges int `json:"plateau_merges"`
 }
 
 // ProjectSettings override workspace defaults per project.
@@ -153,11 +156,13 @@ func DefaultConfig() Config {
 		MaxOutputTokens: 16000,
 		MemFloorMB:      1024,
 		PressureMax:     40,
+		PlateauMerges:   3,
 		Schedules: map[string]string{
-			"improve.sweep":  "every 12h",
-			"kb.file":        "daily 04:00",
-			"modules.update": "every 24h",
-			"hive.update":    "every 6h",
+			"improve.sweep":    "every 12h",
+			"improve.stepback": "every 72h",
+			"kb.file":          "daily 04:00",
+			"modules.update":   "every 24h",
+			"hive.update":      "every 6h",
 		},
 	}
 }

@@ -176,7 +176,7 @@ func ReadSpec(path string) (Spec, error) {
 func InsideEnv(home string, network bool) []string {
 	env := []string{
 		"HOME=" + home,
-		"PATH=/hive/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"PATH=/hive/bin:" + insideBins,
 		"LANG=C.UTF-8",
 		"TERM=dumb",
 		"TMPDIR=/tmp",
@@ -188,6 +188,9 @@ func InsideEnv(home string, network bool) []string {
 	}
 	return env
 }
+
+// insideBins are the system folders on the sandbox's PATH.
+const insideBins = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 // ProxyPort is where the egress forwarder listens inside the sandbox.
 const ProxyPort = "3128"
