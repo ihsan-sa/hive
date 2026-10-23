@@ -180,6 +180,8 @@ func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), token
 // left between writing it and the turn's start goes too. An error names what
 // is still readable; the daemon does not start agents until it is gone.
 func (rs *Runs) Migrate() error {
+	// Any old-layout path means an earlier daemon ran here, so its turns
+	// may still be alive with no cover over private/.
 	if old := rs.legacyPaths(); len(old) > 0 {
 		if err := rs.endOldTurns(); err != nil {
 			return err
@@ -249,7 +251,8 @@ func move(from, to string) error {
 		return err
 	}
 	if Exists(to) {
-		to += ".old-" + NewID()[:6]
+		id := NewID() // its random tail, not the date, keeps the name fresh
+		to += ".old-" + id[strings.LastIndex(id, "-")+1:]
 	}
 	return os.Rename(from, to)
 }

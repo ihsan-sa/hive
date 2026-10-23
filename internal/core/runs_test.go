@@ -22,7 +22,7 @@ func (isolatedSB) Isolated() bool { return true }
 // because bwrap can't make it inside the read-only bind.
 func TestNestedMountPointsExist(t *testing.T) {
 	c, _ := testHive(t)
-	r := Run{ID: "r1", Role: "lead", Harness: "fake", Isolated: true, Modules: []string{"agents", "kb"}}
+	r := Run{RunSpec: RunSpec{ID: "r1", Role: "lead", Harness: "fake", Isolated: true, Modules: []string{"agents", "kb"}}}
 	h, _ := harness.Get("fake")
 	spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, r, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
 	if err != nil {
