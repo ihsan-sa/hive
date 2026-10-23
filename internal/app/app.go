@@ -54,6 +54,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.System = system.New(c)
 	a.Risk = risk.New(c, a.Mods, a.Agents)
 	a.Work.Steps = a.Risk.Steps
+	a.Work.Weigh = a.Risk.Weigh
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = &release.Module{C: c}
 	a.Improve.OnKept = a.Release.AfterKept

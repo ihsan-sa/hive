@@ -463,6 +463,38 @@ func TestGateAndLoop(t *testing.T) {
 	})
 }
 
+// A worker isn't blamed for a failure main has too: its change waits with no
+// round spent, main's failure is one alert, and once main is fixed the change
+// is brought up to date and merges.
+func TestMainRedDoesNotBlameWorker(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/red", map[string]string{
+		".hive/project.json": `{"test": "grep -q green STATE"}`,
+		".hive/goals.md":     "# Goals\n",
+		".hive/lessons.md":   "# Lessons\n\n",
+		"STATE":              "red\n",
+	})
+	h.post("/api/project", map[string]any{"name": "red", "repo": "me/red"}, nil)
+	h.post("/api/ask", map[string]string{"project": "red", "title": "add a feature", "known": "a plain change"}, nil)
+	st := h.wait("the change to wait on main", 4*minute, func(st api.State) bool {
+		tk, ok := task(st, "red", "add a feature")
+		return ok && strings.HasPrefix(tk.Reason, "waiting on main")
+	})
+	tk, _ := task(st, "red", "add a feature")
+	alerts := 0
+	for _, a := range st.Alerts {
+		if a.Kind == "main-red" {
+			alerts++
+		}
+	}
+	if tk.Round != 0 || alerts != 1 {
+		t.Fatalf("round %d, %d main-red alerts; want 0 and 1", tk.Round, alerts)
+	}
+	h.seed("me/red", map[string]string{"STATE": "green\n"})
+	h.wait("the change to merge once main is green", 4*minute, taskStage("red", "add a feature", work.StageDone))
+}
+
 // M7: kill the Hive in the middle of an ask, restart, and get the same
 // outcome with no duplicate issue, run or PR. Usage limits park and resume;
 // a crashed turn is retried on its checkout.
@@ -524,9 +556,22 @@ func TestRecovery(t *testing.T) {
 	h.wait("the crashed run to be retried and land", 3*minute, taskStage("rec", "crash once", work.StageDone))
 }
 
+// toldAbout waits for a "told" ask whose title names what was decided.
+func toldAbout(what string) func(api.State) bool {
+	return func(st api.State) bool {
+		for _, a := range st.Asks {
+			if a.Kind == "told" && strings.Contains(a.Title, what) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // A request past the sandbox goes to a warden, which runs its script, and the
-// outcome reaches the agent. A module installs from a git URL only on the person's approval and
-// updates when its source releases. The Hive releases itself after a kept merge.
+// outcome reaches the agent. At autonomy 2 a warden approves a module install
+// and a goals change, and the person is told after. A module updates when its
+// source releases. The Hive releases itself after a kept merge.
 func TestPersonModulesRelease(t *testing.T) {
 	t.Parallel()
 	h := start(t)
@@ -553,19 +598,6 @@ func TestPersonModulesRelease(t *testing.T) {
 	git(src, "commit", "-q", "-m", "v1")
 	git(src, "tag", "v1.0.0")
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module " + src}, nil)
-	st := h.wait("the module install to reach the person", 2*minute, func(st api.State) bool {
-		for _, a := range st.Asks {
-			if a.Kind == "module" {
-				return true
-			}
-		}
-		return false
-	})
-	for _, a := range st.Asks {
-		if a.Kind == "module" {
-			h.post("/api/answer", map[string]string{"id": a.ID, "answer": "install"}, nil)
-		}
-	}
 	module := func(st api.State) (api.ModuleView, bool) {
 		for _, m := range st.Modules {
 			if m.Name == "tools" {
@@ -574,7 +606,11 @@ func TestPersonModulesRelease(t *testing.T) {
 		}
 		return api.ModuleView{}, false
 	}
-	h.wait("the module to install at v1.0.0", minute, func(st api.State) bool { m, ok := module(st); return ok && m.Release == "v1.0.0" })
+	h.wait("a warden to install the module at v1.0.0", 2*minute, func(st api.State) bool { m, ok := module(st); return ok && m.Release == "v1.0.0" })
+	h.wait("the person to be told after", minute, toldAbout("Install module tools"))
+	h.post("/api/ask", map[string]string{"project": "self", "title": "write down a goal", "known": "FAKE:goals"}, nil)
+	h.wait("a warden to approve the goals change and it to merge", 3*minute, taskStage("self", "write down a goal", work.StageDone))
+	h.wait("the person to be told after", minute, toldAbout("write down a goal"))
 	os.WriteFile(filepath.Join(src, "tool.sh"), []byte("echo hi\n"), 0o644)
 	git(src, "add", "-A")
 	git(src, "commit", "-q", "-m", "v1.1")

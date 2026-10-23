@@ -507,7 +507,8 @@ func (e *Effects) Reads(project, sha string) []string {
 	return slices.Clone(e.lands[project+"@"+sha])
 }
 
-// Approve records the person's approval of a commit: kind "merge" for a head
+// Approve records the approval of a commit (the person's, or a warden's
+// when autonomy lets it decide): kind "merge" for a head
 // that changes protected paths, "release" for a merge held before release.
 // The kinds stay apart, since a fast-forwarding forge merges a head as itself.
 func (e *Effects) Approve(kind, project, sha string) {
@@ -624,7 +625,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", err
 	}
 	if len(ch.Protected) > 0 && !e.Approved("merge", p.Name, m.SHA) {
-		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which the person merges"}
+		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
 	}
 	if !ch.Small && !e.readOK(p, ch, m.SHA) {
 		return "", fmt.Errorf("refusing to merge %s: no land verdict bound to that exact commit", short(m.SHA))

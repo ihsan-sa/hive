@@ -484,6 +484,7 @@ func (m *model) viewDetail(d *detail) []string {
 		lines = append(lines, indent(wrap(mod.Description, w-2), "  ")...)
 		lines = append(lines, "", stTitle.Render("projects that may use it"))
 		all := contains(mod.Projects, "*")
+		top := len(lines)
 		for i, p := range m.projectNames() {
 			mark := "[ ]"
 			if all || contains(mod.Projects, p) {
@@ -499,7 +500,7 @@ func (m *model) viewDetail(d *detail) []string {
 			lines = append(lines, line)
 		}
 		lines = append(lines, "", stDim.Render("space grant or remove"))
-		return lines
+		return window(lines, top+d.sel, m.bodyHeight())
 	default:
 		lines = append(lines, wrap(d.text, w)...)
 	}
@@ -787,6 +788,9 @@ func (m *model) viewSettings() []string {
 	}
 	if m.editing {
 		lines = append(lines, "", m.input.View())
+	}
+	if m.st.ConfigErr != "" {
+		lines = append(lines, "", stBad.Render(clip("config.json: "+m.st.ConfigErr, m.w)))
 	}
 	lines = append(lines, "", stDim.Render(fmt.Sprintf("Hive %s · %s · settings in %s", m.st.Version, m.st.Workspace, ".hive/config.json")))
 	return window(lines, m.setSel, m.bodyHeight())

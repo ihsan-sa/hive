@@ -150,6 +150,9 @@ func (c Config) Check() error {
 		if t.bad != "" {
 			return fmt.Errorf("tribunal seat %s isn't a model name or {\"harness\": ..., \"model\": ...}", t.bad)
 		}
+		if t.Model == "" {
+			return errors.New("a tribunal seat needs a model")
+		}
 		if t.Harness == "" {
 			continue
 		}

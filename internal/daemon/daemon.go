@@ -337,10 +337,7 @@ func (s *server) routes() http.Handler {
 		if r.Method != http.MethodPost {
 			// What config.json got wrong rides beside every setting that did read.
 			c, err := a.C.WS.ReadConfig()
-			out := struct {
-				core.Config
-				LoadError string `json:"load_error,omitempty"`
-			}{Config: c}
+			out := api.ConfigView{Config: c}
 			if err != nil {
 				out.LoadError = err.Error()
 			}
@@ -466,6 +463,7 @@ func (s *server) state() api.State {
 	st.Alerts = append([]api.Alert{}, s.alerts...)
 	s.mu.Unlock()
 	if cfgErr != nil { // live, so it goes once the file is fixed
+		st.ConfigErr = cfgErr.Error()
 		st.Alerts = append(st.Alerts, api.Alert{At: time.Now(), Kind: "settings", Text: cfgErr.Error()})
 	}
 	st.Jobs = a.System.Jobs()

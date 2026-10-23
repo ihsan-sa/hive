@@ -12,7 +12,8 @@ import (
 
 // Asked for a module with one project open, the lead builds it as a project
 // of its own, not in the project that happens to exist, says so, and once it
-// merges asks the person to install it into .modules/.
+// merges asks to install it into .modules/, which a warden approves at
+// autonomy 2 and the person hears after.
 func TestAskForModule(t *testing.T) {
 	t.Parallel()
 	h := start(t)
@@ -27,20 +28,7 @@ func TestAskForModule(t *testing.T) {
 		return false
 	})
 	h.wait("the module's work to merge", 3*minute, taskStage("ledger", "Build module ledger", work.StageDone))
-	st := h.wait("the install to reach the person", 2*minute, func(st api.State) bool {
-		for _, a := range st.Asks {
-			if a.Kind == "module" {
-				return true
-			}
-		}
-		return false
-	})
-	for _, a := range st.Asks {
-		if a.Kind == "module" {
-			h.post("/api/answer", map[string]string{"id": a.ID, "answer": "install"}, nil)
-		}
-	}
-	st = h.wait("the module to install", minute, func(st api.State) bool {
+	st := h.wait("a warden to install the module", 2*minute, func(st api.State) bool {
 		for _, m := range st.Modules {
 			if m.Name == "ledger" {
 				return true
@@ -48,6 +36,7 @@ func TestAskForModule(t *testing.T) {
 		}
 		return false
 	})
+	h.wait("the person to be told after", minute, toldAbout("Install module ledger"))
 	if !core.Exists(filepath.Join(h.ws.Modules(), "ledger", "ledger.md")) {
 		t.Fatal("the installed module lacks the file the worker built")
 	}
