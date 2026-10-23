@@ -187,10 +187,10 @@ func (m *Module) add(msg Message) Message {
 	return msg
 }
 
-// Post is the person writing in a chat; it reaches the chat's lead or agent.
-// Files go into the run's own dir ($HIVE_RUN/attach), and the prompt names
-// their paths: the agent opens them with its own tools.
-func (m *Module) Post(chatID, thread, text string, files ...File) (Message, error) {
+// Post is the person, or the module from names, writing in a chat; it reaches
+// the chat's lead or agent. Files go into the run's own dir ($HIVE_RUN/attach),
+// and the prompt names their paths: the agent opens them with its own tools.
+func (m *Module) Post(chatID, thread, from, text string, files ...File) (Message, error) {
 	text = strings.TrimSpace(text)
 	if text == "" && len(files) == 0 {
 		return Message{}, fmt.Errorf("empty message")
@@ -213,7 +213,11 @@ func (m *Module) Post(chatID, thread, text string, files ...File) (Message, erro
 			return Message{}, core.ErrNotFound
 		}
 	}
-	msg := m.add(Message{Chat: chatID, Thread: thread, From: "person", Name: "you", Text: strings.TrimSpace(shown)})
+	who, name, said, speaker := "person", "you", "the person", "Person"
+	if from != "" {
+		who, name, said, speaker = from, from, "module "+from, "Module "+from
+	}
+	msg := m.add(Message{Chat: chatID, Thread: thread, From: who, Name: name, Text: strings.TrimSpace(shown)})
 	switch ch.Kind {
 	case "agent":
 		err := m.C.Runs.Takes(ch.Lead)
@@ -222,14 +226,14 @@ func (m *Module) Post(chatID, thread, text string, files ...File) (Message, erro
 			note, err = m.attach(ch.Lead, files)
 		}
 		if err == nil {
-			err = m.C.Runs.Send(ch.Lead, "[the person, in your chat] "+text+note)
+			err = m.C.Runs.Send(ch.Lead, "["+said+", in your chat] "+text+note)
 		}
 		if err != nil {
 			return msg, err
 		}
 	default:
 		m.syncFor(ch)
-		prompt := fmt.Sprintf("[chat %s · thread %s · %s] Person: %s", chatID, msg.Thread, time.Now().Format("Mon 15:04"), text)
+		prompt := fmt.Sprintf("[chat %s · thread %s · %s] %s: %s", chatID, msg.Thread, time.Now().Format("Mon 15:04"), speaker, text)
 		if err := m.deliverToLead(ch, prompt, files...); err != nil {
 			return msg, err
 		}

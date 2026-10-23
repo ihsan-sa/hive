@@ -73,8 +73,8 @@ func TestLeadFollowsModelSetting(t *testing.T) {
 }
 
 // Every run but an isolated project's reads the whole .hive at /hive/state,
-// writes none of it, and finds the daemon's token and the stored logins
-// covered; each cover has its mount point in the read-only state.
+// writes none of it, and finds the daemon's token, the stored logins and the
+// modules' homes covered; each cover has its mount point in the read-only state.
 func TestRunsReadTheStateButNoSecret(t *testing.T) {
 	c, _ := testHive(t)
 	os.WriteFile(c.WS.DaemonFile(), []byte(`{"token": "t"}`), 0o600)
@@ -96,7 +96,7 @@ func TestRunsReadTheStateButNoSecret(t *testing.T) {
 			hidden[strings.TrimPrefix(m.Inside, "/hive/state/")] = true
 		}
 	}
-	if !state || !hidden["logins"] || !hidden["daemon.json"] {
+	if !state || !hidden["logins"] || !hidden["modules"] || !hidden["daemon.json"] {
 		t.Fatalf("state mounted %v, covered %v: %+v", state, hidden, spec.Mounts)
 	}
 	if !slices.Contains(spec.Env, "HIVE_STATE=/hive/state") {

@@ -150,7 +150,7 @@ func TestLiveAskLands(t *testing.T) {
 }
 
 // A person asks the lead for a new module; it is built in a project of its
-// own, installed on the person's approval, granted to one project, and an
+// own, installed on a warden's approval, granted to one project, and an
 // agent there uses it. A newer commit of its source then reaches it through
 // modules.update (the source has no release tags, so it follows main).
 func TestModuleLifecycle(t *testing.T) { t.Parallel(); moduleLifecycle(t, false) }
@@ -172,19 +172,6 @@ func moduleLifecycle(t *testing.T, real bool) {
 	h.wait("the module to be built", patience(t), h.onMain("local/greet", "skill.md", "PLUM42"))
 
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module " + h.forge.RepoPath("local/greet")}, nil)
-	st := h.wait("the install to reach the person", patience(t), func(st api.State) bool {
-		for _, a := range st.Asks {
-			if a.Kind == "module" {
-				return true
-			}
-		}
-		return false
-	})
-	for _, a := range st.Asks {
-		if a.Kind == "module" {
-			h.post("/api/answer", map[string]string{"id": a.ID, "answer": "install"}, nil)
-		}
-	}
 	module := func(st api.State) (api.ModuleView, bool) {
 		for _, m := range st.Modules {
 			if m.Name == "greet" {
@@ -193,7 +180,9 @@ func moduleLifecycle(t *testing.T, real bool) {
 		}
 		return api.ModuleView{}, false
 	}
-	st = h.wait("greet to install", minute, func(st api.State) bool { _, ok := module(st); return ok })
+	// At autonomy 2 a warden decides the install and the person hears after.
+	st := h.wait("a warden to install greet", patience(t), func(st api.State) bool { _, ok := module(st); return ok })
+	h.wait("the person to be told after", minute, toldAbout("Install module"))
 	first, _ := module(st)
 	h.post("/api/module/access", map[string]any{"module": "greet", "project": "*", "allow": false}, nil)
 	h.post("/api/module/access", map[string]any{"module": "greet", "project": "app", "allow": true}, nil)
