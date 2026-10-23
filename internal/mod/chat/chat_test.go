@@ -184,7 +184,7 @@ func TestAttachRules(t *testing.T) {
 	if err := json.NewDecoder(Limit(small, 1)).Decode(&b); err != nil || b.Text != "hi" {
 		t.Fatalf("under the limit: %v %q", err, b.Text)
 	}
-	if _, err := m.Post("agent:gone", "", "look", File{Name: "a.txt", Data: []byte("x")}); err != core.ErrNotFound {
+	if _, err := m.Post("agent:gone", "", "", "look", File{Name: "a.txt", Data: []byte("x")}); err != core.ErrNotFound {
 		t.Fatalf("dead run: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(c.WS.RunRO("gone"), "attach")); !os.IsNotExist(err) {

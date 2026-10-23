@@ -27,6 +27,11 @@ type Manifest struct {
 	Description string              `json:"description"`
 	Provides    map[string][]string `json:"provides,omitempty"`
 	Projects    []string            `json:"projects,omitempty"` // default access
+	// Exec is a program the daemon starts and keeps running (argv; a first
+	// word starting with "." is relative to the module's folder), and Hooks
+	// are what it serves, each a fixed slice of the control API (see runner).
+	Exec  []string `json:"exec,omitempty"`
+	Hooks []string `json:"hooks,omitempty"`
 }
 
 // Source is the host-written record of where a module came from.
@@ -36,7 +41,17 @@ type Source struct {
 	Hash      string    `json:"hash,omitempty"` // builtin content hash at install, to spot local edits
 	Installed time.Time `json:"installed"`
 	Updated   time.Time `json:"updated,omitempty"`
-	Projects  []string  `json:"projects"` // access: "*" or project names
+	Projects  []string  `json:"projects"`         // access: "*" or project names
+	Commit    string    `json:"commit,omitempty"` // git modules: the commit checked out
+	Review    *Review   `json:"review,omitempty"` // git modules: the last read of its code
+}
+
+// Review is a read-only review run's verdict on a module at one commit.
+type Review struct {
+	Commit string `json:"commit"`
+	Vote   string `json:"vote"` // approve | decline
+	Reason string `json:"reason"`
+	Run    string `json:"run"`
 }
 
 // Module is one installed module.
@@ -48,8 +63,19 @@ type Module struct {
 
 // Registry reads and writes .modules/.
 type Registry struct {
-	ws core.Workspace
-	j  *core.Journal
+	ws    core.Workspace
+	j     *core.Journal
+	ticks []func()
+}
+
+// Builtin adds an in-process module's step to the tick list.
+func (r *Registry) Builtin(tick func()) { r.ticks = append(r.ticks, tick) }
+
+// Tick steps every in-process module in the order they were added.
+func (r *Registry) Tick() {
+	for _, t := range r.ticks {
+		t()
+	}
 }
 
 // New returns the registry.
@@ -203,6 +229,21 @@ func (r *Registry) Granted(project string) []string {
 	return out
 }
 
+// Reaches says whether a module was granted project; "" (the whole
+// workspace) is reached only by a grant of "*".
+func (r *Registry) Reaches(name, project string) bool {
+	m, ok := r.Get(name)
+	if !ok {
+		return false
+	}
+	for _, p := range m.Source.Projects {
+		if p == "*" || (project != "" && p == project) {
+			return true
+		}
+	}
+	return false
+}
+
 // SetAccess grants or removes a project's access to a module.
 func (r *Registry) SetAccess(name, project string, allow bool) error {
 	m, ok := r.Get(name)
@@ -227,6 +268,21 @@ func (r *Registry) SetAccess(name, project string, allow bool) error {
 		return err
 	}
 	r.j.MustAppend("module.access", map[string]any{"module": name, "project": project, "allow": allow})
+	return nil
+}
+
+// SetReview records a review run's verdict on a module's commit.
+func (r *Registry) SetReview(name string, v Review) error {
+	m, ok := r.Get(name)
+	if !ok {
+		return core.ErrNotFound
+	}
+	s := m.Source
+	s.Review = &v
+	if err := writeSource(m.Dir, s); err != nil {
+		return err
+	}
+	r.j.MustAppend("module.reviewed", map[string]string{"module": name, "commit": v.Commit, "vote": v.Vote, "reason": v.Reason, "run": v.Run})
 	return nil
 }
 
@@ -257,7 +313,11 @@ func (r *Registry) Install(url, name string) (Module, error) {
 		os.RemoveAll(dir)
 		return Module{}, err
 	}
-	return r.record(url, name)
+	m, err := r.record(url, name)
+	if err != nil { // a clone with no source record must not stay behind
+		os.RemoveAll(dir)
+	}
+	return m, err
 }
 
 func (r *Registry) record(url, name string) (Module, error) {
@@ -272,7 +332,8 @@ func (r *Registry) record(url, name string) (Module, error) {
 	} else {
 		rel, _ = core.Git(dir, "rev-parse", "--short", "HEAD")
 	}
-	s := Source{Source: url, Release: rel, Installed: time.Now().UTC(), Projects: []string{"*"}}
+	commit, _ := core.Git(dir, "rev-parse", "HEAD")
+	s := Source{Source: url, Release: rel, Commit: commit, Installed: time.Now().UTC(), Projects: []string{"*"}}
 	if err := writeSource(dir, s); err != nil {
 		return Module{}, err
 	}
@@ -300,6 +361,7 @@ func (r *Registry) Update() []string {
 		}
 		s := m.Source
 		s.Release, s.Updated = tag, time.Now().UTC()
+		s.Commit, _ = core.Git(m.Dir, "rev-parse", "HEAD")
 		writeSource(m.Dir, s)
 		r.j.MustAppend("module.updated", map[string]string{"module": m.Name, "from": m.Source.Release, "to": tag})
 		changed = append(changed, m.Name+" "+tag)

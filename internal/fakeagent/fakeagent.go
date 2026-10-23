@@ -104,7 +104,7 @@ func Main(argv []string) int {
 		text = string(raw)
 	case "warden":
 		err = warden(all)
-	case "tribunal":
+	case "tribunal", "module-reviewer":
 		vote := "approve"
 		if strings.Contains(all, "FAKE:paneldecline") {
 			vote = "decline"
@@ -158,7 +158,7 @@ func emit(v any) {
 }
 
 // Messages that queued during a turn arrive as one prompt, joined by core.PendingSep.
-var personRe = regexp.MustCompile(`(?s)Person: (.*?)(?:` + regexp.QuoteMeta(core.PendingSep) + `|\z)`)
+var personRe = regexp.MustCompile(`(?s)(?:Person|Module [^:]+): (.*?)(?:` + regexp.QuoteMeta(core.PendingSep) + `|\z)`)
 var projectRe = regexp.MustCompile(`create (?:an? )?(isolated )?project (?:called |named )?([A-Za-z0-9_-]+)`)
 
 // moduleRe is a person asking for a new module; merged is the notice that one merged.
