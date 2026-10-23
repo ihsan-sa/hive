@@ -19,14 +19,17 @@ import (
 func TestPastedPaths(t *testing.T) {
 	dir := t.TempDir()
 	a, b := filepath.Join(dir, "a shot.png"), filepath.Join(dir, "b.go")
+	u := filepath.ToSlash(a) // file:///C:/… on Windows
+	if !strings.HasPrefix(u, "/") {
+		u = "/" + u
+	}
 	os.WriteFile(a, []byte("x"), 0o644)
 	os.WriteFile(b, []byte("x"), 0o644)
 	cases := map[string][]string{
-		a:                                {a}, // bare (Windows Terminal, kitty)
-		"'" + a + "' ":                   {a}, // single quotes (GNOME Terminal, Konsole)
-		`"` + a + `"`:                    {a}, // double quotes
-		strings.ReplaceAll(a, " ", `\ `): {a}, // escaped (macOS Terminal, iTerm2)
-		"file://" + strings.ReplaceAll(a, " ", "%20"): {a}, // file:// URL
+		a:              {a}, // bare (Windows Terminal, kitty)
+		"'" + a + "' ": {a}, // single quotes (GNOME Terminal, Konsole)
+		`"` + a + `"`:  {a}, // double quotes
+		"file://" + strings.ReplaceAll(u, " ", "%20"): {a}, // file:// URL
 		"'" + a + "' " + b: {a, b},
 		"\n" + b + "\n":    {b},
 		"look at " + b:     nil, // text that names a file is text
@@ -39,6 +42,13 @@ func TestPastedPaths(t *testing.T) {
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir) // os.UserHomeDir on Windows
 	cases["b.go"] = nil
+	// macOS Terminal and iTerm2 escape a space; on Windows no terminal does, and
+	// a backslash there is a separator, so the escaped path names no file.
+	if runtime.GOOS == "windows" {
+		cases[strings.ReplaceAll(a, " ", `\ `)] = nil
+	} else {
+		cases[strings.ReplaceAll(a, " ", `\ `)] = []string{a}
+	}
 	cases["./b.go"] = []string{"./b.go"}
 	cases["~/b.go"] = []string{b}
 	up := "../" + filepath.Base(dir) + "/b.go"

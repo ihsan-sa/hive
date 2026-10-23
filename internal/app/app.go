@@ -48,6 +48,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	}
 	a.Agents = &agents.Agents{C: c, Mod: a.Mods}
 	c.Runs.Ops().SetSpawner(a.Agents.Spawner)
+	c.Runs.ModelFor = func(r core.Run) string { _, m := a.Agents.Model(r.Role, r.Project); return m }
 	a.Chat = chat.New(c, a.Agents)
 	a.Work = work.New(c, a.Agents, a.Chat)
 	a.Improve = improve.New(c, a.Agents, a.Work, a.Chat)

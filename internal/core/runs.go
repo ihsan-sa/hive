@@ -146,6 +146,9 @@ type Runs struct {
 	tokens  TokenSource
 	tools   func() []string // host programs to expose (hive binary for the sandbox's OS)
 	ops     *Ops
+	// ModelFor is the model a persistent run's next turn takes, so a lead
+	// follows a changed setting; empty keeps the run's own.
+	ModelFor func(Run) string
 
 	mu    sync.Mutex
 	runs  map[string]*Run
@@ -198,6 +201,7 @@ type turnStarted struct {
 	Proc      proc.Handle `json:"proc"`
 	Delivered int         `json:"delivered"`
 	Resume    bool        `json:"resume"`
+	Model     string      `json:"model,omitempty"`
 	Login     string      `json:"login,omitempty"`
 }
 
@@ -262,6 +266,9 @@ func (rs *Runs) apply(e Event) {
 		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login
 		if t.Session != "" {
 			r.Session = t.Session
+		}
+		if t.Model != "" {
+			r.Model = t.Model
 		}
 		r.Waiting = ""
 		if t.Delivered <= len(r.Pending) {
@@ -816,6 +823,11 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		prompt = "Continue."
 	}
 	r.Session = session
+	if rs.ModelFor != nil && r.Persistent {
+		if m := rs.ModelFor(r); m != "" {
+			r.Model = m
+		}
+	}
 	promptFile := filepath.Join(rs.ws.RunHost(r.ID), fmt.Sprintf("turn-%03d.prompt", turn))
 	if err := os.WriteFile(promptFile, []byte(prompt), 0o644); err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(time.Minute)})
@@ -853,7 +865,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	started = true
-	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key()})
+	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model})
 }
 
 // RunPath is where a run's agent sees its run dir ($HIVE_RUN).

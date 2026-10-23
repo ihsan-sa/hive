@@ -129,7 +129,7 @@ The control center is a terminal UI, so it works in any terminal and over SSH. I
 - GitHub holds the code, the issues and the pull requests. The folder holds everything else as plain, append-only records: events, chats, scores, each run's brief, notes and output. Nothing is in only one agent's memory.
 - A restart reads those records and resumes: an unfinished run continues from its checkout with its notes, a pull request that was waiting is watched again, a merge that was pinned is re-attempted. A restart never starts a second run for the same ask and never opens a second issue for it.
 - An agent's checkout is treated as data by the core. Commits are taken out of it by the effects process and checked to descend from main before anything is pushed.
-- The knowledge base is the Hive's memory across projects and runs. Agents write to it and read from it, and a filing process consolidates it. A run's own note is context for the next run, never a decision.
+- The knowledge base is the Hive's memory across projects and runs. Everything the Hive does is filed into it on its own from the event log: each request and its states, warden and tribunal decisions, chats, runs and tasks from ask to merge or refusal, caught up after a restart and never filed twice. Agents add notes and search it, and the lead searches it before it says what happened or what was decided. A filing process consolidates the notes. A run's own note is context for the next run, never a decision.
 
 Failures, and what happens:
 

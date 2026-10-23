@@ -482,6 +482,24 @@ func TestTribunalThatCannotStartFails(t *testing.T) {
 	}
 }
 
+// The install clones on the host, so a path from inside the lead's sandbox
+// is refused with the way that works, before it reaches the person.
+func TestInstallRefusesSandboxPath(t *testing.T) {
+	g := newRig(t, 2)
+	lead, err := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, url := range []string{"file:///work/wordcount", "/hive/projects/wordcount"} {
+		if _, err := g.call(lead, "install_module", map[string]string{"url": url}); err == nil || !strings.Contains(err.Error(), "--project") {
+			t.Errorf("%s: want a refusal pointing at --project, got %v", url, err)
+		}
+	}
+	if asks := g.c.Person.Open(); len(asks) != 0 {
+		t.Fatalf("a refused install reached the person: %+v", asks)
+	}
+}
+
 // A merge that changes the goals, the score or a setting, and a module
 // install, follow autonomy like any step: at 1 the person decides; above it a
 // warden does, its answer reaches the ask's handler as the person's would,

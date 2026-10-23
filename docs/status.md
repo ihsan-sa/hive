@@ -16,8 +16,11 @@ Done:
   - rename hole: `TestRenameOutOfProtectedPath` fails on the old classifier, passes now. Passes both bare and inside the WSL sandbox.
   - WSL sandbox isolation checked by hand: /mnt, /home, WSL interop hidden; /etc, /usr read-only; only checkout writable; public HTTPS via proxy 200; local services 403; no direct network.
 
+- A person's own module is built as a project of its own and installed from it (`install_module --project`, on the person's "install"); the workspace lead names `--project` on every brief, so an ask no longer lands in the only project by default (`TestAskForModule`). An installed module follows its project only when the repository gets a newer `vX.Y.Z` tag, and nothing tags a module project yet.
+- Asked about the Hive itself, the lead reads its installed modules and `hive agent status` before it answers, instead of guessing (`TestAskAboutTheHive`; live twin `TestLiveAskAboutTheHive`, not yet run on the host). The lead runs on its own model setting, `lead_model`, opus by default; an older config keeps a model the person chose, and the old sonnet default moves to opus.
 - Release v0.1.0 published with binaries (linux/darwin amd64+arm64, windows amd64). One-line install via `gh api …/install.ps1 | Out-String | iex` verified into a scratch dir; installs `hive-v0`.
 - CI green on Windows, Ubuntu and macOS (vet, unit, e2e). Claude Code inside the WSL sandbox verified up to the API (invalid token → 401).
+- The knowledge base files every journal event under `kb/record/` (one file per task, request, run, chat, project) on its own, catches up after downtime and never files an event twice; `hive agent search` and `hive kb <words>` return the best-matching pieces, and the lead searches before it says what happened (unit `internal/mod/kb`).
 
 Not verified:
 - The tribunal with real models under bubblewrap: `TestLiveTribunal` passed on the tower bare (three models approved, the majority ran the warden's script). Under bubblewrap no tribunal formed, because the ask was clipped at 120 characters and a sandboxed worker read the hidden fixture as already gone; both are fixed (the whole ask reaches the agents, and the worker role says outside paths are hidden), and the live probes now run sandboxed when the sandbox works. Re-run under bubblewrap. Injection resistance by a real model is untested.
