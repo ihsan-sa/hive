@@ -72,6 +72,37 @@ func TestSeedingKeepsExistingFiles(t *testing.T) {
 	}
 }
 
+// An update refreshes a practice doc the Hive filed and nobody touched, and
+// leaves one a person edited since.
+func TestUpdateRefreshesUntouchedPracticeDocs(t *testing.T) {
+	ws, c, mods := freshWorkspace(t)
+	New(c, &agents.Agents{C: c, Mod: mods})
+	edited := filepath.Join(ws.KB(), "practice", "risk.md")
+	if err := os.WriteFile(edited, []byte("my own risk rules\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"writing.md", "risk.md"} {
+		p := filepath.Join(ws.Modules(), "kb", "practice", name)
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, append(raw, "\nnew in this release\n"...), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	New(c, &agents.Agents{C: c, Mod: mods})
+	if raw, _ := os.ReadFile(filepath.Join(ws.KB(), "practice", "writing.md")); !strings.Contains(string(raw), "new in this release") {
+		t.Error("untouched practice doc not refreshed on update")
+	}
+	if raw, _ := os.ReadFile(edited); string(raw) != "my own risk rules\n" {
+		t.Errorf("edited practice doc overwritten: %q", raw)
+	}
+	if out, _ := core.Git(ws.KB(), "status", "--porcelain"); out != "" {
+		t.Errorf("refresh not committed:\n%s", out)
+	}
+}
+
 // A commit that fails leaves a journal line instead of vanishing.
 func TestSeedingReportsAFailedCommit(t *testing.T) {
 	ws, c, mods := freshWorkspace(t)
