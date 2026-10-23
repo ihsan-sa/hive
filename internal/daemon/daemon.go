@@ -103,6 +103,9 @@ func Run(ws core.Workspace, waitFor int) error {
 		return err
 	}
 	defer a.Close()
+	if _, err := ws.ReadConfig(); err != nil {
+		fmt.Fprintln(os.Stderr, "settings:", err)
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -372,7 +375,8 @@ func decode(r *http.Request, v any) error {
 
 func (s *server) state() api.State {
 	a := s.a
-	st := api.State{Version: core.Version, Seq: a.C.J.Seq(), Workspace: a.C.WS.Root, Config: a.C.WS.LoadConfig()}
+	cfg, cfgErr := a.C.WS.ReadConfig()
+	st := api.State{Version: core.Version, Seq: a.C.J.Seq(), Workspace: a.C.WS.Root, Config: cfg}
 	if sb, err := a.C.Sandbox(); err != nil {
 		st.SandboxErr = err.Error()
 	} else {
@@ -421,6 +425,9 @@ func (s *server) state() api.State {
 	s.mu.Lock()
 	st.Alerts = append([]api.Alert{}, s.alerts...)
 	s.mu.Unlock()
+	if cfgErr != nil { // live, so it goes once the file is fixed
+		st.Alerts = append(st.Alerts, api.Alert{At: time.Now(), Kind: "settings", Text: cfgErr.Error()})
+	}
 	st.Jobs = a.System.Jobs()
 	st.Wakeups = a.System.Wakeups()
 	for _, m := range a.Mods.List() {

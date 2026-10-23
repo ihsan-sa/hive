@@ -336,7 +336,12 @@ func cmdDoctor(args []string) int {
 	}
 	fmt.Printf("✓ workspace %s\n", ws.Root)
 	c := &core.Core{WS: ws}
-	if cfg := ws.LoadConfig(); cfg.Sandbox == "bare" && cfg.BareAccepted != "" {
+	cfg, err := ws.ReadConfig()
+	if err != nil {
+		ok = false
+		fmt.Printf("✗ settings: %v\n", err)
+	}
+	if cfg.Sandbox == "bare" && cfg.BareAccepted != "" {
 		fmt.Printf("! agents run WITHOUT a sandbox (opted in %s); set \"sandbox\": \"auto\" in Settings to go back\n", cfg.BareAccepted)
 	}
 	if msg, err := setup.SandboxReport(ws, c.HiveLinux()); err != nil {

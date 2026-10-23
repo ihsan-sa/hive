@@ -78,7 +78,9 @@ func (s *Seatbelt) Start(sp Spec) (Proc, error) {
 		e.Close()
 		return p, err
 	}
-	go func() { // the proxy lives as long as the command
+	// The proxy lives as long as the command, but in the daemon: a daemon
+	// restart cuts a running command's network.
+	go func() {
 		for proc.Alive(p) {
 			time.Sleep(5 * time.Second)
 		}

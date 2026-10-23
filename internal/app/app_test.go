@@ -16,6 +16,7 @@ func TestWardenMessagingTheRequesterWaitsInTheApp(t *testing.T) {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Harness = "fake"
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0
 	if err := ws.SaveConfig(cfg); err != nil {
 		t.Fatal(err)
 	}

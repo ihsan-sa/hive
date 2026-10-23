@@ -90,7 +90,10 @@ func TestAllowed(t *testing.T) {
 		}
 	}
 	if !Allowed(nil, "example.com") {
-		t.Error("an empty list should allow every host")
+		t.Error("no list should allow every host")
+	}
+	if Allowed([]string{}, "example.com") {
+		t.Error("an empty list should allow no host")
 	}
 }
 

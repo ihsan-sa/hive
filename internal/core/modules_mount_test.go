@@ -32,7 +32,7 @@ func TestIsolatedRunWithNoGrantsSeesNoModules(t *testing.T) {
 	defer j.Close()
 	rs := NewRuns(ws, j, nil, func(string) ([]string, error) { return nil, nil }, func() []string { return nil })
 	h, _ := harness.Get("fake")
-	spec, err := rs.sandboxSpec(isolatedBox{}, h, Run{RunSpec: RunSpec{ID: "r1", Checkout: t.TempDir(), Isolated: true}}, 1, false, "")
+	spec, err := rs.sandboxSpec(rs.ws.LoadConfig(), isolatedBox{}, h, Run{RunSpec: RunSpec{ID: "r1", Checkout: t.TempDir(), Isolated: true}}, 1, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
