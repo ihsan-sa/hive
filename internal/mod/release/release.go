@@ -29,7 +29,7 @@ type Module struct {
 	C *core.Core
 	// Restart is called after a new binary is in place (the daemon re-execs).
 	Restart func()
-	locks   sync.Map // project -> *sync.Mutex held while AfterKept runs
+	locks   sync.Map // project -> *sync.Mutex held while a release is decided
 	// Busy reports work mid-merge, which an automatic update waits out.
 	Busy func() bool
 }
@@ -268,14 +268,23 @@ func fileSum(path string) (string, error) {
 // merged since the last one and the reviewer runs that read its exact head. A
 // head with no read, or a change to a root path, waits for the person's word.
 func (m *Module) AfterKept(project, sha string) {
+	defer m.lock(project)()
+	m.afterKept(project, sha)
+}
+
+// lock holds the project's release lock until the returned func runs, so two
+// callers never race for the same tag or approve a release another covered.
+func (m *Module) lock(project string) func() {
+	l, _ := m.locks.LoadOrStore(project, &sync.Mutex{})
+	l.(*sync.Mutex).Lock()
+	return l.(*sync.Mutex).Unlock
+}
+
+func (m *Module) afterKept(project, sha string) {
 	p, ok := m.C.Projects.Get(project)
 	if !ok || !p.Self {
 		return
 	}
-	// One at a time per project, so two callers never race for the same tag.
-	l, _ := m.locks.LoadOrStore(project, &sync.Mutex{})
-	l.(*sync.Mutex).Lock()
-	defer l.(*sync.Mutex).Unlock()
 	alert := func(text string) {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": project, "text": text})
 	}
@@ -350,12 +359,13 @@ func (m *Module) hold(project, sha string, root, unread []string, manifest strin
 func (m *Module) OnPerson(a core.Ask) {
 	project, sha, _ := strings.Cut(a.Ref, "@")
 	if a.Answer == "release" || a.Answer == "yes" {
+		defer m.lock(project)()
 		if _, refuse := m.merges(project, sha); refuse != "" {
 			m.C.J.MustAppend("release.superseded", map[string]string{"project": project, "sha": sha, "why": refuse})
 			return
 		}
 		m.C.Effects.Approve("release", project, sha)
-		m.AfterKept(project, sha)
+		m.afterKept(project, sha)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -350,5 +351,29 @@ func TestConcurrentKeepsCutOneRelease(t *testing.T) {
 	wg.Wait()
 	if n.calls != 1 {
 		t.Fatalf("%d releases cut for one merge", n.calls)
+	}
+}
+
+// A late answer for m2 that arrives while a release at m3 is being cut waits
+// for it, then finds m2 covered: no approval is left behind for m2.
+func TestLateAnswerWaitsForTheRelease(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(2, "a2", "m2", "install/root.sh")
+	merged(3, "a3", "m3", "install/root.sh")
+	land("a2", "r2")
+	land("a3", "r3")
+	m.C.Effects.Approve("release", "hive", "m3")
+	unlock := m.lock("hive")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.OnPerson(core.Ask{Kind: "release", Ref: "hive@m2", Project: "hive", Answer: "release"})
+	}()
+	time.Sleep(20 * time.Millisecond) // the answer reaches the lock first
+	m.afterKept("hive", "m3")
+	unlock()
+	<-done
+	if n.calls != 1 || m.C.Effects.Approved("release", "hive", "m2") || !journaled(m, "release.superseded") {
+		t.Fatalf("the late answer should be superseded: %d releases, m2 approved %v", n.calls, m.C.Effects.Approved("release", "hive", "m2"))
 	}
 }
