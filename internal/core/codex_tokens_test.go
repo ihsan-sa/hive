@@ -135,7 +135,9 @@ func TestCodexTokenFromACrashIsCleanedAtStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(dir, "auth.json"), []byte("token"), 0o600)
-	NewRuns(ws, j, nil, nil, func() []string { return nil })
+	if err := NewRuns(ws, j, nil, nil, func() []string { return nil }).Migrate(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("the token outlived a restart: %v", err)
 	}

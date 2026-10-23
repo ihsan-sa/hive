@@ -3,11 +3,13 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
+	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
@@ -105,7 +107,7 @@ func TestRunsReadTheStateButNoSecret(t *testing.T) {
 // A run laid out by an earlier version has its home and CODEX_HOME in its
 // readable folders, and maybe a turn spec that carried a token: starting the
 // daemon moves the first two to Private and deletes the rest.
-func TestTidyMovesAccessOutOfTheState(t *testing.T) {
+func TestMigrateMovesAccessOutOfTheState(t *testing.T) {
 	ws := Workspace{Root: t.TempDir()}
 	run, host := ws.Run("old"), ws.RunHost("old")
 	for _, d := range []string{filepath.Join(run, "home", ".codex"), filepath.Join(host, "codex"), filepath.Join(host, "codex-sessions")} {
@@ -116,7 +118,9 @@ func TestTidyMovesAccessOutOfTheState(t *testing.T) {
 	os.WriteFile(filepath.Join(host, "turn-001.jsonl.sandbox.json"), []byte("{}"), 0o600)
 	os.WriteFile(filepath.Join(host, "turn-001.jsonl"), []byte("{}"), 0o600)
 	os.WriteFile(filepath.Join(ws.Hive(), "daemon.json"), []byte(`{"token": "t"}`), 0o600)
-	(&Runs{ws: ws}).tidy()
+	if err := (&Runs{ws: ws}).Migrate(); err != nil {
+		t.Fatal(err)
+	}
 	for _, p := range []string{filepath.Join(run, "home"), filepath.Join(host, "codex"), filepath.Join(host, "codex-sessions"), filepath.Join(host, "turn-001.jsonl.sandbox.json"), filepath.Join(ws.Hive(), "daemon.json")} {
 		if Exists(p) {
 			t.Errorf("%s is still in the readable tree", p)
@@ -126,5 +130,89 @@ func TestTidyMovesAccessOutOfTheState(t *testing.T) {
 		if !Exists(p) {
 			t.Errorf("%s is gone", p)
 		}
+	}
+}
+
+// A place already taken under private/ (a run that got a home or a Codex
+// home on the new layout before an old daemon wrote to the old one) keeps
+// what it has, and the old token still leaves the readable tree.
+func TestMigrateResolvesATakenPlace(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	run, host := ws.Run("old"), ws.RunHost("old")
+	for _, d := range []string{filepath.Join(run, "home"), filepath.Join(host, "codex"), filepath.Join(ws.RunHome("old")), filepath.Join(ws.RunPrivate("old"), "codex")} {
+		os.MkdirAll(d, 0o700)
+	}
+	os.WriteFile(filepath.Join(run, "home", "old.txt"), []byte("old"), 0o600)
+	os.WriteFile(filepath.Join(ws.RunHome("old"), "new.txt"), []byte("new"), 0o600)
+	os.WriteFile(filepath.Join(host, "codex", "auth.json"), []byte("old token"), 0o600)
+	os.WriteFile(filepath.Join(ws.RunPrivate("old"), "codex", "auth.json"), []byte("new token"), 0o600)
+	if err := (&Runs{ws: ws}).Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(run, "home"), filepath.Join(host, "codex")} {
+		if Exists(p) {
+			t.Errorf("%s is still in the readable tree", p)
+		}
+	}
+	if raw, _ := os.ReadFile(filepath.Join(ws.RunPrivate("old"), "codex", "auth.json")); string(raw) != "new token" {
+		t.Errorf("the Codex home in place was replaced: %q", raw)
+	}
+	if !Exists(filepath.Join(ws.RunHome("old"), "new.txt")) {
+		t.Error("the home in place was replaced")
+	}
+	kept, _ := filepath.Glob(filepath.Join(ws.RunPrivate("old"), "home.old-*", "old.txt"))
+	if len(kept) != 1 {
+		t.Errorf("the old home was not kept beside the new one: %v", kept)
+	}
+}
+
+// A move that fails is an error, not a token left where every agent reads.
+func TestMigrateReportsAMoveItCouldNotMake(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	home := filepath.Join(ws.Run("old"), "home")
+	os.MkdirAll(home, 0o700)
+	os.WriteFile(filepath.Join(home, "auth.json"), []byte("{}"), 0o600)
+	os.MkdirAll(ws.Private(), 0o700)
+	os.WriteFile(filepath.Join(ws.Private(), "runs"), []byte("in the way"), 0o600) // private/runs can't be made
+	err := (&Runs{ws: ws}).Migrate()
+	if err == nil || !strings.Contains(err.Error(), home) {
+		t.Fatalf("Migrate returned %v, want an error naming %s", err, home)
+	}
+}
+
+// A turn the earlier daemon started mounts .hive with no cover over private/,
+// so it is ended before anything moves there.
+func TestMigrateEndsTheOldDaemonsTurns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs sleep")
+	}
+	ws := Workspace{Root: t.TempDir()}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	if _, err := rs.Start(RunSpec{ID: "old", Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := proc.StartDetached([]string{"sleep", "60"}, os.Environ(), t.TempDir(), "", filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proc.Kill(h)
+	rs.append("run.turn_started", turnStarted{ID: "old", Turn: 1, Proc: h})
+	home := filepath.Join(ws.Run("old"), "home")
+	os.MkdirAll(home, 0o700)
+	os.WriteFile(filepath.Join(home, "auth.json"), []byte("{}"), 0o600)
+	if err := rs.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	if proc.Alive(h) {
+		t.Error("the old daemon's turn is still running")
+	}
+	moved, _ := filepath.Glob(filepath.Join(ws.RunPrivate("old"), "home*", "auth.json")) // Start made the new home, so the old one sits beside it
+	if Exists(home) || len(moved) != 1 {
+		t.Errorf("the home did not move: %v", moved)
 	}
 }

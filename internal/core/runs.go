@@ -162,13 +162,6 @@ func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), token
 	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
-	rs.tidy()
-	// A crash between writing a turn's token and starting the turn left it behind.
-	for _, r := range rs.runs {
-		if HarnessName(r.Harness) == "codex" && r.Status != StatusRunning {
-			rs.dropCodexHome(r.ID)
-		}
-	}
 	j.Subscribe(func(e Event) {
 		rs.mu.Lock()
 		rs.apply(e)
@@ -177,24 +170,94 @@ func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), token
 	return rs
 }
 
-// tidy moves what grants access out of the runs' readable folders, where
-// earlier versions kept it: homes and Codex homes go to RunPrivate, and the
-// turn specs once written beside a turn's output (they carried its token) go.
-func (rs *Runs) tidy() {
+// Migrate is the daemon's start-up sweep of what grants access, run once
+// before it publishes its token. Versions before .hive/private kept each run's
+// home and Codex home in the readable runs/<id>/, the turn specs (carrying the
+// turn's token) beside the turn's output, and daemon.json in .hive; those move
+// under Private or go. A turn the earlier daemon started mounts .hive with no
+// cover over private/, so every live turn is ended and waited out first (as
+// Stop ends one) and nothing moves while one is alive. A Codex token a crash
+// left between writing it and the turn's start goes too. An error names what
+// is still readable; the daemon does not start agents until it is gone.
+func (rs *Runs) Migrate() error {
+	if old := rs.legacyPaths(); len(old) > 0 {
+		if err := rs.endOldTurns(); err != nil {
+			return err
+		}
+		for from, to := range old {
+			if err := move(from, to); err != nil {
+				return fmt.Errorf("%s is still readable to every agent: %w", from, err)
+			}
+		}
+	}
+	for _, r := range rs.List(nil) {
+		if HarnessName(r.Harness) == "codex" && r.Status != StatusRunning {
+			rs.dropCodexHome(r.ID) // under the cover already; the next turn's fresh home retries
+		}
+	}
+	return nil
+}
+
+// legacyPaths maps what an earlier version left in the readable tree to where
+// it goes under Private; "" means it goes. A Codex home whose place is taken
+// goes too: it is one turn's copy, and that turn has ended.
+func (rs *Runs) legacyPaths() map[string]string {
+	old := map[string]string{}
+	if p := filepath.Join(rs.ws.Hive(), "daemon.json"); Exists(p) {
+		old[p] = ""
+	}
 	dirs, _ := os.ReadDir(rs.ws.Runs())
 	for _, d := range dirs {
 		id, host := d.Name(), rs.ws.RunHost(d.Name())
-		os.MkdirAll(rs.ws.RunPrivate(id), 0o700)
-		// A rename keeps a live turn's mounts, which follow the folder.
 		for _, from := range []string{filepath.Join(rs.ws.Run(id), "home"), filepath.Join(host, "codex"), filepath.Join(host, "codex-sessions")} {
-			os.Rename(from, filepath.Join(rs.ws.RunPrivate(id), filepath.Base(from)))
+			if !Exists(from) {
+				continue
+			}
+			to := filepath.Join(rs.ws.RunPrivate(id), filepath.Base(from))
+			if filepath.Base(from) == "codex" && Exists(to) {
+				to = ""
+			}
+			old[from] = to
 		}
 		specs, _ := filepath.Glob(filepath.Join(host, "*.sandbox.json"))
 		for _, f := range specs {
-			os.Remove(f)
+			old[f] = ""
 		}
 	}
-	os.Remove(filepath.Join(rs.ws.Hive(), "daemon.json"))
+	return old
+}
+
+// move renames from to to; a to that is taken keeps its place and from goes
+// beside it under a fresh name, so nothing is lost and nothing stays. "" removes from.
+func move(from, to string) error {
+	if to == "" {
+		return removeTree(from)
+	}
+	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
+		return err
+	}
+	if Exists(to) {
+		to += ".old-" + NewID()[:6]
+	}
+	return os.Rename(from, to)
+}
+
+// endOldTurns ends every turn alive from before this start and waits for it
+// to go, as Stop does: a terminate, then a kill.
+func (rs *Runs) endOldTurns() error {
+	for _, r := range rs.List(func(r *Run) bool { return r.Status == StatusRunning && proc.Alive(r.Proc) }) {
+		proc.Terminate(r.Proc)
+		for i := 0; proc.Alive(r.Proc); i++ {
+			switch i {
+			case 50:
+				proc.Kill(r.Proc)
+			case 100:
+				return fmt.Errorf("run %s's turn from before the update is still running (pid %d)", r.ID, r.Proc.PID)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	return nil
 }
 
 // Ops returns the mailbox operation registry.
@@ -972,6 +1035,12 @@ func (rs *Runs) freshCodexHome(r Run) (string, error) {
 func (rs *Runs) dropCodexHome(id string) error {
 	dir := filepath.Join(rs.ws.RunPrivate(id), "codex")
 	os.Rename(filepath.Join(dir, "sessions"), filepath.Join(rs.ws.RunPrivate(id), "codex-sessions"))
+	return removeTree(dir)
+}
+
+// removeTree deletes a folder an agent may have locked, opening it first;
+// links are never followed.
+func removeTree(dir string) error {
 	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && d.IsDir() {
 			os.Chmod(p, 0o700)

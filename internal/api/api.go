@@ -25,7 +25,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
-// DaemonInfo is .hive/daemon.json.
+// DaemonInfo is .hive/private/daemon.json.
 type DaemonInfo struct {
 	PID        int       `json:"pid"`
 	Started    time.Time `json:"started"`

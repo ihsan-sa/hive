@@ -129,6 +129,10 @@ func Run(ws core.Workspace, waitFor int) error {
 		return err
 	}
 	defer a.Close()
+	// Before the token is published: an earlier version's turns can read private/.
+	if err := a.C.Runs.Migrate(); err != nil {
+		return err
+	}
 	if _, err := ws.ReadConfig(); err != nil {
 		fmt.Fprintln(os.Stderr, "settings:", err)
 	}
