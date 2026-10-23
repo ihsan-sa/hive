@@ -82,19 +82,27 @@ func New(c *core.Core, a *agents.Agents) *Module {
 func (m *Module) ensureRepo() {
 	dir := m.C.WS.KB()
 	os.MkdirAll(dir, 0o755)
-	if !core.Exists(filepath.Join(dir, ".git")) {
+	fresh := !core.Exists(filepath.Join(dir, ".git"))
+	if fresh {
 		core.Git(dir, "init", "-q", "-b", "main")
-		os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Knowledge base\n\nOne note per file. Written by agents with `hive agent remember`; consolidated by the filer.\n"), 0o644)
+		if !core.Exists(filepath.Join(dir, "README.md")) {
+			os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Knowledge base\n\nOne note per file. Written by agents with `hive agent remember`; consolidated by the filer.\n"), 0o644)
+		}
+	}
+	// An isolated project's notes stay out of git, where history would keep them.
+	os.MkdirAll(filepath.Join(dir, ".git", "info"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("/isolated/\n"), 0o644)
+	if fresh {
 		core.Git(dir, "add", "-A")
 		core.Git(dir, "commit", "-q", "-m", "Start the knowledge base")
 	}
-	// An isolated project's notes stay out of git, where history would keep them.
-	os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("/isolated/\n"), 0o644)
 }
 
 // moveIsolated moves notes an isolated project left in the shared knowledge
-// base, from before they went in its own folder, into that folder, and takes
-// them out of the repository from here on. Earlier commits still hold them.
+// base, from before they went in its own folder, into that folder. Earlier
+// commits and the filer's old clones still hold them, so it then starts the
+// knowledge base's history afresh from what it holds now; a clone made before
+// shares no history with it after.
 // It runs until every such note has moved, behind a marker in the Hive's own
 // state where the filer can't write. A note whose name is taken in the folder
 // moves under a free one, as Write picks it.
@@ -124,8 +132,12 @@ func (m *Module) moveIsolated() {
 		}
 	}
 	if len(moved) > 0 {
-		core.Git(kb, append([]string{"rm", "-q", "--cached", "--ignore-unmatch", "--"}, moved...)...)
-		core.Git(kb, "commit", "-q", "-m", "Move isolated projects' notes out of the shared knowledge base")
+		os.RemoveAll(filepath.Join(kb, ".git"))
+		m.ensureRepo()
+		old, _ := filepath.Glob(filepath.Join(m.C.WS.Hive(), "scratch", "filer-*"))
+		for _, d := range old {
+			os.RemoveAll(d)
+		}
 	}
 	if !left {
 		os.WriteFile(marker, nil, 0o644)

@@ -106,6 +106,9 @@ func TestIsolatedProjectRecordsMoveAndStayOutOfReach(t *testing.T) {
 	if out, _ := core.Git(ws.KB(), "ls-files"); strings.Contains(out, "plan.md") {
 		t.Error("git still tracks an isolated project's note")
 	}
+	if out, _ := core.Git(ws.KB(), "cat-file", "--batch-all-objects", "--batch"); strings.Contains(out, "the plan") || !strings.Contains(out, "open") {
+		t.Error("the knowledge base's git objects still hold an isolated project's note")
+	}
 	ops := a.C.Runs.Ops()
 	sweep := core.Run{RunSpec: core.RunSpec{ID: "sweep", Role: "improver", Project: "open"}}
 	st, _ := ops.Call(sweep, "status", nil)
