@@ -57,6 +57,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = &release.Module{C: c}
 	a.Improve.OnKept = a.Release.AfterKept
+	c.Person.Handle("release", a.Release.OnPerson)
 
 	a.System.Register(system.Job{Name: "improve.sweep", Fn: func() (string, error) {
 		s, err := a.Improve.StartSweep(false)
@@ -65,6 +66,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 		}
 		return "started " + s.ID, nil
 	}})
+	a.System.Register(system.Job{Name: "improve.stepback", Fn: func() (string, error) { return a.Improve.RotateStepBacks(), nil }})
 	a.System.Register(system.Job{Name: "kb.file", Fn: func() (string, error) {
 		id, err := a.KB.File()
 		if err != nil {
@@ -79,6 +81,9 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 		}
 		return "updated " + join(changed), nil
 	}})
+	a.Release.Busy = func() bool {
+		return len(a.Work.List(func(t work.Task) bool { return t.Stage == work.StageMerging })) > 0
+	}
 	a.System.Register(system.Job{Name: "hive.update", AtStart: true, Fn: a.Release.AutoUpdate})
 	return a, nil
 }
@@ -100,6 +105,7 @@ func (a *App) Tick() {
 	a.Work.Tick()
 	a.Improve.Tick()
 	a.Improve.TickSweeps()
+	a.Improve.TickStepBacks()
 	a.KB.Tick()
 	a.System.Tick()
 	a.Risk.Tick()

@@ -2,6 +2,7 @@ package work
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -110,7 +111,7 @@ func TestCloseIssueGivesUp(t *testing.T) {
 	for i := 0; i < 20 && task.IssueOpen; i++ {
 		m.closeIssue(task, p)
 	}
-	if task.Stage != StageDone || task.IssueOpen || forge.fail != 92 || !logged(task, "gave up closing the issue: HTTP 503") {
+	if task.Stage != StageDone || task.IssueOpen || forge.fail != 92 || !logged(task, "gave up closing the issue, left open on the forge: HTTP 503") {
 		t.Fatalf("stage %q, issue open %v, attempts %d, log %v", task.Stage, task.IssueOpen, 100-forge.fail, task.Log)
 	}
 }
@@ -153,5 +154,68 @@ func TestBriefWithoutProjectRefused(t *testing.T) {
 	m, _, _, _ := noCommitRig(t, 0)
 	if _, err := m.File(Brief{Title: "a cost ledger", From: "person"}); err == nil || !strings.Contains(err.Error(), "one of: p") {
 		t.Fatalf("want a refusal naming the projects, got %v", err)
+	}
+}
+
+// A revert the Hive made has no worker, so findings on it stop the task
+// cleanly instead of reopening a run that doesn't exist.
+func TestRevertFindingsStop(t *testing.T) {
+	m, _, _, p := noCommitRig(t, 0)
+	task := &Task{ID: "t2", Project: "p", Title: "Revert: x", Kind: "revert", Stage: StageReviewing}
+	if err := m.sendBack(task, p, "it reverts too much"); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageStopped || task.Round != 0 || !strings.Contains(task.Reason, "it reverts too much") {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+}
+
+// briefAt renders a brief for a project whose main holds config.
+func briefAt(t *testing.T, config string, task *Task) string {
+	m, p := rigAt(t, config)
+	return m.renderBrief(task, p, "HEAD")
+}
+
+// rigAt is a rig whose project's main holds config.
+func rigAt(t *testing.T, config string) (*Module, core.Project) {
+	m, _, _, p := noCommitRig(t, 0)
+	dir := m.C.WS.Project(p.Name)
+	os.MkdirAll(filepath.Join(dir, ".hive"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".hive/project.json"), []byte(config), 0o644)
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "seed"}} {
+		if out, err := core.Git(dir, args...); err != nil {
+			t.Fatal(out, err)
+		}
+	}
+	return m, p
+}
+
+// A scored project's worker gets the person's goal as written, with no bar an
+// agent set; the Hive's setup brief and an unscored brief keep their done.
+func TestScoredBriefCarriesTheGoal(t *testing.T) {
+	goal := "The kernel is slow. Make it faster."
+	task := func() *Task {
+		return &Task{ID: "t1", Project: "p", Title: goal, Done: "score above 3.139", Known: "the kernel is in k.c"}
+	}
+	b := briefAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`, task())
+	if !strings.Contains(b, "## The ask\n\n"+goal+"\n") || strings.Contains(b, "3.139") || !strings.Contains(b, "as far as you can take it") {
+		t.Fatalf("scored brief:\n%s", b)
+	}
+	setup := task()
+	setup.From = "hive"
+	if b := briefAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`, setup); !strings.Contains(b, "score above 3.139") {
+		t.Fatalf("the Hive's own setup brief lost its done line:\n%s", b)
+	}
+	b = briefAt(t, `{"test":"true"}`, task())
+	if !strings.Contains(b, "## What done looks like\n\nscore above 3.139\n") {
+		t.Fatalf("unscored brief:\n%s", b)
+	}
+	m, p := rigAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`)
+	if b := m.issueBody(task(), p); strings.Contains(b, "3.139") || !strings.Contains(b, "as far as you can take it") {
+		t.Fatalf("scored issue body:\n%s", b)
+	}
+	m, p = rigAt(t, `{"test":"true"}`)
+	if b := m.issueBody(task(), p); !strings.Contains(b, "score above 3.139") {
+		t.Fatalf("unscored issue body:\n%s", b)
 	}
 }

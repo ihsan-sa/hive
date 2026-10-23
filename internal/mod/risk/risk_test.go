@@ -27,7 +27,7 @@ func newRig(t *testing.T, autonomy int) *rig {
 		t.Fatal(err)
 	}
 	cfg := ws.LoadConfig()
-	cfg.Harness, cfg.Autonomy, cfg.TribunalModels = "fake", autonomy, []string{"opus", "sonnet"}
+	cfg.Harness, cfg.Autonomy, cfg.TribunalModels = "fake", autonomy, []core.TribunalSeat{{Model: "opus"}, {Model: "sonnet"}}
 	ws.SaveConfig(cfg)
 	c, err := core.Open(ws, nil)
 	if err != nil {
@@ -208,8 +208,8 @@ func TestT3GoesToATribunalEvenOnDo(t *testing.T) {
 	if got.State != "tribunal" || len(got.Panel) != PanelSize {
 		t.Fatalf("no tribunal: %+v", got)
 	}
-	if p := g.run(got.Panel[0].Run); got.Panel[0].Model == got.Panel[1].Model || g.run(got.Panel[1].Run).Model != got.Panel[1].Model || !p.ReadOnly || p.Schema != VoteSchema {
-		t.Fatalf("panel isn't read-only across the tribunal models: %+v", got.Panel)
+	if p := g.run(got.Panel[0].Run); got.Panel[0].Model == got.Panel[1].Model || g.run(got.Panel[1].Run).Model != got.Panel[1].Model || !p.ReadOnly || !p.Isolated || p.Schema != VoteSchema {
+		t.Fatalf("panel isn't read-only and isolated across the tribunal models: %+v", got.Panel)
 	}
 }
 
@@ -483,5 +483,62 @@ func TestInstallRefusesSandboxPath(t *testing.T) {
 	}
 	if asks := g.c.Person.Open(); len(asks) != 0 {
 		t.Fatalf("a refused install reached the person: %+v", asks)
+	}
+}
+
+// A step that touches the person's floor goes to them, as asked or as a
+// script a warden approved.
+func TestFloorRaisesToThePerson(t *testing.T) {
+	g := newRig(t, 3)
+	cfg := g.c.WS.LoadConfig()
+	cfg.Floor = []string{"/srv/app", "*.pem"}
+	g.c.WS.SaveConfig(cfg)
+	if req := g.request("refresh the site", "rsync -a build/ /srv/app/", "T2"); req.Route != "person" || req.Warden != "" {
+		t.Fatalf("a floor step reached a warden: %+v", req)
+	}
+	req := g.request("renew the certificate", "x", "T2")
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "echo x > proof && cp new.pem old.pem"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.settle(req.ID, "approved"); got.State != "asked" || core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof")) {
+		t.Fatalf("the floor let a warden's step run: %+v", got)
+	}
+}
+
+// A seat names its harness; one the Hive doesn't have keeps the panel from
+// convening and says why.
+func TestSeatsNameTheirHarness(t *testing.T) {
+	g := newRig(t, 2)
+	cfg := g.c.WS.LoadConfig()
+	cfg.TribunalModels = []core.TribunalSeat{{Harness: "claude", Model: "opus"}, {Model: "sonnet"}}
+	g.c.WS.SaveConfig(cfg)
+	req := g.request("a hard step", "x", "T2")
+	if err := g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "script": "true"}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := g.m.get(req.ID)
+	if got.Panel[0].Harness != "claude" || g.run(got.Panel[0].Run).Harness != "claude" || got.Panel[1].Harness != "fake" {
+		t.Fatalf("seats sat on the wrong harness: %+v", got.Panel)
+	}
+	cfg.TribunalModels = []core.TribunalSeat{{Harness: "no-such-harness", Model: "m"}}
+	g.c.WS.SaveConfig(cfg)
+	req = g.request("another hard step", "x", "T2")
+	if g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "script": "true"}) == nil || !g.told("no-such-harness") {
+		t.Fatal("a seat on a missing harness convened")
+	}
+}
+
+// Only exactly one clean vote counts; anything else is a decline.
+func TestVoteMustBeClean(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"vote":"approve","reason":"fine"}`:              "approve",
+		`{"vote":"approve","reason":"fine","extra":true}`: "decline",
+		`{"vote":true,"reason":"fine"}`:                   "decline",
+		`{"vote":"yes","reason":"fine"}`:                  "decline",
+		`{"vote":"approve"}{"vote":"approve"}`:            "decline",
+	} {
+		if got, _ := voteOf(core.Run{Status: core.StatusDone, Structured: json.RawMessage(raw)}); got != want {
+			t.Errorf("voteOf(%s) = %s, want %s", raw, got, want)
+		}
 	}
 }

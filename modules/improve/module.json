@@ -1,6 +1,6 @@
 {
   "name": "improve",
-  "description": "Self-improvement: measure main after every merge, keep or revert against the best kept score, and sweep the records for the next real gain.",
-  "provides": {"schedules": ["improve.sweep"]},
+  "description": "Self-improvement: measure main after every merge, keep or revert against the best kept score, sweep the records for the next real gain, and step back when the score stalls to test whether a simpler setup beats the Hive's own.",
+  "provides": {"schedules": ["improve.sweep", "improve.stepback"]},
   "projects": ["*"]
 }

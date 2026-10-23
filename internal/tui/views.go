@@ -134,12 +134,12 @@ func (m *model) dashRows() []row {
 			if status == "rejected" {
 				status = stBad.Render("limited") + ", resets " + p.Limit.ResetsAt.Local().Format("Mon 15:04")
 			}
-			text := fmt.Sprintf("%s  %s", p.Harness, status)
+			text := fmt.Sprintf("%s  %s", p.Key(), status)
 			for _, k := range sortedKeys(p.Limit.Windows) {
 				wnd := p.Limit.Windows[k]
 				text += fmt.Sprintf("  %s %.0f%%", k, wnd.Utilization*100)
 			}
-			add(row{key: "plan:" + p.Harness, depth: 1, text: text})
+			add(row{key: "plan:" + p.Key(), depth: 1, text: text})
 		}
 	}
 	add(row{key: "waiting", text: fmt.Sprintf("waiting on you (%d)", len(m.st.Asks)), jump: secWaiting})
