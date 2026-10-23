@@ -349,6 +349,15 @@ func TestHighClassNeedsTwoReads(t *testing.T) {
 // commit it came from: each needs a read of its own sha. Elsewhere it carries.
 func TestSelfHostCommitsNeedTheirOwnRead(t *testing.T) {
 	c, f, p, main := setupProject(t)
+	// The reviewer runs below are still running when the test ends; let them
+	// finish before the hive's temp dir is removed (cleanups run last-first).
+	t.Cleanup(func() {
+		for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+			if len(c.Runs.List(func(r *Run) bool { return r.Status == StatusRunning })) == 0 {
+				return
+			}
+		}
+	})
 	r, _ := commitInCheckout(t, c, p, "w8", main, "feature.go", "package demo\n")
 	sha, _ := c.Effects.Extract(p, r, main)
 	c.Runs.Start(RunSpec{ID: "r8", Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha}})
