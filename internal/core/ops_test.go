@@ -91,3 +91,14 @@ func TestSpawnedHelper(t *testing.T) {
 		t.Fatalf("started %d times, parent's queue %q", created, p.Pending)
 	}
 }
+
+// A step still running at shutdown writes after the journal closed; the write
+// is dropped instead of panicking the process.
+func TestAppendAfterCloseIsDropped(t *testing.T) {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	j.MustAppend("task.saved", map[string]string{"id": "late"})
+}

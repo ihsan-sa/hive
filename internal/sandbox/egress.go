@@ -25,7 +25,7 @@ type Egress struct {
 	refused  io.Writer // one line per refused host; nil keeps none
 }
 
-// ServeEgress serves the proxy on ln until it is closed. An empty allow list
+// ServeEgress serves the proxy on ln until it is closed. A nil allow list
 // lets every public host through; refused, if set, gets each refused host.
 func ServeEgress(ln net.Listener, allow []string, refused io.Writer) *Egress {
 	e := &Egress{ln: ln, resolver: net.DefaultResolver, allow: allow, refused: refused}
@@ -151,9 +151,9 @@ func (e *Egress) refuse(host string) {
 }
 
 // Allowed reports whether host is on allow: an entry matches itself and its
-// subdomains. An empty list allows every host.
+// subdomains. A nil list allows every host; an empty one, none.
 func Allowed(allow []string, host string) bool {
-	if len(allow) == 0 {
+	if allow == nil {
 		return true
 	}
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
