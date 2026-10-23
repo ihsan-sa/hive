@@ -102,7 +102,10 @@ func (r *Run) Terminal() bool {
 func (ws Workspace) RunHost(id string) string { return filepath.Join(ws.Run(id), "host") }
 func (ws Workspace) RunRO(id string) string   { return filepath.Join(ws.Run(id), "ro") }
 func (ws Workspace) RunBox(id string) string  { return filepath.Join(ws.Run(id), "box") }
-func (ws Workspace) RunHome(id string) string { return filepath.Join(ws.Run(id), "home") }
+func (ws Workspace) RunHome(id string) string { return filepath.Join(ws.RunPrivate(id), "home") }
+
+// RunPrivate holds what of a run grants access: its home and CODEX_HOME.
+func (ws Workspace) RunPrivate(id string) string { return filepath.Join(ws.Private(), "runs", id) }
 
 // TurnOut is the streamed output of one turn.
 func (ws Workspace) TurnOut(id string, turn int) string {
@@ -157,12 +160,33 @@ func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), token
 	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
+	rs.tidy()
 	j.Subscribe(func(e Event) {
 		rs.mu.Lock()
 		rs.apply(e)
 		rs.mu.Unlock()
 	})
 	return rs
+}
+
+// tidy moves what grants access out of the runs' readable folders, where
+// earlier versions kept it: homes and Codex homes go to RunPrivate, and the
+// turn specs once written beside a turn's output (they carried its token) go.
+func (rs *Runs) tidy() {
+	dirs, _ := os.ReadDir(rs.ws.Runs())
+	for _, d := range dirs {
+		id, host := d.Name(), rs.ws.RunHost(d.Name())
+		os.MkdirAll(rs.ws.RunPrivate(id), 0o700)
+		// A rename keeps a live turn's mounts, which follow the folder.
+		for _, from := range []string{filepath.Join(rs.ws.Run(id), "home"), filepath.Join(host, "codex"), filepath.Join(host, "codex-sessions")} {
+			os.Rename(from, filepath.Join(rs.ws.RunPrivate(id), filepath.Base(from)))
+		}
+		specs, _ := filepath.Glob(filepath.Join(host, "*.sandbox.json"))
+		for _, f := range specs {
+			os.Remove(f)
+		}
+	}
+	os.Remove(filepath.Join(rs.ws.Hive(), "daemon.json"))
 }
 
 // Ops returns the mailbox operation registry.
@@ -822,13 +846,13 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	if !r.Isolated {
 		mounts = append(mounts, sandbox.Mount{Host: rs.ws.Projects(), Inside: "/hive/projects"},
 			sandbox.Mount{Host: rs.ws.Hive(), Inside: "/hive/state"})
-		// Every agent reads the whole Hive but what grants access: the daemon's
-		// API token and the login pool's stored logins.
-		logins := filepath.Join(rs.ws.Hive(), "logins")
-		os.MkdirAll(logins, 0o700) // a login added mid-turn lands under the cover
-		mounts = append(mounts, sandbox.Mount{Host: logins, Inside: "/hive/state/logins", Hide: true})
-		if _, err := os.Stat(rs.ws.DaemonFile()); err == nil {
-			mounts = append(mounts, sandbox.Mount{Host: rs.ws.DaemonFile(), Inside: "/hive/state/daemon.json", Hide: true})
+		// Every agent reads the whole Hive but what grants access: the login
+		// pool's stored logins and Private (the daemon's token, every run's home
+		// and CODEX_HOME). Both are folders, so what lands in them mid-turn
+		// lands under the cover.
+		for _, d := range []string{filepath.Join(rs.ws.Hive(), "logins"), rs.ws.Private()} {
+			os.MkdirAll(d, 0o700)
+			mounts = append(mounts, sandbox.Mount{Host: d, Inside: "/hive/state/" + filepath.Base(d), Hide: true})
 		}
 	}
 	if r.Isolated && sb.Isolated() {
@@ -908,11 +932,11 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 // line, which has a size cap.
 func (rs *Runs) freshCodexHome(r Run) (string, error) {
 	rs.dropCodexHome(r.ID)
-	dir := filepath.Join(rs.ws.RunHost(r.ID), "codex")
+	dir := filepath.Join(rs.ws.RunPrivate(r.ID), "codex")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return "", err
 	}
-	os.Rename(filepath.Join(rs.ws.RunHost(r.ID), "codex-sessions"), filepath.Join(dir, "sessions"))
+	os.Rename(filepath.Join(rs.ws.RunPrivate(r.ID), "codex-sessions"), filepath.Join(dir, "sessions"))
 	if r.System == "" {
 		return dir, nil
 	}
@@ -923,8 +947,8 @@ func (rs *Runs) freshCodexHome(r Run) (string, error) {
 // dropCodexHome deletes the turn's CODEX_HOME, and with it the access token,
 // keeping only its sessions for the next turn's resume.
 func (rs *Runs) dropCodexHome(id string) {
-	dir := filepath.Join(rs.ws.RunHost(id), "codex")
-	os.Rename(filepath.Join(dir, "sessions"), filepath.Join(rs.ws.RunHost(id), "codex-sessions"))
+	dir := filepath.Join(rs.ws.RunPrivate(id), "codex")
+	os.Rename(filepath.Join(dir, "sessions"), filepath.Join(rs.ws.RunPrivate(id), "codex-sessions"))
 	os.RemoveAll(dir)
 }
 

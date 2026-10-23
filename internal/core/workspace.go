@@ -30,9 +30,14 @@ func (w Workspace) Run(id string) string       { return filepath.Join(w.Runs(), 
 func (w Workspace) Chats() string              { return filepath.Join(w.Hive(), "chats") }
 func (w Workspace) KB() string                 { return filepath.Join(w.Hive(), "kb") }
 func (w Workspace) ConfigPath() string         { return filepath.Join(w.Hive(), "config.json") }
-func (w Workspace) DaemonFile() string         { return filepath.Join(w.Hive(), "daemon.json") }
+func (w Workspace) DaemonFile() string         { return filepath.Join(w.Private(), "daemon.json") }
 func (w Workspace) Bin() string                { return filepath.Join(w.Hive(), "bin") }
 func (w Workspace) Gates() string              { return filepath.Join(w.Hive(), "gates") }
+
+// Private holds what grants access (the daemon's token, each run's home and
+// CODEX_HOME). It is covered as a whole wherever agents read .hive, so a run
+// made or a file renamed in it mid-turn is covered too.
+func (w Workspace) Private() string { return filepath.Join(w.Hive(), "private") }
 
 // Checkouts is where agents' own checkouts of a project live.
 func (w Workspace) Checkouts(project string) string {
@@ -276,6 +281,9 @@ func (w Workspace) Init() error {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
+	}
+	if err := os.MkdirAll(w.Private(), 0o700); err != nil {
+		return err
 	}
 	if !exists(w.ConfigPath()) {
 		return w.SaveConfig(DefaultConfig())

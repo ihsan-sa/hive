@@ -677,8 +677,8 @@ func TestOutsideStep(t *testing.T) {
 	h.wait("the worker to land", 3*minute, taskStage("out", title, work.StageDone))
 }
 
-// TestAgentsReadTheHive: a worker reads another run's log, a chat, a warden's
-// log and the journal from $HIVE_STATE. Under the sandbox (HIVE_E2E_SANDBOX=auto)
+// TestAgentsReadTheHive: a worker reads another run's log, a chat, a step's
+// risk records and the journal from $HIVE_STATE. Under the sandbox (HIVE_E2E_SANDBOX=auto)
 // it can change none of them and reads no secret; a bare run is unsandboxed by
 // the person's choice, so there only the reads are checked.
 func TestAgentsReadTheHive(t *testing.T) {
@@ -692,17 +692,17 @@ func TestAgentsReadTheHive(t *testing.T) {
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "hello"}, nil)
 	h.wait("the lead's reply", minute, h.replied("lead", ""))
 	h.post("/api/ask", map[string]string{"project": "peek", "title": "package", "known": "FAKE:needpackage"}, nil)
-	var warden string
-	h.wait("a warden to settle the step", 3*minute, func(st api.State) bool {
+	var request string
+	h.wait("the step to run", 3*minute, func(st api.State) bool {
 		for _, r := range st.Requests {
 			if r.Kind == "request" && r.State == "done" {
-				warden = r.Warden
+				request = r.ID
 				return true
 			}
 		}
 		return false
 	})
-	h.post("/api/ask", map[string]string{"project": "peek", "title": "peek", "known": "FAKE:peek " + warden}, nil)
+	h.post("/api/ask", map[string]string{"project": "peek", "title": "peek", "known": "FAKE:peek " + request}, nil)
 	var account string
 	h.wait("the peeking worker's account", 2*minute, func(st api.State) bool {
 		for _, r := range st.Runs {
@@ -713,7 +713,7 @@ func TestAgentsReadTheHive(t *testing.T) {
 		}
 		return false
 	})
-	for _, want := range []string{"log read=true", "chat read=true", "warden read=true", "journal read=true"} {
+	for _, want := range []string{"log read=true", "chat read=true", "risk read=true", "journal read=true"} {
 		if !strings.Contains(account, want) {
 			t.Errorf("account lacks %q: %s", want, account)
 		}

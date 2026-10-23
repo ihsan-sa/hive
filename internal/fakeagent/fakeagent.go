@@ -221,7 +221,7 @@ func worker(all, prompt, system string) (string, error) {
 		_, err := call("finish", map[string]string{"status": "blocked", "account": "FAKE: blocked on purpose"}, time.Minute)
 		return "blocked", err
 	}
-	if m := peekWarden.FindStringSubmatch(all); m != nil {
+	if m := peekRequest.FindStringSubmatch(all); m != nil {
 		_, err := call("finish", map[string]string{"status": "done", "account": "FAKE: peek " + peek(m[1])}, time.Minute)
 		return "done", err
 	}
@@ -278,9 +278,9 @@ func worker(all, prompt, system string) (string, error) {
 }
 
 // peek reads what the rest of the Hive left in $HIVE_STATE (another run's log,
-// a chat, the named warden's log, the journal), tries to open each for writing and to
-// make a new file, and counts the secrets it could read.
-func peek(warden string) string {
+// a chat, the named request's risk records, the journal), tries to open each
+// for writing and to make a new file, and counts the secrets it could read.
+func peek(request string) string {
 	st := os.Getenv("HIVE_STATE")
 	var out []string
 	try := func(name, glob string) {
@@ -301,7 +301,7 @@ func peek(warden string) string {
 	}
 	try("log", "runs/*/host/turn-*.jsonl")
 	try("chat", "chats/*.jsonl")
-	try("warden", "runs/"+warden+"/host/turn-*.jsonl")
+	try("risk", "risk/"+request+"/*")
 	try("journal", "events.jsonl")
 	f, err := os.Create(filepath.Join(st, "runs", "peek-was-here"))
 	if err == nil {
@@ -309,21 +309,20 @@ func peek(warden string) string {
 		os.Remove(f.Name())
 	}
 	secrets := 0
-	if raw, _ := os.ReadFile(filepath.Join(st, "daemon.json")); strings.Contains(string(raw), "token") {
-		secrets++
-	}
-	filepath.WalkDir(filepath.Join(st, "logins"), func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			if _, err := os.ReadFile(p); err == nil {
-				secrets++
+	for _, dir := range []string{"logins", "private"} {
+		filepath.WalkDir(filepath.Join(st, dir), func(p string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				if _, err := os.ReadFile(p); err == nil {
+					secrets++
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
+	}
 	return strings.Join(out, ", ") + fmt.Sprintf(", create=%t, secrets=%d", err == nil, secrets)
 }
 
-var peekWarden = regexp.MustCompile(`FAKE:peek (\S+)`)
+var peekRequest = regexp.MustCompile(`FAKE:peek (\S+)`)
 
 // riskKeys steer the fake warden and panel; the worker passes them on in its request.
 var riskKeys = regexp.MustCompile(`FAKE:(warden|panel)[a-z]+`)

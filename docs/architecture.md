@@ -14,7 +14,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 | `internal/fakeagent` | `hive fake-agent`: scripted agent for tests and dry runs (FAKE:* keywords). |
 | `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb`, `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates), `release` (self-update, self-release). |
 | `internal/app` | Wires core + modules; tick loop. |
-| `internal/daemon` | `hive daemon`, control API (127.0.0.1, bearer token in `.hive/daemon.json`, 0600). |
+| `internal/daemon` | `hive daemon`, control API (127.0.0.1, bearer token in `.hive/private/daemon.json`, 0600). |
 | `internal/api` | API types + client. |
 | `internal/tui` | Control center (Bubble Tea): Chats, Dashboard, Waiting, Modules, Settings. |
 | `internal/setup` | First run, `hive login`, `hive doctor`, autostart (HKCU Run / systemd user / LaunchAgent). |
@@ -24,14 +24,15 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 ## Folder on disk (`~/hive`)
 
 ```
-.hive/      events.jsonl, config.json, daemon.json, chats/*.jsonl, scores/*.jsonl,
-            runs/<id>/{host,ro,box,home}, kb/ (git repo), gates/, checks/, improve/sweeps/
+.hive/      events.jsonl, config.json, chats/*.jsonl, scores/*.jsonl,
+            runs/<id>/{host,ro,box}, kb/ (git repo), gates/, checks/, improve/sweeps/,
+            logins/, private/{daemon.json, runs/<id>/{home,codex,codex-sessions}}
 .modules/   agents, chat, kb, improve, system, + installed (each with .hive-source.json)
 projects/<name>/             host clone (effects process only)
 projects/<name>/.checkouts/  agents' own checkouts (excluded from the clone)
 ```
 
-Run dir: `host/` (turn output, prompts, stop file; never mounted on its own), `ro/` (system prompt, brief, inputs; mounted read-only at `/hive/run`), `box/` (mailbox + notes; rw at `/hive/box`), `home/` (rw `$HOME`). Every run but an isolated project's also gets the whole `.hive` read-only at `/hive/state` (`$HIVE_STATE`), so agents read one another's runs, chats and records; `logins/` and `daemon.json` are covered there (empty tmpfs, `/dev/null`; a Seatbelt deny on macOS), and a turn's spec, which carries its token, is written to the temp dir, not beside its output.
+Run dir: `host/` (turn output, prompts, stop file; never mounted on its own), `ro/` (system prompt, brief, inputs; mounted read-only at `/hive/run`), `box/` (mailbox + notes; rw at `/hive/box`); its home (rw `$HOME`) is `.hive/private/runs/<id>/home`. Every run but an isolated project's also gets the whole `.hive` read-only at `/hive/state` (`$HIVE_STATE`), so agents read one another's runs, chats and records. What grants access lives in two folders covered there as a whole (an empty tmpfs; a Seatbelt deny on macOS, after which a run's own writable folders are allowed again): `logins/` and `private/`, which holds the daemon's token and every run's home and `CODEX_HOME`. Covering folders rather than files means a run made mid-turn, or a `daemon.json` a restart renames into place, is covered too; a file cover is bound to the inode it found. The daemon moves homes and Codex homes from where earlier versions kept them, and deletes their turn specs, on start. config.json and daemon.log hold nothing that grants access. A turn's spec, which carries its token, is written to the temp dir.
 
 ## Data flow: one ask
 
@@ -48,7 +49,7 @@ Run dir: `host/` (turn output, prompts, stop file; never mounted on its own), `r
 
 ## Invariants (enforced by structure)
 
-- Agents hold no credentials. Sandbox gets `CLAUDE_CODE_OAUTH_TOKEN` = short-lived access token only, read fresh per turn; each Codex turn gets a fresh `CODEX_HOME` made on the host side (`host/codex`, mounted at `/hive/codex`), so nothing the agent planted steers the write; its `auth.json` holds the access token with the refresh token blanked and its `config.toml` the Hive's instructions (argv has a size cap). At turn end it is deleted except `sessions/`, kept in `host/codex-sessions` for resume. A bare run whose machine login has no readable credential file gets no token, so the harness's own host login works. Each turn goes on the least-used login of the pool (the machine's own plus `.hive/logins/<harness>/<name>` from `hive login add`) not parked at its usage limit.
+- Agents hold no credentials. Sandbox gets `CLAUDE_CODE_OAUTH_TOKEN` = short-lived access token only, read fresh per turn; each Codex turn gets a fresh `CODEX_HOME` made on the host side (`private/runs/<id>/codex`, mounted at `/hive/codex`), so nothing the agent planted steers the write; its `auth.json` holds the access token with the refresh token blanked and its `config.toml` the Hive's instructions (argv has a size cap). At turn end it is deleted except `sessions/`, kept in `private/runs/<id>/codex-sessions` for resume. A bare run whose machine login has no readable credential file gets no token, so the harness's own host login works. Each turn goes on the least-used login of the pool (the machine's own plus `.hive/logins/<harness>/<name>` from `hive login add`) not parked at its usage limit.
 - Host git never runs in an agent's checkout (only in host clones and fresh gate clones; hooks disabled, fsck on fetch).
 - Only `hive/*` branches are pushed; main changes only by merge; `PushInitial` only into an empty repo with a host-made commit.
 - Merge requires: host-recorded passing test on that sha + (small | land verdict on that sha from a core-started read-only reviewer | host-made update of a reviewed sha | host-made revert/setup) + person approval if protected paths changed. For a self project or a high-class path the read must be on that exact sha (nothing carries), and a high class needs two land runs since the last fix.
