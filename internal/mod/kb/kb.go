@@ -67,12 +67,15 @@ func New(c *core.Core, a *agents.Agents) *Module {
 		}
 		return "saved as " + filepath.Base(path), nil
 	}})
-	c.Runs.Ops().Register(core.Op{Name: "search", Help: `{"query"}`, Fn: func(r core.Run, args json.RawMessage) (any, error) {
-		var q struct{ Query string }
+	c.Runs.Ops().Register(core.Op{Name: "search", Help: `{"query", "limit": "n or all"}`, Fn: func(r core.Run, args json.RawMessage) (any, error) {
+		var q struct {
+			Query string
+			Limit json.RawMessage
+		}
 		if err := core.Bind(args, &q); err != nil {
 			return nil, err
 		}
-		return FormatHits(Search(c.WS.KB(), q.Query, 20)), nil
+		return Find(c.WS.KB(), q.Query, strings.Trim(string(q.Limit), `"`)), nil
 	}})
 	m.startRecord()
 	c.J.Subscribe(func(e core.Event) {

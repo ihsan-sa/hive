@@ -31,7 +31,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive ask "..."           ask the lead [--project name] [--wait]
   hive status              what the Hive is doing
   hive improve             run an improvement sweep now
-  hive kb [words]          search the knowledge base: notes and everything the Hive did
+  hive kb [words]          search the knowledge base: notes and everything the Hive did [--limit n|all]
   hive answer <id> <opt>   answer something waiting on you
   hive login               log in to Claude Code and GitHub with their own logins
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
@@ -103,11 +103,15 @@ func run(args []string) int {
 			fmt.Fprintln(os.Stderr, core.Cmd+":", err)
 			return 1
 		}
+		limit := ""
+		if len(args) > 1 && args[0] == "--limit" {
+			limit, args = args[1], args[2:]
+		}
 		if len(args) == 0 {
 			fmt.Println("The knowledge base is the folder " + ws.KB() + "; its record/ has a file per task, request, run, chat and project.")
 			return 0
 		}
-		fmt.Println(kb.FormatHits(kb.Search(ws.KB(), strings.Join(args, " "), 20)))
+		fmt.Println(kb.Find(ws.KB(), strings.Join(args, " "), limit))
 		return 0
 	case "improve":
 		return withClient(func(c *api.Client) error {

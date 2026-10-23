@@ -26,8 +26,10 @@ var skipKinds = map[string]bool{"plan.usage": true, "run.turn_started": true, "r
 // skipFields are long or machine-only parts of an event.
 var skipFields = map[string]bool{"system": true, "inputs": true, "tools": true, "modules": true, "queue": true, "structured": true, "session_live": true}
 
-// subjectFields name what an event is about, in order of preference.
-var subjectFields = []string{"chat", "id", "project", "name", "module", "job"}
+// subjectFields name what an event is about, in order of preference. A chat
+// event is about its chat, never its message's id; anything else is about its
+// own id, so a task that names its chat still files under the task.
+var subjectFields = []string{"id", "project", "name", "module", "job"}
 
 type recorder struct {
 	dir    string
@@ -43,13 +45,14 @@ func (m *Module) startRecord() {
 	rec.cursor, _ = strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
 	resumed := rec.cursor
 	// Replay all of it so snapshots diff against their true previous state;
-	// only events past the cursor are written, which is the catch-up.
-	m.C.J.Replay(func(e core.Event) { rec.file(e, e.Seq == resumed+1) })
+	// only events past the cursor are written, which is the catch-up. Each of
+	// those is rechecked, since the cursor moves only when an entry is written.
+	m.C.J.Replay(func(e core.Event) { rec.file(e, e.Seq > resumed) })
 	m.C.J.Subscribe(func(e core.Event) { rec.file(e, false) })
 }
 
-// file writes one event; recheck guards the one event a crash could have
-// written without moving the cursor.
+// file writes one event; recheck guards an event a crash could have written
+// without moving the cursor.
 func (r *recorder) file(e core.Event, recheck bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -60,7 +63,11 @@ func (r *recorder) file(e core.Event, recheck bool) {
 		flatten("", data, fields)
 	}
 	subject := ""
-	for _, k := range subjectFields {
+	order := subjectFields
+	if area == "chat" {
+		order = append([]string{"chat"}, order...)
+	}
+	for _, k := range order {
 		if v := fields[k]; v != "" {
 			subject = v
 			break
@@ -76,6 +83,11 @@ func (r *recorder) file(e core.Event, recheck bool) {
 			for k, v := range fields {
 				if prev[k] != v {
 					shown[k] = v
+				}
+			}
+			for k := range prev {
+				if _, ok := fields[k]; !ok {
+					shown[k] = "(cleared)"
 				}
 			}
 		}
@@ -120,7 +132,7 @@ func (r *recorder) file(e core.Event, recheck bool) {
 func (r *recorder) advance(seq int64) {
 	if seq > r.cursor {
 		r.cursor = seq
-		os.WriteFile(filepath.Join(r.dir, ".filed"), []byte(strconv.FormatInt(seq, 10)), 0o644)
+		core.WriteFileAtomic(filepath.Join(r.dir, ".filed"), []byte(strconv.FormatInt(seq, 10)), 0o644)
 	}
 }
 
@@ -157,8 +169,8 @@ type Hit struct {
 
 // Search returns the pieces of the knowledge base under dir (notes whole,
 // record files entry by entry) that match the most words of query, newest
-// first among equals, and at most limit of them.
-func Search(dir, query string, limit int) []Hit {
+// first among equals.
+func Search(dir, query string) []Hit {
 	var terms []string
 	for _, w := range strings.Fields(strings.ToLower(query)) {
 		if len(w) > 1 {
@@ -167,7 +179,10 @@ func Search(dir, query string, limit int) []Hit {
 	}
 	var hits []Hit
 	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() && d.Name() == ".git" {
+		if err != nil {
+			return nil // an unreadable folder has nothing to give; go on with the rest
+		}
+		if d.IsDir() && d.Name() == ".git" {
 			return filepath.SkipDir
 		}
 		if d.IsDir() || !strings.HasSuffix(path, ".md") {
@@ -214,20 +229,33 @@ func Search(dir, query string, limit int) []Hit {
 		}
 		return hits[i].When > hits[j].When
 	})
-	if len(hits) > limit {
-		hits = hits[:limit]
-	}
 	return hits
 }
 
-// FormatHits renders hits for an agent or a person to read.
-func FormatHits(hits []Hit) string {
+// Find searches the knowledge base under dir and renders the best limit hits
+// ("all", or a number; 20 when empty) for an agent or a person to read,
+// saying how many more matched.
+func Find(dir, query, limit string) string {
+	hits := Search(dir, query)
 	if len(hits) == 0 {
 		return "nothing in the knowledge base matches; the record doesn't cover it"
 	}
+	n, err := strconv.Atoi(limit)
+	if limit == "all" || n > len(hits) {
+		n = len(hits)
+	} else if err != nil || n <= 0 {
+		n = min(20, len(hits))
+	}
 	var b strings.Builder
-	for _, h := range hits {
-		fmt.Fprintf(&b, "== %s\n%s\n\n", h.File, core.Clip(h.Text, 1500))
+	for _, h := range hits[:n] {
+		text := h.Text
+		if r := []rune(text); len(r) > 1500 {
+			text = string(r[:1500]) + " … (clipped; the rest is in " + h.File + ")"
+		}
+		fmt.Fprintf(&b, "== %s\n%s\n\n", h.File, text)
+	}
+	if more := len(hits) - n; more > 0 {
+		fmt.Fprintf(&b, "%d more match; ask again with --limit all (or a bigger number) to see them.", more)
 	}
 	return strings.TrimSpace(b.String())
 }

@@ -154,7 +154,7 @@ A value of @path reads that file. Common ops:
   brief     --title "..." --done "what done looks like" [--known "..."] [--project p]
                                                  file an ask: it becomes an issue, a worker, a PR
   warden    --want "..." --why "..." --steps "..."   for anything past your reach; the person decides
-  search    --query "words"                      the knowledge base pieces that match, best first
+  search    --query "words" [--limit n|all]     the knowledge base pieces that match, best first
   remember  --title "..." --text "..." [--tags a,b]   write to the knowledge base
   schedule  --in 2h --text "..."                 a wake-up message to yourself
   status                                         projects, work in flight, scores`
