@@ -79,6 +79,7 @@ type model struct {
 	input     textinput.Model
 	composing bool
 	files     []chat.File // attached to the message being written
+	composeN  int         // counts composes, so a clipboard read can't land in a later one
 	reply     string      // thread being replied to; "" = new thread
 
 	// dashboard and lists
@@ -279,6 +280,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg.text)
 			return m, cmd
+		case msg.compose != m.composeN || !m.composing:
+			// read for a message that has since been sent or dropped
 		case msg.err != nil:
 			m.setFlash(msg.err.Error())
 		case m.composing:
@@ -392,7 +395,7 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// As in Claude Code: an image on the clipboard attaches; otherwise
 		// ctrl+v pastes text as before.
 		if m.composing {
-			return m, readClipboard(true)
+			return m, readClipboard(true, m.composeN)
 		}
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
@@ -421,15 +424,24 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.composing && k.Paste {
 		// A drop arrives as a pasted path; an empty paste may be an image.
 		if len(k.Runes) == 0 {
-			return m, readClipboard(false)
+			return m, readClipboard(false, m.composeN)
 		}
 		if paths := pastedPaths(string(k.Runes)); paths != nil {
+			maxMB := m.st.Config.ChatMaxMB
+			if maxMB <= 0 { // no state yet
+				maxMB = core.DefaultConfig().ChatMaxMB
+			}
+			var have int64
+			for _, f := range m.files {
+				have += int64(len(f.Data))
+			}
 			for _, p := range paths {
-				f, err := readAttachment(p)
+				f, err := readAttachment(p, have, maxMB)
 				if err != nil {
 					return m, flash("error: " + err.Error())
 				}
 				m.files = append(m.files, f)
+				have += int64(len(f.Data))
 			}
 			return m, nil
 		}
@@ -444,20 +456,21 @@ func flash(s string) tea.Cmd { return func() tea.Msg { return flashMsg(s) } }
 // clipMsg is a clipboard read: an image to attach, why there is none, or,
 // for ctrl+v with no image, the input's own text paste.
 type clipMsg struct {
-	f    chat.File
-	err  error
-	text tea.Msg
+	f       chat.File
+	err     error
+	text    tea.Msg
+	compose int // the compose it was read for
 }
 
 // readClipboard reads the clipboard's image off the UI loop, since a tool
 // like powershell.exe can take seconds.
-func readClipboard(text bool) tea.Cmd {
+func readClipboard(text bool, compose int) tea.Cmd {
 	return func() tea.Msg {
 		f, err := clipboardImage()
 		if text && (err == errNoImage || err == errNoTool) {
-			return clipMsg{text: textinput.Paste()}
+			return clipMsg{text: textinput.Paste(), compose: compose}
 		}
-		return clipMsg{f: f, err: err}
+		return clipMsg{f: f, err: err, compose: compose}
 	}
 }
 

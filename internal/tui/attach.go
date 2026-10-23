@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
@@ -20,7 +21,7 @@ import (
 // quoted or backslash-escaped paths, file:// URLs, and Windows paths (as
 // /mnt/<drive> or the distro's own path under WSL). It returns nil unless
 // every word of the paste names a file that exists, so text stays text, and
-// a single word must also read as a path (absolute, ~ or ./): pasting the
+// a single word must also read as a path (absolute, ~, ./ or ../): pasting the
 // word go.mod types it.
 func pastedPaths(s string) []string {
 	s = strings.TrimSpace(s)
@@ -42,7 +43,9 @@ func pastedPaths(s string) []string {
 	return out
 }
 
-func pathLike(p string) bool { return filepath.IsAbs(p) || strings.HasPrefix(p, "./") }
+func pathLike(p string) bool { return filepath.IsAbs(p) || relPath.MatchString(p) }
+
+var relPath = regexp.MustCompile(`^\.\.?[\\/]`) // ./ ../ .\ ..\
 
 var (
 	winDrive = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
@@ -120,10 +123,23 @@ func isFile(p string) bool {
 	return err == nil && fi.Mode().IsRegular()
 }
 
-// readAttachment reads a pasted file.
-func readAttachment(p string) (chat.File, error) {
+// readAttachment reads a dropped file. Before reading it refuses anything
+// that isn't a regular file, or that would take the message, with the have
+// bytes already attached, over maxMB (chat_max_mb, which the daemon holds a
+// message to as well), so a huge drop gets a message, not a frozen screen.
+func readAttachment(p string, have int64, maxMB int) (chat.File, error) {
+	name := filepath.Base(p)
+	fi, err := os.Stat(p)
+	switch {
+	case err != nil:
+		return chat.File{}, err
+	case !fi.Mode().IsRegular():
+		return chat.File{}, fmt.Errorf("%s is not a file, so it can't be attached", name)
+	case have+fi.Size() > int64(maxMB)<<20:
+		return chat.File{}, fmt.Errorf("%s would make the message %d MB; one message can be at most %d MB; chat_max_mb in .hive/config.json raises it", name, (have+fi.Size()+1<<20-1)>>20, maxMB)
+	}
 	data, err := os.ReadFile(p)
-	return chat.File{Name: filepath.Base(p), Data: data}, err
+	return chat.File{Name: name, Data: data}, err
 }
 
 // clipTool is a command that prints the clipboard's image, and how to decode it.
@@ -164,8 +180,16 @@ func clipTools() []clipTool {
 var (
 	pngMagic   = []byte("\x89PNG")
 	errNoImage = errors.New("no image on the clipboard")
-	errNoTool  = errors.New("no clipboard tool found to read a pasted image; install wl-clipboard (Wayland) or xclip (X11)")
+	errNoTool  = errors.New("no clipboard tool found to read a pasted image" + toolHint(runtime.GOOS))
 )
+
+// toolHint names what to install, where that is wl-clipboard or xclip.
+func toolHint(goos string) string {
+	if goos == "darwin" || goos == "windows" {
+		return ""
+	}
+	return "; install wl-clipboard (Wayland) or xclip (X11)"
+}
 
 // clipboardImage reads an image off the clipboard with the first tool found
 // that has one.

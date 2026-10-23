@@ -10,6 +10,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 )
 
 // TestPastedPaths: each form a terminal pastes for a dropped file reads as
@@ -35,12 +37,20 @@ func TestPastedPaths(t *testing.T) {
 	// One word attaches only when it reads as a path; go.mod alone is typed.
 	t.Chdir(dir)
 	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir) // os.UserHomeDir on Windows
 	cases["b.go"] = nil
 	cases["./b.go"] = []string{"./b.go"}
 	cases["~/b.go"] = []string{b}
+	up := "../" + filepath.Base(dir) + "/b.go"
+	cases[up] = []string{up}
 	for in, want := range cases {
 		if got := pastedPaths(in); !reflect.DeepEqual(got, want) {
 			t.Errorf("pastedPaths(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for _, p := range []string{`.\a.png`, `..\a.png`, "../a.png"} {
+		if !pathLike(p) {
+			t.Errorf("%s doesn't read as a path", p)
 		}
 	}
 }
@@ -85,6 +95,48 @@ func TestDropAttaches(t *testing.T) {
 		t.Fatalf("text paste: %q %d", m.input.Value(), len(m.files))
 	}
 
+	// Over chat_max_mb, alone or with what's attached, is refused before the
+	// read, with a message; so is anything that isn't a file.
+	m.st.Config.ChatMaxMB = 1
+	dir := t.TempDir()
+	big, half := filepath.Join(dir, "big.img"), filepath.Join(dir, "half.bin")
+	os.WriteFile(big, make([]byte, 2<<20), 0o644)
+	os.WriteFile(half, make([]byte, 600<<10), 0o644)
+	drop := func(p string) {
+		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(p), Paste: true})
+		if cmd != nil {
+			m.Update(cmd())
+		}
+	}
+	drop(big)
+	if len(m.files) != 1 || !strings.Contains(m.flash, "big.img would make the message 3 MB; one message can be at most 1 MB; chat_max_mb") {
+		t.Fatalf("over the limit: files %d flash %q", len(m.files), m.flash)
+	}
+	m.flash = ""
+	drop(half)
+	drop(half)
+	if len(m.files) != 2 || !strings.Contains(m.flash, "half.bin would make the message 2 MB") {
+		t.Fatalf("over the limit in total: files %d flash %q", len(m.files), m.flash)
+	}
+	if _, err := readAttachment(dir, 0, 1); err == nil || !strings.Contains(err.Error(), "not a file") {
+		t.Fatalf("a folder: %v", err)
+	}
+	m.st.Config.ChatMaxMB = 0
+	m.files = m.files[:1]
+
+	// A clipboard image read for a message that was dropped stays out of the next one.
+	stale := m.composeN
+	m.keyInput(tea.KeyMsg{Type: tea.KeyEsc})
+	m.compose("", "")
+	m.Update(clipMsg{f: chat.File{Name: "pasted.png"}, compose: stale})
+	if len(m.files) != 0 {
+		t.Fatalf("a stale clipboard read attached: %+v", m.files)
+	}
+	m.Update(clipMsg{f: chat.File{Name: "pasted.png"}, compose: m.composeN})
+	if len(m.files) != 1 {
+		t.Fatalf("a current clipboard read didn't attach: %+v", m.files)
+	}
+
 	// A drop while the chat list or thread pane is focused, before composing,
 	// starts a message with the file attached.
 	for focus := 0; focus < 2; focus++ {
@@ -108,6 +160,9 @@ func TestDropAttaches(t *testing.T) {
 	t.Setenv("DISPLAY", "")
 	if _, err := clipboardImage(); err != errNoTool {
 		t.Fatalf("no tool: %v", err)
+	}
+	if toolHint("darwin") != "" || toolHint("windows") != "" || !strings.Contains(toolHint("linux"), "xclip") {
+		t.Fatal("the install hint names Linux tools only on Linux")
 	}
 	// With no tool, ctrl+v still hands the input its text paste.
 	_, cmd := m.keyInput(tea.KeyMsg{Type: tea.KeyCtrlV})

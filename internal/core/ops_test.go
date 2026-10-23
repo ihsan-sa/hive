@@ -50,3 +50,18 @@ func TestDeliverToParentWithNoParentFails(t *testing.T) {
 		t.Fatalf("Deliver to parent with no Parent: %v, want a no-parent error", err)
 	}
 }
+
+// TestChatMaxZero: chat_max_mb set to 0 means the default, not a limit that
+// refuses every message.
+func TestChatMaxZero(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ws.LoadConfig()
+	cfg.ChatMaxMB = 0
+	ws.SaveConfig(cfg)
+	if got := ws.LoadConfig().ChatMaxMB; got != DefaultConfig().ChatMaxMB {
+		t.Fatalf("chat_max_mb 0 loads as %d", got)
+	}
+}

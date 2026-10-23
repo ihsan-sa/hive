@@ -64,7 +64,7 @@ type Config struct {
 	ReviewRounds int                        `json:"review_rounds"`
 	Projects     map[string]ProjectSettings `json:"projects,omitempty"`
 	Schedules    map[string]string          `json:"schedules,omitempty"` // name -> "every 12h" | "daily 03:00" | "off"
-	ChatMaxMB    int                        `json:"chat_max_mb"`         // the most one chat message, files and all, may be
+	ChatMaxMB    int                        `json:"chat_max_mb"`         // the most one chat message, files and all, may be, in MB; 0 means the default
 
 	// MaxOutputTokens caps one reply (a budget is checked only between turns); 0 leaves the harness default.
 	MaxOutputTokens int `json:"max_output_tokens"`
@@ -183,6 +183,9 @@ func (w Workspace) LoadConfig() Config {
 	}
 	if c.Schedules == nil {
 		c.Schedules = DefaultConfig().Schedules
+	}
+	if c.ChatMaxMB <= 0 {
+		c.ChatMaxMB = DefaultConfig().ChatMaxMB
 	}
 	return c
 }

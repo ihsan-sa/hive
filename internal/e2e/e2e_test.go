@@ -829,6 +829,14 @@ func TestChatAttachment(t *testing.T) {
 	}
 	h.wait("the lead to open both", 2*minute, h.replied("lead", "shot.png (image/png"))
 	h.wait("the lead to open the text", minute, h.replied("lead", "notes.txt (text/plain"))
+	// Over chat_max_mb the daemon refuses the POST and says which setting raises it.
+	cfg := h.ws.LoadConfig()
+	cfg.ChatMaxMB = 1
+	h.ws.SaveConfig(cfg)
+	err := h.c.Do("POST", "/api/chat", map[string]any{"chat": "lead", "files": []chat.File{{Name: "big.bin", Data: make([]byte, 2<<20)}}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "over the 1 MB limit; chat_max_mb") {
+		t.Fatalf("an oversized message: %v", err)
+	}
 }
 
 // TestLiveAttachment is TestChatAttachment's host probe: run it with

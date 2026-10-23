@@ -237,6 +237,7 @@ func (m *model) keyChats(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *model) compose(thread, initial string) tea.Cmd {
 	m.composing, m.reply = true, thread
+	m.composeN++
 	m.input.SetValue(initial)
 	m.input.CursorEnd()
 	if thread != "" {
