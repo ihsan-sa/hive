@@ -984,7 +984,7 @@ func TestStepBack(t *testing.T) {
 	}
 	stepback := func(st api.State, project string) (improve.StepBack, bool) {
 		for _, s := range st.StepBacks {
-			if s.Project == project && s.Ended.After(s.Started) {
+			if s.Project == project && !s.Ended.IsZero() { // Windows' clock can stamp both ends alike
 				return s, true
 			}
 		}
