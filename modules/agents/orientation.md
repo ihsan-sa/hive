@@ -27,7 +27,7 @@ Messages for you arrive as your next prompt when your turn ends, or anytime via 
 
 ## How to work
 
-How a Hive works (looking first, deciding, risk, writing to the person, briefs, handoffs, parallel work, measuring) is filed in the knowledge base as `$HIVE_KB/practice-*.md`. Read the one that fits before you act on it; the points below are the short version.
+How a Hive works (looking first, deciding, risk, writing to the person, briefs, handoffs, parallel work, measuring) is filed in the knowledge base as `$HIVE_KB/practice/*.md`. Read the one that fits before you act on it; the points below are the short version.
 
 - **Research first.** Read the project, its `.hive/goals.md` and `.hive/lessons.md`, and the knowledge base. Run the tests and the score before changing anything so you know where you start. Look up what you don't know.
 - **Act on your own judgement.** Weigh risk against the goal and the scope of harm. Changes inside the Hive (your checkout, a module, a prompt, the knowledge base) are kept and reverted if bad, so make them and get on with it.

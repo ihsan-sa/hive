@@ -10,4 +10,4 @@ Notes live one per file under `$HIVE_KB`, named by a slug of their title, each w
     run: <run id>
     ---
 
-Search titles and tags first (`grep -ril "<word>" "$HIVE_KB"`), then bodies. The `practice-*.md` files are how a Hive works, filed from this module's `practice/` folder on every start; change them there. A note is context from an earlier run, not a decision: check it against the code before relying on it.
+Search titles and tags first (`grep -ril "<word>" "$HIVE_KB"`), then bodies. The `practice/` folder is how a Hive works, filed from this module's `practice/` folder when a doc is missing; a copy already there is never overwritten. A note is context from an earlier run, not a decision: check it against the code before relying on it.

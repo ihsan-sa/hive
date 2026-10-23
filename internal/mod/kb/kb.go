@@ -88,21 +88,41 @@ func (m *Module) ensureRepo() {
 }
 
 // filePractice copies the kb module's practice docs (how a Hive works) into
-// the store as practice-<name>.md, so a fresh install starts knowing them and
-// an update refreshes them. The module's copy wins over edits in the store.
+// the store's practice/ folder, so a fresh install starts knowing them. Notes
+// live at the top level, so a note never shares a path with a practice doc,
+// and a doc already in the store is never overwritten.
 func (m *Module) filePractice() {
 	src := filepath.Join(m.C.WS.Modules(), "kb", "practice")
+	dst := filepath.Join(m.C.WS.KB(), "practice")
 	entries, _ := os.ReadDir(src)
+	filed := false
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
 			continue
 		}
-		if raw, err := os.ReadFile(filepath.Join(src, e.Name())); err == nil {
-			os.WriteFile(filepath.Join(m.C.WS.KB(), "practice-"+e.Name()), raw, 0o644)
+		raw, err := os.ReadFile(filepath.Join(src, e.Name()))
+		if err != nil || os.MkdirAll(dst, 0o755) != nil {
+			continue
+		}
+		f, err := os.OpenFile(filepath.Join(dst, e.Name()), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			continue // already there, or unwritable: leave it
+		}
+		_, werr := f.Write(raw)
+		if f.Close() == nil && werr == nil {
+			filed = true
 		}
 	}
-	core.Git(m.C.WS.KB(), "add", "-A", "--", "practice-*.md")
-	core.Git(m.C.WS.KB(), "commit", "-q", "-m", "File how a Hive works")
+	if !filed {
+		return
+	}
+	_, err := core.Git(m.C.WS.KB(), "add", "--", "practice")
+	if err == nil {
+		_, err = core.Git(m.C.WS.KB(), "commit", "-q", "-m", "File how a Hive works", "--", "practice")
+	}
+	if err != nil {
+		m.C.J.MustAppend("kb.practice", map[string]string{"result": "practice docs not committed: " + err.Error()})
+	}
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -133,12 +153,12 @@ func (m *Module) Write(n Note) (string, error) {
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// Notes lists note files, newest first; the filed practice docs aren't notes.
+// Notes lists note files, newest first; the practice/ folder isn't notes.
 func (m *Module) Notes() []string {
 	entries, _ := os.ReadDir(m.C.WS.KB())
 	var out []string
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".md") && e.Name() != "README.md" && !strings.HasPrefix(e.Name(), "practice-") {
+		if strings.HasSuffix(e.Name(), ".md") && e.Name() != "README.md" {
 			out = append(out, e.Name())
 		}
 	}

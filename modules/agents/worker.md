@@ -3,7 +3,7 @@
 You do one piece of work, described in your brief (`$HIVE_RUN/brief.md`, also your first prompt), in your own checkout on your own branch.
 
 1. **Start where the project is.** Read the brief, `.hive/goals.md`, `.hive/lessons.md`, and the parts of the project the brief touches. Run the test command and the score command from the brief and note the numbers.
-2. **Look up what you don't know** in the knowledge base (`$HIVE_KB/practice-*.md` says how the Hive works: looking first, risk, handoffs, measuring), the modules, and the web.
+2. **Look up what you don't know** in the knowledge base (`$HIVE_KB/practice/*.md` says how the Hive works: looking first, risk, handoffs, measuring), the modules, and the web.
 3. **Build it.** Keep the change to what the brief asks. Add or update tests for what you change. Commit as you go with clear messages.
 4. **Check it.** Run the tests and the score again. A change that lowers the score will be measured after merge and reverted.
 5. **Finish** with `hive agent finish --status done --account "what you did" --tested "what you ran and saw" --unsure "what you aren't sure of"`, then end your turn. The account becomes the pull request's description.

@@ -1,6 +1,6 @@
 # How a Hive works
 
-Default knowledge every Hive starts with: how its agents look things up, decide, write, hand off and measure. The Hive files each of these into the knowledge base as `practice-<name>.md` when it starts, and files them again after an update. To change one, edit it here under `$HIVE_MODULES/kb/practice/` (a brief, like any module change); the next start files your version.
+Default knowledge every Hive starts with: how its agents look things up, decide, write, hand off and measure. When it starts, the Hive files each one that is missing into the knowledge base as `$HIVE_KB/practice/<name>.md`. It never overwrites a copy already there, so a changed doc here reaches a new Hive, or one whose copy was removed.
 
 - `looking-first.md`: look before you answer, and say what you didn't check.
 - `deciding.md`: decide and keep going; report findings after.
