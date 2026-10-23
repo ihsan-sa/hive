@@ -15,6 +15,10 @@ func (Codex) Name() string           { return "codex" }
 func (Codex) Program() string        { return "codex" }
 func (Codex) LoginCommand() []string { return []string{"codex", "login", "--device-auth"} }
 
+// APIHosts are where Codex talks to its model: chatgpt.com on a ChatGPT
+// login, api.openai.com on an API key.
+func (Codex) APIHosts() []string { return []string{"chatgpt.com", "api.openai.com"} }
+
 func (Codex) Args(t Turn) []string {
 	a := []string{"exec"}
 	if t.Resume {
@@ -30,11 +34,6 @@ func (Codex) Args(t Turn) []string {
 			a = append(a, "-c", "sandbox_workspace_write.writable_roots="+string(roots))
 		}
 	}
-	if t.SystemText != "" {
-		// A JSON string is a valid TOML basic string.
-		s, _ := json.Marshal(t.SystemText)
-		a = append(a, "-c", "developer_instructions="+string(s))
-	}
 	if t.Model != "" && !claudeModel(t.Model) {
 		a = append(a, "-m", t.Model)
 	}
@@ -47,9 +46,10 @@ func (Codex) Args(t Turn) []string {
 	return append(a, "-") // the prompt comes on stdin
 }
 
-// Env points Codex at the run's own CODEX_HOME, which holds only the access token.
+// Env points Codex at the turn's own CODEX_HOME, which holds only the access
+// token and, in its config.toml, the Hive's instructions.
 func (Codex) Env(t Turn) []string {
-	return []string{"CODEX_HOME=" + t.Home + "/.codex"}
+	return []string{"CODEX_HOME=" + t.ConfigDir}
 }
 
 type codexLine struct {
@@ -90,8 +90,8 @@ func (Codex) Parse(line []byte) []Event {
 		}
 	case "turn.completed":
 		return []Event{{Kind: "result", Result: &Result{Subtype: "success"}}}
-	case "turn.failed":
-		msg := ""
+	case "turn.failed", "error":
+		msg := l.Message // a top-level error line carries its message there
 		if l.Error != nil {
 			msg = l.Error.Message
 		}

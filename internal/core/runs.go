@@ -2,9 +2,11 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -144,12 +146,13 @@ type Runs struct {
 	mu    sync.Mutex
 	runs  map[string]*Run
 	plans map[string]Plan
-	busy  map[string]bool // runs whose tick work is in flight
+	busy  map[string]bool    // runs whose tick work is in flight
+	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
 }
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -183,6 +186,13 @@ type turnEnded struct {
 	Reason      string          `json:"reason,omitempty"`
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
 	Queue       []string        `json:"queue,omitempty"`
+}
+
+// egressRefused is the hosts a turn's egress proxy refused.
+type egressRefused struct {
+	ID    string   `json:"id"`
+	Turn  int      `json:"turn"`
+	Hosts []string `json:"hosts"`
 }
 
 type runNote struct {
@@ -244,6 +254,7 @@ func (rs *Runs) apply(e Event) {
 		r.Proc = proc.Handle{}
 		if t.Result != nil {
 			r.Cost += t.Result.CostUSD
+			rs.spent[e.At.UTC().Format("2006-01")] += t.Result.CostUSD
 			if !t.Result.IsError {
 				r.Result, r.Structured = t.Result.Text, t.Result.Structured
 				r.Retries = 0
@@ -392,8 +403,10 @@ func (rs *Runs) Plans() []Plan {
 }
 
 // pickLogin chooses the login for a run's next turn: of those not parked at
-// their usage limit, the least used, the machine's own first on a tie.
-func (rs *Runs) pickLogin(h, home string) (Login, []string, error) {
+// their usage limit, the least used, the machine's own first on a tie. A
+// bare run whose machine login has no credential file the Hive can read gets
+// no token, so the harness's own login on the host still works.
+func (rs *Runs) pickLogin(h, home string, bare bool) (Login, []string, error) {
 	logins := rs.tokens.Logins(h)
 	now := time.Now()
 	rs.mu.Lock()
@@ -409,7 +422,7 @@ func (rs *Runs) pickLogin(h, home string) (Login, []string, error) {
 	err := fmt.Errorf("every %s login is at its usage limit", HarnessName(h))
 	for _, l := range open {
 		var env []string
-		if env, err = rs.tokens.AgentEnv(l, home); err == nil {
+		if env, err = rs.tokens.AgentEnv(l, home); err == nil || bare && l.Name == "" && errors.Is(err, ErrNoLogin) {
 			return l, env, nil
 		}
 	}
@@ -433,6 +446,13 @@ func (rs *Runs) freeAt(h string) time.Time {
 		}
 	}
 	return at.Add(15 * time.Second)
+}
+
+// Spent is what runs cost in a month ("2006-01", UTC), from the harnesses' results.
+func (rs *Runs) Spent(month string) float64 {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.spent[month]
 }
 
 // Send queues a message for a run's next turn.
@@ -567,6 +587,9 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 			case "init":
 				tl.SessionLive, tl.Session = true, ev.SessionID
 			case "result":
+				if tl.Result != nil && ev.Result != nil { // a second verdict in one turn: trust neither
+					ev.Result.Structured = nil
+				}
 				tl.Result = ev.Result
 			case "ratelimit":
 				tl.Limit = ev.RateLimit
@@ -592,6 +615,11 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 
 func (rs *Runs) endTurn(r Run) {
 	tl := rs.ReadTurn(r, r.Turn)
+	if raw, err := os.ReadFile(rs.ws.TurnOut(r.ID, r.Turn) + ".egress"); err == nil && len(raw) > 0 {
+		hosts := strings.Fields(string(raw))
+		sort.Strings(hosts)
+		rs.append("run.egress_refused", egressRefused{ID: r.ID, Turn: r.Turn, Hosts: slices.Compact(hosts)})
+	}
 	limited := tl.Result != nil && tl.Result.Limited || (tl.Limit != nil && tl.Limit.Status == "rejected" && (tl.Result == nil || tl.Result.IsError))
 	if limited {
 		// Park the login until its reset (an hour when the harness didn't say).
@@ -609,6 +637,9 @@ func (rs *Runs) endTurn(r Run) {
 		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
 	}
 	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Session: tl.Session, Result: tl.Result}
+	if HarnessName(r.Harness) == "codex" {
+		rs.dropCodexHome(r.ID)
+	}
 	cur, _ := rs.Get(r.ID)
 	switch {
 	case cur.StopAsked:
@@ -619,6 +650,10 @@ func (rs *Runs) endTurn(r Run) {
 		te.Status, te.ParkedUntil = StatusParked, until
 		te.Reason = "usage limit; resumes " + until.Local().Format("Mon 15:04")
 		te.Queue = []string{"The usage limit has reset. Continue where you left off."}
+		if !until.After(time.Now()) {
+			te.Reason = "usage limit; moving to another login"
+			te.Queue = []string{"Your last turn hit a usage limit, so your next turn runs on another login. Continue where you left off."}
+		}
 	case tl.Result == nil:
 		errTail := tail(rs.ws.TurnOut(r.ID, r.Turn)+".err", 400)
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
@@ -689,6 +724,13 @@ const PendingSep = "\n\n---\n\n"
 
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run) {
+	cfg := rs.ws.LoadConfig()
+	if why := Strained(cfg.MemFloorMB, cfg.PressureMax); why != "" {
+		if why = "waiting: " + why; r.Status != StatusQueued || r.Reason != why {
+			rs.append("run.status", runNote{ID: r.ID, Status: StatusQueued, Reason: why})
+		}
+		return
+	}
 	sb, err := rs.sandbox()
 	if err != nil {
 		if r.Status != StatusQueued || r.Reason != err.Error() {
@@ -723,7 +765,19 @@ func (rs *Runs) launch(r Run) {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(time.Minute)})
 		return
 	}
-	login, tok, err := rs.pickLogin(r.Harness, rs.ws.RunHome(r.ID))
+	codexHome, started := "", false
+	if HarnessName(r.Harness) == "codex" {
+		if codexHome, err = rs.freshCodexHome(r); err != nil {
+			rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(time.Minute)})
+			return
+		}
+		defer func() {
+			if !started { // no turn will end to delete the token
+				rs.dropCodexHome(r.ID)
+			}
+		}()
+	}
+	login, tok, err := rs.pickLogin(r.Harness, codexHome, !sb.Isolated())
 	if err != nil {
 		until := rs.freeAt(r.Harness)
 		if !until.After(time.Now()) {
@@ -732,7 +786,7 @@ func (rs *Runs) launch(r Run) {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: "login for " + HarnessName(r.Harness) + ": " + err.Error(), Until: until})
 		return
 	}
-	spec, err := rs.sandboxSpec(sb, h, r, turn, resume, promptFile, tok)
+	spec, err := rs.sandboxSpec(sb, h, r, turn, resume, promptFile, tok, codexHome)
 	if err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(5 * time.Minute)})
 		return
@@ -742,11 +796,12 @@ func (rs *Runs) launch(r Run) {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: "start failed: " + err.Error(), Until: time.Now().Add(backoff(r.Retries))})
 		return
 	}
+	started = true
 	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key()})
 }
 
 // sandboxSpec lays out what the agent sees.
-func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn int, resume bool, promptFile string, tok []string) (sandbox.Spec, error) {
+func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn int, resume bool, promptFile string, tok []string, codexHome string) (sandbox.Spec, error) {
 	home := sandbox.Mount{Host: rs.ws.RunHome(r.ID), Inside: "/hive/home", RW: true}
 	mounts := []sandbox.Mount{
 		{Host: r.Checkout, Inside: "/work", RW: !r.ReadOnly},
@@ -772,14 +827,20 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 		}
 	}
 	in := func(m sandbox.Mount) string { return sandbox.InsidePath(sb, m) }
+	cfgDir := ""
+	if codexHome != "" {
+		m := sandbox.Mount{Host: codexHome, Inside: "/hive/codex", RW: true}
+		mounts, cfgDir = append(mounts, m), in(m)
+	}
 	t := harness.Turn{
 		Role: r.Role, SessionID: r.Session, Resume: resume, Model: r.Model, Tools: r.Tools, SystemText: r.System,
 		SystemFile: filepath.Join(in(mounts[1]), "system.md"), ReadOnly: r.ReadOnly, RunDir: in(mounts[1]), Schema: r.Schema, Sandboxed: sb.Isolated(),
+		MaxOutput: rs.ws.LoadConfig().MaxOutputTokens, ConfigDir: cfgDir,
 	}
 	if sb.Isolated() {
 		t.SystemFile = "/hive/run/system.md"
 	}
-	t.Home, t.Writable = in(home), []string{in(mounts[2]), in(home)}
+	t.Writable = []string{in(mounts[2]), in(home)}
 	if r.Schema != "" {
 		t.SchemaFile = filepath.Join(in(mounts[1]), "schema.json")
 		if sb.Isolated() {
@@ -809,11 +870,42 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	if !sb.Isolated() && h.Program() == "hive" && len(tools) > 0 {
 		argv[0] = tools[0]
 	}
+	allow := rs.ws.LoadConfig().Egress.For(r.Role)
+	if len(allow) > 0 {
+		allow = append(append([]string{}, allow...), harness.APIHosts(h)...)
+	}
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
 		Stdin: promptFile, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
-		Network: true, UID: os.Getuid(), GID: os.Getgid(),
+		Network: true, Allow: allow, UID: os.Getuid(), GID: os.Getgid(),
 	}, nil
+}
+
+// freshCodexHome makes the turn's CODEX_HOME: a new folder on the host side
+// the agent never had, so nothing it planted can steer the host's writes.
+// Only the sessions from earlier turns, which resume needs, move into it.
+// The Hive's instructions go in its config.toml rather than on the command
+// line, which has a size cap.
+func (rs *Runs) freshCodexHome(r Run) (string, error) {
+	rs.dropCodexHome(r.ID)
+	dir := filepath.Join(rs.ws.RunHost(r.ID), "codex")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return "", err
+	}
+	os.Rename(filepath.Join(rs.ws.RunHost(r.ID), "codex-sessions"), filepath.Join(dir, "sessions"))
+	if r.System == "" {
+		return dir, nil
+	}
+	s, _ := json.Marshal(r.System) // a JSON string is a valid TOML basic string
+	return dir, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("developer_instructions = "+string(s)+"\n"), 0o600)
+}
+
+// dropCodexHome deletes the turn's CODEX_HOME, and with it the access token,
+// keeping only its sessions for the next turn's resume.
+func (rs *Runs) dropCodexHome(id string) {
+	dir := filepath.Join(rs.ws.RunHost(id), "codex")
+	os.Rename(filepath.Join(dir, "sessions"), filepath.Join(rs.ws.RunHost(id), "codex-sessions"))
+	os.RemoveAll(dir)
 }
 
 // Clip shortens s to n runes on one line.

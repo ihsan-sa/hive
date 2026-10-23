@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Hive</title>
+<meta name="description" content="A small team of AI agents that lives in a folder on your computer and works on your projects.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>The Hive</h1>
+  <p>A small team of AI agents that lives in a folder on your computer and works on your projects while you do other things.</p>
+  <p>You talk to a lead in a chat. Workers build each piece in their own sandbox, tests run where they can't touch them, a reviewer reads the exact commit, and the change merges on GitHub. After every merge the Hive measures the project and keeps the change or reverts it.</p>
+  <nav><a href="#install">Install</a> <a href="#use">How to use it</a> <a href="https://ihsan.cc/writing/the-hive/">How it works</a> <a href="https://github.com/ihsan-sa/hive">GitHub</a></nav>
+</header>
+
+<figure>
+  <img src="hive.svg" alt="The Hive's system: you talk to a lead, workers build in sandboxes, a gate tests and reviews, and changes merge on GitHub.">
+</figure>
+
+<section id="install">
+  <h2>Install</h2>
+  <p>macOS and Linux, in a terminal:</p>
+  <pre><code>curl -fsSL https://hive.ihsan.cc/install.sh | sh</code></pre>
+  <p>Windows, in PowerShell:</p>
+  <pre><code>irm https://hive.ihsan.cc/install.ps1 | iex</code></pre>
+  <p>Then run <code>hive-v0</code>. On Windows, agents are sandboxed inside WSL 2, and the installer sets up Claude Code there.</p>
+</section>
+
+<section id="use">
+  <h2>How to use it</h2>
+  <h3>The first run</h3>
+  <p>It checks for git, Claude Code and the GitHub CLI and offers their own logins. It asks where to live (Enter for <code>~/hive</code>) and for a GitHub repository (Enter makes a small private demo project). Then it opens the control center with the lead's chat, and from then on the Hive starts with your machine.</p>
+  <h3>Every day</h3>
+  <dl>
+    <dt><code>hive-v0</code></dt><dd>the control center: chats, dashboard, what's waiting on you</dd>
+    <dt><code>hive-v0 ask "..." --wait</code></dt><dd>ask the lead from a shell</dd>
+    <dt><code>hive-v0 status</code></dt><dd>what it's doing</dd>
+    <dt><code>hive-v0 doctor</code></dt><dd>check the install and sandbox</dd>
+    <dt><code>hive-v0 shutdown</code></dt><dd>stop it; <code>hive-v0</code> starts it again</dd>
+  </dl>
+  <p>Closing the control center never stops work.</p>
+  <h3>Updates</h3>
+  <p>The Hive updates itself to each new release when it starts. <code>hive-v0 update</code> does it now, and Settings turns it off.</p>
+  <h3>Uninstall</h3>
+  <pre><code>curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh</code></pre>
+  <pre><code>irm https://hive.ihsan.cc/uninstall.ps1 | iex</code></pre>
+  <p>Your folder and its projects are left alone.</p>
+</section>
+
+<footer>
+  <a href="https://ihsan.cc/writing/the-hive/">Read how it works</a> · <a href="https://github.com/ihsan-sa/hive">github.com/ihsan-sa/hive</a>
+</footer>
+</body>
+</html>

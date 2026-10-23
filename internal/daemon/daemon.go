@@ -313,6 +313,9 @@ func (s *server) routes() http.Handler {
 			return nil, errors.New("bare runs need the warning read first (`" + core.Cmd + " doctor --bare`)")
 		}
 		c.BareAccepted = cur.BareAccepted
+		if err := c.Check(); err != nil {
+			return nil, err
+		}
 		if err := a.C.WS.SaveConfig(c); err != nil {
 			return nil, err
 		}

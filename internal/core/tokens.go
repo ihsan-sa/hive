@@ -80,7 +80,8 @@ func (t *Tokens) Logins(h string) []Login {
 
 // AgentEnv returns environment entries carrying a short-lived credential for
 // login l. Codex reads its credential from a file instead, so for Codex it
-// writes one holding only the access token into home, the run's own folder.
+// writes one holding only the access token into home, the turn's fresh
+// CODEX_HOME.
 func (t *Tokens) AgentEnv(l Login, home string) ([]string, error) {
 	switch l.Harness {
 	case "fake":
@@ -159,8 +160,8 @@ func readClaudeAccess(dir string) (string, time.Time, error) {
 }
 
 // writeCodexAccess copies Codex's login from dir (its own CODEX_HOME when
-// empty) into home/.codex/auth.json with the refresh token blanked, and
-// returns when the access token expires.
+// empty) into home/auth.json with the refresh token blanked, and returns when
+// the access token expires.
 func writeCodexAccess(dir, home string) (time.Time, error) {
 	if dir == "" {
 		dir = os.Getenv("CODEX_HOME")
@@ -182,16 +183,23 @@ func writeCodexAccess(dir, home string) (time.Time, error) {
 	a.Tokens["refresh_token"] = ""
 	// A fresh last_refresh keeps Codex from trying to renew the token itself.
 	out, _ := json.Marshal(map[string]any{"tokens": a.Tokens, "last_refresh": time.Now().UTC()})
-	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
-		return time.Time{}, err
-	}
-	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), out, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), out, 0o600); err != nil {
 		return time.Time{}, err
 	}
 	return jwtExpiry(tok), nil
 }
 
 var errNoCodex = errors.New("Codex is not logged in on this machine")
+
+// LoggedIn reports whether login l holds a credential the Hive can read.
+func LoggedIn(l Login) bool {
+	if l.Harness == "codex" {
+		_, err := os.Stat(filepath.Join(l.Dir, "auth.json"))
+		return err == nil
+	}
+	_, _, err := readClaudeAccess(l.Dir)
+	return err == nil
+}
 
 // jwtExpiry reads a JWT's exp claim without checking its signature; a token
 // it can't read counts as good for an hour, and the API has the last word.

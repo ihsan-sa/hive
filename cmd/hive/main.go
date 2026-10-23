@@ -115,8 +115,16 @@ func run(args []string) int {
 			return c.Do("POST", "/api/answer", map[string]string{"id": args[0], "answer": args[1], "note": note}, nil)
 		})
 	case "login":
-		if len(args) > 1 && args[0] == "add" {
-			ws, _ := core.FindWorkspace()
+		if len(args) > 0 && args[0] == "add" {
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "usage: hive login add <name> [claude|codex]")
+				return 2
+			}
+			ws, err := workspace()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
 			h := "claude"
 			if len(args) > 2 {
 				h = args[2]
@@ -369,6 +377,12 @@ func cmdDoctor(args []string) int {
 			ok = false
 			fmt.Println("✗ Claude Code is not installed inside WSL. Install it there:\n    wsl -- bash -lc \"curl -fsSL https://claude.ai/install.sh | bash\"")
 		}
+	}
+	if msg, err := setup.CodexReport(ws, c.HiveLinux()); err != nil {
+		ok = false
+		fmt.Printf("✗ %v\n", err)
+	} else if msg != "" {
+		fmt.Println("✓ " + msg)
 	}
 	if setup.AutostartEnabled() {
 		fmt.Println("✓ starts with the machine")

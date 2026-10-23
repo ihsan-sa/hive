@@ -47,7 +47,7 @@ Run dir: `host/` (turn output, prompts, stop file; never mounted), `ro/` (system
 
 ## Invariants (enforced by structure)
 
-- Agents hold no credentials. Sandbox gets `CLAUDE_CODE_OAUTH_TOKEN` = short-lived access token only, read fresh per turn; a Codex run gets its own `CODEX_HOME` under the run home whose `auth.json` holds the access token with the refresh token blanked. Each turn goes on the least-used login of the pool (the machine's own plus `.hive/logins/<harness>/<name>` from `hive login add`) not parked at its usage limit.
+- Agents hold no credentials. Sandbox gets `CLAUDE_CODE_OAUTH_TOKEN` = short-lived access token only, read fresh per turn; each Codex turn gets a fresh `CODEX_HOME` made on the host side (`host/codex`, mounted at `/hive/codex`), so nothing the agent planted steers the write; its `auth.json` holds the access token with the refresh token blanked and its `config.toml` the Hive's instructions (argv has a size cap). At turn end it is deleted except `sessions/`, kept in `host/codex-sessions` for resume. A bare run whose machine login has no readable credential file gets no token, so the harness's own host login works. Each turn goes on the least-used login of the pool (the machine's own plus `.hive/logins/<harness>/<name>` from `hive login add`) not parked at its usage limit.
 - Host git never runs in an agent's checkout (only in host clones and fresh gate clones; hooks disabled, fsck on fetch).
 - Only `hive/*` branches are pushed; main changes only by merge; `PushInitial` only into an empty repo with a host-made commit.
 - Merge requires: host-recorded passing test on that sha + (small | land verdict on that sha from a core-started read-only reviewer | host-made update of a reviewed sha | host-made revert/setup) + person approval if protected paths changed.
@@ -55,9 +55,17 @@ Run dir: `host/` (turn output, prompts, stop file; never mounted), `ro/` (system
 - Nothing an agent requests runs outside the sandbox, except a script a warden or tribunal approved, run by the risk module in the daemon as exactly that digest-pinned script; what is always the person's goes to the person (see [risk.md](risk.md)).
 - Every state change is a journal event; restart = replay + reconcile; issue/PR/run creation is idempotent.
 
+## Left alone on a shared machine
+
+Settings in `.hive/config.json`; none of them stops or parks work.
+
+- `max_output_tokens` (16000): sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` on each Claude turn, because a spend budget is checked only between turns and one reply can otherwise run long. 0 leaves Claude's own default.
+- `monthly_usd` (off): each turn's `cost_usd` is already in its `run.turn_ended` event; the runs fold it into a total per UTC month. Past the figure, the person gets one `told` ask for that month (id `spend-YYYY-MM`).
+- `mem_floor_mb` (1024), `pressure_max` (40): before a turn starts, Linux's `MemAvailable` and memory pressure (`/proc/pressure/memory`, some avg10) are read. Past either floor the run stays queued with the reason shown in the control center and starts on the first tick after the machine recovers. Where those files don't exist (macOS, Windows) nothing is held; 0 turns a check off.
+
 ## Sandbox (Linux / WSL)
 
-Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, stop-file watcher, starts init with `CLONE_NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|NEWUTS` (uid 0 → person's uid). Init (pid 1): tmpfs root; binds `/usr /bin /lib* /etc /opt /var /srv` read-only (nosuid, nodev, locked flags kept); fresh `/proc`, `/tmp`, minimal `/dev`; run mounts; tools at `/hive/bin` (one already on the inside PATH under a system dir, like a Node launcher, runs in place); `pivot_root`; root remounted ro; `lo` up; forwarder 127.0.0.1:3128 → egress socket. Command runs in a nested user namespace (no caps). Not present: `/home`, `/mnt` (Windows drives), `/run` (sockets), WSL interop. Egress refuses loopback/private/link-local/CGNAT/ULA and dials the IP it vetted.
+Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, stop-file watcher, starts init with `CLONE_NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|NEWUTS` (uid 0 → person's uid). Init (pid 1): tmpfs root; binds `/usr /bin /lib* /etc /opt /var /srv` read-only (nosuid, nodev, locked flags kept); fresh `/proc`, `/tmp`, minimal `/dev`; run mounts; tools at `/hive/bin` (one already on the inside PATH under a system dir, like a Node launcher, runs in place); `pivot_root`; root remounted ro; `lo` up; forwarder 127.0.0.1:3128 → egress socket. Command runs in a nested user namespace (no caps). Not present: `/home`, `/mnt` (Windows drives), `/run` (sockets), WSL interop. Egress refuses loopback/private/link-local/CGNAT/ULA and dials the IP it vetted; with an `egress` list for the run's role it also refuses every host off the list and records each refusal in `turn-NNN.jsonl.egress` (macOS runs one proxy per command for the same).
 
 ## Gaps (v1)
 
