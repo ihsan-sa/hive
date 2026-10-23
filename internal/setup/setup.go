@@ -101,6 +101,9 @@ func AddLogin(ws core.Workspace, h, name string) error {
 	err = cmd.Run()
 	if err == nil && !core.LoggedIn(core.Login{Harness: h, Name: name, Dir: dir}) {
 		err = errors.New("it left no credential")
+		if h == "codex" {
+			err = errors.New("it left no ChatGPT sign-in, which the Hive needs; an API key can't be shared between runs, so sign in with ChatGPT")
+		}
 	}
 	if err != nil {
 		if fresh {
@@ -150,19 +153,23 @@ func SandboxReport(ws core.Workspace, hiveLinux string) (string, error) {
 }
 
 // CodexReport runs `codex --version` where agents run, when this Hive uses
-// Codex or the machine has it, so a Codex the sandbox can't run shows up
-// here rather than at the first turn. "" with no error: nothing to check.
+// Codex as its harness, a project's, a tribunal seat's or through a login, so
+// a Codex the sandbox can't run shows up here rather than at the first turn.
+// "" with no error: nothing to check.
 func CodexReport(ws core.Workspace, hiveLinux string) (string, error) {
 	cfg := ws.LoadConfig()
 	uses := core.HarnessName(cfg.Harness) == "codex" || len(core.NewTokens(ws).Logins("codex")) > 1
 	for _, s := range cfg.TribunalModels {
 		uses = uses || core.HarnessName(s.Harness) == "codex"
 	}
-	p, err := exec.LookPath("codex")
-	switch {
-	case err != nil && !uses:
+	for _, s := range cfg.Projects {
+		uses = uses || core.HarnessName(s.Harness) == "codex"
+	}
+	if !uses {
 		return "", nil
-	case err != nil && runtime.GOOS != "windows": // on Windows Codex lives inside WSL
+	}
+	p, err := exec.LookPath("codex")
+	if err != nil && runtime.GOOS != "windows" { // on Windows Codex lives inside WSL
 		return "", errors.New("Codex is not installed. Install it system-wide, for example `sudo npm install -g @openai/codex` with the system's Node.")
 	}
 	mode := "auto"
