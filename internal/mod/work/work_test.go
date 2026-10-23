@@ -2,6 +2,7 @@ package work
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -137,5 +138,41 @@ func TestRevertFindingsStop(t *testing.T) {
 	}
 	if task.Stage != StageStopped || task.Round != 0 || !strings.Contains(task.Reason, "it reverts too much") {
 		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+}
+
+// briefAt renders a brief for a project whose main holds config.
+func briefAt(t *testing.T, config string, task *Task) string {
+	m, _, _, p := noCommitRig(t, 0)
+	dir := m.C.WS.Project(p.Name)
+	os.MkdirAll(filepath.Join(dir, ".hive"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".hive/project.json"), []byte(config), 0o644)
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "seed"}} {
+		if out, err := core.Git(dir, args...); err != nil {
+			t.Fatal(out, err)
+		}
+	}
+	return m.renderBrief(task, p, "HEAD")
+}
+
+// A scored project's worker gets the person's goal as written, with no bar an
+// agent set; the Hive's setup brief and an unscored brief keep their done.
+func TestScoredBriefCarriesTheGoal(t *testing.T) {
+	goal := "The kernel is slow. Make it faster."
+	task := func() *Task {
+		return &Task{ID: "t1", Project: "p", Title: goal, Done: "score above 3.139", Known: "the kernel is in k.c"}
+	}
+	b := briefAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`, task())
+	if !strings.Contains(b, "## The ask\n\n"+goal+"\n") || strings.Contains(b, "3.139") || !strings.Contains(b, "as far as you can take it") {
+		t.Fatalf("scored brief:\n%s", b)
+	}
+	setup := task()
+	setup.From = "hive"
+	if b := briefAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`, setup); !strings.Contains(b, "score above 3.139") {
+		t.Fatalf("the Hive's own setup brief lost its done line:\n%s", b)
+	}
+	b = briefAt(t, `{"test":"true"}`, task())
+	if !strings.Contains(b, "## What done looks like\n\nscore above 3.139\n") {
+		t.Fatalf("unscored brief:\n%s", b)
 	}
 }
