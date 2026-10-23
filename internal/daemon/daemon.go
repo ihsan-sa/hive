@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -176,10 +177,11 @@ func (s *server) onEvent(e core.Event) {
 	if e.Kind != "alert.raised" {
 		return
 	}
-	var a struct{ Kind, Text string }
+	var a struct{ Kind, Text, Ref string }
 	e.Decode(&a)
 	s.mu.Lock()
-	s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text})
+	s.alerts = slices.DeleteFunc(s.alerts, func(x api.Alert) bool { return a.Ref != "" && x.Ref == a.Ref })
+	s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text, Ref: a.Ref})
 	if len(s.alerts) > 50 {
 		s.alerts = s.alerts[len(s.alerts)-50:]
 	}
@@ -572,6 +574,7 @@ func (s *server) state() api.State {
 		sw = sw[:10]
 	}
 	st.Sweeps = sw
+	st.StepBacks = a.Improve.StepBacks("")
 	st.Asks = a.C.Person.Open()
 	s.mu.Lock()
 	st.Alerts = append([]api.Alert{}, s.alerts...)

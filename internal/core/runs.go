@@ -49,6 +49,8 @@ type RunSpec struct {
 	Modules    []string          `json:"modules,omitempty"`    // modules an isolated run may see; others see all
 	Tools      []string          `json:"tools,omitempty"`      // explicit harness tool list
 	Inputs     map[string]string `json:"inputs,omitempty"`     // name -> content, placed read-only in /hive/run
+	OneTurn    bool              `json:"one_turn,omitempty"`   // done when a turn ends; nothing is added to its prompts, and it may only finish and report progress
+	Budget     float64           `json:"budget,omitempty"`     // USD the whole run may spend; 0 is no cap
 }
 
 // Finish is an agent's closing account.
@@ -321,7 +323,11 @@ func (rs *Runs) Start(s RunSpec) (Run, error) {
 	if s.Harness == "" {
 		s.Harness = "claude"
 	}
-	if _, err := harness.Get(s.Harness); err != nil {
+	h, err := harness.Get(s.Harness)
+	if err != nil {
+		return Run{}, err
+	}
+	if err := harness.Capped(h, s.Budget); err != nil {
 		return Run{}, err
 	}
 	for _, d := range []string{rs.ws.RunHost(s.ID), rs.ws.RunRO(s.ID), filepath.Join(rs.ws.RunBox(s.ID), "outbox"), filepath.Join(rs.ws.RunBox(s.ID), "inbox"), rs.ws.RunHome(s.ID)} {
@@ -659,6 +665,8 @@ func (rs *Runs) endTurn(r Run) {
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = "interrupted; retrying on its checkout" + suffix(errTail)
 		te.Queue = []string{"Your previous turn was interrupted. Your checkout and commits are intact. Continue where you left off."}
+	case tl.Result.Subtype == "error_max_budget_usd":
+		te.Status, te.Reason = StatusDone, "spent its budget"
 	case tl.Result.IsError:
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = "harness error; retrying" + suffix(Clip(tl.Result.Text, 200))
@@ -668,7 +676,7 @@ func (rs *Runs) endTurn(r Run) {
 		if cur.Finish.Status == "blocked" {
 			te.Status, te.Reason = StatusBlocked, Clip(cur.Finish.Account, 300)
 		}
-	case r.Schema != "" || r.ReadOnly:
+	case r.Schema != "" || r.ReadOnly || r.OneTurn:
 		te.Status = StatusDone
 	case r.Persistent:
 		te.Status = StatusIdle
@@ -848,6 +856,9 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 		Role: r.Role, SessionID: r.Session, Resume: resume, Model: r.Model, Tools: r.Tools, SystemText: r.System,
 		SystemFile: filepath.Join(in(mounts[1]), "system.md"), ReadOnly: r.ReadOnly, RunDir: in(mounts[1]), Schema: r.Schema, Sandboxed: sb.Isolated(),
 		MaxOutput: rs.ws.LoadConfig().MaxOutputTokens, ConfigDir: cfgDir,
+	}
+	if r.Budget > 0 {
+		t.MaxBudgetUSD = max(r.Budget-r.Cost, 0.01)
 	}
 	if sb.Isolated() {
 		t.SystemFile = "/hive/run/system.md"

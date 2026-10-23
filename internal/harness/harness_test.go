@@ -123,3 +123,17 @@ func TestClaudeMaxOutput(t *testing.T) {
 		t.Fatalf("env %q caps output with none set", e)
 	}
 }
+
+type uncapped struct{ Harness } // a harness with no CapsSpend
+
+func (uncapped) Name() string { return "uncapped" }
+
+// A run with a budget starts only on a harness that holds a turn to it.
+func TestCapped(t *testing.T) {
+	if Capped(Claude{}, 5) != nil || Capped(Fake{}, 5) != nil || Capped(uncapped{}, 0) != nil {
+		t.Fatal("a harness that caps spend, or a run with no budget, was refused")
+	}
+	if Capped(uncapped{}, 5) == nil {
+		t.Fatal("a budgeted run started on a harness that can't cap its spend")
+	}
+}

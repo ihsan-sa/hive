@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:needpackage, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:needpackage, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -28,6 +28,7 @@ var call = agentcli.Call
 // current directory and the dir it was given.
 func Main(argv []string) int {
 	var role, session, addDir string
+	var budget float64
 	resume, schema, readonly := false, false, false
 	for i := 0; i < len(argv); i++ {
 		switch argv[i] {
@@ -46,6 +47,9 @@ func Main(argv []string) int {
 		case "--add-dir":
 			i++
 			addDir = argv[i]
+		case "--max-budget-usd":
+			i++
+			fmt.Sscan(argv[i], &budget)
 		}
 	}
 	in, _ := io.ReadAll(os.Stdin)
@@ -71,6 +75,10 @@ func Main(argv []string) int {
 		return 0
 	}
 	emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "allowed", "resetsAt": time.Now().Add(5 * time.Hour).Unix(), "rateLimitType": "five_hour", "utilization": 0.1}})
+	if budget > 0 && strings.Contains(all, "FAKE:spendall") { // as Claude does at --max-budget-usd
+		emit(map[string]any{"type": "result", "subtype": "error_max_budget_usd", "is_error": true, "session_id": session, "total_cost_usd": budget + 0.01})
+		return 0
+	}
 
 	text, structured := "ok", any(nil)
 	var err error
@@ -97,13 +105,27 @@ func Main(argv []string) int {
 			_, err = call("finish", map[string]string{"status": "done", "account": "filed one ask"}, time.Minute)
 		}
 		text = "swept"
+	case "stepback":
+		// The goal steers the setup it designs; with no key it designs none.
+		for key, asks := range map[string][]string{"FAKE:stepbackwin": {"FAKE:raisescore"}, "FAKE:stepbacklose": {"FAKE:lowerscore"}, "FAKE:stepbackfail": {"FAKE:block"},
+			"FAKE:stepbackrig": {"FAKE:raisescore"}, "FAKE:stepbackspend": {"FAKE:spendall", "FAKE:raisescore"}} {
+			if strings.Contains(all, key) {
+				raw, _ := json.Marshal(map[string]any{"why": "FAKE: a simpler setup", "system": "", "asks": asks})
+				os.WriteFile(filepath.Join(os.Getenv("HIVE_BOX"), "experiment.json"), raw, 0o644)
+			}
+		}
+		_, err = call("finish", map[string]string{"status": "done", "account": "stepped back"}, time.Minute)
 	default:
 		_, err = call("finish", map[string]string{"status": "done", "account": "fake " + role + " done"}, time.Minute)
 	}
 	if err != nil {
 		text = "error: " + err.Error()
 	}
-	res := map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": text, "session_id": session, "total_cost_usd": 0.0}
+	cost := 0.0
+	if strings.Contains(all, "FAKE:paid") {
+		cost = 0.25
+	}
+	res := map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": text, "session_id": session, "total_cost_usd": cost}
 	if schema && structured != nil {
 		res["structured_output"] = structured
 	}

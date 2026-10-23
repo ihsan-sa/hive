@@ -59,7 +59,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Release = &release.Module{C: c}
 	a.Improve.OnKept = a.Release.AfterKept
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
-	for _, tick := range []func(){a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.KB.Tick, a.System.Tick, a.Risk.Tick, a.Projects.Tick, a.Runner.Tick} {
+	for _, tick := range []func(){a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Risk.Tick, a.Projects.Tick, a.Runner.Tick} {
 		a.Mods.Builtin(tick)
 	}
 	c.Person.Handle("release", a.Release.OnPerson)
@@ -71,6 +71,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 		}
 		return "started " + s.ID, nil
 	}})
+	a.System.Register(system.Job{Name: "improve.stepback", Fn: func() (string, error) { return a.Improve.RotateStepBacks(), nil }})
 	a.System.Register(system.Job{Name: "kb.file", Fn: func() (string, error) {
 		id, err := a.KB.File()
 		if err != nil {

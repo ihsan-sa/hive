@@ -31,9 +31,10 @@ jobs:
           GIT_AUTHOR_EMAIL: ci@localhost
           GIT_COMMITTER_NAME: ci
           GIT_COMMITTER_EMAIL: ci@localhost
-      # After the suite, so a cross-system vet failure never hides the Linux result.
+      # After the suite, so a cross-system vet failure never hides the Linux result,
+      # and always(), so a Linux failure never hides a cross-system one.
       - name: vet the other systems
-        if: matrix.os == 'ubuntu-latest'
+        if: always() && matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           GOOS=darwin go vet ./...

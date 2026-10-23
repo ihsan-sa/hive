@@ -238,6 +238,22 @@ func (e *Effects) Extract(p Project, r Run, base string) (string, error) {
 	return e.ExtractInto(e.ws.Project(p.Name), p.Name, r, base)
 }
 
+// Snapshot commits whatever a run left in its checkout, from inside the
+// sandbox with no network, and then takes it out as Extract does.
+func (e *Effects) Snapshot(p Project, r Run, base string) (string, error) {
+	sb, err := e.sandbox()
+	if err != nil {
+		return "", err
+	}
+	work := sandbox.Mount{Host: r.Checkout, Inside: "/work", RW: true}
+	git := "git -c safe.directory='*' -c core.hooksPath=/dev/null -c user.name=Hive -c user.email=hive@localhost -C " + shq(sandbox.InsidePath(sb, work))
+	script := git + " add -A && { " + git + " diff --cached --quiet || " + git + " commit -q --no-verify -m 'what the run left'; }"
+	if code, out, err := e.runSandboxed(sb, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute); err != nil || code != 0 {
+		return "", fmt.Errorf("could not commit what the run left: %v %s", err, Clip(out, 300))
+	}
+	return e.Extract(p, r, base)
+}
+
 // ExtractInto is Extract into any host-owned repository (the knowledge base uses it).
 func (e *Effects) ExtractInto(dir, lockKey string, r Run, base string) (string, error) {
 	sb, err := e.sandbox()

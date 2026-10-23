@@ -42,40 +42,41 @@ const (
 
 // Task is one piece of work from ask to merge.
 type Task struct {
-	ID        string     `json:"id"`
-	Project   string     `json:"project"`
-	Title     string     `json:"title"`
-	Done      string     `json:"done"`
-	Known     string     `json:"known"`
-	From      string     `json:"from"` // run id, person, or sweep run
-	Chat      string     `json:"chat,omitempty"`
-	Thread    string     `json:"thread,omitempty"`
-	Kind      string     `json:"kind"` // work | revert
-	Stage     string     `json:"stage"`
-	Reason    string     `json:"reason,omitempty"`
-	Issue     core.Issue `json:"issue"`
-	Worker    string     `json:"worker,omitempty"`
-	Base      string     `json:"base,omitempty"`
-	Branch    string     `json:"branch,omitempty"`
-	SHA       string     `json:"sha,omitempty"`
-	PR        core.PR    `json:"pr"`
-	Round     int        `json:"round"`
-	Conflicts int        `json:"conflicts"`
-	Reviews   int        `json:"reviews"`
-	Reviewer  string     `json:"reviewer,omitempty"`
-	Findings  string     `json:"findings,omitempty"`
-	MergeSHA  string     `json:"merge_sha,omitempty"`
-	RevertOf  string     `json:"revert_of,omitempty"`  // task id
-	RevertSHA string     `json:"revert_sha,omitempty"` // the merge being reverted
-	Lesson    string     `json:"lesson,omitempty"`
-	Failures  int        `json:"failures"`
-	CloseFail int        `json:"close_fail,omitempty"` // failed tries to close the issue
-	Attempt   int        `json:"attempt"` // fresh workers handed this task
-	Retry     time.Time  `json:"retry,omitempty"`
-	IssueOpen bool       `json:"issue_open,omitempty"` // done, but its issue is still to close
-	Log       []Entry    `json:"log,omitempty"`
-	Created   time.Time  `json:"created"`
-	Updated   time.Time  `json:"updated"`
+	ID        string            `json:"id"`
+	Project   string            `json:"project"`
+	Title     string            `json:"title"`
+	Done      string            `json:"done"`
+	Known     string            `json:"known"`
+	From      string            `json:"from"` // run id, person, or sweep run
+	Chat      string            `json:"chat,omitempty"`
+	Thread    string            `json:"thread,omitempty"`
+	Kind      string            `json:"kind"` // work | revert
+	Stage     string            `json:"stage"`
+	Reason    string            `json:"reason,omitempty"`
+	Issue     core.Issue        `json:"issue"`
+	Worker    string            `json:"worker,omitempty"`
+	Base      string            `json:"base,omitempty"`
+	Branch    string            `json:"branch,omitempty"`
+	SHA       string            `json:"sha,omitempty"`
+	PR        core.PR           `json:"pr"`
+	Round     int               `json:"round"`
+	Conflicts int               `json:"conflicts"`
+	Reviews   int               `json:"reviews"`
+	Reviewer  string            `json:"reviewer,omitempty"`
+	Findings  string            `json:"findings,omitempty"`
+	MergeSHA  string            `json:"merge_sha,omitempty"`
+	RevertOf  string            `json:"revert_of,omitempty"`  // task id
+	RevertSHA string            `json:"revert_sha,omitempty"` // the merge being reverted
+	Lesson    string            `json:"lesson,omitempty"`
+	Inputs    map[string]string `json:"inputs,omitempty"` // files its worker reads in $HIVE_RUN, kept off the issue
+	Failures  int               `json:"failures"`
+	CloseFail int               `json:"close_fail,omitempty"` // failed tries to close the issue
+	Attempt   int               `json:"attempt"`              // fresh workers handed this task
+	Retry     time.Time         `json:"retry,omitempty"`
+	IssueOpen bool              `json:"issue_open,omitempty"` // done, but its issue is still to close
+	Log       []Entry           `json:"log,omitempty"`
+	Created   time.Time         `json:"created"`
+	Updated   time.Time         `json:"updated"`
 }
 
 // Label is the title clipped for a heading, an issue, a PR or a message; the
@@ -173,13 +174,14 @@ func (m *Module) List(fn func(Task) bool) []Task {
 
 // Brief files an ask.
 type Brief struct {
-	Project string `json:"project"`
-	Title   string `json:"title"`
-	Done    string `json:"done"`
-	Known   string `json:"known"`
-	From    string `json:"from"`
-	Chat    string `json:"chat"`
-	Thread  string `json:"thread"`
+	Project string            `json:"project"`
+	Title   string            `json:"title"`
+	Done    string            `json:"done"`
+	Known   string            `json:"known"`
+	From    string            `json:"from"`
+	Chat    string            `json:"chat"`
+	Thread  string            `json:"thread"`
+	Inputs  map[string]string `json:"-"`
 }
 
 // File creates a task from a brief.
@@ -202,7 +204,7 @@ func (m *Module) File(b Brief) (Task, error) {
 		return Task{}, fmt.Errorf("no project %q", b.Project)
 	}
 	t := &Task{ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
-		From: b.From, Chat: b.Chat, Thread: b.Thread, Kind: "work", Stage: StageNew, Created: time.Now().UTC()}
+		From: b.From, Chat: b.Chat, Thread: b.Thread, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Created: time.Now().UTC()}
 	m.save(t, "filed by "+b.From)
 	return *t, nil
 }
@@ -364,7 +366,7 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 			return err
 		}
 		spec := m.Agents.Spec(id, "worker", p.Name, dir, m.renderBrief(t, p, base))
-		spec.Task = t.ID
+		spec.Task, spec.Inputs = t.ID, t.Inputs
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
 		}
