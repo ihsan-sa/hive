@@ -63,15 +63,15 @@ func (h *hive) chatExists(id string) func(api.State) bool {
 	}
 }
 
-// TestHarnesses: claude and fake are accepted; codex and an unknown name are
+// TestHarnesses: claude, codex and fake are accepted; an unknown name is
 // refused with a clear message when set and when the Hive starts, never at
-// the first agent.
+// the first agent. (Codex became a harness in #30, after the brief said v1 refuses it.)
 func TestHarnesses(t *testing.T) {
 	t.Parallel()
 	h := start(t)
 	cfg := h.ws.LoadConfig()
-	refused := map[string]string{"codex": "Codex is not in v1", "nope": `unknown harness "nope"`}
-	for _, name := range []string{"claude", "fake", "codex", "nope"} {
+	refused := map[string]string{"nope": `unknown harness "nope"`}
+	for _, name := range []string{"claude", "codex", "fake", "nope"} {
 		c := cfg
 		c.Harness = name
 		err := h.c.Do("POST", "/api/config", c, nil)
@@ -80,9 +80,9 @@ func TestHarnesses(t *testing.T) {
 		}
 	}
 	c := cfg
-	c.Projects = map[string]core.ProjectSettings{"x": {Harness: "codex"}}
+	c.Projects = map[string]core.ProjectSettings{"x": {Harness: "nope"}}
 	if err := h.c.Do("POST", "/api/config", c, nil); err == nil || !strings.Contains(err.Error(), "project x") {
-		t.Errorf("a project's codex harness was accepted: %v", err)
+		t.Errorf("a project's unknown harness was accepted: %v", err)
 	}
 	h.post("/api/config", cfg, nil)
 

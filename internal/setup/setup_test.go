@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -66,5 +67,51 @@ func TestCodexReport(t *testing.T) {
 	os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
 	if msg, err := CodexReport(ws, ""); err != nil || msg == "" {
 		t.Fatalf("a working codex: %q %v", msg, err)
+	}
+}
+
+// A Codex login made with an API key has no access token to hand a turn, so
+// it is refused with a reason rather than joining the pool.
+func TestAddLoginRefusesCodexAPIKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script stands in for codex")
+	}
+	ws := core.Workspace{Root: t.TempDir()}
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	dir := filepath.Join(ws.LoginsDir("codex"), "work")
+	os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\necho '{\"OPENAI_API_KEY\":\"sk-x\",\"tokens\":null}' > \"$CODEX_HOME/auth.json\"\n"), 0o755)
+	if err := AddLogin(ws, "codex", "work"); err == nil || !strings.Contains(err.Error(), "ChatGPT") {
+		t.Fatalf("an API-key login: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("an API-key login left its folder: %v", err)
+	}
+	os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\necho '{\"tokens\":{\"access_token\":\"a\"}}' > \"$CODEX_HOME/auth.json\"\n"), 0o755)
+	if err := AddLogin(ws, "codex", "work"); err != nil {
+		t.Fatalf("a ChatGPT login: %v", err)
+	}
+}
+
+// A codex on PATH that can't run in the sandbox fails doctor only when this
+// Hive uses Codex.
+func TestCodexReportIgnoresAnUnusedCodex(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Codex is checked inside WSL there")
+	}
+	ws := core.Workspace{Root: t.TempDir()}
+	cfg := ws.LoadConfig()
+	cfg.Sandbox, cfg.BareAccepted = "bare", "now"
+	ws.SaveConfig(cfg)
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	if msg, err := CodexReport(ws, ""); msg != "" || err != nil {
+		t.Fatalf("an unused, broken codex: %q %v", msg, err)
+	}
+	cfg.Projects = map[string]core.ProjectSettings{"p": {Harness: "codex"}}
+	ws.SaveConfig(cfg)
+	if _, err := CodexReport(ws, ""); err == nil {
+		t.Fatal("a project on a broken codex passed")
 	}
 }

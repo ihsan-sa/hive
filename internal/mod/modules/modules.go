@@ -115,7 +115,14 @@ func readSource(dir string) (Source, bool) {
 		return Source{}, false
 	}
 	var s Source
-	return s, json.Unmarshal(raw, &s) == nil
+	if json.Unmarshal(raw, &s) != nil {
+		return s, false
+	}
+	var keys map[string]json.RawMessage
+	if json.Unmarshal(raw, &keys) == nil && string(keys["projects"]) == "null" {
+		s.Projects = []string{} // v0.1.0 wrote null for "no project"; that is not "no record"
+	}
+	return s, true
 }
 
 func writeSource(dir string, s Source) error {
