@@ -1,5 +1,5 @@
 // Package harness is the adapter seam between the core and a coding harness
-// (Claude Code today; Codex is the first to add). A harness turns a Turn into
+// (Claude Code and OpenAI's Codex). A harness turns a Turn into
 // a command line and turns its output stream into Events.
 package harness
 
@@ -22,6 +22,9 @@ type Turn struct {
 	RunDir     string   // the run's inputs; a read-only turn may read them besides its checkout
 	Tools      []string // explicit tool list; nil means the harness default
 	Schema     string   // JSON schema for a structured final answer
+	SchemaFile string   // the same schema as a path the agent process sees
+	ConfigDir  string   // the harness's own config folder the Hive made for this turn, if any
+	Writable   []string // folders besides the checkout the agent may write
 	Sandboxed  bool     // inside a Hive sandbox (permission prompts are meaningless there)
 	MaxOutput  int      // cap on one reply's tokens; 0 is the harness default
 }
@@ -92,7 +95,7 @@ func Get(name string) (Harness, error) {
 	case "fake":
 		return Fake{}, nil
 	case "codex":
-		return nil, fmt.Errorf("harness codex: the adapter seam exists but Codex is not in v1")
+		return Codex{}, nil
 	}
 	return nil, fmt.Errorf("unknown harness %q", name)
 }
