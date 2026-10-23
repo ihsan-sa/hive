@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -161,6 +162,13 @@ type turnEnded struct {
 	Reason      string          `json:"reason,omitempty"`
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
 	Queue       []string        `json:"queue,omitempty"`
+}
+
+// egressRefused is the hosts a turn's egress proxy refused.
+type egressRefused struct {
+	ID    string   `json:"id"`
+	Turn  int      `json:"turn"`
+	Hosts []string `json:"hosts"`
 }
 
 type runNote struct {
@@ -502,6 +510,9 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 			case "init":
 				tl.SessionLive = true
 			case "result":
+				if tl.Result != nil && ev.Result != nil { // a second verdict in one turn: trust neither
+					ev.Result.Structured = nil
+				}
 				tl.Result = ev.Result
 			case "ratelimit":
 				tl.Limit = ev.RateLimit
@@ -518,6 +529,11 @@ func (rs *Runs) endTurn(r Run) {
 	tl := rs.ReadTurn(r, r.Turn)
 	if tl.Limit != nil {
 		rs.append("plan.usage", Plan{Harness: r.Harness, Limit: *tl.Limit, At: time.Now().UTC()})
+	}
+	if raw, err := os.ReadFile(rs.ws.TurnOut(r.ID, r.Turn) + ".egress"); err == nil && len(raw) > 0 {
+		hosts := strings.Fields(string(raw))
+		sort.Strings(hosts)
+		rs.append("run.egress_refused", egressRefused{ID: r.ID, Turn: r.Turn, Hosts: slices.Compact(hosts)})
 	}
 	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Result: tl.Result}
 	cur, _ := rs.Get(r.ID)
@@ -719,10 +735,14 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	if !sb.Isolated() && h.Program() == "hive" && len(tools) > 0 {
 		argv[0] = tools[0]
 	}
+	allow := rs.ws.LoadConfig().Egress.For(r.Role)
+	if len(allow) > 0 {
+		allow = append(append([]string{}, allow...), harness.APIHosts(h)...)
+	}
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
 		Stdin: promptFile, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
-		Network: true, UID: os.Getuid(), GID: os.Getgid(),
+		Network: true, Allow: allow, UID: os.Getuid(), GID: os.Getgid(),
 	}, nil
 }
 
