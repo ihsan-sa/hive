@@ -10,6 +10,7 @@ A worker asks with `hive agent warden --want --why --steps --tier T1|T2|T3`. `co
 - **T2** (outside but recoverable, or load-bearing inside): a warden. At autonomy 1 the person says yes first; at autonomy 3 the warden settles it and the person is told after.
 - **T3** (outside and hard to undo): a warden, which always ends in a tribunal.
 - **Always the person** (`core.AlwaysPerson`: money, credentials, opening the machine to the network, outward in their name): straight to the person, at any tier and autonomy. `core.CeilingHit` spots these by keywords and credential-store paths in the text, so it is a best-effort check that errs toward the person: an agent that hides the words (a variable, base64) gets past it.
+- **The person's floor** (`floor` in `.hive/config.json`, empty by default): names never touched, paths no script writes, secret globs, service roots. A step whose text touches an entry goes to the person the same way, whatever a warden or panel would say (`core.FloorHit`: an entry with `*?[` matches a word or its last path element, any other entry matches as written). It is the same best-effort text check, so write entries as scripts would spell them (`.ssh/`, not `~/.ssh`).
 
 A decision that would otherwise wait in the person's queue goes the same way through `risk.Weigh`: a merge that changes protected paths (goals, the score, settings; the ask quotes their diff) and a module install. At autonomy 1, or when the ceiling's words show up, the person decides as before. Otherwise a warden weighs it as T2 and may call a tribunal. No script runs: its `do` or decline answers the person's ask (merge or leave open, install or decline), so the ask's own handler acts, and a "told" item tells the person after. The worker that wrote a change never weighs it. A warden that ends without deciding hands the ask to the person.
 
@@ -19,19 +20,23 @@ An agent (`modules/agents/warden.md`) spawned per request in a scratch directory
 
 ## Tribunal
 
-Three read-only runs (`modules/agents/tribunal.md`) spread over the `tribunal_models` setting, so the panel spans models where the config lists more than one (empty falls back to the main model). Each gets the step, the script (`script.sh`) and the warden's brief, investigates and votes, as a structured final answer (`VoteSchema`, the way the reviewer gives its verdict, since a read-only turn has no shell); in round 2 each sees the others' votes and reasons and votes again. A seat that fails to reopen for round 2 three times counts as a decline, so the request still settles. A majority of final votes approves. A decline with a large gain becomes a person ask whose "run" runs that same script.
+Three read-only, isolated runs (`modules/agents/tribunal.md`; no other project and no module in view, only the case) spread over the `tribunal_models` setting, so the panel spans models where the config lists more than one (empty falls back to the main model). A seat is a model name on the project's harness, or `{"harness": ..., "model": ...}` to sit on another; a harness the Hive doesn't have is refused when the config is saved and when a panel convenes. Each gets the step, the script (`script.sh`) and the warden's brief, investigates and votes, as a structured final answer (`VoteSchema`, the way the reviewer gives its verdict, since a read-only turn has no shell); in round 2 each sees the others' votes and reasons and votes again. A vote counts only as exactly one clean structured answer: a second result in the turn's output, a field the schema doesn't name or a wrong type is no vote, which is a decline. A seat that fails to reopen for round 2 three times counts as a decline, so the request still settles. A majority of final votes approves. A decline with a large gain becomes a person ask whose "run" runs that same script.
 
 ## Point of effect
 
 `execute` runs in the daemon (the effects process), never in an agent's sandbox:
 
 1. The script must match the sha256 pinned when it was weighed, or it is refused.
-2. `core.CeilingGuard` refuses an always-the-person script unless the person said yes, whoever approved it; the step becomes a person ask that keeps the warden's or tribunal's reasoning. It is the same best-effort text check as above, a last check rather than enforcement.
+2. `core.CeilingGuard` refuses an always-the-person or floor script unless the person said yes, whoever approved it; the step becomes a person ask that keeps the warden's or tribunal's reasoning. It is the same best-effort text check as above, a last check rather than enforcement.
 3. The narrow grant: `sh -c <script>` in `.hive/risk/<id>` (Git for Windows' `sh` on Windows), with a 10 minute timeout that kills the script's whole process group (on Windows it ends only `sh`, whose children may outlive it), and only PATH, HOME, USER, LANG and TMPDIR from the daemon's environment, so tokens in that environment never reach the script.
 4. The script runs as the daemon's user and can read that user's files, so its output never goes back to the agent: the agent hears only done or failed, and the output is kept on the request for the person. A scratch HOME would not close this, since a script can name the person's home outright, and it would break steps that need the person's own tool logins.
 
 A restart while a step runs marks it failed and doesn't run it again.
 
 A worker that finishes with no commits finishes its task done when every step it asked for ran and succeeded, and the person is told what ran; if any was declined or failed, the task is blocked with each step's state.
+
+## Egress
+
+Every sandboxed run reaches the network only through the Hive's egress proxy, which refuses this machine and private ranges. `egress` in `.hive/config.json` narrows it: `default` is the hosts every run may reach, and `roles.<role>` (warden, tribunal, worker, lead, ...) replaces it for that role. A run's harness API host (`api.anthropic.com` for Claude) is added to any list. With no list a run reaches every public host, as before. A host matches itself and its subdomains. A refused host is recorded next to the turn's output and journalled as `run.egress_refused` when the turn ends. Sandboxed runs can't write the config, so the list changes only by the person's hand or an approved step.
 
 Installing a module stays a fixed `git clone` into `.modules/` on the person's "install".

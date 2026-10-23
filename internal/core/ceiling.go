@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -59,6 +60,45 @@ func CeilingHit(texts ...string) string {
 	return ""
 }
 
+// FloorHit returns the first entry of the person's floor list the texts
+// touch, or "". An entry with a glob character (*?[) matches a word of the
+// texts or its last path element; any other entry matches as written.
+func FloorHit(floor []string, texts ...string) string {
+	t := strings.Join(texts, "\n")
+	words := strings.FieldsFunc(t, func(r rune) bool { return strings.ContainsRune(" \t\n\"'`=;&|()<>", r) })
+	for _, f := range floor {
+		if f == "" {
+			continue
+		}
+		if !strings.ContainsAny(f, "*?[") {
+			if strings.Contains(t, f) {
+				return f
+			}
+			continue
+		}
+		for _, w := range words {
+			a, _ := path.Match(f, w)
+			b, _ := path.Match(f, path.Base(w))
+			if a || b {
+				return f
+			}
+		}
+	}
+	return ""
+}
+
+// Ceiling says why the texts are always the person's: what an AlwaysPerson
+// step does, or the floor entry they touch. "" means neither.
+func Ceiling(floor []string, texts ...string) string {
+	if k := CeilingHit(texts...); k != "" {
+		return AlwaysPerson[k]
+	}
+	if f := FloorHit(floor, texts...); f != "" {
+		return fmt.Sprintf("touches %q, which your floor list names", f)
+	}
+	return ""
+}
+
 // Tier normalises a risk tier (spec 7): T1 inside the Hive, the worker weighs
 // it; T2 outside but recoverable, or load-bearing inside, a warden weighs it;
 // T3 outside and hard to undo, a tribunal weighs it. Unknown is T2.
@@ -70,7 +110,7 @@ func Tier(s string) string {
 	return "T2"
 }
 
-// Route says who weighs a step: "person" (the ceiling), "self" (T1),
+// Route says who weighs a step: "person" (the ceiling or the floor), "self" (T1),
 // "person-first" (autonomy 1 asks before anything outside the project),
 // "warden" (T2) or "tribunal" (T3). Autonomy 3 routes like 2 and tells the
 // person after. The setting moves lines; it never lifts the ceiling.
@@ -89,11 +129,11 @@ func Route(tier string, autonomy int, ceiling string) string {
 }
 
 // CeilingGuard is checked at the point of effect, on the exact script that
-// would run: a step the ceiling names runs only on the person's own yes,
-// whatever a warden or panel decided.
-func CeilingGuard(script string, personApproved bool) error {
-	if k := CeilingHit(script); k != "" && !personApproved {
-		return fmt.Errorf("refused: this step %s, which is always the person's to decide", AlwaysPerson[k])
+// would run: a step the ceiling or the person's floor names runs only on the
+// person's own yes, whatever a warden or panel decided.
+func CeilingGuard(script string, floor []string, personApproved bool) error {
+	if why := Ceiling(floor, script); why != "" && !personApproved {
+		return fmt.Errorf("refused: this step %s, which is always the person's to decide", why)
 	}
 	return nil
 }

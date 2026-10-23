@@ -90,3 +90,21 @@ func TestProbeBothPaths(t *testing.T) {
 	}
 	t.Logf("%d of 2 sandbox paths ran on this host", ran)
 }
+
+// A hidden directory becomes an empty read-only tmpfs and a hidden file
+// /dev/null, both after the mount that exposes them.
+func TestBwrapArgsHide(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "daemon.json")
+	os.WriteFile(file, []byte("{}"), 0o600)
+	a := initArgs{Spec: Spec{Argv: []string{"sh"}, Cwd: "/work", Mounts: []Mount{
+		{Host: dir, Inside: "/hive/state"},
+		{Host: dir, Inside: "/hive/state/logins", Hide: true},
+		{Host: file, Inside: "/hive/state/daemon.json", Hide: true},
+	}}}
+	got := strings.Join(bwrapArgs(a, "/h/hive"), " ")
+	want := "--ro-bind " + dir + " /hive/state --tmpfs /hive/state/logins --remount-ro /hive/state/logins --ro-bind /dev/null /hive/state/daemon.json"
+	if !strings.Contains(got, want) {
+		t.Errorf("bwrap args lack %q:\n%s", want, got)
+	}
+}

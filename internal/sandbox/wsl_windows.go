@@ -95,8 +95,8 @@ func (w *WSL) Start(s Spec) (Proc, error) {
 	}
 	hostStdout := s.Stdout
 	s = w.translate(s)
-	specPath := hostStdout + ".sandbox.json"
-	if err := WriteSpec(specPath, s); err != nil {
+	specPath, err := writeTempSpec(s)
+	if err != nil {
 		return Proc{}, err
 	}
 	argv := []string{"wsl.exe", "-d", w.Distro, "--exec", WinToWSL(w.HiveLinux), "sandbox-exec", "--spec", WinToWSL(specPath)}
@@ -165,8 +165,8 @@ func (w *WSL) Run(s Spec, timeout time.Duration) (int, error) {
 	}
 	hostStdout := s.Stdout
 	s = w.translate(s)
-	specPath := hostStdout + ".sandbox.json"
-	if err := WriteSpec(specPath, s); err != nil {
+	specPath, err := writeTempSpec(s)
+	if err != nil {
 		return -1, err
 	}
 	argv := []string{"wsl.exe", "-d", w.Distro, "--exec", WinToWSL(w.HiveLinux), "sandbox-exec", "--spec", WinToWSL(specPath)}
