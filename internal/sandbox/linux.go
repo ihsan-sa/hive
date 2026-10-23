@@ -146,7 +146,13 @@ func Exec(specPath string) int {
 		if err != nil {
 			return fail(err)
 		}
-		defer ServeEgress(ln).Close()
+		var refused io.Writer
+		if s.Stdout != "" {
+			if f, err := os.OpenFile(s.Stdout+".egress", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+				refused = f
+			}
+		}
+		defer ServeEgress(ln, s.Allow, refused).Close()
 	}
 	for _, t := range s.Tools {
 		p, err := findTool(t)

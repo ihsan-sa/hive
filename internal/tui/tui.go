@@ -336,6 +336,12 @@ func (m *model) keyDetail(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "esc", "left", "backspace":
 		m.stack = m.stack[:len(m.stack)-1]
+		return m, nil
+	}
+	if d.kind == "module" { // ↑↓ pick a project and space grants, rather than scroll
+		return m.keyDetailAction(d, k.String())
+	}
+	switch k.String() {
 	case "up", "k":
 		if d.scroll > 0 {
 			d.scroll--
@@ -465,6 +471,9 @@ func (m *model) View() string {
 func (m *model) footer() string {
 	if m.composing || m.editing {
 		return "enter send · esc cancel"
+	}
+	if len(m.stack) > 0 && m.stack[len(m.stack)-1].kind == "module" {
+		return "↑↓ project · space grant or remove · esc back · q quit"
 	}
 	if len(m.stack) > 0 {
 		return "↑↓ scroll · esc back · tab section · q quit (the Hive keeps running)"

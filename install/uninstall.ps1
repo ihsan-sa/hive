@@ -1,5 +1,5 @@
 # Uninstall the Hive (your folder, ~\hive by default, is left alone):
-#   gh api repos/ihsan-sa/hive-standalone-build/contents/install/uninstall.ps1 -H "Accept: application/vnd.github.raw" | Out-String | iex
+#   irm https://hive.ihsan.cc/uninstall.ps1 | iex
 $cmd = if ($env:HIVE_CMD) { $env:HIVE_CMD } else { 'hive-v0' }
 $dir = if ($env:HIVE_BIN_DIR) { $env:HIVE_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\$cmd" }
 $exe = Join-Path $dir "$cmd.exe"

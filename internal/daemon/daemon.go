@@ -337,6 +337,9 @@ func (s *server) routes() http.Handler {
 		if err := checkHarness(c); err != nil {
 			return nil, err
 		}
+		if err := c.Check(); err != nil {
+			return nil, err
+		}
 		if err := a.C.WS.SaveConfig(c); err != nil {
 			return nil, err
 		}
