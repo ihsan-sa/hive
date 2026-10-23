@@ -397,6 +397,8 @@ func (m *model) keyDetailAction(d *detail, key string) (tea.Model, tea.Cmd) {
 				allow := !contains(mod.Projects, p)
 				return m, m.post("/api/module/access", map[string]any{"module": mod.Name, "project": p, "allow": allow}, "access updated")
 			}
+		case "r":
+			return m, m.post("/api/module/review", map[string]any{"module": mod.Name}, "its code will be read again")
 		}
 	}
 	return m, nil
@@ -499,7 +501,7 @@ func (m *model) viewDetail(d *detail) []string {
 			}
 			lines = append(lines, line)
 		}
-		lines = append(lines, "", stDim.Render("space grant or remove"))
+		lines = append(lines, "", stDim.Render("space grant or remove · r read its code again"))
 		return window(lines, top+d.sel, m.bodyHeight())
 	default:
 		lines = append(lines, wrap(d.text, w)...)
@@ -660,6 +662,7 @@ func (m *model) settings() []setting {
 		{label: "autonomy", value: strconv.Itoa(c.Autonomy) + "  " + autonomyText(c.Autonomy), key: "autonomy"},
 		{label: "harness", value: c.Harness, key: "harness"},
 		{label: "model", value: c.Model, key: "model"},
+		{label: "lead model", value: c.LeadModel, key: "lead_model"},
 		{label: "reviewer model", value: c.ReviewerModel, key: "reviewer_model"},
 		{label: "review rounds", value: strconv.Itoa(c.ReviewRounds), key: "review_rounds"},
 		{label: "sandbox", value: sandboxVal, key: "sandbox"},
@@ -751,6 +754,8 @@ func (m *model) saveSetting(v string) tea.Cmd {
 		c.Harness = v
 	case key == "model":
 		c.Model = v
+	case key == "lead_model":
+		c.LeadModel = v
 	case key == "reviewer_model":
 		c.ReviewerModel = v
 	case key == "review_rounds":

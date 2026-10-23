@@ -207,15 +207,11 @@ func (m *Module) File(b Brief) (Task, error) {
 		return Task{}, errors.New("a brief needs a title")
 	}
 	if b.Project == "" {
-		ps := m.C.Projects.List()
-		if len(ps) != 1 {
-			names := []string{}
-			for _, p := range ps {
-				names = append(names, p.Name)
-			}
-			return Task{}, fmt.Errorf("say which project (one of: %s)", strings.Join(names, ", "))
+		names := []string{}
+		for _, p := range m.C.Projects.List() {
+			names = append(names, p.Name)
 		}
-		b.Project = ps[0].Name
+		return Task{}, fmt.Errorf("say which project (one of: %s)", strings.Join(names, ", "))
 	}
 	if _, ok := m.C.Projects.Get(b.Project); !ok {
 		return Task{}, fmt.Errorf("no project %q", b.Project)
@@ -234,6 +230,15 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 	b.From = r.ID
 	if b.Project == "" {
 		b.Project = r.Project
+	}
+	// An agent with no project of its own names the target: the only project
+	// is not a safe guess, since the ask may be a module or about the Hive.
+	if b.Project == "" {
+		names := []string{}
+		for _, p := range m.C.Projects.List() {
+			names = append(names, p.Name)
+		}
+		return nil, fmt.Errorf("say which project with --project (one of: %s) and tell the person why; a new module gets a project of its own first (create_project), then install_module --project", strings.Join(names, ", "))
 	}
 	b.Chat, b.Thread = m.thread(r)
 	t, err := m.File(b)

@@ -174,7 +174,7 @@ func TestDigestOfOneProject(t *testing.T) {
 		said(t, m, "w-"+name, name, "SAID-"+name)
 		m.C.J.MustAppend("run.turn_ended", map[string]any{"id": "w-" + name, "turn": 1, "status": core.StatusBlocked, "reason": "BLOCKED-" + name})
 		m.Chat.EnsureProject(name)
-		m.Chat.Post("project:"+name, "", "CHAT-"+name)
+		m.Chat.Post("project:"+name, "", "", "CHAT-"+name)
 	}
 	all, one := m.Digest(0, ""), m.Digest(0, "p")
 	for _, s := range []string{"## Project q", "SAID-q notes", "BLOCKED-q", "CHAT-q"} {

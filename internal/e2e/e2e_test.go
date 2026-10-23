@@ -792,8 +792,14 @@ func TestHelperShips(t *testing.T) {
 	if tk.Issue.Number != 0 || tk.PR.Number == 0 || tk.MergeSHA == "" || tk.From != parent.Worker {
 		t.Fatalf("helper task %+v, parent %+v", tk, parent)
 	}
-	if _, err := core.Git(h.forge.RepoPath("me/helpers"), "merge-base", "--is-ancestor", tk.SHA, "main"); err != nil {
-		t.Fatalf("the helper's commit %s is not on main: %v", tk.SHA, err)
+	// Merges squash, so the helper's commit itself isn't on main; its change is.
+	repo := h.forge.RepoPath("me/helpers")
+	files, err := core.Git(repo, "diff", "--name-only", tk.Base, tk.SHA)
+	if err != nil || strings.TrimSpace(files) == "" {
+		t.Fatalf("the helper's change %s..%s: %q %v", tk.Base, tk.SHA, files, err)
+	}
+	if out, err := core.Git(repo, append([]string{"diff", "--stat", tk.SHA, "main", "--"}, strings.Fields(files)...)...); err != nil || strings.TrimSpace(out) != "" {
+		t.Fatalf("the helper's change is not on main: %s %v", out, err)
 	}
 	if n := h.forge.Issues("me/helpers"); n != 1 {
 		t.Fatalf("issues: %d, want the parent's only", n)

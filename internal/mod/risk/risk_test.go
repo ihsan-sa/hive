@@ -40,6 +40,19 @@ func newRig(t *testing.T, autonomy int) *rig {
 		t.Fatal(err)
 	}
 	m := New(c, mods, &agents.Agents{C: c, Mod: mods})
+	// A step still running would write to the journal after Close; cleanups
+	// run last first, so this wait comes before it.
+	t.Cleanup(func() {
+		for i := 0; i < 250; i++ {
+			m.mu.Lock()
+			n := len(m.busy)
+			m.mu.Unlock()
+			if n == 0 {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
 	w, err := c.Runs.Start(core.RunSpec{Role: "worker", Harness: "fake", Checkout: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -466,6 +479,24 @@ func TestTribunalThatCannotStartFails(t *testing.T) {
 	}
 	if got, _ := g.m.get(req.ID); got.State != "failed" || !g.told("no tribunal") {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// The install clones on the host, so a path from inside the lead's sandbox
+// is refused with the way that works, before it reaches the person.
+func TestInstallRefusesSandboxPath(t *testing.T) {
+	g := newRig(t, 2)
+	lead, err := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, url := range []string{"file:///work/wordcount", "/hive/projects/wordcount"} {
+		if _, err := g.call(lead, "install_module", map[string]string{"url": url}); err == nil || !strings.Contains(err.Error(), "--project") {
+			t.Errorf("%s: want a refusal pointing at --project, got %v", url, err)
+		}
+	}
+	if asks := g.c.Person.Open(); len(asks) != 0 {
+		t.Fatalf("a refused install reached the person: %+v", asks)
 	}
 }
 

@@ -43,9 +43,38 @@ func TestNestedMountPointsExist(t *testing.T) {
 	}
 }
 
+// startSB records each turn's command instead of starting it.
+type startSB struct {
+	sandbox.Bare
+	args *[]string
+}
+
+func (s startSB) Start(spec sandbox.Spec) (sandbox.Proc, error) {
+	*s.args = spec.Argv
+	return sandbox.Proc{}, nil
+}
+
+// A lead is long-lived, so its next turn takes the model the settings name
+// now, and the run says which model that turn is on.
+func TestLeadFollowsModelSetting(t *testing.T) {
+	c, _ := testHive(t)
+	var args []string
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return startSB{args: &args}, nil }
+	c.Runs.ModelFor = func(Run) string { return "opus" }
+	r, err := c.Runs.Start(RunSpec{ID: "lead1", Role: "lead", Harness: "claude", Model: "sonnet", Persistent: true, Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, c.WS.LoadConfig())
+	got, _ := c.Runs.Get("lead1")
+	if got.Model != "opus" || !strings.Contains(strings.Join(args, " "), "opus") {
+		t.Fatalf("model %q, args %q: want the turn on opus", got.Model, args)
+	}
+}
+
 // Every run but an isolated project's reads the whole .hive at /hive/state,
-// writes none of it, and finds the daemon's token and the stored logins
-// covered; each cover has its mount point in the read-only state.
+// writes none of it, and finds the daemon's token, the stored logins and the
+// modules' homes covered; each cover has its mount point in the read-only state.
 func TestRunsReadTheStateButNoSecret(t *testing.T) {
 	c, _ := testHive(t)
 	os.WriteFile(c.WS.DaemonFile(), []byte(`{"token": "t"}`), 0o600)
@@ -67,7 +96,7 @@ func TestRunsReadTheStateButNoSecret(t *testing.T) {
 			hidden[strings.TrimPrefix(m.Inside, "/hive/state/")] = true
 		}
 	}
-	if !state || !hidden["logins"] || !hidden["daemon.json"] {
+	if !state || !hidden["logins"] || !hidden["modules"] || !hidden["daemon.json"] {
 		t.Fatalf("state mounted %v, covered %v: %+v", state, hidden, spec.Mounts)
 	}
 	if !slices.Contains(spec.Env, "HIVE_STATE=/hive/state") {

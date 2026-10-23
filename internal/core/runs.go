@@ -146,6 +146,9 @@ type Runs struct {
 	tokens  TokenSource
 	tools   func() []string // host programs to expose (hive binary for the sandbox's OS)
 	ops     *Ops
+	// ModelFor is the model a persistent run's next turn takes, so a lead
+	// follows a changed setting; empty keeps the run's own.
+	ModelFor func(Run) string
 
 	mu    sync.Mutex
 	runs  map[string]*Run
@@ -198,6 +201,7 @@ type turnStarted struct {
 	Proc      proc.Handle `json:"proc"`
 	Delivered int         `json:"delivered"`
 	Resume    bool        `json:"resume"`
+	Model     string      `json:"model,omitempty"`
 	Login     string      `json:"login,omitempty"`
 }
 
@@ -262,6 +266,9 @@ func (rs *Runs) apply(e Event) {
 		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login
 		if t.Session != "" {
 			r.Session = t.Session
+		}
+		if t.Model != "" {
+			r.Model = t.Model
 		}
 		r.Waiting = ""
 		if t.Delivered <= len(r.Pending) {
@@ -819,6 +826,11 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		prompt = "Continue."
 	}
 	r.Session = session
+	if rs.ModelFor != nil && r.Persistent {
+		if m := rs.ModelFor(r); m != "" {
+			r.Model = m
+		}
+	}
 	promptFile := filepath.Join(rs.ws.RunHost(r.ID), fmt.Sprintf("turn-%03d.prompt", turn))
 	if err := os.WriteFile(promptFile, []byte(prompt), 0o644); err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(time.Minute)})
@@ -856,7 +868,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	started = true
-	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key()})
+	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model})
 }
 
 // RunPath is where a run's agent sees its run dir ($HIVE_RUN).
@@ -883,10 +895,13 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		mounts = append(mounts, sandbox.Mount{Host: rs.ws.Projects(), Inside: "/hive/projects"},
 			sandbox.Mount{Host: rs.ws.Hive(), Inside: "/hive/state"})
 		// Every agent reads the whole Hive but what grants access: the daemon's
-		// API token and the login pool's stored logins.
-		logins := filepath.Join(rs.ws.Hive(), "logins")
-		os.MkdirAll(logins, 0o700) // a login added mid-turn lands under the cover
-		mounts = append(mounts, sandbox.Mount{Host: logins, Inside: "/hive/state/logins", Hide: true})
+		// API token, the login pool's stored logins, and module programs' homes
+		// and logs, where a door module keeps its own service login.
+		for _, d := range []string{"logins", "modules"} {
+			dir := filepath.Join(rs.ws.Hive(), d)
+			os.MkdirAll(dir, 0o700) // one added mid-turn lands under the cover
+			mounts = append(mounts, sandbox.Mount{Host: dir, Inside: "/hive/state/" + d, Hide: true})
+		}
 		if _, err := os.Stat(rs.ws.DaemonFile()); err == nil {
 			mounts = append(mounts, sandbox.Mount{Host: rs.ws.DaemonFile(), Inside: "/hive/state/daemon.json", Hide: true})
 		}
