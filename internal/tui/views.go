@@ -786,6 +786,9 @@ func (m *model) viewSettings() []string {
 	if m.editing {
 		lines = append(lines, "", m.input.View())
 	}
+	if m.st.ConfigErr != "" {
+		lines = append(lines, "", stBad.Render(clip("config.json: "+m.st.ConfigErr, m.w)))
+	}
 	lines = append(lines, "", stDim.Render(fmt.Sprintf("Hive %s · %s · settings in %s", m.st.Version, m.st.Workspace, ".hive/config.json")))
 	return window(lines, m.setSel, m.bodyHeight())
 }

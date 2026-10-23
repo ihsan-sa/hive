@@ -234,3 +234,13 @@ func TestWheelScrollsDetail(t *testing.T) {
 		t.Fatalf("wheel up: scroll %d, want 0", m.stack[0].scroll)
 	}
 }
+
+// A config.json the daemon couldn't read is named on the Settings page.
+func TestSettingsShowsTheConfigLoadError(t *testing.T) {
+	m := testModel(100, 24)
+	m.section = secSettings
+	m.st.ConfigErr = "tribunal seat {\"model\": 5} isn't a model name"
+	if view := m.View(); !strings.Contains(view, "isn't a model name") {
+		t.Fatalf("no load error on Settings:\n%s", view)
+	}
+}
