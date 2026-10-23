@@ -47,13 +47,14 @@ func sample() api.State {
 }
 
 func testModel(w, h int) *model {
-	m := &model{open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
+	m := &model{scroll: -1, open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
 		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, input: textinput.New()}
 	m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	m.Update(stateMsg{st: sample()})
 	now := time.Now()
 	long := strings.Repeat("words that wrap ", 40)
 	m.msgs["lead"] = []chat.Message{
+		{ID: "0", Thread: "0", From: "person", Name: "you", Text: "earlier " + long, At: now},
 		{ID: "1", Thread: "1", From: "person", Name: "you", Text: "please do " + long, At: now},
 		{ID: "2", Thread: "1", From: "lead-x", Name: "lead", Text: "Understood. " + long, At: now},
 		{ID: "3", Thread: "1", From: "hive", Name: "hive", Text: "Merged: https://github.com/me/textkit/pull/3", At: now},
@@ -160,5 +161,107 @@ func TestMarkdown(t *testing.T) {
 		if ansi.StringWidth(l) > 30 {
 			t.Errorf("line too wide: %q", l)
 		}
+	}
+}
+
+func TestThreadPaneScrolls(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	h := m.paneH()
+	if lines, _ := m.threadLines(m.rightW()); len(lines) <= 2*h {
+		t.Fatalf("fixture too short: %d lines for a %d-row pane", len(lines), h)
+	}
+	last := "pull/3"
+	if strings.Contains(m.View(), last) {
+		t.Fatal("last line visible before scrolling")
+	}
+	for i := 0; i < 200 && !strings.Contains(m.View(), last); i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if !strings.Contains(m.View(), last) {
+		t.Fatal("down never reached the last line")
+	}
+	for i := 0; i < 200 && strings.Contains(m.View(), last); i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	if strings.Contains(m.View(), last) {
+		t.Fatal("up never left the last line")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if !strings.Contains(m.View(), last) {
+		t.Fatal("End did not reach the last line")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if strings.Contains(m.View(), last) {
+		t.Fatal("PgUp did not leave the last line")
+	}
+	top := m.scroll
+	m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.scroll-top != h-1 {
+		t.Fatalf("PgDn moved %d, want %d", m.scroll-top, h-1)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	if m.scroll != 0 || !strings.Contains(m.viewThreads(m.rightW())[0], "idle") {
+		t.Fatal("Home did not put the chat's title on the first pane row")
+	}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionRelease})
+	if m.scroll != 3 {
+		t.Fatalf("wheel down: scroll %d, want 3", m.scroll)
+	}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.scroll != 0 {
+		t.Fatalf("wheel up: scroll %d, want 0", m.scroll)
+	}
+	if _, spans := m.threadLines(m.rightW()); spans[m.threadSel][0] < h {
+		t.Fatal("fixture: Home left the selected thread on screen")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.scroll != -1 {
+		t.Fatalf("down after Home: scroll %d, want -1 (back to the selection)", m.scroll)
+	}
+}
+
+func TestThreadPaneUpMirrorsDown(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	lines, spans := m.threadLines(m.rightW())
+	prev := m.top(len(lines), spans)
+	if prev < 2 {
+		t.Fatalf("fixture: view starts at line %d, too near the top to tell a jump", prev)
+	}
+	for i := 0; i < 200 && (m.threadSel > 0 || prev > 0); i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyUp})
+		lines, spans = m.threadLines(m.rightW())
+		top := m.top(len(lines), spans)
+		if top > prev || prev-top > 1 {
+			t.Fatalf("up moved the view from line %d to %d", prev, top)
+		}
+		prev = top
+	}
+	if m.threadSel != 0 || prev != 0 {
+		t.Fatalf("up stopped at thread %d, line %d", m.threadSel, prev)
+	}
+}
+
+func TestThreadPanePinsTitleAtEnd(t *testing.T) {
+	m := testModel(80, 20) // the list has focus and the pane follows the end
+	pane := m.viewThreads(m.rightW())
+	if len(pane) != m.paneH() || !strings.Contains(pane[0], "idle") || !strings.Contains(m.View(), "pull/3") {
+		t.Fatalf("want the title on top and the last message below it, got %q", pane)
+	}
+}
+
+func TestWheelScrollsDetail(t *testing.T) {
+	m := testModel(80, 20)
+	m.stack = []detail{{kind: "run"}}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionRelease})
+	if m.stack[0].scroll != 3 {
+		t.Fatalf("wheel down: scroll %d, want 3", m.stack[0].scroll)
+	}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.stack[0].scroll != 0 {
+		t.Fatalf("wheel up: scroll %d, want 0", m.stack[0].scroll)
 	}
 }

@@ -12,10 +12,12 @@ import (
 
 type isolatedBox struct{}
 
-func (isolatedBox) Name() string                                 { return "isolated" }
-func (isolatedBox) Isolated() bool                               { return true }
-func (isolatedBox) Check() error                                 { return nil }
-func (isolatedBox) Start(sandbox.Spec) (sandbox.Proc, error)     { return sandbox.Proc{}, errors.New("not started") }
+func (isolatedBox) Name() string   { return "isolated" }
+func (isolatedBox) Isolated() bool { return true }
+func (isolatedBox) Check() error   { return nil }
+func (isolatedBox) Start(sandbox.Spec) (sandbox.Proc, error) {
+	return sandbox.Proc{}, errors.New("not started")
+}
 func (isolatedBox) Run(sandbox.Spec, time.Duration) (int, error) { return 0, errors.New("not run") }
 
 // An isolated run sees only its granted modules, so none granted means none,
@@ -30,9 +32,9 @@ func TestIsolatedRunWithNoGrantsSeesNoModules(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer j.Close()
-	rs := NewRuns(ws, j, nil, func(string) ([]string, error) { return nil, nil }, func() []string { return nil })
+	rs := NewRuns(ws, j, nil, NewTokens(ws), func() []string { return nil })
 	h, _ := harness.Get("fake")
-	spec, err := rs.sandboxSpec(isolatedBox{}, h, Run{RunSpec: RunSpec{ID: "r1", Checkout: t.TempDir(), Isolated: true}}, 1, false, "")
+	spec, err := rs.sandboxSpec(isolatedBox{}, h, Run{RunSpec: RunSpec{ID: "r1", Checkout: t.TempDir(), Isolated: true}}, 1, false, "", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

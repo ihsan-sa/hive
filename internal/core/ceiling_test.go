@@ -52,13 +52,39 @@ func TestCeilingHit(t *testing.T) {
 // is the person's.
 func TestCeilingGuardRefusesAfterAllow(t *testing.T) {
 	script := "pip install stripe && stripe charges create --amount 500"
-	if err := CeilingGuard(script, false); err == nil {
+	if err := CeilingGuard(script, nil, false); err == nil {
 		t.Fatal("a money script ran without the person")
 	}
-	if err := CeilingGuard(script, true); err != nil {
+	if err := CeilingGuard(script, nil, true); err != nil {
 		t.Fatalf("the person's yes should run it: %v", err)
 	}
-	if err := CeilingGuard("apt-get install -y jq", false); err != nil {
+	if err := CeilingGuard("apt-get install -y jq", nil, false); err != nil {
 		t.Fatalf("an ordinary step was refused: %v", err)
+	}
+}
+
+// The person's floor raises a step that touches it, whoever approved it.
+func TestFloor(t *testing.T) {
+	floor := []string{"/srv/app", "*.pem", "billing-db"}
+	for text, want := range map[string]string{
+		"rsync -a build/ /srv/app/":     "/srv/app",
+		"cp key.pem /tmp/x":             "*.pem",
+		"cat ./certs/server.pem":        "*.pem",
+		`psql "billing-db" -c 'select'`: "billing-db",
+		"npm install left-pad":          "",
+		"cp pem.txt /tmp":               "",
+	} {
+		if got := FloorHit(floor, text); got != want {
+			t.Errorf("FloorHit(%q) = %q, want %q", text, got, want)
+		}
+	}
+	if FloorHit(nil, "ls /srv/app") != "" {
+		t.Error("an empty floor raised a step")
+	}
+	if err := CeilingGuard("cp new.pem /etc/ssl", floor, false); err == nil {
+		t.Fatal("a floor script ran without the person")
+	}
+	if err := CeilingGuard("cp new.pem /etc/ssl", floor, true); err != nil {
+		t.Fatalf("the person's yes should run it: %v", err)
 	}
 }

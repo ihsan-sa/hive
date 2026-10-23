@@ -10,6 +10,7 @@ GOOS=linux GOARCH=amd64 go build -o hive-linux-amd64 ./cmd/hive   # needed next 
 go vet ./... && go test -short ./...             # unit tests
 go test ./internal/e2e/ -timeout 30m             # end to end: real daemon, fake harness, local forge, bare runs
 HIVE_E2E_SANDBOX=auto go test ./internal/e2e/    # same, inside the platform sandbox
+HIVE_E2E_TUI=1 go test ./internal/e2e/ -run TestControlCenterInTmux -v   # drives the control center in tmux
 ```
 
 Dev runs without touching GitHub or plan usage: `HIVE_HOME=<dir> HIVE_FORGE=local:<dir> hive daemon` with `"harness": "fake"` in `.hive/config.json`.
