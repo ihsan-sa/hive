@@ -1,8 +1,10 @@
 // Package kb is the knowledge base: the Hive's memory across projects and
 // runs. Notes are plain markdown files in .hive/kb, kept in a local git
 // repository so a bad consolidation can be reverted. Agents read it directly
-// (read-only) and write through `hive agent remember`; a scheduled filer
-// consolidates it through the same take-commits-out path as any worker.
+// (read-only), search it with `hive agent search` and write through `hive
+// agent remember`; a scheduled filer consolidates the notes through the same
+// take-commits-out path as any worker. Every journal event is also filed
+// under kb/record on its own (record.go).
 package kb
 
 import (
@@ -68,6 +70,17 @@ func New(c *core.Core, a *agents.Agents) *Module {
 		}
 		return "saved as " + filepath.Base(path), nil
 	}})
+	c.Runs.Ops().Register(core.Op{Name: "search", Help: `{"query", "limit": "n or all"}`, Fn: func(r core.Run, args json.RawMessage) (any, error) {
+		var q struct {
+			Query string
+			Limit json.RawMessage
+		}
+		if err := core.Bind(args, &q); err != nil {
+			return nil, err
+		}
+		return Find(c.WS.KB(), q.Query, strings.Trim(string(q.Limit), `"`)), nil
+	}})
+	m.startRecord()
 	c.J.Subscribe(func(e core.Event) {
 		if e.Kind == "kb.note" {
 			var n Note
@@ -83,9 +96,14 @@ func (m *Module) ensureRepo() {
 	os.MkdirAll(dir, 0o755)
 	if !core.Exists(filepath.Join(dir, ".git")) {
 		core.Git(dir, "init", "-q", "-b", "main")
-		os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Knowledge base\n\nOne note per file. Written by agents with `hive agent remember`; consolidated by the filer.\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Knowledge base\n\nOne note per file, written by agents with `hive agent remember` and consolidated by the filer. `record/` holds every event the Hive journaled, one file per task, request, run, chat or project, filed on its own.\n"), 0o644)
 		core.Git(dir, "add", "-A")
 		core.Git(dir, "commit", "-q", "-m", "Start the knowledge base")
+	}
+	if ignore := filepath.Join(dir, ".gitignore"); !core.Exists(ignore) {
+		os.WriteFile(ignore, []byte("record/\n"), 0o644)
+		core.Git(dir, "add", ".gitignore")
+		core.Git(dir, "commit", "-q", "-m", "Keep the record, rebuilt from the journal, out of the notes' history")
 	}
 }
 
@@ -93,8 +111,11 @@ func (m *Module) ensureRepo() {
 // the store's practice/ folder, so a fresh install starts knowing them, and
 // refreshes them when an update ships new text. practice/.filed.json keeps
 // the hash of what was last filed, so a doc a person has edited since (or
-// wrote before any filing) is never overwritten. Notes live at the top level,
-// so a note never shares a path with a practice doc.
+// wrote before any filing) is never overwritten; the ledger's ".kept" entry
+// names the docs left alone, so each is journaled once, not every start.
+// Only the paths written here are committed, so a person's uncommitted edit
+// never lands under this commit's message. Notes live at the top level, so
+// a note never shares a path with a practice doc.
 func (m *Module) filePractice() {
 	src := filepath.Join(m.C.WS.Modules(), "kb", "practice")
 	dst := filepath.Join(m.C.WS.KB(), "practice")
@@ -104,8 +125,7 @@ func (m *Module) filePractice() {
 		_ = json.Unmarshal(raw, &filed)
 	}
 	entries, _ := os.ReadDir(src)
-	changed := false
-	var kept []string
+	var kept, wrote []string
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
 			continue
@@ -120,7 +140,8 @@ func (m *Module) filePractice() {
 		switch {
 		case err == nil && hashOf(have) == want:
 			if filed[e.Name()] != want {
-				filed[e.Name()], changed = want, true
+				filed[e.Name()] = want
+				wrote = append(wrote, "practice/"+e.Name())
 			}
 			continue
 		case err == nil && hashOf(have) != filed[e.Name()]:
@@ -130,21 +151,25 @@ func (m *Module) filePractice() {
 			continue
 		}
 		if os.WriteFile(path, raw, 0o644) == nil {
-			filed[e.Name()], changed = want, true
+			filed[e.Name()] = want
+			wrote = append(wrote, "practice/"+e.Name())
 		}
 	}
-	if len(kept) > 0 {
-		m.C.J.MustAppend("kb.practice", map[string]string{"result": "kept edited practice docs, not refreshed: " + strings.Join(kept, ", ")})
-	}
-	if !changed {
+	k := strings.Join(kept, ", ")
+	if len(wrote) == 0 && k == filed[".kept"] {
 		return
 	}
+	if k != "" && k != filed[".kept"] {
+		m.C.J.MustAppend("kb.practice", map[string]string{"result": "kept edited practice docs, not refreshed: " + k})
+	}
+	filed[".kept"] = k
 	if raw, err := json.MarshalIndent(filed, "", "  "); err == nil {
 		_ = os.WriteFile(ledger, append(raw, '\n'), 0o644)
 	}
-	_, err := core.Git(m.C.WS.KB(), "add", "--", "practice")
+	paths := append(wrote, "practice/.filed.json")
+	_, err := core.Git(m.C.WS.KB(), append([]string{"add", "--"}, paths...)...)
 	if err == nil {
-		_, err = core.Git(m.C.WS.KB(), "commit", "-q", "-m", "File how a Hive works", "--", "practice")
+		_, err = core.Git(m.C.WS.KB(), append([]string{"commit", "-q", "-m", "File how a Hive works", "--"}, paths...)...)
 	}
 	if err != nil {
 		m.C.J.MustAppend("kb.practice", map[string]string{"result": "practice docs not committed: " + err.Error()})

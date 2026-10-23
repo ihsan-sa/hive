@@ -32,13 +32,15 @@ jobs:
           GIT_COMMITTER_NAME: ci
           GIT_COMMITTER_EMAIL: ci@localhost
       # After the suite, so a cross-system vet failure never hides the Linux result,
-      # and always(), so a Linux failure never hides a cross-system one.
-      - name: vet the other systems
-        if: always() && matrix.os == 'ubuntu-latest'
+      # and !cancelled(), so a Linux failure never hides a cross-system one.
+      - name: vet darwin
+        if: "!cancelled() && matrix.os == 'ubuntu-latest'"
         shell: bash
-        run: |
-          GOOS=darwin go vet ./...
-          GOOS=windows go vet ./...
+        run: GOOS=darwin go vet ./...
+      - name: vet windows
+        if: "!cancelled() && matrix.os == 'ubuntu-latest'"
+        shell: bash
+        run: GOOS=windows go vet ./...
   sandboxed-e2e:
     # The end to end with agents under bubblewrap, the default sandbox on Linux, so a sandbox
     # break goes red on a PR. The runner's Ubuntu blocks unprivileged user namespaces through

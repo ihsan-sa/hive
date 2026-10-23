@@ -78,7 +78,9 @@ type model struct {
 	msgs      map[string][]chat.Message
 	input     textinput.Model
 	composing bool
-	reply     string // thread being replied to; "" = new thread
+	files     []chat.File // attached to the message being written
+	composeN  int         // counts composes, so a clipboard read can't land in a later one
+	reply     string      // thread being replied to; "" = new thread
 
 	// dashboard and lists
 	dashSel int
@@ -272,6 +274,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case flashMsg:
 		m.setFlash(string(msg))
 		return m, m.fetchState()
+	case clipMsg:
+		switch {
+		case msg.text != nil:
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg.text)
+			return m, cmd
+		case msg.compose != m.composeN || !m.composing:
+			// read for a message that has since been sent or dropped
+		case msg.err != nil:
+			m.setFlash(msg.err.Error())
+		case m.composing:
+			m.files = append(m.files, msg.f)
+		}
 	case tea.KeyMsg:
 		return m.key(msg)
 	case tea.MouseMsg:
@@ -379,9 +394,15 @@ func (m *model) keyDetail(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "esc":
-		m.composing, m.editing = false, false
+		m.composing, m.editing, m.files = false, false, nil
 		m.input.Blur()
 		return m, nil
+	case "ctrl+v", "alt+v":
+		// As in Claude Code: an image on the clipboard attaches; otherwise
+		// ctrl+v pastes text as before.
+		if m.composing {
+			return m, readClipboard(true, m.composeN)
+		}
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		m.input.SetValue("")
@@ -391,22 +412,72 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.saveSetting(text)
 		}
 		m.composing = false
-		if text == "" {
+		files := m.files
+		m.files = nil
+		if text == "" && len(files) == 0 {
 			return m, nil
 		}
 		id := m.currentChatID()
 		reply := m.reply
 		return m, func() tea.Msg {
 			var msg chat.Message
-			if err := m.c.Do("POST", "/api/chat", map[string]string{"chat": id, "thread": reply, "text": text}, &msg); err != nil {
+			if err := m.c.Do("POST", "/api/chat", map[string]any{"chat": id, "thread": reply, "text": text, "files": files}, &msg); err != nil {
 				return flashMsg("error: " + err.Error())
 			}
 			return flashMsg("sent")
 		}
 	}
+	if m.composing && k.Paste {
+		// A drop arrives as a pasted path; an empty paste may be an image.
+		if len(k.Runes) == 0 {
+			return m, readClipboard(false, m.composeN)
+		}
+		if paths := pastedPaths(string(k.Runes)); paths != nil {
+			maxMB := m.st.Config.ChatMaxMB
+			if maxMB <= 0 { // no state yet
+				maxMB = core.DefaultConfig().ChatMaxMB
+			}
+			var have int64
+			for _, f := range m.files {
+				have += int64(len(f.Data))
+			}
+			for _, p := range paths {
+				f, err := readAttachment(p, have, maxMB)
+				if err != nil {
+					return m, flash("error: " + err.Error())
+				}
+				m.files = append(m.files, f)
+				have += int64(len(f.Data))
+			}
+			return m, nil
+		}
+	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
 	return m, cmd
+}
+
+func flash(s string) tea.Cmd { return func() tea.Msg { return flashMsg(s) } }
+
+// clipMsg is a clipboard read: an image to attach, why there is none, or,
+// for ctrl+v with no image, the input's own text paste.
+type clipMsg struct {
+	f       chat.File
+	err     error
+	text    tea.Msg
+	compose int // the compose it was read for
+}
+
+// readClipboard reads the clipboard's image off the UI loop, since a tool
+// like powershell.exe can take seconds.
+func readClipboard(text bool, compose int) tea.Cmd {
+	return func() tea.Msg {
+		f, err := clipboardImage()
+		if text && (err == errNoImage || err == errNoTool) {
+			return clipMsg{text: textinput.Paste(), compose: compose}
+		}
+		return clipMsg{f: f, err: err, compose: compose}
+	}
 }
 
 func (m *model) bodyHeight() int { return max(3, m.h-4) }
@@ -488,6 +559,9 @@ func (m *model) View() string {
 
 func (m *model) footer() string {
 	if m.composing || m.editing {
+		if m.composing {
+			return "enter send · esc cancel · drop a file or ctrl+v an image to attach"
+		}
 		return "enter send · esc cancel"
 	}
 	if len(m.stack) > 0 && m.stack[len(m.stack)-1].kind == "module" {

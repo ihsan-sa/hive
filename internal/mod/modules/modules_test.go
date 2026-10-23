@@ -20,6 +20,7 @@ func TestRemovingTheLastGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer j.Close()
 	r := New(ws, j)
 	if err := r.InstallDefaults(); err != nil {
 		t.Fatal(err)
@@ -56,6 +57,7 @@ func TestNullProjectsFromV010(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer j.Close()
 	r := New(ws, j)
 	if err := r.InstallDefaults(); err != nil {
 		t.Fatal(err)

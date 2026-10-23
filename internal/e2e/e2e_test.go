@@ -8,9 +8,14 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -568,6 +573,65 @@ func toldAbout(what string) func(api.State) bool {
 	}
 }
 
+// The Hive notices its own stalls. A worker, a reviewer and a check that stop
+// moving for longer than their stage takes in this Hive are restarted or
+// handed to the lead, each with one alert that updates when it moves on; a
+// worker slower than the floor but within this Hive's history is left alone.
+func TestStalls(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	cfg := h.ws.LoadConfig()
+	cfg.StallFloorSeconds = 20
+	h.ws.SaveConfig(cfg)
+	h.seed("me/stall", map[string]string{".hive/project.json": `{"test": "if [ -f STALL ]; then sleep 60; fi"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "stall", "repo": "me/stall"}, nil)
+	// History: a worker here has taken about 13 seconds (8 asleep), so the limit is about 39 without moving.
+	for title, known := range map[string]string{"history one": "FAKE:slowworker:8", "history two": ""} {
+		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
+		h.wait(title+" to land", 3*minute, taskStage("stall", title, work.StageDone))
+	}
+
+	asks := map[string]string{"hung worker": "FAKE:stallworker", "hung reviewer": "FAKE:stallreviewer", "hung check": "FAKE:stallcheck", "slow worker": "FAKE:slowworker:22"}
+	for title, known := range asks {
+		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
+	}
+	for title := range asks {
+		h.wait(title+" to land", 4*minute, taskStage("stall", title, work.StageDone))
+	}
+	st := h.state()
+	alerts := map[string][]string{}
+	for _, a := range st.Alerts {
+		if a.Kind == "stall" {
+			alerts[a.Ref] = append(alerts[a.Ref], a.Text)
+		}
+	}
+	for title, did := range map[string]string{"hung worker": "restarted its turn", "hung reviewer": "restarted its turn", "hung check": "handed it to the lead"} {
+		tk, _ := task(st, "stall", title)
+		if got := alerts["task:"+tk.ID]; len(got) != 1 || !strings.Contains(got[0], did) || !strings.Contains(got[0], "moved on") {
+			t.Fatalf("%s: want one alert that says %q and that it moved on, got %q", title, did, got)
+		}
+		workers := 0
+		for _, r := range st.Runs {
+			if r.Role == "worker" && r.Task == tk.ID {
+				workers++
+			}
+		}
+		if workers != 1 {
+			t.Fatalf("%s: a restart started %d workers", title, workers)
+		}
+	}
+	if slow, _ := task(st, "stall", "slow worker"); len(alerts["task:"+slow.ID]) != 0 {
+		t.Fatalf("a slow worker within this Hive's history was flagged: %q", alerts["task:"+slow.ID])
+	}
+	told := false
+	for _, msg := range h.messages("lead") {
+		told = told || strings.Contains(msg.Text, "Stuck:") && strings.Contains(msg.Text, "hung check")
+	}
+	if !told {
+		t.Fatal("the lead was not told about the hung check")
+	}
+}
+
 // A request past the sandbox goes to a warden, which runs its script, and the
 // outcome reaches the agent. At autonomy 2 a warden approves a module install
 // and a goals change, and the person is told after. A module updates when its
@@ -859,6 +923,57 @@ func TestLiveTribunal(t *testing.T) {
 	if panels == 0 {
 		t.Error("no tribunal convened")
 	}
+}
+
+// redSquare is a small PNG for the attachment tests.
+func redSquare() []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	draw.Draw(img, img.Bounds(), &image.Uniform{color.RGBA{255, 0, 0, 255}}, image.Point{}, draw.Src)
+	var b bytes.Buffer
+	png.Encode(&b, img)
+	return b.Bytes()
+}
+
+// TestChatAttachment: a pasted image and a dropped file reach the lead as
+// files in its run dir, named in its prompt, and it opens both.
+func TestChatAttachment(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	files := []chat.File{{Name: "shot.png", Data: redSquare()}, {Name: "notes.txt", Data: []byte("hello from a file\n")}}
+	var sent chat.Message
+	h.post("/api/chat", map[string]any{"chat": "lead", "text": "what are these?", "files": files}, &sent)
+	if !strings.Contains(sent.Text, "📎 shot.png") || !strings.Contains(sent.Text, "📎 notes.txt") {
+		t.Fatalf("the message shows no attachments: %q", sent.Text)
+	}
+	h.wait("the lead to open both", 2*minute, h.replied("lead", "shot.png (image/png"))
+	h.wait("the lead to open the text", minute, h.replied("lead", "notes.txt (text/plain"))
+	// Over chat_max_mb the daemon refuses the POST and says which setting raises it.
+	cfg := h.ws.LoadConfig()
+	cfg.ChatMaxMB = 1
+	h.ws.SaveConfig(cfg)
+	err := h.c.Do("POST", "/api/chat", map[string]any{"chat": "lead", "files": []chat.File{{Name: "big.bin", Data: make([]byte, 2<<20)}}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "over the 1 MB limit; chat_max_mb") {
+		t.Fatalf("an oversized message: %v", err)
+	}
+}
+
+// TestLiveAttachment is TestChatAttachment's host probe: run it with
+// HIVE_E2E_HARNESS=claude. A real lead is sent a red square and names its colour.
+func TestLiveAttachment(t *testing.T) {
+	if os.Getenv("HIVE_E2E_HARNESS") == "" {
+		t.Skip("set HIVE_E2E_HARNESS=claude to run real agents")
+	}
+	h := start(t)
+	h.post("/api/chat", map[string]any{"chat": "lead", "text": "What colour is the attached image? Answer in one word.", "files": []chat.File{{Name: "square.png", Data: redSquare()}}}, nil)
+	h.wait("the lead to name the colour", 15*minute, func(api.State) bool {
+		for _, m := range h.messages("lead") {
+			if m.From != "person" && strings.Contains(strings.ToLower(m.Text), "red") {
+				t.Logf("lead: %q", m.Text)
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // A score that stops moving gets a step-back: the agent designs a simpler
