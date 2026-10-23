@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,38 @@ func TestViewsFitTheScreen(t *testing.T) {
 	}
 }
 
+// TestModuleDetailReachesEveryProject: with more projects than rows, moving
+// down the list scrolls it, so the last project can be selected.
+func TestModuleDetailReachesEveryProject(t *testing.T) {
+	m := testModel(80, 14)
+	for i := 0; i < 30; i++ {
+		m.st.Projects = append(m.st.Projects, api.ProjectView{Project: core.Project{Name: fmt.Sprintf("proj%02d", i)}})
+	}
+	m.stack = []detail{{kind: "module", id: "agents"}}
+	for range m.projectNames() {
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if view := m.View(); !strings.Contains(view, "proj29") {
+		t.Fatalf("the last project isn't reachable:\n%s", view)
+	}
+	checkWidth(t, m.View(), 80, 14, "module detail")
+}
+
+// TestWheelMovesModuleSelection: the module detail windows on its selection,
+// so the wheel moves the selection rather than the unused scroll offset.
+func TestWheelMovesModuleSelection(t *testing.T) {
+	m := testModel(80, 20)
+	m.stack = []detail{{kind: "module", id: "agents"}}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	if m.stack[0].sel != 1 {
+		t.Fatalf("wheel down: sel %d, want 1", m.stack[0].sel)
+	}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.stack[0].sel != 0 {
+		t.Fatalf("wheel up: sel %d, want 0", m.stack[0].sel)
+	}
+}
+
 func TestThreadPaneScrolls(t *testing.T) {
 	m := testModel(80, 20)
 	m.Update(tea.KeyMsg{Type: tea.KeyRight})
@@ -214,5 +247,15 @@ func TestWheelScrollsDetail(t *testing.T) {
 	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
 	if m.stack[0].scroll != 0 {
 		t.Fatalf("wheel up: scroll %d, want 0", m.stack[0].scroll)
+	}
+}
+
+// A config.json the daemon couldn't read is named on the Settings page.
+func TestSettingsShowsTheConfigLoadError(t *testing.T) {
+	m := testModel(100, 24)
+	m.section = secSettings
+	m.st.ConfigErr = "tribunal seat {\"model\": 5} isn't a model name"
+	if view := m.View(); !strings.Contains(view, "isn't a model name") {
+		t.Fatalf("no load error on Settings:\n%s", view)
 	}
 }

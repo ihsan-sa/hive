@@ -7,7 +7,7 @@ You are one agent in the Hive, a team of AI agents working on one person's proje
 - **Your checkout** is the current directory, on your own branch.
 - **`$HIVE_RUN`** (read-only): your brief (`brief.md`) and this run's inputs.
 - **`$HIVE_BOX/notes.md`**: yours to write, for whoever picks up after you. Context, never a decision.
-- **`$HIVE_KB`** (read-only): the knowledge base, notes from earlier runs across projects, and under `record/` everything the Hive did. Search it with `hive agent search --query "<words>"` before researching from scratch or saying what happened.
+- **`$HIVE_KB`** (read-only): the knowledge base, notes from earlier runs across projects, and under `record/` everything the Hive did. Search it with `hive agent search --query "<words>"` before researching from scratch or saying what happened. `practice/*.md` there says how a Hive works (looking first, deciding, risk, writing, briefs, handoffs, measuring); read the one that fits before you act on it.
 - **`$HIVE_MODULES`** (read-only): installed modules (procedures, tools, prompts).
 - **`$HIVE_PROJECTS`** (read-only, when present): the other projects' clones.
 - **Each project** keeps `.hive/goals.md` (the person's words) and `.hive/lessons.md` (what was reverted and why).

@@ -5,7 +5,9 @@
 // votes. An approved step runs here, in the effects process, as exactly the
 // script that was weighed (pinned by digest), and only after the ceiling's
 // check on that script. The person keeps the ceiling and, at autonomy 1,
-// says yes before a warden weighs anything.
+// says yes before a warden weighs anything. A decision that would otherwise
+// wait in the person's queue (a protected merge, a module install) goes the
+// same way through Weigh, and the person is told after.
 package risk
 
 import (
@@ -37,7 +39,7 @@ var ExecTimeout = 10 * time.Minute
 // Request is an agent's ask for something past its reach.
 type Request struct {
 	ID       string    `json:"id"`
-	Kind     string    `json:"kind"` // request | module
+	Kind     string    `json:"kind"` // request, or the kind of the ask it settles
 	Origin   string    `json:"origin"`
 	Project  string    `json:"project,omitempty"`
 	Want     string    `json:"want"`
@@ -56,8 +58,8 @@ type Request struct {
 	Round    int       `json:"round,omitempty"`
 	PersonOK bool      `json:"person_ok,omitempty"` // the person said run, to this script
 	Output   string    `json:"output,omitempty"`
-	URL      string    `json:"url,omitempty"`
-	Ask      string    `json:"ask"` // the person's queue item
+	Settles  *core.Ask `json:"settles,omitempty"` // the person's ask a warden answers instead
+	Ask      string    `json:"ask"`               // the person's queue item
 	Outcome  string    `json:"outcome,omitempty"`
 	Note     string    `json:"note,omitempty"`
 	Created  time.Time `json:"created"`
@@ -112,7 +114,7 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 	ops := c.Runs.Ops()
 	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3","gain":"(optional) large"} -> T1 you weigh yourself; T2 goes to a warden, T3 to a tribunal`, Fn: m.opRequest})
 	ops.Register(core.Op{Name: "decide", Roles: []string{"warden"}, Help: `{"decision":"do|safer|decline|tribunal","reason","script":"exactly what runs (do, tribunal)","gain":"(optional) large"}`, Fn: m.opDecide})
-	ops.Register(core.Op{Name: "install_module", Roles: []string{"lead"}, Help: `{"url","name"}`, Fn: m.opInstall})
+	ops.Register(core.Op{Name: "install_module", Roles: []string{"lead"}, Help: `{"url"}`, Fn: m.opInstall})
 	c.Person.Handle("request", m.onAnswer)
 	c.Person.Handle("module", m.onModule)
 	// A warden that asks an agent ends its turn to wait for the reply, so it
@@ -224,7 +226,11 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 func (m *Module) ask(req *Request, why, detail string, options ...string) {
 	body := fmt.Sprintf("%s\n\nAn agent (%s) asked (%s, route %s): %s\n\nWhy: %s\n\nIts proposed steps:\n%s", detail, req.Origin, req.Tier, req.Route, req.Want, req.Why, req.Steps)
 	if req.Script != "" {
-		body = fmt.Sprintf("%s\n\n%s\n\nWhat would run, exactly (sha256 %s):\n%s", detail, req.Reason, core.Short(req.Digest), req.Script)
+		run, what := "run exactly this script", "What would run, exactly (sha256 "+core.Short(req.Digest)+")"
+		if s := req.Settles; s != nil { // no script runs: run answers the ask it stands for
+			run, what = s.Options[0], "What run decides"
+		}
+		body = fmt.Sprintf("%s Run to %s; decline to leave it.\n\n%s\n\n%s:\n%s", detail, run, req.Reason, what, req.Script)
 	}
 	a := m.C.Person.Ask(core.Ask{Kind: "request", Ref: req.ID, Project: req.Project, From: req.Origin,
 		Title: why + ": " + core.Clip(req.Want, 110), Detail: body, Options: options})
@@ -274,6 +280,9 @@ func (m *Module) opDecide(r core.Run, args json.RawMessage) (any, error) {
 	if req.State != "weighing" {
 		return nil, fmt.Errorf("request %s is already decided (%s)", req.ID, req.State)
 	}
+	if req.Settles != nil { // what is weighed is the ask itself, pinned when it was filed
+		a.Script = req.Script
+	}
 	if (a.Decision == "do" || a.Decision == "tribunal") && strings.TrimSpace(a.Script) == "" {
 		return nil, errors.New("give the exact script that would run")
 	}
@@ -296,6 +305,10 @@ func (m *Module) opDecide(r core.Run, args json.RawMessage) (any, error) {
 	case "safer", "decline":
 		req.State, req.Outcome = "declined", a.Decision
 		m.save(&req)
+		if req.Settles != nil {
+			go m.settle(req, false)
+			break
+		}
 		m.tell(req, fmt.Sprintf("The warden won't do %q as asked (%s): %s", core.Clip(req.Want, 80), a.Decision, a.Reason))
 	default:
 		return nil, errors.New(`decision is do, safer, decline or tribunal`)
@@ -310,7 +323,7 @@ func (m *Module) Steps(run string) (string, bool) {
 	var lines []string
 	ok := true
 	for _, r := range m.List() {
-		if r.Origin == run {
+		if r.Origin == run && r.Settles == nil {
 			state := r.State
 			if state != "done" && state != "failed" && state != "declined" {
 				state = "still pending (" + state + ")"
@@ -392,6 +405,10 @@ func (m *Module) convene(req *Request) error {
 			}
 			req.State, req.Outcome = "failed", "no tribunal: "+err.Error()
 			m.save(req)
+			if req.Settles != nil {
+				m.C.Person.Ask(*req.Settles)
+				return err
+			}
 			m.tell(*req, req.Outcome)
 			return err
 		}
@@ -442,11 +459,15 @@ func (m *Module) advance(req *Request) {
 		go m.execute(req.ID)
 	case req.Gain == "large":
 		req.Reason += "\n\nThe tribunal declined (" + tally + "), but the gain would be large, so it's yours to decide."
-		m.ask(req, "A tribunal declined a large gain", "Run to run exactly this script; decline to leave it.", "run", "declined")
+		m.ask(req, "A tribunal declined a large gain", "The tribunal declined, but the gain would be large.", "run", "declined")
 		m.tell(*req, "The tribunal declined ("+tally+"); the gain is large, so the person decides.")
 	default:
 		req.State, req.Outcome = "declined", "tribunal"
 		m.save(req)
+		if req.Settles != nil {
+			go m.settle(*req, false)
+			return
+		}
 		m.tell(*req, fmt.Sprintf("The tribunal declined %q (%s).", core.Clip(req.Want, 80), tally))
 	}
 }
@@ -462,6 +483,10 @@ func (m *Module) Tick() {
 			if w, ok := m.C.Runs.Get(req.Warden); ok && (w.Terminal() || w.Status == core.StatusQuiet) {
 				req.State, req.Outcome = "failed", "the warden ended without deciding"
 				m.save(&req)
+				if req.Settles != nil {
+					m.C.Person.Ask(*req.Settles)
+					continue
+				}
 				m.tell(req, "The warden could not settle it: it ended without deciding.")
 			}
 		case "tribunal":
@@ -543,9 +568,16 @@ func (m *Module) execute(id string) {
 	}
 	floor := m.C.WS.LoadConfig().Floor
 	if err := core.CeilingGuard(req.Script, floor, req.PersonOK); err != nil {
-		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.Ceiling(floor, req.Script)+", which is always yours to decide. Run to run exactly this script; decline to leave it.", "run", "declined")
+		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.Ceiling(floor, req.Script)+", which is always yours to decide.", "run", "declined")
 		m.act.Unlock()
 		m.tell(req, err.Error()+"; the person decides.")
+		return
+	}
+	if req.Settles != nil {
+		req.State, req.Outcome = "done", "done"
+		m.save(&req)
+		m.act.Unlock()
+		m.settle(req, true)
 		return
 	}
 	req.State = "running"
@@ -628,6 +660,10 @@ func (m *Module) onAnswer(a core.Ask) {
 	}
 	m.save(&req)
 	m.act.Unlock()
+	if req.Settles != nil {
+		m.settle(req, false)
+		return
+	}
 	text := fmt.Sprintf("the person answered %q: %s", core.Clip(req.Want, 80), a.Answer)
 	if a.Note != "" {
 		text += ": " + a.Note
@@ -636,49 +672,84 @@ func (m *Module) onAnswer(a core.Ask) {
 }
 
 func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
-	var a struct{ URL, Name string }
+	var a struct{ URL string }
 	if err := core.Bind(args, &a); err != nil {
 		return nil, err
 	}
 	if !strings.HasPrefix(a.URL, "https://") && !strings.HasPrefix(a.URL, "git@") && !strings.HasPrefix(a.URL, "file://") && !core.Exists(a.URL) {
 		return nil, errors.New("give a git URL (https://, git@, file://) or a local repository path")
 	}
-	if a.Name == "" {
-		a.Name = modules.NameFromURL(a.URL)
+	name := modules.NameFromURL(a.URL)
+	if _, ok := m.Mod.Get(name); ok {
+		return nil, fmt.Errorf("a module named %s is already installed", name)
 	}
-	if _, ok := m.Mod.Get(a.Name); ok {
-		return nil, fmt.Errorf("a module named %s is already installed", a.Name)
-	}
-	req := &Request{ID: core.NewID(), Kind: "module", Origin: r.ID, URL: a.URL, Want: "install module " + a.Name, Created: time.Now().UTC()}
-	ask := m.C.Person.Ask(core.Ask{Kind: "module", Ref: req.ID, From: r.ID,
-		Title:   "Install module " + a.Name + "?",
-		Detail:  "From " + a.URL + ". It brings outside code onto this machine; agents will read and use it. The Hive clones it into .modules/" + a.Name + ".",
+	who := m.Weigh(core.Ask{Kind: "module", Ref: a.URL, From: r.ID,
+		Title:   "Install module " + name + "?",
+		Detail:  "From " + a.URL + ". It brings outside code onto this machine; agents will read and use it. The Hive clones it into .modules/" + name + ".",
 		Options: []string{"install", "decline"}})
-	req.Ask = ask.ID
-	m.save(req)
-	return "sent to the person for approval; you'll hear back", nil
+	return "sent to the " + who + " to decide; you'll hear back", nil
+}
+
+// Weigh settles a decision that would otherwise wait on the person the way
+// autonomy settles a step: at autonomy 1, or when it touches the ceiling, it
+// goes to the person; otherwise a warden weighs it as a T2 step (and may call
+// a tribunal), its answer goes to the ask's handler as the person's would,
+// and the person is told after. It returns who decides: person or warden.
+func (m *Module) Weigh(a core.Ask) string {
+	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || core.Ceiling(cfg.Floor, a.Title, a.Detail) != "" {
+		m.C.Person.Ask(a)
+		return "person"
+	}
+	m.act.Lock()
+	defer m.act.Unlock()
+	if _, ok := m.find(func(x *Request) bool {
+		return x.Settles != nil && x.Kind == a.Kind && x.Settles.Ref == a.Ref && x.State != "done" && x.State != "declined" && x.State != "failed"
+	}); ok {
+		return "warden"
+	}
+	script := a.Title + "\n\n" + a.Detail
+	req := &Request{ID: core.NewID(), Kind: a.Kind, Settles: &a, Origin: a.From, Project: a.Project, Want: a.Title, Why: a.Detail,
+		Steps: "Answer do to " + a.Options[0] + ", decline to " + a.Options[len(a.Options)-1] + ". No script runs; the Hive does it.",
+		Tier:  "T2", Route: "warden", Script: script, Digest: Digest(script), Created: time.Now().UTC()}
+	if err := m.spawnWarden(req); err != nil {
+		m.C.Person.Ask(a)
+		return "person"
+	}
+	return "warden"
+}
+
+// settle answers the ask a request stands for, so its handler acts as on the
+// person's answer, and tells the person after. A request the person was asked
+// about (req.Ask) carries their own answer and note, with nothing to tell.
+func (m *Module) settle(req Request, yes bool) {
+	a := m.C.Person.Ask(*req.Settles)
+	opt := a.Options[len(a.Options)-1]
+	if yes {
+		opt = a.Options[0]
+	}
+	if req.Ask != "" {
+		m.C.Person.Answer(a.ID, opt, req.Note)
+		return
+	}
+	who := "the warden"
+	if len(req.Panel) > 0 {
+		who = "a tribunal"
+	}
+	m.C.Person.Answer(a.ID, opt, who+": "+req.Reason)
+	m.C.Person.Ask(core.Ask{Kind: "told", Ref: req.ID, Project: req.Project, From: req.Origin, Options: []string{"seen"},
+		Title: fmt.Sprintf("Decided for you (%s, by %s): %s", opt, who, core.Clip(a.Title, 100)), Detail: req.Reason + "\n\n" + a.Detail})
 }
 
 func (m *Module) onModule(a core.Ask) {
-	req, ok := m.get(a.Ref)
-	if !ok {
-		return
-	}
-	name := modules.NameFromURL(req.URL)
+	name := modules.NameFromURL(a.Ref)
 	if a.Answer != "install" {
-		req.Outcome = "declined"
-		m.save(&req)
-		m.C.Runs.Send(req.Origin, "[the person declined installing module "+name+"]")
+		m.C.Runs.Send(a.From, "[module "+name+" not installed: "+a.Answer+"] "+a.Note)
 		return
 	}
-	mod, err := m.Mod.Install(req.URL, name)
+	mod, err := m.Mod.Install(a.Ref, name)
 	if err != nil {
-		req.Outcome, req.Note = "failed", err.Error()
-		m.save(&req)
-		m.C.Runs.Send(req.Origin, "[module "+name+" did not install] "+err.Error())
+		m.C.Runs.Send(a.From, "[module "+name+" did not install] "+err.Error())
 		return
 	}
-	req.Outcome = "installed " + mod.Source.Release
-	m.save(&req)
-	m.C.Runs.Send(req.Origin, fmt.Sprintf("[module %s installed at %s]", name, mod.Source.Release))
+	m.C.Runs.Send(a.From, fmt.Sprintf("[module %s installed at %s]", name, mod.Source.Release))
 }

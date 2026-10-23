@@ -104,15 +104,12 @@ func run(args []string) int {
 			fmt.Fprintln(os.Stderr, core.Cmd+":", err)
 			return 1
 		}
-		limit := ""
-		if len(args) > 1 && args[0] == "--limit" {
-			limit, args = args[1], args[2:]
-		}
-		if len(args) == 0 {
+		query, limit := kbArgs(args)
+		if query == "" {
 			fmt.Println("The knowledge base is the folder " + ws.KB() + "; its record/ has a file per task, request, run, chat and project.")
 			return 0
 		}
-		fmt.Println(kb.Find(ws.KB(), strings.Join(args, " "), limit))
+		fmt.Println(kb.Find(ws.KB(), query, limit))
 		return 0
 	case "improve":
 		return withClient(func(c *api.Client) error {
@@ -435,4 +432,19 @@ func cmdUninstall() int {
 func pretty(v any) string {
 	raw, _ := json.MarshalIndent(v, "", "  ")
 	return string(raw)
+}
+
+// kbArgs splits `hive kb` arguments into the search words and a --limit
+// value, which may come before, between or after the words.
+func kbArgs(args []string) (query, limit string) {
+	var words []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--limit" && i+1 < len(args) {
+			limit = args[i+1]
+			i++
+			continue
+		}
+		words = append(words, args[i])
+	}
+	return strings.Join(words, " "), limit
 }
