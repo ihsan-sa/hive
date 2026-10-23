@@ -207,6 +207,7 @@ func TestControlCenterInTmux(t *testing.T) {
 	// harness, as a person's own settings would point it at Claude Code.
 	cfg := ws.LoadConfig()
 	cfg.Harness = "fake"
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0
 	for k := range cfg.Schedules {
 		cfg.Schedules[k] = "off"
 	}
