@@ -24,6 +24,9 @@ import (
 func TestModuleSeam(t *testing.T) {
 	t.Parallel()
 	h := start(t)
+	cfg := h.ws.LoadConfig()
+	cfg.Autonomy = 1 // installs ask the person, whose asks a module must not read
+	h.ws.SaveConfig(cfg)
 	t.Cleanup(func() { // stop the daemon, and with it the module, before its folder goes
 		h.c.Do("POST", "/api/shutdown", nil, nil)
 		for i := 0; i < 50 && h.c.Ping(); i++ {
