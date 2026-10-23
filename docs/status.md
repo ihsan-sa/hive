@@ -19,7 +19,7 @@ Done:
 
 - A person's own module is built as a project of its own and installed from it (`install_module --project`, on the person's "install"); the workspace lead names `--project` on every brief, so an ask no longer lands in the only project by default (`TestAskForModule`). An installed module follows its project only when the repository gets a newer `vX.Y.Z` tag, and nothing tags a module project yet.
 - Asked about the Hive itself, the lead reads its installed modules and `hive agent status` before it answers, instead of guessing (`TestAskAboutTheHive`; live twin `TestLiveAskAboutTheHive`, not yet run on the host). The lead runs on its own model setting, `lead_model`, opus by default; an older config keeps a model the person chose, and the old sonnet default moves to opus.
-- Release v0.1.0 published with binaries (linux/darwin amd64+arm64, windows amd64). One-line install via `gh api …/install.ps1 | Out-String | iex` verified into a scratch dir; installs `hive-v0`.
+- Releases are public (latest v0.1.3, 2026-10-23, at 376ce35; green on Linux, macOS and the sandboxed e2e; on Windows the step-back and stall-detection e2e tests are known to fail). v0.1.0 shipped binaries (linux/darwin amd64+arm64, windows amd64). One-line install via `gh api …/install.ps1 | Out-String | iex` verified into a scratch dir; installs `hive-v0`.
 - CI green on Windows, Ubuntu and macOS (vet, unit, e2e). Claude Code inside the WSL sandbox verified up to the API (invalid token → 401).
 - The knowledge base files every journal event under `kb/record/` (one file per task, request, run, chat, project) on its own, catches up after downtime and never files an event twice; `hive agent search` and `hive kb <words>` return the best-matching pieces, and the lead searches before it says what happened (unit `internal/mod/kb`).
 
@@ -29,12 +29,12 @@ Not verified:
 - Approved steps on Windows: `execute` runs them with Git for Windows' `sh`, but only the three-system CI run exercises it, and a timeout there ends `sh` and not its children.
 - Live agents with real Claude Code: the first-hour probes (`TestLiveAskLands`, `TestLiveModuleLifecycle`, `TestLiveImproveSweep`) are written but haven't run; run `tests/live.sh` on the tower. Sandboxed live runs read a short-lived token from Claude Code's credential file at run time; not exercised.
 - The GitHub forge path (gh issue/PR/merge) end to end; only the local forge is exercised.
-- Installers and self-update with real release assets (no repo/release published).
+- Self-update from a real release asset over the GitHub API on a person's machine (the one-line install was run once, on v0.1.0).
 - macOS Seatbelt sandbox; native Linux host (same namespace code as WSL).
 - Autostart registration on a real account (the tmux test stubs systemctl and loginctl).
 
 Next:
-1. Owner decisions: publish the repo + first release (makes install lines work); live smoke run with real Claude (plan usage; bare vs sandboxed).
+1. Owner decision: a live smoke run with real Claude (plan usage; bare vs sandboxed). The repo and releases are already public.
 2. Run `go test ./internal/sandbox/ -run TestProbeBothPaths -v` on a stock Ubuntu host, and `HIVE_E2E_HARNESS=claude go test ./internal/e2e/ -run 'TestLiveWarden|TestLiveTribunal' -v -timeout 90m` for a real warden and panel (plan usage).
 3. A live Codex run with a real Codex login: a worker turn, a resume and a read-only reviewer seat, sandboxed.
 
