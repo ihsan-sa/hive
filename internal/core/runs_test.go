@@ -67,7 +67,7 @@ func TestRunsReadTheStateButNoSecret(t *testing.T) {
 			hidden[strings.TrimPrefix(m.Inside, "/hive/state/")] = true
 		}
 	}
-	if !state || !hidden["logins"] || !hidden["daemon.json"] {
+	if !state || !hidden["logins"] || !hidden["modules"] || !hidden["daemon.json"] {
 		t.Fatalf("state mounted %v, covered %v: %+v", state, hidden, spec.Mounts)
 	}
 	if !slices.Contains(spec.Env, "HIVE_STATE=/hive/state") {

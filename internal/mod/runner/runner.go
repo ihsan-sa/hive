@@ -62,7 +62,8 @@ type child struct {
 }
 
 // Tick journals hive.idle when the last run stops, then brings each module's
-// program to the state its review allows.
+// program to the state its review allows. busy and r.busy are read and written
+// outside r.mu: only the daemon's single tick loop calls Tick.
 func (r *Runner) Tick() {
 	busy := len(r.C.Runs.List(func(x *core.Run) bool {
 		return x.Status == core.StatusRunning || x.Status == core.StatusQueued
@@ -145,7 +146,7 @@ func (r *Runner) cleared(name string, m modules.Module) (string, string) {
 		run, ok := r.C.Runs.Get(id)
 		if !ok {
 			if r.tries[base] >= 3 {
-				why := "its review ended without a vote three times (run " + base + "); restart the Hive to read it again"
+				why := "its review ended without a vote three times (run " + base + "); press r on it in Modules to read it again"
 				if r.status[name] != why {
 					r.C.J.MustAppend("alert.raised", map[string]string{"kind": "module", "module": name, "text": "module " + name + " was not started: " + why})
 				}
@@ -316,6 +317,17 @@ func (r *Runner) Allowed(token, path string) (string, bool, bool) {
 		}
 	}
 	return "", false, false
+}
+
+// Retry lets a module whose reviews ended without a vote be read again.
+func (r *Runner) Retry(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k := range r.tries {
+		if strings.HasPrefix(k, "mr-"+name+"-") {
+			delete(r.tries, k)
+		}
+	}
 }
 
 // Status says what a module's program is doing, or why it is not running.

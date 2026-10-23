@@ -815,10 +815,13 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 		mounts = append(mounts, sandbox.Mount{Host: rs.ws.Projects(), Inside: "/hive/projects"},
 			sandbox.Mount{Host: rs.ws.Hive(), Inside: "/hive/state"})
 		// Every agent reads the whole Hive but what grants access: the daemon's
-		// API token and the login pool's stored logins.
-		logins := filepath.Join(rs.ws.Hive(), "logins")
-		os.MkdirAll(logins, 0o700) // a login added mid-turn lands under the cover
-		mounts = append(mounts, sandbox.Mount{Host: logins, Inside: "/hive/state/logins", Hide: true})
+		// API token, the login pool's stored logins, and module programs' homes
+		// and logs, where a door module keeps its own service login.
+		for _, d := range []string{"logins", "modules"} {
+			dir := filepath.Join(rs.ws.Hive(), d)
+			os.MkdirAll(dir, 0o700) // one added mid-turn lands under the cover
+			mounts = append(mounts, sandbox.Mount{Host: dir, Inside: "/hive/state/" + d, Hide: true})
+		}
 		if _, err := os.Stat(rs.ws.DaemonFile()); err == nil {
 			mounts = append(mounts, sandbox.Mount{Host: rs.ws.DaemonFile(), Inside: "/hive/state/daemon.json", Hide: true})
 		}

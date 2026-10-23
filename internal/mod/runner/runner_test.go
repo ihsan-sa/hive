@@ -100,6 +100,27 @@ func TestReviewWithNoVoteRunsAgain(t *testing.T) {
 	}
 }
 
+// The person's "review again" lets a module held after three silent reviews be
+// read once more, under a fresh run id.
+func TestRetryReadsItAgain(t *testing.T) {
+	r, m, commit := newRunner(t, "held")
+	base := "mr-held-" + commit[:12]
+	for _, id := range []string{base, base + "-2", base + "-3"} {
+		r.check("held", m)
+		r.C.Runs.Stop(id, "crashed")
+	}
+	if why := r.check("held", m); !strings.Contains(why, "three times") {
+		t.Fatalf("not held after three silent reviews: %q", why)
+	}
+	r.Retry("held")
+	if why := r.check("held", m); why != "waiting for its code review" {
+		t.Fatalf("after Retry: %q", why)
+	}
+	if _, ok := r.C.Runs.Get(base + "-4"); !ok {
+		t.Fatalf("no fourth review run after Retry")
+	}
+}
+
 // A vote that cannot be recorded is not journalled again on every tick.
 func TestReviewThatCannotBeRecorded(t *testing.T) {
 	r, m, commit := newRunner(t, "gone")
