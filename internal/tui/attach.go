@@ -99,7 +99,7 @@ func hostPath(w string) string {
 		if u, err := url.Parse(w); err == nil {
 			w = u.Path
 			if runtime.GOOS == "windows" {
-				w = strings.TrimPrefix(w, "/")
+				w = filepath.FromSlash(strings.TrimPrefix(w, "/")) // /C:/a → C:\a
 			}
 		}
 	}

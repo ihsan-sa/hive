@@ -45,6 +45,35 @@ func TestNestedMountPointsExist(t *testing.T) {
 	}
 }
 
+// startSB records each turn's command instead of starting it.
+type startSB struct {
+	sandbox.Bare
+	args *[]string
+}
+
+func (s startSB) Start(spec sandbox.Spec) (sandbox.Proc, error) {
+	*s.args = spec.Argv
+	return sandbox.Proc{}, nil
+}
+
+// A lead is long-lived, so its next turn takes the model the settings name
+// now, and the run says which model that turn is on.
+func TestLeadFollowsModelSetting(t *testing.T) {
+	c, _ := testHive(t)
+	var args []string
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return startSB{args: &args}, nil }
+	c.Runs.ModelFor = func(Run) string { return "opus" }
+	r, err := c.Runs.Start(RunSpec{ID: "lead1", Role: "lead", Harness: "claude", Model: "sonnet", Persistent: true, Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, c.WS.LoadConfig())
+	got, _ := c.Runs.Get("lead1")
+	if got.Model != "opus" || !strings.Contains(strings.Join(args, " "), "opus") {
+		t.Fatalf("model %q, args %q: want the turn on opus", got.Model, args)
+	}
+}
+
 // Every run but an isolated project's reads the whole .hive at /hive/state,
 // writes none of it, and reads nothing there that grants access: no run's
 // home or CODEX_HOME (its own, another's, or one made after the turn
