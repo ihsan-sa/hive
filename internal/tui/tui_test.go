@@ -114,6 +114,12 @@ func TestViewsFitTheScreen(t *testing.T) {
 	}
 }
 
+func TestPreviewDropsMarkers(t *testing.T) {
+	if got := preview("**Done** with `code`\n- and [a link](https://x.io)"); got != "Done with code • and a link (https://x.io)" {
+		t.Errorf("preview = %q", got)
+	}
+}
+
 func TestMarkdown(t *testing.T) {
 	src := "Use **bold** and `code` and [hive](https://x.io).\n- one item\n- two\n```\nfunc main() {}\n```"
 	got := strings.Join(markdown(src, 60), "\n")

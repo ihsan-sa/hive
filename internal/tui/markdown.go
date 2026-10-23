@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 var (
@@ -73,4 +74,10 @@ func inline(s string) string {
 		}
 		return m[:len(m)-len(g[5])-2] + stEm.Render(g[5])
 	})
+}
+
+// preview is a message on one plain line, Markdown markers gone, for a
+// collapsed thread whose row carries its own selection style.
+func preview(s string) string {
+	return oneLine(ansi.Strip(strings.Join(markdown(s, 1<<16), " ")))
 }

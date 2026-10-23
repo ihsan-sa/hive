@@ -316,7 +316,7 @@ func (m *model) viewThreads(w int) []string {
 			if len(t.msgs) > 1 {
 				more = stDim.Render(fmt.Sprintf("  (+%d)", len(t.msgs)-1))
 			}
-			line := head + oneLine(first.Text) + more
+			line := head + preview(first.Text) + more
 			if i == m.threadSel && m.chatFocus == 1 {
 				line = stSel.Render(clip(line, w))
 			}
