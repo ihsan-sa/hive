@@ -122,7 +122,7 @@ func (m *Module) moveIsolated() {
 		}
 		dir, err := m.C.WS.IsolatedKB(p)
 		dst := filepath.Join(dir, name)
-		for i := 2; core.Exists(dst); i++ {
+		for i := 2; err == nil && core.Exists(dst); i++ {
 			dst = filepath.Join(dir, fmt.Sprintf("%s-%d.md", strings.TrimSuffix(name, ".md"), i))
 		}
 		if err == nil && os.Rename(filepath.Join(kb, name), dst) == nil {
