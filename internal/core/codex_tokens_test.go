@@ -161,13 +161,15 @@ func TestCodexConfigEscapesDEL(t *testing.T) {
 	}
 }
 
-// stuckCodexRun leaves a Codex home that cannot be deleted: its parent is read-only.
-func stuckCodexRun(t *testing.T) (Workspace, *Journal, Run) {
+// codexRun starts a Codex run with a token on disk and returns the Runs that
+// started it, the journal's path and a func that makes the folder undeletable.
+func codexRun(t *testing.T) (*Runs, Workspace, string, Run, func()) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("a read-only folder does not stop this user")
 	}
 	ws := Workspace{Root: t.TempDir()}
-	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	path := filepath.Join(t.TempDir(), "j.jsonl")
+	j, err := OpenJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,15 +183,20 @@ func stuckCodexRun(t *testing.T) (Workspace, *Journal, Run) {
 	if _, err := rs.freshCodexHome(r); err != nil {
 		t.Fatal(err)
 	}
-	os.Chmod(ws.RunHost("r1"), 0o500)
-	t.Cleanup(func() { os.Chmod(ws.RunHost("r1"), 0o700) })
-	return ws, j, r
+	lock := func() {
+		os.Chmod(ws.RunHost("r1"), 0o500)
+		t.Cleanup(func() { os.Chmod(ws.RunHost("r1"), 0o700) })
+	}
+	return rs, ws, path, r, lock
 }
 
 // A token that cannot be deleted at turn end blocks the run with the reason.
 func TestUndeletableCodexTokenBlocksTheRun(t *testing.T) {
-	ws, j, r := stuckCodexRun(t)
-	rs := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	rs, _, _, r, lock := codexRun(t)
+	lock()
+	if got, _ := rs.Get("r1"); got.Status == StatusBlocked {
+		t.Fatalf("blocked before the turn ended: %q", got.Reason)
+	}
 	rs.endTurn(r)
 	got, _ := rs.Get("r1")
 	if got.Status != StatusBlocked || !strings.Contains(got.Reason, "Codex token could not be deleted") {
@@ -198,12 +205,47 @@ func TestUndeletableCodexTokenBlocksTheRun(t *testing.T) {
 }
 
 // The same at daemon start: a token a crash left in a folder that cannot be
-// deleted is reported on the run, not dropped.
+// deleted is reported on the run, not dropped. A second start adds nothing, and
+// a finished run keeps its status.
 func TestUndeletableCodexTokenAtStartBlocksTheRun(t *testing.T) {
-	ws, j, _ := stuckCodexRun(t)
-	rs := NewRuns(ws, j, nil, nil, func() []string { return nil })
-	got, _ := rs.Get("r1")
+	rs, ws, path, _, lock := codexRun(t)
+	rs.SetStatus("r1", StatusDone, "finished")
+	lock()
+	start := func() (*Runs, *Journal) {
+		j, err := OpenJournal(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { j.Close() })
+		return NewRuns(ws, j, nil, nil, func() []string { return nil }), j
+	}
+	rs2, _ := start()
+	got, _ := rs2.Get("r1")
+	if got.Status != StatusDone {
+		t.Fatalf("finished run is %q", got.Status)
+	}
+	rs3, _ := start()
+	if got, _ := rs3.Get("r1"); got.Status != StatusDone {
+		t.Fatalf("finished run is %q", got.Status)
+	}
+	// A run that was still going is blocked once, then left alone.
+	rs.SetStatus("r1", StatusIdle, "")
+	rs4, _ := start()
+	got, _ = rs4.Get("r1")
 	if got.Status != StatusBlocked || !strings.Contains(got.Reason, "Codex token could not be deleted") {
 		t.Fatalf("run is %q (%q)", got.Status, got.Reason)
 	}
+	before := fileSize(t, path)
+	start()
+	if after := fileSize(t, path); after != before {
+		t.Fatalf("a restart wrote %d bytes to the journal", after-before)
+	}
+}
+
+func fileSize(t *testing.T, p string) int64 {
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi.Size()
 }

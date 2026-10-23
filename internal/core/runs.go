@@ -174,7 +174,16 @@ func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), token
 		rs.mu.Unlock()
 	})
 	for id, err := range stuck {
-		rs.SetStatus(id, StatusBlocked, "its Codex token could not be deleted: "+err.Error())
+		why := "its Codex token could not be deleted: " + err.Error()
+		r, _ := rs.Get(id)
+		switch {
+		case r.Status == StatusBlocked && strings.HasPrefix(r.Reason, "its Codex token could not be deleted"):
+			// already said; a restart adds nothing
+		case r.Terminal():
+			rs.Progress(id, why) // a finished run keeps its status
+		default:
+			rs.SetStatus(id, StatusBlocked, why)
+		}
 	}
 	return rs
 }
