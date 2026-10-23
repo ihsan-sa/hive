@@ -3,6 +3,7 @@ package kb
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -110,7 +111,8 @@ func TestSearch(t *testing.T) {
 		t.Fatal(got)
 	}
 	// One unreadable folder or file doesn't hide the rest of the knowledge base.
-	if os.Geteuid() != 0 {
+	// Root reads anything, and Windows can't make a folder unreadable with Chmod.
+	if os.Geteuid() != 0 && runtime.GOOS != "windows" {
 		os.MkdirAll(filepath.Join(dir, "a-locked"), 0o755)
 		os.WriteFile(filepath.Join(dir, "a-locked", "x.md"), []byte("invoices"), 0o644)
 		os.WriteFile(filepath.Join(dir, "a-locked.md"), []byte("invoices"), 0o644)
