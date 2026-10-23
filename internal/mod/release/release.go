@@ -279,9 +279,9 @@ func (m *Module) AfterKept(project, sha string) {
 	alert := func(text string) {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": project, "text": text})
 	}
-	list, stale := m.merges(project, sha)
-	if stale {
-		alert("no release at " + core.Short(sha) + ": a newer release already covers it")
+	list, refuse := m.merges(project, sha)
+	if refuse != "" {
+		alert("no release at " + core.Short(sha) + ": " + refuse)
 		return
 	}
 	var manifest strings.Builder
@@ -330,7 +330,7 @@ func (m *Module) hold(project, sha string, root, unread []string, manifest strin
 	ref := project + "@" + sha
 	for _, a := range m.C.Person.Open() {
 		if a.Kind == "release" && a.Project == project && a.Ref != ref {
-			m.C.Person.Answer(a.ID, "superseded", "a release ask at "+core.Short(sha)+" covers it")
+			m.C.Person.Answer(a.ID, "superseded", "the Hive, not the person: a release ask at "+core.Short(sha)+" covers it")
 		}
 	}
 	var why []string
@@ -350,6 +350,10 @@ func (m *Module) hold(project, sha string, root, unread []string, manifest strin
 func (m *Module) OnPerson(a core.Ask) {
 	project, sha, _ := strings.Cut(a.Ref, "@")
 	if a.Answer == "release" || a.Answer == "yes" {
+		if _, refuse := m.merges(project, sha); refuse != "" {
+			m.C.J.MustAppend("release.superseded", map[string]string{"project": project, "sha": sha, "why": refuse})
+			return
+		}
 		m.C.Effects.Approve("release", project, sha)
 		m.AfterKept(project, sha)
 	}
@@ -363,8 +367,9 @@ type merge struct {
 }
 
 // merges lists the project's merges after the one its last release was cut
-// at, up to the one that made upTo. stale means a release already covers upTo.
-func (m *Module) merges(project, upTo string) (out []merge, stale bool) {
+// at, up to the one that made upTo. refuse says why there is nothing to
+// release: a release already covers upTo, or upTo is no merge the journal saw.
+func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 	var all []merge
 	from, at := 0, -1
 	m.C.J.Replay(func(e core.Event) {
@@ -389,12 +394,12 @@ func (m *Module) merges(project, upTo string) (out []merge, stale bool) {
 		from = max(from, i+1)
 	})
 	if at >= 0 && at < from {
-		return nil, true
+		return nil, "a newer release already covers it"
 	}
 	if at < 0 {
-		at = len(all) - 1
+		return nil, "it is not a merge the Hive made"
 	}
-	return all[from : at+1], false
+	return all[from : at+1], ""
 }
 
 func bump(tag string) string {

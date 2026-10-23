@@ -248,6 +248,48 @@ func TestStaleReleaseAnswer(t *testing.T) {
 	if len(n.got) != 1 {
 		t.Fatalf("a stale answer cut another release: %v", n.got)
 	}
+	if m.C.Effects.Approved("release", "hive", "m2") {
+		t.Fatal("a stale answer left an approval for m2")
+	}
+	if !journaled(m, "release.superseded") {
+		t.Fatal("the stale answer was not recorded as superseded")
+	}
+}
+
+func journaled(m *Module, kind string) (found bool) {
+	m.C.J.Replay(func(e core.Event) { found = found || e.Kind == kind })
+	return
+}
+
+// The Hive's own supersede is marked as the Hive's, not the person's word.
+func TestSupersedeIsTheHives(t *testing.T) {
+	m, _, merged, land := selfHive(t)
+	merged(2, "a2", "m2", "install/root.sh")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	old := m.C.Person.Open()[0]
+	merged(3, "a3", "m3", "install/root.sh")
+	land("a3", "r3")
+	m.AfterKept("hive", "m3")
+	got, _ := m.C.Person.Get(old.ID)
+	if got.Answer != "superseded" || !strings.HasPrefix(got.Note, "the Hive") {
+		t.Fatalf("the supersede should say it is the Hive's: %+v", got)
+	}
+}
+
+// A sha no journaled merge made covers nothing: no release, no approval.
+func TestUnknownMergeRefused(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "outside")
+	if len(n.got) != 0 {
+		t.Fatalf("released a merge the Hive never made: %v", n.got)
+	}
+	m.OnPerson(core.Ask{Kind: "release", Ref: "hive@outside", Project: "hive", Answer: "release"})
+	if m.C.Effects.Approved("release", "hive", "outside") {
+		t.Fatal("approved a release of an unknown merge")
+	}
 }
 
 // The person's release answer stands for the unread head its ask named.
