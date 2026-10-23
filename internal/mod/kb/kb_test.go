@@ -3,6 +3,7 @@ package kb
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +58,10 @@ func TestFilerCannotReachIsolatedNotes(t *testing.T) {
 		"not a note": func(dir string) {
 			os.WriteFile(filepath.Join(dir, "x.sh"), []byte("planted"), 0o644)
 		},
+		// The next start's move would put it over the real note.
+		"note naming an isolated project": func(dir string) {
+			os.WriteFile(filepath.Join(dir, "plan.md"), []byte("---\ntitle: plan\nproject: secret\n---\n\nplanted\n"), 0o644)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, m := newKB(t)
@@ -66,6 +71,7 @@ func TestFilerCannotReachIsolatedNotes(t *testing.T) {
 			}
 			kb := c.WS.KB()
 			base := file(t, c, m, plant)
+			m.moveIsolated() // what the next start does
 			if head, _ := core.Git(kb, "rev-parse", "HEAD"); head != base {
 				t.Error("the filer's commits were taken")
 			}
@@ -137,5 +143,46 @@ func TestFilerConsolidates(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(a); string(got) != "one and two" || core.Exists(b) {
 		t.Errorf("the consolidation didn't land: %q", got)
+	}
+}
+
+// Notes an isolated project left in the shared knowledge base move to its
+// folder once, at the first start, and never over a note already there.
+func TestMoveIsolatedOnceWithoutOverwriting(t *testing.T) {
+	c, m := newKB(t)
+	real, _ := m.Write(Note{Title: "plan", Text: "the real plan", Project: "secret"})
+	kb := c.WS.KB()
+	for _, name := range []string{"plan.md", "old.md"} {
+		os.WriteFile(filepath.Join(kb, name), []byte("---\ntitle: x\nproject: secret\n---\n\nleft over\n"), 0o644)
+	}
+	core.Git(kb, "add", "-A")
+	core.Git(kb, "commit", "-q", "-m", "left over")
+	m.moveIsolated()
+	if !core.Exists(filepath.Join(kb, "old.md")) {
+		t.Fatal("notes moved again after the first start")
+	}
+	os.Remove(filepath.Join(c.WS.Hive(), "kb-isolated-moved"))
+	m.moveIsolated()
+	if b, _ := os.ReadFile(real); !strings.Contains(string(b), "the real plan") {
+		t.Errorf("the move replaced the isolated note: %q", b)
+	}
+	if core.Exists(filepath.Join(kb, "old.md")) || !core.Exists(filepath.Join(filepath.Dir(real), "old.md")) {
+		t.Error("the left-over note didn't move")
+	}
+}
+
+// A note is never written through a link left at its name, even a dangling one.
+func TestNoteSkipsADanglingLink(t *testing.T) {
+	c, m := newKB(t)
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.Symlink(target, filepath.Join(c.WS.KB(), "note.md")); err != nil {
+		t.Fatal(err)
+	}
+	path, err := m.Write(Note{Title: "note", Text: "text", Project: "open"})
+	if err != nil || filepath.Base(path) != "note-2.md" {
+		t.Errorf("wrote %s, %v", path, err)
+	}
+	if core.Exists(target) {
+		t.Error("the note was written where the link points")
 	}
 }

@@ -92,19 +92,21 @@ func (m *Module) ensureRepo() {
 // moveIsolated moves notes an isolated project left in the shared knowledge
 // base, from before they went in its own folder, into that folder, and takes
 // them out of the repository from here on. Earlier commits still hold them.
+// It runs once, behind a marker in the Hive's own state where the filer can't
+// write, and never replaces a note already in the folder.
 func (m *Module) moveIsolated() {
+	marker := filepath.Join(m.C.WS.Hive(), "kb-isolated-moved")
+	if core.Exists(marker) {
+		return
+	}
 	kb := m.C.WS.KB()
 	var moved []string
 	for _, name := range m.Notes() {
 		b, _ := os.ReadFile(filepath.Join(kb, name))
-		head, _, _ := strings.Cut(string(b), "\n---\n")
-		for _, line := range strings.Split(head, "\n") {
-			proj, ok := strings.CutPrefix(line, "project: ")
-			if p, isProj := m.C.Projects.Get(proj); ok && isProj && p.Isolated {
-				dir, err := m.C.WS.IsolatedKB(p.Name)
-				if err == nil && os.Rename(filepath.Join(kb, name), filepath.Join(dir, name)) == nil {
-					moved = append(moved, name)
-				}
+		if p, ok := m.isolatedIn(string(b)); ok {
+			dir, err := m.C.WS.IsolatedKB(p)
+			if dst := filepath.Join(dir, name); err == nil && !core.Exists(dst) && os.Rename(filepath.Join(kb, name), dst) == nil {
+				moved = append(moved, name)
 			}
 		}
 	}
@@ -112,6 +114,19 @@ func (m *Module) moveIsolated() {
 		core.Git(kb, append([]string{"rm", "-q", "--cached", "--ignore-unmatch", "--"}, moved...)...)
 		core.Git(kb, "commit", "-q", "-m", "Move isolated projects' notes out of the shared knowledge base")
 	}
+	os.WriteFile(marker, nil, 0o644)
+}
+
+// isolatedIn returns the isolated project a note's header names, if any.
+func (m *Module) isolatedIn(note string) (string, bool) {
+	head, _, _ := strings.Cut(note, "\n---\n")
+	for _, line := range strings.Split(head, "\n") {
+		proj, ok := strings.CutPrefix(line, "project: ")
+		if p, isProj := m.C.Projects.Get(proj); ok && isProj && p.Isolated {
+			return p.Name, true
+		}
+	}
+	return "", false
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -136,12 +151,23 @@ func (m *Module) Write(n Note) (string, error) {
 			return "", err
 		}
 	}
-	path := filepath.Join(dir, slug+".md")
-	for i := 2; core.Exists(path); i++ {
-		path = filepath.Join(dir, fmt.Sprintf("%s-%d.md", slug, i))
-	}
 	body := fmt.Sprintf("---\ntitle: %s\ntags: %s\nproject: %s\ndate: %s\nrun: %s\n---\n\n%s\n", oneLine(n.Title), oneLine(n.Tags), n.Project, time.Now().Format("2006-01-02"), n.Run, strings.TrimSpace(n.Text))
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	// O_EXCL never follows a link, even a dangling one, so a link left at a
+	// note's name is passed over rather than written through.
+	path := filepath.Join(dir, slug+".md")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	for i := 2; os.IsExist(err); i++ {
+		path = filepath.Join(dir, fmt.Sprintf("%s-%d.md", slug, i))
+		f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	}
+	if err != nil {
+		return "", err
+	}
+	_, err = f.WriteString(body)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return "", err
 	}
 	if dir != m.C.WS.KB() {
@@ -159,8 +185,10 @@ var noteRe = regexp.MustCompile(`^[A-Za-z0-9._-]+\.md$`)
 // checkFiled takes a filer's commits only when all they change is top-level
 // notes, as plain files with plain names. Anything else, such as a folder
 // that a case-insensitive disk folds onto isolated/, where isolated projects'
-// notes sit untracked, or a link, is refused.
-func checkFiled(kb, sha string) error {
+// notes sit untracked, a link, or a note whose header names an isolated
+// project, is refused.
+func (m *Module) checkFiled(sha string) error {
+	kb := m.C.WS.KB()
 	diff, err := core.Git(kb, "diff-tree", "-r", "-z", "--no-renames", "HEAD", sha)
 	if err != nil {
 		return err
@@ -172,6 +200,12 @@ func checkFiled(kb, sha string) error {
 		meta, p := strings.Fields(f[i]), f[i+1]
 		if len(meta) < 2 || (meta[1] != "100644" && meta[1] != "000000") || !noteRe.MatchString(p) {
 			return fmt.Errorf("refused: the filer touched %s", p)
+		}
+		if meta[1] == "100644" {
+			b, _ := core.Git(kb, "show", sha+":"+p)
+			if proj, ok := m.isolatedIn(b); ok {
+				return fmt.Errorf("refused: the filer wrote %s for isolated project %s", p, proj)
+			}
 		}
 	}
 	return nil
@@ -247,7 +281,7 @@ func (m *Module) Tick() {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := checkFiled(m.C.WS.KB(), sha); err != nil {
+	if err := m.checkFiled(sha); err != nil {
 		m.C.J.MustAppend("kb.filed", map[string]string{"run": id, "result": err.Error()})
 		return
 	}
