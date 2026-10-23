@@ -135,6 +135,12 @@ func threads(msgs []chat.Message) []thread {
 func (m *model) keyChats(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rows := m.chatRows()
 	s := k.String()
+	if k.Paste && m.chatSel < len(rows) && !rows[m.chatSel].group {
+		// A drop before composing starts a message and attaches like one in it.
+		focus := m.compose("", "")
+		_, cmd := m.keyInput(k)
+		return m, tea.Batch(focus, cmd)
+	}
 	if m.chatFocus == 0 {
 		switch s {
 		case "up", "k":

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
@@ -47,8 +48,29 @@ type File struct {
 	Data []byte `json:"data"`
 }
 
-// MaxFile caps one attachment, so a stray drop can't flood a run's dir.
-const MaxFile = 10 << 20
+// MaxFile caps one attachment and MaxFiles a message's count, so a stray
+// drop can't flood a run's dir. MaxBody follows from them: each file goes as
+// base64 in JSON, plus room for the text.
+const (
+	MaxFile  = 10 << 20
+	MaxFiles = 10
+	MaxBody  = MaxFiles*((MaxFile+2)/3*4+1<<10) + 1<<20
+)
+
+// cleanName is the base name with control characters and brackets dropped,
+// so a file's name can't break the prompt's note or add text to it.
+func cleanName(n string) string {
+	n = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '[' || r == ']' {
+			return -1
+		}
+		return r
+	}, filepath.Base(n))
+	if n == "" || n == "." || n == "/" {
+		return "file"
+	}
+	return n
+}
 
 // TooBig says why an attachment of n bytes can't go, or nil if it can.
 func TooBig(name string, n int64) error {
@@ -161,19 +183,22 @@ func (m *Module) add(msg Message) Message {
 
 // Post is the person writing in a chat; it reaches the chat's lead or agent.
 // Files go into the run's own dir ($HIVE_RUN/attach), and the prompt names
-// their paths: the agent reads them with its own tools, and Claude's Read
-// shows an image as an image.
+// their paths: the agent opens them with its own tools.
 func (m *Module) Post(chatID, thread, text string, files ...File) (Message, error) {
 	text = strings.TrimSpace(text)
 	if text == "" && len(files) == 0 {
 		return Message{}, fmt.Errorf("empty message")
 	}
+	if len(files) > MaxFiles {
+		return Message{}, fmt.Errorf("%d files; a message can carry at most %d", len(files), MaxFiles)
+	}
 	shown := text
-	for _, f := range files {
-		if err := TooBig(f.Name, int64(len(f.Data))); err != nil {
+	for i, f := range files {
+		files[i].Name = cleanName(f.Name)
+		if err := TooBig(files[i].Name, int64(len(f.Data))); err != nil {
 			return Message{}, err
 		}
-		shown += "\n📎 " + filepath.Base(f.Name)
+		shown += "\n📎 " + files[i].Name
 	}
 	m.mu.Lock()
 	ch := m.chats[chatID]
@@ -191,7 +216,11 @@ func (m *Module) Post(chatID, thread, text string, files ...File) (Message, erro
 	msg := m.add(Message{Chat: chatID, Thread: thread, From: "person", Name: "you", Text: strings.TrimSpace(shown)})
 	switch ch.Kind {
 	case "agent":
-		note, err := m.attach(ch.Lead, files)
+		err := m.C.Runs.Takes(ch.Lead)
+		note := ""
+		if err == nil {
+			note, err = m.attach(ch.Lead, files)
+		}
 		if err == nil {
 			err = m.C.Runs.Send(ch.Lead, "[the person, in your chat] "+text+note)
 		}
@@ -217,9 +246,9 @@ func (m *Module) attach(run string, files []File) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	note := "\n[attached; open each with your Read tool, which shows images as images:"
+	note := "\n[attached; the person's files, each at its path:"
 	for i, f := range files {
-		name := fmt.Sprintf("%s-%d-%s", core.NewID(), i, filepath.Base(f.Name))
+		name := fmt.Sprintf("%s-%d-%s", core.NewID(), i, f.Name)
 		if err := os.WriteFile(filepath.Join(dir, name), f.Data, 0o644); err != nil {
 			return "", err
 		}

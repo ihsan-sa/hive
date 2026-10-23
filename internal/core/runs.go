@@ -362,14 +362,22 @@ func (rs *Runs) Plans() []Plan {
 	return out
 }
 
-// Send queues a message for a run's next turn.
-func (rs *Runs) Send(id, text string) error {
+// Takes says why run id can't take a message, or nil if it can.
+func (rs *Runs) Takes(id string) error {
 	r, ok := rs.Get(id)
 	if !ok {
 		return ErrNotFound
 	}
 	if r.Terminal() && !r.Persistent {
 		return fmt.Errorf("run %s has ended (%s)", id, r.Status)
+	}
+	return nil
+}
+
+// Send queues a message for a run's next turn.
+func (rs *Runs) Send(id, text string) error {
+	if err := rs.Takes(id); err != nil {
+		return err
 	}
 	rs.append("run.queued", runNote{ID: id, Text: text})
 	return nil
@@ -643,10 +651,11 @@ func (rs *Runs) launch(r Run) {
 
 // RunPath is where a run's agent sees its run dir ($HIVE_RUN).
 func (rs *Runs) RunPath(id string) string {
-	if sb, err := rs.sandbox(); err == nil && sb.Isolated() {
-		return "/hive/run"
+	m := sandbox.Mount{Host: rs.ws.RunRO(id), Inside: "/hive/run"}
+	if sb, err := rs.sandbox(); err == nil {
+		return sandbox.InsidePath(sb, m)
 	}
-	return rs.ws.RunRO(id)
+	return m.Host
 }
 
 // sandboxSpec lays out what the agent sees.

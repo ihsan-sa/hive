@@ -32,6 +32,12 @@ func TestPastedPaths(t *testing.T) {
 		"hello": nil,
 		dir:     nil, // a folder isn't attached
 	}
+	// One word attaches only when it reads as a path; go.mod alone is typed.
+	t.Chdir(dir)
+	t.Setenv("HOME", dir)
+	cases["b.go"] = nil
+	cases["./b.go"] = []string{"./b.go"}
+	cases["~/b.go"] = []string{b}
 	for in, want := range cases {
 		if got := pastedPaths(in); !reflect.DeepEqual(got, want) {
 			t.Errorf("pastedPaths(%q) = %q, want %q", in, got, want)
@@ -79,10 +85,53 @@ func TestDropAttaches(t *testing.T) {
 		t.Fatalf("text paste: %q %d", m.input.Value(), len(m.files))
 	}
 
+	// A drop while the chat list or thread pane is focused, before composing,
+	// starts a message with the file attached.
+	for focus := 0; focus < 2; focus++ {
+		m := testModel(100, 30)
+		m.section = secChats
+		for i, r := range m.chatRows() {
+			if !r.group {
+				m.chatSel = i
+				break
+			}
+		}
+		m.chatFocus = focus
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("'" + f + "' "), Paste: true})
+		if !m.composing || m.input.Value() != "" || len(m.files) != 1 || m.files[0].Name != "shot.png" {
+			t.Fatalf("focus %d: composing %v input %q files %+v", focus, m.composing, m.input.Value(), m.files)
+		}
+	}
+
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("WAYLAND_DISPLAY", "")
 	t.Setenv("DISPLAY", "")
-	if _, err := clipboardImage(); err == nil || !strings.Contains(err.Error(), "no clipboard tool") {
+	if _, err := clipboardImage(); err != errNoTool {
 		t.Fatalf("no tool: %v", err)
+	}
+	// With no tool, ctrl+v still hands the input its text paste.
+	_, cmd := m.keyInput(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if c, ok := cmd().(clipMsg); !ok || c.text == nil {
+		t.Fatalf("ctrl+v with no tool: %+v", c)
+	}
+}
+
+// TestClipboardTools: a tool with no image passes to the next one.
+func TestClipboardTools(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("wl-paste and xclip are Linux tools")
+	}
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "wl-paste"), []byte("#!/bin/sh\n"), 0o755)
+	os.WriteFile(filepath.Join(bin, "xclip"), []byte("#!/bin/sh\nprintf '\\211PNGimg'\n"), 0o755)
+	t.Setenv("PATH", bin)
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+	t.Setenv("DISPLAY", ":0")
+	if f, err := clipboardImage(); err != nil || string(f.Data) != "\x89PNGimg" {
+		t.Fatalf("got %q, %v", f.Data, err)
+	}
+	os.WriteFile(filepath.Join(bin, "xclip"), []byte("#!/bin/sh\n"), 0o755)
+	if _, err := clipboardImage(); err != errNoImage {
+		t.Fatalf("both empty: %v", err)
 	}
 }

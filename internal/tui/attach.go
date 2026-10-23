@@ -19,25 +19,30 @@ import (
 // pastedPaths reads a paste as the files a terminal delivers for a drop:
 // quoted or backslash-escaped paths, file:// URLs, and Windows paths (as
 // /mnt/<drive> or the distro's own path under WSL). It returns nil unless
-// every word of the paste names a file that exists, so text stays text.
+// every word of the paste names a file that exists, so text stays text, and
+// a single word must also read as a path (absolute, ~ or ./): pasting the
+// word go.mod types it.
 func pastedPaths(s string) []string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil
 	}
-	if isFile(s) {
-		return []string{s}
+	if p := hostPath(s); isFile(p) && pathLike(p) {
+		return []string{p}
 	}
+	ws := words(s)
 	var out []string
-	for _, w := range words(s) {
+	for _, w := range ws {
 		p := hostPath(w)
-		if !isFile(p) {
+		if !isFile(p) || len(ws) == 1 && !pathLike(p) {
 			return nil
 		}
 		out = append(out, p)
 	}
 	return out
 }
+
+func pathLike(p string) bool { return filepath.IsAbs(p) || strings.HasPrefix(p, "./") }
 
 var (
 	winDrive = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
@@ -94,6 +99,9 @@ func hostPath(w string) string {
 				w = strings.TrimPrefix(w, "/")
 			}
 		}
+	}
+	if h, err := os.UserHomeDir(); err == nil && strings.HasPrefix(w, "~/") {
+		w = filepath.Join(h, w[2:])
 	}
 	if runtime.GOOS == "windows" {
 		return w
@@ -163,24 +171,22 @@ func clipTools() []clipTool {
 var (
 	pngMagic   = []byte("\x89PNG")
 	errNoImage = errors.New("no image on the clipboard")
+	errNoTool  = errors.New("no clipboard tool found to read a pasted image; install wl-clipboard (Wayland) or xclip (X11)")
 )
 
-// clipboardImage reads an image off the clipboard with the first tool found.
+// clipboardImage reads an image off the clipboard with the first tool found
+// that has one.
 func clipboardImage() (chat.File, error) {
+	err := errNoTool
 	for _, t := range clipTools() {
-		if _, err := exec.LookPath(t.argv[0]); err != nil {
+		if _, e := exec.LookPath(t.argv[0]); e != nil {
 			continue
 		}
+		err = errNoImage
 		out, _ := exec.Command(t.argv[0], t.argv[1:]...).Output()
-		img, err := t.decode(out)
-		if err != nil || !bytes.HasPrefix(img, pngMagic) {
-			return chat.File{}, errNoImage
+		if img, e := t.decode(out); e == nil && bytes.HasPrefix(img, pngMagic) {
+			return chat.File{Name: "pasted.png", Data: img}, chat.TooBig("the clipboard image", int64(len(img)))
 		}
-		return chat.File{Name: "pasted.png", Data: img}, chat.TooBig("the clipboard image", int64(len(img)))
 	}
-	hint := "no clipboard tool found to read a pasted image"
-	if runtime.GOOS == "linux" {
-		hint += "; install wl-clipboard (Wayland) or xclip (X11)"
-	}
-	return chat.File{}, errors.New(hint)
+	return chat.File{}, err
 }

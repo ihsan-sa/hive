@@ -272,6 +272,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case flashMsg:
 		m.setFlash(string(msg))
 		return m, m.fetchState()
+	case clipMsg:
+		switch {
+		case msg.text != nil:
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg.text)
+			return m, cmd
+		case msg.err != nil:
+			m.setFlash(msg.err.Error())
+		case m.composing:
+			m.files = append(m.files, msg.f)
+		}
 	case tea.KeyMsg:
 		return m.key(msg)
 	}
@@ -363,13 +374,7 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// As in Claude Code: an image on the clipboard attaches; otherwise
 		// ctrl+v pastes text as before.
 		if m.composing {
-			if f, err := clipboardImage(); err != errNoImage {
-				if err != nil {
-					return m, flash(err.Error())
-				}
-				m.files = append(m.files, f)
-				return m, nil
-			}
+			return m, readClipboard(true)
 		}
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
@@ -398,12 +403,7 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.composing && k.Paste {
 		// A drop arrives as a pasted path; an empty paste may be an image.
 		if len(k.Runes) == 0 {
-			f, err := clipboardImage()
-			if err != nil {
-				return m, flash(err.Error())
-			}
-			m.files = append(m.files, f)
-			return m, nil
+			return m, readClipboard(false)
 		}
 		if paths := pastedPaths(string(k.Runes)); paths != nil {
 			for _, p := range paths {
@@ -422,6 +422,26 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func flash(s string) tea.Cmd { return func() tea.Msg { return flashMsg(s) } }
+
+// clipMsg is a clipboard read: an image to attach, why there is none, or,
+// for ctrl+v with no image, the input's own text paste.
+type clipMsg struct {
+	f    chat.File
+	err  error
+	text tea.Msg
+}
+
+// readClipboard reads the clipboard's image off the UI loop, since a tool
+// like powershell.exe can take seconds.
+func readClipboard(text bool) tea.Cmd {
+	return func() tea.Msg {
+		f, err := clipboardImage()
+		if text && (err == errNoImage || err == errNoTool) {
+			return clipMsg{text: textinput.Paste()}
+		}
+		return clipMsg{f: f, err: err}
+	}
+}
 
 func (m *model) bodyHeight() int { return max(3, m.h-4) }
 
