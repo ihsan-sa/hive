@@ -17,6 +17,8 @@ func open(t *testing.T, dir string) (*core.Core, *Module) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// An open journal blocks TempDir's cleanup on Windows; closing twice is harmless.
+	t.Cleanup(func() { c.Close() })
 	return c, New(c, &agents.Agents{C: c})
 }
 
