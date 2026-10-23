@@ -122,7 +122,7 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 	ops := c.Runs.Ops()
 	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3","gain":"(optional) large"} -> T1 you weigh yourself; T2 goes to a warden, T3 to a tribunal`, Fn: m.opRequest})
 	ops.Register(core.Op{Name: "decide", Roles: []string{"warden"}, Help: `{"decision":"do|safer|decline|tribunal","reason","script":"exactly what runs (do, tribunal)","gain":"(optional) large"}`, Fn: m.opDecide})
-	ops.Register(core.Op{Name: "install_module", Roles: []string{"lead"}, Help: `{"url"}`, Fn: m.opInstall})
+	ops.Register(core.Op{Name: "install_module", Roles: []string{"lead"}, Help: `{"url"} or {"project"}: a module built as a project of its own installs from it`, Fn: m.opInstall})
 	c.Person.Handle("request", m.onAnswer)
 	c.Person.Handle("module", m.onModule)
 	// A warden that asks an agent ends its turn to wait for the reply, so it
@@ -468,7 +468,9 @@ func (m *Module) advance(req *Request) {
 	case req.Gain == "large":
 		req.Reason += "\n\nThe tribunal declined (" + tally + "), but the gain would be large, so it's yours to decide."
 		m.ask(req, "A tribunal declined a large gain", "The tribunal declined, but the gain would be large.", "run", "declined")
-		m.tell(*req, "The tribunal declined ("+tally+"); the gain is large, so the person decides.")
+		if req.Settles == nil {
+			m.tell(*req, "The tribunal declined ("+tally+"); the gain is large, so the person decides.")
+		}
 	default:
 		req.State, req.Outcome = "declined", "tribunal"
 		m.save(req)
@@ -578,7 +580,9 @@ func (m *Module) execute(id string) {
 	if err := core.CeilingGuard(req.Script, floor, req.PersonOK); err != nil {
 		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.Ceiling(floor, req.Script)+", which is always yours to decide.", "run", "declined")
 		m.act.Unlock()
-		m.tell(req, err.Error()+"; the person decides.")
+		if req.Settles == nil {
+			m.tell(req, err.Error()+"; the person decides.")
+		}
 		return
 	}
 	if req.Settles != nil {
@@ -680,9 +684,25 @@ func (m *Module) onAnswer(a core.Ask) {
 }
 
 func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
-	var a struct{ URL string }
+	var a struct{ URL, Project string }
 	if err := core.Bind(args, &a); err != nil {
 		return nil, err
+	}
+	if a.Project != "" {
+		p, ok := m.C.Projects.Get(a.Project)
+		if !ok {
+			return nil, fmt.Errorf("no project %q", a.Project)
+		}
+		if err := m.C.Runs.Walled(r, a.Project); err != nil {
+			return nil, err
+		}
+		if p.Isolated {
+			return nil, fmt.Errorf("project %q is isolated, so its code can't become a module every project's agents read", a.Project)
+		}
+		a.URL = m.C.WS.Project(a.Project)
+	}
+	if p := strings.TrimPrefix(a.URL, "file://"); p == "/work" || strings.HasPrefix(p, "/work/") || strings.HasPrefix(p, "/hive/") {
+		return nil, errors.New("that path is inside your sandbox, and the install runs on the host where it doesn't exist: build the module as a project of its own and install it with --project <name>")
 	}
 	if !strings.HasPrefix(a.URL, "https://") && !strings.HasPrefix(a.URL, "git@") && !strings.HasPrefix(a.URL, "file://") && !core.Exists(a.URL) {
 		return nil, errors.New("give a git URL (https://, git@, file://) or a local repository path")
@@ -691,7 +711,11 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 	if _, ok := m.Mod.Get(name); ok {
 		return nil, fmt.Errorf("a module named %s is already installed", name)
 	}
-	who := m.Weigh(core.Ask{Kind: "module", Ref: a.URL, Project: r.Project, From: r.ID,
+	project := a.Project // where the ask is filed: the source project, else the asker's own
+	if project == "" {
+		project = r.Project
+	}
+	who := m.Weigh(core.Ask{Kind: "module", Ref: a.URL, From: r.ID, Project: project,
 		Title:   "Install module " + name + "?",
 		Detail:  "From " + a.URL + ". It brings outside code onto this machine; agents will read and use it. The Hive clones it into .modules/" + name + ".",
 		Options: []string{"install", "decline"}})
@@ -730,6 +754,8 @@ func (m *Module) Weigh(a core.Ask) string {
 // person's answer, and tells the person after. A request the person was asked
 // about (req.Ask) carries their own answer and note, with nothing to tell.
 func (m *Module) settle(req Request, yes bool) {
+	// Answer needs the ask on file: the warden route never filed it, and Ask
+	// files it or, once per kind and ref, returns the one still open.
 	a := m.C.Person.Ask(*req.Settles)
 	opt := a.Options[len(a.Options)-1]
 	if yes {
@@ -754,7 +780,14 @@ func (m *Module) onModule(a core.Ask) {
 		m.C.Runs.Send(a.From, "[module "+name+" not installed: "+a.Answer+"] "+a.Note)
 		return
 	}
-	mod, err := m.Mod.Install(a.Ref, name)
+	var err error
+	if p, ok := m.C.Projects.Get(a.Project); ok && a.Ref == m.C.WS.Project(p.Name) {
+		_, err = m.C.Effects.Sync(p) // the host clone at main is what installs
+	}
+	mod := modules.Module{}
+	if err == nil {
+		mod, err = m.Mod.Install(a.Ref, name)
+	}
 	if err != nil {
 		m.C.Runs.Send(a.From, "[module "+name+" did not install] "+err.Error())
 		return

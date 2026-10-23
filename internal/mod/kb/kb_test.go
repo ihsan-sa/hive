@@ -77,7 +77,7 @@ func TestSeedingKeepsExistingFiles(t *testing.T) {
 // leaves one a person edited since.
 func TestUpdateRefreshesUntouchedPracticeDocs(t *testing.T) {
 	ws, c, mods := freshWorkspace(t)
-	New(c, &agents.Agents{C: c, Mod: mods})
+	m := New(c, &agents.Agents{C: c, Mod: mods})
 	edited := filepath.Join(ws.KB(), "practice", "risk.md")
 	if err := os.WriteFile(edited, []byte("my own risk rules\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -92,15 +92,25 @@ func TestUpdateRefreshesUntouchedPracticeDocs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	New(c, &agents.Agents{C: c, Mod: mods})
+	m.filePractice()
+	m.filePractice()
 	if raw, _ := os.ReadFile(filepath.Join(ws.KB(), "practice", "writing.md")); !strings.Contains(string(raw), "new in this release") {
 		t.Error("untouched practice doc not refreshed on update")
 	}
 	if raw, _ := os.ReadFile(edited); string(raw) != "my own risk rules\n" {
 		t.Errorf("edited practice doc overwritten: %q", raw)
 	}
-	if out, _ := core.Git(ws.KB(), "status", "--porcelain"); out != "" {
-		t.Errorf("refresh not committed:\n%s", out)
+	if out, _ := core.Git(ws.KB(), "status", "--porcelain"); strings.TrimSpace(out) != "M practice/risk.md" {
+		t.Errorf("refresh not committed, or the person's edit swept into it:\n%s", out)
+	}
+	kept := 0
+	c.J.Replay(func(e core.Event) {
+		if e.Kind == "kb.practice" {
+			kept++
+		}
+	})
+	if kept != 1 {
+		t.Errorf("kept edit journaled %d times over two starts, want once", kept)
 	}
 }
 

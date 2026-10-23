@@ -469,6 +469,24 @@ func TestTribunalThatCannotStartFails(t *testing.T) {
 	}
 }
 
+// The install clones on the host, so a path from inside the lead's sandbox
+// is refused with the way that works, before it reaches the person.
+func TestInstallRefusesSandboxPath(t *testing.T) {
+	g := newRig(t, 2)
+	lead, err := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, url := range []string{"file:///work/wordcount", "/hive/projects/wordcount"} {
+		if _, err := g.call(lead, "install_module", map[string]string{"url": url}); err == nil || !strings.Contains(err.Error(), "--project") {
+			t.Errorf("%s: want a refusal pointing at --project, got %v", url, err)
+		}
+	}
+	if asks := g.c.Person.Open(); len(asks) != 0 {
+		t.Fatalf("a refused install reached the person: %+v", asks)
+	}
+}
+
 // A merge that changes the goals, the score or a setting, and a module
 // install, follow autonomy like any step: at 1 the person decides; above it a
 // warden does, its answer reaches the ask's handler as the person's would,
@@ -555,6 +573,18 @@ func TestWeighDeclineAndCeiling(t *testing.T) {
 	}
 	if who := g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@2", Title: "Merge? It changes .hive/project.json", Detail: "+the deploy token lives in ~/.netrc", Options: []string{"merge", "leave open"}}); who != "person" {
 		t.Fatalf("a ceiling change went to the %s", who)
+	}
+}
+
+// A merge that touches the floor goes to the person when it is filed, before
+// any warden sees it.
+func TestWeighFloorGoesToThePerson(t *testing.T) {
+	g := newRig(t, 3)
+	cfg := g.c.WS.LoadConfig()
+	cfg.Floor = []string{"/srv/app"}
+	g.c.WS.SaveConfig(cfg)
+	if who := g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@1", Title: "Merge? It changes the goals", Detail: "+- deploy to /srv/app nightly", Options: []string{"merge", "leave open"}}); who != "person" || len(g.m.List()) != 0 {
+		t.Fatalf("a floor change went to the %s with %d requests", who, len(g.m.List()))
 	}
 }
 
@@ -689,6 +719,30 @@ func TestPersonAnswersASettledAsk(t *testing.T) {
 					t.Fatalf("%s, %s: told the person about their own answer: %+v", route, answer, a)
 				}
 			}
+			if p := g.run(g.worker.ID).Pending; len(p) > 0 {
+				t.Fatalf("%s, %s: the finished worker was sent %q", route, answer, p)
+			}
 		}
+	}
+}
+
+// An isolated project's code never becomes a module every project reads, and
+// no lead installs from a project out of its reach.
+func TestModuleInstallRefusesAnIsolatedProject(t *testing.T) {
+	g := newRig(t, 2)
+	g.c.Projects.Add(core.Project{Name: "open", Repo: "me/open"})
+	g.c.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	os.MkdirAll(g.c.WS.Project("secret"), 0o755)
+	for _, from := range []string{"secret", "open"} {
+		lead, err := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Project: from, Isolated: from == "secret", Checkout: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := g.call(lead, "install_module", map[string]string{"project": "secret"}); err == nil {
+			t.Errorf("a %s lead installed the isolated project as a module", from)
+		}
+	}
+	if len(g.c.Person.Open()) != 0 || len(g.m.List()) != 0 {
+		t.Error("a refused install was still asked or weighed")
 	}
 }

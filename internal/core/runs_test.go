@@ -45,6 +45,35 @@ func TestNestedMountPointsExist(t *testing.T) {
 	}
 }
 
+// startSB records each turn's command instead of starting it.
+type startSB struct {
+	sandbox.Bare
+	args *[]string
+}
+
+func (s startSB) Start(spec sandbox.Spec) (sandbox.Proc, error) {
+	*s.args = spec.Argv
+	return sandbox.Proc{}, nil
+}
+
+// A lead is long-lived, so its next turn takes the model the settings name
+// now, and the run says which model that turn is on.
+func TestLeadFollowsModelSetting(t *testing.T) {
+	c, _ := testHive(t)
+	var args []string
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return startSB{args: &args}, nil }
+	c.Runs.ModelFor = func(Run) string { return "opus" }
+	r, err := c.Runs.Start(RunSpec{ID: "lead1", Role: "lead", Harness: "claude", Model: "sonnet", Persistent: true, Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, c.WS.LoadConfig())
+	got, _ := c.Runs.Get("lead1")
+	if got.Model != "opus" || !strings.Contains(strings.Join(args, " "), "opus") {
+		t.Fatalf("model %q, args %q: want the turn on opus", got.Model, args)
+	}
+}
+
 // Every run but an isolated project's reads the whole .hive at /hive/state,
 // writes none of it, and finds the daemon's token and the stored logins
 // covered; each cover has its mount point in the read-only state.
@@ -118,14 +147,14 @@ func TestIsolatedProjectsStayOutOfSharedState(t *testing.T) {
 		os.WriteFile(filepath.Join(c.WS.Chats(), "agent_"+id+".jsonl"), nil, 0o644)
 	}
 	h, _ := harness.Get("fake")
-	spec, err := c.Runs.sandboxSpec(isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "sweep", Role: "improver", Harness: "fake"}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
+	spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "sweep", Role: "improver", Harness: "fake"}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{"/hive/projects/secret", "/hive/projects/secret/.checkouts/x", "/hive/state/runs/secret-run/box/notes.md",
 		"/hive/state/chats/project_secret.jsonl", "/hive/state/chats/agent_secret-run.jsonl", "/hive/state/events.jsonl",
 		"/hive/state/kb/isolated/secret/n.md", "/hive/kb/isolated/secret/n.md", "/hive/state/checks/secret/x.log", "/hive/state/gates/secret/x",
-		"/hive/state/scratch/secret-run/proof"} {
+		"/hive/state/scratch/secret-run/proof", "/hive/kb/record/run/secret-run.md", "/hive/state/kb/record/run/secret-run.md"} {
 		if readable(spec, p) {
 			t.Errorf("a normal run reads %s", p)
 		}
@@ -141,15 +170,15 @@ func TestIsolatedProjectsStayOutOfSharedState(t *testing.T) {
 			t.Errorf("cover %s has no mount point", m.Inside)
 		}
 	}
-	spec, _ = c.Runs.sandboxSpec(isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "secret-run", Project: "secret", Harness: "fake", Isolated: true}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
+	spec, _ = c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "secret-run", Project: "secret", Harness: "fake", Isolated: true}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
 	if !readable(spec, "/hive/kb/isolated/secret/n.md") {
 		t.Error("the isolated project's own run lost its notes")
 	}
-	if readable(spec, "/hive/kb/isolated/other/n.md") {
-		t.Error("an isolated project reads another's notes")
+	if readable(spec, "/hive/kb/isolated/other/n.md") || readable(spec, "/hive/kb/record/run/other-run.md") {
+		t.Error("an isolated project reads another's notes or the record")
 	}
 	// A tribunal seat is isolated but belongs to no isolated project.
-	spec, _ = c.Runs.sandboxSpec(isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "seat", Project: "open", Harness: "fake", Isolated: true}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
+	spec, _ = c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "seat", Project: "open", Harness: "fake", Isolated: true}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
 	if readable(spec, "/hive/kb/isolated/secret/n.md") || !readable(spec, "/hive/kb/note.md") {
 		t.Error("an isolated seat of a normal project reads the wrong notes")
 	}
