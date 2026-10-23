@@ -128,6 +128,39 @@ func TestDoneProjectGone(t *testing.T) {
 	}
 }
 
+// A lead with no project of its own must name one even when only one exists,
+// since the ask may be a module or about the Hive itself; a project's own
+// agents file to their project.
+func TestBriefNamesItsProject(t *testing.T) {
+	m, _, _, _ := noCommitRig(t, 0)
+	_, err := m.opBrief(core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}, []byte(`{"title":"a cost ledger"}`))
+	if err == nil || !strings.Contains(err.Error(), "one of: p") || !strings.Contains(err.Error(), "create_project") {
+		t.Fatalf("want a refusal naming the projects and the module path, got %v", err)
+	}
+	if len(m.List(nil)) != 0 {
+		t.Fatal("a refused brief filed a task")
+	}
+	if _, err := m.opBrief(core.Run{RunSpec: core.RunSpec{ID: "w", Role: "worker", Project: "p"}}, []byte(`{"title":"a follow-up"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if ts := m.List(nil); len(ts) != 1 || ts[0].Project != "p" {
+		t.Fatalf("want one task in p, got %+v", ts)
+	}
+	// The improvement sweep runs with no project (improve.go) and files the way
+	// modules/agents/sweep.md tells it to, with --project; the fake sweep in the
+	// e2e TestGateAndLoop names one only because that prompt does.
+	sweep := core.Run{RunSpec: core.RunSpec{ID: "sweep-1", Role: "sweep"}}
+	if _, err := m.opBrief(sweep, []byte(`{"title":"raise the score"}`)); err == nil {
+		t.Fatal("a sweep brief with no project was filed")
+	}
+	if _, err := m.opBrief(sweep, []byte(`{"project":"p","title":"raise the score"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if ts := m.List(nil); len(ts) != 2 {
+		t.Fatalf("want the sweep's task filed, got %+v", ts)
+	}
+}
+
 // A revert the Hive made has no worker, so findings on it stop the task
 // cleanly instead of reopening a run that doesn't exist.
 func TestRevertFindingsStop(t *testing.T) {

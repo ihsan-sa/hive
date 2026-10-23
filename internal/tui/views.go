@@ -659,6 +659,7 @@ func (m *model) settings() []setting {
 		{label: "autonomy", value: strconv.Itoa(c.Autonomy) + "  " + autonomyText(c.Autonomy), key: "autonomy"},
 		{label: "harness", value: c.Harness, key: "harness"},
 		{label: "model", value: c.Model, key: "model"},
+		{label: "lead model", value: c.LeadModel, key: "lead_model"},
 		{label: "reviewer model", value: c.ReviewerModel, key: "reviewer_model"},
 		{label: "review rounds", value: strconv.Itoa(c.ReviewRounds), key: "review_rounds"},
 		{label: "sandbox", value: sandboxVal, key: "sandbox"},
@@ -750,6 +751,8 @@ func (m *model) saveSetting(v string) tea.Cmd {
 		c.Harness = v
 	case key == "model":
 		c.Model = v
+	case key == "lead_model":
+		c.LeadModel = v
 	case key == "reviewer_model":
 		c.ReviewerModel = v
 	case key == "review_rounds":

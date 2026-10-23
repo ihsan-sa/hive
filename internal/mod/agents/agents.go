@@ -44,6 +44,9 @@ func (a *Agents) System(role, project string) string {
 func (a *Agents) Model(role, project string) (harness, model string) {
 	cfg := a.C.WS.LoadConfig()
 	harness, model = cfg.Harness, cfg.Model
+	if role == "lead" && cfg.LeadModel != "" {
+		model = cfg.LeadModel
+	}
 	if ps, ok := cfg.Projects[project]; ok {
 		if ps.Harness != "" {
 			harness = ps.Harness

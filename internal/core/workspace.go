@@ -45,6 +45,7 @@ type Config struct {
 	Autonomy       int            `json:"autonomy"`
 	Harness        string         `json:"harness"`
 	Model          string         `json:"model"`
+	LeadModel      string         `json:"lead_model"`
 	ReviewerModel  string         `json:"reviewer_model"`
 	TribunalModels []TribunalSeat `json:"tribunal_models"`
 	// Egress holds runs to the hosts listed; with no list a run reaches every
@@ -144,6 +145,7 @@ func DefaultConfig() Config {
 		Autonomy:       2,
 		Harness:        "claude",
 		Model:          "sonnet",
+		LeadModel:      "opus",
 		ReviewerModel:  "opus",
 		TribunalModels: []TribunalSeat{{Model: "opus"}, {Model: "sonnet"}, {Model: "fable"}},
 		Sandbox:        "auto",
@@ -178,6 +180,14 @@ func (w Workspace) LoadConfig() Config {
 	raw, err := os.ReadFile(w.ConfigPath())
 	if err == nil {
 		_ = json.Unmarshal(raw, &c)
+		// A config from before lead_model: a model the person chose stays the
+		// lead's; the old default moves the lead to the new one.
+		var had struct {
+			LeadModel *string `json:"lead_model"`
+		}
+		if json.Unmarshal(raw, &had) == nil && had.LeadModel == nil && c.Model != DefaultConfig().Model {
+			c.LeadModel = c.Model
+		}
 	}
 	if c.Schedules == nil {
 		c.Schedules = DefaultConfig().Schedules

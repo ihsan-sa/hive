@@ -16,7 +16,7 @@ import (
 // lead must answer both, not read the second as the tail of the first.
 func TestLeadAnswersEveryQueuedPost(t *testing.T) {
 	prompt := "[chat c · thread t · Thu 11:00] Person: hello again" + core.PendingSep + "[chat c · thread t · Thu 11:00] Person: hello there"
-	reply, err := lead(prompt)
+	reply, err := lead(prompt, "")
 	if err != nil {
 		t.Fatal(err)
 	}

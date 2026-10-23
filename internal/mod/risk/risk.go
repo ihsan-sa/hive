@@ -57,7 +57,8 @@ type Request struct {
 	PersonOK bool      `json:"person_ok,omitempty"` // the person said run, to this script
 	Output   string    `json:"output,omitempty"`
 	URL      string    `json:"url,omitempty"`
-	Ask      string    `json:"ask"` // the person's queue item
+	Name     string    `json:"name,omitempty"` // the module name the person approved
+	Ask      string    `json:"ask"`            // the person's queue item
 	Outcome  string    `json:"outcome,omitempty"`
 	Note     string    `json:"note,omitempty"`
 	Created  time.Time `json:"created"`
@@ -112,7 +113,7 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 	ops := c.Runs.Ops()
 	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3","gain":"(optional) large"} -> T1 you weigh yourself; T2 goes to a warden, T3 to a tribunal`, Fn: m.opRequest})
 	ops.Register(core.Op{Name: "decide", Roles: []string{"warden"}, Help: `{"decision":"do|safer|decline|tribunal","reason","script":"exactly what runs (do, tribunal)","gain":"(optional) large"}`, Fn: m.opDecide})
-	ops.Register(core.Op{Name: "install_module", Roles: []string{"lead"}, Help: `{"url","name"}`, Fn: m.opInstall})
+	ops.Register(core.Op{Name: "install_module", Roles: []string{"lead"}, Help: `{"url","name"} or {"project"}: a module built as a project of its own installs from it`, Fn: m.opInstall})
 	c.Person.Handle("request", m.onAnswer)
 	c.Person.Handle("module", m.onModule)
 	// A warden that asks an agent ends its turn to wait for the reply, so it
@@ -636,9 +637,15 @@ func (m *Module) onAnswer(a core.Ask) {
 }
 
 func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
-	var a struct{ URL, Name string }
+	var a struct{ URL, Name, Project string }
 	if err := core.Bind(args, &a); err != nil {
 		return nil, err
+	}
+	if a.Project != "" {
+		if _, ok := m.C.Projects.Get(a.Project); !ok {
+			return nil, fmt.Errorf("no project %q", a.Project)
+		}
+		a.URL, a.Name = m.C.WS.Project(a.Project), a.Project
 	}
 	if !strings.HasPrefix(a.URL, "https://") && !strings.HasPrefix(a.URL, "git@") && !strings.HasPrefix(a.URL, "file://") && !core.Exists(a.URL) {
 		return nil, errors.New("give a git URL (https://, git@, file://) or a local repository path")
@@ -649,7 +656,7 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 	if _, ok := m.Mod.Get(a.Name); ok {
 		return nil, fmt.Errorf("a module named %s is already installed", a.Name)
 	}
-	req := &Request{ID: core.NewID(), Kind: "module", Origin: r.ID, URL: a.URL, Want: "install module " + a.Name, Created: time.Now().UTC()}
+	req := &Request{ID: core.NewID(), Kind: "module", Origin: r.ID, Project: a.Project, URL: a.URL, Name: a.Name, Want: "install module " + a.Name, Created: time.Now().UTC()}
 	ask := m.C.Person.Ask(core.Ask{Kind: "module", Ref: req.ID, From: r.ID,
 		Title:   "Install module " + a.Name + "?",
 		Detail:  "From " + a.URL + ". It brings outside code onto this machine; agents will read and use it. The Hive clones it into .modules/" + a.Name + ".",
@@ -664,14 +671,21 @@ func (m *Module) onModule(a core.Ask) {
 	if !ok {
 		return
 	}
-	name := modules.NameFromURL(req.URL)
+	name := req.Name
 	if a.Answer != "install" {
 		req.Outcome = "declined"
 		m.save(&req)
 		m.C.Runs.Send(req.Origin, "[the person declined installing module "+name+"]")
 		return
 	}
-	mod, err := m.Mod.Install(req.URL, name)
+	var err error
+	if p, ok := m.C.Projects.Get(req.Project); ok {
+		_, err = m.C.Effects.Sync(p) // the host clone at main is what installs
+	}
+	mod := modules.Module{}
+	if err == nil {
+		mod, err = m.Mod.Install(req.URL, name)
+	}
 	if err != nil {
 		req.Outcome, req.Note = "failed", err.Error()
 		m.save(&req)

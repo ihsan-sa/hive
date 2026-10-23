@@ -218,6 +218,15 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 	if b.Project == "" {
 		b.Project = r.Project
 	}
+	// An agent with no project of its own names the target: the only project
+	// is not a safe guess, since the ask may be a module or about the Hive.
+	if b.Project == "" {
+		names := []string{}
+		for _, p := range m.C.Projects.List() {
+			names = append(names, p.Name)
+		}
+		return nil, fmt.Errorf("say which project with --project (one of: %s) and tell the person why; a new module gets a project of its own first (create_project), then install_module --project", strings.Join(names, ", "))
+	}
 	if r.Role == "lead" {
 		b.Chat, b.Thread = m.Chat.CurrentThread(r)
 	} else if parent, ok := m.taskOf(r.ID); ok {
