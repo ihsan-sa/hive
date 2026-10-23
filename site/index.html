@@ -30,14 +30,15 @@ try { var t = localStorage.getItem('ihsan-theme'); if (t) document.documentEleme
 <header class="head">
   <h1 class="title">The Hive</h1>
   <p class="standfirst">A small team of AI agents that lives in a folder on your computer and works on your projects while you do other things.</p>
-  <nav class="jump" aria-label="On this page"><a href="#install">Install</a><span class="jump__sep" aria-hidden="true">·</span><a href="#use">How to use it</a><span class="jump__sep" aria-hidden="true">·</span><a href="https://ihsan.cc/writing/the-hive/">How it works</a><span class="jump__sep" aria-hidden="true">·</span><a href="https://github.com/ihsan-sa/hive">GitHub</a></nav>
+  <nav class="jump" aria-label="On this page"><a href="#install">Install</a><span class="jump__sep" aria-hidden="true">·</span><a href="#use">How to use it</a><span class="jump__sep" aria-hidden="true">·</span><a href="#edition">This edition</a><span class="jump__sep" aria-hidden="true">·</span><a href="https://ihsan.cc/writing/the-hive/">How it works</a><span class="jump__sep" aria-hidden="true">·</span><a href="https://github.com/ihsan-sa/hive">GitHub</a></nav>
 </header>
 
 <div class="body">
-<p>You talk to a lead in a chat. Workers build each piece in their own sandbox, tests run where they can't touch them, a reviewer reads the exact commit, and the change merges on GitHub. After every merge the Hive measures the project and keeps the change or reverts it.</p>
+<p>You talk to a lead in a chat. Workers build each piece in a sandbox, the Hive runs the project's tests itself on the exact commit, a reviewer reads that commit, and the change merges on GitHub. After every merge the Hive measures the project again and reverts the change if it made things worse.</p>
 
 <figure>
-  <div class="figure__frame"><a class="figure__zoom" href="hive.svg" aria-label="Open the diagram full size"><img src="hive.svg" width="699" height="357" alt="The Hive's system: you talk to a lead, workers build in sandboxes, a gate tests and reviews, and changes merge on GitHub."></a></div>
+  <div class="figure__frame"><a class="figure__zoom" href="hive.svg" aria-label="Open the diagram full size"><img src="hive.svg" width="699" height="357" alt="The Hive's full design: you talk to a lead, workers build in sandboxes, a gate tests and reviews, and changes merge on GitHub."></a></div>
+  <figcaption>The Hive's full design, which the essay describes. The program you install here builds part of it; <a href="#edition">this edition</a> says which part.</figcaption>
 </figure>
 
 <section id="install">
@@ -70,6 +71,19 @@ try { var t = localStorage.getItem('ihsan-theme'); if (t) document.documentEleme
   <p>Windows:</p>
   <pre><code>irm https://hive.ihsan.cc/uninstall.ps1 | iex</code></pre>
   <p>Your folder and its projects are left alone.</p>
+</section>
+
+<section id="edition">
+  <h2>What this edition does</h2>
+  <p>The essay and the diagram describe the Hive's design. What you install here is the standalone edition: one program for one person on one machine. Where the two differ, this is what the program does.</p>
+  <dl>
+    <dt>Sandbox</dt><dd>On Linux and in WSL 2, each agent runs in its own Linux namespaces. It sees its own checkout and a read-only copy of the system, and reaches the internet only through a proxy that refuses local addresses. The macOS sandbox is written but hasn't been tested. Where no sandbox works, agents don't start unless you choose to run them without one, and then they can reach everything your account can.</dd>
+    <dt>Credentials</dt><dd>Your GitHub login never enters the sandbox, and only the Hive itself pushes and merges. Agents do get a short-lived token for their model on each turn, because Claude Code and Codex can't run without one.</dd>
+    <dt>Tests</dt><dd>The Hive runs the tests in a fresh sandboxed copy of the exact commit, with the test command from the main branch, so a worker can't report a pass or change the command. A worker can still change the tests themselves as part of its change, unless you mark their folder protected in the project's settings; then the change waits for an approval.</dd>
+    <dt>Review</dt><dd>A reviewer that can only read checks the exact commit before it merges. A small change to docs alone merges on its tests.</dd>
+    <dt>Modules</dt><dd>The pipeline from ask to merge and the default modules are compiled into the program. You change the prompts and roles they use, and add modules of your own. A module that runs a program runs as you, outside the sandbox, so it starts only after a review run has read its code.</dd>
+    <dt>Not here yet</dt><dd>Slack, mail or phone out of the box, other people's workspaces on the same machine, a separate system user for each agent, and sharing a GPU.</dd>
+  </dl>
 </section>
 </div>
 
