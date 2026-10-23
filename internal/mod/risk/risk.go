@@ -226,7 +226,11 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 func (m *Module) ask(req *Request, why, detail string, options ...string) {
 	body := fmt.Sprintf("%s\n\nAn agent (%s) asked (%s, route %s): %s\n\nWhy: %s\n\nIts proposed steps:\n%s", detail, req.Origin, req.Tier, req.Route, req.Want, req.Why, req.Steps)
 	if req.Script != "" {
-		body = fmt.Sprintf("%s\n\n%s\n\nWhat would run, exactly (sha256 %s):\n%s", detail, req.Reason, core.Short(req.Digest), req.Script)
+		run, what := "run exactly this script", "What would run, exactly (sha256 "+core.Short(req.Digest)+")"
+		if s := req.Settles; s != nil { // no script runs: run answers the ask it stands for
+			run, what = s.Options[0], "What run decides"
+		}
+		body = fmt.Sprintf("%s Run to %s; decline to leave it.\n\n%s\n\n%s:\n%s", detail, run, req.Reason, what, req.Script)
 	}
 	a := m.C.Person.Ask(core.Ask{Kind: "request", Ref: req.ID, Project: req.Project, From: req.Origin,
 		Title: why + ": " + core.Clip(req.Want, 110), Detail: body, Options: options})
@@ -319,7 +323,7 @@ func (m *Module) Steps(run string) (string, bool) {
 	var lines []string
 	ok := true
 	for _, r := range m.List() {
-		if r.Origin == run {
+		if r.Origin == run && r.Settles == nil {
 			state := r.State
 			if state != "done" && state != "failed" && state != "declined" {
 				state = "still pending (" + state + ")"
@@ -403,6 +407,7 @@ func (m *Module) convene(req *Request) error {
 			m.save(req)
 			if req.Settles != nil {
 				m.C.Person.Ask(*req.Settles)
+				return err
 			}
 			m.tell(*req, req.Outcome)
 			return err
@@ -454,7 +459,7 @@ func (m *Module) advance(req *Request) {
 		go m.execute(req.ID)
 	case req.Gain == "large":
 		req.Reason += "\n\nThe tribunal declined (" + tally + "), but the gain would be large, so it's yours to decide."
-		m.ask(req, "A tribunal declined a large gain", "Run to run exactly this script; decline to leave it.", "run", "declined")
+		m.ask(req, "A tribunal declined a large gain", "The tribunal declined, but the gain would be large.", "run", "declined")
 		m.tell(*req, "The tribunal declined ("+tally+"); the gain is large, so the person decides.")
 	default:
 		req.State, req.Outcome = "declined", "tribunal"
@@ -563,7 +568,7 @@ func (m *Module) execute(id string) {
 	}
 	floor := m.C.WS.LoadConfig().Floor
 	if err := core.CeilingGuard(req.Script, floor, req.PersonOK); err != nil {
-		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.Ceiling(floor, req.Script)+", which is always yours to decide. Run to run exactly this script; decline to leave it.", "run", "declined")
+		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.Ceiling(floor, req.Script)+", which is always yours to decide.", "run", "declined")
 		m.act.Unlock()
 		m.tell(req, err.Error()+"; the person decides.")
 		return
@@ -655,6 +660,10 @@ func (m *Module) onAnswer(a core.Ask) {
 	}
 	m.save(&req)
 	m.act.Unlock()
+	if req.Settles != nil {
+		m.settle(req, false)
+		return
+	}
 	text := fmt.Sprintf("the person answered %q: %s", core.Clip(req.Want, 80), a.Answer)
 	if a.Note != "" {
 		text += ": " + a.Note
@@ -687,7 +696,7 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 // a tribunal), its answer goes to the ask's handler as the person's would,
 // and the person is told after. It returns who decides: person or warden.
 func (m *Module) Weigh(a core.Ask) string {
-	if m.C.WS.LoadConfig().Autonomy == 1 || core.CeilingHit(a.Title, a.Detail) != "" {
+	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || core.Ceiling(cfg.Floor, a.Title, a.Detail) != "" {
 		m.C.Person.Ask(a)
 		return "person"
 	}
@@ -710,12 +719,17 @@ func (m *Module) Weigh(a core.Ask) string {
 }
 
 // settle answers the ask a request stands for, so its handler acts as on the
-// person's answer, and tells the person after.
+// person's answer, and tells the person after. A request the person was asked
+// about (req.Ask) carries their own answer and note, with nothing to tell.
 func (m *Module) settle(req Request, yes bool) {
 	a := m.C.Person.Ask(*req.Settles)
 	opt := a.Options[len(a.Options)-1]
 	if yes {
 		opt = a.Options[0]
+	}
+	if req.Ask != "" {
+		m.C.Person.Answer(a.ID, opt, req.Note)
+		return
 	}
 	who := "the warden"
 	if len(req.Panel) > 0 {

@@ -865,6 +865,7 @@ func (m *Module) onPersonMerge(a core.Ask) {
 	}
 	t.Stage, t.Reason = StageStopped, strings.TrimSuffix("left open: "+a.Note, ": ")
 	m.save(&t, t.Reason)
+	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q was %s: %s", t.Label(), t.Reason, t.PR.URL))
 }
 
 // Stop ends a task on purpose (from the control center).

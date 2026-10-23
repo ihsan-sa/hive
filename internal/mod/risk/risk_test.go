@@ -488,11 +488,11 @@ func TestAutonomyDecidesProtectedChanges(t *testing.T) {
 	for autonomy := 1; autonomy <= 3; autonomy++ {
 		for what, diff := range changes {
 			g := newRig(t, autonomy)
-			answered := make(chan core.Ask, 1)
+			answered, lead := make(chan core.Ask, 1), core.Run{}
 			kind := "merge"
 			if what == "module" {
 				kind = "module"
-				lead, _ := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir()})
+				lead, _ = g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir()})
 				if _, err := g.call(lead, "install_module", map[string]string{"url": src}); err != nil {
 					t.Fatal(err)
 				}
@@ -522,7 +522,10 @@ func TestAutonomyDecidesProtectedChanges(t *testing.T) {
 				t.Fatal(err)
 			}
 			if what == "module" {
-				if !eventually(func() bool { _, ok := g.m.Mod.Get(modules.NameFromURL(src)); return ok }) {
+				if !eventually(func() bool {
+					r, _ := g.c.Runs.Get(lead.ID)
+					return len(r.Pending) > 0 && strings.Contains(r.Pending[len(r.Pending)-1], "installed at")
+				}) {
 					t.Fatalf("autonomy %d: the warden's yes didn't install the module", autonomy)
 				}
 			} else if a := <-answered; a.Answer != "merge" || !strings.Contains(a.Note, "fits the goals") {
@@ -607,6 +610,52 @@ func TestVoteMustBeClean(t *testing.T) {
 	} {
 		if got, _ := voteOf(core.Run{Status: core.StatusDone, Structured: json.RawMessage(raw)}); got != want {
 			t.Errorf("voteOf(%s) = %s, want %s", raw, got, want)
+		}
+	}
+}
+
+// When a settled ask reaches the person after all, through a tribunal's
+// declined large gain or the ceiling guard, their answer goes to the ask's
+// handler as their own: run is its yes, anything else its no.
+func TestPersonAnswersASettledAsk(t *testing.T) {
+	for _, route := range []string{"large gain", "ceiling"} {
+		for answer, want := range map[string]string{"run": "merge", "declined": "leave open"} {
+			g := newRig(t, 2)
+			answered := make(chan core.Ask, 1)
+			g.c.Person.Handle("merge", func(a core.Ask) { answered <- a })
+			g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@1", From: g.worker.ID, Title: "Merge? It changes the goals", Detail: "+- deploy to /srv/app nightly", Options: []string{"merge", "leave open"}})
+			req := g.m.List()[0]
+			if route == "large gain" {
+				g.decide(req, map[string]string{"decision": "tribunal", "reason": "unsure", "gain": "large"})
+				req, _ = g.m.get(req.ID)
+				g.vote(req, "decline", "decline", "decline")
+				g.m.Tick()
+				req, _ = g.m.get(req.ID)
+				g.vote(req, "decline", "decline", "decline")
+			} else {
+				cfg := g.c.WS.LoadConfig()
+				cfg.Floor = []string{"/srv/app"}
+				g.c.WS.SaveConfig(cfg)
+				g.decide(req, map[string]string{"decision": "do", "reason": "fits the goals"})
+			}
+			got := g.settle(req.ID, "weighing", "tribunal", "approved")
+			if got.State != "asked" {
+				t.Fatalf("%s: the person wasn't asked: %+v", route, got)
+			}
+			g.c.Person.Answer(got.Ask, answer, "my call")
+			select {
+			case a := <-answered:
+				if a.Answer != want || a.Note != "my call" {
+					t.Fatalf("%s, %s: handler got %+v", route, answer, a)
+				}
+			case <-time.After(4 * time.Second):
+				t.Fatalf("%s, %s: the merge ask was never answered", route, answer)
+			}
+			for _, a := range g.c.Person.Open() {
+				if a.Kind == "told" {
+					t.Fatalf("%s, %s: told the person about their own answer: %+v", route, answer, a)
+				}
+			}
 		}
 	}
 }

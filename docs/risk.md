@@ -39,4 +39,4 @@ A worker that finishes with no commits finishes its task done when every step it
 
 Every sandboxed run reaches the network only through the Hive's egress proxy, which refuses this machine and private ranges. `egress` in `.hive/config.json` narrows it: `default` is the hosts every run may reach, and `roles.<role>` (warden, tribunal, worker, lead, ...) replaces it for that role. A run's harness API host (`api.anthropic.com` for Claude) is added to any list. With no list a run reaches every public host, as before. A host matches itself and its subdomains. A refused host is recorded next to the turn's output and journalled as `run.egress_refused` when the turn ends. Sandboxed runs can't write the config, so the list changes only by the person's hand or an approved step.
 
-Installing a module stays a fixed `git clone` into `.modules/` on the person's "install".
+Installing a module stays a fixed `git clone` into `.modules/`, on the install answer of whoever decides it (see above).
