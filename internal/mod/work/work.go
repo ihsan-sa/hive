@@ -108,18 +108,34 @@ type Module struct {
 	// one ran and succeeded (the risk module).
 	Steps func(run string) (string, bool)
 
+	// Weigh settles a merge that changes protected paths as autonomy says
+	// (the risk module) and returns who decides; unset, the person does.
+	Weigh func(core.Ask) string
+
 	// OnMerged is called after a task's merge is recorded (the improve module measures).
 	OnMerged func(t Task)
 
 	mu    sync.Mutex
 	tasks map[string]*Task
 	busy  map[string]bool
+	// mainRed holds project@sha for every main commit whose red tests were
+	// already raised, so each is raised once whatever the tasks say now.
+	mainRed map[string]bool
 }
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, mainRed: map[string]bool{}}
 	apply := func(e core.Event) {
+		if e.Kind == "alert.raised" {
+			var a struct{ Kind, Project, SHA string }
+			if e.Decode(&a) == nil && a.Kind == "main-red" {
+				m.mu.Lock()
+				m.mainRed[a.Project+"@"+a.SHA] = true
+				m.mu.Unlock()
+			}
+			return
+		}
 		if e.Kind != "task.saved" {
 			return
 		}
@@ -596,6 +612,16 @@ func (m *Module) test(t *Task, p core.Project) error {
 		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("Tests on %s: **%s**\n\n```\n%s\n```", core.Short(t.SHA), passFail(c.OK), core.Clip(c.Output, 1500)))
 	}
 	if !c.OK {
+		mc, err := m.mainTests(p, main, cfg.Test)
+		if err != nil {
+			return err
+		}
+		if !mc.OK {
+			return m.waitOnMain(t, p, main, mc)
+		}
+		if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
+			return err
+		}
 		return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
 	}
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
@@ -605,11 +631,21 @@ func (m *Module) test(t *Task, p core.Project) error {
 	switch {
 	case len(ch.Protected) > 0 && !m.C.Effects.Approved("merge", p.Name, t.SHA):
 		t.Stage = StagePerson
-		m.save(t, "waiting on the person: changes "+strings.Join(ch.Protected, ", "))
-		m.C.Person.Ask(core.Ask{Kind: "merge", Ref: t.ID + "@" + t.SHA, Project: p.Name, From: t.Worker,
+		diff, _ := core.Git(m.C.WS.Project(p.Name), append([]string{"diff", ch.Base, t.SHA, "--"}, ch.Protected...)...)
+		a := core.Ask{Kind: "merge", Ref: t.ID + "@" + t.SHA, Project: p.Name, From: t.Worker,
 			Title:  fmt.Sprintf("Merge %q? It changes %s", t.Label(), strings.Join(ch.Protected, ", ")),
-			Detail: fmt.Sprintf("%s\n\nPR: %s", strings.Join(ch.Protected, ", ")+" are yours to merge.", t.PR.URL), Options: []string{"merge", "leave open"}})
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q changes %s, which is yours to approve. It's waiting on you: %s", t.Label(), strings.Join(ch.Protected, ", "), t.PR.URL))
+			Detail: fmt.Sprintf("These hold the project's goals, score or settings. PR: %s\n\n%s", t.PR.URL, core.Clip(diff, 6000)), Options: []string{"merge", "leave open"}}
+		// Saved before Weigh: a warden's answer may reach onPersonMerge first.
+		m.save(t, "waiting for an approval: changes "+strings.Join(ch.Protected, ", "))
+		who := "person"
+		if m.Weigh != nil {
+			who = m.Weigh(a)
+		} else {
+			m.C.Person.Ask(a)
+		}
+		if who == "person" {
+			m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q changes %s, which is yours to approve. It's waiting on you: %s", t.Label(), strings.Join(ch.Protected, ", "), t.PR.URL))
+		}
 	case ch.Small || m.C.Effects.Reviewed(p, ch, t.SHA):
 		t.Stage = StageMerging
 		m.save(t, "tests passed; "+map[bool]string{true: "small change, no read needed", false: "already read"}[ch.Small])
@@ -618,6 +654,62 @@ func (m *Module) test(t *Task, p core.Project) error {
 		m.save(t, "tests passed; asking for a read")
 	}
 	return nil
+}
+
+// mainTests is main's own test result, measured once per main commit (the
+// baseline and the post-merge measurement usually already have it).
+func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
+	if c, ok := m.C.Effects.GetCheck(p.Name, main, "test"); ok {
+		return c, nil
+	}
+	if _, err := m.C.Sandbox(); err != nil {
+		return core.Check{}, err
+	}
+	return m.C.Effects.RunCheck(p, main, "test", command), nil
+}
+
+// waitOnMain holds a red change while main's own tests are red, since the
+// failure can't be told apart from main's. Main's failure is raised once per
+// main commit, not once per waiting change; when main goes green the change
+// is brought up to date and tested again.
+func (m *Module) waitOnMain(t *Task, p core.Project, main string, mc core.Check) error {
+	reason := "waiting on main: its own tests fail at " + core.Short(main) + ", so this failure isn't the worker's"
+	if t.Reason == reason {
+		return nil
+	}
+	m.mu.Lock()
+	raised := m.mainRed[p.Name+"@"+main]
+	m.mu.Unlock()
+	if !raised {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": main,
+			"text": "main's tests fail in " + p.Name + " at " + core.Short(main) + ", so changes with failing tests wait for main to go green: " + core.Clip(mc.Output, 300)})
+	}
+	t.Reason = reason
+	m.save(t, reason)
+	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Main's own tests fail too at "+core.Short(main)+", so this isn't sent back to the worker. It waits for main to go green, then is brought up to date and tested again.")
+	return nil
+}
+
+// catchUp brings t's branch up to date with main and sends it to be tested
+// again. It reports false when the branch already contains main.
+func (m *Module) catchUp(t *Task, p core.Project, main, why string) (bool, error) {
+	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
+		return false, nil
+	}
+	next, err := m.C.Effects.UpdateBranch(p, t.SHA, main)
+	if errors.Is(err, core.ErrConflict) {
+		t.Reason = ""
+		return true, m.conflict(t, p)
+	}
+	if err != nil {
+		return true, err
+	}
+	if err := m.C.Effects.Push(p, t.Branch, next); err != nil {
+		return true, err
+	}
+	t.SHA, t.Stage, t.Reason = next, StageTesting, ""
+	m.save(t, why+"; branch brought up to date at "+core.Short(next)+", testing again")
+	return true, nil
 }
 
 func passFail(ok bool) string {
@@ -750,21 +842,8 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if err != nil {
 		return err
 	}
-	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err != nil {
-		// Main moved: bring the branch up to date and test again first.
-		next, err := m.C.Effects.UpdateBranch(p, t.SHA, main)
-		if errors.Is(err, core.ErrConflict) {
-			return m.conflict(t, p)
-		}
-		if err != nil {
-			return err
-		}
-		if err := m.C.Effects.Push(p, t.Branch, next); err != nil {
-			return err
-		}
-		t.SHA, t.Stage = next, StageTesting
-		m.save(t, "main moved; branch brought up to date at "+core.Short(next)+", testing again")
-		return nil
+	if ok, err := m.catchUp(t, p, main, "main moved"); ok || err != nil {
+		return err
 	}
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label()})
 	var np *core.NeedsPerson
@@ -852,8 +931,9 @@ func (m *Module) onPersonMerge(a core.Ask) {
 		m.save(&t, "the person approved")
 		return
 	}
-	t.Stage, t.Reason = StageStopped, "the person left it open"
+	t.Stage, t.Reason = StageStopped, strings.TrimSuffix("left open: "+a.Note, ": ")
 	m.save(&t, t.Reason)
+	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q was %s: %s", t.Label(), t.Reason, t.PR.URL))
 }
 
 // Stop ends a task on purpose (from the control center).

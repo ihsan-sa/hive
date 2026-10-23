@@ -135,16 +135,18 @@ func (c *Core) agentBinary(exe string) string {
 	return exe
 }
 
-// Tick advances runs; modules tick themselves from the daemon loop.
+// Tick advances runs on one read of the config; modules tick themselves
+// from the daemon loop.
 func (c *Core) Tick() {
-	c.Runs.Tick()
-	c.tellSpend()
+	cfg := c.WS.LoadConfig()
+	c.Runs.Tick(cfg)
+	c.tellSpend(cfg.MonthlyUSD)
 }
 
 // tellSpend tells the person once a month when runs have cost more than the
-// monthly figure they set. It is a notice: work goes on.
-func (c *Core) tellSpend() {
-	limit := c.WS.LoadConfig().MonthlyUSD
+// monthly figure they set. It is a notice: work goes on. Once a month holds
+// because Person.Get finds the ask after it's answered too.
+func (c *Core) tellSpend(limit float64) {
 	month := time.Now().UTC().Format("2006-01")
 	id := "spend-" + month
 	if spent := c.Runs.Spent(month); limit <= 0 || spent <= limit {

@@ -1,9 +1,11 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -158,6 +160,12 @@ func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), token
 	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
+	// A crash between writing a turn's token and starting the turn left it behind.
+	for _, r := range rs.runs {
+		if HarnessName(r.Harness) == "codex" && r.Status != StatusRunning {
+			rs.dropCodexHome(r.ID)
+		}
+	}
 	j.Subscribe(func(e Event) {
 		rs.mu.Lock()
 		rs.apply(e)
@@ -300,6 +308,10 @@ func (rs *Runs) apply(e Event) {
 		if n.Status == StatusQueued || n.Status == StatusIdle {
 			r.Nudges = 0
 		}
+	case "run.held":
+		var n runNote
+		e.Decode(&n)
+		r.Reason = n.Reason
 	case "run.stop":
 		r.StopAsked = true
 	case "run.waiting":
@@ -517,7 +529,7 @@ func (rs *Runs) Stop(id, reason string) {
 }
 
 // Tick advances every run one step: mailboxes, finished turns, due turns.
-func (rs *Runs) Tick() {
+func (rs *Runs) Tick(cfg Config) {
 	for _, r := range rs.List(func(r *Run) bool { return !r.Terminal() || r.Status == StatusRunning }) {
 		rs.mu.Lock()
 		if rs.busy[r.ID] {
@@ -528,31 +540,31 @@ func (rs *Runs) Tick() {
 		rs.mu.Unlock()
 		go func(r Run) {
 			defer func() { rs.mu.Lock(); delete(rs.busy, r.ID); rs.mu.Unlock() }()
-			rs.step(r)
+			rs.step(r, cfg)
 		}(r)
 	}
 }
 
-func (rs *Runs) step(r Run) {
+func (rs *Runs) step(r Run, cfg Config) {
 	switch r.Status {
 	case StatusRunning:
 		rs.ops.Drain(r)
 		rs.watch(r)
 	case StatusQueued:
-		rs.launch(r)
+		rs.launch(r, cfg)
 	case StatusIdle:
 		rs.ops.Drain(r)
 		if len(r.Pending) > 0 {
-			rs.launch(r)
+			rs.launch(r, cfg)
 		}
 	case StatusParked:
 		if time.Now().After(r.ParkedUntil) {
-			rs.launch(r)
+			rs.launch(r, cfg)
 		}
 	case StatusQuiet:
 		rs.ops.Drain(r)
 		if len(r.Pending) > 0 {
-			rs.launch(r)
+			rs.launch(r, cfg)
 		}
 	}
 }
@@ -644,11 +656,14 @@ func (rs *Runs) endTurn(r Run) {
 		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
 	}
 	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Session: tl.Session, Result: tl.Result}
+	var dropErr error
 	if HarnessName(r.Harness) == "codex" {
-		rs.dropCodexHome(r.ID)
+		dropErr = rs.dropCodexHome(r.ID)
 	}
 	cur, _ := rs.Get(r.ID)
 	switch {
+	case dropErr != nil:
+		te.Status, te.Reason = StatusBlocked, "its Codex token could not be deleted: "+dropErr.Error()
 	case cur.StopAsked:
 		te.Status, te.Reason = StatusStopped, "stopped by the Hive"
 	case limited:
@@ -732,11 +747,14 @@ func tail(path string, n int) string {
 const PendingSep = "\n\n---\n\n"
 
 // launch starts the run's next turn in its sandbox.
-func (rs *Runs) launch(r Run) {
-	cfg := rs.ws.LoadConfig()
-	if why := Strained(cfg.MemFloorMB, cfg.PressureMax); why != "" {
-		if why = "waiting: " + why; r.Status != StatusQueued || r.Reason != why {
-			rs.append("run.status", runNote{ID: r.ID, Status: StatusQueued, Reason: why})
+func (rs *Runs) launch(r Run, cfg Config) {
+	if why := Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax); why != "" {
+		// The hold keeps the run's status, so a parked run keeps its backoff
+		// and a nudged one its count; the live figures after " (" change
+		// every tick, so only a new kind of hold is journalled.
+		why = "waiting: " + why
+		if kind, _, _ := strings.Cut(why, " ("); !strings.HasPrefix(r.Reason, kind) {
+			rs.append("run.held", runNote{ID: r.ID, Reason: why})
 		}
 		return
 	}
@@ -795,7 +813,7 @@ func (rs *Runs) launch(r Run) {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: "login for " + HarnessName(r.Harness) + ": " + err.Error(), Until: until})
 		return
 	}
-	spec, err := rs.sandboxSpec(sb, h, r, turn, resume, promptFile, tok, codexHome)
+	spec, err := rs.sandboxSpec(cfg, sb, h, r, turn, resume, promptFile, tok, codexHome)
 	if err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(5 * time.Minute)})
 		return
@@ -810,7 +828,7 @@ func (rs *Runs) launch(r Run) {
 }
 
 // sandboxSpec lays out what the agent sees.
-func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn int, resume bool, promptFile string, tok []string, codexHome string) (sandbox.Spec, error) {
+func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r Run, turn int, resume bool, promptFile string, tok []string, codexHome string) (sandbox.Spec, error) {
 	home := sandbox.Mount{Host: rs.ws.RunHome(r.ID), Inside: "/hive/home", RW: true}
 	mounts := []sandbox.Mount{
 		{Host: r.Checkout, Inside: "/work", RW: !r.ReadOnly},
@@ -854,7 +872,7 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	t := harness.Turn{
 		Role: r.Role, SessionID: r.Session, Resume: resume, Model: r.Model, Tools: r.Tools, SystemText: r.System,
 		SystemFile: filepath.Join(in(mounts[1]), "system.md"), ReadOnly: r.ReadOnly, RunDir: in(mounts[1]), Schema: r.Schema, Sandboxed: sb.Isolated(),
-		MaxOutput: rs.ws.LoadConfig().MaxOutputTokens, ConfigDir: cfgDir,
+		MaxOutput: cfg.MaxOutputTokens, ConfigDir: cfgDir,
 	}
 	if r.Budget > 0 {
 		t.MaxBudgetUSD = max(r.Budget-r.Cost, 0.01)
@@ -892,9 +910,9 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	if !sb.Isolated() && h.Program() == "hive" && len(tools) > 0 {
 		argv[0] = tools[0]
 	}
-	allow := rs.ws.LoadConfig().Egress.For(r.Role)
-	if len(allow) > 0 {
-		allow = append(append([]string{}, allow...), harness.APIHosts(h)...)
+	allow := cfg.Egress.For(r.Role)
+	if allow != nil {
+		allow = append(allow, harness.APIHosts(h)...)
 	}
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
@@ -976,7 +994,9 @@ func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 // The Hive's instructions go in its config.toml rather than on the command
 // line, which has a size cap.
 func (rs *Runs) freshCodexHome(r Run) (string, error) {
-	rs.dropCodexHome(r.ID)
+	if err := rs.dropCodexHome(r.ID); err != nil {
+		return "", err
+	}
 	dir := filepath.Join(rs.ws.RunHost(r.ID), "codex")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return "", err
@@ -985,16 +1005,25 @@ func (rs *Runs) freshCodexHome(r Run) (string, error) {
 	if r.System == "" {
 		return dir, nil
 	}
-	s, _ := json.Marshal(r.System) // a JSON string is a valid TOML basic string
+	// A JSON string is a valid TOML basic string once DEL, which JSON leaves raw, is escaped.
+	s, _ := json.Marshal(r.System)
+	s = bytes.ReplaceAll(s, []byte("\x7f"), []byte(`\u007f`))
 	return dir, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("developer_instructions = "+string(s)+"\n"), 0o600)
 }
 
 // dropCodexHome deletes the turn's CODEX_HOME, and with it the access token,
-// keeping only its sessions for the next turn's resume.
-func (rs *Runs) dropCodexHome(id string) {
+// keeping only its sessions for the next turn's resume. Folders the agent
+// locked are opened first; links are never followed.
+func (rs *Runs) dropCodexHome(id string) error {
 	dir := filepath.Join(rs.ws.RunHost(id), "codex")
 	os.Rename(filepath.Join(dir, "sessions"), filepath.Join(rs.ws.RunHost(id), "codex-sessions"))
-	os.RemoveAll(dir)
+	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			os.Chmod(p, 0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(dir)
 }
 
 // Clip shortens s to n runes on one line.

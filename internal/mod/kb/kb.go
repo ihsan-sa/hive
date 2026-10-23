@@ -6,6 +6,8 @@
 package kb
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -42,6 +44,7 @@ func New(c *core.Core, a *agents.Agents) *Module {
 	m := &Module{C: c, Agents: a}
 	m.ensureRepo()
 	m.moveIsolated()
+	m.filePractice()
 	c.J.Replay(func(e core.Event) {
 		var f struct{ Run string }
 		e.Decode(&f)
@@ -129,6 +132,73 @@ func (m *Module) isolatedIn(note string) (string, bool) {
 	return "", false
 }
 
+// filePractice copies the kb module's practice docs (how a Hive works) into
+// the store's practice/ folder, so a fresh install starts knowing them, and
+// refreshes them when an update ships new text. practice/.filed.json keeps
+// the hash of what was last filed, so a doc a person has edited since (or
+// wrote before any filing) is never overwritten. Notes live at the top level,
+// so a note never shares a path with a practice doc.
+func (m *Module) filePractice() {
+	src := filepath.Join(m.C.WS.Modules(), "kb", "practice")
+	dst := filepath.Join(m.C.WS.KB(), "practice")
+	ledger := filepath.Join(dst, ".filed.json")
+	filed := map[string]string{}
+	if raw, err := os.ReadFile(ledger); err == nil {
+		_ = json.Unmarshal(raw, &filed)
+	}
+	entries, _ := os.ReadDir(src)
+	changed := false
+	var kept []string
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(src, e.Name()))
+		if err != nil || os.MkdirAll(dst, 0o755) != nil {
+			continue
+		}
+		want := hashOf(raw)
+		path := filepath.Join(dst, e.Name())
+		have, err := os.ReadFile(path)
+		switch {
+		case err == nil && hashOf(have) == want:
+			if filed[e.Name()] != want {
+				filed[e.Name()], changed = want, true
+			}
+			continue
+		case err == nil && hashOf(have) != filed[e.Name()]:
+			kept = append(kept, e.Name()) // a person's text: leave it
+			continue
+		case err != nil && !os.IsNotExist(err):
+			continue
+		}
+		if os.WriteFile(path, raw, 0o644) == nil {
+			filed[e.Name()], changed = want, true
+		}
+	}
+	if len(kept) > 0 {
+		m.C.J.MustAppend("kb.practice", map[string]string{"result": "kept edited practice docs, not refreshed: " + strings.Join(kept, ", ")})
+	}
+	if !changed {
+		return
+	}
+	if raw, err := json.MarshalIndent(filed, "", "  "); err == nil {
+		_ = os.WriteFile(ledger, append(raw, '\n'), 0o644)
+	}
+	_, err := core.Git(m.C.WS.KB(), "add", "--", "practice")
+	if err == nil {
+		_, err = core.Git(m.C.WS.KB(), "commit", "-q", "-m", "File how a Hive works", "--", "practice")
+	}
+	if err != nil {
+		m.C.J.MustAppend("kb.practice", map[string]string{"result": "practice docs not committed: " + err.Error()})
+	}
+}
+
+func hashOf(b []byte) string {
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
 // Write saves a note and commits it.
@@ -211,7 +281,7 @@ func (m *Module) checkFiled(sha string) error {
 	return nil
 }
 
-// Notes lists note files, newest first.
+// Notes lists note files, newest first; the practice/ folder isn't notes.
 func (m *Module) Notes() []string {
 	entries, _ := os.ReadDir(m.C.WS.KB())
 	var out []string
