@@ -114,12 +114,24 @@ type Module struct {
 	mu    sync.Mutex
 	tasks map[string]*Task
 	busy  map[string]bool
+	// mainRed holds project@sha for every main commit whose red tests were
+	// already raised, so each is raised once whatever the tasks say now.
+	mainRed map[string]bool
 }
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, mainRed: map[string]bool{}}
 	apply := func(e core.Event) {
+		if e.Kind == "alert.raised" {
+			var a struct{ Kind, Project, SHA string }
+			if e.Decode(&a) == nil && a.Kind == "main-red" {
+				m.mu.Lock()
+				m.mainRed[a.Project+"@"+a.SHA] = true
+				m.mu.Unlock()
+			}
+			return
+		}
 		if e.Kind != "task.saved" {
 			return
 		}
@@ -593,7 +605,11 @@ func (m *Module) test(t *Task, p core.Project) error {
 		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("Tests on %s: **%s**\n\n```\n%s\n```", core.Short(t.SHA), passFail(c.OK), core.Clip(c.Output, 1500)))
 	}
 	if !c.OK {
-		if mc := m.mainTests(p, main, cfg.Test); !mc.OK {
+		mc, err := m.mainTests(p, main, cfg.Test)
+		if err != nil {
+			return err
+		}
+		if !mc.OK {
 			return m.waitOnMain(t, p, main, mc)
 		}
 		if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
@@ -625,11 +641,14 @@ func (m *Module) test(t *Task, p core.Project) error {
 
 // mainTests is main's own test result, measured once per main commit (the
 // baseline and the post-merge measurement usually already have it).
-func (m *Module) mainTests(p core.Project, main, command string) core.Check {
+func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
 	if c, ok := m.C.Effects.GetCheck(p.Name, main, "test"); ok {
-		return c
+		return c, nil
 	}
-	return m.C.Effects.RunCheck(p, main, "test", command)
+	if _, err := m.C.Sandbox(); err != nil {
+		return core.Check{}, err
+	}
+	return m.C.Effects.RunCheck(p, main, "test", command), nil
 }
 
 // waitOnMain holds a red change while main's own tests are red, since the
@@ -641,8 +660,11 @@ func (m *Module) waitOnMain(t *Task, p core.Project, main string, mc core.Check)
 	if t.Reason == reason {
 		return nil
 	}
-	if len(m.List(func(o Task) bool { return o.Project == p.Name && o.Reason == reason })) == 0 {
-		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name,
+	m.mu.Lock()
+	raised := m.mainRed[p.Name+"@"+main]
+	m.mu.Unlock()
+	if !raised {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": main,
 			"text": "main's tests fail in " + p.Name + " at " + core.Short(main) + ", so changes with failing tests wait for main to go green: " + core.Clip(mc.Output, 300)})
 	}
 	t.Reason = reason
@@ -659,6 +681,7 @@ func (m *Module) catchUp(t *Task, p core.Project, main, why string) (bool, error
 	}
 	next, err := m.C.Effects.UpdateBranch(p, t.SHA, main)
 	if errors.Is(err, core.ErrConflict) {
+		t.Reason = ""
 		return true, m.conflict(t, p)
 	}
 	if err != nil {

@@ -128,6 +128,9 @@ func TestGateFailsOnBoth(t *testing.T) {
 	if n := alerts(m, "main-red"); n != 1 {
 		t.Fatalf("%d main-red alerts, want 1", n)
 	}
+	if main, _ := m.C.Effects.Sync(p); !func() bool { _, ok := m.C.Effects.GetCheck(p.Name, main, "test"); return ok }() {
+		t.Fatal("main's result isn't kept, so it would be measured again")
+	}
 	old := task.SHA
 	pushMain(t, forge, map[string]string{"BROKEN": ""})
 	if err := m.test(task, p); err != nil {
@@ -166,5 +169,61 @@ func TestGateFailsOnMainOnly(t *testing.T) {
 	}
 	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 {
 		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+}
+
+// Main's failure is raised once per main commit, even when main moves away
+// and back (A -> B -> A) and no task still names A.
+func TestGateMainRedOncePerCommit(t *testing.T) {
+	m, task, p, forge := gateRig(t, true, map[string]string{"feature.txt": "y"})
+	a, _ := m.C.Effects.Sync(p)
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	pushMain(t, forge, map[string]string{"other.txt": "z"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	must(t, forge.RepoPath("me/p"), "update-ref", "refs/heads/main", a)
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(task.Reason, core.Short(a)) {
+		t.Fatalf("main wasn't reset to A: reason %q", task.Reason)
+	}
+	if n := alerts(m, "main-red"); n != 2 {
+		t.Fatalf("%d main-red alerts for A -> B -> A, want 2", n)
+	}
+}
+
+// With no sandbox, main isn't measured (as red) and nothing is raised.
+func TestGateMainNeedsSandbox(t *testing.T) {
+	m, task, p, _ := gateRig(t, true, map[string]string{"feature.txt": "y"})
+	m.C.Effects.RunCheck(p, task.SHA, "test", "test ! -f BROKEN")
+	cfg := m.C.WS.LoadConfig()
+	cfg.BareAccepted = ""
+	m.C.WS.SaveConfig(cfg)
+	if err := m.test(task, p); err == nil {
+		t.Fatal("the gate ran with no sandbox")
+	}
+	main, _ := m.C.Effects.Sync(p)
+	if _, ok := m.C.Effects.GetCheck(p.Name, main, "test"); ok || alerts(m, "main-red") != 0 || task.Reason != "" {
+		t.Fatalf("main measured without a sandbox: reason %q", task.Reason)
+	}
+}
+
+// A waiting change that conflicts once main goes green is sent back without
+// still saying it waits on main.
+func TestGateWaitThenConflict(t *testing.T) {
+	m, task, p, forge := gateRig(t, true, map[string]string{"README.md": "branch\n"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	pushMain(t, forge, map[string]string{"BROKEN": "", "README.md": "main\n"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageWorking || task.Reason != "" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
 }
