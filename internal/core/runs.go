@@ -190,9 +190,21 @@ func (rs *Runs) Migrate() error {
 			}
 		}
 	}
+	// A token that cannot be deleted is reported on its run, not dropped.
 	for _, r := range rs.List(nil) {
-		if HarnessName(r.Harness) == "codex" && r.Status != StatusRunning {
-			rs.dropCodexHome(r.ID) // under the cover already; the next turn's fresh home retries
+		if HarnessName(r.Harness) != "codex" || r.Status == StatusRunning {
+			continue
+		}
+		if err := rs.dropCodexHome(r.ID); err != nil {
+			why := "its Codex token could not be deleted: " + err.Error()
+			switch {
+			case r.Status == StatusBlocked && strings.HasPrefix(r.Reason, "its Codex token could not be deleted"):
+				// already said; a restart adds nothing
+			case r.Terminal():
+				rs.Progress(r.ID, why) // a finished run keeps its status
+			default:
+				rs.SetStatus(r.ID, StatusBlocked, why)
+			}
 		}
 	}
 	return nil
@@ -560,14 +572,22 @@ func (rs *Runs) Spent(month string) float64 {
 	return rs.spent[month]
 }
 
-// Send queues a message for a run's next turn.
-func (rs *Runs) Send(id, text string) error {
+// Takes says why run id can't take a message, or nil if it can.
+func (rs *Runs) Takes(id string) error {
 	r, ok := rs.Get(id)
 	if !ok {
 		return ErrNotFound
 	}
 	if r.Terminal() && !r.Persistent {
 		return fmt.Errorf("run %s has ended (%s)", id, r.Status)
+	}
+	return nil
+}
+
+// Send queues a message for a run's next turn.
+func (rs *Runs) Send(id, text string) error {
+	if err := rs.Takes(id); err != nil {
+		return err
 	}
 	rs.append("run.queued", runNote{ID: id, Text: text})
 	return nil
@@ -612,6 +632,13 @@ func (rs *Runs) Stop(id, reason string) {
 		return // the turn's end records the stop
 	}
 	rs.append("run.status", runNote{ID: id, Status: StatusStopped, Reason: reason})
+}
+
+// Interrupt ends a running turn's process. The turn ends like any interrupted
+// one and is retried on the same checkout, so nothing is started twice.
+func (rs *Runs) Interrupt(id string) bool {
+	r, ok := rs.Get(id)
+	return ok && r.Status == StatusRunning && proc.Alive(r.Proc) && proc.Kill(r.Proc) == nil
 }
 
 // Tick advances every run one step: mailboxes, finished turns, due turns.
@@ -911,6 +938,15 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	started = true
 	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key()})
+}
+
+// RunPath is where a run's agent sees its run dir ($HIVE_RUN).
+func (rs *Runs) RunPath(id string) string {
+	m := sandbox.Mount{Host: rs.ws.RunRO(id), Inside: "/hive/run"}
+	if sb, err := rs.sandbox(); err == nil {
+		return sandbox.InsidePath(sb, m)
+	}
+	return m.Host
 }
 
 // sandboxSpec lays out what the agent sees.

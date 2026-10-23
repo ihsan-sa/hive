@@ -116,6 +116,55 @@ func TestViewsFitTheScreen(t *testing.T) {
 	}
 }
 
+func TestPreviewDropsMarkers(t *testing.T) {
+	if got := preview("**Done** with `code`\n- and [a link](https://x.io)"); got != "Done with code • and a link (https://x.io)" {
+		t.Errorf("preview = %q", got)
+	}
+}
+
+// A fence closes only on a bare run of backticks at least as long as the one
+// that opened it, so a shorter run inside is literal code.
+func TestLongFenceHoldsShorterRuns(t *testing.T) {
+	src := "````\n```\n**not bold**\n```\n````\nafter **bold**"
+	got := ansi.Strip(strings.Join(markdown(src, 80), "\n"))
+	if want := "```\n**not bold**\n```\nafter bold"; got != want {
+		t.Errorf("markdown = %q, want %q", got, want)
+	}
+}
+
+func TestCodeInsideBoldOrItalic(t *testing.T) {
+	for src, want := range map[string]string{
+		"**run `hive update` now**": "run hive update now",
+		"see *the `kb` module*":     "see the kb module",
+		"**`x`**":                   "x",
+	} {
+		if got := ansi.Strip(inline(src)); got != want {
+			t.Errorf("inline(%q) = %q, want %q", src, got, want)
+		}
+	}
+}
+
+func TestMarkdown(t *testing.T) {
+	src := "Use **bold** and `code` and [hive](https://x.io).\n- one item\n- two\n```\nfunc main() {}\n```"
+	got := strings.Join(markdown(src, 60), "\n")
+	plain := ansi.Strip(got)
+	for _, bad := range []string{"**", "`", "](", "```"} {
+		if strings.Contains(plain, bad) {
+			t.Errorf("raw %q left in %q", bad, plain)
+		}
+	}
+	for _, want := range []string{"Use bold and code and hive (https://x.io).", "• one item", "• two", "func main() {}"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("missing %q in %q", want, plain)
+		}
+	}
+	for _, l := range markdown(strings.Repeat("word ", 30)+"**bold words here**", 30) {
+		if ansi.StringWidth(l) > 30 {
+			t.Errorf("line too wide: %q", l)
+		}
+	}
+}
+
 // TestModuleDetailReachesEveryProject: with more projects than rows, moving
 // down the list scrolls it, so the last project can be selected.
 func TestModuleDetailReachesEveryProject(t *testing.T) {
@@ -131,6 +180,21 @@ func TestModuleDetailReachesEveryProject(t *testing.T) {
 		t.Fatalf("the last project isn't reachable:\n%s", view)
 	}
 	checkWidth(t, m.View(), 80, 14, "module detail")
+}
+
+// TestWheelMovesModuleSelection: the module detail windows on its selection,
+// so the wheel moves the selection rather than the unused scroll offset.
+func TestWheelMovesModuleSelection(t *testing.T) {
+	m := testModel(80, 20)
+	m.stack = []detail{{kind: "module", id: "agents"}}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	if m.stack[0].sel != 1 {
+		t.Fatalf("wheel down: sel %d, want 1", m.stack[0].sel)
+	}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.stack[0].sel != 0 {
+		t.Fatalf("wheel up: sel %d, want 0", m.stack[0].sel)
+	}
 }
 
 func TestThreadPaneScrolls(t *testing.T) {
@@ -232,5 +296,15 @@ func TestWheelScrollsDetail(t *testing.T) {
 	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
 	if m.stack[0].scroll != 0 {
 		t.Fatalf("wheel up: scroll %d, want 0", m.stack[0].scroll)
+	}
+}
+
+// A config.json the daemon couldn't read is named on the Settings page.
+func TestSettingsShowsTheConfigLoadError(t *testing.T) {
+	m := testModel(100, 24)
+	m.section = secSettings
+	m.st.ConfigErr = "tribunal seat {\"model\": 5} isn't a model name"
+	if view := m.View(); !strings.Contains(view, "isn't a model name") {
+		t.Fatalf("no load error on Settings:\n%s", view)
 	}
 }

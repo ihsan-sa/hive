@@ -55,6 +55,7 @@ type State struct {
 	Chats      []ChatView         `json:"chats"`
 	Requests   []risk.Request     `json:"requests"`
 	Config     core.Config        `json:"config"`
+	ConfigErr  string             `json:"config_err,omitempty"`
 }
 
 // ProjectView is one project on the dashboard.
@@ -220,4 +221,10 @@ func (c *Client) Ping() bool {
 func (c *Client) State() (State, error) {
 	var s State
 	return s, c.Do("GET", "/api/state", nil, &s)
+}
+
+// ConfigView is GET /api/config: every setting that read, and what config.json got wrong.
+type ConfigView struct {
+	core.Config
+	LoadError string `json:"load_error,omitempty"`
 }

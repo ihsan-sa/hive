@@ -24,6 +24,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -245,14 +246,18 @@ func (s *server) routes() http.Handler {
 	h("/api/state", func(*http.Request) (any, error) { return s.state(), nil })
 	h("/api/chat", func(r *http.Request) (any, error) {
 		if r.Method == http.MethodPost {
-			var b struct{ Chat, Thread, Text string }
+			var b struct {
+				Chat, Thread, Text string
+				Files              []chat.File
+			}
+			r.Body = chat.Limit(r.Body, a.C.WS.LoadConfig().ChatMaxMB)
 			if err := decode(r, &b); err != nil {
 				return nil, err
 			}
 			if b.Chat == "" {
 				b.Chat = "lead"
 			}
-			return a.Chat.Post(b.Chat, b.Thread, b.Text)
+			return a.Chat.Post(b.Chat, b.Thread, b.Text, b.Files...)
 		}
 		return a.Chat.Messages(r.URL.Query().Get("id")), nil
 	})
@@ -341,10 +346,7 @@ func (s *server) routes() http.Handler {
 		if r.Method != http.MethodPost {
 			// What config.json got wrong rides beside every setting that did read.
 			c, err := a.C.WS.ReadConfig()
-			out := struct {
-				core.Config
-				LoadError string `json:"load_error,omitempty"`
-			}{Config: c}
+			out := api.ConfigView{Config: c}
 			if err != nil {
 				out.LoadError = err.Error()
 			}
@@ -470,6 +472,7 @@ func (s *server) state() api.State {
 	st.Alerts = append([]api.Alert{}, s.alerts...)
 	s.mu.Unlock()
 	if cfgErr != nil { // live, so it goes once the file is fixed
+		st.ConfigErr = cfgErr.Error()
 		st.Alerts = append(st.Alerts, api.Alert{At: time.Now(), Kind: "settings", Text: cfgErr.Error()})
 	}
 	st.Jobs = a.System.Jobs()

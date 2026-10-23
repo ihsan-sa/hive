@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"os"
 	"reflect"
 	"strings"
@@ -29,7 +30,7 @@ func TestBadSeatKeepsTheRestOfTheConfig(t *testing.T) {
 	if err := ws.SaveConfig(c); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ws.ReadConfig(); err == nil || !strings.Contains(err.Error(), `"model": 5`) {
+	if _, err := ws.ReadConfig(); err == nil || !strings.Contains(err.Error(), "tribunal seat") {
 		t.Fatalf("after a save, error %v, want the bad seat still refused", err)
 	}
 }
@@ -41,5 +42,16 @@ func TestCheckRefusesABadFloorGlob(t *testing.T) {
 	}
 	if err := (Config{Floor: []string{"*.pem", `C:\keys\`}}).Check(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A seat written as null reads as an empty model, which Check refuses.
+func TestCheckRefusesANullSeat(t *testing.T) {
+	var c Config
+	if err := json.Unmarshal([]byte(`{"tribunal_models": ["opus", null]}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Check(); err == nil || !strings.Contains(err.Error(), "needs a model") {
+		t.Fatalf("a null seat passed: %v", err)
 	}
 }
