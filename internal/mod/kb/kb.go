@@ -93,8 +93,11 @@ func (m *Module) ensureRepo() {
 // the store's practice/ folder, so a fresh install starts knowing them, and
 // refreshes them when an update ships new text. practice/.filed.json keeps
 // the hash of what was last filed, so a doc a person has edited since (or
-// wrote before any filing) is never overwritten. Notes live at the top level,
-// so a note never shares a path with a practice doc.
+// wrote before any filing) is never overwritten; the ledger's ".kept" entry
+// names the docs left alone, so each is journaled once, not every start.
+// Only the paths written here are committed, so a person's uncommitted edit
+// never lands under this commit's message. Notes live at the top level, so
+// a note never shares a path with a practice doc.
 func (m *Module) filePractice() {
 	src := filepath.Join(m.C.WS.Modules(), "kb", "practice")
 	dst := filepath.Join(m.C.WS.KB(), "practice")
@@ -104,8 +107,7 @@ func (m *Module) filePractice() {
 		_ = json.Unmarshal(raw, &filed)
 	}
 	entries, _ := os.ReadDir(src)
-	changed := false
-	var kept []string
+	var kept, wrote []string
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
 			continue
@@ -120,7 +122,8 @@ func (m *Module) filePractice() {
 		switch {
 		case err == nil && hashOf(have) == want:
 			if filed[e.Name()] != want {
-				filed[e.Name()], changed = want, true
+				filed[e.Name()] = want
+				wrote = append(wrote, "practice/"+e.Name())
 			}
 			continue
 		case err == nil && hashOf(have) != filed[e.Name()]:
@@ -130,21 +133,25 @@ func (m *Module) filePractice() {
 			continue
 		}
 		if os.WriteFile(path, raw, 0o644) == nil {
-			filed[e.Name()], changed = want, true
+			filed[e.Name()] = want
+			wrote = append(wrote, "practice/"+e.Name())
 		}
 	}
-	if len(kept) > 0 {
-		m.C.J.MustAppend("kb.practice", map[string]string{"result": "kept edited practice docs, not refreshed: " + strings.Join(kept, ", ")})
-	}
-	if !changed {
+	k := strings.Join(kept, ", ")
+	if len(wrote) == 0 && k == filed[".kept"] {
 		return
 	}
+	if k != "" && k != filed[".kept"] {
+		m.C.J.MustAppend("kb.practice", map[string]string{"result": "kept edited practice docs, not refreshed: " + k})
+	}
+	filed[".kept"] = k
 	if raw, err := json.MarshalIndent(filed, "", "  "); err == nil {
 		_ = os.WriteFile(ledger, append(raw, '\n'), 0o644)
 	}
-	_, err := core.Git(m.C.WS.KB(), "add", "--", "practice")
+	paths := append(wrote, "practice/.filed.json")
+	_, err := core.Git(m.C.WS.KB(), append([]string{"add", "--"}, paths...)...)
 	if err == nil {
-		_, err = core.Git(m.C.WS.KB(), "commit", "-q", "-m", "File how a Hive works", "--", "practice")
+		_, err = core.Git(m.C.WS.KB(), append([]string{"commit", "-q", "-m", "File how a Hive works", "--"}, paths...)...)
 	}
 	if err != nil {
 		m.C.J.MustAppend("kb.practice", map[string]string{"result": "practice docs not committed: " + err.Error()})
