@@ -184,6 +184,7 @@ func TestGateMainRedOncePerCommit(t *testing.T) {
 	if err := m.test(task, p); err != nil {
 		t.Fatal(err)
 	}
+	// Moving main back relies on Sync's fetch being forced (+refs/heads/*).
 	must(t, forge.RepoPath("me/p"), "update-ref", "refs/heads/main", a)
 	if err := m.test(task, p); err != nil {
 		t.Fatal(err)

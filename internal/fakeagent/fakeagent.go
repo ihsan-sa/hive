@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,6 +80,15 @@ func Main(argv []string) int {
 	if budget > 0 && strings.Contains(all, "FAKE:spendall") { // as Claude does at --max-budget-usd
 		emit(map[string]any{"type": "result", "subtype": "error_max_budget_usd", "is_error": true, "session_id": session, "total_cost_usd": budget + 0.01})
 		return 0
+	}
+
+	// FAKE:stall<role> hangs the role's first turn; FAKE:slow<role>:<s> takes s seconds.
+	if strings.Contains(all, "FAKE:stall"+role) && !resume {
+		time.Sleep(10 * time.Minute)
+	}
+	if m := regexp.MustCompile(`FAKE:slow` + role + `:(\d+)`).FindStringSubmatch(all); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		time.Sleep(time.Duration(n) * time.Second)
 	}
 
 	text, structured := "ok", any(nil)
@@ -164,6 +175,18 @@ func lead(prompt string) (string, error) {
 }
 
 func leadAsk(ask string) (string, error) {
+	if i := strings.Index(ask, "[attached;"); i >= 0 {
+		// Like Claude's Read: the lead opens each file the note names.
+		var got []string
+		for _, p := range strings.Split(strings.TrimSuffix(strings.TrimSpace(ask[i:]), "]"), "\n")[1:] {
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return "", err
+			}
+			got = append(got, fmt.Sprintf("%s (%s, %d bytes)", filepath.Base(p), http.DetectContentType(data), len(data)))
+		}
+		return "I opened " + strings.Join(got, ", ") + ".", nil
+	}
 	if pm := projectRe.FindStringSubmatch(ask); pm != nil {
 		_, err := call("create_project", map[string]any{"name": pm[2], "isolated": pm[1] != "", "description": ask, "goals": ask}, 3*time.Minute)
 		if err != nil {
@@ -258,6 +281,8 @@ func worker(all, prompt, system string) (string, error) {
 		os.WriteFile("score.txt", []byte("9\n"), 0o644)
 	case strings.Contains(all, "FAKE:goals"):
 		appendFile(".hive/goals.md", "- a goal the worker wrote down\n")
+	case strings.Contains(all, "FAKE:stallcheck"):
+		os.WriteFile("STALL", []byte("the test command waits while this exists\n"), 0o644)
 	case strings.Contains(all, "FAKE:docs"):
 		appendFile("NOTES.md", "- a small doc change\n")
 	case strings.Contains(prompt, "conflict"):

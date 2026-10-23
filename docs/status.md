@@ -6,6 +6,7 @@ Done:
 - Linux sandbox on stock Ubuntu 23.10+ (`apparmor_restrict_unprivileged_userns=1`): the same mounts, tools and egress run under bubblewrap; WSL keeps the build's own namespaces.
 - An isolated lead granted modules starts under bubblewrap (the mount-point fix landed in #14). CI runs the e2e under bubblewrap on ubuntu-latest too (`sandboxed-e2e`, which probes the sandbox first), so a sandbox break goes red on a PR.
 - Core (~3k lines), Linux namespace sandbox (+WSL, +Seatbelt), Claude Code + fake harness, all default modules, daemon + API, CLI, TUI, first run, autostart, self-update/self-release, installers, CI + release workflows, demo project.
+- The Hive notices its own stalls: a stage that stops moving past its own history is restarted once, then handed to the lead, with one alert that updates (`TestStalls`: hung worker, hung reviewer, hung check, a slow worker left alone). Schedules aren't watched: they fire from the daemon loop, so if they stop the watcher has stopped too.
 - Tests passing:
   - the control center in tmux (`HIVE_E2E_TUI=1`, `TestControlCenterInTmux`): first run on a clean HOME, a chat that lands, dashboard, approve and decline from Waiting, module access, settings saved, quit and reopen, 80x24 to 160x48 and resizing;
   - unit: gate guarantees (pinned merge, check + verdict bound to sha, foreign git metadata refused, only hive/* pushed, protected paths), journal, harness parsing, egress filtering, schedules, TUI fits 50×16 to 120×40;
