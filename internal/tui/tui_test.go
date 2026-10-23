@@ -120,6 +120,16 @@ func TestPreviewDropsMarkers(t *testing.T) {
 	}
 }
 
+// A fence closes only on a bare run of backticks at least as long as the one
+// that opened it, so a shorter run inside is literal code.
+func TestLongFenceHoldsShorterRuns(t *testing.T) {
+	src := "````\n```\n**not bold**\n```\n````\nafter **bold**"
+	got := ansi.Strip(strings.Join(markdown(src, 80), "\n"))
+	if want := "```\n**not bold**\n```\nafter bold"; got != want {
+		t.Errorf("markdown = %q, want %q", got, want)
+	}
+}
+
 func TestCodeInsideBoldOrItalic(t *testing.T) {
 	for src, want := range map[string]string{
 		"**run `hive update` now**": "run hive update now",

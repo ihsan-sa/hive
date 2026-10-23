@@ -24,12 +24,17 @@ var (
 // TERM=dumb) gets the text with the markers removed and nothing else.
 func markdown(s string, w int) []string {
 	var out []string
-	fence := false
+	fence := 0 // backticks in the open fence's run; 0 is outside a fence
 	for _, l := range strings.Split(strings.ReplaceAll(s, "\r", ""), "\n") {
+		t := strings.TrimSpace(l)
+		run := len(t) - len(strings.TrimLeft(t, "`"))
 		switch {
-		case strings.HasPrefix(strings.TrimSpace(l), "```"):
-			fence = !fence
-		case fence:
+		case fence == 0 && run >= 3:
+			fence = run
+		case fence > 0 && run >= fence && run == len(t):
+			// Only a bare run at least as long as the opener closes it.
+			fence = 0
+		case fence > 0:
 			for _, c := range wrap(l, w) {
 				out = append(out, stCode.Render(c))
 			}
