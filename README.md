@@ -35,7 +35,7 @@ The score command's output ends with one number; `direction` says whether higher
 
 ## Models
 
-The model workers and leads use and the reviewer's model are under **Settings** in the control center. They're stored in `.hive/config.json` in your Hive folder (`model` and `reviewer_model`), and `projects.<name>.model` overrides the model for one project.
+The model workers use, the lead's and the reviewer's are under **Settings** in the control center. They're stored in `.hive/config.json` in your Hive folder (`model`, `lead_model` and `reviewer_model`), and `projects.<name>.model` overrides the model for one project.
 
 ## Use
 
@@ -48,6 +48,8 @@ The model workers and leads use and the reviewer's model are under **Settings** 
     hive shutdown         stop it (agents finish their turn; `hive` starts it again)
 
 The Hive keeps running in the background and starts with the machine. Closing the control center never stops work.
+
+In a chat, drop a file or paste one's path to attach it, and ctrl+v attaches an image on the clipboard. One message, files and all, can be up to 300 MB; `chat_max_mb` in `.hive/config.json` changes that.
 
 ## What's safe and what isn't
 

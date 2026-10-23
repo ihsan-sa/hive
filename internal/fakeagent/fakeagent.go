@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:needpackage, FAKE:goals, FAKE:module, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:needpackage, FAKE:goals, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,11 +82,20 @@ func Main(argv []string) int {
 		return 0
 	}
 
+	// FAKE:stall<role> hangs the role's first turn; FAKE:slow<role>:<s> takes s seconds.
+	if strings.Contains(all, "FAKE:stall"+role) && !resume {
+		time.Sleep(10 * time.Minute)
+	}
+	if m := regexp.MustCompile(`FAKE:slow` + role + `:(\d+)`).FindStringSubmatch(all); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		time.Sleep(time.Duration(n) * time.Second)
+	}
+
 	text, structured := "ok", any(nil)
 	var err error
 	switch role {
 	case "lead":
-		text, err = lead(prompt)
+		text, err = lead(prompt, string(system))
 	case "worker":
 		text, err = worker(all, prompt, string(system))
 	case "reviewer":
@@ -100,7 +111,10 @@ func Main(argv []string) int {
 		}
 		structured = map[string]string{"vote": vote, "reason": "FAKE panelist"}
 	case "sweep":
-		_, err = call("brief", map[string]string{"title": "FAKE sweep: find the next real gain", "done": "score improves", "known": "evidence: fake FAKE:raisescore"}, time.Minute)
+		var ps []string
+		if ps, err = projectNames(); err == nil && len(ps) > 0 {
+			_, err = call("brief", map[string]string{"project": ps[0], "title": "FAKE sweep: find the next real gain", "done": "score improves", "known": "evidence: fake FAKE:raisescore"}, time.Minute)
+		}
 		if err == nil {
 			_, err = call("finish", map[string]string{"status": "done", "account": "filed one ask"}, time.Minute)
 		}
@@ -147,14 +161,24 @@ func emit(v any) {
 var personRe = regexp.MustCompile(`(?s)Person: (.*?)(?:` + regexp.QuoteMeta(core.PendingSep) + `|\z)`)
 var projectRe = regexp.MustCompile(`create (?:an? )?(isolated )?project (?:called |named )?([A-Za-z0-9_-]+)`)
 
-func lead(prompt string) (string, error) {
+// moduleRe is a person asking for a new module; merged is the notice that one merged.
+var moduleRe = regexp.MustCompile(`(?i)make (?:me )?a module (?:called |named )?([a-z0-9-]+)`)
+var merged = regexp.MustCompile(`Merged: Build module ([a-z0-9-]+)`)
+
+func lead(prompt, system string) (string, error) {
 	ms := personRe.FindAllStringSubmatch(prompt, -1)
 	if ms == nil {
+		if mm := merged.FindStringSubmatch(prompt); mm != nil {
+			if _, err := call("install_module", map[string]string{"project": mm[1]}, 3*time.Minute); err != nil {
+				return "", err
+			}
+			return "Module " + mm[1] + " merged; I've asked you to approve installing it.", nil
+		}
 		return "NOOP", nil
 	}
 	var replies []string
 	for _, m := range ms {
-		reply, err := leadAsk(strings.TrimSpace(m[1]))
+		reply, err := leadAsk(strings.TrimSpace(m[1]), system)
 		if err != nil {
 			return "", err
 		}
@@ -163,7 +187,19 @@ func lead(prompt string) (string, error) {
 	return strings.Join(replies, "\n"), nil
 }
 
-func leadAsk(ask string) (string, error) {
+func leadAsk(ask, system string) (string, error) {
+	if i := strings.Index(ask, "[attached;"); i >= 0 {
+		// Like Claude's Read: the lead opens each file the note names.
+		var got []string
+		for _, p := range strings.Split(strings.TrimSuffix(strings.TrimSpace(ask[i:]), "]"), "\n")[1:] {
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return "", err
+			}
+			got = append(got, fmt.Sprintf("%s (%s, %d bytes)", filepath.Base(p), http.DetectContentType(data), len(data)))
+		}
+		return "I opened " + strings.Join(got, ", ") + ".", nil
+	}
 	if pm := projectRe.FindStringSubmatch(ask); pm != nil {
 		_, err := call("create_project", map[string]any{"name": pm[2], "isolated": pm[1] != "", "description": ask, "goals": ask}, 3*time.Minute)
 		if err != nil {
@@ -181,14 +217,95 @@ func leadAsk(ask string) (string, error) {
 	if strings.Contains(strings.ToLower(ask), "what's in the repo") {
 		return "The repo has " + strings.Join(repoFiles(), ", ") + ".", nil
 	}
+	if hiveQ.MatchString(ask) && strings.Contains(system, "look first") {
+		return aboutHive()
+	}
 	if strings.HasPrefix(strings.ToLower(ask), "hello") {
 		return "Hello. I'm the lead. Tell me what you'd like done.", nil
 	}
-	_, err := call("brief", map[string]string{"title": clip(ask, 60), "done": "FAKE: the change is merged", "known": ask}, 3*time.Minute)
+	// As a real lead does with its role doc: a module is a project of its own;
+	// without the doc it files the ask wherever a brief lands.
+	if mm := moduleRe.FindStringSubmatch(ask); mm != nil && strings.Contains(system, "built as a project of its own") {
+		name := mm[1]
+		if _, err := call("create_project", map[string]any{"name": name, "description": "a Hive module: " + ask, "goals": ask}, 3*time.Minute); err != nil {
+			return "", err
+		}
+		_, err := call("brief", map[string]string{"project": name, "title": "Build module " + name, "done": "module.json at the root and the files it names", "known": "FAKE:module " + name + "\n" + ask}, 3*time.Minute)
+		if err != nil {
+			return "", err
+		}
+		return "A module is built as a project of its own, so I made project " + name + " and filed the work there; once it merges I'll ask you to install it.", nil
+	}
+	b := map[string]string{"title": clip(ask, 60), "done": "FAKE: the change is merged", "known": ask}
+	where := ""
+	if os.Getenv("HIVE_PROJECT") == "" {
+		ps, err := projectNames()
+		if err != nil {
+			return "", err
+		}
+		if len(ps) != 1 {
+			return "Which project should this go to? I have: " + strings.Join(ps, ", ") + ".", nil
+		}
+		b["project"], where = ps[0], " in "+ps[0]+", the only project"
+	}
+	if _, err := call("brief", b, 3*time.Minute); err != nil {
+		return "", err
+	}
+	return "Understood: " + clip(ask, 80) + ". I've started a piece of work on it" + where + ".", nil
+}
+
+// hiveQ is a question about the Hive itself, which a lead answers from what it reads.
+var hiveQ = regexp.MustCompile(`(?i)does the hive have`)
+
+// aboutHive answers from the installed modules and the live state, as the
+// lead's role doc tells a real lead to.
+func aboutHive() (string, error) {
+	var mods, roles []string
+	dir := os.Getenv("HIVE_MODULES")
+	jsons, _ := filepath.Glob(filepath.Join(dir, "*", "module.json"))
+	for _, f := range jsons {
+		var m struct {
+			Name     string
+			Provides struct{ Prompts []string }
+		}
+		raw, _ := os.ReadFile(f)
+		json.Unmarshal(raw, &m)
+		mods = append(mods, m.Name)
+		for _, p := range m.Provides.Prompts {
+			if p != "orientation.md" {
+				roles = append(roles, strings.TrimSuffix(p, ".md"))
+			}
+		}
+	}
+	panel := "an unknown number of"
+	tribunal, _ := os.ReadFile(filepath.Join(dir, "agents", "tribunal.md"))
+	if tm := regexp.MustCompile(`panel of (\w+)`).FindSubmatch(tribunal); tm != nil {
+		panel = string(tm[1])
+	}
+	raw, err := call("status", map[string]string{}, time.Minute)
 	if err != nil {
 		return "", err
 	}
-	return "Understood: " + clip(ask, 80) + ". I've started a piece of work on it.", nil
+	var st struct {
+		Waiting []string `json:"waiting_on_person"`
+	}
+	json.Unmarshal(raw, &st)
+	return fmt.Sprintf("Yes. Installed modules: %s. Roles: %s. One warden weighs each request past an agent's reach, and a tribunal is a panel of %s. %d waiting on you. (Read from $HIVE_MODULES and hive agent status.)",
+		strings.Join(mods, ", "), strings.Join(roles, ", "), panel, len(st.Waiting)), nil
+}
+
+func projectNames() ([]string, error) {
+	raw, err := call("status", map[string]string{}, time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	var st struct{ Projects []struct{ Name string } }
+	json.Unmarshal(raw, &st)
+	var names []string
+	for _, p := range st.Projects {
+		names = append(names, p.Name)
+	}
+	return names, nil
 }
 
 // repoFiles lists what a lead sees of its project: its checkout, brought to
@@ -256,8 +373,8 @@ func worker(all, prompt, system string) (string, error) {
 		os.WriteFile("score.txt", []byte("1\n"), 0o644)
 	case strings.Contains(all, "FAKE:raisescore"):
 		os.WriteFile("score.txt", []byte("9\n"), 0o644)
-	case moduleKey.MatchString(all):
-		m := moduleKey.FindStringSubmatch(all)
+	case skillModuleKey.MatchString(all):
+		m := skillModuleKey.FindStringSubmatch(all)
 		os.WriteFile("module.json", []byte(`{"name":"`+m[1]+`","description":"FAKE module: its skill says the codeword"}`), 0o644)
 		os.WriteFile("skill.md", []byte("The codeword is "+m[2]+".\n"), 0o644)
 	case useModuleKey.MatchString(all):
@@ -267,8 +384,14 @@ func worker(all, prompt, system string) (string, error) {
 		}
 		skill, _ := os.ReadFile(found[0])
 		os.WriteFile("USED.md", skill, 0o644)
+	case moduleKey.MatchString(all):
+		name := moduleKey.FindStringSubmatch(all)[1]
+		os.WriteFile("module.json", []byte(`{"name": "`+name+`", "description": "FAKE module", "provides": {"procedures": ["ledger.md"]}, "projects": ["*"]}`+"\n"), 0o644)
+		os.WriteFile("ledger.md", []byte("# How to keep the ledger\n"), 0o644)
 	case strings.Contains(all, "FAKE:goals"):
 		appendFile(".hive/goals.md", "- a goal the worker wrote down\n")
+	case strings.Contains(all, "FAKE:stallcheck"):
+		os.WriteFile("STALL", []byte("the test command waits while this exists\n"), 0o644)
 	case strings.Contains(all, "FAKE:docs"):
 		appendFile("NOTES.md", "- a small doc change\n")
 	case strings.Contains(prompt, "conflict"):
@@ -290,11 +413,12 @@ func worker(all, prompt, system string) (string, error) {
 	return "done", err
 }
 
-// moduleKey makes the checkout a module named $1 whose skill says codeword $2;
+// skillModuleKey makes the checkout a module named $1 whose skill says codeword $2;
 // useModuleKey copies the skill of the installed module whose folder ends in
 // $1 into USED.md.
-var moduleKey = regexp.MustCompile(`FAKE:module (\w+) (\w+)`)
+var skillModuleKey = regexp.MustCompile(`FAKE:skillmodule (\w+) (\w+)`)
 var useModuleKey = regexp.MustCompile(`FAKE:usemodule (\w+)`)
+var moduleKey = regexp.MustCompile(`FAKE:module ([a-z0-9-]+)`)
 
 // peek reads what the rest of the Hive left in $HIVE_STATE (another run's log,
 // a chat, the named warden's log, the journal), tries to open each for writing and to

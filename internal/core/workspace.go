@@ -46,6 +46,7 @@ type Config struct {
 	Autonomy       int            `json:"autonomy"`
 	Harness        string         `json:"harness"`
 	Model          string         `json:"model"`
+	LeadModel      string         `json:"lead_model"`
 	ReviewerModel  string         `json:"reviewer_model"`
 	TribunalModels []TribunalSeat `json:"tribunal_models"`
 	// Egress holds runs to the hosts listed; with no list a run reaches every
@@ -65,6 +66,7 @@ type Config struct {
 	ReviewRounds int                        `json:"review_rounds"`
 	Projects     map[string]ProjectSettings `json:"projects,omitempty"`
 	Schedules    map[string]string          `json:"schedules,omitempty"` // name -> "every 12h" | "daily 03:00" | "off"
+	ChatMaxMB    int                        `json:"chat_max_mb"`         // the most one chat message, files and all, may be, in MB; 0 means the default
 
 	// MaxOutputTokens caps one reply (a budget is checked only between turns); 0 leaves the harness default.
 	MaxOutputTokens int `json:"max_output_tokens"`
@@ -78,6 +80,9 @@ type Config struct {
 	// PlateauMerges: a project whose best score hasn't moved in this many
 	// merges gets a step-back (besides the improve.stepback schedule); 0 is off.
 	PlateauMerges int `json:"plateau_merges"`
+	// StallFloorSeconds: nothing counts as stalled before this long without moving,
+	// however fast its stage usually is here; 0 is the default (20 minutes).
+	StallFloorSeconds int `json:"stall_floor_seconds,omitempty"`
 }
 
 // ProjectSettings override workspace defaults per project.
@@ -168,12 +173,14 @@ func DefaultConfig() Config {
 		Autonomy:       2,
 		Harness:        "claude",
 		Model:          "sonnet",
+		LeadModel:      "opus",
 		ReviewerModel:  "opus",
 		TribunalModels: []TribunalSeat{{Model: "opus"}, {Model: "sonnet"}, {Model: "fable"}},
 		Sandbox:        "auto",
 		ReleaseRepo:    DefaultReleaseRepo,
 		AutoUpdate:     true,
 		ReviewRounds:   3,
+		ChatMaxMB:      300,
 
 		MaxOutputTokens: 16000,
 		MemFloorMB:      1024,
@@ -210,11 +217,22 @@ func (w Workspace) ReadConfig() (Config, error) {
 	raw, err := os.ReadFile(w.ConfigPath())
 	if err == nil {
 		err = json.Unmarshal(raw, &c)
+		// A config from before lead_model: a model the person chose stays the
+		// lead's; the old default moves the lead to the new one.
+		var had struct {
+			LeadModel *string `json:"lead_model"`
+		}
+		if json.Unmarshal(raw, &had) == nil && had.LeadModel == nil && c.Model != DefaultConfig().Model {
+			c.LeadModel = c.Model
+		}
 	} else if os.IsNotExist(err) {
 		err = nil
 	}
 	if c.Schedules == nil {
 		c.Schedules = DefaultConfig().Schedules
+	}
+	if c.ChatMaxMB <= 0 {
+		c.ChatMaxMB = DefaultConfig().ChatMaxMB
 	}
 	if err = errors.Join(err, c.Check()); err != nil {
 		err = fmt.Errorf("%s: %w", w.ConfigPath(), err)

@@ -6,6 +6,7 @@ Done:
 - Linux sandbox on stock Ubuntu 23.10+ (`apparmor_restrict_unprivileged_userns=1`): the same mounts, tools and egress run under bubblewrap; WSL keeps the build's own namespaces.
 - An isolated lead granted modules starts under bubblewrap (the mount-point fix landed in #14). CI runs the e2e under bubblewrap on ubuntu-latest too (`sandboxed-e2e`, which probes the sandbox first), so a sandbox break goes red on a PR.
 - Core (~3k lines), Linux namespace sandbox (+WSL, +Seatbelt), Claude Code + fake harness, all default modules, daemon + API, CLI, TUI, first run, autostart, self-update/self-release, installers, CI + release workflows, demo project.
+- The Hive notices its own stalls: a stage that stops moving past its own history is restarted once, then handed to the lead, with one alert that updates (`TestStalls`: hung worker, hung reviewer, hung check, a slow worker left alone). Schedules aren't watched: they fire from the daemon loop, so if they stop the watcher has stopped too.
 - Tests passing:
   - the control center in tmux (`HIVE_E2E_TUI=1`, `TestControlCenterInTmux`): first run on a clean HOME, a chat that lands, dashboard, approve and decline from Waiting, module access, settings saved, quit and reopen, 80x24 to 160x48 and resizing;
   - unit: gate guarantees (pinned merge, check + verdict bound to sha, foreign git metadata refused, only hive/* pushed, protected paths), journal, harness parsing, egress filtering, schedules, TUI fits 50×16 to 120×40;
@@ -16,8 +17,11 @@ Done:
   - rename hole: `TestRenameOutOfProtectedPath` fails on the old classifier, passes now. Passes both bare and inside the WSL sandbox.
   - WSL sandbox isolation checked by hand: /mnt, /home, WSL interop hidden; /etc, /usr read-only; only checkout writable; public HTTPS via proxy 200; local services 403; no direct network.
 
+- A person's own module is built as a project of its own and installed from it (`install_module --project`, on the person's "install"); the workspace lead names `--project` on every brief, so an ask no longer lands in the only project by default (`TestAskForModule`). An installed module follows its project only when the repository gets a newer `vX.Y.Z` tag, and nothing tags a module project yet.
+- Asked about the Hive itself, the lead reads its installed modules and `hive agent status` before it answers, instead of guessing (`TestAskAboutTheHive`; live twin `TestLiveAskAboutTheHive`, not yet run on the host). The lead runs on its own model setting, `lead_model`, opus by default; an older config keeps a model the person chose, and the old sonnet default moves to opus.
 - Release v0.1.0 published with binaries (linux/darwin amd64+arm64, windows amd64). One-line install via `gh api …/install.ps1 | Out-String | iex` verified into a scratch dir; installs `hive-v0`.
 - CI green on Windows, Ubuntu and macOS (vet, unit, e2e). Claude Code inside the WSL sandbox verified up to the API (invalid token → 401).
+- The knowledge base files every journal event under `kb/record/` (one file per task, request, run, chat, project) on its own, catches up after downtime and never files an event twice; `hive agent search` and `hive kb <words>` return the best-matching pieces, and the lead searches before it says what happened (unit `internal/mod/kb`).
 
 Not verified:
 - The tribunal with real models under bubblewrap: `TestLiveTribunal` passed on the tower bare (three models approved, the majority ran the warden's script). Under bubblewrap no tribunal formed, because the ask was clipped at 120 characters and a sandboxed worker read the hidden fixture as already gone; both are fixed (the whole ask reaches the agents, and the worker role says outside paths are hidden), and the live probes now run sandboxed when the sandbox works. Re-run under bubblewrap. Injection resistance by a real model is untested.

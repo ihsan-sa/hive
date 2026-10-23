@@ -146,6 +146,9 @@ type Runs struct {
 	tokens  TokenSource
 	tools   func() []string // host programs to expose (hive binary for the sandbox's OS)
 	ops     *Ops
+	// ModelFor is the model a persistent run's next turn takes, so a lead
+	// follows a changed setting; empty keeps the run's own.
+	ModelFor func(Run) string
 
 	mu    sync.Mutex
 	runs  map[string]*Run
@@ -160,9 +163,12 @@ func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), token
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	// A crash between writing a turn's token and starting the turn left it behind.
+	stuck := map[string]error{}
 	for _, r := range rs.runs {
 		if HarnessName(r.Harness) == "codex" && r.Status != StatusRunning {
-			rs.dropCodexHome(r.ID)
+			if err := rs.dropCodexHome(r.ID); err != nil {
+				stuck[r.ID] = err
+			}
 		}
 	}
 	j.Subscribe(func(e Event) {
@@ -170,6 +176,18 @@ func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), token
 		rs.apply(e)
 		rs.mu.Unlock()
 	})
+	for id, err := range stuck {
+		why := "its Codex token could not be deleted: " + err.Error()
+		r, _ := rs.Get(id)
+		switch {
+		case r.Status == StatusBlocked && strings.HasPrefix(r.Reason, "its Codex token could not be deleted"):
+			// already said; a restart adds nothing
+		case r.Terminal():
+			rs.Progress(id, why) // a finished run keeps its status
+		default:
+			rs.SetStatus(id, StatusBlocked, why)
+		}
+	}
 	return rs
 }
 
@@ -183,6 +201,7 @@ type turnStarted struct {
 	Proc      proc.Handle `json:"proc"`
 	Delivered int         `json:"delivered"`
 	Resume    bool        `json:"resume"`
+	Model     string      `json:"model,omitempty"`
 	Login     string      `json:"login,omitempty"`
 }
 
@@ -247,6 +266,9 @@ func (rs *Runs) apply(e Event) {
 		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login
 		if t.Session != "" {
 			r.Session = t.Session
+		}
+		if t.Model != "" {
+			r.Model = t.Model
 		}
 		r.Waiting = ""
 		if t.Delivered <= len(r.Pending) {
@@ -473,14 +495,22 @@ func (rs *Runs) Spent(month string) float64 {
 	return rs.spent[month]
 }
 
-// Send queues a message for a run's next turn.
-func (rs *Runs) Send(id, text string) error {
+// Takes says why run id can't take a message, or nil if it can.
+func (rs *Runs) Takes(id string) error {
 	r, ok := rs.Get(id)
 	if !ok {
 		return ErrNotFound
 	}
 	if r.Terminal() && !r.Persistent {
 		return fmt.Errorf("run %s has ended (%s)", id, r.Status)
+	}
+	return nil
+}
+
+// Send queues a message for a run's next turn.
+func (rs *Runs) Send(id, text string) error {
+	if err := rs.Takes(id); err != nil {
+		return err
 	}
 	rs.append("run.queued", runNote{ID: id, Text: text})
 	return nil
@@ -525,6 +555,13 @@ func (rs *Runs) Stop(id, reason string) {
 		return // the turn's end records the stop
 	}
 	rs.append("run.status", runNote{ID: id, Status: StatusStopped, Reason: reason})
+}
+
+// Interrupt ends a running turn's process. The turn ends like any interrupted
+// one and is retried on the same checkout, so nothing is started twice.
+func (rs *Runs) Interrupt(id string) bool {
+	r, ok := rs.Get(id)
+	return ok && r.Status == StatusRunning && proc.Alive(r.Proc) && proc.Kill(r.Proc) == nil
 }
 
 // Tick advances every run one step: mailboxes, finished turns, due turns.
@@ -786,6 +823,11 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		prompt = "Continue."
 	}
 	r.Session = session
+	if rs.ModelFor != nil && r.Persistent {
+		if m := rs.ModelFor(r); m != "" {
+			r.Model = m
+		}
+	}
 	promptFile := filepath.Join(rs.ws.RunHost(r.ID), fmt.Sprintf("turn-%03d.prompt", turn))
 	if err := os.WriteFile(promptFile, []byte(prompt), 0o644); err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(time.Minute)})
@@ -823,7 +865,16 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	started = true
-	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key()})
+	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model})
+}
+
+// RunPath is where a run's agent sees its run dir ($HIVE_RUN).
+func (rs *Runs) RunPath(id string) string {
+	m := sandbox.Mount{Host: rs.ws.RunRO(id), Inside: "/hive/run"}
+	if sb, err := rs.sandbox(); err == nil {
+		return sandbox.InsidePath(sb, m)
+	}
+	return m.Host
 }
 
 // sandboxSpec lays out what the agent sees.

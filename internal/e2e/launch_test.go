@@ -167,7 +167,7 @@ func moduleLifecycle(t *testing.T, real bool) {
 	} else {
 		h.post("/api/chat", map[string]string{"chat": "lead", "text": "create project greet to hold a new module"}, nil)
 		h.wait("project greet", patience(t), h.chatExists("project:greet"))
-		h.post("/api/chat", map[string]string{"chat": "project:greet", "text": "build the module FAKE:module greet PLUM42"}, nil)
+		h.post("/api/chat", map[string]string{"chat": "project:greet", "text": "build the module FAKE:skillmodule greet PLUM42"}, nil)
 	}
 	h.wait("the module to be built", patience(t), h.onMain("local/greet", "skill.md", "PLUM42"))
 

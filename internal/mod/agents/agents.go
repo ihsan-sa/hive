@@ -55,6 +55,9 @@ func (a *Agents) Model(role, project string) (harness, model string) {
 	if role == "reviewer" && cfg.ReviewerModel != "" {
 		model = cfg.ReviewerModel
 	}
+	if role == "lead" && cfg.LeadModel != "" {
+		model = cfg.LeadModel
+	}
 	return harness, model
 }
 
