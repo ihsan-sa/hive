@@ -76,7 +76,7 @@ A project is a GitHub repository the Hive works on, with its own goals, its own 
 
 One ask, end to end:
 
-1. **The ask.** You write to the lead in its chat, or an agent or a sweep files one. The lead answers in a sentence or two, and when work is wanted it writes a brief: a title, what done looks like, and what it already knows. It can split one ask into a few briefs.
+1. **The ask.** You write to the lead in its chat, or an agent or a sweep files one. The lead answers in a sentence or two, and when work is wanted it writes a brief: a title, what done looks like, and what it already knows. It can split one ask into a few briefs, except on a project with a score: there the brief is the person's goal as written, with no bar of the lead's, and done is what the ask says, as far as the worker can take it.
 2. **The issue.** Each brief becomes an issue on the project's repository, so the record of what was asked is on GitHub and not only in the folder.
 3. **The work.** A worker builds it in a fresh checkout on its own branch, as in section 6, and commits. It ends with a short account of what it did, what it tested and what it isn't sure of.
 4. **The pull request.** The effects process pushes the branch and opens a pull request that closes the issue, with the worker's account as its body. From here the pull request is the thread for that piece of work.

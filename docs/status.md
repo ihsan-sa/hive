@@ -7,6 +7,7 @@ Done:
 - An isolated lead granted modules starts under bubblewrap (the mount-point fix landed in #14). CI runs the e2e under bubblewrap on ubuntu-latest too (`sandboxed-e2e`, which probes the sandbox first), so a sandbox break goes red on a PR.
 - Core (~3k lines), Linux namespace sandbox (+WSL, +Seatbelt), Claude Code + fake harness, all default modules, daemon + API, CLI, TUI, first run, autostart, self-update/self-release, installers, CI + release workflows, demo project.
 - Tests passing:
+  - the control center in tmux (`HIVE_E2E_TUI=1`, `TestControlCenterInTmux`): first run on a clean HOME, a chat that lands, dashboard, approve and decline from Waiting, module access, settings saved, quit and reopen, 80x24 to 160x48 and resizing;
   - unit: gate guarantees (pinned merge, check + verdict bound to sha, foreign git metadata refused, only hive/* pushed, protected paths), journal, harness parsing, egress filtering, schedules, TUI fits 50×16 to 120×40;
   - e2e (real daemon, fake harness, local forge): ask→merge with review, projects, failing tests stop with PR open, score drop → revert + lesson quoted in next brief, sweep files an ask, kill/restart at every stage with no duplicates, usage-limit park/resume, crash retry, request → warden → agent, module install + update, self-release.
   - risk on fakes (unit `internal/mod/risk`, e2e `TestRiskPaths`): T1 stays the worker's; warden do / safer / decline / ends silent; T3 → three-seat tribunal across models, two rounds, majority runs the warden's exact script; split panel declines a large gain → person "run" runs it; a script changed after the vote is refused by digest (unit only: e2e has no hook to swap it mid-flight); the ceiling holds a money script after a warden allow; a request with injected instructions to the warden runs only the warden's script; autonomy 1 asks first, 3 tells after; restart mid-step doesn't re-run.
@@ -26,7 +27,7 @@ Not verified:
 - The GitHub forge path (gh issue/PR/merge) end to end; only the local forge is exercised.
 - Installers and self-update with real release assets (no repo/release published).
 - macOS Seatbelt sandbox; native Linux host (same namespace code as WSL).
-- Interactive first run and TUI driven by hand (layout test only); autostart registration not executed on this machine.
+- Autostart registration on a real account (the tmux test stubs systemctl and loginctl).
 
 Next:
 1. Owner decisions: publish the repo + first release (makes install lines work); live smoke run with real Claude (plan usage; bare vs sandboxed).
