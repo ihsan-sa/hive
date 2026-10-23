@@ -190,7 +190,7 @@ func (r *Runner) review(id, commit string, m modules.Module) error {
 
 The Hive will run %q from that folder on the person's machine, outside the sandbox, as the person, with no forge credential in its environment and its HOME set to a folder of its own. It asks to serve these hooks: %s. Its manifest says: %q.
 
-Approve only if the code does what the manifest says and nothing else. Decline if it reads or sends credentials or logins (gh, git, ssh, cloud, browser), writes outside its own folder and HOME, starts other programs it does not need, fetches and runs code, or hides what it does. Your final answer is the structured vote: vote (approve or decline) and reason.`,
+Approve only if the code does what the manifest says and nothing else. Decline if it reads or sends credentials or logins (gh, git, ssh, cloud, browser), writes outside its own folder and HOME, keeps a login, token or other secret anywhere but HOME (every agent can read its folder), starts other programs it does not need, fetches and runs code, or hides what it does. Your final answer is the structured vote: vote (approve or decline) and reason.`,
 		commit, m.Source.Source, strings.Join(m.Exec, " "), strings.Join(m.Hooks, ", "), m.Description)
 	s := r.Agents.Spec(id, "module-reviewer", "", dir, brief)
 	s.ReadOnly, s.Schema = true, VoteSchema
