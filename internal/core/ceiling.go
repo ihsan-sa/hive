@@ -18,8 +18,10 @@ import (
 //   - Main changes only through the gate: a merge pinned to a commit with a
 //     host-run passing test and a bound verdict (Effects.Merge). Only hive/*
 //     branches are ever pushed.
-//   - Goals, the score and the project's settings are the person's to merge
-//     (Effects.Classify marks them protected).
+//   - Goals, the score and the project's settings merge only on a recorded
+//     approval (Effects.Classify marks them protected): the person's at
+//     autonomy 1, otherwise a warden's, never the worker's that wrote them,
+//     and the person is told after (risk.Weigh).
 //   - The core has no path that runs an agent's request outside the sandbox.
 //     Only the risk module does, and only as a warden's or a panel's exact,
 //     digest-pinned script, after CeilingGuard on that script. That guard is

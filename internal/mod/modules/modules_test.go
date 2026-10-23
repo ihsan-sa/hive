@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -41,5 +42,30 @@ func TestRemovingTheLastGrant(t *testing.T) {
 		if got := projects(); !slices.Equal(got, step.want) || granted != (len(step.want) > 0) {
 			t.Fatalf("after %s allow=%v: projects %v (textkit granted %v), want %v", step.project, step.allow, got, granted, step.want)
 		}
+	}
+}
+
+// TestNullProjectsFromV010: a record with "projects": null, as v0.1.0 wrote
+// after the last grant was removed, grants the module to nobody.
+func TestNullProjectsFromV010(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	j, err := core.OpenJournal(filepath.Join(ws.Hive(), "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(ws, j)
+	if err := r.InstallDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := r.Get("kb")
+	raw := `{"source":"builtin","release":"` + m.Source.Release + `","hash":"` + m.Source.Hash + `","projects":null}`
+	if err := os.WriteFile(sourcePath(m.Dir), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(r.Granted("textkit"), "kb") {
+		t.Fatal("a null projects list was read as every project")
 	}
 }

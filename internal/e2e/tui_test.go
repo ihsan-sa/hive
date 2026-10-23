@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
 // term is a tmux server of the test's own, holding one window that a person
@@ -184,7 +186,13 @@ func TestControlCenterInTmux(t *testing.T) {
 	t.Cleanup(func() {
 		cmd := exec.Command(bin, "shutdown")
 		cmd.Env = x.env
-		cmd.Run()
+		if cmd.Run() == nil {
+			return
+		}
+		var info api.DaemonInfo // shutdown failed: don't leave the daemon running in a removed HOME
+		if raw, err := os.ReadFile(filepath.Join(ws.Hive(), "daemon.json")); err == nil && json.Unmarshal(raw, &info) == nil && info.PID > 0 {
+			proc.Kill(proc.Handle{PID: info.PID})
+		}
 	})
 
 	// The checks: with only git on PATH, the first run names what's missing.
@@ -310,7 +318,7 @@ func TestControlCenterInTmux(t *testing.T) {
 			states = append(states, r.State)
 		}
 		slices.Sort(states)
-		if len(states) == 2 && states[0] == "declined" && states[1] != "asked" && states[1] != "declined" {
+		if len(states) == 2 && states[0] == "declined" && states[1] == "done" { // go ahead: the warden weighed it and the step ran
 			break
 		}
 		if time.Now().After(deadline) {
