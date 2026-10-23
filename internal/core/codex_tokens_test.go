@@ -141,7 +141,11 @@ func TestCodexTokenFromACrashIsCleanedAtStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(dir, "auth.json"), []byte("token"), 0o600)
-	if err := NewRuns(ws, j, nil, nil, func() []string { return nil }).Migrate(); err != nil {
+	restarted := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	if !Exists(filepath.Join(dir, "auth.json")) {
+		t.Fatal("NewRuns deleted the token; only daemon start (Migrate) should")
+	}
+	if err := restarted.Migrate(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {

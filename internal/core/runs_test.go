@@ -149,7 +149,20 @@ func TestMigrateMovesAccessOutOfTheState(t *testing.T) {
 	os.WriteFile(filepath.Join(host, "turn-001.jsonl.sandbox.json"), []byte("{}"), 0o600)
 	os.WriteFile(filepath.Join(host, "turn-001.jsonl"), []byte("{}"), 0o600)
 	os.WriteFile(filepath.Join(ws.Hive(), "daemon.json"), []byte(`{"token": "t"}`), 0o600)
-	if err := (&Runs{ws: ws}).Migrate(); err != nil {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	// NewRuns alone moves nothing: only daemon start migrates, so no other
+	// caller of NewRuns deletes a live daemon's token.
+	for _, p := range []string{filepath.Join(run, "home", ".codex", "auth.json"), filepath.Join(host, "codex", "auth.json"), filepath.Join(host, "turn-001.jsonl.sandbox.json"), filepath.Join(ws.Hive(), "daemon.json")} {
+		if !Exists(p) {
+			t.Fatalf("NewRuns moved or deleted %s before Migrate", p)
+		}
+	}
+	if err := rs.Migrate(); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{filepath.Join(run, "home"), filepath.Join(host, "codex"), filepath.Join(host, "codex-sessions"), filepath.Join(host, "turn-001.jsonl.sandbox.json"), filepath.Join(ws.Hive(), "daemon.json")} {
