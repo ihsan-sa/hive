@@ -301,8 +301,9 @@ func TestWheelScrollsDetail(t *testing.T) {
 
 // A config.json the daemon couldn't read is named on the Settings page.
 func TestSettingsShowsTheConfigLoadError(t *testing.T) {
-	m := testModel(100, 24)
+	m := testModel(100, 10)
 	m.section = secSettings
+	m.setSel = len(m.settings()) - 1
 	m.st.ConfigErr = "tribunal seat {\"model\": 5} isn't a model name"
 	if view := m.View(); !strings.Contains(view, "isn't a model name") {
 		t.Fatalf("no load error on Settings:\n%s", view)

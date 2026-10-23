@@ -355,7 +355,8 @@ func TestConcurrentKeepsCutOneRelease(t *testing.T) {
 }
 
 // A late answer for m2 that arrives while a release at m3 is being cut waits
-// for it, then finds m2 covered: no approval is left behind for m2.
+// for it, then finds m2 covered: no approval is left behind for m2. The test
+// holds the lock before the goroutine starts, so the answer cannot get ahead.
 func TestLateAnswerWaitsForTheRelease(t *testing.T) {
 	m, n, merged, land := selfHive(t)
 	merged(2, "a2", "m2", "install/root.sh")
@@ -369,7 +370,6 @@ func TestLateAnswerWaitsForTheRelease(t *testing.T) {
 		defer close(done)
 		m.OnPerson(core.Ask{Kind: "release", Ref: "hive@m2", Project: "hive", Answer: "release"})
 	}()
-	time.Sleep(20 * time.Millisecond) // the answer reaches the lock first
 	m.afterKept("hive", "m3")
 	unlock()
 	<-done
