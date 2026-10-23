@@ -105,7 +105,9 @@ func TestIsolatedProjectsStayOutOfSharedState(t *testing.T) {
 		if _, err := c.Projects.Add(p); err != nil {
 			t.Fatal(err)
 		}
-		os.MkdirAll(c.WS.Project(p.Name), 0o755)
+		if p.Name != "other" { // other's clone never landed
+			os.MkdirAll(c.WS.Project(p.Name), 0o755)
+		}
 		id := p.Name + "-run"
 		c.Runs.mu.Lock()
 		c.Runs.runs[id] = &Run{RunSpec: RunSpec{ID: id, Project: p.Name, Isolated: p.Isolated}}

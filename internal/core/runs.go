@@ -961,7 +961,9 @@ func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 		if r.Isolated {
 			continue
 		}
-		out = append(out, sandbox.Mount{Host: rs.ws.Project(p.Name), Inside: "/hive/projects/" + p.Name, Hide: true})
+		if Exists(rs.ws.Project(p.Name)) { // no clone yet: nothing to hide, and no mount point
+			out = append(out, sandbox.Mount{Host: rs.ws.Project(p.Name), Inside: "/hive/projects/" + p.Name, Hide: true})
+		}
 		for _, d := range []string{"checks", "gates", "risk"} {
 			os.MkdirAll(filepath.Join(rs.ws.Hive(), d, p.Name), 0o755)
 			rel = append(rel, d+"/"+p.Name)
