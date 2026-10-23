@@ -133,6 +133,21 @@ func TestModuleDetailReachesEveryProject(t *testing.T) {
 	checkWidth(t, m.View(), 80, 14, "module detail")
 }
 
+// TestWheelMovesModuleSelection: the module detail windows on its selection,
+// so the wheel moves the selection rather than the unused scroll offset.
+func TestWheelMovesModuleSelection(t *testing.T) {
+	m := testModel(80, 20)
+	m.stack = []detail{{kind: "module", id: "agents"}}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	if m.stack[0].sel != 1 {
+		t.Fatalf("wheel down: sel %d, want 1", m.stack[0].sel)
+	}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.stack[0].sel != 0 {
+		t.Fatalf("wheel up: sel %d, want 0", m.stack[0].sel)
+	}
+}
+
 func TestThreadPaneScrolls(t *testing.T) {
 	m := testModel(80, 20)
 	m.Update(tea.KeyMsg{Type: tea.KeyRight})
