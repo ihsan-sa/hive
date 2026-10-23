@@ -69,6 +69,7 @@ type Task struct {
 	RevertSHA string     `json:"revert_sha,omitempty"` // the merge being reverted
 	Lesson    string     `json:"lesson,omitempty"`
 	Failures  int        `json:"failures"`
+	CloseFail int        `json:"close_fail,omitempty"` // failed tries to close the issue
 	Attempt   int        `json:"attempt"` // fresh workers handed this task
 	Retry     time.Time  `json:"retry,omitempty"`
 	IssueOpen bool       `json:"issue_open,omitempty"` // done, but its issue is still to close
@@ -300,8 +301,7 @@ func (m *Module) step(t *Task) error {
 	}
 	switch t.Stage {
 	case StageNew:
-		body := fmt.Sprintf("%s\n\n**Done looks like:** %s\n\n**Already known:** %s\n\n_Filed by the Hive (%s)._", t.Title, orNone(t.Done), orNone(t.Known), t.From)
-		is, err := m.C.Effects.Forge.CreateIssue(p.Repo, t.Label(), body, marker(t.ID))
+		is, err := m.C.Effects.Forge.CreateIssue(p.Repo, t.Label(), m.issueBody(t, p), marker(t.ID))
 		if err != nil {
 			return err
 		}
@@ -378,6 +378,13 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 	return nil
 }
 
+// issueBody is the issue a task is filed as. Its done line follows the brief's,
+// read from the project's last synced main.
+func (m *Module) issueBody(t *Task, p core.Project) string {
+	done := doneFor(t, m.C.Effects.Config(p, "HEAD").Score != nil)
+	return fmt.Sprintf("%s\n\n**Done looks like:** %s\n\n**Already known:** %s\n\n_Filed by the Hive (%s)._", t.Title, done, orNone(t.Known), t.From)
+}
+
 // renderBrief is the worker's first prompt. It quotes the project's lessons so
 // an idea that was reverted isn't tried again blind.
 func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
@@ -385,7 +392,7 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Brief: %s\n\nTask %s · project %s · issue #%d\n\n", t.Label(), t.ID, p.Name, t.Issue.Number)
 	fmt.Fprintf(&b, "## The ask\n\n%s\n\n", t.Title)
-	fmt.Fprintf(&b, "## What done looks like\n\n%s\n\n## What's already known\n\n%s\n\n", orNone(t.Done), orNone(t.Known))
+	fmt.Fprintf(&b, "## What done looks like\n\n%s\n\n## What's already known\n\n%s\n\n", doneFor(t, cfg.Score != nil), orNone(t.Known))
 	b.WriteString("## The project\n\n")
 	b.WriteString("- Goals: `.hive/goals.md`. Read it; report against it.\n")
 	fmt.Fprintf(&b, "- Tests: `%s`\n", orNone(cfg.Test))
@@ -555,13 +562,13 @@ func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
 // gives up. The task stays done either way.
 func (m *Module) closeIssue(t *Task, p core.Project) {
 	if err := m.C.Effects.Forge.CloseIssue(p.Repo, t.Issue.Number); err != nil {
-		t.Failures++
-		if t.Failures >= 8 {
+		t.CloseFail++
+		if t.CloseFail >= 8 {
 			t.IssueOpen = false
-			m.save(t, "gave up closing the issue: "+core.Clip(err.Error(), 300))
+			m.save(t, "gave up closing the issue, left open on the forge: "+core.Clip(err.Error(), 300))
 			return
 		}
-		t.Retry = time.Now().Add(time.Minute << t.Failures)
+		t.Retry = time.Now().Add(time.Minute << t.CloseFail)
 		m.save(t, "closing the issue failed (will retry): "+core.Clip(err.Error(), 300))
 		return
 	}
@@ -862,4 +869,14 @@ func (m *Module) Retry(id string) error {
 	t.Stage, t.Worker, t.Reason, t.Failures, t.Round = StageIssued, "", "", 0, 0
 	m.save(&t, "handed to a fresh worker")
 	return nil
+}
+
+// doneFor is the done line a brief carries. On a scored project an agent's own
+// bar would cap the work, so the ask stands as done; the Hive's own setup brief
+// keeps its line.
+func doneFor(t *Task, scored bool) string {
+	if scored && t.From != "hive" {
+		return "What the ask says, as far as you can take it."
+	}
+	return orNone(t.Done)
 }

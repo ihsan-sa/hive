@@ -680,6 +680,59 @@ func TestOutsideStep(t *testing.T) {
 	h.wait("the worker to land", 3*minute, taskStage("out", title, work.StageDone))
 }
 
+// TestAgentsReadTheHive: a worker reads another run's log, a chat, a warden's
+// log and the journal from $HIVE_STATE. Under the sandbox (HIVE_E2E_SANDBOX=auto)
+// it can change none of them and reads no secret; a bare run is unsandboxed by
+// the person's choice, so there only the reads are checked.
+func TestAgentsReadTheHive(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	login := filepath.Join(h.ws.Hive(), "logins", "codex", "spare")
+	os.MkdirAll(login, 0o700)
+	os.WriteFile(filepath.Join(login, "auth.json"), []byte(`{"refresh_token": "planted"}`), 0o600)
+	h.seed("me/peek", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "peek", "repo": "me/peek"}, nil)
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "hello"}, nil)
+	h.wait("the lead's reply", minute, h.replied("lead", ""))
+	h.post("/api/ask", map[string]string{"project": "peek", "title": "package", "known": "FAKE:needpackage"}, nil)
+	var warden string
+	h.wait("a warden to settle the step", 3*minute, func(st api.State) bool {
+		for _, r := range st.Requests {
+			if r.Kind == "request" && r.State == "done" {
+				warden = r.Warden
+				return true
+			}
+		}
+		return false
+	})
+	h.post("/api/ask", map[string]string{"project": "peek", "title": "peek", "known": "FAKE:peek " + warden}, nil)
+	var account string
+	h.wait("the peeking worker's account", 2*minute, func(st api.State) bool {
+		for _, r := range st.Runs {
+			if r.Finish != nil && strings.Contains(r.Finish.Account, "peek") {
+				account = r.Finish.Account
+				return true
+			}
+		}
+		return false
+	})
+	for _, want := range []string{"log read=true", "chat read=true", "warden read=true", "journal read=true"} {
+		if !strings.Contains(account, want) {
+			t.Errorf("account lacks %q: %s", want, account)
+		}
+	}
+	if h.ws.LoadConfig().Sandbox == "auto" {
+		for _, bad := range []string{"write=true", "create=true"} {
+			if strings.Contains(account, bad) {
+				t.Errorf("sandboxed worker could change the Hive: %q in %s", bad, account)
+			}
+		}
+		if !strings.Contains(account, "secrets=0") {
+			t.Errorf("sandboxed worker read a secret: %s", account)
+		}
+	}
+}
+
 func init() { _ = fmt.Sprint }
 
 // TestLiveWarden is the host probe for a real harness: run it with

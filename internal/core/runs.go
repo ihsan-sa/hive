@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -123,12 +124,13 @@ type Runs struct {
 	mu    sync.Mutex
 	runs  map[string]*Run
 	plans map[string]Plan
-	busy  map[string]bool // runs whose tick work is in flight
+	busy  map[string]bool    // runs whose tick work is in flight
+	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
 }
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens func(string) ([]string, error), tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -160,6 +162,13 @@ type turnEnded struct {
 	Reason      string          `json:"reason,omitempty"`
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
 	Queue       []string        `json:"queue,omitempty"`
+}
+
+// egressRefused is the hosts a turn's egress proxy refused.
+type egressRefused struct {
+	ID    string   `json:"id"`
+	Turn  int      `json:"turn"`
+	Hosts []string `json:"hosts"`
 }
 
 type runNote struct {
@@ -218,6 +227,7 @@ func (rs *Runs) apply(e Event) {
 		r.Proc = proc.Handle{}
 		if t.Result != nil {
 			r.Cost += t.Result.CostUSD
+			rs.spent[e.At.UTC().Format("2006-01")] += t.Result.CostUSD
 			if !t.Result.IsError {
 				r.Result, r.Structured = t.Result.Text, t.Result.Structured
 				r.Retries = 0
@@ -362,6 +372,13 @@ func (rs *Runs) Plans() []Plan {
 	return out
 }
 
+// Spent is what runs cost in a month ("2006-01", UTC), from the harnesses' results.
+func (rs *Runs) Spent(month string) float64 {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.spent[month]
+}
+
 // Takes says why run id can't take a message, or nil if it can.
 func (rs *Runs) Takes(id string) error {
 	r, ok := rs.Get(id)
@@ -501,6 +518,9 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 			case "init":
 				tl.SessionLive = true
 			case "result":
+				if tl.Result != nil && ev.Result != nil { // a second verdict in one turn: trust neither
+					ev.Result.Structured = nil
+				}
 				tl.Result = ev.Result
 			case "ratelimit":
 				tl.Limit = ev.RateLimit
@@ -517,6 +537,11 @@ func (rs *Runs) endTurn(r Run) {
 	tl := rs.ReadTurn(r, r.Turn)
 	if tl.Limit != nil {
 		rs.append("plan.usage", Plan{Harness: r.Harness, Limit: *tl.Limit, At: time.Now().UTC()})
+	}
+	if raw, err := os.ReadFile(rs.ws.TurnOut(r.ID, r.Turn) + ".egress"); err == nil && len(raw) > 0 {
+		hosts := strings.Fields(string(raw))
+		sort.Strings(hosts)
+		rs.append("run.egress_refused", egressRefused{ID: r.ID, Turn: r.Turn, Hosts: slices.Compact(hosts)})
 	}
 	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Result: tl.Result}
 	cur, _ := rs.Get(r.ID)
@@ -602,6 +627,13 @@ const PendingSep = "\n\n---\n\n"
 
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run) {
+	cfg := rs.ws.LoadConfig()
+	if why := Strained(cfg.MemFloorMB, cfg.PressureMax); why != "" {
+		if why = "waiting: " + why; r.Status != StatusQueued || r.Reason != why {
+			rs.append("run.status", runNote{ID: r.ID, Status: StatusQueued, Reason: why})
+		}
+		return
+	}
 	sb, err := rs.sandbox()
 	if err != nil {
 		if r.Status != StatusQueued || r.Reason != err.Error() {
@@ -670,7 +702,16 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 		{Host: rs.ws.Modules(), Inside: "/hive/modules"},
 	}
 	if !r.Isolated {
-		mounts = append(mounts, sandbox.Mount{Host: rs.ws.Projects(), Inside: "/hive/projects"})
+		mounts = append(mounts, sandbox.Mount{Host: rs.ws.Projects(), Inside: "/hive/projects"},
+			sandbox.Mount{Host: rs.ws.Hive(), Inside: "/hive/state"})
+		// Every agent reads the whole Hive but what grants access: the daemon's
+		// API token and the login pool's stored logins.
+		logins := filepath.Join(rs.ws.Hive(), "logins")
+		os.MkdirAll(logins, 0o700) // a login added mid-turn lands under the cover
+		mounts = append(mounts, sandbox.Mount{Host: logins, Inside: "/hive/state/logins", Hide: true})
+		if _, err := os.Stat(rs.ws.DaemonFile()); err == nil {
+			mounts = append(mounts, sandbox.Mount{Host: rs.ws.DaemonFile(), Inside: "/hive/state/daemon.json", Hide: true})
+		}
 	}
 	if r.Isolated && sb.Isolated() {
 		// Only granted modules are visible: mount each over an empty modules dir,
@@ -688,6 +729,7 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	t := harness.Turn{
 		Role: r.Role, SessionID: r.Session, Resume: resume, Model: r.Model, Tools: r.Tools, SystemText: r.System,
 		SystemFile: filepath.Join(in(mounts[1]), "system.md"), ReadOnly: r.ReadOnly, RunDir: in(mounts[1]), Schema: r.Schema, Sandboxed: sb.Isolated(),
+		MaxOutput: rs.ws.LoadConfig().MaxOutputTokens,
 	}
 	if sb.Isolated() {
 		t.SystemFile = "/hive/run/system.md"
@@ -698,7 +740,7 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 		"GIT_AUTHOR_NAME=Hive " + r.Role, "GIT_AUTHOR_EMAIL=hive@localhost", "GIT_COMMITTER_NAME=Hive " + r.Role, "GIT_COMMITTER_EMAIL=hive@localhost",
 	}
 	if !r.Isolated {
-		env = append(env, "HIVE_PROJECTS="+in(mounts[6]))
+		env = append(env, "HIVE_PROJECTS="+in(mounts[6]), "HIVE_STATE="+in(mounts[7]))
 	}
 	if sb.Isolated() {
 		env = append(sandbox.InsideEnv("/hive/home", true), env...)
@@ -719,10 +761,14 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	if !sb.Isolated() && h.Program() == "hive" && len(tools) > 0 {
 		argv[0] = tools[0]
 	}
+	allow := rs.ws.LoadConfig().Egress.For(r.Role)
+	if len(allow) > 0 {
+		allow = append(append([]string{}, allow...), harness.APIHosts(h)...)
+	}
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
 		Stdin: promptFile, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
-		Network: true, UID: os.Getuid(), GID: os.Getgid(),
+		Network: true, Allow: allow, UID: os.Getuid(), GID: os.Getgid(),
 	}, nil
 }
 

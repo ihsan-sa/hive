@@ -5,11 +5,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
 // Workspace is the folder on disk: .hive (core state), .modules, projects.
@@ -39,11 +42,17 @@ func (w Workspace) Checkouts(project string) string {
 // Config is the workspace's settings, edited from the control center.
 type Config struct {
 	// Autonomy: 1 "ask me before anything outside the project", 2 default, 3 "tell me after".
-	Autonomy       int      `json:"autonomy"`
-	Harness        string   `json:"harness"`
-	Model          string   `json:"model"`
-	ReviewerModel  string   `json:"reviewer_model"`
-	TribunalModels []string `json:"tribunal_models"`
+	Autonomy       int            `json:"autonomy"`
+	Harness        string         `json:"harness"`
+	Model          string         `json:"model"`
+	ReviewerModel  string         `json:"reviewer_model"`
+	TribunalModels []TribunalSeat `json:"tribunal_models"`
+	// Egress holds runs to the hosts listed; with no list a run reaches every
+	// public host.
+	Egress Egress `json:"egress"`
+	// Floor is the person's list of names, paths and secret globs: a step whose
+	// text touches one goes to the person, whatever a warden or panel says.
+	Floor []string `json:"floor,omitempty"`
 	// Sandbox: "auto" uses the platform sandbox and refuses agents without one;
 	// "bare" is the documented, opted-in state where agents run unsandboxed.
 	Sandbox      string                     `json:"sandbox"`
@@ -56,12 +65,75 @@ type Config struct {
 	Projects     map[string]ProjectSettings `json:"projects,omitempty"`
 	Schedules    map[string]string          `json:"schedules,omitempty"` // name -> "every 12h" | "daily 03:00" | "off"
 	ChatMaxMB    int                        `json:"chat_max_mb"`         // the most one chat message, files and all, may be
+
+	// MaxOutputTokens caps one reply (a budget is checked only between turns); 0 leaves the harness default.
+	MaxOutputTokens int `json:"max_output_tokens"`
+	// MonthlyUSD: once this month's runs cost more, the person is told once. Work goes on; 0 is off.
+	MonthlyUSD float64 `json:"monthly_usd,omitempty"`
+	// A turn waits while available memory is under MemFloorMB or memory
+	// pressure (Linux PSI "some avg10", percent) is over PressureMax; 0 turns a check off.
+	MemFloorMB  int     `json:"mem_floor_mb"`
+	PressureMax float64 `json:"pressure_max"`
 }
 
 // ProjectSettings override workspace defaults per project.
 type ProjectSettings struct {
 	Harness string `json:"harness,omitempty"`
 	Model   string `json:"model,omitempty"`
+}
+
+// TribunalSeat is one tribunal seat's harness and model. A plain string in
+// config.json is a model on the workspace harness.
+type TribunalSeat struct {
+	Harness string `json:"harness,omitempty"`
+	Model   string `json:"model"`
+}
+
+func (t *TribunalSeat) UnmarshalJSON(b []byte) error {
+	*t = TribunalSeat{}
+	if json.Unmarshal(b, &t.Model) == nil {
+		return nil
+	}
+	type seat TribunalSeat
+	return json.Unmarshal(b, (*seat)(t))
+}
+
+// MarshalJSON keeps a seat with no harness the plain string the person wrote.
+func (t TribunalSeat) MarshalJSON() ([]byte, error) {
+	if t.Harness == "" {
+		return json.Marshal(t.Model)
+	}
+	type seat TribunalSeat
+	return json.Marshal(seat(t))
+}
+
+// Egress is the hosts runs may reach: Default for every run, and a role's own
+// list in place of it. A run's harness API hosts are added to a non-empty list.
+type Egress struct {
+	Default []string            `json:"default,omitempty"`
+	Roles   map[string][]string `json:"roles,omitempty"` // warden, tribunal, worker, lead, ...
+}
+
+// For is role's list; empty means every public host.
+func (e Egress) For(role string) []string {
+	if l := e.Roles[role]; len(l) > 0 {
+		return l
+	}
+	return e.Default
+}
+
+// Check refuses settings the Hive can't act on: a tribunal seat on a harness
+// it doesn't have.
+func (c Config) Check() error {
+	for _, t := range c.TribunalModels {
+		if t.Harness == "" {
+			continue
+		}
+		if _, err := harness.Get(t.Harness); err != nil {
+			return fmt.Errorf("tribunal seat %s on harness %s can't sit: %v", t.Model, t.Harness, err)
+		}
+	}
+	return nil
 }
 
 // DefaultConfig is a fresh install's settings.
@@ -71,12 +143,16 @@ func DefaultConfig() Config {
 		Harness:        "claude",
 		Model:          "sonnet",
 		ReviewerModel:  "opus",
-		TribunalModels: []string{"opus", "sonnet", "fable"},
+		TribunalModels: []TribunalSeat{{Model: "opus"}, {Model: "sonnet"}, {Model: "fable"}},
 		Sandbox:        "auto",
 		ReleaseRepo:    DefaultReleaseRepo,
 		AutoUpdate:     true,
 		ReviewRounds:   3,
 		ChatMaxMB:      300,
+
+		MaxOutputTokens: 16000,
+		MemFloorMB:      1024,
+		PressureMax:     40,
 		Schedules: map[string]string{
 			"improve.sweep":  "every 12h",
 			"kb.file":        "daily 04:00",

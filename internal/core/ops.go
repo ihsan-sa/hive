@@ -290,6 +290,10 @@ func (o *Ops) registerCore() {
 // Deliver routes a message from r to an address.
 func (o *Ops) Deliver(from Run, to, text string) (any, error) {
 	if to == "parent" {
+		// Find("") matches any run, so a run with no parent must fail here.
+		if from.Parent == "" {
+			return nil, fmt.Errorf("%s has no parent to message", from.ID)
+		}
 		to = from.Parent
 	}
 	for _, route := range o.routers {

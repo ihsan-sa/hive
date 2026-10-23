@@ -40,9 +40,10 @@ jobs:
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           # A release's own run waits for its binaries, which the release workflow attaches.
+          # A failed gh call (the release not visible yet) counts as no binaries, so the loop waits under bash -e.
           for i in $(seq 60); do
-            t=${TAG:-$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)}
-            n=$(gh release view "$t" -R "$GITHUB_REPOSITORY" --json assets -q '.assets | length')
+            t=${TAG:-$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName || true)}
+            n=$(gh release view "$t" -R "$GITHUB_REPOSITORY" --json assets -q '.assets | length') || n=0
             [ "$n" -ge 6 ] && break
             echo "waiting for $t's binaries ($n so far)"; sleep 20
           done
@@ -82,14 +83,14 @@ jobs:
           HIVE_SKIP_WSL: '1'
         run: |
           irm "$env:BASE/install.ps1" | iex
-          Add-Content $env:GITHUB_PATH (Join-Path $env:LOCALAPPDATA 'Programs\hive-v0')
+          Add-Content $env:GITHUB_PATH (Join-Path $env:LOCALAPPDATA 'Programs\hive')
 
       - name: version
         shell: bash
         run: |
-          v=$(hive-v0 --version)
+          v=$(hive --version)
           echo "$v"
-          [ "$v" = "hive-v0 $TAG" ] || { echo "::error::installed '$v', want hive-v0 $TAG"; exit 1; }
+          [ "$v" = "hive $TAG" ] || { echo "::error::installed '$v', want hive $TAG"; exit 1; }
 
       - name: set up a Hive without the prompts
         shell: bash
@@ -97,32 +98,30 @@ jobs:
           mkdir -p "$HIVE_HOME/.hive" "$RUNNER_TEMP/forge"
           if [ "$RUNNER_OS" = Linux ]; then sb='"sandbox": "auto"'; else sb='"sandbox": "bare", "bare_accepted": "smoke"'; fi
           printf '{"harness": "fake", %s, "release_repo": "%s", "auto_update": false, "schedules": {"improve.sweep": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off"}}\n' "$sb" "$GITHUB_REPOSITORY" > "$HIVE_HOME/.hive/config.json"
-          # The local forge knows this release, so `update` has something to compare against.
-          printf '{"releases": {"%s": [{"tag": "%s"}]}}\n' "$GITHUB_REPOSITORY" "$TAG" > "$RUNNER_TEMP/forge/state.json"
 
       - name: ask the lead for a project and a change, and wait for it to land
         shell: bash
         run: |
-          hive-v0 ask "create project smoke for the install test" --wait
-          hive-v0 ask "add a first feature" --project smoke --wait
+          hive ask "create project smoke for the install test" --wait
+          hive ask "add a first feature" --project smoke --wait
           for i in $(seq 150); do
             grep -q '"MERGED"' "$RUNNER_TEMP/forge/state.json" && { echo "the change merged"; exit 0; }
             sleep 2
           done
           echo "::error::the change didn't land within 5 minutes"
-          hive-v0 status || true
+          hive status || true
           tail -50 "$HIVE_HOME/.hive/"*.log 2>/dev/null || true
           exit 1
 
       - name: status and doctor
         shell: bash
         run: |
-          hive-v0 status | tee status.txt
+          hive status | tee status.txt
           grep -qF "Hive $TAG " status.txt || { echo "::error::status doesn't report $TAG"; exit 1; }
           grep -q "smoke (local/smoke)" status.txt || { echo "::error::status doesn't list the project"; exit 1; }
           if [ "$RUNNER_OS" = Linux ] && grep -q '^sandbox: NOT' status.txt; then echo "::error::the sandbox isn't working"; exit 1; fi
           # Doctor exits 1 here because Claude Code and the GitHub CLI have no login on a runner, by design.
-          hive-v0 doctor | tee doctor.txt || true
+          hive doctor | tee doctor.txt || true
           for want in "✓ workspace" "✓ running"; do
             grep -q "$want" doctor.txt || { echo "::error::doctor didn't say '$want'"; exit 1; }
           done
@@ -132,7 +131,7 @@ jobs:
       - name: update
         shell: bash
         run: |
-          out=$(hive-v0 update)
+          out=$(hive update)
           echo "$out"
           [ "$out" = "already on $TAG" ] || { echo "::error::update said '$out'"; exit 1; }
 
@@ -149,22 +148,24 @@ jobs:
       - name: start again and shut down
         shell: bash
         run: |
-          hive-v0 status | grep -qF "Hive $TAG " || { echo "::error::the reinstalled Hive didn't start"; exit 1; }
-          hive-v0 shutdown
+          # Not `status | grep -q`: grep quits at the first line, status dies of SIGPIPE on the next, and pipefail fails the step.
+          hive status > status.txt || true
+          grep -qF "Hive $TAG " status.txt || { cat status.txt; echo "::error::the reinstalled Hive didn't start"; exit 1; }
+          hive shutdown
           sleep 2
-          hive-v0 doctor > doctor.txt || true
+          hive doctor > doctor.txt || true
           grep -q "· not running" doctor.txt || { cat doctor.txt; echo "::error::still running after shutdown"; exit 1; }
 
       - name: uninstall (macOS, Linux)
         if: runner.os != 'Windows'
         run: |
           curl -fsSL "$BASE/uninstall.sh" | sh
-          [ ! -e "$HOME/.local/bin/hive-v0" ] || { echo "::error::the binary is still there"; exit 1; }
+          [ ! -e "$HOME/.local/bin/hive" ] || { echo "::error::the binary is still there"; exit 1; }
           [ -d "$HIVE_HOME/.hive" ] || { echo "::error::uninstall removed the person's folder"; exit 1; }
       - name: uninstall (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           irm "$env:BASE/uninstall.ps1" | iex
-          if (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\hive-v0')) { throw 'the install folder is still there' }
+          if (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\hive')) { throw 'the install folder is still there' }
           if (-not (Test-Path (Join-Path $env:HIVE_HOME '.hive'))) { throw "uninstall removed the person's folder" }

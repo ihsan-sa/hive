@@ -31,7 +31,7 @@ projects/<name>/             host clone (effects process only)
 projects/<name>/.checkouts/  agents' own checkouts (excluded from the clone)
 ```
 
-Run dir: `host/` (turn output, prompts, stop file; never mounted), `ro/` (system prompt, brief, inputs; mounted read-only at `/hive/run`), `box/` (mailbox + notes; rw at `/hive/box`), `home/` (rw `$HOME`).
+Run dir: `host/` (turn output, prompts, stop file; never mounted on its own), `ro/` (system prompt, brief, inputs; mounted read-only at `/hive/run`), `box/` (mailbox + notes; rw at `/hive/box`), `home/` (rw `$HOME`). Every run but an isolated project's also gets the whole `.hive` read-only at `/hive/state` (`$HIVE_STATE`), so agents read one another's runs, chats and records; `logins/` and `daemon.json` are covered there (empty tmpfs, `/dev/null`; a Seatbelt deny on macOS), and a turn's spec, which carries its token, is written to the temp dir, not beside its output.
 
 ## Data flow: one ask
 
@@ -55,9 +55,17 @@ Run dir: `host/` (turn output, prompts, stop file; never mounted), `ro/` (system
 - Nothing an agent requests runs outside the sandbox, except a script a warden or tribunal approved, run by the risk module in the daemon as exactly that digest-pinned script; what is always the person's goes to the person (see [risk.md](risk.md)).
 - Every state change is a journal event; restart = replay + reconcile; issue/PR/run creation is idempotent.
 
+## Left alone on a shared machine
+
+Settings in `.hive/config.json`; none of them stops or parks work.
+
+- `max_output_tokens` (16000): sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` on each Claude turn, because a spend budget is checked only between turns and one reply can otherwise run long. 0 leaves Claude's own default.
+- `monthly_usd` (off): each turn's `cost_usd` is already in its `run.turn_ended` event; the runs fold it into a total per UTC month. Past the figure, the person gets one `told` ask for that month (id `spend-YYYY-MM`).
+- `mem_floor_mb` (1024), `pressure_max` (40): before a turn starts, Linux's `MemAvailable` and memory pressure (`/proc/pressure/memory`, some avg10) are read. Past either floor the run stays queued with the reason shown in the control center and starts on the first tick after the machine recovers. Where those files don't exist (macOS, Windows) nothing is held; 0 turns a check off.
+
 ## Sandbox (Linux / WSL)
 
-Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, stop-file watcher, starts init with `CLONE_NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|NEWUTS` (uid 0 → person's uid). Init (pid 1): tmpfs root; binds `/usr /bin /lib* /etc /opt /var /srv` read-only (nosuid, nodev, locked flags kept); fresh `/proc`, `/tmp`, minimal `/dev`; run mounts; tools at `/hive/bin`; `pivot_root`; root remounted ro; `lo` up; forwarder 127.0.0.1:3128 → egress socket. Command runs in a nested user namespace (no caps). Not present: `/home`, `/mnt` (Windows drives), `/run` (sockets), WSL interop. Egress refuses loopback/private/link-local/CGNAT/ULA and dials the IP it vetted.
+Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, stop-file watcher, starts init with `CLONE_NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|NEWUTS` (uid 0 → person's uid). Init (pid 1): tmpfs root; binds `/usr /bin /lib* /etc /opt /var /srv` read-only (nosuid, nodev, locked flags kept); fresh `/proc`, `/tmp`, minimal `/dev`; run mounts; tools at `/hive/bin`; `pivot_root`; root remounted ro; `lo` up; forwarder 127.0.0.1:3128 → egress socket. Command runs in a nested user namespace (no caps). Not present: `/home`, `/mnt` (Windows drives), `/run` (sockets), WSL interop. Egress refuses loopback/private/link-local/CGNAT/ULA and dials the IP it vetted; with an `egress` list for the run's role it also refuses every host off the list and records each refusal in `turn-NNN.jsonl.egress` (macOS runs one proxy per command for the same).
 
 ## Gaps (v1)
 

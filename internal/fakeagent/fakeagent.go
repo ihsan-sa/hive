@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:needpackage, FAKE:rmoutside <path>, FAKE:inject, and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:needpackage, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -212,6 +212,10 @@ func worker(all, prompt, system string) (string, error) {
 		_, err := call("finish", map[string]string{"status": "blocked", "account": "FAKE: blocked on purpose"}, time.Minute)
 		return "blocked", err
 	}
+	if m := peekWarden.FindStringSubmatch(all); m != nil {
+		_, err := call("finish", map[string]string{"status": "done", "account": "FAKE: peek " + peek(m[1])}, time.Minute)
+		return "done", err
+	}
 	m := outsidePath.FindStringSubmatch(all)
 	if m != nil && strings.Contains(prompt, "[request ") {
 		// As a real worker does: the step was the whole job, so nothing to commit.
@@ -263,6 +267,54 @@ func worker(all, prompt, system string) (string, error) {
 	_, err := call("finish", map[string]string{"status": "done", "account": "FAKE: made the change", "tested": "ran nothing", "unsure": "everything"}, time.Minute)
 	return "done", err
 }
+
+// peek reads what the rest of the Hive left in $HIVE_STATE (another run's log,
+// a chat, the named warden's log, the journal), tries to open each for writing and to
+// make a new file, and counts the secrets it could read.
+func peek(warden string) string {
+	st := os.Getenv("HIVE_STATE")
+	var out []string
+	try := func(name, glob string) {
+		paths, _ := filepath.Glob(filepath.Join(st, glob))
+		for _, p := range paths {
+			if strings.Contains(p, os.Getenv("HIVE_ID")) {
+				continue
+			}
+			_, rerr := os.ReadFile(p)
+			f, werr := os.OpenFile(p, os.O_WRONLY|os.O_APPEND, 0)
+			if werr == nil {
+				f.Close()
+			}
+			out = append(out, fmt.Sprintf("%s read=%t write=%t", name, rerr == nil, werr == nil))
+			return
+		}
+		out = append(out, name+" missing")
+	}
+	try("log", "runs/*/host/turn-*.jsonl")
+	try("chat", "chats/*.jsonl")
+	try("warden", "runs/"+warden+"/host/turn-*.jsonl")
+	try("journal", "events.jsonl")
+	f, err := os.Create(filepath.Join(st, "runs", "peek-was-here"))
+	if err == nil {
+		f.Close()
+		os.Remove(f.Name())
+	}
+	secrets := 0
+	if raw, _ := os.ReadFile(filepath.Join(st, "daemon.json")); strings.Contains(string(raw), "token") {
+		secrets++
+	}
+	filepath.WalkDir(filepath.Join(st, "logins"), func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			if _, err := os.ReadFile(p); err == nil {
+				secrets++
+			}
+		}
+		return nil
+	})
+	return strings.Join(out, ", ") + fmt.Sprintf(", create=%t, secrets=%d", err == nil, secrets)
+}
+
+var peekWarden = regexp.MustCompile(`FAKE:peek (\S+)`)
 
 // riskKeys steer the fake warden and panel; the worker passes them on in its request.
 var riskKeys = regexp.MustCompile(`FAKE:(warden|panel)[a-z]+`)
