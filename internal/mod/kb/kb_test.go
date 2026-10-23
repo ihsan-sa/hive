@@ -329,6 +329,12 @@ func TestMoveIsolatedOnceWithoutOverwriting(t *testing.T) {
 	if core.Exists(filepath.Join(kb, "old.md")) || !core.Exists(filepath.Join(filepath.Dir(real), "old.md")) {
 		t.Error("the left-over note didn't move")
 	}
+	if b, _ := os.ReadFile(filepath.Join(filepath.Dir(real), "plan-2.md")); !strings.Contains(string(b), "left over") {
+		t.Errorf("the clashing note didn't move under a free name: %q", b)
+	}
+	if out, _ := core.Git(kb, "ls-files", "plan.md"); core.Exists(filepath.Join(kb, "plan.md")) || out != "" {
+		t.Error("the clashing note stayed in the shared knowledge base")
+	}
 }
 
 // A note is never written through a link left at its name, even a dangling one.

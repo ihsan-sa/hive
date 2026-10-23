@@ -95,8 +95,9 @@ func (m *Module) ensureRepo() {
 // moveIsolated moves notes an isolated project left in the shared knowledge
 // base, from before they went in its own folder, into that folder, and takes
 // them out of the repository from here on. Earlier commits still hold them.
-// It runs once, behind a marker in the Hive's own state where the filer can't
-// write, and never replaces a note already in the folder.
+// It runs until every such note has moved, behind a marker in the Hive's own
+// state where the filer can't write. A note whose name is taken in the folder
+// moves under a free one, as Write picks it.
 func (m *Module) moveIsolated() {
 	marker := filepath.Join(m.C.WS.Hive(), "kb-isolated-moved")
 	if core.Exists(marker) {
@@ -104,20 +105,31 @@ func (m *Module) moveIsolated() {
 	}
 	kb := m.C.WS.KB()
 	var moved []string
+	left := false
 	for _, name := range m.Notes() {
 		b, _ := os.ReadFile(filepath.Join(kb, name))
-		if p, ok := m.isolatedIn(string(b)); ok {
-			dir, err := m.C.WS.IsolatedKB(p)
-			if dst := filepath.Join(dir, name); err == nil && !core.Exists(dst) && os.Rename(filepath.Join(kb, name), dst) == nil {
-				moved = append(moved, name)
-			}
+		p, ok := m.isolatedIn(string(b))
+		if !ok {
+			continue
+		}
+		dir, err := m.C.WS.IsolatedKB(p)
+		dst := filepath.Join(dir, name)
+		for i := 2; core.Exists(dst); i++ {
+			dst = filepath.Join(dir, fmt.Sprintf("%s-%d.md", strings.TrimSuffix(name, ".md"), i))
+		}
+		if err == nil && os.Rename(filepath.Join(kb, name), dst) == nil {
+			moved = append(moved, name)
+		} else {
+			left = true
 		}
 	}
 	if len(moved) > 0 {
 		core.Git(kb, append([]string{"rm", "-q", "--cached", "--ignore-unmatch", "--"}, moved...)...)
 		core.Git(kb, "commit", "-q", "-m", "Move isolated projects' notes out of the shared knowledge base")
 	}
-	os.WriteFile(marker, nil, 0o644)
+	if !left {
+		os.WriteFile(marker, nil, 0o644)
+	}
 }
 
 // isolatedIn returns the isolated project a note's header names, if any.
