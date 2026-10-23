@@ -3,9 +3,10 @@
 // does it, works out a safer route, declines, or convenes a tribunal: a panel
 // of three across models that investigates, discusses over two rounds and
 // votes. An approved step runs here, in the effects process, as exactly the
-// script that was weighed (pinned by digest), and only after the ceiling's
-// check on that script. The person keeps the ceiling and, at autonomy 1,
-// says yes before a warden weighs anything. A decision that would otherwise
+// script that was weighed (its text pinned by digest; files it calls are
+// not pinned), and only after the ceiling's check on that script. The person
+// keeps the ceiling and, at autonomy 1, says yes before a warden weighs
+// anything. A decision that would otherwise
 // wait in the person's queue (a protected merge, a module install) goes the
 // same way through Weigh, and the person is told after.
 package risk
@@ -540,8 +541,9 @@ func (m *Module) Tick() {
 
 // execute runs an approved step here, in the effects process, as exactly the
 // script that was weighed. Two checks sit at the point of effect: the script
-// must match its pinned digest, and the ceiling refuses an always-the-person
-// step without the person's own yes, whoever approved it.
+// text must match its pinned digest (what it calls is not pinned), and the
+// ceiling refuses an always-the-person step without the person's own yes,
+// whoever approved it.
 func (m *Module) execute(id string) {
 	m.mu.Lock()
 	if m.busy[id] {

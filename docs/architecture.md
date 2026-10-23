@@ -80,7 +80,7 @@ The program can be in any language. The daemon starts it from the module's folde
 - Only `hive/*` branches are pushed; main changes only by merge; `PushInitial` only into an empty repo with a host-made commit.
 - Merge requires: host-recorded passing test on that sha + (small | land verdict on that sha from a core-started read-only reviewer | host-made update of a reviewed sha | host-made revert/setup) + an approval if protected paths changed (the person's at autonomy 1, else a warden's; `risk.Weigh`). For a self project or a high-class path the read must be on that exact sha (nothing carries), and a high class needs two land runs since the last fix.
 - Files the sandbox can write are read with `SafeRead` (no symlinks, same-file check); the host decides what to kill/clean from its own records.
-- Nothing an agent requests runs outside the sandbox, except a script a warden or tribunal approved, run by the risk module in the daemon as exactly that digest-pinned script; what is always the person's goes to the person (see [risk.md](risk.md)).
+- Nothing an agent requests runs outside the sandbox, except a script a warden or tribunal approved, run by the risk module in the daemon as exactly that digest-pinned script text (the pin covers the text, not files it calls); what is always the person's goes to the person (see [risk.md](risk.md)).
 - Every state change is a journal event; restart = replay + reconcile; issue/PR/run creation is idempotent.
 
 ## Left alone on a shared machine
