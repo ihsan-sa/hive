@@ -157,6 +157,9 @@ type Runs struct {
 	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
 }
 
+// codexTokenStuck opens the note on a run whose Codex token folder would not delete.
+const codexTokenStuck = "its Codex token could not be deleted: "
+
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
 	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}}
@@ -177,13 +180,13 @@ func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), token
 		rs.mu.Unlock()
 	})
 	for id, err := range stuck {
-		why := "its Codex token could not be deleted: " + err.Error()
+		why := codexTokenStuck + err.Error()
 		r, _ := rs.Get(id)
 		switch {
-		case r.Status == StatusBlocked && strings.HasPrefix(r.Reason, "its Codex token could not be deleted"):
+		case strings.HasPrefix(r.Reason, codexTokenStuck), strings.HasPrefix(r.Progress, codexTokenStuck):
 			// already said; a restart adds nothing
-		case r.Terminal():
-			rs.Progress(id, why) // a finished run keeps its status
+		case r.Terminal() || r.Status == StatusBlocked:
+			rs.Progress(id, why) // a finished or already blocked run keeps its status and reason
 		default:
 			rs.SetStatus(id, StatusBlocked, why)
 		}
@@ -699,7 +702,7 @@ func (rs *Runs) endTurn(r Run) {
 	cur, _ := rs.Get(r.ID)
 	switch {
 	case dropErr != nil:
-		te.Status, te.Reason = StatusBlocked, "its Codex token could not be deleted: "+dropErr.Error()
+		te.Status, te.Reason = StatusBlocked, codexTokenStuck+dropErr.Error()
 	case cur.StopAsked:
 		te.Status, te.Reason = StatusStopped, "stopped by the Hive"
 	case limited:
