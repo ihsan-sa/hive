@@ -25,7 +25,7 @@ func TestDigestCarriesGoals(t *testing.T) {
 	a := &agents.Agents{C: c}
 	ch := chat.New(c, a)
 	m := New(c, a, work.New(c, a, ch), ch)
-	d := m.Digest(0)
+	d := m.Digest(0, "")
 	if !strings.Contains(d, "raise the score with more") || !strings.Contains(d, "Score: none defined") {
 		t.Fatalf("digest lacks goals or score line:\n%s", d)
 	}

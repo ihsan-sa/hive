@@ -4,12 +4,12 @@ package sandbox
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
@@ -17,14 +17,11 @@ import (
 
 // Seatbelt is the macOS sandbox: sandbox-exec with a generated profile.
 // Reads are allowed except the person's credential stores; writes only to the
-// run's mounts marked rw and a temp dir; network only to the local egress proxy.
+// run's mounts marked rw and a temp dir; network only to the run's own egress
+// proxy, a loopback port held for as long as the command runs.
 //
 // Untested on real macOS in v1's build environment; treat as provisional.
-type Seatbelt struct {
-	once sync.Once
-	port string
-	err  error
-}
+type Seatbelt struct{}
 
 var seatbelt = &Seatbelt{}
 
@@ -38,42 +35,59 @@ func platform(Options) Sandbox {
 func (*Seatbelt) Name() string   { return "seatbelt" }
 func (*Seatbelt) Isolated() bool { return false }
 
-// Check starts the shared egress proxy on a loopback port.
+// Check makes sure a loopback port can be had for a proxy.
 func (s *Seatbelt) Check() error {
-	s.once.Do(func() {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			s.err = err
-			return
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err == nil {
+		ln.Close()
+	}
+	return err
+}
+
+// proxy serves sp's egress proxy on a loopback port, recording refused hosts
+// next to its output.
+func proxy(sp Spec) (*Egress, string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, "", err
+	}
+	var refused io.Writer
+	if sp.Stdout != "" {
+		if f, err := os.OpenFile(sp.Stdout+".egress", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+			refused = f
 		}
-		ServeEgress(ln)
-		_, s.port, _ = net.SplitHostPort(ln.Addr().String())
-	})
-	return s.err
+	}
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	return ServeEgress(ln, sp.Allow, refused), port, nil
 }
 
 func (s *Seatbelt) Start(sp Spec) (Proc, error) {
-	if err := s.Check(); err != nil {
+	e, port, err := proxy(sp)
+	if err != nil {
 		return Proc{}, err
 	}
-	profile := s.profile(sp)
 	pf := sp.Stdout + ".sb"
-	if err := os.WriteFile(pf, []byte(profile), 0o600); err != nil {
+	if err := os.WriteFile(pf, []byte(s.profile(sp, port)), 0o600); err != nil {
+		e.Close()
 		return Proc{}, err
 	}
-	env := []string{}
-	for _, kv := range sp.Env {
-		if strings.Contains(kv, "127.0.0.1:"+ProxyPort) {
-			kv = strings.ReplaceAll(kv, "127.0.0.1:"+ProxyPort, "127.0.0.1:"+s.port)
-		}
-		env = append(env, kv)
-	}
-	env = withPathPrefix(append(env, "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), toolDirs(sp.Tools))
+	env := withPathPrefix(append(s.env(sp, port), "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), toolDirs(sp.Tools))
 	argv := append([]string{"sandbox-exec", "-f", pf}, sp.Argv...)
-	return proc.StartDetached(argv, env, sp.Cwd, sp.Stdin, sp.Stdout)
+	p, err := proc.StartDetached(argv, env, sp.Cwd, sp.Stdin, sp.Stdout)
+	if err != nil {
+		e.Close()
+		return p, err
+	}
+	go func() { // the proxy lives as long as the command
+		for proc.Alive(p) {
+			time.Sleep(5 * time.Second)
+		}
+		e.Close()
+	}()
+	return p, nil
 }
 
-func (s *Seatbelt) profile(sp Spec) string {
+func (s *Seatbelt) profile(sp Spec, port string) string {
 	home := os.Getenv("HOME")
 	var b strings.Builder
 	b.WriteString("(version 1)\n(deny default)\n(allow process*)\n(allow signal (target same-sandbox))\n")
@@ -84,11 +98,13 @@ func (s *Seatbelt) profile(sp Spec) string {
 	b.WriteString("(deny mach-lookup (global-name \"com.apple.SecurityServer\"))\n")
 	b.WriteString("(allow file-write* (subpath \"/private/tmp\") (subpath \"/private/var/folders\") (literal \"/dev/null\") (literal \"/dev/tty\"))\n")
 	for _, m := range sp.Mounts {
-		if m.RW {
+		if m.Hide {
+			fmt.Fprintf(&b, "(deny file-read* (subpath %q))\n", m.Host)
+		} else if m.RW {
 			fmt.Fprintf(&b, "(allow file-write* (subpath %q))\n", m.Host)
 		}
 	}
-	fmt.Fprintf(&b, "(allow network-outbound (remote ip \"localhost:%s\"))\n", s.port)
+	fmt.Fprintf(&b, "(allow network-outbound (remote ip \"localhost:%s\"))\n", port)
 	b.WriteString("(allow network-outbound (literal \"/private/var/run/mDNSResponder\"))\n")
 	return b.String()
 }
@@ -99,21 +115,23 @@ func Inner([]string) int { return Exec("") }
 
 // Run runs s to completion under Seatbelt.
 func (s *Seatbelt) Run(sp Spec, timeout time.Duration) (int, error) {
-	if err := s.Check(); err != nil {
+	e, port, err := proxy(sp)
+	if err != nil {
 		return -1, err
 	}
+	defer e.Close()
 	pf := sp.Stdout + ".sb"
-	if err := os.WriteFile(pf, []byte(s.profile(sp)), 0o600); err != nil {
+	if err := os.WriteFile(pf, []byte(s.profile(sp, port)), 0o600); err != nil {
 		return -1, err
 	}
-	env := withPathPrefix(append(s.env(sp), "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), toolDirs(sp.Tools))
+	env := withPathPrefix(append(s.env(sp, port), "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), toolDirs(sp.Tools))
 	return runSync(append([]string{"sandbox-exec", "-f", pf}, sp.Argv...), env, sp.Cwd, sp.Stdin, sp.Stdout, timeout)
 }
 
-func (s *Seatbelt) env(sp Spec) []string {
+func (s *Seatbelt) env(sp Spec, port string) []string {
 	var env []string
 	for _, kv := range sp.Env {
-		env = append(env, strings.ReplaceAll(kv, "127.0.0.1:"+ProxyPort, "127.0.0.1:"+s.port))
+		env = append(env, strings.ReplaceAll(kv, "127.0.0.1:"+ProxyPort, "127.0.0.1:"+port))
 	}
 	return env
 }
