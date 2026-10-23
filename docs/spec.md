@@ -76,7 +76,7 @@ A project is a GitHub repository the Hive works on, with its own goals, its own 
 
 One ask, end to end:
 
-1. **The ask.** You write to the lead in its chat, or an agent or a sweep files one. The lead answers in a sentence or two, and when work is wanted it writes a brief: a title, what done looks like, and what it already knows. It can split one ask into a few briefs.
+1. **The ask.** You write to the lead in its chat, or an agent or a sweep files one. The lead answers in a sentence or two, and when work is wanted it writes a brief: a title, what done looks like, and what it already knows. It can split one ask into a few briefs, except on a project with a score: there the brief is the person's goal as written, with no bar of the lead's, and done is what the ask says, as far as the worker can take it.
 2. **The issue.** Each brief becomes an issue on the project's repository, so the record of what was asked is on GitHub and not only in the folder.
 3. **The work.** A worker builds it in a fresh checkout on its own branch, as in section 6, and commits. It ends with a short account of what it did, what it tested and what it isn't sure of.
 4. **The pull request.** The effects process pushes the branch and opens a pull request that closes the issue, with the worker's account as its body. From here the pull request is the thread for that piece of work.
@@ -96,7 +96,7 @@ Risk is weighed in three classes, and each class has its own judge.
 
 The person sets how much the Hive does on its own, from "ask me before anything outside the project" to "tell me after". That setting shifts where the lines between the classes sit; it never removes the person from the few things that are always theirs.
 
-What an agent can reach is enforced. A worker runs in a sandbox: it can read the system, write only its own checkout and a scratch home, and reach the network outbound only, with no way to the machine's local services. It holds no GitHub token and no long-lived AI login. A reviewer gets no write tools at all. The warden is the one agent with a wider grant, and it is the only caller of anything privileged. Where the platform can't provide a sandbox, the Hive refuses to run agents until the person opts in with the warning read: an unsandboxed agent acts on everything the person's logins and files reach.
+What an agent can reach is enforced. The sandbox walls the Hive off from the host and the outside world, not agents off from each other: "the sandbox is at hive level mostly, not agent level", and "agents need to be able to see one another and everyone's work", which means "all the projects, all the logs, all the inner workings", so that they can "improve those systems". Every agent reads all of it, everyone's runs, logs, chats and records, except what grants access (logins, tokens). Only a project the person isolates loses that view. A worker runs in a sandbox: it can read the system, write only its own checkout and a scratch home, and reach the network outbound only, with no way to the machine's local services. It holds no GitHub token and no long-lived AI login. A reviewer gets no write tools at all. The warden is the one agent with a wider grant, and it is the only caller of anything privileged. Where the platform can't provide a sandbox, the Hive refuses to run agents until the person opts in with the warning read: an unsandboxed agent acts on everything the person's logins and files reach.
 
 An API key is different from a subscription login, because it works until revoked. The Hive doesn't hand one to agents unless the person opts in, and it advises a dedicated key with a spend limit.
 
@@ -107,7 +107,7 @@ The loop has to close. Closing means a failure is noticed, a worker fixes it, th
 - **Measure.** On the first start, and after every merge, run the project's tests and score on the main branch in a clean checkout, and record the number with the commit it measured.
 - **Keep or revert.** Compare with the best score the project has kept. Within the project's tolerance or better, it is kept. Worse than that, or tests red, and a revert is opened and merged through the normal path, the original pull request gets a comment saying why, and a line goes into the project's lessons file so the idea isn't tried again blind. Comparing with the best kept score stops small drops from adding up.
 - **Notice.** The self-improvement module runs on a schedule and when asked. It reads the scores, the reverts, the failed runs, the chats and the agents' own notes, writes down what it saw with evidence, and files asks through the same path a person's take: "main scores 3.1; the last attempt was reverted because it fell to 2.0; find the next real gain." Every sweep and every ask it filed is visible in the dashboard.
-- **The Hive on itself.** The core and the modules are projects like any other, so the same loop improves them. The Hive cuts its own releases when its tests and a dry run of one ask pass, and installs can follow those releases. A change to the core is T2: it gets a read, and the release carries live work across or waits for a quiet moment.
+- **The Hive on itself.** The core and the modules are projects like any other, so the same loop improves them. The Hive cuts its own releases when its tests and a dry run of one ask pass, and installs can follow those releases. A change to the core is T2: it gets a read, and the release carries live work across or waits for a quiet moment. Every change to the Hive's own project is read on its exact commit, and a release lists each merged change with the read behind it; one with no read waits for the person's word. A project's settings can class paths as high, which need a second, separate read, or as root, for what runs with elevated rights: those also wait for the person before they're released.
 - **Agents' own filings.** Workers are expected to file improvements they notice, publish tools they wrote for themselves, and fix the module they hit a problem in or raise it with the project that owns it.
 
 ## 11. The control center
@@ -136,7 +136,7 @@ Failures, and what happens:
 - **A stuck worker.** Time and spend are ledgers that raise alerts. A quiet or overspending run is flagged on the dashboard, its checkout is kept, and the lead can hand it to a fresh agent on the same branch with the first one's notes.
 - **A red check.** The findings go back to the worker on the same branch. After a bounded number of rounds the work stops, says what remains, and leaves the pull request open.
 - **A conflict.** The branch is brought up to date with main, the worker resolves what collides, and the gate runs again.
-- **A usage limit.** The run is parked, and nothing marks it failed for that. The dashboard says which plan is limited and when it resets, and parked work resumes on its own.
+- **A usage limit.** The person can add several logins for each harness. A plan that hits its limit is parked until its reset and the other plans carry the work; only when every plan is limited is the run parked, and nothing marks it failed for that. The dashboard says which plan is limited and when it resets, and parked work resumes on its own.
 - **A crash, a kill, or the API down.** A run killed by something other than the Hive is retried on its checkout with its commits kept; one the Hive stopped on purpose isn't. When the API can't be reached, work waits and retries with growing gaps.
 
 ## 13. Platforms
@@ -145,7 +145,7 @@ Linux, macOS and Windows, with one install line each. Each platform needs a sand
 
 ## 14. What v1 leaves out
 
-Slack, mail and phone as channels (the chat module is the one channel). Several workspaces (the workspaces module). A module marketplace beyond installing from a git URL or an official source. GPU and server-resource management in the system module beyond schedules and wake-ups. The web mirror of the control center. Harnesses beyond Claude Code, though the adapter seam must exist and Codex is the first to add. Per-agent operating-system users; one user with a sandbox per run is enough on one machine.
+Slack, mail and phone as channels (the chat module is the one channel). Several workspaces (the workspaces module). A module marketplace beyond installing from a git URL or an official source. GPU and server-resource management in the system module beyond schedules and wake-ups. The web mirror of the control center. Harnesses beyond Claude Code and Codex. Per-agent operating-system users; one user with a sandbox per run is enough on one machine.
 
 ## 15. Milestones
 

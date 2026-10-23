@@ -1,17 +1,239 @@
-:root { color-scheme: light dark; --fg: #1d1d1f; --bg: #fdfdfb; --muted: #6b6b70; --code: #f1f0ec; --accent: #b8860b; }
-@media (prefers-color-scheme: dark) { :root { --fg: #e8e6e1; --bg: #161616; --muted: #9a9a9f; --code: #232323; --accent: #e0b040; } }
-* { box-sizing: border-box; }
-body { margin: 0 auto; max-width: 44rem; padding: 2rem 1.25rem 3rem; font: 17px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg); background: var(--bg); }
-h1 { font-size: 2.2rem; margin: 0 0 .5rem; }
-h2 { margin-top: 2.5rem; }
-h3 { margin: 1.5rem 0 .25rem; font-size: 1.05rem; }
-a { color: var(--accent); }
-nav { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; margin-top: 1rem; }
-figure { margin: 2rem 0; }
-img { width: 100%; height: auto; background: #fff; border-radius: 6px; }
-pre { background: var(--code); padding: .8rem 1rem; border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9rem; }
-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-p code, dt code, dd code { background: var(--code); padding: .1em .3em; border-radius: 4px; }
-footer { margin-top: 3rem; color: var(--muted); font-size: .95rem; }
-dt { margin-top: .6rem; }
-dd { margin: 0 0 0 1rem; color: var(--muted); }
+/* The Hive's page, set as a page of ihsan.cc: the same tokens, column, type and
+   link treatment as the site's essay pages (src/index.css and src/writing/Writing.css
+   in the website repo), with Ihsan's design-system values where the site has none
+   (the copy button, focus ring, motion). Fonts are the site's own, served from here:
+   Newsreader and JetBrains Mono, both SIL OFL 1.1 (licences in fonts/). */
+
+@font-face {
+  font-family: 'Newsreader';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url(fonts/Newsreader-latin.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Newsreader';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(fonts/Newsreader-Italic-latin.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(fonts/JetBrainsMono-latin.woff2) format('woff2');
+}
+
+/* ---- tokens: light, then dark (an explicit choice, or the OS when none is stored) ---- */
+:root {
+  color-scheme: light;
+  --paper: #faf7f1;
+  --rule: #e0dad0;
+  --ink: #1b1917;
+  --ink-soft: #464038;
+  --label: #6e6659;
+  --link-rule: #cac3b7;
+  --code-bg: #f2eee3;
+  --diagram-paper: #faf8f3; /* the diagram's own paper, the same in both themes */
+  --serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --column: 660px;
+  --text: 19px;
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #15140f;
+  --rule: #2c2a23;
+  --ink: #f2efe6;
+  --ink-soft: #c3bcae;
+  --label: #a19a8c;
+  --link-rule: #4a463c;
+  --code-bg: #1f1d17;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #15140f;
+    --rule: #2c2a23;
+    --ink: #f2efe6;
+    --ink-soft: #c3bcae;
+    --label: #a19a8c;
+    --link-rule: #4a463c;
+    --code-bg: #1f1d17;
+  }
+}
+
+/* ---- base ---- */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-synthesis-weight: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; border-radius: 2px; }
+
+.page {
+  max-width: calc(var(--column) + 48px);
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+  font-size: var(--text);
+  line-height: 1.6;
+}
+.page p { margin: 0; text-wrap: pretty; }
+
+/* Links are ink with a hairline underline that darkens on hover, as on the site. */
+a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--link-rule);
+  text-underline-offset: 3px;
+}
+a:hover { text-decoration-color: currentColor; }
+
+/* ---- top bar: the trail back to ihsan.cc, the theme switch at the far end ---- */
+.top { display: flex; align-items: center; gap: 18px; margin-bottom: 40px; font-size: 15px; line-height: 1.5; }
+.top__crumbs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
+.top__sep, .top__here { color: var(--label); }
+.top__here { white-space: nowrap; }
+
+.theme-switch {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  margin: 0 0 0 auto;
+  border: 1px solid var(--label);
+  border-radius: 999px;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+.theme-switch::before { content: ''; position: absolute; inset: -8px; }
+.theme-switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.theme-switch[aria-checked="true"]::after { transform: translateX(14px); }
+.theme-switch:hover { border-color: var(--ink); }
+
+/* ---- head: title, standfirst, the page's own links, closed by an ink rule ---- */
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 20px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--ink);
+}
+.title { margin: 0; font-size: 32px; line-height: 1.1; font-weight: 600; letter-spacing: -0.015em; text-wrap: balance; }
+.standfirst { font-size: 19px; line-height: 1.5; color: var(--ink-soft); }
+.jump { display: flex; flex-wrap: wrap; gap: 0 8px; font-size: 15px; line-height: 1.5; color: var(--label); }
+.jump a { color: var(--ink); }
+.jump__sep { color: var(--label); }
+
+/* ---- body ---- */
+.body { display: flex; flex-direction: column; gap: 16px; }
+.body > *, .body section > * { margin: 0; }
+.body section { display: flex; flex-direction: column; gap: 16px; }
+h2 { margin-top: 24px !important; font-size: 23px; line-height: 1.3; font-weight: 400; text-wrap: balance; }
+h3 { margin-top: 8px !important; font-size: 19px; line-height: 1.4; font-weight: 600; }
+
+code {
+  font-family: var(--mono);
+  font-size: 0.8em;
+  background: var(--code-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  overflow-wrap: anywhere;
+}
+pre {
+  position: relative;
+  margin: 0 !important;
+  padding: 12px 14px;
+  background: var(--code-bg);
+  border-top: 1px solid var(--ink);
+  font: 400 13px/1.55 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+pre code { font: inherit; background: none; padding: 0; border-radius: 0; }
+
+/* The copy button: the design system's button (serif, 6px radius, hairline) on the code fill. */
+/* It floats at the top right, so only the first line of a command wraps around it. */
+button.copy {
+  float: right;
+  margin: -5px -6px -10px 14px; /* the negative bottom lets the second line run full width */
+  min-height: 28px;
+  padding: 2px 10px;
+  font: 400 14px/1.4 var(--serif);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  cursor: pointer;
+}
+button.copy:hover { border-color: var(--ink); }
+button.copy:active { background: var(--code-bg); }
+
+/* The command list: each command on a hairline, what it does under it. */
+dl { margin: 0; }
+dt { padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--rule); line-height: 1.4; }
+dt:first-child { margin-top: 0; }
+dd { margin: 4px 0 0; font-size: 17px; line-height: 1.5; color: var(--ink-soft); }
+dd code { font-size: 0.85em; }
+
+/* The diagram sits on its own paper: invisible in light, a light rounded panel in dark.
+   It is never inverted. */
+figure { margin: 8px 0 !important; }
+.figure__frame { background: var(--diagram-paper); border-radius: 3px; padding: 12px; overflow-x: auto; }
+.figure__frame img { display: block; width: 100%; height: auto; }
+.figure__zoom { display: block; cursor: zoom-in; }
+
+/* ---- foot: the essay page's pager, pointing on to the essay and the source ---- */
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px 24px;
+  margin-top: 56px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ink);
+  font-size: var(--text);
+}
+.foot__link { flex: 1 1 220px; display: flex; flex-direction: column; gap: 3px; text-decoration: none; }
+.foot__link--end { text-align: right; }
+.foot__label { font-size: 15px; line-height: 1.5; color: var(--label); }
+.foot__title { font-size: 19px; line-height: 1.3; font-weight: 600; overflow-wrap: anywhere; }
+.foot__link:hover .foot__title { text-decoration: underline; text-decoration-color: var(--link-rule); text-underline-offset: 3px; }
+.foot__home { flex-basis: 100%; font-size: 15px; line-height: 1.5; color: var(--label); }
+.foot__home a { color: var(--ink); }
+
+@media (min-width: 720px) {
+  .page { padding-top: 80px; padding-bottom: 96px; }
+  .title { font-size: 38px; }
+  h2 { font-size: 25px; }
+  .body, .body section { gap: 18px; }
+}
+@media (max-width: 640px) {
+  .page { --text: 18px; }
+  .top a, .top__here { min-height: 32px; display: inline-flex; align-items: center; }
+  .foot__link--end { text-align: left; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  a { transition: text-decoration-color 120ms ease; }
+  .theme-switch::after { transition: transform 160ms ease; }
+}
