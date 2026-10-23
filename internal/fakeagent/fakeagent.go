@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:needpackage, FAKE:goals, FAKE:module <name>, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:needpackage, FAKE:goals, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -113,7 +113,7 @@ func Main(argv []string) int {
 	case "sweep":
 		var ps []string
 		if ps, err = projectNames(); err == nil && len(ps) > 0 {
-			_, err = call("brief", map[string]string{"project": ps[0], "title": "FAKE sweep: find the next real gain", "done": "score improves", "known": "evidence: fake"}, time.Minute)
+			_, err = call("brief", map[string]string{"project": ps[0], "title": "FAKE sweep: find the next real gain", "done": "score improves", "known": "evidence: fake FAKE:raisescore"}, time.Minute)
 		}
 		if err == nil {
 			_, err = call("finish", map[string]string{"status": "done", "account": "filed one ask"}, time.Minute)
@@ -366,6 +366,11 @@ func worker(all, prompt, system string) (string, error) {
 		return "waiting for the warden", err
 	}
 	call("progress", map[string]string{"text": "making the change"}, time.Minute)
+	if strings.Contains(prompt, "FAKE:spawnhelper") { // the first turn only
+		if _, err := call("spawn", map[string]string{"brief": "FAKE helper: write the helper part"}, time.Minute); err != nil {
+			return "", err
+		}
+	}
 	switch {
 	case strings.Contains(all, "FAKE:breaktests"):
 		os.WriteFile("BROKEN", []byte("tests fail while this exists\n"), 0o644)
@@ -373,6 +378,17 @@ func worker(all, prompt, system string) (string, error) {
 		os.WriteFile("score.txt", []byte("1\n"), 0o644)
 	case strings.Contains(all, "FAKE:raisescore"):
 		os.WriteFile("score.txt", []byte("9\n"), 0o644)
+	case skillModuleKey.MatchString(all):
+		m := skillModuleKey.FindStringSubmatch(all)
+		os.WriteFile("module.json", []byte(`{"name":"`+m[1]+`","description":"FAKE module: its skill says the codeword"}`), 0o644)
+		os.WriteFile("skill.md", []byte("The codeword is "+m[2]+".\n"), 0o644)
+	case useModuleKey.MatchString(all):
+		found, _ := filepath.Glob(filepath.Join(os.Getenv("HIVE_MODULES"), "*"+useModuleKey.FindStringSubmatch(all)[1], "skill.md"))
+		if len(found) == 0 {
+			return "", fmt.Errorf("no installed module's skill matches")
+		}
+		skill, _ := os.ReadFile(found[0])
+		os.WriteFile("USED.md", skill, 0o644)
 	case moduleKey.MatchString(all):
 		name := moduleKey.FindStringSubmatch(all)[1]
 		os.WriteFile("module.json", []byte(`{"name": "`+name+`", "description": "FAKE module", "provides": {"procedures": ["ledger.md"]}, "projects": ["*"]}`+"\n"), 0o644)
@@ -402,6 +418,11 @@ func worker(all, prompt, system string) (string, error) {
 	return "done", err
 }
 
+// skillModuleKey makes the checkout a module named $1 whose skill says codeword $2;
+// useModuleKey copies the skill of the installed module whose folder ends in
+// $1 into USED.md.
+var skillModuleKey = regexp.MustCompile(`FAKE:skillmodule (\w+) (\w+)`)
+var useModuleKey = regexp.MustCompile(`FAKE:usemodule (\w+)`)
 var moduleKey = regexp.MustCompile(`FAKE:module ([a-z0-9-]+)`)
 
 // peek reads what the rest of the Hive left in $HIVE_STATE (another run's log,

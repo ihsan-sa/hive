@@ -778,6 +778,34 @@ func TestOutsideStep(t *testing.T) {
 	h.wait("the worker to land", 3*minute, taskStage("out", title, work.StageDone))
 }
 
+// A helper a worker spawns ships like any worker: its commit gets a branch and
+// pull request of its own, no issue, and reaches main.
+func TestHelperShips(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/helpers", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "helpers", "repo": "me/helpers"}, nil)
+	h.post("/api/ask", map[string]string{"project": "helpers", "title": "split the work with a helper FAKE:spawnhelper"}, nil)
+	st := h.wait("the helper's work to merge", 4*minute, taskStage("helpers", "FAKE helper: write the helper part", work.StageDone))
+	tk, _ := task(st, "helpers", "FAKE helper: write the helper part")
+	parent, _ := task(st, "helpers", "split the work with a helper FAKE:spawnhelper")
+	if tk.Issue.Number != 0 || tk.PR.Number == 0 || tk.MergeSHA == "" || tk.From != parent.Worker {
+		t.Fatalf("helper task %+v, parent %+v", tk, parent)
+	}
+	// Merges squash, so the helper's commit itself isn't on main; its change is.
+	repo := h.forge.RepoPath("me/helpers")
+	files, err := core.Git(repo, "diff", "--name-only", tk.Base, tk.SHA)
+	if err != nil || strings.TrimSpace(files) == "" {
+		t.Fatalf("the helper's change %s..%s: %q %v", tk.Base, tk.SHA, files, err)
+	}
+	if out, err := core.Git(repo, append([]string{"diff", "--stat", tk.SHA, "main", "--"}, strings.Fields(files)...)...); err != nil || strings.TrimSpace(out) != "" {
+		t.Fatalf("the helper's change is not on main: %s %v", out, err)
+	}
+	if n := h.forge.Issues("me/helpers"); n != 1 {
+		t.Fatalf("issues: %d, want the parent's only", n)
+	}
+}
+
 // TestAgentsReadTheHive: a worker reads another run's log, a chat, a warden's
 // log and the journal from $HIVE_STATE. Under the sandbox (HIVE_E2E_SANDBOX=auto)
 // it can change none of them and reads no secret; a bare run is unsandboxed by

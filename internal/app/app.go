@@ -47,10 +47,10 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 		return nil, err
 	}
 	a.Agents = &agents.Agents{C: c, Mod: a.Mods}
-	c.Runs.Ops().SetSpawner(a.Agents.Spawner)
 	c.Runs.ModelFor = func(r core.Run) string { _, m := a.Agents.Model(r.Role, r.Project); return m }
 	a.Chat = chat.New(c, a.Agents)
 	a.Work = work.New(c, a.Agents, a.Chat)
+	c.Runs.Ops().SetSpawner(a.Work.Spawn)
 	a.Improve = improve.New(c, a.Agents, a.Work, a.Chat)
 	a.KB = kb.New(c, a.Agents)
 	a.System = system.New(c)
