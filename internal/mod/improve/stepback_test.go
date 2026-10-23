@@ -127,12 +127,44 @@ func TestIsolatedFaultAsksThePerson(t *testing.T) {
 			ask = a
 		}
 	}
-	if !strings.Contains(ask.Title, "9 against 5") || strings.Contains(ask.Detail, "SECRET") {
-		t.Fatalf("the person must get the scores and no transcript: %+v", ask)
+	if !strings.Contains(ask.Title, "9 against 5") || !strings.Contains(ask.Detail, "SECRET-ASK") ||
+		strings.Contains(ask.Detail, "SECRET-SETUP") || strings.Contains(ask.Detail, "SECRET-HIVE") {
+		t.Fatalf("the person must get the scores and the setup, and no transcript: %+v", ask)
 	}
 }
 
-// An isolated project's step-back reads a digest of that project alone.
+// One plateau starts one step-back: a merge whose task was filed before the
+// last step-back began was in its budget, even when it is measured after.
+func TestPlateauSkipsMergesFiledBeforeTheStepBack(t *testing.T) {
+	m := rig(t)
+	five := 5.0
+	file := func(id string) {
+		m.C.J.MustAppend("task.saved", work.Task{ID: id, Project: "p", Created: time.Now().UTC()})
+	}
+	merged := func(task string) {
+		m.record(Measurement{Project: "p", Task: task, Kept: true, Score: &five, Best: &five})
+	}
+	merged("")
+	file("a")
+	file("b")
+	merged("a")
+	if n := m.plateau("p"); n != 1 {
+		t.Fatalf("one merge on a flat score is a plateau of 1, got %d", n)
+	}
+	m.saveStepBack(StepBack{ID: "stepback-1", Project: "p", Status: "none", Started: time.Now().UTC()})
+	merged("b")
+	if n := m.plateau("p"); n != 0 {
+		t.Fatalf("a merge filed before the step-back began counted toward a new plateau: %d", n)
+	}
+	file("c")
+	merged("c")
+	if n := m.plateau("p"); n != 1 {
+		t.Fatalf("a merge filed after the step-back must count: %d", n)
+	}
+}
+
+// An isolated project's step-back reads a digest of that project alone, and
+// no other digest reads it.
 func TestDigestOfOneProject(t *testing.T) {
 	m := rig(t)
 	for _, name := range []string{"p", "q"} {
@@ -147,12 +179,12 @@ func TestDigestOfOneProject(t *testing.T) {
 	all, one := m.Digest(0, ""), m.Digest(0, "p")
 	for _, s := range []string{"## Project q", "SAID-q notes", "BLOCKED-q", "CHAT-q"} {
 		if !strings.Contains(all, s) || strings.Contains(one, s) {
-			t.Fatalf("%q must be in the whole digest only:\nall:\n%s\none:\n%s", s, all, one)
+			t.Fatalf("%q must be in the shared digest only:\nall:\n%s\none:\n%s", s, all, one)
 		}
 	}
 	for _, s := range []string{"## Project p", "SAID-p notes", "BLOCKED-p", "CHAT-p"} {
-		if !strings.Contains(one, s) {
-			t.Fatalf("%q is missing from p's digest:\n%s", s, one)
+		if !strings.Contains(one, s) || strings.Contains(all, s) {
+			t.Fatalf("%q must be in the isolated project's own digest only:\nall:\n%s\none:\n%s", s, all, one)
 		}
 	}
 }

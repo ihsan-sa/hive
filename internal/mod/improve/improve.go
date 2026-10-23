@@ -348,9 +348,14 @@ func (m *Module) TickSweeps() {
 }
 
 // Digest summarizes scores, reverts, failures, chats and notes since seq,
-// across every project, or from project only alone when only is set.
+// across every project but the isolated ones, or from project only alone when
+// only is set. An isolated project's records reach only its own step-back.
 func (m *Module) Digest(since int64, only string) string {
-	mine := func(project string) bool { return only == "" || project == only }
+	isolated := map[string]bool{}
+	for _, p := range m.C.Projects.List() {
+		isolated[p.Name] = p.Isolated
+	}
+	mine := func(project string) bool { return project == only || only == "" && !isolated[project] }
 	var b strings.Builder
 	b.WriteString("# Digest for the improvement sweep\n\n")
 	for _, p := range m.C.Projects.List() {
