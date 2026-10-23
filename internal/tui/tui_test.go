@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -112,4 +113,21 @@ func TestViewsFitTheScreen(t *testing.T) {
 		m.Update(keys("?")[0])
 		checkWidth(t, m.View(), w, h, "help")
 	}
+}
+
+// TestModuleDetailReachesEveryProject: with more projects than rows, moving
+// down the list scrolls it, so the last project can be selected.
+func TestModuleDetailReachesEveryProject(t *testing.T) {
+	m := testModel(80, 14)
+	for i := 0; i < 30; i++ {
+		m.st.Projects = append(m.st.Projects, api.ProjectView{Project: core.Project{Name: fmt.Sprintf("proj%02d", i)}})
+	}
+	m.stack = []detail{{kind: "module", id: "agents"}}
+	for range m.projectNames() {
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if view := m.View(); !strings.Contains(view, "proj29") {
+		t.Fatalf("the last project isn't reachable:\n%s", view)
+	}
+	checkWidth(t, m.View(), 80, 14, "module detail")
 }
