@@ -22,7 +22,7 @@ func TestNestedMountPointsExist(t *testing.T) {
 	c, _ := testHive(t)
 	r := Run{ID: "r1", Role: "lead", Harness: "fake", Isolated: true, Modules: []string{"agents", "kb"}}
 	h, _ := harness.Get("fake")
-	spec, err := c.Runs.sandboxSpec(isolatedSB{}, h, r, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
+	spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, r, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestLeadFollowsModelSetting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Runs.launch(r)
+	c.Runs.launch(r, c.WS.LoadConfig())
 	got, _ := c.Runs.Get("lead1")
 	if got.Model != "opus" || !strings.Contains(strings.Join(args, " "), "opus") {
 		t.Fatalf("model %q, args %q: want the turn on opus", got.Model, args)
@@ -79,7 +79,7 @@ func TestRunsReadTheStateButNoSecret(t *testing.T) {
 	c, _ := testHive(t)
 	os.WriteFile(c.WS.DaemonFile(), []byte(`{"token": "t"}`), 0o600)
 	h, _ := harness.Get("fake")
-	spec, err := c.Runs.sandboxSpec(isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "r1", Role: "worker", Harness: "fake"}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
+	spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "r1", Role: "worker", Harness: "fake"}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestRunsReadTheStateButNoSecret(t *testing.T) {
 	if !slices.Contains(spec.Env, "HIVE_STATE=/hive/state") {
 		t.Errorf("HIVE_STATE not set: %v", spec.Env)
 	}
-	spec, _ = c.Runs.sandboxSpec(isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "r2", Role: "worker", Harness: "fake", Isolated: true}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
+	spec, _ = c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "r2", Role: "worker", Harness: "fake", Isolated: true}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
 	for _, m := range spec.Mounts {
 		if strings.HasPrefix(m.Inside, "/hive/state") {
 			t.Errorf("an isolated project sees the rest of the Hive: %+v", m)
