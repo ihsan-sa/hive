@@ -12,7 +12,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 | `internal/proc` | Detached processes; liveness by pid + start time. |
 | `internal/agentcli` | `hive agent <op>`: what agents call from inside the sandbox. |
 | `internal/fakeagent` | `hive fake-agent`: scripted agent for tests and dry runs (FAKE:* keywords). |
-| `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb`, `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates), `release` (self-update, self-release). |
+| `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb` (notes, the record filed from the journal, search), `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates), `release` (self-update, self-release). |
 | `internal/app` | Wires core + modules; tick loop. |
 | `internal/daemon` | `hive daemon`, control API (127.0.0.1, bearer token in `.hive/private/daemon.json`, 0600). |
 | `internal/api` | API types + client. |
@@ -25,7 +25,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 
 ```
 .hive/      events.jsonl, config.json, chats/*.jsonl, scores/*.jsonl,
-            runs/<id>/{host,ro,box}, kb/ (git repo), gates/, checks/, improve/sweeps/,
+            runs/<id>/{host,ro,box}, kb/ (git repo of notes; record/ filed from the journal, untracked), gates/, checks/, improve/sweeps/,
             logins/, private/{daemon.json, runs/<id>/{home,codex,codex-sessions}}
 .modules/   agents, chat, kb, improve, system, + installed (each with .hive-source.json)
 projects/<name>/             host clone (effects process only)

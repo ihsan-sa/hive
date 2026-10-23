@@ -183,7 +183,7 @@ func (m *Module) add(msg Message) Message {
 	m.mu.Lock()
 	m.msgs[msg.Chat] = append(m.msgs[msg.Chat], msg)
 	m.mu.Unlock()
-	m.C.J.MustAppend("chat.posted", map[string]string{"chat": msg.Chat, "id": msg.ID, "thread": msg.Thread, "from": msg.From})
+	m.C.J.MustAppend("chat.posted", map[string]string{"chat": msg.Chat, "id": msg.ID, "thread": msg.Thread, "from": msg.From, "name": msg.Name, "text": msg.Text})
 	return msg
 }
 

@@ -460,7 +460,9 @@ func (m *Module) advance(req *Request) {
 	case req.Gain == "large":
 		req.Reason += "\n\nThe tribunal declined (" + tally + "), but the gain would be large, so it's yours to decide."
 		m.ask(req, "A tribunal declined a large gain", "The tribunal declined, but the gain would be large.", "run", "declined")
-		m.tell(*req, "The tribunal declined ("+tally+"); the gain is large, so the person decides.")
+		if req.Settles == nil {
+			m.tell(*req, "The tribunal declined ("+tally+"); the gain is large, so the person decides.")
+		}
 	default:
 		req.State, req.Outcome = "declined", "tribunal"
 		m.save(req)
@@ -570,7 +572,9 @@ func (m *Module) execute(id string) {
 	if err := core.CeilingGuard(req.Script, floor, req.PersonOK); err != nil {
 		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.Ceiling(floor, req.Script)+", which is always yours to decide.", "run", "declined")
 		m.act.Unlock()
-		m.tell(req, err.Error()+"; the person decides.")
+		if req.Settles == nil {
+			m.tell(req, err.Error()+"; the person decides.")
+		}
 		return
 	}
 	if req.Settles != nil {
@@ -722,6 +726,8 @@ func (m *Module) Weigh(a core.Ask) string {
 // person's answer, and tells the person after. A request the person was asked
 // about (req.Ask) carries their own answer and note, with nothing to tell.
 func (m *Module) settle(req Request, yes bool) {
+	// Answer needs the ask on file: the warden route never filed it, and Ask
+	// files it or, once per kind and ref, returns the one still open.
 	a := m.C.Person.Ask(*req.Settles)
 	opt := a.Options[len(a.Options)-1]
 	if yes {
