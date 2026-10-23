@@ -938,17 +938,17 @@ func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 		}
 		iso[p.Name] = true
 		kb := filepath.Join(rs.ws.KB(), "isolated", p.Name)
-		os.MkdirAll(kb, 0o755)
+		rs.ws.IsolatedKB(p.Name) // never made through a link
 		out = append(out, sandbox.Mount{Host: kb, Inside: "/hive/kb/isolated/" + p.Name, Hide: true})
 		if r.Isolated {
 			continue
 		}
 		out = append(out, sandbox.Mount{Host: rs.ws.Project(p.Name), Inside: "/hive/projects/" + p.Name, Hide: true})
-		for _, d := range []string{"checks", "gates", "risk", "kb/isolated"} {
+		for _, d := range []string{"checks", "gates", "risk"} {
 			os.MkdirAll(filepath.Join(rs.ws.Hive(), d, p.Name), 0o755)
 			rel = append(rel, d+"/"+p.Name)
 		}
-		rel = append(rel, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl")
+		rel = append(rel, "kb/isolated/"+p.Name, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl")
 	}
 	if len(iso) == 0 || r.Isolated {
 		return out

@@ -293,3 +293,17 @@ func Exists(p string) bool { return exists(p) }
 
 // ErrNotFound is returned for missing records.
 var ErrNotFound = errors.New("not found")
+
+// IsolatedKB makes and returns an isolated project's notes folder, refusing
+// one that isn't a real folder, such as a link a filer planted.
+func (w Workspace) IsolatedKB(project string) (string, error) {
+	dir := w.KB()
+	for _, d := range []string{"isolated", project} {
+		dir = filepath.Join(dir, d)
+		os.Mkdir(dir, 0o755)
+		if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+			return "", fmt.Errorf("%s is not a real folder", dir)
+		}
+	}
+	return dir, nil
+}

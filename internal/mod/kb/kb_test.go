@@ -45,6 +45,18 @@ func TestFilerCannotReachIsolatedNotes(t *testing.T) {
 		"link elsewhere": func(dir string) {
 			os.Symlink("/etc/passwd", filepath.Join(dir, "passwd.md"))
 		},
+		// A case-insensitive disk folds this onto isolated/.
+		"note in Isolated/": func(dir string) {
+			os.MkdirAll(filepath.Join(dir, "Isolated", "secret"), 0o755)
+			os.WriteFile(filepath.Join(dir, "Isolated", "secret", "x.md"), []byte("planted"), 0o644)
+		},
+		"nested note": func(dir string) {
+			os.MkdirAll(filepath.Join(dir, "notes"), 0o755)
+			os.WriteFile(filepath.Join(dir, "notes", "x.md"), []byte("planted"), 0o644)
+		},
+		"not a note": func(dir string) {
+			os.WriteFile(filepath.Join(dir, "x.sh"), []byte("planted"), 0o644)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, m := newKB(t)
@@ -53,23 +65,7 @@ func TestFilerCannotReachIsolatedNotes(t *testing.T) {
 				t.Fatal(err)
 			}
 			kb := c.WS.KB()
-			base, _ := core.Git(kb, "rev-parse", "HEAD")
-			dir := filepath.Join(t.TempDir(), "filer")
-			if _, err := core.Git("", "clone", "-q", "--no-local", kb, dir); err != nil {
-				t.Fatal(err)
-			}
-			plant(dir)
-			core.Git(dir, "add", "-A")
-			if _, err := core.Git(dir, "commit", "-q", "-m", "consolidate"); err != nil {
-				t.Fatal(err)
-			}
-			r, err := c.Runs.Start(core.RunSpec{Role: "filer", Harness: "fake", Checkout: dir, Inputs: map[string]string{"base": base}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			c.J.MustAppend("run.turn_ended", map[string]any{"id": r.ID, "status": core.StatusDone, "result": map[string]any{"text": "filed"}})
-			m.filing = r.ID
-			m.Tick()
+			base := file(t, c, m, plant)
 			if head, _ := core.Git(kb, "rev-parse", "HEAD"); head != base {
 				t.Error("the filer's commits were taken")
 			}
@@ -97,5 +93,49 @@ func TestIsolatedNoteRefusesALinkedFolder(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
 		t.Error("the note landed where the link points")
+	}
+}
+
+// file runs a filer whose commit is what plant leaves in its checkout, and
+// returns the knowledge base's head from before.
+func file(t *testing.T, c *core.Core, m *Module, plant func(dir string)) string {
+	kb := c.WS.KB()
+	base, _ := core.Git(kb, "rev-parse", "HEAD")
+	dir := filepath.Join(t.TempDir(), "filer")
+	if _, err := core.Git("", "clone", "-q", "--no-local", kb, dir); err != nil {
+		t.Fatal(err)
+	}
+	plant(dir)
+	core.Git(dir, "add", "-A")
+	if _, err := core.Git(dir, "commit", "-q", "-m", "consolidate"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := c.Runs.Start(core.RunSpec{Role: "filer", Harness: "fake", Checkout: dir, Inputs: map[string]string{"base": base}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.J.MustAppend("run.turn_ended", map[string]any{"id": r.ID, "status": core.StatusDone, "result": map[string]any{"text": "filed"}})
+	m.filing = r.ID
+	m.Tick()
+	return base
+}
+
+// A filer that merges two notes into one, edits the README and adds a note
+// has its commit taken.
+func TestFilerConsolidates(t *testing.T) {
+	c, m := newKB(t)
+	a, _ := m.Write(Note{Title: "a", Text: "one", Project: "open"})
+	b, _ := m.Write(Note{Title: "b", Text: "two", Project: "open"})
+	base := file(t, c, m, func(dir string) {
+		os.Remove(filepath.Join(dir, filepath.Base(b)))
+		os.WriteFile(filepath.Join(dir, filepath.Base(a)), []byte("one and two"), 0o644)
+		os.WriteFile(filepath.Join(dir, "README.md"), []byte("# KB"), 0o644)
+		os.WriteFile(filepath.Join(dir, "c-2.md"), []byte("three"), 0o644)
+	})
+	if head, _ := core.Git(c.WS.KB(), "rev-parse", "HEAD"); head == base {
+		t.Error("a plain consolidation was refused")
+	}
+	if got, _ := os.ReadFile(a); string(got) != "one and two" || core.Exists(b) {
+		t.Errorf("the consolidation didn't land: %q", got)
 	}
 }

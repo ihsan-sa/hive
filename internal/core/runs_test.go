@@ -249,3 +249,44 @@ func TestOldGateLogOfASharedForkGoesToTheIsolatedProject(t *testing.T) {
 		t.Error("the shared fork's gate log went to the open project")
 	}
 }
+
+// When two isolated projects hold a gate's commit, its old log stays in the
+// shared folder rather than going to one of them, where the other's agents
+// would read it.
+func TestOldGateLogOfTwoIsolatedProjectsStays(t *testing.T) {
+	c, _ := testHive(t)
+	c.Projects.Add(Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	c.Projects.Add(Project{Name: "other", Repo: "me/other", Isolated: true})
+	clone := c.WS.Project("secret")
+	os.MkdirAll(clone, 0o755)
+	Git(clone, "init", "-q")
+	Git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x")
+	if _, err := Git("", "clone", "-q", clone, c.WS.Project("other")); err != nil {
+		t.Fatal(err)
+	}
+	sha, _ := Git(clone, "rev-parse", "HEAD")
+	checks := filepath.Join(c.WS.Hive(), "checks")
+	os.MkdirAll(checks, 0o755)
+	log := "gate-" + short(strings.TrimSpace(sha)) + "-test-abc.log"
+	os.WriteFile(filepath.Join(checks, log), nil, 0o644)
+	c.moveOldChecks()
+	if !Exists(filepath.Join(checks, log)) {
+		t.Error("a gate log two isolated projects share moved to one of them")
+	}
+}
+
+// Covering an isolated project's notes never makes their folder through a
+// link left in the knowledge base.
+func TestHidingIsolatedNotesFollowsNoLink(t *testing.T) {
+	c, _ := testHive(t)
+	c.Projects.Add(Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	elsewhere := t.TempDir()
+	os.MkdirAll(c.WS.KB(), 0o755)
+	if err := os.Symlink(elsewhere, filepath.Join(c.WS.KB(), "isolated")); err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.hideIsolated(Run{RunSpec: RunSpec{ID: "r", Project: "open"}})
+	if Exists(filepath.Join(elsewhere, "secret")) {
+		t.Error("the notes folder was made where the link points")
+	}
+}

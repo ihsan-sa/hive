@@ -101,7 +101,7 @@ func (m *Module) moveIsolated() {
 		for _, line := range strings.Split(head, "\n") {
 			proj, ok := strings.CutPrefix(line, "project: ")
 			if p, isProj := m.C.Projects.Get(proj); ok && isProj && p.Isolated {
-				dir, err := m.isolatedDir(p.Name)
+				dir, err := m.C.WS.IsolatedKB(p.Name)
 				if err == nil && os.Rename(filepath.Join(kb, name), filepath.Join(dir, name)) == nil {
 					moved = append(moved, name)
 				}
@@ -132,7 +132,7 @@ func (m *Module) Write(n Note) (string, error) {
 	dir := m.C.WS.KB()
 	if p, ok := m.C.Projects.Get(n.Project); ok && p.Isolated {
 		var err error
-		if dir, err = m.isolatedDir(n.Project); err != nil {
+		if dir, err = m.C.WS.IsolatedKB(n.Project); err != nil {
 			return "", err
 		}
 	}
@@ -154,39 +154,24 @@ func (m *Module) Write(n Note) (string, error) {
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// isolatedDir makes and returns an isolated project's notes folder, refusing
-// one that isn't a real folder, such as a link the filer planted.
-func (m *Module) isolatedDir(project string) (string, error) {
-	dir := m.C.WS.KB()
-	for _, d := range []string{"isolated", project} {
-		dir = filepath.Join(dir, d)
-		os.Mkdir(dir, 0o755)
-		if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
-			return "", fmt.Errorf("%s is not a real folder", dir)
-		}
-	}
-	return dir, nil
-}
+var noteRe = regexp.MustCompile(`^[A-Za-z0-9._-]+\.md$`)
 
-// checkFiled refuses a filer's commits that would reach isolated projects'
-// notes, which sit untracked in isolated/, or add a link anywhere.
+// checkFiled takes a filer's commits only when all they change is top-level
+// notes, as plain files with plain names. Anything else, such as a folder
+// that a case-insensitive disk folds onto isolated/, where isolated projects'
+// notes sit untracked, or a link, is refused.
 func checkFiled(kb, sha string) error {
-	names, err := core.Git(kb, "diff-tree", "-r", "-z", "--no-renames", "--name-only", "HEAD", sha)
+	diff, err := core.Git(kb, "diff-tree", "-r", "-z", "--no-renames", "HEAD", sha)
 	if err != nil {
 		return err
 	}
-	for _, p := range strings.Split(names, "\x00") {
-		if p == "isolated" || strings.HasPrefix(p, "isolated/") {
+	f := strings.Split(diff, "\x00")
+	for i := 0; i+1 < len(f); i += 2 {
+		// ":oldmode newmode oldsha newsha status", then the path; a
+		// deleted note's new mode is 000000.
+		meta, p := strings.Fields(f[i]), f[i+1]
+		if len(meta) < 2 || (meta[1] != "100644" && meta[1] != "000000") || !noteRe.MatchString(p) {
 			return fmt.Errorf("refused: the filer touched %s", p)
-		}
-	}
-	tree, err := core.Git(kb, "ls-tree", "-r", "-z", sha)
-	if err != nil {
-		return err
-	}
-	for _, e := range strings.Split(tree, "\x00") {
-		if strings.HasPrefix(e, "120000 ") {
-			return fmt.Errorf("refused: the filer added a link: %s", e)
 		}
 	}
 	return nil
