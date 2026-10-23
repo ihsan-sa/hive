@@ -299,6 +299,10 @@ func (rs *Runs) apply(e Event) {
 		if n.Status == StatusQueued || n.Status == StatusIdle {
 			r.Nudges = 0
 		}
+	case "run.held":
+		var n runNote
+		e.Decode(&n)
+		r.Reason = n.Reason
 	case "run.stop":
 		r.StopAsked = true
 	case "run.waiting":
@@ -524,7 +528,7 @@ func (rs *Runs) Stop(id, reason string) {
 }
 
 // Tick advances every run one step: mailboxes, finished turns, due turns.
-func (rs *Runs) Tick() {
+func (rs *Runs) Tick(cfg Config) {
 	for _, r := range rs.List(func(r *Run) bool { return !r.Terminal() || r.Status == StatusRunning }) {
 		rs.mu.Lock()
 		if rs.busy[r.ID] {
@@ -535,31 +539,31 @@ func (rs *Runs) Tick() {
 		rs.mu.Unlock()
 		go func(r Run) {
 			defer func() { rs.mu.Lock(); delete(rs.busy, r.ID); rs.mu.Unlock() }()
-			rs.step(r)
+			rs.step(r, cfg)
 		}(r)
 	}
 }
 
-func (rs *Runs) step(r Run) {
+func (rs *Runs) step(r Run, cfg Config) {
 	switch r.Status {
 	case StatusRunning:
 		rs.ops.Drain(r)
 		rs.watch(r)
 	case StatusQueued:
-		rs.launch(r)
+		rs.launch(r, cfg)
 	case StatusIdle:
 		rs.ops.Drain(r)
 		if len(r.Pending) > 0 {
-			rs.launch(r)
+			rs.launch(r, cfg)
 		}
 	case StatusParked:
 		if time.Now().After(r.ParkedUntil) {
-			rs.launch(r)
+			rs.launch(r, cfg)
 		}
 	case StatusQuiet:
 		rs.ops.Drain(r)
 		if len(r.Pending) > 0 {
-			rs.launch(r)
+			rs.launch(r, cfg)
 		}
 	}
 }
@@ -739,11 +743,14 @@ func tail(path string, n int) string {
 const PendingSep = "\n\n---\n\n"
 
 // launch starts the run's next turn in its sandbox.
-func (rs *Runs) launch(r Run) {
-	cfg := rs.ws.LoadConfig()
-	if why := Strained(cfg.MemFloorMB, cfg.PressureMax); why != "" {
-		if why = "waiting: " + why; r.Status != StatusQueued || r.Reason != why {
-			rs.append("run.status", runNote{ID: r.ID, Status: StatusQueued, Reason: why})
+func (rs *Runs) launch(r Run, cfg Config) {
+	if why := Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax); why != "" {
+		// The hold keeps the run's status, so a parked run keeps its backoff
+		// and a nudged one its count; the live figures after " (" change
+		// every tick, so only a new kind of hold is journalled.
+		why = "waiting: " + why
+		if kind, _, _ := strings.Cut(why, " ("); !strings.HasPrefix(r.Reason, kind) {
+			rs.append("run.held", runNote{ID: r.ID, Reason: why})
 		}
 		return
 	}
@@ -802,7 +809,7 @@ func (rs *Runs) launch(r Run) {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: "login for " + HarnessName(r.Harness) + ": " + err.Error(), Until: until})
 		return
 	}
-	spec, err := rs.sandboxSpec(sb, h, r, turn, resume, promptFile, tok, codexHome)
+	spec, err := rs.sandboxSpec(cfg, sb, h, r, turn, resume, promptFile, tok, codexHome)
 	if err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(5 * time.Minute)})
 		return
@@ -826,7 +833,7 @@ func (rs *Runs) RunPath(id string) string {
 }
 
 // sandboxSpec lays out what the agent sees.
-func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn int, resume bool, promptFile string, tok []string, codexHome string) (sandbox.Spec, error) {
+func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r Run, turn int, resume bool, promptFile string, tok []string, codexHome string) (sandbox.Spec, error) {
 	home := sandbox.Mount{Host: rs.ws.RunHome(r.ID), Inside: "/hive/home", RW: true}
 	mounts := []sandbox.Mount{
 		{Host: r.Checkout, Inside: "/work", RW: !r.ReadOnly},
@@ -869,7 +876,7 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	t := harness.Turn{
 		Role: r.Role, SessionID: r.Session, Resume: resume, Model: r.Model, Tools: r.Tools, SystemText: r.System,
 		SystemFile: filepath.Join(in(mounts[1]), "system.md"), ReadOnly: r.ReadOnly, RunDir: in(mounts[1]), Schema: r.Schema, Sandboxed: sb.Isolated(),
-		MaxOutput: rs.ws.LoadConfig().MaxOutputTokens, ConfigDir: cfgDir,
+		MaxOutput: cfg.MaxOutputTokens, ConfigDir: cfgDir,
 	}
 	if r.Budget > 0 {
 		t.MaxBudgetUSD = max(r.Budget-r.Cost, 0.01)
@@ -907,9 +914,9 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	if !sb.Isolated() && h.Program() == "hive" && len(tools) > 0 {
 		argv[0] = tools[0]
 	}
-	allow := rs.ws.LoadConfig().Egress.For(r.Role)
-	if len(allow) > 0 {
-		allow = append(append([]string{}, allow...), harness.APIHosts(h)...)
+	allow := cfg.Egress.For(r.Role)
+	if allow != nil {
+		allow = append(allow, harness.APIHosts(h)...)
 	}
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,

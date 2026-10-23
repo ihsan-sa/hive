@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -70,10 +71,11 @@ type Config struct {
 	MaxOutputTokens int `json:"max_output_tokens"`
 	// MonthlyUSD: once this month's runs cost more, the person is told once. Work goes on; 0 is off.
 	MonthlyUSD float64 `json:"monthly_usd,omitempty"`
-	// A turn waits while available memory is under MemFloorMB or memory
-	// pressure (Linux PSI "some avg10", percent) is over PressureMax; 0 turns a check off.
-	MemFloorMB  int     `json:"mem_floor_mb"`
-	PressureMax float64 `json:"pressure_max"`
+	// A turn waits while available memory is under MemFloorMB, or memory or
+	// CPU pressure (Linux PSI "some avg10", percent) is over its limit; 0 turns a check off.
+	MemFloorMB     int     `json:"mem_floor_mb"`
+	MemPressureMax float64 `json:"mem_pressure_max"`
+	CPUPressureMax float64 `json:"cpu_pressure_max"`
 	// PlateauMerges: a project whose best score hasn't moved in this many
 	// merges gets a step-back (besides the improve.stepback schedule); 0 is off.
 	PlateauMerges int `json:"plateau_merges"`
@@ -90,19 +92,29 @@ type ProjectSettings struct {
 type TribunalSeat struct {
 	Harness string `json:"harness,omitempty"`
 	Model   string `json:"model"`
+	bad     string // what config.json held when it wasn't a seat; Check refuses it
 }
 
+// UnmarshalJSON never fails, since a failure would stop the rest of
+// config.json being read; Check refuses a seat it couldn't read.
 func (t *TribunalSeat) UnmarshalJSON(b []byte) error {
 	*t = TribunalSeat{}
 	if json.Unmarshal(b, &t.Model) == nil {
 		return nil
 	}
 	type seat TribunalSeat
-	return json.Unmarshal(b, (*seat)(t))
+	if json.Unmarshal(b, (*seat)(t)) != nil {
+		*t = TribunalSeat{bad: string(b)}
+	}
+	return nil
 }
 
-// MarshalJSON keeps a seat with no harness the plain string the person wrote.
+// MarshalJSON keeps a seat with no harness the plain string the person wrote,
+// and a seat it couldn't read exactly as written, so a save never blanks it.
 func (t TribunalSeat) MarshalJSON() ([]byte, error) {
+	if t.bad != "" {
+		return []byte(t.bad), nil
+	}
 	if t.Harness == "" {
 		return json.Marshal(t.Model)
 	}
@@ -111,24 +123,33 @@ func (t TribunalSeat) MarshalJSON() ([]byte, error) {
 }
 
 // Egress is the hosts runs may reach: Default for every run, and a role's own
-// list in place of it. A run's harness API hosts are added to a non-empty list.
+// list in place of it. A run's harness API hosts are added to any list.
 type Egress struct {
 	Default []string            `json:"default,omitempty"`
 	Roles   map[string][]string `json:"roles,omitempty"` // warden, tribunal, worker, lead, ...
 }
 
-// For is role's list; empty means every public host.
+// For is a copy of role's list: the role's own when its key is set, even to
+// [] (then only the harness API hosts), else Default. nil means every public host.
 func (e Egress) For(role string) []string {
-	if l := e.Roles[role]; len(l) > 0 {
-		return l
+	if l, ok := e.Roles[role]; ok {
+		return append([]string{}, l...)
 	}
-	return e.Default
+	return append([]string(nil), e.Default...)
 }
 
-// Check refuses settings the Hive can't act on: a tribunal seat on a harness
-// it doesn't have.
+// Check refuses settings the Hive can't act on: a tribunal seat it couldn't
+// read or on a harness it doesn't have, and a floor glob that can't match.
 func (c Config) Check() error {
+	for _, f := range c.Floor {
+		if _, err := path.Match(f, ""); strings.ContainsAny(f, "*?[") && err != nil {
+			return fmt.Errorf("floor entry %q isn't a glob the Hive can match: %v", f, err)
+		}
+	}
 	for _, t := range c.TribunalModels {
+		if t.bad != "" {
+			return fmt.Errorf("tribunal seat %s isn't a model name or {\"harness\": ..., \"model\": ...}", t.bad)
+		}
 		if t.Harness == "" {
 			continue
 		}
@@ -155,7 +176,8 @@ func DefaultConfig() Config {
 
 		MaxOutputTokens: 16000,
 		MemFloorMB:      1024,
-		PressureMax:     40,
+		MemPressureMax:  10,
+		CPUPressureMax:  40,
 		PlateauMerges:   3,
 		Schedules: map[string]string{
 			"improve.sweep":    "every 12h",
@@ -174,12 +196,21 @@ var cfgMu sync.Mutex
 
 // LoadConfig reads config.json, filling defaults for missing fields.
 func (w Workspace) LoadConfig() Config {
+	c, _ := w.ReadConfig()
+	return c
+}
+
+// ReadConfig is LoadConfig with what's wrong in config.json: a value it
+// couldn't read (every field that did read is kept) or a setting Check refuses.
+func (w Workspace) ReadConfig() (Config, error) {
 	cfgMu.Lock()
 	defer cfgMu.Unlock()
 	c := DefaultConfig()
 	raw, err := os.ReadFile(w.ConfigPath())
 	if err == nil {
-		_ = json.Unmarshal(raw, &c)
+		err = json.Unmarshal(raw, &c)
+	} else if os.IsNotExist(err) {
+		err = nil
 	}
 	if c.Schedules == nil {
 		c.Schedules = DefaultConfig().Schedules
@@ -187,7 +218,10 @@ func (w Workspace) LoadConfig() Config {
 	if c.ChatMaxMB <= 0 {
 		c.ChatMaxMB = DefaultConfig().ChatMaxMB
 	}
-	return c
+	if err = errors.Join(err, c.Check()); err != nil {
+		err = fmt.Errorf("%s: %w", w.ConfigPath(), err)
+	}
+	return c, err
 }
 
 // SaveConfig writes config.json atomically.

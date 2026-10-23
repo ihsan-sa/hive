@@ -65,3 +65,14 @@ func TestChatMaxZero(t *testing.T) {
 		t.Fatalf("chat_max_mb 0 loads as %d", got)
 	}
 }
+
+// A step still running at shutdown writes after the journal closed; the write
+// is dropped instead of panicking the process.
+func TestAppendAfterCloseIsDropped(t *testing.T) {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	j.MustAppend("task.saved", map[string]string{"id": "late"})
+}
