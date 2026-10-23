@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +48,7 @@ func Open(ws Workspace, forge Forge) (*Core, error) {
 	c.Runs = NewRuns(ws, j, c.Sandbox, c.Tokens, c.Tools)
 	c.Runs.projs = c.Projects
 	c.Effects = NewEffects(ws, j, forge, c.Sandbox, c.Tools, c.Runs)
+	c.moveOldChecks()
 	return c, nil
 }
 
@@ -159,3 +161,43 @@ func (c *Core) Close() error { return c.J.Close() }
 
 // Cmd is the name the person runs the Hive by (hive, hive-v0, ...), for messages.
 var Cmd = "hive"
+
+// moveOldChecks moves check logs written before logs went in their project's
+// folder into that folder, where an isolated project's are covered. A log
+// whose project it can't tell stays where it is.
+func (c *Core) moveOldChecks() {
+	dir := filepath.Join(c.WS.Hive(), "checks")
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		id, ok := strings.CutSuffix(e.Name(), ".log")
+		if e.IsDir() || !ok {
+			continue
+		}
+		if p := c.checkProject(id); p != "" {
+			os.MkdirAll(filepath.Join(dir, p), 0o755)
+			os.Rename(filepath.Join(dir, e.Name()), filepath.Join(dir, p, e.Name()))
+		}
+	}
+}
+
+// checkProject names the project an old check log belongs to: a gate's by the
+// clone that holds its commit, a snapshot's or extract's by its run.
+func (c *Core) checkProject(id string) string {
+	if rest, ok := strings.CutPrefix(id, "gate-"); ok {
+		sha, _, _ := strings.Cut(rest, "-")
+		for _, p := range c.Projects.List() {
+			if _, err := Git(c.WS.Project(p.Name), "cat-file", "-e", sha+"^{commit}"); err == nil {
+				return p.Name
+			}
+		}
+		return ""
+	}
+	for _, suf := range []string{"-snapshot", "-extract"} {
+		if run, ok := strings.CutSuffix(id, suf); ok {
+			if r, ok := c.Runs.Get(run); ok {
+				return r.Project
+			}
+		}
+	}
+	return ""
+}

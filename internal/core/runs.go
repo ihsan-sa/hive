@@ -831,8 +831,8 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 		if _, err := os.Stat(rs.ws.DaemonFile()); err == nil {
 			mounts = append(mounts, sandbox.Mount{Host: rs.ws.DaemonFile(), Inside: "/hive/state/daemon.json", Hide: true})
 		}
-		mounts = append(mounts, rs.hideIsolated()...)
 	}
+	mounts = append(mounts, rs.hideIsolated(r)...)
 	if r.Isolated && sb.Isolated() {
 		// Only granted modules are visible: mount each over an empty modules dir,
 		// which holds their mount points, since bwrap can't make them inside a
@@ -903,13 +903,29 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	}, nil
 }
 
-// hideIsolated covers what isolated projects leave in the shared Hive, so a
-// run outside them reads none of their code, runs, chats, notes, checks or
-// scores. The journal holds every project's events in one file, so it is
-// covered whole while any project is isolated. The folders are made first so
-// what lands in them mid-turn is covered too; a run or chat started mid-turn
-// is not, until that agent's next turn.
-func (rs *Runs) hideIsolated() []sandbox.Mount {
+// Walled refuses r reaching project when either side is an isolated project:
+// an isolated project is reached only from its own runs, and its runs reach
+// no other project. Both come from the core's record of r, never from r.
+func (rs *Runs) Walled(r Run, project string) error {
+	if project == r.Project || rs.projs == nil {
+		return nil
+	}
+	for _, name := range []string{project, r.Project} {
+		if p, ok := rs.projs.Get(name); ok && p.Isolated {
+			return fmt.Errorf("project %q is out of reach of %s's agents", project, r.Project)
+		}
+	}
+	return nil
+}
+
+// hideIsolated covers what isolated projects other than r's own leave in the
+// shared Hive, so r reads none of their code, runs, chats, notes, checks or
+// scores. An isolated run sees only the knowledge base of what is shared, so
+// it gets just the notes covered. The journal holds every project's events in
+// one file, so it is covered whole while any project is isolated. The folders
+// are made first so what lands in them mid-turn is covered too; a run or chat
+// started mid-turn is not, until that agent's next turn.
+func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 	if rs.projs == nil {
 		return nil
 	}
@@ -917,10 +933,16 @@ func (rs *Runs) hideIsolated() []sandbox.Mount {
 	var out []sandbox.Mount
 	var rel []string
 	for _, p := range rs.projs.List() {
-		if !p.Isolated {
+		if !p.Isolated || p.Name == r.Project {
 			continue
 		}
 		iso[p.Name] = true
+		kb := filepath.Join(rs.ws.KB(), "isolated", p.Name)
+		os.MkdirAll(kb, 0o755)
+		out = append(out, sandbox.Mount{Host: kb, Inside: "/hive/kb/isolated/" + p.Name, Hide: true})
+		if r.Isolated {
+			continue
+		}
 		out = append(out, sandbox.Mount{Host: rs.ws.Project(p.Name), Inside: "/hive/projects/" + p.Name, Hide: true})
 		for _, d := range []string{"checks", "gates", "risk", "kb/isolated"} {
 			os.MkdirAll(filepath.Join(rs.ws.Hive(), d, p.Name), 0o755)
@@ -928,14 +950,14 @@ func (rs *Runs) hideIsolated() []sandbox.Mount {
 		}
 		rel = append(rel, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl")
 	}
-	if len(iso) == 0 {
-		return nil
+	if len(iso) == 0 || r.Isolated {
+		return out
 	}
 	rel = append(rel, "events.jsonl")
 	rs.mu.Lock()
-	for id, r := range rs.runs {
-		if iso[r.Project] {
-			rel = append(rel, "runs/"+id, "chats/agent_"+id+".jsonl")
+	for id, x := range rs.runs {
+		if iso[x.Project] {
+			rel = append(rel, "runs/"+id, "chats/agent_"+id+".jsonl", "scratch/"+id)
 		}
 	}
 	rs.mu.Unlock()
@@ -943,9 +965,6 @@ func (rs *Runs) hideIsolated() []sandbox.Mount {
 		host := filepath.Join(rs.ws.Hive(), filepath.FromSlash(f))
 		if Exists(host) {
 			out = append(out, sandbox.Mount{Host: host, Inside: "/hive/state/" + f, Hide: true})
-			if after, ok := strings.CutPrefix(f, "kb/"); ok {
-				out = append(out, sandbox.Mount{Host: host, Inside: "/hive/kb/" + after, Hide: true})
-			}
 		}
 	}
 	return out

@@ -109,6 +109,14 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
+	// A request's folder used to sit at risk/<id>; it now sits in its
+	// project's folder, which is covered when the project is isolated.
+	for _, r := range m.reqs {
+		if old := filepath.Join(c.WS.Hive(), "risk", r.ID); r.Project != "" && core.Exists(old) {
+			os.MkdirAll(filepath.Join(c.WS.Hive(), "risk", r.Project), 0o755)
+			os.Rename(old, filepath.Join(c.WS.Hive(), "risk", r.Project, r.ID))
+		}
+	}
 	ops := c.Runs.Ops()
 	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3","gain":"(optional) large"} -> T1 you weigh yourself; T2 goes to a warden, T3 to a tribunal`, Fn: m.opRequest})
 	ops.Register(core.Op{Name: "decide", Roles: []string{"warden"}, Help: `{"decision":"do|safer|decline|tribunal","reason","script":"exactly what runs (do, tribunal)","gain":"(optional) large"}`, Fn: m.opDecide})

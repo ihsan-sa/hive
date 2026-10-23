@@ -41,6 +41,7 @@ type Module struct {
 func New(c *core.Core, a *agents.Agents) *Module {
 	m := &Module{C: c, Agents: a}
 	m.ensureRepo()
+	m.moveIsolated()
 	c.J.Replay(func(e core.Event) {
 		var f struct{ Run string }
 		e.Decode(&f)
@@ -86,6 +87,32 @@ func (m *Module) ensureRepo() {
 	}
 	// An isolated project's notes stay out of git, where history would keep them.
 	os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("/isolated/\n"), 0o644)
+}
+
+// moveIsolated moves notes an isolated project left in the shared knowledge
+// base, from before they went in its own folder, into that folder, and takes
+// them out of the repository from here on. Earlier commits still hold them.
+func (m *Module) moveIsolated() {
+	kb := m.C.WS.KB()
+	var moved []string
+	for _, name := range m.Notes() {
+		b, _ := os.ReadFile(filepath.Join(kb, name))
+		head, _, _ := strings.Cut(string(b), "\n---\n")
+		for _, line := range strings.Split(head, "\n") {
+			proj, ok := strings.CutPrefix(line, "project: ")
+			if p, isProj := m.C.Projects.Get(proj); ok && isProj && p.Isolated {
+				dir := filepath.Join(kb, "isolated", p.Name)
+				os.MkdirAll(dir, 0o755)
+				if os.Rename(filepath.Join(kb, name), filepath.Join(dir, name)) == nil {
+					moved = append(moved, name)
+				}
+			}
+		}
+	}
+	if len(moved) > 0 {
+		core.Git(kb, append([]string{"rm", "-q", "--cached", "--ignore-unmatch", "--"}, moved...)...)
+		core.Git(kb, "commit", "-q", "-m", "Move isolated projects' notes out of the shared knowledge base")
+	}
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)

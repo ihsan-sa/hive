@@ -218,6 +218,9 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 	if b.Project == "" {
 		b.Project = r.Project
 	}
+	if err := m.C.Runs.Walled(r, b.Project); err != nil {
+		return nil, err
+	}
 	if r.Role == "lead" {
 		b.Chat, b.Thread = m.Chat.CurrentThread(r)
 	} else if parent, ok := m.taskOf(r.ID); ok {

@@ -1,6 +1,8 @@
 package core
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -99,7 +101,7 @@ func readable(spec sandbox.Spec, path string) bool {
 // project's own run sees what it always did.
 func TestIsolatedProjectsStayOutOfSharedState(t *testing.T) {
 	c, _ := testHive(t)
-	for _, p := range []Project{{Name: "open", Repo: "me/open"}, {Name: "secret", Repo: "me/secret", Isolated: true}} {
+	for _, p := range []Project{{Name: "open", Repo: "me/open"}, {Name: "secret", Repo: "me/secret", Isolated: true}, {Name: "other", Repo: "me/other", Isolated: true}} {
 		if _, err := c.Projects.Add(p); err != nil {
 			t.Fatal(err)
 		}
@@ -109,6 +111,7 @@ func TestIsolatedProjectsStayOutOfSharedState(t *testing.T) {
 		c.Runs.runs[id] = &Run{RunSpec: RunSpec{ID: id, Project: p.Name, Isolated: p.Isolated}}
 		c.Runs.mu.Unlock()
 		os.MkdirAll(c.WS.Run(id), 0o755)
+		os.MkdirAll(filepath.Join(c.WS.Hive(), "scratch", id), 0o755)
 		os.WriteFile(filepath.Join(c.WS.Chats(), "project_"+p.Name+".jsonl"), nil, 0o644)
 		os.WriteFile(filepath.Join(c.WS.Chats(), "agent_"+id+".jsonl"), nil, 0o644)
 	}
@@ -119,7 +122,8 @@ func TestIsolatedProjectsStayOutOfSharedState(t *testing.T) {
 	}
 	for _, p := range []string{"/hive/projects/secret", "/hive/projects/secret/.checkouts/x", "/hive/state/runs/secret-run/box/notes.md",
 		"/hive/state/chats/project_secret.jsonl", "/hive/state/chats/agent_secret-run.jsonl", "/hive/state/events.jsonl",
-		"/hive/state/kb/isolated/secret/n.md", "/hive/kb/isolated/secret/n.md", "/hive/state/checks/secret/x.log", "/hive/state/gates/secret/x"} {
+		"/hive/state/kb/isolated/secret/n.md", "/hive/kb/isolated/secret/n.md", "/hive/state/checks/secret/x.log", "/hive/state/gates/secret/x",
+		"/hive/state/scratch/secret-run/proof"} {
 		if readable(spec, p) {
 			t.Errorf("a normal run reads %s", p)
 		}
@@ -138,5 +142,86 @@ func TestIsolatedProjectsStayOutOfSharedState(t *testing.T) {
 	spec, _ = c.Runs.sandboxSpec(isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "secret-run", Project: "secret", Harness: "fake", Isolated: true}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
 	if !readable(spec, "/hive/kb/isolated/secret/n.md") {
 		t.Error("the isolated project's own run lost its notes")
+	}
+	if readable(spec, "/hive/kb/isolated/other/n.md") {
+		t.Error("an isolated project reads another's notes")
+	}
+	// A tribunal seat is isolated but belongs to no isolated project.
+	spec, _ = c.Runs.sandboxSpec(isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "seat", Project: "open", Harness: "fake", Isolated: true}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
+	if readable(spec, "/hive/kb/isolated/secret/n.md") || !readable(spec, "/hive/kb/note.md") {
+		t.Error("an isolated seat of a normal project reads the wrong notes")
+	}
+}
+
+// No agent outside an isolated project can spawn into it, message its agents
+// or list them, and its agents reach no other project.
+func TestIsolatedProjectsAreOutOfReach(t *testing.T) {
+	c, _ := testHive(t)
+	for _, p := range []Project{{Name: "open", Repo: "me/open"}, {Name: "secret", Repo: "me/secret", Isolated: true}} {
+		c.Projects.Add(p)
+		id := p.Name + "-run"
+		c.Runs.mu.Lock()
+		c.Runs.runs[id] = &Run{RunSpec: RunSpec{ID: id, Project: p.Name, Isolated: p.Isolated}}
+		c.Runs.mu.Unlock()
+	}
+	o := c.Runs.Ops()
+	o.SetSpawner(func(Run, string, string, string, string) (RunSpec, error) {
+		return RunSpec{}, errors.New("spawner reached")
+	})
+	open, _ := c.Runs.Get("open-run")
+	secret, _ := c.Runs.Get("secret-run")
+	sweep := Run{RunSpec: RunSpec{ID: "sweep", Role: "improver"}}
+	for _, tc := range []struct {
+		from    Run
+		project string
+		ok      bool
+	}{{sweep, "secret", false}, {open, "secret", false}, {secret, "open", false}, {secret, "", true}, {open, "open", true}, {sweep, "open", true}} {
+		_, err := o.Call(tc.from, "spawn", json.RawMessage(`{"brief":"x","project":"`+tc.project+`"}`))
+		if reached := err != nil && err.Error() == "spawner reached"; reached != tc.ok {
+			t.Errorf("%s spawning into %q: %v", tc.from.ID, tc.project, err)
+		}
+	}
+	if _, err := o.Call(sweep, "message", json.RawMessage(`{"to":"secret-run","text":"x"}`)); err == nil {
+		t.Error("a sweep messaged an isolated project's agent")
+	}
+	if _, err := o.Call(secret, "message", json.RawMessage(`{"to":"open-run","text":"x"}`)); err == nil {
+		t.Error("an isolated agent messaged another project's agent")
+	}
+	if _, err := o.Call(sweep, "message", json.RawMessage(`{"to":"open-run","text":"x"}`)); err != nil {
+		t.Errorf("a sweep can't message a normal agent: %v", err)
+	}
+	got, _ := o.Call(sweep, "agents", nil)
+	if b, _ := json.Marshal(got); strings.Contains(string(b), "secret") || !strings.Contains(string(b), "open-run") {
+		t.Errorf("agents shows a sweep %s", b)
+	}
+}
+
+// Check logs from before they went in their project's folder move there on
+// start: a gate's by the clone holding its commit, a snapshot's by its run.
+func TestOldCheckLogsMoveToTheirProject(t *testing.T) {
+	c, _ := testHive(t)
+	c.Projects.Add(Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	clone := c.WS.Project("secret")
+	os.MkdirAll(clone, 0o755)
+	Git(clone, "init", "-q")
+	Git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x")
+	sha, _ := Git(clone, "rev-parse", "HEAD")
+	c.Runs.mu.Lock()
+	c.Runs.runs["secret-run"] = &Run{RunSpec: RunSpec{ID: "secret-run", Project: "secret", Isolated: true}}
+	c.Runs.mu.Unlock()
+	checks := filepath.Join(c.WS.Hive(), "checks")
+	os.MkdirAll(checks, 0o755)
+	logs := []string{"gate-" + short(strings.TrimSpace(sha)) + "-test-abc.log", "secret-run-snapshot.log", "gate-00000000-test-abc.log"}
+	for _, n := range logs {
+		os.WriteFile(filepath.Join(checks, n), nil, 0o644)
+	}
+	c.moveOldChecks()
+	for i, n := range logs[:2] {
+		if !Exists(filepath.Join(checks, "secret", n)) {
+			t.Errorf("log %d stayed in the shared folder", i)
+		}
+	}
+	if !Exists(filepath.Join(checks, logs[2])) {
+		t.Error("a log with no known project moved")
 	}
 }

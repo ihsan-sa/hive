@@ -2,6 +2,9 @@ package app
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -65,4 +68,54 @@ func appWithWarden(t *testing.T, withParent bool) (*App, core.Run) {
 		t.Fatal(err)
 	}
 	return a, warden
+}
+
+// An isolated project's records from before they had their own folders move
+// there on start, and no agent outside it reads its status or files work in it.
+func TestIsolatedProjectRecordsMoveAndStayOutOfReach(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	c, err := core.Open(ws, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Projects.Add(core.Project{Name: "open", Repo: "me/open"})
+	c.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	c.J.MustAppend("risk.saved", map[string]string{"id": "r1", "project": "secret"})
+	c.Person.Ask(core.Ask{Kind: "question", Title: "secret plan", Project: "secret"})
+	c.Close()
+	os.MkdirAll(filepath.Join(ws.Hive(), "risk", "r1"), 0o755)
+	os.MkdirAll(ws.KB(), 0o755)
+	os.WriteFile(filepath.Join(ws.KB(), "plan.md"), []byte("---\ntitle: plan\nproject: secret\n---\n\nthe plan\n"), 0o644)
+	os.WriteFile(filepath.Join(ws.KB(), "open.md"), []byte("---\ntitle: open\nproject: open\n---\n\nopen\n"), 0o644)
+
+	a, err := New(ws, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if !core.Exists(filepath.Join(ws.Hive(), "risk", "secret", "r1")) {
+		t.Error("an isolated project's old warden folder stayed in the shared one")
+	}
+	if !core.Exists(filepath.Join(ws.KB(), "isolated", "secret", "plan.md")) || !core.Exists(filepath.Join(ws.KB(), "open.md")) {
+		t.Error("the notes didn't move to the right folders")
+	}
+	if out, _ := core.Git(ws.KB(), "ls-files"); strings.Contains(out, "plan.md") {
+		t.Error("git still tracks an isolated project's note")
+	}
+	ops := a.C.Runs.Ops()
+	sweep := core.Run{RunSpec: core.RunSpec{ID: "sweep", Role: "improver", Project: "open"}}
+	st, _ := ops.Call(sweep, "status", nil)
+	if b, _ := json.Marshal(st); strings.Contains(string(b), "secret") || !strings.Contains(string(b), "open") {
+		t.Errorf("status shows a normal run %s", b)
+	}
+	own, _ := ops.Call(core.Run{RunSpec: core.RunSpec{ID: "x", Project: "secret", Isolated: true}}, "status", nil)
+	if b, _ := json.Marshal(own); !strings.Contains(string(b), "secret plan") {
+		t.Errorf("status hides an isolated project from its own run: %s", b)
+	}
+	if _, err := ops.Call(sweep, "brief", json.RawMessage(`{"title":"t","done":"d","project":"secret"}`)); err == nil {
+		t.Error("a normal run filed work in an isolated project")
+	}
 }

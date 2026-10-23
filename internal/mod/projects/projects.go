@@ -34,7 +34,7 @@ func New(c *core.Core, ch *chat.Module, w *work.Module, im *improve.Module) *Mod
 	m := &Module{C: c, Chat: ch, Work: w, Improve: im, retry: map[string]time.Time{}, lastErr: map[string]string{}}
 	ops := c.Runs.Ops()
 	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","isolated"}`, Fn: m.opCreate})
-	ops.Register(core.Op{Name: "status", Help: `{} -> projects, work in flight, scores, what waits on the person`, Fn: func(core.Run, json.RawMessage) (any, error) { return m.Status(), nil }})
+	ops.Register(core.Op{Name: "status", Help: `{} -> projects, work in flight, scores, what waits on the person`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.Status(r), nil }})
 	return m
 }
 
@@ -200,10 +200,14 @@ type ProjectStatus struct {
 	Recent   []string `json:"recent"`
 }
 
-// Status summarizes the Hive for agents and the shell.
-func (m *Module) Status() map[string]any {
+// Status summarizes the Hive for agent r, leaving out the projects it may
+// not reach (an isolated one, unless r is its own).
+func (m *Module) Status(r core.Run) map[string]any {
 	var ps []ProjectStatus
 	for _, p := range m.C.Projects.List() {
+		if m.C.Runs.Walled(r, p.Name) != nil {
+			continue
+		}
 		st := ProjectStatus{Name: p.Name, Repo: p.Repo}
 		if b, ok := m.Improve.Best(p.Name); ok {
 			st.Best = &b
@@ -223,6 +227,9 @@ func (m *Module) Status() map[string]any {
 	}
 	var waiting []string
 	for _, a := range m.C.Person.Open() {
+		if m.C.Runs.Walled(r, a.Project) != nil {
+			continue
+		}
 		waiting = append(waiting, a.Title)
 	}
 	return map[string]any{"projects": ps, "waiting_on_person": waiting}
