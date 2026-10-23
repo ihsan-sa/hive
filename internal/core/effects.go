@@ -544,7 +544,12 @@ type Change struct {
 
 var docExt = []string{".md", ".txt", ".rst", ".adoc"}
 
-// Classify measures a change against main. Small means docs only and few lines.
+// docImage are the other types that count as docs, and only under docs/:
+// a script there is code like anywhere else.
+var docImage = []string{".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+// Classify measures a change against main. Small means docs only and few
+// lines, judged by file type: a script under docs/ is code.
 func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	dir := e.ws.Project(p.Name)
 	base, err := Git(dir, "merge-base", mainSHA, sha)
@@ -579,13 +584,9 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		if under(file, cfg.High) || under(file, cfg.Root) {
 			c.High = append(c.High, file)
 		}
-		isDoc := strings.HasPrefix(file, "docs/") || file == ".hive/lessons.md"
-		for _, x := range docExt {
-			if strings.HasSuffix(strings.ToLower(file), x) {
-				isDoc = true
-			}
-		}
-		if !isDoc {
+		ext := strings.ToLower(filepath.Ext(file))
+		if !slices.Contains(docExt, ext) && file != ".hive/lessons.md" &&
+			!(strings.HasPrefix(file, "docs/") && slices.Contains(docImage, ext)) {
 			docsOnly = false
 		}
 	}
