@@ -188,19 +188,27 @@ func (m *model) keyChats(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	ts := threads(m.msgs[m.currentChatID()])
 	lines, spans := m.threadLines(m.rightW())
-	top := m.top(len(lines), spans)
+	top, h := m.top(len(lines), spans), m.paneH()
+	var sp [2]int
+	if m.threadSel < len(spans) {
+		sp = spans[m.threadSel]
+	}
 	switch s {
 	case "esc", "left", "h":
 		m.chatFocus, m.scroll = 0, -1
-	case "up", "k":
-		if m.threadSel < len(spans) && spans[m.threadSel][0] < top {
-			m.scrollBy(-1)
-		} else if m.threadSel > 0 {
-			m.threadSel--
+	case "up", "k", "down", "j":
+		if sp[1] <= top || sp[0] >= top+h { // PgUp or Home left the selection off-screen
 			m.scroll = -1
-		}
-	case "down", "j":
-		if m.threadSel < len(spans) && spans[m.threadSel][1] > top+m.paneH() {
+		} else if s == "up" || s == "k" {
+			// Mirrors down: scroll through a tall thread (the first one up to the
+			// title), then select the one before without moving the view.
+			if top > 0 && (sp[0] <= top || m.threadSel == 0) {
+				m.scrollBy(-1)
+			} else if m.threadSel > 0 {
+				m.threadSel--
+				m.scroll = top
+			}
+		} else if sp[1] > top+h {
 			m.scrollBy(1)
 		} else if m.threadSel < len(ts)-1 {
 			m.threadSel++
@@ -341,8 +349,11 @@ func (m *model) scrollBy(d int) {
 
 func (m *model) viewThreads(w int) []string {
 	lines, spans := m.threadLines(w)
-	t := m.top(len(lines), spans)
-	return lines[t:min(len(lines), t+m.paneH())]
+	t, h := m.top(len(lines), spans), m.paneH()
+	if m.scroll < 0 && m.chatFocus == 0 && t > 0 && h >= 2 { // following the end: keep the title pinned
+		return append(lines[:2:2], lines[len(lines)-h+2:]...)
+	}
+	return lines[t:min(len(lines), t+h)]
 }
 
 // threadLines renders the whole pane, plus the line span of each thread.

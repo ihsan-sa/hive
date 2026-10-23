@@ -275,13 +275,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.key(msg)
 	case tea.MouseMsg:
-		if m.section == secChats && len(m.stack) == 0 && !m.help && !m.showSince {
-			switch msg.Button {
-			case tea.MouseButtonWheelUp:
-				m.scrollBy(-3)
-			case tea.MouseButtonWheelDown:
-				m.scrollBy(3)
+		d := map[tea.MouseButton]int{tea.MouseButtonWheelUp: -3, tea.MouseButtonWheelDown: 3}[msg.Button]
+		switch {
+		case d == 0 || msg.Action != tea.MouseActionPress || m.help || m.showSince:
+		case len(m.stack) > 0:
+			if top := &m.stack[len(m.stack)-1]; top.kind != "module" {
+				top.scroll = max(0, top.scroll+d)
 			}
+		case m.section == secChats:
+			m.scrollBy(d)
 		}
 	}
 	return m, nil
@@ -491,7 +493,7 @@ func (m *model) footer() string {
 	switch m.section {
 	case secChats:
 		if m.chatFocus == 0 {
-			return "↑↓ chat · PgUp/PgDn scroll · type or enter to write · → threads · space collapse · q quit"
+			return "↑↓ chat · PgUp/PgDn scroll · type to write · → threads · space collapse · tab section · q quit"
 		}
 		return "↑↓ scroll/thread · PgUp/PgDn Home/End · enter expand · r reply · n new · ← chats · q quit"
 	case secDash:
@@ -515,7 +517,7 @@ func helpLines() []string {
 		"  space             expand or collapse",
 		"  PgUp PgDn         in Chats, scroll the thread pane a page",
 		"  Home End          in Chats, jump to the top or end of the thread pane",
-		"  mouse wheel       scroll the thread pane; Shift+drag selects text to copy",
+		"  mouse wheel       scroll the thread pane or an open log; Shift+drag selects text",
 		"  typing            in Chats, starts a message to the selected chat",
 		"  r / n             reply in a thread / new thread",
 		"  q                 quit the control center; the Hive keeps working",
