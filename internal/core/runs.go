@@ -79,6 +79,7 @@ type Run struct {
 	Pending     []string        `json:"pending,omitempty"`
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
 	Retries     int             `json:"retries"`
+	Offline     string          `json:"offline,omitempty"` // its last turn couldn't reach its service, and why
 	Nudges      int             `json:"nudges"`
 	Login       string          `json:"login,omitempty"` // the login its latest turn went on
 	Progress    string          `json:"progress,omitempty"`
@@ -161,6 +162,9 @@ type Runs struct {
 	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
 }
 
+// codexTokenStuck opens the note on a run whose Codex token folder would not delete.
+const codexTokenStuck = "its Codex token could not be deleted: "
+
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
 	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}}
@@ -202,12 +206,16 @@ func (rs *Runs) Migrate() error {
 			continue
 		}
 		if err := rs.dropCodexHome(r.ID); err != nil {
-			why := "its Codex token could not be deleted: " + err.Error()
+			why := codexTokenStuck + err.Error()
 			switch {
-			case r.Status == StatusBlocked && strings.HasPrefix(r.Reason, "its Codex token could not be deleted"):
-				// already said; a restart adds nothing
-			case r.Terminal():
-				rs.Progress(r.ID, why) // a finished run keeps its status
+			case r.Status == StatusBlocked && strings.HasPrefix(r.Reason, codexTokenStuck):
+				// already blocked for it; a restart adds nothing
+			case r.Terminal(): // Terminal counts a blocked run too
+				// a finished or already blocked run keeps its status and reason,
+				// and gets the note once
+				if !strings.HasPrefix(r.Progress, codexTokenStuck) {
+					rs.Progress(r.ID, why)
+				}
 			default:
 				rs.SetStatus(r.ID, StatusBlocked, why)
 			}
@@ -303,6 +311,7 @@ type turnEnded struct {
 	Reason      string          `json:"reason,omitempty"`
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
 	Queue       []string        `json:"queue,omitempty"`
+	Offline     string          `json:"offline,omitempty"` // why the harness couldn't reach its service, in one plain line
 }
 
 // egressRefused is the hosts a turn's egress proxy refused.
@@ -370,7 +379,7 @@ func (rs *Runs) apply(e Event) {
 		if t.Session != "" {
 			r.Session = t.Session
 		}
-		r.Status, r.Reason, r.ParkedUntil = t.Status, t.Reason, t.ParkedUntil
+		r.Status, r.Reason, r.ParkedUntil, r.Offline = t.Status, t.Reason, t.ParkedUntil, t.Offline
 		r.Proc = proc.Handle{}
 		if t.Result != nil {
 			r.Cost += t.Result.CostUSD
@@ -787,7 +796,7 @@ func (rs *Runs) endTurn(r Run) {
 	cur, _ := rs.Get(r.ID)
 	switch {
 	case dropErr != nil:
-		te.Status, te.Reason = StatusBlocked, "its Codex token could not be deleted: "+dropErr.Error()
+		te.Status, te.Reason = StatusBlocked, codexTokenStuck+dropErr.Error()
 	case cur.StopAsked:
 		te.Status, te.Reason = StatusStopped, "stopped by the Hive"
 	case limited:
@@ -801,7 +810,10 @@ func (rs *Runs) endTurn(r Run) {
 			te.Queue = []string{"Your last turn hit a usage limit, so your next turn runs on another login. Continue where you left off."}
 		}
 	case tl.Result == nil:
-		errTail := tail(rs.ws.TurnOut(r.ID, r.Turn)+".err", 400)
+		// Under WSL, sandbox-exec's own early failures go to .wsl.
+		out := rs.ws.TurnOut(r.ID, r.Turn)
+		errTail := strings.TrimSpace(tail(out+".err", 400) + "\n" + tail(out+".wsl", 400))
+		te.Offline = Unreachable(service(r.Harness), errTail)
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = "interrupted; retrying on its checkout" + suffix(errTail)
 		te.Queue = []string{"Your previous turn was interrupted. Your checkout and commits are intact. Continue where you left off."}
@@ -810,6 +822,7 @@ func (rs *Runs) endTurn(r Run) {
 	case tl.Result.IsError:
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = "harness error; retrying" + suffix(Clip(tl.Result.Text, 200))
+		te.Offline = Unreachable(service(r.Harness), tl.Result.Text)
 		te.Queue = []string{"The previous turn hit an error (" + Clip(tl.Result.Text, 200) + "). Continue where you left off."}
 	case cur.Finish != nil:
 		te.Status = StatusDone
@@ -827,6 +840,11 @@ func (rs *Runs) endTurn(r Run) {
 		te.Queue = []string{"You ended your turn without `hive agent finish`. If the work is done, commit and finish with an account. If you can't finish, finish with status blocked and say why."}
 	default:
 		te.Status, te.Reason = StatusQuiet, "keeps ending turns without finishing; flagged for the lead"
+	}
+	if te.Offline != "" {
+		// Retrying costs no usage while it's down, so it checks back every few minutes at most.
+		te.Reason = te.Offline + "; retrying"
+		te.ParkedUntil = time.Now().Add(min(backoff(cur.Retries), 5*time.Minute))
 	}
 	rs.append("run.turn_ended", te)
 	// A spawned helper's account goes back to the agent that spawned it.
@@ -849,6 +867,32 @@ func suffix(s string) string {
 		return ""
 	}
 	return ": " + s
+}
+
+// Unreachable says in one plain line why service couldn't be reached, read
+// from an error's text, or "" when the text isn't about reaching it.
+func Unreachable(service, text string) string {
+	t := strings.ToLower(text)
+	has := func(words ...string) bool {
+		return slices.ContainsFunc(words, func(w string) bool { return strings.Contains(t, w) })
+	}
+	switch {
+	case has("token has expired", "/login", "auth login", "not logged in", "invalid api key", "authentication_error", "bad credentials"):
+		return service + " login expired"
+	case has("enotfound", "eai_again", "getaddrinfo", "no such host", "could not resolve", "network is unreachable", "enetunreach"):
+		return "can't reach " + service + ": no internet connection"
+	case has("connection error", "error connecting", "error sending request", "stream disconnected", "econnrefused", "econnreset", "etimedout", "connection refused", "connection reset", "i/o timeout"):
+		return "can't reach " + service + ": the connection failed"
+	}
+	return ""
+}
+
+// service names what a harness talks to.
+func service(h string) string {
+	if HarnessName(h) == "codex" {
+		return "Codex"
+	}
+	return "Claude"
 }
 
 func backoff(n int) time.Duration {

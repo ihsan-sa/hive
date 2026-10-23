@@ -95,11 +95,13 @@ type Module struct {
 	chats map[string]*Chat
 	msgs  map[string][]Message
 	read  map[string]int
+	// offline is the outage each lead was last told about, so it's said once.
+	offline map[string]string
 }
 
 // New loads chats and messages.
 func New(c *core.Core, a *agents.Agents) *Module {
-	m := &Module{C: c, Agents: a, chats: map[string]*Chat{}, msgs: map[string][]Message{}, read: map[string]int{}}
+	m := &Module{C: c, Agents: a, chats: map[string]*Chat{}, msgs: map[string][]Message{}, read: map[string]int{}, offline: map[string]string{}}
 	apply := func(e core.Event) {
 		if e.Kind == "chat.created" || e.Kind == "chat.updated" {
 			var ch Chat
@@ -417,20 +419,31 @@ func (m *Module) onEvent(e core.Event) {
 	switch e.Kind {
 	case "run.turn_ended":
 		var t struct {
-			ID     string `json:"id"`
-			Turn   int    `json:"turn"`
-			Status string `json:"status"`
-			Result *struct {
+			ID      string `json:"id"`
+			Turn    int    `json:"turn"`
+			Status  string `json:"status"`
+			Offline string `json:"offline"`
+			Result  *struct {
 				Text    string `json:"text"`
 				IsError bool   `json:"is_error"`
 			} `json:"result"`
 		}
 		e.Decode(&t)
-		if t.Result == nil || t.Result.IsError {
-			return
-		}
 		r, ok := m.C.Runs.Get(t.ID)
 		if !ok || r.Role != "lead" {
+			return
+		}
+		m.mu.Lock()
+		told := m.offline[t.ID]
+		m.offline[t.ID] = t.Offline
+		m.mu.Unlock()
+		if t.Offline != "" && t.Offline != told {
+			r.Turn = t.Turn
+			if chatID, thread := m.CurrentThread(r); chatID != "" {
+				m.add(Message{Chat: chatID, Thread: thread, From: "hive", Name: "hive", Text: strings.ToUpper(t.Offline[:1]) + t.Offline[1:] + ". The lead will answer on its own once it can."})
+			}
+		}
+		if t.Result == nil || t.Result.IsError {
 			return
 		}
 		text := strings.TrimSpace(t.Result.Text)

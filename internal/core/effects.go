@@ -1,6 +1,8 @@
 package core
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -26,8 +28,8 @@ import (
 //   - only hive/* branches are ever pushed; main changes only by merge;
 //   - checks run on the exact commit in a clean checkout the agent can't touch;
 //   - a merge is pinned to the commit that passed and was read;
-//   - changes to protected paths (goals, the score, the project's settings)
-//     are the person's to merge;
+//   - changes to protected paths (goals, the score and the files it names,
+//     the project's settings) are the person's to merge;
 //   - a change to a high-class path needs two separate land reads of its
 //     exact commit, and so does every change to a self project (one read).
 type Effects struct {
@@ -180,6 +182,17 @@ func (e *Effects) Sync(p Project) (string, error) {
 func (e *Effects) Config(p Project, sha string) ProjectConfig {
 	raw, _ := Git(e.ws.Project(p.Name), "show", sha+":.hive/project.json")
 	return ParseProjectConfig(raw)
+}
+
+// ScoreVersion names the score at sha: its command and the content of its
+// evaluator paths. Scores of two versions are never compared.
+func (e *Effects) ScoreVersion(p Project, sha string, s Score) string {
+	tree := ""
+	if paths := s.Evaluator(); len(paths) > 0 {
+		tree, _ = Git(e.ws.Project(p.Name), append([]string{"ls-tree", sha, "--"}, paths...)...)
+	}
+	sum := sha256.Sum256([]byte(s.Command + "\x00" + tree))
+	return hex.EncodeToString(sum[:6])
 }
 
 // ReadFile reads a file at a commit in the host clone.
@@ -566,6 +579,9 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	}
 	cfg := e.Config(p, mainSHA)
 	protected := append([]string{".hive/project.json", ".hive/goals.md"}, cfg.Protected...)
+	if cfg.Score != nil {
+		protected = append(protected, cfg.Score.Evaluator()...)
+	}
 	docsOnly := true
 	for _, l := range strings.Split(stat, "\n") {
 		f := strings.Fields(l)

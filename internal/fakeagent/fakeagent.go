@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:needpackage, FAKE:goals, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:offline, FAKE:needpackage, FAKE:goals, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -69,6 +69,18 @@ func Main(argv []string) int {
 
 	if strings.Contains(all, "FAKE:crash") && !resume {
 		os.Exit(3)
+	}
+	// FAKE:offline: the turn can't reach Claude and ends as Claude Code does
+	// then; the session keeps the message, so the next turn answers it.
+	held := filepath.Join(os.Getenv("HIVE_BOX"), "fake-offline-prompt")
+	if strings.Contains(prompt, "FAKE:offline") && !core.Exists(held) {
+		os.WriteFile(held, []byte(prompt), 0o600)
+		emit(map[string]any{"type": "result", "subtype": "success", "is_error": true, "result": "API Error: Connection error.", "session_id": session})
+		return 0
+	}
+	if raw, err := os.ReadFile(held); err == nil && !strings.Contains(prompt, "FAKE:offline") {
+		os.Remove(held)
+		prompt = string(raw) + "\n" + prompt
 	}
 	if strings.Contains(all, "FAKE:limit") && !resume {
 		reset := time.Now().Add(3 * time.Second).Unix()

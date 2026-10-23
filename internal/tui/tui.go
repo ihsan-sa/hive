@@ -95,6 +95,8 @@ type model struct {
 
 	since     []string
 	showSince bool
+	seen      int64 // the journal seq the person has seen up to, for the update notice
+	notice    *api.Updated
 	help      bool
 }
 
@@ -120,6 +122,11 @@ func Run(c *api.Client, ws core.Workspace) error {
 	in.CharLimit = 8000
 	m := &model{scroll: -1, c: c, ws: ws, open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
 		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, input: in}
+	var ui struct{ Seq int64 }
+	if raw, err := os.ReadFile(m.uiPath()); err == nil {
+		json.Unmarshal(raw, &ui)
+	}
+	m.seen = ui.Seq
 	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
@@ -261,6 +268,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = "the Hive isn't answering: " + msg.err.Error()
 		} else {
 			m.err, m.st, m.loaded = "", msg.st, true
+			if u := msg.st.Updated; u != nil && u.Seq > m.seen {
+				m.notice, m.seen = u, u.Seq
+			}
 		}
 	case chatMsg:
 		m.msgs[msg.id] = msg.msgs
@@ -292,17 +302,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		d := map[tea.MouseButton]int{tea.MouseButtonWheelUp: -3, tea.MouseButtonWheelDown: 3}[msg.Button]
 		switch {
-		case d == 0 || msg.Action != tea.MouseActionPress || m.help || m.showSince:
+		case d == 0 || msg.Action != tea.MouseActionPress || m.help || m.showSince || m.notice != nil:
 		case len(m.stack) > 0:
-			if top := &m.stack[len(m.stack)-1]; top.kind == "module" { // the list follows the selection
+			top := &m.stack[len(m.stack)-1]
+			if top.kind == "module" { // the list follows the selection
 				key := "up"
 				if d > 0 {
 					key = "down"
 				}
 				return m.keyDetailAction(top, key)
-			} else {
-				top.scroll = max(0, top.scroll+d)
 			}
+			top.scroll = max(0, top.scroll+d)
 		case m.section == secChats:
 			m.scrollBy(d)
 		}
@@ -318,6 +328,10 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.showSince {
 		m.showSince = false
+		return m, nil
+	}
+	if m.notice != nil {
+		m.notice = nil
 		return m, nil
 	}
 	if m.help {
@@ -522,6 +536,8 @@ func (m *model) View() string {
 	case m.showSince:
 		body = append([]string{"", stTitle.Render("  While you were away"), ""}, indent(m.since, "  ")...)
 		body = append(body, "", stDim.Render("  any key to continue"))
+	case m.notice != nil:
+		body = append([]string{"", stTitle.Render("  Updated to "+m.notice.To) + stDim.Render("  any key to dismiss"), ""}, indent(strings.Split(m.notice.Notes, "\n"), "  ")...)
 	case m.help:
 		body = helpLines()
 	case len(m.stack) > 0:
@@ -597,7 +613,7 @@ func helpLines() []string {
 		"  space             expand or collapse",
 		"  PgUp PgDn         in Chats, scroll the thread pane a page",
 		"  Home End          in Chats, jump to the top or end of the thread pane",
-		"  mouse wheel       scroll the thread pane or an open log; Shift+drag selects text",
+		"  mouse wheel       scroll the thread pane or an open log (on a module, move the selection); Shift+drag selects text",
 		"  typing            in Chats, starts a message to the selected chat",
 		"  r / n             reply in a thread / new thread",
 		"  q                 quit the control center; the Hive keeps working",

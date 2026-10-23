@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf16"
 
@@ -103,12 +104,20 @@ func (w *WSL) Start(s Spec) (Proc, error) {
 	return proc.StartDetached(argv, os.Environ(), "", "", hostStdout+".wsl")
 }
 
-// WinToWSL maps C:\x\y to /mnt/c/x/y (the default automount root).
+// WinToWSL maps C:\x\y to /mnt/c/x/y (the default automount root). An 8.3
+// short name such as JOHNSM~1 (a %TEMP% can carry one) doesn't open under
+// /mnt/c, so a path that exists goes by its long name.
 func WinToWSL(p string) string {
 	if p == "" {
 		return ""
 	}
 	p = filepath.Clean(p)
+	if u, err := syscall.UTF16PtrFromString(p); err == nil {
+		buf := make([]uint16, syscall.MAX_LONG_PATH)
+		if n, err := syscall.GetLongPathName(u, &buf[0], uint32(len(buf))); err == nil && int(n) < len(buf) {
+			p = syscall.UTF16ToString(buf[:n])
+		}
+	}
 	if len(p) >= 2 && p[1] == ':' {
 		return "/mnt/" + strings.ToLower(p[:1]) + filepath.ToSlash(p[2:])
 	}

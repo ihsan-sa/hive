@@ -122,6 +122,8 @@ type Module struct {
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
 	mainRed map[string]bool
+	// offline is why the forge was last unreachable, until a step succeeds.
+	offline string
 }
 
 // New loads tasks and registers the brief op.
@@ -339,10 +341,25 @@ func (m *Module) Tick() {
 		m.mu.Unlock()
 		go func(t Task) {
 			defer func() { m.mu.Lock(); delete(m.busy, t.ID); m.mu.Unlock() }()
-			if err := m.step(&t); err != nil {
+			err := m.step(&t)
+			why := ""
+			if err != nil {
+				why = core.Unreachable("GitHub", err.Error())
+			}
+			m.mu.Lock()
+			if why != "" || err == nil {
+				m.offline = why
+			}
+			m.mu.Unlock()
+			if err != nil {
 				t.Failures++
 				t.Retry = time.Now().Add(time.Duration(min(t.Failures, 6)) * 30 * time.Second)
 				msg := err.Error()
+				if why != "" {
+					// An outage isn't the task's fault, so it waits it out.
+					m.save(&t, why+"; retrying")
+					return
+				}
 				if t.Failures >= 8 {
 					t.Stage, t.Reason = StageStopped, "gave up after repeated errors: "+msg
 					m.save(&t, t.Reason)
@@ -353,6 +370,13 @@ func (m *Module) Tick() {
 			}
 		}(t)
 	}
+}
+
+// Offline says why the forge can't be reached, or "" when it can.
+func (m *Module) Offline() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.offline
 }
 
 func (m *Module) project(t *Task) (core.Project, error) {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -290,6 +291,38 @@ func TestScoreCheck(t *testing.T) {
 	ch := c.Effects.RunCheck(p, main, "score", "cat score.txt")
 	if !ch.OK || ch.Score == nil || *ch.Score != 5 {
 		t.Fatalf("score check: %+v", ch)
+	}
+}
+
+// The file a score's command names is protected, and its content is part of
+// the score's version; a change elsewhere leaves the version alone.
+func TestScoreFileIsProtected(t *testing.T) {
+	c, f := testHive(t)
+	seedRepo(t, f, "me/s", map[string]string{"score.sh": "echo 5\n", "n.txt": "1\n", ".hive/project.json": `{"test":"true","score":{"command":"sh ./score.sh","direction":"higher"}}`})
+	p, _ := c.Projects.Add(Project{Name: "s", Repo: "me/s"})
+	main, _ := c.Effects.Sync(p)
+	sc := *c.Effects.Config(p, main).Score
+	r, _ := commitInCheckout(t, c, p, "w1", main, "score.sh", "echo 9\n")
+	sha, _ := c.Effects.Extract(p, r, main)
+	if ch, _ := c.Effects.Classify(p, main, sha); !slices.Contains(ch.Protected, "score.sh") {
+		t.Fatalf("a change to the score's file must be protected: %+v", ch)
+	}
+	if c.Effects.ScoreVersion(p, main, sc) == c.Effects.ScoreVersion(p, sha, sc) {
+		t.Fatal("changing the score's file kept its version")
+	}
+	r2, _ := commitInCheckout(t, c, p, "w2", main, "n.txt", "2\n")
+	sha2, _ := c.Effects.Extract(p, r2, main)
+	if c.Effects.ScoreVersion(p, main, sc) != c.Effects.ScoreVersion(p, sha2, sc) {
+		t.Fatal("a change outside the score changed its version")
+	}
+}
+
+// The score's paths are cleaned to the form a diff names them in, and a path
+// outside the repository is left out.
+func TestScoreEvaluatorPaths(t *testing.T) {
+	s := Score{Command: `sh "./eval/score.sh"; cat ./../up`, Paths: []string{"./tests/", "/abs", "a/../b"}}
+	if got, want := s.Evaluator(), []string{"tests", "b", "eval/score.sh"}; !slices.Equal(got, want) {
+		t.Fatalf("evaluator %q, want %q", got, want)
 	}
 }
 

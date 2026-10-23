@@ -909,6 +909,39 @@ func TestHelperShips(t *testing.T) {
 	}
 }
 
+// When the lead can't reach Claude, the chat and the control center say so in
+// one plain line, and the turn is retried on its own: the lead answers once
+// Claude is back, and the notice clears.
+func TestOfflineLeadSaysWhy(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "hello FAKE:offline"}, nil)
+	const why = "can't reach Claude: the connection failed"
+	h.wait("the notice in the chat and the control center", minute, func(st api.State) bool {
+		if st.Offline != why {
+			return false
+		}
+		for _, m := range h.messages("lead") {
+			if m.From == "hive" && strings.Contains(m.Text, "Can't reach Claude") {
+				return true
+			}
+		}
+		return false
+	})
+	h.wait("the lead's answer once Claude is back", 2*minute, func(st api.State) bool {
+		return st.Offline == "" && h.replied("lead", "I'm the lead")(st)
+	})
+	n := 0
+	for _, m := range h.messages("lead") {
+		if m.From == "hive" && strings.Contains(m.Text, "Can't reach Claude") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("the notice was posted %d times, want once", n)
+	}
+}
+
 // TestAgentsReadTheHive: a worker reads another run's log, a chat, a warden's
 // log and the journal from $HIVE_STATE. Under the sandbox (HIVE_E2E_SANDBOX=auto)
 // it can change none of them and reads no secret; a bare run is unsandboxed by

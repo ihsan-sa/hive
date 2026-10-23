@@ -217,38 +217,73 @@ func TestUndeletableCodexTokenAtStartBlocksTheRun(t *testing.T) {
 	rs, ws, path, _, lock := codexRun(t)
 	rs.SetStatus("r1", StatusDone, "finished")
 	lock()
-	start := func() (*Runs, *Journal) {
-		j, err := OpenJournal(path)
-		if err != nil {
+	var open *Journal
+	t.Cleanup(func() {
+		if open != nil {
+			open.Close()
+		}
+	})
+	start := func() *Runs {
+		if open != nil {
+			open.Close()
+		}
+		var err error
+		if open, err = OpenJournal(path); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { j.Close() })
-		rs := NewRuns(ws, j, nil, nil, func() []string { return nil })
+		rs := NewRuns(ws, open, nil, nil, func() []string { return nil })
 		if err := rs.Migrate(); err != nil {
 			t.Fatal(err)
 		}
-		return rs, j
+		return rs
 	}
-	rs2, _ := start()
+	rs2 := start()
 	got, _ := rs2.Get("r1")
 	if got.Status != StatusDone {
 		t.Fatalf("finished run is %q", got.Status)
 	}
-	rs3, _ := start()
+	if !strings.Contains(got.Progress, "Codex token could not be deleted") {
+		t.Fatalf("finished run has no note: %q", got.Progress)
+	}
+	before := fileSize(t, path)
+	rs3 := start()
 	if got, _ := rs3.Get("r1"); got.Status != StatusDone {
 		t.Fatalf("finished run is %q", got.Status)
 	}
+	if after := fileSize(t, path); after != before {
+		t.Fatalf("a restart wrote %d bytes to the journal", after-before)
+	}
 	// A run that was still going is blocked once, then left alone.
 	rs.SetStatus("r1", StatusIdle, "")
-	rs4, _ := start()
+	rs4 := start()
 	got, _ = rs4.Get("r1")
 	if got.Status != StatusBlocked || !strings.Contains(got.Reason, "Codex token could not be deleted") {
 		t.Fatalf("run is %q (%q)", got.Status, got.Reason)
 	}
-	before := fileSize(t, path)
+	before = fileSize(t, path)
 	start()
 	if after := fileSize(t, path); after != before {
 		t.Fatalf("a restart wrote %d bytes to the journal", after-before)
+	}
+}
+
+// A run blocked for another reason keeps it; the stuck token is a note.
+func TestUndeletableCodexTokenKeepsAnotherBlockReason(t *testing.T) {
+	rs, ws, path, _, lock := codexRun(t)
+	rs.SetStatus("r1", StatusBlocked, "waiting on a person")
+	lock()
+	j, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { j.Close() })
+	rs2 := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	if err := rs2.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := rs2.Get("r1")
+	if got.Status != StatusBlocked || got.Reason != "waiting on a person" || !strings.Contains(got.Progress, "Codex token could not be deleted") {
+		t.Fatalf("run is %q (%q), note %q", got.Status, got.Reason, got.Progress)
 	}
 }
 

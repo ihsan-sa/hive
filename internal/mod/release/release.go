@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,11 +33,16 @@ type Module struct {
 	locks   sync.Map // project -> *sync.Mutex held while a release is decided
 	// Busy reports work mid-merge, which an automatic update waits out.
 	Busy func() bool
+	// announced is the newest release a pinned Hive has said is out.
+	announced string
 }
 
 // Site serves the releases: GitHub over plain HTTPS, so updating needs no
 // login and follows the redirect from a renamed repo. Tests point it elsewhere.
 var Site = "https://github.com"
+
+// API serves each release's notes. Tests point it elsewhere.
+var API = "https://api.github.com"
 
 // executable is the binary an update replaces, through any hive-v0 link.
 var executable = setup.Executable
@@ -81,6 +87,38 @@ func download(repo, tag, name, dir string) error {
 	return err
 }
 
+// Notes are the release notes of each version after from up to to, newest
+// first, each with its page; when they can't be fetched, the releases page.
+func Notes(repo, from, to string) string {
+	var rels []struct {
+		Tag  string `json:"tag_name"`
+		Body string
+		URL  string `json:"html_url"`
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Get(API + "/repos/" + repo + "/releases?per_page=100")
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			err = errors.New(resp.Status)
+		} else {
+			err = json.NewDecoder(resp.Body).Decode(&rels)
+		}
+	}
+	var b strings.Builder
+	for _, r := range rels {
+		if modules.Newer(from, r.Tag) && !modules.Newer(to, r.Tag) {
+			fmt.Fprintf(&b, "%s: %s\n%s\n\n", r.Tag, r.URL, strings.TrimSpace(r.Body))
+		}
+	}
+	if err != nil || b.Len() == 0 {
+		return NotesLink(repo)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// NotesLink points at the releases page.
+func NotesLink(repo string) string { return "What changed: " + Site + "/" + repo + "/releases" }
+
 // AssetName is the release asset for an OS and architecture.
 func AssetName(goos, goarch string) string {
 	n := "hive-" + goos + "-" + goarch
@@ -90,30 +128,29 @@ func AssetName(goos, goarch string) string {
 	return n
 }
 
-// Check returns the newest release tag if it is newer than this build.
-func (m *Module) Check() (string, bool, error) {
-	tag, err := latest(m.C.WS.LoadConfig().ReleaseRepo)
-	if err != nil {
-		return "", false, err
-	}
-	return tag, modules.Newer(core.Version, tag), nil
-}
-
-// Update installs the newest release over this binary. Live runs are separate
-// processes and the daemon reattaches to them after it restarts, so live work
-// carries across.
-func (m *Module) Update() (string, error) {
+// Update installs a release over this binary: tag, which pins the Hive there
+// and may be older, or with "" or "latest" the newest, which clears any pin.
+// Live runs are separate processes and the daemon reattaches to them after it
+// restarts, so live work carries across.
+func (m *Module) Update(tag string) (string, error) {
 	if !strings.HasPrefix(core.Version, "v") {
 		return "this is a source build (" + core.Version + "); it doesn't update itself", nil
 	}
-	tag, newer, err := m.Check()
-	if err != nil {
-		return "", err
-	}
-	if !newer {
-		return "already on " + core.Version, nil
-	}
 	cfg := m.C.WS.LoadConfig()
+	pin := tag != "" && tag != "latest"
+	if !pin {
+		var err error
+		if tag, err = latest(cfg.ReleaseRepo); err != nil {
+			return "", err
+		}
+	}
+	if !pin && !modules.Newer(core.Version, tag) || pin && tag == core.Version {
+		msg := "already on " + core.Version
+		if pin {
+			msg += ", pinned there"
+		}
+		return msg, m.pin(cfg, tag, pin)
+	}
 	tmp, err := os.MkdirTemp("", "hive-update-")
 	if err != nil {
 		return "", err
@@ -124,11 +161,16 @@ func (m *Module) Update() (string, error) {
 		names = append(names, AssetName("linux", "amd64")) // used inside WSL
 	}
 	if err := download(cfg.ReleaseRepo, tag, "checksums.txt", tmp); err != nil {
-		return "", err
+		return "", fmt.Errorf("no release %s in %s (%v)", tag, cfg.ReleaseRepo, err)
 	}
 	sums, err := readSums(filepath.Join(tmp, "checksums.txt"))
 	if err != nil {
 		return "", err
+	}
+	for _, name := range names {
+		if sums[name] == "" {
+			return "", fmt.Errorf("release %s has no %s; not installing", tag, name)
+		}
 	}
 	exe := executable()
 	dir := filepath.Dir(exe)
@@ -140,7 +182,7 @@ func (m *Module) Update() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if want := sums[name]; want == "" || want != got {
+		if sums[name] != got {
 			return "", fmt.Errorf("%s: checksum mismatch; not installing", name)
 		}
 		target := exe
@@ -151,22 +193,66 @@ func (m *Module) Update() (string, error) {
 			return "", err
 		}
 	}
-	m.C.J.MustAppend("hive.updated", map[string]string{"from": core.Version, "to": tag})
+	if err := m.pin(cfg, tag, pin); err != nil {
+		return "", err
+	}
+	notes := Notes(cfg.ReleaseRepo, core.Version, tag)
+	m.C.J.MustAppend("hive.updated", map[string]string{"from": core.Version, "to": tag, "notes": notes})
 	if m.Restart != nil {
 		go func() { time.Sleep(time.Second); m.Restart() }()
 	}
-	return "updated to " + tag, nil
+	msg := "updated to " + tag
+	if pin {
+		msg += ", pinned there with auto-update off: `" + core.Cmd + " update` goes back to the newest"
+	}
+	return msg + "\n\n" + notes, nil
 }
 
-// AutoUpdate is the scheduled job: update when allowed and nothing is mid-merge.
+// pin keeps the Hive on tag, or with on false follows the newest release.
+// Pinning turns auto_update off, because releases older than the pin itself
+// read only that and would update straight back to the newest; clearing the
+// pin turns it back on if it was on before.
+func (m *Module) pin(cfg core.Config, tag string, on bool) error {
+	switch {
+	case on && cfg.ReleasePin == "":
+		cfg.PinnedAuto, cfg.AutoUpdate = cfg.AutoUpdate, false
+	case !on && cfg.ReleasePin != "":
+		cfg.AutoUpdate = cfg.AutoUpdate || cfg.PinnedAuto
+		cfg.PinnedAuto = false
+	case !on || cfg.ReleasePin == tag:
+		return nil
+	}
+	if !on {
+		tag = ""
+	}
+	cfg.ReleasePin = tag
+	return m.C.WS.SaveConfig(cfg)
+}
+
+// AutoUpdate is the scheduled job: update when allowed and nothing is
+// mid-merge. A pinned Hive that was updating itself stays put and says once
+// when a newer release is out.
 func (m *Module) AutoUpdate() (string, error) {
-	if !m.C.WS.LoadConfig().AutoUpdate {
+	cfg := m.C.WS.LoadConfig()
+	if cfg.ReleasePin != "" && (cfg.AutoUpdate || cfg.PinnedAuto) {
+		tag, err := latest(cfg.ReleaseRepo)
+		if err != nil || !modules.Newer(cfg.ReleasePin, tag) {
+			return "pinned to " + cfg.ReleasePin, err
+		}
+		text := "pinned to " + cfg.ReleasePin + "; " + tag + " is out, and `" + core.Cmd + " update` installs it"
+		if m.announced != tag {
+			m.announced = tag
+			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "ref": "release:pin", "text": text})
+		}
+		return text, nil
+	}
+	if !cfg.AutoUpdate || cfg.ReleasePin != "" {
 		return "auto-update is off", nil
 	}
 	if m.Busy != nil && m.Busy() {
 		return "waiting: work is mid-merge", nil
 	}
-	return m.Update()
+	return m.Update("")
 }
 
 // Rename moves an install still called hive-v0 to hive, when this daemon

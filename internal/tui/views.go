@@ -343,6 +343,10 @@ func (m *model) viewDash() []string {
 			sel++
 		}
 	}
+	if m.st.Offline != "" {
+		lines = append([]string{stWarn.Render(strings.ToUpper(m.st.Offline[:1]) + m.st.Offline[1:] + "; the work picks up again on its own."), ""}, lines...)
+		sel += 2
+	}
 	if m.st.SandboxErr != "" {
 		lines = append([]string{stBad.Render("Agents can't start: " + core.Clip(m.st.SandboxErr, 200)), ""}, lines...)
 		sel += 2
@@ -672,6 +676,9 @@ func (m *model) settings() []setting {
 		{label: "WSL distro", value: c.WSLDistro, key: "wsl_distro"},
 		{label: "auto-update", value: auto, key: "auto_update"},
 		{label: "release repo", value: c.ReleaseRepo, key: "release_repo"},
+		{label: "release", value: pinText(c.ReleasePin), action: func() tea.Cmd {
+			return func() tea.Msg { return flashMsg("`" + core.Cmd + " update --release <tag>` installs and pins a release") }
+		}},
 	}
 	for _, name := range sortedKeys(c.Schedules) {
 		s = append(s, setting{label: "schedule " + name, value: c.Schedules[name], key: "schedule:" + name})
@@ -681,6 +688,13 @@ func (m *model) settings() []setting {
 		setting{label: "log in: GitHub", value: "runs the GitHub CLI's own login", action: func() tea.Cmd { return login("gh", "auth", "login") }},
 	)
 	return s
+}
+
+func pinText(pin string) string {
+	if pin == "" {
+		return "the newest"
+	}
+	return "pinned to " + pin + ", auto-update off (`" + core.Cmd + " update` goes back to the newest)"
 }
 
 func autonomyText(n int) string {
@@ -794,11 +808,12 @@ func (m *model) viewSettings() []string {
 	if m.editing {
 		lines = append(lines, "", m.input.View())
 	}
-	if m.st.ConfigErr != "" {
-		lines = append(lines, "", stBad.Render(clip("config.json: "+m.st.ConfigErr, m.w)))
-	}
 	lines = append(lines, "", stDim.Render(fmt.Sprintf("Hive %s · %s · settings in %s", m.st.Version, m.st.Workspace, ".hive/config.json")))
-	return window(lines, m.setSel, m.bodyHeight())
+	if m.st.ConfigErr == "" {
+		return window(lines, m.setSel, m.bodyHeight())
+	}
+	// pinned above the rows so a short window never scrolls it away
+	return append([]string{stBad.Render(clip("config.json: "+m.st.ConfigErr, m.w))}, window(lines, m.setSel, m.bodyHeight()-1)...)
 }
 
 func fmtNum(f float64) string { return strconv.FormatFloat(f, 'g', 6, 64) }

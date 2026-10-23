@@ -1,5 +1,4 @@
 {
   "test": "PY=$(command -v python || command -v python3); $PY -m unittest discover -s tests -q",
-  "score": {"command": "PY=$(command -v python || command -v python3); $PY score.py", "direction": "higher", "tolerance": 0},
-  "protected": ["score.py"]
+  "score": {"command": "PY=$(command -v python || command -v python3); $PY score.py", "direction": "higher", "tolerance": 0, "paths": ["score.py"]}
 }
