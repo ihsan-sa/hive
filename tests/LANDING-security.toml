@@ -1,0 +1,60 @@
+# Files where a mistake weakens the sandbox, leaks a credential or runs
+# something outside the sandbox. The lander merges a PR that touches one of
+# these only after a security read at the PR's head, and never takes the
+# light path for it. Paths are relative to the repo root; `*` stays inside
+# one path segment and `**` crosses segments. Every entry adds a read to each
+# PR that touches it, so keep the list narrow.
+paths = [
+  # This file and the script that decides what counts as green.
+  "tests/LANDING-security.toml",
+  "tests/green.sh",
+
+  # The sandbox boundary: bwrap, Seatbelt, WSL and egress filtering.
+  "internal/sandbox/**",
+
+  # Runs approved scripts in the daemon, outside the sandbox.
+  "internal/mod/risk/**",
+
+  # Decides which modules are installed and which projects may use them.
+  "internal/mod/modules/**",
+
+  # Runs a module's program as the person, outside the sandbox.
+  "internal/mod/runner/**",
+
+  # Mounts and covers for a run, effects applied outside the sandbox, the
+  # hard ceiling, login and token handling, and the workspace paths that
+  # define what is private.
+  "internal/core/runs.go",
+  "internal/core/effects.go",
+  "internal/core/ceiling.go",
+  "internal/core/tokens.go",
+  "internal/core/forge.go",
+  "internal/core/workspace.go",
+
+  # Which sandbox a run gets, which ops a run may call, and git and gh run
+  # on the host, outside the sandbox.
+  "internal/core/core.go",
+  "internal/core/ops.go",
+  "internal/core/git.go",
+
+  # First run and setup: login, autostart and uninstall.
+  "internal/setup/**",
+  "cmd/hive/firstrun.go",
+
+  # The daemon's bearer token and module scoping.
+  "internal/daemon/**",
+
+  # Which credentials reach an agent's turn.
+  "internal/harness/**",
+
+  # Self-update and install scripts.
+  "install/**",
+  "internal/mod/release/**",
+
+  # CI and release workflows run with repository secrets.
+  ".github/workflows/**",
+
+  # Which third-party code the binary is built from.
+  "go.mod",
+  "go.sum",
+]
