@@ -201,7 +201,8 @@ type ProjectStatus struct {
 }
 
 // Status summarizes the Hive for agent r, leaving out the projects it may
-// not reach (an isolated one, unless r is its own).
+// not reach (an isolated one unless r is its own, and every other when r's
+// is isolated: seeing only its own project is what isolation means).
 func (m *Module) Status(r core.Run) map[string]any {
 	var ps []ProjectStatus
 	for _, p := range m.C.Projects.List() {
@@ -227,7 +228,8 @@ func (m *Module) Status(r core.Run) map[string]any {
 	}
 	var waiting []string
 	for _, a := range m.C.Person.Open() {
-		if m.C.Runs.Walled(r, a.Project) != nil {
+		// A project-less ask (the spend notice) is the person's, and every run sees it.
+		if a.Project != "" && m.C.Runs.Walled(r, a.Project) != nil {
 			continue
 		}
 		waiting = append(waiting, a.Title)

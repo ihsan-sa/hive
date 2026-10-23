@@ -86,6 +86,7 @@ func TestIsolatedProjectRecordsMoveAndStayOutOfReach(t *testing.T) {
 	c.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
 	c.J.MustAppend("risk.saved", map[string]string{"id": "r1", "project": "secret"})
 	c.Person.Ask(core.Ask{Kind: "question", Title: "secret plan", Project: "secret"})
+	c.Person.Ask(core.Ask{Kind: "question", Title: "spend notice"})
 	c.Close()
 	os.MkdirAll(filepath.Join(ws.Hive(), "risk", "r1"), 0o755)
 	os.MkdirAll(ws.KB(), 0o755)
@@ -116,7 +117,7 @@ func TestIsolatedProjectRecordsMoveAndStayOutOfReach(t *testing.T) {
 		t.Errorf("status shows a normal run %s", b)
 	}
 	own, _ := ops.Call(core.Run{RunSpec: core.RunSpec{ID: "x", Project: "secret", Isolated: true}}, "status", nil)
-	if b, _ := json.Marshal(own); !strings.Contains(string(b), "secret plan") {
+	if b, _ := json.Marshal(own); !strings.Contains(string(b), "secret plan") || !strings.Contains(string(b), "spend notice") {
 		t.Errorf("status hides an isolated project from its own run: %s", b)
 	}
 	if _, err := ops.Call(sweep, "brief", json.RawMessage(`{"title":"t","done":"d","project":"secret"}`)); err == nil {
