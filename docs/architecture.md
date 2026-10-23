@@ -31,7 +31,7 @@ projects/<name>/             host clone (effects process only)
 projects/<name>/.checkouts/  agents' own checkouts (excluded from the clone)
 ```
 
-Run dir: `host/` (turn output, prompts, stop file; never mounted), `ro/` (system prompt, brief, inputs; mounted read-only at `/hive/run`), `box/` (mailbox + notes; rw at `/hive/box`), `home/` (rw `$HOME`).
+Run dir: `host/` (turn output, prompts, stop file; never mounted on its own), `ro/` (system prompt, brief, inputs; mounted read-only at `/hive/run`), `box/` (mailbox + notes; rw at `/hive/box`), `home/` (rw `$HOME`). Every run but an isolated project's also gets the whole `.hive` read-only at `/hive/state` (`$HIVE_STATE`), so agents read one another's runs, chats and records; `logins/` and `daemon.json` are covered there (empty tmpfs, `/dev/null`; a Seatbelt deny on macOS), and a turn's spec, which carries its token, is written to the temp dir, not beside its output.
 
 ## Data flow: one ask
 
@@ -40,10 +40,11 @@ Run dir: `host/` (turn output, prompts, stop file; never mounted), `ro/` (system
 3. work.Tick: issue (idempotent by body marker) → worker run `w-<task>` in a fresh checkout at main → worker `finish`.
 4. Effects.Extract: `git bundle` made **inside the sandbox**, fetched into the host clone with fsck, must descend from the recorded base → push `hive/<task>` → PR (idempotent by head branch).
 5. Effects.RunCheck: tests on the exact sha in a fresh clean clone, sandboxed; command read from **main's** `.hive/project.json`.
-6. Small (docs-only, ≤40 lines, no protected paths) → merge. Else reviewer run (read-only tools, JSON-schema verdict) bound to the sha.
-7. Fix verdict / red tests → same worker, same checkout, bounded rounds (default 3) → stop with PR open.
+6. Small (docs-only, ≤40 lines, no protected or high paths, not a self project) → merge. Else reviewer run (read-only tools, JSON-schema verdict) bound to the sha; a change to a `high` or `root` path in `.hive/project.json` needs a second land from a separate reviewer run on the same sha.
+7. Fix verdict / red tests → same worker, same checkout, bounded rounds (default 3) → stop with PR open. A host-made revert has no worker: its reviewer gets a revert brief, and findings stop it with the PR open.
 8. Merge: main moved → host merges main into the branch (host-made commit; verdict carries) → retest. `gh pr merge --squash --match-head-commit <sha>`.
 9. improve: measure merge sha (tests + score), compare with best kept; worse → revert task (host-made revert + lessons line) → PR → merge; original PR commented.
+10. release (self projects, one at a time per project): on a kept merge, list the merges after the one the last release was cut at, up to this one, with the reviewer runs that read each exact head; a merge a newer release already covers is refused with an alert; a head with no read or a change to a `root` path waits for the person's "release" (approval kind `release`, kept apart from a `merge` approval of the same sha), and a newer hold supersedes the older ask; dry run; release with that list in its notes.
 
 ## Modules that run a program
 
@@ -76,7 +77,7 @@ The program can be in any language. The daemon starts it from the module's folde
 - Agents hold no credentials. Sandbox gets `CLAUDE_CODE_OAUTH_TOKEN` = short-lived access token only, read fresh per turn.
 - Host git never runs in an agent's checkout (only in host clones and fresh gate clones; hooks disabled, fsck on fetch).
 - Only `hive/*` branches are pushed; main changes only by merge; `PushInitial` only into an empty repo with a host-made commit.
-- Merge requires: host-recorded passing test on that sha + (small | land verdict on that sha from a core-started read-only reviewer | host-made update of a reviewed sha | host-made revert/setup) + person approval if protected paths changed.
+- Merge requires: host-recorded passing test on that sha + (small | land verdict on that sha from a core-started read-only reviewer | host-made update of a reviewed sha | host-made revert/setup) + person approval if protected paths changed. For a self project or a high-class path the read must be on that exact sha (nothing carries), and a high class needs two land runs since the last fix.
 - Files the sandbox can write are read with `SafeRead` (no symlinks, same-file check); the host decides what to kill/clean from its own records.
 - Nothing an agent requests runs outside the sandbox, except a script a warden or tribunal approved, run by the risk module in the daemon as exactly that digest-pinned script; what is always the person's goes to the person (see [risk.md](risk.md)).
 - Every state change is a journal event; restart = replay + reconcile; issue/PR/run creation is idempotent.
@@ -91,7 +92,7 @@ Settings in `.hive/config.json`; none of them stops or parks work.
 
 ## Sandbox (Linux / WSL)
 
-Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, stop-file watcher, starts init with `CLONE_NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|NEWUTS` (uid 0 → person's uid). Init (pid 1): tmpfs root; binds `/usr /bin /lib* /etc /opt /var /srv` read-only (nosuid, nodev, locked flags kept); fresh `/proc`, `/tmp`, minimal `/dev`; run mounts; tools at `/hive/bin`; `pivot_root`; root remounted ro; `lo` up; forwarder 127.0.0.1:3128 → egress socket. Command runs in a nested user namespace (no caps). Not present: `/home`, `/mnt` (Windows drives), `/run` (sockets), WSL interop. Egress refuses loopback/private/link-local/CGNAT/ULA and dials the IP it vetted.
+Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, stop-file watcher, starts init with `CLONE_NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|NEWUTS` (uid 0 → person's uid). Init (pid 1): tmpfs root; binds `/usr /bin /lib* /etc /opt /var /srv` read-only (nosuid, nodev, locked flags kept); fresh `/proc`, `/tmp`, minimal `/dev`; run mounts; tools at `/hive/bin`; `pivot_root`; root remounted ro; `lo` up; forwarder 127.0.0.1:3128 → egress socket. Command runs in a nested user namespace (no caps). Not present: `/home`, `/mnt` (Windows drives), `/run` (sockets), WSL interop. Egress refuses loopback/private/link-local/CGNAT/ULA and dials the IP it vetted; with an `egress` list for the run's role it also refuses every host off the list and records each refusal in `turn-NNN.jsonl.egress` (macOS runs one proxy per command for the same).
 
 ## Gaps (v1)
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -161,6 +162,13 @@ type turnEnded struct {
 	Reason      string          `json:"reason,omitempty"`
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
 	Queue       []string        `json:"queue,omitempty"`
+}
+
+// egressRefused is the hosts a turn's egress proxy refused.
+type egressRefused struct {
+	ID    string   `json:"id"`
+	Turn  int      `json:"turn"`
+	Hosts []string `json:"hosts"`
 }
 
 type runNote struct {
@@ -502,6 +510,9 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 			case "init":
 				tl.SessionLive = true
 			case "result":
+				if tl.Result != nil && ev.Result != nil { // a second verdict in one turn: trust neither
+					ev.Result.Structured = nil
+				}
 				tl.Result = ev.Result
 			case "ratelimit":
 				tl.Limit = ev.RateLimit
@@ -518,6 +529,11 @@ func (rs *Runs) endTurn(r Run) {
 	tl := rs.ReadTurn(r, r.Turn)
 	if tl.Limit != nil {
 		rs.append("plan.usage", Plan{Harness: r.Harness, Limit: *tl.Limit, At: time.Now().UTC()})
+	}
+	if raw, err := os.ReadFile(rs.ws.TurnOut(r.ID, r.Turn) + ".egress"); err == nil && len(raw) > 0 {
+		hosts := strings.Fields(string(raw))
+		sort.Strings(hosts)
+		rs.append("run.egress_refused", egressRefused{ID: r.ID, Turn: r.Turn, Hosts: slices.Compact(hosts)})
 	}
 	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Result: tl.Result}
 	cur, _ := rs.Get(r.ID)
@@ -669,7 +685,16 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 		{Host: rs.ws.Modules(), Inside: "/hive/modules"},
 	}
 	if !r.Isolated {
-		mounts = append(mounts, sandbox.Mount{Host: rs.ws.Projects(), Inside: "/hive/projects"})
+		mounts = append(mounts, sandbox.Mount{Host: rs.ws.Projects(), Inside: "/hive/projects"},
+			sandbox.Mount{Host: rs.ws.Hive(), Inside: "/hive/state"})
+		// Every agent reads the whole Hive but what grants access: the daemon's
+		// API token and the login pool's stored logins.
+		logins := filepath.Join(rs.ws.Hive(), "logins")
+		os.MkdirAll(logins, 0o700) // a login added mid-turn lands under the cover
+		mounts = append(mounts, sandbox.Mount{Host: logins, Inside: "/hive/state/logins", Hide: true})
+		if _, err := os.Stat(rs.ws.DaemonFile()); err == nil {
+			mounts = append(mounts, sandbox.Mount{Host: rs.ws.DaemonFile(), Inside: "/hive/state/daemon.json", Hide: true})
+		}
 	}
 	if r.Isolated && sb.Isolated() {
 		// Only granted modules are visible: mount each over an empty modules dir,
@@ -698,7 +723,7 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 		"GIT_AUTHOR_NAME=Hive " + r.Role, "GIT_AUTHOR_EMAIL=hive@localhost", "GIT_COMMITTER_NAME=Hive " + r.Role, "GIT_COMMITTER_EMAIL=hive@localhost",
 	}
 	if !r.Isolated {
-		env = append(env, "HIVE_PROJECTS="+in(mounts[6]))
+		env = append(env, "HIVE_PROJECTS="+in(mounts[6]), "HIVE_STATE="+in(mounts[7]))
 	}
 	if sb.Isolated() {
 		env = append(sandbox.InsideEnv("/hive/home", true), env...)
@@ -719,10 +744,14 @@ func (rs *Runs) sandboxSpec(sb sandbox.Sandbox, h harness.Harness, r Run, turn i
 	if !sb.Isolated() && h.Program() == "hive" && len(tools) > 0 {
 		argv[0] = tools[0]
 	}
+	allow := rs.ws.LoadConfig().Egress.For(r.Role)
+	if len(allow) > 0 {
+		allow = append(append([]string{}, allow...), harness.APIHosts(h)...)
+	}
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
 		Stdin: promptFile, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
-		Network: true, UID: os.Getuid(), GID: os.Getgid(),
+		Network: true, Allow: allow, UID: os.Getuid(), GID: os.Getgid(),
 	}, nil
 }
 
