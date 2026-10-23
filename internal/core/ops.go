@@ -87,6 +87,9 @@ func (o *Ops) Call(r Run, name string, args json.RawMessage) (any, error) {
 	if len(op.Roles) > 0 && !contains(op.Roles, r.Role) {
 		return nil, fmt.Errorf("op %q is not granted to a %s", name, r.Role)
 	}
+	if r.OneTurn && name != "finish" && name != "progress" {
+		return nil, fmt.Errorf("op %q is not granted to an experiment: it may only report on its own copy", name)
+	}
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
@@ -194,7 +197,8 @@ func Bind(args json.RawMessage, v any) error {
 }
 
 // Spawner creates checkouts and system prompts for spawned agents; the work
-// module provides it.
+// module provides it. A spawner may start the run itself (a helper worker's
+// task names it only once it exists); the spawn op starts it otherwise.
 type Spawner func(parent Run, role, project, brief, model string) (RunSpec, error)
 
 // Router delivers a message to an address the core doesn't own (the person, a chat).
@@ -270,10 +274,12 @@ func (o *Ops) registerCore() {
 		if err != nil {
 			return nil, err
 		}
-		spec.Parent = r.ID
-		child, err := o.rs.Start(spec)
-		if err != nil {
-			return nil, err
+		child, started := o.rs.Get(spec.ID)
+		if !started {
+			spec.Parent = r.ID
+			if child, err = o.rs.Start(spec); err != nil {
+				return nil, err
+			}
 		}
 		o.rs.Wait(r.ID, "helper "+child.ID)
 		return map[string]string{"id": child.ID, "note": "started; its account will arrive as a message (end your turn to wait)"}, nil
@@ -290,6 +296,10 @@ func (o *Ops) registerCore() {
 // Deliver routes a message from r to an address.
 func (o *Ops) Deliver(from Run, to, text string) (any, error) {
 	if to == "parent" {
+		// Find("") matches any run, so a run with no parent must fail here.
+		if from.Parent == "" {
+			return nil, fmt.Errorf("%s has no parent to message", from.ID)
+		}
 		to = from.Parent
 	}
 	for _, route := range o.routers {

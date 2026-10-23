@@ -3,9 +3,12 @@ package daemon
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -53,5 +56,43 @@ func TestRestartRunsNewBinary(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("the restart ran %q, want the new binary with %q", got, want)
+	}
+}
+
+// An update from v0.1.2 runs under a systemd unit without KillMode=process,
+// which kills the restart child when the old daemon exits. The child hands
+// the restart to systemd instead, with the unit rewritten for the new binary.
+func TestRestartInOldUnitGoesThroughSystemd(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd is Linux's")
+	}
+	old := exec.Command("true")
+	old.Run() // a pid that has exited, standing in for the old daemon
+	dir, home, bin := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	unit := filepath.Join(home, ".config", "systemd", "user", "hive.service")
+	os.MkdirAll(filepath.Dir(unit), 0o755)
+	os.WriteFile(unit, []byte("[Service]\nExecStart=/old/hive-v0 daemon\nRestart=on-failure\n"), 0o644)
+	calls := filepath.Join(dir, "calls")
+	os.WriteFile(filepath.Join(bin, "systemctl"), []byte("#!/bin/sh\necho \"$*\" >> '"+calls+"'\n"), 0o755)
+	ws := core.Workspace{Root: filepath.Join(dir, "ws")}
+	os.MkdirAll(ws.Hive(), 0o755)
+	defer func(f func() (string, error), g func() bool) { executable, inHiveUnit = f, g }(executable, inHiveUnit)
+	executable = func() (string, error) { return filepath.Join(dir, "hive"), nil }
+	inHiveUnit = func() bool { return true }
+	t.Cleanup(func() { signal.Reset(syscall.SIGTERM) })
+	if err := Run(ws, old.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(unit)
+	if !strings.Contains(string(raw), "ExecStart="+filepath.Join(dir, "hive")+" daemon\nKillMode=process\n") {
+		t.Fatalf("unit not rewritten:\n%s", raw)
+	}
+	if got, _ := os.ReadFile(calls); !strings.Contains(string(got), "--user restart --no-block hive.service") {
+		t.Fatalf("systemd wasn't asked to restart; calls:\n%s", got)
+	}
+	if core.Exists(ws.DaemonFile()) {
+		t.Fatal("the child ran a daemon itself")
 	}
 }

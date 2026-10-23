@@ -11,6 +11,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 )
 
 // flakyForge fails the first `fail` closes, the way GitHub does on a 503, and
@@ -119,7 +120,7 @@ func TestCloseIssueGivesUp(t *testing.T) {
 	for i := 0; i < 20 && task.IssueOpen; i++ {
 		m.closeIssue(task, p)
 	}
-	if task.Stage != StageDone || task.IssueOpen || forge.fail != 92 || !logged(task, "gave up closing the issue: HTTP 503") {
+	if task.Stage != StageDone || task.IssueOpen || forge.fail != 92 || !logged(task, "gave up closing the issue, left open on the forge: HTTP 503") {
 		t.Fatalf("stage %q, issue open %v, attempts %d, log %v", task.Stage, task.IssueOpen, 100-forge.fail, task.Log)
 	}
 }
@@ -166,8 +167,39 @@ func helperRig(t *testing.T) (*Module, *flakyForge, core.Project) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &agents.Agents{C: c}
+	a := &agents.Agents{C: c, Mod: modules.New(ws, c.J)}
 	return New(c, a, chat.New(c, a)), forge, p
+}
+
+// A helper whose run fails to start leaves no task behind, so nothing points
+// at a run that doesn't exist and no second worker takes up its brief.
+func TestHelperFailedStartLeavesNoTask(t *testing.T) {
+	m, _, _ := helperRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.Harness = "no-such-harness"
+	m.C.WS.SaveConfig(cfg)
+	if _, err := m.Spawn(core.Run{RunSpec: core.RunSpec{ID: "parent", Role: "worker"}}, "worker", "p", "write the helper part", ""); err == nil {
+		t.Fatal("the spawn started on a harness that doesn't exist")
+	}
+	if tasks := m.List(nil); len(tasks) != 0 {
+		t.Fatalf("a failed start left tasks %+v", tasks)
+	}
+}
+
+// A helper on a project with nothing on main yet still gets a checkout, with
+// no task, since there is no main to open a pull request against.
+func TestHelperOnEmptyProject(t *testing.T) {
+	m, forge, _ := helperRig(t)
+	if _, err := forge.EnsureRepo("me/e", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.C.Projects.Add(core.Project{Name: "e", Repo: "me/e"}); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := m.Spawn(core.Run{RunSpec: core.RunSpec{ID: "parent", Role: "worker"}}, "worker", "e", "start the project", "")
+	if err != nil || spec.Task != "" || len(m.List(nil)) != 0 {
+		t.Fatalf("spec %+v, err %v, tasks %+v", spec, err, m.List(nil))
+	}
 }
 
 func mustGit(t *testing.T, dir string, args ...string) {
@@ -185,8 +217,8 @@ func TestHelperCommitsGetTheirOwnPR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.C.Runs.Start(spec); err != nil {
-		t.Fatal(err)
+	if r, ok := m.C.Runs.Get(spec.ID); !ok || r.Parent != "parent" {
+		t.Fatalf("the helper's run wasn't started: %+v", r)
 	}
 	task, ok := m.Get(spec.Task)
 	if !ok || task.Kind != "helper" || task.Worker != spec.ID || task.Stage != StageWorking || task.From != "parent" || task.Branch != "hive/"+task.ID {
@@ -215,5 +247,68 @@ func TestHelperNoCommitsIsDone(t *testing.T) {
 	m.noCommits(task, p, core.Run{RunSpec: core.RunSpec{ID: "w1"}, Result: "answered"})
 	if task.Stage != StageDone || task.IssueOpen || len(forge.closed) != 0 || !logged(task, "the helper made no commits") {
 		t.Fatalf("stage %q, issue open %v, closed %v, log %v", task.Stage, task.IssueOpen, forge.closed, task.Log)
+	}
+}
+
+// A revert the Hive made has no worker, so findings on it stop the task
+// cleanly instead of reopening a run that doesn't exist.
+func TestRevertFindingsStop(t *testing.T) {
+	m, _, _, p := noCommitRig(t, 0)
+	task := &Task{ID: "t2", Project: "p", Title: "Revert: x", Kind: "revert", Stage: StageReviewing}
+	if err := m.sendBack(task, p, "it reverts too much"); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageStopped || task.Round != 0 || !strings.Contains(task.Reason, "it reverts too much") {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+}
+
+// briefAt renders a brief for a project whose main holds config.
+func briefAt(t *testing.T, config string, task *Task) string {
+	m, p := rigAt(t, config)
+	return m.renderBrief(task, p, "HEAD")
+}
+
+// rigAt is a rig whose project's main holds config.
+func rigAt(t *testing.T, config string) (*Module, core.Project) {
+	m, _, _, p := noCommitRig(t, 0)
+	dir := m.C.WS.Project(p.Name)
+	os.MkdirAll(filepath.Join(dir, ".hive"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".hive/project.json"), []byte(config), 0o644)
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "seed"}} {
+		if out, err := core.Git(dir, args...); err != nil {
+			t.Fatal(out, err)
+		}
+	}
+	return m, p
+}
+
+// A scored project's worker gets the person's goal as written, with no bar an
+// agent set; the Hive's setup brief and an unscored brief keep their done.
+func TestScoredBriefCarriesTheGoal(t *testing.T) {
+	goal := "The kernel is slow. Make it faster."
+	task := func() *Task {
+		return &Task{ID: "t1", Project: "p", Title: goal, Done: "score above 3.139", Known: "the kernel is in k.c"}
+	}
+	b := briefAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`, task())
+	if !strings.Contains(b, "## The ask\n\n"+goal+"\n") || strings.Contains(b, "3.139") || !strings.Contains(b, "as far as you can take it") {
+		t.Fatalf("scored brief:\n%s", b)
+	}
+	setup := task()
+	setup.From = "hive"
+	if b := briefAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`, setup); !strings.Contains(b, "score above 3.139") {
+		t.Fatalf("the Hive's own setup brief lost its done line:\n%s", b)
+	}
+	b = briefAt(t, `{"test":"true"}`, task())
+	if !strings.Contains(b, "## What done looks like\n\nscore above 3.139\n") {
+		t.Fatalf("unscored brief:\n%s", b)
+	}
+	m, p := rigAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`)
+	if b := m.issueBody(task(), p); strings.Contains(b, "3.139") || !strings.Contains(b, "as far as you can take it") {
+		t.Fatalf("scored issue body:\n%s", b)
+	}
+	m, p = rigAt(t, `{"test":"true"}`)
+	if b := m.issueBody(task(), p); !strings.Contains(b, "score above 3.139") {
+		t.Fatalf("unscored issue body:\n%s", b)
 	}
 }
