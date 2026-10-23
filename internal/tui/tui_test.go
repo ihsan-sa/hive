@@ -299,13 +299,16 @@ func TestWheelScrollsDetail(t *testing.T) {
 	}
 }
 
-// A config.json the daemon couldn't read is named on the Settings page.
+// A config.json the daemon couldn't read is named on the Settings page, on a
+// screen too short to show every row, whichever row is selected.
 func TestSettingsShowsTheConfigLoadError(t *testing.T) {
 	m := testModel(100, 10)
 	m.section = secSettings
-	m.setSel = len(m.settings()) - 1
 	m.st.ConfigErr = "tribunal seat {\"model\": 5} isn't a model name"
-	if view := m.View(); !strings.Contains(view, "isn't a model name") {
-		t.Fatalf("no load error on Settings:\n%s", view)
+	for _, sel := range []int{0, len(m.settings()) - 1} {
+		m.setSel = sel
+		if view := m.View(); !strings.Contains(view, "isn't a model name") {
+			t.Fatalf("no load error on Settings with row %d selected:\n%s", sel, view)
+		}
 	}
 }
