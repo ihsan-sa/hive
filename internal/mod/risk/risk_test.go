@@ -28,6 +28,7 @@ func newRig(t *testing.T, autonomy int) *rig {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Harness, cfg.Autonomy, cfg.TribunalModels = "fake", autonomy, []core.TribunalSeat{{Model: "opus"}, {Model: "sonnet"}}
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0
 	ws.SaveConfig(cfg)
 	c, err := core.Open(ws, nil)
 	if err != nil {
@@ -441,7 +442,7 @@ func TestWardenAskingTheRequesterWaits(t *testing.T) {
 	out := g.c.WS.TurnOut(req.Warden, 1)
 	os.MkdirAll(filepath.Dir(out), 0o755)
 	os.WriteFile(out, []byte(`{"type":"result","subtype":"success","is_error":false,"result":"asked"}`+"\n"), 0o644)
-	g.c.Runs.Tick()
+	g.c.Runs.Tick(g.c.WS.LoadConfig())
 	if !eventually(func() bool {
 		w := g.run(req.Warden)
 		return w.Status == core.StatusIdle && strings.HasPrefix(w.Reason, "waiting")

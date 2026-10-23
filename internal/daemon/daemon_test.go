@@ -1,7 +1,10 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -94,5 +97,33 @@ func TestRestartInOldUnitGoesThroughSystemd(t *testing.T) {
 	}
 	if core.Exists(ws.DaemonFile()) {
 		t.Fatal("the child ran a daemon itself")
+	}
+}
+
+// GET /api/config says what config.json got wrong and still returns every
+// setting that read, the floor and egress list after a bad seat among them.
+func TestConfigAPIReportsALoadError(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(ws.ConfigPath(), []byte(`{"tribunal_models": [{"model": 5}], "floor": ["*.pem"], "egress": {"default": ["github.com"]}}`), 0o600)
+	s := &server{a: &app.App{C: &core.Core{WS: ws}}, info: api.DaemonInfo{Token: "t"}}
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req.Header.Set("Authorization", "Bearer t")
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+	var got struct {
+		core.Config
+		LoadError string `json:"load_error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("%d %s: %v", rec.Code, rec.Body, err)
+	}
+	if !strings.Contains(got.LoadError, `"model": 5`) {
+		t.Fatalf("load_error %q, want the bad seat named", got.LoadError)
+	}
+	if len(got.Floor) != 1 || got.Floor[0] != "*.pem" || len(got.Egress.Default) != 1 || got.Egress.Default[0] != "github.com" {
+		t.Fatalf("lost settings after the bad seat: floor %v, egress %v", got.Floor, got.Egress)
 	}
 }

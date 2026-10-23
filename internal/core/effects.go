@@ -418,7 +418,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, id string, mounts []sandbox.M
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, Network: network, UID: os.Getuid(), GID: os.Getgid()}
+		Stdout: logPath, Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), UID: os.Getuid(), GID: os.Getgid()}
 	code, err := sb.Run(spec, timeout)
 	raw, _ := os.ReadFile(logPath)
 	errRaw, _ := os.ReadFile(logPath + ".err")
