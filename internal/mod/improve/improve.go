@@ -58,6 +58,9 @@ type Module struct {
 	queue    chan work.Task
 	lastSeen int64 // journal seq at the last sweep start
 	retryAt  map[string]time.Time
+	spells   map[string]spell     // task id -> its current stage and since when
+	took     map[string][]float64 // task stage -> seconds its recent spells took
+	stalls   map[string]*Stall
 
 	stepbacks map[string]*StepBack
 	busy      map[string]bool
@@ -67,10 +70,12 @@ type Module struct {
 
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{},
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		m.applyStall(e)
 		switch e.Kind {
 		case "score.measured":
 			var ms Measurement
@@ -165,6 +170,7 @@ func (m *Module) measure(p core.Project, sha string) (bool, *float64, string) {
 // Tick measures the starting point of projects that have none yet. A red
 // start is measured again until there is a number.
 func (m *Module) Tick() {
+	m.Watch()
 	if _, err := m.C.Sandbox(); err != nil {
 		return
 	}
@@ -363,6 +369,20 @@ func (m *Module) Digest(since int64, only string) string {
 			continue
 		}
 		fmt.Fprintf(&b, "## Project %s (%s)\n\n", p.Name, p.Repo)
+		main, err := m.C.Effects.Sync(p)
+		if err != nil || main == "" {
+			main = p.Branch
+		}
+		goals := m.C.Effects.ReadFile(p, main, ".hive/goals.md")
+		if strings.TrimSpace(goals) == "" {
+			goals = p.Goals
+		}
+		fmt.Fprintf(&b, "Goals:\n%s\n\n", core.Clip(strings.TrimSpace(goals), 1500))
+		if sc := m.C.Effects.Config(p, main).Score; sc != nil {
+			fmt.Fprintf(&b, "Score: `%s`, %s is better.\n\n", sc.Command, sc.Direction)
+		} else {
+			b.WriteString("Score: none defined.\n\n")
+		}
 		ms := m.Scores(p.Name)
 		if len(ms) > 10 {
 			ms = ms[len(ms)-10:]
@@ -395,6 +415,13 @@ func (m *Module) Digest(since int64, only string) string {
 			break
 		}
 		fmt.Fprintf(&b, "- %s %s [%s] %s\n", r.Role, r.ID, r.Status, core.Clip(r.Reason, 300))
+	}
+	b.WriteString("\n## Stalls the watcher acted on (limit = max(stall_floor_seconds, 3 x p90 of the stage's recent durations))\n\n")
+	for i, s := range m.Stalls() {
+		if i >= 20 {
+			break
+		}
+		fmt.Fprintf(&b, "- %s %s in %s: limit %.0fs from %d samples; %s\n", s.At.Format("01-02 15:04"), s.What, s.Stage, s.Limit, s.Samples, s.Did)
 	}
 	b.WriteString("\n## Agents' notes\n\n")
 	for i, r := range m.C.Runs.List(func(r *core.Run) bool { return mine(r.Project) }) {

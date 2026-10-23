@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
@@ -39,6 +42,48 @@ type Message struct {
 	Name   string    `json:"name"`
 	Text   string    `json:"text"`
 	At     time.Time `json:"at"`
+}
+
+// File is an attachment the person pasted or dropped into a message.
+type File struct {
+	Name string `json:"name"`
+	Data []byte `json:"data"`
+}
+
+// Limit caps a posted message's body at mb megabytes (the chat_max_mb
+// setting), so the daemon never buffers an unbounded POST, and going over
+// says which setting raises it.
+func Limit(body io.ReadCloser, mb int) io.ReadCloser {
+	return limited{http.MaxBytesReader(nil, body, int64(mb)<<20), mb}
+}
+
+type limited struct {
+	io.ReadCloser
+	mb int
+}
+
+func (l limited) Read(p []byte) (int, error) {
+	n, err := l.ReadCloser.Read(p)
+	var over *http.MaxBytesError
+	if errors.As(err, &over) {
+		err = fmt.Errorf("the message is over the %d MB limit; chat_max_mb in .hive/config.json raises it", l.mb)
+	}
+	return n, err
+}
+
+// cleanName is the base name with control characters and brackets dropped,
+// so a file's name can't break the prompt's note or add text to it.
+func cleanName(n string) string {
+	n = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '[' || r == ']' {
+			return -1
+		}
+		return r
+	}, filepath.Base(n))
+	if n == "" || n == "." || n == "/" {
+		return "file"
+	}
+	return n
 }
 
 // Module holds chats.
@@ -143,11 +188,17 @@ func (m *Module) add(msg Message) Message {
 }
 
 // Post is the person, or the module from names, writing in a chat; it reaches
-// the chat's lead or agent.
-func (m *Module) Post(chatID, thread, from, text string) (Message, error) {
+// the chat's lead or agent. Files go into the run's own dir ($HIVE_RUN/attach),
+// and the prompt names their paths: the agent opens them with its own tools.
+func (m *Module) Post(chatID, thread, from, text string, files ...File) (Message, error) {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(files) == 0 {
 		return Message{}, fmt.Errorf("empty message")
+	}
+	shown := text
+	for i, f := range files {
+		files[i].Name = cleanName(f.Name)
+		shown += "\n📎 " + files[i].Name
 	}
 	m.mu.Lock()
 	ch := m.chats[chatID]
@@ -166,20 +217,48 @@ func (m *Module) Post(chatID, thread, from, text string) (Message, error) {
 	if from != "" {
 		who, name, said, speaker = from, from, "module "+from, "Module "+from
 	}
-	msg := m.add(Message{Chat: chatID, Thread: thread, From: who, Name: name, Text: text})
+	msg := m.add(Message{Chat: chatID, Thread: thread, From: who, Name: name, Text: strings.TrimSpace(shown)})
 	switch ch.Kind {
 	case "agent":
-		if err := m.C.Runs.Send(ch.Lead, "["+said+", in your chat] "+text); err != nil {
+		err := m.C.Runs.Takes(ch.Lead)
+		note := ""
+		if err == nil {
+			note, err = m.attach(ch.Lead, files)
+		}
+		if err == nil {
+			err = m.C.Runs.Send(ch.Lead, "["+said+", in your chat] "+text+note)
+		}
+		if err != nil {
 			return msg, err
 		}
 	default:
 		m.syncFor(ch)
 		prompt := fmt.Sprintf("[chat %s · thread %s · %s] %s: %s", chatID, msg.Thread, time.Now().Format("Mon 15:04"), speaker, text)
-		if err := m.deliverToLead(ch, prompt); err != nil {
+		if err := m.deliverToLead(ch, prompt, files...); err != nil {
 			return msg, err
 		}
 	}
 	return msg, nil
+}
+
+// attach writes files into a run's dir and returns the note naming them.
+func (m *Module) attach(run string, files []File) (string, error) {
+	if len(files) == 0 {
+		return "", nil
+	}
+	dir := filepath.Join(m.C.WS.RunRO(run), "attach")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	note := "\n[attached; the person's files, each at its path:"
+	for i, f := range files {
+		name := fmt.Sprintf("%s-%d-%s", core.NewID(), i, f.Name)
+		if err := os.WriteFile(filepath.Join(dir, name), f.Data, 0o644); err != nil {
+			return "", err
+		}
+		note += "\n" + m.C.Runs.RunPath(run) + "/attach/" + name
+	}
+	return note + "]", nil
 }
 
 // syncWait bounds the sync that runs before a person's post reaches its lead.
@@ -219,7 +298,8 @@ func (m *Module) syncFor(ch *Chat) {
 // current ($HIVE_PROJECTS). An isolated project's lead can't see that, so it
 // works in a checkout of its own, and before each message its run dir gets
 // main.bundle, the clone's tip, to fetch: host git never runs in its checkout.
-func (m *Module) deliverToLead(ch *Chat, text string) error {
+// Files go in the lead's run dir once its id is known.
+func (m *Module) deliverToLead(ch *Chat, text string, files ...File) error {
 	var p core.Project
 	if ch.Kind == "project" {
 		var ok bool
@@ -231,10 +311,19 @@ func (m *Module) deliverToLead(ch *Chat, text string) error {
 	if ch.Lead != "" {
 		if r, ok := m.C.Runs.Get(ch.Lead); ok && (!r.Terminal()) {
 			bundle(r.ID)
-			return m.C.Runs.Send(r.ID, text)
+			note, err := m.attach(r.ID, files)
+			if err != nil {
+				return err
+			}
+			return m.C.Runs.Send(r.ID, text+note)
 		}
 	}
 	id := "lead-" + strings.NewReplacer(":", "-").Replace(ch.ID) + "-" + core.NewID()[14:]
+	note, err := m.attach(id, files)
+	if err != nil {
+		return err
+	}
+	text += note
 	name, project := "lead", ""
 	dir := filepath.Join(m.C.WS.Hive(), "leads", "main")
 	if ch.Kind == "project" {
