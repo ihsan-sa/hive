@@ -111,7 +111,9 @@ func (m *Module) hiveRuns(project string, t time.Time) []core.Run {
 }
 
 // plateau counts the merges measured since the best kept score last moved
-// and since the last step-back.
+// whose task was filed after the last step-back began. A task filed before
+// it was already in flight and its runs were in that step-back's budget, so
+// its merge landing later is not a new plateau.
 func (m *Module) plateau(project string) int {
 	n, since := 0, m.lastStepBack(project)
 	var best *float64
@@ -121,7 +123,7 @@ func (m *Module) plateau(project string) int {
 		}
 		if best == nil || *x.Best != *best {
 			n = 0
-		} else if x.Task != "" && x.At.After(since) {
+		} else if t, ok := m.Work.Get(x.Task); ok && t.Created.After(since) {
 			n++
 		}
 		best = x.Best
@@ -370,7 +372,7 @@ func (m *Module) transcript(r core.Run, n int) string {
 // The setup and the transcripts were written after reading the project, so
 // they go only to the task's worker, as a file on the host. A fault on an
 // isolated project, or with no Hive source to file against, asks the person
-// instead.
+// instead, and that local ask shows the setup.
 func (m *Module) fileFault(s StepBack, p core.Project, exp core.Run, sc core.Score) string {
 	var ids []string
 	var shown []core.Run
@@ -410,7 +412,7 @@ The setup ran as %s; the Hive's latest runs on the project were %s.
 			}
 		}
 	}
-	return m.C.Person.Ask(core.Ask{Kind: "question", Ref: "stepback:" + s.ID, Project: p.Name, Title: title, Detail: report, Options: []string{"ok"}}).ID
+	return m.C.Person.Ask(core.Ask{Kind: "question", Ref: "stepback:" + s.ID, Project: p.Name, Title: title, Detail: report + "\nThe setup:\n\n" + string(set), Options: []string{"ok"}}).ID
 }
 
 // alert says how a project's step-back stands, as one alert that updates.
