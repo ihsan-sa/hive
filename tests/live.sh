@@ -9,10 +9,10 @@
 # stubbed on PATH so nothing is installed or enabled on the real account.
 # LIVE_CELLS picks cells (default: fake-bwrap fake-bare claude-bwrap claude-bare).
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.."  # from here on $0 may be wrong, so the re-run names tests/live.sh
 if [ -z "${HIVE_LIVE_SCOPED:-}" ]; then
 	exec systemd-run --user --scope --quiet -p TasksMax="${LIVE_TASKS:-4096}" -p RuntimeMaxSec="${LIVE_SECONDS:-14400}" \
-		env HIVE_LIVE_SCOPED=1 bash "$0" "$@"
+		env HIVE_LIVE_SCOPED=1 bash tests/live.sh "$@"
 fi
 
 # Go and its caches come from the real account before HOME moves.
