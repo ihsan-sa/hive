@@ -212,7 +212,11 @@ func TestUndeletableCodexTokenAtStartBlocksTheRun(t *testing.T) {
 	rs.SetStatus("r1", StatusDone, "finished")
 	lock()
 	var open *Journal
-	t.Cleanup(func() { open.Close() })
+	t.Cleanup(func() {
+		if open != nil {
+			open.Close()
+		}
+	})
 	start := func() *Runs {
 		if open != nil {
 			open.Close()

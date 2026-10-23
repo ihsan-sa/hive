@@ -185,7 +185,7 @@ func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), token
 		switch {
 		case r.Status == StatusBlocked && strings.HasPrefix(r.Reason, codexTokenStuck):
 			// already blocked for it; a restart adds nothing
-		case r.Terminal() || r.Status == StatusBlocked:
+		case r.Terminal(): // Terminal counts a blocked run too
 			// a finished or already blocked run keeps its status and reason,
 			// and gets the note once
 			if !strings.HasPrefix(r.Progress, codexTokenStuck) {
