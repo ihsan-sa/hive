@@ -86,3 +86,71 @@ func TestCodexTurnGetsOnlyTheAccessToken(t *testing.T) {
 		t.Fatal("a missing login gave no error")
 	}
 }
+
+// A folder the agent locked under its CODEX_HOME is opened and removed, so the
+// token goes with it; a link out of it is not followed.
+func TestDropCodexHomeOpensLockedFolders(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	rs := &Runs{ws: ws}
+	os.MkdirAll(ws.RunPrivate("r1"), 0o700)
+	dir, err := rs.freshCodexHome(Run{RunSpec: RunSpec{ID: "r1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "auth.json"), []byte("token"), 0o600)
+	outside := t.TempDir()
+	os.Chmod(outside, 0o500)
+	defer os.Chmod(outside, 0o700)
+	os.Symlink(outside, filepath.Join(dir, "out"))
+	os.MkdirAll(filepath.Join(dir, "locked", "deep"), 0o700)
+	os.Chmod(filepath.Join(dir, "locked", "deep"), 0)
+	os.Chmod(filepath.Join(dir, "locked"), 0)
+	if err := rs.dropCodexHome("r1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("CODEX_HOME outlived a locked folder: %v", err)
+	}
+	if fi, _ := os.Stat(outside); fi.Mode().Perm() != 0o500 {
+		t.Fatalf("a link out was followed: %v", fi.Mode())
+	}
+}
+
+// A token written for a turn that never started is gone once the daemon
+// starts again.
+func TestCodexTokenFromACrashIsCleanedAtStart(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	r, err := rs.Start(RunSpec{ID: "r1", Harness: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := rs.freshCodexHome(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "auth.json"), []byte("token"), 0o600)
+	NewRuns(ws, j, nil, nil, func() []string { return nil })
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("the token outlived a restart: %v", err)
+	}
+}
+
+// TOML forbids a raw DEL in a basic string, which JSON leaves raw.
+func TestCodexConfigEscapesDEL(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	rs := &Runs{ws: ws}
+	os.MkdirAll(ws.RunPrivate("r1"), 0o700)
+	dir, err := rs.freshCodexHome(Run{RunSpec: RunSpec{ID: "r1", System: "a\x7fb"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := os.ReadFile(filepath.Join(dir, "config.toml")); string(cfg) != "developer_instructions = \"a\\u007fb\"\n" {
+		t.Fatalf("config.toml: %q", cfg)
+	}
+}

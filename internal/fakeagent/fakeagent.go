@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:needpackage, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:needpackage, FAKE:goals, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -176,7 +176,7 @@ func leadAsk(ask string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return "Asked you to approve installing it.", nil
+		return "Asked for installing it.", nil
 	}
 	if strings.Contains(strings.ToLower(ask), "what's in the repo") {
 		return "The repo has " + strings.Join(repoFiles(), ", ") + ".", nil
@@ -256,6 +256,8 @@ func worker(all, prompt, system string) (string, error) {
 		os.WriteFile("score.txt", []byte("1\n"), 0o644)
 	case strings.Contains(all, "FAKE:raisescore"):
 		os.WriteFile("score.txt", []byte("9\n"), 0o644)
+	case strings.Contains(all, "FAKE:goals"):
+		appendFile(".hive/goals.md", "- a goal the worker wrote down\n")
 	case strings.Contains(all, "FAKE:docs"):
 		appendFile("NOTES.md", "- a small doc change\n")
 	case strings.Contains(prompt, "conflict"):

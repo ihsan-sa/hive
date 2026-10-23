@@ -193,9 +193,14 @@ var errNoCodex = errors.New("Codex is not logged in on this machine")
 
 // LoggedIn reports whether login l holds a credential the Hive can read.
 func LoggedIn(l Login) bool {
-	if l.Harness == "codex" {
-		_, err := os.Stat(filepath.Join(l.Dir, "auth.json"))
-		return err == nil
+	if l.Harness == "codex" { // an API-key login has no token to hand a turn
+		raw, err := os.ReadFile(filepath.Join(l.Dir, "auth.json"))
+		var a struct {
+			Tokens struct {
+				Access string `json:"access_token"`
+			} `json:"tokens"`
+		}
+		return err == nil && json.Unmarshal(raw, &a) == nil && a.Tokens.Access != ""
 	}
 	_, _, err := readClaudeAccess(l.Dir)
 	return err == nil

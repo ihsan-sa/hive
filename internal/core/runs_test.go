@@ -22,7 +22,7 @@ func TestNestedMountPointsExist(t *testing.T) {
 	c, _ := testHive(t)
 	r := Run{ID: "r1", Role: "lead", Harness: "fake", Isolated: true, Modules: []string{"agents", "kb"}}
 	h, _ := harness.Get("fake")
-	spec, err := c.Runs.sandboxSpec(isolatedSB{}, h, r, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
+	spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, r, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestRunsReadTheStateButNoSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec, err := c.Runs.sandboxSpec(isolatedSB{}, h, r, 1, false, filepath.Join(t.TempDir(), "p"), nil, codexHome)
+	spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, r, 1, false, filepath.Join(t.TempDir(), "p"), nil, codexHome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestRunsReadTheStateButNoSecret(t *testing.T) {
 	if !slices.Contains(spec.Env, "HIVE_STATE=/hive/state") {
 		t.Errorf("HIVE_STATE not set: %v", spec.Env)
 	}
-	spec, _ = c.Runs.sandboxSpec(isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "r2", Role: "worker", Harness: "fake", Isolated: true}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
+	spec, _ = c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, Run{RunSpec: RunSpec{ID: "r2", Role: "worker", Harness: "fake", Isolated: true}}, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
 	for _, m := range spec.Mounts {
 		if strings.HasPrefix(m.Inside, "/hive/state") {
 			t.Errorf("an isolated project sees the rest of the Hive: %+v", m)

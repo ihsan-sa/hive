@@ -11,13 +11,13 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
-// A role's list replaces the default, the harness's API host joins any list,
-// and no list leaves every public host open.
+// A role's list replaces the default, even an empty one, the harness's API
+// host joins any list, and no list leaves every public host open.
 func TestEgressListPerRole(t *testing.T) {
 	c, _ := testHive(t)
 	h, _ := harness.Get("claude")
 	allow := func(role string) []string {
-		spec, err := c.Runs.sandboxSpec(sandbox.Bare{}, h, Run{RunSpec: RunSpec{ID: "r-" + role, Role: role, Checkout: t.TempDir()}}, 1, false, "", nil, "")
+		spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), sandbox.Bare{}, h, Run{RunSpec: RunSpec{ID: "r-" + role, Role: role, Checkout: t.TempDir()}}, 1, false, "", nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -27,11 +27,12 @@ func TestEgressListPerRole(t *testing.T) {
 		t.Fatalf("no list set, yet the worker is held to %v", got)
 	}
 	cfg := c.WS.LoadConfig()
-	cfg.Egress = Egress{Default: []string{"github.com"}, Roles: map[string][]string{"warden": {"pypi.org"}}}
+	cfg.Egress = Egress{Default: []string{"github.com"}, Roles: map[string][]string{"warden": {"pypi.org"}, "lead": {}}}
 	c.WS.SaveConfig(cfg)
 	for role, want := range map[string][]string{
-		"worker": {"github.com", "api.anthropic.com"},
+		"worker": {"github.com", "api.anthropic.com"}, // no key: the default
 		"warden": {"pypi.org", "api.anthropic.com"},
+		"lead":   {"api.anthropic.com"}, // an empty list: the API host only
 	} {
 		if got := allow(role); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: allow %v, want %v", role, got, want)
