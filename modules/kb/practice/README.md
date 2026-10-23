@@ -1,6 +1,6 @@
 # How a Hive works
 
-Default knowledge every Hive starts with: how its agents look things up, decide, write, hand off and measure. When it starts, the Hive files each one that is missing into the knowledge base as `$HIVE_KB/practice/<name>.md`. It never overwrites a copy already there, so a changed doc here reaches a new Hive, or one whose copy was removed.
+Default knowledge every Hive starts with: how its agents look things up, decide, write, hand off and measure. When it starts, the Hive files each one into the knowledge base as `$HIVE_KB/practice/<name>.md`, and `practice/.filed.json` records the hash of what it filed. On an update it refreshes a copy that still matches that hash. A copy a person has edited, or one the ledger has no entry for (written by hand or by some other path), is left alone, and the Hive journals the list of such docs when it changes.
 
 - `looking-first.md`: look before you answer, and say what you didn't check.
 - `deciding.md`: decide and keep going; report findings after.

@@ -49,6 +49,8 @@ The model workers use, the lead's and the reviewer's are under **Settings** in t
 
 The Hive keeps running in the background and starts with the machine. Closing the control center never stops work.
 
+In a chat, drop a file or paste one's path to attach it, and ctrl+v attaches an image on the clipboard. One message, files and all, can be up to 300 MB; `chat_max_mb` in `.hive/config.json` changes that.
+
 ## What's safe and what isn't
 
 - Agents hold no logins; they get a short-lived token per turn.

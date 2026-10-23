@@ -119,7 +119,8 @@ type Module struct {
 	tasks map[string]*Task
 	busy  map[string]bool
 	// mainRed holds project@sha for every main commit whose red tests were
-	// already raised, so each is raised once whatever the tasks say now.
+	// already raised, so each is raised once whatever the tasks say now. It
+	// grows by one key per red main commit and isn't pruned; that's small.
 	mainRed map[string]bool
 }
 
@@ -129,7 +130,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	apply := func(e core.Event) {
 		if e.Kind == "alert.raised" {
 			var a struct{ Kind, Project, SHA string }
-			if e.Decode(&a) == nil && a.Kind == "main-red" {
+			if e.Decode(&a) == nil && a.Kind == "main-red" && a.SHA != "" {
 				m.mu.Lock()
 				m.mainRed[a.Project+"@"+a.SHA] = true
 				m.mu.Unlock()
@@ -681,6 +682,7 @@ func (m *Module) waitOnMain(t *Task, p core.Project, main string, mc core.Check)
 	}
 	m.mu.Lock()
 	raised := m.mainRed[p.Name+"@"+main]
+	m.mainRed[p.Name+"@"+main] = true
 	m.mu.Unlock()
 	if !raised {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": main,

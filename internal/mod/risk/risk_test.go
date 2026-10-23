@@ -576,6 +576,18 @@ func TestWeighDeclineAndCeiling(t *testing.T) {
 	}
 }
 
+// A merge that touches the floor goes to the person when it is filed, before
+// any warden sees it.
+func TestWeighFloorGoesToThePerson(t *testing.T) {
+	g := newRig(t, 3)
+	cfg := g.c.WS.LoadConfig()
+	cfg.Floor = []string{"/srv/app"}
+	g.c.WS.SaveConfig(cfg)
+	if who := g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@1", Title: "Merge? It changes the goals", Detail: "+- deploy to /srv/app nightly", Options: []string{"merge", "leave open"}}); who != "person" || len(g.m.List()) != 0 {
+		t.Fatalf("a floor change went to the %s with %d requests", who, len(g.m.List()))
+	}
+}
+
 // A step that touches the person's floor goes to them, as asked or as a
 // script a warden approved.
 func TestFloorRaisesToThePerson(t *testing.T) {
@@ -674,6 +686,9 @@ func TestPersonAnswersASettledAsk(t *testing.T) {
 				if a.Kind == "told" {
 					t.Fatalf("%s, %s: told the person about their own answer: %+v", route, answer, a)
 				}
+			}
+			if p := g.run(g.worker.ID).Pending; len(p) > 0 {
+				t.Fatalf("%s, %s: the finished worker was sent %q", route, answer, p)
 			}
 		}
 	}
