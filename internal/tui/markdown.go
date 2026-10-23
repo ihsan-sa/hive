@@ -68,12 +68,32 @@ func inline(s string) string {
 		case g[1] != "":
 			return stCode.Render(g[1])
 		case g[2] != "":
-			return stBold.Render(g[2])
+			return withCode(stBold, g[2])
 		case g[3] != "":
 			return stLink.Render(g[3]) + " (" + g[4] + ")"
 		}
-		return m[:len(m)-len(g[5])-2] + stEm.Render(g[5])
+		return m[:len(m)-len(g[5])-2] + withCode(stEm, g[5])
 	})
+}
+
+var reCode = regexp.MustCompile("`([^`]+)`")
+
+// withCode renders s in st, with any `code` inside it styled as code too, so
+// a bold or italic span that holds inline code shows no backticks.
+func withCode(st lipgloss.Style, s string) string {
+	var b strings.Builder
+	last := 0
+	for _, ix := range reCode.FindAllStringSubmatchIndex(s, -1) {
+		if ix[0] > last {
+			b.WriteString(st.Render(s[last:ix[0]]))
+		}
+		b.WriteString(stCode.Inherit(st).Render(s[ix[2]:ix[3]]))
+		last = ix[1]
+	}
+	if last < len(s) {
+		b.WriteString(st.Render(s[last:]))
+	}
+	return b.String()
 }
 
 // preview is a message on one plain line, Markdown markers gone, for a

@@ -120,6 +120,18 @@ func TestPreviewDropsMarkers(t *testing.T) {
 	}
 }
 
+func TestCodeInsideBoldOrItalic(t *testing.T) {
+	for src, want := range map[string]string{
+		"**run `hive update` now**": "run hive update now",
+		"see *the `kb` module*":     "see the kb module",
+		"**`x`**":                   "x",
+	} {
+		if got := ansi.Strip(inline(src)); got != want {
+			t.Errorf("inline(%q) = %q, want %q", src, got, want)
+		}
+	}
+}
+
 func TestMarkdown(t *testing.T) {
 	src := "Use **bold** and `code` and [hive](https://x.io).\n- one item\n- two\n```\nfunc main() {}\n```"
 	got := strings.Join(markdown(src, 60), "\n")
