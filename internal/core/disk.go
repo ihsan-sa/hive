@@ -117,11 +117,29 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 	if !sb.Isolated() || runtime.GOOS != "linux" {
 		return none
 	}
-	mod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
-	if err != nil {
+	// go.mod and go.sum are the commit's and the go command reads them here,
+	// outside the sandbox: each must be a plain file (a symlink could point it
+	// at a host file), and every replace pointing at a folder must stay in the
+	// checkout through no symlink.
+	if _, err := os.Lstat(filepath.Join(dir, "go.mod")); err != nil {
 		return none
 	}
-	sum, _ := os.ReadFile(filepath.Join(dir, "go.sum"))
+	mod, err := SafeRead(filepath.Join(dir, "go.mod"), 1<<20)
+	if err != nil {
+		none.note = "modules not prefetched: go.mod is not a plain file"
+		return none
+	}
+	var sum []byte
+	if _, err := os.Lstat(filepath.Join(dir, "go.sum")); err == nil {
+		if sum, err = SafeRead(filepath.Join(dir, "go.sum"), 16<<20); err != nil {
+			none.note = "modules not prefetched: go.sum is not a plain file"
+			return none
+		}
+	}
+	if why := localReplace(dir, string(mod)); why != "" {
+		none.note = "modules not prefetched: " + why
+		return none
+	}
 	h := sha256.Sum256(append(append(mod, 0), sum...))
 	key := hex.EncodeToString(h[:8])
 	marker := filepath.Join(e.ws.goSums(), key)
@@ -143,6 +161,57 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 	os.MkdirAll(e.ws.GoModCache(), 0o755) // a module with nothing to fetch still mounts it
 	return goMods{mounts: []sandbox.Mount{{Host: e.ws.GoModCache(), Inside: GoModInside}},
 		env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly", "GOPROXY=off"}, marker: marker, done: e.modMu.RUnlock}
+}
+
+// localReplace says why go.mod's replace directives would lead the go command
+// out of the checkout at dir, or "": a folder target must be relative, stay
+// inside dir and reach it through no symlink.
+func localReplace(dir, mod string) string {
+	block := false
+	for _, l := range strings.Split(mod, "\n") {
+		if i := strings.Index(l, "//"); i >= 0 {
+			l = l[:i]
+		}
+		f := strings.Fields(l)
+		switch {
+		case len(f) == 0:
+			continue
+		case block && f[0] == ")":
+			block = false
+			continue
+		case f[0] == "replace" && len(f) == 2 && f[1] == "(":
+			block = true
+			continue
+		case f[0] == "replace":
+			f = f[1:]
+		case !block:
+			continue
+		}
+		i := slices.Index(f, "=>")
+		if i < 0 || i+1 >= len(f) {
+			continue
+		}
+		target := strings.Trim(f[i+1], `"`+"`")
+		if !strings.HasPrefix(target, "./") && !strings.HasPrefix(target, "../") && !filepath.IsAbs(target) && target != "." && target != ".." && !strings.HasPrefix(target, "/") {
+			continue // a module path, fetched from the proxy
+		}
+		if filepath.IsAbs(target) || strings.HasPrefix(target, "/") {
+			return "a replace names a folder outside the checkout"
+		}
+		joined := filepath.Join(dir, target)
+		rel, err := filepath.Rel(dir, joined)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+			return "a replace names a folder outside the checkout"
+		}
+		realDir, _ := filepath.EvalSymlinks(dir)
+		if real, err := filepath.EvalSymlinks(joined); err == nil && real != filepath.Join(realDir, rel) {
+			return "a replace reaches its folder through a symlink"
+		}
+		if fi, err := os.Lstat(filepath.Join(joined, "go.mod")); err == nil && !fi.Mode().IsRegular() {
+			return "a replace's go.mod is not a plain file"
+		}
+	}
+	return ""
 }
 
 // prefetch downloads what dir's go.mod and go.sum name into the shared cache.
@@ -179,8 +248,10 @@ func (e *Effects) prefetch(dir string) error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, goBin, "mod", "download")
 	cmd.Dir, cmd.Env = dir, env
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("go mod download: %v: %s", err, Clip(strings.TrimSpace(string(out)), 300))
+	// go's output stays here: it can quote the files it read, and none of it
+	// may reach a check's log, a PR or an alert.
+	if _, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("go mod download failed (%v)", err)
 	}
 	return nil
 }

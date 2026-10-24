@@ -183,3 +183,54 @@ func TestBytes(t *testing.T) {
 		t.Fatal("DiskFull")
 	}
 }
+
+// A commit can't steer the host's prefetch at a host file: a symlinked go.mod
+// or go.sum, or a replace leading out of the checkout, skips the shared cache,
+// and go's own output (which could quote what it read) never reaches the note.
+func TestPrefetchReadsOnlyTheCheckout(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the shared module cache is for Linux sandboxes")
+	}
+	c, _ := testHive(t)
+	secret := filepath.Join(t.TempDir(), "token")
+	os.WriteFile(secret, []byte("hive-secret-token-123\n"), 0o600)
+	cases := map[string]func(dir string){
+		"go.mod symlink": func(dir string) { os.Symlink(secret, filepath.Join(dir, "go.mod")) },
+		"go.sum symlink": func(dir string) {
+			os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n"), 0o644)
+			os.Symlink(secret, filepath.Join(dir, "go.sum"))
+		},
+		"absolute replace": func(dir string) {
+			os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\nrequire example.com/x v1.0.0\nreplace example.com/x => "+filepath.Dir(secret)+"\n"), 0o644)
+		},
+		"replace out": func(dir string) {
+			os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\nreplace (\n\texample.com/x => ../../x // out\n)\n"), 0o644)
+		},
+		"replace through a symlink": func(dir string) {
+			os.Symlink(filepath.Dir(secret), filepath.Join(dir, "sub"))
+			os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\nreplace example.com/x v1.0.0 => ./sub\n"), 0o644)
+		},
+	}
+	for name, setup := range cases {
+		dir := t.TempDir()
+		setup(dir)
+		g := c.Effects.goModules(isolated{}, dir)
+		g.done()
+		if g.mounts != nil || !strings.Contains(g.note, "not prefetched") {
+			t.Errorf("%s: got the shared cache (%+v)", name, g)
+		}
+	}
+	if sums, _ := os.ReadDir(c.WS.goSums()); len(sums) != 0 {
+		t.Fatalf("a prefetch ran: %d markers", len(sums))
+	}
+	// A broken go.mod that go would quote: the note says it failed, never what go read.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("hive-secret-token-123\n"), 0o644)
+	if g := c.Effects.goModules(isolated{}, dir); strings.Contains(g.note, "secret") {
+		t.Fatalf("go's output reached the note: %q", g.note)
+	}
+	// A replace to a plain folder inside the checkout is fine.
+	if why := localReplace(dir, "module m\nreplace example.com/x => ./x\nreplace example.com/y => example.com/z v1.2.3\n"); why != "" {
+		t.Fatal(why)
+	}
+}
