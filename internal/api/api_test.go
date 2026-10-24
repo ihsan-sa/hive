@@ -103,3 +103,20 @@ func TestClientFailsFastWithoutRestart(t *testing.T) {
 		t.Fatalf("failing took %v", d)
 	}
 }
+
+// An update's new daemon reads the version of the one it replaces, which
+// before v0.1.4 wrote .hive/daemon.json: a v0.1.2 hive-v0 is renamed by it.
+func TestDialReadsADaemonFromBeforePrivate(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	os.MkdirAll(ws.Hive(), 0o755)
+	os.WriteFile(filepath.Join(ws.Hive(), "daemon.json"), []byte(`{"pid": 7, "version": "v0.1.2", "restarting": true}`), 0o600)
+	c, err := Dial(ws)
+	if err != nil || c.Info.Version != "v0.1.2" || !c.Info.Restarting {
+		t.Fatalf("Dial = %+v, %v", c, err)
+	}
+	os.MkdirAll(ws.Private(), 0o700)
+	os.WriteFile(ws.DaemonFile(), []byte(`{"pid": 8, "version": "v0.1.7"}`), 0o600)
+	if c, err := Dial(ws); err != nil || c.Info.Version != "v0.1.7" {
+		t.Fatalf("Dial preferred the old file: %+v, %v", c, err)
+	}
+}
