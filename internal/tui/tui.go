@@ -7,6 +7,7 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -730,7 +731,7 @@ type clipMsg struct {
 func readClipboard(text bool, compose int) tea.Cmd {
 	return func() tea.Msg {
 		f, err := clipboardImage()
-		if text && (err == errNoImage || err == errNoTool) {
+		if text && (err == errNoImage || errors.Is(err, errNoTool)) {
 			return clipMsg{text: textarea.Paste(), compose: compose}
 		}
 		return clipMsg{f: f, err: err, compose: compose}
