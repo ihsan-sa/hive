@@ -241,3 +241,27 @@ func TestRelayConnect(t *testing.T) {
 	}
 	in.Close()
 }
+
+// A granted address the sandbox can't bind (::1 with IPv6 off, or one in
+// use) is skipped with a warning; the others are still forwarded.
+func TestForwardLocalSkipsWhatItCantBind(t *testing.T) {
+	_, port := echo(t) // 127.0.0.1:port is taken, so binding it fails
+	free, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := free.Addr().String()
+	free.Close()
+	sock := filepath.Join(t.TempDir(), "egress.sock")
+	var warn bytes.Buffer
+	held := forwardLocal([]string{"127.0.0.1:" + port, ok}, sock, &warn)
+	for _, ln := range held {
+		defer ln.Close()
+	}
+	if len(held) != 1 || held[0].Addr().String() != ok {
+		t.Fatalf("held %v, want only %s", held, ok)
+	}
+	if !strings.Contains(warn.String(), "127.0.0.1:"+port+" not forwarded") {
+		t.Fatalf("warned %q", warn.String())
+	}
+}

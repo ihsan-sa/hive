@@ -275,12 +275,18 @@ func Public(ip net.IP) bool {
 // forwardLocal listens inside the sandbox on each granted local address and
 // relays it through the egress proxy, so a client that never proxies loopback
 // (Go's, for one) reaches the host's service at the address it already knows.
-func forwardLocal(local []string, sock string) error {
+// An address it can't bind (::1 where loopback has no IPv6) is skipped with a
+// line to warn, never fatal: the run still starts, and the proxy still serves
+// the grant. It returns the listeners it holds.
+func forwardLocal(local []string, sock string, warn io.Writer) []net.Listener {
+	var held []net.Listener
 	for _, a := range local {
 		ln, err := net.Listen("tcp", a)
 		if err != nil {
-			return err
+			fmt.Fprintf(warn, "sandbox: granted local %s not forwarded inside (reach it through the proxy): %v\n", a, err)
+			continue
 		}
+		held = append(held, ln)
 		go func() {
 			for {
 				c, err := ln.Accept()
@@ -291,7 +297,7 @@ func forwardLocal(local []string, sock string) error {
 			}
 		}()
 	}
-	return nil
+	return held
 }
 
 // relayConnect opens a CONNECT to dest through the proxy at sock and pipes c over it.

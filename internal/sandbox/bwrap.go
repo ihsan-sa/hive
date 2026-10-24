@@ -99,9 +99,7 @@ func Inner(args []string) int {
 		for len(args) > 1 && args[0] == "--local" {
 			local, args = append(local, args[1]), args[2:]
 		}
-		if err := forwardLocal(local, "/hive/egress.sock"); err != nil {
-			return fail("granted local port", err)
-		}
+		forwardLocal(local, "/hive/egress.sock", os.Stderr)
 	}
 	if len(args) < 2 || args[0] != "--" {
 		return 2

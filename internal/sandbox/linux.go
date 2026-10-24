@@ -382,9 +382,7 @@ func Init(argPath string) int {
 			return fail("forwarder", err)
 		}
 		go forward(ln, "/hive/egress.sock")
-		if err := forwardLocal(s.Local, "/hive/egress.sock"); err != nil {
-			return fail("granted local port", err)
-		}
+		forwardLocal(s.Local, "/hive/egress.sock", os.Stderr)
 	}
 
 	// Resolve against the sandbox's PATH: exec.Command would look the name up
