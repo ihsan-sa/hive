@@ -68,6 +68,12 @@ type Effects struct {
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
+	homes     map[string]bool         // running checks' homes (disk.go)
+	disk      DiskUse                 // the last measurement of the Hive's disk use
+	diskFull  bool                    // a check couldn't run for room, and the alert is out
+
+	// OnDiskFull runs once when checks first can't run for room (the clean job).
+	OnDiskFull func()
 }
 
 // Check is a host-run test or score on one commit.
@@ -371,7 +377,7 @@ func (e *Effects) Snapshot(p Project, r Run, base string) (string, error) {
 	work := sandbox.Mount{Host: r.Checkout, Inside: "/work", RW: true}
 	git := "git -c safe.directory='*' -c core.hooksPath=/dev/null -c user.name=Hive -c user.email=hive@localhost -C " + shq(sandbox.InsidePath(sb, work))
 	script := git + " add -A && { " + git + " diff --cached --quiet || " + git + " commit -q --no-verify -m 'what the run left'; }"
-	if code, out, err := e.runSandboxed(sb, r.Project, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute); err != nil || code != 0 {
+	if code, out, err := e.runSandboxed(sb, r.Project, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute, nil, 0); err != nil || code != 0 {
 		return "", fmt.Errorf("could not commit what the run left: %v %s", err, Clip(out, 300))
 	}
 	return e.Extract(p, r, base)
@@ -396,7 +402,7 @@ func (e *Effects) ExtractInto(dir, lockKey string, r Run, base string) (string, 
 		rangeSpec = base + "..HEAD"
 	}
 	script := fmt.Sprintf("git -c safe.directory='*' -C %s bundle create %s %s", shq(sandbox.InsidePath(sb, work)), shq(bundle), rangeSpec)
-	code, logText, err := e.runSandboxed(sb, r.Project, r.ID+"-extract", []sandbox.Mount{work, outM}, script, false, 5*time.Minute)
+	code, logText, err := e.runSandboxed(sb, r.Project, r.ID+"-extract", []sandbox.Mount{work, outM}, script, false, 5*time.Minute, nil, 0)
 	if err != nil {
 		return "", err
 	}
@@ -477,10 +483,23 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	defer os.RemoveAll(dir)
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
-	code, out, err := e.runSandboxed(sb, p.Name, id, []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}, guardProgram(command), true, 30*time.Minute)
+	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
+	mods, env, note := e.goModules(sb, dir)
+	code, out, err := e.runSandboxed(sb, p.Name, id, append(mounts, mods...), guardProgram(command), true, 30*time.Minute, env, e.checkCacheCap())
+	if note != "" {
+		out = "hive: " + note + "\n" + out
+	}
 	c.Output = out
+	if errors.Is(err, ErrHomeFull) {
+		c.CantRun = fmt.Sprintf("can't run: %v (%s)", err, Bytes(e.checkCacheCap()))
+		return record()
+	}
 	if err != nil {
 		c.Output = err.Error() + "\n" + out
+		if line := DiskFull(c.Output); line != "" {
+			c.CantRun = "can't run: the disk or a quota is full where checks run"
+			e.diskAlert(line)
+		}
 		return record()
 	}
 	c.OK = code == 0
@@ -488,6 +507,14 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.CantRun = "can't run: " + tool + " is not installed where checks run"
 		return record()
 	}
+	if line := DiskFull(out); !c.OK && line != "" {
+		c.OK, c.CantRun = false, "can't run: the disk or a quota is full where checks run"
+		e.diskAlert(line)
+		return record()
+	}
+	e.mu.Lock()
+	e.diskFull = false
+	e.mu.Unlock()
 	if (kind == "test" || kind == "retest") && !c.OK {
 		c.Failed = FailedTests(out)
 	}
@@ -613,24 +640,31 @@ func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
 // runSandboxed runs a shell command in the sandbox and returns its exit code
 // and output. Its log goes in the project's own folder, which other runs
 // can't see when the project is isolated.
-func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []sandbox.Mount, script string, network bool, timeout time.Duration) (int, string, error) {
+// The command gets its own home under the cache folder, removed after; extra
+// is more environment where the sandbox has its own, and a capB over 0 ends
+// the command with ErrHomeFull once its home passes that many bytes.
+func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []sandbox.Mount, script string, network bool, timeout time.Duration, extra []string, capB int64) (int, string, error) {
 	logDir := filepath.Join(e.ws.Hive(), "checks", project)
 	os.MkdirAll(logDir, 0o755)
 	logPath := filepath.Join(logDir, id+".log")
 	os.Remove(logPath)
-	home, _ := os.MkdirTemp("", "hive-check-home-")
-	defer os.RemoveAll(home)
+	home, done := e.newHome()
+	defer done()
 	homeM := sandbox.Mount{Host: home, Inside: "/hive/home", RW: true}
 	mounts = append(mounts, homeM, sandbox.Mount{Host: e.ws.Tools(), Inside: sandbox.ToolsInside})
 	argv := []string{"/bin/sh", "-c", script}
-	env := sandbox.InsideEnv("/hive/home", network)
+	env := append(sandbox.InsideEnv("/hive/home", network), extra...)
 	if !sb.Isolated() {
 		env = nil
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), UID: os.Getuid(), GID: os.Getgid()}
+		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), UID: os.Getuid(), GID: os.Getgid()}
+	over := watchHome(home, capB)
 	code, err := sb.Run(spec, timeout)
+	if over() && err == nil {
+		err = ErrHomeFull
+	}
 	raw, _ := os.ReadFile(logPath)
 	errRaw, _ := os.ReadFile(logPath + ".err")
 	out := string(raw)

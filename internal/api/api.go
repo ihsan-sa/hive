@@ -61,6 +61,7 @@ type State struct {
 	Jobs       []system.JobState  `json:"jobs"`
 	Wakeups    []system.Wakeup    `json:"wakeups"`
 	Checks     Checks             `json:"checks"`
+	Disk       core.DiskUse       `json:"disk"` // the Hive's disk use and the room left, as the hive.clean job last measured
 	Modules    []ModuleView       `json:"modules"`
 	Chats      []ChatView         `json:"chats"`
 	Requests   []risk.Request     `json:"requests"`

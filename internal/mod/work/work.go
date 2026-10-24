@@ -272,6 +272,10 @@ func (m *Module) save(t *Task, note string) {
 	if !t.Updated.After(m.online) {
 		t.Updated = m.online.Add(time.Nanosecond)
 	}
+	var was string
+	if prev := m.tasks[t.ID]; prev != nil {
+		was = prev.Stage
+	}
 	m.mu.Unlock()
 	if note != "" {
 		t.Log = append(t.Log, Entry{At: t.Updated, Text: note})
@@ -280,6 +284,9 @@ func (m *Module) save(t *Task, note string) {
 		}
 	}
 	m.C.J.MustAppend("task.saved", t)
+	if t.Stage != was && (t.Stage == StageMerged || t.Stage == StageDone) {
+		m.ended(*t)
+	}
 }
 
 // Get returns a task.
