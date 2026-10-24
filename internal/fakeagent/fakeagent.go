@@ -1,6 +1,6 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
-// (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
+// (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:reviewadvice, FAKE:crash,
 // FAKE:limit, FAKE:offline, FAKE:needpackage, FAKE:goals, FAKE:needpython, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
@@ -234,8 +234,14 @@ func leadAsk(ask, system string) (string, error) {
 		}
 		return "Asked for installing it.", nil
 	}
+	if m := replyWord.FindStringSubmatch(ask); m != nil {
+		return m[1], nil
+	}
+	if m := namedRepo.FindStringSubmatch(ask); m != nil {
+		return m[1] + " has " + strings.Join(repoFiles(m[1]), ", ") + ".", nil
+	}
 	if strings.Contains(strings.ToLower(ask), "what's in the repo") {
-		return "The repo has " + strings.Join(repoFiles(), ", ") + ".", nil
+		return "The repo has " + strings.Join(repoFiles(os.Getenv("HIVE_PROJECT")), ", ") + ".", nil
 	}
 	// The journal: "remember X" is written to it, "what did I ask you to
 	// remember" is answered from it, so a lead that replaced this one can too.
@@ -407,13 +413,17 @@ func projectNames() ([]string, error) {
 	return names, nil
 }
 
-// repoFiles lists what a lead sees of its project: its checkout, brought to
+// replyWord asks for one word back; namedRepo asks the workspace lead about one project.
+var replyWord = regexp.MustCompile(`(?i)reply with the word (\w+)`)
+var namedRepo = regexp.MustCompile(`(?i)what's in the ([\w-]+) repo`)
+
+// repoFiles lists what a lead sees of a project: its checkout, brought to
 // main from $HIVE_RUN/main.bundle, when it has one (an isolated project's
 // lead), otherwise the project's clone in $HIVE_PROJECTS.
-func repoFiles() []string {
+func repoFiles(project string) []string {
 	dir := "."
 	if _, err := os.Stat(".git"); err != nil {
-		dir = filepath.Join(os.Getenv("HIVE_PROJECTS"), os.Getenv("HIVE_PROJECT"))
+		dir = filepath.Join(os.Getenv("HIVE_PROJECTS"), project)
 	} else if _, err := run("git", "fetch", "-q", filepath.Join(os.Getenv("HIVE_RUN"), "main.bundle"), "main"); err == nil {
 		run("git", "checkout", "-q", "-f", "FETCH_HEAD")
 	}
@@ -671,6 +681,9 @@ func review(all string) map[string]any {
 	}
 	if strings.Contains(all, "FAKE:reviewfix") && strings.Contains(all, "Review round 1") {
 		return map[string]any{"verdict": "fix", "summary": "needs one more pass", "findings": []map[string]any{{"file": "work", "issue": "FAKE finding"}}, "token": tok}
+	}
+	if strings.Contains(all, "FAKE:reviewadvice") {
+		return map[string]any{"verdict": "land", "summary": "looks right", "advice": []string{"FAKE advice: name the helper for what it does"}, "token": tok}
 	}
 	return map[string]any{"verdict": "land", "summary": "looks right", "findings": []any{}, "token": tok}
 }
