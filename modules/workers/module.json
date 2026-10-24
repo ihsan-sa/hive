@@ -1,0 +1,6 @@
+{
+  "name": "workers",
+  "description": "Harnesses agents can run on besides the built-in Claude Code, Codex and open harness: Cursor's CLI agent and OpenCode. Each is a JSON spec (program, login, args per turn, env, API hosts, output parsing); a module of your own adds one the same way (docs/harnesses.md).",
+  "provides": {"harnesses": ["cursor.json", "opencode.json"]},
+  "projects": ["*"]
+}

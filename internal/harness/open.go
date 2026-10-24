@@ -16,6 +16,7 @@ type Open struct{}
 
 func (Open) Name() string           { return "open" }
 func (Open) CapsSpend()             {} // the models it runs are free, so a budget is never spent
+func (Open) ReadOnlyTools()         {}
 func (Open) Program() string        { return "hive" }
 func (Open) LoginCommand() []string { return nil }
 
@@ -64,6 +65,7 @@ type OpenClaude struct{}
 
 func (OpenClaude) Name() string           { return "open" }
 func (OpenClaude) CapsSpend()             {} // as Open: a vendor's prices aren't known here, so spend isn't counted
+func (OpenClaude) ReadOnlyTools()         {}
 func (OpenClaude) Program() string        { return "claude" }
 func (OpenClaude) LoginCommand() []string { return nil }
 

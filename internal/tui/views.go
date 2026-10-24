@@ -942,7 +942,7 @@ func (m *model) settings() []setting {
 			}
 		}},
 		{group: "General", label: "share failures", value: share + "  (scrubbed; `" + core.Cmd + " report` shows what was sent)", key: "share"},
-		{group: "Agents", label: "harness", value: c.Harness, key: "harness", choices: append(slices.Clone(harness.Names), custom)},
+		{group: "Agents", label: "harness", value: c.Harness, key: "harness", choices: append(harness.Names(), custom)},
 		{group: "Agents", label: "worker model", value: c.Model, key: "model", choices: models},
 		{group: "Agents", label: "lead model", value: c.LeadModel, key: "lead_model", choices: models},
 		{group: "Agents", label: "reviewer model", value: c.ReviewerModel, key: "reviewer_model", choices: models},
@@ -958,7 +958,7 @@ func (m *model) settings() []setting {
 		}
 		s = append(s, setting{group: "Agents", label: "model for " + p, value: v, key: "project:" + p, choices: append([]string{"default"}, models...)})
 		// The open harness runs a named model, which the model setting picks.
-		hs := slices.DeleteFunc(append([]string{"default"}, harness.Names...), func(h string) bool { return h == "open" })
+		hs := slices.DeleteFunc(append([]string{"default"}, harness.Names()...), func(h string) bool { return h == "open" })
 		s = append(s, setting{group: "Agents", label: "harness for " + p, value: cmp.Or(c.Projects[p].Harness, "default"), key: "project-harness:" + p, choices: hs})
 	}
 	s = append(s, setting{group: "Agents", label: "review rounds", value: strconv.Itoa(c.ReviewRounds), key: "review_rounds"})
@@ -1136,7 +1136,7 @@ func routeModels(c core.Config) []string {
 			add(routeEntry(c, m))
 		}
 	}
-	for _, h := range harness.Names {
+	for _, h := range harness.Names() {
 		if h == "open" || h == "fake" || h == core.HarnessName(c.Harness) {
 			continue
 		}

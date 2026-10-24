@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,6 +156,7 @@ func Run(c *api.Client, ws core.Workspace) error {
 		lipgloss.SetColorProfile(termenv.ANSI)
 		setHue(false)
 	}
+	harness.UseModules(ws.Modules()) // the pickers list the harnesses modules add
 	m := newModel(c, ws)
 	var ui struct{ Seq int64 }
 	if raw, err := os.ReadFile(m.uiPath()); err == nil {

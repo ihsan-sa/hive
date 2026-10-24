@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -38,6 +39,7 @@ func Open(ws Workspace, forge Forge) (*Core, error) {
 	if err := ws.Init(); err != nil {
 		return nil, err
 	}
+	harness.UseModules(ws.Modules())
 	j, err := OpenJournal(ws.Events())
 	if err != nil {
 		return nil, err
