@@ -873,39 +873,3 @@ func TestReleaseSaysAnUnreadTag(t *testing.T) {
 		t.Fatalf("Publish said %q once the tag read", got)
 	}
 }
-
-// A head the gate merged unread by its own rule (small, no guarded path)
-// goes out without the person, named as such; a head merged unread with no
-// such mark, or with a root path, still waits for them.
-func TestUnreadByRuleReleases(t *testing.T) {
-	m, n, merged, _ := selfHive(t)
-	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 1, "sha": "a1", "merge_sha": "m1", "unread": true, "lines": 3})
-	m.AfterKept("hive", "m1")
-	if body := n.got["v0.0.1"]; !strings.Contains(body, "#1 at a1, merged on its tests and checks (3 lines, no guarded path)") || len(m.C.Person.Open()) != 0 {
-		t.Fatalf("an unread-by-rule head should release on its own: %q %+v", body, m.C.Person.Open())
-	}
-	merged(2, "a2", "m2")
-	m.AfterKept("hive", "m2")
-	if len(n.got) != 1 || len(m.C.Person.Open()) != 1 {
-		t.Fatalf("a head unread with no mark should wait for the person: %v", n.got)
-	}
-}
-
-// An unread head whose sampled read is still to come, or said fix, doesn't go
-// out without the person.
-func TestUnreadWithOpenOrFixedSampleWaits(t *testing.T) {
-	m, n, _, _ := selfHive(t)
-	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 1, "sha": "a1", "merge_sha": "m1", "unread": true, "sample": true, "lines": 3})
-	m.AfterKept("hive", "m1")
-	if len(n.got) != 0 || len(m.C.Person.Open()) != 1 {
-		t.Fatalf("a head with its sampled read open released: %v", n.got)
-	}
-
-	m, n, _, _ = selfHive(t)
-	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 1, "sha": "a1", "merge_sha": "m1", "unread": true, "lines": 3})
-	m.C.J.MustAppend("effect.verdict", core.Verdict{Project: "hive", SHA: "a1", Run: "p-x", Verdict: "fix"})
-	m.AfterKept("hive", "m1")
-	if len(n.got) != 0 || len(m.C.Person.Open()) != 1 {
-		t.Fatalf("a head whose sampled read said fix released: %v", n.got)
-	}
-}

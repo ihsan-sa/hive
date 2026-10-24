@@ -81,8 +81,8 @@ type ProjectConfig struct {
 	// every change is read). SampleUnread is one in how many of those get one
 	// read after merge (default DefaultSampleUnread; negative: none).
 	// ReadTwoMax is the size line over which a read change gets a second,
-	// separate read (default DefaultReadTwoMax); a root path or a reader's
-	// unsure land asks for one at any size.
+	// separate read (default DefaultReadTwoMax); a high or root path or a
+	// reader's unsure land asks for one at any size.
 	UnreadMax    int    `json:"unread_max_lines,omitempty"`
 	SampleUnread int    `json:"sample_unread,omitempty"`
 	ReadTwoMax   int    `json:"second_read_lines,omitempty"`

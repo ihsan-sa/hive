@@ -123,16 +123,18 @@ func TestUnreadLineInConfig(t *testing.T) {
 	}
 }
 
-// A high (not root) change under the second-read line needs one read; an
-// unsure land asks for a second, separate one; one over the line needs two.
+// A high path needs two reads at any size, as the root-path guard says. An
+// ordinary read change under the second-read line needs one; an unsure land
+// asks for a second, separate one; one over the line needs two.
 func TestSecondReadOnlyWhenNeeded(t *testing.T) {
 	c, f := testHive(t)
-	seedRepo(t, f, "me/h2", map[string]string{".hive/project.json": `{"test": "true", "high": ["cred/"], "second_read_lines": 10}`})
+	seedRepo(t, f, "me/h2", map[string]string{".hive/project.json": `{"test": "true", "high": ["cred/"], "second_read_lines": 10, "unread_max_lines": -1}`})
 	p, _ := c.Projects.Add(Project{Name: "h2", Repo: "me/h2"})
 	main, _ := c.Effects.Sync(p)
-	try := func(id, body string, reads ...Verdict) error {
+	try := func(file, body string, reads ...Verdict) error {
 		t.Helper()
-		r, _ := commitInCheckout(t, c, p, "w"+id, main, "cred/"+id+".go", body) // a file each, so merges never conflict
+		id := strings.NewReplacer("/", "-", ".", "-").Replace(file)
+		r, _ := commitInCheckout(t, c, p, "w"+id, main, file, body) // a file each, so merges never conflict
 		sha, _ := c.Effects.Extract(p, r, main)
 		c.Effects.Push(p, "hive/"+id, sha)
 		pr, _ := f.CreatePR(p.Repo, "hive/"+id, "main", id, "body")
@@ -148,20 +150,26 @@ func TestSecondReadOnlyWhenNeeded(t *testing.T) {
 		_, err := c.Effects.Merge(MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main})
 		return err
 	}
-	if err := try("a", "package cred\n", Verdict{Verdict: "land"}); err != nil {
-		t.Fatalf("a small high change should merge on one read: %v", err)
+	if err := try("cred/a.go", "package cred\n", Verdict{Verdict: "land"}); err == nil || !strings.Contains(err.Error(), "no land verdict") {
+		t.Fatalf("a small high change merged on one read: %v", err)
 	}
-	if err := try("b", "package cred\n// b\n", Verdict{Verdict: "land", Unsure: true}); err == nil || !strings.Contains(err.Error(), "no land verdict") {
+	if err := try("cred/b.go", "package cred\n", Verdict{Verdict: "land"}, Verdict{Verdict: "land"}); err != nil {
+		t.Fatalf("a high change should merge on two reads: %v", err)
+	}
+	if err := try("app/a.go", "package app\n", Verdict{Verdict: "land"}); err != nil {
+		t.Fatalf("a small ordinary change should merge on one read: %v", err)
+	}
+	if err := try("app/b.go", "package app\n", Verdict{Verdict: "land", Unsure: true}); err == nil || !strings.Contains(err.Error(), "no land verdict") {
 		t.Fatalf("an unsure land should need a second read: %v", err)
 	}
-	if err := try("c", "package cred\n// c\n", Verdict{Verdict: "land", Unsure: true}, Verdict{Verdict: "land"}); err != nil {
+	if err := try("app/c.go", "package app\n", Verdict{Verdict: "land", Unsure: true}, Verdict{Verdict: "land"}); err != nil {
 		t.Fatalf("a second land after an unsure one should merge: %v", err)
 	}
-	big := "package cred\n" + strings.Repeat("// d\n", 10)
-	if err := try("d", big, Verdict{Verdict: "land"}); err == nil {
+	big := "package app\n" + strings.Repeat("// d\n", 10)
+	if err := try("app/d.go", big, Verdict{Verdict: "land"}); err == nil {
 		t.Fatal("a change over the second-read line merged on one read")
 	}
-	if err := try("e", big+"// e\n", Verdict{Verdict: "land"}, Verdict{Verdict: "land"}); err != nil {
+	if err := try("app/e.go", big, Verdict{Verdict: "land"}, Verdict{Verdict: "land"}); err != nil {
 		t.Fatalf("two reads should merge a big change: %v", err)
 	}
 }

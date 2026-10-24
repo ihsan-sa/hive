@@ -882,7 +882,8 @@ type Change struct {
 	// its tests and the forge's checks with no reviewer seat.
 	Unread bool `json:"unread,omitempty"`
 	// TwoReads says a read change needs a second, separate read: it is over
-	// the project's second-read line (ReadTwoMax) or touches a root path.
+	// the project's second-read line (ReadTwoMax) or touches a high or root
+	// path.
 	TwoReads  bool     `json:"two_reads,omitempty"`
 	Protected []string `json:"protected,omitempty"`
 	High      []string `json:"high,omitempty"` // files in a high or root class
@@ -967,7 +968,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	gate := p.Self && (!docsOnly || slices.ContainsFunc(c.Files, func(f string) bool { return !under(f, SelfUnread) || under(f, SelfSpec) }))
 	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Security) == 0 && !p.Self
 	c.Unread = len(c.Files) > 0 && !binary && !gate && c.Lines <= cfg.UnreadMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Root) == 0 && len(c.Security) == 0
-	c.TwoReads = len(c.Root) > 0 || c.Lines > cfg.ReadTwoMax
+	c.TwoReads = len(c.High) > 0 || len(c.Root) > 0 || c.Lines > cfg.ReadTwoMax
 	// Binary and full-index, so a binary file (or a script git takes for one,
 	// with a NUL byte in it) carries its content into the diff and DiffID, and
 	// two different blobs never read as the same change.
@@ -1139,7 +1140,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		ev["unread"] = true // merged on its tests and checks alone: small, or under the unread line
 		// Chosen here, in the same event, so a release that reads the merge
 		// at once already knows a read is still to come.
-		if unread && Sampled(m.Task, e.Config(p, m.Main).SampleUnread) {
+		if unread && !ch.Small && Sampled(m.Task, e.Config(p, m.Main).SampleUnread) {
 			ev["sample"] = true
 		}
 	}
@@ -1457,8 +1458,8 @@ func (e *Effects) readOK(p Project, ch Change, sha string) bool {
 	reads := e.Reads(project, sha, ch.DiffID)
 	need := e.ReadsNeeded(ch, reads)
 	if p.Self || len(ch.High) > 0 || need > 1 {
-		// A release names the read of each merged head; a big change, a root
-		// path or an unsure land needs a second, separate read.
+		// A release names the read of each merged head; a big change, a high
+		// or root path or an unsure land needs a second, separate read.
 		return len(reads) >= need
 	}
 	if v, ok := e.verdict(project, sha, ch.DiffID); ok {
@@ -1484,7 +1485,7 @@ func (e *Effects) TaskRead(project, task string) bool {
 }
 
 // ReadsNeeded is how many ordinary lands a read change needs, given the
-// lands it has: two when it is big or touches a root path (TwoReads) or a
+// lands it has: two when it is big or touches a high or root path (TwoReads) or a
 // reader was unsure, else one.
 func (e *Effects) ReadsNeeded(ch Change, reads []string) int {
 	if ch.TwoReads {

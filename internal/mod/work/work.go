@@ -1394,7 +1394,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 		}
 		intro := fmt.Sprintf("Review %s of task %s: %q.", round, t.ID, t.Label())
 		if len(reads) > 0 {
-			intro += " Another reader already said land on this change; you are the second, separate read it needs, because it is big, touches a root path or that reader was unsure. Read it on your own."
+			intro += " Another reader already said land on this change; you are the second, separate read it needs, because it is big, touches a high or root path, or that reader was unsure. Read it on your own."
 		}
 		if err := m.startRead(t, p, id, intro, len(reads) == 0); err != nil {
 			return err
