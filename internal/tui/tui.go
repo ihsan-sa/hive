@@ -891,7 +891,7 @@ func wrap(s string, w int) []string {
 			out = append(out, "")
 			continue
 		}
-		out = append(out, strings.Split(ansi.Wordwrap(para, w, " "), "\n")...)
+		out = append(out, strings.Split(ansi.Wrap(para, w, " "), "\n")...)
 	}
 	return out
 }
@@ -920,17 +920,19 @@ func ago(t time.Time) string {
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
-// window returns the slice of lines that keeps line sel visible in h rows.
-func window(lines []string, sel, h int) []string {
+// window returns the slice of lines that keeps line sel visible in h rows,
+// with two lines of what follows it.
+func window(lines []string, sel, h int) []string { return span(lines, sel, sel+2, h) }
+
+// span returns the slice of lines that keeps lines top to bot visible in h
+// rows, so what opens under a row (a pick-list, an ask's options) is never cut
+// at the bottom; when they can't all fit, top wins.
+func span(lines []string, top, bot, h int) []string {
 	if len(lines) <= h {
 		return lines
 	}
-	start := 0
-	if sel >= h-2 {
-		start = sel - h + 3
-	}
-	if start+h > len(lines) {
-		start = len(lines) - h
-	}
-	return lines[start : start+h]
+	h = max(h, 0)
+	start := max(0, bot-h+1)
+	start = min(start, top, len(lines)-h)
+	return lines[max(start, 0) : max(start, 0)+h]
 }
