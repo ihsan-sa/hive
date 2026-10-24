@@ -45,19 +45,88 @@ var AlwaysPerson = map[string]string{
 var alwaysPersonRe = map[string]*regexp.Regexp{
 	"money":      regexp.MustCompile(`(?i)\b(pay|payments?|purchases?|buy|spend|charges?|subscribe|subscriptions?|invoices?|billing|credit card|stripe|usd|eur|dollars?)\b|\$\s?\d+(\.\d\d|,\d{3})|\$\d{2,}`), // not $1: a shell's positional parameter
 	"credential": regexp.MustCompile(`(?i)\b(api[ -]?keys?|tokens?|secrets?|credentials?|passwords?|ssh[ -]?keys?|ssh-keygen|oauth|rotate|mint|private keys?|keychain|gh auth)\b|\.ssh/|\.netrc|\.git-credentials|\.config/gh\b|\.aws/|\.docker/config|\.kube/config|\.gnupg|\.npmrc|\.pypirc`),
-	"open":       regexp.MustCompile(`(?i)\b(open (a |the )?port|listen on|0\.0\.0\.0|expose|port[ -]?forward|firewall|ufw|iptables|nft|public url|tunnel|ngrok|cloudflared|inbound|egress grant|egress\.local)\b`),
+	"open":       regexp.MustCompile(`(?i)\b(open (a |the )?port|listen on|0\.0\.0\.0|expose|port[ -]?forward|firewall(d|-cmd)?|ufw|iptables|nft|public url|tunnel|ngrok|cloudflared|inbound|egress grant|egress\.local)\b`),
 	"outward":    regexp.MustCompile(`(?i)\b(send (an? )?(e-?mail|mail|message|sms|text|dm)|email to|sendmail|tweet|post (to|on|as)|publish (as|in my name)|on my behalf|in my name)\b`),
 }
 
 // CeilingHit names the AlwaysPerson category the texts fall in, or "".
 func CeilingHit(texts ...string) string {
+	k, _ := ceilingMatch(false, texts...)
+	return k
+}
+
+// CeilingMatch is CeilingHit with the words that matched, for telling the
+// person why a step is theirs.
+func CeilingMatch(texts ...string) (kind, phrase string) {
+	return ceilingMatch(false, texts...)
+}
+
+// AskCeilingMatch is CeilingMatch for what an agent asks in words: a mention
+// the ask itself rules out ("do not set OLLAMA_HOST=0.0.0.0", "no
+// credentials needed", "listen on 127.0.0.1 only") doesn't count, any other
+// does: a money mention, a negated protection ("no firewall") and a negated
+// cap ("don't expose more than one port") always count. It only
+// routes; the script that would run still meets CeilingGuard,
+// which counts every mention.
+func AskCeilingMatch(texts ...string) (kind, phrase string) {
+	return ceilingMatch(true, texts...)
+}
+
+func ceilingMatch(skipRuledOut bool, texts ...string) (string, string) {
 	t := strings.Join(texts, "\n")
 	for _, k := range []string{"money", "credential", "open", "outward"} {
-		if alwaysPersonRe[k].MatchString(t) {
-			return k
+		for _, m := range alwaysPersonRe[k].FindAllStringIndex(t, -1) {
+			if !skipRuledOut || !ruledOut(k, t[:m[0]], t[m[0]:m[1]], t[m[1]:]) {
+				return k, t[m[0]:m[1]]
+			}
 		}
 	}
-	return ""
+	return "", ""
+}
+
+var (
+	// clauseEnd ends the stretch a negation reaches back over.
+	clauseEnd = regexp.MustCompile(`(?i)[.;:!?,\n]|\b(and|or|but|then|so|also|plus|while|unless|except)\b`)
+	// negatedRe is a negation at most three words before a mention, with
+	// nothing between that turns it back ("don't forget to open a port").
+	negatedRe = regexp.MustCompile(`(?i)\b(not|no|never|don'?t|doesn'?t|won'?t|shouldn'?t|mustn'?t|needn'?t|without|nor|none)\b((\s+\S+){0,3})\s*$`)
+	// anyNegRe is any negation, for counting them in a clause.
+	anyNegRe  = regexp.MustCompile(`(?i)\b(not|no|never|nor|none|nothing|cannot|without|(do|does|did|wo|ca|is|are|was|were|should|must|need|would|could|have|has|ai)n'?t)\b`)
+	turnsBack = regexp.MustCompile(`(?i)\b(forget|fail|skip|neglect|omit|hesitate|stop|only|just|but|more|over|above|beyond|up|most|less|under|fewer|except)\b`)
+	// limitRe is a cap right after a mention: the negation limits the step
+	// rather than ruling it out.
+	limitRe = regexp.MustCompile(`(?i)^\W{0,3}(\S+\s+){0,2}(more than|over|above|beyond|up to|at most|less than|under|fewer than|except)\b`)
+	// protectionRe is an 'open' word never ruled out: a protection, which
+	// negated asks to open the machine, or a local egress grant, whose every
+	// ask is the person's.
+	protectionRe = regexp.MustCompile(`(?i)firewall|ufw|iptables|nft|inbound|egress`)
+	// loopbackRe is a listen address that stays on this machine.
+	loopbackRe = regexp.MustCompile(`(?i)^\s*(127\.\d+\.\d+\.\d+|localhost|loopback|::1|\[::1\])\b`)
+)
+
+// ruledOut says whether a mention is one the text excludes rather than asks
+// for. It errs towards the person: only a negation close before the mention
+// in its own clause, or listening on loopback, rules it out.
+func ruledOut(kind, before, match, after string) bool {
+	if kind == "open" && strings.EqualFold(match, "listen on") && loopbackRe.MatchString(after) {
+		return true
+	}
+	if kind == "money" {
+		return false // "don't spend more than $50" still spends
+	}
+	if limitRe.MatchString(after) {
+		return false // "don't expose more than one port" still exposes one
+	}
+	if protectionRe.MatchString(match) {
+		return false // "no firewall", "do not block inbound" open the machine
+	}
+	if ix := clauseEnd.FindAllStringIndex(before, -1); len(ix) > 0 {
+		before = before[ix[len(ix)-1][1]:]
+	}
+	m := negatedRe.FindStringSubmatch(before)
+	// A second negation turns the first back: "won't work without your API
+	// key" and "no reason not to expose it" ask for the thing.
+	return m != nil && !turnsBack.MatchString(m[2]) && len(anyNegRe.FindAllString(before, 2)) < 2
 }
 
 // FloorHit returns the first entry of the person's floor list the texts
@@ -90,8 +159,18 @@ func FloorHit(floor []string, texts ...string) string {
 // Ceiling says why the texts are always the person's: what an AlwaysPerson
 // step does, or the floor entry they touch. "" means neither.
 func Ceiling(floor []string, texts ...string) string {
-	if k := CeilingHit(texts...); k != "" {
-		return AlwaysPerson[k]
+	return ceiling(CeilingMatch, floor, texts...)
+}
+
+// AskCeiling is Ceiling for routing what an agent asks in words: a mention
+// the ask rules out doesn't count (AskCeilingMatch).
+func AskCeiling(floor []string, texts ...string) string {
+	return ceiling(AskCeilingMatch, floor, texts...)
+}
+
+func ceiling(match func(...string) (string, string), floor []string, texts ...string) string {
+	if k, p := match(texts...); k != "" {
+		return fmt.Sprintf("%s (%s: it says %q)", AlwaysPerson[k], k, p)
 	}
 	if f := FloorHit(floor, texts...); f != "" {
 		return fmt.Sprintf("touches %q, which your floor list names", f)

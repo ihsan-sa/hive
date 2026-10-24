@@ -699,6 +699,9 @@ func (rs *Runs) Reopen(id, text string) error {
 	if !ok {
 		return ErrNotFound
 	}
+	if r.Status == StatusStopped || r.StopAsked {
+		return fmt.Errorf("run %s was stopped on purpose (%s); it stays stopped", id, r.Reason)
+	}
 	if err := rs.tokenStuck(r); err != nil {
 		return err
 	}

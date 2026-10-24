@@ -48,6 +48,7 @@ type detail struct {
 	sel    int
 	text   string
 	state  string // a diff: "" fetching the whole, "whole", else why the fetch failed
+	total  int    // lines last drawn, for the header's "of n"
 }
 
 type model struct {
@@ -63,8 +64,9 @@ type model struct {
 	flash   string
 	flashAt time.Time
 
-	side  int // sidebar cursor
-	focus int // 0 sidebar, 1 main pane, 2 thread pane
+	side    int    // sidebar cursor
+	sideKey string // the row it's on, so rows coming and going above don't move it
+	focus   int    // 0 sidebar, 1 main pane, 2 thread pane
 
 	// chats
 	chat      string // open chat
@@ -72,6 +74,7 @@ type model struct {
 	threadSel int    // channel cursor; -1 = none
 	chScroll  int
 	thScroll  int
+	chFree    bool            // scrolled by hand, so the picked thread no longer pulls the channel back
 	open      map[string]bool // expanded threads and tree nodes
 	closed    map[string]bool // collapsed project groups
 	msgs      map[string][]chat.Message
@@ -94,6 +97,7 @@ type model struct {
 	stages   map[string]string // task stages seen, so the feed shows changes
 
 	dashSel   int
+	dashKey   string // the status row the cursor is on, as sideKey
 	waitSel   int
 	waitID    string // the selected ask; waitSel follows it as the list shifts
 	waitMoved bool   // the selected ask went and another slid under the cursor
@@ -414,23 +418,65 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		s := map[tea.MouseButton]string{tea.MouseButtonWheelUp: "wheelup", tea.MouseButtonWheelDown: "wheeldown"}[msg.Button]
-		switch {
-		case s == "" || msg.Action != tea.MouseActionPress || m.help || m.showSince || m.notice != nil:
-		case len(m.stack) > 0:
-			top := &m.stack[len(m.stack)-1]
-			if top.kind == "module" { // the list follows the selection
-				key := "up"
-				if s == "wheeldown" {
-					key = "down"
-				}
-				return m.keyDetailAction(top, key)
-			}
-			top.scroll = max(0, top.scroll+map[string]int{"wheelup": -3, "wheeldown": 3}[s])
-		case m.section != secChats:
-		case m.focus == 2:
-			m.thScroll = scroll(m.thScroll, s, m.h-4)
-		default:
-			m.chScroll = scroll(m.chScroll, s, m.h-4)
+		if s == "" || msg.Action != tea.MouseActionPress || m.help || m.showSince || m.notice != nil || m.editing {
+			return m, nil
+		}
+		return m.wheel(m.paneUnder(msg.X), s)
+	}
+	return m, nil
+}
+
+// paneUnder is the pane under column x (0 sidebar, 1 main, 2 thread), so the
+// wheel scrolls what the pointer is on, not what has the keys.
+func (m *model) paneUnder(x int) int {
+	if m.takeover() {
+		return 2
+	}
+	sw, mw, tw := m.layout()
+	switch {
+	case x < sw:
+		return 0
+	case x <= sw+mw || tw == 0:
+		return 1
+	}
+	return 2
+}
+
+// wheel scrolls a pane: text panes move their offset, lists move their
+// cursor (one row a notch), and the sidebar stays put, since moving its
+// cursor would change what the main pane shows.
+func (m *model) wheel(p int, s string) (tea.Model, tea.Cmd) {
+	key := tea.KeyMsg{Type: tea.KeyUp}
+	if s == "wheeldown" {
+		key = tea.KeyMsg{Type: tea.KeyDown}
+	}
+	switch {
+	case p == 0:
+	case p == 2:
+		m.thScroll = scroll(m.thScroll, s, m.h-4)
+	case len(m.stack) > 0:
+		top := &m.stack[len(m.stack)-1]
+		if top.kind == "module" { // the list follows the selection
+			return m.keyDetailAction(top, key.String())
+		}
+		top.scroll = max(0, top.scroll+map[string]int{"wheelup": -3, "wheeldown": 3}[s])
+	case m.section == secChats:
+		m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
+	default: // a list: the cursor shows only with the focus, so the pane takes it
+		if m.focus == 0 {
+			m.focus = 1
+		}
+		switch m.section {
+		case secDash:
+			return m.keyDash(key)
+		case secWaiting:
+			return m.keyWaiting(key)
+		case secKB:
+			return m.keyKB(key)
+		case secModules:
+			return m.keyModules(key)
+		case secSettings:
+			return m.keySettings(key)
 		}
 	}
 	return m, nil
@@ -583,6 +629,10 @@ func (m *model) keyDetail(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		d.scroll += m.bodyHeight() - 2
 	case "pgup":
 		d.scroll = max(0, d.scroll-m.bodyHeight()+2)
+	case "home", "g":
+		d.scroll = 0
+	case "end", "G":
+		d.scroll = 1 << 20 // drawing clamps it to the last page
 	default:
 		return m.keyDetailAction(d, k.String())
 	}
@@ -606,7 +656,7 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up":
 		if !m.editing && m.reply == "" && m.input.Value() == "" { // pick a thread
 			m.blurBox()
-			m.threadSel = len(threads(m.msgs[m.chat])) - 1
+			m.threadSel, m.chFree = len(threads(m.msgs[m.chat]))-1, false
 			return m, nil
 		}
 	case "pgup", "pgdown":
@@ -615,7 +665,7 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !m.editing { // the new-thread box scrolls the channel above it
-			m.chScroll = scroll(m.chScroll, s, m.h-4)
+			m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
 			return m, nil
 		}
 	case "enter":
@@ -773,6 +823,10 @@ func (m *model) viewMain(w int) pane {
 	}
 	note, right := "", ""
 	switch {
+	case len(m.stack) > 0 && !m.help && !m.showSince:
+		if d := m.stack[len(m.stack)-1]; d.kind != "module" && d.total > m.bodyHeight() {
+			right = fmt.Sprintf("%d–%d of %d", d.scroll+1, min(d.total, d.scroll+m.bodyHeight()), d.total)
+		}
 	case len(m.stack) > 0 || m.help || m.showSince:
 	case m.section == secWaiting && len(m.st.Asks) > 0:
 		note, right = fmt.Sprintf("%d need you", len(m.st.Asks)), "oldest first"
@@ -882,13 +936,15 @@ func helpLines() []string {
 		"enter             open; in a box, send",
 		"esc               leave a box, close a thread, one level up",
 		"space             expand or collapse",
+		"← →               in the sidebar and status, back up a level or go deeper",
 		"n                 new thread",
 		"a                 in a chat, answer what's waiting on you",
 		"d                 in Waiting, the whole diff of a change",
 		"p / x             in Feedback, pass it to the lead / set it aside",
 		"/                 in Knowledge, search the knowledge base",
 		"ctrl+j            new line in a box",
-		"pgup pgdn, wheel  scroll",
+		"pgup pgdn, wheel  scroll; the wheel scrolls the pane under it",
+		"home end          the top or the end",
 		"q                 quit the control center; the Hive keeps working",
 		"", stDim.Render("any key to close")}
 }

@@ -64,8 +64,26 @@ func (m *model) rows(all bool) []sideRow {
 		}
 		return out
 	}
+	known := map[string]bool{"": true}
 	for _, p := range m.st.Projects {
+		known[p.Name] = true
 		group("p:"+p.Name, p.Name, append([]sideRow{{key: "project:" + p.Name, label: "lead", chatID: "project:" + p.Name}}, agents(p.Name)...))
+	}
+	// Agents of a project the state no longer lists (removed, or not yet
+	// loaded) keep a group of their own rather than dropping out of sight.
+	others := map[string]bool{}
+	for p := range byProject {
+		others[p] = !known[p]
+	}
+	for _, c := range m.st.Chats {
+		if c.Kind == "agent" && !known[c.Project] {
+			others[c.Project] = true
+		}
+	}
+	for _, p := range sortedKeys(others) {
+		if others[p] {
+			group("p:"+p, p, agents(p))
+		}
 	}
 	var hive []sideRow
 	for _, c := range m.st.Chats {
@@ -95,7 +113,17 @@ func (m *model) viewSidebar(w int) pane {
 	for _, c := range m.st.Chats {
 		unread[c.ID] = c.Unread
 	}
+	news := map[string]int{} // a collapsed group carries its chats' mark
+	g := ""
+	for _, r := range m.rows(true) {
+		if r.group {
+			g = r.key
+		} else if r.chatID != "" {
+			news[g] += unread[r.chatID]
+		}
+	}
 	rows := m.sideRows()
+	m.sideAt(rows)
 	var body []string
 	for i, r := range rows {
 		mark, name, count := "  ", r.label, ""
@@ -116,6 +144,9 @@ func (m *model) viewSidebar(w int) pane {
 				mark = "▸ "
 			}
 			mark, name = stDim.Render(mark), stDim.Render(name)
+			if m.closed[r.key] && news[r.key] > 0 {
+				count = "●"
+			}
 		case r.chatID != "":
 			if unread[r.chatID] > 0 {
 				name, count = stTitle.Render(name), "●"
@@ -129,7 +160,11 @@ func (m *model) viewSidebar(w int) pane {
 			line = pad(clip(line, w-4), w-2-visibleWidth(count)) + count
 		}
 		if i == m.side && m.focus == 0 {
-			line = stSel.Render(fit(" "+ansi.Strip(mark)+r.label, w))
+			line = " " + ansi.Strip(mark) + r.label
+			if c := ansi.Strip(count); c != "" {
+				line = pad(clip(line, w-4), w-2-visibleWidth(c)) + c
+			}
+			line = stSel.Render(fit(line, w))
 		}
 		body = append(body, line)
 	}
@@ -140,31 +175,82 @@ func (m *model) viewSidebar(w int) pane {
 // it is what the main pane shows.
 func (m *model) keySidebar(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rows := m.sideRows()
-	m.side = min(m.side, len(rows)-1)
 	step := func(d int) tea.Cmd {
-		for i := m.side + d; i >= 0 && i < len(rows); i += d {
+		for i := m.sideAt(rows) + d; i >= 0 && i < len(rows); i += d {
 			if rows[i].key != "gap" {
-				m.side = i
+				m.side, m.sideKey = i, rows[i].key
 				return m.pick(rows[i])
 			}
 		}
 		return nil
 	}
-	r := rows[m.side]
+	r := rows[m.sideAt(rows)]
 	switch k.String() {
 	case "up", "k":
 		return m, step(-1)
 	case "down", "j":
 		return m, step(1)
-	case " ", "enter", "right", "l":
+	case " ", "enter":
 		if r.group {
 			m.closed[r.key] = !m.closed[r.key]
 			return m, nil
 		}
-		m.focus = 1
-		return m, m.markRead()
+	case "right", "l": // deeper: open a group, then into its first chat
+		if r.group && m.closed[r.key] {
+			m.closed[r.key] = false
+			return m, nil
+		}
+		if r.group {
+			return m, step(1)
+		}
+	case "left", "h": // back: close a group, or from a chat up to its group
+		if r.group && !m.closed[r.key] {
+			m.closed[r.key] = true
+			return m, nil
+		}
+		if g := m.groupOf(r.key); g != "" {
+			for i, x := range rows {
+				if x.key == g {
+					m.side, m.sideKey = i, g
+				}
+			}
+		}
+		return m, nil
+	default:
+		return m, nil
 	}
-	return m, nil
+	m.focus = 1
+	return m, m.markRead()
+}
+
+// sideAt finds the cursor's row by its key, since chats come and go above it
+// as agents start and end; a row hidden in a collapsed group puts it on the
+// group, and a row that's gone leaves it where it was.
+func (m *model) sideAt(rows []sideRow) int {
+	for _, key := range []string{m.sideKey, m.groupOf(m.sideKey)} {
+		for i, r := range rows {
+			if key != "" && r.key == key {
+				m.side = i
+				return i
+			}
+		}
+	}
+	m.side = max(0, min(m.side, len(rows)-1))
+	return m.side
+}
+
+// groupOf is the key of the group a chat row sits in, or "".
+func (m *model) groupOf(key string) string {
+	g := ""
+	for _, r := range m.rows(true) {
+		switch {
+		case r.group:
+			g = r.key
+		case r.key == key && r.sec < 0:
+			return g
+		}
+	}
+	return ""
 }
 
 func (m *model) pick(r sideRow) tea.Cmd {
@@ -175,7 +261,7 @@ func (m *model) pick(r sideRow) tea.Cmd {
 		m.section = r.sec
 	case r.chatID != "":
 		if m.chat != r.chatID {
-			m.chat, m.thread, m.threadSel, m.chScroll = r.chatID, "", -1, 0
+			m.chat, m.thread, m.threadSel, m.chScroll, m.chFree = r.chatID, "", -1, 0, false
 		}
 		m.section = secChats
 		cmd = m.fetchChat(r.chatID)
@@ -187,7 +273,7 @@ func (m *model) pick(r sideRow) tea.Cmd {
 func (m *model) openChat(id string) tea.Cmd {
 	for i, r := range m.sideRows() {
 		if r.chatID == id {
-			m.side = i
+			m.side, m.sideKey = i, r.key
 		}
 	}
 	m.focus = 1
@@ -264,6 +350,10 @@ func threads(msgs []chat.Message) []thread {
 
 func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	ts := threads(m.msgs[m.chat])
+	switch k.String() {
+	case "up", "down", "k", "j", "enter", "right": // moving or opening the pick brings it back into view
+		m.chFree = false
+	}
 	switch s := k.String(); s {
 	case "up", "k":
 		if m.threadSel < 0 {
@@ -292,7 +382,7 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "left", "h":
 		m.focus = 0
 	case "pgup", "pgdown", "home", "end":
-		m.chScroll = scroll(m.chScroll, s, m.h-4)
+		m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
 	case "n", "i":
 		return m, m.focusBox("")
 	case "a":
@@ -321,7 +411,7 @@ func (m *model) toWaiting() tea.Cmd {
 	}
 	for i, r := range m.sideRows() {
 		if r.sec == secWaiting {
-			m.side = i
+			m.side, m.sideKey = i, r.key
 		}
 	}
 	m.focus = 1
@@ -440,6 +530,9 @@ func (m *model) viewChannel(w int) pane {
 	if n := len(m.st.Asks); n > 0 && len(bx) < m.h-6 { // above the box, so it stays on screen
 		how := map[bool]string{true: "a to answer", false: "→ then a to answer"}[m.focus == 1 && !m.composing]
 		bx = append([]string{" " + stWarn.Render(clip(fmt.Sprintf("%d waiting on you · %s", n, how), w-6))}, bx...)
+	}
+	if m.chFree { // scrolled by hand: the offset rules, not the selection
+		selStart, selEnd = 0, 0
 	}
 	p.body = stack(append(lines, ""), bx, m.h-4, &m.chScroll, selStart, selEnd, true)
 	return p

@@ -253,7 +253,10 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 	}
 	tier := core.Tier(a.Tier)
 	cfg := m.C.WS.LoadConfig()
-	route := core.Route(tier, cfg.Autonomy, core.Ceiling(cfg.Floor, a.Want, a.Why, a.Steps))
+	// Routing reads the ask's words, so a mention it rules out doesn't count;
+	// whatever then runs meets CeilingGuard, which counts every mention.
+	ceiling := core.AskCeiling(cfg.Floor, a.Want, a.Why, a.Steps)
+	route := core.Route(tier, cfg.Autonomy, ceiling)
 	if route == "self" {
 		return map[string]string{"tier": tier, "route": route, "note": "T1 is inside the Hive: weigh it yourself and get on with it."}, nil
 	}
@@ -280,7 +283,7 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 		Tier: tier, Route: route, Gain: a.Gain, State: "asked", Created: time.Now().UTC()}
 	switch route {
 	case "person":
-		m.ask(req, "Always yours", "This step is on the list that is always yours, so no warden or panel may take it. Do it yourself if you agree.", "done", "declined")
+		m.ask(req, "Always yours", "This step "+ceiling+", which is on the list that is always yours, so no warden or panel may take it. Do it yourself if you agree.", "done", "declined")
 	case "person-first":
 		m.ask(req, "Ask first", "Your autonomy setting asks you before anything outside the project. Say go ahead to let a warden weigh it.", "go ahead", "declined")
 	default:

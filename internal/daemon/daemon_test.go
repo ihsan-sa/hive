@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
 // After an update renames the running binary to hive.old, the restart runs
@@ -206,6 +208,34 @@ func TestStateCarriesADiffPreview(t *testing.T) {
 	var got core.Ask
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Diff != diff {
 		t.Fatalf("%d: /api/waiting should return the whole %d-byte diff, got %d (%v)", rec.Code, len(diff), len(got.Diff), err)
+	}
+}
+
+// A module not granted a task's project can't retry it, as it can't stop it.
+func TestTaskRetryReaches(t *testing.T) {
+	dir := t.TempDir()
+	a, err := app.New(core.Workspace{Root: filepath.Join(dir, "hive")}, &core.Local{Dir: filepath.Join(dir, "forge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.C.Close() })
+	if _, err := a.C.Projects.Add(core.Project{Name: "p", Repo: "me/p"}); err != nil {
+		t.Fatal(err)
+	}
+	a.C.J.MustAppend("task.saved", work.Task{ID: "t1", Project: "p", Title: "x", Kind: "work", Stage: work.StageStopped})
+	s := &server{a: a, info: api.DaemonInfo{Token: "t"}}
+	for _, path := range []string{"/api/task/retry", "/api/task/stop"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"id":"t1"}`))
+		req.Header.Set("Authorization", "Bearer t")
+		req = req.WithContext(context.WithValue(req.Context(), moduleKey{}, "stranger"))
+		rec := httptest.NewRecorder()
+		s.routes().ServeHTTP(rec, req)
+		if rec.Code == http.StatusOK || !strings.Contains(rec.Body.String(), "not granted") {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	if got, _ := a.Work.Get("t1"); got.Stage != work.StageStopped {
+		t.Fatalf("stage %q", got.Stage)
 	}
 }
 
