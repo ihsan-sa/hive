@@ -37,8 +37,21 @@ const GateWait = "waiting for the recursive gate"
 // GateTimeout bounds one gate run; the daemon kills it a little after.
 var GateTimeout = 2 * time.Hour
 
-// gateRetry is how long a gate that couldn't run waits before it tries again.
-var gateRetry = time.Hour
+// gateRetry is how long a gate that couldn't run waits before it tries again;
+// gateRetrySoon, when the cause may pass (the machine's load, a test that
+// failed on both sides).
+var (
+	gateRetry     = time.Hour
+	gateRetrySoon = 10 * time.Minute
+)
+
+// retryAfter is when a gate that couldn't run tries again.
+func retryAfter(g core.GateResult) time.Time {
+	if g.Transient {
+		return g.At.Add(gateRetrySoon)
+	}
+	return g.At.Add(gateRetry)
+}
 
 // gateReportFile is the report as the worker sent back reads it, in $HIVE_RUN.
 const gateReportFile = "gate-report.md"
@@ -56,7 +69,7 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		return false, nil
 	}
 	g, ok := m.C.Effects.GateResult(p.Name, t.SHA, main)
-	if ok && (g.Outcome != core.GateCantRun || time.Since(g.At) < gateRetry) {
+	if ok && (g.Outcome != core.GateCantRun || time.Now().Before(retryAfter(g))) {
 		m.tellGate(t, p, g)
 		switch g.Outcome {
 		case core.GateKeep:
@@ -64,11 +77,18 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		case core.GateRollback:
 			return true, m.gateBack(t, p, g)
 		}
-		m.hold(t, p, fmt.Sprintf("%s, which can't run here (%s); it never merges unjudged, and the gate tries again after %s", GateWait, core.Clip(g.Reason, 300), g.At.Add(gateRetry).Format("15:04Z")))
+		m.hold(t, p, fmt.Sprintf("%s, which can't run here (%s); it never merges unjudged, and the gate tries again after %s", GateWait, core.Clip(g.Reason, 300), retryAfter(g).Format("15:04Z")))
 		return true, nil
 	}
 	key := p.Name + "@" + t.SHA + "@" + main
 	m.mu.Lock()
+	// A run that couldn't run against this main, on any change, holds the
+	// others until its retry: the next would fail the same way.
+	if last, ok := m.gateCantRun[p.Name+"@"+main]; ok && last.Head != t.SHA && time.Now().Before(retryAfter(last)) {
+		m.mu.Unlock()
+		m.hold(t, p, fmt.Sprintf("%s: it couldn't run against main at %s on %s (%s); it tries again after %s", GateWait, core.Short(main), core.Short(last.Head), core.Clip(last.Reason, 300), retryAfter(last).Format("15:04Z")))
+		return true, nil
+	}
 	cur := m.gating
 	if cur == nil {
 		m.gating = &gateRun{key: key, task: t.ID, since: time.Now().UTC()}
@@ -117,6 +137,14 @@ func (m *Module) startGate(t *Task, p core.Project, main, key string) {
 		m.mu.Lock()
 		if m.gating != nil && m.gating.key == key {
 			m.gating = nil
+		}
+		if m.gateCantRun == nil {
+			m.gateCantRun = map[string]core.GateResult{}
+		}
+		if g.Outcome == core.GateCantRun {
+			m.gateCantRun[p.Name+"@"+job.Main] = g
+		} else {
+			delete(m.gateCantRun, p.Name+"@"+job.Main)
 		}
 		delete(m.later, id) // the task looks again at once
 		m.mu.Unlock()
