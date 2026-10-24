@@ -80,7 +80,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Models = models.New(c, a.Work)
 	a.Improve.OnKept = a.Release.AfterKept
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
-	for _, tick := range []func(){a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.Runner.Tick, a.Models.Tick} {
+	for _, tick := range []func(){stats.SpendNotice{C: c}.Tick, a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.Runner.Tick, a.Models.Tick} {
 		a.Mods.Builtin(tick)
 	}
 	c.Person.Handle("release", a.Release.OnPerson)
