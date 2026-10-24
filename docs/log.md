@@ -65,6 +65,3 @@
 
 ## 2026-10-23 What opens under a row stays on screen
 - Decision: a pane scrolls to keep the selected row and what opens under it in view (a setting's pick-list, the selected ask down to its options), the row first when both can't fit; settings' values wrap under their column, and wrapped text breaks words longer than the line | Why: the person's case, a pick-list under the bottom row clipped in a short window (docs/tui-text.md) | Tradeoff: summary rows still clip with `…`, since their detail opens.
-
-## 2026-10-24 Sharing has three levels
-- Decision: a project is shared, private or isolated (docs/sharing.md); private is covered from every other run and walled from reach both ways like isolated, while its own runs mount the shared Hive like a shared project's | Why: the person listed "sharing-has-three-levels" with no detail, and the spec offers only the two ends; a one-way wall keeps a project's work out of sight without cutting its agents off from the Hive's records | Tradeoff: the middle level is a reading, not the person's words, and is listed as an open question; it reuses the isolated cover paths (`kb/isolated/`), so names still say "isolated" where they mean hidden

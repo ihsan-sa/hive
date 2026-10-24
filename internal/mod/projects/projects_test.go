@@ -42,11 +42,3 @@ func TestStatusConfigIsAllowListed(t *testing.T) {
 		t.Errorf("a hidden setting leaked into status: %s", raw)
 	}
 }
-
-// A level the Hive doesn't know is refused before anything is made on the forge.
-func TestCreateRefusesAnUnknownSharing(t *testing.T) {
-	m := &Module{C: &core.Core{}}
-	if _, _, err := m.Create(Spec{Name: "x", Sharing: "public"}); err == nil || !strings.Contains(err.Error(), "sharing is one of") {
-		t.Errorf("an unknown level: %v", err)
-	}
-}
