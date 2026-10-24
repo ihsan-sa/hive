@@ -69,6 +69,7 @@ type Effects struct {
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
 	homes     map[string]bool         // running checks' homes (disk.go)
+	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
 	disk      DiskUse                 // the last measurement of the Hive's disk use
 	diskFull  bool                    // a check couldn't run for room, and the alert is out
 
@@ -484,10 +485,19 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
-	mods, env, note := e.goModules(sb, dir)
-	code, out, err := e.runSandboxed(sb, p.Name, id, append(mounts, mods...), guardProgram(command), true, 30*time.Minute, env, e.checkCacheCap())
-	if note != "" {
-		out = "hive: " + note + "\n" + out
+	mods := e.goModules(sb, dir)
+	code, out, err := e.runSandboxed(sb, p.Name, id, append(mounts, mods.mounts...), guardProgram(command), true, 30*time.Minute, mods.env, e.checkCacheCap())
+	mods.done()
+	if mods.marker != "" && code != 0 && strings.Contains(out, staleModules) {
+		// The shared cache lacks what its marker promised: that is the
+		// cache's fault, not the commit's, so drop the marker and run once
+		// fetching its own.
+		os.Remove(mods.marker)
+		mods.note = "the shared module cache lacked a module; run again without it"
+		code, out, err = e.runSandboxed(sb, p.Name, id, mounts, guardProgram(command), true, 30*time.Minute, nil, e.checkCacheCap())
+	}
+	if mods.note != "" {
+		out = "hive: " + mods.note + "\n" + out
 	}
 	c.Output = out
 	if errors.Is(err, ErrHomeFull) {

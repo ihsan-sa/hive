@@ -30,9 +30,11 @@ func TestChecksShareTheModuleCache(t *testing.T) {
 	c, _ := testHive(t)
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n\ngo 1.21\n"), 0o644)
-	mounts, env, note := c.Effects.goModules(isolated{}, dir)
-	if note != "" {
-		t.Fatal(note)
+	g := c.Effects.goModules(isolated{}, dir)
+	g.done()
+	mounts, env := g.mounts, g.env
+	if g.note != "" {
+		t.Fatal(g.note)
 	}
 	if len(mounts) != 1 || mounts[0].Host != c.WS.GoModCache() || mounts[0].Inside != GoModInside || mounts[0].RW {
 		t.Fatalf("mounts %+v", mounts)
@@ -49,16 +51,18 @@ func TestChecksShareTheModuleCache(t *testing.T) {
 	// Filled once: a second check of the same sums doesn't fetch again,
 	// even with no go to fetch with.
 	t.Setenv("PATH", t.TempDir())
-	if _, _, note := c.Effects.goModules(isolated{}, dir); note != "" {
-		t.Fatalf("fetched again: %s", note)
+	if g := c.Effects.goModules(isolated{}, dir); g.note != "" {
+		t.Fatalf("fetched again: %s", g.note)
+	} else {
+		g.done()
 	}
 	// Another go.mod has no go to fetch with, and gets no cache (it fetches its own).
 	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m2\n"), 0o644)
-	if mounts, env, note := c.Effects.goModules(isolated{}, dir); mounts != nil || env != nil || !strings.Contains(note, "not prefetched") {
-		t.Fatalf("without go: %v %v %q", mounts, env, note)
+	if g := c.Effects.goModules(isolated{}, dir); g.mounts != nil || g.env != nil || !strings.Contains(g.note, "not prefetched") {
+		t.Fatalf("without go: %+v", g)
 	}
 	// A bare run keeps the host's own module cache.
-	if mounts, _, _ := c.Effects.goModules(sandbox.Bare{}, dir); mounts != nil {
+	if g := c.Effects.goModules(sandbox.Bare{}, dir); g.mounts != nil {
 		t.Fatal("bare run got the shared cache")
 	}
 }
@@ -100,8 +104,14 @@ func TestDiskFullIsCantRun(t *testing.T) {
 	if alerts != 2 {
 		t.Fatalf("after a check ran, a new shortage raised %d alerts in all, want 2", alerts)
 	}
-	if ch := c.Effects.RunCheck(p, main, "test", "echo '--- FAIL: TestX'; exit 1"); ch.CantRun != "" {
-		t.Fatalf("an ordinary failure read as can't-run: %+v", ch)
+	// A failing test that quotes the error is the commit's red, not the disk's.
+	for _, quoted := range []string{
+		`printf -- '--- FAIL: TestX (0.00s)\n    x_test.go:9: check {CantRun:can'"'"'t run: disk quota exceeded}\nFAIL\n'; exit 1`,
+		`printf '    x_test.go:9: write /x: no space left on device\nFAIL\n'; exit 1`,
+	} {
+		if ch := c.Effects.RunCheck(p, main, "test", quoted); ch.CantRun != "" || ch.OK {
+			t.Fatalf("a test's own words read as a full disk: %+v", ch)
+		}
 	}
 }
 
@@ -169,7 +179,7 @@ func TestBytes(t *testing.T) {
 			t.Errorf("Bytes(%d) = %q, want %q", n, got, want)
 		}
 	}
-	if DiskFull("ok\nwrite /x: disk quota exceeded\n") != "write /x: disk quota exceeded" || DiskFull("--- FAIL: TestX") != "" {
+	if DiskFull("ok\nwrite /x: disk quota exceeded\n") != "write /x: disk quota exceeded" || DiskFull("--- FAIL: TestX\nwrite /x: disk quota exceeded") != "" || DiskFull("\tdisk quota exceeded") != "" {
 		t.Fatal("DiskFull")
 	}
 }

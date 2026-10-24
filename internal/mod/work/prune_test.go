@@ -50,6 +50,7 @@ func TestCheckoutsGoWhenTheTaskEnds(t *testing.T) {
 
 	task.Stage = StageMerged
 	m.save(task, "merged")
+	m.Wait() // the save removes them off its own path
 	for d, want := range map[string]bool{worker: false, reviewer: false, live: true} {
 		if core.Exists(d) != want {
 			t.Fatalf("merged: %s exists %v, want %v", filepath.Base(d), !want, want)

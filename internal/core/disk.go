@@ -68,15 +68,26 @@ var ErrHomeFull = errors.New("the check's own home outgrew its cap")
 var diskFull = regexp.MustCompile(`(?i)disk quota exceeded|no space left on device|\bENOSPC\b|\bEDQUOT\b`)
 
 // DiskFull returns the line of a check's output that says the disk or a
-// quota is full, or "".
+// quota is full, or "". A test's own words never count: not when the output
+// names a failing test (its message may quote the error, as this feature's
+// own tests do), and not on an indented line, where test runners put what a
+// test printed. What counts is a tool's own error at the start of a line
+// ("go: writing go.mod cache: write ...: disk quota exceeded").
 func DiskFull(out string) string {
+	if len(FailedTests(out)) > 0 {
+		return ""
+	}
 	for _, l := range strings.Split(out, "\n") {
-		if diskFull.MatchString(l) {
+		if l != "" && l[0] != ' ' && l[0] != '\t' && diskFull.MatchString(l) {
 			return strings.TrimSpace(l)
 		}
 	}
 	return ""
 }
+
+// staleModules is what a check prints when the shared module cache lacks a
+// module its marker says is there (the cache was emptied under it).
+const staleModules = "module lookup disabled by GOPROXY=off"
 
 // checkCacheCap is one check's home cap in bytes.
 func (e *Effects) checkCacheCap() int64 {
@@ -87,35 +98,51 @@ func (e *Effects) checkCacheCap() int64 {
 	return int64(mb) << 20
 }
 
-// goModules readies the shared module cache for the checkout in dir and
-// returns the mount and environment a check gets, or none (the check then
-// fetches its own modules as before) with why. It only applies where the
-// sandbox has its own paths on Linux; elsewhere a check has the host's home.
-func (e *Effects) goModules(sb sandbox.Sandbox, dir string) ([]sandbox.Mount, []string, string) {
+// goMods is what a check gets of the shared module cache: none (the check
+// then fetches its own modules as before) with why, or the mount and
+// environment, held against Prune until done is called.
+type goMods struct {
+	mounts []sandbox.Mount
+	env    []string
+	note   string
+	marker string
+	done   func()
+}
+
+// goModules readies the shared module cache for the checkout in dir. It only
+// applies where the sandbox has its own paths on Linux; elsewhere a check has
+// the host's home.
+func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
+	none := goMods{done: func() {}}
 	if !sb.Isolated() || runtime.GOOS != "linux" {
-		return nil, nil, ""
+		return none
 	}
 	mod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if err != nil {
-		return nil, nil, ""
+		return none
 	}
 	sum, _ := os.ReadFile(filepath.Join(dir, "go.sum"))
 	h := sha256.Sum256(append(append(mod, 0), sum...))
 	key := hex.EncodeToString(h[:8])
 	marker := filepath.Join(e.ws.goSums(), key)
+	e.modMu.RLock() // Prune empties the cache only while no check fetches into or reads it
 	if !Exists(marker) {
-		defer e.lock("gomod:" + key)()
+		unlock := e.lock("gomod:" + key)
 		if !Exists(marker) {
 			if err := e.prefetch(dir); err != nil {
-				return nil, nil, "modules not prefetched: " + err.Error()
+				unlock()
+				e.modMu.RUnlock()
+				none.note = "modules not prefetched: " + err.Error()
+				return none
 			}
 			os.MkdirAll(e.ws.goSums(), 0o755)
 			os.WriteFile(marker, nil, 0o644)
 		}
+		unlock()
 	}
 	os.MkdirAll(e.ws.GoModCache(), 0o755) // a module with nothing to fetch still mounts it
-	return []sandbox.Mount{{Host: e.ws.GoModCache(), Inside: GoModInside}},
-		[]string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly", "GOPROXY=off"}, ""
+	return goMods{mounts: []sandbox.Mount{{Host: e.ws.GoModCache(), Inside: GoModInside}},
+		env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly", "GOPROXY=off"}, marker: marker, done: e.modMu.RUnlock}
 }
 
 // prefetch downloads what dir's go.mod and go.sum name into the shared cache.
@@ -292,9 +319,10 @@ func (e *Effects) Prune() string {
 			}
 		}
 	}
-	if len(live) == 0 && Size(e.ws.GoModCache()) > modCacheMax {
+	if Size(e.ws.GoModCache()) > modCacheMax && e.modMu.TryLock() {
 		RemoveTree(e.ws.goSums()) // first, so no marker outlives its modules
 		drop(e.ws.GoModCache())
+		e.modMu.Unlock()
 	}
 	if len(gone) == 0 {
 		return ""

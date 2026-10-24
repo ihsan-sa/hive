@@ -285,7 +285,8 @@ func (m *Module) save(t *Task, note string) {
 	}
 	m.C.J.MustAppend("task.saved", t)
 	if t.Stage != was && (t.Stage == StageMerged || t.Stage == StageDone) {
-		m.ended(*t)
+		m.steps.Add(1)
+		go func(t Task) { defer m.steps.Done(); m.ended(t) }(*t) // a large tree mustn't hold the save
 	}
 }
 
