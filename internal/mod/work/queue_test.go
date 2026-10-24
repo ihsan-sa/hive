@@ -225,3 +225,50 @@ func TestQueueHoldsOnlyRealConflicts(t *testing.T) {
 		t.Fatalf("package brief behind pushed tasks: stage %q reason %q", got.Stage, got.Reason)
 	}
 }
+
+// The .gitattributes matcher follows git: "**" spans directories, a name-only
+// pattern matches at any depth, and the last line touching merge wins, so
+// -merge, !merge or another driver undo an earlier merge=union.
+func TestQueueUnionRules(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, ".gitattributes"), []byte(`* text=auto
+docs/**/*.md merge=union
+docs/keep/*.md -merge
+CHANGES merge=union
+docs/odd.md merge=binary
+"quoted name" merge=union
+!docs/neg.md merge=union
+notes/ merge=union
+`), 0o644)
+	rules := unionRules(root)
+	for p, want := range map[string]bool{
+		"docs/log.md":       true,
+		"docs/a/b/plan.md":  true,
+		"docs/keep/plan.md": false,
+		"docs/odd.md":       false,
+		"pkg/CHANGES":       true,
+		"CHANGES":           true,
+		"internal/x.go":     false,
+		"notes/a.md":        false,
+		"docs/log.txt":      false,
+	} {
+		if got := isUnion(rules, p); got != want {
+			t.Errorf("isUnion(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+// A doc main newly marks union stops being an area without the brief changing.
+func TestQueueAreasFollowGitattributes(t *testing.T) {
+	m := queueRig(t)
+	task := file(t, m, "fix it", "See internal/core/runs.go and internal/tui/views.go.")
+	if got := strings.Join(m.areas(task), " "); got != "internal/core/runs.go internal/tui/views.go" {
+		t.Fatalf("areas %q", got)
+	}
+	ga := filepath.Join(m.C.WS.Project("p"), ".gitattributes")
+	b, _ := os.ReadFile(ga)
+	os.WriteFile(ga, append(b, "internal/core/runs.go merge=union\n"...), 0o644)
+	if got := strings.Join(m.areas(task), " "); got != "internal/tui/views.go" {
+		t.Fatalf("areas after .gitattributes changed %q", got)
+	}
+}
