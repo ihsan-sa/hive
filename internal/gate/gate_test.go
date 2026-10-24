@@ -426,11 +426,88 @@ func TestReachPolicy(t *testing.T) {
 	if err := CheckReach(GitHub{Owner: "Lab"}, "ghp_classic", ""); err == nil {
 		t.Error("a classic token passed")
 	}
-	old := listReach
-	defer func() { listReach = old }()
-	listReach = func(GitHub, string) ([]Access, error) { return []Access{{Repo: "Lab/hive", Push: true}}, nil }
-	if err := CheckReach(GitHub{Owner: "Lab"}, "github_pat_x", "https://github.com/ihsan-sa/hive"); err == nil {
-		t.Error("an org-wide token on an org with other repositories passed")
+}
+
+// TestCheckReachProbesTheToken replays GitHub's answers for three tokens of
+// an owner who administers ihsan-sa/hive (private), ihsan-sa/notes (public)
+// and Lab/hive-trials. The listings mark all of them admin whatever the
+// token, as GitHub does for a fine-grained token; only the probes, made with
+// the token itself, tell a narrow token from a wide one.
+func TestCheckReachProbesTheToken(t *testing.T) {
+	gr := "Lab/gate-1700000000-0a1b2c3d-candidate"
+	user := "/user/repos?per_page=100&affiliation=owner,collaborator,organization_member"
+	org := "/orgs/Lab/repos?per_page=100&type=all"
+	row := func(repos ...string) string {
+		var b strings.Builder
+		for _, r := range repos {
+			b.WriteString(r + "\ttrue\ttrue\n")
+		}
+		return b.String()
+	}
+	const (
+		denied   = `{"message":"Resource not accessible by personal access token","status":"403"}` + "\ngh: Resource not accessible by personal access token (HTTP 403)"
+		notFound = `{"message":"Not Found","status":"404"}` + "\ngh: Not Found (HTTP 404)"
+		invalid  = `{"message":"Invalid request.\n\n\"content\" wasn't supplied.","status":"422"}` + "\ngh: Invalid request. (HTTP 422)"
+		limited  = `{"message":"You have exceeded a secondary rate limit"}` + "\ngh: You have exceeded a secondary rate limit (HTTP 403)"
+	)
+	blob := func(r string) string { return "-X POST /repos/" + r + "/git/blobs -f encoding=utf-8" }
+	keys := func(r string) string { return "/repos/" + r + "/keys?per_page=1" }
+	cases := []struct {
+		name, token string
+		gh          map[string]string // args -> output; an output naming an HTTP status fails
+		ok          bool
+	}{
+		{"narrow: the test org's repositories, contents write", "github_pat_narrow", map[string]string{
+			user: row("ihsan-sa/notes", gr), org: row(gr),
+			blob("ihsan-sa/notes"): denied, keys("ihsan-sa/notes"): denied,
+		}, true},
+		{"org-wide on an org that holds another repository", "github_pat_wide", map[string]string{
+			user: row("ihsan-sa/notes", "Lab/hive-trials"), org: row("Lab/hive-trials", gr),
+			blob("ihsan-sa/notes"): denied, keys("ihsan-sa/notes"): denied,
+			blob("Lab/hive-trials"): invalid, keys("Lab/hive-trials"): denied,
+		}, false},
+		{"all of the owner's repositories", "github_pat_all", map[string]string{
+			user: row("ihsan-sa/hive", "ihsan-sa/notes"), org: "",
+			blob("ihsan-sa/hive"): invalid, keys("ihsan-sa/hive"): `[]`,
+			blob("ihsan-sa/notes"): invalid, keys("ihsan-sa/notes"): `[]`,
+		}, false},
+		{"administration but not contents", "github_pat_admin", map[string]string{
+			user: row("Lab/hive-trials"), org: row("Lab/hive-trials"),
+			blob("Lab/hive-trials"): notFound, keys("Lab/hive-trials"): `[]`,
+		}, false},
+		{"a probe GitHub wouldn't answer", "github_pat_limited", map[string]string{
+			user: row("ihsan-sa/notes"), org: "",
+			blob("ihsan-sa/notes"): limited,
+		}, false},
+		{"classic, refused before any call", "ghp_classic", map[string]string{}, false},
+	}
+	old := ghAPI
+	defer func() { ghAPI = old }()
+	for _, c := range cases {
+		ghAPI = func(token string, args ...string) (string, error) {
+			if token != c.token {
+				t.Errorf("%s: called with another token", c.name)
+			}
+			if args[0] == "--paginate" { // the listings, with their jq filter
+				args = args[1:2]
+			}
+			out, ok := c.gh[strings.Join(args, " ")]
+			if !ok {
+				t.Errorf("%s: unrecorded call gh api %s", c.name, strings.Join(args, " "))
+				return "", fmt.Errorf("unrecorded")
+			}
+			if httpStatus.MatchString(out) {
+				return out, fmt.Errorf("exit status 1")
+			}
+			return out, nil
+		}
+		err := CheckReach(GitHub{Owner: "Lab"}, c.token, "https://github.com/ihsan-sa/hive")
+		if (err == nil) != c.ok {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	if err := CheckReach(GitHub{Owner: "ihsan-sa"}, "github_pat_x", "https://github.com/ihsan-sa/hive"); err == nil {
+		t.Error("the gated repository's owner as the test org passed")
 	}
 }
 
