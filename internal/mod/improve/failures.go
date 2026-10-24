@@ -190,20 +190,23 @@ func (m *Module) redTests(p core.Project, sha, test string, tc core.Check) (sum 
 		return sum, false // no command to run again: its removal is the red
 	}
 	if rc := m.C.Effects.RunCheck(p, sha, "retest", rerunCommand(test, fs)); rc.OK {
-		m.fileFlaky(p, sha, fs, sum)
+		m.fileFlaky(p, sha, fs, sum, out)
 		return sum, true
 	}
 	return sum, false
 }
 
 // fileFlaky files the flaky tests as work, once for as long as that work is open.
-func (m *Module) fileFlaky(p core.Project, sha string, fs []failure, sum string) {
+func (m *Module) fileFlaky(p core.Project, sha string, fs []failure, sum, out string) {
 	var names []string
 	for _, f := range fs {
 		names = append(names, f.Tests...)
 		if len(f.Tests) == 0 {
 			names = append(names, f.Pkg)
 		}
+	}
+	if len(names) == 0 {
+		names = core.FailedTests(out) // not go test's output: what its own runner named
 	}
 	what := "the tests"
 	if len(names) > 0 {
@@ -213,7 +216,7 @@ func (m *Module) fileFlaky(p core.Project, sha string, fs []failure, sum string)
 	if len(m.Work.List(func(t work.Task) bool { return t.Project == p.Name && t.Title == title && !t.Terminal() })) > 0 {
 		return
 	}
-	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flaky", "project": p.Name, "text": "a flaky test in " + p.Name + " failed at " + core.Short(sha) + " and passed on rerun: " + core.Clip(sum, 300)})
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": p.Name, "sha": sha, "text": "a flaky test in " + p.Name + " failed at " + core.Short(sha) + " and passed on rerun: " + core.Clip(sum, 300)})
 	m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title,
 		Done:  "The test passes every time: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails.",
 		Known: fmt.Sprintf("After a merge at %s the tests went red and passed when only what failed ran again, so the merge was kept. What failed: %s", core.Short(sha), sum)})

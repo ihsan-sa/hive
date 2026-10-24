@@ -74,15 +74,15 @@ func TestRerunRunsOnlyWhatFailed(t *testing.T) {
 func TestFlakeIsKeptAndBreakIsReverted(t *testing.T) {
 	m, merge := scored(t)
 	dir := t.TempDir()
-	script := func(once bool) string {
+	script := func(name string, once bool) string {
 		gate := "exit 1"
 		if once {
 			gate = "[ -f " + filepath.Join(dir, "ran") + " ] && exit 0; touch " + filepath.Join(dir, "ran") + "; exit 1"
 		}
-		return "printf -- '--- FAIL: TestRace (0.01s)\\n    race_test.go:9: late\\nFAIL\\nFAIL\\texample.com/p/race\\t0.1s\\n'\n" + gate + "\n"
+		return "printf -- '--- FAIL: " + name + " (0.01s)\\n    race_test.go:9: late\\nFAIL\\nFAIL\\texample.com/p/race\\t0.1s\\n'\n" + gate + "\n"
 	}
 	cfg := `{"test": "sh ./t.sh", "score": {"command": "sh ./score.sh", "direction": "higher"}}`
-	ms := merge(map[string]string{".hive/project.json": cfg, "t.sh": script(true)})
+	ms := merge(map[string]string{".hive/project.json": cfg, "t.sh": script("TestRace", true)})
 	if !ms.Kept || !strings.Contains(ms.Note, "flaky") || !strings.Contains(ms.Note, "TestRace (race_test.go:9: late)") {
 		t.Fatalf("a flake was not kept as flaky: %+v", ms)
 	}
@@ -94,12 +94,13 @@ func TestFlakeIsKeptAndBreakIsReverted(t *testing.T) {
 		t.Fatal("the test did not run twice")
 	}
 
-	ms = merge(map[string]string{"t.sh": script(false)})
-	if ms.Kept || !strings.Contains(ms.Note, "FAIL example.com/p/race: TestRace (race_test.go:9: late)") {
+	// A test that failed nowhere before (TestRace did, so it'd be a flake).
+	ms = merge(map[string]string{"t.sh": script("TestBroke", false)})
+	if ms.Kept || !strings.Contains(ms.Note, "FAIL example.com/p/race: TestBroke (race_test.go:9: late)") {
 		t.Fatalf("a break was not named or was kept: %+v", ms)
 	}
 	rev := m.Work.List(func(t work.Task) bool { return t.Kind == "revert" })
-	if len(rev) != 1 || !strings.Contains(rev[0].Lesson, "the tests went red after it merged: FAIL example.com/p/race: TestRace (race_test.go:9: late)") {
+	if len(rev) != 1 || !strings.Contains(rev[0].Lesson, "the tests went red after it merged: FAIL example.com/p/race: TestBroke (race_test.go:9: late)") {
 		t.Fatalf("revert lesson: %+v", rev)
 	}
 }
