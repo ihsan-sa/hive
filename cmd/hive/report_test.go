@@ -97,7 +97,7 @@ func TestInstallerShareAnswer(t *testing.T) {
 			if c.asked {
 				asked = "0"
 			}
-			fake := "#!/bin/sh\n[ \"$*\" = \"report asked\" ] && exit " + asked + "\necho \"$*\" >> " + log + "\n"
+			fake := "#!/bin/sh\n[ \"$*\" = \"report asked\" ] && exit " + asked + "\necho \"$*\" >> '" + filepath.ToSlash(log) + "'\n" // sh reads a backslash in a Windows path as an escape
 			os.WriteFile(filepath.Join(dir, "hive"), []byte(fake), 0o755)
 			if c.noTTY {
 				tty = filepath.Join(dir, "missing", "tty")
