@@ -229,6 +229,7 @@ func (m *Module) baseline(p core.Project) {
 	cfg := m.C.Effects.Config(p, main)
 	ok, score, note := m.measure(p, main)
 	ms := Measurement{Project: p.Name, SHA: main, TestsOK: ok, Score: score, Note: "start: " + note, Version: m.version(p, main, cfg)}
+	m.warnUnlisted(p, cfg)
 	if ok && (score != nil || cfg.Score == nil) {
 		ms.Kept, ms.Best = true, score
 		m.record(ms)
@@ -264,6 +265,16 @@ func (m *Module) noStart(p core.Project, ms Measurement) {
 		"Look at the output below, fix the test or score command in .hive/project.json (the score is the last word of the output, or the one line that is a number alone), and ask the person if you can't:\n"+core.Clip(note, 1500))
 }
 
+// warnUnlisted raises an alert when a score is set with no evaluator paths:
+// only a ./ file its command names is then protected from a candidate, not a
+// script that file calls, a test or its data.
+func (m *Module) warnUnlisted(p core.Project, cfg core.ProjectConfig) {
+	if cfg.Score != nil && len(cfg.Score.Paths) == 0 {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "score-paths", "ref": "score-paths:" + p.Name, "project": p.Name,
+			"text": p.Name + "'s score lists no evaluator files in its `paths`, so a change could alter how it's scored; list the files the score reads in .hive/project.json"})
+	}
+}
+
 func (m *Module) measureLoop() {
 	for t := range m.queue {
 		m.afterMerge(t)
@@ -297,9 +308,12 @@ func (m *Module) afterMerge(t work.Task) {
 		best = *k.Best
 	}
 	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg)}
-	if hasBest && m.versionOf(p, k) != ms.Version {
-		// The score itself changed, so this merge starts a new baseline.
-		hasBest, ms.Note = false, "the score changed, so this starts a new baseline; "+note
+	if !hasBest || m.versionOf(p, k) != ms.Version {
+		m.warnUnlisted(p, cfg)
+		if hasBest {
+			// The score itself changed, so this merge starts a new baseline.
+			hasBest, ms.Note = false, "the score changed, so this starts a new baseline; "+note
+		}
 	}
 	worse := !ok
 	reason := ""
