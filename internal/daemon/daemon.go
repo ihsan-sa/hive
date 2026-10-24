@@ -428,6 +428,9 @@ func (s *server) routes() http.Handler {
 		if err := decode(r, &b); err != nil {
 			return nil, err
 		}
+		if err := s.reaches(r, s.projectOf("task", b.ID)); err != nil {
+			return nil, err
+		}
 		return "ok", a.Work.Retry(b.ID)
 	})
 	h("/api/ask", func(r *http.Request) (any, error) {
