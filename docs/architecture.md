@@ -39,7 +39,7 @@ Tools: `hive agent install --tool python` runs `hive tools-fetch` in a sandbox o
 
 ## Data flow: one ask
 
-1. Person → chat → lead run (persistent Claude session, resumed per message).
+1. Person → chat → lead run (persistent Claude session, resumed per message; Claude Code compacts it when full, and the lead keeps its journal in its box `notes.md`, which a replacing lead inherits).
 2. Lead → `hive agent brief` → `task.saved` (stage `new`).
 3. work.Tick: issue (idempotent by body marker) → worker run `w-<task>` in a fresh checkout at main → worker `finish`.
 4. Effects.Extract: `git bundle` made **inside the sandbox**, fetched into the host clone with fsck, must descend from the recorded base → push `hive/<task>` → PR (idempotent by head branch).
@@ -97,7 +97,7 @@ Settings in `.hive/config.json`; none of them stops or parks work.
 
 ## Sandbox (Linux / WSL)
 
-Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, stop-file watcher, starts init with `CLONE_NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|NEWUTS` (uid 0 → person's uid). Init (pid 1): tmpfs root; binds `/usr /bin /lib* /etc /opt /var /srv` read-only (nosuid, nodev, locked flags kept); fresh `/proc`, `/tmp`, minimal `/dev`; run mounts; tools at `/hive/bin` (one already on the inside PATH under a system dir, like a Node launcher, runs in place); `pivot_root`; root remounted ro; `lo` up; forwarder 127.0.0.1:3128 → egress socket. Command runs in a nested user namespace (no caps). Not present: `/home`, `/mnt` (Windows drives), `/run` (sockets), WSL interop. Egress refuses loopback/private/link-local/CGNAT/ULA and dials the IP it vetted; with an `egress` list for the run's role it also refuses every host off the list and records each refusal in `turn-NNN.jsonl.egress` (macOS runs one proxy per command for the same).
+Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, stop-file watcher, starts init with `CLONE_NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|NEWUTS` (uid 0 → person's uid). Init (pid 1): tmpfs root; binds `/usr /bin /lib* /etc /opt /var /srv` read-only (nosuid, nodev, locked flags kept); fresh `/proc`, `/tmp`, minimal `/dev`; run mounts; tools at `/hive/bin` (one already on the inside PATH under a system dir, like a Node launcher, runs in place); `pivot_root`; root remounted ro; `lo` up; forwarder 127.0.0.1:3128 → egress socket, and one per granted local address (`egress.local`) that relays a CONNECT to it over the same socket. Command runs in a nested user namespace (no caps). Not present: `/home`, `/mnt` (Windows drives), `/run` (sockets), WSL interop. Egress refuses loopback/private/link-local/CGNAT/ULA and dials the IP it vetted; with an `egress` list for the run's role it also refuses every host off the list and records each refusal and its reason in `turn-NNN.jsonl.egress`; a granted loopback ip:port is dialled as that literal address (macOS runs one proxy per command for the same).
 
 ## Gaps (v1)
 

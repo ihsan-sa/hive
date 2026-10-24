@@ -85,7 +85,7 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 			return core.Project{}, false, fmt.Errorf("who are you on %s? %v", f.Name(), err)
 		}
 		if s.Repo = up; !strings.HasPrefix(up, user+"/") {
-			if s.Repo, err = f.Fork(up); err != nil {
+			if s.Repo, err = f.Fork(up, ""); err != nil {
 				return core.Project{}, false, fmt.Errorf("forking %s: %v", up, err)
 			}
 		}

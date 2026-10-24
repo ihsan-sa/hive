@@ -39,9 +39,10 @@ The model workers use, the lead's and the reviewer's are under **Settings** in t
 
 ## Use
 
-    hive                  control center: Chats, Dashboard, Waiting, Modules, Settings
+    hive                  control center: Chats, Dashboard, Waiting, Knowledge, Modules, Settings
     hive ask "..." --wait ask the lead from a shell
     hive status           what it's doing
+    hive kb <words>       search the knowledge base
     hive improve          run an improvement sweep now
     hive doctor           check the install and sandbox
     hive update           newest release
@@ -49,6 +50,12 @@ The model workers use, the lead's and the reviewer's are under **Settings** in t
     hive shutdown         stop it (agents finish their turn; `hive` starts it again)
 
 The Hive keeps running in the background and starts with the machine. Closing the control center never stops work.
+
+## The knowledge base
+
+The knowledge base is the Hive's memory across projects and runs: the notes agents leave, how a Hive works (`practice/`), the Hive's own source (`hive/`), and under `record/` a file for every task, request, run, chat and project, filed from the journal on its own. It lives in `.hive/kb` in your Hive folder (`~/hive/.hive/kb` by default) as plain markdown in a git repository.
+
+Read it under **Knowledge** in the control center: enter opens a folder or file, esc goes back up, and `/` searches it the way agents do. From a shell, `hive kb <words>` prints the best matches (`--limit all` for every one), and `hive kb` alone prints where it is.
 
 In a chat, drop a file or paste one's path to attach it, and ctrl+v attaches an image on the clipboard. One message, files and all, can be up to 300 MB; `chat_max_mb` in `.hive/config.json` changes that.
 
