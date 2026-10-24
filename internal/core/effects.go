@@ -60,6 +60,7 @@ type Check struct {
 	OK      bool      `json:"ok"`
 	Score   *float64  `json:"score,omitempty"`
 	Output  string    `json:"output"`
+	Log     string    `json:"log,omitempty"`    // the full output on the host, when it ran
 	Failed  []string  `json:"failed,omitempty"` // the failing tests it names, read before the output is clipped
 	At      time.Time `json:"at"`
 }
@@ -372,14 +373,16 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		return c
 	}
 	defer os.RemoveAll(dir)
-	code, out, err := e.runSandboxed(sb, p.Name, "gate-"+short(sha)+"-"+kind+"-"+NewID()[14:], []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}, guardProgram(command), true, 30*time.Minute)
+	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
+	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
+	code, out, err := e.runSandboxed(sb, p.Name, id, []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}, guardProgram(command), true, 30*time.Minute)
 	c.Output = out
 	if err != nil {
 		c.Output = err.Error() + "\n" + out
 		return record()
 	}
 	c.OK = code == 0
-	if kind == "test" && !c.OK {
+	if (kind == "test" || kind == "retest") && !c.OK {
 		c.Failed = FailedTests(out)
 	}
 	if kind == "score" && c.OK {

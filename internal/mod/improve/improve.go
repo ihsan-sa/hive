@@ -216,17 +216,25 @@ func (m *Module) record(ms Measurement) {
 func (m *Module) measure(p core.Project, sha string) (bool, *float64, string) {
 	cfg := m.C.Effects.Config(p, sha)
 	tc := m.C.Effects.RunCheck(p, sha, "test", cfg.Test)
+	flaky := "" // a red that passed when what failed ran again
 	if !tc.OK {
-		return false, nil, "tests red: " + core.Clip(tc.Output, 600)
+		sum, flake := m.redTests(p, sha, cfg.Test, tc)
+		if !flake {
+			return false, nil, "tests red: " + sum
+		}
+		flaky = "tests flaky (red, then green when what failed ran again; filed to fix): " + sum + "; "
 	}
 	if cfg.Score == nil {
+		if flaky != "" {
+			return true, nil, flaky + "no score configured"
+		}
 		return true, nil, "tests green (no score configured)"
 	}
 	sc := m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
 	if !sc.OK || sc.Score == nil {
-		return true, nil, "score did not produce a number: " + core.Clip(sc.Output, 600)
+		return true, nil, flaky + "score did not produce a number: " + core.Clip(sc.Output, 600)
 	}
-	return true, sc.Score, fmt.Sprintf("score %g", *sc.Score)
+	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score)
 }
 
 // Tick measures the starting point of projects that have none yet. A red
@@ -350,7 +358,7 @@ func (m *Module) afterMerge(t work.Task) {
 	ok, score, note := m.measure(p, t.MergeSHA)
 	flake := ""
 	if !ok {
-		ok, score, note, flake = m.retest(p, t, note)
+		flake = m.seenElsewhere(p, t)
 	}
 	k, hasBest := m.kept(p.Name)
 	best := 0.0
@@ -373,7 +381,7 @@ func (m *Module) afterMerge(t work.Task) {
 		m.record(ms)
 		return
 	case !ok:
-		reason = "the tests went red after it merged"
+		reason = "the tests went red after it merged: " + strings.TrimPrefix(note, "tests red: ")
 	case cfg.Score != nil && score == nil:
 		worse, reason = true, "the score stopped producing a number"
 	case cfg.Score != nil && hasBest && !cfg.Score.WithinTolerance(*score, best):
@@ -396,7 +404,10 @@ func (m *Module) afterMerge(t work.Task) {
 		}
 		return
 	}
-	ms.Note = reason + "; " + note
+	ms.Note = reason
+	if ok {
+		ms.Note += "; " + note
+	}
 	m.record(ms)
 	if t.Kind == "revert" {
 		m.C.Person.Ask(core.Ask{Kind: "question", Ref: "revert-bad:" + t.ID, Project: p.Name,
@@ -412,33 +423,23 @@ func (m *Module) afterMerge(t work.Task) {
 // flakeWindow is how far back a test's failures elsewhere count as a flake.
 const flakeWindow = 72 * time.Hour
 
-// retest runs a merge's red tests once more. A test that passes the second
-// time, or that failed too on main or on another change before this one
-// merged, is a flake: it raises an alert and is not blamed on the merge. Only
-// a failure this merge alone shows is a break. It returns the second measure
-// and, for a flake, what makes it one.
-func (m *Module) retest(p core.Project, t work.Task, note string) (bool, *float64, string, string) {
-	first, _ := m.C.Effects.GetCheck(p.Name, t.MergeSHA, "test")
-	ok, score, again := m.measure(p, t.MergeSHA)
-	flake := ""
-	if ok {
-		flake = "flaky: the tests failed after it merged and passed when run again"
-		if len(first.Failed) > 0 {
-			flake = "flaky: " + strings.Join(first.Failed, ", ") + " failed after it merged and passed when run again"
-		}
-		note = flake + "; " + again
-	} else {
-		second, _ := m.C.Effects.GetCheck(p.Name, t.MergeSHA, "test")
-		if where := m.failedBefore(p.Name, t, second.Failed); where != "" {
-			flake = "flaky: " + strings.Join(second.Failed, ", ") + " failed twice after it merged, but also " + where + ", without this change"
-		}
-		note = again
+// seenElsewhere is, for a merge whose red tests stayed red when what failed
+// ran again (measure does that), what makes it a flake anyway: every test
+// that failed also failed on main or on another change before this one
+// merged. It raises an alert for one; "" means the merge broke them.
+func (m *Module) seenElsewhere(p core.Project, t work.Task) string {
+	c, ok := m.C.Effects.GetCheck(p.Name, t.MergeSHA, "retest")
+	if !ok || c.OK {
+		c, _ = m.C.Effects.GetCheck(p.Name, t.MergeSHA, "test")
 	}
-	if flake != "" {
-		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": p.Name, "sha": t.MergeSHA, "task": t.ID,
-			"text": core.Clip(flake, 400) + " (" + p.Name + " at " + core.Short(t.MergeSHA) + "). Not reverted; the test wants steadying."})
+	where := m.failedBefore(p.Name, t, c.Failed)
+	if where == "" {
+		return ""
 	}
-	return ok, score, note, flake
+	flake := "flaky: " + strings.Join(c.Failed, ", ") + " failed twice after it merged, but also " + where + ", without this change"
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": p.Name, "sha": t.MergeSHA, "task": t.ID,
+		"text": core.Clip(flake, 400) + " (" + p.Name + " at " + core.Short(t.MergeSHA) + "). Not reverted; the test wants steadying."})
+	return flake
 }
 
 // failedBefore says where every one of names also failed at a commit that

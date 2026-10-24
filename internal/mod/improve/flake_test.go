@@ -75,7 +75,7 @@ func TestFlakeAfterMergeIsNotReverted(t *testing.T) {
 	m, commit, merge := tested(t)
 	once := filepath.Join(t.TempDir(), "once")
 	sha := commit(map[string]string{"t.sh": "[ -e " + once + " ] && exit 0\ntouch " + once + "\necho '--- FAIL: TestJoin (0.09s)'\nexit 1\n"})
-	if ms := merge(sha); !ms.Kept || !strings.Contains(ms.Note, "flaky: TestJoin") {
+	if ms := merge(sha); !ms.Kept || !strings.Contains(ms.Note, "flaky") || !strings.Contains(ms.Note, "TestJoin") {
 		t.Fatalf("a flake was blamed on the merge: %+v", ms)
 	}
 	if reverts(m) != 0 || !strings.Contains(flakeAlerts(m), "TestJoin") {
