@@ -168,7 +168,7 @@ func TestLoginPoolPicksTheLeastUsedByItsWindows(t *testing.T) {
 	}
 	defer j.Close()
 	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, twoLogins{}, func() []string { return nil })
-	shift := time.Until(recorded) // replay the record as if it were just taken
+	shift := time.Since(recorded) // replay the record as if it were just taken: its resets move forward by its age
 	own.Limit.ResetsAt = own.Limit.ResetsAt.Add(shift)
 	for k, w := range own.Limit.Windows {
 		w.ResetsAt = w.ResetsAt.Add(shift)
