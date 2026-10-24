@@ -107,6 +107,9 @@ func (m *model) viewSidebar(w int) pane {
 			if r.sec == secWaiting && len(m.st.Asks) > 0 {
 				count = stTitle.Render(fmt.Sprint(len(m.st.Asks)))
 			}
+			if n := m.fbUnseen(); r.sec == secFeedback && n > 0 {
+				count = stTitle.Render(fmt.Sprint(n))
+			}
 		case r.group:
 			mark = "▾ "
 			if m.closed[r.key] {

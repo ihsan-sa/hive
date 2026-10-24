@@ -3,12 +3,13 @@
    Chats              │   The knowledge base is the Hive's memory across projects and runs: notes
    Dashboard          │   agents leave, and the record of everything the Hive did. Agents search
    Waiting         3  │   it before they say what happened; so can you.
- › Knowledge          │
-   Modules            │   / search
-   Settings           │
-                      │   Nothing here yet.
- ▾ textkit-2          │
-   lead               │   From a shell: hive kb <words>
+   Feedback        1  │
+ › Knowledge          │   / search
+   Modules            │
+   Settings           │   Nothing here yet.
+                      │
+ ▾ textkit-2          │   From a shell: hive kb <words>
+   lead               │
    writer             │
    reviewer        ●  │
  ▾ hive-web           │
@@ -17,7 +18,6 @@
    reviewer           │
    tribunal           │
  ▸ website            │
-                      │
                       │
                       │
                       │

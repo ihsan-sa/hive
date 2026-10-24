@@ -40,6 +40,23 @@ func TestReleaseArgRefusesWhatItCannotRead(t *testing.T) {
 	}
 }
 
+// approve and refuse never guess on an ask with one option (a "told" seen),
+// and say what an answer means where its word doesn't.
+func TestApproveRefuseNeverGuess(t *testing.T) {
+	if _, err := approveOption("refuse", core.Ask{ID: "t1", Options: []string{"seen"}}); err == nil {
+		t.Fatal("refuse answered a one-option ask")
+	}
+	if _, err := approveOption("approve", core.Ask{ID: "q1"}); err == nil {
+		t.Fatal("approve answered an ask with no options")
+	}
+	if o, _ := approveOption("approve", core.Ask{Options: []string{"done", "declined"}}); o != "done" || meaning(o) == "" {
+		t.Fatalf("approve picked %q, meaning %q", o, meaning(o))
+	}
+	if o, _ := approveOption("refuse", core.Ask{Options: []string{"run", "declined"}}); o != "declined" {
+		t.Fatalf("refuse picked %q", o)
+	}
+}
+
 // The owner read "resets Sat 01:40" at 02:09Z as a reset already past; it was
 // 05:40Z printed in EDT with no zone. The line now says how far off it is.
 func TestPlanLineSaysWhenTheResetIs(t *testing.T) {

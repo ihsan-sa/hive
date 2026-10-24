@@ -285,6 +285,42 @@ func TestUndeletableCodexTokenKeepsAnotherBlockReason(t *testing.T) {
 	if got.Status != StatusBlocked || got.Reason != "waiting on a person" || !strings.Contains(got.Progress, "Codex token could not be deleted") {
 		t.Fatalf("run is %q (%q), note %q", got.Status, got.Reason, got.Progress)
 	}
+	// Unblocking it checks the folder again: still stuck, so it stays
+	// blocked, now for the token, and the journal hears it once.
+	if err := rs2.Reopen("r1", "go on"); err == nil {
+		t.Fatal("reopened a run whose token folder won't delete")
+	}
+	got, _ = rs2.Get("r1")
+	if got.Status != StatusBlocked || !strings.HasPrefix(got.Reason, codexTokenStuck) || len(got.Pending) > 0 {
+		t.Fatalf("after unblocking, run is %q (%q), pending %d", got.Status, got.Reason, len(got.Pending))
+	}
+	before := fileSize(t, path)
+	if err := rs2.Reopen("r1", "go on"); err == nil {
+		t.Fatal("reopened a run whose token folder won't delete")
+	}
+	if after := fileSize(t, path); after != before {
+		t.Fatalf("a second unblock wrote %d bytes to the journal", after-before)
+	}
+	// Once the folder deletes, unblocking works.
+	os.Chmod(ws.RunPrivate("r1"), 0o700)
+	if err := rs2.Reopen("r1", "go on"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = rs2.Get("r1"); got.Status != StatusIdle || Exists(filepath.Join(ws.RunPrivate("r1"), "codex")) {
+		t.Fatalf("run is %q (%q), token folder left: %v", got.Status, got.Reason, Exists(filepath.Join(ws.RunPrivate("r1"), "codex")))
+	}
+}
+
+// A message waiting when a turn ends blocked for its Codex token does not wake it.
+func TestUndeletableCodexTokenIsNotWokenByAMessage(t *testing.T) {
+	rs, _, _, r, lock := codexRun(t)
+	rs.Send("r1", "an answer")
+	lock()
+	rs.endTurn(r)
+	got, _ := rs.Get("r1")
+	if got.Status != StatusBlocked || !strings.HasPrefix(got.Reason, codexTokenStuck) {
+		t.Fatalf("run is %q (%q)", got.Status, got.Reason)
+	}
 }
 
 func fileSize(t *testing.T, p string) int64 {

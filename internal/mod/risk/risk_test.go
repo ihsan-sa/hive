@@ -277,6 +277,58 @@ func TestSudoWithPasswordGoesToThePerson(t *testing.T) {
 	}
 }
 
+// Where sudo runs without a password for some commands and not others, a step
+// is judged by how it ends: one that fails with sudo's password message goes
+// to the person, with what it printed, and is never re-run. The shell doesn't
+// stop at the failed sudo, so what follows it has run too. One that succeeds
+// is done whatever it prints.
+func TestSudoWantingAPasswordAtRunGoesToThePerson(t *testing.T) {
+	bin := t.TempDir()
+	fake := "#!/bin/sh\ncase \"$1\" in -n|true|echo) [ \"$1\" = -n ] && shift; exec \"$@\";; esac\necho 'sudo: a password is required' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, script := range []string{
+		"sudo echo allowed",
+		"printf '%s\\n' 'sudo: a terminal is required'", // its diagnostic, but it succeeds
+		"echo before; sudo apt-get install -y x; echo after > proof; exit 1",
+	} {
+		g := newRig(t, 3)
+		req := g.request("install a system package", "apt-get install -y x", "T2")
+		if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": script}); err != nil {
+			t.Fatal(err)
+		}
+		got := g.settle(req.ID, "approved", "running")
+		a, _ := g.c.Person.Get(got.Ask)
+		if !strings.Contains(script, "apt-get") {
+			if got.State != "done" || got.Ask != "" {
+				t.Fatalf("%q didn't end done: %+v %+v", script, got, a)
+			}
+			continue
+		}
+		ran := core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof"))
+		if got.State != "asked" || !strings.HasPrefix(a.Title, "Needs your password") || strings.Join(a.Options, "|") != "done|declined" ||
+			!strings.Contains(a.Detail, "may have run, before sudo or after") || !strings.Contains(a.Detail, "What it printed:\nbefore") || !ran || !g.told("waits on them") || g.told("done") {
+			t.Fatalf("%+v %+v ran=%v", got, a, ran)
+		}
+	}
+}
+
+// Every pending request is listed, however old, and only the newest settled ones.
+func TestRequestsKeepsEveryPending(t *testing.T) {
+	g := newRig(t, 2)
+	g.m.save(&Request{ID: "old", State: "asked", Created: time.Now().Add(-time.Hour)})
+	for i := 0; i < 25; i++ {
+		g.m.save(&Request{ID: core.NewID(), State: "done", Created: time.Now()})
+	}
+	out, err := g.call(g.worker, "requests", nil)
+	b, _ := json.Marshal(out)
+	if err != nil || strings.Count(string(b), `"ID":`) != 21 || !strings.Contains(string(b), `"ID":"old"`) {
+		t.Fatalf("%v %s", err, b)
+	}
+}
+
 func TestT3GoesToATribunalEvenOnDo(t *testing.T) {
 	g := newRig(t, 2)
 	req := g.request("delete the old release bucket", "x", "T3")
@@ -810,6 +862,10 @@ func TestVoteMustBeClean(t *testing.T) {
 		`{"vote":true,"reason":"fine"}`:                   "decline",
 		`{"vote":"yes","reason":"fine"}`:                  "decline",
 		`{"vote":"approve"}{"vote":"approve"}`:            "decline",
+		`{"vote":"approve","reason":"fine"}}`:             "decline",
+		`{"vote":"approve","reason":"fine"}]`:             "decline",
+		`{"vote":"approve","reason":"fine"} x`:            "decline",
+		"{\"vote\":\"approve\",\"reason\":\"fine\"}\n":    "approve",
 	} {
 		if got, _ := voteOf(core.Run{Status: core.StatusDone, Structured: json.RawMessage(raw)}); got != want {
 			t.Errorf("voteOf(%s) = %s, want %s", raw, got, want)

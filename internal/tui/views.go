@@ -164,7 +164,11 @@ func (m *model) dashRows() []row {
 	if add(row{key: "alerts", text: fmt.Sprintf("alerts (%d)", len(m.st.Alerts)), expand: len(m.st.Alerts) > 0}) {
 		for i := len(m.st.Alerts) - 1; i >= 0; i-- {
 			a := m.st.Alerts[i]
-			add(row{key: fmt.Sprintf("alert:%d", i), depth: 1, text: fmt.Sprintf("%s  %s  %s", a.At.Local().Format("Mon 15:04"), stWarn.Render(a.Kind), a.Text)})
+			n := ""
+			if a.Count > 1 {
+				n = fmt.Sprintf(" (x%d)", a.Count)
+			}
+			add(row{key: fmt.Sprintf("alert:%d", i), depth: 1, text: fmt.Sprintf("%s  %s  %s", a.At.Local().Format("Mon 15:04"), stWarn.Render(a.Kind), a.Text+n)})
 		}
 	}
 	if add(row{key: "jobs", text: "schedules", expand: len(m.st.Jobs) > 0}) {
