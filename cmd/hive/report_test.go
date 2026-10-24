@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,6 +124,84 @@ func TestInstallerShareAnswer(t *testing.T) {
 			}
 			if asked, _ := os.ReadFile(tty); !c.noTTY && !c.asked && !strings.Contains(string(asked), "\n"+report.Question+" (y/N) ") {
 				t.Fatalf("the installer asked something other than report.Question:\n%s", asked)
+			}
+		})
+	}
+}
+
+// The update workflow runs this checkout's install.sh to install an older
+// release, which may not have the commands the installer now calls: before
+// v0.1.18 there is no `report`, and an unknown command exits 2. The installer
+// must still install it, without asking about sharing it can't record.
+func TestInstallerOldReleases(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("install.sh is the Linux and macOS installer; Windows runs install.ps1")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	for _, tool := range []string{"curl", "install", "awk"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("no %s", tool)
+		}
+	}
+	installer, err := filepath.Abs("../../install/install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	arch := map[string]string{"amd64": "amd64", "arm64": "arm64"}[runtime.GOARCH]
+	if arch == "" {
+		t.Skip("no release for " + runtime.GOARCH)
+	}
+	asset := "hive-" + runtime.GOOS + "-" + arch
+	// Old releases answer what main.go answered then: --version and shutdown,
+	// and "unknown command" with exit 2 for the rest. The current one has
+	// `report`, unanswered.
+	old := "#!/bin/sh\necho \"$*\" >> \"$CALLS\"\ncase \"$1\" in --version) echo \"$0 %s\" ;; shutdown) exit 1 ;; *) echo \"unknown command \\\"$1\\\"\" >&2; exit 2 ;; esac\n"
+	current := "#!/bin/sh\necho \"$*\" >> \"$CALLS\"\ncase \"$*\" in --version) echo \"$0 v9.9.9\" ;; shutdown) exit 1 ;; 'report asked') exit 1 ;; 'report on'|'report off') ;; *) exit 2 ;; esac\n"
+	for _, c := range []struct {
+		name, version, cmd, bin, share, want string
+	}{
+		{name: "v0.1.2 as hive-v0", version: "v0.1.2", cmd: "hive-v0", bin: fmt.Sprintf(old, "v0.1.2")},
+		{name: "v0.1.17, the last full release", version: "v0.1.17", cmd: "hive", bin: fmt.Sprintf(old, "v0.1.17")},
+		{name: "v0.1.17 with an answer ahead", version: "v0.1.17", cmd: "hive", bin: fmt.Sprintf(old, "v0.1.17"), share: "yes"},
+		{name: "a release with report", version: "v9.9.9", cmd: "hive", bin: current, want: "report off"},
+		{name: "a release with report, answered ahead", version: "v9.9.9", cmd: "hive", bin: current, share: "yes", want: "report on"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			serve, stubs, bin := filepath.Join(dir, "release"), filepath.Join(dir, "stubs"), filepath.Join(dir, "bin")
+			for _, d := range []string{serve, stubs} {
+				os.MkdirAll(d, 0o755)
+			}
+			os.WriteFile(filepath.Join(serve, asset), []byte(c.bin), 0o755)
+			sum := sha256.Sum256([]byte(c.bin))
+			os.WriteFile(filepath.Join(serve, "checksums.txt"), []byte(hex.EncodeToString(sum[:])+"  "+asset+"\n"), 0o644)
+			// curl -fsSL <url> -o <out> fetches the file the URL ends in, from this release only.
+			curl := "#!/bin/sh\ncase \"$2\" in */releases/download/" + c.version + "/*) ;; *) echo \"unexpected url $2\" >&2; exit 22 ;; esac\ncp \"" + serve + "/${2##*/}\" \"$4\"\n"
+			os.WriteFile(filepath.Join(stubs, "curl"), []byte(curl), 0o755)
+			calls := filepath.Join(dir, "calls")
+			cmd := exec.Command(sh, installer)
+			cmd.Env = append(os.Environ(), "PATH="+stubs+":"+bin+":"+os.Getenv("PATH"), "HOME="+dir, "CALLS="+calls,
+				"HIVE_VERSION="+c.version, "HIVE_CMD="+c.cmd, "HIVE_REPO=ihsan-sa/hive", "HIVE_BIN_DIR="+bin,
+				"HIVE_SHARE="+c.share, "HIVE_TTY="+filepath.Join(dir, "no", "tty"))
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("installing %s: %v\n%s", c.version, err, out)
+			}
+			if !strings.Contains(string(out), "Installed. Run: "+c.cmd) {
+				t.Fatalf("the installer didn't finish:\n%s", out)
+			}
+			raw, _ := os.ReadFile(calls)
+			var report []string
+			for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+				if strings.HasPrefix(l, "report ") && l != "report asked" {
+					report = append(report, l)
+				}
+			}
+			if got := strings.Join(report, "; "); got != c.want {
+				t.Fatalf("the installer ran %q on %s, want %q; all calls:\n%s", got, c.version, c.want, raw)
 			}
 		})
 	}
