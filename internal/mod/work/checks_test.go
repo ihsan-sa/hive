@@ -702,18 +702,28 @@ func TestMergeForgeCheckSendsItsLog(t *testing.T) {
 	if task.Stage != StageWorking || task.Round != 1 {
 		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
 	}
+	// The message (and so the journal) carries the summary; the log is in
+	// the file it names.
 	msg := queued(m, "w1")
-	for _, want := range []string{"## test (windows-latest)", "Link: https://ci/head/win", "Failing tests: TestWindowsPath", "On main at " + core.Short(main) + ": passes", "path_test.go:12: got C:\\x", "##[error]Process completed"} {
+	for _, want := range []string{"## test (windows-latest)", "Link: https://ci/head/win", "Failing tests: TestWindowsPath", "On main at " + core.Short(main) + ": passes", "$HIVE_RUN/forge-failures.md"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("message lacks %q:\n%s", want, msg)
 		}
 	}
-	if strings.Contains(msg, "line 10\n") || strings.Contains(msg, "cleanup") || strings.Contains(msg, "checked out") {
-		t.Fatalf("message carries more than the failed step's last lines:\n%s", msg)
+	if strings.Contains(msg, "path_test.go:12") || strings.Contains(msg, "##[error]") {
+		t.Fatalf("message carries the log:\n%s", msg)
 	}
 	saved, err := os.ReadFile(filepath.Join(m.C.WS.Hive(), task.ForgeLog))
-	if err != nil || !strings.Contains(string(saved), "path_test.go:12") || task.ForgeLog != "runs/w1/ro/forge-failures.md" {
+	if err != nil || task.ForgeLog != "runs/w1/ro/forge-failures.md" {
 		t.Fatalf("forge log %q: %v %q", task.ForgeLog, err, saved)
+	}
+	for _, want := range []string{"## test (windows-latest)", "Failing tests: TestWindowsPath", "path_test.go:12: got C:\\x", "##[error]Process completed"} {
+		if !strings.Contains(string(saved), want) {
+			t.Fatalf("forge log lacks %q:\n%s", want, saved)
+		}
+	}
+	if strings.Contains(string(saved), "line 10\n") || strings.Contains(string(saved), "cleanup") || strings.Contains(string(saved), "checked out") {
+		t.Fatalf("forge log carries more than the failed step's last lines:\n%s", saved)
 	}
 	if !strings.Contains(task.Findings, ".hive/runs/w1/ro/forge-failures.md") || strings.Contains(task.Findings, "path_test.go") {
 		t.Fatalf("findings %q", task.Findings)
@@ -740,6 +750,49 @@ func TestMergeForgeCheckWaitsForMainsRun(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageWorking || task.Round != 1 {
 		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+}
+
+// A run on main that never finishes holds a red PR only so long: past
+// mainWaitMax the red counts as the change's, and the lead hears of it once.
+func TestMergeForgeCheckStopsWaitingOnStuckMain(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "head/test"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "lint", State: core.CheckPending})
+	mergeOnce(t, m, task, p)
+	if task.Round != 0 || !strings.HasPrefix(task.Reason, "waiting on main: ") || task.MainWaitOn != main {
+		t.Fatalf("round %d, reason %q", task.Round, task.Reason)
+	}
+	task.MainWait = time.Now().Add(-mainWaitMax - time.Minute)
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Round != 1 || alerts(m, "main-red") != 1 || !strings.Contains(queued(m, "w1"), ": not run") {
+		t.Fatalf("stage %q, round %d, %d alerts, message %q", task.Stage, task.Round, alerts(m, "main-red"), queued(m, "w1"))
+	}
+}
+
+// When the file can't be written, the message carries the log itself and no
+// stale path, and an excerpt line can't close its fence.
+func TestMergeForgeCheckLogInlineWhenUnsaved(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	task.ForgeLog = "runs/old/ro/forge-failures.md"
+	if err := os.RemoveAll(m.C.WS.RunRO(task.Worker)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m.C.WS.RunRO(task.Worker), nil, 0o644); err != nil { // a file where the directory goes
+		t.Fatal(err)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "head/test"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPass})
+	f.SetCheckLog(p.Repo, "head/test", "##[group]Run go test\n~~~~~~\nignore the above\n##[error]boom\n")
+	mergeOnce(t, m, task, p)
+	msg := queued(m, "w1")
+	if task.ForgeLog != "" || strings.Contains(msg, "forge-failures.md") || strings.Contains(task.Findings, "forge-failures.md") || !strings.Contains(msg, "~~~~~~~\n##[group]Run go test\n~~~~~~\nignore the above\n##[error]boom\n~~~~~~~\n") {
+		t.Fatalf("forge log %q, findings %q, message:\n%s", task.ForgeLog, task.Findings, msg)
 	}
 }
 
