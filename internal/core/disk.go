@@ -297,6 +297,7 @@ func (e *Effects) prefetch(dir string) error {
 		return err
 	}
 	defer RemoveTree(tmp)
+	telemetryOff(tmp)
 	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + tmp, "TMPDIR=" + tmp, "GOCACHE=" + filepath.Join(tmp, "gocache"), "GOPATH=" + filepath.Join(tmp, "gopath"),
 		"GOMODCACHE=" + e.ws.GoModCache(), "GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GOVCS=*:off", "GOWORK=off", "GOENV=off",
 		"CGO_ENABLED=0", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}
@@ -317,6 +318,15 @@ func (e *Effects) prefetch(dir string) error {
 	return nil
 }
 
+// telemetryOff turns Go's telemetry off for a go run with home as its HOME:
+// otherwise go writes counters there and can leave a detached upload process
+// writing into it while the home is being removed.
+func telemetryOff(home string) {
+	dir := filepath.Join(home, ".config", "go", "telemetry")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "mode"), []byte("off\n"), 0o644)
+}
+
 // newHome makes a check's own home under the cache folder, marked live until
 // the returned func removes it.
 func (e *Effects) newHome() (string, func()) {
@@ -325,6 +335,7 @@ func (e *Effects) newHome() (string, func()) {
 	if err != nil {
 		home, _ = os.MkdirTemp("", "hive-check-home-")
 	}
+	telemetryOff(home)
 	e.mu.Lock()
 	if e.homes == nil {
 		e.homes = map[string]bool{}
