@@ -693,6 +693,7 @@ func (rs *Runs) Send(id, text string) error {
 }
 
 // Reopen lets a finished run take more turns (fix rounds go back to the same worker).
+// A Codex run whose token folder still won't delete stays blocked for it.
 func (rs *Runs) Reopen(id, text string) error {
 	r, ok := rs.Get(id)
 	if !ok {
@@ -701,10 +702,30 @@ func (rs *Runs) Reopen(id, text string) error {
 	if r.Status == StatusStopped || r.StopAsked {
 		return fmt.Errorf("run %s was stopped on purpose (%s); it stays stopped", id, r.Reason)
 	}
+	if err := rs.tokenStuck(r); err != nil {
+		return err
+	}
 	rs.append("run.reopened", runNote{ID: id})
 	rs.append("run.queued", runNote{ID: id, Text: text})
 	rs.append("run.status", runNote{ID: id, Status: StatusIdle, Reason: "reopened"})
 	return nil
+}
+
+// tokenStuck checks again that a Codex run's token folder is gone; if it still
+// won't delete, the run is blocked for it (once) and the error says why.
+func (rs *Runs) tokenStuck(r Run) error {
+	if HarnessName(r.Harness) != "codex" || r.Status == StatusRunning {
+		return nil
+	}
+	err := rs.dropCodexHome(r.ID)
+	if err == nil {
+		return nil
+	}
+	why := codexTokenStuck + err.Error()
+	if r.Status != StatusBlocked || !strings.HasPrefix(r.Reason, codexTokenStuck) {
+		rs.SetStatus(r.ID, StatusBlocked, why)
+	}
+	return fmt.Errorf("run %s stays blocked: %s", r.ID, why)
 }
 
 // Wait marks a run as waiting for something (a warden, a helper); when its
@@ -934,8 +955,9 @@ func (rs *Runs) endTurn(r Run) {
 	}
 	rs.append("run.turn_ended", te)
 	// A message that came in while it finished blocked (often the answer it was
-	// blocked on) wakes it rather than waiting on a run that takes no turns.
-	if te.Status == StatusBlocked && len(cur.Pending) > 0 {
+	// blocked on) wakes it rather than waiting on a run that takes no turns;
+	// one blocked for its Codex token stays blocked.
+	if te.Status == StatusBlocked && dropErr == nil && len(cur.Pending) > 0 {
 		rs.append("run.reopened", runNote{ID: r.ID})
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusIdle, Reason: "woken by a message"})
 	}
