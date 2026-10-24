@@ -563,16 +563,16 @@ func TestAMessageRacingABlockedEndWakesTheRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	rs.append("run.turn_ended", turnEnded{ID: "w", Turn: 1, Status: StatusBlocked, Reason: "asked a warden"})
-	rs.wakeAnswered("w") // endTurn's, before the message is in
+	rs.wake("w") // endTurn's, before the message is in
 	if r, _ := rs.Get("w"); r.Status != StatusBlocked {
 		t.Fatalf("woken with nothing to read: %s", r.Status)
 	}
 	rs.append("run.queued", runNote{ID: "w", Text: "[request x] the warden won't"})
-	rs.wakeAnswered("w") // Send's, after its message
+	rs.wake("w") // Send's, after its message
 	if r, _ := rs.Get("w"); r.Status != StatusIdle || len(r.Pending) != 1 {
 		t.Fatalf("the answer was left on a blocked run: %s, %d pending", r.Status, len(r.Pending))
 	}
-	rs.wakeAnswered("w")
+	rs.wake("w")
 	n := 0
 	j.Replay(func(e Event) {
 		if e.Kind == "run.reopened" {

@@ -203,7 +203,7 @@ type Runs struct {
 	holds map[string]string  // why no new turn starts (a restart waiting for a quiet moment), by who holds them
 	// launching counts launches past the hold whose turn isn't journalled yet.
 	launching int
-	waking    sync.Mutex // one wakeAnswered at a time, so a run is woken once
+	waking    sync.Mutex // one wake at a time, so a run is woken once
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -770,38 +770,49 @@ func (rs *Runs) Spent(month string) float64 {
 
 // Takes says why run id can't take a message, or nil if it can.
 func (rs *Runs) Takes(id string) error {
+	_, err := rs.taker(id)
+	return err
+}
+
+func (rs *Runs) taker(id string) (Run, error) {
 	r, ok := rs.Get(id)
 	if !ok {
-		return ErrNotFound
+		return r, ErrNotFound
 	}
 	if r.Terminal() && !r.Persistent {
-		return fmt.Errorf("run %s has ended (%s)", id, r.Status)
+		return r, fmt.Errorf("run %s has ended (%s)", id, r.Status)
 	}
-	return nil
+	return r, nil
 }
 
 // Send queues a message for a run's next turn.
 func (rs *Runs) Send(id, text string) error {
-	if err := rs.Takes(id); err != nil {
+	r, err := rs.taker(id)
+	if err != nil {
 		return err
 	}
 	rs.append("run.queued", runNote{ID: id, Text: text})
-	rs.wakeAnswered(id) // its turn may have ended blocked since Takes
+	// A turn that ended blocked after the check, before the message landed,
+	// never saw it; wake the run for it, as endTurn wakes one whose message
+	// came in first.
+	if !r.Terminal() {
+		rs.wake(id)
+	}
 	return nil
 }
 
-// wakeAnswered wakes a run that ended blocked with a message still to read
-// (often the answer it was blocked on), rather than leave it on a run that
-// takes no turns; one blocked for its Codex token stays blocked. Send and
-// endTurn each call it after their own event, so whichever is applied last
-// sees both, however the journal orders its subscribers.
-func (rs *Runs) wakeAnswered(id string) {
-	rs.waking.Lock()
+// wake gives a run that ended blocked with a message waiting (often the
+// answer it was blocked on) the turn for it, rather than leaving it on a run
+// that takes no turns. One blocked for its Codex token stays blocked.
+func (rs *Runs) wake(id string) {
+	rs.waking.Lock() // Send and endTurn can both see it; it's woken once
 	defer rs.waking.Unlock()
-	if r, ok := rs.Get(id); ok && r.Status == StatusBlocked && len(r.Pending) > 0 && !strings.HasPrefix(r.Reason, codexTokenStuck) {
-		rs.append("run.reopened", runNote{ID: id})
-		rs.append("run.status", runNote{ID: id, Status: StatusIdle, Reason: "woken by a message"})
+	r, ok := rs.Get(id)
+	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) {
+		return
 	}
+	rs.append("run.reopened", runNote{ID: id})
+	rs.append("run.status", runNote{ID: id, Status: StatusIdle, Reason: "woken by a message"})
 }
 
 // Reopen lets a finished run take more turns (fix rounds go back to the same worker).
@@ -1075,9 +1086,12 @@ func (rs *Runs) endTurn(r Run) {
 		te.ParkedUntil = time.Now().Add(min(backoff(cur.Retries), 5*time.Minute))
 	}
 	rs.append("run.turn_ended", te)
-	// A message that came in while it finished blocked wakes it. Read after
-	// the event: one sent between cur and here was queued on a running run.
-	rs.wakeAnswered(r.ID)
+	// A message that came in while it finished blocked wakes it. The run is
+	// read again, after the turn's end is recorded: one that landed since cur
+	// was read is not in cur, and its Send saw the run still running.
+	if te.Status == StatusBlocked {
+		rs.wake(r.ID)
+	}
 	// A spawned helper's account goes back to the agent that spawned it.
 	if (te.Status == StatusDone || te.Status == StatusBlocked) && r.Parent != "" {
 		account := cur.Result
