@@ -111,14 +111,24 @@ func (x *term) until(timeout time.Duration, what string, ok func(screen string) 
 // pick moves the cursor down, then up, until the selected line starts with label.
 func (x *term) pick(label string) {
 	x.t.Helper()
-	for i := 0; i < 60; i++ {
-		cur := x.selected()
-		if strings.HasPrefix(cur, label) {
-			return
-		}
-		x.keys(map[bool]string{true: "Down", false: "Up"}[i < 30])
-		for j := 0; j < 10 && x.selected() == cur; j++ { // let the screen catch up
-			time.Sleep(50 * time.Millisecond)
+	// Down to the end of the list, then up to its top: a long list (Settings
+	// with its Routes group) has the line on either side of the selection.
+	for _, key := range []string{"Down", "Up"} {
+		for i := 0; i < 80; i++ {
+			cur := x.selected()
+			if strings.HasPrefix(cur, label) {
+				return
+			}
+			x.keys(key)
+			moved := false
+			for j := 0; j < 10 && !moved; j++ { // let the screen catch up
+				if moved = x.selected() != cur; !moved {
+					time.Sleep(50 * time.Millisecond)
+				}
+			}
+			if !moved {
+				break // the end of the list
+			}
 		}
 	}
 	x.t.Fatalf("no line starting %q to select:\n%s", label, x.screen())
