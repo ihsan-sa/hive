@@ -804,6 +804,10 @@ func (rs *Runs) Send(id, text string) error {
 // wake gives a run that ended blocked with a message waiting (often the
 // answer it was blocked on) the turn for it, rather than leaving it on a run
 // that takes no turns. One blocked for its Codex token stays blocked.
+// It is safe to call at any time: it reads the run afresh, so a caller's
+// earlier, stale look (Send's live check, endTurn's read) can't wake the
+// wrong run; on anything but a blocked run with a message waiting it does
+// nothing.
 func (rs *Runs) wake(id string) {
 	rs.waking.Lock() // Send and endTurn can both see it; it's woken once
 	defer rs.waking.Unlock()
