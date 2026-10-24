@@ -1088,7 +1088,9 @@ func TestWaitingReachesThePerson(t *testing.T) {
 // dashboard never lists it as merging and main never takes it.
 func TestClosedPRStops(t *testing.T) {
 	t.Parallel()
-	h := start(t)
+	// At autonomy 1 the merge waits on the person, not on a fake warden that
+	// answers in a fraction of a second, so the test sees it waiting.
+	h := startWith(t, bin, func(c *core.Config) { c.Autonomy = 1 })
 	h.seed("me/closed", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "closed", "repo": "me/closed"}, nil)
 	h.post("/api/ask", map[string]string{"project": "closed", "title": "edit the goals", "known": "FAKE:goals"}, nil)
