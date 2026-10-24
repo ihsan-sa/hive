@@ -108,19 +108,6 @@ var (
 	SelfHigh = []string{"internal/core/effects.go", "internal/core/forge.go", "internal/harness/", "internal/mod/release/", "internal/daemon/", "modules/agents/warden.md", "modules/agents/tribunal.md", "go.mod", "go.sum", "go.work", "go.work.sum", "vendor/"}
 )
 
-// SelfUnread is the allow-list of a self project's unread path: a change is
-// unread only when every file is a doc (by type, as Small judges it) under
-// one of these. Everything else (code, prompts, tests, root instruction files
-// such as CLAUDE.md, AGENTS.md and LEARNINGS.md, and all of .hive/, whose
-// lessons every reviewer reads as a rule) keeps a reader, whether or not a
-// list names it, so no small edit moves its own bar unread.
-var SelfUnread = []string{"docs/"}
-
-// SelfSpec are the owner's spec under docs/: in a self project they are taken
-// out of SelfUnread, so they keep a reader. (docs/REVIEW.md and .hive/goals.md
-// stay read by Classify's protected list, not by this one.)
-var SelfSpec = []string{"docs/spec.md", "docs/the-hive-essay.md"}
-
 // AlwaysRead are paths that are never unread in any project: the security
 // list itself (its paths, root and required_checks), the CI configuration that
 // defines the forge's checks the unread path relies on, and the Hive's own

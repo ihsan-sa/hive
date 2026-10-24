@@ -25,8 +25,8 @@ func TestUnreadChange(t *testing.T) {
 		unread     bool
 	}{
 		{"main.go", "package main\n", p, true},
-		{"main.go", "package main\n", self, false},                 // a self project is default-deny: code is read
-		{"docs/notes.md", "# notes\n", self, true},                 // a doc under docs/ is not
+		{"main.go", "package main\n", self, false},                 // every change to the Hive itself is read
+		{"docs/notes.md", "# notes\n", self, false},                // a self project is never unread, so its releases never wait on one
 		{"internal/app/selfgate.go", "package app\n", self, false}, // the recursive gate's verdict, on no list
 		{"internal/mod/runner/run.go", "package runner\n", self, false},
 		{"internal/proc/proc.go", "package proc\n", self, false},
@@ -175,5 +175,29 @@ func TestSecondReadOnlyWhenNeeded(t *testing.T) {
 	}
 	if err := try("app/e.go", big, Verdict{Verdict: "land"}, Verdict{Verdict: "land"}); err != nil {
 		t.Fatalf("two reads should merge a big change: %v", err)
+	}
+}
+
+// A small docs change to the Hive itself still needs a read to merge, so the
+// merge is never recorded unread and a release never waits on the person for
+// it (release.afterKept holds only heads with no read).
+func TestSelfChangeIsAlwaysRead(t *testing.T) {
+	c, f := testHive(t)
+	seedRepo(t, f, "me/hive", map[string]string{".hive/project.json": `{"test": "true"}`})
+	p, _ := c.Projects.Add(Project{Name: "hive", Repo: "me/hive", Self: true})
+	main, _ := c.Effects.Sync(p)
+	r, _ := commitInCheckout(t, c, p, "ws", main, "docs/notes.md", "# notes\n")
+	sha, _ := c.Effects.Extract(p, r, main)
+	c.Effects.Push(p, "hive/ts", sha)
+	pr, _ := f.CreatePR(p.Repo, "hive/ts", "main", "notes", "body")
+	c.Effects.RunCheck(p, sha, "test", "true")
+	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main, Task: "ts"}
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no land verdict") {
+		t.Fatalf("a self docs change merged with no read: %v", err)
+	}
+	var merged bool
+	c.J.Replay(func(e Event) { merged = merged || e.Kind == "effect.merged" })
+	if merged {
+		t.Fatal("a self change was recorded as merged")
 	}
 }
