@@ -66,7 +66,7 @@ type Effects struct {
 	seats     map[string]map[string]Verdict     // project#diff -> security seat -> its latest verdict
 	hostMade  map[string]HostCommit
 	approvals map[string]bool
-	failing   map[string][]string // repo url -> the failing tests a check's log names
+	failing   map[string]CheckFailure // repo url -> what a failed check's log says
 }
 
 // Check is a host-run test or score on one commit.
@@ -1234,36 +1234,84 @@ func newTests(r CheckRun, mainRuns []CheckRun, tests TestsOf) (fresh []string, o
 }
 
 // FailingTests reads the failing tests in a check's log on repo's forge, for
-// ChecksAgainstMain, or nil when the forge can't read logs. A log is read
-// once: a run's log doesn't change, and another attempt has a URL of its own.
+// ChecksAgainstMain, or nil when the forge can't read logs.
 func (e *Effects) FailingTests(repo string) TestsOf {
-	cl, ok := e.Forge.(CheckLogs)
-	if !ok {
+	if _, ok := e.Forge.(CheckLogs); !ok {
 		return nil
 	}
 	return func(r CheckRun) ([]string, bool) {
-		if r.URL == "" {
-			return nil, false
-		}
-		key := repo + " " + r.URL
-		e.mu.Lock()
-		names, seen := e.failing[key]
-		e.mu.Unlock()
-		if !seen {
-			log, err := cl.CheckLog(repo, r)
-			if err != nil {
-				return nil, false // not kept: the next pass tries again
-			}
-			names = FailedTests(log)
-			e.mu.Lock()
-			if e.failing == nil || len(e.failing) > 500 {
-				e.failing = map[string][]string{}
-			}
-			e.failing[key] = names
-			e.mu.Unlock()
-		}
-		return names, len(names) > 0
+		f, ok := e.CheckFailure(repo, r)
+		return f.Tests, ok && len(f.Tests) > 0
 	}
+}
+
+// CheckFailure is what a failed check's log says: the tests it names as
+// failing and the end of the step that failed.
+type CheckFailure struct {
+	Tests   []string `json:"tests,omitempty"`
+	Excerpt string   `json:"excerpt,omitempty"`
+}
+
+// CheckFailure reads a failed check's log on repo's forge with the Hive's own
+// token, so a worker (which holds none) gets it in its findings; ok is false
+// when the forge can't read it. A log is read once: a run's log doesn't
+// change, and another attempt has a URL of its own.
+func (e *Effects) CheckFailure(repo string, r CheckRun) (CheckFailure, bool) {
+	cl, ok := e.Forge.(CheckLogs)
+	if !ok || r.URL == "" {
+		return CheckFailure{}, false
+	}
+	key := repo + " " + r.URL
+	e.mu.Lock()
+	f, seen := e.failing[key]
+	e.mu.Unlock()
+	if seen {
+		return f, true
+	}
+	log, err := cl.CheckLog(repo, r)
+	if err != nil {
+		return CheckFailure{}, false // not kept: the next pass tries again
+	}
+	f = CheckFailure{Tests: FailedTests(log), Excerpt: LogExcerpt(log, ExcerptLines)}
+	e.mu.Lock()
+	if e.failing == nil || len(e.failing) > 500 {
+		e.failing = map[string]CheckFailure{}
+	}
+	e.failing[key] = f
+	e.mu.Unlock()
+	return f, true
+}
+
+// ExcerptLines is how much of a failed step's log goes in its findings.
+const ExcerptLines = 100
+
+var (
+	ghStepStart = regexp.MustCompile(`^##\[group\]Run `)
+	ghStepError = regexp.MustCompile(`##\[error\]`)
+)
+
+// LogExcerpt is the last n lines of the step that failed in a CI job's log:
+// the lines up to its last error mark (GitHub's "##[error]"), from no earlier
+// than that step's start. A log with no error mark gives its last n lines.
+func LogExcerpt(log string, n int) string {
+	lines := strings.Split(strings.TrimRight(strings.ReplaceAll(log, "\r\n", "\n"), "\n"), "\n")
+	end := len(lines)
+	for i := len(lines) - 1; i >= 0; i-- {
+		if ghStepError.MatchString(lines[i]) {
+			end = i + 1
+			break
+		}
+	}
+	start := max(0, end-n)
+	if end < len(lines) {
+		for i := end - 1; i >= start; i-- {
+			if ghStepStart.MatchString(lines[i]) {
+				start = i
+				break
+			}
+		}
+	}
+	return strings.Join(lines[start:end], "\n")
 }
 
 // CheckNames lists checks by name, for a message.
