@@ -136,6 +136,19 @@ func Run(cfg Config) (rep Report, err error) {
 
 	cand := &Child{Name: "candidate", Root: filepath.Join(cfg.Out, "candidate"), Sandbox: cfg.Sandbox, Depth: cfg.Depth, Bin: cfg.CandBin, Go: gotool}
 	ctrl := &Child{Name: "control", Root: filepath.Join(cfg.Out, "control"), Sandbox: cfg.Sandbox, Depth: cfg.Depth, Bin: cfg.CtrlBin, Go: gotool}
+	// Each side's way out is its own meter, outside every sandbox: under
+	// bubblewrap the only one it has, so the meter's count is its cost.
+	sockDir, err := os.MkdirTemp(shortTmp(), "hive-meter-") // short: a socket path has a length limit
+	if err != nil {
+		return rep, err
+	}
+	defer os.RemoveAll(sockDir)
+	for _, c := range []*Child{cand, ctrl} {
+		if c.Meter, err = StartMeter(filepath.Join(sockDir, c.Name+".sock")); err != nil {
+			return rep, err
+		}
+		defer c.Meter.Close()
+	}
 	var built []*Child
 	for _, c := range []*Child{cand, ctrl} {
 		sha := cfg.Head
@@ -245,9 +258,14 @@ func Run(cfg Config) (rep Report, err error) {
 					return rep, fmt.Errorf("out of time (%s) before %s's %s", cfg.Timeout, side.c.Name, name)
 				}
 				cfg.log("rep %d: %s on %s", rep0+1, name, side.c.Name)
-				start := time.Now()
+				start, spent := time.Now(), side.c.Meter.Bytes()
 				r := p(&cfg, side.c)
 				r.Probe, r.Rep, r.Seconds = name, rep0+1, time.Since(start).Seconds()
+				if name == "benchmark" && r.Pass {
+					// Cost, counted by the meter, lower is better, and judged
+					// only between sides that landed the same working code.
+					r.Metrics = append(r.Metrics, Metric{Name: "egress_bytes", Value: float64(side.c.Meter.Bytes() - spent), Given: []string{"score", "asks_finished"}})
+				}
 				*side.out = append(*side.out, r)
 				cfg.log("  %s %s: pass=%v %s", side.c.Name, name, r.Pass, r.Detail)
 			}
@@ -259,6 +277,14 @@ func Run(cfg Config) (rep Report, err error) {
 	}
 	rep.Verdict = Decide(rep.Candidate, rep.Control, cfg.Options)
 	return rep, nil
+}
+
+// shortTmp is /tmp where there is one, whatever TMPDIR says.
+func shortTmp() string {
+	if fi, err := os.Stat("/tmp"); err == nil && fi.IsDir() {
+		return "/tmp"
+	}
+	return ""
 }
 
 func randHex() string {

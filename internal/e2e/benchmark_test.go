@@ -5,10 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"sort"
@@ -116,18 +116,9 @@ type benchState struct {
 // checks each textkit function on fresh inputs.
 func onForge(t *testing.T, h *hive, repo string) benchState {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "landed")
-	git := func(args ...string) string {
-		cmd := exec.Command("git", args...)
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v: %v %s", args, err, out)
-		}
-		return strings.TrimSpace(string(out))
-	}
-	git("clone", "-q", "--no-local", "--branch", "main", h.forge.RepoPath(repo), dir)
-	s := benchState{commits: strings.Fields(git("-C", dir, "rev-list", "HEAD")), pass: map[string]bool{}}
+	bare := h.forge.RepoPath(repo)
+	s := benchState{commits: strings.Fields(sideGit(t, bare, "rev-list", "main")), pass: map[string]bool{}}
+	src := sideGit(t, bare, "show", "main:textkit/__init__.py")
 	rng := rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 1))
 	var calls []benchCall
 	for _, name := range benchNames() {
@@ -135,7 +126,7 @@ func onForge(t *testing.T, h *hive, repo string) benchState {
 			calls = append(calls, benchChecks[name](rng))
 		}
 	}
-	got := runTextkit(t, dir, calls)
+	got := runTextkit(t, src, calls)
 	for _, name := range benchNames() {
 		s.pass[name] = true
 	}
@@ -145,6 +136,27 @@ func onForge(t *testing.T, h *hive, repo string) benchState {
 		}
 	}
 	return s
+}
+
+// sideGit reads the measured Hive's forge. Its repositories (and their
+// config) are that Hive's writing, so under the gate git runs in that Hive's
+// sandbox (HIVE_E2E_RUN), never here: what it can make git do stays with it.
+func sideGit(t *testing.T, bare string, args ...string) string {
+	t.Helper()
+	argv := append([]string{"git", "-C", bare}, args...)
+	if run := os.Getenv("HIVE_E2E_RUN"); run != "" {
+		argv = append([]string{run}, argv...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
+	cmd.Dir = os.TempDir()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func benchNames() []string {
@@ -256,18 +268,20 @@ var benchChecks = map[string]func(*rand.Rand) benchCall{
 	},
 }
 
-// textkitDriver calls textkit with the calls on stdin and prints the answers.
-const textkitDriver = `import json, sys
-calls = json.load(sys.stdin)
-sys.path.insert(0, ".")
+// textkitDriver loads textkit from the source on stdin and calls it with the
+// calls there, printing the answers. It reads no file of the measured Hive's.
+const textkitDriver = `import json, sys, types
+req = json.load(sys.stdin)
 out = []
+mod = types.ModuleType("textkit")
+sys.modules["textkit"] = mod
 try:
-    import textkit
+    exec(compile(req["src"], "textkit/__init__.py", "exec"), mod.__dict__)
 except Exception:
-    textkit = None
-for c in calls:
+    pass
+for c in req["calls"]:
     try:
-        out.append({"ok": True, "v": getattr(textkit, c["f"])(*c["a"])})
+        out.append({"ok": True, "v": getattr(mod, c["f"])(*c["a"])})
     except Exception:
         out.append({"ok": False})
 sys.stdout.write("\nRESULT " + json.dumps(out) + "\n")
@@ -278,23 +292,42 @@ type textkitAnswer struct {
 	V  json.RawMessage `json:"v"`
 }
 
-// runTextkit runs the driver in dir. The code is the measured Hive's, so under
-// the gate it runs in that Hive's sandbox (HIVE_E2E_RUN), not here.
-func runTextkit(t *testing.T, dir string, calls []benchCall) []textkitAnswer {
-	argv := []string{"python3", "-I", "-c", textkitDriver}
-	if run := os.Getenv("HIVE_E2E_RUN"); run != "" {
+// runTextkit runs the landed source on the calls. The code is the measured
+// Hive's, so under the gate it runs in a sealed sandbox (HIVE_E2E_CHECK): the
+// machine's programs and nothing of either Hive, not even the measured one's
+// own files, so only the source given here decides the answers.
+func runTextkit(t *testing.T, src string, calls []benchCall) []textkitAnswer {
+	argv := []string{"python3", "-I", "-S", "-c", textkitDriver}
+	if run := os.Getenv("HIVE_E2E_CHECK"); run != "" {
 		argv = append([]string{run}, argv...)
 	}
-	in, _ := json.Marshal(calls)
+	in, _ := json.Marshal(map[string]any{"src": src, "calls": calls})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Dir, cmd.Stdin = dir, bytes.NewReader(in)
-	out, _ := cmd.Output()
+	cmd.Dir, cmd.Stdin = "/", bytes.NewReader(in)
+	var buf bytes.Buffer
+	cmd.Stdout = &capped{w: &buf, n: 1 << 20}
+	cmd.Run()
+	out := buf.Bytes()
 	i := bytes.LastIndex(out, []byte("\nRESULT "))
 	var got []textkitAnswer
 	if i < 0 || json.Unmarshal(bytes.TrimSpace(out[i+len("\nRESULT "):]), &got) != nil {
-		t.Logf("textkit gave no answers: %s", out)
+		t.Logf("textkit gave no answers: %.500s", out)
 	}
 	return got
+}
+
+// capped writes at most n bytes and drops the rest.
+type capped struct {
+	w io.Writer
+	n int
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if k := min(len(p), c.n); k > 0 {
+		c.w.Write(p[:k])
+		c.n -= k
+	}
+	return len(p), nil
 }

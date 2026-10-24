@@ -17,6 +17,10 @@ type Metric struct {
 	Value  float64 `json:"value"`
 	Higher bool    `json:"higher"`
 	Info   bool    `json:"info,omitempty"` // shown, not judged: the side's own word, not measured from outside it
+	// Given names metrics of the same probe that must be equal on both sides
+	// for this one to be judged: time counts only between sides that did the
+	// same work, so doing less never wins it.
+	Given []string `json:"given,omitempty"`
 }
 
 // Result is one run of one probe on one side.
@@ -74,6 +78,7 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 		o.Floor = 0.02
 	}
 	type tally struct{ pass, n int }
+	given := map[key][]string{}
 	count := func(rs []Result) (map[string]*tally, map[key][]float64, map[key]bool) {
 		t, m, hi := map[string]*tally{}, map[key][]float64{}, map[key]bool{}
 		for _, r := range rs {
@@ -92,6 +97,9 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 				k := key{r.Probe, x.Name}
 				m[k] = append(m[k], x.Value)
 				hi[k] = x.Higher
+				if len(x.Given) > 0 {
+					given[k] = x.Given
+				}
 			}
 		}
 		return t, m, hi
@@ -136,6 +144,17 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 	sort.Slice(mk, func(i, j int) bool { return mk[i].probe+mk[i].metric < mk[j].probe+mk[j].metric })
 	for _, k := range mk {
 		a, b := cm[k], km[k]
+		unequal := ""
+		for _, g := range given[k] {
+			gk := key{k.probe, g}
+			if len(cm[gk]) == 0 || len(km[gk]) == 0 || mean(cm[gk]) != mean(km[gk]) {
+				unequal = g
+				break
+			}
+		}
+		if unequal != "" {
+			continue // judged only between sides that did the same work
+		}
 		diff := mean(a) - mean(b)
 		if !chi[k] {
 			diff = -diff

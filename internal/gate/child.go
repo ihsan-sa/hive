@@ -1,13 +1,13 @@
 package gate
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -113,6 +113,9 @@ type Child struct {
 	Building bool       // BinDir is writable only while the child builds
 	RO, RW   []string   // more paths the child sees, read-only and writable
 	Extra    []string   // more environment
+	Meter    *Meter     // the side's only way out, under bubblewrap; nil keeps the machine's network
+	Net      string     // under bubblewrap: "" its own network, through Meter if set, else none; "shared" the caller's
+	Fwd      string     // the gate's own binary, which runs the forwarder (default this executable)
 }
 
 // Home is the child's HOME; Workspace is its HIVE_HOME; Tmp its TMPDIR.
@@ -133,6 +136,9 @@ func (c *Child) Env() []string {
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
 	if c.Go.Root != "" {
 		env = append(env, "GOROOT="+c.Go.Root, "GOMODCACHE="+c.Go.ModCache)
+	}
+	if c.Meter != nil {
+		env = append(env, c.Meter.Env(c.Sandbox == "bwrap")...)
 	}
 	if c.Token != "" {
 		env = append(env, "GH_TOKEN="+c.Token, "GITHUB_TOKEN="+c.Token)
@@ -187,6 +193,13 @@ func (c *Child) bwrapArgs(dir string) []string {
 		args = append(args, "--ro-bind", d, d)
 	}
 	args = append(args, "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp")
+	if c.Net != "shared" {
+		// No network of its own: the meter's forwarder, or nothing, is the way out.
+		args = append(args, "--unshare-net")
+		if c.Meter != nil {
+			args = append(args, "--ro-bind", c.fwd(), c.fwd(), "--bind", c.Meter.Sock, c.Meter.Sock)
+		}
+	}
 	ro := []string{c.Go.Root, c.Go.ModCache, c.Src, c.Bin}
 	for _, k := range []string{"SSL_CERT_FILE", "SSL_CERT_DIR"} {
 		ro = append(ro, os.Getenv(k))
@@ -209,6 +222,14 @@ func (c *Child) bwrapArgs(dir string) []string {
 	return append(args, "--chdir", dir, "--")
 }
 
+func mapq(xs []string, q func(string) string) []string {
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = q(x)
+	}
+	return out
+}
+
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 // Command wraps argv for the child: under bubblewrap, the sandbox of
@@ -216,14 +237,32 @@ func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 func (c *Child) Command(ctx context.Context, dir string, argv ...string) *exec.Cmd {
 	var cmd *exec.Cmd
 	if c.Sandbox == "bwrap" {
-		cmd = exec.CommandContext(ctx, "bwrap", append(c.bwrapArgs(dir), argv...)...)
+		cmd = exec.CommandContext(ctx, "bwrap", append(c.bwrapArgs(dir), c.forwarded(argv)...)...)
 	} else {
 		cmd = exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = dir
 	}
 	cmd.Env = c.Env()
 	cmd.WaitDelay = 10 * time.Second
+	killTree(cmd)
 	return cmd
+}
+
+func (c *Child) fwd() string {
+	if c.Fwd != "" {
+		return c.Fwd
+	}
+	self, _ := os.Executable()
+	return self
+}
+
+// forwarded puts the meter's forwarder in front of argv when the sandbox has
+// a network of its own and a meter.
+func (c *Child) forwarded(argv []string) []string {
+	if c.Net == "shared" || c.Meter == nil {
+		return argv
+	}
+	return append([]string{c.fwd(), "gate-fwd", c.Meter.Sock, "--"}, argv...)
 }
 
 // Wrapper writes a script at path that runs its arguments as this child, in
@@ -243,6 +282,9 @@ func (c *Child) Wrapper(path, bin string) error {
 		b.WriteString("exec bwrap")
 		args := c.bwrapArgs("/")
 		args = args[:len(args)-3] // the --chdir and -- go last, with the caller's folder
+		if f := c.forwarded(nil); len(f) > 0 {
+			tail = strings.Join(mapq(f, q), " ") + " " + tail
+		}
 		for _, e := range env {
 			k, v, _ := strings.Cut(e, "=")
 			args = append(args, "--setenv", k, v)
@@ -266,14 +308,40 @@ func (c *Child) Wrapper(path, bin string) error {
 func (c *Child) Exec(timeout time.Duration, dir string, argv ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	var buf bytes.Buffer
+	buf := &lastBytes{max: 4 << 20} // a child cannot fill the gate's memory
 	cmd := c.Command(ctx, dir, argv...)
-	cmd.Stdout, cmd.Stderr = &buf, &buf
+	cmd.Stdout, cmd.Stderr = buf, buf
 	err := cmd.Run()
 	if ctx.Err() != nil {
 		err = fmt.Errorf("timed out after %s", timeout)
 	}
 	return buf.String(), err
+}
+
+// lastBytes keeps the last max bytes written to it.
+type lastBytes struct {
+	mu  sync.Mutex
+	b   []byte
+	max int
+}
+
+func (l *lastBytes) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.b = append(l.b, p...)
+	if len(l.b) > 2*l.max {
+		l.b = append([]byte(nil), l.b[len(l.b)-l.max:]...)
+	}
+	return len(p), nil
+}
+
+func (l *lastBytes) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.b) > l.max {
+		return string(l.b[len(l.b)-l.max:])
+	}
+	return string(l.b)
 }
 
 // tail is the last n runes of s, for a result's detail.

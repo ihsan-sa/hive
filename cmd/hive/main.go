@@ -21,6 +21,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/daemon"
 	"github.com/ihsan-sa/hive-standalone-build/internal/fakeagent"
+	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
@@ -133,6 +134,11 @@ func run(args []string) int {
 		}
 		fmt.Println(kb.Find(ws.KB(), query, limit))
 		return 0
+	case "gate-fwd": // inside a gate's sandbox: relay to the meter, run the rest
+		if len(args) < 3 || args[1] != "--" {
+			return 2
+		}
+		return gate.Forward(args[0], args[2:])
 	case "gate":
 		return cmdGate(args)
 	case "improve":

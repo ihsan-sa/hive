@@ -34,6 +34,9 @@ func TestDecide(t *testing.T) {
 		{"faster is better", []Result{res("bench", true, secs(60))}, []Result{res("bench", true, secs(100))}, Options{}, true, "seconds"},
 		{"inside the floor is nothing", []Result{res("bench", true, secs(101))}, []Result{res("bench", true, secs(100))}, Options{}, false, "not better"},
 		{"candidate missing a probe", nil, []Result{res("e2e", true)}, Options{}, false, "did not run"},
+		{"faster by doing less is not a gain", []Result{res("bench", true, score(2), Metric{Name: "seconds", Value: 10, Given: []string{"score"}})}, []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 100, Given: []string{"score"}})}, Options{}, false, "worse"},
+		{"faster at the same work is a gain", []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 50, Given: []string{"score"}})}, []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 100, Given: []string{"score"}})}, Options{}, true, "seconds"},
+		{"cheaper at the same work is a gain", []Result{res("bench", true, score(6), Metric{Name: "egress_bytes", Value: 5e5, Given: []string{"score"}})}, []Result{res("bench", true, score(6), Metric{Name: "egress_bytes", Value: 1e6, Given: []string{"score"}})}, Options{}, true, "egress_bytes"},
 		{"a side's own word is not judged", []Result{res("bench", true, Metric{Name: "cost", Value: 1, Info: true})}, []Result{res("bench", true, Metric{Name: "cost", Value: 9, Info: true})}, Options{}, false, "not better"},
 	}
 	for _, c := range cases {
@@ -136,7 +139,7 @@ func TestRunKeepsAndRollsBack(t *testing.T) {
 }
 
 // sandbox is how the tests run children here: bubblewrap where it works.
-func sandbox() string {
+func testSandbox() string {
 	if BwrapWorks() {
 		return "bwrap"
 	}
@@ -195,7 +198,7 @@ func TestNoHostHome(t *testing.T) {
 	}
 	sha, _ := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
 	out := t.TempDir()
-	c := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: sandbox(), Go: g}
+	c := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: testSandbox(), Go: g}
 	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha))); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +262,7 @@ func TestBuildFetchesANewDependency(t *testing.T) {
 		}
 	})
 	out := filepath.Join(dir, "out")
-	c := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: sandbox(), Go: g}
+	c := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: testSandbox(), Go: g}
 	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha))); err != nil {
 		t.Fatal(err)
 	}
@@ -272,9 +275,7 @@ func TestBuildFetchesANewDependency(t *testing.T) {
 // the host's home, a token file kept outside it, another workspace, the user
 // bus; and it can write only its root.
 func TestBwrapHidesTheHost(t *testing.T) {
-	if !BwrapWorks() {
-		t.Skip("bubblewrap cannot make namespaces here")
-	}
+	needBwrap(t)
 	g, err := FindGo()
 	if err != nil {
 		t.Skip(err)
@@ -403,7 +404,7 @@ func TestWrapper(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "hive")
 	os.WriteFile(bin, []byte("#!/bin/sh\necho \"$HOME|$1|$(pwd)\"\n"), 0o755)
-	c := &Child{Name: "candidate", Root: filepath.Join(dir, "root"), Sandbox: sandbox(), Bin: bin}
+	c := &Child{Name: "candidate", Root: filepath.Join(dir, "root"), Sandbox: testSandbox(), Bin: bin}
 	c.Prepare()
 	w := filepath.Join(dir, "wrap", "hive")
 	if err := c.Wrapper(w, bin); err != nil {

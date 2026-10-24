@@ -56,10 +56,24 @@ func buildEvaluator(cfg Config, g Go, sha string) (*Evaluator, error) {
 // evaluator keeps the workspaces and forges it hands c.
 func (c *Child) judge(cfg *Config, timeout time.Duration, env []string, args ...string) (string, error) {
 	wrap := filepath.Join(cfg.Out, "wrap-"+c.Name)
-	if err := c.Wrapper(filepath.Join(wrap, "hive"), c.Bin); err != nil {
+	// Inside the evaluator's sandbox the side shares the evaluator's network
+	// (so the suite reaches the side's daemon), which has no way out but the
+	// side's meter.
+	side := *c
+	side.Net = "shared"
+	if err := side.Wrapper(filepath.Join(wrap, "hive"), c.Bin); err != nil {
 		return "", err
 	}
-	if err := c.Wrapper(filepath.Join(wrap, "run"), ""); err != nil {
+	if err := side.Wrapper(filepath.Join(wrap, "run"), ""); err != nil {
+		return "", err
+	}
+	// Code the side landed is run sealed: the machine's programs, an empty
+	// root of its own, no network, nothing of either Hive.
+	check := &Child{Name: "check-" + c.Name, Root: filepath.Join(cfg.Out, "check-"+c.Name), Sandbox: c.Sandbox}
+	if err := check.Prepare(); err != nil {
+		return "", err
+	}
+	if err := check.Wrapper(filepath.Join(wrap, "check"), ""); err != nil {
 		return "", err
 	}
 	scratch := filepath.Join(c.Root, "evaluator-tmp")
@@ -67,12 +81,12 @@ func (c *Child) judge(cfg *Config, timeout time.Duration, env []string, args ...
 	if err := os.MkdirAll(scratch, 0o755); err != nil {
 		return "", err
 	}
-	ev := &Child{Name: "evaluator-" + c.Name, Root: filepath.Join(cfg.Out, "evaluator-"+c.Name), Sandbox: c.Sandbox, Go: c.Go,
-		RO: append([]string{c.Eval.Test, c.Eval.Src, wrap, c.Src, c.Bin}, c.RO...), RW: append([]string{c.Root}, c.RW...)}
+	ev := &Child{Name: "evaluator-" + c.Name, Root: filepath.Join(cfg.Out, "evaluator-"+c.Name), Sandbox: c.Sandbox, Go: c.Go, Meter: c.Meter, Fwd: c.Fwd,
+		RO: append([]string{c.Eval.Test, c.Eval.Src, wrap, c.Src, c.Bin, check.Root}, c.RO...), RW: append([]string{c.Root}, c.RW...)}
 	if err := ev.Prepare(); err != nil {
 		return "", err
 	}
-	ev.Extra = append([]string{"TMPDIR=" + scratch, "HIVE_E2E_BIN=" + filepath.Join(wrap, "hive"), "HIVE_E2E_RUN=" + filepath.Join(wrap, "run"), "HIVE_E2E_WRAPPED=1"}, env...)
+	ev.Extra = append([]string{"TMPDIR=" + scratch, "HIVE_E2E_BIN=" + filepath.Join(wrap, "hive"), "HIVE_E2E_RUN=" + filepath.Join(wrap, "run"), "HIVE_E2E_CHECK=" + filepath.Join(wrap, "check"), "HIVE_E2E_WRAPPED=1"}, env...)
 	argv := append([]string{c.Eval.Test, "-test.count=1", "-test.timeout", (timeout - time.Minute).String()}, args...)
 	return ev.Exec(timeout, filepath.Join(c.Eval.Src, "internal", "e2e"), argv...)
 }

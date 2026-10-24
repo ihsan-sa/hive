@@ -435,6 +435,17 @@ func repoFiles(project string) []string {
 	return names
 }
 
+// textkitAsk is the benchmark's ask on the demo project.
+var textkitAsk = regexp.MustCompile(`In textkit, implement (\w+) in textkit/__init__\.py`)
+
+// textkitBodies are what the fake worker writes for those asks.
+var textkitBodies = map[string]string{
+	"capitalize_words": "    return \" \".join(w[:1].upper() + w[1:] for w in text.split())\n",
+	"is_palindrome":    "    s = [c.lower() for c in text if c.isalnum()]\n    return s == s[::-1]\n",
+	"char_frequency":   "    out = {}\n    for c in text:\n        if c != \" \":\n            out[c] = out.get(c, 0) + 1\n    return out\n",
+	"truncate":         "    return text if len(text) <= width else text[: width - 3] + \"...\"\n",
+}
+
 // outsidePath is a path on the person's machine the ask wants deleted. It is
 // read from the brief's ask section, since the heading's label may clip it.
 var outsidePath = regexp.MustCompile(`## The ask\n\n[^\n]*FAKE:rmoutside ([^\n]+)`)
@@ -559,6 +570,16 @@ func worker(all, prompt, system string) (string, error) {
 			if !banked(i + 1) {
 				return "", fmt.Errorf("checkpoint %d never merged", i+1)
 			}
+		}
+	case textkitAsk.MatchString(all):
+		// The benchmark's asks: write the function as a real worker would, so
+		// what lands on main can be checked from outside.
+		name := textkitAsk.FindStringSubmatch(all)[1]
+		raw, _ := os.ReadFile(filepath.Join("textkit", "__init__.py"))
+		body, ok := textkitBodies[name]
+		re := regexp.MustCompile(`(def ` + name + `\([^)]*\):\n(?:    """[^\n]*"""\n)?)    raise NotImplementedError\n`)
+		if ok && re.Match(raw) {
+			os.WriteFile(filepath.Join("textkit", "__init__.py"), re.ReplaceAll(raw, []byte("${1}"+body)), 0o644)
 		}
 	case strings.Contains(all, "FAKE:goals"):
 		appendFile(".hive/goals.md", "- a goal the worker wrote down\n")

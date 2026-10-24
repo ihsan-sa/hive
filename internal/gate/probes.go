@@ -39,23 +39,19 @@ func probeDaemon(cfg *Config, c *Child) Result {
 	if err != nil {
 		return Result{Detail: "--version: " + tail(ver, 200)}
 	}
-	ctx, cancel := contextWith(10 * time.Minute)
-	defer cancel()
-	d := c.Command(ctx, c.Root, c.Bin, "daemon")
-	d.Stdout, d.Stderr = nil, nil
-	if err := d.Start(); err != nil {
-		return Result{Detail: "daemon: " + err.Error()}
+	// One sandbox for the daemon and its client: under bubblewrap each has its
+	// own network, so they must share one. The Exec deadline kills it all.
+	script := `"$0" daemon >"$HIVE_HOME/daemon-probe.log" 2>&1 &
+i=0
+while [ $i -lt 60 ]; do
+	if "$0" status >/dev/null 2>&1; then "$0" shutdown >/dev/null 2>&1; sleep 1; kill $! 2>/dev/null; exit 0; fi
+	i=$((i+1)); sleep 1
+done
+kill $! 2>/dev/null; echo "status never answered"; exit 1`
+	if out, err := c.Exec(3*time.Minute, c.Root, "sh", "-c", script, c.Bin); err != nil {
+		return Result{Detail: tail(out, 300)}
 	}
-	defer func() { d.Process.Kill(); d.Wait() }()
-	var out string
-	for i := 0; i < 60; i++ {
-		if out, err = c.Exec(30*time.Second, c.Root, c.Bin, "status"); err == nil {
-			c.Exec(30*time.Second, c.Root, c.Bin, "shutdown")
-			return Result{Pass: true, Detail: strings.TrimSpace(ver)}
-		}
-		time.Sleep(time.Second)
-	}
-	return Result{Detail: "status never answered: " + tail(out, 300)}
+	return Result{Pass: true, Detail: tail(ver, 100)}
 }
 
 // probeOrg proves the child works on its own org repository with the org's
@@ -138,9 +134,14 @@ func probeBenchmark(cfg *Config, c *Child) Result {
 	if json.Unmarshal([]byte(m[1]), &b) != nil || b.Score == nil || b.Finished == nil || b.Commits == nil || b.Seconds == nil {
 		return Result{Detail: "the evaluator's BENCH line lacks what is judged (an evaluator from before the outside measure?): " + m[1]}
 	}
+	// Judged: whether what landed works (score, asks_finished), and the time,
+	// only between sides that landed the same working functions. How many
+	// commits landed, and what the side says of itself, are shown.
+	same := []string{"score", "asks_finished"}
 	return Result{Pass: err == nil, Detail: m[1], Metrics: []Metric{
 		{Name: "score", Value: *b.Score, Higher: true}, {Name: "asks_finished", Value: *b.Finished, Higher: true},
-		{Name: "commits_landed", Value: *b.Commits, Higher: true}, {Name: "seconds", Value: *b.Seconds},
+		{Name: "seconds", Value: *b.Seconds, Given: same},
+		{Name: "commits_landed", Value: *b.Commits, Higher: true, Info: true},
 		{Name: "asks_done_reported", Value: b.Done, Higher: true, Info: true}, {Name: "cost_usd_reported", Value: b.Cost, Info: true}}}
 }
 
