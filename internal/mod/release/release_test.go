@@ -335,6 +335,16 @@ type notes struct {
 	*core.Local
 	got   map[string]string
 	calls int
+	// listed runs after Tags lists them, as a push before CreateRelease would.
+	listed func()
+}
+
+func (n *notes) Tags(repo string) ([]string, error) {
+	tags, err := n.Local.Tags(repo)
+	if n.listed != nil {
+		n.listed()
+	}
+	return tags, err
 }
 
 func (n *notes) CreateRelease(repo, tag, sha, body string) error {
@@ -727,5 +737,51 @@ func TestNextTag(t *testing.T) {
 		if got := nextTag(c.tags); got != c.want {
 			t.Errorf("nextTag(%v) = %s; want %s", c.tags, got, c.want)
 		}
+	}
+}
+
+// A tag pushed between the listing and CreateRelease keeps its own commit, so
+// the release would build and sign that code: it is refused, never published,
+// and the merges it named go out in the next release.
+func TestReleaseRefusesATagAtAnotherCommit(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	n.listed = func() { n.AddTag("me/hive", "v0.0.1", "evil") }
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	n.listed = nil
+	if !journaled(m, "release.refused") || journaled(m, "hive.released") {
+		t.Fatal("a release whose tag points elsewhere was recorded as released")
+	}
+	n.SetReleaseRuns("me/hive", "m1", core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"},
+		core.WorkflowRun{Name: "update", Status: "completed", Conclusion: "success"})
+	if got := m.Publish(); got != "nothing to publish" {
+		t.Fatalf("Publish said %q", got)
+	}
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	if body := n.got["v0.0.2"]; !strings.Contains(body, "#1 at a1") || !strings.Contains(body, "#2 at a2") {
+		t.Fatalf("the next release should name #1 and #2: %q", body)
+	}
+}
+
+// A tag moved after its release was cut is checked again before publishing.
+func TestPublishRefusesAMovedTag(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	n.AddTag("me/hive", "v0.0.1", "evil")
+	n.SetReleaseRuns("me/hive", "m1", core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"},
+		core.WorkflowRun{Name: "update", Status: "completed", Conclusion: "success"})
+	if got := m.Publish(); !strings.Contains(got, "refused") {
+		t.Fatalf("Publish said %q", got)
+	}
+	if rel, _ := n.LatestRelease("me/hive"); !rel.Prerelease {
+		t.Fatalf("a release whose tag moved was published: %+v", rel)
+	}
+	if got := m.Publish(); got != "nothing to publish" {
+		t.Fatalf("a refused release is checked again: %q", got)
 	}
 }

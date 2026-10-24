@@ -73,3 +73,81 @@ func TestReleaseWorkflowSigns(t *testing.T) {
 		t.Fatal("release.yml doesn't sign checksums.txt with HIVE_RELEASE_KEY before the upload")
 	}
 }
+
+// No run script has a ${{ }} expression in it: the runner pastes its value
+// into the script before the shell sees it, so a release tag or branch name
+// is code. Values go in through env and are read as "$NAME".
+func TestWorkflowsKeepExpressionsOutOfScripts(t *testing.T) {
+	files, _ := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	for _, f := range files {
+		raw, _ := os.ReadFile(f)
+		for _, s := range runScripts(string(raw)) {
+			if strings.Contains(s, "${{") {
+				t.Errorf("%s has an expression in a run script:\n%s", filepath.Base(f), s)
+			}
+		}
+	}
+	if got := runScripts("    - run: a ${{ x }}\n      - name: b\n        run: |\n          b\n          c ${{ y }}\n        env: {}\n"); len(got) != 2 || !strings.Contains(got[1], "${{ y }}") {
+		t.Errorf("the check misses the scripts it is for: %q", got)
+	}
+}
+
+// runScripts are a workflow's run: values, inline or block, one per step.
+func runScripts(yml string) []string {
+	var out []string
+	lines := strings.Split(yml, "\n")
+	for i := 0; i < len(lines); i++ {
+		l := lines[i]
+		trimmed := strings.TrimLeft(strings.TrimPrefix(strings.TrimLeft(l, " "), "- "), " ")
+		v, ok := strings.CutPrefix(trimmed, "run:")
+		if !ok {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if v != "|" && v != ">" && !strings.HasPrefix(v, "|") && !strings.HasPrefix(v, ">") {
+			out = append(out, v)
+			continue
+		}
+		indent := len(l) - len(strings.TrimLeft(l, " "))
+		var block []string
+		for i+1 < len(lines) {
+			n := lines[i+1]
+			if strings.TrimSpace(n) != "" && len(n)-len(strings.TrimLeft(n, " ")) <= indent {
+				break
+			}
+			block = append(block, n)
+			i++
+		}
+		out = append(out, strings.Join(block, "\n"))
+	}
+	return out
+}
+
+// The release key is read only in the sign job, which waits behind the
+// protected release environment; the job that can write releases never sees it.
+func TestReleaseKeyOnlyBehindTheEnvironment(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := map[string]string{}
+	name := ""
+	for _, l := range strings.Split(string(raw), "\n") {
+		if m := regexp.MustCompile(`^  ([\w-]+):\s*$`).FindStringSubmatch(l); m != nil {
+			name = m[1]
+		}
+		jobs[name] += l + "\n"
+	}
+	sign := jobs["sign"]
+	if !strings.Contains(sign, "environment: release") || !strings.Contains(sign, "secrets.HIVE_RELEASE_KEY") {
+		t.Fatalf("the sign job doesn't read the key behind the release environment:\n%s", sign)
+	}
+	for n, j := range jobs {
+		if n != "sign" && strings.Contains(j, "HIVE_RELEASE_KEY") {
+			t.Errorf("job %q reads the release key outside the sign job", n)
+		}
+		if n == "sign" && strings.Contains(j, "contents: write") {
+			t.Error("the sign job can write releases")
+		}
+	}
+}
