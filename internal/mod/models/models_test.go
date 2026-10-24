@@ -153,6 +153,43 @@ func TestTrial(t *testing.T) {
 	}
 }
 
+// A trial whose worker was ended for never calling finish records that the
+// model doesn't finish, and routing stops sending it work until a later
+// trial of it finishes.
+func TestATrialThatDoesntFinishBenchesTheModel(t *testing.T) {
+	a, lead := hiveWithModels(t)
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "qwen,fake:opus"}); err != nil {
+		t.Fatal(err)
+	}
+	trial := func(reason string) {
+		t.Helper()
+		res, err := call(t, a, lead, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "add a README"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tk, _ := a.Work.Get(res.(map[string]string)["task"])
+		tk.Stage, tk.Reason = work.StageBlocked, reason
+		if reason == "" {
+			tk.Stage = work.StageMerged
+		}
+		a.C.J.MustAppend("task.saved", tk)
+		a.Models.Tick()
+	}
+	trial(core.NoFinish + ": it was nudged twice")
+	view, _ := json.Marshal(a.Models.View(lead))
+	if !strings.Contains(string(view), `"doesnt_finish":true`) {
+		t.Fatalf("view %s", view)
+	}
+	if h, m := a.Agents.Model("worker", "lab"); h != "fake" || m != "opus" {
+		t.Fatalf("a model that doesn't finish still gets work: %s:%s", h, m)
+	}
+	time.Sleep(time.Second) // task ids order by the second
+	trial("")
+	if h, _ := a.Agents.Model("worker", "lab"); h != "open" {
+		t.Fatal("a model whose later trial finished is still benched")
+	}
+}
+
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	for i := 0; i < 200; i++ {

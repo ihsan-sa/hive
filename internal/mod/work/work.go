@@ -868,6 +868,9 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 		m.save(t, "worker finished: "+core.Clip(finishText(r), 200))
 	case core.StatusBlocked:
 		t.Stage, t.Reason = StageBlocked, finishText(r)
+		if r.Finish == nil {
+			t.Reason = r.Reason // the Hive ended it: say why, not its last words
+		}
 		m.save(t, "blocked: "+core.Clip(t.Reason, 300))
 		if t.Issue.Number != 0 {
 			m.comment(p.Repo, t.Issue.Number, "The worker stopped:\n\n"+t.Reason)

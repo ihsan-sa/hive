@@ -31,16 +31,19 @@ type Route struct {
 
 // Trial is how a model did on one trial brief.
 type Trial struct {
-	Task    string  `json:"task"`
-	Model   string  `json:"model"`
-	Project string  `json:"project"`
-	Title   string  `json:"title"`
-	Outcome string  `json:"outcome"` // the task's last stage: merged, done, blocked, stopped
-	Reason  string  `json:"reason,omitempty"`
-	Turns   int     `json:"turns"`
-	Rounds  int     `json:"review_rounds"`
-	Minutes int     `json:"minutes"`
-	Cost    float64 `json:"cost"`
+	Task    string `json:"task"`
+	Model   string `json:"model"`
+	Project string `json:"project"`
+	Title   string `json:"title"`
+	Outcome string `json:"outcome"` // the task's last stage: merged, done, blocked, stopped
+	Reason  string `json:"reason,omitempty"`
+	// NoFinish: its worker never called finish and was ended for it, so
+	// routing sends the model no work until a later trial of it finishes.
+	NoFinish bool    `json:"doesnt_finish,omitempty"`
+	Turns    int     `json:"turns"`
+	Rounds   int     `json:"review_rounds"`
+	Minutes  int     `json:"minutes"`
+	Cost     float64 `json:"cost"`
 }
 
 // Module is the models module.
@@ -257,13 +260,28 @@ func (m *Module) Tick() {
 			continue
 		}
 		tr := Trial{Task: t.ID, Model: t.Model, Project: t.Project, Title: t.Title, Outcome: t.Stage, Reason: t.Reason, Rounds: t.Reviews,
-			Minutes: int(t.Updated.Sub(t.Created).Minutes())}
+			Minutes: int(t.Updated.Sub(t.Created).Minutes()), NoFinish: t.Stage == work.StageBlocked && strings.HasPrefix(t.Reason, core.NoFinish)}
 		for _, r := range m.C.Runs.List(func(r *core.Run) bool { return r.Task == t.ID && r.Role == "worker" }) {
 			tr.Turns += r.Turn
 			tr.Cost += r.Cost
 		}
 		m.C.J.MustAppend("model.trial", tr)
 	}
+}
+
+// Benched says whether routing skips p: the latest recorded trial of that
+// model didn't finish.
+func (m *Module) Benched(p core.Pick) bool {
+	cfg := m.C.WS.LoadConfig()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var last Trial
+	for _, t := range m.trials {
+		if tp, err := cfg.Pick(t.Model); err == nil && tp.Same(p) && t.Task > last.Task {
+			last = t
+		}
+	}
+	return last.NoFinish
 }
 
 // View is what the models op shows.
