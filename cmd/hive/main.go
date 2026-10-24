@@ -23,6 +23,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/fakeagent"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
@@ -39,9 +40,12 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive answer <id> <opt>   answer something waiting on you
   hive approve <id> [note] say yes to it (its first option)
   hive refuse <id> [note]  say no to it (its last option)
+  hive read <task|#pr> <sha> land|fix --by perms|architect [note]
+                           record the box's perms seat's or architect's read of that head
   hive login               log in to Claude Code and GitHub with their own logins
   hive login add <name>    add another Claude login to spread runs over; add "codex" for Codex
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
+  hive report [on|off|show|send]  sharing failures with the developer: state, switch, last report, send now
   hive egress              the services on this machine agents may reach
   hive egress grant <host:port>   open one to every sandboxed run (loopback only, e.g. 127.0.0.1:11434)
   hive egress revoke <host:port>  close it again
@@ -183,6 +187,20 @@ func run(args []string) int {
 			}
 			return fmt.Errorf("nothing waiting on you has id %s (%s status lists them)", args[0], core.Cmd)
 		})
+	case "read":
+		by, rest := readArgs(args)
+		if len(rest) < 3 || by == "" {
+			fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" read <task|#pr> <sha> land|fix --by perms|architect [note]")
+			return 2
+		}
+		return withClient(func(c *api.Client) error {
+			body := map[string]string{"id": rest[0], "sha": rest[1], "verdict": rest[2], "by": by, "note": strings.Join(rest[3:], " ")}
+			if err := c.Do("POST", "/api/read", body, nil); err != nil {
+				return err
+			}
+			fmt.Printf("recorded: %s's read of %s at %s: %s\n", by, rest[0], rest[1], rest[2])
+			return nil
+		})
 	case "login":
 		if len(args) > 0 && args[0] == "add" {
 			if len(args) < 2 {
@@ -213,6 +231,8 @@ func run(args []string) int {
 		return 0
 	case "doctor":
 		return cmdDoctor(args)
+	case "report":
+		return cmdReport(args)
 	case "egress":
 		return cmdEgress(args)
 	case "share":
@@ -244,6 +264,22 @@ func run(args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usageText())
 	return 2
+}
+
+// readArgs takes --by <reader> (or --by=<reader>) out of args.
+func readArgs(args []string) (by string, rest []string) {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--by" && i+1 < len(args):
+			by = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--by="):
+			by = strings.TrimPrefix(a, "--by=")
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return by, rest
 }
 
 func usageText() string {
@@ -503,14 +539,18 @@ func answerHint(a core.Ask) string {
 func cmdDoctor(args []string) int {
 	bare := len(args) > 0 && args[0] == "--bare"
 	ok := true
+	var failed []string
+	fail := func(format string, a ...any) {
+		ok = false
+		failed = append(failed, fmt.Sprintf(format, a...))
+		fmt.Print(failed[len(failed)-1])
+	}
 	for _, t := range setup.Check() {
 		switch {
 		case !t.Found:
-			ok = false
-			fmt.Printf("✗ %s missing. %s\n", t.Name, t.Get)
+			fail("✗ %s missing. %s\n", t.Name, t.Get)
 		case t.NeedsLogin && !t.LoggedIn:
-			ok = false
-			fmt.Printf("✗ %s is not logged in. Run `%s login`.\n", t.Name, core.Cmd)
+			fail("✗ %s is not logged in. Run `%s login`.\n", t.Name, core.Cmd)
 		default:
 			fmt.Printf("✓ %s\n", t.Name)
 		}
@@ -531,8 +571,7 @@ func cmdDoctor(args []string) int {
 		fmt.Printf("! agents run WITHOUT a sandbox (opted in %s); set \"sandbox\": \"auto\" in Settings to go back\n", cfg.BareAccepted)
 	}
 	if msg, err := setup.SandboxReport(ws, c.HiveLinux()); err != nil {
-		ok = false
-		fmt.Printf("✗ sandbox: %v\n", err)
+		fail("✗ sandbox: %v\n", err)
 		if bare {
 			fmt.Println("\n" + sandbox.BareWarning)
 			if setup.Prompt("Type `bare` to run agents without a sandbox", "") == "bare" {
@@ -543,8 +582,7 @@ func cmdDoctor(args []string) int {
 	} else {
 		fmt.Println("✓ " + msg)
 		if !setup.WSLClaude(ws.LoadConfig().WSLDistro) {
-			ok = false
-			fmt.Println("✗ Claude Code is not installed inside WSL. Install it there:\n    wsl -- bash -lc \"curl -fsSL https://claude.ai/install.sh | bash\"")
+			fail("✗ Claude Code is not installed inside WSL. Install it there:\n    wsl -- bash -lc \"curl -fsSL https://claude.ai/install.sh | bash\"\n")
 		}
 	}
 	if msg, err := setup.CodexReport(ws, c.HiveLinux()); err != nil {
@@ -569,6 +607,7 @@ func cmdDoctor(args []string) int {
 		fmt.Println("· not running")
 	}
 	if !ok {
+		report.Note(ws, report.Failure{Kind: "doctor", Text: strings.Join(failed, "")})
 		return 1
 	}
 	return 0

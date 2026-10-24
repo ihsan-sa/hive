@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeGH puts a gh on PATH that logs its arguments, one call per line, and
@@ -62,6 +63,64 @@ func TestLocalForkOwner(t *testing.T) {
 		fork, err := l.Fork("me/p", owner)
 		if err != nil || fork != want || !Exists(l.RepoPath(fork)) {
 			t.Errorf("Fork(me/p, %q) = %q, %v", owner, fork, err)
+		}
+	}
+}
+
+// GitHub's check runs map to a verdict on the commit only when they ran it.
+func TestGitHubCheckStates(t *testing.T) {
+	now := time.Now()
+	for _, c := range []struct {
+		r    ghCheckRun
+		want string
+	}{
+		{ghCheckRun{Status: "in_progress", StartedAt: now.Add(-3 * time.Hour)}, CheckPending},
+		{ghCheckRun{Status: "queued", StartedAt: now.Add(-time.Minute)}, CheckPending},
+		{ghCheckRun{Status: "queued", StartedAt: now.Add(-2 * time.Hour)}, CheckCantStart},
+		{ghCheckRun{Status: "completed", Conclusion: "success"}, CheckPass},
+		{ghCheckRun{Status: "completed", Conclusion: "skipped"}, CheckSkipped},
+		{ghCheckRun{Status: "completed", Conclusion: "neutral"}, CheckSkipped},
+		{ghCheckRun{Status: "completed", Conclusion: "failure"}, CheckFail},
+		{ghCheckRun{Status: "completed", Conclusion: "timed_out"}, CheckFail},
+		{ghCheckRun{Status: "completed", Conclusion: "startup_failure"}, CheckCantStart},
+		{ghCheckRun{Status: "completed", Conclusion: "cancelled"}, CheckCantStart},
+	} {
+		if got := c.r.check(now).State; got != c.want {
+			t.Errorf("%+v: %s, want %s", c.r, got, c.want)
+		}
+	}
+	if st, which := ChecksState([]CheckRun{{Name: "a", State: CheckPending}, {Name: "b", State: CheckFail}, {Name: "c", State: CheckCantStart}}, nil); st != CheckFail || CheckNames(which) != "b" {
+		t.Fatalf("%s %v", st, which)
+	}
+	if st, _ := ChecksState(nil, nil); st != CheckPass {
+		t.Fatal("no checks should pass")
+	}
+}
+
+// Only a young GitHub Actions suite with no jobs listed yet holds: a stale
+// queued one, or another app's, never does.
+func TestGitHubSuitePending(t *testing.T) {
+	now := time.Now()
+	suite := func(app, status string, runs int, age time.Duration) ghSuite {
+		s := ghSuite{Status: status, Runs: runs, CreatedAt: now.Add(-age)}
+		s.App.Slug = app
+		return s
+	}
+	for _, c := range []struct {
+		s    ghSuite
+		want bool
+	}{
+		{suite("github-actions", "queued", 0, time.Minute), true},
+		{suite("github-actions", "queued", 0, 3*time.Hour), false},
+		{suite("dependabot", "queued", 0, time.Minute), false},
+		{suite("github-actions", "queued", 2, time.Minute), false},
+		{suite("github-actions", "completed", 0, time.Minute), false},
+		{ghSuite{Status: "queued", App: struct {
+			Slug string `json:"slug"`
+		}{"github-actions"}}, false},
+	} {
+		if got := c.s.pending(now); got != c.want {
+			t.Errorf("%+v: %v, want %v", c.s, got, c.want)
 		}
 	}
 }
