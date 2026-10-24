@@ -70,6 +70,7 @@ type Verdict struct {
 	Verdict  string    `json:"verdict"` // land | fix
 	Summary  string    `json:"summary"`
 	Findings []Finding `json:"findings,omitempty"`
+	Advice   []string  `json:"advice,omitempty"` // with a land: worth doing later, not a blocker
 }
 
 // Finding is one thing the reviewer wants fixed.
