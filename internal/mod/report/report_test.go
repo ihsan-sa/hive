@@ -376,3 +376,17 @@ func TestNotedBeforeMarkWaits(t *testing.T) {
 		t.Fatalf("B built twice: %+v", fails)
 	}
 }
+
+// A resumed session's result lines carry its running total, so the usage
+// report counts the rise, not each total again.
+func TestUsageCostOfResumedSession(t *testing.T) {
+	c := open(t, func(cfg *core.Config) { cfg.SetShare(true) })
+	c.J.MustAppend("run.created", map[string]any{"id": "lead", "role": "lead"})
+	for i, total := range []float64{0.5, 0.75, 1} {
+		c.J.MustAppend("run.turn_started", map[string]any{"id": "lead", "session": "s1", "turn": i + 1, "resume": i > 0})
+		c.J.MustAppend("run.turn_ended", map[string]any{"id": "lead", "status": "idle", "session": "s1", "result": map[string]any{"text": "ok", "cost_usd": total}})
+	}
+	if _, usage, _, _ := (&Module{C: c}).Build(c.WS.LoadConfig()); usage.Usage["cost_usd"] != 1 || usage.Usage["turns"] != 3 {
+		t.Fatalf("usage %+v, want $1 over 3 turns", usage.Usage)
+	}
+}
