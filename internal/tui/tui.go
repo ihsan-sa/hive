@@ -74,9 +74,10 @@ type model struct {
 	threadSel int    // channel cursor; -1 = none
 	chScroll  int
 	thScroll  int
-	chFree    bool            // scrolled by hand, so the picked thread no longer pulls the channel back
-	open      map[string]bool // expanded threads and tree nodes
-	closed    map[string]bool // collapsed project groups
+	places    map[string]place // each chat's open thread and scroll while another is shown
+	chFree    bool             // scrolled by hand, so the picked thread no longer pulls the channel back
+	open      map[string]bool  // expanded threads and tree nodes
+	closed    map[string]bool  // collapsed project groups
 	msgs      map[string][]chat.Message
 	input     textarea.Model
 	composing bool              // keys go to the text box
@@ -180,7 +181,7 @@ func newModel(c *api.Client, ws core.Workspace) *model {
 	in.FocusedStyle.Placeholder, in.BlurredStyle.Placeholder = stDim, stDim
 	in.KeyMap.InsertNewline.SetKeys("ctrl+j", "alt+enter")
 	return &model{c: c, ws: ws, open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
-		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, drafts: map[string]string{}, stages: map[string]string{}, input: in, threadSel: -1, feedSel: -1}
+		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, drafts: map[string]string{}, places: map[string]place{}, stages: map[string]string{}, input: in, threadSel: -1, feedSel: -1}
 }
 
 // sidePane: a pane is open beside the main one.
@@ -637,6 +638,12 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.thread, m.focus, m.thScroll = "", 1, 0
 		}
 		return m, nil
+	case "left":
+		if !m.editing && m.reply != "" && m.input.Value() == "" && !m.takeover() { // over to the channel; the thread stays open
+			m.blurBox()
+			m.focus = 1
+			return m, m.markRead()
+		}
 	case "up":
 		if !m.editing && m.reply == "" && m.input.Value() == "" { // pick a thread
 			m.blurBox()
@@ -887,9 +894,11 @@ func (m *model) keys() []string {
 	case m.section == secChats && m.takeover():
 		return []string{"enter", "send", "ctrl+j", "newline", "esc", "back to chat"}
 	case m.section == secChats && m.focus == 2:
-		return []string{"enter", "send", "ctrl+j", "newline", "esc", "close thread", "tab", "switch pane", "pgup pgdn", "scroll"}
+		return []string{"enter", "send", "ctrl+j", "newline", "esc", "close thread", "← tab", "to the channel", "pgup pgdn", "scroll"}
 	case m.section == secChats && m.composing:
 		return []string{"enter", "start thread", "ctrl+j", "newline", "esc", "leave box", "↑", "pick a thread", "tab", "switch pane"}
+	case m.section == secChats && m.thread != "":
+		return []string{"↑↓", "thread", "→", "to the open thread", "pgup pgdn", "scroll", "space", "collapse", "n", "new thread"}
 	case m.section == secChats:
 		return []string{"↑↓", "thread", "enter", "open", "n", "new thread", "space", "collapse", "tab", "pane"}
 	case len(m.stack) > 0 && m.stack[len(m.stack)-1].kind == "module":

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -20,6 +21,8 @@ type sideRow struct {
 	label  string
 	chatID string
 	group  bool
+	fold   bool   // a fold inside a group, closed until opened: ended agents
+	under  string // the fold this row sits in
 }
 
 // sideRows lists the sections, then one chat per project lead and per agent,
@@ -44,6 +47,9 @@ func (m *model) rows(all bool) []sideRow {
 		rows = append(rows, sideRow{sec: -1, key: key, label: label, group: true})
 		for _, c := range chats {
 			seen[c.chatID] = true
+			if c.under != "" && !all && !m.open[c.under] {
+				continue
+			}
 			if all || !m.closed[key] {
 				c.sec = -1
 				rows = append(rows, c)
@@ -56,13 +62,19 @@ func (m *model) rows(all bool) []sideRow {
 			seen["agent:"+r.ID] = true
 			out = append(out, sideRow{key: "agent:" + r.ID, label: runLabel(r), chatID: "agent:" + r.ID})
 		}
-		// Agent chats with history whose run has ended stay reachable.
+		// Agent chats with history whose run has ended stay reachable, out of
+		// the way: in a fold of their own, and only for a day.
+		fold := "ended:" + p
+		var ended []sideRow
 		for _, c := range m.st.Chats {
-			if c.Kind == "agent" && c.Project == p && !seen[c.ID] {
-				out = append(out, sideRow{key: c.ID, label: c.Title + " (ended)", chatID: c.ID})
+			if c.Kind == "agent" && c.Project == p && !seen[c.ID] && (all || time.Since(m.endedAt(c)) < endedFor) {
+				ended = append(ended, sideRow{key: c.ID, label: "  " + c.Title, chatID: c.ID, under: fold})
 			}
 		}
-		return out
+		if len(ended) > 0 {
+			out = append(out, sideRow{key: fold, label: fmt.Sprintf("ended (%d)", len(ended)), fold: true})
+		}
+		return append(out, ended...)
 	}
 	known := map[string]bool{"": true}
 	for _, p := range m.st.Projects {
@@ -145,6 +157,7 @@ func (m *model) viewSidebar(w int) pane {
 			g = r.key
 		} else if r.chatID != "" {
 			news[g] += unread[r.chatID]
+			news[r.under] += unread[r.chatID]
 		}
 	}
 	rows := m.sideRows()
@@ -162,6 +175,15 @@ func (m *model) viewSidebar(w int) pane {
 			}
 			if n := m.fbUnseen(); r.sec == secFeedback && n > 0 {
 				count = stTitle.Render(fmt.Sprint(n))
+			}
+		case r.fold:
+			mark = "  ▸ "
+			if m.open[r.key] {
+				mark = "  ▾ "
+			}
+			mark, name = stDim.Render(mark), stDim.Render(name)
+			if !m.open[r.key] && news[r.key] > 0 {
+				count = stAccent.Render("●")
 			}
 		case r.group:
 			mark = "▾ "
@@ -215,6 +237,14 @@ func (m *model) keySidebar(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, step(-1)
 	case "down", "j":
 		return m, step(1)
+	case " ", "enter", "right", "l", "left", "h":
+		if r.fold { // opens and closes in place; it holds no chat of its own
+			s := k.String()
+			m.open[r.key] = s == "right" || s == "l" || (s != "left" && s != "h" && !m.open[r.key])
+			return m, nil
+		}
+	}
+	switch k.String() {
 	case " ", "enter":
 		if r.group {
 			m.closed[r.key] = !m.closed[r.key]
@@ -252,7 +282,7 @@ func (m *model) keySidebar(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // as agents start and end; a row hidden in a collapsed group puts it on the
 // group, and a row that's gone leaves it where it was.
 func (m *model) sideAt(rows []sideRow) int {
-	for _, key := range []string{m.sideKey, m.groupOf(m.sideKey)} {
+	for _, key := range []string{m.sideKey, m.foldOf(m.sideKey), m.groupOf(m.sideKey)} {
 		for i, r := range rows {
 			if key != "" && r.key == key {
 				m.side = i
@@ -262,6 +292,28 @@ func (m *model) sideAt(rows []sideRow) int {
 	}
 	m.side = max(0, min(m.side, len(rows)-1))
 	return m.side
+}
+
+// foldOf is the key of the fold a chat row sits in, or "".
+func (m *model) foldOf(key string) string {
+	for _, r := range m.rows(true) {
+		if r.key == key {
+			return r.under
+		}
+	}
+	return ""
+}
+
+// endedFor is how long an ended agent's chat stays in the sidebar.
+const endedFor = 24 * time.Hour
+
+// endedAt is when an agent's chat went quiet: its run's last update, or the
+// chat's start for a run the state no longer lists.
+func (m *model) endedAt(c api.ChatView) time.Time {
+	if r, ok := m.run(strings.TrimPrefix(c.ID, "agent:")); ok {
+		return r.Updated
+	}
+	return c.Created
 }
 
 // groupOf is the key of the group a chat row sits in, or "".
@@ -286,12 +338,34 @@ func (m *model) pick(r sideRow) tea.Cmd {
 		m.section = r.sec
 	case r.chatID != "":
 		if m.chat != r.chatID {
-			m.chat, m.thread, m.threadSel, m.chScroll, m.chFree = r.chatID, "", -1, 0, false
+			m.switchChat(r.chatID)
 		}
 		m.section = secChats
 		cmd = m.fetchChat(r.chatID)
 	}
 	return tea.Batch(cmd, m.settle())
+}
+
+// place is where the person was in a chat: its open thread, the pick and
+// the scrolls, kept while they look at another chat.
+type place struct {
+	thread             string
+	threadSel          int
+	chScroll, thScroll int
+	chFree             bool
+}
+
+// switchChat leaves the current chat where it is and goes back to where the
+// person was in the next one; a chat not seen yet opens at its end.
+func (m *model) switchChat(id string) {
+	if m.chat != "" {
+		m.places[m.chat] = place{m.thread, m.threadSel, m.chScroll, m.thScroll, m.chFree}
+	}
+	p, ok := m.places[id]
+	if !ok {
+		p = place{threadSel: -1}
+	}
+	m.chat, m.thread, m.threadSel, m.chScroll, m.thScroll, m.chFree = id, p.thread, p.threadSel, p.chScroll, p.thScroll, p.chFree
 }
 
 // openChat jumps to a chat from elsewhere (an agent's log, the dashboard).
@@ -334,7 +408,7 @@ func (m *model) where() (group, name string) {
 			group = r.label
 		}
 		if r.chatID == m.chat && r.chatID != "" {
-			return group, r.label
+			return group, strings.TrimSpace(r.label)
 		}
 	}
 	c, _ := m.currentChat()
@@ -393,6 +467,10 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.focusBox("")
 		}
 	case "enter", "right":
+		if s == "right" && m.thread != "" && (m.threadSel < 0 || m.threadSel >= len(ts) || ts[m.threadSel].id == m.thread) {
+			m.focus = 2 // back over to the open thread
+			return m, m.focusBox(m.thread)
+		}
 		if m.threadSel >= 0 && m.threadSel < len(ts) {
 			m.thread = ts[m.threadSel].id
 			m.focus = 2

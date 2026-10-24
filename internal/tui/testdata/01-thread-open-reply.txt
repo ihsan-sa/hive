@@ -33,4 +33,4 @@
                       │  │ › Write to the lead of textkit-2…         │ │
                       │  ╰───────────────────────────────────────────╯ │
 ──────────────────────┴────────────────────────────────────────────────┴────────────────────────────────────────────────
- enter send   ctrl+j newline   esc close thread   tab switch pane   pgup pgdn scroll
+ enter send   ctrl+j newline   esc close thread   ← tab to the channel   pgup pgdn scroll

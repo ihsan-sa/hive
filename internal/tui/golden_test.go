@@ -194,6 +194,7 @@ func TestDesignFrames(t *testing.T) {
 		{"06d-feedback-80x24", 80, 24, func(m *model) { m.pick(sideRow{sec: secFeedback}); m.focus = 1 }},
 		{"06d-feedback", 120, 36, func(m *model) { m.pick(sideRow{sec: secFeedback}); m.focus = 1 }},
 		{"04b-80x24-thread-takeover", 80, 24, replyDraft},
+		{"08-ended-agents-80x24", 80, 24, endedAgents},
 		{"07a-two-hives", 120, 36, func(m *model) { twoHives(m, "lead") }},
 		{"07b-two-hives-80x24", 80, 24, func(m *model) { twoHives(m, "project:hive") }},
 	} {
@@ -359,5 +360,103 @@ func TestColourHints(t *testing.T) {
 	defer setHue(true)
 	if c := colourSGR(frames()); c != "" {
 		t.Fatalf("NO_COLOR still colours: %s", c)
+	}
+}
+
+// endedAgents gives textkit-2 two agents that ended today and one that ended
+// days ago.
+func endedAgents(m *model) {
+	for i, ago := range []time.Duration{time.Hour, 3 * time.Hour, 72 * time.Hour} {
+		id := fmt.Sprintf("agent:old-%d", i)
+		m.st.Chats = append(m.st.Chats, api.ChatView{Chat: chat.Chat{ID: id, Title: fmt.Sprintf("worker-%d", i+3), Kind: "agent", Project: "textkit-2", Created: time.Now().Add(-ago)}})
+	}
+	m.closed["p:hive-web"] = true
+}
+
+// Ended agents sit in a fold of their project, closed with a count; one that
+// ended over a day ago leaves the sidebar and stays reachable by its chat.
+func TestEndedAgentsFold(t *testing.T) {
+	m := designModel(80, 24)
+	endedAgents(m)
+	labels := func() (out []string) {
+		for _, r := range m.sideRows() {
+			out = append(out, strings.TrimSpace(r.label))
+		}
+		return out
+	}
+	got := strings.Join(labels(), "|")
+	if !strings.Contains(got, "ended (2)") || strings.Contains(got, "worker-3") || strings.Contains(got, "worker-5") {
+		t.Fatalf("closed fold: %s", got)
+	}
+	for i, r := range m.sideRows() {
+		if r.fold {
+			m.side, m.sideKey, m.focus = i, r.key, 0
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if got = strings.Join(labels(), "|"); !strings.Contains(got, "ended (2)|worker-3|worker-4") || strings.Contains(got, "worker-5") {
+		t.Fatalf("open fold: %s", got)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.chat != "agent:old-0" || m.path() != "textkit-2 › worker-3" {
+		t.Fatalf("down into the fold: chat %q, path %q", m.chat, m.path())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if strings.Contains(strings.Join(labels(), "|"), "worker-3") {
+		t.Fatal("← didn't close the fold")
+	}
+	if m.openChat("agent:old-2"); m.chat != "agent:old-2" {
+		t.Fatalf("the day-old chat isn't reachable: on %q", m.chat)
+	}
+}
+
+// With a thread open beside the channel, ← from an empty reply box and →
+// from the channel move between them, the thread stays open, and each pane
+// scrolls while it has the keys.
+func TestSidewaysBetweenThreadAndChannel(t *testing.T) {
+	m := designModel(120, 24)
+	replyDraft(m)
+	m.input.SetValue("")
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if m.focus != 1 || m.thread != "m3" || m.composing {
+		t.Fatalf("← from the thread: focus %d, thread %q, composing %v", m.focus, m.thread, m.composing)
+	}
+	if !strings.Contains(m.View(), "to the open thread") {
+		t.Fatal("the channel's hints don't say → goes back to the thread")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.chScroll == 0 {
+		t.Fatal("pgup in the channel didn't scroll it")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if m.focus != 2 || m.thread != "m3" || !m.composing || m.reply != "m3" {
+		t.Fatalf("→ from the channel: focus %d, thread %q, reply %q", m.focus, m.thread, m.reply)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.thScroll == 0 {
+		t.Fatal("pgup in the thread didn't scroll it")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // tab goes round the same way
+	if m.focus != 0 {
+		t.Fatalf("tab from the thread: focus %d", m.focus)
+	}
+}
+
+// Each chat keeps its open thread and scroll while another chat is shown.
+func TestChatKeepsItsThread(t *testing.T) {
+	m := designModel(120, 24)
+	replyDraft(m)
+	m.input.SetValue("")
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	scrolled := m.chScroll
+	m.pick(sideRow{sec: -1, chatID: "project:hive-web"})
+	if m.chat != "project:hive-web" || m.thread != "" {
+		t.Fatalf("another chat: %q with thread %q", m.chat, m.thread)
+	}
+	m.pick(sideRow{sec: -1, chatID: "project:textkit-2"})
+	if m.thread != "m3" || m.chScroll != scrolled || !m.sidePane() {
+		t.Fatalf("back: thread %q, scroll %d (was %d)", m.thread, m.chScroll, scrolled)
 	}
 }
