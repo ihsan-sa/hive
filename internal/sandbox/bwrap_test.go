@@ -233,7 +233,7 @@ func TestInstallRootNeverBindsMore(t *testing.T) {
 		{homeBin, link, filepath.Join(home, "bin"), true},
 		{uvLocal, gone, "", false},
 	} {
-		got, ok := installRoot(c.p, c.home)
+		got, ok := installRoot(c.p, c.home, nil)
 		if got != c.want || ok != c.ok {
 			t.Errorf("installRoot(%s, %q) = %q, %v; want %q, %v", c.p, c.home, got, ok, c.want, c.ok)
 		}
@@ -251,6 +251,72 @@ func TestInstallRootNeverBindsMore(t *testing.T) {
 	hostInterpreters(&a)
 	if len(a.Roots) != 0 || strings.Contains(strings.Join(a.Spec.Env, " "), home) {
 		t.Fatalf("with HOME unset: roots %q, env %q", a.Roots, a.Spec.Env)
+	}
+}
+
+// No interpreter's install is bound when it holds the workspace or a folder
+// covered in it, given as the spec's guard or as a mount: a python at
+// /data/bin with lib/ beside it is bound as its bin alone when the workspace
+// lives under /data, and not at all when only a dir holding it would do.
+func TestInstallRootKeepsTheWorkspaceOut(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := filepath.Join(data, "hive")
+	private := filepath.Join(ws, ".hive", "private")
+	py := mkTree(t, data, "bin/python3", "lib/python3.12/os.py", "hive/.hive/private/daemon.json",
+		"hive/bin/python3", "opt/py/bin/python3", "opt/py/lib/x", "keep/bin/python3", "keep/lib/x", "keep/secret/token")
+	guard := []string{ws, filepath.Join(ws, ".hive", "logins"), filepath.Join(ws, ".hive", "modules"), private}
+	// The same workspace reached through a symlink is still kept out.
+	link := filepath.Join(t.TempDir(), "ws")
+	if err := os.Symlink(ws, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name, p string
+		guard   []string
+		want    string
+		ok      bool
+	}{
+		{"workspace under the install", py[0], guard, filepath.Join(data, "bin"), true},
+		{"workspace through a symlink", py[0], []string{link}, filepath.Join(data, "bin"), true},
+		{"masked path under the install", py[0], []string{private}, filepath.Join(data, "bin"), true},
+		{"masked path not made yet", py[0], []string{filepath.Join(link, ".hive", "logins")}, filepath.Join(data, "bin"), true},
+		{"bin holding the workspace", py[0], []string{filepath.Join(data, "bin", "hive")}, "", false},
+		{"install inside the workspace", py[3], guard, filepath.Join(ws, "bin"), true},
+		{"allowed root beside the workspace", py[4], guard, filepath.Join(data, "opt/py"), true},
+		{"no guard binds the install", py[0], nil, data, true},
+		{"masked path inside the install", py[6], []string{py[8]}, filepath.Join(data, "keep/bin"), true},
+	} {
+		got, ok := installRoot(c.p, home, c.guard)
+		if got != c.want || ok != c.ok {
+			t.Errorf("%s: installRoot(%s) = %q, %v; want %q, %v", c.name, c.p, got, ok, c.want, c.ok)
+		}
+		for _, g := range c.guard {
+			if got != "" && holds(got, g) {
+				t.Errorf("%s: installRoot(%s) = %s exposes %s", c.name, c.p, got, g)
+			}
+		}
+	}
+	// Through the spec: the guard and every mount's host path are kept out.
+	defer func(old []string) { interpreters = old }(interpreters)
+	interpreters = []string{"python3"}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", filepath.Join(data, "bin")+":/usr/bin:/bin")
+	for _, s := range []Spec{
+		{Env: InsideEnv("/hive/home", false), Guard: []string{private}},
+		{Env: InsideEnv("/hive/home", false), Mounts: []Mount{{Host: filepath.Join(ws, "projects", "p"), Inside: "/work"}}},
+	} {
+		a := initArgs{Spec: s}
+		hostInterpreters(&a)
+		if !slices.Equal(a.Roots, []string{filepath.Join(data, "bin")}) {
+			t.Errorf("spec %+v: roots %q, want only %s", s, a.Roots, filepath.Join(data, "bin"))
+		}
 	}
 }
 
