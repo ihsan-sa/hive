@@ -179,15 +179,26 @@ func (h *hive) launch() {
 	log.Close() // the daemon has its own handle
 	h.cmd = cmd
 	go cmd.Wait()
+	launched := time.Now().Add(-time.Second)
 	for i := 0; i < 150; i++ {
 		time.Sleep(200 * time.Millisecond)
-		if c, err := api.Dial(h.ws); err == nil && c.Info.PID == cmd.Process.Pid && c.Ping() {
+		if c, err := api.Dial(h.ws); err == nil && ours(c.Info, cmd.Process.Pid, launched) && c.Ping() {
 			h.c = c
 			return
 		}
 	}
 	raw, _ := os.ReadFile(filepath.Join(h.ws.Hive(), "daemon-test.log"))
 	h.t.Fatalf("daemon didn't start: %s", raw)
+}
+
+// ours says the daemon that answers is the one just launched. The gate runs
+// the binary in a sandbox of its own (HIVE_E2E_WRAPPED), where the daemon
+// sees another pid, so there it is the start time instead.
+func ours(info api.DaemonInfo, pid int, launched time.Time) bool {
+	if os.Getenv("HIVE_E2E_WRAPPED") != "" {
+		return info.Started.After(launched)
+	}
+	return info.PID == pid
 }
 
 // kill ends the daemon abruptly, as a crash would.

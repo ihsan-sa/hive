@@ -16,6 +16,7 @@ type Metric struct {
 	Name   string  `json:"name"`
 	Value  float64 `json:"value"`
 	Higher bool    `json:"higher"`
+	Info   bool    `json:"info,omitempty"` // shown, not judged: the side's own word, not measured from outside it
 }
 
 // Result is one run of one probe on one side.
@@ -85,6 +86,9 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 			}
 			t[r.Probe].pass++
 			for _, x := range r.Metrics {
+				if x.Info {
+					continue
+				}
 				k := key{r.Probe, x.Name}
 				m[k] = append(m[k], x.Value)
 				hi[k] = x.Higher

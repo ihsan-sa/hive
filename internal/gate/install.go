@@ -91,7 +91,8 @@ func copyFile(from, to string) error {
 
 // InstallTo installs the candidate the report is about, if the report says
 // keep, the children ran isolated by bubblewrap, and the binary is byte for
-// byte the one built and hashed before any probe ran.
+// byte the one built and hashed before any of its code ran. The health check
+// after the install wants the version the gate stamped into it.
 func (r Report) InstallTo(target string) error {
 	switch {
 	case !r.Verdict.Keep:
@@ -100,9 +101,11 @@ func (r Report) InstallTo(target string) error {
 		return fmt.Errorf("the children ran %s, not isolated by bubblewrap", r.Sandbox)
 	case r.CandBin == "" || r.CandSHA256 == "":
 		return fmt.Errorf("the report names no verified binary")
+	case r.CandVersion == "":
+		return fmt.Errorf("the report names no version for the binary (a prebuilt one is never installed)")
 	}
 	if got, err := FileSHA(r.CandBin); err != nil || got != r.CandSHA256 {
 		return fmt.Errorf("the candidate's binary does not match the hash taken after the build")
 	}
-	return Install(r.CandBin, target, "")
+	return Install(r.CandBin, target, r.CandVersion)
 }

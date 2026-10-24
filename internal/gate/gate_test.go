@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func res(probe string, pass bool, ms ...Metric) Result {
@@ -13,8 +14,8 @@ func res(probe string, pass bool, ms ...Metric) Result {
 }
 
 func TestDecide(t *testing.T) {
-	score := func(v float64) Metric { return Metric{"score", v, true} }
-	secs := func(v float64) Metric { return Metric{"seconds", v, false} }
+	score := func(v float64) Metric { return Metric{Name: "score", Value: v, Higher: true} }
+	secs := func(v float64) Metric { return Metric{Name: "seconds", Value: v, Higher: false} }
 	cases := []struct {
 		name       string
 		cand, ctrl []Result
@@ -32,6 +33,7 @@ func TestDecide(t *testing.T) {
 		{"faster is better", []Result{res("bench", true, secs(60))}, []Result{res("bench", true, secs(100))}, Options{}, true, "seconds"},
 		{"inside the floor is nothing", []Result{res("bench", true, secs(101))}, []Result{res("bench", true, secs(100))}, Options{}, false, "not better"},
 		{"candidate missing a probe", nil, []Result{res("e2e", true)}, Options{}, false, "did not run"},
+		{"a side's own word is not judged", []Result{res("bench", true, Metric{Name: "cost", Value: 1, Info: true})}, []Result{res("bench", true, Metric{Name: "cost", Value: 9, Info: true})}, Options{}, false, "not better"},
 	}
 	for _, c := range cases {
 		v := Decide(c.cand, c.ctrl, c.opt)
@@ -46,7 +48,7 @@ func TestDecideNoise(t *testing.T) {
 	mk := func(vs ...float64) []Result {
 		var rs []Result
 		for _, v := range vs {
-			rs = append(rs, res("bench", true, Metric{"score", v, true}))
+			rs = append(rs, res("bench", true, Metric{Name: "score", Value: v, Higher: true}))
 		}
 		return rs
 	}
@@ -101,14 +103,14 @@ func TestRunKeepsAndRollsBack(t *testing.T) {
 	good, bad := fakeBin(t, dir, "good", "v2", true), fakeBin(t, dir, "bad", "v2", true)
 	probe := func(score map[string]float64) ProbeFunc {
 		return func(cfg *Config, c *Child) Result {
-			return Result{Pass: true, Metrics: []Metric{{"score", score[filepath.Base(c.Bin)], true}}}
+			return Result{Pass: true, Metrics: []Metric{{Name: "score", Value: score[filepath.Base(c.Bin)], Higher: true}}}
 		}
 	}
 	ctrl := fakeBin(t, dir, "ctrl", "v1", true)
 	run := func(cand string, scores map[string]float64) (Report, string) {
 		org := filepath.Join(dir, "org-"+filepath.Base(cand))
 		lessons := filepath.Join(dir, "lessons-"+filepath.Base(cand), ".hive", "lessons.md")
-		rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, "out-"+filepath.Base(cand)+"-x", "run"), Reps: 2, Sandbox: "bare",
+		rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, "out-"+filepath.Base(cand)+"-x", "run"), Reps: 2, Sandbox: "bare", AllowBare: true,
 			Probes: []string{"org", "score"}, Probe: map[string]ProbeFunc{"score": probe(scores)}, Org: Local{Dir: org}, Lessons: lessons})
 		if err != nil {
 			t.Fatal(err)
@@ -132,10 +134,21 @@ func TestRunKeepsAndRollsBack(t *testing.T) {
 	}
 }
 
-// The candidate's tests run during the build; they must not see the host's home.
+// sandbox is how the tests run children here: bubblewrap where it works.
+func sandbox() string {
+	if BwrapWorks() {
+		return "bwrap"
+	}
+	return "bare"
+}
+
+// The candidate is built first, then its tests run; they must not see the
+// host's home or tokens, and under bubblewrap cannot write their checkout or
+// the binary that was built.
 func TestBuildRunsWithoutHostHome(t *testing.T) {
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skip("no go")
+	g, err := FindGo()
+	if err != nil {
+		t.Skip(err)
 	}
 	home := t.TempDir()
 	os.WriteFile(filepath.Join(home, "login"), []byte("secret"), 0o600)
@@ -154,11 +167,23 @@ func TestBuildRunsWithoutHostHome(t *testing.T) {
 import ("os"; "testing")
 
 func TestNoHostHome(t *testing.T) {
-	if _, err := os.Stat(os.Getenv("HOME") + "/login"); err == nil {
-		t.Fatal("the host's home is visible")
+	if os.Getenv("HOME") == os.Getenv("HOST_HOME") {
+		t.Fatal("the host's home is HOME")
 	}
 	if os.Getenv("GH_TOKEN") != "" {
 		t.Fatal("a host token is visible")
+	}
+	if os.Getenv("STRICT") == "" {
+		return
+	}
+	if _, err := os.Stat(os.Getenv("HOST_HOME") + "/login"); err == nil {
+		t.Fatal("the host's home is visible")
+	}
+	if os.WriteFile("planted", nil, 0o644) == nil {
+		t.Fatal("the checkout is writable")
+	}
+	if os.WriteFile(os.Getenv("BIN"), []byte("evil"), 0o755) == nil {
+		t.Fatal("the built binary is writable")
 	}
 }
 `)
@@ -169,9 +194,165 @@ func TestNoHostHome(t *testing.T) {
 	}
 	sha, _ := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
 	out := t.TempDir()
-	c := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: "bare"}
+	c := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: sandbox(), Go: g}
 	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha))); err != nil {
 		t.Fatal(err)
+	}
+	c.Extra = []string{"HOST_HOME=" + home, "BIN=" + c.Bin}
+	if c.Sandbox == "bwrap" {
+		c.Extra = append(c.Extra, "STRICT=1")
+	}
+	if err := unitTest(c); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Under bubblewrap a child sees the machine's programs and Go, and none of:
+// the host's home, a token file kept outside it, another workspace, the user
+// bus; and it can write only its root.
+func TestBwrapHidesTheHost(t *testing.T) {
+	if !BwrapWorks() {
+		t.Skip("bubblewrap cannot make namespaces here")
+	}
+	g, err := FindGo()
+	if err != nil {
+		t.Skip(err)
+	}
+	home, secrets, ws := t.TempDir(), t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(home, "login"), []byte("secret"), 0o600)
+	os.WriteFile(filepath.Join(secrets, "token"), []byte("secret"), 0o600)
+	os.MkdirAll(filepath.Join(ws, ".hive", "private"), 0o755)
+	os.WriteFile(filepath.Join(ws, ".hive", "private", "daemon.json"), []byte(`{"token":"secret"}`), 0o600)
+	t.Setenv("HOME", home)
+	t.Setenv("GH_TOKEN", "host-token")
+	c := &Child{Name: "candidate", Root: filepath.Join(t.TempDir(), "candidate"), Sandbox: "bwrap", Go: g}
+	c.Prepare()
+	script := `set -e
+for p in "$1/login" "$2/token" "$3/.hive/private/daemon.json"; do test ! -e "$p" || { echo "visible: $p"; exit 1; }; done
+for d in /run/user /run/dbus; do test -z "$(ls -A $d 2>/dev/null)" || { echo "visible: $d"; exit 1; }; done
+test -z "$GH_TOKEN" || { echo "token in the environment"; exit 1; }
+go version >/dev/null || { echo "no go"; exit 1; }
+touch "$HOME/ok" || { echo "home not writable"; exit 1; }
+! touch /usr/planted 2>/dev/null || { echo "/usr writable"; exit 1; }
+`
+	if out, err := c.Exec(time.Minute, c.Root, "sh", "-c", script, "sh", home, secrets, ws); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+}
+
+// The sandbox is an allowlist: nothing of the machine is bound but the system
+// dirs and what the child is given; the build output only while building.
+func TestBwrapArgsAllowlist(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := t.TempDir()
+	for _, d := range []string{"root", "src", "bin", "go", "mod"} {
+		os.MkdirAll(filepath.Join(dir, d), 0o755)
+	}
+	c := &Child{Root: filepath.Join(dir, "root"), Src: filepath.Join(dir, "src"), BinDir: filepath.Join(dir, "bin"), Go: Go{Root: filepath.Join(dir, "go"), ModCache: filepath.Join(dir, "mod")}}
+	pairs := func() map[string]string {
+		args, m := c.bwrapArgs("/"), map[string]string{}
+		for i := 0; i+2 < len(args); i++ {
+			if args[i] == "--ro-bind" || args[i] == "--bind" {
+				m[args[i+1]] = args[i]
+			}
+		}
+		return m
+	}
+	m := pairs()
+	if _, ok := m["/"]; ok {
+		t.Error("the whole machine is bound")
+	}
+	if _, ok := m[home]; ok {
+		t.Error("the host's home is bound")
+	}
+	for p, want := range map[string]string{c.Root: "--bind", c.Src: "--ro-bind", c.Go.Root: "--ro-bind", c.Go.ModCache: "--ro-bind"} {
+		if m[p] != want {
+			t.Errorf("%s: %q, want %q", p, m[p], want)
+		}
+	}
+	if _, ok := m[c.BinDir]; ok {
+		t.Error("the build output is bound outside the build")
+	}
+	c.Building = true
+	if pairs()[c.BinDir] != "--bind" {
+		t.Error("the build cannot write its output")
+	}
+	if env := strings.Join(c.Env(), "\n"); !strings.Contains(env, "PATH="+filepath.Join(c.Go.Root, "bin")) || !strings.Contains(env, "GOROOT="+c.Go.Root) {
+		t.Errorf("Go is not on the child's PATH: %s", env)
+	}
+}
+
+func TestBareNeedsLeave(t *testing.T) {
+	for _, c := range []struct {
+		cfg Config
+		ok  bool
+	}{
+		{Config{Sandbox: "bare"}, false},
+		{Config{Sandbox: "bare", AllowBare: true}, true},
+		{Config{Sandbox: "bare", AllowBare: true, Org: Local{}}, true},
+		{Config{Sandbox: "bare", AllowBare: true, Org: GitHub{Owner: "x"}}, false},
+	} {
+		if _, err := pickSandbox(c.cfg); (err == nil) != c.ok {
+			t.Errorf("%+v: %v", c.cfg, err)
+		}
+	}
+	if !BwrapWorks() {
+		if _, err := pickSandbox(Config{}); err == nil {
+			t.Error("fell back to bare without leave")
+		}
+	}
+}
+
+func TestReachPolicy(t *testing.T) {
+	gr := "gate-1700000000-0a1b2c3d-candidate"
+	cases := []struct {
+		org, gated string
+		acc        []Access
+		ok         bool
+	}{
+		{"Lab", "ihsan-sa", []Access{{Repo: "Lab/" + gr, Push: true}}, true},
+		{"Lab", "ihsan-sa", []Access{{Repo: "Lab/" + gr, Push: true, Admin: true}, {Repo: "someone/public"}}, true},
+		{"Lab", "ihsan-sa", []Access{{Repo: "Lab/hive", Push: true}}, false},
+		{"Lab", "ihsan-sa", []Access{{Repo: "ihsan-sa/hive", Push: true}}, false},
+		{"Lab", "ihsan-sa", []Access{{Repo: "Lab/gate-evil", Admin: true}}, false},
+		{"ihsan-sa", "ihsan-sa", nil, false},
+	}
+	for _, c := range cases {
+		if err := reachPolicy(c.org, c.gated, c.acc); (err == nil) != c.ok {
+			t.Errorf("%+v: %v", c, err)
+		}
+	}
+	if ownerOf("https://github.com/ihsan-sa/hive.git") != "ihsan-sa" || ownerOf("git@github.com:ihsan-sa/hive") != "ihsan-sa" || ownerOf("/tmp/x") != "" {
+		t.Error("ownerOf")
+	}
+	if err := CheckReach(GitHub{Owner: "Lab"}, "ghp_classic", ""); err == nil {
+		t.Error("a classic token passed")
+	}
+	old := listReach
+	defer func() { listReach = old }()
+	listReach = func(GitHub, string) ([]Access, error) { return []Access{{Repo: "Lab/hive", Push: true}}, nil }
+	if err := CheckReach(GitHub{Owner: "Lab"}, "github_pat_x", "https://github.com/ihsan-sa/hive"); err == nil {
+		t.Error("an org-wide token on an org with other repositories passed")
+	}
+}
+
+// The evaluator runs a side's binary through a wrapper, as that side.
+func TestWrapper(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "hive")
+	os.WriteFile(bin, []byte("#!/bin/sh\necho \"$HOME|$1|$(pwd)\"\n"), 0o755)
+	c := &Child{Name: "candidate", Root: filepath.Join(dir, "root"), Sandbox: sandbox(), Bin: bin}
+	c.Prepare()
+	w := filepath.Join(dir, "wrap", "hive")
+	if err := c.Wrapper(w, bin); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(w, "it's")
+	cmd.Dir = c.Root
+	out, err := cmd.CombinedOutput()
+	if want := c.Home() + "|it's|" + c.Root; err != nil || strings.TrimSpace(string(out)) != want {
+		t.Errorf("%v: %q, want %q", err, out, want)
 	}
 }
 
@@ -180,7 +361,7 @@ func TestInstallToChecks(t *testing.T) {
 	cur := fakeBin(t, dir, "hive", "v1", true)
 	cand := fakeBin(t, dir, "cand", "v2", true)
 	sum, _ := FileSHA(cand)
-	rep := Report{Verdict: Verdict{Keep: true}, Sandbox: "bare", CandBin: cand, CandSHA256: sum}
+	rep := Report{Verdict: Verdict{Keep: true}, Sandbox: "bare", CandBin: cand, CandSHA256: sum, CandVersion: "v2"}
 	if err := rep.InstallTo(cur); err == nil || !strings.Contains(err.Error(), "bubblewrap") {
 		t.Errorf("a bare run installed: %v", err)
 	}
@@ -215,7 +396,7 @@ func TestRunRecordsHashAndKeepsOutputOutOfLessons(t *testing.T) {
 		}
 		return Result{Pass: true}
 	}
-	rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, "o", "run"), Reps: 1, Sandbox: "bare", Probes: []string{"swap"}, Probe: map[string]ProbeFunc{"swap": swap}, Lessons: lessons})
+	rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, "o", "run"), Reps: 1, Sandbox: "bare", AllowBare: true, Probes: []string{"swap"}, Probe: map[string]ProbeFunc{"swap": swap}, Lessons: lessons})
 	if err == nil || rep.Verdict.Keep || rep.CandSHA256 == "" {
 		t.Fatalf("a swapped binary was kept: %v %+v", err, rep.Verdict)
 	}

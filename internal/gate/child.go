@@ -59,10 +59,11 @@ func (l Local) Create(name string) (string, error) {
 
 func (l Local) Delete(name string) error { return os.RemoveAll(filepath.Join(l.Dir, name+".git")) }
 
-// passEnv is all a child inherits from the gate: how to find tools and the
-// proxy for outbound traffic, nothing that is a login.
-var passEnv = []string{"PATH", "LANG", "TZ", "TMPDIR", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
-	"GOMODCACHE", "GOPATH", "GOFLAGS", "GOPROXY", "GOTOOLCHAIN", "GOROOT", "SSL_CERT_FILE"}
+// passEnv is all a child inherits from the gate: the proxy for outbound
+// traffic and how Go fetches modules, nothing that is a login. PATH, HOME,
+// TMPDIR and the Go caches are the child's own (see Env).
+var passEnv = []string{"PATH", "LANG", "TZ", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
+	"GOFLAGS", "GOPROXY", "GONOSUMDB", "GOPRIVATE", "GOTOOLCHAIN", "SSL_CERT_FILE", "SSL_CERT_DIR"}
 
 // cleanEnv is the whitelist of the gate's own environment.
 func cleanEnv() []string {
@@ -75,32 +76,64 @@ func cleanEnv() []string {
 	return env
 }
 
-// Child is one Hive being tried: a binary, the checkout it was built from, a
-// root that holds its home, workspace and forge, and the sandbox it runs in.
+// Go is where the gate's Go toolchain and module cache are. Children get both
+// by path, read-only (they are often under the person's home, which a child
+// never sees).
+type Go struct{ Root, ModCache string }
+
+// FindGo asks the go on PATH.
+func FindGo() (Go, error) {
+	out, err := exec.Command("go", "env", "GOROOT", "GOMODCACHE").Output()
+	if err != nil {
+		return Go{}, fmt.Errorf("no Go toolchain: %v", err)
+	}
+	f := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(f) != 2 || f[0] == "" || f[1] == "" {
+		return Go{}, fmt.Errorf("go env gave %q", out)
+	}
+	return Go{Root: strings.TrimSpace(f[0]), ModCache: strings.TrimSpace(f[1])}, nil
+}
+
+// Child is one Hive being tried, or the evaluator judging one: a binary, the
+// checkout it was built from, a root that holds its home, workspace and
+// forge, and the sandbox it runs in.
 type Child struct {
-	Name     string // "candidate" or "control"
-	Src      string // the checkout the binary was built from
-	Eval     string // the evaluator: the checkout whose tests and benchmark judge the binary, the same for both sides
-	Bin      string
+	Name     string // "candidate", "control", or "evaluator-<side>"
+	Src      string // the checkout the binary was built from (read-only to the child)
+	Bin      string // the binary; read-only to the child
+	BinDir   string // where the build writes Bin; writable only while Building
 	Root     string // everything the child writes is under here
 	Repo     string // the child's org test repository, if the run has an org
 	RepoURL  string
 	Token    string // the contents-only org token, the only credential the child holds (never one that can make or delete repositories)
 	Sandbox  string // "bwrap" or "bare"
 	Depth    int    // how many more levels the child may gate
-	Building bool   // the checkout is writable only while the child builds
-	Extra    []string
+	Go       Go
+	Eval     *Evaluator // judges this child; nil for prebuilt binaries
+	Building bool     // BinDir is writable only while the child builds
+	RO, RW   []string // more paths the child sees, read-only and writable
+	Extra    []string // more environment
 }
 
-// Home is the child's HOME; Workspace is its HIVE_HOME.
+// Home is the child's HOME; Workspace is its HIVE_HOME; Tmp its TMPDIR.
 func (c *Child) Home() string      { return filepath.Join(c.Root, "home") }
 func (c *Child) Workspace() string { return filepath.Join(c.Root, "hive") }
+func (c *Child) Tmp() string       { return filepath.Join(c.Root, "tmp") }
 
 // Env is the child's whole environment.
 func (c *Child) Env() []string {
-	env := append(cleanEnv(), "HOME="+c.Home(), "HIVE_HOME="+c.Workspace(), "HIVE_GATE_DEPTH="+fmt.Sprint(c.Depth), "GOCACHE="+filepath.Join(c.Root, "gocache"),
+	env := cleanEnv()
+	path := os.Getenv("PATH")
+	if c.Go.Root != "" {
+		path = filepath.Join(c.Go.Root, "bin") + string(os.PathListSeparator) + path
+	}
+	env = append(env, "PATH="+path, "HOME="+c.Home(), "TMPDIR="+c.Tmp(), "HIVE_HOME="+c.Workspace(), "HIVE_GATE_DEPTH="+fmt.Sprint(c.Depth),
+		"GOCACHE="+filepath.Join(c.Root, "gocache"), "GOPATH="+filepath.Join(c.Root, "gopath"),
 		"GIT_AUTHOR_NAME=Hive gate", "GIT_AUTHOR_EMAIL=gate@localhost", "GIT_COMMITTER_NAME=Hive gate", "GIT_COMMITTER_EMAIL=gate@localhost",
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
+	if c.Go.Root != "" {
+		env = append(env, "GOROOT="+c.Go.Root, "GOMODCACHE="+c.Go.ModCache)
+	}
 	if c.Token != "" {
 		env = append(env, "GH_TOKEN="+c.Token, "GITHUB_TOKEN="+c.Token)
 		// git reads its auth header from the environment, so the token is in no argv.
@@ -109,9 +142,9 @@ func (c *Child) Env() []string {
 	return append(env, c.Extra...)
 }
 
-// Prepare makes the child's empty home and workspace.
+// Prepare makes the child's empty home, workspace and caches.
 func (c *Child) Prepare() error {
-	for _, d := range []string{c.Home(), c.Workspace(), filepath.Join(c.Root, "gocache")} {
+	for _, d := range []string{c.Home(), c.Workspace(), c.Tmp(), filepath.Join(c.Root, "gocache"), filepath.Join(c.Root, "gopath")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
@@ -119,8 +152,8 @@ func (c *Child) Prepare() error {
 	return nil
 }
 
-// bwrapWorks is whether bubblewrap can make the namespaces here.
-func bwrapWorks() bool {
+// BwrapWorks is whether bubblewrap can make the namespaces here.
+func BwrapWorks() bool {
 	p, err := exec.LookPath("bwrap")
 	if err != nil {
 		return false
@@ -128,54 +161,62 @@ func bwrapWorks() bool {
 	return exec.Command(p, "--ro-bind", "/", "/", "--unshare-pid", "true").Run() == nil
 }
 
-// PickSandbox says how children run on this machine.
-func PickSandbox() string {
-	if bwrapWorks() {
-		return "bwrap"
+// systemDirs are what a child sees of the machine, read-only: programs,
+// libraries and /etc. Nothing else is there unless named: not the person's
+// home, not a token file kept elsewhere, not another workspace (and so not
+// its daemon's token), not /run (the user bus, systemd --user) beyond DNS.
+var systemDirs = []string{"/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/nix", "/run/systemd/resolve"}
+
+// bwrapArgs is the sandbox for the child: the system dirs, the Go toolchain
+// and module cache, its checkout and binary, read-only; its root writable,
+// and its build output while it builds; its own pid, ipc and uts namespaces;
+// fresh /dev, /proc and /tmp. The network stays, since the org probe needs
+// the proxy.
+func (c *Child) bwrapArgs(dir string) []string {
+	args := []string{"--unshare-pid", "--unshare-ipc", "--unshare-uts", "--die-with-parent", "--new-session"}
+	for _, d := range systemDirs {
+		fi, err := os.Lstat(d)
+		if err != nil {
+			continue
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			target, _ := os.Readlink(d)
+			args = append(args, "--symlink", target, d)
+			continue
+		}
+		args = append(args, "--ro-bind", d, d)
 	}
-	return "bare"
+	args = append(args, "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp")
+	ro := []string{c.Go.Root, c.Go.ModCache, c.Src, c.Bin}
+	for _, k := range []string{"SSL_CERT_FILE", "SSL_CERT_DIR"} {
+		ro = append(ro, os.Getenv(k))
+	}
+	ro = append(ro, c.RO...)
+	for _, p := range ro {
+		if p != "" && exists(p) {
+			args = append(args, "--ro-bind", p, p)
+		}
+	}
+	rw := append([]string{c.Root}, c.RW...)
+	if c.Building {
+		rw = append(rw, c.BinDir)
+	}
+	for _, p := range rw {
+		if p != "" && exists(p) {
+			args = append(args, "--bind", p, p)
+		}
+	}
+	return append(args, "--chdir", dir, "--")
 }
 
-// Command wraps argv for the child: under bubblewrap the machine is read-only,
-// the real home is hidden, and only the child's root, its checkout (to build
-// and test) and the Go caches are writable; bare, only the environment is the
-// child's.
+func exists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+// Command wraps argv for the child: under bubblewrap, the sandbox of
+// bwrapArgs; bare, only the environment is the child's.
 func (c *Child) Command(ctx context.Context, dir string, argv ...string) *exec.Cmd {
 	var cmd *exec.Cmd
 	if c.Sandbox == "bwrap" {
-		// /run/user and the buses are hidden so the child cannot reach the
-		// person's systemd (systemd-run --user would run code outside this
-		// sandbox). The network stays, since the org probe needs the proxy.
-		args := []string{"--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", "/root",
-			"--unshare-pid", "--unshare-ipc", "--unshare-uts", "--die-with-parent", "--new-session"}
-		for _, d := range []string{"/run/user", "/run/dbus"} {
-			if _, err := os.Stat(d); err == nil { // bwrap cannot make a mount point on the read-only root
-				args = append(args, "--tmpfs", d)
-			}
-		}
-		if h := os.Getenv("HOME"); h != "" && h != c.Home() {
-			args = append(args, "--tmpfs", h)
-		}
-		// Read-only: the module cache (a candidate must not edit what every
-		// later build compiles) and the evaluator (the candidate must not
-		// rewrite the tests that grade the control). Writable: the child's own
-		// root, which holds its own Go cache, and, while it builds, its checkout.
-		for _, ro := range []string{os.Getenv("GOMODCACHE"), c.Eval} {
-			if ro != "" {
-				if _, err := os.Stat(ro); err == nil {
-					args = append(args, "--ro-bind", ro, ro)
-				}
-			}
-		}
-		for _, w := range []string{c.Root, c.Src} {
-			if w != "" && (w != c.Src || c.Building) {
-				if _, err := os.Stat(w); err == nil {
-					args = append(args, "--bind", w, w)
-				}
-			}
-		}
-		args = append(args, "--chdir", dir, "--")
-		cmd = exec.CommandContext(ctx, "bwrap", append(args, argv...)...)
+		cmd = exec.CommandContext(ctx, "bwrap", append(c.bwrapArgs(dir), argv...)...)
 	} else {
 		cmd = exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = dir
@@ -183,6 +224,42 @@ func (c *Child) Command(ctx context.Context, dir string, argv ...string) *exec.C
 	cmd.Env = c.Env()
 	cmd.WaitDelay = 10 * time.Second
 	return cmd
+}
+
+// Wrapper writes a script at path that runs its arguments as this child, in
+// the child's sandbox, from the caller's own folder: how the evaluator runs
+// the child's binary without sharing a sandbox with it. With bin, the script
+// runs bin with its arguments.
+func (c *Child) Wrapper(path, bin string) error {
+	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n# written by the Hive gate: run as the " + c.Name + " child\n")
+	env := []string{"HOME=" + c.Home(), "HIVE_GATE_DEPTH=" + fmt.Sprint(c.Depth), "GIT_CONFIG_GLOBAL=/dev/null"}
+	tail := `"$@"`
+	if bin != "" {
+		tail = q(bin) + ` "$@"`
+	}
+	if c.Sandbox == "bwrap" {
+		b.WriteString("exec bwrap")
+		args := c.bwrapArgs("/")
+		args = args[:len(args)-3] // the --chdir and -- go last, with the caller's folder
+		for _, e := range env {
+			k, v, _ := strings.Cut(e, "=")
+			args = append(args, "--setenv", k, v)
+		}
+		for _, a := range args {
+			b.WriteString(" " + q(a))
+		}
+		b.WriteString(` --chdir "$PWD" -- ` + tail + "\n")
+	} else {
+		b.WriteString("exec env")
+		for _, e := range env {
+			b.WriteString(" " + q(e))
+		}
+		b.WriteString(" " + tail + "\n")
+	}
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	return os.WriteFile(path, []byte(b.String()), 0o755)
 }
 
 // Exec runs argv in the child and returns its combined output.

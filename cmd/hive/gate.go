@@ -16,6 +16,7 @@ import (
 const gateUsage = `usage: hive gate --repo <git> --head <sha> --base <sha> [--org Hive-RSI-Lab | --local-org <dir>] [--child-token-file f]
                  [--eval <sha, default base>] [--reps 3] [--bench 4] [--probes daemon,org,e2e,benchmark,recurse] [--depth 1]
                  [--lessons .hive/lessons.md] [--allow-tie] [--install <path>]  (installs only after a keep from bubblewrap-isolated children) [--out <dir>]
+                 [--allow-bare]  (where bubblewrap cannot make namespaces; never with --org, never installed)
        hive gate --self-test [--out <dir>]      the gate on a trivial change, inside a child
        hive gate install --bin <new> --target <path> [--version <v>]
 Exit 0 keeps the candidate, 1 rolls it back, 2 is a usage error. The report is JSON on stdout.`
@@ -40,12 +41,12 @@ func cmdGate(args []string) int {
 	org, localOrg, tokenFile, childFile := fs.String("org", "", ""), fs.String("local-org", "", ""), fs.String("org-token-file", "", ""), fs.String("child-token-file", "", "")
 	reps, bench, depth := fs.Int("reps", 3, ""), fs.Int("bench", 4, ""), fs.Int("depth", 1, "")
 	probes, lessons, out, install := fs.String("probes", "", ""), fs.String("lessons", "", ""), fs.String("out", "", ""), fs.String("install", "", "")
-	tie, self := fs.Bool("allow-tie", false, ""), fs.Bool("self-test", false, "")
+	tie, self, bare := fs.Bool("allow-tie", false, ""), fs.Bool("self-test", false, ""), fs.Bool("allow-bare", false, "")
 	if fs.Parse(args) != nil {
 		fmt.Fprintln(os.Stderr, gateUsage)
 		return 2
 	}
-	cfg := gate.Config{Repo: *repo, Head: *head, Base: *base, Eval: *eval, Out: *out, Reps: *reps, Bench: *bench, Depth: *depth, Lessons: *lessons,
+	cfg := gate.Config{Repo: *repo, Head: *head, Base: *base, Eval: *eval, Out: *out, Reps: *reps, Bench: *bench, Depth: *depth, Lessons: *lessons, AllowBare: *bare,
 		Options: gate.Options{AllowTie: *tie}, Log: func(s string) { fmt.Fprintln(os.Stderr, "gate:", s) }}
 	if *probes != "" {
 		cfg.Probes = strings.Split(*probes, ",")
@@ -72,6 +73,9 @@ func cmdGate(args []string) int {
 		}
 		cfg.Org = gate.Local{Dir: filepath.Join(cfg.Out, "org")}
 		cfg.MaxRepos = 2
+		// The self-test runs inside a child's sandbox already, on local repos
+		// and no token: where bubblewrap cannot nest, it runs bare in there.
+		cfg.AllowBare = true
 	} else {
 		if *repo == "" || *head == "" || *base == "" {
 			fmt.Fprintln(os.Stderr, gateUsage)
@@ -81,6 +85,10 @@ func cmdGate(args []string) int {
 		case *localOrg != "":
 			cfg.Org = gate.Local{Dir: *localOrg}
 		case *org != "":
+			if *bare {
+				fmt.Fprintln(os.Stderr, "gate: --allow-bare is never allowed with --org")
+				return 2
+			}
 			tok := os.Getenv("HIVE_GATE_ORG_TOKEN")
 			if *tokenFile != "" {
 				raw, err := os.ReadFile(*tokenFile)

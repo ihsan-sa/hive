@@ -34,7 +34,8 @@ type Config struct {
 	MaxRepos   int      // most org repositories one run may make (default 4)
 	Timeout    time.Duration
 	Options    Options
-	Sandbox    string // "", "bwrap" or "bare"; "" picks
+	Sandbox    string // "" or "bwrap"; "bare" only with AllowBare
+	AllowBare  bool   // run the children without filesystem isolation where bubblewrap cannot; never with a GitHub org, and never installed
 	Log        func(string)
 	Probe      map[string]ProbeFunc // extra probes, by name
 	KeepFiles  bool
@@ -61,7 +62,14 @@ type Report struct {
 	Error      string    `json:"error,omitempty"`
 	CandBin    string    `json:"candidate_bin,omitempty"`    // the verified copy of the candidate's binary
 	CandSHA256 string    `json:"candidate_sha256,omitempty"` // its hash, taken right after the build
+	CandVersion string   `json:"candidate_version,omitempty"` // what its --version must say: the gate stamps it at build time
 }
+
+// versionVar is where the build stamps the version; versionOf is what it
+// stamps for a commit.
+const versionVar = "github.com/ihsan-sa/hive-standalone-build/internal/core.Version"
+
+func versionOf(sha string) string { return "0.0.0-gate." + short(sha) }
 
 func (c *Config) log(f string, a ...any) {
 	if c.Log != nil {
@@ -89,19 +97,8 @@ func Run(cfg Config) (rep Report, err error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 2 * time.Hour
 	}
-	if cfg.Sandbox == "" {
-		cfg.Sandbox = PickSandbox()
-	}
 	if len(cfg.Probes) == 0 {
 		cfg.Probes = DefaultProbes
-	}
-	// Children read the module cache by path (read-only); each has its own build cache.
-	for _, k := range []string{"GOMODCACHE"} {
-		if os.Getenv(k) == "" {
-			if out, err := exec.Command("go", "env", k).Output(); err == nil {
-				os.Setenv(k, strings.TrimSpace(string(out)))
-			}
-		}
 	}
 	rep = Report{ID: fmt.Sprintf("gate-%d-%s", t0.Unix(), randHex()), Head: cfg.Head, Base: cfg.Base, Sandbox: cfg.Sandbox, Started: t0.UTC()}
 	if cfg.Out == "" {
@@ -121,27 +118,48 @@ func Run(cfg Config) (rep Report, err error) {
 			noteLesson(cfg, rep)
 		}
 	}()
+	if cfg.Sandbox, err = pickSandbox(cfg); err != nil {
+		return rep, err
+	}
+	rep.Sandbox = cfg.Sandbox
+	if g, ok := cfg.Org.(GitHub); ok && cfg.ChildToken != "" {
+		if err = CheckReach(g, cfg.ChildToken, cfg.Repo); err != nil {
+			return rep, err
+		}
+	}
+	// Children get the toolchain and module cache by path, read-only; each has
+	// its own build cache. A self-test on prebuilt binaries needs no Go.
+	gotool, goErr := FindGo()
+	if goErr != nil && (cfg.CandBin == "" || cfg.CtrlBin == "") {
+		return rep, goErr
+	}
 
-	cand := &Child{Name: "candidate", Root: filepath.Join(cfg.Out, "candidate"), Sandbox: cfg.Sandbox, Depth: cfg.Depth, Bin: cfg.CandBin}
-	ctrl := &Child{Name: "control", Root: filepath.Join(cfg.Out, "control"), Sandbox: cfg.Sandbox, Depth: cfg.Depth, Bin: cfg.CtrlBin}
+	cand := &Child{Name: "candidate", Root: filepath.Join(cfg.Out, "candidate"), Sandbox: cfg.Sandbox, Depth: cfg.Depth, Bin: cfg.CandBin, Go: gotool}
+	ctrl := &Child{Name: "control", Root: filepath.Join(cfg.Out, "control"), Sandbox: cfg.Sandbox, Depth: cfg.Depth, Bin: cfg.CtrlBin, Go: gotool}
+	var built []*Child
 	for _, c := range []*Child{cand, ctrl} {
 		sha := cfg.Head
 		if c == ctrl {
 			sha = cfg.Base
+		}
+		if err = c.Prepare(); err != nil {
+			return rep, err
 		}
 		if c.Bin == "" {
 			cfg.log("building %s at %s", c.Name, short(sha))
 			if err = build(cfg, c, sha); err != nil {
 				return rep, fmt.Errorf("%s does not build: %v", c.Name, err)
 			}
-		}
-		if err = c.Prepare(); err != nil {
-			return rep, err
+			built = append(built, c)
+			if c == cand {
+				rep.CandVersion = versionOf(sha)
+			}
 		}
 	}
 
-	// The candidate's binary is copied out of the child's reach and hashed;
-	// that copy, checked against the hash, is all an install ever uses.
+	// The candidate's binary is copied out of the child's reach and hashed
+	// before any of its code runs; that copy, checked against the hash, is all
+	// an install ever uses.
 	if err = os.MkdirAll(filepath.Join(cfg.Out, "verified"), 0o755); err != nil {
 		return rep, err
 	}
@@ -153,20 +171,30 @@ func Run(cfg Config) (rep Report, err error) {
 		return rep, err
 	}
 
+	// Only now does each side's own code run: vet and the short tests, on
+	// its read-only checkout, in its sandbox.
+	for _, c := range built {
+		cfg.log("vet and short tests of %s", c.Name)
+		if err = unitTest(c); err != nil {
+			return rep, fmt.Errorf("%s fails its own checks: %v", c.Name, err)
+		}
+	}
+
 	// Both sides are judged by one evaluator, taken from Eval (the base by
 	// default), so a candidate cannot change the tests or the benchmark that
-	// grade it.
-	if cand.Src != "" || ctrl.Src != "" {
+	// grade it. Its tests are compiled here, with their own caches, and run
+	// in a sandbox of their own; the side's binary runs in the side's sandbox.
+	if len(built) > 0 {
 		evalSHA := cfg.Eval
 		if evalSHA == "" {
 			evalSHA = cfg.Base
 		}
-		eval := &Child{Name: "evaluator"}
-		cfg.log("fetching the evaluator at %s", short(evalSHA))
-		if err = checkout(cfg, eval, evalSHA); err != nil {
+		cfg.log("building the evaluator at %s", short(evalSHA))
+		var ev *Evaluator
+		if ev, err = buildEvaluator(cfg, gotool, evalSHA); err != nil {
 			return rep, fmt.Errorf("evaluator: %v", err)
 		}
-		cand.Eval, ctrl.Eval = eval.Src, eval.Src
+		cand.Eval, ctrl.Eval = ev, ev
 	}
 
 	// Each side gets its own fresh org repository, made once the builds passed
@@ -260,8 +288,26 @@ func short(s string) string {
 	return s
 }
 
-// build clones the repository clean, checks out exactly sha, runs vet and the
-// short tests there, and builds the binary the child will install.
+// pickSandbox is bubblewrap, or bare only when the caller allowed it and no
+// GitHub org is in the run.
+func pickSandbox(cfg Config) (string, error) {
+	_, github := cfg.Org.(GitHub)
+	switch {
+	case cfg.Sandbox == "bwrap" || (cfg.Sandbox == "" && BwrapWorks()):
+		return "bwrap", nil
+	case cfg.Sandbox != "" && cfg.Sandbox != "bare":
+		return "", fmt.Errorf("no sandbox %q", cfg.Sandbox)
+	case !cfg.AllowBare:
+		return "", fmt.Errorf("bubblewrap cannot make namespaces here, and the children run only isolated (--allow-bare runs them bare, never with --org)")
+	case github:
+		return "", fmt.Errorf("a run with a GitHub org runs only under bubblewrap")
+	}
+	return "bare", nil
+}
+
+// build clones the repository clean, checks out exactly sha and builds the
+// binary, stamped with the commit's version, into a folder the child can
+// write only while it builds. Nothing of the side's own code has run yet.
 func build(cfg Config, c *Child, sha string) error {
 	if sha == "" {
 		return fmt.Errorf("no commit given")
@@ -269,25 +315,32 @@ func build(cfg Config, c *Child, sha string) error {
 	if err := checkout(cfg, c, sha); err != nil {
 		return err
 	}
-	// The candidate's own code (its tests, its init functions) runs only in the
-	// child's sandbox, with the child's empty HOME and no host login; the Go
-	// caches reach it by path. Never run it through gitRun.
 	if err := c.Prepare(); err != nil {
 		return err
 	}
+	c.BinDir = filepath.Join(cfg.Out, "built-"+c.Name)
+	if err := os.MkdirAll(c.BinDir, 0o755); err != nil {
+		return err
+	}
+	c.Bin = filepath.Join(c.BinDir, "hive")
 	c.Building = true
 	defer func() { c.Building = false }()
-	run := func(dir string, argv ...string) (string, error) { return c.Exec(30*time.Minute, dir, argv...) }
-	if out, err := run(c.Src, "go", "vet", "./..."); err != nil {
+	if out, err := c.Exec(30*time.Minute, c.Src, "go", "build", "-ldflags", "-X "+versionVar+"="+versionOf(sha), "-o", c.Bin, "./cmd/hive"); err != nil {
+		return fmt.Errorf("go build: %s", tail(out, 600))
+	}
+	return nil
+}
+
+// unitTest runs vet and the short tests in the side's sandbox, its checkout
+// and binary read-only. The side's own code (its tests, its init functions)
+// runs only like this, with the child's empty HOME and no host login; never
+// through gitRun.
+func unitTest(c *Child) error {
+	if out, err := c.Exec(30*time.Minute, c.Src, "go", "vet", "./..."); err != nil {
 		return fmt.Errorf("go vet: %s", tail(out, 600))
 	}
-	if out, err := run(c.Src, "go", "test", "-short", "./..."); err != nil {
+	if out, err := c.Exec(30*time.Minute, c.Src, "go", "test", "-short", "./..."); err != nil {
 		return fmt.Errorf("go test -short: %s", tail(out, 600))
-	}
-	c.Bin = filepath.Join(c.Root, "bin", "hive")
-	os.MkdirAll(filepath.Dir(c.Bin), 0o755)
-	if out, err := run(c.Src, "go", "build", "-o", c.Bin, "./cmd/hive"); err != nil {
-		return fmt.Errorf("go build: %s", tail(out, 600))
 	}
 	return nil
 }

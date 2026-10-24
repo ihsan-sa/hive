@@ -3,6 +3,7 @@ package gate
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -88,12 +89,10 @@ var failed = regexp.MustCompile(`(?m)^--- FAIL: (\S+)`)
 // probeE2E is the evaluator's e2e suite (the base's tests, the same for both
 // sides) run against the child's own binary.
 func probeE2E(cfg *Config, c *Child) Result {
-	if c.Eval == "" {
+	if c.Eval == nil {
 		return Result{Pass: true, Detail: "prebuilt binary: no evaluator to test with"}
 	}
-	c.Extra = []string{"HIVE_E2E_BIN=" + c.Bin}
-	defer func() { c.Extra = nil }()
-	out, err := c.Exec(time.Hour, c.Eval, "go", "test", "./internal/e2e/", "-count=1", "-timeout", "50m")
+	out, err := c.judge(cfg, time.Hour, nil)
 	if err != nil {
 		names := failed.FindAllStringSubmatch(out, -1)
 		var fs []string
@@ -108,37 +107,41 @@ func probeE2E(cfg *Config, c *Child) Result {
 var benchLine = regexp.MustCompile(`(?m)^BENCH (\{.*\})$`)
 
 // probeBenchmark runs the fixed asks on the demo textkit project (see
-// TestBenchmark in internal/e2e) and measures what the child got done: the
-// score, the asks finished, wall time and cost.
+// TestBenchmark in internal/e2e). What is judged the evaluator measured from
+// outside the child: what landed on the child's forge (the commits on main,
+// and textkit's functions checked on fresh inputs), and its own clock. What
+// the child says of itself (its cost, the asks it calls done) is shown, not
+// judged.
 func probeBenchmark(cfg *Config, c *Child) Result {
-	if c.Eval == "" {
+	if c.Eval == nil {
 		return Result{Pass: true, Detail: "prebuilt binary: no benchmark to run"}
 	}
-	env := []string{fmt.Sprintf("HIVE_BENCH=%d", cfg.Bench), "HIVE_E2E_BIN=" + c.Bin}
+	env := []string{fmt.Sprintf("HIVE_BENCH=%d", cfg.Bench)}
 	for _, k := range []string{"HIVE_E2E_HARNESS", "HIVE_E2E_SANDBOX"} {
 		if v := os.Getenv(k); v != "" {
 			env = append(env, k+"="+v)
 		}
 	}
-	c.Extra = env
-	defer func() { c.Extra = nil }()
-	out, err := c.Exec(2*time.Hour, c.Eval, "go", "test", "./internal/e2e/", "-run", "^TestBenchmark$", "-count=1", "-v", "-timeout", "100m")
+	out, err := c.judge(cfg, 2*time.Hour, env, "-test.run", "^TestBenchmark$", "-test.v")
 	m := benchLine.FindStringSubmatch(out)
 	if m == nil {
 		return Result{Detail: "no BENCH line: " + tail(out, 300)}
 	}
 	var b struct {
-		Score    float64 `json:"score"`
-		Finished float64 `json:"asks_finished"`
-		Seconds  float64 `json:"seconds"`
-		Cost     float64 `json:"cost_usd"`
+		Score    *float64 `json:"score"`
+		Finished *float64 `json:"asks_finished"`
+		Commits  *float64 `json:"commits_landed"`
+		Seconds  *float64 `json:"seconds"`
+		Done     float64  `json:"asks_done_reported"`
+		Cost     float64  `json:"cost_usd_reported"`
 	}
-	if json.Unmarshal([]byte(m[1]), &b) != nil {
-		return Result{Detail: "bad BENCH line: " + m[1]}
+	if json.Unmarshal([]byte(m[1]), &b) != nil || b.Score == nil || b.Finished == nil || b.Commits == nil || b.Seconds == nil {
+		return Result{Detail: "the evaluator's BENCH line lacks what is judged (an evaluator from before the outside measure?): " + m[1]}
 	}
-	r := Result{Pass: err == nil, Detail: m[1], Metrics: []Metric{
-		{"score", b.Score, true}, {"asks_finished", b.Finished, true}, {"seconds", b.Seconds, false}, {"cost_usd", b.Cost, false}}}
-	return r
+	return Result{Pass: err == nil, Detail: m[1], Metrics: []Metric{
+		{Name: "score", Value: *b.Score, Higher: true}, {Name: "asks_finished", Value: *b.Finished, Higher: true},
+		{Name: "commits_landed", Value: *b.Commits, Higher: true}, {Name: "seconds", Value: *b.Seconds},
+		{Name: "asks_done_reported", Value: b.Done, Higher: true, Info: true}, {Name: "cost_usd_reported", Value: b.Cost, Info: true}}}
 }
 
 // probeRecurse has the child gate a trivial change of its own through a
@@ -151,18 +154,23 @@ func probeRecurse(cfg *Config, c *Child) Result {
 	}
 	nested := filepath.Join(c.Root, "grandchild")
 	os.RemoveAll(nested)
-	out, _ := c.Exec(30*time.Minute, c.Root, c.Bin, "gate", "--self-test", "--out", nested) // a rollback exits non-zero; the report says what happened
+	c.Exec(30*time.Minute, c.Root, c.Bin, "gate", "--self-test", "--out", nested) // a rollback exits non-zero; the report says what happened
+	// The nested report is the child's own output: read at most 1 MB of it,
+	// take only its shape, and none of its text into this run's record.
 	var rep Report
-	if raw, err := os.ReadFile(filepath.Join(nested, "report.json")); err == nil {
-		json.Unmarshal(raw, &rep)
+	if f, err := os.Open(filepath.Join(nested, "report.json")); err == nil {
+		json.NewDecoder(io.LimitReader(f, 1<<20)).Decode(&rep)
+		f.Close()
 	}
 	switch {
-	case rep.ID == "":
-		return Result{Detail: "no report from the nested gate: " + tail(out, 300)}
+	case !reportID.MatchString(rep.ID):
+		return Result{Detail: "no report from the nested gate"}
 	case rep.Verdict.Keep:
 		return Result{Detail: "the nested gate kept a change that was not better"}
 	case rep.Error != "" || len(rep.Leaked) > 0 || len(rep.Candidate) == 0:
-		return Result{Detail: "the nested gate did not finish clean: " + rep.Error + strings.Join(rep.Leaked, ",")}
+		return Result{Detail: fmt.Sprintf("the nested gate did not finish clean (error: %v, repos left: %d, candidate results: %d)", rep.Error != "", len(rep.Leaked), len(rep.Candidate))}
 	}
-	return Result{Pass: true, Detail: "nested gate " + rep.ID + ": " + rep.Verdict.Reason}
+	return Result{Pass: true, Detail: fmt.Sprintf("nested gate %s rolled back its self-test (%d candidate results, %d repos made and removed)", rep.ID, len(rep.Candidate), len(rep.Cleaned))}
 }
+
+var reportID = regexp.MustCompile(`^gate-[0-9]+-[0-9a-f]{8}$`)
