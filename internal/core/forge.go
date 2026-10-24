@@ -148,22 +148,36 @@ var OwnerTokens = map[string]string{
 }
 
 // ghEnv is the environment that makes gh and git's gh credential helper use
-// the token configured for repo's owner, or nothing to keep gh's login.
+// the token configured for repo's owner, or nothing to keep gh's login. Under
+// the system service install.sh writes, the token comes first from systemd's
+// credential <owner>.token (root's file, which only the service can read), then
+// from OwnerTokens; an empty one keeps gh's login.
 func ghEnv(repo string) []string {
-	owner, _, _ := strings.Cut(repo, "/")
-	path := OwnerTokens[strings.ToLower(owner)]
-	if path == "" {
+	owner, _, _ := strings.Cut(strings.ToLower(repo), "/")
+	if owner == "" || strings.ContainsAny(owner, `/\.`) {
 		return nil
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil
+	for _, path := range []string{credential(owner + ".token"), OwnerTokens[owner]} {
+		if path == "" {
+			continue
+		}
+		if b, err := os.ReadFile(path); err == nil {
+			if tok := strings.TrimSpace(string(b)); tok != "" {
+				return []string{"GH_TOKEN=" + tok}
+			}
+		}
 	}
-	tok := strings.TrimSpace(string(b))
-	if tok == "" {
-		return nil
+	return nil
+}
+
+// credential is the path of a systemd credential the service was given, or
+// "" outside one.
+func credential(name string) string {
+	dir := os.Getenv("CREDENTIALS_DIRECTORY")
+	if dir == "" {
+		return ""
 	}
-	return []string{"GH_TOKEN=" + tok}
+	return filepath.Join(dir, name)
 }
 
 // ghRun runs gh and returns its stdout and stderr. Tests replace it.
