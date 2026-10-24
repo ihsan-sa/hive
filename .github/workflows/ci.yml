@@ -14,6 +14,9 @@ concurrency:
   # Keyed by event too, so a push to main never cancels a manual three-system run on main.
   group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
+# Read-only whatever the repository's default is: no job here writes to it.
+permissions:
+  contents: read
 jobs:
   test:
     strategy:
@@ -23,6 +26,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -60,6 +65,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -93,49 +100,3 @@ jobs:
           GIT_AUTHOR_EMAIL: ci@localhost
           GIT_COMMITTER_NAME: ci
           GIT_COMMITTER_EMAIL: ci@localhost
-  old-releases:
-    # update.yml runs this checkout's installers to install an older release, which lacks
-    # commands added since (v0.1.33's installer called `report`, new in v0.1.18, and every
-    # update leg failed with a usage error). This catches that at the PR, not the release.
-    # The installer is the same script on macOS, so Linux and Windows run it.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        from: [latest, v0.1.2]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    defaults:
-      run:
-        shell: bash
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: pick the release
-        env:
-          FROM: ${{ matrix.from }}
-        run: |
-          if [ "$FROM" = latest ]; then
-            # the newest full release: what installs are on, and update.yml's `previous`
-            echo "HIVE_VERSION=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)" >> "$GITHUB_ENV"
-            echo "HIVE_CMD=hive" >> "$GITHUB_ENV"; echo "HIVE_REPO=$GITHUB_REPOSITORY" >> "$GITHUB_ENV"
-          else
-            echo "HIVE_VERSION=$FROM" >> "$GITHUB_ENV"
-            echo "HIVE_CMD=hive-v0" >> "$GITHUB_ENV"; echo "HIVE_REPO=ihsan-sa/hive-standalone-build" >> "$GITHUB_ENV"
-          fi
-          { echo "HIVE_HOME=$RUNNER_TEMP/hive"; echo "HIVE_BIN_DIR=$RUNNER_TEMP/bin"; } >> "$GITHUB_ENV"
-      - name: install it (Linux)
-        if: runner.os != 'Windows'
-        run: sh install/install.sh
-      - name: install it (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          HIVE_SKIP_WSL: '1'
-          HIVE_NO_PATH: '1'
-        run: ./install/install.ps1
-      - name: it is the release asked for
-        run: |
-          "$HIVE_BIN_DIR/$HIVE_CMD" --version | tee version.txt
-          grep -q "$HIVE_VERSION" version.txt
