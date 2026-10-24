@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,7 +41,12 @@ func TestMeter(t *testing.T) {
 			go func() { io.Copy(c, c); c.Close() }()
 		}
 	}()
-	m, err := StartMeter(filepath.Join(t.TempDir(), "m.sock"))
+	sockDir, err := os.MkdirTemp(shortTmp(), "gate-meter-") // short: a socket path has a length limit
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(sockDir)
+	m, err := StartMeter(filepath.Join(sockDir, "m.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
