@@ -60,6 +60,19 @@ func TestRateLimitStopsComeBack(t *testing.T) {
 	}
 }
 
+// Findings quoted into a stop's reason can say anything the worker's code
+// printed, "secondary rate limit" too: that never resets the review rounds.
+func TestPlantedRateLimitDoesNotRevive(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Round = 3
+	m.giveUp(task, "stopped after 3 rounds of fixes; what remains:\n\nthe log says: You have exceeded a secondary rate limit (was submitted too quickly)")
+	m.limit = time.Time{}
+	m.revive()
+	if got, _ := m.Get(task.ID); got.Stage != StageStopped || got.Round != 3 {
+		t.Fatalf("a planted rate limit brought the task back: stage %q, round %d", got.Stage, got.Round)
+	}
+}
+
 func testComments(f *core.Local, pr int) (n int) {
 	for _, c := range f.Comments("me/p", pr) {
 		if strings.HasPrefix(c, "Tests on ") {
