@@ -54,6 +54,24 @@ type Result struct {
 	Structured json.RawMessage `json:"structured,omitempty"`
 	APIStatus  int             `json:"api_status,omitempty"`
 	Limited    bool            `json:"limited,omitempty"`
+	Tokens     *Tokens         `json:"tokens,omitempty"` // what this turn read and wrote, when the harness says
+}
+
+// Tokens is a turn's token use: fresh input, output, and the prompt cache
+// read and written.
+type Tokens struct {
+	Input      int64 `json:"input,omitempty"`
+	Output     int64 `json:"output,omitempty"`
+	CacheRead  int64 `json:"cache_read,omitempty"`
+	CacheWrite int64 `json:"cache_write,omitempty"`
+}
+
+// Add sums o into t.
+func (t *Tokens) Add(o Tokens) {
+	t.Input += o.Input
+	t.Output += o.Output
+	t.CacheRead += o.CacheRead
+	t.CacheWrite += o.CacheWrite
 }
 
 // RateLimit is the plan's usage state as the harness reports it.
@@ -201,9 +219,15 @@ type claudeLine struct {
 			CacheRead     int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
-	Result           string          `json:"result"`
-	IsError          bool            `json:"is_error"`
-	TotalCost        float64         `json:"total_cost_usd"`
+	Result    string  `json:"result"`
+	IsError   bool    `json:"is_error"`
+	TotalCost float64 `json:"total_cost_usd"`
+	Usage     *struct {
+		Input         int64 `json:"input_tokens"`
+		Output        int64 `json:"output_tokens"`
+		CacheCreation int64 `json:"cache_creation_input_tokens"`
+		CacheRead     int64 `json:"cache_read_input_tokens"`
+	} `json:"usage"`
 	StructuredOutput json.RawMessage `json:"structured_output"`
 	APIErrorStatus   *int            `json:"api_error_status"`
 	RateLimitInfo    *struct {
@@ -274,6 +298,9 @@ func (Claude) Parse(line []byte) []Event {
 		}
 		if l.APIErrorStatus != nil {
 			r.APIStatus = *l.APIErrorStatus
+		}
+		if u := l.Usage; u != nil {
+			r.Tokens = &Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheCreation}
 		}
 		r.Limited = r.IsError && LooksLimited(r.Text)
 		return []Event{{Kind: "result", SessionID: l.SessionID, Result: r}}

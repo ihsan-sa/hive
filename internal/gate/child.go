@@ -133,6 +133,8 @@ func (c *Child) Env() []string {
 	if c.Go.Root != "" {
 		path = filepath.Join(c.Go.Root, "bin") + string(os.PathListSeparator) + path
 	}
+	root, _ := filepath.Abs(c.Root)
+	env = append(env, rootEnv+"="+root, ownerEnv+"="+owner)
 	env = append(env, "PATH="+path, "HOME="+c.Home(), "TMPDIR="+c.Tmp(), "HIVE_HOME="+c.Workspace(), "HIVE_GATE_DEPTH="+fmt.Sprint(c.Depth),
 		"GOCACHE="+filepath.Join(c.Root, "gocache"), "GOPATH="+filepath.Join(c.Root, "gopath"),
 		"GIT_AUTHOR_NAME=Hive gate", "GIT_AUTHOR_EMAIL=gate@localhost", "GIT_COMMITTER_NAME=Hive gate", "GIT_COMMITTER_EMAIL=gate@localhost",
@@ -278,6 +280,7 @@ func (c *Child) ExecIn(timeout time.Duration, dir string, stdin io.Reader, argv 
 	cmd := c.Command(ctx, dir, argv...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, buf, buf
 	err := cmd.Run()
+	stopTree(cmd) // what it left running in its group
 	if ctx.Err() != nil {
 		err = fmt.Errorf("timed out after %s", timeout)
 	}

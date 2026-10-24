@@ -1,9 +1,9 @@
  hive                 │   Dashboard  live · all projects                                            following everyone
 ──────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────
    Chats              │   6 agents · 6 working · 0 idle · 3 waiting on you
- › Dashboard          │
-   Waiting         3  │   time      from → to               project     message
-   Feedback        1  │
+ › Dashboard          │   today $4.50 · month $61.20 · last hour: 14 messages, 9 turns, 1 merged   s more
+   Waiting         3  │
+   Feedback        1  │   time      from → to               project     message
    Knowledge          │
    Modules            │
    Settings           │
