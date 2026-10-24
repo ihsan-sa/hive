@@ -157,3 +157,31 @@ func TestSearchOpSkipsWhatIsolationCovers(t *testing.T) {
 		t.Errorf("the isolated project's own search lost its notes: %s", got)
 	}
 }
+
+// A private project's notes are kept as an isolated one's are: in its own
+// folder, out of git and out of every other project's search.
+func TestPrivateNotesStayInTheProject(t *testing.T) {
+	c, m := newKB(t)
+	c.Projects.Add(core.Project{Name: "mine", Repo: "me/mine", Private: true})
+	c.Projects.Add(core.Project{Name: "open", Repo: "me/open"})
+	path, err := m.Write(Note{Title: "zebra plan", Text: "zebra", Project: "mine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel, _ := filepath.Rel(c.WS.KB(), path); !strings.HasPrefix(rel, filepath.Join("isolated", "mine")+string(filepath.Separator)) {
+		t.Errorf("a private note went to %s", rel)
+	}
+	search := func(project string) string {
+		out, err := c.Runs.Ops().Call(core.Run{RunSpec: core.RunSpec{ID: "r", Project: project}}, "search", []byte(`{"query":"zebra","limit":"all"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.(string)
+	}
+	if got := search("open"); strings.Contains(got, "isolated/") {
+		t.Errorf("another project's search finds a private note: %s", got)
+	}
+	if got := search("mine"); !strings.Contains(got, "isolated/mine/") {
+		t.Errorf("the private project's own search lost its note: %s", got)
+	}
+}

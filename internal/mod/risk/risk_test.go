@@ -29,7 +29,7 @@ func newRig(t *testing.T, autonomy int) *rig {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Harness, cfg.Autonomy, cfg.TribunalModels = "fake", autonomy, []core.TribunalSeat{{Model: "opus"}, {Model: "sonnet"}}
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
 	ws.SaveConfig(cfg)
 	c, err := core.Open(ws, nil)
 	if err != nil {
@@ -886,7 +886,11 @@ func TestJoinMidStepHearsTheResult(t *testing.T) {
 	}) {
 		t.Fatal("the run that joined mid-step never heard the result")
 	}
-	if s, ok := g.m.Steps(late.ID); !ok || s != "- done: install a tool" {
+	// The asker is told before the step is saved as done, so its steps catch
+	// up a moment after the word.
+	var s string
+	var ok bool
+	if !eventually(func() bool { s, ok = g.m.Steps(late.ID); return ok }) || s != "- done: install a tool" {
 		t.Fatalf("steps: %q %v", s, ok)
 	}
 }
