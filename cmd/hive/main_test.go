@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+)
 
 func TestKBArgsTakeLimitAnywhere(t *testing.T) {
 	for _, args := range [][]string{
@@ -35,17 +39,34 @@ func TestReleaseArgRefusesWhatItCannotRead(t *testing.T) {
 
 // approve and refuse never guess on an ask with one option (a "told" seen),
 // and say what an answer means where its word doesn't.
-func TestApproveRefusePick(t *testing.T) {
-	if _, err := pick("refuse", []string{"seen"}); err == nil {
+func TestApproveRefuseNeverGuess(t *testing.T) {
+	if _, err := approveOption("refuse", core.Ask{ID: "t1", Options: []string{"seen"}}); err == nil {
 		t.Fatal("refuse answered a one-option ask")
 	}
-	if _, err := pick("approve", nil); err == nil {
+	if _, err := approveOption("approve", core.Ask{ID: "q1"}); err == nil {
 		t.Fatal("approve answered an ask with no options")
 	}
-	if o, _ := pick("approve", []string{"done", "declined"}); o != "done" || meaning(o) == "" {
+	if o, _ := approveOption("approve", core.Ask{Options: []string{"done", "declined"}}); o != "done" || meaning(o) == "" {
 		t.Fatalf("approve picked %q, meaning %q", o, meaning(o))
 	}
-	if o, _ := pick("refuse", []string{"run", "declined"}); o != "declined" {
+	if o, _ := approveOption("refuse", core.Ask{Options: []string{"run", "declined"}}); o != "declined" {
 		t.Fatalf("refuse picked %q", o)
+	}
+}
+
+// approve and refuse pick the first and last option; an ask with none is an
+// error pointing at hive answer, not a panic.
+func TestApproveOption(t *testing.T) {
+	a := core.Ask{ID: "a1", Options: []string{"merge", "leave open"}}
+	if o, err := approveOption("approve", a); err != nil || o != "merge" {
+		t.Errorf("approve: %q, %v", o, err)
+	}
+	if o, err := approveOption("refuse", a); err != nil || o != "leave open" {
+		t.Errorf("refuse: %q, %v", o, err)
+	}
+	for _, cmd := range []string{"approve", "refuse"} {
+		if o, err := approveOption(cmd, core.Ask{ID: "q1"}); err == nil {
+			t.Errorf("%s on an ask with no options: %q, want an error", cmd, o)
+		}
 	}
 }

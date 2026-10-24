@@ -156,9 +156,9 @@ func run(args []string) int {
 			}
 			for _, a := range st.Asks {
 				if a.ID == args[0] {
-					opt, err := pick(cmd, a.Options)
+					opt, err := approveOption(cmd, a)
 					if err != nil {
-						return fmt.Errorf("%s: %v; answer it with %s answer %s <%s>", a.ID, err, core.Cmd, a.ID, strings.Join(a.Options, "|"))
+						return err
 					}
 					fmt.Printf("%sd: %s -> %s%s\n", cmd, a.Title, opt, meaning(opt))
 					return c.Do("POST", "/api/answer", map[string]string{"id": a.ID, "answer": opt, "note": strings.Join(args[1:], " ")}, nil)
@@ -412,19 +412,6 @@ func cmdStatus() int {
 	})
 }
 
-// pick is the option approve (the first) or refuse (the last) answers with.
-// An ask with fewer than two options has no yes and no to tell apart, so
-// neither verb guesses.
-func pick(cmd string, options []string) (string, error) {
-	if len(options) < 2 {
-		return "", fmt.Errorf("it has no yes and no to choose between (options: %s)", strings.Join(options, "|"))
-	}
-	if cmd == "refuse" {
-		return options[len(options)-1], nil
-	}
-	return options[0], nil
-}
-
 // meaning says what an answer tells the Hive, where that isn't plain from
 // its word.
 func meaning(opt string) string {
@@ -549,4 +536,20 @@ func kbArgs(args []string) (query, limit string) {
 		words = append(words, args[i])
 	}
 	return strings.Join(words, " "), limit
+}
+
+// approveOption is the option approve (the first) or refuse (the last) picks;
+// an ask with no options takes the person's own words through hive answer,
+// and one with a single option (a told "seen") has no yes and no to pick.
+func approveOption(cmd string, a core.Ask) (string, error) {
+	if len(a.Options) == 0 {
+		return "", fmt.Errorf("%s has no options to %s: answer it in your own words with %s answer %s <text>", a.ID, cmd, core.Cmd, a.ID)
+	}
+	if len(a.Options) == 1 { // a told "seen" has no yes and no to tell apart
+		return "", fmt.Errorf("%s has no yes and no to %s between: answer it with %s answer %s %s", a.ID, cmd, core.Cmd, a.ID, a.Options[0])
+	}
+	if cmd == "refuse" {
+		return a.Options[len(a.Options)-1], nil
+	}
+	return a.Options[0], nil
 }
