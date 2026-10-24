@@ -107,3 +107,25 @@ func TestUnversionedStartIsStillTheBaseline(t *testing.T) {
 		t.Fatalf("best %v, want 5", b)
 	}
 }
+
+// A score set with no evaluator paths raises an alert; listing them in a
+// change to the score raises none.
+func TestScoreWithNoPathsWarns(t *testing.T) {
+	m, merge := scored(t)
+	alerts := func() (n int) {
+		for _, e := range m.C.J.Since(0) {
+			var a struct{ Kind string }
+			if e.Kind == "alert.raised" && e.Decode(&a) == nil && a.Kind == "score-paths" {
+				n++
+			}
+		}
+		return n
+	}
+	if alerts() != 1 {
+		t.Fatalf("a score with no paths raised %d alerts, want 1", alerts())
+	}
+	merge(map[string]string{".hive/project.json": `{"test": "true", "score": {"command": "sh ./score.sh", "direction": "higher", "paths": ["n.txt"]}}`})
+	if alerts() != 1 {
+		t.Fatalf("a score with paths listed raised an alert")
+	}
+}

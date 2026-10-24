@@ -154,7 +154,7 @@ func (m *Module) finish(p core.Project) (core.Project, error) {
 		title := "Set up the Hive files for " + p.Name
 		if len(m.Work.List(func(t work.Task) bool { return t.Project == p.Name && t.Title == title })) == 0 {
 			m.Work.File(work.Brief{Project: p.Name, From: "hive", Title: title,
-				Done:  "`.hive/goals.md` holds the person's goals in their own words; `.hive/project.json` names the test command and, if one fits, a score (command, direction, tolerance); `.hive/lessons.md` exists.",
+				Done:  "`.hive/goals.md` holds the person's goals in their own words; `.hive/project.json` names the test command and, if one fits, a score (command, direction, tolerance, and in `paths` every file the score reads: scripts it calls, tests, data); `.hive/lessons.md` exists.",
 				Known: "The person's words about this project: " + orDefault(goals, p.Description)})
 		}
 	}
