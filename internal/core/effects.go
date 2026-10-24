@@ -49,6 +49,10 @@ type Effects struct {
 
 	locks sync.Map
 
+	// MergeHeld is why a pull request on a project may not merge now (the
+	// person's hold on its merges, the work module), or "" if it may.
+	MergeHeld func(project string, pr int) string
+
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
 
@@ -1013,6 +1017,11 @@ type MergeRequest struct {
 // that sha passed its tests and was read (or needed no read).
 func (e *Effects) Merge(m MergeRequest) (string, error) {
 	p := m.Project
+	if e.MergeHeld != nil {
+		if why := e.MergeHeld(p.Name, m.PR); why != "" {
+			return "", fmt.Errorf("refusing to merge #%d: %s", m.PR, why)
+		}
+	}
 	if c, ok := e.GetCheck(p.Name, m.SHA, "test"); !ok || !c.OK {
 		return "", fmt.Errorf("refusing to merge %s: no passing test run recorded for that exact commit", short(m.SHA))
 	}

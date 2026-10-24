@@ -60,6 +60,9 @@ func (m *model) dashRows() []row {
 		if !add(row{key: "proj:" + p.Name, text: fmt.Sprintf("%s  %s  %s  %s", stTitle.Render(p.Name), stDim.Render(p.Repo), best, spark(p.Scores)), expand: true, def: true}) {
 			continue
 		}
+		if p.Hold != nil {
+			add(row{key: "hold:" + p.Name, depth: 1, text: stWarn.Render(text.Visible(p.Hold.Text()))})
+		}
 		if add(row{key: "goals:" + p.Name, depth: 1, text: "goals", expand: true}) {
 			for _, l := range nonEmpty(strings.Split(p.Goals, "\n")) {
 				add(row{key: "goal:" + p.Name + l, depth: 2, text: stDim.Render(l)})
@@ -233,7 +236,7 @@ func (m *model) taskLine(t work.Task) string {
 	if r, ok := m.run(t.Worker); ok && r.Progress != "" && !t.Terminal() && !t.Queued() {
 		progress = stDim.Render("  “" + core.Clip(r.Progress, 60) + "” " + ago(r.ProgressAt))
 	}
-	if t.Queued() && t.Reason != "" {
+	if (t.Queued() || t.Stage == work.StageMerging) && t.Reason != "" {
 		progress = stDim.Render("  " + core.Clip(t.Reason, 70))
 	}
 	if t.Stage == work.StageTesting && slices.ContainsFunc(m.st.Checks.Waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
