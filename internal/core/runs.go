@@ -227,7 +227,8 @@ type Runs struct {
 	holds map[string]string  // why no new turn starts (a restart waiting for a quiet moment), by who holds them
 	// launching counts launches past the hold whose turn isn't journalled yet.
 	launching int
-	waking    sync.Mutex // one wake at a time, so a run is woken once
+	starting  map[string]bool // runs with a launch in flight
+	waking    sync.Mutex      // one wake at a time, so a run is woken once
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -939,6 +940,11 @@ func (rs *Runs) Tick(cfg Config) {
 			continue
 		}
 		rs.busy[r.ID] = true
+		// The list can predate a step that ended since (a turn just
+		// started), so the step works on the run as it is now.
+		if cur := rs.runs[r.ID]; cur != nil {
+			r = *cur
+		}
 		rs.mu.Unlock()
 		go func(r Run) {
 			defer func() { rs.mu.Lock(); delete(rs.busy, r.ID); rs.mu.Unlock() }()
@@ -1220,13 +1226,19 @@ const PendingSep = "\n\n---\n\n"
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run, cfg Config) {
 	rs.mu.Lock()
-	if len(rs.holds) > 0 {
+	// A turn starts at most once: not over a live one, nor from a copy of
+	// the run older than its last turn, nor beside another launch of it.
+	if cur := rs.runs[r.ID]; len(rs.holds) > 0 || cur == nil || cur.Status == StatusRunning || cur.Turn != r.Turn || rs.starting[r.ID] {
 		rs.mu.Unlock()
 		return
 	}
+	if rs.starting == nil {
+		rs.starting = map[string]bool{}
+	}
+	rs.starting[r.ID] = true
 	rs.launching++
 	rs.mu.Unlock()
-	defer func() { rs.mu.Lock(); rs.launching--; rs.mu.Unlock() }()
+	defer func() { rs.mu.Lock(); rs.launching--; delete(rs.starting, r.ID); rs.mu.Unlock() }()
 	if why := Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax); why != "" {
 		// The hold keeps the run's status, so a parked run keeps its backoff
 		// and a nudged one its count; the live figures after " (" change
