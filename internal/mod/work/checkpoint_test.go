@@ -118,3 +118,31 @@ func TestCheckpointPROf(t *testing.T) {
 		t.Fatalf("PROf(c) = #%d", n)
 	}
 }
+
+// A measurement of the last checkpoint that lands while a commit is being
+// weighed counts: here main is measured at 7 as the commit (also 7) is taken
+// out, so the commit is no gain and is no checkpoint. Read before, the kept
+// best was 5 and the commit merged as one more (Windows ci, banked 3).
+func TestCheckpointCountsAMeasurementInFlight(t *testing.T) {
+	m, task, p := checkpointRig(t, 5, "7")
+	task.Banks, task.Banked = []Bank{{PR: core.PR{Number: 2}, MergeSHA: "m1"}}, 1
+	measured := false
+	oldB, oldM := BestScore, Measured
+	BestScore = func(string) (float64, bool) {
+		if measured {
+			return 7, true
+		}
+		return 5, true
+	}
+	Measured = func(_, sha string) bool {
+		measured = true // the measurement of m1 lands now
+		return sha == "m1"
+	}
+	t.Cleanup(func() { BestScore, Measured = oldB, oldM })
+	if err := m.checkWorker(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Checkpoint != "" || task.PR.Number != 0 || !logged(task, "doesn't beat the best kept score 7") {
+		t.Fatalf("checkpoint %q, PR %d, log %v", task.Checkpoint, task.PR.Number, task.Log)
+	}
+}

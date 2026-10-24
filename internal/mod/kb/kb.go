@@ -38,7 +38,8 @@ type Module struct {
 	C      *core.Core
 	Agents *agents.Agents
 	mu     sync.Mutex
-	filing string // running filer
+	filing string        // running filer
+	Seeded time.Duration // how long the last SeedSelf took
 }
 
 // New registers ops and makes sure the store is a repository.

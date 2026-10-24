@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -25,6 +26,8 @@ const SelfDir = "hive"
 // runs. The daemon calls it at start; it rewrites and commits only when the
 // source differs from what it last wrote, so an update (a new binary) reseeds.
 func (m *Module) SeedSelf(src fs.FS) {
+	began := time.Now()
+	defer func() { m.Seeded = time.Since(began) }()
 	dir := filepath.Join(m.C.WS.KB(), SelfDir)
 	h := sha256.New()
 	fmt.Fprintln(h, core.Version)

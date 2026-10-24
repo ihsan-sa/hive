@@ -41,6 +41,14 @@ type Module struct {
 	published  time.Time
 	publishing bool
 	pmu        sync.Mutex
+	// followed is when follow last looked for a pre-release; red holds each
+	// pre-release whose checks here failed, and waits what the newer ones
+	// wait for, as the last look found.
+	followed time.Time
+	red      map[string]verdict
+	waits    []string
+	// updating is held while AutoUpdate runs, from its schedule or follow.
+	updating sync.Mutex
 }
 
 // Site serves the releases: GitHub over plain HTTPS, so updating needs no
@@ -143,7 +151,8 @@ func AssetName(goos, goarch string) string {
 // change the person's Hive released on their fork is the next update. Only
 // release_repo and the person's own fork of it are followed, never a
 // repository an agent named, and a release whose checksums don't list this
-// platform's binary is passed over.
+// platform's binary is passed over. Following pre-releases, it takes the
+// newest of release_repo's whose checks for this system passed, when newer.
 func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	up := m.C.WS.LoadConfig().ReleaseRepo
 	repos := []string{up}
@@ -168,6 +177,24 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 		}
 		if tag == "" || modules.Newer(tag, t) {
 			repo, tag = r, t
+		}
+	}
+	if m.Channel() == Prerelease {
+		after := core.Version
+		if modules.Newer(after, tag) {
+			after = tag
+		}
+		t, waits, e := m.prerelease(up, after)
+		if e != nil {
+			waits = append(waits, e.Error())
+		}
+		m.pmu.Lock()
+		m.waits = waits
+		m.pmu.Unlock()
+		if t != "" {
+			repo, tag = up, t
+		} else if tag == "" && err == nil {
+			err = e
 		}
 	}
 	if tag != "" {
@@ -327,8 +354,13 @@ func (m *Module) pin(cfg core.Config, tag string, on bool) error {
 
 // AutoUpdate is the scheduled job: update when allowed and nothing is
 // mid-merge. A pinned Hive that was updating itself stays put and says once
-// when a newer release is out.
+// when a newer release is out. Following pre-releases, it also runs from
+// follow, every few minutes.
 func (m *Module) AutoUpdate() (string, error) {
+	if !m.updating.TryLock() {
+		return "an update is already being checked", nil
+	}
+	defer m.updating.Unlock()
 	cfg := m.C.WS.LoadConfig()
 	if cfg.ReleasePin != "" && (cfg.AutoUpdate || cfg.PinnedAuto) {
 		tag, err := latest(cfg.ReleaseRepo)
@@ -348,7 +380,14 @@ func (m *Module) AutoUpdate() (string, error) {
 	if m.Busy != nil && m.Busy() {
 		return "waiting: work is mid-merge", nil
 	}
-	return m.Update("")
+	msg, err := m.Update("")
+	m.pmu.Lock()
+	waits := m.waits
+	m.pmu.Unlock()
+	if strings.HasPrefix(msg, "already on") && len(waits) > 0 {
+		msg += "; " + strings.Join(waits, "; ")
+	}
+	return msg, err
 }
 
 // Rename moves an install still called hive-v0 to hive, when this daemon
@@ -475,7 +514,7 @@ func (m *Module) afterKept(project, sha string) {
 	var manifest strings.Builder
 	var root, unread []string
 	for _, mg := range list {
-		if reads := m.C.Effects.Reads(project, mg.SHA); len(reads) > 0 {
+		if reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff); len(reads) > 0 {
 			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
 		} else {
 			unread = append(unread, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
@@ -513,7 +552,16 @@ func (m *Module) afterKept(project, sha string) {
 		alert("release failed: " + err.Error())
 		return
 	}
-	m.C.J.MustAppend("hive.released", map[string]any{"project": project, "tag": next, "sha": sha, "prerelease": true})
+	// A tag made since the listing keeps its own commit, which the release
+	// would then build and sign: such a release is refused, never published,
+	// and these merges wait for the next one.
+	at, err := m.C.Effects.Forge.TagCommit(p.Repo, next)
+	if err == nil && at != sha {
+		m.C.J.MustAppend("release.refused", map[string]string{"project": project, "tag": next, "sha": sha, "tag_sha": at})
+		alert(next + " points at " + core.Short(at) + ", not the gated " + core.Short(sha) + " (a tag made outside the Hive); it stays a pre-release and is never published. Delete that release and its tag.")
+		return
+	}
+	m.C.J.MustAppend("hive.released", map[string]any{"project": project, "tag": next, "sha": sha, "tag_sha": at, "prerelease": true})
 	f, up := m.C.Effects.Forge, m.C.WS.LoadConfig().ReleaseRepo
 	if p.Repo == up {
 		return
@@ -591,6 +639,7 @@ type merge struct {
 	SHA      string
 	MergeSHA string `json:"merge_sha"`
 	Root     []string
+	Diff     string // the head's own diff (core.DiffID), whose reads carry to it
 }
 
 // merges lists the project's merges after the one its last release was cut
@@ -639,8 +688,10 @@ const lateAfter = 6 * time.Hour
 // publishEvery is how often Tick checks the Hive's pre-releases.
 const publishEvery = 10 * time.Minute
 
-// Tick runs Publish every publishEvery, in the background.
+// Tick runs Publish every publishEvery, in the background, and follows
+// pre-releases when the Hive does.
 func (m *Module) Tick() {
+	m.follow()
 	m.pmu.Lock()
 	defer m.pmu.Unlock()
 	if m.publishing || time.Since(m.published) < publishEvery {
@@ -686,6 +737,8 @@ func (m *Module) Publish() string {
 			cands = slices.DeleteFunc(cands, func(c cand) bool { return c.Project == x.Project && !modules.Newer(x.Tag, c.Tag) })
 		case "release.failed":
 			failed[x.Project+"@"+x.Tag] = true
+		case "release.refused":
+			cands = slices.DeleteFunc(cands, func(c cand) bool { return c.Project == x.Project && c.Tag == x.Tag })
 		}
 	})
 	if m.said == nil {
@@ -706,6 +759,18 @@ func (m *Module) Publish() string {
 		state, why := m.gates(p.Repo, c.SHA)
 		switch state {
 		case "passed":
+			// The gates passed at c.SHA; the tag must still point there.
+			at, err := m.C.Effects.Forge.TagCommit(p.Repo, c.Tag)
+			if err != nil {
+				out = append(out, c.Tag+": can't read its tag's commit ("+core.Clip(err.Error(), 200)+")")
+				continue
+			}
+			if at != c.SHA {
+				m.C.J.MustAppend("release.refused", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA, "tag_sha": at})
+				alert(c, c.Tag+" points at "+core.Short(at)+", not the gated "+core.Short(c.SHA)+"; it stays a pre-release and is never published.")
+				out = append(out, c.Tag+": refused, its tag points at "+core.Short(at))
+				continue
+			}
 			if err := m.C.Effects.Forge.PublishRelease(p.Repo, c.Tag); err != nil {
 				if !m.said[key] {
 					m.said[key] = true
