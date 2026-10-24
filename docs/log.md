@@ -65,3 +65,6 @@
 
 ## 2026-10-23 What opens under a row stays on screen
 - Decision: a pane scrolls to keep the selected row and what opens under it in view (a setting's pick-list, the selected ask down to its options), the row first when both can't fit; settings' values wrap under their column, and wrapped text breaks words longer than the line | Why: the person's case, a pick-list under the bottom row clipped in a short window (docs/tui-text.md) | Tradeoff: summary rows still clip with `…`, since their detail opens.
+
+## 2026-10-24 A local service opens to agents per port, on the person's grant
+- Decision: `egress.local` lists loopback `host:port` grants (`hive egress grant|revoke`); the proxy dials a granted literal address past any list, Linux sandboxes relay it from the same address inside, Seatbelt allows the port; refusals are recorded with a reason (`unlisted` or `local`) and journalled with a line saying how a local one opens; `egress grant` / `egress.local` are ceiling words, so an agent's ask always reaches the person | Why: a refused 127.0.0.1 kept an agent from testing its own feature against a local Ollama, and the record said only the host (issue #124) | Tradeoff: a grant is for every run and check, not per role or project; loopback only, so a service on the LAN still can't open this way.
