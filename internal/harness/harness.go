@@ -194,10 +194,10 @@ type claudeLine struct {
 	StructuredOutput json.RawMessage `json:"structured_output"`
 	APIErrorStatus   *int            `json:"api_error_status"`
 	RateLimitInfo    *struct {
-		Status         string  `json:"status"`
-		ResetsAt       int64   `json:"resetsAt"`
-		RateLimitType  string  `json:"rateLimitType"`
-		Utilization    float64 `json:"utilization"`
+		Status         string   `json:"status"`
+		ResetsAt       int64    `json:"resetsAt"`
+		RateLimitType  string   `json:"rateLimitType"`
+		Utilization    *float64 `json:"utilization"`
 		UnifiedWindows map[string]struct {
 			Utilization float64 `json:"utilization"`
 			ResetsAt    int64   `json:"resetsAt"`
@@ -239,12 +239,19 @@ func (Claude) Parse(line []byte) []Event {
 			return nil
 		}
 		ri := l.RateLimitInfo
-		rl := &RateLimit{Status: ri.Status, Window: ri.RateLimitType, Utilization: ri.Utilization, Windows: map[string]Window{}}
+		rl := &RateLimit{Status: ri.Status, Window: ri.RateLimitType, Windows: map[string]Window{}}
 		if ri.ResetsAt > 0 {
 			rl.ResetsAt = time.Unix(ri.ResetsAt, 0).UTC()
 		}
 		for k, w := range ri.UnifiedWindows {
 			rl.Windows[k] = Window{Utilization: w.Utilization, ResetsAt: time.Unix(w.ResetsAt, 0).UTC()}
+		}
+		// Claude Code sends the binding window's utilization only under
+		// unifiedWindows, not at the top level, when the status is allowed.
+		if ri.Utilization != nil {
+			rl.Utilization = *ri.Utilization
+		} else if w, ok := rl.Windows[ri.RateLimitType]; ok {
+			rl.Utilization = w.Utilization
 		}
 		return []Event{{Kind: "ratelimit", RateLimit: rl}}
 	case "result":

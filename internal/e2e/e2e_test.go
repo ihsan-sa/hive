@@ -515,6 +515,48 @@ func TestGateAndLoop(t *testing.T) {
 	})
 }
 
+// A review reads the project's docs/REVIEW.md, goals and lessons from main,
+// and advice given with a land becomes one follow-up brief once it merges, not
+// a blocker. The fake gives advice on the follow-up's review too, which files
+// nothing more, so the chain stops at one.
+func TestReviewReadsTheRules(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/rules", map[string]string{
+		".hive/project.json": `{"test": "true"}`,
+		".hive/goals.md":     "# Goals\n\nEvery agent sees the same thing.\n",
+		"docs/REVIEW.md":     "# Review\n\nThe sandbox walls the Hive off from the host. FAKE:reviewadvice\n",
+		".hive/lessons.md":   "# Lessons\n\n- a lesson from an earlier revert\n",
+	})
+	h.post("/api/project", map[string]any{"name": "rules", "repo": "me/rules"}, nil)
+	h.post("/api/ask", map[string]string{"project": "rules", "title": "add a helper"}, nil)
+	st := h.wait("the ask to merge", 3*minute, taskStage("rules", "add a helper", work.StageDone))
+	tk, _ := task(st, "rules", "add a helper")
+	brief, _ := os.ReadFile(filepath.Join(h.ws.RunRO(tk.Reviewer), "brief.md"))
+	for _, want := range []string{"walls the Hive off from the host", "Every agent sees the same thing", "## `.hive/lessons.md` on main"} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("the review brief lacks %q:\n%s", want, brief)
+		}
+	}
+	follow := "Follow up the review of add a helper"
+	st = h.wait("the advice to land as a brief", 3*minute, taskStage("rules", follow, work.StageDone))
+	fu, _ := task(st, "rules", follow)
+	if fu.From != tk.Reviewer || fu.FollowUp != tk.ID || !strings.Contains(fu.Known, "FAKE advice") {
+		t.Fatalf("follow-up: %+v", fu)
+	}
+	n := 0
+	for _, p := range st.Projects {
+		for _, x := range p.Tasks {
+			if strings.HasPrefix(x.Title, "Follow up") {
+				n++
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d follow-ups, want 1", n)
+	}
+}
+
 // A worker isn't blamed for a failure main has too: its change waits with no
 // round spent, main's failure is one alert, and once main is fixed the change
 // is brought up to date and merges.
@@ -979,6 +1021,9 @@ func TestOutsideStep(t *testing.T) {
 	h.seed("me/out", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "out", "repo": "me/out"}, nil)
 	title := "Delete the leftover test fixture directory on this machine, outside your checkout; it is safe to delete and can't be undone: FAKE:rmoutside " + fixture
+	if len(title) <= 120 {
+		t.Fatalf("the ask is only %d characters, no longer than a label", len(title))
+	}
 	h.post("/api/ask", map[string]string{"project": "out", "title": title}, nil)
 	h.wait("a tribunal to run the T3 step", 4*minute, func(st api.State) bool {
 		for _, r := range st.Requests {

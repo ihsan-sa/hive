@@ -1,6 +1,6 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
-// (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
+// (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:reviewadvice, FAKE:crash,
 // FAKE:limit, FAKE:offline, FAKE:needpackage, FAKE:goals, FAKE:needpython, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
@@ -671,6 +671,9 @@ func review(all string) map[string]any {
 	}
 	if strings.Contains(all, "FAKE:reviewfix") && strings.Contains(all, "Review round 1") {
 		return map[string]any{"verdict": "fix", "summary": "needs one more pass", "findings": []map[string]any{{"file": "work", "issue": "FAKE finding"}}, "token": tok}
+	}
+	if strings.Contains(all, "FAKE:reviewadvice") {
+		return map[string]any{"verdict": "land", "summary": "looks right", "advice": []string{"FAKE advice: name the helper for what it does"}, "token": tok}
 	}
 	return map[string]any{"verdict": "land", "summary": "looks right", "findings": []any{}, "token": tok}
 }
