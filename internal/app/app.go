@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	hive "github.com/ihsan-sa/hive-standalone-build"
@@ -40,6 +41,9 @@ type App struct {
 	Runner   *runner.Runner
 	Feedback *feedback.Module
 	Models   *models.Module
+
+	seeding  sync.WaitGroup // SeedSelf's copy, which Close waits out
+	stopSeed context.CancelFunc
 }
 
 // New opens the workspace and builds every module.
@@ -67,6 +71,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	tools.New(c)
 	a.Work.Steps = a.Risk.Steps
 	a.Work.Weigh = a.Risk.Weigh
+	a.Work.Gate = runGate(ws)
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
 	a.Models = models.New(c, a.Work)
@@ -140,18 +145,28 @@ func (a *App) Run(ctx context.Context) {
 
 // SeedSelf writes the Hive's own source into the knowledge base beside the
 // start, with new turns held until it's there, and calls done with how long
-// it took.
+// it took. Close stops it and waits for it.
 func (a *App) SeedSelf(done func(time.Duration)) {
 	a.C.Runs.HoldFor("kb.self", "waiting: the knowledge base takes the Hive's own source")
+	ctx, cancel := context.WithCancel(context.Background())
+	a.seeding.Add(1)
+	a.stopSeed = cancel
 	go func() {
-		a.KB.SeedSelf(hive.Source)
+		defer a.seeding.Done()
+		a.KB.SeedSelf(ctx, hive.Source)
 		a.C.Runs.HoldFor("kb.self", "")
-		done(a.KB.Seeded)
+		if ctx.Err() == nil {
+			done(a.KB.Seeded)
+		}
 	}()
 }
 
 // Close stops module programs and releases the journal.
 func (a *App) Close() error {
+	if a.stopSeed != nil {
+		a.stopSeed()
+	}
+	a.seeding.Wait()
 	a.Runner.Close()
 	return a.C.Close()
 }

@@ -216,15 +216,23 @@ func updateKeepsAMessage(t *testing.T) {
 	if out := h.cli(old, "update"); !strings.Contains(out, "updated to v0.0.2") {
 		t.Fatalf("update: %q", out)
 	}
-	handing := false
+	// Wait for the handover to begin, on a state that lasts: daemon.json says
+	// the old daemon is restarting from then until the new one writes its
+	// own, so polling for the restarting state alone could miss that window
+	// (it's short on a fast run). Seen past it, the message below goes after
+	// the handover instead of in it, and must still arrive once.
+	handing, gap := false, false
 	for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
-		if c, err := api.Dial(h.ws); err == nil && c.Info.PID == first && c.Info.Restarting {
-			handing = true
+		if c, err := api.Dial(h.ws); err == nil && (c.Info.PID != first || c.Info.Restarting) {
+			handing, gap = true, c.Info.PID == first
 			break
 		}
 	}
 	if !handing {
-		t.Fatal("daemon.json never said the old daemon was restarting")
+		t.Fatal("daemon.json never said the old daemon was restarting, nor named a new one")
+	}
+	if !gap {
+		t.Log("the handover was over before it was seen; the first message goes after it")
 	}
 	h.cli(old, "ask", "Sent while you update: reply with the word MARMALADE and nothing else.")
 	for end := time.Now().Add(30 * time.Second); proc.Alive(proc.Handle{PID: first}) && time.Now().Before(end); {
