@@ -203,6 +203,11 @@ func Run(ws core.Workspace, waitFor int) error {
 	}
 	defer a.Close()
 	built := time.Now()
+	a.SeedSelf(func(d time.Duration) {
+		if d > 5*time.Second {
+			fmt.Printf("hive: took %s to copy its own source into the knowledge base; new turns waited for it\n", d.Round(time.Millisecond))
+		}
+	})
 	// Before the token is published: an earlier version's turns can read private/.
 	if err := a.C.Runs.Migrate(); err != nil {
 		return err
@@ -253,8 +258,8 @@ func Run(ws core.Workspace, waitFor int) error {
 	go srv.Serve(ln)
 	// A slow start says where its time went (a Windows ci runner has taken over 30s).
 	if d := time.Since(began); d > 5*time.Second {
-		fmt.Printf("hive: took %s to start: %s before building the modules, %s building them (%s of it copying the Hive's source into the knowledge base), %s after\n",
-			d.Round(time.Millisecond), booted.Sub(began).Round(time.Millisecond), built.Sub(booted).Round(time.Millisecond), a.KB.Seeded.Round(time.Millisecond), time.Since(built).Round(time.Millisecond))
+		fmt.Printf("hive: took %s to start: %s before building the modules, %s building them, %s after\n",
+			d.Round(time.Millisecond), booted.Sub(began).Round(time.Millisecond), built.Sub(booted).Round(time.Millisecond), time.Since(built).Round(time.Millisecond))
 	}
 	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)

@@ -200,13 +200,28 @@ type Runs struct {
 	plans map[string]Plan
 	busy  map[string]bool    // runs whose tick work is in flight
 	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
-	hold  string             // why no new turn starts, while a restart waits for a quiet moment
+	holds map[string]string  // why no new turn starts (a restart waiting for a quiet moment), by who holds them
 	// launching counts launches past the hold whose turn isn't journalled yet.
 	launching int
+	waking    sync.Mutex // one wake at a time, so a run is woken once
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
-func (rs *Runs) Hold(why string) { rs.mu.Lock(); rs.hold = why; rs.mu.Unlock() }
+func (rs *Runs) Hold(why string) { rs.HoldFor("restart", why) }
+
+// HoldFor is Hold for one holder among several; turns start once none holds them.
+func (rs *Runs) HoldFor(who, why string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if why == "" {
+		delete(rs.holds, who)
+		return
+	}
+	if rs.holds == nil {
+		rs.holds = map[string]string{}
+	}
+	rs.holds[who] = why
+}
 
 // Live counts the turns whose process is running, and those starting.
 func (rs *Runs) Live() int {
@@ -790,6 +805,8 @@ func (rs *Runs) Send(id, text string) error {
 // answer it was blocked on) the turn for it, rather than leaving it on a run
 // that takes no turns. One blocked for its Codex token stays blocked.
 func (rs *Runs) wake(id string) {
+	rs.waking.Lock() // Send and endTurn can both see it; it's woken once
+	defer rs.waking.Unlock()
 	r, ok := rs.Get(id)
 	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) {
 		return
@@ -1151,7 +1168,7 @@ const PendingSep = "\n\n---\n\n"
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run, cfg Config) {
 	rs.mu.Lock()
-	if rs.hold != "" {
+	if len(rs.holds) > 0 {
 		rs.mu.Unlock()
 		return
 	}

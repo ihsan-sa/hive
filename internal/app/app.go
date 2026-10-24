@@ -62,7 +62,6 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Feedback = feedback.New(c)
 	a.Improve.Feedback = a.Feedback.Digest
 	a.KB = kb.New(c, a.Agents)
-	a.KB.SeedSelf(hive.Source)
 	a.System = system.New(c)
 	a.Risk = risk.New(c, a.Mods, a.Agents)
 	tools.New(c)
@@ -136,6 +135,18 @@ func (a *App) Run(ctx context.Context) {
 		case <-t.C:
 		}
 	}
+}
+
+// SeedSelf writes the Hive's own source into the knowledge base beside the
+// start, with new turns held until it's there, and calls done with how long
+// it took.
+func (a *App) SeedSelf(done func(time.Duration)) {
+	a.C.Runs.HoldFor("kb.self", "waiting: the knowledge base takes the Hive's own source")
+	go func() {
+		a.KB.SeedSelf(hive.Source)
+		a.C.Runs.HoldFor("kb.self", "")
+		done(a.KB.Seeded)
+	}()
 }
 
 // Close stops module programs and releases the journal.
