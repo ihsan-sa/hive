@@ -339,6 +339,19 @@ func TestFallbackAtALimit(t *testing.T) {
 		t.Fatalf("a run with room stays on its own model: %+v", got)
 	}
 	limit("fake")
+	// No run has finished on the free model yet, so it waits for the reset.
+	if p, at := c.Runs.next(r); p.Harness != "fake" || !at.After(time.Now()) {
+		t.Fatalf("a worker fell back to a model with no finishes: %v at %v", p, at)
+	}
+	// Once one has (a trial, or real work), it may go there.
+	if _, err := c.Runs.Start(RunSpec{ID: "trial", Role: "worker", Harness: "open", Model: "free", Checkout: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.append("run.finish", map[string]any{"id": "trial", "finish": Finish{Status: "blocked"}})
+	if p, _ := c.Runs.next(r); p.Harness != "fake" {
+		t.Fatalf("a blocked finish proves nothing: %v", p)
+	}
+	c.Runs.append("run.finish", map[string]any{"id": "trial", "finish": Finish{Status: "done"}})
 	if p, at := c.Runs.next(r); p.Harness != "open" || at.After(time.Now()) {
 		t.Fatalf("next at a limit: %v at %v", p, at)
 	}
@@ -369,5 +382,12 @@ func TestFallbackAtALimit(t *testing.T) {
 	r2, _ := c.Runs.Start(RunSpec{ID: "w2", Role: "worker", Harness: "fake", Model: "opus", Checkout: t.TempDir()})
 	if p, at := c.Runs.next(r2); p.Harness != "fake" || !at.After(time.Now()) {
 		t.Fatalf("a run with no route: %v at %v", p, at)
+	}
+	// A worker already on a model with no finishes goes back to its route's
+	// first and waits there, rather than taking another turn where it is.
+	r3, _ := c.Runs.Start(RunSpec{ID: "w3", Role: "worker", Harness: "open", Model: "unproven", Checkout: t.TempDir(),
+		Route: []Pick{{Harness: "fake", Model: "opus"}, {Harness: "open", Model: "unproven"}}})
+	if p, at := c.Runs.next(r3); p.Harness != "fake" || !at.After(time.Now()) {
+		t.Fatalf("a worker stayed on a model with no finishes: %v at %v", p, at)
 	}
 }
