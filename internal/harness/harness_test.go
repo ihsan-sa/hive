@@ -37,6 +37,14 @@ func TestParseClaudeStream(t *testing.T) {
 	}
 }
 
+// The context figure is what one reply was sent, as Claude Code 2.1 prints it.
+func TestParseContext(t *testing.T) {
+	evs := Claude{}.Parse([]byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":12035,"cache_read_input_tokens":13792,"output_tokens":87}}}`))
+	if len(evs) != 2 || evs[0].Kind != "context" || evs[0].Tokens != 25829 || evs[1].Kind != "text" {
+		t.Fatalf("got %+v", evs)
+	}
+}
+
 func TestClaudeArgs(t *testing.T) {
 	a := Claude{}.Args(Turn{SessionID: "u", ReadOnly: true, RunDir: "/hive/run", Schema: "{}"})
 	joined := ""

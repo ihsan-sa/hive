@@ -147,6 +147,7 @@ func Main(argv []string) int {
 	if err != nil {
 		text = "error: " + err.Error()
 	}
+	emit(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{}, "usage": map[string]int{"input_tokens": len(all)}}})
 	cost := 0.0
 	if strings.Contains(all, "FAKE:paid") {
 		cost = 0.25
@@ -235,6 +236,17 @@ func leadAsk(ask, system string) (string, error) {
 	}
 	if strings.Contains(strings.ToLower(ask), "what's in the repo") {
 		return "The repo has " + strings.Join(repoFiles(), ", ") + ".", nil
+	}
+	// The journal: "remember X" is written to it, "what did I ask you to
+	// remember" is answered from it, so a lead that replaced this one can too.
+	journal := filepath.Join(os.Getenv("HIVE_BOX"), "notes.md")
+	if x, ok := strings.CutPrefix(ask, "remember "); ok {
+		appendFile(journal, "- promised: "+x+"\n")
+		return "Noted.", nil
+	}
+	if strings.Contains(ask, "you to remember") {
+		notes, _ := os.ReadFile(journal)
+		return "From my journal: " + strings.TrimSpace(string(notes)), nil
 	}
 	if f := strings.Fields(ask); len(f) == 2 && f[0] == "recheck" {
 		out, err := call("recheck", map[string]string{"task": f[1]}, time.Minute)
