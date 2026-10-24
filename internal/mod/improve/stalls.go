@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -93,9 +94,35 @@ func (m *Module) Watch() {
 	// A queued brief and a check waiting for a slot are waiting their turn,
 	// not stuck; a check is timed from when it got its slot.
 	running, waiting := m.C.Effects.Slots.State()
+	// Tasks held on a named wait (main is red, another task's turn) share
+	// its cause: the cause is judged once, so it reaches the lead once.
+	type group struct {
+		stage, project string
+		tasks          []work.Task
+		since          time.Time
+	}
+	waits := map[string]*group{}
+	var causes []string
 	for _, t := range m.Work.List(func(t work.Task) bool { return !t.Terminal() && t.Stage != work.StagePerson }) {
 		now["task:"+t.ID] = t.Stage
 		if t.Queued() || t.Stage == work.StageTesting && slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
+			continue
+		}
+		if strings.HasPrefix(t.Reason, "waiting ") && t.Stage != work.StageWorking && t.Stage != work.StageReviewing { // a run's own hang is still its own
+			key := "wait:" + t.Project + ":" + t.Stage + ":" + t.Reason
+			g := waits[key]
+			if g == nil {
+				g = &group{stage: t.Stage, project: t.Project}
+				waits[key] = g
+				causes = append(causes, key)
+			}
+			m.mu.Lock()
+			since := m.spells[t.ID].since
+			m.mu.Unlock()
+			if g.since.IsZero() || since.Before(g.since) {
+				g.since = since // the cause has held since its first task stopped
+			}
+			g.tasks = append(g.tasks, t)
 			continue
 		}
 		run := map[string]string{work.StageWorking: t.Worker, work.StageReviewing: t.Reviewer}[t.Stage]
@@ -110,6 +137,24 @@ func (m *Module) Watch() {
 			}
 		}
 		m.judge(Stall{Key: "task:" + t.ID, What: fmt.Sprintf("%q", t.Label()), Project: t.Project, Stage: t.Stage, Since: sp.since}, run, t.Chat, t.Thread, took, floor)
+	}
+	for _, key := range causes {
+		g := waits[key]
+		now[key] = g.stage
+		t := g.tasks[0]
+		what, chat, thread := fmt.Sprintf("%q", t.Label()), t.Chat, t.Thread
+		if len(g.tasks) > 1 {
+			var labels []string
+			for _, t := range g.tasks {
+				labels = append(labels, fmt.Sprintf("%q", t.Label()))
+			}
+			what, chat, thread = fmt.Sprintf("%d tasks (%s)", len(g.tasks), strings.Join(labels, ", ")), "", ""
+		}
+		what += ", " + t.Reason + ","
+		m.mu.Lock()
+		took := append([]float64(nil), m.took[g.stage]...)
+		m.mu.Unlock()
+		m.judge(Stall{Key: key, What: what, Project: g.project, Stage: g.stage, Since: g.since}, "", chat, thread, took, floor)
 	}
 	took := map[string][]float64{}
 	for _, r := range m.C.Runs.List(func(r *core.Run) bool { return r.Terminal() && r.Task == "" && !r.Persistent }) {

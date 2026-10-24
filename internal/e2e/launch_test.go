@@ -181,7 +181,9 @@ func moduleLifecycle(t *testing.T, real bool) {
 		return api.ModuleView{}, false
 	}
 	// At autonomy 2 a warden decides the install and the person hears after.
-	st := h.wait("a warden to install greet", patience(t), func(st api.State) bool { _, ok := module(st); return ok })
+	// Its release is recorded after the clone, so a state read in between
+	// shows it with none, and the update below would seem done at once.
+	st := h.wait("a warden to install greet", patience(t), func(st api.State) bool { m, ok := module(st); return ok && m.Release != "" })
 	h.wait("the person to be told after", minute, toldAbout("Install module"))
 	first, _ := module(st)
 	h.post("/api/module/access", map[string]any{"module": "greet", "project": "*", "allow": false}, nil)
