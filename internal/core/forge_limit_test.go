@@ -52,6 +52,8 @@ func TestGhWrites(t *testing.T) {
 		"api -X PATCH repos/o/r/issues/comments/9 -f body=x": true,
 		"api repos/o/r/issues/3/comments -f body=x":          true,
 		"run rerun 7 --failed -R o/r":                        true,
+		"pr ready 3 -R o/r --undo":                           true,
+		"api -X DELETE repos/o/r/git/refs/heads/hive/x":      true,
 	} {
 		if got := ghWrites(strings.Fields(args)); got != want {
 			t.Errorf("%s: writes %v, want %v", args, got, want)
@@ -225,5 +227,15 @@ func TestChecksNewestAttemptByID(t *testing.T) {
 	runs, err := GitHub{}.Checks("o/r", "abc")
 	if err != nil || len(runs) != 1 || runs[0].State != CheckPending {
 		t.Fatalf("runs %+v, err %v", runs, err)
+	}
+}
+
+// GitHub's refusal to merge a draft reads as ErrDraft, so the task waits.
+func TestDraftRefusedReadsAsDraft(t *testing.T) {
+	if !draftRefused.MatchString("gh pr merge: GraphQL: Pull Request is still a draft (mergePullRequest)") {
+		t.Fatal("GitHub's draft refusal isn't recognised")
+	}
+	if draftRefused.MatchString("gh pr merge: Pull request is not mergeable") {
+		t.Fatal("another refusal reads as a draft")
 	}
 }
