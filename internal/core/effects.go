@@ -69,6 +69,7 @@ type Effects struct {
 	readRuns  map[string][]string // project -> every ordinary reviewer run that gave a verdict
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
+	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
 }
 
 // Check is a host-run test or score on one commit.
@@ -154,7 +155,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, unsure: map[string]bool{}, readRuns: map[string][]string{}, approvals: map[string]bool{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, unsure: map[string]bool{}, readRuns: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}}
 	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -215,6 +216,10 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 				a.Kind = "merge"
 			}
 			e.approvals[a.Kind+":"+a.Project+"@"+a.SHA] = true
+		case "gate.judged":
+			var g GateResult
+			ev.Decode(&g)
+			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
 		}
 	}
 	j.Replay(apply)
@@ -1100,6 +1105,11 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		}
 		return "", fmt.Errorf("refusing to merge %s: it changes %s, on %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), SecurityList, need)
 	}
+	if p.Self {
+		if g, ok := e.GateResult(p.Name, m.SHA, m.Main); !ok || g.Outcome != GateKeep {
+			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself merges only once the recursive gate kept it against main at %s", short(m.SHA), short(m.Main))
+		}
+	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
 	if err != nil {
 		return "", err
@@ -1108,7 +1118,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	st, which := ChecksState(runs, req)
 	var shared []string
 	if st == CheckFail {
-		mainRuns, err := e.Forge.Checks(p.Repo, m.Main)
+		mainRuns, _, err := e.MainAnswer(p, m.Main, which)
 		if err != nil {
 			return "", err
 		}
@@ -1226,6 +1236,78 @@ func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string, tests Tests
 	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(shared, n) })
 	state, which = ChecksState(kept, req)
 	return state, which, shared, byName
+}
+
+// mainLookBack is how many of main's commits, newest first, MainAnswer reads
+// for a finished run.
+const mainLookBack = 10
+
+// MainAnswer is main's runs of the checks that failed, each taken from the
+// newest commit on main's first-parent line, from main back mainLookBack
+// commits, where every run of that name has finished (passed or failed). A
+// run still going, cancelled or that couldn't start is no answer: CI cancels
+// a run on main when the next push supersedes it, and while merges keep
+// coming main's newest commit may never finish one. A check with no answer
+// keeps main's own runs of it. at names, per check, the older commit its
+// answer came from.
+func (e *Effects) MainAnswer(p Project, main string, failed []CheckRun) (runs []CheckRun, at map[string]string, err error) {
+	if runs, err = e.Forge.Checks(p.Repo, main); err != nil {
+		return nil, nil, err
+	}
+	var want []string
+	for _, r := range failed {
+		if r.State == CheckFail && !slices.Contains(want, r.Name) && !finished(runs, r.Name) {
+			want = append(want, r.Name)
+		}
+	}
+	if len(want) == 0 {
+		return runs, nil, nil
+	}
+	out, err := Git(e.ws.Project(p.Name), "rev-list", "--first-parent", "-n", strconv.Itoa(mainLookBack), main)
+	shas := strings.Fields(out)
+	if err != nil || len(shas) < 2 {
+		return runs, nil, nil // no history to read: main's own runs are all there is
+	}
+	at = map[string]string{}
+	for _, sha := range shas[1:] {
+		if len(want) == 0 {
+			break
+		}
+		older, err := e.Forge.Checks(p.Repo, sha)
+		if err != nil {
+			return nil, nil, err
+		}
+		want = slices.DeleteFunc(want, func(name string) bool {
+			if !finished(older, name) {
+				return false
+			}
+			runs = slices.DeleteFunc(runs, func(r CheckRun) bool { return r.Name == name })
+			for _, r := range older {
+				if r.Name == name {
+					runs = append(runs, r)
+				}
+			}
+			at[name] = sha
+			return true
+		})
+	}
+	return runs, at, nil
+}
+
+// finished reports whether runs hold a run named name and every one of them
+// passed or failed.
+func finished(runs []CheckRun, name string) bool {
+	n := 0
+	for _, r := range runs {
+		if r.Name != name {
+			continue
+		}
+		if r.State != CheckPass && r.State != CheckFail {
+			return false
+		}
+		n++
+	}
+	return n > 0
 }
 
 // TestsOf names the failing tests in a failed check's log; ok is false when
