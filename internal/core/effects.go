@@ -711,8 +711,11 @@ func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.rea
 
 // UpdateBranch merges main into the reviewed commit in a clean host checkout.
 // The result is host-made, so the verdict on the reviewed commit carries, but
-// it is tested again before it can merge.
-func (e *Effects) UpdateBranch(p Project, sha, mainSHA string) (string, error) {
+// it is tested again before it can merge. A base names the commit the merge
+// is taken from instead of the common ancestor: the branch's own commit that
+// main already holds as a squashed checkpoint, so only what came after it is
+// laid onto main.
+func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, error) {
 	dir, err := e.cleanCheckout(p, sha, "update")
 	if err != nil {
 		return "", err
@@ -721,7 +724,19 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA string) (string, error) {
 	if _, err := Git(dir, "fetch", "-q", "origin", mainSHA); err != nil {
 		return "", err
 	}
-	if _, err := Git(dir, "merge", "-q", "--no-edit", "-m", "Merge main into this branch", mainSHA); err != nil {
+	if base != "" {
+		tree, err := Git(dir, "merge-tree", "--write-tree", "--merge-base="+base, sha, mainSHA)
+		if err != nil {
+			return "", ErrConflict
+		}
+		c, err := Git(dir, "commit-tree", tree, "-p", sha, "-p", mainSHA, "-m", "Merge main into this branch")
+		if err == nil {
+			_, err = Git(dir, "reset", "-q", "--hard", c)
+		}
+		if err != nil {
+			return "", err
+		}
+	} else if _, err := Git(dir, "merge", "-q", "--no-edit", "-m", "Merge main into this branch", mainSHA); err != nil {
 		Git(dir, "merge", "--abort")
 		return "", ErrConflict
 	}
