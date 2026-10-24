@@ -619,24 +619,26 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	}
 	c := Change{Base: base}
 	// No renames: a move out of a protected path must show as its deletion.
-	stat, err := Git(dir, "diff", "--numstat", "--no-renames", base, sha)
+	// Unquoted and NUL-split, so a name git would quote (é, a tab, a quote)
+	// is read as the path it is and can't slip past a guard.
+	stat, err := Git(dir, "-c", "core.quotePath=false", "diff", "--numstat", "-z", "--no-renames", base, sha)
 	if err != nil {
 		return c, err
 	}
-	cfg := e.Config(p, mainSHA)
-	protected := append([]string{".hive/project.json", ".hive/goals.md"}, cfg.Protected...)
+	cfg := e.Config(p, mainSHA).Guarded(p)
+	protected := append([]string{".hive/project.json", ".hive/goals.md", "docs/REVIEW.md"}, cfg.Protected...)
 	if cfg.Score != nil {
 		protected = append(protected, cfg.Score.Evaluator()...)
 	}
 	docsOnly := true
-	for _, l := range strings.Split(stat, "\n") {
-		f := strings.Fields(l)
-		if len(f) < 3 {
+	for _, l := range strings.Split(stat, "\x00") {
+		f := strings.SplitN(l, "\t", 3)
+		if len(f) < 3 || f[2] == "" {
 			continue
 		}
 		add, _ := strconv.Atoi(f[0])
 		del, _ := strconv.Atoi(f[1])
-		file := strings.Join(f[2:], " ")
+		file := f[2]
 		c.Files = append(c.Files, file)
 		c.Lines += add + del
 		if under(file, protected) {
@@ -657,7 +659,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && !p.Self
 	c.Diff, _ = Git(dir, "diff", base, sha)
 	if len(c.Protected) > 0 {
-		c.ProtectedDiff, _ = Git(dir, append([]string{"diff", "--no-renames", base, sha, "--"}, c.Protected...)...)
+		c.ProtectedDiff, _ = Git(dir, append([]string{"--literal-pathspecs", "diff", "--no-renames", base, sha, "--"}, c.Protected...)...)
 	}
 	return c, nil
 }
