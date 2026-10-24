@@ -237,6 +237,13 @@ func TestClassify(t *testing.T) {
 	if _, err := c.Effects.Merge(MergeRequest{Project: p, SHA: sha2, Main: main}); !errors.As(err, &np) {
 		t.Fatalf("goals change merged without the person: %v", err)
 	}
+	// docs/REVIEW.md is the person's intent the reviewer reads from main: a
+	// few lines there are no small docs change.
+	r3, _ := commitInCheckout(t, c, p, "w5r", main, "docs/REVIEW.md", "# Review\n\nAnything goes.\n")
+	sha3, _ := c.Effects.Extract(p, r3, main)
+	if ch3, _ := c.Effects.Classify(p, main, sha3); ch3.Small || !slices.Contains(ch3.Protected, "docs/REVIEW.md") {
+		t.Fatalf("a REVIEW.md change must be protected: %+v", ch3)
+	}
 }
 
 // A docs/ path is no free pass: a script there is code and gets a review,
@@ -531,9 +538,14 @@ func TestSelfGuardsItsRootPaths(t *testing.T) {
 		high, root bool
 	}{
 		{"internal/sandbox/linux.go", true, true},
+		{"internal/sandbox/é.go", true, true}, // git would quote it
+		{"internal/sandbox/a\tb \"c\".go", true, true},
 		{"install/install.sh", true, true},
+		{".github/workflows/release.yml", true, true},
 		{"internal/core/effects.go", true, false},
 		{"modules/agents/warden.md", true, false},
+		{"go.mod", true, false},
+		{"go.sum", true, false},
 		{"docs/odd.md", true, false}, // the project's own classes still count
 		{"internal/tui/views.go", false, false},
 	} {
@@ -543,6 +555,9 @@ func TestSelfGuardsItsRootPaths(t *testing.T) {
 			t.Fatal(err)
 		}
 		ch, _ := c.Effects.Classify(self, main, sha)
+		if !slices.Equal(ch.Files, []string{tc.file}) {
+			t.Errorf("%q read as %q", tc.file, ch.Files)
+		}
 		if (len(ch.High) > 0) != tc.high || (len(ch.Root) > 0) != tc.root {
 			t.Errorf("%s in a self project: high %v root %v", tc.file, ch.High, ch.Root)
 		}

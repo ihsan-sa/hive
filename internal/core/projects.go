@@ -41,11 +41,12 @@ type ProjectConfig struct {
 // project guards whatever its project.json says; the gate's binary holds them,
 // so no change on the branch can drop them. Root is what acts on the person's
 // machine outside the box: the box itself, the approved scripts the risk
-// module runs, the install and autostart. High is what holds or hands out
-// credentials and what replaces the running Hive.
+// module runs, the install and autostart, and the workflows that build every
+// install's binary. High is what holds or hands out credentials, what
+// replaces the running Hive, and the dependencies compiled into it.
 var (
-	SelfRoot = []string{"internal/sandbox/", "internal/mod/risk/", "internal/setup/", "install/"}
-	SelfHigh = []string{"internal/core/effects.go", "internal/core/forge.go", "internal/harness/", "internal/mod/release/", "internal/daemon/", "modules/agents/warden.md", "modules/agents/tribunal.md"}
+	SelfRoot = []string{"internal/sandbox/", "internal/mod/risk/", "internal/setup/", "install/", ".github/"}
+	SelfHigh = []string{"internal/core/effects.go", "internal/core/forge.go", "internal/harness/", "internal/mod/release/", "internal/daemon/", "modules/agents/warden.md", "modules/agents/tribunal.md", "go.mod", "go.sum"}
 )
 
 // Guarded returns cfg with a self project's built-in classes added to its own.

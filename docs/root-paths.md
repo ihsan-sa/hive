@@ -13,17 +13,21 @@ Now a self project (`Project.Self`, the Hive's own source) always guards a built
 | root | `internal/sandbox/` | the box itself: what keeps agents off the person's machine |
 | root | `internal/mod/risk/` | runs warden- and tribunal-approved scripts in the daemon, outside the box, with `sudo` where it works |
 | root | `internal/setup/`, `install/` | install, autostart units, PATH changes on the person's account |
+| root | `.github/` | `release.yml` builds every install's binary; CI decides what's green |
 | high | `internal/core/effects.go`, `internal/core/forge.go` | hold the forge login and enforce the gate |
 | high | `internal/harness/` | hands harness logins to runs |
 | high | `internal/mod/release/`, `internal/daemon/` | cut releases and replace the running binary (self-update) |
 | high | `modules/agents/warden.md`, `modules/agents/tribunal.md` | the prompts that decide what runs outside the box |
+| high | `go.mod`, `go.sum` | the dependencies compiled into the binary |
+
+Every project, self or not, also protects `docs/REVIEW.md` next to `.hive/goals.md` and `.hive/project.json`: it is the person's intent the reviewer reads from main, so a change to it waits for an approval (the person's, or a warden's by autonomy) and is never a small docs change that merges on tests alone.
 
 A change touching a root path needs two separate land reads of its exact commit to merge, and the release that carries it holds for the person's "release". A change touching a high path needs the two reads and releases on its own. The person sees the same holds and asks they already do; nothing new to learn.
 
 ## How it fits
 
 - The lists live in the binary (`core.SelfRoot`, `core.SelfHigh`) and are joined in `Effects.Classify` through `ProjectConfig.Guarded`, so the running gate holds them, not the branch under review. A PR can't drop them, the same way checks come from main's project.json.
-- Classify reads diffs with `--no-renames`, so moving a file out of a guarded path shows as a change to it.
+- Classify reads diffs with `--no-renames`, so moving a file out of a guarded path shows as a change to it, and with `-c core.quotePath=false -z`, so a name git would quote (`internal/sandbox/é.go`, a tab, a quote mark) is read as the path it is rather than as `"internal/sandbox/\303\251.go"`, which matched no guard.
 - Nothing else changes: `readOK`, `effect.merged`'s `root` and the release hold already worked from `Change.High`/`Change.Root`.
 - Other projects are untouched; only `Self` projects get the defaults.
 
