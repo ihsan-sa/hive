@@ -46,28 +46,16 @@ func main() {
 	out, err := run()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "hive-score:", err)
-		var tool missing
-		if errors.As(err, &tool) {
-			// The shell's own words, so improve reads it as a machine that
-			// can't run the score, not a score of nothing.
-			fmt.Printf("sh: %s: not found\n", string(tool))
-			os.Exit(127)
-		}
 		os.Exit(1)
 	}
 	fmt.Print(out)
 }
 
-type missing string
-
-func (m missing) Error() string { return string(m) + " is not installed" }
-
+// run assumes go, git and python3 are on the PATH. The score command in
+// .hive/project.json looks them up in the shell first, because `go run`
+// exits 1 whatever its program exits with, and improve reads only the
+// shell's own "not found" with exit 127 as a machine that can't run the score.
 func run() (string, error) {
-	for _, tool := range []string{"go", "git", "python3"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			return "", missing(tool)
-		}
-	}
 	root, err := exec.Command("go", "env", "GOMOD").Output()
 	if err != nil || strings.TrimSpace(string(root)) == "" {
 		return "", fmt.Errorf("not in the Hive's module: %v", err)
@@ -84,7 +72,9 @@ func run() (string, error) {
 	}
 
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		return "", err
+	}
 	k := hex.EncodeToString(key)
 	began := time.Now()
 	benchOut, _ := runSuite(suite, pkg, k+"\n", benchTimeout, "HIVE_BENCH="+fmt.Sprint(benchAsks),

@@ -3,7 +3,7 @@
 The Hive project (ihsan-sa/hive) has a score, so the improve module measures main after every merge, keeps or reverts against the best kept score, and the step-back (`improve.stepback`) has a number to beat. It is set in `.hive/project.json`:
 
 ```json
-"score": {"command": "go run ./cmd/hive-score", "direction": "higher", "tolerance": 3, "paths": ["internal/e2e/benchmark_test.go", "internal/demo/"]}
+"score": {"command": "for t in git python3; do command -v \"$t\" >/dev/null || { \"$t\"; exit 127; }; done; go run ./cmd/hive-score", "direction": "higher", "tolerance": 3, "paths": ["internal/e2e/benchmark_test.go", "internal/demo/"]}
 ```
 
 Code: `cmd/hive-score` (output format tested in `main_test.go`).
@@ -15,7 +15,7 @@ Code: `cmd/hive-score` (output format tested in `main_test.go`).
 1. **The benchmark**: `TestBenchmark` with `HIVE_BENCH=4`, the same test the recursive gate judges with (docs/gate.md): four asks on the demo textkit project, judged from what landed on textkit's main, on inputs drawn fresh for the run, with answers worked out by the test, not from what the Hive says. Its BENCH line is signed with a key `hive-score` hands it on stdin, and a line that doesn't verify counts as no line.
 2. **The rest of the e2e suite** (`TestBenchmark` skipped). A test that fails is run once more on its own; a pass then counts as a pass (and is reported as flaky), since improve files flakes as work of their own. A test that never reports (a panic, the suite's timeout) counts as failed; skipped tests (the live probes, tmux) are left out.
 
-It needs `go`, `git` and `python3` (the benchmark runs textkit with it). One missing prints the shell's `sh: <tool>: not found` and exits 127, so improve reads "can't run", not a score.
+It needs `go`, `git` and `python3` (the benchmark runs textkit with it). The command looks `git` and `python3` up in the shell before `go run` (a missing `go` fails the shell's own lookup), and runs a missing one so the shell prints its own `sh: 1: <tool>: not found` and the command exits 127: improve reads that as "can't run", not a score. The lookup has to be in the command: `go run` exits 1 whatever its program exits with, so a 127 from inside `hive-score` would never reach improve (`TestMissingToolCantRun` runs the command from project.json without python3 and checks `core.MissingTool` names it).
 
 ## How it combines
 
@@ -44,13 +44,13 @@ So on this score "beats your benchmark" means: the Hive gets the same asks right
 
 ## Time and noise
 
-On this machine (20 cores), 2026-10-24, five runs at the Hive of main fa3376e: 190.70, 190.63, 190.63, 190.74 and 190.65 (the second alongside `go vet ./... && go test -short ./...`, the fourth alongside a second whole e2e suite). The benchmark took 55.6-56.2 s each time (the fake harness paces its turns, so its seconds barely move) and all 40 e2e tests passed every time. A run takes **about 5 minutes**: under a minute to build, about 1 minute for the benchmark and 4 for the suite. Its bounds are 7 minutes for the benchmark, 10 for the suite and 6 for re-running what failed, so with the build it stays inside the check's own 30; a test cut off by a bound counts as failed.
+On this machine (20 cores), 2026-10-24, six runs at the Hive of main fa3376e: 190.70, 190.63, 190.63, 190.74, 190.65 and 190.68 (the second alongside `go vet ./... && go test -short ./...`, the fourth alongside a second whole e2e suite). The benchmark took 55.6-56.2 s each time (the fake harness paces its turns, so its seconds barely move) and all 40 e2e tests passed every time. A run takes **about 5 minutes**: under a minute to build, about 1 minute for the benchmark and 4 for the suite. Its bounds are 7 minutes for the benchmark, 10 for the suite and 6 for re-running what failed, so with the build it stays inside the check's own 30; a test cut off by a bound counts as failed.
 
 The tolerance (3) is far above that spread, and above one e2e test failing twice in a row (2.5), so a merge that changes nothing is kept rather than reverted on a slow run. A real gain in time needs the benchmark to be 18 s faster. Two things add noise: other checks sharing the machine (`max_checks`), which slow the benchmark and can flake a timing-bound e2e test (the second run absorbs most of it), and the fake harness's own pacing.
 
 ## First value on main
 
-190.70 (then 190.63, 190.63, 190.74, 190.65), measured by hand on this change's branch, whose Hive is main at fa3376e. improve records the kept baseline itself when it measures the merge of this change.
+190.70 (then 190.63, 190.63, 190.74, 190.65, 190.68), measured by hand on this change's branch, whose Hive is main at fa3376e. improve records the kept baseline itself when it measures the merge of this change.
 
 ## Evaluator paths
 

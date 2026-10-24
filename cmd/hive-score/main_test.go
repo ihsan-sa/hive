@@ -6,9 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
 func sign(body, key string) string {
@@ -65,5 +71,38 @@ func TestReportFormat(t *testing.T) {
 	}
 	if out := Report(Bench{Seconds: 900}, errors.New("no BENCH line"), E2E{}, nil); !strings.HasSuffix(out, "\n-150.00\n") {
 		t.Fatalf("a benchmark that failed must still give a number:\n%s", out)
+	}
+}
+
+// The score command in project.json, run where python3 is missing, exits as
+// improve reads a machine that can't run it: the shell's own "not found" with
+// exit 127, which `go run` alone would turn into exit 1.
+func TestMissingToolCantRun(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	raw, err := os.ReadFile("../../.hive/project.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := core.ParseProjectConfig(string(raw))
+	if cfg.Score == nil {
+		t.Fatal("project.json has no score")
+	}
+	if got := cfg.Score.Evaluator(); !slices.Contains(got, "cmd/hive-score") {
+		t.Fatalf("cmd/hive-score is not an evaluator path: %v", got)
+	}
+	// A PATH with git but no python3 (nor go, which the lookup reaches first).
+	bin := t.TempDir()
+	if git, err := exec.LookPath("git"); err == nil {
+		os.Symlink(git, filepath.Join(bin, "git"))
+	}
+	cmd := exec.Command(sh, "-c", cfg.Score.Command)
+	cmd.Env = []string{"PATH=" + bin}
+	out, _ := cmd.CombinedOutput()
+	code := cmd.ProcessState.ExitCode()
+	if tool := core.MissingTool(code, string(out)); tool != "python3" {
+		t.Fatalf("exit %d, %q: improve would not read python3 as missing", code, out)
 	}
 }
