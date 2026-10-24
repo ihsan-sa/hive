@@ -253,6 +253,9 @@ func TestControlCenterInTmux(t *testing.T) {
 	x.keys("Enter")
 	x.wait(20*time.Second, "Where should the Hive live? ["+ws.Root+"]")
 	x.keys("Enter")
+	// Sharing failures: Enter keeps it off.
+	x.wait(20*time.Second, "Send failure reports to the Hive developer")
+	x.keys("Enter")
 	s = x.until(time.Minute, "the sandbox or repository prompt", func(s string) bool {
 		return strings.Contains(s, "Type `bare`") || strings.Contains(s, "GitHub repository")
 	})
