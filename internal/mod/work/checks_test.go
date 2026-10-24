@@ -578,3 +578,28 @@ func TestOwnSecurityReadMovedDiff(t *testing.T) {
 		t.Fatalf("%d seat runs, want 2: one per own diff, none for the caught-up head", n)
 	}
 }
+
+// A merge held while main is red brings a change no worse than main back to
+// the gate every holdGap; its "no worse than main" line is said once.
+func TestMergeNoWorseThanMainSaidOnce(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckFail})
+	if _, err := m.SetHold(MergeHold{Project: p.Name, Why: "wait", By: "person"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		mergeOnce(t, m, task, p)
+	}
+	n := 0
+	for _, e := range task.Log {
+		if strings.HasPrefix(e.Text, "no worse than main") {
+			n++
+		}
+	}
+	if n != 1 || task.Stage != StageMerging || !strings.Contains(task.Reason, "merges held") {
+		t.Fatalf("%d lines, stage %q, reason %q", n, task.Stage, task.Reason)
+	}
+}

@@ -960,6 +960,9 @@ func TestChecksAgainstMain(t *testing.T) {
 			t.Errorf("%v: state %q (%v, shared %v), want %q", c.runs, st, which, shared, c.state)
 		}
 	}
+	if st, _, _ := ChecksAgainstMain([]CheckRun{{Name: "macos", State: CheckFail}}, append(mainRuns, CheckRun{Name: "macos", State: CheckFail}), nil); st != CheckFail {
+		t.Errorf("a stale failed attempt on main counted as shared: %q", st)
+	}
 	if st, _, shared := ChecksAgainstMain([]CheckRun{{Name: "windows", State: CheckFail}}, nil, nil); st != CheckFail || len(shared) != 0 {
 		t.Errorf("main green: %q, shared %v", st, shared)
 	}

@@ -1600,8 +1600,10 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		t.Reason = ""
 		return true, m.sendBack(t, p, "The forge's checks failed on your commit "+core.Short(t.SHA)+": "+checkDetail(which)+onMain)
 	}
-	if len(shared) > 0 {
-		m.save(t, "no worse than main: the forge's checks "+strings.Join(shared, ", ")+" are red on both "+core.Short(t.SHA)+" and main at "+core.Short(main)+", and nothing else fails, so it merges")
+	// Said once per head and main: a merge hold or a failed merge brings t
+	// back here every holdGap, and a repeat would crowd out its log.
+	if note := "no worse than main: the forge's checks " + strings.Join(shared, ", ") + " are red on both " + core.Short(t.SHA) + " and main at " + core.Short(main) + ", and nothing else fails, so it merges"; len(shared) > 0 && !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
+		m.save(t, note)
 	}
 	return false, nil
 }

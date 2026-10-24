@@ -1116,7 +1116,10 @@ func ChecksState(runs []CheckRun, required []string) (state string, which []Chec
 func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string) (state string, which []CheckRun, shared []string) {
 	var kept []CheckRun
 	for _, r := range runs {
-		if r.State == CheckFail && slices.ContainsFunc(mainRuns, func(mr CheckRun) bool { return mr.Name == r.Name && mr.State == CheckFail }) {
+		// Only a check main fails outright: one of its name that passes or
+		// still runs there (another attempt, a status) keeps it the change's.
+		named := func(mr CheckRun) bool { return mr.Name == r.Name }
+		if r.State == CheckFail && slices.ContainsFunc(mainRuns, named) && !slices.ContainsFunc(mainRuns, func(mr CheckRun) bool { return named(mr) && mr.State != CheckFail }) {
 			if !slices.Contains(shared, r.Name) {
 				shared = append(shared, r.Name)
 			}
