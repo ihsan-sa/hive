@@ -188,7 +188,7 @@ If a setup is worth testing, write it to $HIVE_BOX/experiment.json as {"why": ".
 Write your reasoning to $HIVE_BOX/sweep.md, then finish.`, p.Name, why, p.Goals, better, *st.Score, s.Best, h, model, s.Budget, s.Best)
 	spec := m.Agents.Spec(id, "stepback", p.Name, dir, brief)
 	only := ""
-	if p.Isolated {
+	if p.Hidden() {
 		only = p.Name
 	}
 	spec.Inputs, spec.Budget = map[string]string{"digest.md": m.Digest(0, only)}, s.Budget
@@ -406,7 +406,7 @@ From the project's start at %s, the setup scored %g. The best the Hive has kept 
 The setup ran as %s; the Hive's latest runs on the project were %s.
 `, p.Name, asks, core.Short(s.From), *s.Score, s.Best, better, sc.Tolerance, exp.Cost, spent, exp.ID, strings.Join(ids, ", "))
 	for _, self := range m.C.Projects.List() {
-		if self.Self && !p.Isolated {
+		if self.Self && !p.Hidden() {
 			transcripts := fmt.Sprintf("# The setup\n\n%s\n\n# What the setup did (run %s)\n\n%s\n# What the Hive's runs did, newest first\n\n", set, exp.ID, m.transcript(exp, 6000))
 			for _, r := range shown {
 				transcripts += fmt.Sprintf("## %s %s ($%.2f)\n\n%s\n", r.Role, r.ID, r.Cost, m.transcript(r, 1500))

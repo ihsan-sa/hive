@@ -147,6 +147,7 @@ func Main(argv []string) int {
 	if err != nil {
 		text = "error: " + err.Error()
 	}
+	emit(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{}, "usage": map[string]int{"input_tokens": len(all)}}})
 	cost := 0.0
 	if strings.Contains(all, "FAKE:paid") {
 		cost = 0.25
@@ -174,7 +175,7 @@ func emit(v any) {
 var handedBack = regexp.MustCompile(`Stopped "[^"]*FAKE:leadfixes[^"]*" \(task (\S+?)[ )]`)
 
 var personRe = regexp.MustCompile(`(?s)(?:Person|Module [^:]+): (.*?)(?:` + regexp.QuoteMeta(core.PendingSep) + `|\z)`)
-var projectRe = regexp.MustCompile(`create (?:an? )?(isolated )?project (?:called |named )?([A-Za-z0-9_-]+)`)
+var projectRe = regexp.MustCompile(`create (?:an? )?((?:isolated|private) )?project (?:called |named )?([A-Za-z0-9_-]+)`)
 
 // moduleRe is a person asking for a new module; merged is the notice that one merged.
 var moduleRe = regexp.MustCompile(`(?i)make (?:me )?a module (?:called |named )?([a-z0-9-]+)`)
@@ -220,7 +221,7 @@ func leadAsk(ask, system string) (string, error) {
 		return "I opened " + strings.Join(got, ", ") + ".", nil
 	}
 	if pm := projectRe.FindStringSubmatch(ask); pm != nil {
-		_, err := call("create_project", map[string]any{"name": pm[2], "isolated": pm[1] != "", "description": ask, "goals": ask}, 3*time.Minute)
+		_, err := call("create_project", map[string]any{"name": pm[2], "sharing": strings.TrimSpace(pm[1]), "description": ask, "goals": ask}, 3*time.Minute)
 		if err != nil {
 			return "", err
 		}
@@ -235,6 +236,17 @@ func leadAsk(ask, system string) (string, error) {
 	}
 	if strings.Contains(strings.ToLower(ask), "what's in the repo") {
 		return "The repo has " + strings.Join(repoFiles(), ", ") + ".", nil
+	}
+	// The journal: "remember X" is written to it, "what did I ask you to
+	// remember" is answered from it, so a lead that replaced this one can too.
+	journal := filepath.Join(os.Getenv("HIVE_BOX"), "notes.md")
+	if x, ok := strings.CutPrefix(ask, "remember "); ok {
+		appendFile(journal, "- promised: "+x+"\n")
+		return "Noted.", nil
+	}
+	if strings.Contains(ask, "you to remember") {
+		notes, _ := os.ReadFile(journal)
+		return "From my journal: " + strings.TrimSpace(string(notes)), nil
 	}
 	if f := strings.Fields(ask); len(f) == 2 && f[0] == "recheck" {
 		out, err := call("recheck", map[string]string{"task": f[1]}, time.Minute)

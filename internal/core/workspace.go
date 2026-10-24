@@ -95,6 +95,8 @@ type Config struct {
 	// StallFloorSeconds: nothing counts as stalled before this long without moving,
 	// however fast its stage usually is here; 0 is the default (20 minutes).
 	StallFloorSeconds int `json:"stall_floor_seconds,omitempty"`
+	// ShareBundleURL is where `hive share` sends its bundle; empty is the developer's endpoint.
+	ShareBundleURL string `json:"share_bundle_url,omitempty"`
 }
 
 // ProjectSettings override workspace defaults per project.
