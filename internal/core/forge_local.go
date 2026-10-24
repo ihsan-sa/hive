@@ -228,10 +228,27 @@ func (l *Local) GetPR(repo string, number int) (PR, error) {
 		p := &s.PRs[repo][i]
 		if p.Number == number {
 			l.refresh(repo, p)
-			return p.PR, nil
+			out := p.PR
+			out.Body = p.Body
+			return out, nil
 		}
 	}
 	return PR{}, ErrNotFound
+}
+
+// SetDraft marks a PR a draft or ready, as a reader outside the Hive would.
+func (l *Local) SetDraft(repo string, number int, draft bool) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	for i := range s.PRs[repo] {
+		if p := &s.PRs[repo][i]; p.Number == number {
+			p.Draft = draft
+			l.save(s)
+			return nil
+		}
+	}
+	return ErrNotFound
 }
 
 // MergePR squashes the PR's head onto main, refusing if the head moved.
@@ -253,6 +270,9 @@ func (l *Local) MergePR(repo string, number int, sha, subject string) (string, e
 		l.refresh(repo, p)
 		if p.HeadSHA != sha {
 			return "", fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+		}
+		if p.Draft {
+			return "", fmt.Errorf("PR #%d: %w", number, ErrDraft)
 		}
 		tmp, err := os.MkdirTemp("", "hive-localmerge-")
 		if err != nil {
