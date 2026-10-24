@@ -246,6 +246,10 @@ func (e *Effects) NewCheckout(p Project, id, base string) (string, error) {
 // ErrNoChanges means the checkout has no commits past its base.
 var ErrNoChanges = errors.New("no new commits")
 
+// ErrNotDescendant means the run's newest commit doesn't build on its base,
+// as when a worker rewinds past a commit already merged.
+var ErrNotDescendant = errors.New("does not descend from its base")
+
 // Extract takes a run's commits out of its checkout. The bundle is made from
 // inside the sandbox (the checkout's git metadata is the agent's to shape, so
 // host git never runs in it), then fetched into the host clone with object
@@ -320,7 +324,7 @@ func (e *Effects) ExtractInto(dir, lockKey string, r Run, base string) (string, 
 			return "", ErrNoChanges
 		}
 		if _, err := Git(dir, "merge-base", "--is-ancestor", base, sha); err != nil {
-			return "", fmt.Errorf("commit %s does not descend from main at %s; refusing it", short(sha), short(base))
+			return "", fmt.Errorf("commit %s does not descend from main at %s; refusing it: %w", short(sha), short(base), ErrNotDescendant)
 		}
 	}
 	return sha, nil
@@ -740,8 +744,11 @@ func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.rea
 
 // UpdateBranch merges main into the reviewed commit in a clean host checkout.
 // The result is host-made, so the verdict on the reviewed commit carries, but
-// it is tested again before it can merge.
-func (e *Effects) UpdateBranch(p Project, sha, mainSHA string) (string, error) {
+// it is tested again before it can merge. A base names the commit the merge
+// is taken from instead of the common ancestor: the branch's own commit that
+// main already holds as a squashed checkpoint, so only what came after it is
+// laid onto main.
+func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, error) {
 	dir, err := e.cleanCheckout(p, sha, "update")
 	if err != nil {
 		return "", err
@@ -750,7 +757,25 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA string) (string, error) {
 	if _, err := Git(dir, "fetch", "-q", "origin", mainSHA); err != nil {
 		return "", err
 	}
-	if _, err := Git(dir, "merge", "-q", "--no-edit", "-m", "Merge main into this branch", mainSHA); err != nil {
+	if base != "" {
+		// Exit status 1 is a conflict; anything else (such as a git older
+		// than 2.40, without --merge-base) is an error, not the worker's to fix.
+		tree, err := Git(dir, "merge-tree", "--write-tree", "--merge-base="+base, sha, mainSHA)
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return "", ErrConflict
+		}
+		if err != nil {
+			return "", fmt.Errorf("git merge-tree --merge-base (needs git 2.40 or later): %w", err)
+		}
+		c, err := Git(dir, "commit-tree", tree, "-p", sha, "-p", mainSHA, "-m", "Merge main into this branch")
+		if err == nil {
+			_, err = Git(dir, "reset", "-q", "--hard", c)
+		}
+		if err != nil {
+			return "", err
+		}
+	} else if _, err := Git(dir, "merge", "-q", "--no-edit", "-m", "Merge main into this branch", mainSHA); err != nil {
 		Git(dir, "merge", "--abort")
 		return "", ErrConflict
 	}
