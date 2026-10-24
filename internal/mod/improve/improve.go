@@ -4,9 +4,13 @@
 package improve
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -55,6 +59,8 @@ type Module struct {
 
 	// OnKept is called after a merge is measured and kept.
 	OnKept func(project, sha string)
+	// Feedback lists agents' open feedback for the projects mine admits.
+	Feedback func(mine func(project string) bool) string
 
 	mu       sync.Mutex
 	scores   map[string][]Measurement
@@ -65,6 +71,9 @@ type Module struct {
 	spells   map[string]spell     // task id -> its current stage and since when
 	took     map[string][]float64 // task stage -> seconds its recent spells took
 	stalls   map[string]*Stall
+	fails    map[string][]core.Check // project -> recent red test checks that name their failing tests
+	heads    map[string][]string     // task id -> every head it had
+	merged   map[string]time.Time    // merge sha -> when it merged
 
 	stepbacks map[string]*StepBack
 	busy      map[string]bool
@@ -75,7 +84,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -92,6 +101,31 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			if s.Status == "running" {
 				m.lastSeen = e.Seq
 			}
+		case "effect.checked":
+			var c core.Check
+			if e.Decode(&c) == nil && c.Kind == "test" && !c.OK && len(c.Failed) > 0 && time.Since(c.At) < flakeWindow {
+				fs := append(m.fails[c.Project], c)
+				for len(fs) > 0 && time.Since(fs[0].At) > flakeWindow {
+					fs = fs[1:]
+				}
+				m.fails[c.Project] = fs
+			}
+		case "effect.merged":
+			var x struct {
+				MergeSHA string `json:"merge_sha"`
+			}
+			if e.Decode(&x) == nil && x.MergeSHA != "" && time.Since(e.At) < flakeWindow {
+				m.merged[x.MergeSHA] = e.At
+			}
+		case "task.saved":
+			var t work.Task
+			if e.Decode(&t) == nil {
+				for _, sha := range []string{t.SHA, t.Checkpoint} {
+					if sha != "" && !slices.Contains(m.heads[t.ID], sha) {
+						m.heads[t.ID] = append(m.heads[t.ID], sha)
+					}
+				}
+			}
 		case "stepback.saved":
 			var s StepBack
 			e.Decode(&s)
@@ -102,6 +136,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	c.J.Subscribe(apply)
 	w.OnMerged = func(t work.Task) { m.queue <- t }
 	work.BestScore = m.Best
+	work.Measured = m.measured
 	go m.measureLoop()
 	return m
 }
@@ -188,10 +223,18 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 	if tc.CantRun != "" {
 		return false, nil, "tests " + tc.CantRun + ": " + core.Clip(tc.Output, 300), true
 	}
+	flaky := "" // a red that passed when what failed ran again
 	if !tc.OK {
-		return false, nil, "tests red: " + core.Clip(tc.Output, 600), false
+		sum, flake := m.redTests(p, sha, cfg.Test, tc)
+		if !flake {
+			return false, nil, "tests red: " + sum, false
+		}
+		flaky = "tests flaky (red, then green when what failed ran again; filed to fix): " + sum + "; "
 	}
 	if cfg.Score == nil {
+		if flaky != "" {
+			return true, nil, flaky + "no score configured", false
+		}
 		return true, nil, "tests green (no score configured)", false
 	}
 	sc := m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
@@ -199,9 +242,9 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 		return false, nil, "score " + sc.CantRun + ": " + core.Clip(sc.Output, 300), true
 	}
 	if !sc.OK || sc.Score == nil {
-		return true, nil, "score did not produce a number: " + core.Clip(sc.Output, 600), false
+		return true, nil, flaky + "score did not produce a number: " + core.Clip(sc.Output, 600), false
 	}
-	return true, sc.Score, fmt.Sprintf("score %g", *sc.Score), false
+	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score), false
 }
 
 // Tick measures the starting point of projects that have none yet. A red
@@ -258,7 +301,8 @@ func (m *Module) baseline(p core.Project) {
 func (m *Module) noStart(p core.Project, ms Measurement) {
 	m.record(ms)
 	note := strings.TrimPrefix(ms.Note, "start: ")
-	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "baseline", "project": p.Name, "text": "the start of " + p.Name + " has no number yet: " + core.Clip(note, 200) + "; measuring again in 10 minutes"})
+	text, key := baselineAlert(p.Name, ms.TestsOK, note)
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "baseline", "project": p.Name, "key": key, "text": text})
 	n := 0
 	for _, x := range m.Scores(p.Name) {
 		if x.SHA == ms.SHA && !x.Kept && !x.NoResult && x.Task == "" {
@@ -315,7 +359,17 @@ func (m *Module) measureLoop() {
 // Recover re-queues merges whose measurement didn't happen (after a restart).
 func (m *Module) Recover() {
 	for _, t := range m.Work.List(func(t work.Task) bool { return t.MergeSHA != "" }) {
-		if !m.measured(t.Project, t.MergeSHA) && time.Since(t.Updated) < 7*24*time.Hour {
+		if time.Since(t.Updated) >= 7*24*time.Hour {
+			continue
+		}
+		for _, b := range t.Banks { // a checkpoint merged before the latest one
+			if b.MergeSHA != t.MergeSHA && !m.measured(t.Project, b.MergeSHA) {
+				c := t
+				c.MergeSHA = b.MergeSHA
+				m.queue <- c
+			}
+		}
+		if !m.measured(t.Project, t.MergeSHA) {
 			m.queue <- t
 		}
 	}
@@ -338,6 +392,10 @@ func (m *Module) afterMerge(t work.Task) {
 		go func() { time.Sleep(retryNoResult); m.queue <- t }()
 		return
 	}
+	flake := ""
+	if !ok {
+		flake = m.seenElsewhere(p, t)
+	}
 	k, hasBest := m.kept(p.Name)
 	best := 0.0
 	if hasBest {
@@ -354,8 +412,12 @@ func (m *Module) afterMerge(t work.Task) {
 	worse := !ok
 	reason := ""
 	switch {
+	case !ok && flake != "":
+		ms.Note = flake + "; not reverted; " + note
+		m.record(ms)
+		return
 	case !ok:
-		reason = "the tests went red after it merged"
+		reason = "the tests went red after it merged: " + strings.TrimPrefix(note, "tests red: ")
 	case cfg.Score != nil && score == nil:
 		worse, reason = true, "the score stopped producing a number"
 	case cfg.Score != nil && hasBest && !cfg.Score.WithinTolerance(*score, best):
@@ -378,7 +440,10 @@ func (m *Module) afterMerge(t work.Task) {
 		}
 		return
 	}
-	ms.Note = reason + "; " + note
+	ms.Note = reason
+	if ok {
+		ms.Note += "; " + note
+	}
 	m.record(ms)
 	if t.Kind == "revert" {
 		m.C.Person.Ask(core.Ask{Kind: "question", Ref: "revert-bad:" + t.ID, Project: p.Name,
@@ -389,6 +454,73 @@ func (m *Module) afterMerge(t work.Task) {
 	if _, err := m.Work.Revert(t, t.MergeSHA, reason); err != nil {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "revert", "project": p.Name, "text": "could not file a revert: " + err.Error()})
 	}
+}
+
+// flakeWindow is how far back a test's failures elsewhere count as a flake.
+const flakeWindow = 72 * time.Hour
+
+// seenElsewhere is, for a merge whose red tests stayed red when what failed
+// ran again (measure does that), what makes it a flake anyway: every test
+// that failed also failed on main before this one merged. Only main's own
+// checks count: a candidate's code can print any test name it likes. It
+// raises an alert for one; "" means the merge broke them.
+func (m *Module) seenElsewhere(p core.Project, t work.Task) string {
+	c, ok := m.C.Effects.GetCheck(p.Name, t.MergeSHA, "retest")
+	if !ok || c.OK {
+		c, _ = m.C.Effects.GetCheck(p.Name, t.MergeSHA, "test")
+	}
+	where := m.failedBefore(p.Name, t, c.Failed, m.C.Effects.MainLine(p))
+	if where == "" {
+		return ""
+	}
+	flake := "flaky: " + strings.Join(c.Failed, ", ") + " failed twice after it merged, but also " + where + ", without this change"
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": p.Name, "sha": t.MergeSHA, "task": t.ID,
+		"text": core.Clip(flake, 400) + " (" + p.Name + " at " + core.Short(t.MergeSHA) + "). Not reverted; the test wants steadying."})
+	return flake
+}
+
+// failedBefore says where every one of names also failed at a commit on
+// main that can't carry t's change: checked before t first merged (a
+// checkpoint counts), and none of t's own heads or checkpoints.
+// It returns "" when any of them failed only here.
+func (m *Module) failedBefore(project string, t work.Task, names []string, main map[string]bool) string {
+	if len(names) == 0 {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	merged, ok := m.merged[t.MergeSHA]
+	if !ok {
+		merged = time.Now()
+		for _, c := range m.fails[project] {
+			if c.SHA == t.MergeSHA && c.At.Before(merged) {
+				merged = c.At // measured right after it merged
+			}
+		}
+	}
+	// A checkpoint merged earlier is part of the change too: only what was
+	// checked before the task's first merge is without it.
+	for _, b := range t.Banks {
+		if at, ok := m.merged[b.MergeSHA]; ok && at.Before(merged) {
+			merged = at
+		}
+	}
+	var where []string
+	for _, n := range names {
+		found := ""
+		for _, c := range m.fails[project] {
+			if c.SHA != t.MergeSHA && main[c.SHA] && c.At.Before(merged) && !slices.Contains(m.heads[t.ID], c.SHA) && slices.Contains(c.Failed, n) {
+				found = "at " + core.Short(c.SHA)
+			}
+		}
+		if found == "" {
+			return ""
+		}
+		if !slices.Contains(where, found) {
+			where = append(where, found)
+		}
+	}
+	return "failed " + strings.Join(where, ", ")
 }
 
 // Sweeps returns notice runs, newest first.
@@ -435,7 +567,7 @@ func (m *Module) StartSweep(force bool) (Sweep, error) {
 func (m *Module) anythingNew(since int64) bool {
 	for _, e := range m.C.J.Since(since) {
 		switch e.Kind {
-		case "score.measured", "task.saved", "run.turn_ended", "chat.posted":
+		case "score.measured", "task.saved", "run.turn_ended", "chat.posted", "feedback.saved":
 			return true
 		}
 	}
@@ -465,12 +597,13 @@ func (m *Module) TickSweeps() {
 }
 
 // Digest summarizes scores, reverts, failures, chats and notes since seq,
-// across every project but the isolated ones, or from project only alone when
-// only is set. An isolated project's records reach only its own step-back.
+// across every project but the hidden (private or isolated) ones, or from
+// project only alone when only is set. A hidden project's records reach only
+// its own step-back.
 func (m *Module) Digest(since int64, only string) string {
 	isolated := map[string]bool{}
 	for _, p := range m.C.Projects.List() {
-		isolated[p.Name] = p.Isolated
+		isolated[p.Name] = p.Hidden()
 	}
 	mine := func(project string) bool { return project == only || only == "" && !isolated[project] }
 	var b strings.Builder
@@ -547,6 +680,11 @@ func (m *Module) Digest(since int64, only string) string {
 			fmt.Fprintf(&b, "### %s %s\n%s\n\n", r.Role, r.ID, core.Clip(string(notes), 1500))
 		}
 	}
+	if m.Feedback != nil {
+		if fb := m.Feedback(mine); fb != "" {
+			b.WriteString("## Agents' feedback on the Hive, still open\n\n" + fb + "\n")
+		}
+	}
 	b.WriteString("## Recent chat\n\n")
 	for _, ch := range m.Chat.Chats() {
 		if !mine(ch.Project) {
@@ -561,4 +699,60 @@ func (m *Module) Digest(since int64, only string) string {
 		}
 	}
 	return b.String()
+}
+
+// baselineAlert gives the text and dedup key of a start with no number. A
+// missing program is keyed on its plain-words cause; any other failure on the
+// whole note (the clipped, one-line check output) with digits blanked, so a
+// repeat with fresh timings refreshes one alert while a different failure is a
+// new one, even under a long fixed header like pytest's session banner.
+func baselineAlert(project string, testsOK bool, note string) (text, key string) {
+	kind := "test"
+	if testsOK {
+		kind = "score"
+	}
+	if why := MissingTool(project, kind, note); why != "" {
+		return why + " Measuring again in 10 minutes.", why
+	}
+	return "the start of " + project + " has no number yet: " + core.Clip(note, 200) + "; measuring again in 10 minutes", kind + ": " + failureCause(note)
+}
+
+var digits = regexp.MustCompile(`\d+`)
+
+// failureCause is a short digest of a failure note with runs of digits
+// blanked, so timings and counts don't make a new cause.
+func failureCause(note string) string {
+	sum := sha256.Sum256([]byte(digits.ReplaceAllString(strings.Join(strings.Fields(note), " "), "#")))
+	return hex.EncodeToString(sum[:8])
+}
+
+// notFound matches the shell's program-not-found lines (dash "sh: 1: X: not
+// found", bash "bash: line 1: X: command not found") and the line Hive's own
+// guard prints when a program lookup finds nothing.
+var notFound = regexp.MustCompile(`(?m)(?:^|\s)(?:\S*/)?(?:ba|da)?sh: (?:line )?(?:\d+: )?([^\s:]+): (?:command )?not found|hive: missing program: ([^\n]+)`)
+
+// MissingTool says in plain words which program the test or score command
+// (kind) could not start, and how to get it, or "" when the output shows no
+// such failure. A name starting with "-" means the command began with an empty
+// program.
+func MissingTool(project, kind, out string) string {
+	m := notFound.FindStringSubmatch(out)
+	if m == nil {
+		return ""
+	}
+	so := "so " + project + "'s tests can't run"
+	if kind == "score" {
+		so = "so " + project + "'s score can't be measured"
+	}
+	if tool := m[1] + m[2]; !strings.HasPrefix(tool, "-") {
+		return tool + " isn't installed, " + so + ". " + getIt(tool)
+	}
+	return "the " + kind + " command for " + project + " started with no program (an interpreter variable came out empty, so the interpreter it looks for isn't installed), " + so + ". " + getIt("the interpreter it needs")
+}
+
+// getIt says how the person gets a missing program onto the machine: install
+// it themselves, or ask the lead, whose agent may be able to install it into
+// the Hive's own tools or ask a warden to run the install.
+func getIt(tool string) string {
+	return "Install " + tool + " on this machine, or ask the lead in chat: an agent may be able to install it for the Hive's checks, or ask a warden to run the install for you."
 }

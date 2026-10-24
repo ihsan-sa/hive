@@ -3,6 +3,7 @@ package release
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,13 +44,13 @@ func serveAll(t *testing.T, latest string, byTag map[string]map[string]string, l
 		case !strings.HasPrefix(p, "/me/hive/releases/download/") || !known:
 			http.NotFound(w, r)
 		case name == "checksums.txt":
-			for name, body := range assets {
-				h := sha256.Sum256([]byte(body))
-				if lie {
-					h[0]++
-				}
-				w.Write([]byte(hex.EncodeToString(h[:]) + "  " + name + "\n"))
+			w.Write(checksums(assets, lie))
+		case name == SigName && signWith != nil:
+			sig, err := Sign(signWith, signFor+tag, checksums(assets, lie))
+			if err != nil {
+				t.Error(err)
 			}
+			w.Write([]byte(sig + "\n"))
 		case assets[name] != "":
 			w.Write([]byte(assets[name]))
 		default:
@@ -60,6 +61,24 @@ func serveAll(t *testing.T, latest string, byTag map[string]map[string]string, l
 	site, api, rels := Site, API, releases
 	t.Cleanup(func() { Site, API, releases = site, api, rels })
 	Site, API = srv.URL, srv.URL
+}
+
+// signWith is the seed the release site signs with, none when nil; signFor
+// prefixes the tag it signs for.
+var signWith []byte
+var signFor string
+
+// checksums is a checksums.txt over assets, in name order.
+func checksums(assets map[string]string, lie bool) []byte {
+	var b strings.Builder
+	for _, name := range slices.Sorted(maps.Keys(assets)) {
+		h := sha256.Sum256([]byte(assets[name]))
+		if lie {
+			h[0]++
+		}
+		b.WriteString(hex.EncodeToString(h[:]) + "  " + name + "\n")
+	}
+	return []byte(b.String())
 }
 
 // releaseAt is the release module in a build stamped version, following repo,
@@ -78,9 +97,10 @@ func releaseAt(t *testing.T, version, repo string) (*Module, string) {
 	}
 	exe := filepath.Join(dir, AssetName(runtime.GOOS, runtime.GOARCH))
 	os.WriteFile(exe, []byte("old"), 0o755)
-	v, e := core.Version, executable
-	t.Cleanup(func() { core.Version, executable = v, e })
+	v, e, try := core.Version, executable, tryBinary
+	t.Cleanup(func() { core.Version, executable, tryBinary = v, e, try })
 	core.Version, executable = version, func() string { return exe }
+	tryBinary = func(string, string) error { return nil } // the binaries are text
 	return &Module{C: c}, exe
 }
 
@@ -577,5 +597,135 @@ func TestLateAnswerWaitsForTheRelease(t *testing.T) {
 	<-done
 	if n.calls != 1 || m.C.Effects.Approved("release", "hive", "m2") || !journaled(m, "release.superseded") {
 		t.Fatalf("the late answer should be superseded: %d releases, m2 approved %v", n.calls, m.C.Effects.Approved("release", "hive", "m2"))
+	}
+}
+
+// A release is cut as a pre-release and becomes the latest only once ci and
+// update pass on its commit; a red run keeps it a pre-release and raises one
+// alert, and a re-run that passes publishes it.
+func TestReleasePublishesOnlyAfterItsGates(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	latest := func() core.Release {
+		t.Helper()
+		rel, err := n.LatestRelease("me/hive")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rel
+	}
+	if rel := latest(); rel.Tag != "v0.0.1" || !rel.Prerelease {
+		t.Fatalf("the release wasn't cut as a pre-release: %+v", rel)
+	}
+	alerts := func() (k int) {
+		m.C.J.Replay(func(e core.Event) {
+			if e.Kind == "alert.raised" && strings.Contains(string(e.Data), "v0.0.1") {
+				k++
+			}
+		})
+		return k
+	}
+	run := func(name, status, conclusion string) core.WorkflowRun {
+		return core.WorkflowRun{Name: name, Status: status, Conclusion: conclusion, URL: "https://ci/" + name}
+	}
+	steps := []struct {
+		runs   []core.WorkflowRun
+		says   string
+		pre    bool
+		alerts int
+	}{
+		{nil, "waiting for ci (no run yet), update (no run yet)", true, 0},
+		{[]core.WorkflowRun{run("update", "in_progress", ""), run("ci", "completed", "success")}, "waiting for update", true, 0},
+		{[]core.WorkflowRun{run("update", "completed", "failure"), run("ci", "completed", "success")}, "update failure (https://ci/update)", true, 1},
+		{[]core.WorkflowRun{run("update", "completed", "failure"), run("ci", "completed", "success")}, "update failure", true, 1},
+		// a re-run: the newest run of each workflow counts
+		{[]core.WorkflowRun{run("update", "completed", "success"), run("update", "completed", "failure"), run("ci", "completed", "success")}, "published v0.0.1", false, 1},
+		{nil, "nothing to publish", false, 1},
+	}
+	for i, s := range steps {
+		n.SetReleaseRuns("me/hive", "m1", s.runs...)
+		got := m.Publish()
+		if !strings.Contains(got, s.says) || latest().Prerelease != s.pre || alerts() != s.alerts {
+			t.Fatalf("step %d: Publish said %q; pre-release %v; %d alerts; want %q, %v, %d", i, got, latest().Prerelease, alerts(), s.says, s.pre, s.alerts)
+		}
+	}
+	// The next release numbers on from the newest, a pre-release included.
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	if rel := latest(); rel.Tag != "v0.0.2" || !rel.Prerelease {
+		t.Fatalf("the next release is %+v", rel)
+	}
+}
+
+// Of the pre-releases waiting, the newest that passed is published; an older
+// one still waiting stays a pre-release and is no longer checked.
+func TestPublishSkipsOlderPreReleases(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	for i, sha := range []string{"m1", "m2"} {
+		merged(i+1, "a"+sha, sha)
+		land("a"+sha, "r"+sha)
+		m.AfterKept("hive", sha)
+	}
+	green := []core.WorkflowRun{{Name: "ci", Status: "completed", Conclusion: "success"}, {Name: "update", Status: "completed", Conclusion: "success"}}
+	n.SetReleaseRuns("me/hive", "m2", green...)
+	if got := m.Publish(); got != "published v0.0.2" {
+		t.Fatalf("Publish said %q", got)
+	}
+	n.SetReleaseRuns("me/hive", "m1", green...)
+	if got := m.Publish(); got != "nothing to publish" {
+		t.Fatalf("an older release would be published over a newer one: %q", got)
+	}
+	if rel, _ := n.LatestRelease("me/hive"); rel.Tag != "v0.0.2" || rel.Prerelease {
+		t.Fatalf("latest is %+v", rel)
+	}
+}
+
+// The person marked v0.1.3 the latest after v0.1.4 to v0.1.6 went out as
+// pre-releases: the next release takes v0.1.7, not v0.1.4 again (which
+// GitHub refuses as taken).
+func TestReleaseNumbersPastEveryTag(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	for _, tag := range []string{"v0.1.4", "v0.1.6", "v0.1.5", "probe-1"} {
+		n.AddRelease("me/hive", core.Release{Tag: tag, Prerelease: true})
+	}
+	n.AddRelease("me/hive", core.Release{Tag: "v0.1.3"})
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	if rel, _ := n.LatestRelease("me/hive"); rel.Tag != "v0.1.7" || !rel.Prerelease {
+		t.Fatalf("the next release is %+v; want the pre-release v0.1.7", rel)
+	}
+}
+
+func TestNextTag(t *testing.T) {
+	for _, c := range []struct {
+		tags []string
+		want string
+	}{
+		{nil, "v0.0.1"},
+		{[]string{"dev", "probe-3"}, "v0.0.1"},
+		{[]string{"v0.1.3", "v0.1.6", "v0.1.4", "v0.1.10", "v0.1.9"}, "v0.1.11"},
+		{[]string{"v0.2.0", "v0.1.9"}, "v0.2.1"},
+	} {
+		if got := nextTag(c.tags); got != c.want {
+			t.Errorf("nextTag(%v) = %s; want %s", c.tags, got, c.want)
+		}
+	}
+}
+
+// A gate run that was skipped or cancelled didn't pass: the release stays a
+// pre-release, as for a failure.
+func TestSkippedOrCancelledGateIsNotAPass(t *testing.T) {
+	m, n, _, _ := selfHive(t)
+	for _, conclusion := range []string{"skipped", "cancelled", "neutral", ""} {
+		n.SetReleaseRuns("me/hive", "m1",
+			core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"},
+			core.WorkflowRun{Name: "update", Status: "completed", Conclusion: conclusion, URL: "https://ci/update"})
+		if state, why := m.gates("me/hive", "m1"); state != "failed" || !strings.Contains(why, "update "+conclusion) {
+			t.Fatalf("update %q: %s, %s", conclusion, state, why)
+		}
 	}
 }

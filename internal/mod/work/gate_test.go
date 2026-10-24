@@ -51,6 +51,7 @@ func gateRig(t *testing.T, mainRed bool, files map[string]string) (*Module, *Tas
 	}
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
 	ws.SaveConfig(cfg)
 	forge := &core.Local{Dir: filepath.Join(dir, "forge")}
 	c, err := core.Open(ws, forge)

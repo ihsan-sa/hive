@@ -366,6 +366,49 @@ func TestPersonStopHolds(t *testing.T) {
 	}
 }
 
+// A worker the person stops in the control center (/api/run/stop) holds its
+// task: the stop marks it the person's, and a task stopped before that mark
+// existed holds too, because its worker's run says it was stopped.
+func TestPersonStoppedWorkerHolds(t *testing.T) {
+	for _, marked := range []bool{true, false} {
+		m, _, task, p := noCommitRig(t, 0)
+		if _, err := m.C.Runs.Start(core.RunSpec{ID: "w1", Role: "worker", Project: p.Name, Checkout: t.TempDir(), Harness: "fake"}); err != nil {
+			t.Fatal(err)
+		}
+		task.Worker, task.Stage = "w1", StageWorking
+		m.save(task, "working")
+		m.C.Runs.Stop("w1", "stopped by the person")
+		if marked {
+			if err := m.checkWorker(task, p); err != nil {
+				t.Fatal(err)
+			}
+			if task.Stage != StageStopped || !task.ByPerson {
+				t.Fatalf("stage %q, by person %v", task.Stage, task.ByPerson)
+			}
+		} else { // stopped before the fix: no mark on the task
+			task.Stage, task.Reason = StageStopped, "worker stopped: stopped by the person"
+			m.save(task, task.Reason)
+		}
+		for _, back := range []string{"", "try again"} {
+			if err := m.Recheck(task.ID, back); err == nil || !strings.Contains(err.Error(), "by the person") {
+				t.Fatalf("marked %v: recheck %q got %v", marked, back, err)
+			}
+		}
+		if r, _ := m.C.Runs.Get("w1"); r.Status != core.StatusStopped {
+			t.Fatalf("marked %v: the worker was reopened: %s", marked, r.Status)
+		}
+		if err := m.C.Runs.Reopen("w1", "try again"); err == nil {
+			t.Fatal("a stopped run was reopened")
+		}
+		if err := m.Retry(task.ID); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := m.Get(task.ID); got.ByPerson || got.Stage != StageQueued {
+			t.Fatalf("the person's retry should hand the task back: %+v", got)
+		}
+	}
+}
+
 // A lead can't recheck a task in a project walled off from it.
 func TestRecheckWalled(t *testing.T) {
 	m, _, _, _ := noCommitRig(t, 0)
@@ -390,6 +433,7 @@ func helperRig(t *testing.T) (*Module, *flakyForge, core.Project) {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
 	ws.SaveConfig(cfg)
 	forge := &flakyForge{Local: &core.Local{Dir: filepath.Join(dir, "forge")}}
 	if _, err := forge.EnsureRepo("me/p", ""); err != nil {
@@ -587,5 +631,61 @@ func TestScoredBriefCarriesTheGoal(t *testing.T) {
 	m, p = rigAt(t, `{"test":"true"}`)
 	if b := m.issueBody(task(), p); !strings.Contains(b, "score above 3.139") {
 		t.Fatalf("unscored issue body:\n%s", b)
+	}
+}
+
+// A review's brief ends with main's standing rules, lessons included, so a
+// revert the Hive made (no worker brief to quote them) still carries them; a
+// project with none of the files gets nothing appended.
+func TestReviewRulesFromMain(t *testing.T) {
+	m, p := rigAt(t, `{"test":"true"}`)
+	if r := m.reviewRules(p, "HEAD"); r != "" {
+		t.Fatalf("no rule files, yet: %q", r)
+	}
+	dir := m.C.WS.Project(p.Name)
+	os.MkdirAll(filepath.Join(dir, "docs"), 0o755)
+	os.WriteFile(filepath.Join(dir, "docs/REVIEW.md"), []byte("# Review\n\nsimple wins\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".hive/goals.md"), []byte("# Goals\n\nship it\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".hive/lessons.md"), []byte("# Lessons\n\n- don't do that again\n"), 0o644)
+	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "rules"}} {
+		if out, err := core.Git(dir, args...); err != nil {
+			t.Fatal(out, err)
+		}
+	}
+	r := m.reviewRules(p, "HEAD")
+	i, j, k := strings.Index(r, "## `docs/REVIEW.md` on main\n\n# Review\n\nsimple wins"), strings.Index(r, "## `.hive/goals.md` on main"), strings.Index(r, "## `.hive/lessons.md` on main\n\n# Lessons\n\n- don't do that again")
+	if i < 0 || j < i || k < j {
+		t.Fatalf("rules:\n%s", r)
+	}
+}
+
+// Advice from a land is filed once, when the task merges: a step repeated
+// after a restart files no second brief, a follow-up's own advice files none,
+// and on a scored project the follow-up keeps its done line.
+func TestFollowUpOnceAfterMerge(t *testing.T) {
+	m, p := rigAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`)
+	tk := &Task{ID: "t9", Project: "p", Title: "add a helper", Kind: "work", Stage: StageMerged, Reviewer: "r-t9", Advice: []string{"name it better"}}
+	follows := func() []Task { return m.List(func(x Task) bool { return x.FollowUp != "" }) }
+	if err := m.followUp(tk, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.followUp(tk, p); err != nil { // the restart: still merged, filed already
+		t.Fatal(err)
+	}
+	fs := follows()
+	if len(fs) != 1 || fs[0].FollowUp != "t9" || fs[0].From != "r-t9" || !strings.Contains(fs[0].Known, "name it better") {
+		t.Fatalf("follow-ups: %+v", fs)
+	}
+	fu := fs[0]
+	if d := doneFor(&fu, true); !strings.Contains(d, "judged not worth doing") {
+		t.Fatalf("the follow-up lost its done line: %q", d)
+	}
+	keepAdvice(&fu, []string{"and again"})
+	if len(fu.Advice) != 0 {
+		t.Fatalf("a follow-up kept advice, so the chain goes on: %v", fu.Advice)
+	}
+	keepAdvice(tk, []string{" name it better ", "", "test it"}) // a second read repeats one item
+	if strings.Join(tk.Advice, "|") != "name it better|test it" {
+		t.Fatalf("advice: %q", tk.Advice)
 	}
 }

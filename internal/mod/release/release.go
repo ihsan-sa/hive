@@ -4,7 +4,6 @@
 package release
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -35,6 +34,13 @@ type Module struct {
 	Busy func() bool
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
+	// said holds project@tag for each pre-release whose wait or failed
+	// publish Publish has already raised in this life of the daemon.
+	said map[string]bool
+	// published is when Tick last started Publish; publishing says it runs.
+	published  time.Time
+	publishing bool
+	pmu        sync.Mutex
 }
 
 // Site serves the releases: GitHub over plain HTTPS, so updating needs no
@@ -46,6 +52,10 @@ var API = "https://api.github.com"
 
 // executable is the binary an update replaces, through any hive-v0 link.
 var executable = setup.Executable
+
+// alongside are the binaries an update installs beside this system's own:
+// Windows keeps the Linux one for inside WSL.
+var alongside = map[string][]string{"windows": {AssetName("linux", "amd64")}}
 
 var client = &http.Client{Timeout: 10 * time.Minute}
 
@@ -166,15 +176,11 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	return repo, tag, tag != "" && modules.Newer(core.Version, tag), err
 }
 
-// hasBinary errs unless the release's checksums list this platform's binary.
+// hasBinary errs unless the release's checksums are signed as this build
+// requires and list this platform's binary.
 func hasBinary(repo, tag string) error {
-	resp, err := get(repo + "/releases/download/" + tag + "/checksums.txt")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err == nil && !strings.Contains(string(raw), AssetName(runtime.GOOS, runtime.GOARCH)) {
+	sum, err := sums(repo, tag)
+	if err == nil && sum[AssetName(runtime.GOOS, runtime.GOARCH)] == "" {
 		err = fmt.Errorf("%s %s has no %s", repo, tag, AssetName(runtime.GOOS, runtime.GOARCH))
 	}
 	return err
@@ -203,30 +209,27 @@ func (m *Module) Update(tag string) (string, error) {
 		}
 		return msg, m.pin(cfg, tag, pin)
 	}
+	if !pin && m.rolledBack(tag) {
+		return tag + " was rolled back after it failed to start here; `" + core.Cmd + " update " + tag + "` tries it again", nil
+	}
 	tmp, err := os.MkdirTemp("", "hive-update-")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(tmp)
-	names := []string{AssetName(runtime.GOOS, runtime.GOARCH)}
-	if runtime.GOOS == "windows" {
-		names = append(names, AssetName("linux", "amd64")) // used inside WSL
-	}
-	if err := download(repo, tag, "checksums.txt", tmp); err != nil {
-		return "", fmt.Errorf("no release %s in %s (%v)", tag, repo, err)
-	}
-	sums, err := readSums(filepath.Join(tmp, "checksums.txt"))
+	names := append([]string{AssetName(runtime.GOOS, runtime.GOARCH)}, alongside[runtime.GOOS]...)
+	sum, err := sums(repo, tag)
 	if err != nil {
 		return "", err
 	}
 	for _, name := range names {
-		if sums[name] == "" {
+		if sum[name] == "" {
 			return "", fmt.Errorf("release %s has no %s; not installing", tag, name)
 		}
 	}
 	exe := executable()
 	dir := filepath.Dir(exe)
-	for i, name := range names {
+	for _, name := range names {
 		if err := download(repo, tag, name, tmp); err != nil {
 			return "", err
 		}
@@ -234,28 +237,69 @@ func (m *Module) Update(tag string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if sums[name] != got {
+		if sum[name] != got {
 			return "", fmt.Errorf("%s: checksum mismatch; not installing", name)
 		}
+	}
+	// An update to tag from here whose restart never came left its binaries
+	// in place; what it added has no .old and is still the update's to remove.
+	var before []string
+	if p, ok := readPending(m.C.WS); ok && p.From == core.Version && p.To == tag && p.RolledBack == "" {
+		before = p.Added
+	}
+	var paths, added []string // replaced, each with its .old beside it, and put where none was
+	for i, name := range names {
 		target := exe
 		if i > 0 {
 			target = filepath.Join(dir, name)
 		}
+		if on, _ := fileSum(target); on == sum[name] {
+			// In place already, from an update whose restart never came: its
+			// .old is still the binary to roll back to.
+			if slices.Contains(before, target) {
+				added = append(added, target)
+				continue
+			}
+			if core.Exists(target + ".old") {
+				paths = append(paths, target)
+				continue
+			}
+		}
+		fresh := !core.Exists(target)
 		if err := replace(filepath.Join(tmp, name), target); err != nil {
+			rollBack(paths, added)
 			return "", err
 		}
+		if fresh {
+			added = append(added, target)
+		} else {
+			paths = append(paths, target)
+		}
+	}
+	if err := tryBinary(exe, tag); err != nil {
+		if e := rollBack(paths, added); e != nil {
+			return "", fmt.Errorf("%s doesn't run here (%v), and putting %s back failed: %v", tag, err, core.Version, e)
+		}
+		return "", fmt.Errorf("%s doesn't run here (%v); kept %s", tag, err, core.Version)
+	}
+	if err := writePending(m.C.WS, pending{From: core.Version, To: tag, Paths: paths, Added: added}); err != nil {
+		return "", err
 	}
 	if err := m.pin(cfg, tag, pin); err != nil {
 		return "", err
 	}
 	notes := Notes(repo, core.Version, tag)
-	m.C.J.MustAppend("hive.updated", map[string]string{"from": core.Version, "to": tag, "notes": notes})
+	unsigned := PublicKey == ""
+	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned})
 	if m.Restart != nil {
 		go func() { time.Sleep(time.Second); m.Restart() }()
 	}
 	msg := "updated to " + tag
 	if pin {
 		msg += ", pinned there with auto-update off: `" + core.Cmd + " update` goes back to the newest"
+	}
+	if unsigned {
+		msg += "\n\n" + Unsigned
 	}
 	return msg + "\n\n" + notes, nil
 }
@@ -368,16 +412,10 @@ func replace(src, dst string) error {
 	return nil
 }
 
-func readSums(path string) (map[string]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+func parseSums(raw []byte) (map[string]string, error) {
 	out := map[string]string{}
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
 		if len(fields) == 2 {
 			out[strings.TrimPrefix(fields[1], "*")] = fields[0]
 		}
@@ -385,7 +423,7 @@ func readSums(path string) (map[string]string, error) {
 	if len(out) == 0 {
 		return nil, errors.New("empty checksums.txt")
 	}
-	return out, sc.Err()
+	return out, nil
 }
 
 func fileSum(path string) (string, error) {
@@ -462,15 +500,16 @@ func (m *Module) afterKept(project, sha string) {
 			return
 		}
 	}
-	last := "v0.0.0"
-	if rel, err := m.C.Effects.Forge.LatestRelease(p.Repo); err == nil && rel.Tag != "" {
-		last = rel.Tag
+	// The next tag is one past the highest anywhere: the release marked
+	// latest may be older than pre-releases, and their tags are taken.
+	tags, err := m.C.Effects.Forge.Tags(p.Repo)
+	if err != nil {
+		alert("no release at " + core.Short(sha) + ": can't list the tags: " + err.Error())
+		return
 	}
-	if strings.HasPrefix(core.Version, "v") && modules.Newer(last, core.Version) {
-		last = core.Version
-	}
-	next := bump(last)
-	body := "Released by the Hive after " + core.Short(sha) + " kept its tests and dry run green.\n\nWhat was read:\n\n" + manifest.String()
+	next := nextTag(append(tags, core.Version))
+	body := "Released by the Hive after " + core.Short(sha) + " kept its tests and dry run green. It is a pre-release until " +
+		strings.Join(Gates, " and ") + " pass on that commit; then it is the latest, which installs follow.\n\nWhat was read:\n\n" + manifest.String()
 	if approved {
 		body += "\nThe person released it.\n"
 	}
@@ -478,7 +517,7 @@ func (m *Module) afterKept(project, sha string) {
 		alert("release failed: " + err.Error())
 		return
 	}
-	m.C.J.MustAppend("hive.released", map[string]string{"project": project, "tag": next, "sha": sha})
+	m.C.J.MustAppend("hive.released", map[string]any{"project": project, "tag": next, "sha": sha, "prerelease": true})
 	f, up := m.C.Effects.Forge, m.C.WS.LoadConfig().ReleaseRepo
 	if p.Repo == up {
 		return
@@ -592,6 +631,153 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 		return nil, "it is not a merge the Hive made"
 	}
 	return all[from : at+1], ""
+}
+
+// Gates are the workflows that must pass in a release's own runs, on its
+// commit, before Publish makes it the latest.
+var Gates = []string{"ci", "update"}
+
+// lateAfter is how long a pre-release waits for its gates before it is raised.
+const lateAfter = 6 * time.Hour
+
+// publishEvery is how often Tick checks the Hive's pre-releases.
+const publishEvery = 10 * time.Minute
+
+// Tick runs Publish every publishEvery, in the background.
+func (m *Module) Tick() {
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	if m.publishing || time.Since(m.published) < publishEvery {
+		return
+	}
+	m.published, m.publishing = time.Now(), true
+	go func() {
+		m.Publish()
+		m.pmu.Lock()
+		m.publishing = false
+		m.pmu.Unlock()
+	}()
+}
+
+// Publish runs from Tick and says what it did. AfterKept cuts each release
+// as a pre-release, which installs and auto-update don't follow; once every gate
+// passed on its commit, Publish makes it the latest. Of the pre-releases cut
+// since the last one published, the newest that passed is published and
+// older ones stay pre-releases. A failed gate leaves the release a
+// pre-release and raises an alert once; it is still checked, so a re-run
+// that passes publishes it, until a newer release is published.
+func (m *Module) Publish() string {
+	type cand struct {
+		Project, Tag, SHA string
+		At                time.Time
+	}
+	var cands []cand
+	failed := map[string]bool{}
+	m.C.J.Replay(func(e core.Event) {
+		var x struct {
+			Project, Tag, SHA string
+			Prerelease        bool
+		}
+		if e.Decode(&x) != nil {
+			return
+		}
+		switch e.Kind {
+		case "hive.released":
+			if x.Prerelease { // one cut before releases waited for their gates is published already
+				cands = append(cands, cand{x.Project, x.Tag, x.SHA, e.At})
+			}
+		case "hive.published":
+			cands = slices.DeleteFunc(cands, func(c cand) bool { return c.Project == x.Project && !modules.Newer(x.Tag, c.Tag) })
+		case "release.failed":
+			failed[x.Project+"@"+x.Tag] = true
+		}
+	})
+	if m.said == nil {
+		m.said = map[string]bool{}
+	}
+	alert := func(c cand, text string) {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": c.Project, "ref": "release:" + c.Tag, "text": text})
+	}
+	var out []string
+	done, checked := map[string]bool{}, map[string]int{}
+	for i := len(cands) - 1; i >= 0; i-- {
+		c, key := cands[i], cands[i].Project+"@"+cands[i].Tag
+		p, ok := m.C.Projects.Get(c.Project)
+		if !ok || done[c.Project] || checked[c.Project] >= 5 {
+			continue // an older one stays a pre-release
+		}
+		checked[c.Project]++
+		state, why := m.gates(p.Repo, c.SHA)
+		switch state {
+		case "passed":
+			if err := m.C.Effects.Forge.PublishRelease(p.Repo, c.Tag); err != nil {
+				if !m.said[key] {
+					m.said[key] = true
+					alert(c, "publishing "+c.Tag+" failed: "+err.Error())
+				}
+				out = append(out, c.Tag+": "+err.Error())
+				continue
+			}
+			m.C.J.MustAppend("hive.published", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA})
+			done[c.Project] = true
+			out = append(out, "published "+c.Tag)
+		case "failed":
+			if !failed[key] {
+				m.C.J.MustAppend("release.failed", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA, "why": why})
+				alert(c, c.Tag+" stays a pre-release, so installs stay where they are: "+why+". A re-run that passes publishes it.")
+			}
+			out = append(out, c.Tag+": "+why)
+		default:
+			if time.Since(c.At) > lateAfter && !m.said[key] {
+				m.said[key] = true
+				alert(c, c.Tag+" is still a pre-release after "+lateAfter.String()+": "+why)
+			}
+			out = append(out, c.Tag+": "+why)
+		}
+	}
+	if len(out) == 0 {
+		return "nothing to publish"
+	}
+	return strings.Join(out, "; ")
+}
+
+// gates says "passed" when every gate passed in the release runs at sha,
+// else "failed" or "waiting", and why.
+func (m *Module) gates(repo, sha string) (state, why string) {
+	runs, err := m.C.Effects.Forge.ReleaseRuns(repo, sha)
+	if err != nil {
+		return "waiting", "can't read its runs (" + core.Clip(err.Error(), 200) + ")"
+	}
+	var bad, wait []string
+	for _, g := range Gates {
+		i := slices.IndexFunc(runs, func(r core.WorkflowRun) bool { return r.Name == g })
+		switch {
+		case i < 0:
+			wait = append(wait, g+" (no run yet)")
+		case runs[i].Status != "completed":
+			wait = append(wait, g)
+		case runs[i].Conclusion != "success":
+			bad = append(bad, g+" "+runs[i].Conclusion+" ("+runs[i].URL+")")
+		}
+	}
+	switch {
+	case len(bad) > 0:
+		return "failed", strings.Join(bad, ", ")
+	case len(wait) > 0:
+		return "waiting", "waiting for " + strings.Join(wait, ", ")
+	}
+	return "passed", ""
+}
+
+// nextTag is one past the highest vX.Y.Z among tags (v0.0.1 if none is).
+func nextTag(tags []string) string {
+	last := "v0.0.0"
+	for _, t := range tags {
+		if strings.HasPrefix(t, "v") && modules.Newer(last, t) {
+			last = t
+		}
+	}
+	return bump(last)
 }
 
 func bump(tag string) string {

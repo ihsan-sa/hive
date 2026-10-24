@@ -173,10 +173,10 @@ func (x *term) goTo(label string) {
 	x.until(10*time.Second, "focus leaving the sidebar", func(s string) bool { return !strings.Contains(s, "tab switch pane") })
 }
 
-// sections walks the sidebar through all six sections, back to Chats, and checks each frame.
+// sections walks the sidebar through all seven sections, back to Chats, and checks each frame.
 func (x *term) sections(w, h int) {
 	x.t.Helper()
-	for _, name := range []string{"Dashboard", "Waiting", "Knowledge", "Modules", "Settings", "Chats"} {
+	for _, name := range []string{"Dashboard", "Waiting", "Feedback", "Knowledge", "Modules", "Settings", "Chats"} {
 		x.goTo(name)
 		if name != "Chats" {
 			x.wait(10*time.Second, "│   "+name)
@@ -260,7 +260,7 @@ func TestControlCenterInTmux(t *testing.T) {
 	// harness, as a person's own settings would point it at Claude Code.
 	cfg := ws.LoadConfig()
 	cfg.Harness = "fake"
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
 	for k := range cfg.Schedules {
 		cfg.Schedules[k] = "off"
 	}

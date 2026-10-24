@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -82,8 +83,49 @@ var cgroupFile = "/proc/self/cgroup"
 
 // InUnit reports whether this process runs in the Hive's systemd user unit.
 func InUnit() bool {
+	name, user := Unit()
+	return user && name == "hive.service"
+}
+
+// Unit names the systemd service this process runs in, from its cgroup, and
+// whether it is a user unit; name is "" outside any service.
+func Unit() (name string, user bool) {
 	raw, _ := os.ReadFile(cgroupFile)
-	return strings.Contains(string(raw), "/hive.service")
+	for _, line := range strings.Split(string(raw), "\n") {
+		parts := strings.SplitN(line, ":", 3) // v2 "0::/path", v1 "1:name=systemd:/path"
+		if len(parts) < 3 || parts[1] != "" && parts[1] != "name=systemd" {
+			continue
+		}
+		path := parts[2]
+		if base := path[strings.LastIndex(path, "/")+1:]; strings.HasSuffix(base, ".service") {
+			return base, strings.Contains(path, "/user@")
+		}
+	}
+	return "", false
+}
+
+// UnitSettings reads a unit's Restart=, KillMode= and MainPID=, empty (0)
+// where systemctl can't say. A process in the unit's cgroup that isn't its
+// main process, such as one started from a shell in tmux.service, isn't what
+// the unit supervises.
+func UnitSettings(name string, user bool) (restart, killMode string, mainPID int) {
+	args := []string{"show", "-p", "Restart", "-p", "KillMode", "-p", "MainPID", name}
+	if user {
+		args = append([]string{"--user"}, args...)
+	}
+	out, _ := exec.Command("systemctl", args...).Output()
+	for _, line := range strings.Split(string(out), "\n") {
+		k, v, _ := strings.Cut(strings.TrimSpace(line), "=")
+		switch k {
+		case "Restart":
+			restart = v
+		case "KillMode":
+			killMode = v
+		case "MainPID":
+			mainPID, _ = strconv.Atoi(v)
+		}
+	}
+	return restart, killMode, mainPID
 }
 
 // RestartUnit rewrites the unit to start exe and has systemd restart it. A

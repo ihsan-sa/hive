@@ -44,6 +44,9 @@ type Effects struct {
 
 	locks sync.Map
 
+	// Slots holds checks to config's max_checks at a time, started in the order they asked.
+	Slots *Slots
+
 	mu        sync.Mutex
 	checks    map[string]Check
 	verdicts  map[string]Verdict
@@ -61,6 +64,8 @@ type Check struct {
 	Score   *float64  `json:"score,omitempty"`
 	Output  string    `json:"output"`
 	CantRun string    `json:"cant_run,omitempty"` // why the command couldn't start (a missing tool): no verdict on the commit
+	Log     string    `json:"log,omitempty"`      // the full output on the host, when it ran
+	Failed  []string  `json:"failed,omitempty"`   // the failing tests it names, read before the output is clipped
 	At      time.Time `json:"at"`
 }
 
@@ -72,6 +77,7 @@ type Verdict struct {
 	Verdict  string    `json:"verdict"` // land | fix
 	Summary  string    `json:"summary"`
 	Findings []Finding `json:"findings,omitempty"`
+	Advice   []string  `json:"advice,omitempty"` // with a land: worth doing later, not a blocker
 }
 
 // Finding is one thing the reviewer wants fixed.
@@ -94,6 +100,7 @@ type HostCommit struct {
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
 		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}}
+	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
 	apply := func(ev Event) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -170,7 +177,7 @@ func (e *Effects) Sync(p Project) (string, error) {
 	}
 	defer e.lock(p.Name)()
 	dir := e.ws.Project(p.Name)
-	if _, err := GitT(5*time.Minute, dir, "fetch", "-q", "--prune", "origin"); err != nil {
+	if _, err := GitEnvT(5*time.Minute, dir, ghEnv(p.Repo), "fetch", "-q", "--prune", "origin"); err != nil {
 		return "", err
 	}
 	sha, err := Git(dir, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+p.Branch)
@@ -181,6 +188,20 @@ func (e *Effects) Sync(p Project) (string, error) {
 		return "", err
 	}
 	return sha, nil
+}
+
+// MainLine is the set of commits main has been at in the host clone: its
+// first-parent history, without the branches merged into it.
+func (e *Effects) MainLine(p Project) map[string]bool {
+	out, err := Git(e.ws.Project(p.Name), "rev-list", "--first-parent", "refs/remotes/origin/"+p.Branch)
+	if err != nil {
+		return nil
+	}
+	line := map[string]bool{}
+	for _, sha := range strings.Fields(out) {
+		line[sha] = true
+	}
+	return line
 }
 
 // Config reads .hive/project.json at a commit (defaults if absent).
@@ -247,6 +268,10 @@ func (e *Effects) NewCheckout(p Project, id, base string) (string, error) {
 
 // ErrNoChanges means the checkout has no commits past its base.
 var ErrNoChanges = errors.New("no new commits")
+
+// ErrNotDescendant means the run's newest commit doesn't build on its base,
+// as when a worker rewinds past a commit already merged.
+var ErrNotDescendant = errors.New("does not descend from its base")
 
 // Extract takes a run's commits out of its checkout. The bundle is made from
 // inside the sandbox (the checkout's git metadata is the agent's to shape, so
@@ -322,7 +347,7 @@ func (e *Effects) ExtractInto(dir, lockKey string, r Run, base string) (string, 
 			return "", ErrNoChanges
 		}
 		if _, err := Git(dir, "merge-base", "--is-ancestor", base, sha); err != nil {
-			return "", fmt.Errorf("commit %s does not descend from main at %s; refusing it", short(sha), short(base))
+			return "", fmt.Errorf("commit %s does not descend from main at %s; refusing it: %w", short(sha), short(base), ErrNotDescendant)
 		}
 	}
 	return sha, nil
@@ -334,7 +359,7 @@ func (e *Effects) Push(p Project, branch, sha string) error {
 		return fmt.Errorf("the effects process only pushes hive/* branches, not %q", branch)
 	}
 	defer e.lock(p.Name)()
-	if _, err := GitT(5*time.Minute, e.ws.Project(p.Name), "push", "-q", "-f", "origin", sha+":refs/heads/"+branch); err != nil {
+	if _, err := GitEnvT(5*time.Minute, e.ws.Project(p.Name), ghEnv(p.Repo), "push", "-q", "-f", "origin", sha+":refs/heads/"+branch); err != nil {
 		return err
 	}
 	e.j.MustAppend("effect.pushed", map[string]string{"project": p.Name, "branch": branch, "sha": sha})
@@ -363,13 +388,16 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.Output = err.Error()
 		return c // not recorded: no sandbox is not a verdict on the commit
 	}
+	defer e.Slots.Acquire(p.Name, sha, kind)()
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
 		c.Output = "could not make a clean checkout: " + err.Error()
 		return c
 	}
 	defer os.RemoveAll(dir)
-	code, out, err := e.runSandboxed(sb, p.Name, "gate-"+short(sha)+"-"+kind+"-"+NewID()[14:], []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}, command, true, 30*time.Minute)
+	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
+	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
+	code, out, err := e.runSandboxed(sb, p.Name, id, []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}, guardProgram(command), true, 30*time.Minute)
 	c.Output = out
 	if err != nil {
 		c.Output = err.Error() + "\n" + out
@@ -379,6 +407,9 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	if tool := MissingTool(code, out); tool != "" {
 		c.CantRun = "can't run: " + tool + " is not installed where checks run"
 		return record()
+	}
+	if (kind == "test" || kind == "retest") && !c.OK {
+		c.Failed = FailedTests(out)
 	}
 	if kind == "score" && c.OK {
 		v, perr := scoreOf(out)
@@ -416,6 +447,20 @@ func noVerdict(c Check) bool {
 	return c.CantRun != "" || (!c.OK && missingTool.MatchString(c.Output))
 }
 
+var failedTest = regexp.MustCompile(`(?m)^\s*--- FAIL: (\S+)|^FAILED (\S+)`)
+
+// FailedTests names the failing tests in a test command's output, as Go's
+// test runner ("--- FAIL: TestX") and pytest ("FAILED path::test") print them.
+func FailedTests(out string) []string {
+	var names []string
+	for _, m := range failedTest.FindAllStringSubmatch(out, -1) {
+		if n := m[1] + m[2]; !slices.Contains(names, n) && len(names) < 50 {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
 // scoreOf reads the score from a score command's output: the last word of
 // the last line ("score: 42"), or failing that the one line that is a number
 // alone, so a bench can print its result and then per-run detail. Two such
@@ -437,6 +482,33 @@ func scoreOf(out string) (float64, error) {
 		return alone[0], nil
 	}
 	return 0, errors.New("no number")
+}
+
+var (
+	lookupProgram = regexp.MustCompile(`^(\s*([A-Za-z_]\w*)=\$\(([^()]*)\)\s*;)\s*"?\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))(?:["\s;]|$)`)
+	lookedUp      = regexp.MustCompile(`command -v\s+([\w.+-]+)`)
+)
+
+// guardProgram stops a command whose program is a variable set by a lookup
+// (PY=$(command -v python || command -v python3); $PY -m ...) when the lookup
+// finds nothing, so the shell never runs the arguments as the program. Only the
+// first statement's assignment followed by a bare $VAR or ${VAR} as the program
+// is recognised: ${VAR:-default} has its own fallback, and a later use (after a
+// cd, say) is not guarded.
+func guardProgram(command string) string {
+	s := lookupProgram.FindStringSubmatch(command)
+	if s == nil || s[2] != s[4]+s[5] {
+		return command
+	}
+	var names []string
+	for _, n := range lookedUp.FindAllStringSubmatch(s[3], -1) {
+		names = append(names, n[1])
+	}
+	missing := strings.Join(names, " or ")
+	if missing == "" {
+		missing = "the program in " + s[2]
+	}
+	return s[1] + ` [ -n "$` + s[2] + `" ] || { echo "hive: missing program: ` + missing + `" >&2; exit 127; };` + command[len(s[1]):]
 }
 
 // cleanCheckout clones the host clone fresh and checks out sha.
@@ -619,24 +691,26 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	}
 	c := Change{Base: base}
 	// No renames: a move out of a protected path must show as its deletion.
-	stat, err := Git(dir, "diff", "--numstat", "--no-renames", base, sha)
+	// Unquoted and NUL-split, so a name git would quote (é, a tab, a quote)
+	// is read as the path it is and can't slip past a guard.
+	stat, err := Git(dir, "-c", "core.quotePath=false", "diff", "--numstat", "-z", "--no-renames", base, sha)
 	if err != nil {
 		return c, err
 	}
-	cfg := e.Config(p, mainSHA)
-	protected := append([]string{".hive/project.json", ".hive/goals.md"}, cfg.Protected...)
+	cfg := e.Config(p, mainSHA).Guarded(p)
+	protected := append([]string{".hive/project.json", ".hive/goals.md", "docs/REVIEW.md"}, cfg.Protected...)
 	if cfg.Score != nil {
 		protected = append(protected, cfg.Score.Evaluator()...)
 	}
 	docsOnly := true
-	for _, l := range strings.Split(stat, "\n") {
-		f := strings.Fields(l)
-		if len(f) < 3 {
+	for _, l := range strings.Split(stat, "\x00") {
+		f := strings.SplitN(l, "\t", 3)
+		if len(f) < 3 || f[2] == "" {
 			continue
 		}
 		add, _ := strconv.Atoi(f[0])
 		del, _ := strconv.Atoi(f[1])
-		file := strings.Join(f[2:], " ")
+		file := f[2]
 		c.Files = append(c.Files, file)
 		c.Lines += add + del
 		if under(file, protected) {
@@ -657,7 +731,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && !p.Self
 	c.Diff, _ = Git(dir, "diff", base, sha)
 	if len(c.Protected) > 0 {
-		c.ProtectedDiff, _ = Git(dir, append([]string{"diff", "--no-renames", base, sha, "--"}, c.Protected...)...)
+		c.ProtectedDiff, _ = Git(dir, append([]string{"--literal-pathspecs", "diff", "--no-renames", base, sha, "--"}, c.Protected...)...)
 	}
 	return c, nil
 }
@@ -744,8 +818,11 @@ func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.rea
 
 // UpdateBranch merges main into the reviewed commit in a clean host checkout.
 // The result is host-made, so the verdict on the reviewed commit carries, but
-// it is tested again before it can merge.
-func (e *Effects) UpdateBranch(p Project, sha, mainSHA string) (string, error) {
+// it is tested again before it can merge. A base names the commit the merge
+// is taken from instead of the common ancestor: the branch's own commit that
+// main already holds as a squashed checkpoint, so only what came after it is
+// laid onto main.
+func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, error) {
 	dir, err := e.cleanCheckout(p, sha, "update")
 	if err != nil {
 		return "", err
@@ -754,7 +831,25 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA string) (string, error) {
 	if _, err := Git(dir, "fetch", "-q", "origin", mainSHA); err != nil {
 		return "", err
 	}
-	if _, err := Git(dir, "merge", "-q", "--no-edit", "-m", "Merge main into this branch", mainSHA); err != nil {
+	if base != "" {
+		// Exit status 1 is a conflict; anything else (such as a git older
+		// than 2.40, without --merge-base) is an error, not the worker's to fix.
+		tree, err := Git(dir, "merge-tree", "--write-tree", "--merge-base="+base, sha, mainSHA)
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return "", ErrConflict
+		}
+		if err != nil {
+			return "", fmt.Errorf("git merge-tree --merge-base (needs git 2.40 or later): %w", err)
+		}
+		c, err := Git(dir, "commit-tree", tree, "-p", sha, "-p", mainSHA, "-m", "Merge main into this branch")
+		if err == nil {
+			_, err = Git(dir, "reset", "-q", "--hard", c)
+		}
+		if err != nil {
+			return "", err
+		}
+	} else if _, err := Git(dir, "merge", "-q", "--no-edit", "-m", "Merge main into this branch", mainSHA); err != nil {
 		Git(dir, "merge", "--abort")
 		return "", ErrConflict
 	}
@@ -829,10 +924,10 @@ func (e *Effects) PushInitial(p Project, sha string) error {
 	}
 	defer e.lock(p.Name)()
 	dir := e.ws.Project(p.Name)
-	if out, _ := Git(dir, "ls-remote", "origin", "refs/heads/"+p.Branch); out != "" {
+	if out, _ := GitEnvT(2*time.Minute, dir, ghEnv(p.Repo), "ls-remote", "origin", "refs/heads/"+p.Branch); out != "" {
 		return errors.New("repository is not empty; changes go through a pull request")
 	}
-	_, err := Git(dir, "push", "-q", "origin", sha+":refs/heads/"+p.Branch)
+	_, err := GitEnvT(5*time.Minute, dir, ghEnv(p.Repo), "push", "-q", "origin", sha+":refs/heads/"+p.Branch)
 	return err
 }
 

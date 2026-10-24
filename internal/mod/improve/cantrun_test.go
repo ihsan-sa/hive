@@ -51,7 +51,7 @@ func TestMissingToolIsNoResult(t *testing.T) {
 func TestRealFailureIsStillRed(t *testing.T) {
 	m, merge := scored(t)
 	ms := merge(map[string]string{".hive/project.json": `{"test": "echo broken; exit 1", "score": {"command": "sh ./score.sh", "direction": "higher"}}`})
-	if ms.NoResult || ms.Kept || ms.TestsOK || !strings.Contains(ms.Note, "tests red") {
+	if ms.NoResult || ms.Kept || ms.TestsOK || !strings.Contains(ms.Note, "red") {
 		t.Fatalf("a failing test should be red: %+v", ms)
 	}
 	if n := len(m.Work.List(func(t work.Task) bool { return t.Kind == "revert" })); n != 1 {
