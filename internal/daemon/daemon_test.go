@@ -83,7 +83,10 @@ func TestStartWaitsOutAHandOff(t *testing.T) {
 	port := srv.Listener.Addr().(*net.TCPAddr).Port
 	defer func(f func() (string, error)) { executable = f }(executable)
 	executable = func() (string, error) { return "", errors.New("started a daemon of its own") }
-	go func() { time.Sleep(500 * time.Millisecond); write(api.DaemonInfo{PID: os.Getpid(), Port: port, Token: "t"}) }()
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		write(api.DaemonInfo{PID: os.Getpid(), Port: port, Token: "t"})
+	}()
 	c, err := Start(ws)
 	if err != nil || c.Info.Port != port {
 		t.Fatalf("Start during a hand-off: %+v, %v; want the new daemon", c, err)
