@@ -80,6 +80,7 @@ func cleanEnv() []string {
 type Child struct {
 	Name    string // "candidate" or "control"
 	Src     string // the checkout the binary was built from
+	Eval    string // the evaluator: the checkout whose tests and benchmark judge the binary, the same for both sides
 	Bin     string
 	Root    string // everything the child writes is under here
 	Repo    string // the child's org test repository, if the run has an org
@@ -144,7 +145,7 @@ func (c *Child) Command(ctx context.Context, dir string, argv ...string) *exec.C
 		if h := os.Getenv("HOME"); h != "" && h != c.Home() {
 			args = append(args, "--tmpfs", h)
 		}
-		writable := []string{c.Root, c.Src, os.Getenv("GOCACHE"), os.Getenv("GOMODCACHE")}
+		writable := []string{c.Root, c.Src, c.Eval, os.Getenv("GOCACHE"), os.Getenv("GOMODCACHE")}
 		seen := map[string]bool{}
 		for _, w := range writable {
 			if w != "" && !seen[w] {

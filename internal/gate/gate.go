@@ -15,6 +15,7 @@ type Config struct {
 	Repo      string   // git repository (path or URL) of the Hive's source
 	Head      string   // the candidate's exact commit
 	Base      string   // the current Hive's commit: the control
+	Eval      string   // the commit whose e2e tests and benchmark judge both sides (default Base); a candidate never grades itself
 	CandBin   string   // a prebuilt candidate binary (skips building Head; a self-test)
 	CtrlBin   string   // a prebuilt control binary
 	Out       string   // where the run's files and report go
@@ -132,6 +133,22 @@ func Run(cfg Config) (rep Report, err error) {
 		}
 	}
 
+	// Both sides are judged by one evaluator, taken from Eval (the base by
+	// default), so a candidate cannot change the tests or the benchmark that
+	// grade it.
+	if cand.Src != "" || ctrl.Src != "" {
+		evalSHA := cfg.Eval
+		if evalSHA == "" {
+			evalSHA = cfg.Base
+		}
+		eval := &Child{Name: "evaluator"}
+		cfg.log("fetching the evaluator at %s", short(evalSHA))
+		if err = checkout(cfg, eval, evalSHA); err != nil {
+			return rep, fmt.Errorf("evaluator: %v", err)
+		}
+		cand.Eval, ctrl.Eval = eval.Src, eval.Src
+	}
+
 	// Each side gets its own fresh org repository, made once the builds passed
 	// and removed when the run ends, however it ends.
 	made := 0
@@ -203,6 +220,34 @@ func build(cfg Config, c *Child, sha string) error {
 	if sha == "" {
 		return fmt.Errorf("no commit given")
 	}
+	if err := checkout(cfg, c, sha); err != nil {
+		return err
+	}
+	run := gitRun
+	if out, err := run(c.Src, "go", "vet", "./..."); err != nil {
+		return fmt.Errorf("go vet: %s", tail(out, 600))
+	}
+	if out, err := run(c.Src, "go", "test", "-short", "./..."); err != nil {
+		return fmt.Errorf("go test -short: %s", tail(out, 600))
+	}
+	c.Bin = filepath.Join(cfg.Out, "bin-"+c.Name)
+	if out, err := run(c.Src, "go", "build", "-o", c.Bin, "./cmd/hive"); err != nil {
+		return fmt.Errorf("go build: %s", tail(out, 600))
+	}
+	return nil
+}
+
+func gitRun(dir string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	// The build is the gate's own work, not a child's: it needs the Go caches under HOME, and no credentials.
+	cmd.Env = append(cleanEnv(), "HOME="+os.Getenv("HOME"), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// checkout clones the repository clean into c.Src at exactly sha.
+func checkout(cfg Config, c *Child, sha string) error {
 	c.Src = filepath.Join(cfg.Out, "src-"+c.Name)
 	run := func(dir string, name string, args ...string) (string, error) {
 		cmd := exec.Command(name, args...)
@@ -224,16 +269,6 @@ func build(cfg Config, c *Child, sha string) error {
 	}
 	if st, _ := run(c.Src, "git", "status", "--porcelain"); strings.TrimSpace(st) != "" {
 		return fmt.Errorf("checkout is not clean: %s", tail(st, 200))
-	}
-	if out, err := run(c.Src, "go", "vet", "./..."); err != nil {
-		return fmt.Errorf("go vet: %s", tail(out, 600))
-	}
-	if out, err := run(c.Src, "go", "test", "-short", "./..."); err != nil {
-		return fmt.Errorf("go test -short: %s", tail(out, 600))
-	}
-	c.Bin = filepath.Join(cfg.Out, "bin-"+c.Name)
-	if out, err := run(c.Src, "go", "build", "-o", c.Bin, "./cmd/hive"); err != nil {
-		return fmt.Errorf("go build: %s", tail(out, 600))
 	}
 	return nil
 }

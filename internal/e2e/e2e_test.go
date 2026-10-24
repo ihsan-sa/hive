@@ -49,6 +49,13 @@ func TestMain(m *testing.M) {
 		name += ".exe"
 	}
 	bin = filepath.Join(dir, name)
+	if pre := os.Getenv("HIVE_E2E_BIN"); pre != "" {
+		// The gate's evaluator: this tree's tests against another tree's binary.
+		bin = pre
+		code := m.Run()
+		os.RemoveAll(dir)
+		os.Exit(code)
+	}
 	root, _ := exec.Command("go", "env", "GOMOD").Output()
 	cmd := exec.Command("go", "build", "-o", bin, "./cmd/hive")
 	cmd.Dir = filepath.Dir(strings.TrimSpace(string(root)))

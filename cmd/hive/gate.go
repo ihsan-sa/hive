@@ -14,7 +14,7 @@ import (
 )
 
 const gateUsage = `usage: hive gate --repo <git> --head <sha> --base <sha> [--org Hive-RSI-Lab | --local-org <dir>]
-                 [--reps 3] [--bench 4] [--probes daemon,org,e2e,benchmark,recurse] [--depth 1]
+                 [--eval <sha, default base>] [--reps 3] [--bench 4] [--probes daemon,org,e2e,benchmark,recurse] [--depth 1]
                  [--lessons .hive/lessons.md] [--allow-tie] [--install <path>] [--out <dir>]
        hive gate --self-test [--out <dir>]      the gate on a trivial change, inside a child
        hive gate install --bin <new> --target <path> [--version <v>]
@@ -36,7 +36,7 @@ func cmdGate(args []string) int {
 		return 0
 	}
 	fs := flag.NewFlagSet("gate", flag.ContinueOnError)
-	repo, head, base := fs.String("repo", "", ""), fs.String("head", "", ""), fs.String("base", "", "")
+	repo, head, base, eval := fs.String("repo", "", ""), fs.String("head", "", ""), fs.String("base", "", ""), fs.String("eval", "", "")
 	org, localOrg, tokenFile := fs.String("org", "", ""), fs.String("local-org", "", ""), fs.String("org-token-file", "", "")
 	reps, bench, depth := fs.Int("reps", 3, ""), fs.Int("bench", 4, ""), fs.Int("depth", 1, "")
 	probes, lessons, out, install := fs.String("probes", "", ""), fs.String("lessons", "", ""), fs.String("out", "", ""), fs.String("install", "", "")
@@ -45,7 +45,7 @@ func cmdGate(args []string) int {
 		fmt.Fprintln(os.Stderr, gateUsage)
 		return 2
 	}
-	cfg := gate.Config{Repo: *repo, Head: *head, Base: *base, Out: *out, Reps: *reps, Bench: *bench, Depth: *depth, Lessons: *lessons,
+	cfg := gate.Config{Repo: *repo, Head: *head, Base: *base, Eval: *eval, Out: *out, Reps: *reps, Bench: *bench, Depth: *depth, Lessons: *lessons,
 		Options: gate.Options{AllowTie: *tie}, Log: func(s string) { fmt.Fprintln(os.Stderr, "gate:", s) }}
 	if *probes != "" {
 		cfg.Probes = strings.Split(*probes, ",")

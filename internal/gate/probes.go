@@ -85,13 +85,15 @@ func probeOrg(cfg *Config, c *Child) Result {
 
 var failed = regexp.MustCompile(`(?m)^--- FAIL: (\S+)`)
 
-// probeE2E is the e2e suite of the checkout the child was built from, run
-// against the child's own binary.
+// probeE2E is the evaluator's e2e suite (the base's tests, the same for both
+// sides) run against the child's own binary.
 func probeE2E(cfg *Config, c *Child) Result {
-	if c.Src == "" {
-		return Result{Pass: true, Detail: "prebuilt binary: no checkout to test"}
+	if c.Eval == "" {
+		return Result{Pass: true, Detail: "prebuilt binary: no evaluator to test with"}
 	}
-	out, err := c.Exec(time.Hour, c.Src, "go", "test", "./internal/e2e/", "-count=1", "-timeout", "50m")
+	c.Extra = []string{"HIVE_E2E_BIN=" + c.Bin}
+	defer func() { c.Extra = nil }()
+	out, err := c.Exec(time.Hour, c.Eval, "go", "test", "./internal/e2e/", "-count=1", "-timeout", "50m")
 	if err != nil {
 		names := failed.FindAllStringSubmatch(out, -1)
 		var fs []string
@@ -109,10 +111,10 @@ var benchLine = regexp.MustCompile(`(?m)^BENCH (\{.*\})$`)
 // TestBenchmark in internal/e2e) and measures what the child got done: the
 // score, the asks finished, wall time and cost.
 func probeBenchmark(cfg *Config, c *Child) Result {
-	if c.Src == "" {
+	if c.Eval == "" {
 		return Result{Pass: true, Detail: "prebuilt binary: no benchmark to run"}
 	}
-	env := []string{fmt.Sprintf("HIVE_BENCH=%d", cfg.Bench)}
+	env := []string{fmt.Sprintf("HIVE_BENCH=%d", cfg.Bench), "HIVE_E2E_BIN=" + c.Bin}
 	for _, k := range []string{"HIVE_E2E_HARNESS", "HIVE_E2E_SANDBOX"} {
 		if v := os.Getenv(k); v != "" {
 			env = append(env, k+"="+v)
@@ -120,7 +122,7 @@ func probeBenchmark(cfg *Config, c *Child) Result {
 	}
 	c.Extra = env
 	defer func() { c.Extra = nil }()
-	out, err := c.Exec(2*time.Hour, c.Src, "go", "test", "./internal/e2e/", "-run", "^TestBenchmark$", "-count=1", "-v", "-timeout", "100m")
+	out, err := c.Exec(2*time.Hour, c.Eval, "go", "test", "./internal/e2e/", "-run", "^TestBenchmark$", "-count=1", "-v", "-timeout", "100m")
 	m := benchLine.FindStringSubmatch(out)
 	if m == nil {
 		return Result{Detail: "no BENCH line: " + tail(out, 300)}
