@@ -113,7 +113,8 @@ func (m *Module) ensureRepo() {
 	}
 	// An isolated project's notes stay out of git, where history would keep them.
 	os.MkdirAll(filepath.Join(dir, ".git", "info"), 0o755)
-	os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("/isolated/\n"), 0o644)
+	// SeedSelf's new and set-aside copies of the Hive's source are never notes.
+	os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("/isolated/\n/"+selfStage+"/\n/"+selfAside+"/\n"), 0o644)
 	if fresh {
 		core.Git(dir, "add", "-A")
 		core.Git(dir, "commit", "-q", "-m", "Start the knowledge base")

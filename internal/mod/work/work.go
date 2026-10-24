@@ -6,6 +6,7 @@
 package work
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -102,8 +103,9 @@ type Task struct {
 	// .hive (a file in its worker's run), so a later round or the lead reads
 	// it without asking the forge again.
 	ForgeLog string `json:"forge_log,omitempty"`
-	// MainWait is when a red check first waited on main's run of it at
-	// MainWaitOn, so a run on main that never finishes holds it only so long.
+	// MainWait is when a red check on head MainWaitOn first waited on
+	// main's run of it, so a run on main that never finishes holds it only
+	// so long, however often main moves meanwhile.
 	MainWait   time.Time `json:"main_wait,omitempty"`
 	MainWaitOn string    `json:"main_wait_on,omitempty"`
 	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
@@ -115,9 +117,11 @@ type Task struct {
 	IssueOpen  bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
 	Noted      string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
 	NotedDiff  string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
-	Log        []Entry   `json:"log,omitempty"`
-	Created    time.Time `json:"created"`
-	Updated    time.Time `json:"updated"`
+	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
+	Gate    *core.GateResult `json:"gate,omitempty"`
+	Log     []Entry          `json:"log,omitempty"`
+	Created time.Time        `json:"created"`
+	Updated time.Time        `json:"updated"`
 }
 
 // A Bank is a merged checkpoint: its pull request and the merge on main.
@@ -173,11 +177,15 @@ type Module struct {
 	// OnMerged is called after a task's merge is recorded (the improve module measures).
 	OnMerged func(t Task)
 
+	// Gate runs the recursive gate on a self project's head (selfgate.go);
+	// unset, such a change can't be judged and waits.
+	Gate func(ctx context.Context, j GateJob) core.GateResult
+
 	mu    sync.Mutex
 	tasks map[string]*Task
 	busy  map[string]bool
 	// areaCache holds the paths each brief names (queue.go).
-	areaCache map[string][]string
+	areaCache map[string]areaEntry
 	steps     sync.WaitGroup // the steps Tick started that are still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
@@ -205,6 +213,10 @@ type Module struct {
 	// holdPolled when each one's release condition may next be asked of the forge.
 	holds      map[string]*MergeHold
 	holdPolled map[string]time.Time
+	// gating is the recursive gate run in flight, if any (selfgate.go), and
+	// gateCantRun the last run per project and main that couldn't run.
+	gating      *gateRun
+	gateCantRun map[string]core.GateResult
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
 	// gate is shut.
@@ -215,7 +227,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string][]string{}, mainRed: map[string]bool{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -781,14 +793,15 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	if cfg.Score != nil && t.From != "hive" { // as checkpoint() skips the Hive's own setup brief
 		b.WriteString("- Commit each gain as you make it: a commit that beats the best kept score is tested, read and merged into main as a checkpoint while you keep working on top of it.\n")
 	}
-	if lessons := m.C.Effects.ReadFile(p, base, ".hive/lessons.md"); strings.TrimSpace(lessons) != "" {
-		lines := strings.Split(strings.TrimSpace(lessons), "\n")
+	{
+		lessons := m.C.Effects.ReadFile(p, base, ".hive/lessons.md")
 		var items []string
-		for _, l := range lines {
+		for _, l := range strings.Split(strings.TrimSpace(lessons), "\n") {
 			if strings.HasPrefix(strings.TrimSpace(l), "- ") {
 				items = append(items, l)
 			}
 		}
+		items = append(items, m.gateLessons(p, lessons)...)
 		if len(items) > 12 {
 			items = items[len(items)-12:]
 		}
@@ -1568,6 +1581,11 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if wait, err := m.forgeChecks(t, p, main); wait || err != nil {
 		return err
 	}
+	// Last, as it takes longest and only a change that passed the rest is
+	// worth a child Hive's time.
+	if wait, err := m.recursiveGate(t, p, main); wait || err != nil {
+		return err
+	}
 	if why := m.MergeHeld(p.Name, t.PR.Number); why != "" {
 		m.hold(t, p, why)
 		return nil
@@ -1782,19 +1800,22 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	}
 	var shared, byName []string
 	var mainRuns []core.CheckRun
+	var at map[string]string
 	if st == core.CheckFail {
-		if mainRuns, err = m.C.Effects.Forge.Checks(p.Repo, main); err != nil {
+		if mainRuns, at, err = m.C.Effects.MainAnswer(p, main, which); err != nil {
 			return true, err
 		}
 		st, which, shared, byName = core.ChecksAgainstMain(runs, mainRuns, req, m.C.Effects.FailingTests(p.Repo))
 	}
 	if st == core.CheckFail {
-		// A check main hasn't finished at the very commit t is based on can't
-		// tell yet whether the red is the change's or main's: wait for it,
-		// rather than spend a round on what may be main's own.
+		// A check no recent commit of main has finished can't tell yet
+		// whether the red is the change's or main's: wait for it, rather than
+		// spend a round on what may be main's own. The wait is timed from
+		// t's head, not main's: a main that moves on (and cancels its last
+		// run) must not hold t for good.
 		if still := stillOnMain(which, mainRuns); len(still) > 0 {
-			if t.MainWaitOn != main {
-				t.MainWait, t.MainWaitOn = time.Now().UTC(), main
+			if t.MainWaitOn != t.SHA {
+				t.MainWait, t.MainWaitOn = time.Now().UTC(), t.SHA
 			}
 			if time.Since(t.MainWait) < mainWaitMax {
 				m.hold(t, p, "waiting on main: the forge's checks "+core.CheckNames(still)+" fail on "+core.Short(t.SHA)+" and still run on main at "+core.Short(main)+", whose result says whether the red is the change's")
@@ -1830,7 +1851,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			hint = "\n\nIf the log shows a flake rather than your change, `hive agent rerun-checks` runs the failed jobs again and finishing again without a commit waits for them."
 		}
 		findings := forgeFailed + core.Short(t.SHA) + ": " + checkDetail(which) + onMain
-		detail := m.forgeFailures(t, p, main, which, mainRuns)
+		detail := m.forgeFailures(t, p, main, which, mainRuns, at)
 		return true, m.sendBackWith(t, p, findings+hint, detail)
 	}
 	// Said once per head and main: a merge hold or a failed merge brings t
@@ -1878,7 +1899,7 @@ const forgeFailuresFile = "forge-failures.md"
 // token (a worker holds none). The whole is saved under the task's worker
 // run; what it returns, for the worker's message (and so the journal), leaves
 // the logs in that file, and carries them only when the file can't be written.
-func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mainRuns []core.CheckRun) string {
+func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mainRuns []core.CheckRun, at map[string]string) string {
 	var whole, short strings.Builder
 	both := func(format string, a ...any) {
 		fmt.Fprintf(&whole, format, a...)
@@ -1900,7 +1921,11 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		default:
 			both("Failing tests: %s\n", strings.Join(f.Tests, ", "))
 		}
-		both("On main at %s: %s\n", core.Short(main), m.onMain(p, r.Name, mainRuns))
+		if sha := at[r.Name]; sha != "" {
+			both("On main at %s (the newest commit whose run of it finished; at %s it was cancelled or still runs): %s\n", core.Short(sha), core.Short(main), m.onMain(p, r.Name, mainRuns))
+		} else {
+			both("On main at %s: %s\n", core.Short(main), m.onMain(p, r.Name, mainRuns))
+		}
 		if f.Excerpt != "" {
 			logs++
 			// The log is CI's output, not the Hive's: fenced as data, with a

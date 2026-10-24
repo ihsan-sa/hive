@@ -95,6 +95,8 @@ func run(args []string) int {
 		return agentcli.Main(args)
 	case "fake-agent":
 		return fakeagent.Main(args)
+	case "fake-codex":
+		return fakeagent.Codex(args)
 	case "open-agent":
 		return openagent.Main(args)
 	case "open-key":
@@ -592,6 +594,9 @@ func cmdStatus() int {
 			}
 		}
 		fmt.Printf("\nagents: %d live\n", live)
+		for _, why := range st.Held {
+			fmt.Printf("  new turns %s\n", text.Visible(why))
+		}
 		for _, p := range st.Plans {
 			fmt.Println(planLine(p, time.Now()))
 		}

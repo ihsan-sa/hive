@@ -225,6 +225,26 @@ func TestModelIsAPickList(t *testing.T) {
 	}
 }
 
+// The release channel is a pick-list with a way back to the default.
+func TestChannelIsAPickList(t *testing.T) {
+	m := testModel(80, 24)
+	m.section = secSettings
+	m.st.Config.Channel = "latest"
+	for i, s := range m.settings() {
+		if s.key == "channel" {
+			m.setSel = i
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.picking || m.settings()[m.setSel].choices[m.pickSel] != "latest" {
+		t.Fatalf("enter on the channel should open its list at latest (picking %v, sel %d)", m.picking, m.pickSel)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.Update(tea.KeyMsg{Type: tea.KeyEnter}); m.picking || m.st.Config.Channel != "" {
+		t.Fatalf("default should clear the channel, got %q", m.st.Config.Channel)
+	}
+}
+
 func TestMarkdown(t *testing.T) {
 	src := "Use **bold** and `code` and [hive](https://x.io).\n- one item\n- two\n```\nfunc main() {}\n```"
 	got := strings.Join(markdown(src, 60), "\n")
@@ -972,6 +992,13 @@ func TestRouteIsAPickList(t *testing.T) {
 		!slices.Contains(cur.choices, "remove claude:opus") || !slices.Contains(cur.choices, "add kimi") || !slices.Contains(cur.choices, "add claude:sonnet") {
 		t.Fatalf("picking %v, choices %q", m.picking, cur.choices)
 	}
+	// Any role can go on Codex from a Claude Hive.
+	if !slices.Contains(cur.choices, "add codex:"+harness.Models("codex")[0]) {
+		t.Fatalf("no Codex model to route to: %q", cur.choices)
+	}
+	if w := routeEdit(c, "warden", "add codex:gpt-5.5"); w.Check() != nil || w.Route("warden", "")[1] != (core.Pick{Harness: "codex", Model: "gpt-5.5"}) {
+		t.Fatalf("warden on Codex: %v (%v)", w.Route("warden", ""), w.Check())
+	}
 	c = routeEdit(c, "worker", "add kimi")
 	if !slices.Equal(c.Routes["worker"], []string{"claude:opus", "kimi"}) {
 		t.Fatalf("add after the model it runs on now: %v", c.Routes["worker"])
@@ -1017,6 +1044,31 @@ func TestSettingChangesAtOnce(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.st.Config.LeadModel != modelChoices(m.st.Config)[1] {
 		t.Fatalf("lead model %q after picking %q", m.st.Config.LeadModel, modelChoices(m.st.Config)[1])
+	}
+}
+
+// A project can run on its own harness, picked in Settings; "default" goes
+// back to the workspace's.
+func TestProjectHarnessSetting(t *testing.T) {
+	m := testModel(80, 24)
+	m.section = secSettings
+	key := "project-harness:" + m.st.Projects[0].Name
+	for i, s := range m.settings() {
+		if s.key == key {
+			m.setSel = i
+		}
+	}
+	if s := m.settings()[m.setSel]; s.key != key || !slices.Contains(s.choices, "codex") {
+		t.Fatalf("no Codex in %q's harness choices: %+v", key, s)
+	}
+	p := m.st.Projects[0].Name
+	m.saveSetting("codex")
+	if got := m.st.Config.Route("worker", p)[0].Harness; got != "codex" {
+		t.Fatalf("project worker on %q", got)
+	}
+	m.saveSetting("default")
+	if got := m.st.Config.Projects[p].Harness; got != "" {
+		t.Fatalf("default left %q", got)
 	}
 }
 
@@ -1105,5 +1157,18 @@ func TestReleaseText(t *testing.T) {
 		if got := releaseText(c.st); got != c.want {
 			t.Errorf("%+v: %q, want %q", c.st, got, c.want)
 		}
+	}
+}
+
+// The "done for you" head counts what came in the last day, so a quiet notice
+// isn't lost among the recent ones.
+func TestToldHeadCountsTheLastDay(t *testing.T) {
+	now := time.Now()
+	told := []core.Ask{{Asked: now.Add(-time.Hour)}, {Asked: now.Add(-48 * time.Hour)}}
+	if got := toldHead(told, now); got != "done for you (1 in the last day, 2 recent)" {
+		t.Fatalf("head: %q", got)
+	}
+	if got := toldHead(told[1:], now); got != "done for you (1 recent)" {
+		t.Fatalf("head: %q", got)
 	}
 }
