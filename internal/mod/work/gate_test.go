@@ -1,6 +1,7 @@
 package work
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -227,5 +228,48 @@ func TestGateWaitThenConflict(t *testing.T) {
 	}
 	if task.Stage != StageWorking || task.Reason != "" {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
+// A PR left as a draft for a read outside the Hive waits for it: no failure is
+// counted, it isn't brought up to date or tested again while main moves, and
+// it merges once marked ready.
+func TestDraftWaitsForItsRead(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageMerging {
+		t.Fatalf("stage %q, log %v", task.Stage, task.Log)
+	}
+	if err := forge.SetDraft(p.Repo, task.PR.Number, true); err != nil {
+		t.Fatal(err)
+	}
+	pushMain(t, forge, map[string]string{"other.txt": "main moved\n"})
+	sha := task.SHA
+	for range 12 {
+		m.settle(task, m.step(task))
+	}
+	if task.Stage != StageMerging || task.Failures != 0 || task.SHA != sha || !strings.HasPrefix(task.Reason, draftWait+" (an outside read)") {
+		t.Fatalf("stage %q, failures %d, sha moved %v, reason %q", task.Stage, task.Failures, task.SHA != sha, task.Reason)
+	}
+	if n := strings.Count(fmt.Sprint(task.Log), draftWait); n != 1 {
+		t.Fatalf("the wait was logged %d times: %v", n, task.Log)
+	}
+	forge.SetDraft(p.Repo, task.PR.Number, false)
+	if err := m.step(task); err != nil {
+		t.Fatal(err)
+	}
+	if task.Reason != "" || task.Stage != StageTesting { // main moved meanwhile, so it's brought up to date first
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
+func TestWhoseRead(t *testing.T) {
+	if got := whoseRead("Adds a thing.\n\n- **Needs a perms read** (sandbox change)\n"); got != "Needs a perms read (sandbox change)" {
+		t.Fatalf("got %q", got)
+	}
+	if got := whoseRead("nothing said"); got != "an outside read" {
+		t.Fatalf("got %q", got)
 	}
 }

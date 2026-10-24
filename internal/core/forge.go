@@ -28,7 +28,15 @@ type PR struct {
 	HeadSHA   string `json:"head_sha"`
 	MergeSHA  string `json:"merge_sha,omitempty"`
 	Mergeable string `json:"mergeable,omitempty"`
+	// Draft is a PR left for a read outside the Hive (the goals' perms read,
+	// say); it merges once marked ready. Body is what its read is said in.
+	Draft bool   `json:"draft,omitempty"`
+	Body  string `json:"-"`
 }
+
+// ErrDraft means the pull request is a draft, so it can't merge until it is
+// marked ready.
+var ErrDraft = errors.New("the pull request is a draft, left for a read")
 
 // Forge is where code, issues and pull requests live. GitHub through the gh
 // CLI is the real one; Local is a folder-backed stand-in for tests.
@@ -399,6 +407,8 @@ type ghPR struct {
 	State       string `json:"state"`
 	HeadRefOid  string `json:"headRefOid"`
 	Mergeable   string `json:"mergeable"`
+	IsDraft     bool   `json:"isDraft"`
+	Body        string `json:"body"`
 	MergeCommit *struct {
 		Oid string `json:"oid"`
 	} `json:"mergeCommit"`
@@ -408,14 +418,14 @@ type ghPR struct {
 }
 
 func (p ghPR) pr() PR {
-	out := PR{Number: p.Number, URL: p.URL, State: p.State, HeadSHA: p.HeadRefOid, Mergeable: p.Mergeable}
+	out := PR{Number: p.Number, URL: p.URL, State: p.State, HeadSHA: p.HeadRefOid, Mergeable: p.Mergeable, Draft: p.IsDraft, Body: p.Body}
 	if p.MergeCommit != nil {
 		out.MergeSHA = p.MergeCommit.Oid
 	}
 	return out
 }
 
-const prFields = "number,url,state,headRefOid,mergeable,mergeCommit,headRepositoryOwner"
+const prFields = "number,url,state,headRefOid,mergeable,isDraft,body,mergeCommit,headRepositoryOwner"
 
 func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
 	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", prFields}
@@ -478,6 +488,9 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 	}
 	if p.HeadSHA != sha {
 		return "", fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+	}
+	if p.Draft {
+		return "", fmt.Errorf("PR #%d: %w", number, ErrDraft)
 	}
 	if _, err := gh(repo, "pr", "merge", strconv.Itoa(number), "-R", repo, "--squash", "--match-head-commit", sha, "--subject", subject); err != nil {
 		return "", err

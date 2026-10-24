@@ -233,7 +233,7 @@ func (m *model) taskLine(t work.Task) string {
 	if r, ok := m.run(t.Worker); ok && r.Progress != "" && !t.Terminal() && !t.Queued() {
 		progress = stDim.Render("  “" + core.Clip(r.Progress, 60) + "” " + ago(r.ProgressAt))
 	}
-	if t.Queued() && t.Reason != "" {
+	if (t.Queued() || t.Stage == work.StageMerging) && t.Reason != "" {
 		progress = stDim.Render("  " + core.Clip(t.Reason, 70))
 	}
 	if t.Stage == work.StageTesting && slices.ContainsFunc(m.st.Checks.Waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {

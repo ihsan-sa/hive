@@ -1398,6 +1398,19 @@ func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
 }
 
 func (m *Module) merge(t *Task, p core.Project) error {
+	// A draft waits for the read outside the Hive it was left for, before
+	// anything else: bringing it up to date would only test and read it again.
+	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
+	if err != nil {
+		return err
+	}
+	if pr.Draft {
+		return m.waitDraft(t, pr)
+	}
+	if strings.HasPrefix(t.Reason, draftWait) {
+		t.Reason = ""
+		m.save(t, "marked ready; merging")
+	}
 	main, err := m.C.Effects.Sync(p)
 	if err != nil {
 		return err
@@ -1406,6 +1419,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return err
 	}
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label()})
+	if errors.Is(err, core.ErrDraft) { // made a draft since the look above
+		return m.waitDraft(t, pr)
+	}
 	var np *core.NeedsPerson
 	if errors.As(err, &np) {
 		t.Stage = StagePerson
@@ -1439,6 +1455,34 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		m.OnMerged(*t)
 	}
 	return nil
+}
+
+const draftWait = "waiting on the read it was left as a draft for"
+
+// waitDraft parks a merge while its PR is a draft: no failure is counted, it
+// looks again every few minutes, and it merges once the PR is marked ready.
+func (m *Module) waitDraft(t *Task, pr core.PR) error {
+	t.Retry = time.Now().Add(3 * time.Minute)
+	reason := draftWait + " (" + whoseRead(pr.Body) + "); it merges once the PR is marked ready"
+	if t.Reason == reason {
+		m.save(t, "")
+		return nil
+	}
+	t.Reason = reason
+	m.save(t, reason)
+	return nil
+}
+
+// whoseRead is the PR description's line saying which read it needs, such as
+// a worker's "Needs a perms read".
+func whoseRead(body string) string {
+	for _, l := range strings.Split(body, "\n") {
+		l = strings.TrimSpace(strings.Trim(strings.NewReplacer("**", "", "__", "", "`", "").Replace(l), " \t-*>#"))
+		if low := strings.ToLower(l); strings.Contains(low, "need") && strings.Contains(low, "read") {
+			return core.Clip(l, 100)
+		}
+	}
+	return "an outside read"
 }
 
 func (m *Module) conflict(t *Task, p core.Project) error {
