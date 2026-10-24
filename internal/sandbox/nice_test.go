@@ -1,0 +1,27 @@
+package sandbox
+
+import (
+	"os/exec"
+	"runtime"
+	"slices"
+	"testing"
+)
+
+// A niced command runs under `nice -n` where there is one; at 0 it runs as it is.
+func TestNicedPrefixesArgv(t *testing.T) {
+	argv := []string{"sh", "-c", "true"}
+	if got := niced(argv, 0); !slices.Equal(got, argv) {
+		t.Errorf("nice 0: %q, want argv as it is", got)
+	}
+	got := niced(argv, 10)
+	_, err := exec.LookPath("nice")
+	if runtime.GOOS == "windows" || err != nil {
+		if !slices.Equal(got, argv) {
+			t.Errorf("no nice here: %q, want argv as it is", got)
+		}
+		return
+	}
+	if !slices.Equal(got, []string{"nice", "-n", "10", "sh", "-c", "true"}) {
+		t.Errorf("nice 10: %q", got)
+	}
+}

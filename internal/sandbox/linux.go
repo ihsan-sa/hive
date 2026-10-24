@@ -121,6 +121,12 @@ func Exec(specPath string) int {
 		return 125
 	}
 	os.Remove(specPath) // it may carry a short-lived token; don't leave it on disk
+	if s.Nice > 0 {
+		// This launcher, the init it starts and the command inherit it, so a
+		// check or a worker's turn yields the cpu to a lead's; going lower
+		// needs no privilege, and failing to is no reason not to run.
+		unix.Setpriority(unix.PRIO_PROCESS, 0, s.Nice)
+	}
 	errf := os.Stderr
 	if s.Stdout != "" {
 		if f, err := proc.OpenOutput(s.Stdout + ".err"); err == nil {

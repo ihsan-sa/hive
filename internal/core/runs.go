@@ -148,6 +148,36 @@ func (r *Run) Terminal() bool {
 	return false
 }
 
+// Lead reports a lead run: the Hive-wide lead or a project's. A lead
+// answers the person however busy the machine is: its turn starts ahead of
+// every other run's, never waits for pressure, and runs at a higher
+// scheduling priority.
+func (r *Run) Lead() bool { return r.Role == "lead" }
+
+// Nice is the Unix nice value the run's processes get (higher is lower
+// priority; a process can only go higher): the Hive-wide lead at the
+// daemon's own, a project's lead just under it, and every other role well
+// under both, so leads keep the machine when workers fill it. Checks and
+// gate runs go under all of them (CheckNice).
+func (r *Run) Nice() int {
+	switch {
+	case r.Role == "lead" && r.Project == "":
+		return 0
+	case r.Role == "lead":
+		return 2
+	}
+	return 10
+}
+
+// CheckNice is the nice value checks and gate runs get: under every run.
+const CheckNice = 15
+
+// LeadMemFloorMB is the one hold a lead's turn has: below this much
+// available memory its harness would be killed before it answered, so it
+// waits (saying why once, as run.held) rather than crash. Pressure never
+// holds a lead, and mem_floor_mb above this is for the other roles.
+const LeadMemFloorMB = 256
+
 // Paths of one run's folders.
 func (ws Workspace) RunHost(id string) string { return filepath.Join(ws.Run(id), "host") }
 func (ws Workspace) RunRO(id string) string   { return filepath.Join(ws.Run(id), "ro") }
@@ -931,20 +961,55 @@ func (rs *Runs) Interrupt(id string) bool {
 }
 
 // Tick advances every run one step: mailboxes, finished turns, due turns.
+// Leads go first, the Hive-wide lead ahead of the projects', and the other
+// runs step once every lead's step is done (or a few seconds in, should one
+// hang), so a lead's due turn starts ahead of any queued worker or review.
 func (rs *Runs) Tick(cfg Config) {
-	for _, r := range rs.List(func(r *Run) bool { return !r.Terminal() || r.Status == StatusRunning }) {
-		rs.mu.Lock()
-		if rs.busy[r.ID] {
-			rs.mu.Unlock()
-			continue
+	live := rs.List(func(r *Run) bool { return !r.Terminal() || r.Status == StatusRunning })
+	slices.SortStableFunc(live, func(a, b Run) int { return a.Nice() - b.Nice() })
+	leads := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, r := range live {
+		if !r.Lead() {
+			break
 		}
-		rs.busy[r.ID] = true
-		rs.mu.Unlock()
-		go func(r Run) {
-			defer func() { rs.mu.Lock(); delete(rs.busy, r.ID); rs.mu.Unlock() }()
-			rs.step(r, cfg)
-		}(r)
+		rs.stepAsync(r, cfg, &wg)
 	}
+	go func() { wg.Wait(); close(leads) }()
+	select {
+	case <-leads:
+	case <-time.After(5 * time.Second):
+	}
+	for _, r := range live {
+		if !r.Lead() {
+			rs.stepAsync(r, cfg, nil)
+		}
+	}
+}
+
+// stepAsync steps r in its own goroutine unless a step of it is under way.
+func (rs *Runs) stepAsync(r Run, cfg Config, wg *sync.WaitGroup) {
+	rs.mu.Lock()
+	if rs.busy[r.ID] {
+		rs.mu.Unlock()
+		return
+	}
+	rs.busy[r.ID] = true
+	rs.mu.Unlock()
+	if wg != nil {
+		wg.Add(1)
+	}
+	go func() {
+		defer func() {
+			rs.mu.Lock()
+			delete(rs.busy, r.ID)
+			rs.mu.Unlock()
+			if wg != nil {
+				wg.Done()
+			}
+		}()
+		rs.step(r, cfg)
+	}()
 }
 
 func (rs *Runs) step(r Run, cfg Config) {
@@ -1227,7 +1292,13 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	rs.launching++
 	rs.mu.Unlock()
 	defer func() { rs.mu.Lock(); rs.launching--; rs.mu.Unlock() }()
-	if why := Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax); why != "" {
+	floor, memMax, cpuMax := cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax
+	if r.Lead() {
+		// A lead answers however busy the machine is: no pressure hold, and
+		// only the floor under which its turn could not run at all.
+		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
+	}
+	if why := Strained(floor, memMax, cpuMax); why != "" {
 		// The hold keeps the run's status, so a parked run keeps its backoff
 		// and a nudged one its count; the live figures after " (" change
 		// every tick, so only a new kind of hold is journalled.
@@ -1470,6 +1541,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
 		Stdin: promptFile, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
 		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Guard: rs.ws.Guarded(), UID: os.Getuid(), GID: os.Getgid(),
+		Nice: r.Nice(),
 	}, nil
 }
 
