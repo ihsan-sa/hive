@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -121,7 +122,7 @@ func TestRenewFindsTheHarnessOffPath(t *testing.T) {
 	k := newRenewKit(t, time.Now().Add(2*time.Minute))
 	later := time.Now().Add(8 * time.Hour).Truncate(time.Millisecond)
 	k.harness(renews(later))
-	if p, err := harnessBin("claude"); err != nil || p != filepath.Join(k.bin, "claude") {
+	if p, err := k.tk.harnessBin("claude"); err != nil || p != filepath.Join(k.bin, "claude") {
 		t.Fatalf("claude is found by its full path off PATH: %q %v", p, err)
 	}
 	k.tk.Watch()
@@ -244,5 +245,125 @@ func TestRenewThatCantRunIsToldHoursAhead(t *testing.T) {
 	k.tk.Watch()
 	if k.state().Error != "" || len(k.asks()) != 0 || k.calls() != 0 {
 		t.Fatalf("once the harness is back the alert clears, with nothing renewed early: %+v", k.state())
+	}
+}
+
+// A restart reads an unresolved failure back with its count, so the same
+// broken login isn't told afresh; a harness that's back clears it.
+func TestRenewFailureSurvivesARestart(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(6*time.Hour))
+	k.skipBackoff()
+	k.tk.Watch() // the harness isn't installed: the hourly try fails
+	if n, _ := k.events("alert.raised"); n != 1 {
+		t.Fatalf("one alert, got %d", n)
+	}
+	k.tk = NewTokens(k.tk.ws)
+	k.tk.Track(k.j, k.p)
+	if s := k.state(); s.Failures != 1 || s.Error == "" {
+		t.Fatalf("the failure and its count are read back: %+v", s)
+	}
+	k.tk.Watch()
+	if n, _ := k.events("alert.raised"); n != 1 || len(k.asks()) != 1 {
+		t.Fatalf("the same failure after a restart raises nothing new: %d alerts, %d asks", n, len(k.asks()))
+	}
+	k.harness("exit 1")
+	k.skipBackoff()
+	k.tk.Watch()
+	if s := k.state(); s.Error != "" || len(k.asks()) != 0 || k.calls() != 0 {
+		t.Fatalf("a harness back after a restart clears the restored failure: %+v", s)
+	}
+}
+
+// A login renewed by hand after a failed renewal clears the failure at the
+// next look, without waiting for the Hive's own next renewal.
+func TestRenewedByHandClearsTheFailure(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(3*time.Minute))
+	k.harness(`echo "refresh token revoked" >&2; exit 1`)
+	k.tk.Watch()
+	if len(k.asks()) != 1 {
+		t.Fatal("the failure is asked about")
+	}
+	k.writeCreds(time.Now().Add(8 * time.Hour)) // the person runs claude by hand
+	k.tk.Watch()
+	if s := k.state(); s.Error != "" || k.calls() != 1 {
+		t.Fatalf("a moved expiry clears the failure with no renewal run: calls %d, %+v", k.calls(), s)
+	}
+	if n, text := k.events("alert.raised"); n != 2 || !strings.Contains(text, "outside the Hive") || len(k.asks()) != 0 {
+		t.Fatalf("the person hears it's fixed and the ask closes: %d %q", n, text)
+	}
+	tk := NewTokens(k.tk.ws)
+	tk.Track(k.j, k.p)
+	if st := tk.States(); len(st) != 1 || st[0].Error != "" {
+		t.Fatalf("a restart doesn't bring the failure back: %+v", st)
+	}
+}
+
+// A harness no route uses is neither renewed nor tried: a Codex login with no
+// codex installed raises nothing on a Claude Hive.
+func TestRenewLeavesUnusedHarnessesAlone(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(6*time.Hour))
+	k.harness("exit 1")
+	codex := filepath.Join(k.tk.ws.LoginsDir("codex"), "spare")
+	os.MkdirAll(codex, 0o700)
+	os.WriteFile(filepath.Join(codex, "auth.json"), []byte(`{"tokens":{"access_token":"`+jwt(time.Now().Add(-time.Hour))+`"}}`), 0o600)
+	k.tk.Watch()
+	for _, s := range k.tk.States() {
+		if strings.HasPrefix(s.Login, "codex") {
+			t.Fatalf("an unused harness's login is left alone: %+v", s)
+		}
+	}
+	if n, _ := k.events("alert.raised"); n != 0 {
+		t.Fatal("nothing is raised")
+	}
+	if !(Config{Harness: "claude"}).Uses("claude") || (Config{Harness: "claude"}).Uses("codex") {
+		t.Fatal("Uses follows the harness setting")
+	}
+	if !(Config{Harness: "claude", Routes: map[string][]string{"fallback": {"codex:gpt-5"}}}).Uses("codex") {
+		t.Fatal("Uses follows the fallback list")
+	}
+}
+
+func jwt(exp time.Time) string {
+	body := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d}`, exp.Unix())))
+	return "eyJhbGciOiJub25lIn0." + body + ".sig"
+}
+
+// A Codex token whose expiry can't be read can't show a renewal moved it.
+func TestRenewNeedsAReadableCodexExpiry(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "auth.json"), []byte(`{"tokens":{"access_token":"opaque"}}`), 0o600)
+	if _, err := loginExpiry(Login{Harness: "codex", Name: "x", Dir: dir}); err == nil {
+		t.Fatal("an unreadable expiry is an error")
+	}
+	exp := time.Now().Add(time.Hour).Truncate(time.Second)
+	os.WriteFile(filepath.Join(dir, "auth.json"), []byte(`{"tokens":{"access_token":"`+jwt(exp)+`"}}`), 0o600)
+	if got, err := loginExpiry(Login{Harness: "codex", Name: "x", Dir: dir}); err != nil || !got.Equal(exp) {
+		t.Fatalf("a JWT's expiry is read: %v %v", got, err)
+	}
+}
+
+// What a harness printed goes into the journal without anything token-shaped.
+func TestHarnessSaidScrubsTokens(t *testing.T) {
+	out := "error: Authorization: Bearer abc.def refresh sk-ant-ort01-AbCdEf123456 " + jwt(time.Now()) + " key 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddcc /usr/local/lib/node_modules/whatever-package-name"
+	got := harnessSaid([]byte(out))
+	for _, bad := range []string{"abc.def", "sk-ant", "eyJ", "9f8e7d6c"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("%q is scrubbed: %s", bad, got)
+		}
+	}
+	if !strings.Contains(got, "error:") || !strings.Contains(got, "whatever-package-name") {
+		t.Fatalf("the rest is kept: %s", got)
+	}
+}
+
+// A harness in a folder agents can write is never run as the person.
+func TestHarnessBinRefusesAgentWritableFolders(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(6*time.Hour))
+	inside := filepath.Join(k.tk.ws.Hive(), "tools", "bin")
+	os.MkdirAll(inside, 0o755)
+	os.WriteFile(filepath.Join(inside, "claude"), []byte("#!/bin/sh\n"), 0o755)
+	t.Setenv("PATH", inside)
+	if _, err := k.tk.harnessBin("claude"); err == nil || !strings.Contains(err.Error(), "agents can write") {
+		t.Fatalf("a harness under .hive is refused: %v", err)
 	}
 }
