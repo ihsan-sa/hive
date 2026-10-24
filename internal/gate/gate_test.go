@@ -438,27 +438,64 @@ func TestInstallToChecks(t *testing.T) {
 	cur := fakeBin(t, dir, "hive", "v1", true)
 	cand := fakeBin(t, dir, "cand", "v2", true)
 	sum, _ := FileSHA(cand)
-	rep := Report{Verdict: Verdict{Keep: true}, Sandbox: "bare", CandBin: cand, CandSHA256: sum, CandVersion: "v2"}
+	rep := Report{Verdict: Verdict{Keep: true}, Sandbox: "bwrap", CandBin: cand, CandSHA256: sum, CandVersion: "v2"}
+	// A report the gate did not sign, hash and version right, is refused:
+	// writing report.json by hand installs nothing.
+	if err := rep.InstallTo(cur); err == nil || !strings.Contains(err.Error(), "signed") {
+		t.Errorf("an unsigned report installed: %v", err)
+	}
+	rep.sign()
+	rep.CandVersion = "v3"
+	if err := rep.InstallTo(cur); err == nil || !strings.Contains(err.Error(), "signed") {
+		t.Errorf("a report changed after signing installed: %v", err)
+	}
+	rep.CandVersion = "v2"
+	rep.Sandbox = "bare"
+	rep.sign()
 	if err := rep.InstallTo(cur); err == nil || !strings.Contains(err.Error(), "bubblewrap") {
 		t.Errorf("a bare run installed: %v", err)
 	}
 	rep.Sandbox = "bwrap"
+	rep.sign()
 	os.WriteFile(cand, []byte("#!/bin/sh\necho evil\n"), 0o755) // swapped after the hash
 	if err := rep.InstallTo(cur); err == nil || !strings.Contains(err.Error(), "hash") {
 		t.Errorf("a swapped binary installed: %v", err)
 	}
 	cand = fakeBin(t, dir, "cand", "v2", true)
 	rep.Verdict.Keep = false
+	rep.sign()
 	if err := rep.InstallTo(cur); err == nil {
 		t.Error("a rollback installed")
 	}
 	rep.Verdict.Keep = true
+	rep.sign()
 	if err := rep.InstallTo(cur); err != nil {
 		t.Fatal(err)
 	}
 	if out, _ := exec.Command(cur).Output(); strings.TrimSpace(string(out)) != "v2" {
 		t.Errorf("installed %q", out)
 	}
+	// The health check wants the exact version, not one that contains it.
+	if err := Install(fakeBin(t, dir, "near", "v22", true), cur, "v2"); err == nil {
+		t.Error("a binary saying v22 passed for v2")
+	}
+}
+
+// The tests' gate key is their own, never the person's.
+func TestMain(m *testing.M) {
+	// The Go caches stay where they were before HOME moves.
+	if out, err := exec.Command("go", "env", "GOMODCACHE", "GOCACHE").Output(); err == nil {
+		if f := strings.Fields(string(out)); len(f) == 2 {
+			os.Setenv("GOMODCACHE", f[0])
+			os.Setenv("GOCACHE", f[1])
+		}
+	}
+	dir, _ := os.MkdirTemp("", "gate-test-config-")
+	os.Setenv("XDG_CONFIG_HOME", dir)
+	os.Setenv("HOME", dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 // A candidate's own words never reach lessons.md, and a run records the

@@ -66,7 +66,7 @@ func health(bin, wantVersion string) error {
 	if err != nil {
 		return fmt.Errorf("--version: %v: %s", err, tail(out, 200))
 	}
-	if wantVersion != "" && !strings.Contains(out, wantVersion) {
+	if f := strings.Fields(out); wantVersion != "" && (len(f) == 0 || f[len(f)-1] != wantVersion) {
 		return fmt.Errorf("--version says %q, wanted %q", out, wantVersion)
 	}
 	return nil
@@ -103,6 +103,9 @@ func (r Report) InstallTo(target string) error {
 		return fmt.Errorf("the report names no verified binary")
 	case r.CandVersion == "":
 		return fmt.Errorf("the report names no version for the binary (a prebuilt one is never installed)")
+	}
+	if err := r.verify(); err != nil {
+		return err
 	}
 	if got, err := FileSHA(r.CandBin); err != nil || got != r.CandSHA256 {
 		return fmt.Errorf("the candidate's binary does not match the hash taken after the build")

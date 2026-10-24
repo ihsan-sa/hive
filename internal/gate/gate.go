@@ -63,6 +63,7 @@ type Report struct {
 	CandBin     string    `json:"candidate_bin,omitempty"`     // the verified copy of the candidate's binary
 	CandSHA256  string    `json:"candidate_sha256,omitempty"`  // its hash, taken right after the build
 	CandVersion string    `json:"candidate_version,omitempty"` // what its --version must say: the gate stamps it at build time
+	Sig         string    `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
 }
 
 // versionVar is where the build stamps the version; versionOf is what it
@@ -113,6 +114,7 @@ func Run(cfg Config) (rep Report, err error) {
 			rep.Error = err.Error()
 			rep.Verdict = Verdict{Reason: "the gate could not finish: " + err.Error()}
 		}
+		rep.sign()
 		write(cfg, rep)
 		if !rep.Verdict.Keep {
 			noteLesson(cfg, rep)
