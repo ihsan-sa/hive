@@ -41,6 +41,11 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 	args := filepath.Join(dir, "args")
 	t.Setenv("GATE_ARGS", args)
 	run := runGate(ws)
+	// The test process stands for the daemon: the gate must run under it.
+	own := 0
+	if raw, err := exec.Command("ps", "-o", "nice=", "-p", strconv.Itoa(os.Getpid())).Output(); err == nil {
+		own, _ = strconv.Atoi(strings.TrimSpace(string(raw)))
+	}
 	for i, tc := range []struct {
 		exit         string
 		rep          *gate.Report
@@ -76,10 +81,22 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 		}
 		// The gate runs under every lead's priority: at CheckNice, where
 		// there is a nice to put it there (ps reads it back: BSD nice alone
-		// prints no figure, GNU nice does).
+		// prints no figure, GNU nice does). macOS reports a level on its own
+		// scale (15 asked read back as 5 on the forge's runner), so there
+		// the gate is only held under the daemon's own level, read the
+		// same way; Linux reads the exact value.
 		if _, err := exec.LookPath("nice"); err == nil {
-			if n, _ := os.ReadFile(args + ".nice"); strings.TrimSpace(string(n)) != strconv.Itoa(core.CheckNice) {
-				t.Fatalf("case %d: the gate ran at nice %q, want %d", i, strings.TrimSpace(string(n)), core.CheckNice)
+			raw, _ := os.ReadFile(args + ".nice")
+			got, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if err != nil {
+				t.Fatalf("case %d: the gate's nice read as %q", i, raw)
+			}
+			if runtime.GOOS == "darwin" {
+				if got <= own {
+					t.Fatalf("case %d: the gate ran at nice %d, the daemon's own is %d; want it under", i, got, own)
+				}
+			} else if got != core.CheckNice {
+				t.Fatalf("case %d: the gate ran at nice %d, want %d", i, got, core.CheckNice)
 			}
 		}
 	}
