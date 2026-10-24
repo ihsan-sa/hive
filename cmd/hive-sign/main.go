@@ -9,8 +9,9 @@
 // public half isn't the pinned one fails too.
 //
 // The key is the owner's. `go run ./cmd/hive-sign -new` prints a fresh one:
-// the seed goes in the repo's HIVE_RELEASE_KEY secret, and the public half in
-// release.PublicKey.
+// the seed goes in the HIVE_RELEASE_KEY secret of the repository's protected
+// release-signing environment (not a repository secret, which every job
+// sees), and the public half in release.PublicKey.
 package main
 
 import (

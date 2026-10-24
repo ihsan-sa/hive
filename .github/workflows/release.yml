@@ -1,6 +1,10 @@
 name: release
 # The Hive creates its own releases (gh release create) after a kept merge
-# whose tests and dry run passed; this builds and attaches the binaries.
+# whose tests and dry run passed; this builds and attaches the binaries, then
+# signs their checksums in a job of its own.
+#
+# A value from the event goes into a step through env and is read as "$TAG",
+# never spliced into a run script with ${{ }}, where a crafted tag is code.
 on:
   release:
     types: [published]
@@ -30,15 +34,44 @@ jobs:
               -o dist/$name ./cmd/hive
           done
           (cd dist && sha256sum * > checksums.txt)
+      - name: upload
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/* --clobber
+  sign:
+    # checksums.txt.sig: the tag and checksums signed with the owner's release key, which
+    # every install pinning its public half (release.PublicKey) checks before installing.
+    # This job go-runs the tagged commit's own code with the key, and the Hive cuts its own
+    # releases, so it runs in the protected release-signing environment: the key is that
+    # environment's secret, and a person the owner names approves each run before it starts.
+    # The environment and its reviewers are the owner's to set up in the repository's settings.
+    # Unsigned only while no key is pinned; hive-sign fails on a missing or wrong key.
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release-signing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: fetch the checksums
+        # the published checksums.txt, so what is signed is what installs download
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p checksums.txt -D dist
       - name: sign
-        # checksums.txt.sig: the tag and checksums signed with the owner's release key, which
-        # every install pinning its public half (release.PublicKey) checks before installing.
-        # Unsigned only while no key is pinned; hive-sign fails on a missing or wrong key.
         env:
           TAG: ${{ github.event.release.tag_name }}
           HIVE_RELEASE_KEY: ${{ secrets.HIVE_RELEASE_KEY }}
         run: go run ./cmd/hive-sign "$TAG" dist/checksums.txt
-      - name: upload
+      - name: upload the signature
         env:
+          TAG: ${{ github.event.release.tag_name }}
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+        run: |
+          [ -f dist/checksums.txt.sig ] || exit 0  # no key yet: hive-sign said it goes out unsigned
+          gh release upload "$TAG" dist/checksums.txt.sig --clobber

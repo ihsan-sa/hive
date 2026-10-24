@@ -56,8 +56,11 @@ type Forge interface {
 	// Releases (the Hive on itself). LatestRelease is the newest, a
 	// pre-release included. CreateRelease cuts a pre-release, which installs
 	// don't follow; PublishRelease makes it the latest once ReleaseRuns, the
-	// workflow runs its publishing started at sha, pass.
+	// workflow runs its publishing started at sha, pass. Tags are every
+	// release's tag (pre-releases and drafts included) and every git tag, so
+	// a new release can take a tag none of them has.
 	LatestRelease(repo string) (Release, error)
+	Tags(repo string) ([]string, error)
 	CreateRelease(repo, tag, sha, notes string) error
 	ReleaseRuns(repo, sha string) ([]WorkflowRun, error)
 	PublishRelease(repo, tag string) error
@@ -544,6 +547,18 @@ func (GitHub) LatestRelease(repo string) (Release, error) {
 		rel.Assets = strings.Split(out, "\n")
 	}
 	return rel, nil
+}
+
+func (GitHub) Tags(repo string) ([]string, error) {
+	rels, err := gh(repo, "release", "list", "-R", repo, "--limit", "1000", "--json", "tagName", "-q", ".[].tagName")
+	if err != nil {
+		return nil, err
+	}
+	tags, err := gh(repo, "api", "repos/"+repo+"/tags?per_page=100", "--paginate", "-q", ".[].name")
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(rels + "\n" + tags), nil
 }
 
 func (GitHub) CreateRelease(repo, tag, sha, notes string) error {
