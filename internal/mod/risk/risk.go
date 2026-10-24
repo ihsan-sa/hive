@@ -843,8 +843,8 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 		if err := m.C.Runs.Walled(r, a.Project); err != nil {
 			return nil, err
 		}
-		if p.Hidden() {
-			return nil, fmt.Errorf("project %q is %s, so its code can't become a module every project's agents read", a.Project, p.Sharing())
+		if p.Isolated {
+			return nil, fmt.Errorf("project %q is isolated, so its code can't become a module every project's agents read", a.Project)
 		}
 		a.URL = m.C.WS.Project(a.Project)
 	}
