@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"maps"
 	"net"
 	"os"
@@ -981,6 +982,17 @@ func (rs *Runs) Tick(cfg Config) {
 		select {
 		case <-leads:
 		case <-time.After(5 * time.Second):
+			// The busy map keeps a run from being stepped twice, so this only
+			// says, in daemon.log, which lead's step is slow.
+			rs.mu.Lock()
+			var slow []string
+			for _, r := range live {
+				if rs.busy[r.ID] {
+					slow = append(slow, r.ID)
+				}
+			}
+			rs.mu.Unlock()
+			log.Printf("runs: a lead's step is still going after 5s (%s); the other runs step now", strings.Join(slow, ", "))
 		}
 		for _, r := range rs.List(func(r *Run) bool { return !r.Lead() && (!r.Terminal() || r.Status == StatusRunning) }) {
 			rs.stepAsync(r.ID, cfg, nil)
