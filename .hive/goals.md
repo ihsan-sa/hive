@@ -38,7 +38,7 @@ So a change to a path on `tests/LANDING-security.toml` gets its security read fr
 
 What the person has asked that holds from now on, in their words where they gave them:
 
-- **Build against the essay** at ihsan.cc/writing/the-hive.
+- **Build against the essay** at ihsan.cc/writing/the-hive: its text is in [docs/the-hive-essay.md](../docs/the-hive-essay.md), and where the Hive departs from it today is listed, as known gaps, at the end of [docs/spec.md](../docs/spec.md).
 - **A light core.** "the core should be as lightweight as possible"; "The rest goes into modules", "not the core".
 - **Modules are public repos** in the Hive's org.
 - **Other harnesses.** Codex, Cursor and other open harnesses, not only Claude.
