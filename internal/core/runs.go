@@ -179,6 +179,20 @@ type Runs struct {
 	plans map[string]Plan
 	busy  map[string]bool    // runs whose tick work is in flight
 	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
+	hold  string             // why no new turn starts, while a restart waits for a quiet moment
+	// launching counts launches past the hold whose turn isn't journalled yet.
+	launching int
+}
+
+// Hold keeps new turns from starting, saying why; "" lets them start again.
+func (rs *Runs) Hold(why string) { rs.mu.Lock(); rs.hold = why; rs.mu.Unlock() }
+
+// Live counts the turns whose process is running, and those starting.
+func (rs *Runs) Live() int {
+	n := len(rs.List(func(r *Run) bool { return r.Status == StatusRunning && proc.Alive(r.Proc) }))
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return n + rs.launching
 }
 
 // codexTokenStuck opens the note on a run whose Codex token folder would not delete.
@@ -1033,6 +1047,14 @@ const PendingSep = "\n\n---\n\n"
 
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run, cfg Config) {
+	rs.mu.Lock()
+	if rs.hold != "" {
+		rs.mu.Unlock()
+		return
+	}
+	rs.launching++
+	rs.mu.Unlock()
+	defer func() { rs.mu.Lock(); rs.launching--; rs.mu.Unlock() }()
 	if why := Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax); why != "" {
 		// The hold keeps the run's status, so a parked run keeps its backoff
 		// and a nudged one its count; the live figures after " (" change
@@ -1222,28 +1244,30 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	}, nil
 }
 
-// Walled refuses r reaching project when either side is an isolated project:
-// an isolated project is reached only from its own runs, and its runs reach
-// no other project. Both come from the core's record of r, never from r.
+// Walled refuses r reaching project when either side is hidden (private or
+// isolated): a hidden project is reached only from its own runs, and its runs
+// reach no other project, so nothing of it is carried out in a brief or message. Both come from the core's record of r, never from r.
 func (rs *Runs) Walled(r Run, project string) error {
 	if project == r.Project || rs.projs == nil {
 		return nil
 	}
 	for _, name := range []string{project, r.Project} {
-		if p, ok := rs.projs.Get(name); ok && p.Isolated {
+		if p, ok := rs.projs.Get(name); ok && p.Hidden() {
 			return fmt.Errorf("project %q is out of reach of %s's agents", project, r.Project)
 		}
 	}
 	return nil
 }
 
-// hideIsolated covers what isolated projects other than r's own leave in the
-// shared Hive, so r reads none of their code, runs, chats, notes, checks or
-// scores. An isolated run sees only the knowledge base of what is shared, so
-// it gets just the notes covered. The journal holds every project's events in
-// one file, so it is covered whole while any project is isolated. The folders
-// are made first so what lands in them mid-turn is covered too; a run or chat
-// started mid-turn is not, until that agent's next turn.
+// hideIsolated covers what hidden projects (private or isolated) other than
+// r's own leave in the shared Hive, so r reads none of their code, runs,
+// chats, notes, checks or scores. An isolated run sees only the knowledge base
+// of what is shared, so it gets just the notes covered; a private run sees the
+// rest of the shared Hive as a shared one does. The journal holds every
+// project's events in one file, so it is covered whole while any other project
+// is hidden. The folders are made first so what lands in them mid-turn is
+// covered too; a run or chat started mid-turn is not, until that agent's next
+// turn.
 func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 	if rs.projs == nil {
 		return nil
@@ -1252,7 +1276,7 @@ func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 	var out []sandbox.Mount
 	var rel []string
 	for _, p := range rs.projs.List() {
-		if !p.Isolated || p.Name == r.Project {
+		if !p.Hidden() || p.Name == r.Project {
 			continue
 		}
 		iso[p.Name] = true
@@ -1269,7 +1293,9 @@ func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 			os.MkdirAll(filepath.Join(rs.ws.Hive(), d, p.Name), 0o755)
 			rel = append(rel, d+"/"+p.Name)
 		}
-		rel = append(rel, "kb/isolated/"+p.Name, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl")
+		// A private project's lead works in its leads/ folder (an isolated one's in a checkout).
+		os.MkdirAll(filepath.Join(rs.ws.Hive(), "leads", "project-"+p.Name), 0o755)
+		rel = append(rel, "kb/isolated/"+p.Name, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl", "leads/project-"+p.Name)
 	}
 	if len(iso) > 0 { // the kb's record is filed from the journal, so it is covered whole too
 		rec := filepath.Join(rs.ws.KB(), "record")

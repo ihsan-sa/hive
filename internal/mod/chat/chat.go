@@ -21,6 +21,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 )
 
 // Chat is one conversation.
@@ -475,6 +476,16 @@ func (m *Module) onEvent(e core.Event) {
 			return
 		}
 		m.add(Message{Chat: chatID, Thread: thread, From: r.ID, Name: r.Name, Text: text})
+	case "hive.updated":
+		// An unsigned install is told to the person where they talk to the
+		// Hive, not only in the control center's notice.
+		var u struct {
+			To       string
+			Unsigned bool
+		}
+		if e.Decode(&u) == nil && u.Unsigned {
+			m.add(Message{Chat: "lead", From: "hive", Name: "hive", Text: "Updated to " + u.To + ". " + release.Unsigned})
+		}
 	case "msg.sent":
 		var s struct{ From, To, Text string }
 		e.Decode(&s)

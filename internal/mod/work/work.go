@@ -27,7 +27,8 @@ import (
 // Stages.
 const (
 	StageNew       = "new"
-	StageIssued    = "issued"
+	StageIssued    = "issued" // an older record of queued
+	StageQueued    = "queued" // issued, waiting its turn for a worker (queue.go)
 	StageWorking   = "working"
 	StageLanding   = "landing"
 	StageTesting   = "testing"
@@ -54,6 +55,8 @@ type Task struct {
 	Kind      string            `json:"kind"` // work | revert | helper (spawned, no issue)
 	Stage     string            `json:"stage"`
 	Reason    string            `json:"reason,omitempty"`
+	Order     int               `json:"order,omitempty"`     // its place in the queue the lead set; 0 goes after, as filed
+	Held      bool              `json:"held,omitempty"`      // the lead holds it in the queue
 	Recheck   bool              `json:"recheck,omitempty"`   // landed again on the same commit, so its test runs again
 	ByPerson  bool              `json:"by_person,omitempty"` // the person stopped it or left it open, so the lead can't bring it back
 	Issue     core.Issue        `json:"issue"`
@@ -87,6 +90,8 @@ type Task struct {
 	Attempt    int       `json:"attempt"`              // fresh workers handed this task
 	Retry      time.Time `json:"retry,omitempty"`
 	IssueOpen  bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
+	Noted      string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
+	NotedDiff  string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
 	Log        []Entry   `json:"log,omitempty"`
 	Created    time.Time `json:"created"`
 	Updated    time.Time `json:"updated"`
@@ -148,7 +153,9 @@ type Module struct {
 	mu    sync.Mutex
 	tasks map[string]*Task
 	busy  map[string]bool
-	steps sync.WaitGroup // the steps Tick started that are still going
+	// areaCache holds the paths each brief names (queue.go).
+	areaCache map[string][]string
+	steps     sync.WaitGroup // the steps Tick started that are still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -162,11 +169,14 @@ type Module struct {
 	probe   time.Time
 	probing bool
 	online  time.Time
+	// limit is when GitHub's pause on writes ends, and limitText why.
+	limit     time.Time
+	limitText string
 }
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, mainRed: map[string]bool{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string][]string{}, mainRed: map[string]bool{}}
 	apply := func(e core.Event) {
 		if e.Kind == "alert.raised" {
 			var a struct{ Kind, Project, SHA string }
@@ -190,6 +200,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.J.Subscribe(apply)
 	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project"}`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: []string{"lead"}, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); with back, its worker gets that text and works on`, Fn: m.opRecheck})
+	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: []string{"lead"}, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids]} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed), hold keeps one waiting until released. A started worker is never stopped`, Fn: m.opQueue})
 	c.Person.Handle("merge", m.onPersonMerge)
 	return m
 }
@@ -298,7 +309,7 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]string{"task": t.ID, "note": "filed; it becomes an issue and a worker shortly"}, nil
+	return map[string]string{"task": t.ID, "note": "filed; it becomes an issue, then waits its turn for a worker (see queue)"}, nil
 }
 
 // thread is the chat thread that hears about work r asks for: a lead's
@@ -372,11 +383,19 @@ func (m *Module) Revert(of Task, mergeSHA, reason string) (Task, error) {
 	return *t, nil
 }
 
-// Tick advances every task that isn't already being worked on.
+// Tick advances every task that isn't already being worked on. One waiting
+// for a worker goes only when the queue lets it, and otherwise says why it waits.
 func (m *Module) Tick() {
-	for _, t := range m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) }) {
+	m.revive()
+	tasks := m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) })
+	start, wait := m.admit(tasks)
+	for _, t := range tasks {
+		if why, ok := wait[t.ID]; ok {
+			m.waits(t, why)
+			continue
+		}
 		m.mu.Lock()
-		if !m.due(t) || m.busy[t.ID] {
+		if !m.due(t) || m.busy[t.ID] || (t.Queued() && !start[t.ID]) {
 			m.mu.Unlock()
 			continue
 		}
@@ -389,6 +408,27 @@ func (m *Module) Tick() {
 			m.settle(&t, m.step(&t))
 		}(t)
 	}
+}
+
+// waits records why a queued task waits, when that is new. A machine hold's
+// live figures after " (" change every tick, so only a new kind is saved.
+func (m *Module) waits(t Task, why string) {
+	kind, _, _ := strings.Cut(why, " (")
+	if t.Stage == StageQueued && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+		return
+	}
+	m.mu.Lock()
+	if m.busy[t.ID] {
+		m.mu.Unlock()
+		return
+	}
+	m.busy[t.ID] = true
+	m.mu.Unlock()
+	t.Stage, t.Reason = StageQueued, why
+	m.save(&t, "")
+	m.mu.Lock()
+	delete(m.busy, t.ID)
+	m.mu.Unlock()
 }
 
 // Wait returns once every step Tick started has ended, so a test's folders
@@ -442,6 +482,14 @@ func (m *Module) settle(t *Task, err error) {
 	if err == nil {
 		return
 	}
+	if rl := (*core.RateLimited)(nil); errors.As(err, &rl) {
+		// GitHub's pause on writes isn't the task's fault either: it waits
+		// until the pause ends, without counting a failure.
+		m.limited(rl)
+		t.Retry = rl.Until
+		m.save(t, rl.Error()+"; the task waits, then goes on")
+		return
+	}
 	if why != "" {
 		// An outage isn't the task's fault, so it waits it out without counting
 		// a failure, checking back less often the longer it lasts.
@@ -465,11 +513,62 @@ func backoff(n int) time.Duration {
 	return min(30*time.Second<<min(max(n, 1)-1, 5), 10*time.Minute)
 }
 
-// Offline says why the forge can't be reached, or "" when it can.
+// Offline says why the forge can't be reached, or "" when it can; while
+// GitHub has paused the Hive's writes, it says that.
 func (m *Module) Offline() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.offline == "" && time.Now().Before(m.limit) {
+		return "GitHub asked the Hive to slow down, so its writes wait until " + m.limit.UTC().Format("15:04Z")
+	}
 	return m.offline
+}
+
+// limited records GitHub's pause on writes for the dashboard.
+func (m *Module) limited(rl *core.RateLimited) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if rl.Until.After(m.limit) {
+		m.limit, m.limitText = rl.Until, rl.Text
+	}
+}
+
+// comment posts a comment whose loss doesn't hold the task up. One GitHub
+// refused for its rate limit still marks the pause.
+func (m *Module) comment(repo string, number int, body string) {
+	err := m.C.Effects.Forge.Comment(repo, number, body)
+	if rl := (*core.RateLimited)(nil); errors.As(err, &rl) {
+		m.limited(rl)
+	}
+}
+
+// status edits the one comment on a PR that says where its task stands, so
+// rounds don't each post a new one.
+func (m *Module) status(t *Task, p core.Project, number int, text string) {
+	err := m.C.Effects.Forge.StatusComment(p.Repo, number, "<!-- hive-status:"+t.ID+" -->", text)
+	if rl := (*core.RateLimited)(nil); errors.As(err, &rl) {
+		m.limited(rl)
+	}
+}
+
+// revive brings back the tasks GitHub's rate limit stopped, from before it
+// was waited out, once the pause is over.
+func (m *Module) revive() {
+	m.mu.Lock()
+	paused := time.Now().Before(m.limit)
+	m.mu.Unlock()
+	if paused {
+		return
+	}
+	for _, t := range m.List(func(t Task) bool {
+		return t.Stage == StageStopped && !t.ByPerson && core.IsRateLimit(t.Reason)
+	}) {
+		if m.workerStopped(t) {
+			continue
+		}
+		t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.Stage = "", 0, 0, 0, 0, StageLanding
+		m.save(&t, "brought back: it stopped only because GitHub rate-limited the Hive's writes")
+	}
 }
 
 func (m *Module) project(t *Task) (core.Project, error) {
@@ -498,9 +597,9 @@ func (m *Module) step(t *Task) error {
 		if err != nil {
 			return err
 		}
-		t.Issue, t.Stage, t.Failures = is, StageIssued, 0
+		t.Issue, t.Stage, t.Failures = is, StageQueued, 0
 		m.save(t, fmt.Sprintf("issue #%d", is.Number))
-	case StageIssued:
+	case StageQueued, StageIssued:
 		return m.startWorker(t, p)
 	case StageWorking:
 		return m.checkWorker(t, p)
@@ -572,7 +671,7 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 	if t.Branch == "" {
 		t.Branch = "hive/" + t.ID
 	}
-	t.Worker, t.Stage, t.Failures = id, StageWorking, 0
+	t.Worker, t.Stage, t.Failures, t.Reason = id, StageWorking, 0, ""
 	m.save(t, "worker "+id+" started")
 	return nil
 }
@@ -669,7 +768,7 @@ func similar(a, b string) bool {
 func (m *Module) checkWorker(t *Task, p core.Project) error {
 	r, ok := m.C.Runs.Get(t.Worker)
 	if !ok {
-		t.Stage = StageIssued
+		t.Stage = StageQueued
 		m.save(t, "worker record missing; starting again")
 		return nil
 	}
@@ -681,7 +780,7 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 		t.Stage, t.Reason = StageBlocked, finishText(r)
 		m.save(t, "blocked: "+core.Clip(t.Reason, 300))
 		if t.Issue.Number != 0 {
-			m.C.Effects.Forge.Comment(p.Repo, t.Issue.Number, "The worker stopped:\n\n"+t.Reason)
+			m.comment(p.Repo, t.Issue.Number, "The worker stopped:\n\n"+t.Reason)
 		}
 		m.C.J.MustAppend("kb.note", map[string]string{"title": "Blocked: " + t.Label(), "text": t.Reason, "project": t.Project, "run": r.ID})
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Blocked: %q (task %s). %s", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(t.Reason, 400)))
@@ -789,7 +888,7 @@ func (m *Module) dropCheckpoint(t *Task, p core.Project, why string) error {
 	t.Checkpoint, t.Stage, t.Reason = "", StageWorking, ""
 	m.save(t, "checkpoint not merged: "+core.Clip(why, 300))
 	if t.PR.Number != 0 { // a conflict found before its pull request opened
-		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Not merged as a checkpoint: "+core.Clip(why, 3000)+"\n\nThe worker keeps going; this pull request takes its later commits.")
+		m.comment(p.Repo, t.PR.Number, "Not merged as a checkpoint: "+core.Clip(why, 3000)+"\n\nThe worker keeps going; this pull request takes its later commits.")
 	}
 	return nil
 }
@@ -877,7 +976,7 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 		return err
 	}
 	if t.PR.Number != 0 && t.SHA != sha {
-		m.C.Effects.Forge.Comment(p.Repo, pr.Number, fmt.Sprintf("New commit %s after round %d.", core.Short(sha), t.Round))
+		m.status(t, p, pr.Number, fmt.Sprintf("New commit %s after round %d.", core.Short(sha), t.Round))
 	}
 	// A worker that finishes again on the same commit thinks something outside
 	// it changed (a tool installed, an answer), so its tests run again.
@@ -903,7 +1002,7 @@ func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
 	if ok {
 		t.Stage, t.IssueOpen, t.Failures = StageDone, true, 0
 		m.save(t, "done outside the checkout, no commit:\n"+steps)
-		m.C.Effects.Forge.Comment(p.Repo, t.Issue.Number, "Done with no commit, so nothing to merge. What ran outside the checkout:\n\n"+steps+"\n\n"+finishText(r))
+		m.comment(p.Repo, t.Issue.Number, "Done with no commit, so nothing to merge. What ran outside the checkout:\n\n"+steps+"\n\n"+finishText(r))
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q, with no commit, so nothing to merge. What ran:\n%s", t.Label(), steps))
 		m.closeIssue(t, p)
 		return
@@ -946,7 +1045,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 			return err
 		}
 		c, t.Recheck = m.C.Effects.RunCheck(p, t.SHA, "test", cfg.Test), false
-		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("Tests on %s: **%s**\n\n```\n%s\n```", core.Short(t.SHA), passFail(c.OK), core.Clip(c.Output, 1500)))
+	}
+	if err := m.noteTests(t, p, main, c); err != nil {
+		return err
 	}
 	if !c.OK && t.Checkpoint != "" {
 		return m.dropCheckpoint(t, p, "the tests failed on "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 1500))
@@ -993,6 +1094,49 @@ func (m *Module) test(t *Task, p core.Project) error {
 	return nil
 }
 
+// noteTests tells the PR its tests' result once per head. A head that only
+// brought main in, leaving the PR's own diff and the result as they were, gets
+// no comment. A comment GitHub's rate limit refused holds the task until it
+// can be posted; any other failure is let go.
+func (m *Module) noteTests(t *Task, p core.Project, main string, c core.Check) error {
+	if t.PR.Number == 0 || t.Noted == t.SHA {
+		return nil
+	}
+	diff := m.ownDiff(p, main, t.SHA)
+	key := diff + " " + passFail(c.OK)
+	if diff == "" || key != t.NotedDiff {
+		err := m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("Tests on %s: **%s**\n\n```\n%s\n```", core.Short(t.SHA), passFail(c.OK), core.Clip(c.Output, 1500)))
+		if rl := (*core.RateLimited)(nil); errors.As(err, &rl) {
+			return err
+		}
+	}
+	t.Noted, t.NotedDiff = t.SHA, key
+	m.save(t, "")
+	return nil
+}
+
+// ownDiff identifies what a PR's head changes against main, whatever main
+// changed meanwhile: its changed lines with no context, line numbers or blob
+// ids. It is "" when git can't tell.
+func (m *Module) ownDiff(p core.Project, main, sha string) string {
+	dir := m.C.WS.Project(p.Name)
+	base, err := core.Git(dir, "merge-base", main, sha)
+	if err != nil {
+		return ""
+	}
+	out, err := core.Git(dir, "diff", "--no-color", "--no-renames", "-U0", base, sha)
+	if err != nil {
+		return ""
+	}
+	h := sha256.New()
+	for _, l := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(l, "index ") && !strings.HasPrefix(l, "@@") {
+			h.Write([]byte(l + "\n"))
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
 // mainTests is main's own test result, measured once per main commit (the
 // baseline and the post-merge measurement usually already have it).
 func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
@@ -1024,7 +1168,7 @@ func (m *Module) waitOnMain(t *Task, p core.Project, main string, mc core.Check)
 	}
 	t.Reason = reason
 	m.save(t, reason)
-	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Main's own tests fail too at "+core.Short(main)+", so this isn't sent back to the worker. It waits for main to go green, then is brought up to date and tested again.")
+	m.status(t, p, t.PR.Number, "Main's own tests fail too at "+core.Short(main)+", so this isn't sent back to the worker. It waits for main to go green, then is brought up to date and tested again.")
 	return nil
 }
 
@@ -1161,7 +1305,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 	for _, a := range v.Advice {
 		fmt.Fprintf(&fb, "\n- Advice: %s", a)
 	}
-	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fb.String())
+	m.comment(p.Repo, t.PR.Number, fb.String())
 	if v.Verdict == "land" {
 		// Advice with a land doesn't hold the merge; it is kept, from every read,
 		// and filed as one follow-up once the change merges. A follow-up's own
@@ -1240,7 +1384,7 @@ func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
 	}
 	if reason != "" {
 		m.giveUp(t, reason)
-		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Stopping here. "+t.Reason+"\n\nThe pull request stays open.")
+		m.comment(p.Repo, t.PR.Number, "Stopping here. "+t.Reason+"\n\nThe pull request stays open.")
 		return nil
 	}
 	t.Round++
@@ -1301,7 +1445,7 @@ func (m *Module) conflict(t *Task, p core.Project) error {
 	t.Conflicts++
 	if t.Conflicts > 3 {
 		m.giveUp(t, "keeps conflicting with main")
-		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Stopping: the branch keeps conflicting with main. The pull request stays open.")
+		m.comment(p.Repo, t.PR.Number, "Stopping: the branch keeps conflicting with main. The pull request stays open.")
 		return nil
 	}
 	if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle")); err != nil {
@@ -1341,7 +1485,7 @@ func (m *Module) prepareRevert(t *Task, p core.Project) error {
 		return err
 	}
 	if ofPR.Number != 0 {
-		m.C.Effects.Forge.Comment(p.Repo, ofPR.Number, fmt.Sprintf("This change is being reverted in #%d: %s", pr.Number, t.Lesson))
+		m.comment(p.Repo, ofPR.Number, fmt.Sprintf("This change is being reverted in #%d: %s", pr.Number, t.Lesson))
 	}
 	t.PR, t.Stage = pr, StageTesting
 	m.save(t, fmt.Sprintf("revert PR #%d", pr.Number))
@@ -1468,7 +1612,7 @@ func (m *Module) Retry(id string) error {
 		t.Known += fmt.Sprintf("\n\nA previous worker (%s) stopped: %s\nIts notes:\n%s", t.Worker, core.Clip(r.Reason+" "+finishText(r), 800), core.Clip(string(notes), 2000))
 	}
 	t.Attempt++
-	t.Stage, t.Worker, t.Reason, t.Failures, t.Round = StageIssued, "", "", 0, 0
+	t.Stage, t.Worker, t.Reason, t.Failures, t.Round = StageQueued, "", "", 0, 0
 	t.ByPerson = false // the person brought it back; the lead may handle it from here
 	m.save(&t, "handed to a fresh worker")
 	return nil

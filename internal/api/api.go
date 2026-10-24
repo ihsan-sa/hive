@@ -54,12 +54,19 @@ type State struct {
 	Updated    *Updated           `json:"updated,omitempty"`
 	Jobs       []system.JobState  `json:"jobs"`
 	Wakeups    []system.Wakeup    `json:"wakeups"`
+	Checks     Checks             `json:"checks"`
 	Modules    []ModuleView       `json:"modules"`
 	Chats      []ChatView         `json:"chats"`
 	Requests   []risk.Request     `json:"requests"`
 	Feedback   []feedback.Item    `json:"feedback"` // open first, then the last few set aside
 	Config     core.Config        `json:"config"`
 	ConfigErr  string             `json:"config_err,omitempty"`
+}
+
+// Checks are the checks holding a slot and those waiting for one, in order.
+type Checks struct {
+	Running []core.SlotUse `json:"running,omitempty"`
+	Waiting []core.SlotUse `json:"waiting,omitempty"`
 }
 
 // ProjectView is one project on the dashboard.
@@ -71,11 +78,13 @@ type ProjectView struct {
 	Best   *float64              `json:"best,omitempty"`
 }
 
-// Updated is the update that brought in this version, with its release notes.
+// Updated is the update that brought in this version, with its release notes;
+// Unsigned when no release key was pinned to check it against.
 type Updated struct {
-	Seq   int64  `json:"seq"`
-	To    string `json:"to"`
-	Notes string `json:"notes"`
+	Seq      int64  `json:"seq"`
+	To       string `json:"to"`
+	Notes    string `json:"notes"`
+	Unsigned bool   `json:"unsigned,omitempty"`
 }
 
 // Alert is a ledger alert.

@@ -13,7 +13,7 @@ import (
 // The status op shows agents only the allow-listed settings: a config with
 // every field set to a secret shows none of it outside the list.
 func TestStatusConfigIsAllowListed(t *testing.T) {
-	allowed := []string{"autonomy", "harness", "model", "lead_model", "reviewer_model", "tribunal_models", "model_choices", "schedules", "review_rounds", "plateau_merges", "auto_update"}
+	allowed := []string{"autonomy", "harness", "model", "lead_model", "reviewer_model", "tribunal_models", "model_choices", "schedules", "review_rounds", "plateau_merges", "max_workers", "max_checks", "auto_update"}
 	var c core.Config
 	v := reflect.ValueOf(&c).Elem()
 	for i := range v.NumField() {
@@ -40,5 +40,13 @@ func TestStatusConfigIsAllowListed(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "SECRET") {
 		t.Errorf("a hidden setting leaked into status: %s", raw)
+	}
+}
+
+// A level the Hive doesn't know is refused before anything is made on the forge.
+func TestCreateRefusesAnUnknownSharing(t *testing.T) {
+	m := &Module{C: &core.Core{}}
+	if _, _, err := m.Create(Spec{Name: "x", Sharing: "public"}); err == nil || !strings.Contains(err.Error(), "sharing is one of") {
+		t.Errorf("an unknown level: %v", err)
 	}
 }
