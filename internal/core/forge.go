@@ -47,15 +47,29 @@ type Forge interface {
 	MergePR(repo string, number int, sha, subject string) (string, error)
 	ClosePR(repo string, number int, comment string) error
 	CloseIssue(repo string, number int) error // an issue already closed counts as closed
-	// Releases (the Hive on itself).
+	// Releases (the Hive on itself). LatestRelease is the newest, a
+	// pre-release included. CreateRelease cuts a pre-release, which installs
+	// don't follow; PublishRelease makes it the latest once ReleaseRuns, the
+	// workflow runs its publishing started at sha, pass.
 	LatestRelease(repo string) (Release, error)
 	CreateRelease(repo, tag, sha, notes string) error
+	ReleaseRuns(repo, sha string) ([]WorkflowRun, error)
+	PublishRelease(repo, tag string) error
 }
 
-// Release is a published version.
+// Release is a version on the forge.
 type Release struct {
-	Tag    string   `json:"tag"`
-	Assets []string `json:"assets"`
+	Tag        string   `json:"tag"`
+	Assets     []string `json:"assets"`
+	Prerelease bool     `json:"prerelease,omitempty"`
+}
+
+// WorkflowRun is one run of a CI workflow, newest first in a list.
+type WorkflowRun struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`     // queued, in_progress, completed
+	Conclusion string `json:"conclusion"` // success, failure, cancelled... once completed
+	URL        string `json:"html_url"`
 }
 
 // GitHub is the real forge, driven through the person's own gh login.
@@ -287,28 +301,45 @@ func (GitHub) CloseIssue(repo string, number int) error {
 }
 
 func (GitHub) LatestRelease(repo string) (Release, error) {
-	out, err := gh("release", "view", "-R", repo, "--json", "tagName,assets")
+	out, err := gh("release", "list", "-R", repo, "--exclude-drafts", "--limit", "1", "--json", "tagName,isPrerelease")
 	if err != nil {
 		return Release{}, err
 	}
-	var r struct {
-		TagName string `json:"tagName"`
-		Assets  []struct {
-			Name string `json:"name"`
-		} `json:"assets"`
+	var rs []struct {
+		TagName      string `json:"tagName"`
+		IsPrerelease bool   `json:"isPrerelease"`
 	}
-	if err := json.Unmarshal([]byte(out), &r); err != nil {
+	if err := json.Unmarshal([]byte(out), &rs); err != nil {
 		return Release{}, err
 	}
-	rel := Release{Tag: r.TagName}
-	for _, a := range r.Assets {
-		rel.Assets = append(rel.Assets, a.Name)
+	if len(rs) == 0 {
+		return Release{}, ErrNotFound
+	}
+	rel := Release{Tag: rs[0].TagName, Prerelease: rs[0].IsPrerelease}
+	if out, err = gh("release", "view", rel.Tag, "-R", repo, "--json", "assets", "-q", ".assets[].name"); err == nil && out != "" {
+		rel.Assets = strings.Split(out, "\n")
 	}
 	return rel, nil
 }
 
 func (GitHub) CreateRelease(repo, tag, sha, notes string) error {
-	_, err := gh("release", "create", tag, "-R", repo, "--target", sha, "--title", tag, "--notes", notes)
+	_, err := gh("release", "create", tag, "-R", repo, "--target", sha, "--title", tag, "--notes", notes, "--prerelease")
+	return err
+}
+
+// ReleaseRuns are the runs a release event started at sha (a release's runs
+// check out its tag, whose commit is sha), newest first.
+func (GitHub) ReleaseRuns(repo, sha string) ([]WorkflowRun, error) {
+	out, err := gh("api", "repos/"+repo+"/actions/runs?event=release&per_page=100&head_sha="+sha, "-q", ".workflow_runs")
+	if err != nil {
+		return nil, err
+	}
+	var runs []WorkflowRun
+	return runs, json.Unmarshal([]byte(out), &runs)
+}
+
+func (GitHub) PublishRelease(repo, tag string) error {
+	_, err := gh("release", "edit", tag, "-R", repo, "--prerelease=false", "--latest")
 	return err
 }
 

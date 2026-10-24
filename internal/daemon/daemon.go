@@ -54,7 +54,12 @@ func Running(ws core.Workspace) (*api.Client, bool) {
 }
 
 // Start launches the daemon in the background if it isn't running, and waits for it.
-func Start(ws core.Workspace) (*api.Client, error) {
+func Start(ws core.Workspace) (*api.Client, error) { return StartAfter(ws, 0) }
+
+// StartAfter is Start for a daemon that takes over from process waitFor, as
+// an update's restart does (`hive daemon --detach --wait-for`): update.yml
+// hands a pre-release over this way, which old releases can't update to.
+func StartAfter(ws core.Workspace, waitFor int) (*api.Client, error) {
 	if c, ok := Running(ws); ok {
 		return c, nil
 	}
@@ -66,7 +71,11 @@ func Start(ws core.Workspace) (*api.Client, error) {
 		return nil, err
 	}
 	env := append(os.Environ(), "HIVE_HOME="+ws.Root)
-	if _, err := proc.StartDetached([]string{exe, "daemon"}, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err != nil {
+	args := []string{exe, "daemon"}
+	if waitFor > 0 {
+		args = append(args, "--wait-for", strconv.Itoa(waitFor))
+	}
+	if _, err := proc.StartDetached(args, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err != nil {
 		return nil, err
 	}
 	for i := 0; i < 100; i++ {
