@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+)
 
 func TestKBArgsTakeLimitAnywhere(t *testing.T) {
 	for _, args := range [][]string{
@@ -29,6 +33,23 @@ func TestReleaseArgRefusesWhatItCannotRead(t *testing.T) {
 	} {
 		if tag, ok := releaseArg(c.args); tag != c.tag || ok != c.ok {
 			t.Errorf("releaseArg(%q) = %q, %v; want %q, %v", c.args, tag, ok, c.tag, c.ok)
+		}
+	}
+}
+
+// approve and refuse pick the first and last option; an ask with none is an
+// error pointing at hive answer, not a panic.
+func TestApproveOption(t *testing.T) {
+	a := core.Ask{ID: "a1", Options: []string{"merge", "leave open"}}
+	if o, err := approveOption("approve", a); err != nil || o != "merge" {
+		t.Errorf("approve: %q, %v", o, err)
+	}
+	if o, err := approveOption("refuse", a); err != nil || o != "leave open" {
+		t.Errorf("refuse: %q, %v", o, err)
+	}
+	for _, cmd := range []string{"approve", "refuse"} {
+		if o, err := approveOption(cmd, core.Ask{ID: "q1"}); err == nil {
+			t.Errorf("%s on an ask with no options: %q, want an error", cmd, o)
 		}
 	}
 }
