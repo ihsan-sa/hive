@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
@@ -46,7 +47,7 @@ func TestRefusedHostsAreJournalled(t *testing.T) {
 	r := Run{RunSpec: RunSpec{ID: "r1", Role: "worker"}, Turn: 1}
 	out := c.WS.TurnOut(r.ID, 1)
 	os.MkdirAll(filepath.Dir(out), 0o755)
-	os.WriteFile(out+".egress", []byte("evil.example\npaste.example\nevil.example\n"), 0o600)
+	os.WriteFile(out+".egress", []byte("evil.example\npaste.example:443 unlisted\nevil.example\n127.0.0.1:11434 local\n"), 0o600)
 	c.Runs.endTurn(r)
 	var got egressRefused
 	c.J.Replay(func(e Event) {
@@ -54,8 +55,43 @@ func TestRefusedHostsAreJournalled(t *testing.T) {
 			e.Decode(&got)
 		}
 	})
-	if want := []string{"evil.example", "paste.example"}; got.ID != "r1" || !reflect.DeepEqual(got.Hosts, want) {
+	if want := []string{"127.0.0.1", "evil.example", "paste.example"}; got.ID != "r1" || !reflect.DeepEqual(got.Hosts, want) {
 		t.Fatalf("journalled %+v, want hosts %v", got, want)
+	}
+	why := map[string]string{}
+	for _, f := range got.Refused {
+		why[f.Dest] = f.Why
+	}
+	if len(why) != 3 || !strings.Contains(why["127.0.0.1:11434"], "egress grant 127.0.0.1:11434") ||
+		!strings.Contains(why["paste.example:443"], "egress list") {
+		t.Fatalf("journalled reasons %+v, want each refusal's reason and how a local one opens", got.Refused)
+	}
+}
+
+// A granted local service reaches every sandboxed run's spec; a grant that
+// isn't a loopback host:port is refused in the config and opens nothing.
+func TestLocalGrantReachesTheSpec(t *testing.T) {
+	c, _ := testHive(t)
+	h, _ := harness.Get("claude")
+	cfg := c.WS.LoadConfig()
+	cfg.Egress = Egress{Default: []string{"github.com"}, Local: []string{"127.0.0.1:11434", "localhost:11434", "nas.lan:80"}}
+	if err := cfg.Check(); err == nil || !strings.Contains(err.Error(), "nas.lan:80") {
+		t.Fatalf("Check let a non-loopback grant through: %v", err)
+	}
+	c.WS.SaveConfig(cfg)
+	spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), sandbox.Bare{}, h, Run{RunSpec: RunSpec{ID: "r1", Role: "worker", Checkout: t.TempDir()}}, 1, false, "", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"127.0.0.1:11434", "[::1]:11434"}; !reflect.DeepEqual(spec.Local, want) {
+		t.Fatalf("spec opens %v, want %v", spec.Local, want)
+	}
+}
+
+// Asking to open a local service is always the person's.
+func TestLocalGrantIsThePersons(t *testing.T) {
+	if got := CeilingHit("reach the local Ollama", "hive egress grant 127.0.0.1:11434"); got != "open" {
+		t.Fatalf("a local grant fell to %q, not the person", got)
 	}
 }
 
