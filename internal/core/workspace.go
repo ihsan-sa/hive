@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -67,13 +68,18 @@ type Config struct {
 	Floor []string `json:"floor,omitempty"`
 	// Sandbox: "auto" uses the platform sandbox and refuses agents without one;
 	// "bare" is the documented, opted-in state where agents run unsandboxed.
-	Sandbox      string                     `json:"sandbox"`
-	BareAccepted string                     `json:"bare_accepted,omitempty"` // timestamp the warning was read
-	WSLDistro    string                     `json:"wsl_distro,omitempty"`
-	ReleaseRepo  string                     `json:"release_repo"`
-	AutoUpdate   bool                       `json:"auto_update"`
-	ReleasePin   string                     `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
-	PinnedAuto   bool                       `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
+	Sandbox      string `json:"sandbox"`
+	BareAccepted string `json:"bare_accepted,omitempty"` // timestamp the warning was read
+	WSLDistro    string `json:"wsl_distro,omitempty"`
+	ReleaseRepo  string `json:"release_repo"`
+	AutoUpdate   bool   `json:"auto_update"`
+	ReleasePin   string `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
+	PinnedAuto   bool   `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
+	// Channel is the releases auto-update follows: "latest", or "pre-release",
+	// each pre-release once its checks for this system pass. Empty is the
+	// default: pre-releases on the Hive whose own project is release_repo, the
+	// latest everywhere else.
+	Channel      string                     `json:"channel,omitempty"`
 	APIKeyOptIn  bool                       `json:"api_key_opt_in"`
 	ReviewRounds int                        `json:"review_rounds"`
 	Projects     map[string]ProjectSettings `json:"projects,omitempty"`
@@ -105,8 +111,32 @@ type Config struct {
 	// StallFloorSeconds: nothing counts as stalled before this long without moving,
 	// however fast its stage usually is here; 0 is the default (20 minutes).
 	StallFloorSeconds int `json:"stall_floor_seconds,omitempty"`
+
+	// Share is when the person said yes to sharing failures and usage with
+	// the developer (docs/report.md), "off" once they said no, empty if
+	// nobody has asked yet. Anything else counts as off.
+	Share     string `json:"share,omitempty"`
+	ShareURL  string `json:"share_url,omitempty"`
+	InstallID string `json:"install_id,omitempty"`
 	// ShareBundleURL is where `hive share` sends its bundle; empty is the developer's endpoint.
 	ShareBundleURL string `json:"share_bundle_url,omitempty"`
+}
+
+// Sharing says whether sharing is on and since when.
+func (c Config) Sharing() (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339Nano, c.Share)
+	return t, err == nil
+}
+
+// SetShare records the person's answer; turning it on makes the install id.
+func (c *Config) SetShare(on bool) {
+	c.Share = "off"
+	if on {
+		c.Share = time.Now().UTC().Format(time.RFC3339Nano)
+		if c.InstallID == "" {
+			c.InstallID = NewUUID()
+		}
+	}
 }
 
 // ProjectSettings override workspace defaults per project.
@@ -191,6 +221,9 @@ func (e Egress) For(role string) []string {
 // Check refuses settings the Hive can't act on: a tribunal seat it couldn't
 // read or on a harness it doesn't have, and a floor glob that can't match.
 func (c Config) Check() error {
+	if c.Channel != "" && c.Channel != "latest" && c.Channel != "pre-release" {
+		return fmt.Errorf("channel %q is neither \"latest\" nor \"pre-release\"", c.Channel)
+	}
 	for _, f := range c.Floor {
 		if _, err := path.Match(f, ""); strings.ContainsAny(f, "*?[") && err != nil {
 			return fmt.Errorf("floor entry %q isn't a glob the Hive can match: %v", f, err)
@@ -247,6 +280,7 @@ func DefaultConfig() Config {
 			"kb.file":          "daily 04:00",
 			"modules.update":   "every 24h",
 			"hive.update":      "every 6h",
+			"report.send":      "every 6h",
 		},
 	}
 }
@@ -311,11 +345,23 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := os.WriteFile(tmp, data, mode); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := renameOver(tmp, path); err != nil {
 		os.Remove(tmp)
 		return err
 	}
 	return nil
+}
+
+// renameOver renames tmp onto path. Windows refuses to replace a file while
+// another handle has it open (a reader in this daemon, a scanner), so there
+// it tries again for a few seconds before giving up.
+func renameOver(tmp, path string) error {
+	err := os.Rename(tmp, path)
+	for i := 0; err != nil && runtime.GOOS == "windows" && i < 40; i++ {
+		time.Sleep(50 * time.Millisecond)
+		err = os.Rename(tmp, path)
+	}
+	return err
 }
 
 // NewID returns a short random id, sortable by time prefix.
@@ -370,6 +416,10 @@ func FindWorkspace() (Workspace, bool) {
 	root := DefaultRoot()
 	return Workspace{Root: root}, exists(filepath.Join(root, ".hive"))
 }
+
+// ShareAnswer holds the installer's answer to sharing until first run makes
+// the workspace and moves it into the config.
+func ShareAnswer() string { return filepath.Join(filepath.Dir(pointerFile()), "share") }
 
 // RememberWorkspace writes the pointer file.
 func RememberWorkspace(root string) error {
