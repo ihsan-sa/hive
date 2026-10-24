@@ -52,9 +52,20 @@ func (m *Module) Landed(id, mergeSHA, by, why string) (Task, error) {
 			m.C.Runs.Stop(t.Worker, "its work is already on main")
 		}
 	}
+	if t.Checkpoint != "" { // the whole task ends: say what the checkpoint left behind
+		past := ""
+		if t.SHA != "" && t.SHA != t.Checkpoint {
+			past = fmt.Sprintf("; the worker's commits past it, up to %s, are not merged", core.Short(t.SHA))
+		}
+		m.save(&t, fmt.Sprintf("checkpoint %s in flight is dropped as the task ends%s", core.Short(t.Checkpoint), past))
+	}
 	t.MergeSHA, t.Stage, t.Reason, t.Checkpoint = merged, StageMerged, "", ""
 	m.save(&t, fmt.Sprintf("ended as landed by %s (%s, %s): %s", by, how, core.Short(merged), core.Clip(why, 300)))
-	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Merged: %s %s", t.Label(), t.PR.URL))
+	if t.Kind == "revert" { // worded as the merge path words it
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Label(), "Revert: "), t.Lesson))
+	} else {
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Merged: %s %s", t.Label(), t.PR.URL))
+	}
 	if m.OnMerged != nil {
 		m.OnMerged(t)
 	}

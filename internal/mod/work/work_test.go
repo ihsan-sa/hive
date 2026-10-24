@@ -751,7 +751,7 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 
 	// Merged on the forge while the Hive held it: no commit to name.
 	m2, t2, p2, f2 := gateRig(t, false, map[string]string{"other.txt": "z"})
-	t2.Stage = StageReviewing
+	t2.Stage, t2.Checkpoint = StageReviewing, t2.SHA // its checkpoint PR, merged by hand
 	m2.save(t2, "")
 	sha, err := f2.MergePR(p2.Repo, t2.PR.Number, t2.SHA, "work")
 	if err != nil {
@@ -761,7 +761,7 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 		t.Fatalf("no such task: %v", err)
 	}
 	got, err = m2.Landed("t1", "", "lead", "merged on GitHub at 07:53Z")
-	if err != nil || got.Stage != StageMerged || got.MergeSHA != sha || !logged(&got, "merged on the forge") {
+	if err != nil || got.Stage != StageMerged || got.MergeSHA != sha || !logged(&got, "merged on the forge") || !logged(&got, "checkpoint "+core.Short(t2.SHA)+" in flight is dropped") || got.Checkpoint != "" {
 		t.Fatalf("stage %q, merge %q (want %s), log %v: %v", got.Stage, got.MergeSHA, sha, got.Log, err)
 	}
 }
