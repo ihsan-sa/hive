@@ -134,6 +134,10 @@ func (m *Module) areas(t Task) []string {
 			return nil
 		}
 	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil
+	}
 	seen := map[string]bool{}
 	var out []string
 	add := func(p string) {
@@ -147,7 +151,13 @@ func (m *Module) areas(t Task) []string {
 		if p == "." || strings.HasPrefix(p, "..") || strings.HasPrefix(p, ".git/") {
 			continue
 		}
-		fi, err := os.Stat(filepath.Join(root, filepath.FromSlash(p)))
+		// A symlink in the clone may point outside it: the path must resolve
+		// inside, or the brief could test what exists on the machine.
+		real, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(p)))
+		if err != nil || !inside(realRoot, real) {
+			continue
+		}
+		fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p)))
 		if err != nil {
 			continue
 		}
@@ -160,6 +170,12 @@ func (m *Module) areas(t Task) []string {
 	m.areaCache[key] = out
 	m.mu.Unlock()
 	return out
+}
+
+// inside reports whether path is root or under it.
+func inside(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // opQueue shows the queue, and with arguments sets its order or holds briefs.

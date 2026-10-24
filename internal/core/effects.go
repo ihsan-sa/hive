@@ -187,6 +187,20 @@ func (e *Effects) Sync(p Project) (string, error) {
 	return sha, nil
 }
 
+// MainLine is the set of commits main has been at in the host clone: its
+// first-parent history, without the branches merged into it.
+func (e *Effects) MainLine(p Project) map[string]bool {
+	out, err := Git(e.ws.Project(p.Name), "rev-list", "--first-parent", "refs/remotes/origin/"+p.Branch)
+	if err != nil {
+		return nil
+	}
+	line := map[string]bool{}
+	for _, sha := range strings.Fields(out) {
+		line[sha] = true
+	}
+	return line
+}
+
 // Config reads .hive/project.json at a commit (defaults if absent).
 func (e *Effects) Config(p Project, sha string) ProjectConfig {
 	raw, _ := Git(e.ws.Project(p.Name), "show", sha+":.hive/project.json")

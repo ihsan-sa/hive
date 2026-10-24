@@ -13,6 +13,7 @@ func stubGH(t *testing.T, reply func(args []string) (string, string, error)) *[]
 	run, p := ghRun, ghPause
 	t.Cleanup(func() { ghRun, ghPause = run, p })
 	ghPause = &pause{}
+	logins.Clear()
 	var calls [][]string
 	ghRun = func(_ string, args []string) (string, string, error) {
 		calls = append(calls, args)
@@ -126,23 +127,50 @@ func TestRateLimitPausesWrites(t *testing.T) {
 
 // One status comment per PR: posted once, then edited in place.
 func TestGitHubStatusCommentEdits(t *testing.T) {
-	id := ""
+	list := ""
 	calls := stubGH(t, func(args []string) (string, string, error) {
-		if args[0] == "api" && args[1] == "--paginate" {
-			return id, "", nil
+		switch {
+		case strings.Join(args[:2], " ") == "api user":
+			return "hive-bot\n", "", nil
+		case args[0] == "api" && args[1] == "--paginate":
+			return list, "", nil
 		}
 		return "", "", nil
 	})
 	if err := (GitHub{}).StatusComment("o/r", 3, "<!-- s -->", "round 1"); err != nil {
 		t.Fatal(err)
 	}
-	id = "991"
+	list = "990 someone-else false\n991 hive-bot true\n"
 	if err := (GitHub{}).StatusComment("o/r", 3, "<!-- s -->", "round 2"); err != nil {
 		t.Fatal(err)
 	}
 	c := *calls
-	if len(c) != 4 || strings.Join(c[1][:2], " ") != "issue comment" || !strings.Contains(strings.Join(c[3], " "), "-X PATCH repos/o/r/issues/comments/991 -f body=round 2\n\n<!-- s -->") {
+	if len(c) != 5 || strings.Join(c[2][:2], " ") != "issue comment" || !strings.Contains(strings.Join(c[4], " "), "-X PATCH repos/o/r/issues/comments/991 -f body=round 2\n\n<!-- s -->") {
 		t.Fatalf("calls %q", c)
+	}
+}
+
+// Anyone can write the marker into a comment: only the Hive's own is edited.
+func TestGitHubStatusCommentEditsOnlyItsOwn(t *testing.T) {
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		switch {
+		case strings.Join(args[:2], " ") == "api user":
+			return "hive-bot\n", "", nil
+		case args[0] == "api" && args[1] == "--paginate":
+			return "990 someone-else true\n", "", nil
+		}
+		return "", "", nil
+	})
+	if err := (GitHub{}).StatusComment("o/r", 3, "<!-- s -->", "round 2"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range *calls {
+		if strings.Contains(strings.Join(c, " "), "PATCH") {
+			t.Fatalf("edited another's comment: %q", *calls)
+		}
+	}
+	if c := *calls; strings.Join(c[len(c)-1][:2], " ") != "issue comment" {
+		t.Fatalf("no comment of its own posted: %q", c)
 	}
 }
 
