@@ -170,10 +170,14 @@ func (m *model) dashRows() []row {
 		}
 	}
 	add(row{key: "waiting", text: fmt.Sprintf("waiting on you (%d)", len(m.st.Asks)), jump: secWaiting})
-	if add(row{key: "told", text: fmt.Sprintf("done for you (%d recent)", len(m.st.Told)), expand: len(m.st.Told) > 0}) {
+	if add(row{key: "told", text: toldHead(m.st.Told, time.Now()), expand: len(m.st.Told) > 0}) {
 		for _, a := range m.st.Told {
 			d := toldDetail(a)
-			add(row{key: "told:" + a.ID, depth: 1, text: a.Asked.Local().Format("Mon 15:04") + "  " + text.Visible(core.Clip(a.Title, 120)), open: &d})
+			title := text.Visible(core.Clip(a.Title, 120))
+			if strings.HasPrefix(a.ID, "spend-") { // money is the person's: the notice stands out
+				title = stWarn.Render(title)
+			}
+			add(row{key: "told:" + a.ID, depth: 1, text: a.Asked.Local().Format("Mon 15:04") + "  " + title, open: &d})
 		}
 	}
 	if add(row{key: "requests", text: fmt.Sprintf("requests past the sandbox (%d)", len(m.st.Requests)), expand: len(m.st.Requests) > 0}) {
@@ -1355,4 +1359,19 @@ func loginLine(l core.LoginState) string {
 		}
 	}
 	return line
+}
+
+// toldHead heads the "done for you" list: how many in the last day, so a
+// quiet notice isn't missed among the recent ones.
+func toldHead(told []core.Ask, now time.Time) string {
+	day := 0
+	for _, a := range told {
+		if now.Sub(a.Asked) < 24*time.Hour {
+			day++
+		}
+	}
+	if day == 0 {
+		return fmt.Sprintf("done for you (%d recent)", len(told))
+	}
+	return fmt.Sprintf("done for you (%d in the last day, %d recent)", day, len(told))
 }
