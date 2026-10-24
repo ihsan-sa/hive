@@ -893,7 +893,7 @@ func TestUpdateShowsItsProgress(t *testing.T) {
 	if msg, err := m.Update(""); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9") {
 		t.Fatalf("update: %q, %v", msg, err)
 	}
-	n := int64(len("new"))
+	n := int64(len("new") * (1 + len(alongside[runtime.GOOS]))) // Windows fetches the WSL binary too
 	if atMerges.To != "v9.9.9" || atMerges.Step != StepMerges || atMerges.Done != n || atMerges.Total != n || atMerges.Started.IsZero() {
 		t.Fatalf("at the merges' wait: %+v", atMerges)
 	}
