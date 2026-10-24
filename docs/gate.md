@@ -52,10 +52,6 @@ ci's `sandboxed-e2e` job lifts Ubuntu's AppArmor user-namespace restriction and 
 - The evaluator's scratch folder (`TMPDIR`, under the side's root) is writable by the side while a run goes on, because it holds the workspaces and forges the evaluator hands the side. The side can change what the evaluator keeps there. What is judged doesn't come from there: the forge is read through the side's own sandbox, the landed code runs sealed from source on stdin, and the answers and the clock are the evaluator's.
 - The evaluator, the side and the grandchild are the same uid; the separation is namespaces, mounts and Yama, not users. The evaluator shares the side's sandbox: the side cannot reach into it (see above), but it can signal it, which only fails the side's own run.
 
-## Earlier runs
+## Runs
 
-`docs/gate-runs/` holds runs of earlier versions of the gate (see its README); none is of the current code.
-
-## First run of the e2e probe (an earlier, bare version)
-
-`docs/gate-runs/e2e-probe-flaky-module-lifecycle.md` comes from an earlier version of the gate: bare, with no allowlist sandbox, no separate evaluator sandbox and no meter, so it does not show the current code. In it, a docs-only candidate with the base's e2e suite run against its binary failed `TestModuleLifecycle` once (the control passed it), and the gate rolled it back as a regression. The gate is working as designed, but a flaky e2e test costs a candidate its keep; the answer is to fix or quarantine the flaky test, and to run with `--reps` of 2 or more so one flake shows as a pass-rate difference rather than a bare failure.
+`docs/gate-runs/` holds the current code's end-to-end record: a keep run and a rollback run under real bubblewrap, from ci (see its README).

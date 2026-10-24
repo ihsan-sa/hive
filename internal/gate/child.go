@@ -51,7 +51,10 @@ func (g GitHub) Delete(name string) error {
 type Local struct{ Dir string }
 
 func (l Local) Create(name string) (string, error) {
-	p := filepath.Join(l.Dir, name+".git")
+	p, err := filepath.Abs(filepath.Join(l.Dir, name+".git")) // bound into a sandbox at this path
+	if err != nil {
+		return "", err
+	}
 	if out, err := exec.Command("git", "init", "-q", "--bare", "-b", "main", p).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git init: %v: %s", err, out)
 	}

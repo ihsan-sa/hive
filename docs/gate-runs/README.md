@@ -1,5 +1,12 @@
 # Gate run records
 
-These records come from **earlier versions of the gate**. Those versions ran bare on a local org, used the unstamped `0.0.0-dev` version, measured no `commits_landed` and judged the side's own `cost_usd`. They show how the decision rule behaves. They do not show the current code (allowlist bubblewrap sandbox, separate evaluator, benchmark measured from the forge) working. They get replaced by a keep and a rollback run under bubblewrap, and against the test-only org once it exists, on a machine where unprivileged user namespaces work. The worker boxes so far refuse them.
+The current gate's end-to-end record comes from `TestBwrapGateKeepsAndRollsBack`, in ci's `sandboxed-e2e` job, run 40073936934 at 64301d0, under real bubblewrap on a GitHub runner. That test runs two whole gates on a local org with real binaries and the real probes:
 
-The current code's end-to-end record is `TestBwrapGateKeepsAndRollsBack` in ci's `sandboxed-e2e` job (the gate's bubblewrap step): a keep run and a rollback run under real bubblewrap on a local org, with each report printed in the log.
+- `kept-trivial-candidate-bwrap.md`: the same Hive on both sides, `--allow-tie`. **KEPT**. The daemon, the benchmark (this tree's suite inside each side's sandbox, its landed code checked in a sealed sibling sandbox, score 3, egress 0 through the meter) and recurse (a nested gate inside the child, which rolled back its self-test) pass on both sides.
+- `rolled-back-broken-candidate-bwrap.md`: a candidate that answers `--version` but starts no daemon. **ROLLED BACK** on the daemon, the benchmark and recurse, with its lesson written.
+
+Both runs made 2 local org repositories and removed 2, leaving 0. In both, the `org` probe failed on both sides, because the local org's repository was not visible inside the side's allowlist sandbox. That failure was even across the sides, so it did not change either verdict. It is fixed after this run (eb14b6a and the commit after it bind the repository's folder, at its absolute path, into the side's sandbox). The next ci run of the test shows the org round trip passing.
+
+Versions read `0.0.0-dev` because the test hands the gate prebuilt binaries. A gate that builds its sides stamps `0.0.0-gate.<sha>`.
+
+Not yet recorded: a run against a real GitHub org. It needs the test-only org and the fine-grained child token, both the person's to make.
