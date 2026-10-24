@@ -18,6 +18,17 @@ type isolated struct{ sandbox.Bare }
 
 func (isolated) Isolated() bool { return true }
 
+// removesCache removes the workspace's cache at the test's end with the
+// change's own remover, and fails if it couldn't: the Go module cache leaves
+// its files and folders read-only, which t.TempDir can't remove.
+func removesCache(t *testing.T, c *Core) {
+	t.Cleanup(func() {
+		if err := RemoveTree(c.WS.Cache()); err != nil || Exists(c.WS.Cache()) {
+			t.Errorf("the cache outlived RemoveTree: %v", err)
+		}
+	})
+}
+
 // A Go project's check gets the shared module cache read-only, offline, filled
 // once per go.mod and go.sum by the effects process.
 func TestChecksShareTheModuleCache(t *testing.T) {
@@ -28,6 +39,7 @@ func TestChecksShareTheModuleCache(t *testing.T) {
 		t.Skip("no go on PATH")
 	}
 	c, _ := testHive(t)
+	removesCache(t, c)
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n\ngo 1.21\n"), 0o644)
 	g := c.Effects.goModules(isolated{}, dir)
@@ -43,6 +55,14 @@ func TestChecksShareTheModuleCache(t *testing.T) {
 		if !slices.Contains(env, kv) {
 			t.Errorf("env %v lacks %s", env, kv)
 		}
+	}
+	// As go leaves what it fetched (CI's go does so even for a module with no
+	// requirements): read-only files in read-only folders.
+	ro := filepath.Join(c.WS.GoModCache(), "cache", "download", "example.com", "x", "@v")
+	os.MkdirAll(ro, 0o755)
+	os.WriteFile(filepath.Join(ro, "v1.0.0.mod"), []byte("module example.com/x\n"), 0o444)
+	for d := ro; d != c.WS.GoModCache(); d = filepath.Dir(d) {
+		os.Chmod(d, 0o555)
 	}
 	sums, _ := os.ReadDir(c.WS.goSums())
 	if len(sums) != 1 {
@@ -192,6 +212,7 @@ func TestPrefetchReadsOnlyTheCheckout(t *testing.T) {
 		t.Skip("the shared module cache is for Linux sandboxes")
 	}
 	c, _ := testHive(t)
+	removesCache(t, c)
 	secret := filepath.Join(t.TempDir(), "token")
 	os.WriteFile(secret, []byte("hive-secret-token-123\n"), 0o600)
 	cases := map[string]func(dir string){
