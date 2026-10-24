@@ -1,6 +1,7 @@
 package work
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -687,5 +688,116 @@ func TestFollowUpOnceAfterMerge(t *testing.T) {
 	keepAdvice(tk, []string{" name it better ", "", "test it"}) // a second read repeats one item
 	if strings.Join(tk.Advice, "|") != "name it better|test it" {
 		t.Fatalf("advice: %q", tk.Advice)
+	}
+}
+
+// The lead ends a task whose work is already on main, whatever stage it is
+// stuck in: not while its PR is open and main lacks its change; with the main
+// commit named when it was squashed there; at once when its PR was merged on
+// the forge. The merge is recorded, OnMerged runs, and the brief that waited
+// on it starts.
+func TestLandedEndsATaskOnMain(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
+	task.Stage, task.Known = StageMerging, "Changes .hive/project.json."
+	m.save(task, "")
+	var merged []Task
+	m.OnMerged = func(t Task) { merged = append(merged, t) }
+	call := func(args string) error {
+		_, err := m.C.Runs.Ops().Call(lead, "landed", json.RawMessage(args))
+		return err
+	}
+	if err := call(`{"task":"t1"}`); err == nil || !strings.Contains(err.Error(), "why") {
+		t.Fatalf("ended a task with no reason: %v", err)
+	}
+	if err := call(`{"task":"t1","why":"merged by hand"}`); err == nil || !strings.Contains(err.Error(), "isn't landed") {
+		t.Fatalf("ended a task whose PR is open and isn't on main: %v", err)
+	}
+	if err := call(`{"task":"t1","why":"x","merge":"HEAD"}`); err == nil || !strings.Contains(err.Error(), "doesn't hold") {
+		t.Fatalf("took a main commit without its change: %v", err)
+	}
+
+	waiting := file(t, m, "tune the tests", "See .hive/project.json.")
+	waiting.Stage = StageQueued
+	m.save(&waiting, "")
+	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[waiting.ID], "task t1") {
+		t.Fatalf("the brief on the same file doesn't wait for t1: %q", wait[waiting.ID])
+	}
+	// Squashed onto main by hand: the lead names the commit.
+	pushMain(t, f, map[string]string{"feature.txt": "y"})
+	if err := call(`{"task":"t1","why":"x"}`); err == nil || !strings.Contains(err.Error(), "say which") {
+		t.Fatalf("a squashed change wasn't asked for its commit: %v", err)
+	}
+	mainSHA, _ := m.C.Effects.Sync(p)
+	if err := call(`{"task":"t1","why":"squashed by the person","merge":"` + mainSHA + `"}`); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := m.Get("t1")
+	if got.Stage != StageMerged || got.MergeSHA != mainSHA || len(merged) != 1 || !logged(&got, "squashed by the person") {
+		t.Fatalf("stage %q, merge %q, OnMerged %d, log %v", got.Stage, got.MergeSHA, len(merged), got.Log)
+	}
+	if r, _ := m.C.Runs.Get("w1"); !r.Terminal() && !r.StopAsked {
+		t.Fatal("its worker still runs")
+	}
+	if err := call(`{"task":"t1","why":"again"}`); err == nil {
+		t.Fatal("ended a merged task twice")
+	}
+	if err := m.step(&got); err != nil || got.Stage != StageDone {
+		t.Fatalf("stage %q: %v", got.Stage, err)
+	}
+	if start, _ := m.admit(m.List(nil)); !start[waiting.ID] {
+		t.Fatal("the brief behind it didn't start")
+	}
+
+	// Merged on the forge while the Hive held it: no commit to name.
+	m2, t2, p2, f2 := gateRig(t, false, map[string]string{"other.txt": "z"})
+	t2.Stage = StageReviewing
+	m2.save(t2, "")
+	sha, err := f2.MergePR(p2.Repo, t2.PR.Number, t2.SHA, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m2.Landed("t2", "", "lead", "x"); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("no such task: %v", err)
+	}
+	got, err = m2.Landed("t1", "", "lead", "merged on GitHub at 07:53Z")
+	if err != nil || got.Stage != StageMerged || got.MergeSHA != sha || !logged(&got, "merged on the forge") {
+		t.Fatalf("stage %q, merge %q (want %s), log %v: %v", got.Stage, got.MergeSHA, sha, got.Log, err)
+	}
+}
+
+// queue now starts a brief past the one it waits on, only with a reason, put
+// on its record; the max_workers cap still holds it.
+func TestQueueNowPastOverlap(t *testing.T) {
+	m := queueRig(t)
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
+	stuck := file(t, m, "the stuck one", "In internal/core/effects.go.")
+	fix := file(t, m, "the queue fix", "In internal/core/effects.go too.")
+	stuck.Stage, fix.Stage = StageMerging, StageQueued
+	m.save(&stuck, "")
+	m.save(&fix, "")
+	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], stuck.ID) {
+		t.Fatalf("the fix doesn't wait on the stuck one: %q", wait[fix.ID])
+	}
+	if _, err := m.C.Runs.Ops().Call(lead, "queue", json.RawMessage(`{"now":"`+fix.ID+`"}`)); err == nil {
+		t.Fatal("started one now with no reason")
+	}
+	if _, err := m.C.Runs.Ops().Call(lead, "queue", json.RawMessage(`{"now":"`+fix.ID+`","why":"it fixes what holds the queue"}`)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := m.Get(fix.ID)
+	if !got.Now || !logged(&got, "it fixes what holds the queue") {
+		t.Fatalf("now %v, log %v", got.Now, got.Log)
+	}
+	if start, wait := m.admit(m.List(nil)); !start[fix.ID] {
+		t.Fatalf("the fix still waits: %q", wait[fix.ID])
+	}
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	stuck.Stage = StageWorking // a worker that counts toward the cap
+	m.save(&stuck, "")
+	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], "max_workers") {
+		t.Fatalf("now went past max_workers: %q", wait[fix.ID])
 	}
 }

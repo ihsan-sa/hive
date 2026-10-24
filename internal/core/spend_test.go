@@ -2,6 +2,8 @@ package core
 
 import (
 	"math"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,5 +74,25 @@ func TestCostOfResumedSession(t *testing.T) {
 	}
 	if month := c.Runs.Spent(time.Now().UTC().Format("2006-01")); !near(month, 0.6200508) {
 		t.Fatalf("the month's spend is $%.7f, want $0.6200508", month)
+	}
+}
+
+// Claude Code counts --max-budget-usd against what this process spends, not
+// the running total a resumed session carries on (its check is totalCostUSD
+// less restoredCostUSD), so a resumed turn gets what the run has left and no
+// more: adding the session's earlier spend back would loosen the budget.
+func TestResumedTurnBudget(t *testing.T) {
+	c, _ := testHive(t)
+	h, _ := harness.Get("fake")
+	r := Run{RunSpec: RunSpec{ID: "w", Role: "worker", Harness: "fake", Budget: 1}, Session: "s", Cost: 0.4,
+		SessionCost: SessionSpend{Session: "s", Total: 0.4}}
+	for _, resume := range []bool{false, true} {
+		spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, r, 2, resume, filepath.Join(t.TempDir(), "p"), nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a := strings.Join(spec.Argv, " "); !strings.Contains(a, "--max-budget-usd 0.60") {
+			t.Errorf("resume=%v: want --max-budget-usd 0.60 of a $1 budget with $0.40 spent: %s", resume, a)
+		}
 	}
 }

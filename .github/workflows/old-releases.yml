@@ -1,0 +1,76 @@
+name: old-releases
+# update.yml runs this checkout's installers to install an older release, which lacks
+# commands added since (v0.1.33's installer called `report`, new in v0.1.18, and every
+# update leg failed with a usage error). This catches that at the PR, not the release.
+# The installer is the same script on macOS, so Linux and Windows run it. A PR runs it
+# only when it touches the installers or the commands they call, to spare the minutes of
+# four legs (two of them Windows) on every other PR; a published release and a manual run
+# (gh workflow run old-releases) always do.
+on:
+  pull_request:
+    paths:
+      - install/**
+      - cmd/hive/main.go
+      - cmd/hive/report.go
+      - .github/workflows/old-releases.yml
+  release:
+    types: [published]
+  workflow_dispatch:
+concurrency:
+  group: old-releases-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        from: [latest, v0.1.2]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: pick the release
+        # The token is this step's alone: the installers and the old binaries never see it.
+        env:
+          FROM: ${{ matrix.from }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$FROM" = latest ]; then
+            # the newest full release: what installs are on, and update.yml's `previous`
+            v=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+            echo "HIVE_CMD=hive" >> "$GITHUB_ENV"; echo "HIVE_REPO=$GITHUB_REPOSITORY" >> "$GITHUB_ENV"
+          else
+            v=$FROM
+            echo "HIVE_CMD=hive-v0" >> "$GITHUB_ENV"; echo "HIVE_REPO=ihsan-sa/hive-standalone-build" >> "$GITHUB_ENV"
+          fi
+          # An empty version would install `latest` and pass the grep below on anything.
+          [ -n "$v" ] || { echo "::error::no release to install"; exit 1; }
+          echo "HIVE_VERSION=$v" >> "$GITHUB_ENV"
+          # Forward slashes on Windows too (D:/a/_temp), which both pwsh and Git Bash read.
+          tmp=$RUNNER_TEMP
+          if [ "$RUNNER_OS" = Windows ]; then tmp=$(cygpath -m "$RUNNER_TEMP"); fi
+          { echo "HIVE_HOME=$tmp/hive"; echo "HIVE_BIN_DIR=$tmp/bin"; } >> "$GITHUB_ENV"
+      - name: install it (Linux)
+        if: runner.os != 'Windows'
+        run: sh install/install.sh
+      - name: install it (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          HIVE_SKIP_WSL: '1'
+          HIVE_NO_PATH: '1'
+        run: ./install/install.ps1
+      - name: it is the release asked for
+        run: |
+          exe=$HIVE_BIN_DIR/$HIVE_CMD
+          if [ "$RUNNER_OS" = Windows ]; then exe=$exe.exe; fi
+          "$exe" --version | tee version.txt
+          grep -qwF -- "$HIVE_VERSION" version.txt
