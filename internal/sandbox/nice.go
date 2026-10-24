@@ -10,15 +10,25 @@ import (
 // starts, runs at that lower scheduling priority: the host-side way, for a
 // sandbox that starts its command from the daemon's own process (bare,
 // Seatbelt). The Linux namespace sandbox sets it on its own launcher
-// instead. With n 0, or no nice on this machine, argv runs as it is.
+// instead. Both nice and argv[0] are resolved here, in the daemon's own
+// environment: nice would otherwise look argv[0] up on the command's PATH,
+// which carries the tools bins an agent can write to, and a program
+// planted there under the command's name (sandbox-exec, say) would run on
+// the host. With n 0, no nice on this machine, or a command that doesn't
+// resolve, argv runs as it is, resolved by exec as before.
 func Niced(argv []string, n int) []string {
-	if n <= 0 || runtime.GOOS == "windows" {
+	if n <= 0 || runtime.GOOS == "windows" || len(argv) == 0 {
 		return argv
 	}
-	if _, err := exec.LookPath("nice"); err != nil {
+	nice, err := exec.LookPath("nice")
+	if err != nil {
 		return argv
 	}
-	return append([]string{"nice", "-n", strconv.Itoa(n)}, argv...)
+	prog, err := exec.LookPath(argv[0])
+	if err != nil {
+		return argv
+	}
+	return append([]string{nice, "-n", strconv.Itoa(n), prog}, argv[1:]...)
 }
 
 // Lowered is the level a command niced by `by` runs at under a parent at
