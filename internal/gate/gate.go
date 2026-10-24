@@ -67,6 +67,7 @@ type Report struct {
 	CantRun     bool       `json:"cant_run,omitempty"`          // the gate could not run or measure: neither a keep nor the candidate's rollback
 	CandVersion string     `json:"candidate_version,omitempty"` // what its --version must say: the gate stamps it at build time
 	Unit        UnitReport `json:"unit"`                        // the vet and short-test step, each side's failures named
+	Fixes       FixReport  `json:"fixes"`                       // the candidate's own new tests, run on both sides
 	Transient   bool       `json:"transient,omitempty"`         // could not run for a cause that may pass (load, a flake on both sides): try again soon
 	Sig         string     `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
 }
@@ -260,6 +261,19 @@ func Run(cfg Config) (rep Report, err error) {
 		return rep, err
 	}
 
+	// The candidate's own new and changed tests, on both sides: one that
+	// passes on it and fails on the control is a fix the benchmark may not see.
+	if len(built) == 2 {
+		cfg.log("the candidate's new and changed tests, on both sides")
+		rep.Fixes = findFixes(&cfg, cand, ctrl)
+		for _, f := range rep.Fixes.Fixes {
+			cfg.log("  %s", f)
+		}
+		for _, n := range rep.Fixes.Notes {
+			cfg.log("  %s", n)
+		}
+	}
+
 	// Both sides are judged by one evaluator, taken from Eval (the base by
 	// default), so a candidate cannot change the tests or the benchmark that
 	// grade it. Its tests are compiled here, with their own caches, and run
@@ -348,7 +362,11 @@ func Run(cfg Config) (rep Report, err error) {
 	if got, e := FileSHA(cand.Bin); e != nil || got != rep.CandSHA256 {
 		return rep, &candidateFault{"changed its own binary during the run", fmt.Errorf("the candidate's binary changed during the run")}
 	}
-	rep.Verdict = Decide(rep.Candidate, rep.Control, cfg.Options)
+	opts := cfg.Options
+	for _, f := range rep.Fixes.Fixes {
+		opts.Fixed = append(opts.Fixed, f.String())
+	}
+	rep.Verdict = Decide(rep.Candidate, rep.Control, opts)
 	if len(rep.Unit.Shared) > 0 {
 		rep.Verdict.Reason += "; failing on both sides, so the environment's and not counted: " + failureNames(rep.Unit.Shared, modulePath(cand.Src))
 	}
@@ -578,6 +596,7 @@ func (r Report) Markdown() string {
 		fmt.Fprintf(&b, "\n%s\n", fenced(tail(r.Error, 3000)))
 	}
 	b.WriteString(r.Unit.markdown())
+	b.WriteString(r.Fixes.markdown())
 	table("Candidate", r.Candidate)
 	table("Control", r.Control)
 	fmt.Fprintf(&b, "\nOrg repositories made: %d, removed: %d, left: %d\n", len(r.Repos), len(r.Cleaned), len(r.Leaked))
