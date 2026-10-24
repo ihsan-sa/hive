@@ -41,3 +41,35 @@ func TestWorkflowsReadTheDaemonFileWhereItIs(t *testing.T) {
 		t.Error("no workflow reads daemon.json; update.yml should wait for the updated daemon in it")
 	}
 }
+
+// A jq program (gh's -q or jq itself) in a workflow is single-quoted, its
+// values passed with --arg: a release tag spliced into a double-quoted
+// program is code jq runs.
+func TestWorkflowsPassValuesToJqAsArgs(t *testing.T) {
+	files, _ := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	spliced := regexp.MustCompile(`(?:(?:--json\s+\S+\s+|^\s*)(?:-q|--jq)|\bjq(?:\s+-[a-zA-Z]+)*)\s+"(?:[^"\\]|\\.)*\$[\w{]`)
+	for _, f := range files {
+		raw, _ := os.ReadFile(f)
+		for _, line := range strings.Split(string(raw), "\n") {
+			if spliced.MatchString(line) {
+				t.Errorf("%s splices a shell value into a jq program:\n%s", filepath.Base(f), strings.TrimSpace(line))
+			}
+		}
+	}
+	if !spliced.MatchString(`--json tagName -q "(map(.tagName) | index(\"$to\"))"`) || !spliced.MatchString(`| jq -r "index(\"$to\")"`) {
+		t.Error("the check misses the splice it is for")
+	}
+}
+
+// The release workflow signs the checksums before it uploads them.
+func TestReleaseWorkflowSigns(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	sign, upload := strings.Index(s, "go run ./cmd/hive-sign"), strings.Index(s, "gh release upload")
+	if sign < 0 || upload < sign || !strings.Contains(s, "secrets.HIVE_RELEASE_KEY") {
+		t.Fatal("release.yml doesn't sign checksums.txt with HIVE_RELEASE_KEY before the upload")
+	}
+}

@@ -30,6 +30,14 @@ jobs:
               -o dist/$name ./cmd/hive
           done
           (cd dist && sha256sum * > checksums.txt)
+      - name: sign
+        # checksums.txt.sig: the tag and checksums signed with the owner's release key, which
+        # every install pinning its public half (release.PublicKey) checks before installing.
+        # Unsigned only while no key is pinned; hive-sign fails on a missing or wrong key.
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          HIVE_RELEASE_KEY: ${{ secrets.HIVE_RELEASE_KEY }}
+        run: go run ./cmd/hive-sign "$TAG" dist/checksums.txt
       - name: upload
         env:
           GH_TOKEN: ${{ github.token }}

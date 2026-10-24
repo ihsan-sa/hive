@@ -308,6 +308,24 @@ func (l *Local) LatestRelease(repo string) (Release, error) {
 	return rs[len(rs)-1], nil
 }
 
+func (l *Local) Tags(repo string) ([]string, error) {
+	var tags []string
+	for _, r := range l.load().Releases[repo] {
+		tags = append(tags, r.Tag)
+	}
+	return tags, nil
+}
+
+// AddRelease records a release as made outside the Hive, such as the person
+// marking an older one the latest (tests add them); it becomes the latest.
+func (l *Local) AddRelease(repo string, r Release) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	s.Releases[repo] = append(s.Releases[repo], r)
+	l.save(s)
+}
+
 func (l *Local) CreateRelease(repo, tag, sha, notes string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

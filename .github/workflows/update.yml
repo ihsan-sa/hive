@@ -56,8 +56,8 @@ jobs:
           pre=$(gh release view "$to" -R "$GITHUB_REPOSITORY" --json isPrerelease -q .isPrerelease)
           if [ "$FROM" = previous ]; then
             # the newest full release before it: what installs are on (a red pre-release never was)
-            from=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName,isPrerelease \
-              -q "(map(.tagName) | index(\"$to\")) as \$i | if \$i == null then empty else .[\$i+1:] | map(select(.isPrerelease | not)) | .[0].tagName // empty end")
+            from=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName,isPrerelease |
+              jq -r --arg to "$to" '(map(.tagName) | index($to)) as $i | if $i == null then empty else .[$i+1:] | map(select(.isPrerelease | not)) | .[0].tagName // empty end')
             cmd=hive repo=$GITHUB_REPOSITORY
           else
             from=$FROM cmd=hive-v0 repo=ihsan-sa/hive-standalone-build

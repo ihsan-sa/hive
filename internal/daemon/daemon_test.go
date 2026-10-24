@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
 // After an update renames the running binary to hive.old, the restart runs
@@ -43,8 +45,9 @@ func TestRestartRunsNewBinary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	defer func(f func() (string, error)) { executable = f }(executable)
+	defer func(f func() (string, error), g func() supervision) { executable, supervisor = f, g }(executable, supervisor)
 	executable = func() (string, error) { return filepath.Join(dir, "hive.old"), nil }
+	supervisor = func() supervision { return supervision{} } // whatever unit the tests run in
 	stopped := false
 	s := &server{a: &app.App{C: &core.Core{WS: ws}}, info: api.DaemonInfo{PID: os.Getpid(), Token: "t"}, cancel: func() { stopped = true }}
 	s.restart()
@@ -290,5 +293,186 @@ func TestPassFeedbackToTheLead(t *testing.T) {
 	}
 	if rec := do("delete"); rec.Code == http.StatusOK {
 		t.Fatal("an unknown action was accepted")
+	}
+}
+
+// A unit's Restart= says what status a restart exits with, and KillMode=
+// whether its stop takes the live turns with it.
+func TestSupervisedBy(t *testing.T) {
+	for _, c := range []struct {
+		restart, kill string
+		status        int
+		keeps         bool
+	}{
+		{"on-failure", "control-group", RestartStatus, false},
+		{"always", "process", RestartStatus, true},
+		{"on-success", "mixed", 0, false},
+		{"no", "process", -1, true},
+		{"", "", -1, false},
+	} {
+		if got := supervisedBy("x.service", c.restart, c.kill); got.status != c.status || got.keepsRuns != c.keeps {
+			t.Errorf("Restart=%s KillMode=%s: got %+v", c.restart, c.kill, got)
+		}
+	}
+}
+
+// restartUnder runs a restart under sup with one live turn and reports
+// whether the daemon stopped before that turn ended, and after.
+func restartUnder(t *testing.T, sup supervision) (s *server, early, late bool) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("sleep stands in for a turn")
+	}
+	dir := t.TempDir()
+	c, err := core.Open(core.Workspace{Root: filepath.Join(dir, "ws")}, &core.Local{Dir: filepath.Join(dir, "forge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	if _, err := c.Runs.Start(core.RunSpec{ID: "live", Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	turn, err := proc.StartDetached([]string{"sleep", "60"}, os.Environ(), dir, "", filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { proc.Kill(turn) })
+	c.J.MustAppend("run.turn_started", map[string]any{"id": "live", "turn": 1, "proc": turn})
+	defer func(f func() supervision, d time.Duration) { supervisor, quietPoll = f, d }(supervisor, quietPoll)
+	supervisor, quietPoll = func() supervision { return sup }, 20*time.Millisecond
+	var stopped atomic.Bool
+	s = &server{a: &app.App{C: c}, info: api.DaemonInfo{PID: os.Getpid(), Token: "t"}, cancel: func() { stopped.Store(true) }}
+	done := make(chan struct{})
+	go func() { s.restart(); close(done) }()
+	time.Sleep(200 * time.Millisecond)
+	early = stopped.Load()
+	proc.Kill(turn)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restart never finished")
+	}
+	return s, early, stopped.Load()
+}
+
+// Under a system unit of any name that kills its whole cgroup on stop, a
+// restart holds new turns, waits for the live one to end, then exits with the
+// status Restart= starts the new binary on.
+func TestRestartUnderSystemUnitWaitsForLiveTurns(t *testing.T) {
+	s, early, late := restartUnder(t, supervisedBy("hive-box.service", "on-failure", "control-group"))
+	if early {
+		t.Fatal("the daemon stopped while a turn was live, which the unit's stop would kill")
+	}
+	if !late {
+		t.Fatal("the daemon didn't stop once the turn ended")
+	}
+	if got := s.exit.Load(); got != RestartStatus {
+		t.Fatalf("exit status %d, want %d", got, RestartStatus)
+	}
+	if c, err := api.Dial(s.a.C.WS); err != nil || !c.Info.Restarting {
+		t.Fatalf("daemon.json doesn't say a restart is under way: %v", err)
+	}
+	if !strings.Contains(alerts(s), "once 1 live turn(s) end") {
+		t.Fatalf("no alert says the restart waits:\n%s", alerts(s))
+	}
+}
+
+// Under a user unit with another name and KillMode=process, the live turns
+// outlive the daemon, so it exits at once and the new one reattaches to them.
+func TestRestartUnderUserUnitKeepsLiveTurns(t *testing.T) {
+	s, early, _ := restartUnder(t, supervisedBy("agents.service", "always", "process"))
+	if !early {
+		t.Fatal("the daemon waited, though the unit's stop leaves the turns running")
+	}
+	if got := s.exit.Load(); got != RestartStatus {
+		t.Fatalf("exit status %d, want %d", got, RestartStatus)
+	}
+}
+
+// A unit with Restart=no wouldn't start the Hive again, so the daemon keeps
+// running on the old code and says the update waits for its next start.
+func TestRestartUnderUnitWithoutRestartStays(t *testing.T) {
+	s, early, late := restartUnder(t, supervisedBy("hive.service", "no", "control-group"))
+	if early || late {
+		t.Fatal("the daemon stopped under a unit that won't start it again")
+	}
+	if !strings.Contains(alerts(s), "takes effect at its next start") {
+		t.Fatalf("no alert says the update waits:\n%s", alerts(s))
+	}
+}
+
+func alerts(s *server) string {
+	var out strings.Builder
+	s.a.C.J.Replay(func(e core.Event) {
+		if e.Kind == "alert.raised" {
+			out.Write(e.Data)
+			out.WriteByte('\n')
+		}
+	})
+	return out.String()
+}
+
+// Only a unit whose main process is this daemon restarts it. A daemon
+// started from a shell inside tmux.service or cron.service sits in that
+// unit's cgroup, but the unit won't start it again, so it starts its own
+// replacement as before.
+func TestSupervisorIsTheUnitWhoseMainProcessThisIs(t *testing.T) {
+	defer func(f func() (string, bool), g func(string, bool) (string, string, int)) { unitOf, unitSettings = f, g }(unitOf, unitSettings)
+	unitOf = func() (string, bool) { return "cron.service", false }
+	main := os.Getpid() + 1
+	unitSettings = func(string, bool) (string, string, int) { return "on-failure", "control-group", main }
+	if sup := supervisor(); sup.name != "" {
+		t.Fatalf("an unrelated unit was taken for the supervisor: %+v", sup)
+	}
+	main = os.Getpid()
+	if sup := supervisor(); sup.name != "cron.service" || sup.status != RestartStatus {
+		t.Fatalf("the unit whose main process this is wasn't: %+v", sup)
+	}
+	// supervisord as a system unit: the daemon is its child, not its main
+	// process, and HIVE_SUPERVISED says supervisord restarts it.
+	unitOf, main = func() (string, bool) { return "supervisord.service", false }, os.Getpid()+1
+	t.Setenv("HIVE_SUPERVISED", "1")
+	if sup := supervisor(); sup.status != RestartStatus || sup.keepsRuns {
+		t.Fatalf("HIVE_SUPERVISED inside another unit was ignored: %+v", sup)
+	}
+	unitOf = func() (string, bool) { return "hive.service", true }
+	if sup := supervisor(); sup.name != "" {
+		t.Fatalf("the Hive's own user unit left the systemctl path: %+v", sup)
+	}
+}
+
+// A restart that waits for a quiet moment gives up at its deadline: the
+// daemon keeps running, the next update can restart it and an alert says so.
+func TestRestartWaitHasADeadline(t *testing.T) {
+	defer func(d time.Duration) { quietWait = d }(quietWait)
+	quietWait = 50 * time.Millisecond // passes while the turn is live
+	s, early, late := restartUnder(t, supervisedBy("hive-box.service", "on-failure", "control-group"))
+	if early || late || s.exit.Load() != 0 {
+		t.Fatal("the daemon stopped after the wait gave up")
+	}
+	if s.handing.Load() {
+		t.Fatal("the restart still counts as under way, so the next one can't start")
+	}
+	if !strings.Contains(alerts(s), "didn't restart into the update") {
+		t.Fatalf("no alert says the restart gave up:\n%s", alerts(s))
+	}
+}
+
+// After a rollback the old binary starts through what runs the daemon: the
+// Hive's unit or another supervisor restarts on the exit status.
+func TestRolledBackStartsTheOldDaemon(t *testing.T) {
+	defer func(f func() bool, g func() supervision) { inHiveUnit, supervisor = f, g }(inHiveUnit, supervisor)
+	inHiveUnit = func() bool { return true }
+	if err := rolledBack(core.Workspace{}, "/x/hive"); err != ExitCode(RestartStatus) {
+		t.Fatalf("in the Hive's unit: %v", err)
+	}
+	inHiveUnit = func() bool { return false }
+	supervisor = func() supervision { return supervisedBy("x.service", "on-success", "process") }
+	if err := rolledBack(core.Workspace{}, "/x/hive"); err != nil {
+		t.Fatalf("under Restart=on-success: %v", err)
+	}
+	supervisor = func() supervision { return supervisedBy("x.service", "always", "process") }
+	if err := rolledBack(core.Workspace{}, "/x/hive"); err != ExitCode(RestartStatus) {
+		t.Fatalf("under Restart=always: %v", err)
 	}
 }

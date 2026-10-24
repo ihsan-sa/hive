@@ -281,6 +281,9 @@ func cmdDaemon(args []string) int {
 	}
 	if err := daemon.Run(ws, *waitFor); err != nil {
 		fmt.Fprintln(os.Stderr, core.Cmd+" daemon:", err)
+		if code, ok := err.(daemon.ExitCode); ok {
+			return int(code)
+		}
 		return 1
 	}
 	return 0
