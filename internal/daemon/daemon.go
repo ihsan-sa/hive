@@ -180,6 +180,9 @@ func Run(ws core.Workspace, waitFor int) error {
 		_, err := proc.StartDetached([]string{exe, "daemon"}, append(os.Environ(), "HIVE_HOME="+ws.Root), ws.Root, "", filepath.Join(ws.Hive(), "daemon.log"))
 		return err
 	}
+	if back := release.Boot(ws); back != "" {
+		return rolledBack(ws, back)
+	}
 	// After the update hand-off: a renamed binary runs this check in its own daemon.
 	if err := checkHarness(ws.LoadConfig()); err != nil {
 		return err
@@ -231,6 +234,9 @@ func Run(ws core.Workspace, waitFor int) error {
 		}
 	})
 	a.C.J.Subscribe(s.onEvent)
+	a.Release.Report()
+	settled := time.AfterFunc(release.SettleAfter, func() { release.Settled(ws) })
+	defer settled.Stop()
 	a.C.J.MustAppend("hive.started", map[string]string{"version": core.Version, "pid": strconv.Itoa(os.Getpid())})
 	srv := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
 	go srv.Serve(ln)
@@ -245,6 +251,23 @@ func Run(ws core.Workspace, waitFor int) error {
 	if code := s.exit.Load(); code > 0 {
 		return ExitCode(code)
 	}
+	return err
+}
+
+// rolledBack starts the daemon from exe, the binary an update replaced, back
+// in its place because the update's daemon kept failing to start: through
+// the supervisor that runs this one, or detached.
+func rolledBack(ws core.Workspace, exe string) error {
+	if inHiveUnit() {
+		return ExitCode(RestartStatus) // the Hive's unit restarts on failure
+	}
+	if sup := supervisor(); sup.name != "" && sup.status >= 0 {
+		if sup.status == 0 {
+			return nil
+		}
+		return ExitCode(sup.status)
+	}
+	_, err := proc.StartDetached([]string{exe, "daemon"}, append(os.Environ(), "HIVE_HOME="+ws.Root), ws.Root, "", filepath.Join(ws.Hive(), "daemon.log"))
 	return err
 }
 
@@ -308,8 +331,9 @@ func supervisedBy(name, restart, killMode string) supervision {
 	return sup
 }
 
-// quietPoll is how often a restart that waits for a quiet moment looks.
-var quietPoll = 5 * time.Second
+// quietPoll is how often a restart that waits for a quiet moment looks, and
+// quietWait how long it waits before it gives up and lets turns start again.
+var quietPoll, quietWait = 5 * time.Second, 2 * time.Hour
 
 type server struct {
 	a       *app.App
@@ -404,8 +428,13 @@ func (s *server) handBack(sup supervision) {
 		if n := rs.Live(); n > 0 {
 			j.MustAppend("alert.raised", map[string]string{"kind": "update", "ref": "restart", "text": fmt.Sprintf("The Hive restarts into the update once %d live turn(s) end, since stopping %s ends every process in it; new turns wait until then.", n, sup.name)})
 		}
-		for rs.Live() > 0 {
-			time.Sleep(quietPoll)
+		for end := time.Now().Add(quietWait); rs.Live() > 0; time.Sleep(quietPoll) {
+			if time.Now().After(end) {
+				rs.Hold("")
+				s.handing.Store(false)
+				j.MustAppend("alert.raised", map[string]string{"kind": "update", "ref": "restart", "text": fmt.Sprintf("The Hive waited %s for live turns to end and didn't restart into the update; turns start again, and the next update (`%s update`, or the scheduled one) tries the restart again.", quietWait, core.Cmd)})
+				return
+			}
 		}
 	}
 	info := s.info

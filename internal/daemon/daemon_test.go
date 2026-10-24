@@ -440,3 +440,39 @@ func TestSupervisorIsTheUnitWhoseMainProcessThisIs(t *testing.T) {
 		t.Fatalf("the Hive's own user unit left the systemctl path: %+v", sup)
 	}
 }
+
+// A restart that waits for a quiet moment gives up at its deadline: the
+// daemon keeps running, the next update can restart it and an alert says so.
+func TestRestartWaitHasADeadline(t *testing.T) {
+	defer func(d time.Duration) { quietWait = d }(quietWait)
+	quietWait = 50 * time.Millisecond // passes while the turn is live
+	s, early, late := restartUnder(t, supervisedBy("hive-box.service", "on-failure", "control-group"))
+	if early || late || s.exit.Load() != 0 {
+		t.Fatal("the daemon stopped after the wait gave up")
+	}
+	if s.handing.Load() {
+		t.Fatal("the restart still counts as under way, so the next one can't start")
+	}
+	if !strings.Contains(alerts(s), "didn't restart into the update") {
+		t.Fatalf("no alert says the restart gave up:\n%s", alerts(s))
+	}
+}
+
+// After a rollback the old binary starts through what runs the daemon: the
+// Hive's unit or another supervisor restarts on the exit status.
+func TestRolledBackStartsTheOldDaemon(t *testing.T) {
+	defer func(f func() bool, g func() supervision) { inHiveUnit, supervisor = f, g }(inHiveUnit, supervisor)
+	inHiveUnit = func() bool { return true }
+	if err := rolledBack(core.Workspace{}, "/x/hive"); err != ExitCode(RestartStatus) {
+		t.Fatalf("in the Hive's unit: %v", err)
+	}
+	inHiveUnit = func() bool { return false }
+	supervisor = func() supervision { return supervisedBy("x.service", "on-success", "process") }
+	if err := rolledBack(core.Workspace{}, "/x/hive"); err != nil {
+		t.Fatalf("under Restart=on-success: %v", err)
+	}
+	supervisor = func() supervision { return supervisedBy("x.service", "always", "process") }
+	if err := rolledBack(core.Workspace{}, "/x/hive"); err != ExitCode(RestartStatus) {
+		t.Fatalf("under Restart=always: %v", err)
+	}
+}
