@@ -65,6 +65,3 @@
 
 ## 2026-10-23 The Hive's own repo guards its root paths by default
 - Decision: self projects always class the sandbox, the risk module, setup and the installers as root, and the gate's credential code, harness logins, release/daemon and the warden/tribunal prompts as high, joined in `Classify` from the binary (docs/root-paths.md) | Why: the Hive's project.json named no classes, so the code that acts outside the box got one read and released unasked | Tradeoff: more changes to the Hive need two reads, and root ones wait for the person at release.
-
-## 2026-10-24 Sharing has three levels
-- Decision: a project is shared, private or isolated (docs/sharing.md); private is covered from every other run and walled from reach both ways like isolated, while its own runs mount the shared Hive like a shared project's | Why: the person listed "sharing-has-three-levels" with no detail, and the spec offers only the two ends; a one-way wall keeps a project's work out of sight without cutting its agents off from the Hive's records | Tradeoff: the middle level is a reading, not the person's words, and is listed as an open question; it reuses the isolated cover paths (`kb/isolated/`), so names still say "isolated" where they mean hidden
