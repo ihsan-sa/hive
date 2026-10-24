@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -75,6 +76,27 @@ type ProjectConfig struct {
 	DryRun    string   `json:"dryrun,omitempty"` // for self-releasing projects: one ask, end to end
 }
 
+// SelfRoot and SelfHigh are the paths of the Hive's own source that a self
+// project guards whatever its project.json says; the gate's binary holds them,
+// so no change on the branch can drop them. Root is what acts on the person's
+// machine outside the box: the box itself, the approved scripts the risk
+// module runs, the install and autostart, and the workflows that build every
+// install's binary. High is what holds or hands out credentials, what
+// replaces the running Hive, and the dependencies compiled into it.
+var (
+	SelfRoot = []string{"internal/sandbox/", "internal/mod/risk/", "internal/setup/", "install/", ".github/"}
+	SelfHigh = []string{"internal/core/effects.go", "internal/core/forge.go", "internal/harness/", "internal/mod/release/", "internal/daemon/", "modules/agents/warden.md", "modules/agents/tribunal.md", "go.mod", "go.sum"}
+)
+
+// Guarded returns cfg with a self project's built-in classes added to its own.
+func (cfg ProjectConfig) Guarded(p Project) ProjectConfig {
+	if p.Self {
+		cfg.Root = append(slices.Clone(SelfRoot), cfg.Root...)
+		cfg.High = append(slices.Clone(SelfHigh), cfg.High...)
+	}
+	return cfg
+}
+
 // Score is one number, which way is better, and how much noise to tolerate.
 type Score struct {
 	Command   string   `json:"command"`
@@ -112,6 +134,9 @@ func (s Score) WithinTolerance(value, best float64) bool {
 	}
 	return value >= best-s.Tolerance
 }
+
+// Beats reports whether value is better than best by more than the tolerance.
+func (s Score) Beats(value, best float64) bool { return !s.WithinTolerance(best, value) }
 
 // Best returns the better of a and b.
 func (s Score) Best(a, b float64) float64 {

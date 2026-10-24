@@ -579,3 +579,86 @@ func TestLateAnswerWaitsForTheRelease(t *testing.T) {
 		t.Fatalf("the late answer should be superseded: %d releases, m2 approved %v", n.calls, m.C.Effects.Approved("release", "hive", "m2"))
 	}
 }
+
+// A release is cut as a pre-release and becomes the latest only once ci and
+// update pass on its commit; a red run keeps it a pre-release and raises one
+// alert, and a re-run that passes publishes it.
+func TestReleasePublishesOnlyAfterItsGates(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	latest := func() core.Release {
+		t.Helper()
+		rel, err := n.LatestRelease("me/hive")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rel
+	}
+	if rel := latest(); rel.Tag != "v0.0.1" || !rel.Prerelease {
+		t.Fatalf("the release wasn't cut as a pre-release: %+v", rel)
+	}
+	alerts := func() (k int) {
+		m.C.J.Replay(func(e core.Event) {
+			if e.Kind == "alert.raised" && strings.Contains(string(e.Data), "v0.0.1") {
+				k++
+			}
+		})
+		return k
+	}
+	run := func(name, status, conclusion string) core.WorkflowRun {
+		return core.WorkflowRun{Name: name, Status: status, Conclusion: conclusion, URL: "https://ci/" + name}
+	}
+	steps := []struct {
+		runs   []core.WorkflowRun
+		says   string
+		pre    bool
+		alerts int
+	}{
+		{nil, "waiting for ci (no run yet), update (no run yet)", true, 0},
+		{[]core.WorkflowRun{run("update", "in_progress", ""), run("ci", "completed", "success")}, "waiting for update", true, 0},
+		{[]core.WorkflowRun{run("update", "completed", "failure"), run("ci", "completed", "success")}, "update failure (https://ci/update)", true, 1},
+		{[]core.WorkflowRun{run("update", "completed", "failure"), run("ci", "completed", "success")}, "update failure", true, 1},
+		// a re-run: the newest run of each workflow counts
+		{[]core.WorkflowRun{run("update", "completed", "success"), run("update", "completed", "failure"), run("ci", "completed", "success")}, "published v0.0.1", false, 1},
+		{nil, "nothing to publish", false, 1},
+	}
+	for i, s := range steps {
+		n.SetReleaseRuns("me/hive", "m1", s.runs...)
+		got := m.Publish()
+		if !strings.Contains(got, s.says) || latest().Prerelease != s.pre || alerts() != s.alerts {
+			t.Fatalf("step %d: Publish said %q; pre-release %v; %d alerts; want %q, %v, %d", i, got, latest().Prerelease, alerts(), s.says, s.pre, s.alerts)
+		}
+	}
+	// The next release numbers on from the newest, a pre-release included.
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	if rel := latest(); rel.Tag != "v0.0.2" || !rel.Prerelease {
+		t.Fatalf("the next release is %+v", rel)
+	}
+}
+
+// Of the pre-releases waiting, the newest that passed is published; an older
+// one still waiting stays a pre-release and is no longer checked.
+func TestPublishSkipsOlderPreReleases(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	for i, sha := range []string{"m1", "m2"} {
+		merged(i+1, "a"+sha, sha)
+		land("a"+sha, "r"+sha)
+		m.AfterKept("hive", sha)
+	}
+	green := []core.WorkflowRun{{Name: "ci", Status: "completed", Conclusion: "success"}, {Name: "update", Status: "completed", Conclusion: "success"}}
+	n.SetReleaseRuns("me/hive", "m2", green...)
+	if got := m.Publish(); got != "published v0.0.2" {
+		t.Fatalf("Publish said %q", got)
+	}
+	n.SetReleaseRuns("me/hive", "m1", green...)
+	if got := m.Publish(); got != "nothing to publish" {
+		t.Fatalf("an older release would be published over a newer one: %q", got)
+	}
+	if rel, _ := n.LatestRelease("me/hive"); rel.Tag != "v0.0.2" || rel.Prerelease {
+		t.Fatalf("latest is %+v", rel)
+	}
+}

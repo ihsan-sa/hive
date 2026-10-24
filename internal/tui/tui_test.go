@@ -882,3 +882,27 @@ func TestWrapBreaksLongWords(t *testing.T) {
 		t.Fatalf("wrapping lost text: %q", got)
 	}
 }
+
+// Window names and statuses come from the usage feed; one carrying terminal
+// control codes, bidi or zero-width characters is spelled out on the
+// dashboard and in the usage line, never sent to the screen.
+func TestPlanUsageEscapesFeedNames(t *testing.T) {
+	m := testModel(200, 40)
+	evil := "five\x1b[2J\x1b[H\u009b31m\r\u202e\u200bhour"
+	m.st.Plans = []core.Plan{{Harness: "claude\x1b]0;x\x07", Login: "me\u2066", Limit: harness.RateLimit{Status: "allowed\x1b[1A", Window: evil,
+		Windows: map[string]harness.Window{evil: {Utilization: 0.5}}}}}
+	var dash string
+	for _, r := range m.dashRows() {
+		if strings.HasPrefix(r.key, "plan:") {
+			dash += r.text
+		}
+	}
+	for where, s := range map[string]string{"dashboard": dash, "usage line": m.usage(400)} {
+		if !strings.Contains(s, `five\x1b[2J\x1b[H\x9b31m\x0d\u202e\u200bhour`) {
+			t.Errorf("%s lacks the escaped window name: %q", where, s)
+		}
+		if strings.ContainsAny(s, "\x1b\x07\r\u009b\u202e\u200b\u2066") {
+			t.Errorf("%s sends a control or format character to the screen: %q", where, s)
+		}
+	}
+}

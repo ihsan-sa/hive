@@ -524,6 +524,52 @@ func TestGateAndLoop(t *testing.T) {
 	})
 }
 
+// On a scored project each commit a running worker makes that beats the best
+// kept score merges as a checkpoint while it keeps going: the fake worker
+// commits 7, then 9, in one turn and waits on each merge before it goes on,
+// and its finish lands on top of both.
+func TestCheckpointsBankEachGain(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/bank", map[string]string{
+		".hive/project.json": `{"test": "test ! -f BROKEN", "score": {"command": "cat score.txt", "direction": "higher", "tolerance": 0}}`,
+		".hive/goals.md":     "# Goals\n\nRaise the score as far as it goes.\n",
+		"score.txt":          "5\n",
+	})
+	h.post("/api/project", map[string]any{"name": "bank", "repo": "me/bank"}, nil)
+	h.wait("the baseline", minute, func(st api.State) bool {
+		return len(st.Projects) == 1 && st.Projects[0].Best != nil && *st.Projects[0].Best == 5
+	})
+	h.post("/api/ask", map[string]string{"project": "bank", "title": "raise the score", "known": "FAKE:checkpoints"}, nil)
+	st := h.wait("both checkpoints and the finish to merge", 8*minute, taskStage("bank", "raise the score", work.StageDone))
+	tk, _ := task(st, "bank", "raise the score")
+	if tk.Banked != 2 {
+		t.Fatalf("banked %d: %v", tk.Banked, tk.Log)
+	}
+	// main's score at each merge, and whether the worker had finished by then.
+	var merges []string
+	finished := false
+	raw, _ := os.ReadFile(filepath.Join(h.ws.Hive(), "events.jsonl"))
+	for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var e core.Event
+		var d struct {
+			ID       string
+			MergeSHA string `json:"merge_sha"`
+		}
+		if json.Unmarshal([]byte(l), &e) != nil || e.Decode(&d) != nil {
+			continue
+		}
+		finished = finished || e.Kind == "run.finish" && d.ID == tk.Worker
+		if e.Kind == "effect.merged" {
+			s, _ := core.Git(h.ws.Project("bank"), "show", d.MergeSHA+":score.txt")
+			merges = append(merges, fmt.Sprintf("%s/%v", strings.TrimSpace(s), finished))
+		}
+	}
+	if strings.Join(merges, " ") != "7/false 9/false 9/true" {
+		t.Fatalf("main's score at each merge/worker finished: %v", merges)
+	}
+}
+
 // A review reads the project's docs/REVIEW.md, goals and lessons from main,
 // and advice given with a land becomes one follow-up brief once it merges, not
 // a blocker. The fake gives advice on the follow-up's review too, which files
