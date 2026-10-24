@@ -95,18 +95,20 @@ type Task struct {
 	NoBank     string `json:"no_bank,omitempty"` // why no more checkpoints are opened for this task
 	// Reruns counts the re-runs of the forge's failed checks asked on each
 	// head (rerun-checks), capped at rerunsPerHead; RerunAt is the newest.
-	Reruns    map[string]int `json:"reruns,omitempty"`
-	RerunAt   time.Time      `json:"rerun_at,omitempty"`
-	Failures  int            `json:"failures"`
-	CloseFail int            `json:"close_fail,omitempty"` // failed tries to close the issue
-	Attempt   int            `json:"attempt"`              // fresh workers handed this task
-	Retry     time.Time      `json:"retry,omitempty"`
-	IssueOpen bool           `json:"issue_open,omitempty"` // done, but its issue is still to close
-	Noted     string         `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
-	NotedDiff string         `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
-	Log       []Entry        `json:"log,omitempty"`
-	Created   time.Time      `json:"created"`
-	Updated   time.Time      `json:"updated"`
+	Reruns     map[string]int `json:"reruns,omitempty"`
+	RerunAt    time.Time      `json:"rerun_at,omitempty"`
+	DraftSince time.Time      `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
+	DraftTold  bool           `json:"draft_told,omitempty"`  // the lead was told it has waited long
+	Failures   int            `json:"failures"`
+	CloseFail  int            `json:"close_fail,omitempty"` // failed tries to close the issue
+	Attempt    int            `json:"attempt"`              // fresh workers handed this task
+	Retry      time.Time      `json:"retry,omitempty"`
+	IssueOpen  bool           `json:"issue_open,omitempty"` // done, but its issue is still to close
+	Noted      string         `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
+	NotedDiff  string         `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
+	Log        []Entry        `json:"log,omitempty"`
+	Created    time.Time      `json:"created"`
+	Updated    time.Time      `json:"updated"`
 }
 
 // A Bank is a merged checkpoint: its pull request and the merge on main.
@@ -1507,6 +1509,19 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if closed, err := m.closedOnForge(t, p); closed || err != nil {
 		return err
 	}
+	// A draft waits for the read outside the Hive it was left for, before
+	// anything else: bringing it up to date would only test and read it again.
+	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
+	if err != nil {
+		return err
+	}
+	if pr.Draft {
+		return m.waitDraft(t, pr)
+	}
+	if !t.DraftSince.IsZero() {
+		t.Reason, t.DraftSince, t.DraftTold = "", time.Time{}, false
+		m.save(t, "marked ready; merging")
+	}
 	main, err := m.C.Effects.Sync(p)
 	if err != nil {
 		return err
@@ -1527,10 +1542,21 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return nil
 	}
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label()})
+	if errors.Is(err, core.ErrDraft) { // made a draft since the look above
+		return m.waitDraft(t, pr)
+	}
 	var np *core.NeedsPerson
 	if errors.As(err, &np) {
 		t.Stage = StagePerson
 		m.save(t, np.Error())
+		return nil
+	}
+	var rr *core.RefusedRed
+	if errors.As(err, &rr) {
+		// Retrying can't help until main is green again or the rule is
+		// relaxed, so it holds, said once, rather than failing toward a stop.
+		m.raiseOnce(p, main+"/refused", "GitHub's branch rules in "+p.Name+" refuse to merge PR #"+fmt.Sprint(t.PR.Number)+", though it is no worse than main: they want "+strings.Join(rr.Checks, ", ")+", red on main at "+core.Short(main)+" too. Fix main, or merge it yourself or relax the rule to let the fix land.")
+		m.hold(t, p, rr.Error())
 		return nil
 	}
 	if err != nil {
@@ -1564,6 +1590,52 @@ func (m *Module) merge(t *Task, p core.Project) error {
 
 // holdGap is how long a held task waits before the gate looks again.
 var holdGap = time.Minute
+
+const draftWait = "waiting on the read it was left as a draft for"
+
+// draftTell is how long a draft waits before the lead hears of it, once.
+var draftTell = 24 * time.Hour
+
+// waitDraft parks a merge while its PR is a draft: no failure is counted, it
+// looks again every few minutes, saving only what changed, and it merges once
+// the PR is marked ready. One that waits long is told to the lead once.
+func (m *Module) waitDraft(t *Task, pr core.PR) error {
+	m.mu.Lock()
+	m.later[t.ID] = time.Now().Add(3 * time.Minute)
+	m.mu.Unlock()
+	reason := draftWait + " (" + whoseRead(pr.Body) + "); it merges once the PR is marked ready"
+	if t.DraftSince.IsZero() {
+		t.DraftSince = time.Now().UTC()
+	}
+	if t.Reason != reason {
+		t.Reason = reason
+		m.save(t, reason)
+	}
+	if !t.DraftTold && time.Since(t.DraftSince) >= draftTell {
+		t.DraftTold = true
+		m.save(t, "told the lead the draft has waited since "+t.DraftSince.Format("2006-01-02 15:04Z"))
+		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited since %s for the read its PR was left as a draft for (%s). It merges once the PR is marked ready.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), t.DraftSince.Format("2006-01-02 15:04Z"), whoseRead(pr.Body)))
+	}
+	return nil
+}
+
+// whoseRead is the PR description's line saying which read it needs, such as
+// a worker's "Needs a perms read".
+func whoseRead(body string) string {
+	for _, l := range strings.Split(body, "\n") {
+		l = strings.TrimSpace(strings.Trim(strings.NewReplacer("**", "", "__", "", "`", "").Replace(l), " \t-*>#"))
+		if low := strings.ToLower(l); strings.Contains(low, "need") && strings.Contains(low, "read") {
+			return core.Clip(l, 100)
+		}
+	}
+	return "an outside read"
+}
+
+// MidMerge reports a task in the middle of merging. One waiting on a draft
+// isn't: its read may take hours or never come, so it holds nothing up.
+func (m *Module) MidMerge() bool {
+	return len(m.List(func(t Task) bool { return t.Stage == StageMerging && t.DraftSince.IsZero() })) > 0
+}
 
 // upToDate decides whether t's branch must take main in before it merges.
 // It merges as it is while the forge says it merges cleanly: every main merge
@@ -1623,13 +1695,13 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+core.CheckNames(which)+")")
 		return true, nil
 	}
-	var shared []string
+	var shared, byName []string
 	if st == core.CheckFail {
 		mainRuns, err := m.C.Effects.Forge.Checks(p.Repo, main)
 		if err != nil {
 			return true, err
 		}
-		st, which, shared = core.ChecksAgainstMain(runs, mainRuns, req)
+		st, which, shared, byName = core.ChecksAgainstMain(runs, mainRuns, req, m.C.Effects.FailingTests(p.Repo))
 	}
 	names := core.CheckNames(which)
 	onMain := ""
@@ -1661,6 +1733,13 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	// back here every holdGap, and a repeat would crowd out its log.
 	if note := "no worse than main: the forge's checks " + strings.Join(shared, ", ") + " are red on both " + core.Short(t.SHA) + " and main at " + core.Short(main) + ", and nothing else fails, so it merges"; len(shared) > 0 && !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
 		m.save(t, note)
+		say := "Merging while main is red: " + strings.Join(shared, ", ") + " fail on main at " + core.Short(main) + " too, and nothing else fails here."
+		if len(byName) > 0 {
+			// Only a log that names its failing tests can show a new one
+			// inside a check main already fails.
+			say += " The logs of " + strings.Join(byName, ", ") + " name no failing tests to compare, so a new failure inside them can't be ruled out."
+		}
+		m.comment(p.Repo, t.PR.Number, say)
 	}
 	return false, nil
 }

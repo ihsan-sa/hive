@@ -1,6 +1,7 @@
 package work
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -601,5 +602,69 @@ func TestMergeNoWorseThanMainSaidOnce(t *testing.T) {
 	}
 	if n != 1 || task.Stage != StageMerging || !strings.Contains(task.Reason, "merges held") {
 		t.Fatalf("%d lines, stage %q, reason %q", n, task.Stage, task.Reason)
+	}
+}
+
+// A second failing test inside a check main already fails is the change's:
+// the logs name the tests, and only the one main shares is let off.
+func TestMergeForgeCheckNewTestInSharedRed(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, URL: "head/win"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, URL: "main/win"})
+	f.SetCheckLog(p.Repo, "head/win", "--- FAIL: TestOld (0.1s)\n--- FAIL: TestNew (0.2s)\nFAIL\n")
+	f.SetCheckLog(p.Repo, "main/win", "--- FAIL: TestOld (0.1s)\nFAIL\n")
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || prState(t, f, task.PR.Number) != "OPEN" || !strings.Contains(task.Findings, "fails TestNew, which main's run of it doesn't") {
+		t.Fatalf("stage %q, findings %q", task.Stage, task.Findings)
+	}
+}
+
+// Failing the same tests main fails inside a shared check merges; a shared
+// check whose logs name no tests merges too, and the PR says it couldn't tell.
+func TestMergeForgeCheckSameTestsInSharedRed(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "win", State: core.CheckFail, URL: "head/win"}, core.CheckRun{Name: "lint", State: core.CheckFail, URL: "head/lint"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "win", State: core.CheckFail, URL: "main/win"}, core.CheckRun{Name: "lint", State: core.CheckFail, URL: "main/lint"})
+	f.SetCheckLog(p.Repo, "head/win", "--- FAIL: TestOld (0.1s)\n")
+	f.SetCheckLog(p.Repo, "main/win", "--- FAIL: TestOld (0.3s)\n")
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	said := false
+	for _, c := range f.Comments(p.Repo, task.PR.Number) {
+		said = said || (strings.Contains(c, "Merging while main is red") && strings.Contains(c, "The logs of lint name no failing tests") && !strings.Contains(c, "logs of win"))
+	}
+	if !said {
+		t.Fatalf("comments %q", f.Comments(p.Repo, task.PR.Number))
+	}
+}
+
+// refusingForge is GitHub with a required check red on main: its branch rule
+// refuses the merge.
+type refusingForge struct{ *core.Local }
+
+func (refusingForge) MergePR(repo string, number int, sha, subject string) (string, error) {
+	return "", errors.New(`gh pr merge: GraphQL: Required status check "test" is failing. (mergePullRequest)`)
+}
+
+// A merge no worse than main that the forge's branch rules refuse holds with
+// the reason and one alert, rather than counting toward a stop.
+func TestMergeRefusedRedHolds(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckFail})
+	m.C.Effects.Forge = refusingForge{f}
+	for i := 0; i < 3; i++ {
+		mergeOnce(t, m, task, p)
+	}
+	if task.Stage != StageMerging || task.Failures != 0 || !strings.Contains(task.Reason, "branch rules want test, red on main too") || alerts(m, "main-red") != 2 {
+		t.Fatalf("stage %q, %d failures, reason %q, %d alerts", task.Stage, task.Failures, task.Reason, alerts(m, "main-red"))
 	}
 }

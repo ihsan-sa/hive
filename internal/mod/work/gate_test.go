@@ -1,6 +1,7 @@
 package work
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -238,6 +239,76 @@ func TestGateWaitThenConflict(t *testing.T) {
 	}
 	if task.Stage != StageWorking || task.Reason != "" {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
+// A PR left as a draft for a read outside the Hive waits for it: no failure is
+// counted, it isn't brought up to date or tested again while main moves, and
+// it merges once marked ready.
+func TestDraftWaitsForItsRead(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageMerging {
+		t.Fatalf("stage %q, log %v", task.Stage, task.Log)
+	}
+	if err := forge.SetDraft(p.Repo, task.PR.Number, true); err != nil {
+		t.Fatal(err)
+	}
+	pushMain(t, forge, map[string]string{"other.txt": "main moved\n"})
+	sha := task.SHA
+	m.settle(task, m.step(task))
+	updated := task.Updated
+	for range 12 {
+		m.settle(task, m.step(task))
+	}
+	if task.Stage != StageMerging || task.Failures != 0 || task.SHA != sha || !strings.HasPrefix(task.Reason, draftWait+" (an outside read)") {
+		t.Fatalf("stage %q, failures %d, sha moved %v, reason %q", task.Stage, task.Failures, task.SHA != sha, task.Reason)
+	}
+	if n := strings.Count(fmt.Sprint(task.Log), draftWait); n != 1 || !task.Updated.Equal(updated) {
+		t.Fatalf("the wait was logged %d times, saved again %v: %v", n, !task.Updated.Equal(updated), task.Log)
+	}
+	if got, _ := m.Get(task.ID); got.Stage != StageMerging || m.MidMerge() {
+		t.Fatalf("a waiting draft holds up an update: stage %q, mid-merge %v", got.Stage, m.MidMerge())
+	}
+	if m.due(*task) {
+		t.Fatal("a waiting draft is looked at again before its next look")
+	}
+	// Waited long: the lead hears once.
+	old := draftTell
+	draftTell = 0
+	t.Cleanup(func() { draftTell = old })
+	m.step(task)
+	m.step(task)
+	if n := strings.Count(fmt.Sprint(task.Log), "told the lead"); !task.DraftTold || n != 1 {
+		t.Fatalf("told %v, %d times", task.DraftTold, n)
+	}
+	forge.SetDraft(p.Repo, task.PR.Number, false)
+	if err := m.step(task); err != nil {
+		t.Fatal(err)
+	}
+	if task.Reason != "" || task.Stage != StageMerged || !task.DraftSince.IsZero() {
+		t.Fatalf("stage %q, reason %q, draft since %v", task.Stage, task.Reason, task.DraftSince)
+	}
+}
+
+// A task merging on a PR that isn't a draft is mid-merge, so an update waits.
+func TestMidMergeCountsAReadyPR(t *testing.T) {
+	m, task, _, _ := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	task.Stage = StageMerging
+	m.save(task, "merging")
+	if !m.MidMerge() {
+		t.Fatal("a merging task isn't mid-merge")
+	}
+}
+
+func TestWhoseRead(t *testing.T) {
+	if got := whoseRead("Adds a thing.\n\n- **Needs a perms read** (sandbox change)\n"); got != "Needs a perms read (sandbox change)" {
+		t.Fatalf("got %q", got)
+	}
+	if got := whoseRead("nothing said"); got != "an outside read" {
+		t.Fatalf("got %q", got)
 	}
 }
 

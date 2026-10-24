@@ -72,9 +72,9 @@ func TestNullProjectsFromV010(t *testing.T) {
 	}
 }
 
-// TestInstallMovesInWhole: a module is cloned out of sight and moved into
-// .modules/ whole, so it never lists without its files, and a failed clone
-// leaves nothing behind.
+// TestInstallMovesInWhole: a module is cloned and recorded out of sight and
+// moved into .modules/ whole, so it never lists without its files or its
+// release, and a failed clone leaves nothing behind.
 func TestInstallMovesInWhole(t *testing.T) {
 	ws := core.Workspace{Root: t.TempDir()}
 	if err := ws.Init(); err != nil {
@@ -98,8 +98,16 @@ func TestInstallMovesInWhole(t *testing.T) {
 	if _, err := r.Install(filepath.Join(t.TempDir(), "missing"), "gone"); err == nil {
 		t.Fatal("a clone of nothing installed")
 	}
-	if _, err := r.Install(src, "ledger"); err != nil {
-		t.Fatal(err)
+	os.MkdirAll(filepath.Join(ws.Modules(), ".other-1", ".git"), 0o755) // another install, half there
+	if _, ok := r.Get("other"); ok {
+		t.Fatal("a module still installing is listed")
+	}
+	os.RemoveAll(filepath.Join(ws.Modules(), ".other-1"))
+	if m, err := r.Install(src, "ledger"); err != nil || m.Source.Release == "" || m.Source.Source != src {
+		t.Fatalf("installed without its record: %+v %v", m.Source, err)
+	}
+	if _, err := r.Install(src, "ledger"); err == nil {
+		t.Fatal("installed over an existing module")
 	}
 	entries, _ := os.ReadDir(ws.Modules())
 	for _, e := range entries {
