@@ -283,13 +283,17 @@ var interpreters = []string{"python3", "python", "node", "uv", "go"}
 
 func hostInterpreters(a *initArgs) {
 	home, _ := os.UserHomeDir()
+	guard := append([]string{}, a.Spec.Guard...)
+	for _, m := range a.Spec.Mounts {
+		guard = append(guard, m.Host)
+	}
 	var dirs []string
 	for _, n := range interpreters {
 		p, err := findTool(n)
 		if err != nil || filepath.Base(p) == "snap" {
 			continue
 		}
-		root, ok := installRoot(p, home)
+		root, ok := installRoot(p, home, guard)
 		if !ok {
 			continue
 		}
@@ -307,12 +311,15 @@ func hostInterpreters(a *initArgs) {
 // when the system dirs already hold it, the parent of its bin when that parent
 // is an install of its own (a lib/ beside bin, as python, node and go have),
 // else the bin alone. It is never the home, anything above it or a dot-dir
-// right under it (~/.local, ~/.cargo hold keyrings and tokens); ok is false
-// when only such a dir would do, or when the home is unknown, relative or
-// can't be resolved. So a python installed straight into ~/.local (bin and lib
-// both there) is bound as its bin alone: it starts inside but can't find its
-// lib. Install it with uv or into a prefix of its own.
-func installRoot(p, home string) (root string, ok bool) {
+// right under it (~/.local, ~/.cargo hold keyrings and tokens), nor anything
+// that holds a guarded path (the workspace, the folders covered in it, a
+// mount's host path), so a python at /data/bin with lib/ beside it is bound as
+// /data/bin alone when the workspace is under /data. ok is false when only
+// such a dir would do, or when the home is unknown, relative or can't be
+// resolved. So a python installed straight into ~/.local (bin and lib both
+// there) is bound as its bin alone: it starts inside but can't find its lib.
+// Install it with uv or into a prefix of its own.
+func installRoot(p, home string, guard []string) (root string, ok bool) {
 	dir := filepath.Dir(p)
 	if underSystem(dir) {
 		return "", true
@@ -320,11 +327,24 @@ func installRoot(p, home string) (root string, ok bool) {
 	if !filepath.IsAbs(home) {
 		return "", false
 	}
-	// p is resolved (findTool), so the home must be too: through a symlinked
-	// home, the checks below would see neither the home nor ~/.local.
+	// p is resolved (findTool), so the home and the guarded paths must be
+	// too: through a symlinked home, the checks below would see neither the
+	// home nor ~/.local. A guarded path that doesn't resolve (not made yet) is
+	// compared as given, and an unresolved parent of it as well.
 	home, err := filepath.EvalSymlinks(home)
 	if err != nil {
 		return "", false
+	}
+	var held []string
+	for _, g := range guard {
+		if !filepath.IsAbs(g) {
+			continue
+		}
+		g = filepath.Clean(g)
+		held = append(held, g)
+		if r, err := resolveExisting(g); err == nil && r != g {
+			held = append(held, r)
+		}
 	}
 	cands := []string{dir}
 	if up := filepath.Dir(dir); filepath.Base(dir) == "bin" {
@@ -332,14 +352,43 @@ func installRoot(p, home string) (root string, ok bool) {
 			cands = []string{up, dir}
 		}
 	}
+next:
 	for _, r := range cands {
-		rel, err := filepath.Rel(r, home)
-		above := err != nil || rel == "." || !(rel == ".." || strings.HasPrefix(rel, "../"))
-		if !above && !(filepath.Dir(r) == home && strings.HasPrefix(filepath.Base(r), ".")) {
-			return r, true
+		if holds(r, home) || filepath.Dir(r) == home && strings.HasPrefix(filepath.Base(r), ".") {
+			continue
 		}
+		for _, g := range held {
+			if holds(r, g) {
+				continue next
+			}
+		}
+		return r, true
 	}
 	return "", false
+}
+
+// holds reports whether binding dir r exposes path p: p is r or under it.
+func holds(r, p string) bool {
+	rel, err := filepath.Rel(r, p)
+	return err == nil && (rel == "." || rel != ".." && !strings.HasPrefix(rel, "../"))
+}
+
+// resolveExisting resolves the symlinks in p's longest existing prefix and
+// keeps the rest as given, so a guarded folder not made yet still resolves
+// through a symlinked workspace.
+func resolveExisting(p string) (string, error) {
+	var rest []string
+	for {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(append([]string{r}, rest...)...), nil
+		}
+		up := filepath.Dir(p)
+		if up == p {
+			return "", os.ErrNotExist
+		}
+		rest = append([]string{filepath.Base(p)}, rest...)
+		p = up
+	}
 }
 
 func underSystem(p string) bool {
