@@ -29,15 +29,21 @@ func TestReportSharing(t *testing.T) {
 	h.post("/api/project", map[string]any{"name": "rep", "repo": "me/rep"}, nil)
 	send := func() {
 		t.Helper()
-		before := time.Now()
-		h.post("/api/job", map[string]string{"name": "report.send"}, nil)
-		h.wait("report.send to run", minute, func(st api.State) bool {
+		// The run shows as a new Last, not one after the clock: Windows'
+		// clock can tick coarser than a send with sharing off takes.
+		last := func(st api.State) (time.Time, bool) {
 			for _, j := range st.Jobs {
-				if j.Name == "report.send" && j.Last.After(before) && !j.Running {
-					return true
+				if j.Name == "report.send" {
+					return j.Last, j.Running
 				}
 			}
-			return false
+			return time.Time{}, true
+		}
+		before, _ := last(h.state())
+		h.post("/api/job", map[string]string{"name": "report.send"}, nil)
+		h.wait("report.send to run", minute, func(st api.State) bool {
+			at, running := last(st)
+			return !running && !at.Equal(before)
 		})
 	}
 
