@@ -49,6 +49,10 @@ type Effects struct {
 
 	locks sync.Map
 
+	// MergeHeld is why a pull request on a project may not merge now (the
+	// person's hold on its merges, the work module), or "" if it may.
+	MergeHeld func(project string, pr int) string
+
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
 
@@ -72,8 +76,9 @@ type Check struct {
 	OK      bool      `json:"ok"`
 	Score   *float64  `json:"score,omitempty"`
 	Output  string    `json:"output"`
-	Log     string    `json:"log,omitempty"`    // the full output on the host, when it ran
-	Failed  []string  `json:"failed,omitempty"` // the failing tests it names, read before the output is clipped
+	CantRun string    `json:"cant_run,omitempty"` // why the command couldn't start (a missing tool): no verdict on the commit
+	Log     string    `json:"log,omitempty"`      // the full output on the host, when it ran
+	Failed  []string  `json:"failed,omitempty"`   // the failing tests it names, read before the output is clipped
 	At      time.Time `json:"at"`
 }
 
@@ -152,7 +157,9 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 		case "effect.checked":
 			var c Check
 			ev.Decode(&c)
-			e.checks[c.Project+"@"+c.SHA+"/"+c.Kind] = c
+			if !noVerdict(c) { // a check that couldn't start runs again next time
+				e.checks[c.Project+"@"+c.SHA+"/"+c.Kind] = c
+			}
 		case "effect.verdict":
 			var v Verdict
 			ev.Decode(&v)
@@ -471,6 +478,10 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		return record()
 	}
 	c.OK = code == 0
+	if tool := MissingTool(code, out); tool != "" {
+		c.CantRun = "can't run: " + tool + " is not installed where checks run"
+		return record()
+	}
 	if (kind == "test" || kind == "retest") && !c.OK {
 		c.Failed = FailedTests(out)
 	}
@@ -483,6 +494,31 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		}
 	}
 	return record()
+}
+
+// missingTool matches the shell's "not found" for a command looked up on the
+// PATH: dash's "/bin/sh: 1: go: not found", bash's "bash: go: command not found"
+// and env's "env: 'go': No such file or directory".
+var missingTool = regexp.MustCompile(`(?m)^(?:\S*sh: (?:line )?\d*:? ?([^\s/:']+): (?:command )?not found|env: '?([^\s/:']+)'?: No such file or directory)\s*$`)
+
+// MissingTool names the tool a check's command couldn't find, or "" when it
+// ran. Only exit 127 with the shell's own message counts, and only for a bare
+// name: a missing ./script is the commit's fault, not the machine's.
+func MissingTool(code int, out string) string {
+	if code != 127 {
+		return ""
+	}
+	if m := missingTool.FindStringSubmatch(out); m != nil {
+		return m[1] + m[2]
+	}
+	return ""
+}
+
+// noVerdict says a recorded check couldn't start, so it isn't the commit's
+// answer. A failure recorded before checks carried cant_run is read from its
+// output: those kept "go: not found" as main's red result for good.
+func noVerdict(c Check) bool {
+	return c.CantRun != "" || (!c.OK && missingTool.MatchString(c.Output))
 }
 
 var failedTest = regexp.MustCompile(`(?m)^\s*--- FAIL: (\S+)|^FAILED (\S+)`)
@@ -587,7 +623,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), UID: os.Getuid(), GID: os.Getgid()}
+		Stdout: logPath, Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), UID: os.Getuid(), GID: os.Getgid()}
 	code, err := sb.Run(spec, timeout)
 	raw, _ := os.ReadFile(logPath)
 	errRaw, _ := os.ReadFile(logPath + ".err")
@@ -1013,6 +1049,11 @@ type MergeRequest struct {
 // that sha passed its tests and was read (or needed no read).
 func (e *Effects) Merge(m MergeRequest) (string, error) {
 	p := m.Project
+	if e.MergeHeld != nil {
+		if why := e.MergeHeld(p.Name, m.PR); why != "" {
+			return "", fmt.Errorf("refusing to merge #%d: %s", m.PR, why)
+		}
+	}
 	if c, ok := e.GetCheck(p.Name, m.SHA, "test"); !ok || !c.OK {
 		return "", fmt.Errorf("refusing to merge %s: no passing test run recorded for that exact commit", short(m.SHA))
 	}
@@ -1037,8 +1078,17 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if st, which := ChecksState(runs, e.RequiredChecks(p, m.Main)); st != CheckPass {
-		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there (%s: %s)", short(m.SHA), st, CheckNames(which))
+	req := e.RequiredChecks(p, m.Main)
+	st, which := ChecksState(runs, req)
+	if st == CheckFail {
+		mainRuns, err := e.Forge.Checks(p.Repo, m.Main)
+		if err != nil {
+			return "", err
+		}
+		st, which, _ = ChecksAgainstMain(runs, mainRuns, req)
+	}
+	if st != CheckPass {
+		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
 	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
 	if err != nil {
@@ -1088,6 +1138,30 @@ func ChecksState(runs []CheckRun, required []string) (state string, which []Chec
 		return CheckPending, which
 	}
 	return CheckPass, nil
+}
+
+// ChecksAgainstMain sums up a head's checks as ChecksState does, except that
+// a check that fails on main's head too doesn't count against it: the change
+// is no worse than main there, and holding it would keep the fix for a red
+// main from ever landing. shared names those checks; with main green it is
+// empty and the result is ChecksState's.
+func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string) (state string, which []CheckRun, shared []string) {
+	var kept []CheckRun
+	for _, r := range runs {
+		// Only a check main fails outright: one of its name that passes or
+		// still runs there (another attempt, a status) keeps it the change's.
+		named := func(mr CheckRun) bool { return mr.Name == r.Name }
+		if r.State == CheckFail && slices.ContainsFunc(mainRuns, named) && !slices.ContainsFunc(mainRuns, func(mr CheckRun) bool { return named(mr) && mr.State != CheckFail }) {
+			if !slices.Contains(shared, r.Name) {
+				shared = append(shared, r.Name)
+			}
+			continue
+		}
+		kept = append(kept, r)
+	}
+	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(shared, n) })
+	state, which = ChecksState(kept, req)
+	return state, which, shared
 }
 
 // CheckNames lists checks by name, for a message.

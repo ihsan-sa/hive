@@ -309,17 +309,13 @@ func (r *Registry) Install(url, name string) (Module, error) {
 	if core.Exists(dir) {
 		return Module{}, fmt.Errorf("%s already exists", dir)
 	}
-	// The clone goes to a hidden folder (List skips those) and moves in whole,
-	// so no agent or listing sees a module half cloned.
-	tmp := filepath.Join(r.ws.Modules(), ".installing-"+name)
-	os.RemoveAll(tmp)
+	// The clone goes to a hidden folder and moves into place whole: List
+	// reads any folder as a module, and a half-written one would show (and
+	// be read by agents) without its files, which a slow disk made plain.
+	tmp := filepath.Join(r.ws.Modules(), "."+name+"-"+core.NewID())
 	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, tmp); err != nil {
 		os.RemoveAll(tmp)
 		return Module{}, err
-	}
-	core.Git(tmp, "fetch", "-q", "--tags")
-	if rel := latestTag(tmp); rel != "" {
-		core.Git(tmp, "checkout", "-q", rel) // record finds it there already
 	}
 	if err := os.Rename(tmp, dir); err != nil {
 		os.RemoveAll(tmp)
@@ -373,7 +369,7 @@ func (r *Registry) Update() []string {
 		if tag == "" || tag == m.Source.Release {
 			continue
 		}
-		if _, err := core.Git(m.Dir, "checkout", "-q", tag); err != nil {
+		if !checkout(m.Dir, tag) {
 			continue
 		}
 		s := m.Source
@@ -384,6 +380,25 @@ func (r *Registry) Update() []string {
 		changed = append(changed, m.Name+" "+tag)
 	}
 	return changed
+}
+
+// checkout moves a module's folder to rev and says whether its files now
+// match it. Windows can leave a file another process has open as it was and
+// still let git exit 0, so the files are compared after, and a held file
+// gets a few seconds to come free before the update waits for the next run.
+func checkout(dir, rev string) bool {
+	for try := 0; try < 5; try++ {
+		if try > 0 {
+			time.Sleep(time.Second)
+		}
+		if _, err := core.Git(dir, "checkout", "-q", rev); err != nil {
+			continue
+		}
+		if _, err := core.Git(dir, "diff", "--quiet", "HEAD"); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // latestTag returns the highest vX.Y.Z tag.

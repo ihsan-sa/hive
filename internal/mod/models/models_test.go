@@ -1,0 +1,165 @@
+package models_test
+
+import (
+	"encoding/json"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/app"
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+)
+
+func hiveWithModels(t *testing.T) (*app.App, core.Run) {
+	t.Helper()
+	ws := core.Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ws.LoadConfig()
+	cfg.Harness = "fake"
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	cfg.Models = map[string]core.OpenModel{"qwen": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen2.5-coder:14b"}}
+	if err := ws.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	a, err := app.New(ws, &core.Local{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.C.Close() })
+	if _, err := a.C.Projects.Add(core.Project{Name: "lab", Repo: "me/lab"}); err != nil {
+		t.Fatal(err)
+	}
+	lead, err := a.C.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir(), Persistent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a, lead
+}
+
+func call(t *testing.T, a *app.App, r core.Run, op string, args any) (any, error) {
+	t.Helper()
+	raw, _ := json.Marshal(args)
+	return a.C.Runs.Ops().Call(r, op, raw)
+}
+
+// The person routes a role by asking the lead: the lead's route op writes it
+// into config.json and the journal, and new runs of that role go on it; a
+// check seat's route waits for the person's yes.
+func TestLeadRoutes(t *testing.T) {
+	a, lead := hiveWithModels(t)
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "qwen,fake:opus"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := a.C.WS.LoadConfig()
+	if !slices.Equal(cfg.Routes["worker"], []string{"qwen", "fake:opus"}) {
+		t.Fatalf("routes %v", cfg.Routes)
+	}
+	var routed []string
+	a.C.J.Replay(func(e core.Event) {
+		if e.Kind == "config.routed" {
+			routed = append(routed, string(e.Data))
+		}
+	})
+	if len(routed) != 1 || !strings.Contains(routed[0], `"by":"`+lead.ID) {
+		t.Fatalf("journal: %q", routed)
+	}
+	spec := a.Agents.Spec("w1", "worker", "lab", t.TempDir(), "brief")
+	if spec.Harness != "open" || spec.Model != "qwen" || len(spec.Route) != 2 || spec.Route[1] != (core.Pick{Harness: "fake", Model: "opus"}) {
+		t.Fatalf("a new worker: %s:%s, route %v", spec.Harness, spec.Model, spec.Route)
+	}
+
+	for _, bad := range []map[string]any{
+		{"role": "worker", "models": "nosuch:x"},
+		{"role": "worker", "models": "open:gone"},
+		{"role": "janitor", "models": "qwen"},
+	} {
+		if _, err := call(t, a, lead, "route", bad); err == nil {
+			t.Errorf("route %v was taken", bad)
+		}
+	}
+	worker, _ := a.C.Runs.Start(core.RunSpec{Role: "worker", Harness: "fake", Checkout: t.TempDir()})
+	if _, err := call(t, a, worker, "route", map[string]any{"role": "worker", "models": "qwen"}); err == nil {
+		t.Fatal("a worker routed the Hive")
+	}
+
+	res, err := call(t, a, lead, "route", map[string]any{"role": "reviewer", "models": []string{"qwen"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.C.WS.LoadConfig().Routes["reviewer"] != nil {
+		t.Fatal("a check seat was routed without the person")
+	}
+	ask := res.(map[string]string)["ask"]
+	if _, err := a.C.Person.Answer(ask, "yes", ""); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return slices.Equal(a.C.WS.LoadConfig().Routes["reviewer"], []string{"qwen"}) })
+
+	// Clearing a route takes the role back to its model settings.
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": ""}); err != nil {
+		t.Fatal(err)
+	}
+	if h, m := a.Agents.Model("worker", "lab"); h != "fake" || m != "opus" {
+		t.Fatalf("a cleared route: %s:%s", h, m)
+	}
+
+	// A project's lead routes its own project only.
+	plead, _ := a.C.Runs.Start(core.RunSpec{Role: "lead", Project: "lab", Harness: "fake", Checkout: t.TempDir(), Persistent: true})
+	if _, err := call(t, a, plead, "route", map[string]any{"role": "worker", "models": "qwen"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg = a.C.WS.LoadConfig()
+	if cfg.Routes["worker"] != nil || !slices.Equal(cfg.Projects["lab"].Routes["worker"], []string{"qwen"}) {
+		t.Fatalf("a project lead's route: %v, %v", cfg.Routes, cfg.Projects)
+	}
+	if h, _ := a.Agents.Model("worker", "lab"); h != "open" {
+		t.Fatal("the project's route isn't taken")
+	}
+}
+
+// A trial runs one brief's worker on the model alone, with nowhere to fall
+// back, and how it went is recorded once it ends.
+func TestTrial(t *testing.T) {
+	a, lead := hiveWithModels(t)
+	if _, err := call(t, a, lead, "trial", map[string]any{"model": "qwen", "project": "lab"}); err == nil {
+		t.Fatal("a trial with no title was filed")
+	}
+	res, err := call(t, a, lead, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "add a README", "done": "a README says what lab is"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res.(map[string]string)["task"]
+	tk, _ := a.Work.Get(id)
+	if tk.Model != "qwen" || !strings.Contains(tk.Known, "trial of the model open:qwen") {
+		t.Fatalf("task %+v", tk)
+	}
+	tk.Stage, tk.Reason = work.StageBlocked, "tests failed"
+	a.C.J.MustAppend("task.saved", tk)
+	a.Models.Tick()
+	a.Models.Tick() // recorded once
+	n := 0
+	a.C.J.Replay(func(e core.Event) {
+		if e.Kind == "model.trial" {
+			n++
+		}
+	})
+	view, _ := json.Marshal(a.Models.View(lead))
+	if n != 1 || !strings.Contains(string(view), `"outcome":"blocked"`) || !strings.Contains(string(view), `"model":"qwen"`) {
+		t.Fatalf("%d records; view %s", n, view)
+	}
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out")
+}

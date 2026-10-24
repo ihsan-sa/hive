@@ -44,6 +44,12 @@ func (w Workspace) Gates() string              { return filepath.Join(w.Hive(), 
 // made or a file renamed in it mid-turn is covered too.
 func (w Workspace) Private() string { return filepath.Join(w.Hive(), "private") }
 
+// Guarded is what no host interpreter's install bound into a sandbox may
+// contain: the workspace and the folders covered wherever agents read .hive.
+func (w Workspace) Guarded() []string {
+	return []string{w.Root, filepath.Join(w.Hive(), "logins"), filepath.Join(w.Hive(), "modules"), w.Private()}
+}
+
 // Checkouts is where agents' own checkouts of a project live.
 func (w Workspace) Checkouts(project string) string {
 	return filepath.Join(w.Project(project), ".checkouts")
@@ -60,6 +66,15 @@ type Config struct {
 	TribunalModels []TribunalSeat `json:"tribunal_models"`
 	// ModelChoices adds models to the harness's known list in Settings' pick-lists.
 	ModelChoices []string `json:"model_choices,omitempty"`
+	// Models are named models on OpenAI-compatible endpoints, which the open
+	// harness runs (route.go).
+	Models map[string]OpenModel `json:"models,omitempty"`
+	// Routes pick the models a role runs on, in the order a run moves along
+	// them at a usage limit ("lead", "worker", "reviewer", "security",
+	// "warden", "tribunal", "sweep"; "fallback" for every role that isn't a
+	// check). Each entry is a named model, "harness:model", or a model on the
+	// workspace harness. A role with no route takes the model settings above.
+	Routes map[string][]string `json:"routes,omitempty"`
 	// Egress holds runs to the hosts listed; with no list a run reaches every
 	// public host.
 	Egress Egress `json:"egress"`
@@ -141,8 +156,9 @@ func (c *Config) SetShare(on bool) {
 
 // ProjectSettings override workspace defaults per project.
 type ProjectSettings struct {
-	Harness string `json:"harness,omitempty"`
-	Model   string `json:"model,omitempty"`
+	Harness string              `json:"harness,omitempty"`
+	Model   string              `json:"model,omitempty"`
+	Routes  map[string][]string `json:"routes,omitempty"` // the project's own, before the workspace's
 }
 
 // TribunalSeat is one tribunal seat's harness and model. A plain string in
@@ -234,6 +250,12 @@ func (c Config) Check() error {
 			return err
 		}
 	}
+	if err := c.checkRoutes(); err != nil {
+		return err
+	}
+	if _, ok := c.Models[c.Model]; HarnessName(c.Harness) == "open" && !ok {
+		return fmt.Errorf("the open harness runs a model named in models, and %q isn't one", c.Model)
+	}
 	for _, t := range c.TribunalModels {
 		if t.bad != "" {
 			return fmt.Errorf("tribunal seat %s isn't a model name or {\"harness\": ..., \"model\": ...}", t.bad)
@@ -246,6 +268,9 @@ func (c Config) Check() error {
 		}
 		if _, err := harness.Get(t.Harness); err != nil {
 			return fmt.Errorf("tribunal seat %s on harness %s can't sit: %v", t.Model, t.Harness, err)
+		}
+		if _, ok := c.Models[t.Model]; HarnessName(t.Harness) == "open" && !ok {
+			return fmt.Errorf("tribunal seat %s on the open harness: no model of that name in models", t.Model)
 		}
 	}
 	return nil

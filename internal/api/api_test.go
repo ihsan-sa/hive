@@ -122,3 +122,36 @@ func TestDialReadsADaemonFromBeforePrivate(t *testing.T) {
 		t.Fatalf("Dial preferred the old file: %+v, %v", c, err)
 	}
 }
+
+// A new daemon that came up on the old one's port turns the old token away;
+// the client takes the new token from daemon.json and is answered.
+func TestClientFollowsANewTokenOnTheSamePort(t *testing.T) {
+	ws, write := workspace(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer new" {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Write([]byte(`{"version": "v2"}`))
+	})}
+	go srv.Serve(ln)
+	defer srv.Close()
+	write(DaemonInfo{PID: 1, Port: port, Token: "old"})
+	c, err := Dial(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(DaemonInfo{PID: 2, Port: port, Token: "new"})
+	if st, err := c.State(); err != nil || st.Version != "v2" {
+		t.Fatalf("State = %+v, %v", st.Version, err)
+	}
+	write(DaemonInfo{PID: 3, Port: port, Token: "other"})
+	if err := c.Do("GET", "/api/state", nil, nil); err != nil {
+		t.Fatalf("the client lost the daemon it reached: %v", err)
+	}
+}
