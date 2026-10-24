@@ -196,6 +196,12 @@ type Module struct {
 	// holdPolled when each one's release condition may next be asked of the forge.
 	holds      map[string]*MergeHold
 	holdPolled map[string]time.Time
+	// gate lets an update stop new merges and wait out the running ones
+	// (PauseMerges): inMerge counts merges past the gate, paused says the
+	// gate is shut.
+	gate    sync.Mutex
+	inMerge int
+	paused  bool
 }
 
 // New loads tasks and registers the brief op.
@@ -1541,6 +1547,13 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		m.hold(t, p, why)
 		return nil
 	}
+	if !m.enterMerge() { // the Hive is about to restart into an update
+		m.mu.Lock()
+		m.later[t.ID] = time.Now().Add(holdGap)
+		m.mu.Unlock()
+		return nil
+	}
+	defer m.leaveMerge()
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label()})
 	if errors.Is(err, core.ErrDraft) { // made a draft since the look above
 		return m.waitDraft(t, pr)
@@ -1631,10 +1644,57 @@ func whoseRead(body string) string {
 	return "an outside read"
 }
 
-// MidMerge reports a task in the middle of merging. One waiting on a draft
-// isn't: its read may take hours or never come, so it holds nothing up.
-func (m *Module) MidMerge() bool {
-	return len(m.List(func(t Task) bool { return t.Stage == StageMerging && t.DraftSince.IsZero() })) > 0
+// enterMerge lets a merge through the gate unless an update has shut it;
+// leaveMerge is its pair, once the merge is recorded.
+func (m *Module) enterMerge() bool {
+	m.gate.Lock()
+	defer m.gate.Unlock()
+	if m.paused {
+		return false
+	}
+	m.inMerge++
+	return true
+}
+
+func (m *Module) leaveMerge() {
+	m.gate.Lock()
+	m.inMerge--
+	m.gate.Unlock()
+}
+
+// gatePoll is how often PauseMerges looks whether the running merges ended.
+var gatePoll = 100 * time.Millisecond
+
+// PauseMerges shuts the gate before the forge merge, so no new merge starts,
+// and waits up to wait for the merges already past it to end and be
+// recorded. ok says none is still running; resume opens the gate again. A
+// task held at the gate stays in merging and goes through once it opens, or
+// after a restart. Only the merge call itself is gated: a busy Hive always
+// has tasks in merging, but each merge call is short, so an update waits
+// for at most the ones running now and never for a quiet Hive.
+func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
+	m.gate.Lock()
+	m.paused = true
+	m.gate.Unlock()
+	var once sync.Once
+	resume = func() {
+		once.Do(func() {
+			m.gate.Lock()
+			m.paused = false
+			m.gate.Unlock()
+		})
+	}
+	for end := time.Now().Add(wait); ; time.Sleep(gatePoll) {
+		m.gate.Lock()
+		n := m.inMerge
+		m.gate.Unlock()
+		if n == 0 {
+			return resume, true
+		}
+		if !time.Now().Before(end) {
+			return resume, false
+		}
+	}
 }
 
 // upToDate decides whether t's branch must take main in before it merges.

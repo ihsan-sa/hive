@@ -412,6 +412,13 @@ func (m *model) viewTree() []string {
 			sel++
 		}
 	}
+	if rel := releaseText(m.st); m.st.Behind > 0 {
+		lines = append([]string{stWarn.Render(rel), ""}, lines...)
+		sel += 2
+	} else if rel != "" {
+		lines = append([]string{stDim.Render(rel), ""}, lines...)
+		sel += 2
+	}
 	if m.st.Offline != "" {
 		lines = append([]string{stWarn.Render(strings.ToUpper(m.st.Offline[:1]) + m.st.Offline[1:] + "; the work picks up again on its own."), ""}, lines...)
 		sel += 2
@@ -421,6 +428,20 @@ func (m *model) viewTree() []string {
 		sel += 2
 	}
 	return window(lines, sel, m.bodyHeight())
+}
+
+// releaseText says which release the Hive runs and how far behind the newest
+// it is, as the last look for an update found; "" before any look.
+func releaseText(st api.State) string {
+	switch {
+	case st.Newest == "":
+		return ""
+	case st.Behind == 0:
+		return "On " + st.Version + ", the newest release"
+	case st.Behind == 1:
+		return "On " + st.Version + ", 1 release behind " + st.Newest
+	}
+	return fmt.Sprintf("On %s, %d releases behind %s", st.Version, st.Behind, st.Newest)
 }
 
 // ---- details ---------------------------------------------------------------

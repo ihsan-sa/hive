@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -85,9 +86,12 @@ func TestFollowsTheNewestPreReleaseSafeHere(t *testing.T) {
 		t.Fatalf("the Hive that releases the Hive follows %q", m.Channel())
 	}
 	merging := true
-	m.Busy = func() bool { return merging }
-	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "mid-merge") {
+	m.PauseMerges = func(time.Duration) (func(), bool) { return func() {}, !merging }
+	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "a merge has run past") {
 		t.Fatalf("updated mid-merge: %q", msg)
+	}
+	if newest, behind := m.Lag(); newest != "v0.1.15" || behind != 3 {
+		t.Fatalf("on v0.1.12 the dashboard shows newest %q, %d behind; want v0.1.15, 3", newest, behind)
 	}
 	merging = false
 	msg, err := m.AutoUpdate()
@@ -96,6 +100,9 @@ func TestFollowsTheNewestPreReleaseSafeHere(t *testing.T) {
 	}
 	core.Version = "v0.1.13"
 	msg, err = m.AutoUpdate()
+	if newest, behind := m.Lag(); newest != "v0.1.15" || behind != 2 {
+		t.Fatalf("on v0.1.13: newest %q, %d behind; want v0.1.15, 2", newest, behind)
+	}
 	if err != nil || !strings.HasPrefix(msg, "already on v0.1.13") || !strings.Contains(msg, "v0.1.15: waiting for") || !strings.Contains(msg, "v0.1.14: test (") {
 		t.Fatalf("with nothing safe newer: %q, %v", msg, err)
 	}

@@ -92,6 +92,9 @@ func (m *Module) prerelease(repo, after string) (tag string, why []string, err e
 		}
 		return -1
 	})
+	m.pmu.Lock()
+	m.pre = tags
+	m.pmu.Unlock()
 	for i, t := range tags {
 		if i == look {
 			why = append(why, fmt.Sprintf("%d older pre-releases aren't read until one of these %d is safe here", len(tags)-look, look))
