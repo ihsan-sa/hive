@@ -1,2 +1,7 @@
 * text=auto eol=lf
 *.ps1 text eol=crlf
+# Additive docs: the Hive's own merge of main into a branch keeps both sides'
+# lines instead of stopping on a conflict (docs/log.md, 2026-10-24).
+docs/log.md merge=union
+docs/status.md merge=union
+docs/architecture.md merge=union

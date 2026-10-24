@@ -58,10 +58,13 @@ type Forge interface {
 	// don't follow; PublishRelease makes it the latest once ReleaseRuns, the
 	// workflow runs its publishing started at sha, pass. Tags are every
 	// release's tag (pre-releases and drafts included) and every git tag, so
-	// a new release can take a tag none of them has.
+	// a new release can take a tag none of them has. TagCommit is the commit
+	// a tag points at: a tag made between Tags and CreateRelease keeps its
+	// own commit, so the release is published only if that is the one gated.
 	LatestRelease(repo string) (Release, error)
 	Tags(repo string) ([]string, error)
 	CreateRelease(repo, tag, sha, notes string) error
+	TagCommit(repo, tag string) (string, error)
 	ReleaseRuns(repo, sha string) ([]WorkflowRun, error)
 	PublishRelease(repo, tag string) error
 }
@@ -501,6 +504,9 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 		}
 		return p.MergeSHA, nil
 	}
+	if p.State == "CLOSED" {
+		return "", fmt.Errorf("PR #%d was closed without merging", number)
+	}
 	if p.HeadSHA != sha {
 		return "", fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
 	}
@@ -564,6 +570,11 @@ func (GitHub) Tags(repo string) ([]string, error) {
 func (GitHub) CreateRelease(repo, tag, sha, notes string) error {
 	_, err := gh(repo, "release", "create", tag, "-R", repo, "--target", sha, "--title", tag, "--notes", notes, "--prerelease")
 	return err
+}
+
+// TagCommit peels an annotated tag to its commit.
+func (GitHub) TagCommit(repo, tag string) (string, error) {
+	return gh(repo, "api", "repos/"+repo+"/commits/tags/"+tag, "-q", ".sha")
 }
 
 // ReleaseRuns are the runs a release event started at sha (a release's runs

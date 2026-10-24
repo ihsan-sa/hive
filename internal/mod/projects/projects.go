@@ -59,8 +59,16 @@ func (m *Module) opCreate(r core.Run, args json.RawMessage) (any, error) {
 	// A new project's name, description and goals land in the shared record
 	// and on the forge, so a hidden project's lead could carry its text out
 	// through them. Only the person, or a lead outside every wall, makes one.
-	if p, ok := m.C.Projects.Get(r.Project); ok && p.Hidden() {
-		return nil, fmt.Errorf("%s is walled off, so its agents can't create projects; ask the person", r.Project)
+	// A project the Hive doesn't know (removed, or not yet saved) can't show
+	// it has no wall, so its agents can't either.
+	if r.Project != "" {
+		p, ok := m.C.Projects.Get(r.Project)
+		if !ok {
+			return nil, fmt.Errorf("%s isn't a project the Hive knows, so its agents can't create projects; ask the person", r.Project)
+		}
+		if p.Hidden() {
+			return nil, fmt.Errorf("%s is walled off, so its agents can't create projects; ask the person", r.Project)
+		}
 	}
 	if s.Self {
 		s.Repo = "" // an agent never picks where the Hive's own code lives
