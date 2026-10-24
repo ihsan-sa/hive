@@ -8,8 +8,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -42,6 +44,9 @@ type Forge interface {
 	DefaultBranch(repo string) string
 	CreateIssue(repo, title, body, marker string) (Issue, error)
 	Comment(repo string, number int, body string) error
+	// StatusComment keeps one comment per issue or PR that carries marker:
+	// the first call posts it, later calls edit it in place.
+	StatusComment(repo string, number int, marker, body string) error
 	CreatePR(repo, head, base, title, body string) (PR, error)
 	FindPR(repo, head string) (PR, bool, error)
 	GetPR(repo string, number int) (PR, error)
@@ -105,8 +110,153 @@ func ghEnv(repo string) []string {
 	return []string{"GH_TOKEN=" + tok}
 }
 
+// ghRun runs gh and returns its stdout and stderr. Tests replace it.
+var ghRun = func(repo string, args []string) (string, string, error) {
+	return runCmd(2*time.Minute, "", ghEnv(repo), "gh", args...)
+}
+
+// gh runs one gh command. Its error carries gh's stderr, the actual reason,
+// under a short name for the command, never the arguments (which hold bodies
+// long enough to push the reason out of any log line). While GitHub has asked
+// for a pause, writes wait it out without being sent.
 func gh(repo string, args ...string) (string, error) {
-	return RunCmdEnv(2*time.Minute, "", ghEnv(repo), "gh", args...)
+	write := ghWrites(args)
+	if write {
+		if err := ghPause.wait(); err != nil {
+			return "", err
+		}
+	}
+	out, stderr, err := ghRun(repo, args)
+	if err != nil {
+		if rl := ghPause.hit(stderr); rl != nil {
+			return out, rl
+		}
+		if stderr == "" {
+			stderr = err.Error()
+		}
+		return out, fmt.Errorf("gh %s: %s", ghVerb(args), stderr)
+	}
+	if write {
+		ghPause.clear()
+	}
+	return out, nil
+}
+
+// ghVerb names a gh command by its leading words, such as "pr create" or
+// "api repos/o/r/issues/3/comments".
+func ghVerb(args []string) string {
+	var w []string
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") || len(w) == 3 {
+			break
+		}
+		w = append(w, a)
+	}
+	return strings.Join(w, " ")
+}
+
+// ghWrites reports whether a gh command writes to GitHub.
+func ghWrites(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "api" {
+		for i, a := range args {
+			switch a {
+			case "-f", "-F", "--field", "--raw-field", "--input":
+				return true
+			case "-X", "--method":
+				return i+1 < len(args) && !strings.EqualFold(args[i+1], "GET")
+			}
+		}
+		return false
+	}
+	return len(args) > 1 && slices.Contains([]string{"create", "comment", "merge", "close", "edit", "delete"}, args[1])
+}
+
+// RateLimited is GitHub asking the Hive to slow down: a secondary rate limit
+// ("was submitted too quickly"), or a 403 or 429 that names a rate limit or a
+// retry-after. Writes wait until Until; it isn't any task's fault.
+type RateLimited struct {
+	Until time.Time
+	Text  string // gh's own words
+}
+
+func (r *RateLimited) Error() string {
+	return fmt.Sprintf("GitHub asked the Hive to slow down, so its writes wait until %s: %s", r.Until.UTC().Format("15:04:05Z"), r.Text)
+}
+
+// IsRateLimit reports whether an error's text is GitHub's rate limit.
+func IsRateLimit(text string) bool {
+	_, ok := rateLimit(text)
+	return ok
+}
+
+var retryAfterRe = regexp.MustCompile(`(?i)retry[- ]after:?\s*(\d+)`)
+
+// rateLimit reads gh's stderr for a rate limit and the wait GitHub asked for
+// (0 when it named none).
+func rateLimit(stderr string) (time.Duration, bool) {
+	t := strings.ToLower(stderr)
+	has := func(words ...string) bool {
+		return slices.ContainsFunc(words, func(w string) bool { return strings.Contains(t, w) })
+	}
+	limited := has("submitted too quickly", "secondary rate limit", "api rate limit exceeded", "abuse detection") ||
+		has("http 403", "http 429", " 403 ", " 429 ") && has("rate limit", "retry-after", "retry after")
+	if !limited {
+		return 0, false
+	}
+	var d time.Duration
+	if m := retryAfterRe.FindStringSubmatch(stderr); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		d = time.Duration(n) * time.Second
+	}
+	return d, true
+}
+
+// pause is the one wait every write to GitHub shares, since GitHub limits the
+// login, not a task: a minute after the first hit, doubling to 15 minutes
+// while hits keep coming, or the retry-after GitHub names.
+type pause struct {
+	mu    sync.Mutex
+	until time.Time
+	hits  int
+	text  string
+}
+
+var ghPause = &pause{}
+
+func (p *pause) wait() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if time.Now().Before(p.until) {
+		return &RateLimited{Until: p.until, Text: p.text}
+	}
+	return nil
+}
+
+func (p *pause) hit(stderr string) *RateLimited {
+	d, ok := rateLimit(stderr)
+	if !ok {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if d <= 0 {
+		d = min(time.Minute<<min(p.hits, 4), 15*time.Minute)
+	}
+	if u := time.Now().Add(d); u.After(p.until) {
+		p.until = u
+	}
+	p.hits++
+	p.text = Clip(stderr, 300)
+	return &RateLimited{Until: p.until, Text: p.text}
+}
+
+func (p *pause) clear() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.hits = 0
 }
 
 // User is the login gh itself holds.
@@ -224,6 +374,20 @@ func (GitHub) CreateIssue(repo, title, body, marker string) (Issue, error) {
 func (GitHub) Comment(repo string, number int, body string) error {
 	_, err := gh(repo, "issue", "comment", strconv.Itoa(number), "-R", repo, "--body", body)
 	return err
+}
+
+func (g GitHub) StatusComment(repo string, number int, marker, body string) error {
+	body += "\n\n" + marker
+	path := fmt.Sprintf("repos/%s/issues/%d/comments", repo, number)
+	out, err := gh(repo, "api", "--paginate", path, "-q", fmt.Sprintf(".[] | select(.body | contains(%q)) | .id", marker))
+	if err != nil {
+		return err
+	}
+	if id, _, _ := strings.Cut(strings.TrimSpace(out), "\n"); id != "" {
+		_, err = gh(repo, "api", "-X", "PATCH", fmt.Sprintf("repos/%s/issues/comments/%s", repo, id), "-f", "body="+body)
+		return err
+	}
+	return g.Comment(repo, number, body)
 }
 
 type ghPR struct {

@@ -46,6 +46,16 @@ func RunCmd(timeout time.Duration, dir string, name string, args ...string) (str
 
 // RunCmdEnv is RunCmd with extra environment.
 func RunCmdEnv(timeout time.Duration, dir string, env []string, name string, args ...string) (string, error) {
+	out, stderr, err := runCmd(timeout, dir, env, name, args...)
+	if err != nil {
+		return out, fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, stderr)
+	}
+	return out, nil
+}
+
+// runCmd runs a host program and hands back its trimmed stdout and stderr
+// apart from how it ended.
+func runCmd(timeout time.Duration, dir string, env []string, name string, args ...string) (string, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -54,8 +64,5 @@ func RunCmdEnv(timeout time.Duration, dir string, env []string, name string, arg
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
-	if err != nil {
-		return strings.TrimSpace(out.String()), fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
-	}
-	return strings.TrimSpace(out.String()), nil
+	return strings.TrimSpace(out.String()), strings.TrimSpace(errb.String()), err
 }
