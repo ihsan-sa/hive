@@ -1078,13 +1078,13 @@ func TestSpaceFoldsTheSelectedThread(t *testing.T) {
 func TestReconnectShowsTheNewVersion(t *testing.T) {
 	m := testModel(100, 24)
 	m.Update(stateMsg{err: fmt.Errorf("dial tcp: connection refused")})
-	if !strings.Contains(m.View(), "isn't answering") {
+	if !strings.Contains(m.View(), "not answering") {
 		t.Fatal("a failed poll doesn't say so")
 	}
 	st := sample()
 	st.Version = "v9.9.9"
 	m.Update(stateMsg{st: st})
-	if v := m.View(); strings.Contains(v, "isn't answering") || m.st.Version != "v9.9.9" {
+	if v := m.View(); strings.Contains(v, "not answering") || m.st.Version != "v9.9.9" {
 		t.Fatalf("after reconnecting (version %s):\n%s", m.st.Version, v)
 	}
 }

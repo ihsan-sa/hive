@@ -415,6 +415,7 @@ func (s *server) restart() {
 	}
 	exe, err := executable()
 	if err != nil {
+		s.a.Release.EndProgress()
 		return
 	}
 	exe = onDisk(exe)
@@ -426,7 +427,9 @@ func (s *server) restart() {
 		raw, _ := json.Marshal(info)
 		core.WriteFileAtomic(ws.DaemonFile(), raw, 0o600)
 		s.cancel()
+		return
 	}
+	s.a.Release.EndProgress()
 }
 
 // handBack ends this daemon so its supervisor starts the updated binary,
@@ -437,6 +440,7 @@ func (s *server) restart() {
 func (s *server) handBack(sup supervision) {
 	j := s.a.C.J
 	if sup.status < 0 {
+		s.a.Release.EndProgress()
 		j.MustAppend("alert.raised", map[string]string{"kind": "update", "ref": "restart", "text": "The Hive runs under " + sup.name + ", which doesn't start it again when it exits, so the update takes effect at its next start. Restart=on-failure in the unit lets it restart on its own."})
 		return
 	}
@@ -453,6 +457,7 @@ func (s *server) handBack(sup supervision) {
 			if time.Now().After(end) {
 				rs.Hold("")
 				s.handing.Store(false)
+				s.a.Release.EndProgress()
 				j.MustAppend("alert.raised", map[string]string{"kind": "update", "ref": "restart", "text": fmt.Sprintf("The Hive waited %s for live turns to end and didn't restart into the update; turns start again, and the next update (`%s update`, or the scheduled one) tries the restart again.", quietWait, core.Cmd)})
 				return
 			}
@@ -898,6 +903,7 @@ func (s *server) state() api.State {
 	cfg, cfgErr := a.C.WS.ReadConfig()
 	st := api.State{Version: core.Version, Channel: a.Release.Channel(), Seq: a.C.J.Seq(), Workspace: a.C.WS.Root, Config: cfg}
 	st.Newest, st.Behind = a.Release.Lag()
+	st.Updating = a.Release.Progress()
 	if sb, err := a.C.Sandbox(); err != nil {
 		st.SandboxErr = err.Error()
 	} else {

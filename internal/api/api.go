@@ -21,6 +21,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -58,6 +59,7 @@ type State struct {
 	Told       []core.Ask         `json:"told,omitempty"` // done for the person, newest first: nothing to answer
 	Alerts     []Alert            `json:"alerts"`
 	Updated    *Updated           `json:"updated,omitempty"`
+	Updating   *release.Progress  `json:"updating,omitempty"` // the update under way, announced before it starts
 	Jobs       []system.JobState  `json:"jobs"`
 	Wakeups    []system.Wakeup    `json:"wakeups"`
 	Checks     Checks             `json:"checks"`
@@ -253,6 +255,16 @@ func (c *Client) do(info DaemonInfo, method, path string, body, out any) error {
 		return json.Unmarshal(raw, out)
 	}
 	return nil
+}
+
+// Restarting reports whether daemon.json says a restart is under way: the
+// daemon Do last reached is handing over, or a new one has taken its place.
+func (c *Client) Restarting() bool {
+	c.mu.Lock()
+	cur := c.cur
+	c.mu.Unlock()
+	next, err := readInfo(c.ws)
+	return err == nil && (next.Restarting || next.PID != cur.PID)
 }
 
 // Ping reports whether the daemon Dial found answers, trying once.
