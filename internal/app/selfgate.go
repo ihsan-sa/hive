@@ -80,6 +80,7 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 			cmd.Stdout, cmd.Stderr = log, log
 		}
 		runErr := runLocked(cmd)
+		gate.Reap(j.Out) // a gate killed or crashed mid-run left its children
 		g := readReport(j, runErr, ctx.Err())
 		g.Note = note
 		return g
