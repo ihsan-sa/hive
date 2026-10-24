@@ -33,6 +33,9 @@
 ## 2026-10-22 System prompt inline inside sandboxes, file outside
 - Decision: sandboxed turns pass `--append-system-prompt <text>`; bare Windows turns pass a file | Why: Windows argv is capped at 32k; inside the sandbox argv goes via the spec file with Linux limits, and older Claude Code builds may lack the -file flag | Tradeoff: two code paths in the Claude adapter.
 
+## 2026-10-22 A full lead compacts; it keeps a journal instead of rotating
+- Decision: no lead rotation. Each turn records the session's context size (the last reply's input plus cache tokens) on the run, shown in the control center; a lead keeps its journal in `$HIVE_BOX/notes.md`, and a lead that replaces one in a chat starts with that journal | Why: Claude Code 2.1.308 auto-compacts under `-p --resume` (a `compact_boundary` with `trigger: auto` in stream-json; the session went on and still recalled what it was told), so a lead neither dies nor errors at the limit | Tradeoff: compaction's summary is generic and comes late, near the window; the journal is what the lead chooses to keep.
+
 ## 2026-10-22 Agents install their own runtimes
 - Decision: python, uv, node and go go into `.hive/tools` through `hive agent install`, with no root and no one asked; the person is told after. Agents see the folder read-only on PATH; the install runs in its own sandbox that may write it | Why: the owner's first live run sat blocked on a warden request for python, and he asked that the Hive install such things itself | Tradeoff: one version of each tool for every agent; a root install still goes to the person.
 
@@ -59,3 +62,6 @@
 
 ## 2026-10-23 Projects list the files their score reads
 - Decision: the setup brief, the README and the lead's guidance say to list every file the score reads in its `paths`, and a score set or changed with an empty `paths` raises a `score-paths` alert (at the start and when the score's version changes) | Why: the `./` guess misses a script the score calls, a test or a data file, which a candidate could still change (perms' read of the fixed-evaluator change) | Tradeoff: a warning, not a refusal, since only the project knows what its score reads.
+
+## 2026-10-24 Sharing has three levels
+- Decision: a project is shared, private or isolated (docs/sharing.md); private is covered from every other run and walled from reach both ways like isolated, while its own runs mount the shared Hive like a shared project's | Why: the person listed "sharing-has-three-levels" with no detail, and the spec offers only the two ends; a one-way wall keeps a project's work out of sight without cutting its agents off from the Hive's records | Tradeoff: the middle level is a reading, not the person's words, and is listed as an open question; it reuses the isolated cover paths (`kb/isolated/`), so names still say "isolated" where they mean hidden
