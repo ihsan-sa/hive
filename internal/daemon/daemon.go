@@ -172,6 +172,16 @@ func Run(ws core.Workspace, waitFor int) error {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+	// Before anything else touches the workspace: one daemon per workspace.
+	wait := time.Duration(0)
+	if waitFor > 0 {
+		wait = 20 * time.Second // the replaced daemon may still be on its way out
+	}
+	lock, err := lockWorkspace(ws, wait)
+	if err != nil {
+		return err
+	}
+	defer func() { lock.Release() }() // the lock held at the end, which a failed hand-off retakes
 	if _, ok := Running(ws); ok {
 		return errors.New("the Hive is already running")
 	}
@@ -180,16 +190,22 @@ func Run(ws core.Workspace, waitFor int) error {
 		if exe == "" {
 			exe, _ = executable()
 		}
+		lock.Release() // the unit's daemon takes it
 		if setup.RestartUnit(exe, ws.Root) {
 			return nil
+		}
+		if lock, err = lockWorkspace(ws, 10*time.Second); err != nil {
+			return err
 		}
 	}
 	if exe != "" {
 		// This update renamed hive-v0 to hive: start the daemon under its new name.
+		lock.Release()
 		_, err := proc.StartDetached([]string{exe, "daemon"}, append(os.Environ(), "HIVE_HOME="+ws.Root), ws.Root, "", filepath.Join(ws.Hive(), "daemon.log"))
 		return err
 	}
 	if back := release.Boot(ws); back != "" {
+		lock.Release()
 		return rolledBack(ws, back)
 	}
 	// After the update hand-off: a renamed binary runs this check in its own daemon.
@@ -368,6 +384,15 @@ type server struct {
 }
 
 func (s *server) onEvent(e core.Event) {
+	if e.Kind == "alert.cleared" { // the fault behind a status alert is gone
+		var a struct{ Ref string }
+		if e.Decode(&a) == nil && a.Ref != "" {
+			s.mu.Lock()
+			s.alerts = slices.DeleteFunc(s.alerts, func(x api.Alert) bool { return x.Ref == a.Ref })
+			s.mu.Unlock()
+		}
+		return
+	}
 	if e.Kind != "alert.raised" {
 		return
 	}
@@ -417,7 +442,7 @@ func (s *server) restart() {
 	if err != nil {
 		return
 	}
-	exe = onDisk(exe)
+	exe = release.OnDisk(exe) // the new binary sits where the running one was
 	ws := s.a.C.WS
 	env := append(os.Environ(), "HIVE_HOME="+ws.Root)
 	if _, err := proc.StartDetached([]string{exe, "daemon", "--wait-for", strconv.Itoa(os.Getpid())}, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err == nil {
@@ -465,10 +490,6 @@ func (s *server) handBack(sup supervision) {
 	s.exit.Store(int64(sup.status))
 	s.cancel()
 }
-
-// onDisk is the path the new binary sits at: an update renames the running
-// file to <name>.old, and Linux reports the running file by its new name.
-func onDisk(exe string) string { return strings.TrimSuffix(exe, ".old") }
 
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
@@ -853,7 +874,7 @@ func (s *server) eventProject(e core.Event) string {
 // event with no project (the lead's chat, the person's asks) needs a grant of "*".
 func notice(kind string) bool {
 	switch kind {
-	case "hive.idle", "hive.started", "hive.stopped", "alert.raised":
+	case "hive.idle", "hive.started", "hive.stopped", "alert.raised", "alert.cleared":
 		return true
 	}
 	return strings.HasPrefix(kind, "module.")
@@ -947,6 +968,7 @@ func (s *server) state() api.State {
 	}
 	st.Held = a.C.Runs.Holds()
 	st.Plans = a.C.Runs.Plans()
+	st.Down = a.C.Runs.Down()
 	st.Logins = a.C.Tokens.States()
 	sw := a.Improve.Sweeps()
 	if len(sw) > 10 {
@@ -967,6 +989,7 @@ func (s *server) state() api.State {
 	st.Jobs = a.System.Jobs()
 	st.Wakeups = a.System.Wakeups()
 	st.Checks.Running, st.Checks.Waiting = a.C.Effects.Slots.State()
+	st.Disk = a.C.Effects.Disk()
 	for _, m := range a.Mods.List() {
 		st.Modules = append(st.Modules, api.ModuleView{Name: m.Name, Description: m.Description, Source: m.Source.Source, Release: m.Source.Release, Projects: m.Source.Projects,
 			Hooks: m.Hooks, Status: a.Runner.Status(filepath.Base(m.Dir))})
@@ -991,6 +1014,8 @@ func (s *server) state() api.State {
 	st.Feedback = a.Feedback.List(func(it feedback.Item) bool { return it.Status == feedback.Open })
 	done := a.Feedback.List(func(it feedback.Item) bool { return it.Status != feedback.Open })
 	st.Feedback = append(st.Feedback, done[:min(len(done), 20)]...)
+	v := a.Stats.View(time.Now())
+	st.Stats = &v
 	return st
 }
 

@@ -1,0 +1,36 @@
+ hive                 │   Dashboard › status
+──────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────
+   Chats              │ ▾ spend  today $4.50 · month $61.20
+ › Dashboard          │     today       by project  workspace $3.00 · hive-web $1.50
+   Waiting         3  │                 by role     lead $3.00 · worker $1.50
+   Feedback        1  │     this month  by project  hive-web $30.80 · workspace $20.40 · textkit-2 $10.00
+   Knowledge          │                 by role     worker $30.20 · lead $25.00 · reviewer $6.00
+   Modules            │ ▾ activity  9 turns in the last hour, 140 in the last day · 3 waiting on you
+   Settings           │     last hour  14 messages · 9 turns · 1 run started · 2 finished · 1 merged · 0 reverted
+                      │     last day   212 messages · 140 turns · 18 runs started · 16 finished · 7 merged · 1 reverted
+ ▾ textkit-2          │ ▾ all time since Sep 30 2026  219 agents · 311.4 agent-hours · $402.75
+   lead               │     agents   219: worker 120 · reviewer 96 · lead 3 · 5120 turns
+   writer             │     tokens   in 1.2M · out 3.4M · cache read 820.0M · cache write 41.0M
+   reviewer        ●  │     opus     $350.00 · 3000 turns · in 700.0k · out 2.0M · cache read 500.0M · cache write 30.0M
+ ▾ hive-web           │     sonnet   $52.75 · 2120 turns · in 500.0k · out 1.4M · cache read 320.0M · cache write 11.0M
+   lead            ●  │     PRs      88 merged · 3 reverted · 6 releases cut
+   worker-2           │ ▾ textkit-2    no score yet
+   reviewer           │   ▸ goals
+   tribunal           │     work in flight (0)
+ ▸ website            │     score over the last merges
+                      │     recent work (0)
+                      │ ▾ hive-web    no score yet
+                      │   ▸ goals
+                      │     work in flight (0)
+                      │     score over the last merges
+                      │     recent work (0)
+                      │ ▾ website    no score yet
+                      │   ▸ goals
+                      │     work in flight (0)
+                      │     score over the last merges
+                      │     recent work (0)
+                      │ ▾ agents (6 live)
+                      │     writer  running  claude:  turn 0  $0.00  0k ctx    -
+                      │     reviewer  running  claude:  turn 0  $0.00  0k ctx    -
+──────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move   enter open   ← collapse   s feed   tab sidebar

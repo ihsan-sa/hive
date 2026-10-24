@@ -88,7 +88,7 @@ func (m *Module) RotateStepBacks() string {
 	var started []string
 	for _, p := range m.C.Projects.List() {
 		last := m.lastStepBack(p.Name)
-		merged := slices.ContainsFunc(m.Scores(p.Name), func(x Measurement) bool { return x.Task != "" && x.At.After(last) })
+		merged := slices.ContainsFunc(m.Scores(p.Name), func(x Measurement) bool { return x.Task != "" && !x.NoResult && x.At.After(last) })
 		if merged && m.StartStepBack(p, "it is the regular step-back") == nil {
 			started = append(started, p.Name)
 		}

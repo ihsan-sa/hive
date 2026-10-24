@@ -20,6 +20,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/runner"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/stats"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -41,6 +42,7 @@ type App struct {
 	Runner   *runner.Runner
 	Feedback *feedback.Module
 	Models   *models.Module
+	Stats    *stats.Tally
 
 	seeding  sync.WaitGroup // SeedSelf's copy, which Close waits out
 	stopSeed context.CancelFunc
@@ -64,6 +66,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	c.Runs.Ops().SetSpawner(a.Work.Spawn)
 	a.Improve = improve.New(c, a.Agents, a.Work, a.Chat)
 	a.Feedback = feedback.New(c)
+	a.Stats = stats.New(c.J)
 	a.Improve.Feedback = a.Feedback.Digest
 	a.KB = kb.New(c, a.Agents)
 	a.System = system.New(c)
@@ -107,7 +110,25 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Release.PauseMerges = a.Work.PauseMerges
 	a.System.Register(system.Job{Name: "hive.update", AtStart: true, Fn: a.Release.AutoUpdate})
 	a.System.Register(system.Job{Name: "report.send", Fn: (&report.Module{C: c}).Send})
+	a.System.Register(system.Job{Name: "hive.clean", AtStart: true, Fn: func() (string, error) { return a.Clean(), nil }})
+	c.Effects.OnDiskFull = func() { a.System.RunNow("hive.clean") }
 	return a, nil
+}
+
+// Clean removes spent checkouts and what checks left behind, then measures
+// the Hive's disk use for the dashboard (the hive.clean job).
+func (a *App) Clean() string {
+	var did []string
+	for _, s := range []string{a.Work.PruneCheckouts(), a.C.Effects.Prune()} {
+		if s != "" {
+			did = append(did, s)
+		}
+	}
+	d := a.C.Effects.MeasureDisk()
+	if len(did) == 0 {
+		return "nothing to remove; " + d.String()
+	}
+	return join(did) + "; " + d.String()
 }
 
 func join(s []string) string {
