@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/ihsan-sa/hive-standalone-build/internal/text"
 	"strings"
 	"time"
 
@@ -239,12 +240,12 @@ func (m *model) usage(w int) string {
 	}
 	var parts []string
 	for _, p := range m.st.Plans {
-		s := p.Harness
+		s := text.Visible(p.Harness)
 		if p.Limit.Status == "rejected" {
 			s += " " + stBad.Render("limited") + " until " + p.Limit.ResetsAt.Local().Format("Mon 15:04")
 		}
 		for _, k := range sortedKeys(p.Limit.Windows) {
-			s += fmt.Sprintf(" · %s %.0f%%", strings.ReplaceAll(k, "_", " "), p.Limit.Windows[k].Utilization*100)
+			s += fmt.Sprintf(" · %s %.0f%%", text.Visible(strings.ReplaceAll(k, "_", " ")), p.Limit.Windows[k].Utilization*100)
 		}
 		parts = append(parts, s)
 	}
