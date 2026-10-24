@@ -54,3 +54,29 @@ func TestOwnerTokenReachesGhAndGit(t *testing.T) {
 		t.Fatalf("git org: %q %v", out, err)
 	}
 }
+
+// Under install.sh's system unit the token is systemd's credential
+// <owner>.token, which wins over OwnerTokens; an empty one (as the installer
+// creates it) falls back, and an owner can't name a path.
+func TestGhEnvFromCredentials(t *testing.T) {
+	creds, dir := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(creds, "ihsan-sa.token"), []byte("cred-secret\n"), 0o600)
+	os.WriteFile(filepath.Join(creds, "hive-rsi-lab.token"), nil, 0o600)
+	os.WriteFile(filepath.Join(dir, "org.token"), []byte("org-secret\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "..token"), []byte("dots\n"), 0o600)
+	withOwnerTokens(t, map[string]string{"hive-rsi-lab": filepath.Join(dir, "org.token")})
+	t.Setenv("CREDENTIALS_DIRECTORY", creds)
+
+	if got := ghEnv("Ihsan-SA/hive"); len(got) != 1 || got[0] != "GH_TOKEN=cred-secret" {
+		t.Fatalf("credential: %v", got)
+	}
+	if got := ghEnv("hive-rsi-lab/x"); len(got) != 1 || got[0] != "GH_TOKEN=org-secret" {
+		t.Fatalf("an empty credential should fall back: %v", got)
+	}
+	t.Setenv("CREDENTIALS_DIRECTORY", dir)
+	for _, repo := range []string{"./x", "../x", "a\\b/x"} {
+		if got := ghEnv(repo); got != nil {
+			t.Fatalf("%q read %v", repo, got)
+		}
+	}
+}

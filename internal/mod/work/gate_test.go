@@ -501,6 +501,42 @@ func TestGateMissingToolCantRun(t *testing.T) {
 	}
 }
 
+// A checkpoint whose tests can't find their tool is dropped with that reason:
+// not a failure, nothing sent back, its round unspent, and the tool named once.
+// The alert clears once the tests run.
+func TestCheckpointMissingToolDropped(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"NEEDTOOL": "x"})
+	task.Checkpoint = task.SHA
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Checkpoint != "" || task.Stage != StageWorking || task.Round != 0 {
+		t.Fatalf("checkpoint %q, stage %q, round %d", task.Checkpoint, task.Stage, task.Round)
+	}
+	said := false
+	for _, c := range forge.Comments(p.Repo, task.PR.Number) {
+		if strings.Contains(c, "failed") {
+			t.Fatalf("a checkpoint that couldn't be tested was told it failed: %q", c)
+		}
+		said = said || strings.Contains(c, "can't run: hive-gate-tool-xyz")
+	}
+	if !said || alerts(m, "main-red") != 1 {
+		t.Fatalf("the PR heard %v, %d main-red alerts; want the tool named once", said, alerts(m, "main-red"))
+	}
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "hive-gate-tool-xyz"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	_, open := m.cantRunOpen[p.Name]
+	m.mu.Unlock()
+	if open {
+		t.Fatal("the can't-run alert stays open once the tests run")
+	}
+}
+
 // A pull request someone closed on the forge mid-landing ends its task as the
 // person's stop, even when main moved (which used to send it round testing
 // and merging forever), and nothing is merged.
