@@ -73,6 +73,7 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 			cmd.Stdout, cmd.Stderr = log, log
 		}
 		runErr := cmd.Run()
+		gate.Reap(j.Out) // a gate killed or crashed mid-run left its children
 		g := readReport(j, runErr, ctx.Err())
 		g.Note = note
 		return g
@@ -136,7 +137,7 @@ func readReport(j work.GateJob, runErr, ctxErr error) core.GateResult {
 		g.Reason = "the gate left no report: " + fmt.Sprint(runErr)
 		return g
 	}
-	g.Reason, g.Sandbox = rep.Verdict.Reason, rep.Sandbox
+	g.Reason, g.Sandbox, g.Transient = rep.Verdict.Reason, rep.Sandbox, rep.Transient
 	if g.Reason == "" {
 		g.Reason = rep.Error
 	}

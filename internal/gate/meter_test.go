@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,7 +41,14 @@ func TestMeter(t *testing.T) {
 			go func() { io.Copy(c, c); c.Close() }()
 		}
 	}()
-	m, err := StartMeter(filepath.Join(t.TempDir(), "m.sock"))
+	// Not t.TempDir: under a gate's side TMPDIR is deep in the run's folder,
+	// and a unix socket's path must fit in 108 bytes.
+	dir, err := os.MkdirTemp(shortTmp(), "gate-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	m, err := StartMeter(filepath.Join(dir, "m.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
