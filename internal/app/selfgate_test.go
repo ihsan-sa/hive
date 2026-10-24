@@ -83,24 +83,16 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 	}
 	// Under a daemon already niced (the Hive runs its own test checks at
 	// CheckNice, and the gate's child runs too) the gate goes lower still,
-	// to the kernel's cap. The test process lowers itself for this, which
-	// it can't undo, so it comes last.
-	if nice && runtime.GOOS == "linux" {
-		if err := setSelfNice(sandbox.Lowered(own, core.CheckNice)); err != nil {
-			t.Fatal(err)
+	// to the kernel's cap. Linux nices a thread, not a process, and Go's
+	// goroutines move between threads, so the test can't nice itself in
+	// place: it runs itself once more as a process under nice -n CheckNice,
+	// where own reads CheckNice and the gate must read 19.
+	if nice && runtime.GOOS == "linux" && os.Getenv("HIVE_TEST_NICED") == "" {
+		cmd := exec.Command("nice", "-n", strconv.Itoa(core.CheckNice), os.Args[0], "-test.run=^TestRunGateReadsTheVerdict$", "-test.count=1")
+		cmd.Env = append(os.Environ(), "HIVE_TEST_NICED=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("this test under nice -n %d: %v\n%s", core.CheckNice, err, out)
 		}
-		own, _ = ownNice(t)
-		rep := filepath.Join(dir, "rep.json")
-		raw, _ := json.Marshal(&gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true, Reason: "better"}})
-		os.WriteFile(rep, raw, 0o644)
-		t.Setenv("GATE_REPORT", rep)
-		t.Setenv("GATE_EXIT", "0")
-		j := work.GateJob{Project: core.Project{Name: "hive", Repo: "ihsan-sa/hive", Self: true}, Repo: "/repo", Head: "h", Main: "m",
-			Out: filepath.Join(dir, "runs", "niced"), Lessons: filepath.Join(dir, "lessons.md"), Timeout: time.Hour}
-		if g := run(context.Background(), j); g.Outcome != core.GateKeep {
-			t.Fatalf("under a niced daemon: %s %q", g.Outcome, g.Reason)
-		}
-		checkGateNice(t, "niced", args+".nice", own)
 	}
 
 	cfg.Harness = "fake"
