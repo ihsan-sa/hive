@@ -41,6 +41,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive login add <name>    add another Claude login to spread runs over; add "codex" for Codex
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
   hive report [on|off|show|send]  sharing failures with the developer: state, switch, last report, send now
+  hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
   hive update              install the newest release [--release <tag>: that one, and stay on it]
   hive shutdown            stop the Hive (running agents finish their turn)
   hive uninstall           remove autostart and the binary's record; leaves your folder
@@ -199,6 +200,8 @@ func run(args []string) int {
 		return cmdDoctor(args)
 	case "report":
 		return cmdReport(args)
+	case "share":
+		return cmdShare(args)
 	case "update":
 		tag, ok := releaseArg(args)
 		if !ok {

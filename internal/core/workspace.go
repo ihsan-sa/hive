@@ -100,6 +100,8 @@ type Config struct {
 	Share     string `json:"share,omitempty"`
 	ShareURL  string `json:"share_url,omitempty"`
 	InstallID string `json:"install_id,omitempty"`
+	// ShareBundleURL is where `hive share` sends its bundle; empty is the developer's endpoint.
+	ShareBundleURL string `json:"share_bundle_url,omitempty"`
 }
 
 // Sharing says whether sharing is on and since when.

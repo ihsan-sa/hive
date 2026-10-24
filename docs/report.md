@@ -2,6 +2,8 @@
 
 An install can send its failures and usage to the Hive's developer so the improve loop learns from real installs. It is off unless the person says yes. The installer asks on the terminal (`/dev/tty` on Linux and macOS, so `curl | sh` works; the console on Windows); with no terminal, or on Enter, the answer is no, and `HIVE_SHARE=yes` or `HIVE_SHARE=no` answers ahead of time. The answer goes to `share` in `.hive/config.json` (a time when yes, `off` when no); before first run has made the folder, it waits in `share` next to the workspace pointer file (`~/.config/hive/` on Linux) and first run moves it in. First run asks only if nothing has answered, a reinstall doesn't ask again, and `hive report on|off` or Settings → "share failures" changes it. Nothing is sent from before sharing was turned on.
 
+This is separate from `hive share`, which sends one bundle of the Hive's chats, runs, notes and logs only when the person runs it, to `share_bundle_url`.
+
 ## The endpoint
 
 Reports go to `share_url` in `.hive/config.json`, by default `https://hive-api.ihsan.cc/v1/report`. The endpoint is run by the developer, and this page says only how the Hive meets its contract. In short: `POST`, `Content-Type: application/json`, one report per request, at most 64 KiB, no login. It answers 202 when it stored the report; 400 (not JSON or not the schema), 411, 413 or 415 when it never will; 429 when an install sends more than 30 an hour (or everyone together too many); 507 when its store is full.
