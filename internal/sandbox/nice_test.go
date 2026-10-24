@@ -25,3 +25,12 @@ func TestNicedPrefixesArgv(t *testing.T) {
 		t.Errorf("nice 10: %q", got)
 	}
 }
+
+// A level is relative to the parent's and capped where the kernel caps it.
+func TestLoweredAddsAndCaps(t *testing.T) {
+	for _, c := range []struct{ cur, by, want int }{{0, 15, 15}, {0, 10, 10}, {15, 15, 19}, {5, 10, 15}, {19, 2, 19}} {
+		if got := Lowered(c.cur, c.by); got != c.want {
+			t.Errorf("Lowered(%d, %d) = %d, want %d", c.cur, c.by, got, c.want)
+		}
+	}
+}

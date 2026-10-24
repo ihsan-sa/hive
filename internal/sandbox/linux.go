@@ -123,9 +123,16 @@ func Exec(specPath string) int {
 	os.Remove(specPath) // it may carry a short-lived token; don't leave it on disk
 	if s.Nice > 0 {
 		// This launcher, the init it starts and the command inherit it, so a
-		// check or a worker's turn yields the cpu to a lead's; going lower
-		// needs no privilege, and failing to is no reason not to run.
-		unix.Setpriority(unix.PRIO_PROCESS, 0, s.Nice)
+		// check or a worker's turn yields the cpu to a lead's. The level adds
+		// to the daemon's own, as `nice -n` does for the bare and Seatbelt
+		// sandboxes (the raw getpriority answers 20 minus the nice level);
+		// going lower needs no privilege, and failing to is no reason not
+		// to run.
+		cur := 0
+		if prio, err := unix.Getpriority(unix.PRIO_PROCESS, 0); err == nil {
+			cur = 20 - prio
+		}
+		unix.Setpriority(unix.PRIO_PROCESS, 0, Lowered(cur, s.Nice))
 	}
 	errf := os.Stderr
 	if s.Stdout != "" {

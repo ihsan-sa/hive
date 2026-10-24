@@ -15,6 +15,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
 // The daemon's gate runner reads a keep only from a gate that said keep by
@@ -42,10 +43,7 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 	t.Setenv("GATE_ARGS", args)
 	run := runGate(ws)
 	// The test process stands for the daemon: the gate must run under it.
-	own := 0
-	if raw, err := exec.Command("ps", "-o", "nice=", "-p", strconv.Itoa(os.Getpid())).Output(); err == nil {
-		own, _ = strconv.Atoi(strings.TrimSpace(string(raw)))
-	}
+	own, nice := ownNice(t)
 	for i, tc := range []struct {
 		exit         string
 		rep          *gate.Report
@@ -79,31 +77,77 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 		if !strings.Contains(a, "--head h --base m") || !strings.Contains(a, "--local-org") || strings.Contains(a, "--allow-bare") || strings.Contains(a, "--allow-tie") != tc.tie {
 			t.Fatalf("case %d: gate called with %q", i, a)
 		}
-		// The gate runs under every lead's priority: at CheckNice, where
-		// there is a nice to put it there (ps reads it back: BSD nice alone
-		// prints no figure, GNU nice does). macOS reports a level on its own
-		// scale (15 asked read back as 5 on the forge's runner), so there
-		// the gate is only held under the daemon's own level, read the
-		// same way; Linux reads the exact value.
-		if _, err := exec.LookPath("nice"); err == nil {
-			raw, _ := os.ReadFile(args + ".nice")
-			got, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-			if err != nil {
-				t.Fatalf("case %d: the gate's nice read as %q", i, raw)
-			}
-			if runtime.GOOS == "darwin" {
-				if got <= own {
-					t.Fatalf("case %d: the gate ran at nice %d, the daemon's own is %d; want it under", i, got, own)
-				}
-			} else if got != core.CheckNice {
-				t.Fatalf("case %d: the gate ran at nice %d, want %d", i, got, core.CheckNice)
-			}
+		if nice {
+			checkGateNice(t, strconv.Itoa(i), args+".nice", own)
 		}
 	}
+	// Under a daemon already niced (the Hive runs its own test checks at
+	// CheckNice, and the gate's child runs too) the gate goes lower still,
+	// to the kernel's cap. The test process lowers itself for this, which
+	// it can't undo, so it comes last.
+	if nice && runtime.GOOS == "linux" {
+		if err := setSelfNice(sandbox.Lowered(own, core.CheckNice)); err != nil {
+			t.Fatal(err)
+		}
+		own, _ = ownNice(t)
+		rep := filepath.Join(dir, "rep.json")
+		raw, _ := json.Marshal(&gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true, Reason: "better"}})
+		os.WriteFile(rep, raw, 0o644)
+		t.Setenv("GATE_REPORT", rep)
+		t.Setenv("GATE_EXIT", "0")
+		j := work.GateJob{Project: core.Project{Name: "hive", Repo: "ihsan-sa/hive", Self: true}, Repo: "/repo", Head: "h", Main: "m",
+			Out: filepath.Join(dir, "runs", "niced"), Lessons: filepath.Join(dir, "lessons.md"), Timeout: time.Hour}
+		if g := run(context.Background(), j); g.Outcome != core.GateKeep {
+			t.Fatalf("under a niced daemon: %s %q", g.Outcome, g.Reason)
+		}
+		checkGateNice(t, "niced", args+".nice", own)
+	}
+
 	cfg.Harness = "fake"
 	ws.SaveConfig(cfg)
 	if g := run(context.Background(), work.GateJob{Out: filepath.Join(dir, "fake")}); g.Outcome != core.GateKeep || g.Sandbox != "fake" {
 		t.Fatalf("the fake harness: %+v", g)
+	}
+}
+
+// ownNice is the nice level the test process runs at, read as the gate's
+// stand-in reads its own, and whether there is a nice here to check at all.
+func ownNice(t *testing.T) (int, bool) {
+	t.Helper()
+	if _, err := exec.LookPath("nice"); err != nil {
+		return 0, false
+	}
+	raw, err := exec.Command("ps", "-o", "nice=", "-p", strconv.Itoa(os.Getpid())).Output()
+	if err != nil {
+		t.Fatalf("reading the test process's own nice level: %v", err)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("the test process's own nice level read as %q", raw)
+	}
+	return n, true
+}
+
+// checkGateNice reads the level the gate's stand-in ran at from path and
+// holds it under the daemon's (the test process's) own: `nice -n` adds
+// CheckNice to it, capped at 19 (sandbox.Lowered). macOS reports a level
+// on its own scale (15 asked read back as 5 on the forge's runner), so
+// there it is only held under the daemon's own.
+func checkGateNice(t *testing.T, label, path string, own int) {
+	t.Helper()
+	raw, _ := os.ReadFile(path)
+	got, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("case %s: the gate's nice read as %q", label, raw)
+	}
+	if runtime.GOOS == "darwin" {
+		if got <= own {
+			t.Fatalf("case %s: the gate ran at nice %d, the daemon's own is %d; want it under", label, got, own)
+		}
+		return
+	}
+	if want := sandbox.Lowered(own, core.CheckNice); got != want {
+		t.Fatalf("case %s: the gate ran at nice %d under a daemon at %d, want %d", label, got, own, want)
 	}
 }
 

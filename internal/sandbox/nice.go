@@ -20,3 +20,7 @@ func Niced(argv []string, n int) []string {
 	}
 	return append([]string{"nice", "-n", strconv.Itoa(n)}, argv...)
 }
+
+// Lowered is the level a command niced by `by` runs at under a parent at
+// cur: nice adds to the parent's level, and the kernel caps it at 19.
+func Lowered(cur, by int) int { return min(cur+by, 19) }
