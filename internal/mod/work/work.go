@@ -287,6 +287,10 @@ func (m *Module) save(t *Task, note string) {
 	if !t.Updated.After(m.online) {
 		t.Updated = m.online.Add(time.Nanosecond)
 	}
+	var was string
+	if prev := m.tasks[t.ID]; prev != nil {
+		was = prev.Stage
+	}
 	m.mu.Unlock()
 	if note != "" {
 		t.Log = append(t.Log, Entry{At: t.Updated, Text: note})
@@ -295,6 +299,10 @@ func (m *Module) save(t *Task, note string) {
 		}
 	}
 	m.C.J.MustAppend("task.saved", t)
+	if t.Stage != was && (t.Stage == StageMerged || t.Stage == StageDone) {
+		m.steps.Add(1)
+		go func(t Task) { defer m.steps.Done(); m.ended(t) }(*t) // a large tree mustn't hold the save
+	}
 }
 
 // Get returns a task.
