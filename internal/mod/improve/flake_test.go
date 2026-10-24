@@ -73,7 +73,7 @@ func flakeAlerts(m *Module) string {
 // alert, and the merge is kept.
 func TestFlakeAfterMergeIsNotReverted(t *testing.T) {
 	m, commit, merge := tested(t)
-	once := filepath.Join(t.TempDir(), "once")
+	once := "'" + filepath.ToSlash(filepath.Join(t.TempDir(), "once")) + "'" // a Windows path, quoted, reads in sh too
 	sha := commit(map[string]string{"t.sh": "[ -e " + once + " ] && exit 0\ntouch " + once + "\necho '--- FAIL: TestJoin (0.09s)'\nexit 1\n"})
 	if ms := merge(sha); !ms.Kept || !strings.Contains(ms.Note, "flaky") || !strings.Contains(ms.Note, "TestJoin") {
 		t.Fatalf("a flake was blamed on the merge: %+v", ms)
@@ -142,6 +142,39 @@ func TestFailureAfterACheckpointIsTheChanges(t *testing.T) {
 	}
 	sha := commit(map[string]string{"README.md": "the rest of the task\n"})
 	m.afterMerge(work.Task{ID: "t1", Project: "p", MergeSHA: sha, Banks: []work.Bank{{MergeSHA: checkpoint}}})
+	if reverts(m) != 1 || flakeAlerts(m) != "" {
+		t.Fatalf("reverts %d, alerts %q", reverts(m), flakeAlerts(m))
+	}
+}
+
+// A failure checked at a candidate's head, not on main, is what the
+// candidate's code printed: it never makes a failure after a merge a flake.
+func TestOnlyMainsChecksMakeAFlake(t *testing.T) {
+	m, commit, merge := tested(t)
+	forge := m.C.Effects.Forge.(*core.Local)
+	side := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		out, err := core.Git(side, append([]string{"-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+		if err != nil {
+			t.Fatal(out, err)
+		}
+		return strings.TrimSpace(out)
+	}
+	git("clone", "-q", forge.RepoPath("me/p"), ".")
+	os.WriteFile(filepath.Join(side, "t.sh"), []byte("echo '--- FAIL: TestJoin (0.09s)'\nexit 1\n"), 0o644)
+	git("commit", "-qam", "another candidate")
+	git("push", "-q", "origin", "HEAD:refs/heads/cand")
+	cand := git("rev-parse", "HEAD")
+	p, _ := m.C.Projects.Get("p")
+	m.C.Effects.Sync(p)
+	if c := m.C.Effects.RunCheck(p, cand, "test", "sh ./t.sh"); len(c.Failed) != 1 {
+		t.Fatalf("the candidate's failure: %+v", c)
+	}
+	sha := commit(map[string]string{"t.sh": "echo '--- FAIL: TestJoin (0.09s)'\nexit 1\n"})
+	if ms := merge(sha); ms.Kept || ms.TestsOK {
+		t.Fatalf("a break was kept on a candidate's say-so: %+v", ms)
+	}
 	if reverts(m) != 1 || flakeAlerts(m) != "" {
 		t.Fatalf("reverts %d, alerts %q", reverts(m), flakeAlerts(m))
 	}

@@ -157,3 +157,24 @@ func TestQueueAreas(t *testing.T) {
 		t.Fatalf("areas %q, want %q", got, want)
 	}
 }
+
+// A symlink in the clone pointing outside it never names an area, so a brief
+// can't test whether a path on the machine exists.
+func TestQueueAreasStayInsideTheClone(t *testing.T) {
+	m := queueRig(t)
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("x"), 0o644)
+	p, _ := m.C.Projects.Get("p")
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+	clone := m.C.WS.Project("p")
+	os.Symlink(outside, filepath.Join(clone, "out"))
+	os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(clone, "internal", "leak.txt"))
+	task := file(t, m, "fix it", "See out/secret.txt, internal/leak.txt and internal/core/effects.go.")
+	got := m.areas(task)
+	want := []string{"internal/core", "internal/core/effects.go"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("areas %q, want %q", got, want)
+	}
+}

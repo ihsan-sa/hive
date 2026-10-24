@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -116,6 +117,35 @@ func TestUpdateAgainKeepsTheOld(t *testing.T) {
 	}
 }
 
+// An update whose restart never came added a binary beside this one (as
+// Windows' Linux one); updating again still lists it as added, so a rollback
+// removes it rather than putting the same new binary back.
+func TestUpdateAgainKeepsWhatItAdded(t *testing.T) {
+	other := AssetName("plan9", "amd64")
+	serve(t, "v9.9.9", map[string]string{AssetName(runtime.GOOS, runtime.GOARCH): "new", other: "new"}, false)
+	m, exe := releaseAt(t, "v0.1.2", "me/hive")
+	beside := filepath.Join(filepath.Dir(exe), other)
+	a := alongside
+	t.Cleanup(func() { alongside = a })
+	alongside = map[string][]string{runtime.GOOS: {other}}
+	for i := 0; i < 2; i++ {
+		if _, err := m.Update(""); err != nil {
+			t.Fatal(err)
+		}
+		p, _ := readPending(m.C.WS)
+		if !slices.Equal(p.Added, []string{beside}) || !slices.Equal(p.Paths, []string{exe}) || core.Exists(beside+".old") {
+			t.Fatalf("update %d: paths %v, added %v", i+1, p.Paths, p.Added)
+		}
+	}
+	p, _ := readPending(m.C.WS)
+	if err := rollBack(p.Paths, p.Added); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "old" || core.Exists(beside) {
+		t.Fatalf("after rollback: binary %q, added still there: %v", raw, core.Exists(beside))
+	}
+}
+
 // tryBinary passes a binary that runs and names the tag, and nothing else.
 func TestTryBinary(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -133,5 +163,21 @@ func TestTryBinary(t *testing.T) {
 	}
 	if err := tryBinary(bad, "v9.9.9"); err == nil {
 		t.Fatal("a file that doesn't run passed")
+	}
+}
+
+// A binary the update put where none was (Windows' Linux one, on an install
+// without it) doesn't stop a rollback, which removes it.
+func TestRollBackRemovesWhatTheUpdateAdded(t *testing.T) {
+	dir := t.TempDir()
+	exe, added := filepath.Join(dir, "hive"), filepath.Join(dir, "hive-linux-amd64")
+	os.WriteFile(exe, []byte("new"), 0o755)
+	os.WriteFile(exe+".old", []byte("old"), 0o755)
+	os.WriteFile(added, []byte("new"), 0o755)
+	if err := rollBack([]string{exe}, []string{added}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "old" || core.Exists(added) {
+		t.Fatalf("binary %q, added still there: %v", raw, core.Exists(added))
 	}
 }

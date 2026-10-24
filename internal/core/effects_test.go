@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -546,9 +547,16 @@ func TestSelfGuardsItsRootPaths(t *testing.T) {
 		{"modules/agents/warden.md", true, false},
 		{"go.mod", true, false},
 		{"go.sum", true, false},
+		{"go.work", true, false},
+		{"go.work.sum", true, false},
+		{"vendor/golang.org/x/sys/unix/syscall.go", true, false},
+		{"vendor/modules.txt", true, false},
 		{"docs/odd.md", true, false}, // the project's own classes still count
 		{"internal/tui/views.go", false, false},
 	} {
+		if runtime.GOOS == "windows" && strings.ContainsAny(tc.file, "\t\"") {
+			continue // Windows can't name a file so; git still can, from elsewhere
+		}
 		r, _ := commitInCheckout(t, c, p, fmt.Sprintf("w9-%d", i), main, tc.file, "x\n")
 		sha, err := c.Effects.Extract(p, r, main)
 		if err != nil {
