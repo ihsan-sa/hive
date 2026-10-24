@@ -3,6 +3,7 @@
  › Chats              │
    Dashboard          │
    Waiting         3  │
+   Knowledge          │
    Modules            │
    Settings           │
                       │
@@ -10,13 +11,12 @@
  › lead               │
    writer             │
    reviewer        ●  │
- ▾ hive-web           │
-   lead            ●  │   you  19:58
-   worker-2           │   Hello?
-   reviewer           │   ▸ 1 reply  last 19:58
-   tribunal           │
- ▸ website            │   you  20:22
-                      │   The parser and the renderer are tangled together. Can you split the parser into its own
+ ▾ hive-web           │   you  19:58
+   lead            ●  │   Hello?
+   worker-2           │   ▸ 1 reply  last 19:58
+   reviewer           │
+   tribunal           │   you  20:22
+ ▸ website            │   The parser and the renderer are tangled together. Can you split the parser into its own
                       │   package so reviewer can check it on its own?
                       │   ▸ 2 replies  last 20:31
                       │

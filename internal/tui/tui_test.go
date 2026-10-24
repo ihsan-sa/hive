@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -783,5 +784,101 @@ func TestListsScroll(t *testing.T) {
 	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
 	if m.dashSel != 1 || m.focus != 1 {
 		t.Fatalf("wheel down over the status tree: sel %d focus %d, want 1 and 1", m.dashSel, m.focus)
+	}
+}
+
+// span keeps a run of lines in view, the top one when they can't all fit.
+func TestSpanKeepsWhatOpensBelow(t *testing.T) {
+	lines := make([]string, 20)
+	for i := range lines {
+		lines[i] = strconv.Itoa(i)
+	}
+	for _, c := range []struct{ top, bot, h, first int }{
+		{0, 0, 5, 0}, {10, 14, 5, 10}, {10, 19, 5, 10}, {17, 19, 5, 15}, {3, 9, 5, 3}, {8, 9, 5, 5}, {5, 5, 0, 5},
+	} {
+		got := span(lines, c.top, c.bot, c.h)
+		if len(got) != c.h || (c.h > 0 && got[0] != strconv.Itoa(c.first)) {
+			t.Errorf("span(top %d, bot %d, h %d) = %v, want %d lines from %d", c.top, c.bot, c.h, got, c.h, c.first)
+		}
+	}
+	if got := window(lines, 1, 2); got[0] != "1" { // a two-row pane still shows the selected line
+		t.Errorf("window(sel 1, h 2) = %v", got)
+	}
+}
+
+// A pick-list opened on the bottom row of a short window shows every choice.
+func TestPickListUnderTheBottomRow(t *testing.T) {
+	for _, sz := range [][2]int{{80, 24}, {80, 14}, {120, 20}, {50, 16}} {
+		m := designModel(sz[0], sz[1])
+		m.pick(sideRow{sec: secSettings})
+		var sel int
+		for i, s := range m.settings() {
+			if s.key == "project:website" {
+				sel = i
+			}
+		}
+		for range sel {
+			m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if !m.picking {
+			t.Fatalf("%v: the list did not open", sz)
+		}
+		view := plain(m.View())
+		checkWidth(t, view, sz[0], sz[1], "pick-list")
+		for _, ch := range m.settings()[sel].choices {
+			if !strings.Contains(view, ch) {
+				t.Errorf("%v: choice %q is cut off:\n%s", sz, ch, view)
+			}
+		}
+		if !strings.Contains(view, "website") {
+			t.Errorf("%v: the row the list belongs to scrolled away:\n%s", sz, view)
+		}
+	}
+}
+
+// A setting's long value wraps under its own column, and a label too long for
+// its column keeps its whole name.
+func TestSettingsWrapLongValues(t *testing.T) {
+	for _, sz := range [][2]int{{80, 40}, {50, 60}} {
+		m := designModel(sz[0], sz[1])
+		m.st.Config.ReleasePin = "v0.9.1"
+		m.st.Projects = append(m.st.Projects, api.ProjectView{Project: core.Project{Name: "a-project-with-a-long-name"}})
+		m.pick(sideRow{sec: secSettings})
+		view := plain(m.View())
+		checkWidth(t, view, sz[0], sz[1], "settings")
+		for _, want := range []string{"newest)", "a-long-name"} {
+			if !strings.Contains(view, want) {
+				t.Errorf("%v: %q is cut off:\n%s", sz, want, view)
+			}
+		}
+	}
+}
+
+// An ask's options stay on screen when it is the last one and has detail.
+func TestWaitingKeepsTheOptions(t *testing.T) {
+	m := designModel(80, 12)
+	m.st.Asks[2].Detail = strings.Repeat("The rebuild touches every page of the site. ", 4)
+	m.pick(sideRow{sec: secWaiting})
+	m.focus = 1
+	m.waitSel = 2
+	view := plain(m.View())
+	checkWidth(t, view, 80, 12, "waiting")
+	if !strings.Contains(view, "yes    no") {
+		t.Errorf("the last ask's options are cut off:\n%s", view)
+	}
+}
+
+// A word longer than the line, a URL or a path, breaks instead of running off.
+func TestWrapBreaksLongWords(t *testing.T) {
+	url := "https://github.com/ihsan-sa/hive/pull/140/files#diff-0123456789abcdef0123456789abcdef"
+	ls := wrap("see "+url+" for it", 30)
+	for _, l := range ls {
+		if visibleWidth(l) > 30 {
+			t.Fatalf("line %q is wider than 30", l)
+		}
+	}
+	if got := strings.ReplaceAll(strings.Join(ls, ""), " ", ""); got != "see"+url+"forit" {
+		t.Fatalf("wrapping lost text: %q", got)
 	}
 }

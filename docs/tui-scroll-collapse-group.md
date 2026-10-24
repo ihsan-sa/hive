@@ -13,7 +13,7 @@ wrong for the person, what changed, and what is left for them to decide.
   whichever pane had the keys, so wheeling over the thread while typing in the
   channel moved the wrong one, and the wheel did nothing on the dashboard,
   Waiting, Modules or Settings.
-- Over a list (the feed, the status tree, Waiting, Modules, Settings) the wheel
+- Over a list (the feed, the status tree, Waiting, Knowledge, Modules, Settings) the wheel
   moves the cursor one row a notch, and the pane takes the focus so the cursor
   shows. Over the sidebar it does nothing: moving that cursor changes what the
   main pane shows, which a stray scroll shouldn't do.

@@ -406,6 +406,49 @@ func (h *hive) replied(chat, text string) func(api.State) bool {
 	}
 }
 
+// A lead keeps a journal every agent can read, and its context size shows on
+// its run. A lead that replaces it answers from that journal, and the person
+// sees one chat.
+func TestLeadJournal(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "remember the launch is on Friday"}, nil)
+	st := h.wait("the lead to note it", minute, h.replied("lead", "Noted."))
+	var first core.Run
+	for _, r := range st.Runs {
+		if r.Role == "lead" {
+			first = r
+		}
+	}
+	if first.Context == 0 {
+		t.Fatalf("no context figure on the lead: %+v", first)
+	}
+	h.post("/api/run/stop", map[string]string{"id": first.ID}, nil)
+	h.wait("the lead to stop", minute, func(st api.State) bool {
+		for _, r := range st.Runs {
+			if r.ID == first.ID {
+				return r.Terminal()
+			}
+		}
+		return false
+	})
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "what did I ask you to remember?"}, nil)
+	st = h.wait("the new lead to answer from the journal", minute, h.replied("lead", "the launch is on Friday"))
+	leads := 0
+	for _, r := range st.Runs {
+		if r.Role == "lead" {
+			leads++
+		}
+	}
+	var thread []string
+	for _, m := range h.messages("lead") {
+		thread = append(thread, m.From+": "+m.Text)
+	}
+	if leads != 2 || len(thread) < 4 || !strings.HasPrefix(thread[0], "person: remember") || !strings.Contains(thread[len(thread)-1], "Friday") {
+		t.Fatalf("%d leads; chat:\n%s", leads, strings.Join(thread, "\n"))
+	}
+}
+
 // M3 and M4: failing tests never merge; a merge that lowers the score is
 // reverted by a merged PR with a reason, a line lands in the lessons file, and
 // the next worker's brief quotes it; a notice run files an ask with evidence.
@@ -470,6 +513,48 @@ func TestGateAndLoop(t *testing.T) {
 		_, ok := task(st, "gate", "FAKE sweep")
 		return ok && len(st.Sweeps) > 0 && st.Sweeps[0].Status == core.StatusDone && len(st.Sweeps[0].Asks) == 1
 	})
+}
+
+// A review reads the project's docs/REVIEW.md, goals and lessons from main,
+// and advice given with a land becomes one follow-up brief once it merges, not
+// a blocker. The fake gives advice on the follow-up's review too, which files
+// nothing more, so the chain stops at one.
+func TestReviewReadsTheRules(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/rules", map[string]string{
+		".hive/project.json": `{"test": "true"}`,
+		".hive/goals.md":     "# Goals\n\nEvery agent sees the same thing.\n",
+		"docs/REVIEW.md":     "# Review\n\nThe sandbox walls the Hive off from the host. FAKE:reviewadvice\n",
+		".hive/lessons.md":   "# Lessons\n\n- a lesson from an earlier revert\n",
+	})
+	h.post("/api/project", map[string]any{"name": "rules", "repo": "me/rules"}, nil)
+	h.post("/api/ask", map[string]string{"project": "rules", "title": "add a helper"}, nil)
+	st := h.wait("the ask to merge", 3*minute, taskStage("rules", "add a helper", work.StageDone))
+	tk, _ := task(st, "rules", "add a helper")
+	brief, _ := os.ReadFile(filepath.Join(h.ws.RunRO(tk.Reviewer), "brief.md"))
+	for _, want := range []string{"walls the Hive off from the host", "Every agent sees the same thing", "## `.hive/lessons.md` on main"} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("the review brief lacks %q:\n%s", want, brief)
+		}
+	}
+	follow := "Follow up the review of add a helper"
+	st = h.wait("the advice to land as a brief", 3*minute, taskStage("rules", follow, work.StageDone))
+	fu, _ := task(st, "rules", follow)
+	if fu.From != tk.Reviewer || fu.FollowUp != tk.ID || !strings.Contains(fu.Known, "FAKE advice") {
+		t.Fatalf("follow-up: %+v", fu)
+	}
+	n := 0
+	for _, p := range st.Projects {
+		for _, x := range p.Tasks {
+			if strings.HasPrefix(x.Title, "Follow up") {
+				n++
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d follow-ups, want 1", n)
+	}
 }
 
 // A worker isn't blamed for a failure main has too: its change waits with no
@@ -936,6 +1021,9 @@ func TestOutsideStep(t *testing.T) {
 	h.seed("me/out", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "out", "repo": "me/out"}, nil)
 	title := "Delete the leftover test fixture directory on this machine, outside your checkout; it is safe to delete and can't be undone: FAKE:rmoutside " + fixture
+	if len(title) <= 120 {
+		t.Fatalf("the ask is only %d characters, no longer than a label", len(title))
+	}
 	h.post("/api/ask", map[string]string{"project": "out", "title": title}, nil)
 	h.wait("a tribunal to run the T3 step", 4*minute, func(st api.State) bool {
 		for _, r := range st.Requests {

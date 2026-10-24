@@ -1,6 +1,6 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
-// (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
+// (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:reviewadvice, FAKE:crash,
 // FAKE:limit, FAKE:offline, FAKE:needpackage, FAKE:goals, FAKE:needpython, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
@@ -147,6 +147,7 @@ func Main(argv []string) int {
 	if err != nil {
 		text = "error: " + err.Error()
 	}
+	emit(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{}, "usage": map[string]int{"input_tokens": len(all)}}})
 	cost := 0.0
 	if strings.Contains(all, "FAKE:paid") {
 		cost = 0.25
@@ -235,6 +236,17 @@ func leadAsk(ask, system string) (string, error) {
 	}
 	if strings.Contains(strings.ToLower(ask), "what's in the repo") {
 		return "The repo has " + strings.Join(repoFiles(), ", ") + ".", nil
+	}
+	// The journal: "remember X" is written to it, "what did I ask you to
+	// remember" is answered from it, so a lead that replaced this one can too.
+	journal := filepath.Join(os.Getenv("HIVE_BOX"), "notes.md")
+	if x, ok := strings.CutPrefix(ask, "remember "); ok {
+		appendFile(journal, "- promised: "+x+"\n")
+		return "Noted.", nil
+	}
+	if strings.Contains(ask, "you to remember") {
+		notes, _ := os.ReadFile(journal)
+		return "From my journal: " + strings.TrimSpace(string(notes)), nil
 	}
 	if f := strings.Fields(ask); len(f) == 2 && f[0] == "recheck" {
 		out, err := call("recheck", map[string]string{"task": f[1]}, time.Minute)
@@ -659,6 +671,9 @@ func review(all string) map[string]any {
 	}
 	if strings.Contains(all, "FAKE:reviewfix") && strings.Contains(all, "Review round 1") {
 		return map[string]any{"verdict": "fix", "summary": "needs one more pass", "findings": []map[string]any{{"file": "work", "issue": "FAKE finding"}}, "token": tok}
+	}
+	if strings.Contains(all, "FAKE:reviewadvice") {
+		return map[string]any{"verdict": "land", "summary": "looks right", "advice": []string{"FAKE advice: name the helper for what it does"}, "token": tok}
 	}
 	return map[string]any{"verdict": "land", "summary": "looks right", "findings": []any{}, "token": tok}
 }

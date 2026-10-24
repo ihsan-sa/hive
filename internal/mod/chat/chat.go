@@ -346,6 +346,14 @@ func (m *Module) deliverToLead(ch *Chat, text string, files ...File) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	// A new lead for a chat that had one keeps that lead's journal
+	// (Runs.Start only makes missing dirs, so the copy survives it).
+	if ch.Lead != "" {
+		if notes, err := core.SafeRead(filepath.Join(m.C.WS.RunBox(ch.Lead), "notes.md"), 1<<20); err == nil {
+			os.MkdirAll(m.C.WS.RunBox(id), 0o755)
+			os.WriteFile(filepath.Join(m.C.WS.RunBox(id), "notes.md"), notes, 0o644)
+		}
+	}
 	spec := m.Agents.Spec(id, "lead", project, dir, text)
 	spec.Name, spec.Persistent = name, true
 	if _, err := m.C.Runs.Start(spec); err != nil {

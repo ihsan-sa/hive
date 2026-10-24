@@ -58,7 +58,7 @@ func proxy(sp Spec) (*Egress, string, error) {
 		}
 	}
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
-	return ServeEgress(ln, sp.Allow, refused), port, nil
+	return ServeEgress(ln, sp.Allow, sp.Local, refused), port, nil
 }
 
 func (s *Seatbelt) Start(sp Spec) (Proc, error) {
@@ -112,6 +112,13 @@ func (s *Seatbelt) profile(sp Spec, port string) string {
 		}
 	}
 	fmt.Fprintf(&b, "(allow network-outbound (remote ip \"localhost:%s\"))\n", port)
+	// A granted service on this machine: Seatbelt shares the host's loopback,
+	// so the run reaches it directly as well as through the proxy.
+	for _, a := range sp.Local {
+		if _, p, err := net.SplitHostPort(a); err == nil {
+			fmt.Fprintf(&b, "(allow network-outbound (remote ip \"localhost:%s\"))\n", p)
+		}
+	}
 	b.WriteString("(allow network-outbound (literal \"/private/var/run/mDNSResponder\"))\n")
 	return b.String()
 }
