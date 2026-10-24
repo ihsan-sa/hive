@@ -30,7 +30,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
             runs/<id>/{host,ro,box}, kb/ (git repo of notes; record/ filed from the journal, untracked), gates/, checks/, improve/sweeps/,
             logins/, private/{daemon.json, update.json, runs/<id>/{home,codex,codex-sessions}},
             tools/<python|uv|node|go>/bin (agent-installed runtimes; read-only at /hive/tools, on PATH),
-            reports/{sent/*.json, outbox.jsonl} (only when sharing is on)
+            reports/{sent/*.json, outbox.jsonl, pending.jsonl} (only when sharing is on)
 .modules/   agents, chat, kb, improve, system, + installed (each with .hive-source.json)
 projects/<name>/             host clone (effects process only)
 projects/<name>/.checkouts/  agents' own checkouts (excluded from the clone)
