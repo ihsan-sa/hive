@@ -1,0 +1,19 @@
+#!/bin/sh
+# Stands in for curl in tests/install: `curl -fsSL <url> -o <file>` for this
+# test's release only, copied from /stage/release. Anything else fails as a
+# 404 would, so a download from anywhere else shows.
+set -eu
+url='' out=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out=$2; shift ;;
+    -*) ;;
+    *) url=$1 ;;
+  esac
+  shift
+done
+case "$url" in
+  https://github.com/ihsan-sa/hive/releases/latest/download/*) ;;
+  *) echo "curl (test): no network for $url" >&2; exit 22 ;;
+esac
+cp "/stage/release/${url##*/}" "$out"

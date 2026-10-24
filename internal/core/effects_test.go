@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -665,6 +666,9 @@ func TestMissingTool(t *testing.T) {
 		{127, "bash: line 1: cargo: command not found", "cargo"},
 		{127, "sh: npm: command not found\n", "npm"},
 		{127, "env: 'python3': No such file or directory", "python3"},
+		{127, "env: ‘python3’: No such file or directory\n", "python3"},
+		{127, "zsh:1: command not found: rustc\n", "rustc"},
+		{127, "zsh: command not found: rustc", "rustc"},
 		{127, "/bin/sh: 1: ./build.sh: not found", ""},
 		{1, "/bin/sh: 1: go: not found", ""},
 		{1, "--- FAIL: TestX\nFAIL", ""},
@@ -672,6 +676,34 @@ func TestMissingTool(t *testing.T) {
 	} {
 		if got := MissingTool(c.code, c.out); got != c.want {
 			t.Errorf("MissingTool(%d, %q) = %q, want %q", c.code, c.out, got, c.want)
+		}
+	}
+}
+
+// The shells checks really run under word a missing tool as MissingTool
+// expects, so a change in their wording shows here rather than as a red.
+func TestMissingToolRealShells(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no POSIX shell")
+	}
+	const tool = "hive-no-such-tool-xyz"
+	for _, argv := range [][]string{
+		{"/bin/sh", "-c", tool + " --version"},
+		{"bash", "-c", tool + " --version"},
+		{"zsh", "-c", tool + " --version"},
+		{"busybox", "sh", "-c", tool + " --version"},
+		{"env", tool, "--version"},
+	} {
+		if _, err := exec.LookPath(argv[0]); err != nil {
+			continue
+		}
+		out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		}
+		if got := MissingTool(code, string(out)); got != tool {
+			t.Errorf("%s words a missing tool as %q, which MissingTool reads as %q", argv[0], out, got)
 		}
 	}
 }
@@ -684,7 +716,11 @@ func TestCantRunIsNotTheCommitsAnswer(t *testing.T) {
 	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "a", Kind: "test", Output: "/bin/sh: 1: go: not found\n"})
 	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "b", Kind: "test", Output: "x", CantRun: "can't run: go is not installed where checks run"})
 	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "c", Kind: "test", Output: "--- FAIL: TestX\nFAIL\n"})
-	for sha, want := range map[string]bool{"a": false, "b": false, "c": true} {
+	// A real red that logs a "not found" line: one recorded since checks carry
+	// cant_run, and an old one that named its failing tests.
+	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "d", Kind: "test", Output: "sh: x: not found\n", At: cantRunRecorded.Add(time.Hour)})
+	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "e", Kind: "test", Output: "sh: x: not found\n--- FAIL: TestX\n", Failed: []string{"TestX"}})
+	for sha, want := range map[string]bool{"a": false, "b": false, "c": true, "d": true, "e": true} {
 		if _, ok := c.Effects.GetCheck("p", sha, "test"); ok != want {
 			t.Errorf("check at %s kept %v, want %v", sha, ok, want)
 		}
