@@ -6,6 +6,7 @@
 package work
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -191,6 +192,9 @@ type Module struct {
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
 	mainRed map[string]bool
+	// cantRunOpen holds, per project, the kind of check (test or score) its open
+	// "can't run" alert is about: raised once, cleared when that check runs.
+	cantRunOpen map[string]string
 	// later is when a held task (waiting on the forge's checks or an outside
 	// read) is next looked at; kept in memory, so a restart looks at once.
 	later map[string]time.Time
@@ -225,19 +229,27 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
 			return
 		}
-		if e.Kind == "alert.raised" {
-			var a struct{ Kind, Project, SHA string }
-			if e.Decode(&a) == nil && a.Kind == "main-red" && a.SHA != "" {
-				m.mu.Lock()
-				m.mainRed[a.Project+"@"+a.SHA] = true
-				m.mu.Unlock()
+		if e.Kind == "alert.raised" || e.Kind == "alert.cleared" {
+			var a struct{ Kind, Project, SHA, Ref, Check string }
+			if e.Decode(&a) != nil {
+				return
 			}
+			m.mu.Lock()
+			switch {
+			case a.Ref == "cant-run:"+a.Project && e.Kind == "alert.cleared":
+				delete(m.cantRunOpen, a.Project)
+			case a.Ref == "cant-run:"+a.Project:
+				m.cantRunOpen[a.Project] = cmp.Or(a.Check, "test")
+			case a.Kind == "main-red" && a.SHA != "":
+				m.mainRed[a.Project+"@"+a.SHA] = true
+			}
+			m.mu.Unlock()
 			return
 		}
 		if e.Kind != "task.saved" {
@@ -1144,10 +1156,12 @@ func (m *Module) test(t *Task, p core.Project) error {
 	}
 	if c.CantRun != "" {
 		if t.Checkpoint != "" {
+			m.raiseCantRun(p, c)
 			return m.dropCheckpoint(t, p, "the tests "+c.CantRun+", which is no verdict on it")
 		}
 		return m.cantRun(t, p, c)
 	}
+	m.RanCheck(p.Name, "test")
 	if strings.HasPrefix(t.Reason, "the tests can't run") {
 		t.Reason = "" // the tool is there now
 	}
@@ -1216,10 +1230,38 @@ func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
 	}
 	t.Reason = reason
 	m.save(t, reason)
-	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "ref": "cant-run:" + p.Name, "project": p.Name,
-		"text": p.Name + "'s tests " + c.CantRun + " (" + core.Clip(strings.TrimSpace(c.Output), 120) + "): a fault in the environment, not a verdict on any commit; changes wait and nothing is reverted until it is fixed"})
-	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
+	m.raiseCantRun(p, c)
+	if t.PR.Number != 0 {
+		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
+	}
 	return nil
+}
+
+func (m *Module) raiseCantRun(p core.Project, c core.Check) {
+	m.RaiseCantRun(p.Name, "test", p.Name+"'s tests "+c.CantRun+" ("+core.Clip(strings.TrimSpace(c.Output), 120)+"): a fault in the environment, not a verdict on any commit; changes wait and nothing is reverted until it is fixed")
+}
+
+// RaiseCantRun raises the project's "can't run" alert, once while it is open
+// however many changes and merges wait on the missing tool. kind is the check
+// (test or score) that couldn't start.
+func (m *Module) RaiseCantRun(project, kind, text string) {
+	m.mu.Lock()
+	_, open := m.cantRunOpen[project]
+	m.mu.Unlock()
+	if !open {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "ref": "cant-run:" + project, "project": project, "check": kind, "text": text})
+	}
+}
+
+// RanCheck clears the project's "can't run" alert once the kind of check it
+// was about has run: the tool is there now.
+func (m *Module) RanCheck(project, kind string) {
+	m.mu.Lock()
+	open := m.cantRunOpen[project] == kind
+	m.mu.Unlock()
+	if open {
+		m.C.J.MustAppend("alert.cleared", map[string]string{"ref": "cant-run:" + project, "project": project})
+	}
 }
 
 // noteTests tells the PR its tests' result once per head. A head that only

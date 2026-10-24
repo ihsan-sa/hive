@@ -368,6 +368,15 @@ type server struct {
 }
 
 func (s *server) onEvent(e core.Event) {
+	if e.Kind == "alert.cleared" { // the fault behind a status alert is gone
+		var a struct{ Ref string }
+		if e.Decode(&a) == nil && a.Ref != "" {
+			s.mu.Lock()
+			s.alerts = slices.DeleteFunc(s.alerts, func(x api.Alert) bool { return x.Ref == a.Ref })
+			s.mu.Unlock()
+		}
+		return
+	}
 	if e.Kind != "alert.raised" {
 		return
 	}
@@ -853,7 +862,7 @@ func (s *server) eventProject(e core.Event) string {
 // event with no project (the lead's chat, the person's asks) needs a grant of "*".
 func notice(kind string) bool {
 	switch kind {
-	case "hive.idle", "hive.started", "hive.stopped", "alert.raised":
+	case "hive.idle", "hive.started", "hive.stopped", "alert.raised", "alert.cleared":
 		return true
 	}
 	return strings.HasPrefix(kind, "module.")
