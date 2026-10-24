@@ -1269,10 +1269,12 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if ok, err := m.catchUp(t, p, main, "main moved"); ok || err != nil {
 		return err
 	}
-	if wait, err := m.forgeChecks(t, p, main); wait || err != nil {
+	// The security read first: it takes longest, so its line goes on the PR
+	// while the forge's checks still run.
+	if wait, err := m.outsideRead(t, p, main); wait || err != nil {
 		return err
 	}
-	if wait, err := m.outsideRead(t, p, main); wait || err != nil {
+	if wait, err := m.forgeChecks(t, p, main); wait || err != nil {
 		return err
 	}
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), OutsideRead: t.NeedsRead})
@@ -1399,21 +1401,22 @@ func (m *Module) raiseOnce(p core.Project, key, text string) {
 	}
 }
 
-// outsideRead holds a PR that asked for a read from the box's perms seat or
-// architect until one is recorded as land on its own diff (hive read); a fix
-// goes back to the worker with what the reader said.
+// outsideRead holds a PR that touches a path on main's security list, or
+// asked for a read from the box's perms seat or architect, until one is
+// recorded as land on its own diff (hive read); a fix goes back to the
+// worker with what the reader said.
 func (m *Module) outsideRead(t *Task, p core.Project, main string) (bool, error) {
 	if r, ok := m.C.Runs.Get(t.Worker); ok && !t.NeedsRead {
 		t.NeedsRead = asksOutsideRead(finishText(r)) // a task landed before this was looked for
-	}
-	if !t.NeedsRead {
-		return false, nil
 	}
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
 	if err != nil {
 		return true, err
 	}
 	t.Diff = ch.DiffID
+	if !t.NeedsRead && len(ch.Security) == 0 {
+		return false, nil
+	}
 	o, ok := m.C.Effects.OutsideRead(p.Name, ch.DiffID)
 	switch {
 	case ok && o.Verdict == "land":
@@ -1422,7 +1425,11 @@ func (m *Module) outsideRead(t *Task, p core.Project, main string) (bool, error)
 		t.Reason = ""
 		return true, m.sendBack(t, p, fmt.Sprintf("The box's %s read %s and asked for fixes:\n\n%s", o.By, core.Short(o.SHA), orNone(o.Note)))
 	}
-	m.hold(t, p, fmt.Sprintf("waiting for a read from the box's perms seat or architect at %s, as the PR asks; a read of an earlier head counts only while this change's own diff is the same (record one with `%s read %s %s land --by perms`)", core.Short(t.SHA), core.Cmd, t.ID, core.Short(t.SHA)))
+	why := "the PR asks for one"
+	if len(ch.Security) > 0 {
+		why = "it changes " + strings.Join(ch.Security, ", ") + ", on " + core.SecurityList
+	}
+	m.hold(t, p, fmt.Sprintf("waiting on a security read from the box's perms seat or architect at %s, since %s; a read of an earlier head counts only while this change's own diff is the same (record one with `%s read %s %s land --by perms`)", core.Short(t.SHA), why, core.Cmd, t.ID, core.Short(t.SHA)))
 	return true, nil
 }
 

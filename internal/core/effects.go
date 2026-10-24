@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -712,10 +713,13 @@ type Change struct {
 	Lines     int      `json:"lines"`
 	Small     bool     `json:"small"`
 	Protected []string `json:"protected,omitempty"`
-	High      []string `json:"high,omitempty"`    // files in a high or root class
-	Root      []string `json:"root,omitempty"`    // files that run with elevated rights
-	DiffID    string   `json:"diff_id,omitempty"` // names Diff (DiffID)
-	Diff      string   `json:"-"`
+	High      []string `json:"high,omitempty"` // files in a high or root class
+	// Security are files on main's SecurityList: the change merges only
+	// after an outside read (perms seat or architect) said land on its diff.
+	Security []string `json:"security,omitempty"`
+	Root     []string `json:"root,omitempty"`    // files that run with elevated rights
+	DiffID   string   `json:"diff_id,omitempty"` // names Diff (DiffID)
+	Diff     string   `json:"-"`
 	// ProtectedDiff is the diff of the protected files alone, shown to the person who approves it.
 	ProtectedDiff string `json:"-"`
 }
@@ -747,6 +751,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	if cfg.Score != nil {
 		protected = append(protected, cfg.Score.Evaluator()...)
 	}
+	security := ParseSecurityList(e.ReadFile(p, mainSHA, SecurityList))
 	docsOnly := true
 	for _, l := range strings.Split(stat, "\x00") {
 		f := strings.SplitN(l, "\t", 3)
@@ -764,6 +769,9 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		if under(file, cfg.Root) {
 			c.Root = append(c.Root, file)
 		}
+		if matchAny(file, security) {
+			c.Security = append(c.Security, file)
+		}
 		if under(file, cfg.High) || under(file, cfg.Root) {
 			c.High = append(c.High, file)
 		}
@@ -773,13 +781,83 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 			docsOnly = false
 		}
 	}
-	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && !p.Self
+	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Security) == 0 && !p.Self
 	c.Diff, _ = Git(dir, "diff", base, sha)
 	c.DiffID = DiffID(c.Diff)
 	if len(c.Protected) > 0 {
 		c.ProtectedDiff, _ = Git(dir, append([]string{"--literal-pathspecs", "diff", "--no-renames", base, sha, "--"}, c.Protected...)...)
 	}
 	return c, nil
+}
+
+// SecurityList is the project's list of paths a change to which merges only
+// after a security read from outside the Hive (the box's perms seat or its
+// architect). It is read from main, so a change can't move its own bar.
+const SecurityList = "tests/LANDING-security.toml"
+
+// ParseSecurityList reads the quoted entries of the list's paths array: TOML
+// as the list writes it, one `paths = [ ... ]` with # comments.
+func ParseSecurityList(raw string) []string {
+	var out []string
+	in := false
+	for _, l := range strings.Split(raw, "\n") {
+		l = strings.TrimSpace(l)
+		if !in {
+			k, v, ok := strings.Cut(l, "=")
+			if !ok || strings.TrimSpace(k) != "paths" {
+				continue
+			}
+			in, l = true, strings.TrimSpace(v)
+		}
+		for {
+			i := strings.IndexAny(l, "\"#]")
+			if i < 0 || l[i] == '#' {
+				break
+			}
+			if l[i] == ']' {
+				return out
+			}
+			j := strings.IndexByte(l[i+1:], '"')
+			if j < 0 {
+				break
+			}
+			out = append(out, l[i+1:i+1+j])
+			l = l[i+j+2:]
+		}
+	}
+	return out
+}
+
+// matchAny reports whether file matches one of the list's patterns: `*`
+// stays inside one path segment, `**` crosses segments.
+func matchAny(file string, patterns []string) bool {
+	for _, pat := range patterns {
+		if globMatch(strings.Split(pat, "/"), strings.Split(file, "/")) {
+			return true
+		}
+	}
+	return false
+}
+
+func globMatch(pat, segs []string) bool {
+	if len(pat) == 0 {
+		return len(segs) == 0
+	}
+	if pat[0] == "**" {
+		for i := 0; i <= len(segs); i++ {
+			if globMatch(pat[1:], segs[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(segs) == 0 {
+		return false
+	}
+	if ok, _ := path.Match(pat[0], segs[0]); !ok {
+		return false
+	}
+	return globMatch(pat[1:], segs[1:])
 }
 
 // under reports whether file is one of paths or inside one of them.
@@ -821,8 +899,8 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if !ch.Small && !e.readOK(p, ch, m.SHA) {
 		return "", fmt.Errorf("refusing to merge %s: no land verdict bound to that exact commit", short(m.SHA))
 	}
-	if o, ok := e.OutsideRead(p.Name, ch.DiffID); m.OutsideRead && (!ok || o.Verdict != "land") {
-		return "", fmt.Errorf("refusing to merge %s: it asks for a read from the box's perms seat or architect, and none said land on its diff", short(m.SHA))
+	if o, ok := e.OutsideRead(p.Name, ch.DiffID); (m.OutsideRead || len(ch.Security) > 0) && (!ok || o.Verdict != "land") {
+		return "", fmt.Errorf("refusing to merge %s: it needs a security read from the box's perms seat or architect (%s), and none said land on its diff", short(m.SHA), orAsked(ch.Security))
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
 	if err != nil {
@@ -843,6 +921,14 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 type NeedsPerson struct{ Reason string }
 
 func (n *NeedsPerson) Error() string { return "needs the person: " + n.Reason }
+
+// orAsked names the listed paths a change touches, or says the PR asked.
+func orAsked(security []string) string {
+	if len(security) == 0 {
+		return "the PR asks for one"
+	}
+	return "it changes " + strings.Join(security, ", ") + ", on " + SecurityList
+}
 
 // ChecksState sums up the forge's checks on one head, the worst first: a
 // failure, then one that can't start, then one still running; no checks, or

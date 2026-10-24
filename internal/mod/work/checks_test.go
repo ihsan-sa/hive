@@ -1,6 +1,8 @@
 package work
 
 import (
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -192,5 +194,103 @@ func TestCatchUpKeepsTheRead(t *testing.T) {
 	toMerging(t, m, task, p) // not reviewing: the read carried
 	if task.Reviews != 0 || task.Reviewer != "" {
 		t.Fatal("a reviewer was asked again")
+	}
+}
+
+// securityList puts only secure/** on main's security list.
+var securityList = map[string]string{core.SecurityList: "# paths that need a security read\npaths = [\n  \"secure/**\", # the boundary\n  \"tests/LANDING-security.toml\",\n]\n"}
+
+// reviewerLand records the Hive's own reviewer's land on the task's head.
+func reviewerLand(t *testing.T, m *Module, task *Task, p core.Project, id string) {
+	t.Helper()
+	main, _ := m.C.Effects.Sync(p)
+	ch, _ := m.C.Effects.Classify(p, main, task.SHA)
+	if _, err := m.C.Runs.Start(core.RunSpec{ID: id, Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": task.SHA, "diff.patch": ch.Diff}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.C.Effects.RecordVerdict(core.Verdict{Project: p.Name, SHA: task.SHA, Run: id, Verdict: "land"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A change to a path on main's security list is held, with one line on the
+// PR, until a perms or architect read says land at its head, even after the
+// Hive's own reviewer landed it and the forge's checks pass; a head that
+// moves to a new diff waits again.
+func TestSecurityListHolds(t *testing.T) {
+	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPass})
+	for i := 0; i < 3; i++ {
+		mergeOnce(t, m, task, p)
+	}
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "security read") || !strings.Contains(task.Reason, "secure/box.go") || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("stage %q, reason %q, PR %s", task.Stage, task.Reason, prState(t, f, task.PR.Number))
+	}
+	if n := strings.Count(strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"), "waiting on a security read"); n != 1 {
+		t.Fatalf("%d lines saying it waits on a security read, want 1", n)
+	}
+	// The Hive's own merge step refuses it too.
+	main, _ := m.C.Effects.Sync(p)
+	if _, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: task.PR.Number, SHA: task.SHA, Main: main}); err == nil || !strings.Contains(err.Error(), "security read") {
+		t.Fatalf("Effects.Merge took a listed path unread: %v", err)
+	}
+	first := task.SHA
+	if _, err := m.RecordRead("t1", first, "perms", "land", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// The worker pushes a new commit to the listed file: the read was of the
+	// old diff, so the new head waits again.
+	r, _ := m.C.Runs.Get("w1")
+	co := r.Checkout
+	os.WriteFile(filepath.Join(co, "secure/box.go"), []byte("package secure\n\n// more\n"), 0o644)
+	must(t, co, "add", "-A")
+	must(t, co, "commit", "-q", "-m", "more")
+	sha, err := m.C.Effects.Extract(p, r, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.C.Effects.Push(p, "hive/t1", sha)
+	task.SHA, task.Stage = sha, StageTesting
+	reviewerLand(t, m, task, p, "r2")
+	toMerging(t, m, task, p)
+	f.SetChecks(p.Repo, sha, core.CheckRun{Name: "test", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "security read") || !strings.Contains(task.Reason, core.Short(sha)) {
+		t.Fatalf("a moved head merged on the old head's read: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	if _, err := m.RecordRead("t1", sha, "architect", "land", ""); err != nil {
+		t.Fatal(err)
+	}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q after a land at the head", task.Stage, task.Reason)
+	}
+}
+
+// Only a land at the head lets a listed change through after its checks
+// pass: a read recorded while a check still runs waits for the check.
+func TestSecurityListThenChecks(t *testing.T) {
+	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	m.RecordRead("t1", task.SHA, "perms", "land", "")
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPending})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "forge's checks") {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
+// A change to paths not on the list merges on the Hive's own read.
+func TestSecurityListUnlistedPasses(t *testing.T) {
+	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"plain/x.go": "package plain\n"})
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
 }

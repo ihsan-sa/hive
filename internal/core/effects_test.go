@@ -680,3 +680,25 @@ func TestSelfGuardsItsRootPaths(t *testing.T) {
 		}
 	}
 }
+
+// The repo's own security list parses, and its globs keep `*` in one segment.
+func TestSecurityList(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", SecurityList))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := ParseSecurityList(string(raw))
+	for _, f := range []string{"internal/core/runs.go", "internal/harness/claude.go", "internal/sandbox/linux/x.go", ".github/workflows/ci.yml", "go.sum", SecurityList} {
+		if !matchAny(f, list) {
+			t.Errorf("%s should be listed (%v)", f, list)
+		}
+	}
+	for _, f := range []string{"internal/core/journal.go", "internal/mod/work/work.go", "docs/status.md", "internal/harnessx/a.go"} {
+		if matchAny(f, list) {
+			t.Errorf("%s shouldn't be listed", f)
+		}
+	}
+	if got := ParseSecurityList("x = 1\npaths = [\"a/*.go\", \"b/**\"] # c\n"); len(got) != 2 || !matchAny("a/x.go", got) || matchAny("a/b/x.go", got) || !matchAny("b/c/d", got) {
+		t.Fatalf("%v", got)
+	}
+}

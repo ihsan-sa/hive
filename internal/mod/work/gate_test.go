@@ -43,6 +43,11 @@ func pushMain(t *testing.T, f *core.Local, files map[string]string) {
 // with BROKEN on main when mainRed, and a task in testing whose worker made
 // one commit on main with the given files ("" removes one).
 func gateRig(t *testing.T, mainRed bool, files map[string]string) (*Module, *Task, core.Project, *core.Local) {
+	return gateRigSeeded(t, mainRed, nil, files)
+}
+
+// gateRigSeeded is gateRig with more files on main to start with.
+func gateRigSeeded(t *testing.T, mainRed bool, onMain, files map[string]string) (*Module, *Task, core.Project, *core.Local) {
 	dir := t.TempDir()
 	ws := core.Workspace{Root: filepath.Join(dir, "hive")}
 	if err := ws.Init(); err != nil {
@@ -62,6 +67,9 @@ func gateRig(t *testing.T, mainRed bool, files map[string]string) (*Module, *Tas
 	if mainRed {
 		seed["BROKEN"] = "x"
 	}
+	for name, body := range onMain {
+		seed[name] = body
+	}
 	pushMain(t, forge, seed)
 	p, err := c.Projects.Add(core.Project{Name: "p", Repo: "me/p"})
 	if err != nil {
@@ -79,6 +87,7 @@ func gateRig(t *testing.T, mainRed bool, files map[string]string) (*Module, *Tas
 		if body == "" {
 			os.Remove(filepath.Join(co, name))
 		} else {
+			os.MkdirAll(filepath.Dir(filepath.Join(co, name)), 0o755)
 			os.WriteFile(filepath.Join(co, name), []byte(body), 0o644)
 		}
 	}
