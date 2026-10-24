@@ -131,3 +131,46 @@ func TestRunKeepsAndRollsBack(t *testing.T) {
 		t.Errorf("bad candidate: %+v lessons %q", rep.Verdict, lessons)
 	}
 }
+
+// The candidate's tests run during the build; they must not see the host's home.
+func TestBuildRunsWithoutHostHome(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go")
+	}
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, "login"), []byte("secret"), 0o600)
+	t.Setenv("HOME", home)
+	t.Setenv("GH_TOKEN", "host-token")
+	repo := t.TempDir()
+	write := func(p, s string) {
+		os.MkdirAll(filepath.Dir(filepath.Join(repo, p)), 0o755)
+		os.WriteFile(filepath.Join(repo, p), []byte(s), 0o644)
+	}
+	write("go.mod", "module cand\n\ngo 1.21\n")
+	write("cmd/hive/main.go", "package main\n\nfunc main() {}\n")
+	write("p/p.go", "package p\n")
+	write("p/p_test.go", `package p
+
+import ("os"; "testing")
+
+func TestNoHostHome(t *testing.T) {
+	if _, err := os.Stat(os.Getenv("HOME") + "/login"); err == nil {
+		t.Fatal("the host's home is visible")
+	}
+	if os.Getenv("GH_TOKEN") != "" {
+		t.Fatal("a host token is visible")
+	}
+}
+`)
+	for _, a := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, a...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+	}
+	sha, _ := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	out := t.TempDir()
+	c := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: "bare"}
+	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha))); err != nil {
+		t.Fatal(err)
+	}
+}

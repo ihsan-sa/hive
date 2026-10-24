@@ -223,14 +223,21 @@ func build(cfg Config, c *Child, sha string) error {
 	if err := checkout(cfg, c, sha); err != nil {
 		return err
 	}
-	run := gitRun
+	// The candidate's own code (its tests, its init functions) runs only in the
+	// child's sandbox, with the child's empty HOME and no host login; the Go
+	// caches reach it by path. Never run it through gitRun.
+	if err := c.Prepare(); err != nil {
+		return err
+	}
+	run := func(dir string, argv ...string) (string, error) { return c.Exec(30*time.Minute, dir, argv...) }
 	if out, err := run(c.Src, "go", "vet", "./..."); err != nil {
 		return fmt.Errorf("go vet: %s", tail(out, 600))
 	}
 	if out, err := run(c.Src, "go", "test", "-short", "./..."); err != nil {
 		return fmt.Errorf("go test -short: %s", tail(out, 600))
 	}
-	c.Bin = filepath.Join(cfg.Out, "bin-"+c.Name)
+	c.Bin = filepath.Join(c.Root, "bin", "hive")
+	os.MkdirAll(filepath.Dir(c.Bin), 0o755)
 	if out, err := run(c.Src, "go", "build", "-o", c.Bin, "./cmd/hive"); err != nil {
 		return fmt.Errorf("go build: %s", tail(out, 600))
 	}
@@ -240,8 +247,8 @@ func build(cfg Config, c *Child, sha string) error {
 func gitRun(dir string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	// The build is the gate's own work, not a child's: it needs the Go caches under HOME, and no credentials.
-	cmd.Env = append(cleanEnv(), "HOME="+os.Getenv("HOME"), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
+	// Git only, and no HOME: nothing here reads a login.
+	cmd.Env = append(cleanEnv(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -249,14 +256,7 @@ func gitRun(dir string, name string, args ...string) (string, error) {
 // checkout clones the repository clean into c.Src at exactly sha.
 func checkout(cfg Config, c *Child, sha string) error {
 	c.Src = filepath.Join(cfg.Out, "src-"+c.Name)
-	run := func(dir string, name string, args ...string) (string, error) {
-		cmd := exec.Command(name, args...)
-		cmd.Dir = dir
-		// The build is the gate's own work, not a child's: it needs the Go caches under HOME, and no credentials.
-		cmd.Env = append(cleanEnv(), "HOME="+os.Getenv("HOME"), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
-		out, err := cmd.CombinedOutput()
-		return string(out), err
-	}
+	run := func(dir, name string, args ...string) (string, error) { return gitRun(dir, name, args...) }
 	if out, err := run("", "git", "clone", "-q", "--no-checkout", cfg.Repo, c.Src); err != nil {
 		return fmt.Errorf("clone: %v: %s", err, tail(out, 300))
 	}
