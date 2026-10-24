@@ -97,7 +97,8 @@ func TestInstallerShareAnswer(t *testing.T) {
 			if c.asked {
 				asked = "0"
 			}
-			fake := "#!/bin/sh\n[ \"$*\" = \"report asked\" ] && exit " + asked + "\necho \"$*\" >> " + log + "\n"
+			// Forward slashes, quoted: Git Bash on Windows drops a C:\ path's backslashes.
+			fake := "#!/bin/sh\n[ \"$*\" = \"report asked\" ] && exit " + asked + "\necho \"$*\" >> '" + filepath.ToSlash(log) + "'\n"
 			os.WriteFile(filepath.Join(dir, "hive"), []byte(fake), 0o755)
 			if c.noTTY {
 				tty = filepath.Join(dir, "missing", "tty")
@@ -105,7 +106,7 @@ func TestInstallerShareAnswer(t *testing.T) {
 				os.WriteFile(tty, []byte(c.typed), 0o600)
 			}
 			cmd := exec.Command(sh, "-c", block)
-			cmd.Env = append(os.Environ(), "DIR="+dir, "CMD=hive", "HIVE_TTY="+tty, "HIVE_SHARE=")
+			cmd.Env = append(os.Environ(), "DIR="+filepath.ToSlash(dir), "CMD=hive", "HIVE_TTY="+filepath.ToSlash(tty), "HIVE_SHARE=")
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("%v: %s", err, out)
 			}
