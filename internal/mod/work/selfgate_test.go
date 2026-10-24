@@ -153,6 +153,29 @@ func TestSelfGateTransientRetriesSooner(t *testing.T) {
 	}
 }
 
+// While a gate couldn't run against a main, another change against the same
+// main waits for its retry instead of starting a run that would fail alike.
+func TestSelfGateCantRunHoldsOthersAtTheSameMain(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	main, _ := m.C.Effects.Sync(p)
+	m.mu.Lock()
+	m.gateCantRun = map[string]core.GateResult{p.Name + "@" + main: {Outcome: core.GateCantRun, Head: "0ther", Main: main, Reason: "no bubblewrap", At: time.Now()}}
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if len(*jobs) != 0 || !strings.Contains(task.Reason, "couldn't run against main") {
+		t.Fatalf("%d runs, reason %q: want held behind the other change's can't-run", len(*jobs), task.Reason)
+	}
+	m.mu.Lock()
+	m.gateCantRun[p.Name+"@"+main] = core.GateResult{Outcome: core.GateCantRun, Head: "0ther", Main: main, At: time.Now().Add(-2 * gateRetry)}
+	delete(m.later, task.ID)
+	m.mu.Unlock()
+	gateOnce(t, m, task, p)
+	if len(*jobs) != 1 || task.Stage != StageMerged {
+		t.Fatalf("%d runs, stage %q: want a run once the retry passed", len(*jobs), task.Stage)
+	}
+}
+
 // With no gate runner a self project's change can't be judged and waits.
 func TestSelfGateWithoutRunnerWaits(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)

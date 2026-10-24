@@ -82,6 +82,13 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	}
 	key := p.Name + "@" + t.SHA + "@" + main
 	m.mu.Lock()
+	// A run that couldn't run against this main, on any change, holds the
+	// others until its retry: the next would fail the same way.
+	if last, ok := m.gateCantRun[p.Name+"@"+main]; ok && last.Head != t.SHA && time.Now().Before(retryAfter(last)) {
+		m.mu.Unlock()
+		m.hold(t, p, fmt.Sprintf("%s: it couldn't run against main at %s on %s (%s); it tries again after %s", GateWait, core.Short(main), core.Short(last.Head), core.Clip(last.Reason, 300), retryAfter(last).Format("15:04Z")))
+		return true, nil
+	}
 	cur := m.gating
 	if cur == nil {
 		m.gating = &gateRun{key: key, task: t.ID, since: time.Now().UTC()}
@@ -130,6 +137,14 @@ func (m *Module) startGate(t *Task, p core.Project, main, key string) {
 		m.mu.Lock()
 		if m.gating != nil && m.gating.key == key {
 			m.gating = nil
+		}
+		if m.gateCantRun == nil {
+			m.gateCantRun = map[string]core.GateResult{}
+		}
+		if g.Outcome == core.GateCantRun {
+			m.gateCantRun[p.Name+"@"+job.Main] = g
+		} else {
+			delete(m.gateCantRun, p.Name+"@"+job.Main)
 		}
 		delete(m.later, id) // the task looks again at once
 		m.mu.Unlock()
