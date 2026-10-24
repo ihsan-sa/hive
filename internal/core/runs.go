@@ -123,15 +123,6 @@ func (s *SessionSpend) Turn(session string, total float64) float64 {
 	return spent
 }
 
-// Base is what a resumed session already spent: the harness counts a budget
-// against its running total.
-func (s SessionSpend) Base(session string) float64 {
-	if session == s.Session {
-		return s.Total
-	}
-	return 0
-}
-
 // Move is a run going from one harness to another at a turn.
 type Move struct {
 	Turn int    `json:"turn"`
@@ -1392,11 +1383,9 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		MaxOutput: cfg.MaxOutputTokens, ConfigDir: cfgDir,
 	}
 	if r.Budget > 0 {
-		left := r.Budget - r.Cost
-		if resume {
-			left += r.SessionCost.Base(r.Session)
-		}
-		t.MaxBudgetUSD = max(left, 0.01)
+		// Claude Code counts --max-budget-usd against this process's spend
+		// only, not the running total a resumed session carries on.
+		t.MaxBudgetUSD = max(r.Budget-r.Cost, 0.01)
 	}
 	if sb.Isolated() {
 		t.SystemFile = "/hive/run/system.md"

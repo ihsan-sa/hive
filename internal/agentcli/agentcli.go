@@ -173,6 +173,9 @@ A value of @path reads that file. Common ops:
   rerun-checks [--task id]                      the failed forge checks (CI jobs) on your PR's head run again,
                                                  for a flake; at most 2 per head, the merge waits for them
   queue     [--order id,id] [--hold id] [--release id]   (lead) briefs waiting for a worker, in order
+            [--now id --why "..."]               (lead) start it first, past a brief on the same files
+  landed    --task id --why "..." [--merge sha]  (lead) end a task whose PR merged on the forge or whose
+                                                 work is on main, so the briefs waiting on it start
   models                                         named models, each role's route, what each agent runs on, trials
   route     --role worker --models "a,b" [--project p]   (lead) the models a role runs on, in fallback order
   trial     --model m --project test --title "..." --done "..."   (lead) one brief's worker on that model alone`
