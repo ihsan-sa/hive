@@ -146,6 +146,35 @@ checkout and notes are intact. With no pick free it waits for the soonest
 reset. A lead follows the settings' route at every turn. The dashboard's agent
 lines and `hive agent models` say which `harness:model` each agent runs on.
 
+### A model that can't answer
+
+A pick whose turn ends in an error that isn't a usage limit, and that says
+the model can't answer (a 404 such as OpenRouter's "no endpoints matching
+your guardrail", a 401 or 403 on a named model's key, a 400 naming the
+model) or the same error three turns running, is marked down (`model.down`,
+`core.Down`). Runs skip it exactly as they skip a login at its limit: the
+turn's run moves at once to the next pick with room, or waits for the first
+reset, with no retry backoff. The person is told once per spell and cause
+(Done for you), with the model's answer as it gave it and the fix, and the
+lead's chat gets the same line once. `hive status`, the dashboard and
+`hive agent models` list it with its last answer. A turn tries it again an
+hour on, or as soon as its config (the named model's settings or stored key)
+changes, and a turn or probe it answers brings it back (`model.up`).
+
+`hive model add`, `hive model key`, the lead's `route` op and `trial` send a
+named model one real request first and refuse one that can't answer, saying
+why and what would fix it (`hive model add` on a model that needs a key not
+yet stored tries it when the key is stored; `--no-probe` skips it, for a
+server that isn't up yet). The route op doesn't probe a model already on that
+route and not known to fail.
+
+Only a named model is marked down by a 401/403, any 404, or the same error
+three straight turns from at least two runs (an empty error never counts).
+A Claude or Codex pick, and a 400 on any pick, is marked only when its answer
+says the model doesn't exist (not found, unknown or invalid model): their
+other errors, and a context too long, are one run's, which backs off alone.
+A run parked waiting on a pick that comes back looks again at once.
+
 ## Asking the lead
 
 `hive agent route --role worker --models "qwen,claude:opus" [--project p]`

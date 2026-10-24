@@ -62,6 +62,7 @@ type Effects struct {
 	lands     map[string][]string               // project@sha -> reviewer runs that said land, since the last fix
 	diffLands map[string][]string               // project#diff -> the same, for every head with that own diff
 	diffVerds map[string]Verdict                // project#diff -> the latest verdict on that own diff
+	diffHeads map[string][]string               // project#diff -> the heads a verdict on that own diff was given on
 	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
 	seats     map[string]map[string]Verdict     // project#diff -> security seat -> its latest verdict
 	hostMade  map[string]HostCommit
@@ -150,7 +151,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}, gates: map[string]GateResult{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}, gates: map[string]GateResult{}}
 	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -182,10 +183,18 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			if v.Diff != "" {
 				k := v.Project + "#" + v.Diff
 				e.diffVerds[k] = v
+				if !slices.Contains(e.diffHeads[k], v.SHA) {
+					e.diffHeads[k] = append(e.diffHeads[k], v.SHA)
+				}
 				if v.Verdict == "land" && !slices.Contains(e.diffLands[k], v.Run) {
 					e.diffLands[k] = append(e.diffLands[k], v.Run)
 				} else if v.Verdict != "land" {
+					// A fix on the diff is a fix on every head that has it,
+					// so no earlier head's own lands outlive it in Reads.
 					delete(e.diffLands, k)
+					for _, sha := range e.diffHeads[k] {
+						delete(e.lands, v.Project+"@"+sha)
+					}
 				}
 			}
 		case "effect.read":
@@ -817,19 +826,50 @@ func (e *Effects) SecurityOK(project string, ch Change) bool {
 	return len(ch.SecurityRoot) == 0 || lands > PanelSeats/2
 }
 
+// OwnDiff is the diff from base (a change's merge base with main) to sha, as
+// its reviewers read it and DiffID names it. Binary and full-index, so a
+// binary file (or a script git takes for one, with a NUL byte in it) carries
+// its content into the diff and DiffID, and two different blobs never read
+// as the same change. It is "" when git can't tell.
+func OwnDiff(dir, base, sha string) string {
+	out, _ := Git(dir, "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", base, sha)
+	return out
+}
+
 // DiffID names a change's own diff (the diff from its merge base with main to
 // its head) so that a head whose own diff is the same gets the same name,
-// whatever main it was brought up to date with. Hunk positions and blob ids
-// are left out, since main moving shifts them without changing the change;
-// everything else, context lines included, counts.
+// whatever main it was brought up to date with. Hunk positions and text
+// files' blob ids are left out, since main moving shifts them without
+// changing the change; everything else, context lines included, counts. A
+// binary file keeps its index line: git may write it as a delta against the
+// old blob, which only that blob id pins down.
+//
+// Left out on purpose: a hunk's position and function context, so the same
+// added lines with the same context moved elsewhere in one file keep the
+// name (docs/log.md). Changing what counts renames every diff and drops the
+// reads recorded on open PRs.
 func DiffID(diff string) string {
 	if strings.TrimSpace(diff) == "" {
 		return ""
 	}
 	h := sha256.New()
-	for _, l := range strings.Split(diff, "\n") {
+	lines := strings.Split(diff, "\n")
+	binary := false
+	for i, l := range lines {
+		if strings.HasPrefix(l, "diff --git ") {
+			binary = false
+			for _, next := range lines[i+1:] {
+				if strings.HasPrefix(next, "diff --git ") {
+					break
+				}
+				if next == "GIT binary patch" {
+					binary = true
+					break
+				}
+			}
+		}
 		switch {
-		case strings.HasPrefix(l, "index "):
+		case strings.HasPrefix(l, "index ") && !binary:
 			continue
 		case strings.HasPrefix(l, "@@"):
 			l = "@@"
@@ -948,10 +988,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		}
 	}
 	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Security) == 0 && !p.Self
-	// Binary and full-index, so a binary file (or a script git takes for one,
-	// with a NUL byte in it) carries its content into the diff and DiffID, and
-	// two different blobs never read as the same change.
-	c.Diff, _ = Git(dir, "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", base, sha)
+	c.Diff = OwnDiff(dir, base, sha)
 	c.DiffID = DiffID(c.Diff)
 	if len(c.Protected) > 0 {
 		c.ProtectedDiff, _ = Git(dir, append([]string{"--literal-pathspecs", "diff", "--no-renames", base, sha, "--"}, c.Protected...)...)
