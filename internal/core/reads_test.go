@@ -38,6 +38,8 @@ func TestUnreadChange(t *testing.T) {
 		{"LEARNINGS.md", "# gotchas\n", self, false},
 		{".hive/lessons.md", "# lessons\n", self, false},
 		{"README.md", "# hive\n", self, false},
+		{"docs/spec.md", "# spec\n", self, false}, // the owner's spec keeps a reader
+		{"docs/the-hive-essay.md", "# essay\n", self, false},
 		{"main.go", strings.Repeat("x\n", DefaultUnreadMax+1), p, false},
 		{"cred/token.go", "package cred\n", p, false},
 		{"setup.sh", "echo hi\n", p, false},

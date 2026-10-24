@@ -116,6 +116,10 @@ var (
 // list names it, so no small edit moves its own bar unread.
 var SelfUnread = []string{"docs/"}
 
+// SelfSpec are the owner's spec under docs/: in a self project they keep a
+// reader like docs/REVIEW.md and .hive/goals.md, outside SelfUnread.
+var SelfSpec = []string{"docs/spec.md", "docs/the-hive-essay.md"}
+
 // Sampled picks one task in n by its id for a read after an unread merge, so
 // the pick survives a restart and needs no counter; none at n <= 0.
 func Sampled(task string, n int) bool {

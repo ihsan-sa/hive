@@ -964,7 +964,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 			docsOnly = false
 		}
 	}
-	gate := p.Self && (!docsOnly || slices.ContainsFunc(c.Files, func(f string) bool { return !under(f, SelfUnread) }))
+	gate := p.Self && (!docsOnly || slices.ContainsFunc(c.Files, func(f string) bool { return !under(f, SelfUnread) || under(f, SelfSpec) }))
 	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Security) == 0 && !p.Self
 	c.Unread = len(c.Files) > 0 && !binary && !gate && c.Lines <= cfg.UnreadMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Root) == 0 && len(c.Security) == 0
 	c.TwoReads = len(c.Root) > 0 || c.Lines > cfg.ReadTwoMax
