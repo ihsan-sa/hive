@@ -79,6 +79,22 @@ func TestSelfGateKeepMerges(t *testing.T) {
 	}
 }
 
+// A head that lacks main is brought up to date before the gate runs: the
+// gate judges what would land, not a branch cut before main fixed a test.
+func TestSelfGateCatchesUpFirst(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	pushMain(t, f, map[string]string{"other.go": "package p\n"})
+	old := task.SHA
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if len(*jobs) != 0 {
+		t.Fatalf("the gate ran on %s, a head without main", core.Short((*jobs)[0].Head))
+	}
+	if task.SHA == old || task.Stage != StageTesting {
+		t.Fatalf("stage %q, head moved %v: want brought up to date and tested again", task.Stage, task.SHA != old)
+	}
+}
+
 // A rollback goes back to the worker with the report and the lesson to
 // record, and the PR stays open.
 func TestSelfGateRollbackSendsBack(t *testing.T) {

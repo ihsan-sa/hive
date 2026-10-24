@@ -6,6 +6,7 @@
 package work
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -22,6 +24,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 )
@@ -73,7 +76,8 @@ type Task struct {
 	Conflicts int        `json:"conflicts"`
 	Reviews   int        `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
-	// round, so a seat is asked again under a new run id.
+	// own diff, keyed by "diffID#seat". When the diff changes, the old
+	// tries are left behind and the seat starts fresh on the new diff.
 	SeatTries map[string]int    `json:"seat_tries,omitempty"`
 	Reviewer  string            `json:"reviewer,omitempty"`
 	Findings  string            `json:"findings,omitempty"`
@@ -117,6 +121,7 @@ type Task struct {
 	IssueOpen  bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
 	Noted      string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
 	NotedDiff  string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
+	HoldSaid   string    `json:"hold_said,omitempty"`  // the HoldKey of the hold the PR was last told of
 	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
 	Gate *core.GateResult `json:"gate,omitempty"`
 	// GateAsked is the head@main a stuck revert last asked the person about.
@@ -146,6 +151,17 @@ func (t Task) PROf(mergeSHA string) core.PR {
 // Label is the title clipped for a heading, an issue, a PR or a message; the
 // agents get the whole ask.
 func (t Task) Label() string { return core.Clip(t.Title, 120) }
+
+// setDiff records the head's own diff; seat tries counted on another diff are
+// dropped, so a seat starts fresh on a diff that moved without a send-back.
+func (t *Task) setDiff(id string) {
+	for k := range t.SeatTries {
+		if !strings.HasPrefix(k, id+"#") {
+			delete(t.SeatTries, k)
+		}
+	}
+	t.Diff = id
+}
 
 // Entry is one step in a task's timeline.
 type Entry struct {
@@ -193,8 +209,12 @@ type Module struct {
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
 	mainRed map[string]bool
+	// cantRunOpen holds, per project, the kind of check (test or score) its open
+	// "can't run" alert is about: raised once, cleared when that check runs.
+	cantRunOpen map[string]string
 	// later is when a held task (waiting on the forge's checks or an outside
 	// read) is next looked at; kept in memory, so a restart looks at once.
+	// Guarded by mu: due reads it with mu held, hold takes mu itself.
 	later map[string]time.Time
 	// prPolled is when each task waiting for the person last had its pull
 	// request looked up, so a close there is seen without a call every tick.
@@ -229,19 +249,27 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
 			return
 		}
-		if e.Kind == "alert.raised" {
-			var a struct{ Kind, Project, SHA string }
-			if e.Decode(&a) == nil && a.Kind == "main-red" && a.SHA != "" {
-				m.mu.Lock()
-				m.mainRed[a.Project+"@"+a.SHA] = true
-				m.mu.Unlock()
+		if e.Kind == "alert.raised" || e.Kind == "alert.cleared" {
+			var a struct{ Kind, Project, SHA, Ref, Check string }
+			if e.Decode(&a) != nil {
+				return
 			}
+			m.mu.Lock()
+			switch {
+			case a.Ref == "cant-run:"+a.Project && e.Kind == "alert.cleared":
+				delete(m.cantRunOpen, a.Project)
+			case a.Ref == "cant-run:"+a.Project:
+				m.cantRunOpen[a.Project] = cmp.Or(a.Check, "test")
+			case a.Kind == "main-red" && a.SHA != "":
+				m.mainRed[a.Project+"@"+a.SHA] = true
+			}
+			m.mu.Unlock()
 			return
 		}
 		if e.Kind != "task.saved" {
@@ -275,6 +303,10 @@ func (m *Module) save(t *Task, note string) {
 	if !t.Updated.After(m.online) {
 		t.Updated = m.online.Add(time.Nanosecond)
 	}
+	var was string
+	if prev := m.tasks[t.ID]; prev != nil {
+		was = prev.Stage
+	}
 	m.mu.Unlock()
 	if note != "" {
 		t.Log = append(t.Log, Entry{At: t.Updated, Text: note})
@@ -283,6 +315,10 @@ func (m *Module) save(t *Task, note string) {
 		}
 	}
 	m.C.J.MustAppend("task.saved", t)
+	if t.Stage != was && (t.Stage == StageMerged || t.Stage == StageDone) {
+		m.steps.Add(1)
+		go func(t Task) { defer m.steps.Done(); m.ended(t) }(*t) // a large tree mustn't hold the save
+	}
 }
 
 // Get returns a task.
@@ -1149,10 +1185,12 @@ func (m *Module) test(t *Task, p core.Project) error {
 	}
 	if c.CantRun != "" {
 		if t.Checkpoint != "" {
+			m.raiseCantRun(p, c)
 			return m.dropCheckpoint(t, p, "the tests "+c.CantRun+", which is no verdict on it")
 		}
 		return m.cantRun(t, p, c)
 	}
+	m.RanCheck(p.Name, "test")
 	if strings.HasPrefix(t.Reason, "the tests can't run") {
 		t.Reason = "" // the tool is there now
 	}
@@ -1182,7 +1220,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 	if err != nil {
 		return err
 	}
-	t.Diff = ch.DiffID
+	t.setDiff(ch.DiffID)
 	switch {
 	case len(ch.Protected) > 0 && !m.C.Effects.Approved("merge", p.Name, t.SHA):
 		t.Stage = StagePerson
@@ -1221,10 +1259,38 @@ func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
 	}
 	t.Reason = reason
 	m.save(t, reason)
-	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "ref": "cant-run:" + p.Name, "project": p.Name,
-		"text": p.Name + "'s tests " + c.CantRun + " (" + core.Clip(strings.TrimSpace(c.Output), 120) + "): a fault in the environment, not a verdict on any commit; changes wait and nothing is reverted until it is fixed"})
-	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
+	m.raiseCantRun(p, c)
+	if t.PR.Number != 0 {
+		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
+	}
 	return nil
+}
+
+func (m *Module) raiseCantRun(p core.Project, c core.Check) {
+	m.RaiseCantRun(p.Name, "test", p.Name+"'s tests "+c.CantRun+" ("+core.Clip(strings.TrimSpace(c.Output), 120)+"): a fault in the environment, not a verdict on any commit; changes wait and nothing is reverted until it is fixed")
+}
+
+// RaiseCantRun raises the project's "can't run" alert, once while it is open
+// however many changes and merges wait on the missing tool. kind is the check
+// (test or score) that couldn't start.
+func (m *Module) RaiseCantRun(project, kind, text string) {
+	m.mu.Lock()
+	_, open := m.cantRunOpen[project]
+	m.mu.Unlock()
+	if !open {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "ref": "cant-run:" + project, "project": project, "check": kind, "text": text})
+	}
+}
+
+// RanCheck clears the project's "can't run" alert once the kind of check it
+// was about has run: the tool is there now.
+func (m *Module) RanCheck(project, kind string) {
+	m.mu.Lock()
+	open := m.cantRunOpen[project] == kind
+	m.mu.Unlock()
+	if open {
+		m.C.J.MustAppend("alert.cleared", map[string]string{"ref": "cant-run:" + project, "project": project})
+	}
 }
 
 // noteTests tells the PR its tests' result once per head. A head that only
@@ -1249,25 +1315,15 @@ func (m *Module) noteTests(t *Task, p core.Project, main string, c core.Check) e
 }
 
 // ownDiff identifies what a PR's head changes against main, whatever main
-// changed meanwhile: its changed lines with no context, line numbers or blob
-// ids. It is "" when git can't tell.
+// changed meanwhile: the DiffID its reads are bound to. It is "" when git
+// can't tell.
 func (m *Module) ownDiff(p core.Project, main, sha string) string {
 	dir := m.C.WS.Project(p.Name)
 	base, err := core.Git(dir, "merge-base", main, sha)
 	if err != nil {
 		return ""
 	}
-	out, err := core.Git(dir, "diff", "--no-color", "--no-renames", "-U0", base, sha)
-	if err != nil {
-		return ""
-	}
-	h := sha256.New()
-	for _, l := range strings.Split(out, "\n") {
-		if !strings.HasPrefix(l, "index ") && !strings.HasPrefix(l, "@@") {
-			h.Write([]byte(l + "\n"))
-		}
-	}
-	return hex.EncodeToString(h.Sum(nil))[:16]
+	return core.DiffID(core.OwnDiff(dir, base, sha))
 }
 
 // mainTests is main's own test result, measured once per main commit (the
@@ -1762,15 +1818,22 @@ func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 	case pr.MergeState == "BEHIND":
 		return m.catchUp(t, p, main, "main moved and the forge wants the branch up to date")
 	case pr.Mergeable != "MERGEABLE":
-		m.mu.Lock()
-		m.later[t.ID] = time.Now().Add(holdGap)
-		m.mu.Unlock()
+		// Said as a wait, so one that never resolves reaches the lead
+		// through the stall watcher like any other.
+		state := pr.Mergeable
+		if state == "" {
+			state = "not reported"
+		}
+		m.hold(t, p, "waiting for the forge to work out whether PR #"+fmt.Sprint(t.PR.Number)+" merges cleanly with main (mergeable "+state+", main at "+core.Short(main)+")")
 		return true, nil
 	}
 	return false, nil
 }
 
-// hold keeps t where it is for why, saying so on the PR once.
+// hold keeps t where it is for why, saying so on the PR once per HoldKey: the
+// pending checks listed in why change as they finish, which is no new hold.
+// A wait that lasts is the stall watcher's to raise (improve). It takes m.mu,
+// so it is never called with m.mu held.
 func (m *Module) hold(t *Task, p core.Project, why string) {
 	m.mu.Lock()
 	m.later[t.ID] = time.Now().Add(holdGap)
@@ -1780,8 +1843,17 @@ func (m *Module) hold(t *Task, p core.Project, why string) {
 	}
 	t.Reason = why
 	m.save(t, why)
-	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Holding the merge: "+why+".")
+	if key := HoldKey(why); key != t.HoldSaid {
+		t.HoldSaid = key
+		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Holding the merge: "+why+".")
+	}
 }
+
+var parenthetical = regexp.MustCompile(` ?\([^()]*\)`)
+
+// HoldKey is what a hold's reason waits on, its parentheticals (the checks
+// still pending, when a run started, where main is) left out.
+func HoldKey(why string) string { return parenthetical.ReplaceAllString(why, "") }
 
 // forgeChecks holds t until the forge's own checks (CI on every platform,
 // which the Hive's own test doesn't cover) pass on exactly the head it would
@@ -1841,6 +1913,22 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+" ("+names+")"+onMain)
 		return true, nil
 	case core.CheckCantStart:
+		// A run cancelled on this very head (CI's concurrency group, a
+		// runner lost) gets one re-run of its own before anyone hears of it.
+		if t.Reruns[t.SHA] == 0 && !slices.ContainsFunc(which, func(r core.CheckRun) bool { return r.Detail != "cancelled" }) {
+			if n, err := m.C.Effects.Forge.RerunFailed(p.Repo, t.SHA); err != nil {
+				return true, err
+			} else if n > 0 {
+				if t.Reruns == nil {
+					t.Reruns = map[string]int{}
+				}
+				t.Reruns[t.SHA]++
+				t.RerunAt = time.Now().UTC()
+				m.save(t, "re-ran the forge's checks "+names+" on "+core.Short(t.SHA)+", cancelled before they finished")
+				m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+names+"), cancelled before they finished")
+				return true, nil
+			}
+		}
 		why := "the forge's checks " + names + " can't start on " + core.Short(t.SHA) + ", which is the environment's fault, not the change's; waiting for them to run" + onMain
 		if t.Reason != why {
 			m.raiseOnce(p, t.SHA+"/checks", "the forge's checks "+names+" can't start in "+p.Name+" (PR #"+fmt.Sprint(t.PR.Number)+" at "+core.Short(t.SHA)+"): "+checkDetail(which))
@@ -2039,7 +2127,7 @@ func (m *Module) securityRead(t *Task, p core.Project, main string) (bool, error
 	if err != nil {
 		return true, err
 	}
-	t.Diff = ch.DiffID
+	t.setDiff(ch.DiffID)
 	if len(ch.Security) == 0 {
 		return false, nil
 	}
@@ -2048,14 +2136,14 @@ func (m *Module) securityRead(t *Task, p core.Project, main string) (bool, error
 			return false, nil
 		}
 		t.Reason = ""
-		return true, m.sendBack(t, p, fmt.Sprintf("The box's %s read %s and asked for fixes:\n\n%s", o.By, core.Short(o.SHA), orNone(o.Note)))
+		return true, m.sendBack(t, p, fmt.Sprintf("The box's %s read %s and asked for fixes:\n\n%s", o.By, core.Short(o.SHA), orNone(o.Note))+stillStands(t, o.SHA))
 	}
 	reads := m.C.Effects.SecurityReads(p.Name, ch.DiffID)
 	seats := []string{core.SeatSecurity}
 	if v, ok := reads[core.SeatSecurity]; ok {
 		if v.Verdict == "fix" {
 			t.Reason = ""
-			return true, m.sendBack(t, p, "The Hive's security reviewer asked for fixes on "+core.Short(v.SHA)+":\n\n"+verdictText(v))
+			return true, m.sendBack(t, p, "The Hive's security reviewer asked for fixes on "+core.Short(v.SHA)+":\n\n"+verdictText(v)+stillStands(t, v.SHA))
 		}
 		if len(ch.SecurityRoot) == 0 {
 			return false, nil
@@ -2066,13 +2154,14 @@ func (m *Module) securityRead(t *Task, p core.Project, main string) (bool, error
 			return false, nil
 		case fixes > core.PanelSeats/2:
 			var b []string
+			sha := t.SHA
 			for i := 0; i < core.PanelSeats; i++ {
 				if v := reads[core.PanelSeat(i)]; v.Verdict == "fix" {
-					b = append(b, verdictText(v))
+					b, sha = append(b, verdictText(v)), v.SHA
 				}
 			}
 			t.Reason = ""
-			return true, m.sendBack(t, p, fmt.Sprintf("The Hive's security panel asked for fixes on %s (%d of %d):\n\n%s", core.Short(t.SHA), fixes, core.PanelSeats, strings.Join(b, "\n\n")))
+			return true, m.sendBack(t, p, fmt.Sprintf("The Hive's security panel asked for fixes on %s (%d of %d):\n\n%s", core.Short(sha), fixes, core.PanelSeats, strings.Join(b, "\n\n"))+stillStands(t, sha))
 		}
 		seats = nil
 		for i := 0; i < core.PanelSeats; i++ {
@@ -2098,13 +2187,23 @@ func (m *Module) securityRead(t *Task, p core.Project, main string) (bool, error
 	return true, nil
 }
 
+// stillStands tells a worker whose head kept the own diff a security fix was
+// asked on that the fix still stands, so it isn't sent back on it again unawares.
+func stillStands(t *Task, sha string) string {
+	if sha == t.SHA {
+		return ""
+	}
+	return "\n\nThis head's own diff is the same as " + core.Short(sha) + "'s, which this fix was asked on, so it still stands; only a change to the diff gets a new read."
+}
+
 // seatRead starts the security seat's read-only run on t's head, or, once it
 // has ended, records its verdict on the own diff it read and says so on the
 // PR; read says a verdict was recorded. The run is named by the own diff, so
 // a head that only took main in finds the run already reading it. A seat that
 // gives no usable verdict three times stops the task.
 func (m *Module) seatRead(t *Task, p core.Project, ch core.Change, main, seat string) (read bool, err error) {
-	id := fmt.Sprintf("s-%s-%s-%s-%d", t.ID, core.Short(ch.DiffID), seat, t.SeatTries[seat])
+	diffKey := ch.DiffID + "#" + seat
+	id := fmt.Sprintf("s-%s-%s-%s-%d", t.ID, core.Short(ch.DiffID), seat, t.SeatTries[diffKey])
 	r, ok := m.C.Runs.Get(id)
 	if !ok {
 		return false, m.startSeat(t, p, ch, main, seat, id)
@@ -2119,7 +2218,7 @@ func (m *Module) seatRead(t *Task, p core.Project, ch core.Change, main, seat st
 		if t.SeatTries == nil {
 			t.SeatTries = map[string]int{}
 		}
-		if t.SeatTries[seat]++; t.SeatTries[seat] >= 3 {
+		if t.SeatTries[diffKey]++; t.SeatTries[diffKey] >= 3 {
 			m.giveUp(t, "the security seat "+seat+" gave no usable verdict three times")
 			return false, nil
 		}
@@ -2171,35 +2270,45 @@ func (m *Module) startSeat(t *Task, p core.Project, ch core.Change, main, seat, 
 // reviewer takes the first tribunal seat whose model isn't the ordinary
 // reviewer's, so the two reads come from different models; the panel spreads
 // over the tribunal seats as a tribunal does. With no tribunal seats, the
-// reviewer's own.
-func (m *Module) seatModel(p core.Project, seat string) (harness, model string, route []core.Pick) {
+// reviewer's own. A security seat left on the reviewer's model, or a seat on a
+// harness the Hive doesn't have (which sits on the reviewer's instead), says so
+// in an alert rather than failing three times and giving up on the task.
+func (m *Module) seatModel(p core.Project, seat string) (harnessName, model string, route []core.Pick) {
 	cfg := m.C.WS.LoadConfig()
 	if seat == core.SeatSecurity && len(cfg.Routed("security", p.Name)) > 0 {
 		route := cfg.Route("security", p.Name)
 		return route[0].Harness, route[0].Model, route
 	}
-	harness, model = m.Agents.Model("reviewer", p.Name)
-	seats := cfg.Seats(p.Name)
-	if len(seats) == 0 {
-		return harness, model, nil
-	}
-	pick := seats[0]
-	if seat == core.SeatSecurity {
+	harnessName, model = m.Agents.Model("reviewer", p.Name)
+	pick := core.TribunalSeat{Harness: harnessName, Model: model}
+	if seats := cfg.Seats(p.Name); seat == core.SeatSecurity {
 		for _, x := range seats {
 			if x.Model != model {
 				pick = x
 				break
 			}
 		}
-	} else {
+		if pick.Model == model {
+			m.seatAlert(p, "security", "The security read of "+p.Name+" runs on the ordinary reviewer's model ("+model+"), since no tribunal_models seat has another; add one so the two reads come from different models.")
+		}
+	} else if len(seats) > 0 {
 		var i int
 		fmt.Sscanf(seat, "panel-%d", &i)
 		pick = seats[i%len(seats)]
 	}
-	if pick.Harness != "" {
-		harness = pick.Harness
+	if pick.Harness == "" {
+		pick.Harness = harnessName
 	}
-	return harness, pick.Model, nil
+	if _, err := harness.Get(pick.Harness); err != nil {
+		m.seatAlert(p, seat, fmt.Sprintf("The %s seat of %s names harness %q, which the Hive doesn't have; it reads on the reviewer's (%s) instead.", seat, p.Name, pick.Harness, model))
+		return harnessName, model, nil
+	}
+	return pick.Harness, pick.Model, nil
+}
+
+// seatAlert raises a seat's setup alert; the newest replaces the last.
+func (m *Module) seatAlert(p core.Project, seat, text string) {
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "seat", "ref": "seat:" + p.Name + ":" + seat, "project": p.Name, "text": text})
 }
 
 // securityRules is what a security seat reads the change for.
