@@ -47,7 +47,7 @@ func (m *Module) opInstall(r core.Run, a json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	m.C.Person.Ask(core.Ask{Kind: "told", Ref: r.ID + " " + req.Tool + " " + v, From: r.ID, Project: r.Project, Options: []string{"seen"},
+	m.C.Person.Tell(core.Ask{Ref: r.ID + " " + req.Tool + " " + v, From: r.ID, Project: r.Project,
 		Title: fmt.Sprintf("%s installed %s %s for the Hive's agents", r.Name, req.Tool, v)})
 	return fmt.Sprintf("%s %s is installed and on your PATH now", req.Tool, v), nil
 }

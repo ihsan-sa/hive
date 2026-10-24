@@ -296,6 +296,10 @@ func summarize(evs []core.Event) []string {
 			var a core.Ask
 			e.Decode(&a)
 			out = append(out, fmt.Sprintf("%s  waiting on you: %s", e.At.Local().Format("Mon 15:04"), a.Title))
+		case "person.told":
+			var a core.Ask
+			e.Decode(&a)
+			out = append(out, fmt.Sprintf("%s  done for you: %s", e.At.Local().Format("Mon 15:04"), a.Title))
 		case "sweep.saved":
 			var s struct{ ID, Status string }
 			e.Decode(&s)

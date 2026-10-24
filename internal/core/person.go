@@ -32,6 +32,7 @@ type Person struct {
 	mu       sync.Mutex
 	answerMu sync.Mutex // held by Answer from the checks through the append, so one answer wins
 	asks     map[string]*Ask
+	told     []Ask // what was done for the person, oldest first
 	handlers map[string]func(Ask)
 }
 
@@ -45,6 +46,12 @@ func NewPerson(j *Journal) *Person {
 			e.Decode(&a)
 			p.mu.Lock()
 			p.asks[a.ID] = &a
+			p.mu.Unlock()
+		case "person.told":
+			var a Ask
+			e.Decode(&a)
+			p.mu.Lock()
+			p.told = append(p.told, a)
 			p.mu.Unlock()
 		case "person.answered":
 			var a Ask
@@ -87,6 +94,50 @@ func (p *Person) Ask(a Ask) Ask {
 	a.Asked = time.Now().UTC()
 	p.j.MustAppend("person.asked", a)
 	return a
+}
+
+// Tell records something already done for the person, which needs no
+// answer: it goes to their "done for you" feed, never to Waiting. Once per
+// ID, so a caller can give one to keep a notice from repeating.
+func (p *Person) Tell(a Ask) Ask {
+	if a.ID != "" {
+		if x, ok := p.Get(a.ID); ok {
+			return x
+		}
+	}
+	if a.ID == "" {
+		a.ID = NewID()
+	}
+	a.Kind, a.Options = "told", nil
+	if a.Asked.IsZero() {
+		a.Asked = time.Now().UTC()
+	}
+	p.j.MustAppend("person.told", a)
+	return a
+}
+
+// Told returns the newest n things done for the person, newest first.
+func (p *Person) Told(n int) []Ask {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []Ask
+	for i := len(p.told) - 1; i >= 0 && len(out) < n; i-- {
+		out = append(out, p.told[i])
+	}
+	return out
+}
+
+// moveTold clears "told" asks, which only ever waited for a "seen", out of
+// Waiting and into the feed: before Tell, a step that had already run was
+// filed as an ask.
+func (p *Person) moveTold() {
+	for _, a := range p.Open() {
+		if a.Kind != "told" {
+			continue
+		}
+		p.Tell(Ask{ID: a.ID + "-told", Title: a.Title, Detail: a.Detail, Diff: a.Diff, Ref: a.Ref, From: a.From, Project: a.Project, Asked: a.Asked})
+		p.Answer(a.ID, "seen", "the Hive: moved to the feed, it needed no decision")
+	}
 }
 
 // Answer records the person's answer and runs the kind's handler. The answer
@@ -138,13 +189,17 @@ func (p *Person) Open() []Ask {
 	return out
 }
 
-// Get returns one ask.
+// Get returns one ask, or one thing told.
 func (p *Person) Get(id string) (Ask, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	a, ok := p.asks[id]
-	if !ok {
-		return Ask{}, false
+	if a, ok := p.asks[id]; ok {
+		return *a, true
 	}
-	return *a, true
+	for _, a := range p.told {
+		if a.ID == id {
+			return a, true
+		}
+	}
+	return Ask{}, false
 }

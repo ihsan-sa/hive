@@ -21,6 +21,7 @@ type feedRow struct {
 	chat, msg, thread string // a chat message; its text is looked up when drawn
 	task              string
 	ask               bool
+	told              *core.Ask // done for the person: opens to what ran, why and its output
 }
 
 type feedMsg []core.Event
@@ -79,6 +80,10 @@ func (m *model) addEvents(evs []core.Event) tea.Cmd {
 			var a core.Ask
 			e.Decode(&a)
 			r.from, r.to, r.project, r.text, r.ask = or(a.From, "hive"), "you", a.Project, a.Title, true
+		case "person.told":
+			var a core.Ask
+			e.Decode(&a)
+			r.from, r.to, r.project, r.text, r.told = or(a.From, "hive"), "you", a.Project, "done for you: "+a.Title, &a
 		case "alert.raised":
 			var a struct{ Kind, Project, Text string }
 			e.Decode(&a)
@@ -92,6 +97,22 @@ func (m *model) addEvents(evs []core.Event) tea.Cmd {
 		m.feed = m.feed[len(m.feed)-500:]
 	}
 	return tea.Batch(fetch...)
+}
+
+// toldDetail opens something done for the person: what it was, then what
+// ran, why and its output, as the Hive filed them.
+func toldDetail(a core.Ask) detail {
+	text := a.Title + "\n" + a.Asked.Local().Format("Mon 15:04")
+	if a.Project != "" {
+		text += " · " + a.Project
+	}
+	if a.Detail != "" {
+		text += "\n\n" + a.Detail
+	}
+	if a.Diff != "" {
+		text += "\n\n" + a.Diff
+	}
+	return detail{kind: "text", id: "told:" + a.ID, title: "done for you", text: shown(text)}
 }
 
 // chatName names a chat as the sidebar does, with its project.
@@ -170,6 +191,8 @@ func (m *model) keyDash(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmd, m.focusBox(r.thread))
 		case r.task != "":
 			return m, m.push(detail{kind: "task", id: r.task, title: core.Clip(r.text, 40)})
+		case r.told != nil:
+			return m, m.push(toldDetail(*r.told))
 		case r.ask:
 			m.pick(sideRow{sec: secWaiting})
 		}
