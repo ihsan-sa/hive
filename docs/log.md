@@ -62,3 +62,6 @@
 
 ## 2026-10-23 Projects list the files their score reads
 - Decision: the setup brief, the README and the lead's guidance say to list every file the score reads in its `paths`, and a score set or changed with an empty `paths` raises a `score-paths` alert (at the start and when the score's version changes) | Why: the `./` guess misses a script the score calls, a test or a data file, which a candidate could still change (perms' read of the fixed-evaluator change) | Tradeoff: a warning, not a refusal, since only the project knows what its score reads.
+
+## 2026-10-24 A local service opens to agents per port, on the person's grant
+- Decision: `egress.local` lists loopback `host:port` grants (`hive egress grant|revoke`); the proxy dials a granted literal address past any list, Linux sandboxes relay it from the same address inside, Seatbelt allows the port; refusals are recorded with a reason (`unlisted` or `local`) and journalled with a line saying how a local one opens; `egress grant` / `egress.local` are ceiling words, so an agent's ask always reaches the person | Why: a refused 127.0.0.1 kept an agent from testing its own feature against a local Ollama, and the record said only the host (issue #124) | Tradeoff: a grant is for every run and check, not per role or project; loopback only, so a service on the LAN still can't open this way.

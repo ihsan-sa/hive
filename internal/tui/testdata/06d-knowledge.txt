@@ -1,0 +1,36 @@
+ hive                 │   Knowledge  .hive/kb
+──────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────
+   Chats              │   The knowledge base is the Hive's memory across projects and runs: notes
+   Dashboard          │   agents leave, and the record of everything the Hive did. Agents search
+   Waiting         3  │   it before they say what happened; so can you.
+ › Knowledge          │
+   Modules            │   / search
+   Settings           │
+                      │   Nothing here yet.
+ ▾ textkit-2          │
+   lead               │   From a shell: hive kb <words>
+   writer             │
+   reviewer        ●  │
+ ▾ hive-web           │
+   lead            ●  │
+   worker-2           │
+   reviewer           │
+   tribunal           │
+ ▸ website            │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+──────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move   enter open   / search   esc up a folder   tab sidebar
