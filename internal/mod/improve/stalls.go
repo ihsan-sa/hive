@@ -29,8 +29,29 @@ type Stall struct {
 }
 
 type spell struct {
-	stage string
-	since time.Time
+	stage     string
+	since     time.Time
+	wait      string    // the named wait it is held on now, as waitCause gives it
+	waitSince time.Time // since when it has been held on that wait
+	waits     []string  // every named wait it was held on in this spell
+}
+
+// waitCause names what a task held on reason waits for, or "" if it names
+// no wait. Main's red holds every change that waits on it whatever commit
+// main is at, so its waits are one cause however main moves.
+func waitCause(reason string) string {
+	if !strings.HasPrefix(reason, "waiting ") {
+		return ""
+	}
+	if strings.HasPrefix(reason, "waiting on main:") {
+		return "waiting on main"
+	}
+	return reason
+}
+
+// waitKey is the stall key of the wait a task in project and stage shares.
+func waitKey(project, stage, cause string) string {
+	return "wait:" + project + ":" + stage + ":" + cause
 }
 
 // applyStall keeps each task's current stage spell and how long finished
@@ -42,20 +63,49 @@ func (m *Module) applyStall(e core.Event) {
 		e.Decode(&t)
 		sp, ok := m.spells[t.ID]
 		if ok && sp.stage == t.Stage {
+			m.spells[t.ID] = sp.held(t, e.At)
 			return
 		}
-		if s := m.stalls["task:"+t.ID]; ok && (s == nil || s.Stage != sp.stage || s.At.Before(sp.since)) { // a spell the watcher acted on isn't the norm
+		if ok && !m.actedOn(t, sp) { // a spell the watcher acted on isn't the norm
 			m.took[sp.stage] = append(m.took[sp.stage], e.At.Sub(sp.since).Seconds())
 			if n := len(m.took[sp.stage]); n > 50 {
 				m.took[sp.stage] = m.took[sp.stage][n-50:]
 			}
 		}
-		m.spells[t.ID] = spell{t.Stage, e.At}
+		m.spells[t.ID] = spell{stage: t.Stage, since: e.At}.held(t, e.At)
 	case "stall.saved":
 		var s Stall
 		e.Decode(&s)
 		m.stalls[s.Key] = &s
 	}
+}
+
+// held notes the named wait t is held on as of at.
+func (sp spell) held(t work.Task, at time.Time) spell {
+	c := waitCause(t.Reason)
+	if c == sp.wait {
+		return sp
+	}
+	sp.wait, sp.waitSince = c, at
+	if c != "" && !slices.Contains(sp.waits, c) {
+		sp.waits = append(sp.waits[:len(sp.waits):len(sp.waits)], c)
+	}
+	return sp
+}
+
+// actedOn reports whether the watcher acted on t's spell sp, on its own or
+// through a wait it shared with other tasks: a wait handed off before t
+// joined it covers t too, until it moved on.
+func (m *Module) actedOn(t work.Task, sp spell) bool {
+	if s := m.stalls["task:"+t.ID]; s != nil && s.Stage == sp.stage && !s.At.Before(sp.since) {
+		return true
+	}
+	for _, c := range sp.waits {
+		if s := m.stalls[waitKey(t.Project, sp.stage, c)]; s != nil && s.Stage == sp.stage && (!s.At.Before(sp.since) || s.Moved.IsZero() || s.Moved.After(sp.since)) {
+			return true
+		}
+	}
+	return false
 }
 
 // StallLimit is three times the 90th percentile of a stage's recent
@@ -108,8 +158,8 @@ func (m *Module) Watch() {
 		if t.Queued() || t.Stage == work.StageTesting && slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
 			continue
 		}
-		if strings.HasPrefix(t.Reason, "waiting ") && t.Stage != work.StageWorking && t.Stage != work.StageReviewing { // a run's own hang is still its own
-			key := "wait:" + t.Project + ":" + t.Stage + ":" + t.Reason
+		if c := waitCause(t.Reason); c != "" && t.Stage != work.StageWorking && t.Stage != work.StageReviewing { // a run's own hang is still its own
+			key := waitKey(t.Project, t.Stage, c)
 			g := waits[key]
 			if g == nil {
 				g = &group{stage: t.Stage, project: t.Project}
@@ -117,10 +167,14 @@ func (m *Module) Watch() {
 				causes = append(causes, key)
 			}
 			m.mu.Lock()
-			since := m.spells[t.ID].since
+			sp := m.spells[t.ID]
 			m.mu.Unlock()
+			since := sp.since
+			if sp.wait == c {
+				since = sp.waitSince
+			}
 			if g.since.IsZero() || since.Before(g.since) {
-				g.since = since // the cause has held since its first task stopped
+				g.since = since // the cause has held since its first task began waiting on it
 			}
 			g.tasks = append(g.tasks, t)
 			continue
@@ -141,6 +195,7 @@ func (m *Module) Watch() {
 	for _, key := range causes {
 		g := waits[key]
 		now[key] = g.stage
+		sort.Slice(g.tasks, func(i, j int) bool { return g.tasks[i].ID < g.tasks[j].ID }) // the same tasks read the same, so What changes only when they do
 		t := g.tasks[0]
 		what, chat, thread := fmt.Sprintf("%q", t.Label()), t.Chat, t.Thread
 		if len(g.tasks) > 1 {
@@ -191,6 +246,11 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 	}
 	m.mu.Unlock()
 	if s.Told {
+		if s.What != cur.What { // tasks joined or left a shared wait: the alert names who waits now
+			s.What = cur.What
+			m.C.J.MustAppend("stall.saved", *s)
+			m.alertStall(*s)
+		}
 		return
 	}
 	limit := StallLimit(took, floor)
