@@ -88,4 +88,12 @@ func TestHiddenLeadCannotCreateProjects(t *testing.T) {
 			t.Fatalf("%s's text reached the forge", level.Name)
 		}
 	}
+	// A caller whose project the Hive doesn't know can't show it has no wall.
+	gone := core.Run{ID: "lead-gone", Role: "lead", Project: "gone"}
+	if _, err := m.opCreate(gone, json.RawMessage(`{"name":"secret-out","goals":"SECRET GOALS"}`)); err == nil || !strings.Contains(err.Error(), "isn't a project") {
+		t.Fatalf("an unknown project's lead created a project: %v", err)
+	}
+	if _, ok := c.Projects.Get("secret-out"); ok {
+		t.Fatal("an unknown project's text reached the project list")
+	}
 }
