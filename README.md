@@ -4,6 +4,10 @@ A small team of AI agents that lives in a folder on your computer and works on y
 
 You talk to a lead in a chat. The lead turns what you say into briefs. Workers build each piece in their own sandboxed checkout. Tests run where the agent can't touch them, a reviewer reads the exact commit, and the change merges on GitHub pinned to the commit that was checked. After every merge the Hive measures the project against its score and keeps the change or reverts it.
 
+![The Hive's parts: you, the sandboxed agents, the daemon that runs as you, and GitHub](docs/arch.svg)
+
+[docs/overview.md](docs/overview.md) says plainly what each part is, how to install it, the risks on one screen and what isn't here yet. The diagram's source is [docs/arch.json](docs/arch.json).
+
 ## Install
 
 macOS / Linux:
