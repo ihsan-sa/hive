@@ -643,6 +643,7 @@ func TestMissingTool(t *testing.T) {
 		{127, "bash: line 1: cargo: command not found", "cargo"},
 		{127, "sh: npm: command not found\n", "npm"},
 		{127, "env: 'python3': No such file or directory", "python3"},
+		{127, "env: ‘python3’: No such file or directory\n", "python3"},
 		{127, "zsh:1: command not found: rustc\n", "rustc"},
 		{127, "zsh: command not found: rustc", "rustc"},
 		{127, "/bin/sh: 1: ./build.sh: not found", ""},

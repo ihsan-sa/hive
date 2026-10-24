@@ -506,8 +506,8 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 // missingTool matches the shell's "not found" for a command looked up on the
 // PATH: dash's "/bin/sh: 1: go: not found", bash's "bash: go: command not found",
 // busybox's "sh: go: not found", zsh's "zsh:1: command not found: go" and env's
-// "env: 'go': No such file or directory".
-var missingTool = regexp.MustCompile(`(?m)^(?:\S*sh: (?:line )?\d*:? ?([^\s/:']+): (?:command )?not found|env: '?([^\s/:']+)'?: No such file or directory|zsh:(?:\d+: )? ?command not found: ([^\s/:']+))\s*$`)
+// "env: 'go': No such file or directory" ('go' in a UTF-8 locale).
+var missingTool = regexp.MustCompile(`(?m)^(?:\S*sh: (?:line )?\d*:? ?([^\s/:']+): (?:command )?not found|env: ['‘]?([^\s/:'‘’]+)['’]?: No such file or directory|zsh:(?:\d+: )? ?command not found: ([^\s/:']+))\s*$`)
 
 // MissingTool names the tool a check's command couldn't find, or "" when it
 // ran. Only exit 127 with the shell's own message counts, and only for a bare
