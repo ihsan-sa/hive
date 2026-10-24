@@ -7,18 +7,18 @@
    Knowledge      │     auto-update                 on
    Modules        │     use ANTHROPIC_API_KEY       off
  › Settings       │     release repo                ihsan-sa/hive
-                  │     release                     the newest
- ▾ textkit-2      │
-   lead           │   Agents
-   writer         │     harness                     claude
-   reviewer    ●  │     worker model                opus
- ▾ hive-web       │     lead model                  opus
-   lead        ●  │     reviewer model              opus
-   worker-2       │     tribunal seat 1 model       opus
-   reviewer       │     tribunal seat 2 model       sonnet
-   tribunal       │     tribunal seat 3 model       fable
- ▸ website        │     model for textkit-2         default
+                  │     release channel             the latest release (default)
+ ▾ textkit-2      │     release                     0.8.2, following the newest
+   lead           │
+   writer         │   Agents
+   reviewer    ●  │     harness                     claude
+ ▾ hive-web       │     worker model                opus
+   lead        ●  │     lead model                  opus
+   worker-2       │     reviewer model              opus
+   reviewer       │     tribunal seat 1 model       opus
+   tribunal       │     tribunal seat 2 model       sonnet
+ ▸ website        │     tribunal seat 3 model       fable
+                  │     model for textkit-2         default
                   │     model for hive-web          default
-                  │     model for website           default
 ──────────────────┴─────────────────────────────────────────────────────────────
  ↑↓ move   enter change   tab sidebar

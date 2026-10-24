@@ -878,7 +878,8 @@ func (m *model) settings() []setting {
 		{group: "General", label: "auto-update", value: onOff(c.AutoUpdate), key: "auto_update"},
 		{group: "General", label: "use ANTHROPIC_API_KEY", value: onOff(c.APIKeyOptIn), key: "api_key_opt_in"},
 		{group: "General", label: "release repo", value: c.ReleaseRepo, key: "release_repo"},
-		{group: "General", label: "release", value: pinText(c.ReleasePin), action: func() tea.Cmd {
+		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel"},
+		{group: "General", label: "release", value: m.st.Version + ", " + pinText(c.ReleasePin), action: func() tea.Cmd {
 			return func() tea.Msg {
 				return flashMsg("`" + core.Cmd + " update --release <tag>` installs and pins a release")
 			}
@@ -912,9 +913,21 @@ func (m *model) settings() []setting {
 
 func pinText(pin string) string {
 	if pin == "" {
-		return "the newest"
+		return "following the newest"
 	}
 	return "pinned to " + pin + ", auto-update off (`" + core.Cmd + " update` goes back to the newest)"
+}
+
+// channelText is the channel the daemon follows, and whether the person chose it.
+func channelText(follows, chosen string) string {
+	t := "the latest release"
+	if follows == "pre-release" {
+		t = "pre-releases, once safe here"
+	}
+	if chosen == "" {
+		t += " (default)"
+	}
+	return t
 }
 
 func autonomyText(n int) string {
@@ -966,6 +979,11 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "auto_update":
 			c.AutoUpdate = !c.AutoUpdate
 			return m, m.post("/api/config", c, "auto-update changed")
+		case "channel":
+			if c.Channel = "pre-release"; m.st.Channel == "pre-release" {
+				c.Channel = "latest"
+			}
+			return m, m.post("/api/config", c, "release channel changed")
 		case "api_key_opt_in":
 			c.APIKeyOptIn = !c.APIKeyOptIn
 			return m, m.post("/api/config", c, "API key use changed")
