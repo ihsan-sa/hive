@@ -73,6 +73,9 @@ func bwrapArgs(a initArgs, self string) []string {
 	if a.Socket != "" {
 		argv = append(argv, "--bind", a.Socket, "/hive/egress.sock")
 		inner = append(inner, "--fwd")
+		for _, l := range s.Local {
+			inner = append(inner, "--local", l)
+		}
 	}
 	argv = append(argv, "--chdir", s.Cwd, "--remount-ro", "/", "--")
 	return append(append(append(argv, inner...), "--"), s.Argv...)
@@ -92,6 +95,11 @@ func Inner(args []string) int {
 		}
 		go forward(ln, "/hive/egress.sock")
 		args = args[1:]
+		var local []string
+		for len(args) > 1 && args[0] == "--local" {
+			local, args = append(local, args[1]), args[2:]
+		}
+		forwardLocal(local, "/hive/egress.sock", os.Stderr)
 	}
 	if len(args) < 2 || args[0] != "--" {
 		return 2
