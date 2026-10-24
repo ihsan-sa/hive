@@ -1,0 +1,147 @@
+package work
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+)
+
+// Landed ends a task whose work is already on main, whatever stage it is in:
+// its PR was merged on the forge (by the person, or by a merge the Hive didn't
+// see through), or its commits are on main. A task stuck past the queue holds
+// back every brief that touches what it touches, so the lead ends it here
+// rather than waiting on the person. It records the merge commit and runs
+// OnMerged, and the next tick takes it to done, so the briefs behind it start.
+// One whose PR is open and whose work isn't on main is refused: that is a
+// merge still to happen, not one that happened.
+func (m *Module) Landed(id, mergeSHA, by, why string) (Task, error) {
+	t, ok := m.Get(id)
+	if !ok {
+		return Task{}, core.ErrNotFound
+	}
+	switch t.Stage {
+	case StageMerged, StageDone:
+		return t, fmt.Errorf("task %s is already %s", id, t.Stage)
+	case StageNew:
+		return t, fmt.Errorf("task %s has no work yet (%s)", id, t.Stage)
+	}
+	p, err := m.project(&t)
+	if err != nil {
+		return t, err
+	}
+	m.mu.Lock()
+	busy := m.busy[id]
+	if !busy {
+		m.busy[id] = true
+	}
+	m.mu.Unlock()
+	if busy {
+		return t, fmt.Errorf("task %s has a step running right now; ask again in a moment", id)
+	}
+	defer func() { m.mu.Lock(); delete(m.busy, id); m.mu.Unlock() }()
+	t, _ = m.Get(id) // as the last step left it
+	merged, how, err := m.landedAt(&t, p, mergeSHA)
+	if err != nil {
+		return t, err
+	}
+	if t.Worker != "" {
+		if r, ok := m.C.Runs.Get(t.Worker); ok && !r.Terminal() {
+			m.C.Runs.Stop(t.Worker, "its work is already on main")
+		}
+	}
+	t.MergeSHA, t.Stage, t.Reason, t.Checkpoint = merged, StageMerged, "", ""
+	m.save(&t, fmt.Sprintf("ended as landed by %s (%s, %s): %s", by, how, core.Short(merged), core.Clip(why, 300)))
+	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Merged: %s %s", t.Label(), t.PR.URL))
+	if m.OnMerged != nil {
+		m.OnMerged(t)
+	}
+	return t, nil
+}
+
+// landedAt finds where t's work is on main: its PR's merge on the forge, or
+// mergeSHA (a commit on main's line that holds its commits), or its head
+// itself when main has it. It says how it knows.
+func (m *Module) landedAt(t *Task, p core.Project, mergeSHA string) (string, string, error) {
+	open := false
+	if t.PR.Number != 0 {
+		pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
+		if err != nil {
+			return "", "", err
+		}
+		if pr.State == "MERGED" && pr.MergeSHA != "" {
+			return pr.MergeSHA, fmt.Sprintf("PR #%d merged on the forge", pr.Number), nil
+		}
+		open = pr.State == "OPEN"
+	}
+	if t.SHA == "" {
+		return "", "", fmt.Errorf("task %s has no PR merged on the forge and no commits to find on main", t.ID)
+	}
+	main, err := m.C.Effects.Sync(p)
+	if err != nil {
+		return "", "", err
+	}
+	dir := m.C.WS.Project(p.Name)
+	refuse := func() error {
+		state := "no PR"
+		if t.PR.Number != 0 {
+			state = fmt.Sprintf("PR #%d is %s", t.PR.Number, map[bool]string{true: "open", false: "not merged"}[open])
+		}
+		return fmt.Errorf("task %s isn't landed: %s and its head %s isn't on main %s", t.ID, state, core.Short(t.SHA), core.Short(main))
+	}
+	if mergeSHA != "" {
+		full, err := core.Git(dir, "rev-parse", "--verify", "-q", mergeSHA+"^{commit}")
+		if err != nil || !m.C.Effects.MainLine(p)[full] {
+			return "", "", fmt.Errorf("%s isn't a commit on main", mergeSHA)
+		}
+		if !holds(dir, full, t.SHA) {
+			return "", "", fmt.Errorf("main at %s doesn't hold task %s's head %s", core.Short(full), t.ID, core.Short(t.SHA))
+		}
+		return full, "its work is on main at " + core.Short(full), nil
+	}
+	if _, err := core.Git(dir, "merge-base", "--is-ancestor", t.SHA, main); err == nil {
+		return t.SHA, "its head is on main", nil
+	}
+	if holds(dir, main, t.SHA) { // squashed: main has the change, under another commit
+		return "", "", errors.New("main holds its change, squashed under another commit: say which with merge <sha>")
+	}
+	return "", "", refuse()
+}
+
+// holds reports whether the commit at would gain nothing from merging sha in:
+// sha's change is already there, squashed or not.
+func holds(dir, at, sha string) bool {
+	if _, err := core.Git(dir, "merge-base", "--is-ancestor", sha, at); err == nil {
+		return true
+	}
+	tree, err := core.Git(dir, "merge-tree", "--write-tree", at, sha)
+	if err != nil {
+		return false
+	}
+	own, err := core.Git(dir, "rev-parse", at+"^{tree}")
+	return err == nil && strings.TrimSpace(strings.SplitN(tree, "\n", 2)[0]) == strings.TrimSpace(own)
+}
+
+func (m *Module) opLanded(r core.Run, args json.RawMessage) (any, error) {
+	var a struct{ Task, Merge, Why string }
+	if err := core.Bind(args, &a); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(a.Why) == "" {
+		return nil, errors.New("say why with why (it goes on the task's record)")
+	}
+	t, ok := m.Get(a.Task)
+	if !ok {
+		return nil, core.ErrNotFound
+	}
+	if err := m.C.Runs.Walled(r, t.Project); err != nil {
+		return nil, err
+	}
+	t, err := m.Landed(a.Task, a.Merge, r.ID, a.Why)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"task": t.ID, "merge": t.MergeSHA, "note": "ended as merged; the briefs waiting on it start as the queue allows"}, nil
+}

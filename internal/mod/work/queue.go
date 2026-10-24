@@ -2,6 +2,7 @@ package work
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -24,11 +25,14 @@ import (
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
 
-// inLine sorts waiting tasks: those the lead ordered first, in its order, then
-// the rest as filed.
+// inLine sorts waiting tasks: those the lead started now first, then those it
+// ordered, in its order, then the rest as filed.
 func inLine(q []Task) {
 	sort.SliceStable(q, func(i, j int) bool {
 		a, b := q[i], q[j]
+		if a.Now != b.Now {
+			return a.Now
+		}
 		if (a.Order > 0) != (b.Order > 0) {
 			return a.Order > 0
 		}
@@ -70,7 +74,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		case t.Held:
 			wait[t.ID] = "held by the lead"
 			continue // a held brief keeps no place that holds others back
-		case o != nil:
+		case o != nil && !t.Now: // one the lead started now goes past the overlap
 			verb := "to land"
 			if o.Queued() && !start[o.ID] {
 				verb = "to go first"
@@ -184,15 +188,21 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		Order   ids `json:"order"`
 		Hold    ids `json:"hold"`
 		Release ids `json:"release"`
+		Now     ids `json:"now"`
+		Why     string
 	}
 	if len(args) > 0 {
 		if err := core.Bind(args, &a); err != nil {
 			return nil, err
 		}
 	}
+	if len(a.Now) > 0 && strings.TrimSpace(a.Why) == "" {
+		return nil, errors.New("now starts a brief past the one it waits on: say why with why (it goes on the record)")
+	}
 	type change struct {
 		order int
 		held  *bool
+		now   bool
 	}
 	changes := map[string]*change{}
 	at := func(id string) *change {
@@ -210,6 +220,9 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 	}
 	for _, id := range a.Release {
 		at(id).held = &no
+	}
+	for _, id := range a.Now {
+		at(id).now, at(id).held = true, &no
 	}
 	var notes []string
 	if len(a.Order) > 0 { // a new order replaces the old one: the rest go after, as filed
@@ -251,6 +264,9 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 			if !t.Held && t.Reason == "held by the lead" {
 				t.Reason = ""
 			}
+		}
+		if c.now && !t.Now {
+			t.Now, note = true, fmt.Sprintf("started now by %s, past any brief on the same files: %s", r.ID, core.Clip(a.Why, 300))
 		}
 		if note != "" {
 			m.save(&t, note)
