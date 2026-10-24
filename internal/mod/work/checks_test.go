@@ -127,7 +127,9 @@ func TestMergeWaitsForOutsideRead(t *testing.T) {
 	if _, err := m.RecordRead("#"+strconv.Itoa(task.PR.Number), core.Short(read), "perms", "land", "reads fine"); err != nil {
 		t.Fatal(err)
 	}
-	// Main moves without touching the change: the read carries to the caught-up head.
+	// Main moves without touching the change, and the forge wants the
+	// branch up to date: the read carries to the caught-up head.
+	f.UpToDate = true
 	pushMain(t, f, map[string]string{"other.txt": "z"})
 	mergeOnce(t, m, task, p)
 	if task.SHA == read || task.Stage != StageTesting {
@@ -137,6 +139,48 @@ func TestMergeWaitsForOutsideRead(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerged {
 		t.Fatalf("stage %q, reason %q: the read should carry over a main merge that leaves the diff alone", task.Stage, task.Reason)
+	}
+}
+
+// A PR with its security read merges as it is when main moved and the forge
+// says it still merges cleanly: main isn't merged in, so the head stays the
+// one that was read and checked.
+func TestMergeAsItIsWhenClean(t *testing.T) {
+	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
+	m.save(task, "")
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	read := task.SHA
+	if _, err := m.RecordRead("t1", read, "perms", "land", ""); err != nil {
+		t.Fatal(err)
+	}
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.SHA != read {
+		t.Fatalf("stage %q at %s (read %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(read), task.Reason)
+	}
+	main, _ := m.C.Effects.Sync(p)
+	if ref := must(t, m.C.WS.Project(p.Name), "show", main+":other.txt"); ref != "z" {
+		t.Fatalf("main lost its own change: %q", ref)
+	}
+}
+
+// Main is brought in only when the PR actually conflicts with it; then the
+// worker resolves it, and the new head needs a new read.
+func TestCatchUpOnlyOnConflict(t *testing.T) {
+	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
+	m.save(task, "")
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	m.RecordRead("t1", task.SHA, "perms", "land", "")
+	read := task.SHA
+	pushMain(t, f, map[string]string{"secure/box.go": "package secure\n\n// main's own\n"})
+	if pr, _ := f.GetPR(p.Repo, task.PR.Number); pr.Mergeable != "CONFLICTING" {
+		t.Fatalf("the local forge should see the conflict: %+v", pr)
+	}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.SHA != read || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
 }
 
@@ -169,6 +213,7 @@ func TestCatchUpKeepsTheRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	toMerging(t, m, task, p)
+	f.UpToDate = true // the forge's rule brings main in
 	pushMain(t, f, map[string]string{"other.txt": "z"})
 	old := task.SHA
 	mergeOnce(t, m, task, p)

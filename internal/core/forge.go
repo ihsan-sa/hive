@@ -25,7 +25,10 @@ type PR struct {
 	State     string `json:"state"` // OPEN, MERGED, CLOSED
 	HeadSHA   string `json:"head_sha"`
 	MergeSHA  string `json:"merge_sha,omitempty"`
-	Mergeable string `json:"mergeable,omitempty"`
+	Mergeable string `json:"mergeable,omitempty"` // MERGEABLE, CONFLICTING, UNKNOWN (still being worked out)
+	// MergeState is the forge's word on what else stands in the way; BEHIND
+	// means its rules want the branch brought up to date with its base.
+	MergeState string `json:"merge_state,omitempty"`
 }
 
 // Forge is where code, issues and pull requests live. GitHub through the gh
@@ -253,6 +256,7 @@ type ghPR struct {
 	State       string `json:"state"`
 	HeadRefOid  string `json:"headRefOid"`
 	Mergeable   string `json:"mergeable"`
+	MergeState  string `json:"mergeStateStatus"`
 	MergeCommit *struct {
 		Oid string `json:"oid"`
 	} `json:"mergeCommit"`
@@ -262,14 +266,14 @@ type ghPR struct {
 }
 
 func (p ghPR) pr() PR {
-	out := PR{Number: p.Number, URL: p.URL, State: p.State, HeadSHA: p.HeadRefOid, Mergeable: p.Mergeable}
+	out := PR{Number: p.Number, URL: p.URL, State: p.State, HeadSHA: p.HeadRefOid, Mergeable: p.Mergeable, MergeState: p.MergeState}
 	if p.MergeCommit != nil {
 		out.MergeSHA = p.MergeCommit.Oid
 	}
 	return out
 }
 
-const prFields = "number,url,state,headRefOid,mergeable,mergeCommit,headRepositoryOwner"
+const prFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,mergeCommit,headRepositoryOwner"
 
 func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
 	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", prFields}
@@ -417,23 +421,40 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 		return nil, err
 	}
 	var suites struct {
-		CheckSuites []struct {
-			Status string `json:"status"`
-			Runs   int    `json:"latest_check_runs_count"`
-			App    struct {
-				Slug string `json:"slug"`
-			} `json:"app"`
-		} `json:"check_suites"`
+		CheckSuites []ghSuite `json:"check_suites"`
 	}
 	if err := json.Unmarshal([]byte(out), &suites); err != nil {
 		return nil, err
 	}
 	for _, s := range suites.CheckSuites {
-		if s.Runs == 0 && s.Status != "completed" {
+		if s.pending(time.Now()) {
 			list = append(list, CheckRun{Name: s.App.Slug, State: CheckPending, Detail: "suite " + s.Status + ", no jobs listed yet"})
 		}
 	}
 	return list, nil
+}
+
+type ghSuite struct {
+	Status    string    `json:"status"`
+	Runs      int       `json:"latest_check_runs_count"`
+	CreatedAt time.Time `json:"created_at"`
+	App       struct {
+		Slug string `json:"slug"`
+	} `json:"app"`
+}
+
+// suiteGrace is how long a just-pushed head's Actions suite with no jobs
+// listed yet holds the merge.
+const suiteGrace = 10 * time.Minute
+
+// pending reports whether a suite stands for jobs about to be listed: only
+// GitHub Actions' own, and only while young. GitHub makes a suite on every
+// push for each app that may write checks, and one no workflow matches (or
+// an app that never posts runs) stays queued with no runs for good, so an
+// old or foreign one holds nothing; required_checks names the bar.
+func (s ghSuite) pending(now time.Time) bool {
+	return s.Runs == 0 && s.Status != "completed" && s.App.Slug == "github-actions" &&
+		!s.CreatedAt.IsZero() && now.Sub(s.CreatedAt) < suiteGrace
 }
 
 type ghCheckRun struct {

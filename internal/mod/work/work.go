@@ -1268,7 +1268,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if err != nil {
 		return err
 	}
-	if ok, err := m.catchUp(t, p, main, "main moved"); ok || err != nil {
+	if wait, err := m.upToDate(t, p, main); wait || err != nil {
 		return err
 	}
 	// The security read first: it takes longest, so its line goes on the PR
@@ -1317,6 +1317,33 @@ func (m *Module) merge(t *Task, p core.Project) error {
 
 // holdGap is how long a held task waits before the gate looks again.
 var holdGap = time.Minute
+
+// upToDate decides whether t's branch must take main in before it merges.
+// It merges as it is while the forge says it merges cleanly: every main merge
+// moves the head past its reads and restarts its checks. Only a conflict, or
+// the forge's rule that the branch be up to date with main, brings main in.
+// While the forge is still working it out, t waits.
+func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
+	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
+		return false, nil
+	}
+	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
+	if err != nil {
+		return true, err
+	}
+	switch {
+	case pr.Mergeable == "CONFLICTING":
+		return m.catchUp(t, p, main, "main moved and the PR conflicts with it")
+	case pr.MergeState == "BEHIND":
+		return m.catchUp(t, p, main, "main moved and the forge wants the branch up to date")
+	case pr.Mergeable != "MERGEABLE":
+		m.mu.Lock()
+		m.later[t.ID] = time.Now().Add(holdGap)
+		m.mu.Unlock()
+		return true, nil
+	}
+	return false, nil
+}
 
 // hold keeps t where it is for why, saying so on the PR once.
 func (m *Module) hold(t *Task, p core.Project, why string) {

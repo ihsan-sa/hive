@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,7 +15,10 @@ import (
 // path (issue, branch, PR, pinned squash merge) runs without the network.
 type Local struct {
 	Dir string
-	mu  sync.Mutex
+	// UpToDate makes it want a branch up to date with its base before it
+	// merges, as GitHub's branch rule of that name does (MergeState BEHIND).
+	UpToDate bool
+	mu       sync.Mutex
 }
 
 type localState struct {
@@ -137,8 +141,18 @@ func (l *Local) head(repo, branch string) string {
 }
 
 func (l *Local) refresh(repo string, p *localPR) {
-	if p.State == "OPEN" {
-		p.HeadSHA = l.head(repo, p.Head)
+	if p.State != "OPEN" {
+		return
+	}
+	p.HeadSHA = l.head(repo, p.Head)
+	dir, base := l.RepoPath(repo), "refs/heads/"+cmp.Or(p.Base, "main")
+	p.Mergeable, p.MergeState = "MERGEABLE", "CLEAN"
+	// merge-tree exits 1 on a conflict; any other failure (an older git) leaves
+	// it to the merge itself to refuse.
+	if _, err := Git(dir, "merge-tree", "--write-tree", base, p.HeadSHA); err != nil && strings.Contains(err.Error(), "exit status 1:") {
+		p.Mergeable, p.MergeState = "CONFLICTING", "DIRTY"
+	} else if _, err := Git(dir, "merge-base", "--is-ancestor", base, p.HeadSHA); err != nil && l.UpToDate {
+		p.MergeState = "BEHIND"
 	}
 }
 

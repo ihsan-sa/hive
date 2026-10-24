@@ -96,3 +96,31 @@ func TestGitHubCheckStates(t *testing.T) {
 		t.Fatal("no checks should pass")
 	}
 }
+
+// Only a young GitHub Actions suite with no jobs listed yet holds: a stale
+// queued one, or another app's, never does.
+func TestGitHubSuitePending(t *testing.T) {
+	now := time.Now()
+	suite := func(app, status string, runs int, age time.Duration) ghSuite {
+		s := ghSuite{Status: status, Runs: runs, CreatedAt: now.Add(-age)}
+		s.App.Slug = app
+		return s
+	}
+	for _, c := range []struct {
+		s    ghSuite
+		want bool
+	}{
+		{suite("github-actions", "queued", 0, time.Minute), true},
+		{suite("github-actions", "queued", 0, 3*time.Hour), false},
+		{suite("dependabot", "queued", 0, time.Minute), false},
+		{suite("github-actions", "queued", 2, time.Minute), false},
+		{suite("github-actions", "completed", 0, time.Minute), false},
+		{ghSuite{Status: "queued", App: struct {
+			Slug string `json:"slug"`
+		}{"github-actions"}}, false},
+	} {
+		if got := c.s.pending(now); got != c.want {
+			t.Errorf("%+v: %v, want %v", c.s, got, c.want)
+		}
+	}
+}
