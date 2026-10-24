@@ -167,7 +167,7 @@ func run(args []string) int {
 					if err != nil {
 						return err
 					}
-					fmt.Println(cmd+"d:", a.Title, "->", opt)
+					fmt.Printf("%sd: %s -> %s%s\n", cmd, a.Title, opt, meaning(opt))
 					return c.Do("POST", "/api/answer", map[string]string{"id": a.ID, "answer": opt, "note": strings.Join(args[1:], " ")}, nil)
 				}
 			}
@@ -444,11 +444,34 @@ func cmdStatus() int {
 		if len(st.Asks) > 0 {
 			fmt.Println("\nwaiting on you:")
 			for _, a := range st.Asks {
-				fmt.Printf("  %s  %s  (hive answer %s %s)\n", a.ID, a.Title, a.ID, strings.Join(a.Options, "|"))
+				fmt.Printf("  %s  %s  (%s)\n", a.ID, a.Title, answerHint(a))
 			}
 		}
 		return nil
 	})
+}
+
+// meaning says what an answer tells the Hive, where that isn't plain from
+// its word.
+func meaning(opt string) string {
+	switch opt {
+	case "run":
+		return " (the Hive runs exactly the script you were shown)"
+	case "done":
+		return " (you say you did the step yourself; nothing runs)"
+	case "declined", "decline":
+		return " (nothing runs; the agent that asked is told no)"
+	}
+	return ""
+}
+
+// answerHint is how to answer an ask from a shell.
+func answerHint(a core.Ask) string {
+	h := fmt.Sprintf("%s answer %s %s", core.Cmd, a.ID, strings.Join(a.Options, "|"))
+	if len(a.Options) >= 2 {
+		h = fmt.Sprintf("%s approve|refuse %s, or %s", core.Cmd, a.ID, h)
+	}
+	return h
 }
 
 func cmdDoctor(args []string) int {
@@ -627,10 +650,14 @@ func planLine(p core.Plan, now time.Time) string {
 }
 
 // approveOption is the option approve (the first) or refuse (the last) picks;
-// an ask with no options takes the person's own words through hive answer.
+// an ask with no options takes the person's own words through hive answer,
+// and one with a single option (a told "seen") has no yes and no to pick.
 func approveOption(cmd string, a core.Ask) (string, error) {
 	if len(a.Options) == 0 {
 		return "", fmt.Errorf("%s has no options to %s: answer it in your own words with %s answer %s <text>", a.ID, cmd, core.Cmd, a.ID)
+	}
+	if len(a.Options) == 1 { // a told "seen" has no yes and no to tell apart
+		return "", fmt.Errorf("%s has no yes and no to %s between: answer it with %s answer %s %s", a.ID, cmd, core.Cmd, a.ID, a.Options[0])
 	}
 	if cmd == "refuse" {
 		return a.Options[len(a.Options)-1], nil

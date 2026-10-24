@@ -164,7 +164,11 @@ func (m *model) dashRows() []row {
 	if add(row{key: "alerts", text: fmt.Sprintf("alerts (%d)", len(m.st.Alerts)), expand: len(m.st.Alerts) > 0}) {
 		for i := len(m.st.Alerts) - 1; i >= 0; i-- {
 			a := m.st.Alerts[i]
-			add(row{key: fmt.Sprintf("alert:%d", i), depth: 1, text: fmt.Sprintf("%s  %s  %s", a.At.Local().Format("Mon 15:04"), stWarn.Render(a.Kind), a.Text)})
+			n := ""
+			if a.Count > 1 {
+				n = fmt.Sprintf(" (x%d)", a.Count)
+			}
+			add(row{key: fmt.Sprintf("alert:%d", i), depth: 1, text: fmt.Sprintf("%s  %s  %s", a.At.Local().Format("Mon 15:04"), stWarn.Render(a.Kind), a.Text+n)})
 		}
 	}
 	if add(row{key: "jobs", text: "schedules", expand: len(m.st.Jobs) > 0}) {
@@ -273,13 +277,11 @@ func spark(ms []improve.Measurement) string {
 
 func (m *model) keyTree(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rows := m.dashRows()
-	if m.dashSel >= len(rows) {
-		m.dashSel = max(0, len(rows)-1)
-	}
 	if len(rows) == 0 {
 		return m, nil
 	}
-	r := rows[m.dashSel]
+	r := rows[m.treeAt(rows)]
+	defer func() { m.dashKey = m.treeKey(m.dashSel) }()
 	switch k.String() {
 	case "up", "k":
 		if m.dashSel > 0 {
@@ -319,8 +321,36 @@ func (m *model) keyTree(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// treeAt finds the status cursor's row by its key, as sideAt does: work
+// that starts or ends above it doesn't move it. A run shows both under its
+// task and under agents, so the nearer of the two is the cursor's.
+func (m *model) treeAt(rows []row) int {
+	best := -1
+	for i, r := range rows {
+		if m.dashKey != "" && r.key == m.dashKey && (best < 0 || abs(i-m.dashSel) < abs(best-m.dashSel)) {
+			best = i
+		}
+	}
+	if best < 0 {
+		best = m.dashSel
+	}
+	m.dashSel = max(0, min(best, len(rows)-1))
+	return m.dashSel
+}
+
+func abs(n int) int { return max(n, -n) }
+
+// treeKey is the key of status row i, or "".
+func (m *model) treeKey(i int) string {
+	if rows := m.dashRows(); i < len(rows) {
+		return rows[i].key
+	}
+	return ""
+}
+
 func (m *model) viewTree() []string {
 	rows := m.dashRows()
+	m.treeAt(rows)
 	var lines []string
 	for i, r := range rows {
 		arrow := "  "
@@ -516,9 +546,8 @@ func (m *model) viewDetail(d *detail) []string {
 	default:
 		lines = append(lines, wrap(d.text, w)...)
 	}
-	if d.scroll > len(lines)-1 {
-		d.scroll = max(0, len(lines)-1)
-	}
+	d.total = len(lines)
+	d.scroll = max(0, min(d.scroll, len(lines)-m.bodyHeight())) // the last page stays full
 	return lines[d.scroll:]
 }
 
@@ -745,7 +774,7 @@ func (m *model) viewModules() []string {
 		}
 	}
 	lines = append(lines, "", stDim.Render("Install a module by asking the lead (it needs your approval). Modules live in .modules/."))
-	return indent(lines, "  ")
+	return window(indent(lines, "  "), m.modSel, m.bodyHeight()) // the list's rows come first
 }
 
 func (m *model) modName() string {

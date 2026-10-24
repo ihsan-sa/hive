@@ -26,6 +26,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -246,11 +247,30 @@ func (s *server) onEvent(e core.Event) {
 	if e.Kind != "alert.raised" {
 		return
 	}
-	var a struct{ Kind, Text, Ref string }
+	var a struct{ Kind, Project, Key, Text, Ref string }
 	e.Decode(&a)
+	if a.Key == "" {
+		a.Key = a.Text
+	}
+	key := a.Kind + "\x00" + a.Project + "\x00" + a.Key
 	s.mu.Lock()
-	s.alerts = slices.DeleteFunc(s.alerts, func(x api.Alert) bool { return a.Ref != "" && x.Ref == a.Ref })
-	s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text, Ref: a.Ref})
+	if a.Ref != "" {
+		// A status that changes (a step-back's): the newest text replaces it. It
+		// never dedups with a keyed failure alert, even with the same text.
+		s.alerts = slices.DeleteFunc(s.alerts, func(x api.Alert) bool { return x.Ref == a.Ref })
+		s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text, Count: 1, Ref: a.Ref})
+	} else {
+		// A failure that repeats: one alert, counted.
+		n := 1
+		for i := range s.alerts {
+			if s.alerts[i].Key == key {
+				n += s.alerts[i].Count
+				s.alerts = append(s.alerts[:i], s.alerts[i+1:]...) // re-added below as the newest
+				break
+			}
+		}
+		s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text, Count: n, Key: key})
+	}
 	if len(s.alerts) > 50 {
 		s.alerts = s.alerts[len(s.alerts)-50:]
 	}
@@ -408,6 +428,9 @@ func (s *server) routes() http.Handler {
 		if err := decode(r, &b); err != nil {
 			return nil, err
 		}
+		if err := s.reaches(r, s.projectOf("task", b.ID)); err != nil {
+			return nil, err
+		}
 		return "ok", a.Work.Retry(b.ID)
 	})
 	h("/api/ask", func(r *http.Request) (any, error) {
@@ -424,6 +447,39 @@ func (s *server) routes() http.Handler {
 			b.From = "person"
 		}
 		return a.Work.File(b)
+	})
+	h("/api/feedback", func(r *http.Request) (any, error) {
+		var b struct{ ID, Do, Note string }
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		switch b.Do {
+		case "seen":
+			return "ok", a.Feedback.Seen(b.ID)
+		case "close":
+			return a.Feedback.Close(b.ID, b.Note)
+		case "reopen":
+			return a.Feedback.Reopen(b.ID)
+		case "pass": // to its project's lead, or the Hive's lead, as the person's message
+			it, ok := a.Feedback.Get(b.ID)
+			if !ok {
+				return nil, core.ErrNotFound
+			}
+			to := "lead"
+			if _, ok := a.Chat.Get("project:" + it.Project); it.Project != "" && ok {
+				to = "project:" + it.Project
+			} else if p, _ := a.C.Projects.Get(it.Project); p.Isolated {
+				return nil, fmt.Errorf("project %s is isolated and has no chat of its own", it.Project)
+			}
+			if it.Status == feedback.Passed {
+				return nil, fmt.Errorf("already %s", it.Note)
+			}
+			if _, err := a.Chat.Post(to, "", "", feedback.Message(it)); err != nil {
+				return nil, err
+			}
+			return a.Feedback.Passed(b.ID, to)
+		}
+		return nil, fmt.Errorf("do must be seen, close, reopen or pass")
 	})
 	h("/api/module/report", func(r *http.Request) (any, error) {
 		var b map[string]any
@@ -709,7 +765,7 @@ func (s *server) state() api.State {
 	s.mu.Unlock()
 	if cfgErr != nil { // live, so it goes once the file is fixed
 		st.ConfigErr = cfgErr.Error()
-		st.Alerts = append(st.Alerts, api.Alert{At: time.Now(), Kind: "settings", Text: cfgErr.Error()})
+		st.Alerts = append(st.Alerts, api.Alert{At: time.Now(), Kind: "settings", Text: cfgErr.Error(), Count: 1})
 	}
 	st.Jobs = a.System.Jobs()
 	st.Wakeups = a.System.Wakeups()
@@ -734,6 +790,9 @@ func (s *server) state() api.State {
 		req = req[:20]
 	}
 	st.Requests = req
+	st.Feedback = a.Feedback.List(func(it feedback.Item) bool { return it.Status == feedback.Open })
+	done := a.Feedback.List(func(it feedback.Item) bool { return it.Status != feedback.Open })
+	st.Feedback = append(st.Feedback, done[:min(len(done), 20)]...)
 	return st
 }
 
