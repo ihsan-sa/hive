@@ -402,6 +402,9 @@ func TestTurnStartsOnceWhenARunMoves(t *testing.T) {
 	cfg := c.WS.LoadConfig()
 	cfg.Models = map[string]OpenModel{"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"}}
 	c.WS.SaveConfig(cfg)
+	// A worker falls back only to a model that has finished here.
+	c.J.MustAppend("run.created", RunSpec{ID: "trial", Role: "worker", Harness: "open", Model: "free"})
+	c.J.MustAppend("run.finish", map[string]any{"id": "trial", "finish": Finish{Status: "done"}})
 	var args []string
 	var mu sync.Mutex
 	starts := 0
