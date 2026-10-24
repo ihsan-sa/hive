@@ -20,6 +20,7 @@ type flakyForge struct {
 	*core.Local
 	fail   int
 	down   bool
+	users  int
 	closed []int
 	bodies []string
 }
@@ -30,6 +31,7 @@ func (f *flakyForge) CreatePR(repo, head, base, title, body string) (core.PR, er
 }
 
 func (f *flakyForge) User() (string, error) {
+	f.users++
 	if f.down {
 		return "", errors.New("dial tcp: lookup api.github.com: no such host")
 	}
@@ -158,6 +160,7 @@ func TestOutageBacksOffAndWakes(t *testing.T) {
 		t.Fatalf("offline %q, due %v after a step that proves nothing", m.Offline(), m.due(*task))
 	}
 	forge.down = false
+	m.probe = time.Time{}          // the shared check's gap is over
 	m.settle(&Task{ID: "t2"}, nil) // and once GitHub answers
 	if m.Offline() != "" || !m.due(*task) {
 		t.Fatalf("offline %q, due %v once back", m.Offline(), m.due(*task))
@@ -166,6 +169,25 @@ func TestOutageBacksOffAndWakes(t *testing.T) {
 	m.settle(task, errors.New("HTTP 422"))
 	if task.Failures != 1 || task.Stage != StageLanding || m.due(*task) {
 		t.Fatalf("failures %d, stage %q, due %v", task.Failures, task.Stage, m.due(*task))
+	}
+}
+
+// Idle tasks during an outage share one GitHub check per backoff step.
+func TestOutageChecksOncePerStep(t *testing.T) {
+	m, forge, task, _ := noCommitRig(t, 0)
+	m.settle(task, errors.New("dial tcp: lookup api.github.com: no such host"))
+	forge.down = true
+	for step, gap := range []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute} {
+		for range 50 {
+			m.settle(&Task{ID: "idle"}, nil)
+		}
+		if forge.users != step+1 || m.Offline() == "" {
+			t.Fatalf("step %d: %d checks, offline %q", step, forge.users, m.Offline())
+		}
+		if got := time.Until(m.probe).Round(time.Second); got != gap {
+			t.Fatalf("step %d: next check in %v, want %v", step, got, gap)
+		}
+		m.probe = time.Time{} // the gap passes
 	}
 }
 

@@ -123,9 +123,11 @@ type Module struct {
 	// grows by one key per red main commit and isn't pruned; that's small.
 	mainRed map[string]bool
 	// offline is why the forge was last unreachable, until it answers again;
-	// downs counts the failed steps since, and online is when it last came back.
+	// downs counts the failed steps and checks since, probe is when it may next
+	// be checked, and online is when it last came back.
 	offline string
 	downs   int
+	probe   time.Time
 	online  time.Time
 }
 
@@ -362,19 +364,26 @@ func (m *Module) settle(t *Task, err error) {
 	if err != nil {
 		why = core.Unreachable("GitHub", err.Error())
 	}
-	back := false
-	if err == nil && m.Offline() != "" {
-		// Many steps succeed without touching GitHub, so only a direct check
-		// says it's back.
-		_, cerr := m.C.Effects.Forge.User()
-		back = cerr == nil
+	// Many steps succeed without touching GitHub, so only a direct check says
+	// it's back, and the tasks share one check that backs off as they do.
+	m.mu.Lock()
+	probe := err == nil && m.offline != "" && !time.Now().Before(m.probe)
+	if probe {
+		m.probe = time.Now().Add(backoff(m.downs))
+	}
+	m.mu.Unlock()
+	var cerr error
+	if probe {
+		_, cerr = m.C.Effects.Forge.User()
 	}
 	m.mu.Lock()
 	switch {
 	case why != "":
 		m.offline = why
 		m.downs++
-	case back:
+	case probe && cerr != nil:
+		m.downs++
+	case probe:
 		m.offline, m.downs, m.online = "", 0, time.Now().UTC()
 	}
 	downs := m.downs
@@ -385,7 +394,7 @@ func (m *Module) settle(t *Task, err error) {
 	if why != "" {
 		// An outage isn't the task's fault, so it waits it out without counting
 		// a failure, checking back less often the longer it lasts.
-		t.Retry = time.Now().Add(min(30*time.Second<<min(downs-1, 5), 10*time.Minute))
+		t.Retry = time.Now().Add(backoff(downs))
 		m.save(t, why+"; retrying")
 		return
 	}
@@ -399,6 +408,12 @@ func (m *Module) settle(t *Task, err error) {
 		return
 	}
 	m.save(t, "error (will retry): "+core.Clip(msg, 300))
+}
+
+// backoff is the gap after the nth failed step of an outage: 30s doubling to
+// a 10 minute ceiling.
+func backoff(n int) time.Duration {
+	return min(30*time.Second<<min(max(n, 1)-1, 5), 10*time.Minute)
 }
 
 // Offline says why the forge can't be reached, or "" when it can.
