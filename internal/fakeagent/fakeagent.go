@@ -665,6 +665,16 @@ var riskKeys = regexp.MustCompile(`FAKE:(warden|panel)[a-z]+`)
 var hostCheckout = regexp.MustCompile(`checkout is (\S+) `)
 
 func warden(all string) error {
+	// The brief quotes the project's other recent requests; their keys steer
+	// their own wardens, not this one (a decided tribunal ask once sent the
+	// ceiling ask to a panel too).
+	var own []string
+	for _, l := range strings.Split(all, "\n") {
+		if !strings.HasPrefix(l, "another request in this project") {
+			own = append(own, l)
+		}
+	}
+	all = strings.Join(own, "\n")
 	dir := "/work"
 	if m := hostCheckout.FindStringSubmatch(all); m != nil {
 		dir = filepath.ToSlash(m[1]) // sh would eat a Windows path's backslashes

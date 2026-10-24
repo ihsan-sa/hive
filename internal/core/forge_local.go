@@ -244,6 +244,9 @@ func (l *Local) MergePR(repo string, number int, sha, subject string) (string, e
 		if p.State == "MERGED" {
 			return p.MergeSHA, nil
 		}
+		if p.State == "CLOSED" {
+			return "", fmt.Errorf("PR #%d was closed without merging", number)
+		}
 		l.refresh(repo, p)
 		if p.HeadSHA != sha {
 			return "", fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))

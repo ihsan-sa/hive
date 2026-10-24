@@ -239,3 +239,43 @@ func TestGateWaitThenConflict(t *testing.T) {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
 }
+
+// A pull request someone closed on the forge mid-landing ends its task as the
+// person's stop, even when main moved (which used to send it round testing
+// and merging forever), and nothing is merged.
+func TestClosedPRStopsTheTask(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	if err := m.test(task, p); err != nil || task.Stage != StageMerging {
+		t.Fatalf("stage %q, err %v", task.Stage, err)
+	}
+	forge.ClosePR(p.Repo, task.PR.Number, "not wanted")
+	pushMain(t, forge, map[string]string{"other.txt": "z"})
+	before, _ := m.C.Effects.Sync(p)
+	if err := m.merge(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageStopped || !task.ByPerson || !strings.Contains(task.Reason, "closed on the forge") {
+		t.Fatalf("stage %q, by person %v, reason %q", task.Stage, task.ByPerson, task.Reason)
+	}
+	if after, _ := m.C.Effects.Sync(p); after != before {
+		t.Fatalf("main moved from %s to %s after the PR was closed", before, after)
+	}
+	if err := m.Recheck(task.ID, ""); err == nil {
+		t.Fatal("the lead brought back a task the person closed")
+	}
+	if _, err := forge.MergePR(p.Repo, task.PR.Number, task.SHA, "x"); err == nil {
+		t.Fatal("the local forge merged a closed PR")
+	}
+}
+
+// A closed PR found while testing stops the task before its tests run.
+func TestClosedPRStopsTesting(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	forge.ClosePR(p.Repo, task.PR.Number, "not wanted")
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); ok || task.Stage != StageStopped || !task.ByPerson {
+		t.Fatalf("tested %v, stage %q, by person %v", ok, task.Stage, task.ByPerson)
+	}
+}
