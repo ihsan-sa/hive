@@ -19,7 +19,8 @@ const gateUsage = `usage: hive gate --repo <git> --head <sha> --base <sha> [--or
                  [--allow-bare]  (where bubblewrap cannot make namespaces; never with --org, never installed)
        hive gate --self-test [--out <dir>]      the gate on a trivial change, inside a child
        hive gate install --report <run>/report.json --target <path>   install a kept run's verified binary later
-Exit 0 keeps the candidate, 1 rolls it back, 2 is a usage error. The report is JSON on stdout.`
+Exit 0 keeps the candidate, 1 rolls it back, 3 means the gate could not run or measure it
+(no sandbox, no Go, a probe broken on both sides...: not the candidate's failure, no lesson), 2 is a usage error. The report is JSON on stdout.`
 
 func cmdGate(args []string) int {
 	if len(args) > 0 && args[0] == "install" {
@@ -133,7 +134,10 @@ func cmdGate(args []string) int {
 	rep, err := gate.Run(cfg)
 	raw, _ := json.MarshalIndent(rep, "", "  ")
 	fmt.Println(string(raw))
-	fmt.Fprintf(os.Stderr, "gate: %s (%s); report in %s\n", map[bool]string{true: "KEPT", false: "ROLLED BACK"}[rep.Verdict.Keep], rep.Verdict.Reason, cfg.Out)
+	fmt.Fprintf(os.Stderr, "gate: %s (%s); report in %s\n", outcome(rep), rep.Verdict.Reason, cfg.Out)
+	if rep.CantRun {
+		return 3
+	}
 	if err != nil || !rep.Verdict.Keep {
 		return 1
 	}
@@ -145,4 +149,14 @@ func cmdGate(args []string) int {
 		fmt.Fprintln(os.Stderr, "gate: installed", *install, "at", time.Now().Format(time.RFC3339))
 	}
 	return 0
+}
+
+func outcome(rep gate.Report) string {
+	switch {
+	case rep.Verdict.Keep:
+		return "KEPT"
+	case rep.CantRun:
+		return "COULD NOT RUN"
+	}
+	return "ROLLED BACK"
 }

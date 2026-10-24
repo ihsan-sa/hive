@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -63,6 +64,7 @@ type Report struct {
 	Error       string    `json:"error,omitempty"`
 	CandBin     string    `json:"candidate_bin,omitempty"`     // the verified copy of the candidate's binary
 	CandSHA256  string    `json:"candidate_sha256,omitempty"`  // its hash, taken right after the build
+	CantRun     bool      `json:"cant_run,omitempty"`          // the gate could not run or measure: neither a keep nor the candidate's rollback
 	CandVersion string    `json:"candidate_version,omitempty"` // what its --version must say: the gate stamps it at build time
 	Sig         string    `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
 }
@@ -111,13 +113,24 @@ func Run(cfg Config) (rep Report, err error) {
 	}
 	defer func() {
 		rep.Seconds = time.Since(t0).Seconds()
-		if err != nil {
+		var fault *candidateFault
+		switch {
+		case errors.As(err, &fault):
+			// The candidate itself failed before it could be measured: a rollback.
 			rep.Error = err.Error()
-			rep.Verdict = Verdict{Reason: "the gate could not finish: " + err.Error()}
+			rep.Verdict = Verdict{Reason: "the candidate " + fault.why}
+		case err != nil:
+			// The gate could not run (no sandbox, no Go, Yama off, an old
+			// evaluator, the org, the clock): nothing was measured, so this
+			// is not the candidate's failure and no lesson is written.
+			rep.Error, rep.CantRun = err.Error(), true
+			rep.Verdict = Verdict{Reason: "the gate could not run: " + err.Error()}
+		case !rep.Verdict.Keep && len(rep.Verdict.Regressions) == 0 && len(rep.Verdict.Unmeasured) > 0:
+			rep.CantRun = true // a probe failed on both sides: that path was never measured
 		}
 		rep.sign()
 		write(cfg, rep)
-		if !rep.Verdict.Keep {
+		if !rep.Verdict.Keep && !rep.CantRun {
 			noteLesson(cfg, rep)
 		}
 	}()
@@ -164,7 +177,11 @@ func Run(cfg Config) (rep Report, err error) {
 		if c.Bin == "" {
 			cfg.log("building %s at %s", c.Name, short(sha))
 			if err = build(cfg, c, sha); err != nil {
-				return rep, fmt.Errorf("%s does not build: %v", c.Name, err)
+				err = fmt.Errorf("%s does not build: %v", c.Name, err)
+				if c == cand {
+					err = &candidateFault{"does not build", err}
+				}
+				return rep, err
 			}
 			built = append(built, c)
 			if c == cand {
@@ -192,7 +209,11 @@ func Run(cfg Config) (rep Report, err error) {
 	for _, c := range built {
 		cfg.log("vet and short tests of %s", c.Name)
 		if err = unitTest(c); err != nil {
-			return rep, fmt.Errorf("%s fails its own checks: %v", c.Name, err)
+			err = fmt.Errorf("%s fails its own checks: %v", c.Name, err)
+			if c == cand {
+				err = &candidateFault{"fails its own vet or short tests", err}
+			}
+			return rep, err
 		}
 	}
 
@@ -281,7 +302,7 @@ func Run(cfg Config) (rep Report, err error) {
 	}
 	// The candidate's binary must be the one that was built and hashed.
 	if got, e := FileSHA(cand.Bin); e != nil || got != rep.CandSHA256 {
-		return rep, fmt.Errorf("the candidate's binary changed during the run")
+		return rep, &candidateFault{"changed its own binary during the run", fmt.Errorf("the candidate's binary changed during the run")}
 	}
 	rep.Verdict = Decide(rep.Candidate, rep.Control, cfg.Options)
 	return rep, nil
@@ -454,7 +475,7 @@ func checkout(cfg Config, c *Child, sha string) error {
 		return fmt.Errorf("checkout %s: %v: %s", short(sha), err, tail(out, 300))
 	}
 	got, _ := run(c.Src, "git", "rev-parse", "HEAD")
-	if got = strings.TrimSpace(got); !strings.HasPrefix(got, sha) && !strings.HasPrefix(sha, got) {
+	if got = strings.TrimSpace(got); got == "" || (!strings.HasPrefix(got, sha) && !strings.HasPrefix(sha, got)) {
 		return fmt.Errorf("checked out %s, not %s", short(got), short(sha))
 	}
 	if st, _ := run(c.Src, "git", "status", "--porcelain"); strings.TrimSpace(st) != "" {
@@ -469,7 +490,7 @@ func write(cfg Config, rep Report) {
 	raw, _ := json.MarshalIndent(rep, "", "  ")
 	os.WriteFile(filepath.Join(cfg.Out, "report.json"), raw, 0o644)
 	os.WriteFile(filepath.Join(cfg.Out, "report.md"), []byte(rep.Markdown()), 0o644)
-	line, _ := json.Marshal(map[string]any{"id": rep.ID, "head": rep.Head, "base": rep.Base, "keep": rep.Verdict.Keep, "reason": rep.Verdict.Reason, "at": rep.Started})
+	line, _ := json.Marshal(map[string]any{"id": rep.ID, "head": rep.Head, "base": rep.Base, "keep": rep.Verdict.Keep, "cant_run": rep.CantRun, "reason": rep.Verdict.Reason, "at": rep.Started})
 	if f, err := os.OpenFile(filepath.Join(filepath.Dir(cfg.Out), "gates.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 		f.Write(append(line, '\n'))
 		f.Close()
@@ -480,8 +501,11 @@ func write(cfg Config, rep Report) {
 func (r Report) Markdown() string {
 	var b strings.Builder
 	verdict := "ROLLED BACK"
-	if r.Verdict.Keep {
+	switch {
+	case r.Verdict.Keep:
 		verdict = "KEPT"
+	case r.CantRun:
+		verdict = "COULD NOT RUN"
 	}
 	cand := short(r.Head)
 	if cand == "" {
@@ -523,6 +547,18 @@ func (r Report) Markdown() string {
 	return b.String()
 }
 
+// candidateFault is a failure of the candidate itself before it was
+// measured (it does not build, fails its own checks, rewrote its binary):
+// a rollback. Every other error is the gate's: it could not run. why is a
+// fixed phrase; the candidate's own output never reaches a lesson.
+type candidateFault struct {
+	why string
+	err error
+}
+
+func (f *candidateFault) Error() string { return f.err.Error() }
+func (f *candidateFault) Unwrap() error { return f.err }
+
 // noteLesson records a rollback where the next worker reads it.
 func noteLesson(cfg Config, rep Report) {
 	if cfg.Lessons == "" {
@@ -539,10 +575,7 @@ func noteLesson(cfg Config, rep Report) {
 	}
 	// Text from the candidate's own output never goes here: a lesson is read by
 	// the next worker as instructions.
-	reason := rep.Verdict.Reason
-	if rep.Error != "" {
-		reason = "the gate could not finish (see report.json of the run)"
-	}
+	reason := rep.Verdict.Reason // Decide's words, or a fixed candidateFault.why
 	s += fmt.Sprintf("- The gate rolled back %s (run %s): %s\n", short(rep.Head), rep.ID, reason)
 	os.WriteFile(cfg.Lessons, []byte(s), 0o644)
 }

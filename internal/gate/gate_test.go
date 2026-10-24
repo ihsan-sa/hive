@@ -2,6 +2,7 @@ package gate
 
 import (
 	"archive/zip"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
@@ -517,5 +518,37 @@ func TestRunRecordsHashAndKeepsOutputOutOfLessons(t *testing.T) {
 	raw, _ := os.ReadFile(lessons)
 	if strings.Contains(string(raw), "IGNORE") || !strings.Contains(string(raw), "rolled back") {
 		t.Errorf("lessons: %q", raw)
+	}
+}
+
+// When the gate cannot run, nothing was measured: the report says could not
+// run, and no lesson blames the candidate. A candidate that fails on its own
+// before it is measured is a rollback with a lesson.
+func TestCantRunWritesNoLesson(t *testing.T) {
+	dir := t.TempDir()
+	cand := fakeBin(t, dir, "cand", "v2", true)
+	lessons := filepath.Join(dir, "lessons.md")
+	cases := []Config{
+		{CandBin: cand, CtrlBin: cand, Sandbox: "bare"}, // bare without leave: refused before anything runs
+		{CandBin: cand, CtrlBin: cand, Sandbox: "bare", AllowBare: true, Probes: []string{"nosuch"}},
+	}
+	for i, cfg := range cases {
+		cfg.Out, cfg.Lessons = filepath.Join(dir, fmt.Sprint(i), "run"), lessons
+		rep, err := Run(cfg)
+		if err == nil || !rep.CantRun || rep.Verdict.Keep || !strings.Contains(rep.Verdict.Reason, "could not run") {
+			t.Errorf("case %d: err %v, %+v", i, err, rep)
+		}
+		if _, err := os.Stat(lessons); err == nil {
+			t.Fatalf("case %d: the gate's own failure wrote a lesson", i)
+		}
+	}
+	both := func(cfg *Config, c *Child) Result { return Result{} } // fails on both sides
+	rep, err := Run(Config{CandBin: cand, CtrlBin: cand, Sandbox: "bare", AllowBare: true, Probes: []string{"both"}, Probe: map[string]ProbeFunc{"both": both},
+		Out: filepath.Join(dir, "both", "run"), Lessons: lessons})
+	if err != nil || !rep.CantRun || rep.Verdict.Keep || !strings.Contains(rep.Verdict.Reason, "not measured") {
+		t.Errorf("a probe broken on both sides: %v %+v", err, rep.Verdict)
+	}
+	if _, err := os.Stat(lessons); err == nil {
+		t.Fatal("an unmeasured probe wrote a lesson")
 	}
 }

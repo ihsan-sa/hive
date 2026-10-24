@@ -45,6 +45,7 @@ type Verdict struct {
 	Reason      string   `json:"reason"`
 	Regressions []string `json:"regressions,omitempty"`
 	Gains       []string `json:"gains,omitempty"`
+	Unmeasured  []string `json:"unmeasured,omitempty"` // probes that failed on both sides: never measured
 }
 
 func mean(v []float64) float64 {
@@ -131,7 +132,7 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 			if c.pass == 0 && k.pass == 0 {
 				// Broken on both sides: that path was never measured, so it
 				// cannot count as even.
-				v.Regressions = append(v.Regressions, fmt.Sprintf("%s failed on both sides (0/%d, the control 0/%d): not measured", p, c.n, k.n))
+				v.Unmeasured = append(v.Unmeasured, fmt.Sprintf("%s failed on both sides (0/%d, the control 0/%d)", p, c.n, k.n))
 			} else if cr < kr {
 				v.Regressions = append(v.Regressions, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n))
 			} else if cr > kr {
@@ -175,6 +176,10 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 	switch {
 	case len(v.Regressions) > 0:
 		v.Reason = "worse than the current Hive: " + v.Regressions[0]
+	case len(v.Unmeasured) > 0:
+		// Not a keep, and not the candidate's failure either: the gate
+		// could not measure this path (Run reports it as could not run).
+		v.Reason = "not measured: " + v.Unmeasured[0]
 	case len(v.Gains) > 0:
 		v.Keep, v.Reason = true, "better than the current Hive with no regression: "+v.Gains[0]
 	case o.AllowTie:
