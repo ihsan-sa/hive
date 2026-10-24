@@ -304,12 +304,22 @@ func TestOverlappingTicksStepEachRunOnce(t *testing.T) {
 	if w.Turn != 1 || w.Status != StatusRunning {
 		t.Fatalf("worker %s on turn %d, want running on turn 1", w.Status, w.Turn)
 	}
-	// Its turn, ended while ticks overlap, is recorded once.
-	if !c.Runs.Interrupt("worker") {
-		t.Fatal("could not interrupt the worker's turn")
-	}
+	// Its turn, ended while ticks overlap, is recorded once. The fake
+	// worker finishes on its own, so by now its process may be gone already
+	// (it is on Windows); killing it is only a nudge, and either way the
+	// end is seen by the ticks below.
+	c.Runs.Interrupt("worker")
 	slowStep("two")
 	ticks()
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		if w, _ := c.Runs.Get("worker"); w.Status != StatusRunning {
+			break
+		}
+	}
+	if w, _ := c.Runs.Get("worker"); w.Status == StatusRunning {
+		t.Fatalf("the worker's turn never ended: %s %q", w.Status, w.Reason)
+	}
+	time.Sleep(time.Second) // every tick's late step has run by now
 	if n := count("run.turn_ended", "worker"); n != 1 {
 		t.Errorf("the worker's turn ended %d times across overlapping ticks, want 1", n)
 	}
