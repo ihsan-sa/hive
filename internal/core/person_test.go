@@ -59,3 +59,37 @@ func TestConcurrentAnswersRecordOne(t *testing.T) {
 		t.Fatalf("%d answers recorded, want 1", n)
 	}
 }
+
+// Something done for the person goes to the feed, never to Waiting, and a
+// "told" ask filed before Tell is cleared into the feed on the next start,
+// leaving the asks that need a decision.
+func TestToldGoesToTheFeed(t *testing.T) {
+	c, forge := testHive(t)
+	told := c.Person.Tell(Ask{Ref: "r1", Title: "A T2 step ran (done): fetch a job log", Detail: "curl ...\n\nok"})
+	if n := len(c.Person.Open()); n != 0 {
+		t.Fatalf("a told is waiting on the person: %d asks", n)
+	}
+	if got := c.Person.Told(5); len(got) != 1 || got[0].ID != told.ID || got[0].Kind != "told" || len(got[0].Options) != 0 {
+		t.Fatalf("told: %+v", got)
+	}
+	c.J.MustAppend("person.asked", Ask{ID: "old", Kind: "told", Ref: "r0", Title: "A T2 step ran (done): old", Detail: "out", Options: []string{"seen"}})
+	merge := c.Person.Ask(Ask{Kind: "merge", Ref: "t@1", Title: "Merge?", Options: []string{"merge", "leave open"}})
+	c.Close()
+	c, err := Open(c.WS, forge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	if open := c.Person.Open(); len(open) != 1 || open[0].ID != merge.ID {
+		t.Fatalf("after the restart, waiting: %+v, want only the merge", open)
+	}
+	got := c.Person.Told(5)
+	if len(got) != 2 || got[0].Title != "A T2 step ran (done): old" || got[0].Detail != "out" || got[1].ID != told.ID {
+		t.Fatalf("the old told wasn't moved to the feed: %+v", got)
+	}
+	c.Close()
+	if c, _ = Open(c.WS, forge); len(c.Person.Told(5)) != 2 {
+		t.Fatalf("moved twice: %+v", c.Person.Told(5))
+	}
+	c.Close()
+}

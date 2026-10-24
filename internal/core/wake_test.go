@@ -9,6 +9,8 @@ import (
 // A worker asks a warden and finishes blocked at once; the warden's answer
 // can land just as that turn ends. Whichever side records last, the run is
 // woken for it (TestBlockedWorkComesBack on a slow Windows runner).
+// Only the first order reproduces that race; the second passed before the fix
+// too and is here to keep endTurn's own wake from regressing.
 func TestAnswerAtABlockedTurnsEndWakesIt(t *testing.T) {
 	for _, order := range []string{"the turn ends as the answer lands", "the answer waits at the turn's end"} {
 		t.Run(order, func(t *testing.T) {

@@ -955,6 +955,7 @@ func (s *server) state() api.State {
 	st.Sweeps = sw
 	st.StepBacks = a.Improve.StepBacks("")
 	st.Asks = previews(a.C.Person.Open())
+	st.Told = previews(a.C.Person.Told(20))
 	s.mu.Lock()
 	st.Alerts = append([]api.Alert{}, s.alerts...)
 	st.Updated = s.update

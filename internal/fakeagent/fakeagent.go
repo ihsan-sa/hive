@@ -148,9 +148,15 @@ func Main(argv []string) int {
 		text = "error: " + err.Error()
 	}
 	emit(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{}, "usage": map[string]int{"input_tokens": len(all)}}})
+	// Like Claude, total_cost_usd is the session's running total: a resumed
+	// session carries on from what it spent before.
 	cost := 0.0
 	if strings.Contains(all, "FAKE:paid") {
-		cost = 0.25
+		spent := filepath.Join(os.Getenv("HIVE_BOX"), "fake-cost-"+session)
+		raw, _ := os.ReadFile(spent)
+		fmt.Sscan(string(raw), &cost)
+		cost += 0.25
+		os.WriteFile(spent, []byte(fmt.Sprint(cost)), 0o600)
 	}
 	res := map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": text, "session_id": session, "total_cost_usd": cost}
 	if schema && structured != nil {

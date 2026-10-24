@@ -1285,25 +1285,32 @@ func (e *Effects) CheckFailure(repo string, r CheckRun) (CheckFailure, bool) {
 // ExcerptLines is how much of a failed step's log goes in its findings.
 const ExcerptLines = 100
 
+// GitHub's job log marks a step's start with "##[group]Run " and an error
+// with "##[error]", each line after a timestamp when the log is downloaded
+// (and after a byte-order mark on its first line).
 var (
-	ghStepStart = regexp.MustCompile(`^##\[group\]Run `)
+	ghStepStart = regexp.MustCompile(`^(?:\x{FEFF})?(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?##\[group\]Run `)
 	ghStepError = regexp.MustCompile(`##\[error\]`)
 )
 
 // LogExcerpt is the last n lines of the step that failed in a CI job's log:
-// the lines up to its last error mark (GitHub's "##[error]"), from no earlier
-// than that step's start. A log with no error mark gives its last n lines.
+// the first step with an error mark (GitHub's "##[error]"), so a post step's
+// error after it never hides it, up to that step's last error mark and from
+// no earlier than its start. A log with no error mark gives its last n lines.
 func LogExcerpt(log string, n int) string {
 	lines := strings.Split(strings.TrimRight(strings.ReplaceAll(log, "\r\n", "\n"), "\n"), "\n")
 	end := len(lines)
-	for i := len(lines) - 1; i >= 0; i-- {
-		if ghStepError.MatchString(lines[i]) {
-			end = i + 1
-			break
+	first := slices.IndexFunc(lines, ghStepError.MatchString)
+	if first >= 0 {
+		end = first + 1
+		for i := first + 1; i < len(lines) && !ghStepStart.MatchString(lines[i]); i++ {
+			if ghStepError.MatchString(lines[i]) {
+				end = i + 1
+			}
 		}
 	}
 	start := max(0, end-n)
-	if end < len(lines) {
+	if first >= 0 {
 		for i := end - 1; i >= start; i-- {
 			if ghStepStart.MatchString(lines[i]) {
 				start = i
