@@ -731,15 +731,18 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	mainSHA, _ := m.C.Effects.Sync(p)
 	// A checkpoint behind a head that main holds: nothing past it is lost.
 	cp, _ := core.Git(m.C.WS.Project("p"), "rev-parse", mainSHA+"^")
-	task.Checkpoint = strings.TrimSpace(cp)
+	task.Checkpoint, task.Chat = strings.TrimSpace(cp), m.Chat.EnsureProject("p").ID
 	m.save(task, "")
 	if err := call(`{"task":"t1","why":"squashed by the person","merge":"` + mainSHA + `"}`); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := m.Get("t1")
 	if got.Stage != StageMerged || got.MergeSHA != mainSHA || len(merged) != 1 || !logged(&got, "squashed by the person") ||
-		!logged(&got, "checkpoint "+core.Short(task.Checkpoint)+" is what merged") || logged(&got, "not on main") {
+		!logged(&got, "checkpoint "+core.Short(task.Checkpoint)+" is what merged; the worker had committed nothing past it") {
 		t.Fatalf("stage %q, merge %q, OnMerged %d, log %v", got.Stage, got.MergeSHA, len(merged), got.Log)
+	}
+	if msgs := m.Chat.Messages("project:p"); len(msgs) == 0 || msgs[len(msgs)-1].Text != "Merged: work "+task.PR.URL {
+		t.Fatalf("chat %v", msgs)
 	}
 	if r, _ := m.C.Runs.Get("w1"); !r.Terminal() && !r.StopAsked {
 		t.Fatal("its worker still runs")
@@ -772,16 +775,17 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	}
 	must(t, r.Checkout, "add", "-A")
 	must(t, r.Checkout, "commit", "-q", "-m", "later")
-	later, err := m2.C.Effects.Extract(p2, r, t2.Checkpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t2.SHA = later
+	later := strings.TrimSpace(must(t, r.Checkout, "rev-parse", "HEAD")) // only in its checkout, as the real flow leaves it
+	// A revert ended this way reads as the merge path words it.
+	t2.Kind, t2.Title, t2.Lesson, t2.Chat = "revert", "Revert: work", "it broke the tests", m2.Chat.EnsureProject("p").ID
 	m2.save(t2, "")
 	got, err = m2.Landed("t1", "", "lead", "merged on GitHub at 07:53Z")
 	if err != nil || got.Stage != StageMerged || got.MergeSHA != sha || !logged(&got, "merged on the forge") || got.Checkpoint != "" ||
 		!logged(&got, "checkpoint "+core.Short(t2.Checkpoint)+" is what merged; the worker's commits past it, up to "+core.Short(later)+", are not on main") {
 		t.Fatalf("stage %q, merge %q (want %s), log %v: %v", got.Stage, got.MergeSHA, sha, got.Log, err)
+	}
+	if msgs := m2.Chat.Messages("project:p"); len(msgs) == 0 || msgs[len(msgs)-1].Text != "Reverted: work. it broke the tests" {
+		t.Fatalf("chat %v", msgs)
 	}
 }
 

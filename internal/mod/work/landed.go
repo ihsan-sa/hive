@@ -47,17 +47,14 @@ func (m *Module) Landed(id, mergeSHA, by, why string) (Task, error) {
 	if err != nil {
 		return t, err
 	}
+	past := m.pastCheckpoint(&t, p) // read before the worker stops
 	if t.Worker != "" {
 		if r, ok := m.C.Runs.Get(t.Worker); ok && !r.Terminal() {
 			m.C.Runs.Stop(t.Worker, "its work is already on main")
 		}
 	}
 	if t.Checkpoint != "" { // its PR is the checkpoint's: say what merged and what didn't
-		line := fmt.Sprintf("checkpoint %s is what merged", core.Short(t.Checkpoint))
-		if t.SHA != "" && t.SHA != t.Checkpoint && !m.mainHolds(p, t.SHA) {
-			line += fmt.Sprintf("; the worker's commits past it, up to %s, are not on main", core.Short(t.SHA))
-		}
-		m.save(&t, line)
+		m.save(&t, fmt.Sprintf("checkpoint %s is what merged%s", core.Short(t.Checkpoint), past))
 	}
 	t.MergeSHA, t.Stage, t.Reason, t.Checkpoint = merged, StageMerged, "", ""
 	m.save(&t, fmt.Sprintf("ended as landed by %s (%s, %s): %s", by, how, core.Short(merged), core.Clip(why, 300)))
@@ -121,10 +118,29 @@ func (m *Module) landedAt(t *Task, p core.Project, mergeSHA string) (string, str
 	return "", "", refuse()
 }
 
-// mainHolds reports whether main holds sha's change.
-func (m *Module) mainHolds(p core.Project, sha string) bool {
-	main, err := m.C.Effects.Sync(p)
-	return err == nil && holds(m.C.WS.Project(p.Name), main, sha)
+// pastCheckpoint reads what t's worker committed past the Hive's last take of
+// its branch (the checkpoint, or it caught up with main), which ending the task
+// leaves off main, and says so for the log.
+func (m *Module) pastCheckpoint(t *Task, p core.Project) string {
+	if t.Checkpoint == "" || t.Worker == "" {
+		return ""
+	}
+	r, ok := m.C.Runs.Get(t.Worker)
+	if !ok || r.Checkout == "" {
+		return ""
+	}
+	base := t.SHA
+	if base == "" {
+		base = t.Checkpoint
+	}
+	sha, err := m.C.Effects.Extract(p, r, base)
+	switch {
+	case errors.Is(err, core.ErrNoChanges):
+		return "; the worker had committed nothing past it"
+	case err != nil:
+		return "; the worker's commits past it couldn't be read: " + core.Clip(err.Error(), 200)
+	}
+	return fmt.Sprintf("; the worker's commits past it, up to %s, are not on main", core.Short(sha))
 }
 
 // holds reports whether the commit at would gain nothing from merging sha in:
