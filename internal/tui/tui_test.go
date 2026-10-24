@@ -638,8 +638,23 @@ func TestWaitingAnswersTheSelectedAsk(t *testing.T) {
 	if answered["id"] != "a2" || answered["answer"] != "leave open" {
 		t.Fatalf("enter should answer the selected ask a2 with leave open, not what sits at its old position: %v", answered)
 	}
-	m.st.Asks = []core.Ask{first} // a2 answered elsewhere; a1 slides under the cursor
-	if m.waitIndex() != 0 || m.waitID != "a1" || m.optSel != 0 {
+	ask := func(id string) core.Ask { a := protectedAsk(); a.ID, a.Title = id, "Merge "+id+"?"; return a }
+	m.st.Asks = []core.Ask{first, ask("a3")} // a2, answered here, leaves; a3 takes its place
+	m.View()
+	answered = map[string]string{}
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		cmd()
+	}
+	if answered["id"] != "a3" || strings.Contains(ansi.Strip(m.View()), "answered elsewhere") {
+		t.Fatalf("after answering an ask here, enter answers the next one: %v", answered)
+	}
+	m.st.Asks = []core.Ask{first, ask("a4")} // a3 answered here leaves; a4 is selected
+	m.View()
+	if m.waitID != "a4" || m.waitMoved {
+		t.Fatalf("a4 should be selected: %q moved %v", m.waitID, m.waitMoved)
+	}
+	m.st.Asks = []core.Ask{first} // a4 answered elsewhere; a1 slides under the cursor
+	if m.waitIndex() != 0 || m.waitID != "a1" || m.optSel != 0 || !m.waitMoved {
 		t.Fatalf("a vanished ask should not carry its pick to another: sel %d id %q opt %d", m.waitSel, m.waitID, m.optSel)
 	}
 	m.View()

@@ -95,6 +95,7 @@ type model struct {
 	waitSel   int
 	waitID    string // the selected ask; waitSel follows it as the list shifts
 	waitMoved bool   // the selected ask went and another slid under the cursor
+	waitDone  string // the ask last answered here
 	modSel    int
 	kbDir     string // the knowledge base folder shown, relative to its root
 	kbSel     int

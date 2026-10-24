@@ -558,7 +558,8 @@ func contains(l []string, s string) bool {
 // waitIndex finds the selected ask by its id, so a list that shifts under
 // the cursor (an ask answered elsewhere, a new one filed) keeps the selection
 // on the same ask. When that ask is gone the cursor stays at its position and
-// waitMoved is set, so Enter won't answer an ask the person didn't select.
+// waitMoved is set, so Enter won't answer an ask the person didn't select;
+// unless the person answered it here (waitDone), when the next one is theirs.
 func (m *model) waitIndex() int {
 	asks := m.st.Asks
 	for i, a := range asks {
@@ -568,7 +569,8 @@ func (m *model) waitIndex() int {
 		}
 	}
 	if m.waitID != "" {
-		m.optSel, m.waitMoved = 0, true // a different ask now; don't carry the pick over
+		m.optSel = 0 // a different ask now; don't carry the pick over
+		m.waitMoved = m.waitID != m.waitDone
 	}
 	m.waitSel = max(0, min(m.waitSel, len(asks)-1))
 	m.waitID = ""
@@ -618,7 +620,7 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sel < len(asks) {
 			a := asks[sel]
 			opt := a.Options[min(m.optSel, len(a.Options)-1)]
-			m.optSel = 0
+			m.optSel, m.waitDone = 0, a.ID // answered here: its leaving the list isn't a move
 			return m, m.post("/api/answer", map[string]string{"id": a.ID, "answer": opt}, "answered: "+opt)
 		}
 	}
