@@ -7,6 +7,7 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,6 +47,7 @@ type detail struct {
 	scroll int
 	sel    int
 	text   string
+	state  string // a diff: "" fetching the whole, "whole", else why the fetch failed
 }
 
 type model struct {
@@ -91,20 +93,23 @@ type model struct {
 	dashTree bool
 	stages   map[string]string // task stages seen, so the feed shows changes
 
-	dashSel int
-	waitSel int
-	fbSel   string // the feedback item selected, by id
-	modSel  int
-	kbDir   string // the knowledge base folder shown, relative to its root
-	kbSel   int
-	setSel  int
-	editing bool
-	picking bool // a setting's pick-list is open
-	pickSel int
-	optSel  int
-	stack   []detail
-	runs    map[string]api.RunDetail
-	tasks   map[string]work.Task
+	dashSel   int
+	waitSel   int
+	waitID    string // the selected ask; waitSel follows it as the list shifts
+	waitMoved bool   // the selected ask went and another slid under the cursor
+	waitDone  string // the ask last answered here
+	fbSel     string // the feedback item selected, by id
+	modSel    int
+	kbDir     string // the knowledge base folder shown, relative to its root
+	kbSel     int
+	setSel    int
+	editing   bool
+	picking   bool // a setting's pick-list is open
+	pickSel   int
+	optSel    int
+	stack     []detail
+	runs      map[string]api.RunDetail
+	tasks     map[string]work.Task
 
 	since     []string
 	showSince bool
@@ -124,7 +129,11 @@ type chatMsg struct {
 }
 type runMsg struct{ d api.RunDetail }
 type taskMsg struct{ t work.Task }
-type askMsg struct{ a core.Ask }
+type askMsg struct {
+	id  string
+	a   core.Ask
+	err error
+}
 type sinceMsg []string
 type flashMsg string
 type tickMsg time.Time
@@ -219,10 +228,16 @@ func (m *model) fetchDetail() tea.Cmd {
 			return taskMsg{t}
 		}
 	case "diff": // state carries a preview; the whole diff comes when it's opened
+		if d.state == "whole" {
+			return nil
+		}
 		return func() tea.Msg {
 			var a core.Ask
-			m.c.Do("GET", "/api/waiting?id="+d.id, nil, &a)
-			return askMsg{a}
+			err := m.c.Do("GET", "/api/waiting?id="+d.id, nil, &a)
+			if err == nil && a.Diff == "" {
+				err = errors.New("the Hive sent no diff")
+			}
+			return askMsg{d.id, a, err}
 		}
 	}
 	return nil
@@ -363,8 +378,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tasks[msg.t.ID] = msg.t
 	case askMsg:
 		for i := range m.stack {
-			if d := &m.stack[i]; d.kind == "diff" && d.id == msg.a.ID && msg.a.Diff != "" {
-				d.text = msg.a.Diff
+			if d := &m.stack[i]; d.kind == "diff" && d.id == msg.id && d.state != "whole" {
+				if msg.err != nil {
+					d.state = msg.err.Error()
+				} else {
+					d.text, d.state = msg.a.Diff, "whole"
+				}
+				d.title = diffTitle(d.state)
 			}
 		}
 	case sinceMsg:
@@ -838,7 +858,7 @@ func (m *model) keys() []string {
 			return []string{"↑↓", "move", "enter", "open", "←", "collapse", "s", "feed", "tab", "sidebar"}
 		}
 		return []string{"enter", "open thread", "f", "follow", "m", "only me", "s", "status", "tab", "sidebar"}
-	case m.section == secWaiting && m.waitSel < len(m.st.Asks) && m.st.Asks[m.waitSel].Diff != "":
+	case m.section == secWaiting && m.waitIndex() < len(m.st.Asks) && m.st.Asks[m.waitSel].Diff != "":
 		return []string{"↑↓", "move", "←→", "pick", "enter", "answer", "d", "whole diff", "tab", "sidebar"}
 	case m.section == secWaiting:
 		return []string{"↑↓", "move", "←→", "pick", "enter", "answer", "tab", "sidebar"}

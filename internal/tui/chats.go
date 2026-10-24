@@ -312,10 +312,10 @@ func (m *model) toWaiting() tea.Cmd {
 			chatOf[t.ID] = t.Chat
 		}
 	}
-	m.waitSel, m.optSel = 0, 0
+	m.selectWait(0)
 	for i, a := range m.st.Asks {
 		if id, _, _ := strings.Cut(a.Ref, "@"); chatOf[id] == m.chat {
-			m.waitSel = i
+			m.selectWait(i)
 			break
 		}
 	}
