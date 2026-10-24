@@ -1559,43 +1559,49 @@ func (m *Module) hold(t *Task, p core.Project, why string) {
 // forgeChecks holds t until the forge's own checks (CI on every platform,
 // which the Hive's own test doesn't cover) pass on exactly the head it would
 // merge. A failure goes back to the worker as a red test does, unless main
-// fails the same check; a check that can't start is the environment's, so t
-// waits and it is raised, never sent back.
+// fails the same check: a change whose every failure main shares is no worse
+// than main and merges, so the fix for a red main can land. A check that
+// can't start is the environment's, so t waits and it is raised, never sent
+// back.
 func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error) {
 	runs, err := m.C.Effects.Forge.Checks(p.Repo, t.SHA)
 	if err != nil {
 		return true, err
 	}
-	st, which := core.ChecksState(runs, m.C.Effects.RequiredChecks(p, main))
+	req := m.C.Effects.RequiredChecks(p, main)
+	st, which := core.ChecksState(runs, req)
+	var shared []string
+	if st == core.CheckFail {
+		mainRuns, err := m.C.Effects.Forge.Checks(p.Repo, main)
+		if err != nil {
+			return true, err
+		}
+		st, which, shared = core.ChecksAgainstMain(runs, mainRuns, req)
+	}
 	names := core.CheckNames(which)
+	onMain := ""
+	if len(shared) > 0 {
+		both := strings.Join(shared, ", ")
+		m.raiseOnce(p, main+"/checks", "the forge's checks "+both+" fail on main in "+p.Name+" at "+core.Short(main))
+		onMain = " (" + both + " fail on main at " + core.Short(main) + " too, so they don't count against it)"
+	}
 	switch st {
 	case core.CheckPending:
-		m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+" ("+names+")")
+		m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+" ("+names+")"+onMain)
 		return true, nil
 	case core.CheckCantStart:
-		why := "the forge's checks " + names + " can't start on " + core.Short(t.SHA) + ", which is the environment's fault, not the change's; waiting for them to run"
+		why := "the forge's checks " + names + " can't start on " + core.Short(t.SHA) + ", which is the environment's fault, not the change's; waiting for them to run" + onMain
 		if t.Reason != why {
 			m.raiseOnce(p, t.SHA+"/checks", "the forge's checks "+names+" can't start in "+p.Name+" (PR #"+fmt.Sprint(t.PR.Number)+" at "+core.Short(t.SHA)+"): "+checkDetail(which))
 		}
 		m.hold(t, p, why)
 		return true, nil
 	case core.CheckFail:
-		mainRuns, err := m.C.Effects.Forge.Checks(p.Repo, main)
-		if err != nil {
-			return true, err
-		}
-		if _, onMain := core.ChecksState(mainRuns, nil); slices.ContainsFunc(onMain, func(r core.CheckRun) bool {
-			return r.State == core.CheckFail && strings.Contains(", "+names+", ", ", "+r.Name+", ")
-		}) {
-			why := "waiting on main: the forge's checks " + names + " fail on main at " + core.Short(main) + " too, so this failure isn't the worker's"
-			if t.Reason != why {
-				m.raiseOnce(p, main+"/checks", "the forge's checks "+names+" fail on main in "+p.Name+" at "+core.Short(main))
-			}
-			m.hold(t, p, why)
-			return true, nil
-		}
 		t.Reason = ""
-		return true, m.sendBack(t, p, "The forge's checks failed on your commit "+core.Short(t.SHA)+": "+checkDetail(which))
+		return true, m.sendBack(t, p, "The forge's checks failed on your commit "+core.Short(t.SHA)+": "+checkDetail(which)+onMain)
+	}
+	if len(shared) > 0 {
+		m.save(t, "no worse than main: the forge's checks "+strings.Join(shared, ", ")+" are red on both "+core.Short(t.SHA)+" and main at "+core.Short(main)+", and nothing else fails, so it merges")
 	}
 	return false, nil
 }
