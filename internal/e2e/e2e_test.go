@@ -201,6 +201,17 @@ func ours(info api.DaemonInfo, pid int, launched time.Time) bool {
 	return info.PID == pid
 }
 
+// binVersion is what the binary under test says its version is: the gate
+// stamps the one it builds, so it need not be this tree's core.Version.
+func binVersion(t *testing.T) string {
+	out, err := exec.Command(bin, "--version").Output()
+	f := strings.Fields(string(out))
+	if err != nil || len(f) == 0 {
+		t.Fatalf("%s --version: %v %s", bin, err, out)
+	}
+	return f[len(f)-1]
+}
+
 // kill ends the daemon abruptly, as a crash would.
 func (h *hive) kill() {
 	if h.cmd != nil && h.cmd.Process != nil {

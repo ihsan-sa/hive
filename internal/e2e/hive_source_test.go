@@ -41,7 +41,7 @@ func TestHiveKnowsItself(t *testing.T) {
 		}
 		return false
 	})
-	for _, want := range []string{"value >= best-s.Tolerance", "every 7h", core.Version} {
+	for _, want := range []string{"value >= best-s.Tolerance", "every 7h", binVersion(t)} {
 		if !strings.Contains(answer, want) {
 			t.Errorf("the answer lacks %q, so the lead didn't read it: %q", want, answer)
 		}
@@ -56,8 +56,8 @@ func TestHiveKnowsItself(t *testing.T) {
 	core.Git(h.ws.KB(), "add", "-A")
 	core.Git(h.ws.KB(), "commit", "-q", "-m", "the Hive's source at v0.0.1")
 	h.launch()
-	if v, _ := os.ReadFile(filepath.Join(self, "VERSION")); strings.TrimSpace(string(v)) != core.Version {
-		t.Errorf("after the update the source is at %q, want %s", v, core.Version)
+	if v, _ := os.ReadFile(filepath.Join(self, "VERSION")); strings.TrimSpace(string(v)) != binVersion(t) {
+		t.Errorf("after the update the source is at %q, want %s", v, binVersion(t))
 	}
 	if core.Exists(filepath.Join(self, "internal", "gone.go")) {
 		t.Error("a file the new version dropped is still in the knowledge base")
