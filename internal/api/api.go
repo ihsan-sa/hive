@@ -39,6 +39,7 @@ type DaemonInfo struct {
 // State is everything the control center shows.
 type State struct {
 	Version    string             `json:"version"`
+	Channel    string             `json:"channel,omitempty"` // the releases auto-update follows: "latest" or "pre-release"
 	Seq        int64              `json:"seq"`
 	Workspace  string             `json:"workspace"`
 	Sandbox    string             `json:"sandbox"`
