@@ -160,6 +160,9 @@ type Module struct {
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
 	mainRed map[string]bool
+	// prPolled is when each task waiting for the person last had its pull
+	// request looked up, so a close there is seen without a call every tick.
+	prPolled map[string]time.Time
 	// offline is why the forge was last unreachable, until it answers again;
 	// downs counts the failed steps and checks since, probe is when it may next
 	// be checked, probing says a check is out, and online is when it last came
@@ -176,7 +179,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string][]string{}, mainRed: map[string]bool{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string][]string{}, mainRed: map[string]bool{}, prPolled: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "alert.raised" {
 			var a struct{ Kind, Project, SHA string }
@@ -637,7 +640,11 @@ func (m *Module) step(t *Task) error {
 	case StageReverting:
 		return m.prepareRevert(t, p)
 	case StagePerson:
-		// waiting on the person's answer (onPersonMerge)
+		// waiting on the person's answer (onPersonMerge), or their close
+		if m.pollDue(t.ID) {
+			_, err := m.closedOnForge(t, p)
+			return err
+		}
 	case StageBlocked: // woke: an answer reopened its worker
 		t.Stage, t.Reason = StageWorking, ""
 		m.save(t, "the worker was woken with an answer")
@@ -904,7 +911,7 @@ func (m *Module) measured(project, sha string) bool {
 func (m *Module) dropCheckpoint(t *Task, p core.Project, why string) error {
 	t.Checkpoint, t.Stage, t.Reason = "", StageWorking, ""
 	m.save(t, "checkpoint not merged: "+core.Clip(why, 300))
-	if t.PR.Number != 0 { // a conflict found before its pull request opened
+	if t.PR.Number != 0 && t.NoBank != closedCheckpoint { // a conflict found before its pull request opened
 		m.comment(p.Repo, t.PR.Number, "Not merged as a checkpoint: "+core.Clip(why, 3000)+"\n\nThe worker keeps going; this pull request takes its later commits.")
 	}
 	return nil
@@ -1255,6 +1262,9 @@ func (m *Module) review(t *Task, p core.Project) error {
 	}
 	r, ok := m.C.Runs.Get(id)
 	if !ok {
+		if closed, err := m.closedOnForge(t, p); closed || err != nil { // once a round, not every tick
+			return err
+		}
 		main, err := m.C.Effects.Sync(p)
 		if err != nil {
 			return err
@@ -1391,6 +1401,10 @@ func (m *Module) followUp(t *Task, p core.Project) error {
 // bounded number of times, after which the work stops and says so. A revert
 // the Hive made has no worker, so it stops on the first findings.
 func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
+	// A worker's next push would open a new pull request over the person's close.
+	if closed, err := m.closedOnForge(t, p); closed || err != nil {
+		return err
+	}
 	max := m.C.WS.LoadConfig().ReviewRounds
 	if max <= 0 {
 		max = 3
@@ -1467,6 +1481,20 @@ func (m *Module) merge(t *Task, p core.Project) error {
 // closedOnForge ends a task whose pull request someone closed on the forge
 // without merging it. That is the person's call, so the lead can't bring the
 // task back by accident; a closed checkpoint is dropped as one left open is.
+const closedCheckpoint = "the person closed a checkpoint's pull request"
+
+// pollDue says whether a task waiting for the person is due a look at its
+// pull request: the first time, then every ten minutes.
+func (m *Module) pollDue(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if time.Since(m.prPolled[id]) < 10*time.Minute {
+		return false
+	}
+	m.prPolled[id] = time.Now()
+	return true
+}
+
 func (m *Module) closedOnForge(t *Task, p core.Project) (bool, error) {
 	if t.PR.Number == 0 {
 		return false, nil
@@ -1476,7 +1504,7 @@ func (m *Module) closedOnForge(t *Task, p core.Project) (bool, error) {
 		return false, err
 	}
 	if t.Checkpoint != "" {
-		t.NoBank = "the person closed a checkpoint's pull request"
+		t.NoBank = closedCheckpoint
 		return true, m.dropCheckpoint(t, p, fmt.Sprintf("PR #%d was closed on the forge; no more checkpoints, the rest lands when the worker finishes", pr.Number))
 	}
 	t.Stage, t.Reason, t.ByPerson = StageStopped, fmt.Sprintf("closed on the forge without merging (PR #%d)", pr.Number), true

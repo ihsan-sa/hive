@@ -269,3 +269,65 @@ func TestClosedPRStopsTesting(t *testing.T) {
 		t.Fatalf("tested %v, stage %q, by person %v", ok, task.Stage, task.ByPerson)
 	}
 }
+
+// A PR closed while its task is read or sent back stops the task there, so
+// the worker's next push can't open a new PR over the person's close.
+func TestClosedPRStopsReviewAndSendBack(t *testing.T) {
+	for _, step := range []string{"review", "sendBack"} {
+		m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+		forge.ClosePR(p.Repo, task.PR.Number, "not wanted")
+		var err error
+		if step == "review" {
+			task.Stage = StageReviewing
+			err = m.review(task, p)
+		} else {
+			err = m.sendBack(task, p, "fix it")
+		}
+		if err != nil || task.Stage != StageStopped || !task.ByPerson || task.Reviewer != "" || task.Round != 0 {
+			t.Fatalf("%s: stage %q, by person %v, reviewer %q, round %d, err %v", step, task.Stage, task.ByPerson, task.Reviewer, task.Round, err)
+		}
+	}
+}
+
+// A task waiting for the person sees its PR closed on its first look, then
+// looks again only after a while.
+func TestClosedPRStopsWaitingForPerson(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	task.Stage = StagePerson
+	if err := m.step(task); err != nil || task.Stage != StagePerson {
+		t.Fatalf("stage %q, err %v", task.Stage, err)
+	}
+	forge.ClosePR(p.Repo, task.PR.Number, "not wanted")
+	if err := m.step(task); err != nil || task.Stage != StagePerson {
+		t.Fatalf("looked again at once: stage %q, err %v", task.Stage, err)
+	}
+	m.prPolled[task.ID] = time.Now().Add(-11 * time.Minute)
+	if err := m.step(task); err != nil || task.Stage != StageStopped || !task.ByPerson {
+		t.Fatalf("stage %q, by person %v, err %v", task.Stage, task.ByPerson, err)
+	}
+}
+
+// A closed checkpoint PR is dropped without a comment saying it takes the
+// worker's later commits.
+func TestClosedCheckpointNotTold(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	task.Checkpoint = task.SHA
+	forge.ClosePR(p.Repo, task.PR.Number, "not wanted")
+	if err := m.merge(task, p); err != nil || task.Checkpoint != "" || task.Stage != StageWorking {
+		t.Fatalf("checkpoint %q, stage %q, err %v", task.Checkpoint, task.Stage, err)
+	}
+	for _, c := range forge.Comments(p.Repo, task.PR.Number) {
+		if strings.Contains(c, "later commits") {
+			t.Fatalf("told a closed PR it takes later commits: %q", c)
+		}
+	}
+}
