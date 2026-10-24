@@ -67,14 +67,25 @@ func (OpenClaude) CapsSpend()             {} // as Open: a vendor's prices aren'
 func (OpenClaude) Program() string        { return "claude" }
 func (OpenClaude) LoginCommand() []string { return nil }
 
+// Args are Claude's, but with no settings file loaded: the checkout's
+// .claude/settings.json is the agent's or the repo's to write, and a hook in
+// it would run before the key helper (and could read the key file), or its
+// env could send the key to another host. The flag's own settings pin the
+// helper, the endpoint and no hooks.
 func (OpenClaude) Args(t Turn) []string {
 	t.MaxBudgetUSD = 0 // Claude Code would price the vendor's tokens as Claude's
 	a := Claude{}.Args(t)
-	if t.KeyCommand != "" {
-		s, _ := json.Marshal(map[string]string{"apiKeyHelper": t.KeyCommand})
-		a = append(a, "--settings", string(s))
+	for i := range a[:len(a)-1] {
+		if a[i] == "--setting-sources" {
+			a[i+1] = ""
+		}
 	}
-	return a
+	set := map[string]any{"disableAllHooks": true, "env": map[string]string{"ANTHROPIC_BASE_URL": strings.TrimSuffix(t.Endpoint, "/")}}
+	if t.KeyCommand != "" {
+		set["apiKeyHelper"] = t.KeyCommand
+	}
+	s, _ := json.Marshal(set)
+	return append(a, "--settings", string(s))
 }
 
 func (OpenClaude) Env(t Turn) []string {

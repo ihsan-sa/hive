@@ -2,6 +2,7 @@ package core
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -191,7 +192,7 @@ func TestAnthropicModelTurn(t *testing.T) {
 	}
 	argv, env := strings.Join(spec.Argv, " "), strings.Join(spec.Env, "\n")
 	if spec.Argv[0] != "claude" || !strings.Contains(argv, "--model kimi-k2-0905-preview") ||
-		!strings.Contains(argv, `--settings {"apiKeyHelper":"\"hive\" open-key \"/hive/home/.hive-open/key\""}`) {
+		!strings.Contains(argv, `--settings {"apiKeyHelper":"\"hive\" open-key \"/hive/home/.hive-open/key\"","disableAllHooks":true`) {
 		t.Errorf("argv %q", spec.Argv)
 	}
 	for _, want := range []string{"ANTHROPIC_BASE_URL=https://api.moonshot.ai/anthropic", "ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2-0905-preview",
@@ -244,6 +245,55 @@ func TestAnthropicModelTurn(t *testing.T) {
 	cfg.Models["bad"] = OpenModel{Endpoint: "https://x.example/v1", Model: "m", API: "gemini"}
 	if err := cfg.Check(); err == nil || !strings.Contains(err.Error(), "openai, anthropic") {
 		t.Errorf("an unknown api: %v", err)
+	}
+}
+
+// The daemon writes a model's key into the run's home, which the agent can
+// write: a link an earlier turn planted at the key's folder or file is
+// replaced, never followed, so the key lands nowhere else and nothing
+// outside is deleted.
+func TestOpenKeyFollowsNoLink(t *testing.T) {
+	if os.PathSeparator != '/' {
+		t.Skip("links need privileges on Windows")
+	}
+	c, _ := testHive(t)
+	elsewhere := t.TempDir()
+	os.WriteFile(filepath.Join(elsewhere, "key"), []byte("theirs"), 0o644)
+	keyOf := func(id string) string { raw, _ := os.ReadFile(c.Runs.openKeyFile(id)); return string(raw) }
+
+	// The folder is a link.
+	home := c.WS.RunHome("l-dir")
+	os.MkdirAll(home, 0o755)
+	os.Symlink(elsewhere, filepath.Join(home, ".hive-open"))
+	if _, err := c.Runs.openKey("l-dir", []string{"HIVE_OPEN_KEY=sk-x"}, "/k"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(elsewhere, "key")); string(raw) != "theirs" || keyOf("l-dir") != "sk-x" {
+		t.Fatalf("outside %q, key %q", raw, keyOf("l-dir"))
+	}
+	if fi, _ := os.Lstat(filepath.Join(home, ".hive-open")); !fi.IsDir() {
+		t.Fatal("the key's folder is still a link")
+	}
+	c.Runs.dropOpenKey("l-dir")
+
+	// The file is a link.
+	home = c.WS.RunHome("l-file")
+	os.MkdirAll(filepath.Join(home, ".hive-open"), 0o700)
+	os.Symlink(filepath.Join(elsewhere, "key"), filepath.Join(home, ".hive-open", "key"))
+	if _, err := c.Runs.openKey("l-file", []string{"HIVE_OPEN_KEY=sk-y"}, "/k"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(elsewhere, "key")); string(raw) != "theirs" || keyOf("l-file") != "sk-y" {
+		t.Fatalf("outside %q, key %q", raw, keyOf("l-file"))
+	}
+
+	// Dropping a key through a folder planted as a link after the turn
+	// began deletes nothing outside.
+	os.RemoveAll(filepath.Join(home, ".hive-open"))
+	os.Symlink(elsewhere, filepath.Join(home, ".hive-open"))
+	c.Runs.dropOpenKey("l-file")
+	if !Exists(filepath.Join(elsewhere, "key")) {
+		t.Fatal("dropping the key deleted a file outside the run's home")
 	}
 }
 

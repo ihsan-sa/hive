@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -178,9 +179,16 @@ func TestOpenClaude(t *testing.T) {
 			t.Errorf("%T: %+v", h, evs)
 		}
 	}
-	a := strings.Join(OpenClaude{}.Args(Turn{SessionID: "s", Model: "deepseek-chat", MaxBudgetUSD: 2, KeyCommand: "hive open-key /k"}), " ")
-	if strings.Contains(a, "--max-budget-usd") || !strings.Contains(a, `--settings {"apiKeyHelper":"hive open-key /k"}`) || !strings.Contains(a, "--model deepseek-chat") {
+	args := OpenClaude{}.Args(Turn{SessionID: "s", Model: "deepseek-chat", MaxBudgetUSD: 2, KeyCommand: "hive open-key /k", Endpoint: "https://api.deepseek.com/anthropic/"})
+	a := strings.Join(args, " ")
+	if strings.Contains(a, "--max-budget-usd") || !strings.Contains(a, "--model deepseek-chat") ||
+		!strings.Contains(a, `--settings {"apiKeyHelper":"hive open-key /k","disableAllHooks":true,"env":{"ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic"}}`) {
 		t.Errorf("args %s", a)
+	}
+	// No settings file loads, so a hook or env in the checkout's
+	// .claude/settings.json can't run before the helper or redirect the key.
+	if i := slices.Index(args, "--setting-sources"); i < 0 || args[i+1] != "" || slices.Contains(args, "project") {
+		t.Errorf("setting sources %q", args)
 	}
 	if APIHosts(OpenClaude{}) != nil {
 		t.Error("a model on another vendor's endpoint reaches Anthropic's API")

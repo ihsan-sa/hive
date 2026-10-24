@@ -1511,18 +1511,48 @@ func (rs *Runs) openKey(id string, tok []string, keyIn string) ([]string, error)
 	if key == "" {
 		return out, nil
 	}
-	f := rs.openKeyFile(id)
-	if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+	if err := rs.openKeyDir(id); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(f, []byte(key), 0o600); err != nil {
+	// O_EXCL never follows a link planted at the file's own name.
+	f, err := os.OpenFile(rs.openKeyFile(id), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	_, err = f.Write([]byte(key))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		rs.dropOpenKey(id)
 		return nil, err
 	}
 	return append(out, "HIVE_OPEN_KEY_FILE="+keyIn), nil
 }
 
-// dropOpenKey deletes a key file a turn left, read or not.
-func (rs *Runs) dropOpenKey(id string) { os.Remove(rs.openKeyFile(id)) }
+// openKeyDir makes the key file's folder in the run's home, which the agent
+// can write: a link (or file) an earlier turn left in its place is removed,
+// never followed, so the daemon writes the key nowhere else.
+func (rs *Runs) openKeyDir(id string) error {
+	dir := filepath.Dir(rs.openKeyFile(id))
+	if fi, err := os.Lstat(dir); err == nil && !fi.IsDir() {
+		os.Remove(dir) // the link itself
+	}
+	os.Mkdir(dir, 0o700)
+	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("%s is not a real folder", dir)
+	}
+	return nil
+}
+
+// dropOpenKey deletes a key file a turn left, read or not, and only inside a
+// real folder: through a link it would delete another file.
+func (rs *Runs) dropOpenKey(id string) {
+	f := rs.openKeyFile(id)
+	if fi, err := os.Lstat(filepath.Dir(f)); err == nil && fi.IsDir() {
+		os.Remove(f) // a link at the file's name goes, not what it points to
+	}
+}
 
 // removeTree deletes a folder an agent may have locked, opening it first;
 // links are never followed.

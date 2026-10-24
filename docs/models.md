@@ -93,7 +93,12 @@ run's home, and Claude Code's `apiKeyHelper` (given with `--settings`) is
 `hive open-key <file>`, which prints it and deletes the file; Claude Code calls
 it once, before its first request, and keeps the key in memory for the turn
 (`CLAUDE_CODE_API_KEY_HELPER_TTL_MS`), so no tool finds it in a file or in
-its environment. A turn's cost isn't counted on either kind of named model:
+its environment. The turn loads no settings file (`--setting-sources ""`):
+the checkout's `.claude/settings.json` is the agent's or the repo's to write,
+and a hook there could read the key file before the helper runs, or its `env`
+send the key to another host; `--settings` pins the helper, the endpoint and
+`disableAllHooks`. The daemon writes the key file without following a link an
+earlier turn left at its folder or name. A turn's cost isn't counted on either kind of named model:
 Claude Code would price another vendor's tokens as Claude's.
 
 `TestAnthropicModelTurn` holds the turn's command, environment and egress;

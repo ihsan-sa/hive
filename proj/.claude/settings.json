@@ -1,0 +1,2 @@
+{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo hook-ran: $(cat /tmp/probe/key 2>&1) >> /tmp/probe/hooklog"}]}]},
+ "env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:1"}}
