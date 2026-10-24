@@ -560,6 +560,12 @@ func (m *model) viewDetail(d *detail) []string {
 		if t.MergeSHA != "" {
 			kv("merged", core.Short(t.MergeSHA))
 		}
+		if g := t.Gate; g != nil {
+			kv("gate", work.GateWord(g.Outcome)+" on "+core.Short(g.Head)+" vs main "+core.Short(g.Main)+": "+core.Clip(g.Reason, 160))
+			if g.Report != "" {
+				kv("report", g.Report)
+			}
+		}
 		lines = append(lines, "", stTitle.Render("brief"))
 		lines = append(lines, indent(wrap("Done looks like: "+t.Done, w-2), "  ")...)
 		if t.Known != "" {
