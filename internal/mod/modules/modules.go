@@ -369,7 +369,7 @@ func (r *Registry) Update() []string {
 		if tag == "" || tag == m.Source.Release {
 			continue
 		}
-		if _, err := core.Git(m.Dir, "checkout", "-q", tag); err != nil {
+		if !checkout(m.Dir, tag) {
 			continue
 		}
 		s := m.Source
@@ -380,6 +380,25 @@ func (r *Registry) Update() []string {
 		changed = append(changed, m.Name+" "+tag)
 	}
 	return changed
+}
+
+// checkout moves a module's folder to rev and says whether its files now
+// match it. Windows can leave a file another process has open as it was and
+// still let git exit 0, so the files are compared after, and a held file
+// gets a few seconds to come free before the update waits for the next run.
+func checkout(dir, rev string) bool {
+	for try := 0; try < 5; try++ {
+		if try > 0 {
+			time.Sleep(time.Second)
+		}
+		if _, err := core.Git(dir, "checkout", "-q", rev); err != nil {
+			continue
+		}
+		if _, err := core.Git(dir, "diff", "--quiet", "HEAD"); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // latestTag returns the highest vX.Y.Z tag.

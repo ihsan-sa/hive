@@ -113,4 +113,16 @@ func TestInstallMovesInWhole(t *testing.T) {
 	if _, ok := r.Get("gone"); ok {
 		t.Fatal("the failed install lists")
 	}
+	// A newer commit of the source reaches the files, not only the record.
+	os.WriteFile(filepath.Join(src, "ledger.md"), []byte("# ledger, newer\n"), 0o644)
+	if out, err := core.Git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "newer"); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if changed := r.Update(); len(changed) != 1 {
+		t.Fatalf("update changed %v", changed)
+	}
+	m, _ := r.Get("ledger")
+	if got, _ := os.ReadFile(filepath.Join(m.Dir, "ledger.md")); string(got) != "# ledger, newer\n" {
+		t.Fatalf("updated to %s, but the file reads %q", m.Source.Release, got)
+	}
 }
