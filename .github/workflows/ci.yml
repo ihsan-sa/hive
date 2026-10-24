@@ -18,6 +18,8 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  # A Hive following pre-releases reads this job as "test (<os>-latest)" and sandboxed-e2e as
+  # Linux's own (ownJobs and alsoOwn in internal/mod/release/prerelease.go); keep them unnamed.
   test:
     strategy:
       fail-fast: false # a release's run names every system's failures, not only the first
