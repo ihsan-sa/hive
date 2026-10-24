@@ -90,6 +90,7 @@ The program can be in any language. The daemon starts it from the module's folde
 - Files the sandbox can write are read with `SafeRead` (no symlinks, same-file check); the host decides what to kill/clean from its own records.
 - Nothing an agent requests runs outside the sandbox, except a script a warden or tribunal approved, run by the risk module in the daemon as exactly that digest-pinned script text (the pin covers the text, not files it calls); what is always the person's goes to the person (see [risk.md](risk.md)).
 - Every state change is a journal event; restart = replay + reconcile; issue/PR/run creation is idempotent.
+- One daemon per workspace: `hive daemon` takes an exclusive lock on `.hive/private/daemon.lock` (flock; LockFileEx on Windows) before it touches anything, and a second one exits at once naming the pid, start and starter written there (`daemon.AlreadyRunning`), whatever started it. An update's restart (`--wait-for`) waits up to 20s for the daemon it replaces to let go; a hand-off to systemd or to a renamed binary lets go first.
 
 ## Left alone on a shared machine
 
