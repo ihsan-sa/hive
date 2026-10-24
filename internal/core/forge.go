@@ -28,9 +28,6 @@ type PR struct {
 	HeadSHA   string `json:"head_sha"`
 	MergeSHA  string `json:"merge_sha,omitempty"`
 	Mergeable string `json:"mergeable,omitempty"` // MERGEABLE, CONFLICTING, UNKNOWN (still being worked out)
-	// MergeState is the forge's word on what else stands in the way; BEHIND
-	// means its rules want the branch brought up to date with its base.
-	MergeState string `json:"merge_state,omitempty"`
 }
 
 // Forge is where code, issues and pull requests live. GitHub through the gh
@@ -451,7 +448,6 @@ type ghPR struct {
 	State       string `json:"state"`
 	HeadRefOid  string `json:"headRefOid"`
 	Mergeable   string `json:"mergeable"`
-	MergeState  string `json:"mergeStateStatus"`
 	MergeCommit *struct {
 		Oid string `json:"oid"`
 	} `json:"mergeCommit"`
@@ -461,14 +457,14 @@ type ghPR struct {
 }
 
 func (p ghPR) pr() PR {
-	out := PR{Number: p.Number, URL: p.URL, State: p.State, HeadSHA: p.HeadRefOid, Mergeable: p.Mergeable, MergeState: p.MergeState}
+	out := PR{Number: p.Number, URL: p.URL, State: p.State, HeadSHA: p.HeadRefOid, Mergeable: p.Mergeable}
 	if p.MergeCommit != nil {
 		out.MergeSHA = p.MergeCommit.Oid
 	}
 	return out
 }
 
-const prFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,mergeCommit,headRepositoryOwner"
+const prFields = "number,url,state,headRefOid,mergeable,mergeCommit,headRepositoryOwner"
 
 func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
 	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", prFields}

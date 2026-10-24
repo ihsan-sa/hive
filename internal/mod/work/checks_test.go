@@ -127,9 +127,8 @@ func TestMergeWaitsForOutsideRead(t *testing.T) {
 	if _, err := m.RecordRead("#"+strconv.Itoa(task.PR.Number), core.Short(read), "perms", "land", "reads fine"); err != nil {
 		t.Fatal(err)
 	}
-	// Main moves without touching the change, and the forge wants the
-	// branch up to date: the read carries to the caught-up head.
-	f.UpToDate = true
+	// Main moves without touching the change: the read carries to the
+	// caught-up head.
 	pushMain(t, f, map[string]string{"other.txt": "z"})
 	mergeOnce(t, m, task, p)
 	if task.SHA == read || task.Stage != StageTesting {
@@ -142,10 +141,11 @@ func TestMergeWaitsForOutsideRead(t *testing.T) {
 	}
 }
 
-// A PR with its security read merges as it is when main moved and the forge
-// says it still merges cleanly: main isn't merged in, so the head stays the
-// one that was read and checked.
-func TestMergeAsItIsWhenClean(t *testing.T) {
+// When main moved, a PR with its security read is brought up to date and
+// tested again before it merges, never squashed onto a main it wasn't tested
+// with; its own diff is unchanged, so its reads carry and it merges at the
+// caught-up head without a new read.
+func TestCleanPRIsCaughtUpAndKeepsItsRead(t *testing.T) {
 	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
 	m.save(task, "")
 	reviewerLand(t, m, task, p, "r1")
@@ -156,18 +156,26 @@ func TestMergeAsItIsWhenClean(t *testing.T) {
 	}
 	pushMain(t, f, map[string]string{"other.txt": "z"})
 	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerged || task.SHA != read {
-		t.Fatalf("stage %q at %s (read %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(read), task.Reason)
+	if task.Stage != StageTesting || task.SHA == read {
+		t.Fatalf("not caught up and tested again: stage %q at %s", task.Stage, core.Short(task.SHA))
 	}
 	main, _ := m.C.Effects.Sync(p)
-	if ref := must(t, m.C.WS.Project(p.Name), "show", main+":other.txt"); ref != "z" {
-		t.Fatalf("main lost its own change: %q", ref)
+	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, task.SHA); err != nil {
+		t.Fatal("the head that will merge doesn't hold main")
+	}
+	toMerging(t, m, task, p)
+	if _, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); !ok {
+		t.Fatal("the caught-up head wasn't tested")
+	}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.Reviews != 0 {
+		t.Fatalf("stage %q, reason %q, reviews %d", task.Stage, task.Reason, task.Reviews)
 	}
 }
 
-// Main is brought in only when the PR actually conflicts with it; then the
-// worker resolves it, and the new head needs a new read.
-func TestCatchUpOnlyOnConflict(t *testing.T) {
+// A PR that conflicts with main goes back to the worker, and the head it
+// resolves to needs a new read.
+func TestConflictGoesBack(t *testing.T) {
 	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
 	m.save(task, "")
 	reviewerLand(t, m, task, p, "r1")
@@ -213,7 +221,6 @@ func TestCatchUpKeepsTheRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	toMerging(t, m, task, p)
-	f.UpToDate = true // the forge's rule brings main in
 	pushMain(t, f, map[string]string{"other.txt": "z"})
 	old := task.SHA
 	mergeOnce(t, m, task, p)
