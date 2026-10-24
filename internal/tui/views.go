@@ -562,8 +562,9 @@ func contains(l []string, s string) bool {
 // waitIndex finds the selected ask by its id, so a list that shifts under
 // the cursor (an ask answered elsewhere, a new one filed) keeps the selection
 // on the same ask. When that ask is gone the cursor stays at its position and
-// waitMoved is set, so Enter won't answer an ask the person didn't select;
-// unless the person answered it here (waitDone), when the next one is theirs.
+// waitMoved is set, so Enter won't answer an ask the person didn't select.
+// That holds after an answer here too: a quick second Enter would otherwise
+// approve whatever arrived under the cursor before the person saw it.
 func (m *model) waitIndex() int {
 	asks := m.st.Asks
 	for i, a := range asks {
@@ -573,8 +574,8 @@ func (m *model) waitIndex() int {
 		}
 	}
 	if m.waitID != "" {
-		m.optSel = 0 // a different ask now; don't carry the pick over
-		m.waitMoved = m.waitID != m.waitDone
+		m.optSel, m.waitMoved = 0, true // a different ask now; don't carry the pick over
+		m.waitNext = m.waitID == m.waitDone
 	}
 	m.waitSel = max(0, min(m.waitSel, len(asks)-1))
 	m.waitID = ""
@@ -618,13 +619,17 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if m.waitMoved { // the selected ask went; what's under the cursor wasn't chosen
 			m.waitMoved = false
-			m.setFlash("that ask was answered elsewhere; check the selection")
+			if m.waitNext { // the one that went was answered here
+				m.setFlash("answered; this is the next ask, enter again to answer it")
+			} else {
+				m.setFlash("that ask was answered elsewhere; check the selection")
+			}
 			return m, nil
 		}
 		if sel < len(asks) {
 			a := asks[sel]
 			opt := a.Options[min(m.optSel, len(a.Options)-1)]
-			m.optSel, m.waitDone = 0, a.ID // answered here: its leaving the list isn't a move
+			m.optSel, m.waitDone = 0, a.ID // answered here: its leaving says "next", not "elsewhere"
 			return m, m.post("/api/answer", map[string]string{"id": a.ID, "answer": opt}, "answered: "+opt)
 		}
 	}
@@ -663,17 +668,19 @@ func (m *model) viewWaiting() []string {
 		if i == at {
 			gut, sel = stTitle.Render("▌")+" ", len(lines)
 		}
-		from := core.Clip(a.From, 20)
+		// every field an agent wrote is shown through visible, so none can
+		// hide, reorder or overwrite part of what the person approves
+		from := core.Clip(visible(a.From), 20)
 		if a.Project != "" {
-			from = a.Project + " › " + from
+			from = visible(a.Project) + " › " + from
 		}
 		age := ago(a.Asked)
-		top := stTitle.Render(from) + "  " + stDim.Render(a.Kind)
+		top := stTitle.Render(from) + "  " + stDim.Render(visible(a.Kind))
 		ls := []string{pad(clip(top, w-len(age)-1), w-len(age)) + stDim.Render(age)}
-		ls = append(ls, wrap(a.Title, w)...)
+		ls = append(ls, wrap(visibleText(a.Title), w)...)
 		if i == at {
 			if a.Detail != "" {
-				for _, l := range wrap(a.Detail, w) {
+				for _, l := range wrap(visibleText(a.Detail), w) {
 					ls = append(ls, stDim.Render(l))
 				}
 			}
@@ -687,6 +694,7 @@ func (m *model) viewWaiting() []string {
 			}
 			var opts []string
 			for j, o := range a.Options {
+				o = visible(o)
 				if j == m.optSel && m.focus == 1 {
 					o = stSel.Render(o)
 				}
@@ -746,6 +754,9 @@ func diffView(diff string, w int) []string {
 }
 
 // visible spells out control characters (ESC as \x1b), and tabs as spaces.
+// Format characters, the bidi controls that reorder a line and the
+// zero-width ones that hide inside it, are spelled out too (U+202E as \u202e),
+// so what's on screen is every character the text holds, in its order.
 func visible(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -754,11 +765,22 @@ func visible(s string) string {
 			b.WriteString("    ")
 		case unicode.IsControl(r):
 			fmt.Fprintf(&b, "\\x%02x", r)
+		case unicode.Is(unicode.Cf, r), r == '\u115f', r == '\u1160', r == '\u3164', r == '\uffa0':
+			fmt.Fprintf(&b, "\\u%04x", r) // the Hangul fillers are blank letters, not Cf
 		default:
 			b.WriteRune(r)
 		}
 	}
 	return b.String()
+}
+
+// visibleText is visible line by line, keeping the line breaks.
+func visibleText(s string) string {
+	ls := strings.Split(s, "\n")
+	for i, l := range ls {
+		ls[i] = visible(l)
+	}
+	return strings.Join(ls, "\n")
 }
 
 // ---- modules ---------------------------------------------------------------

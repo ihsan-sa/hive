@@ -98,6 +98,7 @@ type model struct {
 	waitID    string // the selected ask; waitSel follows it as the list shifts
 	waitMoved bool   // the selected ask went and another slid under the cursor
 	waitDone  string // the ask last answered here
+	waitNext  bool   // the ask that went was waitDone, so the flash says "next"
 	fbSel     string // the feedback item selected, by id
 	modSel    int
 	kbDir     string // the knowledge base folder shown, relative to its root
