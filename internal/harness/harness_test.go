@@ -3,6 +3,7 @@ package harness
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseClaudeStream(t *testing.T) {
@@ -34,6 +35,27 @@ func TestParseClaudeStream(t *testing.T) {
 	lim := c.Parse([]byte(`{"type":"result","is_error":true,"result":"Claude AI usage limit reached|1793160000"}`))[0].Result
 	if !lim.Limited {
 		t.Fatal("usage limit not recognized")
+	}
+}
+
+// A rate_limit_event as Claude Code 2.x sent it on 2026-10-24 (ids scrubbed):
+// no top-level utilization, the number only under unifiedWindows.
+const realRateLimitEvent = `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1792820400,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"org_level_disabled","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.28,"resetsAt":1792820400,"status":"allowed"},"seven_day":{"utilization":0.36,"resetsAt":1792861200,"status":"allowed"}}},"uuid":"00000000-0000-0000-0000-000000000000","session_id":"00000000-0000-0000-0000-000000000000"}`
+
+func TestParseRealRateLimitEvent(t *testing.T) {
+	evs := Claude{}.Parse([]byte(realRateLimitEvent))
+	if len(evs) != 1 || evs[0].RateLimit == nil {
+		t.Fatalf("got %+v", evs)
+	}
+	rl := evs[0].RateLimit
+	if rl.Status != "allowed" || rl.Window != "five_hour" || rl.Utilization != 0.28 {
+		t.Fatalf("want allowed, five_hour at 0.28; got %+v", rl)
+	}
+	if !rl.ResetsAt.Equal(time.Date(2026, 10, 24, 5, 40, 0, 0, time.UTC)) {
+		t.Fatalf("resets at %v, want 05:40Z", rl.ResetsAt)
+	}
+	if rl.Windows["seven_day"].Utilization != 0.36 {
+		t.Fatalf("seven_day: %+v", rl.Windows)
 	}
 }
 
