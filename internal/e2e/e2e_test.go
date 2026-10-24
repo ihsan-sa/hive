@@ -81,6 +81,7 @@ type hive struct {
 	c     *api.Client
 	env   []string // added to the daemon's environment
 	exe   string   // the binary the daemon runs, when not bin
+	jobs  []func() // end what each daemon left running (Windows)
 }
 
 func start(t *testing.T, env ...string) *hive { return startWith(t, bin, nil, env...) }
@@ -111,8 +112,15 @@ func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string)
 		prep(&cfg)
 	}
 	h.ws.SaveConfig(cfg)
+	// Before the launch, so a daemon that is slow to answer is ended too.
+	t.Cleanup(func() {
+		h.quiesce()
+		h.kill()
+		for _, end := range h.jobs {
+			end()
+		}
+	})
 	h.launch()
-	t.Cleanup(func() { h.quiesce(); h.kill() })
 	return h
 }
 
@@ -147,6 +155,9 @@ func TestSandboxedAsksTheBinary(t *testing.T) {
 // quiesce stops live agents and waits for their processes to end, so the
 // test's folder can be removed (Windows won't delete open files).
 func (h *hive) quiesce() {
+	if h.c == nil {
+		return
+	}
 	st, err := h.c.State()
 	if err != nil {
 		return
@@ -184,16 +195,24 @@ func (h *hive) launch() {
 	}
 	log.Close() // the daemon has its own handle
 	h.cmd = cmd
+	if contain != nil {
+		h.jobs = append(h.jobs, contain(cmd.Process.Pid))
+	}
 	go cmd.Wait()
-	for i := 0; i < 150; i++ {
+	// A loaded Windows runner has taken over 30 seconds to start one.
+	began := time.Now()
+	for time.Since(began) < 2*time.Minute {
 		time.Sleep(200 * time.Millisecond)
 		if c, err := api.Dial(h.ws); err == nil && c.Info.PID == cmd.Process.Pid && c.Ping() {
 			h.c = c
+			if d := time.Since(began); d > 10*time.Second {
+				h.t.Logf("the daemon took %s to start", d.Round(time.Second))
+			}
 			return
 		}
 	}
 	raw, _ := os.ReadFile(filepath.Join(h.ws.Hive(), "daemon-test.log"))
-	h.t.Fatalf("daemon didn't start: %s", raw)
+	h.t.Fatalf("daemon didn't start in %s: %s", time.Since(began).Round(time.Second), raw)
 }
 
 // kill ends the daemon abruptly, as a crash would.
@@ -262,6 +281,16 @@ func task(st api.State, project, title string) (work.Task, bool) {
 		return *partial, true
 	}
 	return work.Task{}, false
+}
+
+// logLines puts a task's log one entry to a line, so a failure's annotation
+// on ci (which cuts each line short) still shows every step.
+func logLines(log []work.Entry) string {
+	var b strings.Builder
+	for _, e := range log {
+		fmt.Fprintf(&b, "\n  %s %s", e.At.Format("15:04:05.000"), core.Clip(strings.ReplaceAll(e.Text, "\n", " "), 200))
+	}
+	return b.String()
 }
 
 func taskStage(project, title, stage string) func(api.State) bool {
@@ -544,7 +573,7 @@ func TestCheckpointsBankEachGain(t *testing.T) {
 	st := h.wait("both checkpoints and the finish to merge", 8*minute, taskStage("bank", "raise the score", work.StageDone))
 	tk, _ := task(st, "bank", "raise the score")
 	if tk.Banked != 2 {
-		t.Fatalf("banked %d: %v", tk.Banked, tk.Log)
+		t.Fatalf("banked %d:%s", tk.Banked, logLines(tk.Log))
 	}
 	// main's score at each merge, and whether the worker had finished by then.
 	var merges []string
@@ -1333,6 +1362,10 @@ func TestToolInstall(t *testing.T) {
 
 // adopt makes this process adopt its daemons' orphans (Linux only).
 var adopt func()
+
+// contain puts a daemon, and what it starts from then on, in a group that
+// the returned func ends (Windows only).
+var contain func(pid int) func()
 
 // TestLiveWarden is the host probe for a real harness: run it with
 // HIVE_E2E_HARNESS=claude. A worker that needs a package outside its checkout
