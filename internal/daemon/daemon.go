@@ -68,6 +68,11 @@ func StartAfter(ws core.Workspace, waitFor int) (*api.Client, error) {
 	if c, ok := handedOver(ws); ok {
 		return c, nil
 	}
+	if waitFor == 0 {
+		if c, ok := booting(ws); ok {
+			return c, nil
+		}
+	}
 	if err := checkHarness(ws.LoadConfig()); err != nil {
 		return nil, err
 	}
@@ -75,13 +80,17 @@ func StartAfter(ws core.Workspace, waitFor int) (*api.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	env := append(os.Environ(), "HIVE_HOME="+ws.Root)
-	args := []string{exe, "daemon"}
-	if waitFor > 0 {
-		args = append(args, "--wait-for", strconv.Itoa(waitFor))
-	}
-	if _, err := proc.StartDetached(args, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err != nil {
-		return nil, err
+	// The Hive's own unit, when it serves this workspace, is what starts the
+	// daemon, so the unit and a command can't each start one.
+	if waitFor > 0 || !setup.StartUnit(ws.Root) {
+		env := append(os.Environ(), "HIVE_HOME="+ws.Root)
+		args := []string{exe, "daemon"}
+		if waitFor > 0 {
+			args = append(args, "--wait-for", strconv.Itoa(waitFor))
+		}
+		if _, err := proc.StartDetached(args, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err != nil {
+			return nil, err
+		}
 	}
 	for i := 0; i < 100; i++ {
 		time.Sleep(200 * time.Millisecond)
