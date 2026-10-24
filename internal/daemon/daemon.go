@@ -152,6 +152,10 @@ func Run(ws core.Workspace, waitFor int) error {
 		return err
 	}
 	defer a.Close()
+	// Before the token is published: an earlier version's turns can read private/.
+	if err := a.C.Runs.Migrate(); err != nil {
+		return err
+	}
 	if _, err := ws.ReadConfig(); err != nil {
 		fmt.Fprintln(os.Stderr, "settings:", err)
 	}
@@ -163,6 +167,9 @@ func Run(ws core.Workspace, waitFor int) error {
 	rand.Read(tok[:])
 	info := api.DaemonInfo{PID: os.Getpid(), Started: time.Now().UTC(), Port: ln.Addr().(*net.TCPAddr).Port, Token: hex.EncodeToString(tok[:]), Version: core.Version}
 	raw, _ := json.Marshal(info)
+	if err := os.MkdirAll(ws.Private(), 0o700); err != nil {
+		return err
+	}
 	if err := core.WriteFileAtomic(ws.DaemonFile(), raw, 0o600); err != nil {
 		return err
 	}

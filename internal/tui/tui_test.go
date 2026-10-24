@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,25 @@ func TestViewsFitTheScreen(t *testing.T) {
 	}
 }
 
+func TestSchedulesAreHours(t *testing.T) {
+	for stored, shown := range map[string]string{"every 12h": "12 hours", "every 90m": "every 90m", "daily 04:00": "daily 04:00", "off": "off"} {
+		if got := scheduleText(stored); got != shown {
+			t.Errorf("scheduleText(%q) = %q, want %q", stored, got, shown)
+		}
+	}
+	for typed, stored := range map[string]string{"12": "every 12h", "12 hours": "every 12h", "0": "off", "off": "off",
+		scheduleText("daily 04:00"): "daily 04:00", "daily 05:30": "daily 05:30", " every  90m ": "every 90m"} {
+		if got, err := scheduleHours(typed); err != nil || got != stored {
+			t.Errorf("scheduleHours(%q) = %q, %v, want %q", typed, got, err, stored)
+		}
+	}
+	for _, bad := range []string{"daily", "daily 25:00", "-3"} {
+		if _, err := scheduleHours(bad); err == nil {
+			t.Errorf("scheduleHours took %q", bad)
+		}
+	}
+}
+
 func TestPreviewDropsMarkers(t *testing.T) {
 	if got := preview("**Done** with `code`\n- and [a link](https://x.io)"); got != "Done with code • and a link (https://x.io)" {
 		t.Errorf("preview = %q", got)
@@ -141,6 +161,46 @@ func TestCodeInsideBoldOrItalic(t *testing.T) {
 		if got := ansi.Strip(inline(src)); got != want {
 			t.Errorf("inline(%q) = %q, want %q", src, got, want)
 		}
+	}
+}
+
+func TestModelIsAPickList(t *testing.T) {
+	if core.DefaultConfig().Model != "opus" || core.DefaultConfig().LeadModel != "opus" {
+		t.Fatal("Opus is not the default model")
+	}
+	c := core.DefaultConfig()
+	c.ModelChoices = []string{"sonnet", "my-model"}
+	ch := modelChoices(c)
+	if ch[0] != "opus" || ch[len(ch)-1] != custom || ch[len(ch)-2] != "my-model" || len(slices.Compact(slices.Sorted(slices.Values(ch)))) != len(ch) {
+		t.Fatalf("choices %v: want opus first, the config's own added once, custom last", ch)
+	}
+	m := testModel(80, 24)
+	m.section = secSettings
+	for i, s := range m.settings() {
+		if s.key == "lead_model" {
+			m.setSel = i
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.picking || m.settings()[m.setSel].choices[m.pickSel] != "opus" {
+		t.Fatalf("enter on the lead model should open its list at opus (picking %v, sel %d)", m.picking, m.pickSel)
+	}
+	if !strings.Contains(m.View(), custom) {
+		t.Fatal("the open list does not show the custom entry")
+	}
+	for _, k := range []tea.KeyMsg{{Type: tea.KeyRunes, Runes: []rune("q")}, {Type: tea.KeyTab}} {
+		if _, cmd := m.Update(k); m.picking || m.section != secSettings || cmd != nil {
+			t.Fatalf("%v should close the open list and stay in Settings", k)
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp}) // already at the top
+	for range len(m.settings()[m.setSel].choices) {
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.picking || !m.editing {
+		t.Fatal("custom should open a text field")
 	}
 }
 
@@ -299,13 +359,17 @@ func TestWheelScrollsDetail(t *testing.T) {
 	}
 }
 
-// A config.json the daemon couldn't read is named on the Settings page.
+// A config.json the daemon couldn't read is named on the Settings page, on a
+// screen too short to show every row, whichever row is selected.
 func TestSettingsShowsTheConfigLoadError(t *testing.T) {
-	m := testModel(100, 24)
+	m := testModel(100, 10)
 	m.section = secSettings
 	m.st.ConfigErr = "tribunal seat {\"model\": 5} isn't a model name"
-	if view := m.View(); !strings.Contains(view, "isn't a model name") {
-		t.Fatalf("no load error on Settings:\n%s", view)
+	for _, sel := range []int{0, len(m.settings()) - 1} {
+		m.setSel = sel
+		if view := m.View(); !strings.Contains(view, "isn't a model name") {
+			t.Fatalf("no load error on Settings with row %d selected:\n%s", sel, view)
+		}
 	}
 }
 

@@ -110,6 +110,14 @@ func Get(name string) (Harness, error) {
 	return nil, fmt.Errorf("unknown harness %q", name)
 }
 
+// Names are the harnesses a person can pick.
+var Names = []string{"claude", "fake"}
+
+// Models are the models a harness knows, the default first.
+func Models(harness string) []string {
+	return []string{"opus", "sonnet", "fable", "haiku"}
+}
+
 // Claude is Claude Code in print mode with stream-json output.
 type Claude struct{}
 

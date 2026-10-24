@@ -90,7 +90,9 @@ func TestIsolatedProjectRecordsMoveAndStayOutOfReach(t *testing.T) {
 	c.Close()
 	os.MkdirAll(filepath.Join(ws.Hive(), "risk", "r1"), 0o755)
 	os.MkdirAll(ws.KB(), 0o755)
-	os.WriteFile(filepath.Join(ws.KB(), "plan.md"), []byte("---\ntitle: plan\nproject: secret\n---\n\nthe plan\n"), 0o644)
+	// Built at run time: the Hive's own source, this file among it, is filed in the KB too.
+	plan := strings.ToUpper("the secret plan")
+	os.WriteFile(filepath.Join(ws.KB(), "plan.md"), []byte("---\ntitle: plan\nproject: secret\n---\n\n"+plan+"\n"), 0o644)
 	os.WriteFile(filepath.Join(ws.KB(), "open.md"), []byte("---\ntitle: open\nproject: open\n---\n\nopen\n"), 0o644)
 
 	a, err := New(ws, nil)
@@ -107,7 +109,7 @@ func TestIsolatedProjectRecordsMoveAndStayOutOfReach(t *testing.T) {
 	if out, _ := core.Git(ws.KB(), "ls-files"); strings.Contains(out, "plan.md") {
 		t.Error("git still tracks an isolated project's note")
 	}
-	if out, _ := core.Git(ws.KB(), "cat-file", "--batch-all-objects", "--batch"); strings.Contains(out, "the plan") || !strings.Contains(out, "open") {
+	if out, _ := core.Git(ws.KB(), "cat-file", "--batch-all-objects", "--batch"); strings.Contains(out, plan) || !strings.Contains(out, "open") {
 		t.Error("the knowledge base's git objects still hold an isolated project's note")
 	}
 	ops := a.C.Runs.Ops()

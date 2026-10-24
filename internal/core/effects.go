@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -372,9 +373,9 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	}
 	c.OK = code == 0
 	if kind == "score" && c.OK {
-		v, perr := lastNumber(out)
+		v, perr := scoreOf(out)
 		if perr != nil {
-			c.OK, c.Output = false, "score command did not end with a number: "+Clip(out, 500)
+			c.OK, c.Output = false, "score command printed no number at the end or on one line of its own: "+Clip(out, 500)
 		} else {
 			c.Score = &v
 		}
@@ -382,17 +383,27 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	return record()
 }
 
-func lastNumber(out string) (float64, error) {
+// scoreOf reads the score from a score command's output: the last word of
+// the last line ("score: 42"), or failing that the one line that is a number
+// alone, so a bench can print its result and then per-run detail. Two such
+// lines are ambiguous and give no score, and NaN or Inf is never a score.
+func scoreOf(out string) (float64, error) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		l := strings.TrimSpace(lines[i])
-		if l == "" {
-			continue
+	if f := strings.Fields(lines[len(lines)-1]); len(f) > 0 {
+		if v, err := strconv.ParseFloat(f[len(f)-1], 64); err == nil && !math.IsNaN(v) && !math.IsInf(v, 0) {
+			return v, nil
 		}
-		f := strings.Fields(l)
-		return strconv.ParseFloat(f[len(f)-1], 64)
 	}
-	return 0, errors.New("no output")
+	var alone []float64
+	for _, l := range lines {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(l), 64); err == nil {
+			alone = append(alone, v)
+		}
+	}
+	if len(alone) == 1 && !math.IsNaN(alone[0]) && !math.IsInf(alone[0], 0) {
+		return alone[0], nil
+	}
+	return 0, errors.New("no number")
 }
 
 // cleanCheckout clones the host clone fresh and checks out sha.

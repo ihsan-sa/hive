@@ -275,11 +275,11 @@ func TestControlCenterInTmux(t *testing.T) {
 	x.wait(10*time.Second, "3  tell me after")
 	x.keys("Enter")
 	x.wait(10*time.Second, "1  ask me before anything outside the project")
-	x.pick("model")
+	x.pick("worker model")
 	x.keys("Enter")
-	x.wait(10*time.Second, "› sonnet")
-	x.keys("C-u")
-	x.typ("opus")
+	x.wait(10*time.Second, "▸ opus")
+	x.keys("Down")
+	x.wait(10*time.Second, "▸ sonnet")
 	x.keys("Enter")
 	x.wait(10*time.Second, "saved")
 	x.pick("auto-update")
@@ -287,7 +287,7 @@ func TestControlCenterInTmux(t *testing.T) {
 	x.keys("Enter")
 	x.wait(10*time.Second, "auto-update changed")
 	x.shot("settings")
-	if got := ws.LoadConfig(); got.Autonomy != 1 || got.Model != "opus" || got.AutoUpdate == auto {
+	if got := ws.LoadConfig(); got.Autonomy != 1 || got.Model != "sonnet" || got.AutoUpdate == auto {
 		t.Fatalf("config.json: autonomy %d model %q auto-update %v (was %v)", got.Autonomy, got.Model, got.AutoUpdate, auto)
 	}
 

@@ -234,8 +234,34 @@ func (m *Module) baseline(p core.Project) {
 		m.record(ms)
 		return
 	}
+	m.noStart(p, ms)
+}
+
+// noStart records a start with no number and raises the alert. Once it has
+// failed more than once at one commit, the project's lead gets it as work,
+// once per commit: a retry alone won't fix a command whose output can't be read.
+func (m *Module) noStart(p core.Project, ms Measurement) {
 	m.record(ms)
+	note := strings.TrimPrefix(ms.Note, "start: ")
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "baseline", "project": p.Name, "text": "the start of " + p.Name + " has no number yet: " + core.Clip(note, 200) + "; measuring again in 10 minutes"})
+	n := 0
+	for _, x := range m.Scores(p.Name) {
+		if x.SHA == ms.SHA && !x.Kept && x.Task == "" {
+			n++
+		}
+	}
+	if n < 2 {
+		return
+	}
+	head := "Main of " + p.Name + " at " + core.Short(ms.SHA) + " has failed"
+	for _, x := range m.Chat.Messages("project:" + p.Name) {
+		if x.From == "improve" && strings.HasPrefix(x.Text, head) {
+			return // told already at this commit
+		}
+	}
+	m.Chat.EnsureProject(p.Name)
+	m.Chat.Post("project:"+p.Name, "", "improve", head+" to give a starting score more than once, so the keep-or-revert loop can't judge any change. "+
+		"Look at the output below, fix the test or score command in .hive/project.json (the score is the last word of the output, or the one line that is a number alone), and ask the person if you can't:\n"+core.Clip(note, 1500))
 }
 
 func (m *Module) measureLoop() {

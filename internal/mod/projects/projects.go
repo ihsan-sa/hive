@@ -12,6 +12,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/demo"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -33,8 +34,8 @@ type Module struct {
 func New(c *core.Core, ch *chat.Module, w *work.Module, im *improve.Module) *Module {
 	m := &Module{C: c, Chat: ch, Work: w, Improve: im, retry: map[string]time.Time{}, lastErr: map[string]string{}}
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","isolated"}`, Fn: m.opCreate})
-	ops.Register(core.Op{Name: "status", Help: `{} -> projects, work in flight, scores, what waits on the person`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.Status(r), nil }})
+	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","isolated","self"} (self: the Hive's own code, in the person's fork of it)`, Fn: m.opCreate})
+	ops.Register(core.Op{Name: "status", Help: `{} -> projects, work in flight, scores, what waits on the person, the live settings (models, autonomy, schedules)`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.Status(r), nil }})
 	return m
 }
 
@@ -54,6 +55,9 @@ func (m *Module) opCreate(r core.Run, args json.RawMessage) (any, error) {
 	if err := core.Bind(args, &s); err != nil {
 		return nil, err
 	}
+	if s.Self {
+		s.Repo = "" // an agent never picks where the Hive's own code lives
+	}
 	p, created, err := m.Create(s)
 	if err != nil {
 		return nil, err
@@ -71,6 +75,21 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 	f := m.C.Effects.Forge
 	if s.Demo && s.Name == "" {
 		s.Name = "textkit"
+	}
+	// The Hive's own project works in the person's fork, made on first need,
+	// or in the Hive's repository itself when it is theirs.
+	if s.Self && s.Repo == "" {
+		up := m.C.WS.LoadConfig().ReleaseRepo
+		user, err := f.User()
+		if err != nil {
+			return core.Project{}, false, fmt.Errorf("who are you on %s? %v", f.Name(), err)
+		}
+		if s.Repo = up; !strings.HasPrefix(up, user+"/") {
+			if s.Repo, err = f.Fork(up); err != nil {
+				return core.Project{}, false, fmt.Errorf("forking %s: %v", up, err)
+			}
+		}
+		s.Name = orDefault(s.Name, "hive")
 	}
 	if s.Repo == "" && s.Name == "" {
 		return core.Project{}, false, errors.New("give a name or a repository")
@@ -154,7 +173,7 @@ func (m *Module) finish(p core.Project) (core.Project, error) {
 		title := "Set up the Hive files for " + p.Name
 		if len(m.Work.List(func(t work.Task) bool { return t.Project == p.Name && t.Title == title })) == 0 {
 			m.Work.File(work.Brief{Project: p.Name, From: "hive", Title: title,
-				Done:  "`.hive/goals.md` holds the person's goals in their own words; `.hive/project.json` names the test command and, if one fits, a score (command, direction, tolerance); `.hive/lessons.md` exists.",
+				Done:  "`.hive/goals.md` holds the person's goals in their own words; `.hive/project.json` names the test command and, if one fits, a score (command, direction, tolerance; the command prints its number as the last word of its output or alone on exactly one line); `.hive/lessons.md` exists.",
 				Known: "The person's words about this project: " + orDefault(goals, p.Description)})
 		}
 	}
@@ -234,5 +253,28 @@ func (m *Module) Status(r core.Run) map[string]any {
 		}
 		waiting = append(waiting, fmt.Sprintf("%s (from %s; the person answers in Waiting, or %s approve|refuse %s)", a.Title, a.From, core.Cmd, a.ID))
 	}
-	return map[string]any{"projects": ps, "waiting_on_person": waiting}
+	return map[string]any{"projects": ps, "waiting_on_person": waiting, "config": View(m.C.WS.LoadConfig())}
+}
+
+// ConfigView is the part of the config every agent may read, so it can say
+// how the Hive is set; everything else (the forge, the floor, egress, other
+// projects' settings) stays hidden, including any field added later.
+type ConfigView struct {
+	Autonomy       int                 `json:"autonomy"`
+	Harness        string              `json:"harness"`
+	Model          string              `json:"model"`
+	LeadModel      string              `json:"lead_model"`
+	ReviewerModel  string              `json:"reviewer_model"`
+	TribunalModels []core.TribunalSeat `json:"tribunal_models"`
+	ModelChoices   []string            `json:"model_choices"`
+	Schedules      map[string]string   `json:"schedules"`
+	ReviewRounds   int                 `json:"review_rounds"`
+	PlateauMerges  int                 `json:"plateau_merges"`
+	AutoUpdate     bool                `json:"auto_update"`
+}
+
+// View is c as agents see it.
+func View(c core.Config) ConfigView {
+	return ConfigView{c.Autonomy, c.Harness, c.Model, c.LeadModel, c.ReviewerModel, c.TribunalModels,
+		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.AutoUpdate}
 }

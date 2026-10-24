@@ -96,7 +96,7 @@ func TestDropCodexHomeOpensLockedFolders(t *testing.T) {
 	}
 	ws := Workspace{Root: t.TempDir()}
 	rs := &Runs{ws: ws}
-	os.MkdirAll(ws.RunHost("r1"), 0o700)
+	os.MkdirAll(ws.RunPrivate("r1"), 0o700)
 	dir, err := rs.freshCodexHome(Run{RunSpec: RunSpec{ID: "r1"}})
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +141,13 @@ func TestCodexTokenFromACrashIsCleanedAtStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(dir, "auth.json"), []byte("token"), 0o600)
-	NewRuns(ws, j, nil, nil, func() []string { return nil })
+	restarted := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	if !Exists(filepath.Join(dir, "auth.json")) {
+		t.Fatal("NewRuns deleted the token; only daemon start (Migrate) should")
+	}
+	if err := restarted.Migrate(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("the token outlived a restart: %v", err)
 	}
@@ -151,7 +157,7 @@ func TestCodexTokenFromACrashIsCleanedAtStart(t *testing.T) {
 func TestCodexConfigEscapesDEL(t *testing.T) {
 	ws := Workspace{Root: t.TempDir()}
 	rs := &Runs{ws: ws}
-	os.MkdirAll(ws.RunHost("r1"), 0o700)
+	os.MkdirAll(ws.RunPrivate("r1"), 0o700)
 	dir, err := rs.freshCodexHome(Run{RunSpec: RunSpec{ID: "r1", System: "a\x7fb"}})
 	if err != nil {
 		t.Fatal(err)
@@ -179,13 +185,13 @@ func codexRun(t *testing.T) (*Runs, Workspace, string, Run, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.MkdirAll(ws.RunHost("r1"), 0o700)
+	os.MkdirAll(ws.RunPrivate("r1"), 0o700)
 	if _, err := rs.freshCodexHome(r); err != nil {
 		t.Fatal(err)
 	}
 	lock := func() {
-		os.Chmod(ws.RunHost("r1"), 0o500)
-		t.Cleanup(func() { os.Chmod(ws.RunHost("r1"), 0o700) })
+		os.Chmod(ws.RunPrivate("r1"), 0o500)
+		t.Cleanup(func() { os.Chmod(ws.RunPrivate("r1"), 0o700) })
 	}
 	return rs, ws, path, r, lock
 }
@@ -204,7 +210,7 @@ func TestUndeletableCodexTokenBlocksTheRun(t *testing.T) {
 	}
 }
 
-// The same at daemon start: a token a crash left in a folder that cannot be
+// The same at daemon start (Migrate): a token a crash left in a folder that cannot be
 // deleted is reported on the run, not dropped. A second start adds nothing, and
 // a finished run keeps its status.
 func TestUndeletableCodexTokenAtStartBlocksTheRun(t *testing.T) {
@@ -225,7 +231,11 @@ func TestUndeletableCodexTokenAtStartBlocksTheRun(t *testing.T) {
 		if open, err = OpenJournal(path); err != nil {
 			t.Fatal(err)
 		}
-		return NewRuns(ws, open, nil, nil, func() []string { return nil })
+		rs := NewRuns(ws, open, nil, nil, func() []string { return nil })
+		if err := rs.Migrate(); err != nil {
+			t.Fatal(err)
+		}
+		return rs
 	}
 	rs2 := start()
 	got, _ := rs2.Get("r1")
@@ -267,7 +277,11 @@ func TestUndeletableCodexTokenKeepsAnotherBlockReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { j.Close() })
-	got, _ := NewRuns(ws, j, nil, nil, func() []string { return nil }).Get("r1")
+	rs2 := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	if err := rs2.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := rs2.Get("r1")
 	if got.Status != StatusBlocked || got.Reason != "waiting on a person" || !strings.Contains(got.Progress, "Codex token could not be deleted") {
 		t.Fatalf("run is %q (%q), note %q", got.Status, got.Reason, got.Progress)
 	}
