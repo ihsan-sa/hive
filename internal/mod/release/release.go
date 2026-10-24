@@ -30,8 +30,10 @@ type Module struct {
 	// Restart is called after a new binary is in place (the daemon re-execs).
 	Restart func()
 	locks   sync.Map // project -> *sync.Mutex held while a release is decided
-	// Busy reports work mid-merge, which an automatic update waits out.
-	Busy func() bool
+	// PauseMerges stops new merges and waits up to the given time for the
+	// running ones to end (the work module), so an update never restarts
+	// mid-merge; ok false says one still runs, and resume lets merges go on.
+	PauseMerges func(wait time.Duration) (resume func(), ok bool)
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
 	// said holds project@tag for each pre-release whose wait or failed
@@ -47,6 +49,11 @@ type Module struct {
 	followed time.Time
 	red      map[string]verdict
 	waits    []string
+	// pre are the pre-releases newer than this one the last look read;
+	// newest and behind are what Lag reports, from the last Check.
+	pre    []string
+	newest string
+	behind int
 	// updating is held while AutoUpdate runs, from its schedule or follow.
 	updating sync.Mutex
 }
@@ -164,8 +171,12 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 			}
 		}
 	}
+	out := "" // the upstream's latest release, which may lack a binary here yet
 	for i, r := range repos {
 		t, e := latest(r)
+		if i == 0 && e == nil {
+			out = t
+		}
 		if e == nil {
 			e = hasBinary(r, t)
 		}
@@ -179,6 +190,9 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 			repo, tag = r, t
 		}
 	}
+	m.pmu.Lock()
+	m.pre = nil
+	m.pmu.Unlock()
 	if m.Channel() == Prerelease {
 		after := core.Version
 		if modules.Newer(after, tag) {
@@ -200,7 +214,36 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	if tag != "" {
 		err = nil
 	}
+	m.lag(out, tag)
 	return repo, tag, tag != "" && modules.Newer(core.Version, tag), err
+}
+
+// lag records the newest release out and how many releases this one is
+// behind it: every pre-release the last look read, when following them, the
+// latest release and the one Check took.
+func (m *Module) lag(out ...string) {
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	seen := map[string]bool{}
+	m.newest, m.behind = core.Version, 0
+	for _, t := range append(slices.Clone(m.pre), out...) {
+		if t == "" || seen[t] || !modules.Newer(core.Version, t) {
+			continue
+		}
+		seen[t] = true
+		m.behind++
+		if modules.Newer(m.newest, t) {
+			m.newest = t
+		}
+	}
+}
+
+// Lag is the newest release out, as the last look found, and how many
+// releases newer than this one there are; "" before any look.
+func (m *Module) Lag() (newest string, behind int) {
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	return m.newest, m.behind
 }
 
 // hasBinary errs unless the release's checksums are signed as this build
@@ -268,6 +311,22 @@ func (m *Module) Update(tag string) (string, error) {
 			return "", fmt.Errorf("%s: checksum mismatch; not installing", name)
 		}
 	}
+	// No merge starts from here to the restart, and any running ends first;
+	// tasks still in merging carry across and go on after it.
+	resume := func() {}
+	if m.PauseMerges != nil {
+		var ok bool
+		if resume, ok = m.PauseMerges(mergeWait); !ok {
+			resume()
+			return "waiting: a merge has run past " + mergeWait.String() + "; " + tag + " installs at the next look", nil
+		}
+	}
+	installed := false
+	defer func() {
+		if !installed {
+			resume()
+		}
+	}()
 	// An update to tag from here whose restart never came left its binaries
 	// in place; what it added has no .old and is still the update's to remove.
 	var before []string
@@ -318,6 +377,10 @@ func (m *Module) Update(tag string) (string, error) {
 	notes := Notes(repo, core.Version, tag)
 	unsigned := PublicKey == ""
 	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned})
+	installed = true
+	// Merges stay paused until the restart; one that never comes (a
+	// supervisor that doesn't restart, a failed start) lets them go on.
+	time.AfterFunc(restartGrace, resume)
 	if m.Restart != nil {
 		go func() { time.Sleep(time.Second); m.Restart() }()
 	}
@@ -352,8 +415,16 @@ func (m *Module) pin(cfg core.Config, tag string, on bool) error {
 	return m.C.WS.SaveConfig(cfg)
 }
 
-// AutoUpdate is the scheduled job: update when allowed and nothing is
-// mid-merge. A pinned Hive that was updating itself stays put and says once
+// mergeWait is the most an update waits for the merges already running.
+var mergeWait = 2 * time.Minute
+
+// restartGrace is how long merges stay paused after an update installs,
+// waiting for its restart.
+var restartGrace = 30 * time.Minute
+
+// AutoUpdate is the scheduled job: update when allowed, pausing merges for
+// the swap rather than waiting for a Hive with none in merging, which a busy
+// one never is. A pinned Hive that was updating itself stays put and says once
 // when a newer release is out. Following pre-releases, it also runs from
 // follow, every few minutes.
 func (m *Module) AutoUpdate() (string, error) {
@@ -376,9 +447,6 @@ func (m *Module) AutoUpdate() (string, error) {
 	}
 	if !cfg.AutoUpdate || cfg.ReleasePin != "" {
 		return "auto-update is off", nil
-	}
-	if m.Busy != nil && m.Busy() {
-		return "waiting: work is mid-merge", nil
 	}
 	msg, err := m.Update("")
 	m.pmu.Lock()

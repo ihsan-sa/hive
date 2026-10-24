@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -277,21 +278,44 @@ func TestPinHoldsUntilCleared(t *testing.T) {
 	}
 }
 
-// An automatic update waits while work is mid-merge, then goes ahead.
+// An automatic update pauses merges for the swap: one still running past the
+// wait leaves the binary alone and lets merges go on; once the running ones
+// end it installs and keeps merges paused for the restart.
 func TestAutoUpdateWaitsOutAMerge(t *testing.T) {
 	serve(t, "v9.9.9", build("new"), false)
 	m, exe := releaseAt(t, "v0.1.2", "me/hive")
-	merging := true
-	m.Busy = func() bool { return merging }
-	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "mid-merge") {
-		t.Fatalf("updated mid-merge: %q", msg)
+	running, paused := true, false
+	var waited time.Duration
+	m.PauseMerges = func(wait time.Duration) (func(), bool) {
+		waited, paused = wait, true
+		return func() { paused = false }, !running
 	}
-	merging = false
-	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") {
-		t.Fatalf("after the merge: %q, %v", msg, err)
+	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "a merge has run past") || paused || waited != mergeWait {
+		t.Fatalf("updated mid-merge: %q, merges paused %v, waited %v", msg, paused, waited)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "old" {
+		t.Fatalf("binary %q while a merge ran", raw)
+	}
+	running = false
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") || !paused {
+		t.Fatalf("after the merge: %q, %v, merges paused for the restart %v", msg, err, paused)
 	}
 	if raw, _ := os.ReadFile(exe); string(raw) != "new" {
 		t.Fatalf("binary %q", raw)
+	}
+}
+
+// Nothing newer pauses no merge: a Hive looking every few minutes doesn't
+// stall its merges to find it is current.
+func TestCurrentHiveDoesNotPauseMerges(t *testing.T) {
+	serve(t, "v0.1.2", build("new"), false)
+	m, _ := releaseAt(t, "v0.1.2", "me/hive")
+	m.PauseMerges = func(time.Duration) (func(), bool) {
+		t.Fatal("paused merges with nothing to install")
+		return nil, false
+	}
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "already on") {
+		t.Fatalf("%q, %v", msg, err)
 	}
 }
 
