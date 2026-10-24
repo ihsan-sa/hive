@@ -13,14 +13,14 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
-// countSB counts the turns it starts, each as the process agent.
-type countSB struct {
+// claimSB counts the turns it starts, each as the process agent.
+type claimSB struct {
 	sandbox.Bare
 	n     *atomic.Int32
 	agent proc.Handle
 }
 
-func (s countSB) Start(sandbox.Spec) (sandbox.Proc, error) { s.n.Add(1); return s.agent, nil }
+func (s claimSB) Start(sandbox.Spec) (sandbox.Proc, error) { s.n.Add(1); return s.agent, nil }
 
 // sleeper is a live process that isn't this one, standing in for another
 // daemon or a turn's agent.
@@ -43,7 +43,7 @@ func TestTwoDaemonsStartATurnOnce(t *testing.T) {
 	}
 	a, forge := testHive(t)
 	var n atomic.Int32
-	a.Runs.sandbox = func() (sandbox.Sandbox, error) { return countSB{n: &n}, nil }
+	a.Runs.sandbox = func() (sandbox.Sandbox, error) { return claimSB{n: &n}, nil }
 	var runs []Run
 	for i := range 20 {
 		r, err := a.Runs.Start(RunSpec{ID: fmt.Sprintf("w%d", i), Role: "worker", Harness: "fake", Checkout: t.TempDir()})
