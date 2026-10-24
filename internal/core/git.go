@@ -19,12 +19,17 @@ func Git(dir string, args ...string) (string, error) {
 
 // GitT is Git with a timeout.
 func GitT(timeout time.Duration, dir string, args ...string) (string, error) {
+	return GitEnvT(timeout, dir, nil, args...)
+}
+
+// GitEnvT is GitT with extra environment, such as the GH_TOKEN for a repo's owner.
+func GitEnvT(timeout time.Duration, dir string, env []string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	full := append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "transfer.fsckObjects=true", "-c", "core.autocrlf=false", "-c", "user.name=Hive", "-c", "user.email=hive@localhost"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "LC_ALL=C")
+	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "LC_ALL=C"), env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
@@ -36,11 +41,16 @@ func GitT(timeout time.Duration, dir string, args ...string) (string, error) {
 
 // RunCmd runs a host program with a timeout and returns trimmed stdout.
 func RunCmd(timeout time.Duration, dir string, name string, args ...string) (string, error) {
+	return RunCmdEnv(timeout, dir, nil, name, args...)
+}
+
+// RunCmdEnv is RunCmd with extra environment.
+func RunCmdEnv(timeout time.Duration, dir string, env []string, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "NO_COLOR=1", "GH_NO_UPDATE_NOTIFIER=1")
+	cmd.Env = append(append(os.Environ(), "GH_PROMPT_DISABLED=1", "NO_COLOR=1", "GH_NO_UPDATE_NOTIFIER=1"), env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()

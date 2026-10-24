@@ -167,7 +167,7 @@ func (e *Effects) Sync(p Project) (string, error) {
 	}
 	defer e.lock(p.Name)()
 	dir := e.ws.Project(p.Name)
-	if _, err := GitT(5*time.Minute, dir, "fetch", "-q", "--prune", "origin"); err != nil {
+	if _, err := GitEnvT(5*time.Minute, dir, ghEnv(p.Repo), "fetch", "-q", "--prune", "origin"); err != nil {
 		return "", err
 	}
 	sha, err := Git(dir, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+p.Branch)
@@ -331,7 +331,7 @@ func (e *Effects) Push(p Project, branch, sha string) error {
 		return fmt.Errorf("the effects process only pushes hive/* branches, not %q", branch)
 	}
 	defer e.lock(p.Name)()
-	if _, err := GitT(5*time.Minute, e.ws.Project(p.Name), "push", "-q", "-f", "origin", sha+":refs/heads/"+branch); err != nil {
+	if _, err := GitEnvT(5*time.Minute, e.ws.Project(p.Name), ghEnv(p.Repo), "push", "-q", "-f", "origin", sha+":refs/heads/"+branch); err != nil {
 		return err
 	}
 	e.j.MustAppend("effect.pushed", map[string]string{"project": p.Name, "branch": branch, "sha": sha})
@@ -797,10 +797,10 @@ func (e *Effects) PushInitial(p Project, sha string) error {
 	}
 	defer e.lock(p.Name)()
 	dir := e.ws.Project(p.Name)
-	if out, _ := Git(dir, "ls-remote", "origin", "refs/heads/"+p.Branch); out != "" {
+	if out, _ := GitEnvT(2*time.Minute, dir, ghEnv(p.Repo), "ls-remote", "origin", "refs/heads/"+p.Branch); out != "" {
 		return errors.New("repository is not empty; changes go through a pull request")
 	}
-	_, err := Git(dir, "push", "-q", "origin", sha+":refs/heads/"+p.Branch)
+	_, err := GitEnvT(5*time.Minute, dir, ghEnv(p.Repo), "push", "-q", "origin", sha+":refs/heads/"+p.Branch)
 	return err
 }
 
