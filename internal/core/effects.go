@@ -967,7 +967,8 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	}
 	gate := p.Self && (!docsOnly || slices.ContainsFunc(c.Files, func(f string) bool { return !under(f, SelfUnread) || under(f, SelfSpec) }))
 	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Security) == 0 && !p.Self
-	c.Unread = len(c.Files) > 0 && !binary && !gate && c.Lines <= cfg.UnreadMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Root) == 0 && len(c.Security) == 0
+	always := slices.ContainsFunc(c.Files, func(f string) bool { return under(f, AlwaysRead) })
+	c.Unread = len(c.Files) > 0 && !binary && !gate && !always && c.Lines <= cfg.UnreadMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Root) == 0 && len(c.Security) == 0
 	c.TwoReads = len(c.High) > 0 || len(c.Root) > 0 || c.Lines > cfg.ReadTwoMax
 	// Binary and full-index, so a binary file (or a script git takes for one,
 	// with a NUL byte in it) carries its content into the diff and DiffID, and

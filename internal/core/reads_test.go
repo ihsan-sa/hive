@@ -47,6 +47,10 @@ func TestUnreadChange(t *testing.T) {
 		{"internal/sandbox/linux.go", "package sandbox\n", self, false},
 		{".hive/goals.md", "# Goals\n\nmore\n", p, false},
 		{"blob.bin", "a\x00b", p, false},
+		// What defines the security bar and the checks is read in any project.
+		{"tests/LANDING-security.toml", "paths = []\n", p, false},
+		{".github/workflows/ci.yml", "on: push\n", p, false},
+		{".hive/lessons.md", "# lessons\n", p, false},
 		// In a self project the code and prompts that define the gate are
 		// never unread, so a small edit can't move its own bar unread.
 		{"internal/core/projects.go", "package core\n", self, false},

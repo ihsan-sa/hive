@@ -116,9 +116,16 @@ var (
 // list names it, so no small edit moves its own bar unread.
 var SelfUnread = []string{"docs/"}
 
-// SelfSpec are the owner's spec under docs/: in a self project they keep a
-// reader like docs/REVIEW.md and .hive/goals.md, outside SelfUnread.
+// SelfSpec are the owner's spec under docs/: in a self project they are taken
+// out of SelfUnread, so they keep a reader. (docs/REVIEW.md and .hive/goals.md
+// stay read by Classify's protected list, not by this one.)
 var SelfSpec = []string{"docs/spec.md", "docs/the-hive-essay.md"}
+
+// AlwaysRead are paths that are never unread in any project: the security
+// list itself (its paths, root and required_checks), the CI configuration that
+// defines the forge's checks the unread path relies on, and the Hive's own
+// files in the project. An edit to one would move the bar it is judged by.
+var AlwaysRead = []string{SecurityList, ".github/", ".gitlab-ci.yml", ".circleci/", ".hive/"}
 
 // Sampled picks one task in n by its id for a read after an unread merge, so
 // the pick survives a restart and needs no counter; none at n <= 0.
