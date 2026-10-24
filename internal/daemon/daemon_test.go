@@ -195,6 +195,7 @@ func TestStateCarriesADiffPreview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { j.Close() }) // Windows can't remove the temp folder while it's open
 	pad := "+" + strings.Repeat("x", 99) + "\n"
 	diff := strings.Repeat(pad, (1<<20)/len(pad)+1) + "+the last line\n"
 	person := core.NewPerson(j)

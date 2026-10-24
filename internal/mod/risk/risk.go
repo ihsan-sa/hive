@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -328,10 +327,16 @@ func (m *Module) toPerson(req *Request, why string) {
 }
 
 // sudoRe finds sudo in a script; sudoOK says whether it works without a
-// password here. A test swaps sudoOK.
+// password here, asked through the shell a step runs in, so it finds the
+// sudo a script would (on Windows, Git's sh runs a sudo script Go can't
+// start). A test swaps sudoOK.
 var (
 	sudoRe = regexp.MustCompile(`\bsudo\b`)
-	sudoOK = func() bool { return exec.Command("sudo", "-n", "true").Run() == nil }
+	sudoOK = func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return shell(ctx, "sudo -n true").Run() == nil
+	}
 )
 
 // sudoPassword is what sudo prints when it wants a password it can't read.

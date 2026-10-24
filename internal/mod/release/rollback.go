@@ -26,7 +26,10 @@ type pending struct {
 	From, To string
 	// Paths are the binaries the update replaced; each <path>.old is what
 	// it replaced.
-	Paths  []string
+	Paths []string
+	// Added are binaries the update put where none was (the Linux one beside
+	// a Windows install that had none); a rollback removes them.
+	Added  []string `json:",omitempty"`
 	Starts int
 	// RolledBack says why, once the old binaries are back.
 	RolledBack string `json:",omitempty"`
@@ -70,7 +73,7 @@ func Boot(ws core.Workspace) string {
 		writePending(ws, p)
 		return ""
 	}
-	if err := rollBack(p.Paths); err != nil {
+	if err := rollBack(p.Paths, p.Added); err != nil {
 		fmt.Fprintf(os.Stderr, "hive: %s failed to start %d times, and rolling back to %s failed: %v\n", p.To, failedStarts, p.From, err)
 		writePending(ws, p)
 		return ""
@@ -117,8 +120,8 @@ func (m *Module) rolledBack(tag string) (back bool) {
 
 // rollBack puts each path's .old back in its place, keeping the failed
 // binary as .failed (a running Windows executable can be renamed, not
-// removed).
-func rollBack(paths []string) error {
+// removed), and removes what the update added.
+func rollBack(paths, added []string) error {
 	for _, p := range paths {
 		if !core.Exists(p + ".old") {
 			return errors.New(p + ".old is gone")
@@ -133,6 +136,9 @@ func rollBack(paths []string) error {
 			os.Rename(p+".failed", p)
 			return err
 		}
+	}
+	for _, p := range added {
+		os.Remove(p)
 	}
 	return nil
 }

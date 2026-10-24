@@ -77,7 +77,8 @@ func TestFlakeIsKeptAndBreakIsReverted(t *testing.T) {
 	script := func(name string, once bool) string {
 		gate := "exit 1"
 		if once {
-			gate = "[ -f " + filepath.Join(dir, "ran") + " ] && exit 0; touch " + filepath.Join(dir, "ran") + "; exit 1"
+			ran := "'" + filepath.ToSlash(filepath.Join(dir, "ran")) + "'" // a Windows path, quoted, reads in sh too
+			gate = "[ -f " + ran + " ] && exit 0; touch " + ran + "; exit 1"
 		}
 		return "printf -- '--- FAIL: " + name + " (0.01s)\\n    race_test.go:9: late\\nFAIL\\nFAIL\\texample.com/p/race\\t0.1s\\n'\n" + gate + "\n"
 	}

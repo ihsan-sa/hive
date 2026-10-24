@@ -73,7 +73,7 @@ func flakeAlerts(m *Module) string {
 // alert, and the merge is kept.
 func TestFlakeAfterMergeIsNotReverted(t *testing.T) {
 	m, commit, merge := tested(t)
-	once := filepath.Join(t.TempDir(), "once")
+	once := "'" + filepath.ToSlash(filepath.Join(t.TempDir(), "once")) + "'" // a Windows path, quoted, reads in sh too
 	sha := commit(map[string]string{"t.sh": "[ -e " + once + " ] && exit 0\ntouch " + once + "\necho '--- FAIL: TestJoin (0.09s)'\nexit 1\n"})
 	if ms := merge(sha); !ms.Kept || !strings.Contains(ms.Note, "flaky") || !strings.Contains(ms.Note, "TestJoin") {
 		t.Fatalf("a flake was blamed on the merge: %+v", ms)
