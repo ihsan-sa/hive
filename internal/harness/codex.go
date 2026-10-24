@@ -77,6 +77,11 @@ type codexLine struct {
 		Text    string `json:"text"`
 		Command string `json:"command"`
 	} `json:"item"`
+	Usage *struct {
+		Input  int64 `json:"input_tokens"`
+		Cached int64 `json:"cached_input_tokens"`
+		Output int64 `json:"output_tokens"`
+	} `json:"usage"`
 }
 
 // Parse maps Codex's JSONL events. turn.completed carries no text; the run
@@ -102,7 +107,11 @@ func (Codex) Parse(line []byte) []Event {
 			return []Event{{Kind: "tool", Tool: "shell", Text: Clip(l.Item.Command, 160)}}
 		}
 	case "turn.completed":
-		return []Event{{Kind: "result", Result: &Result{Subtype: "success"}}}
+		r := &Result{Subtype: "success"}
+		if u := l.Usage; u != nil { // Codex's input counts the cached part too
+			r.Tokens = &Tokens{Input: max(u.Input-u.Cached, 0), Output: u.Output, CacheRead: u.Cached}
+		}
+		return []Event{{Kind: "result", Result: r}}
 	case "turn.failed":
 		msg := ""
 		if l.Error != nil {

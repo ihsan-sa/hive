@@ -41,12 +41,14 @@ func TestMeter(t *testing.T) {
 			go func() { io.Copy(c, c); c.Close() }()
 		}
 	}()
-	sockDir, err := os.MkdirTemp(shortTmp(), "gate-meter-") // short: a socket path has a length limit
+	// Not t.TempDir: under a gate's side TMPDIR is deep in the run's folder,
+	// and a unix socket's path must fit in 108 bytes.
+	dir, err := os.MkdirTemp(shortTmp(), "gate-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(sockDir)
-	m, err := StartMeter(filepath.Join(sockDir, "m.sock"))
+	defer os.RemoveAll(dir)
+	m, err := StartMeter(filepath.Join(dir, "m.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
