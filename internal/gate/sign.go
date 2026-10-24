@@ -63,8 +63,8 @@ func (r *Report) sign() {
 	}
 }
 
-// verify says the report is one this machine's gate wrote, unchanged.
-func (r Report) verify() error {
+// Verify says the report is one this machine's gate wrote, unchanged.
+func (r Report) Verify() error {
 	key, err := gateKey(false)
 	if err != nil {
 		return err

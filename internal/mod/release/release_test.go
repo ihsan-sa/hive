@@ -397,12 +397,31 @@ func selfHive(t *testing.T) (*Module, *notes, func(int, string, string, ...strin
 	m.C.Effects.Forge = n
 	m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true})
 	merged := func(pr int, sha, mergeSHA string, root ...string) {
-		m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": pr, "sha": sha, "merge_sha": mergeSHA, "root": root})
+		m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": pr, "sha": sha, "merge_sha": mergeSHA, "root": root, "gate": "kept"})
 	}
 	land := func(sha, run string) {
 		m.C.J.MustAppend("effect.verdict", core.Verdict{Project: "hive", SHA: sha, Run: run, Verdict: "land"})
 	}
 	return m, n, merged, land
+}
+
+// A self release is cut only from merges the recursive gate kept: one merged
+// without its keep (from before the gate, or by hand) waits for the person.
+func TestReleaseWaitsOnAnUngatedMerge(t *testing.T) {
+	m, n, _, land := selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 1, "sha": "a1", "merge_sha": "m1"})
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	if len(n.got) != 0 {
+		t.Fatalf("released a merge the gate never kept: %v", n.got)
+	}
+	var asked bool
+	for _, a := range m.C.Person.Open() {
+		asked = asked || a.Kind == "release" && strings.Contains(a.Title, "#1 at a1 merged without the recursive gate's keep")
+	}
+	if !asked {
+		t.Fatalf("the person wasn't asked about the ungated merge: %+v", m.C.Person.Open())
+	}
 }
 
 // A self project's release names what each merged head's reader read, waits

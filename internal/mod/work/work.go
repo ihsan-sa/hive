@@ -118,10 +118,12 @@ type Task struct {
 	Noted      string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
 	NotedDiff  string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
 	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
-	Gate    *core.GateResult `json:"gate,omitempty"`
-	Log     []Entry          `json:"log,omitempty"`
-	Created time.Time        `json:"created"`
-	Updated time.Time        `json:"updated"`
+	Gate *core.GateResult `json:"gate,omitempty"`
+	// GateAsked is the head@main a stuck revert last asked the person about.
+	GateAsked string    `json:"gate_asked,omitempty"`
+	Log       []Entry   `json:"log,omitempty"`
+	Created   time.Time `json:"created"`
+	Updated   time.Time `json:"updated"`
 }
 
 // A Bank is a merged checkpoint: its pull request and the merge on main.
@@ -258,6 +260,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "landed", Roles: []string{"lead"}, Help: `{"task","why","merge"} -> ends a task in any stage as merged when its PR is merged on the forge or its commits are on main (merge names the main commit when they were squashed there), so the briefs waiting on it start; refused while its PR is open and its work isn't on main`, Fn: m.opLanded})
 	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Roles: []string{"lead"}, Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (follow-ups and reverts included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs still pass their gate and wait ready`, Fn: m.opHold})
 	c.Person.Handle("merge", m.onPersonMerge)
+	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
 	return m
 }

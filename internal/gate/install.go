@@ -104,7 +104,7 @@ func (r Report) InstallTo(target string) error {
 	case r.CandVersion == "":
 		return fmt.Errorf("the report names no version for the binary (a prebuilt one is never installed)")
 	}
-	if err := r.verify(); err != nil {
+	if err := r.Verify(); err != nil {
 		return err
 	}
 	if got, err := FileSHA(r.CandBin); err != nil || got != r.CandSHA256 {

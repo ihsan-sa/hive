@@ -2,6 +2,9 @@ package app
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -38,6 +41,21 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 	t.Cleanup(func() { gateExe, gateChildFile = old, oldChild })
 	args := filepath.Join(dir, "args")
 	t.Setenv("GATE_ARGS", args)
+	// The gate's key, as the gate keeps it in the person's config folder.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("HOME", dir)
+	key := []byte(strings.Repeat("k", 32))
+	cfgDir, _ := os.UserConfigDir()
+	os.MkdirAll(filepath.Join(cfgDir, "hive"), 0o700)
+	os.WriteFile(filepath.Join(cfgDir, "hive", "gate.key"), key, 0o600)
+	sign := func(r gate.Report) *gate.Report {
+		r.Sig = ""
+		raw, _ := json.Marshal(r)
+		h := hmac.New(sha256.New, key)
+		h.Write(raw)
+		r.Sig = hex.EncodeToString(h.Sum(nil))
+		return &r
+	}
 	run := runGate(ws)
 	for i, tc := range []struct {
 		exit         string
@@ -45,13 +63,20 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 		tie          bool
 		want, reason string
 	}{
-		{"0", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true, Reason: "better"}}, false, core.GateKeep, "better"},
-		{"0", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true, Reason: "a tie"}}, true, core.GateKeep, "a tie"},
-		{"1", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Reason: "not better"}}, false, core.GateRollback, "not better"},
-		{"3", &gate.Report{Head: "h", Base: "m", CantRun: true, Verdict: gate.Verdict{Reason: "the gate could not run: no bubblewrap"}}, false, core.GateCantRun, "no bubblewrap"},
-		{"0", &gate.Report{Head: "h", Base: "m", Sandbox: "bare", Verdict: gate.Verdict{Keep: true}}, false, core.GateCantRun, "sandbox \"bare\""},
-		{"0", &gate.Report{Head: "other", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true}}, false, core.GateCantRun, "not this head"},
+		{"0", sign(gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true, Reason: "better"}}), false, core.GateKeep, "better"},
+		{"0", sign(gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true, Reason: "a tie"}}), true, core.GateKeep, "a tie"},
+		{"1", sign(gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Reason: "not better"}}), false, core.GateRollback, "not better"},
+		{"3", sign(gate.Report{Head: "h", Base: "m", CantRun: true, Verdict: gate.Verdict{Reason: "the gate could not run: no bubblewrap"}}), false, core.GateCantRun, "no bubblewrap"},
+		{"0", sign(gate.Report{Head: "h", Base: "m", Sandbox: "bare", Verdict: gate.Verdict{Keep: true}}), false, core.GateCantRun, "sandbox \"bare\""},
+		{"0", sign(gate.Report{Head: "other", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true}}), false, core.GateCantRun, "not this head"},
 		{"2", nil, false, core.GateCantRun, "no report"},
+		// A keep this machine's gate didn't sign, or one changed after.
+		{"0", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true}}, false, core.GateCantRun, "not trusted"},
+		{"0", func() *gate.Report {
+			r := sign(gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Reason: "x"}})
+			r.Verdict.Keep = true
+			return r
+		}(), false, core.GateCantRun, "not trusted"},
 	} {
 		rep := ""
 		if tc.rep != nil {
@@ -99,5 +124,21 @@ func TestGateOrgFallsBackToLocal(t *testing.T) {
 	reachOK.at = time.Time{}
 	if args, note = orgArgs(work.GateJob{Out: dir}); args[0] != "--local-org" || !strings.Contains(note, "same token") {
 		t.Fatalf("args %q, note %q", args, note)
+	}
+	// The check is cached on both tokens: a children's token swapped for
+	// another is checked again at once, not trusted for the cached minutes.
+	asked := 0
+	oldCheck := checkReach
+	checkReach = func(gate.GitHub, string, string) error { asked++; return nil }
+	t.Cleanup(func() { checkReach = oldCheck })
+	reachOK.at = time.Time{}
+	for i, tok := range []string{"github_pat_one", "github_pat_one", "github_pat_two"} {
+		os.WriteFile(child, []byte(tok+"\n"), 0o600)
+		if args, note = orgArgs(work.GateJob{Project: core.Project{Repo: "ihsan-sa/hive"}, Out: dir}); args[0] != "--org" || note != "" {
+			t.Fatalf("token %d: args %q, note %q", i, args, note)
+		}
+	}
+	if asked != 2 {
+		t.Fatalf("CheckReach asked %d times for two tokens, want 2", asked)
 	}
 }
