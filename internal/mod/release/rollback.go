@@ -124,7 +124,7 @@ func (m *Module) rolledBackFrom() map[string]bool {
 
 // rollBack puts each path's .old back in its place, keeping the failed
 // binary as .failed (a running Windows executable can be renamed, not
-// removed), and removes what the update added.
+// removed, so a .failed still running moves aside), and removes what the update added.
 func rollBack(paths, added []string) error {
 	for _, p := range paths {
 		if !core.Exists(p + ".old") {
@@ -132,7 +132,9 @@ func rollBack(paths, added []string) error {
 		}
 	}
 	for _, p := range paths {
-		os.Remove(p + ".failed")
+		if err := makeWay(p + ".failed"); err != nil {
+			return err
+		}
 		if err := os.Rename(p, p+".failed"); err != nil {
 			return err
 		}
