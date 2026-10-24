@@ -1102,6 +1102,15 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if st != CheckPass {
 		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
 	}
+	// Every read above is the Hive's own and bound to sha, and nobody outside
+	// the Hive reads its PRs, so a draft it cleared is its to ready.
+	if pr, err := e.Forge.GetPR(p.Repo, m.PR); err != nil {
+		return "", err
+	} else if pr.Draft {
+		if err := e.ReadyPR(p, m.PR, m.SHA); err != nil {
+			return "", err
+		}
+	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
 	if err != nil && len(shared) > 0 && protectionRefused.MatchString(err.Error()) {
 		return "", &RefusedRed{Checks: shared, Err: err}
@@ -1111,6 +1120,15 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	}
 	e.j.MustAppend("effect.merged", map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID})
 	return merged, nil
+}
+
+// ReadyPR takes the PR out of draft, only while its head is still sha.
+func (e *Effects) ReadyPR(p Project, pr int, sha string) error {
+	if err := e.Forge.ReadyPR(p.Repo, pr, sha); err != nil {
+		return err
+	}
+	e.j.MustAppend("effect.readied", map[string]any{"project": p.Name, "pr": pr, "sha": sha})
+	return nil
 }
 
 // RefusedRed is the forge refusing a merge the Hive found no worse than main:

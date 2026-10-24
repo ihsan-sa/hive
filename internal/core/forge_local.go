@@ -251,6 +251,32 @@ func (l *Local) SetDraft(repo string, number int, draft bool) error {
 	return ErrNotFound
 }
 
+// ReadyPR takes a draft out of draft while its head is still sha.
+func (l *Local) ReadyPR(repo string, number int, sha string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	for i := range s.PRs[repo] {
+		p := &s.PRs[repo][i]
+		if p.Number != number {
+			continue
+		}
+		if p.State != "OPEN" {
+			return fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
+		}
+		l.refresh(repo, p)
+		if p.HeadSHA != sha {
+			return fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+		}
+		if p.Draft {
+			p.Draft = false
+			l.save(s)
+		}
+		return nil
+	}
+	return ErrNotFound
+}
+
 // MergePR squashes the PR's head onto main, refusing if the head moved.
 func (l *Local) MergePR(repo string, number int, sha, subject string) (string, error) {
 	l.mu.Lock()

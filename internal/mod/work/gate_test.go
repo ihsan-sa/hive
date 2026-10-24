@@ -243,10 +243,40 @@ func TestGateWaitThenConflict(t *testing.T) {
 	}
 }
 
-// A PR left as a draft for a read outside the Hive waits for it: no failure is
-// counted, it isn't brought up to date or tested again while main moves, and
-// it merges once marked ready.
-func TestDraftWaitsForItsRead(t *testing.T) {
+func readied(m *Module) (n int) {
+	m.C.J.Replay(func(e core.Event) {
+		if e.Kind == "effect.readied" {
+			n++
+		}
+	})
+	return n
+}
+
+// A draft whose head the Hive's gate cleared is readied with the repo owner's
+// token and merged, with no failure counted on the way.
+func TestClearedDraftIsReadiedAndMerged(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	if err := forge.SetDraft(p.Repo, task.PR.Number, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5 && task.Stage == StageMerging; i++ {
+		m.settle(task, m.step(task))
+	}
+	if task.Stage != StageMerged || task.Failures != 0 {
+		t.Fatalf("stage %q, failures %d, log %v", task.Stage, task.Failures, task.Log)
+	}
+	if pr, _ := forge.GetPR(p.Repo, task.PR.Number); pr.Draft || pr.State != "MERGED" || readied(m) != 1 {
+		t.Fatalf("draft %v, state %s, readied %d", pr.Draft, pr.State, readied(m))
+	}
+}
+
+// A draft whose head moved past the commit the Hive read isn't readied: it
+// waits without counting failures, the lead hears once, and once its head is
+// the commit read again it is readied and merges.
+func TestMovedDraftIsNotReadied(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
 	if err := m.test(task, p); err != nil {
 		t.Fatal(err)
@@ -254,31 +284,31 @@ func TestDraftWaitsForItsRead(t *testing.T) {
 	if task.Stage != StageMerging {
 		t.Fatalf("stage %q, log %v", task.Stage, task.Log)
 	}
-	if err := forge.SetDraft(p.Repo, task.PR.Number, true); err != nil {
-		t.Fatal(err)
-	}
-	pushMain(t, forge, map[string]string{"other.txt": "main moved\n"})
-	sha := task.SHA
+	forge.SetDraft(p.Repo, task.PR.Number, true)
+	tmp := t.TempDir()
+	must(t, "", "clone", "-q", "-b", "hive/t1", forge.RepoPath(p.Repo), tmp)
+	os.WriteFile(filepath.Join(tmp, "unread.txt"), []byte("not read\n"), 0o644)
+	must(t, tmp, "add", "-A")
+	must(t, tmp, "commit", "-q", "-m", "unread")
+	must(t, tmp, "push", "-q", "origin", "HEAD:hive/t1")
 	m.settle(task, m.step(task))
 	updated := task.Updated
 	for range 12 {
 		m.settle(task, m.step(task))
 	}
-	if task.Stage != StageMerging || task.Failures != 0 || task.SHA != sha || !strings.HasPrefix(task.Reason, draftWait+" (an outside read)") {
-		t.Fatalf("stage %q, failures %d, sha moved %v, reason %q", task.Stage, task.Failures, task.SHA != sha, task.Reason)
+	pr, _ := forge.GetPR(p.Repo, task.PR.Number)
+	if task.Stage != StageMerging || task.Failures != 0 || !strings.HasPrefix(task.Reason, draftWait) || !pr.Draft || readied(m) != 0 {
+		t.Fatalf("stage %q, failures %d, reason %q, draft %v, readied %d", task.Stage, task.Failures, task.Reason, pr.Draft, readied(m))
 	}
 	if n := strings.Count(fmt.Sprint(task.Log), draftWait); n != 1 || !task.Updated.Equal(updated) {
 		t.Fatalf("the wait was logged %d times, saved again %v: %v", n, !task.Updated.Equal(updated), task.Log)
 	}
-	resume, ok := m.PauseMerges(0)
-	resume()
-	if got, _ := m.Get(task.ID); got.Stage != StageMerging || !ok {
-		t.Fatalf("a waiting draft holds up an update: stage %q, merges paused %v", got.Stage, ok)
-	}
 	if m.due(*task) {
 		t.Fatal("a waiting draft is looked at again before its next look")
 	}
-	// Waited long: the lead hears once.
+	if err := m.Ready(task.ID); err == nil {
+		t.Fatal("the lead's ready went through on a head the Hive didn't read")
+	}
 	old := draftTell
 	draftTell = 0
 	t.Cleanup(func() { draftTell = old })
@@ -287,12 +317,48 @@ func TestDraftWaitsForItsRead(t *testing.T) {
 	if n := strings.Count(fmt.Sprint(task.Log), "told the lead"); !task.DraftTold || n != 1 {
 		t.Fatalf("told %v, %d times", task.DraftTold, n)
 	}
-	forge.SetDraft(p.Repo, task.PR.Number, false)
-	if err := m.step(task); err != nil {
-		t.Fatal(err)
+	must(t, tmp, "push", "-q", "-f", "origin", task.SHA+":refs/heads/hive/t1")
+	for i := 0; i < 5 && task.Stage == StageMerging; i++ {
+		m.settle(task, m.step(task))
 	}
-	if task.Reason != "" || task.Stage != StageMerged || !task.DraftSince.IsZero() {
-		t.Fatalf("stage %q, reason %q, draft since %v", task.Stage, task.Reason, task.DraftSince)
+	if task.Stage != StageMerged || !task.DraftSince.IsZero() || readied(m) != 1 {
+		t.Fatalf("stage %q, reason %q, draft since %v, readied %d", task.Stage, task.Reason, task.DraftSince, readied(m))
+	}
+}
+
+// A task stopped on GitHub's "still a draft" before the Hive readied its
+// drafts comes back once a run and merges through the gate; one stopped for
+// anything else stays stopped.
+func TestStoppedOnDraftResumes(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	forge.SetDraft(p.Repo, task.PR.Number, true)
+	task.Stage, task.Failures = StageStopped, 8
+	task.Reason = gaveUpOnErrors + fmt.Sprintf("gh pr merge %d: GraphQL: Pull Request is still a draft (mergePullRequest)", task.PR.Number)
+	m.save(task, task.Reason)
+	other := &Task{ID: "t2", Project: "p", Title: "other", Kind: "work", Stage: StageStopped, Reason: gaveUpOnErrors + "gh pr merge 9: something else"}
+	m.save(other, other.Reason)
+	m.Tick()
+	m.Wait()
+	got, _ := m.Get(task.ID)
+	if got.Stage == StageStopped || got.Failures != 0 || !strings.Contains(fmt.Sprint(got.Log), "brought back") {
+		t.Fatalf("stage %q, failures %d, log %v", got.Stage, got.Failures, got.Log)
+	}
+	if o, _ := m.Get("t2"); o.Stage != StageStopped {
+		t.Fatalf("a task stopped on another error came back: %q", o.Stage)
+	}
+	for i := 0; i < 10 && got.Stage != StageMerged; i++ {
+		m.settle(&got, m.step(&got))
+	}
+	if got.Stage != StageMerged || readied(m) != 1 {
+		t.Fatalf("stage %q, readied %d, log %v", got.Stage, readied(m), got.Log)
+	}
+	// Once a run: stopped on the draft again, it stays for the lead's recheck.
+	again := &Task{ID: "t3", Project: "p", Title: "again", Kind: "work", Stage: StageStopped, Reason: task.Reason}
+	m.save(again, again.Reason)
+	m.Tick()
+	m.Wait()
+	if a, _ := m.Get("t3"); a.Stage != StageStopped {
+		t.Fatalf("brought back twice in one run: %q", a.Stage)
 	}
 }
 
@@ -403,15 +469,6 @@ func TestPauseGivesUpOnALongMerge(t *testing.T) {
 	resume()
 	if ok {
 		t.Fatal("the pause says no merge is running")
-	}
-}
-
-func TestWhoseRead(t *testing.T) {
-	if got := whoseRead("Adds a thing.\n\n- **Needs a perms read** (sandbox change)\n"); got != "Needs a perms read (sandbox change)" {
-		t.Fatalf("got %q", got)
-	}
-	if got := whoseRead("nothing said"); got != "an outside read" {
-		t.Fatalf("got %q", got)
 	}
 }
 
