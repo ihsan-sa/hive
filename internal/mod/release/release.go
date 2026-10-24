@@ -240,7 +240,7 @@ func (m *Module) Update(tag string) (string, error) {
 			return "", fmt.Errorf("%s: checksum mismatch; not installing", name)
 		}
 	}
-	var paths []string // replaced, each with its .old beside it
+	var paths, added []string // replaced, each with its .old beside it, and put where none was
 	for i, name := range names {
 		target := exe
 		if i > 0 {
@@ -252,19 +252,24 @@ func (m *Module) Update(tag string) (string, error) {
 			paths = append(paths, target)
 			continue
 		}
+		fresh := !core.Exists(target)
 		if err := replace(filepath.Join(tmp, name), target); err != nil {
-			rollBack(paths)
+			rollBack(paths, added)
 			return "", err
 		}
-		paths = append(paths, target)
+		if fresh {
+			added = append(added, target)
+		} else {
+			paths = append(paths, target)
+		}
 	}
 	if err := tryBinary(exe, tag); err != nil {
-		if e := rollBack(paths); e != nil {
+		if e := rollBack(paths, added); e != nil {
 			return "", fmt.Errorf("%s doesn't run here (%v), and putting %s back failed: %v", tag, err, core.Version, e)
 		}
 		return "", fmt.Errorf("%s doesn't run here (%v); kept %s", tag, err, core.Version)
 	}
-	if err := writePending(m.C.WS, pending{From: core.Version, To: tag, Paths: paths}); err != nil {
+	if err := writePending(m.C.WS, pending{From: core.Version, To: tag, Paths: paths, Added: added}); err != nil {
 		return "", err
 	}
 	if err := m.pin(cfg, tag, pin); err != nil {
