@@ -10,8 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
@@ -341,4 +343,122 @@ func TestAnthropicModelWorker(t *testing.T) {
 	if strings.Contains(out, "LEAK") || !strings.Contains(out, "landed") {
 		t.Fatalf("the tool's output: %s", out)
 	}
+}
+
+// guarded stands in for OpenRouter's free tier behind a guardrail that
+// excludes the model: it answers every request 404 until it is fixed, then
+// as a free model does.
+type guarded struct {
+	fixed atomic.Bool
+	hits  atomic.Int32
+	model *freeModel
+}
+
+func (g *guarded) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	g.hits.Add(1)
+	if g.fixed.Load() {
+		g.model.ServeHTTP(w, r)
+		return
+	}
+	w.WriteHeader(http.StatusNotFound)
+	w.Write([]byte(`{"error":{"message":"0 endpoints out of 1 requested are available matching your guardrail restrictions and data policy. Free model training violation (guardrail): 1 endpoint excluded; configurable at https://openrouter.ai/workspaces/default/guardrails","code":404}}`))
+}
+
+// A worker at its usage limit moves to a model that answers 404: the model
+// is marked as one that can't answer, the worker moves at once to the next
+// pick (no backoff park), the person is told once with the error and the
+// fix, and so is the lead's chat; once the model is fixed and its config
+// changes it is back, and the next worker routed to it lands on it.
+func TestModelThatCantAnswer(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the open harness's shell tool is bash; the sandboxed Windows path runs it in WSL, the bare one has none")
+	}
+	t.Parallel()
+	router := &guarded{model: &freeModel{auth: map[string]bool{}, models: map[string]bool{},
+		command: `printf 'from the router\n' > router.txt && git add router.txt && git commit -qm "router.txt" && hive agent finish --status done --account "router.txt" --tested "none"`}}
+	free := &freeModel{auth: map[string]bool{}, models: map[string]bool{},
+		command: `printf 'from a free model\n' > free.txt && git add free.txt && git commit -qm "free.txt" && hive agent finish --status done --account "free.txt from the free model" --tested "none"`}
+	rs, fs := httptest.NewServer(router), httptest.NewServer(free)
+	defer rs.Close()
+	defer fs.Close()
+	ru, _ := url.Parse(rs.URL)
+	fu, _ := url.Parse(fs.URL)
+	h := startWith(t, bin, func(c *core.Config) {
+		c.Models = map[string]core.OpenModel{
+			"router": {Endpoint: rs.URL + "/api/v1", Model: "nvidia/nemotron:free", Key: true},
+			"free":   {Endpoint: fs.URL + "/v1", Model: "free-coder:7b", Key: true}}
+		c.Projects = map[string]core.ProjectSettings{"lab": {Routes: map[string][]string{"worker": {"fake:opus", "router", "free"}}}}
+		c.Egress.Local = append(c.Egress.Local, ru.Host, fu.Host)
+	})
+	for _, name := range []string{"router", "free"} {
+		if err := h.ws.SaveOpenKey(name, "sk-"+name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.seed("me/lab", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "lab", "repo": "me/lab"}, nil)
+	h.post("/api/ask", map[string]string{"project": "lab", "title": "work past a dead fallback", "known": "FAKE:limit"}, nil)
+	st := h.wait("the worker to skip the 404ing model and land on the next", 3*minute, taskStage("lab", "work past a dead fallback", work.StageDone))
+	h.wait("free.txt on main", minute, h.onMain("me/lab", "free.txt", "from a free model"))
+	tk, _ := task(st, "lab", "work past a dead fallback")
+	if router.hits.Load() == 0 {
+		t.Fatal("the worker never tried the router")
+	}
+	st = h.wait("the told item", minute, func(st api.State) bool {
+		return slices.ContainsFunc(st.Told, func(a core.Ask) bool { return strings.HasPrefix(a.ID, "model-down-open-router-") })
+	})
+	if len(st.Down) != 1 || st.Down[0].Pick.Model != "router" || st.Down[0].Status != 404 || !strings.Contains(st.Down[0].Text, "guardrail") {
+		t.Fatalf("down: %+v", st.Down)
+	}
+	// The journal: no backoff park on the router, one notice, one line in the lead's chat.
+	worker := ""
+	var told, posted int
+	raw, _ := os.ReadFile(filepath.Join(h.ws.Hive(), "events.jsonl"))
+	for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var e core.Event
+		var d struct {
+			ID, Reason, Chat, Text, Task, Role string
+			Detail                             string
+		}
+		if json.Unmarshal([]byte(l), &e) != nil || e.Decode(&d) != nil {
+			continue
+		}
+		switch e.Kind {
+		case "run.created":
+			if d.Task == tk.ID && d.Role == "worker" {
+				worker = d.ID
+			}
+		case "run.turn_ended":
+			if d.ID == worker && strings.Contains(d.Reason, "retrying") {
+				t.Errorf("the worker parked for a retry: %s", d.Reason)
+			}
+		case "person.told":
+			if strings.HasPrefix(d.ID, "model-down-") {
+				told++
+				if !strings.Contains(d.Detail, "https://openrouter.ai/workspaces/default/guardrails") || !strings.Contains(d.Detail, "Free model training violation") {
+					t.Errorf("the notice: %s", d.Detail)
+				}
+			}
+		case "chat.posted":
+			if d.Chat == "lead" && strings.Contains(d.Text, "open:router can't answer") {
+				posted++
+			}
+		}
+	}
+	if worker == "" || told != 1 || posted != 1 {
+		t.Fatalf("worker %q, told %d, lead chat lines %d", worker, told, posted)
+	}
+	// The person fixes the guardrail and the model's config changes: it is
+	// back, and a worker routed to it lands there.
+	router.fixed.Store(true)
+	cfg := h.ws.LoadConfig()
+	m := cfg.Models["router"]
+	m.Context = 64000
+	cfg.Models["router"] = m
+	cfg.Projects["lab"] = core.ProjectSettings{Routes: map[string][]string{"worker": {"router"}}}
+	h.ws.SaveConfig(cfg)
+	h.wait("the router to come back", minute, func(st api.State) bool { return len(st.Down) == 0 })
+	h.post("/api/ask", map[string]string{"project": "lab", "title": "use the router again"}, nil)
+	h.wait("the router's worker to land", 3*minute, taskStage("lab", "use the router again", work.StageDone))
+	h.wait("router.txt on main", minute, h.onMain("me/lab", "router.txt", "from the router"))
 }

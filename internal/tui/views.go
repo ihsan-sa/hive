@@ -164,6 +164,13 @@ func (m *model) dashRows() []row {
 			add(row{key: "plan:" + p.Key(), depth: 1, text: line})
 		}
 	}
+	if len(m.st.Down) > 0 && add(row{key: "down", text: fmt.Sprintf("models that can't answer (%d)", len(m.st.Down)), expand: true, def: true}) {
+		for _, d := range m.st.Down {
+			line := stBad.Render(text.Visible(d.Pick.String())) + "  tried again " + d.Retry.Local().Format("Mon 15:04") + "  " + text.Visible(core.Clip(d.Text, 160))
+			dt := detail{kind: "text", id: d.Pick.String(), title: d.Pick.String() + " can't answer", text: text.Visible(d.Line()) + "\n\n" + text.Visible(d.Fix(m.st.Config))}
+			add(row{key: "down:" + d.Pick.String(), depth: 1, text: line, open: &dt})
+		}
+	}
 	if add(row{key: "logins", text: "logins", expand: len(m.st.Logins) > 0, def: true}) {
 		for _, l := range m.st.Logins {
 			add(row{key: "login:" + l.Login, depth: 1, text: loginLine(l)})

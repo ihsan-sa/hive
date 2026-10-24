@@ -219,12 +219,15 @@ type Runs struct {
 	// follows a changed setting; empty keeps the run's own and its Route.
 	Route func(Run) []Pick
 
-	mu    sync.Mutex
-	runs  map[string]*Run
-	plans map[string]Plan
-	busy  map[string]bool    // runs whose tick work is in flight
-	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
-	holds map[string]string  // why no new turn starts (a restart waiting for a quiet moment), by who holds them
+	mu      sync.Mutex
+	runs    map[string]*Run
+	plans   map[string]Plan
+	busy    map[string]bool    // runs whose tick work is in flight
+	spent   map[string]float64 // "2006-01" (UTC) -> what runs cost that month
+	holds   map[string]string  // why no new turn starts (a restart waiting for a quiet moment), by who holds them
+	down    map[string]Down    // picks that can't answer, by Pick.String
+	strikes map[string]strike  // each pick's straight turns ending in the same error
+	cfg     Config             // the config of the latest tick, which a Down is fingerprinted against
 	// launching counts launches past the hold whose turn isn't journalled yet.
 	launching int
 	waking    sync.Mutex // one wake at a time, so a run is woken once
@@ -273,7 +276,7 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -419,7 +422,8 @@ type turnEnded struct {
 	Reason      string          `json:"reason,omitempty"`
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
 	Queue       []string        `json:"queue,omitempty"`
-	Offline     string          `json:"offline,omitempty"` // why the harness couldn't reach its service, in one plain line
+	Offline     string          `json:"offline,omitempty"`     // why the harness couldn't reach its service, in one plain line
+	Unavailable string          `json:"unavailable,omitempty"` // the pick it ran on can't answer (Down), so it moved or waits without a retry's backoff
 }
 
 // egressRefused is the hosts a turn's egress proxy refused, and each
@@ -490,10 +494,13 @@ type runNote struct {
 
 // apply folds one event into the in-memory state. Called on replay and on append.
 func (rs *Runs) apply(e Event) {
-	if !strings.HasPrefix(e.Kind, "run.") && e.Kind != "plan.usage" {
+	if !strings.HasPrefix(e.Kind, "run.") && e.Kind != "plan.usage" && e.Kind != "model.down" && e.Kind != "model.up" {
 		return
 	}
 	switch e.Kind {
+	case "model.down", "model.up":
+		rs.applyDown(e)
+		return
 	case "run.created":
 		var s RunSpec
 		e.Decode(&s)
@@ -551,6 +558,7 @@ func (rs *Runs) apply(e Event) {
 		}
 		r.Status, r.Reason, r.ParkedUntil, r.Offline = t.Status, t.Reason, t.ParkedUntil, t.Offline
 		r.Proc = proc.Handle{}
+		rs.strikeTurn(Pick{Harness: HarnessName(r.Harness), Model: r.Model}, t.Result)
 		if t.Context > 0 {
 			r.Context = t.Context
 		}
@@ -563,7 +571,7 @@ func (rs *Runs) apply(e Event) {
 				r.Retries = 0
 			}
 		}
-		if t.Status == StatusParked && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
+		if t.Status == StatusParked && t.Unavailable == "" && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
 			r.Retries++
 		}
 		if len(t.Queue) > 0 {
@@ -751,7 +759,8 @@ func (rs *Runs) logins(h, model string) []Login {
 }
 
 // freeAt is when a login for harness h and model next has room: now if one
-// has, else the earliest reset.
+// has, else the earliest reset; a pick that can't answer (Down) waits for
+// its retry too.
 func (rs *Runs) freeAt(h, model string) time.Time {
 	now := time.Now()
 	var at time.Time
@@ -760,13 +769,20 @@ func (rs *Runs) freeAt(h, model string) time.Time {
 	for _, l := range rs.logins(h, model) {
 		p := rs.plans[l.Key()]
 		if !p.Parked(now) {
-			return now
+			at = now
+			break
 		}
 		if at.IsZero() || p.Limit.ResetsAt.Before(at) {
 			at = p.Limit.ResetsAt
 		}
 	}
-	return at.Add(15 * time.Second)
+	if at != now {
+		at = at.Add(15 * time.Second)
+	}
+	if d, ok := rs.down[Pick{Harness: HarnessName(h), Model: model}.String()]; ok && d.Retry.After(at) {
+		at = d.Retry
+	}
+	return at
 }
 
 // next is the pick r's next turn goes on, and when it has room: the first of
@@ -932,6 +948,7 @@ func (rs *Runs) Interrupt(id string) bool {
 
 // Tick advances every run one step: mailboxes, finished turns, due turns.
 func (rs *Runs) Tick(cfg Config) {
+	rs.tickDown(cfg)
 	for _, r := range rs.List(func(r *Run) bool { return !r.Terminal() || r.Status == StatusRunning }) {
 		rs.mu.Lock()
 		if rs.busy[r.ID] {
@@ -1079,6 +1096,18 @@ func (rs *Runs) endTurn(r Run) {
 		rs.dropOpenKey(r.ID)
 	}
 	cur, _ := rs.Get(r.ID)
+	// A pick that answers is back; one whose error says it can't answer
+	// is skipped by every run until it can (Down).
+	ran := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
+	var down *Down
+	if tl.Result != nil && !limited {
+		if !tl.Result.IsError {
+			rs.Up(ran, "it answered")
+		} else if cantAnswer(ran, tl.Result, Unreachable(service(r.Harness), tl.Result.Text), rs.strikesWith(ran, tl.Result)) {
+			d := rs.markDown(r, ran, tl.Result)
+			down = &d
+		}
+	}
 	switch {
 	case dropErr != nil:
 		te.Status, te.Reason = StatusBlocked, codexTokenStuck+dropErr.Error()
@@ -1110,6 +1139,17 @@ func (rs *Runs) endTurn(r Run) {
 		te.Queue = []string{"Your previous turn was interrupted. Your checkout and commits are intact. Continue where you left off."}
 	case tl.Result.Subtype == "error_max_budget_usd":
 		te.Status, te.Reason = StatusDone, "spent its budget"
+	case down != nil:
+		// As at a usage limit: the next pick with room takes the next turn
+		// at once, else it waits for the first reset, with no backoff.
+		pick, until := rs.next(r)
+		te.Status, te.ParkedUntil, te.Unavailable = StatusParked, until, ran.String()
+		te.Reason = ran.String() + " can't answer; resumes " + until.Local().Format("Mon 15:04")
+		te.Queue = []string{ran.String() + " couldn't answer (" + Clip(down.Text, 200) + "), so your turn waited for a model that can. Continue where you left off."}
+		if !until.After(time.Now()) {
+			te.Reason = ran.String() + " can't answer; moving to " + pick.String()
+			te.Queue = nil // launch tells it why it moved
+		}
 	case tl.Result.IsError:
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = "harness error; retrying" + suffix(Clip(tl.Result.Text, 200))
@@ -1254,7 +1294,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		if pick.Harness != from.Harness || pick.Harness == "open" {
 			r.SessionLive = false
 			why := "the settings route you there"
-			if rs.freeAt(from.Harness, from.Model).After(time.Now()) {
+			if d, ok := rs.downFor(from); ok {
+				why = from.String() + " can't answer (" + Clip(d.Text, 200) + ")"
+			} else if rs.freeAt(from.Harness, from.Model).After(time.Now()) {
 				why = from.String() + " is at its usage limit"
 			}
 			moved = fmt.Sprintf("You now run on %s: %s. This is a fresh session on your brief above; your checkout, commits and notes are as you left them, so look at them (git log, $HIVE_BOX/notes.md) and continue.", pick, why)

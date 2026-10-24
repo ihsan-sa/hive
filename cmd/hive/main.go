@@ -25,6 +25,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
 	"github.com/ihsan-sa/hive-standalone-build/internal/openagent"
@@ -600,6 +601,9 @@ func cmdStatus() int {
 		for _, p := range st.Plans {
 			fmt.Println(planLine(p, time.Now()))
 		}
+		for _, d := range st.Down {
+			fmt.Printf("model %s, so runs skip it; tried again %s\n", text.Visible(d.Line()), d.Retry.Local().Format("Mon 15:04"))
+		}
 		if len(st.Asks) > 0 {
 			fmt.Println("\nwaiting on you:")
 			for _, a := range st.Asks {
@@ -817,6 +821,20 @@ func cmdModel(args []string) int {
 			cfg.Models = map[string]core.OpenModel{}
 		}
 		cfg.Models[args[1]] = m
+		if err := cfg.Check(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		// One real request first: a model that can't answer isn't added.
+		switch err := models.Probe(ws, args[1], m); {
+		case errors.Is(err, models.ErrNoKey):
+			fmt.Printf("Not tried yet: %v; storing it tries it.\n", err)
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "%s can't answer, so it wasn't added: %v\n%s\n", args[1], err, probeFix(cfg, args[1], err))
+			return 1
+		default:
+			fmt.Printf("%s answered.\n", args[1])
+		}
 	case args[0] == "rm" && len(args) == 2:
 		delete(cfg.Models, args[1])
 		os.Remove(ws.OpenKey(args[1]))
@@ -832,6 +850,11 @@ func cmdModel(args []string) int {
 			return 1
 		}
 		fmt.Println("Stored; runs on " + args[1] + " use it from their next turn.")
+		if err := models.Probe(ws, args[1], cfg.Models[args[1]]); err != nil {
+			fmt.Fprintf(os.Stderr, "But %s can't answer with it: %v\n%s\n", args[1], err, probeFix(cfg, args[1], err))
+			return 1
+		}
+		fmt.Printf("%s answered.\n", args[1])
 		return 0
 	default:
 		return usage()
@@ -846,6 +869,11 @@ func cmdModel(args []string) int {
 	}
 	fmt.Println("Saved. Route a role to it in Settings, or ask the lead.")
 	return 0
+}
+
+// probeFix is what would let named model name answer, read from its probe's error.
+func probeFix(cfg core.Config, name string, err error) string {
+	return core.Down{Pick: core.Pick{Harness: "open", Model: name}, Status: openagent.Status(err), Text: err.Error()}.Fix(cfg)
 }
 
 func cmdUninstall() int {
