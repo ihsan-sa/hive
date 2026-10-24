@@ -9,7 +9,7 @@
  › Settings           │     release repo                ihsan-sa/hive
                       │     release channel             the latest release (default)
  ▾ textkit-2          │     release                     0.8.2, following the newest
-   lead               │     share failures              off  (scrubbed; `hive report` shows what was sent)
+   lead               │     share reports               off  (scrubbed; `hive report` shows what was sent)
    writer             │
    reviewer        ●  │   Agents
  ▾ hive-web           │     harness                     claude
