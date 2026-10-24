@@ -1356,7 +1356,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
 		Stdin: promptFile, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
-		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), UID: os.Getuid(), GID: os.Getgid(),
+		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Guard: rs.ws.Guarded(), UID: os.Getuid(), GID: os.Getgid(),
 	}, nil
 }
 

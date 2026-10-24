@@ -47,8 +47,12 @@ type Spec struct {
 	Network  bool     `json:"network"`   // outbound through the egress proxy
 	Allow    []string `json:"allow"`     // hosts the proxy lets through; nil is every public host
 	Local    []string `json:"local"`     // services on this machine the person granted, loopback ip:port (LocalGrant's)
-	UID      int      `json:"uid"`
-	GID      int      `json:"gid"`
+	// Guard is host paths no host interpreter's install may contain, as
+	// its bind would expose them: the workspace and the folders covered in it
+	// (Workspace.Guarded). Every mount's host path is guarded as well.
+	Guard []string `json:"guard,omitempty"`
+	UID   int      `json:"uid"`
+	GID   int      `json:"gid"`
 }
 
 // Proc identifies a started, detached command.
