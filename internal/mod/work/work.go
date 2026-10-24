@@ -207,6 +207,13 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 
 func (m *Module) save(t *Task, note string) {
 	t.Updated = time.Now().UTC()
+	// Windows' clock ticks coarsely, so a save in the tick GitHub came back
+	// would read as before it and wake at once: keep it strictly after.
+	m.mu.Lock()
+	if !t.Updated.After(m.online) {
+		t.Updated = m.online.Add(time.Nanosecond)
+	}
+	m.mu.Unlock()
 	if note != "" {
 		t.Log = append(t.Log, Entry{At: t.Updated, Text: note})
 		if len(t.Log) > 60 {

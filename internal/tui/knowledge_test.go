@@ -17,7 +17,9 @@ import (
 // and climbs back out.
 func TestKnowledgeSection(t *testing.T) {
 	m := testModel(120, 30)
-	m.ws = core.Workspace{Root: t.TempDir()}
+	// A relative root, so the pane's path fits: macOS's temp folders are too long for it.
+	t.Chdir(t.TempDir())
+	m.ws = core.Workspace{Root: "."}
 	kbDir := m.ws.KB()
 	os.MkdirAll(filepath.Join(kbDir, "record", "tasks"), 0o755)
 	os.MkdirAll(filepath.Join(kbDir, "practice"), 0o755)

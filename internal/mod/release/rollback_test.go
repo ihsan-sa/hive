@@ -135,3 +135,19 @@ func TestTryBinary(t *testing.T) {
 		t.Fatal("a file that doesn't run passed")
 	}
 }
+
+// A binary the update put where none was (Windows' Linux one, on an install
+// without it) doesn't stop a rollback, which removes it.
+func TestRollBackRemovesWhatTheUpdateAdded(t *testing.T) {
+	dir := t.TempDir()
+	exe, added := filepath.Join(dir, "hive"), filepath.Join(dir, "hive-linux-amd64")
+	os.WriteFile(exe, []byte("new"), 0o755)
+	os.WriteFile(exe+".old", []byte("old"), 0o755)
+	os.WriteFile(added, []byte("new"), 0o755)
+	if err := rollBack([]string{exe}, []string{added}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "old" || core.Exists(added) {
+		t.Fatalf("binary %q, added still there: %v", raw, core.Exists(added))
+	}
+}
