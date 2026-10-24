@@ -37,3 +37,7 @@ For a candidate commit `--head` of the Hive's source `--repo`, and the current H
 - `e2e` runs inside the child's sandbox with the host's `go`; a machine without a Go toolchain cannot gate.
 - The benchmark is four asks. On the fake harness the score stays at its baseline, so only a real harness shows a score gain.
 - Org runs need the per-owner token (brief 261024-015755-a3f383a160); no org run has been made yet.
+
+## First run of the e2e probe
+
+`docs/gate-runs/e2e-probe-flaky-module-lifecycle.md`: a docs-only candidate with the base's e2e suite run against its binary failed `TestModuleLifecycle` once (the control passed it), and the gate rolled it back as a regression. The gate is working as designed, but a flaky e2e test costs a candidate its keep; the answer is to fix or quarantine the flaky test, and to run with `--reps` of 2 or more so one flake shows as a pass-rate difference rather than a bare failure.
