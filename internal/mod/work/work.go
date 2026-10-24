@@ -229,6 +229,9 @@ type Module struct {
 	// limit is when GitHub's pause on writes ends, and limitText why.
 	limit     time.Time
 	limitText string
+	// refusedAsked holds id@sha for each task stopped on a checks refusal
+	// whose head's checks were asked again, so each is asked once.
+	refusedAsked map[string]bool
 	// holds are the person's holds on each project's merges (hold.go), and
 	// holdPolled when each one's release condition may next be asked of the forge.
 	holds      map[string]*MergeHold
@@ -247,7 +250,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]bool{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -682,6 +685,39 @@ func (m *Module) revive() {
 		}
 		t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.Stage = "", 0, 0, 0, 0, StageLanding
 		m.save(&t, "brought back: it stopped only because GitHub rate-limited the Hive's writes")
+	}
+	m.reviveRefused()
+}
+
+// checksRefused is the error of a forge refusing the token a read of a
+// head's checks, as gh words it.
+var checksRefused = regexp.MustCompile(`^gh api repos/\S+/commits/[0-9a-f]+/(check-runs|check-suites|status)\S*: .*\(HTTP 403\)$`)
+
+// reviveRefused brings back the tasks stopped because the token may not read
+// a head's checks, once those checks read now (the repo has no workflows, so
+// a refusal is no checks, or the permission was granted). Each task's head is
+// asked once, so one whose repo has CI the token can't see stays stopped.
+func (m *Module) reviveRefused() {
+	for _, t := range m.List(func(t Task) bool {
+		return t.Stage == StageStopped && !t.ByPerson && t.SHA != "" && strings.HasPrefix(t.Reason, gaveUpOnErrors) && checksRefused.MatchString(strings.TrimPrefix(t.Reason, gaveUpOnErrors))
+	}) {
+		key := t.ID + "@" + t.SHA
+		m.mu.Lock()
+		asked := m.refusedAsked[key]
+		m.refusedAsked[key] = true
+		m.mu.Unlock()
+		if asked || m.workerStopped(t) {
+			continue
+		}
+		p, err := m.project(&t)
+		if err != nil {
+			continue
+		}
+		if _, err := m.C.Effects.Forge.Checks(p.Repo, t.SHA); err != nil {
+			continue
+		}
+		t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.Stage = "", 0, 0, 0, 0, StageLanding
+		m.save(&t, "brought back: the forge's checks on "+core.Short(t.SHA)+" read now, where the token was refused them before")
 	}
 }
 

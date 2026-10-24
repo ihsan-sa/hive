@@ -147,3 +147,43 @@ func TestStatusCommentEditedEachRound(t *testing.T) {
 		t.Fatalf("status comments %q", status)
 	}
 }
+
+// A task stopped because the token was refused its head's checks comes back
+// once those checks read (a repo with no workflows reads as none); while they
+// are still refused it stays stopped, and its head is asked only once.
+func TestChecksRefusedStopsComeBack(t *testing.T) {
+	m, forge, task, _ := noCommitRig(t, 0)
+	sha := "e3b0815699da94aede6f3d3a1c8b60e5ea532c87"
+	refused := "gave up after repeated errors: gh api repos/me/p/commits/" + sha + "/check-runs?per_page=100: gh: Resource not accessible by personal access token (HTTP 403)"
+	task.SHA = sha
+	m.giveUp(task, refused)
+	other := &Task{ID: "t2", Project: "p", Kind: "work", SHA: sha, Stage: StageStopped, ByPerson: true, Reason: refused}
+	m.save(other, "stopped")
+	planted := &Task{ID: "t3", Project: "p", Kind: "work", SHA: sha, Stage: StageStopped, Reason: "stopped after 3 rounds of fixes: " + refused}
+	m.save(planted, "stopped")
+
+	forge.checksRefused = true
+	m.revive()
+	m.revive()
+	if got, _ := m.Get(task.ID); got.Stage != StageStopped {
+		t.Fatalf("came back while still refused: %q", got.Stage)
+	}
+	if forge.checksAsked != 1 {
+		t.Fatalf("asked the forge %d times, want once", forge.checksAsked)
+	}
+
+	// A new daemon (or a new head) asks again; this time the checks read.
+	forge.checksRefused = false
+	m.refusedAsked = map[string]bool{}
+	m.revive()
+	got, _ := m.Get(task.ID)
+	if got.Stage != StageLanding || got.Failures != 0 || got.Reason != "" || !logged(&got, "read now") {
+		t.Fatalf("not brought back: %+v", got)
+	}
+	if o, _ := m.Get("t2"); o.Stage != StageStopped {
+		t.Fatal("a task the person stopped came back")
+	}
+	if o, _ := m.Get("t3"); o.Stage != StageStopped {
+		t.Fatal("a refusal quoted in another reason brought the task back")
+	}
+}

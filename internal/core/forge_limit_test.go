@@ -270,3 +270,49 @@ func TestChecksPaginates(t *testing.T) {
 		}
 	}
 }
+
+// A token refused the checks (HTTP 403) on a head with no workflows reads as
+// no checks, which ChecksState passes; with workflows there the refusal
+// stands, since there is CI the Hive can't see.
+func TestChecksRefusedWithoutWorkflows(t *testing.T) {
+	refused := "gh: Resource not accessible by personal access token (HTTP 403)"
+	for _, workflows := range []bool{false, true} {
+		calls := stubGH(t, func(args []string) (string, string, error) {
+			switch {
+			case strings.Contains(args[1], "contents/.github/workflows"):
+				if workflows {
+					return `[{"name":"ci.yml"}]`, "", nil
+				}
+				return "", "gh: Not Found (HTTP 404)", errors.New("exit status 1")
+			case strings.Contains(args[2], "check-runs"), strings.Contains(args[2], "check-suites"):
+				return "", refused, errors.New("exit status 1")
+			}
+			return "", "", nil
+		})
+		runs, err := GitHub{}.Checks("o/r", "abc")
+		if workflows {
+			if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+				t.Errorf("with workflows: runs %+v, err %v", runs, err)
+			}
+			continue
+		}
+		if err != nil || len(runs) != 0 {
+			t.Fatalf("no workflows: runs %+v, err %v", runs, err)
+		}
+		if st, _ := ChecksState(runs, nil); st != CheckPass {
+			t.Errorf("no workflows reads %s", st)
+		}
+		asked := 0
+		for _, c := range *calls {
+			if strings.Contains(c[1], "workflows") {
+				asked++
+				if !strings.Contains(c[1], "ref=abc") {
+					t.Errorf("asked for workflows off the head: %q", c)
+				}
+			}
+		}
+		if asked != 1 {
+			t.Errorf("asked for workflows %d times, want once", asked)
+		}
+	}
+}
