@@ -65,7 +65,8 @@ type Task struct {
 	Base      string            `json:"base,omitempty"`
 	Branch    string            `json:"branch,omitempty"`
 	SHA       string            `json:"sha,omitempty"`
-	Diff      string            `json:"diff,omitempty"` // SHA's own diff (core.DiffID), which reads are bound to
+	Diff      string            `json:"diff,omitempty"`      // SHA's own diff (core.DiffID), which reads are bound to
+	ReadKind  string            `json:"read_kind,omitempty"` // the read being asked for: "" ordinary, "security" the security seat's
 	PR        core.PR           `json:"pr"`
 	Round     int               `json:"round"`
 	Conflicts int               `json:"conflicts"`
@@ -1114,12 +1115,34 @@ func (m *Module) test(t *Task, p core.Project) error {
 		if who == "person" {
 			m.Chat.Notify(t.Chat, t.Thread, approveNotice(t.Label(), ch.Protected, t.PR.URL))
 		}
-	case ch.Small || m.C.Effects.Reviewed(p, ch, t.SHA):
+	case !ch.Small && !m.C.Effects.Reviewed(p, ch, t.SHA):
+		t.Stage, t.ReadKind = StageReviewing, ""
+		m.save(t, "tests passed; asking for a read")
+	case len(ch.Security) > 0:
+		return m.securityRead(t, p, ch, "tests passed; ")
+	default:
 		t.Stage = StageMerging
 		m.save(t, "tests passed; "+map[bool]string{true: "small change, no read needed", false: "already read"}[ch.Small])
+	}
+	return nil
+}
+
+// securityRead routes a change to a path on main's security list: its own
+// diff needs the security seat's read (a reviewer run separate from the
+// ordinary one) or an outside reader's land, and a fix from either sends it
+// back (goals.md, Security reads). With the read, it goes on to merge.
+func (m *Module) securityRead(t *Task, p core.Project, ch core.Change, said string) error {
+	ok, fix := m.C.Effects.SecurityRead(p.Name, ch.DiffID)
+	switch {
+	case fix != "":
+		t.Reason = ""
+		return m.sendBack(t, p, fix)
+	case !ok:
+		t.Stage, t.ReadKind, t.Reviews = StageReviewing, "security", 0
+		m.save(t, said+"asking for a security read: it changes "+strings.Join(ch.Security, ", ")+", on "+core.SecurityList)
 	default:
-		t.Stage = StageReviewing
-		m.save(t, "tests passed; asking for a read")
+		t.Stage = StageMerging
+		m.save(t, said+"read, and security read")
 	}
 	return nil
 }
@@ -1260,7 +1283,10 @@ func reviewToken(run string) string {
 
 func (m *Module) review(t *Task, p core.Project) error {
 	id := fmt.Sprintf("r-%s-%s-%d", t.ID, core.Short(t.SHA), t.Reviews)
-	if n := len(m.C.Effects.Reads(p.Name, t.SHA, t.Diff)); n > 0 {
+	security := t.ReadKind == "security"
+	if security {
+		id = fmt.Sprintf("rs-%s-%s-%d", t.ID, core.Short(t.SHA), t.Reviews) // never one of the ordinary reads
+	} else if n := len(m.C.Effects.Reads(p.Name, t.SHA, t.Diff)); n > 0 {
 		id += fmt.Sprintf("-read%d", n+1) // a separate run for each further read
 	}
 	r, ok := m.C.Runs.Get(id)
@@ -1289,10 +1315,16 @@ func (m *Module) review(t *Task, p core.Project) error {
 			account = w.Brief + "\n\n## A checkpoint\n\nThe worker is still running and hasn't written its account yet. This commit is a checkpoint of its unfinished work, put up because it beats the best kept score; it merges on its own while the worker keeps going. Read it as a change that must be safe to merge as it stands, not as the finished task."
 		}
 		brief := fmt.Sprintf("Review %s of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", round, t.ID, t.Label())
+		if security {
+			brief = fmt.Sprintf("Security read of task %s: %q. You are the security seat, separate from the ordinary reviewer, who already said land. It changes %s, on %s, where a mistake weakens the sandbox, leaks a credential or runs something outside the sandbox. Read the exact diff for that alone: say fix for anything that does, land otherwise. The brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt).", t.ID, t.Label(), strings.Join(ch.Security, ", "), core.SecurityList)
+		}
 		spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
 		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": c.Output,
 			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account + m.reviewRules(p, main)}
+		if security {
+			spec.Inputs["kind"] = "security"
+		}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
 		}
@@ -1324,7 +1356,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 		return err
 	}
 	var fb strings.Builder
-	fmt.Fprintf(&fb, "**Review of %s: %s**\n\n%s\n", core.Short(t.SHA), v.Verdict, v.Summary)
+	fmt.Fprintf(&fb, "**%s of %s: %s**\n\n%s\n", map[bool]string{true: "Security read", false: "Review"}[security], core.Short(t.SHA), v.Verdict, v.Summary)
 	for _, f := range v.Findings {
 		loc := f.File
 		if f.Line > 0 {
@@ -1440,9 +1472,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if ok, err := m.catchUp(t, p, main, "main moved"); ok || err != nil {
 		return err
 	}
-	// The security read first: it takes longest, so its line goes on the PR
-	// while the forge's checks still run.
-	if wait, err := m.outsideRead(t, p, main); wait || err != nil {
+	if wait, err := m.securityHeld(t, p, main); wait || err != nil {
 		return err
 	}
 	if wait, err := m.forgeChecks(t, p, main); wait || err != nil {
@@ -1572,11 +1602,11 @@ func (m *Module) raiseOnce(p core.Project, key, text string) {
 	}
 }
 
-// outsideRead holds a PR that touches a path on main's security list until
-// a read from the box's perms seat or architect is recorded as land on its
-// own diff (hive read); a fix goes back to the worker with what the reader
-// said. Only the PR's changed paths decide it, never what its worker wrote.
-func (m *Module) outsideRead(t *Task, p core.Project, main string) (bool, error) {
+// securityHeld checks, at the head about to merge, that a change to a path
+// on main's security list still has its security read on its own diff, and
+// sends it back through the gate if not (a fix recorded since sends it back
+// to the worker).
+func (m *Module) securityHeld(t *Task, p core.Project, main string) (bool, error) {
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
 	if err != nil {
 		return true, err
@@ -1585,17 +1615,10 @@ func (m *Module) outsideRead(t *Task, p core.Project, main string) (bool, error)
 	if len(ch.Security) == 0 {
 		return false, nil
 	}
-	o, ok := m.C.Effects.OutsideRead(p.Name, ch.DiffID)
-	switch {
-	case ok && o.Verdict == "land":
+	if ok, fix := m.C.Effects.SecurityRead(p.Name, ch.DiffID); ok && fix == "" {
 		return false, nil
-	case ok && o.Verdict == "fix":
-		t.Reason = ""
-		return true, m.sendBack(t, p, fmt.Sprintf("The box's %s read %s and asked for fixes:\n\n%s", o.By, core.Short(o.SHA), orNone(o.Note)))
 	}
-	why := "it changes " + strings.Join(ch.Security, ", ") + ", on " + core.SecurityList
-	m.hold(t, p, fmt.Sprintf("waiting on a security read from the box's perms seat or architect at %s, since %s; a read of an earlier head counts only while this change's own diff is the same (record one with `%s read %s %s land --by perms`)", core.Short(t.SHA), why, core.Cmd, t.ID, core.Short(t.SHA)))
-	return true, nil
+	return true, m.securityRead(t, p, ch, "")
 }
 
 // RecordRead records an outside read of the head sha of task id (or of PR

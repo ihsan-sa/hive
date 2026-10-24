@@ -58,6 +58,7 @@ type Effects struct {
 	diffLands map[string][]string               // project#diff -> the same, for every head with that own diff
 	diffVerds map[string]Verdict                // project#diff -> the latest verdict on that own diff
 	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
+	secVerds  map[string]Verdict                // project#diff -> the security seat's latest verdict
 	hostMade  map[string]HostCommit
 	approvals map[string]bool
 }
@@ -87,6 +88,10 @@ type Verdict struct {
 	// Diff names the change's own diff the reviewer read (DiffID), so the read
 	// carries to any head with the same own diff, and to no other.
 	Diff string `json:"diff,omitempty"`
+	// Kind is "security" for the security seat's read of a change to a path
+	// on SecurityList, a reviewer run separate from the ordinary one; "" for
+	// an ordinary read. It comes from the run's inputs, not the verdict.
+	Kind string `json:"kind,omitempty"`
 }
 
 // OutsideRead is a security read from outside the Hive (the box's perms seat
@@ -124,7 +129,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, secVerds: map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}}
 	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -137,6 +142,11 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 		case "effect.verdict":
 			var v Verdict
 			ev.Decode(&v)
+			if v.Kind == "security" {
+				// The security seat's read stands apart: it is no ordinary read.
+				e.secVerds[v.Project+"#"+v.Diff] = v
+				return
+			}
 			e.verdicts[v.Project+"@"+v.SHA] = v
 			if k := v.Project + "@" + v.SHA; v.Verdict == "land" && !slices.Contains(e.lands[k], v.Run) {
 				e.lands[k] = append(e.lands[k], v.Run)
@@ -631,6 +641,10 @@ func (e *Effects) RecordVerdict(v Verdict) error {
 		return fmt.Errorf("verdict must be land or fix")
 	}
 	v.Diff = DiffID(r.Inputs["diff.patch"])
+	v.Kind = r.Inputs["kind"]
+	if v.Kind == "security" && v.Diff == "" {
+		return errors.New("a security read is bound to the diff it read, and this run was given none")
+	}
 	e.j.MustAppend("effect.verdict", v)
 	return nil
 }
@@ -699,6 +713,28 @@ func (e *Effects) OutsideRead(project, diff string) (OutsideRead, bool) {
 		}
 	}
 	return out, out.By != "" && diff != ""
+}
+
+// SecurityRead says whether a change to a path on SecurityList has its
+// security read on its own diff: the Hive's security seat said land, or an
+// outside reader (perms seat, architect) did. An outside read isn't needed,
+// but a fix from one sends the change back whatever else said land, and so
+// does the seat's own latest fix. fix carries the read that asks for fixes.
+func (e *Effects) SecurityRead(project, diff string) (ok bool, fix string) {
+	if o, found := e.OutsideRead(project, diff); found && o.Verdict == "fix" {
+		return false, fmt.Sprintf("The box's %s read %s and asked for fixes:\n\n%s", o.By, short(o.SHA), o.Note)
+	}
+	e.mu.Lock()
+	v, seat := e.secVerds[project+"#"+diff]
+	e.mu.Unlock()
+	if seat && v.Verdict == "fix" && diff != "" {
+		return false, "The security read of " + short(v.SHA) + " asked for fixes:\n\n" + v.Summary
+	}
+	if seat && v.Verdict == "land" && diff != "" {
+		return true, ""
+	}
+	o, found := e.OutsideRead(project, diff)
+	return found && o.Verdict == "land", ""
 }
 
 // DiffID names a change's own diff (the diff from its merge base with main to
@@ -943,8 +979,8 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if !ch.Small && !e.readOK(p, ch, m.SHA) {
 		return "", fmt.Errorf("refusing to merge %s: no land verdict bound to that exact commit", short(m.SHA))
 	}
-	if o, ok := e.OutsideRead(p.Name, ch.DiffID); len(ch.Security) > 0 && (!ok || o.Verdict != "land") {
-		return "", fmt.Errorf("refusing to merge %s: it changes %s, on %s, and no security read from the box's perms seat or architect said land on its diff", short(m.SHA), strings.Join(ch.Security, ", "), SecurityList)
+	if ok, _ := e.SecurityRead(p.Name, ch.DiffID); len(ch.Security) > 0 && !ok {
+		return "", fmt.Errorf("refusing to merge %s: it changes %s, on %s, and no security read said land on its diff", short(m.SHA), strings.Join(ch.Security, ", "), SecurityList)
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
 	if err != nil {

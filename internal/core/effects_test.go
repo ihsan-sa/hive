@@ -942,3 +942,33 @@ func TestClassifyGitattributesHigh(t *testing.T) {
 		}
 	}
 }
+
+// The security seat's read stands apart from ordinary reads, binds to the
+// diff its run was given, and an outside fix outweighs its land.
+func TestSecurityRead(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	r, _ := commitInCheckout(t, c, p, "ws", main, "feature.go", "package demo\n")
+	sha, _ := c.Effects.Extract(p, r, main)
+	ch, _ := c.Effects.Classify(p, main, sha)
+	if ok, _ := c.Effects.SecurityRead(p.Name, ch.DiffID); ok {
+		t.Fatal("a security read before any")
+	}
+	c.Runs.Start(RunSpec{ID: "rs", Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha, "kind": "security"}})
+	if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: "rs", Verdict: "land"}); err == nil {
+		t.Fatal("a security read bound to no diff was taken")
+	}
+	c.Runs.Start(RunSpec{ID: "rs2", Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha, "kind": "security", "diff.patch": ch.Diff}})
+	if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: "rs2", Verdict: "land", Kind: ""}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, fix := c.Effects.SecurityRead(p.Name, ch.DiffID); !ok || fix != "" {
+		t.Fatalf("the seat's land should do: %v %q", ok, fix)
+	}
+	if c.Effects.Reviewed(p, ch, sha) || len(c.Effects.Reads(p.Name, sha, ch.DiffID)) != 0 {
+		t.Fatal("the security seat's land counted as an ordinary read")
+	}
+	c.Effects.RecordRead(OutsideRead{Project: p.Name, SHA: sha, Diff: ch.DiffID, By: "perms", Verdict: "fix", Note: "no"})
+	if ok, fix := c.Effects.SecurityRead(p.Name, ch.DiffID); ok || !strings.Contains(fix, "perms") {
+		t.Fatalf("an outside fix should send it back: %v %q", ok, fix)
+	}
+}
