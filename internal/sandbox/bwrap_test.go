@@ -193,12 +193,25 @@ func TestHostInterpreterReachesInside(t *testing.T) {
 // ~/.local (keyrings) or ~/.cargo (the crates.io token), and nothing at all
 // when the home is unknown.
 func TestInstallRootNeverBindsMore(t *testing.T) {
-	home := t.TempDir()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	secrets := mkTree(t, home, ".cargo/credentials.toml", ".cargo/lib/x", ".local/share/keyrings/login.keyring",
 		".local/lib/python3.12/site.py", "lib/x", ".tool/python3")
 	uvLocal := mkTree(t, home, ".local/bin/uv")[0]
 	uvCargo := mkTree(t, home, ".cargo/bin/uv")[0]
 	homeBin := mkTree(t, home, "bin/python3")[0]
+	// A HOME that runs through a symlink (/home/u -> /data/u) still keeps the
+	// home and ~/.local out; one that resolves nowhere binds nothing.
+	link := filepath.Join(t.TempDir(), "u")
+	if err := os.Symlink(home, link); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(t.TempDir(), "gone")
+	if err := os.Symlink(filepath.Join(home, "missing"), gone); err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
 		p, home, want string
 		ok            bool
@@ -211,6 +224,10 @@ func TestInstallRootNeverBindsMore(t *testing.T) {
 		{uvLocal, "", "", false},
 		{uvCargo, "", "", false},
 		{uvLocal, "rel/home", "", false},
+		{uvLocal, link, filepath.Join(home, ".local/bin"), true},
+		{uvCargo, link, filepath.Join(home, ".cargo/bin"), true},
+		{homeBin, link, filepath.Join(home, "bin"), true},
+		{uvLocal, gone, "", false},
 	} {
 		got, ok := installRoot(c.p, c.home)
 		if got != c.want || ok != c.ok {

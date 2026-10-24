@@ -308,16 +308,22 @@ func hostInterpreters(a *initArgs) {
 // is an install of its own (a lib/ beside bin, as python, node and go have),
 // else the bin alone. It is never the home, anything above it or a dot-dir
 // right under it (~/.local, ~/.cargo hold keyrings and tokens); ok is false
-// when only such a dir would do, or when the home is unknown or relative. So a
-// python installed straight into ~/.local (bin and lib both there) is bound as
-// its bin alone: it starts inside but can't find its lib. Install it with uv
-// or into a prefix of its own.
+// when only such a dir would do, or when the home is unknown, relative or
+// can't be resolved. So a python installed straight into ~/.local (bin and lib
+// both there) is bound as its bin alone: it starts inside but can't find its
+// lib. Install it with uv or into a prefix of its own.
 func installRoot(p, home string) (root string, ok bool) {
 	dir := filepath.Dir(p)
 	if underSystem(dir) {
 		return "", true
 	}
 	if !filepath.IsAbs(home) {
+		return "", false
+	}
+	// p is resolved (findTool), so the home must be too: through a symlinked
+	// home, the checks below would see neither the home nor ~/.local.
+	home, err := filepath.EvalSymlinks(home)
+	if err != nil {
 		return "", false
 	}
 	cands := []string{dir}
