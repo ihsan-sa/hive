@@ -85,6 +85,10 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		t.Logf("%s report:\n%s", name, rep.Markdown())
+		if d := os.Getenv("HIVE_GATE_RECORD"); d != "" { // ci turns these into annotations
+			os.MkdirAll(d, 0o755)
+			os.WriteFile(filepath.Join(d, name+".md"), []byte(rep.Markdown()), 0o644)
+		}
 		if rep.Sandbox != "bwrap" || len(rep.Repos) != 2 || len(rep.Cleaned) != 2 || len(rep.Leaked) != 0 {
 			t.Errorf("%s: sandbox %s, repos made %v, removed %v, left %v", name, rep.Sandbox, rep.Repos, rep.Cleaned, rep.Leaked)
 		}

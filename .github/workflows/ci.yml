@@ -92,6 +92,17 @@ jobs:
         shell: bash
         env:
           HIVE_GATE_BWRAP: "1"
+          HIVE_GATE_RECORD: ${{ runner.temp }}/gate-records
+      # The whole-run test's reports, green or red, as annotations: the Hive commits them as the
+      # gate's end-to-end record without the job log.
+      - name: the gate runs' reports
+        if: "!cancelled()"
+        shell: bash
+        run: |
+          for f in "$RUNNER_TEMP"/gate-records/*.md; do
+            [ -e "$f" ] || continue
+            echo "::notice title=gate run $(basename "$f" .md)::$(awk 'BEGIN { ORS = "%0A" } { gsub(/\r/, ""); gsub(/%/, "%25"); print }' "$f")"
+          done
       # Job logs need a login; annotations don't, so the Hive can read what failed.
       - name: name the gate's failing tests
         if: failure()
