@@ -82,6 +82,9 @@ type Task struct {
 	Advice    []string          `json:"advice,omitempty"`       // a land's reviewer advice, filed as one follow-up once merged
 	FollowUp  string            `json:"follow_up_of,omitempty"` // the task whose review advice this follows up
 	Inputs    map[string]string `json:"inputs,omitempty"`       // files its worker reads in $HIVE_RUN, kept off the issue
+	// Model makes the task a trial of that model: its worker runs on it
+	// alone, with no fallback, and the checks stay on their own models.
+	Model string `json:"model,omitempty"`
 	// A checkpoint is the running worker's commit going through the gate while
 	// it keeps working; once merged, Base moves to it and Banked counts it.
 	Checkpoint string    `json:"checkpoint,omitempty"`
@@ -283,6 +286,8 @@ type Brief struct {
 	// FollowUp is the task whose review advice this brief follows up; only the
 	// Hive sets it.
 	FollowUp string `json:"-"`
+	// Model is the model a trial's worker runs on; only the trial op sets it.
+	Model string `json:"-"`
 }
 
 // File creates a task from a brief.
@@ -301,7 +306,7 @@ func (m *Module) File(b Brief) (Task, error) {
 		return Task{}, fmt.Errorf("no project %q", b.Project)
 	}
 	t := &Task{ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
-		From: b.From, Chat: b.Chat, Thread: b.Thread, FollowUp: b.FollowUp, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Created: time.Now().UTC()}
+		From: b.From, Chat: b.Chat, Thread: b.Thread, FollowUp: b.FollowUp, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Model: b.Model, Created: time.Now().UTC()}
 	m.save(t, "filed by "+b.From)
 	return *t, nil
 }
@@ -707,6 +712,13 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 		}
 		spec := m.Agents.Spec(id, "worker", p.Name, dir, m.renderBrief(t, p, base))
 		spec.Task, spec.Inputs = t.ID, t.Inputs
+		if t.Model != "" {
+			pick, err := m.C.WS.LoadConfig().Pick(t.Model)
+			if err != nil {
+				return fmt.Errorf("trial of %s: %w", t.Model, err)
+			}
+			spec.Harness, spec.Model, spec.Route = pick.Harness, pick.Model, nil
+		}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
 		}
@@ -1097,6 +1109,15 @@ func (m *Module) test(t *Task, p core.Project) error {
 		}
 		c, t.Recheck = m.C.Effects.RunCheck(p, t.SHA, "test", cfg.Test), false
 	}
+	if c.CantRun != "" {
+		if t.Checkpoint != "" {
+			return m.dropCheckpoint(t, p, "the tests "+c.CantRun+", which is no verdict on it")
+		}
+		return m.cantRun(t, p, c)
+	}
+	if strings.HasPrefix(t.Reason, "the tests can't run") {
+		t.Reason = "" // the tool is there now
+	}
 	if err := m.noteTests(t, p, main, c); err != nil {
 		return err
 	}
@@ -1107,6 +1128,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 		mc, err := m.mainTests(p, main, cfg.Test)
 		if err != nil {
 			return err
+		}
+		if mc.CantRun != "" {
+			return m.cantRun(t, p, mc)
 		}
 		if !mc.OK {
 			return m.waitOnMain(t, p, main, mc)
@@ -1143,6 +1167,25 @@ func (m *Module) test(t *Task, p core.Project) error {
 		t.Stage = StageReviewing
 		m.save(t, "tests passed; asking for a read")
 	}
+	return nil
+}
+
+// cantRun holds a change whose tests couldn't start because a tool they call
+// is missing where checks run. That is no verdict on the change: it isn't
+// sent back or failed, and it is tested again every 10 minutes until the tool
+// is there. The PR and the dashboard hear once.
+func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
+	reason := "the tests " + c.CantRun + ", so this waits and is tested again every 10 minutes"
+	t.Retry = time.Now().Add(10 * time.Minute)
+	if t.Reason == reason {
+		m.save(t, "")
+		return nil
+	}
+	t.Reason = reason
+	m.save(t, reason)
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "ref": "cant-run:" + p.Name, "project": p.Name,
+		"text": p.Name + "'s tests " + c.CantRun + " (" + core.Clip(strings.TrimSpace(c.Output), 120) + "): a fault in the environment, not a verdict on any commit; changes wait and nothing is reverted until it is fixed"})
+	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
 	return nil
 }
 
@@ -1561,43 +1604,51 @@ func (m *Module) hold(t *Task, p core.Project, why string) {
 // forgeChecks holds t until the forge's own checks (CI on every platform,
 // which the Hive's own test doesn't cover) pass on exactly the head it would
 // merge. A failure goes back to the worker as a red test does, unless main
-// fails the same check; a check that can't start is the environment's, so t
-// waits and it is raised, never sent back.
+// fails the same check: a change whose every failure main shares is no worse
+// than main and merges, so the fix for a red main can land. A check that
+// can't start is the environment's, so t waits and it is raised, never sent
+// back.
 func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error) {
 	runs, err := m.C.Effects.Forge.Checks(p.Repo, t.SHA)
 	if err != nil {
 		return true, err
 	}
-	st, which := core.ChecksState(runs, m.C.Effects.RequiredChecks(p, main))
+	req := m.C.Effects.RequiredChecks(p, main)
+	st, which := core.ChecksState(runs, req)
+	var shared []string
+	if st == core.CheckFail {
+		mainRuns, err := m.C.Effects.Forge.Checks(p.Repo, main)
+		if err != nil {
+			return true, err
+		}
+		st, which, shared = core.ChecksAgainstMain(runs, mainRuns, req)
+	}
 	names := core.CheckNames(which)
+	onMain := ""
+	if len(shared) > 0 {
+		both := strings.Join(shared, ", ")
+		m.raiseOnce(p, main+"/checks", "the forge's checks "+both+" fail on main in "+p.Name+" at "+core.Short(main))
+		onMain = " (" + both + " fail on main at " + core.Short(main) + " too, so they don't count against it)"
+	}
 	switch st {
 	case core.CheckPending:
-		m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+" ("+names+")")
+		m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+" ("+names+")"+onMain)
 		return true, nil
 	case core.CheckCantStart:
-		why := "the forge's checks " + names + " can't start on " + core.Short(t.SHA) + ", which is the environment's fault, not the change's; waiting for them to run"
+		why := "the forge's checks " + names + " can't start on " + core.Short(t.SHA) + ", which is the environment's fault, not the change's; waiting for them to run" + onMain
 		if t.Reason != why {
 			m.raiseOnce(p, t.SHA+"/checks", "the forge's checks "+names+" can't start in "+p.Name+" (PR #"+fmt.Sprint(t.PR.Number)+" at "+core.Short(t.SHA)+"): "+checkDetail(which))
 		}
 		m.hold(t, p, why)
 		return true, nil
 	case core.CheckFail:
-		mainRuns, err := m.C.Effects.Forge.Checks(p.Repo, main)
-		if err != nil {
-			return true, err
-		}
-		if _, onMain := core.ChecksState(mainRuns, nil); slices.ContainsFunc(onMain, func(r core.CheckRun) bool {
-			return r.State == core.CheckFail && strings.Contains(", "+names+", ", ", "+r.Name+", ")
-		}) {
-			why := "waiting on main: the forge's checks " + names + " fail on main at " + core.Short(main) + " too, so this failure isn't the worker's"
-			if t.Reason != why {
-				m.raiseOnce(p, main+"/checks", "the forge's checks "+names+" fail on main in "+p.Name+" at "+core.Short(main))
-			}
-			m.hold(t, p, why)
-			return true, nil
-		}
 		t.Reason = ""
-		return true, m.sendBack(t, p, "The forge's checks failed on your commit "+core.Short(t.SHA)+": "+checkDetail(which))
+		return true, m.sendBack(t, p, "The forge's checks failed on your commit "+core.Short(t.SHA)+": "+checkDetail(which)+onMain)
+	}
+	// Said once per head and main: a merge hold or a failed merge brings t
+	// back here every holdGap, and a repeat would crowd out its log.
+	if note := "no worse than main: the forge's checks " + strings.Join(shared, ", ") + " are red on both " + core.Short(t.SHA) + " and main at " + core.Short(main) + ", and nothing else fails, so it merges"; len(shared) > 0 && !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
+		m.save(t, note)
 	}
 	return false, nil
 }
@@ -1757,8 +1808,8 @@ func (m *Module) startSeat(t *Task, p core.Project, ch core.Change, main, seat, 
 	}
 	brief := fmt.Sprintf("Security read (%s) of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", seat, t.ID, t.Label())
 	spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
-	h, model := m.seatModel(p, seat)
-	spec.Harness, spec.Model = h, model
+	h, model, route := m.seatModel(p, seat)
+	spec.Harness, spec.Model, spec.Route = h, model, route
 	spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
 	spec.Inputs = map[string]string{"sha": t.SHA, "seat": seat, "diff.patch": ch.Diff, "tests.txt": c.Output,
 		"brief.md": "Review token: " + reviewToken(id) + "\n\n" + securityRules(ch) + "\n\n## The change\n\n" + account + m.reviewRules(p, main)}
@@ -1769,20 +1820,22 @@ func (m *Module) startSeat(t *Task, p core.Project, ch core.Change, main, seat, 
 	return nil
 }
 
-// seatModel picks a seat's harness and model. The security reviewer takes the
-// first tribunal seat whose model isn't the ordinary reviewer's, so the two
-// reads come from different models; the panel spreads over the tribunal
-// seats as a tribunal does. With no tribunal seats, the reviewer's own.
-func (m *Module) seatModel(p core.Project, seat string) (harness, model string) {
-	harness, model = m.Agents.Model("reviewer", p.Name)
-	var seats []core.TribunalSeat
-	for _, x := range m.C.WS.LoadConfig().TribunalModels {
-		if x.Model != "" && !slices.Contains(seats, x) {
-			seats = append(seats, x)
-		}
+// seatModel picks a seat's harness and model, and where it moves at a usage
+// limit. A security route the person set comes first. Else the security
+// reviewer takes the first tribunal seat whose model isn't the ordinary
+// reviewer's, so the two reads come from different models; the panel spreads
+// over the tribunal seats as a tribunal does. With no tribunal seats, the
+// reviewer's own.
+func (m *Module) seatModel(p core.Project, seat string) (harness, model string, route []core.Pick) {
+	cfg := m.C.WS.LoadConfig()
+	if seat == core.SeatSecurity && len(cfg.Routed("security", p.Name)) > 0 {
+		route := cfg.Route("security", p.Name)
+		return route[0].Harness, route[0].Model, route
 	}
+	harness, model = m.Agents.Model("reviewer", p.Name)
+	seats := cfg.Seats(p.Name)
 	if len(seats) == 0 {
-		return harness, model
+		return harness, model, nil
 	}
 	pick := seats[0]
 	if seat == core.SeatSecurity {
@@ -1800,7 +1853,7 @@ func (m *Module) seatModel(p core.Project, seat string) (harness, model string) 
 	if pick.Harness != "" {
 		harness = pick.Harness
 	}
-	return harness, pick.Model
+	return harness, pick.Model, nil
 }
 
 // securityRules is what a security seat reads the change for.
