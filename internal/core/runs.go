@@ -1101,7 +1101,11 @@ func (rs *Runs) endTurn(r Run) {
 	// is skipped by every run until it can (Down).
 	ran := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
 	var down *Down
-	if tl.Result != nil && !limited {
+	// Claude Code asked for the model's key again mid-turn, after the
+	// endpoint refused it: the helper hands it over once a turn, so the next
+	// turn retries with a fresh one rather than marking the model down.
+	keyRefused := tl.Result != nil && tl.Result.IsError && HarnessName(r.Harness) == "open" && strings.Contains(tl.Result.Text, "apiKeyHelper")
+	if tl.Result != nil && !limited && !keyRefused {
 		if !tl.Result.IsError {
 			rs.Up(ran, "it answered")
 		} else if turns, runs := rs.strikesWith(ran, r.ID, tl.Result); cantAnswer(ran, tl.Result, Unreachable(service(r.Harness), tl.Result.Text), turns, runs) {
@@ -1140,9 +1144,7 @@ func (rs *Runs) endTurn(r Run) {
 		te.Queue = []string{"Your previous turn was interrupted. Your checkout and commits are intact. Continue where you left off."}
 	case tl.Result.Subtype == "error_max_budget_usd":
 		te.Status, te.Reason = StatusDone, "spent its budget"
-	case tl.Result.IsError && HarnessName(r.Harness) == "open" && strings.Contains(tl.Result.Text, "apiKeyHelper"):
-		// Claude Code asked for the model's key again mid-turn, after the
-		// endpoint refused it; the helper hands it over once a turn.
+	case keyRefused:
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = fmt.Sprintf("the endpoint refused %s's key mid-turn, and a turn is handed the key only once; the next turn gets it afresh (if this repeats, store it again with `%s model key %s`)", r.Model, Cmd, r.Model)
 		te.Queue = []string{"Your previous turn was cut off when the model's endpoint refused its key. Your checkout and commits are intact. Continue where you left off."}

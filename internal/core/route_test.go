@@ -402,7 +402,7 @@ func TestFallbackAtALimit(t *testing.T) {
 // A vendor's 429, as Claude Code reports it on an Anthropic-compatible model
 // (no rate_limit_info, and words that needn't say "limit"), parks that model
 // and moves the run to the next on its route; a key refused mid-turn says so
-// plainly instead of a generic harness error.
+// plainly and retries afresh, without marking the model down.
 func TestVendorLimitMovesToFallback(t *testing.T) {
 	c, _ := testHive(t)
 	cfg := c.WS.LoadConfig()
@@ -430,12 +430,18 @@ func TestVendorLimitMovesToFallback(t *testing.T) {
 	if got.Status != StatusParked || !strings.Contains(got.Reason, "refused kimi's key mid-turn") || !strings.Contains(got.Reason, "model key kimi") {
 		t.Fatalf("a key refused mid-turn: %s %q", got.Status, got.Reason)
 	}
+	if d := c.Runs.Down(); len(d) != 0 {
+		t.Fatalf("a key refused mid-turn marked the model down: %+v", d)
+	}
 	got = end(2, `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"API Error: Request rejected (429) · Your account org-x request reached organization max RPM: 3","session_id":"s1"}`)
 	if got.Status != StatusParked || got.Reason != "usage limit; moving to open:free" {
 		t.Fatalf("a vendor's 429: %s %q", got.Status, got.Reason)
 	}
 	if !c.Runs.freeAt("open", "kimi").After(time.Now().Add(30 * time.Minute)) {
 		t.Fatal("the vendor's model isn't parked")
+	}
+	if d := c.Runs.Down(); len(d) != 0 {
+		t.Fatalf("a vendor's 429 is a limit, not a model that can't answer: %+v", d)
 	}
 	if p, at := c.Runs.next(got); p.Model != "free" || at.After(time.Now()) {
 		t.Fatalf("next after a vendor's 429: %v at %v", p, at)
