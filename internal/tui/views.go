@@ -53,6 +53,7 @@ func (m *model) dashRows() []row {
 		rows = append(rows, r)
 		return r.expand && m.nodeOpen(r.key, r.def)
 	}
+	m.statRows(add)
 	for _, p := range m.st.Projects {
 		best := "no score yet"
 		if p.Best != nil {

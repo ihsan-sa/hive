@@ -992,6 +992,8 @@ func (s *server) state() api.State {
 	st.Feedback = a.Feedback.List(func(it feedback.Item) bool { return it.Status == feedback.Open })
 	done := a.Feedback.List(func(it feedback.Item) bool { return it.Status != feedback.Open })
 	st.Feedback = append(st.Feedback, done[:min(len(done), 20)]...)
+	v := a.Stats.View(time.Now())
+	st.Stats = &v
 	return st
 }
 

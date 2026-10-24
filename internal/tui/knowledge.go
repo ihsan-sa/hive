@@ -6,19 +6,22 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
+	"github.com/ihsan-sa/hive-standalone-build/internal/text"
 )
 
 // ---- knowledge -------------------------------------------------------------
 
 // kbEntry is one row of a knowledge base folder.
 type kbEntry struct {
-	name string
-	dir  bool
+	name   string
+	dir    bool
+	recent *kb.Change // a recently updated entry, listed above the folders
 }
 
 // kbAbout says what the top-level folders hold, for a person who hasn't read
@@ -35,14 +38,20 @@ var kbAbout = map[string]string{
 func (m *model) kbEntries() []kbEntry {
 	root := filepath.Join(m.ws.KB(), filepath.FromSlash(m.kbDir))
 	des, _ := os.ReadDir(root)
-	var dirs, files []kbEntry
+	var recent, dirs, files []kbEntry
+	if m.kbDir == "" {
+		for i := range m.recentKB() {
+			c := &m.kbNew[i]
+			recent = append(recent, kbEntry{name: c.Path, recent: c})
+		}
+	}
 	mod := map[string]int64{}
 	for _, de := range des {
 		if strings.HasPrefix(de.Name(), ".") {
 			continue
 		}
 		if de.IsDir() {
-			dirs = append(dirs, kbEntry{de.Name(), true})
+			dirs = append(dirs, kbEntry{name: de.Name(), dir: true})
 			continue
 		}
 		if !de.Type().IsRegular() {
@@ -51,10 +60,22 @@ func (m *model) kbEntries() []kbEntry {
 		if fi, err := de.Info(); err == nil {
 			mod[de.Name()] = fi.ModTime().UnixNano()
 		}
-		files = append(files, kbEntry{de.Name(), false})
+		files = append(files, kbEntry{name: de.Name()})
 	}
 	sort.SliceStable(files, func(i, j int) bool { return mod[files[i].name] > mod[files[j].name] })
-	return append(dirs, files...)
+	return append(append(recent, dirs...), files...)
+}
+
+// kbRecentN is how many recently updated entries the top folder lists.
+const kbRecentN = 6
+
+// recentKB is the knowledge base's newest and latest-changed entries, read
+// from its history at most every half minute.
+func (m *model) recentKB() []kb.Change {
+	if time.Since(m.kbNewAt) > 30*time.Second {
+		m.kbNew, m.kbNewAt = kb.Recent(m.ws.KB(), kbRecentN), time.Now()
+	}
+	return m.kbNew
 }
 
 func (m *model) keyKB(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -77,7 +98,7 @@ func (m *model) keyKB(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.kbDir = strings.TrimPrefix(path.Dir(m.kbDir), ".")
 			m.kbSel = 0
 			for i, e := range m.kbEntries() {
-				if e.name == up {
+				if e.name == up && e.recent == nil {
 					m.kbSel = i
 				}
 			}
@@ -88,6 +109,9 @@ func (m *model) keyKB(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		e := es[m.kbSel]
 		rel := path.Join(m.kbDir, e.name)
+		if e.recent != nil {
+			rel = e.recent.Path
+		}
 		if e.dir {
 			m.kbDir, m.kbSel = rel, 0
 			return m, nil
@@ -137,23 +161,46 @@ func (m *model) viewKB() []string {
 	if len(es) == 0 {
 		lines = append(lines, stDim.Render("Nothing here yet."))
 	}
-	top := len(lines)
+	top, sel := len(lines), 0
 	for i, e := range es {
-		name, about := e.name, ""
-		if e.dir {
+		if i == 0 && e.recent != nil {
+			lines = append(lines, stTitle.Render("Recently updated"))
+		}
+		if i > 0 && es[i-1].recent != nil && e.recent == nil {
+			lines = append(lines, "")
+		}
+		name, about, width := e.name, "", 28
+		switch {
+		case e.recent != nil:
+			c := e.recent
+			name, about, width = text.Visible(c.Title), c.At.Local().Format("Mon Jan 2 15:04")+"  ", min(48, max(28, w/2))
+		case e.dir:
 			name += "/"
 			if m.kbDir == "" {
 				about = kbAbout[e.name]
 			}
-		} else if m.kbDir == "" {
+		case m.kbDir == "":
 			about = "a note"
 		}
-		line := pad(clip(name, 26), 28) + stDim.Render(about)
+		line := pad(clip(name, width-2), width) + stDim.Render(about)
+		plainLine := pad(clip(name, width-2), width) + about
+		if c := e.recent; c != nil { // new stands out; an edit is dim like the rest
+			mark, style := "updated", stDim
+			if c.New {
+				mark, style = "new", stGood
+			}
+			line += style.Render(pad(mark, 7)) + "  " + stDim.Render(c.Path)
+			plainLine += pad(mark, 7) + "  " + c.Path
+		}
 		if i == m.kbSel && m.focus == 1 {
-			line = stSel.Render(fit(pad(clip(name, 26), 28)+about, w))
+			line = stSel.Render(fit(plainLine, w))
+			sel = len(lines)
 		}
 		lines = append(lines, clip(line, w))
 	}
+	if m.focus != 1 || len(es) == 0 {
+		sel = top
+	}
 	lines = append(lines, "", stDim.Render(clip("From a shell: "+core.Cmd+" kb <words>", w)))
-	return indent(window(lines, top+m.kbSel, m.bodyHeight()), "  ")
+	return indent(window(lines, sel, m.bodyHeight()), "  ")
 }

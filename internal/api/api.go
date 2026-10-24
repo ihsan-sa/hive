@@ -22,6 +22,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/stats"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
@@ -66,6 +67,7 @@ type State struct {
 	Chats      []ChatView             `json:"chats"`
 	Requests   []risk.Request         `json:"requests"`
 	Feedback   []feedback.Item        `json:"feedback"` // open first, then the last few set aside
+	Stats      *stats.View            `json:"stats,omitempty"`
 	Config     core.Config            `json:"config"`
 	ConfigErr  string                 `json:"config_err,omitempty"`
 }

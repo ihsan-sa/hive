@@ -228,3 +228,15 @@ not json
 		t.Fatalf("at the limit: %+v", rl)
 	}
 }
+
+// A turn's result carries its token use, for the dashboard's totals.
+func TestResultTokens(t *testing.T) {
+	r := Claude{}.Parse([]byte(`{"type":"result","subtype":"success","result":"ok","total_cost_usd":0.5,"usage":{"input_tokens":12,"output_tokens":340,"cache_creation_input_tokens":1000,"cache_read_input_tokens":20000}}`))[0].Result
+	if r.Tokens == nil || *r.Tokens != (Tokens{Input: 12, Output: 340, CacheRead: 20000, CacheWrite: 1000}) {
+		t.Errorf("claude: %+v", r.Tokens)
+	}
+	r = Codex{}.Parse([]byte(`{"type":"turn.completed","usage":{"input_tokens":5000,"cached_input_tokens":4000,"output_tokens":70}}`))[0].Result
+	if r.Tokens == nil || *r.Tokens != (Tokens{Input: 1000, Output: 70, CacheRead: 4000}) {
+		t.Errorf("codex: %+v", r.Tokens)
+	}
+}
