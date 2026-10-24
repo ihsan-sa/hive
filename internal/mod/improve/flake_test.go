@@ -127,3 +127,22 @@ func TestFailureSeenElsewhereIsAFlake(t *testing.T) {
 		t.Fatalf("a new failure beside a known flake wasn't reverted: %d", reverts(m))
 	}
 }
+
+// A task that merged a checkpoint earlier carries its change from then on:
+// a failure checked after the checkpoint merged isn't one without the change.
+func TestFailureAfterACheckpointIsTheChanges(t *testing.T) {
+	m, commit, _ := tested(t)
+	p, _ := m.C.Projects.Get("p")
+	checkpoint := commit(map[string]string{"t.sh": "echo '--- FAIL: TestJoin (0.09s)'\nexit 1\n"})
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "p", "merge_sha": checkpoint})
+	other := commit(map[string]string{"README.md": "another change on top\n"})
+	m.C.Effects.Sync(p)
+	if c := m.C.Effects.RunCheck(p, other, "test", "sh ./t.sh"); len(c.Failed) != 1 {
+		t.Fatalf("the other change's failure: %+v", c)
+	}
+	sha := commit(map[string]string{"README.md": "the rest of the task\n"})
+	m.afterMerge(work.Task{ID: "t1", Project: "p", MergeSHA: sha, Banks: []work.Bank{{MergeSHA: checkpoint}}})
+	if reverts(m) != 1 || flakeAlerts(m) != "" {
+		t.Fatalf("reverts %d, alerts %q", reverts(m), flakeAlerts(m))
+	}
+}

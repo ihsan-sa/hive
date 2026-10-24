@@ -116,8 +116,12 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			}
 		case "task.saved":
 			var t work.Task
-			if e.Decode(&t) == nil && t.SHA != "" && !slices.Contains(m.heads[t.ID], t.SHA) {
-				m.heads[t.ID] = append(m.heads[t.ID], t.SHA)
+			if e.Decode(&t) == nil {
+				for _, sha := range []string{t.SHA, t.Checkpoint} {
+					if sha != "" && !slices.Contains(m.heads[t.ID], sha) {
+						m.heads[t.ID] = append(m.heads[t.ID], sha)
+					}
+				}
 			}
 		case "stepback.saved":
 			var s StepBack
@@ -129,6 +133,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	c.J.Subscribe(apply)
 	w.OnMerged = func(t work.Task) { m.queue <- t }
 	work.BestScore = m.Best
+	work.Measured = m.measured
 	go m.measureLoop()
 	return m
 }
@@ -315,7 +320,17 @@ func (m *Module) measureLoop() {
 // Recover re-queues merges whose measurement didn't happen (after a restart).
 func (m *Module) Recover() {
 	for _, t := range m.Work.List(func(t work.Task) bool { return t.MergeSHA != "" }) {
-		if !m.measured(t.Project, t.MergeSHA) && time.Since(t.Updated) < 7*24*time.Hour {
+		if time.Since(t.Updated) >= 7*24*time.Hour {
+			continue
+		}
+		for _, b := range t.Banks { // a checkpoint merged before the latest one
+			if b.MergeSHA != t.MergeSHA && !m.measured(t.Project, b.MergeSHA) {
+				c := t
+				c.MergeSHA = b.MergeSHA
+				m.queue <- c
+			}
+		}
+		if !m.measured(t.Project, t.MergeSHA) {
 			m.queue <- t
 		}
 	}
@@ -427,7 +442,8 @@ func (m *Module) retest(p core.Project, t work.Task, note string) (bool, *float6
 }
 
 // failedBefore says where every one of names also failed at a commit that
-// can't carry t's change: checked before t merged, and none of t's own heads.
+// can't carry t's change: checked before t first merged (a checkpoint
+// counts), and none of t's own heads or checkpoints.
 // It returns "" when any of them failed only here.
 func (m *Module) failedBefore(project string, t work.Task, names []string) string {
 	if len(names) == 0 {
@@ -442,6 +458,13 @@ func (m *Module) failedBefore(project string, t work.Task, names []string) strin
 			if c.SHA == t.MergeSHA && c.At.Before(merged) {
 				merged = c.At // measured right after it merged
 			}
+		}
+	}
+	// A checkpoint merged earlier is part of the change too: only what was
+	// checked before the task's first merge is without it.
+	for _, b := range t.Banks {
+		if at, ok := m.merged[b.MergeSHA]; ok && at.Before(merged) {
+			merged = at
 		}
 	}
 	var where []string
