@@ -240,11 +240,13 @@ var supervisor = func() supervision {
 	if user && name == "hive.service" {
 		return supervision{} // Run hands the restart to systemctl --user
 	}
+	if os.Getenv("HIVE_SUPERVISED") != "" {
+		// supervisord, pm2, runit: often a unit themselves, whose MainPID
+		// isn't this daemon. Nothing says what its stop kills, so wait for a
+		// quiet moment.
+		return supervision{name: "its supervisor", status: RestartStatus}
+	}
 	if name == "" {
-		if os.Getenv("HIVE_SUPERVISED") != "" {
-			// Nothing says what its stop kills, so wait for a quiet moment.
-			return supervision{name: "its supervisor", status: RestartStatus}
-		}
 		return supervision{}
 	}
 	restart, killMode, mainPID := unitSettings(name, user)

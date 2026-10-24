@@ -290,6 +290,13 @@ func TestSupervisorIsTheUnitWhoseMainProcessThisIs(t *testing.T) {
 	if sup := supervisor(); sup.name != "cron.service" || sup.status != RestartStatus {
 		t.Fatalf("the unit whose main process this is wasn't: %+v", sup)
 	}
+	// supervisord as a system unit: the daemon is its child, not its main
+	// process, and HIVE_SUPERVISED says supervisord restarts it.
+	unitOf, main = func() (string, bool) { return "supervisord.service", false }, os.Getpid()+1
+	t.Setenv("HIVE_SUPERVISED", "1")
+	if sup := supervisor(); sup.status != RestartStatus || sup.keepsRuns {
+		t.Fatalf("HIVE_SUPERVISED inside another unit was ignored: %+v", sup)
+	}
 	unitOf = func() (string, bool) { return "hive.service", true }
 	if sup := supervisor(); sup.name != "" {
 		t.Fatalf("the Hive's own user unit left the systemctl path: %+v", sup)
