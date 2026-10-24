@@ -309,8 +309,20 @@ func (r *Registry) Install(url, name string) (Module, error) {
 	if core.Exists(dir) {
 		return Module{}, fmt.Errorf("%s already exists", dir)
 	}
-	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, dir); err != nil {
-		os.RemoveAll(dir)
+	// The clone goes to a hidden folder (List skips those) and moves in whole,
+	// so no agent or listing sees a module half cloned.
+	tmp := filepath.Join(r.ws.Modules(), ".installing-"+name)
+	os.RemoveAll(tmp)
+	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, tmp); err != nil {
+		os.RemoveAll(tmp)
+		return Module{}, err
+	}
+	core.Git(tmp, "fetch", "-q", "--tags")
+	if rel := latestTag(tmp); rel != "" {
+		core.Git(tmp, "checkout", "-q", rel) // record finds it there already
+	}
+	if err := os.Rename(tmp, dir); err != nil {
+		os.RemoveAll(tmp)
 		return Module{}, err
 	}
 	m, err := r.record(url, name)
