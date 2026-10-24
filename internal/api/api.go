@@ -19,6 +19,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
@@ -53,11 +54,19 @@ type State struct {
 	Updated    *Updated           `json:"updated,omitempty"`
 	Jobs       []system.JobState  `json:"jobs"`
 	Wakeups    []system.Wakeup    `json:"wakeups"`
+	Checks     Checks             `json:"checks"`
 	Modules    []ModuleView       `json:"modules"`
 	Chats      []ChatView         `json:"chats"`
 	Requests   []risk.Request     `json:"requests"`
+	Feedback   []feedback.Item    `json:"feedback"` // open first, then the last few set aside
 	Config     core.Config        `json:"config"`
 	ConfigErr  string             `json:"config_err,omitempty"`
+}
+
+// Checks are the checks holding a slot and those waiting for one, in order.
+type Checks struct {
+	Running []core.SlotUse `json:"running,omitempty"`
+	Waiting []core.SlotUse `json:"waiting,omitempty"`
 }
 
 // ProjectView is one project on the dashboard.
@@ -69,19 +78,23 @@ type ProjectView struct {
 	Best   *float64              `json:"best,omitempty"`
 }
 
-// Updated is the update that brought in this version, with its release notes.
+// Updated is the update that brought in this version, with its release notes;
+// Unsigned when no release key was pinned to check it against.
 type Updated struct {
-	Seq   int64  `json:"seq"`
-	To    string `json:"to"`
-	Notes string `json:"notes"`
+	Seq      int64  `json:"seq"`
+	To       string `json:"to"`
+	Notes    string `json:"notes"`
+	Unsigned bool   `json:"unsigned,omitempty"`
 }
 
 // Alert is a ledger alert.
 type Alert struct {
-	At   time.Time `json:"at"`
-	Kind string    `json:"kind"`
-	Text string    `json:"text"`
-	Ref  string    `json:"ref,omitempty"` // a later alert with the same ref replaces it
+	At    time.Time `json:"at"` // last seen
+	Kind  string    `json:"kind"`
+	Text  string    `json:"text"`
+	Count int       `json:"count"`
+	Ref   string    `json:"ref,omitempty"` // a later alert with the same ref replaces it
+	Key   string    `json:"-"`             // kind, project and cause: a repeat refreshes the alert
 }
 
 // ModuleView is one installed module.

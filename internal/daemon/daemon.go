@@ -27,6 +27,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -55,19 +56,31 @@ func Running(ws core.Workspace) (*api.Client, bool) {
 }
 
 // Start launches the daemon in the background if it isn't running, and waits for it.
-func Start(ws core.Workspace) (*api.Client, error) {
+func Start(ws core.Workspace) (*api.Client, error) { return StartAfter(ws, 0) }
+
+// StartAfter is Start for a daemon that takes over from process waitFor, as
+// an update's restart does (`hive daemon --detach --wait-for`): update.yml
+// hands a pre-release over this way, which old releases can't update to.
+func StartAfter(ws core.Workspace, waitFor int) (*api.Client, error) {
 	if c, ok := Running(ws); ok {
+		return c, nil
+	}
+	if c, ok := handedOver(ws); ok {
 		return c, nil
 	}
 	if err := checkHarness(ws.LoadConfig()); err != nil {
 		return nil, err
 	}
-	exe, err := os.Executable()
+	exe, err := executable()
 	if err != nil {
 		return nil, err
 	}
 	env := append(os.Environ(), "HIVE_HOME="+ws.Root)
-	if _, err := proc.StartDetached([]string{exe, "daemon"}, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err != nil {
+	args := []string{exe, "daemon"}
+	if waitFor > 0 {
+		args = append(args, "--wait-for", strconv.Itoa(waitFor))
+	}
+	if _, err := proc.StartDetached(args, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err != nil {
 		return nil, err
 	}
 	for i := 0; i < 100; i++ {
@@ -78,6 +91,27 @@ func Start(ws core.Workspace) (*api.Client, error) {
 	}
 	log, _ := os.ReadFile(filepath.Join(ws.Hive(), "daemon.log.err"))
 	return nil, fmt.Errorf("the Hive didn't start: %s", core.Clip(string(log), 600))
+}
+
+// handOffWait covers a restart's gap: the old daemon exits within a few
+// seconds, and the new one waits up to 10s for that before it opens the
+// workspace.
+var handOffWait = 30 * time.Second
+
+// handedOver waits for the new daemon while daemon.json says the old one is
+// restarting, so a command run in the gap doesn't start a second daemon on
+// the same workspace. It gives up after handOffWait, as when the new daemon
+// never came up.
+func handedOver(ws core.Workspace) (*api.Client, bool) {
+	if c, err := api.Dial(ws); err != nil || !c.Info.Restarting {
+		return nil, false
+	}
+	for end := time.Now().Add(handOffWait); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		if c, ok := Running(ws); ok && !c.Info.Restarting {
+			return c, true
+		}
+	}
+	return nil, false
 }
 
 // checkHarness refuses a harness the Hive can't run, so a bad name fails when
@@ -146,6 +180,9 @@ func Run(ws core.Workspace, waitFor int) error {
 		_, err := proc.StartDetached([]string{exe, "daemon"}, append(os.Environ(), "HIVE_HOME="+ws.Root), ws.Root, "", filepath.Join(ws.Hive(), "daemon.log"))
 		return err
 	}
+	if back := release.Boot(ws); back != "" {
+		return rolledBack(ws, back)
+	}
 	// After the update hand-off: a renamed binary runs this check in its own daemon.
 	if err := checkHarness(ws.LoadConfig()); err != nil {
 		return err
@@ -197,6 +234,9 @@ func Run(ws core.Workspace, waitFor int) error {
 		}
 	})
 	a.C.J.Subscribe(s.onEvent)
+	a.Release.Report()
+	settled := time.AfterFunc(release.SettleAfter, func() { release.Settled(ws) })
+	defer settled.Stop()
 	a.C.J.MustAppend("hive.started", map[string]string{"version": core.Version, "pid": strconv.Itoa(os.Getpid())})
 	srv := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
 	go srv.Serve(ln)
@@ -211,6 +251,23 @@ func Run(ws core.Workspace, waitFor int) error {
 	if code := s.exit.Load(); code > 0 {
 		return ExitCode(code)
 	}
+	return err
+}
+
+// rolledBack starts the daemon from exe, the binary an update replaced, back
+// in its place because the update's daemon kept failing to start: through
+// the supervisor that runs this one, or detached.
+func rolledBack(ws core.Workspace, exe string) error {
+	if inHiveUnit() {
+		return ExitCode(RestartStatus) // the Hive's unit restarts on failure
+	}
+	if sup := supervisor(); sup.name != "" && sup.status >= 0 {
+		if sup.status == 0 {
+			return nil
+		}
+		return ExitCode(sup.status)
+	}
+	_, err := proc.StartDetached([]string{exe, "daemon"}, append(os.Environ(), "HIVE_HOME="+ws.Root), ws.Root, "", filepath.Join(ws.Hive(), "daemon.log"))
 	return err
 }
 
@@ -274,8 +331,9 @@ func supervisedBy(name, restart, killMode string) supervision {
 	return sup
 }
 
-// quietPoll is how often a restart that waits for a quiet moment looks.
-var quietPoll = 5 * time.Second
+// quietPoll is how often a restart that waits for a quiet moment looks, and
+// quietWait how long it waits before it gives up and lets turns start again.
+var quietPoll, quietWait = 5 * time.Second, 2 * time.Hour
 
 type server struct {
 	a       *app.App
@@ -292,11 +350,30 @@ func (s *server) onEvent(e core.Event) {
 	if e.Kind != "alert.raised" {
 		return
 	}
-	var a struct{ Kind, Text, Ref string }
+	var a struct{ Kind, Project, Key, Text, Ref string }
 	e.Decode(&a)
+	if a.Key == "" {
+		a.Key = a.Text
+	}
+	key := a.Kind + "\x00" + a.Project + "\x00" + a.Key
 	s.mu.Lock()
-	s.alerts = slices.DeleteFunc(s.alerts, func(x api.Alert) bool { return a.Ref != "" && x.Ref == a.Ref })
-	s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text, Ref: a.Ref})
+	if a.Ref != "" {
+		// A status that changes (a step-back's): the newest text replaces it. It
+		// never dedups with a keyed failure alert, even with the same text.
+		s.alerts = slices.DeleteFunc(s.alerts, func(x api.Alert) bool { return x.Ref == a.Ref })
+		s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text, Count: 1, Ref: a.Ref})
+	} else {
+		// A failure that repeats: one alert, counted.
+		n := 1
+		for i := range s.alerts {
+			if s.alerts[i].Key == key {
+				n += s.alerts[i].Count
+				s.alerts = append(s.alerts[:i], s.alerts[i+1:]...) // re-added below as the newest
+				break
+			}
+		}
+		s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text, Count: n, Key: key})
+	}
 	if len(s.alerts) > 50 {
 		s.alerts = s.alerts[len(s.alerts)-50:]
 	}
@@ -351,8 +428,13 @@ func (s *server) handBack(sup supervision) {
 		if n := rs.Live(); n > 0 {
 			j.MustAppend("alert.raised", map[string]string{"kind": "update", "ref": "restart", "text": fmt.Sprintf("The Hive restarts into the update once %d live turn(s) end, since stopping %s ends every process in it; new turns wait until then.", n, sup.name)})
 		}
-		for rs.Live() > 0 {
-			time.Sleep(quietPoll)
+		for end := time.Now().Add(quietWait); rs.Live() > 0; time.Sleep(quietPoll) {
+			if time.Now().After(end) {
+				rs.Hold("")
+				s.handing.Store(false)
+				j.MustAppend("alert.raised", map[string]string{"kind": "update", "ref": "restart", "text": fmt.Sprintf("The Hive waited %s for live turns to end and didn't restart into the update; turns start again, and the next update (`%s update`, or the scheduled one) tries the restart again.", quietWait, core.Cmd)})
+				return
+			}
 		}
 	}
 	info := s.info
@@ -490,6 +572,9 @@ func (s *server) routes() http.Handler {
 		if err := decode(r, &b); err != nil {
 			return nil, err
 		}
+		if err := s.reaches(r, s.projectOf("task", b.ID)); err != nil {
+			return nil, err
+		}
 		return "ok", a.Work.Retry(b.ID)
 	})
 	h("/api/ask", func(r *http.Request) (any, error) {
@@ -506,6 +591,39 @@ func (s *server) routes() http.Handler {
 			b.From = "person"
 		}
 		return a.Work.File(b)
+	})
+	h("/api/feedback", func(r *http.Request) (any, error) {
+		var b struct{ ID, Do, Note string }
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		switch b.Do {
+		case "seen":
+			return "ok", a.Feedback.Seen(b.ID)
+		case "close":
+			return a.Feedback.Close(b.ID, b.Note)
+		case "reopen":
+			return a.Feedback.Reopen(b.ID)
+		case "pass": // to its project's lead, or the Hive's lead, as the person's message
+			it, ok := a.Feedback.Get(b.ID)
+			if !ok {
+				return nil, core.ErrNotFound
+			}
+			to := "lead"
+			if _, ok := a.Chat.Get("project:" + it.Project); it.Project != "" && ok {
+				to = "project:" + it.Project
+			} else if p, _ := a.C.Projects.Get(it.Project); p.Isolated {
+				return nil, fmt.Errorf("project %s is isolated and has no chat of its own", it.Project)
+			}
+			if it.Status == feedback.Passed {
+				return nil, fmt.Errorf("already %s", it.Note)
+			}
+			if _, err := a.Chat.Post(to, "", "", feedback.Message(it)); err != nil {
+				return nil, err
+			}
+			return a.Feedback.Passed(b.ID, to)
+		}
+		return nil, fmt.Errorf("do must be seen, close, reopen or pass")
 	})
 	h("/api/module/report", func(r *http.Request) (any, error) {
 		var b map[string]any
@@ -779,10 +897,11 @@ func (s *server) state() api.State {
 	s.mu.Unlock()
 	if cfgErr != nil { // live, so it goes once the file is fixed
 		st.ConfigErr = cfgErr.Error()
-		st.Alerts = append(st.Alerts, api.Alert{At: time.Now(), Kind: "settings", Text: cfgErr.Error()})
+		st.Alerts = append(st.Alerts, api.Alert{At: time.Now(), Kind: "settings", Text: cfgErr.Error(), Count: 1})
 	}
 	st.Jobs = a.System.Jobs()
 	st.Wakeups = a.System.Wakeups()
+	st.Checks.Running, st.Checks.Waiting = a.C.Effects.Slots.State()
 	for _, m := range a.Mods.List() {
 		st.Modules = append(st.Modules, api.ModuleView{Name: m.Name, Description: m.Description, Source: m.Source.Source, Release: m.Source.Release, Projects: m.Source.Projects,
 			Hooks: m.Hooks, Status: a.Runner.Status(filepath.Base(m.Dir))})
@@ -804,6 +923,9 @@ func (s *server) state() api.State {
 		req = req[:20]
 	}
 	st.Requests = req
+	st.Feedback = a.Feedback.List(func(it feedback.Item) bool { return it.Status == feedback.Open })
+	done := a.Feedback.List(func(it feedback.Item) bool { return it.Status != feedback.Open })
+	st.Feedback = append(st.Feedback, done[:min(len(done), 20)]...)
 	return st
 }
 

@@ -1,6 +1,6 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
-// (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:reviewadvice, FAKE:crash,
+// (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:checkpoints (two commits in one turn, each waited on until merged), FAKE:reviewfix, FAKE:reviewadvice, FAKE:crash,
 // FAKE:limit, FAKE:offline, FAKE:needpackage, FAKE:goals, FAKE:needpython, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
@@ -175,7 +175,7 @@ func emit(v any) {
 var handedBack = regexp.MustCompile(`Stopped "[^"]*FAKE:leadfixes[^"]*" \(task (\S+?)[ )]`)
 
 var personRe = regexp.MustCompile(`(?s)(?:Person|Module [^:]+): (.*?)(?:` + regexp.QuoteMeta(core.PendingSep) + `|\z)`)
-var projectRe = regexp.MustCompile(`create (?:an? )?(isolated )?project (?:called |named )?([A-Za-z0-9_-]+)`)
+var projectRe = regexp.MustCompile(`create (?:an? )?((?:isolated|private) )?project (?:called |named )?([A-Za-z0-9_-]+)`)
 
 // moduleRe is a person asking for a new module; merged is the notice that one merged.
 var moduleRe = regexp.MustCompile(`(?i)make (?:me )?a module (?:called |named )?([a-z0-9-]+)`)
@@ -221,7 +221,7 @@ func leadAsk(ask, system string) (string, error) {
 		return "I opened " + strings.Join(got, ", ") + ".", nil
 	}
 	if pm := projectRe.FindStringSubmatch(ask); pm != nil {
-		_, err := call("create_project", map[string]any{"name": pm[2], "isolated": pm[1] != "", "description": ask, "goals": ask}, 3*time.Minute)
+		_, err := call("create_project", map[string]any{"name": pm[2], "sharing": strings.TrimSpace(pm[1]), "description": ask, "goals": ask}, 3*time.Minute)
 		if err != nil {
 			return "", err
 		}
@@ -234,8 +234,14 @@ func leadAsk(ask, system string) (string, error) {
 		}
 		return "Asked for installing it.", nil
 	}
+	if m := replyWord.FindStringSubmatch(ask); m != nil {
+		return m[1], nil
+	}
+	if m := namedRepo.FindStringSubmatch(ask); m != nil {
+		return m[1] + " has " + strings.Join(repoFiles(m[1]), ", ") + ".", nil
+	}
 	if strings.Contains(strings.ToLower(ask), "what's in the repo") {
-		return "The repo has " + strings.Join(repoFiles(), ", ") + ".", nil
+		return "The repo has " + strings.Join(repoFiles(os.Getenv("HIVE_PROJECT")), ", ") + ".", nil
 	}
 	// The journal: "remember X" is written to it, "what did I ask you to
 	// remember" is answered from it, so a lead that replaced this one can too.
@@ -407,13 +413,17 @@ func projectNames() ([]string, error) {
 	return names, nil
 }
 
-// repoFiles lists what a lead sees of its project: its checkout, brought to
+// replyWord asks for one word back; namedRepo asks the workspace lead about one project.
+var replyWord = regexp.MustCompile(`(?i)reply with the word (\w+)`)
+var namedRepo = regexp.MustCompile(`(?i)what's in the ([\w-]+) repo`)
+
+// repoFiles lists what a lead sees of a project: its checkout, brought to
 // main from $HIVE_RUN/main.bundle, when it has one (an isolated project's
 // lead), otherwise the project's clone in $HIVE_PROJECTS.
-func repoFiles() []string {
+func repoFiles(project string) []string {
 	dir := "."
 	if _, err := os.Stat(".git"); err != nil {
-		dir = filepath.Join(os.Getenv("HIVE_PROJECTS"), os.Getenv("HIVE_PROJECT"))
+		dir = filepath.Join(os.Getenv("HIVE_PROJECTS"), project)
 	} else if _, err := run("git", "fetch", "-q", filepath.Join(os.Getenv("HIVE_RUN"), "main.bundle"), "main"); err == nil {
 		run("git", "checkout", "-q", "-f", "FETCH_HEAD")
 	}
@@ -540,6 +550,16 @@ func worker(all, prompt, system string) (string, error) {
 			return "", err
 		}
 		os.WriteFile("ABOUT-HIVE.md", []byte(answer+"\n"), 0o644)
+	case strings.Contains(all, "FAKE:checkpoints"):
+		for i, score := range []string{"7", "9"} {
+			os.WriteFile("score.txt", []byte(score+"\n"), 0o644)
+			if out, err := run("git", "commit", "-qam", "score "+score); err != nil {
+				return "", fmt.Errorf("git commit: %v %s", err, out)
+			}
+			if !banked(i + 1) {
+				return "", fmt.Errorf("checkpoint %d never merged", i+1)
+			}
+		}
 	case strings.Contains(all, "FAKE:goals"):
 		appendFile(".hive/goals.md", "- a goal the worker wrote down\n")
 	case strings.Contains(all, "FAKE:stallcheck"):
@@ -574,6 +594,21 @@ var needTool = regexp.MustCompile(`FAKE:needtool (\S+)`)
 var skillModuleKey = regexp.MustCompile(`FAKE:skillmodule (\w+) (\w+)`)
 var useModuleKey = regexp.MustCompile(`FAKE:usemodule (\w+)`)
 var moduleKey = regexp.MustCompile(`FAKE:module ([a-z0-9-]+)`)
+
+// banked waits, in the same turn, until the journal shows n of this worker's
+// commits merged as checkpoints.
+func banked(n int) bool {
+	want, mine := fmt.Sprintf(`"banked":%d`, n), `"worker":"`+os.Getenv("HIVE_ID")+`"`
+	for end := time.Now().Add(4 * time.Minute); time.Now().Before(end); time.Sleep(time.Second) {
+		raw, _ := os.ReadFile(filepath.Join(os.Getenv("HIVE_STATE"), "events.jsonl"))
+		for _, l := range strings.Split(string(raw), "\n") {
+			if strings.Contains(l, want) && strings.Contains(l, mine) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // peek reads what the rest of the Hive left in $HIVE_STATE (another run's log,
 // a chat, the named warden's log, the journal), tries to open each for writing and to

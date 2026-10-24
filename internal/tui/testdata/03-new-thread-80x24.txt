@@ -3,21 +3,21 @@
  › Chats          │
    Dashboard      │   you  20:22
    Waiting     3  │   The parser and the renderer are tangled together. Can
-   Knowledge      │   you split the parser into its own package so reviewer
-   Modules        │   can check it on its own?
-   Settings       │   ▸ 2 replies  last 20:31
-                  │
- ▾ textkit-2      │   you  20:40
- › lead           │   Also check whether the docs build still passes.
-   writer         │   ▾ 1 reply
-   reviewer    ●  │     lead  20:41
- ▾ hive-web       │     It passes. I fixed two broken links in
-   lead        ●  │     guide/install.md on the same branch.
+   Feedback    1  │   you split the parser into its own package so reviewer
+   Knowledge      │   can check it on its own?
+   Modules        │   ▸ 2 replies  last 20:31
+   Settings       │
+                  │   you  20:40
+ ▾ textkit-2      │   Also check whether the docs build still passes.
+ › lead           │   ▾ 1 reply
+   writer         │     lead  20:41
+   reviewer    ●  │     It passes. I fixed two broken links in
+ ▾ hive-web       │     guide/install.md on the same branch.
+   lead        ●  │
    worker-2       │
-   reviewer       │
-   tribunal       │   3 waiting on you · → then a to answer
- ▸ website        │  ╭─ new thread · lead ────────────────────────────────────╮
-                  │  │ › Plan the 0.9 release: what's left, what's risky, and │
+   reviewer       │   3 waiting on you · → then a to answer
+   tribunal       │  ╭─ new thread · lead ────────────────────────────────────╮
+ ▸ website        │  │ › Plan the 0.9 release: what's left, what's risky, and │
                   │  │   who's doing what. Short list, please.                │
                   │  ╰────────────────────────────────────────────────────────╯
 ──────────────────┴─────────────────────────────────────────────────────────────
