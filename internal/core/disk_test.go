@@ -273,3 +273,23 @@ func TestPrefetchReadsOnlyTheCheckout(t *testing.T) {
 		}
 	}
 }
+
+// A go command run on a throwaway home collects no telemetry there, so no
+// detached child of go's writes under the home after go has exited and
+// races its removal.
+func TestPrefetchHomeHasTelemetryOff(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("no go here")
+	}
+	home := t.TempDir()
+	cmd := exec.Command(goBin, "env", "GOTELEMETRY")
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GOENV=off", "GOTOOLCHAIN=local"}, goTelemetryOff(home)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go env: %v %s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != "off" {
+		t.Fatalf("go's telemetry mode on the prefetch home is %q, want off", got)
+	}
+}
