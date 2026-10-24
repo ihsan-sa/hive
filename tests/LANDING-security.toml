@@ -1,7 +1,12 @@
 # Files where a mistake weakens the sandbox, leaks a credential or runs
 # something outside the sandbox. The lander merges a PR that touches one of
-# these only after a security read at the PR's head, and never takes the
-# light path for it. Paths are relative to the repo root; `*` stays inside
+# these only after a security read of the PR's own diff, and never takes the
+# light path for it. The Hive gives that read itself: a security reviewer
+# separate from the ordinary one (another model, briefed on the sandbox,
+# credentials and what runs outside it), and for a root entry below a
+# majority of a three-seat panel as well. A read from the box's perms seat or
+# architect, recorded with `hive read`, counts in their place, and its fix
+# sends the PR back. Paths are relative to the repo root; `*` stays inside
 # one path segment and `**` crosses segments. Every entry adds a read to each
 # PR that touches it, so keep the list narrow.
 paths = [
@@ -65,4 +70,15 @@ paths = [
 required_checks = [
   "test (ubuntu-latest)",
   "sandboxed-e2e",
+]
+
+# What runs with elevated rights: CI and release with the repository's
+# secrets, install, setup and self-update. A PR that touches one also needs
+# the Hive's panel (PanelSeats seats over tribunal_models) to say land by a
+# majority. A root entry is on the list whether or not paths names it.
+root = [
+  ".github/workflows/**",
+  "install/**",
+  "internal/setup/**",
+  "internal/mod/release/**",
 ]

@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"testing"
 	"time"
 	"unsafe"
 
@@ -15,18 +16,26 @@ import (
 // crash in a test kills the daemon alone, so its runs outlive it as they do
 // on a person's machine.
 func init() {
-	contain = func(pid int) func() {
+	contain = func(t *testing.T, pid int) func() {
+		// A failure here lets the daemon's runs outlive the test: the
+		// cleanup errors that follow come from this, not from the test.
 		job, err := windows.CreateJobObject(nil, nil)
 		if err != nil {
+			t.Logf("no job object for the daemon: %v", err)
 			return func() {}
 		}
 		info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
 		info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-		windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)))
+		if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+			t.Logf("the daemon's job won't end its processes on close: %v", err)
+		}
 		p, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(pid))
 		if err == nil {
-			windows.AssignProcessToJobObject(job, p)
+			err = windows.AssignProcessToJobObject(job, p)
 			windows.CloseHandle(p)
+		}
+		if err != nil {
+			t.Logf("the daemon (pid %d) isn't in its job: %v", pid, err)
 		}
 		return func() {
 			windows.TerminateJobObject(job, 1)

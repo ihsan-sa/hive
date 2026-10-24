@@ -196,7 +196,7 @@ func (h *hive) launch() {
 	log.Close() // the daemon has its own handle
 	h.cmd = cmd
 	if contain != nil {
-		h.jobs = append(h.jobs, contain(cmd.Process.Pid))
+		h.jobs = append(h.jobs, contain(h.t, cmd.Process.Pid))
 	}
 	go cmd.Wait()
 	// A loaded Windows runner has taken over 30 seconds to start one.
@@ -206,7 +206,9 @@ func (h *hive) launch() {
 		if c, err := api.Dial(h.ws); err == nil && c.Info.PID == cmd.Process.Pid && c.Ping() {
 			h.c = c
 			if d := time.Since(began); d > 10*time.Second {
-				h.t.Logf("the daemon took %s to start", d.Round(time.Second))
+				// The daemon's own account of a slow start is its log's last lines.
+				raw, _ := os.ReadFile(filepath.Join(h.ws.Hive(), "daemon-test.log"))
+				h.t.Logf("the daemon took %s to start; its log ends: %s", d.Round(time.Second), raw[max(0, len(raw)-1000):])
 			}
 			return
 		}
@@ -1001,6 +1003,45 @@ func TestWaitingReachesThePerson(t *testing.T) {
 	h.wait("the refused worker to stop", 3*minute, taskStage("wait", "no", work.StageBlocked))
 }
 
+// TestClosedPRStops: a pull request the person closes on the forge while its
+// task waits for them ends the task, even once its merge is approved, so the
+// dashboard never lists it as merging and main never takes it.
+func TestClosedPRStops(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/closed", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "closed", "repo": "me/closed"}, nil)
+	h.post("/api/ask", map[string]string{"project": "closed", "title": "edit the goals", "known": "FAKE:goals"}, nil)
+	st := h.wait("the goals change to wait for the person", 3*minute, func(st api.State) bool {
+		tk, ok := task(st, "closed", "edit the goals")
+		return ok && tk.Stage == work.StagePerson && tk.PR.Number != 0
+	})
+	tk, _ := task(st, "closed", "edit the goals")
+	if err := h.forge.ClosePR("me/closed", tk.PR.Number, "not wanted"); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range st.Asks {
+		if a.Kind == "merge" && strings.Contains(a.Title, "edit the goals") {
+			h.post("/api/answer", map[string]string{"id": a.ID, "answer": "merge"}, nil)
+		}
+	}
+	st = h.wait("the closed PR's task to stop as the person's", 2*minute, func(st api.State) bool {
+		tk, ok := task(st, "closed", "edit the goals")
+		return ok && tk.Stage == work.StageStopped && tk.ByPerson
+	})
+	for _, p := range h.forge.PRs("me/closed") {
+		if p.State == "MERGED" {
+			t.Fatalf("a closed PR's change merged: %+v", p)
+		}
+	}
+	for i := 0; i < 3; i++ { // it stays stopped across ticks
+		time.Sleep(2 * time.Second)
+		if tk, _ := task(h.state(), "closed", "edit the goals"); tk.Stage != work.StageStopped {
+			t.Fatalf("the stopped task came back as %q", tk.Stage)
+		}
+	}
+}
+
 // TestBlockedWorkComesBack replays the first real run: each worker's tests fail
 // on a missing tool, it asks a warden and finishes blocked at once. Where the
 // warden installs the tool, its answer wakes the worker and the PR merges;
@@ -1326,7 +1367,7 @@ var adopt func()
 
 // contain puts a daemon, and what it starts from then on, in a group that
 // the returned func ends (Windows only).
-var contain func(pid int) func()
+var contain func(t *testing.T, pid int) func()
 
 // TestLiveWarden is the host probe for a real harness: run it with
 // HIVE_E2E_HARNESS=claude. A worker that needs a package outside its checkout

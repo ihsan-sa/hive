@@ -147,6 +147,7 @@ func Stop(ws core.Workspace) error {
 
 // Run is `hive daemon`: the background process.
 func Run(ws core.Workspace, waitFor int) error {
+	began := time.Now()
 	inUnit := inHiveUnit()
 	from := "" // the version of the daemon this one replaces
 	if waitFor > 0 {
@@ -187,11 +188,13 @@ func Run(ws core.Workspace, waitFor int) error {
 	if err := checkHarness(ws.LoadConfig()); err != nil {
 		return err
 	}
+	booted := time.Now()
 	a, err := app.New(ws, Forge())
 	if err != nil {
 		return err
 	}
 	defer a.Close()
+	built := time.Now()
 	// Before the token is published: an earlier version's turns can read private/.
 	if err := a.C.Runs.Migrate(); err != nil {
 		return err
@@ -240,6 +243,11 @@ func Run(ws core.Workspace, waitFor int) error {
 	a.C.J.MustAppend("hive.started", map[string]string{"version": core.Version, "pid": strconv.Itoa(os.Getpid())})
 	srv := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
 	go srv.Serve(ln)
+	// A slow start says where its time went (a Windows ci runner has taken over 30s).
+	if d := time.Since(began); d > 5*time.Second {
+		fmt.Printf("hive: took %s to start: %s before building the modules, %s building them (%s of it copying the Hive's source into the knowledge base), %s after\n",
+			d.Round(time.Millisecond), booted.Sub(began).Round(time.Millisecond), built.Sub(booted).Round(time.Millisecond), a.KB.Seeded.Round(time.Millisecond), time.Since(built).Round(time.Millisecond))
+	}
 	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	go func() { <-sig; cancel() }()
@@ -850,7 +858,7 @@ func previews(asks []core.Ask) []core.Ask {
 func (s *server) state() api.State {
 	a := s.a
 	cfg, cfgErr := a.C.WS.ReadConfig()
-	st := api.State{Version: core.Version, Seq: a.C.J.Seq(), Workspace: a.C.WS.Root, Config: cfg}
+	st := api.State{Version: core.Version, Channel: a.Release.Channel(), Seq: a.C.J.Seq(), Workspace: a.C.WS.Root, Config: cfg}
 	if sb, err := a.C.Sandbox(); err != nil {
 		st.SandboxErr = err.Error()
 	} else {

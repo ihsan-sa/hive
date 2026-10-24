@@ -28,6 +28,9 @@ type PR struct {
 	HeadSHA   string `json:"head_sha"`
 	MergeSHA  string `json:"merge_sha,omitempty"`
 	Mergeable string `json:"mergeable,omitempty"` // MERGEABLE, CONFLICTING, UNKNOWN (still being worked out)
+	// MergeState is the forge's word on what else stands in the way; BEHIND
+	// means its rules want the branch brought up to date with its base.
+	MergeState string `json:"merge_state,omitempty"`
 }
 
 // Forge is where code, issues and pull requests live. GitHub through the gh
@@ -69,6 +72,12 @@ type Forge interface {
 	TagCommit(repo, tag string) (string, error)
 	ReleaseRuns(repo, sha string) ([]WorkflowRun, error)
 	PublishRelease(repo, tag string) error
+	// Releases are the newest releases, pre-releases included and drafts
+	// not, newest first; RunJobs are one workflow run's jobs. An install
+	// following pre-releases reads them to update once its own system's
+	// jobs of a pre-release's gates pass.
+	Releases(repo string) ([]Release, error)
+	RunJobs(repo string, run int64) ([]WorkflowJob, error)
 }
 
 // CheckRun is one of the forge's own checks on a commit, such as a CI job.
@@ -99,9 +108,18 @@ type Release struct {
 
 // WorkflowRun is one run of a CI workflow, newest first in a list.
 type WorkflowRun struct {
+	ID         int64  `json:"id"`
 	Name       string `json:"name"`
 	Status     string `json:"status"`     // queued, in_progress, completed
 	Conclusion string `json:"conclusion"` // success, failure, cancelled... once completed
+	URL        string `json:"html_url"`
+}
+
+// WorkflowJob is one job of a workflow run, such as "test (ubuntu-latest)".
+type WorkflowJob struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
 	URL        string `json:"html_url"`
 }
 
@@ -448,6 +466,7 @@ type ghPR struct {
 	State       string `json:"state"`
 	HeadRefOid  string `json:"headRefOid"`
 	Mergeable   string `json:"mergeable"`
+	MergeState  string `json:"mergeStateStatus"`
 	MergeCommit *struct {
 		Oid string `json:"oid"`
 	} `json:"mergeCommit"`
@@ -457,14 +476,14 @@ type ghPR struct {
 }
 
 func (p ghPR) pr() PR {
-	out := PR{Number: p.Number, URL: p.URL, State: p.State, HeadSHA: p.HeadRefOid, Mergeable: p.Mergeable}
+	out := PR{Number: p.Number, URL: p.URL, State: p.State, HeadSHA: p.HeadRefOid, Mergeable: p.Mergeable, MergeState: p.MergeState}
 	if p.MergeCommit != nil {
 		out.MergeSHA = p.MergeCommit.Oid
 	}
 	return out
 }
 
-const prFields = "number,url,state,headRefOid,mergeable,mergeCommit,headRepositoryOwner"
+const prFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,mergeCommit,headRepositoryOwner"
 
 func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
 	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", prFields}
@@ -738,6 +757,34 @@ func (GitHub) ReleaseRuns(repo, sha string) ([]WorkflowRun, error) {
 	}
 	var runs []WorkflowRun
 	return runs, json.Unmarshal([]byte(out), &runs)
+}
+
+func (GitHub) Releases(repo string) ([]Release, error) {
+	out, err := gh(repo, "release", "list", "-R", repo, "--exclude-drafts", "--limit", "30", "--json", "tagName,isPrerelease")
+	if err != nil {
+		return nil, err
+	}
+	var rs []struct {
+		TagName      string `json:"tagName"`
+		IsPrerelease bool   `json:"isPrerelease"`
+	}
+	if err := json.Unmarshal([]byte(out), &rs); err != nil {
+		return nil, err
+	}
+	var rels []Release
+	for _, r := range rs {
+		rels = append(rels, Release{Tag: r.TagName, Prerelease: r.IsPrerelease})
+	}
+	return rels, nil
+}
+
+func (GitHub) RunJobs(repo string, run int64) ([]WorkflowJob, error) {
+	out, err := gh(repo, "api", fmt.Sprintf("repos/%s/actions/runs/%d/jobs?per_page=100", repo, run), "-q", ".jobs")
+	if err != nil {
+		return nil, err
+	}
+	var jobs []WorkflowJob
+	return jobs, json.Unmarshal([]byte(out), &jobs)
 }
 
 func (GitHub) PublishRelease(repo, tag string) error {
