@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/ihsan-sa/hive-standalone-build/internal/text"
 	"maps"
 	"os/exec"
 	"slices"
@@ -136,16 +137,16 @@ func (m *model) dashRows() []row {
 	}
 	if add(row{key: "plans", text: "plan usage", expand: len(m.st.Plans) > 0, def: true}) {
 		for _, p := range m.st.Plans {
-			status := p.Limit.Status
+			status := text.Visible(p.Limit.Status)
 			if status == "rejected" {
 				status = stBad.Render("limited") + ", resets " + p.Limit.ResetsAt.Local().Format("Mon 15:04")
 			}
-			text := fmt.Sprintf("%s  %s", p.Key(), status)
+			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), status)
 			for _, k := range sortedKeys(p.Limit.Windows) {
 				wnd := p.Limit.Windows[k]
-				text += fmt.Sprintf("  %s %.0f%%", k, wnd.Utilization*100)
+				line += fmt.Sprintf("  %s %.0f%%", text.Visible(k), wnd.Utilization*100)
 			}
-			add(row{key: "plan:" + p.Key(), depth: 1, text: text})
+			add(row{key: "plan:" + p.Key(), depth: 1, text: line})
 		}
 	}
 	add(row{key: "waiting", text: fmt.Sprintf("waiting on you (%d)", len(m.st.Asks)), jump: secWaiting})
