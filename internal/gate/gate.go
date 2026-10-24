@@ -323,10 +323,48 @@ func build(cfg Config, c *Child, sha string) error {
 		return err
 	}
 	c.Bin = filepath.Join(c.BinDir, "hive")
+	if err := prefetch(cfg, c); err != nil {
+		return err
+	}
 	c.Building = true
 	defer func() { c.Building = false }()
+	defer c.with(offline...)()
 	if out, err := c.Exec(30*time.Minute, c.Src, "go", "build", "-ldflags", "-X "+versionVar+"="+versionOf(sha), "-o", c.Bin, "./cmd/hive"); err != nil {
 		return fmt.Errorf("go build: %s", tail(out, 600))
+	}
+	return nil
+}
+
+// offline is how a side builds and tests: from the modules the gate fetched
+// for it, never downloading into the module cache, which it sees read-only.
+var offline = []string{"GOPROXY=off", "GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local"}
+
+// with adds env to the child's until the returned func is called.
+func (c *Child) with(env ...string) func() {
+	saved := c.Extra
+	c.Extra = append(append([]string{}, saved...), env...)
+	return func() { c.Extra = saved }
+}
+
+// prefetch downloads the modules the side's go.mod and go.sum name into the
+// module cache, here, before the side is built: a candidate that adds or bumps
+// a dependency still builds in its sandbox. It runs no code of the side's:
+// the go command reads go.mod and go.sum and fetches what they name, checked
+// against go.sum and the checksum database. GOTOOLCHAIN=local, so a go.mod
+// that asks for another Go cannot make the go command fetch and run it.
+func prefetch(cfg Config, c *Child) error {
+	dir := filepath.Join(cfg.Out, "prefetch")
+	for _, d := range []string{"home", "gocache"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			return err
+		}
+	}
+	cmd := exec.Command("go", "mod", "download")
+	cmd.Dir = c.Src
+	cmd.Env = append(cleanEnv(), "HOME="+filepath.Join(dir, "home"), "GOCACHE="+filepath.Join(dir, "gocache"), "GOROOT="+c.Go.Root, "GOMODCACHE="+c.Go.ModCache,
+		"GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("go mod download: %v: %s", err, tail(string(out), 600))
 	}
 	return nil
 }
@@ -336,6 +374,7 @@ func build(cfg Config, c *Child, sha string) error {
 // runs only like this, with the child's empty HOME and no host login; never
 // through gitRun.
 func unitTest(c *Child) error {
+	defer c.with(offline...)()
 	if out, err := c.Exec(30*time.Minute, c.Src, "go", "vet", "./..."); err != nil {
 		return fmt.Errorf("go vet: %s", tail(out, 600))
 	}

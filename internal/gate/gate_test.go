@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"archive/zip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -204,6 +205,66 @@ func TestNoHostHome(t *testing.T) {
 	}
 	if err := unitTest(c); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A candidate that adds a dependency builds: the gate fetches its modules
+// before the build, and the side itself builds offline (as it must, with the
+// module cache read-only in its sandbox).
+func TestBuildFetchesANewDependency(t *testing.T) {
+	g, err := FindGo()
+	if err != nil {
+		t.Skip(err)
+	}
+	dir := t.TempDir()
+	proxy := filepath.Join(dir, "proxy", "example.com", "dep", "@v")
+	os.MkdirAll(proxy, 0o755)
+	os.WriteFile(filepath.Join(proxy, "list"), []byte("v1.0.0\n"), 0o644)
+	os.WriteFile(filepath.Join(proxy, "v1.0.0.info"), []byte(`{"Version":"v1.0.0","Time":"2026-01-01T00:00:00Z"}`), 0o644)
+	os.WriteFile(filepath.Join(proxy, "v1.0.0.mod"), []byte("module example.com/dep\n\ngo 1.21\n"), 0o644)
+	zf, _ := os.Create(filepath.Join(proxy, "v1.0.0.zip"))
+	zw := zip.NewWriter(zf)
+	for name, body := range map[string]string{"go.mod": "module example.com/dep\n\ngo 1.21\n", "dep.go": "package dep\n\nfunc Two() int { return 2 }\n"} {
+		w, _ := zw.Create("example.com/dep@v1.0.0/" + name)
+		w.Write([]byte(body))
+	}
+	zw.Close()
+	zf.Close()
+	t.Setenv("GOPROXY", "file://"+filepath.Join(dir, "proxy"))
+	t.Setenv("GONOSUMDB", "example.com")
+	repo := filepath.Join(dir, "repo")
+	os.MkdirAll(filepath.Join(repo, "cmd", "hive"), 0o755)
+	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module cand\n\ngo 1.21\n\nrequire example.com/dep v1.0.0\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "cmd", "hive", "main.go"), []byte("package main\n\nimport \"example.com/dep\"\n\nfunc main() { _ = dep.Two() }\n"), 0o644)
+	gocmd := func(cache string, args ...string) {
+		cmd := exec.Command("go", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "GOMODCACHE="+cache, "GOFLAGS=-mod=mod")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("go %v: %v %s", args, err, out)
+		}
+	}
+	setup := filepath.Join(dir, "setup-cache")
+	gocmd(setup, "mod", "tidy")
+	for _, a := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, a...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+	}
+	sha, _ := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	g.ModCache = filepath.Join(dir, "cache") // empty: nothing of dep in it yet
+	t.Cleanup(func() {
+		for _, c := range []string{setup, g.ModCache} {
+			exec.Command("chmod", "-R", "u+w", c).Run()
+		}
+	})
+	out := filepath.Join(dir, "out")
+	c := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: sandbox(), Go: g}
+	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha))); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(c.Bin) {
+		t.Fatal("no binary")
 	}
 }
 
