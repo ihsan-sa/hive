@@ -3,6 +3,7 @@ package report
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -23,30 +24,42 @@ func commas(n int) string {
 // code clips to, and nothing the code doesn't send: a field added, dropped or
 // recapped without the question (or the other way round) fails here.
 func TestQuestionSaysWhatIsSent(t *testing.T) {
-	says := map[string]string{
-		"install":                "a random install id",
-		"version":                "the Hive version",
-		"type":                   "failure report",
-		"os":                     "the OS",
-		"kind":                   "what failed",
-		"at":                     "when",
-		"message":                "why (up to " + commas(maxText) + " characters)",
-		"log":                    "the agent reply or the last lines of the task log (up to " + commas(maxExcerpt) + " characters)",
-		"usage":                  "A usage report",
-		"usage.runs":             "runs",
-		"usage.turns":            "turns",
-		"usage.merges":           "merges",
-		"usage.reverts":          "reverts",
-		"usage.cost_usd":         "cost",
-		"usage.failures_dropped": "dropped reports",
+	// Each key a report sends, as type.key, with the sentence of the question
+	// that names it (by how it starts) and the words it's named by there, so
+	// a word used elsewhere in the question doesn't count.
+	common := "Every report has "
+	failure, usage := "Each failure report holds ", "A usage report counts "
+	says := map[string][2]string{
+		"failure.install":              {common, "a random install id"},
+		"failure.version":              {common, "the Hive version"},
+		"failure.os":                   {common, "the OS"},
+		"failure.type":                 {"Send ", "Send failure and usage reports"},
+		"failure.kind":                 {failure, "holds what failed,"},
+		"failure.at":                   {failure, "what failed, when and why"},
+		"failure.message":              {failure, "why (up to " + commas(maxText) + " characters)"},
+		"failure.log":                  {failure, "the agent reply or the last lines of the task log (up to " + commas(maxExcerpt) + " characters)"},
+		"usage.install":                {common, "a random install id"},
+		"usage.version":                {common, "the Hive version"},
+		"usage.os":                     {common, "the OS"},
+		"usage.type":                   {"Send ", "Send failure and usage reports"},
+		"usage.at":                     {usage, "the time span it covers"},
+		"usage.message":                {usage, "with the harness name and the time span it covers"},
+		"usage.usage":                  {usage, "A usage report counts"},
+		"usage.usage.runs":             {usage, "counts runs,"},
+		"usage.usage.turns":            {usage, " turns,"},
+		"usage.usage.merges":           {usage, " merges,"},
+		"usage.usage.reverts":          {usage, " reverts,"},
+		"usage.usage.cost_usd":         {usage, " cost and"},
+		"usage.usage.failures_dropped": {usage, "and dropped reports,"},
 	}
-	for key, phrase := range says {
-		if !strings.Contains(Question, phrase) {
-			t.Errorf("the question doesn't say %q, for %s", phrase, key)
+	sentences := strings.FieldsFunc(strings.NewReplacer("? ", "?\n", ". ", ".\n").Replace(Question), func(r rune) bool { return r == '\n' })
+	for key, at := range says {
+		i := slices.IndexFunc(sentences, func(s string) bool { return strings.HasPrefix(s, at[0]) })
+		if i < 0 {
+			t.Errorf("the question has no sentence starting %q, for %s", at[0], key)
+		} else if !strings.Contains(sentences[i], at[1]) {
+			t.Errorf("the question's %q doesn't say %q, for %s", sentences[i], at[1], key)
 		}
-	}
-	if !strings.Contains(Question, "harness name") {
-		t.Error("the usage report's message names the harness, and the question doesn't say so")
 	}
 	if i := strings.IndexAny(Question, "'\"`$%\\"); i >= 0 {
 		t.Errorf("the installers quote the question, and it has %q", Question[i])
@@ -75,6 +88,7 @@ func TestQuestionSaysWhatIsSent(t *testing.T) {
 			t.Fatal(err)
 		}
 		for k, v := range r {
+			k = fmt.Sprint(r["type"]) + "." + k
 			seen[k] = true
 			if s, ok := v.(string); ok {
 				longest[k] = max(longest[k], utf8.RuneCountInString(s))
@@ -96,7 +110,7 @@ func TestQuestionSaysWhatIsSent(t *testing.T) {
 			t.Errorf("the question says reports hold %q, and none sent it", k)
 		}
 	}
-	if longest["message"] != maxText || longest["log"] != maxExcerpt {
-		t.Errorf("message clipped to %d and log to %d characters; the question says %d and %d", longest["message"], longest["log"], maxText, maxExcerpt)
+	if longest["failure.message"] != maxText || longest["failure.log"] != maxExcerpt {
+		t.Errorf("message clipped to %d and log to %d characters; the question says %d and %d", longest["failure.message"], longest["failure.log"], maxText, maxExcerpt)
 	}
 }

@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -214,13 +215,10 @@ func TestRerunFailedRunsOnlyFailedRuns(t *testing.T) {
 // the one that counts, not the failed attempt before it.
 func TestChecksNewestAttemptByID(t *testing.T) {
 	stubGH(t, func(args []string) (string, string, error) {
-		switch {
-		case strings.Contains(args[1], "check-runs"):
-			return `{"check_runs":[{"id":5,"name":"test","status":"completed","conclusion":"failure","started_at":"2026-10-24T10:00:00Z"},{"id":9,"name":"test","status":"queued"}]}`, "", nil
-		case strings.HasSuffix(args[1], "/status"):
-			return `{"statuses":[]}`, "", nil
+		if strings.Contains(args[2], "check-runs") {
+			return `{"id":5,"name":"test","status":"completed","conclusion":"failure","started_at":"2026-10-24T10:00:00Z"}` + "\n" + `{"id":9,"name":"test","status":"queued"}`, "", nil
 		}
-		return `{"check_suites":[]}`, "", nil
+		return "", "", nil
 	})
 	runs, err := GitHub{}.Checks("o/r", "abc")
 	if err != nil || len(runs) != 1 || runs[0].State != CheckPending {
@@ -258,5 +256,50 @@ func TestGitHubReadyPRAtItsHead(t *testing.T) {
 	}
 	if !ghWrites([]string{"pr", "ready", "7"}) {
 		t.Fatal("gh pr ready isn't counted a write")
+	}
+}
+
+// Checks reads every page of check runs, statuses and suites (a head past
+// 100 check runs still shows its 101st), and takes gh's items whether it
+// printed them compact or indented. The replies are the item shapes GitHub's
+// check-runs, combined status and check-suites calls return.
+func TestChecksPaginates(t *testing.T) {
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		var b strings.Builder
+		switch {
+		case strings.Contains(args[2], "check-runs"):
+			for i := 1; i <= 100; i++ {
+				fmt.Fprintf(&b, `{"id":%d,"name":"job-%d","status":"completed","conclusion":"success","started_at":"2026-10-24T10:00:00Z","html_url":"https://github.com/o/r/actions/runs/1/job/%d"}`+"\n", i, i, i)
+			}
+			b.WriteString("{\n  \"id\": 101,\n  \"name\": \"test (ubuntu-latest)\",\n  \"status\": \"completed\",\n  \"conclusion\": \"failure\"\n}\n")
+		case strings.Contains(args[2], "/status"):
+			b.WriteString(`{"context":"ci/legacy","state":"pending","description":"waiting","target_url":"https://ci.example/1"}`)
+		default:
+			fmt.Fprintf(&b, `{"status":"queued","latest_check_runs_count":0,"created_at":%q,"app":{"slug":"github-actions"}}`+"\n", recent)
+			b.WriteString(`{"status":"completed","latest_check_runs_count":101,"created_at":"2026-10-24T10:00:00Z","app":{"slug":"github-actions"}}`)
+		}
+		return b.String(), "", nil
+	})
+	runs, err := GitHub{}.Checks("o/r", "abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 103 {
+		t.Fatalf("%d checks, want 101 runs, a status and a young suite", len(runs))
+	}
+	if r := runs[100]; r.Name != "test (ubuntu-latest)" || r.State != CheckFail {
+		t.Errorf("the 101st run reads %+v", r)
+	}
+	if r := runs[101]; r.Name != "ci/legacy" || r.State != CheckPending {
+		t.Errorf("the status reads %+v", r)
+	}
+	if r := runs[102]; r.Name != "github-actions" || r.State != CheckPending {
+		t.Errorf("the young suite reads %+v", r)
+	}
+	for _, c := range *calls {
+		if len(c) < 5 || c[1] != "--paginate" || !strings.Contains(c[2], "per_page=100") || c[3] != "-q" {
+			t.Errorf("gh %q doesn't read every page", c)
+		}
 	}
 }

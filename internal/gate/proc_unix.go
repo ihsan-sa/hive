@@ -10,9 +10,11 @@ import (
 // killTree makes the command the head of its own process group and has a
 // deadline kill the whole group, not only the process: a child's daemon and
 // agents go with it. Under bubblewrap, killing bwrap ends its pid namespace,
-// so nothing of the child outlives it even past a setsid.
+// so nothing of the child outlives it even past a setsid; bare, what left
+// the group (a detached daemon) is ended by reap.
 func killTree(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	dieWithGate(cmd.SysProcAttr)
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil

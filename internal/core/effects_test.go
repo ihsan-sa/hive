@@ -555,6 +555,19 @@ func TestReadsFollowTheOwnDiff(t *testing.T) {
 	if !c.Effects.Reviewed(self, chr, revert) {
 		t.Fatal("a read of the revert's own head should do")
 	}
+
+	// A fix on the caught-up head is a fix on its diff: the first head, read
+	// land with the same diff, no longer counts as read either.
+	c.Runs.Start(RunSpec{ID: "r8d", Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": update, "diff.patch": ch2.Diff}})
+	if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: update, Run: "r8d", Verdict: "fix"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Effects.Reads(p.Name, sha, ch.DiffID); len(got) != 0 {
+		t.Fatalf("a land on %s outlived a fix on the same diff at %s: %v", Short(sha), Short(update), got)
+	}
+	if c.Effects.Reviewed(self, ch, sha) {
+		t.Fatal("the first head still reads as reviewed after a fix on its diff")
+	}
 }
 
 // DiffID ignores where hunks sit and blob ids, and nothing else.
@@ -564,6 +577,15 @@ func TestDiffID(t *testing.T) {
 	changed := "diff --git a/f b/f\nindex 111..222 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1,3 @@ func x\n a\n+B\n c\n"
 	if DiffID(a) != DiffID(moved) || DiffID(a) == DiffID(changed) || DiffID("") != "" {
 		t.Fatalf("%s %s %s", DiffID(a), DiffID(moved), DiffID(changed))
+	}
+	// A binary delta is relative to the old blob: the same delta from another
+	// blob is another change.
+	bin := "diff --git a/b b/b\nindex %s..999 100644\nGIT binary patch\ndelta 5\nzcmV\n\n"
+	if DiffID(fmt.Sprintf(bin, "111")) == DiffID(fmt.Sprintf(bin, "222")) {
+		t.Fatal("binary deltas from different blobs share an id")
+	}
+	if DiffID(fmt.Sprintf(bin, "111")+a) != DiffID(fmt.Sprintf(bin, "111")+moved) {
+		t.Fatal("a binary file kept a text file's blob ids in the id")
 	}
 }
 
