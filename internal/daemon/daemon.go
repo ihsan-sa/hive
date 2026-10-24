@@ -940,6 +940,7 @@ func (s *server) state() api.State {
 		st.Offline = a.Work.Offline()
 	}
 	st.Plans = a.C.Runs.Plans()
+	st.Logins = a.C.Tokens.States()
 	sw := a.Improve.Sweeps()
 	if len(sw) > 10 {
 		sw = sw[:10]

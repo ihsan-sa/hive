@@ -258,6 +258,11 @@ func (m *model) usage(w int) string {
 		}
 		parts = append(parts, s)
 	}
+	for _, l := range m.st.Logins {
+		if l.Error != "" {
+			parts = append(parts, stBad.Render(text.Visible(l.Login)+" login can't renew"))
+		}
+	}
 	if n := len(m.st.Alerts); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d %s", n, plural(n, "alert", "alerts")))
 	}

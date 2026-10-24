@@ -926,6 +926,32 @@ func TestPlanUsageEscapesFeedNames(t *testing.T) {
 	}
 }
 
+// Each login shows its expiry and last renewal, and one that can't renew
+// says so on the dashboard and in the usage line, with what to run.
+func TestLoginsShowExpiryAndRenewal(t *testing.T) {
+	m := testModel(200, 40)
+	exp, renewed := time.Now().Add(3*time.Hour), time.Now().Add(-5*time.Hour)
+	m.st.Logins = []core.LoginState{
+		{Login: "claude", Expires: exp, Renewed: renewed},
+		{Login: "claude:work", Expires: exp, Error: "`claude` not found\x1b[2J", Run: "install Claude Code"},
+	}
+	var dash []string
+	for _, r := range m.dashRows() {
+		if strings.HasPrefix(r.key, "login:") {
+			dash = append(dash, r.text)
+		}
+	}
+	if len(dash) != 2 || !strings.Contains(dash[0], "expires "+exp.Local().Format("Mon 15:04")) || !strings.Contains(dash[0], "renewed "+renewed.Local().Format("Mon 15:04")) {
+		t.Fatalf("a login shows its expiry and last renewal: %q", dash)
+	}
+	if !strings.Contains(dash[1], "can't renew") || !strings.Contains(dash[1], "install Claude Code") || strings.ContainsRune(dash[1], 0x1b) {
+		t.Fatalf("a login that can't renew says why and what to run: %q", dash[1])
+	}
+	if u := m.usage(400); !strings.Contains(u, "claude:work login can't renew") {
+		t.Fatalf("the usage line says a login can't renew: %q", u)
+	}
+}
+
 // A role's route is set from a pick-list, never typed: each known model can
 // be added at the end or removed, and clear gives the role back its model
 // settings.

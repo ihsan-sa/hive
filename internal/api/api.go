@@ -48,6 +48,7 @@ type State struct {
 	Projects   []ProjectView      `json:"projects"`
 	Runs       []core.Run         `json:"runs"`
 	Plans      []core.Plan        `json:"plans"`
+	Logins     []core.LoginState  `json:"logins"` // each login's expiry and last renewal
 	Sweeps     []improve.Sweep    `json:"sweeps"`
 	StepBacks  []improve.StepBack `json:"stepbacks"`
 	Asks       []core.Ask         `json:"asks"`

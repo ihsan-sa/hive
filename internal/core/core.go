@@ -45,6 +45,8 @@ func Open(ws Workspace, forge Forge) (*Core, error) {
 	c := &Core{WS: ws, J: j, Tokens: NewTokens(ws)}
 	c.Projects = NewProjects(j)
 	c.Person = NewPerson(j)
+	c.Tokens.Track(j, c.Person)
+	c.Person.Handle("login", func(a Ask) { c.Tokens.Retry(a.Ref) })
 	c.Runs = NewRuns(ws, j, c.Sandbox, c.Tokens, c.Tools)
 	c.Runs.projs = c.Projects
 	c.Effects = NewEffects(ws, j, forge, c.Sandbox, c.Tools, c.Runs)

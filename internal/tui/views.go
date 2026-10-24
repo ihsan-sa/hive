@@ -164,6 +164,11 @@ func (m *model) dashRows() []row {
 			add(row{key: "plan:" + p.Key(), depth: 1, text: line})
 		}
 	}
+	if add(row{key: "logins", text: "logins", expand: len(m.st.Logins) > 0, def: true}) {
+		for _, l := range m.st.Logins {
+			add(row{key: "login:" + l.Login, depth: 1, text: loginLine(l)})
+		}
+	}
 	add(row{key: "waiting", text: fmt.Sprintf("waiting on you (%d)", len(m.st.Asks)), jump: secWaiting})
 	if add(row{key: "requests", text: fmt.Sprintf("requests past the sandbox (%d)", len(m.st.Requests)), expand: len(m.st.Requests) > 0}) {
 		for _, r := range m.st.Requests {
@@ -1298,3 +1303,25 @@ func (m *model) viewSettings() []string {
 }
 
 func fmtNum(f float64) string { return strconv.FormatFloat(f, 'g', 6, 64) }
+
+// loginLine is a login's expiry and last renewal, and why it can't renew.
+func loginLine(l core.LoginState) string {
+	exp := "expires " + l.Expires.Local().Format("Mon 15:04")
+	if l.Expires.IsZero() {
+		exp = "expiry unknown"
+	} else if !l.Expires.After(time.Now()) {
+		exp = stBad.Render("expired") + " " + l.Expires.Local().Format("Mon 15:04")
+	}
+	renewed := "never renewed by the Hive"
+	if !l.Renewed.IsZero() {
+		renewed = "renewed " + l.Renewed.Local().Format("Mon 15:04")
+	}
+	line := fmt.Sprintf("%s  %s  %s", text.Visible(l.Login), exp, stDim.Render(renewed))
+	if l.Error != "" {
+		line += "  " + stBad.Render("can't renew") + ": " + text.Visible(core.Clip(l.Error, 120))
+		if l.Run != "" {
+			line += "  " + stWarn.Render("to fix: ") + text.Visible(l.Run)
+		}
+	}
+	return line
+}
