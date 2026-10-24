@@ -1,5 +1,7 @@
 # Gate run records
 
+**These two records come from a red run** (the test failed on the org probe). They are kept until a green run of `TestBwrapGateKeepsAndRollsBack` at this PR's head replaces them. That run's keep is built from commits, with the stamped version and the binary's hash in each report's header.
+
 The current gate's end-to-end record comes from `TestBwrapGateKeepsAndRollsBack`, in ci's `sandboxed-e2e` job, run 40073936934 at 64301d0, under real bubblewrap on a GitHub runner. That test runs two whole gates on a local org with real binaries and the real probes:
 
 - `kept-trivial-candidate-bwrap.md`: the same Hive on both sides, `--allow-tie`. **KEPT**. The daemon, the benchmark (this tree's suite inside each side's sandbox, its landed code checked in a sealed sibling sandbox, score 3, egress 0 through the meter) and recurse (a nested gate inside the child, which rolled back its self-test) pass on both sides.

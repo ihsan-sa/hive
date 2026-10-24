@@ -483,7 +483,21 @@ func (r Report) Markdown() string {
 	if r.Verdict.Keep {
 		verdict = "KEPT"
 	}
-	fmt.Fprintf(&b, "# Gate %s: %s\n\n%s\n\n- candidate %s, control %s, sandbox %s, %.0fs\n", r.ID, verdict, r.Verdict.Reason, short(r.Head), short(r.Base), r.Sandbox, r.Seconds)
+	cand := short(r.Head)
+	if cand == "" {
+		cand = "prebuilt"
+	}
+	if r.CandVersion != "" {
+		cand += " (" + r.CandVersion + ")"
+	}
+	if r.CandSHA256 != "" {
+		cand += ", binary sha256 " + r.CandSHA256[:12]
+	}
+	ctrl := short(r.Base)
+	if ctrl == "" {
+		ctrl = "prebuilt"
+	}
+	fmt.Fprintf(&b, "# Gate %s: %s\n\n%s\n\n- candidate %s; control %s; sandbox %s, %.0fs\n", r.ID, verdict, r.Verdict.Reason, cand, ctrl, r.Sandbox, r.Seconds)
 	for _, g := range r.Verdict.Gains {
 		fmt.Fprintf(&b, "- gain: %s\n", g)
 	}

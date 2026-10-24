@@ -36,6 +36,7 @@ func TestDecide(t *testing.T) {
 		{"slower is worse", []Result{res("bench", true, secs(130))}, []Result{res("bench", true, secs(100))}, Options{}, false, "seconds"},
 		{"faster is better", []Result{res("bench", true, secs(60))}, []Result{res("bench", true, secs(100))}, Options{}, true, "seconds"},
 		{"inside the floor is nothing", []Result{res("bench", true, secs(101))}, []Result{res("bench", true, secs(100))}, Options{}, false, "not better"},
+		{"a probe broken on both sides is not even", []Result{res("org", false), res("bench", true, score(9))}, []Result{res("org", false), res("bench", true, score(5))}, Options{}, false, "not measured"},
 		{"candidate missing a probe", nil, []Result{res("e2e", true)}, Options{}, false, "did not run"},
 		{"faster by doing less is not a gain", []Result{res("bench", true, score(2), Metric{Name: "seconds", Value: 10, Given: []string{"score"}})}, []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 100, Given: []string{"score"}})}, Options{}, false, "worse"},
 		{"faster at the same work is a gain", []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 50, Given: []string{"score"}})}, []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 100, Given: []string{"score"}})}, Options{}, true, "seconds"},

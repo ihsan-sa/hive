@@ -128,7 +128,11 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 			// Nothing to compare against; a candidate-only probe is not a gain.
 		default:
 			cr, kr := float64(c.pass)/float64(c.n), float64(k.pass)/float64(k.n)
-			if cr < kr {
+			if c.pass == 0 && k.pass == 0 {
+				// Broken on both sides: that path was never measured, so it
+				// cannot count as even.
+				v.Regressions = append(v.Regressions, fmt.Sprintf("%s failed on both sides (0/%d, the control 0/%d): not measured", p, c.n, k.n))
+			} else if cr < kr {
 				v.Regressions = append(v.Regressions, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n))
 			} else if cr > kr {
 				v.Gains = append(v.Gains, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n))
