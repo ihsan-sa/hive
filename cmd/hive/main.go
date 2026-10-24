@@ -273,7 +273,7 @@ func cmdDaemon(args []string) int {
 		return 1
 	}
 	if *detach {
-		if _, err := daemon.Start(ws); err != nil {
+		if _, err := daemon.StartAfter(ws, *waitFor); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
