@@ -980,3 +980,28 @@ func TestClassifyGitattributesHigh(t *testing.T) {
 		}
 	}
 }
+
+// A failure main shares doesn't count against a head, a required check among
+// them included; a new failure or a check still running still does.
+func TestChecksAgainstMain(t *testing.T) {
+	mainRuns := []CheckRun{{Name: "ubuntu", State: CheckFail}, {Name: "windows", State: CheckFail}, {Name: "macos", State: CheckPass}}
+	for _, c := range []struct {
+		runs  []CheckRun
+		state string
+	}{
+		{[]CheckRun{{Name: "ubuntu", State: CheckPass}, {Name: "windows", State: CheckFail}, {Name: "macos", State: CheckPass}}, CheckPass},
+		{[]CheckRun{{Name: "ubuntu", State: CheckFail}, {Name: "windows", State: CheckFail}, {Name: "macos", State: CheckPass}}, CheckPass},
+		{[]CheckRun{{Name: "ubuntu", State: CheckFail}, {Name: "windows", State: CheckPass}, {Name: "macos", State: CheckFail}}, CheckFail},
+		{[]CheckRun{{Name: "windows", State: CheckFail}, {Name: "macos", State: CheckPending}}, CheckPending},
+	} {
+		if st, which, shared := ChecksAgainstMain(c.runs, mainRuns, []string{"windows"}); st != c.state {
+			t.Errorf("%v: state %q (%v, shared %v), want %q", c.runs, st, which, shared, c.state)
+		}
+	}
+	if st, _, _ := ChecksAgainstMain([]CheckRun{{Name: "macos", State: CheckFail}}, append(mainRuns, CheckRun{Name: "macos", State: CheckFail}), nil); st != CheckFail {
+		t.Errorf("a stale failed attempt on main counted as shared: %q", st)
+	}
+	if st, _, shared := ChecksAgainstMain([]CheckRun{{Name: "windows", State: CheckFail}}, nil, nil); st != CheckFail || len(shared) != 0 {
+		t.Errorf("main green: %q, shared %v", st, shared)
+	}
+}
