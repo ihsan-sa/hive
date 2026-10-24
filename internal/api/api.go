@@ -42,6 +42,7 @@ type State struct {
 	Channel    string             `json:"channel,omitempty"` // the releases auto-update follows: "latest" or "pre-release"
 	Newest     string             `json:"newest,omitempty"`  // the newest release out, as the last look for an update found
 	Behind     int                `json:"behind,omitempty"`  // how many releases newer than Version are out
+	Skipped    []string           `json:"skipped,omitempty"` // why each newer release wasn't installed, as the last look found
 	Seq        int64              `json:"seq"`
 	Workspace  string             `json:"workspace"`
 	Sandbox    string             `json:"sandbox"`

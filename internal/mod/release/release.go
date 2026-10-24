@@ -43,15 +43,12 @@ type Module struct {
 	published  time.Time
 	publishing bool
 	pmu        sync.Mutex
-	// followed is when follow last looked for a pre-release; red holds each
-	// pre-release whose checks here failed, and waits what the newer ones
-	// wait for, as the last look found.
+	// followed is when follow last looked for a pre-release; waits say why
+	// each newer one was passed over, as the last look found.
 	followed time.Time
-	red      map[string]verdict
 	waits    []string
-	// shas are the pre-releases' commits, by repo@tag; tried is the tag the
-	// last update went for and said1 what follow last recorded.
-	shas  map[string]string
+	// tried is the tag the last update went for and said1 what follow last
+	// recorded.
 	tried string
 	said1 string
 	// pre are the pre-releases newer than this one the last look read;
@@ -165,7 +162,8 @@ func AssetName(goos, goarch string) string {
 // release_repo and the person's own fork of it are followed, never a
 // repository an agent named, and a release whose checksums don't list this
 // platform's binary is passed over. Following pre-releases, it takes the
-// newest of release_repo's whose checks for this system passed, when newer.
+// newest of release_repo's with this system's binary, when newer, as soon as
+// it is attached, and one that rolled back here never.
 func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	up := m.C.WS.LoadConfig().ReleaseRepo
 	repos := []string{up}
@@ -254,6 +252,14 @@ func (m *Module) Lag() (newest string, behind int) {
 	m.pmu.Lock()
 	defer m.pmu.Unlock()
 	return m.newest, m.behind
+}
+
+// Skipped says why each release newer than this one was passed over, as the
+// last look found: one rolled back here, one whose binaries aren't attached.
+func (m *Module) Skipped() []string {
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	return slices.Clone(m.waits)
 }
 
 // hasBinary errs unless the release's checksums are signed as this build
@@ -393,6 +399,8 @@ func (m *Module) update(tag string) (string, error) {
 		if e := rollBack(paths, added); e != nil {
 			return "", fmt.Errorf("%s doesn't run here (%v), and putting %s back failed: %v", tag, err, core.Version, e)
 		}
+		// Like a failed start, it isn't installed on its own again.
+		m.C.J.MustAppend("hive.rolledback", map[string]string{"from": tag, "to": core.Version, "why": core.Clip(err.Error(), 300)})
 		return "", fmt.Errorf("%s doesn't run here (%v); kept %s", tag, err, core.Version)
 	}
 	if err := writePending(m.C.WS, pending{From: core.Version, To: tag, Paths: paths, Added: added}); err != nil {
