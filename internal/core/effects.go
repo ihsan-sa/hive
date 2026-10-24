@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -167,7 +168,7 @@ func (e *Effects) Sync(p Project) (string, error) {
 	}
 	defer e.lock(p.Name)()
 	dir := e.ws.Project(p.Name)
-	if _, err := GitT(5*time.Minute, dir, "fetch", "-q", "--prune", "origin"); err != nil {
+	if _, err := GitEnvT(5*time.Minute, dir, ghEnv(p.Repo), "fetch", "-q", "--prune", "origin"); err != nil {
 		return "", err
 	}
 	sha, err := Git(dir, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+p.Branch)
@@ -331,7 +332,7 @@ func (e *Effects) Push(p Project, branch, sha string) error {
 		return fmt.Errorf("the effects process only pushes hive/* branches, not %q", branch)
 	}
 	defer e.lock(p.Name)()
-	if _, err := GitT(5*time.Minute, e.ws.Project(p.Name), "push", "-q", "-f", "origin", sha+":refs/heads/"+branch); err != nil {
+	if _, err := GitEnvT(5*time.Minute, e.ws.Project(p.Name), ghEnv(p.Repo), "push", "-q", "-f", "origin", sha+":refs/heads/"+branch); err != nil {
 		return err
 	}
 	e.j.MustAppend("effect.pushed", map[string]string{"project": p.Name, "branch": branch, "sha": sha})
@@ -366,7 +367,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		return c
 	}
 	defer os.RemoveAll(dir)
-	code, out, err := e.runSandboxed(sb, p.Name, "gate-"+short(sha)+"-"+kind+"-"+NewID()[14:], []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}, command, true, 30*time.Minute)
+	code, out, err := e.runSandboxed(sb, p.Name, "gate-"+short(sha)+"-"+kind+"-"+NewID()[14:], []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}, guardProgram(command), true, 30*time.Minute)
 	c.Output = out
 	if err != nil {
 		c.Output = err.Error() + "\n" + out
@@ -405,6 +406,33 @@ func scoreOf(out string) (float64, error) {
 		return alone[0], nil
 	}
 	return 0, errors.New("no number")
+}
+
+var (
+	lookupProgram = regexp.MustCompile(`^(\s*([A-Za-z_]\w*)=\$\(([^()]*)\)\s*;)\s*"?\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))(?:["\s;]|$)`)
+	lookedUp      = regexp.MustCompile(`command -v\s+([\w.+-]+)`)
+)
+
+// guardProgram stops a command whose program is a variable set by a lookup
+// (PY=$(command -v python || command -v python3); $PY -m ...) when the lookup
+// finds nothing, so the shell never runs the arguments as the program. Only the
+// first statement's assignment followed by a bare $VAR or ${VAR} as the program
+// is recognised: ${VAR:-default} has its own fallback, and a later use (after a
+// cd, say) is not guarded.
+func guardProgram(command string) string {
+	s := lookupProgram.FindStringSubmatch(command)
+	if s == nil || s[2] != s[4]+s[5] {
+		return command
+	}
+	var names []string
+	for _, n := range lookedUp.FindAllStringSubmatch(s[3], -1) {
+		names = append(names, n[1])
+	}
+	missing := strings.Join(names, " or ")
+	if missing == "" {
+		missing = "the program in " + s[2]
+	}
+	return s[1] + ` [ -n "$` + s[2] + `" ] || { echo "hive: missing program: ` + missing + `" >&2; exit 127; };` + command[len(s[1]):]
 }
 
 // cleanCheckout clones the host clone fresh and checks out sha.
@@ -797,10 +825,10 @@ func (e *Effects) PushInitial(p Project, sha string) error {
 	}
 	defer e.lock(p.Name)()
 	dir := e.ws.Project(p.Name)
-	if out, _ := Git(dir, "ls-remote", "origin", "refs/heads/"+p.Branch); out != "" {
+	if out, _ := GitEnvT(2*time.Minute, dir, ghEnv(p.Repo), "ls-remote", "origin", "refs/heads/"+p.Branch); out != "" {
 		return errors.New("repository is not empty; changes go through a pull request")
 	}
-	_, err := Git(dir, "push", "-q", "origin", sha+":refs/heads/"+p.Branch)
+	_, err := GitEnvT(5*time.Minute, dir, ghEnv(p.Repo), "push", "-q", "origin", sha+":refs/heads/"+p.Branch)
 	return err
 }
 

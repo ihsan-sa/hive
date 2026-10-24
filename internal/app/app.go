@@ -9,6 +9,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
@@ -35,6 +36,7 @@ type App struct {
 	Projects *projects.Module
 	Release  *release.Module
 	Runner   *runner.Runner
+	Feedback *feedback.Module
 }
 
 // New opens the workspace and builds every module.
@@ -54,6 +56,8 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Work = work.New(c, a.Agents, a.Chat)
 	c.Runs.Ops().SetSpawner(a.Work.Spawn)
 	a.Improve = improve.New(c, a.Agents, a.Work, a.Chat)
+	a.Feedback = feedback.New(c)
+	a.Improve.Feedback = a.Feedback.Digest
 	a.KB = kb.New(c, a.Agents)
 	a.KB.SeedSelf(hive.Source)
 	a.System = system.New(c)

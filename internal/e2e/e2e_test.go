@@ -10,6 +10,7 @@ package e2e
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/json"
@@ -79,12 +80,17 @@ type hive struct {
 	cmd   *exec.Cmd
 	c     *api.Client
 	env   []string // added to the daemon's environment
+	exe   string   // the binary the daemon runs, when not bin
 }
 
-func start(t *testing.T, env ...string) *hive {
+func start(t *testing.T, env ...string) *hive { return startWith(t, bin, nil, env...) }
+
+// startWith starts exe as the daemon, after prep (if any) has changed the
+// test's settings.
+func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string) *hive {
 	t.Helper()
 	dir := t.TempDir()
-	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env}
+	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env, exe: exe}
 	if err := h.ws.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +107,9 @@ func start(t *testing.T, env ...string) *hive {
 	}
 	cfg.PlateauMerges = 0 // TestStepBack turns it on
 	cfg.Schedules = map[string]string{"improve.sweep": "off", "improve.stepback": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off"}
+	if prep != nil {
+		prep(&cfg)
+	}
 	h.ws.SaveConfig(cfg)
 	h.launch()
 	t.Cleanup(func() { h.quiesce(); h.kill() })
@@ -165,7 +174,7 @@ func (h *hive) quiesce() {
 
 func (h *hive) launch() {
 	h.t.Helper()
-	cmd := exec.Command(bin, "daemon")
+	cmd := exec.Command(cmp.Or(h.exe, bin), "daemon")
 	cmd.Env = append(append(os.Environ(), "HIVE_HOME="+h.ws.Root, "HIVE_FORGE=local:"+h.forge.Dir), h.env...)
 	cmd.Dir = h.ws.Root
 	log, _ := os.OpenFile(filepath.Join(h.ws.Hive(), "daemon-test.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -1095,6 +1104,47 @@ func TestOfflineLeadSaysWhy(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("the notice was posted %d times, want once", n)
 	}
+}
+
+// TestHostPython: the person's python lives outside the system dirs (as uv or
+// pip put it under the home), and the baseline and a worker's checks run that
+// same program, bare or sandboxed. The fake python prints 7 where its folder
+// is read-only (bound into a sandbox) and 8 where it can write it (bare), so a
+// sandboxed run fails unless the sandbox ran the check. Which Linux sandbox
+// ran (bubblewrap or the Hive's own namespaces) is the host's pick; the
+// sandbox package's TestHostPythonBothPaths runs each one by name. Not
+// parallel: the daemon takes PATH from this process.
+func TestHostPython(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX sh")
+	}
+	dir := filepath.Join(t.TempDir(), "py", "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"python", "python3"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("#!/bin/sh\n[ -w \"${0%/*}\" ] && echo 8 || echo 7\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	h := start(t)
+	sb, want := h.ws.LoadConfig().Sandbox, 8.0
+	if sb == "auto" {
+		want = 7
+	}
+	t.Logf("sandbox %q: the check must print %v", sb, want)
+	py := `PY=$(command -v python || command -v python3) || { echo \"no python or python3 on PATH\" >&2; exit 127; }; \"$PY\"`
+	h.seed("me/py", map[string]string{
+		".hive/project.json": `{"test": "` + py + ` | grep -qx ` + fmt.Sprint(want) + `", "score": {"command": "` + py + `", "direction": "higher", "tolerance": 0}}`,
+		".hive/goals.md":     "# Goals\n",
+	})
+	h.post("/api/project", map[string]any{"name": "py", "repo": "me/py"}, nil)
+	h.wait("the baseline from the host's python", minute, func(st api.State) bool {
+		return len(st.Projects) == 1 && st.Projects[0].Best != nil && *st.Projects[0].Best == want
+	})
+	h.post("/api/ask", map[string]string{"project": "py", "title": "add a note", "known": "anything"}, nil)
+	h.wait("the worker to land", 3*minute, taskStage("py", "add a note", work.StageDone))
 }
 
 // TestAgentsReadTheHive: a worker reads another run's log, a chat, a warden's

@@ -19,6 +19,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
@@ -56,6 +57,7 @@ type State struct {
 	Modules    []ModuleView       `json:"modules"`
 	Chats      []ChatView         `json:"chats"`
 	Requests   []risk.Request     `json:"requests"`
+	Feedback   []feedback.Item    `json:"feedback"` // open first, then the last few set aside
 	Config     core.Config        `json:"config"`
 	ConfigErr  string             `json:"config_err,omitempty"`
 }
@@ -78,10 +80,12 @@ type Updated struct {
 
 // Alert is a ledger alert.
 type Alert struct {
-	At   time.Time `json:"at"`
-	Kind string    `json:"kind"`
-	Text string    `json:"text"`
-	Ref  string    `json:"ref,omitempty"` // a later alert with the same ref replaces it
+	At    time.Time `json:"at"` // last seen
+	Kind  string    `json:"kind"`
+	Text  string    `json:"text"`
+	Count int       `json:"count"`
+	Ref   string    `json:"ref,omitempty"` // a later alert with the same ref replaces it
+	Key   string    `json:"-"`             // kind, project and cause: a repeat refreshes the alert
 }
 
 // ModuleView is one installed module.

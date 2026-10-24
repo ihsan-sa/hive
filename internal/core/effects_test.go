@@ -326,6 +326,28 @@ func TestScoreEvaluatorPaths(t *testing.T) {
 	}
 }
 
+// A program variable whose lookup finds nothing stops the check with a clear
+// error; the shell never runs the arguments as the program.
+func TestEmptyProgramNeverRuns(t *testing.T) {
+	c, f := testHive(t)
+	seedRepo(t, f, "me/e", map[string]string{".hive/project.json": `{"test":"true"}`})
+	p, _ := c.Projects.Add(Project{Name: "e", Repo: "me/e"})
+	main, _ := c.Effects.Sync(p)
+	ch := c.Effects.RunCheck(p, main, "test", "PY=$(command -v no-such-hive-tool || command -v no-such-hive-tool3); $PY echo RAN")
+	if ch.OK || strings.Contains(ch.Output, "RAN") || !strings.Contains(ch.Output, "hive: missing program: no-such-hive-tool or no-such-hive-tool3") {
+		t.Fatalf("empty program: %+v", ch)
+	}
+	if ch := c.Effects.RunCheck(p, main, "test", "PY=$(command -v echo); $PY RAN"); !ch.OK || !strings.Contains(ch.Output, "RAN") {
+		t.Fatalf("found program: %+v", ch)
+	}
+	if ch := c.Effects.RunCheck(p, main, "test", "PY=$(command -v no-such-hive-tool); ${PY:-echo} RAN"); !ch.OK || !strings.Contains(ch.Output, "RAN") {
+		t.Fatalf("a default expansion is the shell's own fallback: %+v", ch)
+	}
+	if ch := c.Effects.RunCheck(p, main, "test", "PY=$(command -v no-such-hive-tool); ${PY} echo RAN"); ch.OK || strings.Contains(ch.Output, "RAN") {
+		t.Fatalf("braced empty program: %+v", ch)
+	}
+}
+
 // A rename out of a protected path is still a change to it, and once main has
 // had a test command, losing it is red, not "no test command configured".
 func TestRenameOutOfProtectedPath(t *testing.T) {

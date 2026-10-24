@@ -95,6 +95,181 @@ func TestProbeBothPaths(t *testing.T) {
 	t.Logf("%d of 2 sandbox paths ran on this host", ran)
 }
 
+// TestHostPythonBothPaths runs a host python that lives outside the system
+// dirs through the built binary on each path this host allows. The fake prints
+// 7 where its folder is read-only, as it is once bound inside, and 8 where it
+// can write it, so 7 means that path found it by name and ran it sandboxed.
+func TestHostPythonBothPaths(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	tmp := t.TempDir()
+	if underSystem(tmp) {
+		t.Skip("the temp dir is under a system dir")
+	}
+	bin := filepath.Join(tmp, "hive")
+	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/hive").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v %s", err, out)
+	}
+	py := mkTree(t, tmp, "py/bin/python3")[0]
+	if err := os.WriteFile(py, []byte("#!/bin/sh\n[ -w \"${0%/*}\" ] && echo 8 || echo 7\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ran := 0
+	for _, path := range []struct{ name, env string }{{"namespaces", "0"}, {"bubblewrap", "1"}} {
+		t.Run(path.name, func(t *testing.T) {
+			if path.env == "1" && exec.Command("bwrap", "--unshare-user", "--ro-bind", "/", "/", "true").Run() != nil {
+				t.Skip("bwrap can't create namespaces here")
+			}
+			if path.env == "0" && (bwrapPath() != "" || exec.Command("unshare", "-Ur", "true").Run() != nil) {
+				t.Skip("unprivileged user namespaces are restricted here")
+			}
+			dir := t.TempDir()
+			work := filepath.Join(dir, "work")
+			if err := os.Mkdir(work, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			s := Spec{
+				ID: "py", Argv: []string{"python3"}, Env: InsideEnv("/tmp", false), Cwd: "/work",
+				Mounts: []Mount{{Host: work, Inside: "/work", RW: true}},
+				Stdout: filepath.Join(dir, "out"), UID: os.Getuid(), GID: os.Getgid(),
+			}
+			spec := filepath.Join(dir, "spec.json")
+			if err := WriteSpec(spec, s); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(bin, "sandbox-exec", "--spec", spec)
+			cmd.Env = append(os.Environ(), "HIVE_SANDBOX_BWRAP="+path.env, "PATH="+filepath.Dir(py)+":"+os.Getenv("PATH"))
+			if out, err := cmd.CombinedOutput(); err != nil {
+				e, _ := os.ReadFile(s.Stdout + ".err")
+				t.Fatalf("sandbox-exec: %v %s %s", err, out, e)
+			}
+			if out, _ := os.ReadFile(s.Stdout); strings.TrimSpace(string(out)) != "7" {
+				t.Fatalf("python3 inside printed %q, want 7 (8 is a writable, unsandboxed run)", out)
+			}
+			ran++
+		})
+	}
+	t.Logf("%d of 2 sandbox paths ran on this host", ran)
+}
+
+// A uv python under the home is bound read-only at its own install, not at
+// ~/.local, and found by name inside right after the Hive's dirs.
+func TestHostInterpreterReachesInside(t *testing.T) {
+	home := t.TempDir()
+	if underSystem(home) {
+		t.Skip("the temp dir is under a system dir")
+	}
+	defer func(old []string) { interpreters = old }(interpreters)
+	interpreters = []string{"python3"}
+	inst := mkTree(t, home, ".local/share/uv/python/cpython-3.12/bin/python3", ".local/share/uv/python/cpython-3.12/lib/os.py")[0]
+	inst = filepath.Dir(filepath.Dir(inst))
+	mkTree(t, home, ".local/share/keyrings/login.keyring")
+	if err := os.MkdirAll(filepath.Join(home, ".local/bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(inst, "bin/python3"), filepath.Join(home, ".local/bin/python3")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", filepath.Join(home, ".local/bin")+":/usr/bin:/bin")
+	a := initArgs{Spec: Spec{Env: InsideEnv("/hive/home", false)}}
+	hostInterpreters(&a)
+	if !slices.Equal(a.Roots, []string{inst}) {
+		t.Fatalf("roots %q, want only %s", a.Roots, inst)
+	}
+	var path []string
+	for _, kv := range a.Spec.Env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			path = filepath.SplitList(v)
+		}
+	}
+	at := slices.Index(path, filepath.Join(inst, "bin"))
+	if at < 1 || !strings.HasPrefix(path[at-1], "/hive/") || slices.Index(path, "/usr/bin") < at {
+		t.Fatalf("PATH %q: want the install right after the /hive/ dirs, before /usr/bin", path)
+	}
+	if got := strings.Join(bwrapArgs(a, "/h/hive"), " "); !strings.Contains(got, "--ro-bind "+inst+" "+inst) {
+		t.Fatalf("bwrap args lack the install:\n%s", got)
+	}
+}
+
+// No interpreter widens the bind past its own install: not /usr, the home,
+// ~/.local (keyrings) or ~/.cargo (the crates.io token), and nothing at all
+// when the home is unknown.
+func TestInstallRootNeverBindsMore(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := mkTree(t, home, ".cargo/credentials.toml", ".cargo/lib/x", ".local/share/keyrings/login.keyring",
+		".local/lib/python3.12/site.py", "lib/x", ".tool/python3")
+	uvLocal := mkTree(t, home, ".local/bin/uv")[0]
+	uvCargo := mkTree(t, home, ".cargo/bin/uv")[0]
+	homeBin := mkTree(t, home, "bin/python3")[0]
+	// A HOME that runs through a symlink (/home/u -> /data/u) still keeps the
+	// home and ~/.local out; one that resolves nowhere binds nothing.
+	link := filepath.Join(t.TempDir(), "u")
+	if err := os.Symlink(home, link); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(t.TempDir(), "gone")
+	if err := os.Symlink(filepath.Join(home, "missing"), gone); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		p, home, want string
+		ok            bool
+	}{
+		{"/usr/bin/python3", home, "", true},
+		{uvLocal, home, filepath.Join(home, ".local/bin"), true},
+		{uvCargo, home, filepath.Join(home, ".cargo/bin"), true},
+		{homeBin, home, filepath.Join(home, "bin"), true},
+		{secrets[5], home, "", false},
+		{uvLocal, "", "", false},
+		{uvCargo, "", "", false},
+		{uvLocal, "rel/home", "", false},
+		{uvLocal, link, filepath.Join(home, ".local/bin"), true},
+		{uvCargo, link, filepath.Join(home, ".cargo/bin"), true},
+		{homeBin, link, filepath.Join(home, "bin"), true},
+		{uvLocal, gone, "", false},
+	} {
+		got, ok := installRoot(c.p, c.home)
+		if got != c.want || ok != c.ok {
+			t.Errorf("installRoot(%s, %q) = %q, %v; want %q, %v", c.p, c.home, got, ok, c.want, c.ok)
+		}
+		for _, s := range append(secrets[:3:3], "/usr/lib/os-release") {
+			if got != "" && strings.HasPrefix(s, got+"/") {
+				t.Errorf("installRoot(%s) = %s exposes %s", c.p, got, s)
+			}
+		}
+	}
+	defer func(old []string) { interpreters = old }(interpreters)
+	interpreters = []string{"uv"}
+	t.Setenv("HOME", "")
+	t.Setenv("PATH", filepath.Join(home, ".local/bin")+":/usr/bin:/bin")
+	a := initArgs{Spec: Spec{Env: InsideEnv("/hive/home", false)}}
+	hostInterpreters(&a)
+	if len(a.Roots) != 0 || strings.Contains(strings.Join(a.Spec.Env, " "), home) {
+		t.Fatalf("with HOME unset: roots %q, env %q", a.Roots, a.Spec.Env)
+	}
+}
+
+// mkTree makes each file (and its dirs) under root and returns their paths.
+func mkTree(t *testing.T, root string, files ...string) []string {
+	var out []string
+	for _, f := range files {
+		p := filepath.Join(root, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 // A hidden directory becomes an empty read-only tmpfs and a hidden file
 // /dev/null, both after the mount that exposes them.
 func TestBwrapArgsHide(t *testing.T) {
