@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -67,6 +68,9 @@ type Module struct {
 	spells   map[string]spell     // task id -> its current stage and since when
 	took     map[string][]float64 // task stage -> seconds its recent spells took
 	stalls   map[string]*Stall
+	fails    map[string][]core.Check // project -> recent red test checks that name their failing tests
+	heads    map[string][]string     // task id -> every head it had
+	merged   map[string]time.Time    // merge sha -> when it merged
 
 	stepbacks map[string]*StepBack
 	busy      map[string]bool
@@ -77,7 +81,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -93,6 +97,27 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			m.sweeps[s.ID] = &s
 			if s.Status == "running" {
 				m.lastSeen = e.Seq
+			}
+		case "effect.checked":
+			var c core.Check
+			if e.Decode(&c) == nil && c.Kind == "test" && !c.OK && len(c.Failed) > 0 && time.Since(c.At) < flakeWindow {
+				fs := append(m.fails[c.Project], c)
+				for len(fs) > 0 && time.Since(fs[0].At) > flakeWindow {
+					fs = fs[1:]
+				}
+				m.fails[c.Project] = fs
+			}
+		case "effect.merged":
+			var x struct {
+				MergeSHA string `json:"merge_sha"`
+			}
+			if e.Decode(&x) == nil && x.MergeSHA != "" && time.Since(e.At) < flakeWindow {
+				m.merged[x.MergeSHA] = e.At
+			}
+		case "task.saved":
+			var t work.Task
+			if e.Decode(&t) == nil && t.SHA != "" && !slices.Contains(m.heads[t.ID], t.SHA) {
+				m.heads[t.ID] = append(m.heads[t.ID], t.SHA)
 			}
 		case "stepback.saved":
 			var s StepBack
@@ -308,6 +333,10 @@ func (m *Module) afterMerge(t work.Task) {
 	}
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
 	ok, score, note := m.measure(p, t.MergeSHA)
+	flake := ""
+	if !ok {
+		ok, score, note, flake = m.retest(p, t, note)
+	}
 	k, hasBest := m.kept(p.Name)
 	best := 0.0
 	if hasBest {
@@ -324,6 +353,10 @@ func (m *Module) afterMerge(t work.Task) {
 	worse := !ok
 	reason := ""
 	switch {
+	case !ok && flake != "":
+		ms.Note = flake + "; not reverted; " + note
+		m.record(ms)
+		return
 	case !ok:
 		reason = "the tests went red after it merged"
 	case cfg.Score != nil && score == nil:
@@ -359,6 +392,74 @@ func (m *Module) afterMerge(t work.Task) {
 	if _, err := m.Work.Revert(t, t.MergeSHA, reason); err != nil {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "revert", "project": p.Name, "text": "could not file a revert: " + err.Error()})
 	}
+}
+
+// flakeWindow is how far back a test's failures elsewhere count as a flake.
+const flakeWindow = 72 * time.Hour
+
+// retest runs a merge's red tests once more. A test that passes the second
+// time, or that failed too on main or on another change before this one
+// merged, is a flake: it raises an alert and is not blamed on the merge. Only
+// a failure this merge alone shows is a break. It returns the second measure
+// and, for a flake, what makes it one.
+func (m *Module) retest(p core.Project, t work.Task, note string) (bool, *float64, string, string) {
+	first, _ := m.C.Effects.GetCheck(p.Name, t.MergeSHA, "test")
+	ok, score, again := m.measure(p, t.MergeSHA)
+	flake := ""
+	if ok {
+		flake = "flaky: the tests failed after it merged and passed when run again"
+		if len(first.Failed) > 0 {
+			flake = "flaky: " + strings.Join(first.Failed, ", ") + " failed after it merged and passed when run again"
+		}
+		note = flake + "; " + again
+	} else {
+		second, _ := m.C.Effects.GetCheck(p.Name, t.MergeSHA, "test")
+		if where := m.failedBefore(p.Name, t, second.Failed); where != "" {
+			flake = "flaky: " + strings.Join(second.Failed, ", ") + " failed twice after it merged, but also " + where + ", without this change"
+		}
+		note = again
+	}
+	if flake != "" {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": p.Name, "sha": t.MergeSHA, "task": t.ID,
+			"text": core.Clip(flake, 400) + " (" + p.Name + " at " + core.Short(t.MergeSHA) + "). Not reverted; the test wants steadying."})
+	}
+	return ok, score, note, flake
+}
+
+// failedBefore says where every one of names also failed at a commit that
+// can't carry t's change: checked before t merged, and none of t's own heads.
+// It returns "" when any of them failed only here.
+func (m *Module) failedBefore(project string, t work.Task, names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	merged, ok := m.merged[t.MergeSHA]
+	if !ok {
+		merged = time.Now()
+		for _, c := range m.fails[project] {
+			if c.SHA == t.MergeSHA && c.At.Before(merged) {
+				merged = c.At // measured right after it merged
+			}
+		}
+	}
+	var where []string
+	for _, n := range names {
+		found := ""
+		for _, c := range m.fails[project] {
+			if c.SHA != t.MergeSHA && c.At.Before(merged) && !slices.Contains(m.heads[t.ID], c.SHA) && slices.Contains(c.Failed, n) {
+				found = "at " + core.Short(c.SHA)
+			}
+		}
+		if found == "" {
+			return ""
+		}
+		if !slices.Contains(where, found) {
+			where = append(where, found)
+		}
+	}
+	return "failed " + strings.Join(where, ", ")
 }
 
 // Sweeps returns notice runs, newest first.

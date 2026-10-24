@@ -60,6 +60,7 @@ type Check struct {
 	OK      bool      `json:"ok"`
 	Score   *float64  `json:"score,omitempty"`
 	Output  string    `json:"output"`
+	Failed  []string  `json:"failed,omitempty"` // the failing tests it names, read before the output is clipped
 	At      time.Time `json:"at"`
 }
 
@@ -374,6 +375,9 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		return record()
 	}
 	c.OK = code == 0
+	if kind == "test" && !c.OK {
+		c.Failed = FailedTests(out)
+	}
 	if kind == "score" && c.OK {
 		v, perr := scoreOf(out)
 		if perr != nil {
@@ -383,6 +387,20 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		}
 	}
 	return record()
+}
+
+var failedTest = regexp.MustCompile(`(?m)^\s*--- FAIL: (\S+)|^FAILED (\S+)`)
+
+// FailedTests names the failing tests in a test command's output, as Go's
+// test runner ("--- FAIL: TestX") and pytest ("FAILED path::test") print them.
+func FailedTests(out string) []string {
+	var names []string
+	for _, m := range failedTest.FindAllStringSubmatch(out, -1) {
+		if n := m[1] + m[2]; !slices.Contains(names, n) && len(names) < 50 {
+			names = append(names, n)
+		}
+	}
+	return names
 }
 
 // scoreOf reads the score from a score command's output: the last word of
