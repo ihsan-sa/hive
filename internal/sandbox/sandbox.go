@@ -122,7 +122,7 @@ func (Bare) Check() error   { return nil }
 func (Bare) Start(s Spec) (Proc, error) {
 	env := append(os.Environ(), s.Env...)
 	env = withPathPrefix(env, pathDirs(s))
-	return proc.StartDetached(niced(s.Argv, s.Nice), env, s.Cwd, s.Stdin, s.Stdout)
+	return proc.StartDetached(Niced(s.Argv, s.Nice), env, s.Cwd, s.Stdin, s.Stdout)
 }
 
 func toolDirs(tools []string) []string {

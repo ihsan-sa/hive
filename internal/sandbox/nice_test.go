@@ -10,10 +10,10 @@ import (
 // A niced command runs under `nice -n` where there is one; at 0 it runs as it is.
 func TestNicedPrefixesArgv(t *testing.T) {
 	argv := []string{"sh", "-c", "true"}
-	if got := niced(argv, 0); !slices.Equal(got, argv) {
+	if got := Niced(argv, 0); !slices.Equal(got, argv) {
 		t.Errorf("nice 0: %q, want argv as it is", got)
 	}
-	got := niced(argv, 10)
+	got := Niced(argv, 10)
 	_, err := exec.LookPath("nice")
 	if runtime.GOOS == "windows" || err != nil {
 		if !slices.Equal(got, argv) {

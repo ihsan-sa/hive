@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +33,7 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 	cfg.Harness = "claude"
 	ws.SaveConfig(cfg)
 	script := filepath.Join(dir, "hive-gate.sh")
-	os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" > \"$GATE_ARGS\"\n[ -n \"$GATE_REPORT\" ] && cp \"$GATE_REPORT\" report.json\nexit $GATE_EXIT\n"), 0o755)
+	os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" > \"$GATE_ARGS\"\nnice > \"$GATE_ARGS.nice\" 2>/dev/null\n[ -n \"$GATE_REPORT\" ] && cp \"$GATE_REPORT\" report.json\nexit $GATE_EXIT\n"), 0o755)
 	old, oldChild := gateExe, gateChildFile
 	gateExe = func() (string, error) { return script, nil }
 	gateChildFile = filepath.Join(dir, "no-such.token")
@@ -71,6 +73,13 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 		a := string(raw)
 		if !strings.Contains(a, "--head h --base m") || !strings.Contains(a, "--local-org") || strings.Contains(a, "--allow-bare") || strings.Contains(a, "--allow-tie") != tc.tie {
 			t.Fatalf("case %d: gate called with %q", i, a)
+		}
+		// The gate runs under every lead's priority: at CheckNice, where
+		// there is a nice to put it there.
+		if _, err := exec.LookPath("nice"); err == nil {
+			if n, _ := os.ReadFile(args + ".nice"); strings.TrimSpace(string(n)) != strconv.Itoa(core.CheckNice) {
+				t.Fatalf("case %d: the gate ran at nice %q, want %d", i, strings.TrimSpace(string(n)), core.CheckNice)
+			}
 		}
 	}
 	cfg.Harness = "fake"

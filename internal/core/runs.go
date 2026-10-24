@@ -255,9 +255,10 @@ type Runs struct {
 	busy  map[string]bool    // runs whose tick work is in flight
 	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
 	holds map[string]string  // why no new turn starts (a restart waiting for a quiet moment), by who holds them
-	// launching counts launches past the hold whose turn isn't journalled yet.
-	launching int
-	waking    sync.Mutex // one wake at a time, so a run is woken once
+	// launching counts launches past the hold whose turn isn't journalled
+	// yet; leadLaunching those of leads, which the other roles' wait for.
+	launching, leadLaunching int
+	waking                   sync.Mutex // one wake at a time, so a run is woken once
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -964,27 +965,30 @@ func (rs *Runs) Interrupt(id string) bool {
 // Leads go first, the Hive-wide lead ahead of the projects', and the other
 // runs step once every lead's step is done (or a few seconds in, should one
 // hang), so a lead's due turn starts ahead of any queued worker or review.
+// Nothing here waits on the caller's loop: the wait runs on its own.
 func (rs *Runs) Tick(cfg Config) {
 	live := rs.List(func(r *Run) bool { return !r.Terminal() || r.Status == StatusRunning })
 	slices.SortStableFunc(live, func(a, b Run) int { return a.Nice() - b.Nice() })
-	leads := make(chan struct{})
 	var wg sync.WaitGroup
+	var rest []Run
 	for _, r := range live {
-		if !r.Lead() {
-			break
+		if r.Lead() {
+			rs.stepAsync(r, cfg, &wg)
+		} else {
+			rest = append(rest, r)
 		}
-		rs.stepAsync(r, cfg, &wg)
 	}
-	go func() { wg.Wait(); close(leads) }()
-	select {
-	case <-leads:
-	case <-time.After(5 * time.Second):
-	}
-	for _, r := range live {
-		if !r.Lead() {
+	go func() {
+		leads := make(chan struct{})
+		go func() { wg.Wait(); close(leads) }()
+		select {
+		case <-leads:
+		case <-time.After(5 * time.Second):
+		}
+		for _, r := range rest {
 			rs.stepAsync(r, cfg, nil)
 		}
-	}
+	}()
 }
 
 // stepAsync steps r in its own goroutine unless a step of it is under way.
@@ -1289,9 +1293,23 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		rs.mu.Unlock()
 		return
 	}
+	if !r.Lead() && rs.leadLaunching > 0 {
+		rs.mu.Unlock() // a lead's turn starts first; this one is due again next tick
+		return
+	}
 	rs.launching++
+	if r.Lead() {
+		rs.leadLaunching++
+	}
 	rs.mu.Unlock()
-	defer func() { rs.mu.Lock(); rs.launching--; rs.mu.Unlock() }()
+	defer func() {
+		rs.mu.Lock()
+		rs.launching--
+		if r.Lead() {
+			rs.leadLaunching--
+		}
+		rs.mu.Unlock()
+	}()
 	floor, memMax, cpuMax := cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax
 	if r.Lead() {
 		// A lead answers however busy the machine is: no pressure hold, and

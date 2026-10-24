@@ -227,3 +227,29 @@ func endTurns(t *testing.T, c *Core, cfg Config) {
 	}
 	t.Log("fake turns still running at the end")
 }
+
+// While a lead's turn is being started, another role's launch waits for the
+// next tick: a lead's turn has its process before a worker's starts.
+func TestWorkerLaunchWaitsForLeadLaunch(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	if _, err := c.Runs.Start(RunSpec{ID: "worker", Role: "worker", Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.mu.Lock()
+	c.Runs.leadLaunching = 1
+	c.Runs.mu.Unlock()
+	w, _ := c.Runs.Get("worker")
+	c.Runs.launch(w, cfg)
+	if w, _ = c.Runs.Get("worker"); w.Status != StatusQueued || w.Turn != 0 {
+		t.Fatalf("worker launched while a lead's turn was starting: %s turn %d", w.Status, w.Turn)
+	}
+	c.Runs.mu.Lock()
+	c.Runs.leadLaunching = 0
+	c.Runs.mu.Unlock()
+	c.Runs.launch(w, cfg)
+	if w, _ = c.Runs.Get("worker"); w.Status != StatusRunning || w.Turn != 1 {
+		t.Fatalf("worker after the lead's turn started: %s turn %d, want running", w.Status, w.Turn)
+	}
+}
