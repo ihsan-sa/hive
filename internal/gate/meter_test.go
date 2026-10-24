@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,7 +41,14 @@ func TestMeter(t *testing.T) {
 			go func() { io.Copy(c, c); c.Close() }()
 		}
 	}()
-	m, err := StartMeter(filepath.Join(t.TempDir(), "m.sock"))
+	// Short, as gate.go's own: a socket path has a length limit (108 bytes on
+	// Linux), and t.TempDir() under a gate child's long TMPDIR passes it.
+	dir, err := os.MkdirTemp(shortTmp(), "hive-meter-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	m, err := StartMeter(filepath.Join(dir, "m.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
