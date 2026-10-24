@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,9 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive login add <name>    add another Claude login to spread runs over; add "codex" for Codex
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
   hive report [on|off|show|send]  sharing failures with the developer: state, switch, last report, send now
+  hive egress              the services on this machine agents may reach
+  hive egress grant <host:port>   open one to every sandboxed run (loopback only, e.g. 127.0.0.1:11434)
+  hive egress revoke <host:port>  close it again
   hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
   hive update              install the newest release [--release <tag>: that one, and stay on it]
   hive shutdown            stop the Hive (running agents finish their turn)
@@ -200,6 +204,8 @@ func run(args []string) int {
 		return cmdDoctor(args)
 	case "report":
 		return cmdReport(args)
+	case "egress":
+		return cmdEgress(args)
 	case "share":
 		return cmdShare(args)
 	case "update":
@@ -489,6 +495,60 @@ func cmdDoctor(args []string) int {
 	if !ok {
 		report.Note(ws, report.Failure{Kind: "doctor", Text: strings.Join(failed, "")})
 		return 1
+	}
+	return 0
+}
+
+// cmdEgress lists, grants or revokes the services on this machine sandboxed
+// runs may reach (egress.local). Each run reads the config as it starts, so a
+// grant holds from the next turn on.
+func cmdEgress(args []string) int {
+	ws, err := workspace()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	cfg := ws.LoadConfig()
+	if len(args) == 0 {
+		if len(cfg.Egress.Local) == 0 {
+			fmt.Println("No service on this machine is open to agents.")
+		}
+		for _, l := range cfg.Egress.Local {
+			fmt.Println(l)
+		}
+		return 0
+	}
+	if len(args) != 2 || (args[0] != "grant" && args[0] != "revoke") {
+		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" egress [grant|revoke <host:port>]")
+		return 2
+	}
+	want, err := sandbox.LocalGrant(args[1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	// Entries match by what they open, so revoking 127.0.0.1:11434 also
+	// closes a localhost:11434 grant that covers it.
+	var keep []string
+	for _, l := range cfg.Egress.Local {
+		has, err := sandbox.LocalGrant(l)
+		if err == nil && slices.ContainsFunc(has, func(a string) bool { return slices.Contains(want, a) }) {
+			continue
+		}
+		keep = append(keep, l)
+	}
+	if args[0] == "grant" {
+		keep = append(keep, args[1])
+	}
+	cfg.Egress.Local = keep
+	if err := ws.SaveConfig(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if args[0] == "grant" {
+		fmt.Printf("Agents can reach %s from their next turn.\n", args[1])
+	} else {
+		fmt.Printf("Agents no longer reach %s from their next turn.\n", args[1])
 	}
 	return 0
 }
