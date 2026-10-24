@@ -1031,3 +1031,29 @@ func TestGitHubLogStamp(t *testing.T) {
 		t.Errorf("%v", got)
 	}
 }
+
+// A failed job's excerpt is the end of the step that failed: up to its error
+// mark, never before that step's start, and nothing of the steps after it.
+func TestLogExcerpt(t *testing.T) {
+	log := "##[group]Run setup\nsetup\n##[group]Run go test\na\nb\n--- FAIL: TestX\n##[error]Process completed with exit code 1.\n##[group]Run post\npost\n"
+	if got := LogExcerpt(log, 100); got != "##[group]Run go test\na\nb\n--- FAIL: TestX\n##[error]Process completed with exit code 1." {
+		t.Fatalf("excerpt %q", got)
+	}
+	if got := LogExcerpt(log, 2); got != "--- FAIL: TestX\n##[error]Process completed with exit code 1." {
+		t.Fatalf("clipped excerpt %q", got)
+	}
+	if got := LogExcerpt("one\ntwo\nthree\n", 2); got != "two\nthree" {
+		t.Fatalf("no error mark: %q", got)
+	}
+	// A downloaded log: CRLF, a byte-order mark, a timestamp on each line,
+	// and a post step that errors after the step that failed.
+	ts := "2026-10-24T12:00:00.1234567Z "
+	real := "\ufeff" + ts + "##[group]Run actions/checkout@v4\r\n" + ts + "checked out\r\n" + ts + "##[group]Run go test ./...\r\n" + ts + "--- FAIL: TestX\r\n" + ts + "##[error]path_test.go:12: bad\r\n" + ts + "FAIL\r\n" + ts + "##[error]Process completed with exit code 1.\r\n" + ts + "##[group]Run actions/checkout@v4 post\r\n" + ts + "##[error]cleanup failed\r\n"
+	want := ts + "##[group]Run go test ./...\n" + ts + "--- FAIL: TestX\n" + ts + "##[error]path_test.go:12: bad\n" + ts + "FAIL\n" + ts + "##[error]Process completed with exit code 1."
+	if got := LogExcerpt(real, 100); got != want {
+		t.Fatalf("real log excerpt %q", got)
+	}
+	if got := LogExcerpt("##[group]Run setup\nsetup\n##[group]Run go test\nx\n##[error]boom", 100); got != "##[group]Run go test\nx\n##[error]boom" {
+		t.Fatalf("error on the last line: %q", got)
+	}
+}

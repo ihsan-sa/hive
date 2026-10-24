@@ -40,6 +40,8 @@ type DaemonInfo struct {
 type State struct {
 	Version    string             `json:"version"`
 	Channel    string             `json:"channel,omitempty"` // the releases auto-update follows: "latest" or "pre-release"
+	Newest     string             `json:"newest,omitempty"`  // the newest release out, as the last look for an update found
+	Behind     int                `json:"behind,omitempty"`  // how many releases newer than Version are out
 	Seq        int64              `json:"seq"`
 	Workspace  string             `json:"workspace"`
 	Sandbox    string             `json:"sandbox"`
@@ -52,6 +54,7 @@ type State struct {
 	Sweeps     []improve.Sweep    `json:"sweeps"`
 	StepBacks  []improve.StepBack `json:"stepbacks"`
 	Asks       []core.Ask         `json:"asks"`
+	Told       []core.Ask         `json:"told,omitempty"` // done for the person, newest first: nothing to answer
 	Alerts     []Alert            `json:"alerts"`
 	Updated    *Updated           `json:"updated,omitempty"`
 	Jobs       []system.JobState  `json:"jobs"`

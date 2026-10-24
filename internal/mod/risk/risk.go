@@ -788,7 +788,7 @@ func (m *Module) execute(id string) {
 	m.save(&req)
 	m.act.Unlock()
 	if !req.PersonOK && m.C.WS.LoadConfig().Autonomy >= 3 { // "tell me after"
-		m.C.Person.Ask(core.Ask{Kind: "told", Ref: req.ID, Project: req.Project, From: req.Origin, Options: []string{"seen"},
+		m.C.Person.Tell(core.Ask{Ref: req.ID, Project: req.Project, From: req.Origin,
 			Title: fmt.Sprintf("A %s step ran (%s): %s", req.Tier, req.State, core.Clip(req.Want, 100)), Detail: req.Script + "\n\n" + req.Output})
 	}
 }
@@ -952,7 +952,7 @@ func (m *Module) settle(req Request, yes bool) {
 		who = "a tribunal"
 	}
 	m.C.Person.Answer(a.ID, opt, who+": "+req.Reason)
-	m.C.Person.Ask(core.Ask{Kind: "told", Ref: req.ID, Project: req.Project, From: req.Origin, Options: []string{"seen"},
+	m.C.Person.Tell(core.Ask{Ref: req.ID, Project: req.Project, From: req.Origin,
 		Title: fmt.Sprintf("Decided for you (%s, by %s): %s", opt, who, core.Clip(a.Title, 100)), Detail: req.Reason + "\n\n" + a.Detail, Diff: a.Diff})
 }
 

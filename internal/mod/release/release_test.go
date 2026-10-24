@@ -3,6 +3,9 @@ package release
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -274,21 +278,44 @@ func TestPinHoldsUntilCleared(t *testing.T) {
 	}
 }
 
-// An automatic update waits while work is mid-merge, then goes ahead.
+// An automatic update pauses merges for the swap: one still running past the
+// wait leaves the binary alone and lets merges go on; once the running ones
+// end it installs and keeps merges paused for the restart.
 func TestAutoUpdateWaitsOutAMerge(t *testing.T) {
 	serve(t, "v9.9.9", build("new"), false)
 	m, exe := releaseAt(t, "v0.1.2", "me/hive")
-	merging := true
-	m.Busy = func() bool { return merging }
-	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "mid-merge") {
-		t.Fatalf("updated mid-merge: %q", msg)
+	running, paused := true, false
+	var waited time.Duration
+	m.PauseMerges = func(wait time.Duration) (func(), bool) {
+		waited, paused = wait, true
+		return func() { paused = false }, !running
 	}
-	merging = false
-	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") {
-		t.Fatalf("after the merge: %q, %v", msg, err)
+	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "a merge has run past") || paused || waited != mergeWait {
+		t.Fatalf("updated mid-merge: %q, merges paused %v, waited %v", msg, paused, waited)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "old" {
+		t.Fatalf("binary %q while a merge ran", raw)
+	}
+	running = false
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") || !paused {
+		t.Fatalf("after the merge: %q, %v, merges paused for the restart %v", msg, err, paused)
 	}
 	if raw, _ := os.ReadFile(exe); string(raw) != "new" {
 		t.Fatalf("binary %q", raw)
+	}
+}
+
+// Nothing newer pauses no merge: a Hive looking every few minutes doesn't
+// stall its merges to find it is current.
+func TestCurrentHiveDoesNotPauseMerges(t *testing.T) {
+	serve(t, "v0.1.2", build("new"), false)
+	m, _ := releaseAt(t, "v0.1.2", "me/hive")
+	m.PauseMerges = func(time.Duration) (func(), bool) {
+		t.Fatal("paused merges with nothing to install")
+		return nil, false
+	}
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "already on") {
+		t.Fatalf("%q, %v", msg, err)
 	}
 }
 
@@ -337,6 +364,15 @@ type notes struct {
 	calls int
 	// listed runs after Tags lists them, as a push before CreateRelease would.
 	listed func()
+	// tagErr, when set, is what TagCommit fails with.
+	tagErr error
+}
+
+func (n *notes) TagCommit(repo, tag string) (string, error) {
+	if n.tagErr != nil {
+		return "", n.tagErr
+	}
+	return n.Local.TagCommit(repo, tag)
 }
 
 func (n *notes) Tags(repo string) ([]string, error) {
@@ -753,6 +789,9 @@ func TestReleaseRefusesATagAtAnotherCommit(t *testing.T) {
 	if !journaled(m, "release.refused") || journaled(m, "hive.released") {
 		t.Fatal("a release whose tag points elsewhere was recorded as released")
 	}
+	if a := alertText(m); !strings.Contains(a, "release-signing") || !strings.Contains(a, "reject it") {
+		t.Fatalf("the refusal doesn't say to reject the signing run: %q", a)
+	}
 	n.SetReleaseRuns("me/hive", "m1", core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"},
 		core.WorkflowRun{Name: "update", Status: "completed", Conclusion: "success"})
 	if got := m.Publish(); got != "nothing to publish" {
@@ -778,10 +817,59 @@ func TestPublishRefusesAMovedTag(t *testing.T) {
 	if got := m.Publish(); !strings.Contains(got, "refused") {
 		t.Fatalf("Publish said %q", got)
 	}
+	if a := alertText(m); !strings.Contains(a, "reject it") {
+		t.Fatalf("the refusal doesn't say to reject the signing run: %q", a)
+	}
 	if rel, _ := n.LatestRelease("me/hive"); !rel.Prerelease {
 		t.Fatalf("a release whose tag moved was published: %+v", rel)
 	}
 	if got := m.Publish(); got != "nothing to publish" {
 		t.Fatalf("a refused release is checked again: %q", got)
+	}
+}
+
+// alertText is the last alert raised.
+func alertText(m *Module) (text string) {
+	m.C.J.Replay(func(e core.Event) {
+		if e.Kind == "alert.raised" {
+			var x struct{ Text string }
+			json.Unmarshal(e.Data, &x)
+			text = x.Text
+		}
+	})
+	return
+}
+
+// A tag that can't be read after the release is cut is said, and the record
+// leaves tag_sha out rather than holding an empty one; Publish waits for it.
+func TestReleaseSaysAnUnreadTag(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	n.tagErr = errors.New("gh api: HTTP 502")
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	var rec map[string]any
+	m.C.J.Replay(func(e core.Event) {
+		if e.Kind == "hive.released" {
+			json.Unmarshal(e.Data, &rec)
+		}
+	})
+	if rec == nil {
+		t.Fatal("no hive.released")
+	}
+	if _, ok := rec["tag_sha"]; ok || !strings.Contains(fmt.Sprint(rec["tag_unread"]), "502") {
+		t.Fatalf("record %v", rec)
+	}
+	if a := alertText(m); !strings.Contains(a, "can't read its tag") {
+		t.Fatalf("alert %q", a)
+	}
+	n.SetReleaseRuns("me/hive", "m1", core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"},
+		core.WorkflowRun{Name: "update", Status: "completed", Conclusion: "success"})
+	if got := m.Publish(); !strings.Contains(got, "can't read") {
+		t.Fatalf("Publish said %q", got)
+	}
+	n.tagErr = nil
+	if got := m.Publish(); got != "published v0.0.1" {
+		t.Fatalf("Publish said %q once the tag read", got)
 	}
 }

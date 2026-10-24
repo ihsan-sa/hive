@@ -97,6 +97,38 @@ type Run struct {
 	TurnStarted time.Time       `json:"turn_started,omitempty"`
 	LastOutput  time.Time       `json:"last_output,omitempty"`
 	Moves       []Move          `json:"moves,omitempty"` // each change of harness, so a past turn is read as it was written
+	SessionCost SessionSpend    `json:"session_cost"`
+}
+
+// SessionSpend turns the cost a harness reports into what each turn spent.
+// Claude Code's total_cost_usd is its session's running total, and a resumed
+// session carries it on, so every result line repeats all earlier turns'
+// spend; summing them counted a long resumed session (the lead's) many times
+// over. It holds the session and its total at the last result line.
+type SessionSpend struct {
+	Session string  `json:"session,omitempty"`
+	Total   float64 `json:"total,omitempty"`
+}
+
+// Turn is what a turn ending with this session's running total spent: the
+// rise since the last result line in the same session, or all of it in a new
+// session (or one whose total started again).
+func (s *SessionSpend) Turn(session string, total float64) float64 {
+	spent := total
+	if session == s.Session && total >= s.Total {
+		spent = total - s.Total
+	}
+	s.Session, s.Total = session, total
+	return spent
+}
+
+// Base is what a resumed session already spent: the harness counts a budget
+// against its running total.
+func (s SessionSpend) Base(session string) float64 {
+	if session == s.Session {
+		return s.Total
+	}
+	return 0
 }
 
 // Move is a run going from one harness to another at a turn.
@@ -518,8 +550,9 @@ func (rs *Runs) apply(e Event) {
 			r.Context = t.Context
 		}
 		if t.Result != nil {
-			r.Cost += t.Result.CostUSD
-			rs.spent[e.At.UTC().Format("2006-01")] += t.Result.CostUSD
+			spent := r.SessionCost.Turn(r.Session, t.Result.CostUSD)
+			r.Cost += spent
+			rs.spent[e.At.UTC().Format("2006-01")] += spent
 			if !t.Result.IsError {
 				r.Result, r.Structured = t.Result.Text, t.Result.Structured
 				r.Retries = 0
@@ -804,6 +837,10 @@ func (rs *Runs) Send(id, text string) error {
 // wake gives a run that ended blocked with a message waiting (often the
 // answer it was blocked on) the turn for it, rather than leaving it on a run
 // that takes no turns. One blocked for its Codex token stays blocked.
+// It is safe to call at any time: it reads the run afresh, so a caller's
+// earlier, stale look (Send's live check, endTurn's read) can't wake the
+// wrong run; on anything but a blocked run with a message waiting it does
+// nothing.
 func (rs *Runs) wake(id string) {
 	rs.waking.Lock() // Send and endTurn can both see it; it's woken once
 	defer rs.waking.Unlock()
@@ -1341,7 +1378,11 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		MaxOutput: cfg.MaxOutputTokens, ConfigDir: cfgDir,
 	}
 	if r.Budget > 0 {
-		t.MaxBudgetUSD = max(r.Budget-r.Cost, 0.01)
+		left := r.Budget - r.Cost
+		if resume {
+			left += r.SessionCost.Base(r.Session)
+		}
+		t.MaxBudgetUSD = max(left, 0.01)
 	}
 	if sb.Isolated() {
 		t.SystemFile = "/hive/run/system.md"

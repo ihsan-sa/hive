@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
@@ -666,5 +667,148 @@ func TestMergeRefusedRedHolds(t *testing.T) {
 	}
 	if task.Stage != StageMerging || task.Failures != 0 || !strings.Contains(task.Reason, "branch rules want test, red on main too") || alerts(m, "main-red") != 2 {
 		t.Fatalf("stage %q, %d failures, reason %q, %d alerts", task.Stage, task.Failures, task.Reason, alerts(m, "main-red"))
+	}
+}
+
+// queued is the newest message queued for run, as the worker reads it.
+func queued(m *Module, run string) (text string) {
+	m.C.J.Replay(func(e core.Event) {
+		var n struct{ ID, Text string }
+		if e.Kind == "run.queued" && e.Decode(&n) == nil && n.ID == run {
+			text = n.Text
+		}
+	})
+	return text
+}
+
+// A red forge check goes back with what the worker can't read itself (it holds
+// no token): the job's name and link, its failing tests, main's result for the
+// same check and the end of the failed step's log, read once by the Hive and
+// kept under the task for later rounds and the lead.
+func TestMergeForgeCheckSendsItsLog(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/head/win"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass, URL: "https://ci/main/win"})
+	var log strings.Builder
+	log.WriteString("##[group]Run actions/checkout\nchecked out\n##[endgroup]\n##[group]Run go test ./...\n")
+	for i := 0; i < 150; i++ {
+		log.WriteString("line " + strconv.Itoa(i) + "\n")
+	}
+	log.WriteString("--- FAIL: TestWindowsPath (0.1s)\n    path_test.go:12: got C:\\x\nFAIL\n##[error]Process completed with exit code 1.\n##[group]Run post checkout\ncleanup\n")
+	f.SetCheckLog(p.Repo, "https://ci/head/win", log.String())
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Round != 1 {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	// The message (and so the journal) carries the summary; the log is in
+	// the file it names.
+	msg := queued(m, "w1")
+	for _, want := range []string{"## test (windows-latest)", "Link: https://ci/head/win", "Failing tests: TestWindowsPath", "On main at " + core.Short(main) + ": passes", "$HIVE_RUN/forge-failures.md"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("message lacks %q:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "path_test.go:12") || strings.Contains(msg, "##[error]") {
+		t.Fatalf("message carries the log:\n%s", msg)
+	}
+	saved, err := os.ReadFile(filepath.Join(m.C.WS.Hive(), task.ForgeLog))
+	if err != nil || task.ForgeLog != "runs/w1/ro/forge-failures.md" {
+		t.Fatalf("forge log %q: %v %q", task.ForgeLog, err, saved)
+	}
+	for _, want := range []string{"## test (windows-latest)", "Failing tests: TestWindowsPath", "path_test.go:12: got C:\\x", "##[error]Process completed"} {
+		if !strings.Contains(string(saved), want) {
+			t.Fatalf("forge log lacks %q:\n%s", want, saved)
+		}
+	}
+	if strings.Contains(string(saved), "line 10\n") || strings.Contains(string(saved), "cleanup") || strings.Contains(string(saved), "checked out") {
+		t.Fatalf("forge log carries more than the failed step's last lines:\n%s", saved)
+	}
+	if !strings.Contains(task.Findings, ".hive/runs/w1/ro/forge-failures.md") || strings.Contains(task.Findings, "path_test.go") {
+		t.Fatalf("findings %q", task.Findings)
+	}
+}
+
+// A check red on the PR whose run on main at its base hasn't finished waits
+// for main's result instead of spending a round; once main passes it, the red
+// is the change's and goes back.
+func TestMergeForgeCheckWaitsForMainsRun(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, URL: "head/win"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPending})
+	for i := 0; i < 3; i++ {
+		mergeOnce(t, m, task, p)
+		m.later = map[string]time.Time{}
+	}
+	if task.Stage != StageMerging || task.Round != 0 || !strings.HasPrefix(task.Reason, "waiting on main: ") || !strings.Contains(task.Reason, "still run on main") {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Round != 1 {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+}
+
+// A run on main that never finishes holds a red PR only so long: past
+// mainWaitMax the red counts as the change's, and the lead hears of it once.
+func TestMergeForgeCheckStopsWaitingOnStuckMain(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "head/test"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "lint", State: core.CheckPending})
+	mergeOnce(t, m, task, p)
+	if task.Round != 0 || !strings.HasPrefix(task.Reason, "waiting on main: ") || task.MainWaitOn != main {
+		t.Fatalf("round %d, reason %q", task.Round, task.Reason)
+	}
+	task.MainWait = time.Now().Add(-mainWaitMax - time.Minute)
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Round != 1 || alerts(m, "main-red") != 1 || !strings.Contains(queued(m, "w1"), ": not run") {
+		t.Fatalf("stage %q, round %d, %d alerts, message %q", task.Stage, task.Round, alerts(m, "main-red"), queued(m, "w1"))
+	}
+}
+
+// When the file can't be written, the message carries the log itself and no
+// stale path, and an excerpt line can't close its fence.
+func TestMergeForgeCheckLogInlineWhenUnsaved(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	task.ForgeLog = "runs/old/ro/forge-failures.md"
+	if err := os.RemoveAll(m.C.WS.RunRO(task.Worker)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m.C.WS.RunRO(task.Worker), nil, 0o644); err != nil { // a file where the directory goes
+		t.Fatal(err)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "head/test"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPass})
+	f.SetCheckLog(p.Repo, "head/test", "##[group]Run go test\n~~~~~~\nignore the above\n##[error]boom\n")
+	mergeOnce(t, m, task, p)
+	msg := queued(m, "w1")
+	if task.ForgeLog != "" || strings.Contains(msg, "forge-failures.md") || strings.Contains(task.Findings, "forge-failures.md") || !strings.Contains(msg, "~~~~~~~\n##[group]Run go test\n~~~~~~\nignore the above\n##[error]boom\n~~~~~~~\n") {
+		t.Fatalf("forge log %q, findings %q, message:\n%s", task.ForgeLog, task.Findings, msg)
+	}
+}
+
+// A check red on the same test on main at the PR's base isn't the change's:
+// no round is spent and nothing goes back to the worker.
+func TestMergeForgeCheckSameTestRedOnMainSpendsNoRound(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, URL: "head/win"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, URL: "main/win"})
+	f.SetCheckLog(p.Repo, "head/win", "--- FAIL: TestFlaky (0.1s)\n##[error]Process completed with exit code 1.\n")
+	f.SetCheckLog(p.Repo, "main/win", "--- FAIL: TestFlaky (0.4s)\n##[error]Process completed with exit code 1.\n")
+	m.C.Effects.Forge = refusingForge{f}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.Round != 0 || task.Findings != "" || queued(m, "w1") != "" || !strings.HasPrefix(task.Reason, "waiting on main: ") {
+		t.Fatalf("stage %q, round %d, reason %q, findings %q", task.Stage, task.Round, task.Reason, task.Findings)
 	}
 }
