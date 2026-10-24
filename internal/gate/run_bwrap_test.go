@@ -48,7 +48,10 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 		org := filepath.Join(dir, name, "org")
 		rep, err := Run(Config{CandBin: cand, CtrlBin: hive, Self: hive, Out: filepath.Join(dir, name, "run"), Sandbox: "bwrap", Reps: 1, Depth: 1, Bench: 1,
 			Probes: []string{"daemon", "org", "bench", "recurse"}, Probe: map[string]ProbeFunc{"bench": bench}, Org: Local{Dir: org}, Lessons: lessons,
-			Options: Options{AllowTie: tie}, Timeout: 30 * time.Minute, Log: func(s string) { t.Log(name + ": " + s) }})
+			// Same binary on both sides of the keep run: its time and bytes vary
+			// a few percent run to run, so the floor is wide enough that only a
+			// pass or a failure decides here, not the clock.
+			Options: Options{AllowTie: tie, Floor: 1}, Timeout: 30 * time.Minute, Log: func(s string) { t.Log(name + ": " + s) }})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -74,9 +77,12 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 		if r.Probe == "bench" && !strings.Contains(r.Detail, `"score":3`) {
 			t.Errorf("the benchmark did not measure the landed function: %s", r.Detail)
 		}
+		if r.Probe == "bench" && !hasMetric(r, "egress_bytes") {
+			t.Errorf("the meter's count is missing from the benchmark: %+v", r.Metrics)
+		}
 	}
 	rep, lessons = run("rollback", broken, false)
-	if rep.Verdict.Keep || !strings.Contains(lessons, "rolled back") {
+	if rep.Verdict.Keep || !strings.Contains(lessons, "rolled back") || !strings.Contains(strings.Join(rep.Verdict.Regressions, "|"), "daemon passes 0/1") {
 		t.Errorf("the broken candidate: %+v, lessons %q", rep.Verdict, lessons)
 	}
 }

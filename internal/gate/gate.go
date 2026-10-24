@@ -264,7 +264,7 @@ func Run(cfg Config) (rep Report, err error) {
 				start, spent := time.Now(), side.c.Meter.Bytes()
 				r := p(&cfg, side.c)
 				r.Probe, r.Rep, r.Seconds = name, rep0+1, time.Since(start).Seconds()
-				if name == "benchmark" && r.Pass {
+				if r.Pass && hasMetric(r, "score") { // a benchmark, whatever its name
 					// Cost, counted by the meter, lower is better, and judged
 					// only between sides that landed the same working code.
 					r.Metrics = append(r.Metrics, Metric{Name: "egress_bytes", Value: float64(side.c.Meter.Bytes() - spent), Given: []string{"score", "asks_finished"}})
@@ -280,6 +280,15 @@ func Run(cfg Config) (rep Report, err error) {
 	}
 	rep.Verdict = Decide(rep.Candidate, rep.Control, cfg.Options)
 	return rep, nil
+}
+
+func hasMetric(r Result, name string) bool {
+	for _, m := range r.Metrics {
+		if m.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // shortTmp is /tmp where there is one, whatever TMPDIR says.

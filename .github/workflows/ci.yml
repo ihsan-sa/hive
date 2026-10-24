@@ -88,7 +88,7 @@ jobs:
         # HIVE_GATE_BWRAP=1 turns the gate's bwrap tests' skip into a failure, so they run here:
         # the allowlist hides the host, the meter is the only way out, sealed code runs in a sibling
         # sandbox, no sandbox starts inside another, and a deadline kills a child's whole tree.
-        run: go test ./internal/gate/ -count=1 -v -run 'Bwrap|Build|Deadline|NoSandbox' 2>&1 | tee "$RUNNER_TEMP/gate.log"; test "${PIPESTATUS[0]}" = 0 && ! grep -q -- "--- SKIP" "$RUNNER_TEMP/gate.log"
+        run: go test ./internal/gate/ -count=1 -timeout 30m -v -run 'Bwrap|Build|Deadline|NoSandbox' 2>&1 | tee "$RUNNER_TEMP/gate.log"; test "${PIPESTATUS[0]}" = 0 && ! grep -q -- "--- SKIP" "$RUNNER_TEMP/gate.log"
         shell: bash
         env:
           HIVE_GATE_BWRAP: "1"
