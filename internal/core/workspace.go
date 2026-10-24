@@ -347,7 +347,7 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp-" + NewID()[:6]
+	tmp := path + ".tmp-" + NewID()[14:] // the random part; [:6] is the date, shared by every write that day
 	if err := os.WriteFile(tmp, data, mode); err != nil {
 		return err
 	}
