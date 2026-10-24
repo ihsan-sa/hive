@@ -2,10 +2,11 @@ package e2e
 
 import (
 	"os"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report/contracttest"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -27,22 +28,29 @@ func TestReportSharing(t *testing.T) {
 	h.ws.SaveConfig(cfg)
 	h.seed("me/rep", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "rep", "repo": "me/rep"}, nil)
-	send := func() {
-		t.Helper()
-		// The run is told by its Last changing, not by Last passing the
-		// clock: Windows' clock ticks coarsely, so a quick run can carry the
-		// very time read before it.
-		var before time.Time
-		for _, j := range h.state().Jobs {
-			if j.Name == "report.send" {
-				before = j.Last
+	// A send counts its job's system.ran events rather than comparing times:
+	// Windows' wall clock ticks coarsely, so a send that returns at once (as
+	// it does while sharing is off) can journal at the very instant the test
+	// read as "before", and Last.After(before) never comes true.
+	ran := func() int {
+		var evs []core.Event
+		h.c.Do("GET", "/api/events", nil, &evs)
+		n := 0
+		for _, e := range evs {
+			if e.Kind == "system.ran" && strings.Contains(string(e.Data), `"job":"report.send"`) {
+				n++
 			}
 		}
+		return n
+	}
+	send := func() {
+		t.Helper()
+		before := ran()
 		h.post("/api/job", map[string]string{"name": "report.send"}, nil)
 		h.wait("report.send to run", minute, func(st api.State) bool {
 			for _, j := range st.Jobs {
-				if j.Name == "report.send" && !j.Last.Equal(before) && !j.Running {
-					return true
+				if j.Name == "report.send" && !j.Running {
+					return ran() > before
 				}
 			}
 			return false
