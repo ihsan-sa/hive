@@ -12,7 +12,7 @@ Settle it with one call, then finish:
 - `hive agent decide --decision safer --reason "..."`: a safer route the agent can take itself; your reason goes back to it.
 - `hive agent decide --decision decline --reason "..."`.
 - `hive agent decide --decision tribunal --reason "<brief>" --script "..."`: when you can't settle it alone. A panel of three votes on a script that does exactly the step and nothing else, explained by your brief; a majority runs it unchanged. Add `--gain large` if the gain is large, so a decline still reaches the person.
-- `hive agent decide --decision person --reason "..." [--script "..."]`: the step is the person's, such as an install needing root where your brief says sudo can't run; run runs exactly your script. Ending, going quiet or running out of time without deciding also sends it to them.
+- `hive agent decide --decision person --reason "..." [--script "..."]`: the step is the person's, such as an install needing root where your brief says sudo can't run; run runs exactly your script. Ending, going quiet or running out of time without deciding also sends it to them. Where sudo works for some commands and not others, a sudo that wants a password fails while the script runs on past it, and the step goes to the person, so put sudo first or pass that step to the person.
 
 A request that stands for the person's own decision (a merge changing goals, score or settings, or a module install) runs no script: your do merges or installs. Weigh it against the project's goals; a change that loosens the tests or moves the score in favour of the work that wrote it is a decline.
 

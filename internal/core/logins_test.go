@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,5 +135,57 @@ func TestLoginPoolRoutesByWindowUsage(t *testing.T) {
 		if p.Key() == "claude" && p.Limit.Utilization != 0.28 {
 			t.Fatalf("plan claude reads %v, want 0.28", p.Limit.Utilization)
 		}
+	}
+}
+
+// h0Usage is a plan.usage record as H0's journal holds it (seq 183,
+// 2026-10-24): Claude leaves the top-level utilization at 0 and reports the
+// real figures per window.
+const h0Usage = `{"harness":"claude","login":"claude","limit":{"status":"allowed","resets_at":"2026-10-24T05:40:00Z","window":"five_hour","utilization":0,"windows":{"five_hour":{"utilization":0.29,"resets_at":"2026-10-24T05:40:00Z"},"seven_day":{"utilization":0.36,"resets_at":"2026-10-24T17:00:00Z"}}},"at":"2026-10-24T02:10:29.06537972Z"}`
+
+// Runs go on the least-used login by its windows' figures, so the machine's
+// own login at 36% of its week yields to an added one at 10%; once those
+// windows reset, it counts as unused again.
+func TestLoginPoolPicksTheLeastUsedByItsWindows(t *testing.T) {
+	var own Plan
+	if err := json.Unmarshal([]byte(h0Usage), &own); err != nil {
+		t.Fatal(err)
+	}
+	recorded := time.Date(2026, 10, 24, 2, 10, 29, 0, time.UTC)
+	if u := own.Used(recorded); u != 0.36 {
+		t.Fatalf("H0's record reads as %v used, want 0.36", u)
+	}
+	if u := own.Used(time.Date(2026, 10, 24, 6, 0, 0, 0, time.UTC)); u != 0.36 {
+		t.Fatalf("after the five-hour reset the week still counts: %v", u)
+	}
+	if u := own.Used(time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)); u != 0 {
+		t.Fatalf("after every reset nothing counts: %v", u)
+	}
+
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, twoLogins{}, func() []string { return nil })
+	shift := time.Until(recorded) // replay the record as if it were just taken
+	own.Limit.ResetsAt = own.Limit.ResetsAt.Add(shift)
+	for k, w := range own.Limit.Windows {
+		w.ResetsAt = w.ResetsAt.Add(shift)
+		own.Limit.Windows[k] = w
+	}
+	rs.append("plan.usage", own)
+	work := Plan{Harness: "claude", Login: "claude:work", Limit: harness.RateLimit{Status: "allowed", Windows: map[string]harness.Window{
+		"five_hour": {Utilization: 0.05, ResetsAt: time.Now().Add(time.Hour)},
+		"seven_day": {Utilization: 0.10, ResetsAt: time.Now().Add(48 * time.Hour)},
+	}}}
+	rs.append("plan.usage", work)
+	if l, _, _ := rs.pickLogin("claude", t.TempDir(), false); l.Key() != "claude:work" {
+		t.Fatalf("the less-used added login goes first, got %s", l.Key())
+	}
+	work.Limit.Windows["seven_day"] = harness.Window{Utilization: 0.50, ResetsAt: time.Now().Add(48 * time.Hour)}
+	rs.append("plan.usage", work)
+	if l, _, _ := rs.pickLogin("claude", t.TempDir(), false); l.Key() != "claude" {
+		t.Fatalf("once the added login is fuller, the machine's own goes first, got %s", l.Key())
 	}
 }

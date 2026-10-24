@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/ihsan-sa/hive-standalone-build/internal/text"
 	"strings"
 	"time"
 
@@ -164,7 +165,7 @@ func (m *model) keyDash(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch r := rows[sel]; {
 		case r.chat != "":
 			cmd := m.openChat(r.chat)
-			m.thread, m.focus = r.thread, 2
+			m.thread, m.focus, m.chFree = r.thread, 2, false
 			return m, tea.Batch(cmd, m.focusBox(r.thread))
 		case r.task != "":
 			return m, m.push(detail{kind: "task", id: r.task, title: core.Clip(r.text, 40)})
@@ -239,12 +240,12 @@ func (m *model) usage(w int) string {
 	}
 	var parts []string
 	for _, p := range m.st.Plans {
-		s := p.Harness
+		s := text.Visible(p.Harness)
 		if p.Limit.Status == "rejected" {
 			s += " " + stBad.Render("limited") + " until " + p.Limit.ResetsAt.Local().Format("Mon 15:04")
 		}
 		for _, k := range sortedKeys(p.Limit.Windows) {
-			s += fmt.Sprintf(" · %s %.0f%%", strings.ReplaceAll(k, "_", " "), p.Limit.Windows[k].Utilization*100)
+			s += fmt.Sprintf(" · %s %.0f%%", text.Visible(strings.ReplaceAll(k, "_", " ")), p.Limit.Windows[k].Utilization*100)
 		}
 		parts = append(parts, s)
 	}

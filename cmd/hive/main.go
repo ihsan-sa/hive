@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/ihsan-sa/hive-standalone-build/internal/text"
 	"maps"
 	"os"
 	"path/filepath"
@@ -165,7 +166,7 @@ func run(args []string) int {
 					if err != nil {
 						return err
 					}
-					fmt.Println(cmd+"d:", a.Title, "->", opt)
+					fmt.Printf("%sd: %s -> %s%s\n", cmd, text.Visible(a.Title), text.Visible(opt), meaning(opt))
 					return c.Do("POST", "/api/answer", map[string]string{"id": a.ID, "answer": opt, "note": strings.Join(args[1:], " ")}, nil)
 				}
 			}
@@ -272,7 +273,7 @@ func cmdDaemon(args []string) int {
 		return 1
 	}
 	if *detach {
-		if _, err := daemon.Start(ws); err != nil {
+		if _, err := daemon.StartAfter(ws, *waitFor); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -280,6 +281,9 @@ func cmdDaemon(args []string) int {
 	}
 	if err := daemon.Run(ws, *waitFor); err != nil {
 		fmt.Fprintln(os.Stderr, core.Cmd+" daemon:", err)
+		if code, ok := err.(daemon.ExitCode); ok {
+			return int(code)
+		}
 		return 1
 	}
 	return 0
@@ -412,11 +416,34 @@ func cmdStatus() int {
 		if len(st.Asks) > 0 {
 			fmt.Println("\nwaiting on you:")
 			for _, a := range st.Asks {
-				fmt.Printf("  %s  %s  (hive answer %s %s)\n", a.ID, a.Title, a.ID, strings.Join(a.Options, "|"))
+				fmt.Printf("  %s  %s  (%s)\n", text.Visible(a.ID), text.Visible(a.Title), text.Visible(answerHint(a)))
 			}
 		}
 		return nil
 	})
+}
+
+// meaning says what an answer tells the Hive, where that isn't plain from
+// its word.
+func meaning(opt string) string {
+	switch opt {
+	case "run":
+		return " (the Hive runs exactly the script you were shown)"
+	case "done":
+		return " (you say you did the step yourself; nothing runs)"
+	case "declined", "decline":
+		return " (nothing runs; the agent that asked is told no)"
+	}
+	return ""
+}
+
+// answerHint is how to answer an ask from a shell.
+func answerHint(a core.Ask) string {
+	h := fmt.Sprintf("%s answer %s %s", core.Cmd, a.ID, strings.Join(a.Options, "|"))
+	if len(a.Options) >= 2 {
+		h = fmt.Sprintf("%s approve|refuse %s, or %s", core.Cmd, a.ID, h)
+	}
+	return h
 }
 
 func cmdDoctor(args []string) int {
@@ -578,27 +605,32 @@ func kbArgs(args []string) (query, limit string) {
 
 // planLine is a plan's usage for hive status. The reset carries its zone and
 // how far off it is, and a reading whose window has since reset says so
-// rather than passing its old number off as current.
+// rather than passing its old number off as current. Names from the usage
+// feed are escaped, so none can rewrite the screen.
 func planLine(p core.Plan, now time.Time) string {
-	l := p.Limit
+	l, key, window := p.Limit, text.Visible(p.Key()), text.Visible(p.Limit.Window)
 	at := l.ResetsAt.Local().Format("Mon 15:04 MST")
 	if !l.ResetsAt.After(now) {
-		return fmt.Sprintf("plan %s: the %s window reset at %s, no reading since (last %.0f%%, read %s ago)", p.Key(), l.Window, at, l.Utilization*100, now.Sub(p.At).Round(time.Minute))
+		return fmt.Sprintf("plan %s: the %s window reset at %s, no reading since (last %.0f%%, read %s ago)", key, window, at, l.Utilization*100, now.Sub(p.At).Round(time.Minute))
 	}
-	s := fmt.Sprintf("plan %s: %s, %.0f%% of the %s window, resets in %s (%s)", p.Key(), l.Status, l.Utilization*100, l.Window, l.ResetsAt.Sub(now).Round(time.Minute), at)
+	s := fmt.Sprintf("plan %s: %s, %.0f%% of the %s window, resets in %s (%s)", key, text.Visible(l.Status), l.Utilization*100, window, l.ResetsAt.Sub(now).Round(time.Minute), at)
 	for _, k := range slices.Sorted(maps.Keys(l.Windows)) {
 		if k != l.Window {
-			s += fmt.Sprintf("; %s %.0f%%", k, l.Windows[k].Utilization*100)
+			s += fmt.Sprintf("; %s %.0f%%", text.Visible(k), l.Windows[k].Utilization*100)
 		}
 	}
 	return s
 }
 
 // approveOption is the option approve (the first) or refuse (the last) picks;
-// an ask with no options takes the person's own words through hive answer.
+// an ask with no options takes the person's own words through hive answer,
+// and one with a single option (a told "seen") has no yes and no to pick.
 func approveOption(cmd string, a core.Ask) (string, error) {
 	if len(a.Options) == 0 {
 		return "", fmt.Errorf("%s has no options to %s: answer it in your own words with %s answer %s <text>", a.ID, cmd, core.Cmd, a.ID)
+	}
+	if len(a.Options) == 1 { // a told "seen" has no yes and no to tell apart
+		return "", fmt.Errorf("%s has no yes and no to %s between: answer it with %s answer %s %s", a.ID, cmd, core.Cmd, a.ID, a.Options[0])
 	}
 	if cmd == "refuse" {
 		return a.Options[len(a.Options)-1], nil

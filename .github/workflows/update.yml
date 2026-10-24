@@ -1,12 +1,19 @@
 name: update
 # A Hive installed from an older release updates itself to the release under test while it
-# runs, on all three systems. `previous` is the release before it, installed as `hive`;
-# v0.1.2 is installed as `hive-v0` from the repo's old name, so its update also goes through
-# GitHub's rename redirect and renames the command to `hive`. A manual run tests the latest
-# release, or the tag given: gh workflow run update.yml -f tag=v0.1.3
+# runs, on all three systems. `previous` is the newest full release before it, installed as
+# `hive`; v0.1.2 is installed as `hive-v0` from the repo's old name, so its update also goes
+# through GitHub's rename redirect and renames the command to `hive`. A manual run tests the
+# latest release, or the tag given: gh workflow run update.yml -f tag=v0.1.3
+#
+# The Hive cuts each release as a pre-release and makes it the latest only once this and ci
+# pass on its commit (internal/mod/release). Old releases update only to the latest, so a
+# pre-release is handed over as an update hands over: the binary is swapped in place and the
+# new one takes over from the old daemon (`daemon --detach --wait-for`), reading its
+# daemon.json and renaming a v0.1.2 hive-v0. Once it is the latest, `released` runs the whole
+# update again, by itself.
 on:
   release:
-    types: [published]
+    types: [published, released]
   workflow_dispatch:
     inputs:
       tag:
@@ -46,17 +53,20 @@ jobs:
             echo "waiting for $to's binaries ($n so far)"; sleep 20
           done
           [ "$n" -ge 6 ] || { echo "::error::release $to never got its binaries"; exit 1; }
+          pre=$(gh release view "$to" -R "$GITHUB_REPOSITORY" --json isPrerelease -q .isPrerelease)
           if [ "$FROM" = previous ]; then
-            from=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName -q '.[].tagName' | sed -n "/^$to\$/{n;p;q;}")
+            # the newest full release before it: what installs are on (a red pre-release never was)
+            from=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName,isPrerelease |
+              jq -r --arg to "$to" '(map(.tagName) | index($to)) as $i | if $i == null then empty else .[$i+1:] | map(select(.isPrerelease | not)) | .[0].tagName // empty end')
             cmd=hive repo=$GITHUB_REPOSITORY
           else
             from=$FROM cmd=hive-v0 repo=ihsan-sa/hive-standalone-build
           fi
           skip=false
           if [ -z "$from" ] || [ "$from" = "$to" ]; then skip=true; echo "::warning::nothing to update from: from '$from', to $to"; fi
-          echo "from $from ($cmd) to $to; skip=$skip"
+          echo "from $from ($cmd) to $to (pre-release: $pre); skip=$skip"
           bin=$RUNNER_TEMP/bin
-          { echo "to=$to"; echo "from=$from"; echo "cmd=$cmd"; echo "repo=$repo"; echo "skip=$skip"; echo "bin=$bin"; } >> "$GITHUB_OUTPUT"
+          { echo "to=$to"; echo "pre=$pre"; echo "from=$from"; echo "cmd=$cmd"; echo "repo=$repo"; echo "skip=$skip"; echo "bin=$bin"; } >> "$GITHUB_OUTPUT"
           { echo "HIVE_HOME=$RUNNER_TEMP/hive"; echo "HIVE_BIN_DIR=$bin"; } >> "$GITHUB_ENV"
       - name: install the old release (Linux, macOS)
         if: steps.pick.outputs.skip == 'false' && runner.os != 'Windows'
@@ -80,6 +90,7 @@ jobs:
         env:
           CMD: ${{ steps.pick.outputs.cmd }}
           BIN: ${{ steps.pick.outputs.bin }}
+          PRE: ${{ steps.pick.outputs.pre }}
         run: |
           mkdir -p "$HIVE_HOME/.hive"
           conf() { printf '{"harness": "fake", "auto_update": %s, "schedules": {"hive.update": "every 1m"}}\n' "$1" > "$HIVE_HOME/.hive/config.json"; }
@@ -87,19 +98,46 @@ jobs:
           "$BIN/$CMD" daemon --detach
           "$BIN/$CMD" status
           sleep 45 # past the at-start check, which finds auto-update off
-          conf true
+          # A pre-release isn't what the old release follows: auto-update stays off and the next step hands it over.
+          [ "$PRE" = true ] || conf true
+      - name: hand the pre-release over as an update would
+        if: steps.pick.outputs.skip == 'false' && steps.pick.outputs.pre == 'true'
+        env:
+          TO: ${{ steps.pick.outputs.to }}
+          CMD: ${{ steps.pick.outputs.cmd }}
+          BIN: ${{ steps.pick.outputs.bin }}
+        run: |
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64) asset=hive-linux-amd64 ;; Linux-ARM64) asset=hive-linux-arm64 ;;
+            macOS-X64) asset=hive-darwin-amd64 ;; macOS-ARM64) asset=hive-darwin-arm64 ;;
+            Windows-X64) asset=hive-windows-amd64.exe ;; *) echo "::error::no asset for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
+          esac
+          ext=; [ "$RUNNER_OS" = Windows ] && ext=.exe
+          gh release download "$TO" -R "$GITHUB_REPOSITORY" -p "$asset" -D "$RUNNER_TEMP/new"
+          # Releases before v0.1.4 keep daemon.json in .hive. A restarting daemon leaves it behind
+          # for the new one, so it is kept across the old daemon's stop.
+          info=$HIVE_HOME/.hive/private/daemon.json; [ -f "$info" ] || info=$HIVE_HOME/.hive/daemon.json
+          cp "$info" "$RUNNER_TEMP/daemon.json"; cat "$info"; echo
+          pid=$(sed -n 's/.*"pid": *\([0-9]*\).*/\1/p' "$info")
+          "$BIN/$CMD" shutdown
+          cp "$RUNNER_TEMP/daemon.json" "$info"
+          # Windows holds the exe a moment after its process ends.
+          for i in $(seq 10); do cp "$RUNNER_TEMP/new/$asset" "$BIN/$CMD$ext" && break; sleep 2; done
+          chmod +x "$BIN/$CMD$ext"
+          "$BIN/$CMD" daemon --detach --wait-for "$pid"
       - name: it moves to the new release by itself
         if: steps.pick.outputs.skip == 'false'
         env:
           TO: ${{ steps.pick.outputs.to }}
           BIN: ${{ steps.pick.outputs.bin }}
         run: |
+          info=$HIVE_HOME/.hive/private/daemon.json # where the new release writes it
           for i in $(seq 60); do
-            grep -q "\"version\":\"$TO\"" "$HIVE_HOME/.hive/daemon.json" 2>/dev/null && break
+            grep -q "\"version\":\"$TO\"" "$info" 2>/dev/null && break
             sleep 5
           done
-          cat "$HIVE_HOME/.hive/daemon.json"; echo
-          grep -q "\"version\":\"$TO\"" "$HIVE_HOME/.hive/daemon.json"
+          cat "$info"; echo
+          grep -q "\"version\":\"$TO\"" "$info"
           "$BIN/hive" --version | tee version.txt
           grep -q "$TO" version.txt
           "$BIN/hive" status | tee status.txt

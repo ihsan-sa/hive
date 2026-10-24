@@ -138,6 +138,23 @@ func (p Plan) Parked(now time.Time) bool {
 	return p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now)
 }
 
+// Used is how much of its plan the login has used: the fullest of its usage
+// windows still running at now. Claude reports the windows' figures apart
+// from the top-level one, which it leaves at 0, and a window whose reset has
+// passed has started again from nothing.
+func (p Plan) Used(now time.Time) float64 {
+	var u float64
+	if p.Limit.ResetsAt.After(now) {
+		u = p.Limit.Utilization
+	}
+	for _, w := range p.Limit.Windows {
+		if w.ResetsAt.After(now) {
+			u = max(u, w.Utilization)
+		}
+	}
+	return u
+}
+
 // TokenSource lists a harness's logins and hands out a login's short-lived credential.
 type TokenSource interface {
 	Logins(h string) []Login
@@ -162,6 +179,20 @@ type Runs struct {
 	plans map[string]Plan
 	busy  map[string]bool    // runs whose tick work is in flight
 	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
+	hold  string             // why no new turn starts, while a restart waits for a quiet moment
+	// launching counts launches past the hold whose turn isn't journalled yet.
+	launching int
+}
+
+// Hold keeps new turns from starting, saying why; "" lets them start again.
+func (rs *Runs) Hold(why string) { rs.mu.Lock(); rs.hold = why; rs.mu.Unlock() }
+
+// Live counts the turns whose process is running, and those starting.
+func (rs *Runs) Live() int {
+	n := len(rs.List(func(r *Run) bool { return r.Status == StatusRunning && proc.Alive(r.Proc) }))
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return n + rs.launching
 }
 
 // codexTokenStuck opens the note on a run whose Codex token folder would not delete.
@@ -601,14 +632,15 @@ func (rs *Runs) Plans() []Plan {
 }
 
 // pickLogin chooses the login for a run's next turn: of those not parked at
-// their usage limit, the least used, the machine's own first on a tie. A
+// their usage limit, the least used (Plan.Used), the machine's own first on a
+// tie. A
 // bare run whose machine login has no credential file the Hive can read gets
 // no token, so the harness's own login on the host still works.
 func (rs *Runs) pickLogin(h, home string, bare bool) (Login, []string, error) {
 	logins := rs.tokens.Logins(h)
 	now := time.Now()
 	rs.mu.Lock()
-	use := func(l Login) float64 { return rs.plans[l.Key()].Limit.Utilization }
+	use := func(l Login) float64 { return rs.plans[l.Key()].Used(now) }
 	var open []Login
 	for _, l := range logins {
 		if !rs.plans[l.Key()].Parked(now) {
@@ -675,14 +707,39 @@ func (rs *Runs) Send(id, text string) error {
 }
 
 // Reopen lets a finished run take more turns (fix rounds go back to the same worker).
+// A Codex run whose token folder still won't delete stays blocked for it.
 func (rs *Runs) Reopen(id, text string) error {
-	if _, ok := rs.Get(id); !ok {
+	r, ok := rs.Get(id)
+	if !ok {
 		return ErrNotFound
+	}
+	if r.Status == StatusStopped || r.StopAsked {
+		return fmt.Errorf("run %s was stopped on purpose (%s); it stays stopped", id, r.Reason)
+	}
+	if err := rs.tokenStuck(r); err != nil {
+		return err
 	}
 	rs.append("run.reopened", runNote{ID: id})
 	rs.append("run.queued", runNote{ID: id, Text: text})
 	rs.append("run.status", runNote{ID: id, Status: StatusIdle, Reason: "reopened"})
 	return nil
+}
+
+// tokenStuck checks again that a Codex run's token folder is gone; if it still
+// won't delete, the run is blocked for it (once) and the error says why.
+func (rs *Runs) tokenStuck(r Run) error {
+	if HarnessName(r.Harness) != "codex" || r.Status == StatusRunning {
+		return nil
+	}
+	err := rs.dropCodexHome(r.ID)
+	if err == nil {
+		return nil
+	}
+	why := codexTokenStuck + err.Error()
+	if r.Status != StatusBlocked || !strings.HasPrefix(r.Reason, codexTokenStuck) {
+		rs.SetStatus(r.ID, StatusBlocked, why)
+	}
+	return fmt.Errorf("run %s stays blocked: %s", r.ID, why)
 }
 
 // Wait marks a run as waiting for something (a warden, a helper); when its
@@ -912,8 +969,9 @@ func (rs *Runs) endTurn(r Run) {
 	}
 	rs.append("run.turn_ended", te)
 	// A message that came in while it finished blocked (often the answer it was
-	// blocked on) wakes it rather than waiting on a run that takes no turns.
-	if te.Status == StatusBlocked && len(cur.Pending) > 0 {
+	// blocked on) wakes it rather than waiting on a run that takes no turns;
+	// one blocked for its Codex token stays blocked.
+	if te.Status == StatusBlocked && dropErr == nil && len(cur.Pending) > 0 {
 		rs.append("run.reopened", runNote{ID: r.ID})
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusIdle, Reason: "woken by a message"})
 	}
@@ -989,6 +1047,14 @@ const PendingSep = "\n\n---\n\n"
 
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run, cfg Config) {
+	rs.mu.Lock()
+	if rs.hold != "" {
+		rs.mu.Unlock()
+		return
+	}
+	rs.launching++
+	rs.mu.Unlock()
+	defer func() { rs.mu.Lock(); rs.launching--; rs.mu.Unlock() }()
 	if why := Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax); why != "" {
 		// The hold keeps the run's status, so a parked run keeps its backoff
 		// and a nudged one its count; the live figures after " (" change
