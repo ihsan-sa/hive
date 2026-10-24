@@ -442,8 +442,44 @@ func TestHighClassNeedsTwoReads(t *testing.T) {
 		t.Fatalf("merged a high change on one read: %v", err)
 	}
 	read("r7d", "land")
+	// A root path runs with elevated rights: on no security list, it still
+	// needs the security seat and a majority of the panel on its own diff.
+	if len(ch.SecurityRoot) != 1 || len(ch.Security) != 1 {
+		t.Fatalf("a root-class path should need the security read and its panel: %+v", ch)
+	}
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "panel") {
+		t.Fatalf("merged a root path on the ordinary reads alone: %v", err)
+	}
+	seat := func(run, seat, verdict, diff string) {
+		t.Helper()
+		c.Runs.Start(RunSpec{ID: run, Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha, "seat": seat, "diff.patch": diff}})
+		if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: run, Verdict: verdict}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Lands on another diff (the head before a new commit) count for nothing.
+	other := ch.Diff + "+echo more\n"
+	seat("s7o", SeatSecurity, "land", other)
+	for i := 0; i < PanelSeats; i++ {
+		seat(fmt.Sprintf("s7o%d", i), PanelSeat(i), "land", other)
+	}
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "security read") {
+		t.Fatalf("merged on another diff's reads: %v", err)
+	}
+	seat("s7s", SeatSecurity, "land", ch.Diff)
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "panel") {
+		t.Fatalf("merged a root path on the security seat alone: %v", err)
+	}
+	// A panel majority of fixes declines it, whatever the seat said.
+	seat("s7p0", PanelSeat(0), "fix", ch.Diff)
+	seat("s7p1", PanelSeat(1), "fix", ch.Diff)
+	seat("s7p2", PanelSeat(2), "land", ch.Diff)
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "panel") {
+		t.Fatalf("merged on one panel land of three: %v", err)
+	}
+	seat("s7p1b", PanelSeat(1), "land", ch.Diff) // the seat reads again and lands
 	if _, err := c.Effects.Merge(req); err != nil {
-		t.Fatalf("two separate reads should merge: %v", err)
+		t.Fatalf("the reviewers, the seat and the panel's majority should merge: %v", err)
 	}
 }
 

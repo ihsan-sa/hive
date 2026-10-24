@@ -870,8 +870,9 @@ type Change struct {
 	Small     bool     `json:"small"`
 	Protected []string `json:"protected,omitempty"`
 	High      []string `json:"high,omitempty"` // files in a high or root class
-	// Security are files on main's SecurityList: the change merges only
-	// after a security read said land on its diff (SecurityOK).
+	// Security are files on main's SecurityList, or in the project's root
+	// class: the change merges only after a security read said land on its
+	// diff (SecurityOK).
 	Security []string `json:"security,omitempty"`
 	// SecurityRoot are those of them that run with elevated rights (the
 	// list's root entries, or the project's root class): they need the
@@ -930,9 +931,12 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		if under(file, cfg.Root) {
 			c.Root = append(c.Root, file)
 		}
-		if matchAny(file, security) || matchAny(file, root) {
+		// What runs with elevated rights (the list's root entries, or the
+		// project's root class) needs the security read and its panel,
+		// whether or not the list's paths name it.
+		if elevated := matchAny(file, root) || under(file, cfg.Root); elevated || matchAny(file, security) {
 			c.Security = append(c.Security, file)
-			if matchAny(file, root) || under(file, cfg.Root) {
+			if elevated {
 				c.SecurityRoot = append(c.SecurityRoot, file)
 			}
 		}
