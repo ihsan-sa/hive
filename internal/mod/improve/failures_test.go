@@ -78,7 +78,8 @@ func TestFlakeIsKeptAndBreakIsReverted(t *testing.T) {
 	script := func(name string, once bool) string {
 		gate := "exit 1"
 		if once {
-			gate = "[ -f " + filepath.Join(dir, "ran") + " ] && exit 0; touch " + filepath.Join(dir, "ran") + "; exit 1"
+			ran := "'" + filepath.ToSlash(filepath.Join(dir, "ran")) + "'" // a Windows path, quoted, reads in sh too
+			gate = "[ -f " + ran + " ] && exit 0; touch " + ran + "; exit 1"
 		}
 		return "printf -- '--- FAIL: " + name + " (0.01s)\\n    race_test.go:9: late\\nFAIL\\nFAIL\\texample.com/p/race\\t0.1s\\n'\n" + gate + "\n"
 	}
@@ -130,5 +131,28 @@ func TestRerunNeverRunsAPrintedName(t *testing.T) {
 	// A package name is held to the same.
 	if cmd := rerunCommand("go test ./...", []failure{{Pkg: "a/b;true", Tests: []string{"TestX"}}}); cmd != "go test ./..." {
 		t.Fatalf("an odd package name reached the rerun: %q", cmd)
+	}
+}
+
+// A printed name never reaches the rerun as a flag: "FAIL -test.run" then
+// "FAIL Zz/none" would make go run no tests, exit 0, and a break pass as a
+// flake.
+func TestRerunNeverTakesAPrintedFlag(t *testing.T) {
+	fs := failures("FAIL -test.run\nFAIL Zz/none\n")
+	if len(fs) != 2 {
+		t.Fatalf("failures %+v", fs)
+	}
+	cmd := rerunCommand("go test ./...", fs)
+	if cmd != "go test ./..." {
+		t.Fatalf("a printed flag reached the rerun: %q", cmd)
+	}
+	// A real break: this go fails every time, except that, like go, it runs
+	// nothing and passes when handed -test.run with no tests to match.
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nfor a; do case \"$a\" in -test.run*) exit 0;; esac; done\nexit 1\n"), 0o755)
+	sh := exec.Command("sh", "-c", cmd)
+	sh.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
+	if err := sh.Run(); err == nil {
+		t.Fatalf("the rerun %q passed on a real break", cmd)
 	}
 }
