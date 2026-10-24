@@ -62,3 +62,6 @@
 
 ## 2026-10-23 Projects list the files their score reads
 - Decision: the setup brief, the README and the lead's guidance say to list every file the score reads in its `paths`, and a score set or changed with an empty `paths` raises a `score-paths` alert (at the start and when the score's version changes) | Why: the `./` guess misses a script the score calls, a test or a data file, which a candidate could still change (perms' read of the fixed-evaluator change) | Tradeoff: a warning, not a refusal, since only the project knows what its score reads.
+
+## 2026-10-24 Sharing has three levels
+- Decision: a project is shared, private or isolated (docs/sharing.md); private is covered from every other run and walled from reach both ways like isolated, while its own runs mount the shared Hive like a shared project's | Why: the person listed "sharing-has-three-levels" with no detail, and the spec offers only the two ends; a one-way wall keeps a project's work out of sight without cutting its agents off from the Hive's records | Tradeoff: the middle level is a reading, not the person's words, and is listed as an open question; it reuses the isolated cover paths (`kb/isolated/`), so names still say "isolated" where they mean hidden
