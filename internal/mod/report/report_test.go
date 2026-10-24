@@ -390,3 +390,13 @@ func TestUsageCostOfResumedSession(t *testing.T) {
 		t.Fatalf("usage %+v, want $1 over 3 turns", usage.Usage)
 	}
 }
+
+// A log keeps its line breaks, so whoever reads the report reads it as lines.
+func TestLogKeepsItsLines(t *testing.T) {
+	if got := clipLines("first  line\r\n\n\tsecond line\n", 100); got != "first line\nsecond line" {
+		t.Fatalf("got %q", got)
+	}
+	if got := clipLines("ab\ncd", 4); got != "ab\n…" {
+		t.Fatalf("clipped %q", got)
+	}
+}

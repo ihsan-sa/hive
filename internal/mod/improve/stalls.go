@@ -38,7 +38,9 @@ type spell struct {
 
 // waitCause names what a task held on reason waits for, or "" if it names
 // no wait. Main's red holds every change that waits on it whatever commit
-// main is at, so its waits are one cause however main moves.
+// main is at, so its waits are one cause however main moves; any other wait
+// is one cause while its HoldKey stays (the pending checks it lists finishing
+// one by one don't start it again).
 func waitCause(reason string) string {
 	if !strings.HasPrefix(reason, "waiting ") {
 		return ""
@@ -46,7 +48,7 @@ func waitCause(reason string) string {
 	if strings.HasPrefix(reason, "waiting on main:") {
 		return "waiting on main"
 	}
-	return reason
+	return work.HoldKey(reason)
 }
 
 // waitKey is the stall key of the wait a task in project and stage shares.
