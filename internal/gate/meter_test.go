@@ -41,10 +41,13 @@ func TestMeter(t *testing.T) {
 			go func() { io.Copy(c, c); c.Close() }()
 		}
 	}()
-	// A unix socket's path is capped near 108 bytes, which a gate's deep
-	// temp dir can pass: the socket goes in a short one.
-	dir, _ := os.MkdirTemp(shortTmp(), "gate-test-")
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	// Not t.TempDir: under a gate's side TMPDIR is deep in the run's folder,
+	// and a unix socket's path must fit in 108 bytes.
+	dir, err := os.MkdirTemp(shortTmp(), "gate-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
 	m, err := StartMeter(filepath.Join(dir, "m.sock"))
 	if err != nil {
 		t.Fatal(err)

@@ -68,6 +68,7 @@ type Effects struct {
 	hostMade  map[string]HostCommit
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
+	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
 }
 
 // Check is a host-run test or score on one commit.
@@ -150,7 +151,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}, gates: map[string]GateResult{}}
 	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -207,6 +208,10 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 				a.Kind = "merge"
 			}
 			e.approvals[a.Kind+":"+a.Project+"@"+a.SHA] = true
+		case "gate.judged":
+			var g GateResult
+			ev.Decode(&g)
+			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
 		}
 	}
 	j.Replay(apply)
@@ -1075,6 +1080,11 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 			need += " and a majority of its panel"
 		}
 		return "", fmt.Errorf("refusing to merge %s: it changes %s, on %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), SecurityList, need)
+	}
+	if p.Self {
+		if g, ok := e.GateResult(p.Name, m.SHA, m.Main); !ok || g.Outcome != GateKeep {
+			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself merges only once the recursive gate kept it against main at %s", short(m.SHA), short(m.Main))
+		}
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
 	if err != nil {

@@ -216,7 +216,11 @@ func (m *model) viewFeed() []string {
 		}
 	}
 	lines := []string{"  " + stDim.Render(fmt.Sprintf("%d agents · %d working · %d idle · ", working+idle, working, idle)) +
-		waitStyle(len(m.st.Asks)).Render(fmt.Sprintf("%d waiting on you", len(m.st.Asks))), "  " + m.usage(w)}
+		waitStyle(len(m.st.Asks)).Render(fmt.Sprintf("%d waiting on you", len(m.st.Asks)))}
+	if g := m.glance(w); g != "" {
+		lines = append(lines, "  "+g)
+	}
+	lines = append(lines, "  "+m.usage(w))
 	pw := 12 // the project column, dropped when the message would get too narrow
 	if w < 90 {
 		pw = 0

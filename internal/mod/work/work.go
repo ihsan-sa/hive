@@ -6,6 +6,7 @@
 package work
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -116,9 +117,11 @@ type Task struct {
 	IssueOpen  bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
 	Noted      string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
 	NotedDiff  string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
-	Log        []Entry   `json:"log,omitempty"`
-	Created    time.Time `json:"created"`
-	Updated    time.Time `json:"updated"`
+	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
+	Gate    *core.GateResult `json:"gate,omitempty"`
+	Log     []Entry          `json:"log,omitempty"`
+	Created time.Time        `json:"created"`
+	Updated time.Time        `json:"updated"`
 }
 
 // A Bank is a merged checkpoint: its pull request and the merge on main.
@@ -174,11 +177,15 @@ type Module struct {
 	// OnMerged is called after a task's merge is recorded (the improve module measures).
 	OnMerged func(t Task)
 
+	// Gate runs the recursive gate on a self project's head (selfgate.go);
+	// unset, such a change can't be judged and waits.
+	Gate func(ctx context.Context, j GateJob) core.GateResult
+
 	mu    sync.Mutex
 	tasks map[string]*Task
 	busy  map[string]bool
 	// areaCache holds the paths each brief names (queue.go).
-	areaCache map[string][]string
+	areaCache map[string]areaEntry
 	steps     sync.WaitGroup // the steps Tick started that are still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
@@ -206,6 +213,10 @@ type Module struct {
 	// holdPolled when each one's release condition may next be asked of the forge.
 	holds      map[string]*MergeHold
 	holdPolled map[string]time.Time
+	// gating is the recursive gate run in flight, if any (selfgate.go), and
+	// gateCantRun the last run per project and main that couldn't run.
+	gating      *gateRun
+	gateCantRun map[string]core.GateResult
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
 	// gate is shut.
@@ -216,7 +227,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string][]string{}, mainRed: map[string]bool{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -782,14 +793,15 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	if cfg.Score != nil && t.From != "hive" { // as checkpoint() skips the Hive's own setup brief
 		b.WriteString("- Commit each gain as you make it: a commit that beats the best kept score is tested, read and merged into main as a checkpoint while you keep working on top of it.\n")
 	}
-	if lessons := m.C.Effects.ReadFile(p, base, ".hive/lessons.md"); strings.TrimSpace(lessons) != "" {
-		lines := strings.Split(strings.TrimSpace(lessons), "\n")
+	{
+		lessons := m.C.Effects.ReadFile(p, base, ".hive/lessons.md")
 		var items []string
-		for _, l := range lines {
+		for _, l := range strings.Split(strings.TrimSpace(lessons), "\n") {
 			if strings.HasPrefix(strings.TrimSpace(l), "- ") {
 				items = append(items, l)
 			}
 		}
+		items = append(items, m.gateLessons(p, lessons)...)
 		if len(items) > 12 {
 			items = items[len(items)-12:]
 		}
@@ -1567,6 +1579,11 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return err
 	}
 	if wait, err := m.forgeChecks(t, p, main); wait || err != nil {
+		return err
+	}
+	// Last, as it takes longest and only a change that passed the rest is
+	// worth a child Hive's time.
+	if wait, err := m.recursiveGate(t, p, main); wait || err != nil {
 		return err
 	}
 	if why := m.MergeHeld(p.Name, t.PR.Number); why != "" {

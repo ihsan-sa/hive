@@ -1,0 +1,18 @@
+{"seq": 1, "at": "2026-09-30T23:00:00Z", "kind": "run.created", "data": {"id": "l1", "role": "lead", "harness": "claude", "model": "opus", "checkout": "", "system": "", "brief": ""}}
+{"seq": 2, "at": "2026-09-30T23:00:00Z", "kind": "run.turn_started", "data": {"id": "l1", "session": "s1", "turn": 1, "model": "opus"}}
+{"seq": 3, "at": "2026-09-30T23:30:00Z", "kind": "run.turn_ended", "data": {"id": "l1", "turn": 1, "session": "s1", "status": "idle", "result": {"text": "ok", "cost_usd": 2.0, "tokens": {"input": 100, "output": 50, "cache_read": 1000, "cache_write": 10}}}}
+{"seq": 4, "at": "2026-10-24T02:00:00Z", "kind": "run.turn_started", "data": {"id": "l1", "session": "s1", "turn": 2, "resume": true, "model": "opus"}}
+{"seq": 5, "at": "2026-10-24T03:00:00Z", "kind": "run.turn_ended", "data": {"id": "l1", "turn": 2, "session": "s1", "status": "idle", "result": {"text": "ok", "cost_usd": 5.0, "tokens": {"input": 10, "output": 5}}}}
+{"seq": 6, "at": "2026-10-24T09:00:00Z", "kind": "run.created", "data": {"id": "w1", "role": "worker", "project": "hive", "harness": "claude", "model": "sonnet", "checkout": "", "system": "", "brief": ""}}
+{"seq": 7, "at": "2026-10-24T09:00:00Z", "kind": "run.turn_started", "data": {"id": "w1", "session": "ws1", "turn": 1, "model": "sonnet"}}
+{"seq": 8, "at": "2026-10-24T11:30:00Z", "kind": "run.turn_ended", "data": {"id": "w1", "turn": 1, "session": "ws1", "status": "done", "result": {"text": "ok", "cost_usd": 1.5, "tokens": {"input": 200, "output": 80, "cache_read": 5000, "cache_write": 300}}}}
+{"seq": 9, "at": "2026-10-24T11:31:00Z", "kind": "chat.posted", "data": {"chat": "lead", "id": "m1", "from": "lead", "text": "done"}}
+{"seq": 10, "at": "2026-10-24T11:32:00Z", "kind": "chat.posted", "data": {"chat": "lead", "id": "m2", "from": "person", "text": "thanks"}}
+{"seq": 11, "at": "2026-10-24T11:33:00Z", "kind": "run.queued", "data": {"id": "l1", "text": "from w1: done"}}
+{"seq": 12, "at": "2026-10-24T11:40:00Z", "kind": "task.saved", "data": {"id": "t1", "kind": "work", "stage": "merged", "project": "hive"}}
+{"seq": 13, "at": "2026-10-24T11:41:00Z", "kind": "task.saved", "data": {"id": "t1", "kind": "work", "stage": "merged", "project": "hive"}}
+{"seq": 14, "at": "2026-10-24T11:45:00Z", "kind": "task.saved", "data": {"id": "t2", "kind": "revert", "stage": "working", "project": "hive"}}
+{"seq": 15, "at": "2026-10-24T11:50:00Z", "kind": "task.saved", "data": {"id": "t2", "kind": "revert", "stage": "merged", "project": "hive"}}
+{"seq": 16, "at": "2026-10-24T11:55:00Z", "kind": "hive.released", "data": {"project": "hive", "tag": "v0.1.0", "sha": "abc"}}
+{"seq": 17, "at": "2026-10-24T11:56:00Z", "kind": "hive.released", "data": {"project": "hive", "tag": "v0.1.0", "sha": "abc"}}
+{"seq": 18, "at": "2026-10-24T11:57:00Z", "kind": "run.status", "data": {"id": "w1", "status": "done"}}

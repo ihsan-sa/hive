@@ -20,6 +20,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/runner"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/stats"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -41,6 +42,7 @@ type App struct {
 	Runner   *runner.Runner
 	Feedback *feedback.Module
 	Models   *models.Module
+	Stats    *stats.Tally
 
 	seeding  sync.WaitGroup // SeedSelf's copy, which Close waits out
 	stopSeed context.CancelFunc
@@ -64,6 +66,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	c.Runs.Ops().SetSpawner(a.Work.Spawn)
 	a.Improve = improve.New(c, a.Agents, a.Work, a.Chat)
 	a.Feedback = feedback.New(c)
+	a.Stats = stats.New(c.J)
 	a.Improve.Feedback = a.Feedback.Digest
 	a.KB = kb.New(c, a.Agents)
 	a.System = system.New(c)
@@ -71,6 +74,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	tools.New(c)
 	a.Work.Steps = a.Risk.Steps
 	a.Work.Weigh = a.Risk.Weigh
+	a.Work.Gate = runGate(ws)
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
 	a.Models = models.New(c, a.Work)

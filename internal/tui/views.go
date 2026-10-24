@@ -53,6 +53,7 @@ func (m *model) dashRows() []row {
 		rows = append(rows, r)
 		return r.expand && m.nodeOpen(r.key, r.def)
 	}
+	m.statRows(add)
 	for _, p := range m.st.Projects {
 		best := "no score yet"
 		if p.Best != nil {
@@ -170,10 +171,14 @@ func (m *model) dashRows() []row {
 		}
 	}
 	add(row{key: "waiting", text: fmt.Sprintf("waiting on you (%d)", len(m.st.Asks)), jump: secWaiting})
-	if add(row{key: "told", text: fmt.Sprintf("done for you (%d recent)", len(m.st.Told)), expand: len(m.st.Told) > 0}) {
+	if add(row{key: "told", text: toldHead(m.st.Told, time.Now()), expand: len(m.st.Told) > 0}) {
 		for _, a := range m.st.Told {
 			d := toldDetail(a)
-			add(row{key: "told:" + a.ID, depth: 1, text: a.Asked.Local().Format("Mon 15:04") + "  " + text.Visible(core.Clip(a.Title, 120)), open: &d})
+			title := text.Visible(core.Clip(a.Title, 120))
+			if strings.HasPrefix(a.ID, "spend-") { // money is the person's: the notice stands out
+				title = stWarn.Render(title)
+			}
+			add(row{key: "told:" + a.ID, depth: 1, text: a.Asked.Local().Format("Mon 15:04") + "  " + title, open: &d})
 		}
 	}
 	if add(row{key: "requests", text: fmt.Sprintf("requests past the sandbox (%d)", len(m.st.Requests)), expand: len(m.st.Requests) > 0}) {
@@ -556,6 +561,12 @@ func (m *model) viewDetail(d *detail) []string {
 		if t.MergeSHA != "" {
 			kv("merged", core.Short(t.MergeSHA))
 		}
+		if g := t.Gate; g != nil {
+			kv("gate", work.GateWord(g.Outcome)+" on "+core.Short(g.Head)+" vs main "+core.Short(g.Main)+": "+core.Clip(g.Reason, 160))
+			if g.Report != "" {
+				kv("report", g.Report)
+			}
+		}
 		lines = append(lines, "", stTitle.Render("brief"))
 		lines = append(lines, indent(wrap("Done looks like: "+t.Done, w-2), "  ")...)
 		if t.Known != "" {
@@ -924,7 +935,7 @@ func (m *model) settings() []setting {
 		{group: "General", label: "auto-update", value: onOff(c.AutoUpdate), key: "auto_update"},
 		{group: "General", label: "use ANTHROPIC_API_KEY", value: onOff(c.APIKeyOptIn), key: "api_key_opt_in"},
 		{group: "General", label: "release repo", value: c.ReleaseRepo, key: "release_repo"},
-		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel"},
+		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel", choices: []string{"default", "latest", "pre-release"}},
 		{group: "General", label: "release", value: m.st.Version + ", " + pinText(c.ReleasePin), action: func() tea.Cmd {
 			return func() tea.Msg {
 				return flashMsg("`" + core.Cmd + " update --release <tag>` installs and pins a release")
@@ -946,6 +957,9 @@ func (m *model) settings() []setting {
 			v = "default"
 		}
 		s = append(s, setting{group: "Agents", label: "model for " + p, value: v, key: "project:" + p, choices: append([]string{"default"}, models...)})
+		// The open harness runs a named model, which the model setting picks.
+		hs := slices.DeleteFunc(append([]string{"default"}, harness.Names...), func(h string) bool { return h == "open" })
+		s = append(s, setting{group: "Agents", label: "harness for " + p, value: cmp.Or(c.Projects[p].Harness, "default"), key: "project-harness:" + p, choices: hs})
 	}
 	s = append(s, setting{group: "Agents", label: "review rounds", value: strconv.Itoa(c.ReviewRounds), key: "review_rounds"})
 	// Each role's route shows the models it runs on in order; its pick-list
@@ -971,6 +985,7 @@ func (m *model) settings() []setting {
 	}
 	s = append(s,
 		setting{group: "Log in", label: "Claude Code", value: "runs Claude Code's own login", action: func() tea.Cmd { return login("claude", "auth", "login") }},
+		setting{group: "Log in", label: "Codex", value: "runs Codex's own login (sign in with ChatGPT)", action: func() tea.Cmd { return login("codex", "login", "--device-auth") }},
 		setting{group: "Log in", label: "GitHub", value: "runs the GitHub CLI's own login", action: func() tea.Cmd { return login("gh", "auth", "login") }},
 	)
 	return s
@@ -1045,11 +1060,8 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			c.AutoUpdate = !c.AutoUpdate
 			return m, m.saveConfig(c, "auto-update changed")
 		case "channel":
-			if c.Channel = "pre-release"; m.st.Channel == "pre-release" {
-				c.Channel = "latest"
-			}
-			m.st.Channel = c.Channel // shown at once, as saveConfig shows the rest
-			return m, m.saveConfig(c, "release channel changed")
+			m.picking, m.pickSel = true, max(0, slices.Index(cur.choices, c.Channel))
+			return m, nil
 		case "api_key_opt_in":
 			c.APIKeyOptIn = !c.APIKeyOptIn
 			return m, m.saveConfig(c, "API key use changed")
@@ -1109,12 +1121,27 @@ func (m *model) keyPick(cur setting, k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // routeModels are the models a route can name, as a route names them: a
-// named model by its name, any other as harness:model.
+// named model by its name, any other as harness:model. Besides the
+// workspace harness's, each other harness's known models are there, so a
+// role can run on Codex in a Claude Hive, or the other way round.
 func routeModels(c core.Config) []string {
 	var out []string
-	for _, m := range modelChoices(c) {
-		if e := routeEntry(c, m); m != custom && e != "" && !slices.Contains(out, e) {
+	add := func(e string) {
+		if e != "" && !slices.Contains(out, e) {
 			out = append(out, e)
+		}
+	}
+	for _, m := range modelChoices(c) {
+		if m != custom {
+			add(routeEntry(c, m))
+		}
+	}
+	for _, h := range harness.Names {
+		if h == "open" || h == "fake" || h == core.HarnessName(c.Harness) {
+			continue
+		}
+		for _, m := range harness.Models(h) {
+			add(core.Pick{Harness: h, Model: m}.String())
 		}
 	}
 	return out
@@ -1229,8 +1256,25 @@ func (m *model) saveSetting(v string) tea.Cmd {
 			ps.Model = ""
 		}
 		c.Projects[p] = ps
+	case strings.HasPrefix(key, "project-harness:"):
+		p := strings.TrimPrefix(key, "project-harness:")
+		c.Projects = maps.Clone(c.Projects)
+		if c.Projects == nil {
+			c.Projects = map[string]core.ProjectSettings{}
+		}
+		ps := c.Projects[p]
+		if ps.Harness = v; v == "default" {
+			ps.Harness = ""
+		}
+		c.Projects[p] = ps
 	case strings.HasPrefix(key, "route:"):
 		c = routeEdit(c, strings.TrimPrefix(key, "route:"), v)
+	case key == "channel":
+		if c.Channel = v; v == "default" {
+			c.Channel = ""
+		} else {
+			m.st.Channel = v // shown at once; the default shows once the daemon says what it is
+		}
 	case key == "review_rounds":
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 {
@@ -1355,4 +1399,19 @@ func loginLine(l core.LoginState) string {
 		}
 	}
 	return line
+}
+
+// toldHead heads the "done for you" list: how many in the last day, so a
+// quiet notice isn't missed among the recent ones.
+func toldHead(told []core.Ask, now time.Time) string {
+	day := 0
+	for _, a := range told {
+		if now.Sub(a.Asked) < 24*time.Hour {
+			day++
+		}
+	}
+	if day == 0 {
+		return fmt.Sprintf("done for you (%d recent)", len(told))
+	}
+	return fmt.Sprintf("done for you (%d in the last day, %d recent)", day, len(told))
 }
