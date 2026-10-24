@@ -1178,28 +1178,30 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	}, nil
 }
 
-// Walled refuses r reaching project when either side is an isolated project:
-// an isolated project is reached only from its own runs, and its runs reach
-// no other project. Both come from the core's record of r, never from r.
+// Walled refuses r reaching project when either side is hidden (private or
+// isolated): a hidden project is reached only from its own runs, and its runs
+// reach no other project, so nothing of it is carried out in a brief or message. Both come from the core's record of r, never from r.
 func (rs *Runs) Walled(r Run, project string) error {
 	if project == r.Project || rs.projs == nil {
 		return nil
 	}
 	for _, name := range []string{project, r.Project} {
-		if p, ok := rs.projs.Get(name); ok && p.Isolated {
+		if p, ok := rs.projs.Get(name); ok && p.Hidden() {
 			return fmt.Errorf("project %q is out of reach of %s's agents", project, r.Project)
 		}
 	}
 	return nil
 }
 
-// hideIsolated covers what isolated projects other than r's own leave in the
-// shared Hive, so r reads none of their code, runs, chats, notes, checks or
-// scores. An isolated run sees only the knowledge base of what is shared, so
-// it gets just the notes covered. The journal holds every project's events in
-// one file, so it is covered whole while any project is isolated. The folders
-// are made first so what lands in them mid-turn is covered too; a run or chat
-// started mid-turn is not, until that agent's next turn.
+// hideIsolated covers what hidden projects (private or isolated) other than
+// r's own leave in the shared Hive, so r reads none of their code, runs,
+// chats, notes, checks or scores. An isolated run sees only the knowledge base
+// of what is shared, so it gets just the notes covered; a private run sees the
+// rest of the shared Hive as a shared one does. The journal holds every
+// project's events in one file, so it is covered whole while any other project
+// is hidden. The folders are made first so what lands in them mid-turn is
+// covered too; a run or chat started mid-turn is not, until that agent's next
+// turn.
 func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 	if rs.projs == nil {
 		return nil
@@ -1208,7 +1210,7 @@ func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 	var out []sandbox.Mount
 	var rel []string
 	for _, p := range rs.projs.List() {
-		if !p.Isolated || p.Name == r.Project {
+		if !p.Hidden() || p.Name == r.Project {
 			continue
 		}
 		iso[p.Name] = true
@@ -1225,7 +1227,9 @@ func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 			os.MkdirAll(filepath.Join(rs.ws.Hive(), d, p.Name), 0o755)
 			rel = append(rel, d+"/"+p.Name)
 		}
-		rel = append(rel, "kb/isolated/"+p.Name, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl")
+		// A private project's lead works in its leads/ folder (an isolated one's in a checkout).
+		os.MkdirAll(filepath.Join(rs.ws.Hive(), "leads", "project-"+p.Name), 0o755)
+		rel = append(rel, "kb/isolated/"+p.Name, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl", "leads/project-"+p.Name)
 	}
 	if len(iso) > 0 { // the kb's record is filed from the journal, so it is covered whole too
 		rec := filepath.Join(rs.ws.KB(), "record")
