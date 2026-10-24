@@ -27,7 +27,7 @@ var kbAbout = map[string]string{
 	"record":   "everything the Hive did, one file per task, request, run, chat and project",
 	"practice": "how a Hive works: looking first, deciding, risk, writing, briefs, handoffs",
 	"hive":     "the Hive's own source and design, at the running version",
-	"isolated": "notes from private and isolated projects, kept out of git",
+	"isolated": "notes from isolated projects",
 }
 
 // kbEntries lists a folder of the knowledge base: folders first, then files
