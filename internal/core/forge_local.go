@@ -24,6 +24,7 @@ type localState struct {
 	Comments map[string][]string      `json:"comments"`
 	Releases map[string][]Release     `json:"releases"`
 	Runs     map[string][]WorkflowRun `json:"runs"` // repo@sha -> release runs, newest first
+	TagSHAs  map[string]string        `json:"tags"` // repo@tag -> the commit it points at
 }
 
 type localIssue struct {
@@ -50,7 +51,7 @@ func (l *Local) RepoPath(repo string) string {
 }
 
 func (l *Local) load() localState {
-	s := localState{Issues: map[string][]localIssue{}, PRs: map[string][]localPR{}, Comments: map[string][]string{}, Releases: map[string][]Release{}, Runs: map[string][]WorkflowRun{}}
+	s := localState{Issues: map[string][]localIssue{}, PRs: map[string][]localPR{}, Comments: map[string][]string{}, Releases: map[string][]Release{}, Runs: map[string][]WorkflowRun{}, TagSHAs: map[string]string{}}
 	raw, err := os.ReadFile(filepath.Join(l.Dir, "state.json"))
 	if err == nil {
 		json.Unmarshal(raw, &s)
@@ -310,10 +311,32 @@ func (l *Local) LatestRelease(repo string) (Release, error) {
 
 func (l *Local) Tags(repo string) ([]string, error) {
 	var tags []string
-	for _, r := range l.load().Releases[repo] {
+	s := l.load()
+	for _, r := range s.Releases[repo] {
 		tags = append(tags, r.Tag)
 	}
+	for k := range s.TagSHAs {
+		if t, ok := strings.CutPrefix(k, repo+"@"); ok && !slices.Contains(tags, t) {
+			tags = append(tags, t)
+		}
+	}
 	return tags, nil
+}
+
+// AddTag makes a bare tag at sha, as a push outside the Hive would (tests add them).
+func (l *Local) AddTag(repo, tag, sha string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	s.TagSHAs[repo+"@"+tag] = sha
+	l.save(s)
+}
+
+func (l *Local) TagCommit(repo, tag string) (string, error) {
+	if sha, ok := l.load().TagSHAs[repo+"@"+tag]; ok {
+		return sha, nil
+	}
+	return "", ErrNotFound
 }
 
 // AddRelease records a release as made outside the Hive, such as the person
@@ -331,6 +354,9 @@ func (l *Local) CreateRelease(repo, tag, sha, notes string) error {
 	defer l.mu.Unlock()
 	s := l.load()
 	s.Releases[repo] = append(s.Releases[repo], Release{Tag: tag, Prerelease: true})
+	if _, ok := s.TagSHAs[repo+"@"+tag]; !ok { // as on GitHub, a tag already there keeps its commit
+		s.TagSHAs[repo+"@"+tag] = sha
+	}
 	l.save(s)
 	return nil
 }
