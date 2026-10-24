@@ -97,7 +97,8 @@ func TestInstallerShareAnswer(t *testing.T) {
 			if c.asked {
 				asked = "0"
 			}
-			// Forward slashes, quoted: Git Bash on Windows drops a C:\ path's backslashes.
+			// sh on Windows (Git's) reads a backslash as an escape, so it gets
+			// the paths with forward slashes.
 			fake := "#!/bin/sh\n[ \"$*\" = \"report asked\" ] && exit " + asked + "\necho \"$*\" >> '" + filepath.ToSlash(log) + "'\n"
 			os.WriteFile(filepath.Join(dir, "hive"), []byte(fake), 0o755)
 			if c.noTTY {
