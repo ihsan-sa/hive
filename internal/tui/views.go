@@ -591,8 +591,9 @@ func contains(l []string, s string) bool {
 // That holds after an answer here too: a quick second Enter would otherwise
 // approve whatever arrived under the cursor before the person saw it.
 // Beneath that, Enter answers only the ask the last View drew selected, and
-// only as the first key since that draw (waitSeen), so keys typed ahead of
-// the screen can't approve an ask nobody saw, however the list changed.
+// only once it has been drawn there for waitSettle (see noteShown), so keys
+// typed ahead of the screen can't approve an ask nobody saw, however the
+// list changed.
 func (m *model) waitIndex() int {
 	asks := m.st.Asks
 	for i, a := range asks {
@@ -611,6 +612,23 @@ func (m *model) waitIndex() int {
 		m.waitID = asks[m.waitSel].ID
 	}
 	return m.waitSel
+}
+
+// waitSettle is how long an ask must be on screen, selected, before Enter
+// answers it. Bubbletea draws after every message, so a draw alone doesn't
+// mean the person saw it: Enters typed ahead arrive milliseconds after the
+// draw of whatever slid under the cursor, well inside this.
+const waitSettle = 500 * time.Millisecond
+
+// clock is time.Now, swapped in tests.
+var clock = time.Now
+
+// noteShown ends a View: when the ask drawn selected changed (or none was
+// drawn), its time on screen starts again.
+func (m *model) noteShown() {
+	if m.waitDraw != m.waitShown {
+		m.waitShown, m.waitSince = m.waitDraw, clock()
+	}
 }
 
 func (m *model) selectWait(i int) {
@@ -656,8 +674,8 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if sel < len(asks) {
 			a := asks[sel]
-			if a.ID != m.waitSeen { // not what the screen showed when this key came
-				m.setFlash("the asks changed before you saw them; check the selection and press enter again")
+			if a.ID != m.waitShown || clock().Sub(m.waitSince) < waitSettle { // not on screen long enough to be read
+				m.setFlash("this ask just came on screen; read it, then press enter again")
 				return m, nil
 			}
 			opt := a.Options[min(m.optSel, len(a.Options)-1)]
@@ -695,7 +713,7 @@ func (m *model) viewWaiting() []string {
 	w := m.mainW() - 5
 	var lines []string
 	sel, end, at := 0, 0, m.waitIndex()
-	m.waitDrawn = m.st.Asks[at].ID // what the next key may answer
+	m.waitDraw = m.st.Asks[at].ID
 	for i, a := range m.st.Asks {
 		gut := "  "
 		if i == at {

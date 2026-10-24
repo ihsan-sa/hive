@@ -611,13 +611,13 @@ func TestWaitingAnswersTheSelectedAsk(t *testing.T) {
 	m.pick(sideRow{sec: secWaiting})
 	m.focus = 1
 	m.Update(tea.KeyMsg{Type: tea.KeyDown}) // select a2
-	m.View()
+	look(m)
 	m.st.Asks = []core.Ask{protectedAsk(), first} // the list reorders: a2 now first
 	m.Update(tea.KeyMsg{Type: tea.KeyRight})      // pick "leave open"
 	if m.waitIndex() != 0 || m.waitID != "a2" || m.optSel != 1 {
 		t.Fatalf("the selection should follow a2 to position 0: sel %d id %q opt %d", m.waitSel, m.waitID, m.optSel)
 	}
-	m.View()
+	look(m)
 	m.st.Asks = []core.Ask{first, protectedAsk()} // and back, between drawing and the key
 	answered := map[string]string{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -641,7 +641,7 @@ func TestWaitingAnswersTheSelectedAsk(t *testing.T) {
 	}
 	ask := func(id string) core.Ask { a := protectedAsk(); a.ID, a.Title = id, "Merge "+id+"?"; return a }
 	m.st.Asks = []core.Ask{first, ask("a3")} // a2, answered here, leaves; a3 takes its place
-	m.View()
+	look(m)
 	answered = map[string]string{}
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
 		cmd()
@@ -656,7 +656,7 @@ func TestWaitingAnswersTheSelectedAsk(t *testing.T) {
 		t.Fatalf("the second enter answers the next ask: %v", answered)
 	}
 	m.st.Asks = []core.Ask{first, ask("a4")} // a3 answered here leaves; a4 slides under the cursor
-	m.View()
+	look(m)
 	if m.waitID != "a4" || !m.waitMoved {
 		t.Fatalf("a4 should be under the cursor but not yet chosen: %q moved %v", m.waitID, m.waitMoved)
 	}
@@ -665,7 +665,7 @@ func TestWaitingAnswersTheSelectedAsk(t *testing.T) {
 	if m.waitIndex() != 0 || m.waitID != "a1" || m.optSel != 0 || !m.waitMoved {
 		t.Fatalf("a vanished ask should not carry its pick to another: sel %d id %q opt %d", m.waitSel, m.waitID, m.optSel)
 	}
-	m.View()
+	look(m)
 	answered = map[string]string{}
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
 		cmd()
@@ -678,7 +678,7 @@ func TestWaitingAnswersTheSelectedAsk(t *testing.T) {
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyRight}) // a pick on a1 selects it
 	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	m.View()
+	look(m)
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
 		cmd()
 	}
@@ -711,7 +711,7 @@ func TestWaitingDoubleEnterSkipsANewAsk(t *testing.T) {
 	os.MkdirAll(filepath.Dir(ws.DaemonFile()), 0o700)
 	os.WriteFile(ws.DaemonFile(), raw, 0o600)
 	m.c, _ = api.Dial(ws)
-	m.View()
+	look(m)
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
 		cmd()
 	}
@@ -728,7 +728,7 @@ func TestWaitingDoubleEnterSkipsANewAsk(t *testing.T) {
 		}
 		m.st.Asks = []core.Ask{first}
 		m.waitID, m.waitDone, answered = "a1", "", nil
-		m.View()
+		look(m)
 		if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
 			cmd()
 		}

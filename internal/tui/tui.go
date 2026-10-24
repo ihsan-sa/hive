@@ -99,13 +99,14 @@ type model struct {
 	dashSel   int
 	dashKey   string // the status row the cursor is on, as sideKey
 	waitSel   int
-	waitID    string // the selected ask; waitSel follows it as the list shifts
-	waitMoved bool   // the selected ask went and another slid under the cursor
-	waitDone  string // the ask last answered here
-	waitNext  bool   // the ask that went was waitDone, so the flash says "next"
-	waitDrawn string // the ask the last View drew selected; the next key takes it
-	waitSeen  string // the ask on screen when this key came: the only one Enter may answer
-	fbSel     string // the feedback item selected, by id
+	waitID    string    // the selected ask; waitSel follows it as the list shifts
+	waitMoved bool      // the selected ask went and another slid under the cursor
+	waitDone  string    // the ask last answered here
+	waitNext  bool      // the ask that went was waitDone, so the flash says "next"
+	waitDraw  string    // the ask this View is drawing selected
+	waitShown string    // the ask the last View drew selected
+	waitSince time.Time // when waitShown was first drawn: Enter waits waitSettle past it
+	fbSel     string    // the feedback item selected, by id
 	modSel    int
 	kbDir     string // the knowledge base folder shown, relative to its root
 	kbSel     int
@@ -414,7 +415,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.files = append(m.files, msg.f)
 		}
 	case tea.KeyMsg:
-		m.waitSeen, m.waitDrawn = m.waitDrawn, "" // only the first key after a draw answers what it drew
 		return m.key(msg)
 	case tea.MouseMsg:
 		if ok, cmd := m.mouseSelect(msg); ok {
@@ -766,7 +766,8 @@ func readClipboard(text bool, compose int) tea.Cmd {
 func (m *model) bodyHeight() int { return max(3, m.h-4) }
 
 func (m *model) View() string {
-	m.waitDrawn = "" // viewWaiting sets it if this draw shows an ask
+	m.waitDraw = "" // viewWaiting sets it if this draw shows an ask
+	defer m.noteShown()
 	if m.w == 0 {
 		return ""
 	}

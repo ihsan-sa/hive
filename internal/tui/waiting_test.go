@@ -22,9 +22,11 @@ import (
 func answers(t *testing.T, m *model) *[]string {
 	var got []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var a map[string]string
-		json.NewDecoder(r.Body).Decode(&a)
-		got = append(got, a["id"])
+		if r.URL.Path == "/api/answer" {
+			var a map[string]string
+			json.NewDecoder(r.Body).Decode(&a)
+			got = append(got, a["id"])
+		}
 		w.Write([]byte("{}"))
 	}))
 	t.Cleanup(srv.Close)
@@ -60,29 +62,36 @@ func askNamed(id string) core.Ask {
 	return a
 }
 
-// Enter answers only the ask the last draw showed, and only as the first key
-// since that draw: Enters typed ahead of the screen approve nothing else,
-// whatever happened to the list meanwhile.
+// look draws the screen and lets the person read it: the selected ask has
+// been on screen waitSettle by the next key.
+func look(m *model) {
+	m.View()
+	m.waitSince = m.waitSince.Add(-waitSettle)
+}
+
+// Enter answers only the ask the last draw showed selected, once it has been
+// on screen long enough to read: Enters typed ahead of the screen approve
+// nothing else, whatever happened to the list meanwhile.
 func TestWaitingAnswersOnlyWhatWasDrawn(t *testing.T) {
 	t.Run("a1 swapped for a2, two enters, no draw between", func(t *testing.T) {
 		m, got := waitingOn(t, "a1")
-		m.View()
-		enter(m) // answers a1, which was drawn
+		look(m)
+		enter(m) // answers a1, which was read
 		m.st.Asks = []core.Ask{askNamed("a2")}
 		enter(m)
 		enter(m)
 		if len(*got) != 1 || (*got)[0] != "a1" {
 			t.Fatalf("only a1, which was on screen, may be approved: %v", *got)
 		}
-		m.View() // a2 drawn: the next key may answer it
+		look(m)
 		enter(m)
 		if len(*got) != 2 || (*got)[1] != "a2" {
-			t.Fatalf("after a2 is drawn, enter answers it: %v", *got)
+			t.Fatalf("after a2 is read, enter answers it: %v", *got)
 		}
 	})
 	t.Run("a1 swapped for a2 before the first enter", func(t *testing.T) {
 		m, got := waitingOn(t, "a1")
-		m.View()
+		look(m)
 		m.st.Asks = []core.Ask{askNamed("a2")}
 		enter(m)
 		enter(m)
@@ -93,10 +102,10 @@ func TestWaitingAnswersOnlyWhatWasDrawn(t *testing.T) {
 	for _, drawEmpty := range []bool{true, false} {
 		t.Run("an empty list between, drawn "+strconv.FormatBool(drawEmpty), func(t *testing.T) {
 			m, got := waitingOn(t, "a1")
-			m.View()
+			look(m)
 			m.st.Asks = nil // a1 answered elsewhere
 			if drawEmpty {
-				m.View()
+				look(m)
 			}
 			enter(m)
 			m.st.Asks = []core.Ask{askNamed("a2")}
@@ -107,31 +116,88 @@ func TestWaitingAnswersOnlyWhatWasDrawn(t *testing.T) {
 			}
 		})
 	}
-	t.Run("another key since the draw", func(t *testing.T) {
+	t.Run("drawn but not yet read", func(t *testing.T) {
 		m, got := waitingOn(t, "a1")
 		m.View()
-		m.Update(tea.KeyMsg{Type: tea.KeyRight})
 		enter(m)
 		if len(*got) != 0 {
-			t.Fatalf("the pick changed after the draw; enter must wait for it to be drawn: %v", *got)
+			t.Fatalf("a1 came on screen just now: %v", *got)
 		}
-		m.View()
+		look(m)
 		enter(m)
 		if len(*got) != 1 || (*got)[0] != "a1" {
-			t.Fatalf("drawn again, enter answers a1: %v", *got)
+			t.Fatalf("read, enter answers a1: %v", *got)
 		}
 	})
 	t.Run("a draw of another view", func(t *testing.T) {
 		m, got := waitingOn(t, "a1")
-		m.View()
+		look(m)
 		m.help = true
-		m.View() // the help covers the asks
+		look(m) // the help covers the asks
 		m.help = false
 		enter(m)
 		if len(*got) != 0 {
 			t.Fatalf("the last draw showed no ask: %v", *got)
 		}
 	})
+}
+
+// The same sequences as bubbletea runs them: View after every message, the
+// keys and the state updates that change the list alike, and buffered keys
+// arriving a few milliseconds apart. No buffered Enter approves an ask that
+// came on screen among them.
+func TestWaitingBufferedEntersInTheRealLoop(t *testing.T) {
+	at := time.Now()
+	clock = func() time.Time { return at }
+	t.Cleanup(func() { clock = time.Now })
+	// step is one turn of bubbletea's loop: Update, then View; the commands
+	// a key returns run and their messages come back the same way
+	var step func(m *model, msg tea.Msg)
+	step = func(m *model, msg tea.Msg) {
+		at = at.Add(3 * time.Millisecond)
+		_, cmd := m.Update(msg)
+		m.View()
+		if cmd != nil {
+			if msg := cmd(); msg != nil {
+				step(m, msg)
+			}
+		}
+	}
+	state := func(m *model, asks ...core.Ask) stateMsg {
+		st := m.st
+		st.Asks = asks
+		return stateMsg{st: st}
+	}
+	key := tea.KeyMsg{Type: tea.KeyEnter}
+	for _, between := range [][]core.Ask{nil, {}} {
+		name := "a1 swapped for a2"
+		if between != nil {
+			name = "an empty list between"
+		}
+		t.Run(name, func(t *testing.T) {
+			m, got := waitingOn(t, "a1")
+			m.View()
+			at = at.Add(2 * time.Second) // the person reads a1
+			step(m, key)                 // and answers it
+			if between != nil {
+				step(m, state(m, between...))
+				step(m, key)
+			}
+			step(m, state(m, askNamed("a2")))
+			for range 5 {
+				step(m, key)
+			}
+			if len(*got) != 1 || (*got)[0] != "a1" {
+				t.Fatalf("buffered enters must not approve a2, on screen for milliseconds: %v", *got)
+			}
+			at = at.Add(2 * time.Second) // the person reads a2
+			step(m, key)
+			step(m, key)
+			if len(*got) != 2 || (*got)[1] != "a2" {
+				t.Fatalf("once a2 has been read, enter answers it: %v", *got)
+			}
+		})
+	}
 }
 
 // Ask text an agent wrote reaches the feed, the away list and the answered
@@ -164,7 +230,7 @@ func TestAskTextIsSpelledOutEverywhere(t *testing.T) {
 
 	m, _ = waitingOn(t)
 	m.st.Asks = []core.Ask{a}
-	m.View()
+	look(m)
 	enter(m)
 	clean(t, "the answered flash", ansi.Strip(m.hintLine()))
 }
