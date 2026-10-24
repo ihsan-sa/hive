@@ -809,7 +809,9 @@ func Short(sha string) string { return short(sha) }
 
 // RerunFailed re-runs the failed jobs (gh run rerun --failed) of each
 // finished workflow run on sha that failed, timed out or was cancelled. A run
-// still going, or one going again, is left alone.
+// still going, or one going again, is left alone, and so is one that never
+// started (startup_failure, action_required): GitHub won't re-run its jobs,
+// since there are none, and a broken workflow file fails the same way again.
 func (GitHub) RerunFailed(repo, sha string) (int, error) {
 	out, err := gh(repo, "api", "repos/"+repo+"/actions/runs?head_sha="+sha+"&per_page=100", "-q", ".workflow_runs")
 	if err != nil {

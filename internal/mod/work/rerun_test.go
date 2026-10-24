@@ -103,3 +103,56 @@ func TestRerunFailureAfterGraceGoesBack(t *testing.T) {
 		t.Fatalf("after the grace: stage %q, findings %q", task.Stage, task.Findings)
 	}
 }
+
+// Finishing again on a head re-run long ago runs its tests again, as on any
+// head: the skip holds only while the re-run's result may still be coming.
+func TestFinishAfterRerunGraceRechecks(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	task.Reruns, task.RerunAt = map[string]int{task.SHA: 1}, time.Now().Add(-2*rerunGrace)
+	if err := m.open(task, p, task.SHA, "a tool was installed"); err != nil {
+		t.Fatal(err)
+	}
+	if !task.Recheck {
+		t.Fatal("finishing on a head re-run long ago skips its tests")
+	}
+}
+
+// A check that never started (a startup failure) isn't re-run, on GitHub or
+// the local forge, and the error says why; a cancelled one is.
+func TestRerunSkipsStartupFailure(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	m.save(task, "")
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "ci", State: core.CheckCantStart, Detail: "startup_failure"})
+	if _, err := m.RerunChecks(task.ID, "lead"); err == nil || !strings.Contains(err.Error(), "never started") {
+		t.Fatalf("re-ran a startup failure: %v", err)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "ci", State: core.CheckCantStart, Detail: "cancelled"})
+	if _, err := m.RerunChecks(task.ID, "lead"); err != nil || f.Reruns(p.Repo, task.SHA) != 1 {
+		t.Fatalf("cancelled check: %v, %d re-runs", err, f.Reruns(p.Repo, task.SHA))
+	}
+}
+
+// A lead can't re-run checks across a wall: not on a task in an isolated
+// project, nor from its own isolated project on another's task.
+func TestRerunChecksWalled(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	m.save(task, "")
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "ci", State: core.CheckFail, Detail: "failure"})
+	m.C.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	from := core.Run{RunSpec: core.RunSpec{ID: "lead-secret", Role: "lead", Project: "secret"}}
+	if _, err := m.C.Runs.Ops().Call(from, "rerun-checks", json.RawMessage(`{"task":"`+task.ID+`"}`)); err == nil || !strings.Contains(err.Error(), "out of reach") {
+		t.Fatalf("an isolated project's lead re-ran another project's checks: %v", err)
+	}
+	p.Isolated = true
+	m.C.Projects.Update(p)
+	from = core.Run{RunSpec: core.RunSpec{ID: "lead-q", Role: "lead", Project: "q"}}
+	if _, err := m.C.Runs.Ops().Call(from, "rerun-checks", json.RawMessage(`{"task":"`+task.ID+`"}`)); err == nil || !strings.Contains(err.Error(), "out of reach") {
+		t.Fatalf("a lead re-ran an isolated project's checks: %v", err)
+	}
+	if f.Reruns(p.Repo, task.SHA) != 0 {
+		t.Fatalf("%d re-runs on the forge across a wall", f.Reruns(p.Repo, task.SHA))
+	}
+}
