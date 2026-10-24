@@ -330,3 +330,48 @@ func fileSize(t *testing.T, p string) int64 {
 	}
 	return fi.Size()
 }
+
+// Codex prints no usage on its output, so a turn's reading comes from its
+// session's rollout file: one from an earlier turn is skipped, and a turn
+// that hit its limit parks the run until the window Codex says resets.
+func TestCodexUsageFromItsSessionFile(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { j.Close() })
+	rs := NewRuns(ws, j, nil, NewTokens(ws), func() []string { return nil })
+	r, err := rs.Start(RunSpec{ID: "r1", Harness: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(ws.RunPrivate("r1"), 0o700)
+	home, err := rs.freshCodexHome(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.TurnStarted = time.Now().Add(-time.Minute)
+	os.MkdirAll(filepath.Dir(ws.TurnOut("r1", r.Turn)), 0o700)
+	os.WriteFile(ws.TurnOut("r1", r.Turn), []byte(`{"type":"thread.started","thread_id":"th1"}
+{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again later."}}
+`), 0o600)
+	reset := time.Now().Add(3 * time.Hour).Truncate(time.Second)
+	line := func(at time.Time, used float64, reset time.Time) string {
+		return fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":4200}},"rate_limits":{"primary":{"used_percent":%v,"window_minutes":300,"resets_at":%d},"secondary":{"used_percent":40,"window_minutes":10080,"resets_at":%d}}}}`,
+			at.UTC().Format(time.RFC3339Nano), used, reset.Unix(), reset.Add(96*time.Hour).Unix())
+	}
+	day := filepath.Join(home, "sessions", "2026", "10", "24")
+	os.MkdirAll(day, 0o700)
+	os.WriteFile(filepath.Join(day, "rollout-2026-10-24T10-00-00-th1.jsonl"),
+		[]byte(line(time.Now().Add(-time.Hour), 99, reset.Add(time.Hour))+"\n"+line(time.Now(), 100, reset)+"\n"+line(time.Now().Add(-2*time.Hour), 5, reset)+"\n"), 0o600)
+	os.WriteFile(filepath.Join(day, "rollout-2026-10-24T09-00-00-other.jsonl"), []byte(line(time.Now(), 1, reset)+"\n"), 0o600)
+	rs.endTurn(r)
+	p := rs.plans["codex"]
+	if p.Limit.Status != "rejected" || !p.Limit.ResetsAt.Equal(reset) || p.Limit.Window != "five_hour" || p.Limit.Windows["seven_day"].Utilization != 0.4 {
+		t.Fatalf("plan: %+v", p)
+	}
+	if got, _ := rs.Get("r1"); got.Status != StatusParked || got.ParkedUntil.Before(reset) {
+		t.Fatalf("run is %q until %v, want parked until %v", got.Status, got.ParkedUntil, reset)
+	}
+}
