@@ -26,3 +26,18 @@ func TestReportRedactsTokens(t *testing.T) {
 		t.Fatalf("redacted too much: %+v", r)
 	}
 }
+
+// A short-test failure names the failing test even when its package isn't
+// the last in the output, where the tail alone would show only "FAIL".
+func TestTestFailuresNamesTheTest(t *testing.T) {
+	out := "ok  \tx/a\t0.1s\n--- FAIL: TestThing (0.20s)\n    thing_test.go:12: want 1, got 2\nFAIL\nFAIL\tx/b\t0.3s\n" + strings.Repeat("ok  \tx/c\t0.1s\n", 50) + "FAIL\n"
+	got := testFailures(out)
+	for _, w := range []string{"--- FAIL: TestThing", "thing_test.go:12: want 1, got 2", "FAIL\tx/b"} {
+		if !strings.Contains(got, w) {
+			t.Fatalf("missing %q in:\n%s", w, got)
+		}
+	}
+	if testFailures("ok \tx/a\n") != "" {
+		t.Fatal("named a failure in a passing run")
+	}
+}

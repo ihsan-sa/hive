@@ -468,9 +468,37 @@ func unitTest(c *Child) error {
 		return fmt.Errorf("go vet: %s", tail(out, 600))
 	}
 	if out, err := c.Exec(30*time.Minute, c.Src, "go", "test", "-short", "./..."); err != nil {
-		return fmt.Errorf("go test -short: %s", tail(out, 600))
+		return fmt.Errorf("go test -short: %s%s", testFailures(out), tail(out, 600))
 	}
 	return nil
+}
+
+// testFailures names what failed in go test's output (the --- FAIL lines
+// with the lines they print, a panic, a FAIL package), which its tail alone
+// loses when the failing package isn't the last: a report that says only
+// "FAIL" can't be told from a flake.
+func testFailures(out string) string {
+	var keep []string
+	in := false
+	for _, l := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(l)
+		switch {
+		case strings.HasPrefix(t, "--- FAIL"), strings.HasPrefix(t, "panic:"), strings.HasPrefix(l, "FAIL\t"):
+			keep, in = append(keep, t), strings.HasPrefix(t, "--- FAIL")
+		case in && strings.HasPrefix(l, "    ") && len(keep) < 40:
+			keep = append(keep, t)
+		default:
+			in = false
+		}
+	}
+	if len(keep) == 0 {
+		return ""
+	}
+	s := strings.Join(keep, "\n")
+	if r := []rune(s); len(r) > 1500 {
+		s = string(r[:1500]) + "…"
+	}
+	return "failed:\n" + s + "\n\nthe end of its output:\n"
 }
 
 func gitRun(dir string, name string, args ...string) (string, error) {
