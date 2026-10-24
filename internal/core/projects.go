@@ -96,6 +96,9 @@ func (s Score) WithinTolerance(value, best float64) bool {
 	return value >= best-s.Tolerance
 }
 
+// Beats reports whether value is better than best by more than the tolerance.
+func (s Score) Beats(value, best float64) bool { return !s.WithinTolerance(best, value) }
+
 // Best returns the better of a and b.
 func (s Score) Best(a, b float64) float64 {
 	if s.Direction == "lower" {

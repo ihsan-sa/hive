@@ -466,7 +466,7 @@ func TestSelfHostCommitsNeedTheirOwnRead(t *testing.T) {
 	mustGit(t, tmp, "commit", "-q", "-m", "main moves")
 	mustGit(t, tmp, "push", "-q", "origin", "HEAD:main")
 	main2, _ := c.Effects.Sync(p)
-	update, err := c.Effects.UpdateBranch(p, sha, main2)
+	update, err := c.Effects.UpdateBranch(p, sha, main2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
