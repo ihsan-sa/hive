@@ -71,8 +71,22 @@ func (l *Local) EnsureRepo(repo, _ string) (bool, error) {
 	if err := os.MkdirAll(p, 0o755); err != nil {
 		return false, err
 	}
-	_, err := Git(p, "init", "--bare", "-b", "main")
-	return true, err
+	if _, err := Git(p, "init", "--bare", "-b", "main"); err != nil {
+		return true, err
+	}
+	return true, foreground(p)
+}
+
+// foreground keeps a bare repo's auto maintenance after a push in the
+// receiving git rather than a detached one: -c settings don't cross the
+// local transport, and a detached gc outlives the push that started it.
+func foreground(bare string) error {
+	for _, key := range []string{"maintenance.autoDetach", "gc.autoDetach"} {
+		if _, err := Git(bare, "config", key, "false"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Fork copies repo to owner's name, the local user's when owner is "".
@@ -84,8 +98,10 @@ func (l *Local) Fork(repo, owner string) (string, error) {
 	if Exists(l.RepoPath(fork)) {
 		return fork, nil
 	}
-	_, err := Git("", "clone", "-q", "--bare", l.RepoPath(repo), l.RepoPath(fork))
-	return fork, err
+	if _, err := Git("", "clone", "-q", "--bare", l.RepoPath(repo), l.RepoPath(fork)); err != nil {
+		return fork, err
+	}
+	return fork, foreground(l.RepoPath(fork))
 }
 
 func (l *Local) Clone(repo, dir string) error {
@@ -290,6 +306,24 @@ func (l *Local) LatestRelease(repo string) (Release, error) {
 		return Release{}, ErrNotFound
 	}
 	return rs[len(rs)-1], nil
+}
+
+func (l *Local) Tags(repo string) ([]string, error) {
+	var tags []string
+	for _, r := range l.load().Releases[repo] {
+		tags = append(tags, r.Tag)
+	}
+	return tags, nil
+}
+
+// AddRelease records a release as made outside the Hive, such as the person
+// marking an older one the latest (tests add them); it becomes the latest.
+func (l *Local) AddRelease(repo string, r Release) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	s.Releases[repo] = append(s.Releases[repo], r)
+	l.save(s)
 }
 
 func (l *Local) CreateRelease(repo, tag, sha, notes string) error {
