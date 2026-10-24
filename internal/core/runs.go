@@ -1170,6 +1170,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		r.Harness, r.Model = pick.Harness, pick.Model
 	}
 	h, _ := harness.Get(r.Harness)
+	if HarnessName(r.Harness) == "open" {
+		h = cfg.Models[r.Model].Harness() // Claude Code for a model on an Anthropic-compatible API
+	}
 	turn := r.Turn + 1
 	// A session that never came up is started fresh under a new id; one that
 	// did is resumed with whatever is waiting for it.
@@ -1334,7 +1337,21 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		if tok, err = rs.openKey(r.ID, tok, keyIn); err != nil {
 			return sandbox.Spec{}, err
 		}
-		env = append(env, "HIVE_OPEN_HOME="+in(home))
+		if m := cfg.Models[r.Model]; m.Anthropic() {
+			// Claude Code runs it: on the endpoint's id, with a key helper
+			// that prints the key file once and deletes it.
+			t.Model, t.Endpoint, t.Context = m.Model, m.Endpoint, m.Context
+			if slices.Contains(tok, "HIVE_OPEN_KEY_FILE="+keyIn) {
+				hive := "hive"
+				if tools := rs.tools(); !sb.Isolated() && len(tools) > 0 {
+					hive = tools[0]
+				}
+				t.KeyCommand = fmt.Sprintf("%q open-key %q", hive, keyIn)
+			}
+			tok = nil // the endpoint and id go in Claude Code's own settings
+		} else {
+			env = append(env, "HIVE_OPEN_HOME="+in(home))
+		}
 	}
 	env = append(env, tok...)
 	env = append(env, h.Env(t)...)
@@ -1494,18 +1511,48 @@ func (rs *Runs) openKey(id string, tok []string, keyIn string) ([]string, error)
 	if key == "" {
 		return out, nil
 	}
-	f := rs.openKeyFile(id)
-	if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+	if err := rs.openKeyDir(id); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(f, []byte(key), 0o600); err != nil {
+	// O_EXCL never follows a link planted at the file's own name.
+	f, err := os.OpenFile(rs.openKeyFile(id), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	_, err = f.Write([]byte(key))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		rs.dropOpenKey(id)
 		return nil, err
 	}
 	return append(out, "HIVE_OPEN_KEY_FILE="+keyIn), nil
 }
 
-// dropOpenKey deletes a key file a turn left, read or not.
-func (rs *Runs) dropOpenKey(id string) { os.Remove(rs.openKeyFile(id)) }
+// openKeyDir makes the key file's folder in the run's home, which the agent
+// can write: a link (or file) an earlier turn left in its place is removed,
+// never followed, so the daemon writes the key nowhere else.
+func (rs *Runs) openKeyDir(id string) error {
+	dir := filepath.Dir(rs.openKeyFile(id))
+	if fi, err := os.Lstat(dir); err == nil && !fi.IsDir() {
+		os.Remove(dir) // the link itself
+	}
+	os.Mkdir(dir, 0o700)
+	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("%s is not a real folder", dir)
+	}
+	return nil
+}
+
+// dropOpenKey deletes a key file a turn left, read or not, and only inside a
+// real folder: through a link it would delete another file.
+func (rs *Runs) dropOpenKey(id string) {
+	f := rs.openKeyFile(id)
+	if fi, err := os.Lstat(filepath.Dir(f)); err == nil && fi.IsDir() {
+		os.Remove(f) // a link at the file's name goes, not what it points to
+	}
+}
 
 // removeTree deletes a folder an agent may have locked, opening it first;
 // links are never followed.

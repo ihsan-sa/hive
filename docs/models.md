@@ -32,6 +32,9 @@ hive model add gpt-oss https://openrouter.ai/api/v1 openai/gpt-oss-120b:free --k
 hive model key gpt-oss                     # the key, read from stdin
 ```
 
+(A model on an Anthropic-compatible API runs on Claude Code instead: see
+below.)
+
 ```json
 "models": {
   "qwen":    {"endpoint": "http://127.0.0.1:11434/v1", "model": "qwen2.5-coder:14b", "context": 32000},
@@ -52,10 +55,57 @@ model ids and free tiers):
 | OpenRouter's free models | `https://openrouter.ai/api/v1` | `moonshotai/kimi-k2:free` |
 | Ollama on this machine | `http://127.0.0.1:11434/v1` | `qwen2.5-coder:14b` |
 
-Several of these vendors also serve an Anthropic-compatible API that Claude
-Code itself can drive. That route, and other harnesses with a CLI of their own
-(Kimi's CLI, OpenCode, Aider), come in as harnesses through the harness-module
-seam rather than as more code in the open agent.
+Other harnesses with a CLI of their own (Kimi's CLI, OpenCode, Aider) come in
+as harnesses through the harness-module seam rather than as more code in the
+open agent.
+
+## Anthropic-compatible models, on Claude Code
+
+Moonshot (Kimi), DeepSeek and Zhipu (GLM) also serve an Anthropic-compatible
+API, made for Claude Code. A named model with `"api": "anthropic"` (`--anthropic`
+to `hive model add`) runs on Claude Code itself instead of the open agent, so
+it gets Claude Code's tools, compaction and stream-json:
+
+```
+hive model add kimi https://api.moonshot.ai/anthropic kimi-k2-0905-preview --key --anthropic
+hive model key kimi
+```
+
+```json
+"kimi": {"endpoint": "https://api.moonshot.ai/anthropic", "model": "kimi-k2-0905-preview", "api": "anthropic", "key": true}
+```
+
+| Model | Endpoint (Anthropic API) | Example id |
+|---|---|---|
+| Kimi (Moonshot) | `https://api.moonshot.ai/anthropic` | `kimi-k2-0905-preview` |
+| DeepSeek | `https://api.deepseek.com/anthropic` | `deepseek-chat` |
+| GLM (Zhipu, Z.ai) | `https://api.z.ai/api/anthropic` | `glm-4.6` |
+
+It is still the named model `kimi` (`open:kimi` on the dashboard) and routes,
+falls back and is tried like any other. Its turn runs `claude` with
+`ANTHROPIC_BASE_URL` set to the endpoint and `--model` (and the models Claude
+Code uses for its own side requests and subagents) set to the endpoint's id;
+`context`, if given, is Claude Code's auto-compact window. No Claude login
+reaches it: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and
+`CLAUDE_CODE_OAUTH_TOKEN` are blanked in its environment, and its egress list
+gets the endpoint's host, not Anthropic's. The key goes in the same file in the
+run's home, and Claude Code's `apiKeyHelper` (given with `--settings`) is
+`hive open-key <file>`, which prints it and deletes the file; Claude Code calls
+it once, before its first request, and keeps the key in memory for the turn
+(`CLAUDE_CODE_API_KEY_HELPER_TTL_MS`), so no tool finds it in a file or in
+its environment. The turn loads no settings file (`--setting-sources ""`):
+the checkout's `.claude/settings.json` is the agent's or the repo's to write,
+and a hook there could read the key file before the helper runs, or its `env`
+send the key to another host; `--settings` pins the helper, the endpoint and
+`disableAllHooks`. The daemon writes the key file without following a link an
+earlier turn left at its folder or name. A turn's cost isn't counted on either kind of named model:
+Claude Code would price another vendor's tokens as Claude's.
+
+`TestAnthropicModelTurn` holds the turn's command, environment and egress;
+`TestAnthropicModelWorker` (e2e) runs a worker on real Claude Code against a
+stub Anthropic endpoint when `claude` is installed, and is a live probe with
+`HIVE_E2E_ANTHROPIC="<endpoint> <model id>"` and the key in
+`HIVE_E2E_ANTHROPIC_KEY`.
 
 A key is a credential: it is stored in `.hive/logins/open/<name>.key` (0600),
 which no run sees, and reaches only a turn on that model: the run manager writes it to a file in

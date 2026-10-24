@@ -2,6 +2,7 @@ package core
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -150,6 +151,149 @@ func TestOpenModelTurn(t *testing.T) {
 	c.Runs.dropOpenKey(r.ID)
 	if Exists(c.Runs.openKeyFile(r.ID)) {
 		t.Fatal("the key file outlived its turn")
+	}
+}
+
+// A named model on an Anthropic-compatible API runs on Claude Code: --model
+// is the endpoint's id, ANTHROPIC_BASE_URL its endpoint, no Claude login or
+// credential reaches it, the key goes in a file a helper prints once (never
+// in the environment or the command line), and the run may reach the
+// endpoint's host but not Anthropic's.
+func TestAnthropicModelTurn(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.Models = map[string]OpenModel{
+		"kimi":  {Endpoint: "https://api.moonshot.ai/anthropic", Model: "kimi-k2-0905-preview", API: "anthropic", Key: true, Context: 200000},
+		"local": {Endpoint: "http://127.0.0.1:4000", Model: "glm-4.6", API: "anthropic"},
+	}
+	cfg.Egress.Default = []string{"github.com"}
+	if err := cfg.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WS.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WS.SaveOpenKey("kimi", "sk-kimi-test"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := cfg.Pick("kimi"); p.Harness != "open" || cfg.Models["kimi"].Harness().Program() != "claude" {
+		t.Fatalf("pick %v runs on %s", p, cfg.Models["kimi"].Harness().Program())
+	}
+	tok, err := NewTokens(c.WS).AgentEnv(Login{Harness: "open", Name: "kimi"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := Run{RunSpec: RunSpec{ID: "a-kimi", Role: "worker", Harness: "open", Model: "kimi"}}
+	os.MkdirAll(c.WS.RunHome(r.ID), 0o755)
+	h := cfg.Models["kimi"].Harness()
+	spec, err := c.Runs.sandboxSpec(cfg, isolatedSB{}, h, r, 1, false, "p", tok, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv, env := strings.Join(spec.Argv, " "), strings.Join(spec.Env, "\n")
+	if spec.Argv[0] != "claude" || !strings.Contains(argv, "--model kimi-k2-0905-preview") ||
+		!strings.Contains(argv, `--settings {"apiKeyHelper":"\"hive\" open-key \"/hive/home/.hive-open/key\"","disableAllHooks":true`) {
+		t.Errorf("argv %q", spec.Argv)
+	}
+	for _, want := range []string{"ANTHROPIC_BASE_URL=https://api.moonshot.ai/anthropic", "ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2-0905-preview",
+		"ANTHROPIC_SMALL_FAST_MODEL=kimi-k2-0905-preview", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000"} {
+		if !slices.Contains(spec.Env, want) {
+			t.Errorf("env lacks %s: %q", want, spec.Env)
+		}
+	}
+	if strings.Contains(argv+env, "sk-kimi-test") || strings.Contains(env, "HIVE_OPEN_") {
+		t.Errorf("the key or the open agent's settings are in the turn's command or environment: %q %q", spec.Argv, spec.Env)
+	}
+	// The daemon's own Claude credentials can't win over the model's key:
+	// each is blanked last.
+	last := map[string]string{}
+	for _, kv := range spec.Env {
+		k, v, _ := strings.Cut(kv, "=")
+		last[k] = v
+	}
+	for _, k := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"} {
+		if v, ok := last[k]; !ok || v != "" {
+			t.Errorf("%s is %q, not blank", k, v)
+		}
+	}
+	if raw, _ := os.ReadFile(c.Runs.openKeyFile(r.ID)); string(raw) != "sk-kimi-test" {
+		t.Errorf("key file %q", raw)
+	}
+	if !slices.Contains(spec.Allow, "api.moonshot.ai") || slices.Contains(spec.Allow, "api.anthropic.com") || !slices.Contains(spec.Tools, "claude") {
+		t.Errorf("egress %q, tools %q", spec.Allow, spec.Tools)
+	}
+	c.Runs.dropOpenKey(r.ID)
+
+	// A model with no key gets a placeholder and no helper; one on this
+	// machine adds no public host.
+	r = Run{RunSpec: RunSpec{ID: "a-local", Role: "worker", Harness: "open", Model: "local"}}
+	tok, _ = NewTokens(c.WS).AgentEnv(Login{Harness: "open", Name: "local"}, "")
+	spec, err = c.Runs.sandboxSpec(cfg, isolatedSB{}, cfg.Models["local"].Harness(), r, 1, false, "p", tok, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(spec.Argv, " "), "apiKeyHelper") || !slices.Contains(spec.Env, "ANTHROPIC_API_KEY=none") || len(spec.Allow) != 1 {
+		t.Errorf("argv %q, env %q, egress %q", spec.Argv, spec.Env, spec.Allow)
+	}
+
+	// It routes and falls back as any other pick.
+	cfg.Routes = map[string][]string{"worker": {"claude:opus"}, "fallback": {"kimi", "local"}}
+	if got := picks(cfg.Route("worker", "")); got != "claude:opus open:kimi open:local" {
+		t.Errorf("worker route %s", got)
+	}
+
+	cfg.Models["bad"] = OpenModel{Endpoint: "https://x.example/v1", Model: "m", API: "gemini"}
+	if err := cfg.Check(); err == nil || !strings.Contains(err.Error(), "openai, anthropic") {
+		t.Errorf("an unknown api: %v", err)
+	}
+}
+
+// The daemon writes a model's key into the run's home, which the agent can
+// write: a link an earlier turn planted at the key's folder or file is
+// replaced, never followed, so the key lands nowhere else and nothing
+// outside is deleted.
+func TestOpenKeyFollowsNoLink(t *testing.T) {
+	if os.PathSeparator != '/' {
+		t.Skip("links need privileges on Windows")
+	}
+	c, _ := testHive(t)
+	elsewhere := t.TempDir()
+	os.WriteFile(filepath.Join(elsewhere, "key"), []byte("theirs"), 0o644)
+	keyOf := func(id string) string { raw, _ := os.ReadFile(c.Runs.openKeyFile(id)); return string(raw) }
+
+	// The folder is a link.
+	home := c.WS.RunHome("l-dir")
+	os.MkdirAll(home, 0o755)
+	os.Symlink(elsewhere, filepath.Join(home, ".hive-open"))
+	if _, err := c.Runs.openKey("l-dir", []string{"HIVE_OPEN_KEY=sk-x"}, "/k"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(elsewhere, "key")); string(raw) != "theirs" || keyOf("l-dir") != "sk-x" {
+		t.Fatalf("outside %q, key %q", raw, keyOf("l-dir"))
+	}
+	if fi, _ := os.Lstat(filepath.Join(home, ".hive-open")); !fi.IsDir() {
+		t.Fatal("the key's folder is still a link")
+	}
+	c.Runs.dropOpenKey("l-dir")
+
+	// The file is a link.
+	home = c.WS.RunHome("l-file")
+	os.MkdirAll(filepath.Join(home, ".hive-open"), 0o700)
+	os.Symlink(filepath.Join(elsewhere, "key"), filepath.Join(home, ".hive-open", "key"))
+	if _, err := c.Runs.openKey("l-file", []string{"HIVE_OPEN_KEY=sk-y"}, "/k"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(elsewhere, "key")); string(raw) != "theirs" || keyOf("l-file") != "sk-y" {
+		t.Fatalf("outside %q, key %q", raw, keyOf("l-file"))
+	}
+
+	// Dropping a key through a folder planted as a link after the turn
+	// began deletes nothing outside.
+	os.RemoveAll(filepath.Join(home, ".hive-open"))
+	os.Symlink(elsewhere, filepath.Join(home, ".hive-open"))
+	c.Runs.dropOpenKey("l-file")
+	if !Exists(filepath.Join(elsewhere, "key")) {
+		t.Fatal("dropping the key deleted a file outside the run's home")
 	}
 }
 

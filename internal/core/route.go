@@ -13,13 +13,40 @@ import (
 
 // OpenModel is a model on an OpenAI-compatible endpoint (a model server on
 // this machine such as Ollama, or a hosted tier such as OpenRouter's free
-// models), which the open harness drives. Its name in Config.Models is how
-// routes, tribunal seats and the lead's route op refer to it.
+// models), which the open harness drives, or on an Anthropic-compatible one
+// (API "anthropic"), which Claude Code drives. Its name in Config.Models is
+// how routes, tribunal seats and the lead's route op refer to it.
 type OpenModel struct {
 	Endpoint string `json:"endpoint"`          // base URL, e.g. http://127.0.0.1:11434/v1
 	Model    string `json:"model"`             // the id the endpoint knows, e.g. qwen2.5-coder:14b
+	API      string `json:"api,omitempty"`     // "openai" (the default) or "anthropic"
 	Key      bool   `json:"key,omitempty"`     // it needs an API key, which the person stores with `hive model key <name>`
 	Context  int    `json:"context,omitempty"` // tokens it holds; the agent trims its history to fit (0: 32000)
+}
+
+// APIs are the kinds of endpoint a named model can be on.
+var APIs = []string{"openai", "anthropic"}
+
+// Anthropic reports whether the model's endpoint speaks Anthropic's
+// Messages API, so Claude Code runs it instead of the open agent.
+func (m OpenModel) Anthropic() bool { return m.API == "anthropic" }
+
+// Where is the model as the person reads it: its id, endpoint, and who
+// runs it when that isn't the open agent.
+func (m OpenModel) Where() string {
+	s := m.Model + " at " + m.Endpoint
+	if m.Anthropic() {
+		s += " (Anthropic API, on Claude Code)"
+	}
+	return s
+}
+
+// Harness is the adapter that runs a turn on the model.
+func (m OpenModel) Harness() harness.Harness {
+	if m.Anthropic() {
+		return harness.OpenClaude{}
+	}
+	return harness.Open{}
 }
 
 // Pick is one harness and model a run can go on.
@@ -139,6 +166,9 @@ func (c Config) checkRoutes() error {
 		}
 		if m.Model == "" {
 			return fmt.Errorf("model %s: say which model the endpoint runs (model)", name)
+		}
+		if m.API != "" && !slices.Contains(APIs, m.API) {
+			return fmt.Errorf("model %s: api %q is one of %s", name, m.API, strings.Join(APIs, ", "))
 		}
 	}
 	check := func(where string, routes map[string][]string) error {

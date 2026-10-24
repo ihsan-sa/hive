@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -192,7 +193,7 @@ func (m *model) viewFeed() []string {
 		}
 	}
 	lines := []string{"  " + stDim.Render(fmt.Sprintf("%d agents · %d working · %d idle · ", working+idle, working, idle)) +
-		stTitle.Render(fmt.Sprintf("%d waiting on you", len(m.st.Asks))), "  " + m.usage(w)}
+		waitStyle(len(m.st.Asks)).Render(fmt.Sprintf("%d waiting on you", len(m.st.Asks))), "  " + m.usage(w)}
 	pw := 12 // the project column, dropped when the message would get too narrow
 	if w < 90 {
 		pw = 0
@@ -205,13 +206,21 @@ func (m *model) viewFeed() []string {
 	var feed []string
 	for i := start; i < len(rows) && len(feed) < room; i++ {
 		r := rows[i]
-		line := fmt.Sprintf("%-10s%s%s", r.at.Local().Format("15:04:05"), pad(clip(r.from+" → "+r.to, 22), 24), pad(clip(r.project, pw-2), pw))
-		line = clip(line+m.feedText(r), w)
+		row := func(from, to, text string) string {
+			return clip(fmt.Sprintf("%-10s%s%s", r.at.Local().Format("15:04:05"), pad(clip(from+" → "+to, 22), 24), pad(clip(r.project, pw-2), pw))+text, w)
+		}
+		var line string
 		switch {
-		case i == sel && m.focus == 1:
-			line = stSel.Render(pad(line, w))
+		case i == sel && m.focus == 1: // one reversed run, so no colour inside it
+			line = stSel.Render(pad(row(r.from, r.to, m.feedText(r)), w))
 		case r.from != "you" && r.to != "you":
-			line = stDim.Render(line)
+			line = stDim.Render(row(r.from, r.to, m.feedText(r)))
+		default: // with the person: who speaks keeps their chat colour, and an ask is amber
+			text := m.feedText(r)
+			if r.ask {
+				text = stWarn.Render(text)
+			}
+			line = row(nameStyle(r.from).Render(r.from), nameStyle(r.to).Render(r.to), text)
 		}
 		feed = append(feed, "  "+line)
 	}
@@ -266,4 +275,23 @@ func or(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// nameStyle is how a name shows in the feed: the colour it speaks in.
+func nameStyle(name string) lipgloss.Style {
+	switch name {
+	case "you":
+		return stYou
+	case "hive", "worker":
+		return stTitle
+	}
+	return speaker(name)
+}
+
+// waitStyle hints what waits on the person in amber; nothing waiting stays plain bold.
+func waitStyle(n int) lipgloss.Style {
+	if n > 0 {
+		return stWarn.Bold(true)
+	}
+	return stTitle
 }

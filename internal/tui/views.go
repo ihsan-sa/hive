@@ -61,6 +61,9 @@ func (m *model) dashRows() []row {
 		if !add(row{key: "proj:" + p.Name, text: fmt.Sprintf("%s  %s  %s  %s", stTitle.Render(p.Name), stDim.Render(p.Repo), best, spark(p.Scores)), expand: true, def: true}) {
 			continue
 		}
+		if p.Hold != nil {
+			add(row{key: "hold:" + p.Name, depth: 1, text: stWarn.Render(text.Visible(p.Hold.Text()))})
+		}
 		if add(row{key: "goals:" + p.Name, depth: 1, text: "goals", expand: true}) {
 			for _, l := range nonEmpty(strings.Split(p.Goals, "\n")) {
 				add(row{key: "goal:" + p.Name + l, depth: 2, text: stDim.Render(l)})
@@ -104,7 +107,9 @@ func (m *model) dashRows() []row {
 					v = fmtNum(*x.Score)
 				}
 				mark := stGood.Render("kept")
-				if !x.Kept {
+				if x.NoResult {
+					mark = stDim.Render("can't run")
+				} else if !x.Kept {
 					mark = stBad.Render("not kept")
 				}
 				add(row{key: "sc:" + x.SHA + x.At.String(), depth: 2, text: fmt.Sprintf("%s  %s  %s  %s  %s", x.At.Local().Format("Mon 15:04"), core.Short(x.SHA), v, mark, stDim.Render(core.Clip(x.Note, 80)))})
@@ -234,7 +239,7 @@ func (m *model) taskLine(t work.Task) string {
 	if r, ok := m.run(t.Worker); ok && r.Progress != "" && !t.Terminal() && !t.Queued() {
 		progress = stDim.Render("  “" + core.Clip(r.Progress, 60) + "” " + ago(r.ProgressAt))
 	}
-	if t.Queued() && t.Reason != "" {
+	if (t.Queued() || t.Stage == work.StageMerging) && t.Reason != "" {
 		progress = stDim.Render("  " + core.Clip(t.Reason, 70))
 	}
 	if t.Stage == work.StageTesting && slices.ContainsFunc(m.st.Checks.Waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
@@ -653,7 +658,7 @@ func (m *model) viewWaiting() []string {
 			from = a.Project + " › " + from
 		}
 		age := ago(a.Asked)
-		top := stTitle.Render(from) + "  " + stDim.Render(a.Kind)
+		top := stTitle.Render(from) + "  " + stWarn.Render(a.Kind)
 		ls := []string{pad(clip(top, w-len(age)-1), w-len(age)) + stDim.Render(age)}
 		ls = append(ls, wrap(a.Title, w)...)
 		if i == m.waitSel {
@@ -919,7 +924,7 @@ func (m *model) settings() []setting {
 	}
 	for _, name := range sortedKeys(c.Models) {
 		x := c.Models[name]
-		s = append(s, setting{group: "Routes", label: "model " + name, value: x.Model + " at " + x.Endpoint, action: func() tea.Cmd {
+		s = append(s, setting{group: "Routes", label: "model " + name, value: x.Where(), action: func() tea.Cmd {
 			return func() tea.Msg {
 				return flashMsg("models are set in .hive/config.json; a key is stored with `" + core.Cmd + " model key " + name + "`")
 			}
@@ -999,26 +1004,27 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch cur.key {
 		case "autonomy":
 			c.Autonomy = c.Autonomy%3 + 1
-			return m, m.post("/api/config", c, "autonomy set")
+			return m, m.saveConfig(c, "autonomy set")
 		case "auto_update":
 			c.AutoUpdate = !c.AutoUpdate
-			return m, m.post("/api/config", c, "auto-update changed")
+			return m, m.saveConfig(c, "auto-update changed")
 		case "channel":
 			if c.Channel = "pre-release"; m.st.Channel == "pre-release" {
 				c.Channel = "latest"
 			}
-			return m, m.post("/api/config", c, "release channel changed")
+			m.st.Channel = c.Channel // shown at once, as saveConfig shows the rest
+			return m, m.saveConfig(c, "release channel changed")
 		case "api_key_opt_in":
 			c.APIKeyOptIn = !c.APIKeyOptIn
-			return m, m.post("/api/config", c, "API key use changed")
+			return m, m.saveConfig(c, "API key use changed")
 		case "share":
 			_, on := m.st.Config.Sharing()
 			c.SetShare(!on)
-			return m, m.post("/api/config", c, "sharing changed")
+			return m, m.saveConfig(c, "sharing changed")
 		case "sandbox":
 			if c.Sandbox == "bare" {
 				c.Sandbox = "auto"
-				return m, m.post("/api/config", c, "sandbox back to auto")
+				return m, m.saveConfig(c, "sandbox back to auto")
 			}
 			m.setFlash("to run agents without a sandbox, read the warning in `" + core.Cmd + " doctor --bare`")
 			return m, nil
@@ -1212,7 +1218,14 @@ func (m *model) saveSetting(v string) tea.Cmd {
 	default:
 		return nil
 	}
-	return m.post("/api/config", c, "saved")
+	return m.saveConfig(c, "saved")
+}
+
+// saveConfig shows the new settings at once and posts them. The flash that
+// follows fetches state, which puts the daemon's back if it refused them.
+func (m *model) saveConfig(c core.Config, ok string) tea.Cmd {
+	m.st.Config = c
+	return m.post("/api/config", c, ok)
 }
 
 // settingCols is the width of the settings' label column, 28 cells or less

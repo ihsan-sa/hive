@@ -58,6 +58,26 @@ type Agent struct {
 	Sleep                func(time.Duration) // waits out a short rate limit
 }
 
+// KeyMain is `hive open-key FILE`: it prints the model key the run manager
+// left in FILE and deletes it. Claude Code, running a model on an
+// Anthropic-compatible API, calls it as its apiKeyHelper once, before its
+// first request, so the key is gone before any tool runs.
+func KeyMain(argv []string) int {
+	if len(argv) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: hive open-key FILE")
+		return 2
+	}
+	raw, err := os.ReadFile(argv[0])
+	os.Remove(argv[0])
+	key := strings.TrimSpace(string(raw))
+	if err != nil || key == "" {
+		fmt.Fprintln(os.Stderr, "the model's key was already handed over, or never left: a turn reads it once")
+		return 1
+	}
+	fmt.Println(key)
+	return 0
+}
+
 // Main is `hive open-agent --session S --model NAME [--resume] [--system-file F]
 // [--readonly --add-dir D] [--schema-file F] [--max-output N]`, with the
 // endpoint and model id in HIVE_OPEN_ENDPOINT and HIVE_OPEN_MODEL, the key in
