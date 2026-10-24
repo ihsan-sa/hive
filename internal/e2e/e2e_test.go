@@ -264,6 +264,16 @@ func task(st api.State, project, title string) (work.Task, bool) {
 	return work.Task{}, false
 }
 
+// logLines puts a task's log one entry to a line, so a failure's annotation
+// on ci (which cuts each line short) still shows every step.
+func logLines(log []work.Entry) string {
+	var b strings.Builder
+	for _, e := range log {
+		fmt.Fprintf(&b, "\n  %s %s", e.At.Format("15:04:05.000"), core.Clip(strings.ReplaceAll(e.Text, "\n", " "), 200))
+	}
+	return b.String()
+}
+
 func taskStage(project, title, stage string) func(api.State) bool {
 	return func(st api.State) bool {
 		t, ok := task(st, project, title)
@@ -544,7 +554,7 @@ func TestCheckpointsBankEachGain(t *testing.T) {
 	st := h.wait("both checkpoints and the finish to merge", 8*minute, taskStage("bank", "raise the score", work.StageDone))
 	tk, _ := task(st, "bank", "raise the score")
 	if tk.Banked != 2 {
-		t.Fatalf("banked %d: %v", tk.Banked, tk.Log)
+		t.Fatalf("banked %d:%s", tk.Banked, logLines(tk.Log))
 	}
 	// main's score at each merge, and whether the worker had finished by then.
 	var merges []string
