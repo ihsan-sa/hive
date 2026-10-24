@@ -1,5 +1,5 @@
 // Package tui is the control center: chats, the dashboard, what's waiting on
-// the person, modules and settings. A sidebar picks the section or chat, a
+// the person, the knowledge base, modules and settings. A sidebar picks the section or chat, a
 // chat's threads open in their own pane with the reply box under them, Esc
 // goes one level up, and no line runs off the screen. Quitting never stops
 // anything.
@@ -25,12 +25,13 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
-var sections = []string{"Chats", "Dashboard", "Waiting", "Modules", "Settings"}
+var sections = []string{"Chats", "Dashboard", "Waiting", "Knowledge", "Modules", "Settings"}
 
 const (
 	secChats = iota
 	secDash
 	secWaiting
+	secKB
 	secModules
 	secSettings
 )
@@ -91,6 +92,8 @@ type model struct {
 	dashSel int
 	waitSel int
 	modSel  int
+	kbDir   string // the knowledge base folder shown, relative to its root
+	kbSel   int
 	setSel  int
 	editing bool
 	picking bool // a setting's pick-list is open
@@ -460,6 +463,9 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.focus == 0 {
 		return m.keySidebar(k)
 	}
+	if s == "esc" && len(m.stack) == 0 && m.section == secKB && m.kbDir != "" { // one folder up first
+		return m.keyKB(k)
+	}
 	if s == "esc" && len(m.stack) == 0 && m.section != secChats { // one level up is the sidebar
 		m.focus = 0
 		return m, nil
@@ -474,6 +480,8 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.keyDash(k)
 	case secWaiting:
 		return m.keyWaiting(k)
+	case secKB:
+		return m.keyKB(k)
 	case secModules:
 		return m.keyModules(k)
 	case secSettings:
@@ -590,6 +598,9 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.editing {
 			m.editing = false
 			m.input.Blur()
+			if m.section == secKB {
+				return m, m.searchKB(text)
+			}
 			return m, m.saveSetting(text)
 		}
 		if text == "" && len(m.files) == 0 {
@@ -724,6 +735,8 @@ func (m *model) viewMain(w int) pane {
 			body = m.viewFeed()
 		case secWaiting:
 			body = m.viewWaiting()
+		case secKB:
+			body = m.viewKB()
 		case secModules:
 			body = m.viewModules()
 		case secSettings:
@@ -753,6 +766,8 @@ func (m *model) viewMain(w int) pane {
 			}
 		}
 		note = fmt.Sprintf("%d installed · %d on", len(m.st.Modules), on)
+	case m.section == secKB:
+		note = filepath.Join(m.ws.KB(), filepath.FromSlash(m.kbDir))
 	case m.section == secSettings:
 		note = filepath.Join(m.st.Workspace, ".hive", "config.json")
 	}
@@ -785,6 +800,8 @@ func (m *model) keys() []string {
 	switch {
 	case m.showSince || m.help:
 		return []string{"any key", "close"}
+	case m.editing && m.section == secKB:
+		return []string{"enter", "search", "esc", "cancel"}
 	case m.editing:
 		return []string{"enter", "save", "esc", "cancel"}
 	case m.focus == 0:
@@ -810,6 +827,8 @@ func (m *model) keys() []string {
 		return []string{"↑↓", "move", "←→", "pick", "enter", "answer", "d", "whole diff", "tab", "sidebar"}
 	case m.section == secWaiting:
 		return []string{"↑↓", "move", "←→", "pick", "enter", "answer", "tab", "sidebar"}
+	case m.section == secKB:
+		return []string{"↑↓", "move", "enter", "open", "/", "search", "esc", "up a folder", "tab", "sidebar"}
 	case m.section == secModules:
 		return []string{"enter", "configure", "↑↓", "move", "tab", "sidebar"}
 	case m.section == secSettings && m.picking:
@@ -828,6 +847,7 @@ func helpLines() []string {
 		"n                 new thread",
 		"a                 in a chat, answer what's waiting on you",
 		"d                 in Waiting, the whole diff of a change",
+		"/                 in Knowledge, search the knowledge base",
 		"ctrl+j            new line in a box",
 		"pgup pgdn, wheel  scroll",
 		"q                 quit the control center; the Hive keeps working",
