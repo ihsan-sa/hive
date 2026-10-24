@@ -73,3 +73,48 @@ func TestCheckpointHandbackLeavesWorker(t *testing.T) {
 		t.Fatalf("log %v, reason %q", task.Log, task.Reason)
 	}
 }
+
+// A dropped checkpoint's commit is not weighed again when the reflog moves
+// with no new commit, and a worker sent back after its finish gets none.
+func TestCheckpointWeighsACommitOnce(t *testing.T) {
+	m, task, p := checkpointRig(t, 5, "7")
+	if err := m.checkWorker(task, p); err != nil || task.Checkpoint == "" {
+		t.Fatalf("checkpoint %q, err %v", task.Checkpoint, err)
+	}
+	pr := task.PR.Number
+	m.dropCheckpoint(task, p, "it conflicts with main")
+	task.Seen = "" // the reflog moved
+	if err := m.checkWorker(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageWorking || task.Checkpoint != "" || task.PR.Number != pr {
+		t.Fatalf("weighed again: stage %q, checkpoint %q, PR %d", task.Stage, task.Checkpoint, task.PR.Number)
+	}
+
+	m, task, p = checkpointRig(t, 5, "7")
+	task.Round = 1
+	if err := m.checkWorker(task, p); err != nil || task.Checkpoint != "" || task.PR.Number != 0 {
+		t.Fatalf("a sent-back worker got a checkpoint %q (PR %d, err %v)", task.Checkpoint, task.PR.Number, err)
+	}
+}
+
+// A conflict found before a checkpoint's pull request opens comments on no PR.
+func TestCheckpointDropWithoutPR(t *testing.T) {
+	m, task, p := checkpointRig(t, 5, "7")
+	task.Checkpoint = "x"
+	if err := m.dropCheckpoint(task, p, "it conflicts with main"); err != nil || task.Checkpoint != "" {
+		t.Fatalf("checkpoint %q, err %v", task.Checkpoint, err)
+	}
+}
+
+// A revert of a checkpoint's merge names that checkpoint's pull request, not
+// the task's current one.
+func TestCheckpointPROf(t *testing.T) {
+	task := Task{PR: core.PR{Number: 9}, Banks: []Bank{{PR: core.PR{Number: 4}, MergeSHA: "a"}, {PR: core.PR{Number: 6}, MergeSHA: "b"}}}
+	if n := task.PROf("b").Number; n != 6 {
+		t.Fatalf("PROf(b) = #%d", n)
+	}
+	if n := task.PROf("c").Number; n != 9 {
+		t.Fatalf("PROf(c) = #%d", n)
+	}
+}

@@ -75,7 +75,10 @@ type Task struct {
 	// it keeps working; once merged, Base moves to it and Banked counts it.
 	Checkpoint string    `json:"checkpoint,omitempty"`
 	Banked     int       `json:"banked,omitempty"`
-	Seen       string    `json:"seen,omitempty"` // the worker checkout's reflog when last looked at
+	Banks      []Bank    `json:"banks,omitempty"`   // each merged checkpoint, oldest first
+	Seen       string    `json:"seen,omitempty"`    // the worker checkout's reflog when last looked at
+	Tried      string    `json:"tried,omitempty"`   // the newest commit already weighed as a checkpoint
+	NoBank     string    `json:"no_bank,omitempty"` // why no more checkpoints are opened for this task
 	Failures   int       `json:"failures"`
 	CloseFail  int       `json:"close_fail,omitempty"` // failed tries to close the issue
 	Attempt    int       `json:"attempt"`              // fresh workers handed this task
@@ -84,6 +87,23 @@ type Task struct {
 	Log        []Entry   `json:"log,omitempty"`
 	Created    time.Time `json:"created"`
 	Updated    time.Time `json:"updated"`
+}
+
+// A Bank is a merged checkpoint: its pull request and the merge on main.
+type Bank struct {
+	PR       core.PR `json:"pr"`
+	MergeSHA string  `json:"merge_sha"`
+}
+
+// PROf is the pull request that made a merge of this task: one of its
+// checkpoints, or else its own.
+func (t Task) PROf(mergeSHA string) core.PR {
+	for _, b := range t.Banks {
+		if b.MergeSHA == mergeSHA {
+			return b.PR
+		}
+	}
+	return t.PR
 }
 
 // Label is the title clipped for a heading, an issue, a PR or a message; the
@@ -565,6 +585,8 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 			fmt.Fprintf(&b, " Best kept score: %g.", best)
 		}
 		b.WriteString(" Every merge is measured; a lower score is reverted.\n")
+	}
+	if cfg.Score != nil && t.From != "hive" { // as checkpoint() skips the Hive's own setup brief
 		b.WriteString("- Commit each gain as you make it: a commit that beats the best kept score is tested, read and merged into main as a checkpoint while you keep working on top of it.\n")
 	}
 	if lessons := m.C.Effects.ReadFile(p, base, ".hive/lessons.md"); strings.TrimSpace(lessons) != "" {
@@ -665,10 +687,11 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 // checkpoint banks a running worker's newest commit on a scored project when
 // its score beats the best kept: it goes through the same tests, read and
 // merge as a finished task while the worker keeps going. A commit shows as a
-// change to the checkout's reflog, read without running git there.
+// change to the checkout's reflog, read without running git there. Once the
+// worker has finished and been sent back, its next finish lands instead.
 func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	best, scored := m.bestScore(p.Name)
-	if !scored || t.From == "hive" { // the Hive's own setup brief keeps its done line (doneFor)
+	if !scored || t.From == "hive" || t.NoBank != "" || t.Round > 0 || t.Conflicts > 0 { // the Hive's own setup brief keeps its done line (doneFor)
 		return nil
 	}
 	sc := m.C.Effects.Config(p, "HEAD").Score
@@ -680,24 +703,49 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	if seen == t.Seen {
 		return nil
 	}
-	t.Seen = seen
+	// Seen moves only once the commit has been weighed, so a sandbox or
+	// extract that fails is tried again, without counting against the task.
+	if _, err := m.C.Sandbox(); err != nil {
+		return nil
+	}
 	sha, err := m.C.Effects.Extract(p, r, t.Base)
-	if errors.Is(err, core.ErrNoChanges) {
+	switch {
+	case errors.Is(err, core.ErrNoChanges):
+		t.Seen = seen
+		m.save(t, "")
+		return nil
+	case errors.Is(err, core.ErrNotDescendant):
+		t.Seen = seen
+		m.save(t, "the worker's newest commit no longer builds on its merged checkpoint "+core.Short(t.Base))
+		m.C.Runs.Send(t.Worker, rewound(t.Base))
+		return nil
+	case err != nil:
+		t.Retry = time.Now().Add(2 * time.Minute)
+		m.save(t, "could not take out the worker's commit to weigh it as a checkpoint (will retry): "+core.Clip(err.Error(), 300))
+		return nil
+	}
+	t.Seen = seen
+	if sha == t.Tried {
 		m.save(t, "")
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	// main is measured after a merge, so the last checkpoint's own score counts until then.
-	if c, ok := m.C.Effects.GetCheck(p.Name, t.Base, "score"); ok && c.Score != nil && t.Banked > 0 {
-		best = sc.Best(best, *c.Score)
+	t.Tried = sha
+	// main is measured after a merge, so the last checkpoint's own score
+	// counts until then; once measured, the kept best says what it was worth.
+	if n := len(t.Banks); n > 0 && !m.measured(p.Name, t.Banks[n-1].MergeSHA) {
+		if c, ok := m.C.Effects.GetCheck(p.Name, t.Base, "score"); ok && c.Score != nil {
+			best = sc.Best(best, *c.Score)
+		}
 	}
 	c, ok := m.C.Effects.GetCheck(p.Name, sha, "score")
 	if !ok {
 		c = m.C.Effects.RunCheck(p, sha, "score", sc.Command)
 	}
-	if c.Score == nil || !sc.Beats(*c.Score, best) {
+	if c.Score == nil {
+		m.save(t, fmt.Sprintf("the score gave no number on the worker's commit %s, so no checkpoint", core.Short(sha)))
+		return nil
+	}
+	if !sc.Beats(*c.Score, best) {
 		m.save(t, fmt.Sprintf("the worker's commit %s doesn't beat the best kept score %g, so no checkpoint", core.Short(sha), best))
 		return nil
 	}
@@ -705,12 +753,26 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	return m.open(t, p, sha, fmt.Sprintf("A checkpoint of #%d while its worker keeps going: %s scores %g, above the best kept %g.", t.Issue.Number, core.Short(sha), *c.Score, best))
 }
 
+// rewound tells a worker its branch left a commit already merged as a checkpoint.
+func rewound(base string) string {
+	return fmt.Sprintf("Your newest commit no longer builds on %s, which is merged into main as a checkpoint, so the Hive can't take it. Bring that commit back into your branch (`git merge %s`, or rebase onto it), keep it as it is, commit, and carry on.", core.Short(base), base)
+}
+
+// Measured is provided by the improve module: whether a merge has been measured.
+var Measured func(project, sha string) bool
+
+func (m *Module) measured(project, sha string) bool {
+	return Measured != nil && Measured(project, sha)
+}
+
 // dropCheckpoint leaves a checkpoint unmerged. The worker was never told of
 // it and keeps going; its pull request takes the worker's later commits.
 func (m *Module) dropCheckpoint(t *Task, p core.Project, why string) error {
 	t.Checkpoint, t.Stage, t.Reason = "", StageWorking, ""
 	m.save(t, "checkpoint not merged: "+core.Clip(why, 300))
-	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Not merged as a checkpoint: "+core.Clip(why, 3000)+"\n\nThe worker keeps going; this pull request takes its later commits.")
+	if t.PR.Number != 0 { // a conflict found before its pull request opened
+		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Not merged as a checkpoint: "+core.Clip(why, 3000)+"\n\nThe worker keeps going; this pull request takes its later commits.")
+	}
 	return nil
 }
 
@@ -740,6 +802,19 @@ func (m *Module) land(t *Task, p core.Project) error {
 	}
 	if errors.Is(err, core.ErrNoChanges) {
 		m.noCommits(t, p, r)
+		return nil
+	}
+	if errors.Is(err, core.ErrNotDescendant) && t.Banked > 0 {
+		t.Conflicts++
+		if t.Conflicts > 3 {
+			m.giveUp(t, "the worker's branch keeps leaving its merged checkpoint "+core.Short(t.Base))
+			return nil
+		}
+		if err := m.C.Runs.Reopen(t.Worker, rewound(t.Base)+" Then finish again."); err != nil {
+			return err
+		}
+		t.Stage = StageWorking
+		m.save(t, "the worker's finish left its merged checkpoint; sent back")
 		return nil
 	}
 	if err != nil {
@@ -1013,7 +1088,12 @@ func (m *Module) review(t *Task, p core.Project) error {
 		if t.Kind == "revert" {
 			account = fmt.Sprintf("The Hive made this revert itself; no worker wrote it. It reverts the merge %s because: %s\n\nIt also records that lesson in `.hive/lessons.md`. Check it undoes that merge and nothing else.", core.Short(t.RevertSHA), t.Lesson)
 		}
-		brief := fmt.Sprintf("Review round %d of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", t.Round+1, t.ID, t.Label())
+		round := fmt.Sprintf("round %d", t.Round+1)
+		if t.Checkpoint != "" {
+			round = "a checkpoint"
+			account = w.Brief + "\n\n## A checkpoint\n\nThe worker is still running and hasn't written its account yet. This commit is a checkpoint of its unfinished work, put up because it beats the best kept score; it merges on its own while the worker keeps going. Read it as a change that must be safe to merge as it stands, not as the finished task."
+		}
+		brief := fmt.Sprintf("Review %s of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", round, t.ID, t.Label())
 		spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
 		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": c.Output,
@@ -1123,9 +1203,10 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Merged a checkpoint of %s; its worker keeps going: %s", t.Label(), t.PR.URL))
 		t.Base, t.Checkpoint, t.Stage = t.Checkpoint, "", StageWorking
 		t.Banked++
+		t.Banks = append(t.Banks, Bank{PR: t.PR, MergeSHA: merged}) // a revert of this merge names its PR
 		t.Branch, t.PR = fmt.Sprintf("hive/%s-%d", t.ID, t.Banked), core.PR{}
 		m.save(t, "checkpoint merged as "+core.Short(merged)+"; the worker keeps going")
-		m.C.Runs.Send(t.Worker, fmt.Sprintf("Your commit %s beat the best kept score and is merged into main as a checkpoint. Keep going on your branch: the Hive lays what you commit after it onto main, so you needn't fetch main.", core.Short(t.Base)))
+		m.C.Runs.Send(t.Worker, fmt.Sprintf("Your commit %s beat the best kept score and is merged into main as a checkpoint. Keep going on top of it on your branch, and leave that commit as it is (no amend, reset or rebase past it): the Hive lays what you commit after it onto main, so you needn't fetch main.", core.Short(t.Base)))
 		if m.OnMerged != nil {
 			m.OnMerged(*t)
 		}
@@ -1168,8 +1249,9 @@ func (m *Module) prepareRevert(t *Task, p core.Project) error {
 		return err
 	}
 	of, _ := m.Get(t.RevertOf)
+	ofPR := of.PROf(t.RevertSHA) // a checkpoint's merge has a PR of its own
 	if t.SHA == "" {
-		lesson := fmt.Sprintf("%s: %q (PR #%d, %s) was reverted: %s", time.Now().Format("2006-01-02"), of.Label(), of.PR.Number, core.Short(t.RevertSHA), t.Lesson)
+		lesson := fmt.Sprintf("%s: %q (PR #%d, %s) was reverted: %s", time.Now().Format("2006-01-02"), of.Label(), ofPR.Number, core.Short(t.RevertSHA), t.Lesson)
 		sha, err := m.C.Effects.Revert(p, main, t.RevertSHA, lesson)
 		if err != nil {
 			return err
@@ -1180,13 +1262,13 @@ func (m *Module) prepareRevert(t *Task, p core.Project) error {
 	if err := m.C.Effects.Push(p, t.Branch, t.SHA); err != nil {
 		return err
 	}
-	body := fmt.Sprintf("Reverts #%d (%s).\n\n%s\n\nThe lesson is recorded in `.hive/lessons.md`.\n\n%s", of.PR.Number, core.Short(t.RevertSHA), t.Lesson, marker(t.ID))
+	body := fmt.Sprintf("Reverts #%d (%s).\n\n%s\n\nThe lesson is recorded in `.hive/lessons.md`.\n\n%s", ofPR.Number, core.Short(t.RevertSHA), t.Lesson, marker(t.ID))
 	pr, err := m.C.Effects.Forge.CreatePR(p.Repo, t.Branch, p.Branch, t.Label(), body)
 	if err != nil {
 		return err
 	}
-	if of.PR.Number != 0 {
-		m.C.Effects.Forge.Comment(p.Repo, of.PR.Number, fmt.Sprintf("This change is being reverted in #%d: %s", pr.Number, t.Lesson))
+	if ofPR.Number != 0 {
+		m.C.Effects.Forge.Comment(p.Repo, ofPR.Number, fmt.Sprintf("This change is being reverted in #%d: %s", pr.Number, t.Lesson))
 	}
 	t.PR, t.Stage = pr, StageTesting
 	m.save(t, fmt.Sprintf("revert PR #%d", pr.Number))
@@ -1206,7 +1288,10 @@ func (m *Module) onPersonMerge(a core.Ask) {
 		return
 	}
 	if p, err := m.project(&t); err == nil && t.Checkpoint != "" {
-		m.dropCheckpoint(&t, p, strings.TrimSuffix("left open: "+a.Note, ": "))
+		// Later commits would carry the same change and ask again, so the
+		// rest waits for the worker's finish.
+		t.NoBank = "the person left a checkpoint open"
+		m.dropCheckpoint(&t, p, strings.TrimSuffix("left open: "+a.Note, ": ")+"; no more checkpoints, the rest lands when the worker finishes")
 		return
 	}
 	t.Stage, t.Reason, t.ByPerson = StageStopped, strings.TrimSuffix("left open: "+a.Note, ": "), true

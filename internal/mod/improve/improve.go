@@ -99,6 +99,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	c.J.Subscribe(apply)
 	w.OnMerged = func(t work.Task) { m.queue <- t }
 	work.BestScore = m.Best
+	work.Measured = m.measured
 	go m.measureLoop()
 	return m
 }
@@ -284,7 +285,17 @@ func (m *Module) measureLoop() {
 // Recover re-queues merges whose measurement didn't happen (after a restart).
 func (m *Module) Recover() {
 	for _, t := range m.Work.List(func(t work.Task) bool { return t.MergeSHA != "" }) {
-		if !m.measured(t.Project, t.MergeSHA) && time.Since(t.Updated) < 7*24*time.Hour {
+		if time.Since(t.Updated) >= 7*24*time.Hour {
+			continue
+		}
+		for _, b := range t.Banks { // a checkpoint merged before the latest one
+			if b.MergeSHA != t.MergeSHA && !m.measured(t.Project, b.MergeSHA) {
+				c := t
+				c.MergeSHA = b.MergeSHA
+				m.queue <- c
+			}
+		}
+		if !m.measured(t.Project, t.MergeSHA) {
 			m.queue <- t
 		}
 	}
