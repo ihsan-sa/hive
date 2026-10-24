@@ -48,6 +48,9 @@ type Effects struct {
 	runs    *Runs
 
 	locks sync.Map
+	// mergeFailed is project#pr@sha -> why the Hive's last MergePR of it
+	// failed, so a retry that fails the same way isn't journalled again.
+	mergeFailed sync.Map
 
 	// MergeHeld is why a pull request on a project may not merge now (the
 	// person's hold on its merges, the work module), or "" if it may.
@@ -1093,15 +1096,29 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
 	}
 	// A PR already merged on the forge was merged by someone else, unless
-	// the Hive's own try (effect.merging) got that far before a restart: the
-	// count of outside hands (improve) tells the two apart.
+	// the Hive's own try (effect.merging, with no effect.merge_failed after
+	// it) got that far before a restart: the count of outside hands
+	// (improve) tells the two apart. A try that fails as the last one did
+	// (a hold that retries) writes neither again.
+	key := fmt.Sprintf("%s#%d@%s", p.Name, m.PR, m.SHA)
 	already := false
 	if pr, err := e.Forge.GetPR(p.Repo, m.PR); err == nil && pr.State == "MERGED" {
 		already = true
-	} else {
+	}
+	last, failedBefore := e.mergeFailed.Load(key)
+	if !already && !failedBefore {
 		e.j.MustAppend("effect.merging", map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA})
 	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
+	if err != nil {
+		why := Clip(err.Error(), 300)
+		if !failedBefore || last != why {
+			e.j.MustAppend("effect.merge_failed", map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "error": why})
+			e.mergeFailed.Store(key, why)
+		}
+	} else {
+		e.mergeFailed.Delete(key)
+	}
 	if err != nil && len(shared) > 0 && protectionRefused.MatchString(err.Error()) {
 		return "", &RefusedRed{Checks: shared, Err: err}
 	}

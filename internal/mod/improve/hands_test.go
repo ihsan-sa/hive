@@ -1,6 +1,7 @@
 package improve
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -255,7 +256,7 @@ func TestMergeOnTheForgeIsAHand(t *testing.T) {
 
 	// land opens a PR for a one-file change and merges it through
 	// Effects.Merge, after the person merged it on the forge when byHand.
-	land := func(id string, n int, byHand bool) string {
+	land := func(id string, n int, before func(pr int, sha string)) string {
 		t.Helper()
 		main, err := c.Effects.Sync(p)
 		if err != nil {
@@ -289,10 +290,8 @@ func TestMergeOnTheForgeIsAHand(t *testing.T) {
 			t.Fatalf("test: %+v", ck)
 		}
 		f.SetChecks(p.Repo, sha, core.CheckRun{Name: "test", State: core.CheckPass}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass})
-		if byHand {
-			if _, err := f.MergePR(p.Repo, pr.Number, sha, id); err != nil {
-				t.Fatal(err)
-			}
+		if before != nil {
+			before(pr.Number, sha)
 		}
 		merged, err := c.Effects.Merge(core.MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main, Subject: id})
 		if err != nil {
@@ -302,13 +301,52 @@ func TestMergeOnTheForgeIsAHand(t *testing.T) {
 		c.J.MustAppend("task.saved", task)
 		return merged
 	}
-	own := land("t-own", 1, false)
+	byHand := func(pr int, sha string) {
+		if _, err := f.MergePR(p.Repo, pr, sha, "by hand"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	own := land("t-own", 1, nil)
 	if h := m.HandsFor("t-own", own, c.J.Seq()); !h.Unassisted {
 		t.Fatalf("the Hive's own merge counts %+v", h)
 	}
-	hand := land("t-hand", 2, true)
+	hand := land("t-hand", 2, byHand)
 	if h := m.HandsFor("t-hand", hand, c.J.Seq()); kinds(h) != "merge" || h.Unassisted {
 		t.Fatalf("a merge on the forge counts %+v", h)
+	}
+	// The Hive's merge is refused (twice, journalled once), the person merges
+	// it on the forge, and the Hive's next try finds it merged: by hand.
+	refused := land("t-refused", 3, func(pr int, sha string) {
+		main, _ := c.Effects.Sync(p)
+		c.Effects.Forge = refusing{f}
+		for i := 0; i < 2; i++ {
+			if _, err := c.Effects.Merge(core.MergeRequest{Project: p, PR: pr, SHA: sha, Main: main, Subject: "x"}); err == nil {
+				t.Fatal("the refusing forge merged")
+			}
+		}
+		c.Effects.Forge = f
+		byHand(pr, sha)
+	})
+	if h := m.HandsFor("t-refused", refused, c.J.Seq()); kinds(h) != "merge" {
+		t.Fatalf("a hand merge after a refused try counts %+v", h)
+	}
+	n := 0
+	for _, e := range c.J.Since(0) {
+		if e.Kind == "effect.merge_failed" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("a retry that fails the same way is journalled again: %d failures", n)
+	}
+	// The Hive's own try got through on the forge and the daemon stopped
+	// before it recorded the merge: the next try finds it merged, its own.
+	restarted := land("t-restart", 4, func(pr int, sha string) {
+		c.J.MustAppend("effect.merging", map[string]any{"project": p.Name, "pr": pr, "sha": sha})
+		byHand(pr, sha)
+	})
+	if h := m.HandsFor("t-restart", restarted, c.J.Seq()); !h.Unassisted {
+		t.Fatalf("the Hive's own merge cut short by a restart counts %+v", h)
 	}
 }
 
@@ -330,4 +368,11 @@ func TestUnlinkedHandCountsOnce(t *testing.T) {
 	if kinds(ha) != "login" || !hb.Unassisted {
 		t.Fatalf("the login counts for the next merge only: a %+v, b %+v", ha, hb)
 	}
+}
+
+// refusing is a forge whose branch rules refuse every merge.
+type refusing struct{ *core.Local }
+
+func (refusing) MergePR(repo string, number int, sha, subject string) (string, error) {
+	return "", errors.New(`gh pr merge: GraphQL: Required status check "test" is failing. (mergePullRequest)`)
 }

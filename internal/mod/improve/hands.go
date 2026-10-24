@@ -116,7 +116,7 @@ type hands struct {
 	tasks      map[string]*taskHands
 	hiveMerged map[string]bool // merge shas the Hive merged itself (effect.merged)
 	handMerged map[string]Hand // merge shas whose PR was merged on the forge before the Hive tried
-	merging    map[string]bool // project#pr@sha the Hive tried to merge (effect.merging)
+	merging    map[string]bool // project#pr@sha whose newest try of the Hive's may have merged it (effect.merging, no effect.merge_failed after)
 	merges     []merge         // every merge, in journal order: what unlinked hands go to
 	gen        int64           // bumped on what the milestone reads, so it is worked out again
 	milestones map[string]cachedMilestone
@@ -192,6 +192,14 @@ func (m *Module) applyHands(e core.Event) {
 		}
 		if e.Decode(&x) == nil {
 			h.merging[fmt.Sprintf("%s#%d@%s", x.Project, x.PR, x.SHA)] = true
+		}
+	case "effect.merge_failed":
+		var x struct {
+			Project, SHA string
+			PR           int
+		}
+		if e.Decode(&x) == nil { // that try didn't merge it
+			delete(h.merging, fmt.Sprintf("%s#%d@%s", x.Project, x.PR, x.SHA))
 		}
 	case "effect.merged":
 		var x struct {
