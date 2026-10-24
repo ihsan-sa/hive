@@ -150,29 +150,62 @@ type clipTool struct {
 
 func raw(b []byte) ([]byte, error) { return b, nil }
 
+// clipSetup is where the control center runs, which decides how it can
+// reach the clipboard: the person's clipboard is on the machine whose
+// screen they look at, which over SSH isn't this one.
+type clipSetup struct {
+	goos         string
+	wsl, ssh     bool // Linux under WSL; a session over SSH
+	wayland, x11 bool // a display this session can reach (WSLg's, or one SSH forwards)
+}
+
+func thisSetup() clipSetup {
+	s := clipSetup{goos: runtime.GOOS, wayland: os.Getenv("WAYLAND_DISPLAY") != "", x11: os.Getenv("DISPLAY") != ""}
+	s.ssh = os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != "" || os.Getenv("SSH_TTY") != ""
+	if s.goos == "linux" {
+		rel, _ := os.ReadFile("/proc/sys/kernel/osrelease")
+		s.wsl = os.Getenv("WSL_DISTRO_NAME") != "" || os.Getenv("WSL_INTEROP") != "" || bytes.Contains(bytes.ToLower(rel), []byte("microsoft"))
+	}
+	return s
+}
+
+// winPowerShell is Windows PowerShell where WSL mounts C:, for a distro that
+// leaves Windows off its PATH (appendWindowsPath=false).
+const winPowerShell = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+
 // clipTools follows Claude Code: osascript on macOS, wl-paste on Wayland,
-// xclip on X11, and PowerShell on Windows and from WSL.
-func clipTools() []clipTool {
-	ps := []string{"-NoProfile", "-Command", `Add-Type -AssemblyName System.Windows.Forms; $i = [Windows.Forms.Clipboard]::GetImage(); if ($i) { $m = New-Object IO.MemoryStream; $i.Save($m, [Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($m.ToArray()) }`}
+// xclip on X11, and PowerShell on Windows and from WSL. PowerShell runs -STA,
+// since the clipboard reads nothing on another thread (pwsh's default), and
+// pwsh stands in where it's the only one.
+func clipTools(s clipSetup) []clipTool {
+	ps := []string{"-NoProfile", "-STA", "-Command", `Add-Type -AssemblyName System.Windows.Forms, System.Drawing; $i = [Windows.Forms.Clipboard]::GetImage(); if ($i) { $m = New-Object IO.MemoryStream; $i.Save($m, [Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($m.ToArray()) }`}
 	b64 := func(b []byte) ([]byte, error) { return base64.StdEncoding.DecodeString(strings.TrimSpace(string(b))) }
+	pwsh := func(names ...string) (out []clipTool) {
+		for _, n := range names {
+			out = append(out, clipTool{append([]string{n}, ps...), b64})
+		}
+		return out
+	}
 	var out []clipTool
 	switch {
-	case runtime.GOOS == "darwin":
+	case s.goos == "darwin":
 		out = append(out, clipTool{[]string{"osascript", "-e", "get the clipboard as «class PNGf»"}, func(b []byte) ([]byte, error) {
 			s := strings.TrimSpace(string(b))
 			s = strings.TrimSuffix(strings.TrimPrefix(s, "«data PNGf"), "»")
 			return hex.DecodeString(s)
 		}})
-	case runtime.GOOS == "windows":
-		out = append(out, clipTool{append([]string{"powershell"}, ps...), b64})
+	case s.goos == "windows":
+		out = pwsh("powershell", "pwsh")
 	default:
-		if os.Getenv("WAYLAND_DISPLAY") != "" {
+		if s.wsl { // Windows' own clipboard first: WSLg's carries images poorly
+			out = pwsh("powershell.exe", winPowerShell, "pwsh.exe")
+		}
+		if s.wayland {
 			out = append(out, clipTool{[]string{"wl-paste", "--no-newline", "--type", "image/png"}, raw})
 		}
-		if os.Getenv("DISPLAY") != "" {
+		if s.x11 {
 			out = append(out, clipTool{[]string{"xclip", "-selection", "clipboard", "-t", "image/png", "-o"}, raw})
 		}
-		out = append(out, clipTool{append([]string{"powershell.exe"}, ps...), b64})
 	}
 	return out
 }
@@ -180,22 +213,33 @@ func clipTools() []clipTool {
 var (
 	pngMagic   = []byte("\x89PNG")
 	errNoImage = errors.New("no image on the clipboard")
-	errNoTool  = errors.New("no clipboard tool found to read a pasted image" + toolHint(runtime.GOOS))
+	errNoTool  = errors.New("no clipboard tool found to read a pasted image")
 )
 
-// toolHint names what to install, where that is wl-clipboard or xclip.
-func toolHint(goos string) string {
-	if goos == "darwin" || goos == "windows" {
-		return ""
+// noTool says why no clipboard could be read here and what to do instead.
+func noTool(s clipSetup) error {
+	switch {
+	case s.ssh && !s.wsl:
+		// The terminal holds the clipboard, and no terminal hands an image over SSH.
+		return fmt.Errorf("%w: over SSH this control center can't reach the clipboard of the computer you're on. Copy the image to this machine (for example `scp shot.png <host>:`) and paste its path here, or run the control center on that computer", errNoTool)
+	case s.wsl:
+		return fmt.Errorf("%w: powershell.exe isn't reachable from WSL (is C: mounted, with Windows interop on?). Drop the image's file onto the window, or paste its path", errNoTool)
+	case s.goos == "windows":
+		return fmt.Errorf("%w: neither powershell nor pwsh is on PATH. Drop the image's file onto the window, or paste its path", errNoTool)
+	case s.goos == "darwin":
+		return fmt.Errorf("%w: osascript isn't on PATH. Drop the image's file onto the window, or paste its path", errNoTool)
+	case !s.wayland && !s.x11:
+		return fmt.Errorf("%w: this session has no display to read a clipboard from. Drop the image's file onto the window, or paste its path", errNoTool)
 	}
-	return "; install wl-clipboard (Wayland) or xclip (X11)"
+	return fmt.Errorf("%w; install wl-clipboard (Wayland) or xclip (X11), or drop the image's file onto the window", errNoTool)
 }
 
 // clipboardImage reads an image off the clipboard with the first tool found
 // that has one.
 func clipboardImage() (chat.File, error) {
-	err := errNoTool
-	for _, t := range clipTools() {
+	setup := thisSetup()
+	err := noTool(setup)
+	for _, t := range clipTools(setup) {
 		if _, e := exec.LookPath(t.argv[0]); e != nil {
 			continue
 		}

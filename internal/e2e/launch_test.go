@@ -264,3 +264,45 @@ func improveSweep(t *testing.T, real bool) {
 		t.Errorf("revert reason: %q", rv.Lesson)
 	}
 }
+
+// A control center left open while the Hive restarts finds the new daemon by
+// itself: its client re-reads daemon.json for the new port and token, within
+// a few of its 1.5s polls, whether the old daemon stopped cleanly or crashed.
+func TestControlCenterFollowsARestart(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	cc := h.c // the control center's client, dialled once at launch
+	for i, stop := range []func(){
+		func() { h.post("/api/shutdown", nil, nil); time.Sleep(time.Second) },
+		h.kill,
+	} {
+		stop()
+		if _, err := cc.State(); err == nil {
+			t.Fatalf("restart %d: the old daemon still answers", i+1)
+		}
+		h.launch()
+		start := time.Now()
+		var err error
+		for time.Since(start) < 5*time.Second {
+			var st api.State
+			if st, err = cc.State(); err == nil && st.Version == core.Version {
+				break
+			}
+			time.Sleep(1500 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatalf("restart %d: the open client still can't reach the Hive after %v: %v", i+1, time.Since(start), err)
+		}
+		var evs []core.Event
+		cc.Do("GET", "/api/events", nil, &evs)
+		n := 0
+		for _, e := range evs {
+			if e.Kind == "hive.started" {
+				n++
+			}
+		}
+		if n != i+2 {
+			t.Fatalf("restart %d: the client reached a daemon that saw %d starts", i+1, n)
+		}
+	}
+}
