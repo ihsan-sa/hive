@@ -68,6 +68,7 @@ type Module struct {
 	queue    chan work.Task
 	lastSeen int64 // journal seq at the last sweep start
 	retryAt  map[string]time.Time
+	pending  map[string]held      // project -> its newest merge waiting on a missing tool
 	spells   map[string]spell     // task id -> its current stage and since when
 	took     map[string][]float64 // task stage -> seconds its recent spells took
 	stalls   map[string]*Stall
@@ -83,7 +84,7 @@ type Module struct {
 
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{},
+	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
 		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
@@ -215,36 +216,43 @@ func (m *Module) record(ms Measurement) {
 	core.AppendJSONL(filepath.Join(m.C.WS.Hive(), "scores", ms.Project+".jsonl"), ms)
 }
 
-// measure runs tests and the score on sha in clean checkouts. cantRun says a
-// check couldn't start for want of a tool, which is no result either way.
-func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, note string, cantRun bool) {
+// measure runs tests and the score on sha in clean checkouts. cant is the
+// check that couldn't start for want of a tool (its CantRun set), which is no
+// result either way; a check that did run clears the alert for its kind.
+func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, note string, cant core.Check) {
 	cfg := m.C.Effects.Config(p, sha)
 	tc := m.C.Effects.RunCheck(p, sha, "test", cfg.Test)
 	if tc.CantRun != "" {
-		return false, nil, "tests " + tc.CantRun + ": " + core.Clip(tc.Output, 300), true
+		return false, nil, "tests " + tc.CantRun + ": " + core.Clip(tc.Output, 300), tc
 	}
+	m.Work.RanCheck(p.Name, "test")
 	flaky := "" // a red that passed when what failed ran again
 	if !tc.OK {
-		sum, flake := m.redTests(p, sha, cfg.Test, tc)
+		sum, flake, rc := m.redTests(p, sha, cfg.Test, tc)
+		if rc.CantRun != "" {
+			rc.Kind = "test"
+			return false, nil, "tests red, then " + rc.CantRun + " when what failed ran again: " + core.Clip(rc.Output, 300), rc
+		}
 		if !flake {
-			return false, nil, "tests red: " + sum, false
+			return false, nil, "tests red: " + sum, cant
 		}
 		flaky = "tests flaky (red, then green when what failed ran again; filed to fix): " + sum + "; "
 	}
 	if cfg.Score == nil {
 		if flaky != "" {
-			return true, nil, flaky + "no score configured", false
+			return true, nil, flaky + "no score configured", cant
 		}
-		return true, nil, "tests green (no score configured)", false
+		return true, nil, "tests green (no score configured)", cant
 	}
 	sc := m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
 	if sc.CantRun != "" {
-		return false, nil, "score " + sc.CantRun + ": " + core.Clip(sc.Output, 300), true
+		return false, nil, "score " + sc.CantRun + ": " + core.Clip(sc.Output, 300), sc
 	}
+	m.Work.RanCheck(p.Name, "score")
 	if !sc.OK || sc.Score == nil {
-		return true, nil, flaky + "score did not produce a number: " + core.Clip(sc.Output, 600), false
+		return true, nil, flaky + "score did not produce a number: " + core.Clip(sc.Output, 600), cant
 	}
-	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score), false
+	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score), cant
 }
 
 // Tick measures the starting point of projects that have none yet. A red
@@ -254,6 +262,7 @@ func (m *Module) Tick() {
 	if _, err := m.C.Sandbox(); err != nil {
 		return
 	}
+	m.releaseHeld()
 	for _, p := range m.C.Projects.List() {
 		if !p.Ready || m.hasBaseline(p.Name) {
 			continue
@@ -280,10 +289,10 @@ func (m *Module) baseline(p core.Project) {
 		return
 	}
 	cfg := m.C.Effects.Config(p, main)
-	ok, score, note, cantRun := m.measure(p, main)
-	ms := Measurement{Project: p.Name, SHA: main, TestsOK: ok, Score: score, Note: "start: " + note, Version: m.version(p, main, cfg), NoResult: cantRun}
-	if cantRun {
-		m.noResult(p, ms) // Tick measures again in 10 minutes
+	ok, score, note, cant := m.measure(p, main)
+	ms := Measurement{Project: p.Name, SHA: main, TestsOK: ok, Score: score, Note: "start: " + note, Version: m.version(p, main, cfg), NoResult: cant.CantRun != ""}
+	if ms.NoResult {
+		m.noResult(p, ms, cant.Kind) // Tick measures again in 10 minutes
 		return
 	}
 	m.warnUnlisted(p, cfg)
@@ -324,16 +333,17 @@ func (m *Module) noStart(p core.Project, ms Measurement) {
 }
 
 // noResult records a measure whose check couldn't start, once per commit, and
-// says which tool is missing. Nothing is kept or reverted over it.
-func (m *Module) noResult(p core.Project, ms Measurement) {
+// says which tool is missing, once while the project's alert is open. Nothing
+// is kept or reverted over it.
+func (m *Module) noResult(p core.Project, ms Measurement, kind string) {
 	for _, x := range m.Scores(p.Name) {
 		if x.SHA == ms.SHA && x.NoResult && x.Note == ms.Note {
 			return // recorded and raised already at this commit
 		}
 	}
 	m.record(ms)
-	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "ref": "cant-run:" + p.Name, "project": p.Name,
-		"text": "main of " + p.Name + " at " + core.Short(ms.SHA) + " has no result: " + core.Clip(strings.TrimPrefix(ms.Note, "start: "), 200) + ". That is a fault in the environment, not a verdict on the commit: nothing is reverted, and main is measured again every 10 minutes until it is fixed"})
+	m.Work.RaiseCantRun(p.Name, kind,
+		"main of "+p.Name+" at "+core.Short(ms.SHA)+" has no result: "+core.Clip(strings.TrimPrefix(ms.Note, "start: "), 200)+". That is a fault in the environment, not a verdict on the commit: nothing is reverted, and main is measured again every 10 minutes until it is fixed")
 }
 
 // warnUnlisted raises an alert when a score is set with no evaluator paths:
@@ -349,6 +359,96 @@ func (m *Module) warnUnlisted(p core.Project, cfg core.ProjectConfig) {
 // retryNoResult is how long a merge whose check couldn't start waits before
 // it is measured again.
 var retryNoResult = 10 * time.Minute
+
+// held is a merge waiting to be measured again once its missing tool is there.
+type held struct {
+	t   work.Task
+	due time.Time
+}
+
+// hold keeps a merge whose check couldn't start for Tick to measure again in
+// retryNoResult. Only the newest such merge of a project waits: once the tool
+// is there, measuring one a later merge has superseded would judge a main
+// that is gone. After a restart Recover finds them all again (their only
+// records are no_result), and they are held here the same way.
+func (m *Module) hold(p core.Project, t work.Task) {
+	m.mu.Lock()
+	old, ok := m.pending[p.Name]
+	m.mu.Unlock()
+	if ok && old.t.MergeSHA != t.MergeSHA && !m.after(p, t.MergeSHA, old.t.MergeSHA) {
+		return // a later merge waits already
+	}
+	m.mu.Lock()
+	m.pending[p.Name] = held{t: t, due: time.Now().Add(retryNoResult)}
+	m.mu.Unlock()
+}
+
+// releaseHeld queues the held merges whose wait is over.
+func (m *Module) releaseHeld() {
+	m.mu.Lock()
+	var due []work.Task
+	for name, h := range m.pending {
+		if time.Now().After(h.due) {
+			due = append(due, h.t)
+			delete(m.pending, name)
+		}
+	}
+	m.mu.Unlock()
+	for _, t := range due {
+		go func() { m.queue <- t }()
+	}
+}
+
+// after says merge a came after merge b on p's main.
+func (m *Module) after(p core.Project, a, b string) bool {
+	if a == b {
+		return false
+	}
+	_, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", b, a)
+	return err == nil
+}
+
+// superseded says a merge that had no result has since been passed by a later
+// merge on the same project that was measured, so it isn't measured any more.
+func (m *Module) superseded(p core.Project, sha string) bool {
+	var noResult bool
+	var later []string
+	for _, x := range m.Scores(p.Name) {
+		switch {
+		case x.SHA == sha:
+			noResult = noResult || x.NoResult
+		case x.Task != "" && !x.NoResult:
+			later = append(later, x.SHA)
+		}
+	}
+	return noResult && slices.ContainsFunc(later, func(l string) bool { return m.after(p, l, sha) })
+}
+
+// introduced says the merge itself brought in the command that calls the
+// missing tool: the same command on main before it didn't name that tool. A
+// misspelt tool is then the change's fault, and red, not a wait. A tool
+// called from a script the command runs isn't seen, and still waits.
+func (m *Module) introduced(p core.Project, sha string, cant core.Check) bool {
+	parent, err := core.Git(m.C.WS.Project(p.Name), "rev-parse", "-q", "--verify", sha+"^")
+	if err != nil || cant.Tool == "" {
+		return false
+	}
+	command := func(at string) string {
+		cfg := m.C.Effects.Config(p, at)
+		if cant.Kind != "score" {
+			return cfg.Test
+		}
+		if cfg.Score == nil {
+			return ""
+		}
+		return cfg.Score.Command
+	}
+	names := func(cmd string) bool {
+		return slices.Contains(strings.FieldsFunc(cmd, func(r rune) bool { return strings.ContainsRune(" \t\n;&|()<>`$\"'=", r) }), cant.Tool)
+	}
+	now, before := command(sha), command(strings.TrimSpace(parent))
+	return now != before && names(now) && !names(before)
+}
 
 func (m *Module) measureLoop() {
 	for t := range m.queue {
@@ -378,7 +478,7 @@ func (m *Module) Recover() {
 // afterMerge measures main at the merge and keeps or reverts.
 func (m *Module) afterMerge(t work.Task) {
 	p, ok := m.C.Projects.Get(t.Project)
-	if !ok || m.measured(p.Name, t.MergeSHA) {
+	if !ok || m.measured(p.Name, t.MergeSHA) || m.superseded(p, t.MergeSHA) {
 		return
 	}
 	if _, err := m.C.Effects.Sync(p); err != nil {
@@ -386,10 +486,15 @@ func (m *Module) afterMerge(t work.Task) {
 		return
 	}
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
-	ok, score, note, cantRun := m.measure(p, t.MergeSHA)
-	if cantRun {
-		m.noResult(p, Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, Note: note, Version: m.version(p, t.MergeSHA, cfg), NoResult: true})
-		go func() { time.Sleep(retryNoResult); m.queue <- t }()
+	ok, score, note, cant := m.measure(p, t.MergeSHA)
+	switch {
+	case cant.CantRun != "" && m.introduced(p, t.MergeSHA, cant) && cant.Kind == "score":
+		ok, score, note = true, nil, "score did not produce a number: this merge's score command calls "+cant.Tool+", which isn't installed where checks run: "+note
+	case cant.CantRun != "" && m.introduced(p, t.MergeSHA, cant):
+		ok, note = false, "tests red: this merge's test command calls "+cant.Tool+", which isn't installed where checks run: "+note
+	case cant.CantRun != "":
+		m.noResult(p, Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, Note: note, Version: m.version(p, t.MergeSHA, cfg), NoResult: true}, cant.Kind)
+		m.hold(p, t)
 		return
 	}
 	flake := ""

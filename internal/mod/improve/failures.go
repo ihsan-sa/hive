@@ -185,8 +185,9 @@ func rerunCommand(test string, fs []failure) string {
 }
 
 // redTests reads a red check: what failed, and whether it passes when only
-// that runs again. A pass is a flaky test, not a broken merge.
-func (m *Module) redTests(p core.Project, sha, test string, tc core.Check) (sum string, flaky bool) {
+// that runs again. A pass is a flaky test, not a broken merge. cant is the
+// rerun when it couldn't start for want of a tool: no answer either way.
+func (m *Module) redTests(p core.Project, sha, test string, tc core.Check) (sum string, flaky bool, cant core.Check) {
 	out := tc.Output
 	if tc.Log != "" {
 		if b, err := core.SafeRead(tc.Log, 8<<20); err == nil && len(b) > 0 {
@@ -196,13 +197,17 @@ func (m *Module) redTests(p core.Project, sha, test string, tc core.Check) (sum 
 	fs := failures(out)
 	sum = summary(fs, out)
 	if strings.TrimSpace(test) == "" {
-		return sum, false // no command to run again: its removal is the red
+		return sum, false, cant // no command to run again: its removal is the red
 	}
-	if rc := m.C.Effects.RunCheck(p, sha, "retest", rerunCommand(test, fs)); rc.OK {
+	rc := m.C.Effects.RunCheck(p, sha, "retest", rerunCommand(test, fs))
+	if rc.CantRun != "" {
+		return sum, false, rc // the rerun couldn't start: no answer either way
+	}
+	if rc.OK {
 		m.fileFlaky(p, sha, fs, sum, out)
-		return sum, true
+		return sum, true, cant
 	}
-	return sum, false
+	return sum, false, cant
 }
 
 // fileFlaky files the flaky tests as work, once for as long as that work is open.
