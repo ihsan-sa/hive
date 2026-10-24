@@ -18,6 +18,16 @@ func TestHiveKnowsItself(t *testing.T) {
 	t.Parallel()
 	h := start(t)
 	self := filepath.Join(h.ws.KB(), "hive")
+	seeded := func() {
+		t.Helper()
+		// It is written beside the start, and moved in whole once it's there.
+		h.wait("the Hive's source in the knowledge base", minute, func(api.State) bool {
+			v, _ := os.ReadFile(filepath.Join(self, "VERSION"))
+			st, _ := core.Git(h.ws.KB(), "status", "--porcelain")
+			return strings.TrimSpace(string(v)) == binVersion(t) && st == "" // the gate stamps the binary it builds
+		})
+	}
+	seeded()
 	for _, f := range []string{"docs/spec.md", "docs/architecture.md", "docs/risk.md", "docs/status.md", "internal/mod/improve/improve.go", "modules/agents/lead.md", "SOURCE-MAP.md"} {
 		if !core.Exists(filepath.Join(self, f)) {
 			t.Errorf("the knowledge base lacks the Hive's %s", f)
@@ -56,14 +66,9 @@ func TestHiveKnowsItself(t *testing.T) {
 	core.Git(h.ws.KB(), "add", "-A")
 	core.Git(h.ws.KB(), "commit", "-q", "-m", "the Hive's source at v0.0.1")
 	h.launch()
-	if v, _ := os.ReadFile(filepath.Join(self, "VERSION")); strings.TrimSpace(string(v)) != binVersion(t) {
-		t.Errorf("after the update the source is at %q, want %s", v, binVersion(t))
-	}
+	seeded() // at the new version, committed
 	if core.Exists(filepath.Join(self, "internal", "gone.go")) {
 		t.Error("a file the new version dropped is still in the knowledge base")
-	}
-	if st, _ := core.Git(h.ws.KB(), "status", "--porcelain"); st != "" {
-		t.Errorf("the reseed wasn't committed: %s", st)
 	}
 }
 

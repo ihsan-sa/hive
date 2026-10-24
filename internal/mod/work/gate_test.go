@@ -1,6 +1,7 @@
 package work
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,7 +41,8 @@ func pushMain(t *testing.T, f *core.Local, files map[string]string) {
 	must(t, tmp, "push", "-q", "origin", "HEAD:main")
 }
 
-// gateRig is a project on bare runs whose tests fail while BROKEN exists,
+// gateRig is a project on bare runs whose tests fail while BROKEN exists and
+// call the tool hive-gate-tool-xyz while NEEDTOOL exists,
 // with BROKEN on main when mainRed, and a task in testing whose worker made
 // one commit on main with the given files ("" removes one).
 func gateRig(t *testing.T, mainRed bool, files map[string]string) (*Module, *Task, core.Project, *core.Local) {
@@ -65,7 +67,7 @@ func gateRigSeeded(t *testing.T, mainRed bool, onMain, files map[string]string) 
 	}
 	t.Cleanup(func() { c.Close() })
 	forge.EnsureRepo("me/p", "")
-	seed := map[string]string{".hive/project.json": `{"test": "test ! -f BROKEN"}`, "README.md": "# p\n"}
+	seed := map[string]string{".hive/project.json": `{"test": "test ! -f BROKEN && { test ! -f NEEDTOOL || hive-gate-tool-xyz; }"}`, "README.md": "# p\n"}
 	if mainRed {
 		seed["BROKEN"] = "x"
 	}
@@ -237,6 +239,105 @@ func TestGateWaitThenConflict(t *testing.T) {
 	}
 	if task.Stage != StageWorking || task.Reason != "" {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
+// A PR left as a draft for a read outside the Hive waits for it: no failure is
+// counted, it isn't brought up to date or tested again while main moves, and
+// it merges once marked ready.
+func TestDraftWaitsForItsRead(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageMerging {
+		t.Fatalf("stage %q, log %v", task.Stage, task.Log)
+	}
+	if err := forge.SetDraft(p.Repo, task.PR.Number, true); err != nil {
+		t.Fatal(err)
+	}
+	pushMain(t, forge, map[string]string{"other.txt": "main moved\n"})
+	sha := task.SHA
+	m.settle(task, m.step(task))
+	updated := task.Updated
+	for range 12 {
+		m.settle(task, m.step(task))
+	}
+	if task.Stage != StageMerging || task.Failures != 0 || task.SHA != sha || !strings.HasPrefix(task.Reason, draftWait+" (an outside read)") {
+		t.Fatalf("stage %q, failures %d, sha moved %v, reason %q", task.Stage, task.Failures, task.SHA != sha, task.Reason)
+	}
+	if n := strings.Count(fmt.Sprint(task.Log), draftWait); n != 1 || !task.Updated.Equal(updated) {
+		t.Fatalf("the wait was logged %d times, saved again %v: %v", n, !task.Updated.Equal(updated), task.Log)
+	}
+	if got, _ := m.Get(task.ID); got.Stage != StageMerging || m.MidMerge() {
+		t.Fatalf("a waiting draft holds up an update: stage %q, mid-merge %v", got.Stage, m.MidMerge())
+	}
+	if m.due(*task) {
+		t.Fatal("a waiting draft is looked at again before its next look")
+	}
+	// Waited long: the lead hears once.
+	old := draftTell
+	draftTell = 0
+	t.Cleanup(func() { draftTell = old })
+	m.step(task)
+	m.step(task)
+	if n := strings.Count(fmt.Sprint(task.Log), "told the lead"); !task.DraftTold || n != 1 {
+		t.Fatalf("told %v, %d times", task.DraftTold, n)
+	}
+	forge.SetDraft(p.Repo, task.PR.Number, false)
+	if err := m.step(task); err != nil {
+		t.Fatal(err)
+	}
+	if task.Reason != "" || task.Stage != StageMerged || !task.DraftSince.IsZero() {
+		t.Fatalf("stage %q, reason %q, draft since %v", task.Stage, task.Reason, task.DraftSince)
+	}
+}
+
+// A task merging on a PR that isn't a draft is mid-merge, so an update waits.
+func TestMidMergeCountsAReadyPR(t *testing.T) {
+	m, task, _, _ := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	task.Stage = StageMerging
+	m.save(task, "merging")
+	if !m.MidMerge() {
+		t.Fatal("a merging task isn't mid-merge")
+	}
+}
+
+func TestWhoseRead(t *testing.T) {
+	if got := whoseRead("Adds a thing.\n\n- **Needs a perms read** (sandbox change)\n"); got != "Needs a perms read (sandbox change)" {
+		t.Fatalf("got %q", got)
+	}
+	if got := whoseRead("nothing said"); got != "an outside read" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// A change whose tests can't find their tool isn't failed or sent back: it
+// waits, the tool is named once, and with the tool there it goes on.
+func TestGateMissingToolCantRun(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"NEEDTOOL": "x"})
+	for i := 0; i < 2; i++ {
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task.Stage != StageTesting || task.Round != 0 || !strings.Contains(task.Reason, "can't run: hive-gate-tool-xyz") || !task.Retry.After(time.Now()) {
+		t.Fatalf("stage %q, round %d, reason %q, retry %v", task.Stage, task.Round, task.Reason, task.Retry)
+	}
+	if n := alerts(m, "main-red"); n != 1 {
+		t.Fatalf("%d main-red alerts, want 1", n)
+	}
+	if _, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); ok {
+		t.Fatal("a check that couldn't start is kept as the commit's result")
+	}
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "hive-gate-tool-xyz"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage == StageTesting || task.Stage == StageWorking || task.Reason != "" {
+		t.Fatalf("with the tool there: stage %q, reason %q", task.Stage, task.Reason)
 	}
 }
 

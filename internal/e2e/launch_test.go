@@ -181,7 +181,9 @@ func moduleLifecycle(t *testing.T, real bool) {
 		return api.ModuleView{}, false
 	}
 	// At autonomy 2 a warden decides the install and the person hears after.
-	st := h.wait("a warden to install greet", patience(t), func(st api.State) bool { _, ok := module(st); return ok })
+	// Its release is recorded after the clone, so a state read in between
+	// shows it with none, and the update below would seem done at once.
+	st := h.wait("a warden to install greet", patience(t), func(st api.State) bool { m, ok := module(st); return ok && m.Release != "" })
 	h.wait("the person to be told after", minute, toldAbout("Install module"))
 	first, _ := module(st)
 	h.post("/api/module/access", map[string]any{"module": "greet", "project": "*", "allow": false}, nil)
@@ -260,5 +262,47 @@ func improveSweep(t *testing.T, real bool) {
 	st = h.wait("the score-lowering change to be reverted", patience(t), taskStage("bees", "Revert: "+lower["title"], work.StageDone))
 	if rv, _ := task(st, "bees", "Revert: "+lower["title"]); !strings.Contains(rv.Lesson, "fell to") {
 		t.Errorf("revert reason: %q", rv.Lesson)
+	}
+}
+
+// A control center left open while the Hive restarts finds the new daemon by
+// itself: its client re-reads daemon.json for the new port and token, within
+// a few of its 1.5s polls, whether the old daemon stopped cleanly or crashed.
+func TestControlCenterFollowsARestart(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	cc := h.c // the control center's client, dialled once at launch
+	for i, stop := range []func(){
+		func() { h.post("/api/shutdown", nil, nil); time.Sleep(time.Second) },
+		h.kill,
+	} {
+		stop()
+		if _, err := cc.State(); err == nil {
+			t.Fatalf("restart %d: the old daemon still answers", i+1)
+		}
+		h.launch()
+		start := time.Now()
+		var err error
+		for time.Since(start) < 5*time.Second {
+			var st api.State
+			if st, err = cc.State(); err == nil && st.Version == core.Version {
+				break
+			}
+			time.Sleep(1500 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatalf("restart %d: the open client still can't reach the Hive after %v: %v", i+1, time.Since(start), err)
+		}
+		var evs []core.Event
+		cc.Do("GET", "/api/events", nil, &evs)
+		n := 0
+		for _, e := range evs {
+			if e.Kind == "hive.started" {
+				n++
+			}
+		}
+		if n != i+2 {
+			t.Fatalf("restart %d: the client reached a daemon that saw %d starts", i+1, n)
+		}
 	}
 }

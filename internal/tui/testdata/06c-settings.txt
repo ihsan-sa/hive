@@ -24,13 +24,13 @@
                       │     model for website           default
                       │     review rounds               3
                       │
-                      │   Schedules
-                      │     hive.update                 6 hours
-                      │     improve.stepback            72 hours
-                      │     improve.sweep               12 hours
-                      │     kb.file                     daily 04:00
-                      │     modules.update              24 hours
-                      │     report.send                 6 hours
-                      │
+                      │   Routes
+                      │     lead                        claude:opus
+                      │     worker                      claude:opus
+                      │     reviewer                    claude:opus
+                      │     security                    a tribunal seat unlike the reviewer's
+                      │     warden                      claude:opus
+                      │     tribunal                    claude:opus, claude:sonnet, claude:fable
+                      │     sweep                       claude:opus
 ──────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────
  ↑↓ move   enter change   tab sidebar

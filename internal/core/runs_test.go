@@ -65,7 +65,7 @@ func TestLeadFollowsModelSetting(t *testing.T) {
 	c, _ := testHive(t)
 	var args []string
 	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return startSB{args: &args}, nil }
-	c.Runs.ModelFor = func(Run) string { return "opus" }
+	c.Runs.Route = func(Run) []Pick { return []Pick{{Harness: "claude", Model: "opus"}} }
 	r, err := c.Runs.Start(RunSpec{ID: "lead1", Role: "lead", Harness: "claude", Model: "sonnet", Persistent: true, Checkout: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -541,5 +541,45 @@ func TestLiveCountsLaunchesInFlight(t *testing.T) {
 			t.Fatal("a finished launch still counts")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A message sent while a turn ends blocked wakes the run whichever event the
+// journal applies last: here the turn's end is applied first, having read the
+// run before the message was queued, as a warden's answer in the same tick can.
+func TestAMessageRacingABlockedEndWakesTheRun(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	if _, err := rs.Start(RunSpec{ID: "w", Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	rs.append("run.turn_started", turnStarted{ID: "w", Turn: 1})
+	if err := rs.Takes("w"); err != nil { // Send's check, on the running turn
+		t.Fatal(err)
+	}
+	rs.append("run.turn_ended", turnEnded{ID: "w", Turn: 1, Status: StatusBlocked, Reason: "asked a warden"})
+	rs.wake("w") // endTurn's, before the message is in
+	if r, _ := rs.Get("w"); r.Status != StatusBlocked {
+		t.Fatalf("woken with nothing to read: %s", r.Status)
+	}
+	rs.append("run.queued", runNote{ID: "w", Text: "[request x] the warden won't"})
+	rs.wake("w") // Send's, after its message
+	if r, _ := rs.Get("w"); r.Status != StatusIdle || len(r.Pending) != 1 {
+		t.Fatalf("the answer was left on a blocked run: %s, %d pending", r.Status, len(r.Pending))
+	}
+	rs.wake("w")
+	n := 0
+	j.Replay(func(e Event) {
+		if e.Kind == "run.reopened" {
+			n++
+		}
+	})
+	if n != 1 {
+		t.Fatalf("woken %d times", n)
 	}
 }

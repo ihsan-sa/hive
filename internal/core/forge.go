@@ -31,7 +31,15 @@ type PR struct {
 	// MergeState is the forge's word on what else stands in the way; BEHIND
 	// means its rules want the branch brought up to date with its base.
 	MergeState string `json:"merge_state,omitempty"`
+	// Draft is a PR left for a read outside the Hive (the goals' perms read,
+	// say); it merges once marked ready. Body is what its read is said in.
+	Draft bool   `json:"draft,omitempty"`
+	Body  string `json:"-"`
 }
+
+// ErrDraft means the pull request is a draft, so it can't merge until it is
+// marked ready.
+var ErrDraft = errors.New("the pull request is a draft, left for a read")
 
 // Forge is where code, issues and pull requests live. GitHub through the gh
 // CLI is the real one; Local is a folder-backed stand-in for tests.
@@ -58,6 +66,9 @@ type Forge interface {
 	CloseIssue(repo string, number int) error // an issue already closed counts as closed
 	// Checks are the forge's own checks (CI jobs) on exactly sha.
 	Checks(repo, sha string) ([]CheckRun, error)
+	// RerunFailed re-runs the failed jobs of every finished workflow run on
+	// sha that failed, and says how many runs it started again.
+	RerunFailed(repo, sha string) (int, error)
 	// Releases (the Hive on itself). LatestRelease is the newest, a
 	// pre-release included. CreateRelease cuts a pre-release, which installs
 	// don't follow; PublishRelease makes it the latest once ReleaseRuns, the
@@ -216,7 +227,7 @@ func ghWrites(args []string) bool {
 		}
 		return false
 	}
-	return len(args) > 1 && slices.Contains([]string{"create", "comment", "merge", "close", "edit", "delete"}, args[1])
+	return len(args) > 1 && slices.Contains([]string{"create", "comment", "merge", "close", "edit", "delete", "rerun"}, args[1])
 }
 
 // RateLimited is GitHub asking the Hive to slow down: a secondary rate limit
@@ -467,6 +478,8 @@ type ghPR struct {
 	HeadRefOid  string `json:"headRefOid"`
 	Mergeable   string `json:"mergeable"`
 	MergeState  string `json:"mergeStateStatus"`
+	IsDraft     bool   `json:"isDraft"`
+	Body        string `json:"body"`
 	MergeCommit *struct {
 		Oid string `json:"oid"`
 	} `json:"mergeCommit"`
@@ -476,14 +489,14 @@ type ghPR struct {
 }
 
 func (p ghPR) pr() PR {
-	out := PR{Number: p.Number, URL: p.URL, State: p.State, HeadSHA: p.HeadRefOid, Mergeable: p.Mergeable, MergeState: p.MergeState}
+	out := PR{Number: p.Number, URL: p.URL, State: p.State, HeadSHA: p.HeadRefOid, Mergeable: p.Mergeable, MergeState: p.MergeState, Draft: p.IsDraft, Body: p.Body}
 	if p.MergeCommit != nil {
 		out.MergeSHA = p.MergeCommit.Oid
 	}
 	return out
 }
 
-const prFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,mergeCommit,headRepositoryOwner"
+const prFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,isDraft,body,mergeCommit,headRepositoryOwner"
 
 func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
 	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", prFields}
@@ -550,6 +563,9 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 	if p.HeadSHA != sha {
 		return "", fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
 	}
+	if p.Draft {
+		return "", fmt.Errorf("PR #%d: %w", number, ErrDraft)
+	}
 	if _, err := gh(repo, "pr", "merge", strconv.Itoa(number), "-R", repo, "--squash", "--match-head-commit", sha, "--subject", subject); err != nil {
 		return "", err
 	}
@@ -591,7 +607,8 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 	if err := json.Unmarshal([]byte(out), &runs); err != nil {
 		return nil, err
 	}
-	// A check run again is listed once per attempt; the newest one counts.
+	// A check run again is listed once per attempt; the newest one counts. A
+	// re-run still queued may have no start yet, so its larger id decides.
 	newest := map[string]ghCheckRun{}
 	var order []string
 	for _, r := range runs.CheckRuns {
@@ -599,7 +616,7 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 		if !seen {
 			order = append(order, r.Name)
 		}
-		if !seen || r.StartedAt.After(old.StartedAt) {
+		if !seen || r.ID > old.ID || r.ID == old.ID && r.StartedAt.After(old.StartedAt) {
 			newest[r.Name] = r
 		}
 	}
@@ -647,6 +664,31 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 	return list, nil
 }
 
+// CheckLogs is a forge that can read a check's log, so a check red on both a
+// head and main can be told apart by the tests failing in it.
+type CheckLogs interface {
+	CheckLog(repo string, r CheckRun) (string, error)
+}
+
+var (
+	ghJobURL   = regexp.MustCompile(`/actions/runs/\d+/job/(\d+)`)
+	ghLogStamp = regexp.MustCompile(`(?m)^\d{4}-\d\d-\d\dT[0-9:.]+Z `)
+)
+
+// CheckLog reads a GitHub Actions job's log, the timestamp GitHub puts on
+// each line taken off. Only an Actions job has one.
+func (GitHub) CheckLog(repo string, r CheckRun) (string, error) {
+	m := ghJobURL.FindStringSubmatch(r.URL)
+	if m == nil {
+		return "", fmt.Errorf("%s is not a GitHub Actions job", r.Name)
+	}
+	out, err := gh(repo, "api", "repos/"+repo+"/actions/jobs/"+m[1]+"/logs")
+	if err != nil {
+		return "", err
+	}
+	return ghLogStamp.ReplaceAllString(out, ""), nil
+}
+
 type ghSuite struct {
 	Status    string    `json:"status"`
 	Runs      int       `json:"latest_check_runs_count"`
@@ -671,6 +713,7 @@ func (s ghSuite) pending(now time.Time) bool {
 }
 
 type ghCheckRun struct {
+	ID         int64     `json:"id"`
 	Name       string    `json:"name"`
 	Status     string    `json:"status"`
 	Conclusion string    `json:"conclusion"`
@@ -801,3 +844,28 @@ func short(sha string) string {
 
 // Short abbreviates a commit id.
 func Short(sha string) string { return short(sha) }
+
+// RerunFailed re-runs the failed jobs (gh run rerun --failed) of each
+// finished workflow run on sha that failed, timed out or was cancelled. A run
+// still going, or one going again, is left alone.
+func (GitHub) RerunFailed(repo, sha string) (int, error) {
+	out, err := gh(repo, "api", "repos/"+repo+"/actions/runs?head_sha="+sha+"&per_page=100", "-q", ".workflow_runs")
+	if err != nil {
+		return 0, err
+	}
+	var runs []WorkflowRun
+	if err := json.Unmarshal([]byte(out), &runs); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range runs {
+		if r.Status != "completed" || !slices.Contains([]string{"failure", "timed_out", "cancelled"}, r.Conclusion) {
+			continue
+		}
+		if _, err := gh(repo, "run", "rerun", strconv.FormatInt(r.ID, 10), "--failed", "-R", repo); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}

@@ -128,6 +128,14 @@ func checkHarness(c core.Config) error {
 	return nil
 }
 
+// sandboxChanged: a saved setting picks the sandbox again only when it names
+// a different one. Probing it (bwrap here, several wsl.exe calls on Windows)
+// takes seconds and holds up every state poll, so doing it on each setting
+// made the Settings view slow to answer.
+func sandboxChanged(old, c core.Config) bool {
+	return old.Sandbox != c.Sandbox || old.WSLDistro != c.WSLDistro
+}
+
 // Stop asks the daemon to shut down. Running agents are separate processes
 // and keep going; the next start reattaches to them.
 func Stop(ws core.Workspace) error {
@@ -195,6 +203,11 @@ func Run(ws core.Workspace, waitFor int) error {
 	}
 	defer a.Close()
 	built := time.Now()
+	a.SeedSelf(func(d time.Duration) {
+		if d > 5*time.Second {
+			fmt.Printf("hive: took %s to copy its own source into the knowledge base; new turns waited for it\n", d.Round(time.Millisecond))
+		}
+	})
 	// Before the token is published: an earlier version's turns can read private/.
 	if err := a.C.Runs.Migrate(); err != nil {
 		return err
@@ -245,8 +258,8 @@ func Run(ws core.Workspace, waitFor int) error {
 	go srv.Serve(ln)
 	// A slow start says where its time went (a Windows ci runner has taken over 30s).
 	if d := time.Since(began); d > 5*time.Second {
-		fmt.Printf("hive: took %s to start: %s before building the modules, %s building them (%s of it copying the Hive's source into the knowledge base), %s after\n",
-			d.Round(time.Millisecond), booted.Sub(began).Round(time.Millisecond), built.Sub(booted).Round(time.Millisecond), a.KB.Seeded.Round(time.Millisecond), time.Since(built).Round(time.Millisecond))
+		fmt.Printf("hive: took %s to start: %s before building the modules, %s building them, %s after\n",
+			d.Round(time.Millisecond), booted.Sub(began).Round(time.Millisecond), built.Sub(booted).Round(time.Millisecond), time.Since(built).Round(time.Millisecond))
 	}
 	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -664,6 +677,29 @@ func (s *server) routes() http.Handler {
 		}
 		return a.Work.RecordRead(b.ID, b.SHA, b.By, b.Verdict, b.Note)
 	})
+	h("/api/hold", func(r *http.Request) (any, error) {
+		// A hold on merges is the person's (the lead sets one on their word
+		// through its own op), never a module's.
+		if moduleOf(r) != "" {
+			return nil, errors.New("only the person holds or lifts merges")
+		}
+		var b struct {
+			Project, Why, Until string
+			Only                []int
+			Lift                bool
+		}
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		if b.Lift {
+			return "lifted", a.Work.LiftHold(b.Project, "person", b.Why)
+		}
+		h, err := a.Work.SetHold(work.MergeHold{Project: b.Project, Why: b.Why, Only: b.Only, Until: b.Until, By: "person"})
+		if err != nil {
+			return nil, err
+		}
+		return h.Text(), nil
+	})
 	h("/api/improve", func(r *http.Request) (any, error) { return a.Improve.StartSweep(true) })
 	h("/api/job", func(r *http.Request) (any, error) {
 		var b struct{ Name string }
@@ -700,7 +736,9 @@ func (s *server) routes() http.Handler {
 		if err := a.C.WS.SaveConfig(c); err != nil {
 			return nil, err
 		}
-		a.C.ResetSandbox()
+		if sandboxChanged(cur, c) {
+			a.C.ResetSandbox()
+		}
 		return c, nil
 	})
 	h("/api/module/access", func(r *http.Request) (any, error) {
@@ -866,6 +904,9 @@ func (s *server) state() api.State {
 	}
 	for _, p := range a.C.Projects.List() {
 		pv := api.ProjectView{Project: p}
+		if h, ok := a.Work.Hold(p.Name); ok {
+			pv.Hold = &h
+		}
 		pv.Goals = readGoals(a.C.WS.Project(p.Name))
 		n := 0
 		for _, t := range a.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {

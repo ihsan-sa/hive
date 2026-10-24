@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -26,6 +27,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
+	"github.com/ihsan-sa/hive-standalone-build/internal/openagent"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 	"github.com/ihsan-sa/hive-standalone-build/internal/tui"
@@ -44,6 +46,8 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive refuse <id> [note]  say no to it (its last option)
   hive read <task|#pr> <sha> land|fix --by perms|architect [note]
                            record the box's perms seat's or architect's read of that head
+  hive hold <project> [why]  hold every merge on it, follow-ups included [--only 12,15] [--until release]
+  hive hold <project> --lift [why]  lift the hold
   hive login               log in to Claude Code and GitHub with their own logins
   hive login add <name>    add another Claude login to spread runs over; add "codex" for Codex
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
@@ -51,6 +55,13 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive egress              the services on this machine agents may reach
   hive egress grant <host:port>   open one to every sandboxed run (loopback only, e.g. 127.0.0.1:11434)
   hive egress revoke <host:port>  close it again
+  hive model               the named models (free ones too) and the routes that pick each role's model
+  hive model add <name> <endpoint> <model id> [--key]   a model on an OpenAI-compatible endpoint, e.g.
+                           hive model add qwen http://127.0.0.1:11434/v1 qwen2.5-coder:14b
+                           [--anthropic]: its API is Anthropic-compatible, so Claude Code runs it, e.g.
+                           hive model add kimi https://api.moonshot.ai/anthropic kimi-k2-0905-preview --key --anthropic
+  hive model key <name>    store its API key, read from stdin (kept where no agent can read it)
+  hive model rm <name>     forget it and its key
   hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
   hive update              install the newest release [--release <tag>: that one, and stay on it]
   hive shutdown            stop the Hive (running agents finish their turn)
@@ -84,6 +95,10 @@ func run(args []string) int {
 		return agentcli.Main(args)
 	case "fake-agent":
 		return fakeagent.Main(args)
+	case "open-agent":
+		return openagent.Main(args)
+	case "open-key":
+		return openagent.KeyMain(args)
 	case "sandbox-exec":
 		fs := flag.NewFlagSet("sandbox-exec", flag.ContinueOnError)
 		spec := fs.String("spec", "", "")
@@ -215,6 +230,21 @@ func run(args []string) int {
 			fmt.Printf("recorded: %s's read of %s at %s: %s\n", by, rest[0], rest[1], rest[2])
 			return nil
 		})
+	case "hold":
+		body, err := holdArgs(args)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprint(os.Stderr, commandHelp("hold"))
+			return 2
+		}
+		return withClient(func(c *api.Client) error {
+			var msg string
+			if err := c.Do("POST", "/api/hold", body, &msg); err != nil {
+				return err
+			}
+			fmt.Printf("%s: %s\n", body["project"], msg)
+			return nil
+		})
 	case "login":
 		if len(args) > 0 && args[0] == "add" {
 			if len(args) < 2 {
@@ -249,6 +279,8 @@ func run(args []string) int {
 		return cmdReport(args)
 	case "egress":
 		return cmdEgress(args)
+	case "model":
+		return cmdModel(args)
 	case "share":
 		return cmdShare(args)
 	case "update":
@@ -278,6 +310,49 @@ func run(args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usageText())
 	return 2
+}
+
+// holdArgs reads hive hold's arguments into the body of /api/hold.
+func holdArgs(args []string) (map[string]any, error) {
+	body := map[string]any{}
+	var words []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		flag, val, eq := strings.Cut(a, "=")
+		switch flag {
+		case "--lift":
+			body["lift"] = true
+			continue
+		case "--only", "--until":
+			if !eq {
+				if i+1 >= len(args) {
+					return nil, fmt.Errorf("%s needs a value", flag)
+				}
+				i++
+				val = args[i]
+			}
+			if flag == "--until" {
+				body["until"] = val
+				continue
+			}
+			var prs []int
+			for _, f := range strings.FieldsFunc(val, func(r rune) bool { return r == ',' || r == ' ' }) {
+				n, err := strconv.Atoi(strings.TrimPrefix(f, "#"))
+				if err != nil {
+					return nil, fmt.Errorf("--only takes PR numbers, not %q", f)
+				}
+				prs = append(prs, n)
+			}
+			body["only"] = prs
+			continue
+		}
+		words = append(words, a)
+	}
+	if len(words) == 0 {
+		return nil, errors.New("say which project")
+	}
+	body["project"], body["why"] = words[0], strings.Join(words[1:], " ")
+	return body, nil
 }
 
 // readArgs takes --by <reader> (or --by=<reader>) out of args.
@@ -501,6 +576,9 @@ func cmdStatus() int {
 				best = strconv.FormatFloat(*p.Best, 'g', -1, 64)
 			}
 			fmt.Printf("\n%s (%s)  best score: %s\n", p.Name, p.Repo, best)
+			if p.Hold != nil {
+				fmt.Printf("  %s; `%s hold %s --lift` lifts it\n", text.Visible(p.Hold.Text()), core.Cmd, p.Name)
+			}
 			for _, t := range p.Tasks {
 				if !t.Terminal() {
 					fmt.Printf("  [%s] %s  %s\n", t.Stage, t.Label(), t.PR.URL)
@@ -678,6 +756,90 @@ func cmdEgress(args []string) int {
 	} else {
 		fmt.Printf("Agents no longer reach %s from their next turn.\n", args[1])
 	}
+	return 0
+}
+
+func cmdModel(args []string) int {
+	ws, err := workspace()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	cfg, err := ws.ReadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	usage := func() int {
+		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" model [add <name> <endpoint> <model id> [--key] [--anthropic] | key <name> | rm <name>]")
+		return 2
+	}
+	if len(args) == 0 {
+		if len(cfg.Models) == 0 {
+			fmt.Println("No named models yet; add one with `" + core.Cmd + " model add`.")
+		}
+		for _, name := range slices.Sorted(maps.Keys(cfg.Models)) {
+			x := cfg.Models[name]
+			key := ""
+			if _, err := os.Stat(ws.OpenKey(name)); err == nil {
+				key = ", key stored"
+			} else if x.Key {
+				key = ", needs a key: " + core.Cmd + " model key " + name
+			}
+			fmt.Printf("%s: %s%s\n", name, x.Where(), key)
+		}
+		for _, role := range core.RouteRoles {
+			if r := cfg.Shown(role, ""); len(r) > 0 {
+				fmt.Printf("%s: %s\n", role, strings.Join(r, ", "))
+			}
+		}
+		return 0
+	}
+	switch {
+	case args[0] == "add" && len(args) >= 4:
+		m := core.OpenModel{Endpoint: args[2], Model: args[3]}
+		for _, f := range args[4:] {
+			switch f {
+			case "--key":
+				m.Key = true
+			case "--anthropic":
+				m.API = "anthropic"
+			default:
+				return usage()
+			}
+		}
+		if cfg.Models == nil {
+			cfg.Models = map[string]core.OpenModel{}
+		}
+		cfg.Models[args[1]] = m
+	case args[0] == "rm" && len(args) == 2:
+		delete(cfg.Models, args[1])
+		os.Remove(ws.OpenKey(args[1]))
+	case args[0] == "key" && len(args) == 2:
+		if _, ok := cfg.Models[args[1]]; !ok {
+			fmt.Fprintf(os.Stderr, "no model %q; add it first\n", args[1])
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "Paste the key and press Enter:")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err := ws.SaveOpenKey(args[1], line); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println("Stored; runs on " + args[1] + " use it from their next turn.")
+		return 0
+	default:
+		return usage()
+	}
+	if err := cfg.Check(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := ws.SaveConfig(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println("Saved. Route a role to it in Settings, or ask the lead.")
 	return 0
 }
 

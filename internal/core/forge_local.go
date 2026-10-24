@@ -31,6 +31,8 @@ type localState struct {
 	TagSHAs  map[string]string        `json:"tags"`             // repo@tag -> the commit it points at
 	Checks   map[string][]CheckRun    `json:"checks,omitempty"` // repo@sha
 	Jobs     map[string][]WorkflowJob `json:"jobs,omitempty"`   // repo#run -> its jobs
+	Logs     map[string]string        `json:"logs,omitempty"`   // repo url -> a check's log
+	Reruns   map[string]int           `json:"reruns,omitempty"` // repo@sha -> re-runs of its failed checks asked
 }
 
 type localIssue struct {
@@ -226,10 +228,27 @@ func (l *Local) GetPR(repo string, number int) (PR, error) {
 		p := &s.PRs[repo][i]
 		if p.Number == number {
 			l.refresh(repo, p)
-			return p.PR, nil
+			out := p.PR
+			out.Body = p.Body
+			return out, nil
 		}
 	}
 	return PR{}, ErrNotFound
+}
+
+// SetDraft marks a PR a draft or ready, as a reader outside the Hive would.
+func (l *Local) SetDraft(repo string, number int, draft bool) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	for i := range s.PRs[repo] {
+		if p := &s.PRs[repo][i]; p.Number == number {
+			p.Draft = draft
+			l.save(s)
+			return nil
+		}
+	}
+	return ErrNotFound
 }
 
 // MergePR squashes the PR's head onto main, refusing if the head moved.
@@ -251,6 +270,9 @@ func (l *Local) MergePR(repo string, number int, sha, subject string) (string, e
 		l.refresh(repo, p)
 		if p.HeadSHA != sha {
 			return "", fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+		}
+		if p.Draft {
+			return "", fmt.Errorf("PR #%d: %w", number, ErrDraft)
 		}
 		tmp, err := os.MkdirTemp("", "hive-localmerge-")
 		if err != nil {
@@ -385,6 +407,59 @@ func (l *Local) Checks(repo, sha string) ([]CheckRun, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.load().Checks[repo+"@"+sha], nil
+}
+
+// CheckLog is the log set on a check's URL.
+func (l *Local) CheckLog(repo string, r CheckRun) (string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	log, ok := l.load().Logs[repo+" "+r.URL]
+	if !ok {
+		return "", fmt.Errorf("no log for %s", r.Name)
+	}
+	return log, nil
+}
+
+// SetCheckLog sets the log of the check at url, as a CI would keep it.
+func (l *Local) SetCheckLog(repo, url, log string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	if s.Logs == nil {
+		s.Logs = map[string]string{}
+	}
+	s.Logs[repo+" "+url] = log
+	l.save(s)
+}
+
+// RerunFailed sets each failed or unstarted check on repo@sha back to
+// pending, as a CI starting them again would, and counts it in Reruns.
+func (l *Local) RerunFailed(repo, sha string) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	n := 0
+	for i, c := range s.Checks[repo+"@"+sha] {
+		if c.State == CheckFail || c.State == CheckCantStart {
+			s.Checks[repo+"@"+sha][i].State, s.Checks[repo+"@"+sha][i].Detail = CheckPending, "re-run"
+			n++
+		}
+	}
+	if n > 0 {
+		if s.Reruns == nil {
+			s.Reruns = map[string]int{}
+		}
+		s.Reruns[repo+"@"+sha]++
+		l.save(s)
+	}
+	return n, nil
+}
+
+// Reruns counts the re-runs asked on repo@sha.
+func (l *Local) Reruns(repo, sha string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.load().Reruns[repo+"@"+sha]
 }
 
 // SetChecks sets the forge's checks on repo@sha, as a CI would report them.
