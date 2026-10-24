@@ -1047,6 +1047,9 @@ func (m *Module) closeIssue(t *Task, p core.Project) {
 }
 
 func (m *Module) test(t *Task, p core.Project) error {
+	if closed, err := m.closedOnForge(t, p); closed || err != nil {
+		return err
+	}
 	main, err := m.C.Effects.Sync(p)
 	if err != nil {
 		return err
@@ -1411,6 +1414,9 @@ func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
 }
 
 func (m *Module) merge(t *Task, p core.Project) error {
+	if closed, err := m.closedOnForge(t, p); closed || err != nil {
+		return err
+	}
 	main, err := m.C.Effects.Sync(p)
 	if err != nil {
 		return err
@@ -1452,6 +1458,27 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		m.OnMerged(*t)
 	}
 	return nil
+}
+
+// closedOnForge ends a task whose pull request someone closed on the forge
+// without merging it. That is the person's call, so the lead can't bring the
+// task back by accident; a closed checkpoint is dropped as one left open is.
+func (m *Module) closedOnForge(t *Task, p core.Project) (bool, error) {
+	if t.PR.Number == 0 {
+		return false, nil
+	}
+	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
+	if err != nil || pr.State != "CLOSED" {
+		return false, err
+	}
+	if t.Checkpoint != "" {
+		t.NoBank = "the person closed a checkpoint's pull request"
+		return true, m.dropCheckpoint(t, p, fmt.Sprintf("PR #%d was closed on the forge; no more checkpoints, the rest lands when the worker finishes", pr.Number))
+	}
+	t.Stage, t.Reason, t.ByPerson = StageStopped, fmt.Sprintf("closed on the forge without merging (PR #%d)", pr.Number), true
+	m.save(t, t.Reason)
+	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q was %s: %s", t.Label(), t.Reason, t.PR.URL))
+	return true, nil
 }
 
 func (m *Module) conflict(t *Task, p core.Project, why error) error {
