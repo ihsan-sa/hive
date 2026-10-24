@@ -163,24 +163,31 @@ jobs:
           HIVE_NO_PATH: '1'
           BIN: ${{ steps.pick.outputs.bin }}
         run: |
-          ./install/path_check.ps1
-          # The updated daemon stands in for the old install: the installer must stop it,
-          # point its login autostart at the new install and remove the old folder.
-          $old = Join-Path $env:LOCALAPPDATA 'Programs\hive-v0'
-          New-Item -ItemType Directory -Force $old | Out-Null
-          Copy-Item (Join-Path $env:BIN 'hive.exe') (Join-Path $old 'hive-v0.exe')
-          $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-          Set-ItemProperty $run -Name Hive -Value "`"$old\hive-v0.exe`" daemon --detach"
-          $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
-          $path = ($k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') -split ';' | Where-Object { $_ }) -join ';'
-          $k.SetValue('Path', "$path;$old", 'ExpandString')
-          ./install/install.ps1
-          $got = (Get-ItemProperty $run -Name Hive).Hive
-          Remove-ItemProperty $run -Name Hive
-          if (Test-Path $old) { throw 'the old folder is still there' }
-          if ($got -like '*hive-v0*' -or $got -notlike '*hive.exe" daemon --detach') { throw "the autostart is '$got'" }
-          $now = $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
-          if ($now -cne $path -or $k.GetValueKind('Path') -ne 'ExpandString') { throw "the user PATH went from '$path;$old' to '$now' ($($k.GetValueKind('Path')))" }
+          # A pwsh failure leaves no annotation, and job logs need a login: name it in one.
+          try {
+            ./install/path_check.ps1
+            # The updated daemon stands in for the old install: the installer must stop it,
+            # point its login autostart at the new install and remove the old folder.
+            $old = Join-Path $env:LOCALAPPDATA 'Programs\hive-v0'
+            New-Item -ItemType Directory -Force $old | Out-Null
+            Copy-Item (Join-Path $env:BIN 'hive.exe') (Join-Path $old 'hive-v0.exe')
+            $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+            if (-not (Test-Path $run)) { New-Item $run | Out-Null } # the runner's profile has no Run key
+            Set-ItemProperty $run -Name Hive -Value "`"$old\hive-v0.exe`" daemon --detach"
+            $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+            $path = ($k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') -split ';' | Where-Object { $_ }) -join ';'
+            $k.SetValue('Path', "$path;$old", 'ExpandString')
+            ./install/install.ps1
+            $got = (Get-ItemProperty $run -Name Hive).Hive
+            Remove-ItemProperty $run -Name Hive
+            if (Test-Path $old) { throw 'the old folder is still there' }
+            if ($got -like '*hive-v0*' -or $got -notlike '*hive.exe" daemon --detach') { throw "the autostart is '$got'" }
+            $now = $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+            if ($now -cne $path -or $k.GetValueKind('Path') -ne 'ExpandString') { throw "the user PATH went from '$path;$old' to '$now' ($($k.GetValueKind('Path')))" }
+          } catch {
+            Write-Host "::error::$(($_.Exception.Message + ' ' + $_.InvocationInfo.PositionMessage) -replace '%', '%25' -replace '\r?\n', '%0A')"
+            throw
+          }
       - name: the daemon's log
         if: always() && steps.pick.outputs.skip == 'false'
         run: |

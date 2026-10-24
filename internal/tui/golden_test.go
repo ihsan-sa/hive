@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -192,7 +193,11 @@ func TestDesignFrames(t *testing.T) {
 	} {
 		m := designModel(c.w, c.h)
 		c.set(m)
+		// The frames show Unix paths; Windows joins the same paths with its own separator.
 		got := plain(m.View())
+		for _, p := range []string{core.Workspace{}.KB(), filepath.Join("/home/you/hive", ".hive", "config.json")} {
+			got = strings.ReplaceAll(got, p, filepath.ToSlash(p))
+		}
 		if c.name == "02b-sending" || c.name == "02c-sent" { // the frame is the thread pane alone
 			got = column(got, 72, 48, 16)
 		}

@@ -1,6 +1,8 @@
 name: ci
-# Pushes to main and PRs run on Linux only, because macOS minutes bill at 10x and Windows at 2x.
-# A published release or a manual run gets all three systems: gh workflow run ci
+# PRs, a published release and a manual run (gh workflow run ci) get all three systems, so a
+# change that's red on macOS or Windows is caught before it merges, not at the next release.
+# Pushes to main run on Linux only: their PR already ran the rest, and macOS minutes bill at
+# 10x and Windows at 2x.
 on:
   push:
     branches: [main]
@@ -17,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false # a release's run names every system's failures, not only the first
       matrix:
-        os: ${{ fromJSON((github.event_name == 'release' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]') }}
+        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +40,7 @@ jobs:
         shell: bash
         run: |
           grep -n -e '--- FAIL' -e '^panic:' "$RUNNER_TEMP/suite.log" | head -20 | while IFS=: read -r n _; do
-            echo "::error::$(sed -n "$n,$((n + 12))p" "$RUNNER_TEMP/suite.log" | awk 'BEGIN { ORS = "%0A" } { gsub(/\r/, ""); gsub(/%/, "%25"); print substr($0, 1, 300) }')"
+            echo "::error::$(sed -n "$n,$((n + 30))p" "$RUNNER_TEMP/suite.log" | awk 'BEGIN { ORS = "%0A" } { gsub(/\r/, ""); gsub(/%/, "%25"); print substr($0, 1, 300) }')"
           done
       # After the suite, so a cross-system vet failure never hides the Linux result,
       # and !cancelled(), so a Linux failure never hides a cross-system one.

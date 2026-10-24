@@ -77,7 +77,13 @@ if ((Test-Outside $dir $oldDir) -and (Test-Path $oldDir)) {
   if ((Get-ItemProperty $run -Name Hive -ErrorAction SilentlyContinue).Hive -like "*$oldDir\*") {
     Set-ItemProperty $run -Name Hive -Value "`"$exe`" daemon --detach"
   }
-  Remove-Item $oldDir -Recurse -Force -ErrorAction SilentlyContinue
+  # Windows holds an exe a moment after its process ends (and a scanner may hold a new one), so
+  # the old folder, whose exe has just run shutdown, can't always be removed at once.
+  for ($i = 0; $i -lt 15 -and (Test-Path $oldDir); $i++) {
+    if ($i) { Start-Sleep -Seconds 1 }
+    Remove-Item $oldDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  if (Test-Path $oldDir) { Write-Warning "$oldDir is still in use; remove it once nothing runs from it." }
   Set-UserPath -Remove $oldDir
   $env:Path = (($env:Path -split ';') | Where-Object { $_ -ne $oldDir }) -join ';'
 }

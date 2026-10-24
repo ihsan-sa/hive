@@ -10,8 +10,10 @@ import (
 )
 
 // PublicKey is the public half of the key every release is signed with,
-// base64 of its 32 bytes. The owner makes the key and pins it here; until
-// then it is "" and an update checks the checksums only, and says so. Once
+// base64 of its 32 bytes. The owner makes the key and pins it here, or at
+// build with -ldflags "-X .../release.PublicKey=...", never in a config, env
+// or file the Hive could edit; until then it is "" and an update checks the
+// checksums only, and tells the person (Unsigned). Once
 // it is set, a release whose checksums.txt.sig is missing or doesn't verify
 // against it is never installed.
 var PublicKey = ""
@@ -39,11 +41,16 @@ func PublicOf(seed []byte) string {
 	return base64.StdEncoding.EncodeToString(ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey))
 }
 
+// Unsigned is what the person is told when an update installed with no key
+// pinned: the checksums matched, but nothing showed who made the release.
+const Unsigned = "This release was unsigned: this build has no release key pinned, so the update checked only that the download matched its checksums, not who made the release."
+
 // errUnsigned is a release with no signature where one is required.
 var errUnsigned = errors.New("isn't signed")
 
 // verify errs unless sig is tag's signature over sums by PublicKey. With no
-// key pinned there is nothing to check against, and it passes.
+// key pinned there is nothing to check against, and it passes; Update then
+// tells the person the release was unsigned.
 func verify(tag string, sums []byte, sig func() ([]byte, error)) error {
 	if PublicKey == "" {
 		return nil

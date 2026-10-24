@@ -53,6 +53,10 @@ var API = "https://api.github.com"
 // executable is the binary an update replaces, through any hive-v0 link.
 var executable = setup.Executable
 
+// alongside are the binaries an update installs beside this system's own:
+// Windows keeps the Linux one for inside WSL.
+var alongside = map[string][]string{"windows": {AssetName("linux", "amd64")}}
+
 var client = &http.Client{Timeout: 10 * time.Minute}
 
 func get(path string) (*http.Response, error) {
@@ -213,10 +217,7 @@ func (m *Module) Update(tag string) (string, error) {
 		return "", err
 	}
 	defer os.RemoveAll(tmp)
-	names := []string{AssetName(runtime.GOOS, runtime.GOARCH)}
-	if runtime.GOOS == "windows" {
-		names = append(names, AssetName("linux", "amd64")) // used inside WSL
-	}
+	names := append([]string{AssetName(runtime.GOOS, runtime.GOARCH)}, alongside[runtime.GOOS]...)
 	sum, err := sums(repo, tag)
 	if err != nil {
 		return "", err
@@ -240,44 +241,65 @@ func (m *Module) Update(tag string) (string, error) {
 			return "", fmt.Errorf("%s: checksum mismatch; not installing", name)
 		}
 	}
-	var paths []string // replaced, each with its .old beside it
+	// An update to tag from here whose restart never came left its binaries
+	// in place; what it added has no .old and is still the update's to remove.
+	var before []string
+	if p, ok := readPending(m.C.WS); ok && p.From == core.Version && p.To == tag && p.RolledBack == "" {
+		before = p.Added
+	}
+	var paths, added []string // replaced, each with its .old beside it, and put where none was
 	for i, name := range names {
 		target := exe
 		if i > 0 {
 			target = filepath.Join(dir, name)
 		}
-		if on, _ := fileSum(target); on == sum[name] && core.Exists(target+".old") {
+		if on, _ := fileSum(target); on == sum[name] {
 			// In place already, from an update whose restart never came: its
 			// .old is still the binary to roll back to.
-			paths = append(paths, target)
-			continue
+			if slices.Contains(before, target) {
+				added = append(added, target)
+				continue
+			}
+			if core.Exists(target + ".old") {
+				paths = append(paths, target)
+				continue
+			}
 		}
+		fresh := !core.Exists(target)
 		if err := replace(filepath.Join(tmp, name), target); err != nil {
-			rollBack(paths)
+			rollBack(paths, added)
 			return "", err
 		}
-		paths = append(paths, target)
+		if fresh {
+			added = append(added, target)
+		} else {
+			paths = append(paths, target)
+		}
 	}
 	if err := tryBinary(exe, tag); err != nil {
-		if e := rollBack(paths); e != nil {
+		if e := rollBack(paths, added); e != nil {
 			return "", fmt.Errorf("%s doesn't run here (%v), and putting %s back failed: %v", tag, err, core.Version, e)
 		}
 		return "", fmt.Errorf("%s doesn't run here (%v); kept %s", tag, err, core.Version)
 	}
-	if err := writePending(m.C.WS, pending{From: core.Version, To: tag, Paths: paths}); err != nil {
+	if err := writePending(m.C.WS, pending{From: core.Version, To: tag, Paths: paths, Added: added}); err != nil {
 		return "", err
 	}
 	if err := m.pin(cfg, tag, pin); err != nil {
 		return "", err
 	}
 	notes := Notes(repo, core.Version, tag)
-	m.C.J.MustAppend("hive.updated", map[string]string{"from": core.Version, "to": tag, "notes": notes})
+	unsigned := PublicKey == ""
+	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned})
 	if m.Restart != nil {
 		go func() { time.Sleep(time.Second); m.Restart() }()
 	}
 	msg := "updated to " + tag
 	if pin {
 		msg += ", pinned there with auto-update off: `" + core.Cmd + " update` goes back to the newest"
+	}
+	if unsigned {
+		msg += "\n\n" + Unsigned
 	}
 	return msg + "\n\n" + notes, nil
 }

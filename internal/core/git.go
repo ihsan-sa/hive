@@ -12,7 +12,10 @@ import (
 
 // Git runs host git in dir. Host git only ever runs in repositories the host
 // created and controls (project clones, fresh gate clones), never in an
-// agent's checkout, whose git metadata could point anywhere.
+// agent's checkout, whose git metadata could point anywhere. Auto maintenance
+// (gc, repack, pack-refs) runs before the command returns rather than in a
+// detached process, so nothing still writes in a repo once its git call ends
+// and the repo can be removed or reused at once.
 func Git(dir string, args ...string) (string, error) {
 	return GitT(2*time.Minute, dir, args...)
 }
@@ -26,7 +29,8 @@ func GitT(timeout time.Duration, dir string, args ...string) (string, error) {
 func GitEnvT(timeout time.Duration, dir string, env []string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	full := append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "transfer.fsckObjects=true", "-c", "core.autocrlf=false", "-c", "user.name=Hive", "-c", "user.email=hive@localhost"}, args...)
+	full := append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "transfer.fsckObjects=true", "-c", "core.autocrlf=false", "-c", "user.name=Hive", "-c", "user.email=hive@localhost",
+		"-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
 	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "LC_ALL=C"), env...)
