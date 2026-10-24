@@ -95,20 +95,24 @@ type Task struct {
 	NoBank     string `json:"no_bank,omitempty"` // why no more checkpoints are opened for this task
 	// Reruns counts the re-runs of the forge's failed checks asked on each
 	// head (rerun-checks), capped at rerunsPerHead; RerunAt is the newest.
-	Reruns     map[string]int `json:"reruns,omitempty"`
-	RerunAt    time.Time      `json:"rerun_at,omitempty"`
-	DraftSince time.Time      `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
-	DraftTold  bool           `json:"draft_told,omitempty"`  // the lead was told it has waited long
-	Failures   int            `json:"failures"`
-	CloseFail  int            `json:"close_fail,omitempty"` // failed tries to close the issue
-	Attempt    int            `json:"attempt"`              // fresh workers handed this task
-	Retry      time.Time      `json:"retry,omitempty"`
-	IssueOpen  bool           `json:"issue_open,omitempty"` // done, but its issue is still to close
-	Noted      string         `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
-	NotedDiff  string         `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
-	Log        []Entry        `json:"log,omitempty"`
-	Created    time.Time      `json:"created"`
-	Updated    time.Time      `json:"updated"`
+	Reruns  map[string]int `json:"reruns,omitempty"`
+	RerunAt time.Time      `json:"rerun_at,omitempty"`
+	// ForgeLog is the newest red forge check's findings with its log, under
+	// .hive (a file in its worker's run), so a later round or the lead reads
+	// it without asking the forge again.
+	ForgeLog   string    `json:"forge_log,omitempty"`
+	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
+	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
+	Failures   int       `json:"failures"`
+	CloseFail  int       `json:"close_fail,omitempty"` // failed tries to close the issue
+	Attempt    int       `json:"attempt"`              // fresh workers handed this task
+	Retry      time.Time `json:"retry,omitempty"`
+	IssueOpen  bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
+	Noted      string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
+	NotedDiff  string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
+	Log        []Entry   `json:"log,omitempty"`
+	Created    time.Time `json:"created"`
+	Updated    time.Time `json:"updated"`
 }
 
 // A Bank is a merged checkpoint: its pull request and the merge on main.
@@ -1475,6 +1479,13 @@ func (m *Module) followUp(t *Task, p core.Project) error {
 // bounded number of times, after which the work stops and says so. A revert
 // the Hive made has no worker, so it stops on the first findings.
 func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
+	return m.sendBackWith(t, p, findings, "")
+}
+
+// sendBackWith sends findings back with detail (a red forge check's logs)
+// that goes in the worker's message only: the task keeps where it is saved
+// (ForgeLog), not the text.
+func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string) error {
 	// A worker's next push would open a new pull request over the person's close.
 	if closed, err := m.closedOnForge(t, p); closed || err != nil {
 		return err
@@ -1483,12 +1494,16 @@ func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
 	if max <= 0 {
 		max = 3
 	}
+	saved := ""
+	if detail != "" && t.ForgeLog != "" {
+		saved = "\n\nEach failed check's tests, main's result and the end of its log are in .hive/" + t.ForgeLog + "."
+	}
 	reason := ""
 	switch {
 	case t.Worker == "": // a host-made revert: nobody to send it back to
 		reason = "the Hive made this commit itself, so no worker can fix it; what was found:\n\n" + core.Clip(findings, 1500)
 	case t.Round >= max:
-		reason = fmt.Sprintf("stopped after %d rounds of fixes; what remains:\n\n%s", t.Round, core.Clip(findings, 1500))
+		reason = fmt.Sprintf("stopped after %d rounds of fixes; what remains:\n\n%s%s", t.Round, core.Clip(findings, 1500), saved)
 	}
 	if reason != "" {
 		m.giveUp(t, reason)
@@ -1496,8 +1511,12 @@ func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
 		return nil
 	}
 	t.Round++
-	t.Findings = findings
-	if err := m.C.Runs.Reopen(t.Worker, findings+"\n\nFix these in your checkout, commit, and finish again."); err != nil {
+	t.Findings = findings + saved
+	msg := findings
+	if detail != "" {
+		msg += "\n\n" + detail + "\nThis is kept in $HIVE_RUN/" + forgeFailuresFile + " for later rounds."
+	}
+	if err := m.C.Runs.Reopen(t.Worker, msg+"\n\nFix these in your checkout, commit, and finish again."); err != nil {
 		return err
 	}
 	t.Stage, t.Reviews, t.SeatTries = StageWorking, 0, nil
@@ -1556,7 +1575,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		// Retrying can't help until main is green again or the rule is
 		// relaxed, so it holds, said once, rather than failing toward a stop.
 		m.raiseOnce(p, main+"/refused", "GitHub's branch rules in "+p.Name+" refuse to merge PR #"+fmt.Sprint(t.PR.Number)+", though it is no worse than main: they want "+strings.Join(rr.Checks, ", ")+", red on main at "+core.Short(main)+" too. Fix main, or merge it yourself or relax the rule to let the fix land.")
-		m.hold(t, p, rr.Error())
+		m.hold(t, p, "waiting on main: "+rr.Error())
 		return nil
 	}
 	if err != nil {
@@ -1696,12 +1715,21 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		return true, nil
 	}
 	var shared, byName []string
+	var mainRuns []core.CheckRun
 	if st == core.CheckFail {
-		mainRuns, err := m.C.Effects.Forge.Checks(p.Repo, main)
-		if err != nil {
+		if mainRuns, err = m.C.Effects.Forge.Checks(p.Repo, main); err != nil {
 			return true, err
 		}
 		st, which, shared, byName = core.ChecksAgainstMain(runs, mainRuns, req, m.C.Effects.FailingTests(p.Repo))
+	}
+	if st == core.CheckFail {
+		// A check main hasn't finished at the very commit t is based on can't
+		// tell yet whether the red is the change's or main's: wait for it,
+		// rather than spend a round on what may be main's own.
+		if still := stillOnMain(which, mainRuns); len(still) > 0 {
+			m.hold(t, p, "waiting on main: the forge's checks "+core.CheckNames(still)+" fail on "+core.Short(t.SHA)+" and still run on main at "+core.Short(main)+", whose result says whether the red is the change's")
+			return true, nil
+		}
 	}
 	names := core.CheckNames(which)
 	onMain := ""
@@ -1727,7 +1755,9 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		if t.Reruns[t.SHA] < rerunsPerHead {
 			hint = "\n\nIf the log shows a flake rather than your change, `hive agent rerun-checks` runs the failed jobs again and finishing again without a commit waits for them."
 		}
-		return true, m.sendBack(t, p, forgeFailed+core.Short(t.SHA)+": "+checkDetail(which)+onMain+hint)
+		findings := forgeFailed + core.Short(t.SHA) + ": " + checkDetail(which) + onMain
+		detail := m.forgeFailures(t, p, main, which, mainRuns)
+		return true, m.sendBackWith(t, p, findings+hint, detail)
 	}
 	// Said once per head and main: a merge hold or a failed merge brings t
 	// back here every holdGap, and a repeat would crowd out its log.
@@ -1742,6 +1772,91 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		m.comment(p.Repo, t.PR.Number, say)
 	}
 	return false, nil
+}
+
+// stillOnMain are the failed checks whose run on main is still going, or
+// that main has no run of yet while some of its checks are still listed as
+// starting.
+func stillOnMain(failed, mainRuns []core.CheckRun) []core.CheckRun {
+	starting := slices.ContainsFunc(mainRuns, func(r core.CheckRun) bool { return r.State == core.CheckPending })
+	var still []core.CheckRun
+	for _, r := range failed {
+		named := func(mr core.CheckRun) bool { return mr.Name == r.Name }
+		if slices.ContainsFunc(mainRuns, func(mr core.CheckRun) bool { return named(mr) && mr.State == core.CheckPending }) ||
+			(starting && !slices.ContainsFunc(mainRuns, named)) {
+			still = append(still, r)
+		}
+	}
+	return still
+}
+
+// forgeFailuresFile is where a red forge check's findings are kept in the
+// worker's run directory ($HIVE_RUN), read by later rounds and the lead
+// without another call to the forge.
+const forgeFailuresFile = "forge-failures.md"
+
+// forgeFailures is, per failed check, its name and link, the tests its log
+// names as failing, how the same check went on main at the commit t is based
+// on, and the end of its failed step's log, read once with the Hive's own
+// token (a worker holds none). It is saved under the task's worker run.
+func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mainRuns []core.CheckRun) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# The forge's failed checks on %s\n\nPR #%d, task %s, based on main at %s.\n", core.Short(t.SHA), t.PR.Number, t.ID, core.Short(main))
+	for _, r := range failed {
+		fmt.Fprintf(&b, "\n## %s\n\n", r.Name)
+		if r.URL != "" {
+			fmt.Fprintf(&b, "Link: %s\n", r.URL)
+		}
+		f, read := m.C.Effects.CheckFailure(p.Repo, r)
+		switch {
+		case !read:
+			b.WriteString("Failing tests: the log couldn't be read\n")
+		case len(f.Tests) == 0:
+			b.WriteString("Failing tests: the log names none (a build or setup step, or a runner that isn't Go's or pytest's)\n")
+		default:
+			fmt.Fprintf(&b, "Failing tests: %s\n", strings.Join(f.Tests, ", "))
+		}
+		fmt.Fprintf(&b, "On main at %s: %s\n", core.Short(main), m.onMain(p, r.Name, mainRuns))
+		if f.Excerpt != "" {
+			fmt.Fprintf(&b, "\nThe end of the failed step's log (up to %d lines):\n\n~~~~\n%s\n~~~~\n", core.ExcerptLines, f.Excerpt)
+		}
+	}
+	text := b.String()
+	if t.Worker != "" {
+		path := filepath.Join(m.C.WS.RunRO(t.Worker), forgeFailuresFile)
+		if err := core.WriteFileAtomic(path, []byte(text), 0o644); err == nil {
+			t.ForgeLog = filepath.ToSlash(filepath.Join("runs", t.Worker, "ro", forgeFailuresFile))
+		}
+	}
+	return text
+}
+
+// onMain says how the check named name went on main.
+func (m *Module) onMain(p core.Project, name string, mainRuns []core.CheckRun) string {
+	var states, tests []string
+	for _, mr := range mainRuns {
+		if mr.Name != name {
+			continue
+		}
+		states = append(states, mr.State)
+		if mr.State == core.CheckFail {
+			if f, ok := m.C.Effects.CheckFailure(p.Repo, mr); ok {
+				tests = append(tests, f.Tests...)
+			}
+		}
+	}
+	switch {
+	case len(states) == 0:
+		return "not run"
+	case slices.Contains(states, core.CheckPass):
+		return "passes, so this red is the change's"
+	case slices.Contains(states, core.CheckFail) && len(tests) > 0:
+		slices.Sort(tests)
+		return "fails too, on " + strings.Join(slices.Compact(tests), ", ") + "; only the tests failing here and not there count against the change"
+	case slices.Contains(states, core.CheckFail):
+		return "fails too"
+	}
+	return strings.Join(states, ", ")
 }
 
 // checkDetail names each check with what it said and where to read it.
