@@ -182,6 +182,7 @@ type Runs struct {
 	hold  string             // why no new turn starts, while a restart waits for a quiet moment
 	// launching counts launches past the hold whose turn isn't journalled yet.
 	launching int
+	wakeMu    sync.Mutex // one wake per message that came in as a turn ended blocked
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -702,8 +703,27 @@ func (rs *Runs) Send(id, text string) error {
 	if err := rs.Takes(id); err != nil {
 		return err
 	}
+	r, _ := rs.Get(id)
 	rs.append("run.queued", runNote{ID: id, Text: text})
+	if r.Status == StatusRunning { // its turn may have ended blocked meanwhile
+		rs.wakeBlocked(id)
+	}
 	return nil
+}
+
+// wakeBlocked wakes a run that finished blocked with a message waiting: often
+// the answer it was blocked on, which came in as its turn ended. Send and
+// endTurn each call it once their own event is applied, so whichever lands
+// last sees both. One blocked for its Codex token stays blocked.
+func (rs *Runs) wakeBlocked(id string) {
+	rs.wakeMu.Lock()
+	defer rs.wakeMu.Unlock()
+	r, ok := rs.Get(id)
+	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) {
+		return
+	}
+	rs.append("run.reopened", runNote{ID: r.ID})
+	rs.append("run.status", runNote{ID: r.ID, Status: StatusIdle, Reason: "woken by a message"})
 }
 
 // Reopen lets a finished run take more turns (fix rounds go back to the same worker).
@@ -968,12 +988,12 @@ func (rs *Runs) endTurn(r Run) {
 		te.ParkedUntil = time.Now().Add(min(backoff(cur.Retries), 5*time.Minute))
 	}
 	rs.append("run.turn_ended", te)
-	// A message that came in while it finished blocked (often the answer it was
-	// blocked on) wakes it rather than waiting on a run that takes no turns;
-	// one blocked for its Codex token stays blocked.
-	if te.Status == StatusBlocked && dropErr == nil && len(cur.Pending) > 0 {
-		rs.append("run.reopened", runNote{ID: r.ID})
-		rs.append("run.status", runNote{ID: r.ID, Status: StatusIdle, Reason: "woken by a message"})
+	// A message that came in while it finished blocked wakes it rather than
+	// waiting on a run that takes no turns. It reads the run as it is now: a
+	// message queued since cur was read once went unseen, and the worker it
+	// answered was never woken (Windows ci, TestBlockedWorkComesBack).
+	if te.Status == StatusBlocked {
+		rs.wakeBlocked(r.ID)
 	}
 	// A spawned helper's account goes back to the agent that spawned it.
 	if (te.Status == StatusDone || te.Status == StatusBlocked) && r.Parent != "" {

@@ -259,7 +259,11 @@ func (h *hive) wait(what string, timeout time.Duration, cond func(api.State) boo
 		errOut, _ := os.ReadFile(h.ws.TurnOut(r.ID, max(r.Turn, 1)) + ".err")
 		runs = append(runs, fmt.Sprintf("%s %s turn %d: %s %s", r.Role, r.ID, r.Turn, r.Status, core.Clip(r.Reason+" "+string(errOut), 300)))
 	}
-	h.t.Fatalf("timed out waiting for %s; runs:\n%s\nprojects: %s\nalerts: %+v", what, strings.Join(runs, "\n"), core.Clip(string(raw), 4000), st.Alerts)
+	var reqs []string // a step that never settles leaves its asker unwoken
+	for _, r := range st.Requests {
+		reqs = append(reqs, fmt.Sprintf("%s from %s: %s %s %q", r.ID, r.Origin, r.State, core.Clip(r.Outcome, 200), core.Clip(r.Want, 80)))
+	}
+	h.t.Fatalf("timed out waiting for %s; runs:\n%s\nrequests:\n%s\nprojects: %s\nalerts: %+v", what, strings.Join(runs, "\n"), strings.Join(reqs, "\n"), core.Clip(string(raw), 4000), st.Alerts)
 	return st
 }
 

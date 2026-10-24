@@ -304,26 +304,38 @@ func NameFromURL(url string) string {
 }
 
 // Install clones a module the person approved and records where it came from.
+// It is cloned and recorded under a dot name List skips, then moved into
+// place, so nobody sees (or is granted) a module that is half there: a slow
+// clone once showed up with no release, and its later record read as an update.
 func (r *Registry) Install(url, name string) (Module, error) {
 	dir := filepath.Join(r.ws.Modules(), name)
 	if core.Exists(dir) {
 		return Module{}, fmt.Errorf("%s already exists", dir)
 	}
-	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, dir); err != nil {
-		os.RemoveAll(dir)
+	tmp := filepath.Join(r.ws.Modules(), "."+name+".installing")
+	os.RemoveAll(tmp)
+	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, tmp); err != nil {
+		os.RemoveAll(tmp)
 		return Module{}, err
 	}
-	m, err := r.record(url, name)
-	if err != nil { // a clone with no source record must not stay behind
-		os.RemoveAll(dir)
+	rel, err := record(url, tmp)
+	if err == nil {
+		err = rename(tmp, dir)
 	}
-	return m, err
+	if err != nil { // a clone with no source record must not stay behind
+		os.RemoveAll(tmp)
+		return Module{}, err
+	}
+	r.j.MustAppend("module.installed", map[string]string{"module": name, "source": url, "release": rel})
+	m, _ := r.Get(name)
+	return m, nil
 }
 
-func (r *Registry) record(url, name string) (Module, error) {
-	dir := filepath.Join(r.ws.Modules(), name)
+// record checks out a fresh clone's newest release (or keeps its HEAD) and
+// writes its source record; it returns the release.
+func record(url, dir string) (string, error) {
 	if !core.Exists(filepath.Join(dir, ".git")) {
-		return Module{}, fmt.Errorf("module %s did not clone", name)
+		return "", fmt.Errorf("module %s did not clone", filepath.Base(dir))
 	}
 	core.Git(dir, "fetch", "-q", "--tags")
 	rel := latestTag(dir)
@@ -334,12 +346,18 @@ func (r *Registry) record(url, name string) (Module, error) {
 	}
 	commit, _ := core.Git(dir, "rev-parse", "HEAD")
 	s := Source{Source: url, Release: rel, Commit: commit, Installed: time.Now().UTC(), Projects: []string{"*"}}
-	if err := writeSource(dir, s); err != nil {
-		return Module{}, err
+	return rel, writeSource(dir, s)
+}
+
+// rename moves a folder, trying again for a few seconds: on Windows a scanner
+// can hold a file in a fresh clone open for a moment.
+func rename(from, to string) error {
+	err := os.Rename(from, to)
+	for i := 0; err != nil && i < 20 && !core.Exists(to); i++ {
+		time.Sleep(250 * time.Millisecond)
+		err = os.Rename(from, to)
 	}
-	r.j.MustAppend("module.installed", map[string]string{"module": name, "source": url, "release": rel})
-	m, _ := r.Get(name)
-	return m, nil
+	return err
 }
 
 // Update moves git-sourced modules to their source's newest release, or its
