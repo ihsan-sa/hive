@@ -90,18 +90,19 @@ type model struct {
 	dashTree bool
 	stages   map[string]string // task stages seen, so the feed shows changes
 
-	dashSel int
-	waitSel int
-	waitID  string // the selected ask; waitSel follows it as the list shifts
-	modSel  int
-	setSel  int
-	editing bool
-	picking bool // a setting's pick-list is open
-	pickSel int
-	optSel  int
-	stack   []detail
-	runs    map[string]api.RunDetail
-	tasks   map[string]work.Task
+	dashSel   int
+	waitSel   int
+	waitID    string // the selected ask; waitSel follows it as the list shifts
+	waitMoved bool   // the selected ask went and another slid under the cursor
+	modSel    int
+	setSel    int
+	editing   bool
+	picking   bool // a setting's pick-list is open
+	pickSel   int
+	optSel    int
+	stack     []detail
+	runs      map[string]api.RunDetail
+	tasks     map[string]work.Task
 
 	since     []string
 	showSince bool

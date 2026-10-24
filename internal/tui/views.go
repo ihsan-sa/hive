@@ -556,7 +556,8 @@ func contains(l []string, s string) bool {
 
 // waitIndex finds the selected ask by its id, so a list that shifts under
 // the cursor (an ask answered elsewhere, a new one filed) keeps the selection
-// on the same ask. When that ask is gone the cursor stays at its position.
+// on the same ask. When that ask is gone the cursor stays at its position and
+// waitMoved is set, so Enter won't answer an ask the person didn't select.
 func (m *model) waitIndex() int {
 	asks := m.st.Asks
 	for i, a := range asks {
@@ -566,7 +567,7 @@ func (m *model) waitIndex() int {
 		}
 	}
 	if m.waitID != "" {
-		m.optSel = 0 // a different ask now; don't carry the pick over
+		m.optSel, m.waitMoved = 0, true // a different ask now; don't carry the pick over
 	}
 	m.waitSel = max(0, min(m.waitSel, len(asks)-1))
 	m.waitID = ""
@@ -577,7 +578,7 @@ func (m *model) waitIndex() int {
 }
 
 func (m *model) selectWait(i int) {
-	m.waitSel, m.waitID, m.optSel = i, m.st.Asks[i].ID, 0
+	m.waitSel, m.waitID, m.optSel, m.waitMoved = i, m.st.Asks[i].ID, 0, false
 }
 
 func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -593,10 +594,12 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectWait(sel + 1)
 		}
 	case "left", "h":
+		m.waitMoved = false // a pick on the ask now under the cursor selects it
 		if m.optSel > 0 {
 			m.optSel--
 		}
 	case "right", "l":
+		m.waitMoved = false
 		if sel < len(asks) && m.optSel < len(asks[sel].Options)-1 {
 			m.optSel++
 		}
@@ -606,6 +609,11 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.push(detail{kind: "diff", id: a.ID, title: diffTitle(""), text: a.Diff})
 		}
 	case "enter":
+		if m.waitMoved { // the selected ask went; what's under the cursor wasn't chosen
+			m.waitMoved = false
+			m.setFlash("that ask was answered elsewhere; check the selection")
+			return m, nil
+		}
 		if sel < len(asks) {
 			a := asks[sel]
 			opt := a.Options[min(m.optSel, len(a.Options)-1)]

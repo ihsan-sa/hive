@@ -642,6 +642,25 @@ func TestWaitingAnswersTheSelectedAsk(t *testing.T) {
 	if m.waitIndex() != 0 || m.waitID != "a1" || m.optSel != 0 {
 		t.Fatalf("a vanished ask should not carry its pick to another: sel %d id %q opt %d", m.waitSel, m.waitID, m.optSel)
 	}
+	m.View()
+	answered = map[string]string{}
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		cmd()
+	}
+	if len(answered) != 0 {
+		t.Fatalf("enter must not answer an ask that slid under the cursor: %v", answered)
+	}
+	if v := ansi.Strip(m.View()); !strings.Contains(v, "answered elsewhere") {
+		t.Fatalf("enter should say the selected ask went:\n%s", v)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight}) // a pick on a1 selects it
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		cmd()
+	}
+	if answered["id"] != "a1" || answered["answer"] != "merge" {
+		t.Fatalf("once the person picks on a1, enter answers it: %v", answered)
+	}
 }
 
 // A changed line can't hide itself or move the cursor: control characters in
