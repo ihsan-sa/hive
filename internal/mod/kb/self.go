@@ -23,8 +23,11 @@ const SelfDir = "hive"
 
 // SeedSelf writes the Hive's source and design into the knowledge base at the
 // running version, with a source map, so every agent can read the code it
-// runs. The daemon calls it at start; it rewrites and commits only when the
-// source differs from what it last wrote, so an update (a new binary) reseeds.
+// runs. The daemon calls it at start, beside serving (on a loaded Windows
+// runner it took over ten seconds), with new turns held until it ends; it
+// rewrites and commits only when the source differs from what it last wrote,
+// so an update (a new binary) reseeds. It writes a copy aside and moves it in
+// whole, so a reader never sees half a version.
 func (m *Module) SeedSelf(src fs.FS) {
 	began := time.Now()
 	defer func() { m.Seeded = time.Since(began) }()
@@ -43,23 +46,29 @@ func (m *Module) SeedSelf(src fs.FS) {
 	if old, _ := os.ReadFile(filepath.Join(dir, ".source-hash")); string(old) == sum {
 		return
 	}
-	os.RemoveAll(dir)
+	stage := filepath.Join(m.C.WS.Hive(), "scratch", "kb-self")
+	os.RemoveAll(stage) // a seed cut short
+	defer os.RemoveAll(stage)
 	fs.WalkDir(src, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
 		raw, err := fs.ReadFile(src, p)
 		if err == nil {
-			os.MkdirAll(filepath.Join(dir, filepath.Dir(p)), 0o755)
-			os.WriteFile(filepath.Join(dir, p), raw, 0o644)
+			os.MkdirAll(filepath.Join(stage, filepath.Dir(p)), 0o755)
+			os.WriteFile(filepath.Join(stage, p), raw, 0o644)
 		}
 		return nil
 	})
-	os.WriteFile(filepath.Join(dir, "VERSION"), []byte(core.Version+"\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "SOURCE-MAP.md"), []byte(sourceMap(src)), 0o644)
-	os.WriteFile(filepath.Join(dir, ".source-hash"), []byte(sum), 0o644)
+	os.WriteFile(filepath.Join(stage, "VERSION"), []byte(core.Version+"\n"), 0o644)
+	os.WriteFile(filepath.Join(stage, "SOURCE-MAP.md"), []byte(sourceMap(src)), 0o644)
+	os.WriteFile(filepath.Join(stage, ".source-hash"), []byte(sum), 0o644)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	os.RemoveAll(dir)
+	if err := os.Rename(stage, dir); err != nil {
+		return // the next start seeds again: no hash was left
+	}
 	core.Git(m.C.WS.KB(), "add", "-A", SelfDir)
 	core.Git(m.C.WS.KB(), "commit", "-q", "-m", "The Hive's own source at "+core.Version, "--", SelfDir)
 }

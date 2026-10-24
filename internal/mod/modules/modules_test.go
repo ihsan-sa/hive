@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -69,5 +70,52 @@ func TestNullProjectsFromV010(t *testing.T) {
 	}
 	if slices.Contains(r.Granted("textkit"), "kb") {
 		t.Fatal("a null projects list was read as every project")
+	}
+}
+
+// A module being installed isn't listed until its clone is whole: a slow
+// clone was listed before its files were checked out, and read as missing them.
+func TestInstallListsOnlyAWholeClone(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	j, err := core.OpenJournal(filepath.Join(ws.Hive(), "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	src := filepath.Join(t.TempDir(), "ledger")
+	os.MkdirAll(src, 0o755)
+	for i := range 300 {
+		os.WriteFile(filepath.Join(src, fmt.Sprintf("f%03d.md", i)), []byte("x\n"), 0o644)
+	}
+	os.WriteFile(filepath.Join(src, "zz-last.md"), []byte("# the ledger\n"), 0o644)
+	core.Git(src, "init", "-q", "-b", "main")
+	core.Git(src, "add", "-A")
+	if _, err := core.Git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "ledger"); err != nil {
+		t.Fatal(err)
+	}
+	r := New(ws, j)
+	done := make(chan error)
+	go func() { _, err := r.Install(src, "ledger"); done <- err }()
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m, ok := r.Get("ledger"); !ok || m.Source.Commit == "" {
+				t.Fatalf("installed without its record: %+v", m)
+			}
+			if left, _ := filepath.Glob(filepath.Join(ws.Modules(), ".installing-*")); len(left) != 0 {
+				t.Fatalf("left behind: %v", left)
+			}
+			return
+		default:
+			if m, ok := r.Get("ledger"); ok && !core.Exists(filepath.Join(m.Dir, "zz-last.md")) {
+				t.Fatal("listed before its files were checked out")
+			}
+		}
 	}
 }

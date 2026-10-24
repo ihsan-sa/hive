@@ -304,26 +304,36 @@ func NameFromURL(url string) string {
 }
 
 // Install clones a module the person approved and records where it came from.
+// The clone is made under a hidden name and moved in whole, so the module is
+// never listed half checked out (a slow Windows clone was).
 func (r *Registry) Install(url, name string) (Module, error) {
 	dir := filepath.Join(r.ws.Modules(), name)
 	if core.Exists(dir) {
 		return Module{}, fmt.Errorf("%s already exists", dir)
 	}
-	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, dir); err != nil {
-		os.RemoveAll(dir)
+	stage := filepath.Join(r.ws.Modules(), ".installing-"+name)
+	os.RemoveAll(stage) // an install cut short
+	defer os.RemoveAll(stage)
+	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, stage); err != nil {
 		return Module{}, err
 	}
-	m, err := r.record(url, name)
+	s, err := source(stage, url)
 	if err != nil { // a clone with no source record must not stay behind
-		os.RemoveAll(dir)
+		return Module{}, err
 	}
-	return m, err
+	if err := os.Rename(stage, dir); err != nil {
+		return Module{}, err
+	}
+	r.j.MustAppend("module.installed", map[string]string{"module": name, "source": url, "release": s.Release})
+	m, _ := r.Get(name)
+	return m, nil
 }
 
-func (r *Registry) record(url, name string) (Module, error) {
-	dir := filepath.Join(r.ws.Modules(), name)
+// source checks out a fresh clone at its newest release (or its HEAD) and
+// writes where it came from.
+func source(dir, url string) (Source, error) {
 	if !core.Exists(filepath.Join(dir, ".git")) {
-		return Module{}, fmt.Errorf("module %s did not clone", name)
+		return Source{}, fmt.Errorf("module %s did not clone", filepath.Base(dir))
 	}
 	core.Git(dir, "fetch", "-q", "--tags")
 	rel := latestTag(dir)
@@ -334,12 +344,7 @@ func (r *Registry) record(url, name string) (Module, error) {
 	}
 	commit, _ := core.Git(dir, "rev-parse", "HEAD")
 	s := Source{Source: url, Release: rel, Commit: commit, Installed: time.Now().UTC(), Projects: []string{"*"}}
-	if err := writeSource(dir, s); err != nil {
-		return Module{}, err
-	}
-	r.j.MustAppend("module.installed", map[string]string{"module": name, "source": url, "release": rel})
-	m, _ := r.Get(name)
-	return m, nil
+	return s, writeSource(dir, s)
 }
 
 // Update moves git-sourced modules to their source's newest release, or its
