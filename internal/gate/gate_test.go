@@ -3,10 +3,10 @@ package gate
 import (
 	"archive/zip"
 	"net/url"
-	"runtime"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
