@@ -262,7 +262,8 @@ type Runs struct {
 	// launching counts launches past the hold whose turn isn't journalled
 	// yet; leadLaunching those of leads, which the other roles' wait for.
 	launching, leadLaunching int
-	waking                   sync.Mutex // one wake at a time, so a run is woken once
+	starting                 map[string]bool // runs with a launch in flight
+	waking                   sync.Mutex      // one wake at a time, so a run is woken once
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -1344,7 +1345,9 @@ const PendingSep = "\n\n---\n\n"
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run, cfg Config) {
 	rs.mu.Lock()
-	if len(rs.holds) > 0 {
+	// A turn starts at most once: not over a live one, nor from a copy of
+	// the run older than its last turn, nor beside another launch of it.
+	if cur := rs.runs[r.ID]; len(rs.holds) > 0 || cur == nil || cur.Status == StatusRunning || cur.Turn != r.Turn || rs.starting[r.ID] {
 		rs.mu.Unlock()
 		return
 	}
@@ -1352,6 +1355,10 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		rs.mu.Unlock() // a lead's turn starts first; this one is due again next tick
 		return
 	}
+	if rs.starting == nil {
+		rs.starting = map[string]bool{}
+	}
+	rs.starting[r.ID] = true
 	rs.launching++
 	if r.Lead() {
 		rs.leadLaunching++
@@ -1363,6 +1370,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		if r.Lead() {
 			rs.leadLaunching--
 		}
+		delete(rs.starting, r.ID)
 		rs.mu.Unlock()
 	}()
 	floor, memMax, cpuMax := cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax
