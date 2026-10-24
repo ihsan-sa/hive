@@ -54,6 +54,10 @@ type RunSpec struct {
 	Inputs     map[string]string `json:"inputs,omitempty"`     // name -> content, placed read-only in /hive/run
 	OneTurn    bool              `json:"one_turn,omitempty"`   // done when a turn ends; nothing is added to its prompts, and it may only finish and report progress
 	Budget     float64           `json:"budget,omitempty"`     // USD the whole run may spend; 0 is no cap
+	// Route is the harnesses and models the run may go on, in order
+	// (Config.Route): when its own are at their usage limit it moves to the
+	// first of these with room. Empty stays and waits.
+	Route []Pick `json:"route,omitempty"`
 }
 
 // Finish is an agent's closing account.
@@ -170,9 +174,9 @@ type Runs struct {
 	tools   func() []string // host programs to expose (hive binary for the sandbox's OS)
 	ops     *Ops
 	projs   *Projects // for which projects' records to hide; nil hides none
-	// ModelFor is the model a persistent run's next turn takes, so a lead
-	// follows a changed setting; empty keeps the run's own.
-	ModelFor func(Run) string
+	// Route is the picks a persistent run's next turn follows, so a lead
+	// follows a changed setting; empty keeps the run's own and its Route.
+	Route func(Run) []Pick
 
 	mu    sync.Mutex
 	runs  map[string]*Run
@@ -331,6 +335,7 @@ type turnStarted struct {
 	Delivered int         `json:"delivered"`
 	Resume    bool        `json:"resume"`
 	Model     string      `json:"model,omitempty"`
+	Harness   string      `json:"harness,omitempty"`
 	Login     string      `json:"login,omitempty"`
 }
 
@@ -455,6 +460,12 @@ func (rs *Runs) apply(e Event) {
 		}
 		if t.Model != "" {
 			r.Model = t.Model
+		}
+		if t.Harness != "" {
+			r.Harness = t.Harness
+		}
+		if !t.Resume {
+			r.SessionLive = false // a new session, live once the harness says it began
 		}
 		r.Waiting = ""
 		if t.Delivered <= len(r.Pending) {
@@ -636,8 +647,8 @@ func (rs *Runs) Plans() []Plan {
 // tie. A
 // bare run whose machine login has no credential file the Hive can read gets
 // no token, so the harness's own login on the host still works.
-func (rs *Runs) pickLogin(h, home string, bare bool) (Login, []string, error) {
-	logins := rs.tokens.Logins(h)
+func (rs *Runs) pickLogin(h, model, home string, bare bool) (Login, []string, error) {
+	logins := rs.logins(h, model)
 	now := time.Now()
 	rs.mu.Lock()
 	use := func(l Login) float64 { return rs.plans[l.Key()].Used(now) }
@@ -659,14 +670,23 @@ func (rs *Runs) pickLogin(h, home string, bare bool) (Login, []string, error) {
 	return Login{}, nil, err
 }
 
-// freeAt is when a login for harness h next has room: now if one has, else
-// the earliest reset.
-func (rs *Runs) freeAt(h string) time.Time {
+// logins are the logins a turn on harness h and model can go on. A model the
+// open harness runs is its own login, with its own limit.
+func (rs *Runs) logins(h, model string) []Login {
+	if HarnessName(h) == "open" {
+		return []Login{{Harness: "open", Name: model}}
+	}
+	return rs.tokens.Logins(h)
+}
+
+// freeAt is when a login for harness h and model next has room: now if one
+// has, else the earliest reset.
+func (rs *Runs) freeAt(h, model string) time.Time {
 	now := time.Now()
 	var at time.Time
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	for _, l := range rs.tokens.Logins(h) {
+	for _, l := range rs.logins(h, model) {
 		p := rs.plans[l.Key()]
 		if !p.Parked(now) {
 			return now
@@ -676,6 +696,36 @@ func (rs *Runs) freeAt(h string) time.Time {
 		}
 	}
 	return at.Add(15 * time.Second)
+}
+
+// next is the pick r's next turn goes on, and when it has room: the first of
+// its picks with room now, else the one that has room soonest. A persistent
+// run follows the settings' route; any other stays on its own pick while it
+// has room, then moves along its Route.
+func (rs *Runs) next(r Run) (Pick, time.Time) {
+	own := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
+	picks := []Pick{own}
+	if rs.Route != nil && r.Persistent {
+		if route := rs.Route(r); len(route) > 0 {
+			picks = route
+		}
+	}
+	for _, p := range r.RunSpec.Route {
+		if !slices.ContainsFunc(picks, p.Same) {
+			picks = append(picks, p)
+		}
+	}
+	best, at := picks[0], time.Time{}
+	for _, p := range picks {
+		free := rs.freeAt(p.Harness, p.Model)
+		if !free.After(time.Now()) {
+			return p, free
+		}
+		if at.IsZero() || free.Before(at) {
+			best, at = p, free
+		}
+	}
+	return best, at
 }
 
 // Spent is what runs cost in a month ("2006-01", UTC), from the harnesses' results.
@@ -921,12 +971,18 @@ func (rs *Runs) endTurn(r Run) {
 	case cur.StopAsked:
 		te.Status, te.Reason = StatusStopped, "stopped by the Hive"
 	case limited:
-		// Another login with room takes the next turn at once; else it waits for the first reset.
-		until := rs.freeAt(r.Harness)
+		// Another login with room takes the next turn at once, or else the
+		// next model on its route; else it waits for the first reset.
+		pick, until := rs.next(r)
 		te.Status, te.ParkedUntil = StatusParked, until
 		te.Reason = "usage limit; resumes " + until.Local().Format("Mon 15:04")
 		te.Queue = []string{"The usage limit has reset. Continue where you left off."}
-		if !until.After(time.Now()) {
+		switch {
+		case until.After(time.Now()):
+		case !pick.Same(Pick{Harness: HarnessName(r.Harness), Model: r.Model}):
+			te.Reason = "usage limit; moving to " + pick.String()
+			te.Queue = nil // launch tells it why it moved
+		default:
 			te.Reason = "usage limit; moving to another login"
 			te.Queue = []string{"Your last turn hit a usage limit, so your next turn runs on another login. Continue where you left off."}
 		}
@@ -1017,8 +1073,11 @@ func Unreachable(service, text string) string {
 
 // service names what a harness talks to.
 func service(h string) string {
-	if HarnessName(h) == "codex" {
+	switch HarnessName(h) {
+	case "codex":
 		return "Codex"
+	case "open":
+		return "the model server"
 	}
 	return "Claude"
 }
@@ -1072,6 +1131,23 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		}
 		return
 	}
+	// A run whose own harness and model are at their limit moves to the
+	// first pick with room; one changing harness, or open model, can't
+	// carry its session over, so it starts afresh on its brief.
+	from := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
+	pick, _ := rs.next(r)
+	moved := ""
+	if !pick.Same(from) {
+		if pick.Harness != from.Harness || pick.Harness == "open" {
+			r.SessionLive = false
+			why := "the settings route you there"
+			if rs.freeAt(from.Harness, from.Model).After(time.Now()) {
+				why = from.String() + " is at its usage limit"
+			}
+			moved = fmt.Sprintf("You now run on %s: %s. This is a fresh session on your brief above; your checkout, commits and notes are as you left them, so look at them (git log, $HIVE_BOX/notes.md) and continue.", pick, why)
+		}
+		r.Harness, r.Model = pick.Harness, pick.Model
+	}
 	h, _ := harness.Get(r.Harness)
 	turn := r.Turn + 1
 	// A session that never came up is started fresh under a new id; one that
@@ -1086,19 +1162,17 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			session = NewUUID()
 		}
 		prompt = r.Brief
-		if pending != "" && r.Turn == 0 {
+		if pending != "" && (r.Turn == 0 || moved != "") {
 			prompt += PendingSep + pending
+		}
+		if moved != "" {
+			prompt += PendingSep + moved
 		}
 	}
 	if strings.TrimSpace(prompt) == "" {
 		prompt = "Continue."
 	}
 	r.Session = session
-	if rs.ModelFor != nil && r.Persistent {
-		if m := rs.ModelFor(r); m != "" {
-			r.Model = m
-		}
-	}
 	promptFile := filepath.Join(rs.ws.RunHost(r.ID), fmt.Sprintf("turn-%03d.prompt", turn))
 	if err := os.WriteFile(promptFile, []byte(prompt), 0o644); err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(time.Minute)})
@@ -1116,9 +1190,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			}
 		}()
 	}
-	login, tok, err := rs.pickLogin(r.Harness, codexHome, !sb.Isolated())
+	login, tok, err := rs.pickLogin(r.Harness, r.Model, codexHome, !sb.Isolated())
 	if err != nil {
-		until := rs.freeAt(r.Harness)
+		until := rs.freeAt(r.Harness, r.Model)
 		if !until.After(time.Now()) {
 			until = time.Now().Add(5 * time.Minute)
 		}
@@ -1136,7 +1210,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	started = true
-	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model})
+	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness})
 }
 
 // RunPath is where a run's agent sees its run dir ($HIVE_RUN).
@@ -1236,6 +1310,9 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	allow := cfg.Egress.For(r.Role)
 	if allow != nil {
 		allow = append(allow, harness.APIHosts(h)...)
+		if host := cfg.openHost(r.Model); HarnessName(r.Harness) == "open" && host != "" {
+			allow = append(allow, host)
+		}
 	}
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,

@@ -1,5 +1,5 @@
 // Package harness is the adapter seam between the core and a coding harness
-// (Claude Code and OpenAI's Codex). A harness turns a Turn into
+// (Claude Code, OpenAI's Codex and the Hive's own open harness). A harness turns a Turn into
 // a command line and turns its output stream into Events.
 package harness
 
@@ -107,15 +107,21 @@ func Get(name string) (Harness, error) {
 		return Fake{}, nil
 	case "codex":
 		return Codex{}, nil
+	case "open":
+		return Open{}, nil
 	}
 	return nil, fmt.Errorf("unknown harness %q", name)
 }
 
 // Names are the harnesses a person can pick.
-var Names = []string{"claude", "fake"}
+var Names = []string{"claude", "open", "fake"}
 
-// Models are the models a harness knows, the default first.
+// Models are the models a harness knows, the default first. The open
+// harness knows only the models the config names.
 func Models(harness string) []string {
+	if harness == "open" {
+		return nil
+	}
 	return []string{"opus", "sonnet", "fable", "haiku"}
 }
 

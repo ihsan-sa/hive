@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -303,10 +305,12 @@ type ConfigView struct {
 	MaxWorkers     int                 `json:"max_workers"`
 	MaxChecks      int                 `json:"max_checks"`
 	AutoUpdate     bool                `json:"auto_update"`
+	Routes         map[string][]string `json:"routes,omitempty"` // each role's models in fallback order (the models op says more)
+	OpenModels     []string            `json:"open_models,omitempty"`
 }
 
 // View is c as agents see it.
 func View(c core.Config) ConfigView {
 	return ConfigView{c.Autonomy, c.Harness, c.Model, c.LeadModel, c.ReviewerModel, c.TribunalModels,
-		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.MaxWorkers, c.MaxChecks, c.AutoUpdate}
+		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.MaxWorkers, c.MaxChecks, c.AutoUpdate, c.Routes, slices.Sorted(maps.Keys(c.Models))}
 }
