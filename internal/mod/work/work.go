@@ -1515,6 +1515,14 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		m.save(t, np.Error())
 		return nil
 	}
+	var rr *core.RefusedRed
+	if errors.As(err, &rr) {
+		// Retrying can't help until main is green again or the rule is
+		// relaxed, so it holds, said once, rather than failing toward a stop.
+		m.raiseOnce(p, main+"/refused", "GitHub's branch rules in "+p.Name+" refuse to merge PR #"+fmt.Sprint(t.PR.Number)+", though it is no worse than main: they want "+strings.Join(rr.Checks, ", ")+", red on main at "+core.Short(main)+" too. Fix main, or merge it yourself or relax the rule to let the fix land.")
+		m.hold(t, p, rr.Error())
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -1601,13 +1609,13 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	}
 	req := m.C.Effects.RequiredChecks(p, main)
 	st, which := core.ChecksState(runs, req)
-	var shared []string
+	var shared, byName []string
 	if st == core.CheckFail {
 		mainRuns, err := m.C.Effects.Forge.Checks(p.Repo, main)
 		if err != nil {
 			return true, err
 		}
-		st, which, shared = core.ChecksAgainstMain(runs, mainRuns, req)
+		st, which, shared, byName = core.ChecksAgainstMain(runs, mainRuns, req, m.C.Effects.FailingTests(p.Repo))
 	}
 	names := core.CheckNames(which)
 	onMain := ""
@@ -1635,6 +1643,13 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	// back here every holdGap, and a repeat would crowd out its log.
 	if note := "no worse than main: the forge's checks " + strings.Join(shared, ", ") + " are red on both " + core.Short(t.SHA) + " and main at " + core.Short(main) + ", and nothing else fails, so it merges"; len(shared) > 0 && !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
 		m.save(t, note)
+		say := "Merging while main is red: " + strings.Join(shared, ", ") + " fail on main at " + core.Short(main) + " too, and nothing else fails here."
+		if len(byName) > 0 {
+			// Only a log that names its failing tests can show a new one
+			// inside a check main already fails.
+			say += " The logs of " + strings.Join(byName, ", ") + " name no failing tests to compare, so a new failure inside them can't be ruled out."
+		}
+		m.comment(p.Repo, t.PR.Number, say)
 	}
 	return false, nil
 }

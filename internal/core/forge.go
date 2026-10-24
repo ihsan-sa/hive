@@ -647,6 +647,31 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 	return list, nil
 }
 
+// CheckLogs is a forge that can read a check's log, so a check red on both a
+// head and main can be told apart by the tests failing in it.
+type CheckLogs interface {
+	CheckLog(repo string, r CheckRun) (string, error)
+}
+
+var (
+	ghJobURL   = regexp.MustCompile(`/actions/runs/\d+/job/(\d+)`)
+	ghLogStamp = regexp.MustCompile(`(?m)^\d{4}-\d\d-\d\dT[0-9:.]+Z `)
+)
+
+// CheckLog reads a GitHub Actions job's log, the timestamp GitHub puts on
+// each line taken off. Only an Actions job has one.
+func (GitHub) CheckLog(repo string, r CheckRun) (string, error) {
+	m := ghJobURL.FindStringSubmatch(r.URL)
+	if m == nil {
+		return "", fmt.Errorf("%s is not a GitHub Actions job", r.Name)
+	}
+	out, err := gh(repo, "api", "repos/"+repo+"/actions/jobs/"+m[1]+"/logs")
+	if err != nil {
+		return "", err
+	}
+	return ghLogStamp.ReplaceAllString(out, ""), nil
+}
+
 type ghSuite struct {
 	Status    string    `json:"status"`
 	Runs      int       `json:"latest_check_runs_count"`
