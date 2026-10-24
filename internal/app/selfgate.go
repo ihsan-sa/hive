@@ -152,7 +152,7 @@ func readReport(j work.GateJob, runErr, ctxErr error) core.GateResult {
 		g.Reason = "the gate's report.json is not trusted: " + err.Error()
 		return g
 	}
-	g.Reason, g.Sandbox = rep.Verdict.Reason, rep.Sandbox
+	g.Reason, g.Sandbox, g.Transient = rep.Verdict.Reason, rep.Sandbox, rep.Transient
 	if g.Reason == "" {
 		g.Reason = rep.Error
 	}

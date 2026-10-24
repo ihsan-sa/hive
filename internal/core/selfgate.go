@@ -18,16 +18,17 @@ const (
 // a keep for that head and main, or one carried to it on the same own diff
 // (GateKept, Effects.Merge).
 type GateResult struct {
-	Project string    `json:"project"`
-	Head    string    `json:"head"`
-	Main    string    `json:"main"`
-	Diff    string    `json:"diff,omitempty"` // the head's own diff (DiffID), which a keep carries along
-	Outcome string    `json:"outcome"`
-	Reason  string    `json:"reason"`
-	Report  string    `json:"report,omitempty"`  // the run's report.md on this machine
-	Sandbox string    `json:"sandbox,omitempty"` // what the children ran in
-	Note    string    `json:"note,omitempty"`    // how the run was set up, when the person should hear it (the org leg skipped)
-	At      time.Time `json:"at"`
+	Project   string    `json:"project"`
+	Head      string    `json:"head"`
+	Main      string    `json:"main"`
+	Diff      string    `json:"diff,omitempty"` // the head's own diff (DiffID), which a keep carries along
+	Outcome   string    `json:"outcome"`
+	Reason    string    `json:"reason"`
+	Report    string    `json:"report,omitempty"`    // the run's report.md on this machine
+	Sandbox   string    `json:"sandbox,omitempty"`   // what the children ran in
+	Note      string    `json:"note,omitempty"`      // how the run was set up, when the person should hear it (the org leg skipped)
+	Transient bool      `json:"transient,omitempty"` // a can't-run whose cause may pass (the machine's load, a flake on both sides): tried again soon
+	At        time.Time `json:"at"`
 }
 
 // RecordGate records a gate run's verdict. Only the daemon calls it, from the

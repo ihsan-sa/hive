@@ -49,24 +49,26 @@ const MaxDepth = 2
 
 // Report is the record of a run.
 type Report struct {
-	ID          string    `json:"id"`
-	Head        string    `json:"head"`
-	Base        string    `json:"base"`
-	Sandbox     string    `json:"sandbox"`
-	Started     time.Time `json:"started"`
-	Seconds     float64   `json:"seconds"`
-	Candidate   []Result  `json:"candidate"`
-	Control     []Result  `json:"control"`
-	Verdict     Verdict   `json:"verdict"`
-	Repos       []string  `json:"repos,omitempty"`   // org repositories made
-	Cleaned     []string  `json:"cleaned,omitempty"` // and removed
-	Leaked      []string  `json:"leaked,omitempty"`  // made and not removed
-	Error       string    `json:"error,omitempty"`
-	CandBin     string    `json:"candidate_bin,omitempty"`     // the verified copy of the candidate's binary
-	CandSHA256  string    `json:"candidate_sha256,omitempty"`  // its hash, taken right after the build
-	CantRun     bool      `json:"cant_run,omitempty"`          // the gate could not run or measure: neither a keep nor the candidate's rollback
-	CandVersion string    `json:"candidate_version,omitempty"` // what its --version must say: the gate stamps it at build time
-	Sig         string    `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
+	ID          string     `json:"id"`
+	Head        string     `json:"head"`
+	Base        string     `json:"base"`
+	Sandbox     string     `json:"sandbox"`
+	Started     time.Time  `json:"started"`
+	Seconds     float64    `json:"seconds"`
+	Candidate   []Result   `json:"candidate"`
+	Control     []Result   `json:"control"`
+	Verdict     Verdict    `json:"verdict"`
+	Repos       []string   `json:"repos,omitempty"`   // org repositories made
+	Cleaned     []string   `json:"cleaned,omitempty"` // and removed
+	Leaked      []string   `json:"leaked,omitempty"`  // made and not removed
+	Error       string     `json:"error,omitempty"`
+	CandBin     string     `json:"candidate_bin,omitempty"`     // the verified copy of the candidate's binary
+	CandSHA256  string     `json:"candidate_sha256,omitempty"`  // its hash, taken right after the build
+	CantRun     bool       `json:"cant_run,omitempty"`          // the gate could not run or measure: neither a keep nor the candidate's rollback
+	CandVersion string     `json:"candidate_version,omitempty"` // what its --version must say: the gate stamps it at build time
+	Unit        UnitReport `json:"unit"`                        // the vet and short-test step, each side's failures named
+	Transient   bool       `json:"transient,omitempty"`         // could not run for a cause that may pass (load, a flake on both sides): try again soon
+	Sig         string     `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
 }
 
 // versionVar is where the build stamps the version; versionOf is what it
@@ -124,9 +126,11 @@ func Run(cfg Config) (rep Report, err error) {
 			// evaluator, the org, the clock): nothing was measured, so this
 			// is not the candidate's failure and no lesson is written.
 			rep.Error, rep.CantRun = err.Error(), true
+			rep.Transient = errors.As(err, new(transient))
 			rep.Verdict = Verdict{Reason: "the gate could not run: " + err.Error()}
 		case !rep.Verdict.Keep && len(rep.Verdict.Regressions) == 0 && len(rep.Verdict.Unmeasured) > 0:
 			rep.CantRun = true // a probe failed on both sides: that path was never measured
+			rep.Transient = true
 		}
 		rep.redact(cfg.OrgToken, cfg.ChildToken)
 		rep.sign()
@@ -224,14 +228,24 @@ func Run(cfg Config) (rep Report, err error) {
 
 	// Only now does each side's own code run: vet and the short tests, on
 	// its read-only checkout, in its sandbox.
+	// What fails on both sides is the environment's and is only reported;
+	// what fails on the candidate alone is run again before it is its own.
 	checkErrs := map[*Child]error{}
 	for _, c := range built {
 		cfg.log("vet and short tests of %s", c.Name)
 		if e := unitTest(c); e != nil {
 			checkErrs[c] = e
+			cfg.log("  %s fails: %s", c.Name, tail(e.Error(), 2000))
 		}
 	}
-	if err = whose(cand, ctrl, checkErrs, "fails its own vet or short tests"); err != nil {
+	rep.Unit, err = judgeUnit(cand, ctrl, checkErrs, modulePath(cand.Src))
+	for _, f := range rep.Unit.Shared {
+		cfg.log("  failing on both sides, the environment's: %s", f.Name())
+	}
+	for _, f := range rep.Unit.Flaky {
+		cfg.log("  failed once on the candidate, passed again: %s", f.Name())
+	}
+	if err != nil {
 		return rep, err
 	}
 
@@ -323,6 +337,9 @@ func Run(cfg Config) (rep Report, err error) {
 		return rep, &candidateFault{"changed its own binary during the run", fmt.Errorf("the candidate's binary changed during the run")}
 	}
 	rep.Verdict = Decide(rep.Candidate, rep.Control, cfg.Options)
+	if len(rep.Unit.Shared) > 0 {
+		rep.Verdict.Reason += "; failing on both sides, so the environment's and not counted: " + failureNames(rep.Unit.Shared, modulePath(cand.Src))
+	}
 	return rep, nil
 }
 
@@ -458,49 +475,6 @@ func prefetch(cfg Config, c *Child) error {
 	return nil
 }
 
-// unitTest runs vet and the short tests in the side's sandbox, its checkout
-// and binary read-only. The side's own code (its tests, its init functions)
-// runs only like this, with the child's empty HOME and no host login; never
-// through gitRun.
-func unitTest(c *Child) error {
-	defer c.with(offline...)()
-	if out, err := c.Exec(30*time.Minute, c.Src, "go", "vet", "./..."); err != nil {
-		return fmt.Errorf("go vet: %s", tail(out, 600))
-	}
-	if out, err := c.Exec(30*time.Minute, c.Src, "go", "test", "-short", "./..."); err != nil {
-		return fmt.Errorf("go test -short: %s%s", testFailures(out), tail(out, 600))
-	}
-	return nil
-}
-
-// testFailures names what failed in go test's output (the --- FAIL lines
-// with the lines they print, a panic, a FAIL package), which its tail alone
-// loses when the failing package isn't the last: a report that says only
-// "FAIL" can't be told from a flake.
-func testFailures(out string) string {
-	var keep []string
-	in := false
-	for _, l := range strings.Split(out, "\n") {
-		t := strings.TrimSpace(l)
-		switch {
-		case strings.HasPrefix(t, "--- FAIL"), strings.HasPrefix(t, "panic:"), strings.HasPrefix(l, "FAIL\t"):
-			keep, in = append(keep, t), strings.HasPrefix(t, "--- FAIL")
-		case in && strings.HasPrefix(l, "    ") && len(keep) < 40:
-			keep = append(keep, t)
-		default:
-			in = false
-		}
-	}
-	if len(keep) == 0 {
-		return ""
-	}
-	s := strings.Join(keep, "\n")
-	if r := []rune(s); len(r) > 1500 {
-		s = string(r[:1500]) + "…"
-	}
-	return "failed:\n" + s + "\n\nthe end of its output:\n"
-}
-
 func gitRun(dir string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
@@ -575,6 +549,10 @@ func (r Report) Markdown() string {
 		fmt.Fprintf(&b, "- regression: %s\n", g)
 	}
 	table := func(name string, rs []Result) {
+		if len(rs) == 0 {
+			fmt.Fprintf(&b, "\n## %s\n\nNo probe ran: the run stopped before them.\n", name)
+			return
+		}
 		fmt.Fprintf(&b, "\n## %s\n\n| probe | rep | pass | seconds | metrics | detail |\n|---|---|---|---|---|---|\n", name)
 		for _, x := range rs {
 			var ms []string
@@ -584,6 +562,10 @@ func (r Report) Markdown() string {
 			fmt.Fprintf(&b, "| %s | %d | %v | %.1f | %s | %s |\n", x.Probe, x.Rep, x.Pass, x.Seconds, strings.Join(ms, " "), strings.ReplaceAll(tail(x.Detail, 120), "\n", " "))
 		}
 	}
+	if r.Error != "" && len(r.Unit.Candidate)+len(r.Unit.Control) == 0 {
+		fmt.Fprintf(&b, "\n%s\n", fenced(tail(r.Error, 3000)))
+	}
+	b.WriteString(r.Unit.markdown())
 	table("Candidate", r.Candidate)
 	table("Control", r.Control)
 	fmt.Fprintf(&b, "\nOrg repositories made: %d, removed: %d, left: %d\n", len(r.Repos), len(r.Cleaned), len(r.Leaked))

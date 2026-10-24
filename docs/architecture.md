@@ -8,7 +8,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 |---|---|
 | `internal/core` | **The core.** Journal (append-only event log), workspace + config, runs (agent turns, park/resume, crash retry, reattach), mailbox ops, effects process (git/forge, commit extraction, gate guarantees), project registry, token source, person queue, ceiling notes. ~3k lines. |
 | `internal/sandbox` | Linux namespaces (`sandbox-exec` outer + `sandbox-init` pid 1), WSL launcher (Windows), Seatbelt (macOS, untested), bare (opt-in). Egress proxy. |
-| `internal/harness` | Adapter seam. Claude Code (`claude -p --output-format stream-json`), Codex (`codex exec --json`, in its own read-only or workspace-write sandbox inside ours), open (`hive open-agent`: any OpenAI-compatible endpoint; [models.md](models.md)), fake (scripted). |
+| `internal/harness` | Adapter seam. Claude Code (`claude -p --output-format stream-json`), Codex (`codex exec --json`; inside our sandbox with its own off, since its bubblewrap can't nest; bare, in its own read-only or workspace-write sandbox; usage read from its session rollout at turn end), open (`hive open-agent`: any OpenAI-compatible endpoint; [models.md](models.md)), fake (scripted). |
 | `internal/proc` | Detached processes; liveness by pid + start time, and a zombie is dead, though stopping one still signals its group. |
 | `internal/agentcli` | `hive agent <op>`: what agents call from inside the sandbox. |
 | `internal/fakeagent` | `hive fake-agent`: scripted agent for tests and dry runs (FAKE:* keywords). |
@@ -109,4 +109,4 @@ Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, 
 
 - Risk module: tiers route a step to the worker, a warden, a tribunal or the person; approved scripts run in the daemon after a digest and ceiling check ([risk.md](risk.md)).
 - macOS Seatbelt profile untested.
-- Codex adapter: not yet run live with a real Codex login.
+- Codex adapter: not yet run live with a real Codex login (the fake path, `hive fake-codex`, runs in e2e).

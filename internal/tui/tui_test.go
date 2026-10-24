@@ -992,6 +992,13 @@ func TestRouteIsAPickList(t *testing.T) {
 		!slices.Contains(cur.choices, "remove claude:opus") || !slices.Contains(cur.choices, "add kimi") || !slices.Contains(cur.choices, "add claude:sonnet") {
 		t.Fatalf("picking %v, choices %q", m.picking, cur.choices)
 	}
+	// Any role can go on Codex from a Claude Hive.
+	if !slices.Contains(cur.choices, "add codex:"+harness.Models("codex")[0]) {
+		t.Fatalf("no Codex model to route to: %q", cur.choices)
+	}
+	if w := routeEdit(c, "warden", "add codex:gpt-5.5"); w.Check() != nil || w.Route("warden", "")[1] != (core.Pick{Harness: "codex", Model: "gpt-5.5"}) {
+		t.Fatalf("warden on Codex: %v (%v)", w.Route("warden", ""), w.Check())
+	}
 	c = routeEdit(c, "worker", "add kimi")
 	if !slices.Equal(c.Routes["worker"], []string{"claude:opus", "kimi"}) {
 		t.Fatalf("add after the model it runs on now: %v", c.Routes["worker"])
@@ -1037,6 +1044,31 @@ func TestSettingChangesAtOnce(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.st.Config.LeadModel != modelChoices(m.st.Config)[1] {
 		t.Fatalf("lead model %q after picking %q", m.st.Config.LeadModel, modelChoices(m.st.Config)[1])
+	}
+}
+
+// A project can run on its own harness, picked in Settings; "default" goes
+// back to the workspace's.
+func TestProjectHarnessSetting(t *testing.T) {
+	m := testModel(80, 24)
+	m.section = secSettings
+	key := "project-harness:" + m.st.Projects[0].Name
+	for i, s := range m.settings() {
+		if s.key == key {
+			m.setSel = i
+		}
+	}
+	if s := m.settings()[m.setSel]; s.key != key || !slices.Contains(s.choices, "codex") {
+		t.Fatalf("no Codex in %q's harness choices: %+v", key, s)
+	}
+	p := m.st.Projects[0].Name
+	m.saveSetting("codex")
+	if got := m.st.Config.Route("worker", p)[0].Harness; got != "codex" {
+		t.Fatalf("project worker on %q", got)
+	}
+	m.saveSetting("default")
+	if got := m.st.Config.Projects[p].Harness; got != "" {
+		t.Fatalf("default left %q", got)
 	}
 }
 
