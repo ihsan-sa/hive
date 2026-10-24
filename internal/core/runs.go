@@ -1039,6 +1039,16 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 
 func (rs *Runs) endTurn(r Run) {
 	tl := rs.ReadTurn(r, r.Turn)
+	if HarnessName(r.Harness) == "codex" {
+		// Codex keeps its usage readings in its session file, not its output.
+		l, n := rs.codexUsage(r, tl.Session)
+		if tl.Limit == nil {
+			tl.Limit = l
+		}
+		if tl.Context == 0 {
+			tl.Context = n
+		}
+	}
 	if raw, err := os.ReadFile(rs.ws.TurnOut(r.ID, r.Turn) + ".egress"); err == nil && len(raw) > 0 {
 		ev := readRefusals(string(raw))
 		ev.ID, ev.Turn = r.ID, r.Turn
@@ -1339,7 +1349,9 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	mounts := []sandbox.Mount{
 		{Host: r.Checkout, Inside: "/work", RW: !r.ReadOnly},
 		{Host: rs.ws.RunRO(r.ID), Inside: "/hive/run"},
-		{Host: rs.ws.RunBox(r.ID), Inside: "/hive/box", RW: true},
+		// A read-only Codex turn can run commands (harness.Codex), so it gets
+		// no mailbox to send through, as Claude's, with read tools only, has none.
+		{Host: rs.ws.RunBox(r.ID), Inside: "/hive/box", RW: !(r.ReadOnly && h.Name() == "codex")},
 		home,
 		{Host: rs.ws.KB(), Inside: "/hive/kb"},
 		{Host: rs.ws.Modules(), Inside: "/hive/modules"},
@@ -1572,6 +1584,31 @@ func (rs *Runs) dropCodexHome(id string) error {
 	dir := filepath.Join(rs.ws.RunPrivate(id), "codex")
 	os.Rename(filepath.Join(dir, "sessions"), filepath.Join(rs.ws.RunPrivate(id), "codex-sessions"))
 	return removeTree(dir)
+}
+
+// codexUsage is the plan usage and context Codex recorded during r's turn
+// in session's rollout file (the newest rollout when the session isn't
+// known), which the agent could write, so it is read as such.
+func (rs *Runs) codexUsage(r Run, session string) (*harness.RateLimit, int) {
+	newest, at := "", time.Time{}
+	filepath.WalkDir(filepath.Join(rs.ws.RunPrivate(r.ID), "codex", "sessions"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() || !strings.HasPrefix(d.Name(), "rollout-") || !strings.HasSuffix(d.Name(), ".jsonl") ||
+			session != "" && !strings.Contains(d.Name(), session) {
+			return nil
+		}
+		if fi, err := d.Info(); err == nil && fi.ModTime().After(at) {
+			newest, at = p, fi.ModTime()
+		}
+		return nil
+	})
+	if newest == "" {
+		return nil, 0
+	}
+	raw, err := SafeReadTail(newest, 16<<20)
+	if err != nil {
+		return nil, 0
+	}
+	return harness.Codex{}.Usage(raw, r.TurnStarted)
 }
 
 // openKeyFile is where a turn on the open harness finds its model's key.

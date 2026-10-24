@@ -72,7 +72,7 @@ func reachPolicy(org, gatedOwner string, acc []Access) error {
 		if len(wide) > 5 {
 			wide = append(wide[:5], fmt.Sprintf("and %d more", len(wide)-5))
 		}
-		return fmt.Errorf("the children's token can write to more than the gate's repositories in %s: %s", org, strings.Join(wide, ", "))
+		return fmt.Errorf("the children's token can write to more than the gate's repositories in %s: %s. The owner must move those out of %s (transfer them to another owner, or delete them), or mint the children's token without write access to them", org, strings.Join(wide, ", "), org)
 	}
 	return nil
 }
