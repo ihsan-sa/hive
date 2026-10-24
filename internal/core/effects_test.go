@@ -753,3 +753,94 @@ func TestRequiredChecks(t *testing.T) {
 		t.Fatalf("the repo's list requires %v", got)
 	}
 }
+
+// Two changes that each add to docs/log.md, docs/status.md and
+// docs/architecture.md merge into main one after the other: the repository's
+// own .gitattributes marks them merge=union, so bringing the second branch up
+// to date keeps both entries instead of sending it back as a conflict. Without
+// those lines the same merge conflicts.
+func TestAdditiveDocsMergeWithoutConflict(t *testing.T) {
+	attrs, err := os.ReadFile(filepath.Join("..", "..", ".gitattributes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs := []string{"docs/log.md", "docs/status.md", "docs/architecture.md"}
+	for _, union := range []bool{true, false} {
+		t.Run(fmt.Sprint("union=", union), func(t *testing.T) {
+			c, f := testHive(t)
+			files := map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"}
+			if union {
+				files[".gitattributes"] = string(attrs)
+			}
+			for _, d := range docs {
+				files[d] = "# Doc\n\n## first\n- old\n"
+			}
+			seedRepo(t, f, "me/docs", files)
+			p, err := c.Projects.Add(Project{Name: "docs", Repo: "me/docs"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			base, _ := c.Effects.Sync(p)
+			branch := func(id string) string {
+				dir, err := c.Effects.NewCheckout(p, id, base)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, d := range docs {
+					old, _ := os.ReadFile(filepath.Join(dir, d))
+					os.WriteFile(filepath.Join(dir, d), append(old, "\n## "+id+"\n- entry from "+id+"\n"...), 0o644)
+				}
+				mustGit(t, dir, "add", "-A")
+				mustGit(t, dir, "commit", "-q", "-m", id)
+				r, err := c.Runs.Start(RunSpec{ID: id, Role: "worker", Project: p.Name, Checkout: dir, Harness: "fake"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				sha, err := c.Effects.Extract(p, r, base)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return sha
+			}
+			a, b := branch("wa"), branch("wb")
+			land := func(name, sha string) {
+				if err := c.Effects.Push(p, name, sha); err != nil {
+					t.Fatal(err)
+				}
+				pr, err := f.CreatePR(p.Repo, name, "main", name, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.MergePR(p.Repo, pr.Number, sha, name); err != nil {
+					t.Fatal(err)
+				}
+			}
+			land("hive/a", a)
+			main, _ := c.Effects.Sync(p)
+			for _, from := range []string{"", base} { // a plain merge, and merge-tree from a checkpoint
+				_, err := c.Effects.UpdateBranch(p, b, main, from)
+				if !union {
+					if !errors.Is(err, ErrConflict) {
+						t.Fatalf("base %q: without merge=union the docs should conflict: %v", from, err)
+					}
+					continue
+				}
+				if err != nil {
+					t.Fatalf("base %q: %v", from, err)
+				}
+			}
+			if !union {
+				return
+			}
+			next, _ := c.Effects.UpdateBranch(p, b, main, "")
+			land("hive/b", next)
+			main, _ = c.Effects.Sync(p)
+			for _, d := range docs {
+				got := mustGit(t, c.WS.Project(p.Name), "show", main+":"+d)
+				if !strings.Contains(got, "entry from wa") || !strings.Contains(got, "entry from wb") || strings.Count(got, "- old") != 1 || strings.Contains(got, "<<<<<<<") {
+					t.Fatalf("%s on main should hold both entries once:\n%s", d, got)
+				}
+			}
+		})
+	}
+}
