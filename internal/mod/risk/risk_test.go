@@ -886,7 +886,7 @@ func TestJoinMidStepHearsTheResult(t *testing.T) {
 	g := newRig(t, 2)
 	gate := filepath.Join(t.TempDir(), "gate")
 	req := g.request("install a tool", "x", "T2")
-	if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "while [ ! -e " + gate + " ]; do sleep 0.05; done"}); err != nil {
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "while [ ! -e '" + filepath.ToSlash(gate) + "' ]; do sleep 0.05; done"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := g.settle(req.ID, "approved"); got.State != "running" {
