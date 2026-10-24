@@ -58,10 +58,13 @@ func Start(ws core.Workspace) (*api.Client, error) {
 	if c, ok := Running(ws); ok {
 		return c, nil
 	}
+	if c, ok := handedOver(ws); ok {
+		return c, nil
+	}
 	if err := checkHarness(ws.LoadConfig()); err != nil {
 		return nil, err
 	}
-	exe, err := os.Executable()
+	exe, err := executable()
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +80,27 @@ func Start(ws core.Workspace) (*api.Client, error) {
 	}
 	log, _ := os.ReadFile(filepath.Join(ws.Hive(), "daemon.log.err"))
 	return nil, fmt.Errorf("the Hive didn't start: %s", core.Clip(string(log), 600))
+}
+
+// handOffWait covers a restart's gap: the old daemon exits within a few
+// seconds, and the new one waits up to 10s for that before it opens the
+// workspace.
+var handOffWait = 30 * time.Second
+
+// handedOver waits for the new daemon while daemon.json says the old one is
+// restarting, so a command run in the gap doesn't start a second daemon on
+// the same workspace. It gives up after handOffWait, as when the new daemon
+// never came up.
+func handedOver(ws core.Workspace) (*api.Client, bool) {
+	if c, err := api.Dial(ws); err != nil || !c.Info.Restarting {
+		return nil, false
+	}
+	for end := time.Now().Add(handOffWait); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		if c, ok := Running(ws); ok && !c.Info.Restarting {
+			return c, true
+		}
+	}
+	return nil, false
 }
 
 // checkHarness refuses a harness the Hive can't run, so a bad name fails when

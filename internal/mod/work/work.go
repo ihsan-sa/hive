@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -70,7 +71,9 @@ type Task struct {
 	RevertOf  string            `json:"revert_of,omitempty"`  // task id
 	RevertSHA string            `json:"revert_sha,omitempty"` // the merge being reverted
 	Lesson    string            `json:"lesson,omitempty"`
-	Inputs    map[string]string `json:"inputs,omitempty"` // files its worker reads in $HIVE_RUN, kept off the issue
+	Advice    []string          `json:"advice,omitempty"`       // a land's reviewer advice, filed as one follow-up once merged
+	FollowUp  string            `json:"follow_up_of,omitempty"` // the task whose review advice this follows up
+	Inputs    map[string]string `json:"inputs,omitempty"`       // files its worker reads in $HIVE_RUN, kept off the issue
 	// A checkpoint is the running worker's commit going through the gate while
 	// it keeps working; once merged, Base moves to it and Banked counts it.
 	Checkpoint string    `json:"checkpoint,omitempty"`
@@ -236,6 +239,9 @@ type Brief struct {
 	Chat    string            `json:"chat"`
 	Thread  string            `json:"thread"`
 	Inputs  map[string]string `json:"-"`
+	// FollowUp is the task whose review advice this brief follows up; only the
+	// Hive sets it.
+	FollowUp string `json:"-"`
 }
 
 // File creates a task from a brief.
@@ -254,7 +260,7 @@ func (m *Module) File(b Brief) (Task, error) {
 		return Task{}, fmt.Errorf("no project %q", b.Project)
 	}
 	t := &Task{ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
-		From: b.From, Chat: b.Chat, Thread: b.Thread, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Created: time.Now().UTC()}
+		From: b.From, Chat: b.Chat, Thread: b.Thread, FollowUp: b.FollowUp, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Created: time.Now().UTC()}
 	m.save(t, "filed by "+b.From)
 	return *t, nil
 }
@@ -500,6 +506,9 @@ func (m *Module) step(t *Task) error {
 	case StageMerging:
 		return m.merge(t, p)
 	case StageMerged:
+		if err := m.followUp(t, p); err != nil {
+			return err
+		}
 		t.Stage = StageDone
 		m.save(t, "done")
 	case StageDone:
@@ -794,6 +803,9 @@ func (m *Module) land(t *Task, p core.Project) error {
 	r, _ := m.C.Runs.Get(t.Worker)
 	sha, err := m.C.Effects.Extract(p, r, t.Base)
 	if errors.Is(err, core.ErrNoChanges) && t.Banked > 0 {
+		if err := m.followUp(t, p); err != nil { // advice from the checkpoints' reads
+			return err
+		}
 		t.Stage, t.IssueOpen, t.Failures = StageDone, true, 0
 		m.save(t, "done: everything the worker made was merged as checkpoints")
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q; all of it was merged as checkpoints.", t.Label()))
@@ -1054,7 +1066,7 @@ func passFail(ok bool) string {
 }
 
 // VerdictSchema is the reviewer's structured answer.
-const VerdictSchema = `{"type":"object","properties":{"verdict":{"type":"string","enum":["land","fix"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"issue":{"type":"string"}},"required":["issue"]}},"token":{"type":"string"}},"required":["verdict","summary","token"]}`
+const VerdictSchema = `{"type":"object","properties":{"verdict":{"type":"string","enum":["land","fix"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"issue":{"type":"string"}},"required":["issue"]}},"advice":{"type":"array","items":{"type":"string"}},"token":{"type":"string"}},"required":["verdict","summary","token"]}`
 
 // reviewToken is copied from brief.md into the verdict, so a land shows the
 // reviewer read its inputs.
@@ -1097,7 +1109,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 		spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
 		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": c.Output,
-			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account}
+			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account + m.reviewRules(p, main)}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
 		}
@@ -1137,8 +1149,15 @@ func (m *Module) review(t *Task, p core.Project) error {
 		}
 		fmt.Fprintf(&fb, "\n- `%s` %s", loc, f.Issue)
 	}
+	for _, a := range v.Advice {
+		fmt.Fprintf(&fb, "\n- Advice: %s", a)
+	}
 	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fb.String())
 	if v.Verdict == "land" {
+		// Advice with a land doesn't hold the merge; it is kept, from every read,
+		// and filed as one follow-up once the change merges. A follow-up's own
+		// advice stays on its pull request, so the chain stops there.
+		keepAdvice(t, v.Advice)
 		// Back through test(), which merges or asks a second, separate reader for a high class.
 		t.Stage = StageTesting
 		m.save(t, "reviewer: land")
@@ -1148,6 +1167,51 @@ func (m *Module) review(t *Task, p core.Project) error {
 		return m.dropCheckpoint(t, p, "the reviewer asked for fixes:\n\n"+fb.String())
 	}
 	return m.sendBack(t, p, "The reviewer asked for fixes on "+core.Short(t.SHA)+":\n\n"+fb.String())
+}
+
+// keepAdvice adds a land's advice to the task once per item, unless the task
+// is itself a follow-up.
+func keepAdvice(t *Task, advice []string) {
+	if t.FollowUp != "" {
+		return
+	}
+	for _, a := range advice {
+		if a = strings.TrimSpace(a); a != "" && !slices.Contains(t.Advice, a) {
+			t.Advice = append(t.Advice, a)
+		}
+	}
+}
+
+// reviewRules are the project's standing rules, read from main so a change
+// can't move the bar it is judged against. Lessons are among them: a revert
+// the Hive made has no worker brief quoting them, and one may have landed
+// since the worker started.
+func (m *Module) reviewRules(p core.Project, main string) string {
+	var b strings.Builder
+	for _, f := range []string{"docs/REVIEW.md", ".hive/goals.md", ".hive/lessons.md"} {
+		if s := strings.TrimSpace(m.C.Effects.ReadFile(p, main, f)); s != "" {
+			fmt.Fprintf(&b, "\n\n## `%s` on main\n\n%s", f, s)
+		}
+	}
+	return b.String()
+}
+
+// followUp files a merged task's review advice as one follow-up brief. The
+// task is saved merged before this runs and done after, so a restart in
+// between finds the brief already filed and doesn't file it again.
+func (m *Module) followUp(t *Task, p core.Project) error {
+	if len(t.Advice) == 0 || len(m.List(func(x Task) bool { return x.FollowUp == t.ID })) > 0 {
+		return nil
+	}
+	url := t.PR.URL
+	if url == "" && len(t.Banks) > 0 { // done on its checkpoints alone
+		url = t.Banks[len(t.Banks)-1].PR.URL
+	}
+	_, err := m.File(Brief{Project: p.Name, From: t.Reviewer, Chat: t.Chat, Thread: t.Thread, FollowUp: t.ID,
+		Title: "Follow up the review of " + core.Clip(t.Label(), 100),
+		Done:  "Each item below is done, or judged not worth doing with the reason in your account.",
+		Known: "The reviewer landed " + url + ", now merged, with this advice:\n\n- " + strings.Join(t.Advice, "\n- ")})
+	return err
 }
 
 // sendBack returns findings to the same worker in the same checkout, a
@@ -1395,9 +1459,9 @@ func (m *Module) Retry(id string) error {
 
 // doneFor is the done line a brief carries. On a scored project an agent's own
 // bar would cap the work, so the ask stands as done; the Hive's own setup brief
-// keeps its line.
+// and a review follow-up keep their line.
 func doneFor(t *Task, scored bool) string {
-	if scored && t.From != "hive" {
+	if scored && t.From != "hive" && t.FollowUp == "" {
 		return "What the ask says, as far as you can take it."
 	}
 	return orNone(t.Done)
