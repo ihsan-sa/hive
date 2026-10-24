@@ -13,7 +13,9 @@ on:
 concurrency:
   # Keyed by event too, so a push to main never cancels a manual three-system run on main.
   group: ci-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only a PR's superseded run is cancelled: every push to main finishes its run, so a
+  # change waiting on main's result gets one however fast merges come.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 # Read-only whatever the repository's default is: no job here writes to it.
 permissions:
   contents: read
