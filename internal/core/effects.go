@@ -79,6 +79,7 @@ type Check struct {
 	Score   *float64  `json:"score,omitempty"`
 	Output  string    `json:"output"`
 	CantRun string    `json:"cant_run,omitempty"` // why the command couldn't start (a missing tool): no verdict on the commit
+	Tool    string    `json:"tool,omitempty"`     // with CantRun: the tool the shell couldn't find
 	Log     string    `json:"log,omitempty"`      // the full output on the host, when it ran
 	Failed  []string  `json:"failed,omitempty"`   // the failing tests it names, read before the output is clipped
 	At      time.Time `json:"at"`
@@ -485,7 +486,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	}
 	c.OK = code == 0
 	if tool := MissingTool(code, out); tool != "" {
-		c.CantRun = "can't run: " + tool + " is not installed where checks run"
+		c.CantRun, c.Tool = "can't run: "+tool+" is not installed where checks run", tool
 		return record()
 	}
 	if (kind == "test" || kind == "retest") && !c.OK {
@@ -503,9 +504,10 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 }
 
 // missingTool matches the shell's "not found" for a command looked up on the
-// PATH: dash's "/bin/sh: 1: go: not found", bash's "bash: go: command not found"
-// and env's "env: 'go': No such file or directory".
-var missingTool = regexp.MustCompile(`(?m)^(?:\S*sh: (?:line )?\d*:? ?([^\s/:']+): (?:command )?not found|env: '?([^\s/:']+)'?: No such file or directory)\s*$`)
+// PATH: dash's "/bin/sh: 1: go: not found", bash's "bash: go: command not found",
+// busybox's "sh: go: not found", zsh's "zsh:1: command not found: go" and env's
+// "env: 'go': No such file or directory".
+var missingTool = regexp.MustCompile(`(?m)^(?:\S*sh: (?:line )?\d*:? ?([^\s/:']+): (?:command )?not found|env: '?([^\s/:']+)'?: No such file or directory|zsh:(?:\d+: )? ?command not found: ([^\s/:']+))\s*$`)
 
 // MissingTool names the tool a check's command couldn't find, or "" when it
 // ran. Only exit 127 with the shell's own message counts, and only for a bare
@@ -515,17 +517,26 @@ func MissingTool(code int, out string) string {
 		return ""
 	}
 	if m := missingTool.FindStringSubmatch(out); m != nil {
-		return m[1] + m[2]
+		return m[1] + m[2] + m[3]
 	}
 	return ""
 }
 
 // noVerdict says a recorded check couldn't start, so it isn't the commit's
 // answer. A failure recorded before checks carried cant_run is read from its
-// output: those kept "go: not found" as main's red result for good.
+// output: those kept "go: not found" as main's red result for good. Later
+// records say so themselves, so a real red that merely logs a "not found" line
+// stays cached, as does an old one that named its failing tests.
 func noVerdict(c Check) bool {
-	return c.CantRun != "" || (!c.OK && missingTool.MatchString(c.Output))
+	if c.CantRun != "" {
+		return true
+	}
+	return !c.OK && c.At.Before(cantRunRecorded) && len(c.Failed) == 0 && missingTool.MatchString(c.Output)
 }
+
+// cantRunRecorded is when every check came to carry cant_run (a day's margin
+// after it merged, for daemons that hadn't updated yet).
+var cantRunRecorded = time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
 
 var failedTest = regexp.MustCompile(`(?m)^\s*--- FAIL: (\S+)|^FAILED (\S+)`)
 
