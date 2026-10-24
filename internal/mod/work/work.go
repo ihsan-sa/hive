@@ -187,11 +187,12 @@ type Module struct {
 	// holdPolled when each one's release condition may next be asked of the forge.
 	holds      map[string]*MergeHold
 	holdPolled map[string]time.Time
+	holdWarned map[string]bool // hold and repo whose releases couldn't be read, raised once
 }
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string][]string{}, mainRed: map[string]bool{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string][]string{}, mainRed: map[string]bool{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, holdWarned: map[string]bool{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -415,6 +416,7 @@ func (m *Module) Revert(of Task, mergeSHA, reason string) (Task, error) {
 // for a worker goes only when the queue lets it, and otherwise says why it waits.
 func (m *Module) Tick() {
 	m.revive()
+	m.watchHolds()
 	tasks := m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) })
 	start, wait := m.admit(tasks)
 	for _, t := range tasks {
