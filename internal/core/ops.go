@@ -150,23 +150,47 @@ func isRealDir(p string) bool {
 // SafeRead reads a regular file the sandbox could have written, refusing
 // symlinks and anything that changes between the check and the open.
 func SafeRead(path string, limit int64) ([]byte, error) {
-	before, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !before.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	f, err := os.Open(path)
+	f, _, err := safeOpen(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	after, err := f.Stat()
-	if err != nil || !os.SameFile(before, after) {
-		return nil, errors.New("file changed while reading")
+	return io.ReadAll(io.LimitReader(f, limit))
+}
+
+// SafeReadTail is SafeRead of the file's last limit bytes.
+func SafeReadTail(path string, limit int64) ([]byte, error) {
+	f, fi, err := safeOpen(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if fi.Size() > limit {
+		if _, err := f.Seek(fi.Size()-limit, io.SeekStart); err != nil {
+			return nil, err
+		}
 	}
 	return io.ReadAll(io.LimitReader(f, limit))
+}
+
+func safeOpen(path string) (*os.File, os.FileInfo, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return nil, nil, errors.New("not a regular file")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	after, err := f.Stat()
+	if err != nil || !os.SameFile(before, after) {
+		f.Close()
+		return nil, nil, errors.New("file changed while reading")
+	}
+	return f, after, nil
 }
 
 func writeResponse(inbox, id string, resp Response) {
