@@ -644,6 +644,18 @@ func (s *server) routes() http.Handler {
 		}
 		return a.C.Person.Answer(b.ID, b.Answer, b.Note)
 	})
+	h("/api/read", func(r *http.Request) (any, error) {
+		// An outside read is the person's to record (autobox relays the box's
+		// perms seat and architect), never a module's.
+		if moduleOf(r) != "" {
+			return nil, errors.New("only the person records an outside read")
+		}
+		var b struct{ ID, SHA, By, Verdict, Note string }
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		return a.Work.RecordRead(b.ID, b.SHA, b.By, b.Verdict, b.Note)
+	})
 	h("/api/improve", func(r *http.Request) (any, error) { return a.Improve.StartSweep(true) })
 	h("/api/job", func(r *http.Request) (any, error) {
 		var b struct{ Name string }

@@ -35,7 +35,7 @@ A change touching a root path needs two separate land reads of its exact commit 
 
 - **New guarded code elsewhere.** A new package that, say, execs outside the box isn't caught until someone adds it to the list. The reviewer still reads it; the list is a floor, not a fence.
 - **Opting out.** The person can add classes in project.json but can't remove a built-in one there. If they want that, it's a settings field to add later.
-- **The perms-seat read.** The goals' rule (sandbox, self-update and login changes get one read from the box's perms seat or architect, routed by autobox) stays a PR note, not a gate rule; this doesn't route anything to autobox.
+- **The perms-seat read.** That interim rule was lifted on 2026-10-24: a change to a path on `tests/LANDING-security.toml` gets its security read from the Hive's own security seat and, for a root path, its panel (see architecture.md, step 8); a perms or architect read still counts but isn't needed.
 - **Changing the lists** is itself a change to `internal/core/projects.go`, which isn't guarded. Guarding the core whole would put most changes behind two reads.
 
 ## Open questions for the person

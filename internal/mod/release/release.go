@@ -475,7 +475,7 @@ func (m *Module) afterKept(project, sha string) {
 	var manifest strings.Builder
 	var root, unread []string
 	for _, mg := range list {
-		if reads := m.C.Effects.Reads(project, mg.SHA); len(reads) > 0 {
+		if reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff); len(reads) > 0 {
 			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
 		} else {
 			unread = append(unread, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
@@ -600,6 +600,7 @@ type merge struct {
 	SHA      string
 	MergeSHA string `json:"merge_sha"`
 	Root     []string
+	Diff     string // the head's own diff (core.DiffID), whose reads carry to it
 }
 
 // merges lists the project's merges after the one its last release was cut
