@@ -47,22 +47,22 @@ const MaxDepth = 2
 
 // Report is the record of a run.
 type Report struct {
-	ID         string    `json:"id"`
-	Head       string    `json:"head"`
-	Base       string    `json:"base"`
-	Sandbox    string    `json:"sandbox"`
-	Started    time.Time `json:"started"`
-	Seconds    float64   `json:"seconds"`
-	Candidate  []Result  `json:"candidate"`
-	Control    []Result  `json:"control"`
-	Verdict    Verdict   `json:"verdict"`
-	Repos      []string  `json:"repos,omitempty"`   // org repositories made
-	Cleaned    []string  `json:"cleaned,omitempty"` // and removed
-	Leaked     []string  `json:"leaked,omitempty"`  // made and not removed
-	Error      string    `json:"error,omitempty"`
-	CandBin    string    `json:"candidate_bin,omitempty"`    // the verified copy of the candidate's binary
-	CandSHA256 string    `json:"candidate_sha256,omitempty"` // its hash, taken right after the build
-	CandVersion string   `json:"candidate_version,omitempty"` // what its --version must say: the gate stamps it at build time
+	ID          string    `json:"id"`
+	Head        string    `json:"head"`
+	Base        string    `json:"base"`
+	Sandbox     string    `json:"sandbox"`
+	Started     time.Time `json:"started"`
+	Seconds     float64   `json:"seconds"`
+	Candidate   []Result  `json:"candidate"`
+	Control     []Result  `json:"control"`
+	Verdict     Verdict   `json:"verdict"`
+	Repos       []string  `json:"repos,omitempty"`   // org repositories made
+	Cleaned     []string  `json:"cleaned,omitempty"` // and removed
+	Leaked      []string  `json:"leaked,omitempty"`  // made and not removed
+	Error       string    `json:"error,omitempty"`
+	CandBin     string    `json:"candidate_bin,omitempty"`     // the verified copy of the candidate's binary
+	CandSHA256  string    `json:"candidate_sha256,omitempty"`  // its hash, taken right after the build
+	CandVersion string    `json:"candidate_version,omitempty"` // what its --version must say: the gate stamps it at build time
 }
 
 // versionVar is where the build stamps the version; versionOf is what it

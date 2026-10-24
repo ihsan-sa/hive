@@ -110,9 +110,9 @@ type Child struct {
 	Depth    int    // how many more levels the child may gate
 	Go       Go
 	Eval     *Evaluator // judges this child; nil for prebuilt binaries
-	Building bool     // BinDir is writable only while the child builds
-	RO, RW   []string // more paths the child sees, read-only and writable
-	Extra    []string // more environment
+	Building bool       // BinDir is writable only while the child builds
+	RO, RW   []string   // more paths the child sees, read-only and writable
+	Extra    []string   // more environment
 }
 
 // Home is the child's HOME; Workspace is its HIVE_HOME; Tmp its TMPDIR.
