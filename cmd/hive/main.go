@@ -39,6 +39,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive login               log in to Claude Code and GitHub with their own logins
   hive login add <name>    add another Claude login to spread runs over; add "codex" for Codex
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
+  hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
   hive update              install the newest release [--release <tag>: that one, and stay on it]
   hive shutdown            stop the Hive (running agents finish their turn)
   hive uninstall           remove autostart and the binary's record; leaves your folder
@@ -155,9 +156,9 @@ func run(args []string) int {
 			}
 			for _, a := range st.Asks {
 				if a.ID == args[0] {
-					opt := a.Options[0]
-					if cmd == "refuse" {
-						opt = a.Options[len(a.Options)-1]
+					opt, err := approveOption(cmd, a)
+					if err != nil {
+						return err
 					}
 					fmt.Println(cmd+"d:", a.Title, "->", opt)
 					return c.Do("POST", "/api/answer", map[string]string{"id": a.ID, "answer": opt, "note": strings.Join(args[1:], " ")}, nil)
@@ -195,6 +196,8 @@ func run(args []string) int {
 		return 0
 	case "doctor":
 		return cmdDoctor(args)
+	case "share":
+		return cmdShare(args)
 	case "update":
 		tag, ok := releaseArg(args)
 		if !ok {
@@ -513,4 +516,16 @@ func kbArgs(args []string) (query, limit string) {
 		words = append(words, args[i])
 	}
 	return strings.Join(words, " "), limit
+}
+
+// approveOption is the option approve (the first) or refuse (the last) picks;
+// an ask with no options takes the person's own words through hive answer.
+func approveOption(cmd string, a core.Ask) (string, error) {
+	if len(a.Options) == 0 {
+		return "", fmt.Errorf("%s has no options to %s: answer it in your own words with %s answer %s <text>", a.ID, cmd, core.Cmd, a.ID)
+	}
+	if cmd == "refuse" {
+		return a.Options[len(a.Options)-1], nil
+	}
+	return a.Options[0], nil
 }

@@ -73,6 +73,7 @@ type Run struct {
 	Turn        int             `json:"turn"`
 	Proc        proc.Handle     `json:"proc"`
 	Cost        float64         `json:"cost"`
+	Context     int             `json:"context,omitempty"` // tokens in its session at its last reply
 	Result      string          `json:"result,omitempty"`
 	Structured  json.RawMessage `json:"structured,omitempty"`
 	Finish      *Finish         `json:"finish,omitempty"`
@@ -319,6 +320,7 @@ type turnEnded struct {
 	ID          string          `json:"id"`
 	Turn        int             `json:"turn"`
 	SessionLive bool            `json:"session_live"`
+	Context     int             `json:"context,omitempty"`
 	Session     string          `json:"session,omitempty"` // the id the harness reported
 	Result      *harness.Result `json:"result,omitempty"`
 	Status      string          `json:"status"`
@@ -395,6 +397,9 @@ func (rs *Runs) apply(e Event) {
 		}
 		r.Status, r.Reason, r.ParkedUntil, r.Offline = t.Status, t.Reason, t.ParkedUntil, t.Offline
 		r.Proc = proc.Handle{}
+		if t.Context > 0 {
+			r.Context = t.Context
+		}
 		if t.Result != nil {
 			r.Cost += t.Result.CostUSD
 			rs.spent[e.At.UTC().Format("2006-01")] += t.Result.CostUSD
@@ -737,6 +742,7 @@ func (rs *Runs) watch(r Run) {
 // TurnLog parses a turn's output file.
 type TurnLog struct {
 	SessionLive bool
+	Context     int
 	Session     string
 	Result      *harness.Result
 	Limit       *harness.RateLimit
@@ -759,6 +765,8 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 				tl.Result = ev.Result
 			case "ratelimit":
 				tl.Limit = ev.RateLimit
+			case "context":
+				tl.Context = ev.Tokens
 			}
 			if ev.Kind == "text" || ev.Kind == "tool" {
 				tl.Steps = append(tl.Steps, ev)
@@ -802,7 +810,7 @@ func (rs *Runs) endTurn(r Run) {
 	if tl.Limit != nil {
 		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
 	}
-	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Session: tl.Session, Result: tl.Result}
+	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Session: tl.Session, Context: tl.Context, Result: tl.Result}
 	var dropErr error
 	if HarnessName(r.Harness) == "codex" {
 		dropErr = rs.dropCodexHome(r.ID)
@@ -1136,28 +1144,30 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	}, nil
 }
 
-// Walled refuses r reaching project when either side is an isolated project:
-// an isolated project is reached only from its own runs, and its runs reach
-// no other project. Both come from the core's record of r, never from r.
+// Walled refuses r reaching project when either side is hidden (private or
+// isolated): a hidden project is reached only from its own runs, and its runs
+// reach no other project, so nothing of it is carried out in a brief or message. Both come from the core's record of r, never from r.
 func (rs *Runs) Walled(r Run, project string) error {
 	if project == r.Project || rs.projs == nil {
 		return nil
 	}
 	for _, name := range []string{project, r.Project} {
-		if p, ok := rs.projs.Get(name); ok && p.Isolated {
+		if p, ok := rs.projs.Get(name); ok && p.Hidden() {
 			return fmt.Errorf("project %q is out of reach of %s's agents", project, r.Project)
 		}
 	}
 	return nil
 }
 
-// hideIsolated covers what isolated projects other than r's own leave in the
-// shared Hive, so r reads none of their code, runs, chats, notes, checks or
-// scores. An isolated run sees only the knowledge base of what is shared, so
-// it gets just the notes covered. The journal holds every project's events in
-// one file, so it is covered whole while any project is isolated. The folders
-// are made first so what lands in them mid-turn is covered too; a run or chat
-// started mid-turn is not, until that agent's next turn.
+// hideIsolated covers what hidden projects (private or isolated) other than
+// r's own leave in the shared Hive, so r reads none of their code, runs,
+// chats, notes, checks or scores. An isolated run sees only the knowledge base
+// of what is shared, so it gets just the notes covered; a private run sees the
+// rest of the shared Hive as a shared one does. The journal holds every
+// project's events in one file, so it is covered whole while any other project
+// is hidden. The folders are made first so what lands in them mid-turn is
+// covered too; a run or chat started mid-turn is not, until that agent's next
+// turn.
 func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 	if rs.projs == nil {
 		return nil
@@ -1166,7 +1176,7 @@ func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 	var out []sandbox.Mount
 	var rel []string
 	for _, p := range rs.projs.List() {
-		if !p.Isolated || p.Name == r.Project {
+		if !p.Hidden() || p.Name == r.Project {
 			continue
 		}
 		iso[p.Name] = true
@@ -1183,7 +1193,9 @@ func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 			os.MkdirAll(filepath.Join(rs.ws.Hive(), d, p.Name), 0o755)
 			rel = append(rel, d+"/"+p.Name)
 		}
-		rel = append(rel, "kb/isolated/"+p.Name, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl")
+		// A private project's lead works in its leads/ folder (an isolated one's in a checkout).
+		os.MkdirAll(filepath.Join(rs.ws.Hive(), "leads", "project-"+p.Name), 0o755)
+		rel = append(rel, "kb/isolated/"+p.Name, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl", "leads/project-"+p.Name)
 	}
 	if len(iso) > 0 { // the kb's record is filed from the journal, so it is covered whole too
 		rec := filepath.Join(rs.ws.KB(), "record")
