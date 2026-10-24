@@ -247,11 +247,30 @@ func (s *server) onEvent(e core.Event) {
 	if e.Kind != "alert.raised" {
 		return
 	}
-	var a struct{ Kind, Text, Ref string }
+	var a struct{ Kind, Project, Key, Text, Ref string }
 	e.Decode(&a)
+	if a.Key == "" {
+		a.Key = a.Text
+	}
+	key := a.Kind + "\x00" + a.Project + "\x00" + a.Key
 	s.mu.Lock()
-	s.alerts = slices.DeleteFunc(s.alerts, func(x api.Alert) bool { return a.Ref != "" && x.Ref == a.Ref })
-	s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text, Ref: a.Ref})
+	if a.Ref != "" {
+		// A status that changes (a step-back's): the newest text replaces it. It
+		// never dedups with a keyed failure alert, even with the same text.
+		s.alerts = slices.DeleteFunc(s.alerts, func(x api.Alert) bool { return x.Ref == a.Ref })
+		s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text, Count: 1, Ref: a.Ref})
+	} else {
+		// A failure that repeats: one alert, counted.
+		n := 1
+		for i := range s.alerts {
+			if s.alerts[i].Key == key {
+				n += s.alerts[i].Count
+				s.alerts = append(s.alerts[:i], s.alerts[i+1:]...) // re-added below as the newest
+				break
+			}
+		}
+		s.alerts = append(s.alerts, api.Alert{At: e.At, Kind: a.Kind, Text: a.Text, Count: n, Key: key})
+	}
 	if len(s.alerts) > 50 {
 		s.alerts = s.alerts[len(s.alerts)-50:]
 	}
@@ -731,7 +750,7 @@ func (s *server) state() api.State {
 	s.mu.Unlock()
 	if cfgErr != nil { // live, so it goes once the file is fixed
 		st.ConfigErr = cfgErr.Error()
-		st.Alerts = append(st.Alerts, api.Alert{At: time.Now(), Kind: "settings", Text: cfgErr.Error()})
+		st.Alerts = append(st.Alerts, api.Alert{At: time.Now(), Kind: "settings", Text: cfgErr.Error(), Count: 1})
 	}
 	st.Jobs = a.System.Jobs()
 	st.Wakeups = a.System.Wakeups()

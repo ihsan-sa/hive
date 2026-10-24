@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -190,17 +191,21 @@ func (m *Module) List() []Request {
 	return out
 }
 
-// opRequests shows an agent (the lead, mostly) the newest requests, so it can
-// tell the person what waits on them and how to answer.
+// opRequests shows an agent (the lead, mostly) every pending request and the
+// newest settled ones, so it can tell the person what waits on them and how
+// to answer.
 func (m *Module) opRequests(core.Run, json.RawMessage) (any, error) {
 	type view struct {
 		ID, From, Want, Why, State, Warden, Decision, Reason, Outcome, Answer string
 		Since                                                                 time.Time
 	}
 	var out []view
+	settled := 0
 	for _, r := range m.List() {
-		if len(out) == 20 {
-			break
+		if r.State == "done" || r.State == "declined" || r.State == "failed" {
+			if settled++; settled > 20 {
+				continue
+			}
 		}
 		v := view{r.ID, r.Origin, core.Clip(r.Want, 200), core.Clip(r.Why, 300), r.State, r.Warden, r.Decision, core.Clip(r.Reason, 300), r.Outcome, "", r.Updated}
 		if a, ok := m.C.Person.Get(r.Ask); ok && a.Answer == "" {
@@ -325,6 +330,12 @@ var (
 	sudoRe = regexp.MustCompile(`\bsudo\b`)
 	sudoOK = func() bool { return exec.Command("sudo", "-n", "true").Run() == nil }
 )
+
+// sudoPassword is what sudo prints when it wants a password it can't read.
+// A step runs with no terminal, so a sudo that passed sudoOK but wants a
+// password for this command fails there. The match is on the text, so it
+// counts only when the step failed too.
+var sudoPassword = regexp.MustCompile(`sudo: (a password is required|a terminal is required|no tty present)`)
 
 // sudoFact tells a warden whether a script here can use sudo.
 func sudoFact() string {
@@ -564,10 +575,17 @@ func voteOf(p core.Run) (string, string) {
 	var v struct{ Vote, Reason string }
 	d := json.NewDecoder(bytes.NewReader(p.Structured))
 	d.DisallowUnknownFields()
-	if p.Status != core.StatusDone || d.Decode(&v) != nil || d.More() || (v.Vote != "approve" && v.Vote != "decline") {
+	if p.Status != core.StatusDone || d.Decode(&v) != nil || !atEnd(d) || (v.Vote != "approve" && v.Vote != "decline") {
 		return "decline", "no vote (" + p.Status + ")"
 	}
 	return v.Vote, core.Clip(v.Reason, 2000)
+}
+
+// atEnd says the decoder has nothing left but whitespace; More() alone
+// misses a stray closing delimiter such as the second brace of "{...}}".
+func atEnd(d *json.Decoder) bool {
+	_, err := d.Token()
+	return err == io.EOF
 }
 
 // advance moves a tribunal on once every seat has voted this round.
@@ -739,6 +757,18 @@ func (m *Module) execute(id string) {
 
 	out, err := m.run(req)
 	req.Output = core.Clip(out, 4000)
+	if err != nil && sudoPassword.MatchString(out) { // never re-run: some of it may have run
+		m.act.Lock()
+		if cur, ok := m.get(id); ok {
+			req.Joined = cur.Joined
+		}
+		m.ask(&req, "Needs your password", "This step failed, and what it printed reads like sudo wanting your password, which the Hive can't type (the check is on the text). A script doesn't stop at a failed command, so any line of it may have run, before sudo or after; read the output below before you finish it yourself in a shell and answer done, or decline.\n\nWhat it printed:\n"+req.Output, "done", "declined")
+		m.act.Unlock()
+		if req.Settles == nil {
+			m.tell(req, fmt.Sprintf("%q needs the person's password for sudo, so it waits on them; you hear their answer.", core.Clip(req.Want, 80)))
+		}
+		return
+	}
 	req.State, req.Outcome = "done", "done"
 	if err != nil {
 		req.State, req.Outcome = "failed", err.Error()
