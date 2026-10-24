@@ -110,6 +110,9 @@ func TestInstallMovesInWhole(t *testing.T) {
 	if m, ok := r.Get("ledger"); !ok || !core.Exists(filepath.Join(m.Dir, "ledger.md")) {
 		t.Fatalf("installed %+v without its file", m)
 	}
+	if m, _ := r.Get("ledger"); m.Source.Source != src || m.Source.Release == "" {
+		t.Fatalf("installed without its source record: %+v", m.Source)
+	}
 	if _, ok := r.Get("gone"); ok {
 		t.Fatal("the failed install lists")
 	}
