@@ -12,11 +12,11 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 | `internal/proc` | Detached processes; liveness by pid + start time, and a zombie is dead, though stopping one still signals its group. |
 | `internal/agentcli` | `hive agent <op>`: what agents call from inside the sandbox. |
 | `internal/fakeagent` | `hive fake-agent`: scripted agent for tests and dry runs (FAKE:* keywords). |
-| `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb` (notes, the record filed from the journal, search), `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates, the tick list), `runner` (modules that carry a program), `release` (self-update, self-release), `tools` (runtimes agents install for themselves). |
+| `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb` (notes, the record filed from the journal, search), `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates, the tick list), `runner` (modules that carry a program), `release` (self-update, self-release), `tools` (runtimes agents install for themselves), `feedback` (what agents tell the person about the Hive; [feedback.md](feedback.md)). |
 | `internal/app` | Wires core + modules; the tick loop steps the core, then each module the registry lists. |
 | `internal/daemon` | `hive daemon`, control API (127.0.0.1, bearer token in `.hive/private/daemon.json`, 0600). |
 | `internal/api` | API types + client. |
-| `internal/tui` | Control center (Bubble Tea): Chats, Dashboard, Waiting, Modules, Settings. |
+| `internal/tui` | Control center (Bubble Tea): Chats, Dashboard, Waiting, Feedback, Modules, Settings. |
 | `internal/setup` | First run, `hive login`, `hive doctor`, autostart (HKCU Run / systemd user / LaunchAgent). |
 | `modules/` | Default module content (orientation + role prompts, manifests), embedded and written to `.modules/` on first run. |
 | `internal/demo` | Demo project template (textkit: tests + score). |

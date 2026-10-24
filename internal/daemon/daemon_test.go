@@ -154,3 +154,57 @@ func TestStateCarriesADiffPreview(t *testing.T) {
 		t.Fatalf("%d: /api/waiting should return the whole %d-byte diff, got %d (%v)", rec.Code, len(diff), len(got.Diff), err)
 	}
 }
+
+// The person passes an agent's feedback to the lead: it lands in the lead's
+// chat as the person's message quoting it, the item is marked passed, and a
+// second pass is refused rather than posted twice.
+func TestPassFeedbackToTheLead(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ws.LoadConfig()
+	cfg.Harness = "fake"
+	if err := ws.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	a, err := app.New(ws, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	it, err := a.Feedback.Add(core.Run{RunSpec: core.RunSpec{ID: "w-1", Role: "worker"}}, "kb", "search missed my note")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &server{a: a, info: api.DaemonInfo{Token: "t"}}
+	do := func(what string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/feedback", strings.NewReader(fmt.Sprintf(`{"id": %q, "do": %q}`, it.ID, what)))
+		req.Header.Set("Authorization", "Bearer t")
+		rec := httptest.NewRecorder()
+		s.routes().ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := do("pass"); rec.Code != http.StatusOK {
+		t.Fatalf("pass: %d %s", rec.Code, rec.Body)
+	}
+	msgs := a.Chat.Messages("lead")
+	if len(msgs) != 1 || msgs[0].From != "person" || !strings.Contains(msgs[0].Text, "> search missed my note") {
+		t.Fatalf("the lead's chat after a pass: %+v", msgs)
+	}
+	if got, _ := a.Feedback.Get(it.ID); got.Status != "passed" {
+		t.Fatalf("item after a pass: %+v", got)
+	}
+	if rec := do("pass"); rec.Code == http.StatusOK || len(a.Chat.Messages("lead")) != 1 {
+		t.Fatalf("a second pass went through: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do("close"); rec.Code != http.StatusOK {
+		t.Fatalf("close: %d %s", rec.Code, rec.Body)
+	}
+	if st := s.state(); len(st.Feedback) != 1 || st.Feedback[0].Status != "closed" {
+		t.Fatalf("state's feedback: %+v", st.Feedback)
+	}
+	if rec := do("delete"); rec.Code == http.StatusOK {
+		t.Fatal("an unknown action was accepted")
+	}
+}

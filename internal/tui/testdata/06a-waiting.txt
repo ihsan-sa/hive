@@ -3,12 +3,13 @@
    Chats              │ ▌ hive-web › lead  permission                                                              12m
    Dashboard          │ ▌ Warden blocked worker-2 writing to ../shared/.env, outside the workspace. Allow it once?
  › Waiting         3  │ ▌ allow once    always    deny    ←→ pick   enter answer
-   Modules            │
-   Settings           │   textkit-2 › lead  question                                                               13m
-                      │   Keep the old import path as an alias for one release, or break it now?
- ▾ textkit-2          │
-   lead               │   website › lead  budget                                                                    7m
-   writer             │   The OG image rebuild will use about $3.40 of tokens. Go ahead?
+   Feedback        1  │
+   Modules            │   textkit-2 › lead  question                                                               13m
+   Settings           │   Keep the old import path as an alias for one release, or break it now?
+                      │
+ ▾ textkit-2          │   website › lead  budget                                                                    7m
+   lead               │   The OG image rebuild will use about $3.40 of tokens. Go ahead?
+   writer             │
    reviewer        ●  │
  ▾ hive-web           │
    lead            ●  │
@@ -16,7 +17,6 @@
    reviewer           │
    tribunal           │
  ▸ website            │
-                      │
                       │
                       │
                       │

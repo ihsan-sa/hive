@@ -25,6 +25,7 @@ Everything goes through `hive agent <op>` (`hive agent help` lists them):
 - `hive agent spawn --brief "..."`: a helper; its account comes back as a message, and its commits get a pull request of their own.
 - `hive agent brief --title "..." --done "..." --known "..."`: file new work (an issue, a worker, a pull request).
 - `hive agent remember --title "..." --text "..."`: write to the knowledge base.
+- `hive agent feedback --text "..." [--about <module, prompt or tool>]`: tell the person what about the Hive itself got in your way (a misleading prompt, a missing tool, a step that took three tries) or helped. It shows in their Feedback section and the next sweep reads it; it isn't a way to ask for anything.
 - `hive agent install --tool python|uv|node|go [--version 3.12]`: a runtime or dev tool you lack. The Hive installs it for every agent, with no root and nobody asked, and it is on your PATH at once. Give the call a long timeout (25 minutes). For Python packages use `uv venv` or `uv pip` in your checkout. Something that truly needs root (an apt or brew package) is `hive agent install --system "<the exact command>" --why "..."`, which goes to the person.
 - `hive agent warden --want "..." --why "..." --steps "..." --tier T1|T2|T3`: for a step past your reach.
 

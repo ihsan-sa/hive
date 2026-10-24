@@ -22,15 +22,17 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
-var sections = []string{"Chats", "Dashboard", "Waiting", "Modules", "Settings"}
+var sections = []string{"Chats", "Dashboard", "Waiting", "Feedback", "Modules", "Settings"}
 
 const (
 	secChats = iota
 	secDash
 	secWaiting
+	secFeedback
 	secModules
 	secSettings
 )
@@ -90,6 +92,7 @@ type model struct {
 
 	dashSel int
 	waitSel int
+	fbSel   string // the feedback item selected, by id
 	modSel  int
 	setSel  int
 	editing bool
@@ -474,6 +477,8 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.keyDash(k)
 	case secWaiting:
 		return m.keyWaiting(k)
+	case secFeedback:
+		return m.keyFeedback(k)
 	case secModules:
 		return m.keyModules(k)
 	case secSettings:
@@ -724,6 +729,8 @@ func (m *model) viewMain(w int) pane {
 			body = m.viewFeed()
 		case secWaiting:
 			body = m.viewWaiting()
+		case secFeedback:
+			body = m.viewFeedback()
 		case secModules:
 			body = m.viewModules()
 		case secSettings:
@@ -735,6 +742,14 @@ func (m *model) viewMain(w int) pane {
 	case len(m.stack) > 0 || m.help || m.showSince:
 	case m.section == secWaiting && len(m.st.Asks) > 0:
 		note, right = fmt.Sprintf("%d need you", len(m.st.Asks)), "oldest first"
+	case m.section == secFeedback && len(m.st.Feedback) > 0:
+		open := 0
+		for _, it := range m.st.Feedback {
+			if it.Status == feedback.Open {
+				open++
+			}
+		}
+		note, right = fmt.Sprintf("%d open", open), "newest first"
 	case m.section == secDash && m.dashTree:
 		title += " › status"
 	case m.section == secDash:
@@ -810,6 +825,8 @@ func (m *model) keys() []string {
 		return []string{"↑↓", "move", "←→", "pick", "enter", "answer", "d", "whole diff", "tab", "sidebar"}
 	case m.section == secWaiting:
 		return []string{"↑↓", "move", "←→", "pick", "enter", "answer", "tab", "sidebar"}
+	case m.section == secFeedback:
+		return m.feedbackKeys()
 	case m.section == secModules:
 		return []string{"enter", "configure", "↑↓", "move", "tab", "sidebar"}
 	case m.section == secSettings && m.picking:
@@ -828,6 +845,7 @@ func helpLines() []string {
 		"n                 new thread",
 		"a                 in a chat, answer what's waiting on you",
 		"d                 in Waiting, the whole diff of a change",
+		"p / x             in Feedback, pass it to the lead / set it aside",
 		"ctrl+j            new line in a box",
 		"pgup pgdn, wheel  scroll",
 		"q                 quit the control center; the Hive keeps working",

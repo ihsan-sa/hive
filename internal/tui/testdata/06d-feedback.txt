@@ -1,0 +1,36 @@
+ hive                 │   Feedback  2 open                                                                newest first
+──────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────
+   Chats              │ ▌ ● textkit-2 › worker writer · agents/worker.md                                            9m
+   Dashboard          │ ▌ The worker prompt says to run the score before starting, but textkit-2's score command needs
+   Waiting         3  │ ▌ a built wheel first, so the first run always fails. A line saying `make build` comes first
+ › Feedback        1  │ ▌ would have saved two turns.
+   Modules            │ ▌ from w-261022-140210-9c1e
+   Settings           │
+                      │   hive-web › reviewer                                                                      40m
+ ▾ textkit-2          │   The brief named the sha but not the base, so I read the whole branch to find what changed.
+   lead               │
+   writer             │   set aside
+   reviewer        ●  │
+ ▾ hive-web           │   hive › sweep                                                                             26h
+   lead            ●  │   The digest lists runs that stopped but not why the person stopped them.
+   worker-2           │
+   reviewer           │
+   tribunal           │
+ ▸ website            │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+──────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move   p pass to the lead   x set aside   tab sidebar

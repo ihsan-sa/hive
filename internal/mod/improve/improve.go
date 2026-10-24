@@ -52,6 +52,8 @@ type Module struct {
 
 	// OnKept is called after a merge is measured and kept.
 	OnKept func(project, sha string)
+	// Feedback lists agents' open feedback for the projects mine admits.
+	Feedback func(mine func(project string) bool) string
 
 	mu       sync.Mutex
 	scores   map[string][]Measurement
@@ -399,7 +401,7 @@ func (m *Module) StartSweep(force bool) (Sweep, error) {
 func (m *Module) anythingNew(since int64) bool {
 	for _, e := range m.C.J.Since(since) {
 		switch e.Kind {
-		case "score.measured", "task.saved", "run.turn_ended", "chat.posted":
+		case "score.measured", "task.saved", "run.turn_ended", "chat.posted", "feedback.saved":
 			return true
 		}
 	}
@@ -505,6 +507,11 @@ func (m *Module) Digest(since int64, only string) string {
 		}
 		if notes, err := core.SafeRead(filepath.Join(m.C.WS.RunBox(r.ID), "notes.md"), 4000); err == nil && len(strings.TrimSpace(string(notes))) > 0 {
 			fmt.Fprintf(&b, "### %s %s\n%s\n\n", r.Role, r.ID, core.Clip(string(notes), 1500))
+		}
+	}
+	if m.Feedback != nil {
+		if fb := m.Feedback(mine); fb != "" {
+			b.WriteString("## Agents' feedback on the Hive, still open\n\n" + fb + "\n")
 		}
 	}
 	b.WriteString("## Recent chat\n\n")
