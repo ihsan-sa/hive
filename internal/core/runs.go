@@ -1079,6 +1079,16 @@ func (rs *Runs) endTurn(r Run) {
 		rs.dropOpenKey(r.ID)
 	}
 	cur, _ := rs.Get(r.ID)
+	if f, ok := printedFinish(tl.Result); ok && cur.Finish == nil && !cur.StopAsked && !limited && dropErr == nil {
+		// It wrote its finish as its answer instead of running it: the Hive
+		// runs it on its behalf, with the same flags and the same checks.
+		rs.append("run.finish", struct {
+			ID      string `json:"id"`
+			Finish  Finish `json:"finish"`
+			Printed bool   `json:"printed"`
+		}{r.ID, f, true})
+		cur.Finish = &f
+	}
 	switch {
 	case dropErr != nil:
 		te.Status, te.Reason = StatusBlocked, codexTokenStuck+dropErr.Error()
@@ -1128,7 +1138,7 @@ func (rs *Runs) endTurn(r Run) {
 		te.Status, te.Reason = StatusIdle, "waiting: "+cur.Waiting
 	case cur.Nudges < 2:
 		te.Status, te.Reason = StatusIdle, "nudged: ended a turn without finishing"
-		te.Queue = []string{"You ended your turn without `hive agent finish`. If the work is done, commit and finish with an account. If you can't finish, finish with status blocked and say why."}
+		te.Queue = []string{printedNudge(tl.Result.Text)}
 	default:
 		te.Status, te.Reason = StatusQuiet, "keeps ending turns without finishing; flagged for the lead"
 	}
