@@ -170,6 +170,81 @@ func TestOlderPreReleasesWaitTheirTurn(t *testing.T) {
 	}
 }
 
+// Back on the latest channel, "already on" no longer names the pre-releases'
+// waits.
+func TestLatestChannelForgetsTheWaits(t *testing.T) {
+	m, _ := releaseAt(t, "v0.1.12", "me/hive")
+	preSite(t, m)
+	cfg := m.C.WS.LoadConfig()
+	cfg.Channel = Prerelease
+	m.C.WS.SaveConfig(cfg)
+	tryBinary = func(string, string) error { return errors.New("exit status 2") }
+	for _, tag := range []string{"v0.1.14", "v0.1.13"} {
+		if _, err := m.AutoUpdate(); err == nil || !strings.Contains(err.Error(), tag+" doesn't run here") {
+			t.Fatalf("installing %s: %v", tag, err)
+		}
+	}
+	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "v0.1.13: skipped") {
+		t.Fatalf("on pre-release: %q", msg)
+	}
+	cfg.Channel = Latest
+	m.C.WS.SaveConfig(cfg)
+	if msg, err := m.AutoUpdate(); err != nil || msg != "already on v0.1.12" {
+		t.Fatalf("on latest: %q, %v", msg, err)
+	}
+}
+
+// What follow finds goes in the journal when it changes, and a failed
+// install raises one alert for its pre-release, not one every look.
+func TestFollowRecordsWhatChanged(t *testing.T) {
+	m, _ := releaseAt(t, "v0.1.12", "me/hive")
+	count := func(kind string) (n int) {
+		m.C.J.Replay(func(e core.Event) {
+			if e.Kind == kind {
+				n++
+			}
+		})
+		return n
+	}
+	m.followed1("already on v0.1.12; v0.1.13: waiting for ci", nil)
+	m.followed1("already on v0.1.12; v0.1.13: waiting for ci", nil)
+	m.followed1(busy, nil)
+	if n := count("release.follow"); n != 1 {
+		t.Fatalf("the same wait journalled %d times", n)
+	}
+	m.tried = "v0.1.13"
+	m.followed1("", errors.New("hive-linux-amd64: checksum mismatch; not installing"))
+	m.followed1("", errors.New("hive-linux-amd64: checksum mismatch; not installing (again)"))
+	if n, a := count("release.follow"), count("alert.raised"); n != 2 || a != 1 {
+		t.Fatalf("a failing pre-release: %d journalled, %d alerts; want 2, 1", n, a)
+	}
+	m.tried = "v0.1.14"
+	m.followed1("", errors.New("download failed"))
+	if a := count("alert.raised"); a != 2 {
+		t.Fatalf("a newer failing pre-release raised %d alerts in all, want 2", a)
+	}
+}
+
+// follow waits while this version's own update hasn't settled.
+func TestFollowWaitsForTheUpdateToSettle(t *testing.T) {
+	m, _ := releaseAt(t, "v0.1.13", "me/hive")
+	cfg := m.C.WS.LoadConfig()
+	cfg.Channel, cfg.AutoUpdate = Prerelease, true
+	m.C.WS.SaveConfig(cfg)
+	writePending(m.C.WS, pending{From: "v0.1.12", To: "v0.1.13", Paths: []string{"x"}, Starts: 1})
+	m.follow()
+	time.Sleep(50 * time.Millisecond)
+	if !m.updating.TryLock() {
+		t.Fatal("follow updated over an update that hasn't settled")
+	}
+	m.updating.Unlock()
+	m.C.J.Replay(func(e core.Event) {
+		if e.Kind == "release.follow" {
+			t.Fatalf("follow ran before the update settled: %s", e.Data)
+		}
+	})
+}
+
 // Without a GitHub login the channel can't list the pre-releases, and says so.
 func TestPreReleasesWithoutALoginSaySo(t *testing.T) {
 	m, _ := releaseAt(t, "v0.1.12", "me/hive")

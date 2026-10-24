@@ -38,7 +38,7 @@ func (m *Module) Channel() string {
 const followEvery = 5 * time.Minute
 
 // follow runs AutoUpdate every followEvery while the Hive follows pre-releases,
-// so one installs within minutes of its binaries being attached, not at the next schedule.
+// so one installs within minutes of its binaries being attached.
 func (m *Module) follow() {
 	m.pmu.Lock()
 	due := time.Since(m.followed) >= followEvery
@@ -52,10 +52,44 @@ func (m *Module) follow() {
 	if cfg := m.C.WS.LoadConfig(); !cfg.AutoUpdate || cfg.ReleasePin != "" || m.Channel() != Prerelease {
 		return
 	}
-	go m.AutoUpdate()
+	// An update not yet settled waits: installing over it would leave a
+	// failed restart nothing settled to roll back to.
+	if p, ok := readPending(m.C.WS); ok && p.To == core.Version && p.RolledBack == "" {
+		return
+	}
+	go func() { m.followed1(m.AutoUpdate()) }()
 }
 
-// look is the most pre-releases one look reads the checksums of, newest first.
+// followed1 records what one follow did when it differs from the last: in
+// the journal, as the scheduled job's result is, and an error as an alert,
+// once for each pre-release it was installing.
+func (m *Module) followed1(msg string, err error) {
+	if msg == busy {
+		return
+	}
+	key := msg
+	if err != nil {
+		msg = "failed: " + err.Error()
+		m.pmu.Lock()
+		key = "failed@" + m.tried
+		m.pmu.Unlock()
+	}
+	m.pmu.Lock()
+	same := key == m.said1
+	m.said1 = key
+	m.pmu.Unlock()
+	if same {
+		return
+	}
+	m.C.J.MustAppend("release.follow", map[string]string{"result": core.Clip(msg, 600)})
+	if err != nil {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "update", "ref": "release:follow",
+			"text": "Following pre-releases, the update failed: " + core.Clip(err.Error(), 300) + ". It tries again every " + followEvery.String() + "."})
+	}
+}
+
+// look is the most pre-releases one look reads the checksums of, newest
+// first; one rolled back here costs no read and isn't counted.
 const look = 3
 
 // prerelease is the newest pre-release of repo newer than after whose signed
@@ -85,9 +119,9 @@ func (m *Module) prerelease(repo, after string) (tag string, why []string, err e
 	m.pmu.Lock()
 	m.pre = tags
 	m.pmu.Unlock()
-	read := 0
+	read, back := 0, m.rolledBackFrom()
 	for _, t := range tags {
-		if m.rolledBack(t) {
+		if back[t] {
 			why = append(why, t+": skipped, it rolled back after it failed to start here")
 			continue
 		}

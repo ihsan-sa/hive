@@ -170,10 +170,14 @@ func (m *model) dashRows() []row {
 		}
 	}
 	add(row{key: "waiting", text: fmt.Sprintf("waiting on you (%d)", len(m.st.Asks)), jump: secWaiting})
-	if add(row{key: "told", text: fmt.Sprintf("done for you (%d recent)", len(m.st.Told)), expand: len(m.st.Told) > 0}) {
+	if add(row{key: "told", text: toldHead(m.st.Told, time.Now()), expand: len(m.st.Told) > 0}) {
 		for _, a := range m.st.Told {
 			d := toldDetail(a)
-			add(row{key: "told:" + a.ID, depth: 1, text: a.Asked.Local().Format("Mon 15:04") + "  " + text.Visible(core.Clip(a.Title, 120)), open: &d})
+			title := text.Visible(core.Clip(a.Title, 120))
+			if strings.HasPrefix(a.ID, "spend-") { // money is the person's: the notice stands out
+				title = stWarn.Render(title)
+			}
+			add(row{key: "told:" + a.ID, depth: 1, text: a.Asked.Local().Format("Mon 15:04") + "  " + title, open: &d})
 		}
 	}
 	if add(row{key: "requests", text: fmt.Sprintf("requests past the sandbox (%d)", len(m.st.Requests)), expand: len(m.st.Requests) > 0}) {
@@ -411,6 +415,10 @@ func (m *model) viewTree() []string {
 		if r.depth == 0 && i+1 < len(rows) && rows[i+1].depth == 0 {
 			sel++
 		}
+	}
+	if len(m.st.Held) > 0 { // turns wait for a reason, not for nothing
+		lines = append([]string{stDim.Render("New turns are " + strings.Join(m.st.Held, "; ") + "."), ""}, lines...)
+		sel += 2
 	}
 	if rel := releaseText(m.st); m.st.Behind > 0 {
 		head := []string{stWarn.Render(rel)}
@@ -933,7 +941,7 @@ func (m *model) settings() []setting {
 		{group: "General", label: "auto-update", value: onOff(c.AutoUpdate), key: "auto_update"},
 		{group: "General", label: "use ANTHROPIC_API_KEY", value: onOff(c.APIKeyOptIn), key: "api_key_opt_in"},
 		{group: "General", label: "release repo", value: c.ReleaseRepo, key: "release_repo"},
-		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel"},
+		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel", choices: []string{"default", "latest", "pre-release"}},
 		{group: "General", label: "release", value: m.st.Version + ", " + pinText(c.ReleasePin), action: func() tea.Cmd {
 			return func() tea.Msg {
 				return flashMsg("`" + core.Cmd + " update --release <tag>` installs and pins a release")
@@ -1054,11 +1062,8 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			c.AutoUpdate = !c.AutoUpdate
 			return m, m.saveConfig(c, "auto-update changed")
 		case "channel":
-			if c.Channel = "pre-release"; m.st.Channel == "pre-release" {
-				c.Channel = "latest"
-			}
-			m.st.Channel = c.Channel // shown at once, as saveConfig shows the rest
-			return m, m.saveConfig(c, "release channel changed")
+			m.picking, m.pickSel = true, max(0, slices.Index(cur.choices, c.Channel))
+			return m, nil
 		case "api_key_opt_in":
 			c.APIKeyOptIn = !c.APIKeyOptIn
 			return m, m.saveConfig(c, "API key use changed")
@@ -1240,6 +1245,12 @@ func (m *model) saveSetting(v string) tea.Cmd {
 		c.Projects[p] = ps
 	case strings.HasPrefix(key, "route:"):
 		c = routeEdit(c, strings.TrimPrefix(key, "route:"), v)
+	case key == "channel":
+		if c.Channel = v; v == "default" {
+			c.Channel = ""
+		} else {
+			m.st.Channel = v // shown at once; the default shows once the daemon says what it is
+		}
 	case key == "review_rounds":
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 {
@@ -1364,4 +1375,19 @@ func loginLine(l core.LoginState) string {
 		}
 	}
 	return line
+}
+
+// toldHead heads the "done for you" list: how many in the last day, so a
+// quiet notice isn't missed among the recent ones.
+func toldHead(told []core.Ask, now time.Time) string {
+	day := 0
+	for _, a := range told {
+		if now.Sub(a.Asked) < 24*time.Hour {
+			day++
+		}
+	}
+	if day == 0 {
+		return fmt.Sprintf("done for you (%d recent)", len(told))
+	}
+	return fmt.Sprintf("done for you (%d in the last day, %d recent)", day, len(told))
 }

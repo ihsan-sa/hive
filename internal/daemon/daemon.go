@@ -946,6 +946,7 @@ func (s *server) state() api.State {
 	if st.Offline == "" {
 		st.Offline = a.Work.Offline()
 	}
+	st.Held = a.C.Runs.Holds()
 	st.Plans = a.C.Runs.Plans()
 	st.Logins = a.C.Tokens.States()
 	sw := a.Improve.Sweeps()
