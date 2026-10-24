@@ -80,10 +80,10 @@ func New(c *core.Core, a *agents.Agents) *Module {
 			return nil, err
 		}
 		// The search runs on the host, so it skips what r's sandbox covers:
-		// other hidden projects' notes and, while any is hidden, the record.
+		// other isolated projects' notes and, while any is isolated, the record.
 		var hide []string
 		for _, p := range c.Projects.List() {
-			if p.Hidden() && p.Name != r.Project {
+			if p.Isolated && p.Name != r.Project {
 				hide = append(hide, "isolated/"+p.Name, "record")
 			}
 		}
@@ -167,7 +167,7 @@ func (m *Module) moveIsolated() {
 // sit under their own refs and hold only the filer's text, so they don't count.
 func (m *Module) historyHoldsIsolated() bool {
 	for _, p := range m.C.Projects.List() {
-		if !p.Hidden() {
+		if !p.Isolated {
 			continue
 		}
 		if out, _ := core.Git(m.C.WS.KB(), "log", "--format=%H", "-1", "-G", "^project: "+regexp.QuoteMeta(p.Name)+"$"); out != "" {
@@ -182,7 +182,7 @@ func (m *Module) isolatedIn(note string) (string, bool) {
 	head, _, _ := strings.Cut(note, "\n---\n")
 	for _, line := range strings.Split(head, "\n") {
 		proj, ok := strings.CutPrefix(line, "project: ")
-		if p, isProj := m.C.Projects.Get(proj); ok && isProj && p.Hidden() {
+		if p, isProj := m.C.Projects.Get(proj); ok && isProj && p.Isolated {
 			return p.Name, true
 		}
 	}
@@ -276,10 +276,10 @@ func (m *Module) Write(n Note) (string, error) {
 	if len(slug) > 60 {
 		slug = slug[:60]
 	}
-	// A hidden (private or isolated) project's notes go in its own folder under
-	// isolated/, which only its own runs see, and the filer never reads.
+	// An isolated project's notes go in its own folder, which only isolated
+	// runs see, and the filer never reads.
 	dir := m.C.WS.KB()
-	if p, ok := m.C.Projects.Get(n.Project); ok && p.Hidden() {
+	if p, ok := m.C.Projects.Get(n.Project); ok && p.Isolated {
 		var err error
 		if dir, err = m.C.WS.IsolatedKB(n.Project); err != nil {
 			return "", err
