@@ -449,6 +449,47 @@ func TestVendorLimitMovesToFallback(t *testing.T) {
 	}
 }
 
+// A key the endpoint won't take at all (refused on two turns in a row, the
+// second with the key handed over afresh) marks the model down as any 401
+// does, and the run moves at once to the next pick on its route.
+func TestKeyRefusedTwiceMovesToFallback(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.Models = map[string]OpenModel{
+		"kimi": {Endpoint: "https://api.moonshot.ai/anthropic", Model: "kimi-k2", API: "anthropic", Key: true},
+		"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"},
+	}
+	c.WS.SaveConfig(cfg)
+	if _, err := c.Runs.Start(RunSpec{ID: "v2", Role: "worker", Harness: "open", Model: "kimi", Brief: "b", Checkout: t.TempDir(),
+		Route: []Pick{{Harness: "open", Model: "kimi"}, {Harness: "open", Model: "free"}}}); err != nil {
+		t.Fatal(err)
+	}
+	refused := `{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Your apiKeyHelper script is failing · This usually means you need to re-authenticate with your provider · Run /status to see the script's error output","session_id":"s1"}`
+	end := func(turn int) Run {
+		r, _ := c.Runs.Get("v2")
+		r.Turn, r.Login = turn, "open:kimi"
+		out := c.WS.TurnOut(r.ID, turn)
+		os.MkdirAll(filepath.Dir(out), 0o755)
+		os.WriteFile(out, []byte(refused+"\n"), 0o600)
+		c.Runs.endTurn(r)
+		got, _ := c.Runs.Get("v2")
+		return got
+	}
+	if got := end(1); !strings.Contains(got.Reason, "refused kimi's key mid-turn") || len(c.Runs.Down()) != 0 {
+		t.Fatalf("the first refusal: %q, down %+v", got.Reason, c.Runs.Down())
+	}
+	got := end(2)
+	if d := c.Runs.Down(); len(d) != 1 || d[0].Pick.Model != "kimi" || d[0].Status != 401 {
+		t.Fatalf("the second refusal left the model up: %+v", d)
+	}
+	if got.Status != StatusParked || !strings.Contains(got.Reason, "moving to open:free") {
+		t.Fatalf("the second refusal: %s %q", got.Status, got.Reason)
+	}
+	if p, at := c.Runs.next(got); p.Model != "free" || at.After(time.Now()) {
+		t.Fatalf("next after a refused key: %v at %v", p, at)
+	}
+}
+
 // A run's turn starts at most once. On 2026-10-24 a run moving off a model
 // at its limit got two live sessions on one checkout: two launches of the
 // same run, one beside the other and one from a copy older than the turn

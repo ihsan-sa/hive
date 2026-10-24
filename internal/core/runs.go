@@ -1107,14 +1107,18 @@ func (rs *Runs) endTurn(r Run) {
 	// is skipped by every run until it can (Down).
 	ran := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
 	var down *Down
-	// Claude Code asked for the model's key again mid-turn, after the
-	// endpoint refused it: the helper hands it over once a turn, so the next
-	// turn retries with a fresh one rather than marking the model down.
-	keyRefused := tl.Result != nil && tl.Result.IsError && HarnessName(r.Harness) == "open" && strings.Contains(tl.Result.Text, "apiKeyHelper")
-	if tl.Result != nil && !limited && !keyRefused {
+	// A 401 through Claude Code (an Anthropic-compatible model) comes back as
+	// its apiKeyHelper failing: it asks the one-shot helper again and gets
+	// nothing. The first such turn retries with the key handed over afresh;
+	// a second in a row is a key the endpoint won't take, and marks the
+	// model down as any 401 does, so the run moves on its route.
+	var keyRefused bool
+	if tl.Result != nil && !limited {
+		turns, runs := rs.strikesWith(ran, r.ID, tl.Result)
+		keyRefused = tl.Result.IsError && tl.Result.APIStatus == 401 && ran.Harness == "open" && rs.anthropicModel(r.Model) && turns == 1
 		if !tl.Result.IsError {
 			rs.Up(ran, "it answered")
-		} else if turns, runs := rs.strikesWith(ran, r.ID, tl.Result); cantAnswer(ran, tl.Result, Unreachable(service(r.Harness), tl.Result.Text), turns, runs) {
+		} else if !keyRefused && cantAnswer(ran, tl.Result, Unreachable(service(r.Harness), tl.Result.Text), turns, runs) {
 			d := rs.markDown(r, ran, tl.Result)
 			down = &d
 		}

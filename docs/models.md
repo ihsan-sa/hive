@@ -110,7 +110,9 @@ the model (an hour, since Claude Code passes on no reset) and the run moves
 to its fallback, as on the open agent. If the endpoint refuses the key
 mid-turn (a 401), Claude Code asks the helper again, finds nothing, and the
 run parks saying the key was refused mid-turn and the next turn gets it
-afresh.
+afresh. A second refusal in a row is a key the endpoint won't take: the model
+is marked down like any 401, and the run moves on its route until the stored
+key changes.
 
 A known residual: while a turn runs, the key is in Claude Code's memory, and
 on a host where Yama's `ptrace_scope` is 0 a tool in the same sandbox, as the
