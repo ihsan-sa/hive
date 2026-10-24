@@ -154,24 +154,14 @@ func TestMergeNeedsCheckAndVerdictOnExactCommit(t *testing.T) {
 	if _, err := c.Effects.Merge(req2); err == nil || !strings.Contains(err.Error(), "no land verdict") {
 		t.Fatalf("merged the new head on the old verdict: %v", err)
 	}
-	// Back to the reviewed commit: it merges once the forge's checks pass
-	// there, and a read the PR asked for from outside is recorded.
+	// Back to the reviewed commit: it merges once the forge's checks pass there.
 	c.Effects.Push(p, "hive/t1", sha)
 	f.SetChecks(p.Repo, sha, CheckRun{Name: "test", State: CheckPass}, CheckRun{Name: "sandboxed-e2e", State: CheckPending})
 	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "sandboxed-e2e") {
 		t.Fatalf("merged while a forge check still runs: %v", err)
 	}
 	f.SetChecks(p.Repo, sha, CheckRun{Name: "test", State: CheckPass}, CheckRun{Name: "sandboxed-e2e", State: CheckPass})
-	asks := req
-	asks.OutsideRead = true
-	if _, err := c.Effects.Merge(asks); err == nil || !strings.Contains(err.Error(), "perms seat") {
-		t.Fatalf("merged without the outside read it asked for: %v", err)
-	}
-	ch, _ := c.Effects.Classify(p, main, sha)
-	if err := c.Effects.RecordRead(OutsideRead{Project: p.Name, SHA: sha, Diff: ch.DiffID, By: "perms", Verdict: "land"}); err != nil {
-		t.Fatal(err)
-	}
-	merged, err := c.Effects.Merge(asks)
+	merged, err := c.Effects.Merge(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,7 +677,7 @@ func TestSecurityList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list := ParseSecurityList(string(raw))
+	list := ParseList(string(raw), "paths")
 	for _, f := range []string{"internal/core/runs.go", "internal/harness/claude.go", "internal/sandbox/linux/x.go", ".github/workflows/ci.yml", "go.sum", SecurityList} {
 		if !matchAny(f, list) {
 			t.Errorf("%s should be listed (%v)", f, list)
@@ -698,7 +688,60 @@ func TestSecurityList(t *testing.T) {
 			t.Errorf("%s shouldn't be listed", f)
 		}
 	}
-	if got := ParseSecurityList("x = 1\npaths = [\"a/*.go\", \"b/**\"] # c\n"); len(got) != 2 || !matchAny("a/x.go", got) || matchAny("a/b/x.go", got) || !matchAny("b/c/d", got) {
+	if got := ParseList("x = 1\npaths = [\"a/*.go\", \"b/**\"] # c\n", "paths"); len(got) != 2 || !matchAny("a/x.go", got) || matchAny("a/b/x.go", got) || !matchAny("b/c/d", got) {
 		t.Fatalf("%v", got)
+	}
+}
+
+// Two different binary files, or scripts git takes for binary, are two
+// different changes: the read of one never carries to the other.
+func TestDiffIDTellsBinariesApart(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	ids := map[string]bool{}
+	for i, body := range []string{"\x00\x01\x02 one", "\x00\x01\x02 two", "#!/bin/sh\necho hi\n\x00\nrm -rf /tmp/x\n", "#!/bin/sh\necho hi\n\x00\nrm -rf /tmp/y\n"} {
+		r, _ := commitInCheckout(t, c, p, fmt.Sprintf("wb%d", i), main, "blob.bin", body)
+		sha, err := c.Effects.Extract(p, r, main)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ch, err := c.Effects.Classify(p, main, sha)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ch.DiffID == "" || ids[ch.DiffID] {
+			t.Fatalf("change %d has the id of another (%q):\n%s", i, ch.DiffID, ch.Diff)
+		}
+		ids[ch.DiffID] = true
+	}
+}
+
+// A required check holds until it has succeeded on the head: missing,
+// neutral or skipped is not success.
+func TestRequiredChecks(t *testing.T) {
+	req := ParseList("paths = []\nrequired_checks = [\n  \"test (ubuntu-latest)\", # Linux\n  \"sandboxed-e2e\",\n]\n", "required_checks")
+	if len(req) != 2 {
+		t.Fatalf("%v", req)
+	}
+	pass := CheckRun{Name: "test (ubuntu-latest)", State: CheckPass}
+	for _, c := range []struct {
+		runs []CheckRun
+		want string
+	}{
+		{nil, CheckPending},
+		{[]CheckRun{pass}, CheckPending},
+		{[]CheckRun{pass, {Name: "sandboxed-e2e", State: CheckSkipped}}, CheckPending},
+		{[]CheckRun{pass, {Name: "sandboxed-e2e", State: CheckPass}, {Name: "lint", State: CheckSkipped}}, CheckPass},
+		{[]CheckRun{pass, {Name: "sandboxed-e2e", State: CheckFail}}, CheckFail},
+	} {
+		if st, which := ChecksState(c.runs, req); st != c.want {
+			t.Errorf("%v: %s (%v), want %s", c.runs, st, which, c.want)
+		}
+	}
+	if st, _ := ChecksState(nil, nil); st != CheckPass {
+		t.Fatal("with nothing required, no checks should pass")
+	}
+	raw, _ := os.ReadFile(filepath.Join("..", "..", SecurityList))
+	if got := ParseList(string(raw), "required_checks"); !slices.Contains(got, "sandboxed-e2e") || !slices.Contains(got, "test (ubuntu-latest)") {
+		t.Fatalf("the repo's list requires %v", got)
 	}
 }

@@ -58,3 +58,11 @@ paths = [
   "go.mod",
   "go.sum",
 ]
+
+# The forge's checks that must succeed on a PR's exact head before the Hive
+# merges it (read from main). Neutral, skipped or not reported yet holds the
+# merge like a check still running. Names as GitHub lists them on a PR.
+required_checks = [
+  "test (ubuntu-latest)",
+  "sandboxed-e2e",
+]

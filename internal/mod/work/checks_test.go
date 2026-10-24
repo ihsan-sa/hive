@@ -109,28 +109,12 @@ func TestMergeForgeCheckCantStart(t *testing.T) {
 	}
 }
 
-func TestAsksOutsideRead(t *testing.T) {
-	for s, want := range map[string]bool{
-		"This touches login routing, so per goals.md it needs one read from the box's perms seat or architect before landing": true,
-		"Needs a read from the architect.":                                 true,
-		"The architect should read this first":                             true,
-		"Updated docs/architecture.md and read the tests":                  false,
-		"Fixes the README.":                                                false,
-		"Changes login handling; needs one read from the box's Perms Seat": true,
-	} {
-		if asksOutsideRead(s) != want {
-			t.Errorf("%q: got %v", s, !want)
-		}
-	}
-}
-
-// A PR that asks for a read from the box's perms seat or architect waits for
-// one recorded as land on its head; a main merge that leaves its own diff
-// alone keeps that read, and a fix goes back to the worker.
+// A PR on the security list waits for a read recorded as land on its head;
+// a main merge that leaves its own diff alone keeps that read.
 func TestMergeWaitsForOutsideRead(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	task.NeedsRead = true
+	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
 	m.save(task, "")
+	reviewerLand(t, m, task, p, "r1")
 	toMerging(t, m, task, p)
 	read := task.SHA
 	mergeOnce(t, m, task, p)
@@ -157,9 +141,9 @@ func TestMergeWaitsForOutsideRead(t *testing.T) {
 }
 
 func TestOutsideReadFixGoesBack(t *testing.T) {
-	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	task.NeedsRead = true
+	m, task, p, _ := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
 	m.save(task, "")
+	reviewerLand(t, m, task, p, "r1")
 	toMerging(t, m, task, p)
 	if _, err := m.RecordRead("t1", task.SHA, "architect", "fix", "token logic nobody read"); err != nil {
 		t.Fatal(err)
@@ -292,5 +276,27 @@ func TestSecurityListUnlistedPasses(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
+// With checks required on main's list, a head with none, or with a required
+// one skipped, is held until each has succeeded.
+func TestRequiredChecksHold(t *testing.T) {
+	list := map[string]string{core.SecurityList: "paths = [\"secure/**\"]\nrequired_checks = [\"test (ubuntu-latest)\", \"sandboxed-e2e\"]\n"}
+	m, task, p, f := gateRigSeeded(t, false, list, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "sandboxed-e2e") || !strings.Contains(task.Reason, "test (ubuntu-latest)") {
+		t.Fatalf("a head with no checks: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckSkipped})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "sandboxed-e2e") || strings.Contains(task.Reason, "ubuntu") {
+		t.Fatalf("a skipped required check: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass}, core.CheckRun{Name: "lint", State: core.CheckSkipped})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q once each required check succeeded", task.Stage, task.Reason)
 	}
 }

@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -63,8 +62,7 @@ type Task struct {
 	Base      string            `json:"base,omitempty"`
 	Branch    string            `json:"branch,omitempty"`
 	SHA       string            `json:"sha,omitempty"`
-	Diff      string            `json:"diff,omitempty"`       // SHA's own diff (core.DiffID), which reads are bound to
-	NeedsRead bool              `json:"needs_read,omitempty"` // the PR asks for a read from the box's perms seat or architect
+	Diff      string            `json:"diff,omitempty"` // SHA's own diff (core.DiffID), which reads are bound to
 	PR        core.PR           `json:"pr"`
 	Round     int               `json:"round"`
 	Conflicts int               `json:"conflicts"`
@@ -883,9 +881,6 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 	if err := m.C.Effects.Push(p, t.Branch, sha); err != nil {
 		return err
 	}
-	if asksOutsideRead(body) {
-		t.NeedsRead = true // kept once said, though a later round's account may not repeat it
-	}
 	pr, err := m.C.Effects.Forge.CreatePR(p.Repo, t.Branch, p.Branch, t.Label(), body+"\n\n"+marker(t.ID))
 	if err != nil {
 		return err
@@ -1284,7 +1279,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if wait, err := m.forgeChecks(t, p, main); wait || err != nil {
 		return err
 	}
-	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), OutsideRead: t.NeedsRead})
+	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label()})
 	var np *core.NeedsPerson
 	if errors.As(err, &np) {
 		t.Stage = StagePerson
@@ -1346,7 +1341,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	if err != nil {
 		return true, err
 	}
-	st, which := core.ChecksState(runs)
+	st, which := core.ChecksState(runs, m.C.Effects.RequiredChecks(p, main))
 	names := core.CheckNames(which)
 	switch st {
 	case core.CheckPending:
@@ -1364,7 +1359,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		if err != nil {
 			return true, err
 		}
-		if _, onMain := core.ChecksState(mainRuns); slices.ContainsFunc(onMain, func(r core.CheckRun) bool {
+		if _, onMain := core.ChecksState(mainRuns, nil); slices.ContainsFunc(onMain, func(r core.CheckRun) bool {
 			return r.State == core.CheckFail && strings.Contains(", "+names+", ", ", "+r.Name+", ")
 		}) {
 			why := "waiting on main: the forge's checks " + names + " fail on main at " + core.Short(main) + " too, so this failure isn't the worker's"
@@ -1408,20 +1403,17 @@ func (m *Module) raiseOnce(p core.Project, key, text string) {
 	}
 }
 
-// outsideRead holds a PR that touches a path on main's security list, or
-// asked for a read from the box's perms seat or architect, until one is
-// recorded as land on its own diff (hive read); a fix goes back to the
-// worker with what the reader said.
+// outsideRead holds a PR that touches a path on main's security list until
+// a read from the box's perms seat or architect is recorded as land on its
+// own diff (hive read); a fix goes back to the worker with what the reader
+// said. Only the PR's changed paths decide it, never what its worker wrote.
 func (m *Module) outsideRead(t *Task, p core.Project, main string) (bool, error) {
-	if r, ok := m.C.Runs.Get(t.Worker); ok && !t.NeedsRead {
-		t.NeedsRead = asksOutsideRead(finishText(r)) // a task landed before this was looked for
-	}
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
 	if err != nil {
 		return true, err
 	}
 	t.Diff = ch.DiffID
-	if !t.NeedsRead && len(ch.Security) == 0 {
+	if len(ch.Security) == 0 {
 		return false, nil
 	}
 	o, ok := m.C.Effects.OutsideRead(p.Name, ch.DiffID)
@@ -1432,20 +1424,10 @@ func (m *Module) outsideRead(t *Task, p core.Project, main string) (bool, error)
 		t.Reason = ""
 		return true, m.sendBack(t, p, fmt.Sprintf("The box's %s read %s and asked for fixes:\n\n%s", o.By, core.Short(o.SHA), orNone(o.Note)))
 	}
-	why := "the PR asks for one"
-	if len(ch.Security) > 0 {
-		why = "it changes " + strings.Join(ch.Security, ", ") + ", on " + core.SecurityList
-	}
+	why := "it changes " + strings.Join(ch.Security, ", ") + ", on " + core.SecurityList
 	m.hold(t, p, fmt.Sprintf("waiting on a security read from the box's perms seat or architect at %s, since %s; a read of an earlier head counts only while this change's own diff is the same (record one with `%s read %s %s land --by perms`)", core.Short(t.SHA), why, core.Cmd, t.ID, core.Short(t.SHA)))
 	return true, nil
 }
-
-// asksOutsideRead reports whether a worker's account says the change needs a
-// read from the box's perms seat or its architect (goals.md: sandbox,
-// self-update and login changes).
-func asksOutsideRead(s string) bool { return outsideReadRe.MatchString(s) }
-
-var outsideReadRe = regexp.MustCompile(`(?i)\bperms seat\b|\bread\b[^.\n]{0,80}\barchitect\b|\barchitect\b[^.\n]{0,80}\bread\b`)
 
 // RecordRead records an outside read of the head sha of task id (or of PR
 // #id), given by the box's perms seat or architect, bound to that head's own

@@ -78,7 +78,8 @@ func TestGitHubCheckStates(t *testing.T) {
 		{ghCheckRun{Status: "queued", StartedAt: now.Add(-time.Minute)}, CheckPending},
 		{ghCheckRun{Status: "queued", StartedAt: now.Add(-2 * time.Hour)}, CheckCantStart},
 		{ghCheckRun{Status: "completed", Conclusion: "success"}, CheckPass},
-		{ghCheckRun{Status: "completed", Conclusion: "skipped"}, CheckPass},
+		{ghCheckRun{Status: "completed", Conclusion: "skipped"}, CheckSkipped},
+		{ghCheckRun{Status: "completed", Conclusion: "neutral"}, CheckSkipped},
 		{ghCheckRun{Status: "completed", Conclusion: "failure"}, CheckFail},
 		{ghCheckRun{Status: "completed", Conclusion: "timed_out"}, CheckFail},
 		{ghCheckRun{Status: "completed", Conclusion: "startup_failure"}, CheckCantStart},
@@ -88,10 +89,10 @@ func TestGitHubCheckStates(t *testing.T) {
 			t.Errorf("%+v: %s, want %s", c.r, got, c.want)
 		}
 	}
-	if st, which := ChecksState([]CheckRun{{Name: "a", State: CheckPending}, {Name: "b", State: CheckFail}, {Name: "c", State: CheckCantStart}}); st != CheckFail || CheckNames(which) != "b" {
+	if st, which := ChecksState([]CheckRun{{Name: "a", State: CheckPending}, {Name: "b", State: CheckFail}, {Name: "c", State: CheckCantStart}}, nil); st != CheckFail || CheckNames(which) != "b" {
 		t.Fatalf("%s %v", st, which)
 	}
-	if st, _ := ChecksState(nil); st != CheckPass {
+	if st, _ := ChecksState(nil, nil); st != CheckPass {
 		t.Fatal("no checks should pass")
 	}
 }

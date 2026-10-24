@@ -76,6 +76,7 @@ const (
 	CheckPass      = "pass"
 	CheckFail      = "fail"
 	CheckCantStart = "cantstart"
+	CheckSkipped   = "skipped" // ran nothing on the commit: neutral or skipped
 )
 
 // Release is a version on the forge.
@@ -373,9 +374,21 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 	if err := json.Unmarshal([]byte(out), &runs); err != nil {
 		return nil, err
 	}
-	var list []CheckRun
+	// A check run again is listed once per attempt; the newest one counts.
+	newest := map[string]ghCheckRun{}
+	var order []string
 	for _, r := range runs.CheckRuns {
-		list = append(list, r.check(time.Now()))
+		old, seen := newest[r.Name]
+		if !seen {
+			order = append(order, r.Name)
+		}
+		if !seen || r.StartedAt.After(old.StartedAt) {
+			newest[r.Name] = r
+		}
+	}
+	var list []CheckRun
+	for _, name := range order {
+		list = append(list, newest[name].check(time.Now()))
 	}
 	out, err = gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/status")
 	if err != nil {
@@ -445,8 +458,10 @@ func (r ghCheckRun) check(now time.Time) CheckRun {
 	}
 	c.Detail = r.Conclusion
 	switch r.Conclusion {
-	case "success", "neutral", "skipped":
+	case "success":
 		c.State = CheckPass
+	case "neutral", "skipped":
+		c.State = CheckSkipped
 	case "failure", "timed_out":
 		c.State = CheckFail
 	default: // startup_failure, cancelled, action_required, stale
