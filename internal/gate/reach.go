@@ -1,10 +1,12 @@
 package gate
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
-	"sync"
+	"time"
 )
 
 // Access is what a token can do to one repository.
@@ -30,7 +32,7 @@ func listReach(g GitHub, token string) ([]Access, error) {
 	for _, path := range []string{"/user/repos?per_page=100&affiliation=owner,collaborator,organization_member", "/orgs/" + g.Owner + "/repos?per_page=100&type=all"} {
 		out, err := ghAPI(token, "--paginate", path, "--jq", `.[] | [.full_name, (.permissions.push|tostring), (.permissions.admin|tostring)] | @tsv`)
 		if err != nil {
-			return nil, fmt.Errorf("listing what the children's token reaches (%s): %v: %s", path, err, tail(out, 200))
+			return nil, fmt.Errorf("%w: listing what it reaches (%s): %v: %s", ErrReachUnknown, path, err, tail(out, 200))
 		}
 		for _, line := range strings.Split(out, "\n") {
 			f := strings.Split(strings.TrimSpace(line), "\t")
@@ -47,71 +49,96 @@ func listReach(g GitHub, token string) ([]Access, error) {
 // blob with no content, which GitHub refuses with 403 or 404 when the token
 // lacks the permission and with 422 when it has it, so nothing is ever
 // written. Administration: listing deploy keys, a read only a token with
-// administration access may make. Any other answer (a rate limit, a 5xx)
-// is an error: the check never passes on what it couldn't learn.
+// administration access may make. It stops at the first repository the
+// token can write. An owner with hundreds of public repositories makes
+// hundreds of probes, so they run one at a time, paced under GitHub's
+// secondary limit (probeBudget points a minute, a POST costing 5 and a GET
+// 1), and a secondary rate limit is waited out (its Retry-After, else a
+// minute) and retried. Any other answer, or a limit that doesn't lift, is an
+// ErrReachUnknown: the check never passes on what it couldn't learn.
 func probeReach(org, token string, acc []Access) ([]Access, error) {
-	var todo []int
-	for i, a := range acc {
-		if (a.Push || a.Admin) && !isGateRepo(org, a.Repo) {
-			todo = append(todo, i)
-		}
-	}
-	out := append([]Access(nil), acc...)
-	errs := make([]error, len(acc))
-	jobs := make(chan int)
-	var wg sync.WaitGroup
-	for range min(8, len(todo)) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := range jobs {
-				r := acc[i].Repo
-				push, err := probe(token, "-X", "POST", "/repos/"+r+"/git/blobs", "-f", "encoding=utf-8")
-				admin := false
-				if err == nil {
-					admin, err = probe(token, "/repos/"+r+"/keys?per_page=1")
-				}
-				out[i] = Access{Repo: r, Push: push, Admin: admin}
-				errs[i] = err
-			}
-		}()
-	}
-	for _, i := range todo {
-		jobs <- i
-	}
-	close(jobs)
-	wg.Wait()
-	for _, i := range todo {
-		if errs[i] != nil {
-			return nil, errs[i]
-		}
-	}
-	for i, a := range acc {
+	out := make([]Access, 0, len(acc))
+	p := &pacer{}
+	for _, a := range acc {
 		if !a.Push && !a.Admin { // the owner can't write it, so neither can the token
-			out[i] = Access{Repo: a.Repo}
+			out = append(out, Access{Repo: a.Repo})
+			continue
+		}
+		if isGateRepo(org, a.Repo) {
+			out = append(out, a)
+			continue
+		}
+		push, err := p.probe(token, 5, "-X", "POST", "/repos/"+a.Repo+"/git/blobs", "-f", "encoding=utf-8")
+		if err != nil {
+			return nil, err
+		}
+		admin := false
+		if !push {
+			if admin, err = p.probe(token, 1, "/repos/"+a.Repo+"/keys?per_page=1"); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, Access{Repo: a.Repo, Push: push, Admin: admin})
+		if push || admin {
+			break // refused already; no need to ask about the rest
 		}
 	}
 	return out, nil
 }
 
-var httpStatus = regexp.MustCompile(`\(HTTP ([0-9]{3})\)`)
+// ErrReachUnknown marks a reach check that couldn't learn the answer (a rate
+// limit, GitHub unreachable), as against a token found too wide. A caller
+// may ask again soon; it must not run on the org meanwhile.
+var ErrReachUnknown = errors.New("the children's token's reach is unknown")
+
+// probeBudget is the probes' points a minute: under GitHub's 900 for REST.
+// reachSleep and reachNow are variables for tests.
+var (
+	probeBudget = 600
+	reachSleep  = time.Sleep
+	reachNow    = time.Now
+)
+
+// pacer spends probeBudget points a minute at most.
+type pacer struct{ next time.Time }
+
+var (
+	httpStatus = regexp.MustCompile(`(?m)^HTTP/[0-9.]+ ([0-9]{3})|\(HTTP ([0-9]{3})\)`)
+	retryAfter = regexp.MustCompile(`(?mi)^retry-after:\s*([0-9]+)`)
+)
 
 // probe is whether the token may make the call: yes on 2xx or 422 (allowed,
 // then refused for its body), no on 403 or 404.
-func probe(token string, args ...string) (bool, error) {
-	out, err := ghAPI(token, args...)
-	if err == nil {
-		return true, nil
+func (p *pacer) probe(token string, points int, args ...string) (bool, error) {
+	args = append([]string{"--include"}, args...)
+	for try := 0; ; try++ {
+		if d := p.next.Sub(reachNow()); d > 0 {
+			reachSleep(d)
+		}
+		p.next = reachNow().Add(time.Duration(points) * time.Minute / time.Duration(probeBudget))
+		out, err := ghAPI(token, args...)
+		code := ""
+		if m := httpStatus.FindStringSubmatch(out); m != nil {
+			code = m[1] + m[2]
+		}
+		limited := (code == "403" || code == "429") && strings.Contains(strings.ToLower(out), "rate limit")
+		switch {
+		case limited && try < 3:
+			wait := time.Minute
+			if m := retryAfter.FindStringSubmatch(out); m != nil {
+				n, _ := strconv.Atoi(m[1])
+				wait = time.Duration(n) * time.Second
+			}
+			reachSleep(wait)
+			continue
+		case limited:
+		case err == nil && code != "" && code[0] == '2', code == "422":
+			return true, nil
+		case code == "403", code == "404":
+			return false, nil
+		}
+		return false, fmt.Errorf("%w: probing it (gh api %s): %v: %s", ErrReachUnknown, strings.Join(args[1:], " "), err, tail(out, 200))
 	}
-	m := httpStatus.FindStringSubmatch(out)
-	switch {
-	case m == nil:
-	case m[1] == "422":
-		return true, nil
-	case m[1] == "404", m[1] == "403" && !strings.Contains(strings.ToLower(out), "rate limit"):
-		return false, nil
-	}
-	return false, fmt.Errorf("probing what the children's token can do (%s): %v: %s", strings.Join(args, " "), err, tail(out, 200))
 }
 
 // CheckReach refuses a children's token that can write more than the gate's
