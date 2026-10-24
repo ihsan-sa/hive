@@ -14,7 +14,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 | `internal/fakeagent` | `hive fake-agent`: scripted agent for tests and dry runs (FAKE:* keywords). |
 | `internal/openagent` | `hive open-agent`: the open harness's agent loop over an OpenAI-compatible chat endpoint (Ollama, OpenRouter), with shell and file tools, writing Claude's stream-json. |
 | `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb` (notes, the record filed from the journal, search), `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates, the tick list), `runner` (modules that carry a program), `release` (self-update, self-release), `tools` (runtimes agents install for themselves), `feedback` (what agents tell the person about the Hive; [feedback.md](feedback.md)), `models` (the lead's route and trial ops, trials' records; [models.md](models.md)), `report` (opt-in failure reports to the developer, scrubbed; [report.md](report.md)). |
-| `internal/app` | Wires core + modules; the tick loop steps the core, then each module the registry lists. |
+| `internal/app` | Wires core + modules; the tick loop steps the core, then each module the registry lists, every second and 20ms after any journal event (at most 8 such early ticks a second), so a step that ends lets the next one go at once. |
 | `internal/daemon` | `hive daemon`, control API (127.0.0.1, bearer token in `.hive/private/daemon.json`, 0600). |
 | `internal/api` | API types + client. |
 | `internal/tui` | Control center (Bubble Tea): Chats, Dashboard, Waiting, Feedback, Knowledge, Modules, Settings. |
