@@ -546,6 +546,10 @@ func TestSelfGuardsItsRootPaths(t *testing.T) {
 		{"modules/agents/warden.md", true, false},
 		{"go.mod", true, false},
 		{"go.sum", true, false},
+		{"go.work", true, false},
+		{"go.work.sum", true, false},
+		{"vendor/golang.org/x/sys/unix/syscall.go", true, false},
+		{"vendor/modules.txt", true, false},
 		{"docs/odd.md", true, false}, // the project's own classes still count
 		{"internal/tui/views.go", false, false},
 	} {
