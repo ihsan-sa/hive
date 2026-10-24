@@ -590,7 +590,8 @@ func contains(l []string, s string) bool {
 // on the same ask. When that ask is gone the cursor stays at its position and
 // waitMoved is set, so Enter won't answer an ask the person didn't select.
 // That holds after an answer here too: a quick second Enter would otherwise
-// approve whatever arrived under the cursor before the person saw it.
+// approve whatever arrived under the cursor before the person saw it. A key
+// on an empty list leaves the guard armed for the ask that arrives next.
 func (m *model) waitIndex() int {
 	asks := m.st.Asks
 	for i, a := range asks {
@@ -628,12 +629,12 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectWait(sel + 1)
 		}
 	case "left", "h":
-		m.waitMoved = false // a pick on the ask now under the cursor selects it
+		m.waitMoved = m.waitMoved && sel >= len(asks) // a pick on the ask now under the cursor selects it
 		if m.optSel > 0 {
 			m.optSel--
 		}
 	case "right", "l":
-		m.waitMoved = false
+		m.waitMoved = m.waitMoved && sel >= len(asks)
 		if sel < len(asks) && m.optSel < len(asks[sel].Options)-1 {
 			m.optSel++
 		}
@@ -643,6 +644,10 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.push(detail{kind: "diff", id: a.ID, title: diffTitle(""), text: a.Diff})
 		}
 	case "enter":
+		if sel >= len(asks) { // nothing shown: an ask that arrives next needs its own Enter
+			m.waitMoved = true
+			return m, nil
+		}
 		if m.waitMoved { // the selected ask went; what's under the cursor wasn't chosen
 			m.waitMoved = false
 			if m.waitNext { // the one that went was answered here
@@ -652,12 +657,10 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if sel < len(asks) {
-			a := asks[sel]
-			opt := a.Options[min(m.optSel, len(a.Options)-1)]
-			m.optSel, m.waitDone = 0, a.ID // answered here: its leaving says "next", not "elsewhere"
-			return m, m.post("/api/answer", map[string]string{"id": a.ID, "answer": opt}, "answered: "+opt)
-		}
+		a := asks[sel]
+		opt := a.Options[min(m.optSel, len(a.Options)-1)]
+		m.optSel, m.waitDone = 0, a.ID // answered here: its leaving says "next", not "elsewhere"
+		return m, m.post("/api/answer", map[string]string{"id": a.ID, "answer": opt}, "answered: "+opt)
 	}
 	return m, nil
 }

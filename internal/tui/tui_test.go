@@ -731,6 +731,43 @@ func TestWaitingDoubleEnterSkipsANewAsk(t *testing.T) {
 		}
 		m.st.Asks = []core.Ask{protectedAsk()}
 	}
+
+	// The list comes back empty between the Enters: an Enter spent on nothing
+	// still leaves the guard for the ask that arrives after it.
+	for _, key := range []tea.KeyType{tea.KeyEnter, tea.KeyLeft, tea.KeyRight} {
+		m.st.Asks = []core.Ask{first}
+		m.waitID, m.waitDone, m.waitMoved, answered = "a1", "", false, nil
+		if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+			cmd()
+		}
+		m.st.Asks = nil
+		m.View()
+		m.Update(tea.KeyMsg{Type: key})
+		m.st.Asks = []core.Ask{protectedAsk()}
+		if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+			cmd()
+		}
+		if len(answered) != 1 || answered[0] != "a1" {
+			t.Fatalf("after %v on an empty list, an enter must not approve a2 on its first press: %v", key, answered)
+		}
+		if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+			cmd()
+		}
+		if len(answered) != 2 || answered[1] != "a2" {
+			t.Fatalf("a second enter on a2 should answer it: %v", answered)
+		}
+	}
+
+	// Starting on an empty list, an Enter there arms the guard too.
+	m.st.Asks, m.waitID, m.waitMoved, answered = nil, "", false, nil
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.st.Asks = []core.Ask{protectedAsk()}
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		cmd()
+	}
+	if len(answered) != 0 {
+		t.Fatalf("an enter after one on an empty list must not approve the new ask: %v", answered)
+	}
 }
 
 // No field of an ask can hide part of what the person approves: raw terminal
