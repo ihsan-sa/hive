@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -625,21 +626,15 @@ const queuedTooLong = time.Hour
 // with no runs yet counts as pending, so a just-pushed head whose jobs aren't
 // listed yet doesn't read as having none.
 func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
-	out, err := gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/check-runs?per_page=100")
+	runs, err := ghPages[ghCheckRun](repo, "repos/"+repo+"/commits/"+sha+"/check-runs", "check_runs")
 	if err != nil {
-		return nil, err
-	}
-	var runs struct {
-		CheckRuns []ghCheckRun `json:"check_runs"`
-	}
-	if err := json.Unmarshal([]byte(out), &runs); err != nil {
 		return nil, err
 	}
 	// A check run again is listed once per attempt; the newest one counts. A
 	// re-run still queued may have no start yet, so its larger id decides.
 	newest := map[string]ghCheckRun{}
 	var order []string
-	for _, r := range runs.CheckRuns {
+	for _, r := range runs {
 		old, seen := newest[r.Name]
 		if !seen {
 			order = append(order, r.Name)
@@ -652,44 +647,57 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 	for _, name := range order {
 		list = append(list, newest[name].check(time.Now()))
 	}
-	out, err = gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/status")
+	statuses, err := ghPages[struct {
+		Context     string `json:"context"`
+		State       string `json:"state"`
+		Description string `json:"description"`
+		TargetURL   string `json:"target_url"`
+	}](repo, "repos/"+repo+"/commits/"+sha+"/status", "statuses")
 	if err != nil {
 		return nil, err
 	}
-	var st struct {
-		Statuses []struct {
-			Context     string `json:"context"`
-			State       string `json:"state"`
-			Description string `json:"description"`
-			TargetURL   string `json:"target_url"`
-		} `json:"statuses"`
-	}
-	if err := json.Unmarshal([]byte(out), &st); err != nil {
-		return nil, err
-	}
-	for _, s := range st.Statuses {
+	for _, s := range statuses {
 		state := map[string]string{"success": CheckPass, "failure": CheckFail, "error": CheckCantStart}[s.State]
 		if state == "" {
 			state = CheckPending
 		}
 		list = append(list, CheckRun{Name: s.Context, State: state, Detail: s.Description, URL: s.TargetURL})
 	}
-	out, err = gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/check-suites?per_page=100")
+	suites, err := ghPages[ghSuite](repo, "repos/"+repo+"/commits/"+sha+"/check-suites", "check_suites")
 	if err != nil {
 		return nil, err
 	}
-	var suites struct {
-		CheckSuites []ghSuite `json:"check_suites"`
-	}
-	if err := json.Unmarshal([]byte(out), &suites); err != nil {
-		return nil, err
-	}
-	for _, s := range suites.CheckSuites {
+	for _, s := range suites {
 		if s.pending(time.Now()) {
 			list = append(list, CheckRun{Name: s.App.Slug, State: CheckPending, Detail: "suite " + s.Status + ", no jobs listed yet"})
 		}
 	}
 	return list, nil
+}
+
+// ghPages reads every page of a GitHub list held under field of each page's
+// object (check-runs, statuses and check-suites come 100 a page at most), so
+// a head with more checks than one page holds still shows them all. gh prints
+// one item per jq result, compact or indented; the decoder takes either.
+func ghPages[T any](repo, path, field string) ([]T, error) {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	out, err := gh(repo, "api", "--paginate", path+sep+"per_page=100", "-q", "."+field+"[]")
+	if err != nil {
+		return nil, err
+	}
+	var list []T
+	for dec := json.NewDecoder(strings.NewReader(out)); ; {
+		var item T
+		if err := dec.Decode(&item); err == io.EOF {
+			return list, nil
+		} else if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", field, err)
+		}
+		list = append(list, item)
+	}
 }
 
 // CheckLogs is a forge that can read a check's log, so a check red on both a
