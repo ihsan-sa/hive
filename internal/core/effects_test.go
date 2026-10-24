@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -512,6 +513,41 @@ func TestScoreOf(t *testing.T) {
 	} {
 		if v, err := scoreOf(out); err == nil {
 			t.Errorf("scoreOf(%q) = %v; want no score", out, v)
+		}
+	}
+}
+
+// The Hive's own repo guards its root and high paths even when its
+// project.json names none; another project with the same layout doesn't.
+func TestSelfGuardsItsRootPaths(t *testing.T) {
+	c, f := testHive(t)
+	seedRepo(t, f, "me/hive", map[string]string{".hive/project.json": `{"test": "true", "high": ["docs/odd.md"]}`})
+	p, _ := c.Projects.Add(Project{Name: "hive", Repo: "me/hive"})
+	main, _ := c.Effects.Sync(p)
+	self := p
+	self.Self = true
+	for i, tc := range []struct {
+		file       string
+		high, root bool
+	}{
+		{"internal/sandbox/linux.go", true, true},
+		{"install/install.sh", true, true},
+		{"internal/core/effects.go", true, false},
+		{"modules/agents/warden.md", true, false},
+		{"docs/odd.md", true, false}, // the project's own classes still count
+		{"internal/tui/views.go", false, false},
+	} {
+		r, _ := commitInCheckout(t, c, p, fmt.Sprintf("w9-%d", i), main, tc.file, "x\n")
+		sha, err := c.Effects.Extract(p, r, main)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ch, _ := c.Effects.Classify(self, main, sha)
+		if (len(ch.High) > 0) != tc.high || (len(ch.Root) > 0) != tc.root {
+			t.Errorf("%s in a self project: high %v root %v", tc.file, ch.High, ch.Root)
+		}
+		if ch, _ := c.Effects.Classify(p, main, sha); len(ch.Root) > 0 || (len(ch.High) > 0) != (tc.file == "docs/odd.md") {
+			t.Errorf("%s outside a self project: high %v root %v", tc.file, ch.High, ch.Root)
 		}
 	}
 }

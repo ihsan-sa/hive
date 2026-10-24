@@ -619,7 +619,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	if err != nil {
 		return c, err
 	}
-	cfg := e.Config(p, mainSHA)
+	cfg := e.Config(p, mainSHA).Guarded(p)
 	protected := append([]string{".hive/project.json", ".hive/goals.md"}, cfg.Protected...)
 	if cfg.Score != nil {
 		protected = append(protected, cfg.Score.Evaluator()...)

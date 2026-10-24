@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -34,6 +35,26 @@ type ProjectConfig struct {
 	Root      []string `json:"root,omitempty"`      // paths that run with elevated rights: high, and the person says when they release
 	SmallMax  int      `json:"small_max_lines,omitempty"`
 	DryRun    string   `json:"dryrun,omitempty"` // for self-releasing projects: one ask, end to end
+}
+
+// SelfRoot and SelfHigh are the paths of the Hive's own source that a self
+// project guards whatever its project.json says; the gate's binary holds them,
+// so no change on the branch can drop them. Root is what acts on the person's
+// machine outside the box: the box itself, the approved scripts the risk
+// module runs, the install and autostart. High is what holds or hands out
+// credentials and what replaces the running Hive.
+var (
+	SelfRoot = []string{"internal/sandbox/", "internal/mod/risk/", "internal/setup/", "install/"}
+	SelfHigh = []string{"internal/core/effects.go", "internal/core/forge.go", "internal/harness/", "internal/mod/release/", "internal/daemon/", "modules/agents/warden.md", "modules/agents/tribunal.md"}
+)
+
+// Guarded returns cfg with a self project's built-in classes added to its own.
+func (cfg ProjectConfig) Guarded(p Project) ProjectConfig {
+	if p.Self {
+		cfg.Root = append(slices.Clone(SelfRoot), cfg.Root...)
+		cfg.High = append(slices.Clone(SelfHigh), cfg.High...)
+	}
+	return cfg
 }
 
 // Score is one number, which way is better, and how much noise to tolerate.
