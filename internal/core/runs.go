@@ -411,6 +411,11 @@ func (rs *Runs) apply(e Event) {
 	case "plan.usage":
 		var p Plan
 		e.Decode(&p)
+		// Readings journaled before the parse fix carry 0 at the top level
+		// and the real number only under the window.
+		if w, ok := p.Limit.Windows[p.Limit.Window]; ok && p.Limit.Utilization == 0 {
+			p.Limit.Utilization = w.Utilization
+		}
 		rs.plans[p.Key()] = p
 		return
 	}

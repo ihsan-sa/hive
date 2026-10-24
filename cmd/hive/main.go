@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -409,7 +410,7 @@ func cmdStatus() int {
 		}
 		fmt.Printf("\nagents: %d live\n", live)
 		for _, p := range st.Plans {
-			fmt.Printf("plan %s: %s, %.0f%% of the %s window, resets %s\n", p.Key(), p.Limit.Status, p.Limit.Utilization*100, p.Limit.Window, p.Limit.ResetsAt.Local().Format("Mon 15:04"))
+			fmt.Println(planLine(p, time.Now()))
 		}
 		if len(st.Asks) > 0 {
 			fmt.Println("\nwaiting on you:")
@@ -576,6 +577,24 @@ func kbArgs(args []string) (query, limit string) {
 		words = append(words, args[i])
 	}
 	return strings.Join(words, " "), limit
+}
+
+// planLine is a plan's usage for hive status. The reset carries its zone and
+// how far off it is, and a reading whose window has since reset says so
+// rather than passing its old number off as current.
+func planLine(p core.Plan, now time.Time) string {
+	l := p.Limit
+	at := l.ResetsAt.Local().Format("Mon 15:04 MST")
+	if !l.ResetsAt.After(now) {
+		return fmt.Sprintf("plan %s: the %s window reset at %s, no reading since (last %.0f%%, read %s ago)", p.Key(), l.Window, at, l.Utilization*100, now.Sub(p.At).Round(time.Minute))
+	}
+	s := fmt.Sprintf("plan %s: %s, %.0f%% of the %s window, resets in %s (%s)", p.Key(), l.Status, l.Utilization*100, l.Window, l.ResetsAt.Sub(now).Round(time.Minute), at)
+	for _, k := range slices.Sorted(maps.Keys(l.Windows)) {
+		if k != l.Window {
+			s += fmt.Sprintf("; %s %.0f%%", k, l.Windows[k].Utilization*100)
+		}
+	}
+	return s
 }
 
 // approveOption is the option approve (the first) or refuse (the last) picks;
