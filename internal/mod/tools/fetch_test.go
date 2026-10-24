@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -66,10 +67,10 @@ func TestUnpackVerifiesAndInstalls(t *testing.T) {
 		t.Fatalf("unpack: %q %v", v, err)
 	}
 	fi, err := os.Stat(filepath.Join(folder, "node", "bin", "node"))
-	if err != nil || fi.Mode().Perm()&0o100 == 0 {
+	if err != nil || fi.Mode().Perm()&0o100 == 0 && runtime.GOOS != "windows" { // Windows has no executable bit; real installs unpack inside WSL (fetch.go refuses Windows)
 		t.Fatalf("node not installed executable: %v", err)
 	}
-	if target, _ := os.Readlink(filepath.Join(folder, "node", "bin", "npm")); target != "../lib/npm.js" {
+	if target, _ := os.Readlink(filepath.Join(folder, "node", "bin", "npm")); filepath.ToSlash(target) != "../lib/npm.js" {
 		t.Fatalf("symlink: %q", target)
 	}
 	if got := Installed(folder); len(got) != 1 || got[0] != "node 1.2.3" {

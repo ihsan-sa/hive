@@ -265,6 +265,22 @@ func (p *pause) clear() {
 	p.hits = 0
 }
 
+var logins sync.Map // repo owner -> the login its token acts as
+
+// ghLogin is the login the Hive acts as on repo, asked once per owner.
+func ghLogin(repo string) (string, error) {
+	owner, _, _ := strings.Cut(strings.ToLower(repo), "/")
+	if l, ok := logins.Load(owner); ok {
+		return l.(string), nil
+	}
+	l, err := gh(repo, "api", "user", "-q", ".login")
+	if l = strings.TrimSpace(l); err != nil || l == "" {
+		return "", fmt.Errorf("could not tell which login the Hive acts as on %s: %v", repo, err)
+	}
+	logins.Store(owner, l)
+	return l, nil
+}
+
 // User is the login gh itself holds.
 func (GitHub) User() (string, error) { return gh("", "api", "user", "-q", ".login") }
 
@@ -382,16 +398,25 @@ func (GitHub) Comment(repo string, number int, body string) error {
 	return err
 }
 
+// StatusComment edits the Hive's own comment carrying marker, or posts one.
+// Anyone can write the marker into a comment, so only one the Hive's login
+// wrote is edited.
 func (g GitHub) StatusComment(repo string, number int, marker, body string) error {
 	body += "\n\n" + marker
-	path := fmt.Sprintf("repos/%s/issues/%d/comments", repo, number)
-	out, err := gh(repo, "api", "--paginate", path, "-q", fmt.Sprintf(".[] | select(.body | contains(%q)) | .id", marker))
+	me, err := ghLogin(repo)
 	if err != nil {
 		return err
 	}
-	if id, _, _ := strings.Cut(strings.TrimSpace(out), "\n"); id != "" {
-		_, err = gh(repo, "api", "-X", "PATCH", fmt.Sprintf("repos/%s/issues/comments/%s", repo, id), "-f", "body="+body)
+	path := fmt.Sprintf("repos/%s/issues/%d/comments", repo, number)
+	out, err := gh(repo, "api", "--paginate", path, "-q", fmt.Sprintf(`.[] | "\(.id) \(.user.login) \(.body | contains(%q))"`, marker))
+	if err != nil {
 		return err
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if f := strings.Fields(l); len(f) == 3 && f[1] == me && f[2] == "true" {
+			_, err = gh(repo, "api", "-X", "PATCH", fmt.Sprintf("repos/%s/issues/comments/%s", repo, f[0]), "-f", "body="+body)
+			return err
+		}
 	}
 	return g.Comment(repo, number, body)
 }
