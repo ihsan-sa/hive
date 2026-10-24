@@ -18,18 +18,28 @@ const gateUsage = `usage: hive gate --repo <git> --head <sha> --base <sha> [--or
                  [--lessons .hive/lessons.md] [--allow-tie] [--install <path>]  (installs only after a keep from bubblewrap-isolated children) [--out <dir>]
                  [--allow-bare]  (where bubblewrap cannot make namespaces; never with --org, never installed)
        hive gate --self-test [--out <dir>]      the gate on a trivial change, inside a child
-       hive gate install --bin <new> --target <path> [--version <v>]
+       hive gate install --report <run>/report.json --target <path>   install a kept run's verified binary later
 Exit 0 keeps the candidate, 1 rolls it back, 2 is a usage error. The report is JSON on stdout.`
 
 func cmdGate(args []string) int {
 	if len(args) > 0 && args[0] == "install" {
 		fs := flag.NewFlagSet("gate install", flag.ContinueOnError)
-		bin, target, ver := fs.String("bin", "", ""), fs.String("target", "", ""), fs.String("version", "", "")
-		if fs.Parse(args[1:]) != nil || *bin == "" || *target == "" {
+		report, target := fs.String("report", "", ""), fs.String("target", "", "")
+		if fs.Parse(args[1:]) != nil || *report == "" || *target == "" {
 			fmt.Fprintln(os.Stderr, gateUsage)
 			return 2
 		}
-		if err := gate.Install(*bin, *target, *ver); err != nil {
+		// Only a gate run's report installs, and only through InstallTo's
+		// checks: kept, run under bubblewrap, the hashed binary, its stamped version.
+		raw, err := os.ReadFile(*report)
+		var rep gate.Report
+		if err == nil {
+			err = json.Unmarshal(raw, &rep)
+		}
+		if err == nil {
+			err = rep.InstallTo(*target)
+		}
+		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
