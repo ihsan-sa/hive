@@ -3,8 +3,6 @@ package release
 import (
 	"errors"
 	"os"
-	"runtime"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,73 +10,28 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
-// gateSite holds me/hive's pre-releases on the local forge: each tag at a
-// commit named for it, and the conclusion of each job of its gate runs, ""
-// while it runs.
-type gateSite struct {
-	f    *core.Local
-	runs int64
-}
-
-// setJobs gives tag's release runs at its commit these jobs, by gate.
-func (g *gateSite) setJobs(tag string, jobs map[string]map[string]string) {
-	var runs []core.WorkflowRun
-	for _, gate := range Gates {
-		if _, ok := jobs[gate]; !ok {
-			continue
-		}
-		g.runs++
-		runs = append(runs, core.WorkflowRun{ID: g.runs, Name: gate, Status: "in_progress"})
-		var js []core.WorkflowJob
-		for name, c := range jobs[gate] {
-			st := "completed"
-			if c == "" {
-				st = "in_progress"
-			}
-			js = append(js, core.WorkflowJob{Name: name, Status: st, Conclusion: c, URL: "https://example.com/" + name})
-		}
-		g.f.SetRunJobs("me/hive", g.runs, js...)
-	}
-	g.f.SetReleaseRuns("me/hive", "sha-"+tag, runs...)
-}
-
-// gatesFor are a release's gate jobs, this system's concluding here and the
-// others' there.
-func gatesFor(here, there string) map[string]map[string]string {
-	own, other := runners[runtime.GOOS], "plan9"
-	return map[string]map[string]string{
-		"ci": {"test (" + own + "-latest)": here, "test (" + other + "-latest)": there, "sandboxed-e2e": there},
-		"update": {"update (" + own + "-latest, previous)": here, "update (" + own + "-latest, v0.1.2)": here,
-			"update (" + other + "-latest, previous)": there},
-	}
-}
-
 // preSite is v0.1.12 as the latest release and v0.1.13 to v0.1.15 as
-// pre-releases: v0.1.13's checks passed here though red elsewhere, v0.1.14's
-// failed here, and v0.1.15's still run here.
-func preSite(t *testing.T, m *Module) *gateSite {
-	serveAll(t, "v0.1.12", map[string]map[string]string{"v0.1.12": build("v12"), "v0.1.13": build("v13"),
-		"v0.1.14": build("v14"), "v0.1.15": build("v15")}, false)
-	g := &gateSite{f: m.C.Effects.Forge.(*core.Local)}
+// pre-releases with no ci or update run at all: v0.1.13 and v0.1.14 have
+// their binaries attached, v0.1.15 not yet. Adding to the map it returns
+// attaches a release's binaries.
+func preSite(t *testing.T, m *Module) map[string]map[string]string {
+	assets := map[string]map[string]string{"v0.1.12": build("v12"), "v0.1.13": build("v13"), "v0.1.14": build("v14")}
+	serveAll(t, "v0.1.12", assets, false)
+	f := m.C.Effects.Forge.(*core.Local)
 	for _, tag := range []string{"v0.1.12", "v0.1.13", "v0.1.14", "v0.1.15"} {
-		g.f.CreateRelease("me/hive", tag, "sha-"+tag, "")
+		f.CreateRelease("me/hive", tag, "sha-"+tag, "")
 	}
-	g.f.PublishRelease("me/hive", "v0.1.12")
-	g.setJobs("v0.1.13", gatesFor("success", "failure"))
-	red := gatesFor("failure", "success")
-	red["update"]["update ("+runners[runtime.GOOS]+"-latest, v0.1.2)"] = "success" // one red leg is enough
-	g.setJobs("v0.1.14", red)
-	g.setJobs("v0.1.15", gatesFor("", "success"))
-	return g
+	f.PublishRelease("me/hive", "v0.1.12")
+	return assets
 }
 
 // The Hive that releases the Hive follows pre-releases by default: it takes
-// the newest whose checks for its own system passed, passing over one red
-// here and one still running here, and waits out a merge; once the newer one
-// passes here it takes that too.
-func TestFollowsTheNewestPreReleaseSafeHere(t *testing.T) {
+// the newest whose binaries are attached, without waiting for its ci or
+// update test, and waits out a merge; once a newer one's binaries are
+// attached it takes that too.
+func TestFollowsEachPreReleaseOnceItsBinariesAreAttached(t *testing.T) {
 	m, exe := releaseAt(t, "v0.1.12", "me/hive")
-	g := preSite(t, m)
+	assets := preSite(t, m)
 	if _, err := m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -95,40 +48,66 @@ func TestFollowsTheNewestPreReleaseSafeHere(t *testing.T) {
 	}
 	merging = false
 	msg, err := m.AutoUpdate()
-	if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "updated to v0.1.13\n") || string(raw) != "v13" {
+	if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "updated to v0.1.14\n") || string(raw) != "v14" {
 		t.Fatalf("update: %q, %v, binary %q", msg, err, raw)
 	}
-	core.Version = "v0.1.13"
+	core.Version = "v0.1.14"
 	msg, err = m.AutoUpdate()
-	if newest, behind := m.Lag(); newest != "v0.1.15" || behind != 2 {
-		t.Fatalf("on v0.1.13: newest %q, %d behind; want v0.1.15, 2", newest, behind)
+	if newest, behind := m.Lag(); newest != "v0.1.15" || behind != 1 {
+		t.Fatalf("on v0.1.14: newest %q, %d behind; want v0.1.15, 1", newest, behind)
 	}
-	if err != nil || !strings.HasPrefix(msg, "already on v0.1.13") || !strings.Contains(msg, "v0.1.15: waiting for") || !strings.Contains(msg, "v0.1.14: test (") {
-		t.Fatalf("with nothing safe newer: %q, %v", msg, err)
+	if err != nil || !strings.HasPrefix(msg, "already on v0.1.14; v0.1.15: waiting for its binaries") {
+		t.Fatalf("before v0.1.15's binaries are attached: %q, %v", msg, err)
 	}
-	g.setJobs("v0.1.15", gatesFor("success", ""))
+	if s := m.Skipped(); len(s) != 1 || !strings.HasPrefix(s[0], "v0.1.15: waiting for its binaries") {
+		t.Fatalf("the dashboard's skips: %q", s)
+	}
+	assets["v0.1.15"] = build("v15")
 	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v0.1.15\n") {
-		t.Fatalf("once v0.1.15 passed here: %q, %v", msg, err)
+		t.Fatalf("once v0.1.15's binaries are attached: %q, %v", msg, err)
 	}
 }
 
-// A pre-release with no runs yet, or with no job for this system, is not safe.
-func TestPreReleaseWithoutItsChecksWaits(t *testing.T) {
+// A pre-release that rolled back here, after failed starts or because it
+// didn't run, is skipped from then on, and the next older one is taken.
+func TestRolledBackPreReleaseIsSkipped(t *testing.T) {
 	m, exe := releaseAt(t, "v0.1.12", "me/hive")
-	g := preSite(t, m)
-	g.setJobs("v0.1.13", map[string]map[string]string{"ci": gatesFor("success", "success")["ci"]})
-	g.setJobs("v0.1.15", map[string]map[string]string{"ci": {"test (plan9-latest)": "success"}, "update": {"update (plan9-latest, previous)": "success"}})
+	assets := preSite(t, m)
+	assets["v0.1.15"] = build("v15")
 	cfg := m.C.WS.LoadConfig()
 	cfg.Channel = Prerelease
 	m.C.WS.SaveConfig(cfg)
-	msg, err := m.AutoUpdate()
-	if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "already on v0.1.12") || string(raw) != "old" {
-		t.Fatalf("took an unchecked pre-release: %q, %v, binary %q", msg, err, raw)
-	}
-	for _, want := range []string{"v0.1.13: waiting for update (no run yet)", "v0.1.15: waiting for ci (no " + runners[runtime.GOOS] + " job yet)"} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("%q doesn't say %q", msg, want)
+	tryBinary = func(_, tag string) error {
+		if tag == "v0.1.15" {
+			return errors.New("exit status 2")
 		}
+		return nil
+	}
+	if msg, err := m.AutoUpdate(); err == nil || !strings.Contains(err.Error(), "v0.1.15 doesn't run here") {
+		t.Fatalf("a binary that doesn't run: %q, %v", msg, err)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "old" {
+		t.Fatalf("kept binary %q", raw)
+	}
+	msg, err := m.AutoUpdate()
+	if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "updated to v0.1.14\n") || string(raw) != "v14" {
+		t.Fatalf("after v0.1.15 failed: %q, %v, binary %q", msg, err, raw)
+	}
+	if s := m.Skipped(); len(s) != 1 || !strings.Contains(s[0], "v0.1.15: skipped, it rolled back") {
+		t.Fatalf("the dashboard's skips: %q", s)
+	}
+
+	// A failed start rolls back in Boot; the old daemon's Report journals it.
+	m2, exe2 := releaseAt(t, "v0.1.14", "me/hive")
+	m2.C.Effects.Forge.(*core.Local).CreateRelease("me/hive", "v0.1.15", "sha-v0.1.15", "")
+	cfg = m2.C.WS.LoadConfig()
+	cfg.Channel = Prerelease
+	m2.C.WS.SaveConfig(cfg)
+	writePending(m2.C.WS, pending{From: "v0.1.14", To: "v0.1.15", Paths: []string{exe2}, RolledBack: "v0.1.15 failed to start 2 times after the update"})
+	m2.Report()
+	msg, err = m2.AutoUpdate()
+	if raw, _ := os.ReadFile(exe2); err != nil || !strings.HasPrefix(msg, "already on v0.1.14; v0.1.15: skipped") || string(raw) != "old" {
+		t.Fatalf("retried a release that rolled back: %q, %v, binary %q", msg, err, raw)
 	}
 }
 
@@ -149,10 +128,10 @@ func TestPreReleasesOffByDefault(t *testing.T) {
 	cfg := m.C.WS.LoadConfig()
 	cfg.Channel = Prerelease
 	m.C.WS.SaveConfig(cfg)
-	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v0.1.13\n") {
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v0.1.14\n") {
 		t.Fatalf("chosen: %q, %v", msg, err)
 	}
-	if raw, _ := os.ReadFile(exe); string(raw) != "v13" {
+	if raw, _ := os.ReadFile(exe); string(raw) != "v14" {
 		t.Fatalf("binary %q", raw)
 	}
 	m2, _ := releaseAt(t, "v0.1.12", "me/hive")
@@ -174,59 +153,24 @@ func TestUnknownChannelRefused(t *testing.T) {
 	}
 }
 
-// Only the newest pre-releases are read in one look, and the waits say so.
+// Only the newest pre-releases' checksums are read in one look, and the
+// waits say so.
 func TestOlderPreReleasesWaitTheirTurn(t *testing.T) {
 	m, _ := releaseAt(t, "v0.1.12", "me/hive")
-	g := preSite(t, m)
-	g.f.CreateRelease("me/hive", "v0.1.16", "sha-v0.1.16", "")
-	g.setJobs("v0.1.16", gatesFor("", ""))
+	preSite(t, m)
+	f := m.C.Effects.Forge.(*core.Local)
+	for _, tag := range []string{"v0.1.16", "v0.1.17"} {
+		f.CreateRelease("me/hive", tag, "sha-"+tag, "")
+	}
 	cfg := m.C.WS.LoadConfig()
 	cfg.Channel = Prerelease
 	m.C.WS.SaveConfig(cfg)
-	if msg, err := m.AutoUpdate(); err != nil || !strings.Contains(msg, "1 older pre-releases aren't read") || strings.Contains(msg, "updated") {
+	if msg, err := m.AutoUpdate(); err != nil || !strings.Contains(msg, "older pre-releases aren't read") || strings.Contains(msg, "updated") {
 		t.Fatalf("read past the newest three: %q, %v", msg, err)
 	}
 }
 
-// The jobs the channel reads are named as ci.yml and update.yml name them: a
-// rename would leave the channel waiting without a word.
-func TestOwnJobsAreTheWorkflowsJobs(t *testing.T) {
-	for gate, job := range ownJobs {
-		raw, err := os.ReadFile("../../../.github/workflows/" + gate + ".yml")
-		if err != nil {
-			t.Fatal(err)
-		}
-		lines := strings.Split(string(raw), "\n")
-		i := slices.Index(lines, "  "+job+":")
-		if i < 0 {
-			t.Fatalf("%s.yml has no job %s", gate, job)
-		}
-		matrix := ""
-		for _, l := range lines[i+1:] {
-			if len(l) > 2 && l[2] != ' ' && l[0] == ' ' || !strings.HasPrefix(l, " ") && l != "" {
-				break // the next job, or past jobs
-			}
-			if strings.HasPrefix(l, "    name:") {
-				t.Fatalf("%s.yml names its %s job, so it isn't %q", gate, job, job+" (<runner>...)")
-			}
-			if strings.HasPrefix(l, "      matrix:") {
-				matrix = "next"
-			} else if matrix == "next" {
-				matrix = strings.TrimSpace(l)
-			}
-		}
-		if !strings.HasPrefix(matrix, "os:") {
-			t.Fatalf("%s.yml's %s matrix doesn't lead with os: %q", gate, job, matrix)
-		}
-		for _, r := range runners {
-			if !strings.Contains(matrix, r+"-latest") {
-				t.Fatalf("%s.yml's %s matrix has no %s-latest: %q", gate, job, r, matrix)
-			}
-		}
-	}
-}
-
-// Without a GitHub login the channel can't read the gates, and says so.
+// Without a GitHub login the channel can't list the pre-releases, and says so.
 func TestPreReleasesWithoutALoginSaySo(t *testing.T) {
 	m, _ := releaseAt(t, "v0.1.12", "me/hive")
 	preSite(t, m)

@@ -413,8 +413,12 @@ func (m *model) viewTree() []string {
 		}
 	}
 	if rel := releaseText(m.st); m.st.Behind > 0 {
-		lines = append([]string{stWarn.Render(rel), ""}, lines...)
-		sel += 2
+		head := []string{stWarn.Render(rel)}
+		for _, s := range skippedText(m.st) {
+			head = append(head, stDim.Render(s))
+		}
+		lines = append(append(head, ""), lines...)
+		sel += len(head) + 1
 	} else if rel != "" {
 		lines = append([]string{stDim.Render(rel), ""}, lines...)
 		sel += 2
@@ -442,6 +446,15 @@ func releaseText(st api.State) string {
 		return "On " + st.Version + ", 1 release behind " + st.Newest
 	}
 	return fmt.Sprintf("On %s, %d releases behind %s", st.Version, st.Behind, st.Newest)
+}
+
+// skippedText says, one line each, why the newer releases weren't installed.
+func skippedText(st api.State) []string {
+	var out []string
+	for _, s := range st.Skipped {
+		out = append(out, "  "+core.Clip(s, 200))
+	}
+	return out
 }
 
 // ---- details ---------------------------------------------------------------

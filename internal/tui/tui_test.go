@@ -1106,4 +1106,8 @@ func TestReleaseText(t *testing.T) {
 			t.Errorf("%+v: %q, want %q", c.st, got, c.want)
 		}
 	}
+	st := api.State{Version: "v0.1.33", Newest: "v0.1.35", Behind: 2, Skipped: []string{"v0.1.35: waiting for its binaries", "v0.1.34: skipped, it rolled back after it failed to start here"}}
+	if got := skippedText(st); len(got) != 2 || got[1] != "  v0.1.34: skipped, it rolled back after it failed to start here" {
+		t.Errorf("skips: %q", got)
+	}
 }
