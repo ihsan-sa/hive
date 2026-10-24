@@ -65,10 +65,10 @@ func probeOrg(cfg *Config, c *Child) Result {
 	}
 	dir := filepath.Join(c.Root, "org-clone")
 	os.RemoveAll(dir)
-	git := []string{"git"}
-	if strings.HasPrefix(c.RepoURL, "https://") && c.Token != "" {
-		git = append(git, "-c", "http.extraHeader=Authorization: Basic "+basic(c.Token))
+	if strings.HasPrefix(c.RepoURL, "https://") && c.Token == "" {
+		return Result{Pass: true, Detail: "no contents-only token for the children: org round trip skipped"}
 	}
+	git := []string{"git"} // the child's environment carries the token to git; it is in no argv
 	steps := [][]string{
 		{"clone", "-q", c.RepoURL, dir},
 		{"-C", dir, "checkout", "-q", "-B", "main"},

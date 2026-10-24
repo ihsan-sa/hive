@@ -13,9 +13,9 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 )
 
-const gateUsage = `usage: hive gate --repo <git> --head <sha> --base <sha> [--org Hive-RSI-Lab | --local-org <dir>]
+const gateUsage = `usage: hive gate --repo <git> --head <sha> --base <sha> [--org Hive-RSI-Lab | --local-org <dir>] [--child-token-file f]
                  [--eval <sha, default base>] [--reps 3] [--bench 4] [--probes daemon,org,e2e,benchmark,recurse] [--depth 1]
-                 [--lessons .hive/lessons.md] [--allow-tie] [--install <path>] [--out <dir>]
+                 [--lessons .hive/lessons.md] [--allow-tie] [--install <path>]  (installs only after a keep from bubblewrap-isolated children) [--out <dir>]
        hive gate --self-test [--out <dir>]      the gate on a trivial change, inside a child
        hive gate install --bin <new> --target <path> [--version <v>]
 Exit 0 keeps the candidate, 1 rolls it back, 2 is a usage error. The report is JSON on stdout.`
@@ -37,7 +37,7 @@ func cmdGate(args []string) int {
 	}
 	fs := flag.NewFlagSet("gate", flag.ContinueOnError)
 	repo, head, base, eval := fs.String("repo", "", ""), fs.String("head", "", ""), fs.String("base", "", ""), fs.String("eval", "", "")
-	org, localOrg, tokenFile := fs.String("org", "", ""), fs.String("local-org", "", ""), fs.String("org-token-file", "", "")
+	org, localOrg, tokenFile, childFile := fs.String("org", "", ""), fs.String("local-org", "", ""), fs.String("org-token-file", "", ""), fs.String("child-token-file", "", "")
 	reps, bench, depth := fs.Int("reps", 3, ""), fs.Int("bench", 4, ""), fs.Int("depth", 1, "")
 	probes, lessons, out, install := fs.String("probes", "", ""), fs.String("lessons", "", ""), fs.String("out", "", ""), fs.String("install", "", "")
 	tie, self := fs.Bool("allow-tie", false, ""), fs.Bool("self-test", false, "")
@@ -94,7 +94,22 @@ func cmdGate(args []string) int {
 				fmt.Fprintln(os.Stderr, "gate: --org needs HIVE_GATE_ORG_TOKEN or --org-token-file: the org's own token, never the repository owner's login")
 				return 2
 			}
-			cfg.Org, cfg.OrgToken = gate.GitHub{Owner: *org, Token: tok}, tok
+			// The token that makes and deletes repositories stays with the gate.
+			// Children get a different, contents-only token or none.
+			child := os.Getenv("HIVE_GATE_CHILD_TOKEN")
+			if *childFile != "" {
+				raw, err := os.ReadFile(*childFile)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					return 2
+				}
+				child = strings.TrimSpace(string(raw))
+			}
+			if child == tok {
+				fmt.Fprintln(os.Stderr, "gate: the children's token must not be the token that makes and deletes repositories")
+				return 2
+			}
+			cfg.Org, cfg.OrgToken, cfg.ChildToken = gate.GitHub{Owner: *org, Token: tok}, tok, child
 		}
 	}
 	rep, err := gate.Run(cfg)
@@ -105,12 +120,8 @@ func cmdGate(args []string) int {
 		return 1
 	}
 	if *install != "" {
-		bin := cfg.CandBin
-		if bin == "" {
-			bin = filepath.Join(cfg.Out, "bin-candidate")
-		}
-		if err := gate.Install(bin, *install, ""); err != nil {
-			fmt.Fprintln(os.Stderr, "gate:", err)
+		if err := rep.InstallTo(*install); err != nil {
+			fmt.Fprintln(os.Stderr, "gate: not installing:", err)
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, "gate: installed", *install, "at", time.Now().Format(time.RFC3339))

@@ -1,8 +1,12 @@
 package gate
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,27 +16,28 @@ import (
 
 // Config is one gate run.
 type Config struct {
-	Repo      string   // git repository (path or URL) of the Hive's source
-	Head      string   // the candidate's exact commit
-	Base      string   // the current Hive's commit: the control
-	Eval      string   // the commit whose e2e tests and benchmark judge both sides (default Base); a candidate never grades itself
-	CandBin   string   // a prebuilt candidate binary (skips building Head; a self-test)
-	CtrlBin   string   // a prebuilt control binary
-	Out       string   // where the run's files and report go
-	Probes    []string // which probes to run (default all)
-	Reps      int      // repeats of every probe on each side, interleaved (default 3)
-	Bench     int      // asks in the benchmark (default 4, the whole set)
-	Org       Org      // the fresh test repository's host; nil runs without one
-	OrgToken  string   // the org token the children hold
-	Lessons   string   // .hive/lessons.md to append to on a rollback
-	Depth     int      // levels of gating the children may still do (capped at MaxDepth)
-	MaxRepos  int      // most org repositories one run may make (default 4)
-	Timeout   time.Duration
-	Options   Options
-	Sandbox   string // "", "bwrap" or "bare"; "" picks
-	Log       func(string)
-	Probe     map[string]ProbeFunc // extra probes, by name
-	KeepFiles bool
+	Repo       string   // git repository (path or URL) of the Hive's source
+	Head       string   // the candidate's exact commit
+	Base       string   // the current Hive's commit: the control
+	Eval       string   // the commit whose e2e tests and benchmark judge both sides (default Base); a candidate never grades itself
+	CandBin    string   // a prebuilt candidate binary (skips building Head; a self-test)
+	CtrlBin    string   // a prebuilt control binary
+	Out        string   // where the run's files and report go
+	Probes     []string // which probes to run (default all)
+	Reps       int      // repeats of every probe on each side, interleaved (default 3)
+	Bench      int      // asks in the benchmark (default 4, the whole set)
+	Org        Org      // the fresh test repository's host; nil runs without one
+	OrgToken   string   // the org token the gate itself uses to make and delete test repositories; children never hold it
+	ChildToken string   // the contents-only token the children hold (empty: they hold none and the org probe is skipped)
+	Lessons    string   // .hive/lessons.md to append to on a rollback
+	Depth      int      // levels of gating the children may still do (capped at MaxDepth)
+	MaxRepos   int      // most org repositories one run may make (default 4)
+	Timeout    time.Duration
+	Options    Options
+	Sandbox    string // "", "bwrap" or "bare"; "" picks
+	Log        func(string)
+	Probe      map[string]ProbeFunc // extra probes, by name
+	KeepFiles  bool
 }
 
 // MaxDepth is how many levels deep gates may nest; a child gating a
@@ -41,19 +46,21 @@ const MaxDepth = 2
 
 // Report is the record of a run.
 type Report struct {
-	ID        string    `json:"id"`
-	Head      string    `json:"head"`
-	Base      string    `json:"base"`
-	Sandbox   string    `json:"sandbox"`
-	Started   time.Time `json:"started"`
-	Seconds   float64   `json:"seconds"`
-	Candidate []Result  `json:"candidate"`
-	Control   []Result  `json:"control"`
-	Verdict   Verdict   `json:"verdict"`
-	Repos     []string  `json:"repos,omitempty"`   // org repositories made
-	Cleaned   []string  `json:"cleaned,omitempty"` // and removed
-	Leaked    []string  `json:"leaked,omitempty"`  // made and not removed
-	Error     string    `json:"error,omitempty"`
+	ID         string    `json:"id"`
+	Head       string    `json:"head"`
+	Base       string    `json:"base"`
+	Sandbox    string    `json:"sandbox"`
+	Started    time.Time `json:"started"`
+	Seconds    float64   `json:"seconds"`
+	Candidate  []Result  `json:"candidate"`
+	Control    []Result  `json:"control"`
+	Verdict    Verdict   `json:"verdict"`
+	Repos      []string  `json:"repos,omitempty"`   // org repositories made
+	Cleaned    []string  `json:"cleaned,omitempty"` // and removed
+	Leaked     []string  `json:"leaked,omitempty"`  // made and not removed
+	Error      string    `json:"error,omitempty"`
+	CandBin    string    `json:"candidate_bin,omitempty"`    // the verified copy of the candidate's binary
+	CandSHA256 string    `json:"candidate_sha256,omitempty"` // its hash, taken right after the build
 }
 
 func (c *Config) log(f string, a ...any) {
@@ -88,15 +95,15 @@ func Run(cfg Config) (rep Report, err error) {
 	if len(cfg.Probes) == 0 {
 		cfg.Probes = DefaultProbes
 	}
-	// Children get the Go caches by path, since their HOME is empty.
-	for _, k := range []string{"GOCACHE", "GOMODCACHE"} {
+	// Children read the module cache by path (read-only); each has its own build cache.
+	for _, k := range []string{"GOMODCACHE"} {
 		if os.Getenv(k) == "" {
 			if out, err := exec.Command("go", "env", k).Output(); err == nil {
 				os.Setenv(k, strings.TrimSpace(string(out)))
 			}
 		}
 	}
-	rep = Report{ID: fmt.Sprintf("gate-%d", t0.Unix()), Head: cfg.Head, Base: cfg.Base, Sandbox: cfg.Sandbox, Started: t0.UTC()}
+	rep = Report{ID: fmt.Sprintf("gate-%d-%s", t0.Unix(), randHex()), Head: cfg.Head, Base: cfg.Base, Sandbox: cfg.Sandbox, Started: t0.UTC()}
 	if cfg.Out == "" {
 		cfg.Out = filepath.Join(os.TempDir(), rep.ID)
 	}
@@ -133,6 +140,19 @@ func Run(cfg Config) (rep Report, err error) {
 		}
 	}
 
+	// The candidate's binary is copied out of the child's reach and hashed;
+	// that copy, checked against the hash, is all an install ever uses.
+	if err = os.MkdirAll(filepath.Join(cfg.Out, "verified"), 0o755); err != nil {
+		return rep, err
+	}
+	rep.CandBin = filepath.Join(cfg.Out, "verified", "candidate-hive")
+	if err = copyFile(cand.Bin, rep.CandBin); err != nil {
+		return rep, err
+	}
+	if rep.CandSHA256, err = FileSHA(rep.CandBin); err != nil {
+		return rep, err
+	}
+
 	// Both sides are judged by one evaluator, taken from Eval (the base by
 	// default), so a candidate cannot change the tests or the benchmark that
 	// grade it.
@@ -167,12 +187,14 @@ func Run(cfg Config) (rep Report, err error) {
 				return rep, fmt.Errorf("the run would make more than %d org repositories", cfg.MaxRepos)
 			}
 			made++
-			c.Repo = fmt.Sprintf("%s-%s", rep.ID, c.Name)
-			rep.Repos = append(rep.Repos, c.Repo)
-			if c.RepoURL, err = cfg.Org.Create(c.Repo); err != nil {
+			name := fmt.Sprintf("%s-%s", rep.ID, c.Name)
+			if c.RepoURL, err = cfg.Org.Create(name); err != nil {
 				return rep, err
 			}
-			c.Token = cfg.OrgToken
+			// Only a repository this run made is this run's to delete.
+			c.Repo = name
+			rep.Repos = append(rep.Repos, name)
+			c.Token = cfg.ChildToken
 		}
 	}
 
@@ -203,8 +225,32 @@ func Run(cfg Config) (rep Report, err error) {
 			}
 		}
 	}
+	// The candidate's binary must be the one that was built and hashed.
+	if got, e := FileSHA(cand.Bin); e != nil || got != rep.CandSHA256 {
+		return rep, fmt.Errorf("the candidate's binary changed during the run")
+	}
 	rep.Verdict = Decide(rep.Candidate, rep.Control, cfg.Options)
 	return rep, nil
+}
+
+func randHex() string {
+	b := make([]byte, 4)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// FileSHA is the sha256 of a file, hex.
+func FileSHA(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func short(s string) string {
@@ -229,6 +275,8 @@ func build(cfg Config, c *Child, sha string) error {
 	if err := c.Prepare(); err != nil {
 		return err
 	}
+	c.Building = true
+	defer func() { c.Building = false }()
 	run := func(dir string, argv ...string) (string, error) { return c.Exec(30*time.Minute, dir, argv...) }
 	if out, err := run(c.Src, "go", "vet", "./..."); err != nil {
 		return fmt.Errorf("go vet: %s", tail(out, 600))
@@ -333,6 +381,12 @@ func noteLesson(cfg Config, rep Report) {
 	if !strings.HasSuffix(s, "\n") {
 		s += "\n"
 	}
-	s += fmt.Sprintf("- The gate rolled back %s (run %s): %s\n", short(rep.Head), rep.ID, rep.Verdict.Reason)
+	// Text from the candidate's own output never goes here: a lesson is read by
+	// the next worker as instructions.
+	reason := rep.Verdict.Reason
+	if rep.Error != "" {
+		reason = "the gate could not finish (see report.json of the run)"
+	}
+	s += fmt.Sprintf("- The gate rolled back %s (run %s): %s\n", short(rep.Head), rep.ID, reason)
 	os.WriteFile(cfg.Lessons, []byte(s), 0o644)
 }
