@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -76,6 +79,55 @@ func TestClientFollowsRestartedDaemon(t *testing.T) {
 	}
 	if a := <-got; a != "Bearer new" {
 		t.Fatalf("daemon got %q", a)
+	}
+}
+
+// The window TestClientFollowsRestartedDaemon can't reach with a held port:
+// daemon.json names the new daemon and its port refuses, as before it
+// listens. A dialer refuses the new port until it serves, so no other test's
+// server can take the port meanwhile.
+func TestClientWaitsOutRefusedNewDaemon(t *testing.T) {
+	ws, write := workspace(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	next := ln.Addr().(*net.TCPAddr).Port
+	if err := write(DaemonInfo{PID: 2, Port: next, Token: "new"}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Dial(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.cur = DaemonInfo{PID: 1, Port: deadPort(t), Token: "old"} // the client last reached the old daemon
+	var serving, refused atomic.Bool
+	c.http.Transport = &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if !serving.Load() {
+			refused.Store(true)
+			return nil, &net.OpError{Op: "dial", Net: network, Err: syscall.ECONNREFUSED}
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer new" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Write([]byte(`{}`))
+	})}
+	defer srv.Close()
+	go func() {
+		time.Sleep(time.Second)
+		serving.Store(true)
+		srv.Serve(ln)
+	}()
+	if err := c.Do("POST", "/api/chat", map[string]string{"text": "hi"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !refused.Load() {
+		t.Fatal("the new daemon's port was never refused")
 	}
 }
 

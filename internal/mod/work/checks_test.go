@@ -45,6 +45,10 @@ func prState(t *testing.T, f *core.Local, n int) string {
 func TestMergeWaitsForForgeChecks(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	// The pending checks finishing one by one change the reason, not the
+	// hold: the PR hears of it once.
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPending}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPending})
+	mergeOnce(t, m, task, p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPass}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPending})
 	for i := 0; i < 3; i++ {
 		mergeOnce(t, m, task, p)
@@ -152,6 +156,25 @@ func TestMergeForgeCheckSharedRedWaitsForTheRest(t *testing.T) {
 	}
 }
 
+// A check cancelled on the head itself is run again once, with no alert;
+// cancelled again, it is raised as one that can't start.
+func TestMergeForgeCheckCancelledRerunsOnce(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	cancelled := core.CheckRun{Name: "sandboxed-e2e", State: core.CheckCantStart, Detail: "cancelled"}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPass}, cancelled)
+	mergeOnce(t, m, task, p)
+	if task.Reruns[task.SHA] != 1 || !strings.Contains(task.Reason, "re-run") || alerts(m, "main-red") != 0 {
+		t.Fatalf("reruns %v, reason %q, %d alerts", task.Reruns, task.Reason, alerts(m, "main-red"))
+	}
+	task.RerunAt = time.Now().Add(-time.Hour) // past rerunGrace
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPass}, cancelled)
+	mergeOnce(t, m, task, p)
+	if task.Reruns[task.SHA] != 1 || !strings.Contains(task.Reason, "can't start") || alerts(m, "main-red") != 1 {
+		t.Fatalf("reruns %v, reason %q, %d alerts", task.Reruns, task.Reason, alerts(m, "main-red"))
+	}
+}
+
 // A forge check that can't start is the environment's: the change waits, it
 // is raised once, and it is never sent back to the worker.
 func TestMergeForgeCheckCantStart(t *testing.T) {
@@ -227,6 +250,35 @@ func TestMergeAsItIsWhenClean(t *testing.T) {
 	main, _ := m.C.Effects.Sync(p)
 	if ref := must(t, m.C.WS.Project(p.Name), "show", main+":other.txt"); ref != "z" {
 		t.Fatalf("main lost its own change: %q", ref)
+	}
+}
+
+// unknownForge is a forge still working out whether a PR merges cleanly.
+type unknownForge struct{ *core.Local }
+
+func (u unknownForge) GetPR(repo string, n int) (core.PR, error) {
+	pr, err := u.Local.GetPR(repo, n)
+	pr.Mergeable, pr.MergeState = "UNKNOWN", "UNKNOWN"
+	return pr, err
+}
+
+// A PR whose mergeability the forge hasn't worked out waits under a saved
+// reason, so a wait that never ends reaches the lead through the stall
+// watcher; it merges once the forge knows.
+func TestMergeWaitsOnUnknownMergeable(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	m.C.Effects.Forge = unknownForge{f}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.HasPrefix(task.Reason, "waiting for the forge to work out") || !strings.Contains(task.Reason, "mergeable UNKNOWN") {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	m.C.Effects.Forge = f
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
 }
 
