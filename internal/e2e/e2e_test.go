@@ -788,11 +788,11 @@ func TestRecovery(t *testing.T) {
 	h.wait("the crashed run to be retried and land", 3*minute, taskStage("rec", "crash once", work.StageDone))
 }
 
-// toldAbout waits for a "told" ask whose title names what was decided.
+// toldAbout waits for a told in the feed whose title names what was decided.
 func toldAbout(what string) func(api.State) bool {
 	return func(st api.State) bool {
-		for _, a := range st.Asks {
-			if a.Kind == "told" && strings.Contains(a.Title, what) {
+		for _, a := range st.Told {
+			if strings.Contains(a.Title, what) {
 				return true
 			}
 		}
@@ -1406,11 +1406,11 @@ func TestToolInstall(t *testing.T) {
 		t.Fatalf("python didn't run from the tools folder: %q %v", out, err)
 	}
 	told := false
-	for _, a := range st.Asks {
-		told = told || a.Kind == "told" && strings.Contains(a.Title, "installed python")
+	for _, a := range st.Told {
+		told = told || strings.Contains(a.Title, "installed python")
 	}
 	if !told {
-		t.Fatalf("the person wasn't told of the install: %+v", st.Asks)
+		t.Fatalf("the person wasn't told of the install: %+v", st.Told)
 	}
 }
 

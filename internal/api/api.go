@@ -52,6 +52,7 @@ type State struct {
 	Sweeps     []improve.Sweep    `json:"sweeps"`
 	StepBacks  []improve.StepBack `json:"stepbacks"`
 	Asks       []core.Ask         `json:"asks"`
+	Told       []core.Ask         `json:"told,omitempty"` // done for the person, newest first: nothing to answer
 	Alerts     []Alert            `json:"alerts"`
 	Updated    *Updated           `json:"updated,omitempty"`
 	Jobs       []system.JobState  `json:"jobs"`

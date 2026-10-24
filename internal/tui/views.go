@@ -170,6 +170,12 @@ func (m *model) dashRows() []row {
 		}
 	}
 	add(row{key: "waiting", text: fmt.Sprintf("waiting on you (%d)", len(m.st.Asks)), jump: secWaiting})
+	if add(row{key: "told", text: fmt.Sprintf("done for you (%d recent)", len(m.st.Told)), expand: len(m.st.Told) > 0}) {
+		for _, a := range m.st.Told {
+			d := toldDetail(a)
+			add(row{key: "told:" + a.ID, depth: 1, text: a.Asked.Local().Format("Mon 15:04") + "  " + text.Visible(core.Clip(a.Title, 120)), open: &d})
+		}
+	}
 	if add(row{key: "requests", text: fmt.Sprintf("requests past the sandbox (%d)", len(m.st.Requests)), expand: len(m.st.Requests) > 0}) {
 		for _, r := range m.st.Requests {
 			out := r.Outcome

@@ -1068,3 +1068,24 @@ func TestReconnectShowsTheNewVersion(t *testing.T) {
 		t.Fatalf("after reconnecting (version %s):\n%s", m.st.Version, v)
 	}
 }
+
+// A step done for the person shows in the feed, not in Waiting, and opens to
+// what ran, why and its output.
+func TestToldOpensFromTheFeed(t *testing.T) {
+	m := testModel(120, 40)
+	m.pick(sideRow{sec: secDash})
+	waiting := len(m.st.Asks)
+	data, _ := json.Marshal(core.Ask{ID: "t1", Kind: "told", From: "w-1", Project: "textkit", Title: "A T2 step ran (done): fetch a job log", Detail: "gh run view 7 --log\n\nthe log\x1b[31m"})
+	m.addEvents([]core.Event{{Seq: 1, At: time.Now(), Kind: "person.told", Data: data}})
+	if v := plain(m.View()); !strings.Contains(v, "done for you: A T2 step ran") || len(m.st.Asks) != waiting {
+		t.Fatalf("the told isn't in the feed, or it's waiting:\n%s", v)
+	}
+	m.keyDash(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.stack) != 1 || m.stack[0].kind != "text" {
+		t.Fatalf("enter on the told opened %+v", m.stack)
+	}
+	d := m.stack[0].text
+	if !strings.Contains(d, "gh run view 7 --log") || !strings.Contains(d, "the log") || strings.Contains(d, "\x1b") {
+		t.Fatalf("the detail lacks what ran and its output, or keeps escapes: %q", d)
+	}
+}

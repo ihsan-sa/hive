@@ -484,6 +484,9 @@ func TestCeilingStepGoesStraightToThePerson(t *testing.T) {
 	if req.Route != "person" || req.State != "asked" || req.Warden != "" {
 		t.Fatalf("got %+v", req)
 	}
+	if open := g.c.Person.Open(); len(open) != 1 || open[0].ID != req.Ask || len(g.c.Person.Told(5)) != 0 {
+		t.Fatalf("a step that is always the person's isn't waiting on them: %+v", open)
+	}
 }
 
 func TestAutonomyMovesT2(t *testing.T) {
@@ -502,14 +505,17 @@ func TestAutonomyMovesT2(t *testing.T) {
 	g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": "true"})
 	g.settle(req.ID, "approved", "running")
 	if !eventually(func() bool {
-		for _, a := range g.c.Person.Open() {
-			if a.Kind == "told" && a.Ref == req.ID {
+		for _, a := range g.c.Person.Told(5) {
+			if a.Ref == req.ID && strings.Contains(a.Detail, "true") {
 				return true
 			}
 		}
 		return false
 	}) {
-		t.Fatal("autonomy 3 didn't tell the person after")
+		t.Fatal("autonomy 3 didn't tell the person after, with what ran")
+	}
+	if open := g.c.Person.Open(); len(open) != 0 {
+		t.Fatalf("a T2 step that already ran at autonomy 3 is waiting on the person: %+v", open)
 	}
 }
 
@@ -757,8 +763,8 @@ func TestAutonomyDecidesProtectedChanges(t *testing.T) {
 			} else if a := <-answered; a.Answer != "merge" || !strings.Contains(a.Note, "fits the goals") {
 				t.Fatalf("autonomy %d, %s: handler got %+v", autonomy, what, a)
 			}
-			if !eventually(func() bool { return open("told") }) {
-				t.Fatalf("autonomy %d, %s: the person wasn't told after", autonomy, what)
+			if !eventually(func() bool { return len(g.c.Person.Told(5)) > 0 }) || open("told") {
+				t.Fatalf("autonomy %d, %s: the person wasn't told after in the feed", autonomy, what)
 			}
 		}
 	}
@@ -1014,10 +1020,8 @@ func TestPersonAnswersASettledAsk(t *testing.T) {
 			case <-time.After(4 * time.Second):
 				t.Fatalf("%s, %s: the merge ask was never answered", route, answer)
 			}
-			for _, a := range g.c.Person.Open() {
-				if a.Kind == "told" {
-					t.Fatalf("%s, %s: told the person about their own answer: %+v", route, answer, a)
-				}
+			if told := g.c.Person.Told(5); len(told) > 0 {
+				t.Fatalf("%s, %s: told the person about their own answer: %+v", route, answer, told)
 			}
 			if p := g.run(g.worker.ID).Pending; len(p) > 0 {
 				t.Fatalf("%s, %s: the finished worker was sent %q", route, answer, p)
