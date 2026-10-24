@@ -1140,6 +1140,26 @@ func TestTribunalFenceHoldsEveryAgentWord(t *testing.T) {
 	}
 }
 
+// A request that rules a ceiling word out is weighed by a warden; one whose
+// steps do the thing goes to the person, told the category and the words.
+func TestRuledOutCeilingWordReachesAWarden(t *testing.T) {
+	g := newRig(t, 3)
+	req := g.request("install Ollama, loopback only", "curl -fsSL https://ollama.com/install.sh | sh\ndo not set OLLAMA_HOST=0.0.0.0; no credentials needed", "T2")
+	if req.Route != "warden" || req.Warden == "" {
+		t.Fatalf("a ruled-out mention went to the person: %+v", req)
+	}
+
+	g = newRig(t, 3)
+	req = g.request("let the LAN reach Ollama", "set OLLAMA_HOST=0.0.0.0 and restart it", "T2")
+	if req.Route != "person" || req.Warden != "" {
+		t.Fatalf("opening the machine skipped the person: %+v", req)
+	}
+	a, _ := g.c.Person.Get(req.Ask)
+	if !strings.Contains(a.Detail, "open") || !strings.Contains(a.Detail, `"0.0.0.0"`) {
+		t.Fatalf("the ask doesn't name what matched: %s", a.Detail)
+	}
+}
+
 // A T3 ask longer than any label (120 characters) still forms a full panel:
 // the warden and every seat get the whole want, and the panel reaches a
 // verdict that runs the warden's script.
