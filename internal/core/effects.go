@@ -1078,8 +1078,17 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if st, which := ChecksState(runs, e.RequiredChecks(p, m.Main)); st != CheckPass {
-		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there (%s: %s)", short(m.SHA), st, CheckNames(which))
+	req := e.RequiredChecks(p, m.Main)
+	st, which := ChecksState(runs, req)
+	if st == CheckFail {
+		mainRuns, err := e.Forge.Checks(p.Repo, m.Main)
+		if err != nil {
+			return "", err
+		}
+		st, which, _ = ChecksAgainstMain(runs, mainRuns, req)
+	}
+	if st != CheckPass {
+		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
 	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
 	if err != nil {
@@ -1129,6 +1138,30 @@ func ChecksState(runs []CheckRun, required []string) (state string, which []Chec
 		return CheckPending, which
 	}
 	return CheckPass, nil
+}
+
+// ChecksAgainstMain sums up a head's checks as ChecksState does, except that
+// a check that fails on main's head too doesn't count against it: the change
+// is no worse than main there, and holding it would keep the fix for a red
+// main from ever landing. shared names those checks; with main green it is
+// empty and the result is ChecksState's.
+func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string) (state string, which []CheckRun, shared []string) {
+	var kept []CheckRun
+	for _, r := range runs {
+		// Only a check main fails outright: one of its name that passes or
+		// still runs there (another attempt, a status) keeps it the change's.
+		named := func(mr CheckRun) bool { return mr.Name == r.Name }
+		if r.State == CheckFail && slices.ContainsFunc(mainRuns, named) && !slices.ContainsFunc(mainRuns, func(mr CheckRun) bool { return named(mr) && mr.State != CheckFail }) {
+			if !slices.Contains(shared, r.Name) {
+				shared = append(shared, r.Name)
+			}
+			continue
+		}
+		kept = append(kept, r)
+	}
+	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(shared, n) })
+	state, which = ChecksState(kept, req)
+	return state, which, shared
 }
 
 // CheckNames lists checks by name, for a message.

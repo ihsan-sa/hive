@@ -1,0 +1,36 @@
+ hive                 │   Hive-wide › lead  idle
+──────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────
+ › Chats              │
+   Dashboard          │
+   Waiting         3  │
+   Feedback        1  │
+   Knowledge          │
+   Modules            │
+   Settings           │
+                      │
+ ▸ textkit-2       ●  │
+ ▸ hive-web        ●  │
+ ▸ website            │
+ ▾ hive               │
+   lead               │
+ ▾ Hive-wide          │
+ › lead               │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │
+                      │   This is the Hive-wide lead, for every project and the Hive itself. Press n to write.
+                      │
+                      │
+                      │   3 waiting on you · a to answer
+                      │  ╭─ new thread · lead ────────────────────────────────────────────────────────────────────────╮
+                      │  │ › Write to the Hive-wide lead, for every project and the Hive itself…                      │
+                      │  ╰────────────────────────────────────────────────────────────────────────────────────────────╯
+──────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ thread   enter open   n new thread   space collapse   tab pane
