@@ -282,11 +282,11 @@ func TestModuleReviewKey(t *testing.T) {
 func TestWheelMovesModuleSelection(t *testing.T) {
 	m := testModel(80, 20)
 	m.stack = []detail{{kind: "module", id: "agents"}}
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
 	if m.stack[0].sel != 1 {
 		t.Fatalf("wheel down: sel %d, want 1", m.stack[0].sel)
 	}
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
 	if m.stack[0].sel != 0 {
 		t.Fatalf("wheel up: sel %d, want 0", m.stack[0].sel)
 	}
@@ -315,12 +315,12 @@ func TestChannelScrolls(t *testing.T) {
 		t.Fatal("Home did not show the first thread under the title")
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionRelease})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionRelease})
 	if m.chScroll != 3 {
 		t.Fatalf("wheel up: scroll %d, want 3", m.chScroll)
 	}
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
 	if m.chScroll != 0 {
 		t.Fatalf("wheel down: scroll %d, want 0", m.chScroll)
 	}
@@ -343,12 +343,12 @@ func TestChannelUpKeepsSelectionInView(t *testing.T) {
 func TestWheelScrollsDetail(t *testing.T) {
 	m := testModel(80, 20)
 	m.stack = []detail{{kind: "run"}}
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionRelease})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionRelease})
 	if m.stack[0].scroll != 3 {
 		t.Fatalf("wheel down: scroll %d, want 3", m.stack[0].scroll)
 	}
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
 	if m.stack[0].scroll != 0 {
 		t.Fatalf("wheel up: scroll %d, want 0", m.stack[0].scroll)
 	}
@@ -473,7 +473,7 @@ func TestSidebarGroupRow(t *testing.T) {
 	want := m.path()
 	for i, r := range m.sideRows() {
 		if r.group && r.label == "textkit" {
-			m.side = i
+			m.side, m.sideKey = i, r.key
 		}
 	}
 	m.focus = 0
@@ -594,5 +594,194 @@ func TestChatJumpsToItsAsk(t *testing.T) {
 	}
 	if v := ansi.Strip(m.View()); !strings.Contains(v, "Waiting") || !strings.Contains(v, "+- goal 0") {
 		t.Fatalf("Waiting should show the ask's diff:\n%s", v)
+	}
+}
+
+// The wheel scrolls the pane under the pointer, whichever has the keys.
+func TestWheelScrollsThePaneUnderIt(t *testing.T) {
+	m := testModel(160, 30)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // the thread opens beside the channel, with the keys
+	if !m.sidePane() || m.focus != 2 {
+		t.Fatalf("no thread pane: focus %d", m.focus)
+	}
+	sw, mw, _ := m.layout()
+	m.Update(tea.MouseMsg{X: sw + 5, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.chScroll != 3 || m.thScroll != 0 {
+		t.Fatalf("wheel over the channel: channel %d thread %d, want 3 and 0", m.chScroll, m.thScroll)
+	}
+	m.Update(tea.MouseMsg{X: sw + mw + 5, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.thScroll != 3 || m.chScroll != 3 {
+		t.Fatalf("wheel over the thread: channel %d thread %d, want 3 and 3", m.chScroll, m.thScroll)
+	}
+	m.Update(tea.MouseMsg{X: 2, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.thScroll != 3 || m.chScroll != 3 || m.side != m.sideAt(m.sideRows()) {
+		t.Fatal("wheel over the sidebar moved something")
+	}
+}
+
+// PgUp with a thread picked scrolls the channel, rather than being pulled
+// back to the pick; moving the pick brings it into view again.
+func TestScrolledChannelLetsGoOfThePick(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp}) // the last thread, on screen
+	m.View()
+	before := m.chScroll
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m.View()
+	if m.chScroll <= before {
+		t.Fatalf("PgUp with a pick: scroll %d, was %d", m.chScroll, before)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if !strings.Contains(m.View(), "▌") {
+		t.Fatal("moving the pick left it off screen")
+	}
+}
+
+// A detail scrolls down to its last full page and no further, Home and End
+// jump, and the header says where you are.
+func TestDetailStopsAtItsLastPage(t *testing.T) {
+	m := testModel(80, 20)
+	m.pick(sideRow{sec: secDash})
+	m.focus = 1
+	var text []string
+	for i := 1; i <= 100; i++ {
+		text = append(text, fmt.Sprintf("line %d", i))
+	}
+	m.push(detail{kind: "text", title: "sweep", text: strings.Join(text, "\n")})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	v := m.View()
+	if d := m.stack[0]; d.scroll != 100-m.bodyHeight() || !strings.Contains(v, "line 100") || !strings.Contains(v, "of 100") {
+		t.Fatalf("End: scroll %d, want %d:\n%s", d.scroll, 100-m.bodyHeight(), v)
+	}
+	for i := 0; i < 5; i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m.View()
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if v := m.View(); strings.Contains(v, "line 100") {
+		t.Fatal("down past the end piled up: one up didn't move")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	if v := m.View(); !strings.Contains(v, " line 1 ") && !strings.Contains(v, "1–") {
+		t.Fatalf("Home did not go to the top:\n%s", v)
+	}
+}
+
+// In the sidebar → goes deeper and ← comes back, a level at a time, and a
+// collapsed group still marks a chat with news.
+func TestSidebarFoldsLevelByLevel(t *testing.T) {
+	m := testModel(120, 40)
+	m.focus = 0
+	at := func() sideRow { return m.sideRows()[m.sideAt(m.sideRows())] }
+	key := func(k tea.KeyType) { m.Update(tea.KeyMsg{Type: k}) }
+	if at().key != "lead" {
+		t.Fatalf("starts on %q, want the Hive's lead", at().key)
+	}
+	key(tea.KeyLeft)
+	if at().key != "p:" || m.closed["p:"] {
+		t.Fatalf("← from a chat: on %q, closed %v", at().key, m.closed)
+	}
+	key(tea.KeyLeft)
+	if !m.closed["p:"] {
+		t.Fatal("← on an open group did not close it")
+	}
+	if line := ansi.Strip(m.viewSidebar(30).body[m.side]); !strings.HasSuffix(strings.TrimSpace(line), "●") {
+		t.Fatalf("collapsed group with an unread chat has no mark: %q", line)
+	}
+	key(tea.KeyRight)
+	if m.closed["p:"] || at().key != "p:" {
+		t.Fatal("→ on a closed group did not open it in place")
+	}
+	key(tea.KeyRight)
+	if at().key != "lead" || m.chat != "lead" {
+		t.Fatalf("→ on an open group: on %q, chat %q", at().key, m.chat)
+	}
+}
+
+// Chats that come and go above the cursor don't move it to another chat.
+func TestSidebarCursorKeepsItsRow(t *testing.T) {
+	m := testModel(120, 40)
+	m.focus = 0
+	st := sample()
+	for _, id := range []string{"w-a", "w-b", "w-c"} {
+		st.Runs = append(st.Runs, core.Run{RunSpec: core.RunSpec{ID: id, Role: "worker", Project: "textkit"}, Status: core.StatusRunning})
+	}
+	m.Update(stateMsg{st: st})
+	m.View()
+	if r := m.sideRows()[m.side]; r.key != "lead" {
+		t.Fatalf("three agents started above: cursor on %q, want lead", r.key)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp}) // the Hive's group row
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.chat != "agent:w-c" {
+		t.Fatalf("↑ from the lead opened %q, want the agent just above it", m.chat)
+	}
+}
+
+// An agent whose project the state doesn't list keeps a group of its own.
+func TestAgentsOfAnUnlistedProjectStay(t *testing.T) {
+	m := testModel(120, 40)
+	st := sample()
+	st.Runs = append(st.Runs, core.Run{RunSpec: core.RunSpec{ID: "w-z", Name: "orphan", Role: "worker", Project: "gone"}, Status: core.StatusRunning})
+	m.Update(stateMsg{st: st})
+	var labels []string
+	for _, r := range m.sideRows() {
+		labels = append(labels, r.label)
+	}
+	if !slices.Contains(labels, "gone") || !slices.Contains(labels, "orphan") {
+		t.Fatalf("the agent of an unlisted project is missing: %q", labels)
+	}
+}
+
+// The status tree's cursor stays on its row as work starts above it.
+func TestTreeCursorKeepsItsRow(t *testing.T) {
+	m := testModel(120, 40)
+	m.pick(sideRow{sec: secDash})
+	m.focus, m.dashTree = 1, true
+	rows := m.dashRows()
+	for i, r := range rows {
+		if r.key == "plans" {
+			m.dashSel, m.dashKey = i, r.key
+		}
+	}
+	st := sample()
+	st.Projects[0].Tasks = append(st.Projects[0].Tasks, work.Task{ID: "t3", Title: "more", Stage: work.StageWorking})
+	m.Update(stateMsg{st: st})
+	m.View()
+	if r := m.dashRows()[m.dashSel]; r.key != "plans" {
+		t.Fatalf("new work above: cursor on %q, want plans", r.key)
+	}
+}
+
+// A long module list scrolls to keep the selection on screen, and the wheel
+// over a list moves its cursor.
+func TestListsScroll(t *testing.T) {
+	m := testModel(80, 24)
+	st := sample()
+	for i := 0; i < 40; i++ {
+		st.Modules = append(st.Modules, api.ModuleView{Name: fmt.Sprintf("mod%02d", i)})
+	}
+	m.Update(stateMsg{st: st})
+	m.pick(sideRow{sec: secModules})
+	m.focus = 1
+	m.modSel = 40
+	if v := m.View(); !strings.Contains(v, "mod39") {
+		t.Fatalf("the last module is off screen:\n%s", v)
+	}
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.modSel != 39 {
+		t.Fatalf("wheel up over modules: sel %d, want 39", m.modSel)
+	}
+	m.pick(sideRow{sec: secDash})
+	m.focus, m.dashTree = 0, true
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	if m.dashSel != 1 || m.focus != 1 {
+		t.Fatalf("wheel down over the status tree: sel %d focus %d, want 1 and 1", m.dashSel, m.focus)
 	}
 }
