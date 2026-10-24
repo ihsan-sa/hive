@@ -403,7 +403,7 @@ func TestPersonStoppedWorkerHolds(t *testing.T) {
 		if err := m.Retry(task.ID); err != nil {
 			t.Fatal(err)
 		}
-		if got, _ := m.Get(task.ID); got.ByPerson || got.Stage != StageIssued {
+		if got, _ := m.Get(task.ID); got.ByPerson || got.Stage != StageQueued {
 			t.Fatalf("the person's retry should hand the task back: %+v", got)
 		}
 	}
@@ -433,6 +433,7 @@ func helperRig(t *testing.T) (*Module, *flakyForge, core.Project) {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
 	ws.SaveConfig(cfg)
 	forge := &flakyForge{Local: &core.Local{Dir: filepath.Join(dir, "forge")}}
 	if _, err := forge.EnsureRepo("me/p", ""); err != nil {

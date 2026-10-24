@@ -242,7 +242,9 @@ func (m *Module) Status(r core.Run) map[string]any {
 		}
 		for i, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {
 			line := fmt.Sprintf("[%s] %s (%s)", t.Stage, t.Label(), t.ID)
-			if t.PR.URL != "" {
+			if t.Queued() && t.Reason != "" {
+				line += ": " + t.Reason
+			} else if t.PR.URL != "" {
 				line += " " + t.PR.URL
 			} else if t.Stage == work.StageBlocked && t.Branch != "" {
 				line += " branch " + t.Branch
@@ -263,7 +265,11 @@ func (m *Module) Status(r core.Run) map[string]any {
 		}
 		waiting = append(waiting, fmt.Sprintf("%s (from %s; the person answers in Waiting, or %s approve|refuse %s)", a.Title, a.From, core.Cmd, a.ID))
 	}
-	return map[string]any{"projects": ps, "waiting_on_person": waiting, "config": View(m.C.WS.LoadConfig())}
+	cfg := m.C.WS.LoadConfig()
+	running, waitingChecks := m.C.Effects.Slots.State()
+	return map[string]any{"projects": ps, "waiting_on_person": waiting, "config": View(cfg),
+		"queue":  m.Work.Queue(r), // briefs waiting for a worker, in the order they start; the queue op reorders or holds them
+		"checks": fmt.Sprintf("%d running, %d waiting (max_checks %d)", len(running), len(waitingChecks), cfg.MaxChecks)}
 }
 
 // ConfigView is the part of the config every agent may read, so it can say
@@ -280,11 +286,13 @@ type ConfigView struct {
 	Schedules      map[string]string   `json:"schedules"`
 	ReviewRounds   int                 `json:"review_rounds"`
 	PlateauMerges  int                 `json:"plateau_merges"`
+	MaxWorkers     int                 `json:"max_workers"`
+	MaxChecks      int                 `json:"max_checks"`
 	AutoUpdate     bool                `json:"auto_update"`
 }
 
 // View is c as agents see it.
 func View(c core.Config) ConfigView {
 	return ConfigView{c.Autonomy, c.Harness, c.Model, c.LeadModel, c.ReviewerModel, c.TribunalModels,
-		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.AutoUpdate}
+		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.MaxWorkers, c.MaxChecks, c.AutoUpdate}
 }
