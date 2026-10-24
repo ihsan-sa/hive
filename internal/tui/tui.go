@@ -118,7 +118,17 @@ type model struct {
 	seen      int64 // the journal seq the person has seen up to, for the update notice
 	notice    *api.Updated
 	help      bool
-	sel       selection // a mouse drag in progress
+
+	// whether the Hive answers: a look at its state under way since inflight,
+	// unanswered since down (zero while it answers), daemon.json saying it
+	// restarts, and the version it came back on, until backAt is old
+	inflight   time.Time
+	down       time.Time
+	restarting bool
+	back       string
+	backAt     time.Time
+	beat       time.Time // the last tick, shown as the status line's clock
+	sel        selection // a mouse drag in progress
 }
 
 type stateMsg struct {
@@ -135,6 +145,11 @@ type askMsg struct{ a core.Ask }
 type sinceMsg []string
 type flashMsg string
 type tickMsg time.Time
+type probeMsg bool // daemon.json says a restart is under way
+
+// slowAfter is how long a look at the Hive's state may take before the
+// status line says it isn't answering; backFor how long "back on" shows.
+const slowAfter, backFor = 3 * time.Second, 10 * time.Second
 
 type outMsg struct {
 	n                  int
@@ -200,6 +215,11 @@ func (m *model) fetchState() tea.Cmd {
 		st, err := m.c.State()
 		return stateMsg{st, err}
 	}
+}
+
+// probe reads daemon.json for a restart, off the UI loop.
+func (m *model) probe() tea.Cmd {
+	return func() tea.Msg { return probeMsg(m.c.Restarting()) }
 }
 
 func (m *model) fetchChat(id string) tea.Cmd {
@@ -351,12 +371,37 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.msgs[msg.out.chat] = append(m.msgs[msg.out.chat], msg.msg) // a new thread stays in the channel; the person opens it
 	case tickMsg:
+		m.beat = time.Time(msg)
+		if !m.inflight.IsZero() { // the last look hasn't come back: no more piled on a Hive that isn't answering
+			if m.down.IsZero() && time.Since(m.inflight) > slowAfter {
+				m.down = m.inflight
+			}
+			return m, tea.Batch(m.probe(), tick())
+		}
+		m.inflight = time.Now()
+		if !m.down.IsZero() {
+			return m, tea.Batch(m.fetchState(), m.probe(), tick())
+		}
 		return m, tea.Batch(m.fetchState(), m.fetchChat(m.currentChatID()), m.fetchDetail(), m.fetchFeed(), tick())
+	case probeMsg:
+		m.restarting = bool(msg)
 	case stateMsg:
+		m.inflight = time.Time{}
 		if msg.err != nil {
 			m.err = "the Hive isn't answering: " + msg.err.Error()
+			if m.down.IsZero() {
+				m.down = time.Now()
+			}
 		} else {
 			first := !m.loaded
+			switch {
+			case first:
+			case msg.st.Version != m.st.Version:
+				m.back, m.backAt = "back on "+msg.st.Version, time.Now()
+			case !m.down.IsZero():
+				m.back, m.backAt = "the Hive is answering again", time.Now()
+			}
+			m.down, m.restarting = time.Time{}, false
 			m.err, m.st, m.loaded = "", msg.st, true
 			if u := msg.st.Updated; u != nil && u.Seq > m.seen {
 				m.notice, m.seen = u, u.Seq
@@ -871,7 +916,27 @@ func (m *model) mainW() int {
 	return w
 }
 
+// hintLine is the status line: the Hive's banner when it is updating, away
+// or just back, else a flash, else the keys; and at its right a clock that
+// moves with every screen update, so a still clock means the terminal or
+// its connection is what froze, not the Hive.
 func (m *model) hintLine() string {
+	w, clock := m.w, ""
+	if !m.beat.IsZero() {
+		clock = stDim.Render(m.beat.Local().Format("15:04:05"))
+		w -= visibleWidth(clock) + 2
+	}
+	line := m.statusLine(w)
+	if clock == "" {
+		return line
+	}
+	return pad(clip(line, w), w) + " " + clock + " "
+}
+
+func (m *model) statusLine(w int) string {
+	if b := m.banner(); b != "" {
+		return " " + stWarn.Render(b)
+	}
 	if m.err != "" {
 		return " " + stBad.Render(m.err)
 	}
@@ -881,7 +946,36 @@ func (m *model) hintLine() string {
 		}
 		return " " + stDim.Render(m.flash)
 	}
-	return hints(m.w, m.keys()...)
+	if m.back != "" && time.Since(m.backAt) < backFor {
+		return " " + stGood.Render("✓ "+m.back)
+	}
+	return hints(w, m.keys()...)
+}
+
+// banner says what the Hive is doing when it can't be worked with as usual:
+// not answering (restarting after an update, or for some other reason) or
+// updating, with the step it is on.
+func (m *model) banner() string {
+	u := m.st.Updating
+	if !m.down.IsZero() {
+		n := int(time.Since(m.down).Seconds())
+		if m.restarting || u != nil {
+			to := ""
+			if u != nil {
+				to = " to " + u.To
+			}
+			return fmt.Sprintf("⟳ reconnecting… (the Hive is restarting after an update%s, %ds)", to, n)
+		}
+		why := ""
+		if m.err != "" {
+			why = ": " + strings.TrimPrefix(m.err, "the Hive isn't answering: ")
+		}
+		return fmt.Sprintf("⟳ reconnecting… (the Hive is not answering for %ds%s)", n, why)
+	}
+	if u != nil {
+		return "⟳ updating to " + u.To + ": " + u.Text()
+	}
+	return ""
 }
 
 // keys are the hint line's "key label" pairs for where the focus is.

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -244,6 +245,19 @@ func updateKeepsAMessage(t *testing.T) {
 	h.cli(old, "ask", "Sent after the old daemon left: reply with the word QUINCE and nothing else.")
 
 	st := h.wait("the updated daemon", minute, func(st api.State) bool { return st.Version == "v0.0.2" })
+	// The update announced itself before it began, and the new daemon has
+	// none under way.
+	var evs []core.Event
+	h.c.Do("GET", "/api/events", nil, &evs)
+	var order []string
+	for _, e := range evs {
+		if e.Kind == "hive.updating" || e.Kind == "hive.updated" {
+			order = append(order, e.Kind)
+		}
+	}
+	if !slices.Equal(order, []string{"hive.updating", "hive.updated"}) || st.Updating != nil {
+		t.Fatalf("the update's events: %v; under way after the restart: %+v", order, st.Updating)
+	}
 	h.wait("the lead to answer the message sent during the update", wait, h.replied("lead", "MARMALADE"))
 	h.wait("the lead to answer the message sent after the old daemon left", wait, h.replied("lead", "QUINCE"))
 	for _, word := range []string{"MARMALADE", "QUINCE"} {

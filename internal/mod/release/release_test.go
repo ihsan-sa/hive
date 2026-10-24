@@ -873,3 +873,59 @@ func TestReleaseSaysAnUnreadTag(t *testing.T) {
 		t.Fatalf("Publish said %q once the tag read", got)
 	}
 }
+
+// An update says it is coming before it fetches anything and shows each step
+// through Progress: the bytes downloaded, the wait for merges, then restarting
+// until the restart; one that fails says no update is under way.
+func TestUpdateShowsItsProgress(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	m, _ := releaseAt(t, "v0.1.2", "me/hive")
+	if m.Progress() != nil {
+		t.Fatal("progress before any update")
+	}
+	var atMerges Progress
+	m.PauseMerges = func(time.Duration) (func(), bool) {
+		atMerges = *m.Progress()
+		return func() {}, true
+	}
+	restarted := make(chan *Progress, 1)
+	m.Restart = func() { restarted <- m.Progress() }
+	if msg, err := m.Update(""); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9") {
+		t.Fatalf("update: %q, %v", msg, err)
+	}
+	n := int64(len("new"))
+	if atMerges.To != "v9.9.9" || atMerges.Step != StepMerges || atMerges.Done != n || atMerges.Total != n || atMerges.Started.IsZero() {
+		t.Fatalf("at the merges' wait: %+v", atMerges)
+	}
+	if p := <-restarted; p == nil || p.Step != StepRestarting || p.Text() != "restarting" {
+		t.Fatalf("at the restart: %+v", p)
+	}
+	var kinds []string
+	m.C.J.Replay(func(e core.Event) {
+		if strings.HasPrefix(e.Kind, "hive.updat") {
+			kinds = append(kinds, e.Kind)
+		}
+	})
+	if !slices.Equal(kinds, []string{"hive.updating", "hive.updated"}) {
+		t.Fatalf("journal: %v", kinds)
+	}
+
+	serve(t, "v9.9.9", build("new"), true) // a checksum that lies
+	m2, _ := releaseAt(t, "v0.1.2", "me/hive")
+	if _, err := m2.Update(""); err == nil || m2.Progress() != nil {
+		t.Fatalf("a failed update: %v, progress %+v", err, m2.Progress())
+	}
+}
+
+func TestProgressText(t *testing.T) {
+	for p, want := range map[Progress]string{
+		{Step: StepDownloading, Done: 4 << 20, Total: 12 << 20}: "downloading 4/12 MB",
+		{Step: StepDownloading, Done: 1 << 19, Total: 3 << 19}:  "downloading 0.5/1.5 MB",
+		{Step: StepDownloading}:                                 "downloading",
+		{Step: StepRestarting}:                                  "restarting",
+	} {
+		if got := p.Text(); got != want {
+			t.Errorf("%+v: %q, want %q", p, got, want)
+		}
+	}
+}

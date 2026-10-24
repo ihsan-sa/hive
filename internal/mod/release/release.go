@@ -56,6 +56,100 @@ type Module struct {
 	behind int
 	// updating is held while AutoUpdate runs, from its schedule or follow.
 	updating sync.Mutex
+	// progress is the update under way, for the control center; nil when none.
+	progress *Progress
+}
+
+// Progress is an update under way, as the API shows it before and while it
+// runs: the release it installs, the step it is on and, downloading, the
+// bytes so far of the total. Step is one of the Step* constants.
+type Progress struct {
+	To      string    `json:"to"`
+	Step    string    `json:"step"`
+	Done    int64     `json:"done,omitempty"`
+	Total   int64     `json:"total,omitempty"`
+	Started time.Time `json:"started"`
+}
+
+// The steps of an update, in order.
+const (
+	StepStarting    = "starting"
+	StepDownloading = "downloading"
+	StepChecking    = "checking"
+	StepMerges      = "waiting for merges"
+	StepSwapping    = "swapping"
+	StepRestarting  = "restarting"
+)
+
+// Text is the step in a line: "downloading 4/12 MB".
+func (p Progress) Text() string {
+	if p.Step == StepDownloading && p.Total > 0 {
+		return fmt.Sprintf("%s %s/%s MB", p.Step, mb(p.Done), mb(p.Total))
+	}
+	return p.Step
+}
+
+func mb(n int64) string {
+	if n < 10<<20 && n%(1<<20) != 0 {
+		return fmt.Sprintf("%.1f", float64(n)/(1<<20))
+	}
+	return fmt.Sprint(n >> 20)
+}
+
+// Progress is the update under way, or nil; a nil module has none.
+func (m *Module) Progress() *Progress {
+	if m == nil {
+		return nil
+	}
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	if m.progress == nil {
+		return nil
+	}
+	p := *m.progress
+	return &p
+}
+
+// step moves the update under way on; with to "" it ends it.
+func (m *Module) step(to, step string) {
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	switch {
+	case to == "":
+		m.progress = nil
+	case m.progress == nil || m.progress.To != to:
+		m.progress = &Progress{To: to, Step: step, Started: time.Now().UTC()}
+	default:
+		m.progress.Step = step
+	}
+}
+
+// EndProgress says no update is under way any more: its restart won't come
+// in this life of the daemon. A nil module has none to end.
+func (m *Module) EndProgress() {
+	if m != nil {
+		m.step("", "")
+	}
+}
+
+// counted adds n downloaded bytes, of a file of size total when n is 0.
+func (m *Module) counted(n, total int64) {
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	if m.progress != nil {
+		m.progress.Done += n
+		m.progress.Total += total
+	}
+}
+
+// meter counts what passes through it into the update's progress.
+type meter struct {
+	m *Module
+}
+
+func (w meter) Write(b []byte) (int, error) {
+	w.m.counted(int64(len(b)), 0)
+	return len(b), nil
 }
 
 // Site serves the releases: GitHub over plain HTTPS, so updating needs no
@@ -97,18 +191,20 @@ func latest(repo string) (string, error) {
 	return tag, nil
 }
 
-func download(repo, tag, name, dir string) error {
+// download fetches a release's file into dir, counting it on m's progress.
+func (m *Module) download(repo, tag, name, dir string) error {
 	resp, err := get(repo + "/releases/download/" + tag + "/" + name)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	m.counted(0, max(resp.ContentLength, 0))
 	f, err := os.Create(filepath.Join(dir, name))
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
+	_, err = io.Copy(io.MultiWriter(f, meter{m}), resp.Body)
 	return err
 }
 
@@ -282,6 +378,16 @@ func (m *Module) Update(tag string) (string, error) {
 	if !pin && m.rolledBack(tag) {
 		return tag + " was rolled back after it failed to start here; `" + core.Cmd + " update " + tag + "` tries it again", nil
 	}
+	// The API says an update is coming before anything is fetched, and it
+	// stays until the restart, so an open control center shows each step.
+	installed := false
+	m.C.J.MustAppend("hive.updating", map[string]string{"from": core.Version, "to": tag})
+	m.step(tag, StepStarting)
+	defer func() {
+		if !installed {
+			m.step("", "")
+		}
+	}()
 	tmp, err := os.MkdirTemp("", "hive-update-")
 	if err != nil {
 		return "", err
@@ -299,10 +405,12 @@ func (m *Module) Update(tag string) (string, error) {
 	}
 	exe := executable()
 	dir := filepath.Dir(exe)
+	m.step(tag, StepDownloading)
 	for _, name := range names {
-		if err := download(repo, tag, name, tmp); err != nil {
+		if err := m.download(repo, tag, name, tmp); err != nil {
 			return "", err
 		}
+		m.step(tag, StepChecking)
 		got, err := fileSum(filepath.Join(tmp, name))
 		if err != nil {
 			return "", err
@@ -315,18 +423,19 @@ func (m *Module) Update(tag string) (string, error) {
 	// tasks still in merging carry across and go on after it.
 	resume := func() {}
 	if m.PauseMerges != nil {
+		m.step(tag, StepMerges)
 		var ok bool
 		if resume, ok = m.PauseMerges(mergeWait); !ok {
 			resume()
 			return "waiting: a merge has run past " + mergeWait.String() + "; " + tag + " installs at the next look", nil
 		}
 	}
-	installed := false
 	defer func() {
 		if !installed {
 			resume()
 		}
 	}()
+	m.step(tag, StepSwapping)
 	// An update to tag from here whose restart never came left its binaries
 	// in place; what it added has no .old and is still the update's to remove.
 	var before []string
@@ -378,11 +487,14 @@ func (m *Module) Update(tag string) (string, error) {
 	unsigned := PublicKey == ""
 	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned})
 	installed = true
+	m.step(tag, StepRestarting)
 	// Merges stay paused until the restart; one that never comes (a
 	// supervisor that doesn't restart, a failed start) lets them go on.
-	time.AfterFunc(restartGrace, resume)
+	time.AfterFunc(restartGrace, func() { m.EndProgress(); resume() })
 	if m.Restart != nil {
 		go func() { time.Sleep(time.Second); m.Restart() }()
+	} else {
+		m.EndProgress()
 	}
 	msg := "updated to " + tag
 	if pin {
