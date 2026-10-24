@@ -2,16 +2,21 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
@@ -652,36 +657,96 @@ func (m *model) viewModules() []string {
 
 type setting struct {
 	label, value, key string
+	choices           []string // a pick-list; custom ends it when any value goes
 	action            func() tea.Cmd
+}
+
+const custom = "custom…"
+
+// modelChoices is the harness's known models plus any the config adds, Opus
+// first, then a custom entry.
+func modelChoices(c core.Config) []string {
+	var out []string
+	for _, m := range append(harness.Models(c.Harness), c.ModelChoices...) {
+		if !slices.Contains(out, m) {
+			out = append(out, m)
+		}
+	}
+	return append(out, custom)
+}
+
+// scheduleText shows a stored schedule the way a person sets it: hours.
+func scheduleText(s string) string {
+	if h, ok := strings.CutPrefix(s, "every "); ok {
+		if d, err := time.ParseDuration(h); err == nil && d%time.Hour == 0 {
+			return fmtNum(d.Hours()) + " hours"
+		}
+	}
+	return s
+}
+
+// scheduleHours turns hours typed in Settings into the stored form; 0 is off.
+// A form the scheduler already reads ("daily 04:00", "every 90m") is kept as typed.
+func scheduleHours(v string) (string, error) {
+	if _, err := system.Parse(v); err == nil {
+		return strings.Join(strings.Fields(v), " "), nil
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(v), " hours"))
+	switch {
+	case err == nil && n == 0:
+		return "off", nil
+	case err != nil || n < 0:
+		return "", fmt.Errorf("a schedule is a number of hours, daily HH:MM, or 0 for off")
+	}
+	return fmt.Sprintf("every %dh", n), nil
 }
 
 func (m *model) settings() []setting {
 	c := m.st.Config
-	auto := "off"
-	if c.AutoUpdate {
-		auto = "on"
+	onOff := func(b bool) string {
+		if b {
+			return "on"
+		}
+		return "off"
 	}
 	sandboxVal := c.Sandbox
 	if m.st.Sandbox != "" {
 		sandboxVal += " (" + m.st.Sandbox + ")"
 	}
+	models := modelChoices(c)
 	s := []setting{
 		{label: "autonomy", value: strconv.Itoa(c.Autonomy) + "  " + autonomyText(c.Autonomy), key: "autonomy"},
-		{label: "harness", value: c.Harness, key: "harness"},
-		{label: "model", value: c.Model, key: "model"},
-		{label: "lead model", value: c.LeadModel, key: "lead_model"},
-		{label: "reviewer model", value: c.ReviewerModel, key: "reviewer_model"},
-		{label: "review rounds", value: strconv.Itoa(c.ReviewRounds), key: "review_rounds"},
-		{label: "sandbox", value: sandboxVal, key: "sandbox"},
-		{label: "WSL distro", value: c.WSLDistro, key: "wsl_distro"},
-		{label: "auto-update", value: auto, key: "auto_update"},
-		{label: "release repo", value: c.ReleaseRepo, key: "release_repo"},
-		{label: "release", value: pinText(c.ReleasePin), action: func() tea.Cmd {
-			return func() tea.Msg { return flashMsg("`" + core.Cmd + " update --release <tag>` installs and pins a release") }
-		}},
+		{label: "harness", value: c.Harness, key: "harness", choices: append(slices.Clone(harness.Names), custom)},
+		{label: "worker model", value: c.Model, key: "model", choices: models},
+		{label: "lead model", value: c.LeadModel, key: "lead_model", choices: models},
+		{label: "reviewer model", value: c.ReviewerModel, key: "reviewer_model", choices: models},
 	}
+	for i, t := range c.TribunalModels {
+		s = append(s, setting{label: fmt.Sprintf("tribunal seat %d model", i+1), value: t.Model, key: "tribunal:" + strconv.Itoa(i), choices: models})
+	}
+	for _, pv := range m.st.Projects {
+		p := pv.Name
+		v := c.Projects[p].Model
+		if v == "" {
+			v = "default"
+		}
+		s = append(s, setting{label: "model for " + p, value: v, key: "project:" + p, choices: append([]string{"default"}, models...)})
+	}
+	s = append(s,
+		setting{label: "review rounds", value: strconv.Itoa(c.ReviewRounds), key: "review_rounds"},
+		setting{label: "sandbox", value: sandboxVal, key: "sandbox"},
+		setting{label: "WSL distro", value: c.WSLDistro, key: "wsl_distro"},
+		setting{label: "auto-update", value: onOff(c.AutoUpdate), key: "auto_update"},
+		setting{label: "use ANTHROPIC_API_KEY", value: onOff(c.APIKeyOptIn), key: "api_key_opt_in"},
+		setting{label: "release repo", value: c.ReleaseRepo, key: "release_repo"},
+		setting{label: "release", value: pinText(c.ReleasePin), action: func() tea.Cmd {
+			return func() tea.Msg {
+				return flashMsg("`" + core.Cmd + " update --release <tag>` installs and pins a release")
+			}
+		}},
+	)
 	for _, name := range sortedKeys(c.Schedules) {
-		s = append(s, setting{label: "schedule " + name, value: c.Schedules[name], key: "schedule:" + name})
+		s = append(s, setting{label: "schedule " + name, value: scheduleText(c.Schedules[name]), key: "schedule:" + name})
 	}
 	s = append(s,
 		setting{label: "log in: Claude Code", value: "runs Claude Code's own login", action: func() tea.Cmd { return login("claude", "auth", "login") }},
@@ -718,6 +783,9 @@ func login(name string, args ...string) tea.Cmd {
 
 func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := m.settings()
+	if m.picking && m.setSel < len(s) && s[m.setSel].choices != nil {
+		return m.keyPick(s[m.setSel], k)
+	}
 	switch k.String() {
 	case "up", "k":
 		if m.setSel > 0 {
@@ -743,6 +811,9 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "auto_update":
 			c.AutoUpdate = !c.AutoUpdate
 			return m, m.post("/api/config", c, "auto-update changed")
+		case "api_key_opt_in":
+			c.APIKeyOptIn = !c.APIKeyOptIn
+			return m, m.post("/api/config", c, "API key use changed")
 		case "sandbox":
 			if c.Sandbox == "bare" {
 				c.Sandbox = "auto"
@@ -751,11 +822,42 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setFlash("to run agents without a sandbox, read the warning in `" + core.Cmd + " doctor --bare`")
 			return m, nil
 		}
-		m.editing = true
-		m.input.Placeholder = cur.label
-		m.input.SetValue(strings.SplitN(cur.value, "  ", 2)[0])
-		m.input.CursorEnd()
-		return m, m.input.Focus()
+		if cur.choices != nil {
+			m.picking, m.pickSel = true, max(0, slices.Index(cur.choices, cur.value))
+			return m, nil
+		}
+		value := strings.SplitN(cur.value, "  ", 2)[0]
+		if strings.HasPrefix(cur.key, "schedule:") {
+			value = strings.TrimSuffix(value, " hours")
+		}
+		return m, m.edit(cur.label, value)
+	}
+	return m, nil
+}
+
+func (m *model) edit(label, value string) tea.Cmd {
+	m.editing = true
+	m.input.Placeholder = label
+	m.input.SetValue(value)
+	m.input.CursorEnd()
+	return m.input.Focus()
+}
+
+// keyPick moves through a setting's pick-list; custom opens a text field.
+func (m *model) keyPick(cur setting, k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.String() {
+	case "up", "k":
+		m.pickSel = max(0, m.pickSel-1)
+	case "down", "j":
+		m.pickSel = min(len(cur.choices)-1, m.pickSel+1)
+	case "esc", "left", "h":
+		m.picking = false
+	case "enter", "right", "l":
+		m.picking = false
+		if v := cur.choices[min(m.pickSel, len(cur.choices)-1)]; v != custom {
+			return m, m.saveSetting(v)
+		}
+		return m, m.edit(cur.label, "")
 	}
 	return m, nil
 }
@@ -775,6 +877,21 @@ func (m *model) saveSetting(v string) tea.Cmd {
 		c.LeadModel = v
 	case key == "reviewer_model":
 		c.ReviewerModel = v
+	case strings.HasPrefix(key, "tribunal:"):
+		i, _ := strconv.Atoi(strings.TrimPrefix(key, "tribunal:"))
+		c.TribunalModels = slices.Clone(c.TribunalModels)
+		c.TribunalModels[i].Model = v // a seat keeps its own harness
+	case strings.HasPrefix(key, "project:"):
+		p := strings.TrimPrefix(key, "project:")
+		c.Projects = maps.Clone(c.Projects)
+		if c.Projects == nil {
+			c.Projects = map[string]core.ProjectSettings{}
+		}
+		ps := c.Projects[p]
+		if ps.Model = v; v == "default" {
+			ps.Model = ""
+		}
+		c.Projects[p] = ps
 	case key == "review_rounds":
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 {
@@ -786,10 +903,15 @@ func (m *model) saveSetting(v string) tea.Cmd {
 	case key == "release_repo":
 		c.ReleaseRepo = v
 	case strings.HasPrefix(key, "schedule:"):
+		sched, err := scheduleHours(v)
+		if err != nil {
+			return func() tea.Msg { return flashMsg(err.Error()) }
+		}
+		c.Schedules = maps.Clone(c.Schedules)
 		if c.Schedules == nil {
 			c.Schedules = map[string]string{}
 		}
-		c.Schedules[strings.TrimPrefix(key, "schedule:")] = v
+		c.Schedules[strings.TrimPrefix(key, "schedule:")] = sched
 	default:
 		return nil
 	}
@@ -804,15 +926,25 @@ func (m *model) viewSettings() []string {
 			line = stSel.Render(clip(line, m.w))
 		}
 		lines = append(lines, line)
+		if i == m.setSel && m.picking {
+			for j, ch := range s.choices {
+				l := fmt.Sprintf("%-26s %s", "", ch)
+				if j == m.pickSel {
+					l = stSel.Render(clip(fmt.Sprintf("%-24s ▸ %s", "", ch), m.w))
+				}
+				lines = append(lines, l)
+			}
+		}
 	}
 	if m.editing {
 		lines = append(lines, "", m.input.View())
 	}
-	if m.st.ConfigErr != "" {
-		lines = append(lines, "", stBad.Render(clip("config.json: "+m.st.ConfigErr, m.w)))
-	}
 	lines = append(lines, "", stDim.Render(fmt.Sprintf("Hive %s · %s · settings in %s", m.st.Version, m.st.Workspace, ".hive/config.json")))
-	return window(lines, m.setSel, m.bodyHeight())
+	if m.st.ConfigErr == "" {
+		return window(lines, m.setSel, m.bodyHeight())
+	}
+	// pinned above the rows so a short window never scrolls it away
+	return append([]string{stBad.Render(clip("config.json: "+m.st.ConfigErr, m.w))}, window(lines, m.setSel, m.bodyHeight()-1)...)
 }
 
 func fmtNum(f float64) string { return strconv.FormatFloat(f, 'g', 6, 64) }

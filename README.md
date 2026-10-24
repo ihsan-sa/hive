@@ -35,7 +35,7 @@ The score command's output ends with one number; `direction` says whether higher
 
 ## Models
 
-The model workers use, the lead's and the reviewer's are under **Settings** in the control center. They're stored in `.hive/config.json` in your Hive folder (`model`, `lead_model` and `reviewer_model`), and `projects.<name>.model` overrides the model for one project.
+The model workers use, the lead's and the reviewer's are under **Settings** in the control center. They're stored in `.hive/config.json` in your Hive folder (`model`, `lead_model` and `reviewer_model`), and `projects.<name>.model` overrides the worker and lead model for one project, because the more specific setting wins.
 
 ## Use
 

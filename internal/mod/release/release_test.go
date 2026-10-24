@@ -8,10 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -326,7 +326,7 @@ func (n *notes) CreateRelease(repo, tag, sha, body string) error {
 // selfHive is a self project "hive" whose releases' notes are kept, with
 // helpers to journal a merge and a reviewer's land on a head.
 func selfHive(t *testing.T) (*Module, *notes, func(int, string, string, ...string), func(string, string)) {
-	m, _ := releaseAt(t, "v0.1.0", "me/hive")
+	m, _ := releaseAt(t, "0.0.0-dev", "me/hive") // a source build, so tags count from v0.0.0
 	n := &notes{Local: m.C.Effects.Forge.(*core.Local), got: map[string]string{}}
 	m.C.Effects.Forge = n
 	m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true})
@@ -497,8 +497,68 @@ func TestConcurrentKeepsCutOneRelease(t *testing.T) {
 	}
 }
 
+// releaseSite is a release site where each repo's latest release is tags[repo];
+// a repo in bare has a release whose checksums list no binary.
+func releaseSite(t *testing.T, tags map[string]string, bare ...string) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for repo, tag := range tags {
+			switch r.URL.Path {
+			case "/" + repo + "/releases/latest":
+				http.Redirect(w, r, "/"+repo+"/releases/tag/"+tag, http.StatusFound)
+				return
+			case "/" + repo + "/releases/tag/" + tag:
+				return
+			case "/" + repo + "/releases/download/" + tag + "/checksums.txt":
+				if !slices.Contains(bare, repo) {
+					w.Write([]byte("00  " + AssetName(runtime.GOOS, runtime.GOARCH) + "\n"))
+				}
+				return
+			}
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	site := Site
+	t.Cleanup(func() { Site = site })
+	Site = srv.URL
+}
+
+// A release the person's Hive cut on its own fork is the next update when it
+// is newer than the Hive's own releases.
+func TestCheckFollowsTheFork(t *testing.T) {
+	releaseSite(t, map[string]string{"me/hive": "v9.9.9", "local/hive": "v9.9.10"})
+	m, _ := releaseAt(t, "v0.1.0", "me/hive")
+	if _, err := m.C.Projects.Add(core.Project{Name: "hive", Repo: "local/hive", Self: true}); err != nil {
+		t.Fatal(err)
+	}
+	if repo, tag, ok, err := m.Check(); err != nil || !ok || repo != "local/hive" || tag != "v9.9.10" {
+		t.Fatalf("check: %q %q %v %v", repo, tag, ok, err)
+	}
+}
+
+// Only release_repo and the person's fork of it are update sources: a Hive
+// project an agent pointed at another repository is never followed, and a
+// release without this platform's binary is passed over.
+func TestCheckFollowsOnlyTheHivesOwnRepository(t *testing.T) {
+	releaseSite(t, map[string]string{"me/hive": "v9.9.9", "evil/hive": "v99.0.0", "local/hive": "v9.9.10"}, "local/hive")
+	m, _ := releaseAt(t, "v0.1.0", "me/hive")
+	if _, err := m.C.Projects.Add(core.Project{Name: "hive", Repo: "evil/hive", Self: true}); err != nil {
+		t.Fatal(err)
+	}
+	if repo, tag, _, err := m.Check(); err != nil || repo != "me/hive" || tag != "v9.9.9" {
+		t.Fatalf("check followed %q %q (%v), want the Hive's own v9.9.9", repo, tag, err)
+	}
+	if _, err := m.C.Projects.Add(core.Project{Name: "hive-fork", Repo: "local/hive", Self: true}); err != nil {
+		t.Fatal(err)
+	}
+	if repo, tag, _, err := m.Check(); err != nil || tag != "v9.9.9" {
+		t.Fatalf("check took the release with no binaries: %q %q %v", repo, tag, err)
+	}
+}
+
 // A late answer for m2 that arrives while a release at m3 is being cut waits
-// for it, then finds m2 covered: no approval is left behind for m2.
+// for it, then finds m2 covered: no approval is left behind for m2. The test
+// holds the lock before the goroutine starts, so the answer cannot get ahead.
 func TestLateAnswerWaitsForTheRelease(t *testing.T) {
 	m, n, merged, land := selfHive(t)
 	merged(2, "a2", "m2", "install/root.sh")
@@ -512,7 +572,6 @@ func TestLateAnswerWaitsForTheRelease(t *testing.T) {
 		defer close(done)
 		m.OnPerson(core.Ask{Kind: "release", Ref: "hive@m2", Project: "hive", Answer: "release"})
 	}()
-	time.Sleep(20 * time.Millisecond) // the answer reaches the lock first
 	m.afterKept("hive", "m3")
 	unlock()
 	<-done

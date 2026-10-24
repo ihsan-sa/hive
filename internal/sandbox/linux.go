@@ -339,7 +339,7 @@ func Init(argPath string) int {
 		case m.Hide && serr == nil && fi.IsDir():
 			err = unix.Mount("tmpfs", root+m.Inside, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_RDONLY, "mode=0555")
 		case m.Hide:
-			err = bind("/dev/null", root+m.Inside, false)
+			err = bindFlags("/dev/null", root+m.Inside, false, true) // a device, so it reads empty as under bwrap
 		default:
 			err = bind(m.Host, root+m.Inside, m.RW)
 		}

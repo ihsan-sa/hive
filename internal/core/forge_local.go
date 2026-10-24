@@ -73,6 +73,16 @@ func (l *Local) EnsureRepo(repo, _ string) (bool, error) {
 	return true, err
 }
 
+// Fork copies repo to the local user's name.
+func (l *Local) Fork(repo string) (string, error) {
+	fork := "local/" + repo[strings.LastIndex(repo, "/")+1:]
+	if Exists(l.RepoPath(fork)) {
+		return fork, nil
+	}
+	_, err := Git("", "clone", "-q", "--bare", l.RepoPath(repo), l.RepoPath(fork))
+	return fork, err
+}
+
 func (l *Local) Clone(repo, dir string) error {
 	_, err := Git("", "clone", l.RepoPath(repo), dir)
 	return err

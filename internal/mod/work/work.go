@@ -233,15 +233,19 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 	if b.Project == "" {
 		b.Project = r.Project
 	}
-	// An agent with no project of its own names the target: the only project
-	// is not a safe guess, since the ask may be a module or about the Hive.
-	if b.Project == "" {
-		names := []string{}
-		for _, p := range m.C.Projects.List() {
-			if m.C.Runs.Walled(r, p.Name) == nil {
-				names = append(names, p.Name)
-			}
+	// An agent with no project of its own names the target. For the lead the
+	// only project is not a safe guess, since the ask may be a module or about
+	// the Hive; a sweep's findings come from the records, so it may be.
+	names := []string{}
+	for _, p := range m.C.Projects.List() {
+		if m.C.Runs.Walled(r, p.Name) == nil {
+			names = append(names, p.Name)
 		}
+	}
+	if b.Project == "" && r.Role == "sweep" && len(names) == 1 {
+		b.Project = names[0]
+	}
+	if b.Project == "" {
 		return nil, fmt.Errorf("say which project with --project (one of: %s) and tell the person why; a new module gets a project of its own first (create_project), then install_module --project", strings.Join(names, ", "))
 	}
 	if err := m.C.Runs.Walled(r, b.Project); err != nil {

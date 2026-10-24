@@ -233,8 +233,28 @@ func leadAsk(ask, system string) (string, error) {
 		out, err := call("requests", map[string]string{}, time.Minute)
 		return "Here's what waits: " + string(out), err
 	}
-	if hiveQ.MatchString(ask) && strings.Contains(system, "look first") {
+	if everythingQ.MatchString(ask) && !strings.Contains(ask, "ask a worker") && strings.Contains(system, "Questions about the Hive itself") {
+		return everything()
+	}
+	if hiveQ.MatchString(ask) && strings.Contains(system, "Questions about the Hive itself") {
 		return aboutHive()
+	}
+	if scoreQ.MatchString(ask) && strings.Contains(system, "Questions about the Hive itself") {
+		return howScored()
+	}
+	// As a real lead does with its role doc: the Hive's own code is its own project.
+	if hm := selfRe.FindStringSubmatch(ask); hm != nil && strings.Contains(system, "create_project --self") {
+		// The repository is ignored: the Hive's own code lives where the install says.
+		out, err := call("create_project", map[string]any{"self": true, "repo": "someone/else"}, 3*time.Minute)
+		if err != nil {
+			return "", err
+		}
+		var p struct{ Project, Repo string }
+		json.Unmarshal(out, &p)
+		if _, err := call("brief", map[string]string{"project": p.Project, "title": clip(hm[1], 60), "done": "FAKE: the change is merged", "known": hm[1]}, 3*time.Minute); err != nil {
+			return "", err
+		}
+		return "That's the Hive's own code, so I filed it in project " + p.Project + " (" + p.Repo + "); a kept merge there is released and offered upstream.", nil
 	}
 	if strings.HasPrefix(strings.ToLower(ask), "hello") {
 		return "Hello. I'm the lead. Tell me what you'd like done.", nil
@@ -269,6 +289,9 @@ func leadAsk(ask, system string) (string, error) {
 	}
 	return "Understood: " + clip(ask, 80) + ". I've started a piece of work on it" + where + ".", nil
 }
+
+// selfRe asks for a change to the Hive itself.
+var selfRe = regexp.MustCompile(`(?i)fix the hive itself: (.+)`)
 
 // hiveQ is a question about the Hive itself, which a lead answers from what it reads.
 var hiveQ = regexp.MustCompile(`(?i)does the hive have`)
@@ -308,6 +331,43 @@ func aboutHive() (string, error) {
 	json.Unmarshal(raw, &st)
 	return fmt.Sprintf("Yes. Installed modules: %s. Roles: %s. One warden weighs each request past an agent's reach, and a tribunal is a panel of %s. %d waiting on you. (Read from $HIVE_MODULES and hive agent status.)",
 		strings.Join(mods, ", "), strings.Join(roles, ", "), panel, len(st.Waiting)), nil
+}
+
+// everythingQ is the owner's question; every role answers it the same way.
+var everythingQ = regexp.MustCompile(`(?i)everything you can find out about the hive`)
+
+func everything() (string, error) {
+	a, err := aboutHive()
+	if err != nil {
+		return "", err
+	}
+	b, err := howScored()
+	return a + " " + b, err
+}
+
+// scoreQ asks how the Hive works inside, which a lead answers from its own source.
+var scoreQ = regexp.MustCompile(`(?i)how is a score computed`)
+
+// howScored reads the scoring rule from the Hive's source in the knowledge
+// base and the sweep's schedule from the live config.
+func howScored() (string, error) {
+	self := filepath.Join(os.Getenv("HIVE_KB"), "hive")
+	src, err := os.ReadFile(filepath.Join(self, "internal", "core", "projects.go"))
+	if err != nil {
+		return "", err
+	}
+	rule := regexp.MustCompile(`return value >= best-s.Tolerance`).Find(src)
+	version, _ := os.ReadFile(filepath.Join(self, "VERSION"))
+	raw, err := call("status", map[string]string{}, time.Minute)
+	if err != nil {
+		return "", err
+	}
+	var st struct {
+		Config struct{ Schedules map[string]string }
+	}
+	json.Unmarshal(raw, &st)
+	return fmt.Sprintf("A merge keeps its score when `%s` (internal/core/projects.go at %s), and the sweep runs %s.",
+		rule, strings.TrimSpace(string(version)), st.Config.Schedules["improve.sweep"]), nil
 }
 
 func projectNames() ([]string, error) {
@@ -418,6 +478,15 @@ func worker(all, prompt, system string) (string, error) {
 		name := moduleKey.FindStringSubmatch(all)[1]
 		os.WriteFile("module.json", []byte(`{"name": "`+name+`", "description": "FAKE module", "provides": {"procedures": ["ledger.md"]}, "projects": ["*"]}`+"\n"), 0o644)
 		os.WriteFile("ledger.md", []byte("# How to keep the ledger\n"), 0o644)
+	case everythingQ.MatchString(all) && strings.Contains(system, "Questions about the Hive itself"):
+		answer, err := everything()
+		if err == nil {
+			_, err = call("remember", map[string]string{"title": "Everything about the Hive", "text": answer}, time.Minute)
+		}
+		if err != nil {
+			return "", err
+		}
+		os.WriteFile("ABOUT-HIVE.md", []byte(answer+"\n"), 0o644)
 	case strings.Contains(all, "FAKE:goals"):
 		appendFile(".hive/goals.md", "- a goal the worker wrote down\n")
 	case strings.Contains(all, "FAKE:stallcheck"):
@@ -482,17 +551,16 @@ func peek(warden string) string {
 		os.Remove(f.Name())
 	}
 	secrets := 0
-	if raw, _ := os.ReadFile(filepath.Join(st, "daemon.json")); strings.Contains(string(raw), "token") {
-		secrets++
-	}
-	filepath.WalkDir(filepath.Join(st, "logins"), func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			if _, err := os.ReadFile(p); err == nil {
-				secrets++
+	for _, dir := range []string{"logins", "modules", "private"} {
+		filepath.WalkDir(filepath.Join(st, dir), func(p string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				if _, err := os.ReadFile(p); err == nil {
+					secrets++
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
+	}
 	return strings.Join(out, ", ") + fmt.Sprintf(", create=%t, secrets=%d", err == nil, secrets)
 }
 
