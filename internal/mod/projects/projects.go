@@ -34,7 +34,7 @@ type Module struct {
 func New(c *core.Core, ch *chat.Module, w *work.Module, im *improve.Module) *Module {
 	m := &Module{C: c, Chat: ch, Work: w, Improve: im, retry: map[string]time.Time{}, lastErr: map[string]string{}}
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","sharing","self"} (sharing: shared (default), private (its agents read the shared Hive, no one else sees it) or isolated (walled both ways); self: the Hive's own code, in the person's fork of it)`, Fn: m.opCreate})
+	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","isolated","self"} (self: the Hive's own code, in the person's fork of it)`, Fn: m.opCreate})
 	ops.Register(core.Op{Name: "status", Help: `{} -> projects, work in flight, scores, what waits on the person, the live settings (models, autonomy, schedules)`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.Status(r), nil }})
 	return m
 }
@@ -45,8 +45,7 @@ type Spec struct {
 	Repo        string `json:"repo"`
 	Description string `json:"description"`
 	Goals       string `json:"goals"`
-	Sharing     string `json:"sharing"`  // shared, private or isolated (docs/sharing.md)
-	Isolated    bool   `json:"isolated"` // the older form of "sharing": "isolated"
+	Isolated    bool   `json:"isolated"`
 	Demo        bool   `json:"demo"`
 	Self        bool   `json:"self"`
 }
@@ -73,13 +72,6 @@ func (m *Module) opCreate(r core.Run, args json.RawMessage) (any, error) {
 func (m *Module) Create(s Spec) (core.Project, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var level core.Project
-	if s.Isolated && s.Sharing == "" {
-		s.Sharing = core.SharingIsolated
-	}
-	if err := level.SetSharing(s.Sharing); err != nil {
-		return core.Project{}, false, err
-	}
 	f := m.C.Effects.Forge
 	if s.Demo && s.Name == "" {
 		s.Name = "textkit"
@@ -93,7 +85,7 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 			return core.Project{}, false, fmt.Errorf("who are you on %s? %v", f.Name(), err)
 		}
 		if s.Repo = up; !strings.HasPrefix(up, user+"/") {
-			if s.Repo, err = f.Fork(up); err != nil {
+			if s.Repo, err = f.Fork(up, ""); err != nil {
 				return core.Project{}, false, fmt.Errorf("forking %s: %v", up, err)
 			}
 		}
@@ -134,7 +126,7 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 		return core.Project{}, false, err
 	}
 	p := core.Project{Name: m.C.Projects.UniqueName(s.Name, s.Repo), Repo: s.Repo, Branch: f.DefaultBranch(s.Repo),
-		Description: s.Description, Isolated: level.Isolated, Private: level.Private, Self: s.Self, Demo: s.Demo, Goals: s.Goals}
+		Description: s.Description, Isolated: s.Isolated, Self: s.Self, Demo: s.Demo, Goals: s.Goals}
 	if created {
 		p.Branch = "main"
 	}
