@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,13 +30,22 @@ var (
 // gateExe is the binary that runs `hive gate`: the daemon's own.
 var gateExe = os.Executable
 
-// reachOK caches CheckReach on the children's token for an hour, so a
-// refusal isn't asked of GitHub on every run.
+// reachOK caches CheckReach for ten minutes, so a refusal isn't asked of
+// GitHub on every run. It is keyed by a digest of both tokens and the gated
+// repository: a token swapped for another is checked again at once. What a
+// token reaches can still widen on GitHub's side inside those minutes; the
+// gate checks the token again itself before it makes anything.
 var reachOK struct {
 	sync.Mutex
+	key string
 	at  time.Time
 	err error
 }
+
+const reachFor = 10 * time.Minute
+
+// checkReach is gate.CheckReach; a variable for tests.
+var checkReach = gate.CheckReach
 
 // runGate runs the recursive gate for the work module: `hive gate` from the
 // daemon itself, on this host, so its sibling bubblewrap sandboxes start one
@@ -68,7 +79,7 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 			defer log.Close()
 			cmd.Stdout, cmd.Stderr = log, log
 		}
-		runErr := cmd.Run()
+		runErr := runLocked(cmd)
 		g := readReport(j, runErr, ctx.Err())
 		g.Note = note
 		return g
@@ -88,10 +99,12 @@ func orgArgs(j work.GateJob) ([]string, string) {
 	if orgTok == childTok {
 		return local, fmt.Sprintf("The gate ran on a local org: %s and %s hold the same token, and the children's token must not be the one that makes and deletes repositories.", orgFile, gateChildFile)
 	}
+	sum := sha256.Sum256([]byte(orgTok + "\x00" + childTok + "\x00" + j.Project.Repo))
+	key := hex.EncodeToString(sum[:])
 	reachOK.Lock()
-	if reachOK.at.IsZero() || time.Since(reachOK.at) > time.Hour {
-		reachOK.err = gate.CheckReach(gate.GitHub{Owner: gateOrg, Token: orgTok}, childTok, j.Project.Repo)
-		reachOK.at = time.Now()
+	if reachOK.key != key || reachOK.at.IsZero() || time.Since(reachOK.at) > reachFor {
+		reachOK.err = checkReach(gate.GitHub{Owner: gateOrg, Token: orgTok}, childTok, j.Project.Repo)
+		reachOK.key, reachOK.at = key, time.Now()
 	}
 	err := reachOK.err
 	reachOK.Unlock()
@@ -114,8 +127,11 @@ func readToken(path string) string {
 
 // readReport turns the run's signed report into a verdict. It is a keep only
 // if the gate said so by both its exit code and its report, on exactly this
-// head and main, under bubblewrap; anything the gate didn't decide is
-// "can't run", never a keep.
+// head and main, under bubblewrap, in a report this machine's gate signed and
+// nobody changed (as `hive gate install` checks); anything the gate didn't
+// decide is "can't run", never a keep. A rollback from an unsigned report
+// counts as can't run too: a report left behind or written by someone else
+// must not send a change back either.
 func readReport(j work.GateJob, runErr, ctxErr error) core.GateResult {
 	g := core.GateResult{Outcome: core.GateCantRun, Report: filepath.Join(j.Out, "report.md")}
 	if ctxErr != nil {
@@ -130,6 +146,10 @@ func readReport(j work.GateJob, runErr, ctxErr error) core.GateResult {
 	if err != nil {
 		g.Report = filepath.Join(j.Out, "gate.log")
 		g.Reason = "the gate left no report: " + fmt.Sprint(runErr)
+		return g
+	}
+	if err := rep.Verify(); err != nil {
+		g.Reason = "the gate's report.json is not trusted: " + err.Error()
 		return g
 	}
 	g.Reason, g.Sandbox = rep.Verdict.Reason, rep.Sandbox

@@ -607,8 +607,11 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	var manifest strings.Builder
-	var root, unread []string
+	var root, unread, ungated []string
 	for _, mg := range list {
+		if mg.Gate == "" {
+			ungated = append(ungated, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
+		}
 		if reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff); len(reads) > 0 {
 			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
 		} else {
@@ -618,8 +621,11 @@ func (m *Module) afterKept(project, sha string) {
 		root = append(root, mg.Root...)
 	}
 	approved := m.C.Effects.Approved("release", project, sha)
-	if (len(root) > 0 || len(unread) > 0) && !approved {
-		m.hold(project, sha, root, unread, manifest.String())
+	// A release is cut only from merges the recursive gate kept (or whose
+	// gate the person waived): one from before the gate, or merged by hand,
+	// waits for the person's word like an unread one.
+	if (len(root) > 0 || len(unread) > 0 || len(ungated) > 0) && !approved {
+		m.hold(project, sha, root, unread, ungated, manifest.String())
 		return
 	}
 	cfg := m.C.Effects.Config(p, sha)
@@ -714,7 +720,7 @@ func (m *Module) onUpstream(a core.Ask) {
 
 // hold asks the person to release sha, and answers any older release ask for
 // the project, which this one covers, so a stale answer can't release.
-func (m *Module) hold(project, sha string, root, unread []string, manifest string) {
+func (m *Module) hold(project, sha string, root, unread, ungated []string, manifest string) {
 	ref := project + "@" + sha
 	for _, a := range m.C.Person.Open() {
 		if a.Kind == "release" && a.Project == project && a.Ref != ref {
@@ -728,13 +734,16 @@ func (m *Module) hold(project, sha string, root, unread []string, manifest strin
 	if len(unread) > 0 {
 		why = append(why, strings.Join(unread, ", ")+" merged without a read of its exact commit")
 	}
+	if len(ungated) > 0 {
+		why = append(why, strings.Join(ungated, ", ")+" merged without the recursive gate's keep")
+	}
 	m.C.Person.Ask(core.Ask{Kind: "release", Ref: ref, Project: project,
 		Title:  "Release the Hive at " + core.Short(sha) + "? " + strings.Join(why, "; "),
 		Detail: strings.Join(why, ", and ") + ", so the release waits for you.\n\n" + manifest, Options: []string{"release", "hold"}})
 }
 
 // OnPerson is the person's word on a held release; "release" also stands for
-// any unread head the ask named.
+// any unread or ungated head the ask named.
 func (m *Module) OnPerson(a core.Ask) {
 	project, sha, _ := strings.Cut(a.Ref, "@")
 	if a.Answer == "release" || a.Answer == "yes" {
@@ -754,6 +763,7 @@ type merge struct {
 	MergeSHA string `json:"merge_sha"`
 	Root     []string
 	Diff     string // the head's own diff (core.DiffID), whose reads carry to it
+	Gate     string // how the recursive gate let it merge (core.Effects.Merge); "" for none
 }
 
 // merges lists the project's merges after the one its last release was cut

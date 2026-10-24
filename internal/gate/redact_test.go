@@ -1,0 +1,28 @@
+package gate
+
+import (
+	"strings"
+	"testing"
+)
+
+// A child that prints a token, as itself or as git's Authorization value,
+// leaves no trace of it in the report, which goes on a pull request that may
+// be public; the commit and binary hashes stay.
+func TestReportRedactsTokens(t *testing.T) {
+	child, org := "github_pat_11AAAAchildchildchild", "org-secret-value"
+	sha := strings.Repeat("ab", 20)
+	r := Report{Head: sha, CandSHA256: sha + sha[:24], Error: "go build: echo " + child,
+		Verdict:   Verdict{Reason: "the candidate failed: Authorization: Basic " + basic(child), Regressions: []string{"org: " + org}},
+		Candidate: []Result{{Probe: "org", Detail: "pushed with " + org + " and ghp_abcdefghijklmnopqrstuv"}},
+		Control:   []Result{{Probe: "daemon", Detail: "ok at " + sha}}}
+	r.redact(org, child)
+	md := r.Markdown()
+	for _, s := range []string{child, org, basic(child), "ghp_abcdefghijklmnop"} {
+		if strings.Contains(md+r.Error+r.Verdict.Reason, s) {
+			t.Fatalf("the report still carries %q:\n%s", s, md)
+		}
+	}
+	if r.Head != sha || !strings.Contains(r.Control[0].Detail, sha) || !strings.Contains(md, "[secret]") {
+		t.Fatalf("redacted too much: %+v", r)
+	}
+}
