@@ -18,7 +18,7 @@ Now a self project (`Project.Self`, the Hive's own source) always guards a built
 | high | `internal/harness/` | hands harness logins to runs |
 | high | `internal/mod/release/`, `internal/daemon/` | cut releases and replace the running binary (self-update) |
 | high | `modules/agents/warden.md`, `modules/agents/tribunal.md` | the prompts that decide what runs outside the box |
-| high | `go.mod`, `go.sum` | the dependencies compiled into the binary |
+| high | `go.mod`, `go.sum`, `go.work`, `go.work.sum`, `vendor/` | the dependencies compiled into the binary: a workspace file or a vendored copy swaps them as surely as go.mod does |
 
 Every project, self or not, also protects `docs/REVIEW.md` next to `.hive/goals.md` and `.hive/project.json`: it is the person's intent the reviewer reads from main, so a change to it waits for an approval (the person's, or a warden's by autonomy) and is never a small docs change that merges on tests alone.
 

@@ -117,10 +117,15 @@ func summary(fs []failure, out string) string {
 	return core.Clip(strings.Join(parts, "; "), 900)
 }
 
+// safeName is a package or test name fit for a shell line. The names come
+// from what the candidate's code printed, so anything else (a quote, a $, a
+// ;) makes the rerun the whole command again.
+var safeName = regexp.MustCompile(`^[A-Za-z0-9_/.-]+$`)
+
 // rerunCommand is a command that runs only what failed, once more: the
 // failing packages and tests under the go test flags of the project's own
-// test command. Short of that (not a plain go test, a build failure, a cd)
-// it is the whole command again.
+// test command. Short of that (not a plain go test, a build failure, a cd,
+// a name that isn't plainly a name) it is the whole command again.
 func rerunCommand(test string, fs []failure) string {
 	i := strings.LastIndex(test, "go test")
 	if i < 0 || len(fs) == 0 || strings.Contains(test, "cd ") {
@@ -154,7 +159,7 @@ func rerunCommand(test string, fs []failure) string {
 	var pkgs, tests []string
 	whole := false
 	for _, f := range fs {
-		if f.Build {
+		if f.Build || !safeName.MatchString(f.Pkg) {
 			return test
 		}
 		pkgs = append(pkgs, f.Pkg)
@@ -162,6 +167,9 @@ func rerunCommand(test string, fs []failure) string {
 			whole = true // a panic or timeout outside a named test
 		}
 		for _, t := range f.Tests {
+			if !safeName.MatchString(t) {
+				return test
+			}
 			top, _, _ := strings.Cut(t, "/")
 			if !slices.Contains(tests, top) {
 				tests = append(tests, top)
@@ -172,7 +180,7 @@ func rerunCommand(test string, fs []failure) string {
 	if !whole && len(tests) > 0 {
 		cmd += " -run '^(" + strings.Join(tests, "|") + ")$'"
 	}
-	return cmd + " " + strings.Join(pkgs, " ")
+	return cmd + " '" + strings.Join(pkgs, "' '") + "'"
 }
 
 // redTests reads a red check: what failed, and whether it passes when only
