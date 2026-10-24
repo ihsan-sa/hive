@@ -1,6 +1,7 @@
 # Status - 2026-10-22
 
 Done:
+- Opt-in sharing of failures and usage with the developer ([report.md](report.md)): asked by the installer (from the terminal, `HIVE_SHARE=yes|no` ahead of time, no without a terminal) or else at first run, off unless yes; scrubbed on the machine; `hive report`, Settings. Unit (scrubber table, one report per failure plus usage, the 25 cap, 400 dropped, 429 and unreachable kept, field patterns) and e2e `TestReportSharing` (local endpoint that checks the contract: off sends nothing, one blocked task sends one failure and one usage report).
 - Full build per docs/spec.md, including milestone 6: risk tiers T1-T3, the warden, the tribunal and the always-the-person ceiling enforced at the point of effect (risk.md).
 - Gate: the change classifier reads diffs with `--no-renames`, so moving a protected file out is protected; an emptied test command on main is red once the project has run one.
 - The Hive's own repo guards its root paths: a self project always classes the sandbox, risk module, setup and installers as root and the gate's credential code, harness, release/daemon and warden/tribunal prompts as high, and `.github/` as root and go.mod/go.sum as high, whatever its project.json says; changed paths are read unquoted and NUL-split, so a non-ASCII name can't slip past; every project protects `docs/REVIEW.md` (docs/root-paths.md, `TestSelfGuardsItsRootPaths`, `TestClassify`).
@@ -40,6 +41,7 @@ Done:
 - The tribunal with real models under bubblewrap: `TestLiveTribunal` passed on the tower bare (three models approved, the majority ran the warden's script). Under bubblewrap no tribunal formed, because the ask was clipped at 120 characters and a sandboxed worker read the hidden fixture as already gone; both are fixed (the whole ask reaches the agents, and the worker role says outside paths are hidden), and the live probes now run sandboxed when the sandbox works. Re-run under bubblewrap on 2026-10-24 (issue #122): `TestLiveTribunal` passed with `HIVE_E2E_SANDBOX=auto` on the tower (AppArmor restricts user namespaces there, so the sandbox is bubblewrap); a T3 ask of over 120 characters formed a three-seat panel (opus, sonnet, fable), all approved in both rounds, and the warden's script ran (state done). `TestLongAskFormsAPanel` (unit) and `TestOutsideStep` (e2e) hold it.
 
 Not verified:
+- Sharing against the live endpoint (https://hive-api.ihsan.cc/v1/report) is probed by hand, one report; the tests use a local endpoint that checks the same contract.
 - Issues, comments and an upstream PR from a fork (`FindPR` by `owner:branch`, `onUpstream`) on real GitHub; the live probe covers fork, PR, merge and release on the fork only.
 - Injection resistance of the tribunal and warden by a real model.
 - The bubblewrap path live: `TestProbeBothPaths` (non-short, `internal/sandbox`) runs `hive sandbox-probe` under each path, but skips both inside a nested sandbox. Run it on a stock Ubuntu host.

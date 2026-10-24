@@ -43,10 +43,32 @@ case ":$PATH:" in
     # macOS opens zsh, which never reads .profile, so .zshrc is written there.
     for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
       [ -f "$rc" ] || [ "$rc" = "$HOME/.profile" ] || [ "$rc:$os" = "$HOME/.zshrc:darwin" ] || continue
+      # shellcheck disable=SC2016 # $PATH is written literally, for the shell to expand
       grep -qs "$DIR" "$rc" || printf '\nexport PATH="%s:$PATH"\n' "$DIR" >> "$rc"
     done
     echo "Added $DIR to your PATH (open a new terminal)."
     ;;
 esac
 "$DIR/$CMD" --version
+
+# Sharing failures stays off unless the person says yes. A pipe from curl has
+# no stdin to ask on, so the question goes to the terminal; with no terminal,
+# or on Enter, it's no. HIVE_SHARE=yes|no answers ahead of time, and a
+# reinstall that was answered before doesn't ask again. HIVE_TTY stands in for
+# the terminal in tests.
+share="${HIVE_SHARE:-}"
+tty="${HIVE_TTY:-/dev/tty}"
+if [ -z "$share" ] && ! "$DIR/$CMD" report asked; then
+  share=no
+  if (: <"$tty") 2>/dev/null; then
+    printf '\nShare failures and usage with the developer so they get fixed? Secrets are scrubbed on this machine first. (y/N) ' >>"$tty"
+    read -r share <"$tty" || share=no
+    [ -n "$share" ] || share=no # Enter is no, and is kept as no
+  fi
+fi
+case "$share" in
+  "") ;;
+  [yY]*) "$DIR/$CMD" report on ;;
+  *) "$DIR/$CMD" report off ;;
+esac
 echo "Installed. Run: $CMD"

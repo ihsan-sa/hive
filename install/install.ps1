@@ -114,4 +114,18 @@ if (-not $env:HIVE_SKIP_WSL) {
 }
 
 Write-Host ''
+# Sharing failures stays off unless the person says yes. With no console, or
+# on Enter, it's no. HIVE_SHARE=yes|no answers ahead of time, and a reinstall
+# that was answered before doesn't ask again.
+$share = $env:HIVE_SHARE
+if (-not $share -and (Invoke-Native { & $exe report asked } -Quiet) -ne 0) {
+  $share = 'no'
+  if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    $share = Read-Host "`nShare failures and usage with the developer so they get fixed? Secrets are scrubbed on this machine first. (y/N)"
+  }
+  if (-not $share) { $share = 'no' }
+}
+if ($share -match '^[yY]') { Invoke-Native { & $exe report on } | Out-Null }
+elseif ($share) { Invoke-Native { & $exe report off } | Out-Null }
+
 Write-Host "Installed $(& $exe --version). Run: $cmd"
