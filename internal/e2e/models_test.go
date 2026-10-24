@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -448,17 +449,26 @@ func TestModelThatCantAnswer(t *testing.T) {
 	if worker == "" || told != 1 || posted != 1 {
 		t.Fatalf("worker %q, told %d, lead chat lines %d", worker, told, posted)
 	}
-	// The person fixes the guardrail and the model's config changes: it is
-	// back, and a worker routed to it lands there.
-	router.fixed.Store(true)
+	// A worker routed only to the router parks on it, an hour out.
 	cfg := h.ws.LoadConfig()
+	cfg.Projects["lab"] = core.ProjectSettings{Routes: map[string][]string{"worker": {"router"}}}
+	h.ws.SaveConfig(cfg)
+	h.post("/api/ask", map[string]string{"project": "lab", "title": "use the router again"}, nil)
+	h.wait("the router's worker to park on it", 2*minute, func(st api.State) bool {
+		tk, ok := task(st, "lab", "use the router again")
+		return ok && slices.ContainsFunc(st.Runs, func(r core.Run) bool {
+			return r.ID == tk.Worker && r.Status == core.StatusParked && strings.Contains(r.Reason, "open:router can't answer") && r.ParkedUntil.After(time.Now().Add(30*time.Minute))
+		})
+	})
+	// The person fixes the guardrail and the model's config changes: it is
+	// back, and the parked worker resumes on it at once and lands.
+	router.fixed.Store(true)
+	cfg = h.ws.LoadConfig()
 	m := cfg.Models["router"]
 	m.Context = 64000
 	cfg.Models["router"] = m
-	cfg.Projects["lab"] = core.ProjectSettings{Routes: map[string][]string{"worker": {"router"}}}
 	h.ws.SaveConfig(cfg)
 	h.wait("the router to come back", minute, func(st api.State) bool { return len(st.Down) == 0 })
-	h.post("/api/ask", map[string]string{"project": "lab", "title": "use the router again"}, nil)
-	h.wait("the router's worker to land", 3*minute, taskStage("lab", "use the router again", work.StageDone))
+	h.wait("the parked worker to resume on the router and land", 3*minute, taskStage("lab", "use the router again", work.StageDone))
 	h.wait("router.txt on main", minute, h.onMain("me/lab", "router.txt", "from the router"))
 }

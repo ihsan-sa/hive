@@ -44,11 +44,18 @@ type modelUp struct {
 	Why  string `json:"why"`
 }
 
-// strike is a pick's run of turns ending in the same error.
+// strike is a pick's run of turns ending in the same error, and the runs
+// they came from: one run failing its own way again and again is that run's
+// trouble (it backs off), not the model's.
 type strike struct {
 	text string
 	n    int
+	runs map[string]bool
 }
+
+// noModel is the wording of an answer that says the endpoint has no such
+// model; a 400 saying anything else (a context too long) is one run's.
+var noModel = regexp.MustCompile(`(?i)(model[^.]{0,80}(not found|does not exist|doesn't exist|not exist|is not a valid|not available|unknown|not supported))|((unknown|invalid|unsupported|no such) model)|(no endpoints found)`)
 
 // Cause names what a Down is about, so the person hears once per cause.
 func (d Down) Cause() string {
@@ -95,26 +102,29 @@ func (d Down) Fix(cfg Config) string {
 }
 
 // cantAnswer reports whether a turn's error means the pick it ran on can't
-// answer at all, given how many straight turns (this one included) gave it.
-// A Claude or Codex 401/403 is its login's, handled as a login, and an
-// unreachable server is retried as offline.
-func cantAnswer(p Pick, res *harness.Result, offline string, strikes int) bool {
+// answer at all, given the straight turns with the same error (this one
+// included) and how many runs they came from. Only a named model's 404,
+// 401/403 or repeated error counts: a Claude or Codex pick is the Hive's main
+// harness, whose 401/403 is its login's and whose other errors (often with
+// no text) are each run's own, so it is marked only when it says it has no
+// such model. A 400 counts only when it says so too, and an unreachable
+// server is retried as offline.
+func cantAnswer(p Pick, res *harness.Result, offline string, strikes, runs int) bool {
 	if res == nil || !res.IsError || res.Limited || res.Subtype == "error_max_budget_usd" {
 		return false
 	}
-	switch res.APIStatus {
-	case 404:
+	text := strings.TrimSpace(res.Text)
+	if (res.APIStatus == 404 || res.APIStatus == 400) && noModel.MatchString(text) {
 		return true
-	case 401, 403:
-		if p.Harness == "open" {
-			return true
-		}
-	case 400:
-		if strings.Contains(strings.ToLower(res.Text), "model") {
-			return true
-		}
 	}
-	return offline == "" && strikes >= downStrikes
+	if p.Harness != "open" {
+		return false
+	}
+	switch res.APIStatus {
+	case 404, 401, 403:
+		return true
+	}
+	return offline == "" && text != "" && strikes >= downStrikes && runs >= 2
 }
 
 // downConfig is what a pick's answer depends on in the config: a named
@@ -151,33 +161,44 @@ func (rs *Runs) applyDown(e Event) {
 	}
 }
 
+// sameError is the text a strike compares, "" for an error with none.
+func sameError(res *harness.Result) string { return Clip(strings.TrimSpace(res.Text), 200) }
+
 // strikeTurn counts a pick's straight turns ending in the same error, from
 // the turn's end. rs.mu is held.
-func (rs *Runs) strikeTurn(p Pick, res *harness.Result) {
+func (rs *Runs) strikeTurn(p Pick, run string, res *harness.Result) {
 	if res == nil {
 		return
 	}
 	k := p.String()
-	if !res.IsError || res.Limited {
+	text := sameError(res)
+	if !res.IsError || res.Limited || text == "" {
 		delete(rs.strikes, k)
 		return
 	}
-	text := Clip(res.Text, 200)
-	if s := rs.strikes[k]; s.text == text {
-		rs.strikes[k] = strike{text, s.n + 1}
-	} else {
-		rs.strikes[k] = strike{text, 1}
+	s := rs.strikes[k]
+	if s.text != text {
+		s = strike{text: text, runs: map[string]bool{}}
 	}
+	s.n++
+	s.runs[run] = true
+	rs.strikes[k] = s
 }
 
-// strikes is how many straight turns on p this result's error would make.
-func (rs *Runs) strikesWith(p Pick, res *harness.Result) int {
+// strikesWith is how many straight turns on p, and from how many runs,
+// run's result would make.
+func (rs *Runs) strikesWith(p Pick, run string, res *harness.Result) (turns, runs int) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	if s := rs.strikes[p.String()]; s.text == Clip(res.Text, 200) {
-		return s.n + 1
+	s := rs.strikes[p.String()]
+	if text := sameError(res); text == "" || s.text != text {
+		return 1, 1
 	}
-	return 1
+	runs = len(s.runs)
+	if !s.runs[run] {
+		runs++
+	}
+	return s.n + 1, runs
 }
 
 // markDown records that p can't answer, from a turn of run r; a pick already
@@ -216,11 +237,25 @@ func (rs *Runs) Down() []Down {
 }
 
 // Up brings a pick back, saying why; nothing when it isn't down.
+// Runs parked waiting on a pick that couldn't answer wake to look again,
+// so a fixed config is tried at once rather than at the retry.
 func (rs *Runs) Up(p Pick, why string) {
-	if _, ok := rs.downFor(p); ok {
-		rs.append("model.up", modelUp{Pick: p, Why: why})
+	if _, ok := rs.downFor(p); !ok {
+		return
+	}
+	rs.append("model.up", modelUp{Pick: p, Why: why})
+	now := time.Now()
+	for _, r := range rs.List(func(r *Run) bool {
+		return r.Status == StatusParked && r.ParkedUntil.After(now) && strings.Contains(r.Reason, cantAnswerWhy)
+	}) {
+		if next, until := rs.next(r); until.Before(r.ParkedUntil) {
+			rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: next.String() + " has room again (" + p.String() + " " + why + ")", Until: until})
+		}
 	}
 }
+
+// cantAnswerWhy marks the reason of a run parked because its pick can't answer.
+const cantAnswerWhy = " can't answer; "
 
 // tickDown keeps the config the next Down is fingerprinted against, and
 // brings back each pick whose config changed since it was marked.

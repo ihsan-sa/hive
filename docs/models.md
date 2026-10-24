@@ -164,7 +164,16 @@ changes, and a turn or probe it answers brings it back (`model.up`).
 `hive model add`, `hive model key`, the lead's `route` op and `trial` send a
 named model one real request first and refuse one that can't answer, saying
 why and what would fix it (`hive model add` on a model that needs a key not
-yet stored tries it when the key is stored).
+yet stored tries it when the key is stored; `--no-probe` skips it, for a
+server that isn't up yet). The route op doesn't probe a model already on that
+route and not known to fail.
+
+Only a named model is marked down by a 401/403, any 404, or the same error
+three straight turns from at least two runs (an empty error never counts).
+A Claude or Codex pick, and a 400 on any pick, is marked only when its answer
+says the model doesn't exist (not found, unknown or invalid model): their
+other errors, and a context too long, are one run's, which backs off alone.
+A run parked waiting on a pick that comes back looks again at once.
 
 ## Asking the lead
 

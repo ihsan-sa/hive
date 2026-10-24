@@ -57,7 +57,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive egress grant <host:port>   open one to every sandboxed run (loopback only, e.g. 127.0.0.1:11434)
   hive egress revoke <host:port>  close it again
   hive model               the named models (free ones too) and the routes that pick each role's model
-  hive model add <name> <endpoint> <model id> [--key]   a model on an OpenAI-compatible endpoint, e.g.
+  hive model add <name> <endpoint> <model id> [--key] [--no-probe]   a model on an OpenAI-compatible endpoint, e.g.
                            hive model add qwen http://127.0.0.1:11434/v1 qwen2.5-coder:14b
                            [--anthropic]: its API is Anthropic-compatible, so Claude Code runs it, e.g.
                            hive model add kimi https://api.moonshot.ai/anthropic kimi-k2-0905-preview --key --anthropic
@@ -780,7 +780,7 @@ func cmdModel(args []string) int {
 		return 1
 	}
 	usage := func() int {
-		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" model [add <name> <endpoint> <model id> [--key] [--anthropic] | key <name> | rm <name>]")
+		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" model [add <name> <endpoint> <model id> [--key] [--anthropic] [--no-probe] | key <name> | rm <name>]")
 		return 2
 	}
 	if len(args) == 0 {
@@ -806,13 +806,15 @@ func cmdModel(args []string) int {
 	}
 	switch {
 	case args[0] == "add" && len(args) >= 4:
-		m := core.OpenModel{Endpoint: args[2], Model: args[3]}
+		m, noProbe := core.OpenModel{Endpoint: args[2], Model: args[3]}, false
 		for _, f := range args[4:] {
 			switch f {
 			case "--key":
 				m.Key = true
 			case "--anthropic":
 				m.API = "anthropic"
+			case "--no-probe":
+				noProbe = true
 			default:
 				return usage()
 			}
@@ -826,7 +828,13 @@ func cmdModel(args []string) int {
 			return 1
 		}
 		// One real request first: a model that can't answer isn't added.
-		switch err := models.Probe(ws, args[1], m); {
+		var err error
+		if !noProbe {
+			err = models.Probe(ws, args[1], m)
+		}
+		switch {
+		case noProbe:
+			fmt.Println("Not tried (--no-probe); runs mark it down if it can't answer.")
 		case errors.Is(err, models.ErrNoKey):
 			fmt.Printf("Not tried yet: %v; storing it tries it.\n", err)
 		case err != nil:

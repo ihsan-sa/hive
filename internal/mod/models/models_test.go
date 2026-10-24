@@ -197,4 +197,9 @@ func TestRouteProbesTheModel(t *testing.T) {
 	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "fake:opus,router"}); err != nil {
 		t.Fatal(err)
 	}
+	// A model already on the route, not known to fail, isn't probed again.
+	a.Models.Probe = func(core.Workspace, string, core.OpenModel) error { t.Fatal("probed again"); return nil }
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "router,fake:opus"}); err != nil {
+		t.Fatal(err)
+	}
 }

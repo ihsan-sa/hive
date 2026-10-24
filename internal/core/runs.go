@@ -558,7 +558,7 @@ func (rs *Runs) apply(e Event) {
 		}
 		r.Status, r.Reason, r.ParkedUntil, r.Offline = t.Status, t.Reason, t.ParkedUntil, t.Offline
 		r.Proc = proc.Handle{}
-		rs.strikeTurn(Pick{Harness: HarnessName(r.Harness), Model: r.Model}, t.Result)
+		rs.strikeTurn(Pick{Harness: HarnessName(r.Harness), Model: r.Model}, r.ID, t.Result)
 		if t.Context > 0 {
 			r.Context = t.Context
 		}
@@ -1103,7 +1103,7 @@ func (rs *Runs) endTurn(r Run) {
 	if tl.Result != nil && !limited {
 		if !tl.Result.IsError {
 			rs.Up(ran, "it answered")
-		} else if cantAnswer(ran, tl.Result, Unreachable(service(r.Harness), tl.Result.Text), rs.strikesWith(ran, tl.Result)) {
+		} else if turns, runs := rs.strikesWith(ran, r.ID, tl.Result); cantAnswer(ran, tl.Result, Unreachable(service(r.Harness), tl.Result.Text), turns, runs) {
 			d := rs.markDown(r, ran, tl.Result)
 			down = &d
 		}
@@ -1144,10 +1144,10 @@ func (rs *Runs) endTurn(r Run) {
 		// at once, else it waits for the first reset, with no backoff.
 		pick, until := rs.next(r)
 		te.Status, te.ParkedUntil, te.Unavailable = StatusParked, until, ran.String()
-		te.Reason = ran.String() + " can't answer; resumes " + until.Local().Format("Mon 15:04")
+		te.Reason = ran.String() + cantAnswerWhy + "resumes " + until.Local().Format("Mon 15:04")
 		te.Queue = []string{ran.String() + " couldn't answer (" + Clip(down.Text, 200) + "), so your turn waited for a model that can. Continue where you left off."}
 		if !until.After(time.Now()) {
-			te.Reason = ran.String() + " can't answer; moving to " + pick.String()
+			te.Reason = ran.String() + cantAnswerWhy + "moving to " + pick.String()
 			te.Queue = nil // launch tells it why it moved
 		}
 	case tl.Result.IsError:

@@ -160,12 +160,16 @@ func (m *Module) opRoute(r core.Run, args json.RawMessage) (any, error) {
 		}
 	}
 	rt.By = r.ID
+	was := m.C.WS.LoadConfig().Routed(rt.Role, rt.Project)
 	cfg, err := m.routed(rt)
 	if err != nil {
 		return nil, err
 	}
 	for _, e := range rt.Models {
 		p, _ := cfg.Pick(e)
+		if _, down := downOf(m.C.Runs.Down(), p); slices.Contains(was, e) && !down {
+			continue // already on the route and not known to fail: its turns are its probe
+		}
 		if err := m.probe(cfg, p); err != nil {
 			return nil, err
 		}
