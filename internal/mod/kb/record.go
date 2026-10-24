@@ -183,7 +183,8 @@ func Search(dir, query string, hide ...string) []Hit {
 			return nil // an unreadable folder has nothing to give; go on with the rest
 		}
 		rel, _ := filepath.Rel(dir, path)
-		if d.IsDir() && (d.Name() == ".git" || slices.Contains(hide, filepath.ToSlash(rel))) {
+		// A dot folder is git's or a copy SeedSelf is swapping in, never notes.
+		if d.IsDir() && path != dir && (strings.HasPrefix(d.Name(), ".") || slices.Contains(hide, filepath.ToSlash(rel))) {
 			return filepath.SkipDir
 		}
 		if d.IsDir() || !strings.HasSuffix(path, ".md") {
