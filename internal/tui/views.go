@@ -558,6 +558,11 @@ func (m *model) viewDetail(d *detail) []string {
 		lines = append(lines, "", stDim.Render("space grant or remove · r read its code again"))
 		return window(lines, top+d.sel, m.bodyHeight())
 	case "diff":
+		if d.state != "whole" {
+			for _, l := range wrap(diffNote(d.state), w) {
+				lines = append(lines, stBad.Render(l))
+			}
+		}
 		lines = append(lines, diffView(d.text, w)...)
 	default:
 		lines = append(lines, wrap(d.text, w)...)
@@ -595,44 +600,104 @@ func contains(l []string, s string) bool {
 
 // ---- waiting on you --------------------------------------------------------
 
+// waitIndex finds the selected ask by its id, so a list that shifts under
+// the cursor (an ask answered elsewhere, a new one filed) keeps the selection
+// on the same ask. When that ask is gone the cursor stays at its position and
+// waitMoved is set, so Enter won't answer an ask the person didn't select.
+// That holds after an answer here too: a quick second Enter would otherwise
+// approve whatever arrived under the cursor before the person saw it. A key
+// on an empty list leaves the guard armed for the ask that arrives next.
+func (m *model) waitIndex() int {
+	asks := m.st.Asks
+	for i, a := range asks {
+		if a.ID == m.waitID {
+			m.waitSel = i
+			return i
+		}
+	}
+	if m.waitID != "" {
+		m.optSel, m.waitMoved = 0, true // a different ask now; don't carry the pick over
+		m.waitNext = m.waitID == m.waitDone
+	}
+	m.waitSel = max(0, min(m.waitSel, len(asks)-1))
+	m.waitID = ""
+	if m.waitSel < len(asks) {
+		m.waitID = asks[m.waitSel].ID
+	}
+	return m.waitSel
+}
+
+func (m *model) selectWait(i int) {
+	m.waitSel, m.waitID, m.optSel, m.waitMoved = i, m.st.Asks[i].ID, 0, false
+}
+
 func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	asks := m.st.Asks
-	if m.waitSel >= len(asks) {
-		m.waitSel = max(0, len(asks)-1)
-	}
+	sel := m.waitIndex()
 	switch k.String() {
 	case "up", "k":
-		if m.waitSel > 0 {
-			m.waitSel--
-			m.optSel = 0
+		if sel > 0 {
+			m.selectWait(sel - 1)
 		}
 	case "down", "j":
-		if m.waitSel < len(asks)-1 {
-			m.waitSel++
-			m.optSel = 0
+		if sel < len(asks)-1 {
+			m.selectWait(sel + 1)
 		}
 	case "left", "h":
+		m.waitMoved = m.waitMoved && sel >= len(asks) // a pick on the ask now under the cursor selects it
 		if m.optSel > 0 {
 			m.optSel--
 		}
 	case "right", "l":
-		if m.waitSel < len(asks) && m.optSel < len(asks[m.waitSel].Options)-1 {
+		m.waitMoved = m.waitMoved && sel >= len(asks)
+		if sel < len(asks) && m.optSel < len(asks[sel].Options)-1 {
 			m.optSel++
 		}
 	case "d":
-		if m.waitSel < len(asks) && asks[m.waitSel].Diff != "" {
-			a := asks[m.waitSel]
-			return m, m.push(detail{kind: "diff", id: a.ID, title: "what it changes", text: a.Diff})
+		if sel < len(asks) && asks[sel].Diff != "" {
+			a := asks[sel]
+			return m, m.push(detail{kind: "diff", id: a.ID, title: diffTitle(""), text: a.Diff})
 		}
 	case "enter":
-		if m.waitSel < len(asks) {
-			a := asks[m.waitSel]
-			opt := a.Options[min(m.optSel, len(a.Options)-1)]
-			m.optSel = 0
-			return m, m.post("/api/answer", map[string]string{"id": a.ID, "answer": opt}, "answered: "+opt)
+		if sel >= len(asks) { // nothing shown: an ask that arrives next needs its own Enter
+			m.waitMoved = true
+			return m, nil
 		}
+		if m.waitMoved { // the selected ask went; what's under the cursor wasn't chosen
+			m.waitMoved = false
+			if m.waitNext { // the one that went was answered here
+				m.setFlash("answered; this is the next ask, enter again to answer it")
+			} else {
+				m.setFlash("that ask was answered elsewhere; check the selection")
+			}
+			return m, nil
+		}
+		a := asks[sel]
+		opt := a.Options[min(m.optSel, len(a.Options)-1)]
+		m.optSel, m.waitDone = 0, a.ID // answered here: its leaving says "next", not "elsewhere"
+		return m, m.post("/api/answer", map[string]string{"id": a.ID, "answer": opt}, "answered: "+opt)
 	}
 	return m, nil
+}
+
+// diffTitle heads the diff view with what of the diff it shows. state is ""
+// while the whole diff is on its way, "whole" once it came, else why it didn't.
+func diffTitle(state string) string {
+	switch state {
+	case "whole":
+		return "the whole diff"
+	case "":
+		return "the diff's first part"
+	}
+	return "only the diff's first part"
+}
+
+// diffNote tops a diff view that isn't the whole diff, saying why.
+func diffNote(state string) string {
+	if state == "" {
+		return "the first part of the diff; fetching the whole…"
+	}
+	return "only the first part of the diff: the whole couldn't be fetched (" + state + ")"
 }
 
 func (m *model) viewWaiting() []string {
@@ -641,23 +706,25 @@ func (m *model) viewWaiting() []string {
 	}
 	w := m.mainW() - 5
 	var lines []string
-	sel, end := 0, 0
+	sel, end, at := 0, 0, m.waitIndex()
 	for i, a := range m.st.Asks {
 		gut := "  "
-		if i == m.waitSel {
+		if i == at {
 			gut, sel = stTitle.Render("▌")+" ", len(lines)
 		}
-		from := core.Clip(a.From, 20)
+		// every field an agent wrote is shown through visible, so none can
+		// hide, reorder or overwrite part of what the person approves
+		from := core.Clip(visible(a.From), 20)
 		if a.Project != "" {
-			from = a.Project + " › " + from
+			from = visible(a.Project) + " › " + from
 		}
 		age := ago(a.Asked)
-		top := stTitle.Render(from) + "  " + stDim.Render(a.Kind)
+		top := stTitle.Render(from) + "  " + stDim.Render(visible(a.Kind))
 		ls := []string{pad(clip(top, w-len(age)-1), w-len(age)) + stDim.Render(age)}
-		ls = append(ls, wrap(a.Title, w)...)
-		if i == m.waitSel {
+		ls = append(ls, wrap(visibleText(a.Title), w)...)
+		if i == at {
 			if a.Detail != "" {
-				for _, l := range wrap(a.Detail, w) {
+				for _, l := range wrap(visibleText(a.Detail), w) {
 					ls = append(ls, stDim.Render(l))
 				}
 			}
@@ -671,6 +738,7 @@ func (m *model) viewWaiting() []string {
 			}
 			var opts []string
 			for j, o := range a.Options {
+				o = visible(o)
 				if j == m.optSel && m.focus == 1 {
 					o = stSel.Render(o)
 				}
@@ -679,7 +747,7 @@ func (m *model) viewWaiting() []string {
 			ls = append(ls, optionRows(opts, stTitle.Render("←→")+" "+stDim.Render("pick")+"   "+stTitle.Render("enter")+" "+stDim.Render("answer"), w)...)
 		}
 		lines = append(append(lines, indent(ls, gut)...), "")
-		if i == m.waitSel {
+		if i == at {
 			end = len(lines) - 2
 		}
 	}
@@ -730,6 +798,9 @@ func diffView(diff string, w int) []string {
 }
 
 // visible spells out control characters (ESC as \x1b), and tabs as spaces.
+// Format characters, the bidi controls that reorder a line and the
+// zero-width ones that hide inside it, are spelled out too (U+202E as \u202e),
+// so what's on screen is every character the text holds, in its order.
 func visible(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -738,11 +809,22 @@ func visible(s string) string {
 			b.WriteString("    ")
 		case unicode.IsControl(r):
 			fmt.Fprintf(&b, "\\x%02x", r)
+		case unicode.Is(unicode.Cf, r), r == '\u115f', r == '\u1160', r == '\u3164', r == '\uffa0':
+			fmt.Fprintf(&b, "\\u%04x", r) // the Hangul fillers are blank letters, not Cf
 		default:
 			b.WriteRune(r)
 		}
 	}
 	return b.String()
+}
+
+// visibleText is visible line by line, keeping the line breaks.
+func visibleText(s string) string {
+	ls := strings.Split(s, "\n")
+	for i, l := range ls {
+		ls[i] = visible(l)
+	}
+	return strings.Join(ls, "\n")
 }
 
 // ---- modules ---------------------------------------------------------------

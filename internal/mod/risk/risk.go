@@ -902,17 +902,24 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 	return "sent to the " + who + " to decide; you'll hear back", nil
 }
 
+// wardenDiff is the longest diff a warden is given to weigh, whole.
+const wardenDiff = 64 << 10
+
 // Weigh settles a decision that would otherwise wait on the person the way
 // autonomy settles a step: at autonomy 1, or when it touches the ceiling, it
 // goes to the person; otherwise a warden weighs it as a T2 step (and may call
 // a tribunal), its answer goes to the ask's handler as the person's would,
 // and the person is told after. It returns who decides: person or warden.
+//
+// The ceiling and floor read the whole diff. A warden reads it whole too, in
+// its brief, so a diff longer than wardenDiff goes to the person rather than
+// be weighed on a part of it.
 func (m *Module) Weigh(a core.Ask) string {
 	why := a.Detail
 	if a.Diff != "" {
-		why += "\n\n" + core.Clip(a.Diff, 6000)
+		why += "\n\n" + a.Diff
 	}
-	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || core.Ceiling(cfg.Floor, a.Title, why) != "" {
+	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || len(a.Diff) > wardenDiff || core.Ceiling(cfg.Floor, a.Title, why) != "" {
 		m.C.Person.Ask(a)
 		return "person"
 	}
