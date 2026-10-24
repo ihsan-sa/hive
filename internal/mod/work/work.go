@@ -1849,7 +1849,6 @@ func (m *Module) RecordRead(id, sha, by, verdict, note string) (Task, error) {
 	return t, nil
 }
 
-
 // closedOnForge ends a task whose pull request someone closed on the forge
 // without merging it. That is the person's call, so the lead can't bring the
 // task back by accident; a closed checkpoint is dropped as one left open is.
