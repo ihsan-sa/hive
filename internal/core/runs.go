@@ -179,6 +179,20 @@ type Runs struct {
 	plans map[string]Plan
 	busy  map[string]bool    // runs whose tick work is in flight
 	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
+	hold  string             // why no new turn starts, while a restart waits for a quiet moment
+	// launching counts launches past the hold whose turn isn't journalled yet.
+	launching int
+}
+
+// Hold keeps new turns from starting, saying why; "" lets them start again.
+func (rs *Runs) Hold(why string) { rs.mu.Lock(); rs.hold = why; rs.mu.Unlock() }
+
+// Live counts the turns whose process is running, and those starting.
+func (rs *Runs) Live() int {
+	n := len(rs.List(func(r *Run) bool { return r.Status == StatusRunning && proc.Alive(r.Proc) }))
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return n + rs.launching
 }
 
 // codexTokenStuck opens the note on a run whose Codex token folder would not delete.
@@ -1033,6 +1047,14 @@ const PendingSep = "\n\n---\n\n"
 
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run, cfg Config) {
+	rs.mu.Lock()
+	if rs.hold != "" {
+		rs.mu.Unlock()
+		return
+	}
+	rs.launching++
+	rs.mu.Unlock()
+	defer func() { rs.mu.Lock(); rs.launching--; rs.mu.Unlock() }()
 	if why := Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax); why != "" {
 		// The hold keeps the run's status, so a parked run keeps its backoff
 		// and a nudged one its count; the live figures after " (" change

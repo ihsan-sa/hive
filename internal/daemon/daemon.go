@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -240,16 +241,85 @@ func Run(ws core.Workspace, waitFor int) error {
 	a.C.J.MustAppend("hive.stopped", map[string]string{"pid": strconv.Itoa(os.Getpid())})
 	shut, done := context.WithTimeout(context.Background(), 3*time.Second)
 	defer done()
-	return srv.Shutdown(shut)
+	err = srv.Shutdown(shut)
+	if code := s.exit.Load(); code > 0 {
+		return ExitCode(code)
+	}
+	return err
 }
 
+// ExitCode is how a daemon under a supervisor ends for a restart: with the
+// status its supervisor starts it again on.
+type ExitCode int
+
+func (e ExitCode) Error() string {
+	return fmt.Sprintf("exiting with status %d so the supervisor starts the updated binary", int(e))
+}
+
+// RestartStatus is the exit status a restart under Restart=always or
+// on-failure ends with (EX_TEMPFAIL).
+const RestartStatus = 75
+
+// supervision is what restarts this daemon when it isn't the Hive's own
+// user unit: a systemd unit of any name and kind, or with HIVE_SUPERVISED set
+// another supervisor that starts it again when it exits.
+type supervision struct {
+	name      string // "" when the Hive starts its own replacement
+	status    int    // the exit status it restarts on; -1 when it doesn't
+	keepsRuns bool   // its stop leaves the unit's other processes, the live turns, running
+}
+
+var supervisor = func() supervision {
+	name, user := unitOf()
+	if user && name == "hive.service" {
+		return supervision{} // Run hands the restart to systemctl --user
+	}
+	if os.Getenv("HIVE_SUPERVISED") != "" {
+		// supervisord, pm2, runit: often a unit themselves, whose MainPID
+		// isn't this daemon. Nothing says what its stop kills, so wait for a
+		// quiet moment.
+		return supervision{name: "its supervisor", status: RestartStatus}
+	}
+	if name == "" {
+		return supervision{}
+	}
+	restart, killMode, mainPID := unitSettings(name, user)
+	if mainPID != os.Getpid() {
+		// Started from a shell inside someone else's unit (tmux, cron): that
+		// unit won't start this daemon again, so it starts its own replacement.
+		return supervision{}
+	}
+	return supervisedBy(name, restart, killMode)
+}
+
+var unitOf, unitSettings = setup.Unit, setup.UnitSettings
+
+// supervisedBy reads a unit's Restart= and KillMode=.
+func supervisedBy(name, restart, killMode string) supervision {
+	sup := supervision{name: name, keepsRuns: killMode == "process" || killMode == "none"}
+	switch restart {
+	case "always", "on-failure":
+		sup.status = RestartStatus
+	case "on-success":
+		sup.status = 0
+	default: // no, on-abnormal, on-abort, on-watchdog, or unreadable: an exit just stops it
+		sup.status = -1
+	}
+	return sup
+}
+
+// quietPoll is how often a restart that waits for a quiet moment looks.
+var quietPoll = 5 * time.Second
+
 type server struct {
-	a      *app.App
-	info   api.DaemonInfo
-	cancel func()
-	mu     sync.Mutex
-	alerts []api.Alert
-	update *api.Updated
+	a       *app.App
+	info    api.DaemonInfo
+	cancel  func()
+	mu      sync.Mutex
+	alerts  []api.Alert
+	update  *api.Updated
+	exit    atomic.Int64 // the status to exit with, once a restart hands back to the supervisor
+	handing atomic.Bool
 }
 
 func (s *server) onEvent(e core.Event) {
@@ -294,6 +364,10 @@ var inHiveUnit = setup.InUnit
 // restart replaces this daemon with the (updated) binary on disk, and marks
 // daemon.json so the control center waits for the new one.
 func (s *server) restart() {
+	if sup := supervisor(); sup.name != "" {
+		s.handBack(sup)
+		return
+	}
 	exe, err := executable()
 	if err != nil {
 		return
@@ -308,6 +382,38 @@ func (s *server) restart() {
 		core.WriteFileAtomic(ws.DaemonFile(), raw, 0o600)
 		s.cancel()
 	}
+}
+
+// handBack ends this daemon so its supervisor starts the updated binary,
+// which sits at the path the supervisor runs. A supervisor whose stop kills
+// every process in the unit would kill the live turns too, so new turns are
+// held and the exit waits for the live ones to end. One that doesn't restart
+// on exit leaves the update for its next start.
+func (s *server) handBack(sup supervision) {
+	j := s.a.C.J
+	if sup.status < 0 {
+		j.MustAppend("alert.raised", map[string]string{"kind": "update", "ref": "restart", "text": "The Hive runs under " + sup.name + ", which doesn't start it again when it exits, so the update takes effect at its next start. Restart=on-failure in the unit lets it restart on its own."})
+		return
+	}
+	if !s.handing.CompareAndSwap(false, true) {
+		return
+	}
+	if !sup.keepsRuns {
+		rs := s.a.C.Runs
+		rs.Hold("waiting: the Hive restarts into an update once the live turns end")
+		if n := rs.Live(); n > 0 {
+			j.MustAppend("alert.raised", map[string]string{"kind": "update", "ref": "restart", "text": fmt.Sprintf("The Hive restarts into the update once %d live turn(s) end, since stopping %s ends every process in it; new turns wait until then.", n, sup.name)})
+		}
+		for rs.Live() > 0 {
+			time.Sleep(quietPoll)
+		}
+	}
+	info := s.info
+	info.Restarting = true
+	raw, _ := json.Marshal(info)
+	core.WriteFileAtomic(s.a.C.WS.DaemonFile(), raw, 0o600)
+	s.exit.Store(int64(sup.status))
+	s.cancel()
 }
 
 // onDisk is the path the new binary sits at: an update renames the running
