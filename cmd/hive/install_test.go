@@ -181,4 +181,11 @@ func TestInstallerUnitIsSandboxed(t *testing.T) {
 			t.Errorf("the unit lacks %s:\n%s", want, unit)
 		}
 	}
+	// Each agent's sandbox mounts a fresh proc in a new user namespace, which
+	// the kernel refuses while /proc or /sys has mounts laid over it.
+	for _, bad := range []string{"ProtectKernelTunables", "ProtectKernelLogs", "ProtectControlGroups", "ProtectProc", "ProcSubset"} {
+		if strings.Contains(string(unit), "\n"+bad+"=") {
+			t.Errorf("the unit sets %s, which stops agents' sandboxes:\n%s", bad, unit)
+		}
+	}
 }

@@ -84,7 +84,8 @@ if [ -n "${HIVE_USER:-}" ]; then
     sh "$tmp/install.sh" || fail "installing as $user stopped (above); the service is left as it was"
 
   # The service runs as the worker and sees only its own home, writable, and
-  # the system read-only; nothing it starts gains privileges.
+  # the system read-only; nothing it starts gains privileges, so a warden's
+  # sudo step can't change the system from it either.
   unit="hive-$user.service"
   {
     printf '[Unit]\nDescription=The Hive of %s\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\n' "$user"
@@ -93,7 +94,11 @@ if [ -n "${HIVE_USER:-}" ]; then
       if [ -f "$f" ]; then printf 'LoadCredential=%s:%s\n' "${f##*/}" "$f"; fi
     done
     printf 'ProtectSystem=strict\nProtectHome=tmpfs\nBindPaths=%s\nPrivateTmp=yes\nNoNewPrivileges=yes\n' "$home"
-    printf 'RestrictSUIDSGID=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectKernelLogs=yes\nProtectControlGroups=yes\nProtectClock=yes\nLockPersonality=yes\n'
+    # Nothing here may lay a mount over /proc or /sys (ProtectKernelTunables,
+    # ProtectKernelLogs, ProtectControlGroups, ProtectProc, ProcSubset): each
+    # agent's sandbox mounts a fresh proc in a new user namespace, which the
+    # kernel refuses while the host's /proc has mounts over it.
+    printf 'RestrictSUIDSGID=yes\nProtectKernelModules=yes\nProtectClock=yes\nLockPersonality=yes\n'
     printf '\n[Install]\nWantedBy=multi-user.target\n'
   } >"$tmp/unit"
   cmp -s "$tmp/unit" "/etc/systemd/system/$unit" || install -m 644 -o root -g root "$tmp/unit" "/etc/systemd/system/$unit"

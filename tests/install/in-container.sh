@@ -30,7 +30,7 @@ mode() { stat -c '%U:%G %a %s' "$1"; }
 # snap lists everything outside the worker's home with its owner, mode, link
 # target and content hash, so two snaps differ if anything there changed.
 snap() {
-  prune='( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path /tmp -o -path /var/tmp -o -path /stage -o -path /home/worker )'
+  prune='( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path /tmp -o -path /var/tmp -o -path /var/log -o -path /stage -o -path /home/worker )'
   # shellcheck disable=SC2086 # prune is split into find's words on purpose
   {
     find / -xdev $prune -prune -o -printf '%p %U %G %m %l\n'
@@ -57,6 +57,12 @@ for want in User=worker "ExecStart=$W/.local/bin/hive daemon" ProtectSystem=stri
 done
 mkdir -p /run/systemd # systemd-analyze wants it; nothing boots systemd here
 systemd-analyze verify $UNIT || fail "systemd-analyze verify"
+# Nothing boots systemd here, so the unit is checked for syntax only. What it
+# must not do is checked by name: lay mounts over /proc or /sys, which stops
+# every agent's sandbox from mounting its own proc.
+for bad in ProtectKernelTunables ProtectKernelLogs ProtectControlGroups ProtectProc ProcSubset; do
+  if grep -q "^$bad=" $UNIT; then fail "the unit sets $bad, which stops agents' sandboxes"; fi
+done
 ok "the unit runs as worker, sandboxed, and verifies"
 [ "$(ls $W/.local/bin)" = hive ] || fail "the installer put more than hive in the worker's bin: $(ls $W/.local/bin)"
 if command -v claude >/dev/null; then fail "a claude is installed"; fi
@@ -134,6 +140,9 @@ grep -q "stopped" /tmp/out || { cat /tmp/out; fail "the stopped rerun doesn't sa
 as_worker sh -c 'rm ~/.local/bin && mv ~/.local/bin.real ~/.local/bin && mv ~/.profile ~/.profile.real && ln -s /etc/profile ~/.profile'
 check_links "home/.profile -> /etc/profile, home/work -> /etc, home/.gitconfig -> a root file" 1
 as_worker sh -c 'rm ~/.profile && mv ~/.profile.real ~/.profile'
+# The installer never writes ~/work or ~/.gitconfig, so this case only shows
+# a clean rerun past those links leaves the system as it was; the two cases
+# above are the ones whose links the installer follows.
 check_links "home/work -> /etc, home/.gitconfig -> a root file" 0
 [ "$(cat /etc/hive-test-root-file)" = "root's own" ] || fail "the root file changed"
 
