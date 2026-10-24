@@ -63,7 +63,7 @@ func designModel(w, h int) *model {
 				Text: "The digest lists runs that stopped but not why the person stopped them."},
 		},
 		Config: core.DefaultConfig(), Version: "0.8.2", Workspace: "/home/you/hive",
-		Stats:  designStats(),
+		Stats: designStats(),
 		Chats: []api.ChatView{
 			{Chat: chat.Chat{ID: "project:textkit-2", Title: "textkit-2", Kind: "project", Project: "textkit-2"}, LeadStatus: "working"},
 			{Chat: chat.Chat{ID: "agent:tk-r", Title: "reviewer", Kind: "agent", Project: "textkit-2"}, Unread: 1},

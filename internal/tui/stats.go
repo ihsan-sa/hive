@@ -108,7 +108,9 @@ func (m *model) statRows(add func(row) bool) {
 		}
 		add(row{key: "all:agents", depth: 1, text: fmt.Sprintf("agents   %d: %s · %d turns", n, strings.Join(roles, " · "), a.Turns)})
 		add(row{key: "all:tokens", depth: 1, text: "tokens   " + tokensText(a.Tokens)})
-		for _, name := range slices.SortedFunc(maps.Keys(a.Models), func(x, y string) int { return cmp.Or(cmp.Compare(a.Models[y].Spend, a.Models[x].Spend), cmp.Compare(x, y)) }) {
+		for _, name := range slices.SortedFunc(maps.Keys(a.Models), func(x, y string) int {
+			return cmp.Or(cmp.Compare(a.Models[y].Spend, a.Models[x].Spend), cmp.Compare(x, y))
+		}) {
 			mu := a.Models[name]
 			add(row{key: "all:model:" + name, depth: 1, text: fmt.Sprintf("%-8s %s · %d turns · %s", text.Visible(cmp.Or(name, "default")), money(mu.Spend), mu.Turns, stDim.Render(tokensText(mu.Tokens)))})
 		}

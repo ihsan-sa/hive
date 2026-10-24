@@ -87,3 +87,54 @@ func TestKnowledgeSection(t *testing.T) {
 		t.Fatalf("search didn't find the record: %+v", m.stack)
 	}
 }
+
+// TestKnowledgeRecentlyUpdated: the top of the Knowledge tab lists the
+// newest and latest-changed entries from the knowledge base's history,
+// each with its title, when, and new or updated, and one opens with enter.
+func TestKnowledgeRecentlyUpdated(t *testing.T) {
+	m := testModel(120, 30)
+	t.Chdir(t.TempDir())
+	m.ws = core.Workspace{Root: "."}
+	dir := m.ws.KB()
+	os.MkdirAll(filepath.Join(dir, "practice"), 0o755)
+	git := func(args ...string) {
+		t.Helper()
+		if _, err := core.Git(dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit := func(hm, name, text string) {
+		t.Helper()
+		os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(text), 0o644)
+		git("add", "-A")
+		when := "2026-10-24T" + hm + ":00Z"
+		t.Setenv("GIT_COMMITTER_DATE", when)
+		t.Setenv("GIT_AUTHOR_DATE", when)
+		git("commit", "-q", "-m", "note")
+	}
+	git("init", "-q", "-b", "main")
+	commit("09:00", "practice/risk.md", "# Risk\n")
+	commit("10:00", "zebra.md", "---\ntitle: The zebra parser splits on tabs\n---\n\nbody\n")
+	commit("11:00", "practice/risk.md", "# Risk\n\nmore\n")
+
+	m.pick(sideRow{sec: secKB})
+	m.focus = 1
+	v := ansi.Strip(m.View())
+	head := strings.Index(v, "Recently updated")
+	risk, zebra, folders := strings.Index(v, "Risk"), strings.Index(v, "The zebra parser"), strings.Index(v, "practice/ ")
+	if head < 0 || risk < head || zebra < risk || folders < zebra {
+		t.Fatalf("want Recently updated, then Risk, then the zebra note, then the folders:\n%s", v)
+	}
+	for _, l := range strings.Split(v, "\n") {
+		if strings.Contains(l, "The zebra parser") && !strings.Contains(l, " new ") ||
+			strings.Contains(l, "Risk ") && !strings.Contains(l, "updated") {
+			t.Fatalf("new or updated is wrong on %q", l)
+		}
+	}
+	checkWidth(t, m.View(), 120, 30, "knowledge recent")
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.stack) != 1 || m.stack[0].id != "zebra.md" || !strings.Contains(m.stack[0].text, "zebra parser") {
+		t.Fatalf("enter on a recent entry didn't open it: %+v", m.stack)
+	}
+}
