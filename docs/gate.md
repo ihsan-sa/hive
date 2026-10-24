@@ -54,4 +54,4 @@ ci's `sandboxed-e2e` job lifts Ubuntu's AppArmor user-namespace restriction and 
 
 ## Runs
 
-`docs/gate-runs/` holds the current code's end-to-end record: a keep run and a rollback run under real bubblewrap, from ci (see its README).
+`docs/gate-runs/` holds a keep run (built from commits) and a rollback run of this code, from the whole-run test run bare in a worker box. The same test under bubblewrap annotates its reports in ci (see the README there).
