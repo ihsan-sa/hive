@@ -117,13 +117,17 @@ func Get(name string) (Harness, error) {
 }
 
 // Names are the harnesses a person can pick.
-var Names = []string{"claude", "open", "fake"}
+var Names = []string{"claude", "codex", "open", "fake"}
 
 // Models are the models a harness knows, the default first. The open
-// harness knows only the models the config names.
+// harness knows only the models the config names. Codex's are those its
+// 0.153 release lists; a Claude model on Codex runs Codex's own default.
 func Models(harness string) []string {
-	if harness == "open" {
+	switch harness {
+	case "open":
 		return nil
+	case "codex":
+		return []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"}
 	}
 	return []string{"opus", "sonnet", "fable", "haiku"}
 }
