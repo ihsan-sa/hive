@@ -3,21 +3,21 @@
    Chats          │   [x] tribunal      all projects          Rules on merges…
    Dashboard      │   [x] warden        all projects          Blocks writes out…
    Waiting     3  │   [x] reviewer      all projects          Reviews every cha…
-   Knowledge      │   [x] memory        textkit-2, hive-web   Keeps notes betwe…
- › Modules        │   [ ] scheduler     off                   Starts agents on …
-   Settings       │   [x] budget        all projects          Asks before runs …
-                  │
- ▾ textkit-2      │   ────────────────────────────────────────────────────────
-   lead           │
-   writer         │   tribunal
-   reviewer    ●  │   Rules on merges that reviewers dispute
- ▾ hive-web       │
-   lead        ●  │   applies to    all projects
-   worker-2       │   release       0.8.2
-   reviewer       │   source        builtin
-   tribunal       │
- ▸ website        │   Install a module by asking the lead (it needs your approv…
-                  │
+   Feedback    1  │   [x] memory        textkit-2, hive-web   Keeps notes betwe…
+   Knowledge      │   [ ] scheduler     off                   Starts agents on …
+ › Modules        │   [x] budget        all projects          Asks before runs …
+   Settings       │
+                  │   ────────────────────────────────────────────────────────
+ ▾ textkit-2      │
+   lead           │   tribunal
+   writer         │   Rules on merges that reviewers dispute
+   reviewer    ●  │
+ ▾ hive-web       │   applies to    all projects
+   lead        ●  │   release       0.8.2
+   worker-2       │   source        builtin
+   reviewer       │
+   tribunal       │   Install a module by asking the lead (it needs your approv…
+ ▸ website        │
                   │
                   │
 ──────────────────┴─────────────────────────────────────────────────────────────
