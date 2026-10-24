@@ -206,6 +206,18 @@ func TestPrefetchReadsOnlyTheCheckout(t *testing.T) {
 		"replace out": func(dir string) {
 			os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\nreplace (\n\texample.com/x => ../../x // out\n)\n"), 0o644)
 		},
+		"replace( with no space": func(dir string) {
+			os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\nreplace(\n\texample.com/x => "+filepath.Dir(secret)+"\n)\n"), 0o644)
+		},
+		"quoted target with a space": func(dir string) {
+			os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\nreplace example.com/x => \"../a b\"\n"), 0o644)
+		},
+		"raw-quoted absolute target": func(dir string) {
+			os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\nreplace example.com/x=>`"+filepath.Dir(secret)+"`\n"), 0o644)
+		},
+		"unreadable target": func(dir string) {
+			os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\nreplace example.com/x => \"/unterminated\n"), 0o644)
+		},
 		"replace through a symlink": func(dir string) {
 			os.Symlink(filepath.Dir(secret), filepath.Join(dir, "sub"))
 			os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\nreplace example.com/x v1.0.0 => ./sub\n"), 0o644)
@@ -230,7 +242,13 @@ func TestPrefetchReadsOnlyTheCheckout(t *testing.T) {
 		t.Fatalf("go's output reached the note: %q", g.note)
 	}
 	// A replace to a plain folder inside the checkout is fine.
-	if why := localReplace(dir, "module m\nreplace example.com/x => ./x\nreplace example.com/y => example.com/z v1.2.3\n"); why != "" {
-		t.Fatal(why)
+	for _, ok := range []string{
+		"module m\nreplace example.com/x => ./x\nreplace example.com/y => example.com/z v1.2.3\n",
+		"module m\nreplace(\n\texample.com/x => \"./a b\" // in the checkout\n)\n",
+		"module m // => /not/a/replace\n",
+	} {
+		if why := localReplace(dir, ok); why != "" {
+			t.Errorf("%q: %s", ok, why)
+		}
 	}
 }

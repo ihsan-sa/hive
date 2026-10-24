@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -165,37 +166,24 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 
 // localReplace says why go.mod's replace directives would lead the go command
 // out of the checkout at dir, or "": a folder target must be relative, stay
-// inside dir and reach it through no symlink.
+// inside dir and reach it through no symlink. It doesn't parse directives or
+// blocks (go accepts "replace(" as well as "replace ("): every line with "=>"
+// outside a comment is a replacement, and the token after it, quoted or not,
+// is its target. A target it can't read refuses the prefetch.
 func localReplace(dir, mod string) string {
-	block := false
 	for _, l := range strings.Split(mod, "\n") {
-		if i := strings.Index(l, "//"); i >= 0 {
-			l = l[:i]
-		}
-		f := strings.Fields(l)
-		switch {
-		case len(f) == 0:
-			continue
-		case block && f[0] == ")":
-			block = false
-			continue
-		case f[0] == "replace" && len(f) == 2 && f[1] == "(":
-			block = true
-			continue
-		case f[0] == "replace":
-			f = f[1:]
-		case !block:
+		_, rest, ok := cutArrow(l)
+		if !ok {
 			continue
 		}
-		i := slices.Index(f, "=>")
-		if i < 0 || i+1 >= len(f) {
-			continue
+		target, ok := firstToken(rest)
+		if !ok {
+			return "a replace in go.mod can't be read"
 		}
-		target := strings.Trim(f[i+1], `"`+"`")
-		if !strings.HasPrefix(target, "./") && !strings.HasPrefix(target, "../") && !filepath.IsAbs(target) && target != "." && target != ".." && !strings.HasPrefix(target, "/") {
+		if !dirPath(target) {
 			continue // a module path, fetched from the proxy
 		}
-		if filepath.IsAbs(target) || strings.HasPrefix(target, "/") {
+		if strings.ContainsAny(target, `\:`) || strings.HasPrefix(target, "/") {
 			return "a replace names a folder outside the checkout"
 		}
 		joined := filepath.Join(dir, target)
@@ -212,6 +200,79 @@ func localReplace(dir, mod string) string {
 		}
 	}
 	return ""
+}
+
+// cutArrow finds the first "=>" on a go.mod line outside quotes and before a
+// comment, and returns what follows it.
+func cutArrow(l string) (before, after string, ok bool) {
+	for i := 0; i < len(l); i++ {
+		switch {
+		case l[i] == '"' || l[i] == '`':
+			j := closing(l, i)
+			if j < 0 {
+				return "", "", false
+			}
+			i = j
+		case strings.HasPrefix(l[i:], "//"):
+			return "", "", false
+		case strings.HasPrefix(l[i:], "=>"):
+			return l[:i], l[i+2:], true
+		}
+	}
+	return "", "", false
+}
+
+// closing is the index of the quote closing the string that starts at i, or -1.
+func closing(l string, i int) int {
+	q := l[i]
+	for j := i + 1; j < len(l); j++ {
+		if q == '"' && l[j] == '\\' {
+			j++
+			continue
+		}
+		if l[j] == q {
+			return j
+		}
+	}
+	return -1
+}
+
+// firstToken reads the first go.mod token of s, unquoting a quoted one. An
+// unquoted token ends at a space, a parenthesis or a comment.
+func firstToken(s string) (string, bool) {
+	s = strings.TrimLeft(s, " \t\r")
+	if s == "" {
+		return "", false
+	}
+	if s[0] == '"' || s[0] == '`' {
+		j := closing(s, 0)
+		if j < 0 {
+			return "", false
+		}
+		if s[0] == '`' {
+			return s[1:j], true
+		}
+		t, err := strconv.Unquote(s[:j+1])
+		return t, err == nil
+	}
+	end := strings.IndexAny(s, " \t\r()")
+	if c := strings.Index(s, "//"); c >= 0 && (end < 0 || c < end) {
+		end = c
+	}
+	if end == 0 {
+		return "", false
+	}
+	if end > 0 {
+		s = s[:end]
+	}
+	return s, true
+}
+
+// dirPath reports whether a replace target is a folder, as the go command
+// reads one (modfile.IsDirectoryPath), or could be on some system.
+func dirPath(t string) bool {
+	return t == "." || t == ".." || strings.HasPrefix(t, "./") || strings.HasPrefix(t, "../") || strings.HasPrefix(t, "/") ||
+		strings.HasPrefix(t, `.\`) || strings.HasPrefix(t, `..\`) || strings.HasPrefix(t, `\`) || len(t) >= 2 && t[1] == ':'
 }
 
 // prefetch downloads what dir's go.mod and go.sum name into the shared cache.
