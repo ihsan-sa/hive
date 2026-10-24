@@ -786,9 +786,11 @@ func (GitHub) CreateRelease(repo, tag, sha, notes string) error {
 	return err
 }
 
-// TagCommit peels an annotated tag to its commit.
+// TagCommit peels an annotated tag to its commit. The ref is spelled in full:
+// GitHub answers commits/tags/<tag> with a 422 (checked live on git/git's
+// annotated v2.0.0, which commits/refs/tags/ peels to e156455).
 func (GitHub) TagCommit(repo, tag string) (string, error) {
-	return gh(repo, "api", "repos/"+repo+"/commits/tags/"+tag, "-q", ".sha")
+	return gh(repo, "api", "repos/"+repo+"/commits/refs/tags/"+tag, "-q", ".sha")
 }
 
 // ReleaseRuns are the runs a release event started at sha (a release's runs
@@ -847,7 +849,9 @@ func Short(sha string) string { return short(sha) }
 
 // RerunFailed re-runs the failed jobs (gh run rerun --failed) of each
 // finished workflow run on sha that failed, timed out or was cancelled. A run
-// still going, or one going again, is left alone.
+// still going, or one going again, is left alone, and so is one that never
+// started (startup_failure, action_required): GitHub won't re-run its jobs,
+// since there are none, and a broken workflow file fails the same way again.
 func (GitHub) RerunFailed(repo, sha string) (int, error) {
 	out, err := gh(repo, "api", "repos/"+repo+"/actions/runs?head_sha="+sha+"&per_page=100", "-q", ".workflow_runs")
 	if err != nil {

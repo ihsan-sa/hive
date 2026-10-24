@@ -926,6 +926,32 @@ func TestPlanUsageEscapesFeedNames(t *testing.T) {
 	}
 }
 
+// Each login shows its expiry and last renewal, and one that can't renew
+// says so on the dashboard and in the usage line, with what to run.
+func TestLoginsShowExpiryAndRenewal(t *testing.T) {
+	m := testModel(200, 40)
+	exp, renewed := time.Now().Add(3*time.Hour), time.Now().Add(-5*time.Hour)
+	m.st.Logins = []core.LoginState{
+		{Login: "claude", Expires: exp, Renewed: renewed},
+		{Login: "claude:work", Expires: exp, Error: "`claude` not found\x1b[2J", Run: "install Claude Code"},
+	}
+	var dash []string
+	for _, r := range m.dashRows() {
+		if strings.HasPrefix(r.key, "login:") {
+			dash = append(dash, r.text)
+		}
+	}
+	if len(dash) != 2 || !strings.Contains(dash[0], "expires "+exp.Local().Format("Mon 15:04")) || !strings.Contains(dash[0], "renewed "+renewed.Local().Format("Mon 15:04")) {
+		t.Fatalf("a login shows its expiry and last renewal: %q", dash)
+	}
+	if !strings.Contains(dash[1], "can't renew") || !strings.Contains(dash[1], "install Claude Code") || strings.ContainsRune(dash[1], 0x1b) {
+		t.Fatalf("a login that can't renew says why and what to run: %q", dash[1])
+	}
+	if u := m.usage(400); !strings.Contains(u, "claude:work login can't renew") {
+		t.Fatalf("the usage line says a login can't renew: %q", u)
+	}
+}
+
 // A role's route is set from a pick-list, never typed: each known model can
 // be added at the end or removed, and clear gives the role back its model
 // settings.
@@ -1040,5 +1066,23 @@ func TestReconnectShowsTheNewVersion(t *testing.T) {
 	m.Update(stateMsg{st: st})
 	if v := m.View(); strings.Contains(v, "isn't answering") || m.st.Version != "v9.9.9" {
 		t.Fatalf("after reconnecting (version %s):\n%s", m.st.Version, v)
+	}
+}
+
+// The dashboard says which release the Hive runs and how far behind the
+// newest it is, once a look for an update has found out.
+func TestReleaseText(t *testing.T) {
+	for _, c := range []struct {
+		st   api.State
+		want string
+	}{
+		{api.State{Version: "v0.1.27"}, ""},
+		{api.State{Version: "v0.1.35", Newest: "v0.1.35"}, "On v0.1.35, the newest release"},
+		{api.State{Version: "v0.1.34", Newest: "v0.1.35", Behind: 1}, "On v0.1.34, 1 release behind v0.1.35"},
+		{api.State{Version: "v0.1.27", Newest: "v0.1.35", Behind: 8}, "On v0.1.27, 8 releases behind v0.1.35"},
+	} {
+		if got := releaseText(c.st); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.st, got, c.want)
+		}
 	}
 }

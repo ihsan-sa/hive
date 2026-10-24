@@ -1031,3 +1031,18 @@ func TestGitHubLogStamp(t *testing.T) {
 		t.Errorf("%v", got)
 	}
 }
+
+// A failed job's excerpt is the end of the step that failed: up to its error
+// mark, never before that step's start, and nothing of the steps after it.
+func TestLogExcerpt(t *testing.T) {
+	log := "##[group]Run setup\nsetup\n##[group]Run go test\na\nb\n--- FAIL: TestX\n##[error]Process completed with exit code 1.\n##[group]Run post\npost\n"
+	if got := LogExcerpt(log, 100); got != "##[group]Run go test\na\nb\n--- FAIL: TestX\n##[error]Process completed with exit code 1." {
+		t.Fatalf("excerpt %q", got)
+	}
+	if got := LogExcerpt(log, 2); got != "--- FAIL: TestX\n##[error]Process completed with exit code 1." {
+		t.Fatalf("clipped excerpt %q", got)
+	}
+	if got := LogExcerpt("one\ntwo\nthree\n", 2); got != "two\nthree" {
+		t.Fatalf("no error mark: %q", got)
+	}
+}

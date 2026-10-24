@@ -103,7 +103,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 		}
 		return "updated " + join(changed), nil
 	}})
-	a.Release.Busy = a.Work.MidMerge
+	a.Release.PauseMerges = a.Work.PauseMerges
 	a.System.Register(system.Job{Name: "hive.update", AtStart: true, Fn: a.Release.AutoUpdate})
 	a.System.Register(system.Job{Name: "report.send", Fn: (&report.Module{C: c}).Send})
 	return a, nil
@@ -129,6 +129,7 @@ func (a *App) Tick() {
 // Run ticks until ctx ends.
 func (a *App) Run(ctx context.Context) {
 	a.Improve.Recover()
+	go a.C.WatchLogins(ctx, time.Minute)
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for {

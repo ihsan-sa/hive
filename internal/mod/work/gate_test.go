@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -269,8 +270,10 @@ func TestDraftWaitsForItsRead(t *testing.T) {
 	if n := strings.Count(fmt.Sprint(task.Log), draftWait); n != 1 || !task.Updated.Equal(updated) {
 		t.Fatalf("the wait was logged %d times, saved again %v: %v", n, !task.Updated.Equal(updated), task.Log)
 	}
-	if got, _ := m.Get(task.ID); got.Stage != StageMerging || m.MidMerge() {
-		t.Fatalf("a waiting draft holds up an update: stage %q, mid-merge %v", got.Stage, m.MidMerge())
+	resume, ok := m.PauseMerges(0)
+	resume()
+	if got, _ := m.Get(task.ID); got.Stage != StageMerging || !ok {
+		t.Fatalf("a waiting draft holds up an update: stage %q, merges paused %v", got.Stage, ok)
 	}
 	if m.due(*task) {
 		t.Fatal("a waiting draft is looked at again before its next look")
@@ -293,13 +296,113 @@ func TestDraftWaitsForItsRead(t *testing.T) {
 	}
 }
 
-// A task merging on a PR that isn't a draft is mid-merge, so an update waits.
-func TestMidMergeCountsAReadyPR(t *testing.T) {
-	m, task, _, _ := gateRig(t, false, map[string]string{"x.txt": "x\n"})
-	task.Stage = StageMerging
-	m.save(task, "merging")
-	if !m.MidMerge() {
-		t.Fatal("a merging task isn't mid-merge")
+// An update's pause holds a ready merge at the gate, in merging, without a
+// failure; once the gate opens (or after the restart) it merges.
+func TestPausedMergeWaitsAtTheGate(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	resume, ok := m.PauseMerges(0)
+	if !ok {
+		t.Fatal("nothing was merging, yet the pause timed out")
+	}
+	m.settle(task, m.step(task))
+	if task.Stage != StageMerging || task.Failures != 0 || task.MergeSHA != "" {
+		t.Fatalf("merged through a shut gate: stage %q, failures %d", task.Stage, task.Failures)
+	}
+	resume()
+	m.mu.Lock()
+	delete(m.later, task.ID)
+	m.mu.Unlock()
+	m.settle(task, m.step(task))
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q after the gate opened, reason %q", task.Stage, task.Reason)
+	}
+}
+
+// A merge already running when an update pauses merges finishes and is
+// recorded before the pause returns.
+func TestPauseWaitsForTheRunningMerge(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	inside, finish := make(chan struct{}), make(chan struct{})
+	m.OnMerged = func(Task) { close(inside); <-finish } // runs past the gate, before the merge leaves it
+	stepped := make(chan error, 1)
+	go func() { stepped <- m.step(task) }()
+	<-inside
+	paused := make(chan bool, 1)
+	go func() { _, ok := m.PauseMerges(10 * time.Second); paused <- ok }()
+	select {
+	case <-paused:
+		t.Fatal("the pause returned while a merge was still running")
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(finish)
+	if !<-paused {
+		t.Fatal("the pause timed out though the merge ended")
+	}
+	if err := <-stepped; err != nil || task.Stage != StageMerged {
+		t.Fatalf("stage %q, err %v", task.Stage, err)
+	}
+	if got, _ := m.Get(task.ID); got.Stage != StageMerged {
+		t.Fatalf("the merge wasn't recorded before the pause returned: %q", got.Stage)
+	}
+}
+
+// A steady stream of merges can't starve an update: the pause shuts the gate
+// to new ones and waits only for those running, however many more come.
+func TestMergeStreamDoesNotStarveAPause(t *testing.T) {
+	m := &Module{}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if m.enterMerge() {
+					time.Sleep(20 * time.Millisecond)
+					m.leaveMerge()
+				} else {
+					time.Sleep(time.Millisecond)
+				}
+			}
+		}()
+	}
+	defer func() { close(stop); wg.Wait() }()
+	time.Sleep(50 * time.Millisecond)
+	start := time.Now()
+	resume, ok := m.PauseMerges(5 * time.Second)
+	if !ok || time.Since(start) > 2*time.Second {
+		t.Fatalf("paused %v after %v", ok, time.Since(start))
+	}
+	if m.enterMerge() {
+		t.Fatal("a new merge started through a shut gate")
+	}
+	resume()
+	if !m.enterMerge() {
+		t.Fatal("the gate stayed shut after resume")
+	}
+	m.leaveMerge()
+}
+
+// A merge that outlasts the wait is reported, so the update keeps waiting
+// for its next look instead of restarting mid-merge.
+func TestPauseGivesUpOnALongMerge(t *testing.T) {
+	m := &Module{}
+	m.enterMerge()
+	resume, ok := m.PauseMerges(150 * time.Millisecond)
+	resume()
+	if ok {
+		t.Fatal("the pause says no merge is running")
 	}
 }
 
