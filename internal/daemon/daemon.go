@@ -892,6 +892,7 @@ func (s *server) state() api.State {
 	a := s.a
 	cfg, cfgErr := a.C.WS.ReadConfig()
 	st := api.State{Version: core.Version, Channel: a.Release.Channel(), Seq: a.C.J.Seq(), Workspace: a.C.WS.Root, Config: cfg}
+	st.Newest, st.Behind = a.Release.Lag()
 	if sb, err := a.C.Sandbox(); err != nil {
 		st.SandboxErr = err.Error()
 	} else {

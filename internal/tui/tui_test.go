@@ -1042,3 +1042,21 @@ func TestReconnectShowsTheNewVersion(t *testing.T) {
 		t.Fatalf("after reconnecting (version %s):\n%s", m.st.Version, v)
 	}
 }
+
+// The dashboard says which release the Hive runs and how far behind the
+// newest it is, once a look for an update has found out.
+func TestReleaseText(t *testing.T) {
+	for _, c := range []struct {
+		st   api.State
+		want string
+	}{
+		{api.State{Version: "v0.1.27"}, ""},
+		{api.State{Version: "v0.1.35", Newest: "v0.1.35"}, "On v0.1.35, the newest release"},
+		{api.State{Version: "v0.1.34", Newest: "v0.1.35", Behind: 1}, "On v0.1.34, 1 release behind v0.1.35"},
+		{api.State{Version: "v0.1.27", Newest: "v0.1.35", Behind: 8}, "On v0.1.27, 8 releases behind v0.1.35"},
+	} {
+		if got := releaseText(c.st); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.st, got, c.want)
+		}
+	}
+}
