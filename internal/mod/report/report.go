@@ -38,12 +38,19 @@ const (
 // word: it names everything a report holds, so the person agrees to what is
 // really sent. TestQuestionSaysWhatIsSent holds it to Report and the caps.
 // The installers quote it, so it has no ' " ` $ % or \.
-const Question = "Send failure reports to the Hive developer so they get fixed? " +
+const Question = "Send failure and usage reports to the Hive developer so problems get fixed? " +
 	"Each failure report holds what failed, when and why (up to 2,000 characters), " +
 	"and the agent reply or the last lines of the task log (up to 4,000 characters). " +
-	"A usage report counts runs, turns, merges, reverts, cost and dropped reports, with the harness name. " +
+	"A usage report counts runs, turns, merges, reverts, cost and dropped reports, with the harness name and the time span it covers. " +
 	"Every report has the Hive version, the OS and a random install id. " +
 	"Secrets, emails and your home folder are scrubbed on this machine first."
+
+// WhatIsSent is the question without its ask: what a report holds, for
+// saying once sharing is on.
+func WhatIsSent() string {
+	_, what, _ := strings.Cut(Question, "? ")
+	return what
+}
 
 // Report is one request body, a usage report or one failure.
 type Report struct {
@@ -261,7 +268,24 @@ func failure(cfg core.Config, f Failure, root string) Report {
 	}
 	return Report{Install: cfg.InstallID, Version: Version(), Type: "failure", Kind: clean(strings.ToLower(kind), notKind, 64, "unknown"),
 		OS: runtime.GOOS + "/" + runtime.GOARCH, At: f.At.UTC().Format(time.RFC3339),
-		Message: core.Clip(Scrub(f.Text, root), maxText), Log: core.Clip(Scrub(f.Excerpt, root), maxExcerpt)}
+		Message: core.Clip(Scrub(f.Text, root), maxText), Log: clipLines(Scrub(f.Excerpt, root), maxExcerpt)}
+}
+
+// clipLines clips a log to n characters as core.Clip does, keeping its line
+// breaks so the report reads as the log did: each line's spaces are squashed
+// and blank lines dropped.
+func clipLines(s string, n int) string {
+	var lines []string
+	for l := range strings.Lines(s) {
+		if l = strings.Join(strings.Fields(l), " "); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	s = strings.Join(lines, "\n")
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
 }
 
 // Build reads the journal since the last run that queued reports, from when

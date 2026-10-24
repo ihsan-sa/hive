@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -126,6 +127,7 @@ type Task struct {
 	IssueOpen  bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
 	Noted      string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
 	NotedDiff  string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
+	HoldSaid   string    `json:"hold_said,omitempty"`  // the HoldKey of the hold the PR was last told of
 	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
 	Gate    *core.GateResult `json:"gate,omitempty"`
 	Log     []Entry          `json:"log,omitempty"`
@@ -202,6 +204,7 @@ type Module struct {
 	mainRed map[string]bool
 	// later is when a held task (waiting on the forge's checks or an outside
 	// read) is next looked at; kept in memory, so a restart looks at once.
+	// Guarded by mu: due reads it with mu held, hold takes mu itself.
 	later map[string]time.Time
 	// stats caches each project's ReadStats a minute (reads.go).
 	statsMu sync.Mutex
@@ -1267,25 +1270,15 @@ func (m *Module) noteTests(t *Task, p core.Project, main string, c core.Check) e
 }
 
 // ownDiff identifies what a PR's head changes against main, whatever main
-// changed meanwhile: its changed lines with no context, line numbers or blob
-// ids. It is "" when git can't tell.
+// changed meanwhile: the DiffID its reads are bound to. It is "" when git
+// can't tell.
 func (m *Module) ownDiff(p core.Project, main, sha string) string {
 	dir := m.C.WS.Project(p.Name)
 	base, err := core.Git(dir, "merge-base", main, sha)
 	if err != nil {
 		return ""
 	}
-	out, err := core.Git(dir, "diff", "--no-color", "--no-renames", "-U0", base, sha)
-	if err != nil {
-		return ""
-	}
-	h := sha256.New()
-	for _, l := range strings.Split(out, "\n") {
-		if !strings.HasPrefix(l, "index ") && !strings.HasPrefix(l, "@@") {
-			h.Write([]byte(l + "\n"))
-		}
-	}
-	return hex.EncodeToString(h.Sum(nil))[:16]
+	return core.DiffID(core.OwnDiff(dir, base, sha))
 }
 
 // mainTests is main's own test result, measured once per main commit (the
@@ -1838,15 +1831,22 @@ func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 	case pr.MergeState == "BEHIND":
 		return m.catchUp(t, p, main, "main moved and the forge wants the branch up to date")
 	case pr.Mergeable != "MERGEABLE":
-		m.mu.Lock()
-		m.later[t.ID] = time.Now().Add(holdGap)
-		m.mu.Unlock()
+		// Said as a wait, so one that never resolves reaches the lead
+		// through the stall watcher like any other.
+		state := pr.Mergeable
+		if state == "" {
+			state = "not reported"
+		}
+		m.hold(t, p, "waiting for the forge to work out whether PR #"+fmt.Sprint(t.PR.Number)+" merges cleanly with main (mergeable "+state+", main at "+core.Short(main)+")")
 		return true, nil
 	}
 	return false, nil
 }
 
-// hold keeps t where it is for why, saying so on the PR once.
+// hold keeps t where it is for why, saying so on the PR once per HoldKey: the
+// pending checks listed in why change as they finish, which is no new hold.
+// A wait that lasts is the stall watcher's to raise (improve). It takes m.mu,
+// so it is never called with m.mu held.
 func (m *Module) hold(t *Task, p core.Project, why string) {
 	m.mu.Lock()
 	m.later[t.ID] = time.Now().Add(holdGap)
@@ -1856,8 +1856,17 @@ func (m *Module) hold(t *Task, p core.Project, why string) {
 	}
 	t.Reason = why
 	m.save(t, why)
-	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Holding the merge: "+why+".")
+	if key := HoldKey(why); key != t.HoldSaid {
+		t.HoldSaid = key
+		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Holding the merge: "+why+".")
+	}
 }
+
+var parenthetical = regexp.MustCompile(` ?\([^()]*\)`)
+
+// HoldKey is what a hold's reason waits on, its parentheticals (the checks
+// still pending, when a run started, where main is) left out.
+func HoldKey(why string) string { return parenthetical.ReplaceAllString(why, "") }
 
 // forgeChecks holds t until the forge's own checks (CI on every platform,
 // which the Hive's own test doesn't cover) pass on exactly the head it would
@@ -1917,6 +1926,22 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+" ("+names+")"+onMain)
 		return true, nil
 	case core.CheckCantStart:
+		// A run cancelled on this very head (CI's concurrency group, a
+		// runner lost) gets one re-run of its own before anyone hears of it.
+		if t.Reruns[t.SHA] == 0 && !slices.ContainsFunc(which, func(r core.CheckRun) bool { return r.Detail != "cancelled" }) {
+			if n, err := m.C.Effects.Forge.RerunFailed(p.Repo, t.SHA); err != nil {
+				return true, err
+			} else if n > 0 {
+				if t.Reruns == nil {
+					t.Reruns = map[string]int{}
+				}
+				t.Reruns[t.SHA]++
+				t.RerunAt = time.Now().UTC()
+				m.save(t, "re-ran the forge's checks "+names+" on "+core.Short(t.SHA)+", cancelled before they finished")
+				m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+names+"), cancelled before they finished")
+				return true, nil
+			}
+		}
 		why := "the forge's checks " + names + " can't start on " + core.Short(t.SHA) + ", which is the environment's fault, not the change's; waiting for them to run" + onMain
 		if t.Reason != why {
 			m.raiseOnce(p, t.SHA+"/checks", "the forge's checks "+names+" can't start in "+p.Name+" (PR #"+fmt.Sprint(t.PR.Number)+" at "+core.Short(t.SHA)+"): "+checkDetail(which))
