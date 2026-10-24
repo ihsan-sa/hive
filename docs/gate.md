@@ -47,6 +47,6 @@ ci's `sandboxed-e2e` job lifts Ubuntu's AppArmor user-namespace restriction and 
 
 `docs/gate-runs/` holds runs of earlier versions of the gate (see its README); none is of the current code.
 
-## First run of the e2e probe
+## First run of the e2e probe (an earlier, bare version)
 
-`docs/gate-runs/e2e-probe-flaky-module-lifecycle.md`: a docs-only candidate with the base's e2e suite run against its binary failed `TestModuleLifecycle` once (the control passed it), and the gate rolled it back as a regression. The gate is working as designed, but a flaky e2e test costs a candidate its keep; the answer is to fix or quarantine the flaky test, and to run with `--reps` of 2 or more so one flake shows as a pass-rate difference rather than a bare failure.
+`docs/gate-runs/e2e-probe-flaky-module-lifecycle.md` comes from an earlier version of the gate: bare, with no allowlist sandbox, no separate evaluator sandbox and no meter, so it does not show the current code. In it, a docs-only candidate with the base's e2e suite run against its binary failed `TestModuleLifecycle` once (the control passed it), and the gate rolled it back as a regression. The gate is working as designed, but a flaky e2e test costs a candidate its keep; the answer is to fix or quarantine the flaky test, and to run with `--reps` of 2 or more so one flake shows as a pass-rate difference rather than a bare failure.
