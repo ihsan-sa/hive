@@ -425,14 +425,15 @@ const flakeWindow = 72 * time.Hour
 
 // seenElsewhere is, for a merge whose red tests stayed red when what failed
 // ran again (measure does that), what makes it a flake anyway: every test
-// that failed also failed on main or on another change before this one
-// merged. It raises an alert for one; "" means the merge broke them.
+// that failed also failed on main before this one merged. Only main's own
+// checks count: a candidate's code can print any test name it likes. It
+// raises an alert for one; "" means the merge broke them.
 func (m *Module) seenElsewhere(p core.Project, t work.Task) string {
 	c, ok := m.C.Effects.GetCheck(p.Name, t.MergeSHA, "retest")
 	if !ok || c.OK {
 		c, _ = m.C.Effects.GetCheck(p.Name, t.MergeSHA, "test")
 	}
-	where := m.failedBefore(p.Name, t, c.Failed)
+	where := m.failedBefore(p.Name, t, c.Failed, m.C.Effects.MainLine(p))
 	if where == "" {
 		return ""
 	}
@@ -442,11 +443,11 @@ func (m *Module) seenElsewhere(p core.Project, t work.Task) string {
 	return flake
 }
 
-// failedBefore says where every one of names also failed at a commit that
-// can't carry t's change: checked before t first merged (a checkpoint
-// counts), and none of t's own heads or checkpoints.
+// failedBefore says where every one of names also failed at a commit on
+// main that can't carry t's change: checked before t first merged (a
+// checkpoint counts), and none of t's own heads or checkpoints.
 // It returns "" when any of them failed only here.
-func (m *Module) failedBefore(project string, t work.Task, names []string) string {
+func (m *Module) failedBefore(project string, t work.Task, names []string, main map[string]bool) string {
 	if len(names) == 0 {
 		return ""
 	}
@@ -472,7 +473,7 @@ func (m *Module) failedBefore(project string, t work.Task, names []string) strin
 	for _, n := range names {
 		found := ""
 		for _, c := range m.fails[project] {
-			if c.SHA != t.MergeSHA && c.At.Before(merged) && !slices.Contains(m.heads[t.ID], c.SHA) && slices.Contains(c.Failed, n) {
+			if c.SHA != t.MergeSHA && main[c.SHA] && c.At.Before(merged) && !slices.Contains(m.heads[t.ID], c.SHA) && slices.Contains(c.Failed, n) {
 				found = "at " + core.Short(c.SHA)
 			}
 		}

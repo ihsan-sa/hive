@@ -508,7 +508,7 @@ func (m *Module) settle(t *Task, err error) {
 	t.Retry = time.Now().Add(time.Duration(min(t.Failures, 6)) * 30 * time.Second)
 	msg := err.Error()
 	if t.Failures >= 8 {
-		m.giveUp(t, "gave up after repeated errors: "+msg)
+		m.giveUp(t, gaveUpOnErrors+msg)
 		return
 	}
 	m.save(t, "error (will retry): "+core.Clip(msg, 300))
@@ -558,8 +558,14 @@ func (m *Module) status(t *Task, p core.Project, number int, text string) {
 	}
 }
 
+// gaveUpOnErrors starts the reason of a task stopped by its own steps'
+// errors. Only that reason is the Hive's own words: others quote reviewer
+// findings, which a worker's code can fill with anything.
+const gaveUpOnErrors = "gave up after repeated errors: "
+
 // revive brings back the tasks GitHub's rate limit stopped, from before it
-// was waited out, once the pause is over.
+// was waited out, once the pause is over. Only a stop on repeated errors
+// counts, so findings that say "rate limit" can't reset the review rounds.
 func (m *Module) revive() {
 	m.mu.Lock()
 	paused := time.Now().Before(m.limit)
@@ -568,7 +574,7 @@ func (m *Module) revive() {
 		return
 	}
 	for _, t := range m.List(func(t Task) bool {
-		return t.Stage == StageStopped && !t.ByPerson && core.IsRateLimit(t.Reason)
+		return t.Stage == StageStopped && !t.ByPerson && strings.HasPrefix(t.Reason, gaveUpOnErrors) && core.IsRateLimit(strings.TrimPrefix(t.Reason, gaveUpOnErrors))
 	}) {
 		if m.workerStopped(t) {
 			continue

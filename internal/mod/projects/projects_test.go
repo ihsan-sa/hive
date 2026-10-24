@@ -2,6 +2,7 @@ package projects
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -48,5 +49,43 @@ func TestCreateRefusesAnUnknownSharing(t *testing.T) {
 	m := &Module{C: &core.Core{}}
 	if _, _, err := m.Create(Spec{Name: "x", Sharing: "public"}); err == nil || !strings.Contains(err.Error(), "sharing is one of") {
 		t.Errorf("an unknown level: %v", err)
+	}
+}
+
+// A hidden project's lead can't carry its text out as a new project's name,
+// description or goals: nothing is made and nothing reaches the record.
+func TestHiddenLeadCannotCreateProjects(t *testing.T) {
+	dir := t.TempDir()
+	ws := core.Workspace{Root: filepath.Join(dir, "hive")}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	forge := &core.Local{Dir: filepath.Join(dir, "forge")}
+	c, err := core.Open(ws, forge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	m := &Module{C: c}
+	for _, level := range []core.Project{{Name: "walled", Repo: "me/walled", Isolated: true}, {Name: "quiet", Repo: "me/quiet", Private: true}} {
+		if _, err := c.Projects.Add(level); err != nil {
+			t.Fatal(err)
+		}
+		lead := core.Run{ID: "lead-" + level.Name, Role: "lead", Project: level.Name}
+		args := `{"name":"secret-out","description":"SECRET TEXT","goals":"SECRET GOALS","sharing":"shared"}`
+		if _, err := m.opCreate(lead, json.RawMessage(args)); err == nil {
+			t.Fatalf("%s's lead created a project", level.Name)
+		}
+		if _, ok := c.Projects.Get("secret-out"); ok {
+			t.Fatalf("%s's text reached the project list", level.Name)
+		}
+		for _, e := range c.J.Since(0) {
+			if strings.Contains(string(e.Data), "SECRET") {
+				t.Fatalf("%s's text reached the record: %s", level.Name, e.Data)
+			}
+		}
+		if empty, err := forge.IsEmpty("me/secret-out"); err == nil && !empty {
+			t.Fatalf("%s's text reached the forge", level.Name)
+		}
 	}
 }

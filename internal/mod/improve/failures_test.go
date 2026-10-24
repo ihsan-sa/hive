@@ -2,6 +2,7 @@ package improve
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,11 +54,11 @@ func TestRedNamesTheFailingTests(t *testing.T) {
 func TestRerunRunsOnlyWhatFailed(t *testing.T) {
 	fs := failures(goRed)
 	got := rerunCommand("go vet ./... && go test -short -timeout 10m -run Foo ./...", fs[:1])
-	want := "go test -short -timeout 10m -count=1 -run '^(TestJoinMidStepHearsTheResult|TestTable)$' example.com/h/internal/mod/risk"
+	want := "go test -short -timeout 10m -count=1 -run '^(TestJoinMidStepHearsTheResult|TestTable)$' 'example.com/h/internal/mod/risk'"
 	if got != want {
 		t.Fatalf("rerun\n %q\nwant\n %q", got, want)
 	}
-	if got := rerunCommand("go test ./...", fs); got != "go test -count=1 example.com/h/internal/mod/risk example.com/h/internal/mod/chat" {
+	if got := rerunCommand("go test ./...", fs); got != "go test -count=1 'example.com/h/internal/mod/risk' 'example.com/h/internal/mod/chat'" {
 		t.Fatalf("a panic outside a test reruns the whole package: %q", got)
 	}
 	if got := rerunCommand("make test", fs); got != "make test" {
@@ -103,5 +104,32 @@ func TestFlakeIsKeptAndBreakIsReverted(t *testing.T) {
 	rev := m.Work.List(func(t work.Task) bool { return t.Kind == "revert" })
 	if len(rev) != 1 || !strings.Contains(rev[0].Lesson, "the tests went red after it merged: FAIL example.com/p/race: TestBroke (race_test.go:9: late)") {
 		t.Fatalf("revert lesson: %+v", rev)
+	}
+}
+
+// A failing test name the candidate's code printed never reaches the rerun's
+// shell line as code: a printed "--- FAIL: x)$';true;#" would make the rerun
+// exit 0 and a real break count as a flake.
+func TestRerunNeverRunsAPrintedName(t *testing.T) {
+	out := "--- FAIL: x)$';true;#\nFAIL\nFAIL\texample.com/h/p\t0.1s\n"
+	fs := failures(out)
+	if len(fs) != 1 || len(fs[0].Tests) != 1 {
+		t.Fatalf("failures %+v", fs)
+	}
+	cmd := rerunCommand("go test ./...", fs)
+	if strings.Contains(cmd, "true") {
+		t.Fatalf("the printed name reached the rerun: %q", cmd)
+	}
+	// A real break: go fails every time it runs, so the rerun must fail too.
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	sh := exec.Command("sh", "-c", cmd)
+	sh.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
+	if err := sh.Run(); err == nil {
+		t.Fatalf("the rerun %q passed on a real break", cmd)
+	}
+	// A package name is held to the same.
+	if cmd := rerunCommand("go test ./...", []failure{{Pkg: "a/b;true", Tests: []string{"TestX"}}}); cmd != "go test ./..." {
+		t.Fatalf("an odd package name reached the rerun: %q", cmd)
 	}
 }
