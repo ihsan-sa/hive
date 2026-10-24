@@ -125,6 +125,36 @@ func TestCloseIssueGivesUp(t *testing.T) {
 	}
 }
 
+// While GitHub is unreachable a task's gaps grow to a ceiling and it's never
+// stopped; the first step that gets through wakes every waiting task at once.
+func TestOutageBacksOffAndWakes(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	var gaps []time.Duration
+	for range 20 {
+		m.settle(task, errors.New("dial tcp: lookup api.github.com: no such host"))
+		gaps = append(gaps, time.Until(task.Retry).Round(time.Second))
+	}
+	why := "can't reach GitHub: no internet connection"
+	if task.Stage != StageLanding || task.Failures != 0 || m.Offline() != why || !logged(task, why+"; retrying") {
+		t.Fatalf("stage %q, failures %d, offline %q, log %v", task.Stage, task.Failures, m.Offline(), task.Log)
+	}
+	if gaps[0] != 30*time.Second || gaps[1] != time.Minute || gaps[4] != 8*time.Minute || gaps[5] != 10*time.Minute || gaps[19] != 10*time.Minute {
+		t.Fatalf("gaps %v", gaps)
+	}
+	if m.due(*task) {
+		t.Fatal("due inside its gap while offline")
+	}
+	m.settle(&Task{ID: "t2"}, nil) // another task's step got through
+	if m.Offline() != "" || !m.due(*task) {
+		t.Fatalf("offline %q, due %v once back", m.Offline(), m.due(*task))
+	}
+	// A real error after the outage counts from zero and keeps its own gap.
+	m.settle(task, errors.New("HTTP 422"))
+	if task.Failures != 1 || task.Stage != StageLanding || m.due(*task) {
+		t.Fatalf("failures %d, stage %q, due %v", task.Failures, task.Stage, m.due(*task))
+	}
+}
+
 // A done task whose project is gone drops its pending close and stays done.
 func TestDoneProjectGone(t *testing.T) {
 	m, _, task, _ := noCommitRig(t, 0)

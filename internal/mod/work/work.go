@@ -122,8 +122,11 @@ type Module struct {
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
 	mainRed map[string]bool
-	// offline is why the forge was last unreachable, until a step succeeds.
+	// offline is why the forge was last unreachable, until a step succeeds;
+	// downs counts the failed steps since, and online is when it last came back.
 	offline string
+	downs   int
+	online  time.Time
 }
 
 // New loads tasks and registers the brief op.
@@ -329,11 +332,8 @@ func (m *Module) Revert(of Task, mergeSHA, reason string) (Task, error) {
 // Tick advances every task that isn't already being worked on.
 func (m *Module) Tick() {
 	for _, t := range m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen }) {
-		if time.Now().Before(t.Retry) {
-			continue
-		}
 		m.mu.Lock()
-		if m.busy[t.ID] {
+		if !m.due(t) || m.busy[t.ID] {
 			m.mu.Unlock()
 			continue
 		}
@@ -341,35 +341,53 @@ func (m *Module) Tick() {
 		m.mu.Unlock()
 		go func(t Task) {
 			defer func() { m.mu.Lock(); delete(m.busy, t.ID); m.mu.Unlock() }()
-			err := m.step(&t)
-			why := ""
-			if err != nil {
-				why = core.Unreachable("GitHub", err.Error())
-			}
-			m.mu.Lock()
-			if why != "" || err == nil {
-				m.offline = why
-			}
-			m.mu.Unlock()
-			if err != nil {
-				t.Failures++
-				t.Retry = time.Now().Add(time.Duration(min(t.Failures, 6)) * 30 * time.Second)
-				msg := err.Error()
-				if why != "" {
-					// An outage isn't the task's fault, so it waits it out.
-					m.save(&t, why+"; retrying")
-					return
-				}
-				if t.Failures >= 8 {
-					t.Stage, t.Reason = StageStopped, "gave up after repeated errors: "+msg
-					m.save(&t, t.Reason)
-					m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Stopped %q: %s", t.Label(), core.Clip(msg, 300)))
-					return
-				}
-				m.save(&t, "error (will retry): "+core.Clip(msg, 300))
-			}
+			m.settle(&t, m.step(&t))
 		}(t)
 	}
+}
+
+// due reports whether a task's retry gap is over; a task saved before the
+// forge came back goes at once. The caller holds m.mu.
+func (m *Module) due(t Task) bool {
+	return !time.Now().Before(t.Retry) || !t.Updated.After(m.online)
+}
+
+// settle records how a step ended.
+func (m *Module) settle(t *Task, err error) {
+	why := ""
+	if err != nil {
+		why = core.Unreachable("GitHub", err.Error())
+	}
+	m.mu.Lock()
+	switch {
+	case why != "":
+		m.offline = why
+		m.downs++
+	case err == nil && m.offline != "":
+		m.offline, m.downs, m.online = "", 0, time.Now().UTC()
+	}
+	downs := m.downs
+	m.mu.Unlock()
+	if err == nil {
+		return
+	}
+	if why != "" {
+		// An outage isn't the task's fault, so it waits it out without counting
+		// a failure, checking back less often the longer it lasts.
+		t.Retry = time.Now().Add(min(30*time.Second<<min(downs-1, 5), 10*time.Minute))
+		m.save(t, why+"; retrying")
+		return
+	}
+	t.Failures++
+	t.Retry = time.Now().Add(time.Duration(min(t.Failures, 6)) * 30 * time.Second)
+	msg := err.Error()
+	if t.Failures >= 8 {
+		t.Stage, t.Reason = StageStopped, "gave up after repeated errors: "+msg
+		m.save(t, t.Reason)
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Stopped %q: %s", t.Label(), core.Clip(msg, 300)))
+		return
+	}
+	m.save(t, "error (will retry): "+core.Clip(msg, 300))
 }
 
 // Offline says why the forge can't be reached, or "" when it can.
