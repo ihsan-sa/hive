@@ -271,13 +271,17 @@ func (m *Module) Update(tag string) (string, error) {
 		return "", err
 	}
 	notes := Notes(repo, core.Version, tag)
-	m.C.J.MustAppend("hive.updated", map[string]string{"from": core.Version, "to": tag, "notes": notes})
+	unsigned := PublicKey == ""
+	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned})
 	if m.Restart != nil {
 		go func() { time.Sleep(time.Second); m.Restart() }()
 	}
 	msg := "updated to " + tag
 	if pin {
 		msg += ", pinned there with auto-update off: `" + core.Cmd + " update` goes back to the newest"
+	}
+	if unsigned {
+		msg += "\n\n" + Unsigned
 	}
 	return msg + "\n\n" + notes, nil
 }

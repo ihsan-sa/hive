@@ -1,12 +1,15 @@
 name: release
 # The Hive creates its own releases (gh release create) after a kept merge
-# whose tests and dry run passed; this builds and attaches the binaries.
-# Event data reaches scripts only through env ("$TAG"), never as ${{ }} inside run.
+# whose tests and dry run passed; this builds and attaches the binaries, then
+# signs their checksums in a job of its own.
+#
+# A value from the event goes into a step through env and is read as "$TAG",
+# never spliced into a run script with ${{ }}, where a crafted tag is code.
 on:
   release:
     types: [published]
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -31,21 +34,22 @@ jobs:
               -o dist/$name ./cmd/hive
           done
           (cd dist && sha256sum * > checksums.txt)
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
+      - name: upload
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/* --clobber
   sign:
     # checksums.txt.sig: the tag and checksums signed with the owner's release key, which
     # every install pinning its public half (release.PublicKey) checks before installing.
+    # This job go-runs the tagged commit's own code with the key, and the Hive cuts its own
+    # releases, so it runs in the protected release-signing environment: the key is that
+    # environment's secret, and a person the owner names approves each run before it starts.
+    # The environment and its reviewers are the owner's to set up in the repository's settings.
     # Unsigned only while no key is pinned; hive-sign fails on a missing or wrong key.
-    # This job runs the tagged commit's own hive-sign with the key, and the Hive cuts its
-    # own releases, so it waits behind the protected "release" environment: the key is
-    # exposed only once that environment's required reviewers approve. The key belongs in
-    # that environment's secrets, so no other job can read it.
     needs: build
     runs-on: ubuntu-latest
-    environment: release
+    environment: release-signing
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,41 +57,21 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
+      - name: fetch the checksums
+        # the published checksums.txt, so what is signed is what installs download
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p checksums.txt -D dist
       - name: sign
         env:
           TAG: ${{ github.event.release.tag_name }}
           HIVE_RELEASE_KEY: ${{ secrets.HIVE_RELEASE_KEY }}
-        run: |
-          go run ./cmd/hive-sign "$TAG" dist/checksums.txt
-          mkdir sig && if [ -f dist/checksums.txt.sig ]; then cp dist/checksums.txt.sig sig/; fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sig
-          path: sig/
-          if-no-files-found: ignore
-  upload:
-    needs: sign
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-      - uses: actions/download-artifact@v4
-        # absent while no key is pinned and the release goes out unsigned
-        continue-on-error: true
-        with:
-          name: sig
-          path: dist/
-      - name: upload
+        run: go run ./cmd/hive-sign "$TAG" dist/checksums.txt
+      - name: upload the signature
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
-          REPO: ${{ github.repository }}
-        run: gh release upload "$TAG" dist/* --clobber -R "$REPO"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f dist/checksums.txt.sig ] || exit 0  # no key yet: hive-sign said it goes out unsigned
+          gh release upload "$TAG" dist/checksums.txt.sig --clobber

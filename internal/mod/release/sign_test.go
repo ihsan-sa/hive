@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
 // testSeed is a test key, made here for the tests; the real release key is
@@ -94,5 +96,32 @@ func TestSignatureCoversTheTag(t *testing.T) {
 	}
 	if _, err := Sign([]byte("short"), "v1.0.0", sums); err == nil {
 		t.Fatal("a short seed signed")
+	}
+}
+
+// With no key pinned an update still installs, and says plainly, in what it
+// answers and in its journaled notice, that the release was unsigned; a
+// release checked against a pinned key says no such thing.
+func TestUnpinnedUpdateSaysUnsigned(t *testing.T) {
+	for _, key := range []bool{false, true} {
+		serve(t, "v9.9.9", build("new"), false)
+		if key {
+			pinned(t, testSeed)
+			signWith = testSeed
+		}
+		m, exe := releaseAt(t, "v0.1.2", "me/hive")
+		msg, err := m.Update("")
+		if raw, _ := os.ReadFile(exe); err != nil || string(raw) != "new" {
+			t.Fatalf("key %v: %q, %v, binary %q", key, msg, err, raw)
+		}
+		var got struct{ Unsigned bool }
+		m.C.J.Replay(func(e core.Event) {
+			if e.Kind == "hive.updated" {
+				e.Decode(&got)
+			}
+		})
+		if said := strings.Contains(msg, Unsigned); said == key || got.Unsigned == key {
+			t.Fatalf("key %v: told unsigned %v, journaled unsigned %v: %q", key, said, got.Unsigned, msg)
+		}
 	}
 }

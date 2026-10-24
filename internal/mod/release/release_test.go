@@ -693,20 +693,6 @@ func TestPublishSkipsOlderPreReleases(t *testing.T) {
 	}
 }
 
-// A gate run that was skipped or cancelled didn't pass: the release stays a
-// pre-release, as for a failure.
-func TestSkippedOrCancelledGateIsNotAPass(t *testing.T) {
-	m, n, _, _ := selfHive(t)
-	for _, conclusion := range []string{"skipped", "cancelled", "neutral", ""} {
-		n.SetReleaseRuns("me/hive", "m1",
-			core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"},
-			core.WorkflowRun{Name: "update", Status: "completed", Conclusion: conclusion, URL: "https://ci/update"})
-		if state, why := m.gates("me/hive", "m1"); state != "failed" || !strings.Contains(why, "update "+conclusion) {
-			t.Fatalf("update %q: %s, %s", conclusion, state, why)
-		}
-	}
-}
-
 // The person marked v0.1.3 the latest after v0.1.4 to v0.1.6 went out as
 // pre-releases: the next release takes v0.1.7, not v0.1.4 again (which
 // GitHub refuses as taken).
@@ -736,6 +722,20 @@ func TestNextTag(t *testing.T) {
 	} {
 		if got := nextTag(c.tags); got != c.want {
 			t.Errorf("nextTag(%v) = %s; want %s", c.tags, got, c.want)
+		}
+	}
+}
+
+// A gate run that was skipped or cancelled didn't pass: the release stays a
+// pre-release, as for a failure.
+func TestSkippedOrCancelledGateIsNotAPass(t *testing.T) {
+	m, n, _, _ := selfHive(t)
+	for _, conclusion := range []string{"skipped", "cancelled", "neutral", ""} {
+		n.SetReleaseRuns("me/hive", "m1",
+			core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"},
+			core.WorkflowRun{Name: "update", Status: "completed", Conclusion: conclusion, URL: "https://ci/update"})
+		if state, why := m.gates("me/hive", "m1"); state != "failed" || !strings.Contains(why, "update "+conclusion) {
+			t.Fatalf("update %q: %s, %s", conclusion, state, why)
 		}
 	}
 }
