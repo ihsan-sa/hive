@@ -278,7 +278,7 @@ func TestControlCenterInTmux(t *testing.T) {
 	}
 	x.shot("first run")
 	x.keys("Enter")
-	x.wait(2*time.Minute, "hive › lead", "textkit", "Nothing here yet")
+	x.wait(2*time.Minute, "Hive-wide › lead", "textkit", "This is the Hive-wide lead")
 	x.frame(80, 24, "first open")
 	x.shot("control center on first open")
 	log, _ := os.ReadFile(filepath.Join(home, "stubs.log"))
@@ -493,7 +493,7 @@ func TestControlCenterInTmux(t *testing.T) {
 	x.shot("hive status after quitting")
 	x.typ("hive")
 	x.keys("Enter")
-	x.wait(30*time.Second, "hive › lead", "▾ textkit")
+	x.wait(30*time.Second, "Hive-wide › lead", "▾ textkit")
 	x.frame(80, 24, "reopened")
 	x.keys("q")
 }

@@ -128,6 +128,14 @@ func checkHarness(c core.Config) error {
 	return nil
 }
 
+// sandboxChanged: a saved setting picks the sandbox again only when it names
+// a different one. Probing it (bwrap here, several wsl.exe calls on Windows)
+// takes seconds and holds up every state poll, so doing it on each setting
+// made the Settings view slow to answer.
+func sandboxChanged(old, c core.Config) bool {
+	return old.Sandbox != c.Sandbox || old.WSLDistro != c.WSLDistro
+}
+
 // Stop asks the daemon to shut down. Running agents are separate processes
 // and keep going; the next start reattaches to them.
 func Stop(ws core.Workspace) error {
@@ -723,7 +731,9 @@ func (s *server) routes() http.Handler {
 		if err := a.C.WS.SaveConfig(c); err != nil {
 			return nil, err
 		}
-		a.C.ResetSandbox()
+		if sandboxChanged(cur, c) {
+			a.C.ResetSandbox()
+		}
 		return c, nil
 	})
 	h("/api/module/access", func(r *http.Request) (any, error) {
