@@ -1021,6 +1021,9 @@ func TestOutsideStep(t *testing.T) {
 	h.seed("me/out", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "out", "repo": "me/out"}, nil)
 	title := "Delete the leftover test fixture directory on this machine, outside your checkout; it is safe to delete and can't be undone: FAKE:rmoutside " + fixture
+	if len(title) <= 120 {
+		t.Fatalf("the ask is only %d characters, no longer than a label", len(title))
+	}
 	h.post("/api/ask", map[string]string{"project": "out", "title": title}, nil)
 	h.wait("a tribunal to run the T3 step", 4*minute, func(st api.State) bool {
 		for _, r := range st.Requests {
