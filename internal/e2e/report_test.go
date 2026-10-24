@@ -29,8 +29,9 @@ func TestReportSharing(t *testing.T) {
 	h.post("/api/project", map[string]any{"name": "rep", "repo": "me/rep"}, nil)
 	send := func() {
 		t.Helper()
-		// The run before this one, not the clock: Windows' clock can tick
-		// coarsely enough that a quick run is stamped with this very instant.
+		// The run is told by its Last changing, not by Last passing the
+		// clock: Windows' clock ticks coarsely, so a quick run can carry the
+		// very time read before it.
 		var before time.Time
 		for _, j := range h.state().Jobs {
 			if j.Name == "report.send" {

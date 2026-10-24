@@ -533,7 +533,14 @@ func TestGateAndLoop(t *testing.T) {
 	if !commented {
 		t.Fatal("the original PR has no comment saying why it was reverted")
 	}
-	lessons, _ := core.Git(h.ws.Project("gate"), "show", "origin/main:.hive/lessons.md")
+	// The task shows done once the forge merged; the clone's origin/main may
+	// not have fetched that yet (seen on Windows), so fetch until it has.
+	var lessons string
+	h.wait("the clone to fetch the revert", minute, func(api.State) bool {
+		core.Git(h.ws.Project("gate"), "fetch", "-q", "origin")
+		lessons, _ = core.Git(h.ws.Project("gate"), "show", "origin/main:.hive/lessons.md")
+		return strings.Contains(lessons, "was reverted")
+	})
 	if !strings.Contains(lessons, "was reverted") {
 		t.Fatalf("lessons on main: %q", lessons)
 	}

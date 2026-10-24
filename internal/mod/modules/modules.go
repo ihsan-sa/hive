@@ -304,22 +304,24 @@ func NameFromURL(url string) string {
 }
 
 // Install clones a module the person approved and records where it came from.
-// It is cloned and recorded under a dot name List skips, then moved into
-// place, so nobody sees (or is granted) a module that is half there: a slow
-// clone once showed up with no release, and its later record read as an update.
 func (r *Registry) Install(url, name string) (Module, error) {
 	dir := filepath.Join(r.ws.Modules(), name)
 	if core.Exists(dir) {
 		return Module{}, fmt.Errorf("%s already exists", dir)
 	}
+	// The clone goes to a hidden folder and moves into place whole: List
+	// reads any folder as a module, and a half-written one would show (and
+	// be read by agents) without its files, which a slow disk made plain.
 	tmp := filepath.Join(r.ws.Modules(), "."+name+"-"+core.NewID())
 	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, tmp); err != nil {
 		os.RemoveAll(tmp)
 		return Module{}, err
 	}
-	rel, err := record(url, tmp)
+	// Its release and source record are written there too, so the module
+	// appears with them: a grant made the moment it shows isn't overwritten.
+	rel, err := record(tmp, url)
 	if err == nil {
-		err = rename(tmp, dir)
+		err = os.Rename(tmp, dir)
 	}
 	if err != nil { // a clone with no source record must not stay behind
 		os.RemoveAll(tmp)
@@ -330,11 +332,11 @@ func (r *Registry) Install(url, name string) (Module, error) {
 	return m, nil
 }
 
-// record checks out a fresh clone's newest release (or keeps its HEAD) and
-// writes its source record; it returns the release.
-func record(url, dir string) (string, error) {
+// record checks out a clone's newest release (its HEAD when it has none) and
+// writes where it came from. It returns the release.
+func record(dir, url string) (string, error) {
 	if !core.Exists(filepath.Join(dir, ".git")) {
-		return "", fmt.Errorf("module %s did not clone", filepath.Base(dir))
+		return "", fmt.Errorf("%s did not clone", filepath.Base(url))
 	}
 	core.Git(dir, "fetch", "-q", "--tags")
 	rel := latestTag(dir)
@@ -346,17 +348,6 @@ func record(url, dir string) (string, error) {
 	commit, _ := core.Git(dir, "rev-parse", "HEAD")
 	s := Source{Source: url, Release: rel, Commit: commit, Installed: time.Now().UTC(), Projects: []string{"*"}}
 	return rel, writeSource(dir, s)
-}
-
-// rename moves a folder, trying again for a few seconds: on Windows a scanner
-// can hold a file in a fresh clone open for a moment.
-func rename(from, to string) error {
-	err := os.Rename(from, to)
-	for i := 0; err != nil && i < 20 && !core.Exists(to); i++ {
-		time.Sleep(250 * time.Millisecond)
-		err = os.Rename(from, to)
-	}
-	return err
 }
 
 // Update moves git-sourced modules to their source's newest release, or its
