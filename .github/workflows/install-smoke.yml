@@ -5,9 +5,11 @@ name: install-smoke
 # harness and a local forge, so no Claude or GitHub login is needed. The setup
 # writes the workspace config the first run's prompts would write: `hive`
 # itself opens the interactive control center, which a runner can't drive.
+# The installer brings the latest release, so a release runs this once it is
+# the latest (`released`), not while it is the Hive's pre-release candidate.
 on:
   release:
-    types: [published]
+    types: [released]
   workflow_dispatch:
     inputs:
       base_url:

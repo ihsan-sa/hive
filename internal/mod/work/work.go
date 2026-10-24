@@ -153,6 +153,7 @@ type Module struct {
 	busy  map[string]bool
 	// areaCache holds the paths each brief names (queue.go).
 	areaCache map[string][]string
+	steps     sync.WaitGroup // the steps Tick started that are still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -393,8 +394,10 @@ func (m *Module) Tick() {
 			continue
 		}
 		m.busy[t.ID] = true
+		m.steps.Add(1)
 		m.mu.Unlock()
 		go func(t Task) {
+			defer m.steps.Done()
 			defer func() { m.mu.Lock(); delete(m.busy, t.ID); m.mu.Unlock() }()
 			m.settle(&t, m.step(&t))
 		}(t)
@@ -421,6 +424,10 @@ func (m *Module) waits(t Task, why string) {
 	delete(m.busy, t.ID)
 	m.mu.Unlock()
 }
+
+// Wait returns once every step Tick started has ended, so a test's folders
+// can go without a step still writing in them.
+func (m *Module) Wait() { m.steps.Wait() }
 
 // due reports whether a task's retry gap is over; a task saved before the
 // forge came back goes at once. The caller holds m.mu.
