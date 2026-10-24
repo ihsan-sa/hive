@@ -32,11 +32,14 @@ type Measurement struct {
 	Kept    bool     `json:"kept"`
 	// NoResult says the check couldn't start (a tool it calls is missing), so
 	// this is neither kept nor a failure, and main is measured again later.
-	NoResult bool      `json:"no_result,omitempty"`
-	Best     *float64  `json:"best,omitempty"`    // best kept after this measure
-	Version  string    `json:"version,omitempty"` // the score's version (Effects.ScoreVersion); a new one starts a new baseline
-	Note     string    `json:"note"`
-	At       time.Time `json:"at"`
+	NoResult bool     `json:"no_result,omitempty"`
+	Best     *float64 `json:"best,omitempty"`    // best kept after this measure
+	Version  string   `json:"version,omitempty"` // the score's version (Effects.ScoreVersion); a new one starts a new baseline
+	// Outside is what the merge took from outside the Hive (hands.go); nil
+	// on a start, a no-result, and measures recorded before it was counted.
+	Outside *Hands    `json:"outside,omitempty"`
+	Note    string    `json:"note"`
+	At      time.Time `json:"at"`
 }
 
 // Sweep is one notice run.
@@ -74,6 +77,7 @@ type Module struct {
 	fails    map[string][]core.Check // project -> recent red test checks that name their failing tests
 	heads    map[string][]string     // task id -> every head it had
 	merged   map[string]time.Time    // merge sha -> when it merged
+	hands    hands                   // the journal's outside hands, indexed (hands.go)
 
 	stepbacks map[string]*StepBack
 	busy      map[string]bool
@@ -84,11 +88,12 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}, hands: newHands()}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		m.applyStall(e)
+		m.applyHands(e)
 		switch e.Kind {
 		case "score.measured":
 			var ms Measurement
@@ -251,6 +256,7 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 // start is measured again until there is a number.
 func (m *Module) Tick() {
 	m.Watch()
+	m.CountReleases()
 	if _, err := m.C.Sandbox(); err != nil {
 		return
 	}
@@ -401,7 +407,8 @@ func (m *Module) afterMerge(t work.Task) {
 	if hasBest {
 		best = *k.Best
 	}
-	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg)}
+	hs := m.HandsFor(t.ID, t.MergeSHA, m.C.J.Seq())
+	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg), Outside: &hs}
 	if !hasBest || m.versionOf(p, k) != ms.Version {
 		m.warnUnlisted(p, cfg)
 		if hasBest {
@@ -644,8 +651,13 @@ func (m *Module) Digest(since int64, only string) string {
 			if x.NoResult {
 				kept = "no-result"
 			}
-			fmt.Fprintf(&b, "- %s %s score=%s kept=%s %s\n", x.At.Format("01-02 15:04"), core.Short(x.SHA), sc, kept, core.Clip(x.Note, 200))
+			out := ""
+			if x.Outside != nil {
+				out = " " + core.Clip(x.Outside.String(), 200)
+			}
+			fmt.Fprintf(&b, "- %s %s score=%s kept=%s%s %s\n", x.At.Format("01-02 15:04"), core.Short(x.SHA), sc, kept, out, core.Clip(x.Note, 200))
 		}
+		b.WriteString("\n" + m.handsTrend(p.Name))
 		b.WriteString("\nWork:\n")
 		for i, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {
 			if i >= 25 {

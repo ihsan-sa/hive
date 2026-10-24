@@ -260,7 +260,13 @@ func hasBinary(repo, tag string) error {
 // and may be older, or with "" or "latest" the newest that Check finds, which
 // clears any pin. Live runs are separate processes and the daemon reattaches
 // to them after it restarts, so live work carries across.
-func (m *Module) Update(tag string) (string, error) {
+func (m *Module) Update(tag string) (string, error) { return m.update(tag, "") }
+
+// UpdateByHand is Update on the person's word (`hive update`): its
+// hive.updated says by hand, so the count of outside hands sees it.
+func (m *Module) UpdateByHand(tag string) (string, error) { return m.update(tag, "hand") }
+
+func (m *Module) update(tag, by string) (string, error) {
 	if !strings.HasPrefix(core.Version, "v") {
 		return "this is a source build (" + core.Version + "); it doesn't update itself", nil
 	}
@@ -376,7 +382,11 @@ func (m *Module) Update(tag string) (string, error) {
 	}
 	notes := Notes(repo, core.Version, tag)
 	unsigned := PublicKey == ""
-	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned})
+	rec := map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned}
+	if by != "" {
+		rec["by"] = by
+	}
+	m.C.J.MustAppend("hive.updated", rec)
 	installed = true
 	// Merges stay paused until the restart; one that never comes (a
 	// supervisor that doesn't restart, a failed start) lets them go on.

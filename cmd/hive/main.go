@@ -576,6 +576,9 @@ func cmdStatus() int {
 				best = strconv.FormatFloat(*p.Best, 'g', -1, 64)
 			}
 			fmt.Printf("\n%s (%s)  best score: %s\n", p.Name, p.Repo, best)
+			if p.Milestone != nil {
+				fmt.Printf("  %s\n", text.Visible(p.Milestone.Line))
+			}
 			if p.Hold != nil {
 				fmt.Printf("  %s; `%s hold %s --lift` lifts it\n", text.Visible(p.Hold.Text()), core.Cmd, p.Name)
 			}

@@ -81,7 +81,10 @@ type ProjectView struct {
 	Tasks  []work.Task           `json:"tasks"`
 	Scores []improve.Measurement `json:"scores"`
 	Best   *float64              `json:"best,omitempty"`
-	Hold   *work.MergeHold       `json:"hold,omitempty"` // the person's hold on its merges
+	// Milestone is how far its merges got towards the goals' first
+	// milestone, with nobody in between (improve's outside-hands count).
+	Milestone *improve.Milestone `json:"milestone,omitempty"`
+	Hold      *work.MergeHold    `json:"hold,omitempty"` // the person's hold on its merges
 }
 
 // Updated is the update that brought in this version, with its release notes;
