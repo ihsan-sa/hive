@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/ihsan-sa/hive-standalone-build/internal/text"
 	"maps"
 	"os"
 	"path/filepath"
@@ -167,7 +168,7 @@ func run(args []string) int {
 					if err != nil {
 						return err
 					}
-					fmt.Printf("%sd: %s -> %s%s\n", cmd, a.Title, opt, meaning(opt))
+					fmt.Printf("%sd: %s -> %s%s\n", cmd, text.Visible(a.Title), text.Visible(opt), meaning(opt))
 					return c.Do("POST", "/api/answer", map[string]string{"id": a.ID, "answer": opt, "note": strings.Join(args[1:], " ")}, nil)
 				}
 			}
@@ -304,7 +305,7 @@ func cmdDaemon(args []string) int {
 		return 1
 	}
 	if *detach {
-		if _, err := daemon.Start(ws); err != nil {
+		if _, err := daemon.StartAfter(ws, *waitFor); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -444,7 +445,7 @@ func cmdStatus() int {
 		if len(st.Asks) > 0 {
 			fmt.Println("\nwaiting on you:")
 			for _, a := range st.Asks {
-				fmt.Printf("  %s  %s  (%s)\n", a.ID, a.Title, answerHint(a))
+				fmt.Printf("  %s  %s  (%s)\n", text.Visible(a.ID), text.Visible(a.Title), text.Visible(answerHint(a)))
 			}
 		}
 		return nil
@@ -633,17 +634,18 @@ func kbArgs(args []string) (query, limit string) {
 
 // planLine is a plan's usage for hive status. The reset carries its zone and
 // how far off it is, and a reading whose window has since reset says so
-// rather than passing its old number off as current.
+// rather than passing its old number off as current. Names from the usage
+// feed are escaped, so none can rewrite the screen.
 func planLine(p core.Plan, now time.Time) string {
-	l := p.Limit
+	l, key, window := p.Limit, text.Visible(p.Key()), text.Visible(p.Limit.Window)
 	at := l.ResetsAt.Local().Format("Mon 15:04 MST")
 	if !l.ResetsAt.After(now) {
-		return fmt.Sprintf("plan %s: the %s window reset at %s, no reading since (last %.0f%%, read %s ago)", p.Key(), l.Window, at, l.Utilization*100, now.Sub(p.At).Round(time.Minute))
+		return fmt.Sprintf("plan %s: the %s window reset at %s, no reading since (last %.0f%%, read %s ago)", key, window, at, l.Utilization*100, now.Sub(p.At).Round(time.Minute))
 	}
-	s := fmt.Sprintf("plan %s: %s, %.0f%% of the %s window, resets in %s (%s)", p.Key(), l.Status, l.Utilization*100, l.Window, l.ResetsAt.Sub(now).Round(time.Minute), at)
+	s := fmt.Sprintf("plan %s: %s, %.0f%% of the %s window, resets in %s (%s)", key, text.Visible(l.Status), l.Utilization*100, window, l.ResetsAt.Sub(now).Round(time.Minute), at)
 	for _, k := range slices.Sorted(maps.Keys(l.Windows)) {
 		if k != l.Window {
-			s += fmt.Sprintf("; %s %.0f%%", k, l.Windows[k].Utilization*100)
+			s += fmt.Sprintf("; %s %.0f%%", text.Visible(k), l.Windows[k].Utilization*100)
 		}
 	}
 	return s

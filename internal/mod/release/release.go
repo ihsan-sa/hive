@@ -35,6 +35,13 @@ type Module struct {
 	Busy func() bool
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
+	// said holds project@tag for each pre-release whose wait or failed
+	// publish Publish has already raised in this life of the daemon.
+	said map[string]bool
+	// published is when Tick last started Publish; publishing says it runs.
+	published  time.Time
+	publishing bool
+	pmu        sync.Mutex
 }
 
 // Site serves the releases: GitHub over plain HTTPS, so updating needs no
@@ -466,7 +473,8 @@ func (m *Module) afterKept(project, sha string) {
 		last = core.Version
 	}
 	next := bump(last)
-	body := "Released by the Hive after " + core.Short(sha) + " kept its tests and dry run green.\n\nWhat was read:\n\n" + manifest.String()
+	body := "Released by the Hive after " + core.Short(sha) + " kept its tests and dry run green. It is a pre-release until " +
+		strings.Join(Gates, " and ") + " pass on that commit; then it is the latest, which installs follow.\n\nWhat was read:\n\n" + manifest.String()
 	if approved {
 		body += "\nThe person released it.\n"
 	}
@@ -474,7 +482,7 @@ func (m *Module) afterKept(project, sha string) {
 		alert("release failed: " + err.Error())
 		return
 	}
-	m.C.J.MustAppend("hive.released", map[string]string{"project": project, "tag": next, "sha": sha})
+	m.C.J.MustAppend("hive.released", map[string]any{"project": project, "tag": next, "sha": sha, "prerelease": true})
 	f, up := m.C.Effects.Forge, m.C.WS.LoadConfig().ReleaseRepo
 	if p.Repo == up {
 		return
@@ -589,6 +597,142 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 		return nil, "it is not a merge the Hive made"
 	}
 	return all[from : at+1], ""
+}
+
+// Gates are the workflows that must pass in a release's own runs, on its
+// commit, before Publish makes it the latest.
+var Gates = []string{"ci", "update"}
+
+// lateAfter is how long a pre-release waits for its gates before it is raised.
+const lateAfter = 6 * time.Hour
+
+// publishEvery is how often Tick checks the Hive's pre-releases.
+const publishEvery = 10 * time.Minute
+
+// Tick runs Publish every publishEvery, in the background.
+func (m *Module) Tick() {
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	if m.publishing || time.Since(m.published) < publishEvery {
+		return
+	}
+	m.published, m.publishing = time.Now(), true
+	go func() {
+		m.Publish()
+		m.pmu.Lock()
+		m.publishing = false
+		m.pmu.Unlock()
+	}()
+}
+
+// Publish runs from Tick and says what it did. AfterKept cuts each release
+// as a pre-release, which installs and auto-update don't follow; once every gate
+// passed on its commit, Publish makes it the latest. Of the pre-releases cut
+// since the last one published, the newest that passed is published and
+// older ones stay pre-releases. A failed gate leaves the release a
+// pre-release and raises an alert once; it is still checked, so a re-run
+// that passes publishes it, until a newer release is published.
+func (m *Module) Publish() string {
+	type cand struct {
+		Project, Tag, SHA string
+		At                time.Time
+	}
+	var cands []cand
+	failed := map[string]bool{}
+	m.C.J.Replay(func(e core.Event) {
+		var x struct {
+			Project, Tag, SHA string
+			Prerelease        bool
+		}
+		if e.Decode(&x) != nil {
+			return
+		}
+		switch e.Kind {
+		case "hive.released":
+			if x.Prerelease { // one cut before releases waited for their gates is published already
+				cands = append(cands, cand{x.Project, x.Tag, x.SHA, e.At})
+			}
+		case "hive.published":
+			cands = slices.DeleteFunc(cands, func(c cand) bool { return c.Project == x.Project && !modules.Newer(x.Tag, c.Tag) })
+		case "release.failed":
+			failed[x.Project+"@"+x.Tag] = true
+		}
+	})
+	if m.said == nil {
+		m.said = map[string]bool{}
+	}
+	alert := func(c cand, text string) {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": c.Project, "ref": "release:" + c.Tag, "text": text})
+	}
+	var out []string
+	done, checked := map[string]bool{}, map[string]int{}
+	for i := len(cands) - 1; i >= 0; i-- {
+		c, key := cands[i], cands[i].Project+"@"+cands[i].Tag
+		p, ok := m.C.Projects.Get(c.Project)
+		if !ok || done[c.Project] || checked[c.Project] >= 5 {
+			continue // an older one stays a pre-release
+		}
+		checked[c.Project]++
+		state, why := m.gates(p.Repo, c.SHA)
+		switch state {
+		case "passed":
+			if err := m.C.Effects.Forge.PublishRelease(p.Repo, c.Tag); err != nil {
+				if !m.said[key] {
+					m.said[key] = true
+					alert(c, "publishing "+c.Tag+" failed: "+err.Error())
+				}
+				out = append(out, c.Tag+": "+err.Error())
+				continue
+			}
+			m.C.J.MustAppend("hive.published", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA})
+			done[c.Project] = true
+			out = append(out, "published "+c.Tag)
+		case "failed":
+			if !failed[key] {
+				m.C.J.MustAppend("release.failed", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA, "why": why})
+				alert(c, c.Tag+" stays a pre-release, so installs stay where they are: "+why+". A re-run that passes publishes it.")
+			}
+			out = append(out, c.Tag+": "+why)
+		default:
+			if time.Since(c.At) > lateAfter && !m.said[key] {
+				m.said[key] = true
+				alert(c, c.Tag+" is still a pre-release after "+lateAfter.String()+": "+why)
+			}
+			out = append(out, c.Tag+": "+why)
+		}
+	}
+	if len(out) == 0 {
+		return "nothing to publish"
+	}
+	return strings.Join(out, "; ")
+}
+
+// gates says "passed" when every gate passed in the release runs at sha,
+// else "failed" or "waiting", and why.
+func (m *Module) gates(repo, sha string) (state, why string) {
+	runs, err := m.C.Effects.Forge.ReleaseRuns(repo, sha)
+	if err != nil {
+		return "waiting", "can't read its runs (" + core.Clip(err.Error(), 200) + ")"
+	}
+	var bad, wait []string
+	for _, g := range Gates {
+		i := slices.IndexFunc(runs, func(r core.WorkflowRun) bool { return r.Name == g })
+		switch {
+		case i < 0:
+			wait = append(wait, g+" (no run yet)")
+		case runs[i].Status != "completed":
+			wait = append(wait, g)
+		case runs[i].Conclusion != "success":
+			bad = append(bad, g+" "+runs[i].Conclusion+" ("+runs[i].URL+")")
+		}
+	}
+	switch {
+	case len(bad) > 0:
+		return "failed", strings.Join(bad, ", ")
+	case len(wait) > 0:
+		return "waiting", "waiting for " + strings.Join(wait, ", ")
+	}
+	return "passed", ""
 }
 
 func bump(tag string) string {

@@ -18,11 +18,12 @@ type Local struct {
 }
 
 type localState struct {
-	Issues   map[string][]localIssue `json:"issues"`
-	PRs      map[string][]localPR    `json:"prs"`
-	Comments map[string][]string     `json:"comments"`
-	Releases map[string][]Release    `json:"releases"`
-	Checks   map[string][]CheckRun   `json:"checks,omitempty"` // repo@sha
+	Issues   map[string][]localIssue  `json:"issues"`
+	PRs      map[string][]localPR     `json:"prs"`
+	Comments map[string][]string      `json:"comments"`
+	Releases map[string][]Release     `json:"releases"`
+	Runs     map[string][]WorkflowRun `json:"runs"`             // repo@sha -> release runs, newest first
+	Checks   map[string][]CheckRun    `json:"checks,omitempty"` // repo@sha
 }
 
 type localIssue struct {
@@ -49,7 +50,7 @@ func (l *Local) RepoPath(repo string) string {
 }
 
 func (l *Local) load() localState {
-	s := localState{Issues: map[string][]localIssue{}, PRs: map[string][]localPR{}, Comments: map[string][]string{}, Releases: map[string][]Release{}}
+	s := localState{Issues: map[string][]localIssue{}, PRs: map[string][]localPR{}, Comments: map[string][]string{}, Releases: map[string][]Release{}, Runs: map[string][]WorkflowRun{}}
 	raw, err := os.ReadFile(filepath.Join(l.Dir, "state.json"))
 	if err == nil {
 		json.Unmarshal(raw, &s)
@@ -280,7 +281,7 @@ func (l *Local) CreateRelease(repo, tag, sha, notes string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	s := l.load()
-	s.Releases[repo] = append(s.Releases[repo], Release{Tag: tag})
+	s.Releases[repo] = append(s.Releases[repo], Release{Tag: tag, Prerelease: true})
 	l.save(s)
 	return nil
 }
@@ -302,4 +303,31 @@ func (l *Local) SetChecks(repo, sha string, runs ...CheckRun) {
 	}
 	s.Checks[repo+"@"+sha] = runs
 	l.save(s)
+}
+
+func (l *Local) ReleaseRuns(repo, sha string) ([]WorkflowRun, error) {
+	return l.load().Runs[repo+"@"+sha], nil
+}
+
+// SetReleaseRuns sets the runs a release at sha started (tests set them).
+func (l *Local) SetReleaseRuns(repo, sha string, runs ...WorkflowRun) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	s.Runs[repo+"@"+sha] = runs
+	l.save(s)
+}
+
+func (l *Local) PublishRelease(repo, tag string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	for i, r := range s.Releases[repo] {
+		if r.Tag == tag {
+			s.Releases[repo][i].Prerelease = false
+			l.save(s)
+			return nil
+		}
+	}
+	return ErrNotFound
 }
