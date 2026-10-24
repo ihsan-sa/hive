@@ -679,7 +679,9 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 		m.C.J.MustAppend("kb.note", map[string]string{"title": "Blocked: " + t.Label(), "text": t.Reason, "project": t.Project, "run": r.ID})
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Blocked: %q (task %s). %s", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(t.Reason, 400)))
 	case core.StatusStopped:
-		t.Stage, t.Reason = StageStopped, "worker stopped: "+r.Reason
+		// Only a stop from outside the pipeline (the control center) ends a
+		// worker's run, so the task is the person's to bring back.
+		t.Stage, t.Reason, t.ByPerson = StageStopped, "worker stopped: "+r.Reason, true
 		m.save(t, t.Reason)
 	case core.StatusQuiet:
 		if !strings.Contains(t.Reason, "quiet") {
@@ -1406,7 +1408,7 @@ func (m *Module) Recheck(id, back string) error {
 	if t.Stage != StageBlocked && t.Stage != StageStopped {
 		return fmt.Errorf("task %s is %s, not blocked or stopped", id, t.Stage)
 	}
-	if t.ByPerson {
+	if t.ByPerson || m.workerStopped(t) {
 		return fmt.Errorf("task %s was stopped by the person (%s); only they can bring it back", id, t.Reason)
 	}
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts = "", 0, 0, 0, 0
@@ -1421,6 +1423,13 @@ func (m *Module) Recheck(id, back string) error {
 	t.Stage = StageLanding
 	m.save(&t, "checks run again on its commits")
 	return nil
+}
+
+// workerStopped reports whether a task's worker run was stopped on purpose,
+// which holds a task stopped before checkWorker marked it ByPerson.
+func (m *Module) workerStopped(t Task) bool {
+	r, ok := m.C.Runs.Get(t.Worker)
+	return ok && t.Worker != "" && (r.Status == core.StatusStopped || r.StopAsked)
 }
 
 func (m *Module) opRecheck(r core.Run, args json.RawMessage) (any, error) {
@@ -1453,6 +1462,7 @@ func (m *Module) Retry(id string) error {
 	}
 	t.Attempt++
 	t.Stage, t.Worker, t.Reason, t.Failures, t.Round = StageIssued, "", "", 0, 0
+	t.ByPerson = false // the person brought it back; the lead may handle it from here
 	m.save(&t, "handed to a fresh worker")
 	return nil
 }
