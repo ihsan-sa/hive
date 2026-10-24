@@ -567,6 +567,12 @@ func (m *model) viewDetail(d *detail) []string {
 		if t.MergeSHA != "" {
 			kv("merged", core.Short(t.MergeSHA))
 		}
+		if g := t.Gate; g != nil {
+			kv("gate", work.GateWord(g.Outcome)+" on "+core.Short(g.Head)+" vs main "+core.Short(g.Main)+": "+core.Clip(g.Reason, 160))
+			if g.Report != "" {
+				kv("report", g.Report)
+			}
+		}
 		lines = append(lines, "", stTitle.Render("brief"))
 		lines = append(lines, indent(wrap("Done looks like: "+t.Done, w-2), "  ")...)
 		if t.Known != "" {
@@ -957,6 +963,9 @@ func (m *model) settings() []setting {
 			v = "default"
 		}
 		s = append(s, setting{group: "Agents", label: "model for " + p, value: v, key: "project:" + p, choices: append([]string{"default"}, models...)})
+		// The open harness runs a named model, which the model setting picks.
+		hs := slices.DeleteFunc(append([]string{"default"}, harness.Names...), func(h string) bool { return h == "open" })
+		s = append(s, setting{group: "Agents", label: "harness for " + p, value: cmp.Or(c.Projects[p].Harness, "default"), key: "project-harness:" + p, choices: hs})
 	}
 	s = append(s, setting{group: "Agents", label: "review rounds", value: strconv.Itoa(c.ReviewRounds), key: "review_rounds"})
 	// Each role's route shows the models it runs on in order; its pick-list
@@ -982,6 +991,7 @@ func (m *model) settings() []setting {
 	}
 	s = append(s,
 		setting{group: "Log in", label: "Claude Code", value: "runs Claude Code's own login", action: func() tea.Cmd { return login("claude", "auth", "login") }},
+		setting{group: "Log in", label: "Codex", value: "runs Codex's own login (sign in with ChatGPT)", action: func() tea.Cmd { return login("codex", "login", "--device-auth") }},
 		setting{group: "Log in", label: "GitHub", value: "runs the GitHub CLI's own login", action: func() tea.Cmd { return login("gh", "auth", "login") }},
 	)
 	return s
@@ -1117,12 +1127,27 @@ func (m *model) keyPick(cur setting, k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // routeModels are the models a route can name, as a route names them: a
-// named model by its name, any other as harness:model.
+// named model by its name, any other as harness:model. Besides the
+// workspace harness's, each other harness's known models are there, so a
+// role can run on Codex in a Claude Hive, or the other way round.
 func routeModels(c core.Config) []string {
 	var out []string
-	for _, m := range modelChoices(c) {
-		if e := routeEntry(c, m); m != custom && e != "" && !slices.Contains(out, e) {
+	add := func(e string) {
+		if e != "" && !slices.Contains(out, e) {
 			out = append(out, e)
+		}
+	}
+	for _, m := range modelChoices(c) {
+		if m != custom {
+			add(routeEntry(c, m))
+		}
+	}
+	for _, h := range harness.Names {
+		if h == "open" || h == "fake" || h == core.HarnessName(c.Harness) {
+			continue
+		}
+		for _, m := range harness.Models(h) {
+			add(core.Pick{Harness: h, Model: m}.String())
 		}
 	}
 	return out
@@ -1235,6 +1260,17 @@ func (m *model) saveSetting(v string) tea.Cmd {
 		ps := c.Projects[p]
 		if ps.Model = v; v == "default" {
 			ps.Model = ""
+		}
+		c.Projects[p] = ps
+	case strings.HasPrefix(key, "project-harness:"):
+		p := strings.TrimPrefix(key, "project-harness:")
+		c.Projects = maps.Clone(c.Projects)
+		if c.Projects == nil {
+			c.Projects = map[string]core.ProjectSettings{}
+		}
+		ps := c.Projects[p]
+		if ps.Harness = v; v == "default" {
+			ps.Harness = ""
 		}
 		c.Projects[p] = ps
 	case strings.HasPrefix(key, "route:"):

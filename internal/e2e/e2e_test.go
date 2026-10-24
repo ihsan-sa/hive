@@ -3,7 +3,7 @@
 //
 // Agents run bare here (opted in) unless HIVE_E2E_SANDBOX=auto, which uses the
 // platform sandbox (Linux namespaces, or WSL on Windows). The live probes
-// (HIVE_E2E_HARNESS=claude) use the sandbox when it works, unless
+// (HIVE_E2E_HARNESS=claude or codex) use the sandbox when it works, unless
 // HIVE_E2E_SANDBOX=bare.
 package e2e
 
@@ -1461,12 +1461,33 @@ var adopt func()
 // the returned func ends (Windows only).
 var contain func(t *testing.T, pid int) func()
 
+// TestLiveWorker is the plain path on a real harness: run it with
+// HIVE_E2E_HARNESS=claude or codex. A brief goes to a worker, its PR to a
+// reviewer whose verdict is structured, and it merges.
+func TestLiveWorker(t *testing.T) {
+	if os.Getenv("HIVE_E2E_HARNESS") == "" {
+		t.Skip("set HIVE_E2E_HARNESS=claude (or codex) to run real agents")
+	}
+	h := start(t)
+	h.seed("me/live", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "live", "repo": "me/live"}, nil)
+	title := "Add a file HELLO.md to the repo saying hello in one line"
+	h.post("/api/ask", map[string]string{"project": "live", "title": title}, nil)
+	st := h.wait("the worker's change to merge", 40*minute, taskStage("live", title, work.StageDone))
+	if out, err := core.Git(h.forge.RepoPath("me/live"), "show", "main:HELLO.md"); err != nil || strings.TrimSpace(out) == "" {
+		t.Fatalf("HELLO.md isn't on main: %q %v", out, err)
+	}
+	for _, r := range st.Runs {
+		t.Logf("%s %s on %s:%s: %s", r.ID, r.Role, r.Harness, r.Model, r.Status)
+	}
+}
+
 // TestLiveWarden is the host probe for a real harness: run it with
 // HIVE_E2E_HARNESS=claude. A worker that needs a package outside its checkout
 // should file a T2 step, and a real warden should settle it.
 func TestLiveWarden(t *testing.T) {
 	if os.Getenv("HIVE_E2E_HARNESS") == "" {
-		t.Skip("set HIVE_E2E_HARNESS=claude to run real agents")
+		t.Skip("set HIVE_E2E_HARNESS=claude (or codex) to run real agents")
 	}
 	h := start(t)
 	h.seed("me/live", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
@@ -1501,7 +1522,7 @@ func TestLiveWarden(t *testing.T) {
 // file the step anyway.
 func TestLiveTribunal(t *testing.T) {
 	if os.Getenv("HIVE_E2E_HARNESS") == "" {
-		t.Skip("set HIVE_E2E_HARNESS=claude to run real agents")
+		t.Skip("set HIVE_E2E_HARNESS=claude (or codex) to run real agents")
 	}
 	fixture := filepath.Join(t.TempDir(), "hive-live-tribunal-fixture")
 	os.MkdirAll(fixture, 0o755)
@@ -1575,7 +1596,7 @@ func TestChatAttachment(t *testing.T) {
 // HIVE_E2E_HARNESS=claude. A real lead is sent a red square and names its colour.
 func TestLiveAttachment(t *testing.T) {
 	if os.Getenv("HIVE_E2E_HARNESS") == "" {
-		t.Skip("set HIVE_E2E_HARNESS=claude to run real agents")
+		t.Skip("set HIVE_E2E_HARNESS=claude (or codex) to run real agents")
 	}
 	h := start(t)
 	h.post("/api/chat", map[string]any{"chat": "lead", "text": "What colour is the attached image? Answer in one word.", "files": []chat.File{{Name: "square.png", Data: redSquare()}}}, nil)
