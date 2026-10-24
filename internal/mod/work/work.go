@@ -974,7 +974,7 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 			return m.dropCheckpoint(t, p, "it conflicts with main")
 		}
 		if errors.Is(err, core.ErrConflict) {
-			return m.conflict(t, p)
+			return m.conflict(t, p, err)
 		}
 		if err != nil {
 			return err
@@ -1197,7 +1197,7 @@ func (m *Module) catchUp(t *Task, p core.Project, main, why string) (bool, error
 	}
 	if errors.Is(err, core.ErrConflict) {
 		t.Reason = ""
-		return true, m.conflict(t, p)
+		return true, m.conflict(t, p, err)
 	}
 	if err != nil {
 		return true, err
@@ -1454,7 +1454,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	return nil
 }
 
-func (m *Module) conflict(t *Task, p core.Project) error {
+func (m *Module) conflict(t *Task, p core.Project, why error) error {
 	t.Conflicts++
 	if t.Conflicts > 3 {
 		m.giveUp(t, "keeps conflicting with main")
@@ -1465,6 +1465,10 @@ func (m *Module) conflict(t *Task, p core.Project) error {
 		return err
 	}
 	msg := "Main moved and your branch conflicts with it. Fetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
+	if d := (*core.DoubledError)(nil); errors.As(why, &d) {
+		msg = "Main moved, and merging it into your branch keeps both sides of lines you and main each changed (these docs merge as union), so these end up more than once:\n\n- " +
+			strings.Join(d.Lines, "\n- ") + "\n\nFetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, keep each of these once, run the tests, commit, and finish again."
+	}
 	if err := m.C.Runs.Reopen(t.Worker, msg); err != nil {
 		return err
 	}

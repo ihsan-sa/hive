@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -663,5 +664,102 @@ func TestAdditiveDocsMergeWithoutConflict(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Bringing a branch up to date reads attributes from main. A branch cut
+// before main marked its docs merge=union still merges them as union; a
+// branch that marks its own code merge=union still conflicts on it; and a
+// union merge that would leave a heading twice is sent back as a conflict
+// naming it.
+func TestUpdateBranchTakesAttributesFromMain(t *testing.T) {
+	union := "docs/log.md merge=union\n"
+	type edit = map[string]string
+	for _, tc := range []struct {
+		name       string
+		seed, a, b edit // a lands first, then b is brought up to date
+		want       string
+	}{
+		{"branch cut before union",
+			edit{"docs/log.md": "# Log\n"},
+			edit{".gitattributes": union, "docs/log.md": "# Log\n\n## from a, the first entry\n"},
+			edit{"docs/log.md": "# Log\n\n## from b, the second entry\n"},
+			""},
+		{"branch marks its own code union",
+			edit{"main.go": "package main\n\nvar x = 1\n"},
+			edit{"main.go": "package main\n\nvar x = 2\n"},
+			edit{".gitattributes": "*.go merge=union\n", "main.go": "package main\n\nvar x = 3\n"},
+			"conflict"},
+		{"union doubles a heading",
+			edit{".gitattributes": union, "docs/log.md": "# Log\n\n## Old\n- old entry here\n"},
+			edit{"docs/log.md": "# Log\n\n## Old\n- old entry, changed by a\n\n## Next\n- from a\n"},
+			edit{"docs/log.md": "# Log\n\n## Old\n- old entry, changed by b\n\n## Next\n- from b\n"},
+			"docs/log.md: ## Next"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, f := testHive(t)
+			files := edit{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"}
+			maps.Copy(files, tc.seed)
+			seedRepo(t, f, "me/attrs", files)
+			p, err := c.Projects.Add(Project{Name: "attrs", Repo: "me/attrs"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			base, _ := c.Effects.Sync(p)
+			branch := func(id string, e edit) string {
+				dir, err := c.Effects.NewCheckout(p, id, base)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for name, body := range e {
+					os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644)
+				}
+				mustGit(t, dir, "add", "-A")
+				mustGit(t, dir, "commit", "-q", "-m", id)
+				r, err := c.Runs.Start(RunSpec{ID: id, Role: "worker", Project: p.Name, Checkout: dir, Harness: "fake"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				sha, err := c.Effects.Extract(p, r, base)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return sha
+			}
+			a, b := branch("wa", tc.a), branch("wb", tc.b)
+			if err := c.Effects.Push(p, "hive/a", a); err != nil {
+				t.Fatal(err)
+			}
+			pr, _ := f.CreatePR(p.Repo, "hive/a", "main", "a", "")
+			if _, err := f.MergePR(p.Repo, pr.Number, a, "a"); err != nil {
+				t.Fatal(err)
+			}
+			main, _ := c.Effects.Sync(p)
+			for _, from := range []string{"", base} {
+				_, err := c.Effects.UpdateBranch(p, b, main, from)
+				var d *DoubledError
+				switch {
+				case tc.want == "" && err != nil:
+					t.Fatalf("base %q: %v", from, err)
+				case tc.want == "conflict" && !errors.Is(err, ErrConflict):
+					t.Fatalf("base %q: want a conflict, got %v", from, err)
+				case strings.Contains(tc.want, ": ") && (!errors.As(err, &d) || !errors.Is(err, ErrConflict) || !slices.Contains(d.Lines, tc.want)):
+					t.Fatalf("base %q: want %q doubled, got %v", from, tc.want, err)
+				}
+			}
+		})
+	}
+}
+
+// .gitattributes picks merge drivers, so a change to it, anywhere, is high class.
+func TestClassifyGitattributesHigh(t *testing.T) {
+	for _, file := range []string{".gitattributes", "docs/.gitattributes"} {
+		c, _, p, main := setupProject(t)
+		r, _ := commitInCheckout(t, c, p, "w7", main, file, "*.go merge=union\n")
+		sha, _ := c.Effects.Extract(p, r, main)
+		ch, err := c.Effects.Classify(p, main, sha)
+		if err != nil || ch.Small || !slices.Contains(ch.High, file) {
+			t.Errorf("%s should be high: %+v %v", file, ch, err)
+		}
 	}
 }
