@@ -73,7 +73,7 @@ func TestNullProjectsFromV010(t *testing.T) {
 }
 
 // TestInstallMovesInWhole: a module is cloned out of sight and moved into
-// .modules/ whole, so it never lists without its files, and a failed clone
+// .modules/ whole, so it never lists without its files or its release, and a failed clone
 // leaves nothing behind.
 func TestInstallMovesInWhole(t *testing.T) {
 	ws := core.Workspace{Root: t.TempDir()}
@@ -98,8 +98,10 @@ func TestInstallMovesInWhole(t *testing.T) {
 	if _, err := r.Install(filepath.Join(t.TempDir(), "missing"), "gone"); err == nil {
 		t.Fatal("a clone of nothing installed")
 	}
-	if _, err := r.Install(src, "ledger"); err != nil {
-		t.Fatal(err)
+	// It lists with its release from the start: its record is written
+	// before it moves in.
+	if m, err := r.Install(src, "ledger"); err != nil || m.Source.Release == "" {
+		t.Fatalf("installed %+v, %v", m, err)
 	}
 	entries, _ := os.ReadDir(ws.Modules())
 	for _, e := range entries {

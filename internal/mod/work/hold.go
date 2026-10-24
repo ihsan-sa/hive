@@ -186,13 +186,61 @@ func (m *Module) releasedSince(h MergeHold) bool {
 		}
 		repo, tag := s[:i], s[i+1:]
 		r, err := m.C.Effects.Forge.LatestRelease(repo)
-		if err != nil || r.Tag == "" || r.Tag == tag {
+		if err != nil && !errors.Is(err, core.ErrNotFound) {
+			m.cantWatch(h, repo, err)
 			continue
+		}
+		if r.Tag == "" || r.Tag == tag {
+			continue
+		}
+		m.mu.Lock()
+		now, on := m.holds[h.Project]
+		same := on && now.At.Equal(h.At)
+		m.mu.Unlock()
+		if !same {
+			return false // replaced or lifted meanwhile; the new one is asked next time
 		}
 		m.lift(h.Project, "the Hive", fmt.Sprintf("release %s is out on %s, which the hold waited for", r.Tag, repo))
 		return true
 	}
 	return false
+}
+
+// cantWatch raises, once per hold and repo, that the forge can't say whether
+// a release is out there, so a hold waiting for one doesn't silently never end.
+func (m *Module) cantWatch(h MergeHold, repo string, err error) {
+	key := h.Project + "\x00" + repo + "\x00" + h.At.String()
+	m.mu.Lock()
+	seen := m.holdWarned[key]
+	m.holdWarned[key] = true
+	m.mu.Unlock()
+	if seen {
+		return
+	}
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "hold", "project": h.Project, "ref": "hold:" + h.Project,
+		"text": fmt.Sprintf("%s's merges are held until the next release, but the newest release of %s can't be read (%s), so the hold may not end on its own; `%s hold %s --lift` lifts it",
+			h.Project, repo, core.Clip(err.Error(), 200), core.Cmd, h.Project)})
+}
+
+// watchHolds asks the forge, at most once a holdGap per project, whether a
+// hold's release is out, so a hold ends when it is (and stops showing in
+// status) even with no task waiting at the merge step.
+func (m *Module) watchHolds() {
+	m.mu.Lock()
+	var due []MergeHold
+	for _, h := range m.holds {
+		if h.Until == UntilRelease && !time.Now().Before(m.holdPolled[h.Project]) {
+			due = append(due, *h)
+		}
+	}
+	m.mu.Unlock()
+	for _, h := range due {
+		m.steps.Add(1)
+		go func() {
+			defer m.steps.Done()
+			m.releasedSince(h)
+		}()
+	}
 }
 
 // prs are PR numbers as a list, one number, or one string such as the CLI's

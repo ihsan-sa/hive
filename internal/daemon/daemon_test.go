@@ -243,6 +243,45 @@ func TestTaskRetryReaches(t *testing.T) {
 	}
 }
 
+// A module can't hold or lift merges; the person can.
+func TestHoldIsNotAModules(t *testing.T) {
+	dir := t.TempDir()
+	a, err := app.New(core.Workspace{Root: filepath.Join(dir, "hive")}, &core.Local{Dir: filepath.Join(dir, "forge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.C.Close() })
+	if _, err := a.C.Projects.Add(core.Project{Name: "p", Repo: "me/p"}); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{a: a, info: api.DaemonInfo{Token: "t"}}
+	post := func(body, module string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/hold", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer t")
+		if module != "" {
+			req = req.WithContext(context.WithValue(req.Context(), moduleKey{}, module))
+		}
+		rec := httptest.NewRecorder()
+		s.routes().ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := post(`{"project":"p","why":"hold"}`, "echomod"); rec.Code == http.StatusOK || !strings.Contains(rec.Body.String(), "only the person") {
+		t.Fatalf("a module's hold: %d %s", rec.Code, rec.Body)
+	}
+	if _, ok := a.Work.Hold("p"); ok {
+		t.Fatal("a module set a hold")
+	}
+	if rec := post(`{"project":"p","why":"hold"}`, ""); rec.Code != http.StatusOK {
+		t.Fatalf("the person's hold: %d %s", rec.Code, rec.Body)
+	}
+	if rec := post(`{"project":"p","lift":true}`, "echomod"); rec.Code == http.StatusOK {
+		t.Fatalf("a module lifted the hold: %d %s", rec.Code, rec.Body)
+	}
+	if h, ok := a.Work.Hold("p"); !ok || h.By != "person" {
+		t.Fatalf("hold %+v %v", h, ok)
+	}
+}
+
 // The person passes an agent's feedback to the lead: it lands in the lead's
 // chat as the person's message quoting it, the item is marked passed, and a
 // second pass is refused rather than posted twice.

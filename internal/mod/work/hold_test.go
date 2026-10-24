@@ -1,8 +1,10 @@
 package work
 
 import (
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -123,5 +125,67 @@ func TestLeadHoldNeedsThePersonsWords(t *testing.T) {
 	}
 	if _, ok := m.Hold(p.Name); ok {
 		t.Fatal("not lifted")
+	}
+}
+
+// A worker can't call hold_merges: it is the lead's, on the person's word.
+func TestWorkerCantHold(t *testing.T) {
+	m, _, p, _ := heldRig(t)
+	worker := core.Run{ID: "w-1", Role: "worker", Project: p.Name}
+	for _, args := range []string{`{"project":"p","why":"person: hold merges"}`, `{"project":"p","why":"person: lift it","lift":true}`} {
+		if _, err := m.C.Runs.Ops().Call(worker, "hold_merges", []byte(args)); err == nil || !strings.Contains(err.Error(), "not granted") {
+			t.Fatalf("a worker's %s: %v", args, err)
+		}
+	}
+	if _, ok := m.Hold(p.Name); ok {
+		t.Fatal("a worker set a hold")
+	}
+}
+
+// A hold until the next release, set on a repo with no release yet, ends at
+// its first release.
+func TestHoldUntilTheFirstRelease(t *testing.T) {
+	m, task, p, f := heldRig(t)
+	h, err := m.SetHold(MergeHold{Project: p.Name, Until: UntilRelease, By: "person"})
+	if err != nil || len(h.Since) != 1 || h.Since[0] != "me/p@" {
+		t.Fatalf("hold %+v, %v", h, err)
+	}
+	expectHeld(t, m, task, p, f)
+	f.CreateRelease(p.Repo, "v0.0.1", "", "")
+	expectMerged(t, m, task, p, f)
+}
+
+// A hold until the next release ends on the tick once it is out, with no task
+// at the merge step, so status stops showing it.
+func TestHoldEndsOnTheTick(t *testing.T) {
+	m, _, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	f.CreateRelease(p.Repo, "v1", "", "")
+	m.SetHold(MergeHold{Project: p.Name, Until: UntilRelease, By: "person"})
+	pollAgain(m)
+	m.watchHolds()
+	m.Wait()
+	if _, ok := m.Hold(p.Name); !ok {
+		t.Fatal("lifted with no new release")
+	}
+	f.CreateRelease(p.Repo, "v2", "", "")
+	pollAgain(m)
+	m.watchHolds()
+	m.Wait()
+	if _, ok := m.Hold(p.Name); ok {
+		t.Fatal("the hold outlived its release")
+	}
+}
+
+// A hold whose repo's releases can't be read says so once, rather than
+// silently never ending.
+func TestHoldThatCantWatchSaysSo(t *testing.T) {
+	m, _, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	h := MergeHold{Project: p.Name, Until: UntilRelease, Since: []string{"me/p@v1"}, By: "person", At: time.Now().UTC()}
+	m.C.J.MustAppend("merge.held", h)
+	for i := 0; i < 2; i++ {
+		m.cantWatch(h, "me/gone", errors.New("not found"))
+	}
+	if n := alerts(m, "hold"); n != 1 {
+		t.Fatalf("%d hold alerts, want 1", n)
 	}
 }
