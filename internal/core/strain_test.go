@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,5 +252,65 @@ func TestWorkerLaunchWaitsForLeadLaunch(t *testing.T) {
 	c.Runs.launch(w, cfg)
 	if w, _ = c.Runs.Get("worker"); w.Status != StatusRunning || w.Turn != 1 {
 		t.Fatalf("worker after the lead's turn started: %s turn %d, want running", w.Status, w.Turn)
+	}
+}
+
+// Ticks come every second and a lead's step can take longer (its ops drain
+// one at a time, a launch picks a login and starts a sandbox), so ticks
+// overlap. Each run is still stepped as it is at the time, never from an
+// older tick's view: a queued worker's turn starts once, and ends once.
+func TestOverlappingTicksStepEachRunOnce(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	if _, err := c.Runs.Start(RunSpec{ID: "lead", Role: "lead", Harness: "fake", Persistent: true}); err != nil {
+		t.Fatal(err)
+	}
+	l, _ := c.Runs.Get("lead")
+	c.Runs.launch(l, cfg)
+	if l, _ = c.Runs.Get("lead"); l.Status != StatusRunning {
+		t.Fatalf("lead %s, want running", l.Status)
+	}
+	// The lead's next steps drain an op that takes longer than two ticks.
+	c.Runs.ops.Register(Op{Name: "slow", Fn: func(Run, json.RawMessage) (any, error) { time.Sleep(1500 * time.Millisecond); return nil, nil }})
+	slowStep := func(n string) {
+		os.WriteFile(filepath.Join(c.WS.RunBox("lead"), "outbox", n+".json"), []byte(`{"id":"`+n+`","op":"slow"}`), 0o644)
+	}
+	count := func(kind, id string) int {
+		n := 0
+		c.J.Replay(func(e Event) {
+			if e.Kind == kind && strings.Contains(string(e.Data), `"id":"`+id+`"`) {
+				n++
+			}
+		})
+		return n
+	}
+	ticks := func() {
+		for i := 0; i < 3; i++ {
+			c.Runs.Tick(cfg)
+			time.Sleep(600 * time.Millisecond)
+		}
+		time.Sleep(1500 * time.Millisecond) // every tick's late step has run by now
+	}
+	if _, err := c.Runs.Start(RunSpec{ID: "worker", Role: "worker", Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	slowStep("one")
+	ticks()
+	if n := count("run.turn_started", "worker"); n != 1 {
+		t.Errorf("the worker's turn started %d times across overlapping ticks, want 1", n)
+	}
+	w, _ := c.Runs.Get("worker")
+	if w.Turn != 1 || w.Status != StatusRunning {
+		t.Fatalf("worker %s on turn %d, want running on turn 1", w.Status, w.Turn)
+	}
+	// Its turn, ended while ticks overlap, is recorded once.
+	if !c.Runs.Interrupt("worker") {
+		t.Fatal("could not interrupt the worker's turn")
+	}
+	slowStep("two")
+	ticks()
+	if n := count("run.turn_ended", "worker"); n != 1 {
+		t.Errorf("the worker's turn ended %d times across overlapping ticks, want 1", n)
 	}
 }

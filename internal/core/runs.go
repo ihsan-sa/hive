@@ -965,18 +965,15 @@ func (rs *Runs) Interrupt(id string) bool {
 // Leads go first, the Hive-wide lead ahead of the projects', and the other
 // runs step once every lead's step is done (or a few seconds in, should one
 // hang), so a lead's due turn starts ahead of any queued worker or review.
-// Nothing here waits on the caller's loop: the wait runs on its own.
+// Nothing here waits on the caller's loop: the wait runs on its own, and the
+// other runs are listed after it, as they are then, since a tick that came
+// meanwhile may have stepped them already.
 func (rs *Runs) Tick(cfg Config) {
-	live := rs.List(func(r *Run) bool { return !r.Terminal() || r.Status == StatusRunning })
+	live := rs.List(func(r *Run) bool { return r.Lead() && (!r.Terminal() || r.Status == StatusRunning) })
 	slices.SortStableFunc(live, func(a, b Run) int { return a.Nice() - b.Nice() })
 	var wg sync.WaitGroup
-	var rest []Run
 	for _, r := range live {
-		if r.Lead() {
-			rs.stepAsync(r, cfg, &wg)
-		} else {
-			rest = append(rest, r)
-		}
+		rs.stepAsync(r.ID, cfg, &wg)
 	}
 	go func() {
 		leads := make(chan struct{})
@@ -985,20 +982,24 @@ func (rs *Runs) Tick(cfg Config) {
 		case <-leads:
 		case <-time.After(5 * time.Second):
 		}
-		for _, r := range rest {
-			rs.stepAsync(r, cfg, nil)
+		for _, r := range rs.List(func(r *Run) bool { return !r.Lead() && (!r.Terminal() || r.Status == StatusRunning) }) {
+			rs.stepAsync(r.ID, cfg, nil)
 		}
 	}()
 }
 
-// stepAsync steps r in its own goroutine unless a step of it is under way.
-func (rs *Runs) stepAsync(r Run, cfg Config, wg *sync.WaitGroup) {
+// stepAsync steps the run in its own goroutine unless a step of it is under
+// way. It reads the run once it holds the step, never from the list it was
+// found in: a step that waited (behind the leads, or for a slow one) would
+// otherwise act on a status a later tick's step has moved on from, starting
+// a turn twice or ending one twice.
+func (rs *Runs) stepAsync(id string, cfg Config, wg *sync.WaitGroup) {
 	rs.mu.Lock()
-	if rs.busy[r.ID] {
+	if rs.busy[id] {
 		rs.mu.Unlock()
 		return
 	}
-	rs.busy[r.ID] = true
+	rs.busy[id] = true
 	rs.mu.Unlock()
 	if wg != nil {
 		wg.Add(1)
@@ -1006,13 +1007,15 @@ func (rs *Runs) stepAsync(r Run, cfg Config, wg *sync.WaitGroup) {
 	go func() {
 		defer func() {
 			rs.mu.Lock()
-			delete(rs.busy, r.ID)
+			delete(rs.busy, id)
 			rs.mu.Unlock()
 			if wg != nil {
 				wg.Done()
 			}
 		}()
-		rs.step(r, cfg)
+		if r, ok := rs.Get(id); ok {
+			rs.step(r, cfg)
+		}
 	}()
 }
 
