@@ -138,6 +138,13 @@ func Run(cfg Config) (rep Report, err error) {
 		return rep, err
 	}
 	rep.Sandbox = cfg.Sandbox
+	if cfg.Sandbox == "bwrap" && cfg.Self == "" {
+		// The sandboxes run the gate's own binary (gate-fwd, gate-check): it
+		// must be hive, not a test binary.
+		if self, _ := os.Executable(); strings.HasSuffix(self, ".test") {
+			return rep, fmt.Errorf("the gate runs from a test binary (%s): set Config.Self to a hive binary", filepath.Base(self))
+		}
+	}
 	if g, ok := cfg.Org.(GitHub); ok && cfg.ChildToken != "" {
 		if err = CheckReach(g, cfg.ChildToken, cfg.Repo); err != nil {
 			return rep, err

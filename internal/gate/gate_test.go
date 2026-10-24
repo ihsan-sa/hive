@@ -532,6 +532,7 @@ func TestCantRunWritesNoLesson(t *testing.T) {
 	cases := []Config{
 		{CandBin: cand, CtrlBin: cand, Sandbox: "bare"}, // bare without leave: refused before anything runs
 		{CandBin: cand, CtrlBin: cand, Sandbox: "bare", AllowBare: true, Probes: []string{"nosuch"}},
+		{CandBin: cand, CtrlBin: cand, Sandbox: "bwrap"}, // from a test binary with no Self: its sandboxes would run the tests as their forwarder
 	}
 	for i, cfg := range cases {
 		cfg.Out, cfg.Lessons = filepath.Join(dir, fmt.Sprint(i), "run"), lessons
@@ -586,7 +587,11 @@ func TestBuildFailureIsWhose(t *testing.T) {
 	lessons := filepath.Join(dir, "lessons.md")
 	pass := func(*Config, *Child) Result { return Result{Pass: true} }
 	run := func(name, head string) Report {
-		rep, _ := Run(Config{Repo: repo, Head: head, Base: good, Sandbox: testSandbox(), AllowBare: true, Out: filepath.Join(dir, name, "run"), Lessons: lessons,
+		self := ""
+		if testSandbox() == "bwrap" {
+			self = builtHive(t) // the forwarder in each sandbox is hive gate-fwd, not this test binary
+		}
+		rep, _ := Run(Config{Repo: repo, Head: head, Base: good, Sandbox: testSandbox(), AllowBare: true, Self: self, Out: filepath.Join(dir, name, "run"), Lessons: lessons,
 			Probes: []string{"pass"}, Probe: map[string]ProbeFunc{"pass": pass}})
 		return rep
 	}
