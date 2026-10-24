@@ -1685,3 +1685,29 @@ func TestStepBack(t *testing.T) {
 		t.Fatalf("the experiment reached the project's own tree: score.txt on main is %q", score)
 	}
 }
+
+// A one-line change no guard names merges on its tests and checks with no
+// reviewer seat; with every such merge sampled, one read follows the merge
+// and the task finishes after it.
+func TestTinyChangeMergesUnread(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/tiny", map[string]string{".hive/project.json": `{"test": "true", "sample_unread": 1}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "tiny", "repo": "me/tiny"}, nil)
+	h.post("/api/ask", map[string]string{"project": "tiny", "title": "a one-line fix FAKE:tiny"}, nil)
+	st := h.wait("the tiny change to merge and be sampled", 4*minute, taskStage("tiny", "a one-line fix FAKE:tiny", work.StageDone))
+	tk, _ := task(st, "tiny", "a one-line fix FAKE:tiny")
+	if !tk.Unread || tk.MergeSHA == "" {
+		t.Fatalf("task %+v should have merged unread", tk)
+	}
+	var sampledRead bool
+	for _, r := range st.Runs {
+		if r.Task == tk.ID && strings.HasPrefix(r.ID, "r-") {
+			t.Fatalf("a reviewer read it before merge: %s", r.ID)
+		}
+		sampledRead = sampledRead || r.Task == tk.ID && strings.HasPrefix(r.ID, "p-")
+	}
+	if !sampledRead {
+		t.Fatalf("no sampled read after the merge; log %v", tk.Log)
+	}
+}

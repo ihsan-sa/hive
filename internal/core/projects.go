@@ -73,8 +73,26 @@ type ProjectConfig struct {
 	High      []string `json:"high,omitempty"`      // paths whose changes need two separate reads
 	Root      []string `json:"root,omitempty"`      // paths that run with elevated rights: high, and the person says when they release
 	SmallMax  int      `json:"small_max_lines,omitempty"`
-	DryRun    string   `json:"dryrun,omitempty"` // for self-releasing projects: one ask, end to end
+	// UnreadMax is the size line under which a change that touches no
+	// protected, high, root or security-listed path merges on its tests and
+	// the checks with no reviewer seat (default DefaultUnreadMax; negative:
+	// every change is read). SampleUnread is one in how many of those get one
+	// read after merge (default DefaultSampleUnread; negative: none).
+	// ReadTwoMax is the size line over which a read change gets a second,
+	// separate read (default DefaultReadTwoMax); a root path or a reader's
+	// unsure land asks for one at any size.
+	UnreadMax    int    `json:"unread_max_lines,omitempty"`
+	SampleUnread int    `json:"sample_unread,omitempty"`
+	ReadTwoMax   int    `json:"second_read_lines,omitempty"`
+	DryRun       string `json:"dryrun,omitempty"` // for self-releasing projects: one ask, end to end
 }
+
+// The read lines' defaults (ProjectConfig).
+const (
+	DefaultUnreadMax    = 30
+	DefaultSampleUnread = 5
+	DefaultReadTwoMax   = 300
+)
 
 // SelfRoot and SelfHigh are the paths of the Hive's own source that a self
 // project guards whatever its project.json says; the gate's binary holds them,
@@ -244,6 +262,15 @@ func ParseProjectConfig(raw string) ProjectConfig {
 	json.Unmarshal([]byte(raw), &c)
 	if c.SmallMax == 0 {
 		c.SmallMax = 40
+	}
+	if c.UnreadMax == 0 {
+		c.UnreadMax = DefaultUnreadMax
+	}
+	if c.SampleUnread == 0 {
+		c.SampleUnread = DefaultSampleUnread
+	}
+	if c.ReadTwoMax == 0 {
+		c.ReadTwoMax = DefaultReadTwoMax
 	}
 	return c
 }

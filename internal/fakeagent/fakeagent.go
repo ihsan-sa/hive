@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:checkpoints (two commits in one turn, each waited on until merged), FAKE:reviewfix, FAKE:reviewadvice, FAKE:crash,
-// FAKE:limit, FAKE:offline, FAKE:needpackage, FAKE:goals, FAKE:needpython, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:offline, FAKE:needpackage, FAKE:goals, FAKE:needpython, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), FAKE:tiny (a one-line change, under the unread line), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -601,7 +601,13 @@ func worker(all, prompt, system string) (string, error) {
 	}
 	n := time.Now().UnixNano()
 	os.MkdirAll("work", 0o755)
-	os.WriteFile(filepath.Join("work", fmt.Sprintf("change-%d.code", n)), []byte("change\n"), 0o644)
+	// Over the unread line, so the change gets a read as most real ones do;
+	// FAKE:tiny makes it one line, which merges on its tests and checks.
+	change := strings.Repeat("change\n", core.DefaultUnreadMax+1)
+	if strings.Contains(all, "FAKE:tiny") {
+		change = "change\n"
+	}
+	os.WriteFile(filepath.Join("work", fmt.Sprintf("change-%d.code", n)), []byte(change), 0o644)
 	if out, err := run("git", "add", "-A"); err != nil {
 		return "", fmt.Errorf("git add: %v %s", err, out)
 	}

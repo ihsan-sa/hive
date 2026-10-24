@@ -584,6 +584,10 @@ func (m *Module) afterKept(project, sha string) {
 	for _, mg := range list {
 		if reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff); len(reads) > 0 {
 			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
+		} else if mg.Unread && len(mg.Root) == 0 {
+			// Merged unread by the gate's own rule: small, and no root, high,
+			// protected or security-listed path, so the release needn't wait.
+			fmt.Fprintf(&manifest, "- #%d at %s, merged on its tests and checks (%d lines, no guarded path)\n", mg.PR, core.Short(mg.SHA), mg.Lines)
 		} else {
 			unread = append(unread, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
 			fmt.Fprintf(&manifest, "- #%d at %s, not read\n", mg.PR, core.Short(mg.SHA))
@@ -727,6 +731,10 @@ type merge struct {
 	MergeSHA string `json:"merge_sha"`
 	Root     []string
 	Diff     string // the head's own diff (core.DiffID), whose reads carry to it
+	// Unread is a merge on its tests and checks alone: the gate found it
+	// small and touching no guarded path (core.Change.Unread), or docs only.
+	Unread bool
+	Lines  int
 }
 
 // merges lists the project's merges after the one its last release was cut

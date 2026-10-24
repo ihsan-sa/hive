@@ -65,6 +65,7 @@ type Effects struct {
 	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
 	seats     map[string]map[string]Verdict     // project#diff -> security seat -> its latest verdict
 	hostMade  map[string]HostCommit
+	unsure    map[string]bool // reviewer runs whose land was unsure
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
 }
@@ -99,6 +100,9 @@ type Verdict struct {
 	// PanelSeat(i)); "" is the ordinary reviewer. The host sets it on the run,
 	// so a seat's read never counts as an ordinary one, nor the other way.
 	Seat string `json:"seat,omitempty"`
+	// Unsure is a land its reader isn't confident in: the change then needs
+	// a second, separate read whatever its size.
+	Unsure bool `json:"unsure,omitempty"`
 }
 
 // SeatSecurity is the Hive's own security reviewer: a reviewer separate from
@@ -149,7 +153,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, unsure: map[string]bool{}, approvals: map[string]bool{}}
 	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -173,6 +177,9 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 				return
 			}
 			e.verdicts[v.Project+"@"+v.SHA] = v
+			if v.Unsure && v.Verdict == "land" {
+				e.unsure[v.Run] = true
+			}
 			if k := v.Project + "@" + v.SHA; v.Verdict == "land" && !slices.Contains(e.lands[k], v.Run) {
 				e.lands[k] = append(e.lands[k], v.Run)
 			} else if v.Verdict != "land" {
@@ -859,10 +866,17 @@ func (e *Effects) HostMade(project, sha string) (HostCommit, bool) {
 
 // Change describes a commit relative to main.
 type Change struct {
-	Base      string   `json:"base"`
-	Files     []string `json:"files"`
-	Lines     int      `json:"lines"`
-	Small     bool     `json:"small"`
+	Base  string   `json:"base"`
+	Files []string `json:"files"`
+	Lines int      `json:"lines"`
+	Small bool     `json:"small"`
+	// Unread is a change under the project's unread line (UnreadMax) that
+	// touches no protected, high, root or security-listed path: it merges on
+	// its tests and the forge's checks with no reviewer seat.
+	Unread bool `json:"unread,omitempty"`
+	// TwoReads says a read change needs a second, separate read: it is over
+	// the project's second-read line (ReadTwoMax) or touches a root path.
+	TwoReads  bool     `json:"two_reads,omitempty"`
 	Protected []string `json:"protected,omitempty"`
 	High      []string `json:"high,omitempty"` // files in a high or root class
 	// Security are files on main's SecurityList: the change merges only
@@ -908,12 +922,13 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	}
 	list := e.ReadFile(p, mainSHA, SecurityList)
 	security, root := ParseList(list, "paths"), ParseList(list, "root")
-	docsOnly := true
+	docsOnly, binary := true, false
 	for _, l := range strings.Split(stat, "\x00") {
 		f := strings.SplitN(l, "\t", 3)
 		if len(f) < 3 || f[2] == "" {
 			continue
 		}
+		binary = binary || f[0] == "-" // numstat counts no lines in a binary file
 		add, _ := strconv.Atoi(f[0])
 		del, _ := strconv.Atoi(f[1])
 		file := f[2]
@@ -943,6 +958,8 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		}
 	}
 	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Security) == 0 && !p.Self
+	c.Unread = len(c.Files) > 0 && !binary && c.Lines <= cfg.UnreadMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Root) == 0 && len(c.Security) == 0
+	c.TwoReads = len(c.Root) > 0 || c.Lines > cfg.ReadTwoMax
 	// Binary and full-index, so a binary file (or a script git takes for one,
 	// with a NUL byte in it) carries its content into the diff and DiffID, and
 	// two different blobs never read as the same change.
@@ -1065,7 +1082,8 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if len(ch.Protected) > 0 && !e.Approved("merge", p.Name, m.SHA) {
 		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
 	}
-	if !ch.Small && !e.readOK(p, ch, m.SHA) {
+	read := e.readOK(p, ch, m.SHA)
+	if !ch.Small && !ch.Unread && !read {
 		return "", fmt.Errorf("refusing to merge %s: no land verdict bound to that exact commit", short(m.SHA))
 	}
 	if !e.SecurityOK(p.Name, ch) {
@@ -1099,7 +1117,11 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	e.j.MustAppend("effect.merged", map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID})
+	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID, "lines": ch.Lines}
+	if !read {
+		ev["unread"] = true // merged on its tests and checks alone: small, or under the unread line
+	}
+	e.j.MustAppend("effect.merged", ev)
 	return merged, nil
 }
 
@@ -1338,20 +1360,35 @@ func CheckNames(runs []CheckRun) string {
 // else that changes the change's own files needs a new read.
 func (e *Effects) readOK(p Project, ch Change, sha string) bool {
 	project := p.Name
-	if p.Self || len(ch.High) > 0 {
-		// A release names the read of each merged head; a high class needs a
-		// second, separate read.
-		need := 1
-		if len(ch.High) > 0 {
-			need = 2
-		}
-		return len(e.Reads(project, sha, ch.DiffID)) >= need
+	reads := e.Reads(project, sha, ch.DiffID)
+	need := e.ReadsNeeded(ch, reads)
+	if p.Self || len(ch.High) > 0 || need > 1 {
+		// A release names the read of each merged head; a big change, a root
+		// path or an unsure land needs a second, separate read.
+		return len(reads) >= need
 	}
 	if v, ok := e.verdict(project, sha, ch.DiffID); ok {
 		return v.Verdict == "land"
 	}
 	h, ok := e.HostMade(project, sha)
 	return ok && (h.Kind == "revert" || h.Kind == "setup")
+}
+
+// ReadsNeeded is how many ordinary lands a read change needs, given the
+// lands it has: two when it is big or touches a root path (TwoReads) or a
+// reader was unsure, else one.
+func (e *Effects) ReadsNeeded(ch Change, reads []string) int {
+	if ch.TwoReads {
+		return 2
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, r := range reads {
+		if e.unsure[r] {
+			return 2
+		}
+	}
+	return 1
 }
 
 // Reviewed reports whether sha, classified as ch, has the reads it needs to merge.

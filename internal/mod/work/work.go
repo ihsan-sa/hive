@@ -73,9 +73,18 @@ type Task struct {
 	Reviews   int        `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
 	// round, so a seat is asked again under a new run id.
-	SeatTries map[string]int    `json:"seat_tries,omitempty"`
-	Reviewer  string            `json:"reviewer,omitempty"`
-	Findings  string            `json:"findings,omitempty"`
+	SeatTries map[string]int `json:"seat_tries,omitempty"`
+	Reviewer  string         `json:"reviewer,omitempty"`
+	Findings  string         `json:"findings,omitempty"`
+	// ReadAt is the head the newest ordinary read gave its verdict on, and
+	// ReadSaid that read's findings if it said fix, so the next read judges
+	// the delta since that head against them instead of reading it all again.
+	ReadAt   string `json:"read_at,omitempty"`
+	ReadSaid string `json:"read_said,omitempty"`
+	// Unread says it merged on its tests and checks with no reviewer seat;
+	// Sample, that it is one of those that get one read after merge.
+	Unread    bool              `json:"unread,omitempty"`
+	Sample    bool              `json:"sample,omitempty"`
 	MergeSHA  string            `json:"merge_sha,omitempty"`
 	RevertOf  string            `json:"revert_of,omitempty"`  // task id
 	RevertSHA string            `json:"revert_sha,omitempty"` // the merge being reverted
@@ -186,6 +195,9 @@ type Module struct {
 	// later is when a held task (waiting on the forge's checks or an outside
 	// read) is next looked at; kept in memory, so a restart looks at once.
 	later map[string]time.Time
+	// stats caches each project's ReadStats a minute (reads.go).
+	statsMu sync.Mutex
+	stats   map[string]statsAt
 	// prPolled is when each task waiting for the person last had its pull
 	// request looked up, so a close there is seen without a call every tick.
 	prPolled map[string]time.Time
@@ -678,6 +690,9 @@ func (m *Module) step(t *Task) error {
 	case StageMerging:
 		return m.merge(t, p)
 	case StageMerged:
+		if wait, err := m.sampleRead(t, p); wait || err != nil {
+			return err
+		}
 		if err := m.followUp(t, p); err != nil {
 			return err
 		}
@@ -1185,6 +1200,12 @@ func (m *Module) test(t *Task, p core.Project) error {
 	case ch.Small || m.C.Effects.Reviewed(p, ch, t.SHA):
 		t.Stage = StageMerging
 		m.save(t, "tests passed; "+map[bool]string{true: "small change, no read needed", false: "already read"}[ch.Small])
+	case ch.Unread && t.Reviewer == "":
+		// A small change no guard names merges on its tests and the forge's
+		// checks. One a reviewer already read is read again (its findings'
+		// delta), so shrinking it under the line never skips that read.
+		t.Stage = StageMerging
+		m.save(t, fmt.Sprintf("tests passed; %d lines touching no guarded path (under the unread line, %d), so it merges on its tests and checks with no read", ch.Lines, cfg.UnreadMax))
 	default:
 		t.Stage = StageReviewing
 		m.save(t, "tests passed; asking for a read")
@@ -1336,7 +1357,7 @@ func passFail(ok bool) string {
 }
 
 // VerdictSchema is the reviewer's structured answer.
-const VerdictSchema = `{"type":"object","properties":{"verdict":{"type":"string","enum":["land","fix"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"issue":{"type":"string"}},"required":["issue"]}},"advice":{"type":"array","items":{"type":"string"}},"token":{"type":"string"}},"required":["verdict","summary","token"]}`
+const VerdictSchema = `{"type":"object","properties":{"verdict":{"type":"string","enum":["land","fix"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"issue":{"type":"string"}},"required":["issue"]}},"advice":{"type":"array","items":{"type":"string"}},"unsure":{"type":"boolean"},"token":{"type":"string"}},"required":["verdict","summary","token"]}`
 
 // reviewToken is copied from brief.md into the verdict, so a land shows the
 // reviewer read its inputs.
@@ -1347,7 +1368,8 @@ func reviewToken(run string) string {
 
 func (m *Module) review(t *Task, p core.Project) error {
 	id := fmt.Sprintf("r-%s-%s-%d", t.ID, core.Short(t.SHA), t.Reviews)
-	if n := len(m.C.Effects.Reads(p.Name, t.SHA, t.Diff)); n > 0 {
+	reads := m.C.Effects.Reads(p.Name, t.SHA, t.Diff)
+	if n := len(reads); n > 0 {
 		id += fmt.Sprintf("-read%d", n+1) // a separate run for each further read
 	}
 	r, ok := m.C.Runs.Get(id)
@@ -1355,35 +1377,15 @@ func (m *Module) review(t *Task, p core.Project) error {
 		if closed, err := m.closedOnForge(t, p); closed || err != nil { // once a round, not every tick
 			return err
 		}
-		main, err := m.C.Effects.Sync(p)
-		if err != nil {
-			return err
-		}
-		ch, err := m.C.Effects.Classify(p, main, t.SHA)
-		if err != nil {
-			return err
-		}
-		dir, err := m.C.Effects.NewCheckout(p, id, t.SHA)
-		if err != nil {
-			return err
-		}
-		c, _ := m.C.Effects.GetCheck(p.Name, t.SHA, "test")
-		w, _ := m.C.Runs.Get(t.Worker)
-		account := w.Brief + "\n\n## The worker's account\n\n" + finishText(w)
-		if t.Kind == "revert" {
-			account = fmt.Sprintf("The Hive made this revert itself; no worker wrote it. It reverts the merge %s because: %s\n\nIt also records that lesson in `.hive/lessons.md`. Check it undoes that merge and nothing else.", core.Short(t.RevertSHA), t.Lesson)
-		}
 		round := fmt.Sprintf("round %d", t.Round+1)
 		if t.Checkpoint != "" {
 			round = "a checkpoint"
-			account = w.Brief + "\n\n## A checkpoint\n\nThe worker is still running and hasn't written its account yet. This commit is a checkpoint of its unfinished work, put up because it beats the best kept score; it merges on its own while the worker keeps going. Read it as a change that must be safe to merge as it stands, not as the finished task."
 		}
-		brief := fmt.Sprintf("Review %s of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", round, t.ID, t.Label())
-		spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
-		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
-		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": c.Output,
-			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account + m.reviewRules(p, main)}
-		if _, err := m.C.Runs.Start(spec); err != nil {
+		intro := fmt.Sprintf("Review %s of task %s: %q.", round, t.ID, t.Label())
+		if len(reads) > 0 {
+			intro += " Another reader already said land on this change; you are the second, separate read it needs, because it is big, touches a root path or that reader was unsure. Read it on your own."
+		}
+		if err := m.startRead(t, p, id, intro, len(reads) == 0); err != nil {
 			return err
 		}
 		t.Reviewer = id
@@ -1393,10 +1395,8 @@ func (m *Module) review(t *Task, p core.Project) error {
 	if !r.Terminal() {
 		return nil
 	}
-	var v core.Verdict
-	var tok struct{ Token string }
-	json.Unmarshal(r.Structured, &tok)
-	if err := json.Unmarshal(r.Structured, &v); err != nil || (v.Verdict != "land" && v.Verdict != "fix") || (v.Verdict == "land" && tok.Token != reviewToken(r.ID)) {
+	v, ok := verdictOf(r)
+	if !ok {
 		t.Reviews++
 		if t.Reviews >= 3 && t.Checkpoint != "" {
 			t.Reviews = 0
@@ -1426,6 +1426,10 @@ func (m *Module) review(t *Task, p core.Project) error {
 		fmt.Fprintf(&fb, "\n- Advice: %s", a)
 	}
 	m.comment(p.Repo, t.PR.Number, fb.String())
+	t.ReadAt, t.ReadSaid = t.SHA, ""
+	if v.Verdict == "fix" {
+		t.ReadSaid = fb.String()
+	}
 	if v.Verdict == "land" {
 		// Advice with a land doesn't hold the merge; it is kept, from every read,
 		// and filed as one follow-up once the change merges. A follow-up's own
@@ -1440,6 +1444,80 @@ func (m *Module) review(t *Task, p core.Project) error {
 		return m.dropCheckpoint(t, p, "the reviewer asked for fixes:\n\n"+fb.String())
 	}
 	return m.sendBack(t, p, "The reviewer asked for fixes on "+core.Short(t.SHA)+":\n\n"+fb.String())
+}
+
+// startRead starts the ordinary reviewer's read-only run id on t's head: its
+// brief.md holds the token, the account, and the project's rules from main.
+// A re-read (again: the first read of a head after an earlier read of this
+// task) also gets the earlier read's findings and delta.patch, the worker's
+// own commits since the head that read was of, and is asked to judge those.
+func (m *Module) startRead(t *Task, p core.Project, id, intro string, again bool) error {
+	main, err := m.C.Effects.Sync(p)
+	if err != nil {
+		return err
+	}
+	ch, err := m.C.Effects.Classify(p, main, t.SHA)
+	if err != nil {
+		return err
+	}
+	dir, err := m.C.Effects.NewCheckout(p, id, t.SHA)
+	if err != nil {
+		return err
+	}
+	c, _ := m.C.Effects.GetCheck(p.Name, t.SHA, "test")
+	w, _ := m.C.Runs.Get(t.Worker)
+	account := w.Brief + "\n\n## The worker's account\n\n" + finishText(w)
+	if t.Kind == "revert" {
+		account = fmt.Sprintf("The Hive made this revert itself; no worker wrote it. It reverts the merge %s because: %s\n\nIt also records that lesson in `.hive/lessons.md`. Check it undoes that merge and nothing else.", core.Short(t.RevertSHA), t.Lesson)
+	}
+	if t.Checkpoint != "" {
+		account = w.Brief + "\n\n## A checkpoint\n\nThe worker is still running and hasn't written its account yet. This commit is a checkpoint of its unfinished work, put up because it beats the best kept score; it merges on its own while the worker keeps going. Read it as a change that must be safe to merge as it stands, not as the finished task."
+	}
+	inputs := map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": c.Output}
+	files := "brief.md, diff.patch, tests.txt"
+	if delta := m.delta(p, t.ReadAt, t.SHA); again && delta != "" {
+		inputs["delta.patch"] = delta
+		files += ", delta.patch"
+		account += reReadRules(t)
+	}
+	brief := intro + "\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (" + files + "). The tests in tests.txt are the Hive's own check of this exact head: read that log rather than running the suite again. Give your verdict."
+	spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
+	spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
+	inputs["brief.md"] = "Review token: " + reviewToken(id) + "\n\n" + account + m.reviewRules(p, main)
+	spec.Inputs = inputs
+	_, err = m.C.Runs.Start(spec)
+	return err
+}
+
+// reReadRules tells a re-read what the earlier read found and to judge the
+// delta against it rather than read the whole change again.
+func reReadRules(t *Task) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n\n## A re-read\n\nAn earlier read of this task was of %s. `delta.patch` is what the worker changed since: its own commits after that head, without what a catch-up brought in from main. ", core.Short(t.ReadAt))
+	if t.ReadSaid != "" {
+		b.WriteString("That read asked for fixes. Judge whether its findings below are answered by the delta, and whether the delta brings a new problem; don't read the whole change again (`diff.patch` is there where the delta needs context). A finding left unanswered is fix; one answered differently from what it asked, but soundly, is answered.\n\n### The earlier read's findings\n\n" + t.ReadSaid)
+	} else {
+		b.WriteString("That read said land. Judge the delta: whether it is right and keeps what was landed sound; don't read the whole change again (`diff.patch` is there where the delta needs context).")
+	}
+	if t.Findings != "" && t.Findings != t.ReadSaid {
+		b.WriteString("\n\n### What sent it back since\n\n" + core.Clip(t.Findings, 3000))
+	}
+	return b.String()
+}
+
+// delta is what the worker committed after from up to to: its own commits
+// on the branch's first-parent line, leaving out catch-up merges and main's
+// commits they brought in. It is "" when there is no earlier head or git
+// can't tell, and the read is then of the whole change.
+func (m *Module) delta(p core.Project, from, to string) string {
+	if from == "" || from == to {
+		return ""
+	}
+	out, err := core.Git(m.C.WS.Project(p.Name), "log", "-p", "--first-parent", "--no-merges", "--no-color", "--no-renames", "--format=commit %H%n%n    %s%n", from+".."+to)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }
 
 // keepAdvice adds a land's advice to the task once per item, unless the task
@@ -1614,6 +1692,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		}
 		return nil
 	}
+	m.markUnread(t, p, main)
 	m.save(t, "merged as "+core.Short(merged))
 	if t.Kind == "revert" {
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Label(), "Revert: "), t.Lesson))
@@ -2084,10 +2163,8 @@ func (m *Module) seatRead(t *Task, p core.Project, ch core.Change, main, seat st
 	if !r.Terminal() {
 		return false, nil
 	}
-	var v core.Verdict
-	var tok struct{ Token string }
-	json.Unmarshal(r.Structured, &tok)
-	if err := json.Unmarshal(r.Structured, &v); err != nil || (v.Verdict != "land" && v.Verdict != "fix") || (v.Verdict == "land" && tok.Token != reviewToken(r.ID)) {
+	v, ok := verdictOf(r)
+	if !ok {
 		if t.SeatTries == nil {
 			t.SeatTries = map[string]int{}
 		}
@@ -2124,7 +2201,7 @@ func (m *Module) startSeat(t *Task, p core.Project, ch core.Change, main, seat, 
 	if t.Kind == "revert" {
 		account = fmt.Sprintf("The Hive made this revert itself; no worker wrote it. It reverts the merge %s because: %s", core.Short(t.RevertSHA), t.Lesson)
 	}
-	brief := fmt.Sprintf("Security read (%s) of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", seat, t.ID, t.Label())
+	brief := fmt.Sprintf("Security read (%s) of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). The tests in tests.txt are the Hive's own check of this exact head: read that log rather than running the suite again. Give your verdict.", seat, t.ID, t.Label())
 	spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 	h, model, route := m.seatModel(p, seat)
 	spec.Harness, spec.Model, spec.Route = h, model, route

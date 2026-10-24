@@ -873,3 +873,20 @@ func TestReleaseSaysAnUnreadTag(t *testing.T) {
 		t.Fatalf("Publish said %q once the tag read", got)
 	}
 }
+
+// A head the gate merged unread by its own rule (small, no guarded path)
+// goes out without the person, named as such; a head merged unread with no
+// such mark, or with a root path, still waits for them.
+func TestUnreadByRuleReleases(t *testing.T) {
+	m, n, merged, _ := selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 1, "sha": "a1", "merge_sha": "m1", "unread": true, "lines": 3})
+	m.AfterKept("hive", "m1")
+	if body := n.got["v0.0.1"]; !strings.Contains(body, "#1 at a1, merged on its tests and checks (3 lines, no guarded path)") || len(m.C.Person.Open()) != 0 {
+		t.Fatalf("an unread-by-rule head should release on its own: %q %+v", body, m.C.Person.Open())
+	}
+	merged(2, "a2", "m2")
+	m.AfterKept("hive", "m2")
+	if len(n.got) != 1 || len(m.C.Person.Open()) != 1 {
+		t.Fatalf("a head unread with no mark should wait for the person: %v", n.got)
+	}
+}
