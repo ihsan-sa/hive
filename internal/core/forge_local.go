@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -18,10 +19,11 @@ type Local struct {
 }
 
 type localState struct {
-	Issues   map[string][]localIssue `json:"issues"`
-	PRs      map[string][]localPR    `json:"prs"`
-	Comments map[string][]string     `json:"comments"`
-	Releases map[string][]Release    `json:"releases"`
+	Issues   map[string][]localIssue  `json:"issues"`
+	PRs      map[string][]localPR     `json:"prs"`
+	Comments map[string][]string      `json:"comments"`
+	Releases map[string][]Release     `json:"releases"`
+	Runs     map[string][]WorkflowRun `json:"runs"` // repo@sha -> release runs, newest first
 }
 
 type localIssue struct {
@@ -48,7 +50,7 @@ func (l *Local) RepoPath(repo string) string {
 }
 
 func (l *Local) load() localState {
-	s := localState{Issues: map[string][]localIssue{}, PRs: map[string][]localPR{}, Comments: map[string][]string{}, Releases: map[string][]Release{}}
+	s := localState{Issues: map[string][]localIssue{}, PRs: map[string][]localPR{}, Comments: map[string][]string{}, Releases: map[string][]Release{}, Runs: map[string][]WorkflowRun{}}
 	raw, err := os.ReadFile(filepath.Join(l.Dir, "state.json"))
 	if err == nil {
 		json.Unmarshal(raw, &s)
@@ -69,8 +71,22 @@ func (l *Local) EnsureRepo(repo, _ string) (bool, error) {
 	if err := os.MkdirAll(p, 0o755); err != nil {
 		return false, err
 	}
-	_, err := Git(p, "init", "--bare", "-b", "main")
-	return true, err
+	if _, err := Git(p, "init", "--bare", "-b", "main"); err != nil {
+		return true, err
+	}
+	return true, foreground(p)
+}
+
+// foreground keeps a bare repo's auto maintenance after a push in the
+// receiving git rather than a detached one: -c settings don't cross the
+// local transport, and a detached gc outlives the push that started it.
+func foreground(bare string) error {
+	for _, key := range []string{"maintenance.autoDetach", "gc.autoDetach"} {
+		if _, err := Git(bare, "config", key, "false"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Fork copies repo to owner's name, the local user's when owner is "".
@@ -82,8 +98,10 @@ func (l *Local) Fork(repo, owner string) (string, error) {
 	if Exists(l.RepoPath(fork)) {
 		return fork, nil
 	}
-	_, err := Git("", "clone", "-q", "--bare", l.RepoPath(repo), l.RepoPath(fork))
-	return fork, err
+	if _, err := Git("", "clone", "-q", "--bare", l.RepoPath(repo), l.RepoPath(fork)); err != nil {
+		return fork, err
+	}
+	return fork, foreground(l.RepoPath(fork))
 }
 
 func (l *Local) Clone(repo, dir string) error {
@@ -120,6 +138,21 @@ func (l *Local) Comment(repo string, number int, body string) error {
 	s := l.load()
 	k := fmt.Sprintf("%s#%d", repo, number)
 	s.Comments[k] = append(s.Comments[k], body)
+	l.save(s)
+	return nil
+}
+
+func (l *Local) StatusComment(repo string, number int, marker, body string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	k := fmt.Sprintf("%s#%d", repo, number)
+	body += "\n\n" + marker
+	if i := slices.IndexFunc(s.Comments[k], func(c string) bool { return strings.Contains(c, marker) }); i >= 0 {
+		s.Comments[k][i] = body
+	} else {
+		s.Comments[k] = append(s.Comments[k], body)
+	}
 	l.save(s)
 	return nil
 }
@@ -275,11 +308,56 @@ func (l *Local) LatestRelease(repo string) (Release, error) {
 	return rs[len(rs)-1], nil
 }
 
+func (l *Local) Tags(repo string) ([]string, error) {
+	var tags []string
+	for _, r := range l.load().Releases[repo] {
+		tags = append(tags, r.Tag)
+	}
+	return tags, nil
+}
+
+// AddRelease records a release as made outside the Hive, such as the person
+// marking an older one the latest (tests add them); it becomes the latest.
+func (l *Local) AddRelease(repo string, r Release) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	s.Releases[repo] = append(s.Releases[repo], r)
+	l.save(s)
+}
+
 func (l *Local) CreateRelease(repo, tag, sha, notes string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	s := l.load()
-	s.Releases[repo] = append(s.Releases[repo], Release{Tag: tag})
+	s.Releases[repo] = append(s.Releases[repo], Release{Tag: tag, Prerelease: true})
 	l.save(s)
 	return nil
+}
+
+func (l *Local) ReleaseRuns(repo, sha string) ([]WorkflowRun, error) {
+	return l.load().Runs[repo+"@"+sha], nil
+}
+
+// SetReleaseRuns sets the runs a release at sha started (tests set them).
+func (l *Local) SetReleaseRuns(repo, sha string, runs ...WorkflowRun) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	s.Runs[repo+"@"+sha] = runs
+	l.save(s)
+}
+
+func (l *Local) PublishRelease(repo, tag string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	for i, r := range s.Releases[repo] {
+		if r.Tag == tag {
+			s.Releases[repo][i].Prerelease = false
+			l.save(s)
+			return nil
+		}
+	}
+	return ErrNotFound
 }

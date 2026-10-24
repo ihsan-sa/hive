@@ -89,6 +89,16 @@ type Config struct {
 	MemFloorMB     int     `json:"mem_floor_mb"`
 	MemPressureMax float64 `json:"mem_pressure_max"`
 	CPUPressureMax float64 `json:"cpu_pressure_max"`
+	// MaxWorkers is how many workers may work at once: a plan carries only so
+	// many, so until its usage reading is trusted this number is the limit.
+	// Briefs past it wait in the queue, in order; 0 is no limit.
+	MaxWorkers int `json:"max_workers"`
+	// LoadMax holds new workers while the machine's 1-minute load per core is
+	// over it (Linux /proc/loadavg); 0 is off.
+	LoadMax float64 `json:"load_max"`
+	// MaxChecks is how many checks (the gate's tests, scores and dry runs,
+	// improve's measures) run at once; the rest wait in order. 0 is no limit.
+	MaxChecks int `json:"max_checks"`
 	// PlateauMerges: a project whose best score hasn't moved in this many
 	// merges gets a step-back (besides the improve.stepback schedule); 0 is off.
 	PlateauMerges int `json:"plateau_merges"`
@@ -251,6 +261,9 @@ func DefaultConfig() Config {
 		MemFloorMB:      1024,
 		MemPressureMax:  10,
 		CPUPressureMax:  40,
+		MaxWorkers:      4,
+		LoadMax:         1,
+		MaxChecks:       DefaultMaxChecks(),
 		PlateauMerges:   3,
 		Schedules: map[string]string{
 			"improve.sweep":    "every 12h",

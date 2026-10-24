@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -17,12 +18,51 @@ type Project struct {
 	Repo        string    `json:"repo"` // owner/name on the forge
 	Branch      string    `json:"branch"`
 	Description string    `json:"description,omitempty"`
-	Isolated    bool      `json:"isolated,omitempty"`
-	Self        bool      `json:"self,omitempty"` // the Hive's own source
+	Isolated    bool      `json:"isolated,omitempty"` // walled both ways: sees no other project, and none sees it
+	Private     bool      `json:"private,omitempty"`  // walled one way: reads the shared Hive, and none sees it
+	Self        bool      `json:"self,omitempty"`     // the Hive's own source
 	Demo        bool      `json:"demo,omitempty"`
 	Goals       string    `json:"goals,omitempty"` // the person's words when they made it
 	Ready       bool      `json:"ready,omitempty"` // cloned and set up; until then setup is retried
 	Created     time.Time `json:"created"`
+}
+
+// The three levels of sharing, from most to least seen (docs/sharing.md).
+const (
+	SharingShared   = "shared"
+	SharingPrivate  = "private"
+	SharingIsolated = "isolated"
+)
+
+// Sharing names p's level. Isolated wins over private.
+func (p Project) Sharing() string {
+	switch {
+	case p.Isolated:
+		return SharingIsolated
+	case p.Private:
+		return SharingPrivate
+	}
+	return SharingShared
+}
+
+// Hidden says whether other projects' agents are kept from p: its records are
+// covered in their sandboxes, and they can't reach its agents or file work in
+// it, nor its agents theirs.
+func (p Project) Hidden() bool { return p.Isolated || p.Private }
+
+// SetSharing sets p's level from its name; "" is shared.
+func (p *Project) SetSharing(level string) error {
+	switch level {
+	case "", SharingShared:
+		p.Isolated, p.Private = false, false
+	case SharingPrivate:
+		p.Isolated, p.Private = false, true
+	case SharingIsolated:
+		p.Isolated, p.Private = true, false
+	default:
+		return fmt.Errorf("sharing is one of %s, %s or %s, not %q", SharingShared, SharingPrivate, SharingIsolated, level)
+	}
+	return nil
 }
 
 // ProjectConfig is .hive/project.json in the project's repository, read from main.
@@ -34,6 +74,27 @@ type ProjectConfig struct {
 	Root      []string `json:"root,omitempty"`      // paths that run with elevated rights: high, and the person says when they release
 	SmallMax  int      `json:"small_max_lines,omitempty"`
 	DryRun    string   `json:"dryrun,omitempty"` // for self-releasing projects: one ask, end to end
+}
+
+// SelfRoot and SelfHigh are the paths of the Hive's own source that a self
+// project guards whatever its project.json says; the gate's binary holds them,
+// so no change on the branch can drop them. Root is what acts on the person's
+// machine outside the box: the box itself, the approved scripts the risk
+// module runs, the install and autostart, and the workflows that build every
+// install's binary. High is what holds or hands out credentials, what
+// replaces the running Hive, and the dependencies compiled into it.
+var (
+	SelfRoot = []string{"internal/sandbox/", "internal/mod/risk/", "internal/setup/", "install/", ".github/"}
+	SelfHigh = []string{"internal/core/effects.go", "internal/core/forge.go", "internal/harness/", "internal/mod/release/", "internal/daemon/", "modules/agents/warden.md", "modules/agents/tribunal.md", "go.mod", "go.sum", "go.work", "go.work.sum", "vendor/"}
+)
+
+// Guarded returns cfg with a self project's built-in classes added to its own.
+func (cfg ProjectConfig) Guarded(p Project) ProjectConfig {
+	if p.Self {
+		cfg.Root = append(slices.Clone(SelfRoot), cfg.Root...)
+		cfg.High = append(slices.Clone(SelfHigh), cfg.High...)
+	}
+	return cfg
 }
 
 // Score is one number, which way is better, and how much noise to tolerate.
@@ -73,6 +134,9 @@ func (s Score) WithinTolerance(value, best float64) bool {
 	}
 	return value >= best-s.Tolerance
 }
+
+// Beats reports whether value is better than best by more than the tolerance.
+func (s Score) Beats(value, best float64) bool { return !s.WithinTolerance(best, value) }
 
 // Best returns the better of a and b.
 func (s Score) Best(a, b float64) float64 {

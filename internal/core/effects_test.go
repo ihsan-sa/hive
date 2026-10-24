@@ -2,8 +2,10 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -27,7 +29,7 @@ func testHive(t *testing.T) (*Core, *Local) {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0 // a loaded CI runner mustn't hold fake turns
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded CI runner mustn't hold fake turns
 	ws.SaveConfig(cfg)
 	forge := &Local{Dir: filepath.Join(dir, "forge")}
 	c, err := Open(ws, forge)
@@ -236,6 +238,13 @@ func TestClassify(t *testing.T) {
 	if _, err := c.Effects.Merge(MergeRequest{Project: p, SHA: sha2, Main: main}); !errors.As(err, &np) {
 		t.Fatalf("goals change merged without the person: %v", err)
 	}
+	// docs/REVIEW.md is the person's intent the reviewer reads from main: a
+	// few lines there are no small docs change.
+	r3, _ := commitInCheckout(t, c, p, "w5r", main, "docs/REVIEW.md", "# Review\n\nAnything goes.\n")
+	sha3, _ := c.Effects.Extract(p, r3, main)
+	if ch3, _ := c.Effects.Classify(p, main, sha3); ch3.Small || !slices.Contains(ch3.Protected, "docs/REVIEW.md") {
+		t.Fatalf("a REVIEW.md change must be protected: %+v", ch3)
+	}
 }
 
 // A docs/ path is no free pass: a script there is code and gets a review,
@@ -323,6 +332,28 @@ func TestScoreEvaluatorPaths(t *testing.T) {
 	s := Score{Command: `sh "./eval/score.sh"; cat ./../up`, Paths: []string{"./tests/", "/abs", "a/../b"}}
 	if got, want := s.Evaluator(), []string{"tests", "b", "eval/score.sh"}; !slices.Equal(got, want) {
 		t.Fatalf("evaluator %q, want %q", got, want)
+	}
+}
+
+// A program variable whose lookup finds nothing stops the check with a clear
+// error; the shell never runs the arguments as the program.
+func TestEmptyProgramNeverRuns(t *testing.T) {
+	c, f := testHive(t)
+	seedRepo(t, f, "me/e", map[string]string{".hive/project.json": `{"test":"true"}`})
+	p, _ := c.Projects.Add(Project{Name: "e", Repo: "me/e"})
+	main, _ := c.Effects.Sync(p)
+	ch := c.Effects.RunCheck(p, main, "test", "PY=$(command -v no-such-hive-tool || command -v no-such-hive-tool3); $PY echo RAN")
+	if ch.OK || strings.Contains(ch.Output, "RAN") || !strings.Contains(ch.Output, "hive: missing program: no-such-hive-tool or no-such-hive-tool3") {
+		t.Fatalf("empty program: %+v", ch)
+	}
+	if ch := c.Effects.RunCheck(p, main, "test", "PY=$(command -v echo); $PY RAN"); !ch.OK || !strings.Contains(ch.Output, "RAN") {
+		t.Fatalf("found program: %+v", ch)
+	}
+	if ch := c.Effects.RunCheck(p, main, "test", "PY=$(command -v no-such-hive-tool); ${PY:-echo} RAN"); !ch.OK || !strings.Contains(ch.Output, "RAN") {
+		t.Fatalf("a default expansion is the shell's own fallback: %+v", ch)
+	}
+	if ch := c.Effects.RunCheck(p, main, "test", "PY=$(command -v no-such-hive-tool); ${PY} echo RAN"); ch.OK || strings.Contains(ch.Output, "RAN") {
+		t.Fatalf("braced empty program: %+v", ch)
 	}
 }
 
@@ -436,7 +467,7 @@ func TestSelfHostCommitsNeedTheirOwnRead(t *testing.T) {
 	mustGit(t, tmp, "commit", "-q", "-m", "main moves")
 	mustGit(t, tmp, "push", "-q", "origin", "HEAD:main")
 	main2, _ := c.Effects.Sync(p)
-	update, err := c.Effects.UpdateBranch(p, sha, main2)
+	update, err := c.Effects.UpdateBranch(p, sha, main2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,6 +521,56 @@ func TestScoreOf(t *testing.T) {
 	} {
 		if v, err := scoreOf(out); err == nil {
 			t.Errorf("scoreOf(%q) = %v; want no score", out, v)
+		}
+	}
+}
+
+// The Hive's own repo guards its root and high paths even when its
+// project.json names none; another project with the same layout doesn't.
+func TestSelfGuardsItsRootPaths(t *testing.T) {
+	c, f := testHive(t)
+	seedRepo(t, f, "me/hive", map[string]string{".hive/project.json": `{"test": "true", "high": ["docs/odd.md"]}`})
+	p, _ := c.Projects.Add(Project{Name: "hive", Repo: "me/hive"})
+	main, _ := c.Effects.Sync(p)
+	self := p
+	self.Self = true
+	for i, tc := range []struct {
+		file       string
+		high, root bool
+	}{
+		{"internal/sandbox/linux.go", true, true},
+		{"internal/sandbox/é.go", true, true}, // git would quote it
+		{"internal/sandbox/a\tb \"c\".go", true, true},
+		{"install/install.sh", true, true},
+		{".github/workflows/release.yml", true, true},
+		{"internal/core/effects.go", true, false},
+		{"modules/agents/warden.md", true, false},
+		{"go.mod", true, false},
+		{"go.sum", true, false},
+		{"go.work", true, false},
+		{"go.work.sum", true, false},
+		{"vendor/golang.org/x/sys/unix/syscall.go", true, false},
+		{"vendor/modules.txt", true, false},
+		{"docs/odd.md", true, false}, // the project's own classes still count
+		{"internal/tui/views.go", false, false},
+	} {
+		if runtime.GOOS == "windows" && strings.ContainsAny(tc.file, "\t\"") {
+			continue // Windows can't name a file so; git still can, from elsewhere
+		}
+		r, _ := commitInCheckout(t, c, p, fmt.Sprintf("w9-%d", i), main, tc.file, "x\n")
+		sha, err := c.Effects.Extract(p, r, main)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ch, _ := c.Effects.Classify(self, main, sha)
+		if !slices.Equal(ch.Files, []string{tc.file}) {
+			t.Errorf("%q read as %q", tc.file, ch.Files)
+		}
+		if (len(ch.High) > 0) != tc.high || (len(ch.Root) > 0) != tc.root {
+			t.Errorf("%s in a self project: high %v root %v", tc.file, ch.High, ch.Root)
+		}
+		if ch, _ := c.Effects.Classify(p, main, sha); len(ch.Root) > 0 || (len(ch.High) > 0) != (tc.file == "docs/odd.md") {
+			t.Errorf("%s outside a self project: high %v root %v", tc.file, ch.High, ch.Root)
 		}
 	}
 }

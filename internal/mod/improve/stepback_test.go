@@ -26,6 +26,7 @@ func rig(t *testing.T) *Module {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
 	ws.SaveConfig(cfg)
 	forge := &core.Local{Dir: filepath.Join(dir, "forge")}
 	if _, err := forge.EnsureRepo("me/hive", ""); err != nil {
@@ -48,7 +49,11 @@ func rig(t *testing.T) *Module {
 	}
 	a := &agents.Agents{C: c, Mod: modules.New(ws, c.J)}
 	ch := chat.New(c, a)
-	return New(c, a, work.New(c, a, ch), ch)
+	w := work.New(c, a, ch)
+	// Before the journal closes and the folders go: a worker step a test's
+	// last Tick started may still be cloning or saving (seen on macOS ci).
+	t.Cleanup(w.Wait)
+	return New(c, a, w, ch)
 }
 
 // said records a run on project whose one turn said text and left notes.
@@ -98,7 +103,8 @@ func TestFaultKeepsTranscriptsOffTheIssue(t *testing.T) {
 		t.Fatalf("the issue must carry the scores, the count of asks and the run ids, and no setup or transcript:\n%s", issue)
 	}
 	ro := filepath.Join(m.C.WS.RunRO("w-"+id), "transcripts.md")
-	for end := time.Now().Add(time.Minute); ; time.Sleep(50 * time.Millisecond) {
+	// Two minutes: a step that failed once (a slow runner's git) is retried 30s later.
+	for end := time.Now().Add(2 * time.Minute); ; time.Sleep(50 * time.Millisecond) {
 		m.Work.Tick()
 		if got, err := os.ReadFile(ro); err == nil {
 			if !strings.Contains(string(got), "SECRET-SETUP") || !strings.Contains(string(got), "SECRET-HIVE") ||
