@@ -985,3 +985,19 @@ func TestSpaceFoldsTheSelectedThread(t *testing.T) {
 		t.Fatal("space didn't unfold the selected thread")
 	}
 }
+
+// Once the restarted Hive answers, the control center drops "isn't answering"
+// and shows the new version.
+func TestReconnectShowsTheNewVersion(t *testing.T) {
+	m := testModel(100, 24)
+	m.Update(stateMsg{err: fmt.Errorf("dial tcp: connection refused")})
+	if !strings.Contains(m.View(), "isn't answering") {
+		t.Fatal("a failed poll doesn't say so")
+	}
+	st := sample()
+	st.Version = "v9.9.9"
+	m.Update(stateMsg{st: st})
+	if v := m.View(); strings.Contains(v, "isn't answering") || m.st.Version != "v9.9.9" {
+		t.Fatalf("after reconnecting (version %s):\n%s", m.st.Version, v)
+	}
+}
