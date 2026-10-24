@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
 	"github.com/ihsan-sa/hive-standalone-build/internal/text"
 	"maps"
@@ -263,7 +264,7 @@ func (m *model) runLine(r core.Run) string {
 	if r.Reason != "" && r.Status != core.StatusRunning {
 		extra = r.Reason
 	}
-	return fmt.Sprintf("%s  %s  turn %d  $%.2f  %dk ctx  %s  %s", runLabel(r), status, r.Turn, r.Cost, r.Context/1000, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
+	return fmt.Sprintf("%s  %s  %s  turn %d  $%.2f  %dk ctx  %s  %s", runLabel(r), status, text.Visible(core.HarnessName(r.Harness)+":"+r.Model), r.Turn, r.Cost, r.Context/1000, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
 }
 
 // spark draws the last scores as a one-line chart.
@@ -657,7 +658,7 @@ func (m *model) viewWaiting() []string {
 			from = a.Project + " › " + from
 		}
 		age := ago(a.Asked)
-		top := stTitle.Render(from) + "  " + stDim.Render(a.Kind)
+		top := stTitle.Render(from) + "  " + stWarn.Render(a.Kind)
 		ls := []string{pad(clip(top, w-len(age)-1), w-len(age)) + stDim.Render(age)}
 		ls = append(ls, wrap(a.Title, w)...)
 		if i == m.waitSel {
@@ -829,7 +830,7 @@ const custom = "custom…"
 // first, then a custom entry.
 func modelChoices(c core.Config) []string {
 	var out []string
-	for _, m := range append(harness.Models(c.Harness), c.ModelChoices...) {
+	for _, m := range append(append(harness.Models(c.Harness), c.ModelChoices...), sortedKeys(c.Models)...) {
 		if !slices.Contains(out, m) {
 			out = append(out, m)
 		}
@@ -911,6 +912,24 @@ func (m *model) settings() []setting {
 		s = append(s, setting{group: "Agents", label: "model for " + p, value: v, key: "project:" + p, choices: append([]string{"default"}, models...)})
 	}
 	s = append(s, setting{group: "Agents", label: "review rounds", value: strconv.Itoa(c.ReviewRounds), key: "review_rounds"})
+	// Each role's route shows the models it runs on in order; its pick-list
+	// adds a model at the end, removes one, or clears the role's own route.
+	for _, role := range core.RouteRoles {
+		picks := c.Shown(role, "")
+		v := strings.Join(picks, ", ")
+		if v == "" {
+			v = "none"
+		}
+		s = append(s, setting{group: "Routes", label: role, value: v, key: "route:" + role, choices: routeChoices(c, role)})
+	}
+	for _, name := range sortedKeys(c.Models) {
+		x := c.Models[name]
+		s = append(s, setting{group: "Routes", label: "model " + name, value: x.Where(), action: func() tea.Cmd {
+			return func() tea.Msg {
+				return flashMsg("models are set in .hive/config.json; a key is stored with `" + core.Cmd + " model key " + name + "`")
+			}
+		}})
+	}
 	for _, name := range sortedKeys(c.Schedules) {
 		s = append(s, setting{group: "Schedules", label: name, value: scheduleText(c.Schedules[name]), key: "schedule:" + name})
 	}
@@ -985,26 +1004,27 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch cur.key {
 		case "autonomy":
 			c.Autonomy = c.Autonomy%3 + 1
-			return m, m.post("/api/config", c, "autonomy set")
+			return m, m.saveConfig(c, "autonomy set")
 		case "auto_update":
 			c.AutoUpdate = !c.AutoUpdate
-			return m, m.post("/api/config", c, "auto-update changed")
+			return m, m.saveConfig(c, "auto-update changed")
 		case "channel":
 			if c.Channel = "pre-release"; m.st.Channel == "pre-release" {
 				c.Channel = "latest"
 			}
-			return m, m.post("/api/config", c, "release channel changed")
+			m.st.Channel = c.Channel // shown at once, as saveConfig shows the rest
+			return m, m.saveConfig(c, "release channel changed")
 		case "api_key_opt_in":
 			c.APIKeyOptIn = !c.APIKeyOptIn
-			return m, m.post("/api/config", c, "API key use changed")
+			return m, m.saveConfig(c, "API key use changed")
 		case "share":
 			_, on := m.st.Config.Sharing()
 			c.SetShare(!on)
-			return m, m.post("/api/config", c, "sharing changed")
+			return m, m.saveConfig(c, "sharing changed")
 		case "sandbox":
 			if c.Sandbox == "bare" {
 				c.Sandbox = "auto"
-				return m, m.post("/api/config", c, "sandbox back to auto")
+				return m, m.saveConfig(c, "sandbox back to auto")
 			}
 			m.setFlash("to run agents without a sandbox, read the warning in `" + core.Cmd + " doctor --bare`")
 			return m, nil
@@ -1052,6 +1072,97 @@ func (m *model) keyPick(cur setting, k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// routeModels are the models a route can name, as a route names them: a
+// named model by its name, any other as harness:model.
+func routeModels(c core.Config) []string {
+	var out []string
+	for _, m := range modelChoices(c) {
+		if e := routeEntry(c, m); m != custom && e != "" && !slices.Contains(out, e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func routeEntry(c core.Config, m string) string {
+	p, err := c.Pick(m)
+	switch {
+	case err != nil:
+		return ""
+	case p.Harness == "open":
+		return p.Model
+	}
+	return p.String()
+}
+
+// routeNow is the route a pick changes: the role's own, else what it runs on
+// now (its model setting, or the tribunal's seats).
+func routeNow(c core.Config, role string) []string {
+	var out []string
+	add := func(e string) {
+		if e != "" && !slices.Contains(out, e) {
+			out = append(out, e)
+		}
+	}
+	switch own := c.Routes[role]; {
+	case len(own) > 0:
+		for _, e := range own {
+			add(routeEntry(c, e))
+		}
+	case role == "tribunal":
+		for _, t := range c.Seats("") {
+			if t.Harness == "open" {
+				add(t.Model)
+			} else {
+				add(core.Pick{Harness: core.HarnessName(cmp.Or(t.Harness, c.Harness)), Model: t.Model}.String())
+			}
+		}
+	case role != "fallback" && role != "security":
+		add(routeEntry(c, c.Route(role, "")[0].String()))
+	}
+	return out
+}
+
+// routeChoices are a route's pick-list: add each known model that isn't on
+// it, remove each that is, and clear the role's own route.
+func routeChoices(c core.Config, role string) []string {
+	now := routeNow(c, role)
+	var out []string
+	for _, m := range routeModels(c) {
+		if slices.Contains(now, m) {
+			out = append(out, "remove "+m)
+		} else {
+			out = append(out, "add "+m)
+		}
+	}
+	return append(out, "clear")
+}
+
+// routeEdit is c with one pick from a route's pick-list made.
+func routeEdit(c core.Config, role, choice string) core.Config {
+	now := routeNow(c, role)
+	switch {
+	case choice == "clear":
+		now = nil
+	case strings.HasPrefix(choice, "add "):
+		now = append(now, strings.TrimPrefix(choice, "add "))
+	case strings.HasPrefix(choice, "remove "):
+		now = slices.DeleteFunc(now, func(e string) bool { return e == strings.TrimPrefix(choice, "remove ") })
+	default:
+		return c
+	}
+	c.Routes = maps.Clone(c.Routes)
+	if c.Routes == nil {
+		c.Routes = map[string][]string{}
+	}
+	if len(now) == 0 {
+		delete(c.Routes, role)
+	} else {
+		c.Routes[role] = now
+	}
+	return c
+}
+
 func (m *model) saveSetting(v string) tea.Cmd {
 	s := m.settings()
 	if m.setSel >= len(s) {
@@ -1082,6 +1193,8 @@ func (m *model) saveSetting(v string) tea.Cmd {
 			ps.Model = ""
 		}
 		c.Projects[p] = ps
+	case strings.HasPrefix(key, "route:"):
+		c = routeEdit(c, strings.TrimPrefix(key, "route:"), v)
 	case key == "review_rounds":
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 {
@@ -1105,7 +1218,14 @@ func (m *model) saveSetting(v string) tea.Cmd {
 	default:
 		return nil
 	}
-	return m.post("/api/config", c, "saved")
+	return m.saveConfig(c, "saved")
+}
+
+// saveConfig shows the new settings at once and posts them. The flash that
+// follows fetches state, which puts the daemon's back if it refused them.
+func (m *model) saveConfig(c core.Config, ok string) tea.Cmd {
+	m.st.Config = c
+	return m.post("/api/config", c, ok)
 }
 
 // settingCols is the width of the settings' label column, 28 cells or less

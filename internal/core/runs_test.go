@@ -65,7 +65,7 @@ func TestLeadFollowsModelSetting(t *testing.T) {
 	c, _ := testHive(t)
 	var args []string
 	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return startSB{args: &args}, nil }
-	c.Runs.ModelFor = func(Run) string { return "opus" }
+	c.Runs.Route = func(Run) []Pick { return []Pick{{Harness: "claude", Model: "opus"}} }
 	r, err := c.Runs.Start(RunSpec{ID: "lead1", Role: "lead", Harness: "claude", Model: "sonnet", Persistent: true, Checkout: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)

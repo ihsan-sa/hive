@@ -477,3 +477,21 @@ func TestRolledBackStartsTheOldDaemon(t *testing.T) {
 		t.Fatalf("under Restart=always: %v", err)
 	}
 }
+
+// Saving a setting that isn't the sandbox keeps the sandbox already picked,
+// rather than probing it again on the next state poll.
+func TestSettingKeepsTheSandbox(t *testing.T) {
+	c := core.DefaultConfig()
+	model := c
+	model.Model, model.AutoUpdate, model.ReviewRounds = "sonnet", !c.AutoUpdate, c.ReviewRounds+1
+	if sandboxChanged(c, model) {
+		t.Fatal("a model, auto-update or review-rounds change probes the sandbox again")
+	}
+	for _, f := range []func(*core.Config){func(c *core.Config) { c.Sandbox = "bare" }, func(c *core.Config) { c.WSLDistro = "Debian" }} {
+		n := c
+		f(&n)
+		if !sandboxChanged(c, n) {
+			t.Fatalf("a new sandbox setting %+v keeps the old sandbox", n)
+		}
+	}
+}

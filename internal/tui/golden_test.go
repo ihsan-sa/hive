@@ -5,12 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -190,6 +194,9 @@ func TestDesignFrames(t *testing.T) {
 		{"06d-feedback-80x24", 80, 24, func(m *model) { m.pick(sideRow{sec: secFeedback}); m.focus = 1 }},
 		{"06d-feedback", 120, 36, func(m *model) { m.pick(sideRow{sec: secFeedback}); m.focus = 1 }},
 		{"04b-80x24-thread-takeover", 80, 24, replyDraft},
+		{"08-ended-agents-80x24", 80, 24, endedAgents},
+		{"07a-two-hives", 120, 36, func(m *model) { twoHives(m, "lead") }},
+		{"07b-two-hives-80x24", 80, 24, func(m *model) { twoHives(m, "project:hive") }},
 	} {
 		m := designModel(c.w, c.h)
 		c.set(m)
@@ -264,5 +271,192 @@ func TestTinySizes(t *testing.T) {
 				_ = m.View()
 			}
 		}
+	}
+}
+
+// twoHives adds a project named hive beside the Hive's own lead, and opens
+// one of their chats, empty, where its hint shows.
+func twoHives(m *model, open string) {
+	m.st.Projects = append(m.st.Projects, api.ProjectView{Project: core.Project{Name: "hive"}})
+	m.st.Chats = append(m.st.Chats,
+		api.ChatView{Chat: chat.Chat{ID: "lead", Title: "lead", Kind: "lead"}, LeadStatus: "idle"},
+		api.ChatView{Chat: chat.Chat{ID: "project:hive", Title: "hive", Kind: "project", Project: "hive"}, LeadStatus: "idle"})
+	m.closed["p:textkit-2"], m.closed["p:hive-web"] = true, true
+	m.pick(sideRow{sec: -1, chatID: open})
+}
+
+// The sidebar never shows two groups with one label: the Hive's own lead and
+// a project named hive each say which they are.
+func TestNoTwoGroupsAlike(t *testing.T) {
+	m := designModel(120, 36)
+	twoHives(m, "lead")
+	seen := map[string]bool{}
+	for _, r := range m.sideRows() {
+		if r.group {
+			if seen[strings.ToLower(r.label)] {
+				t.Fatalf("two groups labelled %q", r.label)
+			}
+			seen[strings.ToLower(r.label)] = true
+		}
+	}
+	m.st.Projects = append(m.st.Projects, api.ProjectView{Project: core.Project{Name: "hive-wide"}})
+	for _, r := range m.sideRows() {
+		if r.group && r.key == "p:hive-wide" && strings.EqualFold(r.label, hiveGroup) {
+			t.Fatalf("a project named %s reads as the Hive's group", r.label)
+		}
+	}
+}
+
+// colourSGR finds a colour in a view's escapes: a foreground or background
+// (30–49, 90–107), which NO_COLOR rules out; bold, faint, reverse stay.
+func colourSGR(view string) string {
+	for _, sgr := range regexp.MustCompile(`\x1b\[([0-9;:]*)m`).FindAllStringSubmatch(view, -1) {
+		for _, p := range strings.FieldsFunc(sgr[1], func(r rune) bool { return r == ';' || r == ':' }) {
+			if n, _ := strconv.Atoi(p); n >= 30 && n <= 49 || n >= 90 && n <= 107 {
+				return strconv.Quote(sgr[0])
+			}
+		}
+	}
+	return ""
+}
+
+// Chats colour the person and each agent apart, on dark and light terminals,
+// what waits on the person shows amber, and NO_COLOR leaves no colour at all.
+func TestColourHints(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	defer lipgloss.SetHasDarkBackground(lipgloss.HasDarkBackground())
+	you := chat.Message{From: "person", Name: "you"}
+	lead := chat.Message{From: "lead-1", Name: "lead"}
+	writer := chat.Message{From: "w-1", Name: "writer"}
+	shade := map[bool]string{}
+	for _, dark := range []bool{true, false} {
+		lipgloss.SetHasDarkBackground(dark)
+		y, l, w := who(you), who(lead), who(writer)
+		if colourSGR(y) == "" || colourSGR(l) == "" || y == l || l == w || ansi.Strip(y) != "you" {
+			t.Fatalf("dark %v: you %q, lead %q, writer %q: want three colours", dark, y, l, w)
+		}
+		shade[dark] = l
+	}
+	if shade[true] == shade[false] {
+		t.Fatal("the lead's colour is the same shade on dark and light terminals")
+	}
+	if c := colourSGR(waitStyle(3).Render("3")); c == "" || colourSGR(waitStyle(0).Render("0")) != "" {
+		t.Fatal("waiting on the person isn't amber, or nothing waiting is")
+	}
+	frames := func() string {
+		var all []string
+		for _, set := range []func(*model){replyDraft, func(m *model) { designFeed(m) }, func(m *model) { m.pick(sideRow{sec: secWaiting}) }, func(m *model) { m.pick(sideRow{sec: secSettings}) }} {
+			m := designModel(120, 36)
+			set(m)
+			all = append(all, m.View())
+		}
+		return strings.Join(all, "\n")
+	}
+	if colourSGR(frames()) == "" {
+		t.Fatal("no colour in the frames")
+	}
+	setHue(false)
+	defer setHue(true)
+	if c := colourSGR(frames()); c != "" {
+		t.Fatalf("NO_COLOR still colours: %s", c)
+	}
+}
+
+// endedAgents gives textkit-2 two agents that ended today and one that ended
+// days ago.
+func endedAgents(m *model) {
+	for i, ago := range []time.Duration{time.Hour, 3 * time.Hour, 72 * time.Hour} {
+		id := fmt.Sprintf("agent:old-%d", i)
+		m.st.Chats = append(m.st.Chats, api.ChatView{Chat: chat.Chat{ID: id, Title: fmt.Sprintf("worker-%d", i+3), Kind: "agent", Project: "textkit-2", Created: time.Now().Add(-ago)}})
+	}
+	m.closed["p:hive-web"] = true
+}
+
+// Ended agents sit in a fold of their project, closed with a count; one that
+// ended over a day ago leaves the sidebar and stays reachable by its chat.
+func TestEndedAgentsFold(t *testing.T) {
+	m := designModel(80, 24)
+	endedAgents(m)
+	labels := func() (out []string) {
+		for _, r := range m.sideRows() {
+			out = append(out, strings.TrimSpace(r.label))
+		}
+		return out
+	}
+	got := strings.Join(labels(), "|")
+	if !strings.Contains(got, "ended (2)") || strings.Contains(got, "worker-3") || strings.Contains(got, "worker-5") {
+		t.Fatalf("closed fold: %s", got)
+	}
+	for i, r := range m.sideRows() {
+		if r.fold {
+			m.side, m.sideKey, m.focus = i, r.key, 0
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if got = strings.Join(labels(), "|"); !strings.Contains(got, "ended (2)|worker-3|worker-4") || strings.Contains(got, "worker-5") {
+		t.Fatalf("open fold: %s", got)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.chat != "agent:old-0" || m.path() != "textkit-2 › worker-3" {
+		t.Fatalf("down into the fold: chat %q, path %q", m.chat, m.path())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if strings.Contains(strings.Join(labels(), "|"), "worker-3") {
+		t.Fatal("← didn't close the fold")
+	}
+	if m.openChat("agent:old-2"); m.chat != "agent:old-2" {
+		t.Fatalf("the day-old chat isn't reachable: on %q", m.chat)
+	}
+}
+
+// With a thread open beside the channel, ← from an empty reply box and →
+// from the channel move between them, the thread stays open, and each pane
+// scrolls while it has the keys.
+func TestSidewaysBetweenThreadAndChannel(t *testing.T) {
+	m := designModel(120, 24)
+	replyDraft(m)
+	m.input.SetValue("")
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if m.focus != 1 || m.thread != "m3" || m.composing {
+		t.Fatalf("← from the thread: focus %d, thread %q, composing %v", m.focus, m.thread, m.composing)
+	}
+	if !strings.Contains(m.View(), "to the open thread") {
+		t.Fatal("the channel's hints don't say → goes back to the thread")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.chScroll == 0 {
+		t.Fatal("pgup in the channel didn't scroll it")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if m.focus != 2 || m.thread != "m3" || !m.composing || m.reply != "m3" {
+		t.Fatalf("→ from the channel: focus %d, thread %q, reply %q", m.focus, m.thread, m.reply)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.thScroll == 0 {
+		t.Fatal("pgup in the thread didn't scroll it")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyTab}) // tab goes round the same way
+	if m.focus != 0 {
+		t.Fatalf("tab from the thread: focus %d", m.focus)
+	}
+}
+
+// Each chat keeps its open thread and scroll while another chat is shown.
+func TestChatKeepsItsThread(t *testing.T) {
+	m := designModel(120, 24)
+	replyDraft(m)
+	m.input.SetValue("")
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	scrolled := m.chScroll
+	m.pick(sideRow{sec: -1, chatID: "project:hive-web"})
+	if m.chat != "project:hive-web" || m.thread != "" {
+		t.Fatalf("another chat: %q with thread %q", m.chat, m.thread)
+	}
+	m.pick(sideRow{sec: -1, chatID: "project:textkit-2"})
+	if m.thread != "m3" || m.chScroll != scrolled || !m.sidePane() {
+		t.Fatalf("back: thread %q, scroll %d (was %d)", m.thread, m.chScroll, scrolled)
 	}
 }
