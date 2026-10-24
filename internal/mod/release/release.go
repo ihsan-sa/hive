@@ -474,14 +474,14 @@ func (m *Module) afterKept(project, sha string) {
 			return
 		}
 	}
-	last := "v0.0.0"
-	if rel, err := m.C.Effects.Forge.LatestRelease(p.Repo); err == nil && rel.Tag != "" {
-		last = rel.Tag
+	// The next tag is one past the highest anywhere: the release marked
+	// latest may be older than pre-releases, and their tags are taken.
+	tags, err := m.C.Effects.Forge.Tags(p.Repo)
+	if err != nil {
+		alert("no release at " + core.Short(sha) + ": can't list the tags: " + err.Error())
+		return
 	}
-	if strings.HasPrefix(core.Version, "v") && modules.Newer(last, core.Version) {
-		last = core.Version
-	}
-	next := bump(last)
+	next := nextTag(append(tags, core.Version))
 	body := "Released by the Hive after " + core.Short(sha) + " kept its tests and dry run green. It is a pre-release until " +
 		strings.Join(Gates, " and ") + " pass on that commit; then it is the latest, which installs follow.\n\nWhat was read:\n\n" + manifest.String()
 	if approved {
@@ -741,6 +741,17 @@ func (m *Module) gates(repo, sha string) (state, why string) {
 		return "waiting", "waiting for " + strings.Join(wait, ", ")
 	}
 	return "passed", ""
+}
+
+// nextTag is one past the highest vX.Y.Z among tags (v0.0.1 if none is).
+func nextTag(tags []string) string {
+	last := "v0.0.0"
+	for _, t := range tags {
+		if strings.HasPrefix(t, "v") && modules.Newer(last, t) {
+			last = t
+		}
+	}
+	return bump(last)
 }
 
 func bump(tag string) string {

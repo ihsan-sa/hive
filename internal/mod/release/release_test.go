@@ -696,3 +696,36 @@ func TestSkippedOrCancelledGateIsNotAPass(t *testing.T) {
 		}
 	}
 }
+
+// The person marked v0.1.3 the latest after v0.1.4 to v0.1.6 went out as
+// pre-releases: the next release takes v0.1.7, not v0.1.4 again (which
+// GitHub refuses as taken).
+func TestReleaseNumbersPastEveryTag(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	for _, tag := range []string{"v0.1.4", "v0.1.6", "v0.1.5", "probe-1"} {
+		n.AddRelease("me/hive", core.Release{Tag: tag, Prerelease: true})
+	}
+	n.AddRelease("me/hive", core.Release{Tag: "v0.1.3"})
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	if rel, _ := n.LatestRelease("me/hive"); rel.Tag != "v0.1.7" || !rel.Prerelease {
+		t.Fatalf("the next release is %+v; want the pre-release v0.1.7", rel)
+	}
+}
+
+func TestNextTag(t *testing.T) {
+	for _, c := range []struct {
+		tags []string
+		want string
+	}{
+		{nil, "v0.0.1"},
+		{[]string{"dev", "probe-3"}, "v0.0.1"},
+		{[]string{"v0.1.3", "v0.1.6", "v0.1.4", "v0.1.10", "v0.1.9"}, "v0.1.11"},
+		{[]string{"v0.2.0", "v0.1.9"}, "v0.2.1"},
+	} {
+		if got := nextTag(c.tags); got != c.want {
+			t.Errorf("nextTag(%v) = %s; want %s", c.tags, got, c.want)
+		}
+	}
+}
