@@ -829,8 +829,7 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 // change to the checkout's reflog, read without running git there. Once the
 // worker has finished and been sent back, its next finish lands instead.
 func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
-	best, scored := m.bestScore(p.Name)
-	if !scored || t.From == "hive" || t.NoBank != "" || t.Round > 0 || t.Conflicts > 0 { // the Hive's own setup brief keeps its done line (doneFor)
+	if _, scored := m.bestScore(p.Name); !scored || t.From == "hive" || t.NoBank != "" || t.Round > 0 || t.Conflicts > 0 { // the Hive's own setup brief keeps its done line (doneFor)
 		return nil
 	}
 	sc := m.C.Effects.Config(p, "HEAD").Score
@@ -871,7 +870,12 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	t.Tried = sha
 	// main is measured after a merge, so the last checkpoint's own score
 	// counts until then; once measured, the kept best says what it was worth.
-	if n := len(t.Banks); n > 0 && !m.measured(p.Name, t.Banks[n-1].MergeSHA) {
+	// The kept best is read after asking, so a measurement landing in between
+	// is in it (read before, a stale best let a commit no better than the
+	// last checkpoint merge as one more).
+	unmeasured := len(t.Banks) > 0 && !m.measured(p.Name, t.Banks[len(t.Banks)-1].MergeSHA)
+	best, _ := m.bestScore(p.Name)
+	if unmeasured {
 		if c, ok := m.C.Effects.GetCheck(p.Name, t.Base, "score"); ok && c.Score != nil {
 			best = sc.Best(best, *c.Score)
 		}
@@ -1056,6 +1060,9 @@ func (m *Module) closeIssue(t *Task, p core.Project) {
 }
 
 func (m *Module) test(t *Task, p core.Project) error {
+	if closed, err := m.closedOnForge(t, p); closed || err != nil {
+		return err
+	}
 	main, err := m.C.Effects.Sync(p)
 	if err != nil {
 		return err
@@ -1421,6 +1428,9 @@ func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
 }
 
 func (m *Module) merge(t *Task, p core.Project) error {
+	if closed, err := m.closedOnForge(t, p); closed || err != nil {
+		return err
+	}
 	main, err := m.C.Effects.Sync(p)
 	if err != nil {
 		return err
@@ -1633,6 +1643,27 @@ func (m *Module) RecordRead(id, sha, by, verdict, note string) (Task, error) {
 	}
 	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("**The box's %s read %s: %s**\n\n%s", by, core.Short(full), verdict, note))
 	return t, nil
+}
+
+// closedOnForge ends a task whose pull request someone closed on the forge
+// without merging it. That is the person's call, so the lead can't bring the
+// task back by accident; a closed checkpoint is dropped as one left open is.
+func (m *Module) closedOnForge(t *Task, p core.Project) (bool, error) {
+	if t.PR.Number == 0 {
+		return false, nil
+	}
+	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
+	if err != nil || pr.State != "CLOSED" {
+		return false, err
+	}
+	if t.Checkpoint != "" {
+		t.NoBank = "the person closed a checkpoint's pull request"
+		return true, m.dropCheckpoint(t, p, fmt.Sprintf("PR #%d was closed on the forge; no more checkpoints, the rest lands when the worker finishes", pr.Number))
+	}
+	t.Stage, t.Reason, t.ByPerson = StageStopped, fmt.Sprintf("closed on the forge without merging (PR #%d)", pr.Number), true
+	m.save(t, t.Reason)
+	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q was %s: %s", t.Label(), t.Reason, t.PR.URL))
+	return true, nil
 }
 
 func (m *Module) conflict(t *Task, p core.Project, why error) error {

@@ -12,7 +12,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 | `internal/proc` | Detached processes; liveness by pid + start time, and a zombie is dead, though stopping one still signals its group. |
 | `internal/agentcli` | `hive agent <op>`: what agents call from inside the sandbox. |
 | `internal/fakeagent` | `hive fake-agent`: scripted agent for tests and dry runs (FAKE:* keywords). |
-| `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb` (notes, the record filed from the journal, search), `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates, the tick list), `runner` (modules that carry a program), `release` (self-update, self-release), `tools` (runtimes agents install for themselves), `feedback` (what agents tell the person about the Hive; [feedback.md](feedback.md)). |
+| `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb` (notes, the record filed from the journal, search), `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates, the tick list), `runner` (modules that carry a program), `release` (self-update, self-release), `tools` (runtimes agents install for themselves), `feedback` (what agents tell the person about the Hive; [feedback.md](feedback.md)), `report` (opt-in failure reports to the developer, scrubbed; [report.md](report.md)). |
 | `internal/app` | Wires core + modules; the tick loop steps the core, then each module the registry lists. |
 | `internal/daemon` | `hive daemon`, control API (127.0.0.1, bearer token in `.hive/private/daemon.json`, 0600). |
 | `internal/api` | API types + client. |
@@ -28,7 +28,8 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 .hive/      events.jsonl, config.json, chats/*.jsonl, scores/*.jsonl,
             runs/<id>/{host,ro,box}, kb/ (git repo of notes; record/ filed from the journal, untracked), gates/, checks/, improve/sweeps/,
             logins/, private/{daemon.json, update.json, runs/<id>/{home,codex,codex-sessions}},
-            tools/<python|uv|node|go>/bin (agent-installed runtimes; read-only at /hive/tools, on PATH)
+            tools/<python|uv|node|go>/bin (agent-installed runtimes; read-only at /hive/tools, on PATH),
+            reports/{sent/*.json, outbox.jsonl} (only when sharing is on)
 .modules/   agents, chat, kb, improve, system, + installed (each with .hive-source.json)
 projects/<name>/             host clone (effects process only)
 projects/<name>/.checkouts/  agents' own checkouts (excluded from the clone)
