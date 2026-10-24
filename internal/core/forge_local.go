@@ -31,6 +31,7 @@ type localState struct {
 	TagSHAs  map[string]string        `json:"tags"`             // repo@tag -> the commit it points at
 	Checks   map[string][]CheckRun    `json:"checks,omitempty"` // repo@sha
 	Jobs     map[string][]WorkflowJob `json:"jobs,omitempty"`   // repo#run -> its jobs
+	Reruns   map[string]int           `json:"reruns,omitempty"` // repo@sha -> re-runs of its failed checks asked
 }
 
 type localIssue struct {
@@ -405,6 +406,36 @@ func (l *Local) Checks(repo, sha string) ([]CheckRun, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.load().Checks[repo+"@"+sha], nil
+}
+
+// RerunFailed sets each failed or unstarted check on repo@sha back to
+// pending, as a CI starting them again would, and counts it in Reruns.
+func (l *Local) RerunFailed(repo, sha string) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	n := 0
+	for i, c := range s.Checks[repo+"@"+sha] {
+		if c.State == CheckFail || c.State == CheckCantStart {
+			s.Checks[repo+"@"+sha][i].State, s.Checks[repo+"@"+sha][i].Detail = CheckPending, "re-run"
+			n++
+		}
+	}
+	if n > 0 {
+		if s.Reruns == nil {
+			s.Reruns = map[string]int{}
+		}
+		s.Reruns[repo+"@"+sha]++
+		l.save(s)
+	}
+	return n, nil
+}
+
+// Reruns counts the re-runs asked on repo@sha.
+func (l *Local) Reruns(repo, sha string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.load().Reruns[repo+"@"+sha]
 }
 
 // SetChecks sets the forge's checks on repo@sha, as a CI would report them.
