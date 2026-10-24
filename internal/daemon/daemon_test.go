@@ -273,3 +273,25 @@ func alerts(s *server) string {
 	})
 	return out.String()
 }
+
+// Only a unit whose main process is this daemon restarts it. A daemon
+// started from a shell inside tmux.service or cron.service sits in that
+// unit's cgroup, but the unit won't start it again, so it starts its own
+// replacement as before.
+func TestSupervisorIsTheUnitWhoseMainProcessThisIs(t *testing.T) {
+	defer func(f func() (string, bool), g func(string, bool) (string, string, int)) { unitOf, unitSettings = f, g }(unitOf, unitSettings)
+	unitOf = func() (string, bool) { return "cron.service", false }
+	main := os.Getpid() + 1
+	unitSettings = func(string, bool) (string, string, int) { return "on-failure", "control-group", main }
+	if sup := supervisor(); sup.name != "" {
+		t.Fatalf("an unrelated unit was taken for the supervisor: %+v", sup)
+	}
+	main = os.Getpid()
+	if sup := supervisor(); sup.name != "cron.service" || sup.status != RestartStatus {
+		t.Fatalf("the unit whose main process this is wasn't: %+v", sup)
+	}
+	unitOf = func() (string, bool) { return "hive.service", true }
+	if sup := supervisor(); sup.name != "" {
+		t.Fatalf("the Hive's own user unit left the systemctl path: %+v", sup)
+	}
+}

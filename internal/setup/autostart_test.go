@@ -101,13 +101,13 @@ func TestUnitSettings(t *testing.T) {
 	bin := t.TempDir()
 	t.Setenv("PATH", bin)
 	called := filepath.Join(bin, "called")
-	os.WriteFile(filepath.Join(bin, "systemctl"), []byte("#!/bin/sh\necho \"$*\" >> "+called+"\nprintf 'Restart=on-failure\\nKillMode=control-group\\n'\n"), 0o755)
-	if restart, kill := UnitSettings("hive-box.service", false); restart != "on-failure" || kill != "control-group" {
-		t.Fatalf("got Restart=%q KillMode=%q", restart, kill)
+	os.WriteFile(filepath.Join(bin, "systemctl"), []byte("#!/bin/sh\necho \"$*\" >> "+called+"\nprintf 'Restart=on-failure\\nKillMode=control-group\\nMainPID=4242\\n'\n"), 0o755)
+	if restart, kill, pid := UnitSettings("hive-box.service", false); restart != "on-failure" || kill != "control-group" || pid != 4242 {
+		t.Fatalf("got Restart=%q KillMode=%q MainPID=%d", restart, kill, pid)
 	}
 	UnitSettings("agents.service", true)
 	raw, _ := os.ReadFile(called)
-	if want := "show -p Restart -p KillMode hive-box.service\n--user show -p Restart -p KillMode agents.service\n"; string(raw) != want {
+	if want := "show -p Restart -p KillMode -p MainPID hive-box.service\n--user show -p Restart -p KillMode -p MainPID agents.service\n"; string(raw) != want {
 		t.Fatalf("systemctl ran %q, want %q", raw, want)
 	}
 }

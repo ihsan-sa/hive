@@ -236,7 +236,7 @@ type supervision struct {
 }
 
 var supervisor = func() supervision {
-	name, user := setup.Unit()
+	name, user := unitOf()
 	if user && name == "hive.service" {
 		return supervision{} // Run hands the restart to systemctl --user
 	}
@@ -247,9 +247,16 @@ var supervisor = func() supervision {
 		}
 		return supervision{}
 	}
-	restart, killMode := setup.UnitSettings(name, user)
+	restart, killMode, mainPID := unitSettings(name, user)
+	if mainPID != os.Getpid() {
+		// Started from a shell inside someone else's unit (tmux, cron): that
+		// unit won't start this daemon again, so it starts its own replacement.
+		return supervision{}
+	}
 	return supervisedBy(name, restart, killMode)
 }
+
+var unitOf, unitSettings = setup.Unit, setup.UnitSettings
 
 // supervisedBy reads a unit's Restart= and KillMode=.
 func supervisedBy(name, restart, killMode string) supervision {

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -103,10 +104,12 @@ func Unit() (name string, user bool) {
 	return "", false
 }
 
-// UnitSettings reads a unit's Restart= and KillMode=, empty where systemctl
-// can't say.
-func UnitSettings(name string, user bool) (restart, killMode string) {
-	args := []string{"show", "-p", "Restart", "-p", "KillMode", name}
+// UnitSettings reads a unit's Restart=, KillMode= and MainPID=, empty (0)
+// where systemctl can't say. A process in the unit's cgroup that isn't its
+// main process, such as one started from a shell in tmux.service, isn't what
+// the unit supervises.
+func UnitSettings(name string, user bool) (restart, killMode string, mainPID int) {
+	args := []string{"show", "-p", "Restart", "-p", "KillMode", "-p", "MainPID", name}
 	if user {
 		args = append([]string{"--user"}, args...)
 	}
@@ -118,9 +121,11 @@ func UnitSettings(name string, user bool) (restart, killMode string) {
 			restart = v
 		case "KillMode":
 			killMode = v
+		case "MainPID":
+			mainPID, _ = strconv.Atoi(v)
 		}
 	}
-	return restart, killMode
+	return restart, killMode, mainPID
 }
 
 // RestartUnit rewrites the unit to start exe and has systemd restart it. A

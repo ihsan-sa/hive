@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
@@ -510,5 +511,35 @@ func TestHoldKeepsNewTurnsBack(t *testing.T) {
 	rs.append("run.turn_started", turnStarted{ID: "new", Turn: 1, Proc: h})
 	if rs.Live() != 1 {
 		t.Fatal("the running turn isn't counted")
+	}
+}
+
+// A launch already past the hold counts as live until its turn is
+// journalled, so a restart waiting for a quiet moment doesn't miss it.
+func TestLiveCountsLaunchesInFlight(t *testing.T) {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, nil, func() []string { return nil })
+	r, err := rs.Start(RunSpec{ID: "new", Harness: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, release := make(chan struct{}), make(chan struct{})
+	rs.sandbox = func() (sandbox.Sandbox, error) { close(in); <-release; return nil, errors.New("no sandbox") }
+	go rs.launch(r, Config{})
+	<-in
+	rs.Hold("waiting: a restart")
+	if rs.Live() != 1 {
+		t.Fatal("a launch past the hold isn't counted")
+	}
+	close(release)
+	for i := 0; rs.Live() != 0; i++ {
+		if i == 100 {
+			t.Fatal("a finished launch still counts")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
