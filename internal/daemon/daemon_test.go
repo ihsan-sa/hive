@@ -320,6 +320,13 @@ func TestSupervisedBy(t *testing.T) {
 // restartUnder runs a restart under sup with one live turn and reports
 // whether the daemon stopped before that turn ended, and after.
 func restartUnder(t *testing.T, sup supervision) (s *server, early, late bool) {
+	return restartWith(t, sup, false)
+}
+
+// restartWith is restartUnder; with outlive the turn stays live until the
+// restart returns, so a wait that gives up does so with the turn still live
+// however slowly the machine runs, not by a fixed sleep.
+func restartWith(t *testing.T, sup supervision, outlive bool) (s *server, early, late bool) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("sleep stands in for a turn")
@@ -345,14 +352,21 @@ func restartUnder(t *testing.T, sup supervision) (s *server, early, late bool) {
 	s = &server{a: &app.App{C: c}, info: api.DaemonInfo{PID: os.Getpid(), Token: "t"}, cancel: func() { stopped.Store(true) }}
 	done := make(chan struct{})
 	go func() { s.restart(); close(done) }()
-	time.Sleep(200 * time.Millisecond)
+	finished := func() {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the restart never finished")
+		}
+	}
+	if outlive {
+		finished()
+	} else {
+		time.Sleep(200 * time.Millisecond)
+	}
 	early = stopped.Load()
 	proc.Kill(turn)
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the restart never finished")
-	}
+	finished()
 	return s, early, stopped.Load()
 }
 
@@ -447,7 +461,7 @@ func TestSupervisorIsTheUnitWhoseMainProcessThisIs(t *testing.T) {
 func TestRestartWaitHasADeadline(t *testing.T) {
 	defer func(d time.Duration) { quietWait = d }(quietWait)
 	quietWait = 50 * time.Millisecond // passes while the turn is live
-	s, early, late := restartUnder(t, supervisedBy("hive-box.service", "on-failure", "control-group"))
+	s, early, late := restartWith(t, supervisedBy("hive-box.service", "on-failure", "control-group"), true)
 	if early || late || s.exit.Load() != 0 {
 		t.Fatal("the daemon stopped after the wait gave up")
 	}

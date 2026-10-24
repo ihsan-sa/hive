@@ -122,7 +122,9 @@ func TestRerunNeverRunsAPrintedName(t *testing.T) {
 	}
 	// A real break: go fails every time it runs, so the rerun must fail too.
 	bin := t.TempDir()
-	os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	sh := exec.Command("sh", "-c", cmd)
 	sh.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
 	if err := sh.Run(); err == nil {
@@ -149,7 +151,9 @@ func TestRerunNeverTakesAPrintedFlag(t *testing.T) {
 	// A real break: this go fails every time, except that, like go, it runs
 	// nothing and passes when handed -test.run with no tests to match.
 	bin := t.TempDir()
-	os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nfor a; do case \"$a\" in -test.run*) exit 0;; esac; done\nexit 1\n"), 0o755)
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nfor a; do case \"$a\" in -test.run*) exit 0;; esac; done\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	sh := exec.Command("sh", "-c", cmd)
 	sh.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
 	if err := sh.Run(); err == nil {
