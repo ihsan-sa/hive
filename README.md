@@ -16,6 +16,8 @@ Windows (PowerShell; on Windows PowerShell 5.1, run `[Net.ServicePointManager]::
 
 No GitHub login is needed to install. Running the line again reinstalls.
 
+On a Linux server, root can install it for a user of its own, run by a system service (`hive-<user>.service`, sandboxed: the user's home writable, the system read-only): save the installer and run `sudo HIVE_USER=hive sh install.sh` for an existing user `hive`. Everything in that user's home is written as that user. Root keeps the repo it installs from and one empty GitHub token file per owner (`/etc/hive/<user>/tokens/<owner>.token`, root's, 0600; `HIVE_TOKEN_OWNERS` names the owners) that only the service reads; a rerun naming another `HIVE_REPO` is refused. `sudo HIVE_USER=hive sh uninstall.sh` removes it.
+
 Then run `hive`. (The installer puts it on your PATH as `hive`, or the name in `HIVE_CMD`; `HIVE_VERSION=v0.1.2` installs an older release. Installs from v0.1.2 and before were called `hive-v0`; their next update renames them to `hive` and keeps `hive-v0` working.) The first run checks for git, Claude Code and the GitHub CLI, offers their own logins, asks where to live (Enter for `~/hive`) and for a GitHub repository (Enter makes a small private demo project), and opens the control center with the lead's chat.
 
 On Windows, agents are sandboxed inside WSL 2; the installer installs or updates Claude Code there.
