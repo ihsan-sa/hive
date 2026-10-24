@@ -17,6 +17,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 | `internal/daemon` | `hive daemon`, control API (127.0.0.1, bearer token in `.hive/private/daemon.json`, 0600). |
 | `internal/api` | API types + client. |
 | `internal/tui` | Control center (Bubble Tea): Chats, Dashboard, Waiting, Feedback, Knowledge, Modules, Settings. |
+| `internal/text` | `Visible`: spells out control, bidi and zero-width characters so text from outside (the usage feed, ask titles) can't rewrite the terminal. |
 | `internal/setup` | First run, `hive login`, `hive doctor`, autostart (HKCU Run / systemd user / LaunchAgent). |
 | `modules/` | Default module content (orientation + role prompts, manifests), embedded and written to `.modules/` on first run. |
 | `internal/demo` | Demo project template (textkit: tests + score). |
