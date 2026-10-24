@@ -90,6 +90,8 @@ var (
 	// negatedRe is a negation at most three words before a mention, with
 	// nothing between that turns it back ("don't forget to open a port").
 	negatedRe = regexp.MustCompile(`(?i)\b(not|no|never|don'?t|doesn'?t|won'?t|shouldn'?t|mustn'?t|needn'?t|without|nor|none)\b((\s+\S+){0,3})\s*$`)
+	// anyNegRe is any negation, for counting them in a clause.
+	anyNegRe  = regexp.MustCompile(`(?i)\b(not|no|never|nor|none|nothing|cannot|without|(do|does|did|wo|ca|is|are|was|were|should|must|need|would|could|have|has|ai)n'?t)\b`)
 	turnsBack = regexp.MustCompile(`(?i)\b(forget|fail|skip|neglect|omit|hesitate|stop|only|just|but|more|over|above|beyond|up|most|less|under|fewer|except)\b`)
 	// limitRe is a cap right after a mention: the negation limits the step
 	// rather than ruling it out.
@@ -122,7 +124,9 @@ func ruledOut(kind, before, match, after string) bool {
 		before = before[ix[len(ix)-1][1]:]
 	}
 	m := negatedRe.FindStringSubmatch(before)
-	return m != nil && !turnsBack.MatchString(m[2])
+	// A second negation turns the first back: "won't work without your API
+	// key" and "no reason not to expose it" ask for the thing.
+	return m != nil && !turnsBack.MatchString(m[2]) && len(anyNegRe.FindAllString(before, 2)) < 2
 }
 
 // FloorHit returns the first entry of the person's floor list the texts
