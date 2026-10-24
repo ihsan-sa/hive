@@ -658,7 +658,7 @@ func (m *model) viewWaiting() []string {
 			from = a.Project + " › " + from
 		}
 		age := ago(a.Asked)
-		top := stTitle.Render(from) + "  " + stDim.Render(a.Kind)
+		top := stTitle.Render(from) + "  " + stWarn.Render(a.Kind)
 		ls := []string{pad(clip(top, w-len(age)-1), w-len(age)) + stDim.Render(age)}
 		ls = append(ls, wrap(a.Title, w)...)
 		if i == m.waitSel {
@@ -1004,26 +1004,27 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch cur.key {
 		case "autonomy":
 			c.Autonomy = c.Autonomy%3 + 1
-			return m, m.post("/api/config", c, "autonomy set")
+			return m, m.saveConfig(c, "autonomy set")
 		case "auto_update":
 			c.AutoUpdate = !c.AutoUpdate
-			return m, m.post("/api/config", c, "auto-update changed")
+			return m, m.saveConfig(c, "auto-update changed")
 		case "channel":
 			if c.Channel = "pre-release"; m.st.Channel == "pre-release" {
 				c.Channel = "latest"
 			}
-			return m, m.post("/api/config", c, "release channel changed")
+			m.st.Channel = c.Channel // shown at once, as saveConfig shows the rest
+			return m, m.saveConfig(c, "release channel changed")
 		case "api_key_opt_in":
 			c.APIKeyOptIn = !c.APIKeyOptIn
-			return m, m.post("/api/config", c, "API key use changed")
+			return m, m.saveConfig(c, "API key use changed")
 		case "share":
 			_, on := m.st.Config.Sharing()
 			c.SetShare(!on)
-			return m, m.post("/api/config", c, "sharing changed")
+			return m, m.saveConfig(c, "sharing changed")
 		case "sandbox":
 			if c.Sandbox == "bare" {
 				c.Sandbox = "auto"
-				return m, m.post("/api/config", c, "sandbox back to auto")
+				return m, m.saveConfig(c, "sandbox back to auto")
 			}
 			m.setFlash("to run agents without a sandbox, read the warning in `" + core.Cmd + " doctor --bare`")
 			return m, nil
@@ -1217,7 +1218,14 @@ func (m *model) saveSetting(v string) tea.Cmd {
 	default:
 		return nil
 	}
-	return m.post("/api/config", c, "saved")
+	return m.saveConfig(c, "saved")
+}
+
+// saveConfig shows the new settings at once and posts them. The flash that
+// follows fetches state, which puts the daemon's back if it refused them.
+func (m *model) saveConfig(c core.Config, ok string) tea.Cmd {
+	m.st.Config = c
+	return m.post("/api/config", c, ok)
 }
 
 // settingCols is the width of the settings' label column, 28 cells or less
