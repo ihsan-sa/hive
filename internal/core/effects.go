@@ -687,7 +687,9 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		if under(file, cfg.Root) {
 			c.Root = append(c.Root, file)
 		}
-		if under(file, cfg.High) || under(file, cfg.Root) {
+		// .gitattributes picks merge drivers: merge=union on code would
+		// quietly keep both sides of every conflict in it.
+		if under(file, cfg.High) || under(file, cfg.Root) || file == ".gitattributes" || strings.HasSuffix(file, "/.gitattributes") {
 			c.High = append(c.High, file)
 		}
 		ext := strings.ToLower(filepath.Ext(file))
@@ -790,6 +792,13 @@ func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.rea
 // is taken from instead of the common ancestor: the branch's own commit that
 // main already holds as a squashed checkpoint, so only what came after it is
 // laid onto main.
+//
+// Attributes (merge=union and the rest) are read from main, not the branch:
+// a branch cut before main marked a file union merges it as main does, and a
+// branch can't mark its own files union to make its conflicts disappear. A
+// union merge that leaves a heading or line more times than either side had
+// it is sent back as a conflict too (a *DoubledError), since union keeps
+// both sides of an overlap and only the worker knows which to keep.
 func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, error) {
 	dir, err := e.cleanCheckout(p, sha, "update")
 	if err != nil {
@@ -799,10 +808,12 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 	if _, err := Git(dir, "fetch", "-q", "origin", mainSHA); err != nil {
 		return "", err
 	}
+	// attr.tree needs git 2.46; an older git ignores the key and reads the branch's own.
+	attr := "attr.tree=" + mainSHA
 	if base != "" {
 		// Exit status 1 is a conflict; anything else (such as a git older
 		// than 2.40, without --merge-base) is an error, not the worker's to fix.
-		tree, err := Git(dir, "merge-tree", "--write-tree", "--merge-base="+base, sha, mainSHA)
+		tree, err := Git(dir, "-c", attr, "merge-tree", "--write-tree", "--merge-base="+base, sha, mainSHA)
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() == 1 {
 			return "", ErrConflict
@@ -817,15 +828,72 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 		if err != nil {
 			return "", err
 		}
-	} else if _, err := Git(dir, "merge", "-q", "--no-edit", "-m", "Merge main into this branch", mainSHA); err != nil {
+	} else if _, err := Git(dir, "-c", attr, "merge", "-q", "--no-edit", "-m", "Merge main into this branch", mainSHA); err != nil {
 		Git(dir, "merge", "--abort")
 		return "", ErrConflict
+	}
+	if d := doubled(dir, attr, sha, mainSHA); len(d) > 0 {
+		return "", &DoubledError{Lines: d}
 	}
 	return e.hostCommit(p, dir, HostCommit{Project: p.Name, Kind: "update", Reviewed: sha, Main: mainSHA})
 }
 
 // ErrConflict means a branch can't be brought up to date without the worker.
 var ErrConflict = errors.New("conflicts with main")
+
+// DoubledError is a conflict a union merge hid: each entry is "path: line"
+// for a line the merge holds more times than either side did.
+type DoubledError struct{ Lines []string }
+
+func (d *DoubledError) Error() string {
+	return "a union merge doubled lines: " + strings.Join(d.Lines, "; ")
+}
+func (d *DoubledError) Is(target error) bool { return target == ErrConflict }
+
+// doubled lists, in the files both sides changed that main's attributes mark
+// merge=union, each heading or line of some length that HEAD (their merge)
+// holds more often than ours or theirs does. Blank lines, fences and rules
+// repeat in any doc, so short lines that aren't headings are left out.
+func doubled(dir, attr, ours, theirs string) []string {
+	changed := func(from string) map[string]bool {
+		out, _ := Git(dir, "-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", from, "HEAD")
+		m := map[string]bool{}
+		for _, f := range strings.Split(out, "\x00") {
+			if f != "" {
+				m[f] = true
+			}
+		}
+		return m
+	}
+	fromOurs, fromTheirs := changed(ours), changed(theirs)
+	var out []string
+	for f := range fromOurs {
+		if !fromTheirs[f] {
+			continue
+		}
+		if v, _ := Git(dir, "-c", attr, "check-attr", "merge", "--", f); !strings.HasSuffix(strings.TrimSpace(v), ": merge: union") {
+			continue
+		}
+		count := func(rev string) map[string]int {
+			s, _ := Git(dir, "show", rev+":"+f)
+			m := map[string]int{}
+			for _, l := range strings.Split(s, "\n") {
+				if l = strings.TrimSpace(l); strings.HasPrefix(l, "#") || len(l) >= 12 {
+					m[l]++
+				}
+			}
+			return m
+		}
+		a, b := count(ours), count(theirs)
+		for l, n := range count("HEAD") {
+			if n > max(a[l], b[l]) {
+				out = append(out, f+": "+l)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
 
 // Revert makes a commit on top of main that reverts mergeSHA and records the
 // lesson where the next worker reads it.
