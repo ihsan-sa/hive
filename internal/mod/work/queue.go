@@ -18,9 +18,11 @@ import (
 // start in the order they were filed, or the order the lead set, and only as
 // many work at once as max_workers allows (the plan's limit, until its usage
 // reading is trusted) while the machine isn't loaded. A brief that names the
-// same files or area as one already in flight (or ahead of it in line) waits
-// until that one lands, so the two don't conflict and redo each other's work.
-// Nothing here stops a worker that has started.
+// same files or area as one a worker is on (or ahead of it in line) waits
+// until that worker is done, so the two don't conflict and redo each other's
+// work. Once a worker has pushed, its task holds nothing back: a conflict it
+// meets later goes back to its worker with main to merge. Nothing here stops a
+// worker that has started.
 
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
@@ -49,19 +51,19 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	cfg := m.C.WS.LoadConfig()
 	start, wait = map[string]bool{}, map[string]string{}
 	working := 0
-	var ahead, line []Task // ahead: in flight, or earlier in line
+	var ahead, line []Task // ahead: being worked on, or earlier in line
 	m.mu.Lock()
 	for _, t := range tasks {
 		switch {
-		case t.Terminal(), t.Stage == StageNew: // a new one joins the line once issued
 		case t.Queued() && !m.busy[t.ID]:
 			line = append(line, t)
-		default: // past the queue, or a queued one being started right now
+		case t.Stage == StageWorking || t.Queued(): // or a queued one being started right now
 			ahead = append(ahead, t)
-			if t.Stage == StageWorking || t.Queued() {
-				working++
-			}
+			working++
 		}
+		// The rest hold no one back: new ones join the line once issued, and
+		// pushed ones (landing, testing, reviewing, merging) merge main on
+		// a conflict, with their worker if need be.
 	}
 	m.mu.Unlock()
 	inLine(line)
@@ -94,7 +96,8 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 }
 
 // overlap returns the first task in others on t's project whose brief names
-// a file or area t's brief names too, and that area.
+// a file t's brief names too, or a directory one of them names on its own
+// that holds the other's file or directory, and that area.
 func (m *Module) overlap(t Task, others []Task) (*Task, string) {
 	mine := m.areas(t)
 	if len(mine) == 0 {
@@ -120,9 +123,13 @@ func (m *Module) overlap(t Task, others []Task) (*Task, string) {
 
 var pathLike = regexp.MustCompile(`[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+`)
 
-// areas are the paths t's brief names that exist in its project's clone: each
-// file, and the directory it is in when that is deeper than the top level, so
-// two briefs on one package meet. They are worked out once per brief text.
+// areas are the paths t's brief names that exist in its project's clone. A
+// file is only itself, so two briefs on different files of one package start
+// together; a directory counts when the brief names it, unless it is at the
+// top level ("internal", "docs"), which would hold everything under it. A
+// file that merges as union (.gitattributes merge=union, like docs/log.md)
+// isn't an area: both sides' lines are kept. They are worked out once per
+// brief text.
 func (m *Module) areas(t Task) []string {
 	text := t.Title + "\n" + t.Done + "\n" + t.Known
 	key := t.ID + "\x00" + text
@@ -142,6 +149,7 @@ func (m *Module) areas(t Task) []string {
 	if err != nil {
 		return nil
 	}
+	union := unionPatterns(root)
 	seen := map[string]bool{}
 	var out []string
 	add := func(p string) {
@@ -165,15 +173,54 @@ func (m *Module) areas(t Task) []string {
 		if err != nil {
 			continue
 		}
-		if dir := path.Dir(p); !fi.IsDir() && strings.Contains(dir, "/") {
-			add(dir)
+		switch {
+		case fi.IsDir() && !strings.Contains(p, "/"): // a top-level directory, as in "internal/."
+		case !fi.IsDir() && matchesAny(union, p):
+		default:
+			add(p)
 		}
-		add(p)
 	}
 	m.mu.Lock()
 	m.areaCache[key] = out
 	m.mu.Unlock()
 	return out
+}
+
+// unionPatterns are the .gitattributes patterns in the clone root that merge as union.
+func unionPatterns(root string) []string {
+	b, err := core.SafeRead(filepath.Join(root, ".gitattributes"), 1<<20)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 || strings.HasPrefix(f[0], "#") {
+			continue
+		}
+		for _, attr := range f[1:] {
+			if attr == "merge=union" {
+				out = append(out, f[0])
+			}
+		}
+	}
+	return out
+}
+
+// matchesAny reports whether the clone path p matches a .gitattributes
+// pattern: one without a slash matches the file's name at any depth, one with
+// a slash the path from the root.
+func matchesAny(patterns []string, p string) bool {
+	for _, pat := range patterns {
+		target := p
+		if !strings.Contains(strings.TrimSuffix(pat, "/"), "/") {
+			target = path.Base(p)
+		}
+		if ok, _ := path.Match(strings.TrimPrefix(pat, "/"), target); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // inside reports whether path is root or under it.

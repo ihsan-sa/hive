@@ -720,8 +720,8 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	waiting := file(t, m, "tune the tests", "See .hive/project.json.")
 	waiting.Stage = StageQueued
 	m.save(&waiting, "")
-	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[waiting.ID], "task t1") {
-		t.Fatalf("the brief on the same file doesn't wait for t1: %q", wait[waiting.ID])
+	if _, wait := m.admit(m.List(nil)); strings.Contains(wait[waiting.ID], "task t1") { // t1 has pushed: a conflict goes back to it
+		t.Fatalf("the brief on the same file waits for t1, which is merging: %q", wait[waiting.ID])
 	}
 	// Squashed onto main by hand: the lead names the commit.
 	pushMain(t, f, map[string]string{"feature.txt": "y"})
@@ -773,7 +773,7 @@ func TestQueueNowPastOverlap(t *testing.T) {
 	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
 	stuck := file(t, m, "the stuck one", "In internal/core/effects.go.")
 	fix := file(t, m, "the queue fix", "In internal/core/effects.go too.")
-	stuck.Stage, fix.Stage = StageMerging, StageQueued
+	stuck.Stage, fix.Stage = StageWorking, StageQueued
 	m.save(&stuck, "")
 	m.save(&fix, "")
 	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], stuck.ID) {
@@ -793,10 +793,8 @@ func TestQueueNowPastOverlap(t *testing.T) {
 		t.Fatalf("the fix still waits: %q", wait[fix.ID])
 	}
 	cfg := m.C.WS.LoadConfig()
-	cfg.MaxWorkers = 1
+	cfg.MaxWorkers = 1 // the stuck one's worker counts toward the cap
 	m.C.WS.SaveConfig(cfg)
-	stuck.Stage = StageWorking // a worker that counts toward the cap
-	m.save(&stuck, "")
 	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], "max_workers") {
 		t.Fatalf("now went past max_workers: %q", wait[fix.ID])
 	}
