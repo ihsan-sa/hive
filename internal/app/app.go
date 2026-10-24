@@ -5,6 +5,7 @@ import (
 	"context"
 	"time"
 
+	hive "github.com/ihsan-sa/hive-standalone-build"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
@@ -53,12 +54,13 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	c.Runs.Ops().SetSpawner(a.Work.Spawn)
 	a.Improve = improve.New(c, a.Agents, a.Work, a.Chat)
 	a.KB = kb.New(c, a.Agents)
+	a.KB.SeedSelf(hive.Source)
 	a.System = system.New(c)
 	a.Risk = risk.New(c, a.Mods, a.Agents)
 	a.Work.Steps = a.Risk.Steps
 	a.Work.Weigh = a.Risk.Weigh
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
-	a.Release = &release.Module{C: c}
+	a.Release = release.New(c)
 	a.Improve.OnKept = a.Release.AfterKept
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
 	for _, tick := range []func(){a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Risk.Tick, a.Projects.Tick, a.Runner.Tick} {

@@ -6,62 +6,75 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 )
 
-type chatRow struct {
+// sideRow is one row of the sidebar: a section, a project group or a chat.
+type sideRow struct {
+	sec    int // section row, or -1
 	key    string
 	label  string
 	chatID string
-	depth  int
 	group  bool
 }
 
-// chatRows lists chats like a simplified Slack: the lead, then each project
-// (collapsible) with its lead's chat and its running agents, then the Hive's
-// own agents.
-func (m *model) chatRows() []chatRow {
-	rows := []chatRow{{key: "lead", label: "lead", chatID: "lead"}}
+// sideRows lists the sections, then one chat per project lead and per agent,
+// grouped by project, then the Hive's own lead and agents. A collapsed group
+// hides its chats unless all is set, which lookups use.
+func (m *model) sideRows() []sideRow { return m.rows(false) }
+
+func (m *model) rows(all bool) []sideRow {
+	var rows []sideRow
+	for i, s := range sections {
+		rows = append(rows, sideRow{sec: i, key: "sec:" + s, label: s})
+	}
+	rows = append(rows, sideRow{sec: -1, key: "gap"})
 	byProject := map[string][]core.Run{}
 	for _, r := range m.st.Runs {
-		if r.Terminal() || r.Role == "lead" && r.Project == "" {
-			continue
-		}
-		if r.Role == "lead" {
-			continue
-		}
-		byProject[r.Project] = append(byProject[r.Project], r)
-	}
-	for _, p := range m.st.Projects {
-		rows = append(rows, chatRow{key: "p:" + p.Name, label: p.Name, group: true})
-		if m.closed["p:"+p.Name] {
-			continue
-		}
-		rows = append(rows, chatRow{key: "project:" + p.Name, label: "lead", chatID: "project:" + p.Name, depth: 1})
-		for _, r := range byProject[p.Name] {
-			rows = append(rows, chatRow{key: "agent:" + r.ID, label: runLabel(r), chatID: "agent:" + r.ID, depth: 1})
+		if !r.Terminal() && r.Role != "lead" {
+			byProject[r.Project] = append(byProject[r.Project], r)
 		}
 	}
-	if rs := byProject[""]; len(rs) > 0 {
-		rows = append(rows, chatRow{key: "p:", label: "hive", group: true})
-		if !m.closed["p:"] {
-			for _, r := range rs {
-				rows = append(rows, chatRow{key: "agent:" + r.ID, label: runLabel(r), chatID: "agent:" + r.ID, depth: 1})
+	seen := map[string]bool{}
+	group := func(key, label string, chats []sideRow) {
+		rows = append(rows, sideRow{sec: -1, key: key, label: label, group: true})
+		for _, c := range chats {
+			seen[c.chatID] = true
+			if all || !m.closed[key] {
+				c.sec = -1
+				rows = append(rows, c)
 			}
 		}
 	}
-	// Agent chats with history whose run has ended stay reachable.
-	seen := map[string]bool{}
-	for _, r := range rows {
-		seen[r.chatID] = true
-	}
-	for _, c := range m.st.Chats {
-		if c.Kind == "agent" && !seen[c.ID] {
-			rows = append(rows, chatRow{key: c.ID, label: c.Title + " (ended)", chatID: c.ID})
+	agents := func(p string) []sideRow {
+		var out []sideRow
+		for _, r := range byProject[p] {
+			seen["agent:"+r.ID] = true
+			out = append(out, sideRow{key: "agent:" + r.ID, label: runLabel(r), chatID: "agent:" + r.ID})
 		}
+		// Agent chats with history whose run has ended stay reachable.
+		for _, c := range m.st.Chats {
+			if c.Kind == "agent" && c.Project == p && !seen[c.ID] {
+				out = append(out, sideRow{key: c.ID, label: c.Title + " (ended)", chatID: c.ID})
+			}
+		}
+		return out
+	}
+	for _, p := range m.st.Projects {
+		group("p:"+p.Name, p.Name, append([]sideRow{{key: "project:" + p.Name, label: "lead", chatID: "project:" + p.Name}}, agents(p.Name)...))
+	}
+	var hive []sideRow
+	for _, c := range m.st.Chats {
+		if c.Kind == "lead" {
+			hive = append(hive, sideRow{key: c.ID, label: "lead", chatID: c.ID})
+		}
+	}
+	if hive = append(hive, agents("")...); len(hive) > 0 {
+		group("p:", "hive", hive)
 	}
 	return rows
 }
@@ -77,35 +90,149 @@ func runLabel(r core.Run) string {
 	return r.Role + " " + id
 }
 
+func (m *model) viewSidebar(w int) pane {
+	unread := map[string]int{}
+	for _, c := range m.st.Chats {
+		unread[c.ID] = c.Unread
+	}
+	rows := m.sideRows()
+	var body []string
+	for i, r := range rows {
+		mark, name, count := "  ", r.label, ""
+		switch {
+		case r.sec >= 0:
+			if r.sec == m.section {
+				mark, name = "› ", stTitle.Render(name)
+			}
+			if r.sec == secWaiting && len(m.st.Asks) > 0 {
+				count = stTitle.Render(fmt.Sprint(len(m.st.Asks)))
+			}
+		case r.group:
+			mark = "▾ "
+			if m.closed[r.key] {
+				mark = "▸ "
+			}
+			mark, name = stDim.Render(mark), stDim.Render(name)
+		case r.chatID != "":
+			if unread[r.chatID] > 0 {
+				name, count = stTitle.Render(name), "●"
+			}
+			if m.section == secChats && r.chatID == m.chat {
+				mark, name = "› ", stTitle.Render(r.label)
+			}
+		}
+		line := " " + mark + name
+		if count != "" {
+			line = pad(clip(line, w-4), w-2-visibleWidth(count)) + count
+		}
+		if i == m.side && m.focus == 0 {
+			line = stSel.Render(fit(" "+ansi.Strip(mark)+r.label, w))
+		}
+		body = append(body, line)
+	}
+	return pane{w: w, head: stTitle.Render(" hive"), body: window(body, m.side, m.h-4)}
+}
+
+// keySidebar moves the one cursor through sections and chats; the row under
+// it is what the main pane shows.
+func (m *model) keySidebar(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	rows := m.sideRows()
+	m.side = min(m.side, len(rows)-1)
+	step := func(d int) tea.Cmd {
+		for i := m.side + d; i >= 0 && i < len(rows); i += d {
+			if rows[i].key != "gap" {
+				m.side = i
+				return m.pick(rows[i])
+			}
+		}
+		return nil
+	}
+	r := rows[m.side]
+	switch k.String() {
+	case "up", "k":
+		return m, step(-1)
+	case "down", "j":
+		return m, step(1)
+	case " ", "enter", "right", "l":
+		if r.group {
+			m.closed[r.key] = !m.closed[r.key]
+			return m, nil
+		}
+		m.focus = 1
+		return m, m.markRead()
+	}
+	return m, nil
+}
+
+func (m *model) pick(r sideRow) tea.Cmd {
+	m.stack = nil
+	var cmd tea.Cmd
+	switch {
+	case r.sec >= 0:
+		m.section = r.sec
+	case r.chatID != "":
+		if m.chat != r.chatID {
+			m.chat, m.thread, m.threadSel, m.chScroll = r.chatID, "", -1, 0
+		}
+		m.section = secChats
+		cmd = m.fetchChat(r.chatID)
+	}
+	return tea.Batch(cmd, m.settle())
+}
+
+// openChat jumps to a chat from elsewhere (an agent's log, the dashboard).
+func (m *model) openChat(id string) tea.Cmd {
+	for i, r := range m.sideRows() {
+		if r.chatID == id {
+			m.side = i
+		}
+	}
+	m.focus = 1
+	return m.pick(sideRow{sec: -1, chatID: id})
+}
+
 func (m *model) currentChatID() string {
 	if m.section != secChats {
 		return ""
 	}
-	rows := m.chatRows()
-	if m.chatSel >= len(rows) {
-		m.chatSel = max(0, len(rows)-1)
-	}
-	if len(rows) == 0 {
-		return ""
-	}
-	return rows[m.chatSel].chatID
+	return m.chat
 }
 
 func (m *model) currentChat() (api.ChatView, bool) {
-	id := m.currentChatID()
+	id := m.chat
 	for _, c := range m.st.Chats {
 		if c.ID == id {
 			return c, true
 		}
 	}
-	if strings.HasPrefix(id, "agent:") {
-		for _, r := range m.chatRows() {
-			if r.chatID == id {
-				return api.ChatView{Chat: chat.Chat{ID: id, Title: r.label, Kind: "agent"}}, true
-			}
+	for _, r := range m.rows(true) {
+		if r.chatID == id && id != "" {
+			return api.ChatView{Chat: chat.Chat{ID: id, Title: r.label, Kind: "agent"}}, true
 		}
 	}
 	return api.ChatView{}, false
+}
+
+// where names the open chat as the sidebar groups it: "textkit", "lead".
+func (m *model) where() (group, name string) {
+	for _, r := range m.rows(true) {
+		if r.group {
+			group = r.label
+		}
+		if r.chatID == m.chat && r.chatID != "" {
+			return group, r.label
+		}
+	}
+	c, _ := m.currentChat()
+	return "", c.Title
+}
+
+func (m *model) path() string {
+	g, n := m.where()
+	if g == "" {
+		return n
+	}
+	return g + " › " + n
 }
 
 type thread struct {
@@ -132,307 +259,298 @@ func threads(msgs []chat.Message) []thread {
 	return out
 }
 
-func (m *model) keyChats(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	rows := m.chatRows()
-	s := k.String()
-	if k.Paste && m.chatSel < len(rows) && !rows[m.chatSel].group {
-		// A drop before composing starts a message and attaches like one in it.
-		focus := m.compose("", "")
-		_, cmd := m.keyInput(k)
-		return m, tea.Batch(focus, cmd)
-	}
-	switch s {
-	case "pgup":
-		m.scrollBy(-(m.paneH() - 1))
-		return m, nil
-	case "pgdown":
-		m.scrollBy(m.paneH() - 1)
-		return m, nil
-	case "home":
-		m.scrollBy(-1 << 30)
-		return m, nil
-	case "end":
-		m.scrollBy(1 << 30)
-		return m, nil
-	}
-	if m.chatFocus == 0 {
-		switch s {
-		case "up", "k":
-			if m.chatSel > 0 {
-				m.chatSel--
-			}
-			m.scroll = -1
-			return m, m.fetchChat(m.currentChatID())
-		case "down", "j":
-			if m.chatSel < len(rows)-1 {
-				m.chatSel++
-			}
-			m.scroll = -1
-			return m, m.fetchChat(m.currentChatID())
-		case " ":
-			if m.chatSel < len(rows) && rows[m.chatSel].group {
-				m.closed[rows[m.chatSel].key] = !m.closed[rows[m.chatSel].key]
-			}
-			return m, nil
-		case "right", "l":
-			if m.chatSel < len(rows) && !rows[m.chatSel].group {
-				m.chatFocus, m.threadSel, m.scroll = 1, max(0, len(threads(m.msgs[rows[m.chatSel].chatID]))-1), -1
-				return m, m.markRead()
-			}
-			return m, nil
-		case "enter":
-			if m.chatSel < len(rows) && rows[m.chatSel].group {
-				m.closed[rows[m.chatSel].key] = !m.closed[rows[m.chatSel].key]
-				return m, nil
-			}
-			return m, m.compose("", "")
+func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	ts := threads(m.msgs[m.chat])
+	switch s := k.String(); s {
+	case "up", "k":
+		if m.threadSel < 0 {
+			m.threadSel = len(ts)
 		}
-		if k.Type == tea.KeyRunes && m.chatSel < len(rows) && !rows[m.chatSel].group {
-			return m, m.compose("", string(k.Runes))
-		}
-		return m, nil
-	}
-	ts := threads(m.msgs[m.currentChatID()])
-	lines, spans := m.threadLines(m.rightW())
-	top, h := m.top(len(lines), spans), m.paneH()
-	var sp [2]int
-	if m.threadSel < len(spans) {
-		sp = spans[m.threadSel]
-	}
-	switch s {
-	case "esc", "left", "h":
-		m.chatFocus, m.scroll = 0, -1
-	case "up", "k", "down", "j":
-		if sp[1] <= top || sp[0] >= top+h { // PgUp or Home left the selection off-screen
-			m.scroll = -1
-		} else if s == "up" || s == "k" {
-			// Mirrors down: scroll through a tall thread (the first one up to the
-			// title), then select the one before without moving the view.
-			if top > 0 && (sp[0] <= top || m.threadSel == 0) {
-				m.scrollBy(-1)
-			} else if m.threadSel > 0 {
-				m.threadSel--
-				m.scroll = top
-			}
-		} else if sp[1] > top+h {
-			m.scrollBy(1)
-		} else if m.threadSel < len(ts)-1 {
+		m.threadSel = max(0, m.threadSel-1)
+	case "down", "j":
+		if m.threadSel < len(ts)-1 {
 			m.threadSel++
-			m.scroll = -1
+		} else {
+			m.threadSel = -1
+			return m, m.focusBox("")
 		}
-	case "enter", " ", "right":
-		if m.threadSel < len(ts) {
+	case "enter", "right":
+		if m.threadSel >= 0 && m.threadSel < len(ts) {
+			m.thread = ts[m.threadSel].id
+			m.focus = 2
+			return m, m.focusBox(m.thread)
+		}
+		return m, m.focusBox("")
+	case " ":
+		if m.threadSel >= 0 && m.threadSel < len(ts) {
 			id := "t:" + ts[m.threadSel].id
 			m.open[id] = !m.isOpen(ts, m.threadSel)
 		}
-	case "r":
-		if m.threadSel < len(ts) {
-			return m, m.compose(ts[m.threadSel].id, "")
-		}
+	case "esc", "left", "h":
+		m.focus = 0
+	case "pgup", "pgdown", "home", "end":
+		m.chScroll = scroll(m.chScroll, s, m.h-4)
 	case "n", "i":
-		return m, m.compose("", "")
+		return m, m.focusBox("")
 	}
 	return m, nil
 }
 
-func (m *model) compose(thread, initial string) tea.Cmd {
-	m.composing, m.reply = true, thread
-	m.composeN++
-	m.input.SetValue(initial)
-	m.input.CursorEnd()
-	if thread != "" {
-		m.input.Placeholder = "reply in this thread…"
-	} else {
-		m.input.Placeholder = "new message…"
+// scroll moves an offset counted in lines up from the bottom.
+func scroll(off int, key string, page int) int {
+	switch key {
+	case "pgup", "wheelup":
+		return off + map[string]int{"pgup": page - 2, "wheelup": 3}[key]
+	case "pgdown", "wheeldown":
+		return max(0, off-map[string]int{"pgdown": page - 2, "wheeldown": 3}[key])
+	case "home":
+		return 1 << 20
 	}
+	return 0
+}
+
+// focusBox points the one text box at a target, a new thread in this chat
+// ("") or a reply, keeping each target's draft.
+func (m *model) focusBox(reply string) tea.Cmd {
+	m.blurBox()
+	m.reply, m.composing = reply, true
+	m.composeN++
+	m.input.SetValue(m.drafts[m.chat+"\x00"+reply])
 	return m.input.Focus()
+}
+
+func (m *model) blurBox() {
+	if m.composing {
+		m.drafts[m.chat+"\x00"+m.reply] = m.input.Value()
+	}
+	m.composing, m.files = false, nil // a draft keeps its text, not its attachments
+	m.input.Blur()
 }
 
 func (m *model) markRead() tea.Cmd {
 	id := m.currentChatID()
+	if id == "" {
+		return nil
+	}
 	return func() tea.Msg {
 		m.c.Do("POST", "/api/chat/read", map[string]string{"chat": id}, nil)
 		return nil
 	}
 }
 
-// isOpen: a thread is open if toggled open, or (by default) if it's one of the last three.
+// isOpen: a thread shows its replies if toggled open, or by default if it's the last.
 func (m *model) isOpen(ts []thread, i int) bool {
 	if v, ok := m.open["t:"+ts[i].id]; ok {
 		return v
 	}
-	return i >= len(ts)-3
+	return i == len(ts)-1
 }
 
-func (m *model) viewChats() []string {
-	rows := m.chatRows()
-	listW := m.listW()
-	unread := map[string]int{}
-	for _, c := range m.st.Chats {
-		unread[c.ID] = c.Unread
+func (m *model) viewChannel(w int) pane {
+	c, _ := m.currentChat()
+	title := m.path()
+	if m.focus == 1 {
+		title = stTitle.Render(title)
 	}
-	var left []string
-	for i, r := range rows {
-		mark := "  "
-		if unread[r.chatID] > 0 {
-			mark = stAccent.Render("● ")
+	p := pane{w: w, head: head(w, title, c.LeadStatus, "")}
+	if m.chat == "" {
+		p.body = []string{"", "   " + stDim.Render("Pick a chat on the left.")}
+		return p
+	}
+	tw := w - 5
+	ts := threads(m.msgs[m.chat])
+	var lines []string
+	selStart, selEnd := 0, 0
+	for i, t := range ts {
+		sel := m.focus == 1 && !m.composing && i == m.threadSel || t.id == m.thread
+		gut := "  "
+		if sel {
+			gut = stTitle.Render("▌") + " "
+			selStart = len(lines)
 		}
-		label := strings.Repeat("  ", r.depth) + r.label
-		if r.group {
-			arrow := "▾ "
-			if m.closed[r.key] {
-				arrow = "▸ "
-			}
-			label = arrow + r.label
-			mark = "  "
-		}
-		line := clip(mark+label, listW)
-		if i == m.chatSel {
-			if m.chatFocus == 0 {
-				line = stSel.Render(pad(line, listW))
-			} else {
-				line = stTitle.Render(line)
+		add := func(ls ...string) {
+			for _, l := range ls {
+				lines = append(lines, " "+gut+l)
 			}
 		}
-		left = append(left, pad(line, listW))
-	}
-	rightW := m.rightW()
-	right := m.viewThreads(rightW)
-	h := m.paneH()
-	left = window(left, m.chatSel, h)
-	var out []string
-	for i := 0; i < h; i++ {
-		l, r := strings.Repeat(" ", listW), ""
-		if i < len(left) {
-			l = left[i]
+		first := t.msgs[0]
+		add(msgHead(first))
+		add(m.body(first.Text, tw)...)
+		n := len(t.msgs) - 1
+		replies := fmt.Sprintf("%d %s", n, plural(n, "reply", "replies"))
+		switch {
+		case n == 0:
+		case sel:
+			add(stTitle.Render("▸ "+replies) + "  " + stDim.Render("open →"))
+		case m.isOpen(ts, i):
+			add(stDim.Render("▾ " + replies))
+			for _, r := range t.msgs[1:] {
+				add("  " + msgHead(r))
+				add(indent(m.body(r.Text, tw-2), "  ")...)
+			}
+		default:
+			add(stDim.Render(fmt.Sprintf("▸ %s  last %s", replies, t.msgs[n].At.Local().Format("15:04"))))
 		}
-		if i < len(right) {
-			r = right[i]
+		if sel {
+			selEnd = len(lines)
 		}
-		out = append(out, l+stDim.Render(" │ ")+clip(r, rightW))
+		lines = append(lines, "")
 	}
-	if m.composing {
-		target := "new thread"
-		if m.reply != "" {
-			target = "reply"
-		}
-		c, _ := m.currentChat()
-		chips := ""
-		for _, f := range m.files {
-			chips += stDim.Render(" · ") + stAccent.Render("📎 "+f.Name)
-		}
-		out = append(out, stDim.Render(fmt.Sprintf("  to %s · %s", c.Title, target))+chips, m.input.View())
-	}
-	return out
-}
-
-func (m *model) listW() int  { return min(28, max(16, m.w/4)) }
-func (m *model) rightW() int { return m.w - m.listW() - 3 }
-
-func (m *model) paneH() int {
-	if m.composing {
-		return m.bodyHeight() - 2
-	}
-	return m.bodyHeight()
-}
-
-// top is the first visible line of the thread pane. m.scroll < 0 follows the
-// selected thread (or the conversation's end when the list has focus).
-func (m *model) top(n int, spans [][2]int) int {
-	h := m.paneH()
-	maxTop := max(0, n-h)
-	if m.scroll >= 0 {
-		return min(m.scroll, maxTop)
-	}
-	if m.chatFocus == 1 && m.threadSel < len(spans) {
-		if sel := spans[m.threadSel][0]; sel >= h-2 {
-			return min(sel-h+3, maxTop)
-		}
-		return 0
-	}
-	return maxTop
-}
-
-func (m *model) scrollBy(d int) {
-	lines, spans := m.threadLines(m.rightW())
-	m.scroll = max(0, min(m.top(len(lines), spans)+d, max(0, len(lines)-m.paneH())))
-}
-
-func (m *model) viewThreads(w int) []string {
-	lines, spans := m.threadLines(w)
-	t, h := m.top(len(lines), spans), m.paneH()
-	if m.scroll < 0 && m.chatFocus == 0 && t > 0 && h >= 2 { // following the end: keep the title pinned
-		return append(lines[:2:2], lines[len(lines)-h+2:]...)
-	}
-	return lines[t:min(len(lines), t+h)]
-}
-
-// threadLines renders the whole pane, plus the line span of each thread.
-func (m *model) threadLines(w int) (lines []string, spans [][2]int) {
-	c, ok := m.currentChat()
-	if !ok {
-		return []string{stDim.Render("select a chat")}, nil
-	}
-	header := stTitle.Render(c.Title)
-	if c.LeadStatus != "" {
-		header += "  " + stDim.Render(clip(c.LeadStatus, w/2))
-	}
-	lines = []string{header, ""}
-	ts := threads(m.msgs[c.ID])
 	if len(ts) == 0 {
-		hint := "Nothing here yet. Start typing to write to the lead."
+		hint := "Nothing here yet. Press n to write to the lead."
 		if c.Kind == "agent" {
 			hint = "Write to this agent; it reads your message after its current turn."
 		}
-		return append(lines, stDim.Render(hint)), nil
+		lines = append(lines, "   "+stDim.Render(hint), "")
 	}
-	for i, t := range ts {
-		start := len(lines)
-		first := t.msgs[0]
-		head := fmt.Sprintf("%s %s  %s", who(first), stDim.Render(first.At.Local().Format("Mon 15:04")), "")
-		if !m.isOpen(ts, i) {
-			more := ""
-			if len(t.msgs) > 1 {
-				more = stDim.Render(fmt.Sprintf("  (+%d)", len(t.msgs)-1))
-			}
-			line := head + preview(first.Text) + more
-			if i == m.threadSel && m.chatFocus == 1 {
-				line = stSel.Render(clip(line, w))
-			}
-			lines = append(lines, line)
-			spans = append(spans, [2]int{start, len(lines)})
-			continue
-		}
-		for j, msg := range t.msgs {
-			prefix := ""
-			if j > 0 {
-				prefix = "  "
-			}
-			h := prefix + fmt.Sprintf("%s %s", who(msg), stDim.Render(msg.At.Local().Format("15:04")))
-			if i == m.threadSel && m.chatFocus == 1 && j == 0 {
-				h = stSel.Render(clip(h, w))
-			}
-			lines = append(lines, h)
-			lines = append(lines, indent(markdown(msg.Text, w-len(prefix)-2), prefix+"  ")...)
-		}
-		lines = append(lines, "")
-		spans = append(spans, [2]int{start, len(lines)})
+	_, name := m.where()
+	bx := m.compose("new thread · "+name, "Start a new thread with "+name+"…", "", w-3)
+	p.body = stack(append(lines, ""), bx, m.h-4, &m.chScroll, selStart, selEnd, true)
+	return p
+}
+
+// stack puts a box under the content: right after it when both fit (or on
+// the last rows, bottom set), else on the last rows with the content scrolled
+// (off lines up from its end, kept so lines [s0,s1) show).
+func stack(lines, bx []string, h int, off *int, s0, s1 int, bottom bool) []string {
+	for i := range bx {
+		bx[i] = "  " + bx[i]
 	}
-	return lines, spans
+	room := max(0, h-len(bx))
+	if len(lines) <= room {
+		*off = 0
+		if bottom {
+			lines = append(make([]string, room-len(lines)), lines...)
+		}
+		return append(lines, bx...)
+	}
+	*off = min(*off, len(lines)-room)
+	end := len(lines) - *off
+	if s1 > s0 { // keep the selected thread in view
+		if s1 > end {
+			end = min(s1, len(lines))
+		}
+		if s0 < end-room {
+			end = min(len(lines), s0+room)
+		}
+		*off = len(lines) - end
+	}
+	return append(lines[end-room:end], bx...)
+}
+
+func (m *model) viewThread(w int) pane {
+	ts := threads(m.msgs[m.chat])
+	var t thread
+	for _, x := range ts {
+		if x.id == m.thread {
+			t = x
+		}
+	}
+	focused := m.focus == 2
+	var p pane
+	title := "Thread"
+	if focused {
+		title = stTitle.Render(title)
+	}
+	if m.takeover() {
+		p = pane{w: w, head: pad(" ‹ "+m.path()+"  › thread", w-9) + stDim.Render("esc back")}
+	} else {
+		p = pane{w: w, head: pad(head(w, title, m.path(), ""), w-10) + stDim.Render("esc close")}
+	}
+	tw := w - 5
+	var lines []string
+	add := func(ls ...string) { lines = append(lines, indent(ls, "   ")...) }
+	pending := 0
+	for _, o := range m.outbox {
+		if o.chat == m.chat && o.thread == m.thread {
+			pending++
+		}
+	}
+	for i, msg := range t.msgs {
+		add(msgHead(msg))
+		add(m.body(msg.Text, tw)...)
+		add("")
+		if i == 0 {
+			n := len(t.msgs) - 1 + pending
+			r := fmt.Sprintf("%d %s ", n, plural(n, "reply", "replies"))
+			add(stDim.Render(r+strings.Repeat("─", max(0, tw-len(r)))), "")
+		}
+	}
+	for _, o := range m.outbox {
+		if o.chat == m.chat && o.thread == m.thread {
+			add(stBoldF.Render("you") + "  " + stDim.Render("◌ sending…"))
+			add(indent(m.body(o.text, tw), "")...)
+			add("")
+		}
+	}
+	_, name := m.where()
+	bx := m.compose("reply · "+name, "Reply to this thread…", m.thread, w-3)
+	p.body = stack(lines, bx, m.h-4, &m.thScroll, 0, 0, false)
+	return p
+}
+
+// compose draws the box for one target: live when it has focus, else its
+// draft or placeholder, faint.
+func (m *model) compose(label, placeholder, reply string, w int) []string {
+	if m.composing && m.reply == reply && !m.editing {
+		m.input.Placeholder = placeholder
+		m.input.SetWidth(w - 3)          // the textarea keeps its last cell for the cursor
+		m.input.SetHeight(min(8, m.h-6)) // the whole box stays on a short screen
+		lines := strings.Split(m.input.View(), "\n")
+		for i, l := range lines {
+			lines[i] = ansi.Truncate(l, w-4, "")
+		}
+		for len(lines) > 1 && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
+			lines = lines[:len(lines)-1]
+		}
+		return box(m.composeLabel(label), lines, w, true)
+	}
+	text := m.drafts[m.chat+"\x00"+reply]
+	if text == "" {
+		text = placeholder
+	}
+	lines := wrap(text, w-6)
+	for i := range lines {
+		lines[i] = "  " + lines[i]
+	}
+	lines[0] = "›" + lines[0][1:]
+	return box(label, lines[:min(len(lines), 8)], w, false)
+}
+
+// composeLabel is the live box's label, with a chip for each attachment.
+func (m *model) composeLabel(label string) string {
+	for _, f := range m.files {
+		label += " · 📎 " + f.Name
+	}
+	return label
+}
+
+// body renders a message's markdown to width w.
+func (m *model) body(text string, w int) []string { return markdown(text, w) }
+
+func msgHead(msg chat.Message) string {
+	return who(msg) + "  " + stDim.Render(msg.At.Local().Format("15:04"))
 }
 
 func who(msg chat.Message) string {
 	switch msg.From {
 	case "person":
-		return stAccent.Render("you")
+		return stTitle.Render("you")
 	case "hive":
-		return stWarn.Render("hive")
+		return stTitle.Render("hive")
 	}
 	name := msg.Name
 	if name == "" {
 		name = msg.From
 	}
 	return stTitle.Render(name)
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }

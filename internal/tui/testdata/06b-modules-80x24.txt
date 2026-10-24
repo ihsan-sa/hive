@@ -1,0 +1,24 @@
+ hive             │   Modules  6 installed · 5 on
+──────────────────┼─────────────────────────────────────────────────────────────
+   Chats          │   [x] tribunal      all projects          Rules on merges…
+   Dashboard      │   [x] warden        all projects          Blocks writes out…
+   Waiting     3  │   [x] reviewer      all projects          Reviews every cha…
+ › Modules        │   [x] memory        textkit-2, hive-web   Keeps notes betwe…
+   Settings       │   [ ] scheduler     off                   Starts agents on …
+                  │   [x] budget        all projects          Asks before runs …
+ ▾ textkit-2      │
+   lead           │   ────────────────────────────────────────────────────────
+   writer         │
+   reviewer    ●  │   tribunal
+ ▾ hive-web       │   Rules on merges that reviewers dispute
+   lead        ●  │
+   worker-2       │   applies to    all projects
+   reviewer       │   release       0.8.2
+   tribunal       │   source        builtin
+ ▸ website        │
+                  │   Install a module by asking the lead (it needs your approv…
+                  │
+                  │
+                  │
+──────────────────┴─────────────────────────────────────────────────────────────
+ enter configure   ↑↓ move   tab sidebar

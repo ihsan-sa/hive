@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:needpackage, FAKE:goals, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:offline, FAKE:needpackage, FAKE:goals, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -69,6 +69,18 @@ func Main(argv []string) int {
 
 	if strings.Contains(all, "FAKE:crash") && !resume {
 		os.Exit(3)
+	}
+	// FAKE:offline: the turn can't reach Claude and ends as Claude Code does
+	// then; the session keeps the message, so the next turn answers it.
+	held := filepath.Join(os.Getenv("HIVE_BOX"), "fake-offline-prompt")
+	if strings.Contains(prompt, "FAKE:offline") && !core.Exists(held) {
+		os.WriteFile(held, []byte(prompt), 0o600)
+		emit(map[string]any{"type": "result", "subtype": "success", "is_error": true, "result": "API Error: Connection error.", "session_id": session})
+		return 0
+	}
+	if raw, err := os.ReadFile(held); err == nil && !strings.Contains(prompt, "FAKE:offline") {
+		os.Remove(held)
+		prompt = string(raw) + "\n" + prompt
 	}
 	if strings.Contains(all, "FAKE:limit") && !resume {
 		reset := time.Now().Add(3 * time.Second).Unix()
@@ -158,6 +170,9 @@ func emit(v any) {
 }
 
 // Messages that queued during a turn arrive as one prompt, joined by core.PendingSep.
+// handedBack is a stopped task the lead is told is its own, when its title asks the fake lead to fix it.
+var handedBack = regexp.MustCompile(`Stopped "[^"]*FAKE:leadfixes[^"]*" \(task (\S+?)[ )]`)
+
 var personRe = regexp.MustCompile(`(?s)(?:Person|Module [^:]+): (.*?)(?:` + regexp.QuoteMeta(core.PendingSep) + `|\z)`)
 var projectRe = regexp.MustCompile(`create (?:an? )?(isolated )?project (?:called |named )?([A-Za-z0-9_-]+)`)
 
@@ -166,6 +181,10 @@ var moduleRe = regexp.MustCompile(`(?i)make (?:me )?a module (?:called |named )?
 var merged = regexp.MustCompile(`Merged: Build module ([a-z0-9-]+)`)
 
 func lead(prompt, system string) (string, error) {
+	if m := handedBack.FindStringSubmatch(prompt); m != nil { // the lead owns stopped work; the person isn't asked
+		_, err := call("recheck", map[string]string{"task": m[1], "back": "FAKE:fixit: remove BROKEN, commit and finish"}, time.Minute)
+		return "NOOP", err
+	}
 	ms := personRe.FindAllStringSubmatch(prompt, -1)
 	if ms == nil {
 		if mm := merged.FindStringSubmatch(prompt); mm != nil {
@@ -217,12 +236,36 @@ func leadAsk(ask, system string) (string, error) {
 	if strings.Contains(strings.ToLower(ask), "what's in the repo") {
 		return "The repo has " + strings.Join(repoFiles(), ", ") + ".", nil
 	}
+	if f := strings.Fields(ask); len(f) == 2 && f[0] == "recheck" {
+		out, err := call("recheck", map[string]string{"task": f[1]}, time.Minute)
+		return "Running its checks again: " + string(out), err
+	}
 	if strings.HasPrefix(strings.ToLower(ask), "can i approve") {
 		out, err := call("requests", map[string]string{}, time.Minute)
 		return "Here's what waits: " + string(out), err
 	}
-	if hiveQ.MatchString(ask) && strings.Contains(system, "look first") {
+	if everythingQ.MatchString(ask) && !strings.Contains(ask, "ask a worker") && strings.Contains(system, "Questions about the Hive itself") {
+		return everything()
+	}
+	if hiveQ.MatchString(ask) && strings.Contains(system, "Questions about the Hive itself") {
 		return aboutHive()
+	}
+	if scoreQ.MatchString(ask) && strings.Contains(system, "Questions about the Hive itself") {
+		return howScored()
+	}
+	// As a real lead does with its role doc: the Hive's own code is its own project.
+	if hm := selfRe.FindStringSubmatch(ask); hm != nil && strings.Contains(system, "create_project --self") {
+		// The repository is ignored: the Hive's own code lives where the install says.
+		out, err := call("create_project", map[string]any{"self": true, "repo": "someone/else"}, 3*time.Minute)
+		if err != nil {
+			return "", err
+		}
+		var p struct{ Project, Repo string }
+		json.Unmarshal(out, &p)
+		if _, err := call("brief", map[string]string{"project": p.Project, "title": clip(hm[1], 60), "done": "FAKE: the change is merged", "known": hm[1]}, 3*time.Minute); err != nil {
+			return "", err
+		}
+		return "That's the Hive's own code, so I filed it in project " + p.Project + " (" + p.Repo + "); a kept merge there is released and offered upstream.", nil
 	}
 	if strings.HasPrefix(strings.ToLower(ask), "hello") {
 		return "Hello. I'm the lead. Tell me what you'd like done.", nil
@@ -257,6 +300,9 @@ func leadAsk(ask, system string) (string, error) {
 	}
 	return "Understood: " + clip(ask, 80) + ". I've started a piece of work on it" + where + ".", nil
 }
+
+// selfRe asks for a change to the Hive itself.
+var selfRe = regexp.MustCompile(`(?i)fix the hive itself: (.+)`)
 
 // hiveQ is a question about the Hive itself, which a lead answers from what it reads.
 var hiveQ = regexp.MustCompile(`(?i)does the hive have`)
@@ -296,6 +342,43 @@ func aboutHive() (string, error) {
 	json.Unmarshal(raw, &st)
 	return fmt.Sprintf("Yes. Installed modules: %s. Roles: %s. One warden weighs each request past an agent's reach, and a tribunal is a panel of %s. %d waiting on you. (Read from $HIVE_MODULES and hive agent status.)",
 		strings.Join(mods, ", "), strings.Join(roles, ", "), panel, len(st.Waiting)), nil
+}
+
+// everythingQ is the owner's question; every role answers it the same way.
+var everythingQ = regexp.MustCompile(`(?i)everything you can find out about the hive`)
+
+func everything() (string, error) {
+	a, err := aboutHive()
+	if err != nil {
+		return "", err
+	}
+	b, err := howScored()
+	return a + " " + b, err
+}
+
+// scoreQ asks how the Hive works inside, which a lead answers from its own source.
+var scoreQ = regexp.MustCompile(`(?i)how is a score computed`)
+
+// howScored reads the scoring rule from the Hive's source in the knowledge
+// base and the sweep's schedule from the live config.
+func howScored() (string, error) {
+	self := filepath.Join(os.Getenv("HIVE_KB"), "hive")
+	src, err := os.ReadFile(filepath.Join(self, "internal", "core", "projects.go"))
+	if err != nil {
+		return "", err
+	}
+	rule := regexp.MustCompile(`return value >= best-s.Tolerance`).Find(src)
+	version, _ := os.ReadFile(filepath.Join(self, "VERSION"))
+	raw, err := call("status", map[string]string{}, time.Minute)
+	if err != nil {
+		return "", err
+	}
+	var st struct {
+		Config struct{ Schedules map[string]string }
+	}
+	json.Unmarshal(raw, &st)
+	return fmt.Sprintf("A merge keeps its score when `%s` (internal/core/projects.go at %s), and the sweep runs %s.",
+		rule, strings.TrimSpace(string(version)), st.Config.Schedules["improve.sweep"]), nil
 }
 
 func projectNames() ([]string, error) {
@@ -360,6 +443,23 @@ func worker(all, prompt, system string) (string, error) {
 		_, err := call("warden", map[string]string{"want": "delete " + m[1], "why": "the ask names it", "steps": "rm -rf " + m[1], "tier": "T3"}, time.Minute)
 		return "waiting for the warden", err
 	}
+	if m := needTool.FindStringSubmatch(all); m != nil { // as in the first real run: ask, then finish blocked at once
+		switch {
+		case strings.Contains(prompt, "[request ") && strings.Contains(prompt, "won't"):
+			_, err := call("finish", map[string]string{"status": "blocked", "account": "FAKE: the warden declined the tool"}, time.Minute)
+			return "blocked", err
+		case strings.Contains(prompt, "[request "):
+			_, err := call("finish", map[string]string{"status": "done", "account": "FAKE: the tool is there now"}, time.Minute)
+			return "done", err
+		case strings.Contains(prompt, "tests failed"):
+			why := "the tests need faketool " + m[0] + " " + strings.Join(riskKeys.FindAllString(all, -1), " ")
+			if _, err := call("warden", map[string]string{"want": "install faketool", "why": why, "steps": "touch " + m[1], "tier": "T2"}, time.Minute); err != nil {
+				return "", err
+			}
+			_, err := call("finish", map[string]string{"status": "blocked", "account": "FAKE: faketool is missing; asked a warden"}, time.Minute)
+			return "blocked", err
+		}
+	}
 	if strings.Contains(all, "FAKE:wardenperson") && strings.Contains(prompt, "[request ") && strings.Contains(prompt, "declined") {
 		_, err := call("finish", map[string]string{"status": "blocked", "account": "FAKE: the person declined the install"}, time.Minute)
 		return "blocked", err
@@ -385,6 +485,8 @@ func worker(all, prompt, system string) (string, error) {
 		}
 	}
 	switch {
+	case strings.Contains(prompt, "FAKE:fixit"):
+		os.Remove("BROKEN")
 	case strings.Contains(all, "FAKE:breaktests"):
 		os.WriteFile("BROKEN", []byte("tests fail while this exists\n"), 0o644)
 	case strings.Contains(all, "FAKE:lowerscore"):
@@ -406,6 +508,15 @@ func worker(all, prompt, system string) (string, error) {
 		name := moduleKey.FindStringSubmatch(all)[1]
 		os.WriteFile("module.json", []byte(`{"name": "`+name+`", "description": "FAKE module", "provides": {"procedures": ["ledger.md"]}, "projects": ["*"]}`+"\n"), 0o644)
 		os.WriteFile("ledger.md", []byte("# How to keep the ledger\n"), 0o644)
+	case everythingQ.MatchString(all) && strings.Contains(system, "Questions about the Hive itself"):
+		answer, err := everything()
+		if err == nil {
+			_, err = call("remember", map[string]string{"title": "Everything about the Hive", "text": answer}, time.Minute)
+		}
+		if err != nil {
+			return "", err
+		}
+		os.WriteFile("ABOUT-HIVE.md", []byte(answer+"\n"), 0o644)
 	case strings.Contains(all, "FAKE:goals"):
 		appendFile(".hive/goals.md", "- a goal the worker wrote down\n")
 	case strings.Contains(all, "FAKE:stallcheck"):
@@ -430,6 +541,9 @@ func worker(all, prompt, system string) (string, error) {
 	_, err := call("finish", map[string]string{"status": "done", "account": "FAKE: made the change", "tested": "ran nothing", "unsure": "everything"}, time.Minute)
 	return "done", err
 }
+
+// needTool names the marker a project's test needs, standing in for a missing tool.
+var needTool = regexp.MustCompile(`FAKE:needtool (\S+)`)
 
 // skillModuleKey makes the checkout a module named $1 whose skill says codeword $2;
 // useModuleKey copies the skill of the installed module whose folder ends in
@@ -470,17 +584,16 @@ func peek(warden string) string {
 		os.Remove(f.Name())
 	}
 	secrets := 0
-	if raw, _ := os.ReadFile(filepath.Join(st, "daemon.json")); strings.Contains(string(raw), "token") {
-		secrets++
-	}
-	filepath.WalkDir(filepath.Join(st, "logins"), func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			if _, err := os.ReadFile(p); err == nil {
-				secrets++
+	for _, dir := range []string{"logins", "modules", "private"} {
+		filepath.WalkDir(filepath.Join(st, dir), func(p string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				if _, err := os.ReadFile(p); err == nil {
+					secrets++
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
+	}
 	return strings.Join(out, ", ") + fmt.Sprintf(", create=%t, secrets=%d", err == nil, secrets)
 }
 
@@ -507,6 +620,12 @@ func warden(all string) error {
 	}
 	if strings.Contains(all, "FAKE:wardenmoney") {
 		script = "echo buying && stripe charges create"
+	}
+	if m := needTool.FindStringSubmatch(all); m != nil {
+		script = "touch " + m[1]
+	}
+	if strings.Contains(all, "FAKE:wardendecline") {
+		d = "decline"
 	}
 	if strings.Contains(all, "FAKE:wardenperson") { // a root install it leaves to the person
 		d, script = "person", "echo apt-get install -y left-pad"

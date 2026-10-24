@@ -8,10 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -23,28 +23,35 @@ var releases string
 // each asset with a checksums.txt over them (lie corrupts the sums). The repo's
 // old name, old/name, redirects to it as GitHub does after a rename.
 func serve(t *testing.T, tag string, assets map[string]string, lie bool) {
-	sums := ""
-	for name, body := range assets {
-		h := sha256.Sum256([]byte(body))
-		if lie {
-			h[0]++
-		}
-		sums += hex.EncodeToString(h[:]) + "  " + name + "\n"
-	}
+	serveAll(t, tag, map[string]map[string]string{tag: assets}, lie)
+}
+
+// serveAll is serve with releases, tag to assets, and latest the newest tag.
+func serveAll(t *testing.T, latest string, byTag map[string]map[string]string, lie bool) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
+		tag, name, _ := strings.Cut(strings.TrimPrefix(p, "/me/hive/releases/download/"), "/")
+		assets, known := byTag[tag]
 		switch {
 		case strings.HasPrefix(p, "/old/name/"):
 			http.Redirect(w, r, "/me/hive/"+strings.TrimPrefix(p, "/old/name/"), http.StatusMovedPermanently)
 		case p == "/me/hive/releases/latest":
-			http.Redirect(w, r, "/me/hive/releases/tag/"+tag, http.StatusFound)
-		case p == "/me/hive/releases/tag/"+tag:
+			http.Redirect(w, r, "/me/hive/releases/tag/"+latest, http.StatusFound)
+		case strings.HasPrefix(p, "/me/hive/releases/tag/"):
 		case p == "/repos/me/hive/releases" && releases != "":
 			w.Write([]byte(releases))
-		case p == "/me/hive/releases/download/"+tag+"/checksums.txt":
-			w.Write([]byte(sums))
-		case strings.HasPrefix(p, "/me/hive/releases/download/"+tag+"/") && assets[filepath.Base(p)] != "":
-			w.Write([]byte(assets[filepath.Base(p)]))
+		case !strings.HasPrefix(p, "/me/hive/releases/download/") || !known:
+			http.NotFound(w, r)
+		case name == "checksums.txt":
+			for name, body := range assets {
+				h := sha256.Sum256([]byte(body))
+				if lie {
+					h[0]++
+				}
+				w.Write([]byte(hex.EncodeToString(h[:]) + "  " + name + "\n"))
+			}
+		case assets[name] != "":
+			w.Write([]byte(assets[name]))
 		default:
 			http.NotFound(w, r)
 		}
@@ -77,15 +84,11 @@ func releaseAt(t *testing.T, version, repo string) (*Module, string) {
 	return &Module{C: c}, exe
 }
 
-func newBuild() map[string]string {
-	return map[string]string{AssetName(runtime.GOOS, runtime.GOARCH): "new", AssetName("linux", "amd64"): "new"}
-}
-
 // A source build (no release version) never replaces itself with a release.
 func TestSourceBuildNeverUpdates(t *testing.T) {
-	serve(t, "v9.9.9", newBuild(), false)
+	serve(t, "v9.9.9", build("new"), false)
 	m, exe := releaseAt(t, "0.0.0-dev", "me/hive")
-	msg, err := m.Update()
+	msg, err := m.Update("")
 	if raw, _ := os.ReadFile(exe); err != nil || !strings.Contains(msg, "source build") || string(raw) != "old" {
 		t.Fatalf("source build: %q, %v, binary %q", msg, err, raw)
 	}
@@ -94,14 +97,14 @@ func TestSourceBuildNeverUpdates(t *testing.T) {
 // An install that still follows the repo's old name finds the release
 // through the rename's redirect, checks it and puts it in place.
 func TestUpdateThroughRenamedRepo(t *testing.T) {
-	serve(t, "v9.9.9", newBuild(), false)
+	serve(t, "v9.9.9", build("new"), false)
 	m, exe := releaseAt(t, "v0.1.2", "old/name")
-	msg, err := m.Update()
+	msg, err := m.Update("")
 	if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") || string(raw) != "new" {
 		t.Fatalf("update: %q, %v, binary %q", msg, err, raw)
 	}
 	core.Version = "v9.9.9"
-	if msg, err := m.Update(); err != nil || msg != "already on v9.9.9" {
+	if msg, err := m.Update(""); err != nil || msg != "already on v9.9.9" {
 		t.Fatalf("second update: %q, %v", msg, err)
 	}
 }
@@ -115,10 +118,10 @@ const releaseList = `[
 // hive update names the new version's notes and its page, and journals them
 // for the control center.
 func TestUpdateShowsNotes(t *testing.T) {
-	serve(t, "v9.9.9", newBuild(), false)
+	serve(t, "v9.9.9", build("new"), false)
 	releases = releaseList
 	m, _ := releaseAt(t, "v9.9.8", "me/hive")
-	msg, err := m.Update()
+	msg, err := m.Update("")
 	if err != nil || !strings.Contains(msg, "Faster merges.") || !strings.Contains(msg, "releases/tag/v9.9.9") || strings.Contains(msg, "lead's chat") {
 		t.Fatalf("update: %q, %v", msg, err)
 	}
@@ -135,10 +138,10 @@ func TestUpdateShowsNotes(t *testing.T) {
 
 // An update that skips versions shows each skipped version's notes too.
 func TestUpdateShowsSkippedNotes(t *testing.T) {
-	serve(t, "v9.9.9", newBuild(), false)
+	serve(t, "v9.9.9", build("new"), false)
 	releases = releaseList
 	m, _ := releaseAt(t, "v0.1.2", "me/hive")
-	msg, err := m.Update()
+	msg, err := m.Update("")
 	if err != nil || !strings.Contains(msg, "Faster merges.") || !strings.Contains(msg, "Fixed the lead's chat.") || strings.Contains(msg, "Already installed.") {
 		t.Fatalf("update: %q, %v", msg, err)
 	}
@@ -146,10 +149,10 @@ func TestUpdateShowsSkippedNotes(t *testing.T) {
 
 // Notes that can't be fetched still update, and link the releases page.
 func TestUpdateWithoutNotesLinksThem(t *testing.T) {
-	serve(t, "v9.9.9", newBuild(), false)
+	serve(t, "v9.9.9", build("new"), false)
 	releases = ""
 	m, exe := releaseAt(t, "v0.1.2", "me/hive")
-	msg, err := m.Update()
+	msg, err := m.Update("")
 	if raw, _ := os.ReadFile(exe); err != nil || string(raw) != "new" || !strings.HasSuffix(msg, Site+"/me/hive/releases") {
 		t.Fatalf("update: %q, %v, binary %q", msg, err, raw)
 	}
@@ -157,17 +160,103 @@ func TestUpdateWithoutNotesLinksThem(t *testing.T) {
 
 // A download whose checksum doesn't match is never installed.
 func TestChecksumMismatchKeepsBinary(t *testing.T) {
-	serve(t, "v9.9.9", newBuild(), true)
+	serve(t, "v9.9.9", build("new"), true)
 	m, exe := releaseAt(t, "v0.1.2", "me/hive")
-	_, err := m.Update()
+	_, err := m.Update("")
 	if raw, _ := os.ReadFile(exe); err == nil || !strings.Contains(err.Error(), "checksum") || string(raw) != "old" {
 		t.Fatalf("mismatch: %v, binary %q", err, raw)
 	}
 }
 
+// build is a release's binaries for this platform (and WSL), holding body.
+func build(body string) map[string]string {
+	return map[string]string{AssetName(runtime.GOOS, runtime.GOARCH): body, AssetName("linux", "amd64"): body}
+}
+
+// --release installs the tag asked for, an older one too, and pins it; an
+// unknown tag or one with no binary for this platform is refused and leaves
+// the binary and the pin as they were.
+func TestUpdateToAChosenRelease(t *testing.T) {
+	serveAll(t, "v0.1.3", map[string]map[string]string{"v0.1.3": build("new"), "v0.1.1": build("older"),
+		"v0.1.0": {"hive-plan9-mips": "x"}}, false)
+	m, exe := releaseAt(t, "v0.1.2", "me/hive")
+	for tag, want := range map[string]string{"v0.0.9": "no release v0.0.9", "v0.1.0": "has no hive-"} {
+		_, err := m.Update(tag)
+		if raw, _ := os.ReadFile(exe); err == nil || !strings.Contains(err.Error(), want) || string(raw) != "old" {
+			t.Fatalf("%s: %v, binary %q", tag, err, raw)
+		}
+	}
+	if pin := m.C.WS.LoadConfig().ReleasePin; pin != "" {
+		t.Fatalf("a refused tag pinned %q", pin)
+	}
+	msg, err := m.Update("v0.1.1")
+	if raw, _ := os.ReadFile(exe); err != nil || !strings.Contains(msg, "updated to v0.1.1, pinned") || string(raw) != "older" {
+		t.Fatalf("older tag: %q, %v, binary %q", msg, err, raw)
+	}
+	if cfg := m.C.WS.LoadConfig(); cfg.ReleasePin != "v0.1.1" || cfg.AutoUpdate {
+		t.Fatalf("pin %q, auto_update %v", cfg.ReleasePin, cfg.AutoUpdate)
+	}
+}
+
+// Pinning turns auto_update off, since releases older than the pin read only
+// that, and clearing the pin turns it back on only if it was on before.
+func TestPinPausesAutoUpdate(t *testing.T) {
+	serveAll(t, "v0.1.3", map[string]map[string]string{"v0.1.3": build("new"), "v0.1.1": build("older")}, false)
+	for _, was := range []bool{true, false} {
+		m, _ := releaseAt(t, "v0.1.2", "me/hive")
+		cfg := m.C.WS.LoadConfig()
+		cfg.AutoUpdate = was
+		m.C.WS.SaveConfig(cfg)
+		if msg, err := m.Update("v0.1.1"); err != nil || !strings.Contains(msg, "auto-update off") {
+			t.Fatalf("pin: %q, %v", msg, err)
+		}
+		if cfg := m.C.WS.LoadConfig(); cfg.AutoUpdate {
+			t.Fatalf("auto_update on while pinned (was %v)", was)
+		}
+		if _, err := m.Update(""); err != nil {
+			t.Fatal(err)
+		}
+		if cfg := m.C.WS.LoadConfig(); cfg.ReleasePin != "" || cfg.AutoUpdate != was {
+			t.Fatalf("cleared: pin %q, auto_update %v, want %v", cfg.ReleasePin, cfg.AutoUpdate, was)
+		}
+	}
+}
+
+// A pinned Hive doesn't update itself past its pin and says, once, that a
+// newer release is out; `hive update` clears the pin and installs the newest.
+func TestPinHoldsUntilCleared(t *testing.T) {
+	serveAll(t, "v0.1.3", map[string]map[string]string{"v0.1.3": build("new")}, false)
+	m, exe := releaseAt(t, "v0.1.1", "me/hive")
+	cfg := m.C.WS.LoadConfig()
+	cfg.AutoUpdate, cfg.PinnedAuto, cfg.ReleasePin = false, true, "v0.1.1"
+	m.C.WS.SaveConfig(cfg)
+	for range 2 {
+		msg, err := m.AutoUpdate()
+		if raw, _ := os.ReadFile(exe); err != nil || !strings.Contains(msg, "pinned to v0.1.1; v0.1.3 is out") || string(raw) != "old" {
+			t.Fatalf("pinned auto-update: %q, %v, binary %q", msg, err, raw)
+		}
+	}
+	alerts := 0
+	m.C.J.Replay(func(e core.Event) {
+		if e.Kind == "alert.raised" && strings.Contains(string(e.Data), "v0.1.3 is out") {
+			alerts++
+		}
+	})
+	if alerts != 1 {
+		t.Fatalf("%d alerts for v0.1.3, want 1", alerts)
+	}
+	msg, err := m.Update("latest")
+	if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "updated to v0.1.3\n") || string(raw) != "new" {
+		t.Fatalf("clearing the pin: %q, %v, binary %q", msg, err, raw)
+	}
+	if cfg := m.C.WS.LoadConfig(); cfg.ReleasePin != "" || !cfg.AutoUpdate {
+		t.Fatalf("pin %q, auto_update %v after update", cfg.ReleasePin, cfg.AutoUpdate)
+	}
+}
+
 // An automatic update waits while work is mid-merge, then goes ahead.
 func TestAutoUpdateWaitsOutAMerge(t *testing.T) {
-	serve(t, "v9.9.9", newBuild(), false)
+	serve(t, "v9.9.9", build("new"), false)
 	m, exe := releaseAt(t, "v0.1.2", "me/hive")
 	merging := true
 	m.Busy = func() bool { return merging }
@@ -237,7 +326,7 @@ func (n *notes) CreateRelease(repo, tag, sha, body string) error {
 // selfHive is a self project "hive" whose releases' notes are kept, with
 // helpers to journal a merge and a reviewer's land on a head.
 func selfHive(t *testing.T) (*Module, *notes, func(int, string, string, ...string), func(string, string)) {
-	m, _ := releaseAt(t, "v0.1.0", "me/hive")
+	m, _ := releaseAt(t, "0.0.0-dev", "me/hive") // a source build, so tags count from v0.0.0
 	n := &notes{Local: m.C.Effects.Forge.(*core.Local), got: map[string]string{}}
 	m.C.Effects.Forge = n
 	m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true})
@@ -327,7 +416,7 @@ func TestSupersedeIsTheHives(t *testing.T) {
 	land("a3", "r3")
 	m.AfterKept("hive", "m3")
 	got, _ := m.C.Person.Get(old.ID)
-	if got.Answer != "superseded" || !strings.HasPrefix(got.Note, "the Hive") {
+	if got.Answer != "hold" || !strings.HasPrefix(got.Note, "the Hive") {
 		t.Fatalf("the supersede should say it is the Hive's: %+v", got)
 	}
 }
@@ -408,8 +497,68 @@ func TestConcurrentKeepsCutOneRelease(t *testing.T) {
 	}
 }
 
+// releaseSite is a release site where each repo's latest release is tags[repo];
+// a repo in bare has a release whose checksums list no binary.
+func releaseSite(t *testing.T, tags map[string]string, bare ...string) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for repo, tag := range tags {
+			switch r.URL.Path {
+			case "/" + repo + "/releases/latest":
+				http.Redirect(w, r, "/"+repo+"/releases/tag/"+tag, http.StatusFound)
+				return
+			case "/" + repo + "/releases/tag/" + tag:
+				return
+			case "/" + repo + "/releases/download/" + tag + "/checksums.txt":
+				if !slices.Contains(bare, repo) {
+					w.Write([]byte("00  " + AssetName(runtime.GOOS, runtime.GOARCH) + "\n"))
+				}
+				return
+			}
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	site := Site
+	t.Cleanup(func() { Site = site })
+	Site = srv.URL
+}
+
+// A release the person's Hive cut on its own fork is the next update when it
+// is newer than the Hive's own releases.
+func TestCheckFollowsTheFork(t *testing.T) {
+	releaseSite(t, map[string]string{"me/hive": "v9.9.9", "local/hive": "v9.9.10"})
+	m, _ := releaseAt(t, "v0.1.0", "me/hive")
+	if _, err := m.C.Projects.Add(core.Project{Name: "hive", Repo: "local/hive", Self: true}); err != nil {
+		t.Fatal(err)
+	}
+	if repo, tag, ok, err := m.Check(); err != nil || !ok || repo != "local/hive" || tag != "v9.9.10" {
+		t.Fatalf("check: %q %q %v %v", repo, tag, ok, err)
+	}
+}
+
+// Only release_repo and the person's fork of it are update sources: a Hive
+// project an agent pointed at another repository is never followed, and a
+// release without this platform's binary is passed over.
+func TestCheckFollowsOnlyTheHivesOwnRepository(t *testing.T) {
+	releaseSite(t, map[string]string{"me/hive": "v9.9.9", "evil/hive": "v99.0.0", "local/hive": "v9.9.10"}, "local/hive")
+	m, _ := releaseAt(t, "v0.1.0", "me/hive")
+	if _, err := m.C.Projects.Add(core.Project{Name: "hive", Repo: "evil/hive", Self: true}); err != nil {
+		t.Fatal(err)
+	}
+	if repo, tag, _, err := m.Check(); err != nil || repo != "me/hive" || tag != "v9.9.9" {
+		t.Fatalf("check followed %q %q (%v), want the Hive's own v9.9.9", repo, tag, err)
+	}
+	if _, err := m.C.Projects.Add(core.Project{Name: "hive-fork", Repo: "local/hive", Self: true}); err != nil {
+		t.Fatal(err)
+	}
+	if repo, tag, _, err := m.Check(); err != nil || tag != "v9.9.9" {
+		t.Fatalf("check took the release with no binaries: %q %q %v", repo, tag, err)
+	}
+}
+
 // A late answer for m2 that arrives while a release at m3 is being cut waits
-// for it, then finds m2 covered: no approval is left behind for m2.
+// for it, then finds m2 covered: no approval is left behind for m2. The test
+// holds the lock before the goroutine starts, so the answer cannot get ahead.
 func TestLateAnswerWaitsForTheRelease(t *testing.T) {
 	m, n, merged, land := selfHive(t)
 	merged(2, "a2", "m2", "install/root.sh")
@@ -423,7 +572,6 @@ func TestLateAnswerWaitsForTheRelease(t *testing.T) {
 		defer close(done)
 		m.OnPerson(core.Ask{Kind: "release", Ref: "hive@m2", Project: "hive", Answer: "release"})
 	}()
-	time.Sleep(20 * time.Millisecond) // the answer reaches the lock first
 	m.afterKept("hive", "m3")
 	unlock()
 	<-done

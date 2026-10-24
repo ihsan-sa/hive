@@ -1,0 +1,24 @@
+ ‹ textkit-2 › lead  › thread                                          esc back
+────────────────────────────────────────────────────────────────────────────────
+   you  20:22
+   The parser and the renderer are tangled together. Can you split the parser
+   into its own package so reviewer can check it on its own?
+
+   2 replies ─────────────────────────────────────────────────────────────────
+
+   lead  20:23
+   On it. I'll hand the split to writer and ask reviewer to check the public
+   API before anything merges.
+
+   lead  20:31
+   Done. parser/ is its own package now, with 14 tests passing, and reviewer
+   approved the API. One question: keep the old import path as an alias for a
+   release, or break it now?
+
+  ╭─ reply · lead ────────────────────────────────────────────────────────────╮
+  │ › Keep the alias for one release, then remove it in 0.9.                  │
+  ╰───────────────────────────────────────────────────────────────────────────╯
+
+
+────────────────────────────────────────────────────────────────────────────────
+ enter send   ctrl+j newline   esc back to chat

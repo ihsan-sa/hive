@@ -1,0 +1,24 @@
+ hive             │   Settings  /home/you/hive/.hive/config.json
+──────────────────┼─────────────────────────────────────────────────────────────
+   Chats          │   General
+   Dashboard      │     autonomy                    2  default
+   Waiting     3  │ ▌   sandbox                     auto
+   Modules        │     WSL distro
+ › Settings       │     auto-update                 on
+                  │     use ANTHROPIC_API_KEY       off
+ ▾ textkit-2      │     release repo                ihsan-sa/hive
+   lead           │     release                     the newest
+   writer         │
+   reviewer    ●  │   Agents
+ ▾ hive-web       │     harness                     claude
+   lead        ●  │     worker model                opus
+   worker-2       │     lead model                  opus
+   reviewer       │     reviewer model              opus
+   tribunal       │     tribunal seat 1 model       opus
+ ▸ website        │     tribunal seat 2 model       sonnet
+                  │     tribunal seat 3 model       fable
+                  │     model for textkit-2         default
+                  │     model for hive-web          default
+                  │     model for website           default
+──────────────────┴─────────────────────────────────────────────────────────────
+ ↑↓ move   enter change   tab sidebar

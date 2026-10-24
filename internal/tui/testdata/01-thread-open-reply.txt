@@ -1,0 +1,36 @@
+ hive                 │   textkit-2 › lead  working                    │   Thread  textkit-2 › lead           esc close
+──────────────────────┼────────────────────────────────────────────────┼────────────────────────────────────────────────
+ › Chats              │                                                │   you  20:22
+   Dashboard          │                                                │   The parser and the renderer are tangled
+   Waiting         3  │                                                │   together. Can you split the parser into its
+   Modules            │                                                │   own package so reviewer can check it on its
+   Settings           │                                                │   own?
+                      │                                                │
+ ▾ textkit-2          │                                                │   2 replies ─────────────────────────────────
+ › lead               │                                                │
+   writer             │                                                │   lead  20:23
+   reviewer        ●  │   you  19:58                                   │   On it. I'll hand the split to writer and
+ ▾ hive-web           │   Hello?                                       │   ask reviewer to check the public API before
+   lead            ●  │   ▸ 1 reply  last 19:58                        │   anything merges.
+   worker-2           │                                                │
+   reviewer           │ ▌ you  20:22                                   │   lead  20:31
+   tribunal           │ ▌ The parser and the renderer are tangled      │   Done. parser/ is its own package now, with
+ ▸ website            │ ▌ together. Can you split the parser into its  │   14 tests passing, and reviewer approved the
+                      │ ▌ own package so reviewer can check it on its  │   API. One question: keep the old import path
+                      │ ▌ own?                                         │   as an alias for a release, or break it now?
+                      │ ▌ ▸ 2 replies  open →                          │
+                      │                                                │  ╭─ reply · lead ────────────────────────────╮
+                      │   you  20:40                                   │  │ › Keep the alias for one release, then    │
+                      │   Also check whether the docs build still      │  │   remove it in 0.9.                       │
+                      │   passes.                                      │  ╰───────────────────────────────────────────╯
+                      │   ▾ 1 reply                                    │
+                      │     lead  20:41                                │
+                      │     It passes. I fixed two broken links in     │
+                      │     guide/install.md on the same branch.       │
+                      │                                                │
+                      │                                                │
+                      │  ╭─ new thread · lead ───────────────────────╮ │
+                      │  │ › Start a new thread with lead…           │ │
+                      │  ╰───────────────────────────────────────────╯ │
+──────────────────────┴────────────────────────────────────────────────┴────────────────────────────────────────────────
+ enter send   ctrl+j newline   esc close thread   tab switch pane   pgup pgdn scroll

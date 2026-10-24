@@ -1,7 +1,10 @@
 package core
 
 import (
+	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -84,7 +87,8 @@ func (p *Person) Ask(a Ask) Ask {
 	return a
 }
 
-// Answer records the person's answer and runs the kind's handler.
+// Answer records the person's answer and runs the kind's handler. The answer
+// must be one of the ask's options; an ask with none takes free text.
 func (p *Person) Answer(id, answer, note string) (Ask, error) {
 	p.mu.Lock()
 	a, ok := p.asks[id]
@@ -96,6 +100,10 @@ func (p *Person) Answer(id, answer, note string) (Ask, error) {
 		c := *a
 		p.mu.Unlock()
 		return c, nil
+	}
+	if len(a.Options) > 0 && !slices.Contains(a.Options, answer) {
+		p.mu.Unlock()
+		return Ask{}, fmt.Errorf("%q isn't an answer to this ask: answer %s", answer, strings.Join(a.Options, " or "))
 	}
 	h := p.handlers[a.Kind]
 	p.mu.Unlock()

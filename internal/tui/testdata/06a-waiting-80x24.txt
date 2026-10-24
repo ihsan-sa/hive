@@ -1,0 +1,24 @@
+ hive             │   Waiting  3 need you                         oldest first
+──────────────────┼─────────────────────────────────────────────────────────────
+   Chats          │ ▌ hive-web › lead  permission                          12m
+   Dashboard      │ ▌ Warden blocked worker-2 writing to ../shared/.env,
+ › Waiting     3  │ ▌ outside the workspace. Allow it once?
+   Modules        │ ▌ allow once    always    deny    ←→ pick   enter answer
+   Settings       │
+                  │   textkit-2 › lead  question                           13m
+ ▾ textkit-2      │   Keep the old import path as an alias for one release, or
+   lead           │   break it now?
+   writer         │
+   reviewer    ●  │   website › lead  budget                                7m
+ ▾ hive-web       │   The OG image rebuild will use about $3.40 of tokens. Go
+   lead        ●  │   ahead?
+   worker-2       │
+   reviewer       │
+   tribunal       │
+ ▸ website        │
+                  │
+                  │
+                  │
+                  │
+──────────────────┴─────────────────────────────────────────────────────────────
+ ↑↓ move   ←→ pick   enter answer   tab sidebar

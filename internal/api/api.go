@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -23,7 +25,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
-// DaemonInfo is .hive/daemon.json.
+// DaemonInfo is .hive/private/daemon.json.
 type DaemonInfo struct {
 	PID        int       `json:"pid"`
 	Started    time.Time `json:"started"`
@@ -40,6 +42,7 @@ type State struct {
 	Workspace  string             `json:"workspace"`
 	Sandbox    string             `json:"sandbox"`
 	SandboxErr string             `json:"sandbox_err,omitempty"`
+	Offline    string             `json:"offline,omitempty"` // what the Hive can't reach right now, in one plain line
 	Projects   []ProjectView      `json:"projects"`
 	Runs       []core.Run         `json:"runs"`
 	Plans      []core.Plan        `json:"plans"`
@@ -143,6 +146,9 @@ func Dial(ws core.Workspace) (*Client, error) {
 func readInfo(ws core.Workspace) (DaemonInfo, error) {
 	var info DaemonInfo
 	raw, err := os.ReadFile(ws.DaemonFile())
+	if errors.Is(err, fs.ErrNotExist) {
+		raw, err = os.ReadFile(filepath.Join(ws.Hive(), "daemon.json")) // a daemon from before .hive/private
+	}
 	if err != nil {
 		return info, errors.New("the Hive isn't running")
 	}

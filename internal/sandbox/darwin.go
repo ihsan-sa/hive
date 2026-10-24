@@ -102,8 +102,13 @@ func (s *Seatbelt) profile(sp Spec, port string) string {
 	for _, m := range sp.Mounts {
 		if m.Hide {
 			fmt.Fprintf(&b, "(deny file-read* (subpath %q))\n", m.Host)
-		} else if m.RW {
-			fmt.Fprintf(&b, "(allow file-write* (subpath %q))\n", m.Host)
+		}
+	}
+	// The run's own writable folders may sit in a hidden one (its home in
+	// .hive/private); the later rule wins.
+	for _, m := range sp.Mounts {
+		if m.RW {
+			fmt.Fprintf(&b, "(allow file-read* file-write* (subpath %q))\n", m.Host)
 		}
 	}
 	fmt.Fprintf(&b, "(allow network-outbound (remote ip \"localhost:%s\"))\n", port)

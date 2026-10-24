@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 )
@@ -90,14 +89,14 @@ func TestWindowsPaths(t *testing.T) {
 func TestDropAttaches(t *testing.T) {
 	m := testModel(100, 30)
 	m.section = secChats
-	m.compose("", "")
+	m.focusBox("")
 	f := filepath.Join(t.TempDir(), "shot.png")
 	os.WriteFile(f, []byte("\x89PNG..."), 0o644)
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("'" + f + "' "), Paste: true})
 	if m.input.Value() != "" || len(m.files) != 1 || m.files[0].Name != "shot.png" || string(m.files[0].Data) != "\x89PNG..." {
 		t.Fatalf("input %q files %+v", m.input.Value(), m.files)
 	}
-	if v := ansi.Strip(strings.Join(m.viewChats(), "\n")); !strings.Contains(v, "📎 shot.png") {
+	if v := plain(m.View()); !strings.Contains(v, "📎 shot.png") {
 		t.Fatalf("no chip:\n%s", v)
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("just text"), Paste: true})
@@ -137,7 +136,7 @@ func TestDropAttaches(t *testing.T) {
 	// A clipboard image read for a message that was dropped stays out of the next one.
 	stale := m.composeN
 	m.keyInput(tea.KeyMsg{Type: tea.KeyEsc})
-	m.compose("", "")
+	m.focusBox("")
 	m.Update(clipMsg{f: chat.File{Name: "pasted.png"}, compose: stale})
 	if len(m.files) != 0 {
 		t.Fatalf("a stale clipboard read attached: %+v", m.files)
@@ -146,23 +145,31 @@ func TestDropAttaches(t *testing.T) {
 	if len(m.files) != 1 {
 		t.Fatalf("a current clipboard read didn't attach: %+v", m.files)
 	}
+	// The box stays open after a send, so a read still running for the sent
+	// message stays out of the next one too.
+	sentN := m.composeN
+	m.send("with the picture")
+	m.Update(clipMsg{f: chat.File{Name: "late.png"}, compose: sentN})
+	if len(m.files) != 0 {
+		t.Fatalf("a read for a sent message attached to the next: %+v", m.files)
+	}
 
-	// A drop while the chat list or thread pane is focused, before composing,
+	// A drop while the sidebar or the channel has focus, before composing,
 	// starts a message with the file attached.
 	for focus := 0; focus < 2; focus++ {
 		m := testModel(100, 30)
-		m.section = secChats
-		for i, r := range m.chatRows() {
-			if !r.group {
-				m.chatSel = i
-				break
-			}
-		}
-		m.chatFocus = focus
+		m.focus = focus
 		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("'" + f + "' "), Paste: true})
 		if !m.composing || m.input.Value() != "" || len(m.files) != 1 || m.files[0].Name != "shot.png" {
 			t.Fatalf("focus %d: composing %v input %q files %+v", focus, m.composing, m.input.Value(), m.files)
 		}
+	}
+	// With a thread open, the drop goes to its reply box.
+	r := testModel(120, 40)
+	r.thread, r.focus = "1", 0
+	r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("'" + f + "' "), Paste: true})
+	if r.focus != 2 || r.reply != "1" || len(r.files) != 1 {
+		t.Fatalf("drop with a thread open: focus %d reply %q files %+v", r.focus, r.reply, r.files)
 	}
 
 	t.Setenv("PATH", t.TempDir())

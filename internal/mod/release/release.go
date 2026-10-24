@@ -33,6 +33,8 @@ type Module struct {
 	locks   sync.Map // project -> *sync.Mutex held while a release is decided
 	// Busy reports work mid-merge, which an automatic update waits out.
 	Busy func() bool
+	// announced is the newest release a pinned Hive has said is out.
+	announced string
 }
 
 // Site serves the releases: GitHub over plain HTTPS, so updating needs no
@@ -126,30 +128,81 @@ func AssetName(goos, goarch string) string {
 	return n
 }
 
-// Check returns the newest release tag if it is newer than this build.
-func (m *Module) Check() (string, bool, error) {
-	tag, err := latest(m.C.WS.LoadConfig().ReleaseRepo)
-	if err != nil {
-		return "", false, err
+// Check returns the newest release, and where it is, if it is newer than this
+// build. It looks at the Hive's releases and at the Hive's own project, so a
+// change the person's Hive released on their fork is the next update. Only
+// release_repo and the person's own fork of it are followed, never a
+// repository an agent named, and a release whose checksums don't list this
+// platform's binary is passed over.
+func (m *Module) Check() (repo, tag string, newer bool, err error) {
+	up := m.C.WS.LoadConfig().ReleaseRepo
+	repos := []string{up}
+	if user, e := m.C.Effects.Forge.User(); e == nil {
+		fork := user + "/" + up[strings.LastIndex(up, "/")+1:]
+		for _, p := range m.C.Projects.List() {
+			if p.Self && p.Repo == fork && fork != up {
+				repos = append(repos, fork)
+			}
+		}
 	}
-	return tag, modules.Newer(core.Version, tag), nil
+	for i, r := range repos {
+		t, e := latest(r)
+		if e == nil {
+			e = hasBinary(r, t)
+		}
+		if e != nil {
+			if i == 0 {
+				err = e
+			}
+			continue
+		}
+		if tag == "" || modules.Newer(tag, t) {
+			repo, tag = r, t
+		}
+	}
+	if tag != "" {
+		err = nil
+	}
+	return repo, tag, tag != "" && modules.Newer(core.Version, tag), err
 }
 
-// Update installs the newest release over this binary. Live runs are separate
-// processes and the daemon reattaches to them after it restarts, so live work
-// carries across.
-func (m *Module) Update() (string, error) {
+// hasBinary errs unless the release's checksums list this platform's binary.
+func hasBinary(repo, tag string) error {
+	resp, err := get(repo + "/releases/download/" + tag + "/checksums.txt")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err == nil && !strings.Contains(string(raw), AssetName(runtime.GOOS, runtime.GOARCH)) {
+		err = fmt.Errorf("%s %s has no %s", repo, tag, AssetName(runtime.GOOS, runtime.GOARCH))
+	}
+	return err
+}
+
+// Update installs a release over this binary: tag, which pins the Hive there
+// and may be older, or with "" or "latest" the newest that Check finds, which
+// clears any pin. Live runs are separate processes and the daemon reattaches
+// to them after it restarts, so live work carries across.
+func (m *Module) Update(tag string) (string, error) {
 	if !strings.HasPrefix(core.Version, "v") {
 		return "this is a source build (" + core.Version + "); it doesn't update itself", nil
 	}
-	tag, newer, err := m.Check()
-	if err != nil {
-		return "", err
-	}
-	if !newer {
-		return "already on " + core.Version, nil
-	}
 	cfg := m.C.WS.LoadConfig()
+	repo, pin := cfg.ReleaseRepo, tag != "" && tag != "latest"
+	if !pin {
+		var err error
+		if repo, tag, _, err = m.Check(); err != nil {
+			return "", err
+		}
+	}
+	if !pin && !modules.Newer(core.Version, tag) || pin && tag == core.Version {
+		msg := "already on " + core.Version
+		if pin {
+			msg += ", pinned there"
+		}
+		return msg, m.pin(cfg, tag, pin)
+	}
 	tmp, err := os.MkdirTemp("", "hive-update-")
 	if err != nil {
 		return "", err
@@ -159,24 +212,29 @@ func (m *Module) Update() (string, error) {
 	if runtime.GOOS == "windows" {
 		names = append(names, AssetName("linux", "amd64")) // used inside WSL
 	}
-	if err := download(cfg.ReleaseRepo, tag, "checksums.txt", tmp); err != nil {
-		return "", err
+	if err := download(repo, tag, "checksums.txt", tmp); err != nil {
+		return "", fmt.Errorf("no release %s in %s (%v)", tag, repo, err)
 	}
 	sums, err := readSums(filepath.Join(tmp, "checksums.txt"))
 	if err != nil {
 		return "", err
 	}
+	for _, name := range names {
+		if sums[name] == "" {
+			return "", fmt.Errorf("release %s has no %s; not installing", tag, name)
+		}
+	}
 	exe := executable()
 	dir := filepath.Dir(exe)
 	for i, name := range names {
-		if err := download(cfg.ReleaseRepo, tag, name, tmp); err != nil {
+		if err := download(repo, tag, name, tmp); err != nil {
 			return "", err
 		}
 		got, err := fileSum(filepath.Join(tmp, name))
 		if err != nil {
 			return "", err
 		}
-		if want := sums[name]; want == "" || want != got {
+		if sums[name] != got {
 			return "", fmt.Errorf("%s: checksum mismatch; not installing", name)
 		}
 		target := exe
@@ -187,23 +245,66 @@ func (m *Module) Update() (string, error) {
 			return "", err
 		}
 	}
-	notes := Notes(cfg.ReleaseRepo, core.Version, tag)
+	if err := m.pin(cfg, tag, pin); err != nil {
+		return "", err
+	}
+	notes := Notes(repo, core.Version, tag)
 	m.C.J.MustAppend("hive.updated", map[string]string{"from": core.Version, "to": tag, "notes": notes})
 	if m.Restart != nil {
 		go func() { time.Sleep(time.Second); m.Restart() }()
 	}
-	return "updated to " + tag + "\n\n" + notes, nil
+	msg := "updated to " + tag
+	if pin {
+		msg += ", pinned there with auto-update off: `" + core.Cmd + " update` goes back to the newest"
+	}
+	return msg + "\n\n" + notes, nil
 }
 
-// AutoUpdate is the scheduled job: update when allowed and nothing is mid-merge.
+// pin keeps the Hive on tag, or with on false follows the newest release.
+// Pinning turns auto_update off, because releases older than the pin itself
+// read only that and would update straight back to the newest; clearing the
+// pin turns it back on if it was on before.
+func (m *Module) pin(cfg core.Config, tag string, on bool) error {
+	switch {
+	case on && cfg.ReleasePin == "":
+		cfg.PinnedAuto, cfg.AutoUpdate = cfg.AutoUpdate, false
+	case !on && cfg.ReleasePin != "":
+		cfg.AutoUpdate = cfg.AutoUpdate || cfg.PinnedAuto
+		cfg.PinnedAuto = false
+	case !on || cfg.ReleasePin == tag:
+		return nil
+	}
+	if !on {
+		tag = ""
+	}
+	cfg.ReleasePin = tag
+	return m.C.WS.SaveConfig(cfg)
+}
+
+// AutoUpdate is the scheduled job: update when allowed and nothing is
+// mid-merge. A pinned Hive that was updating itself stays put and says once
+// when a newer release is out.
 func (m *Module) AutoUpdate() (string, error) {
-	if !m.C.WS.LoadConfig().AutoUpdate {
+	cfg := m.C.WS.LoadConfig()
+	if cfg.ReleasePin != "" && (cfg.AutoUpdate || cfg.PinnedAuto) {
+		tag, err := latest(cfg.ReleaseRepo)
+		if err != nil || !modules.Newer(cfg.ReleasePin, tag) {
+			return "pinned to " + cfg.ReleasePin, err
+		}
+		text := "pinned to " + cfg.ReleasePin + "; " + tag + " is out, and `" + core.Cmd + " update` installs it"
+		if m.announced != tag {
+			m.announced = tag
+			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "ref": "release:pin", "text": text})
+		}
+		return text, nil
+	}
+	if !cfg.AutoUpdate || cfg.ReleasePin != "" {
 		return "auto-update is off", nil
 	}
 	if m.Busy != nil && m.Busy() {
 		return "waiting: work is mid-merge", nil
 	}
-	return m.Update()
+	return m.Update("")
 }
 
 // Rename moves an install still called hive-v0 to hive, when this daemon
@@ -304,6 +405,9 @@ func fileSum(path string) (string, error) {
 // and its dry run passes on that exact commit. The release names each change
 // merged since the last one and the reviewer runs that read its exact head. A
 // head with no read, or a change to a root path, waits for the person's word.
+// The release numbers on from this build, so the install switches to it at its
+// next update. In the person's fork it also asks the person whether to offer
+// the change upstream, one pull request that grows with each kept merge.
 func (m *Module) AfterKept(project, sha string) {
 	defer m.lock(project)()
 	m.afterKept(project, sha)
@@ -358,6 +462,9 @@ func (m *Module) afterKept(project, sha string) {
 	if rel, err := m.C.Effects.Forge.LatestRelease(p.Repo); err == nil && rel.Tag != "" {
 		last = rel.Tag
 	}
+	if strings.HasPrefix(core.Version, "v") && modules.Newer(last, core.Version) {
+		last = core.Version
+	}
 	next := bump(last)
 	body := "Released by the Hive after " + core.Short(sha) + " kept its tests and dry run green.\n\nWhat was read:\n\n" + manifest.String()
 	if approved {
@@ -368,6 +475,40 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	m.C.J.MustAppend("hive.released", map[string]string{"project": project, "tag": next, "sha": sha})
+	f, up := m.C.Effects.Forge, m.C.WS.LoadConfig().ReleaseRepo
+	if p.Repo == up {
+		return
+	}
+	head := strings.SplitN(p.Repo, "/", 2)[0] + ":" + p.Branch
+	if _, open, _ := f.FindPR(up, head); open {
+		return // the open pull request grows with the branch
+	}
+	// A pull request on someone else's repository goes out in the person's
+	// name, so it waits for their yes.
+	m.C.Person.Ask(core.Ask{Kind: "upstream", Ref: head, Project: project,
+		Title:  "Offer the Hive's changes to " + up + "?",
+		Detail: "The Hive released " + next + " on " + p.Repo + ". Yes opens one pull request on " + up + " in your name, which grows with each kept change."})
+}
+
+// New is the release module, with the person's answer to an upstream offer.
+func New(c *core.Core) *Module {
+	m := &Module{C: c}
+	c.Person.Handle("upstream", m.onUpstream)
+	return m
+}
+
+func (m *Module) onUpstream(a core.Ask) {
+	if a.Answer != "yes" {
+		return
+	}
+	f, up := m.C.Effects.Forge, m.C.WS.LoadConfig().ReleaseRepo
+	pr, err := f.CreatePR(up, a.Ref, f.DefaultBranch(up), "Improvements from "+a.Project,
+		"Changes the Hive made to itself, each kept by its tests, review and dry run.")
+	if err != nil {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": a.Project, "text": "offering the change upstream failed: " + err.Error()})
+		return
+	}
+	m.C.J.MustAppend("hive.offered", map[string]string{"project": a.Project, "pr": pr.URL})
 }
 
 // hold asks the person to release sha, and answers any older release ask for
@@ -376,7 +517,7 @@ func (m *Module) hold(project, sha string, root, unread []string, manifest strin
 	ref := project + "@" + sha
 	for _, a := range m.C.Person.Open() {
 		if a.Kind == "release" && a.Project == project && a.Ref != ref {
-			m.C.Person.Answer(a.ID, "superseded", "the Hive, not the person: a release ask at "+core.Short(sha)+" covers it")
+			m.C.Person.Answer(a.ID, "hold", "the Hive, not the person: superseded, a release ask at "+core.Short(sha)+" covers it")
 		}
 	}
 	var why []string

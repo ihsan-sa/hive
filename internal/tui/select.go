@@ -8,39 +8,35 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
 // Selection works as in Claude Code's full screen: the control center keeps
 // the mouse so the wheel scrolls the chat, a drag highlights text inside the
-// one pane it started in, and letting go copies it. A drag can't leave its
-// pane, so the copy never carries the chat list or the border between them.
+// body of the one pane it started in, and letting go copies it. A drag can't
+// leave its pane, so the copy never carries the sidebar or a divider.
 type selection struct {
 	on   bool
 	a, b [2]int // press and current cell, {x, y}
 	box  [4]int // the pane's cells, {x0, y0, x1, y1} with x1 and y1 past its edge
 }
 
-var stPicked = lipgloss.NewStyle().Reverse(true)
-
-// pane is the box of screen cells under (x, y); ok is false on the border.
-func (m *model) pane(x, y int) (box [4]int, ok bool) {
-	top, h := 2, m.bodyHeight() // breadcrumb and tabs above the body
-	if y < top || y >= top+h {
+// paneAt is the body of the pane under (x, y) on a screen drawn by frame,
+// whose rule under the headers marks each divider with ┼; ok is false off
+// the bodies or on a divider.
+func paneAt(screen []string, x, y int) (box [4]int, ok bool) {
+	if len(screen) < 4 || y < 2 || y >= len(screen)-2 {
 		return box, false
 	}
-	if m.section != secChats || len(m.stack) > 0 || m.help || m.showSince || m.notice != nil || !m.loaded {
-		return [4]int{0, top, m.w, top + h}, true
-	}
-	h = m.paneH()
-	switch l := m.listW(); {
-	case y >= top+h:
-		return box, false // the compose line
-	case x < l:
-		return [4]int{0, top, l, top + h}, true
-	case x >= l+3:
-		return [4]int{l + 3, top, m.w, top + h}, true
+	x0, i := 0, 0
+	for _, r := range ansi.Strip(screen[1]) + "┼" {
+		if r == '┼' {
+			if x >= x0 && x < i {
+				return [4]int{x0, 2, i, len(screen) - 2}, true
+			}
+			x0 = i + 1
+		}
+		i++
 	}
 	return box, false
 }
@@ -49,7 +45,7 @@ func (m *model) mouseSelect(msg tea.MouseMsg) (handled bool, cmd tea.Cmd) {
 	p := [2]int{msg.X, msg.Y}
 	switch {
 	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
-		box, ok := m.pane(msg.X, msg.Y)
+		box, ok := paneAt(strings.Split(m.View(), "\n"), msg.X, msg.Y)
 		m.sel = selection{on: ok, a: p, b: p, box: box}
 		return true, nil
 	case !m.sel.on:
@@ -112,7 +108,7 @@ func (s selection) paint(screen []string, w int) {
 	for y := a[1]; y <= b[1] && y < len(screen); y++ {
 		l, r := s.span(y)
 		line := pad(screen[y], w)
-		screen[y] = ansi.Cut(line, 0, l) + stPicked.Render(ansi.Strip(ansi.Cut(line, l, r))) + ansi.Cut(line, r, w)
+		screen[y] = ansi.Cut(line, 0, l) + stSel.Render(ansi.Strip(ansi.Cut(line, l, r))) + ansi.Cut(line, r, w)
 	}
 }
 

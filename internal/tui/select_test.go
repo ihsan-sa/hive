@@ -26,18 +26,22 @@ func TestSelectionTextStaysInItsPane(t *testing.T) {
 	}
 }
 
-// TestDragSelectsChatText drives a drag over the thread pane of the real
-// view, past its left edge into the chat list, and checks the copy is the
+// TestDragSelectsChatText drives a drag over the channel pane of the real
+// view, past its left edge into the sidebar, and checks the copy is the
 // pane's own text; the wheel still scrolls the chat afterwards.
 func TestDragSelectsChatText(t *testing.T) {
 	m := testModel(80, 20)
-	x0 := m.listW() + 3
+	m.Update(tea.KeyMsg{Type: tea.KeyRight}) // open the chat
+	side, mw, _ := m.layout()
+	x0 := side + 1
 	m.Update(tea.MouseMsg{X: x0, Y: 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	m.Update(tea.MouseMsg{X: 79, Y: 6, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
-	pane := m.viewThreads(m.rightW())
 	var want []string
-	for _, l := range pane[1:5] {
-		want = append(want, strings.TrimRight(ansi.Strip(clip(l, m.rightW())), " "))
+	for _, l := range m.viewMain(mw).body[1:5] {
+		want = append(want, strings.TrimRight(ansi.Strip(fit(l, mw)), " "))
+	}
+	if strings.Join(want, "") == "" {
+		t.Fatal("the channel pane has no text to select")
 	}
 	if got := m.sel.text(strings.Split(m.View(), "\n")); got != strings.Join(want, "\n") {
 		t.Fatalf("copy %q, want the pane's lines %q", got, want)
@@ -46,16 +50,16 @@ func TestDragSelectsChatText(t *testing.T) {
 	got := strings.Split(m.sel.text(strings.Split(m.View(), "\n")), "\n")
 	for i, l := range got {
 		if i >= len(want) || !strings.HasPrefix(want[i], l) {
-			t.Fatalf("a drag into the chat list copied more than the pane: %q", got)
+			t.Fatalf("a drag into the sidebar copied more than the pane: %q", got)
 		}
 	}
 	_, cmd := m.Update(tea.MouseMsg{X: 0, Y: 6, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
 	if cmd == nil || m.sel.on || m.flash != "copied" {
 		t.Fatalf("release: cmd %v, selecting %v, flash %q", cmd != nil, m.sel.on, m.flash)
 	}
-	before := m.scroll
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
-	if m.scroll == before {
+	before := m.chScroll
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.chScroll == before {
 		t.Fatal("the wheel no longer scrolls the chat after a drag")
 	}
 }

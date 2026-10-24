@@ -26,7 +26,8 @@ type Measurement struct {
 	TestsOK bool      `json:"tests_ok"`
 	Score   *float64  `json:"score,omitempty"`
 	Kept    bool      `json:"kept"`
-	Best    *float64  `json:"best,omitempty"` // best kept after this measure
+	Best    *float64  `json:"best,omitempty"`    // best kept after this measure
+	Version string    `json:"version,omitempty"` // the score's version (Effects.ScoreVersion); a new one starts a new baseline
 	Note    string    `json:"note"`
 	At      time.Time `json:"at"`
 }
@@ -111,15 +112,41 @@ func (m *Module) Scores(project string) []Measurement {
 
 // Best returns the best kept score.
 func (m *Module) Best(project string) (float64, bool) {
+	k, ok := m.kept(project)
+	if !ok {
+		return 0, false
+	}
+	return *k.Best, true
+}
+
+// kept is the last kept measurement with a best score.
+func (m *Module) kept(project string) (Measurement, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ms := m.scores[project]
 	for i := len(ms) - 1; i >= 0; i-- {
 		if ms[i].Kept && ms[i].Best != nil {
-			return *ms[i].Best, true
+			return ms[i], true
 		}
 	}
-	return 0, false
+	return Measurement{}, false
+}
+
+// version is the score's version at sha, or "" with no score.
+func (m *Module) version(p core.Project, sha string, cfg core.ProjectConfig) string {
+	if cfg.Score == nil {
+		return ""
+	}
+	return m.C.Effects.ScoreVersion(p, sha, *cfg.Score)
+}
+
+// versionOf is x's score version, worked out at its commit when x was
+// recorded before measurements carried one.
+func (m *Module) versionOf(p core.Project, x Measurement) string {
+	if x.Version != "" {
+		return x.Version
+	}
+	return m.version(p, x.SHA, m.C.Effects.Config(p, x.SHA))
 }
 
 func (m *Module) measured(project, sha string) bool {
@@ -201,14 +228,51 @@ func (m *Module) baseline(p core.Project) {
 	}
 	cfg := m.C.Effects.Config(p, main)
 	ok, score, note := m.measure(p, main)
-	ms := Measurement{Project: p.Name, SHA: main, TestsOK: ok, Score: score, Note: "start: " + note}
+	ms := Measurement{Project: p.Name, SHA: main, TestsOK: ok, Score: score, Note: "start: " + note, Version: m.version(p, main, cfg)}
+	m.warnUnlisted(p, cfg)
 	if ok && (score != nil || cfg.Score == nil) {
 		ms.Kept, ms.Best = true, score
 		m.record(ms)
 		return
 	}
+	m.noStart(p, ms)
+}
+
+// noStart records a start with no number and raises the alert. Once it has
+// failed more than once at one commit, the project's lead gets it as work,
+// once per commit: a retry alone won't fix a command whose output can't be read.
+func (m *Module) noStart(p core.Project, ms Measurement) {
 	m.record(ms)
+	note := strings.TrimPrefix(ms.Note, "start: ")
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "baseline", "project": p.Name, "text": "the start of " + p.Name + " has no number yet: " + core.Clip(note, 200) + "; measuring again in 10 minutes"})
+	n := 0
+	for _, x := range m.Scores(p.Name) {
+		if x.SHA == ms.SHA && !x.Kept && x.Task == "" {
+			n++
+		}
+	}
+	if n < 2 {
+		return
+	}
+	head := "Main of " + p.Name + " at " + core.Short(ms.SHA) + " has failed"
+	for _, x := range m.Chat.Messages("project:" + p.Name) {
+		if x.From == "improve" && strings.HasPrefix(x.Text, head) {
+			return // told already at this commit
+		}
+	}
+	m.Chat.EnsureProject(p.Name)
+	m.Chat.Post("project:"+p.Name, "", "improve", head+" to give a starting score more than once, so the keep-or-revert loop can't judge any change. "+
+		"Look at the output below, fix the test or score command in .hive/project.json (the score is the last word of the output, or the one line that is a number alone), and ask the person if you can't:\n"+core.Clip(note, 1500))
+}
+
+// warnUnlisted raises an alert when a score is set with no evaluator paths:
+// only a ./ file its command names is then protected from a candidate, not a
+// script that file calls, a test or its data.
+func (m *Module) warnUnlisted(p core.Project, cfg core.ProjectConfig) {
+	if cfg.Score != nil && len(cfg.Score.Paths) == 0 {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "score-paths", "ref": "score-paths:" + p.Name, "project": p.Name,
+			"text": p.Name + "'s score lists no evaluator files in its `paths`, so a change could alter how it's scored; list the files the score reads in .hive/project.json"})
+	}
 }
 
 func (m *Module) measureLoop() {
@@ -238,8 +302,19 @@ func (m *Module) afterMerge(t work.Task) {
 	}
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
 	ok, score, note := m.measure(p, t.MergeSHA)
-	best, hasBest := m.Best(p.Name)
-	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note}
+	k, hasBest := m.kept(p.Name)
+	best := 0.0
+	if hasBest {
+		best = *k.Best
+	}
+	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg)}
+	if !hasBest || m.versionOf(p, k) != ms.Version {
+		m.warnUnlisted(p, cfg)
+		if hasBest {
+			// The score itself changed, so this merge starts a new baseline.
+			hasBest, ms.Note = false, "the score changed, so this starts a new baseline; "+note
+		}
+	}
 	worse := !ok
 	reason := ""
 	switch {

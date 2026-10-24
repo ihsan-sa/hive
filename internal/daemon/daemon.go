@@ -152,6 +152,10 @@ func Run(ws core.Workspace, waitFor int) error {
 		return err
 	}
 	defer a.Close()
+	// Before the token is published: an earlier version's turns can read private/.
+	if err := a.C.Runs.Migrate(); err != nil {
+		return err
+	}
 	if _, err := ws.ReadConfig(); err != nil {
 		fmt.Fprintln(os.Stderr, "settings:", err)
 	}
@@ -163,6 +167,9 @@ func Run(ws core.Workspace, waitFor int) error {
 	rand.Read(tok[:])
 	info := api.DaemonInfo{PID: os.Getpid(), Started: time.Now().UTC(), Port: ln.Addr().(*net.TCPAddr).Port, Token: hex.EncodeToString(tok[:]), Version: core.Version}
 	raw, _ := json.Marshal(info)
+	if err := os.MkdirAll(ws.Private(), 0o700); err != nil {
+		return err
+	}
 	if err := core.WriteFileAtomic(ws.DaemonFile(), raw, 0o600); err != nil {
 		return err
 	}
@@ -490,7 +497,13 @@ func (s *server) routes() http.Handler {
 		}
 		return evs, nil
 	})
-	h("/api/update", func(*http.Request) (any, error) { return a.Release.Update() })
+	h("/api/update", func(r *http.Request) (any, error) {
+		var b struct{ Release string }
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		return a.Release.Update(b.Release)
+	})
 	h("/api/shutdown", func(*http.Request) (any, error) {
 		go func() { time.Sleep(100 * time.Millisecond); s.cancel() }()
 		return "stopping", nil
@@ -612,10 +625,16 @@ func (s *server) state() api.State {
 		if !r.Terminal() || recent < 30 {
 			r.System, r.Brief = "", core.Clip(r.Brief, 400)
 			st.Runs = append(st.Runs, r)
+			if !r.Terminal() && st.Offline == "" {
+				st.Offline = r.Offline
+			}
 			if r.Terminal() {
 				recent++
 			}
 		}
+	}
+	if st.Offline == "" {
+		st.Offline = a.Work.Offline()
 	}
 	st.Plans = a.C.Runs.Plans()
 	sw := a.Improve.Sweeps()

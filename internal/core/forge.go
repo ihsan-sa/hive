@@ -33,6 +33,7 @@ type Forge interface {
 	Name() string
 	User() (string, error)
 	EnsureRepo(repo, description string) (created bool, err error)
+	Fork(repo string) (string, error) // the person's fork of repo, made on first need
 	Clone(repo, dir string) error
 	IsEmpty(repo string) (bool, error)
 	DefaultBranch(repo string) string
@@ -72,6 +73,21 @@ func (g GitHub) EnsureRepo(repo, description string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// Fork returns the person's fork of repo, creating it if they have none.
+// GitHub answers before a new fork's branches exist, so it waits for them,
+// up to a minute, and the first clone finds them.
+func (GitHub) Fork(repo string) (string, error) {
+	fork, err := gh("api", "-X", "POST", "repos/"+repo+"/forks", "-q", ".full_name")
+	for i := 0; err == nil && i < 20; i++ {
+		out, e := GitT(time.Minute, "", "-c", "credential.helper=", "-c", "credential.helper="+ghHelper(), "ls-remote", "--heads", "https://github.com/"+fork+".git")
+		if e == nil && strings.TrimSpace(out) != "" {
+			break
+		}
+		time.Sleep(3 * time.Second)
+	}
+	return fork, err
 }
 
 // ghHelper is git's credential helper backed by the person's gh login, so
@@ -162,6 +178,9 @@ type ghPR struct {
 	MergeCommit *struct {
 		Oid string `json:"oid"`
 	} `json:"mergeCommit"`
+	HeadRepositoryOwner struct {
+		Login string `json:"login"`
+	} `json:"headRepositoryOwner"`
 }
 
 func (p ghPR) pr() PR {
@@ -172,10 +191,17 @@ func (p ghPR) pr() PR {
 	return out
 }
 
-const prFields = "number,url,state,headRefOid,mergeable,mergeCommit"
+const prFields = "number,url,state,headRefOid,mergeable,mergeCommit,headRepositoryOwner"
 
 func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
-	out, err := gh("pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", prFields)
+	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", prFields}
+	// A fork's "owner:branch": gh matches the branch name alone, and once
+	// merged the next change needs a new pull request.
+	owner, branch, fork := strings.Cut(head, ":")
+	if fork {
+		args[5], args[7] = branch, "open"
+	}
+	out, err := gh(args...)
 	if err != nil {
 		return PR{}, false, err
 	}
@@ -184,7 +210,7 @@ func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
 		return PR{}, false, err
 	}
 	for _, p := range list {
-		if p.State != "CLOSED" {
+		if p.State != "CLOSED" && (!fork || p.HeadRepositoryOwner.Login == owner) {
 			return p.pr(), true, nil
 		}
 	}

@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -37,9 +38,32 @@ type ProjectConfig struct {
 
 // Score is one number, which way is better, and how much noise to tolerate.
 type Score struct {
-	Command   string  `json:"command"`
-	Direction string  `json:"direction"` // higher | lower
-	Tolerance float64 `json:"tolerance"`
+	Command   string   `json:"command"`
+	Direction string   `json:"direction"` // higher | lower
+	Tolerance float64  `json:"tolerance"`
+	Paths     []string `json:"paths,omitempty"` // what else the score reads, beyond a ./ file in its command
+}
+
+// Evaluator returns the paths in the repository that make up the score: its
+// paths and, as a best guess, any ./ file its command names. A change to one
+// is the person's to merge, and changes the score's version, so it starts a
+// new baseline. A path outside the repository can't be either, so it's left out.
+func (s Score) Evaluator() []string {
+	var out []string
+	add := func(f string) {
+		if f = path.Clean(f); f != "." && !path.IsAbs(f) && f != ".." && !strings.HasPrefix(f, "../") {
+			out = append(out, f)
+		}
+	}
+	for _, f := range s.Paths {
+		add(f)
+	}
+	for _, f := range strings.Fields(s.Command) {
+		if f = strings.Trim(f, `"'();&|<>`); strings.HasPrefix(f, "./") {
+			add(f)
+		}
+	}
+	return out
 }
 
 // Better reports whether a is at least as good as b within tolerance.

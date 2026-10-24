@@ -1,0 +1,268 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+)
+
+// feedRow is one line of the dashboard's live feed: who told whom what.
+type feedRow struct {
+	at                time.Time
+	from, to, project string
+	text              string
+	chat, msg, thread string // a chat message; its text is looked up when drawn
+	task              string
+	ask               bool
+}
+
+type feedMsg []core.Event
+
+func (m *model) fetchFeed() tea.Cmd {
+	after := m.feedSeq
+	return func() tea.Msg {
+		var evs []core.Event
+		if m.c.Do("GET", fmt.Sprintf("/api/events?after=%d", after), nil, &evs) != nil {
+			return nil
+		}
+		return feedMsg(evs)
+	}
+}
+
+// addEvents writes journal events into the feed (the newest 500 rows).
+func (m *model) addEvents(evs []core.Event) tea.Cmd {
+	var fetch []tea.Cmd
+	fetching := map[string]bool{}
+	for _, e := range evs {
+		if e.Seq <= m.feedSeq {
+			continue
+		}
+		m.feedSeq = e.Seq
+		r := feedRow{at: e.At}
+		switch e.Kind {
+		case "chat.posted":
+			var p struct{ Chat, ID, Thread, From string }
+			e.Decode(&p)
+			name, project := m.chatName(p.Chat)
+			r.chat, r.msg, r.thread, r.project = p.Chat, p.ID, or(p.Thread, p.ID), project
+			r.from, r.to = name, "you"
+			switch p.From {
+			case "person":
+				r.from, r.to = "you", name
+			case "hive":
+				r.from = "hive"
+			}
+			if !fetching[p.Chat] { // once per chat, so the new message's text shows
+				fetching[p.Chat] = true
+				fetch = append(fetch, m.fetchChat(p.Chat))
+			}
+		case "task.saved":
+			var t work.Task
+			e.Decode(&t)
+			if m.stages[t.ID] == t.Stage {
+				continue
+			}
+			m.stages[t.ID] = t.Stage
+			to := "worker"
+			if w, ok := m.run(t.Worker); ok {
+				to = runLabel(w)
+			}
+			r.from, r.to, r.project, r.text, r.task = "lead", to, t.Project, t.Stage+": "+t.Label(), t.ID
+		case "person.asked":
+			var a core.Ask
+			e.Decode(&a)
+			r.from, r.to, r.project, r.text, r.ask = or(a.From, "hive"), "you", a.Project, a.Title, true
+		case "alert.raised":
+			var a struct{ Kind, Project, Text string }
+			e.Decode(&a)
+			r.from, r.to, r.project, r.text = "hive", "you", a.Project, a.Kind+": "+a.Text
+		default:
+			continue
+		}
+		m.feed = append(m.feed, r)
+	}
+	if len(m.feed) > 500 {
+		m.feed = m.feed[len(m.feed)-500:]
+	}
+	return tea.Batch(fetch...)
+}
+
+// chatName names a chat as the sidebar does, with its project.
+func (m *model) chatName(id string) (name, project string) {
+	if p, ok := strings.CutPrefix(id, "project:"); ok {
+		return "lead", p
+	}
+	if r, ok := m.run(strings.TrimPrefix(id, "agent:")); ok {
+		return runLabel(r), r.Project
+	}
+	for _, c := range m.st.Chats {
+		if c.ID == id {
+			return c.Title, c.Project
+		}
+	}
+	return id, ""
+}
+
+// feedRows is the feed as followed: following applies when drawn, never to the buffer.
+func (m *model) feedRows() []feedRow {
+	var out []feedRow
+	for _, r := range m.feed {
+		if m.follow != "" && r.project != m.follow || m.onlyMe && r.from != "you" && r.to != "you" {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// feedCursor: -1 sits on the newest row and follows it as rows arrive.
+func (m *model) feedCursor(n int) int {
+	if m.feedSel < 0 || m.feedSel >= n {
+		return n - 1
+	}
+	return m.feedSel
+}
+
+func (m *model) keyDash(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.dashTree {
+		if k.String() == "s" {
+			m.dashTree = false
+			return m, nil
+		}
+		return m.keyTree(k)
+	}
+	rows := m.feedRows()
+	sel := m.feedCursor(len(rows))
+	switch k.String() {
+	case "up", "k":
+		m.feedSel = max(0, sel-1)
+	case "down", "j":
+		if m.feedSel = sel + 1; m.feedSel >= len(rows)-1 {
+			m.feedSel = -1
+		}
+	case "f":
+		if sel >= 0 {
+			m.follow, m.feedSel = rows[sel].project, -1
+		}
+	case "F":
+		m.follow, m.onlyMe, m.feedSel = "", false, -1
+	case "m":
+		m.onlyMe, m.feedSel = !m.onlyMe, -1
+	case "s":
+		m.dashTree = true
+	case "left", "h":
+		m.focus = 0
+	case "enter", "right", "l":
+		if sel < 0 {
+			return m, nil
+		}
+		switch r := rows[sel]; {
+		case r.chat != "":
+			cmd := m.openChat(r.chat)
+			m.thread, m.focus = r.thread, 2
+			return m, tea.Batch(cmd, m.focusBox(r.thread))
+		case r.task != "":
+			return m, m.push(detail{kind: "task", id: r.task, title: core.Clip(r.text, 40)})
+		case r.ask:
+			m.pick(sideRow{sec: secWaiting})
+		}
+	}
+	return m, nil
+}
+
+func (m *model) viewFeed() []string {
+	if m.dashTree {
+		return m.viewTree()
+	}
+	w := m.mainW() - 5
+	working, idle := 0, 0
+	for _, r := range m.st.Runs {
+		switch {
+		case r.Terminal():
+		case r.Status == core.StatusRunning:
+			working++
+		default:
+			idle++
+		}
+	}
+	lines := []string{"  " + stDim.Render(fmt.Sprintf("%d agents · %d working · %d idle · ", working+idle, working, idle)) +
+		stTitle.Render(fmt.Sprintf("%d waiting on you", len(m.st.Asks))), "  " + m.usage(w)}
+	pw := 12 // the project column, dropped when the message would get too narrow
+	if w < 90 {
+		pw = 0
+	}
+	lines = append(lines, "  "+stDim.Render(fmt.Sprintf("%-10s%-24s%s%s", "time", "from → to", pad(clip("project", pw), pw), "message")), "")
+	rows := m.feedRows()
+	sel := m.feedCursor(len(rows))
+	room := m.bodyHeight() - len(lines)
+	start := max(0, min(len(rows)-room, sel-room/2))
+	var feed []string
+	for i := start; i < len(rows) && len(feed) < room; i++ {
+		r := rows[i]
+		line := fmt.Sprintf("%-10s%s%s", r.at.Local().Format("15:04:05"), pad(clip(r.from+" → "+r.to, 22), 24), pad(clip(r.project, pw-2), pw))
+		line = clip(line+m.feedText(r), w)
+		switch {
+		case i == sel && m.focus == 1:
+			line = stSel.Render(pad(line, w))
+		case r.from != "you" && r.to != "you":
+			line = stDim.Render(line)
+		}
+		feed = append(feed, "  "+line)
+	}
+	if len(rows) == 0 {
+		feed = append(feed, "  "+stDim.Render("Nothing yet. Messages between agents and with you show here as they happen."))
+	}
+	for len(feed) < room {
+		feed = append([]string{""}, feed...)
+	}
+	return append(lines, feed...)
+}
+
+func (m *model) feedText(r feedRow) string {
+	for _, msg := range m.msgs[r.chat] {
+		if msg.ID == r.msg {
+			return preview(msg.Text)
+		}
+	}
+	return oneLine(r.text)
+}
+
+// usage is the plan usage line, or why agents can't start.
+func (m *model) usage(w int) string {
+	if m.st.SandboxErr != "" {
+		return stBad.Render(clip("Agents can't start: "+m.st.SandboxErr, w))
+	}
+	var parts []string
+	for _, p := range m.st.Plans {
+		s := p.Harness
+		if p.Limit.Status == "rejected" {
+			s += " " + stBad.Render("limited") + " until " + p.Limit.ResetsAt.Local().Format("Mon 15:04")
+		}
+		for _, k := range sortedKeys(p.Limit.Windows) {
+			s += fmt.Sprintf(" · %s %.0f%%", strings.ReplaceAll(k, "_", " "), p.Limit.Windows[k].Utilization*100)
+		}
+		parts = append(parts, s)
+	}
+	if n := len(m.st.Alerts); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", n, plural(n, "alert", "alerts")))
+	}
+	if n := len(m.st.Requests); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s past the sandbox", n, plural(n, "request", "requests")))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return stDim.Render(strings.Join(parts, "   ") + "   s status")
+}
+
+func or(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
