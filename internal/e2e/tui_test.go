@@ -17,6 +17,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
@@ -263,8 +264,9 @@ func TestControlCenterInTmux(t *testing.T) {
 	x.keys("Enter")
 	x.wait(20*time.Second, "Where should the Hive live? ["+ws.Root+"]")
 	x.keys("Enter")
-	// The share opt-in: Enter is no, and nothing is sent.
-	x.wait(20*time.Second, "Send failure reports")
+	// The share opt-in: Enter is no, and nothing is sent. Its opening words
+	// come from report.Question, so rewording it can't break this wait.
+	x.wait(20*time.Second, strings.Join(strings.Fields(report.Question)[:3], " "))
 	x.keys("Enter")
 	s = x.until(time.Minute, "the sandbox or repository prompt", func(s string) bool {
 		return strings.Contains(s, "Type `bare`") || strings.Contains(s, "GitHub repository")
