@@ -668,6 +668,7 @@ func TestWaitingAnswersTheSelectedAsk(t *testing.T) {
 	if v := ansi.Strip(m.View()); len(answered) != 0 || !strings.Contains(v, "this is the next ask") || strings.Contains(v, "answered elsewhere") {
 		t.Fatalf("the first enter on the ask that took a2's place should say it's the next one, not answer it: %v\n%s", answered, v)
 	}
+	look(m) // the person reads a3
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
 		cmd()
 	}

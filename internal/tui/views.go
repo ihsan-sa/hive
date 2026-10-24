@@ -605,9 +605,11 @@ func contains(l []string, s string) bool {
 // waitMoved is set, so Enter won't answer an ask the person didn't select.
 // That holds after an answer here too: a quick second Enter would otherwise
 // approve whatever arrived under the cursor before the person saw it.
-// Beneath that, Enter answers only the ask the last View drew selected, and
-// only once it has been drawn there for waitSettle (see noteShown), so keys
-// typed ahead of the screen can't approve an ask nobody saw, however the
+// An ask landing in an empty list is the same: it wasn't selected either.
+// Beneath that, Enter answers only the ask and options the last View drew
+// selected, once they have been drawn there for waitSettle (see noteShown),
+// and not as a repeat of an Enter within waitSettle, so keys typed ahead of
+// the screen or a held Enter can't approve an ask nobody saw, however the
 // list changed.
 func (m *model) waitIndex() int {
 	asks := m.st.Asks
@@ -617,10 +619,14 @@ func (m *model) waitIndex() int {
 			return i
 		}
 	}
-	if m.waitID != "" {
+	switch {
+	case m.waitID != "":
 		m.optSel, m.waitMoved = 0, true // a different ask now; don't carry the pick over
-		m.waitNext = m.waitID == m.waitDone
+		m.waitNext, m.waitNew = m.waitID == m.waitDone, false
+	case m.waitEmpty && len(asks) > 0:
+		m.optSel, m.waitMoved, m.waitNext, m.waitNew = 0, true, false, true
 	}
+	m.waitEmpty = len(asks) == 0
 	m.waitSel = max(0, min(m.waitSel, len(asks)-1))
 	m.waitID = ""
 	if m.waitSel < len(asks) {
@@ -635,19 +641,23 @@ func (m *model) waitIndex() int {
 // draw of whatever slid under the cursor, well inside this.
 const waitSettle = 500 * time.Millisecond
 
+// waitKey is what of an ask Enter answers: its id and its options, so an
+// ask whose options change has to be read again.
+func waitKey(a core.Ask) string { return a.ID + "\x00" + strings.Join(a.Options, "\x00") }
+
 // clock is time.Now, swapped in tests.
 var clock = time.Now
 
 // noteShown ends a View: when the ask drawn selected changed (or none was
 // drawn), its time on screen starts again.
 func (m *model) noteShown() {
-	if m.waitDraw != m.waitShown {
+	if m.waitDraw != m.waitShown { // waitDraw holds the options too: changed options are a new ask to read
 		m.waitShown, m.waitSince = m.waitDraw, clock()
 	}
 }
 
 func (m *model) selectWait(i int) {
-	m.waitSel, m.waitID, m.optSel, m.waitMoved = i, m.st.Asks[i].ID, 0, false
+	m.waitSel, m.waitID, m.optSel, m.waitMoved, m.waitEmpty = i, m.st.Asks[i].ID, 0, false, false
 }
 
 func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -678,10 +688,14 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.push(detail{kind: "diff", id: a.ID, title: diffTitle(""), text: a.Diff})
 		}
 	case "enter":
+		repeat := clock().Sub(m.waitEnter) < waitSettle // a held Enter repeats faster than this
+		m.waitEnter = clock()
 		if m.waitMoved { // the selected ask went; what's under the cursor wasn't chosen
 			m.waitMoved = false
 			if m.waitNext { // the one that went was answered here
 				m.setFlash("answered; this is the next ask, enter again to answer it")
+			} else if m.waitNew {
+				m.setFlash("a new ask came in; enter again to answer it")
 			} else {
 				m.setFlash("that ask was answered elsewhere; check the selection")
 			}
@@ -689,8 +703,12 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if sel < len(asks) {
 			a := asks[sel]
-			if a.ID != m.waitShown || clock().Sub(m.waitSince) < waitSettle { // not on screen long enough to be read
+			if m.waitShown != waitKey(a) || clock().Sub(m.waitSince) < waitSettle { // not on screen long enough to be read
 				m.setFlash("this ask just came on screen; read it, then press enter again")
+				return m, nil
+			}
+			if repeat {
+				m.setFlash("one enter at a time: read the ask, then press enter again")
 				return m, nil
 			}
 			opt := a.Options[min(m.optSel, len(a.Options)-1)]
@@ -722,13 +740,14 @@ func diffNote(state string) string {
 }
 
 func (m *model) viewWaiting() []string {
+	at := m.waitIndex() // an empty list too, so an ask landing in it isn't taken as selected
 	if len(m.st.Asks) == 0 {
 		return []string{"", "  Nothing is waiting on you."}
 	}
 	w := m.mainW() - 5
 	var lines []string
-	sel, end, at := 0, 0, m.waitIndex()
-	m.waitDraw = m.st.Asks[at].ID
+	sel, end := 0, 0
+	m.waitDraw = waitKey(m.st.Asks[at])
 	for i, a := range m.st.Asks {
 		gut := "  "
 		if i == at {

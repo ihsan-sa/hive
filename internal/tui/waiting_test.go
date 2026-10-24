@@ -62,11 +62,11 @@ func askNamed(id string) core.Ask {
 	return a
 }
 
-// look draws the screen and lets the person read it: the selected ask has
-// been on screen waitSettle by the next key.
+// look draws the screen and lets the person read it: by the next key the
+// selected ask has been on screen, and the last Enter was, waitSettle ago.
 func look(m *model) {
 	m.View()
-	m.waitSince = m.waitSince.Add(-waitSettle)
+	m.waitSince, m.waitEnter = m.waitSince.Add(-waitSettle), m.waitEnter.Add(-waitSettle)
 }
 
 // Enter answers only the ask the last draw showed selected, once it has been
@@ -143,10 +143,10 @@ func TestWaitingAnswersOnlyWhatWasDrawn(t *testing.T) {
 }
 
 // The same sequences as bubbletea runs them: View after every message, the
-// keys and the state updates that change the list alike, and buffered keys
-// arriving a few milliseconds apart. No buffered Enter approves an ask that
-// came on screen among them.
-func TestWaitingBufferedEntersInTheRealLoop(t *testing.T) {
+// keys and the state updates that change the list alike, and buffered or
+// repeated keys arriving milliseconds apart. No Enter approves an ask nobody
+// had the time to read.
+func TestWaitingEntersInTheRealLoop(t *testing.T) {
 	at := time.Now()
 	clock = func() time.Time { return at }
 	t.Cleanup(func() { clock = time.Now })
@@ -169,35 +169,81 @@ func TestWaitingBufferedEntersInTheRealLoop(t *testing.T) {
 		return stateMsg{st: st}
 	}
 	key := tea.KeyMsg{Type: tea.KeyEnter}
-	for _, between := range [][]core.Ask{nil, {}} {
-		name := "a1 swapped for a2"
-		if between != nil {
-			name = "an empty list between"
-		}
-		t.Run(name, func(t *testing.T) {
-			m, got := waitingOn(t, "a1")
-			m.View()
-			at = at.Add(2 * time.Second) // the person reads a1
-			step(m, key)                 // and answers it
-			if between != nil {
-				step(m, state(m, between...))
-				step(m, key)
-			}
-			step(m, state(m, askNamed("a2")))
-			for range 5 {
-				step(m, key)
-			}
-			if len(*got) != 1 || (*got)[0] != "a1" {
-				t.Fatalf("buffered enters must not approve a2, on screen for milliseconds: %v", *got)
-			}
-			at = at.Add(2 * time.Second) // the person reads a2
-			step(m, key)
-			step(m, key)
-			if len(*got) != 2 || (*got)[1] != "a2" {
-				t.Fatalf("once a2 has been read, enter answers it: %v", *got)
-			}
-		})
+	read := func() { at = at.Add(2 * time.Second) }
+	start := func(t *testing.T) (*model, *[]string) {
+		m, got := waitingOn(t, "a1")
+		m.View()
+		read()
+		return m, got
 	}
+	want := func(t *testing.T, got *[]string, ids ...string) {
+		t.Helper()
+		if strings.Join(*got, " ") != strings.Join(ids, " ") {
+			t.Fatalf("approved %v, want %v", *got, ids)
+		}
+	}
+	t.Run("a1 swapped for a2, enters buffered", func(t *testing.T) {
+		m, got := start(t)
+		step(m, key)
+		step(m, state(m, askNamed("a2")))
+		for range 5 {
+			step(m, key)
+		}
+		want(t, got, "a1")
+		read()
+		step(m, key)
+		want(t, got, "a1", "a2")
+	})
+	t.Run("an empty list, enter, a2 arrives, enters buffered", func(t *testing.T) {
+		m, got := start(t)
+		step(m, state(m))
+		step(m, key)
+		step(m, state(m, askNamed("a2")))
+		for range 5 {
+			step(m, key)
+		}
+		want(t, got)
+	})
+	t.Run("an empty list, enter, a2 arrives and stays", func(t *testing.T) {
+		m, got := start(t)
+		step(m, state(m))
+		step(m, key)
+		step(m, state(m, askNamed("a2")))
+		read()
+		step(m, key) // a2 landed in an empty selection: this one says so
+		want(t, got)
+		if v := ansi.Strip(m.hintLine()); !strings.Contains(v, "a new ask came in") {
+			t.Fatalf("enter should say a new ask came in: %s", v)
+		}
+		read()
+		step(m, key)
+		want(t, got, "a2")
+	})
+	t.Run("a held enter", func(t *testing.T) {
+		m, got := start(t)
+		for i := range 100 { // three seconds of key repeat
+			at = at.Add(27 * time.Millisecond)
+			step(m, key)
+			if i == 5 {
+				step(m, state(m, askNamed("a2"))) // a1 went; a2 slides under the cursor
+			}
+		}
+		want(t, got, "a1")
+		read() // let go, read a2
+		step(m, key)
+		want(t, got, "a1", "a2")
+	})
+	t.Run("the options change under the same id", func(t *testing.T) {
+		m, got := start(t)
+		a := askNamed("a1")
+		a.Options = []string{"merge anyway", "leave open"}
+		step(m, state(m, a))
+		step(m, key)
+		want(t, got)
+		read()
+		step(m, key)
+		want(t, got, "a1")
+	})
 }
 
 // Ask text an agent wrote reaches the feed, the away list and the answered

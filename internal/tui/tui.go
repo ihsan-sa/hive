@@ -107,6 +107,9 @@ type model struct {
 	waitDraw  string    // the ask this View is drawing selected
 	waitShown string    // the ask the last View drew selected
 	waitSince time.Time // when waitShown was first drawn: Enter waits waitSettle past it
+	waitNew   bool      // the ask came into an empty list, so the flash says "new"
+	waitEmpty bool      // the list was empty when last looked at
+	waitEnter time.Time // the last Enter in Waiting, so a held one isn't read as a choice
 	fbSel     string    // the feedback item selected, by id
 	modSel    int
 	kbDir     string // the knowledge base folder shown, relative to its root
