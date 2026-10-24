@@ -23,6 +23,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
@@ -294,9 +295,13 @@ func summarize(evs []core.Event) []string {
 				out = append(out, fmt.Sprintf("%s  improvement sweep finished", e.At.Local().Format("Mon 15:04")))
 			}
 		case "hive.updated":
-			var u struct{ To string }
+			var u api.Updated
 			e.Decode(&u)
-			out = append(out, fmt.Sprintf("%s  updated to %s", e.At.Local().Format("Mon 15:04"), u.To))
+			line := fmt.Sprintf("%s  updated to %s", e.At.Local().Format("Mon 15:04"), u.To)
+			if u.Unsigned {
+				line += ", an unsigned release"
+			}
+			out = append(out, line)
 		}
 	}
 	if len(out) > 30 {
@@ -774,7 +779,11 @@ func (m *model) viewMain(w int) pane {
 		body = append([]string{"", stTitle.Render("While you were away"), ""}, m.since...)
 		body = append(body, "", stDim.Render("any key to continue"))
 	case m.notice != nil:
-		body = append([]string{"", stTitle.Render("Updated to "+m.notice.To) + stDim.Render("  any key to dismiss"), ""}, strings.Split(m.notice.Notes, "\n")...)
+		body = []string{"", stTitle.Render("Updated to "+m.notice.To) + stDim.Render("  any key to dismiss"), ""}
+		if m.notice.Unsigned {
+			body = append(append(body, wrapStyled(stWarn, release.Unsigned, w-2)...), "")
+		}
+		body = append(body, strings.Split(m.notice.Notes, "\n")...)
 	case m.help:
 		body = helpLines()
 	case m.section == secChats:
