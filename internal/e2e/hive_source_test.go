@@ -24,7 +24,7 @@ func TestHiveKnowsItself(t *testing.T) {
 		h.wait("the Hive's source in the knowledge base", minute, func(api.State) bool {
 			v, _ := os.ReadFile(filepath.Join(self, "VERSION"))
 			st, _ := core.Git(h.ws.KB(), "status", "--porcelain")
-			return strings.TrimSpace(string(v)) == core.Version && st == ""
+			return strings.TrimSpace(string(v)) == binVersion(t) && st == "" // the gate stamps the binary it builds
 		})
 	}
 	seeded()
@@ -51,7 +51,7 @@ func TestHiveKnowsItself(t *testing.T) {
 		}
 		return false
 	})
-	for _, want := range []string{"value >= best-s.Tolerance", "every 7h", core.Version} {
+	for _, want := range []string{"value >= best-s.Tolerance", "every 7h", binVersion(t)} {
 		if !strings.Contains(answer, want) {
 			t.Errorf("the answer lacks %q, so the lead didn't read it: %q", want, answer)
 		}

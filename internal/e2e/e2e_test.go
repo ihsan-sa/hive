@@ -53,6 +53,13 @@ func TestMain(m *testing.M) {
 		name += ".exe"
 	}
 	bin = filepath.Join(dir, name)
+	if pre := os.Getenv("HIVE_E2E_BIN"); pre != "" {
+		// The gate's evaluator: this tree's tests against another tree's binary.
+		bin = pre
+		code := m.Run()
+		os.RemoveAll(dir)
+		os.Exit(code)
+	}
 	root, _ := exec.Command("go", "env", "GOMOD").Output()
 	cmd := exec.Command("go", "build", "-o", bin, "./cmd/hive")
 	cmd.Dir = filepath.Dir(strings.TrimSpace(string(root)))
@@ -203,7 +210,7 @@ func (h *hive) launch() {
 	began := time.Now()
 	for time.Since(began) < 2*time.Minute {
 		time.Sleep(200 * time.Millisecond)
-		if c, err := api.Dial(h.ws); err == nil && c.Info.PID == cmd.Process.Pid && c.Ping() {
+		if c, err := api.Dial(h.ws); err == nil && ours(c.Info, cmd.Process.Pid, began.Add(-time.Second)) && c.Ping() {
 			h.c = c
 			if d := time.Since(began); d > 10*time.Second {
 				// The daemon's own account of a slow start is its log's last lines.
@@ -215,6 +222,27 @@ func (h *hive) launch() {
 	}
 	raw, _ := os.ReadFile(filepath.Join(h.ws.Hive(), "daemon-test.log"))
 	h.t.Fatalf("daemon didn't start in %s: %s", time.Since(began).Round(time.Second), raw)
+}
+
+// ours says the daemon that answers is the one just launched. The gate runs
+// the binary in a sandbox of its own (HIVE_E2E_WRAPPED), where the daemon
+// sees another pid, so there it is the start time instead.
+func ours(info api.DaemonInfo, pid int, launched time.Time) bool {
+	if os.Getenv("HIVE_E2E_WRAPPED") != "" {
+		return info.Started.After(launched)
+	}
+	return info.PID == pid
+}
+
+// binVersion is what the binary under test says its version is: the gate
+// stamps the one it builds, so it need not be this tree's core.Version.
+func binVersion(t *testing.T) string {
+	out, err := exec.Command(bin, "--version").Output()
+	f := strings.Fields(string(out))
+	if err != nil || len(f) == 0 {
+		t.Fatalf("%s --version: %v %s", bin, err, out)
+	}
+	return f[len(f)-1]
 }
 
 // kill ends the daemon abruptly, as a crash would.

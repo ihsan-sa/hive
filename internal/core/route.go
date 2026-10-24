@@ -247,6 +247,34 @@ func (c Config) Seats(project string) []TribunalSeat {
 	return seats
 }
 
+// Uses reports whether any role of any project runs on harness h: its
+// route, its harness setting, a tribunal seat or the fallback list.
+func (c Config) Uses(h string) bool {
+	h = HarnessName(h)
+	projects := []string{""}
+	for name := range c.Projects {
+		projects = append(projects, name)
+	}
+	for _, project := range projects {
+		for _, role := range RouteRoles {
+			if role == "fallback" {
+				continue // in every other role's route
+			}
+			for _, p := range c.Route(role, project) {
+				if HarnessName(p.Harness) == h {
+					return true
+				}
+			}
+		}
+		for _, t := range c.Seats(project) {
+			if t.Harness == "" && HarnessName(c.base("tribunal", project).Harness) == h || t.Harness != "" && HarnessName(t.Harness) == h {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Shown is role's route as the person reads it: each pick, the tribunal's
 // seats, and for an unrouted security seat how it is chosen.
 func (c Config) Shown(role, project string) []string {
