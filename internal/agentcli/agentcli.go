@@ -95,7 +95,7 @@ func Main(argv []string) int {
 
 // switches are the yes/no arguments, which may stand bare before another
 // --key; any other key takes the next word as its value, even "--help".
-var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true}
+var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true}
 
 // parseArgs accepts one JSON object, `-` for JSON on stdin, `--file x.json`,
 // or --key value pairs (a value of @path reads that file's text).
@@ -170,4 +170,7 @@ A value of @path reads that file. Common ops:
   feedback  --text "..." [--about "agents/worker.md"]   what about the Hive got in your way, for the person
   schedule  --in 2h --text "..."                 a wake-up message to yourself
   status                                         projects, work in flight, scores
-  queue     [--order id,id] [--hold id] [--release id]   (lead) briefs waiting for a worker, in order`
+  queue     [--order id,id] [--hold id] [--release id]   (lead) briefs waiting for a worker, in order
+  models                                         named models, each role's route, what each agent runs on, trials
+  route     --role worker --models "a,b" [--project p]   (lead) the models a role runs on, in fallback order
+  trial     --model m --project test --title "..." --done "..."   (lead) one brief's worker on that model alone`

@@ -530,6 +530,10 @@ func (m *Module) afterKept(project, sha string) {
 	cfg := m.C.Effects.Config(p, sha)
 	if cfg.DryRun != "" {
 		c := m.C.Effects.RunCheck(p, sha, "dryrun", cfg.DryRun)
+		if c.CantRun != "" {
+			alert("dry run " + c.CantRun + " on " + core.Short(sha) + "; no release")
+			return
+		}
 		if !c.OK {
 			alert("dry run failed on " + core.Short(sha) + "; no release")
 			return

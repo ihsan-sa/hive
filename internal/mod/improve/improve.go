@@ -24,16 +24,19 @@ import (
 
 // Measurement is one measure of main.
 type Measurement struct {
-	Project string    `json:"project"`
-	SHA     string    `json:"sha"`
-	Task    string    `json:"task,omitempty"`
-	TestsOK bool      `json:"tests_ok"`
-	Score   *float64  `json:"score,omitempty"`
-	Kept    bool      `json:"kept"`
-	Best    *float64  `json:"best,omitempty"`    // best kept after this measure
-	Version string    `json:"version,omitempty"` // the score's version (Effects.ScoreVersion); a new one starts a new baseline
-	Note    string    `json:"note"`
-	At      time.Time `json:"at"`
+	Project string   `json:"project"`
+	SHA     string   `json:"sha"`
+	Task    string   `json:"task,omitempty"`
+	TestsOK bool     `json:"tests_ok"`
+	Score   *float64 `json:"score,omitempty"`
+	Kept    bool     `json:"kept"`
+	// NoResult says the check couldn't start (a tool it calls is missing), so
+	// this is neither kept nor a failure, and main is measured again later.
+	NoResult bool      `json:"no_result,omitempty"`
+	Best     *float64  `json:"best,omitempty"`    // best kept after this measure
+	Version  string    `json:"version,omitempty"` // the score's version (Effects.ScoreVersion); a new one starts a new baseline
+	Note     string    `json:"note"`
+	At       time.Time `json:"at"`
 }
 
 // Sweep is one notice run.
@@ -188,7 +191,7 @@ func (m *Module) measured(project, sha string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, ms := range m.scores[project] {
-		if ms.SHA == sha && (ms.Kept || ms.Task != "") {
+		if ms.SHA == sha && !ms.NoResult && (ms.Kept || ms.Task != "") {
 			return true
 		}
 	}
@@ -212,29 +215,36 @@ func (m *Module) record(ms Measurement) {
 	core.AppendJSONL(filepath.Join(m.C.WS.Hive(), "scores", ms.Project+".jsonl"), ms)
 }
 
-// measure runs tests and the score on sha in clean checkouts.
-func (m *Module) measure(p core.Project, sha string) (bool, *float64, string) {
+// measure runs tests and the score on sha in clean checkouts. cantRun says a
+// check couldn't start for want of a tool, which is no result either way.
+func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, note string, cantRun bool) {
 	cfg := m.C.Effects.Config(p, sha)
 	tc := m.C.Effects.RunCheck(p, sha, "test", cfg.Test)
+	if tc.CantRun != "" {
+		return false, nil, "tests " + tc.CantRun + ": " + core.Clip(tc.Output, 300), true
+	}
 	flaky := "" // a red that passed when what failed ran again
 	if !tc.OK {
 		sum, flake := m.redTests(p, sha, cfg.Test, tc)
 		if !flake {
-			return false, nil, "tests red: " + sum
+			return false, nil, "tests red: " + sum, false
 		}
 		flaky = "tests flaky (red, then green when what failed ran again; filed to fix): " + sum + "; "
 	}
 	if cfg.Score == nil {
 		if flaky != "" {
-			return true, nil, flaky + "no score configured"
+			return true, nil, flaky + "no score configured", false
 		}
-		return true, nil, "tests green (no score configured)"
+		return true, nil, "tests green (no score configured)", false
 	}
 	sc := m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
-	if !sc.OK || sc.Score == nil {
-		return true, nil, flaky + "score did not produce a number: " + core.Clip(sc.Output, 600)
+	if sc.CantRun != "" {
+		return false, nil, "score " + sc.CantRun + ": " + core.Clip(sc.Output, 300), true
 	}
-	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score)
+	if !sc.OK || sc.Score == nil {
+		return true, nil, flaky + "score did not produce a number: " + core.Clip(sc.Output, 600), false
+	}
+	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score), false
 }
 
 // Tick measures the starting point of projects that have none yet. A red
@@ -270,8 +280,12 @@ func (m *Module) baseline(p core.Project) {
 		return
 	}
 	cfg := m.C.Effects.Config(p, main)
-	ok, score, note := m.measure(p, main)
-	ms := Measurement{Project: p.Name, SHA: main, TestsOK: ok, Score: score, Note: "start: " + note, Version: m.version(p, main, cfg)}
+	ok, score, note, cantRun := m.measure(p, main)
+	ms := Measurement{Project: p.Name, SHA: main, TestsOK: ok, Score: score, Note: "start: " + note, Version: m.version(p, main, cfg), NoResult: cantRun}
+	if cantRun {
+		m.noResult(p, ms) // Tick measures again in 10 minutes
+		return
+	}
 	m.warnUnlisted(p, cfg)
 	if ok && (score != nil || cfg.Score == nil) {
 		ms.Kept, ms.Best = true, score
@@ -291,7 +305,7 @@ func (m *Module) noStart(p core.Project, ms Measurement) {
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "baseline", "project": p.Name, "key": key, "text": text})
 	n := 0
 	for _, x := range m.Scores(p.Name) {
-		if x.SHA == ms.SHA && !x.Kept && x.Task == "" {
+		if x.SHA == ms.SHA && !x.Kept && !x.NoResult && x.Task == "" {
 			n++
 		}
 	}
@@ -309,6 +323,19 @@ func (m *Module) noStart(p core.Project, ms Measurement) {
 		"Look at the output below, fix the test or score command in .hive/project.json (the score is the last word of the output, or the one line that is a number alone), and ask the person if you can't:\n"+core.Clip(note, 1500))
 }
 
+// noResult records a measure whose check couldn't start, once per commit, and
+// says which tool is missing. Nothing is kept or reverted over it.
+func (m *Module) noResult(p core.Project, ms Measurement) {
+	for _, x := range m.Scores(p.Name) {
+		if x.SHA == ms.SHA && x.NoResult && x.Note == ms.Note {
+			return // recorded and raised already at this commit
+		}
+	}
+	m.record(ms)
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "ref": "cant-run:" + p.Name, "project": p.Name,
+		"text": "main of " + p.Name + " at " + core.Short(ms.SHA) + " has no result: " + core.Clip(strings.TrimPrefix(ms.Note, "start: "), 200) + ". That is a fault in the environment, not a verdict on the commit: nothing is reverted, and main is measured again every 10 minutes until it is fixed"})
+}
+
 // warnUnlisted raises an alert when a score is set with no evaluator paths:
 // only a ./ file its command names is then protected from a candidate, not a
 // script that file calls, a test or its data.
@@ -318,6 +345,10 @@ func (m *Module) warnUnlisted(p core.Project, cfg core.ProjectConfig) {
 			"text": p.Name + "'s score lists no evaluator files in its `paths`, so a change could alter how it's scored; list the files the score reads in .hive/project.json"})
 	}
 }
+
+// retryNoResult is how long a merge whose check couldn't start waits before
+// it is measured again.
+var retryNoResult = 10 * time.Minute
 
 func (m *Module) measureLoop() {
 	for t := range m.queue {
@@ -355,7 +386,12 @@ func (m *Module) afterMerge(t work.Task) {
 		return
 	}
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
-	ok, score, note := m.measure(p, t.MergeSHA)
+	ok, score, note, cantRun := m.measure(p, t.MergeSHA)
+	if cantRun {
+		m.noResult(p, Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, Note: note, Version: m.version(p, t.MergeSHA, cfg), NoResult: true})
+		go func() { time.Sleep(retryNoResult); m.queue <- t }()
+		return
+	}
 	flake := ""
 	if !ok {
 		flake = m.seenElsewhere(p, t)
@@ -604,7 +640,11 @@ func (m *Module) Digest(since int64, only string) string {
 			if x.Score != nil {
 				sc = fmt.Sprint(*x.Score)
 			}
-			fmt.Fprintf(&b, "- %s %s score=%s kept=%v %s\n", x.At.Format("01-02 15:04"), core.Short(x.SHA), sc, x.Kept, core.Clip(x.Note, 200))
+			kept := fmt.Sprint(x.Kept)
+			if x.NoResult {
+				kept = "no-result"
+			}
+			fmt.Fprintf(&b, "- %s %s score=%s kept=%s %s\n", x.At.Format("01-02 15:04"), core.Short(x.SHA), sc, kept, core.Clip(x.Note, 200))
 		}
 		b.WriteString("\nWork:\n")
 		for i, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {
