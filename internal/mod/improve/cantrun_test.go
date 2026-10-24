@@ -29,7 +29,7 @@ func TestMissingToolIsNoResult(t *testing.T) {
 	alerted := false
 	for _, e := range m.C.J.Since(0) {
 		var a struct{ Kind, Text string }
-		if e.Kind == "alert.raised" && e.Decode(&a) == nil && a.Kind == "cant-run" && strings.Contains(a.Text, "hive-test-tool-xyz") {
+		if e.Kind == "alert.raised" && e.Decode(&a) == nil && a.Kind == "main-red" && strings.Contains(a.Text, "hive-test-tool-xyz") {
 			alerted = true
 		}
 	}

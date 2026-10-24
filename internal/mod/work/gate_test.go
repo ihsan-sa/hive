@@ -242,8 +242,8 @@ func TestGateMissingToolCantRun(t *testing.T) {
 	if task.Stage != StageTesting || task.Round != 0 || !strings.Contains(task.Reason, "can't run: hive-gate-tool-xyz") || !task.Retry.After(time.Now()) {
 		t.Fatalf("stage %q, round %d, reason %q, retry %v", task.Stage, task.Round, task.Reason, task.Retry)
 	}
-	if n := alerts(m, "cant-run"); n != 1 {
-		t.Fatalf("%d cant-run alerts, want 1", n)
+	if n := alerts(m, "main-red"); n != 1 {
+		t.Fatalf("%d main-red alerts, want 1", n)
 	}
 	if _, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); ok {
 		t.Fatal("a check that couldn't start is kept as the commit's result")

@@ -827,8 +827,8 @@ func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
 	}
 	t.Reason = reason
 	m.save(t, reason)
-	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "cant-run", "ref": "cant-run:" + p.Name, "project": p.Name,
-		"text": p.Name + "'s tests " + c.CantRun + " (" + core.Clip(strings.TrimSpace(c.Output), 120) + "); changes wait and nothing is reverted until it is"})
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "ref": "cant-run:" + p.Name, "project": p.Name,
+		"text": p.Name + "'s tests " + c.CantRun + " (" + core.Clip(strings.TrimSpace(c.Output), 120) + "): a fault in the environment, not a verdict on any commit; changes wait and nothing is reverted until it is fixed"})
 	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
 	return nil
 }

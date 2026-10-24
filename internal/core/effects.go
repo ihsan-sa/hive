@@ -101,7 +101,7 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 		case "effect.checked":
 			var c Check
 			ev.Decode(&c)
-			if c.CantRun == "" { // a check that couldn't start runs again next time
+			if !noVerdict(c) { // a check that couldn't start runs again next time
 				e.checks[c.Project+"@"+c.SHA+"/"+c.Kind] = c
 			}
 		case "effect.verdict":
@@ -407,6 +407,13 @@ func MissingTool(code int, out string) string {
 		return m[1] + m[2]
 	}
 	return ""
+}
+
+// noVerdict says a recorded check couldn't start, so it isn't the commit's
+// answer. A failure recorded before checks carried cant_run is read from its
+// output: those kept "go: not found" as main's red result for good.
+func noVerdict(c Check) bool {
+	return c.CantRun != "" || (!c.OK && missingTool.MatchString(c.Output))
 }
 
 // scoreOf reads the score from a score command's output: the last word of

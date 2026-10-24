@@ -288,8 +288,8 @@ func (m *Module) noResult(p core.Project, ms Measurement) {
 		}
 	}
 	m.record(ms)
-	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "cant-run", "ref": "cant-run:" + p.Name, "project": p.Name,
-		"text": "main of " + p.Name + " at " + core.Short(ms.SHA) + " has no result: " + core.Clip(strings.TrimPrefix(ms.Note, "start: "), 200) + "; nothing is reverted, and it is measured again every 10 minutes"})
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "ref": "cant-run:" + p.Name, "project": p.Name,
+		"text": "main of " + p.Name + " at " + core.Short(ms.SHA) + " has no result: " + core.Clip(strings.TrimPrefix(ms.Note, "start: "), 200) + ". That is a fault in the environment, not a verdict on the commit: nothing is reverted, and main is measured again every 10 minutes until it is fixed"})
 }
 
 // warnUnlisted raises an alert when a score is set with no evaluator paths:
@@ -465,12 +465,13 @@ func (m *Module) TickSweeps() {
 }
 
 // Digest summarizes scores, reverts, failures, chats and notes since seq,
-// across every project but the isolated ones, or from project only alone when
-// only is set. An isolated project's records reach only its own step-back.
+// across every project but the hidden (private or isolated) ones, or from
+// project only alone when only is set. A hidden project's records reach only
+// its own step-back.
 func (m *Module) Digest(since int64, only string) string {
 	isolated := map[string]bool{}
 	for _, p := range m.C.Projects.List() {
-		isolated[p.Name] = p.Isolated
+		isolated[p.Name] = p.Hidden()
 	}
 	mine := func(project string) bool { return project == only || only == "" && !isolated[project] }
 	var b strings.Builder
