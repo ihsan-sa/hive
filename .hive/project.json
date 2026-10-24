@@ -1,1 +1,4 @@
-{"test": "go vet ./... && go test -short ./..."}
+{
+  "test": "go vet ./... && go test -short ./...",
+  "score": {"command": "go run ./cmd/hive-score", "direction": "higher", "tolerance": 3, "paths": ["internal/e2e/benchmark_test.go", "internal/demo/"]}
+}

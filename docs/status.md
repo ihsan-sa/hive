@@ -55,6 +55,8 @@ Done:
 
 - Anthropic-compatible models on Claude Code ([models.md](models.md#anthropic-compatible-models-on-claude-code), issue #271): a named model with `"api": "anthropic"` (Kimi, DeepSeek, GLM) runs `claude` against its endpoint on its own id, with its key from a one-shot `apiKeyHelper` (`hive open-key`) and no Claude login. Unit `TestAnthropicModelTurn`, `TestOpenClaude`, `TestKeyMainOnce`; e2e `TestAnthropicModelWorker` passed bare on real Claude Code 2.1.310 against a stub endpoint (key seen on every request, not in the tool's env or file). Not run: sandboxed, and live against a vendor (`HIVE_E2E_ANTHROPIC`, needs a key).
 
+- The Hive project has a score (docs/score.md, issue #264): `go run ./cmd/hive-score` runs the gate's benchmark and the e2e suite on the fake harness and prints one number, higher better (190.70 on main's Hive at fa3376e, five runs within 0.11, about 5 minutes); tolerance 3. Unit `cmd/hive-score` (output format, signed BENCH line, results). Not yet measured by improve on main: that happens once the person merges the project.json change.
+
 Not verified:
 - Sharing against the live endpoint (https://hive-api.ihsan.cc/v1/report) is probed by hand, one report; the tests use a local endpoint that checks the same contract.
 - Issues, comments and an upstream PR from a fork (`FindPR` by `owner:branch`, `onUpstream`) on real GitHub; the live probe covers fork, PR, merge and release on the fork only.
