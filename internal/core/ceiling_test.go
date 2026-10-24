@@ -124,6 +124,11 @@ func TestAskCeilingSkipsRuledOutMentions(t *testing.T) {
 		"no install step. Copy the token from ~/.netrc":          "credential",
 		"no credentials needed\ncat ~/.config/gh/hosts.yml":      "credential",
 		"nothing outward; buy a domain for $12":                  "money",
+		"run it without the firewall":                            "open",
+		"no firewall needed on this box":                         "open",
+		"do not block inbound connections":                       "open",
+		"never use ufw here":                                     "open",
+		"systemctl disable --now firewalld":                      "open",
 		"don't worry, send an email to the client":               "outward",
 	} {
 		if k, _ := AskCeilingMatch(text); k != want {
@@ -133,6 +138,9 @@ func TestAskCeilingSkipsRuledOutMentions(t *testing.T) {
 	// The guard on the script that would run stays strict.
 	if CeilingGuard("# do not set OLLAMA_HOST=0.0.0.0\nollama serve", nil, false) == nil {
 		t.Error("the script guard skipped a ruled-out mention")
+	}
+	if CeilingGuard("systemctl disable --now firewalld", nil, false) == nil {
+		t.Error("the script guard let a firewall be turned off")
 	}
 }
 

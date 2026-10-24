@@ -45,7 +45,7 @@ var AlwaysPerson = map[string]string{
 var alwaysPersonRe = map[string]*regexp.Regexp{
 	"money":      regexp.MustCompile(`(?i)\b(pay|payments?|purchases?|buy|spend|charges?|subscribe|subscriptions?|invoices?|billing|credit card|stripe|usd|eur|dollars?)\b|\$\s?\d+(\.\d\d|,\d{3})|\$\d{2,}`), // not $1: a shell's positional parameter
 	"credential": regexp.MustCompile(`(?i)\b(api[ -]?keys?|tokens?|secrets?|credentials?|passwords?|ssh[ -]?keys?|ssh-keygen|oauth|rotate|mint|private keys?|keychain|gh auth)\b|\.ssh/|\.netrc|\.git-credentials|\.config/gh\b|\.aws/|\.docker/config|\.kube/config|\.gnupg|\.npmrc|\.pypirc`),
-	"open":       regexp.MustCompile(`(?i)\b(open (a |the )?port|listen on|0\.0\.0\.0|expose|port[ -]?forward|firewall|ufw|iptables|nft|public url|tunnel|ngrok|cloudflared|inbound)\b`),
+	"open":       regexp.MustCompile(`(?i)\b(open (a |the )?port|listen on|0\.0\.0\.0|expose|port[ -]?forward|firewall(d|-cmd)?|ufw|iptables|nft|public url|tunnel|ngrok|cloudflared|inbound)\b`),
 	"outward":    regexp.MustCompile(`(?i)\b(send (an? )?(e-?mail|mail|message|sms|text|dm)|email to|sendmail|tweet|post (to|on|as)|publish (as|in my name)|on my behalf|in my name)\b`),
 }
 
@@ -64,7 +64,8 @@ func CeilingMatch(texts ...string) (kind, phrase string) {
 // AskCeilingMatch is CeilingMatch for what an agent asks in words: a mention
 // the ask itself rules out ("do not set OLLAMA_HOST=0.0.0.0", "no
 // credentials needed", "listen on 127.0.0.1 only") doesn't count, any other
-// does. It only routes; the script that would run still meets CeilingGuard,
+// does, and a negated protection ("no firewall") always counts. It only
+// routes; the script that would run still meets CeilingGuard,
 // which counts every mention.
 func AskCeilingMatch(texts ...string) (kind, phrase string) {
 	return ceilingMatch(true, texts...)
@@ -89,6 +90,9 @@ var (
 	// nothing between that turns it back ("don't forget to open a port").
 	negatedRe = regexp.MustCompile(`(?i)\b(not|no|never|don'?t|doesn'?t|won'?t|shouldn'?t|mustn'?t|needn'?t|without|nor|none)\b((\s+\S+){0,3})\s*$`)
 	turnsBack = regexp.MustCompile(`(?i)\b(forget|fail|skip|neglect|omit|hesitate|stop|only|just|but)\b`)
+	// protectionRe is an 'open' word that names a protection, so negating it
+	// asks to open the machine: never ruled out.
+	protectionRe = regexp.MustCompile(`(?i)firewall|ufw|iptables|nft|inbound`)
 	// loopbackRe is a listen address that stays on this machine.
 	loopbackRe = regexp.MustCompile(`(?i)^\s*(127\.\d+\.\d+\.\d+|localhost|loopback|::1|\[::1\])\b`)
 )
@@ -99,6 +103,9 @@ var (
 func ruledOut(kind, before, match, after string) bool {
 	if kind == "open" && strings.EqualFold(match, "listen on") && loopbackRe.MatchString(after) {
 		return true
+	}
+	if protectionRe.MatchString(match) {
+		return false // "no firewall", "do not block inbound" open the machine
 	}
 	if ix := clauseEnd.FindAllStringIndex(before, -1); len(ix) > 0 {
 		before = before[ix[len(ix)-1][1]:]
