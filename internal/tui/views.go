@@ -919,7 +919,7 @@ func (m *model) settings() []setting {
 	}
 	for _, name := range sortedKeys(c.Models) {
 		x := c.Models[name]
-		s = append(s, setting{group: "Routes", label: "model " + name, value: x.Model + " at " + x.Endpoint, action: func() tea.Cmd {
+		s = append(s, setting{group: "Routes", label: "model " + name, value: x.Where(), action: func() tea.Cmd {
 			return func() tea.Msg {
 				return flashMsg("models are set in .hive/config.json; a key is stored with `" + core.Cmd + " model key " + name + "`")
 			}

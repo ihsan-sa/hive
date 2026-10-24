@@ -271,7 +271,7 @@ func (m *Module) View(r core.Run) map[string]any {
 	cfg := m.C.WS.LoadConfig()
 	named := map[string]string{}
 	for name, x := range cfg.Models {
-		s := x.Model + " at " + x.Endpoint
+		s := x.Where()
 		if x.Key {
 			s += ", needs a key"
 		}

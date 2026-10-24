@@ -28,6 +28,9 @@ type Turn struct {
 	Sandboxed    bool     // inside a Hive sandbox (permission prompts are meaningless there)
 	MaxOutput    int      // cap on one reply's tokens; 0 is the harness default
 	MaxBudgetUSD float64  // cap on the turn's spend; 0 is none
+	Endpoint     string   // a named model's API base URL (OpenClaude)
+	KeyCommand   string   // a command that prints the model's key once (OpenClaude); "" for a model with none
+	Context      int      // tokens the model holds; 0 is the harness's own idea
 }
 
 // Event is a normalized line of harness output.

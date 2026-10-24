@@ -54,6 +54,8 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive model               the named models (free ones too) and the routes that pick each role's model
   hive model add <name> <endpoint> <model id> [--key]   a model on an OpenAI-compatible endpoint, e.g.
                            hive model add qwen http://127.0.0.1:11434/v1 qwen2.5-coder:14b
+                           [--anthropic]: its API is Anthropic-compatible, so Claude Code runs it, e.g.
+                           hive model add kimi https://api.moonshot.ai/anthropic kimi-k2-0905-preview --key --anthropic
   hive model key <name>    store its API key, read from stdin (kept where no agent can read it)
   hive model rm <name>     forget it and its key
   hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
@@ -91,6 +93,8 @@ func run(args []string) int {
 		return fakeagent.Main(args)
 	case "open-agent":
 		return openagent.Main(args)
+	case "open-key":
+		return openagent.KeyMain(args)
 	case "sandbox-exec":
 		fs := flag.NewFlagSet("sandbox-exec", flag.ContinueOnError)
 		spec := fs.String("spec", "", "")
@@ -690,7 +694,7 @@ func cmdModel(args []string) int {
 		return 1
 	}
 	usage := func() int {
-		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" model [add <name> <endpoint> <model id> [--key] | key <name> | rm <name>]")
+		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" model [add <name> <endpoint> <model id> [--key] [--anthropic] | key <name> | rm <name>]")
 		return 2
 	}
 	if len(args) == 0 {
@@ -705,7 +709,7 @@ func cmdModel(args []string) int {
 			} else if x.Key {
 				key = ", needs a key: " + core.Cmd + " model key " + name
 			}
-			fmt.Printf("%s: %s at %s%s\n", name, x.Model, x.Endpoint, key)
+			fmt.Printf("%s: %s%s\n", name, x.Where(), key)
 		}
 		for _, role := range core.RouteRoles {
 			if r := cfg.Shown(role, ""); len(r) > 0 {
@@ -715,11 +719,22 @@ func cmdModel(args []string) int {
 		return 0
 	}
 	switch {
-	case args[0] == "add" && (len(args) == 4 || len(args) == 5 && args[4] == "--key"):
+	case args[0] == "add" && len(args) >= 4:
+		m := core.OpenModel{Endpoint: args[2], Model: args[3]}
+		for _, f := range args[4:] {
+			switch f {
+			case "--key":
+				m.Key = true
+			case "--anthropic":
+				m.API = "anthropic"
+			default:
+				return usage()
+			}
+		}
 		if cfg.Models == nil {
 			cfg.Models = map[string]core.OpenModel{}
 		}
-		cfg.Models[args[1]] = core.OpenModel{Endpoint: args[2], Model: args[3], Key: len(args) == 5}
+		cfg.Models[args[1]] = m
 	case args[0] == "rm" && len(args) == 2:
 		delete(cfg.Models, args[1])
 		os.Remove(ws.OpenKey(args[1]))

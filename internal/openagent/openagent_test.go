@@ -288,3 +288,19 @@ func TestMainResumes(t *testing.T) {
 		t.Fatalf("auth %q", s.auth)
 	}
 }
+
+// `hive open-key` prints the key once and leaves no file; a second call
+// finds nothing.
+func TestKeyMainOnce(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "key")
+	os.WriteFile(f, []byte("sk-once\n"), 0o600)
+	if code := KeyMain([]string{f}); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if _, err := os.Stat(f); !os.IsNotExist(err) {
+		t.Fatal("the key file outlived the helper")
+	}
+	if code := KeyMain([]string{f}); code == 0 {
+		t.Fatal("a second call handed out a key")
+	}
+}

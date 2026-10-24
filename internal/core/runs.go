@@ -1170,6 +1170,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		r.Harness, r.Model = pick.Harness, pick.Model
 	}
 	h, _ := harness.Get(r.Harness)
+	if HarnessName(r.Harness) == "open" {
+		h = cfg.Models[r.Model].Harness() // Claude Code for a model on an Anthropic-compatible API
+	}
 	turn := r.Turn + 1
 	// A session that never came up is started fresh under a new id; one that
 	// did is resumed with whatever is waiting for it.
@@ -1334,7 +1337,21 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		if tok, err = rs.openKey(r.ID, tok, keyIn); err != nil {
 			return sandbox.Spec{}, err
 		}
-		env = append(env, "HIVE_OPEN_HOME="+in(home))
+		if m := cfg.Models[r.Model]; m.Anthropic() {
+			// Claude Code runs it: on the endpoint's id, with a key helper
+			// that prints the key file once and deletes it.
+			t.Model, t.Endpoint, t.Context = m.Model, m.Endpoint, m.Context
+			if slices.Contains(tok, "HIVE_OPEN_KEY_FILE="+keyIn) {
+				hive := "hive"
+				if tools := rs.tools(); !sb.Isolated() && len(tools) > 0 {
+					hive = tools[0]
+				}
+				t.KeyCommand = fmt.Sprintf("%q open-key %q", hive, keyIn)
+			}
+			tok = nil // the endpoint and id go in Claude Code's own settings
+		} else {
+			env = append(env, "HIVE_OPEN_HOME="+in(home))
+		}
 	}
 	env = append(env, tok...)
 	env = append(env, h.Env(t)...)

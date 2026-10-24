@@ -167,3 +167,22 @@ func TestCapped(t *testing.T) {
 		t.Fatal("a budgeted run started on a harness that can't cap its spend")
 	}
 }
+
+// A turn on a model the open harness runs never counts a cost, though Claude
+// Code driving another vendor's model prices its tokens as Claude's, and its
+// budget flag is left off for the same reason.
+func TestOpenClaude(t *testing.T) {
+	line := []byte(`{"type":"result","subtype":"success","result":"ok","total_cost_usd":0.5}`)
+	for _, h := range []Harness{Open{}, OpenClaude{}} {
+		if evs := h.Parse(line); len(evs) != 1 || evs[0].Result.CostUSD != 0 {
+			t.Errorf("%T: %+v", h, evs)
+		}
+	}
+	a := strings.Join(OpenClaude{}.Args(Turn{SessionID: "s", Model: "deepseek-chat", MaxBudgetUSD: 2, KeyCommand: "hive open-key /k"}), " ")
+	if strings.Contains(a, "--max-budget-usd") || !strings.Contains(a, `--settings {"apiKeyHelper":"hive open-key /k"}`) || !strings.Contains(a, "--model deepseek-chat") {
+		t.Errorf("args %s", a)
+	}
+	if APIHosts(OpenClaude{}) != nil {
+		t.Error("a model on another vendor's endpoint reaches Anthropic's API")
+	}
+}
