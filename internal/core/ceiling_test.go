@@ -129,6 +129,11 @@ func TestAskCeilingSkipsRuledOutMentions(t *testing.T) {
 		"do not block inbound connections":                       "open",
 		"never use ufw here":                                     "open",
 		"systemctl disable --now firewalld":                      "open",
+		"don't spend more than $50 on a domain":                  "money",
+		"don't pay more than $10":                                "money",
+		"no subscription, a one-off charge of $40":               "money",
+		"don't listen on more than one address":                  "open",
+		"do not expose over two ports":                           "open",
 		"don't worry, send an email to the client":               "outward",
 	} {
 		if k, _ := AskCeilingMatch(text); k != want {

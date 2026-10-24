@@ -64,7 +64,8 @@ func CeilingMatch(texts ...string) (kind, phrase string) {
 // AskCeilingMatch is CeilingMatch for what an agent asks in words: a mention
 // the ask itself rules out ("do not set OLLAMA_HOST=0.0.0.0", "no
 // credentials needed", "listen on 127.0.0.1 only") doesn't count, any other
-// does, and a negated protection ("no firewall") always counts. It only
+// does: a money mention, a negated protection ("no firewall") and a negated
+// cap ("don't expose more than one port") always count. It only
 // routes; the script that would run still meets CeilingGuard,
 // which counts every mention.
 func AskCeilingMatch(texts ...string) (kind, phrase string) {
@@ -89,7 +90,10 @@ var (
 	// negatedRe is a negation at most three words before a mention, with
 	// nothing between that turns it back ("don't forget to open a port").
 	negatedRe = regexp.MustCompile(`(?i)\b(not|no|never|don'?t|doesn'?t|won'?t|shouldn'?t|mustn'?t|needn'?t|without|nor|none)\b((\s+\S+){0,3})\s*$`)
-	turnsBack = regexp.MustCompile(`(?i)\b(forget|fail|skip|neglect|omit|hesitate|stop|only|just|but)\b`)
+	turnsBack = regexp.MustCompile(`(?i)\b(forget|fail|skip|neglect|omit|hesitate|stop|only|just|but|more|over|above|beyond|up|most|less|under|fewer|except)\b`)
+	// limitRe is a cap right after a mention: the negation limits the step
+	// rather than ruling it out.
+	limitRe = regexp.MustCompile(`(?i)^\W{0,3}(\S+\s+){0,2}(more than|over|above|beyond|up to|at most|less than|under|fewer than|except)\b`)
 	// protectionRe is an 'open' word that names a protection, so negating it
 	// asks to open the machine: never ruled out.
 	protectionRe = regexp.MustCompile(`(?i)firewall|ufw|iptables|nft|inbound`)
@@ -103,6 +107,12 @@ var (
 func ruledOut(kind, before, match, after string) bool {
 	if kind == "open" && strings.EqualFold(match, "listen on") && loopbackRe.MatchString(after) {
 		return true
+	}
+	if kind == "money" {
+		return false // "don't spend more than $50" still spends
+	}
+	if limitRe.MatchString(after) {
+		return false // "don't expose more than one port" still exposes one
 	}
 	if protectionRe.MatchString(match) {
 		return false // "no firewall", "do not block inbound" open the machine
