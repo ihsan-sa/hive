@@ -119,8 +119,9 @@ func TestCodex(t *testing.T) {
 	if r := c.Parse([]byte(`{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again later."}}`))[0].Result; !r.IsError || !r.Limited {
 		t.Fatalf("failed: %+v", r)
 	}
-	if r := c.Parse([]byte(`{"type":"error","message":"stream disconnected before completion"}`))[0].Result; !r.IsError || r.Text != "stream disconnected before completion" {
-		t.Fatalf("error line: %+v", r)
+	// Codex prints an error line for each retry; only turn.failed ends the turn.
+	if evs := c.Parse([]byte(`{"type":"error","message":"Reconnecting... 2/5 (stream disconnected before completion)"}`)); len(evs) != 0 {
+		t.Fatalf("a retry ended the turn: %+v", evs)
 	}
 	if h := APIHosts(c); len(h) == 0 {
 		t.Fatal("Codex names no API host for the egress list")
@@ -131,6 +132,13 @@ func TestCodex(t *testing.T) {
 	ro := strings.Join(c.Args(Turn{ReadOnly: true, Resume: true, SessionID: "th1"}), " ")
 	if !strings.Contains(ro, `exec resume`) || !strings.Contains(ro, `sandbox_mode="read-only"`) || !strings.HasSuffix(ro, "th1 -") {
 		t.Fatalf("read-only args: %s", ro)
+	}
+	// Codex's own sandbox can't start inside the Hive's, which is the boundary there.
+	for _, ro := range []bool{false, true} {
+		in := strings.Join(c.Args(Turn{Sandboxed: true, ReadOnly: ro, Writable: []string{"/hive/box"}}), " ")
+		if !strings.Contains(in, "--dangerously-bypass-approvals-and-sandbox") || strings.Contains(in, "sandbox_mode") {
+			t.Fatalf("sandboxed args: %s", in)
+		}
 	}
 	if a := strings.Join(c.Args(Turn{Model: "sonnet"}), " "); strings.Contains(a, "-m ") {
 		t.Fatalf("a Claude model went to Codex: %s", a)
@@ -192,5 +200,30 @@ func TestOpenClaude(t *testing.T) {
 	}
 	if APIHosts(OpenClaude{}) != nil {
 		t.Error("a model on another vendor's endpoint reaches Anthropic's API")
+	}
+}
+
+// Codex's usage readings come from its session file: the last one since the
+// turn began, its windows under Claude's names, the fullest binding.
+func TestCodexUsage(t *testing.T) {
+	start := time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
+	rollout := []byte(`{"timestamp":"2026-10-24T09:59:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":100,"window_minutes":300,"resets_at":1}}}}
+not json
+{"timestamp":"2026-10-24T10:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1234}},"rate_limits":{"primary":{"used_percent":30,"window_minutes":300,"resets_at":1793000000},"secondary":{"used_percent":85,"window_minutes":10080,"resets_at":1793500000}}}}
+{"timestamp":"2026-10-24T10:02:00Z","type":"response_item","payload":{"type":"message"}}
+`)
+	rl, n := Codex{}.Usage(rollout, start)
+	if n != 1234 || rl == nil {
+		t.Fatalf("usage %+v, context %d", rl, n)
+	}
+	if rl.Status != "allowed_warning" || rl.Window != "seven_day" || rl.Utilization != 0.85 || rl.ResetsAt.Unix() != 1793500000 || rl.Windows["five_hour"].Utilization != 0.3 {
+		t.Fatalf("usage %+v", rl)
+	}
+	if rl, _ := (Codex{}).Usage(rollout, start.Add(time.Hour)); rl != nil {
+		t.Fatalf("a reading from before the turn: %+v", rl)
+	}
+	full := []byte(`{"timestamp":"2026-10-24T10:01:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":100,"window_minutes":300,"resets_at":1793000000},"secondary":{"used_percent":20,"window_minutes":10080,"resets_at":1793500000}}}}`)
+	if rl, _ := (Codex{}).Usage(full, start); rl == nil || rl.Status != "rejected" || rl.Window != "five_hour" {
+		t.Fatalf("at the limit: %+v", rl)
 	}
 }

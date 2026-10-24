@@ -20,8 +20,11 @@
  ▸ website            │     tribunal seat 2 model       sonnet
                       │     tribunal seat 3 model       fable
                       │     model for textkit-2         default
+                      │     harness for textkit-2       default
                       │     model for hive-web          default
+                      │     harness for hive-web        default
                       │     model for website           default
+                      │     harness for website         default
                       │     review rounds               3
                       │
                       │   Routes
@@ -29,8 +32,5 @@
                       │     worker                      claude:opus
                       │     reviewer                    claude:opus
                       │     security                    a tribunal seat unlike the reviewer's
-                      │     warden                      claude:opus
-                      │     tribunal                    claude:opus, claude:sonnet, claude:fable
-                      │     sweep                       claude:opus
 ──────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────
  ↑↓ move   enter change   tab sidebar

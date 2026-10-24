@@ -1,8 +1,8 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
@@ -28,29 +28,37 @@ func TestReportSharing(t *testing.T) {
 	h.ws.SaveConfig(cfg)
 	h.seed("me/rep", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "rep", "repo": "me/rep"}, nil)
-	// A send counts its job's system.ran events rather than comparing times:
-	// Windows' wall clock ticks coarsely, so a send that returns at once (as
-	// it does while sharing is off) can journal at the very instant the test
-	// read as "before", and Last.After(before) never comes true.
-	ran := func() int {
+	// A send waits for its job's next system.ran event rather than comparing
+	// times: Windows' wall clock ticks coarsely, so a send that returns at
+	// once (as it does while sharing is off) can journal at the very instant
+	// the test read as "before", and Last.After(before) never comes true.
+	// It reads on from a cursor, since /api/events without one holds only
+	// the newest 2000 events.
+	events := func(after int64) []core.Event {
 		var evs []core.Event
-		h.c.Do("GET", "/api/events", nil, &evs)
-		n := 0
-		for _, e := range evs {
-			if e.Kind == "system.ran" && strings.Contains(string(e.Data), `"job":"report.send"`) {
-				n++
+		h.c.Do("GET", fmt.Sprintf("/api/events?after=%d", after), nil, &evs)
+		return evs
+	}
+	ranSince := func(after int64) bool {
+		for _, e := range events(after) {
+			var d struct{ Job string }
+			if e.Kind == "system.ran" && e.Decode(&d) == nil && d.Job == "report.send" {
+				return true
 			}
 		}
-		return n
+		return false
 	}
 	send := func() {
 		t.Helper()
-		before := ran()
+		var cursor int64
+		if evs := events(0); len(evs) > 0 {
+			cursor = evs[len(evs)-1].Seq
+		}
 		h.post("/api/job", map[string]string{"name": "report.send"}, nil)
 		h.wait("report.send to run", minute, func(st api.State) bool {
 			for _, j := range st.Jobs {
 				if j.Name == "report.send" && !j.Running {
-					return ran() > before
+					return ranSince(cursor)
 				}
 			}
 			return false
