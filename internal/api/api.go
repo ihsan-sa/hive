@@ -77,6 +77,7 @@ type ProjectView struct {
 	Tasks  []work.Task           `json:"tasks"`
 	Scores []improve.Measurement `json:"scores"`
 	Best   *float64              `json:"best,omitempty"`
+	Hold   *work.MergeHold       `json:"hold,omitempty"` // the person's hold on its merges
 }
 
 // Updated is the update that brought in this version, with its release notes;

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -226,5 +227,19 @@ func TestHelpNeverActs(t *testing.T) {
 	}
 	if code := run([]string{"nosuch", "--help"}); code != 2 {
 		t.Errorf("an unknown command with --help: exit %d, want 2", code)
+	}
+}
+
+// hive hold reads the project, the person's words and its flags.
+func TestHoldArgs(t *testing.T) {
+	b, err := holdArgs([]string{"hive", "only", "the", "fix", "--only", "205,#207", "--until=release"})
+	if err != nil || b["project"] != "hive" || b["why"] != "only the fix" || b["until"] != "release" || fmt.Sprint(b["only"]) != "[205 207]" {
+		t.Fatalf("%v %v", b, err)
+	}
+	if b, _ := holdArgs([]string{"hive", "--lift"}); b["lift"] != true {
+		t.Fatalf("%v", b)
+	}
+	if _, err := holdArgs([]string{"--only", "x"}); err == nil {
+		t.Fatal("a bad PR number was taken")
 	}
 }
