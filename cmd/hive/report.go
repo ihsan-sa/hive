@@ -12,7 +12,9 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 )
 
-const shareQuestion = "Share failures and usage with the Hive's developer so it gets fixed? Secrets are scrubbed on this machine first, and `%s report` shows what was sent. (y/N)"
+// shareQuestion is report.Question, the installers' words, and where to see
+// what was sent.
+const shareQuestion = report.Question + " `%s report` shows what was sent. (y/N)"
 
 // setShare turns sharing on or off.
 func setShare(ws core.Workspace, on bool) error {
@@ -90,7 +92,7 @@ func cmdReport(args []string) int {
 	if since, on := cfg.Sharing(); !on {
 		fmt.Println("Sharing failures with the developer is off. `" + core.Cmd + " report on` turns it on.")
 	} else {
-		fmt.Printf("Sharing failures and usage with %s since %s (install %s).\n", report.URL(cfg), since.Format("2006-01-02 15:04"), cfg.InstallID)
+		fmt.Printf("Sending failure and usage reports to %s since %s (install %s).\n", report.URL(cfg), since.Format("2006-01-02 15:04"), cfg.InstallID)
 	}
 	if sent := report.Sent(ws); len(sent) > 0 {
 		fmt.Printf("%d reports sent; copies in %s, the last is `%s report show`.\n", len(sent), filepath.Dir(sent[0]), core.Cmd)

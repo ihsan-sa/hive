@@ -1,4 +1,4 @@
-// Package report shares an install's failures and usage with the Hive's
+// Package report sends an install's failure and usage reports to the Hive's
 // developer, only when the person has said yes. It reads the journal, scrubs
 // secrets on this machine, sends one usage report and one report per failure
 // to the configured address and keeps a copy of every report sent. The
@@ -33,6 +33,17 @@ const (
 	maxText    = 2000
 	maxExcerpt = 4000
 )
+
+// Question is the opt-in question the installers and first run ask, word for
+// word: it names everything a report holds, so the person agrees to what is
+// really sent. TestQuestionSaysWhatIsSent holds it to Report and the caps.
+// The installers quote it, so it has no ' " ` $ % or \.
+const Question = "Send failure reports to the Hive developer so they get fixed? " +
+	"Each failure report holds what failed, when and why (up to 2,000 characters), " +
+	"and the agent reply or the last lines of the task log (up to 4,000 characters). " +
+	"A usage report counts runs, turns, merges, reverts, cost and dropped reports, with the harness name. " +
+	"Every report has the Hive version, the OS and a random install id. " +
+	"Secrets, emails and your home folder are scrubbed on this machine first."
 
 // Report is one request body, a usage report or one failure.
 type Report struct {
