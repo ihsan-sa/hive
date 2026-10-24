@@ -71,6 +71,7 @@ type Verdict struct {
 	Verdict  string    `json:"verdict"` // land | fix
 	Summary  string    `json:"summary"`
 	Findings []Finding `json:"findings,omitempty"`
+	Advice   []string  `json:"advice,omitempty"` // with a land: worth doing later, not a blocker
 }
 
 // Finding is one thing the reviewer wants fixed.
@@ -472,7 +473,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), UID: os.Getuid(), GID: os.Getgid()}
+		Stdout: logPath, Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), UID: os.Getuid(), GID: os.Getgid()}
 	code, err := sb.Run(spec, timeout)
 	raw, _ := os.ReadFile(logPath)
 	errRaw, _ := os.ReadFile(logPath + ".err")

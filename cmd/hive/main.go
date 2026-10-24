@@ -7,8 +7,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +41,10 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive login               log in to Claude Code and GitHub with their own logins
   hive login add <name>    add another Claude login to spread runs over; add "codex" for Codex
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
+  hive egress              the services on this machine agents may reach
+  hive egress grant <host:port>   open one to every sandboxed run (loopback only, e.g. 127.0.0.1:11434)
+  hive egress revoke <host:port>  close it again
+  hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
   hive update              install the newest release [--release <tag>: that one, and stay on it]
   hive shutdown            stop the Hive (running agents finish their turn)
   hive uninstall           remove autostart and the binary's record; leaves your folder
@@ -155,9 +161,9 @@ func run(args []string) int {
 			}
 			for _, a := range st.Asks {
 				if a.ID == args[0] {
-					opt := a.Options[0]
-					if cmd == "refuse" {
-						opt = a.Options[len(a.Options)-1]
+					opt, err := approveOption(cmd, a)
+					if err != nil {
+						return err
 					}
 					fmt.Println(cmd+"d:", a.Title, "->", opt)
 					return c.Do("POST", "/api/answer", map[string]string{"id": a.ID, "answer": opt, "note": strings.Join(args[1:], " ")}, nil)
@@ -195,6 +201,10 @@ func run(args []string) int {
 		return 0
 	case "doctor":
 		return cmdDoctor(args)
+	case "egress":
+		return cmdEgress(args)
+	case "share":
+		return cmdShare(args)
 	case "update":
 		tag, ok := releaseArg(args)
 		if !ok {
@@ -397,7 +407,7 @@ func cmdStatus() int {
 		}
 		fmt.Printf("\nagents: %d live\n", live)
 		for _, p := range st.Plans {
-			fmt.Printf("plan %s: %s, %.0f%% of the %s window, resets %s\n", p.Key(), p.Limit.Status, p.Limit.Utilization*100, p.Limit.Window, p.Limit.ResetsAt.Local().Format("Mon 15:04"))
+			fmt.Println(planLine(p, time.Now()))
 		}
 		if len(st.Asks) > 0 {
 			fmt.Println("\nwaiting on you:")
@@ -483,6 +493,60 @@ func cmdDoctor(args []string) int {
 	return 0
 }
 
+// cmdEgress lists, grants or revokes the services on this machine sandboxed
+// runs may reach (egress.local). Each run reads the config as it starts, so a
+// grant holds from the next turn on.
+func cmdEgress(args []string) int {
+	ws, err := workspace()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	cfg := ws.LoadConfig()
+	if len(args) == 0 {
+		if len(cfg.Egress.Local) == 0 {
+			fmt.Println("No service on this machine is open to agents.")
+		}
+		for _, l := range cfg.Egress.Local {
+			fmt.Println(l)
+		}
+		return 0
+	}
+	if len(args) != 2 || (args[0] != "grant" && args[0] != "revoke") {
+		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" egress [grant|revoke <host:port>]")
+		return 2
+	}
+	want, err := sandbox.LocalGrant(args[1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	// Entries match by what they open, so revoking 127.0.0.1:11434 also
+	// closes a localhost:11434 grant that covers it.
+	var keep []string
+	for _, l := range cfg.Egress.Local {
+		has, err := sandbox.LocalGrant(l)
+		if err == nil && slices.ContainsFunc(has, func(a string) bool { return slices.Contains(want, a) }) {
+			continue
+		}
+		keep = append(keep, l)
+	}
+	if args[0] == "grant" {
+		keep = append(keep, args[1])
+	}
+	cfg.Egress.Local = keep
+	if err := ws.SaveConfig(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if args[0] == "grant" {
+		fmt.Printf("Agents can reach %s from their next turn.\n", args[1])
+	} else {
+		fmt.Printf("Agents no longer reach %s from their next turn.\n", args[1])
+	}
+	return 0
+}
+
 func cmdUninstall() int {
 	ws, _ := core.FindWorkspace()
 	daemon.Stop(ws)
@@ -510,4 +574,34 @@ func kbArgs(args []string) (query, limit string) {
 		words = append(words, args[i])
 	}
 	return strings.Join(words, " "), limit
+}
+
+// planLine is a plan's usage for hive status. The reset carries its zone and
+// how far off it is, and a reading whose window has since reset says so
+// rather than passing its old number off as current.
+func planLine(p core.Plan, now time.Time) string {
+	l := p.Limit
+	at := l.ResetsAt.Local().Format("Mon 15:04 MST")
+	if !l.ResetsAt.After(now) {
+		return fmt.Sprintf("plan %s: the %s window reset at %s, no reading since (last %.0f%%, read %s ago)", p.Key(), l.Window, at, l.Utilization*100, now.Sub(p.At).Round(time.Minute))
+	}
+	s := fmt.Sprintf("plan %s: %s, %.0f%% of the %s window, resets in %s (%s)", p.Key(), l.Status, l.Utilization*100, l.Window, l.ResetsAt.Sub(now).Round(time.Minute), at)
+	for _, k := range slices.Sorted(maps.Keys(l.Windows)) {
+		if k != l.Window {
+			s += fmt.Sprintf("; %s %.0f%%", k, l.Windows[k].Utilization*100)
+		}
+	}
+	return s
+}
+
+// approveOption is the option approve (the first) or refuse (the last) picks;
+// an ask with no options takes the person's own words through hive answer.
+func approveOption(cmd string, a core.Ask) (string, error) {
+	if len(a.Options) == 0 {
+		return "", fmt.Errorf("%s has no options to %s: answer it in your own words with %s answer %s <text>", a.ID, cmd, core.Cmd, a.ID)
+	}
+	if cmd == "refuse" {
+		return a.Options[len(a.Options)-1], nil
+	}
+	return a.Options[0], nil
 }
