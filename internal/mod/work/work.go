@@ -81,10 +81,12 @@ type Task struct {
 	// it keeps working; once merged, Base moves to it and Banked counts it.
 	Checkpoint string    `json:"checkpoint,omitempty"`
 	Banked     int       `json:"banked,omitempty"`
-	Banks      []Bank    `json:"banks,omitempty"`   // each merged checkpoint, oldest first
-	Seen       string    `json:"seen,omitempty"`    // the worker checkout's reflog when last looked at
-	Tried      string    `json:"tried,omitempty"`   // the newest commit already weighed as a checkpoint
-	NoBank     string    `json:"no_bank,omitempty"` // why no more checkpoints are opened for this task
+	Banks      []Bank    `json:"banks,omitempty"`       // each merged checkpoint, oldest first
+	Seen       string    `json:"seen,omitempty"`        // the worker checkout's reflog when last looked at
+	Tried      string    `json:"tried,omitempty"`       // the newest commit already weighed as a checkpoint
+	NoBank     string    `json:"no_bank,omitempty"`     // why no more checkpoints are opened for this task
+	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
+	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
 	Failures   int       `json:"failures"`
 	CloseFail  int       `json:"close_fail,omitempty"` // failed tries to close the issue
 	Attempt    int       `json:"attempt"`              // fresh workers handed this task
@@ -160,6 +162,9 @@ type Module struct {
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
 	mainRed map[string]bool
+	// drafts holds when each task waiting on a draft PR looks at it again;
+	// kept here so a look that finds nothing new writes nothing.
+	drafts map[string]time.Time
 	// offline is why the forge was last unreachable, until it answers again;
 	// downs counts the failed steps and checks since, probe is when it may next
 	// be checked, probing says a check is out, and online is when it last came
@@ -176,7 +181,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string][]string{}, mainRed: map[string]bool{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string][]string{}, mainRed: map[string]bool{}, drafts: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "alert.raised" {
 			var a struct{ Kind, Project, SHA string }
@@ -445,6 +450,9 @@ func (m *Module) Wait() { m.steps.Wait() }
 // due reports whether a task's retry gap is over; a task saved before the
 // forge came back goes at once. The caller holds m.mu.
 func (m *Module) due(t Task) bool {
+	if at, ok := m.drafts[t.ID]; ok && t.Stage == StageMerging && time.Now().Before(at) {
+		return false
+	}
 	return !time.Now().Before(t.Retry) || !t.Updated.After(m.online)
 }
 
@@ -1420,8 +1428,11 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if pr.Draft {
 		return m.waitDraft(t, pr)
 	}
-	if strings.HasPrefix(t.Reason, draftWait) {
-		t.Reason = ""
+	if !t.DraftSince.IsZero() {
+		m.mu.Lock()
+		delete(m.drafts, t.ID)
+		m.mu.Unlock()
+		t.Reason, t.DraftSince, t.DraftTold = "", time.Time{}, false
 		m.save(t, "marked ready; merging")
 	}
 	main, err := m.C.Effects.Sync(p)
@@ -1472,18 +1483,36 @@ func (m *Module) merge(t *Task, p core.Project) error {
 
 const draftWait = "waiting on the read it was left as a draft for"
 
+// draftTell is how long a draft waits before the lead hears of it, once.
+var draftTell = 24 * time.Hour
+
 // waitDraft parks a merge while its PR is a draft: no failure is counted, it
-// looks again every few minutes, and it merges once the PR is marked ready.
+// looks again every few minutes, saving only what changed, and it merges once
+// the PR is marked ready. One that waits long is told to the lead once.
 func (m *Module) waitDraft(t *Task, pr core.PR) error {
-	t.Retry = time.Now().Add(3 * time.Minute)
+	m.mu.Lock()
+	m.drafts[t.ID] = time.Now().Add(3 * time.Minute)
+	m.mu.Unlock()
 	reason := draftWait + " (" + whoseRead(pr.Body) + "); it merges once the PR is marked ready"
-	if t.Reason == reason {
-		m.save(t, "")
-		return nil
+	if t.DraftSince.IsZero() {
+		t.DraftSince = time.Now().UTC()
 	}
-	t.Reason = reason
-	m.save(t, reason)
+	if t.Reason != reason {
+		t.Reason = reason
+		m.save(t, reason)
+	}
+	if !t.DraftTold && time.Since(t.DraftSince) >= draftTell {
+		t.DraftTold = true
+		m.save(t, "told the lead the draft has waited since "+t.DraftSince.Format("2006-01-02 15:04Z"))
+		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited since %s for the read its PR was left as a draft for (%s). It merges once the PR is marked ready.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), t.DraftSince.Format("2006-01-02 15:04Z"), whoseRead(pr.Body)))
+	}
 	return nil
+}
+
+// MidMerge reports a task in the middle of merging. One waiting on a draft
+// isn't: its read may take hours or never come, so it holds nothing up.
+func (m *Module) MidMerge() bool {
+	return len(m.List(func(t Task) bool { return t.Stage == StageMerging && t.DraftSince.IsZero() })) > 0
 }
 
 // whoseRead is the PR description's line saying which read it needs, such as
