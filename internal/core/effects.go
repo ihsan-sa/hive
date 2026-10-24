@@ -1211,12 +1211,12 @@ func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string, tests Tests
 	return state, which, shared, byName
 }
 
-// mainLookBack is how many of main's commits, newest first, MainAnswer reads
+// MainLookBack is how many of main's commits, newest first, MainAnswer reads
 // for a finished run.
-const mainLookBack = 10
+const MainLookBack = 10
 
 // MainAnswer is main's runs of the checks that failed, each taken from the
-// newest commit on main's first-parent line, from main back mainLookBack
+// newest commit on main's first-parent line, from main back MainLookBack
 // commits, where every run of that name has finished (passed or failed). A
 // run still going, cancelled or that couldn't start is no answer: CI cancels
 // a run on main when the next push supersedes it, and while merges keep
@@ -1236,7 +1236,7 @@ func (e *Effects) MainAnswer(p Project, main string, failed []CheckRun) (runs []
 	if len(want) == 0 {
 		return runs, nil, nil
 	}
-	out, err := Git(e.ws.Project(p.Name), "rev-list", "--first-parent", "-n", strconv.Itoa(mainLookBack), main)
+	out, err := Git(e.ws.Project(p.Name), "rev-list", "--first-parent", "-n", strconv.Itoa(MainLookBack), main)
 	if err != nil {
 		// A stale or missing clone: main's own runs are all there is, and
 		// the journal says so once per main, so it doesn't pass unseen.

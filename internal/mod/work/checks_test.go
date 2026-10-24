@@ -893,6 +893,16 @@ func TestMergeForgeCheckWaitsOnCancelledMain(t *testing.T) {
 	if task.Stage != StageWorking || task.Round != 1 {
 		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
 	}
+	said := ""
+	for _, e := range m.C.J.Since(0) {
+		var a struct{ Kind, Text string }
+		if e.Kind == "alert.raised" && e.Decode(&a) == nil && a.Kind == "main-red" {
+			said = a.Text
+		}
+	}
+	if !strings.Contains(said, "were cancelled or couldn't start on main") {
+		t.Fatalf("the lead heard %q", said)
+	}
 }
 
 // When the file can't be written, the message carries the log itself and no

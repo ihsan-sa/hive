@@ -1807,7 +1807,13 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			// A run on main that never finishes (a stuck runner, a status
 			// that never reports, a run cancelled with nothing finished
 			// before it) counts as not run, and the lead hears of it.
-			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+" have run on main in "+p.Name+" at "+core.Short(main)+" for over "+mainWaitMax.String()+" without a result; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
+			how := " have run on main in " + p.Name + " at " + core.Short(main) + " for over " + mainWaitMax.String() + " without a result"
+			if slices.ContainsFunc(mainRuns, func(mr core.CheckRun) bool {
+				return mr.State == core.CheckCantStart && slices.ContainsFunc(still, func(r core.CheckRun) bool { return r.Name == mr.Name })
+			}) {
+				how = " were cancelled or couldn't start on main in " + p.Name + " at " + core.Short(main) + ", with no finished run on its last " + fmt.Sprint(core.MainLookBack) + " commits, for over " + mainWaitMax.String()
+			}
+			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+how+"; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
 		}
 	}
 	names := core.CheckNames(which)
