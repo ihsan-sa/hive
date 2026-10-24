@@ -412,6 +412,10 @@ func (m *model) viewTree() []string {
 			sel++
 		}
 	}
+	if len(m.st.Held) > 0 { // turns wait for a reason, not for nothing
+		lines = append([]string{stDim.Render("New turns are " + strings.Join(m.st.Held, "; ") + "."), ""}, lines...)
+		sel += 2
+	}
 	if rel := releaseText(m.st); m.st.Behind > 0 {
 		lines = append([]string{stWarn.Render(rel), ""}, lines...)
 		sel += 2

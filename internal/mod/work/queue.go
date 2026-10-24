@@ -129,27 +129,29 @@ var pathLike = regexp.MustCompile(`[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+`)
 // top level ("internal", "docs"), which would hold everything under it. A
 // file that merges as union (.gitattributes merge=union, like docs/log.md)
 // isn't an area: both sides' lines are kept. They are worked out once per
-// brief text.
+// brief text and .gitattributes, so a doc main newly marks union frees the
+// briefs that name it.
 func (m *Module) areas(t Task) []string {
 	text := t.Title + "\n" + t.Done + "\n" + t.Known
-	key := t.ID + "\x00" + text
-	m.mu.Lock()
-	got, ok := m.areaCache[key]
-	m.mu.Unlock()
-	if ok {
-		return got
-	}
 	root := m.C.WS.Project(t.Project)
+	key := text + "\x00" + stamp(filepath.Join(root, ".gitattributes"))
+	m.mu.Lock()
+	got, ok := m.areaCache[t.ID]
+	m.mu.Unlock()
+	if ok && got.key == key {
+		return got.areas
+	}
 	if !core.Exists(root) { // the queue reads the clone before any worker has synced it
 		if p, ok := m.C.Projects.Get(t.Project); !ok || m.C.Effects.Clone(p) != nil {
 			return nil
 		}
+		key = text + "\x00" + stamp(filepath.Join(root, ".gitattributes"))
 	}
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil
 	}
-	union := unionPatterns(root)
+	union := unionRules(root)
 	seen := map[string]bool{}
 	var out []string
 	add := func(p string) {
@@ -175,52 +177,110 @@ func (m *Module) areas(t Task) []string {
 		}
 		switch {
 		case fi.IsDir() && !strings.Contains(p, "/"): // a top-level directory, as in "internal/."
-		case !fi.IsDir() && matchesAny(union, p):
+		case !fi.IsDir() && isUnion(union, p):
 		default:
 			add(p)
 		}
 	}
 	m.mu.Lock()
-	m.areaCache[key] = out
+	m.areaCache[t.ID] = areaEntry{key, out}
 	m.mu.Unlock()
 	return out
 }
 
-// unionPatterns are the .gitattributes patterns in the clone root that merge as union.
-func unionPatterns(root string) []string {
+// areaEntry is one task's areas and the brief text and .gitattributes they
+// were worked out from.
+type areaEntry struct {
+	key   string
+	areas []string
+}
+
+// stamp is a file's size and modification time, "" when it is missing.
+func stamp(p string) string {
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d %d", fi.Size(), fi.ModTime().UnixNano())
+}
+
+// attrRule is one .gitattributes line that sets or clears merge: union is
+// whether it makes the files it matches merge as union.
+type attrRule struct {
+	pattern string
+	union   bool
+}
+
+// unionRules are the .gitattributes lines in the clone root that touch the
+// merge attribute, in file order. Only the root file is read, and macros
+// ([attr]) and quoted patterns are skipped.
+func unionRules(root string) []attrRule {
 	b, err := core.SafeRead(filepath.Join(root, ".gitattributes"), 1<<20)
 	if err != nil {
 		return nil
 	}
-	var out []string
+	var out []attrRule
 	for _, line := range strings.Split(string(b), "\n") {
 		f := strings.Fields(line)
-		if len(f) < 2 || strings.HasPrefix(f[0], "#") {
-			continue
+		if len(f) < 2 || strings.HasPrefix(f[0], "#") || strings.HasPrefix(f[0], "!") || strings.HasPrefix(f[0], "[attr]") || strings.HasPrefix(f[0], `"`) {
+			continue // git ignores negative patterns
 		}
 		for _, attr := range f[1:] {
-			if attr == "merge=union" {
-				out = append(out, f[0])
+			switch {
+			case attr == "merge=union":
+				out = append(out, attrRule{f[0], true})
+			case attr == "merge" || attr == "-merge" || attr == "!merge" || strings.HasPrefix(attr, "merge="):
+				out = append(out, attrRule{f[0], false})
 			}
 		}
 	}
 	return out
 }
 
-// matchesAny reports whether the clone path p matches a .gitattributes
-// pattern: one without a slash matches the file's name at any depth, one with
-// a slash the path from the root.
-func matchesAny(patterns []string, p string) bool {
-	for _, pat := range patterns {
-		target := p
-		if !strings.Contains(strings.TrimSuffix(pat, "/"), "/") {
-			target = path.Base(p)
-		}
-		if ok, _ := path.Match(strings.TrimPrefix(pat, "/"), target); ok {
-			return true
+// isUnion reports whether the clone path p merges as union: the last rule
+// that matches it decides, as in git.
+func isUnion(rules []attrRule, p string) bool {
+	union := false
+	for _, r := range rules {
+		if attrMatch(r.pattern, p) {
+			union = r.union
 		}
 	}
-	return false
+	return union
+}
+
+// attrMatch reports whether the clone path p matches a .gitattributes
+// pattern: one without a slash matches the file's name at any depth, one with
+// a slash the path from the root, where "**" stands for any number of
+// directories.
+func attrMatch(pat, p string) bool {
+	if strings.HasSuffix(pat, "/") {
+		return false // matches only directories, and attributes don't recurse
+	}
+	if !strings.Contains(pat, "/") {
+		ok, _ := path.Match(pat, path.Base(p))
+		return ok
+	}
+	return matchSegs(strings.Split(strings.TrimPrefix(pat, "/"), "/"), strings.Split(p, "/"))
+}
+
+func matchSegs(pat, segs []string) bool {
+	if len(pat) == 0 {
+		return len(segs) == 0
+	}
+	if pat[0] == "**" {
+		for i := 0; i <= len(segs); i++ {
+			if matchSegs(pat[1:], segs[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(segs) == 0 {
+		return false
+	}
+	ok, _ := path.Match(pat[0], segs[0])
+	return ok && matchSegs(pat[1:], segs[1:])
 }
 
 // inside reports whether path is root or under it.
