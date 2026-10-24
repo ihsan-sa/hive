@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -316,11 +317,61 @@ type turnEnded struct {
 	Offline     string          `json:"offline,omitempty"` // why the harness couldn't reach its service, in one plain line
 }
 
-// egressRefused is the hosts a turn's egress proxy refused.
+// egressRefused is the hosts a turn's egress proxy refused, and each
+// destination with why.
 type egressRefused struct {
-	ID    string   `json:"id"`
-	Turn  int      `json:"turn"`
-	Hosts []string `json:"hosts"`
+	ID      string          `json:"id"`
+	Turn    int             `json:"turn"`
+	Hosts   []string        `json:"hosts"`
+	Refused []egressRefusal `json:"refused,omitempty"`
+}
+
+type egressRefusal struct {
+	Dest string `json:"dest"` // host:port as asked
+	Why  string `json:"why"`
+}
+
+// refusalWhy says in a line why the proxy refused dest, and for a service on
+// this machine how it opens.
+func refusalWhy(dest, code string) string {
+	switch code {
+	case sandbox.RefusedUnlisted:
+		return "not on this run's egress list (egress in .hive/config.json)"
+	case sandbox.RefusedLocal:
+		return "a service on this machine or a private network, closed to sandboxes; a loopback port opens only on the person's grant: " +
+			"ask a warden for `" + Cmd + " egress grant " + dest + "`"
+	}
+	return "refused by the egress proxy"
+}
+
+// readRefusals reads a turn's .egress file: a line per refusal, "host:port
+// why" (a bare host from a proxy before reasons were kept).
+func readRefusals(raw string) egressRefused {
+	var out egressRefused
+	seen := map[string]bool{}
+	for _, line := range strings.Split(raw, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		dest, code := f[0], ""
+		if len(f) > 1 {
+			code = f[1]
+		}
+		host := dest
+		if h, _, err := net.SplitHostPort(dest); err == nil {
+			host = h
+		}
+		out.Hosts = append(out.Hosts, host)
+		if !seen[dest] {
+			seen[dest] = true
+			out.Refused = append(out.Refused, egressRefusal{Dest: dest, Why: refusalWhy(dest, code)})
+		}
+	}
+	sort.Strings(out.Hosts)
+	out.Hosts = slices.Compact(out.Hosts)
+	sort.Slice(out.Refused, func(i, j int) bool { return out.Refused[i].Dest < out.Refused[j].Dest })
+	return out
 }
 
 type runNote struct {
@@ -346,6 +397,11 @@ func (rs *Runs) apply(e Event) {
 	case "plan.usage":
 		var p Plan
 		e.Decode(&p)
+		// Readings journaled before the parse fix carry 0 at the top level
+		// and the real number only under the window.
+		if w, ok := p.Limit.Windows[p.Limit.Window]; ok && p.Limit.Utilization == 0 {
+			p.Limit.Utilization = w.Utilization
+		}
 		rs.plans[p.Key()] = p
 		return
 	}
@@ -776,9 +832,9 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 func (rs *Runs) endTurn(r Run) {
 	tl := rs.ReadTurn(r, r.Turn)
 	if raw, err := os.ReadFile(rs.ws.TurnOut(r.ID, r.Turn) + ".egress"); err == nil && len(raw) > 0 {
-		hosts := strings.Fields(string(raw))
-		sort.Strings(hosts)
-		rs.append("run.egress_refused", egressRefused{ID: r.ID, Turn: r.Turn, Hosts: slices.Compact(hosts)})
+		ev := readRefusals(string(raw))
+		ev.ID, ev.Turn = r.ID, r.Turn
+		rs.append("run.egress_refused", ev)
 	}
 	limited := tl.Result != nil && tl.Result.Limited || (tl.Limit != nil && tl.Limit.Status == "rejected" && (tl.Result == nil || tl.Result.IsError))
 	if limited {
@@ -1118,7 +1174,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
 		Stdin: promptFile, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
-		Network: true, Allow: allow, UID: os.Getuid(), GID: os.Getgid(),
+		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), UID: os.Getuid(), GID: os.Getgid(),
 	}, nil
 }
 

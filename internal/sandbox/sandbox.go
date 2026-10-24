@@ -46,6 +46,7 @@ type Spec struct {
 	StopFile string   `json:"stop_file"` // host path; when present the command is killed
 	Network  bool     `json:"network"`   // outbound through the egress proxy
 	Allow    []string `json:"allow"`     // hosts the proxy lets through; nil is every public host
+	Local    []string `json:"local"`     // services on this machine the person granted, loopback ip:port (LocalGrant's)
 	UID      int      `json:"uid"`
 	GID      int      `json:"gid"`
 }

@@ -109,3 +109,30 @@ func TestLimitedTurnMovesToAnotherLogin(t *testing.T) {
 		t.Fatalf("turn ended %+v", te)
 	}
 }
+
+// Least-used routing reads the binding window's utilization, including from a
+// reading journaled before the parse fix with 0 at the top level.
+func TestLoginPoolRoutesByWindowUsage(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, twoLogins{}, func() []string { return nil })
+	reset := time.Now().Add(3 * time.Hour)
+	used := func(login string, u float64) {
+		rs.append("plan.usage", Plan{Harness: "claude", Login: login, Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour",
+			Windows: map[string]harness.Window{"five_hour": {Utilization: u, ResetsAt: reset}}}})
+	}
+	used("claude", 0.28)
+	used("claude:work", 0.05)
+	if l, _, _ := rs.pickLogin("claude", t.TempDir(), false); l.Key() != "claude:work" {
+		t.Fatalf("the less used login takes the run, got %s", l.Key())
+	}
+	for _, p := range rs.Plans() {
+		if p.Key() == "claude" && p.Limit.Utilization != 0.28 {
+			t.Fatalf("plan claude reads %v, want 0.28", p.Limit.Utilization)
+		}
+	}
+}

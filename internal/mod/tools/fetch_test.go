@@ -212,7 +212,7 @@ func TestInstallerHoldsToTheRunsEgressList(t *testing.T) {
 		t.Fatal(err)
 	}
 	var refused bytes.Buffer
-	e := sandbox.ServeEgress(ln, sp.Allow, &refused)
+	e := sandbox.ServeEgress(ln, sp.Allow, sp.Local, &refused)
 	defer e.Close()
 	c, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -224,7 +224,7 @@ func TestInstallerHoldsToTheRunsEgressList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusForbidden || refused.String() != "nodejs.org\n" {
+	if resp.StatusCode != http.StatusForbidden || refused.String() != "nodejs.org:443 unlisted\n" {
 		t.Fatalf("installer reached nodejs.org off the run's list: %s, refused %q", resp.Status, refused.String())
 	}
 }
