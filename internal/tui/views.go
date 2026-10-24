@@ -106,7 +106,9 @@ func (m *model) dashRows() []row {
 					v = fmtNum(*x.Score)
 				}
 				mark := stGood.Render("kept")
-				if !x.Kept {
+				if x.NoResult {
+					mark = stDim.Render("can't run")
+				} else if !x.Kept {
 					mark = stBad.Render("not kept")
 				}
 				add(row{key: "sc:" + x.SHA + x.At.String(), depth: 2, text: fmt.Sprintf("%s  %s  %s  %s  %s", x.At.Local().Format("Mon 15:04"), core.Short(x.SHA), v, mark, stDim.Render(core.Clip(x.Note, 80)))})

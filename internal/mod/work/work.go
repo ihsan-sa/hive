@@ -1095,6 +1095,15 @@ func (m *Module) test(t *Task, p core.Project) error {
 		}
 		c, t.Recheck = m.C.Effects.RunCheck(p, t.SHA, "test", cfg.Test), false
 	}
+	if c.CantRun != "" {
+		if t.Checkpoint != "" {
+			return m.dropCheckpoint(t, p, "the tests "+c.CantRun+", which is no verdict on it")
+		}
+		return m.cantRun(t, p, c)
+	}
+	if strings.HasPrefix(t.Reason, "the tests can't run") {
+		t.Reason = "" // the tool is there now
+	}
 	if err := m.noteTests(t, p, main, c); err != nil {
 		return err
 	}
@@ -1105,6 +1114,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 		mc, err := m.mainTests(p, main, cfg.Test)
 		if err != nil {
 			return err
+		}
+		if mc.CantRun != "" {
+			return m.cantRun(t, p, mc)
 		}
 		if !mc.OK {
 			return m.waitOnMain(t, p, main, mc)
@@ -1141,6 +1153,25 @@ func (m *Module) test(t *Task, p core.Project) error {
 		t.Stage = StageReviewing
 		m.save(t, "tests passed; asking for a read")
 	}
+	return nil
+}
+
+// cantRun holds a change whose tests couldn't start because a tool they call
+// is missing where checks run. That is no verdict on the change: it isn't
+// sent back or failed, and it is tested again every 10 minutes until the tool
+// is there. The PR and the dashboard hear once.
+func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
+	reason := "the tests " + c.CantRun + ", so this waits and is tested again every 10 minutes"
+	t.Retry = time.Now().Add(10 * time.Minute)
+	if t.Reason == reason {
+		m.save(t, "")
+		return nil
+	}
+	t.Reason = reason
+	m.save(t, reason)
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "ref": "cant-run:" + p.Name, "project": p.Name,
+		"text": p.Name + "'s tests " + c.CantRun + " (" + core.Clip(strings.TrimSpace(c.Output), 120) + "): a fault in the environment, not a verdict on any commit; changes wait and nothing is reverted until it is fixed"})
+	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
 	return nil
 }
 
