@@ -71,8 +71,22 @@ func (l *Local) EnsureRepo(repo, _ string) (bool, error) {
 	if err := os.MkdirAll(p, 0o755); err != nil {
 		return false, err
 	}
-	_, err := Git(p, "init", "--bare", "-b", "main")
-	return true, err
+	if _, err := Git(p, "init", "--bare", "-b", "main"); err != nil {
+		return true, err
+	}
+	return true, foreground(p)
+}
+
+// foreground keeps a bare repo's auto maintenance after a push in the
+// receiving git rather than a detached one: -c settings don't cross the
+// local transport, and a detached gc outlives the push that started it.
+func foreground(bare string) error {
+	for _, key := range []string{"maintenance.autoDetach", "gc.autoDetach"} {
+		if _, err := Git(bare, "config", key, "false"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Fork copies repo to owner's name, the local user's when owner is "".
@@ -84,8 +98,10 @@ func (l *Local) Fork(repo, owner string) (string, error) {
 	if Exists(l.RepoPath(fork)) {
 		return fork, nil
 	}
-	_, err := Git("", "clone", "-q", "--bare", l.RepoPath(repo), l.RepoPath(fork))
-	return fork, err
+	if _, err := Git("", "clone", "-q", "--bare", l.RepoPath(repo), l.RepoPath(fork)); err != nil {
+		return fork, err
+	}
+	return fork, foreground(l.RepoPath(fork))
 }
 
 func (l *Local) Clone(repo, dir string) error {
