@@ -48,10 +48,30 @@ type Forge interface {
 	MergePR(repo string, number int, sha, subject string) (string, error)
 	ClosePR(repo string, number int, comment string) error
 	CloseIssue(repo string, number int) error // an issue already closed counts as closed
+	// Checks are the forge's own checks (CI jobs) on exactly sha.
+	Checks(repo, sha string) ([]CheckRun, error)
 	// Releases (the Hive on itself).
 	LatestRelease(repo string) (Release, error)
 	CreateRelease(repo, tag, sha, notes string) error
 }
+
+// CheckRun is one of the forge's own checks on a commit, such as a CI job.
+type CheckRun struct {
+	Name   string `json:"name"`
+	State  string `json:"state"` // pending | pass | fail | cantstart
+	Detail string `json:"detail,omitempty"`
+	URL    string `json:"url,omitempty"`
+}
+
+// Check states. CantStart is a check that never ran the commit (no runner, a
+// startup failure, cancelled, stuck in the queue): the environment's fault,
+// never a verdict on the commit.
+const (
+	CheckPending   = "pending"
+	CheckPass      = "pass"
+	CheckFail      = "fail"
+	CheckCantStart = "cantstart"
+)
 
 // Release is a published version.
 type Release struct {
@@ -319,6 +339,106 @@ func (GitHub) ClosePR(repo string, number int, comment string) error {
 func (GitHub) CloseIssue(repo string, number int) error {
 	_, err := gh(repo, "issue", "close", strconv.Itoa(number), "-R", repo)
 	return err
+}
+
+// queuedTooLong is how long a check may wait for a runner before it counts as
+// one that can't start.
+const queuedTooLong = time.Hour
+
+// Checks lists GitHub's check runs and commit statuses on sha. A check suite
+// with no runs yet counts as pending, so a just-pushed head whose jobs aren't
+// listed yet doesn't read as having none.
+func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
+	out, err := gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/check-runs?per_page=100")
+	if err != nil {
+		return nil, err
+	}
+	var runs struct {
+		CheckRuns []ghCheckRun `json:"check_runs"`
+	}
+	if err := json.Unmarshal([]byte(out), &runs); err != nil {
+		return nil, err
+	}
+	var list []CheckRun
+	for _, r := range runs.CheckRuns {
+		list = append(list, r.check(time.Now()))
+	}
+	out, err = gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/status")
+	if err != nil {
+		return nil, err
+	}
+	var st struct {
+		Statuses []struct {
+			Context     string `json:"context"`
+			State       string `json:"state"`
+			Description string `json:"description"`
+			TargetURL   string `json:"target_url"`
+		} `json:"statuses"`
+	}
+	if err := json.Unmarshal([]byte(out), &st); err != nil {
+		return nil, err
+	}
+	for _, s := range st.Statuses {
+		state := map[string]string{"success": CheckPass, "failure": CheckFail, "error": CheckCantStart}[s.State]
+		if state == "" {
+			state = CheckPending
+		}
+		list = append(list, CheckRun{Name: s.Context, State: state, Detail: s.Description, URL: s.TargetURL})
+	}
+	out, err = gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/check-suites?per_page=100")
+	if err != nil {
+		return nil, err
+	}
+	var suites struct {
+		CheckSuites []struct {
+			Status string `json:"status"`
+			Runs   int    `json:"latest_check_runs_count"`
+			App    struct {
+				Slug string `json:"slug"`
+			} `json:"app"`
+		} `json:"check_suites"`
+	}
+	if err := json.Unmarshal([]byte(out), &suites); err != nil {
+		return nil, err
+	}
+	for _, s := range suites.CheckSuites {
+		if s.Runs == 0 && s.Status != "completed" {
+			list = append(list, CheckRun{Name: s.App.Slug, State: CheckPending, Detail: "suite " + s.Status + ", no jobs listed yet"})
+		}
+	}
+	return list, nil
+}
+
+type ghCheckRun struct {
+	Name       string    `json:"name"`
+	Status     string    `json:"status"`
+	Conclusion string    `json:"conclusion"`
+	StartedAt  time.Time `json:"started_at"`
+	HTMLURL    string    `json:"html_url"`
+}
+
+// check maps a GitHub check run to a state: a failure or timeout is a verdict
+// on the commit; a startup failure, a cancelled or stale run, one awaiting an
+// action, or one queued past queuedTooLong never ran it.
+func (r ghCheckRun) check(now time.Time) CheckRun {
+	c := CheckRun{Name: r.Name, URL: r.HTMLURL, Detail: r.Status}
+	if r.Status != "completed" {
+		c.State = CheckPending
+		if r.Status != "in_progress" && !r.StartedAt.IsZero() && now.Sub(r.StartedAt) > queuedTooLong {
+			c.State, c.Detail = CheckCantStart, r.Status+" for over "+queuedTooLong.String()
+		}
+		return c
+	}
+	c.Detail = r.Conclusion
+	switch r.Conclusion {
+	case "success", "neutral", "skipped":
+		c.State = CheckPass
+	case "failure", "timed_out":
+		c.State = CheckFail
+	default: // startup_failure, cancelled, action_required, stale
+		c.State = CheckCantStart
+	}
+	return c
 }
 
 func (GitHub) LatestRelease(repo string) (Release, error) {

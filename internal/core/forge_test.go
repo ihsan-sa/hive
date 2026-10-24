@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeGH puts a gh on PATH that logs its arguments, one call per line, and
@@ -63,5 +64,34 @@ func TestLocalForkOwner(t *testing.T) {
 		if err != nil || fork != want || !Exists(l.RepoPath(fork)) {
 			t.Errorf("Fork(me/p, %q) = %q, %v", owner, fork, err)
 		}
+	}
+}
+
+// GitHub's check runs map to a verdict on the commit only when they ran it.
+func TestGitHubCheckStates(t *testing.T) {
+	now := time.Now()
+	for _, c := range []struct {
+		r    ghCheckRun
+		want string
+	}{
+		{ghCheckRun{Status: "in_progress", StartedAt: now.Add(-3 * time.Hour)}, CheckPending},
+		{ghCheckRun{Status: "queued", StartedAt: now.Add(-time.Minute)}, CheckPending},
+		{ghCheckRun{Status: "queued", StartedAt: now.Add(-2 * time.Hour)}, CheckCantStart},
+		{ghCheckRun{Status: "completed", Conclusion: "success"}, CheckPass},
+		{ghCheckRun{Status: "completed", Conclusion: "skipped"}, CheckPass},
+		{ghCheckRun{Status: "completed", Conclusion: "failure"}, CheckFail},
+		{ghCheckRun{Status: "completed", Conclusion: "timed_out"}, CheckFail},
+		{ghCheckRun{Status: "completed", Conclusion: "startup_failure"}, CheckCantStart},
+		{ghCheckRun{Status: "completed", Conclusion: "cancelled"}, CheckCantStart},
+	} {
+		if got := c.r.check(now).State; got != c.want {
+			t.Errorf("%+v: %s, want %s", c.r, got, c.want)
+		}
+	}
+	if st, which := ChecksState([]CheckRun{{Name: "a", State: CheckPending}, {Name: "b", State: CheckFail}, {Name: "c", State: CheckCantStart}}); st != CheckFail || CheckNames(which) != "b" {
+		t.Fatalf("%s %v", st, which)
+	}
+	if st, _ := ChecksState(nil); st != CheckPass {
+		t.Fatal("no checks should pass")
 	}
 }

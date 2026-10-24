@@ -153,9 +153,24 @@ func TestMergeNeedsCheckAndVerdictOnExactCommit(t *testing.T) {
 	if _, err := c.Effects.Merge(req2); err == nil || !strings.Contains(err.Error(), "no land verdict") {
 		t.Fatalf("merged the new head on the old verdict: %v", err)
 	}
-	// Back to the reviewed commit: now it merges, pinned to that commit.
+	// Back to the reviewed commit: it merges once the forge's checks pass
+	// there, and a read the PR asked for from outside is recorded.
 	c.Effects.Push(p, "hive/t1", sha)
-	merged, err := c.Effects.Merge(req)
+	f.SetChecks(p.Repo, sha, CheckRun{Name: "test", State: CheckPass}, CheckRun{Name: "sandboxed-e2e", State: CheckPending})
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "sandboxed-e2e") {
+		t.Fatalf("merged while a forge check still runs: %v", err)
+	}
+	f.SetChecks(p.Repo, sha, CheckRun{Name: "test", State: CheckPass}, CheckRun{Name: "sandboxed-e2e", State: CheckPass})
+	asks := req
+	asks.OutsideRead = true
+	if _, err := c.Effects.Merge(asks); err == nil || !strings.Contains(err.Error(), "perms seat") {
+		t.Fatalf("merged without the outside read it asked for: %v", err)
+	}
+	ch, _ := c.Effects.Classify(p, main, sha)
+	if err := c.Effects.RecordRead(OutsideRead{Project: p.Name, SHA: sha, Diff: ch.DiffID, By: "perms", Verdict: "land"}); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := c.Effects.Merge(asks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,9 +425,11 @@ func TestHighClassNeedsTwoReads(t *testing.T) {
 	}
 }
 
-// In a self project a host-made update or revert carries no verdict from the
-// commit it came from: each needs a read of its own sha. Elsewhere it carries.
-func TestSelfHostCommitsNeedTheirOwnRead(t *testing.T) {
+// A read is of a change's own diff: it carries to a head with main merged in
+// while the change's own diff is the same, in a self project too, and not to
+// one whose merge changed the change's own files. A host-made revert needs no
+// read outside a self project and its own read in one.
+func TestReadsFollowTheOwnDiff(t *testing.T) {
 	c, f, p, main := setupProject(t)
 	// The reviewer runs below are still running when the test ends; let them
 	// finish before the hive's temp dir is removed (cleanups run last-first).
@@ -423,14 +440,26 @@ func TestSelfHostCommitsNeedTheirOwnRead(t *testing.T) {
 			}
 		}
 	})
-	r, _ := commitInCheckout(t, c, p, "w8", main, "feature.go", "package demo\n")
+	self := p
+	self.Self = true
+	read := func(id, sha string, ch Change) {
+		t.Helper()
+		c.Runs.Start(RunSpec{ID: id, Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha, "diff.patch": ch.Diff}})
+		if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: id, Verdict: "land"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, _ := commitInCheckout(t, c, p, "w8", main, "feature.go", "package demo\n\nfunc A() {}\n")
 	sha, _ := c.Effects.Extract(p, r, main)
-	c.Runs.Start(RunSpec{ID: "r8", Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha}})
-	if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: "r8", Verdict: "land"}); err != nil {
-		t.Fatal(err)
+	ch, _ := c.Effects.Classify(p, main, sha)
+	read("r8", sha, ch)
+	if v, _ := c.Effects.GetVerdict(p.Name, sha); v.Diff != ch.DiffID || v.Diff == "" {
+		t.Fatalf("the verdict isn't bound to the diff its reviewer read: %q, want %q", v.Diff, ch.DiffID)
 	}
 	tmp := t.TempDir()
 	mustGit(t, "", "clone", "-q", f.RepoPath(p.Repo), tmp)
+	mustGit(t, tmp, "config", "user.email", "t@t")
+	mustGit(t, tmp, "config", "user.name", "t")
 	os.WriteFile(filepath.Join(tmp, "other.go"), []byte("package demo\n"), 0o644)
 	mustGit(t, tmp, "add", "-A")
 	mustGit(t, tmp, "commit", "-q", "-m", "main moves")
@@ -440,24 +469,109 @@ func TestSelfHostCommitsNeedTheirOwnRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ch2, _ := c.Effects.Classify(p, main2, update)
+	if ch2.DiffID != ch.DiffID {
+		t.Fatal("merging an unrelated main changed the change's own diff")
+	}
+	for _, pp := range []Project{p, self} {
+		if !c.Effects.Reviewed(pp, ch2, update) {
+			t.Fatalf("self=%v: a main merge that leaves the own diff alone should keep the read", pp.Self)
+		}
+	}
+	if got := c.Effects.Reads(p.Name, update, ch2.DiffID); len(got) != 1 || got[0] != "r8" {
+		t.Fatalf("reads of the caught-up head: %v", got)
+	}
+
+	// Main adds its own feature.go; the conflict is resolved by hand into
+	// something nobody read.
+	os.WriteFile(filepath.Join(tmp, "feature.go"), []byte("package demo\n\nfunc B() {}\n"), 0o644)
+	mustGit(t, tmp, "add", "-A")
+	mustGit(t, tmp, "commit", "-q", "-m", "main adds feature.go")
+	mustGit(t, tmp, "push", "-q", "origin", "HEAD:main")
+	main3 := mustGit(t, tmp, "rev-parse", "HEAD")
+	mustGit(t, tmp, "fetch", "-q", f.RepoPath(p.Repo), "main")
+	if err := c.Effects.Push(p, "hive/t8", update); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, tmp, "fetch", "-q", "origin", "hive/t8")
+	mustGit(t, tmp, "checkout", "-q", "FETCH_HEAD")
+	if _, err := Git(tmp, "merge", "-q", "--no-edit", main3); err == nil {
+		t.Fatal("expected a conflict")
+	}
+	os.WriteFile(filepath.Join(tmp, "feature.go"), []byte("package demo\n\nfunc A() {}\n\nfunc B() {}\n\nfunc Unread() {}\n"), 0o644)
+	mustGit(t, tmp, "add", "-A")
+	mustGit(t, tmp, "commit", "-q", "--no-edit")
+	mustGit(t, tmp, "push", "-q", "origin", "HEAD:refs/heads/hive/t8")
+	resolved := mustGit(t, tmp, "rev-parse", "HEAD")
+	main3, _ = c.Effects.Sync(p)
+	ch3, err := c.Effects.Classify(p, main3, resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch3.DiffID == ch.DiffID {
+		t.Fatal("a conflict resolution that changes the change's files kept its own diff")
+	}
+	for _, pp := range []Project{p, self} {
+		if c.Effects.Reviewed(pp, ch3, resolved) {
+			t.Fatalf("self=%v: the read carried to a head whose own diff changed", pp.Self)
+		}
+	}
+	read("r8b", resolved, ch3)
+	if !c.Effects.Reviewed(self, ch3, resolved) {
+		t.Fatal("a read of the new head should do")
+	}
+
 	revert, err := c.Effects.Revert(p, main2, main2, "main moves: it didn't stay")
 	if err != nil {
 		t.Fatal(err)
 	}
-	self := p
-	self.Self = true
-	for _, h := range []string{update, revert} {
-		if !c.Effects.Reviewed(p, Change{}, h) || c.Effects.Reviewed(self, Change{}, h) {
-			t.Fatalf("%s: a host commit should carry its read only outside a self project", h)
-		}
-		id := "r8-" + h[:7]
-		c.Runs.Start(RunSpec{ID: id, Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": h}})
-		if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: h, Run: id, Verdict: "land"}); err != nil {
-			t.Fatal(err)
-		}
-		if !c.Effects.Reviewed(self, Change{}, h) {
-			t.Fatalf("%s: a read of its own sha should do", h)
-		}
+	chr, _ := c.Effects.Classify(p, main2, revert)
+	if !c.Effects.Reviewed(p, chr, revert) || c.Effects.Reviewed(self, chr, revert) {
+		t.Fatal("a host revert needs no read only outside a self project")
+	}
+	read("r8c", revert, chr)
+	if !c.Effects.Reviewed(self, chr, revert) {
+		t.Fatal("a read of the revert's own head should do")
+	}
+}
+
+// DiffID ignores where hunks sit and blob ids, and nothing else.
+func TestDiffID(t *testing.T) {
+	a := "diff --git a/f b/f\nindex 111..222 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1,3 @@ func x\n a\n+b\n c\n"
+	moved := "diff --git a/f b/f\nindex 333..444 100644\n--- a/f\n+++ b/f\n@@ -10,2 +10,3 @@ func y\n a\n+b\n c\n"
+	changed := "diff --git a/f b/f\nindex 111..222 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1,3 @@ func x\n a\n+B\n c\n"
+	if DiffID(a) != DiffID(moved) || DiffID(a) == DiffID(changed) || DiffID("") != "" {
+		t.Fatalf("%s %s %s", DiffID(a), DiffID(moved), DiffID(changed))
+	}
+}
+
+// An outside read is by the perms seat or the architect, is bound to a
+// diff, and a fix from either outweighs a land from the other.
+func TestOutsideRead(t *testing.T) {
+	c, _ := testHive(t)
+	o := OutsideRead{Project: "p", SHA: "abc", Diff: "d1", By: "perms", Verdict: "land"}
+	if err := c.Effects.RecordRead(OutsideRead{Project: "p", SHA: "abc", Diff: "d1", By: "the lead", Verdict: "land"}); err == nil {
+		t.Fatal("accepted a read from someone else")
+	}
+	if err := c.Effects.RecordRead(OutsideRead{Project: "p", SHA: "abc", By: "perms", Verdict: "land"}); err == nil {
+		t.Fatal("accepted a read bound to no diff")
+	}
+	if _, ok := c.Effects.OutsideRead("p", "d1"); ok {
+		t.Fatal("a read before any was recorded")
+	}
+	if err := c.Effects.RecordRead(o); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := c.Effects.OutsideRead("p", "d1"); !ok || got.Verdict != "land" {
+		t.Fatalf("%+v %v", got, ok)
+	}
+	if _, ok := c.Effects.OutsideRead("p", "d2"); ok {
+		t.Fatal("a read carried to another diff")
+	}
+	o.By, o.Verdict = "architect", "fix"
+	c.Effects.RecordRead(o)
+	if got, _ := c.Effects.OutsideRead("p", "d1"); got.Verdict != "fix" {
+		t.Fatalf("a fix should outweigh a land: %+v", got)
 	}
 }
 

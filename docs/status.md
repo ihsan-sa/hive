@@ -2,6 +2,7 @@
 
 Done:
 - Full build per docs/spec.md, including milestone 6: risk tiers T1-T3, the warden, the tribunal and the always-the-person ceiling enforced at the point of effect (risk.md).
+- Gate: a merge waits for the forge's own checks (CI on every platform, `sandboxed-e2e`) on the exact head it merges; a failure goes back as a red test does, one that can't start waits as the environment's (`main-red`). Reads are bound to the change's own diff (`core.DiffID`), so a catch-up merge of main that leaves it alone keeps the read (no fresh reviewer run per catch-up) and one that changes it needs a new read. A PR that asks for a read from the box's perms seat or architect merges only once the person records one as land (`hive read`). Tests: `internal/mod/work/checks_test.go`, `TestReadsFollowTheOwnDiff`.
 - Gate: the change classifier reads diffs with `--no-renames`, so moving a protected file out is protected; an emptied test command on main is red once the project has run one.
 - Linux sandbox on stock Ubuntu 23.10+ (`apparmor_restrict_unprivileged_userns=1`): the same mounts, tools and egress run under bubblewrap; WSL keeps the build's own namespaces.
 - An isolated lead granted modules starts under bubblewrap (the mount-point fix landed in #14). CI runs the e2e under bubblewrap on ubuntu-latest too (`sandboxed-e2e`, which probes the sandbox first), so a sandbox break goes red on a PR.

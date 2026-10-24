@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +63,8 @@ type Task struct {
 	Base      string            `json:"base,omitempty"`
 	Branch    string            `json:"branch,omitempty"`
 	SHA       string            `json:"sha,omitempty"`
+	Diff      string            `json:"diff,omitempty"`       // SHA's own diff (core.DiffID), which reads are bound to
+	NeedsRead bool              `json:"needs_read,omitempty"` // the PR asks for a read from the box's perms seat or architect
 	PR        core.PR           `json:"pr"`
 	Round     int               `json:"round"`
 	Conflicts int               `json:"conflicts"`
@@ -127,6 +131,9 @@ type Module struct {
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
 	mainRed map[string]bool
+	// later is when a held task (waiting on the forge's checks or an outside
+	// read) is next looked at; kept in memory, so a restart looks at once.
+	later map[string]time.Time
 	// offline is why the forge was last unreachable, until it answers again;
 	// downs counts the failed steps and checks since, probe is when it may next
 	// be checked, probing says a check is out, and online is when it last came
@@ -140,7 +147,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, mainRed: map[string]bool{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, mainRed: map[string]bool{}, later: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "alert.raised" {
 			var a struct{ Kind, Project, SHA string }
@@ -366,6 +373,10 @@ func (m *Module) Tick() {
 // due reports whether a task's retry gap is over; a task saved before the
 // forge came back goes at once. The caller holds m.mu.
 func (m *Module) due(t Task) bool {
+	if time.Now().Before(m.later[t.ID]) {
+		return false
+	}
+	delete(m.later, t.ID)
 	return !time.Now().Before(t.Retry) || !t.Updated.After(m.online)
 }
 
@@ -690,6 +701,9 @@ func (m *Module) land(t *Task, p core.Project) error {
 	if err := m.C.Effects.Push(p, t.Branch, sha); err != nil {
 		return err
 	}
+	if asksOutsideRead(finishText(r)) {
+		t.NeedsRead = true // kept once said, though a later round's account may not repeat it
+	}
 	body := finishText(r) + "\n\n" + marker(t.ID)
 	if t.Issue.Number != 0 {
 		body = finishText(r) + fmt.Sprintf("\n\nCloses #%d\n\n%s", t.Issue.Number, marker(t.ID))
@@ -787,6 +801,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 	if err != nil {
 		return err
 	}
+	t.Diff = ch.DiffID
 	switch {
 	case len(ch.Protected) > 0 && !m.C.Effects.Approved("merge", p.Name, t.SHA):
 		t.Stage = StagePerson
@@ -902,7 +917,7 @@ func reviewToken(run string) string {
 
 func (m *Module) review(t *Task, p core.Project) error {
 	id := fmt.Sprintf("r-%s-%s-%d", t.ID, core.Short(t.SHA), t.Reviews)
-	if n := len(m.C.Effects.Reads(p.Name, t.SHA)); n > 0 {
+	if n := len(m.C.Effects.Reads(p.Name, t.SHA, t.Diff)); n > 0 {
 		id += fmt.Sprintf("-read%d", n+1) // a separate run for each further read
 	}
 	r, ok := m.C.Runs.Get(id)
@@ -1061,7 +1076,13 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if ok, err := m.catchUp(t, p, main, "main moved"); ok || err != nil {
 		return err
 	}
-	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label()})
+	if wait, err := m.forgeChecks(t, p, main); wait || err != nil {
+		return err
+	}
+	if wait, err := m.outsideRead(t, p, main); wait || err != nil {
+		return err
+	}
+	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), OutsideRead: t.NeedsRead})
 	var np *core.NeedsPerson
 	if errors.As(err, &np) {
 		t.Stage = StagePerson
@@ -1071,7 +1092,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if err != nil {
 		return err
 	}
-	t.MergeSHA, t.Stage = merged, StageMerged
+	t.MergeSHA, t.Stage, t.Reason = merged, StageMerged, ""
 	m.save(t, "merged as "+core.Short(merged))
 	if t.Kind == "revert" {
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Label(), "Revert: "), t.Lesson))
@@ -1082,6 +1103,175 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		m.OnMerged(*t)
 	}
 	return nil
+}
+
+// holdGap is how long a held task waits before the gate looks again.
+var holdGap = time.Minute
+
+// hold keeps t where it is for why, saying so on the PR once.
+func (m *Module) hold(t *Task, p core.Project, why string) {
+	m.mu.Lock()
+	m.later[t.ID] = time.Now().Add(holdGap)
+	m.mu.Unlock()
+	if t.Reason == why {
+		return
+	}
+	t.Reason = why
+	m.save(t, why)
+	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Holding the merge: "+why+".")
+}
+
+// forgeChecks holds t until the forge's own checks (CI on every platform,
+// which the Hive's own test doesn't cover) pass on exactly the head it would
+// merge. A failure goes back to the worker as a red test does, unless main
+// fails the same check; a check that can't start is the environment's, so t
+// waits and it is raised, never sent back.
+func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error) {
+	runs, err := m.C.Effects.Forge.Checks(p.Repo, t.SHA)
+	if err != nil {
+		return true, err
+	}
+	st, which := core.ChecksState(runs)
+	names := core.CheckNames(which)
+	switch st {
+	case core.CheckPending:
+		m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+" ("+names+")")
+		return true, nil
+	case core.CheckCantStart:
+		why := "the forge's checks " + names + " can't start on " + core.Short(t.SHA) + ", which is the environment's fault, not the change's; waiting for them to run"
+		if t.Reason != why {
+			m.raiseOnce(p, t.SHA+"/checks", "the forge's checks "+names+" can't start in "+p.Name+" (PR #"+fmt.Sprint(t.PR.Number)+" at "+core.Short(t.SHA)+"): "+checkDetail(which))
+		}
+		m.hold(t, p, why)
+		return true, nil
+	case core.CheckFail:
+		mainRuns, err := m.C.Effects.Forge.Checks(p.Repo, main)
+		if err != nil {
+			return true, err
+		}
+		if _, onMain := core.ChecksState(mainRuns); slices.ContainsFunc(onMain, func(r core.CheckRun) bool {
+			return r.State == core.CheckFail && strings.Contains(", "+names+", ", ", "+r.Name+", ")
+		}) {
+			why := "waiting on main: the forge's checks " + names + " fail on main at " + core.Short(main) + " too, so this failure isn't the worker's"
+			if t.Reason != why {
+				m.raiseOnce(p, main+"/checks", "the forge's checks "+names+" fail on main in "+p.Name+" at "+core.Short(main))
+			}
+			m.hold(t, p, why)
+			return true, nil
+		}
+		t.Reason = ""
+		return true, m.sendBack(t, p, "The forge's checks failed on your commit "+core.Short(t.SHA)+": "+checkDetail(which))
+	}
+	return false, nil
+}
+
+// checkDetail names each check with what it said and where to read it.
+func checkDetail(runs []core.CheckRun) string {
+	var b []string
+	for _, r := range runs {
+		s := r.Name
+		if r.Detail != "" {
+			s += " (" + r.Detail + ")"
+		}
+		if r.URL != "" {
+			s += " " + r.URL
+		}
+		b = append(b, s)
+	}
+	return strings.Join(b, "; ")
+}
+
+// raiseOnce raises a main-red alert (something in the environment holds
+// changes back) once per key, however many changes wait on it.
+func (m *Module) raiseOnce(p core.Project, key, text string) {
+	m.mu.Lock()
+	raised := m.mainRed[p.Name+"@"+key]
+	m.mainRed[p.Name+"@"+key] = true
+	m.mu.Unlock()
+	if !raised {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": key, "text": text})
+	}
+}
+
+// outsideRead holds a PR that asked for a read from the box's perms seat or
+// architect until one is recorded as land on its own diff (hive read); a fix
+// goes back to the worker with what the reader said.
+func (m *Module) outsideRead(t *Task, p core.Project, main string) (bool, error) {
+	if r, ok := m.C.Runs.Get(t.Worker); ok && !t.NeedsRead {
+		t.NeedsRead = asksOutsideRead(finishText(r)) // a task landed before this was looked for
+	}
+	if !t.NeedsRead {
+		return false, nil
+	}
+	ch, err := m.C.Effects.Classify(p, main, t.SHA)
+	if err != nil {
+		return true, err
+	}
+	t.Diff = ch.DiffID
+	o, ok := m.C.Effects.OutsideRead(p.Name, ch.DiffID)
+	switch {
+	case ok && o.Verdict == "land":
+		return false, nil
+	case ok && o.Verdict == "fix":
+		t.Reason = ""
+		return true, m.sendBack(t, p, fmt.Sprintf("The box's %s read %s and asked for fixes:\n\n%s", o.By, core.Short(o.SHA), orNone(o.Note)))
+	}
+	m.hold(t, p, fmt.Sprintf("waiting for a read from the box's perms seat or architect at %s, as the PR asks; a read of an earlier head counts only while this change's own diff is the same (record one with `%s read %s %s land --by perms`)", core.Short(t.SHA), core.Cmd, t.ID, core.Short(t.SHA)))
+	return true, nil
+}
+
+// asksOutsideRead reports whether a worker's account says the change needs a
+// read from the box's perms seat or its architect (goals.md: sandbox,
+// self-update and login changes).
+func asksOutsideRead(s string) bool { return outsideReadRe.MatchString(s) }
+
+var outsideReadRe = regexp.MustCompile(`(?i)\bperms seat\b|\bread\b[^.\n]{0,80}\barchitect\b|\barchitect\b[^.\n]{0,80}\bread\b`)
+
+// RecordRead records an outside read of the head sha of task id (or of PR
+// #id), given by the box's perms seat or architect, bound to that head's own
+// diff. Only the person records one.
+func (m *Module) RecordRead(id, sha, by, verdict, note string) (Task, error) {
+	var t Task
+	ok := false
+	if n, err := strconv.Atoi(strings.TrimPrefix(id, "#")); err == nil {
+		ts := m.List(func(x Task) bool { return x.PR.Number == n && !x.Terminal() })
+		if len(ts) > 1 {
+			return t, fmt.Errorf("PR #%d is open in more than one project; name the task", n)
+		}
+		if ok = len(ts) == 1; ok {
+			t = ts[0]
+		}
+	} else {
+		t, ok = m.Get(id)
+	}
+	if !ok {
+		return t, fmt.Errorf("no task or PR %s", id)
+	}
+	p, err := m.project(&t)
+	if err != nil {
+		return t, err
+	}
+	main, err := m.C.Effects.Sync(p)
+	if err != nil {
+		return t, err
+	}
+	if sha == "" {
+		return t, errors.New("name the head that was read, as it may have moved since")
+	}
+	full, err := core.Git(m.C.WS.Project(p.Name), "rev-parse", "--verify", "--quiet", sha+"^{commit}")
+	if err != nil {
+		return t, fmt.Errorf("%s is not a commit in %s", sha, p.Name)
+	}
+	ch, err := m.C.Effects.Classify(p, main, full)
+	if err != nil {
+		return t, err
+	}
+	err = m.C.Effects.RecordRead(core.OutsideRead{Project: p.Name, SHA: full, Diff: ch.DiffID, PR: t.PR.Number, By: by, Verdict: verdict, Note: note})
+	if err != nil {
+		return t, err
+	}
+	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("**The box's %s read %s: %s**\n\n%s", by, core.Short(full), verdict, note))
+	return t, nil
 }
 
 func (m *Module) conflict(t *Task, p core.Project) error {

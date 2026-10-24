@@ -22,6 +22,7 @@ type localState struct {
 	PRs      map[string][]localPR    `json:"prs"`
 	Comments map[string][]string     `json:"comments"`
 	Releases map[string][]Release    `json:"releases"`
+	Checks   map[string][]CheckRun   `json:"checks,omitempty"` // repo@sha
 }
 
 type localIssue struct {
@@ -282,4 +283,23 @@ func (l *Local) CreateRelease(repo, tag, sha, notes string) error {
 	s.Releases[repo] = append(s.Releases[repo], Release{Tag: tag})
 	l.save(s)
 	return nil
+}
+
+// Checks are the checks set on repo@sha; a local forge runs none of its own.
+func (l *Local) Checks(repo, sha string) ([]CheckRun, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.load().Checks[repo+"@"+sha], nil
+}
+
+// SetChecks sets the forge's checks on repo@sha, as a CI would report them.
+func (l *Local) SetChecks(repo, sha string, runs ...CheckRun) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	if s.Checks == nil {
+		s.Checks = map[string][]CheckRun{}
+	}
+	s.Checks[repo+"@"+sha] = runs
+	l.save(s)
 }
