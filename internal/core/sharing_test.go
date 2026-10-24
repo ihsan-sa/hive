@@ -59,7 +59,7 @@ func TestPrivateProjectSeesOutButIsNotSeen(t *testing.T) {
 		var env []string
 		for _, p := range []string{"/hive/projects/open", "/hive/projects/mine", "/hive/projects/secret",
 			"/hive/state/runs/open-run/box/notes.md", "/hive/state/runs/mine-run/box/notes.md", "/hive/state/runs/secret-run/box/notes.md",
-			"/hive/state/chats/project_mine.jsonl", "/hive/kb/isolated/mine/n.md", "/hive/kb/isolated/secret/n.md", "/hive/state/events.jsonl"} {
+			"/hive/state/chats/project_mine.jsonl", "/hive/state/leads/project-mine/notes.md", "/hive/state/leads/project-open/notes.md", "/hive/kb/isolated/mine/n.md", "/hive/kb/isolated/secret/n.md", "/hive/state/events.jsonl"} {
 			if readable(s, p) {
 				env = append(env, p)
 			}
@@ -68,12 +68,13 @@ func TestPrivateProjectSeesOutButIsNotSeen(t *testing.T) {
 	}
 	open := spec(Run{RunSpec: RunSpec{ID: "open-run", Project: "open", Harness: "fake"}})
 	for _, p := range open {
-		if p != "/hive/projects/open" && p != "/hive/state/runs/open-run/box/notes.md" {
+		if p != "/hive/projects/open" && p != "/hive/state/runs/open-run/box/notes.md" && p != "/hive/state/leads/project-open/notes.md" {
 			t.Errorf("a shared project's run reads %s", p)
 		}
 	}
 	want := map[string]bool{"/hive/projects/open": true, "/hive/projects/mine": true, "/hive/state/runs/open-run/box/notes.md": true,
-		"/hive/state/runs/mine-run/box/notes.md": true, "/hive/state/chats/project_mine.jsonl": true, "/hive/kb/isolated/mine/n.md": true}
+		"/hive/state/runs/mine-run/box/notes.md": true, "/hive/state/chats/project_mine.jsonl": true, "/hive/kb/isolated/mine/n.md": true,
+		"/hive/state/leads/project-mine/notes.md": true, "/hive/state/leads/project-open/notes.md": true}
 	got := map[string]bool{}
 	for _, p := range spec(Run{RunSpec: RunSpec{ID: "mine-run", Project: "mine", Harness: "fake"}}) {
 		got[p] = true

@@ -1163,7 +1163,9 @@ func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 			os.MkdirAll(filepath.Join(rs.ws.Hive(), d, p.Name), 0o755)
 			rel = append(rel, d+"/"+p.Name)
 		}
-		rel = append(rel, "kb/isolated/"+p.Name, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl")
+		// A private project's lead works in its leads/ folder (an isolated one's in a checkout).
+		os.MkdirAll(filepath.Join(rs.ws.Hive(), "leads", "project-"+p.Name), 0o755)
+		rel = append(rel, "kb/isolated/"+p.Name, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl", "leads/project-"+p.Name)
 	}
 	if len(iso) > 0 { // the kb's record is filed from the journal, so it is covered whole too
 		rec := filepath.Join(rs.ws.KB(), "record")
