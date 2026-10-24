@@ -108,17 +108,26 @@ func (x *term) until(timeout time.Duration, what string, ok func(screen string) 
 	}
 }
 
-// pick moves the cursor down, then up, until the selected line starts with label.
+// pick moves the cursor down to the end, then up to the top, until the
+// selected line starts with label.
 func (x *term) pick(label string) {
 	x.t.Helper()
-	for i := 0; i < 60; i++ {
-		cur := x.selected()
-		if strings.HasPrefix(cur, label) {
-			return
-		}
-		x.keys(map[bool]string{true: "Down", false: "Up"}[i < 30])
-		for j := 0; j < 10 && x.selected() == cur; j++ { // let the screen catch up
-			time.Sleep(50 * time.Millisecond)
+	// Down to the end of the list, then up to its top: however long it is.
+	for _, key := range []string{"Down", "Up"} {
+		for i := 0; i < 200; i++ {
+			cur := x.selected()
+			if strings.HasPrefix(cur, label) {
+				return
+			}
+			x.keys(key)
+			moved := false
+			for j := 0; j < 10 && !moved; j++ { // let the screen catch up
+				time.Sleep(50 * time.Millisecond)
+				moved = x.selected() != cur
+			}
+			if !moved {
+				break // the end of the list (two equal rows in a row read as one; a list has none)
+			}
 		}
 	}
 	x.t.Fatalf("no line starting %q to select:\n%s", label, x.screen())
@@ -253,7 +262,12 @@ func TestControlCenterInTmux(t *testing.T) {
 	x.keys("Enter")
 	x.wait(20*time.Second, "Where should the Hive live? ["+ws.Root+"]")
 	x.keys("Enter")
+	shared := false
 	s = x.until(time.Minute, "the sandbox or repository prompt", func(s string) bool {
+		if !shared && strings.HasSuffix(strings.TrimSpace(s), "(y/N) [n]:") {
+			shared = true
+			x.keys("Enter") // the share question: Enter keeps it off
+		}
 		return strings.Contains(s, "Type `bare`") || strings.Contains(s, "GitHub repository")
 	})
 	// The folder exists now and the daemon isn't up: point it at the fake
