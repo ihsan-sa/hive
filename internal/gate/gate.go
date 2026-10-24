@@ -378,6 +378,9 @@ func (c *Child) with(env ...string) func() {
 // the go command reads go.mod and go.sum and fetches what they name, checked
 // against go.sum and the checksum database. GOTOOLCHAIN=local, so a go.mod
 // that asks for another Go cannot make the go command fetch and run it.
+// GOVCS=*:off: modules come only from the module proxy, so a go.mod cannot
+// make the go command run git or hg here against a URL the candidate chose
+// (a module only reachable that way fails the build: a rollback).
 func prefetch(cfg Config, c *Child) error {
 	dir := filepath.Join(cfg.Out, "prefetch")
 	for _, d := range []string{"home", "gocache"} {
@@ -388,7 +391,7 @@ func prefetch(cfg Config, c *Child) error {
 	cmd := exec.Command("go", "mod", "download")
 	cmd.Dir = c.Src
 	cmd.Env = append(cleanEnv(), "HOME="+filepath.Join(dir, "home"), "GOCACHE="+filepath.Join(dir, "gocache"), "GOROOT="+c.Go.Root, "GOMODCACHE="+c.Go.ModCache,
-		"GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
+		"GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GOVCS=*:off", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go mod download: %v: %s", err, tail(string(out), 600))
 	}
