@@ -766,6 +766,7 @@ func (s *server) state() api.State {
 	}
 	st.Jobs = a.System.Jobs()
 	st.Wakeups = a.System.Wakeups()
+	st.Checks.Running, st.Checks.Waiting = a.C.Effects.Slots.State()
 	for _, m := range a.Mods.List() {
 		st.Modules = append(st.Modules, api.ModuleView{Name: m.Name, Description: m.Description, Source: m.Source.Source, Release: m.Source.Release, Projects: m.Source.Projects,
 			Hooks: m.Hooks, Status: a.Runner.Status(filepath.Base(m.Dir))})

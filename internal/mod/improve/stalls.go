@@ -2,6 +2,7 @@ package improve
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -89,12 +90,25 @@ func (m *Module) Watch() {
 		floor = 20 * time.Minute
 	}
 	now := map[string]string{} // key -> current stage
+	// A queued brief and a check waiting for a slot are waiting their turn,
+	// not stuck; a check is timed from when it got its slot.
+	running, waiting := m.C.Effects.Slots.State()
 	for _, t := range m.Work.List(func(t work.Task) bool { return !t.Terminal() && t.Stage != work.StagePerson }) {
+		now["task:"+t.ID] = t.Stage
+		if t.Queued() || t.Stage == work.StageTesting && slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
+			continue
+		}
 		run := map[string]string{work.StageWorking: t.Worker, work.StageReviewing: t.Reviewer}[t.Stage]
 		m.mu.Lock()
 		sp, took := m.spells[t.ID], append([]float64(nil), m.took[t.Stage]...)
 		m.mu.Unlock()
-		now["task:"+t.ID] = t.Stage
+		if t.Stage == work.StageTesting {
+			for _, u := range running {
+				if u.Project == t.Project && u.SHA == t.SHA {
+					sp.since = latest(sp.since, u.Since)
+				}
+			}
+		}
 		m.judge(Stall{Key: "task:" + t.ID, What: fmt.Sprintf("%q", t.Label()), Project: t.Project, Stage: t.Stage, Since: sp.since}, run, t.Chat, t.Thread, took, floor)
 	}
 	took := map[string][]float64{}
