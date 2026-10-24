@@ -308,9 +308,9 @@ func reviewerLand(t *testing.T, m *Module, task *Task, p core.Project, id string
 }
 
 // A change to a path on main's security list is held, with one line on the
-// PR, until a perms or architect read says land at its head, even after the
-// Hive's own reviewer landed it and the forge's checks pass; a head that
-// moves to a new diff waits again.
+// PR, until the Hive's security seat (or a perms or architect read) says land
+// at its head, even after the Hive's own reviewer landed it and the forge's
+// checks pass; a head that moves to a new diff waits again.
 func TestSecurityListHolds(t *testing.T) {
 	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
 	reviewerLand(t, m, task, p, "r1")
@@ -882,5 +882,42 @@ func TestMergeForgeCheckSameTestRedOnMainSpendsNoRound(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerging || task.Round != 0 || task.Findings != "" || queued(m, "w1") != "" || !strings.HasPrefix(task.Reason, "waiting on main: ") {
 		t.Fatalf("stage %q, round %d, reason %q, findings %q", task.Stage, task.Round, task.Reason, task.Findings)
+	}
+}
+
+// A security seat left on the reviewer's model, or a seat on a harness the
+// Hive doesn't have, reads on the reviewer's and says so in an alert.
+func TestSeatModelFallsBack(t *testing.T) {
+	m, _, p, _ := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
+	h, model := m.Agents.Model("reviewer", p.Name)
+	alerts := func() string {
+		var b strings.Builder
+		for _, e := range m.C.J.Since(0) {
+			if e.Kind == "alert.raised" {
+				b.Write(e.Data)
+			}
+		}
+		return b.String()
+	}
+	cfg := m.C.WS.LoadConfig()
+	cfg.TribunalModels = []core.TribunalSeat{{Model: model}}
+	m.C.WS.SaveConfig(cfg)
+	if gh, gm, _ := m.seatModel(p, core.SeatSecurity); gh != h || gm != model || !strings.Contains(alerts(), "ordinary reviewer's model") {
+		t.Fatalf("security seat with no other model: %s/%s, alerts %s", gh, gm, alerts())
+	}
+	cfg.TribunalModels = []core.TribunalSeat{{Harness: "no-such-harness", Model: "other"}}
+	m.C.WS.SaveConfig(cfg)
+	if gh, gm, _ := m.seatModel(p, "panel-0"); gh != h || gm != model || !strings.Contains(alerts(), "no-such-harness") {
+		t.Fatalf("seat on a missing harness: %s/%s, alerts %s", gh, gm, alerts())
+	}
+}
+
+// Seat tries are counted per own diff: a head whose diff moved without a
+// send-back starts its seats fresh.
+func TestSeatTriesFollowTheDiff(t *testing.T) {
+	task := &Task{Diff: "a", SeatTries: map[string]int{"a#security": 2, "b#security": 1}}
+	task.setDiff("b")
+	if task.Diff != "b" || len(task.SeatTries) != 1 || task.SeatTries["b#security"] != 1 {
+		t.Fatalf("tries after the diff moved: %+v", task.SeatTries)
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 )
@@ -73,7 +74,8 @@ type Task struct {
 	Conflicts int        `json:"conflicts"`
 	Reviews   int        `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
-	// round, so a seat is asked again under a new run id.
+	// own diff, keyed by "diffID#seat". When the diff changes, the old
+	// tries are left behind and the seat starts fresh on the new diff.
 	SeatTries map[string]int    `json:"seat_tries,omitempty"`
 	Reviewer  string            `json:"reviewer,omitempty"`
 	Findings  string            `json:"findings,omitempty"`
@@ -144,6 +146,17 @@ func (t Task) PROf(mergeSHA string) core.PR {
 // Label is the title clipped for a heading, an issue, a PR or a message; the
 // agents get the whole ask.
 func (t Task) Label() string { return core.Clip(t.Title, 120) }
+
+// setDiff records the head's own diff; seat tries counted on another diff are
+// dropped, so a seat starts fresh on a diff that moved without a send-back.
+func (t *Task) setDiff(id string) {
+	for k := range t.SeatTries {
+		if !strings.HasPrefix(k, id+"#") {
+			delete(t.SeatTries, k)
+		}
+	}
+	t.Diff = id
+}
 
 // Entry is one step in a task's timeline.
 type Entry struct {
@@ -1177,7 +1190,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 	if err != nil {
 		return err
 	}
-	t.Diff = ch.DiffID
+	t.setDiff(ch.DiffID)
 	switch {
 	case len(ch.Protected) > 0 && !m.C.Effects.Approved("merge", p.Name, t.SHA):
 		t.Stage = StagePerson
@@ -2034,7 +2047,7 @@ func (m *Module) securityRead(t *Task, p core.Project, main string) (bool, error
 	if err != nil {
 		return true, err
 	}
-	t.Diff = ch.DiffID
+	t.setDiff(ch.DiffID)
 	if len(ch.Security) == 0 {
 		return false, nil
 	}
@@ -2043,14 +2056,14 @@ func (m *Module) securityRead(t *Task, p core.Project, main string) (bool, error
 			return false, nil
 		}
 		t.Reason = ""
-		return true, m.sendBack(t, p, fmt.Sprintf("The box's %s read %s and asked for fixes:\n\n%s", o.By, core.Short(o.SHA), orNone(o.Note)))
+		return true, m.sendBack(t, p, fmt.Sprintf("The box's %s read %s and asked for fixes:\n\n%s", o.By, core.Short(o.SHA), orNone(o.Note))+stillStands(t, o.SHA))
 	}
 	reads := m.C.Effects.SecurityReads(p.Name, ch.DiffID)
 	seats := []string{core.SeatSecurity}
 	if v, ok := reads[core.SeatSecurity]; ok {
 		if v.Verdict == "fix" {
 			t.Reason = ""
-			return true, m.sendBack(t, p, "The Hive's security reviewer asked for fixes on "+core.Short(v.SHA)+":\n\n"+verdictText(v))
+			return true, m.sendBack(t, p, "The Hive's security reviewer asked for fixes on "+core.Short(v.SHA)+":\n\n"+verdictText(v)+stillStands(t, v.SHA))
 		}
 		if len(ch.SecurityRoot) == 0 {
 			return false, nil
@@ -2061,13 +2074,14 @@ func (m *Module) securityRead(t *Task, p core.Project, main string) (bool, error
 			return false, nil
 		case fixes > core.PanelSeats/2:
 			var b []string
+			sha := t.SHA
 			for i := 0; i < core.PanelSeats; i++ {
 				if v := reads[core.PanelSeat(i)]; v.Verdict == "fix" {
-					b = append(b, verdictText(v))
+					b, sha = append(b, verdictText(v)), v.SHA
 				}
 			}
 			t.Reason = ""
-			return true, m.sendBack(t, p, fmt.Sprintf("The Hive's security panel asked for fixes on %s (%d of %d):\n\n%s", core.Short(t.SHA), fixes, core.PanelSeats, strings.Join(b, "\n\n")))
+			return true, m.sendBack(t, p, fmt.Sprintf("The Hive's security panel asked for fixes on %s (%d of %d):\n\n%s", core.Short(sha), fixes, core.PanelSeats, strings.Join(b, "\n\n"))+stillStands(t, sha))
 		}
 		seats = nil
 		for i := 0; i < core.PanelSeats; i++ {
@@ -2093,13 +2107,23 @@ func (m *Module) securityRead(t *Task, p core.Project, main string) (bool, error
 	return true, nil
 }
 
+// stillStands tells a worker whose head kept the own diff a security fix was
+// asked on that the fix still stands, so it isn't sent back on it again unawares.
+func stillStands(t *Task, sha string) string {
+	if sha == t.SHA {
+		return ""
+	}
+	return "\n\nThis head's own diff is the same as " + core.Short(sha) + "'s, which this fix was asked on, so it still stands; only a change to the diff gets a new read."
+}
+
 // seatRead starts the security seat's read-only run on t's head, or, once it
 // has ended, records its verdict on the own diff it read and says so on the
 // PR; read says a verdict was recorded. The run is named by the own diff, so
 // a head that only took main in finds the run already reading it. A seat that
 // gives no usable verdict three times stops the task.
 func (m *Module) seatRead(t *Task, p core.Project, ch core.Change, main, seat string) (read bool, err error) {
-	id := fmt.Sprintf("s-%s-%s-%s-%d", t.ID, core.Short(ch.DiffID), seat, t.SeatTries[seat])
+	diffKey := ch.DiffID + "#" + seat
+	id := fmt.Sprintf("s-%s-%s-%s-%d", t.ID, core.Short(ch.DiffID), seat, t.SeatTries[diffKey])
 	r, ok := m.C.Runs.Get(id)
 	if !ok {
 		return false, m.startSeat(t, p, ch, main, seat, id)
@@ -2114,7 +2138,7 @@ func (m *Module) seatRead(t *Task, p core.Project, ch core.Change, main, seat st
 		if t.SeatTries == nil {
 			t.SeatTries = map[string]int{}
 		}
-		if t.SeatTries[seat]++; t.SeatTries[seat] >= 3 {
+		if t.SeatTries[diffKey]++; t.SeatTries[diffKey] >= 3 {
 			m.giveUp(t, "the security seat "+seat+" gave no usable verdict three times")
 			return false, nil
 		}
@@ -2166,35 +2190,45 @@ func (m *Module) startSeat(t *Task, p core.Project, ch core.Change, main, seat, 
 // reviewer takes the first tribunal seat whose model isn't the ordinary
 // reviewer's, so the two reads come from different models; the panel spreads
 // over the tribunal seats as a tribunal does. With no tribunal seats, the
-// reviewer's own.
-func (m *Module) seatModel(p core.Project, seat string) (harness, model string, route []core.Pick) {
+// reviewer's own. A security seat left on the reviewer's model, or a seat on a
+// harness the Hive doesn't have (which sits on the reviewer's instead), says so
+// in an alert rather than failing three times and giving up on the task.
+func (m *Module) seatModel(p core.Project, seat string) (harnessName, model string, route []core.Pick) {
 	cfg := m.C.WS.LoadConfig()
 	if seat == core.SeatSecurity && len(cfg.Routed("security", p.Name)) > 0 {
 		route := cfg.Route("security", p.Name)
 		return route[0].Harness, route[0].Model, route
 	}
-	harness, model = m.Agents.Model("reviewer", p.Name)
-	seats := cfg.Seats(p.Name)
-	if len(seats) == 0 {
-		return harness, model, nil
-	}
-	pick := seats[0]
-	if seat == core.SeatSecurity {
+	harnessName, model = m.Agents.Model("reviewer", p.Name)
+	pick := core.TribunalSeat{Harness: harnessName, Model: model}
+	if seats := cfg.Seats(p.Name); seat == core.SeatSecurity {
 		for _, x := range seats {
 			if x.Model != model {
 				pick = x
 				break
 			}
 		}
-	} else {
+		if pick.Model == model {
+			m.seatAlert(p, "security", "The security read of "+p.Name+" runs on the ordinary reviewer's model ("+model+"), since no tribunal_models seat has another; add one so the two reads come from different models.")
+		}
+	} else if len(seats) > 0 {
 		var i int
 		fmt.Sscanf(seat, "panel-%d", &i)
 		pick = seats[i%len(seats)]
 	}
-	if pick.Harness != "" {
-		harness = pick.Harness
+	if pick.Harness == "" {
+		pick.Harness = harnessName
 	}
-	return harness, pick.Model, nil
+	if _, err := harness.Get(pick.Harness); err != nil {
+		m.seatAlert(p, seat, fmt.Sprintf("The %s seat of %s names harness %q, which the Hive doesn't have; it reads on the reviewer's (%s) instead.", seat, p.Name, pick.Harness, model))
+		return harnessName, model, nil
+	}
+	return pick.Harness, pick.Model, nil
+}
+
+// seatAlert raises a seat's setup alert; the newest replaces the last.
+func (m *Module) seatAlert(p core.Project, seat, text string) {
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "seat", "ref": "seat:" + p.Name + ":" + seat, "project": p.Name, "text": text})
 }
 
 // securityRules is what a security seat reads the change for.
