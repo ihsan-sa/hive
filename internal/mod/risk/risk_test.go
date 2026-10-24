@@ -830,7 +830,10 @@ func TestJoinMidStepHearsTheResult(t *testing.T) {
 	}) {
 		t.Fatal("the run that joined mid-step never heard the result")
 	}
-	if s, ok := g.m.Steps(late.ID); !ok || s != "- done: install a tool" {
+	// The run is told before the step is saved, so Steps may lag a moment.
+	var s string
+	var ok bool
+	if !eventually(func() bool { s, ok = g.m.Steps(late.ID); return ok && s == "- done: install a tool" }) {
 		t.Fatalf("steps: %q %v", s, ok)
 	}
 }
