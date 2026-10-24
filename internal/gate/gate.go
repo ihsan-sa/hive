@@ -239,6 +239,11 @@ func Run(cfg Config) (rep Report, err error) {
 			c.Repo = name
 			rep.Repos = append(rep.Repos, name)
 			c.Token = cfg.ChildToken
+			if !strings.Contains(c.RepoURL, "://") {
+				// A local org's repository is a folder: the child sees it
+				// (writable, to push) and nothing else of the org's.
+				c.RW = append(c.RW, c.RepoURL)
+			}
 		}
 	}
 

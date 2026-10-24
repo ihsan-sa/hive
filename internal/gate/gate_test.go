@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -110,6 +111,9 @@ func TestRunKeepsAndRollsBack(t *testing.T) {
 	good, bad := fakeBin(t, dir, "good", "v2", true), fakeBin(t, dir, "bad", "v2", true)
 	probe := func(score map[string]float64) ProbeFunc {
 		return func(cfg *Config, c *Child) Result {
+			if !slices.Contains(c.RW, c.RepoURL) {
+				t.Errorf("%s does not see its local org repository %s: %v", c.Name, c.RepoURL, c.RW)
+			}
 			return Result{Pass: true, Metrics: []Metric{{Name: "score", Value: score[filepath.Base(c.Bin)], Higher: true}}}
 		}
 	}
