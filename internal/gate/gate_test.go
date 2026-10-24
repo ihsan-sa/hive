@@ -2,6 +2,8 @@ package gate
 
 import (
 	"archive/zip"
+	"net/url"
+	"runtime"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,6 +79,7 @@ func fakeBin(t *testing.T, dir, name, version string, ok bool) string {
 }
 
 func TestInstallRollsBack(t *testing.T) {
+	unixOnly(t)
 	dir := t.TempDir()
 	target := fakeBin(t, dir, "hive", "v1", true)
 	if err := Install(fakeBin(t, dir, "good", "v2", true), target, "v2"); err != nil {
@@ -135,6 +138,16 @@ func TestRunKeepsAndRollsBack(t *testing.T) {
 	rep, lessons := run(bad, scores)
 	if rep.Verdict.Keep || !strings.Contains(lessons, "rolled back") || !strings.Contains(lessons, "score") {
 		t.Errorf("bad candidate: %+v lessons %q", rep.Verdict, lessons)
+	}
+}
+
+// unixOnly skips tests whose stand-in binaries are shell scripts. The gate
+// runs its children only under bubblewrap (Linux) or bare where allowed;
+// installs come only from bubblewrap runs.
+func unixOnly(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("stand-in binaries are shell scripts; the gate installs only from bubblewrap runs (Linux)")
 	}
 }
 
@@ -233,7 +246,7 @@ func TestBuildFetchesANewDependency(t *testing.T) {
 	}
 	zw.Close()
 	zf.Close()
-	t.Setenv("GOPROXY", "file://"+filepath.Join(dir, "proxy"))
+	t.Setenv("GOPROXY", (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(filepath.Join(dir, "proxy")), "/")}).String())
 	t.Setenv("GONOSUMDB", "example.com")
 	repo := filepath.Join(dir, "repo")
 	os.MkdirAll(filepath.Join(repo, "cmd", "hive"), 0o755)
@@ -416,6 +429,7 @@ func TestReachPolicy(t *testing.T) {
 
 // The evaluator runs a side's binary through a wrapper, as that side.
 func TestWrapper(t *testing.T) {
+	unixOnly(t)
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "hive")
 	os.WriteFile(bin, []byte("#!/bin/sh\necho \"$HOME|$1|$(pwd)\"\n"), 0o755)
@@ -434,6 +448,7 @@ func TestWrapper(t *testing.T) {
 }
 
 func TestInstallToChecks(t *testing.T) {
+	unixOnly(t)
 	dir := t.TempDir()
 	cur := fakeBin(t, dir, "hive", "v1", true)
 	cand := fakeBin(t, dir, "cand", "v2", true)

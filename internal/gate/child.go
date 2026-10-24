@@ -280,6 +280,15 @@ func (c *Child) Wrapper(path, bin string) error {
 		tail = q(bin) + ` "$@"`
 	}
 	if c.Sandbox == "bwrap" {
+		// The caller's folder, if the child sees it; else the child's root
+		// (the evaluator's own checkout, say, is not the child's to see).
+		b.WriteString("d=" + q(c.Root) + "\ncase \"$PWD/\" in\n")
+		for _, p := range append(append([]string{c.Root, c.Src}, c.RW...), c.RO...) {
+			if p != "" {
+				b.WriteString("\t" + q(strings.TrimSuffix(p, "/")+"/") + "*) d=$PWD ;;\n")
+			}
+		}
+		b.WriteString("esac\n")
 		b.WriteString("exec bwrap")
 		args := c.bwrapArgs("/")
 		args = args[:len(args)-3] // the --chdir and -- go last, with the caller's folder
@@ -293,7 +302,7 @@ func (c *Child) Wrapper(path, bin string) error {
 		for _, a := range args {
 			b.WriteString(" " + q(a))
 		}
-		b.WriteString(` --chdir "$PWD" -- ` + tail + "\n")
+		b.WriteString(` --chdir "$d" -- ` + tail + "\n")
 	} else {
 		b.WriteString("exec env")
 		for _, e := range env {

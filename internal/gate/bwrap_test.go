@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -144,6 +145,9 @@ kill $! 2>/dev/null; exit 0`
 // A deadline on a child kills everything it started, not only its first
 // process.
 func TestDeadlineKillsTheTree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("killing a child's tree is for Unix process groups and bubblewrap's pid namespace; the gate's children run on Linux")
+	}
 	c := &Child{Name: "candidate", Root: filepath.Join(t.TempDir(), "c"), Sandbox: testSandbox()}
 	c.Prepare()
 	if c.Sandbox == "bwrap" {
