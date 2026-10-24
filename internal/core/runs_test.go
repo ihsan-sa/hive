@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -581,5 +582,81 @@ func TestAMessageRacingABlockedEndWakesTheRun(t *testing.T) {
 	})
 	if n != 1 {
 		t.Fatalf("woken %d times", n)
+	}
+}
+
+// Send's wake and endTurn's can run at once; the run is woken once.
+func TestRacingWakesWakeOnce(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	if _, err := rs.Start(RunSpec{ID: "w", Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	rs.append("run.turn_started", turnStarted{ID: "w", Turn: 1})
+	rs.append("run.turn_ended", turnEnded{ID: "w", Turn: 1, Status: StatusBlocked, Reason: "asked a warden"})
+	rs.append("run.queued", runNote{ID: "w", Text: "[request x] the warden won't"})
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Go(func() { rs.wake("w") })
+	}
+	wg.Wait()
+	n := 0
+	j.Replay(func(e Event) {
+		if e.Kind == "run.reopened" {
+			n++
+		}
+	})
+	if n != 1 {
+		t.Fatalf("woken %d times", n)
+	}
+}
+
+// A persistent run (a lead) that ends blocked with a message waiting is woken
+// for it, as a worker is: it persists to answer messages, and the message
+// would otherwise sit on a run that takes no turns.
+func TestAPersistentRunEndingBlockedIsWokenByItsMessage(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	if _, err := rs.Start(RunSpec{ID: "lead", Harness: "fake", Persistent: true}); err != nil {
+		t.Fatal(err)
+	}
+	rs.append("run.turn_started", turnStarted{ID: "lead", Turn: 1})
+	if err := rs.Send("lead", "[w1 finished] done"); err != nil {
+		t.Fatal(err)
+	}
+	rs.append("run.turn_ended", turnEnded{ID: "lead", Turn: 1, Status: StatusBlocked, Reason: "finished blocked"})
+	rs.wake("lead") // endTurn's
+	if r, _ := rs.Get("lead"); r.Status != StatusIdle || len(r.Pending) != 1 {
+		t.Fatalf("the lead was left blocked with its message: %s, %d pending", r.Status, len(r.Pending))
+	}
+}
+
+// Holds says why turns wait, for status and the dashboard, until let go.
+func TestHoldsSayWhyTurnsWait(t *testing.T) {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, nil, func() []string { return nil })
+	rs.HoldFor("kb.self", "waiting: the knowledge base takes the Hive's own source")
+	rs.Hold("waiting: the Hive restarts")
+	if got := rs.Holds(); !slices.Equal(got, []string{"waiting: the knowledge base takes the Hive's own source", "waiting: the Hive restarts"}) {
+		t.Fatalf("holds %q", got)
+	}
+	rs.HoldFor("kb.self", "")
+	rs.Hold("")
+	if got := rs.Holds(); len(got) != 0 {
+		t.Fatalf("let go, still %q", got)
 	}
 }

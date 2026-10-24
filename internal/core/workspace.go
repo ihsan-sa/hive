@@ -370,17 +370,17 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := os.WriteFile(tmp, data, mode); err != nil {
 		return err
 	}
-	if err := renameOver(tmp, path); err != nil {
+	if err := RenameOver(tmp, path); err != nil {
 		os.Remove(tmp)
 		return err
 	}
 	return nil
 }
 
-// renameOver renames tmp onto path. Windows refuses to replace a file while
-// another handle has it open (a reader in this daemon, a scanner), so there
-// it tries again for a few seconds before giving up.
-func renameOver(tmp, path string) error {
+// RenameOver renames tmp onto path. Windows refuses to replace a file, or
+// move a folder, while another handle has it open (a reader in this daemon, a
+// scanner), so there it tries again for a few seconds before giving up.
+func RenameOver(tmp, path string) error {
 	err := os.Rename(tmp, path)
 	for i := 0; err != nil && runtime.GOOS == "windows" && i < 40; i++ {
 		time.Sleep(50 * time.Millisecond)

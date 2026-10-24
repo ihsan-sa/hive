@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -245,6 +246,19 @@ func (rs *Runs) HoldFor(who, why string) {
 		rs.holds = map[string]string{}
 	}
 	rs.holds[who] = why
+}
+
+// Holds says why no new turn starts, one reason per holder in holder order;
+// none when turns start.
+func (rs *Runs) Holds() []string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	who := slices.Sorted(maps.Keys(rs.holds))
+	why := make([]string, 0, len(who))
+	for _, w := range who {
+		why = append(why, rs.holds[w])
+	}
+	return why
 }
 
 // Live counts the turns whose process is running, and those starting.
