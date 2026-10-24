@@ -27,12 +27,14 @@ Done:
 - CI green on Windows, Ubuntu and macOS (vet, unit, e2e). Claude Code inside the WSL sandbox verified up to the API (invalid token → 401).
 - The knowledge base files every journal event under `kb/record/` (one file per task, request, run, chat, project) on its own, catches up after downtime and never files an event twice; `hive agent search` and `hive kb <words>` return the best-matching pieces, and the lead searches before it says what happened (unit `internal/mod/kb`).
 
+- The GitHub forge path live (`TestLiveGitHubPath`, 2026-10-24, org token): `ihsan-sa/hive` forked into Hive-RSI-Lab (https://github.com/Hive-RSI-Lab/hive), PR https://github.com/Hive-RSI-Lab/hive/pull/1 opened and merged at 7263b1b, release https://github.com/Hive-RSI-Lab/hive/releases/tag/probe-20261024-022121 cut at the merge. `Fork` now takes the owner to fork into.
+
 Not verified:
+- Issues, comments and an upstream PR from a fork (`FindPR` by `owner:branch`, `onUpstream`) on real GitHub; the live probe covers fork, PR, merge and release on the fork only.
 - The tribunal with real models under bubblewrap: `TestLiveTribunal` passed on the tower bare (three models approved, the majority ran the warden's script). Under bubblewrap no tribunal formed, because the ask was clipped at 120 characters and a sandboxed worker read the hidden fixture as already gone; both are fixed (the whole ask reaches the agents, and the worker role says outside paths are hidden), and the live probes now run sandboxed when the sandbox works. Re-run under bubblewrap. Injection resistance by a real model is untested.
 - The bubblewrap path live: `TestProbeBothPaths` (non-short, `internal/sandbox`) runs `hive sandbox-probe` under each path, but skips both inside a nested sandbox. Run it on a stock Ubuntu host.
 - Approved steps on Windows: `execute` runs them with Git for Windows' `sh`, but only the three-system CI run exercises it, and a timeout there ends `sh` and not its children.
 - Live agents with real Claude Code: the first-hour probes (`TestLiveAskLands`, `TestLiveModuleLifecycle`, `TestLiveImproveSweep`) are written but haven't run; run `tests/live.sh` on the tower. Sandboxed live runs read a short-lived token from Claude Code's credential file at run time; not exercised.
-- The GitHub forge path (gh issue/PR/merge) end to end; only the local forge is exercised.
 - Self-update from a real release asset over the GitHub API on a person's machine (the one-line install was run once, on v0.1.0).
 - macOS Seatbelt sandbox; native Linux host (same namespace code as WSL).
 - Autostart registration on a real account (the tmux test stubs systemctl and loginctl).
