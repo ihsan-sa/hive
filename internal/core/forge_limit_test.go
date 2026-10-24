@@ -51,6 +51,7 @@ func TestGhWrites(t *testing.T) {
 		"api repos/o/r/issues/3/comments --paginate -q .":    false,
 		"api -X PATCH repos/o/r/issues/comments/9 -f body=x": true,
 		"api repos/o/r/issues/3/comments -f body=x":          true,
+		"run rerun 7 --failed -R o/r":                        true,
 	} {
 		if got := ghWrites(strings.Fields(args)); got != want {
 			t.Errorf("%s: writes %v, want %v", args, got, want)
@@ -181,5 +182,48 @@ func TestLocalStatusCommentEdits(t *testing.T) {
 	l.StatusComment("o/r", 3, "<!-- s -->", "round 2")
 	if c := l.Comments("o/r", 3); len(c) != 2 || !strings.HasPrefix(c[1], "round 2") {
 		t.Fatalf("comments %q", c)
+	}
+}
+
+// RerunFailed re-runs only the finished runs on the head that failed, timed
+// out or were cancelled, each with --failed under the repo's own token.
+func TestRerunFailedRunsOnlyFailedRuns(t *testing.T) {
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		if args[0] == "api" {
+			return `[{"id":1,"status":"completed","conclusion":"failure"},{"id":2,"status":"completed","conclusion":"success"},
+				{"id":3,"status":"in_progress","conclusion":""},{"id":4,"status":"completed","conclusion":"cancelled"}]`, "", nil
+		}
+		return "", "", nil
+	})
+	n, err := GitHub{}.RerunFailed("o/r", "abc")
+	if err != nil || n != 2 {
+		t.Fatalf("n %d, err %v", n, err)
+	}
+	var reran []string
+	for _, c := range *calls {
+		if c[0] == "run" {
+			reran = append(reran, strings.Join(c, " "))
+		}
+	}
+	if strings.Join(reran, "; ") != "run rerun 1 --failed -R o/r; run rerun 4 --failed -R o/r" {
+		t.Fatalf("re-ran %q", reran)
+	}
+}
+
+// A re-run's attempt still queued has no start yet; its larger id makes it
+// the one that counts, not the failed attempt before it.
+func TestChecksNewestAttemptByID(t *testing.T) {
+	stubGH(t, func(args []string) (string, string, error) {
+		switch {
+		case strings.Contains(args[1], "check-runs"):
+			return `{"check_runs":[{"id":5,"name":"test","status":"completed","conclusion":"failure","started_at":"2026-10-24T10:00:00Z"},{"id":9,"name":"test","status":"queued"}]}`, "", nil
+		case strings.HasSuffix(args[1], "/status"):
+			return `{"statuses":[]}`, "", nil
+		}
+		return `{"check_suites":[]}`, "", nil
+	})
+	runs, err := GitHub{}.Checks("o/r", "abc")
+	if err != nil || len(runs) != 1 || runs[0].State != CheckPending {
+		t.Fatalf("runs %+v, err %v", runs, err)
 	}
 }

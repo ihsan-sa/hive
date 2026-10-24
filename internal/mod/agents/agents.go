@@ -40,32 +40,23 @@ func (a *Agents) System(role, project string) string {
 	return b.String()
 }
 
-// Model picks the model for a role in a project.
+// Model picks the harness and model for a role in a project: the first on
+// its route (core.Config.Route).
 func (a *Agents) Model(role, project string) (harness, model string) {
-	cfg := a.C.WS.LoadConfig()
-	harness, model = cfg.Harness, cfg.Model
-	if role == "lead" && cfg.LeadModel != "" {
-		model = cfg.LeadModel // a project's own model, below, is more specific
-	}
-	if ps, ok := cfg.Projects[project]; ok {
-		if ps.Harness != "" {
-			harness = ps.Harness
-		}
-		if ps.Model != "" {
-			model = ps.Model
-		}
-	}
-	if role == "reviewer" && cfg.ReviewerModel != "" {
-		model = cfg.ReviewerModel
-	}
-	return harness, model
+	p := a.Route(role, project)[0]
+	return p.Harness, p.Model
+}
+
+// Route is the picks a run of role in project goes on, in fallback order.
+func (a *Agents) Route(role, project string) []core.Pick {
+	return a.C.WS.LoadConfig().Route(role, project)
 }
 
 // Spec builds a run spec with the role's system prompt, grants and model.
 func (a *Agents) Spec(id, role, project, checkout, brief string) core.RunSpec {
-	h, m := a.Model(role, project)
-	s := core.RunSpec{ID: id, Role: role, Project: project, Checkout: checkout, Harness: h, Model: m,
-		System: a.System(role, project), Brief: brief}
+	route := a.Route(role, project)
+	s := core.RunSpec{ID: id, Role: role, Project: project, Checkout: checkout, Harness: route[0].Harness, Model: route[0].Model,
+		System: a.System(role, project), Brief: brief, Route: route}
 	if p, ok := a.C.Projects.Get(project); ok && p.Isolated {
 		s.Isolated = true
 		s.Modules = a.Mod.Granted(project)
@@ -106,6 +97,9 @@ func (a *Agents) Spawner(parent core.Run, role, project, brief, model string) (c
 	}
 	if model != "" {
 		s.Model = model
+		if p, err := a.C.WS.LoadConfig().Pick(model); err == nil {
+			s.Harness, s.Model = p.Harness, p.Model // a named model runs on the open harness
+		}
 	}
 	return s, nil
 }

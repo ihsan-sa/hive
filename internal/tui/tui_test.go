@@ -925,3 +925,120 @@ func TestPlanUsageEscapesFeedNames(t *testing.T) {
 		}
 	}
 }
+
+// A role's route is set from a pick-list, never typed: each known model can
+// be added at the end or removed, and clear gives the role back its model
+// settings.
+func TestRouteIsAPickList(t *testing.T) {
+	c := core.DefaultConfig()
+	c.Models = map[string]core.OpenModel{"kimi": {Endpoint: "https://api.moonshot.ai/v1", Model: "kimi-k2-0905-preview", Key: true}}
+	m := testModel(80, 24)
+	m.st.Config = c
+	m.section = secSettings
+	for i, s := range m.settings() {
+		if s.key == "route:worker" {
+			m.setSel = i
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	cur := m.settings()[m.setSel]
+	if !m.picking || slices.Contains(cur.choices, custom) || cur.choices[len(cur.choices)-1] != "clear" ||
+		!slices.Contains(cur.choices, "remove claude:opus") || !slices.Contains(cur.choices, "add kimi") || !slices.Contains(cur.choices, "add claude:sonnet") {
+		t.Fatalf("picking %v, choices %q", m.picking, cur.choices)
+	}
+	c = routeEdit(c, "worker", "add kimi")
+	if !slices.Equal(c.Routes["worker"], []string{"claude:opus", "kimi"}) {
+		t.Fatalf("add after the model it runs on now: %v", c.Routes["worker"])
+	}
+	c = routeEdit(c, "worker", "remove claude:opus")
+	if !slices.Equal(c.Routes["worker"], []string{"kimi"}) || c.Check() != nil {
+		t.Fatalf("remove: %v (%v)", c.Routes["worker"], c.Check())
+	}
+	if ch := routeChoices(c, "worker"); !slices.Contains(ch, "remove kimi") || !slices.Contains(ch, "add claude:opus") {
+		t.Fatalf("choices after: %q", ch)
+	}
+	c = routeEdit(c, "fallback", "add kimi")
+	if !slices.Equal(c.Routes["fallback"], []string{"kimi"}) {
+		t.Fatalf("fallback starts empty: %v", c.Routes["fallback"])
+	}
+	c = routeEdit(c, "worker", "clear")
+	if _, ok := c.Routes["worker"]; ok || c.Route("worker", "")[0] != (core.Pick{Harness: "claude", Model: "opus"}) {
+		t.Fatalf("clear: %v", c.Routes)
+	}
+}
+
+// A setting shows its new value the moment it's changed, not after the save
+// and the next state poll come back.
+func TestSettingChangesAtOnce(t *testing.T) {
+	m := testModel(80, 24)
+	m.section = secSettings
+	for i, s := range m.settings() {
+		if s.key == "auto_update" {
+			m.setSel = i
+		}
+	}
+	was := m.st.Config.AutoUpdate
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil || m.st.Config.AutoUpdate == was {
+		t.Fatal("auto-update didn't change on enter")
+	}
+	for i, s := range m.settings() {
+		if s.key == "lead_model" {
+			m.setSel = i
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.st.Config.LeadModel != modelChoices(m.st.Config)[1] {
+		t.Fatalf("lead model %q after picking %q", m.st.Config.LeadModel, modelChoices(m.st.Config)[1])
+	}
+}
+
+// Sending a new thread leaves it in the channel; the person opens threads.
+func TestSendingDoesNotOpenTheThread(t *testing.T) {
+	m := testModel(80, 24)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	focus := m.focus
+	m.Update(sentMsg{out: outMsg{chat: "lead", text: "hi"}, msg: chat.Message{ID: "9", Thread: "9", From: "person", Name: "you", Text: "hi", At: time.Now()}})
+	if m.thread != "" || m.focus != focus {
+		t.Fatalf("sending opened thread %q (focus %d, was %d)", m.thread, m.focus, focus)
+	}
+}
+
+// Space folds and unfolds the selected thread's replies.
+func TestSpaceFoldsTheSelectedThread(t *testing.T) {
+	m := testModel(100, 60)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp}) // from the new-thread box onto the last thread
+	if m.threadSel != 1 {
+		t.Fatalf("selected thread %d, want 1", m.threadSel)
+	}
+	reply := "pull/3"
+	if !strings.Contains(m.View(), reply) {
+		t.Fatal("the selected last thread starts folded")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	if strings.Contains(m.View(), reply) {
+		t.Fatal("space didn't fold the selected thread")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	if !strings.Contains(m.View(), reply) {
+		t.Fatal("space didn't unfold the selected thread")
+	}
+}
+
+// Once the restarted Hive answers, the control center drops "isn't answering"
+// and shows the new version.
+func TestReconnectShowsTheNewVersion(t *testing.T) {
+	m := testModel(100, 24)
+	m.Update(stateMsg{err: fmt.Errorf("dial tcp: connection refused")})
+	if !strings.Contains(m.View(), "isn't answering") {
+		t.Fatal("a failed poll doesn't say so")
+	}
+	st := sample()
+	st.Version = "v9.9.9"
+	m.Update(stateMsg{st: st})
+	if v := m.View(); strings.Contains(v, "isn't answering") || m.st.Version != "v9.9.9" {
+		t.Fatalf("after reconnecting (version %s):\n%s", m.st.Version, v)
+	}
+}

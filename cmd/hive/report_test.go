@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -65,6 +66,9 @@ func TestInstallersAskTheQuestion(t *testing.T) {
 // The installer's question: Enter and no terminal are kept as no, y as yes,
 // and an install already answered isn't asked.
 func TestInstallerShareAnswer(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("install.sh is the Linux and macOS installer; Windows runs install.ps1")
+	}
 	sh, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skip("no sh")

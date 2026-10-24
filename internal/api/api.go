@@ -77,6 +77,7 @@ type ProjectView struct {
 	Tasks  []work.Task           `json:"tasks"`
 	Scores []improve.Measurement `json:"scores"`
 	Best   *float64              `json:"best,omitempty"`
+	Hold   *work.MergeHold       `json:"hold,omitempty"` // the person's hold on its merges
 }
 
 // Updated is the update that brought in this version, with its release notes;
@@ -183,6 +184,14 @@ func (c *Client) Do(method, path string, body, out any) error {
 	info := c.cur
 	c.mu.Unlock()
 	err, from := c.do(info, method, path, body, out), info.PID
+	if errors.Is(err, errUnauthorized) {
+		// A new daemon on the old port has a new token: daemon.json names it.
+		// Refused, the request did nothing, so sending it again is safe.
+		if next, e := readInfo(c.ws); e == nil && !next.Restarting && next.Token != info.Token {
+			info = next
+			err = c.do(info, method, path, body, out)
+		}
+	}
 	for end := time.Now().Add(restartWait); dialFailed(err) && time.Now().Before(end); {
 		next, e := readInfo(c.ws)
 		if e != nil || (!next.Restarting && next.PID == from) {
@@ -199,6 +208,8 @@ func (c *Client) Do(method, path string, body, out any) error {
 	}
 	return err
 }
+
+var errUnauthorized = errors.New("unauthorized")
 
 func dialFailed(err error) bool {
 	var op *net.OpError
@@ -223,6 +234,9 @@ func (c *Client) do(info DaemonInfo, method, path string, body, out any) error {
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusUnauthorized {
+		return errUnauthorized
+	}
 	if resp.StatusCode >= 300 {
 		var e struct{ Error string }
 		if json.Unmarshal(raw, &e) == nil && e.Error != "" {

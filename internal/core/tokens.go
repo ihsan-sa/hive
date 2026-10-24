@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -86,6 +87,8 @@ func (t *Tokens) AgentEnv(l Login, home string) ([]string, error) {
 	switch l.Harness {
 	case "fake":
 		return nil, nil
+	case "open":
+		return t.ws.openEnv(l.Name)
 	case "codex":
 		exp, err := writeCodexAccess(l.Dir, home)
 		if err == nil && time.Until(exp) < 15*time.Minute {
@@ -240,4 +243,43 @@ func (t *Tokens) refresh(l Login) {
 	cmd.Dir = os.TempDir()
 	cmd.Stdin = nil
 	_ = cmd.Run()
+}
+
+// OpenKey is where the API key of the named open model is kept: under
+// .hive/logins, which no run sees.
+func (w Workspace) OpenKey(name string) string {
+	return filepath.Join(w.LoginsDir("open"), filepath.Base(name)+".key")
+}
+
+// SaveOpenKey stores a model's API key, readable only by the person.
+func (w Workspace) SaveOpenKey(name, key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("an empty key")
+	}
+	if err := os.MkdirAll(w.LoginsDir("open"), 0o700); err != nil {
+		return err
+	}
+	return WriteFileAtomic(w.OpenKey(name), []byte(key+"\n"), 0o600)
+}
+
+// openEnv is what the open harness needs for model name: its endpoint, the
+// id the endpoint knows, how much it holds, and its key if it has one.
+func (w Workspace) openEnv(name string) ([]string, error) {
+	m, ok := w.LoadConfig().Models[name]
+	if !ok {
+		return nil, fmt.Errorf("no model %q in models (.hive/config.json)", name)
+	}
+	env := []string{"HIVE_OPEN_ENDPOINT=" + m.Endpoint, "HIVE_OPEN_MODEL=" + m.Model}
+	if m.Context > 0 {
+		env = append(env, fmt.Sprintf("HIVE_OPEN_CONTEXT=%d", m.Context))
+	}
+	raw, err := os.ReadFile(w.OpenKey(name))
+	switch {
+	case err == nil && strings.TrimSpace(string(raw)) != "":
+		env = append(env, "HIVE_OPEN_KEY="+strings.TrimSpace(string(raw)))
+	case m.Key:
+		return nil, fmt.Errorf("model %s needs an API key: the person stores it with `%s model key %s`", name, Cmd, name)
+	}
+	return env, nil
 }

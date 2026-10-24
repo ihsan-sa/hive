@@ -529,7 +529,14 @@ func TestGateAndLoop(t *testing.T) {
 	if !commented {
 		t.Fatal("the original PR has no comment saying why it was reverted")
 	}
-	lessons, _ := core.Git(h.ws.Project("gate"), "show", "origin/main:.hive/lessons.md")
+	// The task shows done once the forge merged; the clone's origin/main may
+	// not have fetched that yet (seen on Windows), so fetch until it has.
+	var lessons string
+	h.wait("the clone to fetch the revert", minute, func(api.State) bool {
+		core.Git(h.ws.Project("gate"), "fetch", "-q", "origin")
+		lessons, _ = core.Git(h.ws.Project("gate"), "show", "origin/main:.hive/lessons.md")
+		return strings.Contains(lessons, "was reverted")
+	})
 	if !strings.Contains(lessons, "was reverted") {
 		t.Fatalf("lessons on main: %q", lessons)
 	}
@@ -641,6 +648,47 @@ func TestReviewReadsTheRules(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("%d follow-ups, want 1", n)
 	}
+}
+
+// A person's hold on merges stops the Hive's own review follow-up: it passes
+// its gate and waits as a ready PR, and merges once the hold is lifted. The
+// change the hold names merges under it.
+func TestHoldStopsFollowUps(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/held", map[string]string{
+		".hive/project.json": `{"test": "true"}`,
+		".hive/goals.md":     "# Goals\n",
+		"docs/REVIEW.md":     "# Review\n\nFAKE:reviewadvice\n",
+		".hive/lessons.md":   "# Lessons\n\n",
+	})
+	h.post("/api/project", map[string]any{"name": "held", "repo": "me/held"}, nil)
+	h.post("/api/hold", map[string]any{"project": "held", "why": "nothing merges until the next release"}, nil)
+	h.post("/api/ask", map[string]string{"project": "held", "title": "add a helper"}, nil)
+	held := func(title string) func(api.State) bool {
+		return func(st api.State) bool {
+			tk, ok := task(st, "held", title)
+			return ok && tk.Stage == work.StageMerging && strings.Contains(tk.Reason, "merges held")
+		}
+	}
+	st := h.wait("the ask to wait on the hold", 3*minute, held("add a helper"))
+	tk, _ := task(st, "held", "add a helper")
+	h.post("/api/hold", map[string]any{"project": "held", "why": "only the helper may merge", "only": []int{tk.PR.Number}}, nil)
+	h.wait("the named PR to merge under the hold", 3*minute, taskStage("held", "add a helper", work.StageDone))
+	follow := "Follow up the review of add a helper"
+	st = h.wait("the follow-up to wait on the hold", 3*minute, held(follow))
+	for _, p := range st.Projects {
+		if p.Name == "held" && (p.Hold == nil || !strings.Contains(p.Hold.Text(), "only the helper")) {
+			t.Fatalf("the state doesn't show the hold: %+v", p.Hold)
+		}
+	}
+	time.Sleep(3 * time.Second) // a few more ticks, and it still waits
+	st = h.state()
+	if fu, _ := task(st, "held", follow); fu.Stage != work.StageMerging || fu.MergeSHA != "" {
+		t.Fatalf("the follow-up moved under the hold: %s %s", fu.Stage, fu.MergeSHA)
+	}
+	h.post("/api/hold", map[string]any{"project": "held", "lift": true, "why": "the release is out"}, nil)
+	h.wait("the follow-up to merge once lifted", 3*minute, taskStage("held", follow, work.StageDone))
 }
 
 // A worker isn't blamed for a failure main has too: its change waits with no
