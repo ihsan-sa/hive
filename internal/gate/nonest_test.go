@@ -2,10 +2,12 @@ package gate
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeBwrap is a bwrap that records how it was started (from inside one of
@@ -38,7 +40,14 @@ func TestNoSandboxInsideASandbox(t *testing.T) {
 		t.Skip("the gate's sandbox is bubblewrap, on Linux")
 	}
 	hive := builtHive(t)
-	dir := t.TempDir()
+	// Not t.TempDir: with a stand-in bwrap there is no pid namespace to end a
+	// side's daemon and agents with their sandbox, so for a moment after Run
+	// returns they may still write here. Remove it once they have gone.
+	dir, err := os.MkdirTemp("", "gate-nonest-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { removeAll(dir) })
 	bin, log := filepath.Join(dir, "bin"), filepath.Join(dir, "bwrap.log")
 	os.MkdirAll(bin, 0o755)
 	os.WriteFile(filepath.Join(bin, "bwrap"), []byte(strings.ReplaceAll(fakeBwrap, "LOG", "'"+log+"'")), 0o755)
@@ -74,5 +83,17 @@ func TestNoSandboxInsideASandbox(t *testing.T) {
 		if !strings.HasPrefix(l, "inside= ") {
 			t.Errorf("a sandbox was started from inside a sandbox: %.300s", l)
 		}
+	}
+}
+
+// removeAll removes dir, making it writable first and retrying for a while
+// while something that outlived its sandbox still writes into it.
+func removeAll(dir string) {
+	for i := 0; i < 50; i++ {
+		exec.Command("chmod", "-R", "u+w", dir).Run()
+		if os.RemoveAll(dir) == nil {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
