@@ -233,8 +233,14 @@ func leadAsk(ask, system string) (string, error) {
 		}
 		return "Asked for installing it.", nil
 	}
+	if m := replyWord.FindStringSubmatch(ask); m != nil {
+		return m[1], nil
+	}
+	if m := namedRepo.FindStringSubmatch(ask); m != nil {
+		return m[1] + " has " + strings.Join(repoFiles(m[1]), ", ") + ".", nil
+	}
 	if strings.Contains(strings.ToLower(ask), "what's in the repo") {
-		return "The repo has " + strings.Join(repoFiles(), ", ") + ".", nil
+		return "The repo has " + strings.Join(repoFiles(os.Getenv("HIVE_PROJECT")), ", ") + ".", nil
 	}
 	if f := strings.Fields(ask); len(f) == 2 && f[0] == "recheck" {
 		out, err := call("recheck", map[string]string{"task": f[1]}, time.Minute)
@@ -395,13 +401,17 @@ func projectNames() ([]string, error) {
 	return names, nil
 }
 
-// repoFiles lists what a lead sees of its project: its checkout, brought to
+// replyWord asks for one word back; namedRepo asks the workspace lead about one project.
+var replyWord = regexp.MustCompile(`(?i)reply with the word (\w+)`)
+var namedRepo = regexp.MustCompile(`(?i)what's in the ([\w-]+) repo`)
+
+// repoFiles lists what a lead sees of a project: its checkout, brought to
 // main from $HIVE_RUN/main.bundle, when it has one (an isolated project's
 // lead), otherwise the project's clone in $HIVE_PROJECTS.
-func repoFiles() []string {
+func repoFiles(project string) []string {
 	dir := "."
 	if _, err := os.Stat(".git"); err != nil {
-		dir = filepath.Join(os.Getenv("HIVE_PROJECTS"), os.Getenv("HIVE_PROJECT"))
+		dir = filepath.Join(os.Getenv("HIVE_PROJECTS"), project)
 	} else if _, err := run("git", "fetch", "-q", filepath.Join(os.Getenv("HIVE_RUN"), "main.bundle"), "main"); err == nil {
 		run("git", "checkout", "-q", "-f", "FETCH_HEAD")
 	}

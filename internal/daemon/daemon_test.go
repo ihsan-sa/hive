@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -59,6 +61,32 @@ func TestRestartRunsNewBinary(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("the restart ran %q, want the new binary with %q", got, want)
+	}
+}
+
+// A command run while a restart hands over waits for the new daemon instead of
+// starting one of its own, which would run two daemons on one workspace.
+func TestStartWaitsOutAHandOff(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	gone := exec.Command("go", "version")
+	gone.Run() // a pid that has exited, standing in for the old daemon
+	write := func(info api.DaemonInfo) {
+		raw, _ := json.Marshal(info)
+		os.MkdirAll(ws.Private(), 0o700)
+		if err := core.WriteFileAtomic(ws.DaemonFile(), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(api.DaemonInfo{PID: gone.Process.Pid, Port: 1, Restarting: true})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"version":"new"}`) }))
+	defer srv.Close()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	defer func(f func() (string, error)) { executable = f }(executable)
+	executable = func() (string, error) { return "", errors.New("started a daemon of its own") }
+	go func() { time.Sleep(500 * time.Millisecond); write(api.DaemonInfo{PID: os.Getpid(), Port: port, Token: "t"}) }()
+	c, err := Start(ws)
+	if err != nil || c.Info.Port != port {
+		t.Fatalf("Start during a hand-off: %+v, %v; want the new daemon", c, err)
 	}
 }
 
