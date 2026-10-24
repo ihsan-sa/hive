@@ -138,6 +138,23 @@ func (p Plan) Parked(now time.Time) bool {
 	return p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now)
 }
 
+// Used is how much of its plan the login has used: the fullest of its usage
+// windows still running at now. Claude reports the windows' figures apart
+// from the top-level one, which it leaves at 0, and a window whose reset has
+// passed has started again from nothing.
+func (p Plan) Used(now time.Time) float64 {
+	var u float64
+	if p.Limit.ResetsAt.After(now) {
+		u = p.Limit.Utilization
+	}
+	for _, w := range p.Limit.Windows {
+		if w.ResetsAt.After(now) {
+			u = max(u, w.Utilization)
+		}
+	}
+	return u
+}
+
 // TokenSource lists a harness's logins and hands out a login's short-lived credential.
 type TokenSource interface {
 	Logins(h string) []Login
@@ -601,14 +618,15 @@ func (rs *Runs) Plans() []Plan {
 }
 
 // pickLogin chooses the login for a run's next turn: of those not parked at
-// their usage limit, the least used, the machine's own first on a tie. A
+// their usage limit, the least used (Plan.Used), the machine's own first on a
+// tie. A
 // bare run whose machine login has no credential file the Hive can read gets
 // no token, so the harness's own login on the host still works.
 func (rs *Runs) pickLogin(h, home string, bare bool) (Login, []string, error) {
 	logins := rs.tokens.Logins(h)
 	now := time.Now()
 	rs.mu.Lock()
-	use := func(l Login) float64 { return rs.plans[l.Key()].Limit.Utilization }
+	use := func(l Login) float64 { return rs.plans[l.Key()].Used(now) }
 	var open []Login
 	for _, l := range logins {
 		if !rs.plans[l.Key()].Parked(now) {
