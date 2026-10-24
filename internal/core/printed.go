@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
@@ -133,8 +134,10 @@ func printedNudge(text string) string {
 }
 
 // printedFinish is the finish a successful turn's answer printed instead of
-// running, when it would pass the finish op's checks.
-func printedFinish(res *harness.Result) (Finish, bool) {
+// running, when it would pass the finish op's checks. An account that only
+// names the model or the role (as gpt-oss-120b's did) gives way to --tested,
+// and the account says the Hive ran it, for the reviewer and the next agent.
+func printedFinish(r Run, res *harness.Result) (Finish, bool) {
 	if res == nil || res.IsError {
 		return Finish{}, false
 	}
@@ -143,5 +146,12 @@ func printedFinish(res *harness.Result) (Finish, bool) {
 		return Finish{}, false
 	}
 	f := Finish{Status: args["status"], Account: args["account"], Tested: args["tested"], Unsure: args["unsure"]}
-	return f, f.check() == nil
+	if a := strings.TrimSpace(f.Account); f.Tested != "" && slices.ContainsFunc([]string{r.Model, r.Role, HarnessName(r.Harness)}, func(n string) bool { return n != "" && strings.EqualFold(a, n) }) {
+		f.Account = f.Tested
+	}
+	if f.check() != nil {
+		return Finish{}, false
+	}
+	f.Unsure = strings.TrimSpace(f.Unsure + "\n(The agent printed this finish as its answer instead of running it; the Hive ran it for it.)")
+	return f, true
 }

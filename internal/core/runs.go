@@ -1079,9 +1079,11 @@ func (rs *Runs) endTurn(r Run) {
 		rs.dropOpenKey(r.ID)
 	}
 	cur, _ := rs.Get(r.ID)
-	if f, ok := printedFinish(tl.Result); ok && cur.Finish == nil && !cur.StopAsked && !limited && dropErr == nil {
-		// It wrote its finish as its answer instead of running it: the Hive
-		// runs it on its behalf, with the same flags and the same checks.
+	finishes := r.Role == "worker" && !r.Persistent && r.Schema == "" && !r.ReadOnly && !r.OneTurn
+	if f, ok := printedFinish(r, tl.Result); ok && finishes && cur.Finish == nil && !cur.StopAsked && !limited && dropErr == nil {
+		// A worker wrote its finish as its answer instead of running it: the
+		// Hive runs it on its behalf, with the same flags and the same checks.
+		// Only workers: a lead or chat agent showing the command is explaining.
 		rs.append("run.finish", struct {
 			ID      string `json:"id"`
 			Finish  Finish `json:"finish"`
