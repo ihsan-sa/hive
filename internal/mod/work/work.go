@@ -87,22 +87,26 @@ type Task struct {
 	Model string `json:"model,omitempty"`
 	// A checkpoint is the running worker's commit going through the gate while
 	// it keeps working; once merged, Base moves to it and Banked counts it.
-	Checkpoint string    `json:"checkpoint,omitempty"`
-	Banked     int       `json:"banked,omitempty"`
-	Banks      []Bank    `json:"banks,omitempty"`   // each merged checkpoint, oldest first
-	Seen       string    `json:"seen,omitempty"`    // the worker checkout's reflog when last looked at
-	Tried      string    `json:"tried,omitempty"`   // the newest commit already weighed as a checkpoint
-	NoBank     string    `json:"no_bank,omitempty"` // why no more checkpoints are opened for this task
-	Failures   int       `json:"failures"`
-	CloseFail  int       `json:"close_fail,omitempty"` // failed tries to close the issue
-	Attempt    int       `json:"attempt"`              // fresh workers handed this task
-	Retry      time.Time `json:"retry,omitempty"`
-	IssueOpen  bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
-	Noted      string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
-	NotedDiff  string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
-	Log        []Entry   `json:"log,omitempty"`
-	Created    time.Time `json:"created"`
-	Updated    time.Time `json:"updated"`
+	Checkpoint string `json:"checkpoint,omitempty"`
+	Banked     int    `json:"banked,omitempty"`
+	Banks      []Bank `json:"banks,omitempty"`   // each merged checkpoint, oldest first
+	Seen       string `json:"seen,omitempty"`    // the worker checkout's reflog when last looked at
+	Tried      string `json:"tried,omitempty"`   // the newest commit already weighed as a checkpoint
+	NoBank     string `json:"no_bank,omitempty"` // why no more checkpoints are opened for this task
+	// Reruns counts the re-runs of the forge's failed checks asked on each
+	// head (rerun-checks), capped at rerunsPerHead; RerunAt is the newest.
+	Reruns    map[string]int `json:"reruns,omitempty"`
+	RerunAt   time.Time      `json:"rerun_at,omitempty"`
+	Failures  int            `json:"failures"`
+	CloseFail int            `json:"close_fail,omitempty"` // failed tries to close the issue
+	Attempt   int            `json:"attempt"`              // fresh workers handed this task
+	Retry     time.Time      `json:"retry,omitempty"`
+	IssueOpen bool           `json:"issue_open,omitempty"` // done, but its issue is still to close
+	Noted     string         `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
+	NotedDiff string         `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
+	Log       []Entry        `json:"log,omitempty"`
+	Created   time.Time      `json:"created"`
+	Updated   time.Time      `json:"updated"`
 }
 
 // A Bank is a merged checkpoint: its pull request and the merge on main.
@@ -222,6 +226,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.J.Subscribe(apply)
 	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project"}`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: []string{"lead"}, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); with back, its worker gets that text and works on`, Fn: m.opRecheck})
+	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: []string{"worker", "lead"}, Help: `{"task"} (a worker's own task by default) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
 	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: []string{"lead"}, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids]} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed), hold keeps one waiting until released. A started worker is never stopped`, Fn: m.opQueue})
 	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Roles: []string{"lead"}, Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (follow-ups and reverts included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs still pass their gate and wait ready`, Fn: m.opHold})
 	c.Person.Handle("merge", m.onPersonMerge)
@@ -1037,8 +1042,9 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 		m.status(t, p, pr.Number, fmt.Sprintf("New commit %s after round %d.", core.Short(sha), t.Round))
 	}
 	// A worker that finishes again on the same commit thinks something outside
-	// it changed (a tool installed, an answer), so its tests run again.
-	t.PR, t.Recheck, t.SHA, t.Stage, t.Failures = pr, t.SHA == sha, sha, StageTesting, 0
+	// it changed (a tool installed, an answer), so its tests run again; one
+	// that had the forge's checks re-run there waits for those instead.
+	t.PR, t.Recheck, t.SHA, t.Stage, t.Failures = pr, t.SHA == sha && t.Reruns[sha] == 0, sha, StageTesting, 0
 	m.save(t, fmt.Sprintf("pushed %s, PR #%d", core.Short(sha), pr.Number))
 	return nil
 }
@@ -1613,6 +1619,10 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	}
 	req := m.C.Effects.RequiredChecks(p, main)
 	st, which := core.ChecksState(runs, req)
+	if (st == core.CheckFail || st == core.CheckCantStart) && rerunning(t) {
+		m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+core.CheckNames(which)+")")
+		return true, nil
+	}
 	var shared []string
 	if st == core.CheckFail {
 		mainRuns, err := m.C.Effects.Forge.Checks(p.Repo, main)
@@ -1641,7 +1651,11 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		return true, nil
 	case core.CheckFail:
 		t.Reason = ""
-		return true, m.sendBack(t, p, "The forge's checks failed on your commit "+core.Short(t.SHA)+": "+checkDetail(which)+onMain)
+		hint := ""
+		if t.Reruns[t.SHA] < rerunsPerHead {
+			hint = "\n\nIf the log shows a flake rather than your change, `hive agent rerun-checks` runs the failed jobs again and finishing again without a commit waits for them."
+		}
+		return true, m.sendBack(t, p, forgeFailed+core.Short(t.SHA)+": "+checkDetail(which)+onMain+hint)
 	}
 	// Said once per head and main: a merge hold or a failed merge brings t
 	// back here every holdGap, and a repeat would crowd out its log.

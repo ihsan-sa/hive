@@ -309,16 +309,17 @@ func (r *Registry) Install(url, name string) (Module, error) {
 	if core.Exists(dir) {
 		return Module{}, fmt.Errorf("%s already exists", dir)
 	}
-	// The clone goes to a hidden folder and moves into place whole, with its
-	// source record: List reads any folder as a module, and a half-written
-	// one would show (and be read by agents) without its files, which a slow
-	// disk made plain, or with no release until the record landed.
+	// The clone goes to a hidden folder and moves into place whole: List
+	// reads any folder as a module, and a half-written one would show (and
+	// be read by agents) without its files, which a slow disk made plain.
 	tmp := filepath.Join(r.ws.Modules(), "."+name+"-"+core.NewID())
 	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, tmp); err != nil {
 		os.RemoveAll(tmp)
 		return Module{}, err
 	}
-	rel, err := record(url, name, tmp)
+	// Its release and source record are written there too, so the module
+	// appears with them: a grant made the moment it shows isn't overwritten.
+	rel, err := record(tmp, url)
 	if err == nil {
 		err = os.Rename(tmp, dir)
 	}
@@ -331,11 +332,11 @@ func (r *Registry) Install(url, name string) (Module, error) {
 	return m, nil
 }
 
-// record checks a fresh clone out at its newest release and writes where it
-// came from, returning the release.
-func record(url, name, dir string) (string, error) {
+// record checks out a clone's newest release (its HEAD when it has none) and
+// writes where it came from. It returns the release.
+func record(dir, url string) (string, error) {
 	if !core.Exists(filepath.Join(dir, ".git")) {
-		return "", fmt.Errorf("module %s did not clone", name)
+		return "", fmt.Errorf("%s did not clone", filepath.Base(url))
 	}
 	core.Git(dir, "fetch", "-q", "--tags")
 	rel := latestTag(dir)
