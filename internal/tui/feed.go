@@ -164,7 +164,7 @@ func (m *model) keyDash(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch r := rows[sel]; {
 		case r.chat != "":
 			cmd := m.openChat(r.chat)
-			m.thread, m.focus = r.thread, 2
+			m.thread, m.focus, m.chFree = r.thread, 2, false
 			return m, tea.Batch(cmd, m.focusBox(r.thread))
 		case r.task != "":
 			return m, m.push(detail{kind: "task", id: r.task, title: core.Clip(r.text, 40)})
