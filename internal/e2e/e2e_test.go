@@ -196,7 +196,7 @@ func (h *hive) launch() {
 	log.Close() // the daemon has its own handle
 	h.cmd = cmd
 	if contain != nil {
-		h.jobs = append(h.jobs, contain(cmd.Process.Pid))
+		h.jobs = append(h.jobs, contain(h.t, cmd.Process.Pid))
 	}
 	go cmd.Wait()
 	// A loaded Windows runner has taken over 30 seconds to start one.
@@ -206,7 +206,9 @@ func (h *hive) launch() {
 		if c, err := api.Dial(h.ws); err == nil && c.Info.PID == cmd.Process.Pid && c.Ping() {
 			h.c = c
 			if d := time.Since(began); d > 10*time.Second {
-				h.t.Logf("the daemon took %s to start", d.Round(time.Second))
+				// The daemon's own account of a slow start is its log's last lines.
+				raw, _ := os.ReadFile(filepath.Join(h.ws.Hive(), "daemon-test.log"))
+				h.t.Logf("the daemon took %s to start; its log ends: %s", d.Round(time.Second), raw[max(0, len(raw)-1000):])
 			}
 			return
 		}
@@ -1365,7 +1367,7 @@ var adopt func()
 
 // contain puts a daemon, and what it starts from then on, in a group that
 // the returned func ends (Windows only).
-var contain func(pid int) func()
+var contain func(t *testing.T, pid int) func()
 
 // TestLiveWarden is the host probe for a real harness: run it with
 // HIVE_E2E_HARNESS=claude. A worker that needs a package outside its checkout
