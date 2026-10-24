@@ -27,24 +27,21 @@ func TestReportSharing(t *testing.T) {
 	h.ws.SaveConfig(cfg)
 	h.seed("me/rep", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "rep", "repo": "me/rep"}, nil)
-	// A run is seen by its time moving past the last one's, not past the
-	// test's clock: Windows' clock ticks coarsely, and a send with sharing
-	// off can finish within the tick the test read.
-	last := func(st api.State) (at time.Time) {
-		for _, j := range st.Jobs {
-			if j.Name == "report.send" {
-				at = j.Last
-			}
-		}
-		return
-	}
 	send := func() {
 		t.Helper()
-		before := last(h.state())
+		// The run is told by its Last changing, not by Last passing the
+		// clock: Windows' clock ticks coarsely, so a quick run can carry the
+		// very time read before it.
+		var before time.Time
+		for _, j := range h.state().Jobs {
+			if j.Name == "report.send" {
+				before = j.Last
+			}
+		}
 		h.post("/api/job", map[string]string{"name": "report.send"}, nil)
 		h.wait("report.send to run", minute, func(st api.State) bool {
 			for _, j := range st.Jobs {
-				if j.Name == "report.send" && j.Last.After(before) && !j.Running {
+				if j.Name == "report.send" && !j.Last.Equal(before) && !j.Running {
 					return true
 				}
 			}
