@@ -52,12 +52,12 @@ func (m *Module) Landed(id, mergeSHA, by, why string) (Task, error) {
 			m.C.Runs.Stop(t.Worker, "its work is already on main")
 		}
 	}
-	if t.Checkpoint != "" { // the whole task ends: say what the checkpoint left behind
-		past := ""
-		if t.SHA != "" && t.SHA != t.Checkpoint {
-			past = fmt.Sprintf("; the worker's commits past it, up to %s, are not merged", core.Short(t.SHA))
+	if t.Checkpoint != "" { // its PR is the checkpoint's: say what merged and what didn't
+		line := fmt.Sprintf("checkpoint %s is what merged", core.Short(t.Checkpoint))
+		if t.SHA != "" && t.SHA != t.Checkpoint && !m.mainHolds(p, t.SHA) {
+			line += fmt.Sprintf("; the worker's commits past it, up to %s, are not on main", core.Short(t.SHA))
 		}
-		m.save(&t, fmt.Sprintf("checkpoint %s in flight is dropped as the task ends%s", core.Short(t.Checkpoint), past))
+		m.save(&t, line)
 	}
 	t.MergeSHA, t.Stage, t.Reason, t.Checkpoint = merged, StageMerged, "", ""
 	m.save(&t, fmt.Sprintf("ended as landed by %s (%s, %s): %s", by, how, core.Short(merged), core.Clip(why, 300)))
@@ -119,6 +119,12 @@ func (m *Module) landedAt(t *Task, p core.Project, mergeSHA string) (string, str
 		return "", "", errors.New("main holds its change, squashed under another commit: say which with merge <sha>")
 	}
 	return "", "", refuse()
+}
+
+// mainHolds reports whether main holds sha's change.
+func (m *Module) mainHolds(p core.Project, sha string) bool {
+	main, err := m.C.Effects.Sync(p)
+	return err == nil && holds(m.C.WS.Project(p.Name), main, sha)
 }
 
 // holds reports whether the commit at would gain nothing from merging sha in:

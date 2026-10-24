@@ -729,11 +729,16 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 		t.Fatalf("a squashed change wasn't asked for its commit: %v", err)
 	}
 	mainSHA, _ := m.C.Effects.Sync(p)
+	// A checkpoint behind a head that main holds: nothing past it is lost.
+	cp, _ := core.Git(m.C.WS.Project("p"), "rev-parse", mainSHA+"^")
+	task.Checkpoint = strings.TrimSpace(cp)
+	m.save(task, "")
 	if err := call(`{"task":"t1","why":"squashed by the person","merge":"` + mainSHA + `"}`); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := m.Get("t1")
-	if got.Stage != StageMerged || got.MergeSHA != mainSHA || len(merged) != 1 || !logged(&got, "squashed by the person") {
+	if got.Stage != StageMerged || got.MergeSHA != mainSHA || len(merged) != 1 || !logged(&got, "squashed by the person") ||
+		!logged(&got, "checkpoint "+core.Short(task.Checkpoint)+" is what merged") || logged(&got, "not on main") {
 		t.Fatalf("stage %q, merge %q, OnMerged %d, log %v", got.Stage, got.MergeSHA, len(merged), got.Log)
 	}
 	if r, _ := m.C.Runs.Get("w1"); !r.Terminal() && !r.StopAsked {
@@ -760,8 +765,22 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	if _, err := m2.Landed("t2", "", "lead", "x"); !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("no such task: %v", err)
 	}
+	// The worker went on past the checkpoint; those commits aren't on main.
+	r, _ := m2.C.Runs.Get("w1")
+	if err := os.WriteFile(filepath.Join(r.Checkout, "later.txt"), []byte("later"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	must(t, r.Checkout, "add", "-A")
+	must(t, r.Checkout, "commit", "-q", "-m", "later")
+	later, err := m2.C.Effects.Extract(p2, r, t2.Checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t2.SHA = later
+	m2.save(t2, "")
 	got, err = m2.Landed("t1", "", "lead", "merged on GitHub at 07:53Z")
-	if err != nil || got.Stage != StageMerged || got.MergeSHA != sha || !logged(&got, "merged on the forge") || !logged(&got, "checkpoint "+core.Short(t2.SHA)+" in flight is dropped") || got.Checkpoint != "" {
+	if err != nil || got.Stage != StageMerged || got.MergeSHA != sha || !logged(&got, "merged on the forge") || got.Checkpoint != "" ||
+		!logged(&got, "checkpoint "+core.Short(t2.Checkpoint)+" is what merged; the worker's commits past it, up to "+core.Short(later)+", are not on main") {
 		t.Fatalf("stage %q, merge %q (want %s), log %v: %v", got.Stage, got.MergeSHA, sha, got.Log, err)
 	}
 }
