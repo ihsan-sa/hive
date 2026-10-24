@@ -22,11 +22,12 @@ For a candidate change:
 
 Anything may be used for this: nested sandboxed Hives, rollback to an earlier version. Don't narrow it to one test path.
 
-Where it stands (2026-10-24 ~14:30Z): the gate exists, but the first milestone is not met yet: nothing has been kept by the gate because it beat the current Hive.
+Where it stands (2026-10-24 ~16:00Z): the gate exists and is wired in, but the first milestone is not met yet: nothing has been kept by the gate because it beat the current Hive.
 
 - The gate is #146, merged at ~14:03Z. It must run on this machine, and this machine forbids a sandbox inside a sandbox (kernel.apparmor_restrict_unprivileged_userns=1 refuses nested bwrap), so the child Hive runs in a sibling sandbox, not a nested one. Under real bubblewrap in ci, TestBwrapGateKeepsAndRollsBack kept a trivial candidate (a tie is allowed) and rolled back a broken one, and the recursion worked.
-- Not yet wired into merges (task 261024-140317-caacdf7f83), and the project has no score yet for the child to beat (task 261024-073323-39b67b4b25, in progress). The milestone run itself is task 261024-142208-25ca663e99.
+- Since #390 (14:56Z) the gate runs on every change to the Hive. Every gate run since has kept nothing, because the gate's own sandbox fails tests that pass elsewhere (the fix is task 261024-155233-2ea1efb0f2). The project still has no score for the child to beat (task 261024-073323-39b67b4b25, still open). The milestone run itself is task 261024-142208-25ca663e99.
 - The org leg: the test org is Hive-RSI-Lab, and the contents-only token for the child exists at /home/hive/h0-gate.token. The org owns the fork Hive-RSI-Lab/hive, which the gate's reach check must handle.
+- Alongside: Codex can be picked per role (#398); the optional modules have their own projects (dispatch: Hive-RSI-Lab/hive-dispatch, deck: Hive-RSI-Lab/hive-deck, trials: Hive-RSI-Lab/hive-trials); the Claude login renews itself (#323).
 
 ## Security reads
 
@@ -40,10 +41,10 @@ What the person has asked that holds from now on, in their words where they gave
 
 - **Build against the essay** at ihsan.cc/writing/the-hive.
 - **A light core.** "the core should be as lightweight as possible"; "The rest goes into modules", "not the core".
-- **Modules are public repos** in the Hive's org.
+- **Modules: standard in the repo, extras in their own.** As decided with the person (2026-10-24, 10:40-10:41 local): the standard modules (agents with the common harness adapters, chat, improve, kb, system) stay in ihsan-sa/hive under modules/, each a module of its own; extras (Slack, a call/phone module, extra harnesses) live in their own public repos and install from the marketplace.
 - **Other harnesses.** Codex, Cursor and other open harnesses, not only Claude.
 - **Free models first.** Free models through OpenRouter first; paid ones only inside the $10/month cap.
 - **Stay on the newest release.** H0 runs every pre-release as soon as it's published: "You always should be on the newest". (H0 follows pre-releases since #237, #322.)
-- **Don't wait on the person when nothing is worse.** A fix no worse than main doesn't wait for a person, and releases from the root path go out without the person: "Release them yourself and say so after".
+- **Don't wait on the person when nothing is worse.** A fix no worse than main doesn't wait for a person, and releases from the root path go out without the person: "Release them yourself and say so after". These are autobox's answers for the person while they slept (2026-10-24 ~07:56Z), not the person's own words.
 - **Perms and autobox only steer.** They step in "if you go off track"; the Hive's own reads, wardens and tribunals decide (the Hive's own security reads landed in #234; see Security reads above).
 - **Keep the goals current.** "ok make sure youre updating your goals regularly, and same for subprocesses etc.": this file, and each module's and child Hive's own goals (where one exists), are checked against the record at least every few hours and after each milestone step. Also, the lead's prompt (modules/agents/lead.md) asks the lead to review goals against the record at least every few hours and after each milestone step.
