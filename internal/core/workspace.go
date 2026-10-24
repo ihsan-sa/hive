@@ -43,6 +43,12 @@ func (w Workspace) Gates() string              { return filepath.Join(w.Hive(), 
 // made or a file renamed in it mid-turn is covered too.
 func (w Workspace) Private() string { return filepath.Join(w.Hive(), "private") }
 
+// Guarded is what no host interpreter's install bound into a sandbox may
+// contain: the workspace and the folders covered wherever agents read .hive.
+func (w Workspace) Guarded() []string {
+	return []string{w.Root, filepath.Join(w.Hive(), "logins"), filepath.Join(w.Hive(), "modules"), w.Private()}
+}
+
 // Checkouts is where agents' own checkouts of a project live.
 func (w Workspace) Checkouts(project string) string {
 	return filepath.Join(w.Project(project), ".checkouts")

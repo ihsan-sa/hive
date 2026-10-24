@@ -189,7 +189,7 @@ func CodexReport(ws core.Workspace, hiveLinux string) (string, error) {
 	s := sandbox.Spec{
 		ID: "codex-check", Argv: []string{"codex", "--version"}, Env: sandbox.InsideEnv("/tmp", false),
 		Cwd: sandbox.InsidePath(sb, work), Mounts: []sandbox.Mount{work}, Tools: []string{"codex"},
-		Stdout: filepath.Join(dir, "out"), UID: os.Getuid(), GID: os.Getgid(),
+		Stdout: filepath.Join(dir, "out"), Guard: ws.Guarded(), UID: os.Getuid(), GID: os.Getgid(),
 	}
 	if code, err := sb.Run(s, time.Minute); err == nil && code == 0 {
 		return "codex runs where agents run", nil
