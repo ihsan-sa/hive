@@ -175,7 +175,7 @@ func emit(v any) {
 var handedBack = regexp.MustCompile(`Stopped "[^"]*FAKE:leadfixes[^"]*" \(task (\S+?)[ )]`)
 
 var personRe = regexp.MustCompile(`(?s)(?:Person|Module [^:]+): (.*?)(?:` + regexp.QuoteMeta(core.PendingSep) + `|\z)`)
-var projectRe = regexp.MustCompile(`create (?:an? )?(isolated )?project (?:called |named )?([A-Za-z0-9_-]+)`)
+var projectRe = regexp.MustCompile(`create (?:an? )?((?:isolated|private) )?project (?:called |named )?([A-Za-z0-9_-]+)`)
 
 // moduleRe is a person asking for a new module; merged is the notice that one merged.
 var moduleRe = regexp.MustCompile(`(?i)make (?:me )?a module (?:called |named )?([a-z0-9-]+)`)
@@ -221,7 +221,7 @@ func leadAsk(ask, system string) (string, error) {
 		return "I opened " + strings.Join(got, ", ") + ".", nil
 	}
 	if pm := projectRe.FindStringSubmatch(ask); pm != nil {
-		_, err := call("create_project", map[string]any{"name": pm[2], "isolated": pm[1] != "", "description": ask, "goals": ask}, 3*time.Minute)
+		_, err := call("create_project", map[string]any{"name": pm[2], "sharing": strings.TrimSpace(pm[1]), "description": ask, "goals": ask}, 3*time.Minute)
 		if err != nil {
 			return "", err
 		}
