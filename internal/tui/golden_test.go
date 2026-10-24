@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 )
 
 // designModel holds the data the design's frames show.
@@ -45,6 +47,14 @@ func designModel(w, h int) *model {
 			{Name: "memory", Projects: []string{"textkit-2", "hive-web"}, Source: ".modules/memory", Release: "1.0", Description: "Keeps notes between sessions"},
 			{Name: "scheduler", Source: ".modules/scheduler", Release: "0.3", Description: "Starts agents on a schedule"},
 			{Name: "budget", Projects: []string{"*"}, Source: ".modules/budget", Release: "0.2", Description: "Asks before runs over $1"},
+		},
+		Feedback: []feedback.Item{
+			{ID: "f1", Run: "w-261022-140210-9c1e", Role: "worker", Name: "writer", Project: "textkit-2", About: "agents/worker.md", Status: feedback.Open, At: time.Now().Add(-9*time.Minute - time.Second),
+				Text: "The worker prompt says to run the score before starting, but textkit-2's score command needs a built wheel first, so the first run always fails. A line saying `make build` comes first would have saved two turns."},
+			{ID: "f2", Run: "hw-r", Role: "reviewer", Project: "hive-web", Status: feedback.Open, Seen: true, At: time.Now().Add(-40*time.Minute - time.Second),
+				Text: "The brief named the sha but not the base, so I read the whole branch to find what changed."},
+			{ID: "f3", Run: "sweep-261022-0400", Role: "sweep", Status: feedback.Passed, Seen: true, Note: "passed to lead", At: time.Now().Add(-26 * time.Hour),
+				Text: "The digest lists runs that stopped but not why the person stopped them."},
 		},
 		Config: core.DefaultConfig(), Version: "0.8.2", Workspace: "/home/you/hive",
 		Chats: []api.ChatView{
@@ -175,14 +185,25 @@ func TestDesignFrames(t *testing.T) {
 		{"06c-settings-80x24", 80, 24, func(m *model) { m.pick(sideRow{sec: secSettings}); m.setSel = 1 }},
 		{"06a-waiting", 120, 36, func(m *model) { m.pick(sideRow{sec: secWaiting}) }},
 		{"06b-modules", 120, 36, func(m *model) { m.pick(sideRow{sec: secModules}) }},
+		{"06d-knowledge", 120, 36, func(m *model) { m.pick(sideRow{sec: secKB}); m.focus = 1 }},
 		{"06c-settings", 120, 36, func(m *model) { m.pick(sideRow{sec: secSettings}); m.setSel = 1 }},
+		{"06d-feedback-80x24", 80, 24, func(m *model) { m.pick(sideRow{sec: secFeedback}); m.focus = 1 }},
+		{"06d-feedback", 120, 36, func(m *model) { m.pick(sideRow{sec: secFeedback}); m.focus = 1 }},
 		{"04b-80x24-thread-takeover", 80, 24, replyDraft},
 	} {
 		m := designModel(c.w, c.h)
 		c.set(m)
+		// The frames show Unix paths; Windows joins the same paths with its own separator.
 		got := plain(m.View())
+		for _, p := range []string{core.Workspace{}.KB(), filepath.Join("/home/you/hive", ".hive", "config.json")} {
+			got = strings.ReplaceAll(got, p, filepath.ToSlash(p))
+		}
 		if c.name == "02b-sending" || c.name == "02c-sent" { // the frame is the thread pane alone
 			got = column(got, 72, 48, 16)
+		}
+		if os.Getenv("HIVE_UPDATE_FRAMES") != "" { // rewrite the frames; list the change in the PR
+			os.WriteFile("testdata/"+c.name+".txt", []byte(got+"\n"), 0o644)
+			continue
 		}
 		want, err := os.ReadFile("testdata/" + c.name + ".txt")
 		if err != nil {

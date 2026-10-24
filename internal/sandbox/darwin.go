@@ -58,7 +58,7 @@ func proxy(sp Spec) (*Egress, string, error) {
 		}
 	}
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
-	return ServeEgress(ln, sp.Allow, refused), port, nil
+	return ServeEgress(ln, sp.Allow, sp.Local, refused), port, nil
 }
 
 func (s *Seatbelt) Start(sp Spec) (Proc, error) {
@@ -71,7 +71,7 @@ func (s *Seatbelt) Start(sp Spec) (Proc, error) {
 		e.Close()
 		return Proc{}, err
 	}
-	env := withPathPrefix(append(s.env(sp, port), "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), toolDirs(sp.Tools))
+	env := withPathPrefix(append(SeatbeltEnv(sp, port), "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), pathDirs(sp))
 	argv := append([]string{"sandbox-exec", "-f", pf}, sp.Argv...)
 	p, err := proc.StartDetached(argv, env, sp.Cwd, sp.Stdin, sp.Stdout)
 	if err != nil {
@@ -112,6 +112,13 @@ func (s *Seatbelt) profile(sp Spec, port string) string {
 		}
 	}
 	fmt.Fprintf(&b, "(allow network-outbound (remote ip \"localhost:%s\"))\n", port)
+	// A granted service on this machine: Seatbelt shares the host's loopback,
+	// so the run reaches it directly as well as through the proxy.
+	for _, a := range sp.Local {
+		if _, p, err := net.SplitHostPort(a); err == nil {
+			fmt.Fprintf(&b, "(allow network-outbound (remote ip \"localhost:%s\"))\n", p)
+		}
+	}
 	b.WriteString("(allow network-outbound (literal \"/private/var/run/mDNSResponder\"))\n")
 	return b.String()
 }
@@ -131,14 +138,6 @@ func (s *Seatbelt) Run(sp Spec, timeout time.Duration) (int, error) {
 	if err := os.WriteFile(pf, []byte(s.profile(sp, port)), 0o600); err != nil {
 		return -1, err
 	}
-	env := withPathPrefix(append(s.env(sp, port), "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), toolDirs(sp.Tools))
+	env := withPathPrefix(append(SeatbeltEnv(sp, port), "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), pathDirs(sp))
 	return runSync(append([]string{"sandbox-exec", "-f", pf}, sp.Argv...), env, sp.Cwd, sp.Stdin, sp.Stdout, timeout)
-}
-
-func (s *Seatbelt) env(sp Spec, port string) []string {
-	var env []string
-	for _, kv := range sp.Env {
-		env = append(env, strings.ReplaceAll(kv, "127.0.0.1:"+ProxyPort, "127.0.0.1:"+port))
-	}
-	return env
 }

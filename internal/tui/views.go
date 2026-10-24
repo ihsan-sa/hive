@@ -2,12 +2,14 @@ package tui
 
 import (
 	"fmt"
+	"github.com/ihsan-sa/hive-standalone-build/internal/text"
 	"maps"
 	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -126,6 +128,15 @@ func (m *model) dashRows() []row {
 			add(row{key: "run:" + r.ID, depth: 1, text: m.runLine(r), open: &d})
 		}
 	}
+	ck := m.st.Checks
+	if add(row{key: "checks", text: fmt.Sprintf("checks (%d running, %d waiting)", len(ck.Running), len(ck.Waiting)), expand: len(ck.Running)+len(ck.Waiting) > 0, def: true}) {
+		for _, u := range ck.Running {
+			add(row{key: fmt.Sprintf("check:%s:%s:%s", u.Project, u.SHA, u.Kind), depth: 1, text: fmt.Sprintf("%s  %s %s  %s  %s", stGood.Render("running"), u.Project, core.Short(u.SHA), u.Kind, stDim.Render(ago(u.Since)))})
+		}
+		for i, u := range ck.Waiting {
+			add(row{key: fmt.Sprintf("check:%s:%s:%s:w", u.Project, u.SHA, u.Kind), depth: 1, text: fmt.Sprintf("%s  %s %s  %s  %s", stWarn.Render(fmt.Sprintf("waiting #%d", i+1)), u.Project, core.Short(u.SHA), u.Kind, stDim.Render(ago(u.Since)))})
+		}
+	}
 	if add(row{key: "sweeps", text: fmt.Sprintf("improvement sweeps (%d)", len(m.st.Sweeps)), expand: len(m.st.Sweeps) > 0}) {
 		for _, s := range m.st.Sweeps {
 			text := fmt.Sprintf("%s  %s  asks filed: %d", s.Started.Local().Format("Mon 15:04"), s.Status, len(s.Asks))
@@ -135,16 +146,16 @@ func (m *model) dashRows() []row {
 	}
 	if add(row{key: "plans", text: "plan usage", expand: len(m.st.Plans) > 0, def: true}) {
 		for _, p := range m.st.Plans {
-			status := p.Limit.Status
+			status := text.Visible(p.Limit.Status)
 			if status == "rejected" {
 				status = stBad.Render("limited") + ", resets " + p.Limit.ResetsAt.Local().Format("Mon 15:04")
 			}
-			text := fmt.Sprintf("%s  %s", p.Key(), status)
+			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), status)
 			for _, k := range sortedKeys(p.Limit.Windows) {
 				wnd := p.Limit.Windows[k]
-				text += fmt.Sprintf("  %s %.0f%%", k, wnd.Utilization*100)
+				line += fmt.Sprintf("  %s %.0f%%", text.Visible(k), wnd.Utilization*100)
 			}
-			add(row{key: "plan:" + p.Key(), depth: 1, text: text})
+			add(row{key: "plan:" + p.Key(), depth: 1, text: line})
 		}
 	}
 	add(row{key: "waiting", text: fmt.Sprintf("waiting on you (%d)", len(m.st.Asks)), jump: secWaiting})
@@ -163,7 +174,11 @@ func (m *model) dashRows() []row {
 	if add(row{key: "alerts", text: fmt.Sprintf("alerts (%d)", len(m.st.Alerts)), expand: len(m.st.Alerts) > 0}) {
 		for i := len(m.st.Alerts) - 1; i >= 0; i-- {
 			a := m.st.Alerts[i]
-			add(row{key: fmt.Sprintf("alert:%d", i), depth: 1, text: fmt.Sprintf("%s  %s  %s", a.At.Local().Format("Mon 15:04"), stWarn.Render(a.Kind), a.Text)})
+			n := ""
+			if a.Count > 1 {
+				n = fmt.Sprintf(" (x%d)", a.Count)
+			}
+			add(row{key: fmt.Sprintf("alert:%d", i), depth: 1, text: fmt.Sprintf("%s  %s  %s", a.At.Local().Format("Mon 15:04"), stWarn.Render(a.Kind), a.Text+n)})
 		}
 	}
 	if add(row{key: "jobs", text: "schedules", expand: len(m.st.Jobs) > 0}) {
@@ -211,12 +226,18 @@ func (m *model) taskLine(t work.Task) string {
 		stage = stGood.Render(stage)
 	case work.StageBlocked, work.StageStopped:
 		stage = stBad.Render(stage)
-	case work.StagePerson:
+	case work.StagePerson, work.StageQueued, work.StageIssued:
 		stage = stWarn.Render(stage)
 	}
 	progress := ""
-	if r, ok := m.run(t.Worker); ok && r.Progress != "" && !t.Terminal() {
+	if r, ok := m.run(t.Worker); ok && r.Progress != "" && !t.Terminal() && !t.Queued() {
 		progress = stDim.Render("  “" + core.Clip(r.Progress, 60) + "” " + ago(r.ProgressAt))
+	}
+	if t.Queued() && t.Reason != "" {
+		progress = stDim.Render("  " + core.Clip(t.Reason, 70))
+	}
+	if t.Stage == work.StageTesting && slices.ContainsFunc(m.st.Checks.Waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
+		progress = stDim.Render("  waiting for a check slot")
 	}
 	pr := ""
 	if t.PR.Number > 0 {
@@ -237,7 +258,7 @@ func (m *model) runLine(r core.Run) string {
 	if r.Reason != "" && r.Status != core.StatusRunning {
 		extra = r.Reason
 	}
-	return fmt.Sprintf("%s  %s  turn %d  $%.2f  %s  %s", runLabel(r), status, r.Turn, r.Cost, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
+	return fmt.Sprintf("%s  %s  turn %d  $%.2f  %dk ctx  %s  %s", runLabel(r), status, r.Turn, r.Cost, r.Context/1000, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
 }
 
 // spark draws the last scores as a one-line chart.
@@ -272,13 +293,11 @@ func spark(ms []improve.Measurement) string {
 
 func (m *model) keyTree(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rows := m.dashRows()
-	if m.dashSel >= len(rows) {
-		m.dashSel = max(0, len(rows)-1)
-	}
 	if len(rows) == 0 {
 		return m, nil
 	}
-	r := rows[m.dashSel]
+	r := rows[m.treeAt(rows)]
+	defer func() { m.dashKey = m.treeKey(m.dashSel) }()
 	switch k.String() {
 	case "up", "k":
 		if m.dashSel > 0 {
@@ -318,8 +337,36 @@ func (m *model) keyTree(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// treeAt finds the status cursor's row by its key, as sideAt does: work
+// that starts or ends above it doesn't move it. A run shows both under its
+// task and under agents, so the nearer of the two is the cursor's.
+func (m *model) treeAt(rows []row) int {
+	best := -1
+	for i, r := range rows {
+		if m.dashKey != "" && r.key == m.dashKey && (best < 0 || abs(i-m.dashSel) < abs(best-m.dashSel)) {
+			best = i
+		}
+	}
+	if best < 0 {
+		best = m.dashSel
+	}
+	m.dashSel = max(0, min(best, len(rows)-1))
+	return m.dashSel
+}
+
+func abs(n int) int { return max(n, -n) }
+
+// treeKey is the key of status row i, or "".
+func (m *model) treeKey(i int) string {
+	if rows := m.dashRows(); i < len(rows) {
+		return rows[i].key
+	}
+	return ""
+}
+
 func (m *model) viewTree() []string {
 	rows := m.dashRows()
+	m.treeAt(rows)
 	var lines []string
 	for i, r := range rows {
 		arrow := "  "
@@ -426,6 +473,7 @@ func (m *model) viewDetail(d *detail) []string {
 		kv("project", r.Project+"  task "+r.Task)
 		kv("model", r.Harness+" "+r.Model)
 		kv("turns", fmt.Sprintf("%d  cost $%.2f  started %s", r.Turn, r.Cost, r.Created.Local().Format("Mon 15:04")))
+		kv("context", fmt.Sprintf("%dk tokens", r.Context/1000))
 		if r.Progress != "" {
 			kv("progress", r.Progress+"  "+ago(r.ProgressAt))
 		}
@@ -509,12 +557,13 @@ func (m *model) viewDetail(d *detail) []string {
 		}
 		lines = append(lines, "", stDim.Render("space grant or remove · r read its code again"))
 		return window(lines, top+d.sel, m.bodyHeight())
+	case "diff":
+		lines = append(lines, diffView(d.text, w)...)
 	default:
 		lines = append(lines, wrap(d.text, w)...)
 	}
-	if d.scroll > len(lines)-1 {
-		d.scroll = max(0, len(lines)-1)
-	}
+	d.total = len(lines)
+	d.scroll = max(0, min(d.scroll, len(lines)-m.bodyHeight())) // the last page stays full
 	return lines[d.scroll:]
 }
 
@@ -570,6 +619,11 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.waitSel < len(asks) && m.optSel < len(asks[m.waitSel].Options)-1 {
 			m.optSel++
 		}
+	case "d":
+		if m.waitSel < len(asks) && asks[m.waitSel].Diff != "" {
+			a := asks[m.waitSel]
+			return m, m.push(detail{kind: "diff", id: a.ID, title: "what it changes", text: a.Diff})
+		}
 	case "enter":
 		if m.waitSel < len(asks) {
 			a := asks[m.waitSel]
@@ -587,7 +641,7 @@ func (m *model) viewWaiting() []string {
 	}
 	w := m.mainW() - 5
 	var lines []string
-	sel := 0
+	sel, end := 0, 0
 	for i, a := range m.st.Asks {
 		gut := "  "
 		if i == m.waitSel {
@@ -607,6 +661,14 @@ func (m *model) viewWaiting() []string {
 					ls = append(ls, stDim.Render(l))
 				}
 			}
+			if a.Diff != "" { // as much of the diff as leaves the options on screen
+				diff := diffView(a.Diff, w)
+				n := max(3, m.bodyHeight()-len(ls)-2)
+				if len(diff) > n {
+					diff = diff[:n-1]
+				}
+				ls = append(append(ls, diff...), stDim.Render("… d the whole diff"))
+			}
 			var opts []string
 			for j, o := range a.Options {
 				if j == m.optSel && m.focus == 1 {
@@ -614,11 +676,73 @@ func (m *model) viewWaiting() []string {
 				}
 				opts = append(opts, o)
 			}
-			ls = append(ls, strings.Join(opts, "    ")+"    "+stTitle.Render("←→")+" "+stDim.Render("pick")+"   "+stTitle.Render("enter")+" "+stDim.Render("answer"))
+			ls = append(ls, optionRows(opts, stTitle.Render("←→")+" "+stDim.Render("pick")+"   "+stTitle.Render("enter")+" "+stDim.Render("answer"), w)...)
 		}
 		lines = append(append(lines, indent(ls, gut)...), "")
+		if i == m.waitSel {
+			end = len(lines) - 2
+		}
 	}
-	return window(lines, sel, m.bodyHeight())
+	return span(lines, sel, end, m.bodyHeight())
+}
+
+// optionRows lays an ask's options out in rows of at most w cells, with the
+// key hint after them when it fits; the bottom row repeats it anyway.
+func optionRows(opts []string, hint string, w int) []string {
+	var rows []string
+	row := ""
+	for _, o := range opts {
+		o = clip(o, w)
+		if row != "" && visibleWidth(row)+4+visibleWidth(o) > w {
+			rows, row = append(rows, row), ""
+		}
+		if row != "" {
+			row += "    "
+		}
+		row += o
+	}
+	if visibleWidth(row)+4+visibleWidth(hint) <= w {
+		row += "    " + hint
+	}
+	return append(rows, row)
+}
+
+// diffView colours a unified diff and breaks its lines at w cells. Control
+// characters are shown as escapes, so a changed line can't restyle the
+// terminal or hide itself.
+func diffView(diff string, w int) []string {
+	var out []string
+	for _, l := range strings.Split(strings.TrimRight(diff, "\n"), "\n") {
+		st := stGood
+		switch {
+		case strings.HasPrefix(l, "+++"), strings.HasPrefix(l, "---"), strings.HasPrefix(l, "diff "), strings.HasPrefix(l, "index "):
+			st = stTitle
+		case strings.HasPrefix(l, "-"):
+			st = stBad
+		case strings.HasPrefix(l, "@@"):
+			st = stAccent
+		}
+		for _, p := range strings.Split(ansi.Hardwrap(visible(l), max(10, w), true), "\n") {
+			out = append(out, st.Render(p))
+		}
+	}
+	return out
+}
+
+// visible spells out control characters (ESC as \x1b), and tabs as spaces.
+func visible(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\t':
+			b.WriteString("    ")
+		case unicode.IsControl(r):
+			fmt.Fprintf(&b, "\\x%02x", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // ---- modules ---------------------------------------------------------------
@@ -666,7 +790,7 @@ func (m *model) viewModules() []string {
 		}
 	}
 	lines = append(lines, "", stDim.Render("Install a module by asking the lead (it needs your approval). Modules live in .modules/."))
-	return indent(lines, "  ")
+	return window(indent(lines, "  "), m.modSel, m.bodyHeight()) // the list's rows come first
 }
 
 func (m *model) modName() string {
@@ -872,7 +996,8 @@ func (m *model) edit(label, value string) tea.Cmd {
 	m.input.SetValue(value)
 	m.input.CursorEnd()
 	m.input.SetHeight(1)
-	m.input.SetWidth(max(10, m.mainW()-36))
+	_, vw := m.settingCols()
+	m.input.SetWidth(max(10, vw-3))
 	return m.input.Focus()
 }
 
@@ -951,12 +1076,20 @@ func (m *model) saveSetting(v string) tea.Cmd {
 	return m.post("/api/config", c, "saved")
 }
 
+// settingCols is the width of the settings' label column, 28 cells or less
+// on a narrow pane, and of the value column, which takes the rest.
+func (m *model) settingCols() (label, value int) {
+	label = min(28, max(12, (m.mainW()-4)/2))
+	return label, max(10, m.mainW()-5-label)
+}
+
 func (m *model) viewSettings() []string {
 	var lines, banner []string
 	if m.st.ConfigErr != "" { // pinned above the rows so a short window never scrolls it away
 		banner = []string{"  " + stBad.Render(clip("config.json: "+m.st.ConfigErr, m.mainW()-3)), ""}
 	}
-	sel, group := 0, ""
+	sel, end, group := 0, 0, ""
+	lw, vw := m.settingCols()
 	for i, st := range m.settings() {
 		if st.group != group {
 			if group != "" {
@@ -972,7 +1105,30 @@ func (m *model) viewSettings() []string {
 				value = m.input.View()
 			}
 		}
-		lines = append(lines, gut+"  "+pad(label, 28)+value)
+		// A long value wraps under its own column; a label too long for its
+		// column puts the value on the next line.
+		vals := []string{value}
+		if !(i == m.setSel && m.editing) {
+			vals = wrap(value, vw)
+		}
+		if visibleWidth(st.label) >= lw-1 {
+			for _, l := range wrap(st.label, m.mainW()-5) {
+				if i == m.setSel {
+					l = stTitle.Render(l)
+				}
+				lines = append(lines, gut+"  "+l)
+			}
+			label = ""
+		}
+		for j, v := range vals {
+			if j > 0 {
+				label = ""
+			}
+			lines = append(lines, gut+"  "+pad(label, lw)+v)
+		}
+		if i == m.setSel {
+			end = len(lines) - 1
+		}
 		if i == m.setSel && m.picking {
 			for j, ch := range st.choices {
 				if j == m.pickSel {
@@ -980,12 +1136,13 @@ func (m *model) viewSettings() []string {
 				} else {
 					ch = "  " + ch
 				}
-				lines = append(lines, "    "+pad("", 28)+ch)
+				lines = append(lines, "    "+pad("", lw)+clip(ch, vw))
 			}
+			end = len(lines) - 1
 		}
 	}
 	lines = append(lines, "", "  "+stDim.Render("Hive "+m.st.Version+" · "+m.st.Workspace))
-	return append(banner, window(lines, sel, m.bodyHeight()-len(banner))...)
+	return append(banner, span(lines, sel, end, m.bodyHeight()-len(banner))...)
 }
 
 func fmtNum(f float64) string { return strconv.FormatFloat(f, 'g', 6, 64) }

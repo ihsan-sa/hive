@@ -28,6 +28,32 @@ function Invoke-Native([scriptblock]$Block, [switch]$Quiet) {
   }
 }
 
+# Takes $Remove off or puts $Add on the user PATH, writing only when that changes it.
+# It edits the registry value as stored: .NET's own read expands %VAR% entries,
+# and its write drops the REG_EXPAND_SZ type.
+function Set-UserPath([string]$Remove, [string]$Add) {
+  $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+  try {
+    $raw = [string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+    $parts = @($raw -split ';' | Where-Object { $_ })
+    if ($Remove -and $parts -contains $Remove) { $parts = @($parts | Where-Object { $_ -ne $Remove }) }
+    elseif ($Add -and $parts -notcontains $Add) { $parts += $Add }
+    else { return }
+    $kind = if ($k.GetValueNames() -contains 'Path') { $k.GetValueKind('Path') } else { 'ExpandString' }
+    $k.SetValue('Path', ($parts -join ';'), $kind)
+  } finally { $k.Close() }
+  # Clearing a variable that isn't set broadcasts the change, so new terminals see the PATH.
+  [Environment]::SetEnvironmentVariable('HIVE_PATH_CHANGED', $null, 'User')
+}
+
+# Whether $Dir lies outside $Old, so removing $Old leaves it alone. Paths are
+# compared whole, so a trailing separator or another case names the same folder.
+function Test-Outside([string]$Dir, [string]$Old) {
+  $d = [IO.Path]::GetFullPath($Dir).TrimEnd('\', '/') + '\'
+  $o = [IO.Path]::GetFullPath($Old).TrimEnd('\', '/') + '\'
+  -not $d.StartsWith($o, [StringComparison]::OrdinalIgnoreCase)
+}
+
 Write-Host "Downloading the Hive ($version) from $repo ..."
 $base = if ($version -ne 'latest') { "https://github.com/$repo/releases/download/$version" } else { "https://github.com/$repo/releases/latest/download" }
 foreach ($a in $assets) {
@@ -43,12 +69,22 @@ foreach ($a in $assets[1..2]) {
 
 $exe = Join-Path $dir "$cmd.exe"
 # Up to v0.1.2 the Hive lived in Programs\hive-v0, as hive-v0.exe or, once updated, hive.exe:
-# stop it and take that folder off PATH, so `hive` finds this install.
+# stop it, point its login autostart here and remove that folder, so only this install runs.
 $oldDir = Join-Path $env:LOCALAPPDATA 'Programs\hive-v0'
-if ($oldDir -ne $dir) {
-  foreach ($old in Get-ChildItem $oldDir -Filter 'hive*.exe' -ErrorAction SilentlyContinue) { Invoke-Native { & $old.FullName shutdown } -Quiet | Out-Null }
-  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-  [Environment]::SetEnvironmentVariable('Path', (($userPath -split ';') | Where-Object { $_ -ne $oldDir }) -join ';', 'User')
+if ((Test-Outside $dir $oldDir) -and (Test-Path $oldDir)) {
+  foreach ($old in Get-ChildItem $oldDir -Filter 'hive*.exe') { Invoke-Native { & $old.FullName shutdown } -Quiet | Out-Null }
+  $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+  if ((Get-ItemProperty $run -Name Hive -ErrorAction SilentlyContinue).Hive -like "*$oldDir\*") {
+    Set-ItemProperty $run -Name Hive -Value "`"$exe`" daemon --detach"
+  }
+  # Windows holds an exe a moment after its process ends (and a scanner may hold a new one), so
+  # the old folder, whose exe has just run shutdown, can't always be removed at once.
+  for ($i = 0; $i -lt 15 -and (Test-Path $oldDir); $i++) {
+    if ($i) { Start-Sleep -Seconds 1 }
+    Remove-Item $oldDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  if (Test-Path $oldDir) { Write-Warning "$oldDir is still in use; remove it once nothing runs from it." }
+  Set-UserPath -Remove $oldDir
   $env:Path = (($env:Path -split ';') | Where-Object { $_ -ne $oldDir }) -join ';'
 }
 if (Test-Path $exe) {
@@ -62,10 +98,7 @@ Copy-Item (Join-Path $tmp 'hive-linux-amd64') (Join-Path $dir 'hive-linux-amd64'
 Remove-Item $tmp -Recurse -Force
 
 if (-not $env:HIVE_NO_PATH) {
-  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-  if (($userPath -split ';') -notcontains $dir) {
-    [Environment]::SetEnvironmentVariable('Path', "$userPath;$dir", 'User')
-  }
+  Set-UserPath -Add $dir
   if (($env:Path -split ';') -notcontains $dir) { $env:Path = "$env:Path;$dir" }
 }
 

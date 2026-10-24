@@ -85,3 +85,21 @@ func TestStrainHoldKeepsBackoffAndNudges(t *testing.T) {
 		t.Errorf("%d run.held events for two runs held twice each, want 2", held)
 	}
 }
+
+// New work waits while the 1-minute load per core is over load_max.
+func TestLoaded(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "loadavg"), []byte("181.20 104.00 90.00 30/6000 1234\n"), 0o644)
+	if got := loaded(dir, 20, 1); !strings.Contains(got, "load 181 on 20 cores") {
+		t.Errorf("load 181 on 20 cores: %q", got)
+	}
+	if got := loaded(dir, 200, 1); got != "" {
+		t.Errorf("load 181 on 200 cores: %q", got)
+	}
+	if got := loaded(dir, 20, 0); got != "" {
+		t.Errorf("off: %q", got)
+	}
+	if got := loaded(t.TempDir(), 20, 1); got != "" {
+		t.Errorf("no /proc/loadavg: %q", got)
+	}
+}

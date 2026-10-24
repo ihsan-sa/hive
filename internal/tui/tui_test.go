@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -281,11 +283,11 @@ func TestModuleReviewKey(t *testing.T) {
 func TestWheelMovesModuleSelection(t *testing.T) {
 	m := testModel(80, 20)
 	m.stack = []detail{{kind: "module", id: "agents"}}
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
 	if m.stack[0].sel != 1 {
 		t.Fatalf("wheel down: sel %d, want 1", m.stack[0].sel)
 	}
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
 	if m.stack[0].sel != 0 {
 		t.Fatalf("wheel up: sel %d, want 0", m.stack[0].sel)
 	}
@@ -314,12 +316,12 @@ func TestChannelScrolls(t *testing.T) {
 		t.Fatal("Home did not show the first thread under the title")
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionRelease})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionRelease})
 	if m.chScroll != 3 {
 		t.Fatalf("wheel up: scroll %d, want 3", m.chScroll)
 	}
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
 	if m.chScroll != 0 {
 		t.Fatalf("wheel down: scroll %d, want 0", m.chScroll)
 	}
@@ -342,12 +344,12 @@ func TestChannelUpKeepsSelectionInView(t *testing.T) {
 func TestWheelScrollsDetail(t *testing.T) {
 	m := testModel(80, 20)
 	m.stack = []detail{{kind: "run"}}
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionRelease})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionRelease})
 	if m.stack[0].scroll != 3 {
 		t.Fatalf("wheel down: scroll %d, want 3", m.stack[0].scroll)
 	}
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
 	if m.stack[0].scroll != 0 {
 		t.Fatalf("wheel up: scroll %d, want 0", m.stack[0].scroll)
 	}
@@ -472,7 +474,7 @@ func TestSidebarGroupRow(t *testing.T) {
 	want := m.path()
 	for i, r := range m.sideRows() {
 		if r.group && r.label == "textkit" {
-			m.side = i
+			m.side, m.sideKey = i, r.key
 		}
 	}
 	m.focus = 0
@@ -508,5 +510,418 @@ func TestUpdateNoticeShowsOnce(t *testing.T) {
 	m.Update(stateMsg{st: st})
 	if view := m.View(); strings.Contains(view, "Fixed the thing") {
 		t.Fatalf("notice back after dismissing:\n%s", view)
+	}
+}
+
+// An update that installed an unsigned release says so in its notice.
+func TestUpdateNoticeSaysUnsigned(t *testing.T) {
+	m := testModel(100, 30)
+	st := sample()
+	st.Updated = &api.Updated{Seq: 3, To: "v0.1.4", Notes: "Fixed the thing"}
+	m.Update(stateMsg{st: st})
+	if view := m.View(); !strings.Contains(view, "Updated to v0.1.4") || strings.Contains(view, "unsigned") {
+		t.Fatalf("a signed update's notice:\n%s", view)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	st.Updated = &api.Updated{Seq: 4, To: "v0.1.5", Notes: "Fixed the thing", Unsigned: true}
+	m.Update(stateMsg{st: st})
+	view := m.View()
+	checkWidth(t, view, 100, 30, "unsigned update notice")
+	if !strings.Contains(view, "Updated to v0.1.5") || !strings.Contains(view, "This release was unsigned") || !strings.Contains(view, "Fixed the thing") {
+		t.Fatalf("no unsigned notice:\n%s", view)
+	}
+}
+
+func protectedAsk() core.Ask {
+	var diff strings.Builder
+	diff.WriteString("diff --git a/.hive/goals.md b/.hive/goals.md\n--- a/.hive/goals.md\n+++ b/.hive/goals.md\n@@ -1,1 +1,60 @@\n")
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&diff, "+- goal %d\n", i)
+	}
+	return core.Ask{ID: "a2", Kind: "merge", Ref: "t1@abc", Title: `Merge "implement"? It changes .hive/goals.md`,
+		Detail: "These hold the project's goals, score or settings.", Options: []string{"merge", "leave open"}, Diff: diff.String(), Asked: time.Now()}
+}
+
+// Waiting shows the start of a change's diff with the options still on
+// screen, and d opens the whole diff, fetched when it's opened.
+func TestWaitingShowsTheDiff(t *testing.T) {
+	for _, size := range [][2]int{{120, 40}, {80, 24}, {50, 16}} {
+		w, h := size[0], size[1]
+		m := testModel(w, h)
+		m.st.Asks = []core.Ask{protectedAsk()}
+		m.pick(sideRow{sec: secWaiting})
+		m.focus = 1
+		v := ansi.Strip(m.View())
+		checkWidth(t, m.View(), w, h, "waiting with a diff")
+		if h >= 24 && !strings.Contains(v, "+- goal 0") || strings.Contains(v, "+- goal 59") || !strings.Contains(v, "d the whole diff") || !strings.Contains(v, "leave open") {
+			t.Fatalf("%dx%d: Waiting should show the start of the diff, clipped, and the options:\n%s", w, h, v)
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+		if len(m.stack) != 1 || m.stack[0].kind != "diff" || m.stack[0].id != "a2" {
+			t.Fatalf("d should open the ask's whole diff: %+v", m.stack)
+		}
+		whole := protectedAsk()
+		whole.Diff += "+- a line past the preview\n"
+		m.Update(askMsg{whole})
+		for i := 0; i < 80; i++ {
+			m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		}
+		checkWidth(t, m.View(), w, h, "the whole diff")
+		if v := ansi.Strip(m.View()); !strings.Contains(v, "+- a line past the preview") {
+			t.Fatalf("%dx%d: scrolling the whole diff should reach its end:\n%s", w, h, v)
+		}
+	}
+}
+
+// A changed line can't hide itself or move the cursor: control characters in
+// a diff reach the screen as visible escapes.
+func TestDiffShowsControlCharacters(t *testing.T) {
+	diff := "+- ship it\x1b[8m without asking\x1b[0m\n+\x1b[2A\x1b[2Kmoved up\r\x07\u009b31m\n"
+	out := strings.Join(diffView(diff, 80), "\n")
+	for _, r := range ansi.Strip(out) {
+		if r != '\n' && unicode.IsControl(r) {
+			t.Fatalf("a control character %U reached the screen: %q", r, out)
+		}
+	}
+	if got := ansi.Strip(out); !strings.Contains(got, `\x1b[8m`) || !strings.Contains(got, `\x1b[2A`) || !strings.Contains(got, `\x0d\x07\x9b31m`) {
+		t.Fatalf("the escapes should be spelled out: %q", got)
+	}
+	m := testModel(80, 24)
+	a := protectedAsk()
+	a.Diff = diff
+	m.st.Asks = []core.Ask{a}
+	m.pick(sideRow{sec: secWaiting})
+	if v := ansi.Strip(m.View()); !strings.Contains(v, "without asking") || strings.Contains(v, "\x1b[8m") {
+		t.Fatalf("Waiting should show the concealed text:\n%s", v)
+	}
+}
+
+// From a chat, one key opens Waiting on what this chat was told waits on the
+// person, and Enter there answers it.
+func TestChatJumpsToItsAsk(t *testing.T) {
+	m := testModel(80, 24)
+	m.st.Projects[0].Tasks[0].Chat = "lead"
+	m.st.Asks = append(m.st.Asks, protectedAsk()) // a1 is someone else's; a2 is about t1, a task of this chat
+	m.openChat("lead")
+	m.focus = 0
+	if v := ansi.Strip(m.View()); !strings.Contains(v, "2 waiting on you · → then a to answer") {
+		t.Fatalf("the chat should say what's waiting:\n%s", v)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if m.section != secWaiting || m.focus != 1 || m.st.Asks[m.waitSel].ID != "a2" || m.optSel != 0 || m.composing {
+		t.Fatalf("a should open Waiting on this chat's ask: section %d, focus %d, ask %d", m.section, m.focus, m.waitSel)
+	}
+	if v := ansi.Strip(m.View()); !strings.Contains(v, "Waiting") || !strings.Contains(v, "+- goal 0") {
+		t.Fatalf("Waiting should show the ask's diff:\n%s", v)
+	}
+}
+
+// The wheel scrolls the pane under the pointer, whichever has the keys.
+func TestWheelScrollsThePaneUnderIt(t *testing.T) {
+	m := testModel(160, 30)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // the thread opens beside the channel, with the keys
+	if !m.sidePane() || m.focus != 2 {
+		t.Fatalf("no thread pane: focus %d", m.focus)
+	}
+	sw, mw, _ := m.layout()
+	m.Update(tea.MouseMsg{X: sw + 5, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.chScroll != 3 || m.thScroll != 0 {
+		t.Fatalf("wheel over the channel: channel %d thread %d, want 3 and 0", m.chScroll, m.thScroll)
+	}
+	m.Update(tea.MouseMsg{X: sw + mw + 5, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.thScroll != 3 || m.chScroll != 3 {
+		t.Fatalf("wheel over the thread: channel %d thread %d, want 3 and 3", m.chScroll, m.thScroll)
+	}
+	m.Update(tea.MouseMsg{X: 2, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.thScroll != 3 || m.chScroll != 3 || m.side != m.sideAt(m.sideRows()) {
+		t.Fatal("wheel over the sidebar moved something")
+	}
+}
+
+// PgUp with a thread picked scrolls the channel, rather than being pulled
+// back to the pick; moving the pick brings it into view again.
+func TestScrolledChannelLetsGoOfThePick(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp}) // the last thread, on screen
+	m.View()
+	before := m.chScroll
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m.View()
+	if m.chScroll <= before {
+		t.Fatalf("PgUp with a pick: scroll %d, was %d", m.chScroll, before)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if !strings.Contains(m.View(), "▌") {
+		t.Fatal("moving the pick left it off screen")
+	}
+}
+
+// A detail scrolls down to its last full page and no further, Home and End
+// jump, and the header says where you are.
+func TestDetailStopsAtItsLastPage(t *testing.T) {
+	m := testModel(80, 20)
+	m.pick(sideRow{sec: secDash})
+	m.focus = 1
+	var text []string
+	for i := 1; i <= 100; i++ {
+		text = append(text, fmt.Sprintf("line %d", i))
+	}
+	m.push(detail{kind: "text", title: "sweep", text: strings.Join(text, "\n")})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	v := m.View()
+	if d := m.stack[0]; d.scroll != 100-m.bodyHeight() || !strings.Contains(v, "line 100") || !strings.Contains(v, "of 100") {
+		t.Fatalf("End: scroll %d, want %d:\n%s", d.scroll, 100-m.bodyHeight(), v)
+	}
+	for i := 0; i < 5; i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m.View()
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if v := m.View(); strings.Contains(v, "line 100") {
+		t.Fatal("down past the end piled up: one up didn't move")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	if v := m.View(); !strings.Contains(v, " line 1 ") && !strings.Contains(v, "1–") {
+		t.Fatalf("Home did not go to the top:\n%s", v)
+	}
+}
+
+// In the sidebar → goes deeper and ← comes back, a level at a time, and a
+// collapsed group still marks a chat with news.
+func TestSidebarFoldsLevelByLevel(t *testing.T) {
+	m := testModel(120, 40)
+	m.focus = 0
+	at := func() sideRow { return m.sideRows()[m.sideAt(m.sideRows())] }
+	key := func(k tea.KeyType) { m.Update(tea.KeyMsg{Type: k}) }
+	if at().key != "lead" {
+		t.Fatalf("starts on %q, want the Hive's lead", at().key)
+	}
+	key(tea.KeyLeft)
+	if at().key != "p:" || m.closed["p:"] {
+		t.Fatalf("← from a chat: on %q, closed %v", at().key, m.closed)
+	}
+	key(tea.KeyLeft)
+	if !m.closed["p:"] {
+		t.Fatal("← on an open group did not close it")
+	}
+	if line := ansi.Strip(m.viewSidebar(30).body[m.side]); !strings.HasSuffix(strings.TrimSpace(line), "●") {
+		t.Fatalf("collapsed group with an unread chat has no mark: %q", line)
+	}
+	key(tea.KeyRight)
+	if m.closed["p:"] || at().key != "p:" {
+		t.Fatal("→ on a closed group did not open it in place")
+	}
+	key(tea.KeyRight)
+	if at().key != "lead" || m.chat != "lead" {
+		t.Fatalf("→ on an open group: on %q, chat %q", at().key, m.chat)
+	}
+}
+
+// Chats that come and go above the cursor don't move it to another chat.
+func TestSidebarCursorKeepsItsRow(t *testing.T) {
+	m := testModel(120, 40)
+	m.focus = 0
+	st := sample()
+	for _, id := range []string{"w-a", "w-b", "w-c"} {
+		st.Runs = append(st.Runs, core.Run{RunSpec: core.RunSpec{ID: id, Role: "worker", Project: "textkit"}, Status: core.StatusRunning})
+	}
+	m.Update(stateMsg{st: st})
+	m.View()
+	if r := m.sideRows()[m.side]; r.key != "lead" {
+		t.Fatalf("three agents started above: cursor on %q, want lead", r.key)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp}) // the Hive's group row
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.chat != "agent:w-c" {
+		t.Fatalf("↑ from the lead opened %q, want the agent just above it", m.chat)
+	}
+}
+
+// An agent whose project the state doesn't list keeps a group of its own.
+func TestAgentsOfAnUnlistedProjectStay(t *testing.T) {
+	m := testModel(120, 40)
+	st := sample()
+	st.Runs = append(st.Runs, core.Run{RunSpec: core.RunSpec{ID: "w-z", Name: "orphan", Role: "worker", Project: "gone"}, Status: core.StatusRunning})
+	m.Update(stateMsg{st: st})
+	var labels []string
+	for _, r := range m.sideRows() {
+		labels = append(labels, r.label)
+	}
+	if !slices.Contains(labels, "gone") || !slices.Contains(labels, "orphan") {
+		t.Fatalf("the agent of an unlisted project is missing: %q", labels)
+	}
+}
+
+// The status tree's cursor stays on its row as work starts above it.
+func TestTreeCursorKeepsItsRow(t *testing.T) {
+	m := testModel(120, 40)
+	m.pick(sideRow{sec: secDash})
+	m.focus, m.dashTree = 1, true
+	rows := m.dashRows()
+	for i, r := range rows {
+		if r.key == "plans" {
+			m.dashSel, m.dashKey = i, r.key
+		}
+	}
+	st := sample()
+	st.Projects[0].Tasks = append(st.Projects[0].Tasks, work.Task{ID: "t3", Title: "more", Stage: work.StageWorking})
+	m.Update(stateMsg{st: st})
+	m.View()
+	if r := m.dashRows()[m.dashSel]; r.key != "plans" {
+		t.Fatalf("new work above: cursor on %q, want plans", r.key)
+	}
+}
+
+// A long module list scrolls to keep the selection on screen, and the wheel
+// over a list moves its cursor.
+func TestListsScroll(t *testing.T) {
+	m := testModel(80, 24)
+	st := sample()
+	for i := 0; i < 40; i++ {
+		st.Modules = append(st.Modules, api.ModuleView{Name: fmt.Sprintf("mod%02d", i)})
+	}
+	m.Update(stateMsg{st: st})
+	m.pick(sideRow{sec: secModules})
+	m.focus = 1
+	m.modSel = 40
+	if v := m.View(); !strings.Contains(v, "mod39") {
+		t.Fatalf("the last module is off screen:\n%s", v)
+	}
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.modSel != 39 {
+		t.Fatalf("wheel up over modules: sel %d, want 39", m.modSel)
+	}
+	m.pick(sideRow{sec: secDash})
+	m.focus, m.dashTree = 0, true
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	if m.dashSel != 1 || m.focus != 1 {
+		t.Fatalf("wheel down over the status tree: sel %d focus %d, want 1 and 1", m.dashSel, m.focus)
+	}
+}
+
+// span keeps a run of lines in view, the top one when they can't all fit.
+func TestSpanKeepsWhatOpensBelow(t *testing.T) {
+	lines := make([]string, 20)
+	for i := range lines {
+		lines[i] = strconv.Itoa(i)
+	}
+	for _, c := range []struct{ top, bot, h, first int }{
+		{0, 0, 5, 0}, {10, 14, 5, 10}, {10, 19, 5, 10}, {17, 19, 5, 15}, {3, 9, 5, 3}, {8, 9, 5, 5}, {5, 5, 0, 5},
+	} {
+		got := span(lines, c.top, c.bot, c.h)
+		if len(got) != c.h || (c.h > 0 && got[0] != strconv.Itoa(c.first)) {
+			t.Errorf("span(top %d, bot %d, h %d) = %v, want %d lines from %d", c.top, c.bot, c.h, got, c.h, c.first)
+		}
+	}
+	if got := window(lines, 1, 2); got[0] != "1" { // a two-row pane still shows the selected line
+		t.Errorf("window(sel 1, h 2) = %v", got)
+	}
+}
+
+// A pick-list opened on the bottom row of a short window shows every choice.
+func TestPickListUnderTheBottomRow(t *testing.T) {
+	for _, sz := range [][2]int{{80, 24}, {80, 14}, {120, 20}, {50, 16}} {
+		m := designModel(sz[0], sz[1])
+		m.pick(sideRow{sec: secSettings})
+		var sel int
+		for i, s := range m.settings() {
+			if s.key == "project:website" {
+				sel = i
+			}
+		}
+		for range sel {
+			m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if !m.picking {
+			t.Fatalf("%v: the list did not open", sz)
+		}
+		view := plain(m.View())
+		checkWidth(t, view, sz[0], sz[1], "pick-list")
+		for _, ch := range m.settings()[sel].choices {
+			if !strings.Contains(view, ch) {
+				t.Errorf("%v: choice %q is cut off:\n%s", sz, ch, view)
+			}
+		}
+		if !strings.Contains(view, "website") {
+			t.Errorf("%v: the row the list belongs to scrolled away:\n%s", sz, view)
+		}
+	}
+}
+
+// A setting's long value wraps under its own column, and a label too long for
+// its column keeps its whole name.
+func TestSettingsWrapLongValues(t *testing.T) {
+	for _, sz := range [][2]int{{80, 40}, {50, 60}} {
+		m := designModel(sz[0], sz[1])
+		m.st.Config.ReleasePin = "v0.9.1"
+		m.st.Projects = append(m.st.Projects, api.ProjectView{Project: core.Project{Name: "a-project-with-a-long-name"}})
+		m.pick(sideRow{sec: secSettings})
+		view := plain(m.View())
+		checkWidth(t, view, sz[0], sz[1], "settings")
+		for _, want := range []string{"newest)", "a-long-name"} {
+			if !strings.Contains(view, want) {
+				t.Errorf("%v: %q is cut off:\n%s", sz, want, view)
+			}
+		}
+	}
+}
+
+// An ask's options stay on screen when it is the last one and has detail.
+func TestWaitingKeepsTheOptions(t *testing.T) {
+	m := designModel(80, 12)
+	m.st.Asks[2].Detail = strings.Repeat("The rebuild touches every page of the site. ", 4)
+	m.pick(sideRow{sec: secWaiting})
+	m.focus = 1
+	m.waitSel = 2
+	view := plain(m.View())
+	checkWidth(t, view, 80, 12, "waiting")
+	if !strings.Contains(view, "yes    no") {
+		t.Errorf("the last ask's options are cut off:\n%s", view)
+	}
+}
+
+// A word longer than the line, a URL or a path, breaks instead of running off.
+func TestWrapBreaksLongWords(t *testing.T) {
+	url := "https://github.com/ihsan-sa/hive/pull/140/files#diff-0123456789abcdef0123456789abcdef"
+	ls := wrap("see "+url+" for it", 30)
+	for _, l := range ls {
+		if visibleWidth(l) > 30 {
+			t.Fatalf("line %q is wider than 30", l)
+		}
+	}
+	if got := strings.ReplaceAll(strings.Join(ls, ""), " ", ""); got != "see"+url+"forit" {
+		t.Fatalf("wrapping lost text: %q", got)
+	}
+}
+
+// Window names and statuses come from the usage feed; one carrying terminal
+// control codes, bidi or zero-width characters is spelled out on the
+// dashboard and in the usage line, never sent to the screen.
+func TestPlanUsageEscapesFeedNames(t *testing.T) {
+	m := testModel(200, 40)
+	evil := "five\x1b[2J\x1b[H\u009b31m\r\u202e\u200bhour"
+	m.st.Plans = []core.Plan{{Harness: "claude\x1b]0;x\x07", Login: "me\u2066", Limit: harness.RateLimit{Status: "allowed\x1b[1A", Window: evil,
+		Windows: map[string]harness.Window{evil: {Utilization: 0.5}}}}}
+	var dash string
+	for _, r := range m.dashRows() {
+		if strings.HasPrefix(r.key, "plan:") {
+			dash += r.text
+		}
+	}
+	for where, s := range map[string]string{"dashboard": dash, "usage line": m.usage(400)} {
+		if !strings.Contains(s, `five\x1b[2J\x1b[H\x9b31m\x0d\u202e\u200bhour`) {
+			t.Errorf("%s lacks the escaped window name: %q", where, s)
+		}
+		if strings.ContainsAny(s, "\x1b\x07\r\u009b\u202e\u200b\u2066") {
+			t.Errorf("%s sends a control or format character to the screen: %q", where, s)
+		}
 	}
 }

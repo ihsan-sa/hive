@@ -9,11 +9,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
+	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
 // Workspace is the folder on disk: .hive (core state), .modules, projects.
@@ -33,6 +35,7 @@ func (w Workspace) KB() string                 { return filepath.Join(w.Hive(), 
 func (w Workspace) ConfigPath() string         { return filepath.Join(w.Hive(), "config.json") }
 func (w Workspace) DaemonFile() string         { return filepath.Join(w.Private(), "daemon.json") }
 func (w Workspace) Bin() string                { return filepath.Join(w.Hive(), "bin") }
+func (w Workspace) Tools() string              { return filepath.Join(w.Hive(), "tools") }
 func (w Workspace) Gates() string              { return filepath.Join(w.Hive(), "gates") }
 
 // Private holds what grants access (the daemon's token, each run's home and
@@ -86,12 +89,24 @@ type Config struct {
 	MemFloorMB     int     `json:"mem_floor_mb"`
 	MemPressureMax float64 `json:"mem_pressure_max"`
 	CPUPressureMax float64 `json:"cpu_pressure_max"`
+	// MaxWorkers is how many workers may work at once: a plan carries only so
+	// many, so until its usage reading is trusted this number is the limit.
+	// Briefs past it wait in the queue, in order; 0 is no limit.
+	MaxWorkers int `json:"max_workers"`
+	// LoadMax holds new workers while the machine's 1-minute load per core is
+	// over it (Linux /proc/loadavg); 0 is off.
+	LoadMax float64 `json:"load_max"`
+	// MaxChecks is how many checks (the gate's tests, scores and dry runs,
+	// improve's measures) run at once; the rest wait in order. 0 is no limit.
+	MaxChecks int `json:"max_checks"`
 	// PlateauMerges: a project whose best score hasn't moved in this many
 	// merges gets a step-back (besides the improve.stepback schedule); 0 is off.
 	PlateauMerges int `json:"plateau_merges"`
 	// StallFloorSeconds: nothing counts as stalled before this long without moving,
 	// however fast its stage usually is here; 0 is the default (20 minutes).
 	StallFloorSeconds int `json:"stall_floor_seconds,omitempty"`
+	// ShareBundleURL is where `hive share` sends its bundle; empty is the developer's endpoint.
+	ShareBundleURL string `json:"share_bundle_url,omitempty"`
 }
 
 // ProjectSettings override workspace defaults per project.
@@ -136,10 +151,32 @@ func (t TribunalSeat) MarshalJSON() ([]byte, error) {
 }
 
 // Egress is the hosts runs may reach: Default for every run, and a role's own
-// list in place of it. A run's harness API hosts are added to any list.
+// list in place of it. A run's harness API hosts are added to any list. Local
+// is the services on this machine the person opened to every sandboxed run,
+// one loopback host:port each ("127.0.0.1:11434"); nothing local is reachable
+// otherwise.
 type Egress struct {
 	Default []string            `json:"default,omitempty"`
 	Roles   map[string][]string `json:"roles,omitempty"` // warden, tribunal, worker, lead, ...
+	Local   []string            `json:"local,omitempty"`
+}
+
+// LocalAddrs is the loopback ip:port the Local grants open, skipping any
+// entry Check refuses.
+func (e Egress) LocalAddrs() []string {
+	var out []string
+	for _, l := range e.Local {
+		a, err := sandbox.LocalGrant(l)
+		if err != nil {
+			continue
+		}
+		for _, x := range a {
+			if !slices.Contains(out, x) {
+				out = append(out, x)
+			}
+		}
+	}
+	return out
 }
 
 // For is a copy of role's list: the role's own when its key is set, even to
@@ -157,6 +194,11 @@ func (c Config) Check() error {
 	for _, f := range c.Floor {
 		if _, err := path.Match(f, ""); strings.ContainsAny(f, "*?[") && err != nil {
 			return fmt.Errorf("floor entry %q isn't a glob the Hive can match: %v", f, err)
+		}
+	}
+	for _, l := range c.Egress.Local {
+		if _, err := sandbox.LocalGrant(l); err != nil {
+			return err
 		}
 	}
 	for _, t := range c.TribunalModels {
@@ -195,6 +237,9 @@ func DefaultConfig() Config {
 		MemFloorMB:      1024,
 		MemPressureMax:  10,
 		CPUPressureMax:  40,
+		MaxWorkers:      4,
+		LoadMax:         1,
+		MaxChecks:       DefaultMaxChecks(),
 		PlateauMerges:   3,
 		Schedules: map[string]string{
 			"improve.sweep":    "every 12h",
@@ -336,7 +381,7 @@ func ForgetWorkspace() { os.Remove(pointerFile()) }
 
 // Init creates the folder layout.
 func (w Workspace) Init() error {
-	for _, d := range []string{w.Hive(), w.Modules(), w.Projects(), w.Runs(), w.Chats(), w.KB(), w.Bin(), w.Gates()} {
+	for _, d := range []string{w.Hive(), w.Modules(), w.Projects(), w.Runs(), w.Chats(), w.KB(), w.Bin(), w.Gates(), w.Tools()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}

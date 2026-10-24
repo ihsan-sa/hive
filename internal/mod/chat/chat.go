@@ -21,6 +21,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 )
 
 // Chat is one conversation.
@@ -346,6 +347,14 @@ func (m *Module) deliverToLead(ch *Chat, text string, files ...File) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	// A new lead for a chat that had one keeps that lead's journal
+	// (Runs.Start only makes missing dirs, so the copy survives it).
+	if ch.Lead != "" {
+		if notes, err := core.SafeRead(filepath.Join(m.C.WS.RunBox(ch.Lead), "notes.md"), 1<<20); err == nil {
+			os.MkdirAll(m.C.WS.RunBox(id), 0o755)
+			os.WriteFile(filepath.Join(m.C.WS.RunBox(id), "notes.md"), notes, 0o644)
+		}
+	}
 	spec := m.Agents.Spec(id, "lead", project, dir, text)
 	spec.Name, spec.Persistent = name, true
 	if _, err := m.C.Runs.Start(spec); err != nil {
@@ -467,6 +476,16 @@ func (m *Module) onEvent(e core.Event) {
 			return
 		}
 		m.add(Message{Chat: chatID, Thread: thread, From: r.ID, Name: r.Name, Text: text})
+	case "hive.updated":
+		// An unsigned install is told to the person where they talk to the
+		// Hive, not only in the control center's notice.
+		var u struct {
+			To       string
+			Unsigned bool
+		}
+		if e.Decode(&u) == nil && u.Unsigned {
+			m.add(Message{Chat: "lead", From: "hive", Name: "hive", Text: "Updated to " + u.To + ". " + release.Unsigned})
+		}
 	case "msg.sent":
 		var s struct{ From, To, Text string }
 		e.Decode(&s)

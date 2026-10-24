@@ -12,19 +12,28 @@ import (
 
 // Git runs host git in dir. Host git only ever runs in repositories the host
 // created and controls (project clones, fresh gate clones), never in an
-// agent's checkout, whose git metadata could point anywhere.
+// agent's checkout, whose git metadata could point anywhere. Auto maintenance
+// (gc, repack, pack-refs) runs before the command returns rather than in a
+// detached process, so nothing still writes in a repo once its git call ends
+// and the repo can be removed or reused at once.
 func Git(dir string, args ...string) (string, error) {
 	return GitT(2*time.Minute, dir, args...)
 }
 
 // GitT is Git with a timeout.
 func GitT(timeout time.Duration, dir string, args ...string) (string, error) {
+	return GitEnvT(timeout, dir, nil, args...)
+}
+
+// GitEnvT is GitT with extra environment, such as the GH_TOKEN for a repo's owner.
+func GitEnvT(timeout time.Duration, dir string, env []string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	full := append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "transfer.fsckObjects=true", "-c", "core.autocrlf=false", "-c", "user.name=Hive", "-c", "user.email=hive@localhost"}, args...)
+	full := append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "transfer.fsckObjects=true", "-c", "core.autocrlf=false", "-c", "user.name=Hive", "-c", "user.email=hive@localhost",
+		"-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "LC_ALL=C")
+	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "LC_ALL=C"), env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
@@ -36,16 +45,28 @@ func GitT(timeout time.Duration, dir string, args ...string) (string, error) {
 
 // RunCmd runs a host program with a timeout and returns trimmed stdout.
 func RunCmd(timeout time.Duration, dir string, name string, args ...string) (string, error) {
+	return RunCmdEnv(timeout, dir, nil, name, args...)
+}
+
+// RunCmdEnv is RunCmd with extra environment.
+func RunCmdEnv(timeout time.Duration, dir string, env []string, name string, args ...string) (string, error) {
+	out, stderr, err := runCmd(timeout, dir, env, name, args...)
+	if err != nil {
+		return out, fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, stderr)
+	}
+	return out, nil
+}
+
+// runCmd runs a host program and hands back its trimmed stdout and stderr
+// apart from how it ended.
+func runCmd(timeout time.Duration, dir string, env []string, name string, args ...string) (string, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "NO_COLOR=1", "GH_NO_UPDATE_NOTIFIER=1")
+	cmd.Env = append(append(os.Environ(), "GH_PROMPT_DISABLED=1", "NO_COLOR=1", "GH_NO_UPDATE_NOTIFIER=1"), env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
-	if err != nil {
-		return strings.TrimSpace(out.String()), fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
-	}
-	return strings.TrimSpace(out.String()), nil
+	return strings.TrimSpace(out.String()), strings.TrimSpace(errb.String()), err
 }

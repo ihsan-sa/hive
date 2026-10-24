@@ -32,8 +32,9 @@ type Turn struct {
 
 // Event is a normalized line of harness output.
 type Event struct {
-	Kind      string // init, text, tool, result, ratelimit
+	Kind      string // init, text, tool, context, result, ratelimit
 	SessionID string
+	Tokens    int // context: what the session's context held at this reply
 	Model     string
 	Text      string
 	Tool      string
@@ -181,6 +182,11 @@ type claudeLine struct {
 			Name  string          `json:"name"`
 			Input json.RawMessage `json:"input"`
 		} `json:"content"`
+		Usage *struct {
+			Input         int `json:"input_tokens"`
+			CacheCreation int `json:"cache_creation_input_tokens"`
+			CacheRead     int `json:"cache_read_input_tokens"`
+		} `json:"usage"`
 	} `json:"message"`
 	Result           string          `json:"result"`
 	IsError          bool            `json:"is_error"`
@@ -188,10 +194,10 @@ type claudeLine struct {
 	StructuredOutput json.RawMessage `json:"structured_output"`
 	APIErrorStatus   *int            `json:"api_error_status"`
 	RateLimitInfo    *struct {
-		Status         string  `json:"status"`
-		ResetsAt       int64   `json:"resetsAt"`
-		RateLimitType  string  `json:"rateLimitType"`
-		Utilization    float64 `json:"utilization"`
+		Status         string   `json:"status"`
+		ResetsAt       int64    `json:"resetsAt"`
+		RateLimitType  string   `json:"rateLimitType"`
+		Utilization    *float64 `json:"utilization"`
 		UnifiedWindows map[string]struct {
 			Utilization float64 `json:"utilization"`
 			ResetsAt    int64   `json:"resetsAt"`
@@ -214,6 +220,9 @@ func (Claude) Parse(line []byte) []Event {
 			return nil
 		}
 		var out []Event
+		if u := l.Message.Usage; u != nil {
+			out = append(out, Event{Kind: "context", Tokens: u.Input + u.CacheCreation + u.CacheRead})
+		}
 		for _, c := range l.Message.Content {
 			switch c.Type {
 			case "text":
@@ -230,12 +239,19 @@ func (Claude) Parse(line []byte) []Event {
 			return nil
 		}
 		ri := l.RateLimitInfo
-		rl := &RateLimit{Status: ri.Status, Window: ri.RateLimitType, Utilization: ri.Utilization, Windows: map[string]Window{}}
+		rl := &RateLimit{Status: ri.Status, Window: ri.RateLimitType, Windows: map[string]Window{}}
 		if ri.ResetsAt > 0 {
 			rl.ResetsAt = time.Unix(ri.ResetsAt, 0).UTC()
 		}
 		for k, w := range ri.UnifiedWindows {
 			rl.Windows[k] = Window{Utilization: w.Utilization, ResetsAt: time.Unix(w.ResetsAt, 0).UTC()}
+		}
+		// Claude Code sends the binding window's utilization only under
+		// unifiedWindows, not at the top level, when the status is allowed.
+		if ri.Utilization != nil {
+			rl.Utilization = *ri.Utilization
+		} else if w, ok := rl.Windows[ri.RateLimitType]; ok {
+			rl.Utilization = w.Utilization
 		}
 		return []Event{{Kind: "ratelimit", RateLimit: rl}}
 	case "result":

@@ -17,6 +17,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
@@ -172,10 +173,10 @@ func (x *term) goTo(label string) {
 	x.until(10*time.Second, "focus leaving the sidebar", func(s string) bool { return !strings.Contains(s, "tab switch pane") })
 }
 
-// sections walks the sidebar through all five sections, back to Chats, and checks each frame.
+// sections walks the sidebar through all seven sections, back to Chats, and checks each frame.
 func (x *term) sections(w, h int) {
 	x.t.Helper()
-	for _, name := range []string{"Dashboard", "Waiting", "Modules", "Settings", "Chats"} {
+	for _, name := range []string{"Dashboard", "Waiting", "Feedback", "Knowledge", "Modules", "Settings", "Chats"} {
 		x.goTo(name)
 		if name != "Chats" {
 			x.wait(10*time.Second, "│   "+name)
@@ -188,7 +189,8 @@ func (x *term) shot(name string) { x.t.Helper(); x.t.Logf("screen: %s\n%s", name
 
 // TestControlCenterInTmux drives the built hive in a real terminal the way a
 // person does: the first run on a clean HOME, a chat that lands work, the
-// dashboard, approving and declining from Waiting, module access, settings,
+// dashboard, approving and declining from Waiting, merging a goals change
+// reached from the chat, module access, settings,
 // quitting with the Hive still running, reopening, and resizing. Services are
 // stubbed on PATH, so nothing is installed on the account running the test.
 func TestControlCenterInTmux(t *testing.T) {
@@ -258,7 +260,7 @@ func TestControlCenterInTmux(t *testing.T) {
 	// harness, as a person's own settings would point it at Claude Code.
 	cfg := ws.LoadConfig()
 	cfg.Harness = "fake"
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
 	for k := range cfg.Schedules {
 		cfg.Schedules[k] = "off"
 	}
@@ -372,6 +374,49 @@ func TestControlCenterInTmux(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("requests after go ahead and declined: %v", states)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// A change to the goals is the person's to merge: the chat says so, and
+	// → then a opens it in Waiting with its diff, where Enter merges it.
+	x.goTo("Chats")
+	x.wait(10*time.Second, "textkit › lead")
+	x.keys("n")
+	x.typ("edit the goals FAKE:goals")
+	x.keys("Enter")
+	x.wait(time.Minute, "Understood: edit the goa")
+	x.goTo("lead") // the sidebar holds the chat, the focus moves to it, and esc goes back
+	x.wait(3*time.Minute, "1 waiting on you · a to answer")
+	x.keys("Escape")
+	x.wait(10*time.Second, "1 waiting on you · → then a to answer")
+	x.shot("the chat says a change waits on the person")
+	x.keys("Right", "a")
+	x.wait(10*time.Second, "│   Waiting", ".hive/goals.md", "+- a goal the worker wrote down", "merge    leave open")
+	x.shot("the goals change in Waiting")
+	x.keys("d")
+	x.wait(10*time.Second, "Waiting › what it changes", "+++ b/.hive/goals.md")
+	x.keys("Escape", "Enter")
+	x.wait(10*time.Second, "Nothing is waiting on you.")
+	for i := 0; ; i++ {
+		st, _ := c.State()
+		merged := false
+		for _, p := range st.Projects {
+			for _, tk := range p.Tasks {
+				merged = merged || strings.Contains(tk.Label(), "FAKE:goals") && (tk.Stage == work.StageMerged || tk.Stage == work.StageDone)
+			}
+		}
+		if merged {
+			break
+		}
+		if len(st.Asks) > 0 && i%10 == 0 { // main moved: the rebased commit asks again, and only that is answered
+			if a := st.Asks[0]; len(st.Asks) > 1 || a.Kind != "merge" || !strings.Contains(a.Title, "FAKE:goals") {
+				t.Fatalf("an ask this test doesn't expect is open: %+v", st.Asks)
+			}
+			x.keys("Enter")
+		}
+		if i == 600 {
+			t.Fatalf("the approved goals change never merged: %+v", st.Projects)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}

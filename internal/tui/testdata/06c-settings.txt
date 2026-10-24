@@ -3,21 +3,21 @@
    Chats              │   General
    Dashboard          │     autonomy                    2  default
    Waiting         3  │ ▌   sandbox                     auto
-   Modules            │     WSL distro
- › Settings           │     auto-update                 on
-                      │     use ANTHROPIC_API_KEY       off
- ▾ textkit-2          │     release repo                ihsan-sa/hive
-   lead               │     release                     the newest
-   writer             │
-   reviewer        ●  │   Agents
- ▾ hive-web           │     harness                     claude
-   lead            ●  │     worker model                opus
-   worker-2           │     lead model                  opus
-   reviewer           │     reviewer model              opus
-   tribunal           │     tribunal seat 1 model       opus
- ▸ website            │     tribunal seat 2 model       sonnet
-                      │     tribunal seat 3 model       fable
-                      │     model for textkit-2         default
+   Feedback        1  │     WSL distro
+   Knowledge          │     auto-update                 on
+   Modules            │     use ANTHROPIC_API_KEY       off
+ › Settings           │     release repo                ihsan-sa/hive
+                      │     release                     the newest
+ ▾ textkit-2          │
+   lead               │   Agents
+   writer             │     harness                     claude
+   reviewer        ●  │     worker model                opus
+ ▾ hive-web           │     lead model                  opus
+   lead            ●  │     reviewer model              opus
+   worker-2           │     tribunal seat 1 model       opus
+   reviewer           │     tribunal seat 2 model       sonnet
+   tribunal           │     tribunal seat 3 model       fable
+ ▸ website            │     model for textkit-2         default
                       │     model for hive-web          default
                       │     model for website           default
                       │     review rounds               3

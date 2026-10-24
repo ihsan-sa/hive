@@ -34,7 +34,7 @@ type Module struct {
 func New(c *core.Core, ch *chat.Module, w *work.Module, im *improve.Module) *Module {
 	m := &Module{C: c, Chat: ch, Work: w, Improve: im, retry: map[string]time.Time{}, lastErr: map[string]string{}}
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","isolated","self"} (self: the Hive's own code, in the person's fork of it)`, Fn: m.opCreate})
+	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","sharing","self"} (sharing: shared (default), private (its agents read the shared Hive, no one else sees it) or isolated (walled both ways); self: the Hive's own code, in the person's fork of it)`, Fn: m.opCreate})
 	ops.Register(core.Op{Name: "status", Help: `{} -> projects, work in flight, scores, what waits on the person, the live settings (models, autonomy, schedules)`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.Status(r), nil }})
 	return m
 }
@@ -45,7 +45,8 @@ type Spec struct {
 	Repo        string `json:"repo"`
 	Description string `json:"description"`
 	Goals       string `json:"goals"`
-	Isolated    bool   `json:"isolated"`
+	Sharing     string `json:"sharing"`  // shared, private or isolated (docs/sharing.md)
+	Isolated    bool   `json:"isolated"` // the older form of "sharing": "isolated"
 	Demo        bool   `json:"demo"`
 	Self        bool   `json:"self"`
 }
@@ -54,6 +55,20 @@ func (m *Module) opCreate(r core.Run, args json.RawMessage) (any, error) {
 	var s Spec
 	if err := core.Bind(args, &s); err != nil {
 		return nil, err
+	}
+	// A new project's name, description and goals land in the shared record
+	// and on the forge, so a hidden project's lead could carry its text out
+	// through them. Only the person, or a lead outside every wall, makes one.
+	// A project the Hive doesn't know (removed, or not yet saved) can't show
+	// it has no wall, so its agents can't either.
+	if r.Project != "" {
+		p, ok := m.C.Projects.Get(r.Project)
+		if !ok {
+			return nil, fmt.Errorf("%s isn't a project the Hive knows, so its agents can't create projects; ask the person", r.Project)
+		}
+		if p.Hidden() {
+			return nil, fmt.Errorf("%s is walled off, so its agents can't create projects; ask the person", r.Project)
+		}
 	}
 	if s.Self {
 		s.Repo = "" // an agent never picks where the Hive's own code lives
@@ -72,6 +87,13 @@ func (m *Module) opCreate(r core.Run, args json.RawMessage) (any, error) {
 func (m *Module) Create(s Spec) (core.Project, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	var level core.Project
+	if s.Isolated && s.Sharing == "" {
+		s.Sharing = core.SharingIsolated
+	}
+	if err := level.SetSharing(s.Sharing); err != nil {
+		return core.Project{}, false, err
+	}
 	f := m.C.Effects.Forge
 	if s.Demo && s.Name == "" {
 		s.Name = "textkit"
@@ -85,7 +107,7 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 			return core.Project{}, false, fmt.Errorf("who are you on %s? %v", f.Name(), err)
 		}
 		if s.Repo = up; !strings.HasPrefix(up, user+"/") {
-			if s.Repo, err = f.Fork(up); err != nil {
+			if s.Repo, err = f.Fork(up, ""); err != nil {
 				return core.Project{}, false, fmt.Errorf("forking %s: %v", up, err)
 			}
 		}
@@ -126,7 +148,7 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 		return core.Project{}, false, err
 	}
 	p := core.Project{Name: m.C.Projects.UniqueName(s.Name, s.Repo), Repo: s.Repo, Branch: f.DefaultBranch(s.Repo),
-		Description: s.Description, Isolated: s.Isolated, Self: s.Self, Demo: s.Demo, Goals: s.Goals}
+		Description: s.Description, Isolated: level.Isolated, Private: level.Private, Self: s.Self, Demo: s.Demo, Goals: s.Goals}
 	if created {
 		p.Branch = "main"
 	}
@@ -234,7 +256,9 @@ func (m *Module) Status(r core.Run) map[string]any {
 		}
 		for i, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {
 			line := fmt.Sprintf("[%s] %s (%s)", t.Stage, t.Label(), t.ID)
-			if t.PR.URL != "" {
+			if t.Queued() && t.Reason != "" {
+				line += ": " + t.Reason
+			} else if t.PR.URL != "" {
 				line += " " + t.PR.URL
 			} else if t.Stage == work.StageBlocked && t.Branch != "" {
 				line += " branch " + t.Branch
@@ -255,7 +279,11 @@ func (m *Module) Status(r core.Run) map[string]any {
 		}
 		waiting = append(waiting, fmt.Sprintf("%s (from %s; the person answers in Waiting, or %s approve|refuse %s)", a.Title, a.From, core.Cmd, a.ID))
 	}
-	return map[string]any{"projects": ps, "waiting_on_person": waiting, "config": View(m.C.WS.LoadConfig())}
+	cfg := m.C.WS.LoadConfig()
+	running, waitingChecks := m.C.Effects.Slots.State()
+	return map[string]any{"projects": ps, "waiting_on_person": waiting, "config": View(cfg),
+		"queue":  m.Work.Queue(r), // briefs waiting for a worker, in the order they start; the queue op reorders or holds them
+		"checks": fmt.Sprintf("%d running, %d waiting (max_checks %d)", len(running), len(waitingChecks), cfg.MaxChecks)}
 }
 
 // ConfigView is the part of the config every agent may read, so it can say
@@ -272,11 +300,13 @@ type ConfigView struct {
 	Schedules      map[string]string   `json:"schedules"`
 	ReviewRounds   int                 `json:"review_rounds"`
 	PlateauMerges  int                 `json:"plateau_merges"`
+	MaxWorkers     int                 `json:"max_workers"`
+	MaxChecks      int                 `json:"max_checks"`
 	AutoUpdate     bool                `json:"auto_update"`
 }
 
 // View is c as agents see it.
 func View(c core.Config) ConfigView {
 	return ConfigView{c.Autonomy, c.Harness, c.Model, c.LeadModel, c.ReviewerModel, c.TribunalModels,
-		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.AutoUpdate}
+		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.MaxWorkers, c.MaxChecks, c.AutoUpdate}
 }

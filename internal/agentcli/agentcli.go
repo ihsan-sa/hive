@@ -72,7 +72,11 @@ func Main(argv []string) int {
 		fmt.Fprintln(os.Stderr, "hive agent:", err)
 		return 2
 	}
-	res, err := Call(op, args, 3*time.Minute)
+	wait := 3 * time.Minute
+	if op == "install" {
+		wait = 25 * time.Minute // a download and an unpack, in the Hive's own sandbox
+	}
+	res, err := Call(op, args, wait)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "hive agent "+op+":", err)
 		return 1
@@ -158,7 +162,12 @@ A value of @path reads that file. Common ops:
   brief     --title "..." --done "what done looks like" [--known "..."] [--project p]
                                                  file an ask: it becomes an issue, a worker, a PR
   warden    --want "..." --why "..." --steps "..."   for anything past your reach; the person decides
+  install   --tool python|uv|node|go [--version 3.12]   installs it for every agent, no root,
+                                                 on your PATH at once; give the call a 25-minute timeout
+  install   --system "sudo apt-get install -y x" --why "..."   a root install: goes to the person
   search    --query "words" [--limit n|all]     the knowledge base pieces that match, best first
   remember  --title "..." --text "..." [--tags a,b]   write to the knowledge base
+  feedback  --text "..." [--about "agents/worker.md"]   what about the Hive got in your way, for the person
   schedule  --in 2h --text "..."                 a wake-up message to yourself
-  status                                         projects, work in flight, scores`
+  status                                         projects, work in flight, scores
+  queue     [--order id,id] [--hold id] [--release id]   (lead) briefs waiting for a worker, in order`

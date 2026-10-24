@@ -31,9 +31,10 @@ func bwrapPath() string {
 	return p
 }
 
-// bwrapArgs gives bwrap the reach Init builds: system dirs read-only, the
-// spec's mounts, tools at /hive/bin, a fresh /dev, /proc and /tmp, no network
-// but the egress socket, every namespace unshared, and a read-only root.
+// bwrapArgs gives bwrap the reach Init builds: system dirs and host
+// interpreter installs read-only, the spec's mounts, tools at /hive/bin, a
+// fresh /dev, /proc and /tmp, no network but the egress socket, every
+// namespace unshared, and a read-only root.
 func bwrapArgs(a initArgs, self string) []string {
 	s := a.Spec
 	argv := []string{"--unshare-all", "--die-with-parent", "--new-session",
@@ -51,6 +52,9 @@ func bwrapArgs(a initArgs, self string) []string {
 		argv = append(argv, "--ro-bind", d, d)
 	}
 	argv = append(argv, "--dev", "/dev", "--tmpfs", "/dev/shm", "--proc", "/proc", "--tmpfs", "/tmp")
+	for _, r := range a.Roots {
+		argv = append(argv, "--ro-bind", r, r)
+	}
 	for _, m := range s.Mounts {
 		flag := "--ro-bind"
 		if m.RW {
@@ -73,6 +77,9 @@ func bwrapArgs(a initArgs, self string) []string {
 	if a.Socket != "" {
 		argv = append(argv, "--bind", a.Socket, "/hive/egress.sock")
 		inner = append(inner, "--fwd")
+		for _, l := range s.Local {
+			inner = append(inner, "--local", l)
+		}
 	}
 	argv = append(argv, "--chdir", s.Cwd, "--remount-ro", "/", "--")
 	return append(append(append(argv, inner...), "--"), s.Argv...)
@@ -92,6 +99,11 @@ func Inner(args []string) int {
 		}
 		go forward(ln, "/hive/egress.sock")
 		args = args[1:]
+		var local []string
+		for len(args) > 1 && args[0] == "--local" {
+			local, args = append(local, args[1]), args[2:]
+		}
+		forwardLocal(local, "/hive/egress.sock", os.Stderr)
 	}
 	if len(args) < 2 || args[0] != "--" {
 		return 2

@@ -1,5 +1,5 @@
 // Package tui is the control center: chats, the dashboard, what's waiting on
-// the person, modules and settings. A sidebar picks the section or chat, a
+// the person, the knowledge base, modules and settings. A sidebar picks the section or chat, a
 // chat's threads open in their own pane with the reply box under them, Esc
 // goes one level up, and no line runs off the screen. Quitting never stops
 // anything.
@@ -22,27 +22,32 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
-var sections = []string{"Chats", "Dashboard", "Waiting", "Modules", "Settings"}
+var sections = []string{"Chats", "Dashboard", "Waiting", "Feedback", "Knowledge", "Modules", "Settings"}
 
 const (
 	secChats = iota
 	secDash
 	secWaiting
+	secFeedback
+	secKB
 	secModules
 	secSettings
 )
 
 // detail is one level pushed on top of a section (a run's log, a task, an ask...).
 type detail struct {
-	kind   string // run | task | sweep | ask | module | text
+	kind   string // run | task | sweep | ask | module | diff | text
 	id     string
 	title  string
 	scroll int
 	sel    int
 	text   string
+	total  int // lines last drawn, for the header's "of n"
 }
 
 type model struct {
@@ -58,8 +63,9 @@ type model struct {
 	flash   string
 	flashAt time.Time
 
-	side  int // sidebar cursor
-	focus int // 0 sidebar, 1 main pane, 2 thread pane
+	side    int    // sidebar cursor
+	sideKey string // the row it's on, so rows coming and going above don't move it
+	focus   int    // 0 sidebar, 1 main pane, 2 thread pane
 
 	// chats
 	chat      string // open chat
@@ -67,6 +73,7 @@ type model struct {
 	threadSel int    // channel cursor; -1 = none
 	chScroll  int
 	thScroll  int
+	chFree    bool            // scrolled by hand, so the picked thread no longer pulls the channel back
 	open      map[string]bool // expanded threads and tree nodes
 	closed    map[string]bool // collapsed project groups
 	msgs      map[string][]chat.Message
@@ -89,8 +96,12 @@ type model struct {
 	stages   map[string]string // task stages seen, so the feed shows changes
 
 	dashSel int
+	dashKey string // the status row the cursor is on, as sideKey
 	waitSel int
+	fbSel   string // the feedback item selected, by id
 	modSel  int
+	kbDir   string // the knowledge base folder shown, relative to its root
+	kbSel   int
 	setSel  int
 	editing bool
 	picking bool // a setting's pick-list is open
@@ -118,6 +129,7 @@ type chatMsg struct {
 }
 type runMsg struct{ d api.RunDetail }
 type taskMsg struct{ t work.Task }
+type askMsg struct{ a core.Ask }
 type sinceMsg []string
 type flashMsg string
 type tickMsg time.Time
@@ -211,6 +223,12 @@ func (m *model) fetchDetail() tea.Cmd {
 			m.c.Do("GET", "/api/task?id="+d.id, nil, &t)
 			return taskMsg{t}
 		}
+	case "diff": // state carries a preview; the whole diff comes when it's opened
+		return func() tea.Msg {
+			var a core.Ask
+			m.c.Do("GET", "/api/waiting?id="+d.id, nil, &a)
+			return askMsg{a}
+		}
 	}
 	return nil
 }
@@ -277,9 +295,13 @@ func summarize(evs []core.Event) []string {
 				out = append(out, fmt.Sprintf("%s  improvement sweep finished", e.At.Local().Format("Mon 15:04")))
 			}
 		case "hive.updated":
-			var u struct{ To string }
+			var u api.Updated
 			e.Decode(&u)
-			out = append(out, fmt.Sprintf("%s  updated to %s", e.At.Local().Format("Mon 15:04"), u.To))
+			line := fmt.Sprintf("%s  updated to %s", e.At.Local().Format("Mon 15:04"), u.To)
+			if u.Unsigned {
+				line += ", an unsigned release"
+			}
+			out = append(out, line)
 		}
 	}
 	if len(out) > 30 {
@@ -348,6 +370,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runs[msg.d.Run.ID] = msg.d
 	case taskMsg:
 		m.tasks[msg.t.ID] = msg.t
+	case askMsg:
+		for i := range m.stack {
+			if d := &m.stack[i]; d.kind == "diff" && d.id == msg.a.ID && msg.a.Diff != "" {
+				d.text = msg.a.Diff
+			}
+		}
 	case sinceMsg:
 		m.since = msg
 		m.showSince = len(msg) > 0
@@ -374,23 +402,65 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		s := map[tea.MouseButton]string{tea.MouseButtonWheelUp: "wheelup", tea.MouseButtonWheelDown: "wheeldown"}[msg.Button]
-		switch {
-		case s == "" || msg.Action != tea.MouseActionPress || m.help || m.showSince || m.notice != nil:
-		case len(m.stack) > 0:
-			top := &m.stack[len(m.stack)-1]
-			if top.kind == "module" { // the list follows the selection
-				key := "up"
-				if s == "wheeldown" {
-					key = "down"
-				}
-				return m.keyDetailAction(top, key)
-			}
-			top.scroll = max(0, top.scroll+map[string]int{"wheelup": -3, "wheeldown": 3}[s])
-		case m.section != secChats:
-		case m.focus == 2:
-			m.thScroll = scroll(m.thScroll, s, m.h-4)
-		default:
-			m.chScroll = scroll(m.chScroll, s, m.h-4)
+		if s == "" || msg.Action != tea.MouseActionPress || m.help || m.showSince || m.notice != nil || m.editing {
+			return m, nil
+		}
+		return m.wheel(m.paneUnder(msg.X), s)
+	}
+	return m, nil
+}
+
+// paneUnder is the pane under column x (0 sidebar, 1 main, 2 thread), so the
+// wheel scrolls what the pointer is on, not what has the keys.
+func (m *model) paneUnder(x int) int {
+	if m.takeover() {
+		return 2
+	}
+	sw, mw, tw := m.layout()
+	switch {
+	case x < sw:
+		return 0
+	case x <= sw+mw || tw == 0:
+		return 1
+	}
+	return 2
+}
+
+// wheel scrolls a pane: text panes move their offset, lists move their
+// cursor (one row a notch), and the sidebar stays put, since moving its
+// cursor would change what the main pane shows.
+func (m *model) wheel(p int, s string) (tea.Model, tea.Cmd) {
+	key := tea.KeyMsg{Type: tea.KeyUp}
+	if s == "wheeldown" {
+		key = tea.KeyMsg{Type: tea.KeyDown}
+	}
+	switch {
+	case p == 0:
+	case p == 2:
+		m.thScroll = scroll(m.thScroll, s, m.h-4)
+	case len(m.stack) > 0:
+		top := &m.stack[len(m.stack)-1]
+		if top.kind == "module" { // the list follows the selection
+			return m.keyDetailAction(top, key.String())
+		}
+		top.scroll = max(0, top.scroll+map[string]int{"wheelup": -3, "wheeldown": 3}[s])
+	case m.section == secChats:
+		m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
+	default: // a list: the cursor shows only with the focus, so the pane takes it
+		if m.focus == 0 {
+			m.focus = 1
+		}
+		switch m.section {
+		case secDash:
+			return m.keyDash(key)
+		case secWaiting:
+			return m.keyWaiting(key)
+		case secKB:
+			return m.keyKB(key)
+		case secModules:
+			return m.keyModules(key)
+		case secSettings:
+			return m.keySettings(key)
 		}
 	}
 	return m, nil
@@ -447,6 +517,9 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.focus == 0 {
 		return m.keySidebar(k)
 	}
+	if s == "esc" && len(m.stack) == 0 && m.section == secKB && m.kbDir != "" { // one folder up first
+		return m.keyKB(k)
+	}
 	if s == "esc" && len(m.stack) == 0 && m.section != secChats { // one level up is the sidebar
 		m.focus = 0
 		return m, nil
@@ -461,6 +534,10 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.keyDash(k)
 	case secWaiting:
 		return m.keyWaiting(k)
+	case secFeedback:
+		return m.keyFeedback(k)
+	case secKB:
+		return m.keyKB(k)
 	case secModules:
 		return m.keyModules(k)
 	case secSettings:
@@ -536,6 +613,10 @@ func (m *model) keyDetail(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		d.scroll += m.bodyHeight() - 2
 	case "pgup":
 		d.scroll = max(0, d.scroll-m.bodyHeight()+2)
+	case "home", "g":
+		d.scroll = 0
+	case "end", "G":
+		d.scroll = 1 << 20 // drawing clamps it to the last page
 	default:
 		return m.keyDetailAction(d, k.String())
 	}
@@ -559,7 +640,7 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up":
 		if !m.editing && m.reply == "" && m.input.Value() == "" { // pick a thread
 			m.blurBox()
-			m.threadSel = len(threads(m.msgs[m.chat])) - 1
+			m.threadSel, m.chFree = len(threads(m.msgs[m.chat]))-1, false
 			return m, nil
 		}
 	case "pgup", "pgdown":
@@ -568,7 +649,7 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !m.editing { // the new-thread box scrolls the channel above it
-			m.chScroll = scroll(m.chScroll, s, m.h-4)
+			m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
 			return m, nil
 		}
 	case "enter":
@@ -577,6 +658,9 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.editing {
 			m.editing = false
 			m.input.Blur()
+			if m.section == secKB {
+				return m, m.searchKB(text)
+			}
 			return m, m.saveSetting(text)
 		}
 		if text == "" && len(m.files) == 0 {
@@ -695,7 +779,11 @@ func (m *model) viewMain(w int) pane {
 		body = append([]string{"", stTitle.Render("While you were away"), ""}, m.since...)
 		body = append(body, "", stDim.Render("any key to continue"))
 	case m.notice != nil:
-		body = append([]string{"", stTitle.Render("Updated to "+m.notice.To) + stDim.Render("  any key to dismiss"), ""}, strings.Split(m.notice.Notes, "\n")...)
+		body = []string{"", stTitle.Render("Updated to "+m.notice.To) + stDim.Render("  any key to dismiss"), ""}
+		if m.notice.Unsigned {
+			body = append(append(body, wrapStyled(stWarn, release.Unsigned, w-2)...), "")
+		}
+		body = append(body, strings.Split(m.notice.Notes, "\n")...)
 	case m.help:
 		body = helpLines()
 	case m.section == secChats:
@@ -711,6 +799,10 @@ func (m *model) viewMain(w int) pane {
 			body = m.viewFeed()
 		case secWaiting:
 			body = m.viewWaiting()
+		case secFeedback:
+			body = m.viewFeedback()
+		case secKB:
+			body = m.viewKB()
 		case secModules:
 			body = m.viewModules()
 		case secSettings:
@@ -719,9 +811,21 @@ func (m *model) viewMain(w int) pane {
 	}
 	note, right := "", ""
 	switch {
+	case len(m.stack) > 0 && !m.help && !m.showSince:
+		if d := m.stack[len(m.stack)-1]; d.kind != "module" && d.total > m.bodyHeight() {
+			right = fmt.Sprintf("%d–%d of %d", d.scroll+1, min(d.total, d.scroll+m.bodyHeight()), d.total)
+		}
 	case len(m.stack) > 0 || m.help || m.showSince:
 	case m.section == secWaiting && len(m.st.Asks) > 0:
 		note, right = fmt.Sprintf("%d need you", len(m.st.Asks)), "oldest first"
+	case m.section == secFeedback && len(m.st.Feedback) > 0:
+		open := 0
+		for _, it := range m.st.Feedback {
+			if it.Status == feedback.Open {
+				open++
+			}
+		}
+		note, right = fmt.Sprintf("%d open", open), "newest first"
 	case m.section == secDash && m.dashTree:
 		title += " › status"
 	case m.section == secDash:
@@ -740,6 +844,8 @@ func (m *model) viewMain(w int) pane {
 			}
 		}
 		note = fmt.Sprintf("%d installed · %d on", len(m.st.Modules), on)
+	case m.section == secKB:
+		note = filepath.Join(m.ws.KB(), filepath.FromSlash(m.kbDir))
 	case m.section == secSettings:
 		note = filepath.Join(m.st.Workspace, ".hive", "config.json")
 	}
@@ -772,6 +878,8 @@ func (m *model) keys() []string {
 	switch {
 	case m.showSince || m.help:
 		return []string{"any key", "close"}
+	case m.editing && m.section == secKB:
+		return []string{"enter", "search", "esc", "cancel"}
 	case m.editing:
 		return []string{"enter", "save", "esc", "cancel"}
 	case m.focus == 0:
@@ -793,8 +901,14 @@ func (m *model) keys() []string {
 			return []string{"↑↓", "move", "enter", "open", "←", "collapse", "s", "feed", "tab", "sidebar"}
 		}
 		return []string{"enter", "open thread", "f", "follow", "m", "only me", "s", "status", "tab", "sidebar"}
+	case m.section == secWaiting && m.waitSel < len(m.st.Asks) && m.st.Asks[m.waitSel].Diff != "":
+		return []string{"↑↓", "move", "←→", "pick", "enter", "answer", "d", "whole diff", "tab", "sidebar"}
 	case m.section == secWaiting:
 		return []string{"↑↓", "move", "←→", "pick", "enter", "answer", "tab", "sidebar"}
+	case m.section == secFeedback:
+		return m.feedbackKeys()
+	case m.section == secKB:
+		return []string{"↑↓", "move", "enter", "open", "/", "search", "esc", "up a folder", "tab", "sidebar"}
 	case m.section == secModules:
 		return []string{"enter", "configure", "↑↓", "move", "tab", "sidebar"}
 	case m.section == secSettings && m.picking:
@@ -810,9 +924,15 @@ func helpLines() []string {
 		"enter             open; in a box, send",
 		"esc               leave a box, close a thread, one level up",
 		"space             expand or collapse",
+		"← →               in the sidebar and status, back up a level or go deeper",
 		"n                 new thread",
+		"a                 in a chat, answer what's waiting on you",
+		"d                 in Waiting, the whole diff of a change",
+		"p / x             in Feedback, pass it to the lead / set it aside",
+		"/                 in Knowledge, search the knowledge base",
 		"ctrl+j            new line in a box",
-		"pgup pgdn, wheel  scroll",
+		"pgup pgdn, wheel  scroll; the wheel scrolls the pane under it",
+		"home end          the top or the end",
 		"q                 quit the control center; the Hive keeps working",
 		"", stDim.Render("any key to close")}
 }
@@ -836,7 +956,7 @@ func wrap(s string, w int) []string {
 			out = append(out, "")
 			continue
 		}
-		out = append(out, strings.Split(ansi.Wordwrap(para, w, " "), "\n")...)
+		out = append(out, strings.Split(ansi.Wrap(para, w, " "), "\n")...)
 	}
 	return out
 }
@@ -865,17 +985,19 @@ func ago(t time.Time) string {
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
-// window returns the slice of lines that keeps line sel visible in h rows.
-func window(lines []string, sel, h int) []string {
+// window returns the slice of lines that keeps line sel visible in h rows,
+// with two lines of what follows it.
+func window(lines []string, sel, h int) []string { return span(lines, sel, sel+2, h) }
+
+// span returns the slice of lines that keeps lines top to bot visible in h
+// rows, so what opens under a row (a pick-list, an ask's options) is never cut
+// at the bottom; when they can't all fit, top wins.
+func span(lines []string, top, bot, h int) []string {
 	if len(lines) <= h {
 		return lines
 	}
-	start := 0
-	if sel >= h-2 {
-		start = sel - h + 3
-	}
-	if start+h > len(lines) {
-		start = len(lines) - h
-	}
-	return lines[start : start+h]
+	h = max(h, 0)
+	start := max(0, bot-h+1)
+	start = min(start, top, len(lines)-h)
+	return lines[max(start, 0) : max(start, 0)+h]
 }

@@ -16,7 +16,8 @@ type Ask struct {
 	Title    string    `json:"title"`
 	Detail   string    `json:"detail"`
 	Options  []string  `json:"options"`
-	Ref      string    `json:"ref,omitempty"` // what it is about (step id, task id)
+	Diff     string    `json:"diff,omitempty"` // what a merge ask changes in the protected files, fixed at its commit
+	Ref      string    `json:"ref,omitempty"`  // what it is about (step id, task id)
 	From     string    `json:"from,omitempty"`
 	Project  string    `json:"project,omitempty"`
 	Answer   string    `json:"answer,omitempty"`
@@ -29,6 +30,7 @@ type Ask struct {
 type Person struct {
 	j        *Journal
 	mu       sync.Mutex
+	answerMu sync.Mutex // held by Answer from the checks through the append, so one answer wins
 	asks     map[string]*Ask
 	handlers map[string]func(Ask)
 }
@@ -88,8 +90,13 @@ func (p *Person) Ask(a Ask) Ask {
 }
 
 // Answer records the person's answer and runs the kind's handler. The answer
-// must be one of the ask's options; an ask with none takes free text.
+// must be one of the ask's options; an ask with none takes free text. An ask
+// already answered refuses another answer and returns the one on record.
 func (p *Person) Answer(id, answer, note string) (Ask, error) {
+	// p.mu can't be held over the append: the journal runs subscribers, which
+	// take it, synchronously. answerMu keeps the check and the append together.
+	p.answerMu.Lock()
+	defer p.answerMu.Unlock()
 	p.mu.Lock()
 	a, ok := p.asks[id]
 	if !ok {
@@ -99,7 +106,7 @@ func (p *Person) Answer(id, answer, note string) (Ask, error) {
 	if a.Answer != "" {
 		c := *a
 		p.mu.Unlock()
-		return c, nil
+		return c, fmt.Errorf("already answered: %s", c.Answer)
 	}
 	if len(a.Options) > 0 && !slices.Contains(a.Options, answer) {
 		p.mu.Unlock()

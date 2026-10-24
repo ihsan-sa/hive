@@ -19,8 +19,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -190,17 +190,21 @@ func (m *Module) List() []Request {
 	return out
 }
 
-// opRequests shows an agent (the lead, mostly) the newest requests, so it can
-// tell the person what waits on them and how to answer.
+// opRequests shows an agent (the lead, mostly) every pending request and the
+// newest settled ones, so it can tell the person what waits on them and how
+// to answer.
 func (m *Module) opRequests(core.Run, json.RawMessage) (any, error) {
 	type view struct {
 		ID, From, Want, Why, State, Warden, Decision, Reason, Outcome, Answer string
 		Since                                                                 time.Time
 	}
 	var out []view
+	settled := 0
 	for _, r := range m.List() {
-		if len(out) == 20 {
-			break
+		if r.State == "done" || r.State == "declined" || r.State == "failed" {
+			if settled++; settled > 20 {
+				continue
+			}
 		}
 		v := view{r.ID, r.Origin, core.Clip(r.Want, 200), core.Clip(r.Why, 300), r.State, r.Warden, r.Decision, core.Clip(r.Reason, 300), r.Outcome, "", r.Updated}
 		if a, ok := m.C.Person.Get(r.Ask); ok && a.Answer == "" {
@@ -248,7 +252,10 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 	}
 	tier := core.Tier(a.Tier)
 	cfg := m.C.WS.LoadConfig()
-	route := core.Route(tier, cfg.Autonomy, core.Ceiling(cfg.Floor, a.Want, a.Why, a.Steps))
+	// Routing reads the ask's words, so a mention it rules out doesn't count;
+	// whatever then runs meets CeilingGuard, which counts every mention.
+	ceiling := core.AskCeiling(cfg.Floor, a.Want, a.Why, a.Steps)
+	route := core.Route(tier, cfg.Autonomy, ceiling)
 	if route == "self" {
 		return map[string]string{"tier": tier, "route": route, "note": "T1 is inside the Hive: weigh it yourself and get on with it."}, nil
 	}
@@ -275,7 +282,7 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 		Tier: tier, Route: route, Gain: a.Gain, State: "asked", Created: time.Now().UTC()}
 	switch route {
 	case "person":
-		m.ask(req, "Always yours", "This step is on the list that is always yours, so no warden or panel may take it. Do it yourself if you agree.", "done", "declined")
+		m.ask(req, "Always yours", "This step "+ceiling+", which is on the list that is always yours, so no warden or panel may take it. Do it yourself if you agree.", "done", "declined")
 	case "person-first":
 		m.ask(req, "Ask first", "Your autonomy setting asks you before anything outside the project. Say go ahead to let a warden weigh it.", "go ahead", "declined")
 	default:
@@ -320,11 +327,23 @@ func (m *Module) toPerson(req *Request, why string) {
 }
 
 // sudoRe finds sudo in a script; sudoOK says whether it works without a
-// password here. A test swaps sudoOK.
+// password here, asked through the shell a step runs in, so it finds the
+// sudo a script would (on Windows, Git's sh runs a sudo script Go can't
+// start). A test swaps sudoOK.
 var (
 	sudoRe = regexp.MustCompile(`\bsudo\b`)
-	sudoOK = func() bool { return exec.Command("sudo", "-n", "true").Run() == nil }
+	sudoOK = func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return shell(ctx, "sudo -n true").Run() == nil
+	}
 )
+
+// sudoPassword is what sudo prints when it wants a password it can't read.
+// A step runs with no terminal, so a sudo that passed sudoOK but wants a
+// password for this command fails there. The match is on the text, so it
+// counts only when the step failed too.
+var sudoPassword = regexp.MustCompile(`sudo: (a password is required|a terminal is required|no tty present)`)
 
 // sudoFact tells a warden whether a script here can use sudo.
 func sudoFact() string {
@@ -564,10 +583,17 @@ func voteOf(p core.Run) (string, string) {
 	var v struct{ Vote, Reason string }
 	d := json.NewDecoder(bytes.NewReader(p.Structured))
 	d.DisallowUnknownFields()
-	if p.Status != core.StatusDone || d.Decode(&v) != nil || d.More() || (v.Vote != "approve" && v.Vote != "decline") {
+	if p.Status != core.StatusDone || d.Decode(&v) != nil || !atEnd(d) || (v.Vote != "approve" && v.Vote != "decline") {
 		return "decline", "no vote (" + p.Status + ")"
 	}
 	return v.Vote, core.Clip(v.Reason, 2000)
+}
+
+// atEnd says the decoder has nothing left but whitespace; More() alone
+// misses a stray closing delimiter such as the second brace of "{...}}".
+func atEnd(d *json.Decoder) bool {
+	_, err := d.Token()
+	return err == io.EOF
 }
 
 // advance moves a tribunal on once every seat has voted this round.
@@ -739,6 +765,18 @@ func (m *Module) execute(id string) {
 
 	out, err := m.run(req)
 	req.Output = core.Clip(out, 4000)
+	if err != nil && sudoPassword.MatchString(out) { // never re-run: some of it may have run
+		m.act.Lock()
+		if cur, ok := m.get(id); ok {
+			req.Joined = cur.Joined
+		}
+		m.ask(&req, "Needs your password", "This step failed, and what it printed reads like sudo wanting your password, which the Hive can't type (the check is on the text). A script doesn't stop at a failed command, so any line of it may have run, before sudo or after; read the output below before you finish it yourself in a shell and answer done, or decline.\n\nWhat it printed:\n"+req.Output, "done", "declined")
+		m.act.Unlock()
+		if req.Settles == nil {
+			m.tell(req, fmt.Sprintf("%q needs the person's password for sudo, so it waits on them; you hear their answer.", core.Clip(req.Want, 80)))
+		}
+		return
+	}
 	req.State, req.Outcome = "done", "done"
 	if err != nil {
 		req.State, req.Outcome = "failed", err.Error()
@@ -843,8 +881,8 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 		if err := m.C.Runs.Walled(r, a.Project); err != nil {
 			return nil, err
 		}
-		if p.Isolated {
-			return nil, fmt.Errorf("project %q is isolated, so its code can't become a module every project's agents read", a.Project)
+		if p.Hidden() {
+			return nil, fmt.Errorf("project %q is %s, so its code can't become a module every project's agents read", a.Project, p.Sharing())
 		}
 		a.URL = m.C.WS.Project(a.Project)
 	}
@@ -875,7 +913,11 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 // a tribunal), its answer goes to the ask's handler as the person's would,
 // and the person is told after. It returns who decides: person or warden.
 func (m *Module) Weigh(a core.Ask) string {
-	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || core.Ceiling(cfg.Floor, a.Title, a.Detail) != "" {
+	why := a.Detail
+	if a.Diff != "" {
+		why += "\n\n" + core.Clip(a.Diff, 6000)
+	}
+	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || core.Ceiling(cfg.Floor, a.Title, why) != "" {
 		m.C.Person.Ask(a)
 		return "person"
 	}
@@ -886,8 +928,8 @@ func (m *Module) Weigh(a core.Ask) string {
 	}); ok {
 		return "warden"
 	}
-	script := a.Title + "\n\n" + a.Detail
-	req := &Request{ID: core.NewID(), Kind: a.Kind, Settles: &a, Origin: a.From, Project: a.Project, Want: a.Title, Why: a.Detail,
+	script := a.Title + "\n\n" + why
+	req := &Request{ID: core.NewID(), Kind: a.Kind, Settles: &a, Origin: a.From, Project: a.Project, Want: a.Title, Why: why,
 		Steps: "Answer do to " + a.Options[0] + ", decline to " + a.Options[len(a.Options)-1] + ". No script runs; the Hive does it.",
 		Tier:  "T2", Route: "warden", Script: script, Digest: Digest(script), Created: time.Now().UTC()}
 	if err := m.spawnWarden(req); err != nil {
@@ -918,7 +960,7 @@ func (m *Module) settle(req Request, yes bool) {
 	}
 	m.C.Person.Answer(a.ID, opt, who+": "+req.Reason)
 	m.C.Person.Ask(core.Ask{Kind: "told", Ref: req.ID, Project: req.Project, From: req.Origin, Options: []string{"seen"},
-		Title: fmt.Sprintf("Decided for you (%s, by %s): %s", opt, who, core.Clip(a.Title, 100)), Detail: req.Reason + "\n\n" + a.Detail})
+		Title: fmt.Sprintf("Decided for you (%s, by %s): %s", opt, who, core.Clip(a.Title, 100)), Detail: req.Reason + "\n\n" + a.Detail, Diff: a.Diff})
 }
 
 func (m *Module) onModule(a core.Ask) {
