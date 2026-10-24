@@ -69,6 +69,6 @@ Not verified:
 Next:
 1. Owner decision: a live smoke run with real Claude (plan usage; bare vs sandboxed). The repo and releases are already public.
 2. Run `go test ./internal/sandbox/ -run TestProbeBothPaths -v` on a stock Ubuntu host, and `HIVE_E2E_HARNESS=claude go test ./internal/e2e/ -run 'TestLiveWarden|TestLiveTribunal' -v -timeout 90m` for a real warden and panel (plan usage).
-3. A live Codex run with a real Codex login: a worker turn, a resume and a read-only reviewer seat, sandboxed.
+3. A live Codex run with a real Codex login: `HIVE_E2E_HARNESS=codex go test ./internal/e2e/ -run TestLiveWorker -v -timeout 60m` (worker, resume, read-only reviewer, merge, sandboxed). The fake path (`TestCodexEndToEnd`) passes; the rollout-file usage format is read from Codex 0.153's strings and an unauthenticated run, not yet from a real reading.
 
 Resume: read CLAUDE.md, then this file; run `go test -short ./...` and `go test ./internal/e2e/`.
