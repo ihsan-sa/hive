@@ -48,9 +48,11 @@ func TestAnswerAtABlockedTurnsEndWakesIt(t *testing.T) {
 	}
 }
 
-// TestAnswerAsEndTurnRecordsWakesIt: the answer lands after endTurn read the
-// run but before the run's state takes it, so endTurn's own read misses it;
-// endTurn's read after recording the end still wakes the run.
+// TestAnswerAsEndTurnRecordsWakesIt: the whole turn end, endTurn's own wake
+// included, runs after Send read the run as running but before the run's state
+// takes the message, so endTurn sees no message and leaves the run blocked.
+// What wakes it is Send's call to wake, whose fresh read after the message is
+// recorded sees blocked with the message waiting (without it this fails).
 func TestAnswerAsEndTurnRecordsWakesIt(t *testing.T) {
 	ws := Workspace{Root: t.TempDir()}
 	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))

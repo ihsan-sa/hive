@@ -25,6 +25,10 @@ func TestReportSharing(t *testing.T) {
 	h := start(t)
 	cfg := h.ws.LoadConfig()
 	cfg.ShareURL = srv.URL
+	// Only the sends the test posts run: a scheduled one landing between a
+	// send's cursor and its post would pass its wait early. (Every 6h, not at
+	// start, it can't fire here today; off says so rather than relying on it.)
+	cfg.Schedules["report.send"] = "off"
 	h.ws.SaveConfig(cfg)
 	h.seed("me/rep", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "rep", "repo": "me/rep"}, nil)
