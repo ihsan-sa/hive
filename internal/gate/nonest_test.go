@@ -74,6 +74,12 @@ func TestNoSandboxInsideASandbox(t *testing.T) {
 			t.Errorf("%s on a side: %s", r.Probe, r.Detail)
 		}
 	}
+	if left := daemonsUnder(dir); len(left) > 0 {
+		t.Errorf("daemons %v outlived the gate run", left)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "run", "candidate")); err == nil {
+		t.Error("the run's folders outlived it")
+	}
 	raw, _ := os.ReadFile(log)
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
 	if len(lines) < 4 {
