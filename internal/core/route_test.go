@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -369,8 +370,8 @@ func TestFallbackAtALimit(t *testing.T) {
 	if p, at := c.Runs.next(r); p.Harness != "open" || at.After(time.Now()) {
 		t.Fatalf("next at a limit: %v at %v", p, at)
 	}
+	c.Runs.SetStatus("w1", StatusIdle, "") // the first turn ended
 	r, _ = c.Runs.Get("w1")
-	r.Status = StatusIdle
 	c.Runs.launch(r, c.WS.LoadConfig())
 	got, _ := c.Runs.Get("w1")
 	if got.Harness != "open" || got.Model != "free" || got.Login != "open:free" {
@@ -446,4 +447,78 @@ func TestVendorLimitMovesToFallback(t *testing.T) {
 	if p, at := c.Runs.next(got); p.Model != "free" || at.After(time.Now()) {
 		t.Fatalf("next after a vendor's 429: %v at %v", p, at)
 	}
+}
+
+// A run's turn starts at most once. On 2026-10-24 a run moving off a model
+// at its limit got two live sessions on one checkout: two launches of the
+// same run, one beside the other and one from a copy older than the turn
+// the first started. Each has to start nothing.
+func TestTurnStartsOnceWhenARunMoves(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.Models = map[string]OpenModel{"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"}}
+	c.WS.SaveConfig(cfg)
+	var args []string
+	var mu sync.Mutex
+	starts := 0
+	in, release := make(chan struct{}, 1), make(chan struct{})
+	block := false
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) {
+		mu.Lock()
+		b := block
+		block = false
+		mu.Unlock()
+		if b {
+			in <- struct{}{}
+			<-release
+		}
+		return countSB{startSB{args: &args}, &mu, &starts}, nil
+	}
+	r, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake", Model: "opus", Brief: "the brief", Checkout: t.TempDir(),
+		Route: []Pick{{Harness: "fake", Model: "opus"}, {Harness: "open", Model: "free"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, c.WS.LoadConfig())
+	c.Runs.SetStatus("w1", StatusIdle, "") // the first turn ended
+	c.Runs.append("plan.usage", Plan{Harness: "fake", Login: "fake", Limit: harness.RateLimit{Status: "rejected", ResetsAt: time.Now().Add(time.Hour)}})
+	r, _ = c.Runs.Get("w1")
+
+	mu.Lock()
+	block = true
+	mu.Unlock()
+	done := make(chan struct{})
+	go func() { c.Runs.launch(r, c.WS.LoadConfig()); close(done) }()
+	<-in
+	c.Runs.launch(r, c.WS.LoadConfig()) // beside the first
+	close(release)
+	<-done
+	c.Runs.launch(r, c.WS.LoadConfig()) // from the copy before the turn started
+
+	got, _ := c.Runs.Get("w1")
+	if starts != 2 || got.Turn != 2 || got.Harness != "open" {
+		t.Fatalf("%d turns started (want 2: the first and one on the new route); run at turn %d on %s", starts, got.Turn, got.Harness)
+	}
+	started := 0
+	for _, e := range c.J.Since(0) {
+		if e.Kind == "run.turn_started" {
+			started++
+		}
+	}
+	if started != 2 {
+		t.Fatalf("%d run.turn_started journalled, want 2", started)
+	}
+}
+
+type countSB struct {
+	startSB
+	mu *sync.Mutex
+	n  *int
+}
+
+func (s countSB) Start(spec sandbox.Spec) (sandbox.Proc, error) {
+	s.mu.Lock()
+	*s.n++
+	s.mu.Unlock()
+	return s.startSB.Start(spec)
 }

@@ -436,6 +436,14 @@ func (m *model) viewTree() []string {
 		lines = append([]string{stDim.Render(rel), ""}, lines...)
 		sel += 2
 	}
+	if d := m.st.Disk; !d.At.IsZero() {
+		style := stDim
+		if d.Low() {
+			style = stWarn
+		}
+		lines = append([]string{style.Render("Disk: " + d.String() + "."), ""}, lines...)
+		sel += 2
+	}
 	if m.st.Offline != "" {
 		lines = append([]string{stWarn.Render(strings.ToUpper(m.st.Offline[:1]) + m.st.Offline[1:] + "; the work picks up again on its own."), ""}, lines...)
 		sel += 2
