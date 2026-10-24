@@ -755,23 +755,47 @@ func (rs *Runs) Spent(month string) float64 {
 
 // Takes says why run id can't take a message, or nil if it can.
 func (rs *Runs) Takes(id string) error {
+	_, err := rs.taker(id)
+	return err
+}
+
+func (rs *Runs) taker(id string) (Run, error) {
 	r, ok := rs.Get(id)
 	if !ok {
-		return ErrNotFound
+		return r, ErrNotFound
 	}
 	if r.Terminal() && !r.Persistent {
-		return fmt.Errorf("run %s has ended (%s)", id, r.Status)
+		return r, fmt.Errorf("run %s has ended (%s)", id, r.Status)
 	}
-	return nil
+	return r, nil
 }
 
 // Send queues a message for a run's next turn.
 func (rs *Runs) Send(id, text string) error {
-	if err := rs.Takes(id); err != nil {
+	r, err := rs.taker(id)
+	if err != nil {
 		return err
 	}
 	rs.append("run.queued", runNote{ID: id, Text: text})
+	// A turn that ended blocked after the check, before the message landed,
+	// never saw it; wake the run for it, as endTurn wakes one whose message
+	// came in first.
+	if !r.Terminal() {
+		rs.wake(id)
+	}
 	return nil
+}
+
+// wake gives a run that ended blocked with a message waiting (often the
+// answer it was blocked on) the turn for it, rather than leaving it on a run
+// that takes no turns. One blocked for its Codex token stays blocked.
+func (rs *Runs) wake(id string) {
+	r, ok := rs.Get(id)
+	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) {
+		return
+	}
+	rs.append("run.reopened", runNote{ID: id})
+	rs.append("run.status", runNote{ID: id, Status: StatusIdle, Reason: "woken by a message"})
 }
 
 // Reopen lets a finished run take more turns (fix rounds go back to the same worker).
@@ -1045,12 +1069,11 @@ func (rs *Runs) endTurn(r Run) {
 		te.ParkedUntil = time.Now().Add(min(backoff(cur.Retries), 5*time.Minute))
 	}
 	rs.append("run.turn_ended", te)
-	// A message that came in while it finished blocked (often the answer it was
-	// blocked on) wakes it rather than waiting on a run that takes no turns;
-	// one blocked for its Codex token stays blocked.
-	if te.Status == StatusBlocked && dropErr == nil && len(cur.Pending) > 0 {
-		rs.append("run.reopened", runNote{ID: r.ID})
-		rs.append("run.status", runNote{ID: r.ID, Status: StatusIdle, Reason: "woken by a message"})
+	// A message that came in while it finished blocked wakes it. The run is
+	// read again, after the turn's end is recorded: one that landed since cur
+	// was read is not in cur, and its Send saw the run still running.
+	if te.Status == StatusBlocked {
+		rs.wake(r.ID)
 	}
 	// A spawned helper's account goes back to the agent that spawned it.
 	if (te.Status == StatusDone || te.Status == StatusBlocked) && r.Parent != "" {
