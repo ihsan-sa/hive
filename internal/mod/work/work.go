@@ -1045,8 +1045,8 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 	}
 	// A worker that finishes again on the same commit thinks something outside
 	// it changed (a tool installed, an answer), so its tests run again; one
-	// that had the forge's checks re-run there waits for those instead.
-	t.PR, t.Recheck, t.SHA, t.Stage, t.Failures = pr, t.SHA == sha && t.Reruns[sha] == 0, sha, StageTesting, 0
+	// that had the forge's checks re-run there lately waits for those instead.
+	t.PR, t.Recheck, t.SHA, t.Stage, t.Failures = pr, t.SHA == sha && !rerunning(t), sha, StageTesting, 0
 	m.save(t, fmt.Sprintf("pushed %s, PR #%d", core.Short(sha), pr.Number))
 	return nil
 }
