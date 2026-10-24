@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -221,21 +222,30 @@ func LoggedIn(l Login) bool {
 // jwtExpiry reads a JWT's exp claim without checking its signature; a token
 // it can't read counts as good for an hour, and the API has the last word.
 func jwtExpiry(tok string) time.Time {
+	if exp, ok := jwtExp(tok); ok {
+		return exp
+	}
+	return time.Now().Add(time.Hour)
+}
+
+// jwtExp is a JWT's exp claim, if it has one the Hive can read.
+func jwtExp(tok string) (time.Time, bool) {
 	parts := strings.Split(tok, ".")
 	var c struct {
 		Exp int64 `json:"exp"`
 	}
 	if len(parts) == 3 {
 		if raw, err := base64.RawURLEncoding.DecodeString(parts[1]); err == nil && json.Unmarshal(raw, &c) == nil && c.Exp > 0 {
-			return time.Unix(c.Exp, 0)
+			return time.Unix(c.Exp, 0), true
 		}
 	}
-	return time.Now().Add(time.Hour)
+	return time.Time{}, false
 }
 
 // renewWithin is how near its expiry a login is renewed. Claude Code renews
 // its token only in the last five minutes, and Codex only once the API turns
-// the old one away, so a call earlier would leave the expiry where it is.
+// the old one away, so a call earlier would leave the expiry where it is
+// (see LEARNINGS.md before widening either).
 var renewWithin = map[string]time.Duration{"claude": 5 * time.Minute, "codex": 0}
 
 // renewTimeout bounds one renewal call; checkEvery is how often a login's
@@ -255,25 +265,31 @@ type LoginState struct {
 	next     time.Time // no renewal before this: the backoff after a failure
 	checked  time.Time // when the harness was last tried
 	byCheck  bool      // the failure is the harness not running, not a renewal
+	stuckAt  time.Time // the expiry when it failed: a later one was renewed by hand
 }
 
 // Track records renewals in journal j and puts a failure to the person
-// through p, and takes the last renewal of each login from the record.
+// through p, and takes the last renewal of each login from the record, and
+// an unresolved failure with its count, so a restart doesn't tell it afresh.
 func (t *Tokens) Track(j *Journal, p *Person) {
 	j.Replay(func(e Event) {
 		if e.Kind != "login.renewed" && e.Kind != "login.renew_failed" {
 			return
 		}
 		var r struct {
-			Login string `json:"login"`
-			Error string `json:"error"`
+			Login    string    `json:"login"`
+			Error    string    `json:"error"`
+			Expires  time.Time `json:"expires"`
+			Failures int       `json:"failures"`
+			ByCheck  bool      `json:"by_check"`
 		}
 		e.Decode(&r)
 		s := t.stateLocked(r.Login)
+		s.Expires = r.Expires
 		if e.Kind == "login.renewed" {
-			s.Renewed, s.Failed, s.Error = e.At, time.Time{}, ""
+			s.Renewed, s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt = e.At, time.Time{}, "", 0, false, time.Time{}
 		} else {
-			s.Failed, s.Error = e.At, r.Error
+			s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt = e.At, r.Error, max(r.Failures, 1), r.ByCheck, r.Expires
 		}
 	})
 	t.mu.Lock()
@@ -331,9 +347,14 @@ func (c *Core) WatchLogins(ctx context.Context, poll time.Duration) {
 
 // Watch renews each Claude and Codex login the Hive can read once it nears
 // its expiry, whether or not a turn is starting, and tries the harness of the
-// others once an hour.
+// others once an hour. A harness no route sends turns to is left alone: its
+// login is the person's business, not the Hive's.
 func (t *Tokens) Watch() {
+	cfg := t.ws.LoadConfig()
 	for _, h := range []string{"claude", "codex"} {
+		if !cfg.Uses(h) {
+			continue
+		}
 		for _, l := range t.Logins(h) {
 			exp, err := loginExpiry(l)
 			if err != nil {
@@ -343,16 +364,19 @@ func (t *Tokens) Watch() {
 			t.mu.Lock()
 			s := t.stateLocked(l.Key())
 			s.Expires = exp
+			byHand := s.Error != "" && !s.byCheck && !s.stuckAt.IsZero() && exp.After(s.stuckAt)
 			due := now.Sub(s.checked) >= checkEvery || s.byCheck && !now.Before(s.next)
 			if due {
 				s.checked = now
 			}
 			t.mu.Unlock()
 			switch {
+			case byHand: // the person (or the harness in a turn) renewed it since it failed
+				t.done(l, exp, nil, renewedByHand)
 			case exp.Sub(now) < renewWithin[h]:
 				t.refresh(l)
 			case due:
-				t.done(l, exp, tryHarness(h), false)
+				t.done(l, exp, t.tryHarness(h), tried)
 			}
 		}
 	}
@@ -377,7 +401,11 @@ func loginExpiry(l Login) (time.Time, error) {
 		if err != nil || json.Unmarshal(raw, &a) != nil || a.Tokens.Access == "" {
 			return time.Time{}, errNoCodex
 		}
-		return jwtExpiry(a.Tokens.Access), nil
+		// A token whose expiry can't be read can't show a renewal moved it.
+		if exp, ok := jwtExp(a.Tokens.Access); ok {
+			return exp, nil
+		}
+		return time.Time{}, errors.New("Codex's access token has no expiry the Hive can read")
 	}
 	_, exp, err := readClaudeAccess(l.Dir)
 	return exp, err
@@ -398,16 +426,16 @@ func (t *Tokens) refresh(l Login) error {
 	}
 	before, err := loginExpiry(l)
 	if err == nil {
-		err = renew(l, before)
+		err = t.renew(l, before)
 	}
 	after, _ := loginExpiry(l)
-	t.done(l, after, err, true)
+	t.done(l, after, err, renewed)
 	return err
 }
 
 // renew runs the call that renews login l, whose token ran out at before.
-func renew(l Login, before time.Time) error {
-	bin, err := harnessBin(l.Harness)
+func (t *Tokens) renew(l Login, before time.Time) error {
+	bin, err := t.harnessBin(l.Harness)
 	if err != nil {
 		return err
 	}
@@ -425,22 +453,22 @@ func renew(l Login, before time.Time) error {
 	cmd.Dir = os.TempDir()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("`%s` exited with %v: %s", bin, err, Clip(string(out), 300))
+		return fmt.Errorf("`%s` exited with %v: %s", bin, err, harnessSaid(out))
 	}
 	after, err := loginExpiry(l)
 	if err != nil {
 		return fmt.Errorf("`%s` ran, but the login can't be read after it: %v", bin, err)
 	}
 	if !after.After(before) {
-		return fmt.Errorf("`%s` exited 0 but the login's expiry didn't move from %s: %s", bin, before.Local().Format("Mon 15:04"), Clip(string(out), 300))
+		return fmt.Errorf("`%s` exited 0 but the login's expiry didn't move from %s: %s", bin, before.Local().Format("Mon 15:04"), harnessSaid(out))
 	}
 	return nil
 }
 
 // tryHarness runs harness h's program with --version: that it is found and
 // runs is most of what a renewal needs, and it costs nothing.
-func tryHarness(h string) error {
-	bin, err := harnessBin(h)
+func (t *Tokens) tryHarness(h string) error {
+	bin, err := t.harnessBin(h)
 	if err != nil {
 		return err
 	}
@@ -449,7 +477,7 @@ func tryHarness(h string) error {
 	cmd := exec.CommandContext(ctx, bin, "--version")
 	cmd.Env, cmd.Dir = binEnv(bin), os.TempDir()
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("`%s --version` exited with %v: %s", bin, err, Clip(string(out), 300))
+		return fmt.Errorf("`%s --version` exited with %v: %s", bin, err, harnessSaid(out))
 	}
 	return nil
 }
@@ -477,27 +505,74 @@ var binDirs = func() []string {
 var errNoBin = errors.New("not found")
 
 // harnessBin is the absolute path of harness h's program: on the daemon's
-// PATH, else in one of binDirs.
-func harnessBin(h string) (string, error) {
-	if p, err := exec.LookPath(h); err == nil {
-		if p, err = filepath.Abs(p); err == nil {
-			return p, nil
-		}
+// PATH, else in one of binDirs. It runs as the person, outside any sandbox,
+// so one in a folder a run can write (a checkout, a run's home, the Hive's
+// tools) is refused rather than run.
+func (t *Tokens) harnessBin(h string) (string, error) {
+	p, err := exec.LookPath(h)
+	if err == nil {
+		p, err = filepath.Abs(p)
 	}
 	for _, d := range binDirs() {
-		if p, err := exec.LookPath(filepath.Join(d, h)); err == nil {
-			return p, nil
+		if err == nil {
+			break
+		}
+		p, err = exec.LookPath(filepath.Join(d, h))
+	}
+	if err != nil {
+		return "", fmt.Errorf("`%s` %w on the Hive's PATH (%s) or in %s", h, errNoBin, os.Getenv("PATH"), strings.Join(binDirs(), ", "))
+	}
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		real = p
+	}
+	for _, d := range []string{t.ws.Hive(), t.ws.Projects()} {
+		if r, err := filepath.EvalSymlinks(d); err == nil {
+			d = r
+		}
+		if within(real, d) {
+			return "", fmt.Errorf("`%s` is %s, inside %s where agents can write; the Hive won't run it as you", h, real, d)
 		}
 	}
-	return "", fmt.Errorf("`%s` %w on the Hive's PATH (%s) or in %s", h, errNoBin, os.Getenv("PATH"), strings.Join(binDirs(), ", "))
+	return p, nil
 }
 
-// done records how a renewal (or, renewal false, a try of the harness) of
-// login l went; exp is its expiry after. A failure goes to the journal and the
-// daemon's log every time, and the first of a run of them raises an alert and
-// asks the person to renew the login by hand, with what to run. A success after
+// within reports whether path p is dir or inside it.
+func within(p, dir string) bool {
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// tokenShaped is what in a harness's output could be a credential: a JWT,
+// a bearer value, a known key prefix, or a long run of letters and digits.
+var tokenShaped = regexp.MustCompile(`(?i)\bbearer\s+\S+|\b(sk-|ghp_|github_pat_)[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*|[A-Za-z0-9+/_=-]{32,}`)
+
+// harnessSaid is a harness's output fit for the journal every agent reads:
+// clipped, with anything token-shaped taken out.
+func harnessSaid(out []byte) string {
+	s := tokenShaped.ReplaceAllStringFunc(string(out), func(m string) string {
+		if len(m) >= 32 && !strings.ContainsAny(m, "0123456789") && !strings.HasPrefix(strings.ToLower(m), "bearer") {
+			return m // a long word or path, not a key
+		}
+		return "[secret]"
+	})
+	return Clip(s, 300)
+}
+
+// What done records: a renewal the Hive ran, a try of the harness, or an
+// expiry that moved on its own after a failure.
+const (
+	renewed = iota
+	tried
+	renewedByHand
+)
+
+// done records how a renewal or a try of the harness (how) of login l went;
+// exp is its expiry after. A failure goes to the journal and the daemon's log
+// every time, and the first of a run of them raises an alert and asks the
+// person to renew the login by hand, with what to run. A success after
 // failures says so in the same alert and closes the ask.
-func (t *Tokens) done(l Login, exp time.Time, err error, renewal bool) {
+func (t *Tokens) done(l Login, exp time.Time, err error, how int) {
 	now := time.Now()
 	key := l.Key()
 	t.mu.Lock()
@@ -510,14 +585,14 @@ func (t *Tokens) done(l Login, exp time.Time, err error, renewal bool) {
 	case err != nil:
 		s.Failures++
 		first = s.Failures == 1
-		s.Failed, s.Error, s.Run, s.byCheck = now, err.Error(), renewByHand(l, err), !renewal
+		s.Failed, s.Error, s.Run, s.byCheck, s.stuckAt = now, err.Error(), renewByHand(l, err), how == tried, s.Expires
 		s.next = now.Add(time.Minute << min(s.Failures-1, 4))
 		if s.next.Sub(now) > 15*time.Minute {
 			s.next = now.Add(15 * time.Minute)
 		}
-	case renewal:
+	case how != tried:
 		recovered = s.Error != ""
-		s.Renewed, s.Failed, s.Error, s.Run, s.Failures, s.byCheck = now, time.Time{}, "", "", 0, false
+		s.Renewed, s.Failed, s.Error, s.Run, s.Failures, s.byCheck, s.stuckAt = now, time.Time{}, "", "", 0, false, time.Time{}
 		s.next = now.Add(time.Minute)
 	case s.byCheck: // the harness runs again; nothing was renewed
 		recovered = s.Error != ""
@@ -535,9 +610,11 @@ func (t *Tokens) done(l Login, exp time.Time, err error, renewal bool) {
 	}
 	switch {
 	case err != nil:
-		j.MustAppend("login.renew_failed", map[string]any{"login": key, "error": c.Error, "expires": c.Expires, "failures": c.Failures})
-	case renewal:
+		j.MustAppend("login.renew_failed", map[string]any{"login": key, "error": c.Error, "expires": c.Expires, "failures": c.Failures, "by_check": c.byCheck})
+	case how == renewed:
 		j.MustAppend("login.renewed", map[string]any{"login": key, "expires": c.Expires})
+	case how == renewedByHand:
+		j.MustAppend("login.renewed", map[string]any{"login": key, "expires": c.Expires, "by": "hand"})
 	}
 	if first {
 		title := fmt.Sprintf("The %s login can't renew itself; it %s", key, runsOut(c.Expires, now))
@@ -548,11 +625,15 @@ func (t *Tokens) done(l Login, exp time.Time, err error, renewal bool) {
 		}
 	}
 	if recovered {
-		j.MustAppend("alert.raised", map[string]string{"kind": "login", "ref": "login:" + key, "text": fmt.Sprintf("The %s login renews itself again; it %s", key, runsOut(c.Expires, now))})
+		text, why := "The %s login renews itself again; it %s", "renewed on its own"
+		if how == renewedByHand {
+			text, why = "The %s login was renewed outside the Hive; it %s", "renewed outside the Hive"
+		}
+		j.MustAppend("alert.raised", map[string]string{"kind": "login", "ref": "login:" + key, "text": fmt.Sprintf(text, key, runsOut(c.Expires, now))})
 		if p != nil {
 			for _, a := range p.Open() {
 				if a.Kind == "login" && a.Ref == key {
-					p.Answer(a.ID, "done", "renewed on its own")
+					p.Answer(a.ID, "done", why)
 				}
 			}
 		}
