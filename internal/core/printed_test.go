@@ -40,7 +40,7 @@ func endTurnAs(t *testing.T, spec RunSpec, text string) Run {
 	t.Helper()
 	c, _ := testHive(t)
 	c.J.MustAppend("run.created", spec)
-	r, _ := c.Runs.Get("w1")
+	r, _ := c.Runs.Get(spec.ID)
 	r.Turn = 1
 	out := c.WS.TurnOut(r.ID, 1)
 	os.MkdirAll(filepath.Dir(out), 0o755)
