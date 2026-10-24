@@ -590,12 +590,26 @@ func (e *Effects) diskAlert(line string) {
 // exited: on a throwaway home that child raced RemoveTree, which then
 // failed with "directory not empty" (TestPrefetchReadsOnlyTheCheckout,
 // TestChecksShareTheModuleCache, in the gate's sandbox most of all). The
-// mode file is what `go telemetry off` writes, and the returned env points
-// go's config dir at it whatever the host's XDG setting.
+// mode file is what `go telemetry off` writes, put where go's
+// os.UserConfigDir looks for it with HOME at home on this OS: $HOME/.config
+// on Linux (XDG_CONFIG_HOME, which the returned env pins whatever the
+// host's), Library/Application Support on macOS, AppData on Windows (the
+// env names it there too, as go reads only the variable).
 func goTelemetryOff(home string) []string {
-	cfg := filepath.Join(home, ".config")
+	var cfg string
+	var env []string
+	switch runtime.GOOS {
+	case "darwin":
+		cfg = filepath.Join(home, "Library", "Application Support")
+	case "windows":
+		cfg = filepath.Join(home, "AppData", "Roaming")
+		env = append(env, "AppData="+cfg)
+	default:
+		cfg = filepath.Join(home, ".config")
+		env = append(env, "XDG_CONFIG_HOME="+cfg)
+	}
 	dir := filepath.Join(cfg, "go", "telemetry")
 	os.MkdirAll(dir, 0o755)
 	os.WriteFile(filepath.Join(dir, "mode"), []byte("off"), 0o644)
-	return []string{"XDG_CONFIG_HOME=" + cfg}
+	return env
 }
