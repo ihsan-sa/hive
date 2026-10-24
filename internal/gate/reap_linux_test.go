@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -77,14 +78,65 @@ func TestKilledGateLeavesNoDaemon(t *testing.T) {
 		t.Errorf("daemons %v outlived the gate that started them", left)
 	}
 	Reap(out)
-	if _, err := os.Stat(filepath.Join(out, "control")); err == nil {
-		t.Error("the run's folders were not removed")
+	if _, err := os.Stat(filepath.Join(out, "candidate", "gocache")); err == nil {
+		t.Error("the run's caches were not removed")
 	}
 	for _, p := range pids {
 		if syscall.Kill(p, 0) == nil {
 			if z, _ := os.ReadFile("/proc/" + strconv.Itoa(p) + "/stat"); !bytes.Contains(z, []byte(") Z")) {
 				t.Errorf("daemon %d still runs", p)
 			}
+		}
+	}
+}
+
+// Reap ends a process of the run, but not a shell or an editor a person has
+// open in --out, and keeps the children's logs while it removes their caches.
+func TestReapKeepsWhatIsNotTheRuns(t *testing.T) {
+	out := t.TempDir()
+	cand := filepath.Join(out, "candidate")
+	for _, d := range []string{"gocache", filepath.Join("hive", ".hive")} {
+		os.MkdirAll(filepath.Join(cand, d), 0o755)
+	}
+	os.WriteFile(filepath.Join(cand, "hive", ".hive", "daemon.log"), []byte("log"), 0o644)
+	start := func(dir string, env ...string) *exec.Cmd {
+		cmd := exec.Command("sleep", "60")
+		cmd.Dir, cmd.Env = dir, append(os.Environ(), env...)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+		return cmd
+	}
+	person := start(out)
+	inRoot := start(filepath.Join(cand, "hive"))
+	tagged := start(t.TempDir(), rootEnv+"="+cand)
+	if n := Reap(out); n != 2 {
+		t.Errorf("Reap ended %d processes, want 2", n)
+	}
+	for _, c := range []*exec.Cmd{inRoot, tagged} {
+		if err := c.Wait(); err == nil {
+			t.Errorf("process %d of the run wasn't killed", c.Process.Pid)
+		}
+	}
+	if syscall.Kill(person.Process.Pid, 0) != nil {
+		t.Error("Reap killed a process that only had --out open")
+	}
+	if _, err := os.Stat(filepath.Join(cand, "gocache")); err == nil {
+		t.Error("the child's cache was kept")
+	}
+	if _, err := os.Stat(filepath.Join(cand, "hive", ".hive", "daemon.log")); err != nil {
+		t.Errorf("the child's daemon.log went: %v", err)
+	}
+}
+
+// Pdeathsig fires when the starting OS thread ends: no gate code locks one.
+func TestGateLocksNoThread(t *testing.T) {
+	files, _ := filepath.Glob("*.go")
+	for _, name := range files {
+		raw, _ := os.ReadFile(name)
+		if !strings.HasSuffix(name, "_test.go") && bytes.Contains(raw, []byte("runtime.LockOSThread()")) {
+			t.Errorf("%s locks an OS thread: a child it starts there dies with the thread (dieWithGate)", name)
 		}
 	}
 }

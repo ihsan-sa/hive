@@ -77,8 +77,14 @@ func TestNoSandboxInsideASandbox(t *testing.T) {
 	if left := daemonsUnder(dir); len(left) > 0 {
 		t.Errorf("daemons %v outlived the gate run", left)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "out", "run", "candidate")); err == nil {
-		t.Error("the run's folders outlived it")
+	cand := filepath.Join(dir, "out", "run", "candidate")
+	for _, bulky := range []string{"gopath", "gocache", "home"} {
+		if _, err := os.Stat(filepath.Join(cand, bulky)); err == nil {
+			t.Errorf("the candidate's %s outlived the run", bulky)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cand, "hive", "daemon-probe.log")); err != nil {
+		t.Errorf("the candidate's daemon log went with the run: %v", err)
 	}
 	raw, _ := os.ReadFile(log)
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")

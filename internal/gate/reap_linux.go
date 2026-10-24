@@ -13,18 +13,32 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
-// dieWithGate kills a child started bare when the gate's thread that started
-// it dies, a crash or a kill of the gate included.
+// dieWithGate kills a child started bare when the gate dies, a crash or a
+// kill included. Pdeathsig fires when the OS thread that started the child
+// exits, not the process: Go ends a thread only when a goroutine that called
+// runtime.LockOSThread returns still locked, and the gate starts no child
+// from such a goroutine, so here the two are the same. A child started from
+// a locked thread would be killed when that goroutine ends, mid-probe.
 func dieWithGate(a *syscall.SysProcAttr) { a.Pdeathsig = syscall.SIGKILL }
 
-// reap kills every process that belongs to a child: whose environment names
-// a gate root under root (rootEnv, which a nested gate's own children carry
-// too), or whose program or working directory is under it. A daemon the child
-// detached (setsid) has left the child's process group, so this, not the
-// group, is what ends it. It returns how many it killed.
-func reap(root string) int {
+// reap kills every process that belongs to the run in out: whose environment
+// names a gate root under out (rootEnv, which a nested gate's own children
+// carry too), or whose program or working directory is in one of the folders
+// the run made there (runDirs). A daemon a child detached (setsid) has left
+// the child's process group, so this, not the group, is what ends it. It
+// returns how many it killed.
+func reap(out string) int {
+	dirs := runDirs(out)
 	return sweep(func(env [][]byte, exe, cwd string) bool {
-		return under(exe, root) || under(cwd, root) || under(envValue(env, rootEnv), root)
+		if under(envValue(env, rootEnv), out) {
+			return true
+		}
+		for _, d := range dirs {
+			if under(exe, d) || under(cwd, d) {
+				return true
+			}
+		}
+		return false
 	})
 }
 

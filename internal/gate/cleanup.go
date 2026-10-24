@@ -19,11 +19,13 @@ const (
 var owner = ownerID()
 
 // Reap ends every process the gate run in out started (children,
-// grandchildren, the daemons they detached, a nested gate's) and removes the
-// folders the run made there, keeping its report, the verified binary and the
-// log. Run calls it as it ends; the daemon calls it again once the gate has
-// exited, which covers a gate that was killed or crashed. It returns how many
-// processes it ended.
+// grandchildren, the daemons they detached, a nested gate's) and removes
+// the bulky parts of the run (checkouts, binaries, Go caches), keeping the
+// report, the verified binary and every log: the children's workspaces, with
+// their daemon.log and journal, and their *.log files stay in the Hive's
+// record. Run calls it as it ends; the daemon calls it again once the gate
+// has exited, which covers a gate that was killed or crashed. It returns how
+// many processes it ended.
 func Reap(out string) int {
 	abs, err := filepath.Abs(out)
 	if err != nil || abs == "/" {
@@ -34,20 +36,46 @@ func Reap(out string) int {
 	return n
 }
 
-// tidy removes what a run made in out: only folders it names itself, never
-// anything else a person keeps there.
-func tidy(out string) {
+// childRoot is a side's or a sealed check's root in a run folder.
+func childRoot(name string) bool {
+	return name == "candidate" || name == "control" || strings.HasPrefix(name, "check-")
+}
+
+// runDirs are the folders a run makes in out: the only places a process
+// counts as the run's by its program or working directory. Anything else in
+// out (a shell or an editor a person has open there) is matched only by
+// rootEnv, which the gate alone sets.
+func runDirs(out string) []string {
+	var dirs []string
 	ents, _ := os.ReadDir(out)
 	for _, e := range ents {
 		name := e.Name()
-		switch {
-		case name == "org":
-			os.Remove(filepath.Join(out, name)) // a local org, once its repositories are deleted
-		case name == "candidate" || name == "control" || name == "evaluator" || name == "prefetch" ||
-			strings.HasPrefix(name, "src-") || strings.HasPrefix(name, "built-") || strings.HasPrefix(name, "check-"):
-			removeTree(filepath.Join(out, name))
+		if e.IsDir() && (childRoot(name) || name == "evaluator" || name == "prefetch" ||
+			strings.HasPrefix(name, "src-") || strings.HasPrefix(name, "built-")) {
+			dirs = append(dirs, filepath.Join(out, name))
 		}
 	}
+	return dirs
+}
+
+// bulk is what a child root holds besides its logs: its home, scratch,
+// caches and clone. Its workspace ("hive", with the daemon's log and
+// journal) and the nested run ("grandchild", tidied by its own gate) stay.
+var bulk = []string{"home", "tmp", "gocache", "gopath", "org-clone", "evaluator-home", "evaluator-tmp"}
+
+// tidy removes the run's checkouts, binaries and caches: only folders it
+// names itself, never anything else a person keeps in out.
+func tidy(out string) {
+	for _, dir := range runDirs(out) {
+		if !childRoot(filepath.Base(dir)) {
+			removeTree(dir)
+			continue
+		}
+		for _, b := range bulk {
+			removeTree(filepath.Join(dir, b))
+		}
+	}
+	os.Remove(filepath.Join(out, "org")) // a local org, once its repositories are deleted
 }
 
 // removeTree removes p, making its folders writable first: a module cache is
