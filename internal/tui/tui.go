@@ -337,14 +337,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash("✗ not sent · " + msg.err.Error())
 			return m, nil
 		}
-		m.msgs[msg.out.chat] = append(m.msgs[msg.out.chat], msg.msg)
-		if msg.out.thread == "" && m.section == secChats && m.chat == msg.out.chat { // a new thread opens in its pane
-			m.thread, m.focus, m.threadSel = msg.msg.Thread, 2, -1
-			if m.thread == "" {
-				m.thread = msg.msg.ID
-			}
-			return m, m.focusBox(m.thread)
-		}
+		m.msgs[msg.out.chat] = append(m.msgs[msg.out.chat], msg.msg) // a new thread stays in the channel; the person opens it
 	case tickMsg:
 		return m, tea.Batch(m.fetchState(), m.fetchChat(m.currentChatID()), m.fetchDetail(), m.fetchFeed(), tick())
 	case stateMsg:

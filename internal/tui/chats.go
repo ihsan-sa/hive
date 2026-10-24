@@ -502,14 +502,18 @@ func (m *model) viewChannel(w int) pane {
 		replies := fmt.Sprintf("%d %s", n, plural(n, "reply", "replies"))
 		switch {
 		case n == 0:
-		case sel:
-			add(stTitle.Render("▸ "+replies) + "  " + stDim.Render("open →"))
-		case m.isOpen(ts, i):
-			add(stDim.Render("▾ " + replies))
+		case m.isOpen(ts, i): // space toggles this whether or not the thread is selected
+			if sel {
+				add(stTitle.Render("▾ "+replies) + "  " + stDim.Render("open →"))
+			} else {
+				add(stDim.Render("▾ " + replies))
+			}
 			for _, r := range t.msgs[1:] {
 				add("  " + msgHead(r))
 				add(indent(m.body(r.Text, tw-2), "  ")...)
 			}
+		case sel:
+			add(stTitle.Render("▸ "+replies) + "  " + stDim.Render("open →"))
 		default:
 			add(stDim.Render(fmt.Sprintf("▸ %s  last %s", replies, t.msgs[n].At.Local().Format("15:04"))))
 		}

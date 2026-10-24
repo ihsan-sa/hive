@@ -925,3 +925,63 @@ func TestPlanUsageEscapesFeedNames(t *testing.T) {
 		}
 	}
 }
+
+// A setting shows its new value the moment it's changed, not after the save
+// and the next state poll come back.
+func TestSettingChangesAtOnce(t *testing.T) {
+	m := testModel(80, 24)
+	m.section = secSettings
+	for i, s := range m.settings() {
+		if s.key == "auto_update" {
+			m.setSel = i
+		}
+	}
+	was := m.st.Config.AutoUpdate
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil || m.st.Config.AutoUpdate == was {
+		t.Fatal("auto-update didn't change on enter")
+	}
+	for i, s := range m.settings() {
+		if s.key == "lead_model" {
+			m.setSel = i
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.st.Config.LeadModel != modelChoices(m.st.Config)[1] {
+		t.Fatalf("lead model %q after picking %q", m.st.Config.LeadModel, modelChoices(m.st.Config)[1])
+	}
+}
+
+// Sending a new thread leaves it in the channel; the person opens threads.
+func TestSendingDoesNotOpenTheThread(t *testing.T) {
+	m := testModel(80, 24)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	focus := m.focus
+	m.Update(sentMsg{out: outMsg{chat: "lead", text: "hi"}, msg: chat.Message{ID: "9", Thread: "9", From: "person", Name: "you", Text: "hi", At: time.Now()}})
+	if m.thread != "" || m.focus != focus {
+		t.Fatalf("sending opened thread %q (focus %d, was %d)", m.thread, m.focus, focus)
+	}
+}
+
+// Space folds and unfolds the selected thread's replies.
+func TestSpaceFoldsTheSelectedThread(t *testing.T) {
+	m := testModel(100, 60)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp}) // from the new-thread box onto the last thread
+	if m.threadSel != 1 {
+		t.Fatalf("selected thread %d, want 1", m.threadSel)
+	}
+	reply := "pull/3"
+	if !strings.Contains(m.View(), reply) {
+		t.Fatal("the selected last thread starts folded")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	if strings.Contains(m.View(), reply) {
+		t.Fatal("space didn't fold the selected thread")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	if !strings.Contains(m.View(), reply) {
+		t.Fatal("space didn't unfold the selected thread")
+	}
+}
