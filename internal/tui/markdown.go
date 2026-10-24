@@ -9,10 +9,9 @@ import (
 )
 
 var (
-	stCode = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	stLink = lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Underline(true)
-	stBold = lipgloss.NewStyle().Bold(true)
-	stEm   = lipgloss.NewStyle().Italic(true)
+	stCode, stLink lipgloss.Style // set with the palette (setHue)
+	stBold         = lipgloss.NewStyle().Bold(true)
+	stEm           = lipgloss.NewStyle().Italic(true)
 
 	reInline = regexp.MustCompile("`([^`]+)`|\\*\\*([^*]+)\\*\\*|\\[([^\\]]+)\\]\\(([^)\\s]+)\\)|(?:^|\\s)\\*([^*\\s][^*]*)\\*")
 	reBullet = regexp.MustCompile(`^(\s*)[-*+] `)

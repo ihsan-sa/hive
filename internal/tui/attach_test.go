@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -173,13 +175,11 @@ func TestDropAttaches(t *testing.T) {
 	}
 
 	t.Setenv("PATH", t.TempDir())
-	t.Setenv("WAYLAND_DISPLAY", "")
-	t.Setenv("DISPLAY", "")
-	if _, err := clipboardImage(); err != errNoTool {
-		t.Fatalf("no tool: %v", err)
+	for _, v := range []string{"WAYLAND_DISPLAY", "DISPLAY", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"} {
+		t.Setenv(v, "")
 	}
-	if toolHint("darwin") != "" || toolHint("windows") != "" || !strings.Contains(toolHint("linux"), "xclip") {
-		t.Fatal("the install hint names Linux tools only on Linux")
+	if _, err := clipboardImage(); !errors.Is(err, errNoTool) && !thisSetup().wsl { // WSL may find C:'s PowerShell
+		t.Fatalf("no tool: %v", err)
 	}
 	// With no tool, ctrl+v still hands the input its text paste.
 	_, cmd := m.keyInput(tea.KeyMsg{Type: tea.KeyCtrlV})
@@ -205,5 +205,70 @@ func TestClipboardTools(t *testing.T) {
 	os.WriteFile(filepath.Join(bin, "xclip"), []byte("#!/bin/sh\n"), 0o755)
 	if _, err := clipboardImage(); err != errNoImage {
 		t.Fatalf("both empty: %v", err)
+	}
+}
+
+// TestClipboardPerSetup: each way a person may run the control center reads
+// the clipboard it can reach, and where none answers says why and what to do.
+func TestClipboardPerSetup(t *testing.T) {
+	argv0 := func(ts []clipTool) (out []string) {
+		for _, t := range ts {
+			out = append(out, t.argv[0])
+			if strings.Contains(t.argv[0], "powershell") || strings.Contains(t.argv[0], "pwsh") {
+				if !slices.Contains(t.argv, "-STA") {
+					panic(t.argv[0] + " runs without -STA, where the clipboard reads nothing")
+				}
+			}
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name  string
+		s     clipSetup
+		tools []string
+		says  []string // what the no-tool message says
+		not   []string // and doesn't
+	}{
+		{"Windows binary in Windows Terminal", clipSetup{goos: "windows"}, []string{"powershell", "pwsh"}, []string{"powershell", "paste its path"}, []string{"xclip"}},
+		{"Linux binary under WSL", clipSetup{goos: "linux", wsl: true}, []string{"powershell.exe", winPowerShell, "pwsh.exe"}, []string{"WSL", "paste its path"}, []string{"xclip"}},
+		{"WSL with WSLg", clipSetup{goos: "linux", wsl: true, wayland: true, x11: true}, []string{"powershell.exe", winPowerShell, "pwsh.exe", "wl-paste", "xclip"}, nil, nil},
+		{"Linux host over SSH from Windows", clipSetup{goos: "linux", ssh: true}, nil, []string{"SSH", "scp", "paste its path"}, []string{"xclip", "wl-clipboard"}},
+		{"SSH forwarding X", clipSetup{goos: "linux", ssh: true, x11: true}, []string{"xclip"}, []string{"SSH"}, nil},
+		{"Linux desktop", clipSetup{goos: "linux", wayland: true}, []string{"wl-paste"}, []string{"wl-clipboard", "xclip"}, nil},
+		{"Linux console", clipSetup{goos: "linux"}, nil, []string{"no display", "paste its path"}, []string{"xclip"}},
+		{"macOS", clipSetup{goos: "darwin"}, []string{"osascript"}, []string{"osascript"}, []string{"xclip"}},
+	} {
+		if got := argv0(clipTools(c.s)); !slices.Equal(got, c.tools) {
+			t.Errorf("%s: tools %q, want %q", c.name, got, c.tools)
+		}
+		err := noTool(c.s)
+		if !errors.Is(err, errNoTool) {
+			t.Errorf("%s: %v isn't errNoTool, so ctrl+v wouldn't paste text", c.name, err)
+		}
+		for _, w := range c.says {
+			if !strings.Contains(err.Error(), w) {
+				t.Errorf("%s: %q doesn't say %q", c.name, err, w)
+			}
+		}
+		for _, w := range c.not {
+			if strings.Contains(err.Error(), w) {
+				t.Errorf("%s: %q says %q", c.name, err, w)
+			}
+		}
+	}
+}
+
+// TestThisSetup: WSL and SSH are read from the session's environment.
+func TestThisSetup(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("WSL is Linux")
+	}
+	for _, v := range []string{"WSL_DISTRO_NAME", "WSL_INTEROP", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"} {
+		t.Setenv(v, "")
+	}
+	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
+	t.Setenv("SSH_CONNECTION", "10.0.0.2 50000 10.0.0.1 22")
+	if s := thisSetup(); !s.wsl || !s.ssh {
+		t.Fatalf("setup %+v, want WSL over SSH", s)
 	}
 }

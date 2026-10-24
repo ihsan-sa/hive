@@ -500,14 +500,7 @@ func (m *Module) panelSeats() ([]core.TribunalSeat, error) {
 	if err := cfg.Check(); err != nil {
 		return nil, err
 	}
-	var out []core.TribunalSeat
-	seen := map[core.TribunalSeat]bool{}
-	for _, x := range cfg.TribunalModels {
-		if x.Model != "" && !seen[x] {
-			seen[x] = true
-			out = append(out, x)
-		}
-	}
+	out := cfg.Seats("")
 	if len(out) == 0 {
 		out = []core.TribunalSeat{{Model: cfg.Model}}
 	}
