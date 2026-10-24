@@ -144,6 +144,7 @@ func Run(cfg Config) (rep Report, err error) {
 			rep.CantRun = true // a probe failed on both sides: that path was never measured
 			rep.Transient = true
 		}
+		rep.redact(cfg.OrgToken, cfg.ChildToken)
 		rep.sign()
 		write(cfg, rep)
 		if !rep.Verdict.Keep && !rep.CantRun {

@@ -246,9 +246,95 @@ func TestGateLessonsReachTheBrief(t *testing.T) {
 	if b := m.renderBrief(task, p, main); !strings.Contains(b, "> - The gate rolled back abc1234") {
 		t.Fatalf("the brief misses the gate's lesson:\n%s", b)
 	}
+	// A lesson is data: kept to one plain line, clipped, no fence to open.
+	os.WriteFile(filepath.Join(dir, "lessons.md"), []byte("- The gate rolled back abc1234 (run gate-1): ```\x1b[2J"+strings.Repeat("x", 900)+"\n"), 0o644)
+	if b := m.renderBrief(task, p, main); strings.Contains(b, "```") || strings.Contains(b, "\x1b") || strings.Contains(b, strings.Repeat("x", 500)) {
+		t.Fatalf("an untrusted lesson reached the brief as written:\n%s", b)
+	}
+	os.WriteFile(filepath.Join(dir, "lessons.md"), []byte("# Lessons\n\n- The gate rolled back abc1234 (run gate-1): not better\n"), 0o644)
 	pushMain(t, f, map[string]string{".hive/lessons.md": "# Lessons\n\n- 2026-10-24: the recursive gate rolled back abc1234 (work): not better\n"})
 	main, _ = m.C.Effects.Sync(p)
 	if b := m.renderBrief(task, p, main); strings.Count(b, "rolled back abc1234") != 1 {
 		t.Fatalf("want the lesson once, from main:\n%s", b)
+	}
+}
+
+// A keep carries across a main that moved without changing the change's own
+// diff, as reads do, so a busy main doesn't send every open self PR round the
+// gate again; a rollback of the same diff stops it carrying.
+func TestSelfGateKeepCarriesAcrossMain(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	old, _ := m.C.Effects.Sync(p)
+	ch, err := m.C.Effects.Classify(p, old, task.SHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Head: task.SHA, Main: old, Diff: ch.DiffID, Outcome: core.GateKeep, Sandbox: "bwrap", Reason: "better"})
+	pushMain(t, f, map[string]string{"other.txt": "elsewhere\n"})
+	main, _ := m.C.Effects.Sync(p)
+	if main == old {
+		t.Fatal("main didn't move")
+	}
+	if g, ok := m.C.Effects.GateKept(p.Name, task.SHA, main, ch.DiffID); !ok || g.Main != old {
+		t.Fatalf("the keep against %s didn't carry to %s: %+v", core.Short(old), core.Short(main), g)
+	}
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Head: "later", Main: main, Diff: ch.DiffID, Outcome: core.GateRollback, Sandbox: "bwrap"})
+	if _, ok := m.C.Effects.GateKept(p.Name, task.SHA, main, ch.DiffID); ok {
+		t.Fatal("a keep carried past a later rollback of the same diff")
+	}
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Head: task.SHA, Main: old, Diff: ch.DiffID, Outcome: core.GateKeep, Sandbox: "bwrap", Reason: "better"})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || len(*jobs) != 0 {
+		t.Fatalf("stage %q, reason %q, %d gate runs: want merged on the carried keep", task.Stage, task.Reason, len(*jobs))
+	}
+}
+
+// A stand-in's keep (sandbox "fake") counts only under the fake harness: set
+// the harness to fake, then back, and the change is gated for real.
+func TestSelfGateFakeKeepNeedsTheFakeHarness(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
+	main, _ := m.C.Effects.Sync(p)
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Head: task.SHA, Main: main, Outcome: core.GateKeep, Sandbox: "fake"})
+	cfg := m.C.WS.LoadConfig()
+	cfg.Harness = "claude"
+	m.C.WS.SaveConfig(cfg)
+	if _, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: task.PR.Number, SHA: task.SHA, Main: main, Subject: "x"}); err == nil || !strings.Contains(err.Error(), "recursive gate") {
+		t.Fatalf("a stand-in's keep merged under a real harness: %v", err)
+	}
+	gateOnce(t, m, task, p)
+	if len(*jobs) != 1 || task.Stage != StageWorking {
+		t.Fatalf("%d gate runs, stage %q: want gated for real and rolled back", len(*jobs), task.Stage)
+	}
+}
+
+// A revert the Hive made itself that the gate won't keep has no worker to fix
+// it: the person is asked once, with an alert, whether to merge it without
+// the gate, and their merge lets it land.
+func TestSelfGateStuckRevertAsksThePerson(t *testing.T) {
+	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
+	task.Kind, task.Worker = "revert", ""
+	m.C.J.MustAppend("effect.hostcommit", core.HostCommit{Project: p.Name, SHA: task.SHA, Kind: "revert"})
+	gateOnce(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	var ask core.Ask
+	n := 0
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "gate" {
+			ask, n = a, n+1
+		}
+	}
+	if n != 1 || task.Stage != StageMerging || !strings.Contains(task.Reason, "the person may merge it") || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("%d asks, stage %q, reason %q: want one ask and the revert held", n, task.Stage, task.Reason)
+	}
+	if alerts(m, "gate") < 1 {
+		t.Fatal("no alert for the stuck revert")
+	}
+	if _, err := m.C.Person.Answer(ask.ID, "merge", ""); err != nil {
+		t.Fatal(err)
+	}
+	*task, _ = m.Get(task.ID)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q: want merged on the person's word", task.Stage, task.Reason)
 	}
 }

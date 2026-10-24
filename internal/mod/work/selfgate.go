@@ -65,16 +65,28 @@ type gateRun struct {
 // recursiveGate holds t until the recursive gate has kept its head against
 // main; the bool says it waits (or went back).
 func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, error) {
-	if !p.Self {
+	if !p.Self || m.C.Effects.GateWaived(p.Name, t.SHA) {
+		return false, nil
+	}
+	// The diff as the merge will see it, so a keep carried here carries there.
+	ch, err := m.C.Effects.Classify(p, main, t.SHA)
+	if err != nil {
+		return true, err
+	}
+	if g, ok := m.C.Effects.GateKept(p.Name, t.SHA, main, ch.DiffID); ok {
+		m.tellGate(t, p, g)
 		return false, nil
 	}
 	g, ok := m.C.Effects.GateResult(p.Name, t.SHA, main)
+	if ok && g.Outcome == core.GateKeep {
+		ok = false // a stand-in's keep from when the harness was fake: judged again for real
+	}
 	if ok && (g.Outcome != core.GateCantRun || time.Now().Before(retryAfter(g))) {
 		m.tellGate(t, p, g)
-		switch g.Outcome {
-		case core.GateKeep:
-			return false, nil
-		case core.GateRollback:
+		if t.Kind == "revert" {
+			return true, m.revertStuck(t, p, g, main)
+		}
+		if g.Outcome == core.GateRollback {
 			return true, m.gateBack(t, p, g)
 		}
 		m.hold(t, p, fmt.Sprintf("%s, which can't run here (%s); it never merges unjudged, and the gate tries again after %s", GateWait, core.Clip(g.Reason, 300), retryAfter(g).Format("15:04Z")))
@@ -103,7 +115,7 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	m.mu.Unlock()
 	switch {
 	case cur == nil:
-		m.startGate(t, p, main, key)
+		m.startGate(t, p, ch, main, key)
 		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), time.Now().UTC().Format("15:04Z"), GateTimeout))
 	case cur.key == key:
 		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), cur.since.Format("15:04Z"), GateTimeout))
@@ -115,11 +127,8 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 
 // startGate runs the gate on t's head in the background and records its
 // verdict; m.gating is already set to key, and m.steps counts it.
-func (m *Module) startGate(t *Task, p core.Project, main, key string) {
-	tie := t.Kind == "revert"
-	if ch, err := m.C.Effects.Classify(p, main, t.SHA); err == nil && textOnly(ch.Files) {
-		tie = true
-	}
+func (m *Module) startGate(t *Task, p core.Project, ch core.Change, main, key string) {
+	tie, diff := t.Kind == "revert" || textOnly(ch.Files), ch.DiffID
 	dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
 	job := GateJob{Project: p, Repo: m.C.WS.Project(p.Name), Head: t.SHA, Main: main, AllowTie: tie,
 		Out: filepath.Join(dir, time.Now().UTC().Format("060102-150405")+"-"+core.Short(t.SHA)), Lessons: filepath.Join(dir, "lessons.md"), Timeout: GateTimeout}
@@ -135,7 +144,7 @@ func (m *Module) startGate(t *Task, p core.Project, main, key string) {
 			g = m.Gate(ctx, job)
 			cancel()
 		}
-		g.Project, g.Head, g.Main, g.At = p.Name, job.Head, job.Main, time.Now().UTC()
+		g.Project, g.Head, g.Main, g.Diff, g.At = p.Name, job.Head, job.Main, diff, time.Now().UTC()
 		if g.Outcome == "" {
 			g.Outcome = core.GateCantRun
 		}
@@ -201,7 +210,7 @@ func (m *Module) gateBack(t *Task, p core.Project, g core.GateResult) error {
 		}
 	}
 	detail += fmt.Sprintf("\n\nThe change is kept only if the child Hive built from it does better than the current one, with no regression. Add this line to `.hive/lessons.md` with your fix, so it is on the record:\n\n- %s: the recursive gate rolled back %s (%s): %s",
-		time.Now().UTC().Format("2006-01-02"), core.Short(g.Head), t.Label(), g.Reason)
+		time.Now().UTC().Format("2006-01-02"), core.Short(g.Head), t.Label(), lessonText(g.Reason))
 	return m.sendBackWith(t, p, findings, strings.TrimSpace(detail))
 }
 
@@ -240,7 +249,7 @@ func (m *Module) gateLessons(p core.Project, onMain string) []string {
 	}
 	var out []string
 	for _, l := range strings.Split(string(raw), "\n") {
-		l = strings.TrimSpace(l)
+		l = lessonText(l)
 		if !strings.HasPrefix(l, "- ") || strings.Contains(onMain, l) {
 			continue
 		}
@@ -253,4 +262,59 @@ func (m *Module) gateLessons(p core.Project, onMain string) []string {
 		out = append(out, l)
 	}
 	return out
+}
+
+// lessonText is a gate lesson fit to quote in a brief: a gate's reason can
+// carry words the candidate's run produced, so it is data, kept to one line
+// of plain text with no markup that could open a block or a heading.
+func lessonText(s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r == '`':
+			return '\''
+		case r < ' ' || r == 0x7f:
+			return ' '
+		}
+		return r
+	}, s)
+	return core.Clip(strings.Join(strings.Fields(s), " "), 400)
+}
+
+// revertStuck is a revert the Hive made itself that the gate rolled back or
+// can't run on: no worker can fix it, and undoing a bad merge mustn't hang on
+// the gate, so the person is asked once per head and main whether to merge it
+// without a keep. Waiting, it stays held, and a gate that couldn't run tries
+// again as for any change.
+func (m *Module) revertStuck(t *Task, p core.Project, g core.GateResult, main string) error {
+	asked := t.SHA + "@" + main
+	if t.GateAsked != asked {
+		t.GateAsked = asked
+		m.C.Person.Ask(core.Ask{Kind: "gate", Ref: t.ID + "@" + t.SHA, Project: p.Name,
+			Title:   fmt.Sprintf("Merge the revert %q without the recursive gate?", t.Label()),
+			Detail:  fmt.Sprintf("The Hive reverts %s because: %s\n\nThe recursive gate %s it on %s against main at %s: %s\n\nA revert undoes a merge that was already judged. Merge lets it land without the gate's keep; wait leaves it for the gate. PR: %s", core.Short(t.RevertSHA), t.Lesson, strings.ToLower(GateWord(g.Outcome)), core.Short(g.Head), core.Short(g.Main), core.Clip(g.Reason, 300), t.PR.URL),
+			Options: []string{"merge", "wait"}})
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "gate", "ref": "gate-revert:" + t.ID, "project": p.Name,
+			"text": fmt.Sprintf("the revert PR #%d in %s is stuck behind the recursive gate (%s): it is yours to merge without it, in Waiting", t.PR.Number, p.Name, strings.ToLower(GateWord(g.Outcome)))})
+	}
+	why := "it tries again after " + retryAfter(g).Format("15:04Z")
+	if g.Outcome == core.GateRollback {
+		why = "it is judged again once main moves"
+	}
+	m.hold(t, p, fmt.Sprintf("%s: it %s this revert (%s); the person may merge it without the gate, and %s", GateWait, strings.ToLower(GateWord(g.Outcome)), core.Clip(g.Reason, 200), why))
+	return nil
+}
+
+// onPersonGate is the person's word on a stuck revert: merge waives the gate
+// for that head (core.Effects.GateWaived); wait leaves it held.
+func (m *Module) onPersonGate(a core.Ask) {
+	id, sha, _ := strings.Cut(a.Ref, "@")
+	t, ok := m.Get(id)
+	if !ok || t.Kind != "revert" || t.SHA != sha || (a.Answer != "merge" && a.Answer != "yes") {
+		return
+	}
+	m.C.Effects.Approve("gate", t.Project, sha)
+	m.mu.Lock()
+	delete(m.later, id) // the merge looks again at once
+	m.mu.Unlock()
+	m.save(&t, "the person let the revert merge without the recursive gate")
 }
