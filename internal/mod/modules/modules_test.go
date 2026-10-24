@@ -179,8 +179,13 @@ func TestInstallListsOnlyAWholeClone(t *testing.T) {
 			}
 			return
 		default:
-			if m, ok := r.Get("ledger"); ok && !core.Exists(filepath.Join(m.Dir, "zz-last.md")) {
-				t.Fatal("listed before its files were checked out")
+			if m, ok := r.Get("ledger"); ok {
+				if !core.Exists(filepath.Join(m.Dir, "zz-last.md")) {
+					t.Fatal("listed before its files were checked out")
+				}
+				if m.Source.Commit == "" { // the bug a rename before the record let through
+					t.Fatalf("listed before its source record was written: %+v", m.Source)
+				}
 			}
 		}
 	}

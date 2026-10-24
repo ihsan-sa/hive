@@ -762,7 +762,7 @@ func TestMergeForgeCheckStopsWaitingOnStuckMain(t *testing.T) {
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "head/test"})
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "lint", State: core.CheckPending})
 	mergeOnce(t, m, task, p)
-	if task.Round != 0 || !strings.HasPrefix(task.Reason, "waiting on main: ") || task.MainWaitOn != main {
+	if task.Round != 0 || !strings.HasPrefix(task.Reason, "waiting on main: ") || task.MainWaitOn != task.SHA {
 		t.Fatalf("round %d, reason %q", task.Round, task.Reason)
 	}
 	task.MainWait = time.Now().Add(-mainWaitMax - time.Minute)
@@ -770,6 +770,78 @@ func TestMergeForgeCheckStopsWaitingOnStuckMain(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageWorking || task.Round != 1 || alerts(m, "main-red") != 1 || !strings.Contains(queued(m, "w1"), ": not run") {
 		t.Fatalf("stage %q, round %d, %d alerts, message %q", task.Stage, task.Round, alerts(m, "main-red"), queued(m, "w1"))
+	}
+}
+
+// While merges keep coming, main's newest commits may have only cancelled or
+// unfinished runs. A red PR doesn't wait on them: it takes main's answer from
+// the newest commit whose run of the check finished, and a cancelled run is
+// never that answer. Here main fails the check two commits back, so the PR is
+// no worse than main and merges.
+func TestMergeForgeCheckUsesLastFinishedMainRun(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	base, _ := m.C.Effects.Sync(p)
+	pushMain(t, f, map[string]string{"a.txt": "1"})
+	cancelled, _ := m.C.Effects.Sync(p)
+	pushMain(t, f, map[string]string{"b.txt": "2"})
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail})
+	f.SetChecks(p.Repo, base, core.CheckRun{Name: "test", State: core.CheckFail})
+	f.SetChecks(p.Repo, cancelled, core.CheckRun{Name: "test", State: core.CheckCantStart, Detail: "cancelled"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPending})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.Round != 0 || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+}
+
+// The same, with main passing the check at the last finished run: the red is
+// the change's and goes back at once, naming the commit main's answer is from,
+// though main's newest run was cancelled and the one before still runs.
+func TestMergeForgeCheckSkipsCancelledMainRuns(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	base, _ := m.C.Effects.Sync(p)
+	pushMain(t, f, map[string]string{"a.txt": "1"})
+	running, _ := m.C.Effects.Sync(p)
+	pushMain(t, f, map[string]string{"b.txt": "2"})
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "head/test"})
+	f.SetChecks(p.Repo, base, core.CheckRun{Name: "test", State: core.CheckPass})
+	f.SetChecks(p.Repo, running, core.CheckRun{Name: "test", State: core.CheckPending})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckCantStart, Detail: "cancelled"})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Round != 1 {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	if msg := queued(m, "w1"); !strings.Contains(msg, "On main at "+core.Short(base)+" (the newest commit whose run of it finished; at "+core.Short(main)) || !strings.Contains(msg, "passes, so this red is the change's") {
+		t.Fatalf("message:\n%s", msg)
+	}
+}
+
+// With no finished run on main to go by, the wait is timed from the PR's
+// head: main moving on (and its CI cancelling the last run) doesn't restart
+// it, so the PR isn't held for as long as merges keep coming.
+func TestMergeForgeCheckMainWaitSurvivesMainMoving(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "head/test"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPending})
+	mergeOnce(t, m, task, p)
+	if task.Round != 0 || !strings.HasPrefix(task.Reason, "waiting on main: ") || task.MainWaitOn != task.SHA {
+		t.Fatalf("round %d, reason %q, waiting on %q", task.Round, task.Reason, task.MainWaitOn)
+	}
+	task.MainWait = time.Now().Add(-mainWaitMax - time.Minute)
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckCantStart, Detail: "cancelled"})
+	pushMain(t, f, map[string]string{"a.txt": "1"})
+	next, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, next, core.CheckRun{Name: "test", State: core.CheckPending})
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Round != 1 {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
 	}
 }
 

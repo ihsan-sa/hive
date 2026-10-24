@@ -47,6 +47,7 @@ type State struct {
 	Sandbox    string             `json:"sandbox"`
 	SandboxErr string             `json:"sandbox_err,omitempty"`
 	Offline    string             `json:"offline,omitempty"` // what the Hive can't reach right now, in one plain line
+	Held       []string           `json:"held,omitempty"`    // why no new turn starts right now (a restart, the knowledge base's seed)
 	Projects   []ProjectView      `json:"projects"`
 	Runs       []core.Run         `json:"runs"`
 	Plans      []core.Plan        `json:"plans"`

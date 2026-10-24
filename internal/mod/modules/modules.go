@@ -315,11 +315,11 @@ func (r *Registry) Install(url, name string) (Module, error) {
 	tmp := filepath.Join(r.ws.Modules(), "."+name+"-"+core.NewID())
 	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, tmp); err != nil {
 		os.RemoveAll(tmp)
-		return Module{}, err
+		return Module{}, fmt.Errorf("module %s: %w", name, err)
 	}
 	// Its release and source record are written there too, so the module
 	// appears with them: a grant made the moment it shows isn't overwritten.
-	rel, err := record(tmp, url)
+	rel, err := record(tmp, name, url)
 	if err == nil {
 		err = os.Rename(tmp, dir)
 	}
@@ -334,9 +334,9 @@ func (r *Registry) Install(url, name string) (Module, error) {
 
 // record checks out a clone's newest release (its HEAD when it has none) and
 // writes where it came from. It returns the release.
-func record(dir, url string) (string, error) {
+func record(dir, name, url string) (string, error) {
 	if !core.Exists(filepath.Join(dir, ".git")) {
-		return "", fmt.Errorf("%s did not clone", filepath.Base(url))
+		return "", fmt.Errorf("module %s did not clone", name)
 	}
 	core.Git(dir, "fetch", "-q", "--tags")
 	rel := latestTag(dir)

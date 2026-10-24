@@ -31,15 +31,20 @@ type Ask struct {
 type Person struct {
 	j        *Journal
 	mu       sync.Mutex
-	answerMu sync.Mutex // held by Answer from the checks through the append, so one answer wins
+	answerMu sync.Mutex // held by Answer and Tell from the checks through the append, so one wins
 	asks     map[string]*Ask
-	told     []Ask // what was done for the person, oldest first
+	told     []Ask          // what was done for the person, oldest first: the newest keepTold
+	toldAt   map[string]int // told ID to its index in told
 	handlers map[string]func(Ask)
 }
 
+// keepTold is how many things told stay in memory. Only the newest few are
+// read; the journal keeps them all.
+const keepTold = 500
+
 // NewPerson replays asks.
 func NewPerson(j *Journal) *Person {
-	p := &Person{j: j, asks: map[string]*Ask{}, handlers: map[string]func(Ask){}}
+	p := &Person{j: j, asks: map[string]*Ask{}, toldAt: map[string]int{}, handlers: map[string]func(Ask){}}
 	apply := func(e Event) {
 		switch e.Kind {
 		case "person.asked":
@@ -52,7 +57,7 @@ func NewPerson(j *Journal) *Person {
 			var a Ask
 			e.Decode(&a)
 			p.mu.Lock()
-			p.told = append(p.told, a)
+			p.addTold(a)
 			p.mu.Unlock()
 		case "person.answered":
 			var a Ask
@@ -97,15 +102,48 @@ func (p *Person) Ask(a Ask) Ask {
 	return a
 }
 
+// addTold keeps a told, dropping the oldest past keepTold. p.mu is held.
+func (p *Person) addTold(a Ask) {
+	p.toldAt[a.ID] = len(p.told)
+	p.told = append(p.told, a)
+	if len(p.told) < 2*keepTold {
+		return
+	}
+	p.told = append([]Ask(nil), p.told[len(p.told)-keepTold:]...)
+	clear(p.toldAt)
+	for i, x := range p.told {
+		p.toldAt[x.ID] = i
+	}
+}
+
 // Tell records something already done for the person, which needs no
 // answer: it goes to their "done for you" feed, never to Waiting. Once per
-// ID, so a caller can give one to keep a notice from repeating.
+// ID, and once per (Ref, Title), so a step run twice after a restart, or a
+// caller's stable ID, keeps a notice from repeating.
 func (p *Person) Tell(a Ask) Ask {
-	if a.ID != "" {
-		if x, ok := p.Get(a.ID); ok {
-			return x
+	// answerMu keeps the check and the append together, as in Answer.
+	p.answerMu.Lock()
+	defer p.answerMu.Unlock()
+	p.mu.Lock()
+	if i, ok := p.toldAt[a.ID]; ok && a.ID != "" {
+		x := p.told[i]
+		p.mu.Unlock()
+		return x
+	}
+	if x, ok := p.asks[a.ID]; ok && a.ID != "" {
+		c := *x
+		p.mu.Unlock()
+		return c
+	}
+	if a.Ref != "" {
+		for i := len(p.told) - 1; i >= 0; i-- {
+			if x := p.told[i]; x.Ref == a.Ref && x.Title == a.Title {
+				p.mu.Unlock()
+				return x
+			}
 		}
 	}
+	p.mu.Unlock()
 	if a.ID == "" {
 		a.ID = NewID()
 	}
@@ -205,10 +243,8 @@ func (p *Person) Get(id string) (Ask, bool) {
 	if a, ok := p.asks[id]; ok {
 		return *a, true
 	}
-	for _, a := range p.told {
-		if a.ID == id {
-			return a, true
-		}
+	if i, ok := p.toldAt[id]; ok {
+		return p.told[i], true
 	}
 	return Ask{}, false
 }
