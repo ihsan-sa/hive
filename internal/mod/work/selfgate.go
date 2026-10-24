@@ -37,8 +37,21 @@ const GateWait = "waiting for the recursive gate"
 // GateTimeout bounds one gate run; the daemon kills it a little after.
 var GateTimeout = 2 * time.Hour
 
-// gateRetry is how long a gate that couldn't run waits before it tries again.
-var gateRetry = time.Hour
+// gateRetry is how long a gate that couldn't run waits before it tries again;
+// gateRetrySoon, when the cause may pass (the machine's load, a test that
+// failed on both sides).
+var (
+	gateRetry     = time.Hour
+	gateRetrySoon = 10 * time.Minute
+)
+
+// retryAfter is when a gate that couldn't run tries again.
+func retryAfter(g core.GateResult) time.Time {
+	if g.Transient {
+		return g.At.Add(gateRetrySoon)
+	}
+	return g.At.Add(gateRetry)
+}
 
 // gateReportFile is the report as the worker sent back reads it, in $HIVE_RUN.
 const gateReportFile = "gate-report.md"
@@ -56,7 +69,7 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		return false, nil
 	}
 	g, ok := m.C.Effects.GateResult(p.Name, t.SHA, main)
-	if ok && (g.Outcome != core.GateCantRun || time.Since(g.At) < gateRetry) {
+	if ok && (g.Outcome != core.GateCantRun || time.Now().Before(retryAfter(g))) {
 		m.tellGate(t, p, g)
 		switch g.Outcome {
 		case core.GateKeep:
@@ -64,7 +77,7 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		case core.GateRollback:
 			return true, m.gateBack(t, p, g)
 		}
-		m.hold(t, p, fmt.Sprintf("%s, which can't run here (%s); it never merges unjudged, and the gate tries again after %s", GateWait, core.Clip(g.Reason, 300), g.At.Add(gateRetry).Format("15:04Z")))
+		m.hold(t, p, fmt.Sprintf("%s, which can't run here (%s); it never merges unjudged, and the gate tries again after %s", GateWait, core.Clip(g.Reason, 300), retryAfter(g).Format("15:04Z")))
 		return true, nil
 	}
 	key := p.Name + "@" + t.SHA + "@" + main

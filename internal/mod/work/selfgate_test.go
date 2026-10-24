@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -121,6 +122,34 @@ func TestSelfGateCantRunWaits(t *testing.T) {
 	m.Wait()
 	if len(*jobs) != 2 {
 		t.Fatalf("%d runs, want a second try after the retry gap", len(*jobs))
+	}
+}
+
+// A gate that couldn't run for a cause that may pass (load, a test failing
+// on both sides) tries again after gateRetrySoon, not the hour.
+func TestSelfGateTransientRetriesSooner(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
+	inner := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+		g := inner(ctx, j)
+		g.Transient = true
+		return g
+	}
+	old := gateRetrySoon
+	gateRetrySoon = time.Hour
+	t.Cleanup(func() { gateRetrySoon = old })
+	gateOnce(t, m, task, p)
+	if !strings.Contains(task.Reason, "tries again after") {
+		t.Fatalf("reason %q", task.Reason)
+	}
+	gateRetrySoon = 0 // gateRetry stays an hour
+	m.mu.Lock()
+	delete(m.later, task.ID)
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if len(*jobs) != 2 {
+		t.Fatalf("%d runs, want a second try once the short gap passed", len(*jobs))
 	}
 }
 
