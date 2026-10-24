@@ -31,9 +31,10 @@ func bwrapPath() string {
 	return p
 }
 
-// bwrapArgs gives bwrap the reach Init builds: system dirs read-only, the
-// spec's mounts, tools at /hive/bin, a fresh /dev, /proc and /tmp, no network
-// but the egress socket, every namespace unshared, and a read-only root.
+// bwrapArgs gives bwrap the reach Init builds: system dirs and host
+// interpreter installs read-only, the spec's mounts, tools at /hive/bin, a
+// fresh /dev, /proc and /tmp, no network but the egress socket, every
+// namespace unshared, and a read-only root.
 func bwrapArgs(a initArgs, self string) []string {
 	s := a.Spec
 	argv := []string{"--unshare-all", "--die-with-parent", "--new-session",
@@ -51,6 +52,9 @@ func bwrapArgs(a initArgs, self string) []string {
 		argv = append(argv, "--ro-bind", d, d)
 	}
 	argv = append(argv, "--dev", "/dev", "--tmpfs", "/dev/shm", "--proc", "/proc", "--tmpfs", "/tmp")
+	for _, r := range a.Roots {
+		argv = append(argv, "--ro-bind", r, r)
+	}
 	for _, m := range s.Mounts {
 		flag := "--ro-bind"
 		if m.RW {
