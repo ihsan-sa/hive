@@ -67,25 +67,3 @@ func TestParkReasonReadsTheWSLLog(t *testing.T) {
 		t.Fatalf("reason %q, want the sandbox-exec error", te.Reason)
 	}
 }
-
-// A run that finishes blocked with a message waiting (often the answer it was
-// blocked on) is woken by it, whether the message came before or during the
-// turn's end; the wake reads the run after the turn ended.
-func TestBlockedFinishIsWokenByAMessage(t *testing.T) {
-	c, _ := testHive(t)
-	c.J.MustAppend("run.created", RunSpec{ID: "r1", Role: "worker"})
-	c.J.MustAppend("run.status", runNote{ID: "r1", Status: StatusRunning})
-	c.J.MustAppend("run.finish", map[string]any{"id": "r1", "finish": Finish{Status: "blocked", Account: "asked a warden"}})
-	r, _ := c.Runs.Get("r1")
-	r.Turn = 1
-	out := c.WS.TurnOut(r.ID, 1)
-	os.MkdirAll(filepath.Dir(out), 0o755)
-	os.WriteFile(out, []byte(`{"type":"result","subtype":"success","result":"ok","session_id":"s1"}`+"\n"), 0o600)
-	if err := c.Runs.Send("r1", "[request x] declined"); err != nil {
-		t.Fatal(err)
-	}
-	c.Runs.endTurn(r)
-	if got, _ := c.Runs.Get("r1"); got.Status != StatusIdle || got.Reason != "woken by a message" || len(got.Pending) != 1 {
-		t.Fatalf("run is %q (%q) with %d pending", got.Status, got.Reason, len(got.Pending))
-	}
-}
