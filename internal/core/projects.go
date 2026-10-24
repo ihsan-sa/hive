@@ -1,6 +1,8 @@
 package core
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"path"
@@ -73,8 +75,26 @@ type ProjectConfig struct {
 	High      []string `json:"high,omitempty"`      // paths whose changes need two separate reads
 	Root      []string `json:"root,omitempty"`      // paths that run with elevated rights: high, and the person says when they release
 	SmallMax  int      `json:"small_max_lines,omitempty"`
-	DryRun    string   `json:"dryrun,omitempty"` // for self-releasing projects: one ask, end to end
+	// UnreadMax is the size line under which a change that touches no
+	// protected, high, root or security-listed path merges on its tests and
+	// the checks with no reviewer seat (default DefaultUnreadMax; negative:
+	// every change is read). SampleUnread is one in how many of those get one
+	// read after merge (default DefaultSampleUnread; negative: none).
+	// ReadTwoMax is the size line over which a read change gets a second,
+	// separate read (default DefaultReadTwoMax); a root path or a reader's
+	// unsure land asks for one at any size.
+	UnreadMax    int    `json:"unread_max_lines,omitempty"`
+	SampleUnread int    `json:"sample_unread,omitempty"`
+	ReadTwoMax   int    `json:"second_read_lines,omitempty"`
+	DryRun       string `json:"dryrun,omitempty"` // for self-releasing projects: one ask, end to end
 }
+
+// The read lines' defaults (ProjectConfig).
+const (
+	DefaultUnreadMax    = 30
+	DefaultSampleUnread = 5
+	DefaultReadTwoMax   = 300
+)
 
 // SelfRoot and SelfHigh are the paths of the Hive's own source that a self
 // project guards whatever its project.json says; the gate's binary holds them,
@@ -87,6 +107,24 @@ var (
 	SelfRoot = []string{"internal/sandbox/", "internal/mod/risk/", "internal/setup/", "install/", ".github/"}
 	SelfHigh = []string{"internal/core/effects.go", "internal/core/forge.go", "internal/harness/", "internal/mod/release/", "internal/daemon/", "modules/agents/warden.md", "modules/agents/tribunal.md", "go.mod", "go.sum", "go.work", "go.work.sum", "vendor/"}
 )
+
+// SelfUnread is the allow-list of a self project's unread path: a change is
+// unread only when every file is a doc (by type, as Small judges it) under
+// one of these. Everything else (code, prompts, tests, root instruction files
+// such as CLAUDE.md, AGENTS.md and LEARNINGS.md, and all of .hive/, whose
+// lessons every reviewer reads as a rule) keeps a reader, whether or not a
+// list names it, so no small edit moves its own bar unread.
+var SelfUnread = []string{"docs/"}
+
+// Sampled picks one task in n by its id for a read after an unread merge, so
+// the pick survives a restart and needs no counter; none at n <= 0.
+func Sampled(task string, n int) bool {
+	if n <= 0 || task == "" {
+		return false
+	}
+	sum := sha256.Sum256([]byte("sample " + task))
+	return binary.BigEndian.Uint32(sum[:4])%uint32(n) == 0
+}
 
 // Guarded returns cfg with a self project's built-in classes added to its own.
 func (cfg ProjectConfig) Guarded(p Project) ProjectConfig {
@@ -244,6 +282,15 @@ func ParseProjectConfig(raw string) ProjectConfig {
 	json.Unmarshal([]byte(raw), &c)
 	if c.SmallMax == 0 {
 		c.SmallMax = 40
+	}
+	if c.UnreadMax == 0 {
+		c.UnreadMax = DefaultUnreadMax
+	}
+	if c.SampleUnread == 0 {
+		c.SampleUnread = DefaultSampleUnread
+	}
+	if c.ReadTwoMax == 0 {
+		c.ReadTwoMax = DefaultReadTwoMax
 	}
 	return c
 }
