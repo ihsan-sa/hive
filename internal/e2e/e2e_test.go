@@ -1152,6 +1152,47 @@ func TestOfflineLeadSaysWhy(t *testing.T) {
 	}
 }
 
+// TestHostPython: the person's python lives outside the system dirs (as uv or
+// pip put it under the home), and the baseline and a worker's checks run that
+// same program, bare or sandboxed. The fake python prints 7 where its folder
+// is read-only (bound into a sandbox) and 8 where it can write it (bare), so a
+// sandboxed run fails unless the sandbox ran the check. Which Linux sandbox
+// ran (bubblewrap or the Hive's own namespaces) is the host's pick; the
+// sandbox package's TestHostPythonBothPaths runs each one by name. Not
+// parallel: the daemon takes PATH from this process.
+func TestHostPython(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX sh")
+	}
+	dir := filepath.Join(t.TempDir(), "py", "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"python", "python3"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("#!/bin/sh\n[ -w \"${0%/*}\" ] && echo 8 || echo 7\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	h := start(t)
+	sb, want := h.ws.LoadConfig().Sandbox, 8.0
+	if sb == "auto" {
+		want = 7
+	}
+	t.Logf("sandbox %q: the check must print %v", sb, want)
+	py := `PY=$(command -v python || command -v python3) || { echo \"no python or python3 on PATH\" >&2; exit 127; }; \"$PY\"`
+	h.seed("me/py", map[string]string{
+		".hive/project.json": `{"test": "` + py + ` | grep -qx ` + fmt.Sprint(want) + `", "score": {"command": "` + py + `", "direction": "higher", "tolerance": 0}}`,
+		".hive/goals.md":     "# Goals\n",
+	})
+	h.post("/api/project", map[string]any{"name": "py", "repo": "me/py"}, nil)
+	h.wait("the baseline from the host's python", minute, func(st api.State) bool {
+		return len(st.Projects) == 1 && st.Projects[0].Best != nil && *st.Projects[0].Best == want
+	})
+	h.post("/api/ask", map[string]string{"project": "py", "title": "add a note", "known": "anything"}, nil)
+	h.wait("the worker to land", 3*minute, taskStage("py", "add a note", work.StageDone))
+}
+
 // TestAgentsReadTheHive: a worker reads another run's log, a chat, a warden's
 // log and the journal from $HIVE_STATE. Under the sandbox (HIVE_E2E_SANDBOX=auto)
 // it can change none of them and reads no secret; a bare run is unsandboxed by
