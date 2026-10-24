@@ -40,7 +40,7 @@ func TestModelThatCantAnswerIsSkipped(t *testing.T) {
 	cfg := c.WS.LoadConfig()
 	cfg.Models = map[string]OpenModel{"router": {Endpoint: "https://openrouter.ai/api/v1", Model: "free:free", Key: true}, "local": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"}}
 	c.WS.SaveConfig(cfg)
-	c.Runs.Tick(cfg) // the config Downs are fingerprinted against
+	c.Runs.tickDown(cfg) // the config Downs are fingerprinted against
 	reset := time.Now().Add(20 * time.Minute)
 	c.Runs.append("plan.usage", Plan{Harness: "fake", Limit: harness.RateLimit{Status: "rejected", ResetsAt: reset}})
 	route := []Pick{{Harness: "fake", Model: "opus"}, {Harness: "open", Model: "router"}, {Harness: "open", Model: "local"}}
@@ -73,7 +73,7 @@ func TestModelThatCantAnswerIsSkipped(t *testing.T) {
 	}
 	// A changed model config brings it back; an answer brings the other back.
 	cfg.Models["router"] = OpenModel{Endpoint: "https://openrouter.ai/api/v1", Model: "other:free", Key: true}
-	c.Runs.Tick(cfg)
+	c.Runs.tickDown(cfg)
 	if down := c.Runs.Down(); len(down) != 1 || down[0].Pick.Model != "local" {
 		t.Fatalf("after router's config changed: %+v", down)
 	}
@@ -91,7 +91,7 @@ func TestSameErrorThreeTurnsIsDown(t *testing.T) {
 	cfg := c.WS.LoadConfig()
 	cfg.Models = map[string]OpenModel{"m": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"}}
 	c.WS.SaveConfig(cfg)
-	c.Runs.Tick(cfg)
+	c.Runs.tickDown(cfg)
 	c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker", Harness: "open", Model: "m"})
 	c.J.MustAppend("run.created", RunSpec{ID: "w2", Role: "worker", Harness: "open", Model: "m"})
 	line := `{"type":"result","subtype":"error","is_error":true,"result":"the model server answered 500: boom","api_error_status":500}`
@@ -111,7 +111,7 @@ func TestSameErrorThreeTurnsIsDown(t *testing.T) {
 // that it has no such model marks it.
 func TestClaudeErrorsDontMarkItDown(t *testing.T) {
 	c, _ := testHive(t)
-	c.Runs.Tick(c.WS.LoadConfig())
+	c.Runs.tickDown(c.WS.LoadConfig())
 	for _, line := range []string{
 		`{"type":"result","subtype":"error_during_execution","is_error":true,"result":""}`,
 		`{"type":"result","subtype":"error_max_turns","is_error":true,"result":"","api_error_status":500}`,
@@ -140,7 +140,7 @@ func TestContextLength400IsntDown(t *testing.T) {
 	cfg := c.WS.LoadConfig()
 	cfg.Models = map[string]OpenModel{"m": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"}}
 	c.WS.SaveConfig(cfg)
-	c.Runs.Tick(cfg)
+	c.Runs.tickDown(cfg)
 	c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker", Harness: "open", Model: "m"})
 	got := endOn(t, c, "w1", "m", 1, `{"type":"result","subtype":"error","is_error":true,"result":"the model server answered 400: This model's maximum context length is 32768 tokens. However, your messages resulted in 40100 tokens.","api_error_status":400}`)
 	if d := c.Runs.Down(); len(d) != 0 || got.Retries != 1 {
@@ -155,14 +155,14 @@ func TestParkedRunWakesWhenThePickComesBack(t *testing.T) {
 	cfg := c.WS.LoadConfig()
 	cfg.Models = map[string]OpenModel{"router": {Endpoint: "https://openrouter.ai/api/v1", Model: "free:free"}}
 	c.WS.SaveConfig(cfg)
-	c.Runs.Tick(cfg)
+	c.Runs.tickDown(cfg)
 	c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker", Harness: "open", Model: "router", Route: []Pick{{Harness: "open", Model: "router"}}})
 	got := endOn(t, c, "w1", "router", 1, guardrail404)
 	if !got.ParkedUntil.After(time.Now().Add(50 * time.Minute)) {
 		t.Fatalf("parked until %v", got.ParkedUntil)
 	}
 	cfg.Models["router"] = OpenModel{Endpoint: "https://openrouter.ai/api/v1", Model: "other:free"}
-	c.Runs.Tick(cfg)
+	c.Runs.tickDown(cfg)
 	got, _ = c.Runs.Get("w1")
 	if got.Status != StatusParked || got.ParkedUntil.After(time.Now()) {
 		t.Fatalf("after the config changed: %s until %v (%s)", got.Status, got.ParkedUntil, got.Reason)
