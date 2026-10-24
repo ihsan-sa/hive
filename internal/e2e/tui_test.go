@@ -248,10 +248,13 @@ func TestControlCenterInTmux(t *testing.T) {
 		t.Fatalf("git is on PATH but the check calls it missing:\n%s", s)
 	}
 
-	// The first run: Enter for the folder, Enter for the demo project.
+	// The first run: Enter for the folder, for the report question and for the demo project.
 	x.typ("hive")
 	x.keys("Enter")
 	x.wait(20*time.Second, "Where should the Hive live? ["+ws.Root+"]")
+	x.keys("Enter")
+	// Then the failure-report question, whose Enter is no.
+	x.wait(20*time.Second, "Send failure reports to the Hive developer")
 	x.keys("Enter")
 	s = x.until(time.Minute, "the sandbox or repository prompt", func(s string) bool {
 		return strings.Contains(s, "Type `bare`") || strings.Contains(s, "GitHub repository")
