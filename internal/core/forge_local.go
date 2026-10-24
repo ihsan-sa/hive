@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -120,6 +121,21 @@ func (l *Local) Comment(repo string, number int, body string) error {
 	s := l.load()
 	k := fmt.Sprintf("%s#%d", repo, number)
 	s.Comments[k] = append(s.Comments[k], body)
+	l.save(s)
+	return nil
+}
+
+func (l *Local) StatusComment(repo string, number int, marker, body string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	k := fmt.Sprintf("%s#%d", repo, number)
+	body += "\n\n" + marker
+	if i := slices.IndexFunc(s.Comments[k], func(c string) bool { return strings.Contains(c, marker) }); i >= 0 {
+		s.Comments[k][i] = body
+	} else {
+		s.Comments[k] = append(s.Comments[k], body)
+	}
 	l.save(s)
 	return nil
 }
