@@ -124,10 +124,12 @@ type Module struct {
 	mainRed map[string]bool
 	// offline is why the forge was last unreachable, until it answers again;
 	// downs counts the failed steps and checks since, probe is when it may next
-	// be checked, and online is when it last came back.
+	// be checked, probing says a check is out, and online is when it last came
+	// back.
 	offline string
 	downs   int
 	probe   time.Time
+	probing bool
 	online  time.Time
 }
 
@@ -365,28 +367,36 @@ func (m *Module) settle(t *Task, err error) {
 		why = core.Unreachable("GitHub", err.Error())
 	}
 	// Many steps succeed without touching GitHub, so only a direct check says
-	// it's back, and the tasks share one check that backs off as they do.
+	// it's back, and the tasks share one check at a time that backs off as
+	// they do. Any answer but a network failure counts as back.
 	m.mu.Lock()
-	probe := err == nil && m.offline != "" && !time.Now().Before(m.probe)
+	probe := err == nil && m.offline != "" && !m.probing && !time.Now().Before(m.probe)
+	downs := m.downs
 	if probe {
-		m.probe = time.Now().Add(backoff(m.downs))
+		m.probe, m.probing = time.Now().Add(backoff(m.downs)), true
 	}
 	m.mu.Unlock()
-	var cerr error
+	cwhy := ""
 	if probe {
-		_, cerr = m.C.Effects.Forge.User()
+		if _, cerr := m.C.Effects.Forge.User(); cerr != nil {
+			cwhy = core.Unreachable("GitHub", cerr.Error())
+		}
 	}
 	m.mu.Lock()
+	if probe {
+		m.probing = false
+	}
 	switch {
 	case why != "":
 		m.offline = why
 		m.downs++
-	case probe && cerr != nil:
+	case probe && cwhy != "":
+		m.offline = cwhy
 		m.downs++
-	case probe:
-		m.offline, m.downs, m.online = "", 0, time.Now().UTC()
+	case probe && m.downs == downs: // no step failed while it was out
+		m.offline, m.downs, m.probe, m.online = "", 0, time.Time{}, time.Now().UTC()
 	}
-	downs := m.downs
+	downs = m.downs
 	m.mu.Unlock()
 	if err == nil {
 		return
