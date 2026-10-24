@@ -281,6 +281,13 @@ func (m *model) usage(w int) string {
 		}
 		parts = append(parts, s)
 	}
+	if b := m.st.OpenRouter; b != nil && b.Paid {
+		s := fmt.Sprintf("openrouter $%.2f/$%.0f", b.Spent, b.Cap)
+		if b.Stopped {
+			s = stWarn.Render(s + " paid off")
+		}
+		parts = append(parts, s)
+	}
 	for _, l := range m.st.Logins {
 		if l.Error != "" {
 			parts = append(parts, stBad.Render(text.Visible(l.Login)+" login can't renew"))

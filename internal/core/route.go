@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"net/url"
 	"slices"
@@ -40,6 +41,21 @@ func (m OpenModel) Where() string {
 	}
 	return s
 }
+
+// OpenRouter reports whether the model is on OpenRouter, whose key can
+// spend the person's money on any model that isn't a free one.
+func (m OpenModel) OpenRouter() bool {
+	u, err := url.Parse(m.Endpoint)
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "openrouter.ai" || strings.HasSuffix(h, ".openrouter.ai")
+}
+
+// Paid reports whether a turn on the model spends from the person's
+// OpenRouter budget: an OpenRouter model that isn't a free variant (":free").
+func (m OpenModel) Paid() bool { return m.OpenRouter() && !strings.HasSuffix(m.Model, ":free") }
 
 // Harness is the adapter that runs a turn on the model.
 func (m OpenModel) Harness() harness.Harness {
@@ -127,6 +143,48 @@ func (c Config) Route(role, project string) []Pick {
 	if !slices.Contains(CheckRoles, role) {
 		add(c.Routed("fallback", project))
 	}
+	return c.freeFirst(out)
+}
+
+// freeFirst puts a route's free OpenRouter models ahead of its paid ones, in
+// the places its OpenRouter models hold; every other pick keeps its place.
+func (c Config) freeFirst(picks []Pick) []Pick {
+	var at []int
+	var free, paid []Pick
+	for i, p := range picks {
+		if m, ok := c.OpenModel(p); ok && m.OpenRouter() {
+			at = append(at, i)
+			if m.Paid() {
+				paid = append(paid, p)
+			} else {
+				free = append(free, p)
+			}
+		}
+	}
+	for i, p := range append(free, paid...) {
+		picks[at[i]] = p
+	}
+	return picks
+}
+
+// OpenModel is the named model a pick on the open harness runs.
+func (c Config) OpenModel(p Pick) (OpenModel, bool) {
+	if HarnessName(p.Harness) != "open" {
+		return OpenModel{}, false
+	}
+	m, ok := c.Models[p.Model]
+	return m, ok
+}
+
+// FreeOpenRouter is the names of the free OpenRouter models, in name order:
+// where a run goes once the month's paid OpenRouter budget is spent.
+func (c Config) FreeOpenRouter() []Pick {
+	var out []Pick
+	for _, name := range slices.Sorted(maps.Keys(c.Models)) {
+		if m := c.Models[name]; m.OpenRouter() && !m.Paid() {
+			out = append(out, Pick{Harness: "open", Model: name})
+		}
+	}
 	return out
 }
 
@@ -170,6 +228,9 @@ func (c Config) checkRoutes() error {
 		if m.API != "" && !slices.Contains(APIs, m.API) {
 			return fmt.Errorf("model %s: api %q is one of %s", name, m.API, strings.Join(APIs, ", "))
 		}
+	}
+	if c.OpenRouterStopUSD < 0 || c.OpenRouterStopUSD > c.OpenRouterCapUSD {
+		return fmt.Errorf("openrouter_stop_usd ($%.2f) is where paid OpenRouter models stop, from $0 up to openrouter_cap_usd ($%.2f)", c.OpenRouterStopUSD, c.OpenRouterCapUSD)
 	}
 	check := func(where string, routes map[string][]string) error {
 		for role, entries := range routes {

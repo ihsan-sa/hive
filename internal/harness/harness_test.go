@@ -177,15 +177,16 @@ func TestCapped(t *testing.T) {
 	}
 }
 
-// A turn on a model the open harness runs never counts a cost, though Claude
-// Code driving another vendor's model prices its tokens as Claude's, and its
-// budget flag is left off for the same reason.
+// Claude Code driving another vendor's model prices its tokens as Claude's,
+// so its turn counts no cost and its budget flag is left off; the open agent's
+// cost is the endpoint's own report (OpenRouter's), so it counts.
 func TestOpenClaude(t *testing.T) {
 	line := []byte(`{"type":"result","subtype":"success","result":"ok","total_cost_usd":0.5}`)
-	for _, h := range []Harness{Open{}, OpenClaude{}} {
-		if evs := h.Parse(line); len(evs) != 1 || evs[0].Result.CostUSD != 0 {
-			t.Errorf("%T: %+v", h, evs)
-		}
+	if evs := (OpenClaude{}).Parse(line); len(evs) != 1 || evs[0].Result.CostUSD != 0 {
+		t.Errorf("OpenClaude: %+v", evs)
+	}
+	if evs := (Open{}).Parse(line); len(evs) != 1 || evs[0].Result.CostUSD != 0.5 {
+		t.Errorf("Open: %+v", evs)
 	}
 	args := OpenClaude{}.Args(Turn{SessionID: "s", Model: "deepseek-chat", MaxBudgetUSD: 2, KeyCommand: "hive open-key /k", Endpoint: "https://api.deepseek.com/anthropic/"})
 	a := strings.Join(args, " ")

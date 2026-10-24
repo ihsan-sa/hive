@@ -224,7 +224,9 @@ type Runs struct {
 	plans map[string]Plan
 	busy  map[string]bool    // runs whose tick work is in flight
 	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
-	holds map[string]string  // why no new turn starts (a restart waiting for a quiet moment), by who holds them
+	// openRouter is the part of spent that went on OpenRouter models.
+	openRouter map[string]float64
+	holds      map[string]string // why no new turn starts (a restart waiting for a quiet moment), by who holds them
 	// launching counts launches past the hold whose turn isn't journalled yet.
 	launching int
 	waking    sync.Mutex // one wake at a time, so a run is woken once
@@ -273,7 +275,7 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, openRouter: map[string]float64{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -419,7 +421,8 @@ type turnEnded struct {
 	Reason      string          `json:"reason,omitempty"`
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
 	Queue       []string        `json:"queue,omitempty"`
-	Offline     string          `json:"offline,omitempty"` // why the harness couldn't reach its service, in one plain line
+	Offline     string          `json:"offline,omitempty"`    // why the harness couldn't reach its service, in one plain line
+	OpenRouter  bool            `json:"openrouter,omitempty"` // the turn ran on an OpenRouter model, so its cost counts against that budget
 }
 
 // egressRefused is the hosts a turn's egress proxy refused, and each
@@ -558,6 +561,9 @@ func (rs *Runs) apply(e Event) {
 			spent := r.SessionCost.Turn(r.Session, t.Result.CostUSD)
 			r.Cost += spent
 			rs.spent[e.At.UTC().Format("2006-01")] += spent
+			if t.OpenRouter {
+				rs.openRouter[e.At.UTC().Format("2006-01")] += spent
+			}
 			if !t.Result.IsError {
 				r.Result, r.Structured = t.Result.Text, t.Result.Structured
 				r.Retries = 0
@@ -773,7 +779,12 @@ func (rs *Runs) freeAt(h, model string) time.Time {
 // its picks with room now, else the one that has room soonest. A persistent
 // run follows the settings' route; any other stays on its own pick while it
 // has room, then moves along its Route.
+//
+// Once the month's paid OpenRouter budget is spent, a paid OpenRouter pick
+// has no room until the month ends, and the free OpenRouter models join the
+// end of its picks.
 func (rs *Runs) next(r Run) (Pick, time.Time) {
+	cfg := rs.ws.LoadConfig()
 	own := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
 	picks := []Pick{own}
 	if rs.Route != nil && r.Persistent {
@@ -786,9 +797,19 @@ func (rs *Runs) next(r Run) (Pick, time.Time) {
 			picks = append(picks, p)
 		}
 	}
+	if slices.ContainsFunc(picks, func(p Pick) bool { return rs.Barred(cfg, p) }) {
+		for _, p := range cfg.FreeOpenRouter() {
+			if !slices.ContainsFunc(picks, p.Same) {
+				picks = append(picks, p)
+			}
+		}
+	}
 	best, at := picks[0], time.Time{}
 	for _, p := range picks {
 		free := rs.freeAt(p.Harness, p.Model)
+		if rs.Barred(cfg, p) {
+			free = NextMonth(time.Now())
+		}
 		if !free.After(time.Now()) {
 			return p, free
 		}
@@ -797,6 +818,54 @@ func (rs *Runs) next(r Run) (Pick, time.Time) {
 		}
 	}
 	return best, at
+}
+
+// OpenRouterSpent is what runs on OpenRouter models cost in a month
+// ("2006-01", UTC), from the costs OpenRouter reported with each answer.
+func (rs *Runs) OpenRouterSpent(month string) float64 {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.openRouter[month]
+}
+
+// Barred reports whether pick p is a paid OpenRouter model while this
+// month's OpenRouter spend has reached the person's stop.
+func (rs *Runs) Barred(cfg Config, p Pick) bool {
+	m, ok := cfg.OpenModel(p)
+	return ok && m.Paid() && rs.OpenRouterSpent(time.Now().UTC().Format("2006-01")) >= cfg.OpenRouterStopUSD
+}
+
+// OpenRouterBudget is this month's OpenRouter spend against the person's
+// cap, for the dashboard; nil when no model is on OpenRouter.
+func (rs *Runs) OpenRouterBudget(cfg Config) *OpenRouterBudget {
+	on, paid := false, false
+	for _, m := range cfg.Models {
+		on, paid = on || m.OpenRouter(), paid || m.Paid()
+	}
+	if !on {
+		return nil
+	}
+	month := time.Now().UTC().Format("2006-01")
+	b := &OpenRouterBudget{Month: month, Spent: rs.OpenRouterSpent(month), Cap: cfg.OpenRouterCapUSD, Stop: cfg.OpenRouterStopUSD, Paid: paid}
+	b.Stopped = b.Spent >= b.Stop
+	return b
+}
+
+// OpenRouterBudget is a month's OpenRouter spend, the person's cap on their
+// key, and the stop past which no paid OpenRouter model takes a turn.
+type OpenRouterBudget struct {
+	Month   string  `json:"month"` // "2006-01", UTC
+	Spent   float64 `json:"spent"`
+	Cap     float64 `json:"cap"`
+	Stop    float64 `json:"stop"`
+	Paid    bool    `json:"paid,omitempty"`    // some named model on OpenRouter is a paid one
+	Stopped bool    `json:"stopped,omitempty"` // the stop is reached: paid ones wait for next month
+}
+
+// NextMonth is when the calendar month after t's starts, in UTC.
+func NextMonth(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month()+1, 1, 0, 0, 0, 0, time.UTC)
 }
 
 // Spent is what runs cost in a month ("2006-01", UTC), from the harnesses' results.
@@ -1071,6 +1140,9 @@ func (rs *Runs) endTurn(r Run) {
 		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
 	}
 	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Session: tl.Session, Context: tl.Context, Result: tl.Result}
+	if m, ok := rs.ws.LoadConfig().OpenModel(Pick{Harness: r.Harness, Model: r.Model}); ok && m.OpenRouter() {
+		te.OpenRouter = true
+	}
 	var dropErr error
 	if HarnessName(r.Harness) == "codex" {
 		dropErr = rs.dropCodexHome(r.ID)
@@ -1249,12 +1321,22 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	// carry its session over, so it starts afresh on its brief.
 	from := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
 	pick, _ := rs.next(r)
+	if rs.Barred(cfg, pick) {
+		// No pick but a paid OpenRouter one: it waits for the month's budget.
+		until := NextMonth(time.Now())
+		if why := "waiting: this month's OpenRouter budget is spent and its picks have no free model; resumes " + until.Local().Format("Mon 2 Jan"); r.Status != StatusParked || r.Reason != why {
+			rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: why, Until: until})
+		}
+		return
+	}
 	moved := ""
 	if !pick.Same(from) {
 		if pick.Harness != from.Harness || pick.Harness == "open" {
 			r.SessionLive = false
 			why := "the settings route you there"
-			if rs.freeAt(from.Harness, from.Model).After(time.Now()) {
+			if rs.Barred(cfg, from) {
+				why = from.String() + " is a paid OpenRouter model and this month's OpenRouter budget is spent"
+			} else if rs.freeAt(from.Harness, from.Model).After(time.Now()) {
 				why = from.String() + " is at its usage limit"
 			}
 			moved = fmt.Sprintf("You now run on %s: %s. This is a fresh session on your brief above; your checkout, commits and notes are as you left them, so look at them (git log, $HIVE_BOX/notes.md) and continue.", pick, why)
@@ -1447,6 +1529,11 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 			tok = nil // the endpoint and id go in Claude Code's own settings
 		} else {
 			env = append(env, "HIVE_OPEN_HOME="+in(home))
+			if m := cfg.Models[r.Model]; m.Paid() {
+				// The turn stops once it has spent what is left before the stop.
+				left := cfg.OpenRouterStopUSD - rs.OpenRouterSpent(time.Now().UTC().Format("2006-01"))
+				env = append(env, fmt.Sprintf("HIVE_OPEN_BUDGET=%.4f", max(left, 0.0001)))
+			}
 		}
 	}
 	env = append(env, tok...)

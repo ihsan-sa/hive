@@ -15,7 +15,7 @@ import (
 type Open struct{}
 
 func (Open) Name() string           { return "open" }
-func (Open) CapsSpend()             {} // the models it runs are free, so a budget is never spent
+func (Open) CapsSpend()             {} // a run's budget is weighed between turns, on the cost the endpoint reports
 func (Open) Program() string        { return "hive" }
 func (Open) LoginCommand() []string { return nil }
 
@@ -41,18 +41,11 @@ func (Open) Args(t Turn) []string {
 
 func (Open) Env(Turn) []string { return nil }
 
-// Parse uses Claude's stream-json shape, which the open agent emits. A
-// turn's cost is never counted: the open agent knows no prices, and Claude
-// Code on another vendor's model would price its tokens as Claude's.
-func (Open) Parse(line []byte) []Event {
-	evs := Claude{}.Parse(line)
-	for _, e := range evs {
-		if e.Result != nil {
-			e.Result.CostUSD = 0
-		}
-	}
-	return evs
-}
+// Parse uses Claude's stream-json shape, which the open agent emits. Its
+// cost is what the endpoint itself reported (OpenRouter says what each
+// answer cost; a local server says nothing, so nothing), never a price the
+// Hive guessed.
+func (Open) Parse(line []byte) []Event { return Claude{}.Parse(line) }
 
 // OpenClaude is how the open harness runs a named model whose API is
 // Anthropic-compatible (Kimi, DeepSeek and GLM serve one): Claude Code
@@ -114,4 +107,14 @@ func (OpenClaude) Env(t Turn) []string {
 	return env
 }
 
-func (OpenClaude) Parse(line []byte) []Event { return Open{}.Parse(line) }
+// Parse counts no cost: Claude Code on another vendor's model prices its
+// tokens as Claude's.
+func (OpenClaude) Parse(line []byte) []Event {
+	evs := Claude{}.Parse(line)
+	for _, e := range evs {
+		if e.Result != nil {
+			e.Result.CostUSD = 0
+		}
+	}
+	return evs
+}

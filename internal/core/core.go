@@ -144,6 +144,32 @@ func (c *Core) Tick() {
 	cfg := c.WS.LoadConfig()
 	c.Runs.Tick(cfg)
 	c.tellSpend(cfg.MonthlyUSD)
+	c.tellOpenRouter(cfg)
+}
+
+// tellOpenRouter tells the person once a month when OpenRouter spend has
+// reached their stop, so paid OpenRouter models are off until the month ends.
+func (c *Core) tellOpenRouter(cfg Config) {
+	b := c.Runs.OpenRouterBudget(cfg)
+	if b == nil || !b.Paid || !b.Stopped {
+		return
+	}
+	id := "openrouter-" + b.Month
+	if _, told := c.Person.Get(id); told {
+		return
+	}
+	free := "none is set up, so runs routed only to paid ones wait for the month"
+	if picks := cfg.FreeOpenRouter(); len(picks) > 0 {
+		var names []string
+		for _, p := range picks {
+			names = append(names, p.Model)
+		}
+		free = "runs go on the free ones (" + strings.Join(names, ", ") + ")"
+	}
+	c.Person.Tell(Ask{ID: id,
+		Title: fmt.Sprintf("OpenRouter has cost $%.2f of your $%.2f this month: paid OpenRouter models are off until %s", b.Spent, b.Cap, NextMonth(time.Now()).Format("2 Jan")),
+		Detail: fmt.Sprintf("The Hive stops paid OpenRouter models at $%.2f; %s. This is the one notice for %s. The figures are openrouter_stop_usd and openrouter_cap_usd in .hive/config.json.",
+			b.Stop, free, b.Month)})
 }
 
 // tellSpend tells the person once a month when runs have cost more than the

@@ -16,6 +16,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,6 +57,11 @@ type Agent struct {
 	Out                  io.Writer
 	Client               *http.Client
 	Sleep                func(time.Duration) // waits out a short rate limit
+	// Spent is the session's cost so far in USD, as the endpoint reports it
+	// (OpenRouter's usage.cost); a turn's result carries it as Claude's
+	// running total_cost_usd. Budget, when set, ends a turn once the turn
+	// itself has spent that much.
+	Spent, Budget float64
 }
 
 // KeyMain is `hive open-key FILE`: it prints the model key the run manager
@@ -82,7 +88,8 @@ func KeyMain(argv []string) int {
 // [--readonly --add-dir D] [--schema-file F] [--max-output N]`, with the
 // endpoint and model id in HIVE_OPEN_ENDPOINT and HIVE_OPEN_MODEL, the key in
 // the file HIVE_OPEN_KEY_FILE names (deleted once read) or HIVE_OPEN_KEY, and
-// its conversations under HIVE_OPEN_HOME (else $HOME).
+// its conversations under HIVE_OPEN_HOME (else $HOME), and in HIVE_OPEN_BUDGET
+// the USD a turn may spend (a paid OpenRouter model's budget left).
 func Main(argv []string) int {
 	fl := flag.NewFlagSet("open-agent", flag.ContinueOnError)
 	session := fl.String("session", "", "")
@@ -101,6 +108,7 @@ func Main(argv []string) int {
 		ReadOnly: *readonly, MaxOutput: *maxOut, MaxSteps: 200, Out: os.Stdout, Sleep: time.Sleep,
 		Client: &http.Client{Timeout: 20 * time.Minute}}
 	a.Context, _ = strconv.Atoi(os.Getenv("HIVE_OPEN_CONTEXT"))
+	a.Budget, _ = strconv.ParseFloat(os.Getenv("HIVE_OPEN_BUDGET"), 64)
 	if f := os.Getenv("HIVE_OPEN_KEY_FILE"); f != "" {
 		// The run manager hands the key over in a file, deleted before any
 		// tool runs, so no command the model runs can read it.
@@ -116,7 +124,7 @@ func Main(argv []string) int {
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	for _, k := range []string{"HIVE_OPEN_ENDPOINT", "HIVE_OPEN_MODEL", "HIVE_OPEN_KEY", "HIVE_OPEN_KEY_FILE", "HIVE_OPEN_CONTEXT", "HIVE_OPEN_HOME"} {
+	for _, k := range []string{"HIVE_OPEN_ENDPOINT", "HIVE_OPEN_MODEL", "HIVE_OPEN_KEY", "HIVE_OPEN_KEY_FILE", "HIVE_OPEN_CONTEXT", "HIVE_OPEN_HOME", "HIVE_OPEN_BUDGET"} {
 		os.Unsetenv(k)
 	}
 	if a.Model == "" {
@@ -142,10 +150,14 @@ func Main(argv []string) int {
 		system = string(raw)
 	}
 	store := filepath.Join(home, ".hive-open", filepath.Base(*session)+".json")
+	costFile := strings.TrimSuffix(store, ".json") + ".cost"
 	var msgs []Message
 	if *resume {
 		if raw, err := os.ReadFile(store); err == nil {
 			json.Unmarshal(raw, &msgs)
+		}
+		if raw, err := os.ReadFile(costFile); err == nil {
+			a.Spent, _ = strconv.ParseFloat(strings.TrimSpace(string(raw)), 64)
 		}
 	}
 	if len(msgs) == 0 {
@@ -159,6 +171,10 @@ func Main(argv []string) int {
 		os.WriteFile(store, raw, 0o600)
 	}
 	res := a.Turn(context.Background(), msgs, save)
+	if a.Spent > 0 {
+		os.MkdirAll(filepath.Dir(costFile), 0o700)
+		os.WriteFile(costFile, []byte(strconv.FormatFloat(a.Spent, 'f', -1, 64)), 0o600)
+	}
 	res["session_id"] = *session
 	a.emit(res)
 	if res["is_error"] == true {
@@ -186,11 +202,23 @@ func (a *Agent) preamble() string {
 }
 
 // Turn runs the loop until the model answers without a tool call, returning
-// the result line.
+// the result line, which carries the session's cost so far.
 func (a *Agent) Turn(ctx context.Context, msgs []Message, save func([]Message)) map[string]any {
+	res := a.turn(ctx, msgs, save)
+	res["total_cost_usd"] = a.Spent
+	return res
+}
+
+func (a *Agent) turn(ctx context.Context, msgs []Message, save func([]Message)) map[string]any {
 	tools := a.tools()
 	last := ""
+	start := a.Spent
 	for step := 0; step < a.MaxSteps; step++ {
+		if a.Budget > 0 && a.Spent-start >= a.Budget {
+			save(msgs)
+			return map[string]any{"type": "result", "subtype": "success", "is_error": false,
+				"result": fmt.Sprintf("%s\n\n(stopped: this turn spent $%.4f, what was left of the month's budget for paid models)", last, a.Spent-start)}
+		}
 		msgs = a.fit(msgs)
 		reply, tokens, err := a.chat(ctx, msgs, tools)
 		if err != nil {
@@ -230,24 +258,24 @@ func (a *Agent) Turn(ctx context.Context, msgs []Message, save func([]Message)) 
 				msgs = append(msgs, Message{Role: "user", Content: "Call the answer tool with your final answer now."})
 				continue
 			}
-			return map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": last, "total_cost_usd": 0}
+			return map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": last}
 		}
 		for _, c := range reply.ToolCalls {
 			if c.Function.Name == "answer" && len(a.Schema) > 0 {
 				save(msgs)
 				return map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": c.Function.Arguments,
-					"structured_output": json.RawMessage(validJSON(c.Function.Arguments)), "total_cost_usd": 0}
+					"structured_output": json.RawMessage(validJSON(c.Function.Arguments))}
 			}
 			msgs = append(msgs, Message{Role: "tool", ToolCallID: c.ID, Content: a.run(ctx, c)})
 		}
 		save(msgs)
 	}
-	return map[string]any{"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0,
+	return map[string]any{"type": "result", "subtype": "success", "is_error": false,
 		"result": fmt.Sprintf("%s\n\n(stopped after %d tool steps in one turn)", last, a.MaxSteps)}
 }
 
 func errResult(msg string, status int) map[string]any {
-	r := map[string]any{"type": "result", "subtype": "error", "is_error": true, "result": msg, "total_cost_usd": 0}
+	r := map[string]any{"type": "result", "subtype": "error", "is_error": true, "result": msg}
 	if status > 0 {
 		r["api_error_status"] = status
 	}
@@ -349,6 +377,9 @@ func (e *httpErr) Error() string {
 // size in tokens. A rate limit that resets within two minutes is waited out.
 func (a *Agent) chat(ctx context.Context, msgs []Message, tools []map[string]any) (Message, int, error) {
 	body := map[string]any{"model": a.Model, "messages": msgs, "tools": tools}
+	if openRouter(a.Endpoint) {
+		body["usage"] = map[string]any{"include": true} // the answer then says what it cost
+	}
 	if a.MaxOutput > 0 {
 		body["max_tokens"] = a.MaxOutput
 	}
@@ -373,7 +404,8 @@ func (a *Agent) chat(ctx context.Context, msgs []Message, tools []map[string]any
 				Message Message `json:"message"`
 			} `json:"choices"`
 			Usage struct {
-				Prompt int `json:"prompt_tokens"`
+				Prompt int     `json:"prompt_tokens"`
+				Cost   float64 `json:"cost"` // USD, as OpenRouter reports it
 			} `json:"usage"`
 			Error *struct {
 				Message string `json:"message"`
@@ -381,6 +413,7 @@ func (a *Agent) chat(ctx context.Context, msgs []Message, tools []map[string]any
 			} `json:"error"`
 		}
 		json.Unmarshal(out, &r)
+		a.Spent += r.Usage.Cost // a failed request can cost too
 		msg := strings.TrimSpace(string(out))
 		if r.Error != nil {
 			msg = r.Error.Message
@@ -421,6 +454,16 @@ func (a *Agent) chat(ctx context.Context, msgs []Message, tools []map[string]any
 		}
 		return m, tokens, nil
 	}
+}
+
+// openRouter reports whether endpoint is OpenRouter's.
+func openRouter(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "openrouter.ai" || strings.HasSuffix(h, ".openrouter.ai")
 }
 
 // resetAt reads when a rate limit resets: Retry-After (seconds or a date),

@@ -150,7 +150,10 @@ func (m *model) dashRows() []row {
 			add(row{key: "sweep:" + s.ID, depth: 1, text: text, open: &d})
 		}
 	}
-	if add(row{key: "plans", text: "plan usage", expand: len(m.st.Plans) > 0, def: true}) {
+	if add(row{key: "plans", text: "plan usage", expand: len(m.st.Plans) > 0 || m.st.OpenRouter != nil, def: true}) {
+		if b := m.st.OpenRouter; b != nil {
+			add(row{key: "plan:openrouter", depth: 1, text: openRouterLine(b)})
+		}
 		for _, p := range m.st.Plans {
 			status := text.Visible(p.Limit.Status)
 			if status == "rejected" {
@@ -174,7 +177,7 @@ func (m *model) dashRows() []row {
 		for _, a := range m.st.Told {
 			d := toldDetail(a)
 			title := text.Visible(core.Clip(a.Title, 120))
-			if strings.HasPrefix(a.ID, "spend-") { // money is the person's: the notice stands out
+			if strings.HasPrefix(a.ID, "spend-") || strings.HasPrefix(a.ID, "openrouter-") { // money is the person's: the notice stands out
 				title = stWarn.Render(title)
 			}
 			add(row{key: "told:" + a.ID, depth: 1, text: a.Asked.Local().Format("Mon 15:04") + "  " + title, open: &d})
@@ -1413,4 +1416,17 @@ func toldHead(told []core.Ask, now time.Time) string {
 		return fmt.Sprintf("done for you (%d recent)", len(told))
 	}
 	return fmt.Sprintf("done for you (%d in the last day, %d recent)", day, len(told))
+}
+
+// openRouterLine is the month's OpenRouter spend against the person's cap,
+// and where paid models stop.
+func openRouterLine(b *core.OpenRouterBudget) string {
+	line := fmt.Sprintf("openrouter  $%.2f of $%.2f this month", b.Spent, b.Cap)
+	switch {
+	case !b.Paid:
+		return line + stDim.Render("  free models only")
+	case b.Stopped:
+		return line + "  " + stWarn.Render(fmt.Sprintf("paid models off past $%.2f, free ones only until the month ends", b.Stop))
+	}
+	return line + stDim.Render(fmt.Sprintf("  paid models stop at $%.2f", b.Stop))
 }

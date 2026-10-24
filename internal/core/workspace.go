@@ -105,6 +105,13 @@ type Config struct {
 	MaxOutputTokens int `json:"max_output_tokens"`
 	// MonthlyUSD: once this month's runs cost more, the person is told once. Work goes on; 0 is off.
 	MonthlyUSD float64 `json:"monthly_usd,omitempty"`
+	// OpenRouterCapUSD is the monthly cap the person put on their OpenRouter
+	// key, which the dashboard shows the month's OpenRouter spend against.
+	// Once that spend (UTC calendar month) reaches OpenRouterStopUSD, runs
+	// stop going on paid OpenRouter models until the month ends and go on the
+	// free ones (":free"). Both are the person's alone: no op writes them.
+	OpenRouterCapUSD  float64 `json:"openrouter_cap_usd"`
+	OpenRouterStopUSD float64 `json:"openrouter_stop_usd"`
 	// A turn waits while available memory is under MemFloorMB, or memory or
 	// CPU pressure (Linux PSI "some avg10", percent) is over its limit; 0 turns a check off.
 	MemFloorMB     int     `json:"mem_floor_mb"`
@@ -299,6 +306,9 @@ func DefaultConfig() Config {
 		LoadMax:         1,
 		MaxChecks:       DefaultMaxChecks(),
 		PlateauMerges:   3,
+
+		OpenRouterCapUSD:  10,
+		OpenRouterStopUSD: 9,
 		Schedules: map[string]string{
 			"improve.sweep":    "every 12h",
 			"improve.stepback": "every 72h",

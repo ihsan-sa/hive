@@ -38,35 +38,36 @@ type DaemonInfo struct {
 
 // State is everything the control center shows.
 type State struct {
-	Version    string             `json:"version"`
-	Channel    string             `json:"channel,omitempty"` // the releases auto-update follows: "latest" or "pre-release"
-	Newest     string             `json:"newest,omitempty"`  // the newest release out, as the last look for an update found
-	Behind     int                `json:"behind,omitempty"`  // how many releases newer than Version are out
-	Seq        int64              `json:"seq"`
-	Workspace  string             `json:"workspace"`
-	Sandbox    string             `json:"sandbox"`
-	SandboxErr string             `json:"sandbox_err,omitempty"`
-	Offline    string             `json:"offline,omitempty"` // what the Hive can't reach right now, in one plain line
-	Held       []string           `json:"held,omitempty"`    // why no new turn starts right now (a restart, the knowledge base's seed)
-	Projects   []ProjectView      `json:"projects"`
-	Runs       []core.Run         `json:"runs"`
-	Plans      []core.Plan        `json:"plans"`
-	Logins     []core.LoginState  `json:"logins"` // each login's expiry and last renewal
-	Sweeps     []improve.Sweep    `json:"sweeps"`
-	StepBacks  []improve.StepBack `json:"stepbacks"`
-	Asks       []core.Ask         `json:"asks"`
-	Told       []core.Ask         `json:"told,omitempty"` // done for the person, newest first: nothing to answer
-	Alerts     []Alert            `json:"alerts"`
-	Updated    *Updated           `json:"updated,omitempty"`
-	Jobs       []system.JobState  `json:"jobs"`
-	Wakeups    []system.Wakeup    `json:"wakeups"`
-	Checks     Checks             `json:"checks"`
-	Modules    []ModuleView       `json:"modules"`
-	Chats      []ChatView         `json:"chats"`
-	Requests   []risk.Request     `json:"requests"`
-	Feedback   []feedback.Item    `json:"feedback"` // open first, then the last few set aside
-	Config     core.Config        `json:"config"`
-	ConfigErr  string             `json:"config_err,omitempty"`
+	Version    string                 `json:"version"`
+	Channel    string                 `json:"channel,omitempty"` // the releases auto-update follows: "latest" or "pre-release"
+	Newest     string                 `json:"newest,omitempty"`  // the newest release out, as the last look for an update found
+	Behind     int                    `json:"behind,omitempty"`  // how many releases newer than Version are out
+	Seq        int64                  `json:"seq"`
+	Workspace  string                 `json:"workspace"`
+	Sandbox    string                 `json:"sandbox"`
+	SandboxErr string                 `json:"sandbox_err,omitempty"`
+	Offline    string                 `json:"offline,omitempty"` // what the Hive can't reach right now, in one plain line
+	Held       []string               `json:"held,omitempty"`    // why no new turn starts right now (a restart, the knowledge base's seed)
+	Projects   []ProjectView          `json:"projects"`
+	Runs       []core.Run             `json:"runs"`
+	Plans      []core.Plan            `json:"plans"`
+	OpenRouter *core.OpenRouterBudget `json:"openrouter,omitempty"` // the month's OpenRouter spend against the person's cap
+	Logins     []core.LoginState      `json:"logins"`               // each login's expiry and last renewal
+	Sweeps     []improve.Sweep        `json:"sweeps"`
+	StepBacks  []improve.StepBack     `json:"stepbacks"`
+	Asks       []core.Ask             `json:"asks"`
+	Told       []core.Ask             `json:"told,omitempty"` // done for the person, newest first: nothing to answer
+	Alerts     []Alert                `json:"alerts"`
+	Updated    *Updated               `json:"updated,omitempty"`
+	Jobs       []system.JobState      `json:"jobs"`
+	Wakeups    []system.Wakeup        `json:"wakeups"`
+	Checks     Checks                 `json:"checks"`
+	Modules    []ModuleView           `json:"modules"`
+	Chats      []ChatView             `json:"chats"`
+	Requests   []risk.Request         `json:"requests"`
+	Feedback   []feedback.Item        `json:"feedback"` // open first, then the last few set aside
+	Config     core.Config            `json:"config"`
+	ConfigErr  string                 `json:"config_err,omitempty"`
 }
 
 // Checks are the checks holding a slot and those waiting for one, in order.

@@ -55,6 +55,32 @@ model ids and free tiers):
 | OpenRouter's free models | `https://openrouter.ai/api/v1` | `moonshotai/kimi-k2:free` |
 | Ollama on this machine | `http://127.0.0.1:11434/v1` | `qwen2.5-coder:14b` |
 
+## OpenRouter: free first, paid inside the month's budget
+
+An OpenRouter key can spend money on every model that isn't a free variant
+(an id ending `:free`). So a route puts its free OpenRouter models ahead of
+its paid ones, in the places its OpenRouter models hold (Claude and other
+picks keep theirs). Paid ones may still run, inside a monthly budget:
+
+- The open agent asks OpenRouter for usage accounting (`usage: {include: true}`)
+  and adds up each answer's `usage.cost`. A turn's result carries the
+  session's running cost, which the run manager counts as it counts Claude's
+  and also keeps apart as the month's OpenRouter spend (UTC calendar month,
+  `turn_ended.openrouter` in the journal).
+- Once that spend reaches `openrouter_stop_usd` (default 9) of
+  `openrouter_cap_usd` (default 10, the cap the person put on the key), no
+  paid OpenRouter model takes a turn until the month ends. A run on one
+  moves to the free OpenRouter models, told why. With none, it waits for the
+  next month. The person is told once a month (`openrouter-<month>`).
+- A turn on a paid model gets `HIVE_OPEN_BUDGET`, what is left before the
+  stop, and ends itself once it has spent that. The $1 between the stop and
+  the cap covers turns that were already running.
+- The dashboard's plan usage, its status line and `hive status` show the
+  month's OpenRouter spend against the cap.
+
+Both figures are the person's: no op writes them. Adding a model stays the
+person's step (or autobox's), and the lead asks for it by name.
+
 Other harnesses with a CLI of their own (Kimi's CLI, OpenCode, Aider) come in
 as harnesses through the harness-module seam rather than as more code in the
 open agent.

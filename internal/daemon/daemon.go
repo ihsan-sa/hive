@@ -947,6 +947,7 @@ func (s *server) state() api.State {
 	}
 	st.Held = a.C.Runs.Holds()
 	st.Plans = a.C.Runs.Plans()
+	st.OpenRouter = a.C.Runs.OpenRouterBudget(cfg)
 	st.Logins = a.C.Tokens.States()
 	sw := a.Improve.Sweeps()
 	if len(sw) > 10 {

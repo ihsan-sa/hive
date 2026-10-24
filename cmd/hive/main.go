@@ -600,6 +600,16 @@ func cmdStatus() int {
 		for _, p := range st.Plans {
 			fmt.Println(planLine(p, time.Now()))
 		}
+		if b := st.OpenRouter; b != nil {
+			line := fmt.Sprintf("  openrouter: $%.2f of $%.2f this month", b.Spent, b.Cap)
+			switch {
+			case b.Stopped && b.Paid:
+				line += fmt.Sprintf("; paid models off past $%.2f, free ones only", b.Stop)
+			case b.Paid:
+				line += fmt.Sprintf("; paid models stop at $%.2f", b.Stop)
+			}
+			fmt.Println(line)
+		}
 		if len(st.Asks) > 0 {
 			fmt.Println("\nwaiting on you:")
 			for _, a := range st.Asks {

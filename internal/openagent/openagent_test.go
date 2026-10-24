@@ -304,3 +304,40 @@ func TestKeyMainOnce(t *testing.T) {
 		t.Fatal("a second call handed out a key")
 	}
 }
+
+// costly is a reply calling a tool, with what OpenRouter says it cost.
+func costly(usd float64) func(w http.ResponseWriter) {
+	return func(w http.ResponseWriter) {
+		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"role": "assistant",
+			"tool_calls": []any{map[string]any{"id": "c1", "type": "function", "function": map[string]any{"name": "bash", "arguments": `{"command":"true"}`}}}}}},
+			"usage": map[string]any{"prompt_tokens": 10, "cost": usd}})
+	}
+}
+
+// A turn's result carries the session's cost so far, from what the endpoint
+// reported, and a turn with a budget stops once it has spent it.
+func TestCostAndBudget(t *testing.T) {
+	s := &stub{replies: []func(http.ResponseWriter){costly(0.01), costly(0.02), say("done")}}
+	a, _ := agent(t, s)
+	a.Spent = 0.5 // earlier turns of the session
+	res := result(t, a, a.Turn(context.Background(), []Message{{Role: "user", Content: "go"}}, func([]Message) {}))
+	if res.IsError || res.CostUSD < 0.5299 || res.CostUSD > 0.5301 {
+		t.Fatalf("cost %v, want the session's running total 0.53: %+v", res.CostUSD, res)
+	}
+	if _, ok := s.got[0]["usage"]; ok {
+		t.Error("asked a server that isn't OpenRouter for its usage accounting")
+	}
+	s = &stub{replies: []func(http.ResponseWriter){costly(0.01), costly(0.02), costly(0.04), say("done")}}
+	a, _ = agent(t, s)
+	a.Budget = 0.025
+	res = result(t, a, a.Turn(context.Background(), []Message{{Role: "user", Content: "go"}}, func([]Message) {}))
+	if len(s.got) != 2 || !strings.Contains(res.Text, "stopped: this turn spent $0.0300") {
+		t.Fatalf("a budget of $0.025 stops after the request that spends it: %d requests, %q", len(s.got), res.Text)
+	}
+	for ep, want := range map[string]bool{"https://openrouter.ai/api/v1": true, "https://eu.openrouter.ai/api/v1": true,
+		"https://openrouter.ai.evil.example/v1": false, "http://127.0.0.1:11434/v1": false} {
+		if openRouter(ep) != want {
+			t.Errorf("openRouter(%s) != %v", ep, want)
+		}
+	}
+}
