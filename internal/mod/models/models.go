@@ -7,16 +7,20 @@
 package models
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+	"github.com/ihsan-sa/hive-standalone-build/internal/openagent"
 )
 
 // Route is one change to the routing: role's models in project ("" for the
@@ -48,13 +52,62 @@ type Module struct {
 	C    *core.Core
 	Work *work.Module
 
+	// Probe asks a named model one real request before a route or trial
+	// puts work on it (Probe, by default).
+	Probe func(ws core.Workspace, name string, m core.OpenModel) error
+
 	mu     sync.Mutex
 	trials map[string]Trial // recorded, by task
 }
 
+// ErrNoKey is a Probe of a model that needs a key nobody has stored yet.
+var ErrNoKey = errors.New("it needs a key, and none is stored yet")
+
+// Probe asks named model m one real request, with its stored key, and says
+// why it can't answer; nil when it answers.
+func Probe(ws core.Workspace, name string, m core.OpenModel) error {
+	key := ""
+	if raw, err := os.ReadFile(ws.OpenKey(name)); err == nil {
+		key = strings.TrimSpace(string(raw))
+	} else if m.Key {
+		return fmt.Errorf("%w: `%s model key %s`", ErrNoKey, core.Cmd, name)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	return openagent.Probe(ctx, m.Endpoint, m.Model, key, m.Anthropic())
+}
+
+// probe refuses a pick that can't answer, saying why: a named model gets one
+// real request (a stored Down is no reason to refuse, as the person may have
+// just fixed it); any other pick is refused only while it is down.
+func (m *Module) probe(cfg core.Config, p core.Pick) error {
+	if p.Harness != "open" {
+		if d, ok := downOf(m.C.Runs.Down(), p); ok {
+			return fmt.Errorf("%s; %s", d.Line(), d.Fix(cfg))
+		}
+		return nil
+	}
+	err := m.Probe(m.C.WS, p.Model, cfg.Models[p.Model])
+	if err == nil {
+		m.C.Runs.Up(p, "it answered a probe")
+		return nil
+	}
+	d := core.Down{Pick: p, Status: openagent.Status(err), Text: err.Error()}
+	return fmt.Errorf("%s can't answer, so nothing was routed to it: %v. %s", p, err, d.Fix(cfg))
+}
+
+func downOf(downs []core.Down, p core.Pick) (core.Down, bool) {
+	for _, d := range downs {
+		if d.Pick.Same(p) {
+			return d, true
+		}
+	}
+	return core.Down{}, false
+}
+
 // New registers the ops and the person's answer to a check seat's route.
 func New(c *core.Core, w *work.Module) *Module {
-	m := &Module{C: c, Work: w, trials: map[string]Trial{}}
+	m := &Module{C: c, Work: w, trials: map[string]Trial{}, Probe: Probe}
 	apply := func(e core.Event) {
 		if e.Kind != "model.trial" {
 			return
@@ -107,8 +160,19 @@ func (m *Module) opRoute(r core.Run, args json.RawMessage) (any, error) {
 		}
 	}
 	rt.By = r.ID
-	if _, err := m.routed(rt); err != nil {
+	was := m.C.WS.LoadConfig().Routed(rt.Role, rt.Project)
+	cfg, err := m.routed(rt)
+	if err != nil {
 		return nil, err
+	}
+	for _, e := range rt.Models {
+		p, _ := cfg.Pick(e)
+		if _, down := downOf(m.C.Runs.Down(), p); slices.Contains(was, e) && !down {
+			continue // already on the route and not known to fail: its turns are its probe
+		}
+		if err := m.probe(cfg, p); err != nil {
+			return nil, err
+		}
 	}
 	if slices.Contains(core.CheckRoles, rt.Role) {
 		raw, _ := json.Marshal(rt)
@@ -125,8 +189,7 @@ func (m *Module) opRoute(r core.Run, args json.RawMessage) (any, error) {
 			Ref:    string(raw), From: r.ID, Project: rt.Project})
 		return map[string]string{"ask": a.ID, "note": "a check seat's route waits for the person's yes in Waiting; tell them so"}, nil
 	}
-	cfg, err := m.apply(rt)
-	if err != nil {
+	if cfg, err = m.apply(rt); err != nil {
 		return nil, err
 	}
 	return map[string]any{"routed": rt.Role, "route": pickNames(cfg.Route(rt.Role, rt.Project))}, nil
@@ -229,8 +292,12 @@ func (m *Module) opTrial(r core.Run, args json.RawMessage) (any, error) {
 	if err := m.C.Runs.Walled(r, b.Project); err != nil {
 		return nil, err
 	}
-	pick, err := m.C.WS.LoadConfig().Pick(b.Model)
+	cfg := m.C.WS.LoadConfig()
+	pick, err := cfg.Pick(b.Model)
 	if err != nil {
+		return nil, err
+	}
+	if err := m.probe(cfg, pick); err != nil {
 		return nil, err
 	}
 	chat, thread := m.Work.Chat.CurrentThread(r)
@@ -242,8 +309,10 @@ func (m *Module) opTrial(r core.Run, args json.RawMessage) (any, error) {
 	return map[string]string{"task": t.ID, "note": "filed as a trial of " + pick.String() + "; how it went shows in the models op once it ends"}, nil
 }
 
-// Tick records each trial that has ended.
+// Tick tells the person once of each pick that can't answer, and records
+// each trial that has ended.
 func (m *Module) Tick() {
+	m.tellDown()
 	for _, t := range m.Work.List(func(t work.Task) bool { return t.Model != "" }) {
 		switch t.Stage {
 		case work.StageMerged, work.StageDone, work.StageBlocked, work.StageStopped:
@@ -305,5 +374,36 @@ func (m *Module) View(r core.Run) map[string]any {
 			running = append(running, fmt.Sprintf("%s on %s: %s (%s)", t.ID, t.Model, t.Stage, t.Title))
 		}
 	}
-	return map[string]any{"models": named, "routes": routes, "agents": agents, "trials": trials, "trials_running": running}
+	var down []string
+	for _, d := range m.C.Runs.Down() {
+		down = append(down, downLine(d, cfg))
+	}
+	return map[string]any{"models": named, "routes": routes, "agents": agents, "trials": trials, "trials_running": running, "unavailable": down}
+}
+
+// downLine is a Down with when it is tried again and the fix.
+func downLine(d core.Down, cfg core.Config) string {
+	again := "tried again by the next turn routed to it"
+	if d.Retry.After(time.Now()) {
+		again = "tried again " + d.Retry.Local().Format("Mon 15:04") + " or when its config changes"
+	}
+	return fmt.Sprintf("%s (since %s; %s). %s", d.Line(), d.Since.Local().Format("Mon 15:04"), again, d.Fix(cfg))
+}
+
+// tellDown tells the person, and the lead's chat, once per pick and cause
+// that can't answer: its answer as it gave it, and the fix.
+func (m *Module) tellDown() {
+	cfg := m.C.WS.LoadConfig()
+	for _, d := range m.C.Runs.Down() {
+		id := d.ToldID()
+		if _, told := m.C.Person.Get(id); told {
+			continue
+		}
+		title := d.Pick.String() + " can't answer, so runs skip it"
+		detail := fmt.Sprintf("Its answer: %s\n\nFix: %s\n\nRuns routed to it move to the next model on their route with room, or wait for the first reset. It is tried again when its config changes or after an hour, and comes back on its own once it answers.", d.Text, d.Fix(cfg))
+		m.C.Person.Tell(core.Ask{ID: id, Ref: id, Title: title, Detail: detail, From: d.Run})
+		if m.Work.Chat != nil {
+			m.Work.Chat.Notify("lead", "", fmt.Sprintf("%s: %s Fix: %s", title, core.Clip(d.Text, 600), d.Fix(cfg)))
+		}
+	}
 }

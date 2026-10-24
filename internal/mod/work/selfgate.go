@@ -80,6 +80,12 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		m.hold(t, p, fmt.Sprintf("%s, which can't run here (%s); it never merges unjudged, and the gate tries again after %s", GateWait, core.Clip(g.Reason, 300), retryAfter(g).Format("15:04Z")))
 		return true, nil
 	}
+	// The gate judges what would land: a head that lacks main is brought up
+	// to date first, or it fails on what main has since fixed (a test that
+	// broke in the gate's sandbox, fixed on main after the branch was cut).
+	if moved, err := m.catchUp(t, p, main, "the recursive gate judges the change with main in"); moved || err != nil {
+		return true, err
+	}
 	key := p.Name + "@" + t.SHA + "@" + main
 	m.mu.Lock()
 	// A run that couldn't run against this main, on any change, holds the

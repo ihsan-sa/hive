@@ -120,6 +120,10 @@ type Config struct {
 	// MaxChecks is how many checks (the gate's tests, scores and dry runs,
 	// improve's measures) run at once; the rest wait in order. 0 is no limit.
 	MaxChecks int `json:"max_checks"`
+	// CheckCacheMaxMB caps one check's own home (its build cache and
+	// scratch): past it the check is ended as can't-run; 0 is the default
+	// (8 GB). See disk.go.
+	CheckCacheMaxMB int `json:"check_cache_max_mb,omitempty"`
 	// PlateauMerges: a project whose best score hasn't moved in this many
 	// merges gets a step-back (besides the improve.stepback schedule); 0 is off.
 	PlateauMerges int `json:"plateau_merges"`
@@ -306,6 +310,7 @@ func DefaultConfig() Config {
 			"modules.update":   "every 24h",
 			"hive.update":      "every 6h",
 			"report.send":      "every 6h",
+			"hive.clean":       "every 1h",
 		},
 	}
 }
