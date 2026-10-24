@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -1086,6 +1087,12 @@ func (rs *Runs) endTurn(r Run) {
 		te.Queue = []string{"Your previous turn was interrupted. Your checkout and commits are intact. Continue where you left off."}
 	case tl.Result.Subtype == "error_max_budget_usd":
 		te.Status, te.Reason = StatusDone, "spent its budget"
+	case tl.Result.IsError && HarnessName(r.Harness) == "open" && strings.Contains(tl.Result.Text, "apiKeyHelper"):
+		// Claude Code asked for the model's key again mid-turn, after the
+		// endpoint refused it; the helper hands it over once a turn.
+		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
+		te.Reason = fmt.Sprintf("the endpoint refused %s's key mid-turn, and a turn is handed the key only once; the next turn gets it afresh (if this repeats, store it again with `%s model key %s`)", r.Model, Cmd, r.Model)
+		te.Queue = []string{"Your previous turn was cut off when the model's endpoint refused its key. Your checkout and commits are intact. Continue where you left off."}
 	case tl.Result.IsError:
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = "harness error; retrying" + suffix(Clip(tl.Result.Text, 200))
@@ -1416,7 +1423,16 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 				if tools := rs.tools(); !sb.Isolated() && len(tools) > 0 {
 					hive = tools[0]
 				}
-				t.KeyCommand = fmt.Sprintf("%q open-key %q", hive, keyIn)
+				t.KeyCommand = shellWord(hive, sb.Isolated()) + " open-key " + shellWord(keyIn, sb.Isolated())
+			}
+			// Its own config folder, so a Claude login in the HOME of a bare
+			// run is never found: none can reach the vendor's endpoint.
+			if err := realDir(filepath.Join(rs.ws.RunHome(r.ID), ".claude-open")); err != nil {
+				return sandbox.Spec{}, err
+			}
+			t.ConfigDir = in(home) + "/.claude-open"
+			if !sb.Isolated() {
+				t.ConfigDir = filepath.Join(in(home), ".claude-open")
 			}
 			tok = nil // the endpoint and id go in Claude Code's own settings
 		} else {
@@ -1600,19 +1616,33 @@ func (rs *Runs) openKey(id string, tok []string, keyIn string) ([]string, error)
 	return append(out, "HIVE_OPEN_KEY_FILE="+keyIn), nil
 }
 
-// openKeyDir makes the key file's folder in the run's home, which the agent
-// can write: a link (or file) an earlier turn left in its place is removed,
-// never followed, so the daemon writes the key nowhere else.
-func (rs *Runs) openKeyDir(id string) error {
-	dir := filepath.Dir(rs.openKeyFile(id))
+// openKeyDir makes the key file's folder in the run's home.
+func (rs *Runs) openKeyDir(id string) error { return realDir(filepath.Dir(rs.openKeyFile(id))) }
+
+// realDir makes a folder in a run's home, which the agent can write: a link
+// (or file) an earlier turn left in its place is removed, never followed, so
+// the daemon writes nothing elsewhere and the harness reads nothing from
+// elsewhere.
+func realDir(dir string) error {
 	if fi, err := os.Lstat(dir); err == nil && !fi.IsDir() {
 		os.Remove(dir) // the link itself
 	}
+	os.MkdirAll(filepath.Dir(dir), 0o755) // the run's home, the daemon's own
 	os.Mkdir(dir, 0o700)
 	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
 		return fmt.Errorf("%s is not a real folder", dir)
 	}
 	return nil
+}
+
+// shellWord quotes s as one word for the shell Claude Code runs its key
+// helper with: POSIX quoting, so a path holding $ or ` is never expanded;
+// on bare Windows, cmd's double quotes (a Windows path holds no ").
+func shellWord(s string, isolated bool) string {
+	if runtime.GOOS == "windows" && !isolated {
+		return `"` + s + `"`
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // dropOpenKey deletes a key file a turn left, read or not, and only inside a

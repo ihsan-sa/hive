@@ -97,15 +97,37 @@ its environment. The turn loads no settings file (`--setting-sources ""`):
 the checkout's `.claude/settings.json` is the agent's or the repo's to write,
 and a hook there could read the key file before the helper runs, or its `env`
 send the key to another host; `--settings` pins the helper, the endpoint and
-`disableAllHooks`. The daemon writes the key file without following a link an
-earlier turn left at its folder or name. A turn's cost isn't counted on either kind of named model:
+`disableAllHooks`; `--strict-mcp-config` keeps a project `.mcp.json` server
+from starting (checked on Claude Code 2.1.310: neither a hook nor such a
+server ran). Claude Code's config folder is the run's own
+(`CLAUDE_CONFIG_DIR=<run home>/.claude-open`), so a bare run, whose HOME is
+the daemon's, finds no Claude login there; and when the helper fails Claude
+Code sends no credential at all rather than falling back to a login. The
+daemon writes the key file, and makes that folder, without following a link
+an earlier turn left; `hive open-key` reads only a regular file, never one a
+link points to, and the helper's words are shell-quoted. A vendor's 429 parks
+the model (an hour, since Claude Code passes on no reset) and the run moves
+to its fallback, as on the open agent. If the endpoint refuses the key
+mid-turn (a 401), Claude Code asks the helper again, finds nothing, and the
+run parks saying the key was refused mid-turn and the next turn gets it
+afresh.
+
+A known residual: while a turn runs, the key is in Claude Code's memory, and
+on a host where Yama's `ptrace_scope` is 0 a tool in the same sandbox, as the
+same user, could read it through `/proc/<pid>/mem`. The open agent makes
+itself non-dumpable, which closes that for it; Claude Code is a program the
+Hive doesn't control, so for it the exposure is the key of the model the run
+is already on. A turn's cost isn't counted on either kind of named model:
 Claude Code would price another vendor's tokens as Claude's.
 
 `TestAnthropicModelTurn` holds the turn's command, environment and egress;
 `TestAnthropicModelWorker` (e2e) runs a worker on real Claude Code against a
-stub Anthropic endpoint when `claude` is installed, and is a live probe with
-`HIVE_E2E_ANTHROPIC="<endpoint> <model id>"` and the key in
-`HIVE_E2E_ANTHROPIC_KEY`.
+stub Anthropic endpoint when `claude` is installed, with a decoy Claude
+login in the run's HOME that must never reach the endpoint. It is a live probe
+with `HIVE_E2E_ANTHROPIC="<endpoint> <model id>"` and the key in
+`HIVE_E2E_ANTHROPIC_KEY`, or with `HIVE_E2E_ANTHROPIC=<name>` for a model this
+machine's Hive has set up, using the key `hive model key <name>` stored (a
+live probe spends the vendor's tokens, so it runs only when asked).
 
 A key is a credential: it is stored in `.hive/logins/open/<name>.key` (0600),
 which no run sees, and reaches only a turn on that model: the run manager writes it to a file in
