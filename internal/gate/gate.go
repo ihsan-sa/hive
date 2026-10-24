@@ -141,7 +141,7 @@ func Run(cfg Config) (rep Report, err error) {
 	if cfg.Sandbox == "bwrap" && cfg.Self == "" {
 		// The sandboxes run the gate's own binary (gate-fwd, gate-check): it
 		// must be hive, not a test binary.
-		if self, _ := os.Executable(); strings.HasSuffix(self, ".test") {
+		if self, _ := os.Executable(); strings.HasSuffix(strings.TrimSuffix(self, ".exe"), ".test") {
 			return rep, fmt.Errorf("the gate runs from a test binary (%s): set Config.Self to a hive binary", filepath.Base(self))
 		}
 	}
