@@ -66,6 +66,13 @@ jobs:
           "$RUNNER_TEMP/hive" sandbox-probe | grep -x "ok bubblewrap"
         env:
           HIVE_SANDBOX_BWRAP: "1"
+      - name: the host's python runs under bubblewrap
+        # TestHostPythonBothPaths skips a path the host can't run, so the grep fails the job
+        # unless its bubblewrap half really ran and passed.
+        shell: bash
+        run: |
+          go test ./internal/sandbox/ -run 'BothPaths' -v | tee "$RUNNER_TEMP/both.log"
+          grep -q -- "--- PASS: TestHostPythonBothPaths/bubblewrap" "$RUNNER_TEMP/both.log"
       - name: end to end under bubblewrap
         run: go test ./internal/e2e/ -timeout 30m
         env:

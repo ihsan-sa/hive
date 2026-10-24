@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -109,6 +110,7 @@ type initArgs struct {
 	Root   string            `json:"root"`
 	Socket string            `json:"socket"`
 	Tools  map[string]string `json:"tools"`
+	Roots  []string          `json:"roots"` // host interpreter installs, bound read-only at their own paths
 }
 
 // Exec is `hive sandbox-exec`: the host side of one sandboxed command.
@@ -168,6 +170,7 @@ func Exec(specPath string) int {
 		}
 		args.Tools[name] = p
 	}
+	hostInterpreters(&args)
 	raw, _ := json.Marshal(args)
 	argPath := filepath.Join(rt, "init.json")
 	if err := os.WriteFile(argPath, raw, 0o600); err != nil {
@@ -203,7 +206,7 @@ func Exec(specPath string) int {
 			return fail(err)
 		}
 		cmd = exec.Command(bw, bwrapArgs(args, self)...)
-		cmd.Env = s.Env
+		cmd.Env = args.Spec.Env // hostInterpreters put the install dirs on its PATH
 		cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errf
@@ -268,6 +271,86 @@ func findTool(t string) (string, error) {
 	return filepath.EvalSymlinks(t)
 }
 
+// interpreters are the host's own runtimes a command may call by name. One
+// installed outside systemDirs (by uv under the home, say) would be missing
+// from the sandbox's root, so its install is bound read-only at its own path,
+// and the dir it runs from goes on PATH after the Hive's own dirs: inside, the
+// name finds the same program it finds on the host. Shims (pyenv, asdf, mise)
+// are scripts, not links, so they are not followed and won't run inside; put
+// the real install's bin on PATH instead. A snap app links to /usr/bin/snap,
+// which can't start it without snapd, so snaps are skipped.
+var interpreters = []string{"python3", "python", "node", "uv", "go"}
+
+func hostInterpreters(a *initArgs) {
+	home, _ := os.UserHomeDir()
+	var dirs []string
+	for _, n := range interpreters {
+		p, err := findTool(n)
+		if err != nil || filepath.Base(p) == "snap" {
+			continue
+		}
+		root, ok := installRoot(p, home)
+		if !ok {
+			continue
+		}
+		if root != "" && !slices.Contains(a.Roots, root) {
+			a.Roots = append(a.Roots, root)
+		}
+		if dir := filepath.Dir(p); !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
+		}
+	}
+	a.Spec.Env = insertPath(a.Spec.Env, dirs)
+}
+
+// installRoot is what to bind so the resolved interpreter p runs inside: ""
+// when the system dirs already hold it, the parent of its bin when that parent
+// is an install of its own (a lib/ beside bin, as python, node and go have),
+// else the bin alone. It is never the home, anything above it or a dot-dir
+// right under it (~/.local, ~/.cargo hold keyrings and tokens); ok is false
+// when only such a dir would do, or when the home is unknown, relative or
+// can't be resolved. So a python installed straight into ~/.local (bin and lib
+// both there) is bound as its bin alone: it starts inside but can't find its
+// lib. Install it with uv or into a prefix of its own.
+func installRoot(p, home string) (root string, ok bool) {
+	dir := filepath.Dir(p)
+	if underSystem(dir) {
+		return "", true
+	}
+	if !filepath.IsAbs(home) {
+		return "", false
+	}
+	// p is resolved (findTool), so the home must be too: through a symlinked
+	// home, the checks below would see neither the home nor ~/.local.
+	home, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		return "", false
+	}
+	cands := []string{dir}
+	if up := filepath.Dir(dir); filepath.Base(dir) == "bin" {
+		if fi, err := os.Stat(filepath.Join(up, "lib")); err == nil && fi.IsDir() {
+			cands = []string{up, dir}
+		}
+	}
+	for _, r := range cands {
+		rel, err := filepath.Rel(r, home)
+		above := err != nil || rel == "." || !(rel == ".." || strings.HasPrefix(rel, "../"))
+		if !above && !(filepath.Dir(r) == home && strings.HasPrefix(filepath.Base(r), ".")) {
+			return r, true
+		}
+	}
+	return "", false
+}
+
+func underSystem(p string) bool {
+	for _, d := range systemDirs {
+		if p == d || strings.HasPrefix(p, d+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // visibleInside reports whether tool t, which resolves to p, is already on
 // the sandbox's PATH. Such a tool (Codex's Node launcher, say) may need its
 // package beside it, so it runs where it is instead of being bound alone.
@@ -276,12 +359,30 @@ func visibleInside(t, p string) bool {
 	if filepath.IsAbs(t) || err != nil || !strings.Contains(":"+insideBins+":", ":"+filepath.Dir(l)+":") {
 		return false
 	}
-	for _, d := range systemDirs {
-		if strings.HasPrefix(p, d+"/") {
-			return true
+	return underSystem(p)
+}
+
+// insertPath puts dirs not already on PATH after its /hive/ entries.
+func insertPath(env, dirs []string) []string {
+	for i, kv := range env {
+		v, ok := strings.CutPrefix(kv, "PATH=")
+		if !ok {
+			continue
 		}
+		path := filepath.SplitList(v)
+		at := 0
+		for at < len(path) && strings.HasPrefix(path[at], "/hive/") {
+			at++
+		}
+		var add []string
+		for _, d := range dirs {
+			if !slices.Contains(path, d) {
+				add = append(add, d)
+			}
+		}
+		env[i] = "PATH=" + strings.Join(slices.Insert(path, at, add...), ":")
 	}
-	return false
+	return env
 }
 
 // systemDirs are exposed read-only; everything else (home, /mnt, /run, /tmp,
@@ -332,6 +433,11 @@ func Init(argPath string) int {
 	}
 	if err := mkdirMount("tmpfs", root+"/tmp", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=1777"); err != nil {
 		return fail("tmp", err)
+	}
+	for _, r := range a.Roots {
+		if err := bind(r, root+r, false); err != nil {
+			return fail("bind "+r, err)
+		}
 	}
 	for _, m := range s.Mounts {
 		var err error

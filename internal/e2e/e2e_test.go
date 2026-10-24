@@ -10,6 +10,7 @@ package e2e
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/json"
@@ -79,12 +80,17 @@ type hive struct {
 	cmd   *exec.Cmd
 	c     *api.Client
 	env   []string // added to the daemon's environment
+	exe   string   // the binary the daemon runs, when not bin
 }
 
-func start(t *testing.T, env ...string) *hive {
+func start(t *testing.T, env ...string) *hive { return startWith(t, bin, nil, env...) }
+
+// startWith starts exe as the daemon, after prep (if any) has changed the
+// test's settings.
+func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string) *hive {
 	t.Helper()
 	dir := t.TempDir()
-	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env}
+	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env, exe: exe}
 	if err := h.ws.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +107,9 @@ func start(t *testing.T, env ...string) *hive {
 	}
 	cfg.PlateauMerges = 0 // TestStepBack turns it on
 	cfg.Schedules = map[string]string{"improve.sweep": "off", "improve.stepback": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off"}
+	if prep != nil {
+		prep(&cfg)
+	}
 	h.ws.SaveConfig(cfg)
 	h.launch()
 	t.Cleanup(func() { h.quiesce(); h.kill() })
@@ -165,7 +174,7 @@ func (h *hive) quiesce() {
 
 func (h *hive) launch() {
 	h.t.Helper()
-	cmd := exec.Command(bin, "daemon")
+	cmd := exec.Command(cmp.Or(h.exe, bin), "daemon")
 	cmd.Env = append(append(os.Environ(), "HIVE_HOME="+h.ws.Root, "HIVE_FORGE=local:"+h.forge.Dir), h.env...)
 	cmd.Dir = h.ws.Root
 	log, _ := os.OpenFile(filepath.Join(h.ws.Hive(), "daemon-test.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -513,6 +522,94 @@ func TestGateAndLoop(t *testing.T) {
 		_, ok := task(st, "gate", "FAKE sweep")
 		return ok && len(st.Sweeps) > 0 && st.Sweeps[0].Status == core.StatusDone && len(st.Sweeps[0].Asks) == 1
 	})
+}
+
+// On a scored project each commit a running worker makes that beats the best
+// kept score merges as a checkpoint while it keeps going: the fake worker
+// commits 7, then 9, in one turn and waits on each merge before it goes on,
+// and its finish lands on top of both.
+func TestCheckpointsBankEachGain(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/bank", map[string]string{
+		".hive/project.json": `{"test": "test ! -f BROKEN", "score": {"command": "cat score.txt", "direction": "higher", "tolerance": 0}}`,
+		".hive/goals.md":     "# Goals\n\nRaise the score as far as it goes.\n",
+		"score.txt":          "5\n",
+	})
+	h.post("/api/project", map[string]any{"name": "bank", "repo": "me/bank"}, nil)
+	h.wait("the baseline", minute, func(st api.State) bool {
+		return len(st.Projects) == 1 && st.Projects[0].Best != nil && *st.Projects[0].Best == 5
+	})
+	h.post("/api/ask", map[string]string{"project": "bank", "title": "raise the score", "known": "FAKE:checkpoints"}, nil)
+	st := h.wait("both checkpoints and the finish to merge", 8*minute, taskStage("bank", "raise the score", work.StageDone))
+	tk, _ := task(st, "bank", "raise the score")
+	if tk.Banked != 2 {
+		t.Fatalf("banked %d: %v", tk.Banked, tk.Log)
+	}
+	// main's score at each merge, and whether the worker had finished by then.
+	var merges []string
+	finished := false
+	raw, _ := os.ReadFile(filepath.Join(h.ws.Hive(), "events.jsonl"))
+	for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var e core.Event
+		var d struct {
+			ID       string
+			MergeSHA string `json:"merge_sha"`
+		}
+		if json.Unmarshal([]byte(l), &e) != nil || e.Decode(&d) != nil {
+			continue
+		}
+		finished = finished || e.Kind == "run.finish" && d.ID == tk.Worker
+		if e.Kind == "effect.merged" {
+			s, _ := core.Git(h.ws.Project("bank"), "show", d.MergeSHA+":score.txt")
+			merges = append(merges, fmt.Sprintf("%s/%v", strings.TrimSpace(s), finished))
+		}
+	}
+	if strings.Join(merges, " ") != "7/false 9/false 9/true" {
+		t.Fatalf("main's score at each merge/worker finished: %v", merges)
+	}
+}
+
+// A review reads the project's docs/REVIEW.md, goals and lessons from main,
+// and advice given with a land becomes one follow-up brief once it merges, not
+// a blocker. The fake gives advice on the follow-up's review too, which files
+// nothing more, so the chain stops at one.
+func TestReviewReadsTheRules(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/rules", map[string]string{
+		".hive/project.json": `{"test": "true"}`,
+		".hive/goals.md":     "# Goals\n\nEvery agent sees the same thing.\n",
+		"docs/REVIEW.md":     "# Review\n\nThe sandbox walls the Hive off from the host. FAKE:reviewadvice\n",
+		".hive/lessons.md":   "# Lessons\n\n- a lesson from an earlier revert\n",
+	})
+	h.post("/api/project", map[string]any{"name": "rules", "repo": "me/rules"}, nil)
+	h.post("/api/ask", map[string]string{"project": "rules", "title": "add a helper"}, nil)
+	st := h.wait("the ask to merge", 3*minute, taskStage("rules", "add a helper", work.StageDone))
+	tk, _ := task(st, "rules", "add a helper")
+	brief, _ := os.ReadFile(filepath.Join(h.ws.RunRO(tk.Reviewer), "brief.md"))
+	for _, want := range []string{"walls the Hive off from the host", "Every agent sees the same thing", "## `.hive/lessons.md` on main"} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("the review brief lacks %q:\n%s", want, brief)
+		}
+	}
+	follow := "Follow up the review of add a helper"
+	st = h.wait("the advice to land as a brief", 3*minute, taskStage("rules", follow, work.StageDone))
+	fu, _ := task(st, "rules", follow)
+	if fu.From != tk.Reviewer || fu.FollowUp != tk.ID || !strings.Contains(fu.Known, "FAKE advice") {
+		t.Fatalf("follow-up: %+v", fu)
+	}
+	n := 0
+	for _, p := range st.Projects {
+		for _, x := range p.Tasks {
+			if strings.HasPrefix(x.Title, "Follow up") {
+				n++
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d follow-ups, want 1", n)
+	}
 }
 
 // A worker isn't blamed for a failure main has too: its change waits with no
@@ -979,6 +1076,9 @@ func TestOutsideStep(t *testing.T) {
 	h.seed("me/out", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "out", "repo": "me/out"}, nil)
 	title := "Delete the leftover test fixture directory on this machine, outside your checkout; it is safe to delete and can't be undone: FAKE:rmoutside " + fixture
+	if len(title) <= 120 {
+		t.Fatalf("the ask is only %d characters, no longer than a label", len(title))
+	}
 	h.post("/api/ask", map[string]string{"project": "out", "title": title}, nil)
 	h.wait("a tribunal to run the T3 step", 4*minute, func(st api.State) bool {
 		for _, r := range st.Requests {
@@ -1050,6 +1150,47 @@ func TestOfflineLeadSaysWhy(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("the notice was posted %d times, want once", n)
 	}
+}
+
+// TestHostPython: the person's python lives outside the system dirs (as uv or
+// pip put it under the home), and the baseline and a worker's checks run that
+// same program, bare or sandboxed. The fake python prints 7 where its folder
+// is read-only (bound into a sandbox) and 8 where it can write it (bare), so a
+// sandboxed run fails unless the sandbox ran the check. Which Linux sandbox
+// ran (bubblewrap or the Hive's own namespaces) is the host's pick; the
+// sandbox package's TestHostPythonBothPaths runs each one by name. Not
+// parallel: the daemon takes PATH from this process.
+func TestHostPython(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX sh")
+	}
+	dir := filepath.Join(t.TempDir(), "py", "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"python", "python3"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("#!/bin/sh\n[ -w \"${0%/*}\" ] && echo 8 || echo 7\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	h := start(t)
+	sb, want := h.ws.LoadConfig().Sandbox, 8.0
+	if sb == "auto" {
+		want = 7
+	}
+	t.Logf("sandbox %q: the check must print %v", sb, want)
+	py := `PY=$(command -v python || command -v python3) || { echo \"no python or python3 on PATH\" >&2; exit 127; }; \"$PY\"`
+	h.seed("me/py", map[string]string{
+		".hive/project.json": `{"test": "` + py + ` | grep -qx ` + fmt.Sprint(want) + `", "score": {"command": "` + py + `", "direction": "higher", "tolerance": 0}}`,
+		".hive/goals.md":     "# Goals\n",
+	})
+	h.post("/api/project", map[string]any{"name": "py", "repo": "me/py"}, nil)
+	h.wait("the baseline from the host's python", minute, func(st api.State) bool {
+		return len(st.Projects) == 1 && st.Projects[0].Best != nil && *st.Projects[0].Best == want
+	})
+	h.post("/api/ask", map[string]string{"project": "py", "title": "add a note", "known": "anything"}, nil)
+	h.wait("the worker to land", 3*minute, taskStage("py", "add a note", work.StageDone))
 }
 
 // TestAgentsReadTheHive: a worker reads another run's log, a chat, a warden's
