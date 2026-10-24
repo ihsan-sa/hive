@@ -26,7 +26,8 @@ import (
 // Stages.
 const (
 	StageNew       = "new"
-	StageIssued    = "issued"
+	StageIssued    = "issued" // an older record of queued
+	StageQueued    = "queued" // issued, waiting its turn for a worker (queue.go)
 	StageWorking   = "working"
 	StageLanding   = "landing"
 	StageTesting   = "testing"
@@ -53,6 +54,8 @@ type Task struct {
 	Kind      string            `json:"kind"` // work | revert | helper (spawned, no issue)
 	Stage     string            `json:"stage"`
 	Reason    string            `json:"reason,omitempty"`
+	Order     int               `json:"order,omitempty"`     // its place in the queue the lead set; 0 goes after, as filed
+	Held      bool              `json:"held,omitempty"`      // the lead holds it in the queue
 	Recheck   bool              `json:"recheck,omitempty"`   // landed again on the same commit, so its test runs again
 	ByPerson  bool              `json:"by_person,omitempty"` // the person stopped it or left it open, so the lead can't bring it back
 	Issue     core.Issue        `json:"issue"`
@@ -120,6 +123,8 @@ type Module struct {
 	mu    sync.Mutex
 	tasks map[string]*Task
 	busy  map[string]bool
+	// areaCache holds the paths each brief names (queue.go).
+	areaCache map[string][]string
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -137,7 +142,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, mainRed: map[string]bool{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string][]string{}, mainRed: map[string]bool{}}
 	apply := func(e core.Event) {
 		if e.Kind == "alert.raised" {
 			var a struct{ Kind, Project, SHA string }
@@ -161,6 +166,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.J.Subscribe(apply)
 	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project"}`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: []string{"lead"}, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); with back, its worker gets that text and works on`, Fn: m.opRecheck})
+	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: []string{"lead"}, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids]} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed), hold keeps one waiting until released. A started worker is never stopped`, Fn: m.opQueue})
 	c.Person.Handle("merge", m.onPersonMerge)
 	return m
 }
@@ -266,7 +272,7 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]string{"task": t.ID, "note": "filed; it becomes an issue and a worker shortly"}, nil
+	return map[string]string{"task": t.ID, "note": "filed; it becomes an issue, then waits its turn for a worker (see queue)"}, nil
 }
 
 // thread is the chat thread that hears about work r asks for: a lead's
@@ -340,11 +346,18 @@ func (m *Module) Revert(of Task, mergeSHA, reason string) (Task, error) {
 	return *t, nil
 }
 
-// Tick advances every task that isn't already being worked on.
+// Tick advances every task that isn't already being worked on. One waiting
+// for a worker goes only when the queue lets it, and otherwise says why it waits.
 func (m *Module) Tick() {
-	for _, t := range m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) }) {
+	tasks := m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) })
+	start, wait := m.admit(tasks)
+	for _, t := range tasks {
+		if why, ok := wait[t.ID]; ok {
+			m.waits(t, why)
+			continue
+		}
 		m.mu.Lock()
-		if !m.due(t) || m.busy[t.ID] {
+		if !m.due(t) || m.busy[t.ID] || (t.Queued() && !start[t.ID]) {
 			m.mu.Unlock()
 			continue
 		}
@@ -355,6 +368,27 @@ func (m *Module) Tick() {
 			m.settle(&t, m.step(&t))
 		}(t)
 	}
+}
+
+// waits records why a queued task waits, when that is new. A machine hold's
+// live figures after " (" change every tick, so only a new kind is saved.
+func (m *Module) waits(t Task, why string) {
+	kind, _, _ := strings.Cut(why, " (")
+	if t.Stage == StageQueued && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+		return
+	}
+	m.mu.Lock()
+	if m.busy[t.ID] {
+		m.mu.Unlock()
+		return
+	}
+	m.busy[t.ID] = true
+	m.mu.Unlock()
+	t.Stage, t.Reason = StageQueued, why
+	m.save(&t, "")
+	m.mu.Lock()
+	delete(m.busy, t.ID)
+	m.mu.Unlock()
 }
 
 // due reports whether a task's retry gap is over; a task saved before the
@@ -460,9 +494,9 @@ func (m *Module) step(t *Task) error {
 		if err != nil {
 			return err
 		}
-		t.Issue, t.Stage, t.Failures = is, StageIssued, 0
+		t.Issue, t.Stage, t.Failures = is, StageQueued, 0
 		m.save(t, fmt.Sprintf("issue #%d", is.Number))
-	case StageIssued:
+	case StageQueued, StageIssued:
 		return m.startWorker(t, p)
 	case StageWorking:
 		return m.checkWorker(t, p)
@@ -531,7 +565,7 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 	if t.Branch == "" {
 		t.Branch = "hive/" + t.ID
 	}
-	t.Worker, t.Stage, t.Failures = id, StageWorking, 0
+	t.Worker, t.Stage, t.Failures, t.Reason = id, StageWorking, 0, ""
 	m.save(t, "worker "+id+" started")
 	return nil
 }
@@ -625,7 +659,7 @@ func similar(a, b string) bool {
 func (m *Module) checkWorker(t *Task, p core.Project) error {
 	r, ok := m.C.Runs.Get(t.Worker)
 	if !ok {
-		t.Stage = StageIssued
+		t.Stage = StageQueued
 		m.save(t, "worker record missing; starting again")
 		return nil
 	}
@@ -1183,7 +1217,7 @@ func (m *Module) Retry(id string) error {
 		t.Known += fmt.Sprintf("\n\nA previous worker (%s) stopped: %s\nIts notes:\n%s", t.Worker, core.Clip(r.Reason+" "+finishText(r), 800), core.Clip(string(notes), 2000))
 	}
 	t.Attempt++
-	t.Stage, t.Worker, t.Reason, t.Failures, t.Round = StageIssued, "", "", 0, 0
+	t.Stage, t.Worker, t.Reason, t.Failures, t.Round = StageQueued, "", "", 0, 0
 	m.save(&t, "handed to a fresh worker")
 	return nil
 }

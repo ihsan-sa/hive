@@ -43,6 +43,9 @@ type Effects struct {
 
 	locks sync.Map
 
+	// Slots holds checks to config's max_checks at a time, started in the order they asked.
+	Slots *Slots
+
 	mu        sync.Mutex
 	checks    map[string]Check
 	verdicts  map[string]Verdict
@@ -92,6 +95,7 @@ type HostCommit struct {
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
 		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}}
+	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
 	apply := func(ev Event) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -359,6 +363,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.Output = err.Error()
 		return c // not recorded: no sandbox is not a verdict on the commit
 	}
+	defer e.Slots.Acquire(p.Name, sha, kind)()
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
 		c.Output = "could not make a clean checkout: " + err.Error()

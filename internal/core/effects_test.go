@@ -27,7 +27,7 @@ func testHive(t *testing.T) (*Core, *Local) {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0 // a loaded CI runner mustn't hold fake turns
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded CI runner mustn't hold fake turns
 	ws.SaveConfig(cfg)
 	forge := &Local{Dir: filepath.Join(dir, "forge")}
 	c, err := Open(ws, forge)

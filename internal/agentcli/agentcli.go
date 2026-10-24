@@ -168,4 +168,5 @@ A value of @path reads that file. Common ops:
   search    --query "words" [--limit n|all]     the knowledge base pieces that match, best first
   remember  --title "..." --text "..." [--tags a,b]   write to the knowledge base
   schedule  --in 2h --text "..."                 a wake-up message to yourself
-  status                                         projects, work in flight, scores`
+  status                                         projects, work in flight, scores
+  queue     [--order id,id] [--hold id] [--release id]   (lead) briefs waiting for a worker, in order`

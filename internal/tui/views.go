@@ -127,6 +127,15 @@ func (m *model) dashRows() []row {
 			add(row{key: "run:" + r.ID, depth: 1, text: m.runLine(r), open: &d})
 		}
 	}
+	ck := m.st.Checks
+	if add(row{key: "checks", text: fmt.Sprintf("checks (%d running, %d waiting)", len(ck.Running), len(ck.Waiting)), expand: len(ck.Running)+len(ck.Waiting) > 0, def: true}) {
+		for _, u := range ck.Running {
+			add(row{key: fmt.Sprintf("check:%s:%s:%s", u.Project, u.SHA, u.Kind), depth: 1, text: fmt.Sprintf("%s  %s %s  %s  %s", stGood.Render("running"), u.Project, core.Short(u.SHA), u.Kind, stDim.Render(ago(u.Since)))})
+		}
+		for i, u := range ck.Waiting {
+			add(row{key: fmt.Sprintf("check:%s:%s:%s:w", u.Project, u.SHA, u.Kind), depth: 1, text: fmt.Sprintf("%s  %s %s  %s  %s", stWarn.Render(fmt.Sprintf("waiting #%d", i+1)), u.Project, core.Short(u.SHA), u.Kind, stDim.Render(ago(u.Since)))})
+		}
+	}
 	if add(row{key: "sweeps", text: fmt.Sprintf("improvement sweeps (%d)", len(m.st.Sweeps)), expand: len(m.st.Sweeps) > 0}) {
 		for _, s := range m.st.Sweeps {
 			text := fmt.Sprintf("%s  %s  asks filed: %d", s.Started.Local().Format("Mon 15:04"), s.Status, len(s.Asks))
@@ -212,12 +221,18 @@ func (m *model) taskLine(t work.Task) string {
 		stage = stGood.Render(stage)
 	case work.StageBlocked, work.StageStopped:
 		stage = stBad.Render(stage)
-	case work.StagePerson:
+	case work.StagePerson, work.StageQueued, work.StageIssued:
 		stage = stWarn.Render(stage)
 	}
 	progress := ""
-	if r, ok := m.run(t.Worker); ok && r.Progress != "" && !t.Terminal() {
+	if r, ok := m.run(t.Worker); ok && r.Progress != "" && !t.Terminal() && !t.Queued() {
 		progress = stDim.Render("  “" + core.Clip(r.Progress, 60) + "” " + ago(r.ProgressAt))
+	}
+	if t.Queued() && t.Reason != "" {
+		progress = stDim.Render("  " + core.Clip(t.Reason, 70))
+	}
+	if t.Stage == work.StageTesting && slices.ContainsFunc(m.st.Checks.Waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
+		progress = stDim.Render("  waiting for a check slot")
 	}
 	pr := ""
 	if t.PR.Number > 0 {
