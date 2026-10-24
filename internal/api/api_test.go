@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -34,10 +33,18 @@ func deadPort(t *testing.T) int {
 }
 
 // A daemon that restarted on a new port still gets the message: the client
-// re-reads daemon.json and keeps dialling the new daemon until it listens.
+// keeps dialling while the old one is restarting, re-reads daemon.json and
+// sends to the new daemon. The new port is held from the start (a freed port
+// can be taken by another test's server before the new daemon listens), and
+// it answers only once it serves.
 func TestClientFollowsRestartedDaemon(t *testing.T) {
 	ws, write := workspace(t)
-	next := deadPort(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	next := ln.Addr().(*net.TCPAddr).Port
 	if err := write(DaemonInfo{PID: 1, Port: deadPort(t), Token: "old", Restarting: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -62,11 +69,6 @@ func TestClientFollowsRestartedDaemon(t *testing.T) {
 			return
 		}
 		time.Sleep(time.Second)
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", next))
-		if err != nil {
-			t.Error(err)
-			return
-		}
 		srv.Serve(ln)
 	}()
 	if err := c.Do("POST", "/api/chat", map[string]string{"text": "hi"}, nil); err != nil {

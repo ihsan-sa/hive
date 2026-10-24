@@ -34,8 +34,14 @@ func runSync(argv, env []string, dir, stdin, stdout string, timeout time.Duratio
 		defer f.Close()
 		cmd.Stdout, cmd.Stderr = f, f
 	}
-	err = cmd.Run()
-	if ctx.Err() == context.DeadlineExceeded {
+	if err = cmd.Start(); err != nil {
+		return -1, err
+	}
+	end := group(cmd.Process.Pid)
+	err = cmd.Wait()
+	timedOut := ctx.Err() == context.DeadlineExceeded
+	end(timedOut) // the timeout killed argv alone; what it started goes too
+	if timedOut {
 		return -1, ErrTimeout
 	}
 	var ee *exec.ExitError
