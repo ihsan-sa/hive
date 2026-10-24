@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -40,5 +41,27 @@ func TestInUnit(t *testing.T) {
 		if InUnit() != want {
 			t.Errorf("InUnit for %q: want %v", line, want)
 		}
+	}
+}
+
+// A handover rewrites the macOS plist without touching launchd, so unloading
+// the job can't stop the daemon doing the handover.
+func TestHandoverLeavesLaunchdAlone(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("launchd is macOS's")
+	}
+	home, bin := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	called := filepath.Join(bin, "called")
+	os.WriteFile(filepath.Join(bin, "launchctl"), []byte("#!/bin/sh\necho \"$@\" >> "+called+"\n"), 0o755)
+	if err := EnableAutostartAt("/new/hive", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(launchAgent()); err != nil || !strings.Contains(string(raw), "<string>/new/hive</string>") || !strings.Contains(string(raw), "<key>AbandonProcessGroup</key><true/>") {
+		t.Fatalf("plist %q, %v", raw, err)
+	}
+	if raw, err := os.ReadFile(called); err == nil {
+		t.Fatalf("the handover ran launchctl %q", raw)
 	}
 }

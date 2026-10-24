@@ -33,6 +33,7 @@ func (w Workspace) KB() string                 { return filepath.Join(w.Hive(), 
 func (w Workspace) ConfigPath() string         { return filepath.Join(w.Hive(), "config.json") }
 func (w Workspace) DaemonFile() string         { return filepath.Join(w.Private(), "daemon.json") }
 func (w Workspace) Bin() string                { return filepath.Join(w.Hive(), "bin") }
+func (w Workspace) Tools() string              { return filepath.Join(w.Hive(), "tools") }
 func (w Workspace) Gates() string              { return filepath.Join(w.Hive(), "gates") }
 
 // Private holds what grants access (the daemon's token, each run's home and
@@ -92,6 +93,8 @@ type Config struct {
 	// StallFloorSeconds: nothing counts as stalled before this long without moving,
 	// however fast its stage usually is here; 0 is the default (20 minutes).
 	StallFloorSeconds int `json:"stall_floor_seconds,omitempty"`
+	// ShareBundleURL is where `hive share` sends its bundle; empty is the developer's endpoint.
+	ShareBundleURL string `json:"share_bundle_url,omitempty"`
 }
 
 // ProjectSettings override workspace defaults per project.
@@ -336,7 +339,7 @@ func ForgetWorkspace() { os.Remove(pointerFile()) }
 
 // Init creates the folder layout.
 func (w Workspace) Init() error {
-	for _, d := range []string{w.Hive(), w.Modules(), w.Projects(), w.Runs(), w.Chats(), w.KB(), w.Bin(), w.Gates()} {
+	for _, d := range []string{w.Hive(), w.Modules(), w.Projects(), w.Runs(), w.Chats(), w.KB(), w.Bin(), w.Gates(), w.Tools()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}

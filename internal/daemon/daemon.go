@@ -117,6 +117,8 @@ func Run(ws core.Workspace, waitFor int) error {
 	if waitFor > 0 {
 		if c, err := api.Dial(ws); err == nil {
 			from = c.Info.Version
+		} else {
+			fmt.Printf("hive: can't read the replaced daemon's version (%v), so a hive-v0 keeps its name\n", err)
 		}
 		if inUnit {
 			// An old unit stops everything in it as the old daemon exits; outlive that and hand the restart to systemd below.
@@ -360,6 +362,13 @@ func (s *server) routes() http.Handler {
 		}
 		return t, nil
 	})
+	h("/api/waiting", func(r *http.Request) (any, error) {
+		ask, ok := a.C.Person.Get(r.URL.Query().Get("id"))
+		if !ok {
+			return nil, core.ErrNotFound
+		}
+		return ask, nil
+	})
 	h("/api/task/stop", func(r *http.Request) (any, error) {
 		var b struct{ ID, Reason string }
 		if err := decode(r, &b); err != nil {
@@ -588,6 +597,20 @@ func decode(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
+// diffPreview is how much of an ask's diff each state poll carries.
+const diffPreview = 8 << 10
+
+// previews cuts each ask's diff to its first lines, since state is polled
+// every second or two; /api/waiting has the whole diff.
+func previews(asks []core.Ask) []core.Ask {
+	for i := range asks {
+		if d := asks[i].Diff; len(d) > diffPreview {
+			asks[i].Diff = d[:max(strings.LastIndexByte(d[:diffPreview], '\n')+1, diffPreview/2)]
+		}
+	}
+	return asks
+}
+
 func (s *server) state() api.State {
 	a := s.a
 	cfg, cfgErr := a.C.WS.ReadConfig()
@@ -643,7 +666,7 @@ func (s *server) state() api.State {
 	}
 	st.Sweeps = sw
 	st.StepBacks = a.Improve.StepBacks("")
-	st.Asks = a.C.Person.Open()
+	st.Asks = previews(a.C.Person.Open())
 	s.mu.Lock()
 	st.Alerts = append([]api.Alert{}, s.alerts...)
 	st.Updated = s.update

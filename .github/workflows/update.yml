@@ -37,8 +37,10 @@ jobs:
           FROM: ${{ matrix.from }}
         run: |
           to=${TO:-$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)}
-          # A release's own run waits for the binaries the release workflow attaches, as install-smoke does.
-          for i in $(seq 60); do
+          # A release's own run waits for the binaries the release workflow attaches, as install-smoke does;
+          # a manual run names a release that should have them already, so it checks once.
+          tries=1; [ "$GITHUB_EVENT_NAME" = release ] && tries=60
+          for i in $(seq $tries); do
             n=$(gh release view "$to" -R "$GITHUB_REPOSITORY" --json assets -q '.assets | length') || n=0
             [ "$n" -ge 6 ] && break
             echo "waiting for $to's binaries ($n so far)"; sleep 20
@@ -113,6 +115,34 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then cmd.exe //c "$(cygpath -w "$BIN/hive-v0.cmd")" status | tee alias.txt
           else "$BIN/hive-v0" status | tee alias.txt; fi
           grep -q "^Hive $TO " alias.txt
+      - name: a reinstall retires an old Programs\hive-v0 and keeps the user PATH as stored (Windows)
+        if: steps.pick.outputs.skip == 'false' && runner.os == 'Windows' && steps.pick.outputs.cmd == 'hive-v0'
+        shell: pwsh
+        env:
+          HIVE_VERSION: ${{ steps.pick.outputs.to }}
+          HIVE_REPO: ${{ github.repository }}
+          HIVE_SKIP_WSL: '1'
+          HIVE_NO_PATH: '1'
+          BIN: ${{ steps.pick.outputs.bin }}
+        run: |
+          ./install/path_check.ps1
+          # The updated daemon stands in for the old install: the installer must stop it,
+          # point its login autostart at the new install and remove the old folder.
+          $old = Join-Path $env:LOCALAPPDATA 'Programs\hive-v0'
+          New-Item -ItemType Directory -Force $old | Out-Null
+          Copy-Item (Join-Path $env:BIN 'hive.exe') (Join-Path $old 'hive-v0.exe')
+          $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          Set-ItemProperty $run -Name Hive -Value "`"$old\hive-v0.exe`" daemon --detach"
+          $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+          $path = ($k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') -split ';' | Where-Object { $_ }) -join ';'
+          $k.SetValue('Path', "$path;$old", 'ExpandString')
+          ./install/install.ps1
+          $got = (Get-ItemProperty $run -Name Hive).Hive
+          Remove-ItemProperty $run -Name Hive
+          if (Test-Path $old) { throw 'the old folder is still there' }
+          if ($got -like '*hive-v0*' -or $got -notlike '*hive.exe" daemon --detach') { throw "the autostart is '$got'" }
+          $now = $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          if ($now -cne $path -or $k.GetValueKind('Path') -ne 'ExpandString') { throw "the user PATH went from '$path;$old' to '$now' ($($k.GetValueKind('Path')))" }
       - name: the daemon's log
         if: always() && steps.pick.outputs.skip == 'false'
         run: |

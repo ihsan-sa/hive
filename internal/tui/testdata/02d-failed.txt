@@ -10,7 +10,7 @@
  › lead               │   you  20:40                                   │   API. One question: keep the old import path
    writer             │   Also check whether the docs build still      │   as an alias for a release, or break it now?
    reviewer        ●  │   passes.                                      │
- ▾ hive-web           │   ▾ 1 reply                                    │  ╭─ reply · lead ────────────────────────────╮
+ ▾ hive-web           │   3 waiting on you · → then a to answer        │  ╭─ reply · lead ────────────────────────────╮
    lead            ●  │  ╭─ new thread · lead ───────────────────────╮ │  │ › Keep the alias for one release, then    │
    worker-2           │  │ › Start a new thread with lead…           │ │  │   remove it in 0.9.                       │
    reviewer           │  ╰───────────────────────────────────────────╯ │  ╰───────────────────────────────────────────╯

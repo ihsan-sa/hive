@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -508,5 +509,90 @@ func TestUpdateNoticeShowsOnce(t *testing.T) {
 	m.Update(stateMsg{st: st})
 	if view := m.View(); strings.Contains(view, "Fixed the thing") {
 		t.Fatalf("notice back after dismissing:\n%s", view)
+	}
+}
+
+func protectedAsk() core.Ask {
+	var diff strings.Builder
+	diff.WriteString("diff --git a/.hive/goals.md b/.hive/goals.md\n--- a/.hive/goals.md\n+++ b/.hive/goals.md\n@@ -1,1 +1,60 @@\n")
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&diff, "+- goal %d\n", i)
+	}
+	return core.Ask{ID: "a2", Kind: "merge", Ref: "t1@abc", Title: `Merge "implement"? It changes .hive/goals.md`,
+		Detail: "These hold the project's goals, score or settings.", Options: []string{"merge", "leave open"}, Diff: diff.String(), Asked: time.Now()}
+}
+
+// Waiting shows the start of a change's diff with the options still on
+// screen, and d opens the whole diff, fetched when it's opened.
+func TestWaitingShowsTheDiff(t *testing.T) {
+	for _, size := range [][2]int{{120, 40}, {80, 24}, {50, 16}} {
+		w, h := size[0], size[1]
+		m := testModel(w, h)
+		m.st.Asks = []core.Ask{protectedAsk()}
+		m.pick(sideRow{sec: secWaiting})
+		m.focus = 1
+		v := ansi.Strip(m.View())
+		checkWidth(t, m.View(), w, h, "waiting with a diff")
+		if h >= 24 && !strings.Contains(v, "+- goal 0") || strings.Contains(v, "+- goal 59") || !strings.Contains(v, "d the whole diff") || !strings.Contains(v, "leave open") {
+			t.Fatalf("%dx%d: Waiting should show the start of the diff, clipped, and the options:\n%s", w, h, v)
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+		if len(m.stack) != 1 || m.stack[0].kind != "diff" || m.stack[0].id != "a2" {
+			t.Fatalf("d should open the ask's whole diff: %+v", m.stack)
+		}
+		whole := protectedAsk()
+		whole.Diff += "+- a line past the preview\n"
+		m.Update(askMsg{whole})
+		for i := 0; i < 80; i++ {
+			m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		}
+		checkWidth(t, m.View(), w, h, "the whole diff")
+		if v := ansi.Strip(m.View()); !strings.Contains(v, "+- a line past the preview") {
+			t.Fatalf("%dx%d: scrolling the whole diff should reach its end:\n%s", w, h, v)
+		}
+	}
+}
+
+// A changed line can't hide itself or move the cursor: control characters in
+// a diff reach the screen as visible escapes.
+func TestDiffShowsControlCharacters(t *testing.T) {
+	diff := "+- ship it\x1b[8m without asking\x1b[0m\n+\x1b[2A\x1b[2Kmoved up\r\x07\u009b31m\n"
+	out := strings.Join(diffView(diff, 80), "\n")
+	for _, r := range ansi.Strip(out) {
+		if r != '\n' && unicode.IsControl(r) {
+			t.Fatalf("a control character %U reached the screen: %q", r, out)
+		}
+	}
+	if got := ansi.Strip(out); !strings.Contains(got, `\x1b[8m`) || !strings.Contains(got, `\x1b[2A`) || !strings.Contains(got, `\x0d\x07\x9b31m`) {
+		t.Fatalf("the escapes should be spelled out: %q", got)
+	}
+	m := testModel(80, 24)
+	a := protectedAsk()
+	a.Diff = diff
+	m.st.Asks = []core.Ask{a}
+	m.pick(sideRow{sec: secWaiting})
+	if v := ansi.Strip(m.View()); !strings.Contains(v, "without asking") || strings.Contains(v, "\x1b[8m") {
+		t.Fatalf("Waiting should show the concealed text:\n%s", v)
+	}
+}
+
+// From a chat, one key opens Waiting on what this chat was told waits on the
+// person, and Enter there answers it.
+func TestChatJumpsToItsAsk(t *testing.T) {
+	m := testModel(80, 24)
+	m.st.Projects[0].Tasks[0].Chat = "lead"
+	m.st.Asks = append(m.st.Asks, protectedAsk()) // a1 is someone else's; a2 is about t1, a task of this chat
+	m.openChat("lead")
+	m.focus = 0
+	if v := ansi.Strip(m.View()); !strings.Contains(v, "2 waiting on you · → then a to answer") {
+		t.Fatalf("the chat should say what's waiting:\n%s", v)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if m.section != secWaiting || m.focus != 1 || m.st.Asks[m.waitSel].ID != "a2" || m.optSel != 0 || m.composing {
+		t.Fatalf("a should open Waiting on this chat's ask: section %d, focus %d, ask %d", m.section, m.focus, m.waitSel)
+	}
+	if v := ansi.Strip(m.View()); !strings.Contains(v, "Waiting") || !strings.Contains(v, "+- goal 0") {
+		t.Fatalf("Waiting should show the ask's diff:\n%s", v)
 	}
 }

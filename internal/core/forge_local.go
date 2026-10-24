@@ -73,9 +73,12 @@ func (l *Local) EnsureRepo(repo, _ string) (bool, error) {
 	return true, err
 }
 
-// Fork copies repo to the local user's name.
-func (l *Local) Fork(repo string) (string, error) {
-	fork := "local/" + repo[strings.LastIndex(repo, "/")+1:]
+// Fork copies repo to owner's name, the local user's when owner is "".
+func (l *Local) Fork(repo, owner string) (string, error) {
+	if owner == "" {
+		owner = "local"
+	}
+	fork := owner + "/" + repo[strings.LastIndex(repo, "/")+1:]
 	if Exists(l.RepoPath(fork)) {
 		return fork, nil
 	}

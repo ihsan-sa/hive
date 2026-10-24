@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -112,7 +113,7 @@ func (Bare) Check() error   { return nil }
 
 func (Bare) Start(s Spec) (Proc, error) {
 	env := append(os.Environ(), s.Env...)
-	env = withPathPrefix(env, toolDirs(s.Tools))
+	env = withPathPrefix(env, pathDirs(s))
 	return proc.StartDetached(s.Argv, env, s.Cwd, s.Stdin, s.Stdout)
 }
 
@@ -124,6 +125,36 @@ func toolDirs(tools []string) []string {
 		}
 	}
 	return dirs
+}
+
+// ToolsInside is where the Hive's tools folder is mounted: the runtimes and
+// dev tools agents install for themselves (`hive agent install`).
+const ToolsInside = "/hive/tools"
+
+// ToolNames are the tools the Hive installs. Each lives in <folder>/<name>,
+// with its programs in <folder>/<name>/bin.
+var ToolNames = []string{"python", "uv", "node", "go"}
+
+// ToolBins are the tools folder's bin dirs, for PATH.
+func ToolBins(folder string, join func(...string) string) []string {
+	var out []string
+	for _, n := range ToolNames {
+		out = append(out, join(folder, n, "bin"))
+	}
+	return out
+}
+
+// pathDirs are what a command on the host's own paths (bare, Seatbelt) gets
+// on PATH: the bin dirs of a mounted tools folder, then the exposed tools'
+// dirs, so an installed runtime wins over an older one beside hive on the host.
+func pathDirs(s Spec) []string {
+	var dirs []string
+	for _, m := range s.Mounts {
+		if m.Inside == ToolsInside {
+			dirs = append(dirs, ToolBins(m.Host, filepath.Join)...)
+		}
+	}
+	return append(dirs, toolDirs(s.Tools)...)
 }
 
 func withPathPrefix(env []string, dirs []string) []string {
@@ -176,15 +207,34 @@ func ReadSpec(path string) (Spec, error) {
 func InsideEnv(home string, network bool) []string {
 	env := []string{
 		"HOME=" + home,
-		"PATH=/hive/bin:" + insideBins,
+		"PATH=/hive/bin:" + strings.Join(ToolBins(ToolsInside, path.Join), ":") + ":" + insideBins,
 		"LANG=C.UTF-8",
 		"TERM=dumb",
 		"TMPDIR=/tmp",
 		"GIT_CONFIG_NOSYSTEM=1",
 	}
 	if network {
-		p := "http://127.0.0.1:" + ProxyPort
-		env = append(env, "HTTPS_PROXY="+p, "HTTP_PROXY="+p, "https_proxy="+p, "http_proxy="+p, "ALL_PROXY="+p, "NO_PROXY=", "no_proxy=")
+		env = append(env, proxyEnv(ProxyPort)...)
+	}
+	return env
+}
+
+func proxyEnv(port string) []string {
+	p := "http://127.0.0.1:" + port
+	return []string{"HTTPS_PROXY=" + p, "HTTP_PROXY=" + p, "https_proxy=" + p, "http_proxy=" + p, "ALL_PROXY=" + p, "NO_PROXY=", "no_proxy="}
+}
+
+// SeatbeltEnv is the environment Seatbelt gives sp when its egress proxy
+// listens on port: sp's own, with the proxy moved to port, and the proxy set
+// whenever sp has the network, since Seatbelt lets a spec reach only the
+// proxy. It lives here so Linux tests can check it.
+func SeatbeltEnv(sp Spec, port string) []string {
+	var env []string
+	for _, kv := range sp.Env {
+		env = append(env, strings.ReplaceAll(kv, "127.0.0.1:"+ProxyPort, "127.0.0.1:"+port))
+	}
+	if sp.Network {
+		env = append(env, proxyEnv(port)...)
 	}
 	return env
 }

@@ -33,6 +33,12 @@
 ## 2026-10-22 System prompt inline inside sandboxes, file outside
 - Decision: sandboxed turns pass `--append-system-prompt <text>`; bare Windows turns pass a file | Why: Windows argv is capped at 32k; inside the sandbox argv goes via the spec file with Linux limits, and older Claude Code builds may lack the -file flag | Tradeoff: two code paths in the Claude adapter.
 
+## 2026-10-22 A full lead compacts; it keeps a journal instead of rotating
+- Decision: no lead rotation. Each turn records the session's context size (the last reply's input plus cache tokens) on the run, shown in the control center; a lead keeps its journal in `$HIVE_BOX/notes.md`, and a lead that replaces one in a chat starts with that journal | Why: Claude Code 2.1.308 auto-compacts under `-p --resume` (a `compact_boundary` with `trigger: auto` in stream-json; the session went on and still recalled what it was told), so a lead neither dies nor errors at the limit | Tradeoff: compaction's summary is generic and comes late, near the window; the journal is what the lead chooses to keep.
+
+## 2026-10-22 Agents install their own runtimes
+- Decision: python, uv, node and go go into `.hive/tools` through `hive agent install`, with no root and no one asked; the person is told after. Agents see the folder read-only on PATH; the install runs in its own sandbox that may write it | Why: the owner's first live run sat blocked on a warden request for python, and he asked that the Hive install such things itself | Tradeoff: one version of each tool for every agent; a root install still goes to the person.
+
 ## 2026-10-22 The Hive's own code is a fork made on first need
 - Decision: the self project is the person's GitHub fork of `release_repo`, created by `create_project --self`; a kept merge releases on the fork numbered on from the running version, the updater takes the newest of fork and upstream, and the fork's main is offered upstream as one PR once the person says yes, since it goes out in their name | Why: a release binary has no checkout and no write access upstream, and every change still goes through the sandboxed worker, checks, review and merge | Tradeoff: a new fork has Actions off until the person turns them on, so its releases carry no binaries before that.
 

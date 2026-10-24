@@ -8,7 +8,10 @@
 package e2e
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -75,12 +78,13 @@ type hive struct {
 	forge *core.Local
 	cmd   *exec.Cmd
 	c     *api.Client
+	env   []string // added to the daemon's environment
 }
 
-func start(t *testing.T) *hive {
+func start(t *testing.T, env ...string) *hive {
 	t.Helper()
 	dir := t.TempDir()
-	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}}
+	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env}
 	if err := h.ws.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +166,7 @@ func (h *hive) quiesce() {
 func (h *hive) launch() {
 	h.t.Helper()
 	cmd := exec.Command(bin, "daemon")
-	cmd.Env = append(os.Environ(), "HIVE_HOME="+h.ws.Root, "HIVE_FORGE=local:"+h.forge.Dir)
+	cmd.Env = append(append(os.Environ(), "HIVE_HOME="+h.ws.Root, "HIVE_FORGE=local:"+h.forge.Dir), h.env...)
 	cmd.Dir = h.ws.Root
 	log, _ := os.OpenFile(filepath.Join(h.ws.Hive(), "daemon-test.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	cmd.Stdout, cmd.Stderr = log, log
@@ -399,6 +403,49 @@ func (h *hive) replied(chat, text string) func(api.State) bool {
 			}
 		}
 		return false
+	}
+}
+
+// A lead keeps a journal every agent can read, and its context size shows on
+// its run. A lead that replaces it answers from that journal, and the person
+// sees one chat.
+func TestLeadJournal(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "remember the launch is on Friday"}, nil)
+	st := h.wait("the lead to note it", minute, h.replied("lead", "Noted."))
+	var first core.Run
+	for _, r := range st.Runs {
+		if r.Role == "lead" {
+			first = r
+		}
+	}
+	if first.Context == 0 {
+		t.Fatalf("no context figure on the lead: %+v", first)
+	}
+	h.post("/api/run/stop", map[string]string{"id": first.ID}, nil)
+	h.wait("the lead to stop", minute, func(st api.State) bool {
+		for _, r := range st.Runs {
+			if r.ID == first.ID {
+				return r.Terminal()
+			}
+		}
+		return false
+	})
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "what did I ask you to remember?"}, nil)
+	st = h.wait("the new lead to answer from the journal", minute, h.replied("lead", "the launch is on Friday"))
+	leads := 0
+	for _, r := range st.Runs {
+		if r.Role == "lead" {
+			leads++
+		}
+	}
+	var thread []string
+	for _, m := range h.messages("lead") {
+		thread = append(thread, m.From+": "+m.Text)
+	}
+	if leads != 2 || len(thread) < 4 || !strings.HasPrefix(thread[0], "person: remember") || !strings.Contains(thread[len(thread)-1], "Friday") {
+		t.Fatalf("%d leads; chat:\n%s", leads, strings.Join(thread, "\n"))
 	}
 }
 
@@ -1059,6 +1106,50 @@ func TestAgentsReadTheHive(t *testing.T) {
 }
 
 func init() { _ = fmt.Sprint }
+
+// TestToolInstall: a worker that needs python installs it through the Hive
+// and runs it in its next command, from the Hive's tools folder, and the
+// person is told. The python is a fake from HIVE_TOOLS_SOURCE unless
+// HIVE_E2E_TOOLS=live, which downloads the real uv and python (with
+// HIVE_E2E_SANDBOX=auto, the live check that a sandbox runs it).
+func TestToolInstall(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("tools are Linux builds for the WSL sandbox; a bare Windows run can't exec them")
+	}
+	var env []string
+	if os.Getenv("HIVE_E2E_TOOLS") != "live" {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(zw)
+		script := "#!/bin/sh\necho \"$0\"\n" // prints where it was run from, as sys.executable does
+		tw.WriteHeader(&tar.Header{Name: "fake/bin/python3", Mode: 0o755, Size: int64(len(script)), Typeflag: tar.TypeReg})
+		tw.Write([]byte(script))
+		tw.Close()
+		zw.Close()
+		src := t.TempDir()
+		os.WriteFile(filepath.Join(src, "python.tar.gz"), buf.Bytes(), 0o644)
+		os.WriteFile(filepath.Join(src, "python.tar.gz.sha256"), fmt.Appendf(nil, "%x  python.tar.gz\n", sha256.Sum256(buf.Bytes())), 0o644)
+		env = append(env, "HIVE_TOOLS_SOURCE="+src)
+	}
+	h := start(t, env...)
+	h.seed("me/py", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "py", "repo": "me/py"}, nil)
+	title := "Add a small python script to the repo: FAKE:needpython"
+	h.post("/api/ask", map[string]string{"project": "py", "title": title}, nil)
+	st := h.wait("the worker to land", 10*minute, taskStage("py", title, work.StageDone))
+	out, err := core.Git(h.forge.RepoPath("me/py"), "show", "main:PYTHON.md")
+	if err != nil || !strings.Contains(out, "tools/python/") {
+		t.Fatalf("python didn't run from the tools folder: %q %v", out, err)
+	}
+	told := false
+	for _, a := range st.Asks {
+		told = told || a.Kind == "told" && strings.Contains(a.Title, "installed python")
+	}
+	if !told {
+		t.Fatalf("the person wasn't told of the install: %+v", st.Asks)
+	}
+}
 
 // adopt makes this process adopt its daemons' orphans (Linux only).
 var adopt func()

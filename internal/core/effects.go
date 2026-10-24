@@ -436,7 +436,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 	home, _ := os.MkdirTemp("", "hive-check-home-")
 	defer os.RemoveAll(home)
 	homeM := sandbox.Mount{Host: home, Inside: "/hive/home", RW: true}
-	mounts = append(mounts, homeM)
+	mounts = append(mounts, homeM, sandbox.Mount{Host: e.ws.Tools(), Inside: sandbox.ToolsInside})
 	argv := []string{"/bin/sh", "-c", script}
 	env := sandbox.InsideEnv("/hive/home", network)
 	if !sb.Isolated() {
@@ -566,6 +566,8 @@ type Change struct {
 	High      []string `json:"high,omitempty"` // files in a high or root class
 	Root      []string `json:"root,omitempty"` // files that run with elevated rights
 	Diff      string   `json:"-"`
+	// ProtectedDiff is the diff of the protected files alone, shown to the person who approves it.
+	ProtectedDiff string `json:"-"`
 }
 
 var docExt = []string{".md", ".txt", ".rst", ".adoc"}
@@ -621,6 +623,9 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	}
 	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && !p.Self
 	c.Diff, _ = Git(dir, "diff", base, sha)
+	if len(c.Protected) > 0 {
+		c.ProtectedDiff, _ = Git(dir, append([]string{"diff", "--no-renames", base, sha, "--"}, c.Protected...)...)
+	}
 	return c, nil
 }
 

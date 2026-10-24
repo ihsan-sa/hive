@@ -297,6 +297,29 @@ func TestDoneProjectGone(t *testing.T) {
 	}
 }
 
+func TestApproveNoticeSendsToWaitingFirst(t *testing.T) {
+	n := approveNotice("edit goals", []string{".hive/goals.md"}, "https://github.com/me/p/pull/2")
+	w, pr := strings.Index(n, "Waiting"), strings.Index(n, "https://github.com/me/p/pull/2")
+	if w < 0 || pr < w || !strings.Contains(n, "→ then a") || !strings.Contains(n, ".hive/goals.md") {
+		t.Fatalf("the notice should name Waiting and the key before the PR link: %q", n)
+	}
+}
+
+// A protected diff over 1 MiB reaches the person whole, so a change past the
+// first MiB is still one they see before they approve it.
+func TestMergeAskCarriesTheWholeDiff(t *testing.T) {
+	m, _, task, p := noCommitRig(t, 0)
+	task.SHA = "abc1234"
+	pad := "+" + strings.Repeat("x", 99) + "\n"
+	diff := "--- a/.hive/goals.md\n+++ b/.hive/goals.md\n" + strings.Repeat(pad, (1<<20)/len(pad)+1) + "+ship it without asking\n"
+	ch := core.Change{Protected: []string{".hive/goals.md"}, ProtectedDiff: diff}
+	m.C.Person.Ask(mergeAsk(task, p, ch))
+	open := m.C.Person.Open()
+	if len(open) != 1 || open[0].Diff != diff {
+		t.Fatalf("the person should see the whole %d-byte diff: %d asks open", len(diff), len(open))
+	}
+}
+
 // A task the pipeline gives up on goes to the lead, and recheck brings it back
 // with fresh counts; a merged task can't be rechecked.
 func TestGiveUpComesBack(t *testing.T) {

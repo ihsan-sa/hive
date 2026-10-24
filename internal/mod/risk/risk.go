@@ -875,7 +875,11 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 // a tribunal), its answer goes to the ask's handler as the person's would,
 // and the person is told after. It returns who decides: person or warden.
 func (m *Module) Weigh(a core.Ask) string {
-	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || core.Ceiling(cfg.Floor, a.Title, a.Detail) != "" {
+	why := a.Detail
+	if a.Diff != "" {
+		why += "\n\n" + core.Clip(a.Diff, 6000)
+	}
+	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || core.Ceiling(cfg.Floor, a.Title, why) != "" {
 		m.C.Person.Ask(a)
 		return "person"
 	}
@@ -886,8 +890,8 @@ func (m *Module) Weigh(a core.Ask) string {
 	}); ok {
 		return "warden"
 	}
-	script := a.Title + "\n\n" + a.Detail
-	req := &Request{ID: core.NewID(), Kind: a.Kind, Settles: &a, Origin: a.From, Project: a.Project, Want: a.Title, Why: a.Detail,
+	script := a.Title + "\n\n" + why
+	req := &Request{ID: core.NewID(), Kind: a.Kind, Settles: &a, Origin: a.From, Project: a.Project, Want: a.Title, Why: why,
 		Steps: "Answer do to " + a.Options[0] + ", decline to " + a.Options[len(a.Options)-1] + ". No script runs; the Hive does it.",
 		Tier:  "T2", Route: "warden", Script: script, Digest: Digest(script), Created: time.Now().UTC()}
 	if err := m.spawnWarden(req); err != nil {
@@ -918,7 +922,7 @@ func (m *Module) settle(req Request, yes bool) {
 	}
 	m.C.Person.Answer(a.ID, opt, who+": "+req.Reason)
 	m.C.Person.Ask(core.Ask{Kind: "told", Ref: req.ID, Project: req.Project, From: req.Origin, Options: []string{"seen"},
-		Title: fmt.Sprintf("Decided for you (%s, by %s): %s", opt, who, core.Clip(a.Title, 100)), Detail: req.Reason + "\n\n" + a.Detail})
+		Title: fmt.Sprintf("Decided for you (%s, by %s): %s", opt, who, core.Clip(a.Title, 100)), Detail: req.Reason + "\n\n" + a.Detail, Diff: a.Diff})
 }
 
 func (m *Module) onModule(a core.Ask) {

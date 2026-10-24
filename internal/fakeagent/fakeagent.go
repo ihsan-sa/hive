@@ -1,7 +1,7 @@
 // Package fakeagent is a scripted agent that speaks Claude Code's
 // stream-json and uses the real mailbox. Keywords in the brief steer it
 // (FAKE:block, FAKE:breaktests, FAKE:lowerscore, FAKE:reviewfix, FAKE:crash,
-// FAKE:limit, FAKE:offline, FAKE:needpackage, FAKE:goals, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
+// FAKE:limit, FAKE:offline, FAKE:needpackage, FAKE:goals, FAKE:needpython, FAKE:module <name>, FAKE:skillmodule, FAKE:usemodule, FAKE:rmoutside <path>, FAKE:inject, FAKE:peek <warden run>, FAKE:paid (a run that costs), FAKE:spendall (spends its --max-budget-usd), and FAKE:warden*/FAKE:panel* for the risk path), so tests and the release
 // dry run drive every path of the Hive without spending plan usage.
 package fakeagent
 
@@ -147,6 +147,7 @@ func Main(argv []string) int {
 	if err != nil {
 		text = "error: " + err.Error()
 	}
+	emit(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{}, "usage": map[string]int{"input_tokens": len(all)}}})
 	cost := 0.0
 	if strings.Contains(all, "FAKE:paid") {
 		cost = 0.25
@@ -235,6 +236,17 @@ func leadAsk(ask, system string) (string, error) {
 	}
 	if strings.Contains(strings.ToLower(ask), "what's in the repo") {
 		return "The repo has " + strings.Join(repoFiles(), ", ") + ".", nil
+	}
+	// The journal: "remember X" is written to it, "what did I ask you to
+	// remember" is answered from it, so a lead that replaced this one can too.
+	journal := filepath.Join(os.Getenv("HIVE_BOX"), "notes.md")
+	if x, ok := strings.CutPrefix(ask, "remember "); ok {
+		appendFile(journal, "- promised: "+x+"\n")
+		return "Noted.", nil
+	}
+	if strings.Contains(ask, "you to remember") {
+		notes, _ := os.ReadFile(journal)
+		return "From my journal: " + strings.TrimSpace(string(notes)), nil
 	}
 	if f := strings.Fields(ask); len(f) == 2 && f[0] == "recheck" {
 		out, err := call("recheck", map[string]string{"task": f[1]}, time.Minute)
@@ -479,6 +491,17 @@ func worker(all, prompt, system string) (string, error) {
 		return "waiting for the warden", err
 	}
 	call("progress", map[string]string{"text": "making the change"}, time.Minute)
+	if strings.Contains(all, "FAKE:needpython") {
+		// As a real worker should: install it through the Hive, then use it.
+		if _, err := call("install", map[string]string{"tool": "python"}, 25*time.Minute); err != nil {
+			return "", fmt.Errorf("install python: %v", err)
+		}
+		out, err := exec.Command("python3", "-c", "import sys; print(sys.executable)").CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("python3 after the install: %v %s", err, out)
+		}
+		appendFile("PYTHON.md", string(out))
+	}
 	if strings.Contains(prompt, "FAKE:spawnhelper") { // the first turn only
 		if _, err := call("spawn", map[string]string{"brief": "FAKE helper: write the helper part"}, time.Minute); err != nil {
 			return "", err

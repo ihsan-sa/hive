@@ -781,10 +781,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 	switch {
 	case len(ch.Protected) > 0 && !m.C.Effects.Approved("merge", p.Name, t.SHA):
 		t.Stage = StagePerson
-		diff, _ := core.Git(m.C.WS.Project(p.Name), append([]string{"diff", ch.Base, t.SHA, "--"}, ch.Protected...)...)
-		a := core.Ask{Kind: "merge", Ref: t.ID + "@" + t.SHA, Project: p.Name, From: t.Worker,
-			Title:  fmt.Sprintf("Merge %q? It changes %s", t.Label(), strings.Join(ch.Protected, ", ")),
-			Detail: fmt.Sprintf("These hold the project's goals, score or settings. PR: %s\n\n%s", t.PR.URL, core.Clip(diff, 6000)), Options: []string{"merge", "leave open"}}
+		a := mergeAsk(t, p, ch)
 		// Saved before Weigh: a warden's answer may reach onPersonMerge first.
 		m.save(t, "waiting for an approval: changes "+strings.Join(ch.Protected, ", "))
 		who := "person"
@@ -794,7 +791,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 			m.C.Person.Ask(a)
 		}
 		if who == "person" {
-			m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q changes %s, which is yours to approve. It's waiting on you: %s", t.Label(), strings.Join(ch.Protected, ", "), t.PR.URL))
+			m.Chat.Notify(t.Chat, t.Thread, approveNotice(t.Label(), ch.Protected, t.PR.URL))
 		}
 	case ch.Small || m.C.Effects.Reviewed(p, ch, t.SHA):
 		t.Stage = StageMerging
@@ -861,6 +858,20 @@ func (m *Module) catchUp(t *Task, p core.Project, main, why string) (bool, error
 	t.SHA, t.Stage, t.Reason = next, StageTesting, ""
 	m.save(t, why+"; branch brought up to date at "+core.Short(next)+", testing again")
 	return true, nil
+}
+
+// mergeAsk asks the person to merge a change to protected files, carrying the
+// whole diff of those files so they see every change they approve.
+func mergeAsk(t *Task, p core.Project, ch core.Change) core.Ask {
+	return core.Ask{Kind: "merge", Ref: t.ID + "@" + t.SHA, Project: p.Name, From: t.Worker,
+		Title:  fmt.Sprintf("Merge %q? It changes %s", t.Label(), strings.Join(ch.Protected, ", ")),
+		Detail: "These hold the project's goals, score or settings. PR: " + t.PR.URL, Options: []string{"merge", "leave open"},
+		Diff: ch.ProtectedDiff}
+}
+
+// approveNotice tells the person a change is theirs and where to answer it.
+func approveNotice(label string, protected []string, url string) string {
+	return fmt.Sprintf("%q changes %s, which is yours to approve. Answer it in the control center's Waiting section, where you see the diff: in this chat, → then a. The PR: %s", label, strings.Join(protected, ", "), url)
 }
 
 func passFail(ok bool) string {

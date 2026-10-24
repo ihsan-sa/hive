@@ -1,22 +1,22 @@
  hive             │   textkit-2 › lead  working
 ──────────────────┼─────────────────────────────────────────────────────────────
- › Chats          │   Hello?
-   Dashboard      │   ▸ 1 reply  last 19:58
-   Waiting     3  │
-   Modules        │ ▌ you  20:22
-   Settings       │ ▌ The parser and the renderer are tangled together. Can
-                  │ ▌ you split the parser into its own package so reviewer
- ▾ textkit-2      │ ▌ can check it on its own?
- › lead           │ ▌ ▸ 2 replies  open →
-   writer         │
-   reviewer    ●  │   you  20:40
- ▾ hive-web       │   Also check whether the docs build still passes.
-   lead        ●  │   ▾ 1 reply
-   worker-2       │     lead  20:41
-   reviewer       │     It passes. I fixed two broken links in
-   tribunal       │     guide/install.md on the same branch.
+ › Chats          │   ▸ 1 reply  last 19:58
+   Dashboard      │
+   Waiting     3  │ ▌ you  20:22
+   Modules        │ ▌ The parser and the renderer are tangled together. Can
+   Settings       │ ▌ you split the parser into its own package so reviewer
+                  │ ▌ can check it on its own?
+ ▾ textkit-2      │ ▌ ▸ 2 replies  open →
+ › lead           │
+   writer         │   you  20:40
+   reviewer    ●  │   Also check whether the docs build still passes.
+ ▾ hive-web       │   ▾ 1 reply
+   lead        ●  │     lead  20:41
+   worker-2       │     It passes. I fixed two broken links in
+   reviewer       │     guide/install.md on the same branch.
+   tribunal       │
  ▸ website        │
-                  │
+                  │   3 waiting on you · a to answer
                   │  ╭─ new thread · lead ────────────────────────────────────╮
                   │  │ › Start a new thread with lead…                        │
                   │  ╰────────────────────────────────────────────────────────╯

@@ -124,3 +124,33 @@ func TestConfigAPIReportsALoadError(t *testing.T) {
 		t.Fatalf("lost settings after the bad seat: floor %v, egress %v", got.Floor, got.Egress)
 	}
 }
+
+// State carries the first lines of a diff over 1 MiB, and /api/waiting the
+// whole of it.
+func TestStateCarriesADiffPreview(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	j, err := core.OpenJournal(filepath.Join(ws.Root, "journal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pad := "+" + strings.Repeat("x", 99) + "\n"
+	diff := strings.Repeat(pad, (1<<20)/len(pad)+1) + "+the last line\n"
+	person := core.NewPerson(j)
+	a := person.Ask(core.Ask{Kind: "merge", Ref: "t1@abc", Title: "Merge?", Options: []string{"merge", "leave open"}, Diff: diff})
+	s := &server{a: &app.App{C: &core.Core{WS: ws, Person: person}}, info: api.DaemonInfo{Token: "t"}}
+	open := previews(s.a.C.Person.Open())
+	if len(open) != 1 || len(open[0].Diff) > diffPreview || !strings.HasPrefix(diff, open[0].Diff) || !strings.HasSuffix(open[0].Diff, "\n") {
+		t.Fatalf("state should carry whole lines from the diff's start, at most %d bytes: got %d", diffPreview, len(open[0].Diff))
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/waiting?id="+a.ID, nil)
+	req.Header.Set("Authorization", "Bearer t")
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+	var got core.Ask
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Diff != diff {
+		t.Fatalf("%d: /api/waiting should return the whole %d-byte diff, got %d (%v)", rec.Code, len(diff), len(got.Diff), err)
+	}
+}

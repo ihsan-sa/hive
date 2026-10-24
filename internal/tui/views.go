@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -237,7 +238,7 @@ func (m *model) runLine(r core.Run) string {
 	if r.Reason != "" && r.Status != core.StatusRunning {
 		extra = r.Reason
 	}
-	return fmt.Sprintf("%s  %s  turn %d  $%.2f  %s  %s", runLabel(r), status, r.Turn, r.Cost, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
+	return fmt.Sprintf("%s  %s  turn %d  $%.2f  %dk ctx  %s  %s", runLabel(r), status, r.Turn, r.Cost, r.Context/1000, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
 }
 
 // spark draws the last scores as a one-line chart.
@@ -426,6 +427,7 @@ func (m *model) viewDetail(d *detail) []string {
 		kv("project", r.Project+"  task "+r.Task)
 		kv("model", r.Harness+" "+r.Model)
 		kv("turns", fmt.Sprintf("%d  cost $%.2f  started %s", r.Turn, r.Cost, r.Created.Local().Format("Mon 15:04")))
+		kv("context", fmt.Sprintf("%dk tokens", r.Context/1000))
 		if r.Progress != "" {
 			kv("progress", r.Progress+"  "+ago(r.ProgressAt))
 		}
@@ -509,6 +511,8 @@ func (m *model) viewDetail(d *detail) []string {
 		}
 		lines = append(lines, "", stDim.Render("space grant or remove · r read its code again"))
 		return window(lines, top+d.sel, m.bodyHeight())
+	case "diff":
+		lines = append(lines, diffView(d.text, w)...)
 	default:
 		lines = append(lines, wrap(d.text, w)...)
 	}
@@ -570,6 +574,11 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.waitSel < len(asks) && m.optSel < len(asks[m.waitSel].Options)-1 {
 			m.optSel++
 		}
+	case "d":
+		if m.waitSel < len(asks) && asks[m.waitSel].Diff != "" {
+			a := asks[m.waitSel]
+			return m, m.push(detail{kind: "diff", id: a.ID, title: "what it changes", text: a.Diff})
+		}
 	case "enter":
 		if m.waitSel < len(asks) {
 			a := asks[m.waitSel]
@@ -607,6 +616,14 @@ func (m *model) viewWaiting() []string {
 					ls = append(ls, stDim.Render(l))
 				}
 			}
+			if a.Diff != "" { // as much of the diff as leaves the options on screen
+				diff := diffView(a.Diff, w)
+				n := max(3, m.bodyHeight()-len(ls)-2)
+				if len(diff) > n {
+					diff = diff[:n-1]
+				}
+				ls = append(append(ls, diff...), stDim.Render("… d the whole diff"))
+			}
 			var opts []string
 			for j, o := range a.Options {
 				if j == m.optSel && m.focus == 1 {
@@ -619,6 +636,44 @@ func (m *model) viewWaiting() []string {
 		lines = append(append(lines, indent(ls, gut)...), "")
 	}
 	return window(lines, sel, m.bodyHeight())
+}
+
+// diffView colours a unified diff and breaks its lines at w cells. Control
+// characters are shown as escapes, so a changed line can't restyle the
+// terminal or hide itself.
+func diffView(diff string, w int) []string {
+	var out []string
+	for _, l := range strings.Split(strings.TrimRight(diff, "\n"), "\n") {
+		st := stGood
+		switch {
+		case strings.HasPrefix(l, "+++"), strings.HasPrefix(l, "---"), strings.HasPrefix(l, "diff "), strings.HasPrefix(l, "index "):
+			st = stTitle
+		case strings.HasPrefix(l, "-"):
+			st = stBad
+		case strings.HasPrefix(l, "@@"):
+			st = stAccent
+		}
+		for _, p := range strings.Split(ansi.Hardwrap(visible(l), max(10, w), true), "\n") {
+			out = append(out, st.Render(p))
+		}
+	}
+	return out
+}
+
+// visible spells out control characters (ESC as \x1b), and tabs as spaces.
+func visible(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\t':
+			b.WriteString("    ")
+		case unicode.IsControl(r):
+			fmt.Fprintf(&b, "\\x%02x", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // ---- modules ---------------------------------------------------------------

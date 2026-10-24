@@ -292,8 +292,37 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.chScroll = scroll(m.chScroll, s, m.h-4)
 	case "n", "i":
 		return m, m.focusBox("")
+	case "a":
+		return m, m.toWaiting()
 	}
 	return m, nil
+}
+
+// toWaiting opens Waiting on what this chat was told is waiting on the person.
+func (m *model) toWaiting() tea.Cmd {
+	if len(m.st.Asks) == 0 {
+		return nil
+	}
+	chatOf := map[string]string{}
+	for _, p := range m.st.Projects {
+		for _, t := range p.Tasks {
+			chatOf[t.ID] = t.Chat
+		}
+	}
+	m.waitSel, m.optSel = 0, 0
+	for i, a := range m.st.Asks {
+		if id, _, _ := strings.Cut(a.Ref, "@"); chatOf[id] == m.chat {
+			m.waitSel = i
+			break
+		}
+	}
+	for i, r := range m.sideRows() {
+		if r.sec == secWaiting {
+			m.side = i
+		}
+	}
+	m.focus = 1
+	return m.pick(sideRow{sec: secWaiting})
 }
 
 // scroll moves an offset counted in lines up from the bottom.
@@ -405,6 +434,10 @@ func (m *model) viewChannel(w int) pane {
 	}
 	_, name := m.where()
 	bx := m.compose("new thread · "+name, "Start a new thread with "+name+"…", "", w-3)
+	if n := len(m.st.Asks); n > 0 && len(bx) < m.h-6 { // above the box, so it stays on screen
+		how := map[bool]string{true: "a to answer", false: "→ then a to answer"}[m.focus == 1 && !m.composing]
+		bx = append([]string{" " + stWarn.Render(clip(fmt.Sprintf("%d waiting on you · %s", n, how), w-6))}, bx...)
+	}
 	p.body = stack(append(lines, ""), bx, m.h-4, &m.chScroll, selStart, selEnd, true)
 	return p
 }
