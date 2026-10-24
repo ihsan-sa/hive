@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -21,8 +20,6 @@ type sideRow struct {
 	label  string
 	chatID string
 	group  bool
-	fold   bool   // a fold inside a group, closed until opened: ended agents
-	under  string // the fold this row sits in
 }
 
 // sideRows lists the sections, then one chat per project lead and per agent,
@@ -47,9 +44,6 @@ func (m *model) rows(all bool) []sideRow {
 		rows = append(rows, sideRow{sec: -1, key: key, label: label, group: true})
 		for _, c := range chats {
 			seen[c.chatID] = true
-			if c.under != "" && !all && !m.open[c.under] {
-				continue
-			}
 			if all || !m.closed[key] {
 				c.sec = -1
 				rows = append(rows, c)
@@ -62,24 +56,18 @@ func (m *model) rows(all bool) []sideRow {
 			seen["agent:"+r.ID] = true
 			out = append(out, sideRow{key: "agent:" + r.ID, label: runLabel(r), chatID: "agent:" + r.ID})
 		}
-		// Agent chats with history whose run has ended stay reachable, out of
-		// the way: in a fold of their own, and only for a day.
-		fold := "ended:" + p
-		var ended []sideRow
+		// Agent chats with history whose run has ended stay reachable.
 		for _, c := range m.st.Chats {
-			if c.Kind == "agent" && c.Project == p && !seen[c.ID] && (all || time.Since(m.endedAt(c)) < endedFor) {
-				ended = append(ended, sideRow{key: c.ID, label: "  " + c.Title, chatID: c.ID, under: fold})
+			if c.Kind == "agent" && c.Project == p && !seen[c.ID] {
+				out = append(out, sideRow{key: c.ID, label: c.Title + " (ended)", chatID: c.ID})
 			}
 		}
-		if len(ended) > 0 {
-			out = append(out, sideRow{key: fold, label: fmt.Sprintf("ended (%d)", len(ended)), fold: true})
-		}
-		return append(out, ended...)
+		return out
 	}
 	known := map[string]bool{"": true}
 	for _, p := range m.st.Projects {
 		known[p.Name] = true
-		group("p:"+p.Name, groupLabel(p.Name), append([]sideRow{{key: "project:" + p.Name, label: "lead", chatID: "project:" + p.Name}}, agents(p.Name)...))
+		group("p:"+p.Name, p.Name, append([]sideRow{{key: "project:" + p.Name, label: "lead", chatID: "project:" + p.Name}}, agents(p.Name)...))
 	}
 	// Agents of a project the state no longer lists (removed, or not yet
 	// loaded) keep a group of their own rather than dropping out of sight.
@@ -94,7 +82,7 @@ func (m *model) rows(all bool) []sideRow {
 	}
 	for _, p := range sortedKeys(others) {
 		if others[p] {
-			group("p:"+p, groupLabel(p), agents(p))
+			group("p:"+p, p, agents(p))
 		}
 	}
 	var hive []sideRow
@@ -104,34 +92,9 @@ func (m *model) rows(all bool) []sideRow {
 		}
 	}
 	if hive = append(hive, agents("")...); len(hive) > 0 {
-		group("p:", hiveGroup, hive)
+		group("p:", "hive", hive)
 	}
 	return rows
-}
-
-// hiveGroup labels the Hive's own lead and agents, apart from any project's,
-// a project named hive among them.
-const hiveGroup = "Hive-wide"
-
-// groupLabel is a project's group label, which never reads as the Hive's.
-func groupLabel(project string) string {
-	if strings.EqualFold(project, hiveGroup) {
-		return "project " + project
-	}
-	return project
-}
-
-// chatHint says in a line what a lead's chat is for, so the Hive's lead and
-// a project's lead never read alike; short, it only names the lead.
-func chatHint(c api.ChatView, short bool) string {
-	who, what := "the Hive-wide lead", ", for every project and the Hive itself"
-	if c.Kind == "project" {
-		who, what = "the lead of "+c.Project, ", for this project only"
-	}
-	if short {
-		return who
-	}
-	return who + what
 }
 
 func runLabel(r core.Run) string {
@@ -157,7 +120,6 @@ func (m *model) viewSidebar(w int) pane {
 			g = r.key
 		} else if r.chatID != "" {
 			news[g] += unread[r.chatID]
-			news[r.under] += unread[r.chatID]
 		}
 	}
 	rows := m.sideRows()
@@ -171,19 +133,10 @@ func (m *model) viewSidebar(w int) pane {
 				mark, name = "› ", stTitle.Render(name)
 			}
 			if r.sec == secWaiting && len(m.st.Asks) > 0 {
-				count = waitStyle(len(m.st.Asks)).Render(fmt.Sprint(len(m.st.Asks)))
+				count = stTitle.Render(fmt.Sprint(len(m.st.Asks)))
 			}
 			if n := m.fbUnseen(); r.sec == secFeedback && n > 0 {
 				count = stTitle.Render(fmt.Sprint(n))
-			}
-		case r.fold:
-			mark = "  ▸ "
-			if m.open[r.key] {
-				mark = "  ▾ "
-			}
-			mark, name = stDim.Render(mark), stDim.Render(name)
-			if !m.open[r.key] && news[r.key] > 0 {
-				count = stAccent.Render("●")
 			}
 		case r.group:
 			mark = "▾ "
@@ -192,11 +145,11 @@ func (m *model) viewSidebar(w int) pane {
 			}
 			mark, name = stDim.Render(mark), stDim.Render(name)
 			if m.closed[r.key] && news[r.key] > 0 {
-				count = stAccent.Render("●")
+				count = "●"
 			}
 		case r.chatID != "":
 			if unread[r.chatID] > 0 {
-				name, count = stTitle.Render(name), stAccent.Render("●")
+				name, count = stTitle.Render(name), "●"
 			}
 			if m.section == secChats && r.chatID == m.chat {
 				mark, name = "› ", stTitle.Render(r.label)
@@ -237,14 +190,6 @@ func (m *model) keySidebar(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, step(-1)
 	case "down", "j":
 		return m, step(1)
-	case " ", "enter", "right", "l", "left", "h":
-		if r.fold { // opens and closes in place; it holds no chat of its own
-			s := k.String()
-			m.open[r.key] = s == "right" || s == "l" || (s != "left" && s != "h" && !m.open[r.key])
-			return m, nil
-		}
-	}
-	switch k.String() {
 	case " ", "enter":
 		if r.group {
 			m.closed[r.key] = !m.closed[r.key]
@@ -282,7 +227,7 @@ func (m *model) keySidebar(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // as agents start and end; a row hidden in a collapsed group puts it on the
 // group, and a row that's gone leaves it where it was.
 func (m *model) sideAt(rows []sideRow) int {
-	for _, key := range []string{m.sideKey, m.foldOf(m.sideKey), m.groupOf(m.sideKey)} {
+	for _, key := range []string{m.sideKey, m.groupOf(m.sideKey)} {
 		for i, r := range rows {
 			if key != "" && r.key == key {
 				m.side = i
@@ -292,28 +237,6 @@ func (m *model) sideAt(rows []sideRow) int {
 	}
 	m.side = max(0, min(m.side, len(rows)-1))
 	return m.side
-}
-
-// foldOf is the key of the fold a chat row sits in, or "".
-func (m *model) foldOf(key string) string {
-	for _, r := range m.rows(true) {
-		if r.key == key {
-			return r.under
-		}
-	}
-	return ""
-}
-
-// endedFor is how long an ended agent's chat stays in the sidebar.
-const endedFor = 24 * time.Hour
-
-// endedAt is when an agent's chat went quiet: its run's last update, or the
-// chat's start for a run the state no longer lists.
-func (m *model) endedAt(c api.ChatView) time.Time {
-	if r, ok := m.run(strings.TrimPrefix(c.ID, "agent:")); ok {
-		return r.Updated
-	}
-	return c.Created
 }
 
 // groupOf is the key of the group a chat row sits in, or "".
@@ -338,34 +261,12 @@ func (m *model) pick(r sideRow) tea.Cmd {
 		m.section = r.sec
 	case r.chatID != "":
 		if m.chat != r.chatID {
-			m.switchChat(r.chatID)
+			m.chat, m.thread, m.threadSel, m.chScroll, m.chFree = r.chatID, "", -1, 0, false
 		}
 		m.section = secChats
 		cmd = m.fetchChat(r.chatID)
 	}
 	return tea.Batch(cmd, m.settle())
-}
-
-// place is where the person was in a chat: its open thread, the pick and
-// the scrolls, kept while they look at another chat.
-type place struct {
-	thread             string
-	threadSel          int
-	chScroll, thScroll int
-	chFree             bool
-}
-
-// switchChat leaves the current chat where it is and goes back to where the
-// person was in the next one; a chat not seen yet opens at its end.
-func (m *model) switchChat(id string) {
-	if m.chat != "" {
-		m.places[m.chat] = place{m.thread, m.threadSel, m.chScroll, m.thScroll, m.chFree}
-	}
-	p, ok := m.places[id]
-	if !ok {
-		p = place{threadSel: -1}
-	}
-	m.chat, m.thread, m.threadSel, m.chScroll, m.thScroll, m.chFree = id, p.thread, p.threadSel, p.chScroll, p.thScroll, p.chFree
 }
 
 // openChat jumps to a chat from elsewhere (an agent's log, the dashboard).
@@ -408,7 +309,7 @@ func (m *model) where() (group, name string) {
 			group = r.label
 		}
 		if r.chatID == m.chat && r.chatID != "" {
-			return group, strings.TrimSpace(r.label)
+			return group, r.label
 		}
 	}
 	c, _ := m.currentChat()
@@ -467,10 +368,6 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.focusBox("")
 		}
 	case "enter", "right":
-		if s == "right" && m.thread != "" && (m.threadSel < 0 || m.threadSel >= len(ts) || ts[m.threadSel].id == m.thread) {
-			m.focus = 2 // back over to the open thread
-			return m, m.focusBox(m.thread)
-		}
 		if m.threadSel >= 0 && m.threadSel < len(ts) {
 			m.thread = ts[m.threadSel].id
 			m.focus = 2
@@ -577,7 +474,7 @@ func (m *model) viewChannel(w int) pane {
 	if m.focus == 1 {
 		title = stTitle.Render(title)
 	}
-	p := pane{w: w, head: head(w, title, leadStatus(c.LeadStatus), "")}
+	p := pane{w: w, head: head(w, title, c.LeadStatus, "")}
 	if m.chat == "" {
 		p.body = []string{"", "   " + stDim.Render("Pick a chat on the left.")}
 		return p
@@ -605,18 +502,14 @@ func (m *model) viewChannel(w int) pane {
 		replies := fmt.Sprintf("%d %s", n, plural(n, "reply", "replies"))
 		switch {
 		case n == 0:
-		case m.isOpen(ts, i): // space toggles this whether or not the thread is selected
-			if sel {
-				add(stTitle.Render("▾ "+replies) + "  " + stDim.Render("open →"))
-			} else {
-				add(stDim.Render("▾ " + replies))
-			}
+		case sel:
+			add(stTitle.Render("▸ "+replies) + "  " + stDim.Render("open →"))
+		case m.isOpen(ts, i):
+			add(stDim.Render("▾ " + replies))
 			for _, r := range t.msgs[1:] {
 				add("  " + msgHead(r))
 				add(indent(m.body(r.Text, tw-2), "  ")...)
 			}
-		case sel:
-			add(stTitle.Render("▸ "+replies) + "  " + stDim.Render("open →"))
 		default:
 			add(stDim.Render(fmt.Sprintf("▸ %s  last %s", replies, t.msgs[n].At.Local().Format("15:04"))))
 		}
@@ -626,23 +519,14 @@ func (m *model) viewChannel(w int) pane {
 		lines = append(lines, "")
 	}
 	if len(ts) == 0 {
-		hint := "This is " + chatHint(c, false) + ". Press n to write."
+		hint := "Nothing here yet. Press n to write to the lead."
 		if c.Kind == "agent" {
 			hint = "Write to this agent; it reads your message after its current turn."
 		}
-		for _, l := range wrap(hint, tw) {
-			lines = append(lines, "   "+stDim.Render(l))
-		}
-		lines = append(lines, "")
+		lines = append(lines, "   "+stDim.Render(hint), "")
 	}
 	_, name := m.where()
-	invite := "Start a new thread with " + name + "…"
-	if c.Kind != "agent" { // the whole hint where the box has room for it on one line
-		if invite = "Write to " + chatHint(c, false) + "…"; visibleWidth(invite) > w-9 {
-			invite = "Write to " + chatHint(c, true) + "…"
-		}
-	}
-	bx := m.compose("new thread · "+name, invite, "", w-3)
+	bx := m.compose("new thread · "+name, "Start a new thread with "+name+"…", "", w-3)
 	if n := len(m.st.Asks); n > 0 && len(bx) < m.h-6 { // above the box, so it stays on screen
 		how := map[bool]string{true: "a to answer", false: "→ then a to answer"}[m.focus == 1 && !m.composing]
 		bx = append([]string{" " + stWarn.Render(clip(fmt.Sprintf("%d waiting on you · %s", n, how), w-6))}, bx...)
@@ -780,7 +664,7 @@ func msgHead(msg chat.Message) string {
 func who(msg chat.Message) string {
 	switch msg.From {
 	case "person":
-		return stYou.Render("you")
+		return stTitle.Render("you")
 	case "hive":
 		return stTitle.Render("hive")
 	}
@@ -788,7 +672,7 @@ func who(msg chat.Message) string {
 	if name == "" {
 		name = msg.From
 	}
-	return speaker(name).Render(name)
+	return stTitle.Render(name)
 }
 
 func plural(n int, one, many string) string {
@@ -814,12 +698,4 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// leadStatus hints a lead at work in green; idle stays faint.
-func leadStatus(s string) string {
-	if s == "working" {
-		return stGood.Render(s)
-	}
-	return s
 }

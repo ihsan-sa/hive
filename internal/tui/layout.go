@@ -6,63 +6,19 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Styling is bold, faint and reverse, with hints of colour: red for what
-// failed, green for what runs or was kept, amber for what waits on the
-// person, blue for the person, and a hue per agent in chats. Each colour has
-// a dark and a light terminal's shade; NO_COLOR drops every hue (noHue).
+// There is deliberately no theme: bold, faint and reverse, and red only for
+// what failed.
 var (
 	stTitle = lipgloss.NewStyle().Bold(true)
 	stDim   = lipgloss.NewStyle().Faint(true)
 	stBoldF = lipgloss.NewStyle().Bold(true).Faint(true)
 	stSel   = lipgloss.NewStyle().Reverse(true)
-
-	stBad, stGood, stWarn, stAccent, stYou lipgloss.Style
-	stAgents                               []lipgloss.Style // speakers other than the person, by name
+	stBad   = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: "#E5534B", Light: "#C4352B"})
+	// Kept for the status tree and run detail, which predate the design's palette.
+	stGood   = lipgloss.NewStyle()
+	stWarn   = stTitle
+	stAccent = stTitle
 )
-
-func hue(dark, light string) lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Dark: dark, Light: light})
-}
-
-func init() { setHue(true) }
-
-// setHue sets the palette, or with on false drops its hues for NO_COLOR:
-// what was coloured to stand out stays bold.
-func setHue(on bool) {
-	if !on {
-		stBad, stGood, stWarn, stAccent, stYou = stTitle, lipgloss.NewStyle(), stTitle, stTitle, stTitle
-		stAgents = []lipgloss.Style{stTitle}
-		stCode, stLink = lipgloss.NewStyle(), lipgloss.NewStyle().Underline(true)
-		return
-	}
-	stBad = hue("#E5534B", "#C4352B")
-	stGood = hue("#57AB5A", "#2A7A3B")
-	stWarn = hue("#DAAA3F", "#9A6700")
-	stAccent = hue("#39C5CF", "#1B7C83")
-	stYou = hue("#6CB6FF", "#0969DA").Bold(true)
-	stAgents = []lipgloss.Style{
-		hue("#DCBDFB", "#8250DF").Bold(true), // the lead's: every lead hashes here
-		hue("#F69D50", "#BC4C00").Bold(true),
-		hue("#56D4DD", "#1B7C83").Bold(true),
-		hue("#FC8DC7", "#BF3989").Bold(true),
-		hue("#8DDB8C", "#2A7A3B").Bold(true),
-	}
-	stCode = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	stLink = lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Underline(true)
-}
-
-// speaker is the colour a name speaks in: the person's own, the lead's, or
-// one picked by the name, so the same agent keeps its colour.
-func speaker(name string) lipgloss.Style {
-	if name == "lead" || len(stAgents) == 1 {
-		return stAgents[0]
-	}
-	h := 0
-	for _, r := range name {
-		h = h*31 + int(r)
-	}
-	return stAgents[1+(h&0x7fffffff)%(len(stAgents)-1)]
-}
 
 // pane is one column of the screen: a header row and a body.
 type pane struct {

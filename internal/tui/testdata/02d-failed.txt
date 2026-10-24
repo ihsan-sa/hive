@@ -12,7 +12,7 @@
  › lead               │   passes.                                      │
    writer             │   3 waiting on you · → then a to answer        │  ╭─ reply · lead ────────────────────────────╮
    reviewer        ●  │  ╭─ new thread · lead ───────────────────────╮ │  │ › Keep the alias for one release, then    │
- ▾ hive-web           │  │ › Write to the lead of textkit-2…         │ │  │   remove it in 0.9.                       │
+ ▾ hive-web           │  │ › Start a new thread with lead…           │ │  │   remove it in 0.9.                       │
    lead            ●  │  ╰───────────────────────────────────────────╯ │  ╰───────────────────────────────────────────╯
 ──────────────────────┴────────────────────────────────────────────────┴────────────────────────────────────────────────
  ✗ not sent · connection lost
