@@ -18,8 +18,10 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/stats"
 )
 
 // designModel holds the data the design's frames show.
@@ -61,6 +63,7 @@ func designModel(w, h int) *model {
 				Text: "The digest lists runs that stopped but not why the person stopped them."},
 		},
 		Config: core.DefaultConfig(), Version: "0.8.2", Workspace: "/home/you/hive",
+		Stats:  designStats(),
 		Chats: []api.ChatView{
 			{Chat: chat.Chat{ID: "project:textkit-2", Title: "textkit-2", Kind: "project", Project: "textkit-2"}, LeadStatus: "working"},
 			{Chat: chat.Chat{ID: "agent:tk-r", Title: "reviewer", Kind: "agent", Project: "textkit-2"}, Unread: 1},
@@ -89,6 +92,22 @@ func designModel(w, h int) *model {
 	}
 	m.openChat("project:textkit-2")
 	return m
+}
+
+// designStats are the figures the frames show.
+func designStats() *stats.View {
+	return &stats.View{
+		Today: stats.Spend{Total: 4.5, Projects: map[string]float64{"": 3, "hive-web": 1.5}, Roles: map[string]float64{"lead": 3, "worker": 1.5}},
+		Month: stats.Spend{Total: 61.2, Projects: map[string]float64{"": 20.4, "hive-web": 30.8, "textkit-2": 10}, Roles: map[string]float64{"lead": 25, "worker": 30.2, "reviewer": 6}},
+		Hour:  stats.Activity{Messages: 14, Turns: 9, Started: 1, Finished: 2, Merged: 1},
+		Day:   stats.Activity{Messages: 212, Turns: 140, Started: 18, Finished: 16, Merged: 7, Reverted: 1},
+		All: stats.AllTime{Since: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), Runs: map[string]int{"lead": 3, "worker": 120, "reviewer": 96},
+			AgentHours: 311.4, Turns: 5120, Spend: 402.75,
+			Tokens: harness.Tokens{Input: 1_200_000, Output: 3_400_000, CacheRead: 820_000_000, CacheWrite: 41_000_000},
+			Models: map[string]stats.Model{"opus": {Turns: 3000, Spend: 350, Tokens: harness.Tokens{Input: 700_000, Output: 2_000_000, CacheRead: 500_000_000, CacheWrite: 30_000_000}},
+				"sonnet": {Turns: 2120, Spend: 52.75, Tokens: harness.Tokens{Input: 500_000, Output: 1_400_000, CacheRead: 320_000_000, CacheWrite: 11_000_000}}},
+			Merged: 88, Reverted: 3, Releases: 6},
+	}
 }
 
 // designFeed is the dashboard feed the frames show.
@@ -184,6 +203,7 @@ func TestDesignFrames(t *testing.T) {
 		{"04a-80x24-channel", 80, 24, func(m *model) { m.threadSel = 1 }},
 		{"05a-dashboard-all", 120, 36, func(m *model) { designFeed(m); m.feedSel = 13 }},
 		{"05a-dashboard-80x24", 80, 24, func(m *model) { designFeed(m); m.feedSel = 13 }},
+		{"05b-dashboard-status", 120, 36, func(m *model) { m.pick(sideRow{sec: secDash}); m.dashTree, m.focus = true, 1 }},
 		{"06a-waiting-80x24", 80, 24, func(m *model) { m.pick(sideRow{sec: secWaiting}) }},
 		{"06b-modules-80x24", 80, 24, func(m *model) { m.pick(sideRow{sec: secModules}) }},
 		{"06c-settings-80x24", 80, 24, func(m *model) { m.pick(sideRow{sec: secSettings}); m.setSel = 1 }},
