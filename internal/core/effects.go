@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -29,7 +30,10 @@ import (
 //     descend from the main commit the checkout started at;
 //   - only hive/* branches are ever pushed; main changes only by merge;
 //   - checks run on the exact commit in a clean checkout the agent can't touch;
-//   - a merge is pinned to the commit that passed and was read;
+//   - a merge is pinned to the commit that passed and was read, and waits
+//     for every one of the forge's own checks to pass on it;
+//   - a read is of a change's own diff, so it holds for a later head only
+//     while that diff is the same;
 //   - changes to protected paths (goals, the score and the files it names,
 //     the project's settings) are the person's to merge;
 //   - a change to a high-class path needs two separate land reads of its
@@ -50,7 +54,10 @@ type Effects struct {
 	mu        sync.Mutex
 	checks    map[string]Check
 	verdicts  map[string]Verdict
-	lands     map[string][]string // project@sha -> reviewer runs that said land, since the last fix
+	lands     map[string][]string               // project@sha -> reviewer runs that said land, since the last fix
+	diffLands map[string][]string               // project#diff -> the same, for every head with that own diff
+	diffVerds map[string]Verdict                // project#diff -> the latest verdict on that own diff
+	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
 	hostMade  map[string]HostCommit
 	approvals map[string]bool
 }
@@ -77,7 +84,26 @@ type Verdict struct {
 	Summary  string    `json:"summary"`
 	Findings []Finding `json:"findings,omitempty"`
 	Advice   []string  `json:"advice,omitempty"` // with a land: worth doing later, not a blocker
+	// Diff names the change's own diff the reviewer read (DiffID), so the read
+	// carries to any head with the same own diff, and to no other.
+	Diff string `json:"diff,omitempty"`
 }
+
+// OutsideRead is a security read from outside the Hive (the box's perms seat
+// or its architect) of one head, recorded by the person.
+type OutsideRead struct {
+	Project string    `json:"project"`
+	SHA     string    `json:"sha"`
+	Diff    string    `json:"diff"` // DiffID of the head's own diff
+	PR      int       `json:"pr,omitempty"`
+	By      string    `json:"by"`      // perms | architect
+	Verdict string    `json:"verdict"` // land | fix
+	Note    string    `json:"note,omitempty"`
+	At      time.Time `json:"at"`
+}
+
+// OutsideReaders are who may give an outside read.
+var OutsideReaders = []string{"perms", "architect"}
 
 // Finding is one thing the reviewer wants fixed.
 type Finding struct {
@@ -98,7 +124,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}}
 	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -117,6 +143,23 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			} else if v.Verdict != "land" {
 				delete(e.lands, k)
 			}
+			if v.Diff != "" {
+				k := v.Project + "#" + v.Diff
+				e.diffVerds[k] = v
+				if v.Verdict == "land" && !slices.Contains(e.diffLands[k], v.Run) {
+					e.diffLands[k] = append(e.diffLands[k], v.Run)
+				} else if v.Verdict != "land" {
+					delete(e.diffLands, k)
+				}
+			}
+		case "effect.read":
+			var o OutsideRead
+			ev.Decode(&o)
+			k := o.Project + "#" + o.Diff
+			if e.outside[k] == nil {
+				e.outside[k] = map[string]OutsideRead{}
+			}
+			e.outside[k][o.By] = o
 		case "effect.hostcommit":
 			var h HostCommit
 			ev.Decode(&h)
@@ -578,7 +621,7 @@ func (e *Effects) GetCheck(project, sha, kind string) (Check, bool) {
 }
 
 // RecordVerdict accepts a verdict only from a read-only reviewer run the Hive
-// started on exactly that commit.
+// started on exactly that commit, and binds it to the diff that run was given.
 func (e *Effects) RecordVerdict(v Verdict) error {
 	r, ok := e.runs.Get(v.Run)
 	if !ok || r.Role != "reviewer" || !r.ReadOnly || r.Inputs["sha"] != v.SHA || r.Project != v.Project {
@@ -587,6 +630,7 @@ func (e *Effects) RecordVerdict(v Verdict) error {
 	if v.Verdict != "land" && v.Verdict != "fix" {
 		return fmt.Errorf("verdict must be land or fix")
 	}
+	v.Diff = DiffID(r.Inputs["diff.patch"])
 	e.j.MustAppend("effect.verdict", v)
 	return nil
 }
@@ -599,11 +643,84 @@ func (e *Effects) GetVerdict(project, sha string) (Verdict, bool) {
 	return v, ok
 }
 
-// Reads returns the reviewer runs that said land on exactly sha since its last fix.
-func (e *Effects) Reads(project, sha string) []string {
+// Reads returns the reviewer runs that said land since the last fix, on
+// exactly sha or on a head with the same own diff (DiffID; "" for none).
+func (e *Effects) Reads(project, sha, diff string) []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return slices.Clone(e.lands[project+"@"+sha])
+	out := slices.Clone(e.lands[project+"@"+sha])
+	if diff != "" {
+		for _, r := range e.diffLands[project+"#"+diff] {
+			if !slices.Contains(out, r) {
+				out = append(out, r)
+			}
+		}
+	}
+	return out
+}
+
+// verdict is the latest verdict on the own diff, else on exactly sha.
+func (e *Effects) verdict(project, sha, diff string) (Verdict, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if v, ok := e.diffVerds[project+"#"+diff]; ok && diff != "" {
+		return v, true
+	}
+	v, ok := e.verdicts[project+"@"+sha]
+	return v, ok
+}
+
+// RecordRead records an outside read (OutsideReaders) of a head whose own
+// diff is o.Diff; it holds for every head with that own diff.
+func (e *Effects) RecordRead(o OutsideRead) error {
+	if !slices.Contains(OutsideReaders, o.By) {
+		return fmt.Errorf("an outside read is by one of %s, not %q", strings.Join(OutsideReaders, ", "), o.By)
+	}
+	if o.Verdict != "land" && o.Verdict != "fix" {
+		return fmt.Errorf("verdict must be land or fix")
+	}
+	if o.Project == "" || o.SHA == "" || o.Diff == "" {
+		return errors.New("an outside read names a project, a head and its diff")
+	}
+	o.At = time.Now().UTC()
+	e.j.MustAppend("effect.read", o)
+	return nil
+}
+
+// OutsideRead is the latest outside read of the own diff: a fix from any
+// reader outweighs a land from another.
+func (e *Effects) OutsideRead(project, diff string) (OutsideRead, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var out OutsideRead
+	for _, by := range OutsideReaders {
+		if o, ok := e.outside[project+"#"+diff][by]; ok && out.Verdict != "fix" {
+			out = o
+		}
+	}
+	return out, out.By != "" && diff != ""
+}
+
+// DiffID names a change's own diff (the diff from its merge base with main to
+// its head) so that a head whose own diff is the same gets the same name,
+// whatever main it was brought up to date with. Hunk positions and blob ids
+// are left out, since main moving shifts them without changing the change;
+// everything else, context lines included, counts.
+func DiffID(diff string) string {
+	if strings.TrimSpace(diff) == "" {
+		return ""
+	}
+	h := sha256.New()
+	for _, l := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(l, "index "):
+			continue
+		case strings.HasPrefix(l, "@@"):
+			l = "@@"
+		}
+		h.Write([]byte(l + "\n"))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 // Approve records the approval of a commit (the person's, or a warden's
@@ -637,8 +754,12 @@ type Change struct {
 	Small     bool     `json:"small"`
 	Protected []string `json:"protected,omitempty"`
 	High      []string `json:"high,omitempty"` // files in a high or root class
-	Root      []string `json:"root,omitempty"` // files that run with elevated rights
-	Diff      string   `json:"-"`
+	// Security are files on main's SecurityList: the change merges only
+	// after an outside read (perms seat or architect) said land on its diff.
+	Security []string `json:"security,omitempty"`
+	Root     []string `json:"root,omitempty"`    // files that run with elevated rights
+	DiffID   string   `json:"diff_id,omitempty"` // names Diff (DiffID)
+	Diff     string   `json:"-"`
 	// ProtectedDiff is the diff of the protected files alone, shown to the person who approves it.
 	ProtectedDiff string `json:"-"`
 }
@@ -670,6 +791,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	if cfg.Score != nil {
 		protected = append(protected, cfg.Score.Evaluator()...)
 	}
+	security := ParseList(e.ReadFile(p, mainSHA, SecurityList), "paths")
 	docsOnly := true
 	for _, l := range strings.Split(stat, "\x00") {
 		f := strings.SplitN(l, "\t", 3)
@@ -687,6 +809,9 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		if under(file, cfg.Root) {
 			c.Root = append(c.Root, file)
 		}
+		if matchAny(file, security) {
+			c.Security = append(c.Security, file)
+		}
 		// .gitattributes picks merge drivers: merge=union on code would
 		// quietly keep both sides of every conflict in it.
 		if under(file, cfg.High) || under(file, cfg.Root) || file == ".gitattributes" || strings.HasSuffix(file, "/.gitattributes") {
@@ -698,12 +823,88 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 			docsOnly = false
 		}
 	}
-	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && !p.Self
-	c.Diff, _ = Git(dir, "diff", base, sha)
+	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Security) == 0 && !p.Self
+	// Binary and full-index, so a binary file (or a script git takes for one,
+	// with a NUL byte in it) carries its content into the diff and DiffID, and
+	// two different blobs never read as the same change.
+	c.Diff, _ = Git(dir, "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", base, sha)
+	c.DiffID = DiffID(c.Diff)
 	if len(c.Protected) > 0 {
 		c.ProtectedDiff, _ = Git(dir, append([]string{"--literal-pathspecs", "diff", "--no-renames", base, sha, "--"}, c.Protected...)...)
 	}
 	return c, nil
+}
+
+// SecurityList is the project's list of paths a change to which merges only
+// after a security read from outside the Hive (the box's perms seat or its
+// architect), and whose required_checks are the forge's checks that must
+// succeed on a head before it merges. It is read from main, so a change
+// can't move its own bar.
+const SecurityList = "tests/LANDING-security.toml"
+
+// ParseList reads the quoted entries of one array in the list: TOML as the
+// list writes it, `key = [ ... ]` with # comments.
+func ParseList(raw, key string) []string {
+	var out []string
+	in := false
+	for _, l := range strings.Split(raw, "\n") {
+		l = strings.TrimSpace(l)
+		if !in {
+			k, v, ok := strings.Cut(l, "=")
+			if !ok || strings.TrimSpace(k) != key {
+				continue
+			}
+			in, l = true, strings.TrimSpace(v)
+		}
+		for {
+			i := strings.IndexAny(l, "\"#]")
+			if i < 0 || l[i] == '#' {
+				break
+			}
+			if l[i] == ']' {
+				return out
+			}
+			j := strings.IndexByte(l[i+1:], '"')
+			if j < 0 {
+				break
+			}
+			out = append(out, l[i+1:i+1+j])
+			l = l[i+j+2:]
+		}
+	}
+	return out
+}
+
+// matchAny reports whether file matches one of the list's patterns: `*`
+// stays inside one path segment, `**` crosses segments.
+func matchAny(file string, patterns []string) bool {
+	for _, pat := range patterns {
+		if globMatch(strings.Split(pat, "/"), strings.Split(file, "/")) {
+			return true
+		}
+	}
+	return false
+}
+
+func globMatch(pat, segs []string) bool {
+	if len(pat) == 0 {
+		return len(segs) == 0
+	}
+	if pat[0] == "**" {
+		for i := 0; i <= len(segs); i++ {
+			if globMatch(pat[1:], segs[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(segs) == 0 {
+		return false
+	}
+	if ok, _ := path.Match(pat[0], segs[0]); !ok {
+		return false
+	}
+	return globMatch(pat[1:], segs[1:])
 }
 
 // under reports whether file is one of paths or inside one of them.
@@ -742,11 +943,21 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if !ch.Small && !e.readOK(p, ch, m.SHA) {
 		return "", fmt.Errorf("refusing to merge %s: no land verdict bound to that exact commit", short(m.SHA))
 	}
+	if o, ok := e.OutsideRead(p.Name, ch.DiffID); len(ch.Security) > 0 && (!ok || o.Verdict != "land") {
+		return "", fmt.Errorf("refusing to merge %s: it changes %s, on %s, and no security read from the box's perms seat or architect said land on its diff", short(m.SHA), strings.Join(ch.Security, ", "), SecurityList)
+	}
+	runs, err := e.Forge.Checks(p.Repo, m.SHA)
+	if err != nil {
+		return "", err
+	}
+	if st, which := ChecksState(runs, e.RequiredChecks(p, m.Main)); st != CheckPass {
+		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there (%s: %s)", short(m.SHA), st, CheckNames(which))
+	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
 	if err != nil {
 		return "", err
 	}
-	e.j.MustAppend("effect.merged", map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root})
+	e.j.MustAppend("effect.merged", map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID})
 	return merged, nil
 }
 
@@ -755,41 +966,84 @@ type NeedsPerson struct{ Reason string }
 
 func (n *NeedsPerson) Error() string { return "needs the person: " + n.Reason }
 
+// RequiredChecks are the forge's checks main's list says must succeed on a
+// head before it merges.
+func (e *Effects) RequiredChecks(p Project, mainSHA string) []string {
+	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "required_checks")
+}
+
+// ChecksState sums up the forge's checks on one head, the worst first: a
+// failure, then one that can't start, then one still running, then a
+// required check that hasn't succeeded (not reported yet, or neutral or
+// skipped), which holds as pending. Otherwise it is a pass: with nothing
+// required, no checks at all is a pass. which are the checks in that state.
+func ChecksState(runs []CheckRun, required []string) (state string, which []CheckRun) {
+	for _, st := range []string{CheckFail, CheckCantStart, CheckPending} {
+		for _, r := range runs {
+			if r.State == st {
+				which = append(which, r)
+			}
+		}
+		if len(which) > 0 {
+			return st, which
+		}
+	}
+	for _, name := range required {
+		i := slices.IndexFunc(runs, func(r CheckRun) bool { return r.Name == name })
+		switch {
+		case i < 0:
+			which = append(which, CheckRun{Name: name, State: CheckPending, Detail: "required, not reported yet"})
+		case runs[i].State != CheckPass:
+			which = append(which, CheckRun{Name: name, State: CheckPending, Detail: "required, but " + runs[i].State, URL: runs[i].URL})
+		}
+	}
+	if len(which) > 0 {
+		return CheckPending, which
+	}
+	return CheckPass, nil
+}
+
+// CheckNames lists checks by name, for a message.
+func CheckNames(runs []CheckRun) string {
+	var names []string
+	for _, r := range runs {
+		if !slices.Contains(names, r.Name) {
+			names = append(names, r.Name)
+		}
+	}
+	return strings.Join(names, ", ")
+}
+
+// readOK reports whether sha has the reads it needs. A read is of a change's
+// own diff, so it carries to a later head of it (main merged in) only while
+// that head's own diff is the same, and a conflict resolution or anything
+// else that changes the change's own files needs a new read.
 func (e *Effects) readOK(p Project, ch Change, sha string) bool {
 	project := p.Name
 	if p.Self || len(ch.High) > 0 {
-		// A release names the read of each merged head, so no verdict carries
-		// over from another commit; a high class needs a second, separate read.
+		// A release names the read of each merged head; a high class needs a
+		// second, separate read.
 		need := 1
 		if len(ch.High) > 0 {
 			need = 2
 		}
-		return len(e.Reads(project, sha)) >= need
+		return len(e.Reads(project, sha, ch.DiffID)) >= need
 	}
-	if v, ok := e.GetVerdict(project, sha); ok {
+	if v, ok := e.verdict(project, sha, ch.DiffID); ok {
 		return v.Verdict == "land"
 	}
 	h, ok := e.HostMade(project, sha)
-	if !ok {
-		return false
-	}
-	switch h.Kind {
-	case "revert", "setup":
-		return true
-	case "update":
-		v, ok := e.GetVerdict(project, h.Reviewed)
-		return ok && v.Verdict == "land"
-	}
-	return false
+	return ok && (h.Kind == "revert" || h.Kind == "setup")
 }
 
 // Reviewed reports whether sha, classified as ch, has the reads it needs to merge.
 func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.readOK(p, ch, sha) }
 
 // UpdateBranch merges main into the reviewed commit in a clean host checkout.
-// The result is host-made, so the verdict on the reviewed commit carries, but
-// it is tested again before it can merge. A base names the commit the merge
-// is taken from instead of the common ancestor: the branch's own commit that
+// The result is host-made; the read of the reviewed commit carries while the
+// change's own diff stays the same, and it is tested again before it can
+// merge. A base names the commit the merge is taken from instead of the
+// common ancestor: the branch's own commit that
 // main already holds as a squashed checkpoint, so only what came after it is
 // laid onto main.
 //
