@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -139,7 +140,7 @@ func TestModuleHarnessKey(t *testing.T) {
 	if env, err := tok.AgentEnv(Login{Harness: "cursor"}, ""); err != nil || !slices.Equal(env, []string{"CURSOR_API_KEY=key_123"}) {
 		t.Fatalf("stored key: %q %v", env, err)
 	}
-	if fi, _ := os.Stat(c.WS.HarnessKey("cursor")); fi.Mode().Perm() != 0o600 {
+	if fi, _ := os.Stat(c.WS.HarnessKey("cursor")); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 { // Windows has no Unix modes
 		t.Fatalf("key file mode %v", fi.Mode())
 	}
 	if env, err := tok.AgentEnv(Login{Harness: "opencode"}, ""); err != nil || env != nil {
