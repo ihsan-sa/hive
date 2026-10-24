@@ -33,6 +33,9 @@
 ## 2026-10-22 System prompt inline inside sandboxes, file outside
 - Decision: sandboxed turns pass `--append-system-prompt <text>`; bare Windows turns pass a file | Why: Windows argv is capped at 32k; inside the sandbox argv goes via the spec file with Linux limits, and older Claude Code builds may lack the -file flag | Tradeoff: two code paths in the Claude adapter.
 
+## 2026-10-22 A full lead compacts; it keeps a journal instead of rotating
+- Decision: no lead rotation. Each turn records the session's context size (the last reply's input plus cache tokens) on the run, shown in the control center; a lead keeps its journal in `$HIVE_BOX/notes.md`, and a lead that replaces one in a chat starts with that journal | Why: Claude Code 2.1.308 auto-compacts under `-p --resume` (a `compact_boundary` with `trigger: auto` in stream-json; the session went on and still recalled what it was told), so a lead neither dies nor errors at the limit | Tradeoff: compaction's summary is generic and comes late, near the window; the journal is what the lead chooses to keep.
+
 ## 2026-10-22 Agents install their own runtimes
 - Decision: python, uv, node and go go into `.hive/tools` through `hive agent install`, with no root and no one asked; the person is told after. Agents see the folder read-only on PATH; the install runs in its own sandbox that may write it | Why: the owner's first live run sat blocked on a warden request for python, and he asked that the Hive install such things itself | Tradeoff: one version of each tool for every agent; a root install still goes to the person.
 
@@ -62,3 +65,6 @@
 
 ## 2026-10-23 The Hive's own repo guards its root paths by default
 - Decision: self projects always class the sandbox, the risk module, setup and the installers as root, and the gate's credential code, harness logins, release/daemon and the warden/tribunal prompts as high, joined in `Classify` from the binary (docs/root-paths.md) | Why: the Hive's project.json named no classes, so the code that acts outside the box got one read and released unasked | Tradeoff: more changes to the Hive need two reads, and root ones wait for the person at release.
+
+## 2026-10-24 Sharing has three levels
+- Decision: a project is shared, private or isolated (docs/sharing.md); private is covered from every other run and walled from reach both ways like isolated, while its own runs mount the shared Hive like a shared project's | Why: the person listed "sharing-has-three-levels" with no detail, and the spec offers only the two ends; a one-way wall keeps a project's work out of sight without cutting its agents off from the Hive's records | Tradeoff: the middle level is a reading, not the person's words, and is listed as an open question; it reuses the isolated cover paths (`kb/isolated/`), so names still say "isolated" where they mean hidden
