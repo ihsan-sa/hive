@@ -72,10 +72,10 @@ func TestNullProjectsFromV010(t *testing.T) {
 	}
 }
 
-// TestInstallShowsOnlyWhenRecorded: a module is cloned and recorded out of
-// sight and appears only whole, with its release; nothing of the clone stays
-// beside it.
-func TestInstallShowsOnlyWhenRecorded(t *testing.T) {
+// TestInstallMovesInWhole: a module is cloned and recorded out of sight and
+// moved into .modules/ whole, so it never lists without its files or its
+// release, and a failed clone leaves nothing behind.
+func TestInstallMovesInWhole(t *testing.T) {
 	ws := core.Workspace{Root: t.TempDir()}
 	if err := ws.Init(); err != nil {
 		t.Fatal(err)
@@ -85,30 +85,52 @@ func TestInstallShowsOnlyWhenRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer j.Close()
-	r := New(ws, j)
-	src := filepath.Join(t.TempDir(), "greet")
+	src := filepath.Join(t.TempDir(), "ledger")
 	os.MkdirAll(src, 0o755)
-	os.WriteFile(filepath.Join(src, "skill.md"), []byte("PLUM42\n"), 0o644)
-	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"commit", "-q", "-m", "one"}} {
-		if _, err := core.Git(src, args...); err != nil {
-			t.Fatal(err)
+	os.WriteFile(filepath.Join(src, "module.json"), []byte(`{"name": "ledger"}`), 0o644)
+	os.WriteFile(filepath.Join(src, "ledger.md"), []byte("# ledger\n"), 0o644)
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "ledger"}} {
+		if out, err := core.Git(src, args...); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
 		}
 	}
-	os.MkdirAll(filepath.Join(ws.Modules(), ".other.installing", ".git"), 0o755) // another install, half there
+	r := New(ws, j)
+	if _, err := r.Install(filepath.Join(t.TempDir(), "missing"), "gone"); err == nil {
+		t.Fatal("a clone of nothing installed")
+	}
+	os.MkdirAll(filepath.Join(ws.Modules(), ".other-1", ".git"), 0o755) // another install, half there
 	if _, ok := r.Get("other"); ok {
 		t.Fatal("a module still installing is listed")
 	}
-	m, err := r.Install(src, "greet")
-	if err != nil {
-		t.Fatal(err)
+	os.RemoveAll(filepath.Join(ws.Modules(), ".other-1"))
+	if m, err := r.Install(src, "ledger"); err != nil || m.Source.Release == "" || m.Source.Source != src {
+		t.Fatalf("installed without its record: %+v %v", m.Source, err)
 	}
-	if m.Source.Release == "" || m.Source.Source != src {
-		t.Fatalf("installed without its record: %+v", m.Source)
-	}
-	if core.Exists(filepath.Join(ws.Modules(), ".greet.installing")) {
-		t.Fatal("the clone's staging folder stayed behind")
-	}
-	if _, err := r.Install(src, "greet"); err == nil {
+	if _, err := r.Install(src, "ledger"); err == nil {
 		t.Fatal("installed over an existing module")
+	}
+	entries, _ := os.ReadDir(ws.Modules())
+	for _, e := range entries {
+		if e.Name() != "ledger" && e.Name()[0] == '.' {
+			t.Fatalf("left behind: %s", e.Name())
+		}
+	}
+	if m, ok := r.Get("ledger"); !ok || !core.Exists(filepath.Join(m.Dir, "ledger.md")) {
+		t.Fatalf("installed %+v without its file", m)
+	}
+	if _, ok := r.Get("gone"); ok {
+		t.Fatal("the failed install lists")
+	}
+	// A newer commit of the source reaches the files, not only the record.
+	os.WriteFile(filepath.Join(src, "ledger.md"), []byte("# ledger, newer\n"), 0o644)
+	if out, err := core.Git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "newer"); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if changed := r.Update(); len(changed) != 1 {
+		t.Fatalf("update changed %v", changed)
+	}
+	m, _ := r.Get("ledger")
+	if got, _ := os.ReadFile(filepath.Join(m.Dir, "ledger.md")); string(got) != "# ledger, newer\n" {
+		t.Fatalf("updated to %s, but the file reads %q", m.Source.Release, got)
 	}
 }
