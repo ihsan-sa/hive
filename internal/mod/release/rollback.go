@@ -108,11 +108,15 @@ func (m *Module) Report() {
 }
 
 // rolledBack is a release this Hive rolled back from.
-func (m *Module) rolledBack(tag string) (back bool) {
+func (m *Module) rolledBack(tag string) bool { return m.rolledBackFrom()[tag] }
+
+// rolledBackFrom are the releases this Hive rolled back from.
+func (m *Module) rolledBackFrom() map[string]bool {
+	back := map[string]bool{}
 	m.C.J.Replay(func(e core.Event) {
 		var x struct{ From string }
-		if e.Kind == "hive.rolledback" && e.Decode(&x) == nil && x.From == tag {
-			back = true
+		if e.Kind == "hive.rolledback" && e.Decode(&x) == nil {
+			back[x.From] = true
 		}
 	})
 	return back

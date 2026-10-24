@@ -20,7 +20,7 @@ import (
 
 func live(t *testing.T) {
 	if os.Getenv("HIVE_E2E_HARNESS") == "" {
-		t.Skip("set HIVE_E2E_HARNESS=claude to run real agents")
+		t.Skip("set HIVE_E2E_HARNESS=claude (or codex) to run real agents")
 	}
 }
 
