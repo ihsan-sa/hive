@@ -227,3 +227,36 @@ func TestChecksNewestAttemptByID(t *testing.T) {
 		t.Fatalf("runs %+v, err %v", runs, err)
 	}
 }
+
+// ReadyPR runs gh pr ready, a write, only while the draft's head is the
+// commit it names; a moved head or a PR already ready runs nothing.
+func TestGitHubReadyPRAtItsHead(t *testing.T) {
+	head, draft := "aaaa1111", true
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		if args[0] == "pr" && args[1] == "view" {
+			return `{"number":7,"state":"OPEN","headRefOid":"` + head + `","isDraft":` + map[bool]string{true: "true", false: "false"}[draft] + `}`, "", nil
+		}
+		return "", "", nil
+	})
+	readies := func() (n int) {
+		for _, c := range *calls {
+			if c[0] == "pr" && c[1] == "ready" {
+				n++
+			}
+		}
+		return n
+	}
+	if err := (GitHub{}).ReadyPR("o/r", 7, "bbbb2222"); err == nil || readies() != 0 {
+		t.Fatalf("readied a moved head: %v, %d", err, readies())
+	}
+	if err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || readies() != 1 {
+		t.Fatalf("ready at its head: %v, %d", err, readies())
+	}
+	draft = false
+	if err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || readies() != 1 {
+		t.Fatalf("readied one already ready: %v, %d", err, readies())
+	}
+	if !ghWrites([]string{"pr", "ready", "7"}) {
+		t.Fatal("gh pr ready isn't counted a write")
+	}
+}
