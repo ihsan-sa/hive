@@ -3,6 +3,7 @@ package release
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,13 +44,13 @@ func serveAll(t *testing.T, latest string, byTag map[string]map[string]string, l
 		case !strings.HasPrefix(p, "/me/hive/releases/download/") || !known:
 			http.NotFound(w, r)
 		case name == "checksums.txt":
-			for name, body := range assets {
-				h := sha256.Sum256([]byte(body))
-				if lie {
-					h[0]++
-				}
-				w.Write([]byte(hex.EncodeToString(h[:]) + "  " + name + "\n"))
+			w.Write(checksums(assets, lie))
+		case name == SigName && signWith != nil:
+			sig, err := Sign(signWith, signFor+tag, checksums(assets, lie))
+			if err != nil {
+				t.Error(err)
 			}
+			w.Write([]byte(sig + "\n"))
 		case assets[name] != "":
 			w.Write([]byte(assets[name]))
 		default:
@@ -60,6 +61,24 @@ func serveAll(t *testing.T, latest string, byTag map[string]map[string]string, l
 	site, api, rels := Site, API, releases
 	t.Cleanup(func() { Site, API, releases = site, api, rels })
 	Site, API = srv.URL, srv.URL
+}
+
+// signWith is the seed the release site signs with, none when nil; signFor
+// prefixes the tag it signs for.
+var signWith []byte
+var signFor string
+
+// checksums is a checksums.txt over assets, in name order.
+func checksums(assets map[string]string, lie bool) []byte {
+	var b strings.Builder
+	for _, name := range slices.Sorted(maps.Keys(assets)) {
+		h := sha256.Sum256([]byte(assets[name]))
+		if lie {
+			h[0]++
+		}
+		b.WriteString(hex.EncodeToString(h[:]) + "  " + name + "\n")
+	}
+	return []byte(b.String())
 }
 
 // releaseAt is the release module in a build stamped version, following repo,
@@ -78,9 +97,10 @@ func releaseAt(t *testing.T, version, repo string) (*Module, string) {
 	}
 	exe := filepath.Join(dir, AssetName(runtime.GOOS, runtime.GOARCH))
 	os.WriteFile(exe, []byte("old"), 0o755)
-	v, e := core.Version, executable
-	t.Cleanup(func() { core.Version, executable = v, e })
+	v, e, try := core.Version, executable, tryBinary
+	t.Cleanup(func() { core.Version, executable, tryBinary = v, e, try })
 	core.Version, executable = version, func() string { return exe }
+	tryBinary = func(string, string) error { return nil } // the binaries are text
 	return &Module{C: c}, exe
 }
 
@@ -660,5 +680,19 @@ func TestPublishSkipsOlderPreReleases(t *testing.T) {
 	}
 	if rel, _ := n.LatestRelease("me/hive"); rel.Tag != "v0.0.2" || rel.Prerelease {
 		t.Fatalf("latest is %+v", rel)
+	}
+}
+
+// A gate run that was skipped or cancelled didn't pass: the release stays a
+// pre-release, as for a failure.
+func TestSkippedOrCancelledGateIsNotAPass(t *testing.T) {
+	m, n, _, _ := selfHive(t)
+	for _, conclusion := range []string{"skipped", "cancelled", "neutral", ""} {
+		n.SetReleaseRuns("me/hive", "m1",
+			core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"},
+			core.WorkflowRun{Name: "update", Status: "completed", Conclusion: conclusion, URL: "https://ci/update"})
+		if state, why := m.gates("me/hive", "m1"); state != "failed" || !strings.Contains(why, "update "+conclusion) {
+			t.Fatalf("update %q: %s, %s", conclusion, state, why)
+		}
 	}
 }
