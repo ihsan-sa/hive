@@ -190,6 +190,11 @@ func (w *WSL) translate(s Spec) Spec {
 		mounts[i] = m
 	}
 	s.Mounts = mounts
+	guard := make([]string, len(s.Guard))
+	for i, g := range s.Guard {
+		guard[i] = WinToWSL(g)
+	}
+	s.Guard = guard
 	tools := make([]string, len(s.Tools))
 	for i, t := range s.Tools {
 		if filepath.IsAbs(t) {
