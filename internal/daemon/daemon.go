@@ -663,7 +663,11 @@ func (s *server) routes() http.Handler {
 		if err := decode(r, &b); err != nil {
 			return nil, err
 		}
-		return a.C.Person.Answer(b.ID, b.Answer, b.Note)
+		by := "person"
+		if mod := moduleOf(r); mod != "" {
+			by = "module:" + mod
+		}
+		return a.C.Person.AnswerAs(by, b.ID, b.Answer, b.Note)
 	})
 	h("/api/read", func(r *http.Request) (any, error) {
 		// An outside read is the person's to record (autobox relays the box's
@@ -793,7 +797,7 @@ func (s *server) routes() http.Handler {
 		if err := decode(r, &b); err != nil {
 			return nil, err
 		}
-		return a.Release.Update(b.Release)
+		return a.Release.UpdateByHand(b.Release)
 	})
 	h("/api/shutdown", func(*http.Request) (any, error) {
 		go func() { time.Sleep(100 * time.Millisecond); s.cancel() }()
@@ -927,6 +931,8 @@ func (s *server) state() api.State {
 		if b, ok := a.Improve.Best(p.Name); ok {
 			pv.Best = &b
 		}
+		ml := a.Improve.Milestone(p.Name)
+		pv.Milestone = &ml
 		st.Projects = append(st.Projects, pv)
 	}
 	recent := 0

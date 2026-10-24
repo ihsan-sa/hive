@@ -22,6 +22,7 @@ type Ask struct {
 	Project  string    `json:"project,omitempty"`
 	Answer   string    `json:"answer,omitempty"`
 	Note     string    `json:"note,omitempty"`
+	By       string    `json:"by,omitempty"` // who answered: person, hive, or module:<name>; "" on answers recorded before it was kept
 	Asked    time.Time `json:"asked"`
 	Answered time.Time `json:"answered,omitempty"`
 }
@@ -63,7 +64,7 @@ func NewPerson(j *Journal) *Person {
 			e.Decode(&a)
 			p.mu.Lock()
 			if x := p.asks[a.ID]; x != nil {
-				x.Answer, x.Note, x.Answered = a.Answer, a.Note, e.At
+				x.Answer, x.Note, x.By, x.Answered = a.Answer, a.Note, a.By, e.At
 			}
 			p.mu.Unlock()
 		}
@@ -178,10 +179,18 @@ func (p *Person) moveTold() {
 	}
 }
 
-// Answer records the person's answer and runs the kind's handler. The answer
-// must be one of the ask's options; an ask with none takes free text. An ask
-// already answered refuses another answer and returns the one on record.
+// Answer records an answer the Hive gives itself (superseded, settled by a
+// warden, a login that renewed); AnswerAs says who else gave one.
 func (p *Person) Answer(id, answer, note string) (Ask, error) {
+	return p.AnswerAs("hive", id, answer, note)
+}
+
+// AnswerAs records by's answer and runs the kind's handler: by is "person"
+// for the person's own word (the API), so a count of outside hands can tell
+// it from the Hive's. The answer must be one of the ask's options; an ask with
+// none takes free text. An ask already answered refuses another answer and
+// returns the one on record.
+func (p *Person) AnswerAs(by, id, answer, note string) (Ask, error) {
 	// p.mu can't be held over the append: the journal runs subscribers, which
 	// take it, synchronously. answerMu keeps the check and the append together.
 	p.answerMu.Lock()
@@ -203,7 +212,7 @@ func (p *Person) Answer(id, answer, note string) (Ask, error) {
 	}
 	h := p.handlers[a.Kind]
 	p.mu.Unlock()
-	p.j.MustAppend("person.answered", Ask{ID: id, Answer: answer, Note: note})
+	p.j.MustAppend("person.answered", Ask{ID: id, Answer: answer, Note: note, By: by})
 	p.mu.Lock()
 	c := *p.asks[id]
 	p.mu.Unlock()

@@ -270,18 +270,25 @@ func hasBinary(repo, tag string) error {
 // and may be older, or with "" or "latest" the newest that Check finds, which
 // clears any pin. Live runs are separate processes and the daemon reattaches
 // to them after it restarts, so live work carries across.
-func (m *Module) Update(tag string) (string, error) {
+func (m *Module) Update(tag string) (string, error) { return m.locked(tag, "") }
+
+// UpdateByHand is Update on the person's word (`hive update`): its
+// hive.updated says by hand, so the count of outside hands sees it.
+func (m *Module) UpdateByHand(tag string) (string, error) { return m.locked(tag, "hand") }
+
+// locked runs one update at a time.
+func (m *Module) locked(tag, by string) (string, error) {
 	if !m.updating.TryLock() {
 		return busy, nil
 	}
 	defer m.updating.Unlock()
-	return m.update(tag)
+	return m.update(tag, by)
 }
 
 // busy is what an update says while another is being checked.
 const busy = "an update is already being checked; try again in a minute"
 
-func (m *Module) update(tag string) (string, error) {
+func (m *Module) update(tag, by string) (string, error) {
 	m.pmu.Lock()
 	m.tried = tag
 	m.pmu.Unlock()
@@ -403,7 +410,11 @@ func (m *Module) update(tag string) (string, error) {
 	}
 	notes := Notes(repo, core.Version, tag)
 	unsigned := PublicKey == ""
-	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned})
+	rec := map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned}
+	if by != "" {
+		rec["by"] = by
+	}
+	m.C.J.MustAppend("hive.updated", rec)
 	installed = true
 	// Merges stay paused until the restart; one that never comes (a
 	// supervisor that doesn't restart, a failed start) lets them go on.
@@ -475,7 +486,7 @@ func (m *Module) AutoUpdate() (string, error) {
 	if !cfg.AutoUpdate || cfg.ReleasePin != "" {
 		return "auto-update is off", nil
 	}
-	msg, err := m.update("")
+	msg, err := m.update("", "")
 	m.pmu.Lock()
 	waits := m.waits
 	m.pmu.Unlock()

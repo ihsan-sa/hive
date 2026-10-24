@@ -61,6 +61,13 @@ func (m *model) dashRows() []row {
 		if !add(row{key: "proj:" + p.Name, text: fmt.Sprintf("%s  %s  %s  %s", stTitle.Render(p.Name), stDim.Render(p.Repo), best, spark(p.Scores)), expand: true, def: true}) {
 			continue
 		}
+		if p.Milestone != nil {
+			st := stDim
+			if p.Milestone.Met() {
+				st = stGood
+			}
+			add(row{key: "milestone:" + p.Name, depth: 1, text: st.Render(text.Visible(p.Milestone.Line))})
+		}
 		if p.Hold != nil {
 			add(row{key: "hold:" + p.Name, depth: 1, text: stWarn.Render(text.Visible(p.Hold.Text()))})
 		}

@@ -419,7 +419,7 @@ func TestAskLandsAndProjects(t *testing.T) {
 	if !merged {
 		t.Fatalf("the chat didn't say it merged with a link: %+v", h.messages("lead"))
 	}
-	h.wait("the merge to be measured", minute, func(st api.State) bool {
+	st = h.wait("the merge to be measured", minute, func(st api.State) bool {
 		for _, pv := range st.Projects {
 			for _, s := range pv.Scores {
 				if s.SHA == tk.MergeSHA && s.Kept {
@@ -429,6 +429,18 @@ func TestAskLandsAndProjects(t *testing.T) {
 		}
 		return false
 	})
+	// Nobody stepped in between the ask and the merge, so it counts zero
+	// outside hands; the person's ask was theirs, not the Hive's proposal.
+	for _, pv := range st.Projects {
+		for _, s := range pv.Scores {
+			if s.SHA == tk.MergeSHA && (s.Outside == nil || s.Outside.Count != 0 || !s.Outside.Unassisted) {
+				t.Fatalf("an unassisted merge counts outside hands: %+v", s.Outside)
+			}
+		}
+		if pv.Name == "textkit" && (pv.Milestone == nil || !pv.Milestone.Unassisted || pv.Milestone.Proposed || !strings.Contains(pv.Milestone.Line, "unassisted merge yes")) {
+			t.Fatalf("milestone: %+v", pv.Milestone)
+		}
+	}
 
 	// M5: projects.
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "create project alpha for experiments"}, nil)
