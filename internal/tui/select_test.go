@@ -58,7 +58,7 @@ func TestDragSelectsChatText(t *testing.T) {
 		t.Fatalf("release: cmd %v, selecting %v, flash %q", cmd != nil, m.sel.on, m.flash)
 	}
 	before := m.chScroll
-	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: 40, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
 	if m.chScroll == before {
 		t.Fatal("the wheel no longer scrolls the chat after a drag")
 	}
