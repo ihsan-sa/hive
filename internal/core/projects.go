@@ -106,12 +106,13 @@ var (
 	SelfHigh = []string{"internal/core/effects.go", "internal/core/forge.go", "internal/harness/", "internal/mod/release/", "internal/daemon/", "modules/agents/warden.md", "modules/agents/tribunal.md", "go.mod", "go.sum", "go.work", "go.work.sum", "vendor/"}
 )
 
-// SelfGate is the Hive's own code and prompts that decide how a change is
-// gated (the core, stage routing and seats, keep or revert, the recursive
-// gate, the agents' prompts, the tests that hold them): in a self project a
-// change to one is never unread, however small, so it can't move its own bar
-// without a reader.
-var SelfGate = []string{"internal/core/", "internal/mod/work/", "internal/mod/agents/", "internal/mod/improve/", "internal/gate/", "modules/", "tests/", "cmd/hive/"}
+// SelfGate is where the Hive's own code, prompts and tests live. A self
+// project is default-deny for the unread path: a change is unread only when
+// every file is a doc (by type, as Small judges it) outside these, so no
+// code, prompt or test (the gate, its wiring, the recursive gate's verdict,
+// the module read-gate, what sends or fetches) can move its own bar without
+// a reader, whether or not a list names it.
+var SelfGate = []string{"internal/", "cmd/", "modules/", "tests/"}
 
 // Guarded returns cfg with a self project's built-in classes added to its own.
 func (cfg ProjectConfig) Guarded(p Project) ProjectConfig {

@@ -929,7 +929,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	}
 	list := e.ReadFile(p, mainSHA, SecurityList)
 	security, root := ParseList(list, "paths"), ParseList(list, "root")
-	docsOnly, binary, gate := true, false, false
+	docsOnly, binary := true, false
 	for _, l := range strings.Split(stat, "\x00") {
 		f := strings.SplitN(l, "\t", 3)
 		if len(f) < 3 || f[2] == "" {
@@ -940,7 +940,6 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		del, _ := strconv.Atoi(f[1])
 		file := f[2]
 		c.Files = append(c.Files, file)
-		gate = gate || p.Self && under(file, SelfGate)
 		c.Lines += add + del
 		if under(file, protected) {
 			c.Protected = append(c.Protected, file)
@@ -965,6 +964,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 			docsOnly = false
 		}
 	}
+	gate := p.Self && (!docsOnly || slices.ContainsFunc(c.Files, func(f string) bool { return under(f, SelfGate) }))
 	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Security) == 0 && !p.Self
 	c.Unread = len(c.Files) > 0 && !binary && !gate && c.Lines <= cfg.UnreadMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Root) == 0 && len(c.Security) == 0
 	c.TwoReads = len(c.Root) > 0 || c.Lines > cfg.ReadTwoMax
