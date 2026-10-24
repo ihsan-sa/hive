@@ -12,6 +12,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
@@ -38,6 +39,7 @@ type App struct {
 	Release  *release.Module
 	Runner   *runner.Runner
 	Feedback *feedback.Module
+	Models   *models.Module
 }
 
 // New opens the workspace and builds every module.
@@ -52,7 +54,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 		return nil, err
 	}
 	a.Agents = &agents.Agents{C: c, Mod: a.Mods}
-	c.Runs.ModelFor = func(r core.Run) string { _, m := a.Agents.Model(r.Role, r.Project); return m }
+	c.Runs.Route = func(r core.Run) []core.Pick { return a.Agents.Route(r.Role, r.Project) }
 	a.Chat = chat.New(c, a.Agents)
 	a.Work = work.New(c, a.Agents, a.Chat)
 	c.Runs.Ops().SetSpawner(a.Work.Spawn)
@@ -68,9 +70,10 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Work.Weigh = a.Risk.Weigh
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
+	a.Models = models.New(c, a.Work)
 	a.Improve.OnKept = a.Release.AfterKept
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
-	for _, tick := range []func(){a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.Runner.Tick} {
+	for _, tick := range []func(){a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.Runner.Tick, a.Models.Tick} {
 		a.Mods.Builtin(tick)
 	}
 	c.Person.Handle("release", a.Release.OnPerson)

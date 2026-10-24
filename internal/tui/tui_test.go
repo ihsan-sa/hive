@@ -926,6 +926,47 @@ func TestPlanUsageEscapesFeedNames(t *testing.T) {
 	}
 }
 
+// A role's route is set from a pick-list, never typed: each known model can
+// be added at the end or removed, and clear gives the role back its model
+// settings.
+func TestRouteIsAPickList(t *testing.T) {
+	c := core.DefaultConfig()
+	c.Models = map[string]core.OpenModel{"kimi": {Endpoint: "https://api.moonshot.ai/v1", Model: "kimi-k2-0905-preview", Key: true}}
+	m := testModel(80, 24)
+	m.st.Config = c
+	m.section = secSettings
+	for i, s := range m.settings() {
+		if s.key == "route:worker" {
+			m.setSel = i
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	cur := m.settings()[m.setSel]
+	if !m.picking || slices.Contains(cur.choices, custom) || cur.choices[len(cur.choices)-1] != "clear" ||
+		!slices.Contains(cur.choices, "remove claude:opus") || !slices.Contains(cur.choices, "add kimi") || !slices.Contains(cur.choices, "add claude:sonnet") {
+		t.Fatalf("picking %v, choices %q", m.picking, cur.choices)
+	}
+	c = routeEdit(c, "worker", "add kimi")
+	if !slices.Equal(c.Routes["worker"], []string{"claude:opus", "kimi"}) {
+		t.Fatalf("add after the model it runs on now: %v", c.Routes["worker"])
+	}
+	c = routeEdit(c, "worker", "remove claude:opus")
+	if !slices.Equal(c.Routes["worker"], []string{"kimi"}) || c.Check() != nil {
+		t.Fatalf("remove: %v (%v)", c.Routes["worker"], c.Check())
+	}
+	if ch := routeChoices(c, "worker"); !slices.Contains(ch, "remove kimi") || !slices.Contains(ch, "add claude:opus") {
+		t.Fatalf("choices after: %q", ch)
+	}
+	c = routeEdit(c, "fallback", "add kimi")
+	if !slices.Equal(c.Routes["fallback"], []string{"kimi"}) {
+		t.Fatalf("fallback starts empty: %v", c.Routes["fallback"])
+	}
+	c = routeEdit(c, "worker", "clear")
+	if _, ok := c.Routes["worker"]; ok || c.Route("worker", "")[0] != (core.Pick{Harness: "claude", Model: "opus"}) {
+		t.Fatalf("clear: %v", c.Routes)
+	}
+}
+
 // A setting shows its new value the moment it's changed, not after the save
 // and the next state poll come back.
 func TestSettingChangesAtOnce(t *testing.T) {
