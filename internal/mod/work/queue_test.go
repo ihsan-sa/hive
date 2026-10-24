@@ -243,7 +243,7 @@ func TestQueueHoldsWhatAWorkerChanged(t *testing.T) {
 		t.Fatalf("stage %q worker %q base %q", got.Stage, got.Worker, got.Base)
 	}
 	os.WriteFile(filepath.Join(r.Checkout, "internal/core/runs.go"), []byte("package x // changed\n"), 0o644)
-	os.WriteFile(filepath.Join(r.Checkout, "internal/core/effects.go"), []byte("package x\n"), 0o644) // rewritten as it was
+	os.WriteFile(filepath.Join(r.Checkout, "internal/core/effects.go"), []byte("package x\r\n"), 0o644) // rewritten as it was, with CRLF as on Windows
 	b := file(t, m, "hold strained turns", "In internal/core/runs.go.")
 	c := file(t, m, "cap the effects", "In internal/core/effects.go.")
 	d := file(t, m, "show the queue", "In internal/tui/views.go.")

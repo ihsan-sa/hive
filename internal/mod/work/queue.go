@@ -1,6 +1,7 @@
 package work
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
@@ -180,7 +181,9 @@ func (m *Module) differs(project, base, checkout, p string) bool {
 	case len(b) > limit:
 		return true
 	}
-	return blobID(b, len(blob)) != blob
+	// A checkout made with CRLF line endings (Windows, text=auto) holds the
+	// same blob as LF.
+	return blobID(b, len(blob)) != blob && blobID(bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")), len(blob)) != blob
 }
 
 // blobID is git's object id of content as a blob, sha256 when the repo's ids
