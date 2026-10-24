@@ -201,6 +201,19 @@ func TestOpenClaude(t *testing.T) {
 	if APIHosts(OpenClaude{}) != nil {
 		t.Error("a model on another vendor's endpoint reaches Anthropic's API")
 	}
+	// Its config folder is the run's own, so no Claude login is found.
+	if env := (OpenClaude{}).Env(Turn{ConfigDir: "/hive/home/.claude-open"}); !slices.Contains(env, "CLAUDE_CONFIG_DIR=/hive/home/.claude-open") {
+		t.Errorf("env %q", env)
+	}
+	// A vendor's 429, as Claude Code 2.1 reports it, is a usage limit.
+	limited := []byte(`{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"API Error: Request rejected (429) · Your account org-x request reached organization max RPM: 3"}`)
+	if evs := (OpenClaude{}).Parse(limited); len(evs) != 1 || !evs[0].Result.Limited {
+		t.Errorf("a vendor's 429: %+v", evs)
+	}
+	refused := []byte(`{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"invalid x-api-key"}`)
+	if evs := (OpenClaude{}).Parse(refused); len(evs) != 1 || evs[0].Result.Limited {
+		t.Errorf("a 401 is no limit: %+v", evs)
+	}
 }
 
 // Codex's usage readings come from its session file: the last one since the

@@ -67,15 +67,35 @@ func KeyMain(argv []string) int {
 		fmt.Fprintln(os.Stderr, "usage: hive open-key FILE")
 		return 2
 	}
-	raw, err := os.ReadFile(argv[0])
-	os.Remove(argv[0])
+	raw, err := readNoLink(argv[0])
+	os.Remove(argv[0]) // a link at its name goes, not what it points to
 	key := strings.TrimSpace(string(raw))
 	if err != nil || key == "" {
-		fmt.Fprintln(os.Stderr, "the model's key was already handed over, or never left: a turn reads it once")
+		fmt.Fprintln(os.Stderr, "the model's key was already handed over this turn (a turn is handed it once, so the endpoint refused it mid-turn), or never left: the next turn gets it afresh")
 		return 1
 	}
 	fmt.Println(key)
 	return 0
+}
+
+// readNoLink reads a regular file at path, never one a link there points to.
+func readNoLink(path string) ([]byte, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if after, err := f.Stat(); err != nil || !os.SameFile(before, after) {
+		return nil, fmt.Errorf("%s changed while it was read", path)
+	}
+	return io.ReadAll(f)
 }
 
 // Main is `hive open-agent --session S --model NAME [--resume] [--system-file F]
@@ -101,10 +121,11 @@ func Main(argv []string) int {
 		ReadOnly: *readonly, MaxOutput: *maxOut, MaxSteps: 200, Out: os.Stdout, Sleep: time.Sleep,
 		Client: &http.Client{Timeout: 20 * time.Minute}}
 	a.Context, _ = strconv.Atoi(os.Getenv("HIVE_OPEN_CONTEXT"))
+	noDump()
 	if f := os.Getenv("HIVE_OPEN_KEY_FILE"); f != "" {
 		// The run manager hands the key over in a file, deleted before any
 		// tool runs, so no command the model runs can read it.
-		raw, err := os.ReadFile(f)
+		raw, err := readNoLink(f)
 		os.Remove(f)
 		if err != nil {
 			a.emit(map[string]any{"type": "result", "subtype": "error", "is_error": true, "result": "the model's key: " + err.Error(), "session_id": *session})
