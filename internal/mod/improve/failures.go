@@ -119,8 +119,9 @@ func summary(fs []failure, out string) string {
 
 // safeName is a package or test name fit for a shell line. The names come
 // from what the candidate's code printed, so anything else (a quote, a $, a
-// ;) makes the rerun the whole command again.
-var safeName = regexp.MustCompile(`^[A-Za-z0-9_/.-]+$`)
+// ;) makes the rerun the whole command again. A leading - would be read as
+// a flag: "-test.run" swallows the next name and the rerun runs no tests.
+var safeName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_/.-]*$`)
 
 // rerunCommand is a command that runs only what failed, once more: the
 // failing packages and tests under the go test flags of the project's own
