@@ -125,6 +125,7 @@ func (a *App) Tick() {
 // Run ticks until ctx ends.
 func (a *App) Run(ctx context.Context) {
 	a.Improve.Recover()
+	go a.C.WatchLogins(ctx, time.Minute)
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for {
