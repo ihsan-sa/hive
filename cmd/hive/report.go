@@ -57,7 +57,10 @@ func cmdReport(args []string) int {
 				fmt.Fprintln(os.Stderr, err)
 				return 1
 			}
-			fmt.Printf("Sharing failures with the developer: %s. `%s report on|off` changes it.\n", sub, core.Cmd)
+			if sub == "on" {
+				fmt.Println(report.WhatIsSent())
+			}
+			fmt.Printf("Sending failure and usage reports to the developer: %s. `%s report on|off` changes it.\n", sub, core.Cmd)
 			return 0
 		}
 		if err := setShare(ws, sub == "on"); err != nil {
@@ -89,8 +92,12 @@ func cmdReport(args []string) int {
 		return 2
 	}
 	cfg := ws.LoadConfig()
-	if since, on := cfg.Sharing(); !on {
-		fmt.Println("Sharing failures with the developer is off. `" + core.Cmd + " report on` turns it on.")
+	since, on := cfg.Sharing()
+	if sub == "on" {
+		fmt.Println(report.WhatIsSent())
+	}
+	if !on {
+		fmt.Println("Sending failure and usage reports to the developer is off. `" + core.Cmd + " report on` turns it on.")
 	} else {
 		fmt.Printf("Sending failure and usage reports to %s since %s (install %s).\n", report.URL(cfg), since.Format("2006-01-02 15:04"), cfg.InstallID)
 	}

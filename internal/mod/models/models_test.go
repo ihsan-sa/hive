@@ -2,6 +2,8 @@ package models_test
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
@@ -30,6 +33,7 @@ func hiveWithModels(t *testing.T) (*app.App, core.Run) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { a.C.Close() })
+	a.Models.Probe = func(core.Workspace, string, core.OpenModel) error { return nil } // qwen answers
 	if _, err := a.C.Projects.Add(core.Project{Name: "lab", Repo: "me/lab"}); err != nil {
 		t.Fatal(err)
 	}
@@ -162,4 +166,40 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out")
+}
+
+// A route or trial onto a model that can't answer is refused with its answer
+// and the fix, and nothing is routed; one that answers its probe is routed.
+func TestRouteProbesTheModel(t *testing.T) {
+	a, lead := hiveWithModels(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		w.Write([]byte(`{"error":{"message":"No endpoints found matching your data policy (Free model training violation (guardrail)). Configurable at https://openrouter.ai/workspaces/default/guardrails","code":404}}`))
+	}))
+	defer srv.Close()
+	a.Models.Probe = models.Probe
+	cfg := a.C.WS.LoadConfig()
+	cfg.Models["router"] = core.OpenModel{Endpoint: srv.URL + "/api/v1", Model: "free/model:free"}
+	if err := a.C.WS.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	_, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "fake:opus,router"})
+	if err == nil || !strings.Contains(err.Error(), "404") || !strings.Contains(err.Error(), "https://openrouter.ai/workspaces/default/guardrails") {
+		t.Fatalf("the route onto a model that 404s: %v", err)
+	}
+	if r := a.C.WS.LoadConfig().Routes["worker"]; len(r) > 0 {
+		t.Fatalf("routed anyway: %v", r)
+	}
+	if _, err := call(t, a, lead, "trial", map[string]any{"model": "router", "project": "lab", "title": "try it"}); err == nil {
+		t.Fatal("a trial on a model that 404s was filed")
+	}
+	a.Models.Probe = func(core.Workspace, string, core.OpenModel) error { return nil }
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "fake:opus,router"}); err != nil {
+		t.Fatal(err)
+	}
+	// A model already on the route, not known to fail, isn't probed again.
+	a.Models.Probe = func(core.Workspace, string, core.OpenModel) error { t.Fatal("probed again"); return nil }
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "router,fake:opus"}); err != nil {
+		t.Fatal(err)
+	}
 }

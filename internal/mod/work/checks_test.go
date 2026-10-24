@@ -45,6 +45,10 @@ func prState(t *testing.T, f *core.Local, n int) string {
 func TestMergeWaitsForForgeChecks(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	// The pending checks finishing one by one change the reason, not the
+	// hold: the PR hears of it once.
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPending}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPending})
+	mergeOnce(t, m, task, p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPass}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPending})
 	for i := 0; i < 3; i++ {
 		mergeOnce(t, m, task, p)
@@ -152,6 +156,25 @@ func TestMergeForgeCheckSharedRedWaitsForTheRest(t *testing.T) {
 	}
 }
 
+// A check cancelled on the head itself is run again once, with no alert;
+// cancelled again, it is raised as one that can't start.
+func TestMergeForgeCheckCancelledRerunsOnce(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	cancelled := core.CheckRun{Name: "sandboxed-e2e", State: core.CheckCantStart, Detail: "cancelled"}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPass}, cancelled)
+	mergeOnce(t, m, task, p)
+	if task.Reruns[task.SHA] != 1 || !strings.Contains(task.Reason, "re-run") || alerts(m, "main-red") != 0 {
+		t.Fatalf("reruns %v, reason %q, %d alerts", task.Reruns, task.Reason, alerts(m, "main-red"))
+	}
+	task.RerunAt = time.Now().Add(-time.Hour) // past rerunGrace
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPass}, cancelled)
+	mergeOnce(t, m, task, p)
+	if task.Reruns[task.SHA] != 1 || !strings.Contains(task.Reason, "can't start") || alerts(m, "main-red") != 1 {
+		t.Fatalf("reruns %v, reason %q, %d alerts", task.Reruns, task.Reason, alerts(m, "main-red"))
+	}
+}
+
 // A forge check that can't start is the environment's: the change waits, it
 // is raised once, and it is never sent back to the worker.
 func TestMergeForgeCheckCantStart(t *testing.T) {
@@ -227,6 +250,35 @@ func TestMergeAsItIsWhenClean(t *testing.T) {
 	main, _ := m.C.Effects.Sync(p)
 	if ref := must(t, m.C.WS.Project(p.Name), "show", main+":other.txt"); ref != "z" {
 		t.Fatalf("main lost its own change: %q", ref)
+	}
+}
+
+// unknownForge is a forge still working out whether a PR merges cleanly.
+type unknownForge struct{ *core.Local }
+
+func (u unknownForge) GetPR(repo string, n int) (core.PR, error) {
+	pr, err := u.Local.GetPR(repo, n)
+	pr.Mergeable, pr.MergeState = "UNKNOWN", "UNKNOWN"
+	return pr, err
+}
+
+// A PR whose mergeability the forge hasn't worked out waits under a saved
+// reason, so a wait that never ends reaches the lead through the stall
+// watcher; it merges once the forge knows.
+func TestMergeWaitsOnUnknownMergeable(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	m.C.Effects.Forge = unknownForge{f}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.HasPrefix(task.Reason, "waiting for the forge to work out") || !strings.Contains(task.Reason, "mergeable UNKNOWN") {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	m.C.Effects.Forge = f
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
 }
 
@@ -308,9 +360,9 @@ func reviewerLand(t *testing.T, m *Module, task *Task, p core.Project, id string
 }
 
 // A change to a path on main's security list is held, with one line on the
-// PR, until a perms or architect read says land at its head, even after the
-// Hive's own reviewer landed it and the forge's checks pass; a head that
-// moves to a new diff waits again.
+// PR, until the Hive's security seat (or a perms or architect read) says land
+// at its head, even after the Hive's own reviewer landed it and the forge's
+// checks pass; a head that moves to a new diff waits again.
 func TestSecurityListHolds(t *testing.T) {
 	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
 	reviewerLand(t, m, task, p, "r1")
@@ -993,5 +1045,42 @@ func TestMergeForgeCheckSameTestRedOnMainSpendsNoRound(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerging || task.Round != 0 || task.Findings != "" || queued(m, "w1") != "" || !strings.HasPrefix(task.Reason, "waiting on main: ") {
 		t.Fatalf("stage %q, round %d, reason %q, findings %q", task.Stage, task.Round, task.Reason, task.Findings)
+	}
+}
+
+// A security seat left on the reviewer's model, or a seat on a harness the
+// Hive doesn't have, reads on the reviewer's and says so in an alert.
+func TestSeatModelFallsBack(t *testing.T) {
+	m, _, p, _ := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
+	h, model := m.Agents.Model("reviewer", p.Name)
+	alerts := func() string {
+		var b strings.Builder
+		for _, e := range m.C.J.Since(0) {
+			if e.Kind == "alert.raised" {
+				b.Write(e.Data)
+			}
+		}
+		return b.String()
+	}
+	cfg := m.C.WS.LoadConfig()
+	cfg.TribunalModels = []core.TribunalSeat{{Model: model}}
+	m.C.WS.SaveConfig(cfg)
+	if gh, gm, _ := m.seatModel(p, core.SeatSecurity); gh != h || gm != model || !strings.Contains(alerts(), "ordinary reviewer's model") {
+		t.Fatalf("security seat with no other model: %s/%s, alerts %s", gh, gm, alerts())
+	}
+	cfg.TribunalModels = []core.TribunalSeat{{Harness: "no-such-harness", Model: "other"}}
+	m.C.WS.SaveConfig(cfg)
+	if gh, gm, _ := m.seatModel(p, "panel-0"); gh != h || gm != model || !strings.Contains(alerts(), "no-such-harness") {
+		t.Fatalf("seat on a missing harness: %s/%s, alerts %s", gh, gm, alerts())
+	}
+}
+
+// Seat tries are counted per own diff: a head whose diff moved without a
+// send-back starts its seats fresh.
+func TestSeatTriesFollowTheDiff(t *testing.T) {
+	task := &Task{Diff: "a", SeatTries: map[string]int{"a#security": 2, "b#security": 1}}
+	task.setDiff("b")
+	if task.Diff != "b" || len(task.SeatTries) != 1 || task.SeatTries["b#security"] != 1 {
+		t.Fatalf("tries after the diff moved: %+v", task.SeatTries)
 	}
 }

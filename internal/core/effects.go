@@ -62,12 +62,20 @@ type Effects struct {
 	lands     map[string][]string               // project@sha -> reviewer runs that said land, since the last fix
 	diffLands map[string][]string               // project#diff -> the same, for every head with that own diff
 	diffVerds map[string]Verdict                // project#diff -> the latest verdict on that own diff
+	diffHeads map[string][]string               // project#diff -> the heads a verdict on that own diff was given on
 	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
 	seats     map[string]map[string]Verdict     // project#diff -> security seat -> its latest verdict
 	hostMade  map[string]HostCommit
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
+	homes     map[string]bool         // running checks' homes (disk.go)
+	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
+	disk      DiskUse                 // the last measurement of the Hive's disk use
+	diskFull  bool                    // a check couldn't run for room, and the alert is out
+
+	// OnDiskFull runs once when checks first can't run for room (the clean job).
+	OnDiskFull func()
 }
 
 // Check is a host-run test or score on one commit.
@@ -79,6 +87,7 @@ type Check struct {
 	Score   *float64  `json:"score,omitempty"`
 	Output  string    `json:"output"`
 	CantRun string    `json:"cant_run,omitempty"` // why the command couldn't start (a missing tool): no verdict on the commit
+	Tool    string    `json:"tool,omitempty"`     // with CantRun: the tool the shell couldn't find
 	Log     string    `json:"log,omitempty"`      // the full output on the host, when it ran
 	Failed  []string  `json:"failed,omitempty"`   // the failing tests it names, read before the output is clipped
 	At      time.Time `json:"at"`
@@ -150,7 +159,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}, gates: map[string]GateResult{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}, gates: map[string]GateResult{}}
 	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -182,10 +191,18 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			if v.Diff != "" {
 				k := v.Project + "#" + v.Diff
 				e.diffVerds[k] = v
+				if !slices.Contains(e.diffHeads[k], v.SHA) {
+					e.diffHeads[k] = append(e.diffHeads[k], v.SHA)
+				}
 				if v.Verdict == "land" && !slices.Contains(e.diffLands[k], v.Run) {
 					e.diffLands[k] = append(e.diffLands[k], v.Run)
 				} else if v.Verdict != "land" {
+					// A fix on the diff is a fix on every head that has it,
+					// so no earlier head's own lands outlive it in Reads.
 					delete(e.diffLands, k)
+					for _, sha := range e.diffHeads[k] {
+						delete(e.lands, v.Project+"@"+sha)
+					}
 				}
 			}
 		case "effect.read":
@@ -371,7 +388,7 @@ func (e *Effects) Snapshot(p Project, r Run, base string) (string, error) {
 	work := sandbox.Mount{Host: r.Checkout, Inside: "/work", RW: true}
 	git := "git -c safe.directory='*' -c core.hooksPath=/dev/null -c user.name=Hive -c user.email=hive@localhost -C " + shq(sandbox.InsidePath(sb, work))
 	script := git + " add -A && { " + git + " diff --cached --quiet || " + git + " commit -q --no-verify -m 'what the run left'; }"
-	if code, out, err := e.runSandboxed(sb, r.Project, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute); err != nil || code != 0 {
+	if code, out, err := e.runSandboxed(sb, r.Project, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute, nil, 0); err != nil || code != 0 {
 		return "", fmt.Errorf("could not commit what the run left: %v %s", err, Clip(out, 300))
 	}
 	return e.Extract(p, r, base)
@@ -396,7 +413,7 @@ func (e *Effects) ExtractInto(dir, lockKey string, r Run, base string) (string, 
 		rangeSpec = base + "..HEAD"
 	}
 	script := fmt.Sprintf("git -c safe.directory='*' -C %s bundle create %s %s", shq(sandbox.InsidePath(sb, work)), shq(bundle), rangeSpec)
-	code, logText, err := e.runSandboxed(sb, r.Project, r.ID+"-extract", []sandbox.Mount{work, outM}, script, false, 5*time.Minute)
+	code, logText, err := e.runSandboxed(sb, r.Project, r.ID+"-extract", []sandbox.Mount{work, outM}, script, false, 5*time.Minute, nil, 0)
 	if err != nil {
 		return "", err
 	}
@@ -477,17 +494,47 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	defer os.RemoveAll(dir)
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
-	code, out, err := e.runSandboxed(sb, p.Name, id, []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}, guardProgram(command), true, 30*time.Minute)
+	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
+	mods := e.goModules(sb, dir)
+	code, out, err := e.runSandboxed(sb, p.Name, id, append(mounts, mods.mounts...), guardProgram(command), true, 30*time.Minute, mods.env, e.checkCacheCap())
+	mods.done()
+	if mods.marker != "" && code != 0 && strings.Contains(out, staleModules) {
+		// The shared cache lacks what its marker promised: that is the
+		// cache's fault, not the commit's, so drop the marker and run once
+		// fetching its own.
+		os.Remove(mods.marker)
+		mods.note = "the shared module cache lacked a module; run again without it"
+		code, out, err = e.runSandboxed(sb, p.Name, id, mounts, guardProgram(command), true, 30*time.Minute, nil, e.checkCacheCap())
+	}
+	if mods.note != "" {
+		out = "hive: " + mods.note + "\n" + out
+	}
 	c.Output = out
+	if errors.Is(err, ErrHomeFull) {
+		c.CantRun = fmt.Sprintf("can't run: %v (%s)", err, Bytes(e.checkCacheCap()))
+		return record()
+	}
 	if err != nil {
 		c.Output = err.Error() + "\n" + out
+		if line := DiskFull(c.Output); line != "" {
+			c.CantRun = "can't run: the disk or a quota is full where checks run"
+			e.diskAlert(line)
+		}
 		return record()
 	}
 	c.OK = code == 0
 	if tool := MissingTool(code, out); tool != "" {
-		c.CantRun = "can't run: " + tool + " is not installed where checks run"
+		c.CantRun, c.Tool = "can't run: "+tool+" is not installed where checks run", tool
 		return record()
 	}
+	if line := DiskFull(out); !c.OK && line != "" {
+		c.OK, c.CantRun = false, "can't run: the disk or a quota is full where checks run"
+		e.diskAlert(line)
+		return record()
+	}
+	e.mu.Lock()
+	e.diskFull = false
+	e.mu.Unlock()
 	if (kind == "test" || kind == "retest") && !c.OK {
 		c.Failed = FailedTests(out)
 	}
@@ -503,9 +550,10 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 }
 
 // missingTool matches the shell's "not found" for a command looked up on the
-// PATH: dash's "/bin/sh: 1: go: not found", bash's "bash: go: command not found"
-// and env's "env: 'go': No such file or directory".
-var missingTool = regexp.MustCompile(`(?m)^(?:\S*sh: (?:line )?\d*:? ?([^\s/:']+): (?:command )?not found|env: '?([^\s/:']+)'?: No such file or directory)\s*$`)
+// PATH: dash's "/bin/sh: 1: go: not found", bash's "bash: go: command not found",
+// busybox's "sh: go: not found", zsh's "zsh:1: command not found: go" and env's
+// "env: 'go': No such file or directory" ('go' in a UTF-8 locale).
+var missingTool = regexp.MustCompile(`(?m)^(?:\S*sh: (?:line )?\d*:? ?([^\s/:']+): (?:command )?not found|env: ['‘]?([^\s/:'‘’]+)['’]?: No such file or directory|zsh:(?:\d+: )? ?command not found: ([^\s/:']+))\s*$`)
 
 // MissingTool names the tool a check's command couldn't find, or "" when it
 // ran. Only exit 127 with the shell's own message counts, and only for a bare
@@ -515,17 +563,26 @@ func MissingTool(code int, out string) string {
 		return ""
 	}
 	if m := missingTool.FindStringSubmatch(out); m != nil {
-		return m[1] + m[2]
+		return m[1] + m[2] + m[3]
 	}
 	return ""
 }
 
 // noVerdict says a recorded check couldn't start, so it isn't the commit's
 // answer. A failure recorded before checks carried cant_run is read from its
-// output: those kept "go: not found" as main's red result for good.
+// output: those kept "go: not found" as main's red result for good. Later
+// records say so themselves, so a real red that merely logs a "not found" line
+// stays cached, as does an old one that named its failing tests.
 func noVerdict(c Check) bool {
-	return c.CantRun != "" || (!c.OK && missingTool.MatchString(c.Output))
+	if c.CantRun != "" {
+		return true
+	}
+	return !c.OK && c.At.Before(cantRunRecorded) && len(c.Failed) == 0 && missingTool.MatchString(c.Output)
 }
+
+// cantRunRecorded is when every check came to carry cant_run (a day's margin
+// after it merged, for daemons that hadn't updated yet).
+var cantRunRecorded = time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
 
 var failedTest = regexp.MustCompile(`(?m)^\s*--- FAIL: (\S+)|^FAILED (\S+)`)
 
@@ -613,24 +670,31 @@ func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
 // runSandboxed runs a shell command in the sandbox and returns its exit code
 // and output. Its log goes in the project's own folder, which other runs
 // can't see when the project is isolated.
-func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []sandbox.Mount, script string, network bool, timeout time.Duration) (int, string, error) {
+// The command gets its own home under the cache folder, removed after; extra
+// is more environment where the sandbox has its own, and a capB over 0 ends
+// the command with ErrHomeFull once its home passes that many bytes.
+func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []sandbox.Mount, script string, network bool, timeout time.Duration, extra []string, capB int64) (int, string, error) {
 	logDir := filepath.Join(e.ws.Hive(), "checks", project)
 	os.MkdirAll(logDir, 0o755)
 	logPath := filepath.Join(logDir, id+".log")
 	os.Remove(logPath)
-	home, _ := os.MkdirTemp("", "hive-check-home-")
-	defer os.RemoveAll(home)
+	home, done := e.newHome()
+	defer done()
 	homeM := sandbox.Mount{Host: home, Inside: "/hive/home", RW: true}
 	mounts = append(mounts, homeM, sandbox.Mount{Host: e.ws.Tools(), Inside: sandbox.ToolsInside})
 	argv := []string{"/bin/sh", "-c", script}
-	env := sandbox.InsideEnv("/hive/home", network)
+	env := append(sandbox.InsideEnv("/hive/home", network), extra...)
 	if !sb.Isolated() {
 		env = nil
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), UID: os.Getuid(), GID: os.Getgid()}
+		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), UID: os.Getuid(), GID: os.Getgid()}
+	over := watchHome(home, capB)
 	code, err := sb.Run(spec, timeout)
+	if over() && err == nil {
+		err = ErrHomeFull
+	}
 	raw, _ := os.ReadFile(logPath)
 	errRaw, _ := os.ReadFile(logPath + ".err")
 	out := string(raw)
@@ -817,19 +881,50 @@ func (e *Effects) SecurityOK(project string, ch Change) bool {
 	return len(ch.SecurityRoot) == 0 || lands > PanelSeats/2
 }
 
+// OwnDiff is the diff from base (a change's merge base with main) to sha, as
+// its reviewers read it and DiffID names it. Binary and full-index, so a
+// binary file (or a script git takes for one, with a NUL byte in it) carries
+// its content into the diff and DiffID, and two different blobs never read
+// as the same change. It is "" when git can't tell.
+func OwnDiff(dir, base, sha string) string {
+	out, _ := Git(dir, "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", base, sha)
+	return out
+}
+
 // DiffID names a change's own diff (the diff from its merge base with main to
 // its head) so that a head whose own diff is the same gets the same name,
-// whatever main it was brought up to date with. Hunk positions and blob ids
-// are left out, since main moving shifts them without changing the change;
-// everything else, context lines included, counts.
+// whatever main it was brought up to date with. Hunk positions and text
+// files' blob ids are left out, since main moving shifts them without
+// changing the change; everything else, context lines included, counts. A
+// binary file keeps its index line: git may write it as a delta against the
+// old blob, which only that blob id pins down.
+//
+// Left out on purpose: a hunk's position and function context, so the same
+// added lines with the same context moved elsewhere in one file keep the
+// name (docs/log.md). Changing what counts renames every diff and drops the
+// reads recorded on open PRs.
 func DiffID(diff string) string {
 	if strings.TrimSpace(diff) == "" {
 		return ""
 	}
 	h := sha256.New()
-	for _, l := range strings.Split(diff, "\n") {
+	lines := strings.Split(diff, "\n")
+	binary := false
+	for i, l := range lines {
+		if strings.HasPrefix(l, "diff --git ") {
+			binary = false
+			for _, next := range lines[i+1:] {
+				if strings.HasPrefix(next, "diff --git ") {
+					break
+				}
+				if next == "GIT binary patch" {
+					binary = true
+					break
+				}
+			}
+		}
 		switch {
-		case strings.HasPrefix(l, "index "):
+		case strings.HasPrefix(l, "index ") && !binary:
 			continue
 		case strings.HasPrefix(l, "@@"):
 			l = "@@"
@@ -952,10 +1047,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		}
 	}
 	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Security) == 0 && !p.Self
-	// Binary and full-index, so a binary file (or a script git takes for one,
-	// with a NUL byte in it) carries its content into the diff and DiffID, and
-	// two different blobs never read as the same change.
-	c.Diff, _ = Git(dir, "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", base, sha)
+	c.Diff = OwnDiff(dir, base, sha)
 	c.DiffID = DiffID(c.Diff)
 	if len(c.Protected) > 0 {
 		c.ProtectedDiff, _ = Git(dir, append([]string{"--literal-pathspecs", "diff", "--no-renames", base, sha, "--"}, c.Protected...)...)
