@@ -275,6 +275,7 @@ func (m *Module) Build(cfg core.Config) ([]Report, Report, int64, int64) {
 	var from, to time.Time
 	var last, seq, boxAt int64
 	roles := map[string]string{}
+	sessions, spends := map[string]string{}, map[string]*core.SessionSpend{}
 	stages := map[string]string{}
 	running := false
 	var events []core.Event
@@ -306,10 +307,14 @@ func (m *Module) Build(cfg core.Config) ([]Report, Report, int64, int64) {
 			if fresh {
 				use["runs"]++
 			}
+		case "run.turn_started":
+			var t struct{ ID, Session string }
+			e.Decode(&t)
+			sessions[t.ID] = t.Session
 		case "run.turn_ended":
 			var t struct {
-				ID, Status, Reason string
-				Result             *struct {
+				ID, Status, Reason, Session string
+				Result                      *struct {
 					Text    string
 					IsError bool    `json:"is_error"`
 					Limited bool    `json:"limited"`
@@ -317,13 +322,21 @@ func (m *Module) Build(cfg core.Config) ([]Report, Report, int64, int64) {
 				}
 			}
 			e.Decode(&t)
+			if t.Session != "" {
+				sessions[t.ID] = t.Session
+			}
+			spent := 0.0
+			if t.Result != nil {
+				if spends[t.ID] == nil {
+					spends[t.ID] = &core.SessionSpend{}
+				}
+				spent = spends[t.ID].Turn(sessions[t.ID], t.Result.Cost)
+			}
 			if !fresh {
 				continue
 			}
 			use["turns"]++
-			if t.Result != nil {
-				use["cost_usd"] += t.Result.Cost
-			}
+			use["cost_usd"] += spent
 			if t.Status == core.StatusParked && (t.Result == nil || t.Result.IsError && !t.Result.Limited) {
 				text := ""
 				if t.Result != nil {
