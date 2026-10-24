@@ -3,6 +3,9 @@ package release
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -337,6 +340,15 @@ type notes struct {
 	calls int
 	// listed runs after Tags lists them, as a push before CreateRelease would.
 	listed func()
+	// tagErr, when set, is what TagCommit fails with.
+	tagErr error
+}
+
+func (n *notes) TagCommit(repo, tag string) (string, error) {
+	if n.tagErr != nil {
+		return "", n.tagErr
+	}
+	return n.Local.TagCommit(repo, tag)
 }
 
 func (n *notes) Tags(repo string) ([]string, error) {
@@ -753,6 +765,9 @@ func TestReleaseRefusesATagAtAnotherCommit(t *testing.T) {
 	if !journaled(m, "release.refused") || journaled(m, "hive.released") {
 		t.Fatal("a release whose tag points elsewhere was recorded as released")
 	}
+	if a := alertText(m); !strings.Contains(a, "release-signing") || !strings.Contains(a, "reject it") {
+		t.Fatalf("the refusal doesn't say to reject the signing run: %q", a)
+	}
 	n.SetReleaseRuns("me/hive", "m1", core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"},
 		core.WorkflowRun{Name: "update", Status: "completed", Conclusion: "success"})
 	if got := m.Publish(); got != "nothing to publish" {
@@ -778,10 +793,59 @@ func TestPublishRefusesAMovedTag(t *testing.T) {
 	if got := m.Publish(); !strings.Contains(got, "refused") {
 		t.Fatalf("Publish said %q", got)
 	}
+	if a := alertText(m); !strings.Contains(a, "reject it") {
+		t.Fatalf("the refusal doesn't say to reject the signing run: %q", a)
+	}
 	if rel, _ := n.LatestRelease("me/hive"); !rel.Prerelease {
 		t.Fatalf("a release whose tag moved was published: %+v", rel)
 	}
 	if got := m.Publish(); got != "nothing to publish" {
 		t.Fatalf("a refused release is checked again: %q", got)
+	}
+}
+
+// alertText is the last alert raised.
+func alertText(m *Module) (text string) {
+	m.C.J.Replay(func(e core.Event) {
+		if e.Kind == "alert.raised" {
+			var x struct{ Text string }
+			json.Unmarshal(e.Data, &x)
+			text = x.Text
+		}
+	})
+	return
+}
+
+// A tag that can't be read after the release is cut is said, and the record
+// leaves tag_sha out rather than holding an empty one; Publish waits for it.
+func TestReleaseSaysAnUnreadTag(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	n.tagErr = errors.New("gh api: HTTP 502")
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	var rec map[string]any
+	m.C.J.Replay(func(e core.Event) {
+		if e.Kind == "hive.released" {
+			json.Unmarshal(e.Data, &rec)
+		}
+	})
+	if rec == nil {
+		t.Fatal("no hive.released")
+	}
+	if _, ok := rec["tag_sha"]; ok || !strings.Contains(fmt.Sprint(rec["tag_unread"]), "502") {
+		t.Fatalf("record %v", rec)
+	}
+	if a := alertText(m); !strings.Contains(a, "can't read its tag") {
+		t.Fatalf("alert %q", a)
+	}
+	n.SetReleaseRuns("me/hive", "m1", core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"},
+		core.WorkflowRun{Name: "update", Status: "completed", Conclusion: "success"})
+	if got := m.Publish(); !strings.Contains(got, "can't read") {
+		t.Fatalf("Publish said %q", got)
+	}
+	n.tagErr = nil
+	if got := m.Publish(); got != "published v0.0.1" {
+		t.Fatalf("Publish said %q once the tag read", got)
 	}
 }

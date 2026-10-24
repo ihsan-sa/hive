@@ -569,9 +569,11 @@ func (GitHub) CreateRelease(repo, tag, sha, notes string) error {
 	return err
 }
 
-// TagCommit peels an annotated tag to its commit.
+// TagCommit peels an annotated tag to its commit. The ref is spelled in full:
+// GitHub answers commits/tags/<tag> with a 422 (checked live on git/git's
+// annotated v2.0.0, which commits/refs/tags/ peels to e156455).
 func (GitHub) TagCommit(repo, tag string) (string, error) {
-	return gh(repo, "api", "repos/"+repo+"/commits/tags/"+tag, "-q", ".sha")
+	return gh(repo, "api", "repos/"+repo+"/commits/refs/tags/"+tag, "-q", ".sha")
 }
 
 // ReleaseRuns are the runs a release event started at sha (a release's runs

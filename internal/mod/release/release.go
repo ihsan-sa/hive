@@ -516,13 +516,22 @@ func (m *Module) afterKept(project, sha string) {
 	// A tag made since the listing keeps its own commit, which the release
 	// would then build and sign: such a release is refused, never published,
 	// and these merges wait for the next one.
+	rec := map[string]any{"project": project, "tag": next, "sha": sha, "prerelease": true}
 	at, err := m.C.Effects.Forge.TagCommit(p.Repo, next)
-	if err == nil && at != sha {
+	switch {
+	case err != nil:
+		// Publish reads the tag again before it publishes, so this only
+		// says why the first check didn't happen.
+		rec["tag_unread"] = core.Clip(err.Error(), 200)
+		alert("released " + next + " at " + core.Short(sha) + " but can't read its tag's commit (" + core.Clip(err.Error(), 200) + "); it stays a pre-release until the tag reads as " + core.Short(sha) + ".")
+	case at != sha:
 		m.C.J.MustAppend("release.refused", map[string]string{"project": project, "tag": next, "sha": sha, "tag_sha": at})
-		alert(next + " points at " + core.Short(at) + ", not the gated " + core.Short(sha) + " (a tag made outside the Hive); it stays a pre-release and is never published. Delete that release and its tag.")
+		alert(next + " points at " + core.Short(at) + ", not the gated " + core.Short(sha) + " (a tag made outside the Hive); it stays a pre-release and is never published. " + refusedSteps)
 		return
+	default:
+		rec["tag_sha"] = at
 	}
-	m.C.J.MustAppend("hive.released", map[string]any{"project": project, "tag": next, "sha": sha, "tag_sha": at, "prerelease": true})
+	m.C.J.MustAppend("hive.released", rec)
 	f, up := m.C.Effects.Forge, m.C.WS.LoadConfig().ReleaseRepo
 	if p.Repo == up {
 		return
@@ -537,6 +546,12 @@ func (m *Module) afterKept(project, sha string) {
 		Title:  "Offer the Hive's changes to " + up + "?",
 		Detail: "The Hive released " + next + " on " + p.Repo + ". Yes opens one pull request on " + up + " in your name, which grows with each kept change."})
 }
+
+// refusedSteps is what the person does about a refused release. Its
+// pre-release already fired release.yml at the tag's commit, whose sign job
+// waits on the release-signing environment's approval: only that approval
+// stands between the other commit and the signing key.
+const refusedSteps = "Its release run at that commit waits for approval in the release-signing environment: reject it, don't approve. Then delete the release and its tag."
 
 // New is the release module, with the person's answer to an upstream offer.
 func New(c *core.Core) *Module {
@@ -725,7 +740,7 @@ func (m *Module) Publish() string {
 			}
 			if at != c.SHA {
 				m.C.J.MustAppend("release.refused", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA, "tag_sha": at})
-				alert(c, c.Tag+" points at "+core.Short(at)+", not the gated "+core.Short(c.SHA)+"; it stays a pre-release and is never published.")
+				alert(c, c.Tag+" points at "+core.Short(at)+", not the gated "+core.Short(c.SHA)+"; it stays a pre-release and is never published. "+refusedSteps)
 				out = append(out, c.Tag+": refused, its tag points at "+core.Short(at))
 				continue
 			}
