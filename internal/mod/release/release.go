@@ -49,12 +49,18 @@ type Module struct {
 	followed time.Time
 	red      map[string]verdict
 	waits    []string
+	// shas are the pre-releases' commits, by repo@tag; tried is the tag the
+	// last update went for and said1 what follow last recorded.
+	shas  map[string]string
+	tried string
+	said1 string
 	// pre are the pre-releases newer than this one the last look read;
 	// newest and behind are what Lag reports, from the last Check.
 	pre    []string
 	newest string
 	behind int
-	// updating is held while AutoUpdate runs, from its schedule or follow.
+	// updating is held while an update runs: AutoUpdate, from its schedule
+	// or follow, or `hive update`.
 	updating sync.Mutex
 }
 
@@ -210,6 +216,10 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 		} else if tag == "" && err == nil {
 			err = e
 		}
+	} else {
+		m.pmu.Lock()
+		m.waits = nil
+		m.pmu.Unlock()
 	}
 	if tag != "" {
 		err = nil
@@ -261,6 +271,20 @@ func hasBinary(repo, tag string) error {
 // clears any pin. Live runs are separate processes and the daemon reattaches
 // to them after it restarts, so live work carries across.
 func (m *Module) Update(tag string) (string, error) {
+	if !m.updating.TryLock() {
+		return busy, nil
+	}
+	defer m.updating.Unlock()
+	return m.update(tag)
+}
+
+// busy is what an update says while another is being checked.
+const busy = "an update is already being checked; try again in a minute"
+
+func (m *Module) update(tag string) (string, error) {
+	m.pmu.Lock()
+	m.tried = tag
+	m.pmu.Unlock()
 	if !strings.HasPrefix(core.Version, "v") {
 		return "this is a source build (" + core.Version + "); it doesn't update itself", nil
 	}
@@ -279,6 +303,9 @@ func (m *Module) Update(tag string) (string, error) {
 		}
 		return msg, m.pin(cfg, tag, pin)
 	}
+	m.pmu.Lock()
+	m.tried = tag
+	m.pmu.Unlock()
 	if !pin && m.rolledBack(tag) {
 		return tag + " was rolled back after it failed to start here; `" + core.Cmd + " update " + tag + "` tries it again", nil
 	}
@@ -429,7 +456,7 @@ var restartGrace = 30 * time.Minute
 // follow, every few minutes.
 func (m *Module) AutoUpdate() (string, error) {
 	if !m.updating.TryLock() {
-		return "an update is already being checked", nil
+		return busy, nil
 	}
 	defer m.updating.Unlock()
 	cfg := m.C.WS.LoadConfig()
@@ -448,7 +475,7 @@ func (m *Module) AutoUpdate() (string, error) {
 	if !cfg.AutoUpdate || cfg.ReleasePin != "" {
 		return "auto-update is off", nil
 	}
-	msg, err := m.Update("")
+	msg, err := m.update("")
 	m.pmu.Lock()
 	waits := m.waits
 	m.pmu.Unlock()
