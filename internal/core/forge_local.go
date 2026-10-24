@@ -25,6 +25,7 @@ type localState struct {
 	Releases map[string][]Release     `json:"releases"`
 	Runs     map[string][]WorkflowRun `json:"runs"` // repo@sha -> release runs, newest first
 	TagSHAs  map[string]string        `json:"tags"` // repo@tag -> the commit it points at
+	Jobs     map[string][]WorkflowJob `json:"jobs"` // repo#run -> its jobs
 }
 
 type localIssue struct {
@@ -374,6 +375,28 @@ func (l *Local) SetReleaseRuns(repo, sha string, runs ...WorkflowRun) {
 	defer l.mu.Unlock()
 	s := l.load()
 	s.Runs[repo+"@"+sha] = runs
+	l.save(s)
+}
+
+func (l *Local) Releases(repo string) ([]Release, error) {
+	rels := slices.Clone(l.load().Releases[repo])
+	slices.Reverse(rels)
+	return rels, nil
+}
+
+func (l *Local) RunJobs(repo string, run int64) ([]WorkflowJob, error) {
+	return l.load().Jobs[fmt.Sprintf("%s#%d", repo, run)], nil
+}
+
+// SetRunJobs sets one run's jobs (tests set them).
+func (l *Local) SetRunJobs(repo string, run int64, jobs ...WorkflowJob) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	if s.Jobs == nil {
+		s.Jobs = map[string][]WorkflowJob{}
+	}
+	s.Jobs[fmt.Sprintf("%s#%d", repo, run)] = jobs
 	l.save(s)
 }
 

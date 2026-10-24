@@ -1,14 +1,10 @@
 package release
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -38,8 +34,8 @@ func (m *Module) Channel() string {
 }
 
 // followEvery is how often a Hive following pre-releases looks for one: each
-// look is a few calls on GitHub's API, which allows 60 an hour without a login
-// (an answer unchanged since the last look, by its ETag, doesn't count).
+// look is 1 call on the person's GitHub login, and 4 more for each newer
+// pre-release, well within the login's 5,000 an hour.
 const followEvery = 5 * time.Minute
 
 // recheckRed is how long a pre-release whose own checks failed is passed over
@@ -72,20 +68,21 @@ func (m *Module) follow() {
 	go m.AutoUpdate()
 }
 
+// look is the most pre-releases one look reads the gates of, newest first.
+const look = 3
+
 // prerelease is the newest pre-release of repo newer than after whose checks
-// for this system passed, or "" with what each newer one waits for.
+// for this system passed, or "" with what each newer one waits for. It reads
+// the gates through the forge, on the person's login, as Publish does.
 func (m *Module) prerelease(repo, after string) (tag string, why []string, err error) {
-	var rels []struct {
-		Tag        string `json:"tag_name"`
-		Prerelease bool
-		Draft      bool
-	}
-	if err := apiJSON("/repos/"+repo+"/releases?per_page=30", &rels); err != nil {
-		return "", nil, err
+	f := m.C.Effects.Forge
+	rels, err := f.Releases(repo)
+	if err != nil {
+		return "", nil, fmt.Errorf("following pre-releases reads them through the GitHub login, which failed: %w", err)
 	}
 	var tags []string
 	for _, r := range rels {
-		if r.Prerelease && !r.Draft && modules.Newer(after, r.Tag) {
+		if r.Prerelease && modules.Newer(after, r.Tag) {
 			tags = append(tags, r.Tag)
 		}
 	}
@@ -96,8 +93,9 @@ func (m *Module) prerelease(repo, after string) (tag string, why []string, err e
 		return -1
 	})
 	for i, t := range tags {
-		if i == 3 {
-			break // older ones wait for the newer to settle
+		if i == look {
+			why = append(why, fmt.Sprintf("%d older pre-releases aren't read until one of these %d is safe here", len(tags)-look, look))
+			break
 		}
 		state, w := m.ownGates(repo, t)
 		if state == "passed" {
@@ -123,7 +121,7 @@ func (m *Module) ownGates(repo, tag string) (state, why string) {
 	if ok && time.Since(red.at) < recheckRed {
 		return "failed", red.why
 	}
-	state, why = ownGates(repo, tag)
+	state, why = m.readOwnGates(repo, tag)
 	if state == "failed" {
 		m.pmu.Lock()
 		if m.red == nil {
@@ -140,38 +138,31 @@ type verdict struct {
 	why string
 }
 
-func ownGates(repo, tag string) (state, why string) {
-	sha, err := apiGet("/repos/"+repo+"/commits/"+tag, "application/vnd.github.sha")
+func (m *Module) readOwnGates(repo, tag string) (state, why string) {
+	f := m.C.Effects.Forge
+	sha, err := f.TagCommit(repo, tag)
 	if err != nil {
 		return "waiting", "can't read its commit (" + core.Clip(err.Error(), 200) + ")"
 	}
-	at := strings.TrimSpace(string(sha))
-	var runs struct {
-		Runs []run `json:"workflow_runs"`
-	}
-	if err := apiJSON("/repos/"+repo+"/actions/runs?event=release&per_page=100&head_sha="+at, &runs); err != nil {
+	runs, err := f.ReleaseRuns(repo, sha)
+	if err != nil {
 		return "waiting", "can't read its runs (" + core.Clip(err.Error(), 200) + ")"
 	}
 	runner := runners[runtime.GOOS]
 	var bad, wait []string
 	for _, g := range Gates {
-		i := slices.IndexFunc(runs.Runs, func(r run) bool { return r.Name == g && r.HeadSHA == at })
+		i := slices.IndexFunc(runs, func(r core.WorkflowRun) bool { return r.Name == g })
 		if i < 0 {
 			wait = append(wait, g+" (no run yet)")
 			continue
 		}
-		var jobs struct {
-			Jobs []struct {
-				Name, Status, Conclusion string
-				URL                      string `json:"html_url"`
-			}
-		}
-		if err := apiJSON(fmt.Sprintf("/repos/%s/actions/runs/%d/jobs?per_page=100", repo, runs.Runs[i].ID), &jobs); err != nil {
+		jobs, err := f.RunJobs(repo, runs[i].ID)
+		if err != nil {
 			wait = append(wait, g+" (can't read its jobs)")
 			continue
 		}
 		prefix, n := ownJobs[g]+" ("+runner, 0
-		for _, j := range jobs.Jobs {
+		for _, j := range jobs {
 			if !strings.HasPrefix(j.Name, prefix) {
 				continue
 			}
@@ -194,70 +185,4 @@ func ownGates(repo, tag string) (state, why string) {
 		return "waiting", "waiting for " + strings.Join(wait, ", ")
 	}
 	return "passed", ""
-}
-
-// run is a workflow run in the API's list, newest first.
-type run struct {
-	ID      int64
-	Name    string
-	HeadSHA string `json:"head_sha"`
-}
-
-var apiClient = &http.Client{Timeout: 30 * time.Second}
-
-// cached holds each API answer by its ETag: asking again with it costs
-// nothing of the hourly allowance when the answer hasn't changed.
-var (
-	cacheMu sync.Mutex
-	cached  = map[string]etagged{}
-)
-
-type etagged struct {
-	etag string
-	body []byte
-}
-
-// apiGet reads a path of GitHub's API, without a login.
-func apiGet(path, accept string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, API+path, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", accept)
-	key := accept + " " + req.URL.String()
-	cacheMu.Lock()
-	c, ok := cached[key]
-	cacheMu.Unlock()
-	if ok {
-		req.Header.Set("If-None-Match", c.etag)
-	}
-	resp, err := apiClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if ok && resp.StatusCode == http.StatusNotModified {
-		return c.body, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: %s", path, resp.Status)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if etag := resp.Header.Get("ETag"); err == nil && etag != "" {
-		cacheMu.Lock()
-		if len(cached) > 500 {
-			clear(cached)
-		}
-		cached[key] = etagged{etag, body}
-		cacheMu.Unlock()
-	}
-	return body, err
-}
-
-func apiJSON(path string, v any) error {
-	raw, err := apiGet(path, "application/vnd.github+json")
-	if err == nil {
-		err = json.Unmarshal(raw, v)
-	}
-	return err
 }

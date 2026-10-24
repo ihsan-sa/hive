@@ -1,79 +1,44 @@
 package release
 
 import (
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
-// gateAPI is GitHub's API for me/hive: its releases (pre is the
-// pre-releases), each tag at a commit named for it, and the conclusion of
-// each job of each tag's gate runs, "" while it runs.
-type gateAPI struct {
-	mu   sync.Mutex
-	rels []string
-	pre  map[string]bool
-	jobs map[string]map[string]map[string]string // tag -> gate -> job -> conclusion
-	runs []string                                // run id -> "tag gate"
+// gateSite holds me/hive's pre-releases on the local forge: each tag at a
+// commit named for it, and the conclusion of each job of its gate runs, ""
+// while it runs.
+type gateSite struct {
+	f    *core.Local
+	runs int64
 }
 
-// serveGates serves api in place of GitHub's API.
-func serveGates(t *testing.T, api *gateAPI) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		api.mu.Lock()
-		defer api.mu.Unlock()
-		p := r.URL.Path
-		switch {
-		case p == "/repos/me/hive/releases":
-			var out []map[string]any
-			for _, tag := range api.rels {
-				out = append(out, map[string]any{"tag_name": tag, "prerelease": api.pre[tag]})
-			}
-			json.NewEncoder(w).Encode(out)
-		case strings.HasPrefix(p, "/repos/me/hive/commits/"):
-			if r.Header.Get("Accept") != "application/vnd.github.sha" {
-				http.Error(w, "want the sha", http.StatusBadRequest)
-			}
-			w.Write([]byte("sha-" + strings.TrimPrefix(p, "/repos/me/hive/commits/") + "\n"))
-		case p == "/repos/me/hive/actions/runs":
-			tag := strings.TrimPrefix(r.URL.Query().Get("head_sha"), "sha-")
-			var runs []map[string]any
-			for _, g := range Gates {
-				if _, ok := api.jobs[tag][g]; ok && r.URL.Query().Get("event") == "release" {
-					api.runs = append(api.runs, tag+" "+g)
-					runs = append(runs, map[string]any{"id": len(api.runs) - 1, "name": g, "head_sha": "sha-" + tag})
-				}
-			}
-			json.NewEncoder(w).Encode(map[string]any{"workflow_runs": runs})
-		case strings.HasPrefix(p, "/repos/me/hive/actions/runs/"):
-			var id int
-			fmt.Sscanf(strings.TrimPrefix(p, "/repos/me/hive/actions/runs/"), "%d/jobs", &id)
-			tag, g, _ := strings.Cut(api.runs[id], " ")
-			var out []map[string]any
-			for name, c := range api.jobs[tag][g] {
-				st := "completed"
-				if c == "" {
-					st = "in_progress"
-				}
-				out = append(out, map[string]any{"name": name, "status": st, "conclusion": c, "html_url": "https://example.com/" + name})
-			}
-			json.NewEncoder(w).Encode(map[string]any{"jobs": out})
-		default:
-			http.NotFound(w, r)
+// setJobs gives tag's release runs at its commit these jobs, by gate.
+func (g *gateSite) setJobs(tag string, jobs map[string]map[string]string) {
+	var runs []core.WorkflowRun
+	for _, gate := range Gates {
+		if _, ok := jobs[gate]; !ok {
+			continue
 		}
-	}))
-	t.Cleanup(srv.Close)
-	api0 := API
-	t.Cleanup(func() { API = api0 })
-	API = srv.URL
+		g.runs++
+		runs = append(runs, core.WorkflowRun{ID: g.runs, Name: gate, Status: "in_progress"})
+		var js []core.WorkflowJob
+		for name, c := range jobs[gate] {
+			st := "completed"
+			if c == "" {
+				st = "in_progress"
+			}
+			js = append(js, core.WorkflowJob{Name: name, Status: st, Conclusion: c, URL: "https://example.com/" + name})
+		}
+		g.f.SetRunJobs("me/hive", g.runs, js...)
+	}
+	g.f.SetReleaseRuns("me/hive", "sha-"+tag, runs...)
 }
 
 // gatesFor are a release's gate jobs, this system's concluding here and the
@@ -90,19 +55,20 @@ func gatesFor(here, there string) map[string]map[string]string {
 // preSite is v0.1.12 as the latest release and v0.1.13 to v0.1.15 as
 // pre-releases: v0.1.13's checks passed here though red elsewhere, v0.1.14's
 // failed here, and v0.1.15's still run here.
-func preSite(t *testing.T) *gateAPI {
+func preSite(t *testing.T, m *Module) *gateSite {
 	serveAll(t, "v0.1.12", map[string]map[string]string{"v0.1.12": build("v12"), "v0.1.13": build("v13"),
 		"v0.1.14": build("v14"), "v0.1.15": build("v15")}, false)
-	api := &gateAPI{rels: []string{"v0.1.15", "v0.1.14", "v0.1.13", "v0.1.12"},
-		pre: map[string]bool{"v0.1.13": true, "v0.1.14": true, "v0.1.15": true},
-		jobs: map[string]map[string]map[string]string{
-			"v0.1.13": gatesFor("success", "failure"),
-			"v0.1.14": gatesFor("failure", "success"),
-			"v0.1.15": gatesFor("", "success"),
-		}}
-	api.jobs["v0.1.14"]["update"]["update ("+runners[runtime.GOOS]+"-latest, v0.1.2)"] = "success" // one red leg is enough
-	serveGates(t, api)
-	return api
+	g := &gateSite{f: m.C.Effects.Forge.(*core.Local)}
+	for _, tag := range []string{"v0.1.12", "v0.1.13", "v0.1.14", "v0.1.15"} {
+		g.f.CreateRelease("me/hive", tag, "sha-"+tag, "")
+	}
+	g.f.PublishRelease("me/hive", "v0.1.12")
+	g.setJobs("v0.1.13", gatesFor("success", "failure"))
+	red := gatesFor("failure", "success")
+	red["update"]["update ("+runners[runtime.GOOS]+"-latest, v0.1.2)"] = "success" // one red leg is enough
+	g.setJobs("v0.1.14", red)
+	g.setJobs("v0.1.15", gatesFor("", "success"))
+	return g
 }
 
 // The Hive that releases the Hive follows pre-releases by default: it takes
@@ -110,8 +76,8 @@ func preSite(t *testing.T) *gateAPI {
 // here and one still running here, and waits out a merge; once the newer one
 // passes here it takes that too.
 func TestFollowsTheNewestPreReleaseSafeHere(t *testing.T) {
-	api := preSite(t)
 	m, exe := releaseAt(t, "v0.1.12", "me/hive")
+	g := preSite(t, m)
 	if _, err := m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -133,9 +99,7 @@ func TestFollowsTheNewestPreReleaseSafeHere(t *testing.T) {
 	if err != nil || !strings.HasPrefix(msg, "already on v0.1.13") || !strings.Contains(msg, "v0.1.15: waiting for") || !strings.Contains(msg, "v0.1.14: test (") {
 		t.Fatalf("with nothing safe newer: %q, %v", msg, err)
 	}
-	api.mu.Lock()
-	api.jobs["v0.1.15"] = gatesFor("success", "")
-	api.mu.Unlock()
+	g.setJobs("v0.1.15", gatesFor("success", ""))
 	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v0.1.15\n") {
 		t.Fatalf("once v0.1.15 passed here: %q, %v", msg, err)
 	}
@@ -143,12 +107,10 @@ func TestFollowsTheNewestPreReleaseSafeHere(t *testing.T) {
 
 // A pre-release with no runs yet, or with no job for this system, is not safe.
 func TestPreReleaseWithoutItsChecksWaits(t *testing.T) {
-	api := preSite(t)
-	api.jobs = map[string]map[string]map[string]string{
-		"v0.1.13": {"ci": gatesFor("success", "success")["ci"]},
-		"v0.1.15": {"ci": {"test (plan9-latest)": "success"}, "update": {"update (plan9-latest, previous)": "success"}},
-	}
 	m, exe := releaseAt(t, "v0.1.12", "me/hive")
+	g := preSite(t, m)
+	g.setJobs("v0.1.13", map[string]map[string]string{"ci": gatesFor("success", "success")["ci"]})
+	g.setJobs("v0.1.15", map[string]map[string]string{"ci": {"test (plan9-latest)": "success"}, "update": {"update (plan9-latest, previous)": "success"}})
 	cfg := m.C.WS.LoadConfig()
 	cfg.Channel = Prerelease
 	m.C.WS.SaveConfig(cfg)
@@ -166,8 +128,8 @@ func TestPreReleaseWithoutItsChecksWaits(t *testing.T) {
 // Every other install follows the latest release by default; a person can
 // choose either channel.
 func TestPreReleasesOffByDefault(t *testing.T) {
-	preSite(t)
 	m, exe := releaseAt(t, "v0.1.12", "me/hive")
+	preSite(t, m)
 	if _, err := m.C.Projects.Add(core.Project{Name: "fork", Repo: "you/hive", Self: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -205,29 +167,71 @@ func TestUnknownChannelRefused(t *testing.T) {
 	}
 }
 
-// An API answer that hasn't changed is asked for by its ETag, which costs
-// nothing of the hourly allowance, and read from the cache.
-func TestAPIAsksAgainByETag(t *testing.T) {
-	asked := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		asked++
-		if r.Header.Get("If-None-Match") == `"v1"` {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		w.Header().Set("ETag", `"v1"`)
-		w.Write([]byte("body"))
-	}))
-	defer srv.Close()
-	api0 := API
-	defer func() { API = api0 }()
-	API = srv.URL
-	for range 2 {
-		if got, err := apiGet("/etag", "text/plain"); err != nil || string(got) != "body" {
-			t.Fatalf("got %q, %v", got, err)
-		}
-	}
-	if asked != 2 {
-		t.Fatalf("asked %d times", asked)
+// Only the newest pre-releases are read in one look, and the waits say so.
+func TestOlderPreReleasesWaitTheirTurn(t *testing.T) {
+	m, _ := releaseAt(t, "v0.1.12", "me/hive")
+	g := preSite(t, m)
+	g.f.CreateRelease("me/hive", "v0.1.16", "sha-v0.1.16", "")
+	g.setJobs("v0.1.16", gatesFor("", ""))
+	cfg := m.C.WS.LoadConfig()
+	cfg.Channel = Prerelease
+	m.C.WS.SaveConfig(cfg)
+	if msg, err := m.AutoUpdate(); err != nil || !strings.Contains(msg, "1 older pre-releases aren't read") || strings.Contains(msg, "updated") {
+		t.Fatalf("read past the newest three: %q, %v", msg, err)
 	}
 }
+
+// The jobs the channel reads are named as ci.yml and update.yml name them: a
+// rename would leave the channel waiting without a word.
+func TestOwnJobsAreTheWorkflowsJobs(t *testing.T) {
+	for gate, job := range ownJobs {
+		raw, err := os.ReadFile("../../../.github/workflows/" + gate + ".yml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(raw), "\n")
+		i := slices.Index(lines, "  "+job+":")
+		if i < 0 {
+			t.Fatalf("%s.yml has no job %s", gate, job)
+		}
+		matrix := ""
+		for _, l := range lines[i+1:] {
+			if len(l) > 2 && l[2] != ' ' && l[0] == ' ' || !strings.HasPrefix(l, " ") && l != "" {
+				break // the next job, or past jobs
+			}
+			if strings.HasPrefix(l, "    name:") {
+				t.Fatalf("%s.yml names its %s job, so it isn't %q", gate, job, job+" (<runner>...)")
+			}
+			if strings.HasPrefix(l, "      matrix:") {
+				matrix = "next"
+			} else if matrix == "next" {
+				matrix = strings.TrimSpace(l)
+			}
+		}
+		if !strings.HasPrefix(matrix, "os:") {
+			t.Fatalf("%s.yml's %s matrix doesn't lead with os: %q", gate, job, matrix)
+		}
+		for _, r := range runners {
+			if !strings.Contains(matrix, r+"-latest") {
+				t.Fatalf("%s.yml's %s matrix has no %s-latest: %q", gate, job, r, matrix)
+			}
+		}
+	}
+}
+
+// Without a GitHub login the channel can't read the gates, and says so.
+func TestPreReleasesWithoutALoginSaySo(t *testing.T) {
+	m, _ := releaseAt(t, "v0.1.12", "me/hive")
+	preSite(t, m)
+	m.C.Effects.Forge = noLogin{m.C.Effects.Forge}
+	cfg := m.C.WS.LoadConfig()
+	cfg.Channel = Prerelease
+	m.C.WS.SaveConfig(cfg)
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "already on v0.1.12; following pre-releases reads them through the GitHub login") {
+		t.Fatalf("without a login: %q, %v", msg, err)
+	}
+}
+
+type noLogin struct{ core.Forge }
+
+func (noLogin) Releases(string) ([]core.Release, error) { return nil, errors.New("gh: not logged in") }

@@ -185,6 +185,9 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 			after = tag
 		}
 		t, waits, e := m.prerelease(up, after)
+		if e != nil {
+			waits = append(waits, e.Error())
+		}
 		m.pmu.Lock()
 		m.waits = waits
 		m.pmu.Unlock()
