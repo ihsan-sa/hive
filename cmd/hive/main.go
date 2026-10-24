@@ -67,6 +67,13 @@ func run(args []string) int {
 	if len(args) > 0 {
 		cmd, args = args[0], args[1:]
 	}
+	if help := commandHelp(cmd); help != "" && wantsHelp(args) {
+		fmt.Print(help)
+		if cmd == "ask" && len(args) > 1 {
+			fmt.Fprintln(os.Stderr, "Nothing was sent. To send -h or --help as text, quote the text or put it after --: "+core.Cmd+` ask -- "..."`)
+		}
+		return 0
+	}
 	switch cmd {
 	// Internal commands, used inside sandboxes and by the Hive itself.
 	case "agent":
@@ -115,6 +122,10 @@ func run(args []string) int {
 		fmt.Println(core.Cmd, core.Version)
 		return 0
 	case "-h", "--help", "help":
+		if len(args) > 0 && commandHelp(args[0]) != "" {
+			fmt.Print(commandHelp(args[0]))
+			return 0
+		}
 		fmt.Print(usageText())
 		return 0
 	case "ask":
@@ -248,6 +259,46 @@ func usageText() string {
 	return strings.ReplaceAll(strings.ReplaceAll(usage, "\n  hive", "\n  "+core.Cmd), "hive: a small", core.Cmd+": a small")
 }
 
+// wantsHelp is true when a command's arguments carry -h or --help (before
+// any --), so `hive update --help` prints help instead of installing and
+// `hive ask --help` isn't sent to the lead. Only commands with help lines ask
+// it; the internal ones (agent, sandbox-exec, ...) keep their own arguments.
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "--":
+			return false
+		case "-h", "-help", "--help":
+			return true
+		}
+	}
+	return false
+}
+
+// unlisted is help for the commands the usage doesn't list.
+var unlisted = map[string]string{
+	"open":   "  hive open                open the control center (as plain `hive` does)\n",
+	"init":   "  hive init                set up a Hive in a folder\n",
+	"daemon": "  hive daemon              run the Hive in this terminal [--detach: in the background]\n",
+}
+
+// commandHelp is the usage lines for one command, "" for one it doesn't know.
+func commandHelp(cmd string) string {
+	var b strings.Builder
+	for _, l := range strings.SplitAfter(usage, "\n") {
+		if f := strings.Fields(l); len(f) > 1 && f[0] == "hive" && f[1] == cmd {
+			b.WriteString(l)
+		}
+	}
+	if b.Len() == 0 {
+		b.WriteString(unlisted[cmd])
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return strings.ReplaceAll("\n"+b.String(), "\n  hive", "\n  "+core.Cmd)[1:]
+}
+
 func workspace() (core.Workspace, error) {
 	ws, ok := core.FindWorkspace()
 	if !ok {
@@ -333,11 +384,14 @@ func releaseArg(args []string) (tag string, ok bool) {
 }
 
 func cmdAsk(args []string) int {
-	// Flags may come before or after the text.
+	// Flags may come before or after the text; everything after a -- is text.
 	var words []string
 	project, wait := new(string), new(bool)
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
+		case a == "--":
+			words = append(words, args[i+1:]...)
+			i = len(args)
 		case a == "--wait" || a == "-wait":
 			*wait = true
 		case (a == "--project" || a == "-project") && i+1 < len(args):
