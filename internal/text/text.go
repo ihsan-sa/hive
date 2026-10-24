@@ -6,17 +6,22 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Visible spells out what a terminal would act on or hide rather than show:
 // control characters as \xNN (ESC as \x1b, so no escape sequence reaches the
 // screen), Unicode format characters (bidi embeddings, overrides and
 // isolates, zero-width characters, the BOM, the word joiner) and the blank
-// Hangul fillers as \uXXXX. Tabs become spaces.
+// Hangul fillers as \uXXXX, and bytes that aren't valid UTF-8 as \xNN (a
+// terminal would draw them as U+FFFD, or read them as part of a sequence).
+// Tabs become spaces.
 func Visible(s string) string {
 	var b strings.Builder
-	for _, r := range s {
+	for i, r := range s {
 		switch {
+		case r == utf8.RuneError && !strings.HasPrefix(s[i:], "\ufffd"): // a byte, not a real U+FFFD
+			fmt.Fprintf(&b, "\\x%02x", s[i])
 		case r == '\t':
 			b.WriteString("    ")
 		case unicode.IsControl(r):

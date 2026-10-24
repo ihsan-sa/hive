@@ -2,7 +2,12 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -562,13 +567,230 @@ func TestWaitingShowsTheDiff(t *testing.T) {
 		}
 		whole := protectedAsk()
 		whole.Diff += "+- a line past the preview\n"
-		m.Update(askMsg{whole})
+		m.Update(askMsg{"a2", whole, nil})
+		if m.stack[0].title != "the whole diff" {
+			t.Fatalf("once fetched, the view should say it's the whole diff: %q", m.stack[0].title)
+		}
 		for i := 0; i < 80; i++ {
 			m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		}
 		checkWidth(t, m.View(), w, h, "the whole diff")
 		if v := ansi.Strip(m.View()); !strings.Contains(v, "+- a line past the preview") {
 			t.Fatalf("%dx%d: scrolling the whole diff should reach its end:\n%s", w, h, v)
+		}
+	}
+}
+
+// Each line of a diff is its own row in Waiting, not one wrapped line.
+func TestWaitingDiffKeepsItsNewlines(t *testing.T) {
+	m := testModel(120, 40)
+	m.st.Asks = []core.Ask{protectedAsk()}
+	m.pick(sideRow{sec: secWaiting})
+	rows := strings.Split(ansi.Strip(m.View()), "\n")
+	at := func(s string) int {
+		for i, r := range rows {
+			if strings.Contains(r, s) {
+				return i
+			}
+		}
+		return -1
+	}
+	if a, b := at("+- goal 0"), at("+- goal 1"); a < 0 || b != a+1 || strings.Contains(rows[a], "goal 1") {
+		t.Fatalf("each diff line should be its own row (%d, %d):\n%s", a, b, strings.Join(rows, "\n"))
+	}
+}
+
+// A failed fetch of the whole diff says so; the preview isn't labelled whole.
+func TestDiffFetchFailureSaysSo(t *testing.T) {
+	m := testModel(80, 24)
+	m.st.Asks = []core.Ask{protectedAsk()}
+	m.pick(sideRow{sec: secWaiting})
+	m.focus = 1
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if m.stack[0].title != "the diff's first part" {
+		t.Fatalf("before the whole diff comes, the view should say it shows the first part: %q", m.stack[0].title)
+	}
+	m.Update(askMsg{"a2", core.Ask{}, errors.New("connection refused")})
+	d := m.stack[0]
+	if d.title != "only the diff's first part" || d.text != protectedAsk().Diff {
+		t.Fatalf("a failed fetch should keep the preview and say it's only part: %q", d.title)
+	}
+	if v := ansi.Strip(m.View()); !strings.Contains(v, "the whole couldn't be") || !strings.Contains(v, "(connection refused)") {
+		t.Fatalf("the screen should say the fetch failed:\n%s", v)
+	}
+}
+
+// Enter answers the ask the person selected, by its id, even when the list
+// shifts under the cursor between drawing and the key.
+func TestWaitingAnswersTheSelectedAsk(t *testing.T) {
+	m := testModel(80, 24)
+	first := protectedAsk()
+	first.ID, first.Title = "a1", "Merge the first?"
+	m.st.Asks = []core.Ask{first, protectedAsk()}
+	m.pick(sideRow{sec: secWaiting})
+	m.focus = 1
+	m.Update(tea.KeyMsg{Type: tea.KeyDown}) // select a2
+	look(m)
+	m.st.Asks = []core.Ask{protectedAsk(), first} // the list reorders: a2 now first
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})      // pick "leave open"
+	if m.waitIndex() != 0 || m.waitID != "a2" || m.optSel != 1 {
+		t.Fatalf("the selection should follow a2 to position 0: sel %d id %q opt %d", m.waitSel, m.waitID, m.optSel)
+	}
+	look(m)
+	m.st.Asks = []core.Ask{first, protectedAsk()} // and back, between drawing and the key
+	answered := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&answered)
+		w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	ws := core.Workspace{Root: t.TempDir()}
+	port, _ := strconv.Atoi(srv.URL[strings.LastIndexByte(srv.URL, ':')+1:])
+	raw, _ := json.Marshal(api.DaemonInfo{Port: port, Token: "t"})
+	os.MkdirAll(filepath.Dir(ws.DaemonFile()), 0o700)
+	os.WriteFile(ws.DaemonFile(), raw, 0o600)
+	m.c, _ = api.Dial(ws)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter should answer")
+	}
+	cmd()
+	if answered["id"] != "a2" || answered["answer"] != "leave open" {
+		t.Fatalf("enter should answer the selected ask a2 with leave open, not what sits at its old position: %v", answered)
+	}
+	ask := func(id string) core.Ask { a := protectedAsk(); a.ID, a.Title = id, "Merge "+id+"?"; return a }
+	m.st.Asks = []core.Ask{first, ask("a3")} // a2, answered here, leaves; a3 takes its place
+	look(m)
+	answered = map[string]string{}
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		cmd()
+	}
+	if v := ansi.Strip(m.View()); len(answered) != 0 || !strings.Contains(v, "this is the next ask") || strings.Contains(v, "answered elsewhere") {
+		t.Fatalf("the first enter on the ask that took a2's place should say it's the next one, not answer it: %v\n%s", answered, v)
+	}
+	look(m) // the person reads a3
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		cmd()
+	}
+	if answered["id"] != "a3" {
+		t.Fatalf("the second enter answers the next ask: %v", answered)
+	}
+	m.st.Asks = []core.Ask{first, ask("a4")} // a3 answered here leaves; a4 slides under the cursor
+	look(m)
+	if m.waitID != "a4" || !m.waitMoved {
+		t.Fatalf("a4 should be under the cursor but not yet chosen: %q moved %v", m.waitID, m.waitMoved)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.st.Asks = []core.Ask{first} // a4 answered elsewhere; a1 slides under the cursor
+	if m.waitIndex() != 0 || m.waitID != "a1" || m.optSel != 0 || !m.waitMoved {
+		t.Fatalf("a vanished ask should not carry its pick to another: sel %d id %q opt %d", m.waitSel, m.waitID, m.optSel)
+	}
+	look(m)
+	answered = map[string]string{}
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		cmd()
+	}
+	if len(answered) != 0 {
+		t.Fatalf("enter must not answer an ask that slid under the cursor: %v", answered)
+	}
+	if v := ansi.Strip(m.View()); !strings.Contains(v, "answered elsewhere") {
+		t.Fatalf("enter should say the selected ask went:\n%s", v)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight}) // a pick on a1 selects it
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	look(m)
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		cmd()
+	}
+	if answered["id"] != "a1" || answered["answer"] != "merge" {
+		t.Fatalf("once the person picks on a1, enter answers it: %v", answered)
+	}
+}
+
+// Two quick Enters can't approve an ask that arrived between them: the first
+// answers the selected ask, and the one that slides under the cursor before
+// the second isn't answered by it.
+func TestWaitingDoubleEnterSkipsANewAsk(t *testing.T) {
+	m := testModel(80, 24)
+	first := protectedAsk()
+	first.ID, first.Title = "a1", "Merge the first?"
+	m.st.Asks = []core.Ask{first}
+	m.pick(sideRow{sec: secWaiting})
+	m.focus = 1
+	var answered []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var a map[string]string
+		json.NewDecoder(r.Body).Decode(&a)
+		answered = append(answered, a["id"])
+		w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	ws := core.Workspace{Root: t.TempDir()}
+	port, _ := strconv.Atoi(srv.URL[strings.LastIndexByte(srv.URL, ':')+1:])
+	raw, _ := json.Marshal(api.DaemonInfo{Port: port, Token: "t"})
+	os.MkdirAll(filepath.Dir(ws.DaemonFile()), 0o700)
+	os.WriteFile(ws.DaemonFile(), raw, 0o600)
+	m.c, _ = api.Dial(ws)
+	look(m)
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		cmd()
+	}
+	m.st.Asks = []core.Ask{protectedAsk()}     // a1 leaves and a2 arrives, between the Enters
+	for _, draw := range []bool{true, false} { // whether or not the view redrew in between
+		if draw {
+			m.View()
+		}
+		if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+			cmd()
+		}
+		if len(answered) != 1 || answered[0] != "a1" {
+			t.Fatalf("the second enter must not approve a2, which arrived after the first: %v", answered)
+		}
+		m.st.Asks = []core.Ask{first}
+		m.waitID, m.waitDone, answered = "a1", "", nil
+		look(m)
+		if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+			cmd()
+		}
+		m.st.Asks = []core.Ask{protectedAsk()}
+	}
+}
+
+// No field of an ask can hide part of what the person approves: raw terminal
+// escapes, bidi controls and zero-width characters in the title, detail, from,
+// project and kind all reach the Waiting view spelled out.
+func TestWaitingShowsHiddenCharacters(t *testing.T) {
+	kinds := map[string]struct{ in, out string }{
+		"escape":     {"ok\x1b[8mrm -rf ~\x1b[0m", `\x1b[8m`},
+		"cursor":     {"ok\r\x1b[2Kfine", `\x0d\x1b[2K`},
+		"bidi":       {"ok\u202eexe.txt\u202c", `\u202e`},
+		"isolate":    {"ok\u2067hidden\u2069", `\u2067`},
+		"zero-width": {"o\u200bk\u200d\ufeff", `\u200b`},
+		"filler":     {"ok\u3164x", `\u3164`},
+	}
+	set := map[string]func(*core.Ask, string){
+		"title":   func(a *core.Ask, s string) { a.Title = s },
+		"detail":  func(a *core.Ask, s string) { a.Detail = s },
+		"from":    func(a *core.Ask, s string) { a.From = s },
+		"project": func(a *core.Ask, s string) { a.Project = s },
+		"kind":    func(a *core.Ask, s string) { a.Kind = s },
+	}
+	for kind, c := range kinds {
+		for field, f := range set {
+			m := testModel(120, 40)
+			a := protectedAsk()
+			f(&a, c.in)
+			m.st.Asks = []core.Ask{a}
+			m.pick(sideRow{sec: secWaiting})
+			v := ansi.Strip(m.View())
+			if !strings.Contains(v, c.out) {
+				t.Errorf("%s in %s should be spelled out as %s:\n%s", kind, field, c.out, v)
+			}
+			for _, r := range v {
+				if r != '\n' && (unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u3164') {
+					t.Errorf("%s in %s: %U reached the screen", kind, field, r)
+				}
+			}
 		}
 	}
 }

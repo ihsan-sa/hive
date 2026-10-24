@@ -795,6 +795,23 @@ func TestWeighFloorGoesToThePerson(t *testing.T) {
 	}
 }
 
+// The ceiling reads the whole diff, not its start; a diff too long for a
+// warden to read whole goes to the person; one that fits reaches the warden whole.
+func TestWeighSeesTheWholeDiff(t *testing.T) {
+	g := newRig(t, 3)
+	pad := strings.Repeat("+- an ordinary line\n", 400) // well past 6000 characters
+	if who := g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@1", Title: "Merge?", Diff: pad + "+the deploy token lives in ~/.netrc\n", Options: []string{"merge", "leave open"}}); who != "person" || len(g.m.List()) != 0 {
+		t.Fatalf("a ceiling line deep in the diff went to the %s", who)
+	}
+	if who := g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@2", Title: "Merge?", Diff: strings.Repeat(pad, 10), Options: []string{"merge", "leave open"}}); who != "person" || len(g.m.List()) != 0 {
+		t.Fatalf("a diff too long for a warden to read whole went to the %s", who)
+	}
+	diff := pad + "+- the last line\n"
+	if who := g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@3", Title: "Merge?", Diff: diff, Options: []string{"merge", "leave open"}}); who != "warden" || !strings.HasSuffix(g.m.List()[0].Why, diff) {
+		t.Fatalf("the warden should be given the whole diff (went to the %s)", who)
+	}
+}
+
 // A step that touches the person's floor goes to them, as asked or as a
 // script a warden approved.
 func TestFloorRaisesToThePerson(t *testing.T) {

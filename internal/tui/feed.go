@@ -205,7 +205,7 @@ func (m *model) viewFeed() []string {
 	var feed []string
 	for i := start; i < len(rows) && len(feed) < room; i++ {
 		r := rows[i]
-		line := fmt.Sprintf("%-10s%s%s", r.at.Local().Format("15:04:05"), pad(clip(r.from+" → "+r.to, 22), 24), pad(clip(r.project, pw-2), pw))
+		line := fmt.Sprintf("%-10s%s%s", r.at.Local().Format("15:04:05"), pad(clip(visible(r.from)+" → "+visible(r.to), 22), 24), pad(clip(visible(r.project), pw-2), pw))
 		line = clip(line+m.feedText(r), w)
 		switch {
 		case i == sel && m.focus == 1:
@@ -227,10 +227,10 @@ func (m *model) viewFeed() []string {
 func (m *model) feedText(r feedRow) string {
 	for _, msg := range m.msgs[r.chat] {
 		if msg.ID == r.msg {
-			return preview(msg.Text)
+			return visible(preview(msg.Text))
 		}
 	}
-	return oneLine(r.text)
+	return visible(oneLine(r.text)) // an ask's title, a task's label: agents wrote them
 }
 
 // usage is the plan usage line, or why agents can't start.
