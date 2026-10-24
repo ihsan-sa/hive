@@ -65,7 +65,8 @@ type Effects struct {
 	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
 	seats     map[string]map[string]Verdict     // project#diff -> security seat -> its latest verdict
 	hostMade  map[string]HostCommit
-	unsure    map[string]bool // reviewer runs whose land was unsure
+	unsure    map[string]bool     // reviewer runs whose land was unsure
+	readRuns  map[string][]string // project -> every ordinary reviewer run that gave a verdict
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
 }
@@ -153,7 +154,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, unsure: map[string]bool{}, approvals: map[string]bool{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, unsure: map[string]bool{}, readRuns: map[string][]string{}, approvals: map[string]bool{}}
 	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -177,6 +178,7 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 				return
 			}
 			e.verdicts[v.Project+"@"+v.SHA] = v
+			e.readRuns[v.Project] = append(e.readRuns[v.Project], v.Run)
 			if v.Unsure && v.Verdict == "land" {
 				e.unsure[v.Run] = true
 			}
@@ -922,7 +924,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	}
 	list := e.ReadFile(p, mainSHA, SecurityList)
 	security, root := ParseList(list, "paths"), ParseList(list, "root")
-	docsOnly, binary := true, false
+	docsOnly, binary, gate := true, false, false
 	for _, l := range strings.Split(stat, "\x00") {
 		f := strings.SplitN(l, "\t", 3)
 		if len(f) < 3 || f[2] == "" {
@@ -933,6 +935,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		del, _ := strconv.Atoi(f[1])
 		file := f[2]
 		c.Files = append(c.Files, file)
+		gate = gate || p.Self && under(file, SelfGate)
 		c.Lines += add + del
 		if under(file, protected) {
 			c.Protected = append(c.Protected, file)
@@ -958,7 +961,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		}
 	}
 	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Security) == 0 && !p.Self
-	c.Unread = len(c.Files) > 0 && !binary && c.Lines <= cfg.UnreadMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Root) == 0 && len(c.Security) == 0
+	c.Unread = len(c.Files) > 0 && !binary && !gate && c.Lines <= cfg.UnreadMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Root) == 0 && len(c.Security) == 0
 	c.TwoReads = len(c.Root) > 0 || c.Lines > cfg.ReadTwoMax
 	// Binary and full-index, so a binary file (or a script git takes for one,
 	// with a NUL byte in it) carries its content into the diff and DiffID, and
@@ -1061,6 +1064,9 @@ type MergeRequest struct {
 	SHA     string
 	Main    string
 	Subject string
+	// Task is the work task the PR is of: an unread change merges only while
+	// no ordinary reader has read any head of it.
+	Task string
 }
 
 // Merge merges the PR only at sha, and only when the host's own records show
@@ -1083,7 +1089,8 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
 	}
 	read := e.readOK(p, ch, m.SHA)
-	if !ch.Small && !ch.Unread && !read {
+	unread := ch.Unread && m.Task != "" && !e.TaskRead(p.Name, m.Task)
+	if !ch.Small && !unread && !read {
 		return "", fmt.Errorf("refusing to merge %s: no land verdict bound to that exact commit", short(m.SHA))
 	}
 	if !e.SecurityOK(p.Name, ch) {
@@ -1372,6 +1379,21 @@ func (e *Effects) readOK(p Project, ch Change, sha string) bool {
 	}
 	h, ok := e.HostMade(project, sha)
 	return ok && (h.Kind == "revert" || h.Kind == "setup")
+}
+
+// TaskRead reports whether an ordinary reader has given a verdict on any head
+// of task (a sampled read after merge, a p- run, doesn't count: it reads a
+// merged head).
+func (e *Effects) TaskRead(project, task string) bool {
+	e.mu.Lock()
+	runs := slices.Clone(e.readRuns[project])
+	e.mu.Unlock()
+	for _, id := range runs {
+		if r, ok := e.runs.Get(id); ok && r.Task == task && !strings.HasPrefix(id, "p-") {
+			return true
+		}
+	}
+	return false
 }
 
 // ReadsNeeded is how many ordinary lands a read change needs, given the

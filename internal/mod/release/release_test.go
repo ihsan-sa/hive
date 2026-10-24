@@ -890,3 +890,23 @@ func TestUnreadByRuleReleases(t *testing.T) {
 		t.Fatalf("a head unread with no mark should wait for the person: %v", n.got)
 	}
 }
+
+// An unread head whose sampled read is still to come, or said fix, doesn't go
+// out without the person.
+func TestUnreadWithOpenOrFixedSampleWaits(t *testing.T) {
+	m, n, _, _ := selfHive(t)
+	m.SampleOpen = func(project, sha string) bool { return sha == "a1" }
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 1, "sha": "a1", "merge_sha": "m1", "unread": true, "lines": 3})
+	m.AfterKept("hive", "m1")
+	if len(n.got) != 0 || len(m.C.Person.Open()) != 1 {
+		t.Fatalf("a head with its sampled read open released: %v", n.got)
+	}
+
+	m, n, _, _ = selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 1, "sha": "a1", "merge_sha": "m1", "unread": true, "lines": 3})
+	m.C.J.MustAppend("effect.verdict", core.Verdict{Project: "hive", SHA: "a1", Run: "p-x", Verdict: "fix"})
+	m.AfterKept("hive", "m1")
+	if len(n.got) != 0 || len(m.C.Person.Open()) != 1 {
+		t.Fatalf("a head whose sampled read said fix released: %v", n.got)
+	}
+}

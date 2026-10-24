@@ -33,6 +33,12 @@ func TestUnreadChange(t *testing.T) {
 		{"internal/sandbox/linux.go", "package sandbox\n", self, false},
 		{".hive/goals.md", "# Goals\n\nmore\n", p, false},
 		{"blob.bin", "a\x00b", p, false},
+		// In a self project the code and prompts that define the gate are
+		// never unread, so a small edit can't move its own bar unread.
+		{"internal/core/projects.go", "package core\n", self, false},
+		{"internal/mod/work/work.go", "package work\n", self, false},
+		{"modules/agents/reviewer.md", "# reviewer\n", self, false},
+		{"internal/core/projects.go", "package core\n", p, true}, // only the Hive's own repo
 	} {
 		r, _ := commitInCheckout(t, c, p, fmt.Sprintf("wu-%d", i), main, tc.file, tc.body)
 		sha, err := c.Effects.Extract(p, r, main)
@@ -50,7 +56,22 @@ func TestUnreadChange(t *testing.T) {
 	c.Effects.Push(p, "hive/tu", sha)
 	pr, _ := f.CreatePR(p.Repo, "hive/tu", "main", "tiny", "body")
 	c.Effects.RunCheck(p, sha, "test", "true")
-	if _, err := c.Effects.Merge(MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main}); err != nil {
+	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main}
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no land verdict") {
+		t.Fatalf("an unread merge must name its task: %v", err)
+	}
+	// A reader's verdict on an earlier head of the task keeps every later
+	// head read, however small, whichever way it reaches the merge.
+	c.Runs.Start(RunSpec{ID: "r-old", Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Task: "read-before", Inputs: map[string]string{"sha": main}})
+	if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: main, Run: "r-old", Verdict: "fix"}); err != nil {
+		t.Fatal(err)
+	}
+	req.Task = "read-before"
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no land verdict") {
+		t.Fatalf("a task read before merged unread: %v", err)
+	}
+	req.Task = "tu"
+	if _, err := c.Effects.Merge(req); err != nil {
 		t.Fatalf("an unread change should merge on its tests: %v", err)
 	}
 	var merged struct {

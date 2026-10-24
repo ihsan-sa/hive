@@ -34,6 +34,9 @@ type Module struct {
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
 	PauseMerges func(wait time.Duration) (resume func(), ok bool)
+	// SampleOpen says the head sha merged unread and its sampled read hasn't
+	// said land yet (the work module), so it doesn't go out unread meanwhile.
+	SampleOpen func(project, sha string) bool
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
 	// said holds project@tag for each pre-release whose wait or failed
@@ -584,9 +587,10 @@ func (m *Module) afterKept(project, sha string) {
 	for _, mg := range list {
 		if reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff); len(reads) > 0 {
 			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
-		} else if mg.Unread && len(mg.Root) == 0 {
+		} else if mg.Unread && len(mg.Root) == 0 && !m.sampleOpen(project, mg.SHA) && !m.readFix(project, mg.SHA) {
 			// Merged unread by the gate's own rule: small, and no root, high,
-			// protected or security-listed path, so the release needn't wait.
+			// protected, security-listed or gate-defining path, so the release
+			// needn't wait, unless its sampled read is still to come or said fix.
 			fmt.Fprintf(&manifest, "- #%d at %s, merged on its tests and checks (%d lines, no guarded path)\n", mg.PR, core.Short(mg.SHA), mg.Lines)
 		} else {
 			unread = append(unread, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
@@ -771,6 +775,17 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 		return nil, "it is not a merge the Hive made"
 	}
 	return all[from : at+1], ""
+}
+
+func (m *Module) sampleOpen(project, sha string) bool {
+	return m.SampleOpen != nil && m.SampleOpen(project, sha)
+}
+
+// readFix reports whether the newest read of sha (a sampled read after merge)
+// asked for fixes.
+func (m *Module) readFix(project, sha string) bool {
+	v, ok := m.C.Effects.GetVerdict(project, sha)
+	return ok && v.Verdict == "fix"
 }
 
 // Gates are the workflows that must pass in a release's own runs, on its

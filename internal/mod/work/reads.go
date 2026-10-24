@@ -40,6 +40,12 @@ func sampled(id string, n int) bool {
 	return binary.BigEndian.Uint32(sum[:4])%uint32(n) == 0
 }
 
+// SampleOpen reports whether a task of project merged unread at head sha and
+// its sampled read is still to come.
+func (m *Module) SampleOpen(project, sha string) bool {
+	return len(m.List(func(t Task) bool { return t.Project == project && t.SHA == sha && t.Sample })) > 0
+}
+
 // sampleRead runs the one read a sampled unread merge gets: wait says the
 // read is still to come. A land lets the task finish as usual (its advice
 // filed as the follow-up); a fix files one follow-up brief with the findings,

@@ -43,6 +43,19 @@ func TestUnreadNotAfterARead(t *testing.T) {
 	}
 }
 
+// The journal's reads count even when the task's own record of its reviewer
+// is gone: the router and the merge both look there.
+func TestUnreadNotAfterAJournaledRead(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"main.go": "package main\n"})
+	m.C.Runs.Start(core.RunSpec{ID: "r-t1-old-0", Role: "reviewer", Project: p.Name, Harness: "fake", ReadOnly: true, Task: "t1", Inputs: map[string]string{"sha": task.SHA}})
+	if err := m.C.Effects.RecordVerdict(core.Verdict{Project: p.Name, SHA: task.SHA, Run: "r-t1-old-0", Verdict: "fix"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.test(task, p); err != nil || task.Stage != StageReviewing {
+		t.Fatalf("stage %q, err %v", task.Stage, err)
+	}
+}
+
 // A fix round's re-read gets the earlier read's findings and the worker's
 // delta since that head, and is asked to judge those rather than read it all.
 func TestReReadSeesFindingsAndDelta(t *testing.T) {

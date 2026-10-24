@@ -1200,7 +1200,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 	case ch.Small || m.C.Effects.Reviewed(p, ch, t.SHA):
 		t.Stage = StageMerging
 		m.save(t, "tests passed; "+map[bool]string{true: "small change, no read needed", false: "already read"}[ch.Small])
-	case ch.Unread && t.Reviewer == "":
+	case ch.Unread && t.Reviewer == "" && !m.C.Effects.TaskRead(p.Name, t.ID):
 		// A small change no guard names merges on its tests and the forge's
 		// checks. One a reviewer already read is read again (its findings'
 		// delta), so shrinking it under the line never skips that read.
@@ -1657,7 +1657,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return nil
 	}
 	defer m.leaveMerge()
-	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label()})
+	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Task: t.ID})
 	if errors.Is(err, core.ErrDraft) { // made a draft since the look above
 		return m.waitDraft(t, pr)
 	}
