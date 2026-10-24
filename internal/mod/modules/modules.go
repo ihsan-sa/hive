@@ -361,8 +361,8 @@ func (r *Registry) Update() []string {
 		if tag == "" || tag == m.Source.Release {
 			continue
 		}
-		if _, err := core.Git(m.Dir, "checkout", "-q", tag); err != nil {
-			continue
+		if !checkout(m.Dir, tag) {
+			continue // the next update tries again
 		}
 		s := m.Source
 		s.Release, s.Updated = tag, time.Now().UTC()
@@ -372,6 +372,30 @@ func (r *Registry) Update() []string {
 		changed = append(changed, m.Name+" "+tag)
 	}
 	return changed
+}
+
+// checkout moves dir to tag and reports whether it did. On Windows a file
+// another process has open can stay as it was while HEAD moves; a tree that
+// was clean before is then written from tag again, and an update that still
+// differs isn't recorded, so the next one tries again.
+func checkout(dir, tag string) bool {
+	_, dirty := core.Git(dir, "diff", "--quiet", "HEAD", "--")
+	if _, err := core.Git(dir, "checkout", "-q", tag); err != nil {
+		return false
+	}
+	if dirty != nil {
+		return true // local edits that survived the checkout stay, as before
+	}
+	for try := 0; ; try++ {
+		if _, err := core.Git(dir, "diff", "--quiet", tag, "--"); err == nil {
+			return true
+		}
+		if try == 3 {
+			return false
+		}
+		time.Sleep(time.Second)
+		core.Git(dir, "checkout", "-q", tag, "--", ".")
+	}
 }
 
 // latestTag returns the highest vX.Y.Z tag.
