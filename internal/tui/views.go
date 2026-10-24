@@ -928,7 +928,7 @@ func (m *model) settings() []setting {
 		{group: "General", label: "auto-update", value: onOff(c.AutoUpdate), key: "auto_update"},
 		{group: "General", label: "use ANTHROPIC_API_KEY", value: onOff(c.APIKeyOptIn), key: "api_key_opt_in"},
 		{group: "General", label: "release repo", value: c.ReleaseRepo, key: "release_repo"},
-		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel"},
+		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel", choices: []string{"default", "latest", "pre-release"}},
 		{group: "General", label: "release", value: m.st.Version + ", " + pinText(c.ReleasePin), action: func() tea.Cmd {
 			return func() tea.Msg {
 				return flashMsg("`" + core.Cmd + " update --release <tag>` installs and pins a release")
@@ -1049,11 +1049,8 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			c.AutoUpdate = !c.AutoUpdate
 			return m, m.saveConfig(c, "auto-update changed")
 		case "channel":
-			if c.Channel = "pre-release"; m.st.Channel == "pre-release" {
-				c.Channel = "latest"
-			}
-			m.st.Channel = c.Channel // shown at once, as saveConfig shows the rest
-			return m, m.saveConfig(c, "release channel changed")
+			m.picking, m.pickSel = true, max(0, slices.Index(cur.choices, c.Channel))
+			return m, nil
 		case "api_key_opt_in":
 			c.APIKeyOptIn = !c.APIKeyOptIn
 			return m, m.saveConfig(c, "API key use changed")
@@ -1235,6 +1232,12 @@ func (m *model) saveSetting(v string) tea.Cmd {
 		c.Projects[p] = ps
 	case strings.HasPrefix(key, "route:"):
 		c = routeEdit(c, strings.TrimPrefix(key, "route:"), v)
+	case key == "channel":
+		if c.Channel = v; v == "default" {
+			c.Channel = ""
+		} else {
+			m.st.Channel = v // shown at once; the default shows once the daemon says what it is
+		}
 	case key == "review_rounds":
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 {

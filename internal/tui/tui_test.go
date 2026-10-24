@@ -225,6 +225,26 @@ func TestModelIsAPickList(t *testing.T) {
 	}
 }
 
+// The release channel is a pick-list with a way back to the default.
+func TestChannelIsAPickList(t *testing.T) {
+	m := testModel(80, 24)
+	m.section = secSettings
+	m.st.Config.Channel = "latest"
+	for i, s := range m.settings() {
+		if s.key == "channel" {
+			m.setSel = i
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.picking || m.settings()[m.setSel].choices[m.pickSel] != "latest" {
+		t.Fatalf("enter on the channel should open its list at latest (picking %v, sel %d)", m.picking, m.pickSel)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.Update(tea.KeyMsg{Type: tea.KeyEnter}); m.picking || m.st.Config.Channel != "" {
+		t.Fatalf("default should clear the channel, got %q", m.st.Config.Channel)
+	}
+}
+
 func TestMarkdown(t *testing.T) {
 	src := "Use **bold** and `code` and [hive](https://x.io).\n- one item\n- two\n```\nfunc main() {}\n```"
 	got := strings.Join(markdown(src, 60), "\n")
