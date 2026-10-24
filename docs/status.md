@@ -25,6 +25,7 @@ Done:
 - Settings pick models from a list of the harness's known models (Opus first and the default) plus `model_choices` and a custom entry; schedules are typed as hours.
 - Releases are public (latest v0.1.3, 2026-10-23, at 376ce35; green on Linux, macOS and the sandboxed e2e; on Windows the step-back and stall-detection e2e tests are known to fail). v0.1.0 shipped binaries (linux/darwin amd64+arm64, windows amd64). One-line install via `gh api …/install.ps1 | Out-String | iex` verified into a scratch dir; installs `hive-v0`.
 - CI green on Windows, Ubuntu and macOS (vet, unit, e2e). Claude Code inside the WSL sandbox verified up to the API (invalid token → 401).
+- Sharing has three levels (docs/sharing.md): `create_project --sharing shared|private|isolated`; a private project is hidden from every other run and walled from reach both ways, while its own runs read the shared Hive (unit `TestPrivateProjectSeesOutButIsNotSeen`, `TestPrivateProjectsAreOutOfReach`, `TestPrivateNotesStayInTheProject`). Not yet in the control center, and no way to change a level after creation.
 - The knowledge base files every journal event under `kb/record/` (one file per task, request, run, chat, project) on its own, catches up after downtime and never files an event twice; `hive agent search` and `hive kb <words>` return the best-matching pieces, and the lead searches before it says what happened (unit `internal/mod/kb`).
 
 Not verified:

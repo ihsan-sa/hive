@@ -17,12 +17,51 @@ type Project struct {
 	Repo        string    `json:"repo"` // owner/name on the forge
 	Branch      string    `json:"branch"`
 	Description string    `json:"description,omitempty"`
-	Isolated    bool      `json:"isolated,omitempty"`
-	Self        bool      `json:"self,omitempty"` // the Hive's own source
+	Isolated    bool      `json:"isolated,omitempty"` // walled both ways: sees no other project, and none sees it
+	Private     bool      `json:"private,omitempty"`  // walled one way: reads the shared Hive, and none sees it
+	Self        bool      `json:"self,omitempty"`     // the Hive's own source
 	Demo        bool      `json:"demo,omitempty"`
 	Goals       string    `json:"goals,omitempty"` // the person's words when they made it
 	Ready       bool      `json:"ready,omitempty"` // cloned and set up; until then setup is retried
 	Created     time.Time `json:"created"`
+}
+
+// The three levels of sharing, from most to least seen (docs/sharing.md).
+const (
+	SharingShared   = "shared"
+	SharingPrivate  = "private"
+	SharingIsolated = "isolated"
+)
+
+// Sharing names p's level. Isolated wins over private.
+func (p Project) Sharing() string {
+	switch {
+	case p.Isolated:
+		return SharingIsolated
+	case p.Private:
+		return SharingPrivate
+	}
+	return SharingShared
+}
+
+// Hidden says whether other projects' agents are kept from p: its records are
+// covered in their sandboxes, and they can't reach its agents or file work in
+// it, nor its agents theirs.
+func (p Project) Hidden() bool { return p.Isolated || p.Private }
+
+// SetSharing sets p's level from its name; "" is shared.
+func (p *Project) SetSharing(level string) error {
+	switch level {
+	case "", SharingShared:
+		p.Isolated, p.Private = false, false
+	case SharingPrivate:
+		p.Isolated, p.Private = false, true
+	case SharingIsolated:
+		p.Isolated, p.Private = true, false
+	default:
+		return fmt.Errorf("sharing is one of %s, %s or %s, not %q", SharingShared, SharingPrivate, SharingIsolated, level)
+	}
+	return nil
 }
 
 // ProjectConfig is .hive/project.json in the project's repository, read from main.
