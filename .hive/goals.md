@@ -39,7 +39,7 @@ So a change to a path on `tests/LANDING-security.toml` gets its security read fr
 
 What the person has asked that holds from now on, in their words where they gave them:
 
-- **Build against the essay** at ihsan.cc/writing/the-hive.
+- **Build against the essay** at ihsan.cc/writing/the-hive: its text is in [docs/the-hive-essay.md](../docs/the-hive-essay.md), and where the Hive departs from it today is listed, as known gaps, at the end of [docs/spec.md](../docs/spec.md).
 - **A light core.** "the core should be as lightweight as possible"; "The rest goes into modules", "not the core".
 - **Modules: standard in the repo, extras in their own.** As decided with the person (2026-10-24, 10:40-10:41 local): the standard modules (agents with the common harness adapters, chat, improve, kb, system) stay in ihsan-sa/hive under modules/, each a module of its own; extras (Slack, a call/phone module, extra harnesses) live in their own public repos and install from the marketplace.
 - **Other harnesses.** Codex, Cursor and other open harnesses, not only Claude.
