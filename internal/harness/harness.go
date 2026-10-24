@@ -32,8 +32,9 @@ type Turn struct {
 
 // Event is a normalized line of harness output.
 type Event struct {
-	Kind      string // init, text, tool, result, ratelimit
+	Kind      string // init, text, tool, context, result, ratelimit
 	SessionID string
+	Tokens    int // context: what the session's context held at this reply
 	Model     string
 	Text      string
 	Tool      string
@@ -181,6 +182,11 @@ type claudeLine struct {
 			Name  string          `json:"name"`
 			Input json.RawMessage `json:"input"`
 		} `json:"content"`
+		Usage *struct {
+			Input         int `json:"input_tokens"`
+			CacheCreation int `json:"cache_creation_input_tokens"`
+			CacheRead     int `json:"cache_read_input_tokens"`
+		} `json:"usage"`
 	} `json:"message"`
 	Result           string          `json:"result"`
 	IsError          bool            `json:"is_error"`
@@ -214,6 +220,9 @@ func (Claude) Parse(line []byte) []Event {
 			return nil
 		}
 		var out []Event
+		if u := l.Message.Usage; u != nil {
+			out = append(out, Event{Kind: "context", Tokens: u.Input + u.CacheCreation + u.CacheRead})
+		}
 		for _, c := range l.Message.Content {
 			switch c.Type {
 			case "text":
