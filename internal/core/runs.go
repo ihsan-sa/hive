@@ -96,6 +96,23 @@ type Run struct {
 	Updated     time.Time       `json:"updated"`
 	TurnStarted time.Time       `json:"turn_started,omitempty"`
 	LastOutput  time.Time       `json:"last_output,omitempty"`
+	Moves       []Move          `json:"moves,omitempty"` // each change of harness, so a past turn is read as it was written
+}
+
+// Move is a run going from one harness to another at a turn.
+type Move struct {
+	Turn int    `json:"turn"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// HarnessAt is the harness the run's turn ran on.
+func (r *Run) HarnessAt(turn int) string {
+	h := r.Harness
+	for i := len(r.Moves) - 1; i >= 0 && turn < r.Moves[i].Turn; i-- {
+		h = r.Moves[i].From
+	}
+	return h
 }
 
 // Terminal reports whether the run will take no more turns on its own.
@@ -461,7 +478,8 @@ func (rs *Runs) apply(e Event) {
 		if t.Model != "" {
 			r.Model = t.Model
 		}
-		if t.Harness != "" {
+		if t.Harness != "" && HarnessName(t.Harness) != HarnessName(r.Harness) {
+			r.Moves = append(r.Moves, Move{Turn: t.Turn, From: r.Harness, To: t.Harness})
 			r.Harness = t.Harness
 		}
 		if !t.Resume {
@@ -900,7 +918,7 @@ type TurnLog struct {
 
 // ReadTurn parses one turn's output.
 func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
-	h, _ := harness.Get(r.Harness)
+	h, _ := harness.Get(r.HarnessAt(turn))
 	var tl TurnLog
 	_ = ReadJSONL(rs.ws.TurnOut(r.ID, turn), func(line []byte) {
 		for _, ev := range h.Parse(line) {
@@ -963,6 +981,9 @@ func (rs *Runs) endTurn(r Run) {
 	var dropErr error
 	if HarnessName(r.Harness) == "codex" {
 		dropErr = rs.dropCodexHome(r.ID)
+	}
+	if HarnessName(r.Harness) == "open" {
+		rs.dropOpenKey(r.ID)
 	}
 	cur, _ := rs.Get(r.ID)
 	switch {
@@ -1200,6 +1221,11 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	spec, err := rs.sandboxSpec(cfg, sb, h, r, turn, resume, promptFile, tok, codexHome)
+	defer func() {
+		if !started && HarnessName(r.Harness) == "open" {
+			rs.dropOpenKey(r.ID) // no turn will end to delete the key
+		}
+	}()
 	if err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(5 * time.Minute)})
 		return
@@ -1296,6 +1322,19 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		env = append(sandbox.InsideEnv("/hive/home", true), env...)
 	} else {
 		env = append(env, "HIVE_WORKSPACE="+rs.ws.Root)
+	}
+	if HarnessName(r.Harness) == "open" {
+		// The key goes in a file the open agent deletes before any tool runs,
+		// never in its environment, which its commands could read from /proc.
+		keyIn := filepath.Join(in(home), ".hive-open", "key")
+		if sb.Isolated() {
+			keyIn = in(home) + "/.hive-open/key"
+		}
+		var err error
+		if tok, err = rs.openKey(r.ID, tok, keyIn); err != nil {
+			return sandbox.Spec{}, err
+		}
+		env = append(env, "HIVE_OPEN_HOME="+in(home))
 	}
 	env = append(env, tok...)
 	env = append(env, h.Env(t)...)
@@ -1433,6 +1472,40 @@ func (rs *Runs) dropCodexHome(id string) error {
 	os.Rename(filepath.Join(dir, "sessions"), filepath.Join(rs.ws.RunPrivate(id), "codex-sessions"))
 	return removeTree(dir)
 }
+
+// openKeyFile is where a turn on the open harness finds its model's key.
+func (rs *Runs) openKeyFile(id string) string {
+	return filepath.Join(rs.ws.RunHome(id), ".hive-open", "key")
+}
+
+// openKey moves a model key out of tok into the run's key file, which the
+// agent sees at keyIn; with no key it leaves no file.
+func (rs *Runs) openKey(id string, tok []string, keyIn string) ([]string, error) {
+	var out []string
+	key := ""
+	for _, kv := range tok {
+		if k, ok := strings.CutPrefix(kv, "HIVE_OPEN_KEY="); ok {
+			key = k
+		} else {
+			out = append(out, kv)
+		}
+	}
+	rs.dropOpenKey(id)
+	if key == "" {
+		return out, nil
+	}
+	f := rs.openKeyFile(id)
+	if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(f, []byte(key), 0o600); err != nil {
+		return nil, err
+	}
+	return append(out, "HIVE_OPEN_KEY_FILE="+keyIn), nil
+}
+
+// dropOpenKey deletes a key file a turn left, read or not.
+func (rs *Runs) dropOpenKey(id string) { os.Remove(rs.openKeyFile(id)) }
 
 // removeTree deletes a folder an agent may have locked, opening it first;
 // links are never followed.

@@ -135,6 +135,41 @@ func TestOpenModelTurn(t *testing.T) {
 			t.Errorf("argv %q", spec.Argv)
 		}
 	}
+	// The key reaches the turn as a file in its home, never in its environment.
+	r := Run{RunSpec: RunSpec{ID: "o-key", Role: "worker", Harness: "open", Model: "free"}}
+	os.MkdirAll(c.WS.RunHome(r.ID), 0o755)
+	spec, err := c.Runs.sandboxSpec(cfg, isolatedSB{}, h, r, 1, false, "p", env, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(spec.Env, "\n")
+	raw, _ := os.ReadFile(c.Runs.openKeyFile(r.ID))
+	if strings.Contains(all, "sk-or-test") || !strings.Contains(all, "HIVE_OPEN_KEY_FILE=/hive/home/.hive-open/key") || string(raw) != "sk-or-test" {
+		t.Fatalf("env %q, key file %q", spec.Env, raw)
+	}
+	c.Runs.dropOpenKey(r.ID)
+	if Exists(c.Runs.openKeyFile(r.ID)) {
+		t.Fatal("the key file outlived its turn")
+	}
+}
+
+// Only a public host is added to a run's egress list for its model: an
+// endpoint on this machine or a private network opens only through the
+// person's local grant.
+func TestOpenHostIsPublicOnly(t *testing.T) {
+	c := DefaultConfig()
+	c.Models = map[string]OpenModel{}
+	for ep, want := range map[string]string{
+		"https://api.moonshot.ai/v1": "api.moonshot.ai", "https://api.deepseek.com/v1": "api.deepseek.com",
+		"http://localhost:11434/v1": "", "http://127.0.0.2:8080/v1": "", "http://0.0.0.0:11434/v1": "",
+		"http://[::1]:8000/v1": "", "http://[::ffff:127.0.0.1]:8000/v1": "", "http://192.168.1.20:11434/v1": "",
+		"http://10.0.0.5/v1": "", "http://169.254.169.254/v1": "", "http://[fd00::1]/v1": "", "http://100.64.0.1/v1": "",
+	} {
+		c.Models["m"] = OpenModel{Endpoint: ep, Model: "x"}
+		if got := c.openHost("m"); got != want {
+			t.Errorf("%s: %q, want %q", ep, got, want)
+		}
+	}
 }
 
 // At a usage limit a run moves to the next model on its route that has
@@ -169,6 +204,9 @@ func TestFallbackAtALimit(t *testing.T) {
 	got, _ := c.Runs.Get("w1")
 	if got.Harness != "open" || got.Model != "free" || got.Login != "open:free" {
 		t.Fatalf("the run didn't move to the free model: %s:%s on %s", got.Harness, got.Model, got.Login)
+	}
+	if got.HarnessAt(1) != "fake" || got.HarnessAt(2) != "open" || len(got.Moves) != 1 {
+		t.Fatalf("each turn is read with the harness it ran on: %+v", got.Moves)
 	}
 	prompt, _ := os.ReadFile(c.WS.RunHost("w1") + "/turn-002.prompt")
 	if !strings.HasPrefix(string(prompt), "the brief") || !strings.Contains(string(prompt), "You now run on open:free: fake:opus is at its usage limit") {

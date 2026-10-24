@@ -243,6 +243,12 @@ func TestMainResumes(t *testing.T) {
 		t.Setenv("HIVE_OPEN_ENDPOINT", srv.URL+"/v1")
 		t.Setenv("HIVE_OPEN_MODEL", "qwen")
 		t.Setenv("HIVE_OPEN_KEY", "sk-main")
+		keyFile := filepath.Join(t.TempDir(), "key")
+		if strings.Contains(prompt, "message") { // the second turn gets its key as the run manager hands it over
+			t.Setenv("HIVE_OPEN_KEY", "")
+			os.WriteFile(keyFile, []byte("sk-file"), 0o600)
+			t.Setenv("HIVE_OPEN_KEY_FILE", keyFile)
+		}
 		in, out := filepath.Join(t.TempDir(), "in"), filepath.Join(t.TempDir(), "out")
 		os.WriteFile(in, []byte(prompt), 0o644)
 		stdin, _ := os.Open(in)
@@ -256,8 +262,11 @@ func TestMainResumes(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("exit %d", code)
 		}
-		if k := os.Getenv("HIVE_OPEN_KEY"); k != "" {
+		if os.Getenv("HIVE_OPEN_KEY") != "" || os.Getenv("HIVE_OPEN_KEY_FILE") != "" {
 			t.Fatal("the key is still in the environment tools inherit")
+		}
+		if _, err := os.Stat(keyFile); err == nil {
+			t.Fatal("the key file is still there for a tool to read")
 		}
 		raw, _ := os.ReadFile(out)
 		return string(raw)
@@ -275,7 +284,7 @@ func TestMainResumes(t *testing.T) {
 	if strings.Join(roles, ",") != "system,user,assistant,user" || !strings.Contains(texts[0], "THE HIVE'S PROMPT") || texts[1] != "the brief" || texts[3] != "a message" {
 		t.Fatalf("the resumed turn sent %q %q", roles, texts)
 	}
-	if s.auth[1] != "Bearer sk-main" {
-		t.Fatalf("auth %q", s.auth[1])
+	if s.auth[0] != "Bearer sk-main" || s.auth[1] != "Bearer sk-file" {
+		t.Fatalf("auth %q", s.auth)
 	}
 }

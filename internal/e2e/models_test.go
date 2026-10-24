@@ -94,11 +94,19 @@ func TestFallbackToAFreeModel(t *testing.T) {
 	}
 }
 
-// A live probe: a worker turn on a model on this machine's Ollama, which
-// lands on a test project. It runs where Ollama answers on 127.0.0.1:11434
-// with a model (HIVE_E2E_OPEN_MODEL picks one, else the first it lists).
+// A live probe: a worker turn on a model on this machine's Ollama (say
+// qwen2.5-coder, or a Kimi, DeepSeek or GLM build), which lands on a test
+// project. It runs only when asked, as the other live probes do:
+// HIVE_E2E_OPEN_MODEL=<model> (or "any" for the first Ollama lists), and
+// Ollama answering on 127.0.0.1:11434.
 func TestLiveLocalModelWorker(t *testing.T) {
 	model := os.Getenv("HIVE_E2E_OPEN_MODEL")
+	if model == "" {
+		t.Skip("set HIVE_E2E_OPEN_MODEL=<an Ollama model> (or any) to run a worker on a local model")
+	}
+	if model == "any" {
+		model = ""
+	}
 	resp, err := http.Get("http://127.0.0.1:11434/api/tags")
 	if err != nil {
 		t.Skip("no Ollama on 127.0.0.1:11434: " + err.Error())

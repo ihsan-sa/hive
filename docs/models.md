@@ -39,12 +39,32 @@ hive model key gpt-oss                     # the key, read from stdin
 }
 ```
 
+No vendor is built in: any endpoint that speaks OpenAI's chat completions
+with tool calls works the same way. For example (check each vendor's current
+model ids and free tiers):
+
+| Model | Endpoint | Example id |
+|---|---|---|
+| Kimi (Moonshot) | `https://api.moonshot.ai/v1` | `kimi-k2-0905-preview` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| Qwen (DashScope) | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `qwen3-coder-plus` |
+| GLM (Zhipu) | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` |
+| OpenRouter's free models | `https://openrouter.ai/api/v1` | `moonshotai/kimi-k2:free` |
+| Ollama on this machine | `http://127.0.0.1:11434/v1` | `qwen2.5-coder:14b` |
+
+Several of these vendors also serve an Anthropic-compatible API that Claude
+Code itself can drive. That route, and other harnesses with a CLI of their own
+(Kimi's CLI, OpenCode, Aider), come in as harnesses through the harness-module
+seam rather than as more code in the open agent.
+
 A key is a credential: it is stored in `.hive/logins/open/<name>.key` (0600),
-which no run sees, and reaches only a turn on that model, in the open agent's
-environment, which it clears before any tool runs (as Claude's token, it is
-still in that process's own environment block). A run on a hosted model may
-reach that endpoint's host besides its egress list; one on this machine only
-through the person's `hive egress grant`. Ollama's default context is small:
+which no run sees, and reaches only a turn on that model: the run manager writes it to a file in
+the run's home, which the open agent reads and deletes before any tool runs
+(and the run manager deletes when the turn ends), so it is never in an
+environment a command could read. A run on a hosted model may reach that
+endpoint's public host besides its egress list; an endpoint on this machine or
+a private network (any IP that isn't public, `localhost`) only through the
+person's `hive egress grant`. Ollama's default context is small:
 set `OLLAMA_CONTEXT_LENGTH` (or a Modelfile's `num_ctx`) to the `context` given here.
 
 ## Routes and fallback

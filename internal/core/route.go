@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
@@ -165,19 +166,29 @@ func (c Config) checkRoutes() error {
 }
 
 // openHost is the host a sandboxed run reaches model name's endpoint at, for
-// its egress list; "" for one on this machine, which only the person's local
-// grant opens.
+// its egress list; "" for one on this machine or a private network (an IP
+// that isn't public), which only the person's local grant opens. A name that
+// resolves to such an address is still refused by the egress proxy.
 func (c Config) openHost(name string) string {
 	u, err := url.Parse(c.Models[name].Endpoint)
 	if err != nil {
 		return ""
 	}
 	h := u.Hostname()
-	if h == "localhost" || strings.HasPrefix(h, "127.") || h == "::1" {
+	if strings.EqualFold(h, "localhost") || strings.HasSuffix(strings.ToLower(h), ".localhost") {
 		return ""
+	}
+	if ip, err := netip.ParseAddr(h); err == nil {
+		ip = ip.Unmap()
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || cgnat.Contains(ip) {
+			return ""
+		}
 	}
 	return h
 }
+
+// cgnat is the shared address space (RFC 6598), private in practice.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
 // Seats are the tribunal's seats: the tribunal route when one is set, else
 // tribunal_models. A seat on a model named in Models sits on the open harness.

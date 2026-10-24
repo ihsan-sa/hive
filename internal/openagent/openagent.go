@@ -60,8 +60,9 @@ type Agent struct {
 
 // Main is `hive open-agent --session S --model NAME [--resume] [--system-file F]
 // [--readonly --add-dir D] [--schema-file F] [--max-output N]`, with the
-// endpoint, model id and key in HIVE_OPEN_ENDPOINT, HIVE_OPEN_MODEL and
-// HIVE_OPEN_KEY, which it clears before any tool runs.
+// endpoint and model id in HIVE_OPEN_ENDPOINT and HIVE_OPEN_MODEL, the key in
+// the file HIVE_OPEN_KEY_FILE names (deleted once read) or HIVE_OPEN_KEY, and
+// its conversations under HIVE_OPEN_HOME (else $HOME).
 func Main(argv []string) int {
 	fl := flag.NewFlagSet("open-agent", flag.ContinueOnError)
 	session := fl.String("session", "", "")
@@ -80,8 +81,23 @@ func Main(argv []string) int {
 		ReadOnly: *readonly, MaxOutput: *maxOut, MaxSteps: 200, Out: os.Stdout, Sleep: time.Sleep,
 		Client: &http.Client{Timeout: 20 * time.Minute}}
 	a.Context, _ = strconv.Atoi(os.Getenv("HIVE_OPEN_CONTEXT"))
-	for _, k := range []string{"HIVE_OPEN_ENDPOINT", "HIVE_OPEN_MODEL", "HIVE_OPEN_KEY", "HIVE_OPEN_CONTEXT"} {
-		os.Unsetenv(k) // the shell tool's commands never see the key
+	if f := os.Getenv("HIVE_OPEN_KEY_FILE"); f != "" {
+		// The run manager hands the key over in a file, deleted before any
+		// tool runs, so no command the model runs can read it.
+		raw, err := os.ReadFile(f)
+		os.Remove(f)
+		if err != nil {
+			a.emit(map[string]any{"type": "result", "subtype": "error", "is_error": true, "result": "the model's key: " + err.Error(), "session_id": *session})
+			return 1
+		}
+		a.Key = strings.TrimSpace(string(raw))
+	}
+	home := os.Getenv("HIVE_OPEN_HOME")
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	for _, k := range []string{"HIVE_OPEN_ENDPOINT", "HIVE_OPEN_MODEL", "HIVE_OPEN_KEY", "HIVE_OPEN_KEY_FILE", "HIVE_OPEN_CONTEXT", "HIVE_OPEN_HOME"} {
+		os.Unsetenv(k)
 	}
 	if a.Model == "" {
 		a.Model = *name
@@ -105,7 +121,6 @@ func Main(argv []string) int {
 		raw, _ := os.ReadFile(*systemFile)
 		system = string(raw)
 	}
-	home, _ := os.UserHomeDir()
 	store := filepath.Join(home, ".hive-open", filepath.Base(*session)+".json")
 	var msgs []Message
 	if *resume {
