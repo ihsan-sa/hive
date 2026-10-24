@@ -47,7 +47,8 @@ type Effects struct {
 	tools   func() []string
 	runs    *Runs
 
-	locks sync.Map
+	locks  sync.Map
+	unread sync.Map // project@main whose history MainAnswer couldn't read, journaled once
 
 	// MergeHeld is why a pull request on a project may not merge now (the
 	// person's hold on its merges, the work module), or "" if it may.
@@ -1082,8 +1083,10 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	req := e.RequiredChecks(p, m.Main)
 	st, which := ChecksState(runs, req)
 	var shared []string
+	var answer map[string]string // check -> the older main commit its answer came from
 	if st == CheckFail {
-		mainRuns, _, err := e.MainAnswer(p, m.Main, which)
+		mainRuns, at, err := e.MainAnswer(p, m.Main, which)
+		answer = at
 		if err != nil {
 			return "", err
 		}
@@ -1099,7 +1102,16 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	e.j.MustAppend("effect.merged", map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID})
+	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID}
+	if len(shared) > 0 {
+		// A merge past a red check names the main commits that excused it,
+		// so one that relied on an older main answer can be audited.
+		ev["red_on_main"] = shared
+		if len(answer) > 0 {
+			ev["main_answer"] = answer
+		}
+	}
+	e.j.MustAppend("effect.merged", ev)
 	return merged, nil
 }
 
@@ -1225,8 +1237,16 @@ func (e *Effects) MainAnswer(p Project, main string, failed []CheckRun) (runs []
 		return runs, nil, nil
 	}
 	out, err := Git(e.ws.Project(p.Name), "rev-list", "--first-parent", "-n", strconv.Itoa(mainLookBack), main)
+	if err != nil {
+		// A stale or missing clone: main's own runs are all there is, and
+		// the journal says so once per main, so it doesn't pass unseen.
+		if _, seen := e.unread.LoadOrStore(p.Name+"@"+main, true); !seen {
+			e.j.MustAppend("effect.main_history_unread", map[string]string{"project": p.Name, "main": main, "error": Clip(err.Error(), 300)})
+		}
+		return runs, nil, nil
+	}
 	shas := strings.Fields(out)
-	if err != nil || len(shas) < 2 {
+	if len(shas) < 2 {
 		return runs, nil, nil // no history to read: main's own runs are all there is
 	}
 	at = map[string]string{}
