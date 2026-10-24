@@ -14,6 +14,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 )
 
 // A remote that never answers holds a person's post for syncWait at most,
@@ -189,5 +190,24 @@ func TestAttachRules(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(c.WS.RunRO("gone"), "attach")); !os.IsNotExist(err) {
 		t.Fatalf("files written for a dead run: %v", err)
+	}
+}
+
+// An unsigned update reaches the person in the lead's chat, not only a log;
+// a signed one adds nothing there.
+func TestUnsignedUpdateToldInChat(t *testing.T) {
+	dir := t.TempDir()
+	ws := core.Workspace{Root: filepath.Join(dir, "hive")}
+	c, err := core.Open(ws, &core.Local{Dir: filepath.Join(dir, "forge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	m := New(c, &agents.Agents{C: c, Mod: modules.New(ws, c.J)})
+	c.J.MustAppend("hive.updated", map[string]any{"from": "v0.1.2", "to": "v0.1.3", "notes": "n"})
+	c.J.MustAppend("hive.updated", map[string]any{"from": "v0.1.3", "to": "v0.1.4", "notes": "n", "unsigned": true})
+	msgs := m.Messages("lead")
+	if len(msgs) != 1 || !strings.Contains(msgs[0].Text, "v0.1.4") || !strings.Contains(msgs[0].Text, release.Unsigned) {
+		t.Fatalf("lead chat after updates: %+v", msgs)
 	}
 }
