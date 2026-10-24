@@ -32,6 +32,10 @@ func TestBwrapArgsKeepReach(t *testing.T) {
 	if strings.Contains(got, "--share-net") || strings.Contains(got, "/home") {
 		t.Errorf("bwrap args widen reach:\n%s", got)
 	}
+	a.Spec.Local = []string{"127.0.0.1:11434"}
+	if got := strings.Join(bwrapArgs(a, "/h/hive"), " "); !strings.Contains(got, "sandbox-inner --fwd --local 127.0.0.1:11434 -- claude -p") {
+		t.Errorf("a granted local port isn't forwarded inside:\n%s", got)
+	}
 	a.Socket = ""
 	if slices.Contains(bwrapArgs(a, "/h/hive"), "--fwd") {
 		t.Error("no network must mean no forwarder")
