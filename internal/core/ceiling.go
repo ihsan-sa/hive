@@ -45,7 +45,7 @@ var AlwaysPerson = map[string]string{
 var alwaysPersonRe = map[string]*regexp.Regexp{
 	"money":      regexp.MustCompile(`(?i)\b(pay|payments?|purchases?|buy|spend|charges?|subscribe|subscriptions?|invoices?|billing|credit card|stripe|usd|eur|dollars?)\b|\$\s?\d+(\.\d\d|,\d{3})|\$\d{2,}`), // not $1: a shell's positional parameter
 	"credential": regexp.MustCompile(`(?i)\b(api[ -]?keys?|tokens?|secrets?|credentials?|passwords?|ssh[ -]?keys?|ssh-keygen|oauth|rotate|mint|private keys?|keychain|gh auth)\b|\.ssh/|\.netrc|\.git-credentials|\.config/gh\b|\.aws/|\.docker/config|\.kube/config|\.gnupg|\.npmrc|\.pypirc`),
-	"open":       regexp.MustCompile(`(?i)\b(open (a |the )?port|listen on|0\.0\.0\.0|expose|port[ -]?forward|firewall(d|-cmd)?|ufw|iptables|nft|public url|tunnel|ngrok|cloudflared|inbound)\b`),
+	"open":       regexp.MustCompile(`(?i)\b(open (a |the )?port|listen on|0\.0\.0\.0|expose|port[ -]?forward|firewall(d|-cmd)?|ufw|iptables|nft|public url|tunnel|ngrok|cloudflared|inbound|egress grant|egress\.local)\b`),
 	"outward":    regexp.MustCompile(`(?i)\b(send (an? )?(e-?mail|mail|message|sms|text|dm)|email to|sendmail|tweet|post (to|on|as)|publish (as|in my name)|on my behalf|in my name)\b`),
 }
 
@@ -94,9 +94,10 @@ var (
 	// limitRe is a cap right after a mention: the negation limits the step
 	// rather than ruling it out.
 	limitRe = regexp.MustCompile(`(?i)^\W{0,3}(\S+\s+){0,2}(more than|over|above|beyond|up to|at most|less than|under|fewer than|except)\b`)
-	// protectionRe is an 'open' word that names a protection, so negating it
-	// asks to open the machine: never ruled out.
-	protectionRe = regexp.MustCompile(`(?i)firewall|ufw|iptables|nft|inbound`)
+	// protectionRe is an 'open' word never ruled out: a protection, which
+	// negated asks to open the machine, or a local egress grant, whose every
+	// ask is the person's.
+	protectionRe = regexp.MustCompile(`(?i)firewall|ufw|iptables|nft|inbound|egress`)
 	// loopbackRe is a listen address that stays on this machine.
 	loopbackRe = regexp.MustCompile(`(?i)^\s*(127\.\d+\.\d+\.\d+|localhost|loopback|::1|\[::1\])\b`)
 )

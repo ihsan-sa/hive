@@ -134,6 +134,8 @@ func TestAskCeilingSkipsRuledOutMentions(t *testing.T) {
 		"no subscription, a one-off charge of $40":               "money",
 		"don't listen on more than one address":                  "open",
 		"do not expose over two ports":                           "open",
+		"do not revoke the egress grant for 127.0.0.1:11434":     "open",
+		"no egress.local change, just restart":                   "open",
 		"don't worry, send an email to the client":               "outward",
 	} {
 		if k, _ := AskCeilingMatch(text); k != want {
