@@ -171,9 +171,100 @@ func within(path, dir string) bool {
 	return dir != "" && err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func emit(v any) {
+// emit writes one line of output, as Claude Code's stream-json unless Codex
+// swapped it for its own.
+var emit = func(v any) {
 	raw, _ := json.Marshal(v)
 	os.Stdout.Write(append(raw, '\n'))
+}
+
+// Codex is `hive fake-codex`, the fake agent behind Codex's command line
+// (`codex exec [resume] [flags] [session] -`): the same script, speaking
+// Codex's JSONL and keeping its usage in a session rollout file under
+// CODEX_HOME, as Codex does, so tests drive the Codex adapter end to end.
+func Codex(argv []string) int {
+	if len(argv) > 0 && argv[0] == "--version" {
+		fmt.Println("codex-cli 0.0.0 (hive fake)")
+		return 0
+	}
+	resume, schema, readonly := false, false, false
+	var pos []string
+	for i := 0; i < len(argv); i++ {
+		switch a := argv[i]; {
+		case a == "exec":
+		case a == "resume":
+			resume = true
+		case a == "-c" && i+1 < len(argv):
+			i++
+			readonly = readonly || argv[i] == `sandbox_mode="read-only"`
+		case a == "-m" && i+1 < len(argv):
+			i++
+		case a == "--output-schema":
+			i++
+			schema = true
+		case strings.HasPrefix(a, "-"):
+		default:
+			pos = append(pos, a)
+		}
+	}
+	session := core.NewUUID()
+	if resume && len(pos) > 0 {
+		session = pos[0]
+	}
+	rollout := filepath.Join(os.Getenv("CODEX_HOME"), "sessions", time.Now().Format("2006/01/02"))
+	os.MkdirAll(rollout, 0o700)
+	rollout = filepath.Join(rollout, "rollout-"+session+".jsonl")
+	if old, _ := filepath.Glob(filepath.Join(os.Getenv("CODEX_HOME"), "sessions", "*", "*", "*", "rollout-"+session+".jsonl")); len(old) > 0 {
+		rollout = old[0] // a resumed session carries on in its file
+	}
+	record := func(payload map[string]any) {
+		raw, _ := json.Marshal(map[string]any{"timestamp": time.Now().UTC(), "type": "event_msg", "payload": payload})
+		if f, err := os.OpenFile(rollout, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+			f.Write(append(raw, '\n'))
+			f.Close()
+		}
+	}
+	claude := emit
+	emit = func(v any) {
+		m, _ := v.(map[string]any)
+		switch m["type"] {
+		case "system":
+			claude(map[string]any{"type": "thread.started", "thread_id": session})
+		case "rate_limit_event":
+			ri := m["rate_limit_info"].(map[string]any)
+			record(map[string]any{"type": "token_count", "rate_limits": map[string]any{
+				"primary": map[string]any{"used_percent": ri["utilization"].(float64) * 100, "window_minutes": 300, "resets_at": ri["resetsAt"]}}})
+		case "assistant":
+			if u, ok := m["message"].(map[string]any)["usage"].(map[string]int); ok {
+				record(map[string]any{"type": "token_count", "info": map[string]any{"last_token_usage": map[string]int{"input_tokens": u["input_tokens"]}}})
+			}
+		case "result":
+			if m["is_error"] == true {
+				claude(map[string]any{"type": "turn.failed", "error": map[string]any{"message": m["result"]}})
+				return
+			}
+			text := m["result"]
+			if st, ok := m["structured_output"]; ok {
+				raw, _ := json.Marshal(st)
+				text = string(raw)
+			}
+			// What Codex prints for each of its retries, which mustn't end the turn.
+			claude(map[string]any{"type": "error", "message": "Reconnecting... 1/5 (stream disconnected before completion)"})
+			claude(map[string]any{"type": "item.completed", "item": map[string]any{"type": "agent_message", "text": text}})
+			claude(map[string]any{"type": "turn.completed", "usage": map[string]int{}})
+		}
+	}
+	a := []string{"--role", os.Getenv("HIVE_ROLE"), "--session", session}
+	if resume {
+		a = append(a, "--resume")
+	}
+	if schema {
+		a = append(a, "--schema")
+	}
+	if readonly {
+		a = append(a, "--readonly", "--add-dir", os.Getenv("HIVE_RUN"))
+	}
+	return Main(a)
 }
 
 // Messages that queued during a turn arrive as one prompt, joined by core.PendingSep.
