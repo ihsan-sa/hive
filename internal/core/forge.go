@@ -27,7 +27,10 @@ type PR struct {
 	State     string `json:"state"` // OPEN, MERGED, CLOSED
 	HeadSHA   string `json:"head_sha"`
 	MergeSHA  string `json:"merge_sha,omitempty"`
-	Mergeable string `json:"mergeable,omitempty"`
+	Mergeable string `json:"mergeable,omitempty"` // MERGEABLE, CONFLICTING, UNKNOWN (still being worked out)
+	// MergeState is the forge's word on what else stands in the way; BEHIND
+	// means its rules want the branch brought up to date with its base.
+	MergeState string `json:"merge_state,omitempty"`
 }
 
 // Forge is where code, issues and pull requests live. GitHub through the gh
@@ -53,6 +56,8 @@ type Forge interface {
 	MergePR(repo string, number int, sha, subject string) (string, error)
 	ClosePR(repo string, number int, comment string) error
 	CloseIssue(repo string, number int) error // an issue already closed counts as closed
+	// Checks are the forge's own checks (CI jobs) on exactly sha.
+	Checks(repo, sha string) ([]CheckRun, error)
 	// Releases (the Hive on itself). LatestRelease is the newest, a
 	// pre-release included. CreateRelease cuts a pre-release, which installs
 	// don't follow; PublishRelease makes it the latest once ReleaseRuns, the
@@ -67,7 +72,32 @@ type Forge interface {
 	TagCommit(repo, tag string) (string, error)
 	ReleaseRuns(repo, sha string) ([]WorkflowRun, error)
 	PublishRelease(repo, tag string) error
+	// Releases are the newest releases, pre-releases included and drafts
+	// not, newest first; RunJobs are one workflow run's jobs. An install
+	// following pre-releases reads them to update once its own system's
+	// jobs of a pre-release's gates pass.
+	Releases(repo string) ([]Release, error)
+	RunJobs(repo string, run int64) ([]WorkflowJob, error)
 }
+
+// CheckRun is one of the forge's own checks on a commit, such as a CI job.
+type CheckRun struct {
+	Name   string `json:"name"`
+	State  string `json:"state"` // pending | pass | fail | cantstart
+	Detail string `json:"detail,omitempty"`
+	URL    string `json:"url,omitempty"`
+}
+
+// Check states. CantStart is a check that never ran the commit (no runner, a
+// startup failure, cancelled, stuck in the queue): the environment's fault,
+// never a verdict on the commit.
+const (
+	CheckPending   = "pending"
+	CheckPass      = "pass"
+	CheckFail      = "fail"
+	CheckCantStart = "cantstart"
+	CheckSkipped   = "skipped" // ran nothing on the commit: neutral or skipped
+)
 
 // Release is a version on the forge.
 type Release struct {
@@ -78,9 +108,18 @@ type Release struct {
 
 // WorkflowRun is one run of a CI workflow, newest first in a list.
 type WorkflowRun struct {
+	ID         int64  `json:"id"`
 	Name       string `json:"name"`
 	Status     string `json:"status"`     // queued, in_progress, completed
 	Conclusion string `json:"conclusion"` // success, failure, cancelled... once completed
+	URL        string `json:"html_url"`
+}
+
+// WorkflowJob is one job of a workflow run, such as "test (ubuntu-latest)".
+type WorkflowJob struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
 	URL        string `json:"html_url"`
 }
 
@@ -427,6 +466,7 @@ type ghPR struct {
 	State       string `json:"state"`
 	HeadRefOid  string `json:"headRefOid"`
 	Mergeable   string `json:"mergeable"`
+	MergeState  string `json:"mergeStateStatus"`
 	MergeCommit *struct {
 		Oid string `json:"oid"`
 	} `json:"mergeCommit"`
@@ -436,14 +476,14 @@ type ghPR struct {
 }
 
 func (p ghPR) pr() PR {
-	out := PR{Number: p.Number, URL: p.URL, State: p.State, HeadSHA: p.HeadRefOid, Mergeable: p.Mergeable}
+	out := PR{Number: p.Number, URL: p.URL, State: p.State, HeadSHA: p.HeadRefOid, Mergeable: p.Mergeable, MergeState: p.MergeState}
 	if p.MergeCommit != nil {
 		out.MergeSHA = p.MergeCommit.Oid
 	}
 	return out
 }
 
-const prFields = "number,url,state,headRefOid,mergeable,mergeCommit,headRepositoryOwner"
+const prFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,mergeCommit,headRepositoryOwner"
 
 func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
 	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", prFields}
@@ -504,6 +544,9 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 		}
 		return p.MergeSHA, nil
 	}
+	if p.State == "CLOSED" {
+		return "", fmt.Errorf("PR #%d was closed without merging", number)
+	}
 	if p.HeadSHA != sha {
 		return "", fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
 	}
@@ -528,6 +571,137 @@ func (GitHub) ClosePR(repo string, number int, comment string) error {
 func (GitHub) CloseIssue(repo string, number int) error {
 	_, err := gh(repo, "issue", "close", strconv.Itoa(number), "-R", repo)
 	return err
+}
+
+// queuedTooLong is how long a check may wait for a runner before it counts as
+// one that can't start.
+const queuedTooLong = time.Hour
+
+// Checks lists GitHub's check runs and commit statuses on sha. A check suite
+// with no runs yet counts as pending, so a just-pushed head whose jobs aren't
+// listed yet doesn't read as having none.
+func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
+	out, err := gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/check-runs?per_page=100")
+	if err != nil {
+		return nil, err
+	}
+	var runs struct {
+		CheckRuns []ghCheckRun `json:"check_runs"`
+	}
+	if err := json.Unmarshal([]byte(out), &runs); err != nil {
+		return nil, err
+	}
+	// A check run again is listed once per attempt; the newest one counts.
+	newest := map[string]ghCheckRun{}
+	var order []string
+	for _, r := range runs.CheckRuns {
+		old, seen := newest[r.Name]
+		if !seen {
+			order = append(order, r.Name)
+		}
+		if !seen || r.StartedAt.After(old.StartedAt) {
+			newest[r.Name] = r
+		}
+	}
+	var list []CheckRun
+	for _, name := range order {
+		list = append(list, newest[name].check(time.Now()))
+	}
+	out, err = gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/status")
+	if err != nil {
+		return nil, err
+	}
+	var st struct {
+		Statuses []struct {
+			Context     string `json:"context"`
+			State       string `json:"state"`
+			Description string `json:"description"`
+			TargetURL   string `json:"target_url"`
+		} `json:"statuses"`
+	}
+	if err := json.Unmarshal([]byte(out), &st); err != nil {
+		return nil, err
+	}
+	for _, s := range st.Statuses {
+		state := map[string]string{"success": CheckPass, "failure": CheckFail, "error": CheckCantStart}[s.State]
+		if state == "" {
+			state = CheckPending
+		}
+		list = append(list, CheckRun{Name: s.Context, State: state, Detail: s.Description, URL: s.TargetURL})
+	}
+	out, err = gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/check-suites?per_page=100")
+	if err != nil {
+		return nil, err
+	}
+	var suites struct {
+		CheckSuites []ghSuite `json:"check_suites"`
+	}
+	if err := json.Unmarshal([]byte(out), &suites); err != nil {
+		return nil, err
+	}
+	for _, s := range suites.CheckSuites {
+		if s.pending(time.Now()) {
+			list = append(list, CheckRun{Name: s.App.Slug, State: CheckPending, Detail: "suite " + s.Status + ", no jobs listed yet"})
+		}
+	}
+	return list, nil
+}
+
+type ghSuite struct {
+	Status    string    `json:"status"`
+	Runs      int       `json:"latest_check_runs_count"`
+	CreatedAt time.Time `json:"created_at"`
+	App       struct {
+		Slug string `json:"slug"`
+	} `json:"app"`
+}
+
+// suiteGrace is how long a just-pushed head's Actions suite with no jobs
+// listed yet holds the merge.
+const suiteGrace = 10 * time.Minute
+
+// pending reports whether a suite stands for jobs about to be listed: only
+// GitHub Actions' own, and only while young. GitHub makes a suite on every
+// push for each app that may write checks, and one no workflow matches (or
+// an app that never posts runs) stays queued with no runs for good, so an
+// old or foreign one holds nothing; required_checks names the bar.
+func (s ghSuite) pending(now time.Time) bool {
+	return s.Runs == 0 && s.Status != "completed" && s.App.Slug == "github-actions" &&
+		!s.CreatedAt.IsZero() && now.Sub(s.CreatedAt) < suiteGrace
+}
+
+type ghCheckRun struct {
+	Name       string    `json:"name"`
+	Status     string    `json:"status"`
+	Conclusion string    `json:"conclusion"`
+	StartedAt  time.Time `json:"started_at"`
+	HTMLURL    string    `json:"html_url"`
+}
+
+// check maps a GitHub check run to a state: a failure or timeout is a verdict
+// on the commit; a startup failure, a cancelled or stale run, one awaiting an
+// action, or one queued past queuedTooLong never ran it.
+func (r ghCheckRun) check(now time.Time) CheckRun {
+	c := CheckRun{Name: r.Name, URL: r.HTMLURL, Detail: r.Status}
+	if r.Status != "completed" {
+		c.State = CheckPending
+		if r.Status != "in_progress" && !r.StartedAt.IsZero() && now.Sub(r.StartedAt) > queuedTooLong {
+			c.State, c.Detail = CheckCantStart, r.Status+" for over "+queuedTooLong.String()
+		}
+		return c
+	}
+	c.Detail = r.Conclusion
+	switch r.Conclusion {
+	case "success":
+		c.State = CheckPass
+	case "neutral", "skipped":
+		c.State = CheckSkipped
+	case "failure", "timed_out":
+		c.State = CheckFail
+	default: // startup_failure, cancelled, action_required, stale
+		c.State = CheckCantStart
+	}
+	return c
 }
 
 func (GitHub) LatestRelease(repo string) (Release, error) {
@@ -583,6 +757,34 @@ func (GitHub) ReleaseRuns(repo, sha string) ([]WorkflowRun, error) {
 	}
 	var runs []WorkflowRun
 	return runs, json.Unmarshal([]byte(out), &runs)
+}
+
+func (GitHub) Releases(repo string) ([]Release, error) {
+	out, err := gh(repo, "release", "list", "-R", repo, "--exclude-drafts", "--limit", "30", "--json", "tagName,isPrerelease")
+	if err != nil {
+		return nil, err
+	}
+	var rs []struct {
+		TagName      string `json:"tagName"`
+		IsPrerelease bool   `json:"isPrerelease"`
+	}
+	if err := json.Unmarshal([]byte(out), &rs); err != nil {
+		return nil, err
+	}
+	var rels []Release
+	for _, r := range rs {
+		rels = append(rels, Release{Tag: r.TagName, Prerelease: r.IsPrerelease})
+	}
+	return rels, nil
+}
+
+func (GitHub) RunJobs(repo string, run int64) ([]WorkflowJob, error) {
+	out, err := gh(repo, "api", fmt.Sprintf("repos/%s/actions/runs/%d/jobs?per_page=100", repo, run), "-q", ".jobs")
+	if err != nil {
+		return nil, err
+	}
+	var jobs []WorkflowJob
+	return jobs, json.Unmarshal([]byte(out), &jobs)
 }
 
 func (GitHub) PublishRelease(repo, tag string) error {

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,7 +16,10 @@ import (
 // path (issue, branch, PR, pinned squash merge) runs without the network.
 type Local struct {
 	Dir string
-	mu  sync.Mutex
+	// UpToDate makes it want a branch up to date with its base before it
+	// merges, as GitHub's branch rule of that name does (MergeState BEHIND).
+	UpToDate bool
+	mu       sync.Mutex
 }
 
 type localState struct {
@@ -23,8 +27,10 @@ type localState struct {
 	PRs      map[string][]localPR     `json:"prs"`
 	Comments map[string][]string      `json:"comments"`
 	Releases map[string][]Release     `json:"releases"`
-	Runs     map[string][]WorkflowRun `json:"runs"` // repo@sha -> release runs, newest first
-	TagSHAs  map[string]string        `json:"tags"` // repo@tag -> the commit it points at
+	Runs     map[string][]WorkflowRun `json:"runs"`             // repo@sha -> release runs, newest first
+	TagSHAs  map[string]string        `json:"tags"`             // repo@tag -> the commit it points at
+	Checks   map[string][]CheckRun    `json:"checks,omitempty"` // repo@sha
+	Jobs     map[string][]WorkflowJob `json:"jobs,omitempty"`   // repo#run -> its jobs
 }
 
 type localIssue struct {
@@ -169,8 +175,18 @@ func (l *Local) head(repo, branch string) string {
 }
 
 func (l *Local) refresh(repo string, p *localPR) {
-	if p.State == "OPEN" {
-		p.HeadSHA = l.head(repo, p.Head)
+	if p.State != "OPEN" {
+		return
+	}
+	p.HeadSHA = l.head(repo, p.Head)
+	dir, base := l.RepoPath(repo), "refs/heads/"+cmp.Or(p.Base, "main")
+	p.Mergeable, p.MergeState = "MERGEABLE", "CLEAN"
+	// merge-tree exits 1 on a conflict; any other failure (an older git) leaves
+	// it to the merge itself to refuse.
+	if _, err := Git(dir, "merge-tree", "--write-tree", base, p.HeadSHA); err != nil && strings.Contains(err.Error(), "exit status 1:") {
+		p.Mergeable, p.MergeState = "CONFLICTING", "DIRTY"
+	} else if _, err := Git(dir, "merge-base", "--is-ancestor", base, p.HeadSHA); err != nil && l.UpToDate {
+		p.MergeState = "BEHIND"
 	}
 }
 
@@ -228,6 +244,9 @@ func (l *Local) MergePR(repo string, number int, sha, subject string) (string, e
 		}
 		if p.State == "MERGED" {
 			return p.MergeSHA, nil
+		}
+		if p.State == "CLOSED" {
+			return "", fmt.Errorf("PR #%d was closed without merging", number)
 		}
 		l.refresh(repo, p)
 		if p.HeadSHA != sha {
@@ -361,6 +380,25 @@ func (l *Local) CreateRelease(repo, tag, sha, notes string) error {
 	return nil
 }
 
+// Checks are the checks set on repo@sha; a local forge runs none of its own.
+func (l *Local) Checks(repo, sha string) ([]CheckRun, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.load().Checks[repo+"@"+sha], nil
+}
+
+// SetChecks sets the forge's checks on repo@sha, as a CI would report them.
+func (l *Local) SetChecks(repo, sha string, runs ...CheckRun) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	if s.Checks == nil {
+		s.Checks = map[string][]CheckRun{}
+	}
+	s.Checks[repo+"@"+sha] = runs
+	l.save(s)
+}
+
 func (l *Local) ReleaseRuns(repo, sha string) ([]WorkflowRun, error) {
 	return l.load().Runs[repo+"@"+sha], nil
 }
@@ -371,6 +409,28 @@ func (l *Local) SetReleaseRuns(repo, sha string, runs ...WorkflowRun) {
 	defer l.mu.Unlock()
 	s := l.load()
 	s.Runs[repo+"@"+sha] = runs
+	l.save(s)
+}
+
+func (l *Local) Releases(repo string) ([]Release, error) {
+	rels := slices.Clone(l.load().Releases[repo])
+	slices.Reverse(rels)
+	return rels, nil
+}
+
+func (l *Local) RunJobs(repo string, run int64) ([]WorkflowJob, error) {
+	return l.load().Jobs[fmt.Sprintf("%s#%d", repo, run)], nil
+}
+
+// SetRunJobs sets one run's jobs (tests set them).
+func (l *Local) SetRunJobs(repo string, run int64, jobs ...WorkflowJob) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	if s.Jobs == nil {
+		s.Jobs = map[string][]WorkflowJob{}
+	}
+	s.Jobs[fmt.Sprintf("%s#%d", repo, run)] = jobs
 	l.save(s)
 }
 
