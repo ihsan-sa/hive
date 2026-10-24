@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -46,4 +47,28 @@ func procField(path, key string) (float64, bool) {
 	_, rest, _ := strings.Cut(string(raw), key)
 	f, err := strconv.ParseFloat(strings.SplitN(strings.TrimSpace(rest), " ", 2)[0], 64)
 	return f, err == nil
+}
+
+// Loaded says why the machine is too loaded to take on more work, or "": its
+// 1-minute load average per core is over max. Where /proc/loadavg doesn't
+// exist it never holds, and a max of 0 turns it off.
+func Loaded(max float64) string { return loaded("/proc", runtime.NumCPU(), max) }
+
+func loaded(proc string, cores int, max float64) string {
+	if max <= 0 {
+		return ""
+	}
+	raw, err := os.ReadFile(proc + "/loadavg")
+	if err != nil {
+		return ""
+	}
+	f := strings.Fields(string(raw))
+	if len(f) == 0 {
+		return ""
+	}
+	l, err := strconv.ParseFloat(f[0], 64)
+	if err != nil || l/float64(cores) <= max {
+		return ""
+	}
+	return fmt.Sprintf("machine loaded (load %.0f on %d cores, limit %g per core)", l, cores, max)
 }

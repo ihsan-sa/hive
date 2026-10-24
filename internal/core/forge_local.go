@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -126,6 +127,21 @@ func (l *Local) Comment(repo string, number int, body string) error {
 	s := l.load()
 	k := fmt.Sprintf("%s#%d", repo, number)
 	s.Comments[k] = append(s.Comments[k], body)
+	l.save(s)
+	return nil
+}
+
+func (l *Local) StatusComment(repo string, number int, marker, body string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	k := fmt.Sprintf("%s#%d", repo, number)
+	body += "\n\n" + marker
+	if i := slices.IndexFunc(s.Comments[k], func(c string) bool { return strings.Contains(c, marker) }); i >= 0 {
+		s.Comments[k][i] = body
+	} else {
+		s.Comments[k] = append(s.Comments[k], body)
+	}
 	l.save(s)
 	return nil
 }
@@ -289,6 +305,24 @@ func (l *Local) LatestRelease(repo string) (Release, error) {
 		return Release{}, ErrNotFound
 	}
 	return rs[len(rs)-1], nil
+}
+
+func (l *Local) Tags(repo string) ([]string, error) {
+	var tags []string
+	for _, r := range l.load().Releases[repo] {
+		tags = append(tags, r.Tag)
+	}
+	return tags, nil
+}
+
+// AddRelease records a release as made outside the Hive, such as the person
+// marking an older one the latest (tests add them); it becomes the latest.
+func (l *Local) AddRelease(repo string, r Release) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	s.Releases[repo] = append(s.Releases[repo], r)
+	l.save(s)
 }
 
 func (l *Local) CreateRelease(repo, tag, sha, notes string) error {

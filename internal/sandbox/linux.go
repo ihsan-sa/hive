@@ -520,14 +520,34 @@ func Init(argPath string) int {
 			cmd.Process.Signal(syscall.SIGTERM)
 		}
 	}()
-	err = cmd.Wait()
-	if ee, ok := err.(*exec.ExitError); ok {
-		return ee.ExitCode()
-	}
+	code, err := reap(cmd.Process.Pid)
 	if err != nil {
 		return fail("wait", err)
 	}
-	return 0
+	return code
+}
+
+// reap waits for pid as pid 1 must: every orphan in the namespace is
+// reparented here, so it reaps whatever exits until pid does, rather than
+// leaving zombies (a check's go test, an agent's shells) until the sandbox
+// ends. It returns pid's exit code, or -1 when a signal ended it.
+func reap(pid int) (int, error) {
+	for {
+		var ws syscall.WaitStatus
+		got, err := syscall.Wait4(-1, &ws, 0, nil)
+		if err == syscall.EINTR {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if got == pid && (ws.Exited() || ws.Signaled()) {
+			if ws.Signaled() {
+				return -1, nil
+			}
+			return ws.ExitStatus(), nil
+		}
+	}
 }
 
 func lookPathIn(name string, env []string) (string, error) {
