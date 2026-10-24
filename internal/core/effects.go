@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
@@ -58,6 +59,7 @@ type Effects struct {
 	diffLands map[string][]string               // project#diff -> the same, for every head with that own diff
 	diffVerds map[string]Verdict                // project#diff -> the latest verdict on that own diff
 	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
+	seats     map[string]map[string]Verdict     // project#diff -> security seat -> its latest verdict
 	hostMade  map[string]HostCommit
 	approvals map[string]bool
 }
@@ -87,7 +89,24 @@ type Verdict struct {
 	// Diff names the change's own diff the reviewer read (DiffID), so the read
 	// carries to any head with the same own diff, and to no other.
 	Diff string `json:"diff,omitempty"`
+	// Seat names the Hive's own security seat that gave it (SeatSecurity, or
+	// PanelSeat(i)); "" is the ordinary reviewer. The host sets it on the run,
+	// so a seat's read never counts as an ordinary one, nor the other way.
+	Seat string `json:"seat,omitempty"`
 }
+
+// SeatSecurity is the Hive's own security reviewer: a reviewer separate from
+// the ordinary one, on another model, briefed on the sandbox, credentials and
+// what runs outside it. A change on the security list needs its land.
+const SeatSecurity = "security"
+
+// PanelSeats is how many sit on the panel that also reads a change to a root
+// path on the security list (what runs with elevated rights); a majority of
+// their lands passes it.
+const PanelSeats = 3
+
+// PanelSeat names the panel's seat i.
+func PanelSeat(i int) string { return fmt.Sprintf("panel-%d", i) }
 
 // OutsideRead is a security read from outside the Hive (the box's perms seat
 // or its architect) of one head, recorded by the person.
@@ -124,7 +143,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}}
 	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -137,6 +156,14 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 		case "effect.verdict":
 			var v Verdict
 			ev.Decode(&v)
+			if v.Seat != "" {
+				k := v.Project + "#" + v.Diff
+				if e.seats[k] == nil {
+					e.seats[k] = map[string]Verdict{}
+				}
+				e.seats[k][v.Seat] = v
+				return
+			}
 			e.verdicts[v.Project+"@"+v.SHA] = v
 			if k := v.Project + "@" + v.SHA; v.Verdict == "land" && !slices.Contains(e.lands[k], v.Run) {
 				e.lands[k] = append(e.lands[k], v.Run)
@@ -631,6 +658,9 @@ func (e *Effects) RecordVerdict(v Verdict) error {
 		return fmt.Errorf("verdict must be land or fix")
 	}
 	v.Diff = DiffID(r.Inputs["diff.patch"])
+	if v.Seat = r.Inputs["seat"]; v.Seat != "" && v.Diff == "" {
+		return errors.New("a security seat's read is bound to a diff")
+	}
 	e.j.MustAppend("effect.verdict", v)
 	return nil
 }
@@ -701,6 +731,50 @@ func (e *Effects) OutsideRead(project, diff string) (OutsideRead, bool) {
 	return out, out.By != "" && diff != ""
 }
 
+// SecurityReads are the Hive's own security seats' latest verdicts on the
+// own diff, by seat.
+func (e *Effects) SecurityReads(project, diff string) map[string]Verdict {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return maps.Clone(e.seats[project+"#"+diff])
+}
+
+// PanelTally counts the panel's lands and fixes on the own diff.
+func PanelTally(reads map[string]Verdict) (lands, fixes int) {
+	for i := 0; i < PanelSeats; i++ {
+		switch reads[PanelSeat(i)].Verdict {
+		case "land":
+			lands++
+		case "fix":
+			fixes++
+		}
+	}
+	return lands, fixes
+}
+
+// SecurityOK reports whether ch, a change on the security list, has the
+// security read it needs: an outside read (the box's perms seat or
+// architect) decides when there is one, a fix from either outweighing a
+// land; otherwise the Hive's own security seat said land on its own diff,
+// and for a root path a majority of the panel did too.
+func (e *Effects) SecurityOK(project string, ch Change) bool {
+	if len(ch.Security) == 0 {
+		return true
+	}
+	if o, ok := e.OutsideRead(project, ch.DiffID); ok {
+		return o.Verdict == "land"
+	}
+	if ch.DiffID == "" {
+		return false
+	}
+	reads := e.SecurityReads(project, ch.DiffID)
+	if reads[SeatSecurity].Verdict != "land" {
+		return false
+	}
+	lands, _ := PanelTally(reads)
+	return len(ch.SecurityRoot) == 0 || lands > PanelSeats/2
+}
+
 // DiffID names a change's own diff (the diff from its merge base with main to
 // its head) so that a head whose own diff is the same gets the same name,
 // whatever main it was brought up to date with. Hunk positions and blob ids
@@ -755,11 +829,15 @@ type Change struct {
 	Protected []string `json:"protected,omitempty"`
 	High      []string `json:"high,omitempty"` // files in a high or root class
 	// Security are files on main's SecurityList: the change merges only
-	// after an outside read (perms seat or architect) said land on its diff.
+	// after a security read said land on its diff (SecurityOK).
 	Security []string `json:"security,omitempty"`
-	Root     []string `json:"root,omitempty"`    // files that run with elevated rights
-	DiffID   string   `json:"diff_id,omitempty"` // names Diff (DiffID)
-	Diff     string   `json:"-"`
+	// SecurityRoot are those of them that run with elevated rights (the
+	// list's root entries, or the project's root class): they need the
+	// panel's read as well.
+	SecurityRoot []string `json:"security_root,omitempty"`
+	Root         []string `json:"root,omitempty"`    // files that run with elevated rights
+	DiffID       string   `json:"diff_id,omitempty"` // names Diff (DiffID)
+	Diff         string   `json:"-"`
 	// ProtectedDiff is the diff of the protected files alone, shown to the person who approves it.
 	ProtectedDiff string `json:"-"`
 }
@@ -791,7 +869,8 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 	if cfg.Score != nil {
 		protected = append(protected, cfg.Score.Evaluator()...)
 	}
-	security := ParseList(e.ReadFile(p, mainSHA, SecurityList), "paths")
+	list := e.ReadFile(p, mainSHA, SecurityList)
+	security, root := ParseList(list, "paths"), ParseList(list, "root")
 	docsOnly := true
 	for _, l := range strings.Split(stat, "\x00") {
 		f := strings.SplitN(l, "\t", 3)
@@ -809,8 +888,11 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		if under(file, cfg.Root) {
 			c.Root = append(c.Root, file)
 		}
-		if matchAny(file, security) {
+		if matchAny(file, security) || matchAny(file, root) {
 			c.Security = append(c.Security, file)
+			if matchAny(file, root) || under(file, cfg.Root) {
+				c.SecurityRoot = append(c.SecurityRoot, file)
+			}
 		}
 		// .gitattributes picks merge drivers: merge=union on code would
 		// quietly keep both sides of every conflict in it.
@@ -836,8 +918,9 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 }
 
 // SecurityList is the project's list of paths a change to which merges only
-// after a security read from outside the Hive (the box's perms seat or its
-// architect), and whose required_checks are the forge's checks that must
+// after a security read (SecurityOK): the Hive's own security seat, with its
+// panel for the list's root entries, or an outside read from the box's perms
+// seat or architect. Its required_checks are the forge's checks that must
 // succeed on a head before it merges. It is read from main, so a change
 // can't move its own bar.
 const SecurityList = "tests/LANDING-security.toml"
@@ -943,8 +1026,12 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if !ch.Small && !e.readOK(p, ch, m.SHA) {
 		return "", fmt.Errorf("refusing to merge %s: no land verdict bound to that exact commit", short(m.SHA))
 	}
-	if o, ok := e.OutsideRead(p.Name, ch.DiffID); len(ch.Security) > 0 && (!ok || o.Verdict != "land") {
-		return "", fmt.Errorf("refusing to merge %s: it changes %s, on %s, and no security read from the box's perms seat or architect said land on its diff", short(m.SHA), strings.Join(ch.Security, ", "), SecurityList)
+	if !e.SecurityOK(p.Name, ch) {
+		need := "the Hive's security seat"
+		if len(ch.SecurityRoot) > 0 {
+			need += " and a majority of its panel"
+		}
+		return "", fmt.Errorf("refusing to merge %s: it changes %s, on %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), SecurityList, need)
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
 	if err != nil {

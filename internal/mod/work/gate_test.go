@@ -10,6 +10,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 )
 
 func must(t *testing.T, dir string, args ...string) string {
@@ -106,7 +107,7 @@ func gateRigSeeded(t *testing.T, mainRed bool, onMain, files map[string]string) 
 		t.Fatal(err)
 	}
 	pr, _ := forge.CreatePR(p.Repo, "hive/t1", "main", "work", "")
-	a := &agents.Agents{C: c}
+	a := &agents.Agents{C: c, Mod: modules.New(ws, c.J)}
 	m := New(c, a, chat.New(c, a))
 	task := &Task{ID: "t1", Project: "p", Title: "work", Kind: "work", Stage: StageTesting, Worker: "w1", Branch: "hive/t1", SHA: sha, PR: pr}
 	return m, task, p, forge

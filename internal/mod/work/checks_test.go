@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
 // toMerging takes a rig's task through its tests to the merge.
@@ -343,5 +344,175 @@ func TestRequiredChecksHold(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerged {
 		t.Fatalf("stage %q, reason %q once each required check succeeded", task.Stage, task.Reason)
+	}
+}
+
+// seatSays ends the task's security seat run on its head with a verdict, as
+// the seat would; the gate must have started it.
+func seatSays(t *testing.T, m *Module, task *Task, seat, verdict string) core.Run {
+	t.Helper()
+	id := "s-" + task.ID + "-" + core.Short(task.Diff) + "-" + seat + "-0"
+	r, ok := m.C.Runs.Get(id)
+	if !ok || !r.ReadOnly || r.Role != "reviewer" || r.Inputs["seat"] != seat {
+		t.Fatalf("no read-only %s seat run %s: %+v", seat, id, r)
+	}
+	m.C.J.MustAppend("run.turn_ended", map[string]any{"id": id, "turn": 1, "status": core.StatusDone,
+		"result": harness.Result{Structured: []byte(`{"verdict":"` + verdict + `","summary":"seat ` + seat + ` says ` + verdict + `","findings":[{"file":"secure/box.go","issue":"widens a mount"}],"token":"` + reviewToken(id) + `"}`)}})
+	return r
+}
+
+// A change to a listed path is held until the Hive's own security seat, a
+// reviewer on another model than the ordinary one, says land on its diff;
+// with no outside read at all it then merges.
+func TestOwnSecurityReadLands(t *testing.T) {
+	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "the Hive's security reviewer") || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	main, _ := m.C.Effects.Sync(p)
+	if _, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: task.PR.Number, SHA: task.SHA, Main: main}); err == nil || !strings.Contains(err.Error(), "security read") {
+		t.Fatalf("Effects.Merge took a listed path before its security read: %v", err)
+	}
+	r := seatSays(t, m, task, core.SeatSecurity, "land")
+	if _, reviewer := m.Agents.Model("reviewer", p.Name); r.Model == reviewer || r.Model == "" {
+		t.Fatalf("the security seat sits on the ordinary reviewer's model %q", r.Model)
+	}
+	if b := r.Inputs["brief.md"]; !strings.Contains(b, "sandbox") || !strings.Contains(b, "credential") || !strings.Contains(b, "secure/box.go") {
+		t.Fatalf("the seat's brief isn't about security: %s", b)
+	}
+	mergeOnce(t, m, task, p) // records the read
+	mergeOnce(t, m, task, p) // and merges on it
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q after the seat's land", task.Stage, task.Reason)
+	}
+	if n := len(m.C.Effects.Reads(p.Name, task.SHA, task.Diff)); n != 1 {
+		t.Fatalf("%d ordinary reads, want 1: the seat's land counted as an ordinary read", n)
+	}
+	if !strings.Contains(strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"), "Security read (security)") {
+		t.Fatal("the seat's read isn't on the PR")
+	}
+}
+
+// The seat's fix goes back to the worker; an outside fix outweighs the
+// seat's land.
+func TestOwnSecurityReadFix(t *testing.T) {
+	m, task, p, _ := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	seatSays(t, m, task, core.SeatSecurity, "fix")
+	mergeOnce(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || !strings.Contains(task.Findings, "security reviewer") || !strings.Contains(task.Findings, "widens a mount") {
+		t.Fatalf("stage %q, findings %q", task.Stage, task.Findings)
+	}
+
+	m, task, p, _ = gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	seatSays(t, m, task, core.SeatSecurity, "land")
+	mergeOnce(t, m, task, p)
+	m.RecordRead("t1", task.SHA, "perms", "fix", "steer: not this way")
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || !strings.Contains(task.Findings, "steer: not this way") {
+		t.Fatalf("an outside fix didn't outweigh the seat's land: stage %q, findings %q", task.Stage, task.Findings)
+	}
+}
+
+// A root path on the list (what runs with elevated rights) needs the
+// panel's majority as well as the seat's land; the panel sits on the
+// tribunal seats.
+func TestRootPathNeedsPanel(t *testing.T) {
+	list := map[string]string{core.SecurityList: "paths = [\"secure/**\"]\nroot = [\"ops/**\"]\n"}
+	m, task, p, f := gateRigSeeded(t, false, list, map[string]string{"ops/deploy.sh": "echo hi\n"})
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	seatSays(t, m, task, core.SeatSecurity, "land")
+	mergeOnce(t, m, task, p) // records the seat's land
+	mergeOnce(t, m, task, p) // seats the panel
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "panel") || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("a root path merged on the seat alone: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	main, _ := m.C.Effects.Sync(p)
+	if _, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: task.PR.Number, SHA: task.SHA, Main: main}); err == nil || !strings.Contains(err.Error(), "panel") {
+		t.Fatalf("Effects.Merge took a root path without its panel: %v", err)
+	}
+	var models []string
+	for i := 0; i < core.PanelSeats; i++ {
+		r, _ := m.C.Runs.Get("s-t1-" + core.Short(task.Diff) + "-" + core.PanelSeat(i) + "-0")
+		models = append(models, r.Model)
+	}
+	if strings.Join(models, ",") != "opus,sonnet,fable" {
+		t.Fatalf("panel models %v, want the tribunal seats", models)
+	}
+	seatSays(t, m, task, core.PanelSeat(0), "land")
+	seatSays(t, m, task, core.PanelSeat(1), "fix")
+	for i := 0; i < 3; i++ {
+		mergeOnce(t, m, task, p)
+	}
+	if task.Stage != StageMerging || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("merged on one land of three: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	seatSays(t, m, task, core.PanelSeat(2), "land")
+	for i := 0; i < 3 && task.Stage == StageMerging; i++ {
+		mergeOnce(t, m, task, p)
+	}
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q after the panel's majority", task.Stage, task.Reason)
+	}
+}
+
+// A read is of the change's own diff: a main merge that leaves it alone
+// keeps the seat's read, and a new commit to the change needs a new one.
+func TestOwnSecurityReadMovedDiff(t *testing.T) {
+	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	seatSays(t, m, task, core.SeatSecurity, "land")
+	read := task.SHA
+
+	// The worker commits again to the listed file: a new diff, a new read.
+	r, _ := m.C.Runs.Get("w1")
+	os.WriteFile(filepath.Join(r.Checkout, "secure/box.go"), []byte("package secure\n\n// more\n"), 0o644)
+	must(t, r.Checkout, "add", "-A")
+	must(t, r.Checkout, "commit", "-q", "-m", "more")
+	main, _ := m.C.Effects.Sync(p)
+	sha, err := m.C.Effects.Extract(p, r, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.C.Effects.Push(p, "hive/t1", sha)
+	mergeOnce(t, m, task, p) // the land is recorded on the first head's diff
+	task.SHA, task.Stage = sha, StageTesting
+	reviewerLand(t, m, task, p, "r2")
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "security reviewer at "+core.Short(sha)) {
+		t.Fatalf("a new diff merged on the old diff's read (%s): stage %q, reason %q", core.Short(read), task.Stage, task.Reason)
+	}
+	seatSays(t, m, task, core.SeatSecurity, "land")
+	mergeOnce(t, m, task, p)
+
+	// Main moves without touching the change and the forge wants the branch
+	// up to date: the caught-up head keeps the read, with no new seat run.
+	f.UpToDate = true
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	mergeOnce(t, m, task, p)
+	if task.SHA == sha || task.Stage != StageTesting {
+		t.Fatalf("not caught up: stage %q", task.Stage)
+	}
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q: the read should carry over a main merge that leaves the diff alone", task.Stage, task.Reason)
+	}
+	if n := len(m.C.Runs.List(func(r *core.Run) bool { return strings.HasPrefix(r.ID, "s-t1-") })); n != 2 {
+		t.Fatalf("%d seat runs, want 2: one per own diff, none for the caught-up head", n)
 	}
 }

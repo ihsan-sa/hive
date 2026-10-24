@@ -20,6 +20,8 @@ For a candidate change:
 
 Anything may be used for this: nested sandboxed Hives, rollback to an earlier version. Don't narrow it to one test path.
 
-## Rules until a tribunal panel forms under bubblewrap
+## Security reads
 
-Changes to the sandbox, self-update or login get one read from the box's perms seat or its architect before landing. Say so in the PR, and autobox will route it. Everything else wardens and tribunal decide at the exact head.
+The interim rule ("Changes to the sandbox, self-update or login get one read from the box's perms seat or its architect before landing") was lifted on 2026-10-24, once a tribunal panel had formed under bubblewrap (#168). The person: "why is perms reading everything. You should be doing stuff with wardens and tribunals, perms and autobox are only supposed to steer you" ... "if you go off track".
+
+So a change to a path on `tests/LANDING-security.toml` gets its security read from the Hive's own seats, at its exact own diff: a security reviewer separate from the ordinary one, and for what runs with elevated rights a tribunal panel too (three seats over the tribunal's models). A read from the box's perms seat or architect still counts and can still send a change back, but isn't needed. Everything else wardens and tribunal decide at the exact head.
