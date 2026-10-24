@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 )
 
 // The installer answers before there is a Hive; first run takes that answer
@@ -43,6 +44,21 @@ func TestInstallerAnswerReachesFirstRun(t *testing.T) {
 	}
 	if cfg := ws.LoadConfig(); cfg.Share != "off" || cmdReport([]string{"asked"}) != 0 {
 		t.Fatalf("want off and answered, got %q", cfg.Share)
+	}
+}
+
+// Both installers and first run ask report.Question word for word, which its
+// own test holds to what is sent.
+func TestInstallersAskTheQuestion(t *testing.T) {
+	raw, err := os.ReadFile("../../install/install.ps1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `Read-Host "`+"`n"+report.Question+` (y/N)"`) {
+		t.Fatal("install.ps1 doesn't ask report.Question word for word")
+	}
+	if !strings.HasPrefix(shareQuestion, report.Question+" ") {
+		t.Fatal("first run doesn't ask report.Question")
 	}
 }
 
@@ -96,6 +112,9 @@ func TestInstallerShareAnswer(t *testing.T) {
 			got, _ := os.ReadFile(log)
 			if strings.TrimSpace(string(got)) != c.want {
 				t.Fatalf("installer ran %q, want %q", got, c.want)
+			}
+			if asked, _ := os.ReadFile(tty); !c.noTTY && !c.asked && !strings.Contains(string(asked), "\n"+report.Question+" (y/N) ") {
+				t.Fatalf("the installer asked something other than report.Question:\n%s", asked)
 			}
 		})
 	}
