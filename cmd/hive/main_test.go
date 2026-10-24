@@ -1,10 +1,20 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
@@ -112,5 +122,109 @@ func TestApproveOption(t *testing.T) {
 		if o, err := approveOption(cmd, core.Ask{ID: "q1"}); err == nil {
 			t.Errorf("%s on an ask with no options: %q, want an error", cmd, o)
 		}
+	}
+}
+
+// TestHelperStayAlive is the stand-in daemon process for TestHelpNeverActs.
+func TestHelperStayAlive(t *testing.T) {
+	if os.Getenv("HIVE_TEST_STAY_ALIVE") == "" {
+		t.Skip("a helper process, not a test")
+	}
+	time.Sleep(5 * time.Minute)
+}
+
+// `hive <command> --help` prints that command's usage and does nothing:
+// `hive update --help` once installed an update and `hive ask --help` sent
+// "--help" to the lead. Every command runs against a fake daemon that counts
+// what reaches it.
+func TestHelpNeverActs(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HIVE_HOME", root)
+	t.Setenv("HOME", root) // uninstall and login touch files under home
+	t.Setenv("XDG_CONFIG_HOME", root)
+	t.Setenv("APPDATA", root)
+	ws := core.Workspace{Root: root}
+	// daemon.json names a child process, never this test's own: a regressed
+	// `shutdown --help` gets a fresh child in its place, so it's counted and
+	// returns at once, and the commands after it still reach the fake daemon.
+	var mu sync.Mutex
+	var child *exec.Cmd
+	var port int
+	daemonUp := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if child != nil {
+			child.Process.Kill()
+			child.Wait() // reaped, so it no longer looks alive
+		}
+		child = exec.Command(os.Args[0], "-test.run=^TestHelperStayAlive$")
+		child.Env = append(os.Environ(), "HIVE_TEST_STAY_ALIVE=1")
+		if err := child.Start(); err != nil {
+			t.Error(err)
+			return
+		}
+		info, _ := json.Marshal(api.DaemonInfo{PID: child.Process.Pid, Port: port, Token: "t", Version: core.Version})
+		os.MkdirAll(filepath.Dir(ws.DaemonFile()), 0o755)
+		if err := os.WriteFile(ws.DaemonFile(), info, 0o600); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		child.Process.Kill()
+		child.Wait()
+	})
+	var calls atomic.Int32
+	var sent atomic.Value // the text of the last chat message
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path == "/api/shutdown" {
+			daemonUp()
+		}
+		if r.URL.Path == "/api/chat" && r.Method == "POST" {
+			var body map[string]string
+			json.NewDecoder(r.Body).Decode(&body)
+			sent.Store(body["text"])
+		}
+		w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	port, _ = strconv.Atoi(srv.URL[strings.LastIndex(srv.URL, ":")+1:])
+	daemonUp()
+	if t.Failed() {
+		t.FailNow()
+	}
+	// The fake daemon answers: a command without --help reaches it.
+	if code := run([]string{"improve"}); code != 0 || calls.Load() == 0 {
+		t.Fatalf("improve without --help: exit %d, %d requests; the fake daemon isn't reached", code, calls.Load())
+	}
+	calls.Store(0)
+	cmds := []string{"open", "init", "daemon", "ask", "status", "kb", "improve", "answer", "approve", "refuse", "login", "doctor", "egress", "share", "update", "shutdown", "uninstall"}
+	for _, cmd := range cmds {
+		for _, args := range [][]string{{"--help"}, {"-h"}, {"x", "--help"}, {"--release", "v0.1.2", "--help"}} {
+			if code := run(append([]string{cmd}, args...)); code != 0 {
+				t.Errorf("hive %s %q: exit %d, want 0", cmd, args, code)
+			}
+		}
+		if h := commandHelp(cmd); !strings.Contains(h, "hive "+cmd) && !strings.Contains(h, "control center") {
+			t.Errorf("help for %s doesn't name it: %q", cmd, commandHelp(cmd))
+		}
+	}
+	if n := calls.Load(); n != 0 {
+		t.Errorf("--help made %d requests to the daemon, want none", n)
+	}
+	if _, err := os.Stat(ws.DaemonFile()); err != nil {
+		t.Errorf("--help touched the daemon's record: %v", err)
+	}
+	// After --, -h and --help are text, sent without the --.
+	if code := run([]string{"ask", "--", "what", "does", "--help", "do", "--wait-not"}); code != 0 {
+		t.Errorf("ask -- ... --help: exit %d, want 0", code)
+	}
+	if got, want := sent.Load(), "what does --help do --wait-not"; got != want {
+		t.Errorf("ask -- sent %q, want %q", got, want)
+	}
+	if code := run([]string{"nosuch", "--help"}); code != 2 {
+		t.Errorf("an unknown command with --help: exit %d, want 2", code)
 	}
 }

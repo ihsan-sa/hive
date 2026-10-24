@@ -133,3 +133,26 @@ func TestRerunNeverRunsAPrintedName(t *testing.T) {
 		t.Fatalf("an odd package name reached the rerun: %q", cmd)
 	}
 }
+
+// A printed name never reaches the rerun as a flag: "FAIL -test.run" then
+// "FAIL Zz/none" would make go run no tests, exit 0, and a break pass as a
+// flake.
+func TestRerunNeverTakesAPrintedFlag(t *testing.T) {
+	fs := failures("FAIL -test.run\nFAIL Zz/none\n")
+	if len(fs) != 2 {
+		t.Fatalf("failures %+v", fs)
+	}
+	cmd := rerunCommand("go test ./...", fs)
+	if cmd != "go test ./..." {
+		t.Fatalf("a printed flag reached the rerun: %q", cmd)
+	}
+	// A real break: this go fails every time, except that, like go, it runs
+	// nothing and passes when handed -test.run with no tests to match.
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nfor a; do case \"$a\" in -test.run*) exit 0;; esac; done\nexit 1\n"), 0o755)
+	sh := exec.Command("sh", "-c", cmd)
+	sh.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
+	if err := sh.Run(); err == nil {
+		t.Fatalf("the rerun %q passed on a real break", cmd)
+	}
+}

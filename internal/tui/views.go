@@ -866,6 +866,10 @@ func (m *model) settings() []setting {
 		}
 		return "off"
 	}
+	share := "off"
+	if since, on := c.Sharing(); on {
+		share = "on since " + since.Format("2006-01-02 15:04")
+	}
 	sandboxVal := c.Sandbox
 	if m.st.Sandbox != "" {
 		sandboxVal += " (" + m.st.Sandbox + ")"
@@ -883,6 +887,7 @@ func (m *model) settings() []setting {
 				return flashMsg("`" + core.Cmd + " update --release <tag>` installs and pins a release")
 			}
 		}},
+		{group: "General", label: "share failures", value: share + "  (scrubbed; `" + core.Cmd + " report` shows what was sent)", key: "share"},
 		{group: "Agents", label: "harness", value: c.Harness, key: "harness", choices: append(slices.Clone(harness.Names), custom)},
 		{group: "Agents", label: "worker model", value: c.Model, key: "model", choices: models},
 		{group: "Agents", label: "lead model", value: c.LeadModel, key: "lead_model", choices: models},
@@ -969,6 +974,10 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "api_key_opt_in":
 			c.APIKeyOptIn = !c.APIKeyOptIn
 			return m, m.saveConfig(c, "API key use changed")
+		case "share":
+			_, on := m.st.Config.Sharing()
+			c.SetShare(!on)
+			return m, m.saveConfig(c, "sharing changed")
 		case "sandbox":
 			if c.Sandbox == "bare" {
 				c.Sandbox = "auto"

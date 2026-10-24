@@ -475,7 +475,7 @@ func (m *Module) afterKept(project, sha string) {
 	var manifest strings.Builder
 	var root, unread []string
 	for _, mg := range list {
-		if reads := m.C.Effects.Reads(project, mg.SHA); len(reads) > 0 {
+		if reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff); len(reads) > 0 {
 			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
 		} else {
 			unread = append(unread, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
@@ -513,7 +513,16 @@ func (m *Module) afterKept(project, sha string) {
 		alert("release failed: " + err.Error())
 		return
 	}
-	m.C.J.MustAppend("hive.released", map[string]any{"project": project, "tag": next, "sha": sha, "prerelease": true})
+	// A tag made since the listing keeps its own commit, which the release
+	// would then build and sign: such a release is refused, never published,
+	// and these merges wait for the next one.
+	at, err := m.C.Effects.Forge.TagCommit(p.Repo, next)
+	if err == nil && at != sha {
+		m.C.J.MustAppend("release.refused", map[string]string{"project": project, "tag": next, "sha": sha, "tag_sha": at})
+		alert(next + " points at " + core.Short(at) + ", not the gated " + core.Short(sha) + " (a tag made outside the Hive); it stays a pre-release and is never published. Delete that release and its tag.")
+		return
+	}
+	m.C.J.MustAppend("hive.released", map[string]any{"project": project, "tag": next, "sha": sha, "tag_sha": at, "prerelease": true})
 	f, up := m.C.Effects.Forge, m.C.WS.LoadConfig().ReleaseRepo
 	if p.Repo == up {
 		return
@@ -591,6 +600,7 @@ type merge struct {
 	SHA      string
 	MergeSHA string `json:"merge_sha"`
 	Root     []string
+	Diff     string // the head's own diff (core.DiffID), whose reads carry to it
 }
 
 // merges lists the project's merges after the one its last release was cut
@@ -686,6 +696,8 @@ func (m *Module) Publish() string {
 			cands = slices.DeleteFunc(cands, func(c cand) bool { return c.Project == x.Project && !modules.Newer(x.Tag, c.Tag) })
 		case "release.failed":
 			failed[x.Project+"@"+x.Tag] = true
+		case "release.refused":
+			cands = slices.DeleteFunc(cands, func(c cand) bool { return c.Project == x.Project && c.Tag == x.Tag })
 		}
 	})
 	if m.said == nil {
@@ -706,6 +718,18 @@ func (m *Module) Publish() string {
 		state, why := m.gates(p.Repo, c.SHA)
 		switch state {
 		case "passed":
+			// The gates passed at c.SHA; the tag must still point there.
+			at, err := m.C.Effects.Forge.TagCommit(p.Repo, c.Tag)
+			if err != nil {
+				out = append(out, c.Tag+": can't read its tag's commit ("+core.Clip(err.Error(), 200)+")")
+				continue
+			}
+			if at != c.SHA {
+				m.C.J.MustAppend("release.refused", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA, "tag_sha": at})
+				alert(c, c.Tag+" points at "+core.Short(at)+", not the gated "+core.Short(c.SHA)+"; it stays a pre-release and is never published.")
+				out = append(out, c.Tag+": refused, its tag points at "+core.Short(at))
+				continue
+			}
 			if err := m.C.Effects.Forge.PublishRelease(p.Repo, c.Tag); err != nil {
 				if !m.said[key] {
 					m.said[key] = true
