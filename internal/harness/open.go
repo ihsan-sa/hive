@@ -3,6 +3,7 @@ package harness
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -117,4 +118,15 @@ func (OpenClaude) Parse(line []byte) []Event {
 		}
 	}
 	return evs
+}
+
+// OpenRouter reports whether endpoint is OpenRouter's, whose answers say what
+// they cost and whose key can spend money on any model that isn't free.
+func OpenRouter(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "openrouter.ai" || strings.HasSuffix(h, ".openrouter.ai")
 }

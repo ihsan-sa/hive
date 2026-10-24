@@ -44,14 +44,7 @@ func (m OpenModel) Where() string {
 
 // OpenRouter reports whether the model is on OpenRouter, whose key can
 // spend the person's money on any model that isn't a free one.
-func (m OpenModel) OpenRouter() bool {
-	u, err := url.Parse(m.Endpoint)
-	if err != nil {
-		return false
-	}
-	h := strings.ToLower(u.Hostname())
-	return h == "openrouter.ai" || strings.HasSuffix(h, ".openrouter.ai")
-}
+func (m OpenModel) OpenRouter() bool { return harness.OpenRouter(m.Endpoint) }
 
 // Paid reports whether a turn on the model spends from the person's
 // OpenRouter budget: an OpenRouter model that isn't a free variant (":free").

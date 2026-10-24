@@ -16,7 +16,6 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
 // Message is one entry of the chat, in the OpenAI shape.
@@ -377,7 +378,7 @@ func (e *httpErr) Error() string {
 // size in tokens. A rate limit that resets within two minutes is waited out.
 func (a *Agent) chat(ctx context.Context, msgs []Message, tools []map[string]any) (Message, int, error) {
 	body := map[string]any{"model": a.Model, "messages": msgs, "tools": tools}
-	if openRouter(a.Endpoint) {
+	if harness.OpenRouter(a.Endpoint) {
 		body["usage"] = map[string]any{"include": true} // the answer then says what it cost
 	}
 	if a.MaxOutput > 0 {
@@ -454,16 +455,6 @@ func (a *Agent) chat(ctx context.Context, msgs []Message, tools []map[string]any
 		}
 		return m, tokens, nil
 	}
-}
-
-// openRouter reports whether endpoint is OpenRouter's.
-func openRouter(endpoint string) bool {
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return false
-	}
-	h := strings.ToLower(u.Hostname())
-	return h == "openrouter.ai" || strings.HasSuffix(h, ".openrouter.ai")
 }
 
 // resetAt reads when a rate limit resets: Retry-After (seconds or a date),

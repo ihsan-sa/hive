@@ -85,35 +85,6 @@ Other harnesses with a CLI of their own (Kimi's CLI, OpenCode, Aider) come in
 as harnesses through the harness-module seam rather than as more code in the
 open agent.
 
-## OpenRouter: free models first, paid ones inside a monthly budget
-
-An OpenRouter key can spend real money on any model that isn't a free
-variant (an id ending `:free`). So:
-
-- **Free first.** A route's free OpenRouter models go ahead of its paid ones,
-  in the places its OpenRouter models hold; Claude, Codex and other models
-  keep their places (`Config.Route`, `freeFirst`).
-- **Spend is counted.** The open agent asks OpenRouter for usage accounting
-  (`"usage": {"include": true}`) and adds each answer's `usage.cost` to the
-  session's running `total_cost_usd`. The turn's end records it as an
-  OpenRouter turn (`run.turn_ended` `openrouter`), and the run manager keeps
-  the UTC calendar month's OpenRouter spend (`Runs.OpenRouterSpent`). It also
-  counts in the month's total spend (`monthly_usd`).
-- **The stop.** Once the month's OpenRouter spend reaches
-  `openrouter_stop_usd` (default 9), a paid OpenRouter pick has no room until
-  the month ends. A run on one moves to its next pick with room, and the free
-  OpenRouter models join the end of its picks. A run with no free one waits
-  for the month. A turn on a paid model gets what is left before the stop
-  (`HIVE_OPEN_BUDGET`) and ends once it has spent that, so one long turn
-  can't run far past it. The person is told once a month (`openrouter-<month>`).
-- **The dashboard** shows the month's spend against `openrouter_cap_usd`
-  (default 10, the cap the person put on their key) under plan usage, in the
-  status line and in `hive status`.
-
-Both figures are the person's settings in `.hive/config.json`. No op
-writes them, and a stop past the cap is refused. Adding a model stays the
-person's step: the lead asks for one by name.
-
 ## Anthropic-compatible models, on Claude Code
 
 Moonshot (Kimi), DeepSeek and Zhipu (GLM) also serve an Anthropic-compatible

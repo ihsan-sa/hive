@@ -151,6 +151,19 @@ func TestOpenRouterBudgetWaitsWithNoFreeModel(t *testing.T) {
 	if spec.Argv != nil {
 		t.Fatal("no turn started")
 	}
+	// Still parked, a tick leaves it; once the person raises the stop, the
+	// next tick starts it, without waiting for the month.
+	c.Runs.step(got, c.WS.LoadConfig())
+	if got, _ = c.Runs.Get("w1"); got.Turn != 0 {
+		t.Fatal("a tick started a barred run")
+	}
+	cfg = c.WS.LoadConfig()
+	cfg.OpenRouterStopUSD = 10
+	c.WS.SaveConfig(cfg)
+	c.Runs.step(got, c.WS.LoadConfig())
+	if got, _ = c.Runs.Get("w1"); got.Turn != 1 || got.Model != "kimi" || !slices.Contains(spec.Env, "HIVE_OPEN_BUDGET=1.0000") {
+		t.Fatalf("a raised stop starts the parked run: turn %d on %s, env %q", got.Turn, got.Model, spec.Env)
+	}
 	// A turn that didn't run on OpenRouter doesn't count against it.
 	c2, _ := testHive(t)
 	c2.Runs.append("run.turn_ended", turnEnded{ID: "x", Turn: 1, Status: StatusIdle, Result: &harness.Result{CostUSD: 50}})

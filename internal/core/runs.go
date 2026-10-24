@@ -862,6 +862,9 @@ type OpenRouterBudget struct {
 	Stopped bool    `json:"stopped,omitempty"` // the stop is reached: paid ones wait for next month
 }
 
+// budgetWait begins the reason of a run parked for the OpenRouter budget.
+const budgetWait = "waiting: this month's OpenRouter budget is spent and its picks have no free model"
+
 // NextMonth is when the calendar month after t's starts, in UTC.
 func NextMonth(t time.Time) time.Time {
 	t = t.UTC()
@@ -1031,6 +1034,11 @@ func (rs *Runs) step(r Run, cfg Config) {
 	case StatusParked:
 		if time.Now().After(r.ParkedUntil) {
 			rs.launch(r, cfg)
+		} else if strings.HasPrefix(r.Reason, budgetWait) {
+			// The person may have raised the stop or added a free model.
+			if p, _ := rs.next(r); !rs.Barred(cfg, p) {
+				rs.launch(r, cfg)
+			}
 		}
 	case StatusQuiet:
 		rs.ops.Drain(r)
@@ -1324,7 +1332,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	if rs.Barred(cfg, pick) {
 		// No pick but a paid OpenRouter one: it waits for the month's budget.
 		until := NextMonth(time.Now())
-		if why := "waiting: this month's OpenRouter budget is spent and its picks have no free model; resumes " + until.Local().Format("Mon 2 Jan"); r.Status != StatusParked || r.Reason != why {
+		if why := budgetWait + "; resumes " + until.Local().Format("Mon 2 Jan"); r.Status != StatusParked || r.Reason != why {
 			rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: why, Until: until})
 		}
 		return
@@ -1532,7 +1540,10 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 			if m := cfg.Models[r.Model]; m.Paid() {
 				// The turn stops once it has spent what is left before the stop.
 				left := cfg.OpenRouterStopUSD - rs.OpenRouterSpent(time.Now().UTC().Format("2006-01"))
-				env = append(env, fmt.Sprintf("HIVE_OPEN_BUDGET=%.4f", max(left, 0.0001)))
+				if left <= 0 {
+					return sandbox.Spec{}, fmt.Errorf("%s is a paid OpenRouter model and this month's OpenRouter budget is spent", r.Model)
+				}
+				env = append(env, fmt.Sprintf("HIVE_OPEN_BUDGET=%.4f", left))
 			}
 		}
 	}

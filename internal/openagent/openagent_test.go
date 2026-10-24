@@ -336,8 +336,8 @@ func TestCostAndBudget(t *testing.T) {
 	}
 	for ep, want := range map[string]bool{"https://openrouter.ai/api/v1": true, "https://eu.openrouter.ai/api/v1": true,
 		"https://openrouter.ai.evil.example/v1": false, "http://127.0.0.1:11434/v1": false} {
-		if openRouter(ep) != want {
-			t.Errorf("openRouter(%s) != %v", ep, want)
+		if harness.OpenRouter(ep) != want {
+			t.Errorf("OpenRouter(%s) != %v", ep, want)
 		}
 	}
 }
