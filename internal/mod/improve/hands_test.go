@@ -1,6 +1,7 @@
 package improve
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,7 +77,8 @@ func TestHandsCountEachKind(t *testing.T) {
 	say(c, "project:hive", "hive", "Merged: one https://x/me/hive/pull/7")
 	say(c, "project:hive", "improve", "about t-one")
 
-	// Drafted and readied on the forge, then merged there, and a login
+	// Drafted and readied on the forge, then ended as landed (the lead's
+	// landed op: on main with no merge of the Hive's), and a login
 	// renewed by hand meanwhile.
 	task.DraftSince = time.Now()
 	c.J.MustAppend("task.saved", task)
@@ -200,5 +202,132 @@ func TestMilestoneProposedAndUpdatedByHand(t *testing.T) {
 	defer m.mu.Unlock()
 	if len(m.hands.updates) != 1 || m.hands.updates[0].by != "hand" {
 		t.Fatalf("update by hand: %+v", m.hands.updates)
+	}
+}
+
+// The real merge path: a PR the person merged on the forge before the Hive's
+// merge ran is recorded by Effects.Merge as already merged, and counts as a
+// merge by hand; one the Hive merges itself doesn't.
+func TestMergeOnTheForgeIsAHand(t *testing.T) {
+	for k, v := range map[string]string{"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "gc.auto", "GIT_CONFIG_VALUE_0": "0", "GIT_CONFIG_KEY_1": "maintenance.auto", "GIT_CONFIG_VALUE_1": "false"} {
+		t.Setenv(k, v)
+	}
+	dir := t.TempDir()
+	ws := core.Workspace{Root: filepath.Join(dir, "hive")}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ws.LoadConfig()
+	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	ws.SaveConfig(cfg)
+	f := &core.Local{Dir: filepath.Join(dir, "forge")}
+	c, err := core.Open(ws, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	a := &agents.Agents{C: c}
+	ch := chat.New(c, a)
+	m := New(c, a, work.New(c, a, ch), ch)
+
+	git := func(dir string, args ...string) {
+		t.Helper()
+		if _, err := core.Git(dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.EnsureRepo("me/demo", ""); err != nil {
+		t.Fatal(err)
+	}
+	seed := t.TempDir()
+	git("", "clone", "-q", f.RepoPath("me/demo"), seed)
+	os.MkdirAll(filepath.Join(seed, ".hive"), 0o755)
+	os.WriteFile(filepath.Join(seed, ".hive", "project.json"), []byte(`{"test": "true"}`), 0o644)
+	os.WriteFile(filepath.Join(seed, "README.md"), []byte("# demo\n"), 0o644)
+	git(seed, "add", "-A")
+	git(seed, "commit", "-q", "-m", "seed")
+	git(seed, "push", "-q", "origin", "HEAD:main")
+	p, err := c.Projects.Add(core.Project{Name: "demo", Repo: "me/demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// land opens a PR for a one-file change and merges it through
+	// Effects.Merge, after the person merged it on the forge when byHand.
+	land := func(id string, n int, byHand bool) string {
+		t.Helper()
+		main, err := c.Effects.Sync(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		co, err := c.Effects.NewCheckout(p, id, main)
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(co, id+".md"), []byte("# "+id+"\n"), 0o644)
+		git(co, "add", "-A")
+		git(co, "commit", "-q", "-m", id)
+		r, err := c.Runs.Start(core.RunSpec{ID: "w-" + id, Role: "worker", Project: p.Name, Checkout: co, Harness: "fake"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sha, err := c.Effects.Extract(p, r, main)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Effects.Push(p, "hive/"+id, sha); err != nil {
+			t.Fatal(err)
+		}
+		pr, err := f.CreatePR(p.Repo, "hive/"+id, "main", id, "body")
+		if err != nil || pr.Number != n {
+			t.Fatalf("pr %+v: %v", pr, err)
+		}
+		task := work.Task{ID: id, Project: p.Name, Title: id, From: "lead-1", Stage: work.StageMerging, Worker: r.ID, SHA: sha, PR: pr}
+		c.J.MustAppend("task.saved", task)
+		if ck := c.Effects.RunCheck(p, sha, "test", "true"); !ck.OK {
+			t.Fatalf("test: %+v", ck)
+		}
+		f.SetChecks(p.Repo, sha, core.CheckRun{Name: "test", State: core.CheckPass}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass})
+		if byHand {
+			if _, err := f.MergePR(p.Repo, pr.Number, sha, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		merged, err := c.Effects.Merge(core.MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main, Subject: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		task.Stage, task.MergeSHA = work.StageMerged, merged
+		c.J.MustAppend("task.saved", task)
+		return merged
+	}
+	own := land("t-own", 1, false)
+	if h := m.HandsFor("t-own", own, c.J.Seq()); !h.Unassisted {
+		t.Fatalf("the Hive's own merge counts %+v", h)
+	}
+	hand := land("t-hand", 2, true)
+	if h := m.HandsFor("t-hand", hand, c.J.Seq()); kinds(h) != "merge" || h.Unassisted {
+		t.Fatalf("a merge on the forge counts %+v", h)
+	}
+}
+
+// A hand that names no change (a login renewed by hand) counts once, for the
+// next merge after it, not for every change in flight.
+func TestUnlinkedHandCountsOnce(t *testing.T) {
+	c, m := handsModule(t)
+	a := work.Task{ID: "t-a", Project: "hive", Title: "a", From: "lead-1", Stage: work.StageWorking}
+	b := work.Task{ID: "t-b", Project: "hive", Title: "b", From: "lead-1", Stage: work.StageWorking}
+	c.J.MustAppend("task.saved", a)
+	c.J.MustAppend("task.saved", b)
+	c.J.MustAppend("login.renewed", map[string]any{"login": "claude", "by": "hand"})
+	for _, x := range []*work.Task{&a, &b} {
+		c.J.MustAppend("effect.merged", map[string]any{"project": "hive", "merge_sha": "m-" + x.ID})
+		x.Stage, x.MergeSHA = work.StageMerged, "m-"+x.ID
+		c.J.MustAppend("task.saved", *x)
+	}
+	ha, hb := m.HandsFor("t-a", "m-t-a", c.J.Seq()), m.HandsFor("t-b", "m-t-b", c.J.Seq())
+	if kinds(ha) != "login" || !hb.Unassisted {
+		t.Fatalf("the login counts for the next merge only: a %+v, b %+v", ha, hb)
 	}
 }

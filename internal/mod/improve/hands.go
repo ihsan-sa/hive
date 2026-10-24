@@ -8,7 +8,6 @@ package improve
 
 import (
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -71,6 +70,18 @@ type taskHands struct {
 	mergeAt  map[string]Hand // merge sha -> the task.saved that first carried it
 }
 
+// merge is a task's merge at sha, first recorded at seq.
+type merge struct {
+	seq           int64
+	project, task string
+	sha           string
+}
+
+type cachedMilestone struct {
+	gen int64
+	m   Milestone
+}
+
 type answered struct {
 	seq int64
 	at  time.Time
@@ -104,6 +115,11 @@ type hands struct {
 	logins     []Hand
 	tasks      map[string]*taskHands
 	hiveMerged map[string]bool // merge shas the Hive merged itself (effect.merged)
+	handMerged map[string]Hand // merge shas whose PR was merged on the forge before the Hive tried
+	merging    map[string]bool // project#pr@sha the Hive tried to merge (effect.merging)
+	merges     []merge         // every merge, in journal order: what unlinked hands go to
+	gen        int64           // bumped on what the milestone reads, so it is worked out again
+	milestones map[string]cachedMilestone
 	releases   []released
 	updates    []updated
 	rolled     map[string]bool // tags an update to rolled back
@@ -111,7 +127,7 @@ type hands struct {
 }
 
 func newHands() hands {
-	return hands{asks: map[string]core.Ask{}, roots: map[string]bool{}, tasks: map[string]*taskHands{}, hiveMerged: map[string]bool{}, rolled: map[string]bool{}, counted: map[string]ReleaseCount{}}
+	return hands{asks: map[string]core.Ask{}, roots: map[string]bool{}, tasks: map[string]*taskHands{}, hiveMerged: map[string]bool{}, handMerged: map[string]Hand{}, merging: map[string]bool{}, milestones: map[string]cachedMilestone{}, rolled: map[string]bool{}, counted: map[string]ReleaseCount{}}
 }
 
 // byPerson says an answer is the person's own. Answers recorded before they
@@ -134,6 +150,10 @@ func fromPerson(from string) bool { return from == "person" || from == "autobox"
 // applyHands indexes e; m.mu is held.
 func (m *Module) applyHands(e core.Event) {
 	h := &m.hands
+	switch e.Kind {
+	case "score.measured", "release.counted", "hive.updated", "hive.rolledback", "task.saved", "chat.posted":
+		h.gen++
+	}
 	switch e.Kind {
 	case "person.asked":
 		var a core.Ask
@@ -165,13 +185,32 @@ func (m *Module) applyHands(e core.Event) {
 		if e.Decode(&x) == nil && x["by"] == "hand" {
 			h.logins = append(h.logins, Hand{Seq: e.Seq, Kind: "login", What: fmt.Sprintf("the %v login renewed by hand", x["login"]), At: e.At})
 		}
+	case "effect.merging":
+		var x struct {
+			Project, SHA string
+			PR           int
+		}
+		if e.Decode(&x) == nil {
+			h.merging[fmt.Sprintf("%s#%d@%s", x.Project, x.PR, x.SHA)] = true
+		}
 	case "effect.merged":
 		var x struct {
+			Project  string `json:"project"`
+			PR       int    `json:"pr"`
+			SHA      string `json:"sha"`
 			MergeSHA string `json:"merge_sha"`
+			Already  bool   `json:"already"`
 		}
-		if e.Decode(&x) == nil && x.MergeSHA != "" {
-			h.hiveMerged[x.MergeSHA] = true
+		if e.Decode(&x) != nil || x.MergeSHA == "" {
+			return
 		}
+		// The PR was merged on the forge before the Hive's merge ran, and no
+		// try of the Hive's own (cut short by a restart) got there first.
+		if x.Already && !h.merging[fmt.Sprintf("%s#%d@%s", x.Project, x.PR, x.SHA)] {
+			h.handMerged[x.MergeSHA] = Hand{Seq: e.Seq, Kind: "merge", What: fmt.Sprintf("PR #%d merged outside the Hive (at %s)", x.PR, core.Short(x.MergeSHA)), At: e.At}
+			return
+		}
+		h.hiveMerged[x.MergeSHA] = true
 	case "task.saved":
 		var t work.Task
 		if e.Decode(&t) != nil {
@@ -210,6 +249,7 @@ func (m *Module) applyHands(e core.Event) {
 		}
 		for _, sha := range append([]string{t.MergeSHA}, bankSHAs(t)...) {
 			if _, ok := th.mergeAt[sha]; sha != "" && !ok {
+				h.merges = append(h.merges, merge{e.Seq, t.Project, t.ID, sha})
 				th.mergeAt[sha] = Hand{Seq: e.Seq, Kind: "merge", What: fmt.Sprintf("PR #%d merged outside the Hive (at %s)", t.PR.Number, core.Short(sha)), At: e.At}
 			}
 		}
@@ -272,13 +312,27 @@ func postHand(p post) Hand {
 	return Hand{Seq: p.seq, Kind: "chat", What: "the person in " + p.chat + ": " + core.Clip(strings.Join(strings.Fields(p.text), " "), 100), At: p.at}
 }
 
-// numbered matches a mention of PR or issue n.
+// numbered matches a mention of PR or issue n: #n, /pull/n, /issues/n,
+// "PR n" or "issue n", with no digit after it.
 func numbered(text string, n int) bool {
 	if n == 0 {
 		return false
 	}
-	re := regexp.MustCompile(`(?:#|/pull/|/issues/|\bPR |\bissue )` + strconv.Itoa(n) + `\b`)
-	return re.MatchString(text)
+	num := strconv.Itoa(n)
+	for _, pre := range []string{"#", "/pull/", "/issues/", "PR ", "issue "} {
+		for rest := text; ; {
+			i := strings.Index(rest, pre+num)
+			if i < 0 {
+				break
+			}
+			end := i + len(pre) + len(num)
+			if end == len(rest) || rest[end] < '0' || rest[end] > '9' {
+				return true
+			}
+			rest = rest[end:]
+		}
+	}
+	return false
 }
 
 // names says whether a post names the task: its id, its PR or its issue. A
@@ -301,9 +355,9 @@ func finish(hs []Hand) Hands {
 
 // HandsFor counts what task's merge at sha took from outside, up to seq upto:
 // from the task's first record on, its PR's draft, ready, close or merge the
-// Hive didn't make, the person's answers about it and posts naming it, and
+// Hive didn't make, the person's answers about it and posts naming it; and
 // anything outside that names no task or release (an answer, a login renewed
-// by hand) while it was in flight.
+// by hand) when this is the next merge after it, so each counts once.
 func (m *Module) HandsFor(task, sha string, upto int64) Hands {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -319,15 +373,26 @@ func (m *Module) HandsFor(task, sha string, upto int64) Hands {
 			hs = append(hs, x)
 		}
 	}
-	if x, ok := th.mergeAt[sha]; ok && in(x.Seq) && !h.hiveMerged[sha] {
-		hs = append(hs, x)
+	if x, ok := h.handMerged[sha]; ok && x.Seq <= upto {
+		hs = append(hs, x) // merged on the forge, then recorded by the Hive's merge
+	} else if x, ok := th.mergeAt[sha]; ok && in(x.Seq) && !h.hiveMerged[sha] {
+		hs = append(hs, x) // ended as landed, with no merge of the Hive's
+	}
+	// next says this merge is the first after seq in project ("" is any).
+	next := func(seq int64, project string) bool {
+		for _, x := range h.merges {
+			if x.seq > seq && (project == "" || x.project == project) {
+				return x.task == task && x.sha == sha && x.seq <= upto
+			}
+		}
+		return false
 	}
 	for _, x := range h.answers {
-		if !in(x.seq) {
+		if x.seq > upto {
 			continue
 		}
 		link := m.linkOf(x.ask)
-		if link == task || link == "" && (x.ask.Project == "" || x.ask.Project == th.project) {
+		if link == task && in(x.seq) || link == "" && (x.ask.Project == "" || x.ask.Project == th.project) && next(x.seq, x.ask.Project) {
 			hs = append(hs, answerHand(x))
 		}
 	}
@@ -337,7 +402,7 @@ func (m *Module) HandsFor(task, sha string, upto int64) Hands {
 		}
 	}
 	for _, l := range h.logins {
-		if in(l.Seq) {
+		if next(l.Seq, "") {
 			hs = append(hs, l)
 		}
 	}
@@ -470,6 +535,13 @@ func (m *Module) proposed(t work.Task) bool {
 // Milestone is how far the project's merges got towards the milestone: the
 // merge that got furthest, the newest of those.
 func (m *Module) Milestone(project string) Milestone {
+	m.mu.Lock()
+	gen := m.hands.gen
+	if c, ok := m.hands.milestones[project]; ok && c.gen == gen {
+		m.mu.Unlock()
+		return c.m
+	}
+	m.mu.Unlock()
 	scores, rels := m.Scores(project), m.Releases(project)
 	m.mu.Lock()
 	updated := map[string]bool{}
@@ -508,6 +580,9 @@ func (m *Module) Milestone(project string) Milestone {
 		}
 	}
 	best.Line = best.line()
+	m.mu.Lock()
+	m.hands.milestones[project] = cachedMilestone{gen, best}
+	m.mu.Unlock()
 	return best
 }
 

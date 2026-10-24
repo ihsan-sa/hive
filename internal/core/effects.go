@@ -1092,6 +1092,15 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if st != CheckPass {
 		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
 	}
+	// A PR already merged on the forge was merged by someone else, unless
+	// the Hive's own try (effect.merging) got that far before a restart: the
+	// count of outside hands (improve) tells the two apart.
+	already := false
+	if pr, err := e.Forge.GetPR(p.Repo, m.PR); err == nil && pr.State == "MERGED" {
+		already = true
+	} else {
+		e.j.MustAppend("effect.merging", map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA})
+	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
 	if err != nil && len(shared) > 0 && protectionRefused.MatchString(err.Error()) {
 		return "", &RefusedRed{Checks: shared, Err: err}
@@ -1099,7 +1108,11 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	e.j.MustAppend("effect.merged", map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID})
+	rec := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID}
+	if already {
+		rec["already"] = true
+	}
+	e.j.MustAppend("effect.merged", rec)
 	return merged, nil
 }
 
