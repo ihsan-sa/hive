@@ -165,7 +165,12 @@ func Run(cfg Config) (rep Report, err error) {
 		}
 		defer c.Meter.Close()
 	}
+	// Both sides are built, then both are checked, before anyone's fault is
+	// decided: a step that fails on both sides is the gate's (could not run),
+	// and only the go build or the side's own checks failing on the
+	// candidate alone are the candidate's.
 	var built []*Child
+	buildErrs := map[*Child]error{}
 	for _, c := range []*Child{cand, ctrl} {
 		sha := cfg.Head
 		if c == ctrl {
@@ -176,18 +181,23 @@ func Run(cfg Config) (rep Report, err error) {
 		}
 		if c.Bin == "" {
 			cfg.log("building %s at %s", c.Name, short(sha))
-			if err = build(cfg, c, sha); err != nil {
-				err = fmt.Errorf("%s does not build: %v", c.Name, err)
-				if c == cand {
-					err = &candidateFault{"does not build", err}
+			if e := build(cfg, c, sha); e != nil {
+				var own *ownFailure
+				if !errors.As(e, &own) {
+					// The gate's own step (the clone, the module download): could not run.
+					return rep, fmt.Errorf("preparing %s's build: %v", c.Name, e)
 				}
-				return rep, err
+				buildErrs[c] = e
+				continue
 			}
 			built = append(built, c)
 			if c == cand {
 				rep.CandVersion = versionOf(sha)
 			}
 		}
+	}
+	if err = whose(cand, ctrl, buildErrs, "does not build"); err != nil {
+		return rep, err
 	}
 
 	// The candidate's binary is copied out of the child's reach and hashed
@@ -206,15 +216,15 @@ func Run(cfg Config) (rep Report, err error) {
 
 	// Only now does each side's own code run: vet and the short tests, on
 	// its read-only checkout, in its sandbox.
+	checkErrs := map[*Child]error{}
 	for _, c := range built {
 		cfg.log("vet and short tests of %s", c.Name)
-		if err = unitTest(c); err != nil {
-			err = fmt.Errorf("%s fails its own checks: %v", c.Name, err)
-			if c == cand {
-				err = &candidateFault{"fails its own vet or short tests", err}
-			}
-			return rep, err
+		if e := unitTest(c); e != nil {
+			checkErrs[c] = e
 		}
+	}
+	if err = whose(cand, ctrl, checkErrs, "fails its own vet or short tests"); err != nil {
+		return rep, err
 	}
 
 	// Both sides are judged by one evaluator, taken from Eval (the base by
@@ -398,7 +408,7 @@ func build(cfg Config, c *Child, sha string) error {
 	defer func() { c.Building = false }()
 	defer c.with(offline...)()
 	if out, err := c.Exec(30*time.Minute, c.Src, "go", "build", "-ldflags", "-X "+versionVar+"="+versionOf(sha), "-o", c.Bin, "./cmd/hive"); err != nil {
-		return fmt.Errorf("go build: %s", tail(out, 600))
+		return &ownFailure{fmt.Errorf("go build: %s", tail(out, 600))}
 	}
 	return nil
 }
@@ -545,6 +555,29 @@ func (r Report) Markdown() string {
 		fmt.Fprintf(&b, "- LEFT BEHIND: %s\n", l)
 	}
 	return b.String()
+}
+
+// ownFailure is a side's own step failing (its go build, vet or tests), as
+// against a step of the gate's around it (the clone, the module download).
+type ownFailure struct{ err error }
+
+func (o *ownFailure) Error() string { return o.err.Error() }
+func (o *ownFailure) Unwrap() error { return o.err }
+
+// whose decides whose failure a step's errors are. On the candidate alone
+// (with the control fine or not built here): the candidate's, a rollback.
+// On the control, or on both: the gate's, could not run.
+func whose(cand, ctrl *Child, errs map[*Child]error, why string) error {
+	ce, ke := errs[cand], errs[ctrl]
+	switch {
+	case ce != nil && ke == nil:
+		return &candidateFault{why, fmt.Errorf("the candidate %s: %v", why, ce)}
+	case ce != nil && ke != nil:
+		return fmt.Errorf("both sides %s, so the step itself cannot run here: the candidate: %v; the control: %v", why, ce, ke)
+	case ke != nil:
+		return fmt.Errorf("the control %s: %v", why, ke)
+	}
+	return nil
 }
 
 // candidateFault is a failure of the candidate itself before it was

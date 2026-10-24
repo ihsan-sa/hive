@@ -124,4 +124,20 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 	if rep.Verdict.Keep || !strings.Contains(lessons, "rolled back") || !strings.Contains(strings.Join(rep.Verdict.Regressions, "|"), "daemon passes 0/1") {
 		t.Errorf("the broken candidate: %+v, lessons %q", rep.Verdict, lessons)
 	}
+
+	// Could not run, under bubblewrap: a probe broken on both sides was never
+	// measured, so the run is neither a keep nor the candidate's rollback,
+	// and no lesson is written.
+	both := filepath.Join(dir, "cantrun", ".hive", "lessons.md")
+	rep, err = Run(Config{CandBin: hive, CtrlBin: hive, Self: hive, Out: filepath.Join(dir, "cantrun", "run"), Sandbox: "bwrap", Reps: 1, Lessons: both,
+		Probes: []string{"broken"}, Probe: map[string]ProbeFunc{"broken": func(cfg *Config, c *Child) Result {
+			out, err := c.Exec(time.Minute, c.Root, "sh", "-c", "exit 7")
+			return Result{Pass: err == nil, Detail: out}
+		}}})
+	if err != nil || !rep.CantRun || rep.Verdict.Keep || rep.Sandbox != "bwrap" {
+		t.Errorf("a probe broken on both sides under bubblewrap: %v %+v", err, rep)
+	}
+	if _, err := os.Stat(both); err == nil {
+		t.Error("a run that could not measure wrote a lesson")
+	}
 }

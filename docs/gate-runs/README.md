@@ -1,12 +1,16 @@
 # Gate run records
 
-These two records are from `TestBwrapGateKeepsAndRollsBack` at 521131d (this PR's code), run **bare** in a worker box that cannot make user namespaces. The test is the same as ci runs, except that the sandbox is bare (`--allow-bare`), not bubblewrap. Both runs used a local org.
+These two records are from `TestBwrapGateKeepsAndRollsBack` in ci's `sandboxed-e2e` job: check run 120823169714, at e8e6fa4, green, under real bubblewrap on a GitHub runner. The test runs whole gates on a local org with the real probes. Each report was taken verbatim from that job's "gate run keep" and "gate run rollback" annotations.
 
-- `kept-trivial-candidate-bare.md`: **KEPT**. The gate built from commits: a trivial docs commit (02480c521) on a clone of this tree, against that clone's head (521131d17). It built both sides at their exact commits, stamped the candidate `0.0.0-gate.02480c521`, and recorded its sha256. It ran vet and the short tests in each side's sandbox, and judged both with the base's own suite, which it compiled itself. The daemon, org round trip, benchmark (score 3) and recurse (a nested gate that rolled back its self-test) all pass on both sides.
-- `rolled-back-broken-candidate-bare.md`: **ROLLED BACK**. A broken prebuilt candidate (it answers `--version`, starts no daemon) regresses on the daemon, the benchmark and recurse. Its lesson was written.
+- `kept-trivial-candidate-bwrap.md`: **KEPT**. A gate from commits: a trivial docs commit (07b6bbf14) on a clone of this tree, against that clone's head (19e49a649). The gate built both at their exact commits, stamped the candidate `0.0.0-gate.07b6bbf14` with its binary's sha256, and ran vet and the short tests in each side's sandbox. It judged both with the base's own suite, which it compiled itself. All four probes pass on both sides:
+  - the daemon, with each side reporting its stamped version;
+  - the org round trip;
+  - the benchmark, inside each side's sandbox, at score 3, with its landed code checked in a sealed sibling sandbox and 0 bytes through the meter;
+  - recurse, a nested gate inside the child, which rolled back its self-test.
+- `rolled-back-broken-candidate-bwrap.md`: **ROLLED BACK**. A broken prebuilt candidate (it answers `--version`, starts no daemon) regresses on the daemon, the benchmark and recurse, and its lesson was written. The org round trip passes on both sides.
 
-Both made 2 local org repositories and removed 2, leaving 0.
+Both runs made 2 local org repositories and removed 2, leaving 0.
 
-The same test under real bubblewrap runs in ci's `sandboxed-e2e` job, and its reports appear there as annotations ("gate run keep" and "gate run rollback"). The earlier ci run (40073936934 at 64301d0) ran every probe under bubblewrap, with the org probe failing on both sides; that is fixed since. Once a green ci run exists at the landing head, its reports replace these two.
+The test now also has a third, could-not-run case under bubblewrap (a probe broken on both sides: no keep, no lesson). It was added after that ci run.
 
-Not yet recorded: a run against a real GitHub org. It needs the test-only org and the fine-grained child token, both the person's to make.
+Not yet recorded: a run against a real GitHub org. It needs the test-only org and the fine-grained child token, both the person's to make; they have been asked.

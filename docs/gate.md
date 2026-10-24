@@ -32,7 +32,7 @@ For a candidate commit `--head` of the Hive's source `--repo`, and the current H
 6. **Record.** `report.json` and `report.md` in the run's folder, a line in `gates.jsonl` beside it. Three outcomes, each with its own exit code:
    - **Kept** (exit 0).
    - **Rolled back** (exit 1). The candidate is worse, or it failed on its own before it could be measured: it does not build, fails its own vet or short tests, or rewrote its binary. The reason is appended to `--lessons` (`.hive/lessons.md`), where the next worker reads it. The reason is Decide's words or a fixed phrase, never the candidate's output.
-   - **Could not run** (exit 3, `cant_run` in the report). The gate itself could not run or measure: no bubblewrap without `--allow-bare`, no Go, Yama off, an evaluator older than the outside measure, the meter or the org failing, out of time, the control not building, or a probe that failed on both sides (that path was never measured). This is not the candidate's failure, so **no lesson is written**: a check that can't find its own tool is "can't run", never red (see `.hive/lessons.md` on #111).
+   - **Could not run** (exit 3, `cant_run` in the report). The gate itself could not run or measure: no bubblewrap without `--allow-bare`, no Go, Yama off, an evaluator older than the outside measure, the meter or the org failing, out of time, the clone or the module download failing, the control not building or failing its checks, a step (the build, vet or the short tests) failing on both sides, or a probe that failed on both sides (that path was never measured). This is not the candidate's failure, so **no lesson is written**: a check that can't find its own tool is "can't run", never red (see `.hive/lessons.md` on #111).
 
 ## Recursion and its caps
 

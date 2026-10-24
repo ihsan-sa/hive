@@ -2,6 +2,7 @@ package gate
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -550,5 +551,74 @@ func TestCantRunWritesNoLesson(t *testing.T) {
 	}
 	if _, err := os.Stat(lessons); err == nil {
 		t.Fatal("an unmeasured probe wrote a lesson")
+	}
+}
+
+// Whose failure a build is: the candidate's own go build failing while the
+// control builds is a rollback with a lesson; a clone that cannot find the
+// commit is the gate's (could not run, no lesson).
+func TestBuildFailureIsWhose(t *testing.T) {
+	if _, err := FindGo(); err != nil {
+		t.Skip(err)
+	}
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	os.MkdirAll(filepath.Join(repo, "cmd", "hive"), 0o755)
+	os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module cand\n\ngo 1.21\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "cmd", "hive", "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644)
+	git("init", "-q", "-b", "main")
+	git("add", "-A")
+	git("commit", "-qm", "good")
+	good := git("rev-parse", "HEAD")
+	os.WriteFile(filepath.Join(repo, "cmd", "hive", "main.go"), []byte("package main\n\nfunc main() { broken }\n"), 0o644)
+	git("commit", "-qam", "broken")
+	broken := git("rev-parse", "HEAD")
+
+	dir := t.TempDir()
+	lessons := filepath.Join(dir, "lessons.md")
+	pass := func(*Config, *Child) Result { return Result{Pass: true} }
+	run := func(name, head string) Report {
+		rep, _ := Run(Config{Repo: repo, Head: head, Base: good, Sandbox: testSandbox(), AllowBare: true, Out: filepath.Join(dir, name, "run"), Lessons: lessons,
+			Probes: []string{"pass"}, Probe: map[string]ProbeFunc{"pass": pass}})
+		return rep
+	}
+	rep := run("nosha", "0123456789abcdef0123456789abcdef01234567")
+	if !rep.CantRun {
+		t.Errorf("a commit the clone cannot find: %+v", rep.Verdict)
+	}
+	if _, err := os.Stat(lessons); err == nil {
+		t.Fatal("the gate's own clone failing wrote a lesson")
+	}
+	rep = run("broken", broken)
+	if rep.CantRun || rep.Verdict.Keep || !strings.Contains(rep.Verdict.Reason, "does not build") {
+		t.Errorf("a candidate that does not build: %+v", rep.Verdict)
+	}
+	if raw, _ := os.ReadFile(lessons); !strings.Contains(string(raw), "does not build") {
+		t.Errorf("no lesson for a candidate that does not build: %q", raw)
+	}
+}
+
+func TestWhose(t *testing.T) {
+	cand, ctrl := &Child{Name: "candidate"}, &Child{Name: "control"}
+	boom := fmt.Errorf("boom")
+	var fault *candidateFault
+	if err := whose(cand, ctrl, map[*Child]error{cand: boom}, "x"); !errors.As(err, &fault) {
+		t.Errorf("the candidate alone: %v", err)
+	}
+	for _, errs := range []map[*Child]error{{cand: boom, ctrl: boom}, {ctrl: boom}} {
+		if err := whose(cand, ctrl, errs, "x"); err == nil || errors.As(err, &fault) {
+			t.Errorf("%v: %v", errs, err)
+		}
+	}
+	if whose(cand, ctrl, nil, "x") != nil {
+		t.Error("no errors")
 	}
 }
