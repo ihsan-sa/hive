@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -330,11 +331,61 @@ type turnEnded struct {
 	Offline     string          `json:"offline,omitempty"` // why the harness couldn't reach its service, in one plain line
 }
 
-// egressRefused is the hosts a turn's egress proxy refused.
+// egressRefused is the hosts a turn's egress proxy refused, and each
+// destination with why.
 type egressRefused struct {
-	ID    string   `json:"id"`
-	Turn  int      `json:"turn"`
-	Hosts []string `json:"hosts"`
+	ID      string          `json:"id"`
+	Turn    int             `json:"turn"`
+	Hosts   []string        `json:"hosts"`
+	Refused []egressRefusal `json:"refused,omitempty"`
+}
+
+type egressRefusal struct {
+	Dest string `json:"dest"` // host:port as asked
+	Why  string `json:"why"`
+}
+
+// refusalWhy says in a line why the proxy refused dest, and for a service on
+// this machine how it opens.
+func refusalWhy(dest, code string) string {
+	switch code {
+	case sandbox.RefusedUnlisted:
+		return "not on this run's egress list (egress in .hive/config.json)"
+	case sandbox.RefusedLocal:
+		return "a service on this machine or a private network, closed to sandboxes; a loopback port opens only on the person's grant: " +
+			"ask a warden for `" + Cmd + " egress grant " + dest + "`"
+	}
+	return "refused by the egress proxy"
+}
+
+// readRefusals reads a turn's .egress file: a line per refusal, "host:port
+// why" (a bare host from a proxy before reasons were kept).
+func readRefusals(raw string) egressRefused {
+	var out egressRefused
+	seen := map[string]bool{}
+	for _, line := range strings.Split(raw, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		dest, code := f[0], ""
+		if len(f) > 1 {
+			code = f[1]
+		}
+		host := dest
+		if h, _, err := net.SplitHostPort(dest); err == nil {
+			host = h
+		}
+		out.Hosts = append(out.Hosts, host)
+		if !seen[dest] {
+			seen[dest] = true
+			out.Refused = append(out.Refused, egressRefusal{Dest: dest, Why: refusalWhy(dest, code)})
+		}
+	}
+	sort.Strings(out.Hosts)
+	out.Hosts = slices.Compact(out.Hosts)
+	sort.Slice(out.Refused, func(i, j int) bool { return out.Refused[i].Dest < out.Refused[j].Dest })
+	return out
 }
 
 type runNote struct {
@@ -790,9 +841,9 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 func (rs *Runs) endTurn(r Run) {
 	tl := rs.ReadTurn(r, r.Turn)
 	if raw, err := os.ReadFile(rs.ws.TurnOut(r.ID, r.Turn) + ".egress"); err == nil && len(raw) > 0 {
-		hosts := strings.Fields(string(raw))
-		sort.Strings(hosts)
-		rs.append("run.egress_refused", egressRefused{ID: r.ID, Turn: r.Turn, Hosts: slices.Compact(hosts)})
+		ev := readRefusals(string(raw))
+		ev.ID, ev.Turn = r.ID, r.Turn
+		rs.append("run.egress_refused", ev)
 	}
 	limited := tl.Result != nil && tl.Result.Limited || (tl.Limit != nil && tl.Limit.Status == "rejected" && (tl.Result == nil || tl.Result.IsError))
 	if limited {
@@ -1140,34 +1191,32 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
 		Stdin: promptFile, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
-		Network: true, Allow: allow, UID: os.Getuid(), GID: os.Getgid(),
+		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), UID: os.Getuid(), GID: os.Getgid(),
 	}, nil
 }
 
-// Walled refuses r reaching project when either side is hidden (private or
-// isolated): a hidden project is reached only from its own runs, and its runs
-// reach no other project, so nothing of it is carried out in a brief or message. Both come from the core's record of r, never from r.
+// Walled refuses r reaching project when either side is an isolated project:
+// an isolated project is reached only from its own runs, and its runs reach
+// no other project. Both come from the core's record of r, never from r.
 func (rs *Runs) Walled(r Run, project string) error {
 	if project == r.Project || rs.projs == nil {
 		return nil
 	}
 	for _, name := range []string{project, r.Project} {
-		if p, ok := rs.projs.Get(name); ok && p.Hidden() {
+		if p, ok := rs.projs.Get(name); ok && p.Isolated {
 			return fmt.Errorf("project %q is out of reach of %s's agents", project, r.Project)
 		}
 	}
 	return nil
 }
 
-// hideIsolated covers what hidden projects (private or isolated) other than
-// r's own leave in the shared Hive, so r reads none of their code, runs,
-// chats, notes, checks or scores. An isolated run sees only the knowledge base
-// of what is shared, so it gets just the notes covered; a private run sees the
-// rest of the shared Hive as a shared one does. The journal holds every
-// project's events in one file, so it is covered whole while any other project
-// is hidden. The folders are made first so what lands in them mid-turn is
-// covered too; a run or chat started mid-turn is not, until that agent's next
-// turn.
+// hideIsolated covers what isolated projects other than r's own leave in the
+// shared Hive, so r reads none of their code, runs, chats, notes, checks or
+// scores. An isolated run sees only the knowledge base of what is shared, so
+// it gets just the notes covered. The journal holds every project's events in
+// one file, so it is covered whole while any project is isolated. The folders
+// are made first so what lands in them mid-turn is covered too; a run or chat
+// started mid-turn is not, until that agent's next turn.
 func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 	if rs.projs == nil {
 		return nil
@@ -1176,7 +1225,7 @@ func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 	var out []sandbox.Mount
 	var rel []string
 	for _, p := range rs.projs.List() {
-		if !p.Hidden() || p.Name == r.Project {
+		if !p.Isolated || p.Name == r.Project {
 			continue
 		}
 		iso[p.Name] = true
@@ -1193,9 +1242,7 @@ func (rs *Runs) hideIsolated(r Run) []sandbox.Mount {
 			os.MkdirAll(filepath.Join(rs.ws.Hive(), d, p.Name), 0o755)
 			rel = append(rel, d+"/"+p.Name)
 		}
-		// A private project's lead works in its leads/ folder (an isolated one's in a checkout).
-		os.MkdirAll(filepath.Join(rs.ws.Hive(), "leads", "project-"+p.Name), 0o755)
-		rel = append(rel, "kb/isolated/"+p.Name, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl", "leads/project-"+p.Name)
+		rel = append(rel, "kb/isolated/"+p.Name, "scores/"+p.Name+".jsonl", "chats/project_"+p.Name+".jsonl")
 	}
 	if len(iso) > 0 { // the kb's record is filed from the journal, so it is covered whole too
 		rec := filepath.Join(rs.ws.KB(), "record")

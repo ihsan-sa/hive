@@ -192,10 +192,10 @@ func (c *Core) checkProject(id string) string {
 		found, iso := "", ""
 		for _, p := range c.Projects.List() {
 			if _, err := Git(c.WS.Project(p.Name), "cat-file", "-e", sha+"^{commit}"); err == nil {
-				if p.Hidden() && iso != "" {
+				if p.Isolated && iso != "" {
 					return ""
 				}
-				if p.Hidden() {
+				if p.Isolated {
 					iso = p.Name
 				} else if found == "" {
 					found = p.Name
