@@ -78,11 +78,13 @@ type ProjectView struct {
 	Best   *float64              `json:"best,omitempty"`
 }
 
-// Updated is the update that brought in this version, with its release notes.
+// Updated is the update that brought in this version, with its release notes;
+// Unsigned when no release key was pinned to check it against.
 type Updated struct {
-	Seq   int64  `json:"seq"`
-	To    string `json:"to"`
-	Notes string `json:"notes"`
+	Seq      int64  `json:"seq"`
+	To       string `json:"to"`
+	Notes    string `json:"notes"`
+	Unsigned bool   `json:"unsigned,omitempty"`
 }
 
 // Alert is a ledger alert.
