@@ -164,7 +164,11 @@ func (m *model) dashRows() []row {
 	if add(row{key: "alerts", text: fmt.Sprintf("alerts (%d)", len(m.st.Alerts)), expand: len(m.st.Alerts) > 0}) {
 		for i := len(m.st.Alerts) - 1; i >= 0; i-- {
 			a := m.st.Alerts[i]
-			add(row{key: fmt.Sprintf("alert:%d", i), depth: 1, text: fmt.Sprintf("%s  %s  %s", a.At.Local().Format("Mon 15:04"), stWarn.Render(a.Kind), a.Text)})
+			n := ""
+			if a.Count > 1 {
+				n = fmt.Sprintf(" (x%d)", a.Count)
+			}
+			add(row{key: fmt.Sprintf("alert:%d", i), depth: 1, text: fmt.Sprintf("%s  %s  %s", a.At.Local().Format("Mon 15:04"), stWarn.Render(a.Kind), a.Text+n)})
 		}
 	}
 	if add(row{key: "jobs", text: "schedules", expand: len(m.st.Jobs) > 0}) {
@@ -238,7 +242,7 @@ func (m *model) runLine(r core.Run) string {
 	if r.Reason != "" && r.Status != core.StatusRunning {
 		extra = r.Reason
 	}
-	return fmt.Sprintf("%s  %s  turn %d  $%.2f  %s  %s", runLabel(r), status, r.Turn, r.Cost, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
+	return fmt.Sprintf("%s  %s  turn %d  $%.2f  %dk ctx  %s  %s", runLabel(r), status, r.Turn, r.Cost, r.Context/1000, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
 }
 
 // spark draws the last scores as a one-line chart.
@@ -427,6 +431,7 @@ func (m *model) viewDetail(d *detail) []string {
 		kv("project", r.Project+"  task "+r.Task)
 		kv("model", r.Harness+" "+r.Model)
 		kv("turns", fmt.Sprintf("%d  cost $%.2f  started %s", r.Turn, r.Cost, r.Created.Local().Format("Mon 15:04")))
+		kv("context", fmt.Sprintf("%dk tokens", r.Context/1000))
 		if r.Progress != "" {
 			kv("progress", r.Progress+"  "+ago(r.ProgressAt))
 		}
@@ -595,7 +600,7 @@ func (m *model) viewWaiting() []string {
 	}
 	w := m.mainW() - 5
 	var lines []string
-	sel := 0
+	sel, end := 0, 0
 	for i, a := range m.st.Asks {
 		gut := "  "
 		if i == m.waitSel {
@@ -630,11 +635,35 @@ func (m *model) viewWaiting() []string {
 				}
 				opts = append(opts, o)
 			}
-			ls = append(ls, strings.Join(opts, "    ")+"    "+stTitle.Render("←→")+" "+stDim.Render("pick")+"   "+stTitle.Render("enter")+" "+stDim.Render("answer"))
+			ls = append(ls, optionRows(opts, stTitle.Render("←→")+" "+stDim.Render("pick")+"   "+stTitle.Render("enter")+" "+stDim.Render("answer"), w)...)
 		}
 		lines = append(append(lines, indent(ls, gut)...), "")
+		if i == m.waitSel {
+			end = len(lines) - 2
+		}
 	}
-	return window(lines, sel, m.bodyHeight())
+	return span(lines, sel, end, m.bodyHeight())
+}
+
+// optionRows lays an ask's options out in rows of at most w cells, with the
+// key hint after them when it fits; the bottom row repeats it anyway.
+func optionRows(opts []string, hint string, w int) []string {
+	var rows []string
+	row := ""
+	for _, o := range opts {
+		o = clip(o, w)
+		if row != "" && visibleWidth(row)+4+visibleWidth(o) > w {
+			rows, row = append(rows, row), ""
+		}
+		if row != "" {
+			row += "    "
+		}
+		row += o
+	}
+	if visibleWidth(row)+4+visibleWidth(hint) <= w {
+		row += "    " + hint
+	}
+	return append(rows, row)
 }
 
 // diffView colours a unified diff and breaks its lines at w cells. Control
@@ -926,7 +955,8 @@ func (m *model) edit(label, value string) tea.Cmd {
 	m.input.SetValue(value)
 	m.input.CursorEnd()
 	m.input.SetHeight(1)
-	m.input.SetWidth(max(10, m.mainW()-36))
+	_, vw := m.settingCols()
+	m.input.SetWidth(max(10, vw-3))
 	return m.input.Focus()
 }
 
@@ -1005,12 +1035,20 @@ func (m *model) saveSetting(v string) tea.Cmd {
 	return m.post("/api/config", c, "saved")
 }
 
+// settingCols is the width of the settings' label column, 28 cells or less
+// on a narrow pane, and of the value column, which takes the rest.
+func (m *model) settingCols() (label, value int) {
+	label = min(28, max(12, (m.mainW()-4)/2))
+	return label, max(10, m.mainW()-5-label)
+}
+
 func (m *model) viewSettings() []string {
 	var lines, banner []string
 	if m.st.ConfigErr != "" { // pinned above the rows so a short window never scrolls it away
 		banner = []string{"  " + stBad.Render(clip("config.json: "+m.st.ConfigErr, m.mainW()-3)), ""}
 	}
-	sel, group := 0, ""
+	sel, end, group := 0, 0, ""
+	lw, vw := m.settingCols()
 	for i, st := range m.settings() {
 		if st.group != group {
 			if group != "" {
@@ -1026,7 +1064,30 @@ func (m *model) viewSettings() []string {
 				value = m.input.View()
 			}
 		}
-		lines = append(lines, gut+"  "+pad(label, 28)+value)
+		// A long value wraps under its own column; a label too long for its
+		// column puts the value on the next line.
+		vals := []string{value}
+		if !(i == m.setSel && m.editing) {
+			vals = wrap(value, vw)
+		}
+		if visibleWidth(st.label) >= lw-1 {
+			for _, l := range wrap(st.label, m.mainW()-5) {
+				if i == m.setSel {
+					l = stTitle.Render(l)
+				}
+				lines = append(lines, gut+"  "+l)
+			}
+			label = ""
+		}
+		for j, v := range vals {
+			if j > 0 {
+				label = ""
+			}
+			lines = append(lines, gut+"  "+pad(label, lw)+v)
+		}
+		if i == m.setSel {
+			end = len(lines) - 1
+		}
 		if i == m.setSel && m.picking {
 			for j, ch := range st.choices {
 				if j == m.pickSel {
@@ -1034,12 +1095,13 @@ func (m *model) viewSettings() []string {
 				} else {
 					ch = "  " + ch
 				}
-				lines = append(lines, "    "+pad("", 28)+ch)
+				lines = append(lines, "    "+pad("", lw)+clip(ch, vw))
 			}
+			end = len(lines) - 1
 		}
 	}
 	lines = append(lines, "", "  "+stDim.Render("Hive "+m.st.Version+" · "+m.st.Workspace))
-	return append(banner, window(lines, sel, m.bodyHeight()-len(banner))...)
+	return append(banner, span(lines, sel, end, m.bodyHeight()-len(banner))...)
 }
 
 func fmtNum(f float64) string { return strconv.FormatFloat(f, 'g', 6, 64) }

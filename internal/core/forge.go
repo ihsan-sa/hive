@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -33,7 +34,9 @@ type Forge interface {
 	Name() string
 	User() (string, error)
 	EnsureRepo(repo, description string) (created bool, err error)
-	Fork(repo string) (string, error) // the person's fork of repo, made on first need
+	// Fork is owner's fork of repo, made on first need; owner "" is the
+	// person's own account, else an organization they can create repos in.
+	Fork(repo, owner string) (string, error)
 	Clone(repo, dir string) error
 	IsEmpty(repo string) (bool, error)
 	DefaultBranch(repo string) string
@@ -61,33 +64,73 @@ type GitHub struct{}
 
 func (GitHub) Name() string { return "github" }
 
-func gh(args ...string) (string, error) { return RunCmd(2*time.Minute, "", "gh", args...) }
+// OwnerTokens maps a lower-cased repo owner to a file holding the GitHub token
+// for that owner. An owner not listed (or whose file is unreadable) uses gh's
+// own login. Both tokens act as the same user, so gh cannot hold them as two
+// logins; the effects process passes GH_TOKEN per call instead.
+var OwnerTokens = map[string]string{
+	"hive-rsi-lab": "/home/hive/h0-org.token",
+}
 
-func (GitHub) User() (string, error) { return gh("api", "user", "-q", ".login") }
+// ghEnv is the environment that makes gh and git's gh credential helper use
+// the token configured for repo's owner, or nothing to keep gh's login.
+func ghEnv(repo string) []string {
+	owner, _, _ := strings.Cut(repo, "/")
+	path := OwnerTokens[strings.ToLower(owner)]
+	if path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	tok := strings.TrimSpace(string(b))
+	if tok == "" {
+		return nil
+	}
+	return []string{"GH_TOKEN=" + tok}
+}
+
+func gh(repo string, args ...string) (string, error) {
+	return RunCmdEnv(2*time.Minute, "", ghEnv(repo), "gh", args...)
+}
+
+// User is the login gh itself holds.
+func (GitHub) User() (string, error) { return gh("", "api", "user", "-q", ".login") }
 
 func (g GitHub) EnsureRepo(repo, description string) (bool, error) {
-	if _, err := gh("repo", "view", repo, "--json", "name"); err == nil {
+	if _, err := gh(repo, "repo", "view", repo, "--json", "name"); err == nil {
 		return false, nil
 	}
-	if _, err := gh("repo", "create", repo, "--private", "--description", description); err != nil {
+	if _, err := gh(repo, "repo", "create", repo, "--private", "--description", description); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// Fork returns the person's fork of repo, creating it if they have none.
-// GitHub answers before a new fork's branches exist, so it waits for them,
-// up to a minute, and the first clone finds them.
-func (GitHub) Fork(repo string) (string, error) {
-	fork, err := gh("api", "-X", "POST", "repos/"+repo+"/forks", "-q", ".full_name")
-	for i := 0; err == nil && i < 20; i++ {
-		out, e := GitT(time.Minute, "", "-c", "credential.helper=", "-c", "credential.helper="+ghHelper(), "ls-remote", "--heads", "https://github.com/"+fork+".git")
-		if e == nil && strings.TrimSpace(out) != "" {
-			break
-		}
+// Fork returns owner's fork of repo (the person's when owner is ""),
+// creating it if there is none. GitHub answers before a new fork's branches
+// exist, so it waits for them, up to a minute, and the first clone finds them.
+func (GitHub) Fork(repo, owner string) (string, error) {
+	args := []string{"api", "-X", "POST", "repos/" + repo + "/forks", "-q", ".full_name"}
+	if owner != "" {
+		args = append(args, "-f", "organization="+owner)
+	}
+	tokenRepo := repo
+	if owner != "" {
+		tokenRepo = owner + "/"
+	}
+	fork, err := gh(tokenRepo, args...)
+	for i := 0; err == nil && i < 20 && !forkReady(fork); i++ {
 		time.Sleep(3 * time.Second)
 	}
 	return fork, err
+}
+
+// forkReady reports whether a fork's branches exist yet. Tests replace it.
+var forkReady = func(fork string) bool {
+	out, err := GitEnvT(time.Minute, "", ghEnv(fork), "-c", "credential.helper=", "-c", "credential.helper="+ghHelper(), "ls-remote", "--heads", "https://github.com/"+fork+".git")
+	return err == nil && strings.TrimSpace(out) != ""
 }
 
 // ghHelper is git's credential helper backed by the person's gh login, so
@@ -104,7 +147,7 @@ func ghHelper() string {
 // Clone clones over HTTPS and leaves the clone set to authenticate through gh.
 func (GitHub) Clone(repo, dir string) error {
 	url := "https://github.com/" + repo + ".git"
-	if _, err := GitT(10*time.Minute, "", "-c", "credential.helper=", "-c", "credential.helper="+ghHelper(), "clone", "-q", url, dir); err != nil {
+	if _, err := GitEnvT(10*time.Minute, "", ghEnv(repo), "-c", "credential.helper=", "-c", "credential.helper="+ghHelper(), "clone", "-q", url, dir); err != nil {
 		return err
 	}
 	Git(dir, "config", "--local", "--unset-all", "credential.helper")
@@ -117,12 +160,12 @@ func (GitHub) Clone(repo, dir string) error {
 
 // IsEmpty reports whether a repository has no commits.
 func (GitHub) IsEmpty(repo string) (bool, error) {
-	out, err := gh("repo", "view", repo, "--json", "isEmpty", "-q", ".isEmpty")
+	out, err := gh(repo, "repo", "view", repo, "--json", "isEmpty", "-q", ".isEmpty")
 	return out == "true", err
 }
 
 func (GitHub) DefaultBranch(repo string) string {
-	out, err := gh("repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name")
+	out, err := gh(repo, "repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name")
 	if err != nil || out == "" {
 		return "main"
 	}
@@ -142,7 +185,7 @@ func numberFromURL(u string) int {
 
 // CreateIssue is idempotent: an issue whose body carries marker is reused.
 func (GitHub) CreateIssue(repo, title, body, marker string) (Issue, error) {
-	out, err := gh("issue", "list", "-R", repo, "--state", "all", "--limit", "100", "--json", "number,url,body")
+	out, err := gh(repo, "issue", "list", "-R", repo, "--state", "all", "--limit", "100", "--json", "number,url,body")
 	if err == nil {
 		var list []struct {
 			Number int    `json:"number"`
@@ -157,7 +200,7 @@ func (GitHub) CreateIssue(repo, title, body, marker string) (Issue, error) {
 			}
 		}
 	}
-	url, err := gh("issue", "create", "-R", repo, "--title", title, "--body", body+"\n\n"+marker)
+	url, err := gh(repo, "issue", "create", "-R", repo, "--title", title, "--body", body+"\n\n"+marker)
 	if err != nil {
 		return Issue{}, err
 	}
@@ -165,7 +208,7 @@ func (GitHub) CreateIssue(repo, title, body, marker string) (Issue, error) {
 }
 
 func (GitHub) Comment(repo string, number int, body string) error {
-	_, err := gh("issue", "comment", strconv.Itoa(number), "-R", repo, "--body", body)
+	_, err := gh(repo, "issue", "comment", strconv.Itoa(number), "-R", repo, "--body", body)
 	return err
 }
 
@@ -201,7 +244,7 @@ func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
 	if fork {
 		args[5], args[7] = branch, "open"
 	}
-	out, err := gh(args...)
+	out, err := gh(repo, args...)
 	if err != nil {
 		return PR{}, false, err
 	}
@@ -221,7 +264,7 @@ func (g GitHub) CreatePR(repo, head, base, title, body string) (PR, error) {
 	if p, ok, err := g.FindPR(repo, head); err == nil && ok {
 		return p, nil
 	}
-	url, err := gh("pr", "create", "-R", repo, "--head", head, "--base", base, "--title", title, "--body", body)
+	url, err := gh(repo, "pr", "create", "-R", repo, "--head", head, "--base", base, "--title", title, "--body", body)
 	if err != nil {
 		return PR{}, err
 	}
@@ -229,7 +272,7 @@ func (g GitHub) CreatePR(repo, head, base, title, body string) (PR, error) {
 }
 
 func (GitHub) GetPR(repo string, number int) (PR, error) {
-	out, err := gh("pr", "view", strconv.Itoa(number), "-R", repo, "--json", prFields)
+	out, err := gh(repo, "pr", "view", strconv.Itoa(number), "-R", repo, "--json", prFields)
 	if err != nil {
 		return PR{}, err
 	}
@@ -255,7 +298,7 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 	if p.HeadSHA != sha {
 		return "", fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
 	}
-	if _, err := gh("pr", "merge", strconv.Itoa(number), "-R", repo, "--squash", "--match-head-commit", sha, "--subject", subject); err != nil {
+	if _, err := gh(repo, "pr", "merge", strconv.Itoa(number), "-R", repo, "--squash", "--match-head-commit", sha, "--subject", subject); err != nil {
 		return "", err
 	}
 	for i := 0; i < 10; i++ {
@@ -269,17 +312,17 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 }
 
 func (GitHub) ClosePR(repo string, number int, comment string) error {
-	_, err := gh("pr", "close", strconv.Itoa(number), "-R", repo, "--comment", comment)
+	_, err := gh(repo, "pr", "close", strconv.Itoa(number), "-R", repo, "--comment", comment)
 	return err
 }
 
 func (GitHub) CloseIssue(repo string, number int) error {
-	_, err := gh("issue", "close", strconv.Itoa(number), "-R", repo)
+	_, err := gh(repo, "issue", "close", strconv.Itoa(number), "-R", repo)
 	return err
 }
 
 func (GitHub) LatestRelease(repo string) (Release, error) {
-	out, err := gh("release", "view", "-R", repo, "--json", "tagName,assets")
+	out, err := gh(repo, "release", "view", "-R", repo, "--json", "tagName,assets")
 	if err != nil {
 		return Release{}, err
 	}
@@ -300,7 +343,7 @@ func (GitHub) LatestRelease(repo string) (Release, error) {
 }
 
 func (GitHub) CreateRelease(repo, tag, sha, notes string) error {
-	_, err := gh("release", "create", tag, "-R", repo, "--target", sha, "--title", tag, "--notes", notes)
+	_, err := gh(repo, "release", "create", tag, "-R", repo, "--target", sha, "--title", tag, "--notes", notes)
 	return err
 }
 

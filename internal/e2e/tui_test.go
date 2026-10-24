@@ -173,10 +173,10 @@ func (x *term) goTo(label string) {
 	x.until(10*time.Second, "focus leaving the sidebar", func(s string) bool { return !strings.Contains(s, "tab switch pane") })
 }
 
-// sections walks the sidebar through all five sections, back to Chats, and checks each frame.
+// sections walks the sidebar through all seven sections, back to Chats, and checks each frame.
 func (x *term) sections(w, h int) {
 	x.t.Helper()
-	for _, name := range []string{"Dashboard", "Waiting", "Modules", "Settings", "Chats"} {
+	for _, name := range []string{"Dashboard", "Waiting", "Feedback", "Knowledge", "Modules", "Settings", "Chats"} {
 		x.goTo(name)
 		if name != "Chats" {
 			x.wait(10*time.Second, "│   "+name)

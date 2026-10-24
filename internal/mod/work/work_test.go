@@ -632,3 +632,59 @@ func TestScoredBriefCarriesTheGoal(t *testing.T) {
 		t.Fatalf("unscored issue body:\n%s", b)
 	}
 }
+
+// A review's brief ends with main's standing rules, lessons included, so a
+// revert the Hive made (no worker brief to quote them) still carries them; a
+// project with none of the files gets nothing appended.
+func TestReviewRulesFromMain(t *testing.T) {
+	m, p := rigAt(t, `{"test":"true"}`)
+	if r := m.reviewRules(p, "HEAD"); r != "" {
+		t.Fatalf("no rule files, yet: %q", r)
+	}
+	dir := m.C.WS.Project(p.Name)
+	os.MkdirAll(filepath.Join(dir, "docs"), 0o755)
+	os.WriteFile(filepath.Join(dir, "docs/REVIEW.md"), []byte("# Review\n\nsimple wins\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".hive/goals.md"), []byte("# Goals\n\nship it\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".hive/lessons.md"), []byte("# Lessons\n\n- don't do that again\n"), 0o644)
+	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "rules"}} {
+		if out, err := core.Git(dir, args...); err != nil {
+			t.Fatal(out, err)
+		}
+	}
+	r := m.reviewRules(p, "HEAD")
+	i, j, k := strings.Index(r, "## `docs/REVIEW.md` on main\n\n# Review\n\nsimple wins"), strings.Index(r, "## `.hive/goals.md` on main"), strings.Index(r, "## `.hive/lessons.md` on main\n\n# Lessons\n\n- don't do that again")
+	if i < 0 || j < i || k < j {
+		t.Fatalf("rules:\n%s", r)
+	}
+}
+
+// Advice from a land is filed once, when the task merges: a step repeated
+// after a restart files no second brief, a follow-up's own advice files none,
+// and on a scored project the follow-up keeps its done line.
+func TestFollowUpOnceAfterMerge(t *testing.T) {
+	m, p := rigAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`)
+	tk := &Task{ID: "t9", Project: "p", Title: "add a helper", Kind: "work", Stage: StageMerged, Reviewer: "r-t9", Advice: []string{"name it better"}}
+	follows := func() []Task { return m.List(func(x Task) bool { return x.FollowUp != "" }) }
+	if err := m.followUp(tk, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.followUp(tk, p); err != nil { // the restart: still merged, filed already
+		t.Fatal(err)
+	}
+	fs := follows()
+	if len(fs) != 1 || fs[0].FollowUp != "t9" || fs[0].From != "r-t9" || !strings.Contains(fs[0].Known, "name it better") {
+		t.Fatalf("follow-ups: %+v", fs)
+	}
+	fu := fs[0]
+	if d := doneFor(&fu, true); !strings.Contains(d, "judged not worth doing") {
+		t.Fatalf("the follow-up lost its done line: %q", d)
+	}
+	keepAdvice(&fu, []string{"and again"})
+	if len(fu.Advice) != 0 {
+		t.Fatalf("a follow-up kept advice, so the chain goes on: %v", fu.Advice)
+	}
+	keepAdvice(tk, []string{" name it better ", "", "test it"}) // a second read repeats one item
+	if strings.Join(tk.Advice, "|") != "name it better|test it" {
+		t.Fatalf("advice: %q", tk.Advice)
+	}
+}

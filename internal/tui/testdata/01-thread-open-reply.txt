@@ -3,21 +3,21 @@
  › Chats              │                                                │   you  20:22
    Dashboard          │                                                │   The parser and the renderer are tangled
    Waiting         3  │                                                │   together. Can you split the parser into its
-   Modules            │                                                │   own package so reviewer can check it on its
-   Settings           │                                                │   own?
+   Feedback        1  │                                                │   own package so reviewer can check it on its
+   Knowledge          │                                                │   own?
+   Modules            │                                                │
+   Settings           │                                                │   2 replies ─────────────────────────────────
                       │                                                │
- ▾ textkit-2          │                                                │   2 replies ─────────────────────────────────
- › lead               │                                                │
-   writer             │   you  19:58                                   │   lead  20:23
-   reviewer        ●  │   Hello?                                       │   On it. I'll hand the split to writer and
- ▾ hive-web           │   ▸ 1 reply  last 19:58                        │   ask reviewer to check the public API before
-   lead            ●  │                                                │   anything merges.
-   worker-2           │ ▌ you  20:22                                   │
-   reviewer           │ ▌ The parser and the renderer are tangled      │   lead  20:31
-   tribunal           │ ▌ together. Can you split the parser into its  │   Done. parser/ is its own package now, with
- ▸ website            │ ▌ own package so reviewer can check it on its  │   14 tests passing, and reviewer approved the
-                      │ ▌ own?                                         │   API. One question: keep the old import path
-                      │ ▌ ▸ 2 replies  open →                          │   as an alias for a release, or break it now?
+ ▾ textkit-2          │   you  19:58                                   │   lead  20:23
+ › lead               │   Hello?                                       │   On it. I'll hand the split to writer and
+   writer             │   ▸ 1 reply  last 19:58                        │   ask reviewer to check the public API before
+   reviewer        ●  │                                                │   anything merges.
+ ▾ hive-web           │ ▌ you  20:22                                   │
+   lead            ●  │ ▌ The parser and the renderer are tangled      │   lead  20:31
+   worker-2           │ ▌ together. Can you split the parser into its  │   Done. parser/ is its own package now, with
+   reviewer           │ ▌ own package so reviewer can check it on its  │   14 tests passing, and reviewer approved the
+   tribunal           │ ▌ own?                                         │   API. One question: keep the old import path
+ ▸ website            │ ▌ ▸ 2 replies  open →                          │   as an alias for a release, or break it now?
                       │                                                │
                       │   you  20:40                                   │  ╭─ reply · lead ────────────────────────────╮
                       │   Also check whether the docs build still      │  │ › Keep the alias for one release, then    │
