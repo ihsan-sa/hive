@@ -297,6 +297,66 @@ func TestDoneProjectGone(t *testing.T) {
 	}
 }
 
+// A task the pipeline gives up on goes to the lead, and recheck brings it back
+// with fresh counts; a merged task can't be rechecked.
+func TestGiveUpComesBack(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Failures, task.Round, task.Reviews = 8, 3, 3
+	m.giveUp(task, "gave up after repeated errors: HTTP 503")
+	if task.Stage != StageStopped {
+		t.Fatalf("stage %q", task.Stage)
+	}
+	if err := m.Recheck(task.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := m.Get(task.ID)
+	if got.Stage != StageLanding || got.Failures+got.Round+got.Reviews != 0 || got.Reason != "" {
+		t.Fatalf("not back in the pipeline with fresh counts: %+v", got)
+	}
+	got.Stage = StageDone
+	m.save(&got, "done")
+	if err := m.Recheck(task.ID, ""); err == nil {
+		t.Fatal("a done task was rechecked")
+	}
+}
+
+// A task the person stopped, from the control center or by leaving its PR
+// open, stays stopped: the lead can neither recheck it nor send its worker back.
+func TestPersonStopHolds(t *testing.T) {
+	for _, how := range []string{"stop", "leave open"} {
+		m, _, task, _ := noCommitRig(t, 0)
+		task.Stage = StagePerson
+		m.save(task, "waiting on the person")
+		if how == "stop" {
+			m.Stop(task.ID, "stopped by the person")
+		} else {
+			m.onPersonMerge(core.Ask{Ref: task.ID + "@abc", Answer: "leave open"})
+		}
+		for _, back := range []string{"", "try again"} {
+			if err := m.Recheck(task.ID, back); err == nil || !strings.Contains(err.Error(), "by the person") {
+				t.Fatalf("%s: recheck %q got %v", how, back, err)
+			}
+		}
+		if got, _ := m.Get(task.ID); got.Stage != StageStopped {
+			t.Fatalf("%s: stage %q", how, got.Stage)
+		}
+	}
+}
+
+// A lead can't recheck a task in a project walled off from it.
+func TestRecheckWalled(t *testing.T) {
+	m, _, _, _ := noCommitRig(t, 0)
+	m.C.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	task := &Task{ID: "t9", Project: "secret", Title: "x", Kind: "work"}
+	m.giveUp(task, "gave up")
+	if _, err := m.opRecheck(core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead", Project: "p"}}, []byte(`{"task":"t9"}`)); err == nil {
+		t.Fatal("a walled lead rechecked another project's task")
+	}
+	if got, _ := m.Get("t9"); got.Stage != StageStopped {
+		t.Fatalf("stage %q", got.Stage)
+	}
+}
+
 // helperRig is a work module on a project with one commit on main, in bare
 // sandboxes so a checkout's commits can be extracted.
 func helperRig(t *testing.T) (*Module, *flakyForge, core.Project) {

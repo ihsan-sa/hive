@@ -828,6 +828,69 @@ func TestWaitingReachesThePerson(t *testing.T) {
 	h.wait("the refused worker to stop", 3*minute, taskStage("wait", "no", work.StageBlocked))
 }
 
+// TestBlockedWorkComesBack replays the first real run: each worker's tests fail
+// on a missing tool, it asks a warden and finishes blocked at once. Where the
+// warden installs the tool, its answer wakes the worker and the PR merges;
+// where it declines and the person installs the tool, the lead re-runs the check.
+func TestBlockedWorkComesBack(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	// the sandboxed check sees system dirs like /var, not the test's temp dir
+	dir, err := os.MkdirTemp("/var/tmp", "hive-tool-")
+	if err != nil {
+		dir = t.TempDir()
+	} else {
+		t.Cleanup(func() { os.RemoveAll(dir) })
+	}
+	for _, name := range []string{"tool", "rerun"} {
+		marker := filepath.Join(dir, name)
+		// main is green; only the worker's change (under work/) needs the tool
+		h.seed("me/"+name, map[string]string{".hive/project.json": `{"test": "test -f ` + filepath.ToSlash(marker) + ` || test ! -d work"}`, ".hive/goals.md": "# Goals\n"})
+		h.post("/api/project", map[string]any{"name": name, "repo": "me/" + name}, nil)
+		known := "FAKE:needtool " + filepath.ToSlash(marker)
+		if name == "rerun" {
+			known += " FAKE:wardendecline"
+		}
+		h.post("/api/ask", map[string]string{"project": name, "title": name, "known": known}, nil)
+	}
+	h.wait("the warden's answer to wake the worker and its PR to merge", 4*minute, taskStage("tool", "tool", work.StageDone))
+	st := h.wait("the declined worker to stay blocked", 4*minute, func(st api.State) bool {
+		t, ok := task(st, "rerun", "rerun")
+		return ok && t.Stage == work.StageBlocked && strings.Contains(t.Reason, "declined") && t.PR.Number != 0
+	})
+	rerun, _ := task(st, "rerun", "rerun")
+	os.WriteFile(filepath.Join(dir, "rerun"), nil, 0o644) // the person installs the tool
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "recheck " + rerun.ID}, nil)
+	h.wait("the lead's re-run to pass and merge the PR", 4*minute, taskStage("rerun", "rerun", work.StageDone))
+}
+
+// TestStoppedWorkComesBack: a change whose tests keep failing stops after its
+// fix rounds and goes to the lead, not the person; the lead sends it back with
+// what remains and it merges.
+func TestStoppedWorkComesBack(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/stop", map[string]string{".hive/project.json": `{"test": "test ! -f BROKEN"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "stop", "repo": "me/stop"}, nil)
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "hello"}, nil) // the lead is up to be told
+	title := "break the build FAKE:leadfixes"
+	h.post("/api/ask", map[string]string{"project": "stop", "title": title, "known": "FAKE:breaktests"}, nil)
+	st := h.wait("the lead's call to bring it back past the fix rounds and merge it", 6*minute, taskStage("stop", title, work.StageDone))
+	tk, _ := task(st, "stop", title)
+	stopped := false
+	for _, e := range tk.Log {
+		stopped = stopped || strings.Contains(e.Text, "stopped after 3 rounds")
+	}
+	if !stopped {
+		t.Fatalf("it never stopped after its rounds: %+v", tk.Log)
+	}
+	for _, msg := range h.messages("lead") {
+		if strings.Contains(msg.Text, "Stopped") {
+			t.Fatalf("the person was told of work the lead owns: %q", msg.Text)
+		}
+	}
+}
+
 // TestWardenOutlivesARestart: a warden mid-turn when the Hive restarts still
 // decides, and once its process ends it leaves the live list. Here the test
 // process adopts the orphaned turn and never reaps it, as a container's PID 1

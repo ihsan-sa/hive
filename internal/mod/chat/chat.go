@@ -386,7 +386,18 @@ func (m *Module) Notify(chatID, thread, text string) {
 		return
 	}
 	m.add(Message{Chat: chatID, Thread: thread, From: "hive", Name: "hive", Text: text})
-	if ch.Lead != "" {
+	m.ToLead(chatID, thread, text)
+}
+
+// ToLead tells only the chat's lead, which judges what the person hears.
+func (m *Module) ToLead(chatID, thread, text string) {
+	if chatID == "" {
+		chatID = "lead"
+	}
+	m.mu.Lock()
+	ch := m.chats[chatID]
+	m.mu.Unlock()
+	if ch != nil && ch.Lead != "" {
 		if r, ok := m.C.Runs.Get(ch.Lead); ok && !r.Terminal() {
 			m.C.Runs.Send(r.ID, fmt.Sprintf("[notification · thread %s] %s", thread, text))
 		}

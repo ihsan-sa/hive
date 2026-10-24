@@ -284,7 +284,7 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 		}
 	}
 	m.C.Runs.Wait(r.ID, "request "+req.ID)
-	return map[string]string{"request": req.ID, "route": route, "note": "the answer arrives as a message. End your turn to wait, or carry on without it."}, nil
+	return map[string]string{"request": req.ID, "route": route, "note": "the answer arrives as a message. End your turn to wait for it rather than finishing blocked, or carry on without it."}, nil
 }
 
 // ask puts a request in front of the person; the worker's words are quoted.
@@ -456,9 +456,18 @@ func (m *Module) Steps(run string) (string, bool) {
 	return strings.Join(lines, "\n"), ok && len(lines) > 0
 }
 
+// tell gives each asker the answer; one that already ended is woken with it,
+// but one that was stopped on purpose stays stopped and only has it noted.
 func (m *Module) tell(req Request, text string) {
+	text = "[request " + req.ID + "] " + text
 	for _, id := range append([]string{req.Origin}, req.Joined...) {
-		m.C.Runs.Send(id, "[request "+req.ID+"] "+text)
+		if r, ok := m.C.Runs.Get(id); ok && r.Status == core.StatusStopped {
+			m.C.Runs.Progress(id, "late answer, run stays stopped: "+text)
+			continue
+		}
+		if m.C.Runs.Send(id, text) != nil {
+			m.reopen(id, text)
+		}
 	}
 }
 

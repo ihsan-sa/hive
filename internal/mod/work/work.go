@@ -53,6 +53,8 @@ type Task struct {
 	Kind      string            `json:"kind"` // work | revert | helper (spawned, no issue)
 	Stage     string            `json:"stage"`
 	Reason    string            `json:"reason,omitempty"`
+	Recheck   bool              `json:"recheck,omitempty"`   // landed again on the same commit, so its test runs again
+	ByPerson  bool              `json:"by_person,omitempty"` // the person stopped it or left it open, so the lead can't bring it back
 	Issue     core.Issue        `json:"issue"`
 	Worker    string            `json:"worker,omitempty"`
 	Base      string            `json:"base,omitempty"`
@@ -158,6 +160,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
 	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project"}`, Fn: m.opBrief})
+	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: []string{"lead"}, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); with back, its worker gets that text and works on`, Fn: m.opRecheck})
 	c.Person.Handle("merge", m.onPersonMerge)
 	return m
 }
@@ -339,7 +342,7 @@ func (m *Module) Revert(of Task, mergeSHA, reason string) (Task, error) {
 
 // Tick advances every task that isn't already being worked on.
 func (m *Module) Tick() {
-	for _, t := range m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen }) {
+	for _, t := range m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) }) {
 		m.mu.Lock()
 		if !m.due(t) || m.busy[t.ID] {
 			m.mu.Unlock()
@@ -412,9 +415,7 @@ func (m *Module) settle(t *Task, err error) {
 	t.Retry = time.Now().Add(time.Duration(min(t.Failures, 6)) * 30 * time.Second)
 	msg := err.Error()
 	if t.Failures >= 8 {
-		t.Stage, t.Reason = StageStopped, "gave up after repeated errors: "+msg
-		m.save(t, t.Reason)
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Stopped %q: %s", t.Label(), core.Clip(msg, 300)))
+		m.giveUp(t, "gave up after repeated errors: "+msg)
 		return
 	}
 	m.save(t, "error (will retry): "+core.Clip(msg, 300))
@@ -484,6 +485,9 @@ func (m *Module) step(t *Task) error {
 		return m.prepareRevert(t, p)
 	case StagePerson:
 		// waiting on the person's answer (onPersonMerge)
+	case StageBlocked: // woke: an answer reopened its worker
+		t.Stage, t.Reason = StageWorking, ""
+		m.save(t, "the worker was woken with an answer")
 	}
 	return nil
 }
@@ -636,7 +640,7 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 			m.C.Effects.Forge.Comment(p.Repo, t.Issue.Number, "The worker stopped:\n\n"+t.Reason)
 		}
 		m.C.J.MustAppend("kb.note", map[string]string{"title": "Blocked: " + t.Label(), "text": t.Reason, "project": t.Project, "run": r.ID})
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Blocked: %q. %s", t.Label(), core.Clip(t.Reason, 400)))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Blocked: %q (task %s). %s", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(t.Reason, 400)))
 	case core.StatusStopped:
 		t.Stage, t.Reason = StageStopped, "worker stopped: "+r.Reason
 		m.save(t, t.Reason)
@@ -688,7 +692,9 @@ func (m *Module) land(t *Task, p core.Project) error {
 	if t.PR.Number != 0 && t.SHA != sha {
 		m.C.Effects.Forge.Comment(p.Repo, pr.Number, fmt.Sprintf("New commit %s after round %d.", core.Short(sha), t.Round))
 	}
-	t.PR, t.SHA, t.Stage, t.Failures = pr, sha, StageTesting, 0
+	// A worker that finishes again on the same commit thinks something outside
+	// it changed (a tool installed, an answer), so its tests run again.
+	t.PR, t.Recheck, t.SHA, t.Stage, t.Failures = pr, t.SHA == sha, sha, StageTesting, 0
 	m.save(t, fmt.Sprintf("pushed %s, PR #%d", core.Short(sha), pr.Number))
 	return nil
 }
@@ -748,11 +754,11 @@ func (m *Module) test(t *Task, p core.Project) error {
 	}
 	cfg := m.C.Effects.Config(p, main)
 	c, ok := m.C.Effects.GetCheck(p.Name, t.SHA, "test")
-	if !ok {
+	if !ok || t.Recheck {
 		if _, err := m.C.Sandbox(); err != nil {
 			return err
 		}
-		c = m.C.Effects.RunCheck(p, t.SHA, "test", cfg.Test)
+		c, t.Recheck = m.C.Effects.RunCheck(p, t.SHA, "test", cfg.Test), false
 		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("Tests on %s: **%s**\n\n```\n%s\n```", core.Short(t.SHA), passFail(c.OK), core.Clip(c.Output, 1500)))
 	}
 	if !c.OK {
@@ -920,8 +926,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 	if err := json.Unmarshal(r.Structured, &v); err != nil || (v.Verdict != "land" && v.Verdict != "fix") || (v.Verdict == "land" && tok.Token != reviewToken(r.ID)) {
 		t.Reviews++
 		if t.Reviews >= 3 {
-			t.Stage, t.Reason = StageStopped, "the reviewer gave no usable verdict three times"
-			m.save(t, t.Reason)
+			m.giveUp(t, "the reviewer gave no usable verdict three times")
 			return nil
 		}
 		m.save(t, "reviewer gave no usable verdict (a land must carry the token from its brief.md); asking again")
@@ -966,10 +971,8 @@ func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
 		reason = fmt.Sprintf("stopped after %d rounds of fixes; what remains:\n\n%s", t.Round, core.Clip(findings, 1500))
 	}
 	if reason != "" {
-		t.Stage, t.Reason = StageStopped, reason
-		m.save(t, "stopped: nothing more to send back")
+		m.giveUp(t, reason)
 		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Stopping here. "+t.Reason+"\n\nThe pull request stays open.")
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Stopped %q; the PR stays open: %s", t.Label(), t.PR.URL))
 		return nil
 	}
 	t.Round++
@@ -1016,8 +1019,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 func (m *Module) conflict(t *Task, p core.Project) error {
 	t.Conflicts++
 	if t.Conflicts > 3 {
-		t.Stage, t.Reason = StageStopped, "keeps conflicting with main"
-		m.save(t, t.Reason)
+		m.giveUp(t, "keeps conflicting with main")
 		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Stopping: the branch keeps conflicting with main. The pull request stays open.")
 		return nil
 	}
@@ -1076,7 +1078,7 @@ func (m *Module) onPersonMerge(a core.Ask) {
 		m.save(&t, "the person approved")
 		return
 	}
-	t.Stage, t.Reason = StageStopped, strings.TrimSuffix("left open: "+a.Note, ": ")
+	t.Stage, t.Reason, t.ByPerson = StageStopped, strings.TrimSuffix("left open: "+a.Note, ": "), true
 	m.save(&t, t.Reason)
 	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q was %s: %s", t.Label(), t.Reason, t.PR.URL))
 }
@@ -1090,9 +1092,71 @@ func (m *Module) Stop(id, reason string) error {
 	if t.Worker != "" {
 		m.C.Runs.Stop(t.Worker, reason)
 	}
-	t.Stage, t.Reason = StageStopped, reason
+	t.Stage, t.Reason, t.ByPerson = StageStopped, reason, true
 	m.save(&t, "stopped: "+reason)
 	return nil
+}
+
+// giveUp stops a task the pipeline can't take further and hands it to the
+// lead, which brings it back with recheck or leaves it; no count ends it for good.
+func (m *Module) giveUp(t *Task, reason string) {
+	t.Stage, t.Reason = StageStopped, reason
+	m.save(t, core.Clip(reason, 300))
+	m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("Stopped %q (task %s): %s\n\nIt's yours: bring it back with recheck, or leave it.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(reason, 1500)))
+}
+
+// woke reports whether a blocked task's worker is taking turns again.
+func (m *Module) woke(t Task) bool {
+	if t.Stage != StageBlocked || t.Worker == "" {
+		return false
+	}
+	r, ok := m.C.Runs.Get(t.Worker)
+	return ok && !r.Terminal()
+}
+
+// Recheck brings a blocked or stopped task back with fresh counts: with no
+// text its commits are pushed and checked again (what blocked it may be fixed
+// now); with text its worker gets that and works on in the same checkout. A
+// task the person stopped or left open stays theirs to bring back.
+func (m *Module) Recheck(id, back string) error {
+	t, ok := m.Get(id)
+	if !ok {
+		return core.ErrNotFound
+	}
+	if t.Stage != StageBlocked && t.Stage != StageStopped {
+		return fmt.Errorf("task %s is %s, not blocked or stopped", id, t.Stage)
+	}
+	if t.ByPerson {
+		return fmt.Errorf("task %s was stopped by the person (%s); only they can bring it back", id, t.Reason)
+	}
+	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts = "", 0, 0, 0, 0
+	if back != "" {
+		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
+			return err
+		}
+		t.Stage = StageWorking
+		m.save(&t, "sent back to its worker: "+core.Clip(back, 200))
+		return nil
+	}
+	t.Stage = StageLanding
+	m.save(&t, "checks run again on its commits")
+	return nil
+}
+
+func (m *Module) opRecheck(r core.Run, args json.RawMessage) (any, error) {
+	var a struct{ Task, Back string }
+	if err := core.Bind(args, &a); err != nil {
+		return nil, err
+	}
+	if t, ok := m.Get(a.Task); ok {
+		if err := m.C.Runs.Walled(r, t.Project); err != nil {
+			return nil, err
+		}
+	}
+	if err := m.Recheck(a.Task, a.Back); err != nil {
+		return nil, err
+	}
+	return map[string]string{"task": a.Task, "note": "back in the pipeline; you'll be told the outcome"}, nil
 }
 
 // Retry hands a blocked or stopped task to a fresh worker on the same branch

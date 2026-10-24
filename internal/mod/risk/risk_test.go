@@ -246,7 +246,7 @@ func TestWardenPassesToThePerson(t *testing.T) {
 		}
 		g.c.Person.Answer(a.ID, answer, "")
 		got = g.settle(req.ID, "asked", "approved", "running")
-		ran := core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.ID, "proof"))
+		ran := core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof"))
 		if answer == "run" && (got.State != "done" || !ran || !g.told("done")) || answer == "declined" && (got.State != "declined" || ran || !g.told("declined")) {
 			t.Fatalf("%s: %+v ran=%v", answer, got, ran)
 		}
@@ -530,6 +530,24 @@ func TestWardenAskingTheRequesterWaits(t *testing.T) {
 	g.m.Tick()
 	if got, _ := g.m.get(req.ID); got.State != "weighing" {
 		t.Fatalf("a waiting warden failed the request: %s", got.State)
+	}
+}
+
+// A late answer does not revive a run that was stopped on purpose; the
+// answer is noted on the run instead.
+func TestLateAnswerLeavesStoppedRunStopped(t *testing.T) {
+	g := newRig(t, 2)
+	req := g.request("install a tool", "x", "T2")
+	g.c.Runs.Stop(g.worker.ID, "the person stopped it")
+	if g.run(g.worker.ID).Status != core.StatusStopped {
+		t.Fatalf("not stopped: %+v", g.run(g.worker.ID))
+	}
+	if err := g.decide(req, map[string]string{"decision": "decline", "reason": "no"}); err != nil {
+		t.Fatal(err)
+	}
+	w := g.run(g.worker.ID)
+	if w.Status != core.StatusStopped || !strings.Contains(w.Progress, "late answer") {
+		t.Fatalf("a late answer revived or was lost: %+v", w)
 	}
 }
 
