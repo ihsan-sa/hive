@@ -67,6 +67,9 @@ func run(args []string) int {
 	}
 	if help := commandHelp(cmd); help != "" && wantsHelp(args) {
 		fmt.Print(help)
+		if cmd == "ask" && len(args) > 1 {
+			fmt.Fprintln(os.Stderr, "Nothing was sent. To send -h or --help as text, quote the text or put it after --: "+core.Cmd+` ask -- "..."`)
+		}
 		return 0
 	}
 	switch cmd {
@@ -372,11 +375,14 @@ func releaseArg(args []string) (tag string, ok bool) {
 }
 
 func cmdAsk(args []string) int {
-	// Flags may come before or after the text.
+	// Flags may come before or after the text; everything after a -- is text.
 	var words []string
 	project, wait := new(string), new(bool)
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
+		case a == "--":
+			words = append(words, args[i+1:]...)
+			i = len(args)
 		case a == "--wait" || a == "-wait":
 			*wait = true
 		case (a == "--project" || a == "-project") && i+1 < len(args):
