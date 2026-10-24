@@ -964,7 +964,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 			docsOnly = false
 		}
 	}
-	gate := p.Self && (!docsOnly || slices.ContainsFunc(c.Files, func(f string) bool { return under(f, SelfGate) }))
+	gate := p.Self && (!docsOnly || slices.ContainsFunc(c.Files, func(f string) bool { return !under(f, SelfUnread) }))
 	c.Small = docsOnly && len(c.Files) > 0 && c.Lines <= cfg.SmallMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Security) == 0 && !p.Self
 	c.Unread = len(c.Files) > 0 && !binary && !gate && c.Lines <= cfg.UnreadMax && len(c.Protected) == 0 && len(c.High) == 0 && len(c.Root) == 0 && len(c.Security) == 0
 	c.TwoReads = len(c.Root) > 0 || c.Lines > cfg.ReadTwoMax
@@ -1137,6 +1137,11 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID, "lines": ch.Lines}
 	if !read {
 		ev["unread"] = true // merged on its tests and checks alone: small, or under the unread line
+		// Chosen here, in the same event, so a release that reads the merge
+		// at once already knows a read is still to come.
+		if unread && Sampled(m.Task, e.Config(p, m.Main).SampleUnread) {
+			ev["sample"] = true
+		}
 	}
 	e.j.MustAppend("effect.merged", ev)
 	return merged, nil

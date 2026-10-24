@@ -26,12 +26,18 @@ func TestUnreadChange(t *testing.T) {
 	}{
 		{"main.go", "package main\n", p, true},
 		{"main.go", "package main\n", self, false},                 // a self project is default-deny: code is read
-		{"docs/notes.md", "# notes\n", self, true},                 // a doc outside its code is not
+		{"docs/notes.md", "# notes\n", self, true},                 // a doc under docs/ is not
 		{"internal/app/selfgate.go", "package app\n", self, false}, // the recursive gate's verdict, on no list
 		{"internal/mod/runner/run.go", "package runner\n", self, false},
 		{"internal/proc/proc.go", "package proc\n", self, false},
 		{"internal/notes.md", "# notes\n", self, false}, // a doc among its code too
 		{"scripts/x.sh", "echo\n", self, false},
+		// Docs that act as prompts or rules stay read: only docs/ is allowed.
+		{"CLAUDE.md", "# rules\n", self, false},
+		{"AGENTS.md", "# rules\n", self, false},
+		{"LEARNINGS.md", "# gotchas\n", self, false},
+		{".hive/lessons.md", "# lessons\n", self, false},
+		{"README.md", "# hive\n", self, false},
 		{"main.go", strings.Repeat("x\n", DefaultUnreadMax+1), p, false},
 		{"cred/token.go", "package cred\n", p, false},
 		{"setup.sh", "echo hi\n", p, false},
@@ -81,16 +87,16 @@ func TestUnreadChange(t *testing.T) {
 		t.Fatalf("an unread change should merge on its tests: %v", err)
 	}
 	var merged struct {
-		Unread bool
-		Lines  int
+		Unread, Sample bool
+		Lines          int
 	}
 	c.J.Replay(func(e Event) {
 		if e.Kind == "effect.merged" {
 			e.Decode(&merged)
 		}
 	})
-	if !merged.Unread || merged.Lines != 1 {
-		t.Fatalf("the merge should say it went unread: %+v", merged)
+	if !merged.Unread || merged.Lines != 1 || merged.Sample != Sampled("tu", DefaultSampleUnread) {
+		t.Fatalf("the merge should say it went unread, and whether it is sampled: %+v", merged)
 	}
 }
 

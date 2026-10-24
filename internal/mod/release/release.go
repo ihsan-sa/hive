@@ -34,9 +34,6 @@ type Module struct {
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
 	PauseMerges func(wait time.Duration) (resume func(), ok bool)
-	// SampleOpen says the head sha merged unread and its sampled read hasn't
-	// said land yet (the work module), so it doesn't go out unread meanwhile.
-	SampleOpen func(project, sha string) bool
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
 	// said holds project@tag for each pre-release whose wait or failed
@@ -614,7 +611,7 @@ func (m *Module) afterKept(project, sha string) {
 	for _, mg := range list {
 		if reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff); len(reads) > 0 {
 			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
-		} else if mg.Unread && len(mg.Root) == 0 && !m.sampleOpen(project, mg.SHA) && !m.readFix(project, mg.SHA) {
+		} else if mg.Unread && len(mg.Root) == 0 && !m.sampleOpen(project, mg) && !m.readFix(project, mg.SHA) {
 			// Merged unread by the gate's own rule: small, and no root, high,
 			// protected, security-listed or gate-defining path, so the release
 			// needn't wait, unless its sampled read is still to come or said fix.
@@ -765,6 +762,7 @@ type merge struct {
 	// Unread is a merge on its tests and checks alone: the gate found it
 	// small and touching no guarded path (core.Change.Unread), or docs only.
 	Unread bool
+	Sample bool // picked for a read after merge (core.Sampled)
 	Lines  int
 }
 
@@ -804,8 +802,11 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 	return all[from : at+1], ""
 }
 
-func (m *Module) sampleOpen(project, sha string) bool {
-	return m.SampleOpen != nil && m.SampleOpen(project, sha)
+// sampleOpen reports whether mg was picked for a read after merge (recorded
+// in its effect.merged) and no read of its head has said land yet.
+func (m *Module) sampleOpen(project string, mg merge) bool {
+	v, ok := m.C.Effects.GetVerdict(project, mg.SHA)
+	return mg.Sample && !(ok && v.Verdict == "land")
 }
 
 // readFix reports whether the newest read of sha (a sampled read after merge)

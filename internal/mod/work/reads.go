@@ -1,8 +1,6 @@
 package work
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -27,23 +25,8 @@ func (m *Module) markUnread(t *Task, p core.Project, main string) {
 		return
 	}
 	t.Unread = true
-	t.Sample = !ch.Small && sampled(t.ID, m.C.Effects.Config(p, main).SampleUnread)
-}
-
-// sampled picks one task in n by its id, so the pick survives a restart and
-// needs no counter.
-func sampled(id string, n int) bool {
-	if n <= 0 {
-		return false
-	}
-	sum := sha256.Sum256([]byte("sample " + id))
-	return binary.BigEndian.Uint32(sum[:4])%uint32(n) == 0
-}
-
-// SampleOpen reports whether a task of project merged unread at head sha and
-// its sampled read is still to come.
-func (m *Module) SampleOpen(project, sha string) bool {
-	return len(m.List(func(t Task) bool { return t.Project == project && t.SHA == sha && t.Sample })) > 0
+	// The same pick Effects.Merge recorded in effect.merged.
+	t.Sample = !ch.Small && core.Sampled(t.ID, m.C.Effects.Config(p, main).SampleUnread)
 }
 
 // sampleRead runs the one read a sampled unread merge gets: wait says the

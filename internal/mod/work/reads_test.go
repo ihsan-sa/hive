@@ -173,11 +173,11 @@ func TestSampledReadFilesAFollowUp(t *testing.T) {
 func TestSampledShare(t *testing.T) {
 	n := 0
 	for i := 0; i < 1000; i++ {
-		if sampled("task-"+string(rune('a'+i%26))+strings.Repeat("x", i/26), 5) {
+		if core.Sampled("task-"+string(rune('a'+i%26))+strings.Repeat("x", i/26), 5) {
 			n++
 		}
 	}
-	if n < 150 || n > 250 || sampled("x", 0) || sampled("x", -1) || !sampled("x", 1) {
+	if n < 150 || n > 250 || core.Sampled("x", 0) || core.Sampled("x", -1) || !core.Sampled("x", 1) {
 		t.Fatalf("%d of 1000 sampled at 1 in 5", n)
 	}
 }
