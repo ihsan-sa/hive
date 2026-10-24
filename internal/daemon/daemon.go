@@ -664,6 +664,29 @@ func (s *server) routes() http.Handler {
 		}
 		return a.Work.RecordRead(b.ID, b.SHA, b.By, b.Verdict, b.Note)
 	})
+	h("/api/hold", func(r *http.Request) (any, error) {
+		// A hold on merges is the person's (the lead sets one on their word
+		// through its own op), never a module's.
+		if moduleOf(r) != "" {
+			return nil, errors.New("only the person holds or lifts merges")
+		}
+		var b struct {
+			Project, Why, Until string
+			Only                []int
+			Lift                bool
+		}
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		if b.Lift {
+			return "lifted", a.Work.LiftHold(b.Project, "person", b.Why)
+		}
+		h, err := a.Work.SetHold(work.MergeHold{Project: b.Project, Why: b.Why, Only: b.Only, Until: b.Until, By: "person"})
+		if err != nil {
+			return nil, err
+		}
+		return h.Text(), nil
+	})
 	h("/api/improve", func(r *http.Request) (any, error) { return a.Improve.StartSweep(true) })
 	h("/api/job", func(r *http.Request) (any, error) {
 		var b struct{ Name string }
@@ -866,6 +889,9 @@ func (s *server) state() api.State {
 	}
 	for _, p := range a.C.Projects.List() {
 		pv := api.ProjectView{Project: p}
+		if h, ok := a.Work.Hold(p.Name); ok {
+			pv.Hold = &h
+		}
 		pv.Goals = readGoals(a.C.WS.Project(p.Name))
 		n := 0
 		for _, t := range a.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {
