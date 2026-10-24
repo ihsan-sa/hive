@@ -4,15 +4,15 @@
    Dashboard          │ ▌ The parser and the renderer are tangled      │   ask reviewer to check the public API before
    Waiting         3  │ ▌ together. Can you split the parser into its  │   anything merges.
    Feedback        1  │ ▌ own package so reviewer can check it on its  │
-   Modules            │ ▌ own?                                         │   lead  20:31
-   Settings           │ ▌ ▸ 2 replies  open →                          │   Done. parser/ is its own package now, with
-                      │                                                │   14 tests passing, and reviewer approved the
- ▾ textkit-2          │   you  20:40                                   │   API. One question: keep the old import path
- › lead               │   Also check whether the docs build still      │   as an alias for a release, or break it now?
-   writer             │   passes.                                      │
-   reviewer        ●  │   3 waiting on you · → then a to answer        │  ╭─ reply · lead ────────────────────────────╮
- ▾ hive-web           │  ╭─ new thread · lead ───────────────────────╮ │  │ › Keep the alias for one release, then    │
-   lead            ●  │  │ › Start a new thread with lead…           │ │  │   remove it in 0.9.                       │
-   worker-2           │  ╰───────────────────────────────────────────╯ │  ╰───────────────────────────────────────────╯
+   Knowledge          │ ▌ own?                                         │   lead  20:31
+   Modules            │ ▌ ▸ 2 replies  open →                          │   Done. parser/ is its own package now, with
+   Settings           │                                                │   14 tests passing, and reviewer approved the
+                      │   you  20:40                                   │   API. One question: keep the old import path
+ ▾ textkit-2          │   Also check whether the docs build still      │   as an alias for a release, or break it now?
+ › lead               │   passes.                                      │
+   writer             │   3 waiting on you · → then a to answer        │  ╭─ reply · lead ────────────────────────────╮
+   reviewer        ●  │  ╭─ new thread · lead ───────────────────────╮ │  │ › Keep the alias for one release, then    │
+ ▾ hive-web           │  │ › Start a new thread with lead…           │ │  │   remove it in 0.9.                       │
+   lead            ●  │  ╰───────────────────────────────────────────╯ │  ╰───────────────────────────────────────────╯
 ──────────────────────┴────────────────────────────────────────────────┴────────────────────────────────────────────────
  ✗ not sent · connection lost

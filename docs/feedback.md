@@ -7,7 +7,7 @@ The person listed "feedback-from-agents-and-a-tab" with no more detail. This is 
 Agents are the ones who use the Hive most: its prompts, its tools, its sandbox, its briefs. When one of them hits friction (a prompt that sent it the wrong way, a missing tool, a brief with no base sha, a step that took three tries), that is today buried in its notes or its turn log, where the person never looks. Feedback gives that one place:
 
 - An agent says it in a line: `hive agent feedback --text "..." [--about agents/worker.md]`. Any role may, except a one-turn experiment, which may only report on its own copy.
-- The control center has a **Feedback** section, between Waiting and Modules. It lists open feedback newest first, then what was set aside. Each item shows its project, the role and name of the agent, what it is about, how long ago, and the text; the selected item shows all of it and the run it came from. The sidebar counts open items the person hasn't selected yet.
+- The control center has a **Feedback** section, between Waiting and Knowledge. It lists open feedback newest first, then what was set aside. Each item shows its project, the role and name of the agent, what it is about, how long ago, and the text; the selected item shows all of it and the run it came from. The sidebar counts open items the person hasn't selected yet.
 - The person can **pass** an item to the lead (`p`): it is posted in the project lead's chat (or the Hive lead's, for feedback with no project) as the person's message, quoting the feedback and asking the lead to weigh it, so the lead files work or says why not. Or **set it aside** (`x`), and bring it back the same way.
 - The **improvement sweep** reads every open item in its digest, scoped like the rest of the digest, so feedback becomes asks with evidence without the person doing anything. New feedback alone is enough for a scheduled sweep to run.
 
@@ -34,7 +34,7 @@ Agents are the ones who use the Hive most: its prompts, its tools, its sandbox, 
 1. **Who is it from, and to whom?** Built: agents → the person, about the Hive itself. Did you instead mean feedback from friends' installs reaching you upstream (e.g. as GitHub issues on ihsan-sa/hive), or the person's feedback *to* agents? Either is outward or a different flow and wasn't guessed.
 2. **Should feedback reach the lead without the person?** Built: only the sweep reads it on its own; the lead hears of it only when you pass it. Passing everything automatically is a one-line change.
 3. **Should agents be told to send it?** Built: the orientation lists the op and what it is for, but no role is asked to send feedback at the end of every run. Asking every worker would give more signal and more noise.
-4. **Placement and keys.** Feedback sits between Waiting and Modules, with `p` to pass and `x` to set aside. Say if you want it elsewhere, or folded into the Dashboard.
+4. **Placement and keys.** Feedback sits between Waiting and Knowledge, with `p` to pass and `x` to set aside. Say if you want it elsewhere, or folded into the Dashboard.
 
 ## Built and tested
 

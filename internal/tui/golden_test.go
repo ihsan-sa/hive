@@ -184,6 +184,7 @@ func TestDesignFrames(t *testing.T) {
 		{"06c-settings-80x24", 80, 24, func(m *model) { m.pick(sideRow{sec: secSettings}); m.setSel = 1 }},
 		{"06a-waiting", 120, 36, func(m *model) { m.pick(sideRow{sec: secWaiting}) }},
 		{"06b-modules", 120, 36, func(m *model) { m.pick(sideRow{sec: secModules}) }},
+		{"06d-knowledge", 120, 36, func(m *model) { m.pick(sideRow{sec: secKB}); m.focus = 1 }},
 		{"06c-settings", 120, 36, func(m *model) { m.pick(sideRow{sec: secSettings}); m.setSel = 1 }},
 		{"06d-feedback-80x24", 80, 24, func(m *model) { m.pick(sideRow{sec: secFeedback}); m.focus = 1 }},
 		{"06d-feedback", 120, 36, func(m *model) { m.pick(sideRow{sec: secFeedback}); m.focus = 1 }},

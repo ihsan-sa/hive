@@ -4,20 +4,20 @@
    Dashboard      │ ▌ The worker prompt says to run the score before starting,
    Waiting     3  │ ▌ but textkit-2's score command needs a built wheel first,
  › Feedback    1  │ ▌ so the first run always fails. A line saying `make
-   Modules        │ ▌ build` comes first would have saved two turns.
-   Settings       │ ▌ from w-261022-140210-9c1e
-                  │
- ▾ textkit-2      │   hive-web › reviewer                                  40m
-   lead           │   The brief named the sha but not the base, so I read the
-   writer         │   whole branch to find what changed.
-   reviewer    ●  │
- ▾ hive-web       │   set aside
-   lead        ●  │
-   worker-2       │   hive › sweep                                         26h
-   reviewer       │   The digest lists runs that stopped but not why the
-   tribunal       │   person stopped them.
+   Knowledge      │ ▌ build` comes first would have saved two turns.
+   Modules        │ ▌ from w-261022-140210-9c1e
+   Settings       │
+                  │   hive-web › reviewer                                  40m
+ ▾ textkit-2      │   The brief named the sha but not the base, so I read the
+   lead           │   whole branch to find what changed.
+   writer         │
+   reviewer    ●  │   set aside
+ ▾ hive-web       │
+   lead        ●  │   hive › sweep                                         26h
+   worker-2       │   The digest lists runs that stopped but not why the
+   reviewer       │   person stopped them.
+   tribunal       │
  ▸ website        │
-                  │
                   │
                   │
 ──────────────────┴─────────────────────────────────────────────────────────────

@@ -4,20 +4,20 @@
    Dashboard          │
    Waiting         3  │
    Feedback        1  │
+   Knowledge          │
    Modules            │
    Settings           │
                       │
  ▾ textkit-2          │
  › lead               │
    writer             │
-   reviewer        ●  │
- ▾ hive-web           │   you  19:58
-   lead            ●  │   Hello?
-   worker-2           │   ▸ 1 reply  last 19:58
-   reviewer           │
-   tribunal           │   you  20:22
- ▸ website            │   The parser and the renderer are tangled together. Can you split the parser into its own
-                      │   package so reviewer can check it on its own?
+   reviewer        ●  │   you  19:58
+ ▾ hive-web           │   Hello?
+   lead            ●  │   ▸ 1 reply  last 19:58
+   worker-2           │
+   reviewer           │   you  20:22
+   tribunal           │   The parser and the renderer are tangled together. Can you split the parser into its own
+ ▸ website            │   package so reviewer can check it on its own?
                       │   ▸ 2 replies  last 20:31
                       │
                       │   you  20:40

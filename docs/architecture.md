@@ -16,7 +16,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 | `internal/app` | Wires core + modules; the tick loop steps the core, then each module the registry lists. |
 | `internal/daemon` | `hive daemon`, control API (127.0.0.1, bearer token in `.hive/private/daemon.json`, 0600). |
 | `internal/api` | API types + client. |
-| `internal/tui` | Control center (Bubble Tea): Chats, Dashboard, Waiting, Feedback, Modules, Settings. |
+| `internal/tui` | Control center (Bubble Tea): Chats, Dashboard, Waiting, Feedback, Knowledge, Modules, Settings. |
 | `internal/setup` | First run, `hive login`, `hive doctor`, autostart (HKCU Run / systemd user / LaunchAgent). |
 | `modules/` | Default module content (orientation + role prompts, manifests), embedded and written to `.modules/` on first run. |
 | `internal/demo` | Demo project template (textkit: tests + score). |
@@ -97,7 +97,7 @@ Settings in `.hive/config.json`; none of them stops or parks work.
 
 ## Sandbox (Linux / WSL)
 
-Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, stop-file watcher, starts init with `CLONE_NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|NEWUTS` (uid 0 → person's uid). Init (pid 1): tmpfs root; binds `/usr /bin /lib* /etc /opt /var /srv` read-only (nosuid, nodev, locked flags kept); fresh `/proc`, `/tmp`, minimal `/dev`; run mounts; tools at `/hive/bin` (one already on the inside PATH under a system dir, like a Node launcher, runs in place); `pivot_root`; root remounted ro; `lo` up; forwarder 127.0.0.1:3128 → egress socket. Command runs in a nested user namespace (no caps). Not present: `/home`, `/mnt` (Windows drives), `/run` (sockets), WSL interop. Egress refuses loopback/private/link-local/CGNAT/ULA and dials the IP it vetted; with an `egress` list for the run's role it also refuses every host off the list and records each refusal in `turn-NNN.jsonl.egress` (macOS runs one proxy per command for the same).
+Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, stop-file watcher, starts init with `CLONE_NEWUSER|NEWNS|NEWPID|NEWNET|NEWIPC|NEWUTS` (uid 0 → person's uid). Init (pid 1): tmpfs root; binds `/usr /bin /lib* /etc /opt /var /srv` read-only (nosuid, nodev, locked flags kept); fresh `/proc`, `/tmp`, minimal `/dev`; run mounts; tools at `/hive/bin` (one already on the inside PATH under a system dir, like a Node launcher, runs in place); `pivot_root`; root remounted ro; `lo` up; forwarder 127.0.0.1:3128 → egress socket, and one per granted local address (`egress.local`) that relays a CONNECT to it over the same socket. Command runs in a nested user namespace (no caps). Not present: `/home`, `/mnt` (Windows drives), `/run` (sockets), WSL interop. Egress refuses loopback/private/link-local/CGNAT/ULA and dials the IP it vetted; with an `egress` list for the run's role it also refuses every host off the list and records each refusal and its reason in `turn-NNN.jsonl.egress`; a granted loopback ip:port is dialled as that literal address (macOS runs one proxy per command for the same).
 
 ## Gaps (v1)
 
