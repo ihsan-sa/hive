@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -591,6 +590,9 @@ func contains(l []string, s string) bool {
 // waitMoved is set, so Enter won't answer an ask the person didn't select.
 // That holds after an answer here too: a quick second Enter would otherwise
 // approve whatever arrived under the cursor before the person saw it.
+// Beneath that, Enter answers only the ask the last View drew selected, and
+// only as the first key since that draw (waitSeen), so keys typed ahead of
+// the screen can't approve an ask nobody saw, however the list changed.
 func (m *model) waitIndex() int {
 	asks := m.st.Asks
 	for i, a := range asks {
@@ -654,9 +656,13 @@ func (m *model) keyWaiting(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if sel < len(asks) {
 			a := asks[sel]
+			if a.ID != m.waitSeen { // not what the screen showed when this key came
+				m.setFlash("the asks changed before you saw them; check the selection and press enter again")
+				return m, nil
+			}
 			opt := a.Options[min(m.optSel, len(a.Options)-1)]
 			m.optSel, m.waitDone = 0, a.ID // answered here: its leaving says "next", not "elsewhere"
-			return m, m.post("/api/answer", map[string]string{"id": a.ID, "answer": opt}, "answered: "+opt)
+			return m, m.post("/api/answer", map[string]string{"id": a.ID, "answer": opt}, "answered: "+visible(opt))
 		}
 	}
 	return m, nil
@@ -689,6 +695,7 @@ func (m *model) viewWaiting() []string {
 	w := m.mainW() - 5
 	var lines []string
 	sel, end, at := 0, 0, m.waitIndex()
+	m.waitDrawn = m.st.Asks[at].ID // what the next key may answer
 	for i, a := range m.st.Asks {
 		gut := "  "
 		if i == at {
@@ -779,26 +786,9 @@ func diffView(diff string, w int) []string {
 	return out
 }
 
-// visible spells out control characters (ESC as \x1b), and tabs as spaces.
-// Format characters, the bidi controls that reorder a line and the
-// zero-width ones that hide inside it, are spelled out too (U+202E as \u202e),
-// so what's on screen is every character the text holds, in its order.
-func visible(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r == '\t':
-			b.WriteString("    ")
-		case unicode.IsControl(r):
-			fmt.Fprintf(&b, "\\x%02x", r)
-		case unicode.Is(unicode.Cf, r), r == '\u115f', r == '\u1160', r == '\u3164', r == '\uffa0':
-			fmt.Fprintf(&b, "\\u%04x", r) // the Hangul fillers are blank letters, not Cf
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
+// visible is text.Visible: control, format and blank filler characters
+// spelled out, so what's on screen is every character the text holds.
+func visible(s string) string { return text.Visible(s) }
 
 // visibleText is visible line by line, keeping the line breaks.
 func visibleText(s string) string {

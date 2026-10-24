@@ -617,6 +617,7 @@ func TestWaitingAnswersTheSelectedAsk(t *testing.T) {
 	if m.waitIndex() != 0 || m.waitID != "a2" || m.optSel != 1 {
 		t.Fatalf("the selection should follow a2 to position 0: sel %d id %q opt %d", m.waitSel, m.waitID, m.optSel)
 	}
+	m.View()
 	m.st.Asks = []core.Ask{first, protectedAsk()} // and back, between drawing and the key
 	answered := map[string]string{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -677,6 +678,7 @@ func TestWaitingAnswersTheSelectedAsk(t *testing.T) {
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyRight}) // a pick on a1 selects it
 	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m.View()
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
 		cmd()
 	}
@@ -726,6 +728,7 @@ func TestWaitingDoubleEnterSkipsANewAsk(t *testing.T) {
 		}
 		m.st.Asks = []core.Ask{first}
 		m.waitID, m.waitDone, answered = "a1", "", nil
+		m.View()
 		if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
 			cmd()
 		}

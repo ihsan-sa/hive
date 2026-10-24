@@ -103,6 +103,8 @@ type model struct {
 	waitMoved bool   // the selected ask went and another slid under the cursor
 	waitDone  string // the ask last answered here
 	waitNext  bool   // the ask that went was waitDone, so the flash says "next"
+	waitDrawn string // the ask the last View drew selected; the next key takes it
+	waitSeen  string // the ask on screen when this key came: the only one Enter may answer
 	fbSel     string // the feedback item selected, by id
 	modSel    int
 	kbDir     string // the knowledge base folder shown, relative to its root
@@ -296,13 +298,13 @@ func summarize(evs []core.Event) []string {
 				if t.Kind == "revert" && t.Stage == work.StageMerged {
 					label = "reverted"
 				}
-				out = append(out, fmt.Sprintf("%s  %s: %s", e.At.Local().Format("Mon 15:04"), label, t.Label()))
+				out = append(out, fmt.Sprintf("%s  %s: %s", e.At.Local().Format("Mon 15:04"), label, visible(t.Label())))
 			}
 			tasks[t.ID] = t
 		case "person.asked":
 			var a core.Ask
 			e.Decode(&a)
-			out = append(out, fmt.Sprintf("%s  waiting on you: %s", e.At.Local().Format("Mon 15:04"), a.Title))
+			out = append(out, fmt.Sprintf("%s  waiting on you: %s", e.At.Local().Format("Mon 15:04"), visible(a.Title)))
 		case "sweep.saved":
 			var s struct{ ID, Status string }
 			e.Decode(&s)
@@ -312,7 +314,7 @@ func summarize(evs []core.Event) []string {
 		case "hive.updated":
 			var u struct{ To string }
 			e.Decode(&u)
-			out = append(out, fmt.Sprintf("%s  updated to %s", e.At.Local().Format("Mon 15:04"), u.To))
+			out = append(out, fmt.Sprintf("%s  updated to %s", e.At.Local().Format("Mon 15:04"), visible(u.To)))
 		}
 	}
 	if len(out) > 30 {
@@ -412,6 +414,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.files = append(m.files, msg.f)
 		}
 	case tea.KeyMsg:
+		m.waitSeen, m.waitDrawn = m.waitDrawn, "" // only the first key after a draw answers what it drew
 		return m.key(msg)
 	case tea.MouseMsg:
 		if ok, cmd := m.mouseSelect(msg); ok {
@@ -763,6 +766,7 @@ func readClipboard(text bool, compose int) tea.Cmd {
 func (m *model) bodyHeight() int { return max(3, m.h-4) }
 
 func (m *model) View() string {
+	m.waitDrawn = "" // viewWaiting sets it if this draw shows an ask
 	if m.w == 0 {
 		return ""
 	}
