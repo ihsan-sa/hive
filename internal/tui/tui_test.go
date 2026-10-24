@@ -518,6 +518,25 @@ func TestUpdateNoticeShowsOnce(t *testing.T) {
 	}
 }
 
+// An update that installed an unsigned release says so in its notice.
+func TestUpdateNoticeSaysUnsigned(t *testing.T) {
+	m := testModel(100, 30)
+	st := sample()
+	st.Updated = &api.Updated{Seq: 3, To: "v0.1.4", Notes: "Fixed the thing"}
+	m.Update(stateMsg{st: st})
+	if view := m.View(); !strings.Contains(view, "Updated to v0.1.4") || strings.Contains(view, "unsigned") {
+		t.Fatalf("a signed update's notice:\n%s", view)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	st.Updated = &api.Updated{Seq: 4, To: "v0.1.5", Notes: "Fixed the thing", Unsigned: true}
+	m.Update(stateMsg{st: st})
+	view := m.View()
+	checkWidth(t, view, 100, 30, "unsigned update notice")
+	if !strings.Contains(view, "Updated to v0.1.5") || !strings.Contains(view, "This release was unsigned") || !strings.Contains(view, "Fixed the thing") {
+		t.Fatalf("no unsigned notice:\n%s", view)
+	}
+}
+
 func protectedAsk() core.Ask {
 	var diff strings.Builder
 	diff.WriteString("diff --git a/.hive/goals.md b/.hive/goals.md\n--- a/.hive/goals.md\n+++ b/.hive/goals.md\n@@ -1,1 +1,60 @@\n")
