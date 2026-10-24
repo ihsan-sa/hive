@@ -185,12 +185,20 @@ type Module struct {
 	// limit is when GitHub's pause on writes ends, and limitText why.
 	limit     time.Time
 	limitText string
+	// holds are the person's holds on each project's merges (hold.go), and
+	// holdPolled when each one's release condition may next be asked of the forge.
+	holds      map[string]*MergeHold
+	holdPolled map[string]time.Time
 }
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string][]string{}, mainRed: map[string]bool{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string][]string{}, mainRed: map[string]bool{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
 	apply := func(e core.Event) {
+		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
+			m.applyHold(e)
+			return
+		}
 		if e.Kind == "alert.raised" {
 			var a struct{ Kind, Project, SHA string }
 			if e.Decode(&a) == nil && a.Kind == "main-red" && a.SHA != "" {
@@ -214,7 +222,9 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project"}`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: []string{"lead"}, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); with back, its worker gets that text and works on`, Fn: m.opRecheck})
 	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: []string{"lead"}, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids]} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed), hold keeps one waiting until released. A started worker is never stopped`, Fn: m.opQueue})
+	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Roles: []string{"lead"}, Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (follow-ups and reverts included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs still pass their gate and wait ready`, Fn: m.opHold})
 	c.Person.Handle("merge", m.onPersonMerge)
+	c.Effects.MergeHeld = m.MergeHeld
 	return m
 }
 
@@ -1087,6 +1097,15 @@ func (m *Module) test(t *Task, p core.Project) error {
 		}
 		c, t.Recheck = m.C.Effects.RunCheck(p, t.SHA, "test", cfg.Test), false
 	}
+	if c.CantRun != "" {
+		if t.Checkpoint != "" {
+			return m.dropCheckpoint(t, p, "the tests "+c.CantRun+", which is no verdict on it")
+		}
+		return m.cantRun(t, p, c)
+	}
+	if strings.HasPrefix(t.Reason, "the tests can't run") {
+		t.Reason = "" // the tool is there now
+	}
 	if err := m.noteTests(t, p, main, c); err != nil {
 		return err
 	}
@@ -1097,6 +1116,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 		mc, err := m.mainTests(p, main, cfg.Test)
 		if err != nil {
 			return err
+		}
+		if mc.CantRun != "" {
+			return m.cantRun(t, p, mc)
 		}
 		if !mc.OK {
 			return m.waitOnMain(t, p, main, mc)
@@ -1133,6 +1155,25 @@ func (m *Module) test(t *Task, p core.Project) error {
 		t.Stage = StageReviewing
 		m.save(t, "tests passed; asking for a read")
 	}
+	return nil
+}
+
+// cantRun holds a change whose tests couldn't start because a tool they call
+// is missing where checks run. That is no verdict on the change: it isn't
+// sent back or failed, and it is tested again every 10 minutes until the tool
+// is there. The PR and the dashboard hear once.
+func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
+	reason := "the tests " + c.CantRun + ", so this waits and is tested again every 10 minutes"
+	t.Retry = time.Now().Add(10 * time.Minute)
+	if t.Reason == reason {
+		m.save(t, "")
+		return nil
+	}
+	t.Reason = reason
+	m.save(t, reason)
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "ref": "cant-run:" + p.Name, "project": p.Name,
+		"text": p.Name + "'s tests " + c.CantRun + " (" + core.Clip(strings.TrimSpace(c.Output), 120) + "): a fault in the environment, not a verdict on any commit; changes wait and nothing is reverted until it is fixed"})
+	m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
 	return nil
 }
 
@@ -1477,6 +1518,10 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	}
 	if wait, err := m.forgeChecks(t, p, main); wait || err != nil {
 		return err
+	}
+	if why := m.MergeHeld(p.Name, t.PR.Number); why != "" {
+		m.hold(t, p, why)
+		return nil
 	}
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label()})
 	if errors.Is(err, core.ErrDraft) { // made a draft since the look above

@@ -42,6 +42,8 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive refuse <id> [note]  say no to it (its last option)
   hive read <task|#pr> <sha> land|fix --by perms|architect [note]
                            record the box's perms seat's or architect's read of that head
+  hive hold <project> [why]  hold every merge on it, follow-ups included [--only 12,15] [--until release]
+  hive hold <project> --lift [why]  lift the hold
   hive login               log in to Claude Code and GitHub with their own logins
   hive login add <name>    add another Claude login to spread runs over; add "codex" for Codex
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
@@ -201,6 +203,21 @@ func run(args []string) int {
 			fmt.Printf("recorded: %s's read of %s at %s: %s\n", by, rest[0], rest[1], rest[2])
 			return nil
 		})
+	case "hold":
+		body, err := holdArgs(args)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprint(os.Stderr, commandHelp("hold"))
+			return 2
+		}
+		return withClient(func(c *api.Client) error {
+			var msg string
+			if err := c.Do("POST", "/api/hold", body, &msg); err != nil {
+				return err
+			}
+			fmt.Printf("%s: %s\n", body["project"], msg)
+			return nil
+		})
 	case "login":
 		if len(args) > 0 && args[0] == "add" {
 			if len(args) < 2 {
@@ -264,6 +281,49 @@ func run(args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usageText())
 	return 2
+}
+
+// holdArgs reads hive hold's arguments into the body of /api/hold.
+func holdArgs(args []string) (map[string]any, error) {
+	body := map[string]any{}
+	var words []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		flag, val, eq := strings.Cut(a, "=")
+		switch flag {
+		case "--lift":
+			body["lift"] = true
+			continue
+		case "--only", "--until":
+			if !eq {
+				if i+1 >= len(args) {
+					return nil, fmt.Errorf("%s needs a value", flag)
+				}
+				i++
+				val = args[i]
+			}
+			if flag == "--until" {
+				body["until"] = val
+				continue
+			}
+			var prs []int
+			for _, f := range strings.FieldsFunc(val, func(r rune) bool { return r == ',' || r == ' ' }) {
+				n, err := strconv.Atoi(strings.TrimPrefix(f, "#"))
+				if err != nil {
+					return nil, fmt.Errorf("--only takes PR numbers, not %q", f)
+				}
+				prs = append(prs, n)
+			}
+			body["only"] = prs
+			continue
+		}
+		words = append(words, a)
+	}
+	if len(words) == 0 {
+		return nil, errors.New("say which project")
+	}
+	body["project"], body["why"] = words[0], strings.Join(words[1:], " ")
+	return body, nil
 }
 
 // readArgs takes --by <reader> (or --by=<reader>) out of args.
@@ -487,6 +547,9 @@ func cmdStatus() int {
 				best = strconv.FormatFloat(*p.Best, 'g', -1, 64)
 			}
 			fmt.Printf("\n%s (%s)  best score: %s\n", p.Name, p.Repo, best)
+			if p.Hold != nil {
+				fmt.Printf("  %s; `%s hold %s --lift` lifts it\n", text.Visible(p.Hold.Text()), core.Cmd, p.Name)
+			}
 			for _, t := range p.Tasks {
 				if !t.Terminal() {
 					fmt.Printf("  [%s] %s  %s\n", t.Stage, t.Label(), t.PR.URL)

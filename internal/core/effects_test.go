@@ -630,6 +630,44 @@ func TestScoreOf(t *testing.T) {
 	}
 }
 
+// Only the shell's own "not found" for a bare tool name, at exit 127, is a
+// missing tool; a missing ./script or an ordinary failure is the commit's.
+func TestMissingTool(t *testing.T) {
+	for _, c := range []struct {
+		code int
+		out  string
+		want string
+	}{
+		{127, "/bin/sh: 1: go: not found\n", "go"},
+		{127, "bash: line 1: cargo: command not found", "cargo"},
+		{127, "sh: npm: command not found\n", "npm"},
+		{127, "env: 'python3': No such file or directory", "python3"},
+		{127, "/bin/sh: 1: ./build.sh: not found", ""},
+		{1, "/bin/sh: 1: go: not found", ""},
+		{1, "--- FAIL: TestX\nFAIL", ""},
+		{127, "some test printed exit 127", ""},
+	} {
+		if got := MissingTool(c.code, c.out); got != c.want {
+			t.Errorf("MissingTool(%d, %q) = %q, want %q", c.code, c.out, got, c.want)
+		}
+	}
+}
+
+// A check recorded as not starting, or an old red result whose output is the
+// shell's "go: not found", is not kept as the commit's answer, so it runs
+// again once the tool is there; a real red result is kept.
+func TestCantRunIsNotTheCommitsAnswer(t *testing.T) {
+	c, _ := testHive(t)
+	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "a", Kind: "test", Output: "/bin/sh: 1: go: not found\n"})
+	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "b", Kind: "test", Output: "x", CantRun: "can't run: go is not installed where checks run"})
+	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "c", Kind: "test", Output: "--- FAIL: TestX\nFAIL\n"})
+	for sha, want := range map[string]bool{"a": false, "b": false, "c": true} {
+		if _, ok := c.Effects.GetCheck("p", sha, "test"); ok != want {
+			t.Errorf("check at %s kept %v, want %v", sha, ok, want)
+		}
+	}
+}
+
 // The Hive's own repo guards its root and high paths even when its
 // project.json names none; another project with the same layout doesn't.
 func TestSelfGuardsItsRootPaths(t *testing.T) {

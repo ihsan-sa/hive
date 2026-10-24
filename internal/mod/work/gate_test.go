@@ -41,7 +41,8 @@ func pushMain(t *testing.T, f *core.Local, files map[string]string) {
 	must(t, tmp, "push", "-q", "origin", "HEAD:main")
 }
 
-// gateRig is a project on bare runs whose tests fail while BROKEN exists,
+// gateRig is a project on bare runs whose tests fail while BROKEN exists and
+// call the tool hive-gate-tool-xyz while NEEDTOOL exists,
 // with BROKEN on main when mainRed, and a task in testing whose worker made
 // one commit on main with the given files ("" removes one).
 func gateRig(t *testing.T, mainRed bool, files map[string]string) (*Module, *Task, core.Project, *core.Local) {
@@ -66,7 +67,7 @@ func gateRigSeeded(t *testing.T, mainRed bool, onMain, files map[string]string) 
 	}
 	t.Cleanup(func() { c.Close() })
 	forge.EnsureRepo("me/p", "")
-	seed := map[string]string{".hive/project.json": `{"test": "test ! -f BROKEN"}`, "README.md": "# p\n"}
+	seed := map[string]string{".hive/project.json": `{"test": "test ! -f BROKEN && { test ! -f NEEDTOOL || hive-gate-tool-xyz; }"}`, "README.md": "# p\n"}
 	if mainRed {
 		seed["BROKEN"] = "x"
 	}
@@ -308,6 +309,35 @@ func TestWhoseRead(t *testing.T) {
 	}
 	if got := whoseRead("nothing said"); got != "an outside read" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// A change whose tests can't find their tool isn't failed or sent back: it
+// waits, the tool is named once, and with the tool there it goes on.
+func TestGateMissingToolCantRun(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"NEEDTOOL": "x"})
+	for i := 0; i < 2; i++ {
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task.Stage != StageTesting || task.Round != 0 || !strings.Contains(task.Reason, "can't run: hive-gate-tool-xyz") || !task.Retry.After(time.Now()) {
+		t.Fatalf("stage %q, round %d, reason %q, retry %v", task.Stage, task.Round, task.Reason, task.Retry)
+	}
+	if n := alerts(m, "main-red"); n != 1 {
+		t.Fatalf("%d main-red alerts, want 1", n)
+	}
+	if _, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); ok {
+		t.Fatal("a check that couldn't start is kept as the commit's result")
+	}
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "hive-gate-tool-xyz"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage == StageTesting || task.Stage == StageWorking || task.Reason != "" {
+		t.Fatalf("with the tool there: stage %q, reason %q", task.Stage, task.Reason)
 	}
 }
 
