@@ -10,6 +10,7 @@ package e2e
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/json"
@@ -79,12 +80,17 @@ type hive struct {
 	cmd   *exec.Cmd
 	c     *api.Client
 	env   []string // added to the daemon's environment
+	exe   string   // the binary the daemon runs, when not bin
 }
 
-func start(t *testing.T, env ...string) *hive {
+func start(t *testing.T, env ...string) *hive { return startWith(t, bin, nil, env...) }
+
+// startWith starts exe as the daemon, after prep (if any) has changed the
+// test's settings.
+func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string) *hive {
 	t.Helper()
 	dir := t.TempDir()
-	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env}
+	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env, exe: exe}
 	if err := h.ws.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +107,9 @@ func start(t *testing.T, env ...string) *hive {
 	}
 	cfg.PlateauMerges = 0 // TestStepBack turns it on
 	cfg.Schedules = map[string]string{"improve.sweep": "off", "improve.stepback": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off"}
+	if prep != nil {
+		prep(&cfg)
+	}
 	h.ws.SaveConfig(cfg)
 	h.launch()
 	t.Cleanup(func() { h.quiesce(); h.kill() })
@@ -165,7 +174,7 @@ func (h *hive) quiesce() {
 
 func (h *hive) launch() {
 	h.t.Helper()
-	cmd := exec.Command(bin, "daemon")
+	cmd := exec.Command(cmp.Or(h.exe, bin), "daemon")
 	cmd.Env = append(append(os.Environ(), "HIVE_HOME="+h.ws.Root, "HIVE_FORGE=local:"+h.forge.Dir), h.env...)
 	cmd.Dir = h.ws.Root
 	log, _ := os.OpenFile(filepath.Join(h.ws.Hive(), "daemon-test.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
