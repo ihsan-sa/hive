@@ -4,7 +4,6 @@
 package release
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -173,15 +172,11 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	return repo, tag, tag != "" && modules.Newer(core.Version, tag), err
 }
 
-// hasBinary errs unless the release's checksums list this platform's binary.
+// hasBinary errs unless the release's checksums are signed as this build
+// requires and list this platform's binary.
 func hasBinary(repo, tag string) error {
-	resp, err := get(repo + "/releases/download/" + tag + "/checksums.txt")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err == nil && !strings.Contains(string(raw), AssetName(runtime.GOOS, runtime.GOARCH)) {
+	sum, err := sums(repo, tag)
+	if err == nil && sum[AssetName(runtime.GOOS, runtime.GOARCH)] == "" {
 		err = fmt.Errorf("%s %s has no %s", repo, tag, AssetName(runtime.GOOS, runtime.GOARCH))
 	}
 	return err
@@ -210,6 +205,9 @@ func (m *Module) Update(tag string) (string, error) {
 		}
 		return msg, m.pin(cfg, tag, pin)
 	}
+	if !pin && m.rolledBack(tag) {
+		return tag + " was rolled back after it failed to start here; `" + core.Cmd + " update " + tag + "` tries it again", nil
+	}
 	tmp, err := os.MkdirTemp("", "hive-update-")
 	if err != nil {
 		return "", err
@@ -219,21 +217,18 @@ func (m *Module) Update(tag string) (string, error) {
 	if runtime.GOOS == "windows" {
 		names = append(names, AssetName("linux", "amd64")) // used inside WSL
 	}
-	if err := download(repo, tag, "checksums.txt", tmp); err != nil {
-		return "", fmt.Errorf("no release %s in %s (%v)", tag, repo, err)
-	}
-	sums, err := readSums(filepath.Join(tmp, "checksums.txt"))
+	sum, err := sums(repo, tag)
 	if err != nil {
 		return "", err
 	}
 	for _, name := range names {
-		if sums[name] == "" {
+		if sum[name] == "" {
 			return "", fmt.Errorf("release %s has no %s; not installing", tag, name)
 		}
 	}
 	exe := executable()
 	dir := filepath.Dir(exe)
-	for i, name := range names {
+	for _, name := range names {
 		if err := download(repo, tag, name, tmp); err != nil {
 			return "", err
 		}
@@ -241,16 +236,36 @@ func (m *Module) Update(tag string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if sums[name] != got {
+		if sum[name] != got {
 			return "", fmt.Errorf("%s: checksum mismatch; not installing", name)
 		}
+	}
+	var paths []string // replaced, each with its .old beside it
+	for i, name := range names {
 		target := exe
 		if i > 0 {
 			target = filepath.Join(dir, name)
 		}
+		if on, _ := fileSum(target); on == sum[name] && core.Exists(target+".old") {
+			// In place already, from an update whose restart never came: its
+			// .old is still the binary to roll back to.
+			paths = append(paths, target)
+			continue
+		}
 		if err := replace(filepath.Join(tmp, name), target); err != nil {
+			rollBack(paths)
 			return "", err
 		}
+		paths = append(paths, target)
+	}
+	if err := tryBinary(exe, tag); err != nil {
+		if e := rollBack(paths); e != nil {
+			return "", fmt.Errorf("%s doesn't run here (%v), and putting %s back failed: %v", tag, err, core.Version, e)
+		}
+		return "", fmt.Errorf("%s doesn't run here (%v); kept %s", tag, err, core.Version)
+	}
+	if err := writePending(m.C.WS, pending{From: core.Version, To: tag, Paths: paths}); err != nil {
+		return "", err
 	}
 	if err := m.pin(cfg, tag, pin); err != nil {
 		return "", err
@@ -375,16 +390,10 @@ func replace(src, dst string) error {
 	return nil
 }
 
-func readSums(path string) (map[string]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+func parseSums(raw []byte) (map[string]string, error) {
 	out := map[string]string{}
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
 		if len(fields) == 2 {
 			out[strings.TrimPrefix(fields[1], "*")] = fields[0]
 		}
@@ -392,7 +401,7 @@ func readSums(path string) (map[string]string, error) {
 	if len(out) == 0 {
 		return nil, errors.New("empty checksums.txt")
 	}
-	return out, sc.Err()
+	return out, nil
 }
 
 func fileSum(path string) (string, error) {
