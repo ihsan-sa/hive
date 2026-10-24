@@ -149,7 +149,7 @@ type sentMsg struct {
 func Run(c *api.Client, ws core.Workspace) error {
 	if os.Getenv("NO_COLOR") != "" { // NO_COLOR drops hue, not bold, faint and reverse
 		lipgloss.SetColorProfile(termenv.ANSI)
-		stBad = stTitle
+		setHue(false)
 	}
 	m := newModel(c, ws)
 	var ui struct{ Seq int64 }
@@ -171,6 +171,12 @@ func newModel(c *api.Client, ws core.Workspace) *model {
 		return "  "
 	})
 	in.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	// The textarea's own greys and white read poorly on a light terminal and
+	// ignore NO_COLOR: plain and faint instead.
+	for _, st := range []*textarea.Style{&in.FocusedStyle, &in.BlurredStyle} {
+		st.Prompt, st.EndOfBuffer, st.LineNumber, st.CursorLineNumber = lipgloss.NewStyle(), stDim, stDim, stDim
+	}
+	in.BlurredStyle.Text, in.BlurredStyle.CursorLine = stDim, stDim
 	in.FocusedStyle.Placeholder, in.BlurredStyle.Placeholder = stDim, stDim
 	in.KeyMap.InsertNewline.SetKeys("ctrl+j", "alt+enter")
 	return &model{c: c, ws: ws, open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},

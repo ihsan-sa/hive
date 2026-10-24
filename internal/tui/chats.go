@@ -67,7 +67,7 @@ func (m *model) rows(all bool) []sideRow {
 	known := map[string]bool{"": true}
 	for _, p := range m.st.Projects {
 		known[p.Name] = true
-		group("p:"+p.Name, p.Name, append([]sideRow{{key: "project:" + p.Name, label: "lead", chatID: "project:" + p.Name}}, agents(p.Name)...))
+		group("p:"+p.Name, groupLabel(p.Name), append([]sideRow{{key: "project:" + p.Name, label: "lead", chatID: "project:" + p.Name}}, agents(p.Name)...))
 	}
 	// Agents of a project the state no longer lists (removed, or not yet
 	// loaded) keep a group of their own rather than dropping out of sight.
@@ -82,7 +82,7 @@ func (m *model) rows(all bool) []sideRow {
 	}
 	for _, p := range sortedKeys(others) {
 		if others[p] {
-			group("p:"+p, p, agents(p))
+			group("p:"+p, groupLabel(p), agents(p))
 		}
 	}
 	var hive []sideRow
@@ -92,9 +92,34 @@ func (m *model) rows(all bool) []sideRow {
 		}
 	}
 	if hive = append(hive, agents("")...); len(hive) > 0 {
-		group("p:", "hive", hive)
+		group("p:", hiveGroup, hive)
 	}
 	return rows
+}
+
+// hiveGroup labels the Hive's own lead and agents, apart from any project's,
+// a project named hive among them.
+const hiveGroup = "Hive-wide"
+
+// groupLabel is a project's group label, which never reads as the Hive's.
+func groupLabel(project string) string {
+	if strings.EqualFold(project, hiveGroup) {
+		return "project " + project
+	}
+	return project
+}
+
+// chatHint says in a line what a lead's chat is for, so the Hive's lead and
+// a project's lead never read alike; short, it only names the lead.
+func chatHint(c api.ChatView, short bool) string {
+	who, what := "the Hive-wide lead", ", for every project and the Hive itself"
+	if c.Kind == "project" {
+		who, what = "the lead of "+c.Project, ", for this project only"
+	}
+	if short {
+		return who
+	}
+	return who + what
 }
 
 func runLabel(r core.Run) string {
@@ -133,7 +158,7 @@ func (m *model) viewSidebar(w int) pane {
 				mark, name = "› ", stTitle.Render(name)
 			}
 			if r.sec == secWaiting && len(m.st.Asks) > 0 {
-				count = stTitle.Render(fmt.Sprint(len(m.st.Asks)))
+				count = waitStyle(len(m.st.Asks)).Render(fmt.Sprint(len(m.st.Asks)))
 			}
 			if n := m.fbUnseen(); r.sec == secFeedback && n > 0 {
 				count = stTitle.Render(fmt.Sprint(n))
@@ -145,11 +170,11 @@ func (m *model) viewSidebar(w int) pane {
 			}
 			mark, name = stDim.Render(mark), stDim.Render(name)
 			if m.closed[r.key] && news[r.key] > 0 {
-				count = "●"
+				count = stAccent.Render("●")
 			}
 		case r.chatID != "":
 			if unread[r.chatID] > 0 {
-				name, count = stTitle.Render(name), "●"
+				name, count = stTitle.Render(name), stAccent.Render("●")
 			}
 			if m.section == secChats && r.chatID == m.chat {
 				mark, name = "› ", stTitle.Render(r.label)
@@ -474,7 +499,7 @@ func (m *model) viewChannel(w int) pane {
 	if m.focus == 1 {
 		title = stTitle.Render(title)
 	}
-	p := pane{w: w, head: head(w, title, c.LeadStatus, "")}
+	p := pane{w: w, head: head(w, title, leadStatus(c.LeadStatus), "")}
 	if m.chat == "" {
 		p.body = []string{"", "   " + stDim.Render("Pick a chat on the left.")}
 		return p
@@ -523,14 +548,23 @@ func (m *model) viewChannel(w int) pane {
 		lines = append(lines, "")
 	}
 	if len(ts) == 0 {
-		hint := "Nothing here yet. Press n to write to the lead."
+		hint := "This is " + chatHint(c, false) + ". Press n to write."
 		if c.Kind == "agent" {
 			hint = "Write to this agent; it reads your message after its current turn."
 		}
-		lines = append(lines, "   "+stDim.Render(hint), "")
+		for _, l := range wrap(hint, tw) {
+			lines = append(lines, "   "+stDim.Render(l))
+		}
+		lines = append(lines, "")
 	}
 	_, name := m.where()
-	bx := m.compose("new thread · "+name, "Start a new thread with "+name+"…", "", w-3)
+	invite := "Start a new thread with " + name + "…"
+	if c.Kind != "agent" { // the whole hint where the box has room for it on one line
+		if invite = "Write to " + chatHint(c, false) + "…"; visibleWidth(invite) > w-9 {
+			invite = "Write to " + chatHint(c, true) + "…"
+		}
+	}
+	bx := m.compose("new thread · "+name, invite, "", w-3)
 	if n := len(m.st.Asks); n > 0 && len(bx) < m.h-6 { // above the box, so it stays on screen
 		how := map[bool]string{true: "a to answer", false: "→ then a to answer"}[m.focus == 1 && !m.composing]
 		bx = append([]string{" " + stWarn.Render(clip(fmt.Sprintf("%d waiting on you · %s", n, how), w-6))}, bx...)
@@ -668,7 +702,7 @@ func msgHead(msg chat.Message) string {
 func who(msg chat.Message) string {
 	switch msg.From {
 	case "person":
-		return stTitle.Render("you")
+		return stYou.Render("you")
 	case "hive":
 		return stTitle.Render("hive")
 	}
@@ -676,7 +710,7 @@ func who(msg chat.Message) string {
 	if name == "" {
 		name = msg.From
 	}
-	return stTitle.Render(name)
+	return speaker(name).Render(name)
 }
 
 func plural(n int, one, many string) string {
@@ -702,4 +736,12 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// leadStatus hints a lead at work in green; idle stays faint.
+func leadStatus(s string) string {
+	if s == "working" {
+		return stGood.Render(s)
+	}
+	return s
 }

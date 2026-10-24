@@ -652,7 +652,7 @@ func (m *model) viewWaiting() []string {
 			from = a.Project + " › " + from
 		}
 		age := ago(a.Asked)
-		top := stTitle.Render(from) + "  " + stDim.Render(a.Kind)
+		top := stTitle.Render(from) + "  " + stWarn.Render(a.Kind)
 		ls := []string{pad(clip(top, w-len(age)-1), w-len(age)) + stDim.Render(age)}
 		ls = append(ls, wrap(a.Title, w)...)
 		if i == m.waitSel {

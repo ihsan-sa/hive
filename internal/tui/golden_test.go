@@ -5,12 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -190,6 +194,8 @@ func TestDesignFrames(t *testing.T) {
 		{"06d-feedback-80x24", 80, 24, func(m *model) { m.pick(sideRow{sec: secFeedback}); m.focus = 1 }},
 		{"06d-feedback", 120, 36, func(m *model) { m.pick(sideRow{sec: secFeedback}); m.focus = 1 }},
 		{"04b-80x24-thread-takeover", 80, 24, replyDraft},
+		{"07a-two-hives", 120, 36, func(m *model) { twoHives(m, "lead") }},
+		{"07b-two-hives-80x24", 80, 24, func(m *model) { twoHives(m, "project:hive") }},
 	} {
 		m := designModel(c.w, c.h)
 		c.set(m)
@@ -264,5 +270,94 @@ func TestTinySizes(t *testing.T) {
 				_ = m.View()
 			}
 		}
+	}
+}
+
+// twoHives adds a project named hive beside the Hive's own lead, and opens
+// one of their chats, empty, where its hint shows.
+func twoHives(m *model, open string) {
+	m.st.Projects = append(m.st.Projects, api.ProjectView{Project: core.Project{Name: "hive"}})
+	m.st.Chats = append(m.st.Chats,
+		api.ChatView{Chat: chat.Chat{ID: "lead", Title: "lead", Kind: "lead"}, LeadStatus: "idle"},
+		api.ChatView{Chat: chat.Chat{ID: "project:hive", Title: "hive", Kind: "project", Project: "hive"}, LeadStatus: "idle"})
+	m.closed["p:textkit-2"], m.closed["p:hive-web"] = true, true
+	m.pick(sideRow{sec: -1, chatID: open})
+}
+
+// The sidebar never shows two groups with one label: the Hive's own lead and
+// a project named hive each say which they are.
+func TestNoTwoGroupsAlike(t *testing.T) {
+	m := designModel(120, 36)
+	twoHives(m, "lead")
+	seen := map[string]bool{}
+	for _, r := range m.sideRows() {
+		if r.group {
+			if seen[strings.ToLower(r.label)] {
+				t.Fatalf("two groups labelled %q", r.label)
+			}
+			seen[strings.ToLower(r.label)] = true
+		}
+	}
+	m.st.Projects = append(m.st.Projects, api.ProjectView{Project: core.Project{Name: "hive-wide"}})
+	for _, r := range m.sideRows() {
+		if r.group && r.key == "p:hive-wide" && strings.EqualFold(r.label, hiveGroup) {
+			t.Fatalf("a project named %s reads as the Hive's group", r.label)
+		}
+	}
+}
+
+// colourSGR finds a colour in a view's escapes: a foreground or background
+// (30–49, 90–107), which NO_COLOR rules out; bold, faint, reverse stay.
+func colourSGR(view string) string {
+	for _, sgr := range regexp.MustCompile(`\x1b\[([0-9;:]*)m`).FindAllStringSubmatch(view, -1) {
+		for _, p := range strings.FieldsFunc(sgr[1], func(r rune) bool { return r == ';' || r == ':' }) {
+			if n, _ := strconv.Atoi(p); n >= 30 && n <= 49 || n >= 90 && n <= 107 {
+				return strconv.Quote(sgr[0])
+			}
+		}
+	}
+	return ""
+}
+
+// Chats colour the person and each agent apart, on dark and light terminals,
+// what waits on the person shows amber, and NO_COLOR leaves no colour at all.
+func TestColourHints(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	defer lipgloss.SetHasDarkBackground(lipgloss.HasDarkBackground())
+	you := chat.Message{From: "person", Name: "you"}
+	lead := chat.Message{From: "lead-1", Name: "lead"}
+	writer := chat.Message{From: "w-1", Name: "writer"}
+	shade := map[bool]string{}
+	for _, dark := range []bool{true, false} {
+		lipgloss.SetHasDarkBackground(dark)
+		y, l, w := who(you), who(lead), who(writer)
+		if colourSGR(y) == "" || colourSGR(l) == "" || y == l || l == w || ansi.Strip(y) != "you" {
+			t.Fatalf("dark %v: you %q, lead %q, writer %q: want three colours", dark, y, l, w)
+		}
+		shade[dark] = l
+	}
+	if shade[true] == shade[false] {
+		t.Fatal("the lead's colour is the same shade on dark and light terminals")
+	}
+	if c := colourSGR(waitStyle(3).Render("3")); c == "" || colourSGR(waitStyle(0).Render("0")) != "" {
+		t.Fatal("waiting on the person isn't amber, or nothing waiting is")
+	}
+	frames := func() string {
+		var all []string
+		for _, set := range []func(*model){replyDraft, func(m *model) { designFeed(m) }, func(m *model) { m.pick(sideRow{sec: secWaiting}) }, func(m *model) { m.pick(sideRow{sec: secSettings}) }} {
+			m := designModel(120, 36)
+			set(m)
+			all = append(all, m.View())
+		}
+		return strings.Join(all, "\n")
+	}
+	if colourSGR(frames()) == "" {
+		t.Fatal("no colour in the frames")
+	}
+	setHue(false)
+	defer setHue(true)
+	if c := colourSGR(frames()); c != "" {
+		t.Fatalf("NO_COLOR still colours: %s", c)
 	}
 }

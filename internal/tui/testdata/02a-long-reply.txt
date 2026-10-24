@@ -30,7 +30,7 @@
                       │                                                │  │   examples import from the new path       │
                       │   3 waiting on you · → then a to answer        │  ╰───────────────────────────────────────────╯
                       │  ╭─ new thread · lead ───────────────────────╮ │
-                      │  │ › Start a new thread with lead…           │ │
+                      │  │ › Write to the lead of textkit-2…         │ │
                       │  ╰───────────────────────────────────────────╯ │
 ──────────────────────┴────────────────────────────────────────────────┴────────────────────────────────────────────────
  enter send   ctrl+j newline   esc close thread   tab switch pane   pgup pgdn scroll
