@@ -1107,3 +1107,16 @@ func TestReleaseText(t *testing.T) {
 		}
 	}
 }
+
+// The "done for you" head counts what came in the last day, so a quiet notice
+// isn't lost among the recent ones.
+func TestToldHeadCountsTheLastDay(t *testing.T) {
+	now := time.Now()
+	told := []core.Ask{{Asked: now.Add(-time.Hour)}, {Asked: now.Add(-48 * time.Hour)}}
+	if got := toldHead(told, now); got != "done for you (1 in the last day, 2 recent)" {
+		t.Fatalf("head: %q", got)
+	}
+	if got := toldHead(told[1:], now); got != "done for you (1 recent)" {
+		t.Fatalf("head: %q", got)
+	}
+}
