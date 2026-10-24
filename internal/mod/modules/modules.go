@@ -309,32 +309,34 @@ func (r *Registry) Install(url, name string) (Module, error) {
 	if core.Exists(dir) {
 		return Module{}, fmt.Errorf("%s already exists", dir)
 	}
-	// The clone goes to a hidden folder, is checked out and recorded there,
-	// and moves into place whole: List reads any folder as a module, and a
-	// half-written one would show (and be read by agents) without its files,
-	// which a slow disk made plain.
-	stage := filepath.Join(r.ws.Modules(), "."+name+"-"+core.NewID())
-	defer os.RemoveAll(stage)
-	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, stage); err != nil {
+	// The clone goes to a hidden folder and moves into place whole: List
+	// reads any folder as a module, and a half-written one would show (and
+	// be read by agents) without its files, which a slow disk made plain.
+	tmp := filepath.Join(r.ws.Modules(), "."+name+"-"+core.NewID())
+	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, tmp); err != nil {
+		os.RemoveAll(tmp)
 		return Module{}, err
 	}
-	s, err := source(stage, url)
+	// Its release and source record are written there too, so the module
+	// appears with them: a grant made the moment it shows isn't overwritten.
+	rel, err := record(tmp, url)
+	if err == nil {
+		err = os.Rename(tmp, dir)
+	}
 	if err != nil { // a clone with no source record must not stay behind
+		os.RemoveAll(tmp)
 		return Module{}, err
 	}
-	if err := os.Rename(stage, dir); err != nil {
-		return Module{}, err
-	}
-	r.j.MustAppend("module.installed", map[string]string{"module": name, "source": url, "release": s.Release})
+	r.j.MustAppend("module.installed", map[string]string{"module": name, "source": url, "release": rel})
 	m, _ := r.Get(name)
 	return m, nil
 }
 
-// source checks out a fresh clone at its newest release (or its HEAD) and
-// writes where it came from.
-func source(dir, url string) (Source, error) {
+// record checks out a clone's newest release (its HEAD when it has none) and
+// writes where it came from. It returns the release.
+func record(dir, url string) (string, error) {
 	if !core.Exists(filepath.Join(dir, ".git")) {
-		return Source{}, fmt.Errorf("module %s did not clone", filepath.Base(dir))
+		return "", fmt.Errorf("%s did not clone", filepath.Base(url))
 	}
 	core.Git(dir, "fetch", "-q", "--tags")
 	rel := latestTag(dir)
@@ -345,7 +347,7 @@ func source(dir, url string) (Source, error) {
 	}
 	commit, _ := core.Git(dir, "rev-parse", "HEAD")
 	s := Source{Source: url, Release: rel, Commit: commit, Installed: time.Now().UTC(), Projects: []string{"*"}}
-	return s, writeSource(dir, s)
+	return rel, writeSource(dir, s)
 }
 
 // Update moves git-sourced modules to their source's newest release, or its
