@@ -994,14 +994,40 @@ func TestChecksAgainstMain(t *testing.T) {
 		{[]CheckRun{{Name: "ubuntu", State: CheckFail}, {Name: "windows", State: CheckPass}, {Name: "macos", State: CheckFail}}, CheckFail},
 		{[]CheckRun{{Name: "windows", State: CheckFail}, {Name: "macos", State: CheckPending}}, CheckPending},
 	} {
-		if st, which, shared := ChecksAgainstMain(c.runs, mainRuns, []string{"windows"}); st != c.state {
+		if st, which, shared, _ := ChecksAgainstMain(c.runs, mainRuns, []string{"windows"}, nil); st != c.state {
 			t.Errorf("%v: state %q (%v, shared %v), want %q", c.runs, st, which, shared, c.state)
 		}
 	}
-	if st, _, _ := ChecksAgainstMain([]CheckRun{{Name: "macos", State: CheckFail}}, append(mainRuns, CheckRun{Name: "macos", State: CheckFail}), nil); st != CheckFail {
+	if st, _, _, _ := ChecksAgainstMain([]CheckRun{{Name: "macos", State: CheckFail}}, append(mainRuns, CheckRun{Name: "macos", State: CheckFail}), nil, nil); st != CheckFail {
 		t.Errorf("a stale failed attempt on main counted as shared: %q", st)
 	}
-	if st, _, shared := ChecksAgainstMain([]CheckRun{{Name: "windows", State: CheckFail}}, nil, nil); st != CheckFail || len(shared) != 0 {
+	if st, _, shared, _ := ChecksAgainstMain([]CheckRun{{Name: "windows", State: CheckFail}}, nil, nil, nil); st != CheckFail || len(shared) != 0 {
 		t.Errorf("main green: %q, shared %v", st, shared)
+	}
+}
+
+// With logs that name their failing tests, a shared check counts against a
+// head only for a test main's run of it doesn't fail; logs that name none
+// leave the check name to decide, and say so.
+func TestChecksAgainstMainByTests(t *testing.T) {
+	logs := map[string][]string{"h": {"TestA", "TestB"}, "m": {"TestA"}, "h2": {"TestA"}}
+	tests := func(r CheckRun) ([]string, bool) { n, ok := logs[r.URL]; return n, ok }
+	mainRuns := []CheckRun{{Name: "win", State: CheckFail, URL: "m"}}
+	st, which, shared, _ := ChecksAgainstMain([]CheckRun{{Name: "win", State: CheckFail, URL: "h"}}, mainRuns, nil, tests)
+	if st != CheckFail || len(shared) != 0 || len(which) != 1 || !strings.Contains(which[0].Detail, "fails TestB,") {
+		t.Errorf("a new test in a shared red: %q %v %v", st, which, shared)
+	}
+	if st, _, shared, byName := ChecksAgainstMain([]CheckRun{{Name: "win", State: CheckFail, URL: "h2"}}, mainRuns, nil, tests); st != CheckPass || len(shared) != 1 || len(byName) != 0 {
+		t.Errorf("the same tests: %q %v %v", st, shared, byName)
+	}
+	if st, _, shared, byName := ChecksAgainstMain([]CheckRun{{Name: "win", State: CheckFail, URL: "none"}}, mainRuns, nil, tests); st != CheckPass || len(shared) != 1 || len(byName) != 1 {
+		t.Errorf("no log: %q %v %v", st, shared, byName)
+	}
+}
+
+func TestGitHubLogStamp(t *testing.T) {
+	log := "2026-10-24T08:00:00.1234567Z --- FAIL: TestX (0.01s)\n2026-10-24T08:00:01.0Z FAIL\n"
+	if got := FailedTests(ghLogStamp.ReplaceAllString(log, "")); len(got) != 1 || got[0] != "TestX" {
+		t.Errorf("%v", got)
 	}
 }

@@ -31,6 +31,7 @@ type localState struct {
 	TagSHAs  map[string]string        `json:"tags"`             // repo@tag -> the commit it points at
 	Checks   map[string][]CheckRun    `json:"checks,omitempty"` // repo@sha
 	Jobs     map[string][]WorkflowJob `json:"jobs,omitempty"`   // repo#run -> its jobs
+	Logs     map[string]string        `json:"logs,omitempty"`   // repo url -> a check's log
 	Reruns   map[string]int           `json:"reruns,omitempty"` // repo@sha -> re-runs of its failed checks asked
 }
 
@@ -386,6 +387,29 @@ func (l *Local) Checks(repo, sha string) ([]CheckRun, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.load().Checks[repo+"@"+sha], nil
+}
+
+// CheckLog is the log set on a check's URL.
+func (l *Local) CheckLog(repo string, r CheckRun) (string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	log, ok := l.load().Logs[repo+" "+r.URL]
+	if !ok {
+		return "", fmt.Errorf("no log for %s", r.Name)
+	}
+	return log, nil
+}
+
+// SetCheckLog sets the log of the check at url, as a CI would keep it.
+func (l *Local) SetCheckLog(repo, url, log string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	if s.Logs == nil {
+		s.Logs = map[string]string{}
+	}
+	s.Logs[repo+" "+url] = log
+	l.save(s)
 }
 
 // RerunFailed sets each failed or unstarted check on repo@sha back to
