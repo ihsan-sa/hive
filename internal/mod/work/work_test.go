@@ -19,6 +19,7 @@ import (
 type flakyForge struct {
 	*core.Local
 	fail   int
+	down   bool
 	closed []int
 	bodies []string
 }
@@ -26,6 +27,13 @@ type flakyForge struct {
 func (f *flakyForge) CreatePR(repo, head, base, title, body string) (core.PR, error) {
 	f.bodies = append(f.bodies, body)
 	return f.Local.CreatePR(repo, head, base, title, body)
+}
+
+func (f *flakyForge) User() (string, error) {
+	if f.down {
+		return "", errors.New("dial tcp: lookup api.github.com: no such host")
+	}
+	return f.Local.User()
 }
 
 func (f *flakyForge) CloseIssue(repo string, number int) error {
@@ -128,7 +136,7 @@ func TestCloseIssueGivesUp(t *testing.T) {
 // While GitHub is unreachable a task's gaps grow to a ceiling and it's never
 // stopped; the first step that gets through wakes every waiting task at once.
 func TestOutageBacksOffAndWakes(t *testing.T) {
-	m, _, task, _ := noCommitRig(t, 0)
+	m, forge, task, _ := noCommitRig(t, 0)
 	var gaps []time.Duration
 	for range 20 {
 		m.settle(task, errors.New("dial tcp: lookup api.github.com: no such host"))
@@ -144,7 +152,13 @@ func TestOutageBacksOffAndWakes(t *testing.T) {
 	if m.due(*task) {
 		t.Fatal("due inside its gap while offline")
 	}
-	m.settle(&Task{ID: "t2"}, nil) // another task's step got through
+	forge.down = true
+	m.settle(&Task{ID: "t2"}, nil) // a step that never touched GitHub
+	if m.Offline() != why || m.due(*task) {
+		t.Fatalf("offline %q, due %v after a step that proves nothing", m.Offline(), m.due(*task))
+	}
+	forge.down = false
+	m.settle(&Task{ID: "t2"}, nil) // and once GitHub answers
 	if m.Offline() != "" || !m.due(*task) {
 		t.Fatalf("offline %q, due %v once back", m.Offline(), m.due(*task))
 	}

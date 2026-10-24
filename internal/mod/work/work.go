@@ -122,7 +122,7 @@ type Module struct {
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
 	mainRed map[string]bool
-	// offline is why the forge was last unreachable, until a step succeeds;
+	// offline is why the forge was last unreachable, until it answers again;
 	// downs counts the failed steps since, and online is when it last came back.
 	offline string
 	downs   int
@@ -362,12 +362,19 @@ func (m *Module) settle(t *Task, err error) {
 	if err != nil {
 		why = core.Unreachable("GitHub", err.Error())
 	}
+	back := false
+	if err == nil && m.Offline() != "" {
+		// Many steps succeed without touching GitHub, so only a direct check
+		// says it's back.
+		_, cerr := m.C.Effects.Forge.User()
+		back = cerr == nil
+	}
 	m.mu.Lock()
 	switch {
 	case why != "":
 		m.offline = why
 		m.downs++
-	case err == nil && m.offline != "":
+	case back:
 		m.offline, m.downs, m.online = "", 0, time.Now().UTC()
 	}
 	downs := m.downs
