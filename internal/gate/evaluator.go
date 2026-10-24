@@ -2,6 +2,7 @@ package gate
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,44 +50,82 @@ func buildEvaluator(cfg Config, g Go, sha string) (*Evaluator, error) {
 	return ev, nil
 }
 
-// judge runs the evaluator's e2e test binary against c's binary. The
-// evaluator has a sandbox of its own; c's binary, and any code c's Hive
-// landed that the evaluator runs, go through wrappers into c's sandbox, a
-// pid namespace apart from the evaluator. They share only c's root, where the
-// evaluator keeps the workspaces and forges it hands c.
-func (c *Child) judge(cfg *Config, timeout time.Duration, env []string, args ...string) (string, error) {
-	wrap := filepath.Join(cfg.Out, "wrap-"+c.Name)
-	// Inside the evaluator's sandbox the side shares the evaluator's network
-	// (so the suite reaches the side's daemon), which has no way out but the
-	// side's meter.
-	side := *c
-	side.Net = "shared"
-	if err := side.Wrapper(filepath.Join(wrap, "hive"), c.Bin); err != nil {
-		return "", err
-	}
-	if err := side.Wrapper(filepath.Join(wrap, "run"), ""); err != nil {
-		return "", err
-	}
-	// Code the side landed is run sealed: the machine's programs, an empty
-	// root of its own, no network, nothing of either Hive.
-	check := &Child{Name: "check-" + c.Name, Root: filepath.Join(cfg.Out, "check-"+c.Name), Sandbox: c.Sandbox}
-	if err := check.Prepare(); err != nil {
-		return "", err
-	}
-	if err := check.Wrapper(filepath.Join(wrap, "check"), ""); err != nil {
-		return "", err
+// judge runs the evaluator's e2e test binary against c's binary, inside c's
+// own sandbox: no sandbox is started from inside another, and the suite has
+// to reach c's daemon on c's own network. What keeps c from bending the
+// verdict there:
+//   - The suite was compiled by the gate before c's code ran, and is
+//     read-only to c, as is the evaluator's checkout.
+//   - Every process of c's descends from the suite, and Yama (ptrace_scope
+//     1 or more, required) lets no process trace or read the memory of an
+//     ancestor; so c cannot reach into the suite.
+//   - The suite's exit code goes to the gate through processes c cannot
+//     touch, and the benchmark's line is signed with a key the suite reads
+//     from its stdin before any of c's processes exist, so a line c writes
+//     into the suite's output is refused.
+//   - Code c landed runs in a sealed sandbox the gate starts beside c's on
+//     request (HIVE_E2E_CHECK, a Launcher): no network, nothing of c.
+func (c *Child) judge(cfg *Config, timeout time.Duration, env []string, key string, args ...string) (string, error) {
+	if c.Sandbox == "bwrap" {
+		if err := yamaGuards(); err != nil {
+			return "", err
+		}
 	}
 	scratch := filepath.Join(c.Root, "evaluator-tmp")
 	os.RemoveAll(scratch)
-	if err := os.MkdirAll(scratch, 0o755); err != nil {
-		return "", err
+	evHome := filepath.Join(c.Root, "evaluator-home")
+	for _, d := range []string{scratch, evHome} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return "", err
+		}
 	}
-	ev := &Child{Name: "evaluator-" + c.Name, Root: filepath.Join(cfg.Out, "evaluator-"+c.Name), Sandbox: c.Sandbox, Go: c.Go, Meter: c.Meter, Fwd: c.Fwd,
-		RO: append([]string{c.Eval.Test, c.Eval.Src, wrap, c.Src, c.Bin, check.Root}, c.RO...), RW: append([]string{c.Root}, c.RW...)}
-	if err := ev.Prepare(); err != nil {
-		return "", err
+	extra := []string{"TMPDIR=" + scratch, "HOME=" + evHome, "HIVE_E2E_BIN=" + c.Bin, "HIVE_E2E_WRAPPED=1"}
+	ro := []string{c.Eval.Test, c.Eval.Src}
+	var rw []string
+	if c.Sandbox == "bwrap" {
+		// Code c landed runs sealed, in a sandbox the gate starts beside c's.
+		dir, err := os.MkdirTemp(shortTmp(), "hive-check-")
+		if err != nil {
+			return "", err
+		}
+		defer os.RemoveAll(dir)
+		check := &Child{Name: "check-" + c.Name, Root: filepath.Join(cfg.Out, "check-"+c.Name), Sandbox: c.Sandbox}
+		if err := check.Prepare(); err != nil {
+			return "", err
+		}
+		l, err := StartLauncher(filepath.Join(dir, "check.sock"), check)
+		if err != nil {
+			return "", err
+		}
+		defer l.Close()
+		script := filepath.Join(dir, "check")
+		if err := checkScript(script, c.fwd(), l.Sock); err != nil {
+			return "", err
+		}
+		extra = append(extra, "HIVE_E2E_CHECK="+script)
+		ro = append(ro, script, c.fwd())
+		rw = append(rw, l.Sock)
 	}
-	ev.Extra = append([]string{"TMPDIR=" + scratch, "HIVE_E2E_BIN=" + filepath.Join(wrap, "hive"), "HIVE_E2E_RUN=" + filepath.Join(wrap, "run"), "HIVE_E2E_CHECK=" + filepath.Join(wrap, "check"), "HIVE_E2E_WRAPPED=1"}, env...)
+	saved := *c
+	defer func() { c.RO, c.RW, c.Extra = saved.RO, saved.RW, saved.Extra }()
+	c.RO = append(append([]string{}, c.RO...), ro...)
+	c.RW = append(append([]string{}, c.RW...), rw...)
+	c.Extra = append(append(append([]string{}, c.Extra...), extra...), env...)
+	var stdin io.Reader
+	if key != "" {
+		c.Extra = append(c.Extra, "HIVE_BENCH_KEY=stdin")
+		stdin = strings.NewReader(key + "\n")
+	}
 	argv := append([]string{c.Eval.Test, "-test.count=1", "-test.timeout", (timeout - time.Minute).String()}, args...)
-	return ev.Exec(timeout, filepath.Join(c.Eval.Src, "internal", "e2e"), argv...)
+	return c.ExecIn(timeout, filepath.Join(c.Eval.Src, "internal", "e2e"), stdin, argv...)
+}
+
+// yamaGuards refuses to share a sandbox between a side and its evaluator
+// unless Yama keeps a process from tracing its ancestors.
+func yamaGuards() error {
+	raw, err := os.ReadFile("/proc/sys/kernel/yama/ptrace_scope")
+	if err != nil || strings.TrimSpace(string(raw)) == "0" {
+		return fmt.Errorf("the evaluator shares the side's sandbox only where Yama's ptrace_scope is 1 or more (here: %q)", strings.TrimSpace(string(raw)))
+	}
+	return nil
 }

@@ -145,6 +145,11 @@ func run(args []string) int {
 		}
 		fmt.Println(kb.Find(ws.KB(), query, limit))
 		return 0
+	case "gate-check": // inside a gate's sandbox: ask the gate for a sealed run
+		if len(args) < 3 || args[1] != "--" {
+			return 2
+		}
+		return gate.LaunchClient(args[0], args[2:])
 	case "gate-fwd": // inside a gate's sandbox: relay to the meter, run the rest
 		if len(args) < 3 || args[1] != "--" {
 			return 2

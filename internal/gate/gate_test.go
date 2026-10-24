@@ -427,26 +427,6 @@ func TestReachPolicy(t *testing.T) {
 	}
 }
 
-// The evaluator runs a side's binary through a wrapper, as that side.
-func TestWrapper(t *testing.T) {
-	unixOnly(t)
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "hive")
-	os.WriteFile(bin, []byte("#!/bin/sh\necho \"$HOME|$1|$(pwd)\"\n"), 0o755)
-	c := &Child{Name: "candidate", Root: filepath.Join(dir, "root"), Sandbox: testSandbox(), Bin: bin}
-	c.Prepare()
-	w := filepath.Join(dir, "wrap", "hive")
-	if err := c.Wrapper(w, bin); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(w, "it's")
-	cmd.Dir = c.Root
-	out, err := cmd.CombinedOutput()
-	if want := c.Home() + "|it's|" + c.Root; err != nil || strings.TrimSpace(string(out)) != want {
-		t.Errorf("%v: %q, want %q", err, out, want)
-	}
-}
-
 func TestInstallToChecks(t *testing.T) {
 	unixOnly(t)
 	dir := t.TempDir()

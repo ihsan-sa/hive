@@ -1,6 +1,10 @@
 package gate
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -88,7 +92,7 @@ func probeE2E(cfg *Config, c *Child) Result {
 	if c.Eval == nil {
 		return Result{Pass: true, Detail: "prebuilt binary: no evaluator to test with"}
 	}
-	out, err := c.judge(cfg, time.Hour, nil)
+	out, err := c.judge(cfg, time.Hour, nil, "")
 	if err != nil {
 		names := failed.FindAllStringSubmatch(out, -1)
 		var fs []string
@@ -100,7 +104,7 @@ func probeE2E(cfg *Config, c *Child) Result {
 	return Result{Pass: true}
 }
 
-var benchLine = regexp.MustCompile(`(?m)^BENCH (\{.*\})$`)
+var benchLine = regexp.MustCompile(`(?m)^BENCH (\{.*\}) ([0-9a-f]{64})$`)
 
 // probeBenchmark runs the fixed asks on the demo textkit project (see
 // TestBenchmark in internal/e2e). What is judged the evaluator measured from
@@ -118,10 +122,22 @@ func probeBenchmark(cfg *Config, c *Child) Result {
 			env = append(env, k+"="+v)
 		}
 	}
-	out, err := c.judge(cfg, 2*time.Hour, env, "-test.run", "^TestBenchmark$", "-test.v")
-	m := benchLine.FindStringSubmatch(out)
+	// The evaluator signs its line with a key only it holds (see judge): a
+	// line the side writes into the suite's output does not count.
+	kb := make([]byte, 32)
+	rand.Read(kb)
+	key := hex.EncodeToString(kb)
+	out, err := c.judge(cfg, 2*time.Hour, env, key, "-test.run", "^TestBenchmark$", "-test.v")
+	var m []string
+	for _, x := range benchLine.FindAllStringSubmatch(out, -1) {
+		h := hmac.New(sha256.New, []byte(key))
+		h.Write([]byte(x[1]))
+		if hmac.Equal([]byte(x[2]), []byte(hex.EncodeToString(h.Sum(nil)))) {
+			m = x
+		}
+	}
 	if m == nil {
-		return Result{Detail: "no BENCH line: " + tail(out, 300)}
+		return Result{Detail: "no BENCH line signed by the evaluator: " + tail(out, 300)}
 	}
 	var b struct {
 		Score    *float64 `json:"score"`

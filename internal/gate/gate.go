@@ -39,6 +39,7 @@ type Config struct {
 	Log        func(string)
 	Probe      map[string]ProbeFunc // extra probes, by name
 	KeepFiles  bool
+	Self       string // the gate's own binary, which runs gate-fwd and gate-check in the sandboxes (default this executable)
 }
 
 // MaxDepth is how many levels deep gates may nest; a child gating a
@@ -136,8 +137,8 @@ func Run(cfg Config) (rep Report, err error) {
 		return rep, goErr
 	}
 
-	cand := &Child{Name: "candidate", Root: filepath.Join(cfg.Out, "candidate"), Sandbox: cfg.Sandbox, Depth: cfg.Depth, Bin: cfg.CandBin, Go: gotool}
-	ctrl := &Child{Name: "control", Root: filepath.Join(cfg.Out, "control"), Sandbox: cfg.Sandbox, Depth: cfg.Depth, Bin: cfg.CtrlBin, Go: gotool}
+	cand := &Child{Name: "candidate", Root: filepath.Join(cfg.Out, "candidate"), Sandbox: cfg.Sandbox, Depth: cfg.Depth, Bin: cfg.CandBin, Go: gotool, Fwd: cfg.Self}
+	ctrl := &Child{Name: "control", Root: filepath.Join(cfg.Out, "control"), Sandbox: cfg.Sandbox, Depth: cfg.Depth, Bin: cfg.CtrlBin, Go: gotool, Fwd: cfg.Self}
 	// Each side's way out is its own meter, outside every sandbox: under
 	// bubblewrap the only one it has, so the meter's count is its cost.
 	sockDir, err := os.MkdirTemp(shortTmp(), "hive-meter-") // short: a socket path has a length limit
@@ -321,6 +322,10 @@ func short(s string) string {
 func pickSandbox(cfg Config) (string, error) {
 	_, github := cfg.Org.(GitHub)
 	switch {
+	case insideSandbox() && cfg.Sandbox == "bwrap":
+		return "", fmt.Errorf("inside one of the gate's sandboxes no sandbox is started (bubblewrap nests only one level where user namespaces are restricted)")
+	case insideSandbox() && cfg.AllowBare && !github:
+		return "bare", nil // contained by the sandbox it runs in
 	case cfg.Sandbox == "bwrap" || (cfg.Sandbox == "" && BwrapWorks()):
 		return "bwrap", nil
 	case cfg.Sandbox != "" && cfg.Sandbox != "bare":

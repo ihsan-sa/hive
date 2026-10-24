@@ -1,8 +1,12 @@
 package e2e
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,7 +35,7 @@ var benchAsks = []string{
 }
 
 // TestBenchmark is what `hive gate` measures: the fixed asks on the scored demo
-// project, one after another. It prints one BENCH line of JSON. It runs only
+// project, one after another. It prints one BENCH line: JSON and its HMAC. It runs only
 // when HIVE_BENCH is set (to the number of asks), because on the real harness
 // it spends plan usage.
 //
@@ -47,6 +51,15 @@ func TestBenchmark(t *testing.T) {
 		t.Skip("set HIVE_BENCH=<asks> (4 runs the whole set) to run the benchmark")
 	}
 	n = min(n, len(benchAsks))
+	// Under the gate the line is signed with a key read from stdin before the
+	// measured Hive starts: it shares this process's sandbox, and could write
+	// into its output, but cannot read its memory.
+	key := ""
+	if os.Getenv("HIVE_BENCH_KEY") == "stdin" {
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		key = strings.TrimSpace(line)
+		os.Stdin.Close()
+	}
 	h := start(t)
 	h.post("/api/project", map[string]any{"demo": true}, nil)
 	st := h.wait("the demo project", 5*minute, func(st api.State) bool {
@@ -97,7 +110,9 @@ func TestBenchmark(t *testing.T) {
 	}
 	out, _ := json.Marshal(map[string]any{"score": score, "asks_finished": finished, "commits_landed": commits, "asks": n, "seconds": seconds,
 		"asks_done_reported": done, "cost_usd_reported": cost})
-	fmt.Println("BENCH " + string(out))
+	mac := hmac.New(sha256.New, []byte(key))
+	mac.Write(out)
+	fmt.Println("BENCH " + string(out) + " " + hex.EncodeToString(mac.Sum(nil)))
 	if commits < n {
 		t.Errorf("%d commits landed on %s's main for %d asks (the Hive said %d were done)", commits, repo, n, done)
 	}
@@ -139,8 +154,9 @@ func onForge(t *testing.T, h *hive, repo string) benchState {
 }
 
 // sideGit reads the measured Hive's forge. Its repositories (and their
-// config) are that Hive's writing, so under the gate git runs in that Hive's
-// sandbox (HIVE_E2E_RUN), never here: what it can make git do stays with it.
+// config) are that Hive's writing; under the gate this suite runs in that
+// Hive's sandbox, so what it can make git do stays there. HIVE_E2E_RUN, if
+// set, runs git through it.
 func sideGit(t *testing.T, bare string, args ...string) string {
 	t.Helper()
 	argv := append([]string{"git", "-C", bare}, args...)

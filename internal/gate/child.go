@@ -3,6 +3,7 @@ package gate
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,7 +115,6 @@ type Child struct {
 	RO, RW   []string   // more paths the child sees, read-only and writable
 	Extra    []string   // more environment
 	Meter    *Meter     // the side's only way out, under bubblewrap; nil keeps the machine's network
-	Net      string     // under bubblewrap: "" its own network, through Meter if set, else none; "shared" the caller's
 	Fwd      string     // the gate's own binary, which runs the forwarder (default this executable)
 }
 
@@ -158,8 +158,12 @@ func (c *Child) Prepare() error {
 	return nil
 }
 
-// BwrapWorks is whether bubblewrap can make the namespaces here.
+// BwrapWorks is whether bubblewrap can make the namespaces here. Inside one
+// of the gate's sandboxes it is never tried: no sandbox starts another.
 func BwrapWorks() bool {
+	if insideSandbox() {
+		return false
+	}
 	p, err := exec.LookPath("bwrap")
 	if err != nil {
 		return false
@@ -176,11 +180,11 @@ var systemDirs = []string{"/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "
 // bwrapArgs is the sandbox for the child: the system dirs, the Go toolchain
 // and module cache, its checkout and binary, read-only; its root writable,
 // and its build output while it builds; its own pid, ipc and uts namespaces;
-// fresh /dev, /proc and /tmp. Its own network too, with the meter's
-// forwarder as the only way out (or none), unless Net is "shared": then it
-// is in the caller's network (the evaluator's, which has the forwarder).
+// fresh /dev, /proc and /tmp; its own network, with the meter's forwarder as
+// the only way out (or none). Marked as inside, so nothing in it starts
+// another sandbox.
 func (c *Child) bwrapArgs(dir string) []string {
-	args := []string{"--unshare-pid", "--unshare-ipc", "--unshare-uts", "--die-with-parent", "--new-session"}
+	args := []string{"--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-net", "--die-with-parent", "--new-session", "--setenv", sandboxedEnv, "1"}
 	for _, d := range systemDirs {
 		fi, err := os.Lstat(d)
 		if err != nil {
@@ -194,12 +198,9 @@ func (c *Child) bwrapArgs(dir string) []string {
 		args = append(args, "--ro-bind", d, d)
 	}
 	args = append(args, "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp")
-	if c.Net != "shared" {
-		// No network of its own: the meter's forwarder, or nothing, is the way out.
-		args = append(args, "--unshare-net")
-		if c.Meter != nil {
-			args = append(args, "--ro-bind", c.fwd(), c.fwd(), "--bind", c.Meter.Sock, c.Meter.Sock)
-		}
+	if c.Meter != nil {
+		// No network of its own: the meter's forwarder is the way out.
+		args = append(args, "--ro-bind", c.fwd(), c.fwd(), "--bind", c.Meter.Sock, c.Meter.Sock)
 	}
 	ro := []string{c.Go.Root, c.Go.ModCache, c.Src, c.Bin}
 	for _, k := range []string{"SSL_CERT_FILE", "SSL_CERT_DIR"} {
@@ -223,21 +224,16 @@ func (c *Child) bwrapArgs(dir string) []string {
 	return append(args, "--chdir", dir, "--")
 }
 
-func mapq(xs []string, q func(string) string) []string {
-	out := make([]string, len(xs))
-	for i, x := range xs {
-		out[i] = q(x)
-	}
-	return out
-}
-
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 // Command wraps argv for the child: under bubblewrap, the sandbox of
 // bwrapArgs; bare, only the environment is the child's.
 func (c *Child) Command(ctx context.Context, dir string, argv ...string) *exec.Cmd {
 	var cmd *exec.Cmd
-	if c.Sandbox == "bwrap" {
+	if c.Sandbox == "bwrap" && insideSandbox() {
+		// Never a sandbox inside a sandbox (pickSandbox refuses it first).
+		cmd = exec.CommandContext(ctx, "sh", "-c", "echo 'the gate starts no sandbox inside its own' >&2; exit 125")
+	} else if c.Sandbox == "bwrap" {
 		cmd = exec.CommandContext(ctx, "bwrap", append(c.bwrapArgs(dir), c.forwarded(argv)...)...)
 	} else {
 		cmd = exec.CommandContext(ctx, argv[0], argv[1:]...)
@@ -260,67 +256,24 @@ func (c *Child) fwd() string {
 // forwarded puts the meter's forwarder in front of argv when the sandbox has
 // a network of its own and a meter.
 func (c *Child) forwarded(argv []string) []string {
-	if c.Net == "shared" || c.Meter == nil {
+	if c.Meter == nil {
 		return argv
 	}
 	return append([]string{c.fwd(), "gate-fwd", c.Meter.Sock, "--"}, argv...)
 }
 
-// Wrapper writes a script at path that runs its arguments as this child, in
-// the child's sandbox, from the caller's own folder: how the evaluator runs
-// the child's binary without sharing a sandbox with it. With bin, the script
-// runs bin with its arguments.
-func (c *Child) Wrapper(path, bin string) error {
-	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
-	var b strings.Builder
-	b.WriteString("#!/bin/sh\n# written by the Hive gate: run as the " + c.Name + " child\n")
-	env := []string{"HOME=" + c.Home(), "HIVE_GATE_DEPTH=" + fmt.Sprint(c.Depth), "GIT_CONFIG_GLOBAL=/dev/null"}
-	tail := `"$@"`
-	if bin != "" {
-		tail = q(bin) + ` "$@"`
-	}
-	if c.Sandbox == "bwrap" {
-		// The caller's folder, if the child sees it; else the child's root
-		// (the evaluator's own checkout, say, is not the child's to see).
-		b.WriteString("d=" + q(c.Root) + "\ncase \"$PWD/\" in\n")
-		for _, p := range append(append([]string{c.Root, c.Src}, c.RW...), c.RO...) {
-			if p != "" {
-				b.WriteString("\t" + q(strings.TrimSuffix(p, "/")+"/") + "*) d=$PWD ;;\n")
-			}
-		}
-		b.WriteString("esac\n")
-		b.WriteString("exec bwrap")
-		args := c.bwrapArgs("/")
-		args = args[:len(args)-3] // the --chdir and -- go last, with the caller's folder
-		if f := c.forwarded(nil); len(f) > 0 {
-			tail = strings.Join(mapq(f, q), " ") + " " + tail
-		}
-		for _, e := range env {
-			k, v, _ := strings.Cut(e, "=")
-			args = append(args, "--setenv", k, v)
-		}
-		for _, a := range args {
-			b.WriteString(" " + q(a))
-		}
-		b.WriteString(` --chdir "$d" -- ` + tail + "\n")
-	} else {
-		b.WriteString("exec env")
-		for _, e := range env {
-			b.WriteString(" " + q(e))
-		}
-		b.WriteString(" " + tail + "\n")
-	}
-	os.MkdirAll(filepath.Dir(path), 0o755)
-	return os.WriteFile(path, []byte(b.String()), 0o755)
-}
-
 // Exec runs argv in the child and returns its combined output.
 func (c *Child) Exec(timeout time.Duration, dir string, argv ...string) (string, error) {
+	return c.ExecIn(timeout, dir, nil, argv...)
+}
+
+// ExecIn is Exec with stdin.
+func (c *Child) ExecIn(timeout time.Duration, dir string, stdin io.Reader, argv ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	buf := &lastBytes{max: 4 << 20} // a child cannot fill the gate's memory
 	cmd := c.Command(ctx, dir, argv...)
-	cmd.Stdout, cmd.Stderr = buf, buf
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, buf, buf
 	err := cmd.Run()
 	if ctx.Err() != nil {
 		err = fmt.Errorf("timed out after %s", timeout)

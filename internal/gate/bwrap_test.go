@@ -102,42 +102,34 @@ if [ -n "$CHECK_OUT" ]; then curl -sS -o /dev/null https://example.com || { echo
 	}
 }
 
-// The evaluator runs the side's binary through the wrapper: the side is a
-// pid namespace apart from the evaluator, shares only its network (the
-// meter's forwarder), and sees its own home. Landed code runs sealed: no
-// network, nothing of the side.
-func TestBwrapNestedWrapper(t *testing.T) {
+// Code the side landed runs in a sealed sandbox the gate starts beside the
+// side's, on the side's request: it gets the request's stdin, has no network
+// and sees nothing of the side.
+func TestBwrapSealedCheckIsASibling(t *testing.T) {
 	needBwrap(t)
 	side, _ := meteredChild(t, "candidate")
 	os.WriteFile(filepath.Join(side.Root, "mark"), []byte("x"), 0o644)
-	wrap := filepath.Join(t.TempDir(), "wrap")
-	s := *side
-	s.Net = "shared"
-	if err := s.Wrapper(filepath.Join(wrap, "hive"), ""); err != nil {
-		t.Fatal(err)
-	}
 	check := &Child{Name: "check", Root: filepath.Join(t.TempDir(), "check"), Sandbox: "bwrap"}
 	check.Prepare()
-	if err := check.Wrapper(filepath.Join(wrap, "check"), ""); err != nil {
+	dir, _ := os.MkdirTemp(shortTmp(), "gate-test-")
+	defer os.RemoveAll(dir)
+	l, err := StartLauncher(filepath.Join(dir, "check.sock"), check)
+	if err != nil {
 		t.Fatal(err)
 	}
-	ev := &Child{Name: "evaluator", Root: filepath.Join(t.TempDir(), "ev"), Sandbox: "bwrap", Go: side.Go, Meter: side.Meter, Fwd: side.Fwd,
-		RO: []string{wrap, check.Root}, RW: []string{side.Root}}
-	ev.Prepare()
-	script := `
-sleep 4242 &
-"$1/hive" sh -c '
-	for f in /proc/[0-9]*/cmdline; do tr "\0" " " <"$f" 2>/dev/null | grep -q "^sleep 4242" && { echo "the side sees the evaluator"; exit 1; }; done
-	[ "$HOME" = "$0" ] || { echo "home $HOME"; exit 1; }
-	test -e "$0/../mark" || { echo "no side root"; exit 1; }
-	bash -c "exec 3<>/dev/tcp/127.0.0.1/3128" || { echo "the side lost the forwarder"; exit 1; }
-' "$2" || exit 1
-"$1/check" sh -c '
-	if bash -c "exec 3<>/dev/tcp/127.0.0.1/3128" 2>/dev/null; then echo "sealed code has a network"; exit 1; fi
-	test ! -e "$0/mark" || { echo "sealed code sees the side"; exit 1; }
-' "$3" || exit 1
-kill $! 2>/dev/null; exit 0`
-	if out, err := ev.Exec(2*time.Minute, ev.Root, "sh", "-c", script, "sh", wrap, side.Home(), side.Root); err != nil {
+	defer l.Close()
+	script := filepath.Join(dir, "check")
+	checkScript(script, side.Fwd, l.Sock)
+	side.RO, side.RW = []string{script}, []string{l.Sock}
+	inner := `
+got=$(printf hello | "$1" sh -c '
+	cat
+	if bash -c "exec 3<>/dev/tcp/127.0.0.1/3128" 2>/dev/null; then echo " sealed code has a network"; exit 1; fi
+	test ! -e "$0/mark" || { echo " sealed code sees the side"; exit 1; }
+	[ "$HIVE_GATE_SANDBOXED" = 1 ] || { echo " not marked as inside"; exit 1; }
+' "$2") || { echo "the sealed run failed: $got"; exit 1; }
+[ "$got" = hello ] || { echo "sealed run said: $got"; exit 1; }`
+	if out, err := side.Exec(2*time.Minute, side.Root, "sh", "-c", inner, "sh", script, side.Root); err != nil {
 		t.Fatalf("%v: %s", err, out)
 	}
 }
