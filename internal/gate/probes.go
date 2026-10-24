@@ -37,8 +37,7 @@ func probeDaemon(cfg *Config, c *Child) Result {
 	os.MkdirAll(filepath.Join(ws, ".hive"), 0o755)
 	conf := `{"harness":"fake","sandbox":"bare","bare_accepted":"` + time.Now().Format(time.RFC3339) + `","auto_update":false}`
 	os.WriteFile(filepath.Join(ws, ".hive", "config.json"), []byte(conf), 0o644)
-	c.Extra = []string{"HIVE_FORGE=local:" + filepath.Join(c.Root, "forge")}
-	defer func() { c.Extra = nil }()
+	defer c.with("HIVE_FORGE=local:" + filepath.Join(c.Root, "forge"))()
 	ver, err := c.Exec(time.Minute, c.Root, c.Bin, "--version")
 	if err != nil {
 		return Result{Detail: "--version: " + tail(ver, 200)}
