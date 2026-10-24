@@ -11,7 +11,7 @@ import (
 
 // Install puts a kept candidate's binary at target and keeps the one it
 // replaces beside it as target+".prev". The new install must answer its health
-// check (it reports the version asked for and the sandbox probe passes); if it
+// check (its --version runs and names the version asked for); if it
 // does not, the previous binary goes back and the error says why. Nothing is
 // changed unless the gate said keep, so a caller reaches Install only with a
 // passing Report.
