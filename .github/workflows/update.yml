@@ -22,6 +22,8 @@ on:
 permissions:
   contents: read
 jobs:
+  # A Hive following pre-releases reads these legs as "update (<os>-latest, ...)" (ownJobs in
+  # internal/mod/release/prerelease.go); keep the job unnamed and os first in the matrix.
   update:
     strategy:
       fail-fast: false

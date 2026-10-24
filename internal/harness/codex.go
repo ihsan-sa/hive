@@ -1,14 +1,24 @@
 package harness
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"time"
 )
 
-// Codex is OpenAI's Codex CLI in exec mode with JSONL output. It runs in its
-// own sandbox inside the Hive's: read-only for a read-only turn, else writes
-// limited to the checkout and the Turn's Writable folders. Codex picks its own
-// session id, which the init event reports.
+// Codex is OpenAI's Codex CLI in exec mode with JSONL output. Codex picks its
+// own session id, which the init event reports.
+//
+// Inside a Hive sandbox Codex's own sandbox can't start (it is bubblewrap,
+// and a namespace can't be made inside ours), so every command it ran would
+// fail; there it runs with its sandbox off and the Hive's is the boundary, as
+// for Claude Code: the checkout is read-only on a read-only turn. Unlike
+// Claude's read-only turn, which has only read tools, a read-only Codex turn
+// can run commands, since Codex reads files through its shell. Outside a Hive
+// sandbox (bare) Codex keeps its own: read-only for a read-only turn, else
+// writes limited to the checkout and the Turn's Writable folders.
 type Codex struct{}
 
 func (Codex) Name() string           { return "codex" }
@@ -25,9 +35,12 @@ func (Codex) Args(t Turn) []string {
 		a = append(a, "resume")
 	}
 	a = append(a, "--json", "--skip-git-repo-check", "-c", `approval_policy="never"`)
-	if t.ReadOnly {
+	switch {
+	case t.Sandboxed:
+		a = append(a, "--dangerously-bypass-approvals-and-sandbox")
+	case t.ReadOnly:
 		a = append(a, "-c", `sandbox_mode="read-only"`)
-	} else {
+	default:
 		a = append(a, "-c", `sandbox_mode="workspace-write"`, "-c", "sandbox_workspace_write.network_access=true")
 		if len(t.Writable) > 0 {
 			roots, _ := json.Marshal(t.Writable)
@@ -90,14 +103,113 @@ func (Codex) Parse(line []byte) []Event {
 		}
 	case "turn.completed":
 		return []Event{{Kind: "result", Result: &Result{Subtype: "success"}}}
-	case "turn.failed", "error":
-		msg := l.Message // a top-level error line carries its message there
+	case "turn.failed":
+		msg := ""
 		if l.Error != nil {
 			msg = l.Error.Message
 		}
 		return []Event{{Kind: "result", Result: &Result{Text: msg, IsError: true, Subtype: "error", Limited: LooksLimited(msg)}}}
 	}
+	// A top-level "error" line is not the turn's end: Codex prints one for
+	// each retry ("Reconnecting... 2/5"), and a turn that fails ends with
+	// turn.failed, carrying the last error's message.
 	return nil
+}
+
+// Usage reads the plan usage Codex keeps out of its output stream, in the
+// session's rollout file under CODEX_HOME/sessions: the last rate-limit
+// reading taken at or after since, and what the context held at the last
+// request then (0 when it isn't known). A reading at its limit is "rejected".
+func (Codex) Usage(rollout []byte, since time.Time) (*RateLimit, int) {
+	var rl *RateLimit
+	tokens := 0
+	for _, line := range bytes.Split(rollout, []byte("\n")) {
+		var l codexRollout
+		if json.Unmarshal(line, &l) != nil || l.Payload == nil || l.Timestamp.Before(since) {
+			continue
+		}
+		if i := l.Payload.Info; i != nil && i.Last != nil {
+			tokens = i.Last.Input
+		}
+		if r := l.Payload.RateLimits; r != nil {
+			if got := r.limit(); got != nil {
+				rl = got
+			}
+		}
+	}
+	return rl, tokens
+}
+
+type codexRollout struct {
+	Timestamp time.Time `json:"timestamp"`
+	Payload   *struct {
+		Info *struct {
+			Last *struct {
+				Input int `json:"input_tokens"`
+			} `json:"last_token_usage"`
+		} `json:"info"`
+		RateLimits *codexLimits `json:"rate_limits"`
+	} `json:"payload"`
+}
+
+type codexLimits struct {
+	Primary   *codexWindow `json:"primary"`
+	Secondary *codexWindow `json:"secondary"`
+	Reached   *string      `json:"rate_limit_reached_type"`
+}
+
+type codexWindow struct {
+	UsedPercent   float64 `json:"used_percent"`
+	WindowMinutes int     `json:"window_minutes"`
+	ResetsAt      int64   `json:"resets_at"`         // unix seconds
+	ResetsIn      int64   `json:"resets_in_seconds"` // older Codex
+}
+
+// limit is the reading as a RateLimit: each window under the name Claude's
+// windows go by where the length matches, the binding one the fullest.
+func (c codexLimits) limit() *RateLimit {
+	rl := &RateLimit{Status: "allowed", Windows: map[string]Window{}}
+	for i, w := range []*codexWindow{c.Primary, c.Secondary} {
+		if w == nil {
+			continue
+		}
+		name := windowName(w.WindowMinutes, i)
+		at := time.Unix(w.ResetsAt, 0).UTC()
+		if w.ResetsAt == 0 {
+			at = time.Now().Add(time.Duration(w.ResetsIn) * time.Second).UTC()
+		}
+		used := w.UsedPercent / 100
+		rl.Windows[name] = Window{Utilization: used, ResetsAt: at}
+		if rl.Window == "" || used > rl.Utilization || used >= 1 && at.After(rl.ResetsAt) {
+			rl.Window, rl.Utilization, rl.ResetsAt = name, used, at
+		}
+	}
+	if rl.Window == "" {
+		return nil
+	}
+	switch {
+	case rl.Utilization >= 1 || c.Reached != nil && *c.Reached != "":
+		rl.Status = "rejected"
+	case rl.Utilization >= 0.8:
+		rl.Status = "allowed_warning"
+	}
+	return rl
+}
+
+func windowName(minutes, i int) string {
+	switch {
+	case minutes == 300:
+		return "five_hour"
+	case minutes == 7*24*60:
+		return "seven_day"
+	case minutes <= 0:
+		return []string{"primary", "secondary"}[i]
+	case minutes%(24*60) == 0:
+		return fmt.Sprintf("%d_day", minutes/(24*60))
+	case minutes%60 == 0:
+		return fmt.Sprintf("%d_hour", minutes/60)
+	}
+	return fmt.Sprintf("%d_minute", minutes)
 }
 
 // claudeModel reports a Claude model name, which a workspace switched to Codex

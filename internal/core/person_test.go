@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -92,4 +93,36 @@ func TestToldGoesToTheFeed(t *testing.T) {
 		t.Fatalf("moved twice: %+v", c.Person.Told(5))
 	}
 	c.Close()
+}
+
+// Tell records once per ID and once per (Ref, Title), even from callers at
+// once, so a step that runs twice after a restart is told once; and only the
+// newest are kept in memory, still found by ID.
+func TestTellOnce(t *testing.T) {
+	c, _ := testHive(t)
+	t.Cleanup(func() { c.Close() })
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(2)
+		go func() { defer wg.Done(); c.Person.Tell(Ask{ID: "spend-x", Title: "spent"}) }()
+		go func() { defer wg.Done(); c.Person.Tell(Ask{Ref: "req1", Title: "A T2 step ran (done): x"}) }()
+	}
+	wg.Wait()
+	c.Person.Tell(Ask{Ref: "req1", Title: "Decided for you (yes, by a warden): x"})
+	if got := c.Person.Told(10); len(got) != 3 {
+		t.Fatalf("told %d, want 3: %+v", len(got), got)
+	}
+	for i := range 2 * keepTold {
+		c.Person.Tell(Ask{ID: fmt.Sprint("n", i), Title: "t"})
+	}
+	if n := len(c.Person.told); n > 2*keepTold {
+		t.Fatalf("%d told in memory, want at most %d", n, 2*keepTold)
+	}
+	last := fmt.Sprint("n", 2*keepTold-1)
+	if a, ok := c.Person.Get(last); !ok || a.ID != last {
+		t.Fatalf("the newest told isn't found by ID: %+v", a)
+	}
+	if got := c.Person.Told(1); got[0].ID != last {
+		t.Fatalf("newest: %+v", got)
+	}
 }
