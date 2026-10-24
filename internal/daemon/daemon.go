@@ -433,7 +433,7 @@ func (s *server) restart() {
 	if err != nil {
 		return
 	}
-	exe = onDisk(exe)
+	exe = release.OnDisk(exe) // the new binary sits where the running one was
 	ws := s.a.C.WS
 	env := append(os.Environ(), "HIVE_HOME="+ws.Root)
 	if _, err := proc.StartDetached([]string{exe, "daemon", "--wait-for", strconv.Itoa(os.Getpid())}, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err == nil {
@@ -481,10 +481,6 @@ func (s *server) handBack(sup supervision) {
 	s.exit.Store(int64(sup.status))
 	s.cancel()
 }
-
-// onDisk is the path the new binary sits at: an update renames the running
-// file to <name>.old, and Linux reports the running file by its new name.
-func onDisk(exe string) string { return strings.TrimSuffix(exe, ".old") }
 
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
