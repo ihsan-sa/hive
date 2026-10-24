@@ -176,8 +176,9 @@ var systemDirs = []string{"/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "
 // bwrapArgs is the sandbox for the child: the system dirs, the Go toolchain
 // and module cache, its checkout and binary, read-only; its root writable,
 // and its build output while it builds; its own pid, ipc and uts namespaces;
-// fresh /dev, /proc and /tmp. The network stays, since the org probe needs
-// the proxy.
+// fresh /dev, /proc and /tmp. Its own network too, with the meter's
+// forwarder as the only way out (or none), unless Net is "shared": then it
+// is in the caller's network (the evaluator's, which has the forwarder).
 func (c *Child) bwrapArgs(dir string) []string {
 	args := []string{"--unshare-pid", "--unshare-ipc", "--unshare-uts", "--die-with-parent", "--new-session"}
 	for _, d := range systemDirs {

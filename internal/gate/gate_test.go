@@ -280,7 +280,22 @@ func TestBwrapHidesTheHost(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	home, secrets, ws := t.TempDir(), t.TempDir(), t.TempDir()
+	// Outside /tmp, which the sandbox replaces with its own: only the
+	// allowlist can hide these, so a sandbox that bound the whole machine
+	// (--ro-bind / /) would fail here.
+	outside := func() string {
+		d, err := os.MkdirTemp(".", ".bwrap-host-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(d) })
+		abs, _ := filepath.Abs(d)
+		if strings.HasPrefix(abs, "/tmp/") {
+			t.Fatalf("%s is under /tmp", abs)
+		}
+		return abs
+	}
+	home, secrets, ws := outside(), outside(), outside()
 	os.WriteFile(filepath.Join(home, "login"), []byte("secret"), 0o600)
 	os.WriteFile(filepath.Join(secrets, "token"), []byte("secret"), 0o600)
 	os.MkdirAll(filepath.Join(ws, ".hive", "private"), 0o755)

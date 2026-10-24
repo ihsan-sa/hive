@@ -41,6 +41,7 @@ ci's `sandboxed-e2e` job lifts Ubuntu's AppArmor user-namespace restriction and 
 - A machine without a Go toolchain cannot gate.
 - The benchmark is four asks. A real harness inside the allowlisted sandbox also needs the `claude` CLI and its login bound in, which the gate does not do yet. Cost is the bytes through the meter, not tokens: it tracks what a model costs (context sent, output received) but not price or cache discounts. A bare run has no meter it can enforce.
 - Org runs need a test-only org and a fine-grained child token on it (both the person's to make) and the per-owner token (brief 261024-015755-a3f383a160); no org run has been made yet.
+- The evaluator's scratch folder (`TMPDIR`, under the side's root) is writable by the side while a run goes on, because it holds the workspaces and forges the evaluator hands the side. The side can change what the evaluator keeps there. What is judged doesn't come from there: the forge is read through the side's own sandbox, the landed code runs sealed from source on stdin, and the answers and the clock are the evaluator's.
 - The evaluator, the side and the grandchild are the same uid; the separation is namespaces and mounts, not users.
 
 ## Earlier runs
