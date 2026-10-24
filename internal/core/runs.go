@@ -1047,8 +1047,11 @@ func (rs *Runs) endTurn(r Run) {
 	rs.append("run.turn_ended", te)
 	// A message that came in while it finished blocked (often the answer it was
 	// blocked on) wakes it rather than waiting on a run that takes no turns;
-	// one blocked for its Codex token stays blocked.
-	if te.Status == StatusBlocked && dropErr == nil && len(cur.Pending) > 0 {
+	// one blocked for its Codex token stays blocked. The run is read again
+	// after the turn ended: a message queued since cur was read still found it
+	// running, so nothing else would wake it, and one sent from here on finds
+	// it ended and reopens it itself.
+	if after, ok := rs.Get(r.ID); ok && te.Status == StatusBlocked && dropErr == nil && len(after.Pending) > 0 {
 		rs.append("run.reopened", runNote{ID: r.ID})
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusIdle, Reason: "woken by a message"})
 	}
