@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -154,6 +155,45 @@ func TestRemoteFollowsTheHiveThere(t *testing.T) {
 	r.Close()
 	if _, err := r.Info(); err == nil {
 		t.Fatal("a closed session still reads as live")
+	}
+	if err := c.Do("GET", "/api/ping", nil, nil); err == nil || !strings.Contains(err.Error(), "remote` again") {
+		t.Fatalf("after the session ended: %v", err)
+	}
+}
+
+// TestRemoteSendsOnce: a daemon that took a post and dropped the connection
+// before answering gets it once; only a request that never went out (the
+// proxy's connect refused) is sent again.
+func TestRemoteSendsOnce(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var posts atomic.Int32
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.ReadAll(r.Body)
+		posts.Add(1)
+		c, _, _ := w.(http.Hijacker).Hijack()
+		c.Close() // taken, never answered: a daemon going down mid-request
+	})}
+	go srv.Serve(ln)
+	defer srv.Close()
+	info := filepath.Join(t.TempDir(), "daemon.json")
+	os.WriteFile(info, []byte(`{"pid":1,"port":41001,"token":"one"}`), 0o600)
+	t.Setenv("HIVE_FAKE_SSH", "1")
+	t.Setenv("HIVE_FAKE_SSH_INFO", info)
+	t.Setenv("HIVE_FAKE_SSH_PORTS", fmt.Sprintf("41001=%d", ln.Addr().(*net.TCPAddr).Port))
+	r := &Remote{Dest: "box", SSH: []string{os.Args[0]}}
+	c, err := DialRemote(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := c.Do("POST", "/api/chat", map[string]string{"text": "hi"}, nil); err == nil {
+		t.Fatal("a dropped answer read as sent")
+	}
+	if n := posts.Load(); n != 1 {
+		t.Fatalf("the post went %d times", n)
 	}
 }
 

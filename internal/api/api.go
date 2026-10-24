@@ -11,7 +11,6 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -195,6 +194,11 @@ const remoteLag = 3 * time.Second
 // restartWait and sends the request to the new daemon. Otherwise a failed
 // dial is returned at once.
 func (c *Client) Do(method, path string, body, out any) error {
+	if c.remote {
+		if _, e := c.info(); e != nil { // the ssh session ended: say so, not a refused request
+			return fmt.Errorf("%w; quit and run `%s remote` again", e, core.Cmd)
+		}
+	}
 	c.mu.Lock()
 	info := c.cur
 	c.mu.Unlock()
@@ -229,12 +233,18 @@ func (c *Client) Do(method, path string, body, out any) error {
 
 var errUnauthorized = errors.New("unauthorized")
 
+// dialFailed: the request never went out, so sending it again is safe.
+// Through SSH's proxy a daemon that's gone fails the proxy's CONNECT, which
+// Go's SOCKS dialer reports as "socks connect". Anything later (a reset, an
+// EOF, a timeout) may come after the daemon took the request, and is never
+// sent again: a chat message would be posted twice.
 func (c *Client) dialFailed(err error) bool {
 	var op *net.OpError
-	var ue *url.Error
-	// Through SSH's proxy a daemon that's gone fails the proxy's connect, not a dial.
-	return errors.As(err, &op) && op.Op == "dial" || c.remote && errors.As(err, &ue)
+	return errors.As(err, &op) && (op.Op == "dial" || c.remote && op.Op == "socks connect")
 }
+
+// Remote: the client reaches its daemon through a Remote's SSH session.
+func (c *Client) Remote() bool { return c.remote }
 
 func (c *Client) do(info DaemonInfo, method, path string, body, out any) error {
 	var rd io.Reader

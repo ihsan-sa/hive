@@ -222,7 +222,7 @@ func noTool(s clipSetup) error {
 	switch {
 	case s.ssh && !s.wsl:
 		// The terminal holds the clipboard, and no terminal hands an image over SSH.
-		return fmt.Errorf("%w: over SSH this control center can't reach your computer's clipboard. Paste or drop the path of a file on this machine (scp it here first), or run `%s remote %s` on your computer and paste there", errNoTool, core.Cmd, sshHost())
+		return fmt.Errorf("%w: over SSH this control center can't reach your computer's clipboard. Paste or drop the path of a file on this machine (scp it here first), or run `%s remote <host>` on your computer and paste there", errNoTool, core.Cmd)
 	case s.wsl:
 		return fmt.Errorf("%w: powershell.exe isn't reachable from WSL (is C: mounted, with Windows interop on?). Drop the image's file onto the window, or paste its path", errNoTool)
 	case s.goos == "windows":
@@ -233,14 +233,6 @@ func noTool(s clipSetup) error {
 		return fmt.Errorf("%w: this session has no display to read a clipboard from. Drop the image's file onto the window, or paste its path", errNoTool)
 	}
 	return fmt.Errorf("%w; install wl-clipboard (Wayland) or xclip (X11), or drop the image's file onto the window", errNoTool)
-}
-
-// sshHost names this machine for `hive remote`, as the person may reach it.
-func sshHost() string {
-	if h, err := os.Hostname(); err == nil && h != "" {
-		return h
-	}
-	return "<this host>"
 }
 
 // clipboardImage reads an image off the clipboard with the first tool found
