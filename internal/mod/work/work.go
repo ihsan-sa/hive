@@ -225,8 +225,10 @@ type Module struct {
 	// holdPolled when each one's release condition may next be asked of the forge.
 	holds      map[string]*MergeHold
 	holdPolled map[string]time.Time
-	// gating is the recursive gate run in flight, if any (selfgate.go).
-	gating *gateRun
+	// gating is the recursive gate run in flight, if any (selfgate.go), and
+	// gateCantRun the last run per project and main that couldn't run.
+	gating      *gateRun
+	gateCantRun map[string]core.GateResult
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
 	// gate is shut.

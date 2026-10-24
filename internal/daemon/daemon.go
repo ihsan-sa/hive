@@ -172,6 +172,16 @@ func Run(ws core.Workspace, waitFor int) error {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+	// Before anything else touches the workspace: one daemon per workspace.
+	wait := time.Duration(0)
+	if waitFor > 0 {
+		wait = 20 * time.Second // the replaced daemon may still be on its way out
+	}
+	lock, err := lockWorkspace(ws, wait)
+	if err != nil {
+		return err
+	}
+	defer func() { lock.Release() }() // the lock held at the end, which a failed hand-off retakes
 	if _, ok := Running(ws); ok {
 		return errors.New("the Hive is already running")
 	}
@@ -180,16 +190,22 @@ func Run(ws core.Workspace, waitFor int) error {
 		if exe == "" {
 			exe, _ = executable()
 		}
+		lock.Release() // the unit's daemon takes it
 		if setup.RestartUnit(exe, ws.Root) {
 			return nil
+		}
+		if lock, err = lockWorkspace(ws, 10*time.Second); err != nil {
+			return err
 		}
 	}
 	if exe != "" {
 		// This update renamed hive-v0 to hive: start the daemon under its new name.
+		lock.Release()
 		_, err := proc.StartDetached([]string{exe, "daemon"}, append(os.Environ(), "HIVE_HOME="+ws.Root), ws.Root, "", filepath.Join(ws.Hive(), "daemon.log"))
 		return err
 	}
 	if back := release.Boot(ws); back != "" {
+		lock.Release()
 		return rolledBack(ws, back)
 	}
 	// After the update hand-off: a renamed binary runs this check in its own daemon.
@@ -992,6 +1008,8 @@ func (s *server) state() api.State {
 	st.Feedback = a.Feedback.List(func(it feedback.Item) bool { return it.Status == feedback.Open })
 	done := a.Feedback.List(func(it feedback.Item) bool { return it.Status != feedback.Open })
 	st.Feedback = append(st.Feedback, done[:min(len(done), 20)]...)
+	v := a.Stats.View(time.Now())
+	st.Stats = &v
 	return st
 }
 

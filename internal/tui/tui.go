@@ -24,6 +24,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
@@ -104,6 +105,8 @@ type model struct {
 	modSel  int
 	kbDir   string // the knowledge base folder shown, relative to its root
 	kbSel   int
+	kbNew   []kb.Change // the knowledge base's recently updated entries
+	kbNewAt time.Time   // when they were read
 	setSel  int
 	editing bool
 	picking bool // a setting's pick-list is open

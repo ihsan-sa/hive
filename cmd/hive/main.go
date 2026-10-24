@@ -95,6 +95,8 @@ func run(args []string) int {
 		return agentcli.Main(args)
 	case "fake-agent":
 		return fakeagent.Main(args)
+	case "fake-codex":
+		return fakeagent.Codex(args)
 	case "open-agent":
 		return openagent.Main(args)
 	case "open-key":

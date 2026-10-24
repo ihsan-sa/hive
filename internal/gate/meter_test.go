@@ -41,9 +41,9 @@ func TestMeter(t *testing.T) {
 			go func() { io.Copy(c, c); c.Close() }()
 		}
 	}()
-	// Short, as gate.go's own: a socket path has a length limit (108 bytes on
-	// Linux), and t.TempDir() under a gate child's long TMPDIR passes it.
-	dir, err := os.MkdirTemp(shortTmp(), "hive-meter-test-")
+	// Not t.TempDir: under a gate's side TMPDIR is deep in the run's folder,
+	// and a unix socket's path must fit in 108 bytes.
+	dir, err := os.MkdirTemp(shortTmp(), "gate-test-")
 	if err != nil {
 		t.Fatal(err)
 	}

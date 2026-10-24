@@ -8,12 +8,12 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 |---|---|
 | `internal/core` | **The core.** Journal (append-only event log), workspace + config, runs (agent turns, park/resume, crash retry, reattach), mailbox ops, effects process (git/forge, commit extraction, gate guarantees), project registry, token source, person queue, ceiling notes. ~3k lines. |
 | `internal/sandbox` | Linux namespaces (`sandbox-exec` outer + `sandbox-init` pid 1), WSL launcher (Windows), Seatbelt (macOS, untested), bare (opt-in). Egress proxy. |
-| `internal/harness` | Adapter seam. Claude Code (`claude -p --output-format stream-json`), Codex (`codex exec --json`, in its own read-only or workspace-write sandbox inside ours), open (`hive open-agent`: any OpenAI-compatible endpoint; [models.md](models.md)), fake (scripted). |
+| `internal/harness` | Adapter seam. Claude Code (`claude -p --output-format stream-json`), Codex (`codex exec --json`; inside our sandbox with its own off, since its bubblewrap can't nest; bare, in its own read-only or workspace-write sandbox; usage read from its session rollout at turn end), open (`hive open-agent`: any OpenAI-compatible endpoint; [models.md](models.md)), fake (scripted). |
 | `internal/proc` | Detached processes; liveness by pid + start time, and a zombie is dead, though stopping one still signals its group. |
 | `internal/agentcli` | `hive agent <op>`: what agents call from inside the sandbox. |
 | `internal/fakeagent` | `hive fake-agent`: scripted agent for tests and dry runs (FAKE:* keywords). |
 | `internal/openagent` | `hive open-agent`: the open harness's agent loop over an OpenAI-compatible chat endpoint (Ollama, OpenRouter), with shell and file tools, writing Claude's stream-json. |
-| `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb` (notes, the record filed from the journal, search), `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates, the tick list), `runner` (modules that carry a program), `release` (self-update, self-release), `tools` (runtimes agents install for themselves), `feedback` (what agents tell the person about the Hive; [feedback.md](feedback.md)), `models` (the lead's route and trial ops, trials' records; [models.md](models.md)), `report` (opt-in failure reports to the developer, scrubbed; [report.md](report.md)). |
+| `internal/mod/*` | Default modules: `agents` (prompts, spawner), `chat`, `work` (ask → merge), `improve` (measure, keep/revert, sweep), `kb` (notes, the record filed from the journal, search), `system` (schedules, wake-ups), `risk` (requests past the sandbox → warden, tribunal or person), `projects`, `modules` (registry, installs, updates, the tick list), `runner` (modules that carry a program), `release` (self-update, self-release), `tools` (runtimes agents install for themselves), `feedback` (what agents tell the person about the Hive; [feedback.md](feedback.md)), `models` (the lead's route and trial ops, trials' records; [models.md](models.md)), `report` (opt-in failure reports to the developer, scrubbed; [report.md](report.md)), `stats` (the dashboard's spend, recent activity and all-time totals, a running tally of the journal). |
 | `internal/app` | Wires core + modules; the tick loop steps the core, then each module the registry lists. |
 | `internal/daemon` | `hive daemon`, control API (127.0.0.1, bearer token in `.hive/private/daemon.json`, 0600). |
 | `internal/api` | API types + client. |
@@ -90,6 +90,7 @@ The program can be in any language. The daemon starts it from the module's folde
 - Files the sandbox can write are read with `SafeRead` (no symlinks, same-file check); the host decides what to kill/clean from its own records.
 - Nothing an agent requests runs outside the sandbox, except a script a warden or tribunal approved, run by the risk module in the daemon as exactly that digest-pinned script text (the pin covers the text, not files it calls); what is always the person's goes to the person (see [risk.md](risk.md)).
 - Every state change is a journal event; restart = replay + reconcile; issue/PR/run creation is idempotent.
+- One daemon per workspace: `hive daemon` takes an exclusive lock on `.hive/private/daemon.lock` (flock; LockFileEx on Windows) before it touches anything, and a second one exits at once naming the pid, start and starter written there (`daemon.AlreadyRunning`), whatever started it. An update's restart (`--wait-for`) waits up to 20s for the daemon it replaces to let go; a hand-off to systemd or to a renamed binary lets go first.
 
 ## Left alone on a shared machine
 
@@ -109,4 +110,4 @@ Outer (`sandbox-exec`, host side): egress proxy on a unix socket in `/dev/shm`, 
 
 - Risk module: tiers route a step to the worker, a warden, a tribunal or the person; approved scripts run in the daemon after a digest and ceiling check ([risk.md](risk.md)).
 - macOS Seatbelt profile untested.
-- Codex adapter: not yet run live with a real Codex login.
+- Codex adapter: not yet run live with a real Codex login (the fake path, `hive fake-codex`, runs in e2e).

@@ -65,7 +65,7 @@ func TestAskAboutTheHive(t *testing.T) {
 // three-seat tribunal from its modules, without guessing.
 func TestLiveAskAboutTheHive(t *testing.T) {
 	if os.Getenv("HIVE_E2E_HARNESS") == "" {
-		t.Skip("set HIVE_E2E_HARNESS=claude to run real agents")
+		t.Skip("set HIVE_E2E_HARNESS=claude (or codex) to run real agents")
 	}
 	h := start(t)
 	answer := askAboutTheHive(t, h, 10*minute)
