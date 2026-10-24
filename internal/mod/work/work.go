@@ -820,8 +820,7 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 // change to the checkout's reflog, read without running git there. Once the
 // worker has finished and been sent back, its next finish lands instead.
 func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
-	best, scored := m.bestScore(p.Name)
-	if !scored || t.From == "hive" || t.NoBank != "" || t.Round > 0 || t.Conflicts > 0 { // the Hive's own setup brief keeps its done line (doneFor)
+	if _, scored := m.bestScore(p.Name); !scored || t.From == "hive" || t.NoBank != "" || t.Round > 0 || t.Conflicts > 0 { // the Hive's own setup brief keeps its done line (doneFor)
 		return nil
 	}
 	sc := m.C.Effects.Config(p, "HEAD").Score
@@ -862,7 +861,12 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	t.Tried = sha
 	// main is measured after a merge, so the last checkpoint's own score
 	// counts until then; once measured, the kept best says what it was worth.
-	if n := len(t.Banks); n > 0 && !m.measured(p.Name, t.Banks[n-1].MergeSHA) {
+	// The kept best is read after asking, so a measurement landing in between
+	// is in it (read before, a stale best let a commit no better than the
+	// last checkpoint merge as one more).
+	unmeasured := len(t.Banks) > 0 && !m.measured(p.Name, t.Banks[len(t.Banks)-1].MergeSHA)
+	best, _ := m.bestScore(p.Name)
+	if unmeasured {
 		if c, ok := m.C.Effects.GetCheck(p.Name, t.Base, "score"); ok && c.Score != nil {
 			best = sc.Best(best, *c.Score)
 		}
