@@ -253,8 +253,8 @@ func TestControlCenterInTmux(t *testing.T) {
 	x.keys("Enter")
 	x.wait(20*time.Second, "Where should the Hive live? ["+ws.Root+"]")
 	x.keys("Enter")
-	// Then the failure-report question, whose Enter is no.
-	x.wait(20*time.Second, "Send failure reports to the Hive developer")
+	// The share opt-in: Enter is no, and nothing is sent.
+	x.wait(20*time.Second, "Send failure reports")
 	x.keys("Enter")
 	s = x.until(time.Minute, "the sandbox or repository prompt", func(s string) bool {
 		return strings.Contains(s, "Type `bare`") || strings.Contains(s, "GitHub repository")
@@ -262,6 +262,9 @@ func TestControlCenterInTmux(t *testing.T) {
 	// The folder exists now and the daemon isn't up: point it at the fake
 	// harness, as a person's own settings would point it at Claude Code.
 	cfg := ws.LoadConfig()
+	if cfg.Share != "off" {
+		t.Fatalf("Enter at the share opt-in left share at %q, not off", cfg.Share)
+	}
 	cfg.Harness = "fake"
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
 	for k := range cfg.Schedules {
