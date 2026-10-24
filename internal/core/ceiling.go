@@ -45,7 +45,7 @@ var AlwaysPerson = map[string]string{
 var alwaysPersonRe = map[string]*regexp.Regexp{
 	"money":      regexp.MustCompile(`(?i)\b(pay|payments?|purchases?|buy|spend|charges?|subscribe|subscriptions?|invoices?|billing|credit card|stripe|usd|eur|dollars?)\b|\$\s?\d+(\.\d\d|,\d{3})|\$\d{2,}`), // not $1: a shell's positional parameter
 	"credential": regexp.MustCompile(`(?i)\b(api[ -]?keys?|tokens?|secrets?|credentials?|passwords?|ssh[ -]?keys?|ssh-keygen|oauth|rotate|mint|private keys?|keychain|gh auth)\b|\.ssh/|\.netrc|\.git-credentials|\.config/gh\b|\.aws/|\.docker/config|\.kube/config|\.gnupg|\.npmrc|\.pypirc`),
-	"open":       regexp.MustCompile(`(?i)\b(open (a |the )?port|listen on|0\.0\.0\.0|expose|port[ -]?forward|firewall|ufw|iptables|nft|public url|tunnel|ngrok|cloudflared|inbound)\b`),
+	"open":       regexp.MustCompile(`(?i)\b(open (a |the )?port|listen on|0\.0\.0\.0|expose|port[ -]?forward|firewall|ufw|iptables|nft|public url|tunnel|ngrok|cloudflared|inbound|egress grant|egress\.local)\b`),
 	"outward":    regexp.MustCompile(`(?i)\b(send (an? )?(e-?mail|mail|message|sms|text|dm)|email to|sendmail|tweet|post (to|on|as)|publish (as|in my name)|on my behalf|in my name)\b`),
 }
 
