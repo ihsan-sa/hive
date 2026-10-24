@@ -9,11 +9,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
+	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
 // Workspace is the folder on disk: .hive (core state), .modules, projects.
@@ -93,6 +95,8 @@ type Config struct {
 	// StallFloorSeconds: nothing counts as stalled before this long without moving,
 	// however fast its stage usually is here; 0 is the default (20 minutes).
 	StallFloorSeconds int `json:"stall_floor_seconds,omitempty"`
+	// ShareBundleURL is where `hive share` sends its bundle; empty is the developer's endpoint.
+	ShareBundleURL string `json:"share_bundle_url,omitempty"`
 }
 
 // ProjectSettings override workspace defaults per project.
@@ -137,10 +141,32 @@ func (t TribunalSeat) MarshalJSON() ([]byte, error) {
 }
 
 // Egress is the hosts runs may reach: Default for every run, and a role's own
-// list in place of it. A run's harness API hosts are added to any list.
+// list in place of it. A run's harness API hosts are added to any list. Local
+// is the services on this machine the person opened to every sandboxed run,
+// one loopback host:port each ("127.0.0.1:11434"); nothing local is reachable
+// otherwise.
 type Egress struct {
 	Default []string            `json:"default,omitempty"`
 	Roles   map[string][]string `json:"roles,omitempty"` // warden, tribunal, worker, lead, ...
+	Local   []string            `json:"local,omitempty"`
+}
+
+// LocalAddrs is the loopback ip:port the Local grants open, skipping any
+// entry Check refuses.
+func (e Egress) LocalAddrs() []string {
+	var out []string
+	for _, l := range e.Local {
+		a, err := sandbox.LocalGrant(l)
+		if err != nil {
+			continue
+		}
+		for _, x := range a {
+			if !slices.Contains(out, x) {
+				out = append(out, x)
+			}
+		}
+	}
+	return out
 }
 
 // For is a copy of role's list: the role's own when its key is set, even to
@@ -158,6 +184,11 @@ func (c Config) Check() error {
 	for _, f := range c.Floor {
 		if _, err := path.Match(f, ""); strings.ContainsAny(f, "*?[") && err != nil {
 			return fmt.Errorf("floor entry %q isn't a glob the Hive can match: %v", f, err)
+		}
+	}
+	for _, l := range c.Egress.Local {
+		if _, err := sandbox.LocalGrant(l); err != nil {
+			return err
 		}
 	}
 	for _, t := range c.TribunalModels {
