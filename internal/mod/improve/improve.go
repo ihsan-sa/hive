@@ -4,9 +4,12 @@
 package improve
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -52,6 +55,8 @@ type Module struct {
 
 	// OnKept is called after a merge is measured and kept.
 	OnKept func(project, sha string)
+	// Feedback lists agents' open feedback for the projects mine admits.
+	Feedback func(mine func(project string) bool) string
 
 	mu       sync.Mutex
 	scores   map[string][]Measurement
@@ -245,7 +250,8 @@ func (m *Module) baseline(p core.Project) {
 func (m *Module) noStart(p core.Project, ms Measurement) {
 	m.record(ms)
 	note := strings.TrimPrefix(ms.Note, "start: ")
-	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "baseline", "project": p.Name, "text": "the start of " + p.Name + " has no number yet: " + core.Clip(note, 200) + "; measuring again in 10 minutes"})
+	text, key := baselineAlert(p.Name, ms.TestsOK, note)
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "baseline", "project": p.Name, "key": key, "text": text})
 	n := 0
 	for _, x := range m.Scores(p.Name) {
 		if x.SHA == ms.SHA && !x.Kept && x.Task == "" {
@@ -410,7 +416,7 @@ func (m *Module) StartSweep(force bool) (Sweep, error) {
 func (m *Module) anythingNew(since int64) bool {
 	for _, e := range m.C.J.Since(since) {
 		switch e.Kind {
-		case "score.measured", "task.saved", "run.turn_ended", "chat.posted":
+		case "score.measured", "task.saved", "run.turn_ended", "chat.posted", "feedback.saved":
 			return true
 		}
 	}
@@ -518,6 +524,11 @@ func (m *Module) Digest(since int64, only string) string {
 			fmt.Fprintf(&b, "### %s %s\n%s\n\n", r.Role, r.ID, core.Clip(string(notes), 1500))
 		}
 	}
+	if m.Feedback != nil {
+		if fb := m.Feedback(mine); fb != "" {
+			b.WriteString("## Agents' feedback on the Hive, still open\n\n" + fb + "\n")
+		}
+	}
 	b.WriteString("## Recent chat\n\n")
 	for _, ch := range m.Chat.Chats() {
 		if !mine(ch.Project) {
@@ -532,4 +543,60 @@ func (m *Module) Digest(since int64, only string) string {
 		}
 	}
 	return b.String()
+}
+
+// baselineAlert gives the text and dedup key of a start with no number. A
+// missing program is keyed on its plain-words cause; any other failure on the
+// whole note (the clipped, one-line check output) with digits blanked, so a
+// repeat with fresh timings refreshes one alert while a different failure is a
+// new one, even under a long fixed header like pytest's session banner.
+func baselineAlert(project string, testsOK bool, note string) (text, key string) {
+	kind := "test"
+	if testsOK {
+		kind = "score"
+	}
+	if why := MissingTool(project, kind, note); why != "" {
+		return why + " Measuring again in 10 minutes.", why
+	}
+	return "the start of " + project + " has no number yet: " + core.Clip(note, 200) + "; measuring again in 10 minutes", kind + ": " + failureCause(note)
+}
+
+var digits = regexp.MustCompile(`\d+`)
+
+// failureCause is a short digest of a failure note with runs of digits
+// blanked, so timings and counts don't make a new cause.
+func failureCause(note string) string {
+	sum := sha256.Sum256([]byte(digits.ReplaceAllString(strings.Join(strings.Fields(note), " "), "#")))
+	return hex.EncodeToString(sum[:8])
+}
+
+// notFound matches the shell's program-not-found lines (dash "sh: 1: X: not
+// found", bash "bash: line 1: X: command not found") and the line Hive's own
+// guard prints when a program lookup finds nothing.
+var notFound = regexp.MustCompile(`(?m)(?:^|\s)(?:\S*/)?(?:ba|da)?sh: (?:line )?(?:\d+: )?([^\s:]+): (?:command )?not found|hive: missing program: ([^\n]+)`)
+
+// MissingTool says in plain words which program the test or score command
+// (kind) could not start, and how to get it, or "" when the output shows no
+// such failure. A name starting with "-" means the command began with an empty
+// program.
+func MissingTool(project, kind, out string) string {
+	m := notFound.FindStringSubmatch(out)
+	if m == nil {
+		return ""
+	}
+	so := "so " + project + "'s tests can't run"
+	if kind == "score" {
+		so = "so " + project + "'s score can't be measured"
+	}
+	if tool := m[1] + m[2]; !strings.HasPrefix(tool, "-") {
+		return tool + " isn't installed, " + so + ". " + getIt(tool)
+	}
+	return "the " + kind + " command for " + project + " started with no program (an interpreter variable came out empty, so the interpreter it looks for isn't installed), " + so + ". " + getIt("the interpreter it needs")
+}
+
+// getIt says how the person gets a missing program onto the machine: install
+// it themselves, or ask the lead, whose agent may be able to install it into
+// the Hive's own tools or ask a warden to run the install.
+func getIt(tool string) string {
+	return "Install " + tool + " on this machine, or ask the lead in chat: an agent may be able to install it for the Hive's checks, or ask a warden to run the install for you."
 }

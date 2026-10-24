@@ -64,6 +64,29 @@ func TestRestartRunsNewBinary(t *testing.T) {
 	}
 }
 
+// Five identical failures are one alert with a count; a different one is a
+// second alert. A repeat with fresh output refreshes the text and moves to the
+// newest place, and the same failure on another project is its own alert.
+func TestAlertsDedup(t *testing.T) {
+	s := &server{}
+	raise := func(project, key, text string) {
+		raw, _ := json.Marshal(map[string]string{"kind": "baseline", "project": project, "key": key, "text": text})
+		s.onEvent(core.Event{Kind: "alert.raised", At: time.Now(), Data: raw})
+	}
+	for i := 0; i < 5; i++ {
+		raise("p", "python3 isn't installed", "python3 isn't installed")
+	}
+	raise("p", "git isn't installed", "git isn't installed")
+	if len(s.alerts) != 2 || s.alerts[0].Count != 5 || s.alerts[1].Count != 1 {
+		t.Fatalf("alerts: %+v", s.alerts)
+	}
+	raise("p", "python3 isn't installed", "python3 isn't installed, run 6")
+	raise("q", "python3 isn't installed", "python3 isn't installed")
+	if len(s.alerts) != 3 || s.alerts[1].Count != 6 || s.alerts[1].Text != "python3 isn't installed, run 6" || s.alerts[2].Count != 1 {
+		t.Fatalf("refresh and per project: %+v", s.alerts)
+	}
+}
+
 // A command run while a restart hands over waits for the new daemon instead of
 // starting one of its own, which would run two daemons on one workspace.
 func TestStartWaitsOutAHandOff(t *testing.T) {
@@ -183,5 +206,59 @@ func TestStateCarriesADiffPreview(t *testing.T) {
 	var got core.Ask
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Diff != diff {
 		t.Fatalf("%d: /api/waiting should return the whole %d-byte diff, got %d (%v)", rec.Code, len(diff), len(got.Diff), err)
+	}
+}
+
+// The person passes an agent's feedback to the lead: it lands in the lead's
+// chat as the person's message quoting it, the item is marked passed, and a
+// second pass is refused rather than posted twice.
+func TestPassFeedbackToTheLead(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ws.LoadConfig()
+	cfg.Harness = "fake"
+	if err := ws.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	a, err := app.New(ws, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	it, err := a.Feedback.Add(core.Run{RunSpec: core.RunSpec{ID: "w-1", Role: "worker"}}, "kb", "search missed my note")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &server{a: a, info: api.DaemonInfo{Token: "t"}}
+	do := func(what string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/feedback", strings.NewReader(fmt.Sprintf(`{"id": %q, "do": %q}`, it.ID, what)))
+		req.Header.Set("Authorization", "Bearer t")
+		rec := httptest.NewRecorder()
+		s.routes().ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := do("pass"); rec.Code != http.StatusOK {
+		t.Fatalf("pass: %d %s", rec.Code, rec.Body)
+	}
+	msgs := a.Chat.Messages("lead")
+	if len(msgs) != 1 || msgs[0].From != "person" || !strings.Contains(msgs[0].Text, "> search missed my note") {
+		t.Fatalf("the lead's chat after a pass: %+v", msgs)
+	}
+	if got, _ := a.Feedback.Get(it.ID); got.Status != "passed" {
+		t.Fatalf("item after a pass: %+v", got)
+	}
+	if rec := do("pass"); rec.Code == http.StatusOK || len(a.Chat.Messages("lead")) != 1 {
+		t.Fatalf("a second pass went through: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do("close"); rec.Code != http.StatusOK {
+		t.Fatalf("close: %d %s", rec.Code, rec.Body)
+	}
+	if st := s.state(); len(st.Feedback) != 1 || st.Feedback[0].Status != "closed" {
+		t.Fatalf("state's feedback: %+v", st.Feedback)
+	}
+	if rec := do("delete"); rec.Code == http.StatusOK {
+		t.Fatal("an unknown action was accepted")
 	}
 }
