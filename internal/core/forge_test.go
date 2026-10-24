@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,20 @@ func TestLocalForkOwner(t *testing.T) {
 		if err != nil || fork != want || !Exists(l.RepoPath(fork)) {
 			t.Errorf("Fork(me/p, %q) = %q, %v", owner, fork, err)
 		}
+	}
+}
+
+// TagCommit asks for the full ref, which GitHub peels to the commit; the
+// short commits/tags/<tag> form is a 422 there.
+func TestGitHubTagCommitPath(t *testing.T) {
+	calls := stubGH(t, func([]string) (string, string, error) { return "e156455", "", nil })
+	sha, err := GitHub{}.TagCommit("o/r", "v1.2.3")
+	if err != nil || sha != "e156455" {
+		t.Fatalf("%q %v", sha, err)
+	}
+	want := []string{"api", "repos/o/r/commits/refs/tags/v1.2.3", "-q", ".sha"}
+	if got := (*calls)[len(*calls)-1]; !slices.Equal(got, want) {
+		t.Fatalf("gh %q, want %q", got, want)
 	}
 }
 
