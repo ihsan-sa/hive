@@ -171,7 +171,11 @@ func loop(ctx context.Context, j *core.Journal, tick func()) {
 			woken = 0
 		case <-early:
 			woken++
-			time.Sleep(wakeGap)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wakeGap):
+			}
 		}
 	}
 }
