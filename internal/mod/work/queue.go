@@ -38,11 +38,12 @@ import (
 // worker that has started.
 //
 // A brief that only changes module prompts (every path it names is a .md
-// file under modules/) is quick: it goes first in line, after those the lead
-// started now, and may start past the pace while no other quick brief is
-// working, since a prompt edit takes a worker little time and plan. It still
-// waits on a brief on the same prompt, on a strained machine and on a plan
-// near its end.
+// file in a module's folder) is quick: it goes first in line, after those the
+// lead started now, and may start past the pace while no other quick brief is
+// working, quiet or not, since a prompt edit takes a worker little time and
+// plan. It still waits on a brief on the same prompt, on a strained machine,
+// on a plan near its end or ahead of its window, and on a max_workers the
+// person set: that ceiling is theirs, only the pace is the Hive's to pass.
 //
 // A worker that has gone quiet (it keeps ending turns without finishing)
 // counts toward neither max_workers nor any brief's wait until it resumes.
@@ -76,29 +77,48 @@ func (m *Module) inLine(q []Task) {
 }
 
 // quick reports whether t's brief only changes module prompts: it names at
-// least one path, and every path-like word in it is a .md file under modules/
-// (one that doesn't exist yet counts) or a merge=union file in the clone. A
-// package, a directory, a code file or a file still to be made, named
-// alongside a prompt, makes it an ordinary brief.
+// least one path, and every path-like word in it is a .md file in a module's
+// folder (modules/<name>/ holding a module.json in the clone; a prompt that
+// doesn't exist yet counts) or a merge=union file in the clone. A package, a
+// directory, a code file or a file still to be made, named alongside a
+// prompt, makes it an ordinary brief, and so does a .md under a modules/ that
+// holds no modules: in another project it may be ordinary code.
 func (m *Module) quick(t Task) bool {
 	m.areas(t) // clones the project when no worker has yet
 	text := t.Title + "\n" + t.Done + "\n" + t.Known
 	root := m.C.WS.Project(t.Project)
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	// file says whether p is a file in the clone, resolved inside it as
+	// areas resolves, so a symlink can't test what exists on the machine.
+	file := func(p string) bool {
+		real, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(p)))
+		if err != nil || !inside(realRoot, real) {
+			return false
+		}
+		fi, err := os.Stat(real)
+		return err == nil && !fi.IsDir()
+	}
 	var union []attrRule
 	read, n := false, 0
 	for _, p := range pathLike.FindAllString(text, -1) {
 		p = path.Clean(strings.TrimRight(strings.TrimPrefix(p, "./"), "."))
+		parts := strings.Split(p, "/")
 		switch {
 		case p == ".." || strings.HasPrefix(p, "../"): // never looked up outside the clone
 			return false
-		case strings.HasPrefix(p, "modules/") && path.Ext(p) == ".md":
+		case len(parts) >= 3 && parts[0] == "modules" && path.Ext(p) == ".md":
+			if !file(path.Join("modules", parts[1], "module.json")) {
+				return false
+			}
 			n++
 		default:
 			if !read {
 				union, read = unionRules(root), true
 			}
-			fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p)))
-			if err != nil || fi.IsDir() || !isUnion(union, p) {
+			if !file(p) || !isUnion(union, p) {
 				return false
 			}
 		}
@@ -111,7 +131,7 @@ func (m *Module) quick(t Task) bool {
 func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]string) {
 	cfg := m.C.WS.LoadConfig()
 	working, quickWorking := 0, 0
-	var ahead, line []Task         // ahead: being worked on, or earlier in line
+	var ahead, line, quiet []Task  // ahead: being worked on, or earlier in line
 	starting := map[string]bool{}  // queued ones whose worker is being started right now
 	workingBy := map[string]bool{} // the workers of working tasks
 	m.mu.Lock()
@@ -128,6 +148,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			// message resumes it (core.Runs), and then it counts again,
 			// even if that puts the workers past the limit (by as many as
 			// resume at once) until slots free; none start meanwhile.
+			quiet = append(quiet, t)
 		case t.Stage == StageWorking || t.Queued(): // or a queued one being started right now
 			ahead = append(ahead, t)
 			working++
@@ -149,7 +170,9 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		}
 	}
 	m.mu.Unlock()
-	for _, t := range ahead { // areas takes m.mu
+	// A quiet quick worker still counts as the one quick brief past the
+	// pace: one stuck on a prompt doesn't let another quick one past.
+	for _, t := range append(slices.Clone(ahead), quiet...) { // areas takes m.mu
 		if m.quick(t) {
 			quickWorking++
 		}
@@ -189,7 +212,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				}
 				wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s%s%s", o.Label(), o.ID, verb, bothTouch, area)
 				continue // one that waits on another holds no one back, so waits never chain
-			case working >= limit && (!quick || quickWorking > 0 || !plan()):
+			case working >= limit && (!quick || quickWorking > 0 || !plan() || cfg.MaxWorkers > 0 && working >= cfg.MaxWorkers):
 				wait[t.ID], capped = full, true
 			case strain != "":
 				wait[t.ID] = "waiting: " + strain

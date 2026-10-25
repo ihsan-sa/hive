@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
 // queueRig is helperRig with a few source files on main, so briefs can name
@@ -18,7 +19,7 @@ func queueRig(t *testing.T) *Module {
 	m, forge, _ := helperRig(t)
 	seed := filepath.Join(t.TempDir(), "seed")
 	mustGit(t, "", "clone", "-q", forge.RepoPath("me/p"), seed)
-	for _, f := range []string{"internal/core/effects.go", "internal/core/runs.go", "internal/tui/views.go", "docs/log.md", "docs/notes/plan.md", "modules/agents/worker.md", "modules/kb/filer.md"} {
+	for _, f := range []string{"internal/core/effects.go", "internal/core/runs.go", "internal/tui/views.go", "docs/log.md", "docs/notes/plan.md", "modules/agents/worker.md", "modules/agents/module.json", "modules/kb/filer.md", "modules/kb/module.json", "modules/notes/README.md"} {
 		os.MkdirAll(filepath.Join(seed, filepath.Dir(f)), 0o755)
 		os.WriteFile(filepath.Join(seed, f), []byte("package x\n"), 0o644)
 	}
@@ -174,6 +175,8 @@ func TestQueueQuickPromptBriefs(t *testing.T) {
 		"modules/agents/lead.md, and a new internal/core/pace.go.":   false,
 		"modules/agents/../../x/y.md":                                false,
 		"A new modules/agents/scout.md, logged in docs/log.md.":      true,
+		"modules/notes/README.md, a folder that holds no module.":    false,
+		"A new modules/other/x.md, in no module's folder.":           false,
 	} {
 		if got := m.quick(Task{Project: "p", Known: known}); got != want {
 			t.Errorf("quick(%q) = %v, want %v", known, got, want)
@@ -191,20 +194,50 @@ func TestQueueQuickPromptBriefs(t *testing.T) {
 		task.Stage = StageWorking
 		m.save(task, "")
 	}
+	// A max_workers the person set is their ceiling: a quick brief waits at it.
 	start, wait := m.admit(m.List(nil))
+	if start[p1.ID] || !strings.Contains(wait[p1.ID], "max_workers 2") {
+		t.Fatalf("the prompt brief went past the person's max_workers: %q", wait[p1.ID])
+	}
+	// With none set, it goes past the pace.
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 1e6 // watched, never strained
+	m.C.WS.SaveConfig(cfg)
+	m.workers = pace{limit: 2, start: defaultWorkers, at: time.Now(), why: "the start"}
+	start, wait = m.admit(m.List(nil))
 	if !start[p1.ID] {
-		t.Fatalf("the prompt brief waits past a full cap: %q", wait[p1.ID])
+		t.Fatalf("the prompt brief waits past a full pace: %q", wait[p1.ID])
 	}
 	for _, task := range []Task{p2, c} {
-		if !strings.Contains(wait[task.ID], "max_workers 2") {
+		if !strings.Contains(wait[task.ID], "pace 2") {
 			t.Fatalf("%q: %q, want waiting for a worker", task.Title, wait[task.ID])
 		}
 	}
+	// It still waits on a strained machine and on a plan near its end.
+	cfg.MemFloorMB = 1 << 40
+	m.C.WS.SaveConfig(cfg)
+	if start, wait = m.admit(m.List(nil)); start[p1.ID] || !strings.HasPrefix(wait[p1.ID], "waiting: ") {
+		t.Fatalf("the prompt brief started on a strained machine: %q", wait[p1.ID])
+	}
+	cfg.MemFloorMB = 0
+	m.C.WS.SaveConfig(cfg)
+	pick := cfg.Route("worker", "")[0]
+	plan := func(u float64) {
+		reset := time.Now().Add(time.Hour)
+		m.C.J.MustAppend("plan.usage", core.Plan{Harness: pick.Harness, Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour",
+			Windows: map[string]harness.Window{"five_hour": {Utilization: u, ResetsAt: reset}}}})
+	}
+	plan(0.95)
+	if start, wait = m.admit(m.List(nil)); start[p1.ID] || !strings.Contains(wait[p1.ID], "pace 2") {
+		t.Fatalf("the prompt brief started on a spent plan: %q", wait[p1.ID])
+	}
+	plan(0.1)
 	// A quick worker on: the next quick brief waits for a slot like any other.
 	p1.Stage = StageWorking
 	m.save(&p1, "")
-	if start, wait = m.admit(m.List(nil)); start[p2.ID] || !strings.Contains(wait[p2.ID], "max_workers 2") {
-		t.Fatalf("a second quick brief went past the cap: %q", wait[p2.ID])
+	if start, wait = m.admit(m.List(nil)); start[p2.ID] || !strings.Contains(wait[p2.ID], "pace 2") {
+		t.Fatalf("a second quick brief went past the pace: %q", wait[p2.ID])
 	}
 	// The mixed brief names p1's prompt: it waits on p1 even with a slot free.
 	if !strings.Contains(wait[mixed.ID], p1.ID) {
@@ -214,6 +247,18 @@ func TestQueueQuickPromptBriefs(t *testing.T) {
 	m.save(&a, "landed")
 	if _, wait = m.admit(m.List(nil)); !strings.Contains(wait[mixed.ID], p1.ID) {
 		t.Fatalf("mixed: %q", wait[mixed.ID])
+	}
+	// A quick worker gone quiet frees its slot, and the pace has room for
+	// p2; at a full pace it still keeps p2 from going past.
+	if _, err := m.C.Runs.Start(core.RunSpec{ID: "wp1", Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	p1.Worker = "wp1"
+	m.save(&p1, "")
+	m.C.Runs.SetStatus("wp1", core.StatusQuiet, "keeps ending turns without finishing")
+	m.workers = pace{limit: 1, start: defaultWorkers, at: time.Now(), why: "the start"}
+	if start, wait = m.admit(m.List(nil)); start[p2.ID] || !strings.Contains(wait[p2.ID], "pace 1") {
+		t.Fatalf("a second quick brief went past the pace beside a quiet one: %q", wait[p2.ID])
 	}
 }
 
