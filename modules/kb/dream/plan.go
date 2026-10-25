@@ -161,7 +161,9 @@ func merge(notes map[string]*Note, day string) []Merge {
 		if key == "" {
 			key = suffixRe.ReplaceAllString(n.name(), "")
 		}
-		groups[key] = append(groups[key], n)
+		// Only one project's notes merge: one title in two projects may be
+		// two different things.
+		groups[n.get("project")+"\x00"+key] = append(groups[n.get("project")+"\x00"+key], n)
 	}
 	var keys []string
 	for k, g := range groups {
@@ -202,7 +204,8 @@ func merge(notes map[string]*Note, day string) []Merge {
 		}
 		into := living
 		if into == nil {
-			into = notes[key+".md"]
+			_, base, _ := strings.Cut(key, "\x00")
+			into = notes[base+".md"]
 			if into == nil || !contains(g, into) {
 				into = fresh[0]
 			}

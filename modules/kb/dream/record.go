@@ -178,3 +178,21 @@ func (s *State) taskOf(run, title string) (string, *Task) {
 	}
 	return id, best
 }
+
+// chatProject is the project a chat belongs to: none for the lead's, the
+// project's own, or an agent chat's run's. A chat whose project can't be
+// worked out (a run it never saw created, a kind it doesn't know) is not
+// known, and a caller keeping hidden projects out leaves it out.
+func (s *State) chatProject(chat string) (string, bool) {
+	switch {
+	case chat == "lead":
+		return "", true
+	case strings.HasPrefix(chat, "project:"):
+		return strings.TrimPrefix(chat, "project:"), true
+	case strings.HasPrefix(chat, "agent:"):
+		if r := s.Runs[strings.TrimPrefix(chat, "agent:")]; r != nil && r.Project != "" {
+			return r.Project, true
+		}
+	}
+	return "", false
+}

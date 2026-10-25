@@ -80,7 +80,7 @@ func digest(in Input, p Pass, notes map[string]*Note, hidden map[string]bool, da
 	}
 	var said []string
 	for _, s := range st.Said {
-		if after(s.At) && !hidden[strings.TrimPrefix(s.Chat, "project:")] {
+		if p, ok := st.chatProject(s.Chat); after(s.At) && ok && !hidden[p] {
 			said = append(said, "- "+s.At.UTC().Format("Jan 2 15:04")+" in "+s.Chat+": “"+clip(s.Text, 160)+"”")
 		}
 	}

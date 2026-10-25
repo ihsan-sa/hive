@@ -91,6 +91,10 @@ func record(t *testing.T) *State {
 	ev(7, at.Add(2*time.Hour), "gate.judged", map[string]any{"project": "hive", "outcome": "rollback", "head": "fe55aed96bfb", "reason": "not better than the current Hive: nothing moved beyond the noise"})
 	ev(8, at.Add(2*time.Hour), "chat.posted", map[string]any{"chat": "lead", "from": "person", "text": "the kb should dream"})
 	ev(9, at, "task.saved", map[string]any{"id": "t-secret", "title": "Secret thing", "project": "vault", "stage": "merged"})
+	ev(9, at, "run.created", map[string]any{"id": "w-secret", "task": "t-secret", "project": "vault"})
+	ev(9, at.Add(2*time.Hour), "chat.posted", map[string]any{"chat": "agent:w-secret", "from": "person", "text": "the vault password is hunter2"})
+	ev(9, at.Add(2*time.Hour), "chat.posted", map[string]any{"chat": "agent:w-unknown", "from": "person", "text": "a run never seen created"})
+	ev(9, at.Add(2*time.Hour), "chat.posted", map[string]any{"chat": "agent:w-banner", "from": "person", "text": "the banner looks right"})
 	ev(10, t0, "module.scheduled", map[string]any{"module": "kb", "job": "kb.dream"})
 	if st.fold(Event{Seq: 11, At: t0, Kind: "module.scheduled", Data: json.RawMessage(`{"module":"other","job":"kb.dream"}`)}, "kb") != "" {
 		t.Fatal("another module's schedule read as this one's")
@@ -225,8 +229,11 @@ func TestDistilAndDigest(t *testing.T) {
 			t.Errorf("digest lacks %q:\n%s", want, d)
 		}
 	}
+	if !strings.Contains(d, "the banner looks right") || strings.Contains(d, "never seen created") {
+		t.Errorf("agent chat lines: want the shared run's, not the unknown run's:\n%s", d)
+	}
 	for _, n := range after {
-		if strings.Contains(n.Text, "Secret thing") || strings.Contains(n.Text, "vault") {
+		if strings.Contains(n.Text, "Secret thing") || strings.Contains(n.Text, "vault") || strings.Contains(n.Text, "hunter2") {
 			t.Errorf("%s names the isolated project", n.Path)
 		}
 	}
@@ -268,5 +275,16 @@ func TestManifestNamesEveryFile(t *testing.T) {
 	}
 	if m.Schedule["kb.dream"] == "" || !slices.Contains(m.Hooks, "kb") {
 		t.Errorf("manifest lacks the kb.dream schedule or the kb hook: %+v", m)
+	}
+}
+
+// One title in two projects stays two notes.
+func TestMergeKeepsProjectsApart(t *testing.T) {
+	notes := []Shared{
+		{Path: "flaky-test.md", Text: "---\ntitle: Flaky test\nproject: hive\ndate: 2026-10-24\n---\n\nhive's flake\n"},
+		{Path: "flaky-test-2.md", Text: "---\ntitle: Flaky test\nproject: deck\ndate: 2026-10-24\n---\n\ndeck's flake\n"},
+	}
+	if p := plan(t, notes, newState()); len(p.Merged) != 0 {
+		t.Fatalf("merged across projects: %+v", p.Merged)
 	}
 }
