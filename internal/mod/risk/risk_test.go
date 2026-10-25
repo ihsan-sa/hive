@@ -710,6 +710,9 @@ func TestInstallRefusesSandboxPath(t *testing.T) {
 // warden does, its answer reaches the ask's handler as the person's would,
 // and the person is told after.
 func TestAutonomyDecidesProtectedChanges(t *testing.T) {
+	// The module's source is a temporary repository, wherever TMPDIR is.
+	defer func(r []string) { SandboxRoots = r }(SandboxRoots)
+	SandboxRoots = nil
 	src := t.TempDir()
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "v1"}, {"tag", "v1.0.0"}} {
 		if _, err := core.Git(src, args...); err != nil {
@@ -965,7 +968,7 @@ func TestModuleInstallAskCarriesTheProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.call(lead, "install_module", map[string]string{"url": t.TempDir()}); err != nil {
+	if _, err := g.call(lead, "install_module", map[string]string{"url": "https://example.com/me/tool.git"}); err != nil {
 		t.Fatal(err)
 	}
 	filed := 0
