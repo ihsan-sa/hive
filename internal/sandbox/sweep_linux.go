@@ -33,10 +33,10 @@ func holdRuntime(rt string) (*os.File, error) {
 	return f, nil
 }
 
-// sweepRuntime removes the runtime folders of sandboxes that are gone.
-func sweepRuntime() int {
+// sweepRuntime removes the runtime folders in bases of sandboxes that are gone.
+func sweepRuntime(bases ...string) int {
 	n := 0
-	for _, base := range []string{"/dev/shm", os.TempDir()} {
+	for _, base := range bases {
 		ms, _ := filepath.Glob(filepath.Join(base, "hive-sbx-*"))
 		for _, rt := range ms {
 			if runtimeDead(rt) && os.RemoveAll(rt) == nil {
@@ -47,12 +47,19 @@ func sweepRuntime() int {
 	return n
 }
 
+// runtimeDead says rt is a runtime folder of this user's whose sandbox is
+// gone. Another user's folder in the shared /dev/shm is never this one's to
+// judge, and the lock file is opened without following a symlink: a lock
+// needs no more than a read-only descriptor.
 func runtimeDead(rt string) bool {
 	fi, err := os.Lstat(rt)
 	if err != nil || !fi.IsDir() || time.Since(fi.ModTime()) < runtimeGrace {
 		return false
 	}
-	f, err := os.OpenFile(filepath.Join(rt, runtimeLock), os.O_RDWR, 0)
+	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() {
+		return false
+	}
+	f, err := os.OpenFile(filepath.Join(rt, runtimeLock), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return os.IsNotExist(err) && time.Since(fi.ModTime()) > runtimeStale
 	}

@@ -377,7 +377,7 @@ func Run(cfg Config) (rep Report, err error) {
 				cfg.log("rep %d: %s on %s", rep0+1, name, side.c.Name)
 				start, spent := time.Now(), side.c.Meter.Bytes()
 				r := p(&cfg, side.c)
-				reap(cfg.Out) // a probe's daemons end with it
+				reap(cfg.Out, true) // a probe's daemons end with it
 				r.Probe, r.Rep, r.Seconds = name, rep0+1, time.Since(start).Seconds()
 				if r.Pass && hasMetric(r, "score") { // a benchmark, whatever its name
 					// Cost, counted by the meter, lower is better, and judged
