@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -26,7 +28,62 @@ func GitT(timeout time.Duration, dir string, args ...string) (string, error) {
 }
 
 // GitEnvT is GitT with extra environment, such as the GH_TOKEN for a repo's owner.
+// A git lock older than this belongs to no live git call (the longest the
+// Hive gives one is ten minutes): it was left by a git that died, as when the
+// machine ran out of memory, and is removed so one dead process doesn't stall
+// every later call in the repo (#440).
+const staleGitLock = 20 * time.Minute
+
+var gitLockExists = regexp.MustCompile(`Unable to create '?([^'\n]+\.lock)'?: File exists`)
+
 func GitEnvT(timeout time.Duration, dir string, env []string, args ...string) (string, error) {
+	out, err := gitOnce(timeout, dir, env, args...)
+	if err != nil && clearStaleLock(dir, err.Error()) {
+		out, err = gitOnce(timeout, dir, env, args...)
+	}
+	return out, err
+}
+
+// clearStaleLock removes the lock a failed git call names when it is a plain
+// file inside dir's own .git and older than staleGitLock, and says whether it
+// did. Anything else (a lock elsewhere, a symlink, a fresh lock) is left alone.
+func clearStaleLock(dir, msg string) bool {
+	m := gitLockExists.FindStringSubmatch(msg)
+	if m == nil || dir == "" {
+		return false
+	}
+	gitDir, err := filepath.Abs(filepath.Join(dir, ".git"))
+	if err != nil {
+		return false
+	}
+	if fi, err := os.Lstat(gitDir); err != nil || !fi.IsDir() {
+		return false
+	}
+	lock := m[1]
+	if !filepath.IsAbs(lock) {
+		lock = filepath.Join(dir, lock)
+	}
+	lock = filepath.Clean(lock)
+	if rel, err := filepath.Rel(gitDir, lock); err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	if real, err := filepath.EvalSymlinks(filepath.Dir(lock)); err != nil {
+		return false
+	} else if realGit, err := filepath.EvalSymlinks(gitDir); err != nil || !strings.HasPrefix(real+string(filepath.Separator), realGit+string(filepath.Separator)) {
+		return false
+	}
+	fi, err := os.Lstat(lock)
+	if err != nil || !fi.Mode().IsRegular() || time.Since(fi.ModTime()) < staleGitLock {
+		return false
+	}
+	if os.Remove(lock) != nil {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "hive: removed a stale git lock %s (%s old)\n", lock, time.Since(fi.ModTime()).Round(time.Minute))
+	return true
+}
+
+func gitOnce(timeout time.Duration, dir string, env []string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	full := append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "transfer.fsckObjects=true", "-c", "core.autocrlf=false", "-c", "user.name=Hive", "-c", "user.email=hive@localhost",
