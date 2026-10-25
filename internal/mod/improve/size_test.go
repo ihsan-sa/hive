@@ -2,6 +2,7 @@ package improve
 
 import (
 	"maps"
+	"strings"
 	"testing"
 )
 
@@ -14,8 +15,8 @@ func TestSizeRecordedWithTheScore(t *testing.T) {
 		t.Fatalf("size %v kept %v, want %v and kept", ms.Size, ms.Kept, want)
 	}
 	ms = merge(map[string]string{".hive/project.json": `{"test": "true", "score": {"command": "sh ./score.sh", "direction": "higher"}, "size": "echo core_lines 1; exit 1"}`})
-	if ms.Size != nil || !ms.Kept {
-		t.Fatalf("a failed size command: size %v kept %v, want none and kept", ms.Size, ms.Kept)
+	if ms.Size != nil || !ms.Kept || !strings.Contains(ms.Note, "size not recorded") {
+		t.Fatalf("a failed size command: size %v kept %v note %q, want none, kept and said", ms.Size, ms.Kept, ms.Note)
 	}
 }
 

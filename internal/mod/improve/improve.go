@@ -287,31 +287,46 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 }
 
 // SelfSize is the Hive's own size command, run for a self project whose
-// project.json names none while the script is in its tree.
-const SelfSize = "sh tests/core-size.sh"
+// project.json names none while the script is in its tree. A merge counts
+// lines only (SelfLines): the release build would hold a check slot for a
+// minute on every merge, so the binary is measured at the start, which comes
+// with every daemon start and Hive update.
+const (
+	SelfSize  = "sh tests/core-size.sh"
+	SelfLines = SelfSize + " --lines"
+)
 
 // size runs the project's size command (project.json "size") on sha in a
-// clean checkout and reads each "name value" line it prints. It is nil when
-// there is no command or it fails: a size is shown, never judged.
-func (m *Module) size(p core.Project, sha string) map[string]float64 {
+// clean checkout and reads each "name value" line it prints; full says
+// whether the Hive's own counts its binary too. It is nil when there is no
+// command or it fails: a size is shown, never judged. A command that ran and
+// gave nothing says so in the note, so the record shows sizes stopped.
+func (m *Module) size(p core.Project, sha string, full bool) (map[string]float64, string) {
 	var pc struct{ Size string }
 	json.Unmarshal([]byte(m.C.Effects.ReadFile(p, sha, ".hive/project.json")), &pc)
 	cmd := strings.TrimSpace(pc.Size)
 	if cmd == "" && p.Self && m.C.Effects.ReadFile(p, sha, "tests/core-size.sh") != "" {
-		cmd = SelfSize
+		cmd = SelfLines
+		if full {
+			cmd = SelfSize
+		}
 	}
 	if cmd == "" {
-		return nil
+		return nil, ""
 	}
 	c := m.C.Effects.RunCheck(p, sha, "size", cmd)
 	if !c.OK || c.Log == "" {
-		return nil
+		return nil, "; size not recorded: " + core.Clip(cmp.Or(c.Output, "the size command failed"), 200)
 	}
 	out, err := core.SafeRead(c.Log, 1<<20) // the full log: a check's Output is clipped to one line
 	if err != nil {
-		return nil
+		return nil, "; size not recorded: " + err.Error()
 	}
-	return sizes(string(out))
+	got := sizes(string(out))
+	if got == nil {
+		return nil, "; size not recorded: the size command printed no \"name value\" line"
+	}
+	return got, ""
 }
 
 // sizes reads "name value" lines; any other line is left out.
@@ -376,7 +391,9 @@ func (m *Module) baseline(p core.Project) {
 		return
 	}
 	m.warnUnlisted(p, cfg)
-	ms.Size = m.size(p, main)
+	var sizeNote string
+	ms.Size, sizeNote = m.size(p, main, true)
+	ms.Note += sizeNote
 	if ok && (score != nil || cfg.Score == nil) {
 		ms.Kept, ms.Best = true, score
 		m.record(ms)
@@ -641,7 +658,9 @@ func (m *Module) afterMerge(t work.Task) {
 	if hasBest {
 		best = *k.Best
 	}
-	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg), Size: m.size(p, t.MergeSHA)}
+	size, sizeNote := m.size(p, t.MergeSHA, false)
+	note += sizeNote
+	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg), Size: size}
 	if !hasBest || m.versionOf(p, k) != ms.Version {
 		m.warnUnlisted(p, cfg)
 		if hasBest {
