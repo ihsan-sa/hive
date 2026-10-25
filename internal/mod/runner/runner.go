@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -30,7 +31,8 @@ var Scopes = map[string][]string{
 	"channel": {"/api/chat", "/api/events", "/api/run/stop", "/api/task/stop"}, // the lead's conversation out, steer and stop in
 	"after":   {"/api/events"},                                                 // run.turn_ended, effect.merged
 	"status":  {"/api/events"},
-	"idle":    {"/api/events"}, // hive.idle
+	"idle":    {"/api/events"},                    // hive.idle
+	"kb":      {"/api/kb/notes", "/api/kb/dream"}, // read the shared notes, apply a consolidation pass
 }
 
 // every module may ping and report.
@@ -275,16 +277,25 @@ func (r *Runner) start(name string, c *child, m modules.Module) {
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = m.Dir
-	cmd.Env = append(scrub(os.Environ()), "HOME="+home, "USERPROFILE="+home, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "APPDATA="+filepath.Join(home, ".config"),
-		"HIVE_API="+r.API, "HIVE_MODULE="+name, "HIVE_MODULE_TOKEN="+c.token)
+	cmd.Env = append(r.env(name), "HIVE_API="+r.API, "HIVE_MODULE_TOKEN="+c.token)
 	log, _ := os.OpenFile(filepath.Join(home, "module.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	cmd.Stdout, cmd.Stderr = log, log
 	at := time.Now()
 	if err := cmd.Start(); err != nil {
 		log.Close()
-		r.status[name] = "could not start: " + err.Error()
+		why := "could not start: " + err.Error()
+		if errors.Is(err, exec.ErrNotFound) && r.status[name] != why {
+			// It backs off and tries again, but a missing program (go, for a
+			// module run with go run) won't appear on its own: say so once.
+			r.C.J.MustAppend("alert.raised", map[string]string{"kind": "module", "ref": "module:" + name + ":missing", "module": name,
+				"text": fmt.Sprintf("module %s can't start: %q is not on the Hive's PATH. Install it, or put it on the PATH the daemon runs with, and the module starts on its next try, within the hour, or at the Hive's next start.", name, argv[0])})
+		}
+		r.status[name] = why
 		r.C.J.MustAppend("module.exited", map[string]string{"module": name, "error": err.Error()})
 		c.next, c.wait = at.Add(c.wait), min(c.wait*2, 5*time.Minute)
+		if errors.Is(err, exec.ErrNotFound) {
+			c.next = at.Add(time.Hour) // it won't appear on its own; the alert says what to do
+		}
 		return
 	}
 	c.cmd = cmd

@@ -22,6 +22,7 @@ type kbEntry struct {
 	name   string
 	dir    bool
 	recent *kb.Change // a recently updated entry, listed above the folders
+	digest bool       // the latest dream digest, pinned above those
 }
 
 // kbAbout says what the top-level folders hold, for a person who hasn't read
@@ -31,6 +32,7 @@ var kbAbout = map[string]string{
 	"practice": "how a Hive works: looking first, deciding, risk, writing, briefs, handoffs",
 	"hive":     "the Hive's own source and design, at the running version",
 	"isolated": "notes from isolated projects",
+	"dreams":   "what the Hive learned in each consolidation pass, one digest a pass",
 }
 
 // kbEntries lists a folder of the knowledge base: folders first, then files
@@ -40,6 +42,9 @@ func (m *model) kbEntries() []kbEntry {
 	des, _ := os.ReadDir(root)
 	var recent, dirs, files []kbEntry
 	if m.kbDir == "" {
+		if d, ok := kb.LatestDigest(m.ws.KB()); ok {
+			recent = append(recent, kbEntry{name: d.Path, recent: &d, digest: true})
+		}
 		for i := range m.recentKB() {
 			c := &m.kbNew[i]
 			recent = append(recent, kbEntry{name: c.Path, recent: c})
@@ -219,7 +224,13 @@ func (m *model) viewKB() []string {
 	}
 	top, sel := len(lines), 0
 	for i, e := range es {
-		if i == 0 && e.recent != nil {
+		if e.digest {
+			lines = append(lines, stTitle.Render("Since last time"))
+		}
+		if e.recent != nil && !e.digest && (i == 0 || es[i-1].digest) {
+			if i > 0 {
+				lines = append(lines, "")
+			}
 			lines = append(lines, stTitle.Render("Recently updated"))
 		}
 		if i > 0 && es[i-1].recent != nil && e.recent == nil {
@@ -242,7 +253,9 @@ func (m *model) viewKB() []string {
 		plainLine := pad(clip(name, width-2), width) + about
 		if c := e.recent; c != nil { // new stands out; an edit is dim like the rest
 			mark, style := "updated", stDim
-			if c.New {
+			if e.digest {
+				mark, style = "digest", stGood
+			} else if c.New {
 				mark, style = "new", stGood
 			}
 			line += style.Render(pad(mark, 7)) + "  " + stDim.Render(c.Path)
