@@ -111,10 +111,14 @@ func (m *Module) quick(t Task) bool {
 func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]string) {
 	cfg := m.C.WS.LoadConfig()
 	working, quickWorking := 0, 0
-	var ahead, line []Task        // ahead: being worked on, or earlier in line
-	starting := map[string]bool{} // queued ones whose worker is being started right now
+	var ahead, line []Task         // ahead: being worked on, or earlier in line
+	starting := map[string]bool{}  // queued ones whose worker is being started right now
+	workingBy := map[string]bool{} // the workers of working tasks
 	m.mu.Lock()
 	for _, t := range tasks {
+		if t.Stage == StageWorking && t.Worker != "" {
+			workingBy[t.Worker] = true
+		}
 		switch {
 		case t.Queued() && !m.busy[t.ID]:
 			line = append(line, t)
@@ -134,6 +138,15 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		// a conflict, with their worker if need be. Nor does a working task
 		// whose worker has gone quiet: it may never finish, and briefs that
 		// touch its files waited on one for hours (task 135947 held about 60).
+	}
+	// Main is read afresh each pass, and the answers kept for a worker go
+	// once its task leaves working, so the cache doesn't grow with the
+	// daemon's life.
+	clear(m.mainTips)
+	for k := range m.editCache {
+		if w, _, _ := strings.Cut(k, "\x00"); !workingBy[w] {
+			delete(m.editCache, k)
+		}
 	}
 	m.mu.Unlock()
 	for _, t := range ahead { // areas takes m.mu
@@ -159,9 +172,13 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	decide := func(limit int) (start map[string]bool, wait map[string]string, capped bool) {
 		start, wait = map[string]bool{}, map[string]string{}
 		working, quickWorking, ahead := working, quickWorking, slices.Clone(ahead)
+		// The reason is saved with the task, so it names the limit but not
+		// its live value: the pace moved about every minute under load, and
+		// each move re-saved every waiting task with its whole brief (one
+		// 36 times in 40 minutes). The pace itself shows in Pace.
 		full := fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
 		if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
-			full = "waiting for a worker (pace " + m.workers.String() + ")"
+			full = "waiting for a worker (at the pace)"
 		}
 		for _, t := range line {
 			quick := m.quick(t)
@@ -179,7 +196,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			case working >= limit && (!quick || quickWorking > 0 || !plan()):
 				wait[t.ID], capped = full, true
 			case strain != "":
-				wait[t.ID] = "waiting: " + strain
+				wait[t.ID] = "waiting: " + steady(strain)
 			default:
 				start[t.ID] = true
 				working++
@@ -211,6 +228,11 @@ const bothTouch = ": both touch "
 // passed again and again by later briefs on its other files.
 var filesTell = 4 * time.Hour
 
+// personal are the files workers don't change unless their brief asks: the
+// person's to merge (the worker role prompt). Two briefs citing them still
+// start together.
+var personal = map[string]bool{".hive/goals.md": true, ".hive/project.json": true}
+
 // onFiles reports whether why is a wait on another brief's file.
 func onFiles(why string) bool {
 	return strings.HasPrefix(why, "waiting for ") && strings.Contains(why, bothTouch)
@@ -231,8 +253,10 @@ func (m *Module) quiet(t Task) bool {
 	return ok && r.Status == core.StatusQuiet
 }
 
-// waitsOn finds the task a queued one's reason says it waits for.
-var waitsOn = regexp.MustCompile(`\(task (\S+)\) to (?:land|go first): both touch `)
+// waitsOn finds the task a queued one's reason says it waits for. It reads
+// from the start, past the holder's label as %q wrote it, so a label that
+// itself reads "(task X) to land: both touch " never names X.
+var waitsOn = regexp.MustCompile(`^waiting for "(?:[^"\\]|\\.)*" \(task (\S+)\) to (?:land|go first): both touch `)
 
 // holder returns the task a wait reason names, or "".
 func holder(reason string) string {
@@ -251,7 +275,9 @@ func holder(reason string) string {
 // A package or directory named in a brief holds nothing by itself: two
 // briefs in one package start together, and the second merges main if they
 // meet. Nor does a file both name when each names functions defined in it
-// and none is the other's (apart).
+// and none is the other's (apart), or a file only the person changes
+// (personal): briefs cite the goals as evidence; it holds only once a worker
+// changed it.
 func (m *Module) overlap(t Task, others []Task, prefer string) (*Task, string) {
 	mine := m.areas(t)
 	if len(mine) == 0 {
@@ -278,7 +304,7 @@ func (m *Module) overlap(t Task, others []Task, prefer string) (*Task, string) {
 			if theirs[a] && m.apart(t, o, a) {
 				continue // each names its own functions in the file: they start side by side
 			}
-			if theirs[a] || m.edited(o, a) {
+			if (theirs[a] && !personal[a]) || m.edited(o, a) {
 				return &others[i], a
 			}
 		}
@@ -366,9 +392,13 @@ type defEntry struct {
 }
 
 // edited reports whether o's worker has changed the clone file p in its
-// checkout, committed or not, from the main it started on. The checkout is
-// read as files (host git never runs there); a path that leaves it through a
-// symlink counts as unchanged. Each answer is kept until the file or the base
+// checkout, committed or not, from the main it started on. A file that is as
+// main's tip holds it is not the worker's change either: a worker that has
+// merged main carries main's later changes, and those held briefs on files
+// it never touched. The checkout is read as files (host git never runs
+// there); a symlink is its link text, as git keeps it, and a path that
+// leaves the checkout through a symlinked directory counts as unchanged.
+// Each answer is kept until the file, the base or main
 // moves; none is given or kept while the base's tree can't be read.
 func (m *Module) edited(o Task, p string) bool {
 	if o.Stage != StageWorking || o.Worker == "" || o.Base == "" {
@@ -380,7 +410,8 @@ func (m *Module) edited(o Task, p string) bool {
 	}
 	file := filepath.Join(r.Checkout, filepath.FromSlash(p))
 	cacheKey := o.Worker + "\x00" + p
-	key := o.Base + "\x00" + stamp(file)
+	tip := m.mainTip(o.Project)
+	key := o.Base + "\x00" + tip + "\x00" + stamp(file)
 	m.mu.Lock()
 	got, ok := m.editCache[cacheKey]
 	m.mu.Unlock()
@@ -392,10 +423,40 @@ func (m *Module) edited(o Task, p string) bool {
 		return false // unknown for now: held by nothing, and asked again next tick
 	}
 	changed := differs(tree, r.Checkout, p)
+	if changed && tip != "" && tip != o.Base {
+		if main := m.baseTree(o.Project, tip); main != nil {
+			changed = differs(main, r.Checkout, p)
+		}
+	}
 	m.mu.Lock()
 	m.editCache[cacheKey] = editEntry{key, changed}
 	m.mu.Unlock()
 	return changed
+}
+
+// mainTip is the commit main is at in the project's host clone, the main a
+// worker merges (Effects.MainBundle), read once per admit pass; "" when it
+// can't be read.
+func (m *Module) mainTip(project string) string {
+	m.mu.Lock()
+	tip, ok := m.mainTips[project]
+	m.mu.Unlock()
+	if ok {
+		return tip
+	}
+	branch := "main"
+	if p, ok := m.C.Projects.Get(project); ok && p.Branch != "" {
+		branch = p.Branch
+	}
+	tip, _ = core.Git(m.C.WS.Project(project), "rev-parse", "--verify", "-q", branch)
+	tip = strings.TrimSpace(tip)
+	m.mu.Lock()
+	if m.mainTips == nil {
+		m.mainTips = map[string]string{}
+	}
+	m.mainTips[project] = tip
+	m.mu.Unlock()
+	return tip
 }
 
 // differs reports whether the file p in checkout is not what the base's tree
@@ -403,12 +464,26 @@ func (m *Module) edited(o Task, p string) bool {
 func differs(tree map[string]string, checkout, p string) bool {
 	blob, inBase := tree[p]
 	file := filepath.Join(checkout, filepath.FromSlash(p))
-	if _, err := os.Lstat(file); errors.Is(err, os.ErrNotExist) {
+	fi, err := os.Lstat(file)
+	if errors.Is(err, os.ErrNotExist) {
 		return inBase // removed, or never there
 	}
 	realRoot, err := filepath.EvalSymlinks(checkout)
 	if err != nil {
 		return false
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		// Git keeps a symlink as its link text, read without following it,
+		// so the link itself must sit inside the checkout.
+		dir, err := filepath.EvalSymlinks(filepath.Dir(file))
+		if err != nil || !inside(realRoot, dir) {
+			return false
+		}
+		link, err := os.Readlink(file)
+		if err != nil {
+			return false
+		}
+		return !inBase || blobID([]byte(filepath.ToSlash(link)), len(blob)) != blob
 	}
 	if real, err := filepath.EvalSymlinks(file); err != nil || !inside(realRoot, real) {
 		return false

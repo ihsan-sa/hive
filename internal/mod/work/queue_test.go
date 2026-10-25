@@ -504,6 +504,140 @@ func TestQueueHoldsWhatAWorkerChanged(t *testing.T) {
 	}
 }
 
+// A worker that has merged main carries main's later changes; those aren't
+// its edits and hold no brief, while a file it changed itself still does.
+// Its answers go once its task leaves working.
+func TestQueueMergedMainIsNotAnEdit(t *testing.T) {
+	m := queueRig(t)
+	a := file(t, m, "cap the checks", "Somewhere in internal/core.")
+	tick(m)
+	got := stageOf(t, m, a)
+	r, _ := m.C.Runs.Get(got.Worker)
+	if got.Stage != StageWorking {
+		t.Fatalf("stage %q", got.Stage)
+	}
+	// main moves on runs.go; the worker merges it, and edits effects.go.
+	moveMain(t, m, "internal/core/runs.go", "package x // main's\n")
+	os.WriteFile(filepath.Join(r.Checkout, "internal/core/runs.go"), []byte("package x // main's\n"), 0o644)
+	os.WriteFile(filepath.Join(r.Checkout, "internal/core/effects.go"), []byte("package x // mine\n"), 0o644)
+	b := file(t, m, "hold strained turns", "In internal/core/runs.go.")
+	c := file(t, m, "cap the effects", "In internal/core/effects.go.")
+	tick(m)
+	if got := stageOf(t, m, b); got.Stage != StageWorking {
+		t.Fatalf("a brief on main's change waits: stage %q reason %q", got.Stage, got.Reason)
+	}
+	if got := stageOf(t, m, c); got.Stage != StageQueued || !strings.Contains(got.Reason, "both touch internal/core/effects.go") {
+		t.Fatalf("a brief on the worker's own change: stage %q reason %q", got.Stage, got.Reason)
+	}
+	m.mu.Lock()
+	n := len(m.editCache)
+	m.mu.Unlock()
+	if n == 0 {
+		t.Fatal("no answers kept while working")
+	}
+	done := stageOf(t, m, a)
+	done.Stage = StageReviewing
+	m.save(&done, "")
+	m.admit(m.List(nil))
+	m.mu.Lock()
+	for k := range m.editCache {
+		if strings.HasPrefix(k, done.Worker+"\x00") {
+			t.Errorf("an answer for a worker no longer working is kept: %q", k)
+		}
+	}
+	m.mu.Unlock()
+}
+
+// A symlink is its link text, as git keeps it: a file made a link counts
+// as changed, wherever the link points, and one the base already held as a
+// link counts as unchanged until the link text moves.
+func TestQueueEditSeesSymlinks(t *testing.T) {
+	m := queueRig(t)
+	p, _ := m.C.Projects.Get("p")
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+	origin, _ := core.Git(m.C.WS.Project("p"), "remote", "get-url", "origin")
+	seed := filepath.Join(t.TempDir(), "seed")
+	mustGit(t, "", "clone", "-q", strings.TrimSpace(origin), seed)
+	if err := os.Symlink("effects.go", filepath.Join(seed, "internal/core/link.go")); err != nil {
+		t.Skip(err)
+	}
+	mustGit(t, seed, "add", "-A")
+	mustGit(t, seed, "commit", "-q", "-m", "a link")
+	mustGit(t, seed, "push", "-q", "origin", "HEAD:"+p.Branch)
+	a := file(t, m, "cap the checks", "Somewhere in internal/core.")
+	tick(m)
+	got := stageOf(t, m, a)
+	r, _ := m.C.Runs.Get(got.Worker)
+	if got.Stage != StageWorking {
+		t.Fatalf("stage %q", got.Stage)
+	}
+	link := filepath.Join(r.Checkout, "internal/core/link.go")
+	if m.edited(got, "internal/core/link.go") {
+		t.Fatal("a link as the base holds it is seen as changed")
+	}
+	os.WriteFile(filepath.Join(r.Checkout, "internal/core/effects.go"), []byte("package x // its target changed\n"), 0o644)
+	if m.edited(got, "internal/core/link.go") {
+		t.Fatal("a link whose text didn't move is seen as changed")
+	}
+	os.Remove(link)
+	os.Symlink("runs.go", link)
+	if !m.edited(got, "internal/core/link.go") {
+		t.Fatal("a link pointed elsewhere isn't seen")
+	}
+	runs := filepath.Join(r.Checkout, "internal/core/runs.go")
+	os.Remove(runs)
+	os.Symlink("/etc/hostname", runs)
+	if !m.edited(got, "internal/core/runs.go") {
+		t.Fatal("a file made a link isn't seen")
+	}
+}
+
+// moveMain commits f on the forge's main and syncs the host clone to it.
+func moveMain(t *testing.T, m *Module, f, content string) {
+	t.Helper()
+	p, _ := m.C.Projects.Get("p")
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+	origin, err := core.Git(m.C.WS.Project("p"), "remote", "get-url", "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := filepath.Join(t.TempDir(), "seed")
+	mustGit(t, "", "clone", "-q", strings.TrimSpace(origin), seed)
+	os.MkdirAll(filepath.Join(seed, filepath.Dir(f)), 0o755)
+	os.WriteFile(filepath.Join(seed, f), []byte(content), 0o644)
+	mustGit(t, seed, "add", "-A")
+	mustGit(t, seed, "commit", "-q", "-m", "main moves")
+	mustGit(t, seed, "push", "-q", "origin", "HEAD:"+p.Branch)
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Two briefs citing the goals start together; the goals hold a brief only
+// once a worker has changed them.
+func TestQueueGoalsHoldOnlyWhenChanged(t *testing.T) {
+	m := queueRig(t)
+	moveMain(t, m, ".hive/goals.md", "goals\n")
+	a := file(t, m, "one", "As .hive/goals.md says.")
+	b := file(t, m, "two", "As .hive/goals.md says too.")
+	tick(m)
+	for _, task := range []Task{a, b} {
+		if got := stageOf(t, m, task); got.Stage != StageWorking {
+			t.Fatalf("%q: stage %q reason %q", task.Title, got.Stage, got.Reason)
+		}
+	}
+	got := stageOf(t, m, a)
+	r, _ := m.C.Runs.Get(got.Worker)
+	os.WriteFile(filepath.Join(r.Checkout, ".hive/goals.md"), []byte("changed\n"), 0o644)
+	if !m.edited(got, ".hive/goals.md") {
+		t.Fatal("goals a worker changed aren't seen as changed")
+	}
+}
+
 // The .gitattributes matcher follows git: "**" spans directories, a name-only
 // pattern matches at any depth, and the last line touching merge wins, so
 // -merge, !merge or another driver undo an earlier merge=union.
@@ -620,8 +754,11 @@ func TestQueueReplay1445(t *testing.T) {
 		}
 	}
 	t.Logf("%d free of any overlap, %d wait on a shared file, %d held", free, overlaps, len(wait)+len(start)-free-overlaps)
-	if overlaps > 25 || free < 26 { // 26 free, and 25 wait on files cited by more than one brief (7 on tests/LANDING-security.toml)
-		t.Fatalf("%d free and %d still wait on a shared file (51 did at 14:45Z)", free, overlaps)
+	// Pinned both ways: fewer free is a hold come back, more is a same-file
+	// hold that quietly stopped working. The 18 left wait on files more than
+	// one brief cites (7 on tests/LANDING-security.toml); none on the goals.
+	if overlaps != 18 || free != 33 {
+		t.Fatalf("%d free and %d wait on a shared file, want 33 and 18 (51 waited at 14:45Z)", free, overlaps)
 	}
 }
 
@@ -699,5 +836,25 @@ func TestQueueKeepsItsHolder(t *testing.T) {
 	tick(m)
 	if got := stageOf(t, m, a); !strings.Contains(got.Reason, "(task "+y.ID+") to land") {
 		t.Fatalf("after the first holder pushed: reason %q", got.Reason)
+	}
+}
+
+// A holder's label that itself reads like a wait reason doesn't name a task:
+// the holder is the one after the quoted label.
+func TestHolderPastLabel(t *testing.T) {
+	for _, c := range []struct{ label, verb string }{
+		{`plain`, "to land"},
+		{`waits on (task 111) to land: both touch x.go`, "to go first"},
+		{`a "quoted" (task 222) to go first: both touch y.go`, "to land"},
+	} {
+		why := fmt.Sprintf("waiting for %q (task %s) %s%s%s", c.label, "333", c.verb, bothTouch, "z.go")
+		if got := holder(why); got != "333" {
+			t.Errorf("holder(%q) = %q, want 333", why, got)
+		}
+	}
+	for _, why := range []string{"", "waiting for a worker (max_workers 4)", "held by the lead"} {
+		if got := holder(why); got != "" {
+			t.Errorf("holder(%q) = %q, want none", why, got)
+		}
 	}
 }
