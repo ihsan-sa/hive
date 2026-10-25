@@ -257,7 +257,30 @@ func TestPacePullsBackAheadOfTheWindow(t *testing.T) {
 		t.Fatalf("on the clock: %q", why)
 	}
 	read(0.8, 3*time.Hour)
-	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of its five-hour window") {
+	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of the clock") {
 		t.Fatalf("40%% ahead: %q", why)
+	}
+}
+
+// The week is paced too: on 10-25 a login's week stood at 75% a day after
+// its reset, on course to run out five and a half days early, while its
+// five-hour window was on the clock.
+func TestPacePullsBackAheadOfTheWeek(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	pick := cfg.Route("worker", "")[0]
+	read := func(week float64, weekLeft time.Duration) {
+		reset := time.Now().Add(3 * time.Hour)
+		m.C.J.MustAppend("plan.usage", core.Plan{Harness: pick.Harness, Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour",
+			Windows: map[string]harness.Window{"five_hour": {Utilization: 0.3, ResetsAt: reset},
+				"seven_day": {Utilization: week, ResetsAt: time.Now().Add(weekLeft)}}}})
+	}
+	read(0.5, 3*24*time.Hour)
+	if why := m.planSpent(cfg); why != "" {
+		t.Fatalf("on the clock in the week: %q", why)
+	}
+	read(0.75, 6*24*time.Hour)
+	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of the clock") {
+		t.Fatalf("a week 75%% spent in its first day: %q", why)
 	}
 }

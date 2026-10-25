@@ -241,19 +241,30 @@ func (p Plan) Used(now time.Time) float64 {
 	return u
 }
 
-// windowLength is how long a usage window runs, for the windows the Hive
-// paces against: the week is left to run on its own.
-var windowLength = map[string]time.Duration{"five_hour": 5 * time.Hour}
+// windowLength is how long a usage window runs, 0 for one the Hive doesn't
+// know: the five hours, and the week with its per-model windows
+// (seven_day_opus). The week is paced too: on 10-25 it stood at 75% a day
+// after its reset, and two logins sat at their weekly limit for days.
+func windowLength(k string) time.Duration {
+	switch {
+	case strings.HasPrefix(k, "five_hour"):
+		return 5 * time.Hour
+	case strings.HasPrefix(k, "seven_day"):
+		return 7 * 24 * time.Hour
+	}
+	return 0
+}
 
 // Ahead is how far the login has used its plan ahead of the clock: the most
 // a paced window's use is beyond the share of it that has passed, 0 when on
-// or behind it. A window spent at this rate runs out before it resets and
+// or behind it. The share is of each window's own length, so the same slack
+// is 45 minutes of a five-hour window and about a day of the week. A window spent at this rate runs out before it resets and
 // the Hive sits idle until it does.
 func (p Plan) Ahead(now time.Time) float64 {
 	a := 0.0
 	for k, w := range p.Limit.Windows {
-		n, ok := windowLength[k]
-		if !ok || !w.ResetsAt.After(now) {
+		n := windowLength(k)
+		if n == 0 || !w.ResetsAt.After(now) {
 			continue
 		}
 		passed := 1 - float64(w.ResetsAt.Sub(now))/float64(n)

@@ -17,8 +17,8 @@ import (
 // plan carry. While something waits on the limit and nothing is strained, it
 // grows by one a step; when the machine is strained (memory floor, memory or
 // CPU pressure, load per core: the same settings that hold a turn) or the
-// workers' plan is nearly spent or running ahead of its five-hour window,
-// it pulls back to three quarters of what is running, or to its start when
+// workers' plan is nearly spent or running ahead of its five-hour or weekly
+// window, it pulls back to three quarters of what is running, or to its start when
 // nothing runs (the strain isn't the Hive's, and from 1 it would take
 // minutes to climb back). Nothing running is stopped; past the limit, work
 // waits in order. It changes at most once a step, so the readings (load is
@@ -36,10 +36,11 @@ const paceStep = time.Minute
 // planFloor is the share of the plan left below which workers pull back.
 const planFloor = 0.1
 
-// aheadSlack is how far ahead of its five-hour window the workers' plan may
-// run before workers pull back: a burst early in a window is fine, a pace
-// that spends it an hour before its reset is not (10-25: three windows ran
-// out 50 to 100 minutes early, and nothing moved until the reset).
+// aheadSlack is how far ahead of a usage window (five-hour or weekly), as a
+// share of the window, the workers' plan may run before workers pull back: a
+// burst early in a window is fine, a pace that spends it before its reset is
+// not (10-25: three five-hour windows ran out 50 to 100 minutes early, and
+// one login's week was 75% gone a day in, the other two's already out).
 const aheadSlack = 0.15
 
 // defaultWorkers is where the workers' limit starts when no ceiling is set.
@@ -134,7 +135,7 @@ func safeChecks() int { return 2 * core.DefaultMaxChecks() }
 
 // planSpent says when every model a worker would go on, the workspace's
 // route or any project's own, has under planFloor of its plan left, all
-// logins together, or is spending its five-hour window more than aheadSlack
+// logins together, or is spending a usage window more than aheadSlack
 // ahead of the clock, or "".
 func (m *Module) planSpent(cfg core.Config) string {
 	room, ahead := 0.0, -1.0
@@ -150,7 +151,7 @@ func (m *Module) planSpent(cfg core.Config) string {
 	case room < planFloor:
 		return fmt.Sprintf("the workers' plan is nearly spent (%.0f%% left)", room*100)
 	case ahead > aheadSlack:
-		return fmt.Sprintf("the workers' plan is %.0f%% ahead of its five-hour window and would run out before it resets", ahead*100)
+		return fmt.Sprintf("the workers' plan is %.0f%% ahead of the clock in a usage window and would run out before it resets", ahead*100)
 	}
 	return ""
 }
