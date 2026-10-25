@@ -80,3 +80,38 @@ func TestRunningHiveRechecksForUpdates(t *testing.T) {
 		t.Fatal("checked again before the interval")
 	}
 }
+
+// A module program's job runs on its own default schedule until config.json
+// names another, and the control center shows that schedule.
+func TestJobDefaultSchedule(t *testing.T) {
+	dir := t.TempDir()
+	ws := core.Workspace{Root: filepath.Join(dir, "hive")}
+	c, err := core.Open(ws, &core.Local{Dir: filepath.Join(dir, "forge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	m := New(c)
+	var ran atomic.Int32
+	m.Register(Job{Name: "kb.dream", Default: "every 4h", Fn: func() (string, error) { ran.Add(1); return "ok", nil }})
+	if js := m.Jobs(); len(js) != 1 || js[0].Schedule != "every 4h" {
+		t.Fatalf("jobs %+v", js)
+	}
+	now := time.Now()
+	m.started, m.last["kb.dream"] = now.Add(-5*time.Hour), now.Add(-3*time.Hour)
+	m.Tick()
+	time.Sleep(100 * time.Millisecond)
+	if ran.Load() != 0 {
+		t.Fatal("ran before its default interval")
+	}
+	cfg := ws.LoadConfig()
+	cfg.Schedules["kb.dream"] = "every 2h"
+	ws.SaveConfig(cfg)
+	m.Tick()
+	for i := 0; i < 100 && ran.Load() == 0; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if ran.Load() != 1 {
+		t.Fatal("config.json's schedule didn't override the default")
+	}
+}

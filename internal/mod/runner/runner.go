@@ -29,7 +29,8 @@ var Scopes = map[string][]string{
 	"channel": {"/api/chat", "/api/events", "/api/run/stop", "/api/task/stop"}, // the lead's conversation out, steer and stop in
 	"after":   {"/api/events"},                                                 // run.turn_ended, effect.merged
 	"status":  {"/api/events"},
-	"idle":    {"/api/events"}, // hive.idle
+	"idle":    {"/api/events"},                    // hive.idle
+	"kb":      {"/api/kb/notes", "/api/kb/dream"}, // read the shared notes, apply a consolidation pass
 }
 
 // every module may ping and report.
@@ -247,7 +248,15 @@ func (r *Runner) start(name string, c *child, m modules.Module) {
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = m.Dir
-	cmd.Env = append(scrub(os.Environ()), "HOME="+home, "USERPROFILE="+home, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "APPDATA="+filepath.Join(home, ".config"),
+	env := scrub(os.Environ())
+	if os.Getenv("GOCACHE") == "" {
+		// A program run with `go run` builds into the person's own Go cache,
+		// as go would with their HOME, not into a fresh one under its HOME.
+		if dir, err := os.UserCacheDir(); err == nil {
+			env = append(env, "GOCACHE="+filepath.Join(dir, "go-build"))
+		}
+	}
+	cmd.Env = append(env, "HOME="+home, "USERPROFILE="+home, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "APPDATA="+filepath.Join(home, ".config"),
 		"HIVE_API="+r.API, "HIVE_MODULE="+name, "HIVE_MODULE_TOKEN="+c.token)
 	log, _ := os.OpenFile(filepath.Join(home, "module.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	cmd.Stdout, cmd.Stderr = log, log
