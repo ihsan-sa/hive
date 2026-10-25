@@ -46,8 +46,10 @@ const recheckRed = time.Hour
 // matrix does: "test (ubuntu-latest)", "update (ubuntu-latest, previous)".
 // GitHub's ubuntu and windows runners are x64 and its macos runner arm64, so
 // a system they don't run on (linux/arm64, darwin/amd64, freebsd) has no
-// checks of its own and doesn't follow pre-releases.
-var runners = map[string]string{"linux/amd64": "ubuntu", "darwin/arm64": "macos", "windows/amd64": "windows"}
+// checks of its own and doesn't follow pre-releases. Linux only for now
+// (issue #564): add "darwin/arm64": "macos" and "windows/amd64": "windows"
+// back with the workflows' matrices.
+var runners = map[string]string{"linux/amd64": "ubuntu"}
 
 // runner is this system's runner, "" for one the gates don't run on.
 func runner() string { return runners[runtime.GOOS+"/"+runtime.GOARCH] }
