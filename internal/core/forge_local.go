@@ -211,13 +211,16 @@ func (l *Local) refresh(repo string, p *localPR) {
 	dir, base := l.RepoPath(repo), "refs/heads/"+cmp.Or(p.Base, "main")
 	// MergePR pushes its squash before it saves the PR as merged: a process
 	// killed in between left its own merge on main under an open PR, which
-	// GitHub, merging on its side, never shows. That squash is its merge.
-	if out, err := Git(dir, "log", "--first-parent", "-n", "200", "--format=%H %s", base); err == nil {
-		for _, line := range strings.Split(out, "\n") {
-			if sha, subject, ok := strings.Cut(strings.TrimSpace(line), " "); ok && strings.HasSuffix(subject, fmt.Sprintf(" (#%d)", p.Number)) {
-				p.State, p.MergeSHA = "MERGED", sha
-				return
-			}
+	// GitHub, merging on its side, never shows. That squash is its merge. It
+	// is found by the trailer only MergePR writes, not the " (#N)" subject,
+	// which a repo cloned from GitHub already has for numbers the local forge
+	// hands out again. It is one git log over the last 200 commits per read of
+	// an open PR: fine for tests and dev runs; cache it per base sha if the
+	// local forge ever runs in a heavier loop.
+	if out, err := Git(dir, "log", "--first-parent", "-n", "200", "-F", "--grep="+localMergeTrailer(p.Number), "--format=%H", base); err == nil {
+		if f := strings.Fields(out); len(f) > 0 {
+			p.State, p.MergeSHA = "MERGED", f[0]
+			return
 		}
 	}
 	p.Mergeable, p.MergeState = "MERGEABLE", "CLEAN"
@@ -315,6 +318,18 @@ func (l *Local) ReadyPR(repo string, number int, sha string) error {
 	return ErrNotFound
 }
 
+// LocalMergeMessage is the local forge's squash message for PR number at
+// head: GitHub's "subject (#N)", and a trailer that marks it as this forge's
+// own merge.
+func LocalMergeMessage(subject string, number int, head string) string {
+	return fmt.Sprintf("%s (#%d)\n\n%s %s", subject, number, localMergeTrailer(number), head)
+}
+
+// localMergeTrailer ends in a space so #1 doesn't match #12.
+func localMergeTrailer(number int) string {
+	return fmt.Sprintf("Hive-Local-Merge: #%d ", number)
+}
+
 // MergePR squashes the PR's head onto main, refusing if the head moved.
 func (l *Local) MergePR(repo string, number int, sha, subject string) (string, error) {
 	l.mu.Lock()
@@ -353,7 +368,7 @@ func (l *Local) MergePR(repo string, number int, sha, subject string) (string, e
 		if _, err := Git(tmp, "merge", "--squash", sha); err != nil {
 			return "", fmt.Errorf("conflict: %v", err)
 		}
-		if _, err := Git(tmp, "commit", "-q", "--allow-empty", "-m", fmt.Sprintf("%s (#%d)", subject, number)); err != nil {
+		if _, err := Git(tmp, "commit", "-q", "--allow-empty", "-m", LocalMergeMessage(subject, number, sha)); err != nil {
 			return "", err
 		}
 		if _, err := Git(tmp, "push", "-q", "origin", "HEAD:main"); err != nil {
