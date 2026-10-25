@@ -609,14 +609,17 @@ var (
 	redPkgLine = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
 	redTest    = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
 	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |exit status |test timed out|# )|\[(build|setup) failed\]`)
+	redBuild   = regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+(?::\d+)?: (.+)`)
 )
 
 // RedKeys names what failed in a red go test run so two runs' reds can be
 // compared: each failing test with its package ("pkg TestX"), and "pkg !"
 // for a package that failed in a way no test name accounts for (no test
 // named, a build failure, a timeout, a panic or exit outside a test). Output
-// with no go package lines falls back to FailedTests' names. Nil means
-// nothing could be named.
+// with no go package lines (go vet, or a build that stopped the command
+// before go test ran) falls back to FailedTests' names and to each compile
+// or vet error as "file.go: message", its line left out so an edit above it
+// doesn't make the same error look new. Nil means nothing could be named.
 func RedKeys(out string) []string {
 	var keys, tests []string
 	odd, pkgs := false, false
@@ -646,7 +649,12 @@ func RedKeys(out string) []string {
 		}
 	}
 	if !pkgs {
-		return FailedTests(out)
+		keys = FailedTests(out)
+		for _, l := range strings.Split(out, "\n") {
+			if m := redBuild.FindStringSubmatch(strings.TrimRight(l, " \r")); m != nil {
+				add(m[1] + ": " + m[2])
+			}
+		}
 	}
 	return keys
 }
