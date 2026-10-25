@@ -77,7 +77,7 @@ func TestPlanLineSaysWhenTheResetIs(t *testing.T) {
 	p := core.Plan{Harness: "claude", Login: "claude", At: now.Add(-time.Minute), Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour", Utilization: 0.28,
 		Windows: map[string]harness.Window{"five_hour": {Utilization: 0.28, ResetsAt: reset}, "seven_day": {Utilization: 0.36, ResetsAt: reset.Add(48 * time.Hour)}}}}
 	got := planLine(p, now)
-	for _, want := range []string{"within its limit", "5-hour window 28% used, resets in 3h31m", "weekly window 36% used, resets in 2d3h"} {
+	for _, want := range []string{"within its limit", "5-hour window 28% used, resets in 3h31m", "weekly window 36% used, resets in 2d3h", "(read 1m ago)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q lacks %q", got, want)
 		}
