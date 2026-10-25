@@ -96,7 +96,7 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		// The head can't be merged with main as the gate sees it: its worker
 		// merges main. No rollback, and the gate runs again on the new head.
 		m.tellGate(t, p, g)
-		return true, m.conflict(t, p, t.SHA, fmt.Errorf("the recursive gate: %s", g.Reason))
+		return true, m.conflict(t, p, t.SHA, &gateConflict{reason: g.Reason, files: g.Conflicts})
 	}
 	if ok && (g.Outcome != core.GateCantRun || time.Now().Before(retryAfter(g))) {
 		m.tellGate(t, p, g)
@@ -521,3 +521,12 @@ func (m *Module) gateLive(out string) bool {
 	}
 	return false
 }
+
+// gateConflict is the recursive gate finding the head conflicts with main:
+// the worker is told which files, as the gate's merge found them.
+type gateConflict struct {
+	reason string
+	files  []string
+}
+
+func (g *gateConflict) Error() string { return "the recursive gate: " + g.reason }

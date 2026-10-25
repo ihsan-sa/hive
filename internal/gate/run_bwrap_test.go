@@ -58,12 +58,20 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
+	// The base moves on after the head branched, so the candidate is its
+	// head with the base merged in, built and bound read-only as it would land.
 	git("clone", "-q", root, repo)
-	base := git("-C", repo, "rev-parse", "HEAD")
+	fork := git("-C", repo, "rev-parse", "HEAD")
 	os.WriteFile(filepath.Join(repo, "docs", "gate-runs", "TRIVIAL.md"), []byte("A trivial change, for the gate's keep run.\n"), 0o644)
 	git("-C", repo, "add", "-A")
 	git("-C", repo, "commit", "-qm", "a trivial change")
 	head := git("-C", repo, "rev-parse", "HEAD")
+	git("-C", repo, "branch", "-f", "candidate", head) // a ref, so the gate's clone of repo holds the head
+	git("-C", repo, "checkout", "-q", "--detach", fork)
+	os.WriteFile(filepath.Join(repo, "docs", "gate-runs", "BASE.md"), []byte("The base moving on, for the gate's keep run.\n"), 0o644)
+	git("-C", repo, "add", "-A")
+	git("-C", repo, "commit", "-qm", "the base moves on")
+	base := git("-C", repo, "rev-parse", "HEAD")
 
 	run := func(name string, cfg Config, tie bool) (Report, string) {
 		t.Helper()
@@ -102,6 +110,9 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 	rep, lessons := run("keep", Config{Repo: repo, Head: head, Base: base}, true)
 	if !rep.Verdict.Keep || lessons != "" {
 		t.Errorf("the trivial candidate: %+v, lessons %q", rep.Verdict, lessons)
+	}
+	if rep.Merged == "" || rep.Merged == head {
+		t.Errorf("the candidate was built at %s, not its head %s merged with the base", short(rep.Merged), short(head))
 	}
 	if rep.CandVersion != "0.0.0-gate."+head[:9] || rep.CandSHA256 == "" || rep.Sig == "" {
 		t.Errorf("the built candidate: version %q, sha256 %q, signed %v", rep.CandVersion, rep.CandSHA256, rep.Sig != "")
