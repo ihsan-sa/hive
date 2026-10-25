@@ -14,7 +14,6 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
-	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
@@ -171,7 +170,7 @@ func moduleLifecycle(t *testing.T, real bool) {
 	}
 	h.wait("the module to be built", patience(t), h.onMain("local/greet", "skill.md", "PLUM42"))
 
-	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module " + h.forge.RepoPath("local/greet")}, nil)
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module greet"}, nil)
 	module := func(st api.State) (api.ModuleView, bool) {
 		for _, m := range st.Modules {
 			if m.Name == "greet" {
@@ -195,7 +194,7 @@ func moduleLifecycle(t *testing.T, real bool) {
 	}
 	h.post("/api/ask", map[string]string{"project": "app", "title": use}, nil)
 	st = h.wait("the module's codeword on app's main", patience(t), h.onMain("me/app", "USED.md", "PLUM42"))
-	dir := modules.NameFromURL(h.forge.RepoPath("local/greet")) // its folder in .modules
+	dir := "greet" // its folder in .modules
 	for _, r := range st.Runs {
 		if sys, _ := os.ReadFile(filepath.Join(h.ws.RunRO(r.ID), "system.md")); r.Role == "worker" && r.Project == "app" && !strings.Contains(string(sys), "`"+dir+"`") {
 			t.Errorf("the worker's system prompt doesn't offer %s:\n%s", dir, sys)

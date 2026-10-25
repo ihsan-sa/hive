@@ -117,6 +117,10 @@ type ModuleView struct {
 	Projects    []string `json:"projects"`
 	Hooks       []string `json:"hooks,omitempty"`
 	Status      string   `json:"status,omitempty"` // a module with a program: running, or why not
+	Commit      string   `json:"commit,omitempty"`
+	Trust       string   `json:"trust,omitempty"` // core-team | reviewed | unlisted | project
+	Read        string   `json:"read,omitempty"`  // the read behind its listing
+	Needs       string   `json:"needs,omitempty"` // the reach it was installed with
 }
 
 // ChatView is one chat in the list.

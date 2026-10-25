@@ -131,9 +131,12 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3","gain":"(optional) large"} -> T1 you weigh yourself; T2 goes to a warden, T3 to a tribunal`, Fn: m.opRequest})
 	ops.Register(core.Op{Name: "decide", Roles: []string{"warden"}, Help: `{"decision":"do|safer|decline|tribunal|person","reason","script":"exactly what runs (do, tribunal; person if you have one)","gain":"(optional) large"}`, Fn: m.opDecide})
 	ops.Register(core.Op{Name: "requests", Help: `{} -> recent requests past the sandbox: who asked, what, why, where each stands`, Fn: m.opRequests})
-	ops.Register(core.Op{Name: "install_module", Roles: []string{"lead"}, Help: `{"url"} or {"project"}: a module built as a project of its own installs from it`, Fn: m.opInstall})
+	ops.Register(core.Op{Name: "install_module", Roles: []string{"lead"}, Help: `{"name"} a module an index lists (name@sha for another commit), {"url"} a git URL (unlisted: the person decides), or {"project"} a module built as a project of its own`, Fn: m.opInstall})
+	ops.Register(core.Op{Name: "remove_module", Roles: []string{"lead"}, Help: `{"name"}: asks the person to uninstall it`, Fn: m.opRemove})
 	c.Person.Handle("request", m.onAnswer)
 	c.Person.Handle("module", m.onModule)
+	c.Person.Handle("module-update", m.onModuleUpdate)
+	c.Person.Handle("module-remove", m.onModuleRemove)
 	// A warden that asks an agent ends its turn to wait for the reply, so it
 	// idles rather than going quiet, which Tick would read as failing. It
 	// waits only once the message is sent, so a failed send never leaves it
@@ -862,11 +865,16 @@ func (m *Module) onAnswer(a core.Ask) {
 }
 
 func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
-	var a struct{ URL, Project string }
+	var a struct{ Name, URL, Project string }
 	if err := core.Bind(args, &a); err != nil {
 		return nil, err
 	}
-	if a.Project != "" {
+	if _, ok := m.C.Projects.Get(a.Name); ok && a.Project == "" {
+		a.Project, a.Name = a.Name, "" // the Hive's own module project wins over an index's name
+	}
+	spec := a.Name
+	switch {
+	case a.Project != "":
 		p, ok := m.C.Projects.Get(a.Project)
 		if !ok {
 			return nil, fmt.Errorf("no project %q", a.Project)
@@ -877,27 +885,61 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 		if p.Hidden() {
 			return nil, fmt.Errorf("project %q is %s, so its code can't become a module every project's agents read", a.Project, p.Sharing())
 		}
-		a.URL = m.C.WS.Project(a.Project)
-	}
-	if p := strings.TrimPrefix(a.URL, "file://"); p == "/work" || strings.HasPrefix(p, "/work/") || strings.HasPrefix(p, "/hive/") {
-		return nil, errors.New("that path is inside your sandbox, and the install runs on the host where it doesn't exist: build the module as a project of its own and install it with --project <name>")
-	}
-	if !strings.HasPrefix(a.URL, "https://") && !strings.HasPrefix(a.URL, "git@") && !strings.HasPrefix(a.URL, "file://") && !core.Exists(a.URL) {
-		return nil, errors.New("give a git URL (https://, git@, file://) or a local repository path")
-	}
-	name := modules.NameFromURL(a.URL)
-	if _, ok := m.Mod.Get(name); ok {
-		return nil, fmt.Errorf("a module named %s is already installed", name)
+		spec = "project:" + a.Project
+	case a.URL != "":
+		if p := strings.TrimPrefix(a.URL, "file://"); p == "/work" || strings.HasPrefix(p, "/work/") || strings.HasPrefix(p, "/hive/") {
+			return nil, errors.New("that path is inside your sandbox, and the install runs on the host where it doesn't exist: build the module as a project of its own and install it with --project <name>")
+		}
+		if !strings.HasPrefix(a.URL, "https://") && !strings.HasPrefix(a.URL, "git@") && !strings.HasPrefix(a.URL, "file://") && !core.Exists(a.URL) {
+			return nil, errors.New("give a git URL (https://, git@, file://) or a local repository path")
+		}
+		spec = a.URL
+	case strings.ContainsAny(a.Name, ":=/\\"):
+		return nil, errors.New(`a name is a module an index lists, or name@sha; give a git URL as {"url"} and a project as {"project"}`)
+	case spec == "":
+		return nil, errors.New(`give {"name"} (a module an index lists, name@sha for another commit), {"url"} (a git URL, unlisted) or {"project"}`)
 	}
 	project := a.Project // where the ask is filed: the source project, else the asker's own
 	if project == "" {
 		project = r.Project
 	}
-	who := m.Weigh(core.Ask{Kind: "module", Ref: a.URL, From: r.ID, Project: project,
-		Title:   "Install module " + name + "?",
-		Detail:  "From " + a.URL + ". It brings outside code onto this machine; agents will read and use it. The Hive clones it into .modules/" + name + ".",
-		Options: []string{"install", "decline"}})
-	return "sent to the " + who + " to decide; you'll hear back", nil
+	return m.Install(spec, r.ID, project)
+}
+
+// Install files a module's install, routed by its trust: listed (core-team,
+// reviewed) and the Hive's own projects go through Weigh (a warden's check;
+// the person at autonomy 1), an unlisted one waits for the person. from is
+// the run that asked, "" for the person. It says what was declared and who
+// decides.
+func (m *Module) Install(spec, from, project string) (string, error) {
+	plan, err := m.Mod.PlanFor(spec)
+	if err != nil {
+		return "", err
+	}
+	if plan.Trust == "project" {
+		p, ok := m.C.Projects.Get(plan.Project)
+		if !ok {
+			return "", fmt.Errorf("no project %q", plan.Project)
+		}
+		if _, err := m.C.Effects.Sync(p); err != nil { // the host clone at main is what installs
+			return "", err
+		}
+	}
+	if plan, err = m.Mod.Resolve(spec); err != nil {
+		return "", err
+	}
+	if _, ok := m.Mod.Get(plan.Name); ok {
+		return "", fmt.Errorf("a module named %s is already installed", plan.Name)
+	}
+	a := core.Ask{Kind: "module", Ref: plan.Ref(), From: from, Project: project,
+		Title:   "Install module " + plan.Name + " (" + plan.Trust + ")?",
+		Detail:  plan.Describe() + "\nIt brings outside code onto this machine; agents will read and use it. The Hive copies it into .modules/" + plan.Name + ".",
+		Options: []string{"install", "decline"}}
+	if plan.Trust == "unlisted" {
+		a = m.C.Person.Ask(a)
+		return plan.Describe() + "\nUnlisted, so it waits for the person (ask " + a.ID + ").", nil
+	}
+	return plan.Describe() + "\nSent to the " + m.Weigh(a) + " to decide; you'll hear back.", nil
 }
 
 // Weigh settles a decision that would otherwise wait on the person the way
@@ -957,22 +999,123 @@ func (m *Module) settle(req Request, yes bool) {
 }
 
 func (m *Module) onModule(a core.Ask) {
-	name := modules.NameFromURL(a.Ref)
+	plan, err := m.Mod.PlanFor(a.Ref)
+	name := plan.Name
+	if name == "" {
+		name = modules.NameFromURL(a.Ref)
+	}
 	if a.Answer != "install" {
-		m.C.Runs.Send(a.From, "[module "+name+" not installed: "+a.Answer+"] "+a.Note)
+		m.report(a, "[module "+name+" not installed: "+a.Answer+"] "+a.Note)
 		return
 	}
-	var err error
-	if p, ok := m.C.Projects.Get(a.Project); ok && a.Ref == m.C.WS.Project(p.Name) {
-		_, err = m.C.Effects.Sync(p) // the host clone at main is what installs
+	if err == nil && !plan.Listed() && (strings.Contains(a.Title, "(core-team)?") || strings.Contains(a.Title, "(reviewed)?")) {
+		err = errors.New("the index no longer pins it at that commit; ask again") // a warden's yes was to a listing
+	}
+	if p, ok := m.C.Projects.Get(plan.Project); ok && err == nil {
+		_, err = m.C.Effects.Sync(p)
 	}
 	mod := modules.Module{}
 	if err == nil {
-		mod, err = m.Mod.Install(a.Ref, name)
+		mod, err = m.Mod.Install(plan)
 	}
 	if err != nil {
-		m.C.Runs.Send(a.From, "[module "+name+" did not install] "+err.Error())
+		m.report(a, "[module "+name+" did not install] "+err.Error())
 		return
 	}
-	m.C.Runs.Send(a.From, fmt.Sprintf("[module %s installed at %s]", name, mod.Source.Release))
+	m.report(a, fmt.Sprintf("[module %s installed at %s]", mod.Name, mod.Source.Release))
+}
+
+// report tells whoever asked: the run, or the person.
+func (m *Module) report(a core.Ask, text string) {
+	if a.From != "" {
+		m.C.Runs.Send(a.From, text)
+		return
+	}
+	m.C.Person.Tell(core.Ask{Ref: a.ID, Title: text, Detail: a.Detail})
+}
+
+// UpdateModules is the modules.update job. A module from one of the Hive's
+// own projects follows its main; any other with a newer commit (an index's
+// new pin, or an unlisted repository's newest release) is asked about with the
+// diff: through Weigh when listed (a warden reads it, or the person per
+// their autonomy), the person when unlisted.
+func (m *Module) UpdateModules() (string, error) {
+	for _, mod := range m.Mod.List() {
+		if p, ok := m.C.Projects.Get(mod.Source.Project); ok && mod.Source.Trust == "project" {
+			m.C.Effects.Sync(p)
+		}
+	}
+	plans, notes := m.Mod.Outdated()
+	var did []string
+	for _, p := range plans {
+		installed, _ := m.Mod.Get(p.Name)
+		if p.Trust == "project" {
+			if _, err := m.Mod.Upgrade(p); err != nil {
+				notes = append(notes, p.Name+": "+err.Error())
+				continue
+			}
+			did = append(did, p.Name+" "+p.Release)
+			continue
+		}
+		a := core.Ask{Kind: "module-update", Ref: p.Ref(), Project: "",
+			Title:   fmt.Sprintf("Update module %s from %s to %s (%s)?", p.Name, installed.Source.Release, p.Release, p.Trust),
+			Detail:  p.Describe() + "\nRead the diff: approve only if the change does what its module says and reaches nothing it doesn't declare.",
+			Diff:    p.Diff,
+			Options: []string{"update", "skip"}}
+		who := "person"
+		if p.Listed() {
+			who = m.Weigh(a)
+		} else {
+			m.C.Person.Ask(a)
+		}
+		did = append(did, p.Name+" "+p.Release+" asked of the "+who)
+	}
+	if len(did) == 0 {
+		did = append(did, "all modules current")
+	}
+	return strings.Join(append(did, notes...), "; "), nil
+}
+
+func (m *Module) onModuleUpdate(a core.Ask) {
+	plan, err := m.Mod.PlanFor(a.Ref)
+	if err != nil {
+		m.C.Person.Tell(core.Ask{Ref: a.ID, Title: "Module update not done: " + err.Error()})
+		return
+	}
+	if a.Answer != "update" {
+		m.Mod.Skip(plan.Name, plan.Sha)
+		return
+	}
+	if _, err := m.Mod.Upgrade(plan); err != nil {
+		m.C.Person.Tell(core.Ask{Ref: a.ID, Title: "Module " + plan.Name + " did not update: " + err.Error()})
+	}
+}
+
+func (m *Module) opRemove(r core.Run, args json.RawMessage) (any, error) {
+	var a struct{ Name string }
+	if err := core.Bind(args, &a); err != nil {
+		return nil, err
+	}
+	mod, ok := m.Mod.Get(a.Name)
+	if !ok {
+		return nil, fmt.Errorf("no module %q is installed", a.Name)
+	}
+	if mod.Source.Source == "builtin" {
+		return nil, fmt.Errorf("%s is a standard module and stays; take it from a project with the person's Modules tab", a.Name)
+	}
+	ask := m.C.Person.Ask(core.Ask{Kind: "module-remove", Ref: a.Name, From: r.ID, Project: r.Project,
+		Title: "Remove module " + a.Name + "?", Detail: "Its folder .modules/" + filepath.Base(mod.Dir) + " and its program's home go.", Options: []string{"remove", "keep"}})
+	return "asked the person (ask " + ask.ID + "); you'll hear back", nil
+}
+
+func (m *Module) onModuleRemove(a core.Ask) {
+	if a.Answer != "remove" {
+		m.report(a, "[module "+a.Ref+" kept] "+a.Note)
+		return
+	}
+	if err := m.Mod.Remove(a.Ref); err != nil {
+		m.report(a, "[module "+a.Ref+" not removed] "+err.Error())
+		return
+	}
+	m.report(a, "[module "+a.Ref+" removed]")
 }

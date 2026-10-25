@@ -16,7 +16,7 @@
    lead        ●  │   release       0.8.2
    worker-2       │   source        builtin
    reviewer       │
-   tribunal       │   Install a module by asking the lead (it needs your approv…
+   tribunal       │   Install: enter on a [+] module, then i; `hive module add …
  ▸ website        │
                   │
                   │

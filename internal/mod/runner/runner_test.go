@@ -172,3 +172,20 @@ func TestReviewThatCannotBeRecorded(t *testing.T) {
 		t.Fatalf("%d events for a vote that was never recorded", n)
 	}
 }
+
+// A module whose manifest asks for more than the reach it was installed with
+// is refused before any review starts, with an alert.
+func TestUndeclaredReachIsRefused(t *testing.T) {
+	r, m, commit := newRunner(t, "door")
+	m.Source = modules.Source{Source: "https://example.com/door", Commit: commit, Trust: "reviewed", Needs: &modules.Needs{Program: true}}
+	if why := r.check("door", m); !strings.Contains(why, "refused") || !strings.Contains(why, "hook source") {
+		t.Fatalf("undeclared hook: %q", why)
+	}
+	if _, ok := r.C.Runs.Get("mr-door-" + commit[:12]); ok || r.count("alert.raised") != 1 {
+		t.Fatal("want no review and one alert")
+	}
+	m.Source.Needs.Hooks = []string{"source"}
+	if why := r.check("door", m); why != "waiting for its code review" {
+		t.Fatalf("declared: %q", why)
+	}
+}

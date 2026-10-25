@@ -515,6 +515,16 @@ func (m *model) keyDetailAction(d *detail, key string) (tea.Model, tea.Cmd) {
 			}
 		case "r":
 			return m, m.post("/api/module/review", map[string]any{"module": mod.Name}, "its code will be read again")
+		case "x":
+			if mod.Source == "builtin" {
+				return m, flash("a standard module stays; take it from every project instead")
+			}
+			m.stack = m.stack[:len(m.stack)-1]
+			return m, m.post("/api/module/remove", map[string]any{"module": mod.Name}, mod.Name+" uninstalled")
+		}
+	case "listing":
+		if key == "i" {
+			return m, m.post("/api/module/add", map[string]any{"spec": d.id}, "install of "+d.id+" asked; see Waiting if it needs you")
 		}
 	}
 	return m, nil
@@ -605,6 +615,15 @@ func (m *model) viewDetail(d *detail) []string {
 		kv("module", mod.Name)
 		kv("source", mod.Source)
 		kv("release", mod.Release)
+		if mod.Trust != "" {
+			kv("trust", mod.Trust)
+		}
+		if mod.Needs != "" {
+			kv("reach", mod.Needs)
+		}
+		if mod.Read != "" {
+			kv("read", mod.Read)
+		}
 		lines = append(lines, "")
 		lines = append(lines, indent(wrap(mod.Description, w-2), "  ")...)
 		lines = append(lines, "", stTitle.Render("projects that may use it"))
@@ -624,8 +643,10 @@ func (m *model) viewDetail(d *detail) []string {
 			}
 			lines = append(lines, line)
 		}
-		lines = append(lines, "", stDim.Render("space grant or remove · r read its code again"))
+		lines = append(lines, "", stDim.Render("space grant or remove · r read its code again · x uninstall"))
 		return window(lines, top+d.sel, m.bodyHeight())
+	case "listing":
+		lines = append(lines, m.viewListing(d.id, w)...)
 	case "diff":
 		lines = append(lines, diffView(d.text, w)...)
 	default:
@@ -823,13 +844,17 @@ func (m *model) keyModules(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.modSel--
 		}
 	case "down", "j":
-		if m.modSel < len(m.st.Modules)-1 {
+		if m.modSel < len(m.st.Modules)+len(m.listable())-1 {
 			m.modSel++
 		}
 	case "enter", "right", "l":
 		if m.modSel < len(m.st.Modules) {
 			mod := m.st.Modules[m.modSel]
 			return m, m.push(detail{kind: "module", id: mod.Name, title: mod.Name})
+		}
+		if l := m.listable(); m.modSel-len(m.st.Modules) < len(l) {
+			name := l[m.modSel-len(m.st.Modules)].Name
+			return m, m.push(detail{kind: "listing", id: name, title: name + " (not installed)"})
 		}
 	}
 	return m, nil
@@ -849,7 +874,11 @@ func (m *model) viewModules() []string {
 		}
 		lines = append(lines, line)
 	}
+	lines = append(lines, m.marketRows(w)...) // right after, so row i is still modSel i
 	lines = append(lines, "", stDim.Render(strings.Repeat("─", w)), "")
+	if l, ok := m.selListing(); ok {
+		lines = append(lines, m.viewListing(l.Name, min(w, 72))...)
+	}
 	if mod, ok := m.module(m.modName()); ok {
 		lines = append(lines, stTitle.Render(mod.Name))
 		lines = append(lines, wrap(mod.Description, min(w, 72))...)
@@ -858,7 +887,10 @@ func (m *model) viewModules() []string {
 			lines = append(lines, stDim.Render(fmt.Sprintf("%-14s", kv[0]))+kv[1])
 		}
 	}
-	lines = append(lines, "", stDim.Render("Install a module by asking the lead (it needs your approval). Modules live in .modules/."))
+	for _, e := range m.market.Errors {
+		lines = append(lines, "", stDim.Render(fit("index unread: "+e, w)))
+	}
+	lines = append(lines, "", stDim.Render("Install: enter on a [+] module, then i; `hive module add <name>`; or ask the lead."))
 	return window(indent(lines, "  "), m.modSel, m.bodyHeight()) // the list's rows come first
 }
 

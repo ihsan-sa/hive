@@ -705,12 +705,7 @@ func TestInstallRefusesSandboxPath(t *testing.T) {
 // warden does, its answer reaches the ask's handler as the person's would,
 // and the person is told after.
 func TestAutonomyDecidesProtectedChanges(t *testing.T) {
-	src := t.TempDir()
-	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "v1"}, {"tag", "v1.0.0"}} {
-		if _, err := core.Git(src, args...); err != nil {
-			t.Fatal(err)
-		}
-	}
+	src, sha := moduleRepo(t, "greet", `{"name": "greet", "description": "a skill"}`)
 	changes := map[string]string{
 		"goal":    "+- ship the beta to the three testers",
 		"score":   `+"score": {"command": "cat score.txt", "direction": "higher"}`,
@@ -725,7 +720,8 @@ func TestAutonomyDecidesProtectedChanges(t *testing.T) {
 			if what == "module" {
 				kind = "module"
 				lead, _ = g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir()})
-				if _, err := g.call(lead, "install_module", map[string]string{"url": src}); err != nil {
+				g.index(modules.Listing{Name: "greet", Repo: src, Sha: sha, Trust: "core-team"})
+				if _, err := g.call(lead, "install_module", map[string]string{"name": "greet"}); err != nil {
 					t.Fatal(err)
 				}
 			} else {
@@ -960,7 +956,8 @@ func TestModuleInstallAskCarriesTheProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.call(lead, "install_module", map[string]string{"url": t.TempDir()}); err != nil {
+	src, _ := moduleRepo(t, "door", `{"name": "door"}`)
+	if _, err := g.call(lead, "install_module", map[string]string{"url": src}); err != nil {
 		t.Fatal(err)
 	}
 	filed := 0
@@ -1199,5 +1196,148 @@ func TestLongAskFormsAPanel(t *testing.T) {
 	g.vote(req, "approve", "approve", "decline")
 	if got := g.settle(req.ID, "tribunal", "approved", "running"); got.State != "done" || !core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("the panel reached no verdict that ran: %+v", got)
+	}
+}
+
+// moduleRepo makes a git repository holding one module and returns it and its commit.
+func moduleRepo(t *testing.T, name, manifest string) (string, string) {
+	t.Helper()
+	src := filepath.Join(t.TempDir(), name)
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "module.json"), []byte(manifest), 0o644)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"commit", "-q", "-m", "v1"}} {
+		if out, err := core.Git(src, args...); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+	}
+	sha, _ := core.Git(src, "rev-parse", "HEAD")
+	return src, sha
+}
+
+// index points the Hive at an index (a folder) listing ls.
+func (g *rig) index(ls ...modules.Listing) {
+	dir := filepath.Join(g.c.WS.Root, "index")
+	os.MkdirAll(dir, 0o755)
+	raw, _ := json.Marshal(map[string]any{"modules": ls})
+	os.WriteFile(filepath.Join(dir, "index.json"), raw, 0o644)
+	cfg := g.c.WS.LoadConfig()
+	cfg.Indexes = []string{dir}
+	g.c.WS.SaveConfig(cfg)
+}
+
+// A module no index vouches for waits for the person whatever the autonomy,
+// with what it declares in the ask, and installs on their yes; the lead hears.
+func TestUnlistedModuleWaitsForThePerson(t *testing.T) {
+	g := newRig(t, 3)
+	lead, _ := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir()})
+	src, sha := moduleRepo(t, "door", `{"name": "door", "description": "a door", "exec": ["./door"], "hooks": ["source"]}`)
+	if _, err := g.call(lead, "install_module", map[string]string{"url": src}); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.m.List()) != 0 {
+		t.Fatal("a warden weighs an unlisted module")
+	}
+	var ask core.Ask
+	for _, a := range g.c.Person.Open() {
+		if a.Kind == "module" {
+			ask = a
+		}
+	}
+	if ask.ID == "" || !strings.Contains(ask.Detail, "unlisted") || !strings.Contains(ask.Detail, "runs a program; hooks: source") || !strings.Contains(ask.Detail, sha) {
+		t.Fatalf("the person's ask: %+v", ask)
+	}
+	if _, ok := g.m.Mod.Get("door"); ok {
+		t.Fatal("installed before the person said yes")
+	}
+	g.c.Person.Answer(ask.ID, "install", "")
+	if !eventually(func() bool {
+		r := g.run(lead.ID)
+		return len(r.Pending) > 0 && strings.Contains(r.Pending[len(r.Pending)-1], "[module door installed at")
+	}) {
+		t.Fatalf("the lead didn't hear it installed: %v", g.run(lead.ID).Pending)
+	}
+	if m, _ := g.m.Mod.Get("door"); m.Source.Commit != sha || m.Source.Trust != "unlisted" {
+		t.Fatalf("installed %+v", m.Source)
+	}
+}
+
+// An index's new pin is read as a diff before it installs: a warden weighs
+// the diff of a listed module (the person at autonomy 1) and its yes
+// installs it; an unlisted module's newer release goes to the person.
+func TestModuleUpdateNeedsADiffRead(t *testing.T) {
+	g := newRig(t, 2)
+	src, v1 := moduleRepo(t, "greet", `{"name": "greet", "description": "a skill"}`)
+	g.index(modules.Listing{Name: "greet", Repo: src, Sha: v1, Trust: "reviewed", Read: "read at v1"})
+	p, err := g.m.Mod.Resolve("greet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.m.Mod.Install(p); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(src, "skill.md"), []byte("the codeword is FIG\n"), 0o644)
+	core.Git(src, "add", "-A")
+	core.Git(src, "commit", "-q", "-m", "v2")
+	v2, _ := core.Git(src, "rev-parse", "HEAD")
+	if msg, _ := g.m.UpdateModules(); msg != "all modules current" {
+		t.Fatalf("an unpinned commit was offered: %s", msg)
+	}
+	g.index(modules.Listing{Name: "greet", Repo: src, Sha: v2, Trust: "reviewed", Read: "read at v2"})
+	if msg, _ := g.m.UpdateModules(); !strings.Contains(msg, "asked of the warden") {
+		t.Fatalf("update: %s", msg)
+	}
+	reqs := g.m.List()
+	if len(reqs) != 1 || !strings.Contains(reqs[0].Why, "+the codeword is FIG") {
+		t.Fatalf("the warden doesn't read the diff: %+v", reqs)
+	}
+	if m, _ := g.m.Mod.Get("greet"); m.Source.Commit != v1 {
+		t.Fatal("updated before the read")
+	}
+	g.m.UpdateModules() // asked again while it's weighed: still one request
+	if len(g.m.List()) != 1 {
+		t.Fatalf("the update was weighed twice: %d", len(g.m.List()))
+	}
+	if err := g.decide(reqs[0], map[string]string{"decision": "do", "reason": "the diff only changes the skill"}); err != nil {
+		t.Fatal(err)
+	}
+	if !eventually(func() bool { m, _ := g.m.Mod.Get("greet"); return m.Source.Commit == v2 }) {
+		t.Fatal("the warden's yes didn't update it")
+	}
+
+	// Unlisted: the person reads it.
+	door, _ := moduleRepo(t, "door", `{"name": "door"}`)
+	p, _ = g.m.Mod.Resolve(door)
+	if _, err := g.m.Mod.Install(p); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(door, "more.md"), []byte("more\n"), 0o644)
+	core.Git(door, "add", "-A")
+	core.Git(door, "commit", "-q", "-m", "v2")
+	g.m.UpdateModules()
+	for _, a := range g.c.Person.Open() {
+		if a.Kind == "module-update" && strings.Contains(a.Diff, "+more") {
+			g.c.Person.Answer(a.ID, "skip", "")
+			if !eventually(func() bool { m, _ := g.m.Mod.Get("door"); return m.Source.Skipped != "" }) {
+				t.Fatal("a skipped update isn't recorded")
+			}
+			return
+		}
+	}
+	t.Fatalf("the unlisted update didn't reach the person with its diff: %+v", g.c.Person.Open())
+}
+
+// A name or URL can't stand for an isolated project, past the checks the
+// project route makes.
+func TestInstallNameIsOnlyAName(t *testing.T) {
+	g := newRig(t, 2)
+	g.c.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	lead, _ := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir()})
+	for _, args := range []map[string]string{{"name": "project:secret"}, {"name": "x=project:secret"}, {"url": "project:secret"}} {
+		if _, err := g.call(lead, "install_module", args); err == nil {
+			t.Errorf("%v was accepted", args)
+		}
+	}
+	if len(g.c.Person.Open()) != 0 || len(g.m.List()) != 0 {
+		t.Fatal("a refused install was filed")
 	}
 }

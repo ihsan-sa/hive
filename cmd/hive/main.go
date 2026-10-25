@@ -56,6 +56,8 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive egress              the services on this machine agents may reach
   hive egress grant <host:port>   open one to every sandboxed run (loopback only, e.g. 127.0.0.1:11434)
   hive egress revoke <host:port>  close it again
+  hive module [browse|add <name>[@sha]|rm <name>|index [add|rm <url>]]
+                           modules: installed, what the indexes list, install, uninstall (docs/modules.md)
   hive model               the named models (free ones too) and the routes that pick each role's model
   hive model add <name> <endpoint> <model id> [--key] [--no-probe]   a model on an OpenAI-compatible endpoint, e.g.
                            hive model add qwen http://127.0.0.1:11434/v1 qwen2.5-coder:14b
@@ -284,6 +286,8 @@ func run(args []string) int {
 		return cmdEgress(args)
 	case "model":
 		return cmdModel(args)
+	case "module":
+		return cmdModule(args)
 	case "share":
 		return cmdShare(args)
 	case "update":
