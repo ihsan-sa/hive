@@ -71,11 +71,7 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 			cmd.Stdout, cmd.Stderr = log, log
 		}
 		runErr := cmd.Run()
-		// A gate killed or crashed mid-run left its children. Reap runs here
-		// as the person: only on a run folder of the Hive's own.
-		if rel, err := filepath.Rel(ws.Gates(), j.Out); err == nil && filepath.IsLocal(rel) {
-			gate.Reap(j.Out)
-		}
+		gate.Reap(j.Out) // a gate killed or crashed mid-run left its children
 		g := readReport(j, runErr, ctx.Err())
 		g.Note = note
 		return g

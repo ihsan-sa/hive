@@ -5,12 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
@@ -135,24 +132,7 @@ func cmdGate(args []string) int {
 			cfg.Org, cfg.OrgToken, cfg.ChildToken = gate.GitHub{Owner: *org, Token: tok}, tok, child
 		}
 	}
-	// A gate a person interrupts or kills (but for SIGKILL) ends what it
-	// started and tidies its run now, not when the next gate runs.
-	sig := make(chan os.Signal, 1)
-	var stopping atomic.Bool
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		s := <-sig
-		stopping.Store(true)
-		fmt.Fprintf(os.Stderr, "gate: %v: ending what the run started\n", s)
-		n := gate.Reap(cfg.Out)
-		fmt.Fprintf(os.Stderr, "gate: ended %d processes; logs kept in %s\n", n, cfg.Out)
-		os.Exit(3)
-	}()
 	rep, err := gate.Run(cfg)
-	signal.Stop(sig)
-	if stopping.Load() {
-		select {} // the handler exits once it has reaped
-	}
 	raw, _ := json.MarshalIndent(rep, "", "  ")
 	fmt.Println(string(raw))
 	fmt.Fprintf(os.Stderr, "gate: %s (%s); report in %s\n", outcome(rep), rep.Verdict.Reason, cfg.Out)
