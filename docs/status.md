@@ -1,5 +1,6 @@
 # Status - 2026-10-22
 
+[overview.md](overview.md) repeats a few facts from here (the untested macOS sandbox, Codex without a real login, the gate not yet keeping a change on merit). When one of them changes, change it there too.
 Paused:
 - macOS and Windows, on the person's word (2026-10-24, issue #564: "only building linux releases for now and only focusing on the RSI"). CI (`test`, `sandboxed-e2e`, `old-releases`), the update and install-smoke tests run on ubuntu-latest alone, release.yml builds linux/amd64 and linux/arm64 only, and only a Linux Hive follows pre-releases (`runners` in internal/mod/release/prerelease.go). Nothing in the merge path waits on another system. They come back once the self-improvement loop is tight and fast: restore the matrices, the release targets and `runners`. Notes below about macOS or Windows describe how things stood before the pause.
 
