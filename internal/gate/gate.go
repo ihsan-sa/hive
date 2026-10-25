@@ -347,7 +347,7 @@ func Run(cfg Config) (rep Report, err error) {
 			}{{cand, &rep.Candidate}, {ctrl, &rep.Control}} {
 				if time.Now().After(deadline) {
 					err = fmt.Errorf("out of time (%s) before %s's %s", cfg.Timeout, side.c.Name, name)
-					if probeSeconds(rep.Candidate) > probeSeconds(rep.Control) {
+					if slowerAlone(rep.Candidate, rep.Control) {
 						err = alone{err} // the candidate took the time; on a slow machine both would
 					}
 					return rep, err
@@ -382,13 +382,17 @@ func Run(cfg Config) (rep Report, err error) {
 	return rep, nil
 }
 
-// probeSeconds is the seconds a side's probes took.
-func probeSeconds(rs []Result) float64 {
-	var s float64
-	for _, r := range rs {
-		s += r.Seconds
+// slowerAlone says the candidate took more time than the control over the
+// probes both ran. The candidate goes first, so it may have run one more;
+// that one is left out, or a machine slow for both would blame it.
+func slowerAlone(cand, ctrl []Result) bool {
+	n := min(len(cand), len(ctrl))
+	var c, k float64
+	for i := 0; i < n; i++ {
+		c += cand[i].Seconds
+		k += ctrl[i].Seconds
 	}
-	return s
+	return c > k
 }
 
 func hasMetric(r Result, name string) bool {
