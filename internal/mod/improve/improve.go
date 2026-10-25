@@ -557,29 +557,33 @@ func (m *Module) superseded(p core.Project, sha string) bool {
 }
 
 // Covered is a merge that wasn't measured on its own: main already held it
-// when it was measured at By.
+// when it was measured at By. Red says that measurement wasn't kept, so the
+// change went in under a red main and a reader can't take it as cleared.
 type Covered struct {
 	Project string    `json:"project"`
 	SHA     string    `json:"sha"`
 	Task    string    `json:"task"`
 	By      string    `json:"by"`
+	Red     bool      `json:"red,omitempty"`
 	At      time.Time `json:"-"`
 }
 
-// coveredBy is a commit already measured on p's main that contains sha, so
+// coveredBy is the measurement of a commit on p's main that contains sha, so
 // measuring sha now would test old code (a pull request that landed hours
 // before its task closed) and blame it on main. Main is linear, so the newest
-// measurement with a result is the one to ask.
-func (m *Module) coveredBy(p core.Project, sha string) string {
+// measurement with a result is the one to ask: one ancestry check, however
+// long the history. It trusts measurements to be recorded in main's order, so
+// a merge that comes back late (held for a missing tool, or requeued after a
+// failed sync while a later merge was measured) is covered by that later
+// measurement, red or not, as superseded already treats it; the Red mark on
+// its score.covered line is what tells a reader the later red may be its.
+func (m *Module) coveredBy(p core.Project, sha string) (Measurement, bool) {
 	for _, x := range slices.Backward(m.Scores(p.Name)) {
 		if !x.NoResult {
-			if m.after(p, x.SHA, sha) {
-				return x.SHA
-			}
-			return ""
+			return x, m.after(p, x.SHA, sha)
 		}
 	}
-	return ""
+	return Measurement{}, false
 }
 
 // introduced says the merge itself brought in the command that calls the
@@ -649,8 +653,8 @@ func (m *Module) afterMerge(t work.Task) {
 		go func() { time.Sleep(time.Minute); m.queue <- t }()
 		return
 	}
-	if by := m.coveredBy(p, t.MergeSHA); by != "" {
-		m.C.J.MustAppend("score.covered", Covered{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, By: by})
+	if by, ok := m.coveredBy(p, t.MergeSHA); ok {
+		m.C.J.MustAppend("score.covered", Covered{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, By: by.SHA, Red: !by.Kept})
 		return
 	}
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
@@ -971,6 +975,20 @@ func (m *Module) Digest(since int64, only string) string {
 			fmt.Fprintf(&b, "Best kept score: %g\n\n", best)
 		}
 		b.WriteString("Recent measurements of main:\n")
+		m.mu.Lock()
+		cov := slices.Clone(m.covered[p.Name])
+		m.mu.Unlock()
+		if len(ms) > 0 { // covered merges from the same stretch as the measurements shown
+			cov = slices.DeleteFunc(cov, func(c Covered) bool { return c.At.Before(ms[0].At) })
+		}
+		if len(cov) > 5 {
+			cov = cov[len(cov)-5:]
+		}
+		type line struct {
+			at   time.Time
+			text string
+		}
+		var lines []line
 		for _, x := range ms {
 			sc := "-"
 			if x.Score != nil {
@@ -980,16 +998,18 @@ func (m *Module) Digest(since int64, only string) string {
 			if x.NoResult {
 				kept = "no-result"
 			}
-			fmt.Fprintf(&b, "- %s %s score=%s kept=%s %s\n", x.At.Format("01-02 15:04"), core.Short(x.SHA), sc, kept, core.Clip(x.Note, 200))
-		}
-		m.mu.Lock()
-		cov := m.covered[p.Name]
-		m.mu.Unlock()
-		if len(cov) > 5 {
-			cov = cov[len(cov)-5:]
+			lines = append(lines, line{x.At, fmt.Sprintf("%s score=%s kept=%s %s", core.Short(x.SHA), sc, kept, core.Clip(x.Note, 200))})
 		}
 		for _, c := range cov {
-			fmt.Fprintf(&b, "- %s %s not measured: main already held it when measured at %s (task %s)\n", c.At.Format("01-02 15:04"), core.Short(c.SHA), core.Short(c.By), c.Task)
+			state := "kept"
+			if c.Red {
+				state = "red, so this change went in under a red main"
+			}
+			lines = append(lines, line{c.At, fmt.Sprintf("%s (task %s) not measured: main already held it when measured at %s, which was %s", core.Short(c.SHA), c.Task, core.Short(c.By), state)})
+		}
+		slices.SortStableFunc(lines, func(a, b line) int { return a.at.Compare(b.at) })
+		for _, l := range lines {
+			fmt.Fprintf(&b, "- %s %s\n", l.at.Format("01-02 15:04"), l.text)
 		}
 		b.WriteString("\nWork:\n")
 		for i, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {
