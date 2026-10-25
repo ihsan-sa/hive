@@ -881,7 +881,10 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 		}
 		a.URL = m.C.WS.Project(a.Project)
 	}
-	if p := strings.TrimPrefix(a.URL, "file://"); p == "/work" || strings.HasPrefix(p, "/work/") || strings.HasPrefix(p, "/hive/") {
+	// Only a path the agent gave is checked, and only when the daemon can't
+	// see it: a sandbox path like /work/x doesn't exist on the host, while a
+	// host path that merely starts with /hive/ (a test's TMPDIR) does.
+	if p := strings.TrimPrefix(a.URL, "file://"); a.Project == "" && (p == "/work" || strings.HasPrefix(p, "/work/") || strings.HasPrefix(p, "/hive/")) && !core.Exists(p) {
 		return nil, errors.New("that path is inside your sandbox, and the install runs on the host where it doesn't exist: build the module as a project of its own and install it with --project <name>")
 	}
 	if !strings.HasPrefix(a.URL, "https://") && !strings.HasPrefix(a.URL, "git@") && !strings.HasPrefix(a.URL, "file://") && !core.Exists(a.URL) {
