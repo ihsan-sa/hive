@@ -6,6 +6,7 @@ import (
 	"maps"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -123,6 +124,14 @@ func machine(cfg core.Config) (string, bool) {
 		why = core.Loaded(cfg.LoadMax)
 	}
 	return why, core.Watched(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax)
+}
+
+// steady is a strain without its readings ("machine loaded", not the load
+// now), for a reason saved with a task: readings that move each minute would
+// re-save it each minute.
+func steady(strain string) string {
+	s, _, _ := strings.Cut(strain, " (")
+	return s
 }
 
 // safeWorkers is the workers' ceiling when the person sets none: one a core,
