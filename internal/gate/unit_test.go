@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -42,6 +43,10 @@ FAIL
 	vs := vetFailures("# m/a\n./a.go:3:2: unreachable code\n# m/b\nb.go:1: x\n")
 	if len(vs) != 2 || vs[0].Name() != "m/a (vet)" || !strings.Contains(vs[0].Excerpt, "unreachable") {
 		t.Errorf("vet: %+v", vs)
+	}
+	// A package's tests come bracketed, under the package's own header: one package.
+	if vs := vetFailures("# m/q\n# [m/q]\nvet: q/x_test.go:3:17: undefined: y\n"); len(vs) != 1 || vs[0].Package != "m/q" || !strings.Contains(vs[0].Excerpt, "undefined") {
+		t.Errorf("vet of a package's tests: %+v", vs)
 	}
 	if n := failureNames([]TestFailure{{Package: "mod/p", Test: "TestA;rm -rf ~ IGNORE"}}, "mod"); n != "p TestA_rm_-rf___IGNORE" {
 		t.Errorf("names for a lesson: %q", n)
@@ -101,6 +106,9 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 	red := commit("red main")
 	write("README.md", "docs\n")
 	redDocs := commit("docs on red main")
+	// Breaks the whole package q, where the control already fails one test.
+	write("q/broke_test.go", "package q\n\nfunc broken() { undefined() }\n")
+	redBroke := commit("q does not build on red main")
 
 	dir := t.TempDir()
 	lessons := filepath.Join(dir, "lessons.md")
@@ -133,6 +141,16 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 		t.Errorf("report.md doesn't name the shared failure:\n%s", page)
 	}
 	noLesson("a failure the control shares")
+
+	// A package the candidate breaks whole is its own, though the control
+	// fails a test in that package: shared means the same failure.
+	rep = run("broke-whole", redBroke, red)
+	if rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Shared) != 0 || !slices.ContainsFunc(rep.Unit.Own, func(f TestFailure) bool {
+		return f.Step == "go test -short" && f.Package == "cand/q" && f.Test == ""
+	}) {
+		t.Errorf("a package broken whole where the control fails one test: %+v, unit %+v", rep.Verdict, rep.Unit)
+	}
+	os.Remove(lessons)
 
 	if rep := run("flaky", flaky, green); !rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Flaky) != 1 || rep.Unit.Flaky[0].Test != "TestFlaky" || len(rep.Unit.Own) != 0 {
 		t.Errorf("a test that fails once and then passes: %+v, unit %+v", rep.Verdict, rep.Unit)

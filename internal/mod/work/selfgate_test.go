@@ -192,6 +192,26 @@ func TestSelfGateCantRunHoldsOthersAtTheSameMain(t *testing.T) {
 	}
 }
 
+// A can't-run whose cause is that change alone (its own build, its clock)
+// holds no other change at the same main.
+func TestSelfGateCantRunAloneHoldsNobody(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
+	inner := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+		g := inner(ctx, j)
+		g.Alone = true
+		return g
+	}
+	gateOnce(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	m.mu.Lock()
+	_, held := m.gateCantRun[p.Name+"@"+main]
+	m.mu.Unlock()
+	if len(*jobs) != 1 || held {
+		t.Fatalf("%d runs, held %v: want the run recorded without holding others", len(*jobs), held)
+	}
+}
+
 // With no gate runner a self project's change can't be judged and waits.
 func TestSelfGateWithoutRunnerWaits(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
