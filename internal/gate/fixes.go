@@ -80,11 +80,15 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 		note("the candidate's go.mod names no module")
 		return
 	}
+	head := cand.Commit // the tree the candidate was built from: its head with the base merged in
+	if head == "" {
+		head = cfg.Head
+	}
 	from := cfg.Base
-	if out, err := gitRun(cand.Src, "git", "merge-base", cfg.Base, cfg.Head); err == nil && strings.TrimSpace(out) != "" {
+	if out, err := gitRun(cand.Src, "git", "merge-base", cfg.Base, head); err == nil && strings.TrimSpace(out) != "" {
 		from = strings.TrimSpace(out) // the candidate's own changes, not main's since it branched
 	}
-	code, tests, err := changedGo(cand.Src, from, cfg.Head)
+	code, tests, err := changedGo(cand.Src, from, head)
 	switch {
 	case err != nil:
 		note("reading the diff: %v", err)
@@ -96,7 +100,7 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 		note("the change adds or changes no test")
 		return
 	}
-	touched, err := touchedLines(cand.Src, from, cfg.Head, code)
+	touched, err := touchedLines(cand.Src, from, head, code)
 	if err != nil {
 		note("reading the diff: %v", err)
 		return
