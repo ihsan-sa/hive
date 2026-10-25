@@ -1240,3 +1240,20 @@ func TestRedKeys(t *testing.T) {
 		t.Fatalf("nothing named: %q", got)
 	}
 }
+
+// SecurityWhere names why a change needs a security read: the list, the
+// project's root class, or, for a mixed change, both with the unlisted files.
+func TestSecurityWhere(t *testing.T) {
+	for _, c := range []struct {
+		ch   Change
+		want string
+	}{
+		{Change{Security: []string{"tests/a.go"}}, "on " + SecurityList},
+		{Change{Security: []string{".github/x.yml"}, Unlisted: []string{".github/x.yml"}}, "in the project's root class (which runs with elevated rights)"},
+		{Change{Security: []string{"tests/a.go", ".github/x.yml"}, Unlisted: []string{".github/x.yml"}}, "on " + SecurityList + " or in the project's root class (.github/x.yml)"},
+	} {
+		if got := c.ch.SecurityWhere(); got != c.want {
+			t.Errorf("%v: %q, want %q", c.ch.Security, got, c.want)
+		}
+	}
+}

@@ -269,9 +269,13 @@ type Runs struct {
 	down    map[string]Down    // picks that can't answer, by Pick.String
 	strikes map[string]strike  // each pick's straight turns ending in the same error
 	cfg     Config             // the config of the latest tick, which a Down is fingerprinted against
-	// proven is the picks (Pick.String) some run has finished done on: the
-	// only ones a run that must finish falls back to (next).
+	// proven is the picks (Pick.String) some run has finished done on, every
+	// turn of it on that pick: the only ones a run that must finish falls
+	// back to (next). ranOn is the pick each run's turns ran on, "" once they
+	// ran on more than one, so a run that did its work on opus and finished on
+	// a fallback proves neither.
 	proven map[string]bool
+	ranOn  map[string]string
 	// launching counts launches past the hold whose turn isn't journalled
 	// yet; leadLaunching those of leads, which the other roles' wait for.
 	launching, leadLaunching int
@@ -326,7 +330,7 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, proven: map[string]bool{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, proven: map[string]bool{}, ranOn: map[string]string{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -595,6 +599,11 @@ func (rs *Runs) apply(e Event) {
 		if !t.Resume {
 			r.SessionLive = false // a new session, live once the harness says it began
 		}
+		on := Pick{Harness: HarnessName(r.Harness), Model: r.Model}.String()
+		if prev, ok := rs.ranOn[r.ID]; ok && prev != on {
+			on = ""
+		}
+		rs.ranOn[r.ID] = on
 		r.Waiting = ""
 		if t.Delivered <= len(r.Pending) {
 			r.Pending = r.Pending[t.Delivered:]
@@ -655,8 +664,9 @@ func (rs *Runs) apply(e Event) {
 		e.Decode(&f)
 		f.Finish.Printed = f.Finish.Printed || f.Printed
 		r.Finish = &f.Finish
-		if f.Finish.Status == "done" {
-			rs.proven[Pick{Harness: HarnessName(r.Harness), Model: r.Model}.String()] = true
+		on := Pick{Harness: HarnessName(r.Harness), Model: r.Model}.String()
+		if prev, ok := rs.ranOn[r.ID]; f.Finish.Status == "done" && (!ok || prev == on) {
+			rs.proven[on] = true
 		}
 	case "run.progress":
 		var n runNote
@@ -880,8 +890,25 @@ func (rs *Runs) freeAt(h, model string) time.Time {
 // without finishing while others waited on it (task 135947 on gpt-oss), so it
 // waits for its own model's reset instead.
 func (rs *Runs) next(r Run) (Pick, time.Time) {
+	picks, _ := rs.picks(r)
+	best, at := picks[0], time.Time{}
+	for _, p := range picks {
+		free := rs.freeAt(p.Harness, p.Model)
+		if !free.After(time.Now()) {
+			return p, free
+		}
+		if at.IsZero() || free.Before(at) {
+			best, at = p, free
+		}
+	}
+	return best, at
+}
+
+// picks is r's picks in the order next tries them, and those of its route
+// it won't go on because no run has finished done on them (unproven).
+func (rs *Runs) picks(r Run) (picks, unproven []Pick) {
 	own := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
-	picks := []Pick{own}
+	picks = []Pick{own}
 	if rs.Route != nil && r.Persistent {
 		if route := rs.Route(r); len(route) > 0 {
 			picks = route
@@ -898,23 +925,19 @@ func (rs *Runs) next(r Run) (Pick, time.Time) {
 			first = r.RunSpec.Route[0]
 		}
 		rs.mu.Lock()
-		picks = slices.DeleteFunc(picks, func(p Pick) bool { return !p.Same(first) && !rs.proven[p.String()] })
+		picks = slices.DeleteFunc(picks, func(p Pick) bool {
+			if p.Same(first) || rs.proven[p.String()] {
+				return false
+			}
+			unproven = append(unproven, p)
+			return true
+		})
 		rs.mu.Unlock()
 		if !slices.ContainsFunc(picks, first.Same) {
 			picks = append([]Pick{first}, picks...)
 		}
 	}
-	best, at := picks[0], time.Time{}
-	for _, p := range picks {
-		free := rs.freeAt(p.Harness, p.Model)
-		if !free.After(time.Now()) {
-			return p, free
-		}
-		if at.IsZero() || free.Before(at) {
-			best, at = p, free
-		}
-	}
-	return best, at
+	return picks, unproven
 }
 
 // Spent is what runs cost in a month ("2006-01", UTC), from the harnesses' results.
@@ -1368,6 +1391,15 @@ func (rs *Runs) endTurn(r Run) {
 		pick, until := rs.next(r)
 		te.Status, te.ParkedUntil = StatusParked, until
 		te.Reason = "usage limit; resumes " + until.Local().Format("Mon 15:04")
+		if _, unproven := rs.picks(r); len(unproven) > 0 {
+			// Say why it didn't fall back, so the person knows a trial
+			// on the model would let it.
+			names := make([]string, len(unproven))
+			for i, p := range unproven {
+				names[i] = p.String()
+			}
+			te.Reason += " (no worker has finished on " + strings.Join(names, ", ") + " yet, so it doesn't fall back there)"
+		}
 		te.Queue = []string{"The usage limit has reset. Continue where you left off."}
 		switch {
 		case until.After(time.Now()):

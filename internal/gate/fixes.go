@@ -177,7 +177,7 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 					}
 					args = append(args, "./"+t.dir)
 					out := lab.test(args)
-					reap(cfg.Out)
+					reap(cfg.Out, true)
 					got := testOutcome(out, pkg, t.name)
 					if onCand {
 						if got == "pass" {
