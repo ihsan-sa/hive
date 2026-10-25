@@ -54,3 +54,25 @@ func TestProjectModelBeatsLeadModel(t *testing.T) {
 		}
 	}
 }
+
+// A helper asked for on a plain model name runs on its project's harness;
+// a named model on the open harness, harness:model as said.
+func TestHelperPickFollowsTheProjectsHarness(t *testing.T) {
+	cfg := core.DefaultConfig()
+	cfg.Harness = "claude"
+	cfg.Models = map[string]core.OpenModel{"qwen": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"}}
+	cfg.Projects = map[string]core.ProjectSettings{"p": {Harness: "codex"}}
+	for _, tc := range []struct {
+		project, model string
+		want           core.Pick
+	}{
+		{"p", "gpt-5.5", core.Pick{Harness: "codex", Model: "gpt-5.5"}},
+		{"q", "sonnet", core.Pick{Harness: "claude", Model: "sonnet"}},
+		{"p", "claude:opus", core.Pick{Harness: "claude", Model: "opus"}},
+		{"p", "qwen", core.Pick{Harness: "open", Model: "qwen"}},
+	} {
+		if got, err := helperPick(cfg, tc.project, tc.model); err != nil || got != tc.want {
+			t.Errorf("helperPick(%q, %q) = %v, %v; want %v", tc.project, tc.model, got, err, tc.want)
+		}
+	}
+}

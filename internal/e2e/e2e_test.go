@@ -30,8 +30,10 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -111,6 +113,17 @@ func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string)
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded CI runner mustn't hold fake turns
 	if hn := os.Getenv("HIVE_E2E_HARNESS"); hn != "" {
 		cfg.Harness = hn // a live probe: real agents, plan usage
+		if _, err := harness.Get(hn); err != nil {
+			// A module's harness (opencode): its module is a default one, which
+			// the daemon writes only after it checks the harness.
+			if err := modules.New(h.ws, nil).InstallDefaults(); err != nil {
+				t.Fatal(err)
+			}
+			harness.UseModules(h.ws.Modules())
+		}
+	}
+	if m := os.Getenv("HIVE_E2E_MODEL"); m != "" { // a harness whose default model isn't Claude's (opencode/big-pickle)
+		cfg.Model, cfg.LeadModel, cfg.ReviewerModel = m, m, m
 	}
 	if sb := os.Getenv("HIVE_E2E_SANDBOX"); sb == "auto" || (sb == "" && cfg.Harness != "fake" && sandboxed()) {
 		cfg.Sandbox = "auto" // a live probe takes the path people get
@@ -126,6 +139,15 @@ func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string)
 	// Before the launch, so a daemon that is slow to answer is ended too.
 	t.Cleanup(func() {
 		h.quiesce()
+		// A clean shutdown first, so module programs (the kb's dream, run
+		// with go run) are stopped and waited for before the folder goes.
+		if h.c != nil && h.ended != nil {
+			h.c.Do("POST", "/api/shutdown", nil, nil)
+			select {
+			case <-h.ended:
+			case <-time.After(20 * time.Second):
+			}
+		}
 		h.kill()
 		for _, end := range h.jobs {
 			end()
@@ -235,7 +257,7 @@ func (h *hive) launch() {
 // sees another pid, so there it is the start time instead.
 func ours(info api.DaemonInfo, pid int, launched time.Time) bool {
 	if os.Getenv("HIVE_E2E_WRAPPED") != "" {
-		return info.Started.After(launched)
+		return !info.Started.Before(launched) // a coarse clock can stamp both at one instant
 	}
 	return info.PID == pid
 }
@@ -1369,8 +1391,10 @@ func TestHostPython(t *testing.T) {
 }
 
 // TestAgentsReadTheHive: a worker reads another run's log, a chat, a warden's
-// log and the journal from $HIVE_STATE. Under the sandbox (HIVE_E2E_SANDBOX=auto)
-// it can change none of them and reads no secret; a bare run is unsandboxed by
+// log, the journal and config.json from $HIVE_STATE. Under the sandbox
+// (HIVE_E2E_SANDBOX=auto) it can change none of them, so no agent adds a model,
+// changes an endpoint or a route, and it reads no secret (a named model's key
+// among them); a bare run is unsandboxed by
 // the person's choice, so there only the reads are checked.
 func TestAgentsReadTheHive(t *testing.T) {
 	t.Parallel()
@@ -1378,6 +1402,7 @@ func TestAgentsReadTheHive(t *testing.T) {
 	login := filepath.Join(h.ws.Hive(), "logins", "codex", "spare")
 	os.MkdirAll(login, 0o700)
 	os.WriteFile(filepath.Join(login, "auth.json"), []byte(`{"refresh_token": "planted"}`), 0o600)
+	h.ws.SaveOpenKey("spare", "sk-planted") // a named model's key, which `hive model key` stores
 	h.seed("me/peek", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "peek", "repo": "me/peek"}, nil)
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "hello"}, nil)
@@ -1404,7 +1429,7 @@ func TestAgentsReadTheHive(t *testing.T) {
 		}
 		return false
 	})
-	for _, want := range []string{"log read=true", "chat read=true", "warden read=true", "journal read=true"} {
+	for _, want := range []string{"log read=true", "chat read=true", "warden read=true", "journal read=true", "config read=true"} {
 		if !strings.Contains(account, want) {
 			t.Errorf("account lacks %q: %s", want, account)
 		}
@@ -1475,7 +1500,8 @@ var adopt func()
 var contain func(t *testing.T, pid int) func()
 
 // TestLiveWorker is the plain path on a real harness: run it with
-// HIVE_E2E_HARNESS=claude or codex. A brief goes to a worker, its PR to a
+// HIVE_E2E_HARNESS=claude or codex, or a module's harness (HIVE_E2E_HARNESS=opencode
+// HIVE_E2E_MODEL=opencode/big-pickle). A brief goes to a worker, its PR to a
 // reviewer whose verdict is structured, and it merges.
 func TestLiveWorker(t *testing.T) {
 	if os.Getenv("HIVE_E2E_HARNESS") == "" {

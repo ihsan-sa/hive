@@ -15,7 +15,8 @@ import (
 type Open struct{}
 
 func (Open) Name() string           { return "open" }
-func (Open) CapsSpend()             {} // the models it runs are free, so a budget is never spent
+func (Open) CapsSpend()             {} // it stops a turn at its budget, at the model's price (core.OpenModel.Holds refuses a budget it can't count)
+func (Open) ReadOnlyTools()         {}
 func (Open) Program() string        { return "hive" }
 func (Open) LoginCommand() []string { return nil }
 
@@ -36,14 +37,18 @@ func (Open) Args(t Turn) []string {
 	if t.MaxOutput > 0 {
 		a = append(a, "--max-output", fmt.Sprint(t.MaxOutput))
 	}
+	if t.MaxBudgetUSD > 0 {
+		a = append(a, "--max-budget-usd", fmt.Sprint(t.MaxBudgetUSD))
+	}
 	return a
 }
 
 func (Open) Env(Turn) []string { return nil }
 
-// Parse uses Claude's stream-json shape, which the open agent emits. A
-// turn's cost is never counted: the open agent knows no prices, and Claude
-// Code on another vendor's model would price its tokens as Claude's.
+// Parse uses Claude's stream-json shape, which the open agent emits. The
+// cost a line says is dropped: Claude Code on another vendor's model would
+// price its tokens as Claude's. The run manager costs a turn from its tokens
+// at the named model's price, when the person set one.
 func (Open) Parse(line []byte) []Event {
 	evs := Claude{}.Parse(line)
 	for _, e := range evs {
@@ -69,7 +74,8 @@ func (Open) Parse(line []byte) []Event {
 type OpenClaude struct{}
 
 func (OpenClaude) Name() string           { return "open" }
-func (OpenClaude) CapsSpend()             {} // as Open: a vendor's prices aren't known here, so spend isn't counted
+func (OpenClaude) CapsSpend()             {} // a budget only on a model that costs nothing (core.OpenModel.Holds)
+func (OpenClaude) ReadOnlyTools()         {}
 func (OpenClaude) Program() string        { return "claude" }
 func (OpenClaude) LoginCommand() []string { return nil }
 

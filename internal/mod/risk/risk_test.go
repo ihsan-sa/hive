@@ -342,6 +342,11 @@ func TestT3GoesToATribunalEvenOnDo(t *testing.T) {
 	if p := g.run(got.Panel[0].Run); got.Panel[0].Model == got.Panel[1].Model || g.run(got.Panel[1].Run).Model != got.Panel[1].Model || !p.ReadOnly || !p.Isolated || p.Schema != VoteSchema {
 		t.Fatalf("panel isn't read-only and isolated across the tribunal models: %+v", got.Panel)
 	}
+	for _, s := range got.Panel {
+		if r := g.run(s.Run); len(r.RunSpec.Route) > 0 {
+			t.Fatalf("seat %s can move to %v at a limit, onto another seat's model", s.Run, r.RunSpec.Route)
+		}
+	}
 }
 
 func TestTribunalMajorityRunsTheScript(t *testing.T) {

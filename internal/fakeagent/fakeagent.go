@@ -754,6 +754,7 @@ func peek(warden string) string {
 	try("chat", "chats/*.jsonl")
 	try("warden", "runs/"+warden+"/host/turn-*.jsonl")
 	try("journal", "events.jsonl")
+	try("config", "config.json") // models, endpoints and routes: `hive model add` and the route op write it, never a run
 	f, err := os.Create(filepath.Join(st, "runs", "peek-was-here"))
 	if err == nil {
 		f.Close()

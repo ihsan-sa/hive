@@ -6,6 +6,7 @@ package harness
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -31,11 +32,12 @@ type Turn struct {
 	Endpoint     string   // a named model's API base URL (OpenClaude)
 	KeyCommand   string   // a command that prints the model's key once (OpenClaude); "" for a model with none
 	Context      int      // tokens the model holds; 0 is the harness's own idea
+	Prompt       string   // the turn's prompt, for a harness that takes it as an arg (Prompter)
 }
 
 // Event is a normalized line of harness output.
 type Event struct {
-	Kind      string // init, text, tool, context, result, ratelimit
+	Kind      string // init, text, tool, context, usage, result, ratelimit
 	SessionID string
 	Tokens    int // context: what the session's context held at this reply
 	Model     string
@@ -43,6 +45,7 @@ type Event struct {
 	Tool      string
 	Result    *Result
 	RateLimit *RateLimit
+	Usage     *Tokens // usage: one step's tokens, summed into a result that carries none
 }
 
 // Result ends a turn.
@@ -110,6 +113,29 @@ func APIHosts(h Harness) []string {
 	return nil
 }
 
+// Prompter is a harness that rewrites the prompt it is sent (Spec): the
+// core sends it Prompt(t) instead of the turn's prompt, on stdin, or in the
+// args when PromptArg.
+type Prompter interface {
+	Prompt(t Turn) string
+	PromptArg() bool
+}
+
+// ReadOnlyTools says h holds a read-only turn to tools that can't write
+// (Claude Code's read tools, the fake's and the open agent's own), so the
+// turn may keep a writable mailbox; on any other harness a read-only turn can
+// run commands, and gets none.
+func ReadOnlyTools(h Harness) bool {
+	_, ok := h.(interface{ ReadOnlyTools() })
+	return ok
+}
+
+// AnswersInText says a structured answer from h comes as its result's text.
+func AnswersInText(h Harness) bool {
+	_, ok := h.(interface{ AnswersInText() bool })
+	return ok
+}
+
 // Capped is nil when h holds a turn to budget USD itself (Turn.MaxBudgetUSD).
 // A harness says it does with a CapsSpend method; 0 is no budget.
 func Capped(h Harness, budget float64) error {
@@ -119,28 +145,17 @@ func Capped(h Harness, budget float64) error {
 	return nil
 }
 
-// Get returns a harness by name.
-func Get(name string) (Harness, error) {
-	switch name {
-	case "", "claude", "claude-code":
-		return Claude{}, nil
-	case "fake":
-		return Fake{}, nil
-	case "codex":
-		return Codex{}, nil
-	case "open":
-		return Open{}, nil
-	}
-	return nil, fmt.Errorf("unknown harness %q", name)
-}
-
-// Names are the harnesses a person can pick.
-var Names = []string{"claude", "codex", "open", "fake"}
-
 // Models are the models a harness knows, the default first. The open
-// harness knows only the models the config names. Codex's are those its
+// harness knows only the models the config names, and a module's harness
+// those its spec lists. Codex's are those its
 // 0.153 release lists; a Claude model on Codex runs Codex's own default.
 func Models(harness string) []string {
+	if !builtin(harness) {
+		if s, ok := lookup(harness, false); ok {
+			return slices.Clone(s.ModelList)
+		}
+		return nil
+	}
 	switch harness {
 	case "open":
 		return nil
@@ -155,6 +170,7 @@ type Claude struct{}
 
 func (Claude) Name() string           { return "claude" }
 func (Claude) CapsSpend()             {}
+func (Claude) ReadOnlyTools()         {}
 func (Claude) Program() string        { return "claude" }
 func (Claude) LoginCommand() []string { return []string{"claude", "auth", "login"} }
 func (Claude) APIHosts() []string     { return []string{"api.anthropic.com"} }

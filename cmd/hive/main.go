@@ -8,9 +8,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/text"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -63,6 +65,9 @@ const usage = `hive: a small team of AI agents working on your projects.
                            hive model add kimi https://api.moonshot.ai/anthropic kimi-k2-0905-preview --key --anthropic
   hive model key <name>    store its API key, read from stdin (kept where no agent can read it)
   hive model rm <name>     forget it and its key
+  hive harness             the harnesses agents can run on: built in, and those installed modules add
+  hive harness key <name>  store a module harness's API key, read from stdin (kept where no agent can read it)
+  hive harness login <name>  run a module harness's own login on this machine (what bare runs use)
   hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
                            (scanned first: it needs a handle list in .hive/private/scan-handles.txt or HIVE_SCAN_HANDLES)
   hive update              install the newest release [--release <tag>: that one, and stay on it]
@@ -287,6 +292,8 @@ func run(args []string) int {
 		return cmdEgress(args)
 	case "model":
 		return cmdModel(args)
+	case "harness":
+		return cmdHarness(args)
 	case "share":
 		return cmdShare(args)
 	case "update":
@@ -829,10 +836,18 @@ func cmdModel(args []string) int {
 		if cfg.Models == nil {
 			cfg.Models = map[string]core.OpenModel{}
 		}
+		was, replaced := cfg.Models[args[1]]
 		cfg.Models[args[1]] = m
 		if err := cfg.Check(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
+		}
+		if m.Key && cfg.Plaintext(args[1]) {
+			fmt.Fprintf(os.Stderr, "%s is plain http on a public host, so its key would cross the network unencrypted; use its https:// endpoint\n", m.Endpoint)
+			return 1
+		}
+		if replaced {
+			fmt.Printf("Replacing %s (was %s).\n", args[1], was.Where())
 		}
 		// One real request first: a model that can't answer isn't added.
 		var err error
@@ -851,11 +866,36 @@ func cmdModel(args []string) int {
 			fmt.Printf("%s answered.\n", args[1])
 		}
 	case args[0] == "rm" && len(args) == 2:
+		if _, ok := cfg.Models[args[1]]; !ok {
+			fmt.Fprintf(os.Stderr, "no model %q\n", args[1])
+			return 1
+		}
+		// A route naming it would read the bare name as a model of the
+		// harness once it's gone, so both stay until no route does.
+		if on := routesNaming(cfg, args[1]); len(on) > 0 {
+			fmt.Fprintf(os.Stderr, "%s is still named by %s; take it off there first (Settings, or ask the lead), so nothing was removed.\n", args[1], strings.Join(on, ", "))
+			return 1
+		}
 		delete(cfg.Models, args[1])
+		// The key goes only once the config without the model is saved.
+		if err := cfg.Check(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := ws.SaveConfig(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 		os.Remove(ws.OpenKey(args[1]))
+		fmt.Println("Removed " + args[1] + " and its key.")
+		return 0
 	case args[0] == "key" && len(args) == 2:
 		if _, ok := cfg.Models[args[1]]; !ok {
 			fmt.Fprintf(os.Stderr, "no model %q; add it first\n", args[1])
+			return 1
+		}
+		if cfg.Plaintext(args[1]) {
+			fmt.Fprintf(os.Stderr, "%s is plain http on a public host, so its key would cross the network unencrypted; point it at its https:// endpoint first (%s model add)\n", cfg.Models[args[1]].Endpoint, core.Cmd)
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, "Paste the key and press Enter:")
@@ -884,6 +924,120 @@ func cmdModel(args []string) int {
 	}
 	fmt.Println("Saved. Route a role to it in Settings, or ask the lead.")
 	return 0
+}
+
+// routesNaming are the routes and model settings that name model name, as
+// "worker", "worker in lab" or "the lead model".
+func routesNaming(cfg core.Config, name string) []string {
+	var out []string
+	for what, m := range map[string]string{"the worker model": cfg.Model, "the lead model": cfg.LeadModel, "the reviewer model": cfg.ReviewerModel} {
+		if m == name {
+			out = append(out, what)
+		}
+	}
+	slices.Sort(out)
+	for _, t := range cfg.TribunalModels {
+		if t.Model == name && (t.Harness == "" || t.Harness == "open") {
+			out = append(out, "a tribunal seat")
+		}
+	}
+	for _, p := range slices.Sorted(maps.Keys(cfg.Projects)) {
+		if cfg.Projects[p].Model == name {
+			out = append(out, "the model for "+p)
+		}
+	}
+	for _, role := range slices.Sorted(maps.Keys(cfg.Routes)) {
+		if slices.Contains(cfg.Routes[role], name) || slices.Contains(cfg.Routes[role], "open:"+name) {
+			out = append(out, role)
+		}
+	}
+	for _, p := range slices.Sorted(maps.Keys(cfg.Projects)) {
+		routes := cfg.Projects[p].Routes
+		for _, role := range slices.Sorted(maps.Keys(routes)) {
+			if slices.Contains(routes[role], name) || slices.Contains(routes[role], "open:"+name) {
+				out = append(out, role+" in "+p)
+			}
+		}
+	}
+	return out
+}
+
+func cmdHarness(args []string) int {
+	ws, err := workspace()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	harness.UseModules(ws.Modules())
+	spec := func(name string) (*harness.Spec, bool) {
+		h, err := harness.Get(name)
+		s, ok := h.(*harness.Spec)
+		if err != nil || !ok {
+			fmt.Fprintf(os.Stderr, "%q is not a module's harness; `%s harness` lists them\n", name, core.Cmd)
+		}
+		return s, ok
+	}
+	switch {
+	case len(args) == 0:
+		specs, bad := harness.Declared()
+		fmt.Println("Built in: claude, codex, open, fake.")
+		for _, s := range specs {
+			found := "not installed: `" + s.Program() + "` isn't on PATH"
+			if _, err := exec.LookPath(s.Program()); err == nil {
+				found = "`" + s.Program() + "` found"
+			}
+			key := ""
+			if s.KeyEnv != "" {
+				if _, err := os.Stat(ws.HarnessKey(s.Name())); err == nil {
+					key = ", key stored"
+				} else if !s.KeyOptional {
+					key = ", sandboxed runs need a key: " + core.Cmd + " harness key " + s.Name()
+				}
+			}
+			fmt.Printf("%s (%s, from %s): %s%s\n", s.Name(), s.Display(), filepath.Base(filepath.Dir(s.File())), found, key)
+		}
+		for _, b := range bad {
+			fmt.Println("not loaded:", b)
+		}
+		fmt.Println("Pick one in Settings (harness), per project, or per role in routes.")
+		return 0
+	case len(args) == 2 && args[0] == "key":
+		s, ok := spec(args[1])
+		if !ok {
+			return 1
+		}
+		if s.KeyEnv == "" {
+			fmt.Fprintf(os.Stderr, "%s takes no API key; log in with `%s harness login %s`\n", s.Name(), core.Cmd, s.Name())
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "Paste the key and press Enter:")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err := ws.SaveHarnessKey(s.Name(), line); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println("Stored; runs on " + s.Name() + " use it from their next turn.")
+		return 0
+	case len(args) == 2 && args[0] == "login":
+		s, ok := spec(args[1])
+		if !ok {
+			return 1
+		}
+		argv := s.LoginCommand()
+		if len(argv) == 0 {
+			fmt.Fprintf(os.Stderr, "%s has no login command of its own\n", s.Name())
+			return 1
+		}
+		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "%s login: %v\n", s.Name(), err)
+			return 1
+		}
+		return 0
+	}
+	fmt.Fprint(os.Stderr, commandHelp("harness"))
+	return 2
 }
 
 // probeFix is what would let named model name answer, read from its probe's error.

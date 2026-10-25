@@ -3,6 +3,7 @@
 package agents
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -109,9 +110,20 @@ func (a *Agents) Spawner(parent core.Run, role, project, brief, model string) (c
 	}
 	if model != "" {
 		s.Model = model
-		if p, err := a.C.WS.LoadConfig().Pick(model); err == nil {
+		if p, err := helperPick(a.C.WS.LoadConfig(), project, model); err == nil {
 			s.Harness, s.Model = p.Harness, p.Model // a named model runs on the open harness
 		}
 	}
 	return s, nil
+}
+
+// helperPick is where a helper asked for on model runs in project: a named
+// model on the open harness, harness:model as said, and a plain model name
+// on the project's harness, not the workspace's.
+func helperPick(cfg core.Config, project, model string) (core.Pick, error) {
+	p, err := cfg.Pick(model)
+	if err == nil && p.Harness != "open" && !strings.Contains(model, ":") {
+		p.Harness = core.HarnessName(cmp.Or(cfg.Projects[project].Harness, cfg.Harness))
+	}
+	return p, err
 }
