@@ -166,6 +166,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
 	w.OnMerged = func(t work.Task) { m.queue <- t }
+	w.Retest = m.retest
 	work.BestScore = m.Best
 	work.Measured = m.measured
 	c.Effects.Quarantined = m.QuarantinedTests
