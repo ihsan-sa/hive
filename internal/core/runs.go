@@ -1075,6 +1075,14 @@ func (rs *Runs) Tick(cfg Config) {
 		for _, r := range rs.List(func(r *Run) bool { return !r.Lead() && (!r.Terminal() || r.Status == StatusRunning) }) {
 			rs.stepAsync(r, cfg, nil)
 		}
+		// A run that ended without launching leaves no deferral count behind.
+		rs.mu.Lock()
+		for id := range rs.deferred {
+			if r := rs.runs[id]; r == nil || r.Terminal() {
+				delete(rs.deferred, id)
+			}
+		}
+		rs.mu.Unlock()
 	}()
 }
 
