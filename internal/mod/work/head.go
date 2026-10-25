@@ -50,7 +50,10 @@ func (m *Module) noChecks(t *Task, p core.Project, main string, runs []core.Chec
 		return false, nil
 	}
 	if t.NoChecksOn != t.SHA {
+		// Saved now: a hold whose reason didn't change saves nothing, and
+		// the next tick loads the task afresh.
 		t.NoChecks, t.NoChecksOn = time.Now().UTC(), t.SHA
+		m.save(t, "no forge check run on "+core.Short(t.SHA)+" yet; waiting up to "+noChecksMax.String()+" for one")
 	}
 	if time.Since(t.NoChecks) < noChecksMax {
 		return false, nil

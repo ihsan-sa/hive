@@ -129,14 +129,7 @@ func TestMergeForeignHeadGoesBack(t *testing.T) {
 // fixes step runs it there).
 func waitedLong(t *testing.T, task *Task) {
 	t.Helper()
-	raw, _ := json.Marshal(task)
-	var fields map[string]any
-	json.Unmarshal(raw, &fields)
-	fields["no_checks"] = time.Now().Add(-31 * time.Minute)
-	raw, _ = json.Marshal(fields)
-	if err := json.Unmarshal(raw, task); err != nil {
-		t.Fatal(err)
-	}
+	setJSON(t, task, map[string]any{"no_checks": time.Now().Add(-31 * time.Minute)})
 }
 
 // A head on which the forge reports no check run at all waits only so long:
@@ -163,5 +156,60 @@ func TestMergeNoCheckRunsIsBounded(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.SHA == old || task.Stage != StageTesting || task.Round != 0 {
 		t.Fatalf("behind main: sha %s, stage %q, reason %q", core.Short(task.SHA), task.Stage, task.Reason)
+	}
+}
+
+// A task already holding for checks that never came, with its reason
+// unchanged from tick to tick, keeps the start of its wait across ticks,
+// each of which loads it afresh: else the wait restarts every tick.
+func TestMergeNoCheckRunsWaitSurvivesReload(t *testing.T) {
+	list := map[string]string{core.SecurityList: "paths = [\"secure/**\"]\nrequired_checks = [\"sandboxed-e2e\"]\n"}
+	m, task, p, _ := gateRigSeeded(t, false, list, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	setJSON(t, task, map[string]any{"no_checks": nil, "no_checks_on": nil}) // as saved before the wait was bounded
+	m.save(task, "")
+	reload := func() *Task {
+		got, ok := m.Get(task.ID)
+		if !ok {
+			t.Fatal("task gone")
+		}
+		m.later = map[string]time.Time{}
+		return &got
+	}
+	again := reload()
+	mergeOnce(t, m, again, p)
+	again = reload()
+	raw, _ := json.Marshal(again)
+	var saved map[string]any
+	json.Unmarshal(raw, &saved)
+	if saved["no_checks_on"] != again.SHA {
+		t.Fatalf("the wait's start wasn't saved: %v", saved["no_checks_on"])
+	}
+	waitedLong(t, again)
+	mergeOnce(t, m, again, p)
+	if !strings.Contains(again.Reason, "lead has been told") || alerts(m, "main-red") != 1 {
+		t.Fatalf("reason %q, %d alerts", again.Reason, alerts(m, "main-red"))
+	}
+}
+
+// setJSON sets fields of the task's saved form, nil removing one, through
+// JSON so that this file builds on a Hive without them.
+func setJSON(t *testing.T, task *Task, set map[string]any) {
+	t.Helper()
+	raw, _ := json.Marshal(task)
+	var fields map[string]any
+	json.Unmarshal(raw, &fields)
+	for k, v := range set {
+		if v == nil {
+			delete(fields, k)
+		} else {
+			fields[k] = v
+		}
+	}
+	raw, _ = json.Marshal(fields)
+	*task = Task{}
+	if err := json.Unmarshal(raw, task); err != nil {
+		t.Fatal(err)
 	}
 }

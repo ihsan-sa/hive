@@ -1895,6 +1895,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		if still := stillOnMain(which, mainRuns); len(still) > 0 {
 			if t.MainWaitOn != t.SHA {
 				t.MainWait, t.MainWaitOn = time.Now().UTC(), t.SHA
+				m.save(t, "") // the hold below may save nothing, and the next tick loads it afresh
 			}
 			if time.Since(t.MainWait) < mainWaitMax {
 				m.hold(t, p, "waiting on main: the forge's checks "+core.CheckNames(still)+" fail on "+core.Short(t.SHA)+" and still run on main at "+core.Short(main)+", whose result says whether the red is the change's")
