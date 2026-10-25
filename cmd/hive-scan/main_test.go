@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"testing"
 )
@@ -22,6 +23,9 @@ func TestAnnotation(t *testing.T) {
 func TestRepositoryPasses(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
+	}
+	if _, err := os.Stat("../../.git"); err != nil {
+		t.Skip("not a git checkout (an exported tarball): git ls-files has nothing to list")
 	}
 	t.Setenv("HIVE_SCAN_HANDLES", "no-such-handle-zq7")
 	t.Setenv("HIVE_SCAN_DENY", "")
