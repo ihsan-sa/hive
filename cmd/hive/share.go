@@ -18,12 +18,13 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 )
 
 // bundleCap is just under the 100 MB the bundle endpoint takes.
 const bundleCap = 100<<20 - 64<<10
 
-const defaultBundleURL = "https://hive-api.ihsan.cc/v1/bundle"
+const defaultBundleURL = report.DefaultBundleURL
 
 // sharedSet is what `hive share` sends, relative to .hive. It never reaches
 // logins, bin or projects.

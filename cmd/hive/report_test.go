@@ -58,7 +58,7 @@ func TestInstallersAskTheQuestion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `Read-Host "`+"`n"+report.Question+` (y/N)"`) {
+	if !strings.Contains(string(raw), `Read-Host "`+"`n"+report.Question+` (off/failures/everything)"`) {
 		t.Fatal("install.ps1 doesn't ask report.Question word for word")
 	}
 	if !strings.HasPrefix(shareQuestion, report.Question+" ") {
@@ -93,6 +93,9 @@ func TestInstallerShareAnswer(t *testing.T) {
 	}{
 		{name: "Enter", typed: "\n", want: "report off"},
 		{name: "yes", typed: "y\n", want: "report on"},
+		{name: "failures", typed: "failures\n", want: "report on"},
+		{name: "everything", typed: "everything\n", want: "report everything"},
+		{name: "off", typed: "off\n", want: "report off"},
 		{name: "no", typed: "n\n", want: "report off"},
 		{name: "no terminal", noTTY: true, want: "report off"},
 		{name: "answered before", typed: "y\n", asked: true, want: ""},
@@ -122,7 +125,7 @@ func TestInstallerShareAnswer(t *testing.T) {
 			if strings.TrimSpace(string(got)) != c.want {
 				t.Fatalf("installer ran %q, want %q", got, c.want)
 			}
-			if asked, _ := os.ReadFile(tty); !c.noTTY && !c.asked && !strings.Contains(string(asked), "\n"+report.Question+" (y/N) ") {
+			if asked, _ := os.ReadFile(tty); !c.noTTY && !c.asked && !strings.Contains(string(asked), "\n"+report.Question+" (off/failures/everything) ") {
 				t.Fatalf("the installer asked something other than report.Question:\n%s", asked)
 			}
 		})
@@ -168,6 +171,7 @@ func TestInstallerOldReleases(t *testing.T) {
 		{name: "v0.1.17 with an answer ahead", version: "v0.1.17", cmd: "hive", bin: fmt.Sprintf(old, "v0.1.17"), share: "yes"},
 		{name: "a release with report", version: "v9.9.9", cmd: "hive", bin: current, want: "report off"},
 		{name: "a release with report, answered ahead", version: "v9.9.9", cmd: "hive", bin: current, share: "yes", want: "report on"},
+		{name: "a release with report but no levels, everything ahead", version: "v9.9.9", cmd: "hive", bin: current, share: "everything", want: "report everything; report on"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()

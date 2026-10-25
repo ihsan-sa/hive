@@ -109,7 +109,9 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	}})
 	a.Release.PauseMerges = a.Work.PauseMerges
 	a.System.Register(system.Job{Name: "hive.update", AtStart: true, Fn: a.Release.AutoUpdate})
-	a.System.Register(system.Job{Name: "report.send", Fn: (&report.Module{C: c}).Send})
+	reports := report.New(c)
+	a.Improve.Installs = reports.Received
+	a.System.Register(system.Job{Name: "report.send", Fn: reports.Send})
 	a.System.Register(system.Job{Name: "hive.clean", AtStart: true, Fn: func() (string, error) { return a.Clean(), nil }})
 	c.Effects.OnDiskFull = func() { a.System.RunNow("hive.clean") }
 	return a, nil

@@ -34,24 +34,6 @@ const (
 	maxExcerpt = 4000
 )
 
-// Question is the opt-in question the installers and first run ask, word for
-// word: it names everything a report holds, so the person agrees to what is
-// really sent. TestQuestionSaysWhatIsSent holds it to Report and the caps.
-// The installers quote it, so it has no ' " ` $ % or \.
-const Question = "Send failure and usage reports to the Hive developer so problems get fixed? " +
-	"Each failure report holds what failed, when and why (up to 2,000 characters), " +
-	"and the agent reply or the last lines of the task log (up to 4,000 characters). " +
-	"A usage report counts runs, turns, merges, reverts, cost and dropped reports, with the harness name and the time span it covers. " +
-	"Every report has the Hive version, the OS and a random install id. " +
-	"Secrets, emails and your home folder are scrubbed on this machine first."
-
-// WhatIsSent is the question without its ask: what a report holds, for
-// saying once sharing is on.
-func WhatIsSent() string {
-	_, what, _ := strings.Cut(Question, "? ")
-	return what
-}
-
 // Report is one request body, a usage report or one failure.
 type Report struct {
 	Install string             `json:"install"`
@@ -86,7 +68,8 @@ func pending(ws core.Workspace) string { return filepath.Join(Dir(ws), "pending.
 
 // Note keeps a failure seen outside the daemon (the doctor) for the next run.
 func Note(ws core.Workspace, f Failure) {
-	if _, on := ws.LoadConfig().Sharing(); on {
+	cfg := ws.LoadConfig()
+	if _, yes := Contributing(cfg); yes || Level(cfg) != Off {
 		f.At = time.Now().UTC()
 		core.AppendJSONL(outbox(ws), f)
 	}
@@ -100,17 +83,38 @@ func URL(cfg core.Config) string {
 	return DefaultURL
 }
 
-// Send is the report.send job: it queues what the journal holds since the
-// last run, then sends the queue one report at a time. It never fails the
-// Hive: an unreachable address or a 429 leaves the rest for next time.
+// Send is the report.send job: what the person chose to share goes (the
+// reports, then at everything one batch of the records), and what they chose
+// to contribute is filed upstream. It never fails the Hive: an unreachable
+// address or a 429 leaves the rest for next time.
 func (m *Module) Send() (string, error) {
 	cfg := m.C.WS.LoadConfig()
-	if _, on := cfg.Sharing(); !on {
+	_, contributing := Contributing(cfg)
+	if Level(cfg) == Off && !contributing {
 		return "sharing is off", nil
 	}
 	if cfg.InstallID == "" {
-		return "sharing has no install id; `" + core.Cmd + " report on` makes one", nil
+		return "sharing has no install id; `" + core.Cmd + " report failures` makes one", nil
 	}
+	out := "sharing is off"
+	if Level(cfg) != Off {
+		var err error
+		if out, err = m.sendReports(cfg); err != nil {
+			return "", err
+		}
+	}
+	if Level(cfg) == Everything {
+		out += "; " + m.sendBatch(cfg)
+	}
+	if contributing {
+		out += "; " + m.contribute(cfg)
+	}
+	return out, nil
+}
+
+// sendReports queues what the journal holds since the last run, then sends
+// the queue one report at a time.
+func (m *Module) sendReports(cfg core.Config) (string, error) {
 	ws := m.C.WS
 	fails, use, seq, read := m.Build(cfg)
 	queue := Waiting(ws)
@@ -294,6 +298,12 @@ func clipLines(s string, n int) string {
 // read up to.
 func (m *Module) Build(cfg core.Config) ([]Report, Report, int64, int64) {
 	since, _ := cfg.Sharing()
+	return m.build(cfg, since, "report.queued")
+}
+
+// build is Build from since, after the last event of kind mark: the reports'
+// queue and the contribute path each keep their own place.
+func (m *Module) build(cfg core.Config, since time.Time, mark string) ([]Report, Report, int64, int64) {
 	use := map[string]float64{"runs": 0, "turns": 0, "merges": 0, "reverts": 0, "cost_usd": 0}
 	var fails []Failure
 	var from, to time.Time
@@ -304,7 +314,7 @@ func (m *Module) Build(cfg core.Config) ([]Report, Report, int64, int64) {
 	running := false
 	var events []core.Event
 	m.C.J.Replay(func(e core.Event) {
-		if e.Kind == "report.queued" {
+		if e.Kind == mark {
 			var s struct{ Seq, Outbox int64 }
 			e.Decode(&s)
 			last, boxAt = s.Seq, s.Outbox

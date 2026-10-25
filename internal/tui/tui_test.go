@@ -1048,39 +1048,72 @@ func TestSettingChangesAtOnce(t *testing.T) {
 	}
 }
 
-// Turning sharing on in Settings shows report.Question first, as the
-// installers do: Enter on it is yes, any other key is no.
-func TestSettingsShareAsksTheQuestion(t *testing.T) {
+// Settings picks the sharing level: more than now shows what it sends first,
+// and Enter on that is the yes, any other key no; less is at once. The
+// contribute choice is a yes or no that shows its question first.
+func TestSettingsShareLevels(t *testing.T) {
 	m := testModel(120, 36)
 	m.section = secSettings
-	for i, s := range m.settings() {
-		if s.key == "share" {
-			m.setSel = i
+	at := func(key string) {
+		for i, s := range m.settings() {
+			if s.key == key {
+				m.setSel = i
+			}
 		}
 	}
-	if _, on := m.st.Config.Sharing(); on {
+	pick := func(level string) {
+		at("share")
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if !m.picking {
+			t.Fatal("enter on sharing didn't open its choices")
+		}
+		for range report.Levels {
+			m.Update(tea.KeyMsg{Type: tea.KeyUp})
+		}
+		for range slices.Index(report.Levels, level) {
+			m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	if report.Level(m.st.Config) != report.Off {
 		t.Fatal("sharing starts on")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if _, on := m.st.Config.Sharing(); on || !strings.Contains(m.settings()[m.setSel].value, report.Question) {
-		t.Fatalf("first enter: on %v, shows %q", on, m.settings()[m.setSel].value)
+	pick(report.Everything)
+	if v := m.settings()[m.setSel].value; report.Level(m.st.Config) != report.Off || !strings.Contains(v, report.WhatIsSent(report.Everything)) {
+		t.Fatalf("picking everything: level %s, shows %q", report.Level(m.st.Config), v)
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
-	if _, on := m.st.Config.Sharing(); on || strings.Contains(m.settings()[m.setSel].value, report.Question) {
+	if report.Level(m.st.Config) != report.Off || strings.Contains(m.settings()[m.setSel].value, report.WhatIsSent(report.Everything)) {
 		t.Fatal("another key didn't answer no")
 	}
+	pick(report.Everything)
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil || report.Level(m.st.Config) != report.Everything {
+		t.Fatalf("enter on the question: level %s", report.Level(m.st.Config))
+	}
+	if !strings.HasPrefix(m.settings()[m.setSel].value, "everything since ") {
+		t.Fatalf("shows %q", m.settings()[m.setSel].value)
+	}
+	pick(report.Failures) // less: at once, and everything stops
+	if report.Level(m.st.Config) != report.Failures || m.st.Config.ShareAll != "" || m.shareAsk != "" {
+		t.Fatalf("lowering to failures: level %s, share_all %q", report.Level(m.st.Config), m.st.Config.ShareAll)
+	}
+	pick(report.Off)
+	if report.Level(m.st.Config) != report.Off {
+		t.Fatal("off didn't turn sharing off")
+	}
+
+	at("contribute")
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
-		t.Fatal("enter on the question saved nothing")
+	if _, on := report.Contributing(m.st.Config); on || !strings.Contains(m.settings()[m.setSel].value, report.ContributeQuestion) {
+		t.Fatalf("first enter on contribute shows %q", m.settings()[m.setSel].value)
 	}
-	if _, on := m.st.Config.Sharing(); !on {
-		t.Fatal("enter on the question didn't turn sharing on")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if _, on := report.Contributing(m.st.Config); !on || m.st.Config.InstallID == "" {
+		t.Fatal("enter on the question didn't turn contributing on")
 	}
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
-		t.Fatal("turning it off saved nothing")
-	}
-	if _, on := m.st.Config.Sharing(); on {
-		t.Fatal("turning it off asked or didn't")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if _, on := report.Contributing(m.st.Config); on {
+		t.Fatal("contributing didn't turn off at once")
 	}
 }
 

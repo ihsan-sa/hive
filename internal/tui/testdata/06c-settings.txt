@@ -9,15 +9,16 @@
  › Settings           │     release repo                ihsan-sa/hive
                       │     release channel             the latest release (default)
  ▾ textkit-2          │     release                     0.8.2, following the newest
-   lead               │     share reports               off  (scrubbed; `hive report` shows what was sent)
-   writer             │
-   reviewer        ●  │   Agents
- ▾ hive-web           │     harness                     claude
-   lead            ●  │     worker model                opus
-   worker-2           │     lead model                  opus
-   reviewer           │     reviewer model              opus
-   tribunal           │     tribunal seat 1 model       opus
- ▸ website            │     tribunal seat 2 model       sonnet
+   lead               │     share with developer        off  (scrubbed; `hive report` shows what was sent)
+   writer             │     contribute upstream         off
+   reviewer        ●  │
+ ▾ hive-web           │   Agents
+   lead            ●  │     harness                     claude
+   worker-2           │     worker model                opus
+   reviewer           │     lead model                  opus
+   tribunal           │     reviewer model              opus
+ ▸ website            │     tribunal seat 1 model       opus
+                      │     tribunal seat 2 model       sonnet
                       │     tribunal seat 3 model       fable
                       │     model for textkit-2         default
                       │     harness for textkit-2       default
@@ -31,6 +32,5 @@
                       │     lead                        claude:opus
                       │     worker                      claude:opus
                       │     reviewer                    claude:opus
-                      │     security                    a tribunal seat unlike the reviewer's
 ──────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────
  ↑↓ move   enter change   tab sidebar
