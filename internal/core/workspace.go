@@ -87,9 +87,13 @@ type Config struct {
 	BareAccepted string `json:"bare_accepted,omitempty"` // timestamp the warning was read
 	WSLDistro    string `json:"wsl_distro,omitempty"`
 	ReleaseRepo  string `json:"release_repo"`
-	AutoUpdate   bool   `json:"auto_update"`
-	ReleasePin   string `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
-	PinnedAuto   bool   `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
+	// SelfFork is the owner (an organization) whose fork of release_repo this
+	// Hive works on itself in, when the person owns release_repo but another
+	// of their Hives is its steward (core.StewardFile).
+	SelfFork   string `json:"self_fork,omitempty"`
+	AutoUpdate bool   `json:"auto_update"`
+	ReleasePin string `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
+	PinnedAuto bool   `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
 	// Channel is the releases auto-update follows: "latest", or "pre-release",
 	// each pre-release once its checks for this system pass. Empty is the
 	// default: pre-releases on the Hive whose own project is release_repo, the
