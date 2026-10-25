@@ -37,6 +37,11 @@ type Report struct {
 	Reverted int            `json:"reverted"`
 	// Outcome is filled in by the experiment: landed, open or stalled, and why.
 	Outcome string `json:"outcome,omitempty"`
+	// PeakMB and PeakLoad are filled in by the experiment too: the most
+	// memory the run's processes held at once (their summed RSS, sampled)
+	// and the highest 1-minute load the machine had while the arm ran.
+	PeakMB   int     `json:"peak_mb,omitempty"`
+	PeakLoad float64 `json:"peak_load,omitempty"`
 }
 
 type event struct {
@@ -177,8 +182,8 @@ func sorted(m map[string]int) string {
 // Table is the reports side by side, one row per arm, in Markdown.
 func Table(reps []Report) string {
 	var b strings.Builder
-	b.WriteString("| arm | outcome | minutes | runs | turns | messages | peer | briefs | helpers | asks | finished | notes | feedback | merged |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| arm | outcome | minutes | runs | turns | messages | peer | briefs | helpers | asks | finished | notes | feedback | merged | peak MB | peak load |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, r := range reps {
 		runs := 0
 		for _, n := range r.Runs {
@@ -188,14 +193,23 @@ func Table(reps []Report) string {
 		if name == "" {
 			name = "-"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %.0f | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d |\n", name, orDash(r.Outcome),
-			r.To.Sub(r.From).Minutes(), runs, r.Turns, r.Messages, r.Peer, r.Briefs, r.Helpers, r.Asks, sorted(r.Finished), r.Notes, r.Feedback, r.Merged)
+		fmt.Fprintf(&b, "| %s | %s | %.0f | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s |\n", name, orDash(r.Outcome),
+			r.To.Sub(r.From).Minutes(), runs, r.Turns, r.Messages, r.Peer, r.Briefs, r.Helpers, r.Asks, sorted(r.Finished), r.Notes, r.Feedback, r.Merged,
+			peak(r.PeakMB > 0, "%d", r.PeakMB), peak(r.PeakLoad > 0, "%.1f", r.PeakLoad))
 	}
 	b.WriteString("\nWho talked to whom, and which roles ran:\n\n")
 	for _, r := range reps {
 		fmt.Fprintf(&b, "- **%s**: messages %s; runs %s\n", orDash(r.Variant), sorted(r.Pairs), sorted(r.Runs))
 	}
 	return b.String()
+}
+
+// peak is a measure, or "-" for an arm nobody measured (hive-soft observe).
+func peak(measured bool, format string, v any) string {
+	if !measured {
+		return "-"
+	}
+	return fmt.Sprintf(format, v)
 }
 
 func orDash(s string) string {
