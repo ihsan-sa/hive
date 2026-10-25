@@ -310,6 +310,26 @@ type LoginState struct {
 	checked  time.Time // when the harness was last tried
 	byCheck  bool      // the failure is the harness not running, not a renewal
 	stuckAt  time.Time // the expiry when it failed: a later one was renewed by hand
+	told     bool      // this run of failures was put to the person
+}
+
+// askAfter and askWithin are when a failure that may be the machine's load
+// (the harness killed or timed out) is put to the person: once it has failed
+// this many times in a row, or once the login runs out this soon. Any other
+// failure is put to them at once.
+var askAfter, askWithin = 3, time.Hour
+
+// transient reports whether error text e is a run killed or timed out, as a
+// loaded machine does to it, rather than one that ran and failed.
+func transient(e string) bool {
+	return strings.Contains(e, "signal: killed") || strings.Contains(e, "signal: terminated") ||
+		strings.Contains(e, "deadline exceeded")
+}
+
+// tell reports whether a run of failures that stands at failures, whose last
+// error is e, with the login running out at exp, is put to the person now.
+func tell(failures int, e string, exp, now time.Time) bool {
+	return !transient(e) || failures >= askAfter || exp.IsZero() || exp.Sub(now) < askWithin
 }
 
 // Track records renewals in journal j and puts a failure to the person
@@ -331,9 +351,10 @@ func (t *Tokens) Track(j *Journal, p *Person) {
 		s := t.stateLocked(r.Login)
 		s.Expires = r.Expires
 		if e.Kind == "login.renewed" {
-			s.Renewed, s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt = e.At, time.Time{}, "", 0, false, time.Time{}
+			s.Renewed, s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt, s.told = e.At, time.Time{}, "", 0, false, time.Time{}, false
 		} else {
 			s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt = e.At, r.Error, max(r.Failures, 1), r.ByCheck, r.Expires
+			s.told = s.told && s.Failures > 1 || tell(s.Failures, r.Error, r.Expires, e.At)
 		}
 	})
 	t.mu.Lock()
@@ -613,9 +634,11 @@ const (
 
 // done records how a renewal or a try of the harness (how) of login l went;
 // exp is its expiry after. A failure goes to the journal and the daemon's log
-// every time, and the first of a run of them raises an alert and asks the
-// person to renew the login by hand, with what to run. A success after
-// failures says so in the same alert and closes the ask.
+// every time; the first of a run of them raises an alert and asks the person
+// to renew the login by hand, with what to run, unless it was killed or timed
+// out, which is asked only once it repeats or the login nears its expiry (see
+// tell). A success after a told failure says so in the same alert and closes
+// the ask.
 func (t *Tokens) done(l Login, exp time.Time, err error, how int) {
 	now := time.Now()
 	key := l.Key()
@@ -628,19 +651,21 @@ func (t *Tokens) done(l Login, exp time.Time, err error, how int) {
 	switch {
 	case err != nil:
 		s.Failures++
-		first = s.Failures == 1
+		s.told = s.told && s.Failures > 1 // a run after the person's done is told afresh
 		s.Failed, s.Error, s.Run, s.byCheck, s.stuckAt = now, err.Error(), renewByHand(l, err), how == tried, s.Expires
+		first = !s.told && tell(s.Failures, s.Error, s.Expires, now)
+		s.told = s.told || first
 		s.next = now.Add(time.Minute << min(s.Failures-1, 4))
 		if s.next.Sub(now) > 15*time.Minute {
 			s.next = now.Add(15 * time.Minute)
 		}
 	case how != tried:
-		recovered = s.Error != ""
-		s.Renewed, s.Failed, s.Error, s.Run, s.Failures, s.byCheck, s.stuckAt = now, time.Time{}, "", "", 0, false, time.Time{}
+		recovered = s.told
+		s.Renewed, s.Failed, s.Error, s.Run, s.Failures, s.byCheck, s.stuckAt, s.told = now, time.Time{}, "", "", 0, false, time.Time{}, false
 		s.next = now.Add(time.Minute)
 	case s.byCheck: // the harness runs again; nothing was renewed
-		recovered = s.Error != ""
-		s.Failed, s.Error, s.Run, s.Failures, s.byCheck, s.next = time.Time{}, "", "", 0, false, time.Time{}
+		recovered = s.told
+		s.Failed, s.Error, s.Run, s.Failures, s.byCheck, s.next, s.told = time.Time{}, "", "", 0, false, time.Time{}, false
 	}
 	c := *s
 	j, p := t.j, t.person
