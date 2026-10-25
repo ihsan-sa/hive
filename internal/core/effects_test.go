@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -555,6 +556,19 @@ func TestReadsFollowTheOwnDiff(t *testing.T) {
 	if !c.Effects.Reviewed(self, chr, revert) {
 		t.Fatal("a read of the revert's own head should do")
 	}
+
+	// A fix on the caught-up head is a fix on its diff: the first head, read
+	// land with the same diff, no longer counts as read either.
+	c.Runs.Start(RunSpec{ID: "r8d", Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": update, "diff.patch": ch2.Diff}})
+	if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: update, Run: "r8d", Verdict: "fix"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Effects.Reads(p.Name, sha, ch.DiffID); len(got) != 0 {
+		t.Fatalf("a land on %s outlived a fix on the same diff at %s: %v", Short(sha), Short(update), got)
+	}
+	if c.Effects.Reviewed(self, ch, sha) {
+		t.Fatal("the first head still reads as reviewed after a fix on its diff")
+	}
 }
 
 // DiffID ignores where hunks sit and blob ids, and nothing else.
@@ -564,6 +578,15 @@ func TestDiffID(t *testing.T) {
 	changed := "diff --git a/f b/f\nindex 111..222 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1,3 @@ func x\n a\n+B\n c\n"
 	if DiffID(a) != DiffID(moved) || DiffID(a) == DiffID(changed) || DiffID("") != "" {
 		t.Fatalf("%s %s %s", DiffID(a), DiffID(moved), DiffID(changed))
+	}
+	// A binary delta is relative to the old blob: the same delta from another
+	// blob is another change.
+	bin := "diff --git a/b b/b\nindex %s..999 100644\nGIT binary patch\ndelta 5\nzcmV\n\n"
+	if DiffID(fmt.Sprintf(bin, "111")) == DiffID(fmt.Sprintf(bin, "222")) {
+		t.Fatal("binary deltas from different blobs share an id")
+	}
+	if DiffID(fmt.Sprintf(bin, "111")+a) != DiffID(fmt.Sprintf(bin, "111")+moved) {
+		t.Fatal("a binary file kept a text file's blob ids in the id")
 	}
 }
 
@@ -642,6 +665,9 @@ func TestMissingTool(t *testing.T) {
 		{127, "bash: line 1: cargo: command not found", "cargo"},
 		{127, "sh: npm: command not found\n", "npm"},
 		{127, "env: 'python3': No such file or directory", "python3"},
+		{127, "env: ‘python3’: No such file or directory\n", "python3"},
+		{127, "zsh:1: command not found: rustc\n", "rustc"},
+		{127, "zsh: command not found: rustc", "rustc"},
 		{127, "/bin/sh: 1: ./build.sh: not found", ""},
 		{1, "/bin/sh: 1: go: not found", ""},
 		{1, "--- FAIL: TestX\nFAIL", ""},
@@ -649,6 +675,34 @@ func TestMissingTool(t *testing.T) {
 	} {
 		if got := MissingTool(c.code, c.out); got != c.want {
 			t.Errorf("MissingTool(%d, %q) = %q, want %q", c.code, c.out, got, c.want)
+		}
+	}
+}
+
+// The shells checks really run under word a missing tool as MissingTool
+// expects, so a change in their wording shows here rather than as a red.
+func TestMissingToolRealShells(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no POSIX shell")
+	}
+	const tool = "hive-no-such-tool-xyz"
+	for _, argv := range [][]string{
+		{"/bin/sh", "-c", tool + " --version"},
+		{"bash", "-c", tool + " --version"},
+		{"zsh", "-c", tool + " --version"},
+		{"busybox", "sh", "-c", tool + " --version"},
+		{"env", tool, "--version"},
+	} {
+		if _, err := exec.LookPath(argv[0]); err != nil {
+			continue
+		}
+		out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		}
+		if got := MissingTool(code, string(out)); got != tool {
+			t.Errorf("%s words a missing tool as %q, which MissingTool reads as %q", argv[0], out, got)
 		}
 	}
 }
@@ -661,7 +715,11 @@ func TestCantRunIsNotTheCommitsAnswer(t *testing.T) {
 	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "a", Kind: "test", Output: "/bin/sh: 1: go: not found\n"})
 	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "b", Kind: "test", Output: "x", CantRun: "can't run: go is not installed where checks run"})
 	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "c", Kind: "test", Output: "--- FAIL: TestX\nFAIL\n"})
-	for sha, want := range map[string]bool{"a": false, "b": false, "c": true} {
+	// A real red that logs a "not found" line: one recorded since checks carry
+	// cant_run, and an old one that named its failing tests.
+	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "d", Kind: "test", Output: "sh: x: not found\n", At: cantRunRecorded.Add(time.Hour)})
+	c.J.MustAppend("effect.checked", Check{Project: "p", SHA: "e", Kind: "test", Output: "sh: x: not found\n--- FAIL: TestX\n", Failed: []string{"TestX"}})
+	for sha, want := range map[string]bool{"a": false, "b": false, "c": true, "d": true, "e": true} {
 		if _, ok := c.Effects.GetCheck("p", sha, "test"); ok != want {
 			t.Errorf("check at %s kept %v, want %v", sha, ok, want)
 		}

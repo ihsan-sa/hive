@@ -33,6 +33,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
@@ -102,6 +103,8 @@ func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string)
 	if err := h.ws.Init(); err != nil {
 		t.Fatal(err)
 	}
+	// A handle list, since the scan on every release and export fails without one.
+	os.WriteFile(filepath.Join(h.ws.Private(), scan.HandlesFile), []byte("nobody-in-this-test\n"), 0o600)
 	cfg := h.ws.LoadConfig()
 	cfg.Harness, cfg.AutoUpdate = "fake", false
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded CI runner mustn't hold fake turns
@@ -835,8 +838,11 @@ func toldAbout(what string) func(api.State) bool {
 func TestStalls(t *testing.T) {
 	t.Parallel()
 	h := start(t)
+	// The history is built under a floor no history turn reaches, even on a
+	// slow runner: one the watcher acted on isn't history, and without it
+	// the limit falls to the floor and flags the slow worker.
 	cfg := h.ws.LoadConfig()
-	cfg.StallFloorSeconds = 20
+	cfg.StallFloorSeconds = 120
 	h.ws.SaveConfig(cfg)
 	h.seed("me/stall", map[string]string{".hive/project.json": `{"test": "if [ -f STALL ]; then sleep 60; fi"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "stall", "repo": "me/stall"}, nil)
@@ -845,6 +851,9 @@ func TestStalls(t *testing.T) {
 		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
 		h.wait(title+" to land", 3*minute, taskStage("stall", title, work.StageDone))
 	}
+	cfg = h.ws.LoadConfig()
+	cfg.StallFloorSeconds = 20
+	h.ws.SaveConfig(cfg)
 
 	asks := map[string]string{"hung worker": "FAKE:stallworker", "hung reviewer": "FAKE:stallreviewer", "hung check": "FAKE:stallcheck", "slow worker": "FAKE:slowworker:22"}
 	for title, known := range asks {
@@ -908,7 +917,7 @@ func TestStalls(t *testing.T) {
 func TestPersonModulesRelease(t *testing.T) {
 	t.Parallel()
 	h := start(t)
-	h.seed("me/self", map[string]string{".hive/project.json": `{"test": "true", "dryrun": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.seed("me/self", map[string]string{".hive/project.json": `{"test": "true", "dryrun": "true"}`, ".hive/goals.md": "# Goals\n", scan.PublicList: "**\n"})
 	h.post("/api/project", map[string]any{"name": "self", "repo": "me/self", "self": true}, nil)
 
 	h.post("/api/ask", map[string]string{"project": "self", "title": "needs a package", "known": "FAKE:needpackage"}, nil)
