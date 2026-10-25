@@ -77,19 +77,41 @@ func TestBenchmark(t *testing.T) {
 		}
 	}
 	base := onForge(t, h, repo)
+	ended := func(st api.State, ask string) bool {
+		tk, ok := task(st, "textkit", ask)
+		return ok && (tk.Stage == work.StageDone || tk.Stage == work.StageBlocked || tk.Stage == work.StageStopped)
+	}
+	// HIVE_BENCH_AT_ONCE=1 asks them all at once, as work arrives for a real
+	// Hive: then what is measured is the loop itself, how soon queued work
+	// starts, how many run side by side, and how branches that all edit the
+	// same file land on a main that moves under them.
+	atOnce := os.Getenv("HIVE_BENCH_AT_ONCE") == "1"
 	start := time.Now()
 	done := 0
+	if atOnce {
+		for _, ask := range benchAsks[:n] {
+			h.post("/api/ask", map[string]string{"project": "textkit", "title": ask, "known": ask}, nil)
+		}
+	}
+	// Looked at every tenth of a second, so the seconds measure the Hive
+	// and not h.wait's half-second steps.
 	for _, ask := range benchAsks[:n] {
-		h.post("/api/ask", map[string]string{"project": "textkit", "title": ask, "known": ask}, nil)
-		st := h.wait("the ask to finish", patience(t), func(st api.State) bool {
-			tk, ok := task(st, "textkit", ask)
-			return ok && (tk.Stage == work.StageDone || tk.Stage == work.StageBlocked || tk.Stage == work.StageStopped)
-		})
+		if !atOnce {
+			h.post("/api/ask", map[string]string{"project": "textkit", "title": ask, "known": ask}, nil)
+		}
+		for end := time.Now().Add(patience(t)); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
+			if st, err := h.c.State(); err == nil && ended(st, ask) {
+				break
+			}
+		}
+	}
+	seconds := time.Since(start).Seconds()
+	for _, ask := range benchAsks[:n] {
+		st := h.wait("the ask to finish", time.Second, func(st api.State) bool { return ended(st, ask) })
 		if tk, _ := task(st, "textkit", ask); tk.Stage == work.StageDone {
 			done++
 		}
 	}
-	seconds := time.Since(start).Seconds()
 	cost := 0.0
 	for _, r := range h.state().Runs {
 		cost += r.Cost
@@ -108,7 +130,7 @@ func TestBenchmark(t *testing.T) {
 			score++
 		}
 	}
-	out, _ := json.Marshal(map[string]any{"score": score, "asks_finished": finished, "commits_landed": commits, "asks": n, "seconds": seconds,
+	out, _ := json.Marshal(map[string]any{"score": score, "asks_finished": finished, "commits_landed": commits, "asks": n, "seconds": seconds, "at_once": atOnce,
 		"asks_done_reported": done, "cost_usd_reported": cost})
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write(out)
