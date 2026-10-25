@@ -212,4 +212,79 @@ func TestCreateProjectVisibility(t *testing.T) {
 	if _, err := a.C.Runs.Ops().Call(lead, "create_project", json.RawMessage(`{"name":"x","visibility":"internal"}`)); err == nil {
 		t.Fatal("an unknown visibility was taken")
 	}
+
+	// A walled project with a public repository asks, even in Hive-RSI-Lab.
+	for _, sharing := range []string{"private", "isolated"} {
+		out = create(`{"repo":"Hive-RSI-Lab/walled-` + sharing + `","sharing":"` + sharing + `","visibility":"public"}`)
+		if out["waiting_on_person"] == nil || core.Exists(forge.RepoPath("Hive-RSI-Lab/walled-"+sharing)) {
+			t.Fatalf("a public repository for a %s project didn't wait for the person: %v", sharing, out)
+		}
+	}
+
+	// A bare name is the forge login's own account: public without asking
+	// only once the person lists that login.
+	if out = create(`{"name":"mine","visibility":"public"}`); out["waiting_on_person"] == nil {
+		t.Fatalf("a public repository in the login's account didn't ask: %v", out)
+	}
+	cfg = ws.LoadConfig()
+	cfg.PublicOwners = append(cfg.PublicOwners, "local")
+	if err := ws.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if out = create(`{"name":"mine2","visibility":"public"}`); out["waiting_on_person"] != nil || !forge.IsPublic("local/mine2") {
+		t.Fatalf("a bare name in a listed login's account wasn't made public: %v", out)
+	}
+}
+
+// The person's no to a public repository makes nothing, and the run that
+// asked is told.
+func TestCreateProjectPublicNo(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ws.LoadConfig()
+	cfg.Harness = "fake"
+	if err := ws.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	forge := &core.Local{Dir: t.TempDir()}
+	a, err := New(ws, forge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.C.Close()
+	lead, err := a.C.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir(), Persistent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := a.C.Runs.Ops().Call(lead, "create_project", json.RawMessage(`{"repo":"someone/nope","visibility":"public"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := out.(map[string]any)["waiting_on_person"].(string)
+	if id == "" {
+		t.Fatalf("didn't wait for the person: %v", out)
+	}
+	if _, err := a.C.Person.Answer(id, "no", ""); err != nil {
+		t.Fatal(err)
+	}
+	told := func() bool {
+		found := false
+		a.C.J.Replay(func(e core.Event) {
+			if e.Kind == "run.queued" && strings.Contains(string(e.Data), lead.ID) && strings.Contains(string(e.Data), "said no") {
+				found = true
+			}
+		})
+		return found
+	}
+	for i := 0; i < 200 && !told(); i++ {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !told() {
+		t.Fatal("the asking run wasn't told of the no")
+	}
+	if _, ok := a.C.Projects.Get("nope"); ok || core.Exists(forge.RepoPath("someone/nope")) {
+		t.Fatal("a no still made the project")
+	}
 }
