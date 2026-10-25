@@ -1,6 +1,7 @@
 package work
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -144,5 +145,20 @@ func TestCheckpointCountsAMeasurementInFlight(t *testing.T) {
 	}
 	if task.Checkpoint != "" || task.PR.Number != 0 || !logged(task, "doesn't beat the best kept score 7") {
 		t.Fatalf("checkpoint %q, PR %d, log %v", task.Checkpoint, task.PR.Number, task.Log)
+	}
+}
+
+// A checkpoint merged on the forge by hand tells its worker how it merged,
+// not that it beat the best kept score.
+func TestCheckpointMergedOnForgeTellsWorker(t *testing.T) {
+	m, task, _ := checkpointRig(t, 5, "7")
+	task.Checkpoint = "abc1234567"
+	m.merged(task, "def7654321", "merged on the forge outside the Hive (PR #3) as def7654")
+	r, _ := m.C.Runs.Get("w1")
+	if task.Stage != StageWorking || len(r.Pending) != 1 {
+		t.Fatalf("stage %q, worker told %v", task.Stage, r.Pending)
+	}
+	if got := fmt.Sprint(r.Pending[0]); !strings.Contains(got, "merged on the forge outside the Hive") || strings.Contains(got, "beat the best kept score") {
+		t.Fatalf("worker told %q", got)
 	}
 }

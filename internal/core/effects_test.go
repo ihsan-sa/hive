@@ -1156,24 +1156,61 @@ func TestLogExcerpt(t *testing.T) {
 	}
 }
 
-// Only the Hive's own project sets a red Windows job aside, and it is then
-// neither counted nor waited on as required; a pending one still counts.
+// A plain text file or anything under testdata is data a test may read, not
+// prose: its red counts as any code change's.
+func TestProseOnly(t *testing.T) {
+	for files, want := range map[string]bool{
+		".hive/goals.md":                 true,
+		"docs/a.md,.modules/agents/x.md": true,
+		"feature.txt":                    false,
+		"internal/x/testdata/golden.md":  false,
+		"docs/a.md,main.go":              false,
+	} {
+		if got := ProseOnly(strings.Split(files, ",")); got != want {
+			t.Errorf("ProseOnly(%s) = %v, want %v", files, got, want)
+		}
+	}
+}
+
+// ChecksBesidesFailures leaves a failed check out of the required list too,
+// while a required check not yet reported still holds.
+func TestChecksBesidesFailures(t *testing.T) {
+	runs := []CheckRun{{Name: "win", State: CheckFail}, {Name: "linux", State: CheckPass}}
+	if st, _, failed := ChecksBesidesFailures(runs, []string{"win", "linux"}); st != CheckPass || len(failed) != 1 || failed[0] != "win" {
+		t.Fatalf("state %q, failed %v", st, failed)
+	}
+	if st, which, _ := ChecksBesidesFailures(runs, []string{"win", "e2e"}); st != CheckPending || len(which) != 1 || which[0].Name != "e2e" {
+		t.Fatalf("state %q, which %v", st, which)
+	}
+}
+
+// Only the Hive's own project sets a listed check aside, by its exact name,
+// and it is then neither counted nor waited on as required, red or pending.
 func TestAdvisory(t *testing.T) {
-	runs := []CheckRun{{Name: "test (windows-latest)", State: CheckFail}, {Name: "test (ubuntu-latest)", State: CheckPass}}
+	runs := []CheckRun{{Name: "test (windows-latest)", State: CheckFail}, {Name: "test (ubuntu-latest)", State: CheckPass}, {Name: "lint-windows", State: CheckPass}}
 	req := []string{"test (windows-latest)", "test (ubuntu-latest)"}
-	if kept, r, w := Advisory(Project{}, runs, req); len(kept) != 2 || len(r) != 2 || w != nil {
+	adv := []string{"test (windows-latest)"}
+	if kept, r, w := Advisory(Project{}, runs, req, adv); len(kept) != 3 || len(r) != 2 || w != nil {
 		t.Fatalf("not self: %v %v %v", kept, r, w)
 	}
-	kept, r, w := Advisory(Project{Self: true}, runs, req)
-	if len(kept) != 1 || !slices.Equal(r, []string{"test (ubuntu-latest)"}) || !slices.Equal(w, []string{"test (windows-latest)"}) {
+	if kept, r, w := Advisory(Project{Self: true}, runs, req, nil); len(kept) != 3 || len(r) != 2 || w != nil {
+		t.Fatalf("no list: %v %v %v", kept, r, w)
+	}
+	kept, r, w := Advisory(Project{Self: true}, runs, req, adv)
+	if len(kept) != 2 || !slices.Equal(r, []string{"test (ubuntu-latest)"}) || !slices.Equal(w, []string{"test (windows-latest)"}) {
 		t.Fatalf("self: %v %v %v", kept, r, w)
 	}
 	if st, _ := ChecksState(kept, r); st != CheckPass {
 		t.Fatalf("state %s", st)
 	}
-	runs[0].State = CheckPending
-	if _, _, w := Advisory(Project{Self: true}, runs, req); w != nil {
-		t.Fatalf("a pending Windows job was set aside: %v", w)
+	runs[2].State = CheckFail // named like Windows, but not on the list
+	if _, _, w := Advisory(Project{Self: true}, runs, req, adv); !slices.Equal(w, []string{"test (windows-latest)"}) {
+		t.Fatalf("an unlisted check was set aside: %v", w)
+	}
+	runs[0].State, runs[2].State = CheckPending, CheckPass
+	kept, r, w = Advisory(Project{Self: true}, runs, req, adv)
+	if st, _ := ChecksState(kept, r); st != CheckPass || w != nil {
+		t.Fatalf("a pending advisory check held the merge: %s %v", st, w)
 	}
 }
 

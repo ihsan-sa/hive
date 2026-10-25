@@ -52,10 +52,12 @@ type FixReport struct {
 	Tests []string `json:"tests,omitempty"`
 	Fixes []Fix    `json:"fixes,omitempty"`
 	Notes []string `json:"notes,omitempty"`
+	// Seconds is how long the step took.
+	Seconds float64 `json:"seconds,omitempty"`
 }
 
 // fixTest is a test the candidate's diff adds or changes.
-type fixTest struct{ dir, name string }
+type fixTest struct{ dir, name, file string }
 
 func (t fixTest) String() string { return safeName(t.dir) + " " + t.name }
 
@@ -68,7 +70,9 @@ func safeName(s string) string { return clip(unsafeName.ReplaceAllString(s, "_")
 // place of the control's. A test counts only if, every round, it passes on
 // the candidate and fails, by name, on the control, and on the candidate it
 // runs a line the diff changed outside the tests. A test that does not build
-// or run on the control (it calls a new function) is no evidence either way.
+// or run on the control (it calls a new function) is no evidence either way;
+// when its whole package fails to build there, each test is tried again with
+// only its own file and the test files both sides have alike.
 func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 	note := func(f string, a ...any) { fr.Notes = append(fr.Notes, fmt.Sprintf(f, a...)) }
 	if cand.Src == "" || ctrl.Src == "" || cfg.Base == "" || cfg.Head == "" {
@@ -108,7 +112,7 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 	var tried []fixTest
 	for _, f := range tests {
 		for _, name := range changedTests(cand.Src, from, f) {
-			t := fixTest{path.Dir(f), name}
+			t := fixTest{path.Dir(f), name, f}
 			if !slices.Contains(tried, t) {
 				tried = append(tried, t)
 			}
@@ -131,65 +135,103 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 			cover = append(cover, p)
 		}
 	}
-	overlay := map[string]bool{}
+	whole := map[string]string{} // each tried test's package: all of the candidate's test files
 	for _, t := range tried {
-		overlay[t.dir] = true
+		whole[t.dir] = ""
 	}
 
 	lab := &Child{Name: "fixes", Root: filepath.Join(cfg.Out, "fixes"), Sandbox: cand.Sandbox, Go: cand.Go, Meter: cand.Meter, Fwd: cand.Fwd}
 	defer os.RemoveAll(lab.Root)
 	defer os.RemoveAll(lab.Tmp())
-	type tally struct {
-		pass, fail int
-		norun      bool // did not build or run: no evidence
-		covers     string
+	start := time.Now()
+	defer func() { fr.Seconds = time.Since(start).Round(time.Millisecond).Seconds() }()
+	deadline := start.Add(45 * time.Minute)
+	errOutOfTime := fmt.Errorf("out of time")
+	// try runs tests on both sides, fixRounds times each, the side that
+	// starts picked at random (neither may count on going first), each tree
+	// laid out with the candidate's test files of ov.
+	try := func(tests []fixTest, ov map[string]string) (cands, ctrls map[fixTest]*tally, err error) {
+		cands, ctrls = map[fixTest]*tally{}, map[fixTest]*tally{}
+		for _, t := range tests {
+			cands[t], ctrls[t] = &tally{}, &tally{}
+		}
+		first := time.Now().UnixNano()%2 == 0
+		for round := 0; round < fixRounds; round++ {
+			for _, onCand := range []bool{first, !first} {
+				if time.Now().After(deadline) {
+					return nil, nil, errOutOfTime
+				}
+				src := ctrl.Src
+				if onCand {
+					src = cand.Src
+				}
+				if err := lab.reset(src, cand.Src, ctrl.Src, ov); err != nil {
+					return nil, nil, fmt.Errorf("preparing the tests' tree: %v", err)
+				}
+				for _, t := range tests {
+					pkg := importPath(mod, t.dir)
+					args := []string{"go", "test", "-short", "-count=1", "-json", "-run", "^" + regexp.QuoteMeta(t.name) + "$"}
+					profile := filepath.Join(lab.Root, "cover", "cover.out")
+					if onCand {
+						args = append(args, "-coverpkg="+strings.Join(cover, ","), "-coverprofile="+profile)
+					}
+					args = append(args, "./"+t.dir)
+					out := lab.test(args)
+					reap(cfg.Out, true)
+					got := testOutcome(out, pkg, t.name)
+					if onCand {
+						if got == "pass" {
+							cands[t].pass++
+							if raw, err := core.SafeRead(profile, 64<<20); err == nil && cands[t].covers == "" {
+								cands[t].covers = coversChange(raw, mod, touched)
+							}
+						}
+						os.Remove(profile)
+					} else if got == "fail" {
+						ctrls[t].fail++
+					} else if got == "" {
+						ctrls[t].norun = true
+					} else {
+						ctrls[t].pass++
+					}
+				}
+			}
+		}
+		return cands, ctrls, nil
 	}
-	cands, ctrls := map[fixTest]*tally{}, map[fixTest]*tally{}
+	cands, ctrls, err := try(tried, whole)
+	if err != nil {
+		note("%v", err)
+		return
+	}
+	// A package whose tests don't build on the control (one of them calls a
+	// function the change adds) hides every test in it. Each test that passed
+	// on the candidate is tried again with its own file and only the test
+	// files both sides have alike, so a fix beside such a test still shows.
+	again := map[string][]fixTest{}
+	var files []string
 	for _, t := range tried {
-		cands[t], ctrls[t] = &tally{}, &tally{}
+		if cands[t].pass == fixRounds && ctrls[t].norun {
+			if again[t.file] == nil {
+				files = append(files, t.file)
+			}
+			again[t.file] = append(again[t.file], t)
+		}
 	}
-	deadline := time.Now().Add(45 * time.Minute)
-	first := time.Now().UnixNano()%2 == 0 // which side starts: neither may count on going first
-	for round := 0; round < fixRounds; round++ {
-		for _, onCand := range []bool{first, !first} {
-			if time.Now().After(deadline) {
-				note("out of time after %d rounds", round)
-				return
-			}
-			src, ov := ctrl.Src, overlay
-			if onCand {
-				src, ov = cand.Src, nil
-			}
-			if err := lab.reset(src, cand.Src, ov); err != nil {
-				note("preparing the tests' tree: %v", err)
-				return
-			}
-			for _, t := range tried {
-				pkg := importPath(mod, t.dir)
-				args := []string{"go", "test", "-short", "-count=1", "-json", "-run", "^" + regexp.QuoteMeta(t.name) + "$"}
-				profile := filepath.Join(lab.Root, "cover", "cover.out")
-				if onCand {
-					args = append(args, "-coverpkg="+strings.Join(cover, ","), "-coverprofile="+profile)
-				}
-				args = append(args, "./"+t.dir)
-				out := lab.test(args)
-				reap(cfg.Out)
-				got := testOutcome(out, pkg, t.name)
-				if onCand {
-					if got == "pass" {
-						cands[t].pass++
-					}
-					if raw, err := core.SafeRead(profile, 64<<20); err == nil && cands[t].covers == "" {
-						cands[t].covers = coversChange(raw, mod, touched)
-					}
-					os.Remove(profile)
-				} else if got == "fail" {
-					ctrls[t].fail++
-				} else if got == "" {
-					ctrls[t].norun = true
-				} else {
-					ctrls[t].pass++
-				}
+	for _, f := range files {
+		ts := again[f]
+		c, k, err := try(ts, map[string]string{path.Dir(f): path.Base(f)})
+		if err == errOutOfTime {
+			note("out of time trying tests again with only their own file")
+			break
+		}
+		if err != nil {
+			note("%v", err)
+			return
+		}
+		for _, t := range ts {
+			if c[t].pass == fixRounds { // else it needs the candidate's other test files: no evidence
+				cands[t], ctrls[t] = c[t], k[t]
 			}
 		}
 	}
@@ -211,10 +253,18 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 	return fr
 }
 
-// reset puts a fresh tree of src at the lab's one path, with the test files
-// and testdata of the dirs in overlay taken from tests, and empties the
-// lab's home and scratch; the build cache stays.
-func (c *Child) reset(src, tests string, overlay map[string]bool) error {
+// tally is one side's runs of one test.
+type tally struct {
+	pass, fail int
+	norun      bool   // did not build or run: no evidence
+	covers     string // a changed line a passing run ran
+}
+
+// reset puts a fresh tree of src at the lab's one path and empties the lab's
+// home and scratch; the build cache stays. In each dir of ov the tree's test
+// files are the candidate's (cand), and so is its testdata: all of them for
+// "", else only the named file and those the control (ctrl) has alike.
+func (c *Child) reset(src, cand, ctrl string, ov map[string]string) error {
 	for _, d := range []string{"tree", "cover", "home", "tmp", "gopath", "hive"} {
 		p := filepath.Join(c.Root, d)
 		if err := os.RemoveAll(p); err != nil {
@@ -234,8 +284,12 @@ func (c *Child) reset(src, tests string, overlay map[string]bool) error {
 	if err := os.MkdirAll(filepath.Join(c.Root, "cover"), 0o755); err != nil {
 		return err
 	}
-	for dir := range overlay {
-		to, from := filepath.Join(tree, filepath.FromSlash(dir)), filepath.Join(tests, filepath.FromSlash(dir))
+	for dir, only := range ov {
+		if only == "" && src == cand {
+			continue // the candidate's own tree already is that
+		}
+		dir := filepath.FromSlash(dir)
+		to, from := filepath.Join(tree, dir), filepath.Join(cand, dir)
 		if fi, err := os.Stat(to); err != nil || !fi.IsDir() {
 			continue // no such package on this side: the test can't run here
 		}
@@ -246,6 +300,9 @@ func (c *Child) reset(src, tests string, overlay map[string]bool) error {
 		os.RemoveAll(filepath.Join(to, "testdata"))
 		files, _ := filepath.Glob(filepath.Join(from, "*_test.go"))
 		for _, f := range files {
+			if only != "" && filepath.Base(f) != only && !sameFile(f, filepath.Join(ctrl, dir, filepath.Base(f))) {
+				continue
+			}
 			if err := copyFile(f, filepath.Join(to, filepath.Base(f))); err != nil {
 				return err
 			}
@@ -257,6 +314,16 @@ func (c *Child) reset(src, tests string, overlay map[string]bool) error {
 		}
 	}
 	return nil
+}
+
+// sameFile is whether a and b are both there with the same bytes.
+func sameFile(a, b string) bool {
+	x, err := os.ReadFile(a)
+	if err != nil {
+		return false
+	}
+	y, err := os.ReadFile(b)
+	return err == nil && bytes.Equal(x, y)
 }
 
 // test runs go test in the lab's tree, offline, and returns its output.
@@ -476,6 +543,9 @@ func (fr FixReport) markdown() string {
 	}
 	for _, n := range fr.Notes {
 		fmt.Fprintf(&b, "- %s\n", n)
+	}
+	if fr.Seconds > 0 {
+		fmt.Fprintf(&b, "- the step took %s\n", time.Duration(fr.Seconds*float64(time.Second)))
 	}
 	return b.String()
 }

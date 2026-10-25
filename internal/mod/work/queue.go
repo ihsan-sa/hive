@@ -27,6 +27,10 @@ import (
 // another brief names (one a worker is on, or ahead of it in line), or one
 // that worker has changed, waits until that worker is done, so the two don't
 // redo each other's work. A package or directory alone holds nothing back.
+// A brief that itself waits on another's file holds no one back: a later
+// brief on its other files starts, so waits never chain and two briefs never
+// wait on each other (task 163142 waited 6h behind 140258, itself held by a
+// stream of workers on its other files).
 // Once a worker has pushed, its task holds nothing back: a conflict it meets
 // later goes back to its worker with main to merge. Nothing here stops a
 // worker that has started.
@@ -156,6 +160,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				verb = "to go first"
 			}
 			wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s: both touch %s", o.Label(), o.ID, verb, area)
+			continue // one that waits on another holds no one back, so waits never chain
 		case working >= limit && (!quick || quickWorking > 0 || !plan()):
 			wait[t.ID] = full
 		case strain != "":

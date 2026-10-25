@@ -47,6 +47,7 @@ type Effects struct {
 	sandbox func() (sandbox.Sandbox, error)
 	tools   func() []string
 	runs    *Runs
+	sweep   func() int // sandbox.Sweep; a test points it away from the host
 
 	locks  sync.Map
 	unread sync.Map // project@main whose history MainAnswer couldn't read, journaled once
@@ -162,7 +163,7 @@ type HostCommit struct {
 
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
-	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
+	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs, sweep: sandbox.Sweep,
 		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
@@ -1301,7 +1302,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	runs, req, warned := Advisory(p, runs, e.RequiredChecks(p, m.Main))
+	runs, req, warned := Advisory(p, runs, e.RequiredChecks(p, m.Main), e.AdvisoryChecks(p, m.Main))
 	st, which := ChecksState(runs, req)
 	var shared []string
 	var answer map[string]string // check -> the older main commit its answer came from
@@ -1312,6 +1313,10 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 			return "", err
 		}
 		st, which, shared, _ = ChecksAgainstMain(runs, mainRuns, req, e.FailingTests(p.Repo))
+	}
+	var prose []string
+	if st == CheckFail && ProseOnly(ch.Files) {
+		st, which, prose = ChecksBesidesFailures(runs, req)
 	}
 	if st != CheckPass {
 		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
@@ -1326,8 +1331,8 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		}
 	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
-	if err != nil && len(shared) > 0 && protectionRefused.MatchString(err.Error()) {
-		return "", &RefusedRed{Checks: shared, Err: err}
+	if red := append(slices.Concat(shared, prose), warned...); err != nil && len(red) > 0 && protectionRefused.MatchString(err.Error()) {
+		return "", &RefusedRed{Checks: red, Warned: warned, Err: err}
 	}
 	if err != nil {
 		return "", err
@@ -1344,6 +1349,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 			ev["main_answer"] = answer
 		}
 	}
+	if len(prose) > 0 {
+		ev["red_on_prose"] = prose // a change to prose alone, which can't break them
+	}
 	e.j.MustAppend("effect.merged", ev)
 	return merged, nil
 }
@@ -1358,15 +1366,21 @@ func (e *Effects) ReadyPR(p Project, pr int, sha string) error {
 }
 
 // RefusedRed is the forge refusing a merge the Hive found no worse than main:
-// its branch rules want a check that is red on main too, so retrying won't
-// help until main is fixed or the person relaxes the rule.
+// its branch rules want a check that is red on main too, or one main's list
+// says only warns (Warned), so retrying won't help until main is fixed or the
+// person relaxes the rule.
 type RefusedRed struct {
 	Checks []string
+	Warned []string
 	Err    error
 }
 
 func (r *RefusedRed) Error() string {
-	return "the forge refused the merge: its branch rules want " + strings.Join(r.Checks, ", ") + ", red on main too (" + Clip(r.Err.Error(), 200) + ")"
+	why := ", red on main too"
+	if len(r.Warned) > 0 {
+		why = ", red here (" + strings.Join(r.Warned, ", ") + " only warn on the Hive's own PRs, per advisory_checks)"
+	}
+	return "the forge refused the merge: its branch rules want " + strings.Join(r.Checks, ", ") + why + " (" + Clip(r.Err.Error(), 200) + ")"
 }
 
 func (r *RefusedRed) Unwrap() error { return r.Err }
@@ -1385,26 +1399,31 @@ func (e *Effects) RequiredChecks(p Project, mainSHA string) []string {
 	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "required_checks")
 }
 
+// AdvisoryChecks are the forge's checks main's list says only warn on the
+// Hive's own PRs (Advisory).
+func (e *Effects) AdvisoryChecks(p Project, mainSHA string) []string {
+	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "advisory_checks")
+}
+
 // Advisory splits off the checks that only warn: on the Hive's own project
-// (Self) a failing Windows job, whose red tonight was mostly flakes unrelated
-// to the change, doesn't block the merge (the person: keep the Hive improving
-// as fast as possible). A release still needs the whole ci workflow green,
-// Windows with it. kept are the rest; warned names the failures set aside,
-// and required loses them so they aren't waited on either.
-func Advisory(p Project, runs []CheckRun, required []string) (kept []CheckRun, req, warned []string) {
-	if !p.Self {
+// (Self) a check named on main's advisory_checks (a Windows job, whose red was
+// mostly flakes unrelated to the change) doesn't hold the merge, red, pending
+// or unable to start (the person: keep the Hive improving as fast as
+// possible). A release still needs the whole ci workflow green. kept are the
+// rest; warned names the red ones set aside, and required loses every
+// advisory check so none is waited on.
+func Advisory(p Project, runs []CheckRun, required, advisory []string) (kept []CheckRun, req, warned []string) {
+	if !p.Self || len(advisory) == 0 {
 		return runs, required, nil
 	}
 	for _, r := range runs {
-		if r.State == CheckFail && strings.Contains(strings.ToLower(r.Name), "windows") {
-			if !slices.Contains(warned, r.Name) {
-				warned = append(warned, r.Name)
-			}
-			continue
+		if !slices.Contains(advisory, r.Name) || r.State == CheckPass {
+			kept = append(kept, r)
+		} else if r.State == CheckFail && !slices.Contains(warned, r.Name) {
+			warned = append(warned, r.Name)
 		}
-		kept = append(kept, r)
 	}
-	req = slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(warned, n) })
+	req = slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(advisory, n) })
 	return kept, req, warned
 }
 
@@ -1474,6 +1493,43 @@ func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string, tests Tests
 	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(shared, n) })
 	state, which = ChecksState(kept, req)
 	return state, which, shared, byName
+}
+
+// ProseOnly says every file is prose (markdown, reStructuredText, AsciiDoc:
+// docs, goals, the agents' prompts) and none is under a testdata directory,
+// where tests read files as their data. A plain .txt file may be such data
+// anywhere, so it isn't prose. The Hive's own tests ran every test that reads
+// such a change on Linux, so a red forge check on it (another system, a flake)
+// isn't its own.
+func ProseOnly(files []string) bool {
+	for _, f := range files {
+		f = filepath.ToSlash(f)
+		switch strings.ToLower(filepath.Ext(f)) {
+		case ".md", ".rst", ".adoc":
+		default:
+			return false
+		}
+		if strings.HasPrefix(f, "testdata/") || strings.Contains(f, "/testdata/") {
+			return false
+		}
+	}
+	return len(files) > 0
+}
+
+// ChecksBesidesFailures sums up runs as ChecksState does with every failed
+// check left out (and not required), and names those.
+func ChecksBesidesFailures(runs []CheckRun, required []string) (state string, which []CheckRun, failed []string) {
+	var kept []CheckRun
+	for _, r := range runs {
+		if r.State != CheckFail {
+			kept = append(kept, r)
+		} else if !slices.Contains(failed, r.Name) {
+			failed = append(failed, r.Name)
+		}
+	}
+	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(failed, n) })
+	state, which = ChecksState(kept, req)
+	return state, which, failed
 }
 
 // MainLookBack is how many of main's commits, newest first, MainAnswer reads

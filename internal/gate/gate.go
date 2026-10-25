@@ -30,6 +30,7 @@ type Config struct {
 	Org        Org      // the fresh test repository's host; nil runs without one
 	OrgToken   string   // the org token the gate itself uses to make and delete test repositories; children never hold it
 	ChildToken string   // the contents-only token the children hold (empty: they hold none and the org probe is skipped)
+	ReachOK    bool     // the caller passed CheckReach on these tokens within the hour (the daemon), so the gate doesn't probe again
 	Lessons    string   // .hive/lessons.md to append to on a rollback
 	Judged     bool     // a judge decides a measured verdict after the run, and writes its lesson itself
 	Depth      int      // levels of gating the children may still do (capped at MaxDepth)
@@ -173,7 +174,7 @@ func Run(cfg Config) (rep Report, err error) {
 			return rep, fmt.Errorf("the gate runs from a test binary (%s): set Config.Self to a hive binary", filepath.Base(self))
 		}
 	}
-	if g, ok := cfg.Org.(GitHub); ok && cfg.ChildToken != "" {
+	if g, ok := cfg.Org.(GitHub); ok && cfg.ChildToken != "" && !cfg.ReachOK {
 		if err = CheckReach(g, cfg.ChildToken, cfg.Repo); err != nil {
 			return rep, err
 		}
@@ -376,7 +377,7 @@ func Run(cfg Config) (rep Report, err error) {
 				cfg.log("rep %d: %s on %s", rep0+1, name, side.c.Name)
 				start, spent := time.Now(), side.c.Meter.Bytes()
 				r := p(&cfg, side.c)
-				reap(cfg.Out) // a probe's daemons end with it
+				reap(cfg.Out, true) // a probe's daemons end with it
 				r.Probe, r.Rep, r.Seconds = name, rep0+1, time.Since(start).Seconds()
 				if r.Pass && hasMetric(r, "score") { // a benchmark, whatever its name
 					// Cost, counted by the meter, lower is better, and judged

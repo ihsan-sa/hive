@@ -56,16 +56,8 @@ func (m *Module) Landed(id, mergeSHA, by, why string) (Task, error) {
 	if t.Checkpoint != "" { // its PR is the checkpoint's: say what merged and what didn't
 		m.save(&t, fmt.Sprintf("checkpoint %s is what merged%s", core.Short(t.Checkpoint), past))
 	}
-	t.MergeSHA, t.Stage, t.Reason, t.Checkpoint = merged, StageMerged, "", ""
-	m.save(&t, fmt.Sprintf("ended as landed by %s (%s, %s): %s", by, how, core.Short(merged), core.Clip(why, 300)))
-	if t.Kind == "revert" { // worded as the merge path words it
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Label(), "Revert: "), t.Lesson))
-	} else {
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Merged: %s %s", t.Label(), t.PR.URL))
-	}
-	if m.OnMerged != nil {
-		m.OnMerged(t)
-	}
+	t.Checkpoint = "" // ended, not banked: its worker is stopped
+	m.merged(&t, merged, fmt.Sprintf("ended as landed by %s (%s, %s): %s", by, how, core.Short(merged), core.Clip(why, 300)))
 	return t, nil
 }
 
@@ -207,8 +199,12 @@ func (m *Module) alreadyLanded(t *Task, p core.Project, main, sha string) (bool,
 	if t.Checkpoint != "" {
 		return true, m.dropCheckpoint(t, p, "main at "+core.Short(main)+" already has everything in it")
 	}
-	at := carrier(dir, main, sha)
-	say := fmt.Sprintf("Already on main: %s carries this work, so there is nothing left to merge. Closing.", at)
+	at, exact := carrier(dir, main, sha)
+	who := at + " carries"
+	if !exact {
+		who = fmt.Sprintf("%s or an older commit carries", at)
+	}
+	say := fmt.Sprintf("Already on main: %s this work, so there is nothing left to merge. Closing.", who)
 	if open {
 		if err := m.C.Effects.Forge.ClosePR(p.Repo, t.PR.Number, say); err != nil {
 			return true, err
@@ -230,12 +226,16 @@ func (m *Module) alreadyLanded(t *Task, p core.Project, main, sha string) (bool,
 	return true, nil
 }
 
+// carrierBack is how many commits carrier looks back over on main's line.
+var carrierBack = 200
+
 // carrier is the main commit that brought sha's change: the oldest on main's
-// first-parent line, going back from main, that still holds it. A line longer
-// than it looks back over names the oldest it looked at. A head that brought
-// main in is read as the branch was before (its first parent), so the commit
-// named is the one that landed the work, not main's newest.
-func carrier(dir, main, sha string) string {
+// first-parent line, going back from main, that still holds it. When the
+// oldest it looks back to still holds it, that one is named and exact is
+// false: the work may have landed further back. A head that brought main in
+// is read as the branch was before (its first parent), so the commit named is
+// the one that landed the work, not main's newest.
+func carrier(dir, main, sha string) (at string, exact bool) {
 	for i := 0; i < 20; i++ {
 		prev, err := core.Git(dir, "rev-parse", "-q", "--verify", sha+"^2^{commit}")
 		if err != nil || strings.TrimSpace(prev) == "" {
@@ -247,19 +247,22 @@ func carrier(dir, main, sha string) string {
 		}
 		sha = strings.TrimSpace(first)
 	}
-	out, err := core.Git(dir, "rev-list", "--first-parent", "-n", "200", main)
+	out, err := core.Git(dir, "rev-list", "--first-parent", "-n", fmt.Sprint(carrierBack+1), main)
 	lines := strings.Fields(out)
 	if err != nil || len(lines) == 0 {
-		return main
+		return main, false
 	}
-	at := main
-	for _, c := range lines[1:] {
+	at = main
+	for i, c := range lines[1:] {
 		if !holds(dir, c, sha) {
-			break
+			return at, true
+		}
+		if i+1 == carrierBack { // one further back may be the carrier
+			return c, false
 		}
 		at = c
 	}
-	return at
+	return at, true // main's line starts here
 }
 
 // landedHead is alreadyLanded against main as it is now, for a step that

@@ -22,14 +22,14 @@ func brief(t *testing.T, m *Module, from string, b map[string]any) map[string]st
 // apart (as #290 and #291 were), one naming no path the queue could hold it
 // by: the second joins the first as added context, so one worker takes it.
 // A brief filed once that worker has started joins it too, and its worker is
-// told. Different work, a gain on the same test, or work its filer says is
-// apart, is filed on its own.
+// told. Different work, a gain or an unclear brief (taken as a gain) on the
+// same test, or work its filer says is apart, is filed on its own.
 func TestDuplicateBriefJoinsOpenTask(t *testing.T) {
 	m := queueRig(t)
 	first := brief(t, m, "w-one", map[string]any{"title": "TestBlockedWorkComesBack times out on the Windows runner",
-		"done": "The test passes reliably on windows-latest", "known": "It waited 4 minutes for the tool worker."})
+		"done": "The test passes reliably on windows-latest", "known": "It waited 4 minutes for the tool worker.", "aim": "fix", "why": "TestBlockedWorkComesBack times out"})
 	second := brief(t, m, "w-two", map[string]any{"title": "Windows CI e2e flakes: TestBlockedWorkComesBack never wakes the tool worker",
-		"done": "TestBlockedWorkComesBack and TestModuleLifecycle pass reliably on windows-latest", "known": "Run 40078245067: the worker was never woken for turn 3."})
+		"done": "TestBlockedWorkComesBack and TestModuleLifecycle pass reliably on windows-latest", "known": "Run 40078245067: the worker was never woken for turn 3.", "aim": "fix", "why": "TestBlockedWorkComesBack never wakes"})
 	if second["task"] != first["task"] || second["joined"] != "true" || !strings.Contains(second["note"], "TestBlockedWorkComesBack") {
 		t.Fatalf("the second brief didn't join the first: %v / %v", first, second)
 	}
@@ -50,7 +50,7 @@ func TestDuplicateBriefJoinsOpenTask(t *testing.T) {
 		t.Fatal("the worker's brief lacks the joined ask")
 	}
 
-	third := brief(t, m, "sweep-x", map[string]any{"title": "TestModuleLifecycle fails on Windows", "done": "TestModuleLifecycle passes there"})
+	third := brief(t, m, "sweep-x", map[string]any{"title": "TestModuleLifecycle fails on Windows", "done": "TestModuleLifecycle passes there", "aim": "fix", "why": "TestModuleLifecycle fails"})
 	if third["task"] != task.ID {
 		t.Fatalf("a brief on a test the working task names didn't join it: %v", third)
 	}
@@ -61,11 +61,17 @@ func TestDuplicateBriefJoinsOpenTask(t *testing.T) {
 	other := brief(t, m, "w-two", map[string]any{"title": "Show the queue on the dashboard", "known": "internal/tui/views.go"})
 	apart := brief(t, m, "w-two", map[string]any{"title": "TestBlockedWorkComesBack also needs a Linux leg", "apart": true})
 	gain := brief(t, m, "w-two", map[string]any{"title": "TestBlockedWorkComesBack runs in half the time", "done": "TestBlockedWorkComesBack takes 20s", "aim": "gain"})
-	if other["task"] == task.ID || apart["task"] == task.ID || gain["task"] == task.ID || other["joined"] != "" || apart["joined"] != "" || gain["joined"] != "" {
-		t.Fatalf("separate work joined the task: %v / %v / %v", other, apart, gain)
+	unclear := brief(t, m, "w-three", map[string]any{"title": "TestBlockedWorkComesBack logs each wake", "done": "TestBlockedWorkComesBack prints a line per wake"})
+	if other["task"] == task.ID || apart["task"] == task.ID || gain["task"] == task.ID || unclear["task"] == task.ID || other["joined"] != "" || apart["joined"] != "" {
+		t.Fatalf("separate work joined the fix: %v / %v / %v / %v", other, apart, gain, unclear)
 	}
-	if n := len(m.List(nil)); n != 4 {
-		t.Fatalf("want four tasks, got %d", n)
+	// The apart brief names no failure, so it is a gain too, and the gain and
+	// the unclear brief on its test join it rather than the fix.
+	if gain["task"] != apart["task"] || unclear["task"] != apart["task"] {
+		t.Fatalf("gains on one test didn't join each other: %v / %v / %v", apart, gain, unclear)
+	}
+	if n := len(m.List(nil)); n != 3 {
+		t.Fatalf("want three tasks, got %d", n)
 	}
 }
 
