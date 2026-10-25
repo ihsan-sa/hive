@@ -410,7 +410,7 @@ func TestRestartUnderSystemUnitWaitsForLiveTurns(t *testing.T) {
 // Under a user unit with another name and KillMode=process, the live turns
 // outlive the daemon, so it exits at once and the new one reattaches to them.
 func TestRestartUnderUserUnitKeepsLiveTurns(t *testing.T) {
-	s, early, _ := restartUnder(t, supervisedBy("agents.service", "always", "process"))
+	s, early, _ := restartWith(t, supervisedBy("agents.service", "always", "process"), true)
 	if !early {
 		t.Fatal("the daemon waited, though the unit's stop leaves the turns running")
 	}
