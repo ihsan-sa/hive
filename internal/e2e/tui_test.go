@@ -232,7 +232,18 @@ func TestControlCenterInTmux(t *testing.T) {
 	}
 	os.Symlink(git, filepath.Join(gitOnly, "git"))
 	os.Symlink(bin, filepath.Join(stubs, "hive"))
-	x := &term{t: t, sock: filepath.Join(dir, "tmux.sock"), env: []string{
+	// Not under t.TempDir: a unix socket's path must fit in 108 bytes, and a
+	// gate's side runs this suite deep in its run folder.
+	base := ""
+	if fi, err := os.Stat("/tmp"); err == nil && fi.IsDir() {
+		base = "/tmp"
+	}
+	sockDir, err := os.MkdirTemp(base, "tui-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	x := &term{t: t, sock: filepath.Join(sockDir, "tmux.sock"), env: []string{
 		"HOME=" + home, "PATH=" + stubs + string(os.PathListSeparator) + os.Getenv("PATH"), "TERM=xterm-256color",
 		"LANG=C.UTF-8", "PS1=$ ", "TMPDIR=" + os.TempDir(), "HIVE_FORGE=local:" + forge,
 		"NO_COLOR=1"}} // the cursor must still show without colour

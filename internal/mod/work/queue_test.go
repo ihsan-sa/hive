@@ -324,8 +324,8 @@ func TestQueueAreasFollowGitattributes(t *testing.T) {
 
 // The hive project's queue at 14:45Z on 2026-10-24, replayed: 68 queued, 5
 // working, and 51 of the queued waiting on "both touch <area>", mostly a
-// package or directory a brief cited as evidence, and none started. With only
-// files holding, half of them start, and every one still waiting waits on a
+// package or directory a brief cited as evidence. With only files holding,
+// half of them are free to start, and every one still waiting waits on a
 // file.
 func TestQueueReplay1445(t *testing.T) {
 	var fix struct {
@@ -372,9 +372,15 @@ func TestQueueReplay1445(t *testing.T) {
 	if queued != 68 || len(tasks) != 73 {
 		t.Fatalf("fixture has %d queued of %d", queued, len(tasks))
 	}
+	// The pace (pace.go) starts at 4 workers and 5 already work, so a brief
+	// free of every overlap waits for a worker: it counts as free here.
 	start, wait := m.admit(tasks)
-	overlaps := 0
+	free, overlaps := len(start), 0
 	for id, why := range wait {
+		if strings.HasPrefix(why, "waiting for a worker") {
+			free++
+			continue
+		}
 		i := strings.LastIndex(why, "both touch ")
 		if i < 0 {
 			continue
@@ -384,9 +390,9 @@ func TestQueueReplay1445(t *testing.T) {
 			t.Errorf("%s waits on %q, not a file: %s", id, area, why)
 		}
 	}
-	t.Logf("%d start, %d wait on a shared file, %d held", len(start), overlaps, len(wait)-overlaps)
-	if overlaps > 25 || len(start) < 26 { // 26 start, and 25 wait on files cited by more than one brief (7 on tests/LANDING-security.toml)
-		t.Fatalf("%d start and %d still wait on a shared file (51 did at 14:45Z)", len(start), overlaps)
+	t.Logf("%d free of any overlap, %d wait on a shared file, %d held", free, overlaps, len(wait)+len(start)-free-overlaps)
+	if overlaps > 25 || free < 26 { // 26 free, and 25 wait on files cited by more than one brief (7 on tests/LANDING-security.toml)
+		t.Fatalf("%d free and %d still wait on a shared file (51 did at 14:45Z)", free, overlaps)
 	}
 }
 

@@ -103,3 +103,20 @@ func TestLoaded(t *testing.T) {
 		t.Errorf("no /proc/loadavg: %q", got)
 	}
 }
+
+// A machine with none of the readings (no /proc, as on macOS or Windows) is
+// watched by none of them, whatever the limits say; a reading counts only
+// when its limit is on and its file is there.
+func TestWatched(t *testing.T) {
+	if watched(t.TempDir(), 1024, 10, 40, 1) {
+		t.Error("no readings to read, yet watched")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "loadavg"), []byte("1.00 1.00 1.00 1/100 1\n"), 0o644)
+	if !watched(dir, 1024, 10, 40, 1) {
+		t.Error("loadavg is there and load_max on, yet not watched")
+	}
+	if watched(dir, 1024, 10, 40, 0) {
+		t.Error("only loadavg is there and load_max is off, yet watched")
+	}
+}

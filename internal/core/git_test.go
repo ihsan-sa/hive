@@ -36,3 +36,33 @@ func TestGitMaintenanceStaysInForeground(t *testing.T) {
 		}
 	}
 }
+
+// A lock left by a git that died (the machine ran out of memory) stalled every
+// later checkout in the project clone (#440): a stale one is cleared and the
+// call retried; a fresh one, maybe a live git's, is left alone.
+func TestGitClearsStaleLock(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "x"}} {
+		if _, err := Git(dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lock := filepath.Join(dir, ".git", "refs", "heads", "main.lock")
+	if err := os.WriteFile(lock, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Git(dir, "checkout", "-q", "-f", "-B", "main", "HEAD"); err == nil || !strings.Contains(err.Error(), "File exists") {
+		t.Fatalf("a fresh lock was cleared: %v", err)
+	}
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(lock, old, old)
+	if _, err := Git(dir, "checkout", "-q", "-f", "-B", "main", "HEAD"); err != nil {
+		t.Fatalf("stale lock still stalls git: %v", err)
+	}
+	if Exists(lock) {
+		t.Fatal("stale lock left in place")
+	}
+	if clearStaleLock(dir, "Unable to create '"+filepath.Join(t.TempDir(), "x.lock")+"': File exists.") {
+		t.Fatal("cleared a lock outside the repo's .git")
+	}
+}

@@ -61,3 +61,15 @@ func TestWriteFileAtomicConcurrent(t *testing.T) {
 		t.Fatalf("temp files left behind: %v", left)
 	}
 }
+
+// A workspace given by a relative path still guards absolute paths, so a
+// host interpreter's install check never skips them.
+func TestGuardedIsAbsolute(t *testing.T) {
+	t.Chdir(t.TempDir())
+	w := Workspace{Root: "rel"}
+	for _, g := range append(w.Guarded(), w.Covered()...) {
+		if !filepath.IsAbs(g) {
+			t.Errorf("guarded %q is relative", g)
+		}
+	}
+}

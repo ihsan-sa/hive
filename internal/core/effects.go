@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -161,7 +162,7 @@ type HostCommit struct {
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
 		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}, gates: map[string]GateResult{}}
-	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
+	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -747,7 +748,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), UID: os.Getuid(), GID: os.Getgid()}
+		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid()}
 	over := watchHome(home, capB)
 	code, err := sb.Run(spec, timeout)
 	if over() && err == nil {
@@ -1075,7 +1076,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		return c, err
 	}
 	cfg := e.Config(p, mainSHA).Guarded(p)
-	protected := append([]string{".hive/project.json", ".hive/goals.md", "docs/REVIEW.md"}, cfg.Protected...)
+	protected := append([]string{".hive/project.json", ".hive/goals.md", "docs/REVIEW.md", StewardFile}, cfg.Protected...)
 	if cfg.Score != nil {
 		protected = append(protected, cfg.Score.Evaluator()...)
 	}
@@ -1231,6 +1232,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		if why := e.MergeHeld(p.Name, m.PR); why != "" {
 			return "", fmt.Errorf("refusing to merge #%d: %s", m.PR, why)
 		}
+	}
+	if why := e.Stewardship(p, m.Main); why != "" {
+		return "", fmt.Errorf("refusing to merge #%d: %s", m.PR, why)
 	}
 	if c, ok := e.GetCheck(p.Name, m.SHA, "test"); !ok || !c.OK {
 		return "", fmt.Errorf("refusing to merge %s: no passing test run recorded for that exact commit", short(m.SHA))

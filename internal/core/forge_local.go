@@ -138,6 +138,14 @@ func (l *Local) Clone(repo, dir string) error {
 
 func (l *Local) DefaultBranch(string) string { return "main" }
 
+func (l *Local) File(repo, path string) (string, error) {
+	out, err := Git(l.RepoPath(repo), "show", "main:"+path)
+	if err != nil {
+		return "", ErrNotFound
+	}
+	return out, nil
+}
+
 // IsEmpty reports whether the bare repository has no refs.
 func (l *Local) IsEmpty(repo string) (bool, error) {
 	out, err := Git(l.RepoPath(repo), "for-each-ref", "--count=1")

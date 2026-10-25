@@ -337,6 +337,70 @@ func TestAimOp(t *testing.T) {
 	}
 }
 
+// Turning an improvement into a fix while its gate runs cancels that run, so
+// the one gate slot frees for the gains behind it; the cancelled run records
+// no verdict and holds nobody.
+func TestAimFixCancelsItsGate(t *testing.T) {
+	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	started := make(chan struct{})
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+		close(started)
+		<-ctx.Done()
+		return core.GateResult{Outcome: core.GateCantRun, Reason: "the gate ran out of time (" + ctx.Err().Error() + ")"}
+	}
+	main, _ := m.C.Effects.Sync(p)
+	mergeOnce(t, m, task, p)
+	<-started
+	lead := core.Run{ID: "lead-1", Role: "lead"}
+	if _, err := m.opAim(lead, []byte(`{"task":"`+task.ID+`","aim":"fix","why":"a plain fix"}`)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { m.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the gate run went on after its task became a fix")
+	}
+	m.mu.Lock()
+	gating, cantRun := m.gating, len(m.gateCantRun)
+	m.mu.Unlock()
+	if gating != nil || cantRun != 0 {
+		t.Fatalf("gating %+v, %d can't-run holds: want the slot free and nobody held", gating, cantRun)
+	}
+	if g, ok := m.C.Effects.GateResult(p.Name, task.SHA, main); ok {
+		t.Fatalf("a cancelled run recorded a verdict: %+v", g)
+	}
+	*task, _ = m.Get(task.ID)
+	if !strings.Contains(task.Log[len(task.Log)-1].Text, "cancelled") {
+		t.Fatalf("the task doesn't say its gate run was cancelled: %+v", task.Log[len(task.Log)-1])
+	}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q: want the fix merged", task.Stage, task.Reason)
+	}
+}
+
+// A worker whose gain the gate rolled back can't make it a fix on its own
+// word, which would let a change move its own bar; the lead can.
+func TestWorkerCantUnaimARolledBackGain(t *testing.T) {
+	m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
+	gateOnce(t, m, task, p)
+	if task.Stage != StageWorking {
+		t.Fatalf("stage %q: want sent back", task.Stage)
+	}
+	own := core.Run{ID: task.Worker, Role: "worker"}
+	if _, err := m.opAim(own, []byte(`{"aim":"fix","why":"it is a fix really"}`)); err == nil || !strings.Contains(err.Error(), "lead") {
+		t.Fatalf("a worker turned its rolled-back gain into a fix: %v", err)
+	}
+	if _, err := m.opAim(core.Run{ID: "lead-1", Role: "lead"}, []byte(`{"task":"`+task.ID+`","aim":"fix","why":"it is a fix"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := m.Get(task.ID); got.Gain() {
+		t.Fatal("the lead's fix didn't take")
+	}
+}
+
 // A brief may say it aims at a gain, and its worker's brief says which it is.
 func TestBriefAim(t *testing.T) {
 	m, _, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
@@ -372,5 +436,22 @@ func TestGateLessonsReachTheBrief(t *testing.T) {
 	main, _ = m.C.Effects.Sync(p)
 	if b := m.renderBrief(task, p, main); strings.Count(b, "rolled back abc1234") != 1 {
 		t.Fatalf("want the lesson once, from main:\n%s", b)
+	}
+}
+
+// The reader of a change to the Hive declared a fix is asked to flag one
+// aimed at a gain; a gain, a revert or another project's change isn't.
+func TestAimCheckOnSelfFixes(t *testing.T) {
+	self, other := core.Project{Name: "hive", Self: true}, core.Project{Name: "p"}
+	if s := aimCheck(&Task{}, self); !strings.Contains(s, "declared a fix") || !strings.Contains(s, "--aim gain") {
+		t.Fatalf("a self fix's reader isn't asked about its aim: %q", s)
+	}
+	for _, c := range []struct {
+		t *Task
+		p core.Project
+	}{{&Task{Aim: AimGain}, self}, {&Task{Kind: "revert"}, self}, {&Task{}, other}} {
+		if s := aimCheck(c.t, c.p); s != "" {
+			t.Fatalf("aim %q kind %q self %v: got %q", c.t.Aim, c.t.Kind, c.p.Self, s)
+		}
 	}
 }
