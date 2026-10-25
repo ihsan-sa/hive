@@ -74,8 +74,8 @@ func TestFindFixes(t *testing.T) {
 		cfg := &Config{Repo: repo, Base: sha["base"], Head: sha[head], Out: out}
 		cand := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: "bare", Go: gotool}
 		ctrl := &Child{Name: "control", Root: filepath.Join(out, "control"), Sandbox: "bare", Go: gotool}
-		for c, s := range map[*Child]string{cand: sha[head], ctrl: sha["base"]} {
-			if err := checkout(*cfg, c, s); err != nil {
+		for c, s := range map[*Child][2]string{cand: {sha[head], sha["base"]}, ctrl: {sha["base"], ""}} {
+			if err := checkout(*cfg, c, s[0], s[1]); err != nil {
 				t.Fatal(err)
 			}
 		}

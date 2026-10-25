@@ -67,7 +67,7 @@ func gateRigSeeded(t *testing.T, mainRed bool, onMain, files map[string]string) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.Close() })
-	forge.EnsureRepo("me/p", "")
+	forge.EnsureRepo("me/p", "", false)
 	seed := map[string]string{".hive/project.json": `{"test": "test ! -f BROKEN && { test ! -f NEEDTOOL || hive-gate-tool-xyz; }"}`, "README.md": "# p\n"}
 	if mainRed {
 		seed["BROKEN"] = "x"
@@ -183,6 +183,42 @@ func TestGateFailsOnMainOnly(t *testing.T) {
 	}
 	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 {
 		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+}
+
+// A change whose every failing test main fails too is no worse than main: it
+// goes on rather than wait for main to go green, so the fix for a red main
+// (a revert, say) can land. Anything more of its own and it waits: another
+// failing test, the same test in another package, or a package failing with
+// no test named (a timeout) beside main's failure.
+func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
+	const red = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\n"
+	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": red + "exit 1\n"}
+	m, task, p, _ := gateRigSeeded(t, false, onMain, map[string]string{"feature.txt": "y"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 || strings.HasPrefix(task.Reason, "waiting on main") {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	for name, more := range map[string]string{
+		"another test":          "echo '--- FAIL: TestNew (0.01s)'\necho 'FAIL\tp/b\t0.01s'\n",
+		"another package":       "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/b\t0.01s'\n",
+		"a timeout":             "echo 'panic: test timed out after 2s'\necho 'FAIL\tp/b\t2.01s'\n",
+		"no test named":         "echo 'PASS'\necho 'FAIL\tp/b\t0.01s'\n",
+		"a panic beside a test": "echo '--- FAIL: TestClock (0.01s)'\necho 'panic: boom'\necho 'FAIL\tp/a\t0.01s'\n",
+	} {
+		script := red + more + "exit 1\n"
+		if name == "a panic beside a test" {
+			script = more + "exit 1\n"
+		}
+		m, task, p, _ := gateRigSeeded(t, false, onMain, map[string]string{"t.sh": script})
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+		if task.Stage != StageTesting || !strings.HasPrefix(task.Reason, "waiting on main") {
+			t.Fatalf("%s beside main's failure went on: stage %q, reason %q", name, task.Stage, task.Reason)
+		}
 	}
 }
 
@@ -530,6 +566,56 @@ func TestGateMissingToolCantRun(t *testing.T) {
 	}
 }
 
+// A change faking a missing tool (exit 127 with "not found", a new tool each
+// time) gets one can't-run comment however often it is tried; after
+// CantRunTries it counts as red: stopped, not merged, and the person is asked
+// for the tool by name.
+func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
+	m, task, p, forge := gateRigSeeded(t, false,
+		map[string]string{".hive/project.json": `{"test": "test ! -f FAKE || { echo \"sh: 1: tool$$: not found\"; exit 127; }"}`},
+		map[string]string{"FAKE": "x"})
+	before, _ := m.C.Effects.Sync(p)
+	for i := 1; i < CantRunTries; i++ {
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+		if task.Stage != StageTesting {
+			t.Fatalf("try %d: stage %q, want it still waiting", i, task.Stage)
+		}
+	}
+	said := 0
+	for _, c := range forge.Comments(p.Repo, task.PR.Number) {
+		if strings.Contains(c, "can't run") {
+			said++
+		}
+	}
+	if said != 1 {
+		t.Fatalf("%d can't-run comments on the PR over %d tries, want 1", said, CantRunTries-1)
+	}
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageStopped || !strings.Contains(task.Reason, "counts as red") {
+		t.Fatalf("after %d tries: stage %q, reason %q", CantRunTries, task.Stage, task.Reason)
+	}
+	var ask core.Ask
+	for _, a := range m.C.Person.Open() {
+		if a.Ref == "cant-run:"+task.ID {
+			ask = a
+		}
+	}
+	if !strings.Contains(ask.Title, "Install tool") {
+		t.Fatalf("the person isn't asked for the tool by name: %+v", ask)
+	}
+	if after, _ := m.C.Effects.Sync(p); after != before {
+		t.Fatal("a change whose tests never ran was merged")
+	}
+	err := m.Recheck(task.ID, "")
+	if got, _ := m.Get(task.ID); err != nil || got.CantRuns != 0 {
+		t.Fatalf("the lead's recheck: %v, count %d, want a fresh count", err, got.CantRuns)
+	}
+}
+
 // A checkpoint whose tests can't find their tool is dropped with that reason:
 // not a failure, nothing sent back, its round unspent, and the tool named once.
 // The alert clears once the tests run.
@@ -665,5 +751,26 @@ func TestClosedCheckpointNotTold(t *testing.T) {
 		if strings.Contains(c, "later commits") {
 			t.Fatalf("told a closed PR it takes later commits: %q", c)
 		}
+	}
+}
+
+// A draft closed while it waits stops as the person's call, rather than
+// waiting in merging for good; one that leaves merging drops its wait, so a
+// later draft wait starts its clock afresh.
+func TestClosedDraftStops(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	forge.SetDraft(p.Repo, task.PR.Number, true)
+	task.DraftWhy = "the lead holds it" // else the gate would ready it
+	m.settle(task, m.step(task))
+	if task.DraftSince.IsZero() {
+		t.Fatalf("not waiting: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	forge.ClosePR(p.Repo, task.PR.Number, "")
+	m.settle(task, m.step(task))
+	if task.Stage != StageStopped || !task.ByPerson || !task.DraftSince.IsZero() || task.DraftTold {
+		t.Fatalf("stage %q, by person %v, draft since %v", task.Stage, task.ByPerson, task.DraftSince)
 	}
 }
