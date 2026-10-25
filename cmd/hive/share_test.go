@@ -22,19 +22,20 @@ import (
 func shareFixture(t *testing.T) core.Workspace {
 	ws := core.Workspace{Root: t.TempDir()}
 	for rel, body := range map[string]string{
-		".hive/chats/lead.jsonl":     "{}",
-		".hive/runs/r1/output.log":   "run one",
-		".hive/runs/r2/turns/1.json": "run two",
-		".hive/kb/notes/a.md":        "a note",
-		".hive/gates/web/check.sh":   "true",
-		".hive/events.jsonl":         "{}",
-		".hive/config.json":          `{"harness":"fake"}`,
-		".hive/daemon.log":           "started",
-		".hive/logins/claude/token":  "secret",
-		".hive/bin/hive":             "binary",
-		".hive/daemon.json":          "{}",
-		"projects/web/main.go":       "package main",
-		".modules/x/module.json":     "{}",
+		".hive/chats/lead.jsonl":         "{}",
+		".hive/runs/r1/output.log":       "run one",
+		".hive/runs/r2/turns/1.json":     "run two",
+		".hive/kb/notes/a.md":            "a note",
+		".hive/gates/web/check.sh":       "true",
+		".hive/events.jsonl":             "{}",
+		".hive/config.json":              `{"harness":"fake"}`,
+		".hive/daemon.log":               "started",
+		".hive/logins/claude/token":      "secret",
+		".hive/bin/hive":                 "binary",
+		".hive/daemon.json":              "{}",
+		"projects/web/main.go":           "package main",
+		".modules/x/module.json":         "{}",
+		".hive/private/scan-handles.txt": "nobody-in-this-test\n",
 	} {
 		p := filepath.Join(ws.Root, filepath.FromSlash(rel))
 		os.MkdirAll(filepath.Dir(p), 0o755)
@@ -226,5 +227,31 @@ func TestShareNeverFollowsASwappedFolder(t *testing.T) {
 				t.Fatalf("bundle %d holds the secret as %s", i, f.Name)
 			}
 		}
+	}
+}
+
+// The bundle is scanned before anything is asked or sent: a key, a handle
+// or no handle list sends nothing, and the failure prints no handle.
+func TestShareScanBlocksTheBundle(t *testing.T) {
+	srv, got := bundleServer(t, "b-3")
+	key := "sk-ant-api03-" + strings.Repeat("Zq9xW2vB7nK4", 4)
+	for name, c := range map[string]struct{ file, body, want string }{
+		"a key in a run":   {".hive/runs/r1/output.log", "printed " + key + " (a fake token)", "runs/r1/output.log:1: an Anthropic key"},
+		"a handle in chat": {".hive/chats/lead.jsonl", "{}\n{\"text\":\"ask Alice-K\"}", "chats/lead.jsonl:2: handle 2 of the handle list"},
+		"no handle list":   {".hive/private/scan-handles.txt", "", "no handle list"},
+	} {
+		ws := shareFixture(t)
+		os.WriteFile(filepath.Join(ws.Private(), "scan-handles.txt"), []byte("bob\nalice-k\n"), 0o600)
+		os.WriteFile(filepath.Join(ws.Root, filepath.FromSlash(c.file)), []byte(c.body), 0o644)
+		var out bytes.Buffer
+		err := share(ws, srv.URL+"/v1/bundle", bundleCap, true, nil, &out)
+		if err == nil || !strings.HasPrefix(err.Error(), "nothing sent: ") || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: want %q, got %v", name, c.want, err)
+		} else if strings.Contains(err.Error(), key) || strings.Contains(strings.ToLower(err.Error()), "alice") || strings.Contains(err.Error(), "bob") {
+			t.Errorf("%s: the failure prints what it found: %v", name, err)
+		}
+	}
+	if len(*got) != 0 {
+		t.Fatalf("a bundle the scan blocked was sent %d times", len(*got))
 	}
 }
