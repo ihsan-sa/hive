@@ -536,7 +536,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	e.mu.Lock()
 	e.diskFull = false
 	e.mu.Unlock()
-	if (kind == "test" || kind == "retest") && !c.OK {
+	if (kind == "test" || kind == "retest" || kind == "before") && !c.OK {
 		c.Failed = FailedTests(out)
 	}
 	if kind == "score" && c.OK {
@@ -597,6 +597,63 @@ func FailedTests(out string) []string {
 		}
 	}
 	return names
+}
+
+var (
+	redPkgLine = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
+	redTest    = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
+	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |exit status |test timed out|# )|\[(build|setup) failed\]`)
+)
+
+// RedKeys names what failed in a red go test run so two runs' reds can be
+// compared: each failing test with its package ("pkg TestX"), and "pkg !"
+// for a package that failed in a way no test name accounts for (no test
+// named, a build failure, a timeout, a panic or exit outside a test). Output
+// with no go package lines falls back to FailedTests' names. Nil means
+// nothing could be named.
+func RedKeys(out string) []string {
+	var keys, tests []string
+	odd, pkgs := false, false
+	add := func(k string) {
+		if !slices.Contains(keys, k) {
+			keys = append(keys, k)
+		}
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if m := redPkgLine.FindStringSubmatch(l); m != nil && strings.ContainsAny(m[2], "/.") {
+			pkgs = true
+			if m[1] == "FAIL" {
+				for _, t := range tests {
+					add(m[2] + " " + t)
+				}
+				if len(tests) == 0 || odd || strings.Contains(m[4], "failed") {
+					add(m[2] + " !")
+				}
+			}
+			tests, odd = nil, false
+			continue
+		}
+		if m := redTest.FindStringSubmatch(l); m != nil {
+			tests = append(tests, m[1])
+		} else if redOdd.MatchString(strings.TrimSpace(l)) {
+			odd = true
+		}
+	}
+	if !pkgs {
+		return FailedTests(out)
+	}
+	return keys
+}
+
+// FullOutput is a check's whole output: its log on the host when it can be
+// read, else the clipped output it was journaled with.
+func (c Check) FullOutput() string {
+	if c.Log != "" {
+		if b, err := SafeRead(c.Log, 8<<20); err == nil && len(b) > 0 {
+			return string(b)
+		}
+	}
+	return c.Output
 }
 
 // scoreOf reads the score from a score command's output: the last word of

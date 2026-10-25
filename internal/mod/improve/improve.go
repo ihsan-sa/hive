@@ -556,6 +556,9 @@ func (m *Module) afterMerge(t work.Task) {
 	if !ok {
 		flake = m.seenElsewhere(p, t)
 	}
+	if !ok && flake == "" && cant.CantRun == "" {
+		flake = m.redBefore(p, t, cfg.Test)
+	}
 	k, hasBest := m.kept(p.Name)
 	best := 0.0
 	if hasBest {

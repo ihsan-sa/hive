@@ -1151,3 +1151,20 @@ func TestLogExcerpt(t *testing.T) {
 		t.Fatalf("error on the last line: %q", got)
 	}
 }
+
+func TestRedKeys(t *testing.T) {
+	out := "--- FAIL: TestClock (0.00s)\n    a_test.go:3: late\nFAIL\nFAIL\tx/a\t0.004s\nok  \tx/ok\t0.1s\n" +
+		"PASS\nFAIL\tx/exit\t0.002s\n" +
+		"--- FAIL: TestClock (0.00s)\npanic: test timed out after 2s\n\trunning tests:\nFAIL\tx/c\t2.011s\n" +
+		"# x/d\nd.go:1: syntax error\nFAIL\tx/d [build failed]\nFAIL\n"
+	got := strings.Join(RedKeys(out), "|")
+	if want := "x/a TestClock|x/exit !|x/c TestClock|x/c !|x/d !"; got != want {
+		t.Fatalf("RedKeys = %q, want %q", got, want)
+	}
+	if got := RedKeys("FAILED tests/a.py::test_x\n"); len(got) != 1 || got[0] != "tests/a.py::test_x" {
+		t.Fatalf("pytest: %q", got)
+	}
+	if got := RedKeys("vet: something\n"); got != nil {
+		t.Fatalf("nothing named: %q", got)
+	}
+}
