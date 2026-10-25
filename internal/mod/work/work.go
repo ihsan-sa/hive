@@ -229,9 +229,9 @@ type Module struct {
 	// limit is when GitHub's pause on writes ends, and limitText why.
 	limit     time.Time
 	limitText string
-	// refusedAsked holds id@sha for each task stopped on a checks refusal
-	// whose head's checks were asked again, so each is asked once.
-	refusedAsked map[string]bool
+	// refusedAsked is when the checks of each task stopped on a checks
+	// refusal were last asked again, by id@sha (reviveRefused).
+	refusedAsked map[string]time.Time
 	// holds are the person's holds on each project's merges (hold.go), and
 	// holdPolled when each one's release condition may next be asked of the forge.
 	holds      map[string]*MergeHold
@@ -250,7 +250,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]bool{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -689,22 +689,23 @@ func (m *Module) revive() {
 	m.reviveRefused()
 }
 
-// checksRefused is the error of a forge refusing the token a read of a
-// head's checks, as gh words it.
-var checksRefused = regexp.MustCompile(`^gh api repos/\S+/commits/[0-9a-f]+/(check-runs|check-suites|status)\S*: .*\(HTTP 403\)$`)
-
 // reviveRefused brings back the tasks stopped because the token may not read
 // a head's checks, once those checks read now (the repo has no workflows, so
 // a refusal is no checks, or the permission was granted). Each task's head is
-// asked once, so one whose repo has CI the token can't see stays stopped.
+// asked at most once an hour, so one whose repo has CI the token can't see
+// stays stopped without a call every tick, and comes back within the hour
+// of the permission being granted.
 func (m *Module) reviveRefused() {
+	const refusedAgain = time.Hour
 	for _, t := range m.List(func(t Task) bool {
-		return t.Stage == StageStopped && !t.ByPerson && t.SHA != "" && strings.HasPrefix(t.Reason, gaveUpOnErrors) && checksRefused.MatchString(strings.TrimPrefix(t.Reason, gaveUpOnErrors))
+		return t.Stage == StageStopped && !t.ByPerson && t.SHA != "" && strings.HasPrefix(t.Reason, gaveUpOnErrors) && core.ChecksRefused(strings.TrimPrefix(t.Reason, gaveUpOnErrors))
 	}) {
 		key := t.ID + "@" + t.SHA
 		m.mu.Lock()
-		asked := m.refusedAsked[key]
-		m.refusedAsked[key] = true
+		asked := time.Since(m.refusedAsked[key]) < refusedAgain
+		if !asked {
+			m.refusedAsked[key] = time.Now()
+		}
 		m.mu.Unlock()
 		if asked || m.workerStopped(t) {
 			continue

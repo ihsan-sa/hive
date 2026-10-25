@@ -153,8 +153,9 @@ func TestStatusCommentEditedEachRound(t *testing.T) {
 // are still refused it stays stopped, and its head is asked only once.
 func TestChecksRefusedStopsComeBack(t *testing.T) {
 	m, forge, task, _ := noCommitRig(t, 0)
+	// The deck task's reason as the journal records it (task 261024-154353-5c4bec3bc6).
 	sha := "e3b0815699da94aede6f3d3a1c8b60e5ea532c87"
-	refused := "gave up after repeated errors: gh api repos/me/p/commits/" + sha + "/check-runs?per_page=100: gh: Resource not accessible by personal access token (HTTP 403)"
+	refused := "gave up after repeated errors: gh api repos/Hive-RSI-Lab/hive-deck/commits/e3b0815699da94aede6f3d3a1c8b60e5ea532c87/check-runs?per_page=100: gh: Resource not accessible by personal access token (HTTP 403)"
 	task.SHA = sha
 	m.giveUp(task, refused)
 	other := &Task{ID: "t2", Project: "p", Kind: "work", SHA: sha, Stage: StageStopped, ByPerson: true, Reason: refused}
@@ -172,9 +173,9 @@ func TestChecksRefusedStopsComeBack(t *testing.T) {
 		t.Fatalf("asked the forge %d times, want once", forge.checksAsked)
 	}
 
-	// A new daemon (or a new head) asks again; this time the checks read.
+	// An hour on it asks again; this time the checks read.
 	forge.checksRefused = false
-	m.refusedAsked = map[string]bool{}
+	m.refusedAsked[task.ID+"@"+sha] = time.Now().Add(-2 * time.Hour)
 	m.revive()
 	got, _ := m.Get(task.ID)
 	if got.Stage != StageLanding || got.Failures != 0 || got.Reason != "" || !logged(&got, "read now") {

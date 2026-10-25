@@ -291,7 +291,9 @@ func TestChecksRefusedWithoutWorkflows(t *testing.T) {
 		})
 		runs, err := GitHub{}.Checks("o/r", "abc")
 		if workflows {
-			if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+			// The stopped task's reason is this text, which revive matches.
+			want := "gh api repos/o/r/commits/abc/check-runs?per_page=100: " + refused
+			if err == nil || err.Error() != want || !ChecksRefused(err.Error()) {
 				t.Errorf("with workflows: runs %+v, err %v", runs, err)
 			}
 			continue
@@ -313,6 +315,32 @@ func TestChecksRefusedWithoutWorkflows(t *testing.T) {
 		}
 		if asked != 1 {
 			t.Errorf("asked for workflows %d times, want once", asked)
+		}
+	}
+}
+
+// The four tasks stopped on a checks refusal, their reasons as the journal
+// records them (after "gave up after repeated errors: "), read as one; a
+// refusal of another call doesn't.
+func TestChecksRefusedReasons(t *testing.T) {
+	const tail = "?per_page=100: gh: Resource not accessible by personal access token (HTTP 403)"
+	for _, r := range []string{
+		"gh api repos/Hive-RSI-Lab/hive-deck/commits/e3b0815699da94aede6f3d3a1c8b60e5ea532c87/check-runs" + tail,
+		"gh api repos/Hive-RSI-Lab/hive-dispatch/commits/23925cb03db4544ed170451a28aa905c00d66783/check-runs" + tail,
+		"gh api repos/Hive-RSI-Lab/hive-trials/commits/e5789b39d9d40ee34abf3b53886ee38529028feb/check-runs" + tail,
+		"gh api repos/Hive-RSI-Lab/hive-trials/commits/fa2ec42bff45ca0e5d059e4a6429e8c0495ebd36/check-runs" + tail,
+	} {
+		if !ChecksRefused(r) {
+			t.Errorf("not read as a checks refusal: %s", r)
+		}
+	}
+	for _, r := range []string{
+		"gh api: gh: Resource not accessible by personal access token (HTTP 403)",
+		"gh api repos/o/r/issues/3/comments: gh: Resource not accessible by personal access token (HTTP 403)",
+		"gh api repos/o/r/commits/abc/check-runs?per_page=100: gh: Bad credentials (HTTP 401)",
+	} {
+		if ChecksRefused(r) {
+			t.Errorf("read as a checks refusal: %s", r)
 		}
 	}
 }

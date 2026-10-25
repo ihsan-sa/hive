@@ -214,10 +214,14 @@ func gh(repo string, args ...string) (string, error) {
 }
 
 // ghVerb names a gh command by its leading words, such as "pr create" or
-// "api repos/o/r/issues/3/comments".
+// "api repos/o/r/issues/3/comments". --paginate takes no value, so the path
+// after it still names a list read.
 func ghVerb(args []string) string {
 	var w []string
 	for _, a := range args {
+		if a == "--paginate" {
+			continue
+		}
 		if strings.HasPrefix(a, "-") || len(w) == 3 {
 			break
 		}
@@ -665,6 +669,15 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 	}
 	return list, nil
 }
+
+// checksRefused is a forge refusing the token a read of a head's checks, as
+// gh words it: "gh api repos/o/r/commits/<sha>/check-runs?per_page=100: gh:
+// Resource not accessible by personal access token (HTTP 403)".
+var checksRefused = regexp.MustCompile(`^gh api repos/\S+/commits/[0-9a-f]+/(check-runs|check-suites|status)\S*: .*\(HTTP 403\)$`)
+
+// ChecksRefused reports whether err's text is GitHub.Checks refused the
+// token's read of a head's checks.
+func ChecksRefused(text string) bool { return checksRefused.MatchString(text) }
 
 // ciless returns a filter for the errors of reading sha's checks: a refusal
 // (HTTP 403) is dropped when sha has no .github/workflows (GitHub answers 404

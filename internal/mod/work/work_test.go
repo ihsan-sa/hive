@@ -24,7 +24,8 @@ type flakyForge struct {
 	users  int
 	refuse bool
 	// checksRefused refuses the token every read of checks, as GitHub does
-	// a token without Checks: read on a repo with workflows.
+	// a token without Checks: read on a repo with workflows, in the words
+	// GitHub.Checks gives (TestChecksRefusedWithoutWorkflows pins them).
 	checksRefused bool
 	checksAsked   int
 	hold          chan struct{} // the first User call waits for it to close
