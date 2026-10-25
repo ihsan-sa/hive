@@ -44,6 +44,10 @@ func TestModelThatCantAnswerIsSkipped(t *testing.T) {
 	reset := time.Now().Add(20 * time.Minute)
 	c.Runs.append("plan.usage", Plan{Harness: "fake", Limit: harness.RateLimit{Status: "rejected", ResetsAt: reset}})
 	route := []Pick{{Harness: "fake", Model: "opus"}, {Harness: "open", Model: "router"}, {Harness: "open", Model: "local"}}
+	for _, m := range []string{"router", "local"} { // a worker falls back only to a model that has finished here
+		c.J.MustAppend("run.created", RunSpec{ID: "trial-" + m, Role: "worker", Harness: "open", Model: m})
+		c.J.MustAppend("run.finish", map[string]any{"id": "trial-" + m, "finish": Finish{Status: "done"}})
+	}
 	c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker", Harness: "open", Model: "router", Route: route})
 
 	got := endOn(t, c, "w1", "router", 1, guardrail404)

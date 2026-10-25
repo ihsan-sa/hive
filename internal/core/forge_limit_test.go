@@ -315,3 +315,36 @@ func TestChecksPaginates(t *testing.T) {
 		}
 	}
 }
+
+// An API read goes through gh's login as a plain GET, and a rate-limited one
+// comes back as RateLimited; the quota's reset is read from rate_limit.
+func TestAPIGetOnTheLogin(t *testing.T) {
+	limited := false
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		switch {
+		case args[1] == "rate_limit":
+			return "1792900000\n", "", nil
+		case limited:
+			return "", "HTTP 403: API rate limit exceeded for user ID 1.", errors.New("exit status 1")
+		}
+		return `{"number":7}`, "", nil
+	})
+	var r APIReader = GitHub{}
+	if out, err := r.APIGet("o/r", "repos/o/r/pulls/7"); err != nil || out != `{"number":7}` {
+		t.Fatalf("read: %q, %v", out, err)
+	}
+	if got := strings.Join((*calls)[0], " "); got != "api repos/o/r/pulls/7" || ghWrites((*calls)[0]) {
+		t.Fatalf("gh called as %q", got)
+	}
+	if _, err := r.APIGet("o/r", "-X"); err == nil {
+		t.Fatal("a flag passed as the path")
+	}
+	limited = true
+	var rl *RateLimited
+	if _, err := r.APIGet("o/r", "repos/o/r/pulls/7"); !errors.As(err, &rl) {
+		t.Fatalf("rate-limited read: %v", err)
+	}
+	if at, err := r.RateReset("o/r"); err != nil || at.Unix() != 1792900000 {
+		t.Fatalf("reset %v, %v", at, err)
+	}
+}

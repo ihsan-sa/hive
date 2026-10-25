@@ -2,7 +2,6 @@ package core
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -141,24 +140,7 @@ func (c *Core) agentBinary(exe string) string {
 // Tick advances runs on one read of the config; modules tick themselves
 // from the daemon loop.
 func (c *Core) Tick() {
-	cfg := c.WS.LoadConfig()
-	c.Runs.Tick(cfg)
-	c.tellSpend(cfg.MonthlyUSD)
-}
-
-// tellSpend tells the person once a month when runs have cost more than the
-// monthly figure they set. It is a notice in the feed: work goes on. Once a
-// month holds because Person.Get finds it by its ID.
-func (c *Core) tellSpend(limit float64) {
-	month := time.Now().UTC().Format("2006-01")
-	id := "spend-" + month
-	if spent := c.Runs.Spent(month); limit <= 0 || spent <= limit {
-		return
-	} else if _, told := c.Person.Get(id); !told {
-		c.Person.Tell(Ask{ID: id,
-			Title:  fmt.Sprintf("Runs have cost $%.2f this month, past your $%.2f", spent, limit),
-			Detail: "Work goes on; this is the one notice for " + month + ". The figure is monthly_usd in .hive/config.json."})
-	}
+	c.Runs.Tick(c.WS.LoadConfig())
 }
 
 // Close closes the journal.

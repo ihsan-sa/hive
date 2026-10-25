@@ -541,7 +541,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	e.mu.Lock()
 	e.diskFull = false
 	e.mu.Unlock()
-	if (kind == "test" || kind == "retest") && !c.OK {
+	if (kind == "test" || kind == "retest" || kind == "before") && !c.OK {
 		c.Failed = FailedTests(out)
 	}
 	if kind == "score" && c.OK {
@@ -602,6 +602,63 @@ func FailedTests(out string) []string {
 		}
 	}
 	return names
+}
+
+var (
+	redPkgLine = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
+	redTest    = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
+	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |exit status |test timed out|# )|\[(build|setup) failed\]`)
+)
+
+// RedKeys names what failed in a red go test run so two runs' reds can be
+// compared: each failing test with its package ("pkg TestX"), and "pkg !"
+// for a package that failed in a way no test name accounts for (no test
+// named, a build failure, a timeout, a panic or exit outside a test). Output
+// with no go package lines falls back to FailedTests' names. Nil means
+// nothing could be named.
+func RedKeys(out string) []string {
+	var keys, tests []string
+	odd, pkgs := false, false
+	add := func(k string) {
+		if !slices.Contains(keys, k) {
+			keys = append(keys, k)
+		}
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if m := redPkgLine.FindStringSubmatch(l); m != nil && strings.ContainsAny(m[2], "/.") {
+			pkgs = true
+			if m[1] == "FAIL" {
+				for _, t := range tests {
+					add(m[2] + " " + t)
+				}
+				if len(tests) == 0 || odd || strings.Contains(m[4], "failed") {
+					add(m[2] + " !")
+				}
+			}
+			tests, odd = nil, false
+			continue
+		}
+		if m := redTest.FindStringSubmatch(l); m != nil {
+			tests = append(tests, m[1])
+		} else if redOdd.MatchString(strings.TrimSpace(l)) {
+			odd = true
+		}
+	}
+	if !pkgs {
+		return FailedTests(out)
+	}
+	return keys
+}
+
+// FullOutput is a check's whole output: its log on the host when it can be
+// read, else the clipped output it was journaled with.
+func (c Check) FullOutput() string {
+	if c.Log != "" {
+		if b, err := SafeRead(c.Log, 8<<20); err == nil && len(b) > 0 {
+			return string(b)
+		}
+	}
+	return c.Output
 }
 
 // scoreOf reads the score from a score command's output: the last word of
@@ -971,18 +1028,33 @@ type Change struct {
 	Small     bool     `json:"small"`
 	Protected []string `json:"protected,omitempty"`
 	High      []string `json:"high,omitempty"` // files in a high or root class
-	// Security are files on main's SecurityList: the change merges only
-	// after a security read said land on its diff (SecurityOK).
+	// Security are files on main's SecurityList, or in the project's root
+	// class: the change merges only after a security read said land on its
+	// diff (SecurityOK).
 	Security []string `json:"security,omitempty"`
 	// SecurityRoot are those of them that run with elevated rights (the
 	// list's root entries, or the project's root class): they need the
 	// panel's read as well.
 	SecurityRoot []string `json:"security_root,omitempty"`
-	Root         []string `json:"root,omitempty"`    // files that run with elevated rights
-	DiffID       string   `json:"diff_id,omitempty"` // names Diff (DiffID)
-	Diff         string   `json:"-"`
+	// Unlisted are those of them the list doesn't name: in the root class only.
+	Unlisted []string `json:"unlisted,omitempty"`
+	Root     []string `json:"root,omitempty"`    // files that run with elevated rights
+	DiffID   string   `json:"diff_id,omitempty"` // names Diff (DiffID)
+	Diff     string   `json:"-"`
 	// ProtectedDiff is the diff of the protected files alone, shown to the person who approves it.
 	ProtectedDiff string `json:"-"`
+}
+
+// SecurityWhere says why the change's Security files need a security read:
+// they are on SecurityList, in the project's root class, or some of each.
+func (c Change) SecurityWhere() string {
+	switch {
+	case len(c.Unlisted) == 0:
+		return "on " + SecurityList
+	case len(c.Unlisted) == len(c.Security):
+		return "in the project's root class (which runs with elevated rights)"
+	}
+	return "on " + SecurityList + " or in the project's root class (" + strings.Join(c.Unlisted, ", ") + ")"
 }
 
 var docExt = []string{".md", ".txt", ".rst", ".adoc"}
@@ -1031,10 +1103,16 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		if under(file, cfg.Root) {
 			c.Root = append(c.Root, file)
 		}
-		if matchAny(file, security) || matchAny(file, root) {
+		// What runs with elevated rights (the list's root entries, or the
+		// project's root class) needs the security read and its panel,
+		// whether or not the list's paths name it.
+		if elevated := matchAny(file, root) || under(file, cfg.Root); elevated || matchAny(file, security) {
 			c.Security = append(c.Security, file)
-			if matchAny(file, root) || under(file, cfg.Root) {
+			if elevated {
 				c.SecurityRoot = append(c.SecurityRoot, file)
+			}
+			if !matchAny(file, root) && !matchAny(file, security) {
+				c.Unlisted = append(c.Unlisted, file)
 			}
 		}
 		// .gitattributes picks merge drivers: merge=union on code would
@@ -1177,7 +1255,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		if len(ch.SecurityRoot) > 0 {
 			need += " and a majority of its panel"
 		}
-		return "", fmt.Errorf("refusing to merge %s: it changes %s, on %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), SecurityList, need)
+		return "", fmt.Errorf("refusing to merge %s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
 	}
 	if p.Self && m.Gain {
 		if !e.Kept(p.Name, m.SHA, m.Main) {
