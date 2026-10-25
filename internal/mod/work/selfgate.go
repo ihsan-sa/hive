@@ -91,7 +91,9 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	if !p.Self || !t.Gain() || m.C.Effects.Approved("gate", p.Name, t.SHA) {
 		return false, nil
 	}
-	g, ok := m.C.Effects.GateResult(p.Name, t.SHA, main)
+	// A measured verdict against an older main still counts while main's
+	// commits since leave the change and what the gate measures with alone.
+	g, ok := m.C.Effects.StandingGate(p, t.SHA, main)
 	if ok && g.Outcome == core.GateCantRun && len(g.Conflicts) > 0 {
 		// The head can't be merged with main as the gate sees it: its worker
 		// merges main. No rollback, and the gate runs again on the new head.
