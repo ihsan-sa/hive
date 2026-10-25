@@ -607,6 +607,9 @@ func (m *model) viewDetail(d *detail) []string {
 		}
 		kv("task", t.Label())
 		kv("stage", t.Stage+"  "+core.Clip(t.Reason, 200))
+		if t.Warning != "" {
+			kv("warning", core.Clip(t.Warning, 200))
+		}
 		kv("project", t.Project)
 		kv("aim", t.AimWord())
 		if t.Issue.Number > 0 {
@@ -996,6 +999,7 @@ func (m *model) settings() []setting {
 		{group: "General", label: "auto-update", value: onOff(c.AutoUpdate), key: "auto_update"},
 		{group: "General", label: "use ANTHROPIC_API_KEY", value: onOff(c.APIKeyOptIn), key: "api_key_opt_in"},
 		{group: "General", label: "release repo", value: c.ReleaseRepo, key: "release_repo"},
+		{group: "General", label: "self fork owner", value: c.SelfFork, key: "self_fork"},
 		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel", choices: []string{"default", "latest", "pre-release"}},
 		{group: "General", label: "release", value: m.st.Version + ", " + pinText(c.ReleasePin), action: func() tea.Cmd {
 			return func() tea.Msg {
@@ -1003,7 +1007,7 @@ func (m *model) settings() []setting {
 			}
 		}},
 		{group: "General", label: "share reports", value: share, key: "share"},
-		{group: "Agents", label: "harness", value: c.Harness, key: "harness", choices: append(slices.Clone(harness.Names), custom)},
+		{group: "Agents", label: "harness", value: c.Harness, key: "harness", choices: append(harness.Names(), custom)},
 		{group: "Agents", label: "worker model", value: c.Model, key: "model", choices: models},
 		{group: "Agents", label: "lead model", value: c.LeadModel, key: "lead_model", choices: models},
 		{group: "Agents", label: "reviewer model", value: c.ReviewerModel, key: "reviewer_model", choices: models},
@@ -1019,7 +1023,7 @@ func (m *model) settings() []setting {
 		}
 		s = append(s, setting{group: "Agents", label: "model for " + p, value: v, key: "project:" + p, choices: append([]string{"default"}, models...)})
 		// The open harness runs a named model, which the model setting picks.
-		hs := slices.DeleteFunc(append([]string{"default"}, harness.Names...), func(h string) bool { return h == "open" })
+		hs := slices.DeleteFunc(append([]string{"default"}, harness.Names()...), func(h string) bool { return h == "open" })
 		s = append(s, setting{group: "Agents", label: "harness for " + p, value: cmp.Or(c.Projects[p].Harness, "default"), key: "project-harness:" + p, choices: hs})
 	}
 	s = append(s, setting{group: "Agents", label: "review rounds", value: strconv.Itoa(c.ReviewRounds), key: "review_rounds"})
@@ -1208,7 +1212,7 @@ func routeModels(c core.Config) []string {
 			add(routeEntry(c, m))
 		}
 	}
-	for _, h := range harness.Names {
+	for _, h := range harness.Names() {
 		if h == "open" || h == "fake" || h == core.HarnessName(c.Harness) {
 			continue
 		}
@@ -1357,6 +1361,8 @@ func (m *model) saveSetting(v string) tea.Cmd {
 		c.WSLDistro = v
 	case key == "release_repo":
 		c.ReleaseRepo = v
+	case key == "self_fork":
+		c.SelfFork = v
 	case strings.HasPrefix(key, "schedule:"):
 		sched, err := scheduleHours(v)
 		if err != nil {
