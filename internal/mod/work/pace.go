@@ -38,6 +38,7 @@ type pace struct {
 	start int // the start it last read: a new one (a ceiling set) starts it afresh
 	at    time.Time
 	why   string
+	step  time.Duration // the least time between two changes; 0 is paceStep
 }
 
 // next moves the limit for running things with waiting ones wanting more,
@@ -53,7 +54,7 @@ func (p *pace) next(now time.Time, running int, waiting bool, strain string, wat
 	if p.limit == 0 || start != p.start { // a restart starts from what already runs
 		p.limit, p.start, p.at, p.why = max(start, min(running, cmp.Or(top, running))), start, now, "the start"
 	}
-	if now.Sub(p.at) >= paceStep {
+	if now.Sub(p.at) >= cmp.Or(p.step, paceStep) {
 		switch {
 		case strain != "":
 			if l := max(1, min(p.limit, running)*3/4); l < p.limit {
@@ -131,8 +132,8 @@ func (m *Module) paceChecks() {
 	m.C.Effects.Slots.Fill()
 }
 
-// Pace says the workers' and checks' limits now and why, for the dashboard
+// Pace says the workers', checks' and recursive gates' limits now and why, for the dashboard
 // and the lead.
 func (m *Module) Pace() map[string]string {
-	return map[string]string{"workers": m.workers.String(), "checks": m.checks.String()}
+	return map[string]string{"workers": m.workers.String(), "checks": m.checks.String(), "gates": m.gates.String()}
 }

@@ -254,8 +254,9 @@ type Module struct {
 	mu    sync.Mutex
 	tasks map[string]*Task
 	busy  map[string]bool
-	// workers and checks are the limits the pace sets (pace.go).
-	workers, checks pace
+	// workers, checks and gates are the limits the pace sets (pace.go,
+	// selfgate.go).
+	workers, checks, gates pace
 	// areaCache holds the paths each brief names (queue.go).
 	areaCache map[string]areaEntry
 	// editCache holds whether a worker's checkout has changed a file (queue.go).
@@ -299,9 +300,9 @@ type Module struct {
 	// holdPolled when each one's release condition may next be asked of the forge.
 	holds      map[string]*MergeHold
 	holdPolled map[string]time.Time
-	// gating is the recursive gate run in flight, if any (selfgate.go), and
+	// gating are the recursive gate runs in flight by key (selfgate.go), and
 	// gateCantRun the last run per project and main that couldn't run.
-	gating      *gateRun
+	gating      map[string]*gateRun
 	gateCantRun map[string]core.GateResult
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
