@@ -1995,7 +1995,9 @@ func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string) 
 	if detail != "" {
 		msg += "\n\n" + detail
 	}
-	msg += m.bundleForFixes(t, p, msg)
+	if detail == "" { // a red forge check's detail already carries bundleForChecks's bundle
+		msg += m.bundleForFixes(t, p)
+	}
 	if err := m.C.Runs.Reopen(t.Worker, msg+"\n\nFix these in your checkout, commit, and finish again."); err != nil {
 		return err
 	}
@@ -2006,19 +2008,25 @@ func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string) 
 
 // bundleForFixes writes main to the worker's main.bundle and says so, so a
 // fix that needs main's newer commits (a reviewer's ask built on them) can
-// merge them. A message that already names a bundle (the forge's checks write
-// the main they ran on) keeps it. A bundle that can't be written leaves the
-// findings to go back without it.
-func (m *Module) bundleForFixes(t *Task, p core.Project, msg string) string {
-	if strings.Contains(msg, "main.bundle") {
-		return ""
-	}
-	main, err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle"))
+// merge them. A bundle that can't be written leaves the findings to go back
+// without it.
+func (m *Module) bundleForFixes(t *Task, p core.Project) string {
+	main, err := m.writeMainBundle(t, p)
 	if err != nil {
 		m.bundleFailed(t, p, err)
 		return ""
 	}
-	return "\n\n$HIVE_RUN/main.bundle holds main at " + core.Short(main) + ": if a fix needs main's newer commits, `git fetch \"$HIVE_RUN/main.bundle\" main` and merge FETCH_HEAD."
+	return "\n\n$HIVE_RUN/main.bundle holds main at " + core.Short(main) + ": if a fix needs main's newer commits, " + fetchMain + " and merge FETCH_HEAD."
+}
+
+// fetchMain is how a worker takes the main its writeMainBundle holds.
+const fetchMain = "`git fetch \"$HIVE_RUN/main.bundle\" main`"
+
+// writeMainBundle writes the project's main to t's worker's main.bundle
+// ($HIVE_RUN) and returns the commit it holds; each path that sends a worker
+// back with main (fixes, the forge's checks, a conflict) goes through it.
+func (m *Module) writeMainBundle(t *Task, p core.Project) (string, error) {
+	return m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle"))
 }
 
 func (m *Module) merge(t *Task, p core.Project) error {
@@ -2716,7 +2724,7 @@ func (m *Module) bundleForChecks(t *Task, p core.Project, main string) string {
 	if t.Worker == "" {
 		return ""
 	}
-	head, err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle"))
+	head, err := m.writeMainBundle(t, p)
 	if err != nil {
 		m.bundleFailed(t, p, err)
 		return "$HIVE_RUN/main.bundle couldn't be updated to main at " + core.Short(main) + "; an older one there may not hold what the checks ran.\n"
@@ -2725,11 +2733,10 @@ func (m *Module) bundleForChecks(t *Task, p core.Project, main string) string {
 	if head != main {
 		holds += ", which main has moved to since the checks ran on " + core.Short(main)
 	}
-	fetch := "`git fetch \"$HIVE_RUN/main.bundle\" main`"
 	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
-		return holds + " (" + fetch + ").\n"
+		return holds + " (" + fetchMain + ").\n"
 	}
-	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. " + holds + ": " + fetch + ", then merge FETCH_HEAD to see and run what the checks ran.\n"
+	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. " + holds + ": " + fetchMain + ", then merge FETCH_HEAD to see and run what the checks ran.\n"
 }
 
 // bundleFailed journals a main.bundle that couldn't be written, so a worker
@@ -3161,17 +3168,17 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 		m.comment(p.Repo, t.PR.Number, "Stopping: the branch keeps conflicting with main. The pull request stays open.")
 		return nil
 	}
-	if _, err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle")); err != nil {
+	if _, err := m.writeMainBundle(t, p); err != nil {
 		return err
 	}
-	msg := "Main moved and your branch conflicts with it. Fetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
+	msg := "Main moved and your branch conflicts with it. Fetch main with " + fetchMain + ", merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
 	if d := (*core.DoubledError)(nil); errors.As(why, &d) {
 		msg = "Main moved, and merging it into your branch keeps both sides of lines you and main each changed (these docs merge as union), so these end up more than once:\n\n- " +
-			strings.Join(d.Lines, "\n- ") + "\n\nFetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, keep each of these once, run the tests, commit, and finish again."
+			strings.Join(d.Lines, "\n- ") + "\n\nFetch main with " + fetchMain + ", merge FETCH_HEAD, keep each of these once, run the tests, commit, and finish again."
 	}
 	if g := (*gateConflict)(nil); errors.As(why, &g) && len(g.files) > 0 {
 		msg = "Main moved, and the recursive gate, merging it into your branch to judge the change as it would land, found conflicts in:\n\n- " +
-			strings.Join(g.files, "\n- ") + "\n\nFetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
+			strings.Join(g.files, "\n- ") + "\n\nFetch main with " + fetchMain + ", merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
 	}
 	if err := m.C.Runs.Reopen(t.Worker, msg); err != nil {
 		return err
