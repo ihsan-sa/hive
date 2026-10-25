@@ -27,7 +27,6 @@ func GitT(timeout time.Duration, dir string, args ...string) (string, error) {
 	return GitEnvT(timeout, dir, nil, args...)
 }
 
-// GitEnvT is GitT with extra environment, such as the GH_TOKEN for a repo's owner.
 // A git lock older than this belongs to no live git call (the longest the
 // Hive gives one is ten minutes): it was left by a git that died, as when the
 // machine ran out of memory, and is removed so one dead process doesn't stall
@@ -36,6 +35,10 @@ const staleGitLock = 20 * time.Minute
 
 var gitLockExists = regexp.MustCompile(`Unable to create '?([^'\n]+\.lock)'?: File exists`)
 
+// GitEnvT is GitT with extra environment, such as the GH_TOKEN for a repo's owner.
+// A call that fails on a stale lock in dir's own .git (see staleGitLock) has
+// the lock removed and runs once more. With dir "" (a clone, an ls-remote)
+// there is no repo of the Hive's to recover, so a lock is left alone.
 func GitEnvT(timeout time.Duration, dir string, env []string, args ...string) (string, error) {
 	out, err := gitOnce(timeout, dir, env, args...)
 	if err != nil && clearStaleLock(dir, err.Error()) {
