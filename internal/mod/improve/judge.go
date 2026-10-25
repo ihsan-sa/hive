@@ -1,6 +1,7 @@
 package improve
 
 import (
+	"cmp"
 	"fmt"
 	"strings"
 	"time"
@@ -13,17 +14,26 @@ import (
 // how long it waits on one run before asking again.
 var (
 	judgePoll = 5 * time.Second
-	judgeWait = 3 * time.Hour
+	judgeWait = work.JudgeWait
 	judgeHold = time.Minute // how long a later merge waits before looking again
+	judgeLong = time.Hour   // past it, a merge with its judge raises an alert
 )
+
+// judgingMerge is a merge with its judge: running while judgeMerge decides
+// it, or found after a restart with its judge run still going, which holds
+// later merges until the merge is measured again and finds that run.
+type judgingMerge struct {
+	project string
+	running bool
+}
 
 // judgingBefore says another merge of project is with its judge, so sha's
 // measurement waits for the baseline it settles.
 func (m *Module) judgingBefore(project, sha string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for s, p := range m.judging {
-		if p == project && s != sha {
+	for s, j := range m.judging {
+		if j.project == project && s != sha {
 			return true
 		}
 	}
@@ -52,7 +62,7 @@ func (m *Module) judgeMerge(p core.Project, t work.Task, ms Measurement, reason 
 		j, ok = ask(p, t, ms, reason)
 	}
 	if !ok {
-		ms.Note += "; its judge gave no usable answer, so the score decides"
+		ms.Note += "; " + cmp.Or(j.Summary, "its judge gave no usable answer") + ", so the score decides"
 		m.revert(p, t, ms, reason)
 		return
 	}
@@ -67,7 +77,7 @@ func (m *Module) judgeMerge(p core.Project, t work.Task, ms Measurement, reason 
 	if k, ok := m.kept(p.Name); ok && k.At.After(started) && k.Best != nil {
 		ms.Best = k.Best // a later merge was measured meanwhile: its baseline stands
 	}
-	ms.Note = fmt.Sprintf("kept by its judge (%s) though %s: %s", j.Model, reason, core.Clip(j.Summary, 400))
+	ms.Note = fmt.Sprintf(judgedKeep+" (%s) though %s: %s", j.Model, reason, core.Clip(j.Summary, 400))
 	m.record(ms)
 	if m.OnKept != nil {
 		m.OnKept(p.Name, t.MergeSHA)
@@ -75,13 +85,19 @@ func (m *Module) judgeMerge(p core.Project, t work.Task, ms Measurement, reason 
 }
 
 // runJudge asks the judge's runs for their call, up to work.JudgeTries of
-// them, and records the first usable one.
+// them, and records the first usable one. With none, j.Summary says why
+// when it isn't that no answer was usable.
 func (m *Module) runJudge(p core.Project, t work.Task, ms Measurement, reason string) (j core.Judgement, ok bool) {
+	waited, alerted := time.Now(), false
 	for i := 0; i < work.JudgeTries; i++ {
 		id := fmt.Sprintf("j-%s-%s-%d", t.ID, core.Short(t.MergeSHA), i)
 		r, found := m.C.Runs.Get(id)
 		if !found {
 			c, err := m.judgeCase(p, t, ms, reason, id)
+			if err == nil && c.Unjudged != "" {
+				j.Summary = c.Unjudged
+				return j, false
+			}
 			if err == nil {
 				_, err = work.StartJudge(m.C, m.Agents, c)
 			}
@@ -93,6 +109,12 @@ func (m *Module) runJudge(p core.Project, t work.Task, ms Measurement, reason st
 		for start := time.Now(); time.Since(start) < judgeWait; time.Sleep(judgePoll) {
 			if r, found = m.C.Runs.Get(id); found && r.Terminal() {
 				break
+			}
+			if time.Since(waited) > judgeLong && !alerted {
+				// Later merges of the project wait on this one: say so.
+				alerted = true
+				m.C.J.MustAppend("alert.raised", map[string]string{"kind": "judge", "ref": "judge:" + t.MergeSHA, "project": p.Name,
+					"text": fmt.Sprintf("merge %s (%s) has been with its judge for over %s; later merges of %s aren't measured until it decides (up to %d runs of %s)", core.Short(t.MergeSHA), t.Label(), judgeLong, p.Name, work.JudgeTries, judgeWait)})
 			}
 		}
 		if !r.Terminal() {
@@ -139,6 +161,9 @@ func (m *Module) judgeCase(p core.Project, t work.Task, ms Measurement, reason, 
 	}
 	b.WriteString("## Its recent history on main, newest last\n\n| merge | task | score | kept | note |\n|---|---|---|---|---|\n")
 	m.mu.Lock()
+	if n, drop, before := judgedDrift(m.scores[p.Name]); n > 0 {
+		fmt.Fprintf(&b, "Judges have kept %d falls in a row on main, lowering the baseline by %g in all, from %g; the score above is measured against where they left it.\n\n", n, drop, before)
+	}
 	hist := m.scores[p.Name]
 	if len(hist) > 20 {
 		hist = hist[len(hist)-20:]
@@ -151,7 +176,34 @@ func (m *Module) judgeCase(p core.Project, t work.Task, ms Measurement, reason, 
 		fmt.Fprintf(&b, "| %s | %s | %s | %v | %s |\n", core.Short(x.SHA), x.Task, sc, x.Kept, strings.ReplaceAll(core.Clip(x.Note, 160), "|", "/"))
 	}
 	m.mu.Unlock()
-	return work.JudgeCase{ID: id, Project: p, SHA: t.MergeSHA, Numbers: core.GateRollback,
+	return work.JudgeCase{ID: id, Project: p, SHA: t.MergeSHA, Numbers: core.GateRollback, Unjudged: work.Unjudged(ch),
 		What:  fmt.Sprintf("whether main keeps merge %s of task %s (%q), or reverts it because its score fell", core.Short(t.MergeSHA), t.ID, t.Label()),
 		Brief: brief, Diff: ch.Diff, Report: b.String(), Author: w}, nil
 }
+
+// judgedDrift is how far judges' keeps of falls have lowered a project's
+// baseline since the score last stood at a best of its own: how many in a
+// row, by how much, and the best before them.
+func judgedDrift(hist []Measurement) (n int, drop, before float64) {
+	var last *float64
+	for _, x := range hist {
+		if !x.Kept || x.Best == nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(x.Note, judgedKeep) && last != nil:
+			if n == 0 {
+				before = *last
+			}
+			n, drop = n+1, drop+(*last-*x.Best)
+		case last == nil || *x.Best != *last:
+			n, drop = 0, 0 // a new best of the score's own
+		}
+		b := *x.Best
+		last = &b
+	}
+	return n, drop, before
+}
+
+// judgedKeep opens the note of a merge a judge kept.
+const judgedKeep = "kept by its judge"
