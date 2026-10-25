@@ -1269,6 +1269,16 @@ func testModelSettingsTop(t *testing.T) string {
 	return m.View()
 }
 
+// A draft waiting in merging says on its line whose read it waits on.
+func TestWaitingDraftSaysWhoseRead(t *testing.T) {
+	m := testModel(120, 40)
+	line := ansi.Strip(m.taskLine(work.Task{ID: "t1", Title: "Box change", Stage: work.StageMerging, PR: core.PR{Number: 9},
+		Reason: `waiting as a draft (held by the lead: Needs a perms read); it merges once the PR is marked ready (pr_ready)`}))
+	if !strings.Contains(line, "Needs a perms read") {
+		t.Fatalf("the line doesn't say whose read: %q", line)
+	}
+}
+
 // The dashboard shows the newest measured size and how it moved since the
 // measure before, skipping measures with none.
 func TestSizeLine(t *testing.T) {

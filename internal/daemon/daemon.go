@@ -187,10 +187,16 @@ func Run(ws core.Workspace, waitFor int) error {
 	// still starting): wait for it, and exit at once only when one is up.
 	wait := stopWait
 	if waitFor > 0 {
-		wait = 20 * time.Second // the replaced daemon may still be on its way out
+		// The replaced daemon may still be on its way out: a slow shutdown
+		// mustn't leave the Hive down, with nothing to start it again.
+		wait = 2 * time.Minute
 	}
 	lock, err := lockWorkspace(ws, wait, waitFor == 0)
 	if err != nil {
+		if waitFor > 0 {
+			fmt.Printf("hive: %s: the daemon an update replaced (pid %d) still held the workspace after %s more, so the Hive stays down until it is started again\n",
+				time.Now().Format(time.DateTime), waitFor, wait)
+		}
 		return err
 	}
 	defer func() { lock.Release() }() // the lock held at the end, which a failed hand-off retakes
