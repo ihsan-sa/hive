@@ -137,7 +137,7 @@ func (c *Child) Env() []string {
 	root, _ := filepath.Abs(c.Root)
 	env = append(env, rootEnv+"="+root, ownerEnv+"="+owner)
 	env = append(env, "PATH="+path, "HOME="+c.Home(), "TMPDIR="+c.Tmp(), "HIVE_HOME="+c.Workspace(), "HIVE_GATE_DEPTH="+fmt.Sprint(c.Depth),
-		"GOCACHE="+filepath.Join(c.Root, "gocache"), "GOPATH="+filepath.Join(c.Root, "gopath"),
+		"GOCACHE="+goCache(c.Sandbox, filepath.Join(c.Root, "gocache")), "GOPATH="+filepath.Join(c.Root, "gopath"),
 		"GIT_AUTHOR_NAME=Hive gate", "GIT_AUTHOR_EMAIL=gate@localhost", "GIT_COMMITTER_NAME=Hive gate", "GIT_COMMITTER_EMAIL=gate@localhost",
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
 	if c.Go.Root != "" {
@@ -152,6 +152,21 @@ func (c *Child) Env() []string {
 		env = append(env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0=Authorization: Basic "+basic(c.Token))
 	}
 	return append(env, c.Extra...)
+}
+
+// testGoCache, when set (by this package's tests only), is one build cache
+// every unsandboxed go command shares, so a test pays for compiling the
+// standard library once instead of once per side; a gate never sets it, and
+// a bubblewrap side, which could not see it, keeps its own.
+var testGoCache string
+
+// goCache is the build cache a go command run in sandbox uses: own unless
+// the tests share one.
+func goCache(sandbox, own string) string {
+	if testGoCache != "" && sandbox != "bwrap" {
+		return testGoCache
+	}
+	return own
 }
 
 // Prepare makes the child's empty home, workspace and caches.

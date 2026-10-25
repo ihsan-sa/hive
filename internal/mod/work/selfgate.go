@@ -64,6 +64,7 @@ const gateReportFile = "gate-report.md"
 type gateRun struct {
 	key, task string
 	since     time.Time
+	out       string // its run folder, named before it starts so TidyGates never takes it
 }
 
 // recursiveGate holds t, a change to the Hive aimed at a gain, until the
@@ -100,21 +101,24 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	key := p.Name + "@" + t.SHA + "@" + main
 	m.mu.Lock()
 	// A run that couldn't run against this main, on any change, holds the
-	// others until its retry: the next would fail the same way.
+	// others until its retry: the next would fail the same way. One whose
+	// cause was that change alone (its own build, its clock) holds nobody.
 	if last, ok := m.gateCantRun[p.Name+"@"+main]; ok && last.Head != t.SHA && time.Now().Before(retryAfter(last)) {
 		m.mu.Unlock()
 		m.hold(t, p, fmt.Sprintf("%s: it couldn't run against main at %s on %s (%s); it tries again after %s", GateWait, core.Short(main), core.Short(last.Head), core.Clip(last.Reason, 300), retryAfter(last).Format("15:04Z")))
 		return true, nil
 	}
 	cur := m.gating
+	var out string
 	if cur == nil {
-		m.gating = &gateRun{key: key, task: t.ID, since: time.Now().UTC()}
+		out = filepath.Join(m.C.WS.Gates(), p.Name, "recursive", time.Now().UTC().Format("060102-150405")+"-"+core.Short(t.SHA))
+		m.gating = &gateRun{key: key, task: t.ID, since: time.Now().UTC(), out: out}
 		m.steps.Add(1)
 	}
 	m.mu.Unlock()
 	switch {
 	case cur == nil:
-		m.startGate(t, p, main, key)
+		m.startGate(t, p, main, key, out)
 		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), time.Now().UTC().Format("15:04Z"), GateTimeout))
 	case cur.key == key:
 		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), cur.since.Format("15:04Z"), GateTimeout))
@@ -125,11 +129,11 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 }
 
 // startGate runs the gate on t's head in the background and records its
-// verdict; m.gating is already set to key, and m.steps counts it.
-func (m *Module) startGate(t *Task, p core.Project, main, key string) {
-	dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
+// verdict in out; m.gating is already set to key, and m.steps counts it.
+func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
+	dir := filepath.Dir(out)
 	job := GateJob{Project: p, Repo: m.C.WS.Project(p.Name), Head: t.SHA, Main: main,
-		Out: filepath.Join(dir, time.Now().UTC().Format("060102-150405")+"-"+core.Short(t.SHA)), Lessons: filepath.Join(dir, "lessons.md"), Timeout: GateTimeout}
+		Out: out, Lessons: filepath.Join(dir, "lessons.md"), Timeout: GateTimeout}
 	id := t.ID
 	m.save(t, fmt.Sprintf("the recursive gate started on %s against main at %s: an improvement is kept only on a clear gain", core.Short(t.SHA), core.Short(main)))
 	go func() {
@@ -154,9 +158,12 @@ func (m *Module) startGate(t *Task, p core.Project, main, key string) {
 		if m.gateCantRun == nil {
 			m.gateCantRun = map[string]core.GateResult{}
 		}
-		if g.Outcome == core.GateCantRun && len(g.Conflicts) == 0 { // a conflict is the head's alone
+		switch {
+		case g.Outcome == core.GateCantRun && (g.Alone || len(g.Conflicts) > 0):
+			// Its own cause: the others at this main go on as they were.
+		case g.Outcome == core.GateCantRun:
 			m.gateCantRun[p.Name+"@"+job.Main] = g
-		} else {
+		default:
 			delete(m.gateCantRun, p.Name+"@"+job.Main)
 		}
 		delete(m.later, id) // the task looks again at once
@@ -247,4 +254,31 @@ func (m *Module) gateLessons(p core.Project, onMain string) []string {
 		out = append(out, l)
 	}
 	return out
+}
+
+// TidyGates hands reap every recursive gate run folder but the one in
+// flight, for the hive.clean job: a gate that died with its daemon (or was
+// killed past its time) left its children and its bulk (checkouts, homes,
+// Go caches) there, and only a later Reap of that folder ends them. The
+// folders are listed under the lock that names a new run's folder, so a
+// gate that starts meanwhile is never among them. It returns how many
+// processes reap ended.
+func (m *Module) TidyGates(reap func(out string) int) int {
+	m.mu.Lock()
+	var outs []string
+	for _, p := range m.C.Projects.List() {
+		dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
+		ents, _ := os.ReadDir(dir)
+		for _, e := range ents {
+			if out := filepath.Join(dir, e.Name()); e.IsDir() && (m.gating == nil || m.gating.out != out) {
+				outs = append(outs, out)
+			}
+		}
+	}
+	m.mu.Unlock()
+	n := 0
+	for _, out := range outs {
+		n += reap(out)
+	}
+	return n
 }
