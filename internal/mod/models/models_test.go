@@ -240,3 +240,26 @@ func TestRouteProbesTheModel(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A route changed in Settings goes on the record as the route op's does:
+// by whom, in which project, and from what.
+func TestSettingsRouteIsRecorded(t *testing.T) {
+	a, _ := hiveWithModels(t)
+	before := a.C.WS.LoadConfig()
+	after := before
+	after.Routes = map[string][]string{"worker": {"qwen"}}
+	after.Projects = map[string]core.ProjectSettings{"lab": {Routes: map[string][]string{"reviewer": {"fake:opus"}}}}
+	models.Record(a.C.J, before, after, "person (Settings)")
+	models.Record(a.C.J, after, after, "person (Settings)") // nothing changed: nothing recorded
+	var got []models.Route
+	a.C.J.Replay(func(e core.Event) {
+		var r models.Route
+		if e.Kind == "config.routed" && e.Decode(&r) == nil {
+			got = append(got, r)
+		}
+	})
+	if len(got) != 2 || got[0].Role != "worker" || got[0].Project != "" || !slices.Equal(got[0].Models, []string{"qwen"}) ||
+		got[1].Role != "reviewer" || got[1].Project != "lab" || got[1].By != "person (Settings)" || got[1].From != nil {
+		t.Fatalf("recorded %+v", got)
+	}
+}

@@ -667,6 +667,11 @@ func (rs *Runs) Start(s RunSpec) (Run, error) {
 	if err := harness.Capped(h, s.Budget); err != nil {
 		return Run{}, err
 	}
+	if HarnessName(s.Harness) == "open" {
+		if err := rs.ws.LoadConfig().Models[s.Model].Holds(s.Budget); err != nil {
+			return Run{}, fmt.Errorf("a run with a budget won't start on %s: %v", s.Model, err)
+		}
+	}
 	for _, d := range []string{rs.ws.RunHost(s.ID), rs.ws.RunRO(s.ID), filepath.Join(rs.ws.RunBox(s.ID), "outbox"), filepath.Join(rs.ws.RunBox(s.ID), "inbox"), rs.ws.RunHome(s.ID)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return Run{}, err
@@ -1194,6 +1199,13 @@ func (rs *Runs) endTurn(r Run) {
 			l.ResetsAt = time.Now().Add(time.Hour)
 		}
 		tl.Limit = &l
+	}
+	if p := rs.ws.LoadConfig().Models[r.Model].Price; HarnessName(r.Harness) == "open" && p != nil && tl.Result != nil && tl.Result.Tokens != nil {
+		// The harness counts no vendor's prices; a priced model's turn costs
+		// its tokens at the price the person set.
+		res := *tl.Result
+		res.CostUSD = p.Cost(*res.Tokens)
+		tl.Result = &res
 	}
 	if tl.Limit != nil {
 		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
