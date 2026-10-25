@@ -68,5 +68,5 @@ func openInput(path string) (*os.File, error) {
 // Run runs s to completion directly on the host.
 func (Bare) Run(s Spec, timeout time.Duration) (int, error) {
 	env := withPathPrefix(append(os.Environ(), s.Env...), pathDirs(s))
-	return runSync(s.Argv, env, s.Cwd, s.Stdin, s.Stdout, timeout)
+	return runSync(Niced(s.Argv, s.Nice), env, s.Cwd, s.Stdin, s.Stdout, timeout)
 }

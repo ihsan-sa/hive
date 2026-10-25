@@ -244,6 +244,26 @@ func TestRedAlreadyOnMainBeforeTheMergeIsNotReverted(t *testing.T) {
 	}
 }
 
+// A vet or compile error prints no test or package line to name it by, only
+// "file.go:line:col: message". The merge that brought it is reverted; one
+// measured on main while it stays red (a goals-only change) is not.
+func TestVetRedOnlyRevertsTheMergeThatBroughtIt(t *testing.T) {
+	m, commit, merge := tested(t)
+	vet := "echo '# x/e'\necho 'vet: e/a_test.go:225:42: not enough arguments in call to f'\nexit 1\n"
+	if ms := merge(commit(map[string]string{"t.sh": vet})); ms.Kept || strings.Contains(ms.Note, "not new at this merge") || reverts(m) != 1 {
+		t.Fatalf("the merge that broke vet: %+v, reverts %d", ms, reverts(m))
+	}
+	for i, f := range []string{".hive/goals.md", "README.md"} {
+		sha := commit(map[string]string{f: "only text\n"})
+		if ms := merge(sha); ms.Kept || !strings.Contains(ms.Note, "not new at this merge") {
+			t.Fatalf("merge %d on a vet-red main: %+v", i, ms)
+		}
+	}
+	if reverts(m) != 1 {
+		t.Fatalf("merges measured while main stayed red were reverted: %d", reverts(m))
+	}
+}
+
 // A merge that adds a failure no test name accounts for (a timeout) beside
 // a test main already failed is the merge's break: it is reverted.
 func TestUnnamedFailureBesideMainsRedIsReverted(t *testing.T) {

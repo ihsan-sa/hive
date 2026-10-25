@@ -228,6 +228,8 @@ func gh(repo string, args ...string) (string, error) {
 		}
 		if stderr == "" {
 			stderr = err.Error()
+		} else if TimedOut(err.Error()) {
+			stderr += ": " + err.Error()
 		}
 		return out, fmt.Errorf("gh %s: %s", ghVerb(args), stderr)
 	}

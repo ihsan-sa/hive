@@ -683,7 +683,10 @@ func fileSum(path string) (string, error) {
 // AfterKept cuts a release when a kept merge lands in the Hive's own project
 // and its dry run passes on that exact commit. The release names each change
 // merged since the last one and the reviewer runs that read its exact head. A
-// head with no read, or a change to a root path, waits for the person's word.
+// head with no read waits for the person's word. A change to a root path (what
+// runs with elevated rights) goes out once the Hive's own security reads passed
+// its diff (rootRead), and the person is told after; with no such read it waits
+// for the person too.
 // The release numbers on from this build, so the install switches to it at its
 // next update. In the person's fork it also asks the person whether to offer
 // the change upstream, one pull request that grows with each kept merge.
@@ -718,7 +721,7 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	var manifest strings.Builder
-	var root, unread []string
+	var root, unread, rootRead []string
 	for _, mg := range list {
 		if reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff); len(reads) > 0 {
 			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
@@ -726,7 +729,15 @@ func (m *Module) afterKept(project, sha string) {
 			unread = append(unread, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
 			fmt.Fprintf(&manifest, "- #%d at %s, not read\n", mg.PR, core.Short(mg.SHA))
 		}
-		root = append(root, mg.Root...)
+		if len(mg.Root) == 0 {
+			continue
+		}
+		if by := m.rootRead(project, mg); by != "" {
+			fmt.Fprintf(&manifest, "  its root paths (%s) passed %s\n", strings.Join(mg.Root, ", "), by)
+			rootRead = append(rootRead, fmt.Sprintf("#%d (%s)", mg.PR, strings.Join(mg.Root, ", ")))
+		} else {
+			root = append(root, mg.Root...)
+		}
 	}
 	approved := m.C.Effects.Approved("release", project, sha)
 	if (len(root) > 0 || len(unread) > 0) && !approved {
@@ -765,6 +776,8 @@ func (m *Module) afterKept(project, sha string) {
 		strings.Join(Gates, " and ") + " pass on that commit; then it is the latest, which installs follow.\n\nWhat was read:\n\n" + manifest.String()
 	if approved {
 		body += "\nThe person released it.\n"
+	} else if len(rootRead) > 0 {
+		body += "\nIts root paths went out on the Hive's own security reads; the person is told after.\n"
 	}
 	if err := m.C.Effects.Forge.CreateRelease(p.Repo, next, sha, body); err != nil {
 		alert("release failed: " + err.Error())
@@ -789,6 +802,19 @@ func (m *Module) afterKept(project, sha string) {
 		rec["tag_sha"] = at
 	}
 	m.C.J.MustAppend("hive.released", rec)
+	// A release ask at one of the merges this release covers has nothing
+	// left to answer.
+	for _, a := range m.C.Person.Open() {
+		_, at, _ := strings.Cut(a.Ref, "@")
+		if a.Kind == "release" && a.Project == project && slices.ContainsFunc(list, func(mg merge) bool { return mg.MergeSHA == at }) {
+			m.C.Person.Answer(a.ID, "hold", "the Hive, not the person: "+next+" released it")
+		}
+	}
+	if len(rootRead) > 0 && !approved {
+		m.C.Person.Tell(core.Ask{Ref: "release:" + project + "@" + next, Project: project,
+			Title:  "Released " + next + " with changes to root paths: " + strings.Join(rootRead, ", "),
+			Detail: "They run with elevated rights. The Hive released them itself once its security seat and panel (or the box's outside read) said land on each one's own diff.\n\n" + manifest.String()})
+	}
 	f, up := m.C.Effects.Forge, m.C.WS.LoadConfig().ReleaseRepo
 	if p.Repo == up {
 		return
@@ -802,6 +828,20 @@ func (m *Module) afterKept(project, sha string) {
 	m.C.Person.Ask(core.Ask{Kind: "upstream", Ref: head, Project: project,
 		Title:  "Offer the Hive's changes to " + up + "?",
 		Detail: "The Hive released " + next + " on " + p.Repo + ". Yes opens one pull request on " + up + " in your name, which grows with each kept change."})
+}
+
+// rootRead says who passed a merge's root paths, as Effects.SecurityOK reads
+// a change to a root path on the security list: an outside read decides when
+// there is one, else the security seat and a majority of the panel said land
+// on its own diff. "" when nobody did.
+func (m *Module) rootRead(project string, mg merge) string {
+	if !m.C.Effects.SecurityOK(project, core.Change{Security: mg.Root, SecurityRoot: mg.Root, DiffID: mg.Diff}) {
+		return ""
+	}
+	if o, ok := m.C.Effects.OutsideRead(project, mg.Diff); ok {
+		return "the box's " + o.By + " read"
+	}
+	return "the security seat and a majority of its panel"
 }
 
 // refusedSteps is what the person does about a refused release. Its
@@ -842,7 +882,7 @@ func (m *Module) hold(project, sha string, root, unread []string, manifest strin
 	}
 	var why []string
 	if len(root) > 0 {
-		why = append(why, strings.Join(root, ", ")+" run with elevated rights")
+		why = append(why, strings.Join(root, ", ")+" run with elevated rights and no security read passed them")
 	}
 	if len(unread) > 0 {
 		why = append(why, strings.Join(unread, ", ")+" merged without a read of its exact commit")
