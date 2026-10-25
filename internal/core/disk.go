@@ -297,7 +297,10 @@ func (e *Effects) prefetch(dir string) error {
 		return err
 	}
 	defer RemoveTree(tmp)
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + tmp, "TMPDIR=" + tmp, "GOCACHE=" + filepath.Join(tmp, "gocache"), "GOPATH=" + filepath.Join(tmp, "gopath"),
+	// XDG_CONFIG_HOME=/dev/null keeps go's telemetry off: it writes under the
+	// config dir, and its detached child can still be writing in tmp after
+	// go exits and tmp is removed, leaving the cache folder behind.
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + tmp, "XDG_CONFIG_HOME=/dev/null", "TMPDIR=" + tmp, "GOCACHE=" + filepath.Join(tmp, "gocache"), "GOPATH=" + filepath.Join(tmp, "gopath"),
 		"GOMODCACHE=" + e.ws.GoModCache(), "GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GOVCS=*:off", "GOWORK=off", "GOENV=off",
 		"CGO_ENABLED=0", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}
 	for _, k := range []string{"GOPROXY", "GOSUMDB", "GONOSUMDB", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
