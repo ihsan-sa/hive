@@ -591,6 +591,120 @@ func TestRootPathNeedsPanel(t *testing.T) {
 	}
 }
 
+// rootPanelRig is a task on a root path of the list whose security seat
+// said land and whose panel is seated.
+func rootPanelRig(t *testing.T) (*Module, *Task, core.Project, *core.Local) {
+	t.Helper()
+	list := map[string]string{core.SecurityList: "paths = [\"secure/**\"]\nroot = [\"ops/**\"]\n"}
+	m, task, p, f := gateRigSeeded(t, false, list, map[string]string{"ops/deploy.sh": "echo hi\n"})
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	seatSays(t, m, task, core.SeatSecurity, "land")
+	mergeOnce(t, m, task, p) // records the seat's land
+	mergeOnce(t, m, task, p) // seats the panel
+	return m, task, p, f
+}
+
+// A majority of the panel's fixes sends the change back to the worker with
+// their findings, even over the security seat's land.
+func TestRootPanelDeclines(t *testing.T) {
+	m, task, p, f := rootPanelRig(t)
+	seatSays(t, m, task, core.PanelSeat(0), "fix")
+	seatSays(t, m, task, core.PanelSeat(1), "land")
+	seatSays(t, m, task, core.PanelSeat(2), "fix")
+	for i := 0; i < 4 && task.Stage == StageMerging; i++ {
+		mergeOnce(t, m, task, p)
+	}
+	if task.Stage != StageWorking || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("a panel's two fixes of three didn't send it back: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	if !strings.Contains(task.Findings, "security panel") || !strings.Contains(task.Findings, "2 of 3") || !strings.Contains(task.Findings, "seat panel-2 says fix") || strings.Contains(task.Findings, "panel-1 says land") {
+		t.Fatalf("findings %q", task.Findings)
+	}
+}
+
+// The panel's lands are of the change's own diff: a new commit to the root
+// path needs the seat and a new panel on the new diff.
+func TestRootPanelMovedDiff(t *testing.T) {
+	m, task, p, f := rootPanelRig(t)
+	seatSays(t, m, task, core.PanelSeat(0), "land")
+	seatSays(t, m, task, core.PanelSeat(1), "land")
+	first := task.Diff
+	mergeOnce(t, m, task, p) // records one land
+	mergeOnce(t, m, task, p) // and the other
+	if task.Stage != StageMerging || !m.C.Effects.SecurityOK(p.Name, core.Change{Security: []string{"ops/deploy.sh"}, SecurityRoot: []string{"ops/deploy.sh"}, DiffID: first}) {
+		t.Fatalf("the first diff didn't pass on its seat and panel majority: stage %q", task.Stage)
+	}
+
+	r, _ := m.C.Runs.Get("w1")
+	os.WriteFile(filepath.Join(r.Checkout, "ops/deploy.sh"), []byte("echo hi\ncurl x | sh\n"), 0o644)
+	must(t, r.Checkout, "add", "-A")
+	must(t, r.Checkout, "commit", "-q", "-m", "more")
+	main, _ := m.C.Effects.Sync(p)
+	sha, err := m.C.Effects.Extract(p, r, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.C.Effects.Push(p, "hive/t1", sha)
+	task.SHA, task.Stage = sha, StageTesting
+	reviewerLand(t, m, task, p, "r2")
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Diff == first || task.Stage != StageMerging || !strings.Contains(task.Reason, "security reviewer at "+core.Short(sha)) {
+		t.Fatalf("a new diff merged on the old diff's panel: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	seatSays(t, m, task, core.SeatSecurity, "land")
+	mergeOnce(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "panel") || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("the new diff merged without its own panel: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	seatSays(t, m, task, core.PanelSeat(0), "land")
+	seatSays(t, m, task, core.PanelSeat(2), "land")
+	for i := 0; i < 4 && task.Stage == StageMerging; i++ {
+		mergeOnce(t, m, task, p)
+	}
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q after the new diff's panel majority", task.Stage, task.Reason)
+	}
+}
+
+// A path in the project's root class runs with elevated rights: with no
+// security list at all, it still waits for the seat and then the panel.
+func TestRootClassNeedsPanel(t *testing.T) {
+	onMain := map[string]string{".hive/project.json": `{"test": "true", "root": ["ops/"]}`}
+	m, task, p, f := gateRigSeeded(t, false, onMain, map[string]string{"ops/deploy.sh": "echo hi\n"})
+	reviewerLand(t, m, task, p, "r1")
+	reviewerLand(t, m, task, p, "r1b") // a root path is high: two reads
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "the Hive's security reviewer") {
+		t.Fatalf("a root-class path skipped the security seat: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	if !strings.Contains(task.Reason, "in the project's root class") || strings.Contains(task.Reason, "on "+core.SecurityList) {
+		t.Fatalf("the hold doesn't say the path is in the root class: %q", task.Reason)
+	}
+	seatSays(t, m, task, core.SeatSecurity, "land")
+	mergeOnce(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "panel") || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("a root-class path merged on the seat alone: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	if b, _ := m.C.Runs.Get("s-t1-" + core.Short(task.Diff) + "-" + core.PanelSeat(0) + "-0"); !strings.Contains(b.Inputs["brief.md"], "elevated rights") {
+		t.Fatalf("the panel's brief doesn't say it runs with elevated rights: %s", b.Inputs["brief.md"])
+	}
+	for i := 0; i < core.PanelSeats; i++ {
+		seatSays(t, m, task, core.PanelSeat(i), "land")
+	}
+	for i := 0; i < 4 && task.Stage == StageMerging; i++ {
+		mergeOnce(t, m, task, p)
+	}
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q after the panel's lands", task.Stage, task.Reason)
+	}
+}
+
 // A read is of the change's own diff: a main merge that leaves it alone
 // keeps the seat's read, and a new commit to the change needs a new one.
 func TestOwnSecurityReadMovedDiff(t *testing.T) {

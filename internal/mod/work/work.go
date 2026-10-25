@@ -1064,7 +1064,7 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 		if !strings.Contains(t.Reason, "quiet") {
 			t.Reason = "worker is quiet: " + r.Reason
 			m.save(t, t.Reason)
-			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "quiet", "run": r.ID, "task": t.ID, "text": "worker " + r.ID + " keeps ending turns without finishing"})
+			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "quiet", "run": r.ID, "task": t.ID, "text": "worker " + r.ID + " keeps ending turns without finishing; briefs that waited on its task start without it"})
 		}
 	default:
 		return m.checkpoint(t, p, r)
@@ -1359,13 +1359,23 @@ func (m *Module) test(t *Task, p core.Project) error {
 		if mc.CantRun != "" {
 			return m.cantRun(t, p, mc)
 		}
-		if !mc.OK {
+		switch {
+		case !mc.OK && !noWorse(c, mc):
 			return m.waitOnMain(t, p, main, mc)
+		case !mc.OK:
+			// Every test it fails main fails too: it is no worse than main,
+			// so it goes on rather than wait for the green it may be the fix
+			// for (a revert of what turned main red, say).
+			if strings.HasPrefix(t.Reason, "waiting on main") {
+				t.Reason = ""
+				m.save(t, "its tests fail on "+core.Short(t.SHA)+" only where main's fail at "+core.Short(main)+" ("+strings.Join(c.Failed, ", ")+"), so it is no worse than main and goes on")
+			}
+		default:
+			if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
+				return err
+			}
+			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
 		}
-		if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
-			return err
-		}
-		return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
 	}
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
 	if err != nil {
@@ -1487,6 +1497,25 @@ func (m *Module) mainTests(p core.Project, main, command string) (core.Check, er
 		return core.Check{}, err
 	}
 	return m.C.Effects.RunCheck(p, main, "test", command), nil
+}
+
+// noWorse says a red change fails only what main's red run fails too, each
+// test by its package and name, so the red is main's and the change may be
+// its fix. A failure in its run that no test name accounts for (a timeout, a
+// panic or exit outside a test, a build failure) counts only where main's
+// run fails that package so too; one either run can't name at all can't be
+// told apart.
+func noWorse(c, mc core.Check) bool {
+	mine, mains := core.RedKeys(c.FullOutput()), core.RedKeys(mc.FullOutput())
+	if len(mine) == 0 || len(mains) == 0 {
+		return false
+	}
+	for _, k := range mine {
+		if !slices.Contains(mains, k) {
+			return false
+		}
+	}
+	return true
 }
 
 // waitOnMain holds a red change while main's own tests are red, since the
@@ -1834,6 +1863,14 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if err != nil {
 		return err
 	}
+	m.merged(t, merged, "merged as "+core.Short(merged))
+	return nil
+}
+
+// merged records t's merge as merged, by the Hive or on the forge: a
+// checkpoint's worker keeps going on a new branch, anything else is merged and
+// the next tick takes it to done. Either way the chat hears and OnMerged runs.
+func (m *Module) merged(t *Task, merged, note string) {
 	t.MergeSHA, t.Stage, t.Reason = merged, StageMerged, ""
 	if t.Checkpoint != "" {
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Merged a checkpoint of %s; its worker keeps going: %s", t.Label(), t.PR.URL))
@@ -1841,14 +1878,14 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		t.Banked++
 		t.Banks = append(t.Banks, Bank{PR: t.PR, MergeSHA: merged}) // a revert of this merge names its PR
 		t.Branch, t.PR = fmt.Sprintf("hive/%s-%d", t.ID, t.Banked), core.PR{}
-		m.save(t, "checkpoint merged as "+core.Short(merged)+"; the worker keeps going")
+		m.save(t, "checkpoint "+note+"; the worker keeps going")
 		m.C.Runs.Send(t.Worker, fmt.Sprintf("Your commit %s beat the best kept score and is merged into main as a checkpoint. Keep going on top of it on your branch, and leave that commit as it is (no amend, reset or rebase past it): the Hive lays what you commit after it onto main, so you needn't fetch main.", core.Short(t.Base)))
 		if m.OnMerged != nil {
 			m.OnMerged(*t)
 		}
-		return nil
+		return
 	}
-	m.save(t, "merged as "+core.Short(merged))
+	m.save(t, note)
 	if t.Kind == "revert" {
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Label(), "Revert: "), t.Lesson))
 	} else {
@@ -1857,7 +1894,6 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if m.OnMerged != nil {
 		m.OnMerged(*t)
 	}
-	return nil
 }
 
 // holdGap is how long a held task waits before the gate looks again.
@@ -2480,7 +2516,7 @@ func (m *Module) securityRead(t *Task, p core.Project, main string) (bool, error
 	if seats[0] != core.SeatSecurity {
 		who = "the Hive's security panel"
 	}
-	m.hold(t, p, fmt.Sprintf("waiting on a security read from %s at %s, since it changes %s, on %s; a read of an earlier head counts only while this change's own diff is the same (an outside read from the box's perms seat or architect counts too: `%s read %s %s land|fix --by perms`)", who, core.Short(t.SHA), strings.Join(ch.Security, ", "), core.SecurityList, core.Cmd, t.ID, core.Short(t.SHA)))
+	m.hold(t, p, fmt.Sprintf("waiting on a security read from %s at %s, since it changes %s, %s; a read of an earlier head counts only while this change's own diff is the same (an outside read from the box's perms seat or architect counts too: `%s read %s %s land|fix --by perms`)", who, core.Short(t.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), core.Cmd, t.ID, core.Short(t.SHA)))
 	return true, nil
 }
 
@@ -2611,7 +2647,11 @@ func (m *Module) seatAlert(p core.Project, seat, text string) {
 // securityRules is what a security seat reads the change for.
 func securityRules(ch core.Change) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "## You are the Hive's security read\n\nThis change touches %s, on `%s`: files where a mistake weakens the sandbox, leaks a credential or runs something outside the sandbox. The ordinary reviewer reads it for the brief; you read it only for that. A land here lets it merge with no read from outside the Hive, so say fix for anything that:\n\n", "`"+strings.Join(ch.Security, "`, `")+"`", core.SecurityList)
+	where := "on `" + core.SecurityList + "`"
+	if len(ch.Unlisted) > 0 {
+		where = ch.SecurityWhere()
+	}
+	fmt.Fprintf(&b, "## You are the Hive's security read\n\nThis change touches %s, %s: files where a mistake weakens the sandbox, leaks a credential or runs something outside the sandbox. The ordinary reviewer reads it for the brief; you read it only for that. A land here lets it merge with no read from outside the Hive, so say fix for anything that:\n\n", "`"+strings.Join(ch.Security, "`, `")+"`", where)
 	b.WriteString("- widens what a sandboxed run can see, write or reach (mounts, covers, egress, the private folders, the daemon's token);\n")
 	b.WriteString("- lets a credential (a token, a login, the forge's environment) reach a run, a log, a comment or a script that didn't have it;\n")
 	b.WriteString("- runs something outside the sandbox, or as the person, that an agent can choose or edit, or moves the point of effect past its checks (a pinned digest, the ceiling, an approval);\n")
@@ -2684,9 +2724,12 @@ func (m *Module) RecordRead(id, sha, by, verdict, note string) (Task, error) {
 	return t, nil
 }
 
-// closedOnForge ends a task whose pull request someone closed on the forge
-// without merging it. That is the person's call, so the lead can't bring the
-// task back by accident; a closed checkpoint is dropped as one left open is.
+// closedOnForge ends a task whose pull request someone ended on the forge. One
+// merged there (by the person, the lead through gh, anyone) is recorded as the
+// Hive's own merge is, whatever stage it was in or held at, so the briefs
+// queued behind it start. One closed without merging is the person's call, so
+// the lead can't bring the task back by accident; a closed checkpoint is
+// dropped as one left open is.
 const closedCheckpoint = "the person closed a checkpoint's pull request"
 
 // pollDue says whether a task waiting for the person is due a look at its
@@ -2706,8 +2749,18 @@ func (m *Module) closedOnForge(t *Task, p core.Project) (bool, error) {
 		return false, nil
 	}
 	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
-	if err != nil || pr.State != "CLOSED" {
+	if err != nil {
 		return false, err
+	}
+	if pr.State == "MERGED" {
+		if pr.MergeSHA == "" { // the forge hasn't said where yet: look next tick
+			return true, nil
+		}
+		m.merged(t, pr.MergeSHA, fmt.Sprintf("merged on the forge outside the Hive (PR #%d) as %s", pr.Number, core.Short(pr.MergeSHA)))
+		return true, nil
+	}
+	if pr.State != "CLOSED" {
+		return false, nil
 	}
 	if t.Checkpoint != "" {
 		t.NoBank = closedCheckpoint
