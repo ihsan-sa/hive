@@ -187,6 +187,10 @@ func TestOpenClaude(t *testing.T) {
 			t.Errorf("%T: %+v", h, evs)
 		}
 	}
+	// The open agent holds its own turn to the budget, at the model's price.
+	if a := strings.Join(Open{}.Args(Turn{SessionID: "s", Model: "m", MaxBudgetUSD: 2}), " "); !strings.Contains(a, "--max-budget-usd 2") {
+		t.Errorf("open args %s", a)
+	}
 	args := OpenClaude{}.Args(Turn{SessionID: "s", Model: "deepseek-chat", MaxBudgetUSD: 2, KeyCommand: "hive open-key /k", Endpoint: "https://api.deepseek.com/anthropic/"})
 	a := strings.Join(args, " ")
 	if strings.Contains(a, "--max-budget-usd") || !strings.Contains(a, "--model deepseek-chat") ||
@@ -250,5 +254,14 @@ func TestResultTokens(t *testing.T) {
 	r = Codex{}.Parse([]byte(`{"type":"turn.completed","usage":{"input_tokens":5000,"cached_input_tokens":4000,"output_tokens":70}}`))[0].Result
 	if r.Tokens == nil || *r.Tokens != (Tokens{Input: 1000, Output: 70, CacheRead: 4000}) {
 		t.Errorf("codex: %+v", r.Tokens)
+	}
+}
+
+// A window the harness sent without a reset has none, not one in 1970 that
+// would read as long past.
+func TestWindowWithoutResetHasNone(t *testing.T) {
+	evs := Claude{}.Parse([]byte(`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","unifiedWindows":{"seven_day":{"utilization":0.3}}}}`))
+	if len(evs) != 1 || evs[0].RateLimit == nil || !evs[0].RateLimit.Windows["seven_day"].ResetsAt.IsZero() {
+		t.Fatalf("got %+v", evs)
 	}
 }

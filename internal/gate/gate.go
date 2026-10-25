@@ -30,7 +30,9 @@ type Config struct {
 	Org        Org      // the fresh test repository's host; nil runs without one
 	OrgToken   string   // the org token the gate itself uses to make and delete test repositories; children never hold it
 	ChildToken string   // the contents-only token the children hold (empty: they hold none and the org probe is skipped)
+	ReachOK    bool     // the caller passed CheckReach on these tokens within the hour (the daemon), so the gate doesn't probe again
 	Lessons    string   // .hive/lessons.md to append to on a rollback
+	Judged     bool     // a judge decides a measured verdict after the run, and writes its lesson itself
 	Depth      int      // levels of gating the children may still do (capped at MaxDepth)
 	MaxRepos   int      // most org repositories one run may make (default 4)
 	Timeout    time.Duration
@@ -73,6 +75,7 @@ type Report struct {
 	Transient   bool       `json:"transient,omitempty"`         // could not run for a cause that may pass (load, a flake on both sides): try again soon
 	Alone       bool       `json:"alone,omitempty"`             // could not run for a cause tied to this candidate alone (preparing its build, the run's clock): another change at this base would not hit it
 	BaseFails   bool       `json:"base_fails,omitempty"`        // could not run for a cause in the base itself (the control fails a step): every change at this base would hit it
+	Measured    bool       `json:"measured,omitempty"`          // the verdict compares both sides' results (Decide), so a judge may weigh it
 	Sig         string     `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
 }
 
@@ -157,7 +160,7 @@ func Run(cfg Config) (rep Report, err error) {
 		}
 		rep.sign()
 		write(cfg, rep)
-		if !rep.Verdict.Keep && !rep.CantRun {
+		if !rep.Verdict.Keep && !rep.CantRun && !(cfg.Judged && rep.Measured) {
 			noteLesson(cfg, rep)
 		}
 	}()
@@ -172,7 +175,7 @@ func Run(cfg Config) (rep Report, err error) {
 			return rep, fmt.Errorf("the gate runs from a test binary (%s): set Config.Self to a hive binary", filepath.Base(self))
 		}
 	}
-	if g, ok := cfg.Org.(GitHub); ok && cfg.ChildToken != "" {
+	if g, ok := cfg.Org.(GitHub); ok && cfg.ChildToken != "" && !cfg.ReachOK {
 		if err = CheckReach(g, cfg.ChildToken, cfg.Repo); err != nil {
 			return rep, err
 		}
@@ -396,6 +399,7 @@ func Run(cfg Config) (rep Report, err error) {
 		opts.Fixed = append(opts.Fixed, f.String())
 	}
 	rep.Verdict = Decide(rep.Candidate, rep.Control, opts)
+	rep.Measured = true
 	if len(rep.Unit.Shared) > 0 {
 		rep.Verdict.Reason += "; failing on both sides, so the environment's and not counted: " + failureNames(rep.Unit.Shared, modulePath(cand.Src))
 	}

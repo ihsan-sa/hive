@@ -540,7 +540,9 @@ func (m *Module) convene(req *Request) error {
 				s = m.Agents.Spec(id, "tribunal", req.Project, dir, m.panelBrief(*req, 1, i))
 				// The seat sees the case and nothing else: no other project, no module.
 				s.ReadOnly, s.Isolated, s.Modules = true, true, nil
-				s.Schema, s.Model, s.Inputs = VoteSchema, seat.Model, map[string]string{"script.sh": req.Script}
+				// A seat at its limit waits rather than moving along the
+				// tribunal's route onto another seat's model.
+				s.Schema, s.Model, s.Inputs, s.Route = VoteSchema, seat.Model, map[string]string{"script.sh": req.Script}, nil
 				if seat.Harness != "" {
 					s.Harness = seat.Harness
 				}

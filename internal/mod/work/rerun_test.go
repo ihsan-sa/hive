@@ -22,6 +22,8 @@ func TestRerunFailedForgeChecks(t *testing.T) {
 	}
 	flaky := core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, Detail: "failure"}
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass}, flaky)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass}) // an answer, so no re-run of the Hive's own
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "rerun-checks") {
 		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
@@ -69,16 +71,18 @@ func TestRerunFailedForgeChecks(t *testing.T) {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
 
-	// The cap: a second re-run goes, a third doesn't.
-	if _, err := m.RerunChecks(task.ID, "lead"); err != nil {
-		t.Fatal(err)
+	// The cap: a second and third re-run go, a fourth doesn't.
+	for i := 0; i < 2; i++ {
+		if _, err := m.RerunChecks(task.ID, "lead"); err != nil {
+			t.Fatal(err)
+		}
+		f.SetChecks(p.Repo, task.SHA, flaky)
 	}
-	f.SetChecks(p.Repo, task.SHA, flaky)
 	if _, err := m.RerunChecks(task.ID, "lead"); err == nil || !strings.Contains(err.Error(), "most for one head") {
-		t.Fatalf("third re-run on one head: %v", err)
+		t.Fatalf("fourth re-run on one head: %v", err)
 	}
-	if f.Reruns(p.Repo, task.SHA) != 2 {
-		t.Fatalf("%d re-runs on the forge, want 2", f.Reruns(p.Repo, task.SHA))
+	if f.Reruns(p.Repo, task.SHA) != 3 {
+		t.Fatalf("%d re-runs on the forge, want 3", f.Reruns(p.Repo, task.SHA))
 	}
 
 	*task, _ = m.Get(task.ID)

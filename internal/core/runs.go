@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"maps"
 	"net"
 	"os"
@@ -68,6 +69,7 @@ type Finish struct {
 	Account string `json:"account"`
 	Tested  string `json:"tested,omitempty"`
 	Unsure  string `json:"unsure,omitempty"`
+	Printed bool   `json:"printed,omitempty"` // the agent printed it as its answer and the Hive ran it
 }
 
 // Run is a live or past agent.
@@ -157,6 +159,36 @@ func (r *Run) Terminal() bool {
 	return false
 }
 
+// Lead reports a lead run: the Hive-wide lead or a project's. A lead
+// answers the person however busy the machine is: its turn starts ahead of
+// every other run's, never waits for pressure, and runs at a higher
+// scheduling priority.
+func (r *Run) Lead() bool { return r.Role == "lead" }
+
+// Nice is the Unix nice value the run's processes get (higher is lower
+// priority; a process can only go higher): the Hive-wide lead at the
+// daemon's own, a project's lead just under it, and every other role well
+// under both, so leads keep the machine when workers fill it. Checks and
+// gate runs go under all of them (CheckNice).
+func (r *Run) Nice() int {
+	switch {
+	case r.Role == "lead" && r.Project == "":
+		return 0
+	case r.Role == "lead":
+		return 2
+	}
+	return 10
+}
+
+// CheckNice is the nice value checks and gate runs get: under every run.
+const CheckNice = 15
+
+// LeadMemFloorMB is the one hold a lead's turn has: below this much
+// available memory its harness would be killed before it answered, so it
+// waits (saying why once, as run.held) rather than crash. Pressure never
+// holds a lead, and mem_floor_mb above this is for the other roles.
+const LeadMemFloorMB = 256
+
 // Paths of one run's folders.
 func (ws Workspace) RunHost(id string) string { return filepath.Join(ws.Run(id), "host") }
 func (ws Workspace) RunRO(id string) string   { return filepath.Join(ws.Run(id), "ro") }
@@ -240,12 +272,15 @@ type Runs struct {
 	// proven is the picks (Pick.String) some run has finished done on: the
 	// only ones a run that must finish falls back to (next).
 	proven map[string]bool
-	// launching counts launches past the hold whose turn isn't journalled yet.
-	launching int
-	starting  map[string]bool // runs with a launch in flight
-	waking    sync.Mutex      // one wake at a time, so a run is woken once
-	self      proc.Handle     // this daemon, as a turn's claimant (claim.go)
-	backedOff map[string]int  // the turn each run last backed off from, said once
+	// launching counts launches past the hold whose turn isn't journalled
+	// yet; leadLaunching those of leads, which the other roles' wait for.
+	launching, leadLaunching int
+	starting                 map[string]bool // runs with a launch in flight
+	deferred                 map[string]int  // ticks a run's launch has waited behind leads', in a row
+	passing                  bool            // a tick's pass over the other runs is waiting for the leads' steps
+	self                     proc.Handle     // this daemon, as a turn's claimant (claim.go)
+	backedOff                map[string]int  // the turn each run last backed off from, said once
+	waking                   sync.Mutex      // one wake at a time, so a run is woken once
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -613,10 +648,12 @@ func (rs *Runs) apply(e Event) {
 		}
 	case "run.finish":
 		var f struct {
-			ID     string `json:"id"`
-			Finish Finish `json:"finish"`
+			ID      string `json:"id"`
+			Finish  Finish `json:"finish"`
+			Printed bool   `json:"printed"` // where the first printed finishes said so
 		}
 		e.Decode(&f)
+		f.Finish.Printed = f.Finish.Printed || f.Printed
 		r.Finish = &f.Finish
 		if f.Finish.Status == "done" {
 			rs.proven[Pick{Harness: HarnessName(r.Harness), Model: r.Model}.String()] = true
@@ -666,6 +703,11 @@ func (rs *Runs) Start(s RunSpec) (Run, error) {
 	}
 	if err := harness.Capped(h, s.Budget); err != nil {
 		return Run{}, err
+	}
+	if HarnessName(s.Harness) == "open" {
+		if err := rs.ws.LoadConfig().Models[s.Model].Holds(s.Budget); err != nil {
+			return Run{}, fmt.Errorf("a run with a budget won't start on %s: %v", s.Model, err)
+		}
 	}
 	for _, d := range []string{rs.ws.RunHost(s.ID), rs.ws.RunRO(s.ID), filepath.Join(rs.ws.RunBox(s.ID), "outbox"), filepath.Join(rs.ws.RunBox(s.ID), "inbox"), rs.ws.RunHome(s.ID)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -1007,18 +1049,87 @@ func (rs *Runs) Interrupt(id string) bool {
 }
 
 // Tick advances every run one step: mailboxes, finished turns, due turns.
+// Leads go first, the Hive-wide lead ahead of the projects', and the other
+// runs step once every lead's step is done (or a few seconds in, should one
+// hang), so a lead's due turn starts ahead of any queued worker or review.
+// Nothing here waits on the caller's loop: the wait runs on its own, and the
+// other runs are listed after it, as they are then, since a tick that came
+// meanwhile may have stepped them already.
 func (rs *Runs) Tick(cfg Config) {
 	rs.tickDown(cfg)
-	for _, r := range rs.List(func(r *Run) bool { return !r.Terminal() || r.Status == StatusRunning }) {
-		r, ok := rs.claim(r)
-		if !ok {
-			continue
-		}
-		go func(r Run) {
-			defer func() { rs.mu.Lock(); delete(rs.busy, r.ID); rs.mu.Unlock() }()
-			rs.step(r, cfg)
-		}(r)
+	live := rs.List(func(r *Run) bool { return r.Lead() && (!r.Terminal() || r.Status == StatusRunning) })
+	slices.SortStableFunc(live, func(a, b Run) int { return a.Nice() - b.Nice() })
+	var wg sync.WaitGroup
+	for _, r := range live {
+		rs.stepAsync(r, cfg, &wg)
 	}
+	// One pass over the other runs waits at a time: while a tick's is still
+	// waiting for the leads' steps, the ticks that come meanwhile skip
+	// theirs, rather than pile up a waiting goroutine each.
+	rs.mu.Lock()
+	if rs.passing {
+		rs.mu.Unlock()
+		return
+	}
+	rs.passing = true
+	rs.mu.Unlock()
+	go func() {
+		defer func() { rs.mu.Lock(); rs.passing = false; rs.mu.Unlock() }()
+		leads := make(chan struct{})
+		go func() { wg.Wait(); close(leads) }()
+		select {
+		case <-leads:
+		case <-time.After(5 * time.Second):
+			// The busy map keeps a run from being stepped twice, so this only
+			// says, in daemon.log, which lead's step is slow.
+			rs.mu.Lock()
+			var slow []string
+			for _, r := range live {
+				if rs.busy[r.ID] {
+					slow = append(slow, r.ID)
+				}
+			}
+			rs.mu.Unlock()
+			log.Printf("runs: a lead's step is still going after 5s (%s); the other runs step now", strings.Join(slow, ", "))
+		}
+		for _, r := range rs.List(func(r *Run) bool { return !r.Lead() && (!r.Terminal() || r.Status == StatusRunning) }) {
+			rs.stepAsync(r, cfg, nil)
+		}
+		// A run that ended without launching leaves no deferral count behind.
+		rs.mu.Lock()
+		for id := range rs.deferred {
+			if r := rs.runs[id]; r == nil || r.Terminal() {
+				delete(rs.deferred, id)
+			}
+		}
+		rs.mu.Unlock()
+	}()
+}
+
+// stepAsync steps a listed run in its own goroutine once it claims it
+// (claim: marked busy for one step, read as it is now), so a step that
+// waited (behind the leads, or for a slow one) never acts on a status a
+// later tick's step has moved on from, starting a turn twice or ending one
+// twice.
+func (rs *Runs) stepAsync(r Run, cfg Config, wg *sync.WaitGroup) {
+	r, ok := rs.claim(r)
+	if !ok {
+		return
+	}
+	if wg != nil {
+		wg.Add(1)
+	}
+	go func() {
+		defer func() {
+			rs.mu.Lock()
+			delete(rs.busy, r.ID)
+			rs.mu.Unlock()
+			if wg != nil {
+				wg.Done()
+			}
+		}()
+		rs.step(r, cfg)
+	}()
 }
 
 // claim marks a listed run busy for one step and returns it as it is now:
@@ -1195,6 +1306,13 @@ func (rs *Runs) endTurn(r Run) {
 		}
 		tl.Limit = &l
 	}
+	if p := rs.ws.LoadConfig().Models[r.Model].Price; HarnessName(r.Harness) == "open" && p != nil && tl.Result != nil && tl.Result.Tokens != nil {
+		// The harness counts no vendor's prices; a priced model's turn costs
+		// its tokens at the price the person set.
+		res := *tl.Result
+		res.CostUSD = p.Cost(*res.Tokens)
+		tl.Result = &res
+	}
 	if tl.Limit != nil {
 		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
 	}
@@ -1303,7 +1421,7 @@ func (rs *Runs) endTurn(r Run) {
 		te.Status, te.Reason = StatusIdle, "waiting: "+cur.Waiting
 	case cur.Nudges < 2:
 		te.Status, te.Reason = StatusIdle, "nudged: ended a turn without finishing"
-		te.Queue = []string{printedNudge(tl.Result.Text)}
+		te.Queue = []string{printedNudge(r, tl.Result.Text)}
 	case te.Head == cur.Head && cur.Still+1 >= StillTurns:
 		// Its nudges changed nothing: it can't follow the finish protocol,
 		// so it ends and frees its slot instead of holding it quiet.
@@ -1431,14 +1549,46 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		rs.mu.Unlock()
 		return
 	}
+	if !r.Lead() && rs.leadLaunching > 0 {
+		// A lead's turn starts first; this one is due again next tick. Leads
+		// launch when a message comes, so this rarely repeats; one that does
+		// (leads launching back to back, tick after tick) is said in daemon.log.
+		if rs.deferred == nil {
+			rs.deferred = map[string]int{}
+		}
+		rs.deferred[r.ID]++
+		if n := rs.deferred[r.ID]; n == 10 || n%100 == 0 {
+			log.Printf("runs: %s %s has waited %d ticks for leads' launches to finish", r.Role, r.ID, n)
+		}
+		rs.mu.Unlock()
+		return
+	}
+	delete(rs.deferred, r.ID)
 	if rs.starting == nil {
 		rs.starting = map[string]bool{}
 	}
 	rs.starting[r.ID] = true
 	rs.launching++
+	if r.Lead() {
+		rs.leadLaunching++
+	}
 	rs.mu.Unlock()
-	defer func() { rs.mu.Lock(); rs.launching--; delete(rs.starting, r.ID); rs.mu.Unlock() }()
-	if why := Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax); why != "" {
+	defer func() {
+		rs.mu.Lock()
+		rs.launching--
+		if r.Lead() {
+			rs.leadLaunching--
+		}
+		delete(rs.starting, r.ID)
+		rs.mu.Unlock()
+	}()
+	floor, memMax, cpuMax := cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax
+	if r.Lead() {
+		// A lead answers however busy the machine is: no pressure hold, and
+		// only the floor under which its turn could not run at all.
+		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
+	}
+	if why := Strained(floor, memMax, cpuMax); why != "" {
 		// The hold keeps the run's status, so a parked run keeps its backoff
 		// and a nudged one its count; the live figures after " (" change
 		// every tick, so only a new kind of hold is journalled.
@@ -1507,15 +1657,23 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	r.Session = session
 	// One process per turn: another daemon on this workspace may have started it.
-	if err := rs.claimTurn(r.ID, turn); err != nil {
+	took, err := rs.claimTurn(r.ID, turn)
+	if err != nil {
 		rs.mu.Lock()
-		said := rs.backedOff[r.ID] == turn
+		said, first := rs.backedOff[r.ID] == turn, len(rs.backedOff) == 0
 		rs.backedOff[r.ID] = turn
 		rs.mu.Unlock()
 		if !said {
 			fmt.Printf("hive: %s's turn %d isn't started here: %v\n", r.ID, turn, err)
 		}
+		if first { // once per daemon, so a second daemon shows in the record and on the dashboard
+			rs.append("alert.raised", map[string]string{"kind": "daemon", "ref": "turn-claim", "text": fmt.Sprintf("This daemon (pid %d) backed off %s's turn %d: %v. Two daemons may be running on this workspace.", os.Getpid(), r.ID, turn, err)})
+		}
 		return
+	}
+	if took != "" {
+		fmt.Printf("hive: %s's turn %d is started again here: %s\n", r.ID, turn, took)
+		rs.append("alert.raised", map[string]string{"kind": "daemon", "ref": "turn-takeover-" + r.ID, "text": fmt.Sprintf("%s's turn %d is started again: %s before journalling its start.", r.ID, turn, took)})
 	}
 	promptFile := filepath.Join(rs.ws.RunHost(r.ID), fmt.Sprintf("turn-%03d.prompt", turn))
 	if err := os.WriteFile(promptFile, []byte(prompt), 0o644); err != nil {
@@ -1730,6 +1888,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
 		Stdin: stdin, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
 		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Guard: rs.ws.Guarded(), Cover: rs.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(),
+		Nice: r.Nice(),
 	}, nil
 }
 

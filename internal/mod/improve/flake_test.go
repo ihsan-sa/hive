@@ -81,6 +81,9 @@ func TestFlakeAfterMergeIsNotReverted(t *testing.T) {
 	if reverts(m) != 0 || !strings.Contains(flakeAlerts(m), "TestJoin") {
 		t.Fatalf("reverts %d, alerts %q", reverts(m), flakeAlerts(m))
 	}
+	if f := m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, "Fix the flaky") }); len(f) != 1 || !f[0].Fix() {
+		t.Fatalf("the flaky test's brief names its failure, so it is a fix (issue #568): %+v", f)
+	}
 }
 
 // A test that fails twice after a merge and nowhere else is a break, and
@@ -233,14 +236,38 @@ func TestRedAlreadyOnMainBeforeTheMergeIsNotReverted(t *testing.T) {
 	if reverts(m) != 0 {
 		t.Fatalf("a red main had before the merge was reverted: %d", reverts(m))
 	}
-	if filed := m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") }); len(filed) != 1 {
+	filed := m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") })
+	if len(filed) != 1 {
 		t.Fatalf("the red wasn't filed to fix: %d", len(filed))
+	}
+	if !filed[0].Fix() || !strings.Contains(filed[0].AimWhy, "TestClock") {
+		t.Fatalf("a red main's brief names its failure, so it is a fix (issue #568): %q", filed[0].AimWord())
 	}
 	// A second red merge on the same red main files it no second time.
 	sha = commit(map[string]string{"README.md": "another\n"})
 	m.afterMerge(work.Task{ID: "t2", Project: "p", MergeSHA: sha})
 	if reverts(m) != 0 || len(m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") })) != 1 {
 		t.Fatalf("reverts %d on a second merge", reverts(m))
+	}
+}
+
+// A vet or compile error prints no test or package line to name it by, only
+// "file.go:line:col: message". The merge that brought it is reverted; one
+// measured on main while it stays red (a goals-only change) is not.
+func TestVetRedOnlyRevertsTheMergeThatBroughtIt(t *testing.T) {
+	m, commit, merge := tested(t)
+	vet := "echo '# x/e'\necho 'vet: e/a_test.go:225:42: not enough arguments in call to f'\nexit 1\n"
+	if ms := merge(commit(map[string]string{"t.sh": vet})); ms.Kept || strings.Contains(ms.Note, "not new at this merge") || reverts(m) != 1 {
+		t.Fatalf("the merge that broke vet: %+v, reverts %d", ms, reverts(m))
+	}
+	for i, f := range []string{".hive/goals.md", "README.md"} {
+		sha := commit(map[string]string{f: "only text\n"})
+		if ms := merge(sha); ms.Kept || !strings.Contains(ms.Note, "not new at this merge") {
+			t.Fatalf("merge %d on a vet-red main: %+v", i, ms)
+		}
+	}
+	if reverts(m) != 1 {
+		t.Fatalf("merges measured while main stayed red were reverted: %d", reverts(m))
 	}
 }
 

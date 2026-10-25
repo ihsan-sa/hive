@@ -69,19 +69,24 @@ func TestApproveRefuseNeverGuess(t *testing.T) {
 }
 
 // The owner read "resets Sat 01:40" at 02:09Z as a reset already past; it was
-// 05:40Z printed in EDT with no zone. The line now says how far off it is.
+// 05:40Z printed in EDT with no zone. The line now says how far off it is,
+// in plain words, and every window says when it resets, not only a limited one.
 func TestPlanLineSaysWhenTheResetIs(t *testing.T) {
 	reset := time.Date(2026, 10, 24, 5, 40, 0, 0, time.UTC)
 	now := time.Date(2026, 10, 24, 2, 9, 0, 0, time.UTC)
 	p := core.Plan{Harness: "claude", Login: "claude", At: now.Add(-time.Minute), Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour", Utilization: 0.28,
-		Windows: map[string]harness.Window{"five_hour": {Utilization: 0.28, ResetsAt: reset}, "seven_day": {Utilization: 0.36}}}}
+		Windows: map[string]harness.Window{"five_hour": {Utilization: 0.28, ResetsAt: reset}, "seven_day": {Utilization: 0.36, ResetsAt: reset.Add(48 * time.Hour)}}}}
 	got := planLine(p, now)
-	for _, want := range []string{"28% of the five_hour window", "resets in 3h31m0s", "seven_day 36%"} {
+	for _, want := range []string{"within its limit", "5-hour window 28% used, resets in 3h31m", "weekly window 36% used, resets in 2d3h"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q lacks %q", got, want)
 		}
 	}
-	if got := planLine(p, reset.Add(time.Minute)); !strings.Contains(got, "window reset at") || !strings.Contains(got, "no reading since") {
+	p.Limit.Status = "allowed_warning"
+	if got := planLine(p, now); !strings.Contains(got, "near its limit") || strings.Contains(got, "allowed_warning") {
+		t.Errorf("allowed_warning should read in plain words: %q", got)
+	}
+	if got := planLine(p, reset.Add(time.Minute)); !strings.Contains(got, "5-hour window reset at") || !strings.Contains(got, "no reading since (was 28%)") || strings.Contains(got, "within its limit") {
 		t.Errorf("a reading past its reset should say so: %q", got)
 	}
 }
@@ -104,7 +109,7 @@ func TestPlanLineEscapesFeedNames(t *testing.T) {
 			t.Errorf("a control or format character reaches the screen: %q", got)
 		}
 	}
-	if got := planLine(p, now); !strings.Contains(got, `allowed\x1b]0;x\x07`) || !strings.Contains(got, `seven\x1b[Kday\u2066 10%`) {
+	if got := planLine(p, now); !strings.Contains(got, `allowed\x1b]0;x\x07`) || !strings.Contains(got, `seven\x1b[Kday\u2066 window 10%`) {
 		t.Errorf("the status and the other windows should be escaped too: %q", got)
 	}
 }
@@ -241,5 +246,59 @@ func TestHoldArgs(t *testing.T) {
 	}
 	if _, err := holdArgs([]string{"--only", "x"}); err == nil {
 		t.Fatal("a bad PR number was taken")
+	}
+}
+
+// `hive model rm` keeps a model and its key while a route names it, and says
+// which; `add` refuses a key on plain http to a public host and says when it
+// replaces one.
+func TestModelCommands(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HIVE_HOME", root)
+	ws := core.Workspace{Root: root}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if code := cmdModel([]string{"add", "pub", "http://api.example.com/v1", "m1", "--key", "--no-probe"}); code != 1 {
+		t.Fatalf("plain http with a key: exit %d", code)
+	}
+	if _, ok := ws.LoadConfig().Models["pub"]; ok {
+		t.Fatal("added a key-bearing model on plain http")
+	}
+	for _, args := range [][]string{
+		{"add", "kimi", "https://api.moonshot.ai/v1", "kimi-k2", "--key", "--no-probe"},
+		{"add", "kimi", "https://api.moonshot.ai/v1", "kimi-k2-0905", "--key", "--no-probe"},
+	} {
+		if code := cmdModel(args); code != 0 {
+			t.Fatalf("%v: exit %d", args, code)
+		}
+	}
+	if got := ws.LoadConfig().Models["kimi"].Model; got != "kimi-k2-0905" {
+		t.Fatalf("replaced model id %q", got)
+	}
+	if err := ws.SaveOpenKey("kimi", "sk-1"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ws.LoadConfig()
+	cfg.Projects = map[string]core.ProjectSettings{"lab": {Routes: map[string][]string{"worker": {"kimi"}}}}
+	if err := ws.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if code := cmdModel([]string{"rm", "kimi"}); code != 1 {
+		t.Fatalf("rm of a routed model: exit %d", code)
+	}
+	if _, err := os.Stat(ws.OpenKey("kimi")); err != nil {
+		t.Fatal("rm refused, but the key is gone")
+	}
+	if got := routesNaming(ws.LoadConfig(), "kimi"); len(got) != 1 || got[0] != "worker in lab" {
+		t.Fatalf("routes naming kimi: %q", got)
+	}
+	cfg.Projects = nil
+	ws.SaveConfig(cfg)
+	if code := cmdModel([]string{"rm", "kimi"}); code != 0 {
+		t.Fatalf("rm: exit %d", code)
+	}
+	if _, err := os.Stat(ws.OpenKey("kimi")); err == nil {
+		t.Fatal("rm left the key")
 	}
 }

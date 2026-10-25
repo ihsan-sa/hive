@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -122,6 +123,28 @@ func TestEgressHoldsToItsList(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusForbidden || refused.String() != "paste.example:443 unlisted\n" {
 		t.Fatalf("CONNECT paste.example: %s, recorded %q", resp.Status, refused.String())
+	}
+}
+
+// A listed host whose name resolves to this machine or a private network
+// is refused all the same: a model's endpoint is put on a run's list by name
+// (core's openHost checks only literal addresses and localhost), and this is
+// what keeps a name like that from reaching a local service.
+func TestEgressRefusesANameThatResolvesPrivate(t *testing.T) {
+	_, port := echo(t)
+	for _, ip := range []string{"127.0.0.1", "10.0.0.5", "192.168.1.20", "169.254.169.254", "::1", "fd00::1"} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var refused bytes.Buffer
+		e := ServeEgress(ln, []string{"llm.example.com"}, nil, &refused)
+		e.lookup = func(context.Context, string) ([]net.IPAddr, error) { return []net.IPAddr{{IP: net.ParseIP(ip)}}, nil }
+		code, body := connect(t, "tcp", ln.Addr().String(), "llm.example.com:"+port)
+		e.Close()
+		if code != http.StatusForbidden || strings.Contains(body, "echo") || !strings.Contains(refused.String(), "llm.example.com:"+port) {
+			t.Errorf("llm.example.com at %s: %d %q, recorded %q", ip, code, body, refused.String())
+		}
 	}
 }
 

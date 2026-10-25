@@ -154,8 +154,9 @@ func (GitHub) Name() string { return "github" }
 
 // OwnerTokens maps a lower-cased repo owner to a file holding the GitHub token
 // for that owner. An owner not listed (or whose file is unreadable, said once
-// on stderr) uses gh's own login. Both tokens act as the same user, so gh
-// cannot hold them as two logins; the effects process passes GH_TOKEN per call instead.
+// on stderr, which is daemon.log.err) uses gh's own login. Both tokens act as
+// the same user, so gh cannot hold them as two logins; the effects process
+// passes GH_TOKEN per call instead.
 var OwnerTokens = map[string]string{
 	"hive-rsi-lab": "/home/hive/h0-org.token",
 }
@@ -176,6 +177,9 @@ func ghEnv(repo string) []string {
 		}
 		b, err := os.ReadFile(path)
 		if err == nil {
+			if i == 1 { // readable again: a later break is said again
+				unreadTokens.Delete(owner + "\x00" + path)
+			}
 			if tok := strings.TrimSpace(string(b)); tok != "" {
 				return []string{"GH_TOKEN=" + tok}
 			}
@@ -189,7 +193,7 @@ func ghEnv(repo string) []string {
 }
 
 // unreadTokens holds each owner and listed token file already said to be
-// unreadable, so the fallback is said once, not on every gh call.
+// unreadable, so the fallback is said once while it lasts, not on every gh call.
 var unreadTokens sync.Map
 
 // tokenLog is where that is said. Tests replace it.
@@ -228,6 +232,8 @@ func gh(repo string, args ...string) (string, error) {
 		}
 		if stderr == "" {
 			stderr = err.Error()
+		} else if TimedOut(err.Error()) {
+			stderr += ": " + err.Error()
 		}
 		return out, fmt.Errorf("gh %s: %s", ghVerb(args), stderr)
 	}
@@ -674,11 +680,27 @@ func (GitHub) SetDraft(repo string, number int, draft bool) error {
 }
 
 func (GitHub) DeleteBranch(repo, branch string) error {
+	if err := HiveBranch(branch); err != nil {
+		return err
+	}
 	_, err := gh(repo, "api", "-X", "DELETE", "repos/"+repo+"/git/refs/heads/"+branch)
 	if err != nil && strings.Contains(err.Error(), "Reference does not exist") {
 		return nil
 	}
 	return err
+}
+
+// hiveBranchName is what a branch the Hive made looks like: hive/ and then
+// plain path segments.
+var hiveBranchName = regexp.MustCompile(`^hive/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$`)
+
+// HiveBranch refuses a branch name that isn't plainly one of the Hive's own,
+// so a forge never deletes another branch or builds an odd API path from it.
+func HiveBranch(branch string) error {
+	if !hiveBranchName.MatchString(branch) || strings.Contains(branch, "..") || strings.HasSuffix(branch, ".lock") {
+		return fmt.Errorf("branch %q isn't one of the Hive's own (hive/...)", branch)
+	}
+	return nil
 }
 
 func (GitHub) CloseIssue(repo string, number int) error {

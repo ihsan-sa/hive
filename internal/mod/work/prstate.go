@@ -93,11 +93,26 @@ func (m *Module) MarkReady(id, by, why string) (string, error) {
 	m.mu.Lock()
 	delete(m.later, id) // the draft's wait is over: look again at once
 	m.mu.Unlock()
-	t.DraftWhy = ""
+	// The forge's record matches the task's: the lead's reason goes on the
+	// PR, and a draft the lead didn't make (DraftWhy empty) says so loudly.
 	note := fmt.Sprintf("PR #%d marked ready by %s", pr.Number, by)
+	if pr.Draft && t.DraftWhy == "" {
+		note += " (a draft the lead didn't make)"
+	}
 	if why != "" {
 		note += ": " + core.Clip(why, 300)
 	}
+	if pr.Draft || why != "" {
+		body := "Marked ready by the Hive's lead"
+		if why != "" {
+			body += ": " + why
+		}
+		if pr.Draft && t.DraftWhy == "" {
+			body += "\n\nThe lead didn't make this draft; if it was held for a read outside the Hive, make it a draft again."
+		}
+		m.comment(p.Repo, pr.Number, body)
+	}
+	t.DraftWhy = ""
 	m.save(&t, note)
 	switch {
 	case t.Stage != StageStopped && t.Stage != StageBlocked:
@@ -107,7 +122,7 @@ func (m *Module) MarkReady(id, by, why string) (string, error) {
 	case t.ByPerson || m.workerStopped(t):
 		return note + fmt.Sprintf("; task %s stays stopped: the person stopped it", t.ID), nil
 	}
-	if err := m.Recheck(id, ""); err != nil {
+	if err := m.Recheck(id, "", by); err != nil {
 		return "", err
 	}
 	return note + "; it had stopped over the draft, so it is back and checked again", nil
@@ -145,6 +160,10 @@ func (m *Module) MarkDraft(id, by, why string) (string, error) {
 	return note + "; its merge waits until it is marked ready (pr_ready)", nil
 }
 
+// closedByLead starts the reason of a task the lead ended with pr_close. Its
+// PR is closed, so recheck doesn't bring it back; new work is a new brief.
+const closedByLead = "closed by the lead"
+
 // ClosePR closes a task's PR with a comment and ends the task, its worker
 // stopped; with deleteBranch its hive/ branch goes too. A revert the lead no
 // longer wants ends this way, rather than waiting on the person.
@@ -166,6 +185,7 @@ func (m *Module) ClosePR(id, by, comment string, deleteBranch bool) (string, err
 	if err != nil {
 		return "", err
 	}
+	note := fmt.Sprintf("PR #%d closed by %s: %s", pr.Number, by, core.Clip(comment, 300))
 	switch pr.State {
 	case "MERGED":
 		return "", fmt.Errorf("PR #%d is merged: end the task with landed", pr.Number)
@@ -173,16 +193,17 @@ func (m *Module) ClosePR(id, by, comment string, deleteBranch bool) (string, err
 		if err := m.C.Effects.Forge.ClosePR(p.Repo, pr.Number, comment); err != nil {
 			return "", err
 		}
+	default:
+		note = fmt.Sprintf("PR #%d was already closed on the forge; task ended by %s: %s", pr.Number, by, core.Clip(comment, 300))
 	}
 	if t.Worker != "" {
 		if r, ok := m.C.Runs.Get(t.Worker); ok && !r.Terminal() {
-			m.C.Runs.Stop(t.Worker, "its pull request was closed by the lead")
+			m.C.Runs.Stop(t.Worker, "its pull request was "+closedByLead)
 		}
 	}
-	note := fmt.Sprintf("PR #%d closed by %s: %s", pr.Number, by, core.Clip(comment, 300))
 	if deleteBranch {
 		switch branch := t.Branch; {
-		case !strings.HasPrefix(branch, "hive/"):
+		case core.HiveBranch(branch) != nil:
 			note += fmt.Sprintf("; branch %q kept, as only hive/ branches are the Hive's", branch)
 		default:
 			if err := m.C.Effects.Forge.DeleteBranch(p.Repo, branch); err != nil {
@@ -192,8 +213,16 @@ func (m *Module) ClosePR(id, by, comment string, deleteBranch bool) (string, err
 			}
 		}
 	}
-	t.Stage, t.Reason, t.Checkpoint, t.DraftWhy = StageStopped, core.Clip("closed by the lead: "+comment, 300), "", ""
+	t.Stage, t.Reason, t.Checkpoint, t.DraftWhy = StageStopped, core.Clip(closedByLead+": "+comment, 300), "", ""
 	m.save(&t, note)
+	// A merge question already put to the person is about a PR that is gone
+	// now: answered for them, it leaves Waiting (onPersonMerge ignores it, as
+	// the task is no longer waiting on the person).
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "merge" && strings.HasPrefix(a.Ref, t.ID+"@") {
+			m.C.Person.Answer(a.ID, "leave open", "the Hive, not the person: the lead closed the PR")
+		}
+	}
 	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Closed without merging: %s %s (%s)", t.Label(), t.PR.URL, core.Clip(comment, 300)))
 	return note, nil
 }
