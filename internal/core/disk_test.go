@@ -271,11 +271,26 @@ func TestPrefetchReadsOnlyTheCheckout(t *testing.T) {
 	if g := c.Effects.goModules(isolated{}, dir); strings.Contains(g.note, "secret") {
 		t.Fatalf("go's output reached the note: %q", g.note)
 	}
+	// go's lexer reads "=>" as the arrow only on its own, and ends a target
+	// at its punctuation: a second "=>", or a target that reads as inside
+	// the checkout only up to a comma, refuses the prefetch.
+	for _, bad := range []string{
+		"module m\nreplace a=>b v1 => ../x\n",
+		"module m\nreplace example.com/x => ./..,x\n",
+		"module m\nreplace example.com/x => ./x => ../y\n",
+		"module m\nreplace example.com/x=>./x\n",
+		"module m\nreplace example.com/x \"=>\" ../x\n",
+	} {
+		if localReplace(dir, bad) == "" {
+			t.Errorf("%q was taken", bad)
+		}
+	}
 	// A replace to a plain folder inside the checkout is fine.
 	for _, ok := range []string{
 		"module m\nreplace example.com/x => ./x\nreplace example.com/y => example.com/z v1.2.3\n",
 		"module m\nreplace(\n\texample.com/x => \"./a b\" // in the checkout\n)\n",
 		"module m // => /not/a/replace\n",
+		"module m\nreplace example.com/x v1.0.0 => ./x // a=>b\n",
 	} {
 		if why := localReplace(dir, ok); why != "" {
 			t.Errorf("%q: %s", ok, why)
@@ -323,5 +338,160 @@ func TestPrefetchTurnsTelemetryOff(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(seen); strings.TrimSpace(string(raw)) != "off" {
 		t.Fatalf("go saw telemetry mode %q", raw)
+	}
+}
+
+// mapped is an isolated sandbox that runs on the host, each mount's inside
+// path standing for its host path, and keeps every spec it ran.
+type mapped struct {
+	sandbox.Bare
+	specs *[]sandbox.Spec
+}
+
+func (mapped) Isolated() bool { return true }
+
+func (m mapped) Run(s sandbox.Spec, timeout time.Duration) (int, error) {
+	*m.specs = append(*m.specs, s)
+	script := s.Argv[len(s.Argv)-1]
+	for _, mt := range s.Mounts {
+		if s.Cwd == mt.Inside {
+			s.Cwd = mt.Host
+		}
+		script = strings.ReplaceAll(script, mt.Inside, mt.Host)
+	}
+	s.Argv = []string{"/bin/sh", "-c", script}
+	var env []string
+	for _, kv := range s.Env {
+		if !strings.HasPrefix(kv, "TMPDIR=") && !strings.HasPrefix(kv, "HOME=") && !strings.HasPrefix(kv, "PATH=") {
+			env = append(env, kv)
+		}
+	}
+	s.Env = env
+	return m.Bare.Run(s, timeout)
+}
+
+// A check that couldn't have a module offline runs once more without the
+// shared cache, in a checkout the first run never wrote to. If go.sum names
+// the module, the cache lacked it and its marker goes; if not, the check
+// needs more than the cache holds, and later checks skip the cache at once.
+func TestStaleModuleCacheRunsAgain(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the shared module cache is for Linux sandboxes")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go on PATH")
+	}
+	c, f := testHive(t)
+	removesCache(t, c)
+	seedRepo(t, f, "me/gomod", map[string]string{
+		"go.mod":             "module example.com/m\n\ngo 1.21\n",
+		"go.sum":             "example.com/x v1.0.0 h1:abc=\nexample.com/x v1.0.0/go.mod h1:def=\n",
+		".hive/project.json": `{"test": "true"}`,
+	})
+	p, err := c.Projects.Add(Project{Name: "gomod", Repo: "me/gomod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	main, err := c.Effects.Sync(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var specs []sandbox.Spec
+	c.Effects.sandbox = func() (sandbox.Sandbox, error) { return mapped{specs: &specs}, nil }
+	// Offline it can't have the module it names; online it passes, but only
+	// in a checkout no earlier run wrote to.
+	check := func(missing string) string {
+		return `test -e dirty && { echo "a used checkout"; exit 3; }; touch dirty; ` +
+			`[ "$GOPROXY" = off ] && { echo "go: ` + missing + `: ` + staleModules + `"; exit 1; }; exit 0`
+	}
+	sharedIn := func(s sandbox.Spec) bool {
+		return slices.ContainsFunc(s.Mounts, func(m sandbox.Mount) bool { return m.Inside == GoModInside })
+	}
+	markers := func() []string {
+		es, _ := os.ReadDir(c.WS.goSums())
+		var names []string
+		for _, e := range es {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+
+	ch := c.Effects.RunCheck(p, main, "test", check("example.com/x@v1.0.0"))
+	if !ch.OK || ch.CantRun != "" {
+		t.Fatalf("named module: %+v", ch)
+	}
+	if len(specs) != 2 || !sharedIn(specs[0]) || sharedIn(specs[1]) || slices.Contains(specs[1].Env, "GOPROXY=off") {
+		t.Fatalf("named module: %d runs, want the shared cache then none", len(specs))
+	}
+	if m := markers(); len(m) != 0 {
+		t.Fatalf("the cache lacked what its marker promised, and the marker stayed: %v", m)
+	}
+
+	specs = nil
+	if ch := c.Effects.RunCheck(p, main, "test", check("example.com/tool@latest")); !ch.OK || !strings.Contains(ch.Output, "doesn't name") {
+		t.Fatalf("unnamed module: %+v", ch)
+	}
+	if m := markers(); len(m) != 2 || !slices.ContainsFunc(m, func(n string) bool { return strings.HasSuffix(n, ownModules) }) {
+		t.Fatalf("markers %v, want the go.sum's and its own-modules mark", m)
+	}
+	specs = nil
+	if ch := c.Effects.RunCheck(p, main, "test", check("example.com/tool@latest")); !ch.OK || len(specs) != 1 || sharedIn(specs[0]) {
+		t.Fatalf("a later check of the same go.sum ran %d time(s) (%+v)", len(specs), ch)
+	}
+}
+
+// A test that fails because the disk filled under it is can't-run when the
+// room where checks write is short as the check ends, and the commit's red
+// when there is room (its message only quotes the error).
+func TestFullDiskFailingATest(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	low := false
+	saved := roomOf
+	roomOf = func(path string) (int64, int64, bool) {
+		if low {
+			return 1 << 20, 100 << 20, true
+		}
+		return 90 << 20, 100 << 20, true
+	}
+	t.Cleanup(func() { roomOf = saved })
+	failing := `printf -- '--- FAIL: TestBig (0.00s)\nwrite /tmp/x: no space left on device\nFAIL\n'; exit 1`
+	if ch := c.Effects.RunCheck(p, main, "test", failing); ch.CantRun != "" || len(ch.Failed) != 1 {
+		t.Fatalf("with room: %+v", ch)
+	}
+	low = true
+	if ch := c.Effects.RunCheck(p, main, "test", failing); !strings.Contains(ch.CantRun, "disk") {
+		t.Fatalf("short of room: %+v", ch)
+	}
+	// What a test printed indented is still its own words.
+	if ch := c.Effects.RunCheck(p, main, "test", `printf -- '--- FAIL: TestX (0.00s)\n    x_test.go:9: no space left on device\n'; exit 1`); ch.CantRun != "" {
+		t.Fatalf("a test's own words: %+v", ch)
+	}
+	if !strings.Contains(c.Effects.Disk().String(), "quota") && !quotaShown {
+		t.Fatal("the room figures don't say a per-user quota is missing from them")
+	}
+}
+
+// A checkout is moved aside under the project's lock and removed after, and
+// its removal is on the record.
+func TestRemoveCheckout(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	dir, err := c.Effects.NewCheckout(p, "w-1", main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := 0
+	c.J.Subscribe(func(e Event) {
+		if e.Kind == "effect.checkout_removed" {
+			removed++
+		}
+	})
+	if err := c.Effects.RemoveCheckout(p.Name, "w-1"); err != nil || Exists(dir) || removed != 1 {
+		t.Fatalf("err %v, still there %v, %d events", err, Exists(dir), removed)
+	}
+	if left, _ := filepath.Glob(filepath.Join(c.WS.Cache(), "removing-*")); len(left) != 0 {
+		t.Fatalf("left aside: %v", left)
+	}
+	if c.Effects.RemoveCheckout(p.Name, "w-1") != nil || removed != 1 {
+		t.Fatal("a checkout that's gone was removed again")
 	}
 }
