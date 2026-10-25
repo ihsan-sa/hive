@@ -432,6 +432,7 @@ func TestVendorLimitMovesToFallback(t *testing.T) {
 		"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"},
 	}
 	c.WS.SaveConfig(cfg)
+	proven(c, "free")
 	_, err := c.Runs.Start(RunSpec{ID: "v1", Role: "worker", Harness: "open", Model: "kimi", Brief: "b", Checkout: t.TempDir(),
 		Route: []Pick{{Harness: "open", Model: "kimi"}, {Harness: "open", Model: "free"}}})
 	if err != nil {
@@ -480,6 +481,7 @@ func TestKeyRefusedTwiceMovesToFallback(t *testing.T) {
 		"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"},
 	}
 	c.WS.SaveConfig(cfg)
+	proven(c, "free")
 	if _, err := c.Runs.Start(RunSpec{ID: "v2", Role: "worker", Harness: "open", Model: "kimi", Brief: "b", Checkout: t.TempDir(),
 		Route: []Pick{{Harness: "open", Model: "kimi"}, {Harness: "open", Model: "free"}}}); err != nil {
 		t.Fatal(err)
@@ -519,9 +521,7 @@ func TestTurnStartsOnceWhenARunMoves(t *testing.T) {
 	cfg := c.WS.LoadConfig()
 	cfg.Models = map[string]OpenModel{"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"}}
 	c.WS.SaveConfig(cfg)
-	// A worker falls back only to a model that has finished here.
-	c.J.MustAppend("run.created", RunSpec{ID: "trial", Role: "worker", Harness: "open", Model: "free"})
-	c.J.MustAppend("run.finish", map[string]any{"id": "trial", "finish": Finish{Status: "done"}})
+	proven(c, "free")
 	var args []string
 	var mu sync.Mutex
 	starts := 0
@@ -585,4 +585,12 @@ func (s countSB) Start(spec sandbox.Spec) (sandbox.Proc, error) {
 	*s.n++
 	s.mu.Unlock()
 	return s.startSB.Start(spec)
+}
+
+// proven records a worker that finished done on the open model, as a trial
+// would: a worker falls back only to a model that has finished here.
+func proven(c *Core, model string) {
+	id := "trial-" + model
+	c.J.MustAppend("run.created", RunSpec{ID: id, Role: "worker", Harness: "open", Model: model})
+	c.J.MustAppend("run.finish", map[string]any{"id": id, "finish": Finish{Status: "done"}})
 }
