@@ -9,8 +9,9 @@ import (
 )
 
 // fixRepo is a tiny module with a bug in Add, and one commit per kind of
-// change on top of it: the commit's sha by name.
-func fixRepo(t *testing.T) (repo string, sha map[string]string) {
+// change on top of it: the commit's sha by name. extra are more files of the
+// base commit.
+func fixRepo(t *testing.T, extra map[string]string) (repo string, sha map[string]string) {
 	t.Helper()
 	repo = t.TempDir()
 	git := func(args ...string) string {
@@ -40,6 +41,9 @@ func fixRepo(t *testing.T) (repo string, sha map[string]string) {
 	write("go.mod", "module example.com/m\n\ngo 1.21\n")
 	write("calc/calc.go", "package calc\n\nfunc Add(a, b int) int {\n\treturn a - b\n}\n")
 	write("calc/calc_test.go", "package calc\n\nimport \"testing\"\n\nfunc TestZero(t *testing.T) {\n\tif Add(0, 0) != 0 {\n\t\tt.Fatal(\"0+0\")\n\t}\n}\n")
+	for name, body := range extra {
+		write(name, body)
+	}
 	commit("base")
 
 	// A real fix, with the test that shows it.
@@ -59,6 +63,13 @@ func fixRepo(t *testing.T) (repo string, sha map[string]string) {
 	write("calc/mul.go", "package calc\n\nfunc Mul(a, b int) int {\n\treturn a * b\n}\n")
 	write("calc/src_test.go", "package calc\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestHasMul(t *testing.T) {\n\tif _, err := os.Stat(\"mul.go\"); err != nil {\n\t\tt.Fatal(err)\n\t}\n}\n")
 	commit("unrelated")
+
+	// The fix beside a test that cannot build on the control: the package's
+	// tests don't build there whole, but the fix's own file does.
+	git("checkout", "-q", "--detach", sha["fix"])
+	write("calc/sub.go", "package calc\n\nfunc Sub(a, b int) int {\n\treturn a - b\n}\n")
+	write("calc/sub_test.go", "package calc\n\nimport \"testing\"\n\nfunc TestSub(t *testing.T) {\n\tif Sub(3, 2) != 1 {\n\t\tt.Fatal(Sub(3, 2))\n\t}\n}\n")
+	commit("fix+new")
 	return repo, sha
 }
 
@@ -68,12 +79,20 @@ func TestFindFixes(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	repo, sha := fixRepo(t)
+	checkFindFixes(t, nil, func(name, root string) *Child {
+		return &Child{Name: name, Root: root, Sandbox: "bare", Go: gotool}
+	})
+}
+
+// checkFindFixes runs the step on each of fixRepo's commits, with sides made
+// by side.
+func checkFindFixes(t *testing.T, extra map[string]string, side func(name, root string) *Child) {
+	t.Helper()
+	repo, sha := fixRepo(t, extra)
 	run := func(head string) FixReport {
 		out := filepath.Join(t.TempDir(), "run")
 		cfg := &Config{Repo: repo, Base: sha["base"], Head: sha[head], Out: out}
-		cand := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: "bare", Go: gotool}
-		ctrl := &Child{Name: "control", Root: filepath.Join(out, "control"), Sandbox: "bare", Go: gotool}
+		cand, ctrl := side("candidate", filepath.Join(out, "candidate")), side("control", filepath.Join(out, "control"))
 		for c, s := range map[*Child][2]string{cand: {sha[head], sha["base"]}, ctrl: {sha["base"], ""}} {
 			if err := checkout(*cfg, c, s[0], s[1]); err != nil {
 				t.Fatal(err)
@@ -97,6 +116,14 @@ func TestFindFixes(t *testing.T) {
 	}
 	if v := decide(fr); !v.Keep || !strings.Contains(v.Reason, "TestAdd") {
 		t.Fatalf("a real fix with its regression test was not kept: %+v", v)
+	}
+
+	fr = run("fix+new")
+	if len(fr.Fixes) != 1 || fr.Fixes[0].Test != "TestAdd" || !strings.Contains(strings.Join(fr.Notes, "\n"), "calc TestSub: does not build or run on the control") {
+		t.Fatalf("a fix beside a test the control can't build was not counted alone: %+v", fr)
+	}
+	if fr.Seconds <= 0 || !strings.Contains(fr.markdown(), "the step took") {
+		t.Fatalf("the step's time is not in the report: %v\n%s", fr.Seconds, fr.markdown())
 	}
 
 	fr = run("noop")

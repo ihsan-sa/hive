@@ -598,7 +598,7 @@ func TestOwnSecurityReadLands(t *testing.T) {
 func TestSelfFixStillWaitsForSecurityRead(t *testing.T) {
 	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
 	p.Self = true
-	task.Aim = ""
+	task.Aim, task.AimWhy = AimFix, "the box leaks: TestBox fails"
 	m.Gate = func(context.Context, GateJob) core.GateResult {
 		t.Error("the gate ran on a fix")
 		return core.GateResult{Outcome: core.GateKeep}
