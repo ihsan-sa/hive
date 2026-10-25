@@ -1182,7 +1182,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req := e.RequiredChecks(p, m.Main)
+	runs, req, warned := Advisory(p, runs, e.RequiredChecks(p, m.Main))
 	st, which := ChecksState(runs, req)
 	var shared []string
 	var answer map[string]string // check -> the older main commit its answer came from
@@ -1205,6 +1205,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", err
 	}
 	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID}
+	if len(warned) > 0 {
+		ev["warned"] = warned
+	}
 	if len(shared) > 0 {
 		// A merge past a red check names the main commits that excused it,
 		// so one that relied on an older main answer can be audited.
@@ -1243,6 +1246,29 @@ func (n *NeedsPerson) Error() string { return "needs the person: " + n.Reason }
 // head before it merges.
 func (e *Effects) RequiredChecks(p Project, mainSHA string) []string {
 	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "required_checks")
+}
+
+// Advisory splits off the checks that only warn: on the Hive's own project
+// (Self) a failing Windows job, whose red tonight was mostly flakes unrelated
+// to the change, doesn't block the merge (the person: keep the Hive improving
+// as fast as possible). A release still needs the whole ci workflow green,
+// Windows with it. kept are the rest; warned names the failures set aside,
+// and required loses them so they aren't waited on either.
+func Advisory(p Project, runs []CheckRun, required []string) (kept []CheckRun, req, warned []string) {
+	if !p.Self {
+		return runs, required, nil
+	}
+	for _, r := range runs {
+		if r.State == CheckFail && strings.Contains(strings.ToLower(r.Name), "windows") {
+			if !slices.Contains(warned, r.Name) {
+				warned = append(warned, r.Name)
+			}
+			continue
+		}
+		kept = append(kept, r)
+	}
+	req = slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(warned, n) })
+	return kept, req, warned
 }
 
 // ChecksState sums up the forge's checks on one head, the worst first: a

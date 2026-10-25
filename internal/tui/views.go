@@ -565,6 +565,9 @@ func (m *model) viewDetail(d *detail) []string {
 		}
 		kv("task", t.Label())
 		kv("stage", t.Stage+"  "+core.Clip(t.Reason, 200))
+		if t.Warning != "" {
+			kv("warning", core.Clip(t.Warning, 200))
+		}
 		kv("project", t.Project)
 		if t.Issue.Number > 0 {
 			kv("issue", fmt.Sprintf("#%d %s", t.Issue.Number, t.Issue.URL))

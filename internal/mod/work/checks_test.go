@@ -1033,3 +1033,40 @@ func TestSeatTriesFollowTheDiff(t *testing.T) {
 		t.Fatalf("tries after the diff moved: %+v", task.SeatTries)
 	}
 }
+
+// On the Hive's own PRs a red Windows job warns rather than blocks: with
+// everything else green it merges, the task, its log, the PR and an alert
+// saying so. Main's Windows is green, so it isn't excused as main's red.
+func TestSelfMergesPastRedWindows(t *testing.T) {
+	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	main, _ := m.C.Effects.Sync(p)
+	runs := []core.CheckRun{{Name: "test (ubuntu-latest)", State: core.CheckPass}, {Name: "test (windows-latest)", State: core.CheckFail, Detail: "failure"}, {Name: "sandboxed-e2e", State: core.CheckPass}}
+	f.SetChecks(p.Repo, task.SHA, runs...)
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass})
+	gateOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.Round != 0 || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	if !strings.Contains(task.Warning, "test (windows-latest)") || !logHas(task, "warning: the forge's checks test (windows-latest) fail") {
+		t.Fatalf("warning %q, log %v", task.Warning, task.Log)
+	}
+	if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); strings.Count(c, "Warning, not blocking") != 1 {
+		t.Fatalf("PR comments:\n%s", c)
+	}
+	if alerts(m, "check-warning") != 1 {
+		t.Fatalf("%d check-warning alerts, want 1", alerts(m, "check-warning"))
+	}
+}
+
+// Elsewhere a red Windows job blocks as any red check does.
+func TestRedWindowsBlocksOtherProjects(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Round != 1 || task.Warning != "" || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("stage %q, round %d, warning %q", task.Stage, task.Round, task.Warning)
+	}
+}
