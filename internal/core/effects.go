@@ -237,6 +237,9 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 		case "gate.judged":
 			var g GateResult
 			ev.Decode(&g)
+			if prev, ok := e.gateMains[g.Project+"@"+g.Main]; ok && prev.MainFails && g.MainFails {
+				g.Repeats = prev.Repeats + 1
+			}
 			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
 			switch {
 			case g.Outcome == GateCantRun && (g.Alone || len(g.Conflicts) > 0):

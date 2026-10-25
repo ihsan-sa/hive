@@ -152,10 +152,13 @@ type Task struct {
 	CantRuns    int `json:"cant_runs,omitempty"`
 	CantRunSaid int `json:"cant_run_said,omitempty"`
 	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
-	Gate    *core.GateResult `json:"gate,omitempty"`
-	Log     []Entry          `json:"log,omitempty"`
-	Created time.Time        `json:"created"`
-	Updated time.Time        `json:"updated"`
+	Gate *core.GateResult `json:"gate,omitempty"`
+	// GateAsked is the gate item last put to the person (askGateFix),
+	// task@head@main: one answer per head and main.
+	GateAsked string    `json:"gate_asked,omitempty"`
+	Log       []Entry   `json:"log,omitempty"`
+	Created   time.Time `json:"created"`
+	Updated   time.Time `json:"updated"`
 }
 
 // A Bank is a merged checkpoint: its pull request and the merge on main.
@@ -405,6 +408,9 @@ func (m *Module) save(t *Task, note string) {
 		}
 	}
 	m.C.J.MustAppend("task.saved", t)
+	if was == StageMerging && t.Stage != StageMerging {
+		m.closeGateAsks(*t)
+	}
 	if t.Stage != was && (t.Stage == StageMerged || t.Stage == StageDone) {
 		m.steps.Add(1)
 		go func(t Task) { defer m.steps.Done(); m.ended(t) }(*t) // a large tree mustn't hold the save

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -256,8 +257,8 @@ func TestSelfGateMainFailsAsksToLandTheGateFix(t *testing.T) {
 	}
 	gateOnce(t, m, task, p)
 	main, _ := m.C.Effects.Sync(p)
-	if g, ok := m.C.Effects.GateAtMain(p.Name, main); !ok || !g.MainFails || retryAfter(g).Sub(g.At) != gateRetryMain {
-		t.Fatalf("remembered %+v %v: want main's failure kept for gateRetryMain", g, ok)
+	if g, ok := m.C.Effects.GateAtMain(p.Name, main); !ok || !g.MainFails || retryAfter(g).Sub(g.At) != gateRetry {
+		t.Fatalf("remembered %+v %v: want main's failure kept for gateRetry the first time", g, ok)
 	}
 	var asks []core.Ask
 	for i := 0; i < 3; i++ {
@@ -285,6 +286,83 @@ func TestSelfGateMainFailsAsksToLandTheGateFix(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" || len(*jobs) != 1 {
 		t.Fatalf("stage %q, %d runs: want merged at the head the person landed, with no other run", task.Stage, len(*jobs))
+	}
+}
+
+// Main failing in the gate again at the same main holds longer each time,
+// up to gateRetryMain.
+func TestSelfGateMainFailsHoldGrows(t *testing.T) {
+	m, _, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
+	main, _ := m.C.Effects.Sync(p)
+	var holds []time.Duration
+	for i := 0; i < 5; i++ {
+		m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Head: "h", Main: main, Outcome: core.GateCantRun, MainFails: true, At: time.Now()})
+		g, _ := m.C.Effects.GateAtMain(p.Name, main)
+		holds = append(holds, retryAfter(g).Sub(g.At))
+	}
+	want := []time.Duration{gateRetry, 2 * gateRetry, 4 * gateRetry, gateRetryMain, gateRetryMain}
+	if !slices.Equal(holds, want) {
+		t.Fatalf("holds %v, want %v", holds, want)
+	}
+}
+
+// "keep waiting" stands: the person isn't asked again about that head at
+// that main. An item whose PR the lead closed leaves Waiting.
+func TestSelfGateFixAskOnceAndClosedWithItsPR(t *testing.T) {
+	m, task, p, _, _ := selfRig(t, map[string]string{"internal/gate/unit.go": "package gate\n"}, core.GateCantRun)
+	inner := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+		g := inner(ctx, j)
+		g.MainFails = true
+		return g
+	}
+	gateOnce(t, m, task, p)
+	gates := func() (open int) {
+		for _, a := range m.C.Person.Open() {
+			if a.Kind == "gate" {
+				open++
+			}
+		}
+		return open
+	}
+	var id string
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "gate" {
+			id = a.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("no gate item")
+	}
+	if _, err := m.C.Person.Answer(id, "keep waiting", ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		m.mu.Lock()
+		delete(m.later, task.ID)
+		m.mu.Unlock()
+		*task, _ = m.Get(task.ID)
+		mergeOnce(t, m, task, p)
+	}
+	if n := gates(); n != 0 {
+		t.Fatalf("%d gate items open after the person said keep waiting: want none", n)
+	}
+	// A new head or main is a new question (its ref differs; cleared here).
+	*task, _ = m.Get(task.ID)
+	task.GateAsked = ""
+	m.save(task, "")
+	m.mu.Lock()
+	delete(m.later, task.ID)
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	if n := gates(); n != 1 {
+		t.Fatalf("%d gate items: want one again", n)
+	}
+	if _, err := m.ClosePR(task.ID, "lead", "superseded", false); err != nil {
+		t.Fatal(err)
+	}
+	if n := gates(); n != 0 {
+		t.Fatalf("%d gate items open after the lead closed the PR: want none", n)
 	}
 }
 
