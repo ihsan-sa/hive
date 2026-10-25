@@ -22,12 +22,12 @@ import (
 // this machine is a local grant: a loopback ip:port the person named
 // (LocalGrant), dialled as that literal address and nothing else.
 type Egress struct {
-	ln       net.Listener
-	resolver *net.Resolver
-	allow    []string
-	local    []string // granted loopback ip:port, canonical
-	mu       sync.Mutex
-	refused  io.Writer // one line per refusal, "host:port why"; nil keeps none
+	ln      net.Listener
+	lookup  func(ctx context.Context, host string) ([]net.IPAddr, error) // net.DefaultResolver's; a test's own
+	allow   []string
+	local   []string // granted loopback ip:port, canonical
+	mu      sync.Mutex
+	refused io.Writer // one line per refusal, "host:port why"; nil keeps none
 }
 
 // Why a destination was refused, as recorded after it.
@@ -40,7 +40,7 @@ const (
 // lets every public host through; local is the granted loopback ip:port
 // (LocalGrant's); refused, if set, gets each refusal and its reason.
 func ServeEgress(ln net.Listener, allow, local []string, refused io.Writer) *Egress {
-	e := &Egress{ln: ln, resolver: net.DefaultResolver, allow: allow, local: local, refused: refused}
+	e := &Egress{ln: ln, lookup: net.DefaultResolver.LookupIPAddr, allow: allow, local: local, refused: refused}
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -149,7 +149,7 @@ func (e *Egress) dial(hostport string) (net.Conn, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	ips, err := e.resolver.LookupIPAddr(ctx, host)
+	ips, err := e.lookup(ctx, host)
 	if err != nil || len(ips) == 0 {
 		return nil, fmt.Errorf("cannot resolve %s", host)
 	}

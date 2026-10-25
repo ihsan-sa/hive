@@ -66,6 +66,10 @@ paths = [
   "internal/openagent/**",
   "internal/core/route.go",
 
+  # The route op and the person's yes that it waits for before a check seat
+  # (reviewer, security, warden, tribunal) moves to another model.
+  "internal/mod/models/**",
+
   # Self-update and install scripts.
   "install/**",
   "internal/mod/release/**",

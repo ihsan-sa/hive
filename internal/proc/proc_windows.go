@@ -63,3 +63,16 @@ func Kill(h Handle) error {
 // Terminate asks politely; on Windows there is no SIGTERM for console-less
 // processes, so it is the same as Kill.
 func Terminate(h Handle) error { return Kill(h) }
+
+// Group starts cmd in a process group of its own.
+func Group(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewProcessGroup | createNoWindow, HideWindow: true}
+}
+
+// KillGroup kills cmd and every process under it.
+func KillGroup(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+		cmd.Process.Kill()
+	}
+}

@@ -187,6 +187,10 @@ func TestOpenClaude(t *testing.T) {
 			t.Errorf("%T: %+v", h, evs)
 		}
 	}
+	// The open agent holds its own turn to the budget, at the model's price.
+	if a := strings.Join(Open{}.Args(Turn{SessionID: "s", Model: "m", MaxBudgetUSD: 2}), " "); !strings.Contains(a, "--max-budget-usd 2") {
+		t.Errorf("open args %s", a)
+	}
 	args := OpenClaude{}.Args(Turn{SessionID: "s", Model: "deepseek-chat", MaxBudgetUSD: 2, KeyCommand: "hive open-key /k", Endpoint: "https://api.deepseek.com/anthropic/"})
 	a := strings.Join(args, " ")
 	if strings.Contains(a, "--max-budget-usd") || !strings.Contains(a, "--model deepseek-chat") ||
