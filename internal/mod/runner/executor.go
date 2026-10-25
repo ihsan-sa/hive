@@ -25,6 +25,18 @@ const RoomWait = 5 * time.Second
 // launch of every one.
 const noRoomFor = 15 * time.Second
 
+// roomFor is how long a "room on <runner>" stands, so the work queue's
+// question and the launch that follows it ask once. The module still decides
+// at `turn`, and runs the turn here when its runner has filled since.
+const roomFor = 5 * time.Second
+
+// roomAnswer is an executor's last answer to `room`: the runner it named
+// ("" for no room) and until when it stands.
+type roomAnswer struct {
+	where string
+	until time.Time
+}
+
 // Executor returns a running executor module that has room for a turn now,
 // as a sandbox that hands the turn's spec to it, and the runner it named.
 // A module serves the hook `executor` by answering `<exec> room` (exit 0
@@ -35,22 +47,26 @@ func (r *Runner) Executor() (sandbox.Sandbox, string) {
 		if len(m.Exec) == 0 || !slices.Contains(m.Hooks, "executor") || r.Status(name) != "running" {
 			continue
 		}
-		r.mu.Lock()
-		skip := time.Now().Before(r.noRoom[name])
-		r.mu.Unlock()
-		if skip {
-			continue
-		}
 		argv, env := Argv(m), Env(r.C.WS, name)
-		if where, ok := room(argv, env, m.Dir); ok {
-			return &sandbox.Delegate{Module: name, Where: where, Argv: argv, Env: env, Dir: m.Dir}, where
-		}
 		r.mu.Lock()
-		if r.noRoom == nil {
-			r.noRoom = map[string]time.Time{}
-		}
-		r.noRoom[name] = time.Now().Add(noRoomFor)
+		a := r.rooms[name]
 		r.mu.Unlock()
+		if time.Now().After(a.until) {
+			a.where, _ = room(argv, env, m.Dir)
+			a.until = time.Now().Add(noRoomFor)
+			if a.where != "" {
+				a.until = time.Now().Add(roomFor)
+			}
+			r.mu.Lock()
+			if r.rooms == nil {
+				r.rooms = map[string]roomAnswer{}
+			}
+			r.rooms[name] = a
+			r.mu.Unlock()
+		}
+		if a.where != "" {
+			return &sandbox.Delegate{Module: name, Where: a.where, Argv: argv, Env: env, Dir: m.Dir}, a.where
+		}
 	}
 	return nil, ""
 }
@@ -101,23 +117,35 @@ func Env(ws core.Workspace, name string) []string {
 // put there runs as is; one from git only at the commit its review approved.
 // It reads the recorded review and starts none (the daemon does that).
 func Cleared(m modules.Module) string {
-	if (m.Source.Source == "" || m.Source.Source == "builtin") && !core.Exists(filepath.Join(m.Dir, ".git")) {
-		return ""
+	commit, decided, why := recorded(m)
+	if !decided {
+		return "its code at " + commit[:min(12, len(commit))] + " hasn't been read yet (the running Hive reads it)"
 	}
-	commit := m.Source.Commit
-	if commit == "" {
+	return why
+}
+
+// recorded is the commit a module runs at ("local" for one the person put
+// there, with no .git) and whether that commit is decided: with why ""
+// when it may run, or why not (its review declined it, or its commit is
+// unknown). A git module whose commit no review has read is undecided.
+func recorded(m modules.Module) (commit string, decided bool, why string) {
+	if (m.Source.Source == "" || m.Source.Source == "builtin") && !core.Exists(filepath.Join(m.Dir, ".git")) {
+		return "local", true, ""
+	}
+	commit = m.Source.Commit
+	if commit == "" { // installed before the commit was recorded, or never recorded
 		var err error
 		if commit, err = core.Git(m.Dir, "rev-parse", "HEAD"); err != nil {
-			return "its commit is unknown: " + err.Error()
+			return "", true, "its commit is unknown: " + err.Error()
 		}
 	}
 	switch v := m.Source.Review; {
 	case v == nil || v.Commit != commit:
-		return "its code at " + commit[:min(12, len(commit))] + " hasn't been read yet (the running Hive reads it)"
+		return commit, false, ""
 	case v.Vote != "approve":
-		return "declined by its review: " + v.Reason
+		return commit, true, "declined by its review: " + v.Reason
 	}
-	return ""
+	return commit, true, ""
 }
 
 // ErrNoCommand means no installed module offers a command by that name.

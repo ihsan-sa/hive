@@ -82,6 +82,10 @@ func TestExecutorHandsTheSpecToTheModule(t *testing.T) {
 	}
 
 	os.WriteFile(filepath.Join(home, "full"), nil, 0o644)
+	if ex, _ := r.Executor(); ex == nil {
+		t.Fatal("a module's room answer wasn't kept a moment, for the launch after the queue's question")
+	}
+	r.rooms = nil
 	if ex, _ := r.Executor(); ex != nil {
 		t.Fatal("an executor with no room was handed a turn")
 	}
@@ -89,7 +93,7 @@ func TestExecutorHandsTheSpecToTheModule(t *testing.T) {
 	if ex, _ := r.Executor(); ex != nil {
 		t.Error("a module's no-room answer wasn't kept a while")
 	}
-	r.noRoom = nil
+	r.rooms = nil
 	if ex, _ := r.Executor(); ex == nil {
 		t.Error("an executor with room again was passed over")
 	}

@@ -67,21 +67,9 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	}
 	m.mu.Unlock()
 	inLine(line)
-	machine := core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax)
-	if machine == "" {
-		machine = core.Loaded(cfg.LoadMax)
-	}
-	// One task a pass goes past a strained machine while an executor module
-	// has room to run its turns elsewhere.
-	asked := false
-	elsewhere := func() bool {
-		if asked {
-			return false
-		}
-		asked = true
-		return m.C.Runs.Elsewhere()
-	}
+	machine := machineHold(core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax), core.Loaded(cfg.LoadMax), m.C.Runs.Elsewhere)
 	for _, t := range line {
+		held := "" // asked only of a task nothing else holds back
 		switch o, area := m.overlap(t, ahead); {
 		case t.Held:
 			wait[t.ID] = "held by the lead"
@@ -94,8 +82,8 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s: both touch %s", o.Label(), o.ID, verb, area)
 		case cfg.MaxWorkers > 0 && working >= cfg.MaxWorkers:
 			wait[t.ID] = fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
-		case machine != "" && !elsewhere():
-			wait[t.ID] = "waiting: " + machine
+		case func() bool { held = machine(); return held != "" }():
+			wait[t.ID] = "waiting: " + held
 		default:
 			start[t.ID] = true
 			working++
@@ -103,6 +91,26 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		ahead = append(ahead, t)
 	}
 	return start, wait
+}
+
+// machineHold says, for each task in line in turn, why the machine holds it
+// back, or "". A machine over load_max alone (loaded) holds every one, since
+// launch would run it here; one task a pass goes past a strained machine
+// while an executor module has room, since launch hands a strained turn to it.
+func machineHold(strained, loaded string, elsewhere func() bool) func() string {
+	asked := false
+	return func() string {
+		if strained == "" {
+			return loaded
+		}
+		if !asked {
+			asked = true
+			if elsewhere() {
+				return ""
+			}
+		}
+		return strained
+	}
 }
 
 // overlap returns the first task in others on t's project whose brief names
