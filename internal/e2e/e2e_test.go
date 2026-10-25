@@ -139,6 +139,15 @@ func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string)
 	// Before the launch, so a daemon that is slow to answer is ended too.
 	t.Cleanup(func() {
 		h.quiesce()
+		// A clean shutdown first, so module programs (the kb's dream, run
+		// with go run) are stopped and waited for before the folder goes.
+		if h.c != nil && h.ended != nil {
+			h.c.Do("POST", "/api/shutdown", nil, nil)
+			select {
+			case <-h.ended:
+			case <-time.After(20 * time.Second):
+			}
+		}
 		h.kill()
 		for _, end := range h.jobs {
 			end()
