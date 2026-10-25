@@ -831,7 +831,7 @@ func (Linux) Run(s Spec, timeout time.Duration) (int, error) {
 	if err != nil {
 		return -1, err
 	}
-	return runSync([]string{self, "sandbox-exec", "--spec", specPath}, os.Environ(), "/", "", "", timeout)
+	return runSync(scoped(s, []string{self, "sandbox-exec", "--spec", specPath}), os.Environ(), "/", "", "", timeout)
 }
 
 // lowerPriority puts the calling thread `by` under the daemon's level,

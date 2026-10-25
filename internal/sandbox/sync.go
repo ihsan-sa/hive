@@ -67,6 +67,13 @@ func runSync(argv, env []string, dir, stdin, stdout string, timeout time.Duratio
 	return 0, nil
 }
 
+func scoped(s Spec, argv []string) []string {
+	if s.Scope {
+		return Scoped(argv)
+	}
+	return argv
+}
+
 func openInput(path string) (*os.File, error) {
 	if path == "" {
 		return os.Open(os.DevNull)
@@ -91,5 +98,5 @@ func (Bare) Run(s Spec, timeout time.Duration) (int, error) {
 	if owner != "" {
 		env = append(env, OwnerEnv+"="+owner)
 	}
-	return runSync(Niced(s.Argv, s.Nice), env, s.Cwd, s.Stdin, s.Stdout, timeout)
+	return runSync(scoped(s, Niced(s.Argv, s.Nice)), env, s.Cwd, s.Stdin, s.Stdout, timeout)
 }

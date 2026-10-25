@@ -67,8 +67,9 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 		org, note := orgArgs(j)
 		args = append(args, org...)
 		// The gate and all it starts (builds, child Hives, the e2e suite) run
-		// under every lead's priority, as a check does.
-		argv := sandbox.Niced(append([]string{exe}, args...), core.CheckNice)
+		// under every lead's priority and the checks' memory ceiling, as a
+		// check does.
+		argv := sandbox.Scoped(sandbox.Niced(append([]string{exe}, args...), core.CheckNice))
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = j.Out
 		cmd.WaitDelay = time.Minute

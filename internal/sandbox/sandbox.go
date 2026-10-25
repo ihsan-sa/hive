@@ -61,6 +61,9 @@ type Spec struct {
 	// Nice is the Unix nice value the command runs at, 0 the daemon's own;
 	// a process can only go higher (lower priority), so it is never raised.
 	Nice int `json:"nice,omitempty"`
+	// Scope runs a synchronous command under the checks' memory, CPU and IO
+	// ceiling, where systemd can give it one (Scoped).
+	Scope bool `json:"-"`
 }
 
 // Proc identifies a started, detached command.
