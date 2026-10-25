@@ -98,11 +98,11 @@ func (p Pick) Same(q Pick) bool {
 // CheckRoles are the seats the Hive's checks sit in. The general fallback
 // list never moves them: a weaker model needs the checks more, so they go on
 // another model only where the person routes them themselves.
-var CheckRoles = []string{"reviewer", "security", "warden", "tribunal"}
+var CheckRoles = []string{"reviewer", "security", "warden", "tribunal", JudgeRole}
 
 // RouteRoles are the roles a route can name; "fallback" is the list every
 // other role moves along at a limit.
-var RouteRoles = []string{"lead", "worker", "reviewer", "security", "warden", "tribunal", "sweep", "fallback"}
+var RouteRoles = []string{"lead", "worker", "reviewer", "security", "warden", "tribunal", JudgeRole, "sweep", "fallback"}
 
 // Pick reads a route entry: a model named in Models (the open harness), a
 // "harness:model" pair, or a model on the workspace's harness.
