@@ -30,6 +30,34 @@ func TestLeadModel(t *testing.T) {
 	}
 }
 
+// A config from before the pace saved the then defaults as max_workers and
+// max_checks; reading it clears them, so the pace can grow. Other values, and
+// any in a config that has the ceilings marker, are the person's.
+func TestOldDefaultCeilingsClear(t *testing.T) {
+	old := DefaultMaxChecks()
+	for _, c := range []struct {
+		name            string
+		raw             string
+		workers, checks int
+	}{
+		{"fresh install", "", 0, 0},
+		{"old defaults", fmt.Sprintf(`{"max_workers": 4, "max_checks": %d}`, old), 0, 0},
+		{"chosen before the pace", fmt.Sprintf(`{"max_workers": 8, "max_checks": %d}`, old+1), 8, old + 1},
+		{"chosen since", fmt.Sprintf(`{"max_workers": 4, "max_checks": %d, "ceilings": true}`, old), 4, old},
+	} {
+		ws := Workspace{Root: t.TempDir()}
+		if c.raw != "" {
+			if err := WriteFileAtomic(ws.ConfigPath(), []byte(c.raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cfg := ws.LoadConfig()
+		if cfg.MaxWorkers != c.workers || cfg.MaxChecks != c.checks || !cfg.Ceilings {
+			t.Errorf("%s: max_workers %d max_checks %d ceilings %v, want %d %d true", c.name, cfg.MaxWorkers, cfg.MaxChecks, cfg.Ceilings, c.workers, c.checks)
+		}
+	}
+}
+
 // A config saved before public_owners keeps the default owner, so a public
 // repository there isn't quietly turned into an ask; one that lists its own,
 // even none, keeps that.

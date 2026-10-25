@@ -21,6 +21,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 )
@@ -31,6 +32,9 @@ type Module struct {
 	// Restart is called after a new binary is in place (the daemon re-execs).
 	Restart func()
 	locks   sync.Map // project -> *sync.Mutex held while a release is decided
+	// refused is each project's last "sha: why" that stopped a release
+	// before main's checks were read, raised once so a retry doesn't repeat it.
+	refused sync.Map
 	// PauseMerges stops new merges and waits up to the given time for the
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
@@ -715,15 +719,24 @@ func (m *Module) afterKept(project, sha string) {
 	alert := func(text string) {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": project, "text": text})
 	}
+	// A refusal here comes again on each retry of a commit that waits on
+	// main's checks (retryWaiting), so each is raised once per commit.
+	once := func(why string) {
+		text := "no release at " + core.Short(sha) + ": " + why
+		if last, _ := m.refused.Swap(project, sha+": "+why); last != sha+": "+why {
+			alert(text)
+		}
+	}
 	if why := m.C.Effects.Stewardship(p, sha); why != "" {
-		alert("no release at " + core.Short(sha) + ": " + why)
+		once(why)
 		return
 	}
 	list, refuse := m.merges(project, sha)
 	if refuse != "" {
-		alert("no release at " + core.Short(sha) + ": " + refuse)
+		once(refuse)
 		return
 	}
+	m.refused.Delete(project)
 	var manifest strings.Builder
 	var root, unread, rootRead []string
 	for _, mg := range list {
@@ -851,13 +864,15 @@ func (m *Module) afterKept(project, sha string) {
 
 // mainGreen says whether main's own checks (CI) passed at sha, so the Hive
 // offers or cuts a release only at a commit its CI found green. A failure is
-// raised once and the cut waits for the next kept merge; one still running,
-// that can't start or can't be read is journaled as release.ci_waiting once,
-// and Tick tries the newest such commit again (retryWaiting).
+// raised once; one still running, that can't start or can't be read is
+// journaled as release.ci_waiting once. Either way Tick tries the newest such
+// commit again (retryWaiting), so a re-run that passes releases it, as does
+// the next kept merge whose checks pass. A release needs the whole ci
+// workflow green: core.Advisory's checks, set aside for merges, count here.
 func (m *Module) mainGreen(p core.Project, sha string) bool {
 	state, which := core.CheckPending, ""
 	if runs, err := m.C.Effects.Forge.Checks(p.Repo, sha); err != nil {
-		which = "can't read its checks (" + core.Clip(err.Error(), 200) + ")"
+		which = "can't read its checks (" + core.Clip(report.Scrub(err.Error(), ""), 200) + ")"
 	} else {
 		var bad []core.CheckRun
 		state, bad = core.ChecksState(runs, m.C.Effects.RequiredChecks(p, sha))
@@ -874,7 +889,7 @@ func (m *Module) mainGreen(p core.Project, sha string) bool {
 		if last.SHA != sha || last.Kind != "release.ci_failed" {
 			m.C.J.MustAppend("release.ci_failed", map[string]string{"project": p.Name, "sha": sha, "checks": which})
 			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": p.Name,
-				"text": "no release at " + core.Short(sha) + ": its checks failed on main (" + which + "); the next kept merge whose checks pass is released"})
+				"text": "no release at " + core.Short(sha) + ": its checks failed on main (" + which + "); it is released if a re-run of them passes, or the next kept merge whose checks pass is"})
 		}
 	default:
 		if last.SHA != sha || last.Kind != "release.ci_waiting" {
@@ -911,8 +926,8 @@ func (m *Module) ciState(project string) (last ciWait) {
 }
 
 // retryWaiting tries again the newest kept merge of each self project whose
-// release waits on main's checks; one still waiting after lateAfter is raised
-// once.
+// release waits on main's checks or found them failed (a re-run may pass);
+// one still waiting after lateAfter is raised once.
 func (m *Module) retryWaiting() {
 	if m.said == nil {
 		m.said = map[string]bool{}
@@ -922,7 +937,7 @@ func (m *Module) retryWaiting() {
 			continue
 		}
 		w := m.ciState(p.Name)
-		if w.Kind != "release.ci_waiting" {
+		if w.Kind != "release.ci_waiting" && w.Kind != "release.ci_failed" {
 			continue
 		}
 		func() {

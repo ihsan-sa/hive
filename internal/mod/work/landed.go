@@ -136,10 +136,16 @@ func (m *Module) pastCheckpoint(t *Task, p core.Project) string {
 }
 
 // holds reports whether the commit at would gain nothing from merging sha in:
-// sha's change is already there, squashed or not.
+// sha's change is already there, squashed or not, or sha changes nothing
+// since its merge base with at (an empty own diff).
 func holds(dir, at, sha string) bool {
 	if _, err := core.Git(dir, "merge-base", "--is-ancestor", sha, at); err == nil {
 		return true
+	}
+	if base, err := core.Git(dir, "merge-base", at, sha); err == nil {
+		if _, err := core.Git(dir, "diff", "--quiet", strings.TrimSpace(base), sha); err == nil {
+			return true
+		}
 	}
 	tree, err := core.Git(dir, "merge-tree", "--write-tree", at, sha)
 	if err != nil {
