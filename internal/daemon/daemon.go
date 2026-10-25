@@ -1031,6 +1031,7 @@ func (s *server) state() api.State {
 		if b, ok := a.Improve.Best(p.Name); ok {
 			pv.Best = &b
 		}
+		pv.Flakes = a.Improve.Quarantine(p.Name)
 		st.Projects = append(st.Projects, pv)
 	}
 	recent := 0

@@ -119,6 +119,10 @@ type Task struct {
 	// head (rerun-checks), capped at rerunsPerHead; RerunAt is the newest.
 	Reruns  map[string]int `json:"reruns,omitempty"`
 	RerunAt time.Time      `json:"rerun_at,omitempty"`
+	// Retried is the red forge checks on a head re-run before going back to
+	// the worker: a pass on the re-run is a flake, recorded once (Said), and
+	// a red read on a URL it lists is the attempt before.
+	Retried *Retried `json:"retried,omitempty"`
 	// ForgeLog is the newest red forge check's findings with its log, under
 	// .hive (a file in its worker's run), so a later round or the lead reads
 	// it without asking the forge again.
@@ -156,6 +160,16 @@ type Task struct {
 	Log     []Entry          `json:"log,omitempty"`
 	Created time.Time        `json:"created"`
 	Updated time.Time        `json:"updated"`
+}
+
+// Retried is a head's red forge checks, run again once before the worker
+// hears of them.
+type Retried struct {
+	SHA    string   `json:"sha"`
+	Checks []string `json:"checks"`
+	URLs   []string `json:"urls,omitempty"`
+	Tests  []string `json:"tests,omitempty"` // the failing tests their logs named
+	Said   bool     `json:"said,omitempty"`
 }
 
 // A Bank is a merged checkpoint: its pull request and the merge on main.
@@ -283,6 +297,9 @@ type Module struct {
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
 	mainRed map[string]bool
+	// sighted holds the URLs of the failed forge checks already journaled
+	// as sightings of their failing tests (sightings).
+	sighted map[string]bool
 	// cantRunOpen holds, per project, the kind of check (test or score) its open
 	// "can't run" alert is about: raised once, cleared when that check runs.
 	cantRunOpen map[string]string
@@ -332,7 +349,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, baseTrees: map[string]map[string]string{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, baseTrees: map[string]map[string]string{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -2039,7 +2056,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return nil
 	}
 	defer m.leaveMerge()
-	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Gain: t.Gain()})
+	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Gain: t.Gain(), Task: t.ID})
 	if errors.Is(err, core.ErrDraft) { // made a draft again between the ready and the merge
 		return m.waitDraft(t, pr)
 	}
@@ -2259,20 +2276,34 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	if err != nil {
 		return true, err
 	}
+	tests := m.C.Effects.FailingTests(p.Repo)
+	keys := m.keysOf(p.Repo)
+	m.sightings(t, p, runs, keys, "", nil) // a red that only warns is evidence too
+	raw := runs
 	runs, req, warned := core.Advisory(p, runs, m.C.Effects.RequiredChecks(p, main), m.C.Effects.AdvisoryChecks(p, main))
 	st, which := core.ChecksState(runs, req)
-	if (st == core.CheckFail || st == core.CheckCantStart) && rerunning(t) {
+	if (st == core.CheckFail || st == core.CheckCantStart) && rerunning(t) && t.Retried.before(which) {
 		m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+core.CheckNames(which)+")")
 		return true, nil
 	}
-	var shared, byName []string
+	var shared, byName, excused []string
 	var mainRuns []core.CheckRun
 	var at map[string]string
 	if st == core.CheckFail {
 		if mainRuns, at, err = m.C.Effects.MainAnswer(p, main, which); err != nil {
 			return true, err
 		}
-		st, which, shared, byName = core.ChecksAgainstMain(runs, mainRuns, req, m.C.Effects.FailingTests(p.Repo))
+		m.sightings(t, p, mainRuns, keys, main, at)
+		// Known flakes count against no head, as Effects.Merge rules too;
+		// main's runs show which skipped steps the job always skips.
+		if q := m.C.Effects.Quarantine(p.Name, t.ID); len(q) > 0 {
+			ch, err := m.C.Effects.Classify(p, main, t.SHA)
+			if err != nil {
+				return true, err
+			}
+			runs, excused = m.C.Effects.Excused(p, main, t.ID, ch.Files, runs, mainRuns)
+		}
+		st, which, shared, byName = core.ChecksAgainstMain(runs, mainRuns, req, tests)
 	}
 	var unminded []string
 	if st == core.CheckFail && m.textChange(t, p, main) {
@@ -2286,11 +2317,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			if n, err := m.C.Effects.Forge.RerunFailed(p.Repo, t.SHA); err != nil {
 				return true, err
 			} else if n > 0 {
-				if t.Reruns == nil {
-					t.Reruns = map[string]int{}
-				}
-				t.Reruns[t.SHA]++
-				t.RerunAt = time.Now().UTC()
+				m.retried(t, un, keys)
 				m.save(t, "re-ran the forge's checks "+core.CheckNames(un)+" on "+core.Short(t.SHA)+", red with no finished run on main to tell whether it's the change's; a second red counts against it")
 				m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+core.CheckNames(un)+"), red with no answer on main")
 				return true, nil
@@ -2359,11 +2386,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			if n, err := m.C.Effects.Forge.RerunFailed(p.Repo, t.SHA); err != nil {
 				return true, err
 			} else if n > 0 {
-				if t.Reruns == nil {
-					t.Reruns = map[string]int{}
-				}
-				t.Reruns[t.SHA]++
-				t.RerunAt = time.Now().UTC()
+				m.retried(t, which, nil)
 				m.save(t, "re-ran the forge's checks "+names+" on "+core.Short(t.SHA)+", cancelled before they finished")
 				m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+names+"), cancelled before they finished")
 				return true, nil
@@ -2376,6 +2399,18 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		m.hold(t, p, why)
 		return true, nil
 	case core.CheckFail:
+		// Run once more before the worker hears of it, so a flake costs
+		// no round: a pass on the re-run merges and is recorded as one.
+		if t.Reruns[t.SHA] == 0 {
+			if n, err := m.C.Effects.Forge.RerunFailed(p.Repo, t.SHA); err != nil {
+				return true, err
+			} else if n > 0 {
+				m.retried(t, which, keys)
+				m.save(t, "re-ran the forge's failed checks "+names+" on "+core.Short(t.SHA)+" once before sending them back, in case they are flakes")
+				m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+names+"), run again once before a red goes back")
+				return true, nil
+			}
+		}
 		t.Reason = ""
 		hint := ""
 		if t.Reruns[t.SHA] < rerunsPerHead {
@@ -2384,6 +2419,11 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		findings := forgeFailed + core.Short(t.SHA) + ": " + checkDetail(which) + onMain
 		detail := m.forgeFailures(t, p, main, which, mainRuns, at)
 		return true, m.sendBackWith(t, p, findings+hint, detail)
+	}
+	m.flaked(t, p, raw)
+	if note := "known flakes: the forge's checks " + strings.Join(excused, ", ") + " fail on " + core.Short(t.SHA) + " only in quarantined tests, so they don't count against it"; len(excused) > 0 && !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
+		m.save(t, note)
+		m.comment(p.Repo, t.PR.Number, "Merging past known flakes: "+strings.Join(excused, ", ")+" fail only in tests the Hive has quarantined (each has a task to fix it).")
 	}
 	if note := "text only: the forge's checks " + strings.Join(unminded, ", ") + " fail on " + core.Short(t.SHA) + ", which changes only docs or prompts and can't break them, so it merges"; len(unminded) > 0 && !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
 		m.save(t, note)
@@ -2407,6 +2447,118 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		m.comment(p.Repo, t.PR.Number, say)
 	}
 	return false, nil
+}
+
+// sightings journals, once per failed check, the tests its log names as
+// failing, with their packages (keysOf), on t's head or, with main set, on main (at[name] the older main
+// commit the run came from): the improve module quarantines a test seen
+// failing on main or on unrelated branches.
+func (m *Module) sightings(t *Task, p core.Project, runs []core.CheckRun, tests core.TestsOf, main string, at map[string]string) {
+	if tests == nil {
+		return
+	}
+	for _, r := range runs {
+		if r.State != core.CheckFail || r.URL == "" {
+			continue
+		}
+		m.mu.Lock()
+		seen := m.sighted[r.URL]
+		if len(m.sighted) > 2000 {
+			m.sighted = map[string]bool{}
+		}
+		m.sighted[r.URL] = true
+		m.mu.Unlock()
+		if seen {
+			continue
+		}
+		names, ok := tests(r)
+		if !ok {
+			continue
+		}
+		ev := map[string]any{"project": p.Name, "check": r.Name, "url": r.URL, "tests": names}
+		if main != "" {
+			ev["main"], ev["sha"] = true, cmp.Or(at[r.Name], main)
+		} else {
+			ev["task"], ev["branch"], ev["sha"] = t.ID, t.Branch, t.SHA
+		}
+		m.C.J.MustAppend("forge.tests_failed", ev)
+	}
+}
+
+// keysOf names a failed check's tests with their packages (pkg::TestX), as
+// the quarantine keys them; ok is false when the log can't place them all.
+func (m *Module) keysOf(repo string) core.TestsOf {
+	if m.C.Effects.FailingTests(repo) == nil {
+		return nil
+	}
+	return func(r core.CheckRun) ([]string, bool) {
+		f, ok := m.C.Effects.CheckFailure(repo, r)
+		return f.Keys, ok && len(f.Keys) > 0
+	}
+}
+
+// retried notes on t the red checks re-run on its head before going back.
+func (m *Module) retried(t *Task, which []core.CheckRun, tests core.TestsOf) {
+	if t.Reruns == nil {
+		t.Reruns = map[string]int{}
+	}
+	t.Reruns[t.SHA]++
+	t.RerunAt = time.Now().UTC()
+	// A wait on main belongs to one run of the checks: the re-run's red
+	// starts its own, not one already spent.
+	t.MainWait, t.MainWaitOn = time.Time{}, ""
+	rt := &Retried{SHA: t.SHA}
+	for _, r := range which {
+		if r.State != core.CheckFail && r.State != core.CheckCantStart {
+			continue
+		}
+		rt.Checks = append(rt.Checks, r.Name)
+		if r.URL != "" {
+			rt.URLs = append(rt.URLs, r.URL)
+		}
+		if tests != nil {
+			if names, ok := tests(r); ok {
+				for _, n := range names {
+					if !slices.Contains(rt.Tests, n) {
+						rt.Tests = append(rt.Tests, n)
+					}
+				}
+			}
+		}
+	}
+	t.Retried = rt
+}
+
+// before reports whether a red read may be the attempt before a re-run: a
+// red check on a URL the re-run left behind, or one with no URL to tell by.
+func (rt *Retried) before(which []core.CheckRun) bool {
+	if rt == nil || len(rt.URLs) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(which, func(r core.CheckRun) bool { return r.URL == "" || slices.Contains(rt.URLs, r.URL) })
+}
+
+// flaked records, once, a head whose re-run checks now pass: they were
+// flakes, the change goes on, and the improve module hears of the tests.
+func (m *Module) flaked(t *Task, p core.Project, runs []core.CheckRun) {
+	rt := t.Retried
+	if rt == nil || rt.SHA != t.SHA || rt.Said || len(rt.Checks) == 0 {
+		return
+	}
+	for _, name := range rt.Checks {
+		if !slices.ContainsFunc(runs, func(r core.CheckRun) bool { return r.Name == name && r.State == core.CheckPass }) {
+			return
+		}
+	}
+	said := *rt // a Task is copied by value: never change what a copy shares
+	said.Said = true
+	t.Retried = &said
+	m.C.J.MustAppend("forge.flaked", map[string]any{"project": p.Name, "task": t.ID, "branch": t.Branch, "sha": t.SHA, "checks": rt.Checks, "tests": rt.Tests})
+	what := strings.Join(rt.Checks, ", ")
+	if len(rt.Tests) > 0 {
+		what += " (" + strings.Join(rt.Tests, ", ") + ")"
+	}
+	m.save(t, "a flake: the forge's checks "+what+" failed on "+core.Short(t.SHA)+" and passed when run again, so it goes on")
 }
 
 // textChange says t's change touches only prose (core.ProseOnly), whose

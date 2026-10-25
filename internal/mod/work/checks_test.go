@@ -207,6 +207,7 @@ func TestMergeForgeCheckSameFailuresAsMain(t *testing.T) {
 func TestMergeForgeCheckNewFailureWhileMainRed(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	rerunSpent(task)
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckFail}, core.CheckRun{Name: "test (macos-latest)", State: core.CheckFail, Detail: "failure"})
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckFail}, core.CheckRun{Name: "test (macos-latest)", State: core.CheckPass})
@@ -888,6 +889,7 @@ func TestMergeNoWorseThanMainSaidOnce(t *testing.T) {
 func TestMergeForgeCheckNewTestInSharedRed(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	rerunSpent(task)
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, URL: "head/win"})
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, URL: "main/win"})
@@ -965,6 +967,7 @@ func queued(m *Module, run string) (text string) {
 func TestMergeForgeCheckSendsItsLog(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	rerunSpent(task)
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/head/win"})
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass, URL: "https://ci/main/win"})
@@ -1013,6 +1016,7 @@ func TestMergeForgeCheckSendsItsLog(t *testing.T) {
 func TestMergeForgeCheckBundlesMainItRanOn(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	rerunSpent(task)
 	pushMain(t, f, map[string]string{"new_test.txt": "only on main"})
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail})
@@ -1104,6 +1108,7 @@ func TestMergeForgeCheckUsesLastFinishedMainRun(t *testing.T) {
 func TestMergeForgeCheckSkipsCancelledMainRuns(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	rerunSpent(task)
 	base, _ := m.C.Effects.Sync(p)
 	pushMain(t, f, map[string]string{"a.txt": "1"})
 	running, _ := m.C.Effects.Sync(p)
@@ -1214,6 +1219,7 @@ func TestMergeForgeCheckWaitsOnCancelledMain(t *testing.T) {
 func TestMergeForgeCheckLogInlineWhenUnsaved(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	rerunSpent(task)
 	main, _ := m.C.Effects.Sync(p)
 	task.ForgeLog = "runs/old/ro/forge-failures.md"
 	if err := os.RemoveAll(m.C.WS.RunRO(task.Worker)); err != nil {
@@ -1317,6 +1323,7 @@ var advisoryList = map[string]string{core.SecurityList: "paths = []\nadvisory_ch
 // name the job advisory: only a listed check warns.
 func TestSelfRedWindowsBlocksUnlisted(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	rerunSpent(task)
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "lint-windows-paths", State: core.CheckFail})
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "lint-windows-paths", State: core.CheckPass})
@@ -1346,6 +1353,7 @@ func TestSelfRefusedWarnedHolds(t *testing.T) {
 func TestRedWindowsBlocksOtherProjects(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	rerunSpent(task)
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail})
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass})

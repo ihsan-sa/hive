@@ -9,10 +9,11 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
-// A worker sent back for a flaky forge check re-runs it: the round comes
-// back, the merge waits for the new attempt (an old failure still listed
-// doesn't send it back again) and merges once it passes. Re-runs are capped
-// per head, and there must be a failure to re-run.
+// A red forge check is run again once before it goes back; one red on the
+// re-run too goes back, and the worker can re-run it once more: the round
+// comes back, the merge waits for the new attempt (an old failure still
+// listed doesn't send it back again) and merges once it passes, recorded as a
+// flake. Re-runs are capped per head, and there must be a failure to re-run.
 func TestRerunFailedForgeChecks(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
@@ -20,10 +21,19 @@ func TestRerunFailedForgeChecks(t *testing.T) {
 	if _, err := m.RerunChecks(task.ID, "w1"); err == nil || !strings.Contains(err.Error(), "nothing to re-run") {
 		t.Fatal("re-ran checks on a task with no failure")
 	}
-	flaky := core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, Detail: "failure"}
+	flaky := core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/attempt1"}
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass}, flaky)
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass}) // an answer, so no re-run of the Hive's own
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 1 || !strings.Contains(task.Reason, "run again once before a red goes back") {
+		t.Fatalf("first red: stage %q, round %d, %d re-runs, reason %q", task.Stage, task.Round, f.Reruns(p.Repo, task.SHA), task.Reason)
+	}
+	// The re-run's own red (a new attempt, its own URL) goes back at once.
+	again := flaky
+	again.URL = "https://ci/attempt2"
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass}, again)
+	m.later = map[string]time.Time{}
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "rerun-checks") {
 		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
@@ -39,11 +49,11 @@ func TestRerunFailedForgeChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.Reruns(p.Repo, task.SHA) != 1 {
-		t.Fatalf("%d re-runs on the forge, want 1 (%v)", f.Reruns(p.Repo, task.SHA), out)
+	if f.Reruns(p.Repo, task.SHA) != 2 {
+		t.Fatalf("%d re-runs on the forge, want 2 (%v)", f.Reruns(p.Repo, task.SHA), out)
 	}
 	*task, _ = m.Get(task.ID)
-	if task.Round != 0 || task.Reruns[task.SHA] != 1 || !logHas(task, "round they cost is given back") {
+	if task.Round != 0 || task.Reruns[task.SHA] != 2 || !logHas(task, "round they cost is given back") {
 		t.Fatalf("round %d, reruns %v, log %v", task.Round, task.Reruns, task.Log)
 	}
 	// A wait on main spent on the first run isn't carried into the re-run's.
@@ -65,19 +75,17 @@ func TestRerunFailedForgeChecks(t *testing.T) {
 		t.Fatal("finishing on a re-run head runs its tests again")
 	}
 	toMerging(t, m, task, p)
-	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass}, flaky)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass}, again)
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerging || !strings.Contains(task.Reason, "re-run") || prState(t, f, task.PR.Number) != "OPEN" {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
 
-	// The cap: a second and third re-run go, a fourth doesn't.
-	for i := 0; i < 2; i++ {
-		if _, err := m.RerunChecks(task.ID, "lead"); err != nil {
-			t.Fatal(err)
-		}
-		f.SetChecks(p.Repo, task.SHA, flaky)
+	// The cap: a third re-run goes, a fourth doesn't.
+	if _, err := m.RerunChecks(task.ID, "lead"); err != nil {
+		t.Fatal(err)
 	}
+	f.SetChecks(p.Repo, task.SHA, again)
 	if _, err := m.RerunChecks(task.ID, "lead"); err == nil || !strings.Contains(err.Error(), "most for one head") {
 		t.Fatalf("fourth re-run on one head: %v", err)
 	}
@@ -90,6 +98,9 @@ func TestRerunFailedForgeChecks(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	if !logHas(task, "a flake: the forge's checks test (windows-latest) failed on") {
+		t.Fatalf("no flake recorded: %v", task.Log)
 	}
 }
 
@@ -167,4 +178,184 @@ func TestRerunChecksWalled(t *testing.T) {
 	if f.Reruns(p.Repo, task.SHA) != 0 {
 		t.Fatalf("%d re-runs on the forge across a wall", f.Reruns(p.Repo, task.SHA))
 	}
+}
+
+// e2eKey is a test's quarantine key in the module flakeRig seeds.
+const e2eKey = "example.com/p/e2e::"
+
+// flakeRig is gateRig on a Go module (example.com/p), with quarantined, keyed
+// package::test, quarantined for its task's PR alone.
+func flakeRig(t *testing.T, files map[string]string, quarantined ...string) (*Module, *Task, core.Project, *core.Local) {
+	m, task, p, f := gateRigSeeded(t, false, map[string]string{"go.mod": "module example.com/p\n"}, files)
+	m.C.Effects.Quarantined = func(project, id string) []string {
+		if project != p.Name || id != task.ID {
+			return nil
+		}
+		return quarantined
+	}
+	return m, task, p, f
+}
+
+// e2eLog is a go test log where tests fail in example.com/p/e2e.
+func e2eLog(tests ...string) string {
+	var b strings.Builder
+	for _, n := range tests {
+		b.WriteString("--- FAIL: " + n + " (1.0s)\n")
+	}
+	return b.String() + "FAIL\nFAIL\texample.com/p/e2e\t300.1s\nok  \texample.com/p/core\t1.2s\n"
+}
+
+// A red forge check is run again before it goes back: a pass on the re-run
+// merges, spends no round and is recorded as a flake, once, keyed by package.
+func TestForgeFlakePassesOnRerun(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, URL: "https://ci/1"})
+	f.SetCheckLog(p.Repo, "https://ci/1", e2eLog("TestModuleLifecycle"))
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 1 || queued(m, "w1") != "" {
+		t.Fatalf("stage %q, round %d, %d re-runs, reason %q", task.Stage, task.Round, f.Reruns(p.Repo, task.SHA), task.Reason)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass, URL: "https://ci/2"})
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.Round != 0 || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	type flake struct {
+		Task, SHA string
+		Tests     []string
+	}
+	var flaked []flake
+	for _, e := range m.C.J.Since(0) {
+		if e.Kind == "forge.flaked" {
+			var x flake
+			e.Decode(&x)
+			flaked = append(flaked, x)
+		}
+	}
+	if len(flaked) != 1 || flaked[0].Task != task.ID || flaked[0].SHA != task.SHA || len(flaked[0].Tests) != 1 || flaked[0].Tests[0] != e2eKey+"TestModuleLifecycle" {
+		t.Fatalf("flakes recorded: %+v", flaked)
+	}
+	if !logHas(task, "a flake: the forge's checks test (windows-latest) ("+e2eKey+"TestModuleLifecycle) failed on") {
+		t.Fatalf("log %v", task.Log)
+	}
+}
+
+// A red that comes back on its re-run is the change's: it goes back to the
+// worker, spending one round, and its failing tests are journaled as seen.
+func TestForgeRealFailureGoesBack(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPass})
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "https://ci/1"})
+	f.SetCheckLog(p.Repo, "https://ci/1", e2eLog("TestBroken"))
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.Round != 0 {
+		t.Fatalf("first red: stage %q, round %d", task.Stage, task.Round)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "https://ci/2"})
+	f.SetCheckLog(p.Repo, "https://ci/2", e2eLog("TestBroken"))
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, forgeFailed) || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
+	}
+	seen := 0
+	for _, e := range m.C.J.Since(0) {
+		var x struct {
+			Task  string
+			Tests []string
+		}
+		if e.Kind == "forge.tests_failed" && e.Decode(&x) == nil && x.Task == task.ID && len(x.Tests) == 1 && x.Tests[0] == e2eKey+"TestBroken" {
+			seen++
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("%d sightings of TestBroken, want one per attempt", seen)
+	}
+}
+
+// A check failing only quarantined tests doesn't send a PR back or hold it:
+// it merges with no re-run and the PR says why.
+func TestForgeQuarantinedFailureIgnored(t *testing.T) {
+	m, task, p, f := flakeRig(t, map[string]string{"feature.txt": "y"}, e2eKey+"TestStalls", e2eKey+"TestModuleLifecycle")
+	toMerging(t, m, task, p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (macos-latest)", State: core.CheckFail, URL: "https://ci/mac"}, core.CheckRun{Name: "lint", State: core.CheckPass})
+	f.SetCheckLog(p.Repo, "https://ci/mac", e2eLog("TestStalls", "TestModuleLifecycle"))
+	f.SetCheckSteps(p.Repo, "https://ci/mac", core.JobStep{Name: "checkout", Conclusion: "success"}, core.JobStep{Name: "the suite", Conclusion: "failure"})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 0 {
+		t.Fatalf("stage %q, round %d, %d re-runs, reason %q", task.Stage, task.Round, f.Reruns(p.Repo, task.SHA), task.Reason)
+	}
+	said := false
+	for _, c := range f.Comments(p.Repo, task.PR.Number) {
+		said = said || strings.Contains(c, "Merging past known flakes: test (macos-latest)")
+	}
+	if !said || !logHas(task, "known flakes: the forge's checks test (macos-latest)") {
+		t.Fatalf("comments %q, log %v", f.Comments(p.Repo, task.PR.Number), task.Log)
+	}
+	var ev struct{ Quarantined []string }
+	for _, e := range m.C.J.Since(0) {
+		if e.Kind == "effect.merged" {
+			e.Decode(&ev)
+		}
+	}
+	if len(ev.Quarantined) != 1 || ev.Quarantined[0] != "test (macos-latest)" {
+		t.Fatalf("merge event quarantined %v", ev.Quarantined)
+	}
+}
+
+// redOnce sets one red check "test" on t's head with log, main passing it,
+// the head's one re-run already spent.
+func redOnce(t *testing.T, m *Module, task *Task, p core.Project, f *core.Local, log string) {
+	t.Helper()
+	toMerging(t, m, task, p)
+	rerunSpent(task)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPass})
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "https://ci/1"})
+	f.SetCheckLog(p.Repo, "https://ci/1", log)
+	f.SetCheckSteps(p.Repo, "https://ci/1", core.JobStep{Name: "the suite", Conclusion: "failure"})
+	mergeOnce(t, m, task, p)
+}
+
+func sentBack(t *testing.T, f *core.Local, task *Task) {
+	t.Helper()
+	if task.Stage != StageWorking || task.Round != 1 || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+}
+
+// A quarantined test failing alongside a failure that names no test (a
+// package that doesn't build, here) shows no failure in flakes alone: the
+// check counts, and the PR goes back.
+func TestForgeQuarantineKeepsBuildFailure(t *testing.T) {
+	m, task, p, f := flakeRig(t, map[string]string{"feature.txt": "y"}, e2eKey+"TestStalls")
+	redOnce(t, m, task, p, f, e2eLog("TestStalls")+"# example.com/p/win\nwin.go:3:1: undefined: syscall.Foo\nFAIL\texample.com/p/win [build failed]\n")
+	sentBack(t, f, task)
+}
+
+// A check that fails a test outside the quarantine as well still counts.
+func TestForgeQuarantineKeepsOtherFailures(t *testing.T) {
+	m, task, p, f := flakeRig(t, map[string]string{"feature.txt": "y"}, e2eKey+"TestStalls")
+	redOnce(t, m, task, p, f, e2eLog("TestStalls", "TestMine"))
+	sentBack(t, f, task)
+}
+
+// The quarantine is keyed by package: a test of the same name failing in
+// another package isn't the quarantined one.
+func TestForgeQuarantineKeysByPackage(t *testing.T) {
+	m, task, p, f := flakeRig(t, map[string]string{"feature.txt": "y"}, e2eKey+"TestStalls")
+	redOnce(t, m, task, p, f, "--- FAIL: TestStalls (2.0s)\nFAIL\nFAIL\texample.com/p/core\t3.0s\n")
+	sentBack(t, f, task)
+}
+
+// A change to a quarantined test's own package is never excused for it: a
+// change mustn't break a known flake for real and pass.
+func TestForgeQuarantineNotForItsOwnPackage(t *testing.T) {
+	m, task, p, f := flakeRig(t, map[string]string{"e2e/testdata.txt": "y"}, e2eKey+"TestStalls")
+	redOnce(t, m, task, p, f, e2eLog("TestStalls"))
+	sentBack(t, f, task)
 }

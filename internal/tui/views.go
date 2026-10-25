@@ -120,6 +120,17 @@ func (m *model) dashRows() []row {
 				add(row{key: "sc:" + x.SHA + x.At.String(), depth: 2, text: fmt.Sprintf("%s  %s  %s  %s  %s", x.At.Local().Format("Mon 15:04"), core.Short(x.SHA), v, mark, stDim.Render(core.Clip(x.Note, 80)))})
 			}
 		}
+		if len(p.Flakes) > 0 && add(row{key: "flakes:" + p.Name, depth: 1, text: fmt.Sprintf("known flakes, quarantined (%d)", len(p.Flakes)), expand: true}) {
+			for _, f := range p.Flakes {
+				fix := stWarn.Render("no fix task yet")
+				var open *detail
+				if f.Task != "" {
+					fix = "fix: " + f.Task + " " + stDim.Render(f.TaskStage)
+					open = &detail{kind: "task", id: f.Task, title: core.Clip(text.Visible(f.Test), 40)}
+				}
+				add(row{key: "flake:" + p.Name + f.Test, depth: 2, text: fmt.Sprintf("%s  %s  %s", text.Visible(f.Test), fix, stDim.Render(text.Visible(core.Clip(f.Why, 100)))), open: open})
+			}
+		}
 		if add(row{key: "done:" + p.Name, depth: 1, text: fmt.Sprintf("recent work (%d)", len(done)), expand: len(done) > 0}) {
 			for _, t := range done {
 				d := detail{kind: "task", id: t.ID, title: core.Clip(t.Label(), 40)}

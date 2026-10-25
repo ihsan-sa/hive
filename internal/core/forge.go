@@ -831,6 +831,33 @@ type CheckLogs interface {
 	CheckLog(repo string, r CheckRun) (string, error)
 }
 
+// JobStep is one step of a CI job and how it ended: success, failure,
+// skipped, cancelled.
+type JobStep struct {
+	Name       string `json:"name"`
+	Conclusion string `json:"conclusion"`
+}
+
+// CheckSteps is a forge that can list a check's steps, so a step a failure
+// kept from running can be told from one that never runs on that job.
+type CheckSteps interface {
+	CheckSteps(repo string, r CheckRun) ([]JobStep, error)
+}
+
+// CheckSteps lists a GitHub Actions job's steps.
+func (GitHub) CheckSteps(repo string, r CheckRun) ([]JobStep, error) {
+	m := ghJobURL.FindStringSubmatch(r.URL)
+	if m == nil {
+		return nil, fmt.Errorf("%s is not a GitHub Actions job", r.Name)
+	}
+	out, err := gh(repo, "api", "repos/"+repo+"/actions/jobs/"+m[1], "-q", ".steps")
+	if err != nil {
+		return nil, err
+	}
+	var steps []JobStep
+	return steps, json.Unmarshal([]byte(out), &steps)
+}
+
 // APIReader is a forge that answers read-only API calls on the person's
 // login (5,000 an hour), so neither the daemon nor agents spend the anonymous
 // 60 an hour this machine's address shares. RateReset is when the login's
