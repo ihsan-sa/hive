@@ -58,21 +58,24 @@ func EnableAutostartAt(exe, root string) error {
 		return os.WriteFile(path, []byte(plist), 0o644)
 	default:
 		home, _ := os.UserHomeDir()
-		unit := filepath.Join(home, ".config", "systemd", "user", "hive.service")
+		unit := userUnit()
 		content := fmt.Sprintf("[Unit]\nDescription=The Hive\nAfter=network-online.target\n\n[Service]\nEnvironment=HIVE_HOME=%s\nExecStart=%s daemon\nKillMode=process\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n", root, exe)
 		os.MkdirAll(filepath.Dir(unit), 0o755)
 		if err := os.WriteFile(unit, []byte(content), 0o644); err != nil {
 			return err
 		}
+		desk := filepath.Join(home, ".config", "autostart", "hive.desktop")
 		if exec.Command("systemctl", "--user", "daemon-reload").Run() == nil {
 			exec.Command("systemctl", "--user", "enable", "hive.service").Run()
+			// One launcher: a desktop autostart left from a start without
+			// systemd would start a second daemon at login.
+			os.Remove(desk)
 			// Start at boot without a login session, where the system allows it.
 			exec.Command("loginctl", "enable-linger").Run()
 			return nil
 		}
 		// No systemd user session: fall back to the desktop autostart.
 		os.Remove(unit)
-		desk := filepath.Join(home, ".config", "autostart", "hive.desktop")
 		os.MkdirAll(filepath.Dir(desk), 0o755)
 		return os.WriteFile(desk, []byte(fmt.Sprintf("[Desktop Entry]\nType=Application\nName=Hive\nExec=env HIVE_HOME=%s %s daemon\nX-GNOME-Autostart-enabled=true\n", root, exe)), 0o644)
 	}
@@ -135,6 +138,27 @@ func UnitSettings(name string, user bool) (restart, killMode string, mainPID int
 func RestartUnit(exe, root string) bool {
 	EnableAutostartAt(exe, root)
 	return exec.Command("systemctl", "--user", "restart", "--no-block", "hive.service").Run() == nil
+}
+
+// userUnit is the Hive's systemd user unit.
+func userUnit() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "systemd", "user", "hive.service")
+}
+
+// StartUnit has systemd start the Hive's user unit when it serves the
+// workspace at root, so a command that finds no daemon starts the one the
+// unit supervises instead of one beside it; starting an active unit does
+// nothing. It reports whether systemd took the start.
+func StartUnit(root string) bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	raw, err := os.ReadFile(userUnit())
+	if err != nil || !strings.Contains(string(raw), "\nEnvironment=HIVE_HOME="+root+"\n") {
+		return false
+	}
+	return exec.Command("systemctl", "--user", "start", "--no-block", "hive.service").Run() == nil
 }
 
 // DisableAutostart undoes EnableAutostart.

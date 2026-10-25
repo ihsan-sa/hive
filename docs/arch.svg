@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1104" height="554" viewBox="0 0 1104 554" font-family="Helvetica, Arial, sans-serif">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#444"/></marker></defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="24" y="32" font-size="17" font-weight="bold" fill="#222">The Hive: who does what, and where it runs</text>
+<rect x="12" y="188" width="1080" height="90" rx="10" fill="#edf6ed" stroke="#4f8a4f" stroke-dasharray="6 4"/>
+<text x="242" y="203" font-size="12" font-weight="bold" fill="#4f8a4f">Sandboxes: one per agent turn or test run, no GitHub login, network only through the proxy</text>
+<rect x="12" y="320" width="1080" height="90" rx="10" fill="#edf1fa" stroke="#4d68a3" stroke-dasharray="6 4"/>
+<text x="462" y="335" font-size="12" font-weight="bold" fill="#4d68a3">The daemon: runs as you, on your machine</text>
+<rect x="464" y="78" width="176" height="56" rx="6" fill="#fff4d6" stroke="#333"/>
+<text x="552" y="102" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">You</text>
+<text x="552" y="120" font-size="11" text-anchor="middle" fill="#555">control center, hive ask</text>
+<rect x="24" y="210" width="176" height="56" rx="6" fill="#ffffff" stroke="#333"/>
+<text x="112" y="234" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">Lead</text>
+<text x="112" y="252" font-size="11" text-anchor="middle" fill="#555">turns asks into briefs</text>
+<rect x="244" y="210" width="176" height="56" rx="6" fill="#ffffff" stroke="#333"/>
+<text x="332" y="234" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">Workers</text>
+<text x="332" y="252" font-size="11" text-anchor="middle" fill="#555">build one brief each</text>
+<rect x="464" y="210" width="176" height="56" rx="6" fill="#ffffff" stroke="#333"/>
+<text x="552" y="234" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">Reviewer</text>
+<text x="552" y="252" font-size="11" text-anchor="middle" fill="#555">read-only, exact commit</text>
+<rect x="684" y="210" width="176" height="56" rx="6" fill="#ffffff" stroke="#333"/>
+<text x="772" y="234" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">Tests</text>
+<text x="772" y="252" font-size="11" text-anchor="middle" fill="#555">fresh clone, main&#39;s command</text>
+<rect x="904" y="210" width="176" height="56" rx="6" fill="#ffffff" stroke="#333"/>
+<text x="992" y="234" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">Warden, tribunal</text>
+<text x="992" y="252" font-size="11" text-anchor="middle" fill="#555">weigh steps past a sandbox</text>
+<rect x="24" y="342" width="176" height="56" rx="6" fill="#ffffff" stroke="#333"/>
+<text x="112" y="366" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">Egress proxy</text>
+<text x="112" y="384" font-size="11" text-anchor="middle" fill="#555">refuses this machine, LAN</text>
+<rect x="244" y="342" width="176" height="56" rx="6" fill="#ffffff" stroke="#333"/>
+<text x="332" y="366" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">Journal, queue</text>
+<text x="332" y="384" font-size="11" text-anchor="middle" fill="#555">score: keep or revert</text>
+<rect x="464" y="342" width="176" height="56" rx="6" fill="#ffffff" stroke="#333"/>
+<text x="552" y="366" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">Effects</text>
+<text x="552" y="384" font-size="11" text-anchor="middle" fill="#555">only holder of GitHub login</text>
+<rect x="904" y="342" width="176" height="56" rx="6" fill="#ffffff" stroke="#333"/>
+<text x="992" y="366" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">Approved steps</text>
+<text x="992" y="384" font-size="11" text-anchor="middle" fill="#555">digest-pinned scripts</text>
+<rect x="24" y="474" width="176" height="56" rx="6" fill="#f4f4f4" stroke="#333"/>
+<text x="112" y="498" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">Model APIs, web</text>
+<text x="112" y="516" font-size="11" text-anchor="middle" fill="#555">public hosts</text>
+<rect x="464" y="474" width="176" height="56" rx="6" fill="#f4f4f4" stroke="#333"/>
+<text x="552" y="498" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">GitHub</text>
+<text x="552" y="516" font-size="11" text-anchor="middle" fill="#555">issues, PRs, main</text>
+<rect x="904" y="474" width="176" height="56" rx="6" fill="#f4f4f4" stroke="#333"/>
+<text x="992" y="498" font-size="14" font-weight="bold" text-anchor="middle" fill="#222">Your machine</text>
+<text x="992" y="516" font-size="11" text-anchor="middle" fill="#555">files, installs</text>
+<line x1="461.1" y1="133.3" x2="204.8" y2="210.2" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="161.2" y1="267.5" x2="281.0" y2="339.4" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="318.0" y1="339.0" x2="318.0" y2="271.0" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="346.0" y1="269.0" x2="346.0" y2="337.0" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="381.2" y1="340.5" x2="501.0" y2="268.6" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="422.9" y1="342.7" x2="679.2" y2="265.8" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="423.0" y1="370.0" x2="459.0" y2="370.0" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="552.0" y1="401.0" x2="552.0" y2="469.0" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="112.0" y1="269.0" x2="112.0" y2="337.0" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="112.0" y1="401.0" x2="112.0" y2="469.0" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="992.0" y1="269.0" x2="992.0" y2="337.0" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="992.0" y1="401.0" x2="992.0" y2="469.0" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="901.1" y1="210.7" x2="644.8" y2="133.8" stroke="#444" stroke-width="1.4" marker-end="url(#arrow)"/>
+<rect x="315.6" y="162.7" width="34.8" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="333.0" y="175.7" font-size="11" text-anchor="middle" fill="#333">chat</text>
+<rect x="197.5" y="294.5" width="47.2" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="221.1" y="307.5" font-size="11" text-anchor="middle" fill="#333">briefs</text>
+<rect x="272.0" y="296.0" width="47.2" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="295.6" y="309.0" font-size="11" text-anchor="middle" fill="#333">starts</text>
+<rect x="341.7" y="294.0" width="53.4" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="368.4" y="307.0" font-size="11" text-anchor="middle" fill="#333">commits</text>
+<rect x="398.9" y="295.5" width="84.4" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="441.1" y="308.5" font-size="11" text-anchor="middle" fill="#333">exact commit</text>
+<rect x="508.8" y="295.3" width="84.4" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="551.0" y="308.3" font-size="11" text-anchor="middle" fill="#333">exact commit</text>
+<rect x="417.4" y="361.0" width="47.2" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="441.0" y="374.0" font-size="11" text-anchor="middle" fill="#333">passed</text>
+<rect x="500.5" y="426.0" width="103.0" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="552.0" y="439.0" font-size="11" text-anchor="middle" fill="#333">push, PR, merge</text>
+<rect x="35.7" y="294.0" width="152.6" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="112.0" y="307.0" font-size="11" text-anchor="middle" fill="#333">every sandbox&#39;s network</text>
+<rect x="66.7" y="426.0" width="90.6" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="112.0" y="439.0" font-size="11" text-anchor="middle" fill="#333">outbound only</text>
+<rect x="962.2" y="294.0" width="59.6" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="992.0" y="307.0" font-size="11" text-anchor="middle" fill="#333">approved</text>
+<rect x="952.9" y="426.0" width="78.2" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="992.0" y="439.0" font-size="11" text-anchor="middle" fill="#333">runs as you</text>
+<rect x="712.2" y="163.3" width="121.6" height="17" rx="3" fill="#ffffff" fill-opacity="0.92"/>
+<text x="773.0" y="176.3" font-size="11" text-anchor="middle" fill="#333">hands you the rest</text>
+</svg>

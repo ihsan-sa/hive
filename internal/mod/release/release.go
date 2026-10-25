@@ -34,6 +34,9 @@ type Module struct {
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
 	PauseMerges func(wait time.Duration) (resume func(), ok bool)
+	// Scan checks what a release at sha publishes before it is cut; nil is
+	// the identity and secret scan of the files on the commit's public list.
+	Scan func(p core.Project, sha string) error
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
 	// said holds project@tag for each pre-release whose wait or failed
@@ -68,7 +71,8 @@ type Module struct {
 // login and follows the redirect from a renamed repo. Tests point it elsewhere.
 var Site = "https://github.com"
 
-// API serves each release's notes. Tests point it elsewhere.
+// API serves each release's notes to a forge with no login to read them on
+// (GitHub reads them through gh). Tests point it elsewhere.
 var API = "https://api.github.com"
 
 // executable is the binary an update replaces, through any hive-v0 link.
@@ -120,19 +124,31 @@ func download(repo, tag, name, dir string) error {
 
 // Notes are the release notes of each version after from up to to, newest
 // first, each with its page; when they can't be fetched, the releases page.
-func Notes(repo, from, to string) string {
+// They are read on the forge's login when it has one, never on the anonymous
+// 60 an hour this machine's agents share.
+func Notes(f core.Forge, repo, from, to string) string {
 	var rels []struct {
 		Tag  string `json:"tag_name"`
 		Body string
 		URL  string `json:"html_url"`
 	}
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Get(API + "/repos/" + repo + "/releases?per_page=100")
-	if err == nil {
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			err = errors.New(resp.Status)
-		} else {
-			err = json.NewDecoder(resp.Body).Decode(&rels)
+	path := "repos/" + repo + "/releases?per_page=100"
+	var err error
+	if r, ok := f.(core.APIReader); ok {
+		var out string
+		if out, err = r.APIGet(repo, path); err == nil {
+			err = json.Unmarshal([]byte(out), &rels)
+		}
+	} else {
+		var resp *http.Response
+		resp, err = (&http.Client{Timeout: 30 * time.Second}).Get(API + "/" + path)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				err = errors.New(resp.Status)
+			} else {
+				err = json.NewDecoder(resp.Body).Decode(&rels)
+			}
 		}
 	}
 	var b strings.Builder
@@ -165,7 +181,9 @@ func AssetName(goos, goarch string) string {
 // release_repo and the person's own fork of it are followed, never a
 // repository an agent named, and a release whose checksums don't list this
 // platform's binary is passed over. Following pre-releases, it takes the
-// newest of release_repo's whose checks for this system passed, when newer.
+// newest of release_repo's whose checks for this system passed, when newer;
+// when GitHub's rate limit stopped that look and nothing newer is in hand,
+// the error says so and when it looks again.
 func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	up := m.C.WS.LoadConfig().ReleaseRepo
 	repos := []string{up}
@@ -199,12 +217,14 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	m.pmu.Lock()
 	m.pre = nil
 	m.pmu.Unlock()
+	var stopped *limited // a look the rate limit stopped
 	if m.Channel() == Prerelease {
 		after := core.Version
 		if modules.Newer(after, tag) {
 			after = tag
 		}
 		t, waits, e := m.prerelease(up, after)
+		errors.As(e, &stopped)
 		if e != nil {
 			waits = append(waits, e.Error())
 		}
@@ -223,6 +243,9 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	}
 	if tag != "" {
 		err = nil
+	}
+	if stopped != nil && (tag == "" || !modules.Newer(core.Version, tag)) {
+		err = stopped // not "nothing newer": the look didn't finish
 	}
 	m.lag(out, tag)
 	return repo, tag, tag != "" && modules.Newer(core.Version, tag), err
@@ -401,7 +424,7 @@ func (m *Module) update(tag string) (string, error) {
 	if err := m.pin(cfg, tag, pin); err != nil {
 		return "", err
 	}
-	notes := Notes(repo, core.Version, tag)
+	notes := Notes(m.C.Effects.Forge, repo, core.Version, tag)
 	unsigned := PublicKey == ""
 	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned})
 	installed = true
@@ -495,6 +518,7 @@ func Rename(root, from string) string {
 	exe := executable()
 	dir, base := filepath.Split(exe)
 	ext := filepath.Ext(base)
+	Sweep(OnDisk(exe))
 	if base != "hive-v0"+ext || (from != "v0.1.0" && from != "v0.1.1" && from != "v0.1.2") {
 		os.Remove(filepath.Join(dir, "hive-v0"+ext+".old")) // left by a rename on Windows
 		return ""
@@ -515,6 +539,16 @@ func Rename(root, from string) string {
 	return target
 }
 
+// OnDisk is the path a binary an update renamed aside (to <name>.old, or
+// <name>.old-<n> by makeWay) came from: Linux reports a running file by its
+// new name.
+func OnDisk(exe string) string {
+	if i := strings.LastIndex(exe, ".old"); i >= 0 && strings.Trim(strings.TrimPrefix(exe[i+4:], "-"), "0123456789") == "" {
+		return exe[:i]
+	}
+	return exe
+}
+
 // autostart points a registered autostart at exe.
 var autostart = func(exe, root string) {
 	if setup.AutostartEnabled() {
@@ -533,7 +567,10 @@ func replace(src, dst string) error {
 		return err
 	}
 	old := dst + ".old"
-	os.Remove(old)
+	if err := makeWay(old); err != nil {
+		os.Remove(next)
+		return err
+	}
 	if core.Exists(dst) {
 		if err := os.Rename(dst, old); err != nil {
 			return err
@@ -544,6 +581,43 @@ func replace(src, dst string) error {
 		return err
 	}
 	return nil
+}
+
+// removeFile is os.Remove; a test fails it as Windows does for a running image.
+var removeFile = os.Remove
+
+// makeWay clears path for a rename onto it: it removes what is there or, when
+// that fails (Windows can rename a running image but not delete it, as the
+// daemon an earlier update replaced, still running from its .old), moves it
+// aside to <path>-<n>, which Sweep removes on a later start.
+func makeWay(path string) error {
+	if removeFile(path) == nil || !core.Exists(path) {
+		return nil
+	}
+	for n := 1; n < 1000; n++ {
+		aside := fmt.Sprintf("%s-%d", path, n)
+		if !core.Exists(aside) {
+			return os.Rename(path, aside)
+		}
+	}
+	return errors.New(path + " can't be removed or moved aside")
+}
+
+// Sweep removes what makeWay moved aside beside exe and the binaries an
+// update installs with it, once nothing runs from them; one still running
+// stays for the next start.
+func Sweep(exe string) {
+	dir := filepath.Dir(exe)
+	for _, name := range append([]string{filepath.Base(exe)}, alongside[runtime.GOOS]...) {
+		for _, kind := range []string{".old-", ".failed-"} {
+			left, _ := filepath.Glob(filepath.Join(dir, name+kind+"*"))
+			for _, f := range left {
+				if n := strings.TrimPrefix(f, filepath.Join(dir, name+kind)); n != "" && strings.Trim(n, "0123456789") == "" {
+					removeFile(f)
+				}
+			}
+		}
+	}
 }
 
 func parseSums(raw []byte) (map[string]string, error) {
@@ -620,6 +694,14 @@ func (m *Module) afterKept(project, sha string) {
 	approved := m.C.Effects.Approved("release", project, sha)
 	if (len(root) > 0 || len(unread) > 0) && !approved {
 		m.hold(project, sha, root, unread, manifest.String())
+		return
+	}
+	scanAt := m.Scan
+	if scanAt == nil {
+		scanAt = m.scan
+	}
+	if err := scanAt(p, sha); err != nil {
+		alert("no release at " + core.Short(sha) + ", since its scan blocks it: " + err.Error())
 		return
 	}
 	cfg := m.C.Effects.Config(p, sha)

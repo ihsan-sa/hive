@@ -1,0 +1,41 @@
+{
+  "title": "The Hive: who does what, and where it runs",
+  "note": "Source of arch.svg. Edit this, then run: go test ./docs -run TestArch -update",
+  "zones": [
+    {"id": "sandbox", "label": "Sandboxes: one per agent turn or test run, no GitHub login, network only through the proxy", "label_col": 1},
+    {"id": "daemon", "label": "The daemon: runs as you, on your machine", "label_col": 2}
+  ],
+  "nodes": [
+    {"id": "you", "label": "You", "sub": "control center, hive ask", "col": 2, "row": 0, "kind": "person"},
+
+    {"id": "lead", "label": "Lead", "sub": "turns asks into briefs", "col": 0, "row": 1, "zone": "sandbox", "kind": "agent"},
+    {"id": "workers", "label": "Workers", "sub": "build one brief each", "col": 1, "row": 1, "zone": "sandbox", "kind": "agent"},
+    {"id": "reviewer", "label": "Reviewer", "sub": "read-only, exact commit", "col": 2, "row": 1, "zone": "sandbox", "kind": "agent"},
+    {"id": "tests", "label": "Tests", "sub": "fresh clone, main's command", "col": 3, "row": 1, "zone": "sandbox", "kind": "host"},
+    {"id": "warden", "label": "Warden, tribunal", "sub": "weigh steps past a sandbox", "col": 4, "row": 1, "zone": "sandbox", "kind": "agent"},
+
+    {"id": "proxy", "label": "Egress proxy", "sub": "refuses this machine, LAN", "col": 0, "row": 2, "zone": "daemon", "kind": "host"},
+    {"id": "core", "label": "Journal, queue", "sub": "score: keep or revert", "col": 1, "row": 2, "zone": "daemon", "kind": "host"},
+    {"id": "effects", "label": "Effects", "sub": "only holder of GitHub login", "col": 2, "row": 2, "zone": "daemon", "kind": "host"},
+    {"id": "scripts", "label": "Approved steps", "sub": "digest-pinned scripts", "col": 4, "row": 2, "zone": "daemon", "kind": "host"},
+
+    {"id": "web", "label": "Model APIs, web", "sub": "public hosts", "col": 0, "row": 3, "kind": "outside"},
+    {"id": "github", "label": "GitHub", "sub": "issues, PRs, main", "col": 2, "row": 3, "kind": "outside"},
+    {"id": "machine", "label": "Your machine", "sub": "files, installs", "col": 4, "row": 3, "kind": "outside"}
+  ],
+  "edges": [
+    {"from": "you", "to": "lead", "label": "chat"},
+    {"from": "lead", "to": "core", "label": "briefs"},
+    {"from": "core", "to": "workers", "label": "starts", "offset": -14},
+    {"from": "workers", "to": "core", "label": "commits", "offset": -14},
+    {"from": "core", "to": "reviewer", "label": "exact commit"},
+    {"from": "core", "to": "tests", "label": "exact commit"},
+    {"from": "core", "to": "effects", "label": "passed"},
+    {"from": "effects", "to": "github", "label": "push, PR, merge"},
+    {"from": "lead", "to": "proxy", "label": "every sandbox's network", "note": "Drawn from the lead for room; every sandbox above, agents' and tests', reaches out only through the proxy."},
+    {"from": "proxy", "to": "web", "label": "outbound only"},
+    {"from": "warden", "to": "scripts", "label": "approved"},
+    {"from": "scripts", "to": "machine", "label": "runs as you"},
+    {"from": "warden", "to": "you", "label": "hands you the rest"}
+  ]
+}

@@ -50,6 +50,10 @@ func (Open) Parse(line []byte) []Event {
 	for _, e := range evs {
 		if e.Result != nil {
 			e.Result.CostUSD = 0
+			// A vendor's 429 is its usage limit: Claude Code reports no
+			// rate_limit_info for an endpoint not Anthropic's, and the
+			// vendor's words need not say "limit".
+			e.Result.Limited = e.Result.Limited || e.Result.IsError && e.Result.APIStatus == 429
 		}
 	}
 	return evs
@@ -60,7 +64,9 @@ func (Open) Parse(line []byte) []Event {
 // itself, pointed at the endpoint, on the endpoint's model id and never on a
 // Claude login. The key comes from KeyCommand, which Claude Code runs once
 // before its first request and which deletes the key file it reads, so no
-// tool finds the key in a file or in its environment.
+// tool finds the key in a file or in its environment. Its config folder is
+// the run's own (ConfigDir), so no Claude login is found there either; and
+// Claude Code never falls back to one when the helper fails.
 type OpenClaude struct{}
 
 func (OpenClaude) Name() string           { return "open" }
@@ -99,6 +105,9 @@ func (OpenClaude) Env(t Turn) []string {
 		// The helper's key lasts the turn; a fresh turn hands over a fresh one.
 		"CLAUDE_CODE_API_KEY_HELPER_TTL_MS=86400000",
 	)
+	if t.ConfigDir != "" {
+		env = append(env, "CLAUDE_CONFIG_DIR="+t.ConfigDir)
+	}
 	if t.KeyCommand == "" {
 		env = append(env, "ANTHROPIC_API_KEY=none") // a model with no key, such as a server on this machine
 	} else {

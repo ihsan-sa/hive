@@ -12,11 +12,14 @@ import (
 )
 
 // The recursive gate on the Hive's own repository (docs/gate.md): once a
-// self project's change has passed its tests, reads and the forge's checks,
+// self project's change aimed at a gain (Task.Aim) has passed its tests,
+// reads and the forge's checks,
 // the daemon runs `hive gate` on its exact head against current main, and it
 // merges only if the gate keeps it. A rollback goes back to the worker with
 // the report; a gate that can't run (no bubblewrap, no Go) leaves it waiting,
 // never merged unjudged. One gate runs at a time, for at most GateTimeout.
+// A fix doesn't wait for it: it merges as in any project, and the score
+// measured after the merge still reverts it if main got worse.
 
 // GateJob is one gate run the work module asks for.
 type GateJob struct {
@@ -24,7 +27,7 @@ type GateJob struct {
 	Repo     string // the host's clone of the project, which holds both commits
 	Head     string // the candidate: the PR's exact head
 	Main     string // the control: main as the merge would see it
-	AllowTie bool   // a docs- or prompt-only change, or a revert: kept when it breaks nothing
+	AllowTie bool   // kept when it breaks nothing; the work module never sets it, since an improvement must show a gain
 	Out      string // the run's folder; its report.md and report.json go here
 	Lessons  string // where a rollback's lesson is written on this machine
 	Timeout  time.Duration
@@ -60,12 +63,14 @@ const gateReportFile = "gate-report.md"
 type gateRun struct {
 	key, task string
 	since     time.Time
+	out       string // its run folder, named before it starts so TidyGates never takes it
 }
 
-// recursiveGate holds t until the recursive gate has kept its head against
-// main; the bool says it waits (or went back).
+// recursiveGate holds t, a change to the Hive aimed at a gain, until the
+// recursive gate has kept its head against main; the bool says it waits (or
+// went back). A fix passes straight on.
 func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, error) {
-	if !p.Self {
+	if !p.Self || !t.Gain() {
 		return false, nil
 	}
 	g, ok := m.C.Effects.GateResult(p.Name, t.SHA, main)
@@ -80,24 +85,33 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		m.hold(t, p, fmt.Sprintf("%s, which can't run here (%s); it never merges unjudged, and the gate tries again after %s", GateWait, core.Clip(g.Reason, 300), retryAfter(g).Format("15:04Z")))
 		return true, nil
 	}
+	// The gate judges what would land: a head that lacks main is brought up
+	// to date first, or it fails on what main has since fixed (a test that
+	// broke in the gate's sandbox, fixed on main after the branch was cut).
+	if moved, err := m.catchUp(t, p, main, "the recursive gate judges the change with main in"); moved || err != nil {
+		return true, err
+	}
 	key := p.Name + "@" + t.SHA + "@" + main
 	m.mu.Lock()
 	// A run that couldn't run against this main, on any change, holds the
-	// others until its retry: the next would fail the same way.
+	// others until its retry: the next would fail the same way. One whose
+	// cause was that change alone (its own build, its clock) holds nobody.
 	if last, ok := m.gateCantRun[p.Name+"@"+main]; ok && last.Head != t.SHA && time.Now().Before(retryAfter(last)) {
 		m.mu.Unlock()
 		m.hold(t, p, fmt.Sprintf("%s: it couldn't run against main at %s on %s (%s); it tries again after %s", GateWait, core.Short(main), core.Short(last.Head), core.Clip(last.Reason, 300), retryAfter(last).Format("15:04Z")))
 		return true, nil
 	}
 	cur := m.gating
+	var out string
 	if cur == nil {
-		m.gating = &gateRun{key: key, task: t.ID, since: time.Now().UTC()}
+		out = filepath.Join(m.C.WS.Gates(), p.Name, "recursive", time.Now().UTC().Format("060102-150405")+"-"+core.Short(t.SHA))
+		m.gating = &gateRun{key: key, task: t.ID, since: time.Now().UTC(), out: out}
 		m.steps.Add(1)
 	}
 	m.mu.Unlock()
 	switch {
 	case cur == nil:
-		m.startGate(t, p, main, key)
+		m.startGate(t, p, main, key, out)
 		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), time.Now().UTC().Format("15:04Z"), GateTimeout))
 	case cur.key == key:
 		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), cur.since.Format("15:04Z"), GateTimeout))
@@ -108,17 +122,13 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 }
 
 // startGate runs the gate on t's head in the background and records its
-// verdict; m.gating is already set to key, and m.steps counts it.
-func (m *Module) startGate(t *Task, p core.Project, main, key string) {
-	tie := t.Kind == "revert"
-	if ch, err := m.C.Effects.Classify(p, main, t.SHA); err == nil && textOnly(ch.Files) {
-		tie = true
-	}
-	dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
-	job := GateJob{Project: p, Repo: m.C.WS.Project(p.Name), Head: t.SHA, Main: main, AllowTie: tie,
-		Out: filepath.Join(dir, time.Now().UTC().Format("060102-150405")+"-"+core.Short(t.SHA)), Lessons: filepath.Join(dir, "lessons.md"), Timeout: GateTimeout}
+// verdict in out; m.gating is already set to key, and m.steps counts it.
+func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
+	dir := filepath.Dir(out)
+	job := GateJob{Project: p, Repo: m.C.WS.Project(p.Name), Head: t.SHA, Main: main,
+		Out: out, Lessons: filepath.Join(dir, "lessons.md"), Timeout: GateTimeout}
 	id := t.ID
-	m.save(t, fmt.Sprintf("the recursive gate started on %s against main at %s%s", core.Short(t.SHA), core.Short(main), map[bool]string{true: ", ties allowed (docs, prompts or a revert)"}[tie]))
+	m.save(t, fmt.Sprintf("the recursive gate started on %s against main at %s: an improvement is kept only on a clear gain", core.Short(t.SHA), core.Short(main)))
 	go func() {
 		defer m.steps.Done()
 		var g core.GateResult
@@ -141,9 +151,12 @@ func (m *Module) startGate(t *Task, p core.Project, main, key string) {
 		if m.gateCantRun == nil {
 			m.gateCantRun = map[string]core.GateResult{}
 		}
-		if g.Outcome == core.GateCantRun {
+		switch {
+		case g.Outcome == core.GateCantRun && g.Alone:
+			// Its own cause: the others at this main go on as they were.
+		case g.Outcome == core.GateCantRun:
 			m.gateCantRun[p.Name+"@"+job.Main] = g
-		} else {
+		default:
 			delete(m.gateCantRun, p.Name+"@"+job.Main)
 		}
 		delete(m.later, id) // the task looks again at once
@@ -212,19 +225,6 @@ func GateWord(outcome string) string {
 	return "COULD NOT RUN"
 }
 
-// textOnly says every file is prose: docs, or the agents' prompts (markdown),
-// which the gate keeps on a tie.
-func textOnly(files []string) bool {
-	for _, f := range files {
-		switch strings.ToLower(filepath.Ext(f)) {
-		case ".md", ".txt", ".rst", ".adoc":
-		default:
-			return false
-		}
-	}
-	return len(files) > 0
-}
-
 // gateLessons are the recursive gate's lessons on this machine that main's
 // .hive/lessons.md doesn't carry yet (a worker sent back adds its own there).
 func (m *Module) gateLessons(p core.Project, onMain string) []string {
@@ -247,4 +247,31 @@ func (m *Module) gateLessons(p core.Project, onMain string) []string {
 		out = append(out, l)
 	}
 	return out
+}
+
+// TidyGates hands reap every recursive gate run folder but the one in
+// flight, for the hive.clean job: a gate that died with its daemon (or was
+// killed past its time) left its children and its bulk (checkouts, homes,
+// Go caches) there, and only a later Reap of that folder ends them. The
+// folders are listed under the lock that names a new run's folder, so a
+// gate that starts meanwhile is never among them. It returns how many
+// processes reap ended.
+func (m *Module) TidyGates(reap func(out string) int) int {
+	m.mu.Lock()
+	var outs []string
+	for _, p := range m.C.Projects.List() {
+		dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
+		ents, _ := os.ReadDir(dir)
+		for _, e := range ents {
+			if out := filepath.Join(dir, e.Name()); e.IsDir() && (m.gating == nil || m.gating.out != out) {
+				outs = append(outs, out)
+			}
+		}
+	}
+	m.mu.Unlock()
+	n := 0
+	for _, out := range outs {
+		n += reap(out)
+	}
+	return n
 }

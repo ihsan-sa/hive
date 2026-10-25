@@ -66,6 +66,9 @@ func (m *model) dashRows() []row {
 		if p.Hold != nil {
 			add(row{key: "hold:" + p.Name, depth: 1, text: stWarn.Render(text.Visible(p.Hold.Text()))})
 		}
+		if sz := sizeLine(p.Scores); sz != "" {
+			add(row{key: "size:" + p.Name, depth: 1, text: sz})
+		}
 		if add(row{key: "goals:" + p.Name, depth: 1, text: "goals", expand: true}) {
 			for _, l := range nonEmpty(strings.Split(p.Goals, "\n")) {
 				add(row{key: "goal:" + p.Name + l, depth: 2, text: stDim.Render(l)})
@@ -291,6 +294,45 @@ func (m *model) runLine(r core.Run) string {
 	return fmt.Sprintf("%s  %s  %s  turn %d  $%.2f  %dk ctx  %s  %s", runLabel(r), status, text.Visible(core.HarnessName(r.Harness)+":"+r.Model), r.Turn, r.Cost, r.Context/1000, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
 }
 
+// sizeLine is the newest measured size (for the Hive, its core's: docs/core.md)
+// and how it moved since the measure before it, or "" when none was measured.
+func sizeLine(ms []improve.Measurement) string {
+	var now, before map[string]float64
+	for i := len(ms) - 1; i >= 0 && before == nil; i-- {
+		if ms[i].Size == nil {
+			continue
+		}
+		if now == nil {
+			now = ms[i].Size
+		} else {
+			before = ms[i].Size
+		}
+	}
+	if now == nil {
+		return ""
+	}
+	moved := func(k string) string {
+		b, ok := before[k]
+		if !ok || b == now[k] {
+			return ""
+		}
+		return stDim.Render(fmt.Sprintf(" (%+g)", now[k]-b))
+	}
+	var parts []string
+	if v, ok := now["core_lines"]; ok {
+		parts = append(parts, "core "+fmtNum(v)+" lines"+moved("core_lines"))
+	}
+	if v, ok := now["binary_bytes"]; ok {
+		parts = append(parts, fmt.Sprintf("binary %.1f MB", v/1e6)+moved("binary_bytes"))
+	}
+	for _, k := range slices.Sorted(maps.Keys(now)) {
+		if k != "core_lines" && k != "binary_bytes" {
+			parts = append(parts, text.Visible(k)+" "+fmtNum(now[k])+moved(k))
+		}
+	}
+	return "size  " + strings.Join(parts, "  ")
+}
+
 // spark draws the last scores as a one-line chart.
 func spark(ms []improve.Measurement) string {
 	var vals []float64
@@ -436,6 +478,14 @@ func (m *model) viewTree() []string {
 		lines = append([]string{stDim.Render(rel), ""}, lines...)
 		sel += 2
 	}
+	if d := m.st.Disk; !d.At.IsZero() {
+		style := stDim
+		if d.Low() {
+			style = stWarn
+		}
+		lines = append([]string{style.Render("Disk: " + d.String() + "."), ""}, lines...)
+		sel += 2
+	}
 	if m.st.Offline != "" {
 		lines = append([]string{stWarn.Render(strings.ToUpper(m.st.Offline[:1]) + m.st.Offline[1:] + "; the work picks up again on its own."), ""}, lines...)
 		sel += 2
@@ -558,6 +608,7 @@ func (m *model) viewDetail(d *detail) []string {
 		kv("task", t.Label())
 		kv("stage", t.Stage+"  "+core.Clip(t.Reason, 200))
 		kv("project", t.Project)
+		kv("aim", t.AimWord())
 		if t.Issue.Number > 0 {
 			kv("issue", fmt.Sprintf("#%d %s", t.Issue.Number, t.Issue.URL))
 		}

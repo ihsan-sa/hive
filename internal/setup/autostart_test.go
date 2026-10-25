@@ -111,3 +111,31 @@ func TestUnitSettings(t *testing.T) {
 		t.Fatalf("systemctl ran %q, want %q", raw, want)
 	}
 }
+
+// A desktop autostart left from a start without systemd goes once the unit
+// is enabled, so a restart and the next login don't each start a daemon.
+func TestUnitReplacesALoginAutostart(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd is Linux's")
+	}
+	home, bin := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	os.WriteFile(filepath.Join(bin, "systemctl"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	desk := filepath.Join(home, ".config", "autostart", "hive.desktop")
+	os.MkdirAll(filepath.Dir(desk), 0o755)
+	os.WriteFile(desk, []byte("[Desktop Entry]\nExec=env HIVE_HOME=/w /x/hive daemon\n"), 0o644)
+	root := t.TempDir()
+	if err := EnableAutostartAt("/x/hive", root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(desk); err == nil {
+		t.Fatal("the login autostart is still there beside the unit")
+	}
+	if !StartUnit(root) {
+		t.Fatal("the unit serving the workspace wasn't started")
+	}
+	if StartUnit(t.TempDir()) {
+		t.Fatal("a unit serving another workspace was started")
+	}
+}
