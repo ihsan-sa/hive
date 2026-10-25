@@ -195,7 +195,6 @@ func TestATrialThatDoesntFinishBenchesTheModel(t *testing.T) {
 	if h, m := a.Agents.Model("worker", "lab"); h != "fake" || m != "opus" {
 		t.Fatalf("a model that doesn't finish still gets work: %s:%s", h, m)
 	}
-	time.Sleep(time.Second) // task ids order by the second
 	trial("")
 	if h, _ := a.Agents.Model("worker", "lab"); h != "open" {
 		t.Fatal("a model whose later trial finished is still benched")
