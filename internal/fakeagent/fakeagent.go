@@ -325,7 +325,11 @@ func leadAsk(ask, system string) (string, error) {
 		return "Created project " + pm[2] + ".", nil
 	}
 	if mm := regexp.MustCompile(`install module (\S+)`).FindStringSubmatch(ask); mm != nil {
-		_, err := call("install_module", map[string]string{"url": mm[1]}, 3*time.Minute)
+		args := map[string]string{"url": mm[1]}
+		if !strings.ContainsAny(mm[1], `/\:`) { // a name: an index's module, or a project's
+			args = map[string]string{"name": mm[1]}
+		}
+		_, err := call("install_module", args, 3*time.Minute)
 		if err != nil {
 			return "", err
 		}

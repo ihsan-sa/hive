@@ -100,13 +100,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 		}
 		return "started " + id, nil
 	}})
-	a.System.Register(system.Job{Name: "modules.update", AtStart: true, Fn: func() (string, error) {
-		changed := a.Mods.Update()
-		if len(changed) == 0 {
-			return "all modules current", nil
-		}
-		return "updated " + join(changed), nil
-	}})
+	a.System.Register(system.Job{Name: "modules.update", AtStart: true, Fn: a.Risk.UpdateModules})
 	a.Release.PauseMerges = a.Work.PauseMerges
 	a.System.Register(system.Job{Name: "hive.update", AtStart: true, Fn: a.Release.AutoUpdate})
 	a.System.Register(system.Job{Name: "report.send", Fn: (&report.Module{C: c}).Send})

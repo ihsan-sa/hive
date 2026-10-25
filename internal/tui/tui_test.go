@@ -20,6 +20,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
@@ -1207,5 +1208,31 @@ func TestToldHeadCountsTheLastDay(t *testing.T) {
 	}
 	if got := toldHead(told[1:], now); got != "done for you (1 recent)" {
 		t.Fatalf("head: %q", got)
+	}
+}
+
+// The Modules tab lists what the indexes offer under what's installed; enter
+// on one shows its trust, the read behind it and what it needs.
+func TestModulesTabBrowsesTheIndex(t *testing.T) {
+	m := testModel(100, 30)
+	st := sample()
+	m.Update(stateMsg{st: st})
+	m.Update(marketMsg{Modules: []modules.Listing{
+		{Name: "slack", Description: "the lead's chat in Slack", Repo: "https://github.com/Hive-RSI-Lab/slack", Sha: strings.Repeat("a", 40), Trust: "core-team",
+			Read: "read by the security seat at this commit", Needs: modules.Needs{Program: true, Hosts: []string{"slack.com"}}},
+		{Name: st.Modules[0].Name}, // installed already: not offered
+	}, at: time.Now()})
+	m.pick(sideRow{sec: secModules})
+	m.focus = 1
+	if v := m.View(); strings.Count(v, "[+] slack") != 1 || strings.Contains(v, "[+] "+st.Modules[0].Name) {
+		t.Fatalf("the index's module isn't offered once:\n%s", v)
+	}
+	m.modSel = len(st.Modules)
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.stack) != 1 || m.stack[0].kind != "listing" {
+		t.Fatalf("enter opened %+v", m.stack)
+	}
+	if v := m.View(); !strings.Contains(v, "core-team") || !strings.Contains(v, "read by the security seat") || !strings.Contains(v, "hosts: slack.com") {
+		t.Fatalf("the listing doesn't show its trust, read and needs:\n%s", v)
 	}
 }

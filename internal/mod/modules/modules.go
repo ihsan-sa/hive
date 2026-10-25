@@ -32,11 +32,16 @@ type Manifest struct {
 	// are what it serves, each a fixed slice of the control API (see runner).
 	Exec  []string `json:"exec,omitempty"`
 	Hooks []string `json:"hooks,omitempty"`
+	// Hosts its program reaches, and Credentials it uses (only ever through
+	// the Hive): with the above, its reach (Needs), declared up front.
+	Hosts       []string `json:"hosts,omitempty"`
+	Credentials []string `json:"credentials,omitempty"`
 }
 
 // Source is the host-written record of where a module came from.
 type Source struct {
-	Source    string    `json:"source"` // builtin | git URL
+	Source    string    `json:"source"`         // builtin | git URL
+	Path      string    `json:"path,omitempty"` // its folder in that repository
 	Release   string    `json:"release"`
 	Hash      string    `json:"hash,omitempty"` // builtin content hash at install, to spot local edits
 	Installed time.Time `json:"installed"`
@@ -44,6 +49,17 @@ type Source struct {
 	Projects  []string  `json:"projects"`         // access: "*" or project names
 	Commit    string    `json:"commit,omitempty"` // git modules: the commit checked out
 	Review    *Review   `json:"review,omitempty"` // git modules: the last read of its code
+	// Trust is core-team or reviewed (an index lists it: Index, and Read is
+	// the read behind it), unlisted (the person said yes), or project (one of
+	// the Hive's own). Needs is the reach it was installed with; nil for
+	// modules installed before reach was recorded. Skipped is an update
+	// commit that was declined.
+	Trust   string `json:"trust,omitempty"`
+	Index   string `json:"index,omitempty"`
+	Read    string `json:"read,omitempty"`
+	Project string `json:"project,omitempty"`
+	Needs   *Needs `json:"needs,omitempty"`
+	Skipped string `json:"skipped,omitempty"`
 }
 
 // Review is a read-only review run's verdict on a module at one commit.
@@ -66,6 +82,7 @@ type Registry struct {
 	ws    core.Workspace
 	j     *core.Journal
 	ticks []func()
+	index indexCache
 }
 
 // Builtin adds an in-process module's step to the tick list.
@@ -106,7 +123,7 @@ func (r *Registry) InstallDefaults() error {
 		if err := writeDefault(name, dir); err != nil {
 			return err
 		}
-		s := Source{Source: "builtin", Release: core.Version, Installed: time.Now().UTC(), Projects: []string{"*"}, Hash: hashDir(dir)}
+		s := Source{Source: "builtin", Release: core.Version, Installed: time.Now().UTC(), Projects: []string{"*"}, Hash: hashDir(dir), Trust: "core-team"}
 		if hasSrc {
 			s.Installed, s.Projects, s.Updated = src.Installed, src.Projects, time.Now().UTC()
 		}
@@ -301,104 +318,6 @@ var safeName = regexp.MustCompile(`[^a-z0-9-]+`)
 func NameFromURL(url string) string {
 	base := strings.TrimSuffix(filepath.Base(strings.TrimRight(url, "/")), ".git")
 	return strings.Trim(safeName.ReplaceAllString(strings.ToLower(base), "-"), "-")
-}
-
-// Install clones a module the person approved and records where it came from.
-func (r *Registry) Install(url, name string) (Module, error) {
-	dir := filepath.Join(r.ws.Modules(), name)
-	if core.Exists(dir) {
-		return Module{}, fmt.Errorf("%s already exists", dir)
-	}
-	// The clone goes to a hidden folder and moves into place whole: List
-	// reads any folder as a module, and a half-written one would show (and
-	// be read by agents) without its files, which a slow disk made plain.
-	tmp := filepath.Join(r.ws.Modules(), "."+name+"-"+core.NewID())
-	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, tmp); err != nil {
-		os.RemoveAll(tmp)
-		return Module{}, fmt.Errorf("module %s: %w", name, err)
-	}
-	// Its release and source record are written there too, so the module
-	// appears with them: a grant made the moment it shows isn't overwritten.
-	rel, err := record(tmp, name, url)
-	if err == nil {
-		err = os.Rename(tmp, dir)
-	}
-	if err != nil { // a clone with no source record must not stay behind
-		os.RemoveAll(tmp)
-		return Module{}, err
-	}
-	r.j.MustAppend("module.installed", map[string]string{"module": name, "source": url, "release": rel})
-	m, _ := r.Get(name)
-	return m, nil
-}
-
-// record checks out a clone's newest release (its HEAD when it has none) and
-// writes where it came from. It returns the release.
-func record(dir, name, url string) (string, error) {
-	if !core.Exists(filepath.Join(dir, ".git")) {
-		return "", fmt.Errorf("module %s did not clone", name)
-	}
-	core.Git(dir, "fetch", "-q", "--tags")
-	rel := latestTag(dir)
-	if rel != "" {
-		core.Git(dir, "checkout", "-q", rel)
-	} else {
-		rel, _ = core.Git(dir, "rev-parse", "--short", "HEAD")
-	}
-	commit, _ := core.Git(dir, "rev-parse", "HEAD")
-	s := Source{Source: url, Release: rel, Commit: commit, Installed: time.Now().UTC(), Projects: []string{"*"}}
-	return rel, writeSource(dir, s)
-}
-
-// Update moves git-sourced modules to their source's newest release, or its
-// newest commit when it has no releases.
-func (r *Registry) Update() []string {
-	var changed []string
-	for _, m := range r.List() {
-		if m.Source.Source == "" || m.Source.Source == "builtin" || !core.Exists(filepath.Join(m.Dir, ".git")) {
-			continue
-		}
-		if _, err := core.Git(m.Dir, "fetch", "-q", "--tags", "--force"); err != nil {
-			continue
-		}
-		tag := latestTag(m.Dir)
-		if tag == "" {
-			// A source with no releases is followed to its newest commit.
-			tag, _ = core.Git(m.Dir, "rev-parse", "--short", "origin/HEAD")
-		}
-		if tag == "" || tag == m.Source.Release {
-			continue
-		}
-		if !checkout(m.Dir, tag) {
-			continue
-		}
-		s := m.Source
-		s.Release, s.Updated = tag, time.Now().UTC()
-		s.Commit, _ = core.Git(m.Dir, "rev-parse", "HEAD")
-		writeSource(m.Dir, s)
-		r.j.MustAppend("module.updated", map[string]string{"module": m.Name, "from": m.Source.Release, "to": tag})
-		changed = append(changed, m.Name+" "+tag)
-	}
-	return changed
-}
-
-// checkout moves a module's folder to rev and says whether its files now
-// match it. Windows can leave a file another process has open as it was and
-// still let git exit 0, so the files are compared after, and a held file
-// gets a few seconds to come free before the update waits for the next run.
-func checkout(dir, rev string) bool {
-	for try := 0; try < 5; try++ {
-		if try > 0 {
-			time.Sleep(time.Second)
-		}
-		if _, err := core.Git(dir, "checkout", "-q", rev); err != nil {
-			continue
-		}
-		if _, err := core.Git(dir, "diff", "--quiet", "HEAD"); err == nil {
-			return true
-		}
-	}
-	return false
 }
 
 // latestTag returns the highest vX.Y.Z tag.

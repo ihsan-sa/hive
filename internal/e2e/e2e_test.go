@@ -903,8 +903,9 @@ func TestStalls(t *testing.T) {
 
 // A request past the sandbox goes to a warden, which runs its script, and the
 // outcome reaches the agent. At autonomy 2 a warden approves a module install
-// and a goals change, and the person is told after. A module updates when its
-// source releases. The Hive releases itself after a kept merge.
+// listed in an index, and a goals change, and the person is told after. A
+// module updates when its index pins a newer commit, after a warden's read of
+// the diff. The Hive releases itself after a kept merge.
 func TestPersonModulesRelease(t *testing.T) {
 	t.Parallel()
 	h := start(t)
@@ -930,7 +931,18 @@ func TestPersonModulesRelease(t *testing.T) {
 	git(src, "add", "-A")
 	git(src, "commit", "-q", "-m", "v1")
 	git(src, "tag", "v1.0.0")
-	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module " + src}, nil)
+	// It is listed in an index of the person's own, so a warden decides it.
+	index := filepath.Join(t.TempDir(), "index")
+	pin := func() {
+		sha, _ := core.Git(src, "rev-parse", "HEAD")
+		os.MkdirAll(index, 0o755)
+		os.WriteFile(filepath.Join(index, "index.json"), []byte(`{"modules": [{"name": "tools", "repo": "`+filepath.ToSlash(src)+`", "sha": "`+sha+`", "trust": "reviewed", "read": "read at this commit: helper scripts only"}]}`), 0o644)
+	}
+	pin()
+	cfg := h.ws.LoadConfig()
+	cfg.Indexes = []string{index}
+	h.ws.SaveConfig(cfg)
+	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module tools"}, nil)
 	module := func(st api.State) (api.ModuleView, bool) {
 		for _, m := range st.Modules {
 			if m.Name == "tools" {
@@ -948,8 +960,10 @@ func TestPersonModulesRelease(t *testing.T) {
 	git(src, "add", "-A")
 	git(src, "commit", "-q", "-m", "v1.1")
 	git(src, "tag", "v1.1.0")
+	h.post("/api/job", map[string]string{"name": "modules.update"}, nil) // not pinned yet: nothing to update
+	pin()
 	h.post("/api/job", map[string]string{"name": "modules.update"}, nil)
-	h.wait("the module to update to v1.1.0", minute, func(st api.State) bool { m, ok := module(st); return ok && m.Release == "v1.1.0" })
+	h.wait("the module to update to v1.1.0, read as a diff", minute, func(st api.State) bool { m, ok := module(st); return ok && m.Release == "v1.1.0" })
 }
 
 // Every risk path on the fake agents: a tribunal approves over two rounds and

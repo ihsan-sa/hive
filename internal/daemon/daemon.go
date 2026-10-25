@@ -28,6 +28,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -772,6 +773,40 @@ func (s *server) routes() http.Handler {
 		}
 		return "ok", a.Mods.SetAccess(b.Module, b.Project, b.Allow)
 	})
+	h("/api/module/index", func(r *http.Request) (any, error) {
+		list, errs := a.Mods.Listings()
+		return map[string]any{"modules": list, "errors": errs, "indexes": modules.Indexes(a.C.WS.LoadConfig())}, nil
+	})
+	h("/api/module/indexes", func(r *http.Request) (any, error) {
+		var b struct{ Add, Remove string }
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		cfg := a.C.WS.LoadConfig()
+		idx := slices.DeleteFunc(slices.Clone(modules.Indexes(cfg)), func(s string) bool { return s == b.Add || s == b.Remove })
+		if b.Add != "" {
+			idx = append(idx, b.Add)
+		}
+		if len(idx) == 0 {
+			return nil, errors.New("keep at least one index; with none listed, the Hive's own is read")
+		}
+		cfg.Indexes = idx
+		return idx, a.C.WS.SaveConfig(cfg)
+	})
+	h("/api/module/add", func(r *http.Request) (any, error) {
+		var b struct{ Spec string }
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		return a.Risk.Install(b.Spec, "", "")
+	})
+	h("/api/module/remove", func(r *http.Request) (any, error) {
+		var b struct{ Module string }
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		return "removed " + b.Module, a.Mods.Remove(b.Module)
+	})
 	h("/api/module/review", func(r *http.Request) (any, error) {
 		var b struct{ Module string }
 		if err := decode(r, &b); err != nil {
@@ -991,8 +1026,12 @@ func (s *server) state() api.State {
 	st.Checks.Running, st.Checks.Waiting = a.C.Effects.Slots.State()
 	st.Disk = a.C.Effects.Disk()
 	for _, m := range a.Mods.List() {
-		st.Modules = append(st.Modules, api.ModuleView{Name: m.Name, Description: m.Description, Source: m.Source.Source, Release: m.Source.Release, Projects: m.Source.Projects,
-			Hooks: m.Hooks, Status: a.Runner.Status(filepath.Base(m.Dir))})
+		v := api.ModuleView{Name: m.Name, Description: m.Description, Source: m.Source.Source, Release: m.Source.Release, Projects: m.Source.Projects,
+			Hooks: m.Hooks, Status: a.Runner.Status(filepath.Base(m.Dir)), Commit: m.Source.Commit, Trust: m.Source.Trust, Read: m.Source.Read}
+		if m.Source.Needs != nil {
+			v.Needs = m.Source.Needs.String()
+		}
+		st.Modules = append(st.Modules, v)
 	}
 	for _, c := range a.Chat.Chats() {
 		cv := api.ChatView{Chat: c, Unread: a.Chat.Unread(c.ID)}

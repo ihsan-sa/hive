@@ -113,6 +113,15 @@ func TestModuleSeam(t *testing.T) {
 		}
 	}
 	h.post("/api/job", map[string]string{"name": "modules.update"}, nil)
+	h.wait("the update's diff to reach the person", 2*minute, func(st api.State) bool { // unlisted: the person reads it
+		for _, a := range st.Asks {
+			if a.Kind == "module-update" && strings.Contains(a.Diff, "+an inbox and an outbox") {
+				h.post("/api/answer", map[string]string{"id": a.ID, "answer": "update"}, nil)
+				return true
+			}
+		}
+		return false
+	})
 	h.wait("the update to be reviewed and started", 2*minute, func(st api.State) bool {
 		return h.count("module.reviewed") >= 2 && h.count("module.started") >= 3 && running(st)
 	})

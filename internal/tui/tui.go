@@ -105,7 +105,8 @@ type model struct {
 	waitSel int
 	fbSel   string // the feedback item selected, by id
 	modSel  int
-	kbDir   string // the knowledge base folder shown, relative to its root
+	market  marketMsg // what the indexes list, for the Modules tab
+	kbDir   string    // the knowledge base folder shown, relative to its root
 	kbSel   int
 	kbNew   []kb.Change // the knowledge base's recently updated entries
 	kbNewAt time.Time   // when they were read
@@ -356,7 +357,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.msgs[msg.out.chat] = append(m.msgs[msg.out.chat], msg.msg) // a new thread stays in the channel; the person opens it
 	case tickMsg:
-		return m, tea.Batch(m.fetchState(), m.fetchChat(m.currentChatID()), m.fetchDetail(), m.fetchFeed(), tick())
+		return m, tea.Batch(m.fetchState(), m.fetchChat(m.currentChatID()), m.fetchDetail(), m.fetchFeed(), m.fetchMarket(), tick())
+	case marketMsg:
+		m.market = msg
 	case stateMsg:
 		if msg.err != nil {
 			m.err = "the Hive isn't answering: " + msg.err.Error()
@@ -911,7 +914,9 @@ func (m *model) keys() []string {
 	case m.section == secChats:
 		return []string{"↑↓", "thread", "enter", "open", "n", "new thread", "space", "collapse", "tab", "pane"}
 	case len(m.stack) > 0 && m.stack[len(m.stack)-1].kind == "module":
-		return []string{"↑↓", "project", "space", "grant or remove", "r", "review again", "esc", "back", "q", "quit"}
+		return []string{"↑↓", "project", "space", "grant or remove", "r", "review again", "x", "uninstall", "esc", "back"}
+	case len(m.stack) > 0 && m.stack[len(m.stack)-1].kind == "listing":
+		return []string{"i", "install", "↑↓", "scroll", "esc", "back", "q", "quit"}
 	case len(m.stack) > 0:
 		return []string{"↑↓", "scroll", "esc", "back", "tab", "sidebar", "q", "quit"}
 	case m.section == secDash:

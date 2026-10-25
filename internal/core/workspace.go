@@ -78,6 +78,9 @@ type Config struct {
 	// Egress holds runs to the hosts listed; with no list a run reaches every
 	// public host.
 	Egress Egress `json:"egress"`
+	// Indexes are the module marketplaces modules install from, in order; nil
+	// is the Hive's own (internal/mod/modules, docs/modules.md).
+	Indexes []string `json:"indexes,omitempty"`
 	// Floor is the person's list of names, paths and secret globs: a step whose
 	// text touches one goes to the person, whatever a warden or panel says.
 	Floor []string `json:"floor,omitempty"`

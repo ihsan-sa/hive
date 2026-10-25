@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,6 +118,13 @@ func (r *Runner) Tick() {
 // A module with neither a git source nor a .git folder was put there by the
 // person and runs as is; a clone with no source record is read like any other.
 func (r *Runner) cleared(name string, m modules.Module) (string, string) {
+	if extra := m.Undeclared(); len(extra) > 0 {
+		why := "refused: its module.json asks for reach it was not installed with: " + strings.Join(extra, ", ")
+		if r.status[name] != why {
+			r.C.J.MustAppend("alert.raised", map[string]string{"kind": "module", "module": name, "text": "module " + name + " was not started: " + why})
+		}
+		return "", why
+	}
 	if (m.Source.Source == "" || m.Source.Source == "builtin") && !core.Exists(filepath.Join(m.Dir, ".git")) {
 		return "local", ""
 	}
@@ -183,45 +189,19 @@ func (r *Runner) review(id, commit string, m modules.Module) error {
 	if err != nil {
 		return err
 	}
-	if err := copyTree(m.Dir, dir); err != nil {
+	if err := modules.CopyTree(m.Dir, dir); err != nil {
 		return err
 	}
 	brief := fmt.Sprintf(`Read the module in your working folder, at commit %s from %s.
 
-The Hive will run %q from that folder on the person's machine, outside the sandbox, as the person, with no forge credential in its environment and its HOME set to a folder of its own. It asks to serve these hooks: %s. Its manifest says: %q.
+The Hive will run %q from that folder on the person's machine, outside the sandbox, as the person, with no forge credential in its environment and its HOME set to a folder of its own. It asks to serve these hooks: %s. It declares this reach: %s. Its manifest says: %q.
 
-Approve only if the code does what the manifest says and nothing else. Decline if it reads or sends credentials or logins (gh, git, ssh, cloud, browser), writes outside its own folder and HOME, keeps a login, token or other secret anywhere but HOME (every agent can read its folder), starts other programs it does not need, fetches and runs code, or hides what it does. Your final answer is the structured vote: vote (approve or decline) and reason.`,
-		commit, m.Source.Source, strings.Join(m.Exec, " "), strings.Join(m.Hooks, ", "), m.Description)
+Approve only if the code does what the manifest says and reaches nothing it doesn't declare. Decline if it reads or sends credentials or logins (gh, git, ssh, cloud, browser), writes outside its own folder and HOME, keeps a login, token or other secret anywhere but HOME (every agent can read its folder), starts other programs it does not need, fetches and runs code, or hides what it does. Your final answer is the structured vote: vote (approve or decline) and reason.`,
+		commit, m.Source.Source, strings.Join(m.Exec, " "), strings.Join(m.Hooks, ", "), m.Manifest.Needs(), m.Description)
 	s := r.Agents.Spec(id, "module-reviewer", "", dir, brief)
 	s.ReadOnly, s.Schema = true, VoteSchema
 	_, err = r.C.Runs.Start(s)
 	return err
-}
-
-func copyTree(from, to string) error {
-	return filepath.WalkDir(from, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(from, p)
-		if d.Name() == ".git" || d.Name() == ".hive-source.json" {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			return os.MkdirAll(filepath.Join(to, rel), 0o755)
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(filepath.Join(to, rel), raw, 0o644)
-	})
 }
 
 // start launches the program with a fresh token, its own HOME and no
