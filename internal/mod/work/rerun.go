@@ -99,6 +99,9 @@ func (m *Module) RerunChecks(id, by string) (string, error) {
 	}
 	t.Reruns[t.SHA]++
 	t.RerunAt = time.Now().UTC()
+	// A wait on main belongs to one run of the checks: the re-run's red
+	// starts its own, not one already spent.
+	t.MainWait, t.MainWaitOn = time.Time{}, ""
 	note := fmt.Sprintf("re-ran the forge's failed checks on %s (%s) for %s, %d of %d on this head", core.Short(t.SHA), core.CheckNames(failed), by, t.Reruns[t.SHA], rerunsPerHead)
 	if t.Stage == StageWorking && t.Round > 0 && strings.HasPrefix(t.Findings, forgeFailed+core.Short(t.SHA)) {
 		t.Round--

@@ -396,6 +396,7 @@ func selfHive(t *testing.T) (*Module, *notes, func(int, string, string, ...strin
 	n := &notes{Local: m.C.Effects.Forge.(*core.Local), got: map[string]string{}}
 	m.C.Effects.Forge = n
 	m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true})
+	m.Scan = func(core.Project, string) error { return nil } // scan_test.go tests the scan
 	merged := func(pr int, sha, mergeSHA string, root ...string) {
 		m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": pr, "sha": sha, "merge_sha": mergeSHA, "root": root})
 	}
