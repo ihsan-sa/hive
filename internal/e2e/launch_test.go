@@ -120,7 +120,11 @@ func settledDir(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { settle(dir, dir) })
+	t.Cleanup(func() {
+		if err := settle(dir, dir); err != nil {
+			t.Logf("left %s behind: something still writes there: %v", dir, err)
+		}
+	})
 	return dir
 }
 
