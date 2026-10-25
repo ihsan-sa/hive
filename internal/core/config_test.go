@@ -67,6 +67,13 @@ func TestSetShareOnAgainKeepsSince(t *testing.T) {
 	if c.Share != "2026-01-02T03:04:05Z" || c.InstallID != id {
 		t.Fatalf("on again moved sharing to %q, id %q (was %q)", c.Share, c.InstallID, id)
 	}
+	// An id lost while on (a hand edit, a config from a share bundle) comes back.
+	c.InstallID = ""
+	c.SetShare(true)
+	if c.Share != "2026-01-02T03:04:05Z" || c.InstallID == "" {
+		t.Fatalf("on again without an id: share %q, id %q", c.Share, c.InstallID)
+	}
+	id = c.InstallID
 	c.SetShare(false)
 	c.SetShare(true)
 	if c.Share == "2026-01-02T03:04:05Z" || c.InstallID != id {

@@ -149,17 +149,17 @@ func (c Config) Sharing() (time.Time, bool) {
 
 // SetShare records the person's answer; turning it on makes the install id.
 // Turning it on when it is already on keeps the time it was turned on, so
-// events since then that no run has reported yet still are.
+// events since then that no run has reported yet still are, and still makes
+// an id it lacks (report.Send asks for `report on` then).
 func (c *Config) SetShare(on bool) {
-	if _, already := c.Sharing(); on && already {
-		return
-	}
-	c.Share = "off"
-	if on {
-		c.Share = time.Now().UTC().Format(time.RFC3339Nano)
-		if c.InstallID == "" {
-			c.InstallID = NewUUID()
+	if _, already := c.Sharing(); !on || !already {
+		c.Share = "off"
+		if on {
+			c.Share = time.Now().UTC().Format(time.RFC3339Nano)
 		}
+	}
+	if on && c.InstallID == "" {
+		c.InstallID = NewUUID()
 	}
 }
 
