@@ -27,7 +27,7 @@ func TestSyncBeforePostIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	forge.EnsureRepo("me/slow", "")
+	forge.EnsureRepo("me/slow", "", false)
 	p, err := c.Projects.Add(core.Project{Name: "slow", Repo: "me/slow"})
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestLeadBundle(t *testing.T) {
 		return
 	}
 	lead := func(name string) string {
-		forge.EnsureRepo("me/"+name, "")
+		forge.EnsureRepo("me/"+name, "", false)
 		p, err := c.Projects.Add(core.Project{Name: name, Repo: "me/" + name, Isolated: true})
 		if err != nil {
 			t.Fatal(err)

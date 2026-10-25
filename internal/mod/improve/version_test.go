@@ -18,7 +18,7 @@ func scored(t *testing.T) (m *Module, merge func(files map[string]string, as ...
 	t.Helper()
 	m = rig(t)
 	forge := m.C.Effects.Forge.(*core.Local)
-	if _, err := forge.EnsureRepo("me/p", ""); err != nil {
+	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {
 		t.Fatal(err)
 	}
 	src := t.TempDir()

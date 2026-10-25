@@ -67,7 +67,7 @@ func gateRigSeeded(t *testing.T, mainRed bool, onMain, files map[string]string) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.Close() })
-	forge.EnsureRepo("me/p", "")
+	forge.EnsureRepo("me/p", "", false)
 	seed := map[string]string{".hive/project.json": `{"test": "test ! -f BROKEN && { test ! -f NEEDTOOL || hive-gate-tool-xyz; }"}`, "README.md": "# p\n"}
 	if mainRed {
 		seed["BROKEN"] = "x"

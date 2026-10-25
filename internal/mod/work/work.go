@@ -1051,6 +1051,9 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 			return err
 		}
 		t.Stage, t.Reason = StageBlocked, finishText(r)
+		if r.Finish == nil {
+			t.Reason = r.Reason // the Hive ended it: say why, not its last words
+		}
 		m.save(t, "blocked: "+core.Clip(t.Reason, 300))
 		if t.Issue.Number != 0 {
 			m.comment(p.Repo, t.Issue.Number, "The worker stopped:\n\n"+t.Reason)
@@ -2193,6 +2196,7 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		fmt.Fprintf(&short, format, a...)
 	}
 	both("# The forge's failed checks on %s\n\nPR #%d, task %s, based on main at %s.\n", core.Short(t.SHA), t.PR.Number, t.ID, core.Short(main))
+	both("%s", m.bundleForChecks(t, p, main))
 	logs := 0
 	for _, r := range failed {
 		both("\n## %s\n\n", r.Name)
@@ -2236,6 +2240,25 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		fmt.Fprintf(&short, "\nThe end of each failed step's log is in $HIVE_RUN/%s, kept there for later rounds.\n", forgeFailuresFile)
 	}
 	return short.String()
+}
+
+// bundleForChecks writes main as the forge's checks saw it to the worker's
+// main.bundle and says so. The forge runs a pull request's checks on it merged
+// with main, so a branch behind main fails on tests only main has; without
+// that main in $HIVE_RUN (an older bundle, or none), the worker can neither
+// see nor run them, and reads main's change as its own.
+func (m *Module) bundleForChecks(t *Task, p core.Project, main string) string {
+	if t.Worker == "" {
+		return ""
+	}
+	if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle")); err != nil {
+		return ""
+	}
+	fetch := "`git fetch \"$HIVE_RUN/main.bundle\" main`"
+	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
+		return "$HIVE_RUN/main.bundle holds main at " + core.Short(main) + " (" + fetch + ").\n"
+	}
+	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. $HIVE_RUN/main.bundle holds main at " + core.Short(main) + ": " + fetch + ", then merge FETCH_HEAD to see and run what the checks ran.\n"
 }
 
 // fenceFor is a ~ fence longer than any run of ~ or ` that starts a line of
