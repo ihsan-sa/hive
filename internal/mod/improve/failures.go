@@ -286,8 +286,13 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	if stopped {
 		before = core.StopKeys(bc.FullOutput())
 	}
+	// Main just before was stopped by vet or the build, so its tests never
+	// ran: this merge fixed that, and what fails now may have been hidden
+	// behind it since any merge in that stretch. Comparing further back
+	// can't clear this merge, and reverting it only brings the stop back.
+	hidden := !stopped && len(before) == 0 && len(core.StopKeys(bc.FullOutput())) > 0
 	for _, k := range keys {
-		if !slices.Contains(before, k) {
+		if !hidden && !slices.Contains(before, k) {
 			return ""
 		}
 	}
@@ -300,13 +305,22 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	slices.Sort(names)
 	what := strings.Join(slices.Compact(names), ", ")
 	why := "not new at this merge: " + what + " failed after it merged and fail too at " + core.Short(parent) + ", main just before it"
+	known := fmt.Sprintf("After %s merged as %s the tests went red, but the same tests fail at %s, main just before it, so the merge wasn't the cause and wasn't reverted.", t.Label(), core.Short(t.MergeSHA), core.Short(parent))
+	switch {
+	case stopped:
+		why += " (vet or the build stopped the command, so the tests behind it didn't run at either)"
+		known += " Vet or the build stopped the command at both, so the tests behind it didn't run: they may fail too once it is fixed."
+	case hidden:
+		why = "can't be told new at this merge: " + what + " failed after it merged, and at " + core.Short(parent) + ", main just before it, vet or the build stopped the command before any test ran, so they may have failed there unseen; this merge cleared that stop, and reverting it only brings the stop back"
+		known = fmt.Sprintf("After %s merged as %s it cleared a vet or build error that stopped main's tests at %s, main just before it, and tests that couldn't run there fail now. They may have broken at any merge while main was stopped, so this one wasn't reverted.", t.Label(), core.Short(t.MergeSHA), core.Short(parent))
+	}
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": t.MergeSHA, "task": t.ID,
 		"text": core.Clip(why, 400) + " (" + p.Name + "). Not reverted; filed to fix on main."})
 	title := core.Clip("Make "+what+" pass on main again", 120)
 	if len(m.Work.List(func(w work.Task) bool { return w.Project == p.Name && w.Title == title && !w.Terminal() })) == 0 {
 		m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title, Aim: work.AimFix, Why: core.Clip("red on main: "+what+" fail at "+core.Short(parent)+" and after "+core.Short(t.MergeSHA), 300),
 			Done:  "The tests pass on main again, every time, without reverting anything.",
-			Known: fmt.Sprintf("After %s merged as %s the tests went red, but the same tests fail at %s, main just before it, so the merge wasn't the cause and wasn't reverted. What failed: %s", t.Label(), core.Short(t.MergeSHA), core.Short(parent), core.Clip(bc.Output, 1500))})
+			Known: known + " What failed: " + core.Clip(tc.Output, 1500) + "\n\nAt " + core.Short(parent) + ": " + core.Clip(bc.Output, 1000)})
 	}
 	return why
 }
