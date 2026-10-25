@@ -30,7 +30,7 @@ func match(b Brief, t Task) string {
 		}
 	}
 	sim := likeness(b.Title, t.Title)
-	if sim >= 0.6 {
+	if sim >= 0.8 { // "add left-pad" and "add right-pad" share 4 of 6 words and are two asks
 		return "the titles are nearly the same"
 	}
 	if f := files(b.Title + "\n" + b.Done + "\n" + b.Known); sim >= 0.3 && len(f) > 0 && slices.Equal(f, files(t.Title+"\n"+t.Done+"\n"+t.Known)) {

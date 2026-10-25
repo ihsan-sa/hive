@@ -71,6 +71,10 @@ func TestDuplicateBriefJoinsOpenTask(t *testing.T) {
 
 // What makes two briefs the same ask, on the briefs filed on 2026-10-24.
 func TestBriefMatch(t *testing.T) {
+	pad := Task{Title: "add left-pad FAKE:needpackage"}
+	if match(Brief{Title: "add right-pad FAKE:needpackage"}, pad) != "" {
+		t.Error("two asks whose short titles differ in one word are the same ask")
+	}
 	open := Task{Title: "Windows e2e flakes: TestReportSharing and TestModuleLifecycle on a slow runner", Done: "Both tests pass reliably on test (windows-latest)"}
 	for _, c := range []struct {
 		b    Brief
