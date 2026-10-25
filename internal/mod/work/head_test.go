@@ -1,6 +1,7 @@
 package work
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,6 +123,22 @@ func TestMergeForeignHeadGoesBack(t *testing.T) {
 	}
 }
 
+// waitedLong backdates the task's wait for its head's first check run past
+// the 30 minutes it waits. It goes through the task's saved form, so this file
+// builds on a Hive without the wait, where the test then fails (the gate's
+// fixes step runs it there).
+func waitedLong(t *testing.T, task *Task) {
+	t.Helper()
+	raw, _ := json.Marshal(task)
+	var fields map[string]any
+	json.Unmarshal(raw, &fields)
+	fields["no_checks"] = time.Now().Add(-31 * time.Minute)
+	raw, _ = json.Marshal(fields)
+	if err := json.Unmarshal(raw, task); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A head on which the forge reports no check run at all waits only so long:
 // behind main, it is brought up to date for a head the forge will run on; up
 // to date, the lead hears of it once.
@@ -130,10 +147,10 @@ func TestMergeNoCheckRunsIsBounded(t *testing.T) {
 	m, task, p, f := gateRigSeeded(t, false, list, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
 	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerging || task.NoChecksOn != task.SHA || alerts(m, "main-red") != 0 {
+	if task.Stage != StageMerging || alerts(m, "main-red") != 0 {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
-	task.NoChecks = time.Now().Add(-noChecksMax - time.Minute)
+	waitedLong(t, task)
 	m.later = map[string]time.Time{}
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerging || !strings.Contains(task.Reason, "lead has been told") || alerts(m, "main-red") != 1 {
@@ -141,7 +158,7 @@ func TestMergeNoCheckRunsIsBounded(t *testing.T) {
 	}
 	old := task.SHA
 	pushMain(t, f, map[string]string{"other.txt": "z"})
-	task.NoChecks = time.Now().Add(-noChecksMax - time.Minute)
+	waitedLong(t, task)
 	m.later = map[string]time.Time{}
 	mergeOnce(t, m, task, p)
 	if task.SHA == old || task.Stage != StageTesting || task.Round != 0 {
