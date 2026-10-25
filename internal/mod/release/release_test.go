@@ -959,6 +959,33 @@ func TestReleaseNumbersPastEveryTag(t *testing.T) {
 	}
 }
 
+// A release cut outside the Hive (a warden's hand cut, which journals no
+// hive.released) at a later merge covers the earlier ones: a merge kept late
+// is not cut after it, as v0.1.111 was at a commit older than v0.1.110's.
+func TestNoReleaseBehindAHandCut(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	merged(2, "a2", "m2")
+	land("a1", "r1")
+	land("a2", "r2")
+	n.AddTag("me/hive", "v0.0.1", "m2")
+	n.AddRelease("me/hive", core.Release{Tag: "v0.0.1", Prerelease: true})
+	m.AfterKept("hive", "m1")
+	m.AfterKept("hive", "m2")
+	if n.calls != 0 {
+		t.Fatalf("released behind the hand-cut v0.0.1: %v", n.got)
+	}
+	if a := alertText(m); !strings.Contains(a, "v0.0.1 at m2") {
+		t.Fatalf("the refusal doesn't name the newer release: %q", a)
+	}
+	merged(3, "a3", "m3")
+	land("a3", "r3")
+	m.AfterKept("hive", "m3")
+	if _, ok := n.got["v0.0.2"]; !ok {
+		t.Fatalf("a merge after the hand cut wasn't released: %v", n.got)
+	}
+}
+
 func TestNextTag(t *testing.T) {
 	for _, c := range []struct {
 		tags []string
