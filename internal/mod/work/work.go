@@ -1817,6 +1817,14 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if err != nil {
 		return err
 	}
+	m.merged(t, merged, "merged as "+core.Short(merged))
+	return nil
+}
+
+// merged records t's merge as merged, by the Hive or on the forge: a
+// checkpoint's worker keeps going on a new branch, anything else is merged and
+// the next tick takes it to done. Either way the chat hears and OnMerged runs.
+func (m *Module) merged(t *Task, merged, note string) {
 	t.MergeSHA, t.Stage, t.Reason = merged, StageMerged, ""
 	if t.Checkpoint != "" {
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Merged a checkpoint of %s; its worker keeps going: %s", t.Label(), t.PR.URL))
@@ -1824,14 +1832,14 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		t.Banked++
 		t.Banks = append(t.Banks, Bank{PR: t.PR, MergeSHA: merged}) // a revert of this merge names its PR
 		t.Branch, t.PR = fmt.Sprintf("hive/%s-%d", t.ID, t.Banked), core.PR{}
-		m.save(t, "checkpoint merged as "+core.Short(merged)+"; the worker keeps going")
+		m.save(t, "checkpoint "+note+"; the worker keeps going")
 		m.C.Runs.Send(t.Worker, fmt.Sprintf("Your commit %s beat the best kept score and is merged into main as a checkpoint. Keep going on top of it on your branch, and leave that commit as it is (no amend, reset or rebase past it): the Hive lays what you commit after it onto main, so you needn't fetch main.", core.Short(t.Base)))
 		if m.OnMerged != nil {
 			m.OnMerged(*t)
 		}
-		return nil
+		return
 	}
-	m.save(t, "merged as "+core.Short(merged))
+	m.save(t, note)
 	if t.Kind == "revert" {
 		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Label(), "Revert: "), t.Lesson))
 	} else {
@@ -1840,7 +1848,6 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if m.OnMerged != nil {
 		m.OnMerged(*t)
 	}
-	return nil
 }
 
 // holdGap is how long a held task waits before the gate looks again.
@@ -2528,9 +2535,12 @@ func (m *Module) RecordRead(id, sha, by, verdict, note string) (Task, error) {
 	return t, nil
 }
 
-// closedOnForge ends a task whose pull request someone closed on the forge
-// without merging it. That is the person's call, so the lead can't bring the
-// task back by accident; a closed checkpoint is dropped as one left open is.
+// closedOnForge ends a task whose pull request someone ended on the forge. One
+// merged there (by the person, the lead through gh, anyone) is recorded as the
+// Hive's own merge is, whatever stage it was in or held at, so the briefs
+// queued behind it start. One closed without merging is the person's call, so
+// the lead can't bring the task back by accident; a closed checkpoint is
+// dropped as one left open is.
 const closedCheckpoint = "the person closed a checkpoint's pull request"
 
 // pollDue says whether a task waiting for the person is due a look at its
@@ -2550,8 +2560,18 @@ func (m *Module) closedOnForge(t *Task, p core.Project) (bool, error) {
 		return false, nil
 	}
 	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
-	if err != nil || pr.State != "CLOSED" {
+	if err != nil {
 		return false, err
+	}
+	if pr.State == "MERGED" {
+		if pr.MergeSHA == "" { // the forge hasn't said where yet: look next tick
+			return true, nil
+		}
+		m.merged(t, pr.MergeSHA, fmt.Sprintf("merged on the forge outside the Hive (PR #%d) as %s", pr.Number, core.Short(pr.MergeSHA)))
+		return true, nil
+	}
+	if pr.State != "CLOSED" {
+		return false, nil
 	}
 	if t.Checkpoint != "" {
 		t.NoBank = closedCheckpoint
