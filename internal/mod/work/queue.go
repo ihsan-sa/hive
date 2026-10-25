@@ -1,6 +1,7 @@
 package work
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,7 +75,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	for _, t := range line {
 		switch o, area := m.overlap(t, ahead); {
 		case t.Held:
-			wait[t.ID] = "held by the lead"
+			wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
 			continue // a held brief keeps no place that holds others back
 		case o != nil && !t.Now: // one the lead started now goes past the overlap
 			verb := "to land"
@@ -348,6 +349,9 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		case m.C.Runs.Walled(r, t.Project) != nil:
 			notes = append(notes, "no task "+id)
 			continue
+		case m.reach(r, t.Project) != nil:
+			notes = append(notes, fmt.Sprintf("%s is on project %s; you steer only your own", id, t.Project))
+			continue
 		case !t.Queued():
 			notes = append(notes, fmt.Sprintf("%s has left the queue (%s); a started worker isn't stopped by the queue", id, t.Stage))
 			continue
@@ -368,7 +372,8 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		}
 		if c.held != nil && *c.held != t.Held {
 			t.Held, note = *c.held, map[bool]string{true: "held by " + r.ID, false: "released by " + r.ID}[*c.held]
-			if !t.Held && t.Reason == "held by the lead" {
+			t.HeldBy = map[bool]string{true: r.ID}[t.Held]
+			if !t.Held && strings.HasPrefix(t.Reason, "held by ") {
 				t.Reason = ""
 			}
 		}

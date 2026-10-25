@@ -330,7 +330,7 @@ func TestGiveUpComesBack(t *testing.T) {
 	if task.Stage != StageStopped {
 		t.Fatalf("stage %q", task.Stage)
 	}
-	if err := m.Recheck(task.ID, ""); err != nil {
+	if err := m.Recheck(task.ID, "", "lead"); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := m.Get(task.ID)
@@ -339,7 +339,7 @@ func TestGiveUpComesBack(t *testing.T) {
 	}
 	got.Stage = StageDone
 	m.save(&got, "done")
-	if err := m.Recheck(task.ID, ""); err == nil {
+	if err := m.Recheck(task.ID, "", "lead"); err == nil {
 		t.Fatal("a done task was rechecked")
 	}
 }
@@ -357,7 +357,7 @@ func TestPersonStopHolds(t *testing.T) {
 			m.onPersonMerge(core.Ask{Ref: task.ID + "@abc", Answer: "leave open"})
 		}
 		for _, back := range []string{"", "try again"} {
-			if err := m.Recheck(task.ID, back); err == nil || !strings.Contains(err.Error(), "by the person") {
+			if err := m.Recheck(task.ID, back, "lead"); err == nil || !strings.Contains(err.Error(), "by the person") {
 				t.Fatalf("%s: recheck %q got %v", how, back, err)
 			}
 		}
@@ -391,7 +391,7 @@ func TestPersonStoppedWorkerHolds(t *testing.T) {
 			m.save(task, task.Reason)
 		}
 		for _, back := range []string{"", "try again"} {
-			if err := m.Recheck(task.ID, back); err == nil || !strings.Contains(err.Error(), "by the person") {
+			if err := m.Recheck(task.ID, back, "lead"); err == nil || !strings.Contains(err.Error(), "by the person") {
 				t.Fatalf("marked %v: recheck %q got %v", marked, back, err)
 			}
 		}
