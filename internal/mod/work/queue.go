@@ -24,9 +24,9 @@ import (
 // brake is the machine. A brief that names a file another brief names (one a
 // worker is on, or ahead of it in line), or one that worker has changed,
 // waits until that worker is done, so the two don't redo each other's work. A
-// package or directory alone holds nothing back. Once a worker has pushed, its task holds nothing back: a conflict it
-// meets later goes back to its worker with main to merge. Nothing here stops a
-// worker that has started.
+// package or directory alone holds nothing back. Once a worker has pushed,
+// its task holds nothing back: a conflict it meets later goes back to its
+// worker with main to merge. Nothing here stops a worker that has started.
 
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
@@ -213,10 +213,11 @@ var pathLike = regexp.MustCompile(`[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+`)
 
 // areas are the files t's brief names that exist in its project's clone. A
 // directory or package is never one, even named on its own or as evidence,
-// so it holds no brief back for a whole run. A file that merges as union (.gitattributes merge=union, like docs/log.md)
-// isn't an area: both sides' lines are kept. They are worked out once per
-// brief text and .gitattributes, so a doc main newly marks union frees the
-// briefs that name it.
+// so it holds no brief back for a whole run. A file that merges as union
+// (.gitattributes merge=union, like docs/log.md) isn't an area: both sides'
+// lines are kept. They are worked out once per brief text and
+// .gitattributes, so a doc main newly marks union frees the briefs that name
+// it.
 func (m *Module) areas(t Task) []string {
 	text := t.Title + "\n" + t.Done + "\n" + t.Known
 	root := m.C.WS.Project(t.Project)
