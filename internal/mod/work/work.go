@@ -139,10 +139,20 @@ type Task struct {
 	// run at all while its required ones were awaited (head.go).
 	NoChecks   time.Time `json:"no_checks,omitempty"`
 	NoChecksOn string    `json:"no_checks_on,omitempty"`
+	// HeadWait is when the forge was first seen still showing HeadWaitOn,
+	// an earlier push of the Hive's than the task's head (head.go).
+	HeadWait   time.Time `json:"head_wait,omitempty"`
+	HeadWaitOn string    `json:"head_wait_on,omitempty"`
 	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
 	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
 	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
+	// FilesSince is when a queued brief began waiting, tick after tick, on
+	// other briefs' files (queue.go); FilesTold says the lead was told it
+	// has waited long, once per wait.
+	FilesSince time.Time `json:"files_since,omitempty"`
+	FilesTold  bool      `json:"files_told,omitempty"`
 	Failures   int       `json:"failures"`
+	Kills      int       `json:"kills,omitempty"`      // steps in a row killed by their timeout (killCap)
 	CloseFail  int       `json:"close_fail,omitempty"` // failed tries to close the issue
 	Attempt    int       `json:"attempt"`              // fresh workers handed this task
 	Retry      time.Time `json:"retry,omitempty"`
@@ -369,7 +379,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 				m.cantRunOpen[a.Project] = cmp.Or(a.Check, "test")
 			case a.Kind == "main-red" && a.SHA != "":
 				m.mainRed[a.Project+"@"+a.SHA] = true
-			case a.Kind == "check-warning" && a.Key != "":
+			case (a.Kind == "check-warning" || a.Kind == "no-checks") && a.Key != "":
 				m.mainRed[a.Project+"@"+a.Key] = true
 			}
 			m.mu.Unlock()
@@ -711,10 +721,17 @@ func (m *Module) Tick() {
 }
 
 // waits records why a queued task waits, when that is new. A machine hold's
-// live figures after " (" change every tick, so only a new kind is saved.
+// live figures after " (" change every tick, so only a new kind is saved. A
+// brief that has waited on other briefs' files since filesTell ago, passed
+// meanwhile by later briefs on its other files, is told to the lead once.
 func (m *Module) waits(t Task, why string) {
+	since := time.Time{}
+	if onFiles(why) {
+		since = cmp.Or(t.FilesSince, time.Now().UTC())
+	}
+	tell := !since.IsZero() && !t.FilesTold && time.Since(since) >= filesTell
 	kind, _, _ := strings.Cut(why, " (")
-	if t.Stage == StageQueued && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+	if t.Stage == StageQueued && since.Equal(t.FilesSince) && !tell && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
 		return
 	}
 	m.mu.Lock()
@@ -724,11 +741,20 @@ func (m *Module) waits(t Task, why string) {
 	}
 	m.busy[t.ID] = true
 	m.mu.Unlock()
-	t.Stage, t.Reason = StageQueued, why
-	m.save(&t, "")
+	t.Stage, t.Reason, t.FilesSince = StageQueued, why, since
+	t.FilesTold = t.FilesTold && !since.IsZero() || tell
+	note := ""
+	if tell {
+		note = "told the lead it has waited on other briefs' files since " + since.Format("2006-01-02 15:04Z")
+	}
+	m.save(&t, note)
 	m.mu.Lock()
 	delete(m.busy, t.ID)
 	m.mu.Unlock()
+	if tell {
+		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited on other briefs' files since %s, while later briefs on its other files went ahead; now %s. `queue --now %s --why ...` starts it past them, or hold the ones on its files.",
+			t.Label(), t.ID, since.Format("2006-01-02 15:04Z"), why, t.ID))
+	}
 }
 
 // Wait returns once every step Tick started has ended, so a test's folders
@@ -784,6 +810,12 @@ func (m *Module) settle(t *Task, err error) {
 	downs = m.downs
 	m.mu.Unlock()
 	if err == nil {
+		// t is the tick's copy, which nothing saves after this, so a run of
+		// kills a step got through ends on the task as kept.
+		if cur, ok := m.Get(t.ID); ok && cur.Kills > 0 {
+			cur.Kills, t.Kills = 0, 0
+			m.save(&cur, "")
+		}
 		return
 	}
 	if rl := (*core.RateLimited)(nil); errors.As(err, &rl) {
@@ -804,13 +836,22 @@ func (m *Module) settle(t *Task, err error) {
 	if core.TimedOut(err.Error()) {
 		// A call killed by its timeout means the machine is loaded, which isn't
 		// the task's fault either: it waits a while without counting a failure.
+		// One killed every time for about an hour is stuck, not slow: it stops
+		// for the person, in words revive doesn't bring back.
 		m.mu.Lock()
 		m.slow = time.Now()
 		m.mu.Unlock()
+		t.Kills++
+		if t.Kills >= killCap {
+			t.Kills = 0
+			m.giveUp(t, fmt.Sprintf("gave up after %d steps in a row killed by their timeout (about %s): ", killCap, killCap*slowWait)+core.Clip(err.Error(), 300))
+			return
+		}
 		t.Retry = time.Now().Add(slowWait)
 		m.save(t, core.Clip(err.Error(), 300)+"; the machine is slow, so the task waits, then goes on")
 		return
 	}
+	t.Kills = 0
 	t.Failures++
 	t.Retry = time.Now().Add(time.Duration(min(t.Failures, 6)) * 30 * time.Second)
 	msg := err.Error()
@@ -824,6 +865,10 @@ func (m *Module) settle(t *Task, err error) {
 // slowWait is how long a task waits after a call killed by its timeout, and
 // how long the calls must stay clear of that before tasks it stopped return.
 const slowWait = 3 * time.Minute
+
+// killCap is how many steps in a row killed by their timeout stop a task:
+// about an hour of slowWait.
+const killCap = 20
 
 // backoff is the gap after the nth failed step of an outage: 30s doubling to
 // a 10 minute ceiling.
@@ -1074,6 +1119,7 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 		t.Branch = "hive/" + t.ID
 	}
 	t.Worker, t.Stage, t.Failures, t.Reason, t.Now = id, StageWorking, 0, "", false
+	t.FilesSince, t.FilesTold = time.Time{}, false
 	m.save(t, "worker "+id+" started")
 	return nil
 }
@@ -1819,6 +1865,9 @@ func (m *Module) review(t *Task, p core.Project) error {
 		if err != nil {
 			return err
 		}
+		if strings.TrimSpace(ch.Diff) == "" { // alreadyLanded takes a truly empty one: this diff couldn't be read
+			return fmt.Errorf("the diff of %s against main %s came out empty; not handing a reviewer nothing to read", core.Short(t.SHA), core.Short(main))
+		}
 		dir, err := m.C.Effects.NewCheckout(p, id, t.SHA)
 		if err != nil {
 			return err
@@ -1958,13 +2007,15 @@ func (m *Module) followUp(t *Task, p core.Project) error {
 // bounded number of times, after which the work stops and says so. A revert
 // the Hive made has no worker, so it stops on the first findings.
 func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
-	return m.sendBackWith(t, p, findings, "")
+	return m.sendBackWith(t, p, findings, "", false)
 }
 
 // sendBackWith sends findings back with detail (a red forge check's
-// summary) that goes in the worker's message only: the task keeps where the
-// whole of it is saved (ForgeLog), not the text.
-func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string) error {
+// summary, a gate report) that goes in the worker's message only: the task
+// keeps where the whole of it is saved (ForgeLog), not the text. bundled says
+// the caller already wrote main.bundle and said so (bundleForChecks);
+// otherwise bundleForFixes writes it.
+func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string, bundled bool) error {
 	// A worker's next push would open a new pull request over the person's close.
 	if closed, err := m.closedOnForge(t, p); closed || err != nil {
 		return err
@@ -1995,7 +2046,9 @@ func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string) 
 	if detail != "" {
 		msg += "\n\n" + detail
 	}
-	msg += m.bundleForFixes(t, p, msg)
+	if !bundled {
+		msg += m.bundleForFixes(t, p)
+	}
 	if err := m.C.Runs.Reopen(t.Worker, msg+"\n\nFix these in your checkout, commit, and finish again."); err != nil {
 		return err
 	}
@@ -2006,19 +2059,25 @@ func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string) 
 
 // bundleForFixes writes main to the worker's main.bundle and says so, so a
 // fix that needs main's newer commits (a reviewer's ask built on them) can
-// merge them. A message that already names a bundle (the forge's checks write
-// the main they ran on) keeps it. A bundle that can't be written leaves the
-// findings to go back without it.
-func (m *Module) bundleForFixes(t *Task, p core.Project, msg string) string {
-	if strings.Contains(msg, "main.bundle") {
-		return ""
-	}
-	main, err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle"))
+// merge them. A bundle that can't be written leaves the findings to go back
+// without it.
+func (m *Module) bundleForFixes(t *Task, p core.Project) string {
+	main, err := m.writeMainBundle(t, p)
 	if err != nil {
 		m.bundleFailed(t, p, err)
 		return ""
 	}
-	return "\n\n$HIVE_RUN/main.bundle holds main at " + core.Short(main) + ": if a fix needs main's newer commits, `git fetch \"$HIVE_RUN/main.bundle\" main` and merge FETCH_HEAD."
+	return "\n\n$HIVE_RUN/main.bundle holds main at " + core.Short(main) + ": if a fix needs main's newer commits, " + fetchMain + " and merge FETCH_HEAD."
+}
+
+// fetchMain is how a worker takes the main its writeMainBundle holds.
+const fetchMain = "`git fetch \"$HIVE_RUN/main.bundle\" main`"
+
+// writeMainBundle writes the project's main to t's worker's main.bundle
+// ($HIVE_RUN) and returns the commit it holds; each path that sends a worker
+// back with main (fixes, the forge's checks, a conflict) goes through it.
+func (m *Module) writeMainBundle(t *Task, p core.Project) (string, error) {
+	return m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle"))
 }
 
 func (m *Module) merge(t *Task, p core.Project) error {
@@ -2033,6 +2092,15 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	}
 	if closed, err := m.closedPR(t, p, pr); closed || err != nil {
 		return err
+	}
+	if pr.Draft && pr.HeadSHA != t.SHA {
+		// A head the Hive pushed is reconciled as any PR's is; anyone
+		// else's commit on a draft waits for its read below.
+		if pushed, _ := m.C.Effects.Pushed(p.Name, t.Branch, pr.HeadSHA); pushed {
+			if wait, err := m.sameHead(t, p, pr.HeadSHA); wait || err != nil {
+				return err
+			}
+		}
 	}
 	if pr.Draft && (pr.HeadSHA != t.SHA || t.DraftWhy != "") {
 		return m.waitDraft(t, pr)
@@ -2373,7 +2441,8 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+how+"; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
 		}
 	}
-	if wait, err := m.noChecks(t, p, main, runs, st); wait || err != nil {
+	// Runs core.Advisory set aside still show the forge ran CI on the head.
+	if wait, err := m.noChecks(t, p, main, raw, st); wait || err != nil {
 		return wait, err
 	}
 	names := core.CheckNames(which)
@@ -2443,7 +2512,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		}
 		findings := forgeFailed + core.Short(t.SHA) + ": " + checkDetail(which) + onMain
 		detail := m.forgeFailures(t, p, main, which, mainRuns, at)
-		return true, m.sendBackWith(t, p, findings+hint, detail)
+		return true, m.sendBackWith(t, p, findings+hint, detail, true) // forgeFailures wrote main.bundle
 	}
 	m.flaked(t, p, raw)
 	if note := "known flakes: the forge's checks " + strings.Join(excused, ", ") + " fail on " + core.Short(t.SHA) + " only in quarantined tests, so they don't count against it"; len(excused) > 0 && !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
@@ -2719,7 +2788,7 @@ func (m *Module) bundleForChecks(t *Task, p core.Project, main string) string {
 	if t.Worker == "" {
 		return ""
 	}
-	head, err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle"))
+	head, err := m.writeMainBundle(t, p)
 	if err != nil {
 		m.bundleFailed(t, p, err)
 		return "$HIVE_RUN/main.bundle couldn't be updated to main at " + core.Short(main) + "; an older one there may not hold what the checks ran.\n"
@@ -2728,11 +2797,10 @@ func (m *Module) bundleForChecks(t *Task, p core.Project, main string) string {
 	if head != main {
 		holds += ", which main has moved to since the checks ran on " + core.Short(main)
 	}
-	fetch := "`git fetch \"$HIVE_RUN/main.bundle\" main`"
 	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
-		return holds + " (" + fetch + ").\n"
+		return holds + " (" + fetchMain + ").\n"
 	}
-	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. " + holds + ": " + fetch + ", then merge FETCH_HEAD to see and run what the checks ran.\n"
+	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. " + holds + ": " + fetchMain + ", then merge FETCH_HEAD to see and run what the checks ran.\n"
 }
 
 // bundleFailed journals a main.bundle that couldn't be written, so a worker
@@ -2807,6 +2875,14 @@ func checkDetail(runs []core.CheckRun) string {
 func (m *Module) raiseOnce(p core.Project, key, text string) {
 	if !m.raised(p, key) {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": key, "text": text})
+	}
+}
+
+// raiseKind raises an alert of its own kind once per key, as raiseOnce does,
+// for what holds a change back without main being red.
+func (m *Module) raiseKind(p core.Project, kind, key, text string) {
+	if !m.raised(p, key) {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": kind, "project": p.Name, "key": key, "text": text})
 	}
 }
 
@@ -3164,17 +3240,17 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 		m.comment(p.Repo, t.PR.Number, "Stopping: the branch keeps conflicting with main. The pull request stays open.")
 		return nil
 	}
-	if _, err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle")); err != nil {
+	if _, err := m.writeMainBundle(t, p); err != nil {
 		return err
 	}
-	msg := "Main moved and your branch conflicts with it. Fetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
+	msg := "Main moved and your branch conflicts with it. Fetch main with " + fetchMain + ", merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
 	if d := (*core.DoubledError)(nil); errors.As(why, &d) {
 		msg = "Main moved, and merging it into your branch keeps both sides of lines you and main each changed (these docs merge as union), so these end up more than once:\n\n- " +
-			strings.Join(d.Lines, "\n- ") + "\n\nFetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, keep each of these once, run the tests, commit, and finish again."
+			strings.Join(d.Lines, "\n- ") + "\n\nFetch main with " + fetchMain + ", merge FETCH_HEAD, keep each of these once, run the tests, commit, and finish again."
 	}
 	if g := (*gateConflict)(nil); errors.As(why, &g) && len(g.files) > 0 {
 		msg = "Main moved, and the recursive gate, merging it into your branch to judge the change as it would land, found conflicts in:\n\n- " +
-			strings.Join(g.files, "\n- ") + "\n\nFetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
+			strings.Join(g.files, "\n- ") + "\n\nFetch main with " + fetchMain + ", merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
 	}
 	if err := m.C.Runs.Reopen(t.Worker, msg); err != nil {
 		return err

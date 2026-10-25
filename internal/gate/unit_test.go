@@ -1,11 +1,13 @@
 package gate
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -285,5 +287,23 @@ func TestCandidateIsMergedWithBase(t *testing.T) {
 	}
 	if raw, err := os.ReadFile(lessons); err == nil {
 		t.Fatalf("a merge conflict or a keep wrote a lesson: %q", raw)
+	}
+}
+
+// Gates that roll back at once into a fresh lessons.md write its header once.
+func TestNoteLessonHeaderOnce(t *testing.T) {
+	lessons := filepath.Join(t.TempDir(), ".hive", "lessons.md")
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			noteLesson(Config{Lessons: lessons}, Report{ID: fmt.Sprintf("gate-%d", i), Head: "abc", Verdict: Verdict{Reason: "nothing moved"}})
+		}()
+	}
+	wg.Wait()
+	raw, _ := os.ReadFile(lessons)
+	if n, m := strings.Count(string(raw), "# Lessons"), strings.Count(string(raw), "- The gate rolled back"); n != 1 || m != 8 || !strings.HasPrefix(string(raw), lessonsHeader) {
+		t.Fatalf("%d headers, %d lessons:\n%s", n, m, raw)
 	}
 }

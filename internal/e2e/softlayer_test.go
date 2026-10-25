@@ -16,9 +16,10 @@ import (
 )
 
 // softTask is the default real task: an open fix from this Hive's own queue
-// (task 261024-213942-b2a9266433), small enough for one worker, and one the
-// standard prompts would get as a brief.
-const softTask = "The recursive gate gives the candidate and control sides TMPDIRs of different lengths, so a unix socket under t.TempDir() fits the 108-byte limit on one side and not the other, and a test fails on the candidate alone (internal/gate TestMeter did, three times on 2026-10-24). Give both sides TMPDIRs of the same length (internal/gate/evaluator.go and child.go build the side paths), move internal/sandbox/egress_test.go's egress.sock off t.TempDir() the way internal/gate/meter_test.go does with shortTmp(), and add a test that would catch it."
+// (task 261024-192651-ed793376e5, issue #460), small enough for one worker,
+// and one the standard prompts would get as a brief. The first default (the
+// gate's unequal TMPDIRs) landed as 4425272 before the arms ran on real agents.
+const softTask = "An approved warden step can say it needs longer than 10 minutes. internal/mod/risk/risk.go:41: ExecTimeout = 10m applies to every approved step, and a host gate baseline (6 reps, 1-2h) was killed by it and reported only 'signal: killed'. Done: an approved script may carry a line '# hive-timeout: <Go duration>'; the line is weighed and pinned with the script's text, and capped at 4h. Without it a step still gets ExecTimeout (10m). A step that times out reports 'timed out after X' instead of a bare 'signal: killed'. docs/risk.md says so. Tests: the timeout line's parsing and a script that outlives the default."
 
 // TestSoftLayer is the soft-layer experiment (docs/soft-layer.md): for each
 // arm (HIVE_SOFT=all, or a comma list of softlayer.Variants), a sub-Hive in
