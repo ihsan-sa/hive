@@ -37,7 +37,7 @@ type Module struct {
 func New(c *core.Core, ch *chat.Module, w *work.Module, im *improve.Module) *Module {
 	m := &Module{C: c, Chat: ch, Work: w, Improve: im, retry: map[string]time.Time{}, lastErr: map[string]string{}, claimed: map[string]bool{}}
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","sharing","visibility","self"} (visibility: private (default) or public: public in public_owners (Hive-RSI-Lab) is made and the person told, public anywhere else waits for their yes; an existing repository keeps its visibility, changing it is the person's; sharing: shared (default), private (its agents read the shared Hive, no one else sees it) or isolated (walled both ways); self: the Hive's own code, in a fork of it, or in the release repository itself only when this Hive is its steward)`, Fn: m.opCreate})
+	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","sharing","visibility","self"} (visibility: private (default) or public: public in public_owners (Hive-RSI-Lab) is made and the person told, public anywhere else, or for a project whose sharing isn't shared, waits for their yes; an existing repository keeps its visibility, changing it is the person's; sharing: shared (default), private (its agents read the shared Hive, no one else sees it) or isolated (walled both ways); self: the Hive's own code, in a fork of it, or in the release repository itself only when this Hive is its steward)`, Fn: m.opCreate})
 	c.Person.Handle("public_repo", m.onPublic)
 	ops.Register(core.Op{Name: "status", Help: `{} -> projects, work in flight, scores, what waits on the person, the live settings (models, autonomy, schedules)`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.Status(r), nil }})
 	return m
@@ -87,12 +87,20 @@ func (m *Module) opCreate(r core.Run, args json.RawMessage) (any, error) {
 	}
 	// A public repository is outward in the person's name: only where they
 	// said public repositories go is one made without their yes.
-	if s.Visibility == "public" && !m.publicAllowed(s.Repo) {
+	// A project walled inside the Hive (sharing private or isolated) with a
+	// public repository would show the world everything its agents push, so
+	// that clash is theirs to settle too, wherever the repository goes.
+	walled := s.Isolated || (s.Sharing != "" && s.Sharing != core.SharingShared)
+	if s.Visibility == "public" && (walled || !m.publicAllowed(orDefault(s.Repo, s.Name))) {
+		why := "outside " + orDefault(strings.Join(m.C.WS.LoadConfig().PublicOwners, ", "), "every owner in public_owners (none are listed)")
+		if walled {
+			why = "for a project with sharing " + orDefault(s.Sharing, core.SharingIsolated) + ", walled inside the Hive, so everything its agents push would be public"
+		}
 		ref, _ := json.Marshal(s)
 		a := m.C.Person.Ask(core.Ask{Kind: "public_repo", Ref: string(ref), From: r.ID, Project: r.Project,
 			Title:  "Make a public repository for " + orDefault(s.Repo, s.Name) + "?",
-			Detail: "An agent asked create_project for a public repository outside " + strings.Join(m.C.WS.LoadConfig().PublicOwners, ", ") + ". Yes creates the project with it public; no leaves it uncreated. Description: " + core.Clip(s.Description, 300)})
-		return map[string]any{"waiting_on_person": a.ID, "text": "a public repository outside public_owners is the person's call: asked them; the project is made if they say yes, and you'll get a message"}, nil
+			Detail: "An agent asked create_project for a public repository " + why + ". Yes creates the project with it public; no leaves it uncreated. Description: " + core.Clip(s.Description, 300)})
+		return map[string]any{"waiting_on_person": a.ID, "text": "a public repository " + why + " is the person's call: asked them; the project is made if they say yes, and you'll get a message"}, nil
 	}
 	p, created, err := m.Create(s)
 	if err != nil {
@@ -116,12 +124,16 @@ func checkVisibility(v string) error {
 }
 
 // publicAllowed says whether repo's owner is one the person said public
-// repositories may go in. A bare name lives in the person's own account,
-// which isn't one unless they list it.
+// repositories may go in. A bare name lives in the forge login's own
+// account, which counts only if they list it.
 func (m *Module) publicAllowed(repo string) bool {
 	owner, _, ok := strings.Cut(repo, "/")
 	if !ok {
-		return false
+		user, err := m.C.Effects.Forge.User()
+		if err != nil || user == "" {
+			return false
+		}
+		owner = user
 	}
 	return slices.ContainsFunc(m.C.WS.LoadConfig().PublicOwners, func(o string) bool { return strings.EqualFold(o, owner) })
 }

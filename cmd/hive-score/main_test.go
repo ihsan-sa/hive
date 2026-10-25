@@ -127,3 +127,19 @@ func TestMissingToolCantRun(t *testing.T) {
 		t.Fatalf("exit %d, %q: improve would not read python3 as missing", code, out)
 	}
 }
+
+// A test the parent declared and the candidate dropped counts as failed, so
+// deleting a failing test can't raise the pass rate; a skipped one is left out.
+func TestTally(t *testing.T) {
+	before := Declared("func TestMain(m *testing.M) {\nfunc TestA(t *testing.T) {\nfunc TestBenchmark(t *testing.T) {\nfunc TestGone(t *testing.T) {\nfunc TestC(t *testing.T) {\n")
+	if !slices.Equal(before, []string{"TestA", "TestGone", "TestC"}) {
+		t.Fatalf("declared %v", before)
+	}
+	e, failed := Tally([]string{"TestA", "TestC", "TestNew", "TestQuiet"}, before, map[string]string{"TestA": "pass", "TestC": "skip", "TestNew": "pass"})
+	if e != (E2E{Run: 4, Passed: 2}) || !slices.Equal(failed, []string{"TestGone (deleted)", "TestQuiet"}) {
+		t.Fatalf("got %+v, %v", e, failed)
+	}
+	if e, _ := Tally([]string{"TestA"}, nil, map[string]string{"TestA": "pass"}); e != (E2E{Run: 1, Passed: 1}) {
+		t.Fatalf("with no parent: %+v", e)
+	}
+}

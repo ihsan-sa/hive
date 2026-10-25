@@ -241,6 +241,27 @@ func (p Plan) Used(now time.Time) float64 {
 	return u
 }
 
+// windowLength is how long a usage window runs, for the windows the Hive
+// paces against: the week is left to run on its own.
+var windowLength = map[string]time.Duration{"five_hour": 5 * time.Hour}
+
+// Ahead is how far the login has used its plan ahead of the clock: the most
+// a paced window's use is beyond the share of it that has passed, 0 when on
+// or behind it. A window spent at this rate runs out before it resets and
+// the Hive sits idle until it does.
+func (p Plan) Ahead(now time.Time) float64 {
+	a := 0.0
+	for k, w := range p.Limit.Windows {
+		n, ok := windowLength[k]
+		if !ok || !w.ResetsAt.After(now) {
+			continue
+		}
+		passed := 1 - float64(w.ResetsAt.Sub(now))/float64(n)
+		a = max(a, w.Utilization-passed)
+	}
+	return a
+}
+
 // TokenSource lists a harness's logins and hands out a login's short-lived credential.
 type TokenSource interface {
 	Logins(h string) []Login
@@ -569,6 +590,12 @@ func (rs *Runs) apply(e Event) {
 		if w, ok := p.Limit.Windows[p.Limit.Window]; ok && p.Limit.Utilization == 0 {
 			p.Limit.Utilization = w.Utilization
 		}
+		// A turn that started before the limit can end after it with a
+		// reading taken before it: that doesn't lift the park, or the next
+		// turn starts only to be turned away (10-25, 10:41).
+		if old := rs.plans[p.Key()]; old.Parked(e.At) && p.Limit.Status != "rejected" && !p.Limit.ResetsAt.After(old.Limit.ResetsAt) {
+			return
+		}
 		rs.plans[p.Key()] = p
 		return
 	}
@@ -815,14 +842,30 @@ func (rs *Runs) pickLogin(h, model, home string, bare bool) (Login, []string, er
 	}
 	sort.SliceStable(open, func(i, j int) bool { return use(open[i]) < use(open[j]) })
 	rs.mu.Unlock()
-	err := fmt.Errorf("every %s login is at its usage limit", HarnessName(h))
+	limit := fmt.Errorf("every %s login is at its usage limit", HarnessName(h))
+	err := limit
 	for _, l := range open {
-		var env []string
-		if env, err = rs.tokens.AgentEnv(l, home); err == nil || bare && l.Name == "" && (errors.Is(err, ErrNoLogin) || errors.Is(err, ErrNoKey)) {
+		env, e := rs.tokens.AgentEnv(l, home)
+		if e == nil || bare && l.Name == "" && (errors.Is(e, ErrNoLogin) || errors.Is(e, ErrNoKey)) {
 			return l, env, nil
 		}
+		err = e
+	}
+	if len(open) < len(logins) && err != limit {
+		// Some are at their limit and the rest can't be used: the limit is
+		// why nothing runs, not an added login with no credential.
+		err = fmt.Errorf("%w; %s can't be used either: %v", limit, strings.Join(keys(open), ", "), err)
 	}
 	return Login{}, nil, err
+}
+
+// keys names the logins.
+func keys(ls []Login) []string {
+	var out []string
+	for _, l := range ls {
+		out = append(out, l.Key())
+	}
+	return out
 }
 
 // Headroom is how much of its plan the least used login a turn on p could
@@ -843,6 +886,23 @@ func (rs *Runs) Headroom(p Pick) float64 {
 		}
 	}
 	return room
+}
+
+// Ahead is how far ahead of its paced windows the least ahead login a turn
+// on p could take is (Plan.Ahead), 0 when one is on pace or nothing is known;
+// with every login parked it is 0 too, and Headroom says so.
+func (rs *Runs) Ahead(p Pick) float64 {
+	logins := rs.logins(p.Harness, p.Model)
+	now := time.Now()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	ahead := -1.0
+	for _, l := range logins {
+		if pl := rs.plans[l.Key()]; !pl.Parked(now) && (ahead < 0 || pl.Ahead(now) < ahead) {
+			ahead = pl.Ahead(now)
+		}
+	}
+	return max(ahead, 0)
 }
 
 // logins are the logins a turn on harness h and model can go on. A model the

@@ -638,7 +638,19 @@ var (
 	GoPkgLine  = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
 	GoFailLine = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
 	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |test timed out)|\[(build|setup) failed\]`)
-	redBuild   = regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+(?::\d+)?: (.+)`)
+	// A compiler's or vet's error on one line: go and go vet
+	// ("a.go:3:4: msg"), javac ("A.java:3: error: msg"), tsc
+	// ("a.ts(3,4): error TS2322: msg", or "a.ts:3:4 - error TS2322: msg").
+	redBuild = []*regexp.Regexp{
+		regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+(?::\d+)?: (.+)`),
+		regexp.MustCompile(`^(\S+\.java):\d+: (error: .+)`),
+		regexp.MustCompile(`^(\S+\.[cm]?[jt]sx?)\(\d+,\d+\): (error TS\d+: .+)`),
+		regexp.MustCompile(`^(\S+\.[cm]?[jt]sx?):\d+:\d+ - (error TS\d+: .+)`),
+	}
+	// rustc says the error first and where on the next line.
+	rustErr, rustAt = regexp.MustCompile(`^(error(?:\[E\d+\])?: .+)`), regexp.MustCompile(`^\s*--> (\S+\.rs):\d+:\d+`)
+	// A python traceback names its frames, then the error at column 0.
+	pyAt, pyErr = regexp.MustCompile(`^\s*File "([^"]+\.py)", line \d+`), regexp.MustCompile(`^([A-Za-z_][\w.]*(?:Error|Exception|Exit)\b.*)`)
 )
 
 // RedKeys names what failed in a red go test run so two runs' reds can be
@@ -690,15 +702,40 @@ func RedKeys(out string) []string {
 }
 
 // StopKeys names, for a red run RedKeys names nothing in (go vet, or a build
-// that stopped the command before go test ran), each compile or vet error as
-// "file.go: message", its line left out so an edit above it doesn't make the
-// same error look new. The rest of the command didn't run, so these can show
-// a red isn't new at a merge but never that a change is no worse than main.
+// that stopped the command before the tests ran), each compile or vet error
+// as "file: message", its line left out so an edit above it doesn't make the
+// same error look new: go, javac, tsc and rustc errors, and the error a
+// python traceback ends in, by the last file it names. The rest of the
+// command didn't run, so these can show a red isn't new at a merge but never
+// that a change is no worse than main.
 func StopKeys(out string) []string {
 	var keys []string
+	add := func(file, msg string) {
+		if k := file + ": " + msg; !slices.Contains(keys, k) {
+			keys = append(keys, k)
+		}
+	}
+	rust, py := "", ""
 	for _, l := range strings.Split(out, "\n") {
-		if m := redBuild.FindStringSubmatch(strings.TrimRight(l, " \r")); m != nil && !slices.Contains(keys, m[1]+": "+m[2]) {
-			keys = append(keys, m[1]+": "+m[2])
+		l = strings.TrimRight(l, " \r")
+		if m := rustAt.FindStringSubmatch(l); m != nil && rust != "" {
+			add(m[1], rust)
+		}
+		rust = ""
+		if m := rustErr.FindStringSubmatch(l); m != nil {
+			rust = m[1]
+		}
+		if m := pyAt.FindStringSubmatch(l); m != nil {
+			py = m[1]
+		} else if m := pyErr.FindStringSubmatch(l); m != nil && py != "" {
+			add(py, m[1])
+			py = ""
+		}
+		for _, re := range redBuild {
+			if m := re.FindStringSubmatch(l); m != nil {
+				add(m[1], m[2])
+				break
+			}
 		}
 	}
 	return keys
@@ -1006,6 +1043,12 @@ func (e *Effects) SecurityOK(project string, ch Change) bool {
 func OwnDiff(dir, base, sha string) string {
 	out, _ := Git(dir, "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", base, sha)
 	return out
+}
+
+// Between is the diff from one commit to another in p's host clone, "" when
+// git can't tell (one of them isn't fetched).
+func (e *Effects) Between(p Project, from, to string) string {
+	return OwnDiff(e.ws.Project(p.Name), from, to)
 }
 
 // DiffID names a change's own diff (the diff from its merge base with main to

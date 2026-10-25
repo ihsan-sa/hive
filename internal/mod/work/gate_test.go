@@ -623,6 +623,11 @@ func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
 	if got, _ := m.Get(task.ID); err != nil || got.CantRuns != 0 {
 		t.Fatalf("the lead's recheck: %v, count %d, want a fresh count", err, got.CantRuns)
 	}
+	for _, a := range m.C.Person.Open() {
+		if a.Ref == "cant-run:"+task.ID {
+			t.Fatalf("the ask stays open once the change is tested again: %+v", a)
+		}
+	}
 }
 
 // A checkpoint whose tests can't find their tool is dropped with that reason:

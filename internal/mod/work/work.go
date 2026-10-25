@@ -139,6 +139,10 @@ type Task struct {
 	// run at all while its required ones were awaited (head.go).
 	NoChecks   time.Time `json:"no_checks,omitempty"`
 	NoChecksOn string    `json:"no_checks_on,omitempty"`
+	// HeadWait is when the forge was first seen still showing HeadWaitOn,
+	// an earlier push of the Hive's than the task's head (head.go).
+	HeadWait   time.Time `json:"head_wait,omitempty"`
+	HeadWaitOn string    `json:"head_wait_on,omitempty"`
 	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
 	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
 	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
@@ -369,7 +373,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 				m.cantRunOpen[a.Project] = cmp.Or(a.Check, "test")
 			case a.Kind == "main-red" && a.SHA != "":
 				m.mainRed[a.Project+"@"+a.SHA] = true
-			case a.Kind == "check-warning" && a.Key != "":
+			case (a.Kind == "check-warning" || a.Kind == "no-checks") && a.Key != "":
 				m.mainRed[a.Project+"@"+a.Key] = true
 			}
 			m.mu.Unlock()
@@ -1489,11 +1493,17 @@ func (m *Module) test(t *Task, p core.Project) error {
 			m.raiseCantRun(p, c)
 			return m.dropCheckpoint(t, p, "the tests "+c.CantRun+", which is no verdict on it")
 		}
-		t.CantRuns++
+		if c.Tool != "" {
+			// Only a missing tool counts toward red: a commit can fake
+			// that from its own output, but not a full disk or quota,
+			// which is the machine's fault and only waits.
+			t.CantRuns++
+		}
 		return m.cantRun(t, p, c)
 	}
 	t.CantRuns = 0
 	m.RanCheck(p.Name, "test")
+	m.CloseCantRunAsk(p.Name, "cant-run:"+t.ID, "its tests run now")
 	if strings.HasPrefix(t.Reason, "the tests can't run") {
 		t.Reason = "" // the tool is there now
 	}
@@ -1608,6 +1618,17 @@ func (m *Module) cantRunRed(t *Task, p core.Project, c core.Check) error {
 	t.CantRuns = 0
 	m.giveUp(t, fmt.Sprintf("the tests %s, %d tries in a row, which now counts as red; the person is asked for %s", c.CantRun, CantRunTries, tool))
 	return nil
+}
+
+// CloseCantRunAsk answers the person's open "install the tool" ask with ref
+// for them once it is stale (the tests run, or the change is tested again),
+// so it leaves their Waiting list. A later run of tries asks afresh.
+func (m *Module) CloseCantRunAsk(project, ref, why string) {
+	for _, a := range m.C.Person.Open() {
+		if a.Ref == ref && a.Project == project && a.Kind == "question" {
+			m.C.Person.Answer(a.ID, "ok", "the Hive, not the person: "+why)
+		}
+	}
 }
 
 func (m *Module) raiseCantRun(p core.Project, c core.Check) {
@@ -2017,6 +2038,15 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if closed, err := m.closedPR(t, p, pr); closed || err != nil {
 		return err
 	}
+	if pr.Draft && pr.HeadSHA != t.SHA {
+		// A head the Hive pushed is reconciled as any PR's is; anyone
+		// else's commit on a draft waits for its read below.
+		if pushed, _ := m.C.Effects.Pushed(p.Name, t.Branch, pr.HeadSHA); pushed {
+			if wait, err := m.sameHead(t, p, pr.HeadSHA); wait || err != nil {
+				return err
+			}
+		}
+	}
 	if pr.Draft && (pr.HeadSHA != t.SHA || t.DraftWhy != "") {
 		return m.waitDraft(t, pr)
 	}
@@ -2356,7 +2386,8 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+how+"; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
 		}
 	}
-	if wait, err := m.noChecks(t, p, main, runs, st); wait || err != nil {
+	// Runs core.Advisory set aside still show the forge ran CI on the head.
+	if wait, err := m.noChecks(t, p, main, raw, st); wait || err != nil {
 		return wait, err
 	}
 	names := core.CheckNames(which)
@@ -2374,7 +2405,10 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		cancelled := !slices.ContainsFunc(which, func(r core.CheckRun) bool { return r.Detail != "cancelled" })
 		// Runs cancelled because a newer push to the PR replaced them (CI
 		// cancels a PR's superseded run) broke nothing: the newer head's own
-		// run is the one to wait for, and the next pass adopts it.
+		// run is the one to wait for, and the next pass adopts it. The PR is
+		// fetched again rather than taken from merge(): sameHead has already
+		// held t unless that copy's head was t.SHA, so only a fresh fetch
+		// sees a push that landed while the security read and checks ran.
 		if cancelled {
 			pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
 			if err != nil {
@@ -2787,6 +2821,14 @@ func checkDetail(runs []core.CheckRun) string {
 func (m *Module) raiseOnce(p core.Project, key, text string) {
 	if !m.raised(p, key) {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": key, "text": text})
+	}
+}
+
+// raiseKind raises an alert of its own kind once per key, as raiseOnce does,
+// for what holds a change back without main being red.
+func (m *Module) raiseKind(p core.Project, kind, key, text string) {
+	if !m.raised(p, key) {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": kind, "project": p.Name, "key": key, "text": text})
 	}
 }
 
@@ -3273,6 +3315,8 @@ func (m *Module) Recheck(id, back, by string) error {
 		return fmt.Errorf("task %s was stopped by the person (%s); only they can bring it back", id, t.Reason)
 	}
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns = "", 0, 0, 0, 0, 0
+	m.goNow(&t)
+	m.CloseCantRunAsk(t.Project, "cant-run:"+t.ID, "the change is tested again, asked by "+by)
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
 			return err
@@ -3284,6 +3328,15 @@ func (m *Module) Recheck(id, back, by string) error {
 	t.Stage = StageLanding
 	m.save(&t, "checks run again on its commits, asked by "+by)
 	return nil
+}
+
+// goNow drops a task's backoff and hold, so a retry asked for by hand runs on
+// the next tick, not after an outage's or rate limit's wait from before it.
+func (m *Module) goNow(t *Task) {
+	t.Retry = time.Time{}
+	m.mu.Lock()
+	delete(m.later, t.ID)
+	m.mu.Unlock()
 }
 
 // inFlight reports whether a task in stage is on its way from its worker's
@@ -3324,6 +3377,7 @@ func (m *Module) retryInFlight(id, back, by string) error {
 		return m.dropCheckpoint(&t, p, "the lead retried it from "+was)
 	}
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts = "", 0, 0, 0, 0
+	m.goNow(&t)
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
 			return err

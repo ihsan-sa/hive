@@ -215,10 +215,14 @@ func moduleLifecycle(t *testing.T, real bool) {
 	}
 
 	h.seed("local/greet", map[string]string{"skill.md": "The codeword is FIG77.\n"})
+	seeded, _ := core.Git(h.forge.RepoPath("local/greet"), "rev-parse", "main")
 	h.post("/api/job", map[string]string{"name": "modules.update"}, nil)
-	h.wait("greet to update to the newer commit", minute, func(st api.State) bool {
+	// The release a source without tags gets is its commit, short: waiting
+	// for that commit, not any change from first, means a record that moved
+	// for another reason can't pass the wait before the update has run.
+	h.wait("greet to update to the seeded commit", minute, func(st api.State) bool {
 		m, ok := module(st)
-		return ok && m.Release != first.Release
+		return ok && m.Release != "" && m.Release != first.Release && strings.HasPrefix(seeded, m.Release)
 	})
 	if skill, _ := os.ReadFile(filepath.Join(h.ws.Modules(), dir, "skill.md")); !strings.Contains(string(skill), "FIG77") {
 		t.Errorf("the updated module's skill: %q", skill)
