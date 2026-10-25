@@ -195,6 +195,9 @@ func writeBundle(w io.Writer, ws core.Workspace, parts []part) (int64, error) {
 			if err != nil {
 				continue // gone or swapped since the walk
 			}
+			if rel == "config.json" {
+				data = unlinkedConfig(data)
+			}
 			f, err := zw.CreateHeader(&zip.FileHeader{Name: ".hive/" + rel, Method: zip.Deflate, Modified: time.Now()})
 			if err != nil {
 				return 0, err
@@ -210,6 +213,27 @@ func writeBundle(w io.Writer, ws core.Workspace, parts []part) (int64, error) {
 	}
 	err = zw.Close()
 	return cw.n, err
+}
+
+// reportKeys tie a config to the install's anonymous reports
+// (docs/report.md); a bundle leaves them out, so it can't be matched to them.
+var reportKeys = []string{"install_id", "share_url"}
+
+// unlinkedConfig is config.json without reportKeys. A config that isn't a
+// JSON object goes as it is: nothing in it can be read as an install id.
+func unlinkedConfig(data []byte) []byte {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(data, &m) != nil {
+		return data
+	}
+	for _, k := range reportKeys {
+		delete(m, k)
+	}
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return data
+	}
+	return append(out, '\n')
 }
 
 // readNoFollow reads the slash path rel under root one name at a time,

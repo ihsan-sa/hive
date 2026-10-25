@@ -28,7 +28,7 @@ func shareFixture(t *testing.T) core.Workspace {
 		".hive/kb/notes/a.md":        "a note",
 		".hive/gates/web/check.sh":   "true",
 		".hive/events.jsonl":         "{}",
-		".hive/config.json":          `{"harness":"fake"}`,
+		".hive/config.json":          `{"harness":"fake","share":"2026-01-02T03:04:05Z","install_id":"3f0c8a5e-2b7d-4c1e","share_url":"https://r.example/v1/report"}`,
 		".hive/daemon.log":           "started",
 		".hive/logins/claude/token":  "secret",
 		".hive/bin/hive":             "binary",
@@ -89,6 +89,18 @@ func TestShareSendsExactlyTheSetAndPrintsTheReference(t *testing.T) {
 		".hive/gates/web/check.sh", ".hive/kb/notes/a.md", ".hive/runs/r1/output.log", ".hive/runs/r2/turns/1.json"}
 	if names := zipNames(t, (*got)[0]); strings.Join(names, " ") != strings.Join(want, " ") {
 		t.Errorf("zip holds %q, want %q", names, want)
+	}
+	// The bundle can't be matched to the install's anonymous reports.
+	zr, _ := zip.NewReader(bytes.NewReader((*got)[0]), int64(len((*got)[0])))
+	for _, f := range zr.File {
+		if f.Name == ".hive/config.json" {
+			rc, _ := f.Open()
+			cfg, _ := io.ReadAll(rc)
+			rc.Close()
+			if bytes.Contains(cfg, []byte("3f0c8a5e")) || bytes.Contains(cfg, []byte("r.example")) || !bytes.Contains(cfg, []byte(`"harness": "fake"`)) {
+				t.Errorf("config.json in the bundle:\n%s", cfg)
+			}
+		}
 	}
 	if !strings.Contains(out.String(), "Your reference is b-7f3a\n") {
 		t.Errorf("output doesn't print the server's reference:\n%s", out.String())
