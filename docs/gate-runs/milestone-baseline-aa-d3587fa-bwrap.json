@@ -1,0 +1,773 @@
+{
+  "id": "gate-1792871994-34e3dc5a",
+  "head": "d3587fafe575f270e0610c2acd69c4f6f361b6b9",
+  "base": "d3587fafe575f270e0610c2acd69c4f6f361b6b9",
+  "sandbox": "bwrap",
+  "started": "2026-10-24T19:59:54.68149021Z",
+  "seconds": 889.59331287,
+  "candidate": [
+    {
+      "probe": "daemon",
+      "rep": 1,
+      "pass": true,
+      "detail": "hive 0.0.0-gate.d3587fafe",
+      "seconds": 1.515300665
+    },
+    {
+      "probe": "benchmark",
+      "rep": 1,
+      "pass": true,
+      "detail": "{\"asks\":4,\"asks_done_reported\":4,\"asks_finished\":4,\"commits_landed\":4,\"cost_usd_reported\":0,\"score\":6,\"seconds\":56.196742111}",
+      "seconds": 57.901060918,
+      "metrics": [
+        {
+          "name": "score",
+          "value": 6,
+          "higher": true
+        },
+        {
+          "name": "asks_finished",
+          "value": 4,
+          "higher": true
+        },
+        {
+          "name": "seconds",
+          "value": 56.196742111,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        },
+        {
+          "name": "commits_landed",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "asks_done_reported",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "cost_usd_reported",
+          "value": 0,
+          "higher": false,
+          "info": true
+        },
+        {
+          "name": "egress_bytes",
+          "value": 0,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        }
+      ]
+    },
+    {
+      "probe": "daemon",
+      "rep": 2,
+      "pass": true,
+      "detail": "hive 0.0.0-gate.d3587fafe",
+      "seconds": 1.510510101
+    },
+    {
+      "probe": "benchmark",
+      "rep": 2,
+      "pass": true,
+      "detail": "{\"asks\":4,\"asks_done_reported\":4,\"asks_finished\":4,\"commits_landed\":4,\"cost_usd_reported\":0,\"score\":6,\"seconds\":56.208033213}",
+      "seconds": 57.925908278,
+      "metrics": [
+        {
+          "name": "score",
+          "value": 6,
+          "higher": true
+        },
+        {
+          "name": "asks_finished",
+          "value": 4,
+          "higher": true
+        },
+        {
+          "name": "seconds",
+          "value": 56.208033213,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        },
+        {
+          "name": "commits_landed",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "asks_done_reported",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "cost_usd_reported",
+          "value": 0,
+          "higher": false,
+          "info": true
+        },
+        {
+          "name": "egress_bytes",
+          "value": 0,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        }
+      ]
+    },
+    {
+      "probe": "daemon",
+      "rep": 3,
+      "pass": true,
+      "detail": "hive 0.0.0-gate.d3587fafe",
+      "seconds": 1.515353276
+    },
+    {
+      "probe": "benchmark",
+      "rep": 3,
+      "pass": true,
+      "detail": "{\"asks\":4,\"asks_done_reported\":4,\"asks_finished\":4,\"commits_landed\":4,\"cost_usd_reported\":0,\"score\":6,\"seconds\":77.927553844}",
+      "seconds": 79.658288467,
+      "metrics": [
+        {
+          "name": "score",
+          "value": 6,
+          "higher": true
+        },
+        {
+          "name": "asks_finished",
+          "value": 4,
+          "higher": true
+        },
+        {
+          "name": "seconds",
+          "value": 77.927553844,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        },
+        {
+          "name": "commits_landed",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "asks_done_reported",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "cost_usd_reported",
+          "value": 0,
+          "higher": false,
+          "info": true
+        },
+        {
+          "name": "egress_bytes",
+          "value": 0,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        }
+      ]
+    },
+    {
+      "probe": "daemon",
+      "rep": 4,
+      "pass": true,
+      "detail": "hive 0.0.0-gate.d3587fafe",
+      "seconds": 1.5352684079999999
+    },
+    {
+      "probe": "benchmark",
+      "rep": 4,
+      "pass": true,
+      "detail": "{\"asks\":4,\"asks_done_reported\":4,\"asks_finished\":4,\"commits_landed\":4,\"cost_usd_reported\":0,\"score\":6,\"seconds\":56.205807822}",
+      "seconds": 57.930974018,
+      "metrics": [
+        {
+          "name": "score",
+          "value": 6,
+          "higher": true
+        },
+        {
+          "name": "asks_finished",
+          "value": 4,
+          "higher": true
+        },
+        {
+          "name": "seconds",
+          "value": 56.205807822,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        },
+        {
+          "name": "commits_landed",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "asks_done_reported",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "cost_usd_reported",
+          "value": 0,
+          "higher": false,
+          "info": true
+        },
+        {
+          "name": "egress_bytes",
+          "value": 0,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        }
+      ]
+    },
+    {
+      "probe": "daemon",
+      "rep": 5,
+      "pass": true,
+      "detail": "hive 0.0.0-gate.d3587fafe",
+      "seconds": 1.5204120319999999
+    },
+    {
+      "probe": "benchmark",
+      "rep": 5,
+      "pass": true,
+      "detail": "{\"asks\":4,\"asks_done_reported\":4,\"asks_finished\":4,\"commits_landed\":4,\"cost_usd_reported\":0,\"score\":6,\"seconds\":56.208887577}",
+      "seconds": 57.937049511,
+      "metrics": [
+        {
+          "name": "score",
+          "value": 6,
+          "higher": true
+        },
+        {
+          "name": "asks_finished",
+          "value": 4,
+          "higher": true
+        },
+        {
+          "name": "seconds",
+          "value": 56.208887577,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        },
+        {
+          "name": "commits_landed",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "asks_done_reported",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "cost_usd_reported",
+          "value": 0,
+          "higher": false,
+          "info": true
+        },
+        {
+          "name": "egress_bytes",
+          "value": 0,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        }
+      ]
+    },
+    {
+      "probe": "daemon",
+      "rep": 6,
+      "pass": true,
+      "detail": "hive 0.0.0-gate.d3587fafe",
+      "seconds": 1.520486135
+    },
+    {
+      "probe": "benchmark",
+      "rep": 6,
+      "pass": true,
+      "detail": "{\"asks\":4,\"asks_done_reported\":4,\"asks_finished\":4,\"commits_landed\":4,\"cost_usd_reported\":0,\"score\":6,\"seconds\":55.735772645}",
+      "seconds": 58.15362157,
+      "metrics": [
+        {
+          "name": "score",
+          "value": 6,
+          "higher": true
+        },
+        {
+          "name": "asks_finished",
+          "value": 4,
+          "higher": true
+        },
+        {
+          "name": "seconds",
+          "value": 55.735772645,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        },
+        {
+          "name": "commits_landed",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "asks_done_reported",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "cost_usd_reported",
+          "value": 0,
+          "higher": false,
+          "info": true
+        },
+        {
+          "name": "egress_bytes",
+          "value": 0,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        }
+      ]
+    }
+  ],
+  "control": [
+    {
+      "probe": "daemon",
+      "rep": 1,
+      "pass": true,
+      "detail": "hive 0.0.0-gate.d3587fafe",
+      "seconds": 1.509455231
+    },
+    {
+      "probe": "benchmark",
+      "rep": 1,
+      "pass": true,
+      "detail": "{\"asks\":4,\"asks_done_reported\":4,\"asks_finished\":4,\"commits_landed\":4,\"cost_usd_reported\":0,\"score\":6,\"seconds\":56.198232516}",
+      "seconds": 57.898000563,
+      "metrics": [
+        {
+          "name": "score",
+          "value": 6,
+          "higher": true
+        },
+        {
+          "name": "asks_finished",
+          "value": 4,
+          "higher": true
+        },
+        {
+          "name": "seconds",
+          "value": 56.198232516,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        },
+        {
+          "name": "commits_landed",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "asks_done_reported",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "cost_usd_reported",
+          "value": 0,
+          "higher": false,
+          "info": true
+        },
+        {
+          "name": "egress_bytes",
+          "value": 0,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        }
+      ]
+    },
+    {
+      "probe": "daemon",
+      "rep": 2,
+      "pass": true,
+      "detail": "hive 0.0.0-gate.d3587fafe",
+      "seconds": 1.521135511
+    },
+    {
+      "probe": "benchmark",
+      "rep": 2,
+      "pass": true,
+      "detail": "{\"asks\":4,\"asks_done_reported\":4,\"asks_finished\":4,\"commits_landed\":4,\"cost_usd_reported\":0,\"score\":6,\"seconds\":73.938975276}",
+      "seconds": 75.649993773,
+      "metrics": [
+        {
+          "name": "score",
+          "value": 6,
+          "higher": true
+        },
+        {
+          "name": "asks_finished",
+          "value": 4,
+          "higher": true
+        },
+        {
+          "name": "seconds",
+          "value": 73.938975276,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        },
+        {
+          "name": "commits_landed",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "asks_done_reported",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "cost_usd_reported",
+          "value": 0,
+          "higher": false,
+          "info": true
+        },
+        {
+          "name": "egress_bytes",
+          "value": 0,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        }
+      ]
+    },
+    {
+      "probe": "daemon",
+      "rep": 3,
+      "pass": true,
+      "detail": "hive 0.0.0-gate.d3587fafe",
+      "seconds": 1.515274893
+    },
+    {
+      "probe": "benchmark",
+      "rep": 3,
+      "pass": true,
+      "detail": "{\"asks\":4,\"asks_done_reported\":4,\"asks_finished\":4,\"commits_landed\":4,\"cost_usd_reported\":0,\"score\":6,\"seconds\":55.723898279}",
+      "seconds": 57.464910508,
+      "metrics": [
+        {
+          "name": "score",
+          "value": 6,
+          "higher": true
+        },
+        {
+          "name": "asks_finished",
+          "value": 4,
+          "higher": true
+        },
+        {
+          "name": "seconds",
+          "value": 55.723898279,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        },
+        {
+          "name": "commits_landed",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "asks_done_reported",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "cost_usd_reported",
+          "value": 0,
+          "higher": false,
+          "info": true
+        },
+        {
+          "name": "egress_bytes",
+          "value": 0,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        }
+      ]
+    },
+    {
+      "probe": "daemon",
+      "rep": 4,
+      "pass": true,
+      "detail": "hive 0.0.0-gate.d3587fafe",
+      "seconds": 1.767222171
+    },
+    {
+      "probe": "benchmark",
+      "rep": 4,
+      "pass": true,
+      "detail": "{\"asks\":4,\"asks_done_reported\":4,\"asks_finished\":4,\"commits_landed\":4,\"cost_usd_reported\":0,\"score\":6,\"seconds\":56.185013565}",
+      "seconds": 57.926762187,
+      "metrics": [
+        {
+          "name": "score",
+          "value": 6,
+          "higher": true
+        },
+        {
+          "name": "asks_finished",
+          "value": 4,
+          "higher": true
+        },
+        {
+          "name": "seconds",
+          "value": 56.185013565,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        },
+        {
+          "name": "commits_landed",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "asks_done_reported",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "cost_usd_reported",
+          "value": 0,
+          "higher": false,
+          "info": true
+        },
+        {
+          "name": "egress_bytes",
+          "value": 0,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        }
+      ]
+    },
+    {
+      "probe": "daemon",
+      "rep": 5,
+      "pass": true,
+      "detail": "hive 0.0.0-gate.d3587fafe",
+      "seconds": 1.5172685160000001
+    },
+    {
+      "probe": "benchmark",
+      "rep": 5,
+      "pass": true,
+      "detail": "{\"asks\":4,\"asks_done_reported\":4,\"asks_finished\":4,\"commits_landed\":4,\"cost_usd_reported\":0,\"score\":6,\"seconds\":56.222969854}",
+      "seconds": 57.973930221,
+      "metrics": [
+        {
+          "name": "score",
+          "value": 6,
+          "higher": true
+        },
+        {
+          "name": "asks_finished",
+          "value": 4,
+          "higher": true
+        },
+        {
+          "name": "seconds",
+          "value": 56.222969854,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        },
+        {
+          "name": "commits_landed",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "asks_done_reported",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "cost_usd_reported",
+          "value": 0,
+          "higher": false,
+          "info": true
+        },
+        {
+          "name": "egress_bytes",
+          "value": 0,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        }
+      ]
+    },
+    {
+      "probe": "daemon",
+      "rep": 6,
+      "pass": true,
+      "detail": "hive 0.0.0-gate.d3587fafe",
+      "seconds": 1.518764527
+    },
+    {
+      "probe": "benchmark",
+      "rep": 6,
+      "pass": true,
+      "detail": "{\"asks\":4,\"asks_done_reported\":4,\"asks_finished\":4,\"commits_landed\":4,\"cost_usd_reported\":0,\"score\":6,\"seconds\":55.712463044}",
+      "seconds": 57.835579739,
+      "metrics": [
+        {
+          "name": "score",
+          "value": 6,
+          "higher": true
+        },
+        {
+          "name": "asks_finished",
+          "value": 4,
+          "higher": true
+        },
+        {
+          "name": "seconds",
+          "value": 55.712463044,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        },
+        {
+          "name": "commits_landed",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "asks_done_reported",
+          "value": 4,
+          "higher": true,
+          "info": true
+        },
+        {
+          "name": "cost_usd_reported",
+          "value": 0,
+          "higher": false,
+          "info": true
+        },
+        {
+          "name": "egress_bytes",
+          "value": 0,
+          "higher": false,
+          "given": [
+            "score",
+            "asks_finished"
+          ]
+        }
+      ]
+    }
+  ],
+  "verdict": {
+    "keep": false,
+    "reason": "not better than the current Hive: nothing moved beyond the noise"
+  },
+  "repos": [
+    "gate-1792871994-34e3dc5a-candidate",
+    "gate-1792871994-34e3dc5a-control"
+  ],
+  "cleaned": [
+    "gate-1792871994-34e3dc5a-candidate",
+    "gate-1792871994-34e3dc5a-control"
+  ],
+  "candidate_bin": "/home/hive/hive/.hive/scratch/gate/milestone.21uYA6/run-baseline/verified/candidate-hive",
+  "candidate_sha256": "7ff0c7553f821052158ce822c012059f13484c4e08b0e951cf01b5c256405b7b",
+  "candidate_version": "0.0.0-gate.d3587fafe",
+  "unit": {},
+  "sig": "74312333e07bf1dbaa710745c2a8fcf5f9b45188d43d66f21f7049e84dd4a261"
+}
