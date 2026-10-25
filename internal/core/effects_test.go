@@ -1115,3 +1115,19 @@ func TestLogExcerpt(t *testing.T) {
 		t.Fatalf("error on the last line: %q", got)
 	}
 }
+
+// A plain text file or anything under testdata is data a test may read, not
+// prose: its red counts as any code change's.
+func TestProseOnly(t *testing.T) {
+	for files, want := range map[string]bool{
+		".hive/goals.md":                 true,
+		"docs/a.md,.modules/agents/x.md": true,
+		"feature.txt":                    false,
+		"internal/x/testdata/golden.md":  false,
+		"docs/a.md,main.go":              false,
+	} {
+		if got := ProseOnly(strings.Split(files, ",")); got != want {
+			t.Errorf("ProseOnly(%s) = %v, want %v", files, got, want)
+		}
+	}
+}

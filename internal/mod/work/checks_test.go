@@ -66,17 +66,62 @@ func TestMergeWaitsForForgeChecks(t *testing.T) {
 	}
 }
 
-// A forge check that fails sends the change back as a red test would.
+// rerunSpent marks the automatic re-run of task's head (a red main has no
+// answer for) as done and past its grace, for tests of what comes after.
+func rerunSpent(task *Task) {
+	task.Reruns, task.RerunAt = map[string]int{task.SHA: 1}, time.Now().Add(-2*rerunGrace)
+}
+
+// A forge check that fails on a change to code (a plain text file is data a
+// test may read), with no answer on main, is run once more; failing
+// again, it sends the change back as a red test would.
 func TestMergeForgeCheckFails(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
-	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (macos-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/1"}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPending})
+	red := []core.CheckRun{{Name: "test (macos-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/1"}, {Name: "sandboxed-e2e", State: core.CheckPending}}
+	f.SetChecks(p.Repo, task.SHA, red...)
 	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.Round != 0 || task.Reruns[task.SHA] != 1 || f.Reruns(p.Repo, task.SHA) != 1 || !strings.Contains(task.Reason, "re-run") {
+		t.Fatalf("stage %q, round %d, reruns %v, reason %q", task.Stage, task.Round, task.Reruns, task.Reason)
+	}
+	task.RerunAt = time.Now().Add(-2 * rerunGrace)
+	m.later = map[string]time.Time{}
+	f.SetChecks(p.Repo, task.SHA, red...)
+	mergeOnce(t, m, task, p)
+	if f.Reruns(p.Repo, task.SHA) != 1 {
+		t.Fatalf("%d re-runs on the forge, want 1", f.Reruns(p.Repo, task.SHA))
+	}
 	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "test (macos-latest) (failure) https://ci/1") {
 		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
 	}
 	if prState(t, f, task.PR.Number) != "OPEN" || alerts(m, "main-red") != 0 {
 		t.Fatal("a red check merged or raised main")
+	}
+}
+
+// A change to prose only (docs, as for goals once the person lets them
+// through) can't break a test on another system: a red Windows TestStepBack, which main passes, is no reason to send
+// it back, and it isn't re-run either. It still waits for a check that runs.
+func TestMergeForgeCheckTextOnlyKept(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"docs/overview.md": "# The Hive\n\nA tight loop.\n"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	win := core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, URL: "head/win"}
+	f.SetCheckLog(p.Repo, "head/win", "--- FAIL: TestStepBack (2.1s)\n##[error]Process completed with exit code 1.\n")
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass})
+	f.SetChecks(p.Repo, task.SHA, win, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPending})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.Round != 0 || !strings.Contains(task.Reason, "sandboxed-e2e") {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	m.later = map[string]time.Time{}
+	f.SetChecks(p.Repo, task.SHA, win, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 0 || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, round %d, %d re-runs, reason %q", task.Stage, task.Round, f.Reruns(p.Repo, task.SHA), task.Reason)
+	}
+	if !logHas(task, "text only: the forge's checks test (windows-latest) fail") || !strings.Contains(strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"), "touches only text") {
+		t.Fatalf("log %v", task.Log)
 	}
 }
 
@@ -788,6 +833,7 @@ func TestMergeForgeCheckSendsItsLog(t *testing.T) {
 func TestMergeForgeCheckWaitsForMainsRun(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	rerunSpent(task)
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, URL: "head/win"})
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPending})
@@ -810,6 +856,7 @@ func TestMergeForgeCheckWaitsForMainsRun(t *testing.T) {
 func TestMergeForgeCheckStopsWaitingOnStuckMain(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	rerunSpent(task)
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "head/test"})
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "lint", State: core.CheckPending})
@@ -878,6 +925,7 @@ func TestMergeForgeCheckSkipsCancelledMainRuns(t *testing.T) {
 func TestMergeForgeCheckMainWaitSurvivesMainMoving(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	rerunSpent(task)
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "head/test"})
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPending})
@@ -932,6 +980,7 @@ func TestMergeForgeCheckRecordsMainAnswer(t *testing.T) {
 func TestMergeForgeCheckWaitsOnCancelledMain(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
+	rerunSpent(task)
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "head/test"})
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckCantStart, Detail: "cancelled"})

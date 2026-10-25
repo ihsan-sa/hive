@@ -22,6 +22,8 @@ func TestRerunFailedForgeChecks(t *testing.T) {
 	}
 	flaky := core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, Detail: "failure"}
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass}, flaky)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass}) // an answer, so no re-run of the Hive's own
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "rerun-checks") {
 		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)

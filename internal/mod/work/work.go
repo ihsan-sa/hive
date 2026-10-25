@@ -1879,6 +1879,29 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		}
 		st, which, shared, byName = core.ChecksAgainstMain(runs, mainRuns, req, m.C.Effects.FailingTests(p.Repo))
 	}
+	var unminded []string
+	if st == core.CheckFail && m.textChange(t, p, main) {
+		st, which, unminded = core.ChecksBesidesFailures(runs, req)
+	}
+	if st == core.CheckFail && t.Reruns[t.SHA] == 0 {
+		// A red with no finished answer on main may be a flake as well as
+		// the change's: the failed jobs run once more before it costs a
+		// round, while main's own answer is still awaited below.
+		if un := unanswered(which, mainRuns); len(un) > 0 {
+			if n, err := m.C.Effects.Forge.RerunFailed(p.Repo, t.SHA); err != nil {
+				return true, err
+			} else if n > 0 {
+				if t.Reruns == nil {
+					t.Reruns = map[string]int{}
+				}
+				t.Reruns[t.SHA]++
+				t.RerunAt = time.Now().UTC()
+				m.save(t, "re-ran the forge's checks "+core.CheckNames(un)+" on "+core.Short(t.SHA)+", red with no finished run on main to tell whether it's the change's; a second red counts against it")
+				m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+core.CheckNames(un)+"), red with no answer on main")
+				return true, nil
+			}
+		}
+	}
 	if st == core.CheckFail {
 		// A check no recent commit of main has finished can't tell yet
 		// whether the red is the change's or main's: wait for it, rather than
@@ -1949,6 +1972,10 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		detail := m.forgeFailures(t, p, main, which, mainRuns, at)
 		return true, m.sendBackWith(t, p, findings+hint, detail)
 	}
+	if note := "text only: the forge's checks " + strings.Join(unminded, ", ") + " fail on " + core.Short(t.SHA) + ", which changes only docs or prompts and can't break them, so it merges"; len(unminded) > 0 && !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
+		m.save(t, note)
+		m.comment(p.Repo, t.PR.Number, "Merging though "+strings.Join(unminded, ", ")+" fail here: this change touches only text (docs, goals, prompts), which the Hive's own test and gate have already run against, so a red forge check isn't its own.")
+	}
 	// Said once per head and main: a merge hold or a failed merge brings t
 	// back here every holdGap, and a repeat would crowd out its log.
 	if note := "no worse than main: the forge's checks " + strings.Join(shared, ", ") + " are red on both " + core.Short(t.SHA) + " and main at " + core.Short(main) + ", and nothing else fails, so it merges"; len(shared) > 0 && !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
@@ -1962,6 +1989,27 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		m.comment(p.Repo, t.PR.Number, say)
 	}
 	return false, nil
+}
+
+// textChange says t's change touches only prose (core.ProseOnly), whose
+// red on the forge isn't its own.
+func (m *Module) textChange(t *Task, p core.Project, main string) bool {
+	ch, err := m.C.Effects.Classify(p, main, t.SHA)
+	return err == nil && core.ProseOnly(ch.Files)
+}
+
+// unanswered are the failed checks main has no finished (passed or failed)
+// run of.
+func unanswered(failed, mainRuns []core.CheckRun) []core.CheckRun {
+	var out []core.CheckRun
+	for _, r := range failed {
+		if r.State == core.CheckFail && !slices.ContainsFunc(mainRuns, func(mr core.CheckRun) bool {
+			return mr.Name == r.Name && (mr.State == core.CheckPass || mr.State == core.CheckFail)
+		}) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // mainWaitMax is how long a red check waits on main's run of it.

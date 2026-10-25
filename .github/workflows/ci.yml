@@ -1,8 +1,9 @@
 name: ci
 # PRs, a published release and a manual run (gh workflow run ci) get all three systems, so a
 # change that's red on macOS or Windows is caught before it merges, not at the next release.
-# Pushes to main run on Linux only: their PR already ran the rest, and macOS minutes bill at
-# 10x and Windows at 2x.
+# Pushes to main run on Linux and Windows: a PR red on Windows waits for main's own answer
+# there to tell its red from main's (forgeChecks in internal/mod/work), which a main without
+# a Windows run can never give. macOS minutes bill at 10x, so main skips it.
 on:
   push:
     branches: [main]
@@ -26,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false # a release's run names every system's failures, not only the first
       matrix:
-        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
