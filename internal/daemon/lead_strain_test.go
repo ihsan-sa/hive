@@ -12,8 +12,7 @@ import (
 // A lead answers however busy the machine is: under a memory hold that keeps
 // a worker's turn from starting, the lead's turn starts (issue #421). The
 // floor asked for is more memory than any machine has, so the hold is real
-// on both runs; what differs is who it holds. The test reads the runs'
-// reasons rather than wait for an agent, so it needs no harness to run.
+// on both runs; what differs is who it holds.
 func TestLeadTurnStartsUnderStrainThatHoldsAWorker(t *testing.T) {
 	if core.Strained(1<<30, 0, 0) == "" {
 		t.Skip("no memory figure here to hold a turn on")
@@ -57,14 +56,14 @@ func TestLeadTurnStartsUnderStrainThatHoldsAWorker(t *testing.T) {
 		c.Tick()
 		lead, _ = c.Runs.Get("lead")
 		worker, _ = c.Runs.Get("worker")
-		if worker.Reason != "" && (lead.Turn > 0 || lead.Reason != "") {
+		if worker.Reason != "" && lead.Turn > 0 {
 			break
 		}
 	}
 	if !strings.HasPrefix(worker.Reason, "waiting: machine low on memory") || worker.Turn != 0 {
 		t.Fatalf("the worker was not held by the machine: %s turn %d %q", worker.Status, worker.Turn, worker.Reason)
 	}
-	if strings.HasPrefix(lead.Reason, "waiting: machine") || (lead.Turn == 0 && lead.Status == core.StatusQueued && lead.Reason == "") {
-		t.Fatalf("the lead waited for the machine too: %s turn %d %q, want its turn to start", lead.Status, lead.Turn, lead.Reason)
+	if lead.Turn != 1 {
+		t.Fatalf("the lead's turn did not start under the hold: %s turn %d %q", lead.Status, lead.Turn, lead.Reason)
 	}
 }

@@ -264,6 +264,7 @@ type Runs struct {
 	// yet; leadLaunching those of leads, which the other roles' wait for.
 	launching, leadLaunching int
 	starting                 map[string]bool // runs with a launch in flight
+	deferred                 map[string]int  // ticks a run's launch has waited behind leads', in a row
 	waking                   sync.Mutex      // one wake at a time, so a run is woken once
 }
 
@@ -1365,9 +1366,20 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	if !r.Lead() && rs.leadLaunching > 0 {
-		rs.mu.Unlock() // a lead's turn starts first; this one is due again next tick
+		// A lead's turn starts first; this one is due again next tick. Leads
+		// launch when a message comes, so this rarely repeats; one that does
+		// (leads launching back to back, tick after tick) is said in daemon.log.
+		if rs.deferred == nil {
+			rs.deferred = map[string]int{}
+		}
+		rs.deferred[r.ID]++
+		if n := rs.deferred[r.ID]; n == 10 || n%100 == 0 {
+			log.Printf("runs: %s %s has waited %d ticks for leads' launches to finish", r.Role, r.ID, n)
+		}
+		rs.mu.Unlock()
 		return
 	}
+	delete(rs.deferred, r.ID)
 	if rs.starting == nil {
 		rs.starting = map[string]bool{}
 	}
