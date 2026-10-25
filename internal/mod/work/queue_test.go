@@ -148,8 +148,8 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 }
 
 // A brief that only changes module prompts goes to the top of the line and
-// may start past max_workers, one at a time; one that names code too waits
-// its turn.
+// may start past the worker limit, one at a time; one that names code too
+// waits its turn.
 func TestQueueQuickPromptBriefs(t *testing.T) {
 	m := queueRig(t) // max_workers 2
 	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
@@ -161,6 +161,19 @@ func TestQueueQuickPromptBriefs(t *testing.T) {
 	p2 := file(t, m, "word the filer prompt", "In modules/kb/filer.md; see docs/log.md.")
 	if m.quick(mixed) || !m.quick(p1) || !m.quick(p2) || m.quick(a) {
 		t.Fatalf("quick: mixed %v, p1 %v, p2 %v, a %v", m.quick(mixed), m.quick(p1), m.quick(p2), m.quick(a))
+	}
+	// A package, a directory or a file still to be made, named next to a
+	// prompt, is code work: not quick. A prompt still to be made is.
+	for known, want := range map[string]bool{
+		"modules/agents/lead.md and the queue in internal/mod/work.": false,
+		"modules/kb/filer.md and the modules/kb/dream package.":      false,
+		"modules/agents/lead.md, and a new internal/core/pace.go.":   false,
+		"modules/agents/../../x/y.md":                                false,
+		"A new modules/agents/scout.md, logged in docs/log.md.":      true,
+	} {
+		if got := m.quick(Task{Project: "p", Known: known}); got != want {
+			t.Errorf("quick(%q) = %v, want %v", known, got, want)
+		}
 	}
 	for _, task := range []*Task{&a, &b, &c, &mixed, &p1, &p2} {
 		task.Stage = StageQueued

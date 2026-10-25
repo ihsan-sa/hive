@@ -35,7 +35,8 @@ import (
 // file under modules/) is quick: it goes first in line, after those the lead
 // started now, and may start past the pace while no other quick brief is
 // working, since a prompt edit takes a worker little time and plan. It still
-// waits on a brief on the same prompt, and on a strained machine.
+// waits on a brief on the same prompt, on a strained machine and on a plan
+// near its end.
 
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
@@ -66,15 +67,34 @@ func (m *Module) inLine(q []Task) {
 }
 
 // quick reports whether t's brief only changes module prompts: it names at
-// least one path, and every one is a .md file under modules/.
+// least one path, and every path-like word in it is a .md file under modules/
+// (one that doesn't exist yet counts) or a merge=union file in the clone. A
+// package, a directory, a code file or a file still to be made, named
+// alongside a prompt, makes it an ordinary brief.
 func (m *Module) quick(t Task) bool {
-	areas := m.areas(t)
-	for _, a := range areas {
-		if !strings.HasPrefix(a, "modules/") || path.Ext(a) != ".md" {
+	m.areas(t) // clones the project when no worker has yet
+	text := t.Title + "\n" + t.Done + "\n" + t.Known
+	root := m.C.WS.Project(t.Project)
+	var union []attrRule
+	read, n := false, 0
+	for _, p := range pathLike.FindAllString(text, -1) {
+		p = path.Clean(strings.TrimRight(strings.TrimPrefix(p, "./"), "."))
+		switch {
+		case p == ".." || strings.HasPrefix(p, "../"): // never looked up outside the clone
 			return false
+		case strings.HasPrefix(p, "modules/") && path.Ext(p) == ".md":
+			n++
+		default:
+			if !read {
+				union, read = unionRules(root), true
+			}
+			fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p)))
+			if err != nil || fi.IsDir() || !isUnion(union, p) {
+				return false
+			}
 		}
 	}
-	return len(areas) > 0
+	return n > 0
 }
 
 // admit decides which waiting tasks start a worker now, and why each other
@@ -114,6 +134,16 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
 		full = "waiting for a worker (pace " + m.workers.String() + ")"
 	}
+	// planOK says the plan has room for a quick brief past the pace: read
+	// once, on need.
+	var planOK *bool
+	plan := func() bool {
+		if planOK == nil {
+			ok := m.planSpent(cfg) == ""
+			planOK = &ok
+		}
+		return *planOK
+	}
 	for _, t := range line {
 		quick := m.quick(t)
 		switch o, area := m.overlap(t, ahead); {
@@ -126,7 +156,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				verb = "to go first"
 			}
 			wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s: both touch %s", o.Label(), o.ID, verb, area)
-		case working >= limit && (!quick || quickWorking > 0):
+		case working >= limit && (!quick || quickWorking > 0 || !plan()):
 			wait[t.ID] = full
 		case strain != "":
 			wait[t.ID] = "waiting: " + strain
