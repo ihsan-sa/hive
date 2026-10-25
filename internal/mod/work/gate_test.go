@@ -112,6 +112,9 @@ func gateRigSeeded(t *testing.T, mainRed bool, onMain, files map[string]string) 
 	pr, _ := forge.CreatePR(p.Repo, "hive/t1", "main", "work", "")
 	a := &agents.Agents{C: c, Mod: modules.New(ws, c.J)}
 	m := New(c, a, chat.New(c, a))
+	// A merged task's checkouts go off the save's path (ended): they must be
+	// gone before the workspace is closed and removed.
+	t.Cleanup(m.Wait)
 	task := &Task{ID: "t1", Project: "p", Title: "work", Kind: "work", Stage: StageTesting, Worker: "w1", Branch: "hive/t1", SHA: sha, PR: pr}
 	return m, task, p, forge
 }

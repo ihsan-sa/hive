@@ -85,6 +85,7 @@ func noCommitRig(t *testing.T, fail int) (*Module, *flakyForge, *Task, core.Proj
 	}
 	a := &agents.Agents{C: c}
 	m := New(c, a, chat.New(c, a))
+	t.Cleanup(m.Wait) // a task's checkouts go off the save's path
 	task := &Task{ID: "t1", Project: "p", Title: "restart the box", Kind: "work", Stage: StageLanding, Issue: core.Issue{Number: 7}}
 	return m, forge, task, p
 }
