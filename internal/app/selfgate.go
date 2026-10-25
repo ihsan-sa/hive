@@ -121,7 +121,6 @@ func readReport(j work.GateJob, runErr, ctxErr error) core.GateResult {
 	g := core.GateResult{Outcome: core.GateCantRun, Report: filepath.Join(j.Out, "report.md")}
 	if ctxErr != nil {
 		g.Reason = "the gate ran out of time (" + ctxErr.Error() + ")"
-		g.Alone = true // this run's clock: another head at this main may finish in time
 		return g
 	}
 	raw, err := os.ReadFile(filepath.Join(j.Out, "report.json"))

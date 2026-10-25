@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -78,7 +79,7 @@ func unitTest(c *Child) error {
 	u := &unitFailure{}
 	vet, verr := c.Exec(30*time.Minute, c.Src, "go", "vet", "./...")
 	if verr != nil {
-		u.failures = append(u.failures, vetFailures(vet)...)
+		u.failures = append(u.failures, vetFailures(vet, modulePath(c.Src))...)
 		u.out = vet
 	}
 	test, terr := c.Exec(30*time.Minute, c.Src, "go", "test", "-short", "-json", "./...")
@@ -121,7 +122,7 @@ func rerun(c *Child, fs []TestFailure) (left []TestFailure, unnamed bool) {
 		// vet reads code, not the machine: run once more only to be sure.
 		args := append([]string{"go", "vet"}, vetPkgs...)
 		if out, err := c.Exec(30*time.Minute, c.Src, args...); err != nil {
-			got := vetFailures(out)
+			got := vetFailures(out, modulePath(c.Src))
 			if len(got) == 0 { // it failed and named nothing: the vet failures stand
 				unnamed = true
 				got = slices.DeleteFunc(slices.Clone(fs), func(f TestFailure) bool { return f.Step != "go vet" })
@@ -238,15 +239,26 @@ func testFailures(out string) (fs []TestFailure, stray string) {
 // tests are bracketed ("# [p]").
 var vetHeader = regexp.MustCompile(`^# \[?([^\s\]]+)\]?`)
 
+// vetFile is a report line naming its file, relative to the module's root.
+var vetFile = regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+`)
+
 // vetFailures reads go vet's output: each package it reported on, with its
-// reports.
-func vetFailures(out string) []TestFailure {
+// reports. A run that vets one package prints no header: a report there is
+// put on the package of its file, in module mod.
+func vetFailures(out, mod string) []TestFailure {
 	var fs []TestFailure
+	headed := false
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		pkg := ""
 		if m := vetHeader.FindStringSubmatch(line); m != nil {
-			if len(fs) == 0 || fs[len(fs)-1].Package != m[1] {
-				fs = append(fs, TestFailure{Step: "go vet", Package: m[1]})
-			}
+			pkg, headed = m[1], true
+		} else if m := vetFile.FindStringSubmatch(line); m != nil && !headed && mod != "" && !filepath.IsAbs(m[1]) {
+			pkg = path.Join(mod, path.Dir(filepath.ToSlash(m[1])))
+		}
+		if pkg != "" && (len(fs) == 0 || fs[len(fs)-1].Package != pkg) {
+			fs = append(fs, TestFailure{Step: "go vet", Package: pkg})
+		}
+		if vetHeader.MatchString(line) {
 			continue
 		}
 		if len(fs) > 0 && strings.TrimSpace(line) != "" {
@@ -355,6 +367,16 @@ func judgeUnit(cand, ctrl *Child, errs map[*Child]error, mod string) (UnitReport
 				again = append(again, g)
 			}
 		}
+		// A package the control doesn't have can't fail there: its failures
+		// are the candidate's own, and asking the control would only fail to
+		// load it, naming nothing.
+		again = slices.DeleteFunc(again, func(f TestFailure) bool {
+			if hasPackage(ctrl.Src, mod, f.Package) {
+				return false
+			}
+			u.Own = append(u.Own, f)
+			return true
+		})
 		if len(again) > 0 {
 			// Shared only as the same failure: a package the candidate breaks
 			// whole is not excused by one test the control fails in it.
@@ -422,6 +444,17 @@ func clip(s string, n int) string {
 		return string(r[:n])
 	}
 	return s
+}
+
+// hasPackage says whether src, the checkout of module mod, holds the Go
+// package pkg: a folder with a .go file in it. A package outside mod (or a
+// side with no module path) is taken to be there.
+func hasPackage(src, mod, pkg string) bool {
+	if src == "" || mod == "" || (pkg != mod && !strings.HasPrefix(pkg, mod+"/")) {
+		return true
+	}
+	files, _ := filepath.Glob(filepath.Join(src, filepath.FromSlash(strings.TrimPrefix(pkg, mod)), "*.go"))
+	return len(files) > 0
 }
 
 // modulePath is the module go.mod in src names, or "".

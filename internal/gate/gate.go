@@ -346,7 +346,11 @@ func Run(cfg Config) (rep Report, err error) {
 				out *[]Result
 			}{{cand, &rep.Candidate}, {ctrl, &rep.Control}} {
 				if time.Now().After(deadline) {
-					return rep, alone{fmt.Errorf("out of time (%s) before %s's %s", cfg.Timeout, side.c.Name, name)}
+					err = fmt.Errorf("out of time (%s) before %s's %s", cfg.Timeout, side.c.Name, name)
+					if probeSeconds(rep.Candidate) > probeSeconds(rep.Control) {
+						err = alone{err} // the candidate took the time; on a slow machine both would
+					}
+					return rep, err
 				}
 				cfg.log("rep %d: %s on %s", rep0+1, name, side.c.Name)
 				start, spent := time.Now(), side.c.Meter.Bytes()
@@ -376,6 +380,15 @@ func Run(cfg Config) (rep Report, err error) {
 		rep.Verdict.Reason += "; failing on both sides, so the environment's and not counted: " + failureNames(rep.Unit.Shared, modulePath(cand.Src))
 	}
 	return rep, nil
+}
+
+// probeSeconds is the seconds a side's probes took.
+func probeSeconds(rs []Result) float64 {
+	var s float64
+	for _, r := range rs {
+		s += r.Seconds
+	}
+	return s
 }
 
 func hasMetric(r Result, name string) bool {
