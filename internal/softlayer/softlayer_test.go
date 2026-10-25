@@ -47,6 +47,11 @@ func TestEveryArmBuilds(t *testing.T) {
 	if !strings.HasPrefix(tools, essay) || !strings.Contains(tools, "- `hive agent finish") || strings.Contains(tools, "Talk to each other") {
 		t.Errorf("the essay-tools arm should be the essay and the bare command list:\n%s", tools)
 	}
+	for _, v := range Variants {
+		if want := strings.HasPrefix(v.Name, "essay"); v.NeedsEssay() != want {
+			t.Errorf("%s: NeedsEssay %v, want %v", v.Name, !want, want)
+		}
+	}
 	for _, name := range []string{"essay", "essay-tools", "philosophy", "vague"} {
 		for _, r := range Roles[1:] {
 			if n := len(strings.Fields(built[name][r])); n > 8 {
@@ -90,8 +95,8 @@ func TestInstallSurvivesTheDefaults(t *testing.T) {
 	}
 }
 
-// TestObserve: messages are counted by role, peer talk is between two runs
-// that aren't a lead, a task is filed once however often it is saved, and the
+// TestObserve: messages are counted by role, peer talk is worker to worker
+// (not a sweep's to a worker), a task is filed once however often it is saved, and the
 // window holds what it should.
 func TestObserve(t *testing.T) {
 	journal := strings.Join([]string{
@@ -102,6 +107,8 @@ func TestObserve(t *testing.T) {
 		`{"at":"2026-10-25T02:01:00Z","kind":"msg.sent","data":{"from":"w-1","to":"w-2","text":"hi"}}`,
 		`{"at":"2026-10-25T02:02:00Z","kind":"msg.sent","data":{"from":"w-2","to":"lead","text":"hi"}}`,
 		`{"at":"2026-10-25T02:03:00Z","kind":"msg.sent","data":{"from":"lead-lead-x","to":"w-1","text":"hi"}}`,
+		`{"at":"2026-10-25T02:03:01Z","kind":"run.created","data":{"id":"s-1","role":"sweep"}}`,
+		`{"at":"2026-10-25T02:03:02Z","kind":"msg.sent","data":{"from":"s-1","to":"w-1","text":"hi"}}`,
 		`{"at":"2026-10-25T02:04:00Z","kind":"task.saved","data":{"id":"t-old","from":"w-1","kind":"work"}}`,
 		`{"at":"2026-10-25T02:04:00Z","kind":"task.saved","data":{"id":"t-new","from":"w-2","kind":"work"}}`,
 		`{"at":"2026-10-25T02:04:01Z","kind":"task.saved","data":{"id":"t-new","from":"w-2","kind":"work"}}`,
@@ -119,13 +126,13 @@ func TestObserve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Messages != 3 || rep.Peer != 1 || rep.Pairs["worker→worker"] != 1 || rep.Pairs["worker→lead"] != 1 || rep.Pairs["lead→worker"] != 1 {
+	if rep.Messages != 4 || rep.Peer != 1 || rep.Pairs["sweep→worker"] != 1 || rep.Pairs["worker→worker"] != 1 || rep.Pairs["worker→lead"] != 1 || rep.Pairs["lead→worker"] != 1 {
 		t.Errorf("messages %d, peer %d, pairs %v", rep.Messages, rep.Peer, rep.Pairs)
 	}
 	if rep.Briefs != 1 || rep.Helpers != 1 || rep.Asks != 1 {
 		t.Errorf("briefs %d, helpers %d, asks %d: want 1 each", rep.Briefs, rep.Helpers, rep.Asks)
 	}
-	if rep.Runs["worker"] != 1 || rep.Runs["lead"] != 1 || rep.Finished["done"] != 1 || rep.Merged != 1 {
+	if rep.Runs["worker"] != 1 || rep.Runs["lead"] != 1 || rep.Runs["sweep"] != 1 || rep.Finished["done"] != 1 || rep.Merged != 1 {
 		t.Errorf("runs %v, finished %v, merged %d", rep.Runs, rep.Finished, rep.Merged)
 	}
 	rep.Variant = "vague"

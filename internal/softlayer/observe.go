@@ -22,8 +22,9 @@ type Report struct {
 	Turns    int            `json:"turns"` // agent turns ended
 	Messages int            `json:"messages"`
 	Pairs    map[string]int `json:"pairs"` // "worker→lead": count
-	// Peer is a message between two runs neither of which is a lead: the
-	// lateral talk the person asked to see ("2 of them worker to worker").
+	// Peer is a message from one worker run to another: the lateral talk the
+	// person asked to see ("2 of them worker to worker"). A sweep's or
+	// reviewer's message to a worker is in Pairs, not here.
 	Peer     int            `json:"peer"`
 	Briefs   int            `json:"briefs"`  // work an agent filed
 	Helpers  int            `json:"helpers"` // helpers an agent spawned
@@ -90,7 +91,7 @@ func Observe(r io.Reader, since, until time.Time) (Report, error) {
 			from, to := endpoint(roles, str("from")), endpoint(roles, str("to"))
 			rep.Messages++
 			rep.Pairs[from+"→"+to]++
-			if _, ok := roles[str("from")]; ok && from != "lead" && to != "lead" && to != "person" && to != "parent" && to != "other" {
+			if from == "worker" && to == "worker" {
 				rep.Peer++
 			}
 		case "task.saved":

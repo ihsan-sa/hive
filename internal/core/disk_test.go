@@ -161,7 +161,9 @@ func TestCheckHomeCap(t *testing.T) {
 // the self gate's folder, and runs' homes live under the cache, gone after.
 func TestPruneRemovesLeftovers(t *testing.T) {
 	c, _ := testHive(t)
+	t.Setenv("TMPDIR", t.TempDir()) // the temp homes Prune looks for are the test's, not the host's
 	e := c.Effects
+	e.sweep = func() int { return sandbox.SweepIn(t.TempDir(), os.TempDir()) }
 	old := time.Now().Add(-2 * staleAfter)
 	mk := func(p string) string {
 		os.MkdirAll(filepath.Join(p, "x"), 0o755)

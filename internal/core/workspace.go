@@ -148,6 +148,10 @@ type Config struct {
 	// improve's measures) that run at once, a ceiling over the pace as
 	// MaxWorkers is; the rest wait in order. 0 is no ceiling.
 	MaxChecks int `json:"max_checks"`
+	// MaxGates is the most recursive gate runs (self projects' gains, each
+	// two child Hives and their suites) at once, a ceiling over their pace;
+	// 0 is one per 6 cores (internal/mod/work/selfgate.go).
+	MaxGates int `json:"max_gates,omitempty"`
 	// CheckCacheMaxMB caps one check's own home (its build cache and
 	// scratch): past it the check is ended as can't-run; 0 is the default
 	// (8 GB). See disk.go.

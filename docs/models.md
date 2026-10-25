@@ -202,7 +202,15 @@ at their usage limit (every login of that harness parked, or the named model's
 own limit), its next turn goes on the first pick with room; changing harness
 (or open model) starts a fresh session on its brief, told why and that its
 checkout and notes are intact. With no pick free it waits for the soonest
-reset. A lead follows the settings' route at every turn. The dashboard's agent
+reset. A run that must finish (a worker) moves only to a pick some run has
+finished done on with every turn on that pick (a trial, or real work that
+started there), or back to its route's first: a model that never finished here
+ended turns without finishing while others waited on it. A run proves the pick
+as its route names it, since a run starts on its route's first pick. Proof is
+Hive-wide and kept from the journal; a worker that skips an unproven pick at
+a limit says so in its parked reason ("no worker has finished on open:qwen
+yet"), so a trial there lets it fall back. A worker gone quiet moves to a
+proven pick only when it is next woken. A lead follows the settings' route at every turn. The dashboard's agent
 lines and `hive agent models` say which `harness:model` each agent runs on.
 
 ### A model that can't answer

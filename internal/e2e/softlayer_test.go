@@ -74,7 +74,9 @@ func TestSoftLayer(t *testing.T) {
 		}
 	})
 	table := fmt.Sprintf("Task: %s\n\nHarness: %s; each arm waited up to %s.\n\n%s", task, envOr("HIVE_E2E_HARNESS", "fake"), wait, softlayer.Table(reps))
-	os.WriteFile(filepath.Join(out, "table.md"), []byte(table), 0o644)
+	if err := os.WriteFile(filepath.Join(out, "table.md"), []byte(table), 0o644); err != nil {
+		t.Errorf("keeping the table: %v", err)
+	}
 	t.Logf("soft layer, in %s:\n%s", out, table)
 }
 
@@ -135,16 +137,30 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 	if !armTookEffect(h, arm, essay) {
 		t.Errorf("%s: the sub-Hive's agents didn't start from the arm's prompts", arm.Name)
 	}
-	os.MkdirAll(keep, 0o755)
-	raw, _ := json.MarshalIndent(rep, "", "  ")
-	os.WriteFile(filepath.Join(keep, "report.json"), raw, 0o644)
-	if j, err := os.ReadFile(h.ws.Events()); err == nil {
-		os.WriteFile(filepath.Join(keep, "events.jsonl"), j, 0o644)
+	// What the arm leaves is the experiment's output: a write that fails is
+	// said, not dropped, but doesn't stop the other arms' results.
+	kept := func(what string, err error) {
+		if err != nil {
+			t.Errorf("%s: keeping %s: %v", arm.Name, what, err)
+		}
 	}
-	exec.Command("cp", "-r", h.ws.Chats(), filepath.Join(keep, "chats")).Run()
-	exec.Command("cp", "-r", h.ws.Runs(), filepath.Join(keep, "runs")).Run()
+	kept(keep, os.MkdirAll(keep, 0o755))
+	raw, _ := json.MarshalIndent(rep, "", "  ")
+	kept("report.json", os.WriteFile(filepath.Join(keep, "report.json"), raw, 0o644))
+	j, err := os.ReadFile(h.ws.Events())
+	if err == nil {
+		err = os.WriteFile(filepath.Join(keep, "events.jsonl"), j, 0o644)
+	}
+	kept("events.jsonl", err)
+	for what, from := range map[string]string{"chats": h.ws.Chats(), "runs": h.ws.Runs()} {
+		if out, err := exec.Command("cp", "-r", from, filepath.Join(keep, what)).CombinedOutput(); err != nil {
+			kept(what, fmt.Errorf("%v: %s", err, out))
+		}
+	}
 	if diff, err := core.Git(h.forge.RepoPath("me/"+project), "log", "--stat", "--format=%h %s", "main"); err == nil {
-		os.WriteFile(filepath.Join(keep, "main.log"), []byte(diff), 0o644)
+		kept("main.log", os.WriteFile(filepath.Join(keep, "main.log"), []byte(diff), 0o644))
+	} else {
+		t.Logf("%s: no main.log: %v", arm.Name, err)
 	}
 	t.Logf("%s: %s", arm.Name, outcome)
 	return rep
@@ -253,10 +269,16 @@ func copyNotes(t *testing.T, from, to string) {
 	t.Helper()
 	for _, sub := range []string{"", "practice"} {
 		files, _ := filepath.Glob(filepath.Join(from, sub, "*.md"))
-		os.MkdirAll(filepath.Join(to, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(to, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		for _, f := range files {
-			if raw, err := os.ReadFile(f); err == nil {
-				os.WriteFile(filepath.Join(to, sub, filepath.Base(f)), raw, 0o644)
+			raw, err := os.ReadFile(f)
+			if err == nil {
+				err = os.WriteFile(filepath.Join(to, sub, filepath.Base(f)), raw, 0o644)
+			}
+			if err != nil {
+				t.Fatalf("copying the knowledge base's notes: %v", err)
 			}
 		}
 	}

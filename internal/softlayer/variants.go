@@ -209,6 +209,23 @@ func (v Variant) Build(essay string) (map[string]string, error) {
 	return files, nil
 }
 
+// NeedsEssay says whether any of the variant's prompts carry the essay's
+// text, so a caller without the essay can fail instead of installing
+// empty orientations.
+func (v Variant) NeedsEssay() bool {
+	const mark = "\x00the essay\x00"
+	files, err := v.Build(mark)
+	if err != nil {
+		return true
+	}
+	for _, text := range files {
+		if strings.Contains(text, mark) {
+			return true
+		}
+	}
+	return false
+}
+
 // Install writes the variant into a workspace's modules folder (core.Workspace.Modules()),
 // over the agents module, with a source record that is not "builtin" so the
 // daemon's default install never puts the standard prompts back. Every role
