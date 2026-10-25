@@ -612,28 +612,36 @@ func FailedTests(out string) []string {
 }
 
 var (
-	redPkgLine = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
-	redTest    = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
-	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |exit status |test timed out|# )|\[(build|setup) failed\]`)
+	// GoPkgLine and GoFailLine are go test's line closing a package's
+	// output ("FAIL\tpkg\t0.1s", "FAIL pkg [build failed]") and the line
+	// naming a failed test; RedKeys and improve's failures read both.
+	GoPkgLine  = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
+	GoFailLine = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
+	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |test timed out)|\[(build|setup) failed\]`)
 	redBuild   = regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+(?::\d+)?: (.+)`)
 )
 
 // RedKeys names what failed in a red go test run so two runs' reds can be
 // compared: each failing test with its package ("pkg TestX"), and "pkg !"
 // for a package that failed in a way no test name accounts for (no test
-// named, a build failure, a timeout, a panic or exit outside a test). Output
+// named, a build failure, a timeout, a panic or exit outside a test). go test
+// run in a package's directory ends an ordinary failure with "FAIL" then
+// "exit status 1"; only an exit with no "FAIL" just before it (os.Exit in a
+// test) counts as unnamed. A build's "# pkg" header counts at column 0 only.
+// Output
 // with no go package lines falls back to FailedTests' names. Nil means
 // nothing could be named.
 func RedKeys(out string) []string {
 	var keys, tests []string
-	odd, pkgs := false, false
+	odd, pkgs, prev := false, false, ""
 	add := func(k string) {
 		if !slices.Contains(keys, k) {
 			keys = append(keys, k)
 		}
 	}
 	for _, l := range strings.Split(out, "\n") {
-		if m := redPkgLine.FindStringSubmatch(l); m != nil && strings.ContainsAny(m[2], "/.") {
+		t := strings.TrimSpace(l)
+		if m := GoPkgLine.FindStringSubmatch(l); m != nil && strings.ContainsAny(m[2], "/.") {
 			pkgs = true
 			if m[1] == "FAIL" {
 				for _, t := range tests {
@@ -643,13 +651,16 @@ func RedKeys(out string) []string {
 					add(m[2] + " !")
 				}
 			}
-			tests, odd = nil, false
+			tests, odd, prev = nil, false, ""
 			continue
 		}
-		if m := redTest.FindStringSubmatch(l); m != nil {
+		if m := GoFailLine.FindStringSubmatch(l); m != nil {
 			tests = append(tests, m[1])
-		} else if redOdd.MatchString(strings.TrimSpace(l)) {
+		} else if redOdd.MatchString(t) || strings.HasPrefix(l, "# ") || strings.HasPrefix(t, "exit status ") && prev != "FAIL" {
 			odd = true
+		}
+		if t != "" {
+			prev = t
 		}
 	}
 	if !pkgs {

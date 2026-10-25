@@ -1239,4 +1239,22 @@ func TestRedKeys(t *testing.T) {
 	if got := RedKeys("vet: something\n"); got != nil {
 		t.Fatalf("nothing named: %q", got)
 	}
+	if got := RedKeys("--- FAIL: TestX (0.00s)\n    # a log line\nFAIL\nFAIL\tx/a\t0.01s\n"); !slices.Equal(got, []string{"x/a TestX"}) {
+		t.Fatalf("a test's log line starting '# ' isn't a build header: %q", got)
+	}
+}
+
+// go1.27.3's own output, run in each package's directory ("go test", no
+// package list), which prints "exit status 1" after every failing package.
+func TestRedKeysExitStatus(t *testing.T) {
+	// a: TestX fails, so testing prints FAIL and exits 1.
+	ordinary := "--- FAIL: TestX (0.00s)\n    a_test.go:3: bad\nFAIL\nexit status 1\nFAIL\tx/m/a\t0.001s\n"
+	if got := RedKeys(ordinary); !slices.Equal(got, []string{"x/m/a TestX"}) {
+		t.Fatalf("an ordinary failure's exit status counted as unnamed: %q", got)
+	}
+	// b: TestY fails, then TestZ calls os.Exit(1) before testing prints FAIL.
+	exited := "--- FAIL: TestY (0.00s)\n    b_test.go:3: bad\nexit status 1\nFAIL\tx/m/b\t0.001s\n"
+	if got := RedKeys(exited); !slices.Equal(got, []string{"x/m/b TestY", "x/m/b !"}) {
+		t.Fatalf("an exit beside a named failure went unnamed: %q", got)
+	}
 }
