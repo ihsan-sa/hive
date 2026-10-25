@@ -1186,10 +1186,13 @@ func TestRedKeys(t *testing.T) {
 		t.Fatalf("pytest: %q", got)
 	}
 	vet := "# x/e\n# [x/e]\nvet: e/a_test.go:225:42: not enough arguments in call to f\n\thave (string)\n\twant (string, bool)\n"
-	if got := RedKeys(vet); len(got) != 1 || got[0] != "e/a_test.go: not enough arguments in call to f" {
+	if got := RedKeys(vet); got != nil {
+		t.Fatalf("vet's errors name no test: %q", got)
+	}
+	if got := StopKeys(vet); len(got) != 1 || got[0] != "e/a_test.go: not enough arguments in call to f" {
 		t.Fatalf("vet: %q", got)
 	}
-	if moved := RedKeys(strings.Replace(vet, ":225:42:", ":230:9:", 1)); !slices.Equal(moved, RedKeys(vet)) {
+	if moved := StopKeys(strings.Replace(vet, ":225:42:", ":230:9:", 1)); !slices.Equal(moved, StopKeys(vet)) {
 		t.Fatalf("the same vet error a few lines down: %q", moved)
 	}
 	if got := RedKeys("vet: something\n"); got != nil {
