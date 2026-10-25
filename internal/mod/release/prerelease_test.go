@@ -365,3 +365,139 @@ func TestPreReleasesWithoutALoginSaySo(t *testing.T) {
 type noLogin struct{ core.Forge }
 
 func (noLogin) Releases(string) ([]core.Release, error) { return nil, errors.New("gh: not logged in") }
+
+// loginForge is the local forge read through a login: its API answers notes,
+// and GitHub's rate limit stops the reads named in limit until reset.
+type loginForge struct {
+	*core.Local
+	notes string
+	limit map[string]bool // "releases", "runs", "jobs"
+	reset time.Time
+	gets  []string
+}
+
+func (f *loginForge) limited(what string) error {
+	if f.limit[what] {
+		return &core.RateLimited{Until: time.Now().Add(time.Minute), Text: "HTTP 403: API rate limit exceeded for user ID 1."}
+	}
+	return nil
+}
+
+func (f *loginForge) Releases(repo string) ([]core.Release, error) {
+	if err := f.limited("releases"); err != nil {
+		return nil, err
+	}
+	return f.Local.Releases(repo)
+}
+
+func (f *loginForge) ReleaseRuns(repo, sha string) ([]core.WorkflowRun, error) {
+	if err := f.limited("runs"); err != nil {
+		return nil, err
+	}
+	return f.Local.ReleaseRuns(repo, sha)
+}
+
+func (f *loginForge) RunJobs(repo string, run int64) ([]core.WorkflowJob, error) {
+	if err := f.limited("jobs"); err != nil {
+		return nil, err
+	}
+	return f.Local.RunJobs(repo, run)
+}
+
+func (f *loginForge) APIGet(repo, path string) (string, error) {
+	f.gets = append(f.gets, path)
+	return f.notes, nil
+}
+
+func (f *loginForge) RateReset(string) (time.Time, error) { return f.reset, nil }
+
+// A look GitHub's rate limit stops, at any of its reads, says so and when it
+// looks again (the login's reset), instead of "already on" as if nothing
+// were newer; follow waits for the reset, and says so once, with no alert.
+func TestRateLimitedLookSaysSoAndWaitsForTheReset(t *testing.T) {
+	for _, what := range []string{"releases", "runs", "jobs"} {
+		t.Run(what, func(t *testing.T) {
+			m, exe := releaseAt(t, "v0.1.12", "me/hive")
+			preSite(t, m)
+			cfg := m.C.WS.LoadConfig()
+			cfg.Channel, cfg.AutoUpdate = Prerelease, true
+			m.C.WS.SaveConfig(cfg)
+			m.PauseMerges = func(time.Duration) (func(), bool) { return func() {}, true }
+			reset := time.Now().Add(40 * time.Minute).Truncate(time.Second)
+			f := &loginForge{Local: m.C.Effects.Forge.(*core.Local), limit: map[string]bool{what: true}, reset: reset}
+			m.C.Effects.Forge = f
+			msg, err := m.AutoUpdate()
+			if raw, _ := os.ReadFile(exe); err == nil || strings.HasPrefix(msg, "already on") || string(raw) != "old" ||
+				!strings.Contains(err.Error(), "rate limit") || !strings.Contains(err.Error(), reset.UTC().Format("15:04Z")) {
+				t.Fatalf("rate-limited look: %q, %v, binary %q", msg, err, raw)
+			}
+			m.follow()
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				m.pmu.Lock()
+				at := m.followed
+				m.pmu.Unlock()
+				if at.Equal(reset.Add(-followEvery)) {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			m.updating.Lock() // the follow's update has ended
+			m.updating.Unlock()
+			m.pmu.Lock()
+			at := m.followed
+			m.pmu.Unlock()
+			if !at.Equal(reset.Add(-followEvery)) {
+				t.Fatalf("the next look is due at %v, want the reset %v", at.Add(followEvery), reset)
+			}
+			m.followed1(m.AutoUpdate())
+			follows, alerts := 0, 0
+			m.C.J.Replay(func(e core.Event) {
+				switch e.Kind {
+				case "release.follow":
+					follows++
+					if !strings.Contains(string(e.Data), "rate limit") {
+						t.Errorf("journalled %s", e.Data)
+					}
+				case "alert.raised":
+					alerts++
+				}
+			})
+			if follows != 1 || alerts != 0 {
+				t.Fatalf("a rate limit journalled %d times with %d alerts, want once and none", follows, alerts)
+			}
+			f.limit = nil // after the reset, the look goes on and takes v0.1.13
+			if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v0.1.13\n") {
+				t.Fatalf("after the reset: %q, %v", msg, err)
+			}
+		})
+	}
+}
+
+// A newer release in hand is still installed when the look for pre-releases
+// was rate-limited: the limit only stops a look short.
+func TestRateLimitedLookStillTakesANewerLatest(t *testing.T) {
+	m, exe := releaseAt(t, "v0.1.11", "me/hive")
+	preSite(t, m)
+	cfg := m.C.WS.LoadConfig()
+	cfg.Channel = Prerelease
+	m.C.WS.SaveConfig(cfg)
+	m.C.Effects.Forge = &loginForge{Local: m.C.Effects.Forge.(*core.Local), limit: map[string]bool{"releases": true}}
+	msg, err := m.Update("")
+	if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "updated to v0.1.12\n") || string(raw) != "v12" {
+		t.Fatalf("update: %q, %v, binary %q", msg, err, raw)
+	}
+}
+
+// Release notes are read on the forge's login, never the anonymous API.
+func TestNotesReadOnTheLogin(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	releases = "" // the anonymous API has none
+	m, _ := releaseAt(t, "v9.9.8", "me/hive")
+	f := &loginForge{Local: m.C.Effects.Forge.(*core.Local), notes: releaseList}
+	m.C.Effects.Forge = f
+	msg, err := m.Update("")
+	if err != nil || !strings.Contains(msg, "Faster merges.") || !slices.Contains(f.gets, "repos/me/hive/releases?per_page=100") {
+		t.Fatalf("update: %q, %v, reads %q", msg, err, f.gets)
+	}
+}

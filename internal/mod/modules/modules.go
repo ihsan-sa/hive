@@ -32,6 +32,10 @@ type Manifest struct {
 	// are what it serves, each a fixed slice of the control API (see runner).
 	Exec  []string `json:"exec,omitempty"`
 	Hooks []string `json:"hooks,omitempty"`
+	// Schedule names jobs the program serves, each with its default
+	// schedule ("every 4h"); config.json's schedules override it. When one
+	// is due the system journals module.scheduled, which the program reads.
+	Schedule map[string]string `json:"schedule,omitempty"`
 }
 
 // Source is the host-written record of where a module came from.
@@ -312,6 +316,13 @@ func (r *Registry) Install(url, name string) (Module, error) {
 	// The clone goes to a hidden folder and moves into place whole: List
 	// reads any folder as a module, and a half-written one would show (and
 	// be read by agents) without its files, which a slow disk made plain.
+	// One an earlier install of it left behind (the daemon stopped mid-clone)
+	// goes first; the pattern is core.NewID's shape, so ".name-other-<id>"
+	// of another module stays.
+	left, _ := filepath.Glob(filepath.Join(r.ws.Modules(), "."+name+"-??????-??????-??????????"))
+	for _, d := range left {
+		os.RemoveAll(d)
+	}
 	tmp := filepath.Join(r.ws.Modules(), "."+name+"-"+core.NewID())
 	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", url, tmp); err != nil {
 		os.RemoveAll(tmp)

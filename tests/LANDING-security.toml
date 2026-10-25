@@ -26,6 +26,12 @@ paths = [
   # Runs a module's program as the person, outside the sandbox.
   "internal/mod/runner/**",
 
+  # A shipped module's manifest names the program the runner starts as the
+  # person (exec) and the API scopes it gets (hooks); a shipped module has no
+  # module-reviewer read, so its program's source needs this one.
+  "modules/*/module.json",
+  "modules/kb/dream/**",
+
   # Mounts and covers for a run, effects applied outside the sandbox, the
   # hard ceiling, login and token handling, and the workspace paths that
   # define what is private.
@@ -51,6 +57,9 @@ paths = [
 
   # Which credentials reach an agent's turn.
   "internal/harness/**",
+
+  # Agents' reads of GitHub on the person's login: which repos and paths.
+  "internal/mod/forgeread/**",
 
   # The open harness holds a model's key and runs the model's shell commands;
   # routes decide which model and endpoint a run's turn goes to.

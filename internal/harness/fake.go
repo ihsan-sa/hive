@@ -10,6 +10,7 @@ type Fake struct{}
 
 func (Fake) Name() string           { return "fake" }
 func (Fake) CapsSpend()             {}
+func (Fake) ReadOnlyTools()         {}
 func (Fake) Program() string        { return "hive" }
 func (Fake) LoginCommand() []string { return nil }
 
