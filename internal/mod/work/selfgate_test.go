@@ -238,11 +238,11 @@ func TestSelfGateNoTiesAndTurns(t *testing.T) {
 	}
 }
 
-// A fix to the Hive itself (the default aim, as every task filed before
-// aims existed) merges on its tests, reads and checks, with no gate run.
+// A clear fix to the Hive itself merges on its tests, reads and checks,
+// with no gate run.
 func TestSelfFixMergesWithoutTheGate(t *testing.T) {
 	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
-	task.Aim = ""
+	task.Aim, task.AimWhy = AimFix, "TestMerge fails: the merge never lands"
 	mergeOnce(t, m, task, p)
 	m.Wait()
 	if len(*jobs) != 0 {
@@ -250,6 +250,24 @@ func TestSelfFixMergesWithoutTheGate(t *testing.T) {
 	}
 	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
 		t.Fatalf("stage %q, reason %q: want a fix merged", task.Stage, task.Reason)
+	}
+}
+
+// A change that says neither fix nor gain is unclear, and is taken as a gain
+// (issue #568): it waits for the gate, and the gate's rollback holds it.
+func TestUnclearIsTakenAsAGain(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
+	task.Aim, task.AimWhy = "", ""
+	if !task.Gain() || !strings.Contains(task.AimWord(), "nothing says it is a fix") {
+		t.Fatalf("an unclear task is %q, want a gain", task.AimWord())
+	}
+	gateOnce(t, m, task, p)
+	if len(*jobs) != 1 || task.Stage == StageMerged || prState(t, f, task.PR.Number) == "MERGED" {
+		t.Fatalf("%d gate runs, stage %q: want an unclear change gated and not merged", len(*jobs), task.Stage)
+	}
+	rv := Task{Kind: "revert"}
+	if rv.Gain() {
+		t.Fatal("a revert waits for the gate")
 	}
 }
 
@@ -279,7 +297,7 @@ func TestAimOp(t *testing.T) {
 		t.Fatal(err)
 	}
 	*task, _ = m.Get(task.ID)
-	if task.Gain() || !strings.Contains(task.Log[len(task.Log)-1].Text, "a plain fix") {
+	if task.Gain() || !strings.Contains(task.Log[len(task.Log)-1].Text, "a plain fix") || task.AimWord() != "a fix: a plain fix" {
 		t.Fatalf("aim %q, log %+v", task.Aim, task.Log[len(task.Log)-1])
 	}
 	mergeOnce(t, m, task, p)
@@ -292,23 +310,37 @@ func TestAimOp(t *testing.T) {
 	}
 }
 
-// A brief may say it aims at a gain, and its worker's brief says which it is.
+// A brief may say it aims at a gain or is a fix naming its failure; one that
+// says neither is taken as a gain; its worker's brief says which, and why.
 func TestBriefAim(t *testing.T) {
 	m, _, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	if _, err := m.File(Brief{Project: p.Name, Title: "x", Aim: "bigger"}); err == nil {
 		t.Fatal("filed a brief with an aim that is neither fix nor gain")
 	}
+	if _, err := m.File(Brief{Project: p.Name, Title: "x", Aim: "fix"}); err == nil {
+		t.Fatal("filed a fix that names no failure")
+	}
 	g, err := m.File(Brief{Project: p.Name, Title: "faster merges", Aim: "gain"})
 	if err != nil || !g.Gain() {
 		t.Fatalf("aim %q, %v", g.Aim, err)
 	}
-	fx, _ := m.File(Brief{Project: p.Name, Title: "a fix"})
+	fx, err := m.File(Brief{Project: p.Name, Title: "a fix", Aim: "fix", Why: "TestMerge fails"})
+	if err != nil || !fx.Fix() || fx.AimWhy != "TestMerge fails" {
+		t.Fatalf("aim %q (%q), %v", fx.Aim, fx.AimWhy, err)
+	}
+	u, _ := m.File(Brief{Project: p.Name, Title: "tidy the merge loop"})
+	if !u.Gain() || !strings.Contains(u.Log[len(u.Log)-1].Text, "taken as a gain") {
+		t.Fatalf("an unclear brief: aim %q, log %+v", u.Aim, u.Log)
+	}
 	main, _ := m.C.Effects.Sync(p)
-	if b := m.renderBrief(&g, p, main); !strings.Contains(b, "Aim: an improvement") {
+	if b := m.renderBrief(&g, p, main); !strings.Contains(b, "Aim: a gain (aims at a measurable gain)") {
 		t.Fatalf("the brief doesn't say it aims at a gain:\n%s", b)
 	}
-	if b := m.renderBrief(&fx, p, main); !strings.Contains(b, "Aim: a fix") {
+	if b := m.renderBrief(&fx, p, main); !strings.Contains(b, "Aim: a fix (TestMerge fails)") {
 		t.Fatalf("the brief doesn't say it is a fix:\n%s", b)
+	}
+	if b := m.renderBrief(&u, p, main); !strings.Contains(b, "Aim: a gain, as nothing says it is a fix") {
+		t.Fatalf("the brief doesn't say it is taken as a gain:\n%s", b)
 	}
 }
 

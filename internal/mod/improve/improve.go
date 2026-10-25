@@ -514,7 +514,7 @@ func (m *Module) afterMerge(t work.Task) {
 			hasBest, ms.Note = false, "the score changed, so this starts a new baseline; "+note
 		}
 	}
-	worse := !ok
+	worse, dip := !ok, false
 	reason := ""
 	switch {
 	case !ok && flake != "":
@@ -526,7 +526,21 @@ func (m *Module) afterMerge(t work.Task) {
 	case cfg.Score != nil && score == nil:
 		worse, reason = true, "the score stopped producing a number"
 	case cfg.Score != nil && hasBest && !cfg.Score.WithinTolerance(*score, best):
-		worse, reason = true, fmt.Sprintf("the score fell to %g from the best kept %g (tolerance %g)", *score, best, cfg.Score.Tolerance)
+		worse, dip, reason = true, true, fmt.Sprintf("the score fell to %g from the best kept %g (tolerance %g)", *score, best, cfg.Score.Tolerance)
+	}
+	if dip && t.Kind != "revert" && t.Fix() {
+		// A known fix wins over a dip (issue #568): it stays, main's score
+		// is the baseline from here, and a brief looks into the dip; only
+		// that look, judging the fix itself made things worse, reverts it.
+		m.lookIntoDip(p, t, reason)
+		b := *score
+		ms.Kept, ms.Best = true, &b
+		ms.Note = "kept as a fix (" + core.Clip(t.AimWhy, 200) + ") though " + reason + "; a brief looks into the dip; " + note
+		m.record(ms)
+		if m.OnKept != nil {
+			m.OnKept(p.Name, t.MergeSHA)
+		}
+		return
 	}
 	if !worse {
 		ms.Kept = true
@@ -558,6 +572,24 @@ func (m *Module) afterMerge(t work.Task) {
 	}
 	if _, err := m.Work.Revert(t, t.MergeSHA, reason); err != nil {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "revert", "project": p.Name, "text": "could not file a revert: " + err.Error()})
+	}
+}
+
+// lookIntoDip files, once per merge, the brief that judges a fix's score
+// dip: what caused it, and whether the fix itself made things worse.
+func (m *Module) lookIntoDip(p core.Project, t work.Task, reason string) {
+	title := core.Clip("Look into the score dip after "+core.Short(t.MergeSHA)+": "+t.Label(), 120)
+	if len(m.Work.List(func(x work.Task) bool { return x.Project == p.Name && x.Title == title })) > 0 {
+		return
+	}
+	if _, err := m.Work.File(work.Brief{Project: p.Name, From: "improve", Chat: t.Chat, Thread: t.Thread, Title: title,
+		Done: "You judged what made the score dip and said so in your account. If the fix itself made things worse, " +
+			"revert it (`git revert " + t.MergeSHA + "`) and name what got worse; if the dip is noise or comes from elsewhere, " +
+			"say what, and win the score back without undoing the fix if you can.",
+		Known: fmt.Sprintf("Task %s, a fix (%s), merged at %s and was kept, since a known fix wins over a score dip: %s. "+
+			"The score is a data point, not the judge: a revert needs a judged read that the fix itself made things worse.",
+			t.ID, core.Clip(t.AimWhy, 300), core.Short(t.MergeSHA), reason)}); err != nil {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "dip", "project": p.Name, "text": "could not file a look into a fix's score dip: " + err.Error()})
 	}
 }
 

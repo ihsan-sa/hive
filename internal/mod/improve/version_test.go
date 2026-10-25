@@ -13,7 +13,8 @@ import (
 
 // scored is project p on the rig, scored by ./score.sh reading n.txt (5),
 // with its start measured. merge puts files on main and measures the merge.
-func scored(t *testing.T) (m *Module, merge func(files map[string]string) Measurement) {
+// merge measures it as task as, when given, or as an unclear task.
+func scored(t *testing.T) (m *Module, merge func(files map[string]string, as ...work.Task) Measurement) {
 	t.Helper()
 	m = rig(t)
 	forge := m.C.Effects.Forge.(*core.Local)
@@ -51,12 +52,17 @@ func scored(t *testing.T) (m *Module, merge func(files map[string]string) Measur
 		t.Fatalf("start: best %v %v, want 5", b, ok)
 	}
 	n := 0
-	merge = func(files map[string]string) Measurement {
+	merge = func(files map[string]string, as ...work.Task) Measurement {
 		t.Helper()
 		put(files)
 		n++
 		sha, _ := core.Git(src, "rev-parse", "HEAD")
-		m.afterMerge(work.Task{ID: fmt.Sprint("t", n), Project: "p", MergeSHA: strings.TrimSpace(sha)})
+		task := work.Task{ID: fmt.Sprint("t", n)}
+		if len(as) > 0 {
+			task = as[0]
+		}
+		task.Project, task.MergeSHA = "p", strings.TrimSpace(sha)
+		m.afterMerge(task)
 		ms := m.Scores("p")
 		return ms[len(ms)-1]
 	}
@@ -71,6 +77,50 @@ func TestLowerScoreIsNotKept(t *testing.T) {
 	}
 	if b, _ := m.Best("p"); b != 5 {
 		t.Fatalf("best %v, want 5", b)
+	}
+}
+
+// A known fix wins over a score dip (issue #568): it is kept, its score is
+// the baseline from there, and a brief looks into the dip instead of a
+// revert. A change that isn't clearly a fix is taken as a gain, and a dip
+// reverts it.
+func TestFixWinsOverAScoreDip(t *testing.T) {
+	m, merge := scored(t)
+	reverts := func() int {
+		return len(m.Work.List(func(x work.Task) bool { return x.Kind == "revert" }))
+	}
+	looks := func() []work.Task {
+		return m.Work.List(func(x work.Task) bool { return strings.HasPrefix(x.Title, "Look into the score dip") })
+	}
+	fix := work.Task{ID: "fix-1", Title: "Fix the broken merge path", Aim: work.AimFix, AimWhy: "TestMerge fails: the merge never lands"}
+	ms := merge(map[string]string{"n.txt": "3\n"}, fix)
+	if !ms.Kept || ms.Best == nil || *ms.Best != 3 || !strings.Contains(ms.Note, "kept as a fix") {
+		t.Fatalf("a fix whose score dipped from 5 to 3 wasn't kept at 3: %+v", ms)
+	}
+	if reverts() != 0 {
+		t.Fatalf("a fix was reverted for a dip alone")
+	}
+	l := looks()
+	if len(l) != 1 || !strings.Contains(l[0].Known, "TestMerge fails") || !strings.Contains(l[0].Done, "git revert "+ms.SHA) {
+		t.Fatalf("want one brief to look into the dip, naming the fix and how to revert it: %+v", l)
+	}
+	if l[0].Fix() {
+		t.Fatal("the look into a dip names no failure, so it is taken as a gain")
+	}
+	p, _ := m.C.Projects.Get("p")
+	m.lookIntoDip(p, work.Task{ID: "fix-1", Title: fix.Title, MergeSHA: ms.SHA}, "again")
+	if len(looks()) != 1 {
+		t.Fatal("the same dip was looked into twice")
+	}
+
+	if ms := merge(map[string]string{"n.txt": "1\n"}, work.Task{ID: "u-1", Title: "Tidy the merge loop"}); ms.Kept {
+		t.Fatalf("an unclear change whose score dipped was kept: %+v", ms)
+	}
+	if reverts() != 1 {
+		t.Fatalf("%d reverts: an unclear change, taken as a gain, is reverted on a dip", reverts())
+	}
+	if b, _ := m.Best("p"); b != 3 {
+		t.Fatalf("best %v, want the fix's 3", b)
 	}
 }
 
