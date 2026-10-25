@@ -172,9 +172,13 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	decide := func(limit int) (start map[string]bool, wait map[string]string, capped bool) {
 		start, wait = map[string]bool{}, map[string]string{}
 		working, quickWorking, ahead := working, quickWorking, slices.Clone(ahead)
+		// The reason is saved with the task, so it names the limit but not
+		// its live value: the pace moved about every minute under load, and
+		// each move re-saved every waiting task with its whole brief (one
+		// 36 times in 40 minutes). The pace itself shows in Pace.
 		full := fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
 		if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
-			full = "waiting for a worker (pace " + m.workers.String() + ")"
+			full = "waiting for a worker (at the pace)"
 		}
 		for _, t := range line {
 			quick := m.quick(t)
@@ -192,7 +196,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			case working >= limit && (!quick || quickWorking > 0 || !plan()):
 				wait[t.ID], capped = full, true
 			case strain != "":
-				wait[t.ID] = "waiting: " + strain
+				wait[t.ID] = "waiting: " + steady(strain)
 			default:
 				start[t.ID] = true
 				working++
