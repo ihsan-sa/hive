@@ -22,6 +22,36 @@ type OpenModel struct {
 	API      string `json:"api,omitempty"`     // "openai" (the default) or "anthropic"
 	Key      bool   `json:"key,omitempty"`     // it needs an API key, which the person stores with `hive model key <name>`
 	Context  int    `json:"context,omitempty"` // tokens it holds; the agent trims its history to fit (0: 32000)
+	Price    *Price `json:"price,omitempty"`   // what a paid tier charges; none is free, or not known
+}
+
+// Price is what a model charges, in USD per million tokens. A turn's cost is
+// its tokens at this price (the cache's reads and writes as input).
+type Price struct {
+	Input  float64 `json:"input"`
+	Output float64 `json:"output"`
+}
+
+// Cost is t at p.
+func (p Price) Cost(t harness.Tokens) float64 {
+	return (float64(t.Input+t.CacheRead+t.CacheWrite)*p.Input + float64(t.Output)*p.Output) / 1e6
+}
+
+// Holds is nil when a run on m can be held to a budget: one that costs
+// nothing, or one with a price the open agent counts against it as it goes.
+// A model with a key and no price may be a paid tier whose spend nobody
+// counts, and Claude Code (an Anthropic API) prices a turn as Claude's.
+func (m OpenModel) Holds(budget float64) error {
+	free := m.Price == nil && !m.Key || m.Price != nil && *m.Price == Price{}
+	switch {
+	case budget <= 0 || free:
+		return nil
+	case m.Price == nil:
+		return errors.New("it needs a key and has no price, so what it spends isn't known; set its price in config.json (0 for a free tier)")
+	case m.Anthropic():
+		return errors.New("Claude Code runs it and can't hold a turn to the vendor's price")
+	}
+	return nil
 }
 
 // APIs are the kinds of endpoint a named model can be on.
@@ -37,6 +67,9 @@ func (m OpenModel) Where() string {
 	s := m.Model + " at " + m.Endpoint
 	if m.Anthropic() {
 		s += " (Anthropic API, on Claude Code)"
+	}
+	if m.Price != nil {
+		s += fmt.Sprintf(", $%g/$%g per million tokens in/out", m.Price.Input, m.Price.Output)
 	}
 	return s
 }
@@ -65,11 +98,11 @@ func (p Pick) Same(q Pick) bool {
 // CheckRoles are the seats the Hive's checks sit in. The general fallback
 // list never moves them: a weaker model needs the checks more, so they go on
 // another model only where the person routes them themselves.
-var CheckRoles = []string{"reviewer", "security", "warden", "tribunal"}
+var CheckRoles = []string{"reviewer", "security", "warden", "tribunal", JudgeRole}
 
 // RouteRoles are the roles a route can name; "fallback" is the list every
 // other role moves along at a limit.
-var RouteRoles = []string{"lead", "worker", "reviewer", "security", "warden", "tribunal", "sweep", "fallback"}
+var RouteRoles = []string{"lead", "worker", "reviewer", "security", "warden", "tribunal", JudgeRole, "sweep", "fallback"}
 
 // Pick reads a route entry: a model named in Models (the open harness), a
 // "harness:model" pair, or a model on the workspace's harness.
@@ -164,6 +197,11 @@ func (c Config) checkRoutes() error {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return fmt.Errorf("model %s: endpoint %q isn't an http(s) URL", name, m.Endpoint)
 		}
+		if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			// Agents and the person see endpoints (the models op, `hive
+			// model`), so a key put in one would leak.
+			return fmt.Errorf("model %s: the endpoint holds no user, password or query; a key is stored with `%s model key %s`", name, Cmd, name)
+		}
 		if m.Model == "" {
 			return fmt.Errorf("model %s: say which model the endpoint runs (model)", name)
 		}
@@ -215,6 +253,14 @@ func (c Config) openHost(name string) string {
 		}
 	}
 	return h
+}
+
+// Plaintext reports whether model name's key would cross a public network
+// unencrypted: a plain http:// endpoint on a host that isn't this machine or
+// a private network.
+func (c Config) Plaintext(name string) bool {
+	u, err := url.Parse(c.Models[name].Endpoint)
+	return err == nil && u.Scheme == "http" && c.openHost(name) != ""
 }
 
 // cgnat is the shared address space (RFC 6598), private in practice.

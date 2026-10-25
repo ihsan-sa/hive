@@ -36,10 +36,7 @@ func (m *Module) opRerunChecks(r core.Run, args json.RawMessage) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("no task %q", a.Task)
 	}
-	if r.Role == "worker" && t.Worker != r.ID {
-		return nil, fmt.Errorf("task %s isn't yours: a worker re-runs only its own task's checks", t.ID)
-	}
-	if err := m.C.Runs.Walled(r, t.Project); err != nil {
+	if err := m.reach(r, t.Project); err != nil {
 		return nil, err
 	}
 	note, err := m.RerunChecks(t.ID, r.ID)
