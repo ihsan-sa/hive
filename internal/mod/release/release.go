@@ -745,12 +745,12 @@ func (m *Module) afterKept(project, sha string) {
 		rec["tag_sha"] = at
 	}
 	m.C.J.MustAppend("hive.released", rec)
-	// A release ask this release covers has nothing left to answer.
+	// A release ask at one of the merges this release covers has nothing
+	// left to answer.
 	for _, a := range m.C.Person.Open() {
-		if _, at, _ := strings.Cut(a.Ref, "@"); a.Kind == "release" && a.Project == project {
-			if _, refuse := m.merges(project, at); refuse != "" {
-				m.C.Person.Answer(a.ID, "hold", "the Hive, not the person: "+next+" released it")
-			}
+		_, at, _ := strings.Cut(a.Ref, "@")
+		if a.Kind == "release" && a.Project == project && slices.ContainsFunc(list, func(mg merge) bool { return mg.MergeSHA == at }) {
+			m.C.Person.Answer(a.ID, "hold", "the Hive, not the person: "+next+" released it")
 		}
 	}
 	if len(rootRead) > 0 && !approved {
