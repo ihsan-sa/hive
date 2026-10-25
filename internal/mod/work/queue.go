@@ -158,8 +158,7 @@ func (m *Module) edited(o Task, p string) bool {
 // differs reports whether the file p in checkout is not what base holds in
 // the project's clone: changed, or added or removed.
 func (m *Module) differs(project, base, checkout, p string) bool {
-	blob, err := core.Git(m.C.WS.Project(project), "rev-parse", "--verify", "-q", base+":"+p)
-	inBase := err == nil && blob != ""
+	blob, inBase := m.baseTree(project, base)[p]
 	file := filepath.Join(checkout, filepath.FromSlash(p))
 	if _, err := os.Lstat(file); errors.Is(err, os.ErrNotExist) {
 		return inBase // removed, or never there
@@ -184,6 +183,37 @@ func (m *Module) differs(project, base, checkout, p string) bool {
 	// A checkout made with CRLF line endings (Windows, text=auto) holds the
 	// same blob as LF.
 	return blobID(b, len(blob)) != blob && blobID(bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")), len(blob)) != blob
+}
+
+// baseTree is the blob of every file in base, read from the project's clone
+// once per base: a commit's tree never changes. Only the newest few bases
+// are kept; an unreadable one is nil and read again next time.
+func (m *Module) baseTree(project, base string) map[string]string {
+	key := project + "\x00" + base
+	m.mu.Lock()
+	tree, ok := m.baseTrees[key]
+	m.mu.Unlock()
+	if ok {
+		return tree
+	}
+	out, err := core.Git(m.C.WS.Project(project), "ls-tree", "-r", "-z", "--full-tree", base)
+	if err != nil {
+		return nil
+	}
+	tree = map[string]string{}
+	for _, e := range strings.Split(out, "\x00") {
+		meta, name, ok := strings.Cut(e, "\t")
+		if f := strings.Fields(meta); ok && len(f) == 3 && f[1] == "blob" {
+			tree[name] = f[2]
+		}
+	}
+	m.mu.Lock()
+	if len(m.baseTrees) >= 16 {
+		clear(m.baseTrees)
+	}
+	m.baseTrees[key] = tree
+	m.mu.Unlock()
+	return tree
 }
 
 // blobID is git's object id of content as a blob, sha256 when the repo's ids
