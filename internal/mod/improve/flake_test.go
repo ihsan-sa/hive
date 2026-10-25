@@ -1,6 +1,7 @@
 package improve
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -378,5 +379,61 @@ func TestUnnamedFailureBesideMainsRedIsReverted(t *testing.T) {
 	}
 	if reverts(m) != 1 {
 		t.Fatalf("a timeout beside main's red wasn't reverted: %d", reverts(m))
+	}
+}
+
+// Merges that piled up while main was measured are measured at main's newest,
+// not each in turn hours behind it: the older ones are covered by it (#784).
+func TestNewestMergeIsMeasuredAhead(t *testing.T) {
+	m, commit, _ := tested(t)
+	var shas []string
+	for i := range 3 {
+		sha := commit(map[string]string{"README.md": fmt.Sprintf("change %d\n", i)})
+		m.C.J.MustAppend("task.saved", work.Task{ID: fmt.Sprintf("t%d", i), Project: "p", Title: "change", Stage: work.StageMerged, MergeSHA: sha, Updated: time.Now()})
+		shas = append(shas, sha)
+	}
+	m.afterMerge(work.Task{ID: "t0", Project: "p", MergeSHA: shas[0]})
+	ms := m.Scores("p")
+	if len(ms) != 1 || ms[0].SHA != shas[2] || !ms[0].Kept {
+		t.Fatalf("measured: %+v", ms)
+	}
+	for _, sha := range shas[:2] {
+		m.afterMerge(work.Task{ID: "t", Project: "p", MergeSHA: sha})
+		if !m.measured("p", sha) {
+			t.Fatalf("%s was neither measured nor covered", sha)
+		}
+	}
+	if n := len(m.Scores("p")); n != 1 {
+		t.Fatalf("older merges were measured too: %+v", m.Scores("p"))
+	}
+}
+
+// A newest merge that isn't clean when measured ahead isn't blamed: nothing is
+// recorded or reverted for it, and the merges before it are measured in turn,
+// so the one that broke main is the one reverted.
+func TestNewestMergeRedAheadIsMeasuredInTurn(t *testing.T) {
+	m, commit, _ := tested(t)
+	var shas []string
+	for i, f := range []map[string]string{
+		{"README.md": "fine\n"},
+		{"t.sh": "echo '--- FAIL: TestJoin (0.09s)'\nexit 1\n"},
+		{"README.md": "after the break\n"},
+	} {
+		sha := commit(f)
+		m.C.J.MustAppend("effect.merged", map[string]string{"project": "p", "merge_sha": sha})
+		m.C.J.MustAppend("task.saved", work.Task{ID: fmt.Sprintf("t%d", i), Project: "p", Title: "change", Stage: work.StageMerged, MergeSHA: sha, Updated: time.Now()})
+		shas = append(shas, sha)
+	}
+	m.afterMerge(work.Task{ID: "t0", Project: "p", MergeSHA: shas[0]})
+	if ms := m.Scores("p"); len(ms) != 1 || ms[0].SHA != shas[0] || !ms[0].Kept || reverts(m) != 0 {
+		t.Fatalf("measured: %+v, reverts %d", ms, reverts(m))
+	}
+	m.afterMerge(work.Task{ID: "t1", Project: "p", MergeSHA: shas[1]})
+	if ms := m.Scores("p"); len(ms) != 2 || ms[1].SHA != shas[1] || ms[1].Kept {
+		t.Fatalf("the break wasn't measured in turn: %+v", ms)
+	}
+	rv := m.Work.List(func(t work.Task) bool { return t.Kind == "revert" })
+	if len(rv) != 1 || rv[0].RevertSHA != shas[1] {
+		t.Fatalf("reverts: %+v", rv)
 	}
 }
