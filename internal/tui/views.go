@@ -1556,7 +1556,7 @@ func toldHead(told []core.Ask, now time.Time) string {
 // standing is the plan's state in plain words, coloured by how near its
 // limit the login is.
 func standing(p core.Plan, now time.Time) string {
-	s := text.Visible(p.Limit.Standing(now))
+	s := text.Visible(p.Standing(now))
 	switch p.Limit.Level(now) {
 	case harness.LevelBad:
 		return stBad.Render(s)
