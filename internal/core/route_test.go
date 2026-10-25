@@ -367,6 +367,19 @@ func TestFallbackAtALimit(t *testing.T) {
 		t.Fatalf("a run with room stays on its own model: %+v", got)
 	}
 	limit("fake")
+	// No run has finished on the free model yet, so it waits for the reset.
+	if p, at := c.Runs.next(r); p.Harness != "fake" || !at.After(time.Now()) {
+		t.Fatalf("a worker fell back to a model with no finishes: %v at %v", p, at)
+	}
+	// Once one has (a trial, or real work), it may go there.
+	if _, err := c.Runs.Start(RunSpec{ID: "trial", Role: "worker", Harness: "open", Model: "free", Checkout: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.append("run.finish", map[string]any{"id": "trial", "finish": Finish{Status: "blocked"}})
+	if p, _ := c.Runs.next(r); p.Harness != "fake" {
+		t.Fatalf("a blocked finish proves nothing: %v", p)
+	}
+	c.Runs.append("run.finish", map[string]any{"id": "trial", "finish": Finish{Status: "done"}})
 	if p, at := c.Runs.next(r); p.Harness != "open" || at.After(time.Now()) {
 		t.Fatalf("next at a limit: %v at %v", p, at)
 	}
@@ -398,6 +411,13 @@ func TestFallbackAtALimit(t *testing.T) {
 	if p, at := c.Runs.next(r2); p.Harness != "fake" || !at.After(time.Now()) {
 		t.Fatalf("a run with no route: %v at %v", p, at)
 	}
+	// A worker already on a model with no finishes goes back to its route's
+	// first and waits there, rather than taking another turn where it is.
+	r3, _ := c.Runs.Start(RunSpec{ID: "w3", Role: "worker", Harness: "open", Model: "unproven", Checkout: t.TempDir(),
+		Route: []Pick{{Harness: "fake", Model: "opus"}, {Harness: "open", Model: "unproven"}}})
+	if p, at := c.Runs.next(r3); p.Harness != "fake" || !at.After(time.Now()) {
+		t.Fatalf("a worker stayed on a model with no finishes: %v at %v", p, at)
+	}
 }
 
 // A vendor's 429, as Claude Code reports it on an Anthropic-compatible model
@@ -412,6 +432,7 @@ func TestVendorLimitMovesToFallback(t *testing.T) {
 		"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"},
 	}
 	c.WS.SaveConfig(cfg)
+	proven(c, "free")
 	_, err := c.Runs.Start(RunSpec{ID: "v1", Role: "worker", Harness: "open", Model: "kimi", Brief: "b", Checkout: t.TempDir(),
 		Route: []Pick{{Harness: "open", Model: "kimi"}, {Harness: "open", Model: "free"}}})
 	if err != nil {
@@ -460,6 +481,7 @@ func TestKeyRefusedTwiceMovesToFallback(t *testing.T) {
 		"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"},
 	}
 	c.WS.SaveConfig(cfg)
+	proven(c, "free")
 	if _, err := c.Runs.Start(RunSpec{ID: "v2", Role: "worker", Harness: "open", Model: "kimi", Brief: "b", Checkout: t.TempDir(),
 		Route: []Pick{{Harness: "open", Model: "kimi"}, {Harness: "open", Model: "free"}}}); err != nil {
 		t.Fatal(err)
@@ -499,6 +521,7 @@ func TestTurnStartsOnceWhenARunMoves(t *testing.T) {
 	cfg := c.WS.LoadConfig()
 	cfg.Models = map[string]OpenModel{"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"}}
 	c.WS.SaveConfig(cfg)
+	proven(c, "free")
 	var args []string
 	var mu sync.Mutex
 	starts := 0
@@ -562,4 +585,67 @@ func (s countSB) Start(spec sandbox.Spec) (sandbox.Proc, error) {
 	*s.n++
 	s.mu.Unlock()
 	return s.startSB.Start(spec)
+}
+
+// Tick steps a run as it is when the step begins, not as it was listed: a
+// run listed idle whose turn started since is stepped as running, so it is
+// watched rather than launched again.
+func TestTickStepsTheRunAsItIsNow(t *testing.T) {
+	c, _ := testHive(t)
+	var args []string
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return startSB{args: &args}, nil }
+	r, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake", Model: "opus", Brief: "the brief", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, c.WS.LoadConfig())
+	c.Runs.SetStatus("w1", StatusIdle, "") // the first turn ended
+	listed, _ := c.Runs.Get("w1")
+	c.Runs.launch(listed, c.WS.LoadConfig()) // a turn starts after the list was read
+	got, ok := c.Runs.claim(listed)
+	if !ok || got.Status != StatusRunning || got.Turn != 2 {
+		t.Fatalf("claimed %v: %s at turn %d, want running at turn 2", ok, got.Status, got.Turn)
+	}
+	if _, again := c.Runs.claim(listed); again {
+		t.Fatal("a run claimed twice before its step ended")
+	}
+}
+
+// A watch from a copy older than the run's last turn ends nothing: that
+// turn ended already, and ending it again would clear the live one after it.
+func TestWatchFromAStaleCopyEndsNothing(t *testing.T) {
+	c, _ := testHive(t)
+	var args []string
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return startSB{args: &args}, nil }
+	r, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake", Model: "opus", Brief: "the brief", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, c.WS.LoadConfig())
+	stale, _ := c.Runs.Get("w1") // running turn 1
+	c.Runs.SetStatus("w1", StatusIdle, "")
+	cur, _ := c.Runs.Get("w1")
+	c.Runs.launch(cur, c.WS.LoadConfig()) // turn 2 is live
+	c.Runs.watch(stale)
+	got, _ := c.Runs.Get("w1")
+	if got.Status != StatusRunning || got.Turn != 2 {
+		t.Fatalf("after a stale watch: %s at turn %d, want running at turn 2", got.Status, got.Turn)
+	}
+	for _, e := range c.J.Since(0) {
+		if e.Kind == "run.turn_ended" {
+			t.Fatalf("a stale watch ended a turn: %s", e.Data)
+		}
+	}
+	c.Runs.watch(got) // the live copy still ends its turn
+	if got, _ = c.Runs.Get("w1"); got.Status == StatusRunning {
+		t.Fatal("the current copy's watch didn't end the turn")
+	}
+}
+
+// proven records a worker that finished done on the open model, as a trial
+// would: a worker falls back only to a model that has finished here.
+func proven(c *Core, model string) {
+	id := "trial-" + model
+	c.J.MustAppend("run.created", RunSpec{ID: id, Role: "worker", Harness: "open", Model: model})
+	c.J.MustAppend("run.finish", map[string]any{"id": id, "finish": Finish{Status: "done"}})
 }
