@@ -1,6 +1,10 @@
 package work
 
 import (
+	"bytes"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,11 +22,13 @@ import (
 // The queue: a filed brief waits as queued until a worker can take it. Briefs
 // start in the order they were filed, or the order the lead set, and only as
 // many work at once as the pace allows (pace.go, under max_workers) while the
-// machine isn't loaded. A brief that names the same files or area as one a
-// worker is on (or ahead of it in line) waits until that worker is done, so
-// the two don't conflict and redo each other's work. Once a worker has
-// pushed, its task holds nothing back: a conflict it meets later goes back to
-// its worker with main to merge. Nothing here stops a worker that has started.
+// machine isn't loaded: the brake is the machine. A brief that names a file
+// another brief names (one a worker is on, or ahead of it in line), or one
+// that worker has changed, waits until that worker is done, so the two don't
+// redo each other's work. A package or directory alone holds nothing back.
+// Once a worker has pushed, its task holds nothing back: a conflict it meets
+// later goes back to its worker with main to merge. Nothing here stops a
+// worker that has started.
 
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
@@ -108,7 +114,10 @@ func (m *Module) quiet(t Task) bool {
 }
 
 // overlap returns the first task in others on t's project whose brief names
-// a file t's brief names too, and that file.
+// a file t's brief names too, or whose worker has changed one in its
+// checkout, and that file. A package or directory named in a brief holds
+// nothing by itself: two briefs in one package start together, and the
+// second merges main if they meet.
 func (m *Module) overlap(t Task, others []Task) (*Task, string) {
 	mine := m.areas(t)
 	if len(mine) == 0 {
@@ -118,15 +127,134 @@ func (m *Module) overlap(t Task, others []Task) (*Task, string) {
 		if o.Project != t.Project || o.ID == t.ID {
 			continue
 		}
+		theirs := map[string]bool{}
+		for _, b := range m.areas(o) {
+			theirs[b] = true
+		}
 		for _, a := range mine {
-			for _, b := range m.areas(o) {
-				if a == b {
-					return &others[i], a
-				}
+			if theirs[a] || m.edited(o, a) {
+				return &others[i], a
 			}
 		}
 	}
 	return nil, ""
+}
+
+// edited reports whether o's worker has changed the clone file p in its
+// checkout, committed or not, from the main it started on. The checkout is
+// read as files (host git never runs there); a path that leaves it through a
+// symlink counts as unchanged. Each answer is kept until the file or the base
+// moves; none is given or kept while the base's tree can't be read.
+func (m *Module) edited(o Task, p string) bool {
+	if o.Stage != StageWorking || o.Worker == "" || o.Base == "" {
+		return false
+	}
+	r, ok := m.C.Runs.Get(o.Worker)
+	if !ok || r.Checkout == "" {
+		return false
+	}
+	file := filepath.Join(r.Checkout, filepath.FromSlash(p))
+	cacheKey := o.Worker + "\x00" + p
+	key := o.Base + "\x00" + stamp(file)
+	m.mu.Lock()
+	got, ok := m.editCache[cacheKey]
+	m.mu.Unlock()
+	if ok && got.key == key {
+		return got.edited
+	}
+	tree := m.baseTree(o.Project, o.Base)
+	if tree == nil {
+		return false // unknown for now: held by nothing, and asked again next tick
+	}
+	changed := differs(tree, r.Checkout, p)
+	m.mu.Lock()
+	m.editCache[cacheKey] = editEntry{key, changed}
+	m.mu.Unlock()
+	return changed
+}
+
+// differs reports whether the file p in checkout is not what the base's tree
+// holds: changed, or added or removed.
+func differs(tree map[string]string, checkout, p string) bool {
+	blob, inBase := tree[p]
+	file := filepath.Join(checkout, filepath.FromSlash(p))
+	if _, err := os.Lstat(file); errors.Is(err, os.ErrNotExist) {
+		return inBase // removed, or never there
+	}
+	realRoot, err := filepath.EvalSymlinks(checkout)
+	if err != nil {
+		return false
+	}
+	if real, err := filepath.EvalSymlinks(file); err != nil || !inside(realRoot, real) {
+		return false
+	}
+	const limit = 32 << 20
+	b, err := core.SafeRead(file, limit+1)
+	switch {
+	case err != nil:
+		return false
+	case !inBase:
+		return true // added
+	case len(b) > limit:
+		return true
+	}
+	// A checkout made with CRLF line endings (Windows, text=auto) holds the
+	// same blob as LF.
+	return blobID(b, len(blob)) != blob && blobID(bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")), len(blob)) != blob
+}
+
+// baseTree is the blob of every file in base, read from the project's clone
+// once per base: a commit's tree never changes. Only the newest few bases
+// are kept; an unreadable one is nil and read again next time.
+func (m *Module) baseTree(project, base string) map[string]string {
+	key := project + "\x00" + base
+	m.mu.Lock()
+	tree, ok := m.baseTrees[key]
+	m.mu.Unlock()
+	if ok {
+		return tree
+	}
+	out, err := core.Git(m.C.WS.Project(project), "ls-tree", "-r", "-z", "--full-tree", base)
+	if err != nil {
+		return nil
+	}
+	tree = map[string]string{}
+	for _, e := range strings.Split(out, "\x00") {
+		meta, name, ok := strings.Cut(e, "\t")
+		if f := strings.Fields(meta); ok && len(f) == 3 && f[1] == "blob" {
+			tree[name] = f[2]
+		}
+	}
+	m.mu.Lock()
+	if len(m.baseTrees) >= 16 {
+		clear(m.baseTrees)
+	}
+	m.baseTrees[key] = tree
+	m.mu.Unlock()
+	return tree
+}
+
+// blobID is git's object id of content as a blob, sha256 when the repo's ids
+// are that long.
+func blobID(content []byte, idLen int) string {
+	head := fmt.Sprintf("blob %d\x00", len(content))
+	if idLen == 64 {
+		h := sha256.New()
+		h.Write([]byte(head))
+		h.Write(content)
+		return hex.EncodeToString(h.Sum(nil))
+	}
+	h := sha1.New()
+	h.Write([]byte(head))
+	h.Write(content)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// editEntry is whether a worker changed a file, and the base and file stamp
+// that was worked out from.
+type editEntry struct {
+	key    string
+	edited bool
 }
 
 var pathLike = regexp.MustCompile(`[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+`)
@@ -136,10 +264,10 @@ var pathLike = regexp.MustCompile(`[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+`)
 // together, and a directory ("internal/mod", "internal/mod/work") is no area:
 // a brief names its package to say where it works, not that it edits every
 // file there, and holding on it queued most of the line behind one worker
-// (issue #399). A file that merges as union (.gitattributes merge=union, like docs/log.md)
-// isn't an area: both sides' lines are kept. They are worked out once per
-// brief text and .gitattributes, so a doc main newly marks union frees the
-// briefs that name it.
+// (issues #399, #406). A file that merges as union (.gitattributes
+// merge=union, like docs/log.md) isn't an area: both sides' lines are kept.
+// They are worked out once per brief text and .gitattributes, so a doc main
+// newly marks union frees the briefs that name it.
 func (m *Module) areas(t Task) []string {
 	text := t.Title + "\n" + t.Done + "\n" + t.Known
 	root := m.C.WS.Project(t.Project)
