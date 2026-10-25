@@ -28,11 +28,13 @@ var (
 // gateExe is the binary that runs `hive gate`: the daemon's own.
 var gateExe = os.Executable
 
-// reachOK caches CheckReach on the children's token for an hour, so a
-// refusal isn't asked of GitHub on every run.
+// reachOK caches CheckReach on the children's token until ttl: an hour
+// for a verdict, so a refusal isn't asked of GitHub on every run, and five
+// minutes when the check couldn't learn the answer (a rate limit).
 var reachOK struct {
 	sync.Mutex
 	at  time.Time
+	ttl time.Duration
 	err error
 }
 
@@ -90,9 +92,12 @@ func orgArgs(j work.GateJob) ([]string, string) {
 		return local, fmt.Sprintf("The gate ran on a local org: %s and %s hold the same token, and the children's token must not be the one that makes and deletes repositories.", orgFile, gateChildFile)
 	}
 	reachOK.Lock()
-	if reachOK.at.IsZero() || time.Since(reachOK.at) > time.Hour {
+	if reachOK.at.IsZero() || time.Since(reachOK.at) > reachOK.ttl {
 		reachOK.err = gate.CheckReach(gate.GitHub{Owner: gateOrg, Token: orgTok}, childTok, j.Project.Repo)
-		reachOK.at = time.Now()
+		reachOK.at, reachOK.ttl = time.Now(), time.Hour
+		if errors.Is(reachOK.err, gate.ErrReachUnknown) {
+			reachOK.ttl = 5 * time.Minute
+		}
 	}
 	err := reachOK.err
 	reachOK.Unlock()

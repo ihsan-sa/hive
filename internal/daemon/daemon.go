@@ -68,6 +68,11 @@ func StartAfter(ws core.Workspace, waitFor int) (*api.Client, error) {
 	if c, ok := handedOver(ws); ok {
 		return c, nil
 	}
+	if waitFor == 0 {
+		if c, ok := booting(ws); ok {
+			return c, nil
+		}
+	}
 	if err := checkHarness(ws.LoadConfig()); err != nil {
 		return nil, err
 	}
@@ -75,13 +80,17 @@ func StartAfter(ws core.Workspace, waitFor int) (*api.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	env := append(os.Environ(), "HIVE_HOME="+ws.Root)
-	args := []string{exe, "daemon"}
-	if waitFor > 0 {
-		args = append(args, "--wait-for", strconv.Itoa(waitFor))
-	}
-	if _, err := proc.StartDetached(args, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err != nil {
-		return nil, err
+	// The Hive's own unit, when it serves this workspace, is what starts the
+	// daemon, so the unit and a command can't each start one.
+	if waitFor > 0 || !setup.StartUnit(ws.Root) {
+		env := append(os.Environ(), "HIVE_HOME="+ws.Root)
+		args := []string{exe, "daemon"}
+		if waitFor > 0 {
+			args = append(args, "--wait-for", strconv.Itoa(waitFor))
+		}
+		if _, err := proc.StartDetached(args, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err != nil {
+			return nil, err
+		}
 	}
 	for i := 0; i < 100; i++ {
 		time.Sleep(200 * time.Millisecond)
@@ -173,11 +182,13 @@ func Run(ws core.Workspace, waitFor int) error {
 		}
 	}
 	// Before anything else touches the workspace: one daemon per workspace.
-	wait := time.Duration(0)
+	// A daemon that holds the lock but doesn't answer is on its way out (or
+	// still starting): wait for it, and exit at once only when one is up.
+	wait := stopWait
 	if waitFor > 0 {
 		wait = 20 * time.Second // the replaced daemon may still be on its way out
 	}
-	lock, err := lockWorkspace(ws, wait)
+	lock, err := lockWorkspace(ws, wait, waitFor == 0)
 	if err != nil {
 		return err
 	}
@@ -194,7 +205,7 @@ func Run(ws core.Workspace, waitFor int) error {
 		if setup.RestartUnit(exe, ws.Root) {
 			return nil
 		}
-		if lock, err = lockWorkspace(ws, 10*time.Second); err != nil {
+		if lock, err = lockWorkspace(ws, 10*time.Second, false); err != nil {
 			return err
 		}
 	}
@@ -253,7 +264,8 @@ func Run(ws core.Workspace, waitFor int) error {
 	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := &server{a: a, info: info, cancel: cancel}
+	s := &server{a: a, info: info}
+	s.cancel = func() { s.stopping.Store(true); cancel() }
 	a.Runner.API = fmt.Sprintf("http://127.0.0.1:%d", info.Port)
 	a.Release.Restart = func() { s.restart() }
 	a.C.J.Replay(func(e core.Event) {
@@ -266,6 +278,12 @@ func Run(ws core.Workspace, waitFor int) error {
 		}
 	})
 	a.C.J.Subscribe(s.onEvent)
+	if fresh, total := a.C.J.Breaks(); fresh > 0 {
+		// Two daemons on one workspace each count seq from their own start;
+		// say so, rather than leave it for someone reading events.jsonl.
+		a.C.J.MustAppend("alert.raised", map[string]any{"kind": "journal", "ref": "journal", "breaks": total,
+			"text": fmt.Sprintf("%d journal event(s) carry a seq that didn't rise past the one before: two Hive daemons wrote this workspace at once. Check that only one runs.", fresh)})
+	}
 	a.Release.Report()
 	settled := time.AfterFunc(release.SettleAfter, func() { release.Settled(ws) })
 	defer settled.Stop()
@@ -279,7 +297,7 @@ func Run(ws core.Workspace, waitFor int) error {
 	}
 	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	go func() { <-sig; cancel() }()
+	go func() { <-sig; s.cancel() }()
 	a.Run(ctx)
 	a.C.J.MustAppend("hive.stopped", map[string]string{"pid": strconv.Itoa(os.Getpid())})
 	shut, done := context.WithTimeout(context.Background(), 3*time.Second)
@@ -381,9 +399,21 @@ type server struct {
 	update  *api.Updated
 	exit    atomic.Int64 // the status to exit with, once a restart hands back to the supervisor
 	handing atomic.Bool
+	// stopping is set once shutdown begins: ping fails from then on, so a
+	// daemon starting meanwhile waits for the lock instead of giving up.
+	stopping atomic.Bool
 }
 
 func (s *server) onEvent(e core.Event) {
+	if e.Kind == "alert.cleared" { // the fault behind a status alert is gone
+		var a struct{ Ref string }
+		if e.Decode(&a) == nil && a.Ref != "" {
+			s.mu.Lock()
+			s.alerts = slices.DeleteFunc(s.alerts, func(x api.Alert) bool { return x.Ref == a.Ref })
+			s.mu.Unlock()
+		}
+		return
+	}
 	if e.Kind != "alert.raised" {
 		return
 	}
@@ -433,7 +463,7 @@ func (s *server) restart() {
 	if err != nil {
 		return
 	}
-	exe = onDisk(exe)
+	exe = release.OnDisk(exe) // the new binary sits where the running one was
 	ws := s.a.C.WS
 	env := append(os.Environ(), "HIVE_HOME="+ws.Root)
 	if _, err := proc.StartDetached([]string{exe, "daemon", "--wait-for", strconv.Itoa(os.Getpid())}, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err == nil {
@@ -482,10 +512,6 @@ func (s *server) handBack(sup supervision) {
 	s.cancel()
 }
 
-// onDisk is the path the new binary sits at: an update renames the running
-// file to <name>.old, and Linux reports the running file by its new name.
-func onDisk(exe string) string { return strings.TrimSuffix(exe, ".old") }
-
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	h := func(path string, fn func(r *http.Request) (any, error)) {
@@ -514,7 +540,12 @@ func (s *server) routes() http.Handler {
 		})
 	}
 	a := s.a
-	h("/api/ping", func(*http.Request) (any, error) { return map[string]string{"version": core.Version}, nil })
+	h("/api/ping", func(*http.Request) (any, error) {
+		if s.stopping.Load() {
+			return nil, errors.New("the Hive is stopping")
+		}
+		return map[string]string{"version": core.Version}, nil
+	})
 	h("/api/state", func(*http.Request) (any, error) { return s.state(), nil })
 	h("/api/chat", func(r *http.Request) (any, error) {
 		if r.Method == http.MethodPost {
@@ -869,7 +900,7 @@ func (s *server) eventProject(e core.Event) string {
 // event with no project (the lead's chat, the person's asks) needs a grant of "*".
 func notice(kind string) bool {
 	switch kind {
-	case "hive.idle", "hive.started", "hive.stopped", "alert.raised":
+	case "hive.idle", "hive.started", "hive.stopped", "alert.raised", "alert.cleared":
 		return true
 	}
 	return strings.HasPrefix(kind, "module.")
@@ -984,6 +1015,7 @@ func (s *server) state() api.State {
 	st.Jobs = a.System.Jobs()
 	st.Wakeups = a.System.Wakeups()
 	st.Checks.Running, st.Checks.Waiting = a.C.Effects.Slots.State()
+	st.Disk = a.C.Effects.Disk()
 	for _, m := range a.Mods.List() {
 		st.Modules = append(st.Modules, api.ModuleView{Name: m.Name, Description: m.Description, Source: m.Source.Source, Release: m.Source.Release, Projects: m.Source.Projects,
 			Hooks: m.Hooks, Status: a.Runner.Status(filepath.Base(m.Dir))})

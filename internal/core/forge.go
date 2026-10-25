@@ -64,6 +64,10 @@ type Forge interface {
 	GetPR(repo string, number int) (PR, error)
 	MergePR(repo string, number int, sha, subject string) (string, error)
 	ClosePR(repo string, number int, comment string) error
+	// SetDraft marks an open pull request a draft or ready for review.
+	SetDraft(repo string, number int, draft bool) error
+	// DeleteBranch deletes a branch; one already gone counts as deleted.
+	DeleteBranch(repo, branch string) error
 	CloseIssue(repo string, number int) error // an issue already closed counts as closed
 	// Checks are the forge's own checks (CI jobs) on exactly sha.
 	Checks(repo, sha string) ([]CheckRun, error)
@@ -149,22 +153,36 @@ var OwnerTokens = map[string]string{
 }
 
 // ghEnv is the environment that makes gh and git's gh credential helper use
-// the token configured for repo's owner, or nothing to keep gh's login.
+// the token configured for repo's owner, or nothing to keep gh's login. Under
+// the system service install.sh writes, the token comes first from systemd's
+// credential <owner>.token (root's file, which only the service can read), then
+// from OwnerTokens; an empty one keeps gh's login.
 func ghEnv(repo string) []string {
-	owner, _, _ := strings.Cut(repo, "/")
-	path := OwnerTokens[strings.ToLower(owner)]
-	if path == "" {
+	owner, _, _ := strings.Cut(strings.ToLower(repo), "/")
+	if owner == "" || strings.ContainsAny(owner, `/\.`) {
 		return nil
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil
+	for _, path := range []string{credential(owner + ".token"), OwnerTokens[owner]} {
+		if path == "" {
+			continue
+		}
+		if b, err := os.ReadFile(path); err == nil {
+			if tok := strings.TrimSpace(string(b)); tok != "" {
+				return []string{"GH_TOKEN=" + tok}
+			}
+		}
 	}
-	tok := strings.TrimSpace(string(b))
-	if tok == "" {
-		return nil
+	return nil
+}
+
+// credential is the path of a systemd credential the service was given, or
+// "" outside one.
+func credential(name string) string {
+	dir := os.Getenv("CREDENTIALS_DIRECTORY")
+	if dir == "" {
+		return ""
 	}
-	return []string{"GH_TOKEN=" + tok}
+	return filepath.Join(dir, name)
 }
 
 // ghRun runs gh and returns its stdout and stderr. Tests replace it.
@@ -228,7 +246,7 @@ func ghWrites(args []string) bool {
 		}
 		return false
 	}
-	return len(args) > 1 && slices.Contains([]string{"create", "comment", "merge", "close", "edit", "delete", "rerun"}, args[1])
+	return len(args) > 1 && slices.Contains([]string{"create", "comment", "merge", "close", "edit", "delete", "rerun", "ready"}, args[1])
 }
 
 // RateLimited is GitHub asking the Hive to slow down: a secondary rate limit
@@ -568,6 +586,9 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 		return "", fmt.Errorf("PR #%d: %w", number, ErrDraft)
 	}
 	if _, err := gh(repo, "pr", "merge", strconv.Itoa(number), "-R", repo, "--squash", "--match-head-commit", sha, "--subject", subject); err != nil {
+		if draftRefused.MatchString(err.Error()) { // made a draft since the look above
+			return "", fmt.Errorf("PR #%d: %w (%v)", number, ErrDraft, err)
+		}
 		return "", err
 	}
 	for i := 0; i < 10; i++ {
@@ -582,6 +603,27 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 
 func (GitHub) ClosePR(repo string, number int, comment string) error {
 	_, err := gh(repo, "pr", "close", strconv.Itoa(number), "-R", repo, "--comment", comment)
+	return err
+}
+
+// draftRefused is how GitHub refuses to merge a draft ("Pull Request is
+// still a draft (mergePullRequest)").
+var draftRefused = regexp.MustCompile(`(?i)is still a draft`)
+
+func (GitHub) SetDraft(repo string, number int, draft bool) error {
+	args := []string{"pr", "ready", strconv.Itoa(number), "-R", repo}
+	if draft {
+		args = append(args, "--undo")
+	}
+	_, err := gh(repo, args...)
+	return err
+}
+
+func (GitHub) DeleteBranch(repo, branch string) error {
+	_, err := gh(repo, "api", "-X", "DELETE", "repos/"+repo+"/git/refs/heads/"+branch)
+	if err != nil && strings.Contains(err.Error(), "Reference does not exist") {
+		return nil
+	}
 	return err
 }
 

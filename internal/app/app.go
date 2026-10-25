@@ -111,7 +111,25 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Release.PauseMerges = a.Work.PauseMerges
 	a.System.Register(system.Job{Name: "hive.update", AtStart: true, Fn: a.Release.AutoUpdate})
 	a.System.Register(system.Job{Name: "report.send", Fn: (&report.Module{C: c}).Send})
+	a.System.Register(system.Job{Name: "hive.clean", AtStart: true, Fn: func() (string, error) { return a.Clean(), nil }})
+	c.Effects.OnDiskFull = func() { a.System.RunNow("hive.clean") }
 	return a, nil
+}
+
+// Clean removes spent checkouts and what checks left behind, then measures
+// the Hive's disk use for the dashboard (the hive.clean job).
+func (a *App) Clean() string {
+	var did []string
+	for _, s := range []string{a.Work.PruneCheckouts(), a.C.Effects.Prune()} {
+		if s != "" {
+			did = append(did, s)
+		}
+	}
+	d := a.C.Effects.MeasureDisk()
+	if len(did) == 0 {
+		return "nothing to remove; " + d.String()
+	}
+	return join(did) + "; " + d.String()
 }
 
 func join(s []string) string {

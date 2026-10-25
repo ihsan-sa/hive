@@ -2,14 +2,23 @@ package daemon
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ihsan-sa/hive-standalone-build/internal/api"
+	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
@@ -17,7 +26,7 @@ import (
 // it, whatever started that one; once that one ends, a daemon starts there.
 func TestSecondDaemonOnAWorkspaceExits(t *testing.T) {
 	if root := os.Getenv("HIVE_LOCK_HELPER"); root != "" {
-		if _, err := lockWorkspace(core.Workspace{Root: root}, 0); err != nil {
+		if _, err := lockWorkspace(core.Workspace{Root: root}, 0, false); err != nil {
 			os.Stdout.WriteString("lock: " + err.Error() + "\n")
 			os.Exit(1)
 		}
@@ -37,6 +46,11 @@ func TestSecondDaemonOnAWorkspaceExits(t *testing.T) {
 	if line, _ := bufio.NewReader(out).ReadString('\n'); line != "locked\n" {
 		t.Fatalf("the first daemon didn't take the workspace: %q", line)
 	}
+	serveDaemon(t, ws, 0) // the first one answers: it is up, not on its way out
+	for !running(ws) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	before, _ := os.ReadFile(ws.DaemonFile())
 	start := time.Now()
 	err := Run(ws, 0)
 	var held *AlreadyRunning
@@ -49,14 +63,151 @@ func TestSecondDaemonOnAWorkspaceExits(t *testing.T) {
 	if msg := err.Error(); !strings.Contains(msg, "pid "+strconv.Itoa(first.Process.Pid)) || !strings.Contains(msg, "started by process") {
 		t.Errorf("the message doesn't name the running daemon: %s", msg)
 	}
-	if core.Exists(ws.DaemonFile()) {
+	if after, _ := os.ReadFile(ws.DaemonFile()); string(after) != string(before) {
 		t.Error("the second daemon wrote daemon.json")
 	}
 	first.Process.Kill()
 	first.Wait()
-	l, err := lockWorkspace(ws, 0)
+	l, err := lockWorkspace(ws, 0, false)
 	if err != nil {
 		t.Fatalf("the lock outlived its daemon: %v", err)
 	}
 	l.Release()
+}
+
+// lockHolder starts a process that holds ws's daemon lock, as a daemon
+// starting up does before it writes daemon.json.
+func lockHolder(t *testing.T, ws core.Workspace) *exec.Cmd {
+	t.Helper()
+	os.MkdirAll(ws.Hive(), 0o755)
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestSecondDaemonOnAWorkspaceExits$")
+	cmd.Env = append(os.Environ(), "HIVE_LOCK_HELPER="+ws.Root)
+	out, _ := cmd.StdoutPipe()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	if line, _ := bufio.NewReader(out).ReadString('\n'); line != "locked\n" {
+		t.Fatalf("the helper didn't take the workspace: %q", line)
+	}
+	return cmd
+}
+
+// serveDaemon writes daemon.json for a daemon answering at a test server
+// after a pause, as one that has finished starting.
+func serveDaemon(t *testing.T, ws core.Workspace, after time.Duration) int {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{}`) }))
+	t.Cleanup(srv.Close)
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	go func() {
+		time.Sleep(after)
+		raw, _ := json.Marshal(api.DaemonInfo{PID: os.Getpid(), Port: port, Token: "t"})
+		os.MkdirAll(ws.Private(), 0o700)
+		core.WriteFileAtomic(ws.DaemonFile(), raw, 0o600)
+	}()
+	return port
+}
+
+// A command run while a daemon starts up (it holds the lock, daemon.json
+// isn't written yet) waits for that daemon instead of starting a second, as
+// a login's command did while the unit's daemon started.
+func TestACommandWaitsForAStartingDaemon(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	lockHolder(t, ws)
+	if !lockHeld(ws) {
+		t.Fatal("a held lock reads as free")
+	}
+	defer func(f func() (string, error)) { executable = f }(executable)
+	executable = func() (string, error) { return "", errors.New("started a daemon of its own") }
+	port := serveDaemon(t, ws, 700*time.Millisecond)
+	c, err := Start(ws)
+	if err != nil || c.Info.Port != port {
+		t.Fatalf("Start while a daemon starts: %+v, %v; want that daemon", c, err)
+	}
+}
+
+// With the Hive's unit serving the workspace, a command that finds no daemon
+// has systemd start the unit rather than starting one beside it, so a unit
+// and a login's command can't make two.
+func TestACommandStartsTheUnitNotASecondDaemon(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd is Linux's")
+	}
+	ws := core.Workspace{Root: t.TempDir()}
+	os.MkdirAll(ws.Hive(), 0o755)
+	home, bin := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	unit := filepath.Join(home, ".config", "systemd", "user", "hive.service")
+	os.MkdirAll(filepath.Dir(unit), 0o755)
+	os.WriteFile(unit, []byte("[Service]\nEnvironment=HIVE_HOME="+ws.Root+"\nExecStart=/x/hive daemon\n"), 0o644)
+	calls := filepath.Join(t.TempDir(), "calls")
+	os.WriteFile(filepath.Join(bin, "systemctl"), []byte("#!/bin/sh\necho \"$*\" >> '"+calls+"'\n"), 0o755)
+	defer func(f func() (string, error)) { executable = f }(executable)
+	spawned := filepath.Join(t.TempDir(), "spawned")
+	os.WriteFile(filepath.Join(bin, "fake-hive"), []byte("#!/bin/sh\n: > '"+spawned+"'\n"), 0o755)
+	executable = func() (string, error) { return filepath.Join(bin, "fake-hive"), nil }
+	port := serveDaemon(t, ws, 500*time.Millisecond)
+	c, err := Start(ws)
+	if err != nil || c.Info.Port != port {
+		t.Fatalf("Start: %+v, %v", c, err)
+	}
+	if raw, _ := os.ReadFile(calls); !strings.Contains(string(raw), "--user start --no-block hive.service") {
+		t.Fatalf("systemd wasn't asked to start the unit: %q", raw)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if core.Exists(spawned) {
+		t.Fatal("a daemon was started beside the unit")
+	}
+	// A unit for another workspace isn't this one's launcher.
+	os.WriteFile(unit, []byte("[Service]\nEnvironment=HIVE_HOME=/elsewhere\nExecStart=/x/hive daemon\n"), 0o644)
+	os.Remove(ws.DaemonFile())
+	os.Remove(calls)
+	serveDaemon(t, ws, 500*time.Millisecond)
+	if _, err := Start(ws); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(calls); len(raw) > 0 {
+		t.Fatalf("another workspace's unit was started: %q", raw)
+	}
+	for i := 0; !core.Exists(spawned); i++ {
+		if i == 50 {
+			t.Fatal("without its unit, no daemon was started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A daemon started while the one before it is still on its way out (it
+// holds the lock but no longer answers, as after /api/shutdown on a slow
+// Windows runner) waits for the lock rather than exiting.
+func TestADaemonWaitsOutOneStopping(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	old := lockHolder(t, ws)
+	go func() { time.Sleep(time.Second); old.Process.Kill() }()
+	l, err := lockWorkspace(ws, stopWait, true)
+	if err != nil {
+		t.Fatalf("the new daemon gave up on one stopping: %v", err)
+	}
+	l.Release()
+}
+
+// Once shutdown begins the daemon no longer answers ping, so a daemon
+// started meanwhile reads it as on its way out.
+func TestPingFailsOnceStopping(t *testing.T) {
+	s := &server{a: &app.App{C: &core.Core{WS: core.Workspace{Root: t.TempDir()}}}, info: api.DaemonInfo{Token: "t"}}
+	ping := func() int {
+		req := httptest.NewRequest(http.MethodGet, "/api/ping", nil)
+		req.Header.Set("Authorization", "Bearer t")
+		rec := httptest.NewRecorder()
+		s.routes().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := ping(); code != http.StatusOK {
+		t.Fatalf("ping: %d", code)
+	}
+	s.stopping.Store(true)
+	if code := ping(); code == http.StatusOK {
+		t.Fatal("a stopping daemon still answers ping")
+	}
 }
