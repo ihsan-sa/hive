@@ -32,6 +32,9 @@ type Manifest struct {
 	// are what it serves, each a fixed slice of the control API (see runner).
 	Exec  []string `json:"exec,omitempty"`
 	Hooks []string `json:"hooks,omitempty"`
+	// Command gives the module `hive <name> <args...>`: its program run with
+	// args, attached to the terminal (see runner.Command).
+	Command bool `json:"command,omitempty"`
 }
 
 // Source is the host-written record of where a module came from.

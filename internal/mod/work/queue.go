@@ -71,6 +71,16 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	if machine == "" {
 		machine = core.Loaded(cfg.LoadMax)
 	}
+	// One task a pass goes past a strained machine while an executor module
+	// has room to run its turns elsewhere.
+	asked := false
+	elsewhere := func() bool {
+		if asked {
+			return false
+		}
+		asked = true
+		return m.C.Runs.Elsewhere()
+	}
 	for _, t := range line {
 		switch o, area := m.overlap(t, ahead); {
 		case t.Held:
@@ -84,7 +94,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s: both touch %s", o.Label(), o.ID, verb, area)
 		case cfg.MaxWorkers > 0 && working >= cfg.MaxWorkers:
 			wait[t.ID] = fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
-		case machine != "":
+		case machine != "" && !elsewhere():
 			wait[t.ID] = "waiting: " + machine
 		default:
 			start[t.ID] = true

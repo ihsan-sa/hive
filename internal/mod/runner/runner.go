@@ -30,6 +30,8 @@ var Scopes = map[string][]string{
 	"after":   {"/api/events"},                                                 // run.turn_ended, effect.merged
 	"status":  {"/api/events"},
 	"idle":    {"/api/events"}, // hive.idle
+	// executor: the core hands it turns (Executor); it needs no API path
+	"executor": {},
 }
 
 // every module may ping and report.
@@ -50,6 +52,7 @@ type Runner struct {
 	status map[string]string
 	tries  map[string]int // reviews started this life, by module and commit
 	busy   bool
+	noRoom map[string]time.Time // executors that said they have no room, until when
 }
 
 type child struct {
@@ -227,11 +230,8 @@ func copyTree(from, to string) error {
 // start launches the program with a fresh token, its own HOME and no
 // credentials from the daemon's environment.
 func (r *Runner) start(name string, c *child, m modules.Module) {
-	argv := append([]string{}, m.Exec...)
-	if strings.HasPrefix(argv[0], ".") {
-		argv[0] = filepath.Join(m.Dir, argv[0])
-	}
-	home := filepath.Join(r.C.WS.Hive(), "modules", name)
+	argv := Argv(m)
+	home := Home(r.C.WS, name)
 	os.MkdirAll(home, 0o700)
 	var tok [16]byte
 	rand.Read(tok[:])
