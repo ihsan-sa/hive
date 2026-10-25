@@ -262,6 +262,17 @@ func TestQueueHoldsWhatAWorkerChanged(t *testing.T) {
 	if !m.edited(stageOf(t, m, a), "internal/tui/views.go") {
 		t.Fatal("a removed file isn't seen as changed")
 	}
+
+	// A base the clone can't read holds nothing and keeps no answer, so
+	// a passing git failure doesn't hold a brief until the file moves.
+	odd := stageOf(t, m, a)
+	odd.Base = strings.Repeat("e", 40)
+	if m.edited(odd, "internal/core/runs.go") {
+		t.Fatal("a file held against a base that can't be read")
+	}
+	if got := m.editCache[odd.Worker+"\x00internal/core/runs.go"]; strings.HasPrefix(got.key, odd.Base) {
+		t.Fatal("an answer without a base tree was kept")
+	}
 }
 
 // The .gitattributes matcher follows git: "**" spans directories, a name-only

@@ -140,7 +140,7 @@ func (m *Module) overlap(t Task, others []Task) (*Task, string) {
 // checkout, committed or not, from the main it started on. The checkout is
 // read as files (host git never runs there); a path that leaves it through a
 // symlink counts as unchanged. Each answer is kept until the file or the base
-// moves.
+// moves; none is given or kept while the base's tree can't be read.
 func (m *Module) edited(o Task, p string) bool {
 	if o.Stage != StageWorking || o.Worker == "" || o.Base == "" {
 		return false
@@ -158,17 +158,21 @@ func (m *Module) edited(o Task, p string) bool {
 	if ok && got.key == key {
 		return got.edited
 	}
-	changed := m.differs(o.Project, o.Base, r.Checkout, p)
+	tree := m.baseTree(o.Project, o.Base)
+	if tree == nil {
+		return false // unknown for now: held by nothing, and asked again next tick
+	}
+	changed := differs(tree, r.Checkout, p)
 	m.mu.Lock()
 	m.editCache[cacheKey] = editEntry{key, changed}
 	m.mu.Unlock()
 	return changed
 }
 
-// differs reports whether the file p in checkout is not what base holds in
-// the project's clone: changed, or added or removed.
-func (m *Module) differs(project, base, checkout, p string) bool {
-	blob, inBase := m.baseTree(project, base)[p]
+// differs reports whether the file p in checkout is not what the base's tree
+// holds: changed, or added or removed.
+func differs(tree map[string]string, checkout, p string) bool {
+	blob, inBase := tree[p]
 	file := filepath.Join(checkout, filepath.FromSlash(p))
 	if _, err := os.Lstat(file); errors.Is(err, os.ErrNotExist) {
 		return inBase // removed, or never there
