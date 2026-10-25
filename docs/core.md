@@ -33,7 +33,7 @@ The packages measured as the core, read by `tests/core-size.sh`:
 
 A project names its own command as `"size"` in `.hive/project.json` (any command printing `name value` lines); a self project with none runs `tests/core-size.sh` while its tree has it.
 
-At this page's first commit: core 14,680 lines, every package 37,415, binary 15.5 MB (linux/amd64).
+On main as this page landed (2026-10-25): core 16,356 lines, every package 41,356, binary 16.4 MB (linux/amd64).
 
 ## What isn't core, and where it goes
 
