@@ -11,7 +11,10 @@
 // and journals it as kb.dreamed.
 //
 // It uses only the standard library and the HTTP API, so it can move to a
-// repository of its own unchanged.
+// repository of its own unchanged. It runs as the person with no module
+// review, so here every change to it gets a security read
+// (tests/LANDING-security.toml lists modules/kb/dream/**); a repository it
+// moves to needs the same rule.
 package main
 
 import (
