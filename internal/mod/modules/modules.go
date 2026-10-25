@@ -35,6 +35,10 @@ type Manifest struct {
 	// Command gives the module `hive <name> <args...>`: its program run with
 	// args, attached to the terminal (see runner.Command).
 	Command bool `json:"command,omitempty"`
+	// Schedule names jobs the program serves, each with its default
+	// schedule ("every 4h"); config.json's schedules override it. When one
+	// is due the system journals module.scheduled, which the program reads.
+	Schedule map[string]string `json:"schedule,omitempty"`
 }
 
 // Source is the host-written record of where a module came from.

@@ -18,8 +18,10 @@ So the core is the skeleton and nothing else. **New functionality goes into a mo
 | Messaging and discovery: message, inbox, progress, finish, spawn, agents; the person's feed | `internal/core/ops.go`, `internal/core/person.go`, `internal/agentcli` (the agent's end) |
 | The effects process (fx): holds every credential and acts for agents: git, the forge, checks, merge guarantees | `internal/core` (`effects.go`, `forge.go`, `git.go`, `tokens.go`, `selfgate.go`, `slots.go`) |
 | The permissions ceiling and the sandbox | `internal/core/ceiling.go`, `internal/core/strain.go`, `internal/sandbox` |
-| The module seam: how the core gains functionality (the registry and tick list, agent ops, the person's answers, scheduled jobs, module programs) | `internal/mod/modules`, `internal/mod/runner`, `Ops().Register`, `Person.Handle` |
+| The module seam: how the core gains functionality (the registry and tick list, agent ops, the person's answers, scheduled jobs, module programs, an executor module handed a strained turn's spec, a module's own `hive <name>` command) | `internal/mod/modules`, `internal/mod/runner`, `Ops().Register`, `Person.Handle`, `Runs.Executor` and `sandbox.Delegate` |
 | The host process and its wiring: the daemon, its control API, the entry point | `internal/daemon`, `internal/api`, `internal/app`, `cmd/hive` |
+
+The executor hook is core because only launch knows a turn's spec and when the machine holds it; what runs the turn elsewhere (hive-dispatch's SSH runners) is the module's. `hive <name>` is the seam step 4 below asks for, for module programs.
 
 The last row is core only as the place the skeleton runs: what a module adds to it (an API route, a CLI verb) is module material and moves out (step 4 below).
 

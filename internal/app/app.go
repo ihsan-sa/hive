@@ -4,6 +4,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -86,7 +87,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Improve.OnKept = a.Release.AfterKept
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
 	c.Runs.Executor = a.Runner.Executor
-	for _, tick := range []func(){stats.SpendNotice{C: c}.Tick, a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.Runner.Tick, a.Models.Tick} {
+	for _, tick := range []func(){stats.SpendNotice{C: c}.Tick, a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.moduleJobs, a.Runner.Tick, a.Models.Tick} {
 		a.Mods.Builtin(tick)
 	}
 	c.Person.Handle("release", a.Release.OnPerson)
@@ -119,6 +120,24 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.System.Register(system.Job{Name: "hive.clean", AtStart: true, Fn: func() (string, error) { return a.Clean(), nil }})
 	c.Effects.OnDiskFull = func() { a.System.RunNow("hive.clean") }
 	return a, nil
+}
+
+// moduleJobs registers the jobs module programs serve (a manifest's
+// "schedule"). A due one is journaled as module.scheduled, which the program
+// reads off the journal like any hook; the daemon never calls it.
+func (a *App) moduleJobs() {
+	for _, m := range a.Mods.List() {
+		if len(m.Exec) == 0 {
+			continue
+		}
+		name := filepath.Base(m.Dir)
+		for job, every := range m.Schedule {
+			a.System.RegisterModule(system.Job{Name: job, Default: every, Fn: func() (string, error) {
+				a.C.J.MustAppend("module.scheduled", map[string]string{"module": name, "job": job})
+				return "asked module " + name, nil
+			}})
+		}
+	}
 }
 
 // Clean removes spent checkouts and what checks left behind, then measures

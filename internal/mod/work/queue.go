@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -16,13 +17,12 @@ import (
 
 // The queue: a filed brief waits as queued until a worker can take it. Briefs
 // start in the order they were filed, or the order the lead set, and only as
-// many work at once as max_workers allows (the plan's limit, until its usage
-// reading is trusted) while the machine isn't loaded. A brief that names the
-// same files or area as one a worker is on (or ahead of it in line) waits
-// until that worker is done, so the two don't conflict and redo each other's
-// work. Once a worker has pushed, its task holds nothing back: a conflict it
-// meets later goes back to its worker with main to merge. Nothing here stops a
-// worker that has started.
+// many work at once as the pace allows (pace.go, under max_workers) while the
+// machine isn't loaded. A brief that names the same files or area as one a
+// worker is on (or ahead of it in line) waits until that worker is done, so
+// the two don't conflict and redo each other's work. Once a worker has
+// pushed, its task holds nothing back: a conflict it meets later goes back to
+// its worker with main to merge. Nothing here stops a worker that has started.
 
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
@@ -71,7 +71,12 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	}
 	m.mu.Unlock()
 	inLine(line)
-	machine := machineHold(core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax), core.Loaded(cfg.LoadMax), m.C.Runs.Elsewhere)
+	hold := machineHold(core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax), core.Loaded(cfg.LoadMax), m.C.Runs.Elsewhere)
+	limit := m.paceWorkers(cfg, working, slices.ContainsFunc(line, func(t Task) bool { return !t.Held }))
+	full := fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
+	if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
+		full = "waiting for a worker (pace " + m.workers.String() + ")"
+	}
 	for _, t := range line {
 		held := "" // asked only of a task nothing else holds back
 		switch o, area := m.overlap(t, ahead); {
@@ -84,9 +89,9 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				verb = "to go first"
 			}
 			wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s: both touch %s", o.Label(), o.ID, verb, area)
-		case cfg.MaxWorkers > 0 && working >= cfg.MaxWorkers:
-			wait[t.ID] = fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
-		case func() bool { held = machine(); return held != "" }():
+		case working >= limit:
+			wait[t.ID] = full
+		case func() bool { held = hold(); return held != "" }():
 			wait[t.ID] = "waiting: " + held
 		default:
 			start[t.ID] = true
