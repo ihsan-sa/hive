@@ -934,7 +934,8 @@ func cmdKB(ws core.Workspace, query, limit string, deep bool) int {
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, "digging ("+s.Run+") …")
-		for {
+		// The Hive stops the agent at its time limit; this gives up well after.
+		for end := time.Now().Add(20 * time.Minute); time.Now().Before(end); {
 			var a struct {
 				Text string
 				Done bool
@@ -949,6 +950,8 @@ func cmdKB(ws core.Workspace, query, limit string, deep bool) int {
 			}
 			time.Sleep(2 * time.Second)
 		}
+		fmt.Fprintln(os.Stderr, core.Cmd+": the deep search "+s.Run+" has no answer after 20 minutes; its run is in the control center")
+		return 1
 	}
 	if up {
 		var a struct{ Text string }

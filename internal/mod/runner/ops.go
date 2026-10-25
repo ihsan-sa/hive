@@ -29,6 +29,9 @@ import (
 // a short run of the module's own role prompt on a small model, held to a
 // budget and a time limit, whose structured answer comes back as the reply.
 
+// opMinute is an op agent's minute; tests shorten it.
+var opMinute = time.Minute
+
 // opTimeout bounds one call of an op's program; a first `go run` builds it.
 const opTimeout = 2 * time.Minute
 
@@ -264,7 +267,8 @@ func (r *Runner) StartAgent(run core.Run, name, question string) (string, error)
 			s.Route[0].Model = a.Model
 		}
 	}
-	s.Tools, s.Schema = []string{"Read", "Grep", "Glob", "Bash"}, AnswerSchema
+	// It reads and searches; it writes no note, brief or message.
+	s.Tools, s.Schema, s.Ops = []string{"Read", "Grep", "Glob", "Bash"}, AnswerSchema, []string{name}
 	if h, err := harness.Get(s.Harness); err == nil && harness.Capped(h, a.BudgetUSD) == nil {
 		s.Budget = a.BudgetUSD
 	}
@@ -327,4 +331,24 @@ func (r *Runner) waitAgent(id string, a *modules.OpAgent) string {
 		}
 	}
 	return fmt.Sprintf("The deep search %s ran past its %d minutes and was stopped.", id, max(a.Minutes, 1))
+}
+
+// stopLate stops every op agent that has run past its minutes, whoever
+// started it and across restarts: a run's start is in the journal, the
+// limit in its op's manifest. It runs under r.mu, from Tick.
+func (r *Runner) stopLate() {
+	limits := map[string]time.Duration{}
+	for _, o := range r.ops {
+		if a := o.spec.Agent; a != nil && a.Role != "" {
+			limits[a.Role] = time.Duration(max(a.Minutes, 1)) * opMinute
+		}
+	}
+	if len(limits) == 0 {
+		return
+	}
+	for _, run := range r.C.Runs.List(func(x *core.Run) bool { _, ok := limits[x.Role]; return ok && !x.Terminal() && !x.StopAsked }) {
+		if limit := limits[run.Role]; time.Since(run.Created) > limit {
+			r.C.Runs.Stop(run.ID, fmt.Sprintf("the deep search ran past its %d minutes", int(limit.Minutes())))
+		}
+	}
 }

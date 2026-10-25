@@ -82,6 +82,7 @@ func (r *Runner) Tick() {
 	}
 	mods := r.Mods.List()
 	r.syncOps(mods)
+	r.stopLate()
 	r.opsWhy = map[string]string{}
 	seen := map[string]bool{}
 	for _, m := range mods {

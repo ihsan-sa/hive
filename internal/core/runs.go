@@ -56,6 +56,7 @@ type RunSpec struct {
 	Inputs     map[string]string `json:"inputs,omitempty"`     // name -> content, placed read-only in /hive/run
 	OneTurn    bool              `json:"one_turn,omitempty"`   // done when a turn ends; nothing is added to its prompts, and it may only finish and report progress
 	Budget     float64           `json:"budget,omitempty"`     // USD the whole run may spend; 0 is no cap
+	Ops        []string          `json:"ops,omitempty"`        // the only ops it may call, beyond finish and progress; empty is any
 	// Route is the harnesses and models the run may go on, in order
 	// (Config.Route): when its own are at their usage limit it moves to the
 	// first of these with room. Empty stays and waits.

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
@@ -155,5 +156,32 @@ func TestKBModuleSearch(t *testing.T) {
 	out, err := call(t, r, core.Run{RunSpec: core.RunSpec{ID: "w-1", Role: "worker"}}, "search", `{"query":"#111"}`)
 	if err != nil || !strings.HasPrefix(out, "1. record/task/261024-015726-45d2d27ed7.md") || !strings.Contains(out, "why: is about #111") {
 		t.Fatalf("kb search: %q, %v", out, err)
+	}
+}
+
+// An op agent the person starts (the Knowledge tab, `hive kb --deep`) is
+// stopped at its minutes too, by the tick, and it may call no op but its own.
+func TestModuleOpAgentStopsInTime(t *testing.T) {
+	defer func(m time.Duration) { opMinute = m }(opMinute)
+	opMinute = 50 * time.Millisecond
+	r, dir := opRunner(t, "fake", `{"name":"look","ops":{"lookup":{"exec":["true"],"agent":{"arg":"deep","role":"look-researcher","prompt":"researcher.md","minutes":1}}}}`)
+	os.WriteFile(filepath.Join(dir, "researcher.md"), []byte("# Your role: look researcher\n"), 0o644)
+	r.Tick()
+	id, err := r.StartAgent(core.Run{RunSpec: core.RunSpec{ID: "person", Role: "person"}}, "lookup", "why?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _ := r.C.Runs.Get(id)
+	if _, err := r.C.Runs.Ops().Call(run, "inbox", nil); err == nil || !strings.Contains(err.Error(), "not granted") {
+		t.Fatalf("the agent may call another op: %v", err)
+	}
+	r.Tick()
+	if run, _ := r.C.Runs.Get(id); run.Terminal() || run.StopAsked {
+		t.Fatal("stopped before its time")
+	}
+	time.Sleep(100 * time.Millisecond)
+	r.Tick()
+	if run, _ := r.C.Runs.Get(id); !run.Terminal() && !run.StopAsked {
+		t.Fatalf("a person's deep search ran past its minutes: %+v", run.Status)
 	}
 }
