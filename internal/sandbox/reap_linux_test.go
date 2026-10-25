@@ -23,8 +23,10 @@ func TestInitReapsOrphans(t *testing.T) {
 			os.Exit(0)
 		}
 		// The inner sh exits at once, orphaning its sleep, which exits while
-		// the command still runs.
-		cmd := exec.Command("/bin/sh", "-c", "sh -c 'sleep 0.05 &'; sleep 0.5; exit 3")
+		// the command still runs: the command waits until the orphan is gone
+		// (kill -0 still finds a zombie), not a fixed time a loaded machine
+		// can outrun.
+		cmd := exec.Command("/bin/sh", "-c", "p=$(sh -c 'sleep 0.05 >/dev/null 2>&1 & echo $!'); i=0; while kill -0 $p 2>/dev/null && [ $i -lt 1000 ]; do sleep 0.01; i=$((i+1)); done; exit 3")
 		if err := cmd.Start(); err != nil {
 			fmt.Print("start: ", err)
 			os.Exit(0)
