@@ -111,6 +111,9 @@ type Task struct {
 	// .hive (a file in its worker's run), so a later round or the lead reads
 	// it without asking the forge again.
 	ForgeLog string `json:"forge_log,omitempty"`
+	// Warning is the newest advisory check red on its head (core.Advisory),
+	// which didn't hold the merge.
+	Warning string `json:"warning,omitempty"`
 	// MainWait is when a red check on head MainWaitOn first waited on
 	// main's run of it, so a run on main that never finishes holds it only
 	// so long, however often main moves meanwhile.
@@ -242,6 +245,10 @@ type Module struct {
 	workers, checks pace
 	// areaCache holds the paths each brief names (queue.go).
 	areaCache map[string]areaEntry
+	// editCache holds whether a worker's checkout has changed a file (queue.go).
+	editCache map[string]editEntry
+	// baseTrees holds the files of the bases working tasks started on (queue.go).
+	baseTrees map[string]map[string]string
 	steps     sync.WaitGroup // the steps Tick started that are still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
@@ -292,7 +299,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, baseTrees: map[string]map[string]string{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -2138,7 +2145,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	if err != nil {
 		return true, err
 	}
-	req := m.C.Effects.RequiredChecks(p, main)
+	runs, req, warned := core.Advisory(p, runs, m.C.Effects.RequiredChecks(p, main))
 	st, which := core.ChecksState(runs, req)
 	if (st == core.CheckFail || st == core.CheckCantStart) && rerunning(t) {
 		m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+core.CheckNames(which)+")")
@@ -2223,6 +2230,11 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		detail := m.forgeFailures(t, p, main, which, mainRuns, at)
 		return true, m.sendBackWith(t, p, findings+hint, detail)
 	}
+	if len(warned) > 0 {
+		m.warn(t, p, warned)
+	} else {
+		t.Warning = "" // a newer head with them green
+	}
 	// Said once per head and main: a merge hold or a failed merge brings t
 	// back here every holdGap, and a repeat would crowd out its log.
 	if note := "no worse than main: the forge's checks " + strings.Join(shared, ", ") + " are red on both " + core.Short(t.SHA) + " and main at " + core.Short(main) + ", and nothing else fails, so it merges"; len(shared) > 0 && !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
@@ -2236,6 +2248,20 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		m.comment(p.Repo, t.PR.Number, say)
 	}
 	return false, nil
+}
+
+// warn records the advisory checks (core.Advisory) red on t's head, once per
+// head: on the task, which the dashboard shows, in its log, on the PR and as
+// an alert, while the change merges on the other checks.
+func (m *Module) warn(t *Task, p core.Project, warned []string) {
+	w := "the forge's checks " + strings.Join(warned, ", ") + " fail on " + core.Short(t.SHA) + "; on the Hive's own PRs they warn rather than block, so it merges on the others (a release still needs them green)"
+	if t.Warning == w {
+		return
+	}
+	t.Warning = w
+	m.save(t, "warning: "+w)
+	m.comment(p.Repo, t.PR.Number, "Warning, not blocking: "+strings.Join(warned, ", ")+" fail on "+core.Short(t.SHA)+". On the Hive's own PRs a red Windows job doesn't hold the merge; a release still needs it green.")
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "check-warning", "project": p.Name, "key": t.SHA + "/warned", "text": "PR #" + fmt.Sprint(t.PR.Number) + ": " + w})
 }
 
 // mainWaitMax is how long a red check waits on main's run of it.
