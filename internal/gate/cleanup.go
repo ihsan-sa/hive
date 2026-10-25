@@ -71,16 +71,11 @@ func runDirs(out string) []string {
 	for _, e := range ents {
 		name := e.Name()
 		if e.IsDir() && (childRoot(name) || name == "evaluator" || name == "prefetch" ||
-			strings.HasPrefix(name, "src-") || strings.HasPrefix(name, "built-") || sideDir(name)) {
+			strings.HasPrefix(name, "src-") || strings.HasPrefix(name, "built-")) {
 			dirs = append(dirs, filepath.Join(out, name))
 		}
 	}
 	return dirs
-}
-
-// sideDir is a child's TMPDIR or its evaluator's scratch (Child.side).
-func sideDir(name string) bool {
-	return len(name) == 8 && (strings.HasPrefix(name, "t-") || strings.HasPrefix(name, "e-"))
 }
 
 // bulk is what a child root holds besides its logs: its home, scratch,
