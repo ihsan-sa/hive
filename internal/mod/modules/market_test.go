@@ -98,7 +98,7 @@ func TestInstallByName(t *testing.T) {
 	if core.Exists(filepath.Join(m.Dir, "later.md")) || core.Exists(filepath.Join(m.Dir, "README.md")) || core.Exists(filepath.Join(m.Dir, ".git")) {
 		t.Fatal("installed more than the module's folder at its pinned commit")
 	}
-	if fi, err := os.Stat(filepath.Join(m.Dir, "slack")); err != nil || fi.Mode()&0o100 == 0 {
+	if fi, err := os.Stat(filepath.Join(m.Dir, "slack")); err != nil || (runtime.GOOS != "windows" && fi.Mode()&0o100 == 0) { // Windows has no executable bit
 		t.Fatalf("its program lost its executable bit: %v", err)
 	}
 	if _, err := r.Install(p); err == nil {
