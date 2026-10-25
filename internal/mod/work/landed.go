@@ -224,7 +224,7 @@ func (m *Module) alreadyLanded(t *Task, p core.Project, main, sha string) (bool,
 	t.MergeSHA, t.Stage, t.Reason, t.Failures = at, StageDone, "", 0
 	t.IssueOpen = t.Issue.Number != 0
 	m.save(t, fmt.Sprintf("already landed: main at %s carries its head %s", core.Short(at), core.Short(sha)))
-	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Already on main: %q, carried by %s. %s", t.Label(), core.Short(at), t.PR.URL))
+	m.notify(t, fmt.Sprintf("Already on main: %q, carried by %s. %s", t.Label(), core.Short(at), t.PR.URL))
 	if t.IssueOpen {
 		m.comment(p.Repo, t.Issue.Number, say)
 		m.closeIssue(t, p)

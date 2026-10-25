@@ -1,6 +1,7 @@
 package work
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -88,8 +89,26 @@ func likeness(a, b string) float64 {
 	return float64(both) / float64(len(x)+len(y)-both)
 }
 
-// JoinedBy reports whether a brief run filed joined t.
+// Join is one brief that joined a task: who filed it, why it matched and the
+// context it added. Chat and Thread are set when a lead filed it, so the
+// thread it came from hears how the task ends too.
+type Join struct {
+	From   string    `json:"from"`
+	At     time.Time `json:"at"`
+	Why    string    `json:"why"`
+	Added  string    `json:"added"`
+	Chat   string    `json:"chat,omitempty"`
+	Thread string    `json:"thread,omitempty"`
+}
+
+// JoinedBy reports whether a brief run filed joined t. Tasks joined before
+// Joins was kept are read from their log.
 func (t Task) JoinedBy(run string) bool {
+	for _, j := range t.Joins {
+		if j.From == run {
+			return true
+		}
+	}
 	for _, e := range t.Log {
 		if e.Text == joinedNote+run || strings.HasPrefix(e.Text, joinedNote+run+":") {
 			return true
@@ -99,6 +118,11 @@ func (t Task) JoinedBy(run string) bool {
 }
 
 const joinedNote = "joined by a brief from "
+
+// fullJoins is how many joined briefs add their whole context to a task's
+// Known; later ones add a line each, so a hot task's brief stays readable.
+// Every one is still posted whole on the issue.
+const fullJoins = 6
 
 // joinable reports whether a new brief may join t: open work on the
 // project that no worker has pushed for yet, taken the same way (a gain or
@@ -116,29 +140,44 @@ func (b Brief) fix() bool {
 }
 
 // join adds b to the oldest open task it matches and returns that task and
-// why, or ok false when there is none and b is to be filed on its own.
-func (m *Module) join(b Brief, own string) (Task, string, bool) {
+// why, or ok false when there is none and b is to be filed on its own. lead
+// says a lead filed it, whose thread then follows the task. A task a step
+// holds is waited on briefly, and all of them for a few seconds at most, as
+// every other agent's brief waits on filing meanwhile.
+func (m *Module) join(b Brief, own string, lead bool) (Task, string, bool) {
 	open := m.List(func(t Task) bool { return joinable(t, b, own) })
 	slices.Reverse(open) // oldest first, so a third brief joins the first
+	end := time.Now().Add(4 * time.Second)
 	for _, o := range open {
 		why := match(b, o)
-		if why == "" || !m.claimWithin(o.ID, 2*time.Second) { // one a long step holds is skipped, so other briefs don't wait long on filing
+		if why == "" || m.workerEnded(o) || !m.claimWithin(o.ID, min(2*time.Second, time.Until(end))) {
 			continue
 		}
 		t, ok := m.Get(o.ID) // afresh, now no step holds it
-		if !ok || !joinable(t, b, own) {
+		if !ok || !joinable(t, b, own) || m.workerEnded(t) {
 			m.release(o.ID)
 			continue
 		}
 		added := fmt.Sprintf("Also asked by %s (%s; joined here since %s): %s", b.From, time.Now().UTC().Format("15:04Z"), why, core.Clip(b.Title, 300))
+		line := added
 		if b.Done != "" {
 			added += "\nDone looks like: " + core.Clip(b.Done, 1500)
 		}
 		if b.Known != "" {
 			added += "\nKnown: " + core.Clip(b.Known, 3000)
 		}
-		t.Known = strings.TrimSpace(t.Known + "\n\n" + added)
-		t.Joined = append(t.Joined, b.Title+"\n"+b.Done)
+		if len(t.Joins) >= fullJoins {
+			line += " (its whole ask is on the task's issue)"
+		} else {
+			line = added
+		}
+		j := Join{From: b.From, At: time.Now().UTC(), Why: why, Added: added}
+		if lead {
+			j.Chat, j.Thread = b.Chat, b.Thread
+		}
+		t.Known = strings.TrimSpace(t.Known + "\n\n" + line)
+		t.Joined = append(t.Joined, core.Clip(b.Title, 300)+"\n"+core.Clip(b.Done, 1500))
+		t.Joins = append(t.Joins, j)
 		m.save(&t, fmt.Sprintf("%s%s: %s", joinedNote, b.From, why))
 		if t.Stage == StageWorking && t.Worker != "" {
 			m.C.Runs.Send(t.Worker, "Another brief was filed for the same ask as your task, so it joins yours rather than starting a second worker. Cover it too, or say in your account what you left out:\n\n"+added)
@@ -147,4 +186,46 @@ func (m *Module) join(b Brief, own string) (Task, string, bool) {
 		return t, why, true
 	}
 	return Task{}, "", false
+}
+
+// workerEnded says t's worker has finished its run, so a brief joining it now
+// would reach a worker that no longer reads its messages.
+func (m *Module) workerEnded(t Task) bool {
+	if t.Stage != StageWorking || t.Worker == "" {
+		return false
+	}
+	r, ok := m.C.Runs.Get(t.Worker)
+	return ok && r.Terminal()
+}
+
+// postJoins puts each joined brief not yet on t's issue there as a comment,
+// so the issue shows every ask its work covers. Each carries its own marker,
+// so one posted before a restart lost the count is edited, not posted again.
+// A comment that fails is tried on the next step.
+func (m *Module) postJoins(t *Task, p core.Project) {
+	for t.Issue.Number != 0 && t.JoinsPosted < len(t.Joins) {
+		n := t.JoinsPosted
+		err := m.C.Effects.Forge.StatusComment(p.Repo, t.Issue.Number, fmt.Sprintf("<!-- hive-joined:%s:%d -->", t.ID, n), "Another brief joined this task:\n\n"+t.Joins[n].Added)
+		if rl := (*core.RateLimited)(nil); errors.As(err, &rl) {
+			m.limited(rl)
+		}
+		if err != nil {
+			return
+		}
+		t.JoinsPosted++
+		m.save(t, fmt.Sprintf("posted the brief %s joined on issue #%d", t.Joins[n].From, t.Issue.Number))
+	}
+}
+
+// notify tells t's thread, and the thread of each lead whose brief joined
+// it, how t went.
+func (m *Module) notify(t *Task, text string) {
+	m.Chat.Notify(t.Chat, t.Thread, text)
+	seen := map[[2]string]bool{{t.Chat, t.Thread}: true}
+	for _, j := range t.Joins {
+		if k := [2]string{j.Chat, j.Thread}; j.Thread != "" && !seen[k] {
+			seen[k] = true
+			m.Chat.Notify(j.Chat, j.Thread, text)
+		}
+	}
 }

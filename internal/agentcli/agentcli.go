@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -118,7 +119,7 @@ func parseArgs(a []string) (map[string]any, error) {
 		}
 		k = strings.TrimPrefix(k, "--")
 		if k, v, ok := strings.Cut(k, "="); ok {
-			out[k] = v
+			out[k] = switchValue(k, v)
 			continue
 		}
 		if i+1 >= len(a) || switches[k] && strings.HasPrefix(a[i+1], "--") {
@@ -144,9 +145,18 @@ func parseArgs(a []string) (map[string]any, error) {
 			}
 			v = string(raw)
 		}
-		out[k] = v
+		out[k] = switchValue(k, v)
 	}
 	return out, nil
+}
+
+// switchValue is a switch's "true" or "false" as a yes or no, so --apart true
+// reads as --apart does; any other value is left as written.
+func switchValue(k, v string) any {
+	if b, err := strconv.ParseBool(v); switches[k] && err == nil {
+		return b
+	}
+	return v
 }
 
 // Usage is the short help agents see.

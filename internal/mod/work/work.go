@@ -56,10 +56,15 @@ type Task struct {
 	Known   string `json:"known"`
 	// Joined is the title and done line of each brief that joined it (join.go).
 	Joined []string `json:"joined,omitempty"`
-	From   string   `json:"from"` // run id, person, or sweep run
-	Chat   string   `json:"chat,omitempty"`
-	Thread string   `json:"thread,omitempty"`
-	Kind   string   `json:"kind"` // work | revert | helper (spawned, no issue)
+	// Joins says who joined it and what was added, one per joined brief, so
+	// the record outlives the task's cut log; JoinsPosted counts those on its
+	// issue (join.go).
+	Joins       []Join `json:"joins,omitempty"`
+	JoinsPosted int    `json:"joins_posted,omitempty"`
+	From        string `json:"from"` // run id, person, or sweep run
+	Chat        string `json:"chat,omitempty"`
+	Thread      string `json:"thread,omitempty"`
+	Kind        string `json:"kind"` // work | revert | helper (spawned, no issue)
 	// Aim is AimFix for a task clearly said to be a fix, with the failure it
 	// fixes named (AimWhy), which merges on its tests, checks and reads and
 	// which a score dip after it merges doesn't revert on its own. Anything
@@ -496,6 +501,15 @@ type Brief struct {
 	Apart bool `json:"apart"`
 }
 
+// aim is the brief's aim as File takes it, or why it can't be taken.
+func (b Brief) aim() (string, error) {
+	aim, err := aimOf(b.Aim)
+	if err == nil && aim == AimFix && strings.TrimSpace(b.Why) == "" {
+		err = errors.New("a fix names the failure it fixes (--why \"...\"); a change with no named failure is taken as a gain")
+	}
+	return aim, err
+}
+
 // File creates a task from a brief.
 func (m *Module) File(b Brief) (Task, error) {
 	if strings.TrimSpace(b.Title) == "" {
@@ -511,14 +525,11 @@ func (m *Module) File(b Brief) (Task, error) {
 	if _, ok := m.C.Projects.Get(b.Project); !ok {
 		return Task{}, fmt.Errorf("no project %q", b.Project)
 	}
-	aim, err := aimOf(b.Aim)
+	aim, err := b.aim()
 	if err != nil {
 		return Task{}, err
 	}
 	why := strings.TrimSpace(b.Why)
-	if aim == AimFix && why == "" {
-		return Task{}, errors.New("a fix names the failure it fixes (--why \"...\"); a change with no named failure is taken as a gain")
-	}
 	t := &Task{Aim: aim, AimWhy: core.Clip(why, 300), ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
 		From: b.From, Chat: b.Chat, Thread: b.Thread, FollowUp: b.FollowUp, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Model: b.Model, Created: time.Now().UTC()}
 	m.save(t, "filed by "+b.From+", taken as "+t.AimWord())
@@ -609,11 +620,16 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 		return nil, err
 	}
 	b.Chat, b.Thread = m.thread(r)
+	aim, err := b.aim() // as File takes it, so " Gain" never joins a fix and a bad aim is refused before it joins
+	if err != nil {
+		return nil, err
+	}
+	b.Aim = aim
 	m.filing.Lock() // two briefs on one ask filed at once still find each other
 	defer m.filing.Unlock()
 	if !b.Apart {
 		own, _ := m.taskOf(r.ID)
-		if t, why, ok := m.join(b, own.ID); ok {
+		if t, why, ok := m.join(b, own.ID, r.Role == "lead"); ok {
 			return map[string]string{"task": t.ID, "joined": "true", "note": fmt.Sprintf("not filed anew: %s, so your brief joins open task %s (%q, %s) as added context; if it is different work, file it again with apart", why, t.ID, t.Label(), t.Stage)}, nil
 		}
 	}
@@ -1031,13 +1047,14 @@ func (m *Module) step(t *Task) error {
 	if err != nil {
 		return err
 	}
+	m.postJoins(t, p)
 	switch t.Stage {
 	case StageNew:
 		is, err := m.C.Effects.Forge.CreateIssue(p.Repo, t.Label(), m.issueBody(t, p), marker(t.ID))
 		if err != nil {
 			return err
 		}
-		t.Issue, t.Stage, t.Failures = is, StageQueued, 0
+		t.Issue, t.Stage, t.Failures, t.JoinsPosted = is, StageQueued, 0, min(len(t.Joins), fullJoins) // the body's Known holds those whole
 		m.save(t, fmt.Sprintf("issue #%d", is.Number))
 	case StageQueued, StageIssued:
 		return m.startWorker(t, p)
@@ -1251,7 +1268,7 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 			m.comment(p.Repo, t.Issue.Number, "The worker stopped:\n\n"+t.Reason)
 		}
 		m.C.J.MustAppend("kb.note", map[string]string{"title": "Blocked: " + t.Label(), "text": t.Reason, "project": t.Project, "run": r.ID})
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Blocked: %q (task %s). %s", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(t.Reason, 400)))
+		m.notify(t, fmt.Sprintf("Blocked: %q (task %s). %s", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(t.Reason, 400)))
 	case core.StatusStopped:
 		// Only a stop from outside the pipeline (the control center) ends a
 		// worker's run, so the task is the person's to bring back.
@@ -1388,7 +1405,7 @@ func (m *Module) land(t *Task, p core.Project) error {
 		}
 		t.Stage, t.IssueOpen, t.Failures = StageDone, true, 0
 		m.save(t, "done: everything the worker made was merged as checkpoints")
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q; all of it was merged as checkpoints.", t.Label()))
+		m.notify(t, fmt.Sprintf("Done: %q; all of it was merged as checkpoints.", t.Label()))
 		m.closeIssue(t, p)
 		return nil
 	}
@@ -1485,7 +1502,7 @@ func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
 		t.Stage, t.IssueOpen, t.Failures = StageDone, true, 0
 		m.save(t, "done outside the checkout, no commit:\n"+steps)
 		m.comment(p.Repo, t.Issue.Number, "Done with no commit, so nothing to merge. What ran outside the checkout:\n\n"+steps+"\n\n"+finishText(r))
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q, with no commit, so nothing to merge. What ran:\n%s", t.Label(), steps))
+		m.notify(t, fmt.Sprintf("Done: %q, with no commit, so nothing to merge. What ran:\n%s", t.Label(), steps))
 		m.closeIssue(t, p)
 		return
 	} else if steps != "" {
@@ -1493,7 +1510,7 @@ func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
 	}
 	t.Stage, t.Reason = StageBlocked, "the worker finished without any commits: "+core.Clip(finishText(r), 300)+steps
 	m.save(t, t.Reason)
-	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q finished with no change to merge. %s%s", t.Label(), core.Clip(finishText(r), 300), steps))
+	m.notify(t, fmt.Sprintf("%q finished with no change to merge. %s%s", t.Label(), core.Clip(finishText(r), 300), steps))
 }
 
 // closeIssue closes a done task's issue. A failure is journaled and a later
@@ -1605,7 +1622,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 			m.C.Person.Ask(a)
 		}
 		if who == "person" {
-			m.Chat.Notify(t.Chat, t.Thread, approveNotice(t.Label(), ch.Protected, t.PR.URL))
+			m.notify(t, approveNotice(t.Label(), ch.Protected, t.PR.URL))
 		}
 	case ch.Small || m.C.Effects.Reviewed(p, ch, t.SHA):
 		t.Stage = StageMerging
@@ -2185,7 +2202,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 func (m *Module) merged(t *Task, merged, note string) {
 	t.MergeSHA, t.Stage, t.Reason = merged, StageMerged, ""
 	if t.Checkpoint != "" {
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Merged a checkpoint of %s; its worker keeps going: %s", t.Label(), t.PR.URL))
+		m.notify(t, fmt.Sprintf("Merged a checkpoint of %s; its worker keeps going: %s", t.Label(), t.PR.URL))
 		t.Base, t.Checkpoint, t.Stage = t.Checkpoint, "", StageWorking
 		t.Banked++
 		t.Banks = append(t.Banks, Bank{PR: t.PR, MergeSHA: merged}) // a revert of this merge names its PR
@@ -2199,9 +2216,9 @@ func (m *Module) merged(t *Task, merged, note string) {
 	}
 	m.save(t, note)
 	if t.Kind == "revert" {
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Label(), "Revert: "), t.Lesson))
+		m.notify(t, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Label(), "Revert: "), t.Lesson))
 	} else {
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Merged: %s %s", t.Label(), t.PR.URL))
+		m.notify(t, fmt.Sprintf("Merged: %s %s", t.Label(), t.PR.URL))
 	}
 	if m.OnMerged != nil {
 		m.OnMerged(*t)
@@ -3225,7 +3242,7 @@ func (m *Module) closedPR(t *Task, p core.Project, pr core.PR) (bool, error) {
 	}
 	t.Stage, t.Reason, t.ByPerson = StageStopped, fmt.Sprintf("closed on the forge without merging (PR #%d)", pr.Number), true
 	m.save(t, t.Reason)
-	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q was %s: %s", t.Label(), t.Reason, t.PR.URL))
+	m.notify(t, fmt.Sprintf("%q was %s: %s", t.Label(), t.Reason, t.PR.URL))
 	return true, nil
 }
 
@@ -3317,7 +3334,7 @@ func (m *Module) onPersonMerge(a core.Ask) {
 	}
 	t.Stage, t.Reason, t.ByPerson = StageStopped, strings.TrimSuffix("left open: "+a.Note, ": "), true
 	m.save(&t, t.Reason)
-	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("%q was %s: %s", t.Label(), t.Reason, t.PR.URL))
+	m.notify(&t, fmt.Sprintf("%q was %s: %s", t.Label(), t.Reason, t.PR.URL))
 }
 
 // Stop ends a task on purpose (from the control center).
