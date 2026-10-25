@@ -675,6 +675,10 @@ func (m *Module) afterKept(project, sha string) {
 	alert := func(text string) {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": project, "text": text})
 	}
+	if why := m.C.Effects.Stewardship(p, sha); why != "" {
+		alert("no release at " + core.Short(sha) + ": " + why)
+		return
+	}
 	list, refuse := m.merges(project, sha)
 	if refuse != "" {
 		alert("no release at " + core.Short(sha) + ": " + refuse)
@@ -952,6 +956,10 @@ func (m *Module) Publish() string {
 			continue // an older one stays a pre-release
 		}
 		checked[c.Project]++
+		if why := m.C.Effects.Stewardship(p, c.SHA); why != "" {
+			out = append(out, c.Tag+": not published, "+why)
+			continue
+		}
 		state, why := m.gates(p.Repo, c.SHA)
 		switch state {
 		case "passed":
