@@ -273,14 +273,13 @@ func TestControlCenterFollowsARestart(t *testing.T) {
 	h := start(t)
 	cc := h.c // the control center's client, dialled once at launch
 	for i, stop := range []func(){
-		func() { h.post("/api/shutdown", nil, nil); time.Sleep(time.Second) },
+		func() { h.post("/api/shutdown", nil, nil); h.exited(time.Minute) },
 		h.kill,
 	} {
 		stop()
 		if _, err := cc.State(); err == nil {
 			t.Fatalf("restart %d: the old daemon still answers", i+1)
 		}
-		h.gone(time.Minute)
 		h.launch()
 		start := time.Now()
 		var err error

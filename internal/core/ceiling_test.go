@@ -166,3 +166,42 @@ func TestCeilingNamesWhatMatched(t *testing.T) {
 		t.Fatalf("got %q", why)
 	}
 }
+
+// A hand merge of the Hive's own reviewed fix, or a release cut on the
+// person's own repository, isn't on the ceiling: it routes to a warden, who
+// decides it (the person, 2026-10-24: "the intended behaviour is ALWAYS max
+// autonomy"). These are the asks and scripts sent to the person that night.
+func TestOwnRepoMergeAndReleaseAreTheWardens(t *testing.T) {
+	asks := []string{
+		"Squash-merge PR #524 on ihsan-sa/hive by hand at head 42d1f970, if it is open, MERGEABLE, changes only .hive/goals.md, and every check except test (windows-latest) is green.",
+		"Cut pre-release v0.1.69 on ihsan-sa/hive at the newest main commit whose ci run passed, unless v0.1.69 already exists. Then report the tag, sha and the release workflow's run.",
+	}
+	scripts := []string{
+		`set -eu
+R=ihsan-sa/hive
+J=$(gh pr view 392 -R "$R" --json headRefOid,mergeable,state,statusCheckRollup)
+H=$(printf '%s' "$J" | jq -r .headRefOid)
+BAD=$(printf '%s' "$J" | jq '[.statusCheckRollup[] | (.conclusion // .state) | select(. != "SUCCESS" and . != "NEUTRAL" and . != "SKIPPED")] | length')
+[ "$BAD" -eq 0 ] || exit 1
+gh pr merge 392 -R "$R" --squash --match-head-commit "$H"
+echo "head=$H merge=$(gh pr view 392 -R "$R" --json mergeCommit -q .mergeCommit.oid)"`,
+		`set -u
+R=ihsan-sa/hive
+for SHA in $(gh api "repos/$R/commits?sha=main&per_page=10" --jq ".[].sha"); do
+  ok=$(gh run list -R "$R" --workflow ci.yml --commit "$SHA" --json conclusion --jq ".[0].conclusion")
+  if [ "$ok" = success ]; then TARGET=$SHA; break; fi
+done
+gh release create v0.1.69 -R "$R" --target "$TARGET" --prerelease --title v0.1.69 --notes "Hand-cut pre-release at $TARGET (newest main commit with passing CI)."
+gh run list -R "$R" --workflow release.yml -L 2`,
+	}
+	for _, a := range asks {
+		if why := AskCeiling(nil, a); why != "" || Route("T2", 3, why) != "warden" {
+			t.Errorf("%q is the person's: %s", a, why)
+		}
+	}
+	for _, s := range scripts {
+		if err := CeilingGuard(s, nil, false); err != nil {
+			t.Errorf("%v\n%s", err, s)
+		}
+	}
+}

@@ -20,6 +20,7 @@ Dev runs without touching GitHub or plan usage: `HIVE_HOME=<dir> HIVE_FORGE=loca
 - [docs/status.md](docs/status.md): what's done, in flight, next. Read first.
 - [docs/architecture.md](docs/architecture.md): packages, folder layout, data flow, invariants.
 - [docs/risk.md](docs/risk.md): risk tiers, warden, tribunal and the point of effect.
+- [docs/score.md](docs/score.md): the Hive project's score.
 - [docs/log.md](docs/log.md): decisions.
 - [docs/spec.md](docs/spec.md): the build spec.
 - [LEARNINGS.md](LEARNINGS.md): gotchas.
