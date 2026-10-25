@@ -185,8 +185,9 @@ var keys = []struct {
 
 // hiveID is the shape of the Hive's own task and run ids (261024-225610-163a3bc0d0,
 // r-261025-081832-f0ffb403d4-43295337-0), which prose names after a word
-// like "token:" ("a brokered org leg with no child token: 261024-...").
-var hiveID = regexp.MustCompile(`^([a-z]+-)?[0-9]{6}-[0-9]{6}-[0-9a-f]{10}([-.][0-9a-z.-]*)?$`)
+// like "token:" ("a brokered org leg with no child token: 261024-..."). Only
+// that exact shape: anything more after an id is still read as a value.
+var hiveID = regexp.MustCompile(`^([a-z]+-)?[0-9]{6}-[0-9]{6}-[0-9a-f]{10}(-[0-9a-f]{8}(-[a-z]{1,12})?-[0-9]{1,3})?\.?$`)
 
 // placeholder says a match is no key: a value with few distinct characters
 // (ghp_xxxx..., sk-0000...) or, for a value assigned to a name, one without
