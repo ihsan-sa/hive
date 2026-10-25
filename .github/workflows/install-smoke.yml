@@ -1,5 +1,6 @@
 name: install-smoke
-# A person's first hour on each OS: install with the one-liner from the site,
+# A person's first hour, on Linux only for now (issue #564; the macOS and Windows steps
+# are in git show 65b1651:.github/workflows/install-smoke.yml): install with the one-liner from the site,
 # set up a Hive, ask the lead for a change and wait for it to land, check
 # status and doctor, update, shut down and uninstall. Agents use the fake
 # harness and a local forge, so no Claude or GitHub login is needed. The setup
@@ -25,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest] # Linux only for now (issue #564); the macOS and Windows steps wait for them to come back
+        os: [ubuntu-latest] # Linux only for now (issue #564)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -58,34 +59,15 @@ jobs:
           echo "HIVE_FORGE=local:$RUNNER_TEMP/forge" >> "$GITHUB_ENV"
 
       - name: sandbox
-        if: runner.os == 'Linux'
         run: |
           # The runner's Ubuntu blocks unprivileged user namespaces through AppArmor, as ci.yml's sandboxed run says.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: no sandbox here
-        if: runner.os != 'Linux'
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = Windows ]; then
-            echo "::notice::Agents run unsandboxed: the Windows sandbox is WSL 2, which a hosted runner doesn't have, so the installer's WSL step is skipped too."
-          else
-            echo "::notice::Agents run unsandboxed: the macOS sandbox isn't proven on hosted runners yet."
-          fi
 
       # The one-liner a person pastes, from a shell with no Hive on PATH.
-      - name: install (macOS, Linux)
-        if: runner.os != 'Windows'
+      - name: install
         run: |
           curl -fsSL "$BASE/install.sh" | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: install (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        env:
-          HIVE_SKIP_WSL: '1'
-        run: |
-          irm "$env:BASE/install.ps1" | iex
-          Add-Content $env:GITHUB_PATH (Join-Path $env:LOCALAPPDATA 'Programs\hive')
 
       - name: version
         shell: bash
@@ -98,8 +80,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$HIVE_HOME/.hive" "$RUNNER_TEMP/forge"
-          if [ "$RUNNER_OS" = Linux ]; then sb='"sandbox": "auto"'; else sb='"sandbox": "bare", "bare_accepted": "smoke"'; fi
-          printf '{"harness": "fake", %s, "release_repo": "%s", "auto_update": false, "schedules": {"improve.sweep": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off"}}\n' "$sb" "$GITHUB_REPOSITORY" > "$HIVE_HOME/.hive/config.json"
+          printf '{"harness": "fake", "sandbox": "auto", "release_repo": "%s", "auto_update": false, "schedules": {"improve.sweep": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off"}}\n' "$GITHUB_REPOSITORY" > "$HIVE_HOME/.hive/config.json"
 
       - name: ask the lead for a project and a change, and wait for it to land
         shell: bash
@@ -121,13 +102,13 @@ jobs:
           hive status | tee status.txt
           grep -qF "Hive $TAG " status.txt || { echo "::error::status doesn't report $TAG"; exit 1; }
           grep -q "smoke (local/smoke)" status.txt || { echo "::error::status doesn't list the project"; exit 1; }
-          if [ "$RUNNER_OS" = Linux ] && grep -q '^sandbox: NOT' status.txt; then echo "::error::the sandbox isn't working"; exit 1; fi
+          if grep -q '^sandbox: NOT' status.txt; then echo "::error::the sandbox isn't working"; exit 1; fi
           # Doctor exits 1 here because Claude Code and the GitHub CLI have no login on a runner, by design.
           hive doctor | tee doctor.txt || true
           for want in "✓ workspace" "✓ running"; do
             grep -q "$want" doctor.txt || { echo "::error::doctor didn't say '$want'"; exit 1; }
           done
-          if [ "$RUNNER_OS" = Linux ] && grep -q "✗ sandbox" doctor.txt; then echo "::error::doctor says the sandbox is broken"; exit 1; fi
+          if grep -q "✗ sandbox" doctor.txt; then echo "::error::doctor says the sandbox is broken"; exit 1; fi
           echo "::notice::Autostart isn't set up: the first run's interactive control center registers it, and a runner can't drive it."
 
       - name: update
@@ -137,15 +118,8 @@ jobs:
           echo "$out"
           [ "$out" = "already on $TAG" ] || { echo "::error::update said '$out'"; exit 1; }
 
-      - name: reinstall over the running Hive (macOS, Linux)
-        if: runner.os != 'Windows'
+      - name: reinstall over the running Hive
         run: curl -fsSL "$BASE/install.sh" | sh
-      - name: reinstall over the running Hive (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        env:
-          HIVE_SKIP_WSL: '1'
-        run: irm "$env:BASE/install.ps1" | iex
 
       - name: start again and shut down
         shell: bash
@@ -158,16 +132,8 @@ jobs:
           hive doctor > doctor.txt || true
           grep -q "· not running" doctor.txt || { cat doctor.txt; echo "::error::still running after shutdown"; exit 1; }
 
-      - name: uninstall (macOS, Linux)
-        if: runner.os != 'Windows'
+      - name: uninstall
         run: |
           curl -fsSL "$BASE/uninstall.sh" | sh
           [ ! -e "$HOME/.local/bin/hive" ] || { echo "::error::the binary is still there"; exit 1; }
           [ -d "$HIVE_HOME/.hive" ] || { echo "::error::uninstall removed the person's folder"; exit 1; }
-      - name: uninstall (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          irm "$env:BASE/uninstall.ps1" | iex
-          if (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\hive')) { throw 'the install folder is still there' }
-          if (-not (Test-Path (Join-Path $env:HIVE_HOME '.hive'))) { throw "uninstall removed the person's folder" }
