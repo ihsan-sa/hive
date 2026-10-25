@@ -86,3 +86,49 @@ func TestBlockedOnLandedWorkIsLanded(t *testing.T) {
 		t.Fatalf("PR %s", pr.State)
 	}
 }
+
+// A task whose own PR was merged on the forge (by the person on GitHub, or the
+// Hive's own merge before a restart) isn't taken for one that landed through
+// another task: from testing, the merge path records it as merged and it is
+// measured once, with no "already on main" comment. A checkpoint's merge is
+// banked.
+func TestOwnMergedPRIsNotAlreadyLanded(t *testing.T) {
+	for _, checkpoint := range []bool{false, true} {
+		t.Run(fmt.Sprint("checkpoint=", checkpoint), func(t *testing.T) {
+			m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+			is, _ := f.CreateIssue(p.Repo, "work", "", marker(task.ID))
+			task.Issue = is
+			if checkpoint {
+				task.Checkpoint = task.SHA
+			}
+			m.save(task, "")
+			var merged int
+			m.OnMerged = func(Task) { merged++ }
+			pr := task.PR
+			sha, err := f.MergePR(p.Repo, pr.Number, task.SHA, "work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 5 && merged == 0; i++ {
+				if err := m.step(task); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch {
+			case merged != 1:
+				t.Fatalf("stage %q, measured %d, log %v", task.Stage, merged, task.Log)
+			case checkpoint && (task.Banked != 1 || len(task.Banks) != 1 || task.Banks[0].MergeSHA != sha || task.Stage != StageWorking):
+				t.Fatalf("checkpoint not banked: %+v", task)
+			case !checkpoint && (task.Stage != StageMerged || task.MergeSHA != sha):
+				t.Fatalf("stage %q, merge %s (want %s)", task.Stage, task.MergeSHA, sha)
+			}
+			for _, n := range []int{pr.Number, is.Number} {
+				for _, c := range f.Comments(p.Repo, n) {
+					if strings.Contains(c, "Already on main") {
+						t.Fatalf("#%d told it was already on main: %q", n, c)
+					}
+				}
+			}
+		})
+	}
+}

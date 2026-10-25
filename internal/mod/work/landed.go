@@ -184,25 +184,34 @@ func (m *Module) opLanded(r core.Run, args json.RawMessage) (any, error) {
 // work landed through another task or by hand. Its PR is closed and its issue
 // closed, each naming the main commit that carries the work, and it is done:
 // no further test, read, merge or worker round, and not blocked or stopped.
-// Nothing is measured, as that commit was measured when it merged. A
-// checkpoint main already holds is dropped and the worker keeps going.
+// Nothing is measured, as that commit was measured when it merged. A task
+// whose own PR is merged on the forge is left to the merge path, which records
+// and measures it. A checkpoint main already holds is dropped and the worker
+// keeps going.
 func (m *Module) alreadyLanded(t *Task, p core.Project, main, sha string) (bool, error) {
 	dir := m.C.WS.Project(p.Name)
 	if sha == "" || main == "" || !holds(dir, main, sha) {
 		return false, nil
+	}
+	open := false
+	if t.PR.Number != 0 {
+		pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
+		if err != nil {
+			return true, err
+		}
+		if pr.State == "MERGED" { // its own merge: the merge path records it, banks a checkpoint and measures it
+			return false, nil
+		}
+		open = pr.State == "OPEN"
 	}
 	if t.Checkpoint != "" {
 		return true, m.dropCheckpoint(t, p, "main at "+core.Short(main)+" already has everything in it")
 	}
 	at := carrier(dir, main, sha)
 	say := fmt.Sprintf("Already on main: %s carries this work, so there is nothing left to merge. Closing.", at)
-	if t.PR.Number != 0 {
-		if pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number); err != nil {
+	if open {
+		if err := m.C.Effects.Forge.ClosePR(p.Repo, t.PR.Number, say); err != nil {
 			return true, err
-		} else if pr.State == "OPEN" {
-			if err := m.C.Effects.Forge.ClosePR(p.Repo, t.PR.Number, say); err != nil {
-				return true, err
-			}
 		}
 	}
 	if t.Worker != "" {
