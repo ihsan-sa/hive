@@ -1008,6 +1008,12 @@ func OwnDiff(dir, base, sha string) string {
 	return out
 }
 
+// Between is the diff from one commit to another in p's host clone, "" when
+// git can't tell (one of them isn't fetched).
+func (e *Effects) Between(p Project, from, to string) string {
+	return OwnDiff(e.ws.Project(p.Name), from, to)
+}
+
 // DiffID names a change's own diff (the diff from its merge base with main to
 // its head) so that a head whose own diff is the same gets the same name,
 // whatever main it was brought up to date with. Hunk positions and text

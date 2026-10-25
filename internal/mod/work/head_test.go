@@ -140,14 +140,14 @@ func TestMergeNoCheckRunsIsBounded(t *testing.T) {
 	m, task, p, f := gateRigSeeded(t, false, list, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
 	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerging || alerts(m, "main-red") != 0 {
+	if task.Stage != StageMerging || alerts(m, "no-checks") != 0 {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
 	waitedLong(t, task)
 	m.later = map[string]time.Time{}
 	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerging || !strings.Contains(task.Reason, "lead has been told") || alerts(m, "main-red") != 1 {
-		t.Fatalf("up to date: stage %q, reason %q, %d alerts", task.Stage, task.Reason, alerts(m, "main-red"))
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "lead has been told") || alerts(m, "no-checks") != 1 {
+		t.Fatalf("up to date: stage %q, reason %q, %d alerts", task.Stage, task.Reason, alerts(m, "no-checks"))
 	}
 	old := task.SHA
 	pushMain(t, f, map[string]string{"other.txt": "z"})
@@ -188,8 +188,8 @@ func TestMergeNoCheckRunsWaitSurvivesReload(t *testing.T) {
 	}
 	waitedLong(t, again)
 	mergeOnce(t, m, again, p)
-	if !strings.Contains(again.Reason, "lead has been told") || alerts(m, "main-red") != 1 {
-		t.Fatalf("reason %q, %d alerts", again.Reason, alerts(m, "main-red"))
+	if !strings.Contains(again.Reason, "lead has been told") || alerts(m, "no-checks") != 1 {
+		t.Fatalf("reason %q, %d alerts", again.Reason, alerts(m, "no-checks"))
 	}
 }
 
@@ -230,5 +230,182 @@ func TestForgeChecksCancelledBySupersedingPushRaiseNothing(t *testing.T) {
 	}
 	if task.Reruns[task.SHA] != 0 || alerts(m, "main-red") != 0 || !strings.Contains(task.Reason, "a newer push replaced it") || !strings.Contains(task.Reason, core.Short(newer)) {
 		t.Fatalf("reruns %v, %d alerts, reason %q", task.Reruns, alerts(m, "main-red"), task.Reason)
+	}
+}
+
+// The forge showing an earlier push of the Hive's is waited on only so long:
+// the journal's order of two pushes may not be the forge's, so past
+// noChecksMax the forge's head is adopted. The wait's start survives a
+// reload, as the hold saves nothing new from tick to tick.
+func TestMergeForgeLagIsBounded(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	old := task.SHA
+	if err := m.C.Effects.Push(p, task.Branch, old); err != nil {
+		t.Fatal(err)
+	}
+	newer := pushHead(t, f, task.Branch, map[string]string{"x.txt": "1"})
+	if err := m.C.Effects.Push(p, task.Branch, newer); err != nil {
+		t.Fatal(err)
+	}
+	task.SHA = newer
+	m.save(task, "")
+	must(t, f.RepoPath("me/p"), "update-ref", "refs/heads/"+task.Branch, old) // the forge's order
+	mergeOnce(t, m, task, p)
+	again, _ := m.Get(task.ID)
+	if saved := savedJSON(&again); saved["head_wait_on"] != old || saved["head_wait"] == nil || !strings.Contains(again.Reason, "waiting for the forge to show") {
+		t.Fatalf("the wait's start wasn't saved: %v, reason %q", saved["head_wait_on"], again.Reason)
+	}
+	setJSON(t, &again, map[string]any{"head_wait": time.Now().Add(-noChecksMax - time.Minute)})
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, &again, p)
+	if again.SHA != old || again.Stage != StageTesting || savedJSON(&again)["head_wait_on"] != nil || !logHas(&again, "the forge's order of the pushes") {
+		t.Fatalf("sha %s, stage %q, reason %q", core.Short(again.SHA), again.Stage, again.Reason)
+	}
+}
+
+// savedJSON is the task's saved form.
+func savedJSON(task *Task) map[string]any {
+	raw, _ := json.Marshal(task)
+	var saved map[string]any
+	json.Unmarshal(raw, &saved)
+	return saved
+}
+
+// A task whose own head isn't the Hive's newest push either doesn't wait for
+// the forge to show it: the forge's head, a push of the Hive's, is adopted.
+func TestMergeAdoptsTheForgesHeadWhenNeitherIsNewest(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	old := task.SHA
+	if err := m.C.Effects.Push(p, task.Branch, old); err != nil {
+		t.Fatal(err)
+	}
+	mid := pushHead(t, f, task.Branch, map[string]string{"x.txt": "1"})
+	if err := m.C.Effects.Push(p, task.Branch, mid); err != nil {
+		t.Fatal(err)
+	}
+	newest := pushHead(t, f, task.Branch, map[string]string{"y.txt": "2"})
+	if err := m.C.Effects.Push(p, task.Branch, newest); err != nil {
+		t.Fatal(err)
+	}
+	must(t, f.RepoPath("me/p"), "update-ref", "refs/heads/"+task.Branch, mid)
+	mergeOnce(t, m, task, p)
+	if task.SHA != mid || task.Stage != StageTesting {
+		t.Fatalf("sha %s (forge %s), stage %q, reason %q", core.Short(task.SHA), core.Short(mid), task.Stage, task.Reason)
+	}
+}
+
+// A foreign head goes back with its diff, which the worker can't fetch.
+func TestMergeForeignHeadSendsItsDiff(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	pushHead(t, f, task.Branch, map[string]string{"theirs.txt": "kept by hand"})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || !strings.Contains(task.Findings, "theirs.txt") || !strings.Contains(task.Findings, "+kept by hand") {
+		t.Fatalf("stage %q, findings %q", task.Stage, task.Findings)
+	}
+}
+
+// A push the Hive made to another branch doesn't make a commit the Hive's on
+// this one.
+func TestMergeHeadPushedToAnotherBranchIsForeign(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	head := pushHead(t, f, task.Branch, map[string]string{"theirs.txt": "q"})
+	m.C.Effects.Sync(p)
+	if err := m.C.Effects.Push(p, "hive/other", head); err != nil {
+		t.Fatal(err)
+	}
+	mergeOnce(t, m, task, p)
+	if task.SHA == head || task.Stage != StageWorking || task.Round != 1 {
+		t.Fatalf("sha %s, stage %q, round %d", core.Short(task.SHA), task.Stage, task.Round)
+	}
+}
+
+// A draft whose head moved to the Hive's newest push adopts it rather than
+// waiting as a draft.
+func TestMergeDraftAdoptsTheHivesNewerHead(t *testing.T) {
+	m, task, p, f, next := staleHead(t, false)
+	f.SetDraft(p.Repo, task.PR.Number, true)
+	mergeOnce(t, m, task, p)
+	if task.SHA != next || task.Stage != StageTesting || !task.DraftSince.IsZero() {
+		t.Fatalf("sha %s (head %s), stage %q, reason %q", core.Short(task.SHA), core.Short(next), task.Stage, task.Reason)
+	}
+}
+
+// An adopted head whose own diff changed a path on the security list needs
+// its own security read: the read of the head before doesn't carry.
+func TestMergeAdoptedHeadNeedsItsOwnSecurityRead(t *testing.T) {
+	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	seatSays(t, m, task, core.SeatSecurity, "land")
+	mergeOnce(t, m, task, p) // records the read
+	main, _ := m.C.Effects.Sync(p)
+	read, _ := m.C.Effects.Classify(p, main, task.SHA)
+	if !m.C.Effects.SecurityOK(p.Name, read) {
+		t.Fatal("the first head's read didn't count")
+	}
+	next := pushHead(t, f, task.Branch, map[string]string{"secure/box.go": "package secure\n\nvar Open = true\n"})
+	if err := m.C.Effects.Push(p, task.Branch, next); err != nil {
+		t.Fatal(err)
+	}
+	mergeOnce(t, m, task, p)
+	if task.SHA != next {
+		t.Fatalf("not adopted: %q", task.Reason)
+	}
+	ch, _ := m.C.Effects.Classify(p, main, next)
+	if m.C.Effects.SecurityOK(p.Name, ch) {
+		t.Fatal("the adopted head's new diff on a listed path took the old head's security read")
+	}
+	if _, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: task.PR.Number, SHA: next, Main: main}); err == nil {
+		t.Fatal("Effects.Merge took the adopted head unread")
+	}
+}
+
+// Runs set aside as advisory still show the forge ran CI on the head, so a
+// head with only those isn't raised as having no check run.
+func TestMergeAdvisoryRunsAreChecksRun(t *testing.T) {
+	list := map[string]string{core.SecurityList: "paths = []\nrequired_checks = [\"test (ubuntu-latest)\"]\nadvisory_checks = [\"test (windows-latest)\"]\n"}
+	m, task, p, f, _ := selfRigSeeded(t, list, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPending})
+	setJSON(t, task, map[string]any{"no_checks": time.Now().Add(-noChecksMax - time.Minute), "no_checks_on": task.SHA})
+	mergeOnce(t, m, task, p)
+	if alerts(m, "no-checks") != 0 || strings.Contains(task.Reason, "lead has been told") {
+		t.Fatalf("%d alerts, reason %q", alerts(m, "no-checks"), task.Reason)
+	}
+}
+
+// A task held waiting on main's run of a red check keeps the start of that
+// wait across ticks, each of which loads it afresh.
+func TestMergeMainWaitSurvivesReload(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	rerunSpent(task)
+	m.save(task, "")
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "head/test"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPending})
+	reload := func() *Task {
+		got, ok := m.Get(task.ID)
+		if !ok {
+			t.Fatal("task gone")
+		}
+		m.later = map[string]time.Time{}
+		return &got
+	}
+	again := reload()
+	mergeOnce(t, m, again, p)
+	again = reload()
+	if again.MainWaitOn != again.SHA || again.MainWait.IsZero() || !strings.HasPrefix(again.Reason, "waiting on main: ") {
+		t.Fatalf("the wait's start wasn't saved: on %q at %v, reason %q", again.MainWaitOn, again.MainWait, again.Reason)
+	}
+	start := again.MainWait
+	mergeOnce(t, m, again, p)
+	if again = reload(); !again.MainWait.Equal(start) {
+		t.Fatalf("the wait restarted: %v, then %v", start, again.MainWait)
 	}
 }
