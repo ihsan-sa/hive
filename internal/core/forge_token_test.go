@@ -103,4 +103,18 @@ func TestGhEnvSaysOnceWhenTokenFileUnreadable(t *testing.T) {
 	if strings.Count(out, "\n") != 1 || !strings.Contains(out, missing) || !strings.Contains(out, "hive-rsi-lab") {
 		t.Fatalf("want one line naming %s and hive-rsi-lab, got %q", missing, out)
 	}
+
+	// Readable again, then broken again: said a second time.
+	if err := os.WriteFile(missing, []byte("tok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ghEnv("hive-rsi-lab/x"); len(got) != 1 {
+		t.Fatalf("readable file should give its token, got %v", got)
+	}
+	os.Remove(missing)
+	ghEnv("hive-rsi-lab/x")
+	ghEnv("hive-rsi-lab/x")
+	if n := strings.Count(buf.String(), "\n"); n != 2 {
+		t.Fatalf("a second break should be said once more, got %q", buf.String())
+	}
 }

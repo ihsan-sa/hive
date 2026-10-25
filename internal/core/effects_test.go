@@ -1156,6 +1156,34 @@ func TestLogExcerpt(t *testing.T) {
 	}
 }
 
+// A plain text file or anything under testdata is data a test may read, not
+// prose: its red counts as any code change's.
+func TestProseOnly(t *testing.T) {
+	for files, want := range map[string]bool{
+		".hive/goals.md":                 true,
+		"docs/a.md,.modules/agents/x.md": true,
+		"feature.txt":                    false,
+		"internal/x/testdata/golden.md":  false,
+		"docs/a.md,main.go":              false,
+	} {
+		if got := ProseOnly(strings.Split(files, ",")); got != want {
+			t.Errorf("ProseOnly(%s) = %v, want %v", files, got, want)
+		}
+	}
+}
+
+// ChecksBesidesFailures leaves a failed check out of the required list too,
+// while a required check not yet reported still holds.
+func TestChecksBesidesFailures(t *testing.T) {
+	runs := []CheckRun{{Name: "win", State: CheckFail}, {Name: "linux", State: CheckPass}}
+	if st, _, failed := ChecksBesidesFailures(runs, []string{"win", "linux"}); st != CheckPass || len(failed) != 1 || failed[0] != "win" {
+		t.Fatalf("state %q, failed %v", st, failed)
+	}
+	if st, which, _ := ChecksBesidesFailures(runs, []string{"win", "e2e"}); st != CheckPending || len(which) != 1 || which[0].Name != "e2e" {
+		t.Fatalf("state %q, which %v", st, which)
+	}
+}
+
 // Only the Hive's own project sets a red Windows job aside, and it is then
 // neither counted nor waited on as required; a pending one still counts.
 func TestAdvisory(t *testing.T) {

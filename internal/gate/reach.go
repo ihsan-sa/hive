@@ -26,9 +26,11 @@ var ghAPI = func(token string, args ...string) (string, error) {
 // For a fine-grained token that role is the owner's, not the token's: a
 // token on one org still lists every public repository of its owner, marked
 // admin. So the role only says what the token can't do (it never does more
-// than its owner); what it can do is probed by probeReach.
+// than its owner); what it can do is probed by probeReach. A repository in
+// both listings (an org's, with organization_member) is kept once.
 func listReach(g GitHub, token string) ([]Access, error) {
 	var all []Access
+	seen := map[string]bool{}
 	for _, path := range []string{"/user/repos?per_page=100&affiliation=owner,collaborator,organization_member", "/orgs/" + g.Owner + "/repos?per_page=100&type=all"} {
 		out, err := ghAPI(token, "--paginate", path, "--jq", `.[] | [.full_name, (.permissions.push|tostring), (.permissions.admin|tostring)] | @tsv`)
 		if err != nil {
@@ -36,7 +38,8 @@ func listReach(g GitHub, token string) ([]Access, error) {
 		}
 		for _, line := range strings.Split(out, "\n") {
 			f := strings.Split(strings.TrimSpace(line), "\t")
-			if len(f) == 3 {
+			if len(f) == 3 && !seen[strings.ToLower(f[0])] {
+				seen[strings.ToLower(f[0])] = true
 				all = append(all, Access{Repo: f[0], Push: f[1] == "true", Admin: f[2] == "true"})
 			}
 		}
@@ -69,14 +72,12 @@ func probeReach(org, token string, acc []Access) ([]Access, error) {
 			continue
 		}
 		push, err := p.probe(token, 5, "-X", "POST", "/repos/"+a.Repo+"/git/blobs", "-f", "encoding=utf-8")
-		if err != nil {
-			return nil, err
-		}
 		admin := false
-		if !push {
-			if admin, err = p.probe(token, 1, "/repos/"+a.Repo+"/keys?per_page=1"); err != nil {
-				return nil, err
-			}
+		if err == nil && !push {
+			admin, err = p.probe(token, 1, "/repos/"+a.Repo+"/keys?per_page=1")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("the probe couldn't run on %s, so the check refuses rather than guess (an empty repository answers 409: push a commit to it or move it out of the org): %w", a.Repo, err)
 		}
 		out = append(out, Access{Repo: a.Repo, Push: push, Admin: admin})
 		if push || admin {
@@ -137,7 +138,10 @@ func (p *pacer) probe(token string, points int, args ...string) (bool, error) {
 		case code == "403", code == "404":
 			return false, nil
 		}
-		return false, fmt.Errorf("%w: probing it (gh api %s): %v: %s", ErrReachUnknown, strings.Join(args[1:], " "), err, tail(out, 200))
+		if code == "" {
+			code = "no status"
+		}
+		return false, fmt.Errorf("%w: GitHub answered %s to gh api %s: %v: %s", ErrReachUnknown, code, strings.Join(args[1:], " "), err, tail(out, 200))
 	}
 }
 

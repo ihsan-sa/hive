@@ -223,6 +223,7 @@ func TestControlCenterInTmux(t *testing.T) {
 	for _, d := range []string{home, stubs, forge, gitOnly} {
 		os.MkdirAll(d, 0o755)
 	}
+	t.Cleanup(func() { settle(dir, home) }) // last: after the Hive is shut down
 	stub := func(name, body string) {
 		os.WriteFile(filepath.Join(stubs, name), []byte("#!/bin/sh\necho \""+name+" $*\" >> \"$HOME/stubs.log\"\n"+body), 0o755)
 	}
