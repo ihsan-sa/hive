@@ -27,7 +27,15 @@ var owner = ownerID()
 // record. Run calls it as it ends; the daemon calls it again once the gate
 // has exited, which covers a gate that was killed or crashed. It returns how
 // many processes it ended.
-func Reap(out string) int {
+func Reap(out string) int { return reapTidy(out, true) }
+
+// ReapLeft is Reap for a past run the hourly sweep finds untidy, long after
+// its gate ended: it matches processes by the run's environment and programs,
+// never by working directory alone, so a shell or an editor a person has
+// open in an old run's candidate or control folder is left alone.
+func ReapLeft(out string) int { return reapTidy(out, false) }
+
+func reapTidy(out string, byCwd bool) int {
 	abs, err := filepath.Abs(out)
 	if err != nil || abs == "/" {
 		return 0
@@ -35,7 +43,7 @@ func Reap(out string) int {
 	if fi, err := os.Lstat(abs); err != nil || !fi.IsDir() {
 		return 0 // a symlink in out's place is not a run's folder
 	}
-	n := reap(abs)
+	n := reap(abs, byCwd)
 	tidy(abs)
 	return n
 }

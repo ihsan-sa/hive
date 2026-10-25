@@ -731,3 +731,52 @@ func proven(c *Core, model string) {
 	c.J.MustAppend("run.created", RunSpec{ID: id, Role: "worker", Harness: "open", Model: model})
 	c.J.MustAppend("run.finish", map[string]any{"id": id, "finish": Finish{Status: "done"}})
 }
+
+// A run proves the pick every one of its turns ran on, named as its route
+// names it: one started from its route's first pick proves that pick, and
+// one that moved partway proves neither of the picks it ran on.
+func TestProofIsAWholeRunOnOnePick(t *testing.T) {
+	c, _ := testHive(t)
+	first := Pick{Harness: "claude", Model: "opus"}
+	finish := func(id string, turns ...Pick) {
+		c.J.MustAppend("run.created", RunSpec{ID: id, Role: "worker", Harness: first.Harness, Model: first.Model, Route: []Pick{first}})
+		for i, p := range turns {
+			c.J.MustAppend("run.turn_started", turnStarted{ID: id, Turn: i + 1, Harness: p.Harness, Model: p.Model})
+		}
+		c.J.MustAppend("run.finish", map[string]any{"id": id, "finish": Finish{Status: "done"}})
+	}
+	finish("moved", first, Pick{Harness: "open", Model: "free"})
+	if c.Runs.proven["open:free"] || c.Runs.proven[first.String()] {
+		t.Fatalf("a run that moved partway proved a pick: %v", c.Runs.proven)
+	}
+	finish("whole", first, first)
+	if !c.Runs.proven[first.String()] {
+		t.Fatalf("a run wholly on its route's first pick didn't prove it as the route names it: %v", c.Runs.proven)
+	}
+}
+
+// A worker at a limit that won't fall back to a model no run has finished
+// on says so in its reason, so the person knows a trial there would let it.
+func TestUnprovenFallbackSaysSo(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.Models = map[string]OpenModel{
+		"kimi": {Endpoint: "https://api.moonshot.ai/anthropic", Model: "kimi-k2", API: "anthropic", Key: true},
+		"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"},
+	}
+	c.WS.SaveConfig(cfg)
+	if _, err := c.Runs.Start(RunSpec{ID: "v1", Role: "worker", Harness: "open", Model: "kimi", Brief: "b", Checkout: t.TempDir(),
+		Route: []Pick{{Harness: "open", Model: "kimi"}, {Harness: "open", Model: "free"}}}); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := c.Runs.Get("v1")
+	r.Turn, r.Login = 1, "open:kimi"
+	out := c.WS.TurnOut(r.ID, 1)
+	os.MkdirAll(filepath.Dir(out), 0o755)
+	os.WriteFile(out, []byte(`{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"API Error: Request rejected (429) · Your account org-x request reached organization max RPM: 3","session_id":"s1"}`+"\n"), 0o600)
+	c.Runs.endTurn(r)
+	got, _ := c.Runs.Get("v1")
+	if got.Status != StatusParked || !strings.HasPrefix(got.Reason, "usage limit; resumes") || !strings.Contains(got.Reason, "no worker has finished on open:free yet") {
+		t.Fatalf("a skipped unproven fallback: %s %q", got.Status, got.Reason)
+	}
+}

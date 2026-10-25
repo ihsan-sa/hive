@@ -744,6 +744,9 @@ func (m *Module) afterKept(project, sha string) {
 		}
 	}
 	approved := m.C.Effects.Approved("release", project, sha)
+	if !approved && !m.mainGreen(p, sha) {
+		return
+	}
 	var why []string
 	if len(root) > 0 {
 		why = append(why, strings.Join(root, ", ")+" run with elevated rights and no security read passed them")
@@ -789,7 +792,7 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	next := nextTag(append(tags, core.Version))
-	body := "Released by the Hive after " + core.Short(sha) + " kept its tests and dry run green. It is a pre-release until " +
+	body := "Released by the Hive after " + core.Short(sha) + " kept its tests, main's checks and dry run green. It is a pre-release until " +
 		strings.Join(Gates, " and ") + " pass on that commit; then it is the latest, which installs follow.\n\nWhat was read:\n\n" + manifest.String()
 	if approved {
 		body += "\nThe person released it.\n"
@@ -845,6 +848,95 @@ func (m *Module) afterKept(project, sha string) {
 	m.C.Person.Ask(core.Ask{Kind: "upstream", Ref: head, Project: project,
 		Title:  "Offer the Hive's changes to " + up + "?",
 		Detail: "The Hive released " + next + " on " + p.Repo + ". Yes opens one pull request on " + up + " in your name, which grows with each kept change."})
+}
+
+// mainGreen says whether main's own checks (CI) passed at sha, so the Hive
+// offers or cuts a release only at a commit its CI found green. A failure is
+// raised once and the cut waits for the next kept merge; one still running,
+// that can't start or can't be read is journaled as release.ci_waiting once,
+// and Tick tries the newest such commit again (retryWaiting).
+func (m *Module) mainGreen(p core.Project, sha string) bool {
+	state, which := core.CheckPending, ""
+	if runs, err := m.C.Effects.Forge.Checks(p.Repo, sha); err != nil {
+		which = "can't read its checks (" + core.Clip(err.Error(), 200) + ")"
+	} else {
+		var bad []core.CheckRun
+		state, bad = core.ChecksState(runs, m.C.Effects.RequiredChecks(p, sha))
+		which = core.CheckNames(bad)
+	}
+	last := m.ciState(p.Name)
+	switch state {
+	case core.CheckPass:
+		if last.SHA != sha || last.Kind != "release.ci_passed" {
+			m.C.J.MustAppend("release.ci_passed", map[string]string{"project": p.Name, "sha": sha})
+		}
+		return true
+	case core.CheckFail:
+		if last.SHA != sha || last.Kind != "release.ci_failed" {
+			m.C.J.MustAppend("release.ci_failed", map[string]string{"project": p.Name, "sha": sha, "checks": which})
+			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": p.Name,
+				"text": "no release at " + core.Short(sha) + ": its checks failed on main (" + which + "); the next kept merge whose checks pass is released"})
+		}
+	default:
+		if last.SHA != sha || last.Kind != "release.ci_waiting" {
+			m.C.J.MustAppend("release.ci_waiting", map[string]string{"project": p.Name, "sha": sha, "state": state, "checks": which})
+		}
+	}
+	return false
+}
+
+// ciWait is the newest of a project's release.ci_* events.
+type ciWait struct {
+	Kind, SHA string
+	At        time.Time
+}
+
+// ciState is the project's newest release.ci_* event, its Kind empty when a
+// release was cut since (nothing waits then).
+func (m *Module) ciState(project string) (last ciWait) {
+	m.C.J.Replay(func(e core.Event) {
+		var x struct{ Project, SHA string }
+		if !strings.HasPrefix(e.Kind, "release.ci_") && e.Kind != "hive.released" || e.Decode(&x) != nil || x.Project != project {
+			return
+		}
+		if e.Kind == "hive.released" {
+			last = ciWait{}
+			return
+		}
+		if last.SHA != x.SHA || last.Kind != "release.ci_waiting" {
+			last.At = e.At // a wait keeps the time it began
+		}
+		last.Kind, last.SHA = e.Kind, x.SHA
+	})
+	return last
+}
+
+// retryWaiting tries again the newest kept merge of each self project whose
+// release waits on main's checks; one still waiting after lateAfter is raised
+// once.
+func (m *Module) retryWaiting() {
+	if m.said == nil {
+		m.said = map[string]bool{}
+	}
+	for _, p := range m.C.Projects.List() {
+		if !p.Self {
+			continue
+		}
+		w := m.ciState(p.Name)
+		if w.Kind != "release.ci_waiting" {
+			continue
+		}
+		func() {
+			defer m.lock(p.Name)()
+			m.afterKept(p.Name, w.SHA)
+		}()
+		key := p.Name + "@ci:" + w.SHA
+		if now := m.ciState(p.Name); now.Kind == "release.ci_waiting" && now.SHA == w.SHA && time.Since(w.At) > lateAfter && !m.said[key] {
+			m.said[key] = true
+			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": p.Name,
+				"text": "no release at " + core.Short(w.SHA) + " yet: main's checks there haven't passed after " + lateAfter.String()})
+		}
+	}
 }
 
 // rootRead says who passed a merge's root paths, as Effects.SecurityOK reads
@@ -982,6 +1074,7 @@ func (m *Module) Tick() {
 	}
 	m.published, m.publishing = time.Now(), true
 	go func() {
+		m.retryWaiting()
 		m.Publish()
 		m.pmu.Lock()
 		m.publishing = false

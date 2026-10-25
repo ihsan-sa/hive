@@ -359,8 +359,9 @@ func watchHome(home string, capB int64) func() bool {
 		return over.Load
 	}
 	done := make(chan struct{})
+	every := homeEvery // read here: a test sets it, and the goroutine may outlive the test
 	go func() {
-		t := time.NewTicker(homeEvery)
+		t := time.NewTicker(every)
 		defer t.Stop()
 		for {
 			select {
@@ -433,7 +434,10 @@ func (e *Effects) RemoveCheckout(project, id string) error {
 // goes at once, not after staleAfter: Prune first writes its stop file,
 // which ends that check's sandbox within a second if it still runs (one
 // started by a build that didn't end checks with their daemon). The stop
-// file stays until a later sweep finds it alone and stopGrace old.
+// file stays until a later sweep finds it alone and stopGrace old. So only
+// the daemon calls Prune (the hive.clean job), holding the workspace's lock:
+// any other Effects over the same workspace marks no home live, and its
+// Prune would remove the running daemon's checks' homes.
 func (e *Effects) Prune() string {
 	now := time.Now()
 	var gone []string
@@ -476,7 +480,7 @@ func (e *Effects) Prune() string {
 			}
 		}
 	}
-	sandboxes := sandbox.Sweep()
+	sandboxes := e.sweep()
 	projects, _ := os.ReadDir(e.ws.Gates())
 	for _, pr := range projects {
 		dirs, _ := os.ReadDir(filepath.Join(e.ws.Gates(), pr.Name()))

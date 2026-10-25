@@ -472,6 +472,7 @@ func cmdDaemon(args []string) int {
 		}
 		return 0
 	}
+	os.Unsetenv(sandbox.OwnerEnv) // a check's tag, if a check started this daemon
 	if err := daemon.Run(ws, *waitFor); err != nil {
 		fmt.Fprintln(os.Stderr, core.Cmd+" daemon:", err)
 		if code, ok := err.(daemon.ExitCode); ok {
