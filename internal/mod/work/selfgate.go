@@ -94,7 +94,8 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	key := p.Name + "@" + t.SHA + "@" + main
 	m.mu.Lock()
 	// A run that couldn't run against this main, on any change, holds the
-	// others until its retry: the next would fail the same way.
+	// others until its retry: the next would fail the same way. One whose
+	// cause was that change alone (its own build, its clock) holds nobody.
 	if last, ok := m.gateCantRun[p.Name+"@"+main]; ok && last.Head != t.SHA && time.Now().Before(retryAfter(last)) {
 		m.mu.Unlock()
 		m.hold(t, p, fmt.Sprintf("%s: it couldn't run against main at %s on %s (%s); it tries again after %s", GateWait, core.Short(main), core.Short(last.Head), core.Clip(last.Reason, 300), retryAfter(last).Format("15:04Z")))
@@ -150,9 +151,12 @@ func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
 		if m.gateCantRun == nil {
 			m.gateCantRun = map[string]core.GateResult{}
 		}
-		if g.Outcome == core.GateCantRun {
+		switch {
+		case g.Outcome == core.GateCantRun && g.Alone:
+			// Its own cause: the others at this main go on as they were.
+		case g.Outcome == core.GateCantRun:
 			m.gateCantRun[p.Name+"@"+job.Main] = g
-		} else {
+		default:
 			delete(m.gateCantRun, p.Name+"@"+job.Main)
 		}
 		delete(m.later, id) // the task looks again at once
