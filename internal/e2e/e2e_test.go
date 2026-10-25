@@ -87,9 +87,10 @@ type hive struct {
 	forge *core.Local
 	cmd   *exec.Cmd
 	c     *api.Client
-	env   []string // added to the daemon's environment
-	exe   string   // the binary the daemon runs, when not bin
-	jobs  []func() // end what each daemon left running (Windows)
+	env   []string      // added to the daemon's environment
+	exe   string        // the binary the daemon runs, when not bin
+	jobs  []func()      // end what each daemon left running (Windows)
+	ended chan struct{} // closed once the daemon process last launched has exited
 }
 
 func start(t *testing.T, env ...string) *hive { return startWith(t, bin, nil, env...) }
@@ -208,7 +209,9 @@ func (h *hive) launch() {
 	if contain != nil {
 		h.jobs = append(h.jobs, contain(h.t, cmd.Process.Pid))
 	}
-	go cmd.Wait()
+	ended := make(chan struct{})
+	h.ended = ended
+	go func() { cmd.Wait(); close(ended) }()
 	// A loaded Windows runner has taken over 30 seconds to start one.
 	began := time.Now()
 	for time.Since(began) < 2*time.Minute {
@@ -252,7 +255,20 @@ func binVersion(t *testing.T) string {
 func (h *hive) kill() {
 	if h.cmd != nil && h.cmd.Process != nil {
 		h.cmd.Process.Kill()
-		time.Sleep(300 * time.Millisecond)
+		h.exited(30 * time.Second)
+	}
+}
+
+// exited waits up to d for the daemon last launched to exit, so a new one
+// isn't refused as a second daemon on the workspace (slow on Windows).
+func (h *hive) exited(d time.Duration) {
+	if h.ended == nil {
+		return
+	}
+	select {
+	case <-h.ended:
+	case <-time.After(d):
+		h.t.Logf("the daemon (pid %d) hasn't exited after %v", h.cmd.Process.Pid, d)
 	}
 }
 
