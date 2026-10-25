@@ -329,6 +329,30 @@ func TestQueueHoldsOnlyRealConflicts(t *testing.T) {
 	}
 }
 
+// A brief that waits on a working one's file holds no later brief back: one
+// on its other file starts, rather than waiting for it to go first while it
+// waits in turn (tasks 140258 and 163142, issue #493).
+func TestQueueWaitsNeverChain(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 5
+	m.C.WS.SaveConfig(cfg)
+	a := file(t, m, "cap the checks", "In internal/core/effects.go.")
+	tick(m)
+	b := file(t, m, "rework effects and views", "internal/core/effects.go and internal/tui/views.go.")
+	c := file(t, m, "show the queue", "On the dashboard, internal/tui/views.go.")
+	tick(m)
+	if got := stageOf(t, m, a); got.Stage != StageWorking {
+		t.Fatalf("first brief: stage %q reason %q", got.Stage, got.Reason)
+	}
+	if got := stageOf(t, m, b); got.Stage != StageQueued || !strings.Contains(got.Reason, ") to land: both touch ") {
+		t.Fatalf("overlapping brief: stage %q reason %q", got.Stage, got.Reason)
+	}
+	if got := stageOf(t, m, c); got.Stage != StageWorking {
+		t.Fatalf("brief behind a waiting one: stage %q reason %q, want working", got.Stage, got.Reason)
+	}
+}
+
 // A file a worker has changed in its checkout holds a brief that names it,
 // though the worker's own brief never did; a file it left as it was doesn't,
 // and neither does one the brief names that the worker hasn't touched.
