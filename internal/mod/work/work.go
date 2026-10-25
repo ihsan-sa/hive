@@ -54,10 +54,12 @@ type Task struct {
 	Title   string `json:"title"`
 	Done    string `json:"done"`
 	Known   string `json:"known"`
-	From    string `json:"from"` // run id, person, or sweep run
-	Chat    string `json:"chat,omitempty"`
-	Thread  string `json:"thread,omitempty"`
-	Kind    string `json:"kind"` // work | revert | helper (spawned, no issue)
+	// Joined is the title and done line of each brief that joined it (join.go).
+	Joined []string `json:"joined,omitempty"`
+	From   string   `json:"from"` // run id, person, or sweep run
+	Chat   string   `json:"chat,omitempty"`
+	Thread string   `json:"thread,omitempty"`
+	Kind   string   `json:"kind"` // work | revert | helper (spawned, no issue)
 	// Aim is AimGain for a change aimed at a measurable gain, which on the
 	// Hive's own repository goes through the recursive gate; anything else
 	// (empty included) is a fix, which merges on its tests, checks and reads.
@@ -256,6 +258,7 @@ type Module struct {
 	editCache map[string]editEntry
 	// baseTrees holds the files of the bases working tasks started on (queue.go).
 	baseTrees map[string]map[string]string
+	filing    sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
 	steps     sync.WaitGroup // the steps Tick started that are still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
@@ -342,7 +345,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
-	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim"} (aim: fix, the default, or gain for a change aimed at a measurable gain, which on the Hive's own repository merges only if the recursive gate shows it)`, Fn: m.opBrief})
+	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","apart"} (aim: fix, the default, or gain for a change aimed at a measurable gain, which on the Hive's own repository merges only if the recursive gate shows it); one matching an open task not yet pushed (a test both name, a near-identical title) joins it as added context instead, unless apart`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: []string{"worker", "lead"}, Help: `{"task","aim":"fix"|"gain","why"} (a worker's own task by default) -> sets whether the task is a fix, which merges on its tests, checks and reads, or aims at a measurable gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: steerers, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
 	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: steerers, Help: `{"task"} (a worker's own task by default) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
@@ -428,6 +431,9 @@ type Brief struct {
 	FollowUp string `json:"-"`
 	// Model is the model a trial's worker runs on; only the trial op sets it.
 	Model string `json:"-"`
+	// Apart files an agent's brief as its own task even when it matches an
+	// open one (join.go).
+	Apart bool `json:"apart"`
 }
 
 // File creates a task from a brief.
@@ -539,6 +545,14 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 		return nil, err
 	}
 	b.Chat, b.Thread = m.thread(r)
+	m.filing.Lock() // two briefs on one ask filed at once still find each other
+	defer m.filing.Unlock()
+	if !b.Apart {
+		own, _ := m.taskOf(r.ID)
+		if t, why, ok := m.join(b, own.ID); ok {
+			return map[string]string{"task": t.ID, "joined": "true", "note": fmt.Sprintf("not filed anew: %s, so your brief joins open task %s (%q, %s) as added context; if it is different work, file it again with apart", why, t.ID, t.Label(), t.Stage)}, nil
+		}
+	}
 	t, err := m.File(b)
 	if err != nil {
 		return nil, err
