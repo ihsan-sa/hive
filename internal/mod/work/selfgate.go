@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,16 +42,22 @@ const GateWait = "waiting for the recursive gate"
 var GateTimeout = 2 * time.Hour
 
 // gateRetry is how long a gate that couldn't run waits before it tries again;
-// gateRetrySoon, when the cause may pass (the machine's load, a test that
-// failed on both sides).
+// gateRetrySoon, when the cause may pass (the machine's load, a probe that
+// failed on both sides); gateRetryMain, when main itself fails in the gate:
+// every run at that main would build and test both sides only to fail the
+// same way, so it is remembered until main moves, or this long.
 var (
 	gateRetry     = time.Hour
 	gateRetrySoon = 10 * time.Minute
+	gateRetryMain = 6 * time.Hour
 )
 
 // retryAfter is when a gate that couldn't run tries again.
 func retryAfter(g core.GateResult) time.Time {
-	if g.Transient {
+	switch {
+	case g.MainFails:
+		return g.At.Add(gateRetryMain)
+	case g.Transient:
 		return g.At.Add(gateRetrySoon)
 	}
 	return g.At.Add(gateRetry)
@@ -68,9 +75,10 @@ type gateRun struct {
 
 // recursiveGate holds t, a change to the Hive aimed at a gain, until the
 // recursive gate has kept its head against main; the bool says it waits (or
-// went back). A fix passes straight on.
+// went back). A fix passes straight on, and so does a head the person landed
+// while the gate couldn't judge at main (askGateFix).
 func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, error) {
-	if !p.Self || !t.Gain() {
+	if !p.Self || !t.Gain() || m.C.Effects.Approved("gate", p.Name, t.SHA) {
 		return false, nil
 	}
 	g, ok := m.C.Effects.GateResult(p.Name, t.SHA, main)
@@ -83,6 +91,7 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 			return true, m.gateBack(t, p, g)
 		}
 		m.hold(t, p, fmt.Sprintf("%s, which can't run here (%s); it never merges unjudged, and the gate tries again after %s", GateWait, core.Clip(g.Reason, 300), retryAfter(g).Format("15:04Z")))
+		m.askGateFix(t, p, main, g)
 		return true, nil
 	}
 	// The gate judges what would land: a head that lacks main is brought up
@@ -92,15 +101,16 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		return true, err
 	}
 	key := p.Name + "@" + t.SHA + "@" + main
-	m.mu.Lock()
 	// A run that couldn't run against this main, on any change, holds the
 	// others until its retry: the next would fail the same way. One whose
 	// cause was that change alone (its own build, its clock) holds nobody.
-	if last, ok := m.gateCantRun[p.Name+"@"+main]; ok && last.Head != t.SHA && time.Now().Before(retryAfter(last)) {
-		m.mu.Unlock()
+	// The journal keeps it, so a restart doesn't run it again either.
+	if last, ok := m.C.Effects.GateAtMain(p.Name, main); ok && last.Head != t.SHA && time.Now().Before(retryAfter(last)) {
 		m.hold(t, p, fmt.Sprintf("%s: it couldn't run against main at %s on %s (%s); it tries again after %s", GateWait, core.Short(main), core.Short(last.Head), core.Clip(last.Reason, 300), retryAfter(last).Format("15:04Z")))
+		m.askGateFix(t, p, main, last)
 		return true, nil
 	}
+	m.mu.Lock()
 	cur := m.gating
 	var out string
 	if cur == nil {
@@ -143,21 +153,10 @@ func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
 		if g.Outcome == "" {
 			g.Outcome = core.GateCantRun
 		}
-		m.C.Effects.RecordGate(g) // complete by construction
+		m.C.Effects.RecordGate(g) // complete by construction; GateAtMain follows it
 		m.mu.Lock()
 		if m.gating != nil && m.gating.key == key {
 			m.gating = nil
-		}
-		if m.gateCantRun == nil {
-			m.gateCantRun = map[string]core.GateResult{}
-		}
-		switch {
-		case g.Outcome == core.GateCantRun && g.Alone:
-			// Its own cause: the others at this main go on as they were.
-		case g.Outcome == core.GateCantRun:
-			m.gateCantRun[p.Name+"@"+job.Main] = g
-		default:
-			delete(m.gateCantRun, p.Name+"@"+job.Main)
 		}
 		delete(m.later, id) // the task looks again at once
 		m.mu.Unlock()
@@ -172,6 +171,9 @@ func (m *Module) tellGate(t *Task, p core.Project, g core.GateResult) {
 	}
 	gv := g
 	t.Gate = &gv
+	if g.Outcome != core.GateCantRun {
+		m.settleGateAsk(p, "the recursive gate judges again, on "+core.Short(g.Head)+" against main at "+core.Short(g.Main))
+	}
 	m.save(t, "the recursive gate: "+GateWord(g.Outcome)+": "+core.Clip(g.Reason, 300))
 	var b strings.Builder
 	fmt.Fprintf(&b, "**Recursive gate: %s** on %s against main at %s: %s\n", GateWord(g.Outcome), core.Short(g.Head), core.Short(g.Main), g.Reason)
@@ -192,6 +194,71 @@ func (m *Module) tellGate(t *Task, p core.Project, g core.GateResult) {
 	if g.Outcome == core.GateCantRun {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "gate", "ref": "gate:" + p.Name, "project": p.Name,
 			"text": fmt.Sprintf("the recursive gate can't run in %s, so PR #%d waits unmerged: %s", p.Name, t.PR.Number, core.Clip(g.Reason, 300))})
+	}
+}
+
+// gateFixPaths are the gate's own code: a change to them may be what lets
+// the gate judge again where main itself fails in it.
+var gateFixPaths = []string{"internal/gate/", "internal/app/selfgate.go", "internal/core/selfgate.go", "internal/mod/work/selfgate.go", "cmd/hive/gate.go"}
+
+// askGateFix gives the person one Waiting item, per project, to land t when
+// the gate can't judge at main because main itself fails in it, and t
+// changes the gate: the gate can't judge its own fix, and every change aimed
+// at a gain waits on it. Landing it is the person's call; the score measured
+// after the merge still reverts it if main got worse.
+func (m *Module) askGateFix(t *Task, p core.Project, main string, g core.GateResult) {
+	if !g.MainFails || t.PR.Number == 0 {
+		return
+	}
+	ref := "gate-fix:" + t.ID + "@" + t.SHA
+	for _, a := range m.C.Person.Open() {
+		if a.Kind != "gate" || a.Project != p.Name {
+			continue
+		}
+		if a.Ref == ref || !strings.HasPrefix(a.Ref, "gate-fix:"+t.ID+"@") {
+			return // one item at a time: this one, or another change's
+		}
+		// This change's earlier head: the item moves to the new one.
+		m.C.Person.Answer(a.ID, "keep waiting", "the change moved on to "+core.Short(t.SHA))
+	}
+	ch, err := m.C.Effects.Classify(p, main, t.SHA)
+	if err != nil || !slices.ContainsFunc(ch.Files, func(f string) bool {
+		return slices.ContainsFunc(gateFixPaths, func(pre string) bool { return strings.HasPrefix(f, pre) })
+	}) {
+		return
+	}
+	m.C.Person.Ask(core.Ask{Kind: "gate", Ref: ref, Project: p.Name, From: t.Worker,
+		Title: fmt.Sprintf("Land %q unjudged? The recursive gate can't judge at main %s, and this change is to the gate", t.Label(), core.Short(main)),
+		Detail: fmt.Sprintf("Main itself fails in the gate (on %s: %s), so no change aimed at a gain can be judged until the gate is fixed, and this change touches the gate's code. \"merge\" lands it at exactly %s, without the gate's verdict; the score measured after the merge still reverts it if main got worse. \"keep waiting\" leaves it for the gate. PR: %s",
+			core.Short(g.Head), core.Clip(g.Reason, 500), core.Short(t.SHA), t.PR.URL),
+		Options: []string{"merge", "keep waiting"}})
+}
+
+// onPersonGate lands the head the person said to merge through askGateFix,
+// if it is still the task's head; it goes on through the merge's own checks.
+func (m *Module) onPersonGate(a core.Ask) {
+	if a.Answer != "merge" {
+		return
+	}
+	id, sha, _ := strings.Cut(strings.TrimPrefix(a.Ref, "gate-fix:"), "@")
+	t, ok := m.Get(id)
+	if !ok || t.SHA != sha || t.Stage != StageMerging {
+		return
+	}
+	m.C.Effects.Approve("gate", t.Project, sha)
+	m.mu.Lock()
+	delete(m.later, t.ID) // the task looks again at once
+	m.mu.Unlock()
+	m.save(&t, "the person landed "+core.Short(sha)+" without the recursive gate, which couldn't judge at main")
+}
+
+// settleGateAsk closes the project's open gate item once the gate judges
+// again: the change it names goes back to being judged.
+func (m *Module) settleGateAsk(p core.Project, why string) {
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "gate" && a.Project == p.Name {
+			m.C.Person.Answer(a.ID, "keep waiting", why)
+		}
 	}
 }
 

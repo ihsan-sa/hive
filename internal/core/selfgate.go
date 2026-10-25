@@ -22,11 +22,12 @@ type GateResult struct {
 	Main      string    `json:"main"`
 	Outcome   string    `json:"outcome"`
 	Reason    string    `json:"reason"`
-	Report    string    `json:"report,omitempty"`    // the run's report.md on this machine
-	Sandbox   string    `json:"sandbox,omitempty"`   // what the children ran in
-	Note      string    `json:"note,omitempty"`      // how the run was set up, when the person should hear it (the org leg skipped)
-	Transient bool      `json:"transient,omitempty"` // a can't-run whose cause may pass (the machine's load, a flake on both sides): tried again soon
-	Alone     bool      `json:"alone,omitempty"`     // a can't-run tied to this head alone (preparing its build, out of time): other heads at this main don't wait on it
+	Report    string    `json:"report,omitempty"`     // the run's report.md on this machine
+	Sandbox   string    `json:"sandbox,omitempty"`    // what the children ran in
+	Note      string    `json:"note,omitempty"`       // how the run was set up, when the person should hear it (the org leg skipped)
+	Transient bool      `json:"transient,omitempty"`  // a can't-run whose cause may pass (the machine's load, a flake on both sides): tried again soon
+	Alone     bool      `json:"alone,omitempty"`      // a can't-run tied to this head alone (preparing its build, out of time): other heads at this main don't wait on it
+	MainFails bool      `json:"main_fails,omitempty"` // a can't-run whose cause is main itself (the control fails a step): every head at this main would hit it
 	At        time.Time `json:"at"`
 }
 
@@ -46,6 +47,16 @@ func (e *Effects) RecordGate(g GateResult) error {
 	}
 	e.j.MustAppend("gate.judged", g)
 	return nil
+}
+
+// GateAtMain is the newest run against main at main that couldn't run for a
+// cause other than its own head, until a run there judges again: every
+// other head at that main would fail the same way. It outlives a restart.
+func (e *Effects) GateAtMain(project, main string) (GateResult, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	g, ok := e.gateMains[project+"@"+main]
+	return g, ok
 }
 
 // GateResult is the newest gate verdict on head against main.

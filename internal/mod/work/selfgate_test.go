@@ -175,16 +175,14 @@ func TestSelfGateTransientRetriesSooner(t *testing.T) {
 func TestSelfGateCantRunHoldsOthersAtTheSameMain(t *testing.T) {
 	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	main, _ := m.C.Effects.Sync(p)
-	m.mu.Lock()
-	m.gateCantRun = map[string]core.GateResult{p.Name + "@" + main: {Outcome: core.GateCantRun, Head: "0ther", Main: main, Reason: "no bubblewrap", At: time.Now()}}
-	m.mu.Unlock()
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Outcome: core.GateCantRun, Head: "0ther", Main: main, Reason: "no bubblewrap", At: time.Now()})
 	mergeOnce(t, m, task, p)
 	m.Wait()
 	if len(*jobs) != 0 || !strings.Contains(task.Reason, "couldn't run against main") {
 		t.Fatalf("%d runs, reason %q: want held behind the other change's can't-run", len(*jobs), task.Reason)
 	}
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Outcome: core.GateCantRun, Head: "0ther", Main: main, At: time.Now().Add(-2 * gateRetry)})
 	m.mu.Lock()
-	m.gateCantRun[p.Name+"@"+main] = core.GateResult{Outcome: core.GateCantRun, Head: "0ther", Main: main, At: time.Now().Add(-2 * gateRetry)}
 	delete(m.later, task.ID)
 	m.mu.Unlock()
 	gateOnce(t, m, task, p)
@@ -205,11 +203,80 @@ func TestSelfGateCantRunAloneHoldsNobody(t *testing.T) {
 	}
 	gateOnce(t, m, task, p)
 	main, _ := m.C.Effects.Sync(p)
-	m.mu.Lock()
-	_, held := m.gateCantRun[p.Name+"@"+main]
-	m.mu.Unlock()
+	_, held := m.C.Effects.GateAtMain(p.Name, main)
 	if len(*jobs) != 1 || held {
 		t.Fatalf("%d runs, held %v: want the run recorded without holding others", len(*jobs), held)
+	}
+}
+
+// A gate that can't judge because main itself fails in it is remembered: no
+// other change at that main runs it, and a change to the gate's own code
+// gets the person one Waiting item to land it. "merge" lands that exact
+// head; a gate that judges again closes the item.
+func TestSelfGateMainFailsAsksToLandTheGateFix(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"internal/gate/unit.go": "package gate\n"}, core.GateCantRun)
+	inner := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+		g := inner(ctx, j)
+		g.MainFails = true
+		return g
+	}
+	gateOnce(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	if g, ok := m.C.Effects.GateAtMain(p.Name, main); !ok || !g.MainFails || retryAfter(g).Sub(g.At) != gateRetryMain {
+		t.Fatalf("remembered %+v %v: want main's failure kept for gateRetryMain", g, ok)
+	}
+	var asks []core.Ask
+	for i := 0; i < 3; i++ {
+		m.mu.Lock()
+		delete(m.later, task.ID)
+		m.mu.Unlock()
+		mergeOnce(t, m, task, p)
+		asks = nil
+		for _, a := range m.C.Person.Open() {
+			if a.Kind == "gate" {
+				asks = append(asks, a)
+			}
+		}
+	}
+	m.Wait()
+	if len(*jobs) != 1 || len(asks) != 1 || !strings.Contains(asks[0].Ref, task.SHA) || task.Stage != StageMerging {
+		t.Fatalf("%d runs, asks %+v, stage %q: want one run and one Waiting item naming the head", len(*jobs), asks, task.Stage)
+	}
+	if _, err := m.C.Person.Answer(asks[0].ID, "merge", ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200 && !m.C.Effects.Approved("gate", p.Name, task.SHA); i++ {
+		time.Sleep(10 * time.Millisecond) // the handler runs on its own
+	}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" || len(*jobs) != 1 {
+		t.Fatalf("stage %q, %d runs: want merged at the head the person landed, with no other run", task.Stage, len(*jobs))
+	}
+}
+
+// A change that isn't to the gate gets no Waiting item when main fails in
+// the gate; it waits, and the item an earlier one raised closes once the
+// gate judges again.
+func TestSelfGateMainFailsAsksNothingOfOtherChanges(t *testing.T) {
+	m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
+	inner := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+		g := inner(ctx, j)
+		g.MainFails = true
+		return g
+	}
+	gateOnce(t, m, task, p)
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "gate" {
+			t.Fatalf("asked %+v for a change not to the gate", a)
+		}
+	}
+	old := m.C.Person.Ask(core.Ask{Kind: "gate", Ref: "gate-fix:t0@abc", Project: p.Name, Options: []string{"merge", "keep waiting"}})
+	main, _ := m.C.Effects.Sync(p)
+	m.tellGate(task, p, core.GateResult{Project: p.Name, Head: task.SHA, Main: main, Outcome: core.GateRollback, Reason: "worse", At: time.Now()})
+	if a, _ := m.C.Person.Get(old.ID); a.Answer != "keep waiting" {
+		t.Fatalf("item %+v: want closed once the gate judges again", a)
 	}
 }
 

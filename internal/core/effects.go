@@ -70,6 +70,7 @@ type Effects struct {
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
+	gateMains map[string]GateResult   // project@main -> the newest can't-run there not tied to its head (GateAtMain)
 	homes     map[string]bool         // running checks' homes (disk.go)
 	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
 	disk      DiskUse                 // the last measurement of the Hive's disk use
@@ -160,7 +161,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}, gates: map[string]GateResult{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, gateMains: map[string]GateResult{}}
 	e.Slots = NewSlots(func() int { return ws.LoadConfig().MaxChecks })
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -229,6 +230,14 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var g GateResult
 			ev.Decode(&g)
 			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
+			switch {
+			case g.Outcome == GateCantRun && g.Alone:
+				// Its own cause: the others at this main go on as they were.
+			case g.Outcome == GateCantRun:
+				e.gateMains[g.Project+"@"+g.Main] = g
+			default:
+				delete(e.gateMains, g.Project+"@"+g.Main)
+			}
 		}
 	}
 	j.Replay(apply)
@@ -1175,8 +1184,10 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", fmt.Errorf("refusing to merge %s: it changes %s, on %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), SecurityList, need)
 	}
 	if p.Self && m.Gain {
-		if g, ok := e.GateResult(p.Name, m.SHA, m.Main); !ok || g.Outcome != GateKeep {
-			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate kept it against main at %s", short(m.SHA), short(m.Main))
+		// Or once the person landed that exact head unjudged, the gate
+		// unable to judge at main (the work module's "gate" ask).
+		if g, ok := e.GateResult(p.Name, m.SHA, m.Main); (!ok || g.Outcome != GateKeep) && !e.Approved("gate", p.Name, m.SHA) {
+			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
 		}
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
