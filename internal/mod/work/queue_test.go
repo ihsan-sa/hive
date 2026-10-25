@@ -2,6 +2,7 @@ package work
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -350,6 +351,76 @@ func TestQueueWaitsNeverChain(t *testing.T) {
 	}
 	if got := stageOf(t, m, c); got.Stage != StageWorking {
 		t.Fatalf("brief behind a waiting one: stage %q reason %q, want working", got.Stage, got.Reason)
+	}
+}
+
+// A brief that waits on other briefs' files keeps the time it began, shown
+// in the queue, and past filesTell the lead hears of it once; once it starts
+// the time goes (issue #701: a broad brief passed by later ones mustn't
+// starve unseen).
+func TestQueueTellsLeadOfLongFileWait(t *testing.T) {
+	m := queueRig(t)
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
+	a := file(t, m, "cap the checks", "In internal/core/effects.go.")
+	tick(m)
+	b := file(t, m, "rework effects", "internal/core/effects.go and internal/tui/views.go.")
+	tick(m)
+	got := stageOf(t, m, b)
+	if got.FilesSince.IsZero() || got.FilesTold {
+		t.Fatalf("waiting brief: since %v told %v reason %q", got.FilesSince, got.FilesTold, got.Reason)
+	}
+	since := got.FilesSince
+	tick(m)
+	if got = stageOf(t, m, b); !got.FilesSince.Equal(since) {
+		t.Fatalf("wait start moved from %v to %v", since, got.FilesSince)
+	}
+	got.FilesSince = time.Now().Add(-2 * time.Hour)
+	m.save(&got, "")
+	if q := strings.Join(m.Queue(lead), "\n"); !strings.Contains(q, "on other briefs' files for 2h0m0s") {
+		t.Fatalf("queue doesn't show the wait: %s", q)
+	}
+	old := filesTell
+	filesTell = time.Hour
+	t.Cleanup(func() { filesTell = old })
+	tick(m)
+	tick(m)
+	if got = stageOf(t, m, b); !got.FilesTold || strings.Count(fmt.Sprint(got.Log), "told the lead") != 1 {
+		t.Fatalf("told %v, log %v", got.FilesTold, got.Log)
+	}
+	if _, err := m.opQueue(lead, json.RawMessage(`{"now":["`+b.ID+`"],"why":"it has waited long"}`)); err != nil {
+		t.Fatal(err)
+	}
+	tick(m)
+	if got = stageOf(t, m, b); got.Stage != StageWorking || !got.FilesSince.IsZero() || got.FilesTold {
+		t.Fatalf("started brief: stage %q since %v told %v", got.Stage, got.FilesSince, got.FilesTold)
+	}
+	_ = a
+}
+
+// Moving a brief in line says the next tick weighs it, not the wait the old
+// line gave it, so the reply never shows two briefs waiting on each other
+// (issue #701: 163142 still read "waiting for 140258 to go first" in the
+// reply that put it first, while 140258 already waited for it to land).
+func TestQueueOrderDropsStaleWait(t *testing.T) {
+	m := queueRig(t)
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	file(t, m, "tidy the readme", "")
+	tick(m)
+	b := file(t, m, "rework effects", "internal/core/effects.go.")
+	c := file(t, m, "cap the checks", "In internal/core/effects.go.")
+	tick(m)
+	if got := stageOf(t, m, c); !strings.Contains(got.Reason, b.ID+") to go first") {
+		t.Fatalf("before: %q", got.Reason)
+	}
+	out, err := m.opQueue(lead, json.RawMessage(`{"order":["`+c.ID+`"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := fmt.Sprint(out); strings.Contains(q, b.ID+") to go first") || !strings.Contains(q, "the next tick weighs it") {
+		t.Fatalf("reply shows the old wait: %s", q)
 	}
 }
 

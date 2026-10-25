@@ -16,6 +16,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -165,7 +166,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			if o.Queued() && !start[o.ID] {
 				verb = "to go first"
 			}
-			wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s: both touch %s", o.Label(), o.ID, verb, area)
+			wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s%s%s", o.Label(), o.ID, verb, bothTouch, area)
 			continue // one that waits on another holds no one back, so waits never chain
 		case working >= limit && (!quick || quickWorking > 0 || !plan()):
 			wait[t.ID] = full
@@ -181,6 +182,28 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		ahead = append(ahead, t)
 	}
 	return start, wait
+}
+
+// bothTouch marks a wait on another brief's file (onFiles).
+const bothTouch = ": both touch "
+
+// filesTell is how long a brief waits on other briefs' files before the lead
+// hears of it: since one that waits holds no one back, a broad brief can be
+// passed again and again by later briefs on its other files.
+var filesTell = 4 * time.Hour
+
+// onFiles reports whether why is a wait on another brief's file.
+func onFiles(why string) bool {
+	return strings.HasPrefix(why, "waiting for ") && strings.Contains(why, bothTouch)
+}
+
+// FilesWait is how long t has waited on other briefs' files, tick after
+// tick; 0 when it doesn't.
+func (t Task) FilesWait() time.Duration {
+	if !t.Queued() || t.FilesSince.IsZero() {
+		return 0
+	}
+	return time.Since(t.FilesSince)
 }
 
 // quiet reports whether t's worker keeps ending turns without finishing.
@@ -581,6 +604,16 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 			continue
 		}
 		note := ""
+		held := t.Held
+		if c.held != nil {
+			held = *c.held
+		}
+		if moved := c.order >= 0 && c.order != t.Order || c.now && !t.Now; moved && !held {
+			// Its wait was weighed in the old line (a "to go first" may no
+			// longer hold): the next tick says anew, rather than this reply
+			// showing a wait that looks mutual (issue #701).
+			t.Reason = "moved in line by " + r.ID + "; the next tick weighs it"
+		}
 		if c.order >= 0 && c.order != t.Order {
 			t.Order, note = c.order, fmt.Sprintf("queue place set by %s", r.ID)
 		}
@@ -622,7 +655,11 @@ func (m *Module) Queue(r core.Run) []string {
 	m.inLine(line)
 	out := []string{}
 	for i, t := range line {
-		out = append(out, fmt.Sprintf("%d. %s %q (%s)%s", i+1, t.ID, t.Label(), t.Project, suffixed(t.Reason)))
+		why := t.Reason
+		if d := t.FilesWait(); d >= time.Hour {
+			why = fmt.Sprintf("on other briefs' files for %s, %s", d.Round(time.Minute), why)
+		}
+		out = append(out, fmt.Sprintf("%d. %s %q (%s)%s", i+1, t.ID, t.Label(), t.Project, suffixed(why)))
 	}
 	return out
 }
