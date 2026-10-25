@@ -16,6 +16,7 @@ type Open struct{}
 
 func (Open) Name() string           { return "open" }
 func (Open) CapsSpend()             {} // it stops a turn at its budget, at the model's price (core.OpenModel.Holds refuses a budget it can't count)
+func (Open) ReadOnlyTools()         {}
 func (Open) Program() string        { return "hive" }
 func (Open) LoginCommand() []string { return nil }
 
@@ -74,6 +75,7 @@ type OpenClaude struct{}
 
 func (OpenClaude) Name() string           { return "open" }
 func (OpenClaude) CapsSpend()             {} // a budget only on a model that costs nothing (core.OpenModel.Holds)
+func (OpenClaude) ReadOnlyTools()         {}
 func (OpenClaude) Program() string        { return "claude" }
 func (OpenClaude) LoginCommand() []string { return nil }
 

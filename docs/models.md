@@ -55,9 +55,9 @@ model ids and free tiers):
 | OpenRouter's free models | `https://openrouter.ai/api/v1` | `moonshotai/kimi-k2:free` |
 | Ollama on this machine | `http://127.0.0.1:11434/v1` | `qwen2.5-coder:14b` |
 
-Other harnesses with a CLI of their own (Kimi's CLI, OpenCode, Aider) come in
-as harnesses through the harness-module seam rather than as more code in the
-open agent.
+Other harnesses with a CLI of their own (Cursor, OpenCode, Aider) come in as
+harnesses through the harness-module seam rather than as more code in the open
+agent ([harnesses.md](harnesses.md)).
 
 ## Anthropic-compatible models, on Claude Code
 
