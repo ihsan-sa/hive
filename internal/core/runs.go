@@ -89,8 +89,6 @@ type Run struct {
 	Retries     int             `json:"retries"`
 	Offline     string          `json:"offline,omitempty"` // its last turn couldn't reach its service, and why
 	Nudges      int             `json:"nudges"`
-	Head        string          `json:"head,omitempty"`  // its checkout's HEAD log (size, time) at its last turn's end
-	Still       int             `json:"still,omitempty"` // turns in a row that ended with that log unchanged
 	Login       string          `json:"login,omitempty"` // the login its latest turn went on
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
@@ -439,7 +437,6 @@ type turnEnded struct {
 	Queue       []string        `json:"queue,omitempty"`
 	Offline     string          `json:"offline,omitempty"`     // why the harness couldn't reach its service, in one plain line
 	Unavailable string          `json:"unavailable,omitempty"` // the pick it ran on can't answer (Down), so it moved or waits without a retry's backoff
-	Head        string          `json:"head,omitempty"`        // the checkout's HEAD log at the turn's end
 }
 
 // egressRefused is the hosts a turn's egress proxy refused, and each
@@ -596,11 +593,6 @@ func (rs *Runs) apply(e Event) {
 		if strings.HasPrefix(t.Reason, "nudged") {
 			r.Nudges++
 		}
-		if t.Head == r.Head {
-			r.Still++
-		} else {
-			r.Head, r.Still = t.Head, 0
-		}
 	case "run.queued":
 		var n runNote
 		e.Decode(&n)
@@ -630,7 +622,7 @@ func (rs *Runs) apply(e Event) {
 		e.Decode(&n)
 		r.Status, r.Reason, r.ParkedUntil = n.Status, n.Reason, n.Until
 		if n.Status == StatusQueued || n.Status == StatusIdle {
-			r.Nudges, r.Still = 0, 0
+			r.Nudges = 0
 		}
 	case "run.held":
 		var n runNote
@@ -643,7 +635,7 @@ func (rs *Runs) apply(e Event) {
 		e.Decode(&n)
 		r.Waiting = n.Text
 	case "run.reopened":
-		r.Finish, r.StopAsked, r.Nudges, r.Still = nil, false, 0, 0
+		r.Finish, r.StopAsked, r.Nudges = nil, false, 0
 	}
 }
 
@@ -1198,7 +1190,7 @@ func (rs *Runs) endTurn(r Run) {
 	if tl.Limit != nil {
 		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
 	}
-	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Session: tl.Session, Context: tl.Context, Result: tl.Result, Head: headMark(r.Checkout)}
+	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Session: tl.Session, Context: tl.Context, Result: tl.Result}
 	var dropErr error
 	if HarnessName(r.Harness) == "codex" {
 		dropErr = rs.dropCodexHome(r.ID)
@@ -1304,10 +1296,6 @@ func (rs *Runs) endTurn(r Run) {
 	case cur.Nudges < 2:
 		te.Status, te.Reason = StatusIdle, "nudged: ended a turn without finishing"
 		te.Queue = []string{printedNudge(tl.Result.Text)}
-	case te.Head == cur.Head && cur.Still+1 >= StillTurns:
-		// Its nudges changed nothing: it can't follow the finish protocol,
-		// so it ends and frees its slot instead of holding it quiet.
-		te.Status, te.Reason = StatusBlocked, NoFinish+": it was nudged twice to call `hive agent finish`, and the turns after made no new commit and ended without it"
 	default:
 		te.Status, te.Reason = StatusQuiet, "keeps ending turns without finishing; flagged for the lead"
 	}
@@ -1336,27 +1324,6 @@ func (rs *Runs) endTurn(r Run) {
 			rs.Send(p.ID, fmt.Sprintf("[%s %s finished]\n%s", r.Role, r.ID, account))
 		}
 	}
-}
-
-// NoFinish begins the reason a run ends blocked for never calling finish.
-const NoFinish = "doesn't finish"
-
-// StillTurns is how many turns in a row, the ones answering its two nudges,
-// may end without finishing and without a new commit before a run ends
-// blocked; one that commits stays quiet for the lead.
-const StillTurns = 2
-
-// headMark is the size and time of a checkout's HEAD log, which a commit (or
-// any move of HEAD) changes; it is read without running git there.
-func headMark(checkout string) string {
-	if checkout == "" {
-		return ""
-	}
-	fi, err := os.Lstat(filepath.Join(checkout, ".git", "logs", "HEAD"))
-	if err != nil {
-		return ""
-	}
-	return fmt.Sprint(fi.Size(), " ", fi.ModTime().UnixNano())
 }
 
 func suffix(s string) string {
