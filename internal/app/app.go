@@ -154,7 +154,7 @@ func (a *App) Clean() string {
 			return 0
 		}
 		tidied++
-		return gate.Reap(out)
+		return gate.ReapLeft(out)
 	}); tidied > 0 {
 		did = append(did, fmt.Sprintf("tidied %d gate run(s) a dead gate left, ending %d process(es)", tidied, n))
 	}

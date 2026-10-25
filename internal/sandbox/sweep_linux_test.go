@@ -42,12 +42,43 @@ func TestSweepRemovesDeadSandboxesRuntime(t *testing.T) {
 	os.WriteFile(spec, []byte("{}"), 0o600)
 	stale := time.Now().Add(-2 * specStale)
 	os.Chtimes(spec, stale, stale)
-	if n := Sweep(); n < 3 {
+	if n := SweepIn(t.TempDir(), os.TempDir()); n < 3 {
 		t.Errorf("swept %d, want at least 3", n)
 	}
 	for p, want := range map[string]bool{live: true, dead: false, legacy: false, fresh: true, spec: false} {
 		if _, err := os.Stat(p); (err == nil) != want {
 			t.Errorf("%s exists %v, want %v", filepath.Base(p), err == nil, want)
+		}
+	}
+}
+
+// Two sweeps at once, as two Hives on one machine run them over the shared
+// /dev/shm, never take a runtime folder whose sandbox still holds its lock.
+func TestConcurrentSweepsKeepLiveSandboxes(t *testing.T) {
+	shm := t.TempDir()
+	old := time.Now().Add(-2 * runtimeGrace)
+	var live []string
+	for _, name := range []string{"a", "b"} {
+		rt := filepath.Join(shm, "hive-sbx-"+name)
+		os.MkdirAll(rt, 0o755)
+		held, err := holdRuntime(rt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer held.Close()
+		os.Chtimes(rt, old, old)
+		live = append(live, rt)
+	}
+	done := make(chan int)
+	for i := 0; i < 2; i++ {
+		go func() { done <- SweepIn(shm, t.TempDir()) }()
+	}
+	if n := <-done + <-done; n != 0 {
+		t.Errorf("swept %d live sandboxes' folders", n)
+	}
+	for _, rt := range live {
+		if _, err := os.Stat(rt); err != nil {
+			t.Errorf("%s went while its sandbox runs", filepath.Base(rt))
 		}
 	}
 }

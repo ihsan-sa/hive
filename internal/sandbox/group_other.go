@@ -11,7 +11,9 @@ import (
 // returns: a check's background job, or a test's helper that outlived it.
 // runSync starts the command as the leader of a group of its own (syncAttr).
 // A daemon that called setsid has left the group; inside the Linux sandbox
-// the namespace's pid 1 ends those with it.
+// the namespace's pid 1 ends those with it. runSync ends the group while the
+// leader is still unreaped where it can (exited), so the group's id can't
+// have passed to another process.
 func group(pid int) func(kill bool) {
 	return func(kill bool) {
 		if kill {

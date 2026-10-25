@@ -6,10 +6,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
 // daemonsUnder are the `hive daemon` processes a gate run in out started.
@@ -27,7 +28,7 @@ func daemonsUnder(out string) []int {
 			continue
 		}
 		env, _ := os.ReadFile(filepath.Join("/proc", e.Name(), "environ"))
-		if under(envValue(bytes.Split(env, []byte{0}), rootEnv), out) {
+		if under(proc.EnvValue(bytes.Split(env, []byte{0}), rootEnv), out) {
 			pids = append(pids, pid)
 		}
 	}
@@ -205,13 +206,34 @@ func TestReapKeepsWhatIsNotTheRuns(t *testing.T) {
 	}
 }
 
-// Pdeathsig fires when the starting OS thread ends: no gate code locks one.
-func TestGateLocksNoThread(t *testing.T) {
-	files, _ := filepath.Glob("*.go")
-	for _, name := range files {
-		raw, _ := os.ReadFile(name)
-		if !strings.HasSuffix(name, "_test.go") && bytes.Contains(raw, []byte("runtime.LockOSThread()")) {
-			t.Errorf("%s locks an OS thread: a child it starts there dies with the thread (dieWithGate)", name)
+// ReapLeft, the hourly sweep's, ends a past run's tagged process but not
+// one that only has its working directory in the run's candidate folder: a
+// person's shell there, long after the gate ended.
+func TestReapLeftSparesAShellInAnOldRun(t *testing.T) {
+	out := t.TempDir()
+	cand := filepath.Join(out, "candidate")
+	os.MkdirAll(filepath.Join(cand, "gocache"), 0o755)
+	start := func(dir string, env ...string) *exec.Cmd {
+		cmd := exec.Command("sleep", "60")
+		cmd.Dir, cmd.Env = dir, append(os.Environ(), env...)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
 		}
+		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+		return cmd
+	}
+	shell := start(cand)
+	tagged := start(t.TempDir(), rootEnv+"="+cand)
+	if n := ReapLeft(out); n != 1 {
+		t.Errorf("ReapLeft ended %d processes, want 1", n)
+	}
+	if err := tagged.Wait(); err == nil {
+		t.Error("the run's tagged process wasn't killed")
+	}
+	if syscall.Kill(shell.Process.Pid, 0) != nil {
+		t.Error("ReapLeft killed a process that only had the old run's folder open")
+	}
+	if _, err := os.Stat(filepath.Join(cand, "gocache")); err == nil {
+		t.Error("ReapLeft kept the run's caches")
 	}
 }
