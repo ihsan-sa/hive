@@ -15,7 +15,7 @@ func TestGitMaintenanceStaysInForeground(t *testing.T) {
 	dir := t.TempDir()
 	trace := filepath.Join(dir, "trace")
 	forge := &Local{Dir: filepath.Join(dir, "forge")}
-	if _, err := forge.EnsureRepo("me/p", ""); err != nil {
+	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {
 		t.Fatal(err)
 	}
 	co := filepath.Join(dir, "co")

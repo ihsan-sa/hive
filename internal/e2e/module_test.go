@@ -102,7 +102,7 @@ func TestModuleSeam(t *testing.T) {
 	f.WriteString("exit\n")
 	f.Close()
 	h.wait("the module to be started again", minute, func(st api.State) bool {
-		return h.count("module.started") >= 2 && running(st)
+		return h.countWith("module.started", `"module":"echo"`) >= 2 && running(st)
 	})
 
 	// An update is read again before it runs.
@@ -114,7 +114,7 @@ func TestModuleSeam(t *testing.T) {
 	}
 	h.post("/api/job", map[string]string{"name": "modules.update"}, nil)
 	h.wait("the update to be reviewed and started", 2*minute, func(st api.State) bool {
-		return h.count("module.reviewed") >= 2 && h.count("module.started") >= 3 && running(st)
+		return h.count("module.reviewed") >= 2 && h.countWith("module.started", `"module":"echo"`) >= 3 && running(st)
 	})
 
 	// Granted only another project, it reaches neither this one nor the lead.
@@ -202,14 +202,63 @@ func (h *hive) journaled(kind, text string) bool {
 	return false
 }
 
-func (h *hive) count(kind string) int {
+func (h *hive) count(kind string) int { return h.countWith(kind, "") }
+
+// countWith counts events of kind that carry text in their data.
+func (h *hive) countWith(kind, text string) int {
 	var evs []core.Event
 	h.c.Do("GET", "/api/events", nil, &evs)
 	n := 0
 	for _, e := range evs {
-		if e.Kind == kind {
+		if e.Kind == kind && strings.Contains(string(e.Data), text) {
 			n++
 		}
 	}
 	return n
+}
+
+// The kb module's dream program is a module program like any other: the
+// daemon starts it from the module's folder, its schedule reaches it as
+// module.scheduled (here run at once, as the control center's run-now does),
+// and the pass it sends back merges two notes with one title into one living
+// note, committed in the knowledge base and journaled as kb.dreamed.
+func TestKBDreams(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	t.Cleanup(func() {
+		h.c.Do("POST", "/api/shutdown", nil, nil)
+		for i := 0; i < 50 && h.c.Ping(); i++ {
+			time.Sleep(200 * time.Millisecond)
+		}
+		time.Sleep(time.Second)
+	})
+	kb := h.ws.KB()
+	for name, body := range map[string]string{
+		"sandbox-gate.md":   "---\ntitle: Sandbox gate\ntags: gate\nproject: \ndate: 2026-10-23\nrun: w-1\n---\n\nThe gate needs bubblewrap.\n",
+		"sandbox-gate-2.md": "---\ntitle: Sandbox gate\ntags: gate\nproject: \ndate: 2026-10-24\nrun: w-2\n---\n\nThe gate runs under bubblewrap now.\n",
+	} {
+		os.WriteFile(filepath.Join(kb, name), []byte(body), 0o644)
+	}
+	core.Git(kb, "add", "sandbox-gate.md", "sandbox-gate-2.md")
+	core.Git(kb, "commit", "-q", "-m", "two notes")
+	h.wait("the dream program to run", 3*minute, func(st api.State) bool {
+		for _, m := range st.Modules {
+			if m.Name == "kb" {
+				return m.Status == "running"
+			}
+		}
+		return false
+	})
+	h.post("/api/job", map[string]string{"name": "kb.dream"}, nil)
+	h.wait("a dream pass", 3*minute, func(api.State) bool { return h.count("kb.dreamed") > 0 })
+	if !h.journaled("kb.dreamed", `"into":"sandbox-gate.md"`) {
+		t.Fatal("the pass didn't merge the two notes")
+	}
+	living, _ := os.ReadFile(filepath.Join(kb, "sandbox-gate.md"))
+	if core.Exists(filepath.Join(kb, "sandbox-gate-2.md")) || !strings.Contains(string(living), "runs under bubblewrap now") || !strings.Contains(string(living), "needs bubblewrap") {
+		t.Fatalf("living note:\n%s", living)
+	}
+	if out, _ := core.Git(kb, "log", "-1", "--format=%s"); !strings.HasPrefix(out, "Dream (scheduled)") {
+		t.Fatalf("last commit %q", out)
+	}
 }

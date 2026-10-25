@@ -36,7 +36,8 @@ type Module struct {
 func New(c *core.Core, ch *chat.Module, w *work.Module, im *improve.Module) *Module {
 	m := &Module{C: c, Chat: ch, Work: w, Improve: im, retry: map[string]time.Time{}, lastErr: map[string]string{}}
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","sharing","self"} (sharing: shared (default), private (its agents read the shared Hive, no one else sees it) or isolated (walled both ways); self: the Hive's own code, in the person's fork of it)`, Fn: m.opCreate})
+	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","sharing","visibility","self"} (visibility: private (default) or public: public in public_owners (Hive-RSI-Lab) is made and the person told, public anywhere else waits for their yes; an existing repository keeps its visibility, changing it is the person's; sharing: shared (default), private (its agents read the shared Hive, no one else sees it) or isolated (walled both ways); self: the Hive's own code, in the person's fork of it)`, Fn: m.opCreate})
+	c.Person.Handle("public_repo", m.onPublic)
 	ops.Register(core.Op{Name: "status", Help: `{} -> projects, work in flight, scores, what waits on the person, the live settings (models, autonomy, schedules)`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.Status(r), nil }})
 	return m
 }
@@ -47,8 +48,9 @@ type Spec struct {
 	Repo        string `json:"repo"`
 	Description string `json:"description"`
 	Goals       string `json:"goals"`
-	Sharing     string `json:"sharing"`  // shared, private or isolated (docs/sharing.md)
-	Isolated    bool   `json:"isolated"` // the older form of "sharing": "isolated"
+	Sharing     string `json:"sharing"`    // shared, private or isolated (docs/sharing.md)
+	Visibility  string `json:"visibility"` // the repository's, if the Hive makes it: private ("") or public
+	Isolated    bool   `json:"isolated"`   // the older form of "sharing": "isolated"
 	Demo        bool   `json:"demo"`
 	Self        bool   `json:"self"`
 }
@@ -75,11 +77,74 @@ func (m *Module) opCreate(r core.Run, args json.RawMessage) (any, error) {
 	if s.Self {
 		s.Repo = "" // an agent never picks where the Hive's own code lives
 	}
+	if err := checkVisibility(s.Visibility); err != nil {
+		return nil, err
+	}
+	// A public repository is outward in the person's name: only where they
+	// said public repositories go is one made without their yes.
+	if s.Visibility == "public" && !m.publicAllowed(s.Repo) {
+		ref, _ := json.Marshal(s)
+		a := m.C.Person.Ask(core.Ask{Kind: "public_repo", Ref: string(ref), From: r.ID, Project: r.Project,
+			Title:  "Make a public repository for " + orDefault(s.Repo, s.Name) + "?",
+			Detail: "An agent asked create_project for a public repository outside " + strings.Join(m.C.WS.LoadConfig().PublicOwners, ", ") + ". Yes creates the project with it public; no leaves it uncreated. Description: " + core.Clip(s.Description, 300)})
+		return map[string]any{"waiting_on_person": a.ID, "text": "a public repository outside public_owners is the person's call: asked them; the project is made if they say yes, and you'll get a message"}, nil
+	}
 	p, created, err := m.Create(s)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"project": p.Name, "repo": p.Repo, "new_repository": created, "chat": "project:" + p.Name}, nil
+	out := map[string]any{"project": p.Name, "repo": p.Repo, "new_repository": created, "visibility": orDefault(p.Visibility, "as it was (adopted)"), "chat": "project:" + p.Name}
+	if s.Visibility == "public" && created {
+		m.C.Person.Tell(core.Ask{Title: "Made a public repository: " + p.Repo, Ref: p.Repo, From: r.ID, Project: p.Name,
+			Detail: "create_project made " + p.Repo + " public, in an owner listed in public_owners. " + core.Clip(p.Description, 300)})
+	} else if s.Visibility == "public" && !created {
+		out["note"] = "the repository already existed, so it keeps its visibility: changing an existing repository's visibility is the person's"
+	}
+	return out, nil
+}
+
+func checkVisibility(v string) error {
+	if v != "" && v != "private" && v != "public" {
+		return fmt.Errorf("visibility is private or public, not %q", v)
+	}
+	return nil
+}
+
+// publicAllowed says whether repo's owner is one the person said public
+// repositories may go in. A bare name lives in the person's own account,
+// which isn't one unless they list it.
+func (m *Module) publicAllowed(repo string) bool {
+	owner, _, ok := strings.Cut(repo, "/")
+	if !ok {
+		return false
+	}
+	return slices.ContainsFunc(m.C.WS.LoadConfig().PublicOwners, func(o string) bool { return strings.EqualFold(o, owner) })
+}
+
+// onPublic makes the project a public_repo ask was about, once the person says yes.
+func (m *Module) onPublic(a core.Ask) {
+	var s Spec
+	if json.Unmarshal([]byte(a.Ref), &s) != nil {
+		return
+	}
+	if a.Answer != "yes" {
+		if a.From != "" {
+			m.C.Runs.Send(a.From, "The person said no to a public repository for "+orDefault(s.Repo, s.Name)+"; nothing was made.")
+		}
+		return
+	}
+	p, created, err := m.Create(s)
+	if a.From == "" {
+		return
+	}
+	switch {
+	case err != nil:
+		m.C.Runs.Send(a.From, "The person said yes to a public repository for "+orDefault(s.Repo, s.Name)+", but making the project failed: "+err.Error())
+	case !created:
+		m.C.Runs.Send(a.From, "The person said yes; "+p.Repo+" already existed, so it keeps its visibility. Project "+p.Name+" is set up.")
+	default:
+		m.C.Runs.Send(a.From, "The person said yes: "+p.Repo+" is made public and project "+p.Name+" is set up (chat project:"+p.Name+").")
+	}
 }
 
 // Create makes (or adopts) the repository, clones it, sets it up, and opens
@@ -96,6 +161,10 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 	if err := level.SetSharing(s.Sharing); err != nil {
 		return core.Project{}, false, err
 	}
+	if err := checkVisibility(s.Visibility); err != nil {
+		return core.Project{}, false, err
+	}
+	public := s.Visibility == "public"
 	f := m.C.Effects.Forge
 	if s.Demo && s.Name == "" {
 		s.Name = "textkit"
@@ -135,7 +204,7 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 			return p, false, err
 		}
 	}
-	created, err := f.EnsureRepo(s.Repo, core.Clip(s.Description, 300))
+	created, err := f.EnsureRepo(s.Repo, core.Clip(s.Description, 300), public)
 	// The demo never adopts a repository with history: take the next free name.
 	for i := 2; s.Demo && err == nil && !created && i < 10; i++ {
 		if empty, _ := f.IsEmpty(s.Repo); empty {
@@ -144,7 +213,7 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 		owner := strings.SplitN(s.Repo, "/", 2)[0]
 		s.Name = fmt.Sprintf("textkit-%d", i)
 		s.Repo = owner + "/" + s.Name
-		created, err = f.EnsureRepo(s.Repo, core.Clip(s.Description, 300))
+		created, err = f.EnsureRepo(s.Repo, core.Clip(s.Description, 300), public)
 	}
 	if err != nil {
 		return core.Project{}, false, err
@@ -152,7 +221,7 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 	p := core.Project{Name: m.C.Projects.UniqueName(s.Name, s.Repo), Repo: s.Repo, Branch: f.DefaultBranch(s.Repo),
 		Description: s.Description, Isolated: level.Isolated, Private: level.Private, Self: s.Self, Demo: s.Demo, Goals: s.Goals}
 	if created {
-		p.Branch = "main"
+		p.Branch, p.Visibility = "main", orDefault(s.Visibility, "private")
 	}
 	if p, err = m.C.Projects.Add(p); err != nil {
 		return p, created, err
@@ -236,12 +305,13 @@ func orDefault(s, d string) string {
 
 // ProjectStatus is one project's summary.
 type ProjectStatus struct {
-	Name     string   `json:"name"`
-	Repo     string   `json:"repo"`
-	Best     *float64 `json:"best_score,omitempty"`
-	Hold     string   `json:"merge_hold,omitempty"` // the person's hold on its merges
-	InFlight []string `json:"in_flight"`
-	Recent   []string `json:"recent"`
+	Name       string   `json:"name"`
+	Repo       string   `json:"repo"`
+	Visibility string   `json:"visibility,omitempty"` // public or private, when the Hive made the repository
+	Best       *float64 `json:"best_score,omitempty"`
+	Hold       string   `json:"merge_hold,omitempty"` // the person's hold on its merges
+	InFlight   []string `json:"in_flight"`
+	Recent     []string `json:"recent"`
 }
 
 // Status summarizes the Hive for agent r, leaving out the projects it may
@@ -253,7 +323,7 @@ func (m *Module) Status(r core.Run) map[string]any {
 		if m.C.Runs.Walled(r, p.Name) != nil {
 			continue
 		}
-		st := ProjectStatus{Name: p.Name, Repo: p.Repo}
+		st := ProjectStatus{Name: p.Name, Repo: p.Repo, Visibility: p.Visibility}
 		if b, ok := m.Improve.Best(p.Name); ok {
 			st.Best = &b
 		}
@@ -290,9 +360,11 @@ func (m *Module) Status(r core.Run) map[string]any {
 	}
 	cfg := m.C.WS.LoadConfig()
 	running, waitingChecks := m.C.Effects.Slots.State()
+	pace := m.Work.Pace()
 	return map[string]any{"projects": ps, "waiting_on_person": waiting, "config": View(cfg),
-		"queue":  m.Work.Queue(r), // briefs waiting for a worker, in the order they start; the queue op reorders or holds them
-		"checks": fmt.Sprintf("%d running, %d waiting (max_checks %d)", len(running), len(waitingChecks), cfg.MaxChecks)}
+		"queue":   m.Work.Queue(r), // briefs waiting for a worker, in the order they start; the queue op reorders or holds them
+		"checks":  fmt.Sprintf("%d running, %d waiting (at once: %s; max_checks %d, 0 is no ceiling)", len(running), len(waitingChecks), pace["checks"], cfg.MaxChecks),
+		"workers": fmt.Sprintf("at once: %s; max_workers %d, 0 is no ceiling", pace["workers"], cfg.MaxWorkers)}
 }
 
 // ConfigView is the part of the config every agent may read, so it can say
