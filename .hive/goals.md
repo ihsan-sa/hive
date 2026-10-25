@@ -25,7 +25,7 @@ Anything may be used for this: nested sandboxed Hives, rollback to an earlier ve
 Where it stands (2026-10-24 ~16:00Z): the gate exists and is wired in, but the first milestone is not met yet: nothing has been kept by the gate because it beat the current Hive.
 
 - The gate is #146, merged at ~14:03Z. It must run on this machine, and this machine forbids a sandbox inside a sandbox (kernel.apparmor_restrict_unprivileged_userns=1 refuses nested bwrap), so the child Hive runs in a sibling sandbox, not a nested one. Under real bubblewrap in ci, TestBwrapGateKeepsAndRollsBack kept a trivial candidate (a tie is allowed) and rolled back a broken one, and the recursion worked.
-- Since #390 (14:56Z) the gate runs on every change to the Hive. Every gate run since has kept nothing, because the gate's own sandbox fails tests that pass elsewhere (the fix is task 261024-155233-2ea1efb0f2). The project still has no score for the child to beat (task 261024-073323-39b67b4b25, still open). The milestone run itself is task 261024-142208-25ca663e99.
+- Since #390 (14:56Z) the gate runs on every change to the Hive. Every gate run since has kept nothing, for two causes: some candidates failed tests in the gate's own sandbox that pass elsewhere (the fix is task 261024-155233-2ea1efb0f2), and others ran but were not better than the current Hive, with nothing moving beyond the noise (6b7f01027, 233ff59a2, fe55aed96, dbef4678f in .hive/lessons.md). The project still has no score for the child to beat (task 261024-073323-39b67b4b25, still open). The milestone run itself is task 261024-142208-25ca663e99.
 - The org leg: the test org is Hive-RSI-Lab, and the contents-only token for the child exists at /home/hive/h0-gate.token. The org owns the fork Hive-RSI-Lab/hive, which the gate's reach check must handle.
 - Alongside: Codex can be picked per role (#398); the optional modules have their own projects (dispatch: Hive-RSI-Lab/hive-dispatch, deck: Hive-RSI-Lab/hive-deck, trials: Hive-RSI-Lab/hive-trials); the Claude login renews itself (#323).
 
@@ -37,7 +37,7 @@ So a change to a path on `tests/LANDING-security.toml` gets its security read fr
 
 ## Standing asks
 
-What the person has asked that holds from now on, in their words where they gave them:
+What the person has asked that holds from now on, in their words where they gave them. A line may also hold answers given on the person's behalf, credited to whoever gave them:
 
 - **Build against the essay** at ihsan.cc/writing/the-hive: its text is in [docs/the-hive-essay.md](../docs/the-hive-essay.md), and where the Hive departs from it today is listed, as known gaps, at the end of [docs/spec.md](../docs/spec.md).
 - **A light core.** "the core should be as lightweight as possible"; "The rest goes into modules", "not the core".
