@@ -1530,7 +1530,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		// module keeps its own service login), and Private (the daemon's token,
 		// every run's home and CODEX_HOME). All are folders, so what lands in
 		// them mid-turn lands under the cover.
-		for _, d := range []string{filepath.Join(rs.ws.Hive(), "logins"), filepath.Join(rs.ws.Hive(), "modules"), rs.ws.Private()} {
+		for _, d := range rs.ws.Covered() {
 			os.MkdirAll(d, 0o700)
 			mounts = append(mounts, sandbox.Mount{Host: d, Inside: "/hive/state/" + filepath.Base(d), Hide: true})
 		}
@@ -1644,7 +1644,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
 		Stdin: promptFile, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
-		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Guard: rs.ws.Guarded(), UID: os.Getuid(), GID: os.Getgid(),
+		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Guard: rs.ws.Guarded(), Cover: rs.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(),
 	}, nil
 }
 
