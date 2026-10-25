@@ -658,19 +658,53 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	var manifest strings.Builder
-	var root, unread []string
+	var root, unread, unknown, unrecorded []string
 	for _, mg := range list {
-		if reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff); len(reads) > 0 {
-			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
-		} else {
-			unread = append(unread, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
-			fmt.Fprintf(&manifest, "- #%d at %s, not read\n", mg.PR, core.Short(mg.SHA))
+		reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff)
+		name := fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA))
+		switch {
+		case mg.Hand && mg.PR != 0:
+			name = fmt.Sprintf("#%d, hand-merged at %s", mg.PR, core.Short(mg.MergeSHA))
+		case mg.Hand:
+			name = "hand-merged at " + core.Short(mg.MergeSHA)
+		}
+		switch {
+		case mg.Hand && mg.Record == "":
+			unrecorded = append(unrecorded, core.Short(mg.MergeSHA))
+			fmt.Fprintf(&manifest, "- %s, with no record of whose authority\n", name)
+		case mg.Hand:
+			fmt.Fprintf(&manifest, "- %s on %s", name, mg.Record)
+			if len(reads) > 0 {
+				fmt.Fprintf(&manifest, ", read by %s", strings.Join(reads, ", "))
+			}
+			manifest.WriteString("\n")
+		case len(reads) > 0:
+			fmt.Fprintf(&manifest, "- %s, read by %s\n", name, strings.Join(reads, ", "))
+		default:
+			unread = append(unread, name)
+			fmt.Fprintf(&manifest, "- %s, not read\n", name)
+		}
+		if mg.Unread {
+			unknown = append(unknown, core.Short(mg.MergeSHA))
 		}
 		root = append(root, mg.Root...)
 	}
 	approved := m.C.Effects.Approved("release", project, sha)
-	if (len(root) > 0 || len(unread) > 0) && !approved {
-		m.hold(project, sha, root, unread, manifest.String())
+	var why []string
+	if len(root) > 0 {
+		why = append(why, strings.Join(root, ", ")+" run with elevated rights")
+	}
+	if len(unread) > 0 {
+		why = append(why, strings.Join(unread, ", ")+" merged without a read of its exact commit")
+	}
+	if len(unrecorded) > 0 {
+		why = append(why, strings.Join(unrecorded, ", ")+" merged outside the Hive with no recorded authority (no warden request names it)")
+	}
+	if len(unknown) > 0 {
+		why = append(why, "what "+strings.Join(unknown, ", ")+" changed can't be read")
+	}
+	if len(why) > 0 && !approved {
+		m.hold(project, sha, why, manifest.String())
 		return
 	}
 	cfg := m.C.Effects.Config(p, sha)
@@ -763,21 +797,15 @@ func (m *Module) onUpstream(a core.Ask) {
 	m.C.J.MustAppend("hive.offered", map[string]string{"project": a.Project, "pr": pr.URL})
 }
 
-// hold asks the person to release sha, and answers any older release ask for
-// the project, which this one covers, so a stale answer can't release.
-func (m *Module) hold(project, sha string, root, unread []string, manifest string) {
+// hold asks the person to release sha, for the reasons in why, and answers
+// any older release ask for the project, which this one covers, so a stale
+// answer can't release.
+func (m *Module) hold(project, sha string, why []string, manifest string) {
 	ref := project + "@" + sha
 	for _, a := range m.C.Person.Open() {
 		if a.Kind == "release" && a.Project == project && a.Ref != ref {
 			m.C.Person.Answer(a.ID, "hold", "the Hive, not the person: superseded, a release ask at "+core.Short(sha)+" covers it")
 		}
-	}
-	var why []string
-	if len(root) > 0 {
-		why = append(why, strings.Join(root, ", ")+" run with elevated rights")
-	}
-	if len(unread) > 0 {
-		why = append(why, strings.Join(unread, ", ")+" merged without a read of its exact commit")
 	}
 	m.C.Person.Ask(core.Ask{Kind: "release", Ref: ref, Project: project,
 		Title:  "Release the Hive at " + core.Short(sha) + "? " + strings.Join(why, "; "),
@@ -805,15 +833,49 @@ type merge struct {
 	MergeSHA string `json:"merge_sha"`
 	Root     []string
 	Diff     string // the head's own diff (core.DiffID), whose reads carry to it
+	// Hand is a commit on main the Hive's pipeline didn't merge (a warden's
+	// or the person's hand merge); Record names the authority it was merged
+	// on, "" for none, and Unread says what it changed couldn't be read.
+	Hand   bool   `json:"-"`
+	Record string `json:"-"`
+	Unread bool   `json:"-"`
 }
 
 // merges lists the project's merges after the one its last release was cut
-// at, up to the one that made upTo. refuse says why there is nothing to
-// release: a release already covers upTo, or upTo is no merge the journal saw.
+// at, up to the one that made upTo. upTo may be a commit on main the Hive
+// didn't merge: it comes last, after the Hive's merges main held before it,
+// marked Hand with the authority it was merged on. refuse says why there is
+// nothing to release: a release already covers upTo, or upTo is neither a
+// merge the journal saw nor a commit on main.
 func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 	var all []merge
 	from, at := 0, -1
+	released := map[string]bool{}
+	prs := map[string]int{} // a task's merge commit -> its PR, for hand merges
+	reqs := map[string]request{}
+	var order []string
 	m.C.J.Replay(func(e core.Event) {
+		switch e.Kind {
+		case "task.saved":
+			var t struct {
+				Project  string
+				MergeSHA string `json:"merge_sha"`
+				PR       struct{ Number int }
+			}
+			if e.Decode(&t) == nil && t.Project == project && t.MergeSHA != "" && t.PR.Number != 0 {
+				prs[t.MergeSHA] = t.PR.Number
+			}
+			return
+		case "risk.saved":
+			var r request
+			if e.Decode(&r) == nil && (r.Project == "" || r.Project == project) {
+				if _, seen := reqs[r.ID]; !seen {
+					order = append(order, r.ID)
+				}
+				reqs[r.ID] = r
+			}
+			return
+		}
 		var x struct {
 			merge
 			Project string
@@ -828,6 +890,7 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 			}
 			return
 		}
+		released[x.SHA] = true
 		i := slices.IndexFunc(all, func(mg merge) bool { return mg.MergeSHA == x.SHA })
 		if i < 0 {
 			i = len(all) - 1 // a release at a commit this journal didn't merge
@@ -837,10 +900,83 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 	if at >= 0 && at < from {
 		return nil, "a newer release already covers it"
 	}
-	if at < 0 {
-		return nil, "it is not a merge the Hive made"
+	if at >= 0 {
+		return all[from : at+1], ""
 	}
-	return all[from : at+1], ""
+	if released[upTo] {
+		return nil, "a release already covers it"
+	}
+	// Not the Hive's merge: it must be on main's line, after the merges
+	// listed before it.
+	p, _ := m.C.Projects.Get(project)
+	dir := m.C.WS.Project(project)
+	raw, err := core.Git(dir, "rev-list", "--first-parent", "refs/remotes/origin/"+p.Branch)
+	line := strings.Fields(raw)
+	i := slices.Index(line, upTo)
+	if err != nil || i < 0 {
+		return nil, "it is not a merge the Hive made, nor a commit on main"
+	}
+	before := map[string]bool{}
+	for _, sha := range line[i+1:] {
+		before[sha] = true
+	}
+	at = -1
+	for j := len(all) - 1; j >= 0; j-- {
+		if before[all[j].MergeSHA] {
+			at = j
+			break
+		}
+	}
+	if at+1 < from {
+		return nil, "a newer release already covers it"
+	}
+	hand := merge{MergeSHA: upTo, PR: prs[upTo], Hand: true, Record: authority(reqs, order, upTo)}
+	if ch, err := m.C.Effects.Classify(p, upTo+"^", upTo); err != nil {
+		hand.Unread = true
+	} else {
+		hand.Root, hand.Diff = ch.Root, ch.DiffID
+	}
+	return append(slices.Clone(all[from:at+1]), hand), ""
+}
+
+// request is what release reads of a warden request (the risk module's).
+type request struct {
+	ID, Project, Want, Steps, Script, Output, State, Outcome, Decision string
+	PersonOK                                                           bool `json:"person_ok"`
+}
+
+// authority names the first request, of those journalled in order, that ran
+// to the end and names sha (its full name, or a prefix of 7 or more in its
+// want, steps, script or output, where a merge reports its commit), or ""
+// when none does.
+func authority(reqs map[string]request, order []string, sha string) string {
+	for _, id := range order {
+		r := reqs[id]
+		if r.State != "done" || r.Outcome != "done" || !names(r.Want+"\n"+r.Steps+"\n"+r.Script+"\n"+r.Output, sha) {
+			continue
+		}
+		by := "a warden"
+		switch {
+		case r.PersonOK:
+			by = "the person"
+		case r.Decision == "tribunal":
+			by = "a tribunal"
+		}
+		return "warden request " + id + ", approved by " + by
+	}
+	return ""
+}
+
+// names says text names the commit sha: a hex word of 7 or more that starts it.
+func names(text, sha string) bool {
+	for _, w := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f')
+	}) {
+		if len(w) >= 7 && strings.HasPrefix(sha, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // Gates are the workflows that must pass in a release's own runs, on its

@@ -487,7 +487,7 @@ func TestSupersedeIsTheHives(t *testing.T) {
 	}
 }
 
-// A sha no journaled merge made covers nothing: no release, no approval.
+// A sha no journaled merge made, and not on main, covers nothing: no release, no approval.
 func TestUnknownMergeRefused(t *testing.T) {
 	m, n, merged, land := selfHive(t)
 	merged(1, "a1", "m1")
@@ -871,5 +871,95 @@ func TestReleaseSaysAnUnreadTag(t *testing.T) {
 	n.tagErr = nil
 	if got := m.Publish(); got != "published v0.0.1" {
 		t.Fatalf("Publish said %q once the tag read", got)
+	}
+}
+
+// mainLine gives self project "hive" a clone whose main is a base commit and
+// then one commit per file named, each a first-parent step, and returns those
+// commits' shas.
+func mainLine(t *testing.T, m *Module, files ...string) []string {
+	dir := m.C.WS.Project("hive")
+	os.MkdirAll(dir, 0o755)
+	git := func(args ...string) string {
+		out, err := core.Git(dir, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "base")
+	var shas []string
+	for _, f := range files {
+		body := f
+		if f == ".hive/project.json" {
+			body = `{"root": ["install/"]}`
+		}
+		os.MkdirAll(filepath.Dir(filepath.Join(dir, f)), 0o755)
+		os.WriteFile(filepath.Join(dir, f), []byte(body), 0o644)
+		git("add", "-A")
+		git("commit", "-q", "-m", f)
+		shas = append(shas, git("rev-parse", "HEAD"))
+	}
+	git("update-ref", "refs/remotes/origin/main", "HEAD")
+	return shas
+}
+
+// A commit on main a warden merged by hand, on a request that names it, is
+// released with the Hive's merges before it, listed as hand-merged with that
+// record, and once only.
+func TestHandMergeOnRecordReleases(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	c := mainLine(t, m, "one.go", "gate.go")
+	merged(1, "a1", c[0])
+	land("a1", "r1")
+	m.C.J.MustAppend("risk.saved", map[string]any{"id": "req-other", "want": "merge PR #9", "state": "done", "outcome": "done", "output": "deadbeefcafe"})
+	m.C.J.MustAppend("risk.saved", map[string]any{"id": "req-1", "want": "merge PR #429 by hand", "state": "running", "person_ok": true})
+	m.C.J.MustAppend("risk.saved", map[string]any{"id": "req-1", "want": "merge PR #429 by hand", "state": "done", "outcome": "done", "person_ok": true,
+		"output": `{"mergeCommit":{"oid":"` + c[1] + `"},"state":"MERGED"}`})
+	m.C.J.MustAppend("task.saved", map[string]any{"id": "t1", "project": "hive", "merge_sha": c[1], "pr": map[string]any{"number": 429}})
+	m.AfterKept("hive", c[1])
+	body := n.got["v0.0.1"]
+	if !strings.Contains(body, "#1 at a1, read by r1") || !strings.Contains(body, "#429, hand-merged at "+core.Short(c[1])+" on warden request req-1, approved by the person") {
+		t.Fatalf("the release should name the Hive's merge and the hand merge with its record: %v %+v", n.got, m.C.Person.Open())
+	}
+	m.AfterKept("hive", c[1])
+	if n.calls != 1 {
+		t.Fatalf("a second keep of the hand merge cut another release: %v", n.got)
+	}
+}
+
+// A hand merge with no request naming it waits for the person, and their
+// word releases it, saying it went out with no record.
+func TestHandMergeWithoutRecordWaits(t *testing.T) {
+	m, n, _, _ := selfHive(t)
+	c := mainLine(t, m, "one.go")
+	m.C.J.MustAppend("risk.saved", map[string]any{"id": "req-1", "want": "merge " + c[0][:10], "state": "declined", "outcome": "decline"})
+	m.AfterKept("hive", c[0])
+	asks := m.C.Person.Open()
+	if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, "no recorded authority") {
+		t.Fatalf("an unrecorded hand merge should wait for the person: %v %+v", n.got, asks)
+	}
+	asks[0].Answer = "release"
+	m.OnPerson(asks[0])
+	body := n.got["v0.0.1"]
+	if !strings.Contains(body, "hand-merged at "+core.Short(c[0])+", with no record") || !strings.Contains(body, "The person released it") {
+		t.Fatalf("the release should say it went out on the person's word: %q", body)
+	}
+}
+
+// A hand merge a warden alone approved still waits for the person when it
+// changes a root path.
+func TestHandMergeOfARootPathWaits(t *testing.T) {
+	m, n, _, _ := selfHive(t)
+	c := mainLine(t, m, ".hive/project.json", "install/root.sh")
+	m.C.J.MustAppend("risk.saved", map[string]any{"id": "req-1", "steps": "gh pr merge 7; it merged at " + c[1][:9], "state": "done", "outcome": "done"})
+	list, refuse := m.merges("hive", c[1])
+	if refuse != "" || len(list) != 1 || list[0].Record != "warden request req-1, approved by a warden" || !slices.Contains(list[0].Root, "install/root.sh") {
+		t.Fatalf("the hand merge, its record and root path: %q %+v", refuse, list)
+	}
+	m.AfterKept("hive", c[1])
+	if len(n.got) != 0 || len(m.C.Person.Open()) != 1 {
+		t.Fatalf("a root hand merge released without the person: %v", n.got)
 	}
 }
