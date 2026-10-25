@@ -63,6 +63,9 @@ type Forge interface {
 	FindPR(repo, head string) (PR, bool, error)
 	GetPR(repo string, number int) (PR, error)
 	MergePR(repo string, number int, sha, subject string) (string, error)
+	// ReadyPR takes a draft out of draft, only while its head is exactly
+	// sha; one already ready is left as it is.
+	ReadyPR(repo string, number int, sha string) error
 	ClosePR(repo string, number int, comment string) error
 	// SetDraft marks an open pull request a draft or ready for review.
 	SetDraft(repo string, number int, draft bool) error
@@ -145,9 +148,9 @@ type GitHub struct{}
 func (GitHub) Name() string { return "github" }
 
 // OwnerTokens maps a lower-cased repo owner to a file holding the GitHub token
-// for that owner. An owner not listed (or whose file is unreadable) uses gh's
-// own login. Both tokens act as the same user, so gh cannot hold them as two
-// logins; the effects process passes GH_TOKEN per call instead.
+// for that owner. An owner not listed (or whose file is unreadable, said once
+// on stderr) uses gh's own login. Both tokens act as the same user, so gh
+// cannot hold them as two logins; the effects process passes GH_TOKEN per call instead.
 var OwnerTokens = map[string]string{
 	"hive-rsi-lab": "/home/hive/h0-org.token",
 }
@@ -162,18 +165,30 @@ func ghEnv(repo string) []string {
 	if owner == "" || strings.ContainsAny(owner, `/\.`) {
 		return nil
 	}
-	for _, path := range []string{credential(owner + ".token"), OwnerTokens[owner]} {
+	for i, path := range []string{credential(owner + ".token"), OwnerTokens[owner]} {
 		if path == "" {
 			continue
 		}
-		if b, err := os.ReadFile(path); err == nil {
+		b, err := os.ReadFile(path)
+		if err == nil {
 			if tok := strings.TrimSpace(string(b)); tok != "" {
 				return []string{"GH_TOKEN=" + tok}
+			}
+		} else if i == 1 { // a listed file, unlike a credential, is meant to be there
+			if _, said := unreadTokens.LoadOrStore(owner+"\x00"+path, true); !said {
+				fmt.Fprintf(tokenLog, "%s token file %s for %s can't be read, using gh's own login: %v\n", time.Now().Format(time.RFC3339), path, owner, err)
 			}
 		}
 	}
 	return nil
 }
+
+// unreadTokens holds each owner and listed token file already said to be
+// unreadable, so the fallback is said once, not on every gh call.
+var unreadTokens sync.Map
+
+// tokenLog is where that is said. Tests replace it.
+var tokenLog io.Writer = os.Stderr
 
 // credential is the path of a systemd credential the service was given, or
 // "" outside one.
@@ -603,6 +618,28 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 		time.Sleep(2 * time.Second)
 	}
 	return "", errors.New("merge reported success but the PR is not merged yet")
+}
+
+// ReadyPR marks a draft ready for review with the token for repo's owner,
+// refusing once its head moved past sha. The merge after it is bound to sha
+// by --match-head-commit, so a push between the look and the ready can't
+// merge what wasn't read.
+func (g GitHub) ReadyPR(repo string, number int, sha string) error {
+	p, err := g.GetPR(repo, number)
+	if err != nil {
+		return err
+	}
+	if p.State != "OPEN" {
+		return fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
+	}
+	if p.HeadSHA != sha {
+		return fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+	}
+	if !p.Draft {
+		return nil
+	}
+	_, err = gh(repo, "pr", "ready", strconv.Itoa(number), "-R", repo)
+	return err
 }
 
 func (GitHub) ClosePR(repo string, number int, comment string) error {

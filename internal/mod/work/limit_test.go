@@ -147,15 +147,3 @@ func TestStatusCommentEditedEachRound(t *testing.T) {
 		t.Fatalf("status comments %q", status)
 	}
 }
-
-// A task that gave up merging its draft, from before drafts waited, comes
-// back to be checked again and then waits for its read.
-func TestDraftStopsComeBack(t *testing.T) {
-	m, _, task, _ := noCommitRig(t, 0)
-	task.PR = core.PR{Number: 7}
-	m.giveUp(task, gaveUpOnErrors+"gh pr merge 7: GraphQL: Pull Request is still a draft (mergePullRequest)")
-	m.revive()
-	if got, _ := m.Get(task.ID); got.Stage != StageLanding || got.Reason != "" || !logged(&got, "a draft now waits") {
-		t.Fatalf("not brought back: stage %q, reason %q", got.Stage, got.Reason)
-	}
-}

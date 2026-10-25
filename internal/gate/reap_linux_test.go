@@ -111,6 +111,9 @@ func TestReapKeepsWhatIsNotTheRuns(t *testing.T) {
 	person := start(out)
 	inRoot := start(filepath.Join(cand, "hive"))
 	tagged := start(t.TempDir(), rootEnv+"="+cand)
+	if !Untidy(out) {
+		t.Error("a run with its caches left reads as tidy")
+	}
 	if n := Reap(out); n != 2 {
 		t.Errorf("Reap ended %d processes, want 2", n)
 	}
@@ -127,6 +130,9 @@ func TestReapKeepsWhatIsNotTheRuns(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cand, "hive", ".hive", "daemon.log")); err != nil {
 		t.Errorf("the child's daemon.log went: %v", err)
+	}
+	if Untidy(out) {
+		t.Error("a reaped run still reads as untidy")
 	}
 }
 

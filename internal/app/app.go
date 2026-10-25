@@ -3,11 +3,13 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	hive "github.com/ihsan-sa/hive-standalone-build"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
@@ -123,6 +125,16 @@ func (a *App) Clean() string {
 		if s != "" {
 			did = append(did, s)
 		}
+	}
+	tidied := 0
+	if n := a.Work.TidyGates(func(out string) int {
+		if !gate.Untidy(out) {
+			return 0
+		}
+		tidied++
+		return gate.Reap(out)
+	}); tidied > 0 {
+		did = append(did, fmt.Sprintf("tidied %d gate run(s) a dead gate left, ending %d process(es)", tidied, n))
 	}
 	d := a.C.Effects.MeasureDisk()
 	if len(did) == 0 {
