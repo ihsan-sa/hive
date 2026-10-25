@@ -22,6 +22,7 @@ Dev runs without touching GitHub or plan usage: `HIVE_HOME=<dir> HIVE_FORGE=loca
 - [docs/architecture.md](docs/architecture.md): packages, folder layout, data flow, invariants.
 - [docs/core.md](docs/core.md): what the core is, its measured size, and what moves out to modules. New functionality goes in a module unless it says core.
 - [docs/risk.md](docs/risk.md): risk tiers, warden, tribunal and the point of effect.
+- [docs/priority.md](docs/priority.md): leads answer however busy the machine is: the strain exemption, leads-first ticks and nice levels.
 - [docs/score.md](docs/score.md): the Hive project's score.
 - [docs/log.md](docs/log.md): decisions.
 - [docs/spec.md](docs/spec.md): the build spec.
