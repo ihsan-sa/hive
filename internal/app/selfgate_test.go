@@ -35,10 +35,10 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 	ws.SaveConfig(cfg)
 	script := filepath.Join(dir, "hive-gate.sh")
 	os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" > \"$GATE_ARGS\"\nps -o nice= -p $$ > \"$GATE_ARGS.nice\" 2>/dev/null\n[ -n \"$GATE_REPORT\" ] && cp \"$GATE_REPORT\" report.json\nexit $GATE_EXIT\n"), 0o755)
-	old, oldChild := gateExe, gateChildFile
+	old, oldOrg := gateExe, core.OwnerTokens["hive-rsi-lab"]
 	gateExe = func() (string, error) { return script, nil }
-	gateChildFile = filepath.Join(dir, "no-such.token")
-	t.Cleanup(func() { gateExe, gateChildFile = old, oldChild })
+	core.OwnerTokens["hive-rsi-lab"] = filepath.Join(dir, "no-such.token")
+	t.Cleanup(func() { gateExe, core.OwnerTokens["hive-rsi-lab"] = old, oldOrg })
 	args := filepath.Join(dir, "args")
 	t.Setenv("GATE_ARGS", args)
 	run := runGate(ws)
@@ -146,24 +146,32 @@ func checkGateNice(t *testing.T, label, path string, own int) {
 	}
 }
 
-// With both tokens here, a children's token the gate refuses runs the gate on
-// a local org and says why, rather than leave the change unjudged.
-func TestGateOrgFallsBackToLocal(t *testing.T) {
+// With the org's token here the gate runs on the test org, holding no second
+// token (each child gets a deploy key on its own repository); without it, on
+// a local org.
+func TestGateOrgArgs(t *testing.T) {
 	dir := t.TempDir()
-	org, child := filepath.Join(dir, "org.token"), filepath.Join(dir, "child.token")
-	os.WriteFile(org, []byte("org-secret\n"), 0o600)
-	os.WriteFile(child, []byte("classic-token\n"), 0o600)
-	oldOrg, oldChild := core.OwnerTokens["hive-rsi-lab"], gateChildFile
-	core.OwnerTokens["hive-rsi-lab"], gateChildFile = org, child
-	t.Cleanup(func() { core.OwnerTokens["hive-rsi-lab"], gateChildFile = oldOrg, oldChild; reachOK.at = time.Time{} })
-	reachOK.at = time.Time{}
-	args, note := orgArgs(work.GateJob{Project: core.Project{Repo: "ihsan-sa/hive"}, Out: dir})
-	if args[0] != "--local-org" || !strings.Contains(note, "fine-grained") {
-		t.Fatalf("args %q, note %q", args, note)
+	org := filepath.Join(dir, "org.token")
+	old := core.OwnerTokens["hive-rsi-lab"]
+	core.OwnerTokens["hive-rsi-lab"] = org
+	t.Cleanup(func() { core.OwnerTokens["hive-rsi-lab"] = old })
+	if args := orgArgs(work.GateJob{Out: dir}); args[0] != "--local-org" {
+		t.Fatalf("no org token: args %q", args)
 	}
-	os.WriteFile(child, []byte("org-secret\n"), 0o600)
-	reachOK.at = time.Time{}
-	if args, note = orgArgs(work.GateJob{Out: dir}); args[0] != "--local-org" || !strings.Contains(note, "same token") {
-		t.Fatalf("args %q, note %q", args, note)
+	os.WriteFile(org, []byte("org-secret\n"), 0o600)
+	args := orgArgs(work.GateJob{Out: dir})
+	if strings.Join(args, " ") != "--org Hive-RSI-Lab --org-token-file "+org {
+		t.Fatalf("args %q", args)
+	}
+}
+
+// The gate's own fallback from the org to a local one reaches the PR as a note.
+func TestGateOrgNoteReachesTheResult(t *testing.T) {
+	dir := t.TempDir()
+	rep := gate.Report{Head: "h", Base: "m", OrgNote: "The gate ran on a local org instead of Hive-RSI-Lab: no"}
+	raw, _ := json.Marshal(rep)
+	os.WriteFile(filepath.Join(dir, "report.json"), raw, 0o644)
+	if g := readReport(work.GateJob{Out: dir, Head: "h", Main: "m"}, nil, nil); g.Note != rep.OrgNote {
+		t.Fatalf("note %q", g.Note)
 	}
 }
