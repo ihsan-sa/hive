@@ -3,6 +3,7 @@ package improve
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -48,5 +49,35 @@ func TestJudgeWeighsOnlyTheScore(t *testing.T) {
 	ms := merge(map[string]string{".hive/project.json": `{"test": "true", "score": {"command": "sh ./score.sh", "direction": "higher"}}`, "n.txt": "2\n"})
 	if ms.Kept || asked != 1 || !strings.Contains(ms.Note, "no usable answer") {
 		t.Fatalf("no judgement: %+v, asked %d", ms, asked)
+	}
+}
+
+// A later merge measured while the judge decided keeps its baseline: the
+// judge's keep of the earlier fall doesn't lower it.
+func TestJudgeKeepLeavesALaterBaseline(t *testing.T) {
+	m, merge := scored(t)
+	m.askJudge = func(core.Project, work.Task, Measurement, string) (core.Judgement, bool) {
+		nine := 9.0
+		m.record(Measurement{Project: "p", SHA: "later", Task: "t9", TestsOK: true, Score: &nine, Kept: true, Best: &nine, Version: m.Scores("p")[0].Version})
+		return core.Judgement{Verdict: core.GateKeep, Model: "stand-in"}, true
+	}
+	merge(map[string]string{"n.txt": "4\n"})
+	if b, _ := m.Best("p"); b != 9 {
+		t.Fatalf("best %v, want the later merge's 9", b)
+	}
+}
+
+// While one merge is with its judge, a later merge of the project waits for
+// the baseline it settles instead of being measured against the old one.
+func TestLaterMergeWaitsForTheJudge(t *testing.T) {
+	m, merge := scored(t)
+	old := judgeHold
+	judgeHold = time.Hour
+	t.Cleanup(func() { judgeHold = old })
+	m.mu.Lock()
+	m.judging["earlier"] = "p"
+	m.mu.Unlock()
+	if ms := merge(map[string]string{"n.txt": "4\n"}); ms.Task != "" {
+		t.Fatalf("measured while an earlier merge was with its judge: %+v", ms)
 	}
 }

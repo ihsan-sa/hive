@@ -26,6 +26,7 @@ type GateResult struct {
 	Sandbox   string `json:"sandbox,omitempty"`   // what the children ran in
 	Note      string `json:"note,omitempty"`      // how the run was set up, when the person should hear it (the org leg skipped)
 	Transient bool   `json:"transient,omitempty"` // a can't-run whose cause may pass (the machine's load, a flake on both sides): tried again soon
+	Alone     bool   `json:"alone,omitempty"`     // a can't-run tied to this head alone (preparing its build, out of time): other heads at this main don't wait on it
 	// Measured says the outcome came from comparing both sides' results, so
 	// the judge weighs it (judge.go); a candidate that failed before it was
 	// measured (it doesn't build, fails its own tests) is rolled back as is.

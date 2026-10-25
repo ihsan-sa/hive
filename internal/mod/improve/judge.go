@@ -14,7 +14,21 @@ import (
 var (
 	judgePoll = 5 * time.Second
 	judgeWait = 3 * time.Hour
+	judgeHold = time.Minute // how long a later merge waits before looking again
 )
+
+// judgingBefore says another merge of project is with its judge, so sha's
+// measurement waits for the baseline it settles.
+func (m *Module) judgingBefore(project, sha string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for s, p := range m.judging {
+		if p == project && s != sha {
+			return true
+		}
+	}
+	return false
+}
 
 // judgeMerge puts a merge whose score fell, tests green, to the judge
 // (docs/judge.md): a model weighs the score with the change, its brief and
@@ -23,6 +37,7 @@ var (
 // usable answer in work.JudgeTries runs, reverts as the numbers say.
 func (m *Module) judgeMerge(p core.Project, t work.Task, ms Measurement, reason string) {
 	defer m.judges.Done()
+	started := time.Now().UTC()
 	defer func() {
 		m.mu.Lock()
 		delete(m.judging, t.MergeSHA)
@@ -49,6 +64,9 @@ func (m *Module) judgeMerge(p core.Project, t work.Task, ms Measurement, reason 
 	// Kept: main stands at this score now, so it is the baseline the next
 	// merge is measured against.
 	ms.Kept, ms.Best = true, ms.Score
+	if k, ok := m.kept(p.Name); ok && k.At.After(started) && k.Best != nil {
+		ms.Best = k.Best // a later merge was measured meanwhile: its baseline stands
+	}
 	ms.Note = fmt.Sprintf("kept by its judge (%s) though %s: %s", j.Model, reason, core.Clip(j.Summary, 400))
 	m.record(ms)
 	if m.OnKept != nil {
@@ -78,6 +96,7 @@ func (m *Module) runJudge(p core.Project, t work.Task, ms Measurement, reason st
 			}
 		}
 		if !r.Terminal() {
+			m.C.Runs.Stop(id, "the judge took longer than "+judgeWait.String()+"; another is asked")
 			continue
 		}
 		verdict, summary, good := work.ReadJudgement(r)
