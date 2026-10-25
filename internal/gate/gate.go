@@ -739,23 +739,28 @@ type candidateFault struct {
 func (f *candidateFault) Error() string { return f.err.Error() }
 func (f *candidateFault) Unwrap() error { return f.err }
 
-// noteLesson records a rollback where the next worker reads it.
+// noteLesson records a rollback where the next worker reads it. Gates run
+// side by side share the file, so the lesson is appended in one write.
 func noteLesson(cfg Config, rep Report) {
 	if cfg.Lessons == "" {
 		return
 	}
 	os.MkdirAll(filepath.Dir(cfg.Lessons), 0o755)
 	raw, _ := os.ReadFile(cfg.Lessons)
-	s := string(raw)
-	if strings.TrimSpace(s) == "" {
+	s := ""
+	if strings.TrimSpace(string(raw)) == "" {
 		s = "# Lessons\n\nWhat was tried and why it didn't stay. Read before working here.\n\n"
-	}
-	if !strings.HasSuffix(s, "\n") {
-		s += "\n"
+	} else if !strings.HasSuffix(string(raw), "\n") {
+		s = "\n"
 	}
 	// Text from the candidate's own output never goes here: a lesson is read by
 	// the next worker as instructions.
 	reason := rep.Verdict.Reason // Decide's words, or a fixed candidateFault.why
 	s += fmt.Sprintf("- The gate rolled back %s (run %s): %s\n", short(rep.Head), rep.ID, reason)
-	os.WriteFile(cfg.Lessons, []byte(s), 0o644)
+	f, err := os.OpenFile(cfg.Lessons, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	f.WriteString(s)
+	f.Close()
 }

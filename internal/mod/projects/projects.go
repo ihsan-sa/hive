@@ -430,7 +430,8 @@ func (m *Module) Status(r core.Run) map[string]any {
 	return map[string]any{"projects": ps, "waiting_on_person": waiting, "config": View(cfg),
 		"queue":   m.Work.Queue(r), // briefs waiting for a worker, in the order they start; the queue op reorders or holds them
 		"checks":  fmt.Sprintf("%d running, %d waiting (at once: %s; max_checks %d, 0 is no ceiling)", len(running), len(waitingChecks), pace["checks"], cfg.MaxChecks),
-		"workers": fmt.Sprintf("at once: %s; max_workers %d, 0 is no ceiling", pace["workers"], cfg.MaxWorkers)}
+		"workers": fmt.Sprintf("at once: %s; max_workers %d, 0 is no ceiling", pace["workers"], cfg.MaxWorkers),
+		"gates":   fmt.Sprintf("recursive gates at once: %s; max_gates %d, 0 is one per 6 cores", pace["gates"], cfg.MaxGates)}
 }
 
 // ConfigView is the part of the config every agent may read, so it can say
