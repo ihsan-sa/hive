@@ -823,10 +823,18 @@ func cmdModel(args []string) int {
 		if cfg.Models == nil {
 			cfg.Models = map[string]core.OpenModel{}
 		}
+		was, replaced := cfg.Models[args[1]]
 		cfg.Models[args[1]] = m
 		if err := cfg.Check(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
+		}
+		if m.Key && cfg.Plaintext(args[1]) {
+			fmt.Fprintf(os.Stderr, "%s is plain http on a public host, so its key would cross the network unencrypted; use its https:// endpoint\n", m.Endpoint)
+			return 1
+		}
+		if replaced {
+			fmt.Printf("Replacing %s (was %s).\n", args[1], was.Where())
 		}
 		// One real request first: a model that can't answer isn't added.
 		var err error
@@ -845,11 +853,36 @@ func cmdModel(args []string) int {
 			fmt.Printf("%s answered.\n", args[1])
 		}
 	case args[0] == "rm" && len(args) == 2:
+		if _, ok := cfg.Models[args[1]]; !ok {
+			fmt.Fprintf(os.Stderr, "no model %q\n", args[1])
+			return 1
+		}
+		// A route naming it would read the bare name as a model of the
+		// harness once it's gone, so both stay until no route does.
+		if on := routesNaming(cfg, args[1]); len(on) > 0 {
+			fmt.Fprintf(os.Stderr, "%s is still named by %s; take it off there first (Settings, or ask the lead), so nothing was removed.\n", args[1], strings.Join(on, ", "))
+			return 1
+		}
 		delete(cfg.Models, args[1])
+		// The key goes only once the config without the model is saved.
+		if err := cfg.Check(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := ws.SaveConfig(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 		os.Remove(ws.OpenKey(args[1]))
+		fmt.Println("Removed " + args[1] + " and its key.")
+		return 0
 	case args[0] == "key" && len(args) == 2:
 		if _, ok := cfg.Models[args[1]]; !ok {
 			fmt.Fprintf(os.Stderr, "no model %q; add it first\n", args[1])
+			return 1
+		}
+		if cfg.Plaintext(args[1]) {
+			fmt.Fprintf(os.Stderr, "%s is plain http on a public host, so its key would cross the network unencrypted; point it at its https:// endpoint first (%s model add)\n", cfg.Models[args[1]].Endpoint, core.Cmd)
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, "Paste the key and press Enter:")
@@ -878,6 +911,42 @@ func cmdModel(args []string) int {
 	}
 	fmt.Println("Saved. Route a role to it in Settings, or ask the lead.")
 	return 0
+}
+
+// routesNaming are the routes and model settings that name model name, as
+// "worker", "worker in lab" or "the lead model".
+func routesNaming(cfg core.Config, name string) []string {
+	var out []string
+	for what, m := range map[string]string{"the worker model": cfg.Model, "the lead model": cfg.LeadModel, "the reviewer model": cfg.ReviewerModel} {
+		if m == name {
+			out = append(out, what)
+		}
+	}
+	slices.Sort(out)
+	for _, t := range cfg.TribunalModels {
+		if t.Model == name && (t.Harness == "" || t.Harness == "open") {
+			out = append(out, "a tribunal seat")
+		}
+	}
+	for _, p := range slices.Sorted(maps.Keys(cfg.Projects)) {
+		if cfg.Projects[p].Model == name {
+			out = append(out, "the model for "+p)
+		}
+	}
+	for _, role := range slices.Sorted(maps.Keys(cfg.Routes)) {
+		if slices.Contains(cfg.Routes[role], name) || slices.Contains(cfg.Routes[role], "open:"+name) {
+			out = append(out, role)
+		}
+	}
+	for _, p := range slices.Sorted(maps.Keys(cfg.Projects)) {
+		routes := cfg.Projects[p].Routes
+		for _, role := range slices.Sorted(maps.Keys(routes)) {
+			if slices.Contains(routes[role], name) || slices.Contains(routes[role], "open:"+name) {
+				out = append(out, role+" in "+p)
+			}
+		}
+	}
+	return out
 }
 
 // probeFix is what would let named model name answer, read from its probe's error.

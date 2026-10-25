@@ -344,6 +344,25 @@ func TestOpenHostIsPublicOnly(t *testing.T) {
 	}
 }
 
+// An endpoint never carries a credential, which agents would see; a key
+// would cross a public network unencrypted only on plain http to a public host.
+func TestEndpointHoldsNoKey(t *testing.T) {
+	c := DefaultConfig()
+	for _, ep := range []string{"https://me:sk-1@api.example.com/v1", "https://api.example.com/v1?key=sk-1", "https://api.example.com/v1#sk-1"} {
+		c.Models = map[string]OpenModel{"m": {Endpoint: ep, Model: "x"}}
+		if err := c.Check(); err == nil || strings.Contains(err.Error(), "sk-1") {
+			t.Errorf("%s: %v", ep, err)
+		}
+	}
+	for ep, want := range map[string]bool{"http://api.example.com/v1": true, "https://api.example.com/v1": false,
+		"http://127.0.0.1:11434/v1": false, "http://192.168.1.2:8000/v1": false, "http://localhost:8000/v1": false} {
+		c.Models = map[string]OpenModel{"m": {Endpoint: ep, Model: "x"}}
+		if c.Check() != nil || c.Plaintext("m") != want {
+			t.Errorf("%s: plaintext %v, want %v (%v)", ep, c.Plaintext("m"), want, c.Check())
+		}
+	}
+}
+
 // At a usage limit a run moves to the next model on its route that has
 // room, as a fresh session told why, and the turn says which model it ran on;
 // with no route it waits for the reset.

@@ -164,6 +164,11 @@ func (c Config) checkRoutes() error {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return fmt.Errorf("model %s: endpoint %q isn't an http(s) URL", name, m.Endpoint)
 		}
+		if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			// Agents and the person see endpoints (the models op, `hive
+			// model`), so a key put in one would leak.
+			return fmt.Errorf("model %s: the endpoint holds no user, password or query; a key is stored with `%s model key %s`", name, Cmd, name)
+		}
 		if m.Model == "" {
 			return fmt.Errorf("model %s: say which model the endpoint runs (model)", name)
 		}
@@ -215,6 +220,14 @@ func (c Config) openHost(name string) string {
 		}
 	}
 	return h
+}
+
+// Plaintext reports whether model name's key would cross a public network
+// unencrypted: a plain http:// endpoint on a host that isn't this machine or
+// a private network.
+func (c Config) Plaintext(name string) bool {
+	u, err := url.Parse(c.Models[name].Endpoint)
+	return err == nil && u.Scheme == "http" && c.openHost(name) != ""
 }
 
 // cgnat is the shared address space (RFC 6598), private in practice.
