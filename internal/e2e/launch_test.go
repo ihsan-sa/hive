@@ -120,11 +120,7 @@ func settledDir(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		for i := 0; os.RemoveAll(dir) != nil && i < 50; i++ {
-			time.Sleep(200 * time.Millisecond)
-		}
-	})
+	t.Cleanup(func() { settle(dir, dir) })
 	return dir
 }
 
