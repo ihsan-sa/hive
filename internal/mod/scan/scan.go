@@ -10,7 +10,8 @@
 // What it says on a hit is a file, a line and what kind of thing is there,
 // never the thing: not the key, not the deny word, and not the handle, so a
 // failure message (which may itself land in a public CI log) never prints a
-// member's handle, the one found or the others on the list.
+// member's handle, the one found or the others on the list. A file whose
+// name holds one is named by its place among the published files.
 package scan
 
 import (
@@ -29,9 +30,11 @@ import (
 // `!glob` leaving files out, `#` comments.
 const PublicList = ".hive/public.txt"
 
-// The run-time lists: each env var holds the list itself (a CI secret), and
-// else the file of the same role in the Hive's private folder, which no agent
-// reads and no repository holds.
+// The run-time lists: each env var holds the list itself (a CI secret, never
+// set in the daemon's environment), and else the file of the same role in
+// the Hive's private folder, which no agent reads and no repository holds.
+// The handle list never names the owner's own login, which the module path
+// carries; an email or a real name goes on the deny list.
 const (
 	HandlesEnv  = "HIVE_SCAN_HANDLES"
 	DenyEnv     = "HIVE_SCAN_DENY"
@@ -209,14 +212,21 @@ func distinct(s string) int {
 	return len(seen)
 }
 
+// handleREs match each handle as a whole name, in any case, so "ann" never
+// hits "annotate". The handle is the second group.
+func handleREs(l Lists) []*regexp.Regexp {
+	var res []*regexp.Regexp
+	for _, h := range l.Handles {
+		res = append(res, regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_-])(`+regexp.QuoteMeta(h)+`)($|[^A-Za-z0-9_-])`))
+	}
+	return res
+}
+
 // Text checks one file. Handles and deny words are matched in any case; a
-// handle only as a whole name, so "ann" never hits "annotate".
+// handle only as a whole name.
 func Text(name string, data []byte, l Lists) []Hit {
 	var hits []Hit
-	var handles []*regexp.Regexp
-	for _, h := range l.Handles {
-		handles = append(handles, regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_-])`+regexp.QuoteMeta(h)+`($|[^A-Za-z0-9_-])`))
-	}
+	handles := handleREs(l)
 	for i, line := range bytes.Split(data, []byte("\n")) {
 		s, low := string(line), strings.ToLower(string(line))
 		at := func(what string) { hits = append(hits, Hit{name, i + 1, what}) }
@@ -242,6 +252,83 @@ func Text(name string, data []byte, l Lists) []Hit {
 	return hits
 }
 
+// keyArmour starts a private key; keyBody is one more line of one: base64,
+// a header such as Proc-Type, or the end line, each a whole line. A turn log
+// splits lines with a JSON "\n", which counts as a line's end too.
+var (
+	keyArmour = regexp.MustCompile(`-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY( BLOCK)?-----`)
+	keyBody   = regexp.MustCompile(`^(?:\r?\n|(?:\\r)?\\n)([A-Za-z0-9+/=]*|[A-Za-z-]+: [^\n\\"]*|-----END [A-Z0-9 ]*-----)(?:\r?\n|(?:\\r)?\\n|"|$)`)
+)
+
+// scrubKeyBlocks replaces each private key, armour and body, with its kind.
+func scrubKeyBlocks(s string) string {
+	var b strings.Builder
+	for {
+		ix := keyArmour.FindStringIndex(s)
+		if ix == nil {
+			return b.String() + s
+		}
+		b.WriteString(s[:ix[0]] + "[a private key]")
+		s = s[ix[1]:]
+		for {
+			m := keyBody.FindStringSubmatchIndex(s)
+			if m == nil {
+				break
+			}
+			line := s[m[2]:m[3]]
+			s = s[m[3]:] // the line's own end starts the next one
+			if strings.HasPrefix(line, "-----END") {
+				break
+			}
+		}
+	}
+}
+
+// Scrub is data with what Text would flag replaced by its kind in brackets:
+// every key (a private key with its body, and of a secret assigned to a
+// name only the value), every deny word and every handle. It is for what is
+// sent to be read, such as `hive share`'s bundle of run logs that quote the
+// tests' made-up keys; what it returns is still scanned before it goes.
+func Scrub(data []byte, l Lists) []byte {
+	s := scrubKeyBlocks(string(data))
+	for _, k := range keys {
+		var b strings.Builder
+		last := 0
+		for _, ix := range k.re.FindAllStringSubmatchIndex(s, -1) {
+			sub := make([]string, len(ix)/2)
+			for i := range sub {
+				if ix[2*i] >= 0 {
+					sub[i] = s[ix[2*i]:ix[2*i+1]]
+				}
+			}
+			if placeholder(k.what, sub[0], sub) {
+				continue
+			}
+			from, to := ix[0], ix[1]
+			if k.what == "a secret assigned to a name" {
+				from, to = ix[len(ix)-2], ix[len(ix)-1]
+			} else if k.what == "a Telegram bot token" && ix[2] >= 0 {
+				from = ix[3] // keep what came before the token
+			}
+			b.WriteString(s[last:from] + "[" + k.what + "]")
+			last = to
+		}
+		s = b.String() + s[last:]
+	}
+	for _, w := range l.Deny {
+		if w != "" {
+			s = regexp.MustCompile(`(?i)`+regexp.QuoteMeta(w)).ReplaceAllLiteralString(s, "[a deny word]")
+		}
+	}
+	for _, re := range handleREs(l) {
+		// A name's end is the next one's start ("carol,carol"), so a few passes.
+		for i := 0; i < 3 && re.MatchString(s); i++ {
+			s = re.ReplaceAllString(s, "${1}[a handle]${3}")
+		}
+	}
+	return []byte(s)
+}
+
 // maxShown is how many hits a failure lists before it counts the rest.
 const maxShown = 30
 
@@ -260,12 +347,22 @@ func Run(names []string, read func(string) ([]byte, error), l Lists) error {
 		return errors.New("the public list names no file, so the scan refuses to pass")
 	}
 	var hits []Hit
-	for _, f := range files {
+	for i, f := range files {
 		data, err := read(f)
-		if err != nil {
-			return fmt.Errorf("can't read %s, which the public list names: %v", f, err)
+		// A file's name is published too. One that holds a key, a deny word or a
+		// handle is named by its place among the published files instead, here
+		// and in what its contents hit.
+		shown := f
+		if named := Text(f, []byte(f), l); len(named) > 0 {
+			shown = fmt.Sprintf("published file %d", i+1)
+			for _, h := range named {
+				hits = append(hits, Hit{shown, 0, h.What + " in its name"})
+			}
 		}
-		hits = append(hits, Text(f, data, l)...)
+		if err != nil {
+			return fmt.Errorf("can't read %s, which the public list names: %v", shown, err)
+		}
+		hits = append(hits, Text(shown, data, l)...)
 	}
 	if len(hits) == 0 {
 		return nil

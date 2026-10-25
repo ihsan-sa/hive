@@ -69,7 +69,8 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive harness key <name>  store a module harness's API key, read from stdin (kept where no agent can read it)
   hive harness login <name>  run a module harness's own login on this machine (what bare runs use)
   hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
-                           (scanned first: it needs a handle list in .hive/private/scan-handles.txt or HIVE_SCAN_HANDLES)
+                           (keys, deny words and handles replaced by their kind, then scanned: it needs a handle list
+                           in .hive/private/scan-handles.txt)
   hive update              install the newest release [--release <tag>: that one, and stay on it]
   hive remote <ssh host>   open the control center here for the Hive on another machine, over ssh [--hive <its hive command>]
                            pasted images and dropped files then go from this computer to that Hive

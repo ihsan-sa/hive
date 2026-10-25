@@ -66,6 +66,10 @@ func cmdShare(args []string) int {
 // endpoint answers with. Over limit it offers to leave parts out; a no sends
 // nothing.
 func share(ws core.Workspace, url string, limit int64, yes bool, in io.Reader, out io.Writer) error {
+	l, err := shareLists(ws)
+	if err != nil {
+		return errors.New("nothing sent: " + err.Error())
+	}
 	parts := shareParts(ws)
 	tmp, err := os.CreateTemp("", "hive-share-*.zip")
 	if err != nil {
@@ -73,7 +77,7 @@ func share(ws core.Workspace, url string, limit int64, yes bool, in io.Reader, o
 	}
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
-	total, err := writeBundle(tmp, ws, parts)
+	total, err := writeBundle(tmp, ws, parts, l)
 	if err != nil {
 		return err
 	}
@@ -84,14 +88,14 @@ func share(ws core.Workspace, url string, limit int64, yes bool, in io.Reader, o
 			overhead -= p.size
 		}
 		parts, left = fitParts(parts, limit-overhead)
-		if total, err = rewriteBundle(tmp, ws, parts); err != nil {
+		if total, err = rewriteBundle(tmp, ws, parts, l); err != nil {
 			return err
 		}
 	}
 	if len(parts) == 0 {
 		return errors.New("nothing in this Hive fits in one bundle")
 	}
-	if err := scanParts(ws, parts); err != nil {
+	if err := scanParts(ws, parts, l); err != nil {
 		return errors.New("nothing sent: " + err.Error())
 	}
 	fmt.Fprintf(out, "This sends %s from %s:\n", mb(total), ws.Hive())
@@ -100,7 +104,7 @@ func share(ws core.Workspace, url string, limit int64, yes bool, in io.Reader, o
 		fmt.Fprintf(out, "Everything together is over the %s the endpoint takes, so it leaves out:\n", mb(limit))
 		listParts(out, left)
 	}
-	fmt.Fprintln(out, "It never includes your logins, the Hive's binaries or your projects' code.")
+	fmt.Fprintln(out, "It never includes your logins, the Hive's binaries or your projects' code, and every key, deny word and handle in it is replaced by its kind, such as [a GitHub token].")
 	if !yes {
 		fmt.Fprintf(out, "Send it to %s? [y/N] ", url)
 		line, _ := bufio.NewReader(in).ReadString('\n')
@@ -181,10 +185,10 @@ func shareParts(ws core.Workspace) []part {
 	return parts
 }
 
-// writeBundle zips parts into w as .hive/..., setting each part's size, and
-// returns the zip's length. Files are read with readNoFollow, since agents
-// can write under runs/.
-func writeBundle(w io.Writer, ws core.Workspace, parts []part) (int64, error) {
+// writeBundle zips parts into w as .hive/..., each file as sent has it,
+// setting each part's size, and returns the zip's length. Files are read
+// with readNoFollow, since agents can write under runs/.
+func writeBundle(w io.Writer, ws core.Workspace, parts []part, l scan.Lists) (int64, error) {
 	root, err := os.OpenRoot(ws.Hive())
 	if err != nil {
 		return 0, err
@@ -199,9 +203,7 @@ func writeBundle(w io.Writer, ws core.Workspace, parts []part) (int64, error) {
 			if err != nil {
 				continue // gone or swapped since the walk
 			}
-			if rel == "config.json" {
-				data = unlinkedConfig(data)
-			}
+			data = sent(rel, data, l)
 			f, err := zw.CreateHeader(&zip.FileHeader{Name: ".hive/" + rel, Method: zip.Deflate, Modified: time.Now()})
 			if err != nil {
 				return 0, err
@@ -217,6 +219,24 @@ func writeBundle(w io.Writer, ws core.Workspace, parts []part) (int64, error) {
 	}
 	err = zw.Close()
 	return cw.n, err
+}
+
+// sent is a file as the bundle sends it: scrubbed of every key, deny word
+// and handle (scan.Scrub), since agents' turn logs quote the tests' made-up
+// keys and a bundle that blocked on each would never go, and config.json
+// without its report keys.
+func sent(rel string, data []byte, l scan.Lists) []byte {
+	if rel == "config.json" {
+		data = unlinkedConfig(data)
+	}
+	return scan.Scrub(data, l)
+}
+
+// shareLists are the deny and handle lists given at run time (scan.RunTime)
+// that the bundle is scrubbed of and scanned against.
+func shareLists(ws core.Workspace) (scan.Lists, error) {
+	deny, handles, err := scan.RunTime(os.Getenv, ws.Private())
+	return scan.Lists{Public: []string{"**"}, Deny: deny, Handles: handles}, err
 }
 
 // reportKeys tie a config to the install's anonymous reports
@@ -285,14 +305,14 @@ func readNoFollow(root *os.Root, rel string) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
-func rewriteBundle(f *os.File, ws core.Workspace, parts []part) (int64, error) {
+func rewriteBundle(f *os.File, ws core.Workspace, parts []part, l scan.Lists) (int64, error) {
 	if err := f.Truncate(0); err != nil {
 		return 0, err
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return 0, err
 	}
-	return writeBundle(f, ws, parts)
+	return writeBundle(f, ws, parts, l)
 }
 
 // fitParts leaves out runs oldest first, then the largest other parts, until
@@ -365,14 +385,8 @@ func (c *countWriter) Write(p []byte) (int, error) {
 }
 
 // scanParts is the identity and secret scan of what the bundle sends: every
-// file of parts, which the shared set names, against the deny and handle
-// lists given at run time (scan.RunTime). A hit, or no handle list, sends
-// nothing.
-func scanParts(ws core.Workspace, parts []part) error {
-	deny, handles, err := scan.RunTime(os.Getenv, ws.Private())
-	if err != nil {
-		return err
-	}
+// file of parts as sent has it, against l. A hit sends nothing.
+func scanParts(ws core.Workspace, parts []part, l scan.Lists) error {
 	root, err := os.OpenRoot(ws.Hive())
 	if err != nil {
 		return err
@@ -387,7 +401,7 @@ func scanParts(ws core.Workspace, parts []part) error {
 		if err != nil {
 			return nil, nil // gone or swapped since the walk, so the bundle leaves it out too
 		}
-		return data, nil
+		return sent(rel, data, l), nil
 	}
-	return scan.Run(names, read, scan.Lists{Public: []string{"**"}, Deny: deny, Handles: handles})
+	return scan.Run(names, read, l)
 }

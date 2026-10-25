@@ -344,7 +344,7 @@ func TestRenewNeedsAReadableCodexExpiry(t *testing.T) {
 
 // What a harness printed goes into the journal without anything token-shaped.
 func TestHarnessSaidScrubsTokens(t *testing.T) {
-	out := "error: Authorization: Bearer abc.def refresh sk-ant-ort01-AbCdEf123456 " + jwt(time.Now()) + " key 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddcc /usr/local/lib/node_modules/whatever-package-name"
+	out := "error: Authorization: Bearer abc.def refresh sk-ant-" + "ort01-AbCdEf123456 " + jwt(time.Now()) + " key 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddcc /usr/local/lib/node_modules/whatever-package-name"
 	got := harnessSaid([]byte(out))
 	for _, bad := range []string{"abc.def", "sk-ant", "eyJ", "9f8e7d6c"} {
 		if strings.Contains(got, bad) {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 )
 
 // shareFixture is a Hive folder with every shared file and everything that
@@ -180,7 +181,7 @@ func TestShareLeavesOutRunLogins(t *testing.T) {
 		os.WriteFile(p, []byte("x"), 0o600)
 	}
 	var buf bytes.Buffer
-	if _, err := writeBundle(&buf, ws, shareParts(ws)); err != nil {
+	if _, err := writeBundle(&buf, ws, shareParts(ws), scan.Lists{Handles: []string{"nobody-at-all"}}); err != nil {
 		t.Fatal(err)
 	}
 	if names := strings.Join(zipNames(t, buf.Bytes()), " "); names != ".hive/runs/r1/host/turn-001.jsonl" {
@@ -224,7 +225,7 @@ func TestShareNeverFollowsASwappedFolder(t *testing.T) {
 	defer func() { close(stop); <-done }()
 	for i := 0; i < 300; i++ {
 		var buf bytes.Buffer
-		if _, err := writeBundle(&buf, ws, shareParts(ws)); err != nil {
+		if _, err := writeBundle(&buf, ws, shareParts(ws), scan.Lists{Handles: []string{"nobody-at-all"}}); err != nil {
 			t.Fatal(err)
 		}
 		zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
@@ -242,28 +243,51 @@ func TestShareNeverFollowsASwappedFolder(t *testing.T) {
 	}
 }
 
-// The bundle is scanned before anything is asked or sent: a key, a handle
-// or no handle list sends nothing, and the failure prints no handle.
+// The bundle is scrubbed and then scanned before anything is asked or sent:
+// a key or a handle in a run log or a chat goes as its kind, a handle in a
+// file's name or no handle list sends nothing, and no failure prints a handle.
 func TestShareScanBlocksTheBundle(t *testing.T) {
 	srv, got := bundleServer(t, "b-3")
 	key := "sk-ant-api03-" + strings.Repeat("Zq9xW2vB7nK4", 4)
 	for name, c := range map[string]struct{ file, body, want string }{
-		"a key in a run":   {".hive/runs/r1/output.log", "printed " + key + " (a fake token)", "runs/r1/output.log:1: an Anthropic key"},
-		"a handle in chat": {".hive/chats/lead.jsonl", "{}\n{\"text\":\"ask Alice-K\"}", "chats/lead.jsonl:2: handle 2 of the handle list"},
-		"no handle list":   {".hive/private/scan-handles.txt", "", "no handle list"},
+		"a key in a run":     {".hive/runs/r1/output.log", "printed " + key + " (a fake token)", "[an Anthropic key] (a fake token)"},
+		"a handle in chat":   {".hive/chats/lead.jsonl", "{}\n{\"text\":\"ask Alice-K\"}", `{"text":"ask [a handle]"}`},
+		"a handle in a name": {".hive/chats/alice-k.jsonl", "{}", "nothing sent: "},
+		"no handle list":     {".hive/private/scan-handles.txt", "", "nothing sent: "},
 	} {
 		ws := shareFixture(t)
 		os.WriteFile(filepath.Join(ws.Private(), "scan-handles.txt"), []byte("bob\nalice-k\n"), 0o600)
 		os.WriteFile(filepath.Join(ws.Root, filepath.FromSlash(c.file)), []byte(c.body), 0o644)
-		var out bytes.Buffer
-		err := share(ws, srv.URL+"/v1/bundle", bundleCap, true, nil, &out)
-		if err == nil || !strings.HasPrefix(err.Error(), "nothing sent: ") || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("%s: want %q, got %v", name, c.want, err)
-		} else if strings.Contains(err.Error(), key) || strings.Contains(strings.ToLower(err.Error()), "alice") || strings.Contains(err.Error(), "bob") {
-			t.Errorf("%s: the failure prints what it found: %v", name, err)
+		before := len(*got)
+		err := share(ws, srv.URL+"/v1/bundle", bundleCap, true, nil, &bytes.Buffer{})
+		if blocks := strings.HasPrefix(c.want, "nothing sent"); blocks {
+			if err == nil || !strings.HasPrefix(err.Error(), c.want) || len(*got) != before {
+				t.Errorf("%s: want nothing sent, got %v", name, err)
+			} else if strings.Contains(strings.ToLower(err.Error()), "alice") || strings.Contains(err.Error(), "bob") {
+				t.Errorf("%s: the failure prints a handle: %v", name, err)
+			}
+			continue
 		}
-	}
-	if len(*got) != 0 {
-		t.Fatalf("a bundle the scan blocked was sent %d times", len(*got))
+		if err != nil || len(*got) != before+1 {
+			t.Errorf("%s: want the scrubbed bundle sent, got %v", name, err)
+			continue
+		}
+		body := (*got)[before]
+		zr, _ := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+		found := false
+		for _, f := range zr.File {
+			if f.Name != c.file {
+				continue
+			}
+			found = true
+			r, _ := f.Open()
+			data, _ := io.ReadAll(r)
+			if !strings.Contains(string(data), c.want) || strings.Contains(string(data), key) || strings.Contains(strings.ToLower(string(data)), "alice") {
+				t.Errorf("%s: want %q in what was sent, got %q", name, c.want, data)
+			}
+		}
+		if !found {
+			t.Errorf("%s: %s was not sent", name, c.file)
+		}
 	}
 }

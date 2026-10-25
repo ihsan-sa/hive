@@ -361,7 +361,7 @@ func TestOpenHostIsPublicOnly(t *testing.T) {
 // would cross a public network unencrypted only on plain http to a public host.
 func TestEndpointHoldsNoKey(t *testing.T) {
 	c := DefaultConfig()
-	for _, ep := range []string{"https://me:sk-1@api.example.com/v1", "https://api.example.com/v1?key=sk-1", "https://api.example.com/v1#sk-1"} {
+	for _, ep := range []string{"https://me:" + "sk-1@api.example.com/v1", "https://api.example.com/v1?key=sk-1", "https://api.example.com/v1#sk-1"} {
 		c.Models = map[string]OpenModel{"m": {Endpoint: ep, Model: "x"}}
 		if err := c.Check(); err == nil || strings.Contains(err.Error(), "sk-1") {
 			t.Errorf("%s: %v", ep, err)

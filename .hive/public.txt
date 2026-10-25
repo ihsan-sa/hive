@@ -2,7 +2,9 @@
 # internal/mod/scan): one glob per line, `*` inside one path segment, `**`
 # across segments, `!glob` leaving files out. A release blocks on a key, a
 # deny word or a person's handle in any of them.
+#
+# Every tracked file: the public repository and each tag's source archive
+# publish the tests and testdata too, so they are scanned like the rest.
+# A test builds its made-up keys at run time (see internal/mod/scan's
+# scan_test.go); cmd/hive-scan's TestRepoPassesItsOwnScan keeps it so.
 **
-# Tests hold made-up keys on purpose, to test the scrubbers and this scan.
-!**/*_test.go
-!**/testdata/**

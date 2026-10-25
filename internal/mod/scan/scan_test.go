@@ -25,6 +25,9 @@ const (
 	hexs  = "0123456789abcdef"
 	b64   = alnum + "+/"
 	url   = alnum + "_-"
+	// begin starts a private key's armour, split so this file passes the
+	// scan it tests: the repository's tests are published and scanned too.
+	begin = "-----" + "BEGIN "
 )
 
 // keyLines are lines that each hold one key of a common format, with what
@@ -33,9 +36,9 @@ func keyLines() map[string]string {
 	r := rand.New(rand.NewSource(1))
 	g := func(n int, set string) string { return gen(r, n, set) }
 	return map[string]string{
-		"-----BEGIN OPENSSH PRIVATE KEY-----":              "a private key",
-		"-----BEGIN RSA PRIVATE KEY-----":                  "a private key",
-		"-----BEGIN PGP PRIVATE KEY BLOCK-----":            "a private key",
+		begin + "OPENSSH PRIVATE KEY-----":                 "a private key",
+		begin + "RSA PRIVATE KEY-----":                     "a private key",
+		begin + "PGP PRIVATE KEY BLOCK-----":               "a private key",
 		"AGE-SECRET-KEY-1" + g(58, upper):                  "an age secret key",
 		"GH_TOKEN=ghp_" + g(36, alnum):                     "a GitHub token",
 		"gho_" + g(36, alnum):                              "a GitHub token",
@@ -122,7 +125,7 @@ func TestRealKeyOnAFakeLabelledLine(t *testing.T) {
 		"# example only, not a real key: sk-ant-api03-" + gen(r, 60, url),
 		"FAKE_TOKEN=AKIA" + gen(r, 16, upper) + "  # dummy",
 		"test_token: " + gen(r, 32, alnum) + " (placeholder)",
-		"token: 261024-225610-163a3bc0d0-" + strings.ToLower(gen(r, 32, alnum)),
+		"token: 261024-225610-163a3bc0d0" + "-" + strings.ToLower(gen(r, 32, alnum)),
 	} {
 		if hits := Text("f", []byte(line), lists()); len(hits) == 0 {
 			t.Errorf("a key on a line labelled fake passed: %q", line)
@@ -237,5 +240,46 @@ func TestNoHandleListFails(t *testing.T) {
 	deny, handles, err = RunTime(env, private)
 	if err != nil || strings.Join(handles, " ") != "dave erin" || strings.Join(deny, "|") != "a word" {
 		t.Fatalf("the environment goes first: %v %v %v", deny, handles, err)
+	}
+}
+
+// Scrub leaves nothing Text would flag: every key goes as its kind (a private
+// key with its body, a named secret keeping its name), and so do deny words
+// and handles, while placeholders and plain words stay.
+func TestScrubLeavesNothingToFlag(t *testing.T) {
+	l := Lists{Public: []string{"**"}, Deny: []string{"Project Nightjar"}, Handles: []string{"carol", "alice-k"}}
+	var b strings.Builder
+	for line := range keyLines() {
+		b.WriteString("logged " + line + " here\n")
+	}
+	body := gen(rand.New(rand.NewSource(4)), 64, b64)
+	b.WriteString(begin + "OPENSSH PRIVATE KEY-----\n" + body + "\n-----END OPENSSH PRIVATE KEY-----\n")
+	b.WriteString(`{"text":"` + begin + `RSA PRIVATE KEY-----\n` + body + `\n-----END RSA PRIVATE KEY-----","next":1}` + "\n")
+	b.WriteString("about project NIGHTJAR, by Carol,carol and alice-k; carolina stays\n")
+	b.WriteString("ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx and token: 261024-225610-163a3bc0d0\n")
+	out := string(Scrub([]byte(b.String()), l))
+	if hits := Text("f", []byte(out), l); len(hits) != 0 {
+		t.Fatalf("the scrubbed text still hits %v:\n%s", hits, out)
+	}
+	for _, want := range []string{"[a private key]", `{"text":"[a private key]","next":1}`, "[a GitHub token]", "DB_PASSWORD=[a secret assigned to a name]", "about [a deny word], by [a handle],[a handle] and [a handle]; carolina stays", "ghp_xxxx", "token: 261024-225610-163a3bc0d0"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("want %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, body) {
+		t.Errorf("a private key's body survived:\n%s", out)
+	}
+}
+
+// A published file's name is scanned too, and a name that holds a handle is
+// never printed: the hits name the file by its place.
+func TestFileNameHoldingAHandle(t *testing.T) {
+	l := Lists{Public: []string{"**"}, Handles: []string{"alice-k"}}
+	err := Run([]string{"README.md", "notes/alice-k/todo.md"}, func(string) ([]byte, error) { return []byte("ask alice-k\n"), nil }, l)
+	if err == nil || !strings.Contains(err.Error(), "published file 2:0: handle 1 of the handle list in its name") || !strings.Contains(err.Error(), "published file 2:1: handle 1") {
+		t.Fatalf("want the name and its line hit by the file's place, got %v", err)
+	}
+	if strings.Contains(err.Error(), "alice") {
+		t.Fatalf("the failure prints the handle: %v", err)
 	}
 }
