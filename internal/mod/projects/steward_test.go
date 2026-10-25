@@ -145,3 +145,52 @@ func TestUnclaimedUpstreamNeedsThePersonsWord(t *testing.T) {
 		t.Fatalf("one brief recording this Hive as steward: %+v", briefs)
 	}
 }
+
+// The steward works in its release repository even with a fork owner named,
+// and a record it can't read at a commit refuses rather than allows.
+func TestStewardWinsOverSelfForkAndUnreadableRefuses(t *testing.T) {
+	m, _ := stewardHive(t, map[string]string{core.StewardFile: core.StewardRecord("H0")})
+	os.WriteFile(filepath.Join(m.C.WS.Hive(), "hive-id"), []byte("H0\n"), 0o644)
+	cfg := m.C.WS.LoadConfig()
+	cfg.SelfFork = "Hive-RSI-Lab"
+	m.C.WS.SaveConfig(cfg)
+	p, _, err := m.Create(Spec{Self: true})
+	if err != nil || p.Repo != "local/hive" {
+		t.Fatalf("the steward forked instead of working in its release repo: %+v %v", p, err)
+	}
+	if why := m.C.Effects.Stewardship(core.Project{Name: "no-clone", Repo: p.Repo, Branch: "main"}, "refs/remotes/origin/main"); !strings.Contains(why, "can't read") {
+		t.Fatalf("an unreadable record should refuse: %q", why)
+	}
+	// Any project in the release repository is checked, not only the self one.
+	other := core.Project{Name: p.Name, Repo: p.Repo}
+	os.WriteFile(filepath.Join(m.C.WS.Hive(), "hive-id"), []byte("H1\n"), 0o644)
+	if why := m.C.Effects.Stewardship(other, "refs/remotes/origin/main"); !strings.Contains(why, "steward is the Hive H0") {
+		t.Fatalf("a non-self project in the release repo skipped the record: %q", why)
+	}
+}
+
+// A claim filed before the person renamed .hive/hive-id isn't filed again
+// under the new name while it is open: the person is told to stop it.
+func TestRenamedHiveDoesNotClaimTwice(t *testing.T) {
+	m, _ := stewardHive(t, map[string]string{})
+	if _, _, err := m.Create(Spec{Self: true, Steward: true}); err != nil {
+		t.Fatal(err)
+	}
+	m.Tick()
+	os.WriteFile(filepath.Join(m.C.WS.Hive(), "hive-id"), []byte("H0\n"), 0o644)
+	m.claimed = map[string]bool{}
+	m.Tick()
+	briefs := m.Work.List(func(w work.Task) bool { return strings.Contains(w.Title, "steward") })
+	if len(briefs) != 1 {
+		t.Fatalf("a rename filed a second claim: %+v", briefs)
+	}
+	if err := m.Work.Stop(briefs[0].ID, "renamed"); err != nil {
+		t.Fatal(err)
+	}
+	m.claimed = map[string]bool{}
+	m.Tick()
+	briefs = m.Work.List(func(w work.Task) bool { return strings.Contains(w.Title, "(H0)") })
+	if len(briefs) != 1 {
+		t.Fatalf("once the old claim is stopped, the claim under the new name: %+v", briefs)
+	}
+}
