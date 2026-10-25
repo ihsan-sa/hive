@@ -598,7 +598,7 @@ func TestOwnSecurityReadLands(t *testing.T) {
 func TestSelfFixStillWaitsForSecurityRead(t *testing.T) {
 	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
 	p.Self = true
-	task.Aim = ""
+	task.Aim, task.AimWhy = AimFix, "the box leaks: TestBox fails"
 	m.Gate = func(context.Context, GateJob) core.GateResult {
 		t.Error("the gate ran on a fix")
 		return core.GateResult{Outcome: core.GateKeep}
@@ -1290,7 +1290,7 @@ func TestSeatTriesFollowTheDiff(t *testing.T) {
 // everything else green it merges, the task, its log, the PR and an alert
 // saying so. Main's Windows is green, so it isn't excused as main's red.
 func TestSelfMergesPastRedWindows(t *testing.T) {
-	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	m, task, p, f, _ := selfRigSeeded(t, advisoryList, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	main, _ := m.C.Effects.Sync(p)
 	runs := []core.CheckRun{{Name: "test (ubuntu-latest)", State: core.CheckPass}, {Name: "test (windows-latest)", State: core.CheckFail, Detail: "failure"}, {Name: "sandboxed-e2e", State: core.CheckPass}}
 	f.SetChecks(p.Repo, task.SHA, runs...)
@@ -1307,6 +1307,38 @@ func TestSelfMergesPastRedWindows(t *testing.T) {
 	}
 	if alerts(m, "check-warning") != 1 {
 		t.Fatalf("%d check-warning alerts, want 1", alerts(m, "check-warning"))
+	}
+}
+
+// advisoryList is a security list on main naming the Windows job advisory.
+var advisoryList = map[string]string{core.SecurityList: "paths = []\nadvisory_checks = [\"test (windows-latest)\"]\n"}
+
+// A self PR with Windows red goes back to its worker when main's list doesn't
+// name the job advisory: only a listed check warns.
+func TestSelfRedWindowsBlocksUnlisted(t *testing.T) {
+	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "lint-windows-paths", State: core.CheckFail})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "lint-windows-paths", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Round != 1 || task.Warning != "" {
+		t.Fatalf("stage %q, round %d, warning %q", task.Stage, task.Round, task.Warning)
+	}
+}
+
+// Branch rules that require an advisory check refuse the merge; it holds,
+// naming the check and the list, rather than failing toward a stop.
+func TestSelfRefusedWarnedHolds(t *testing.T) {
+	m, task, p, f, _ := selfRigSeeded(t, advisoryList, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass})
+	m.C.Effects.Forge = refusingForge{f}
+	for i := 0; i < 3; i++ {
+		gateOnce(t, m, task, p)
+	}
+	if task.Stage != StageMerging || task.Failures != 0 || !strings.Contains(task.Reason, "only warn on the Hive's own PRs") || alerts(m, "main-red") != 1 {
+		t.Fatalf("stage %q, %d failures, reason %q, %d alerts", task.Stage, task.Failures, task.Reason, alerts(m, "main-red"))
 	}
 }
 

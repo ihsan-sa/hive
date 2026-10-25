@@ -490,6 +490,31 @@ func TestCheckReachProbesTheToken(t *testing.T) {
 	}
 }
 
+// A repository in both listings is probed once, and a probe GitHub answers
+// with something else (409, an empty repository) refuses, naming the
+// repository and the answer.
+func TestCheckReachProbeTrouble(t *testing.T) {
+	fakeClock(t)
+	blobs := 0
+	replay(t, "github_pat_x", func(call string) (string, bool) {
+		switch call {
+		case reachUser, reachOrg:
+			return "Lab/empty\ttrue\ttrue\n", true
+		case blobCall("Lab/empty"):
+			blobs++
+			return "HTTP/2.0 409 Conflict\n\n" + `{"message":"Git Repository is empty."}` + "\ngh: Git Repository is empty. (HTTP 409)", true
+		}
+		return "", false
+	})
+	err := CheckReach(GitHub{Owner: "Lab"}, "github_pat_x", "https://github.com/ihsan-sa/hive")
+	if !errors.Is(err, ErrReachUnknown) || !strings.Contains(err.Error(), "Lab/empty") || !strings.Contains(err.Error(), "409") {
+		t.Errorf("refusal: %v", err)
+	}
+	if blobs != 1 {
+		t.Errorf("Lab/empty probed %d times", blobs)
+	}
+}
+
 // TestCheckReachAtScale: a narrow token whose owner has 300 public
 // repositories, all listed as admin, passes, though GitHub refuses any burst
 // past its 900 points a minute.
