@@ -31,12 +31,15 @@ var gateExe = os.Executable
 
 // reachOK caches CheckReach on the children's token until ttl: an hour
 // for a verdict, so a refusal isn't asked of GitHub on every run, and five
-// minutes when the check couldn't learn the answer (a rate limit).
+// minutes when the check couldn't learn the answer (a rate limit). It is
+// kept for one pair of tokens: a token changed on disk is checked afresh.
+// The gate is told a pass (--reach-checked), so it doesn't probe again.
 var reachOK struct {
 	sync.Mutex
-	at  time.Time
-	ttl time.Duration
-	err error
+	at     time.Time
+	ttl    time.Duration
+	tokens string
+	err    error
 }
 
 // runGate runs the recursive gate for the work module: `hive gate` from the
@@ -100,9 +103,10 @@ func orgArgs(j work.GateJob) ([]string, string) {
 		return local, fmt.Sprintf("The gate ran on a local org: %s and %s hold the same token, and the children's token must not be the one that makes and deletes repositories.", orgFile, gateChildFile)
 	}
 	reachOK.Lock()
-	if reachOK.at.IsZero() || time.Since(reachOK.at) > reachOK.ttl {
+	tokens := orgTok + "\x00" + childTok + "\x00" + j.Project.Repo
+	if reachOK.at.IsZero() || time.Since(reachOK.at) > reachOK.ttl || reachOK.tokens != tokens {
 		reachOK.err = gate.CheckReach(gate.GitHub{Owner: gateOrg, Token: orgTok}, childTok, j.Project.Repo)
-		reachOK.at, reachOK.ttl = time.Now(), time.Hour
+		reachOK.at, reachOK.ttl, reachOK.tokens = time.Now(), time.Hour, tokens
 		if errors.Is(reachOK.err, gate.ErrReachUnknown) {
 			reachOK.ttl = 5 * time.Minute
 		}
@@ -112,7 +116,7 @@ func orgArgs(j work.GateJob) ([]string, string) {
 	if err != nil {
 		return local, fmt.Sprintf("The gate ran on a local org instead of %s: %v", gateOrg, err)
 	}
-	return []string{"--org", gateOrg, "--org-token-file", orgFile, "--child-token-file", gateChildFile}, ""
+	return []string{"--org", gateOrg, "--org-token-file", orgFile, "--child-token-file", gateChildFile, "--reach-checked"}, ""
 }
 
 func readToken(path string) string {
