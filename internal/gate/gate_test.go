@@ -219,7 +219,7 @@ func TestNoHostHome(t *testing.T) {
 	sha, _ := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
 	out := t.TempDir()
 	c := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: testSandbox(), Go: g}
-	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha))); err != nil {
+	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha)), ""); err != nil {
 		t.Fatal(err)
 	}
 	c.Extra = []string{"HOST_HOME=" + home, "BIN=" + c.Bin}
@@ -283,7 +283,7 @@ func TestBuildFetchesANewDependency(t *testing.T) {
 	})
 	out := filepath.Join(dir, "out")
 	c := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: testSandbox(), Go: g}
-	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha))); err != nil {
+	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha)), ""); err != nil {
 		t.Fatal(err)
 	}
 	if !exists(c.Bin) {
@@ -783,5 +783,39 @@ func TestWhose(t *testing.T) {
 	}
 	if whose(cand, ctrl, nil, "x") != nil {
 		t.Error("no errors")
+	}
+}
+
+// Out of time is the candidate's alone only when it was the slower side over
+// the probes both ran: the deadline passing before the control's turn, on a
+// machine slow for both, holds the others.
+func TestOutOfTimeIsAloneOnlyWhenTheCandidateIsSlower(t *testing.T) {
+	unixOnly(t)
+	if slowerAlone([]Result{{Seconds: 9}}, nil) || slowerAlone([]Result{{Seconds: 5}, {Seconds: 5}}, []Result{{Seconds: 5}}) {
+		t.Error("the candidate's extra probe was counted against it")
+	}
+	if !slowerAlone([]Result{{Seconds: 8}, {Seconds: 8}}, []Result{{Seconds: 1}}) {
+		t.Error("a candidate slower over the probes both ran is not alone")
+	}
+	dir := t.TempDir()
+	cand, ctrl := fakeBin(t, dir, "cand", "v2", true), fakeBin(t, dir, "ctrl", "v1", true)
+	run := func(name string, candWait, ctrlWait, timeout time.Duration) Report {
+		t.Helper()
+		slow := func(cfg *Config, c *Child) Result {
+			time.Sleep(map[string]time.Duration{"candidate": candWait, "control": ctrlWait}[c.Name])
+			return Result{Pass: true}
+		}
+		rep, _ := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, name, "run"), Reps: 3, Sandbox: "bare", AllowBare: true,
+			Probes: []string{"slow"}, Probe: map[string]ProbeFunc{"slow": slow}, Timeout: timeout})
+		if !rep.CantRun || !strings.Contains(rep.Error, "out of time") {
+			t.Fatalf("%s: want out of time, got %+v (%s)", name, rep.Verdict, rep.Error)
+		}
+		return rep
+	}
+	if rep := run("both-slow", 300*time.Millisecond, 300*time.Millisecond, 100*time.Millisecond); rep.Alone {
+		t.Errorf("out of time before the control's turn, both slow: alone (%s)", rep.Error)
+	}
+	if rep := run("cand-slow", 600*time.Millisecond, 10*time.Millisecond, 800*time.Millisecond); !rep.Alone {
+		t.Errorf("out of time with the candidate the slower side: not alone (%s)", rep.Error)
 	}
 }

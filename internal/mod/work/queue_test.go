@@ -272,3 +272,38 @@ func TestQueueAreasFollowGitattributes(t *testing.T) {
 		t.Fatalf("areas after .gitattributes changed %q", got)
 	}
 }
+
+// A working task whose worker has gone quiet holds no brief back past its
+// quiet alert: the brief on its file starts, and the quiet worker still
+// counts toward max_workers.
+func TestQuietWorkerHoldsNoOne(t *testing.T) {
+	m := queueRig(t)
+	p, _ := m.C.Projects.Get("p")
+	stuck := file(t, m, "the stuck one", "In internal/core/effects.go.")
+	fix := file(t, m, "the queue fix", "In internal/core/effects.go too.")
+	if _, err := m.C.Runs.Start(core.RunSpec{ID: "wq", Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	stuck.Stage, stuck.Worker, fix.Stage = StageWorking, "wq", StageQueued
+	m.save(&stuck, "")
+	m.save(&fix, "")
+	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], stuck.ID) {
+		t.Fatalf("the fix doesn't wait on a working one: %q", wait[fix.ID])
+	}
+	m.C.Runs.SetStatus("wq", core.StatusQuiet, "keeps ending turns without finishing")
+	if err := m.checkWorker(&stuck, p); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := m.Get(stuck.ID); !strings.Contains(got.Reason, "quiet") {
+		t.Fatalf("no quiet note: %q", got.Reason)
+	}
+	if start, wait := m.admit(m.List(nil)); !start[fix.ID] {
+		t.Fatalf("the fix still waits on a quiet worker: %q", wait[fix.ID])
+	}
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], "max_workers") {
+		t.Fatalf("a quiet worker's slot was given away: %q", wait[fix.ID])
+	}
+}
