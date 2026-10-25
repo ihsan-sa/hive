@@ -4,6 +4,7 @@
 package improve
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -84,6 +85,7 @@ type Module struct {
 	fails    map[string][]core.Check // project -> recent red test checks that name their failing tests
 	heads    map[string][]string     // task id -> every head it had
 	merged   map[string]time.Time    // merge sha -> when it merged
+	cantRuns map[string]int          // project@sha -> its checks that couldn't start
 
 	stepbacks map[string]*StepBack
 	busy      map[string]bool
@@ -94,7 +96,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -113,7 +115,10 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			}
 		case "effect.checked":
 			var c core.Check
-			if e.Decode(&c) == nil && c.Kind == "test" && !c.OK && len(c.Failed) > 0 && time.Since(c.At) < flakeWindow {
+			if e.Decode(&c) == nil && c.CantRun != "" {
+				m.cantRuns[c.Project+"@"+c.SHA]++
+			}
+			if c.Kind == "test" && !c.OK && len(c.Failed) > 0 && time.Since(c.At) < flakeWindow {
 				fs := append(m.fails[c.Project], c)
 				for len(fs) > 0 && time.Since(fs[0].At) > flakeWindow {
 					fs = fs[1:]
@@ -414,6 +419,16 @@ func (m *Module) warnUnlisted(p core.Project, cfg core.ProjectConfig) {
 	}
 }
 
+// triedOut says sha's checks couldn't start work.CantRunTries times: a commit
+// can fake a missing tool (print "not found", exit 127), and its merge isn't
+// held unjudged on that forever. The count is every such check on the
+// commit's journal, so a restart doesn't start it over.
+func (m *Module) triedOut(project, sha string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cantRuns[project+"@"+sha] >= work.CantRunTries
+}
+
 // retryNoResult is how long a merge whose check couldn't start waits before
 // it is measured again.
 var retryNoResult = 10 * time.Minute
@@ -550,6 +565,11 @@ func (m *Module) afterMerge(t work.Task) {
 		ok, score, note = true, nil, "score did not produce a number: this merge's score command calls "+cant.Tool+", which isn't installed where checks run: "+note
 	case cant.CantRun != "" && m.introduced(p, t.MergeSHA, cant):
 		ok, note = false, "tests red: this merge's test command calls "+cant.Tool+", which isn't installed where checks run: "+note
+	case cant.CantRun != "" && m.triedOut(p.Name, t.MergeSHA):
+		ok, note = false, fmt.Sprintf("%s %s, %d tries in a row since it merged, which counts as red: %s", cant.Kind, cant.CantRun, work.CantRunTries, note)
+		m.C.Person.Ask(core.Ask{Kind: "question", Ref: "cant-run:" + t.MergeSHA, Project: p.Name, Options: []string{"ok"},
+			Title:  "Install " + cmp.Or(cant.Tool, "a tool") + " where checks run for " + p.Name + "?",
+			Detail: "Main of " + p.Name + " at " + core.Short(t.MergeSHA) + " (" + t.Label() + ") " + cant.CantRun + " every time it was measured since it merged. That now counts as red, so the merge is reverted. If the tool is really missing, install it where checks run; if it isn't, the change only claimed it was."})
 	case cant.CantRun != "":
 		m.noResult(p, Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, Note: note, Version: m.version(p, t.MergeSHA, cfg), NoResult: true}, cant.Kind)
 		m.hold(p, t)
