@@ -467,6 +467,22 @@ func TestRootReleaseOnTheHivesReads(t *testing.T) {
 	}
 }
 
+// A root-class path off the security list never gets a seat's read, so the
+// release that carries it waits for the person, read or not.
+func TestRootPathNoSeatReadsHolds(t *testing.T) {
+	m, n, _, land := selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 4, "sha": "a4", "merge_sha": "m4", "root": []string{".github/CODEOWNERS"}, "diff": "d4"})
+	land("a4", "r4")
+	m.AfterKept("hive", "m4")
+	asks := m.C.Person.Open()
+	if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, ".github/CODEOWNERS run with elevated rights and no security read passed them") {
+		t.Fatalf("a root path no seat read should hold for the person: %v %+v", n.got, asks)
+	}
+	if len(m.C.Person.Told(5)) != 0 {
+		t.Fatal("told the person about a release that didn't go out")
+	}
+}
+
 // A release with an unread merge still waits for the person, even when every
 // root path in it passed the Hive's security reads.
 func TestUnreadMergeStillHeldWithRootRead(t *testing.T) {
