@@ -122,6 +122,10 @@ type Task struct {
 	// so long, however often main moves meanwhile.
 	MainWait   time.Time `json:"main_wait,omitempty"`
 	MainWaitOn string    `json:"main_wait_on,omitempty"`
+	// NoChecks is when head NoChecksOn was first seen with no forge check
+	// run at all while its required ones were awaited (head.go).
+	NoChecks   time.Time `json:"no_checks,omitempty"`
+	NoChecksOn string    `json:"no_checks_on,omitempty"`
 	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
 	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
 	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
@@ -1913,6 +1917,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if done, err := m.alreadyLanded(t, p, main, t.SHA); done || err != nil {
 		return err
 	}
+	if wait, err := m.sameHead(t, p, pr.HeadSHA); wait || err != nil {
+		return err
+	}
 	if wait, err := m.upToDate(t, p, main); wait || err != nil {
 		return err
 	}
@@ -2178,6 +2185,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		if still := stillOnMain(which, mainRuns); len(still) > 0 {
 			if t.MainWaitOn != t.SHA {
 				t.MainWait, t.MainWaitOn = time.Now().UTC(), t.SHA
+				m.save(t, "") // the hold below may save nothing, and the next tick loads it afresh
 			}
 			if time.Since(t.MainWait) < mainWaitMax {
 				m.hold(t, p, "waiting on main: the forge's checks "+core.CheckNames(still)+" fail on "+core.Short(t.SHA)+" and still run on main at "+core.Short(main)+", whose result says whether the red is the change's")
@@ -2194,6 +2202,9 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			}
 			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+how+"; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
 		}
+	}
+	if wait, err := m.noChecks(t, p, main, runs, st); wait || err != nil {
+		return wait, err
 	}
 	names := core.CheckNames(which)
 	onMain := ""
