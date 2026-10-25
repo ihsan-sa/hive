@@ -435,6 +435,75 @@ func TestReleaseNamesItsReads(t *testing.T) {
 	}
 }
 
+// seated journals a security seat's verdict on the own diff diff.
+func seated(m *Module, sha, diff, seat, verdict string) {
+	m.C.J.MustAppend("effect.verdict", core.Verdict{Project: "hive", SHA: sha, Run: "s-" + seat, Verdict: verdict, Diff: diff, Seat: seat})
+}
+
+// A merge to a root path whose own diff the security seat and a majority of
+// the panel passed is released by the Hive itself, and the person is told
+// after instead of asked.
+func TestRootReleaseOnTheHivesReads(t *testing.T) {
+	m, n, _, land := selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh"}, "diff": "d2"})
+	land("a2", "r2")
+	seated(m, "a2", "d2", core.SeatSecurity, "land")
+	seated(m, "a2", "d2", core.PanelSeat(0), "land")
+	m.AfterKept("hive", "m2")
+	if len(n.got) != 0 || len(m.C.Person.Open()) != 1 {
+		t.Fatalf("one panel land of three released a root change: %v", n.got)
+	}
+	seated(m, "a2", "d2", core.PanelSeat(1), "land")
+	m.AfterKept("hive", "m2")
+	body := n.got["v0.0.1"]
+	if !strings.Contains(body, "install/root.sh) passed the security seat") || strings.Contains(body, "The person released it") {
+		t.Fatalf("the release should say the Hive's reads passed its root paths: %q", body)
+	}
+	if open := m.C.Person.Open(); len(open) != 0 {
+		t.Fatalf("the earlier release ask should be answered by the release: %+v", open)
+	}
+	told := m.C.Person.Told(5)
+	if len(told) != 1 || !strings.Contains(told[0].Title, "Released v0.0.1") || !strings.Contains(told[0].Title, "#2 (install/root.sh)") {
+		t.Fatalf("the person should be told after: %+v", told)
+	}
+}
+
+// A root-class path off the security list never gets a seat's read, so the
+// release that carries it waits for the person, read or not.
+func TestRootPathNoSeatReadsHolds(t *testing.T) {
+	m, n, _, land := selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 4, "sha": "a4", "merge_sha": "m4", "root": []string{".github/CODEOWNERS"}, "diff": "d4"})
+	land("a4", "r4")
+	m.AfterKept("hive", "m4")
+	asks := m.C.Person.Open()
+	if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, ".github/CODEOWNERS run with elevated rights and no security read passed them") {
+		t.Fatalf("a root path no seat read should hold for the person: %v %+v", n.got, asks)
+	}
+	if len(m.C.Person.Told(5)) != 0 {
+		t.Fatal("told the person about a release that didn't go out")
+	}
+}
+
+// A release with an unread merge still waits for the person, even when every
+// root path in it passed the Hive's security reads.
+func TestUnreadMergeStillHeldWithRootRead(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh"}, "diff": "d2"})
+	land("a2", "r2")
+	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
+		seated(m, "a2", "d2", seat, "land")
+	}
+	merged(3, "a3", "m3")
+	m.AfterKept("hive", "m3")
+	asks := m.C.Person.Open()
+	if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, "#3 at a3 merged without a read") || strings.Contains(asks[0].Title, "elevated") {
+		t.Fatalf("an unread merge should hold the release for the person, on that alone: %v %+v", n.got, asks)
+	}
+	if len(m.C.Person.Told(5)) != 0 {
+		t.Fatal("told the person about a release that didn't go out")
+	}
+}
+
 // An answer to an older release ask, given after a newer release was cut,
 // never releases the older merge under a newer tag.
 func TestStaleReleaseAnswer(t *testing.T) {

@@ -8,12 +8,15 @@ import (
 	"strings"
 )
 
+// procRoot is where Linux's figures are read; a test points it at its own.
+var procRoot = "/proc"
+
 // Strained says why the machine is too strained to start a turn, or "". It
 // reads Linux's MemAvailable and memory and CPU pressure (PSI "some avg10",
 // the share of the last ten seconds some task stalled); where those files
 // don't exist it never holds. A limit of 0 turns its check off.
 func Strained(memFloorMB int, memPressureMax, cpuPressureMax float64) string {
-	return strained("/proc", memFloorMB, memPressureMax, cpuPressureMax)
+	return strained(procRoot, memFloorMB, memPressureMax, cpuPressureMax)
 }
 
 func strained(proc string, memFloorMB int, memPressureMax, cpuPressureMax float64) string {
@@ -40,7 +43,7 @@ func strained(proc string, memFloorMB int, memPressureMax, cpuPressureMax float6
 // Loaded's) exists on this machine: where none does (no /proc, as on macOS
 // or Windows) they never hold, so nothing is seen at all.
 func Watched(memFloorMB int, memPressureMax, cpuPressureMax, loadMax float64) bool {
-	return watched("/proc", memFloorMB, memPressureMax, cpuPressureMax, loadMax)
+	return watched(procRoot, memFloorMB, memPressureMax, cpuPressureMax, loadMax)
 }
 
 func watched(proc string, memFloorMB int, memPressureMax, cpuPressureMax, loadMax float64) bool {
@@ -71,7 +74,7 @@ func procField(path, key string) (float64, bool) {
 // Loaded says why the machine is too loaded to take on more work, or "": its
 // 1-minute load average per core is over max. Where /proc/loadavg doesn't
 // exist it never holds, and a max of 0 turns it off.
-func Loaded(max float64) string { return loaded("/proc", runtime.NumCPU(), max) }
+func Loaded(max float64) string { return loaded(procRoot, runtime.NumCPU(), max) }
 
 func loaded(proc string, cores int, max float64) string {
 	if max <= 0 {

@@ -1238,3 +1238,16 @@ func TestRedWindowsBlocksOtherProjects(t *testing.T) {
 		t.Fatalf("stage %q, round %d, warning %q", task.Stage, task.Round, task.Warning)
 	}
 }
+
+// A branch red only with main's own vet error never ran its tests (vet
+// stopped the command), so it isn't no worse than main: it waits on main.
+func TestVetRedOnlyAsMainIsNotNoWorse(t *testing.T) {
+	vet := core.Check{Output: "# x/e\nvet: e/a_test.go:225:42: not enough arguments in call to f\n"}
+	if noWorse(vet, vet) {
+		t.Fatal("a branch whose tests vet stopped counted as no worse than main")
+	}
+	red := core.Check{Output: "--- FAIL: TestClock (0.00s)\nFAIL\tx/a\t0.01s\n"}
+	if !noWorse(red, red) {
+		t.Fatal("a branch failing only main's own test wasn't no worse")
+	}
+}

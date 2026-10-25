@@ -300,15 +300,13 @@ func (e *Effects) prefetch(dir string) error {
 		return err
 	}
 	defer RemoveTree(tmp)
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + tmp, "TMPDIR=" + tmp, "GOCACHE=" + filepath.Join(tmp, "gocache"), "GOPATH=" + filepath.Join(tmp, "gopath"),
+		"GOMODCACHE=" + e.ws.GoModCache(), "GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GOVCS=*:off", "GOWORK=off", "GOENV=off",
+		"CGO_ENABLED=0", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}
 	// Telemetry off: in a fresh home go always takes its daily upload token
 	// and starts a detached child that can outlive it, still writing under
 	// tmp while RemoveTree empties it (issue #514).
-	conf := filepath.Join(tmp, "config")
-	os.MkdirAll(filepath.Join(conf, "go", "telemetry"), 0o755)
-	os.WriteFile(filepath.Join(conf, "go", "telemetry", "mode"), []byte("off\n"), 0o644)
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + tmp, "XDG_CONFIG_HOME=" + conf, "TMPDIR=" + tmp, "GOCACHE=" + filepath.Join(tmp, "gocache"), "GOPATH=" + filepath.Join(tmp, "gopath"),
-		"GOMODCACHE=" + e.ws.GoModCache(), "GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GOVCS=*:off", "GOWORK=off", "GOENV=off",
-		"CGO_ENABLED=0", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}
+	env = append(env, goTelemetryOff(tmp)...)
 	for _, k := range []string{"GOPROXY", "GOSUMDB", "GONOSUMDB", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
 		if v, ok := os.LookupEnv(k); ok {
 			env = append(env, k+"="+v)
@@ -623,6 +621,35 @@ func (e *Effects) diskAlert(line string) {
 	if e.OnDiskFull != nil {
 		go e.OnDiskFull()
 	}
+}
+
+// goTelemetryOff keeps go from collecting telemetry under home, and from
+// starting the detached child that writes there after go itself has
+// exited: on a throwaway home that child raced RemoveTree, which then
+// failed with "directory not empty" (TestPrefetchReadsOnlyTheCheckout,
+// TestChecksShareTheModuleCache, in the gate's sandbox most of all). The
+// mode file is what `go telemetry off` writes, put where go's
+// os.UserConfigDir looks for it with HOME at home on this OS: $HOME/.config
+// on Linux (XDG_CONFIG_HOME, which the returned env pins whatever the
+// host's), Library/Application Support on macOS, AppData on Windows (the
+// env names it there too, as go reads only the variable).
+func goTelemetryOff(home string) []string {
+	var cfg string
+	var env []string
+	switch runtime.GOOS {
+	case "darwin":
+		cfg = filepath.Join(home, "Library", "Application Support")
+	case "windows":
+		cfg = filepath.Join(home, "AppData", "Roaming")
+		env = append(env, "AppData="+cfg)
+	default:
+		cfg = filepath.Join(home, ".config")
+		env = append(env, "XDG_CONFIG_HOME="+cfg)
+	}
+	dir := filepath.Join(cfg, "go", "telemetry")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "mode"), []byte("off"), 0o644)
+	return env
 }
 
 // checkTmp points a check's TMPDIR at the temp folder in its home, on disk,
