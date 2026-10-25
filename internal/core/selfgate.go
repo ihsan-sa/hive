@@ -14,8 +14,8 @@ const (
 )
 
 // GateResult is the recursive gate's verdict on a self project's head,
-// measured against main at Main. A change to the Hive itself merges only on
-// a keep for exactly that head and main (Effects.Merge).
+// measured against main at Main. A change to the Hive itself aimed at a gain
+// merges only on a keep for exactly that head and main (Effects.Merge).
 type GateResult struct {
 	Project   string    `json:"project"`
 	Head      string    `json:"head"`

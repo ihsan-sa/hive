@@ -62,4 +62,4 @@ More: [risk.md](risk.md) (tiers, warden, tribunal, egress), [architecture.md](ar
 
 - Slack, mail or phone out of the box (a module could add them), other people's workspaces on the same machine, a separate system user per agent, and sharing a GPU.
 - The macOS sandbox hasn't been tested, and Codex hasn't run with a real login.
-- The recursive gate ([gate.md](gate.md)), which keeps a change to the Hive itself only if a child Hive built from it does better, exists and runs on every change to the Hive's own repository, but hasn't yet kept a change because it beat the current Hive.
+- The recursive gate ([gate.md](gate.md)), which keeps a change to the Hive itself only if a child Hive built from it does better, exists and runs on every change to the Hive's own repository that aims at a measurable gain (a fix just merges, and the score after the merge still reverts it if main got worse), but hasn't yet kept a change because it beat the current Hive.
