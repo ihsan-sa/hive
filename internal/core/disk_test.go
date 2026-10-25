@@ -274,21 +274,25 @@ func TestPrefetchReadsOnlyTheCheckout(t *testing.T) {
 	}
 }
 
-// The prefetch's go runs with telemetry off, so no counter files or upload
-// child are left writing in the folder it removes.
+// The prefetch's go runs with telemetry off: in its fresh home go would
+// otherwise take the daily upload token and leave a detached child writing
+// into the cache after RemoveTree (issue #514).
 func TestPrefetchTurnsTelemetryOff(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("a shell script stands in for go")
+	if runtime.GOOS != "linux" {
+		t.Skip("the shared module cache is for Linux sandboxes")
 	}
 	c, _ := testHive(t)
-	bin := filepath.Join(c.WS.Tools(), "go", "bin")
-	os.MkdirAll(bin, 0o755)
+	removesCache(t, c)
 	seen := filepath.Join(t.TempDir(), "mode")
-	os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\ncat \"$XDG_CONFIG_HOME/go/telemetry/mode\" > '"+seen+"'\n"), 0o755)
-	if err := c.Effects.prefetch(t.TempDir()); err != nil {
+	goBin := filepath.Join(c.WS.Tools(), "go", "bin", "go")
+	os.MkdirAll(filepath.Dir(goBin), 0o755)
+	os.WriteFile(goBin, []byte("#!/bin/sh\ncat \"$XDG_CONFIG_HOME/go/telemetry/mode\" > "+seen+"\n"), 0o755)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n"), 0o644)
+	if err := c.Effects.prefetch(dir); err != nil {
 		t.Fatal(err)
 	}
 	if raw, _ := os.ReadFile(seen); strings.TrimSpace(string(raw)) != "off" {
-		t.Fatalf("go ran with telemetry mode %q", raw)
+		t.Fatalf("go saw telemetry mode %q", raw)
 	}
 }
