@@ -157,7 +157,7 @@ func (m *Module) Watch() {
 	var causes []string
 	for _, t := range m.Work.List(func(t work.Task) bool { return !t.Terminal() && t.Stage != work.StagePerson }) {
 		now["task:"+t.ID] = t.Stage
-		// The recursive gate runs one change at a time on its own clock.
+		// The recursive gate runs on its own clock, as many at once as the machine carries.
 		if t.Queued() || strings.HasPrefix(t.Reason, work.GateWait) || t.Stage == work.StageTesting && slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
 			continue
 		}

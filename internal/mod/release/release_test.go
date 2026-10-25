@@ -1221,3 +1221,49 @@ func TestNonStewardDoesNotRelease(t *testing.T) {
 		t.Fatalf("a non-steward published: %s", out)
 	}
 }
+
+// A kept merge whose checks failed on main is neither cut nor offered to the
+// person; one whose checks still run waits, and Tick's retry releases it once
+// they pass, covering the red merge before it.
+func TestReleaseOnlyAtAGreenMain(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1", "install/root.sh") // would ask the person
+	land("a1", "r1")
+	n.SetChecks("me/hive", "m1", core.CheckRun{Name: "test", State: core.CheckFail})
+	m.AfterKept("hive", "m1")
+	if len(n.got) != 0 || len(m.C.Person.Open()) != 0 {
+		t.Fatalf("a red main was released or offered: %v %+v", n.got, m.C.Person.Open())
+	}
+	if a := alertText(m); !strings.Contains(a, "no release at m1: its checks failed on main (test)") {
+		t.Fatalf("alert %q", a)
+	}
+	m.AfterKept("hive", "m1")
+	if journaledN(m, "release.ci_failed") != 1 || journaledN(m, "alert.raised") != 1 {
+		t.Fatal("the red main was raised again")
+	}
+
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPending})
+	m.AfterKept("hive", "m2")
+	m.retryWaiting()
+	if len(n.got) != 0 || len(m.C.Person.Open()) != 0 || journaledN(m, "release.ci_waiting") != 1 {
+		t.Fatalf("a running main was released or offered: %v %+v", n.got, m.C.Person.Open())
+	}
+
+	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPass})
+	m.retryWaiting()
+	asks := m.C.Person.Open()
+	if len(asks) != 1 || asks[0].Ref != "hive@m2" {
+		t.Fatalf("the green main isn't offered: %+v", asks)
+	}
+	m.retryWaiting()
+	if len(m.C.Person.Open()) != 1 || journaledN(m, "release.ci_passed") != 1 {
+		t.Fatal("a passed wait was tried again")
+	}
+	asks[0].Answer = "release"
+	m.OnPerson(asks[0])
+	if body := n.got["v0.0.1"]; !strings.Contains(body, "#1 at a1") || !strings.Contains(body, "#2 at a2") {
+		t.Fatalf("release %q", body)
+	}
+}

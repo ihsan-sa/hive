@@ -71,3 +71,42 @@ func gone(t *testing.T, pid int) {
 	syscall.Kill(pid, syscall.SIGKILL)
 	t.Fatalf("pid %d outlived its check", pid)
 }
+
+// A bare command's process that left its group (setsid) outlives the daemon
+// that died under it; the next sweep ends it by its daemon's tag, and leaves
+// a live daemon's alone.
+func TestSweepEndsWhatADeadDaemonsBareCommandLeft(t *testing.T) {
+	if os.Getenv("HIVE_SYNC_HELPER") == "2" {
+		pidFile := os.Getenv("HIVE_SYNC_PID")
+		go Bare{}.Run(Spec{Argv: []string{"/bin/sh", "-c", "setsid sleep 300 & echo $! > " + pidFile + "; exec sleep 300"}, Cwd: "/"}, time.Hour)
+		time.Sleep(time.Hour)
+		return
+	}
+	pidFile := t.TempDir() + "/pid"
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSweepEndsWhatADeadDaemonsBareCommandLeft$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "HIVE_SYNC_HELPER=2", "HIVE_SYNC_PID="+pidFile)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := waitPid(t, pidFile)
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	live := exec.Command("sleep", "60")
+	live.Env = append(os.Environ(), OwnerEnv+"="+owner)
+	if err := live.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { live.Process.Kill(); live.Wait() })
+	cmd.Process.Kill()
+	cmd.Wait()
+	time.Sleep(100 * time.Millisecond)
+	if syscall.Kill(pid, 0) != nil {
+		t.Fatal("the detached process ended with its daemon: nothing for the sweep to do")
+	}
+	if n := sweepOrphans(); n < 1 {
+		t.Errorf("the sweep ended %d processes, want the orphan", n)
+	}
+	gone(t, pid)
+	if syscall.Kill(live.Process.Pid, 0) != nil {
+		t.Error("the sweep killed a live daemon's command")
+	}
+}

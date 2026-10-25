@@ -19,7 +19,7 @@ func TestTidyGatesSkipsTheRunInFlight(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(dir, "lessons.md"), nil, 0o644)
 	m.mu.Lock()
-	m.gating = &gateRun{key: "k", since: time.Now(), out: live}
+	m.gating = map[string]*gateRun{"k": {key: "k", since: time.Now(), out: live}}
 	m.mu.Unlock()
 	var reaped []string
 	m.TidyGates(func(out string) int { reaped = append(reaped, out); return 0 })

@@ -147,6 +147,10 @@ func Exec(specPath string) int {
 	defer os.RemoveAll(rt)
 	if held, err := holdRuntime(rt); err == nil {
 		defer held.Close()
+	} else {
+		// It runs on, but a sweep reads its folder as a legacy one, gone
+		// after runtimeStale (egress.sock with it) even while it still runs.
+		fmt.Fprintln(errf, "sandbox: can't hold the runtime folder's lock:", err)
 	}
 	args := initArgs{Spec: s, Root: filepath.Join(rt, "root"), Tools: map[string]string{}}
 	if err := os.Mkdir(args.Root, 0o755); err != nil {
