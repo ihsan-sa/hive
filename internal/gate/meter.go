@@ -239,3 +239,36 @@ func Forward(sock string, argv []string) int {
 	}
 	return 0
 }
+
+// Connect is `hive gate-connect <host> <port>`: an ssh ProxyCommand inside a
+// side's sandbox. It opens a tunnel to host:port through the side's proxy
+// (HTTPS_PROXY: the forwarder, so the meter) and relays stdin and stdout over
+// it, so git over ssh leaves the sandbox the one way everything else does.
+func Connect(host, port string) int {
+	fail := func(err error) int { fmt.Fprintln(os.Stderr, "gate-connect:", err); return 1 }
+	p := os.Getenv("HTTPS_PROXY")
+	u, err := url.Parse(p)
+	if err != nil || u.Host == "" {
+		return fail(fmt.Errorf("no proxy in HTTPS_PROXY (%q)", p))
+	}
+	up, err := net.DialTimeout("tcp", u.Host, 30*time.Second)
+	if err != nil {
+		return fail(err)
+	}
+	defer up.Close()
+	hostport := net.JoinHostPort(host, port)
+	up.SetDeadline(time.Now().Add(30 * time.Second))
+	fmt.Fprintf(up, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", hostport, hostport)
+	br := bufio.NewReader(up)
+	resp, err := http.ReadResponse(br, &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		return fail(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fail(fmt.Errorf("the proxy said %s", resp.Status))
+	}
+	up.SetDeadline(time.Time{})
+	go func() { io.Copy(up, os.Stdin); up.(*net.TCPConn).CloseWrite() }()
+	io.Copy(os.Stdout, br) // until the far end closes
+	return 0
+}

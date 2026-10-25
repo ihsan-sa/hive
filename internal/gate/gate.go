@@ -61,9 +61,10 @@ type Report struct {
 	Candidate   []Result   `json:"candidate"`
 	Control     []Result   `json:"control"`
 	Verdict     Verdict    `json:"verdict"`
-	Repos       []string   `json:"repos,omitempty"`   // org repositories made
-	Cleaned     []string   `json:"cleaned,omitempty"` // and removed
-	Leaked      []string   `json:"leaked,omitempty"`  // made and not removed
+	Repos       []string   `json:"repos,omitempty"`    // org repositories made
+	Cleaned     []string   `json:"cleaned,omitempty"`  // and removed
+	Leaked      []string   `json:"leaked,omitempty"`   // made and not removed
+	OrgNote     string     `json:"org_note,omitempty"` // why the run fell back from the GitHub org to a local one
 	Error       string     `json:"error,omitempty"`
 	CandBin     string     `json:"candidate_bin,omitempty"`     // the verified copy of the candidate's binary
 	CandSHA256  string     `json:"candidate_sha256,omitempty"`  // its hash, taken right after the build
@@ -323,32 +324,80 @@ func Run(cfg Config) (rep Report, err error) {
 	// and removed when the run ends, however it ends.
 	made := 0
 	if cfg.Org != nil {
-		defer func() {
-			for _, name := range rep.Repos {
-				if e := cfg.Org.Delete(name); e != nil {
+		// Each repository is deleted by the org that made it, even after a
+		// fallback to a local org.
+		madeBy := map[string]Org{}
+		var pending []string
+		cleanup := func() {
+			names := pending
+			pending = nil
+			for _, name := range names {
+				if e := madeBy[name].Delete(name); e != nil {
 					rep.Leaked = append(rep.Leaked, name+": "+e.Error())
 				} else {
 					rep.Cleaned = append(rep.Cleaned, name)
 				}
 			}
-		}()
-		for _, c := range []*Child{cand, ctrl} {
-			if made >= cfg.MaxRepos {
-				return rep, fmt.Errorf("the run would make more than %d org repositories", cfg.MaxRepos)
+		}
+		defer cleanup()
+		makeRepos := func(org Org, suffix string) error {
+			for _, c := range []*Child{cand, ctrl} {
+				if made >= cfg.MaxRepos {
+					return fmt.Errorf("the run would make more than %d org repositories", cfg.MaxRepos)
+				}
+				made++
+				name := fmt.Sprintf("%s-%s%s", rep.ID, c.Name, suffix)
+				url, err := org.Create(name)
+				if err != nil {
+					return err
+				}
+				// Only a repository this run made is this run's to delete.
+				madeBy[name] = org
+				pending = append(pending, name)
+				c.Repo, c.RepoURL, c.Key = name, url, ""
+				rep.Repos = append(rep.Repos, name)
+				c.Token = cfg.ChildToken
+				if g, ok := org.(GitHub); ok && c.Token == "" {
+					// No token for the children: each holds a deploy key on its
+					// own repository, which reaches nothing else.
+					if c.Key, c.RepoURL, err = g.DeployKey(name, c.Root); err != nil {
+						return err
+					}
+					if err = c.writeSSHConfig(); err != nil {
+						return err
+					}
+					if out, err := c.Exec(2*time.Minute, c.Root, "git", "ls-remote", c.RepoURL); err != nil {
+						return fmt.Errorf("%s can't reach %s with its deploy key: %v: %s", c.Name, name, err, tail(out, 300))
+					}
+				}
+				if !strings.Contains(c.RepoURL, "://") {
+					// A local org's repository is a folder: the child sees it
+					// (writable, to push) and nothing else of the org's.
+					c.RW = append(c.RW, c.RepoURL)
+				}
 			}
-			made++
-			name := fmt.Sprintf("%s-%s", rep.ID, c.Name)
-			if c.RepoURL, err = cfg.Org.Create(name); err != nil {
+			return nil
+		}
+		if err = makeRepos(cfg.Org, ""); err != nil {
+			g, ok := cfg.Org.(GitHub)
+			if !ok || cfg.ChildToken != "" {
 				return rep, err
 			}
-			// Only a repository this run made is this run's to delete.
-			c.Repo = name
-			rep.Repos = append(rep.Repos, name)
-			c.Token = cfg.ChildToken
-			if !strings.Contains(c.RepoURL, "://") {
-				// A local org's repository is a folder: the child sees it
-				// (writable, to push) and nothing else of the org's.
-				c.RW = append(c.RW, c.RepoURL)
+			// The org leg failing to set up is not the candidate's doing, and
+			// must not hold every change: the run goes on with a local org and
+			// the report says why.
+			rep.OrgNote = fmt.Sprintf("The gate ran on a local org instead of %s: %v", g.Owner, err)
+			cfg.log("%s", rep.OrgNote)
+			cleanup()
+			for _, c := range []*Child{cand, ctrl} {
+				c.Repo, c.RepoURL, c.Key, c.Token = "", "", "", ""
+			}
+			cfg.Org = Local{Dir: filepath.Join(cfg.Out, "org")}
+			if err = os.MkdirAll(filepath.Join(cfg.Out, "org"), 0o755); err != nil {
+				return rep, err
+			}
+			if err = makeRepos(cfg.Org, "-local"); err != nil {
+				return rep, err
 			}
 		}
 	}
@@ -701,6 +750,9 @@ func (r Report) Markdown() string {
 	table("Candidate", r.Candidate)
 	table("Control", r.Control)
 	fmt.Fprintf(&b, "\nOrg repositories made: %d, removed: %d, left: %d\n", len(r.Repos), len(r.Cleaned), len(r.Leaked))
+	if r.OrgNote != "" {
+		fmt.Fprintf(&b, "\n%s\n", r.OrgNote)
+	}
 	for _, l := range r.Leaked {
 		fmt.Fprintf(&b, "- LEFT BEHIND: %s\n", l)
 	}
