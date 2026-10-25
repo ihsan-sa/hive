@@ -19,7 +19,8 @@ import (
 // It changes at most once a step, so the readings (load is a 1-minute
 // average) catch up with the last change before the next. max_workers and
 // max_checks, when set, are the person's ceilings and where the pace starts;
-// with no machine reading on it stays at its start, as it can't see.
+// with no machine reading on, or none to read (no /proc, as on macOS or
+// Windows), it stays at its start, as it can't see.
 
 // paceStep is the least time between two changes of a limit.
 const paceStep = time.Minute
@@ -82,13 +83,14 @@ func (p *pace) String() string {
 	return fmt.Sprintf("%d (%s)", p.limit, p.why)
 }
 
-// machine says why the machine is strained, or "", and whether any reading is on.
+// machine says why the machine is strained, or "", and whether any reading
+// is both on and there to read.
 func machine(cfg core.Config) (string, bool) {
 	why := core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax)
 	if why == "" {
 		why = core.Loaded(cfg.LoadMax)
 	}
-	return why, cfg.MemFloorMB > 0 || cfg.MemPressureMax > 0 || cfg.CPUPressureMax > 0 || cfg.LoadMax > 0
+	return why, core.Watched(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax)
 }
 
 // planSpent says when every model a worker would go on has under planFloor

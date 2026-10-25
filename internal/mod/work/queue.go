@@ -17,12 +17,12 @@ import (
 
 // The queue: a filed brief waits as queued until a worker can take it. Briefs
 // start in the order they were filed, or the order the lead set, and only as
-// many work at once as the pace allows while the machine isn't loaded. A brief that names the
-// same files or area as one a worker is on (or ahead of it in line) waits
-// until that worker is done, so the two don't conflict and redo each other's
-// work. How many work at once the pace sets (pace.go), under max_workers. Once a worker has pushed, its task holds nothing back: a conflict it
-// meets later goes back to its worker with main to merge. Nothing here stops a
-// worker that has started.
+// many work at once as the pace allows (pace.go, under max_workers) while the
+// machine isn't loaded. A brief that names the same files or area as one a
+// worker is on (or ahead of it in line) waits until that worker is done, so
+// the two don't conflict and redo each other's work. Once a worker has
+// pushed, its task holds nothing back: a conflict it meets later goes back to
+// its worker with main to merge. Nothing here stops a worker that has started.
 
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
