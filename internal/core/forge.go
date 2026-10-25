@@ -781,23 +781,53 @@ func ChecksRefused(text string) bool { return checksRefused.MatchString(text) }
 
 // ciless returns a filter for the errors of reading sha's checks: a refusal
 // (HTTP 403) is dropped when sha has no .github/workflows (GitHub answers 404
-// for it), asked once and only on the first refusal; any other error stands.
+// for it), asked only on a refusal and remembered per head, since a commit's
+// tree never changes; any other error stands. A rate limit's 403 is no
+// refusal. A 404 can also mean a private repo the token can't see, but the
+// 403 on its checks already says the token sees the repo.
+//
+// A head with no workflows can still carry statuses or check runs from an
+// outside app (CircleCI, a GitHub App); a refusal hides those, so such a repo
+// reads as having no checks (docs/risk.md).
 func ciless(repo, sha string) func(error) error {
-	asked, none := false, false
 	return func(err error) error {
-		if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+		var rl *RateLimited
+		if err == nil || errors.As(err, &rl) || !strings.Contains(err.Error(), "HTTP 403") {
 			return err
 		}
-		if !asked {
-			asked = true
-			_, werr := gh(repo, "api", "repos/"+repo+"/contents/.github/workflows?ref="+sha)
-			none = werr != nil && strings.Contains(werr.Error(), "HTTP 404")
-		}
-		if none {
+		if noWorkflows(repo, sha) {
 			return nil
 		}
 		return err
 	}
+}
+
+// workflowless remembers, by repo@sha, whether a head was found to have no
+// .github/workflows; only a definite answer (a 404 or a listing) is kept.
+var workflowless = struct {
+	sync.Mutex
+	m map[string]bool
+}{m: map[string]bool{}}
+
+func noWorkflows(repo, sha string) bool {
+	key := repo + "@" + sha
+	workflowless.Lock()
+	none, known := workflowless.m[key]
+	workflowless.Unlock()
+	if known {
+		return none
+	}
+	_, err := gh(repo, "api", "repos/"+repo+"/contents/.github/workflows?ref="+sha)
+	none = err != nil && strings.Contains(err.Error(), "HTTP 404")
+	if err == nil || none {
+		workflowless.Lock()
+		if len(workflowless.m) >= 1024 {
+			clear(workflowless.m)
+		}
+		workflowless.m[key] = none
+		workflowless.Unlock()
+	}
+	return none
 }
 
 // ghPages reads every page of a GitHub list held under field of each page's

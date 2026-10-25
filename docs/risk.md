@@ -36,6 +36,8 @@ A host-made revert goes through the same gate: a revert of a merge that touched 
 
 Known gap: a clean PR merges as it is onto the newest main (main is merged in only on a conflict, or when the forge requires the branch to be up to date), so the combined tree is tested by neither the Hive nor the PR's own CI, which ran on the PR merged with main at push time. A semantic clash between the two is caught after merge: improve measures main after every merge and reverts a change that leaves it red or worse. Turning on the forge's "require branches to be up to date" rule for a project closes the gap at the cost of a catch-up and a CI restart for every merge.
 
+Known gap: a forge token refused a head's checks (HTTP 403) on a head with no `.github/workflows` reads as having no checks (#464), so the change merges on the Hive's own tests. A repo whose statuses or check runs come from an outside app (CircleCI, Buildkite, a GitHub App) with no workflow file would have them hidden by the refusal; branch protection's required checks still hold the merge at the forge. No project the Hive runs today is set up that way. A head with workflows keeps the refusal as an error, and the stopped task comes back within an hour of the permission being granted.
+
 ## Point of effect
 
 `execute` runs in the daemon (the effects process), never in an agent's sandbox:

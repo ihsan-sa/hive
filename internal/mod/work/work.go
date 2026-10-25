@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -961,9 +962,18 @@ func (m *Module) revive() {
 // of the permission being granted.
 func (m *Module) reviveRefused() {
 	const refusedAgain = time.Hour
-	for _, t := range m.List(func(t Task) bool {
+	stopped := m.List(func(t Task) bool {
 		return t.Stage == StageStopped && !t.ByPerson && t.SHA != "" && strings.HasPrefix(t.Reason, gaveUpOnErrors) && core.ChecksRefused(strings.TrimPrefix(t.Reason, gaveUpOnErrors))
-	}) {
+	})
+	// A task that came back, or moved to another head, is asked no more.
+	keep := map[string]bool{}
+	for _, t := range stopped {
+		keep[t.ID+"@"+t.SHA] = true
+	}
+	m.mu.Lock()
+	maps.DeleteFunc(m.refusedAsked, func(k string, _ time.Time) bool { return !keep[k] })
+	m.mu.Unlock()
+	for _, t := range stopped {
 		key := t.ID + "@" + t.SHA
 		m.mu.Lock()
 		asked := time.Since(m.refusedAsked[key]) < refusedAgain

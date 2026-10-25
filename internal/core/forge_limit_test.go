@@ -16,6 +16,7 @@ func stubGH(t *testing.T, reply func(args []string) (string, string, error)) *[]
 	t.Cleanup(func() { ghRun, ghPause = run, p })
 	ghPause = &pause{}
 	logins.Clear()
+	clear(workflowless.m)
 	var calls [][]string
 	ghRun = func(_ string, args []string) (string, string, error) {
 		calls = append(calls, args)
@@ -361,6 +362,35 @@ func TestChecksRefusedWithoutWorkflows(t *testing.T) {
 		}
 		if asked != 1 {
 			t.Errorf("asked for workflows %d times, want once", asked)
+		}
+		// The head's answer is remembered: the next poll doesn't ask again.
+		if _, err := (GitHub{}).Checks("o/r", "abc"); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range (*calls)[len(*calls)-3:] {
+			if strings.Contains(c[1], "workflows") {
+				t.Errorf("asked for workflows again on the same head: %q", c)
+			}
+		}
+	}
+}
+
+// A rate limit's 403 on the checks is no refusal: it isn't read as no checks
+// and spends no call on the workflows.
+func TestChecksRateLimitIsNoRefusal(t *testing.T) {
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		if strings.Contains(strings.Join(args, " "), "check-runs") {
+			return "", "gh: You have exceeded a secondary rate limit (HTTP 403)", errors.New("exit status 1")
+		}
+		return "", "gh: Not Found (HTTP 404)", errors.New("exit status 1")
+	})
+	var rl *RateLimited
+	if _, err := (GitHub{}).Checks("o/r", "abc"); !errors.As(err, &rl) {
+		t.Fatalf("a rate limit read as %v", err)
+	}
+	for _, c := range *calls {
+		if strings.Contains(strings.Join(c, " "), "workflows") {
+			t.Errorf("asked for workflows on a rate limit: %q", c)
 		}
 	}
 }
