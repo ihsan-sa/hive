@@ -115,6 +115,31 @@ func TestSelfGateRollbackSendsBack(t *testing.T) {
 	}
 }
 
+// A head the gate can't merge with main goes back to its worker to merge
+// main: not a rollback, no lesson, no alert, and it holds no other change.
+func TestSelfGateConflictSendsBackToMerge(t *testing.T) {
+	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
+	inner := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+		g := inner(ctx, j)
+		g.Reason, g.Conflicts = "the candidate conflicts with the base in NOTES.md", []string{"NOTES.md"}
+		return g
+	}
+	gateOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Conflicts != 1 || strings.Contains(task.Findings, gateRolledBack) {
+		t.Fatalf("stage %q, conflicts %d, findings %q: want sent back to merge main", task.Stage, task.Conflicts, task.Findings)
+	}
+	if _, err := os.Stat(filepath.Join(m.C.WS.RunRO(task.Worker), "main.bundle")); err != nil {
+		t.Fatalf("the worker has no main to merge: %v", err)
+	}
+	if prState(t, f, task.PR.Number) != "OPEN" || alerts(m, "gate") != 0 {
+		t.Fatalf("PR %s, %d alerts: want open and no can't-run alert", prState(t, f, task.PR.Number), alerts(m, "gate"))
+	}
+	if len(m.gateCantRun) != 0 {
+		t.Fatalf("a conflict holds other changes: %+v", m.gateCantRun)
+	}
+}
+
 // A gate that can't run leaves the change waiting, never merged, raises it
 // once, and tries again only after gateRetry.
 func TestSelfGateCantRunWaits(t *testing.T) {
@@ -190,6 +215,26 @@ func TestSelfGateCantRunHoldsOthersAtTheSameMain(t *testing.T) {
 	gateOnce(t, m, task, p)
 	if len(*jobs) != 1 || task.Stage != StageMerged {
 		t.Fatalf("%d runs, stage %q: want a run once the retry passed", len(*jobs), task.Stage)
+	}
+}
+
+// A can't-run whose cause is that change alone (its own build, its clock)
+// holds no other change at the same main.
+func TestSelfGateCantRunAloneHoldsNobody(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
+	inner := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+		g := inner(ctx, j)
+		g.Alone = true
+		return g
+	}
+	gateOnce(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	m.mu.Lock()
+	_, held := m.gateCantRun[p.Name+"@"+main]
+	m.mu.Unlock()
+	if len(*jobs) != 1 || held {
+		t.Fatalf("%d runs, held %v: want the run recorded without holding others", len(*jobs), held)
 	}
 }
 

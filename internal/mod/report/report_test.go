@@ -77,8 +77,10 @@ var leaks = func() []struct{ in, secret string } {
 		{"auth_code=c0d3c0d3", "c0d3c0d3"},
 		{"authorization-header=hunter2pass", "hunter2pass"},
 		{"authorization.header=hunter2pass", "hunter2pass"},
-		{"Authorization-Key: abc", ": abc"},
-		{"authorization_code=abc", "=abc"},
+		{"Authorization-Key: zq7wx3vk", "zq7wx3vk"},
+		{"authorization_code=zq7wx3vk", "zq7wx3vk"},
+		{"authentication: hunter2pass", "hunter2pass"},
+		{"Authentication-Token: zq7wx3vk", "zq7wx3vk"},
 		{"-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ\nAAAAMwAAAAtzc2gtZW\n-----END OPENSSH PRIVATE KEY-----", "AAAAMwAAAAtzc2gtZW"},
 		{"-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA7bq9 (clipped", "MIIEpAIBAAKCAQEA7bq9"},
 		{"commit by Ihsan Salari <ihsan.salari@example.com>", "ihsan.salari@example.com"},
@@ -118,6 +120,9 @@ func TestScrubKeepsPlainText(t *testing.T) {
 		"author: Ihsan",
 		"authors: Ihsan, Marta",
 		"Author = Ihsan",
+		"authentication: failed",
+		"git: Authentication: failed for 'https://github.com/x/y'",
+		"authenticated: false",
 	} {
 		if out := Scrub(s, ""); out != s {
 			t.Errorf("changed plain text:\n  in:  %s\n  out: %s", s, out)
@@ -374,6 +379,27 @@ func TestNotedBeforeMarkWaits(t *testing.T) {
 	}
 	if fails, _, _, _ := (&Module{C: c}).Build(c.WS.LoadConfig()); len(fails) != 0 {
 		t.Fatalf("B built twice: %+v", fails)
+	}
+}
+
+// A run that stops between keeping the queue and marking the journal leaves
+// its reports queued; the next run builds them again and sends each once.
+func TestStopBeforeMarkSendsOnce(t *testing.T) {
+	e := contracttest.New(t)
+	c := sharing(t, e.URL, 1)
+	c.J.MustAppend("run.created", map[string]any{"id": "w1", "role": "worker"})
+	beforeMark = func() { panic("stopped") }
+	func() {
+		defer func() { recover() }()
+		(&Module{C: c}).Send()
+	}()
+	beforeMark = func() {}
+	before := len(Waiting(c.WS))
+	if before != 2 {
+		t.Fatalf("%d queued before the stop, want the failure and the usage report", before)
+	}
+	if res, err := (&Module{C: c}).Send(); err != nil || res != "sent 2, refused 0" || requests(e) != 2 {
+		t.Fatalf("next run: %q %v, %d requests; want each report once", res, err, requests(e))
 	}
 }
 

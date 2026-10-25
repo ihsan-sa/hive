@@ -140,6 +140,12 @@ func (r *Run) HarnessAt(turn int) string {
 	return h
 }
 
+// Finishes reports whether the run ends only on its own `hive agent finish`
+// (a worker, a helper), not on a structured answer, one turn or never.
+func (r Run) Finishes() bool {
+	return !r.Persistent && !r.ReadOnly && !r.OneTurn && r.Schema == ""
+}
+
 // Terminal reports whether the run will take no more turns on its own.
 func (r *Run) Terminal() bool {
 	switch r.Status {
@@ -229,10 +235,15 @@ type Runs struct {
 	down    map[string]Down    // picks that can't answer, by Pick.String
 	strikes map[string]strike  // each pick's straight turns ending in the same error
 	cfg     Config             // the config of the latest tick, which a Down is fingerprinted against
+	// proven is the picks (Pick.String) some run has finished done on: the
+	// only ones a run that must finish falls back to (next).
+	proven map[string]bool
 	// launching counts launches past the hold whose turn isn't journalled yet.
 	launching int
 	starting  map[string]bool // runs with a launch in flight
 	waking    sync.Mutex      // one wake at a time, so a run is woken once
+	self      proc.Handle     // this daemon, as a turn's claimant (claim.go)
+	backedOff map[string]int  // the turn each run last backed off from, said once
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -278,7 +289,7 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, proven: map[string]bool{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -599,6 +610,9 @@ func (rs *Runs) apply(e Event) {
 		}
 		e.Decode(&f)
 		r.Finish = &f.Finish
+		if f.Finish.Status == "done" {
+			rs.proven[Pick{Harness: HarnessName(r.Harness), Model: r.Model}.String()] = true
+		}
 	case "run.progress":
 		var n runNote
 		e.Decode(&n)
@@ -790,7 +804,11 @@ func (rs *Runs) freeAt(h, model string) time.Time {
 // next is the pick r's next turn goes on, and when it has room: the first of
 // its picks with room now, else the one that has room soonest. A persistent
 // run follows the settings' route; any other stays on its own pick while it
-// has room, then moves along its Route.
+// has room, then moves along its Route. A run that must finish (a worker)
+// moves only to a pick some run has finished done on, or back to the first
+// of its route: one on a model that has never finished here ended turns
+// without finishing while others waited on it (task 135947 on gpt-oss), so it
+// waits for its own model's reset instead.
 func (rs *Runs) next(r Run) (Pick, time.Time) {
 	own := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
 	picks := []Pick{own}
@@ -802,6 +820,18 @@ func (rs *Runs) next(r Run) (Pick, time.Time) {
 	for _, p := range r.RunSpec.Route {
 		if !slices.ContainsFunc(picks, p.Same) {
 			picks = append(picks, p)
+		}
+	}
+	if r.Finishes() {
+		first := own
+		if len(r.RunSpec.Route) > 0 {
+			first = r.RunSpec.Route[0]
+		}
+		rs.mu.Lock()
+		picks = slices.DeleteFunc(picks, func(p Pick) bool { return !p.Same(first) && !rs.proven[p.String()] })
+		rs.mu.Unlock()
+		if !slices.ContainsFunc(picks, first.Same) {
+			picks = append([]Pick{first}, picks...)
 		}
 	}
 	best, at := picks[0], time.Time{}
@@ -952,23 +982,30 @@ func (rs *Runs) Interrupt(id string) bool {
 func (rs *Runs) Tick(cfg Config) {
 	rs.tickDown(cfg)
 	for _, r := range rs.List(func(r *Run) bool { return !r.Terminal() || r.Status == StatusRunning }) {
-		rs.mu.Lock()
-		if rs.busy[r.ID] {
-			rs.mu.Unlock()
+		r, ok := rs.claim(r)
+		if !ok {
 			continue
 		}
-		rs.busy[r.ID] = true
-		// The list can predate a step that ended since (a turn just
-		// started), so the step works on the run as it is now.
-		if cur := rs.runs[r.ID]; cur != nil {
-			r = *cur
-		}
-		rs.mu.Unlock()
 		go func(r Run) {
 			defer func() { rs.mu.Lock(); delete(rs.busy, r.ID); rs.mu.Unlock() }()
 			rs.step(r, cfg)
 		}(r)
 	}
+}
+
+// claim marks a listed run busy for one step and returns it as it is now:
+// the list can predate a step that ended since (a turn just started).
+func (rs *Runs) claim(r Run) (Run, bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.busy[r.ID] {
+		return r, false
+	}
+	rs.busy[r.ID] = true
+	if cur := rs.runs[r.ID]; cur != nil {
+		r = *cur
+	}
+	return r, true
 }
 
 func (rs *Runs) step(r Run, cfg Config) {
@@ -1009,6 +1046,11 @@ func (rs *Runs) watch(r Run) {
 		return
 	}
 	time.Sleep(200 * time.Millisecond) // let the last lines land
+	// A copy of the run older than now ends nothing: its turn ended already,
+	// and ending it again would clear the live turn after it.
+	if cur, ok := rs.Get(r.ID); !ok || cur.Status != StatusRunning || cur.Turn != r.Turn {
+		return
+	}
 	rs.ops.Drain(r)
 	rs.endTurn(r)
 }
@@ -1103,6 +1145,18 @@ func (rs *Runs) endTurn(r Run) {
 		rs.dropOpenKey(r.ID)
 	}
 	cur, _ := rs.Get(r.ID)
+	finishes := r.Role == "worker" && !r.Persistent && r.Schema == "" && !r.ReadOnly && !r.OneTurn
+	if f, ok := printedFinish(r, tl.Result); ok && finishes && cur.Finish == nil && !cur.StopAsked && !limited && dropErr == nil {
+		// A worker wrote its finish as its answer instead of running it: the
+		// Hive runs it on its behalf, with the same flags and the same checks.
+		// Only workers: a lead or chat agent showing the command is explaining.
+		rs.append("run.finish", struct {
+			ID      string `json:"id"`
+			Finish  Finish `json:"finish"`
+			Printed bool   `json:"printed"`
+		}{r.ID, f, true})
+		cur.Finish = &f
+	}
 	// A pick that answers is back; one whose error says it can't answer
 	// is skipped by every run until it can (Down).
 	ran := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
@@ -1187,7 +1241,7 @@ func (rs *Runs) endTurn(r Run) {
 		te.Status, te.Reason = StatusIdle, "waiting: "+cur.Waiting
 	case cur.Nudges < 2:
 		te.Status, te.Reason = StatusIdle, "nudged: ended a turn without finishing"
-		te.Queue = []string{"You ended your turn without `hive agent finish`. If the work is done, commit and finish with an account. If you can't finish, finish with status blocked and say why."}
+		te.Queue = []string{printedNudge(tl.Result.Text)}
 	default:
 		te.Status, te.Reason = StatusQuiet, "keeps ending turns without finishing; flagged for the lead"
 	}
@@ -1356,6 +1410,17 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		prompt = "Continue."
 	}
 	r.Session = session
+	// One process per turn: another daemon on this workspace may have started it.
+	if err := rs.claimTurn(r.ID, turn); err != nil {
+		rs.mu.Lock()
+		said := rs.backedOff[r.ID] == turn
+		rs.backedOff[r.ID] = turn
+		rs.mu.Unlock()
+		if !said {
+			fmt.Printf("hive: %s's turn %d isn't started here: %v\n", r.ID, turn, err)
+		}
+		return
+	}
 	promptFile := filepath.Join(rs.ws.RunHost(r.ID), fmt.Sprintf("turn-%03d.prompt", turn))
 	if err := os.WriteFile(promptFile, []byte(prompt), 0o644); err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(time.Minute)})
@@ -1398,6 +1463,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	started = true
+	rs.claimed(r.ID, turn, p)
 	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness})
 }
 
