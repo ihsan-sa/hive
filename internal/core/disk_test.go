@@ -292,8 +292,12 @@ func TestPrefetchHomeHasTelemetryOff(t *testing.T) {
 		t.Skip("no go here")
 	}
 	home := t.TempDir()
+	off, err := goTelemetryOff(home)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(goBin, "env", "GOTELEMETRY")
-	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "USERPROFILE=" + home, "SystemRoot=" + os.Getenv("SystemRoot"), "GOENV=off", "GOTOOLCHAIN=local"}, goTelemetryOff(home)...)
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "USERPROFILE=" + home, "SystemRoot=" + os.Getenv("SystemRoot"), "GOENV=off", "GOTOOLCHAIN=local"}, off...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go env: %v %s", err, out)

@@ -32,15 +32,21 @@ type PR struct {
 	// MergeState is the forge's word on what else stands in the way; BEHIND
 	// means its rules want the branch brought up to date with its base.
 	MergeState string `json:"merge_state,omitempty"`
-	// Draft is a PR left for a read outside the Hive (the goals' perms read,
-	// say); it merges once marked ready. Body is what its read is said in.
+	// Draft is a PR that can't merge until marked ready: the Hive's merge
+	// readies a draft once its own reads clear the head, unless the lead holds
+	// it (pr_draft). Body is the PR's description.
 	Draft bool   `json:"draft,omitempty"`
 	Body  string `json:"-"`
 }
 
 // ErrDraft means the pull request is a draft, so it can't merge until it is
-// marked ready.
-var ErrDraft = errors.New("the pull request is a draft, left for a read")
+// marked ready. Its text is matched in stopped tasks' reasons; an older
+// wording, "left for a read", is matched there too (work.stoppedOnDraft).
+var ErrDraft = errors.New("the pull request is a draft, not yet marked ready")
+
+// ErrHeadMoved means the pull request's head is no longer the commit the
+// Hive read, so it isn't readied: the next look sees the new head.
+var ErrHeadMoved = errors.New("its head moved past the commit read")
 
 // Forge is where code, issues and pull requests live. GitHub through the gh
 // CLI is the real one; Local is a folder-backed stand-in for tests.
@@ -66,8 +72,9 @@ type Forge interface {
 	GetPR(repo string, number int) (PR, error)
 	MergePR(repo string, number int, sha, subject string) (string, error)
 	// ReadyPR takes a draft out of draft, only while its head is exactly
-	// sha; one already ready is left as it is.
-	ReadyPR(repo string, number int, sha string) error
+	// sha (else ErrHeadMoved); one already ready is left as it is, and
+	// readied says whether this call changed anything.
+	ReadyPR(repo string, number int, sha string) (readied bool, err error)
 	ClosePR(repo string, number int, comment string) error
 	// SetDraft marks an open pull request a draft or ready for review.
 	SetDraft(repo string, number int, draft bool) error
@@ -640,25 +647,35 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 }
 
 // ReadyPR marks a draft ready for review with the token for repo's owner,
-// refusing once its head moved past sha. The merge after it is bound to sha
-// by --match-head-commit, so a push between the look and the ready can't
-// merge what wasn't read.
-func (g GitHub) ReadyPR(repo string, number int, sha string) error {
+// refusing once its head moved past sha. gh can't bind `pr ready` to a head,
+// so the head is looked at again after: one that moved in between is made a
+// draft again and refused. The merge after it is bound to sha by
+// --match-head-commit either way, so a push in that gap can't merge what
+// wasn't read.
+func (g GitHub) ReadyPR(repo string, number int, sha string) (bool, error) {
 	p, err := g.GetPR(repo, number)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if p.State != "OPEN" {
-		return fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
+		return false, fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
 	}
 	if p.HeadSHA != sha {
-		return fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+		return false, fmt.Errorf("PR #%d head is %s, not the checked commit %s: %w", number, short(p.HeadSHA), short(sha), ErrHeadMoved)
 	}
 	if !p.Draft {
-		return nil
+		return false, nil
 	}
-	_, err = gh(repo, "pr", "ready", strconv.Itoa(number), "-R", repo)
-	return err
+	if _, err := gh(repo, "pr", "ready", strconv.Itoa(number), "-R", repo); err != nil {
+		return false, err
+	}
+	if p, err = g.GetPR(repo, number); err == nil && p.HeadSHA != sha {
+		if err := g.SetDraft(repo, number, true); err != nil {
+			return true, fmt.Errorf("PR #%d head moved to %s while it was readied at %s, and making it a draft again failed (%v): %w", number, short(p.HeadSHA), short(sha), err, ErrHeadMoved)
+		}
+		return false, fmt.Errorf("PR #%d head moved to %s while it was readied at %s, so it is a draft again: %w", number, short(p.HeadSHA), short(sha), ErrHeadMoved)
+	}
+	return true, nil
 }
 
 func (GitHub) ClosePR(repo string, number int, comment string) error {

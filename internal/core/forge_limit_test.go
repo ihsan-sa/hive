@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -230,32 +231,41 @@ func TestChecksNewestAttemptByID(t *testing.T) {
 }
 
 // ReadyPR runs gh pr ready, a write, only while the draft's head is the
-// commit it names; a moved head or a PR already ready runs nothing.
+// commit it names; a moved head or a PR already ready runs nothing, and a
+// head that moves during the ready makes it a draft again.
 func TestGitHubReadyPRAtItsHead(t *testing.T) {
-	head, draft := "aaaa1111", true
+	head, draft, moveOnReady := "aaaa1111", true, ""
 	calls := stubGH(t, func(args []string) (string, string, error) {
 		if args[0] == "pr" && args[1] == "view" {
 			return `{"number":7,"state":"OPEN","headRefOid":"` + head + `","isDraft":` + map[bool]string{true: "true", false: "false"}[draft] + `}`, "", nil
 		}
+		if args[0] == "pr" && args[1] == "ready" && moveOnReady != "" {
+			head = moveOnReady
+		}
 		return "", "", nil
 	})
-	readies := func() (n int) {
+	count := func(undo bool) (n int) {
 		for _, c := range *calls {
-			if c[0] == "pr" && c[1] == "ready" {
+			if c[0] == "pr" && c[1] == "ready" && slices.Contains(c, "--undo") == undo {
 				n++
 			}
 		}
 		return n
 	}
-	if err := (GitHub{}).ReadyPR("o/r", 7, "bbbb2222"); err == nil || readies() != 0 {
-		t.Fatalf("readied a moved head: %v, %d", err, readies())
+	readies := func() int { return count(false) }
+	if ok, err := (GitHub{}).ReadyPR("o/r", 7, "bbbb2222"); !errors.Is(err, ErrHeadMoved) || ok || readies() != 0 {
+		t.Fatalf("readied a moved head: %v %v, %d", ok, err, readies())
 	}
-	if err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || readies() != 1 {
-		t.Fatalf("ready at its head: %v, %d", err, readies())
+	if ok, err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || !ok || readies() != 1 {
+		t.Fatalf("ready at its head: %v %v, %d", ok, err, readies())
+	}
+	moveOnReady = "cccc3333"
+	if ok, err := (GitHub{}).ReadyPR("o/r", 7, head); !errors.Is(err, ErrHeadMoved) || ok || readies() != 2 || count(true) != 1 {
+		t.Fatalf("a head moved during the ready: %v %v, readies %d, undone %d", ok, err, readies(), count(true))
 	}
 	draft = false
-	if err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || readies() != 1 {
-		t.Fatalf("readied one already ready: %v, %d", err, readies())
+	if ok, err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || ok || readies() != 2 {
+		t.Fatalf("readied one already ready: %v %v, %d", ok, err, readies())
 	}
 	if !ghWrites([]string{"pr", "ready", "7"}) {
 		t.Fatal("gh pr ready isn't counted a write")
