@@ -99,6 +99,9 @@ type Forge interface {
 	// jobs of a pre-release's gates pass.
 	Releases(repo string) ([]Release, error)
 	RunJobs(repo string, run int64) ([]WorkflowJob, error)
+	// File is one file on repo's default branch; ErrNotFound when it has
+	// none (the release repository's steward record).
+	File(repo, path string) (string, error)
 }
 
 // CheckRun is one of the forge's own checks on a commit, such as a CI job.
@@ -968,6 +971,14 @@ func (GitHub) ReleaseRuns(repo, sha string) ([]WorkflowRun, error) {
 	}
 	var runs []WorkflowRun
 	return runs, json.Unmarshal([]byte(out), &runs)
+}
+
+func (GitHub) File(repo, path string) (string, error) {
+	out, err := gh(repo, "api", "repos/"+repo+"/contents/"+path, "-H", "Accept: application/vnd.github.raw")
+	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+		return "", ErrNotFound
+	}
+	return out, err
 }
 
 func (GitHub) Releases(repo string) ([]Release, error) {
