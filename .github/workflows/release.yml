@@ -11,7 +11,28 @@ on:
 permissions:
   contents: write
 jobs:
+  scan:
+    # The identity and secret scan (internal/mod/scan) of the files .hive/public.txt
+    # names, at the tag, before anything is built or uploaded. Its deny and handle
+    # lists are repository secrets the owner sets, never files in the repository;
+    # with no HIVE_SCAN_HANDLES it fails, and so does the release.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: scan
+        env:
+          HIVE_SCAN_HANDLES: ${{ secrets.HIVE_SCAN_HANDLES }}
+          HIVE_SCAN_DENY: ${{ secrets.HIVE_SCAN_DENY }}
+        run: go run ./cmd/hive-scan
   build:
+    needs: scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,9 +47,9 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           mkdir dist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+          # Linux only for now (issue #564); add darwin/amd64 darwin/arm64 windows/amd64 back with ci's matrix.
+          for target in linux/amd64 linux/arm64; do
             os=${target%/*}; arch=${target#*/}; name=hive-$os-$arch
-            [ "$os" = windows ] && name=$name.exe
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
               -ldflags "-s -w -X github.com/ihsan-sa/hive-standalone-build/internal/core.Version=$TAG -X github.com/ihsan-sa/hive-standalone-build/internal/core.DefaultReleaseRepo=$REPO" \
               -o dist/$name ./cmd/hive
