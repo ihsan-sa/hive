@@ -951,23 +951,30 @@ func (rs *Runs) Interrupt(id string) bool {
 func (rs *Runs) Tick(cfg Config) {
 	rs.tickDown(cfg)
 	for _, r := range rs.List(func(r *Run) bool { return !r.Terminal() || r.Status == StatusRunning }) {
-		rs.mu.Lock()
-		if rs.busy[r.ID] {
-			rs.mu.Unlock()
+		r, ok := rs.claim(r)
+		if !ok {
 			continue
 		}
-		rs.busy[r.ID] = true
-		// The list can predate a step that ended since (a turn just
-		// started), so the step works on the run as it is now.
-		if cur := rs.runs[r.ID]; cur != nil {
-			r = *cur
-		}
-		rs.mu.Unlock()
 		go func(r Run) {
 			defer func() { rs.mu.Lock(); delete(rs.busy, r.ID); rs.mu.Unlock() }()
 			rs.step(r, cfg)
 		}(r)
 	}
+}
+
+// claim marks a listed run busy for one step and returns it as it is now:
+// the list can predate a step that ended since (a turn just started).
+func (rs *Runs) claim(r Run) (Run, bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.busy[r.ID] {
+		return r, false
+	}
+	rs.busy[r.ID] = true
+	if cur := rs.runs[r.ID]; cur != nil {
+		r = *cur
+	}
+	return r, true
 }
 
 func (rs *Runs) step(r Run, cfg Config) {
@@ -1008,6 +1015,11 @@ func (rs *Runs) watch(r Run) {
 		return
 	}
 	time.Sleep(200 * time.Millisecond) // let the last lines land
+	// A copy of the run older than now ends nothing: its turn ended already,
+	// and ending it again would clear the live turn after it.
+	if cur, ok := rs.Get(r.ID); !ok || cur.Status != StatusRunning || cur.Turn != r.Turn {
+		return
+	}
 	rs.ops.Drain(r)
 	rs.endTurn(r)
 }

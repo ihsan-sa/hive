@@ -446,3 +446,58 @@ func (s countSB) Start(spec sandbox.Spec) (sandbox.Proc, error) {
 	s.mu.Unlock()
 	return s.startSB.Start(spec)
 }
+
+// Tick steps a run as it is when the step begins, not as it was listed: a
+// run listed idle whose turn started since is stepped as running, so it is
+// watched rather than launched again.
+func TestTickStepsTheRunAsItIsNow(t *testing.T) {
+	c, _ := testHive(t)
+	var args []string
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return startSB{args: &args}, nil }
+	r, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake", Model: "opus", Brief: "the brief", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, c.WS.LoadConfig())
+	c.Runs.SetStatus("w1", StatusIdle, "") // the first turn ended
+	listed, _ := c.Runs.Get("w1")
+	c.Runs.launch(listed, c.WS.LoadConfig()) // a turn starts after the list was read
+	got, ok := c.Runs.claim(listed)
+	if !ok || got.Status != StatusRunning || got.Turn != 2 {
+		t.Fatalf("claimed %v: %s at turn %d, want running at turn 2", ok, got.Status, got.Turn)
+	}
+	if _, again := c.Runs.claim(listed); again {
+		t.Fatal("a run claimed twice before its step ended")
+	}
+}
+
+// A watch from a copy older than the run's last turn ends nothing: that
+// turn ended already, and ending it again would clear the live one after it.
+func TestWatchFromAStaleCopyEndsNothing(t *testing.T) {
+	c, _ := testHive(t)
+	var args []string
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return startSB{args: &args}, nil }
+	r, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake", Model: "opus", Brief: "the brief", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, c.WS.LoadConfig())
+	stale, _ := c.Runs.Get("w1") // running turn 1
+	c.Runs.SetStatus("w1", StatusIdle, "")
+	cur, _ := c.Runs.Get("w1")
+	c.Runs.launch(cur, c.WS.LoadConfig()) // turn 2 is live
+	c.Runs.watch(stale)
+	got, _ := c.Runs.Get("w1")
+	if got.Status != StatusRunning || got.Turn != 2 {
+		t.Fatalf("after a stale watch: %s at turn %d, want running at turn 2", got.Status, got.Turn)
+	}
+	for _, e := range c.J.Since(0) {
+		if e.Kind == "run.turn_ended" {
+			t.Fatalf("a stale watch ended a turn: %s", e.Data)
+		}
+	}
+	c.Runs.watch(got) // the live copy still ends its turn
+	if got, _ = c.Runs.Get("w1"); got.Status == StatusRunning {
+		t.Fatal("the current copy's watch didn't end the turn")
+	}
+}
