@@ -356,6 +356,9 @@ func TestSelfGatesRunSideBySide(t *testing.T) {
 	strain := "machine low on memory (900 MB free, floor 4096 MB)"
 	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
 	gateMachine = func(core.Config) (string, bool) { return strain, true }
+	release := make(chan struct{})
+	gate := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult { <-release; return gate(ctx, j) }
 	m.mu.Lock()
 	m.gating = map[string]*gateRun{"other": {key: "other", task: "t9"}}
 	m.mu.Unlock()
@@ -374,6 +377,7 @@ func TestSelfGatesRunSideBySide(t *testing.T) {
 	if n != 2 || !strings.Contains(task.Reason, "started") {
 		t.Fatalf("%d runs in flight, reason %q: want a second run beside the first", n, task.Reason)
 	}
+	close(release)
 	m.Wait()
 	m.mu.Lock()
 	delete(m.later, task.ID)
