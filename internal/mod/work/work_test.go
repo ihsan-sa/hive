@@ -359,6 +359,45 @@ func TestGiveUpComesBack(t *testing.T) {
 	}
 }
 
+// A task stuck on its way to the merge (here waiting on a stale commit's
+// checks) is the lead's to retry: recheck takes it back to landing with fresh
+// counts, a stuck checkpoint is dropped while its worker goes on, and a step
+// running on the task refuses it.
+func TestRecheckRetriesAStuckMerge(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage, task.SHA, task.Round, task.Failures = StageMerging, "2125f74e", 2, 4
+	task.Reason = "waiting for the forge's checks on 2125f74e"
+	m.save(task, task.Reason)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.mu.Unlock()
+	if err := m.Recheck(task.ID, ""); err == nil || !strings.Contains(err.Error(), "step running") {
+		t.Fatalf("retried under a running step: %v", err)
+	}
+	m.mu.Lock()
+	delete(m.busy, task.ID)
+	m.mu.Unlock()
+	if err := m.Recheck(task.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := m.Get(task.ID)
+	if got.Stage != StageLanding || got.Failures+got.Round != 0 || got.Reason != "" || !logged(&got, "retried from merging") {
+		t.Fatalf("not back to landing with fresh counts: %+v", got)
+	}
+
+	got.Stage, got.Checkpoint = StageTesting, "2125f74e"
+	m.save(&got, "a checkpoint")
+	if err := m.Recheck(task.ID, "try again"); err == nil {
+		t.Fatal("sent back a worker still working past its checkpoint")
+	}
+	if err := m.Recheck(task.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = m.Get(task.ID); got.Stage != StageWorking || got.Checkpoint != "" {
+		t.Fatalf("the checkpoint should be dropped: %+v", got)
+	}
+}
+
 // A task the person stopped, from the control center or by leaving its PR
 // open, stays stopped: the lead can neither recheck it nor send its worker back.
 func TestPersonStopHolds(t *testing.T) {
