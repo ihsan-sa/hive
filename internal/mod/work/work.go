@@ -245,6 +245,10 @@ type Module struct {
 	workers, checks pace
 	// areaCache holds the paths each brief names (queue.go).
 	areaCache map[string]areaEntry
+	// editCache holds whether a worker's checkout has changed a file (queue.go).
+	editCache map[string]editEntry
+	// baseTrees holds the files of the bases working tasks started on (queue.go).
+	baseTrees map[string]map[string]string
 	steps     sync.WaitGroup // the steps Tick started that are still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
@@ -295,7 +299,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, baseTrees: map[string]map[string]string{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)

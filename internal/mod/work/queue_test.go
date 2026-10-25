@@ -283,6 +283,54 @@ func TestQueueHoldsOnlyRealConflicts(t *testing.T) {
 	}
 }
 
+// A file a worker has changed in its checkout holds a brief that names it,
+// though the worker's own brief never did; a file it left as it was doesn't,
+// and neither does one the brief names that the worker hasn't touched.
+func TestQueueHoldsWhatAWorkerChanged(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 5
+	m.C.WS.SaveConfig(cfg)
+	a := file(t, m, "cap the checks", "Somewhere in internal/core.")
+	tick(m)
+	got := stageOf(t, m, a)
+	r, ok := m.C.Runs.Get(got.Worker)
+	if got.Stage != StageWorking || !ok || got.Base == "" {
+		t.Fatalf("stage %q worker %q base %q", got.Stage, got.Worker, got.Base)
+	}
+	os.WriteFile(filepath.Join(r.Checkout, "internal/core/runs.go"), []byte("package x // changed\n"), 0o644)
+	os.WriteFile(filepath.Join(r.Checkout, "internal/core/effects.go"), []byte("package x\r\n"), 0o644) // rewritten as it was, with CRLF as on Windows
+	b := file(t, m, "hold strained turns", "In internal/core/runs.go.")
+	c := file(t, m, "cap the effects", "In internal/core/effects.go.")
+	d := file(t, m, "show the queue", "In internal/tui/views.go.")
+	tick(m)
+	if got := stageOf(t, m, b); got.Stage != StageQueued || !strings.Contains(got.Reason, "both touch internal/core/runs.go") {
+		t.Fatalf("brief on a changed file: stage %q reason %q", got.Stage, got.Reason)
+	}
+	for _, task := range []Task{c, d} {
+		if got := stageOf(t, m, task); got.Stage != StageWorking {
+			t.Fatalf("%q: stage %q reason %q, want working", task.Title, got.Stage, got.Reason)
+		}
+	}
+
+	// A removed file is a change too, seen once the checkout moves.
+	os.Remove(filepath.Join(r.Checkout, "internal/tui/views.go"))
+	if !m.edited(stageOf(t, m, a), "internal/tui/views.go") {
+		t.Fatal("a removed file isn't seen as changed")
+	}
+
+	// A base the clone can't read holds nothing and keeps no answer, so
+	// a passing git failure doesn't hold a brief until the file moves.
+	odd := stageOf(t, m, a)
+	odd.Base = strings.Repeat("e", 40)
+	if m.edited(odd, "internal/core/runs.go") {
+		t.Fatal("a file held against a base that can't be read")
+	}
+	if got := m.editCache[odd.Worker+"\x00internal/core/runs.go"]; strings.HasPrefix(got.key, odd.Base) {
+		t.Fatal("an answer without a base tree was kept")
+	}
+}
+
 // The .gitattributes matcher follows git: "**" spans directories, a name-only
 // pattern matches at any depth, and the last line touching merge wins, so
 // -merge, !merge or another driver undo an earlier merge=union.
@@ -327,6 +375,80 @@ func TestQueueAreasFollowGitattributes(t *testing.T) {
 	os.WriteFile(ga, append(b, "internal/core/runs.go merge=union\n"...), 0o644)
 	if got := strings.Join(m.areas(task), " "); got != "internal/tui/views.go" {
 		t.Fatalf("areas after .gitattributes changed %q", got)
+	}
+}
+
+// The hive project's queue at 14:45Z on 2026-10-24, replayed: 68 queued, 5
+// working, and 51 of the queued waiting on "both touch <area>", mostly a
+// package or directory a brief cited as evidence. With only files holding,
+// half of them are free to start, and every one still waiting waits on a
+// file.
+func TestQueueReplay1445(t *testing.T) {
+	var fix struct {
+		Files []string
+		Tasks []struct {
+			ID, Title, Done, Known, Stage string
+			Held, Now                     bool
+			Order                         int
+			Created                       time.Time
+		}
+	}
+	b, err := os.ReadFile("testdata/queue-1445.json")
+	if err != nil || json.Unmarshal(b, &fix) != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	m, forge, p := helperRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 0 // as the lead set it at 14:22Z
+	m.C.WS.SaveConfig(cfg)
+	seed := filepath.Join(t.TempDir(), "seed")
+	mustGit(t, "", "clone", "-q", forge.RepoPath("me/p"), seed)
+	for _, f := range fix.Files {
+		os.MkdirAll(filepath.Join(seed, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(seed, f), []byte("x\n"), 0o644)
+	}
+	mustGit(t, seed, "add", "-A")
+	mustGit(t, seed, "commit", "-q", "-m", "main at 14:45Z")
+	mustGit(t, seed, "push", "-q", "origin", "HEAD:main")
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]bool{}
+	for _, f := range fix.Files {
+		files[f] = true
+	}
+	var tasks []Task
+	queued := 0
+	for _, f := range fix.Tasks {
+		tasks = append(tasks, Task{ID: f.ID, Project: "p", Title: f.Title, Done: f.Done, Known: f.Known, Stage: f.Stage, Held: f.Held, Now: f.Now, Order: f.Order, Created: f.Created})
+		if f.Stage == StageQueued {
+			queued++
+		}
+	}
+	if queued != 68 || len(tasks) != 73 {
+		t.Fatalf("fixture has %d queued of %d", queued, len(tasks))
+	}
+	// The pace (pace.go) starts at 4 workers and 5 already work, so a brief
+	// free of every overlap waits for a worker: it counts as free here.
+	start, wait := m.admit(tasks)
+	free, overlaps := len(start), 0
+	for id, why := range wait {
+		if strings.HasPrefix(why, "waiting for a worker") {
+			free++
+			continue
+		}
+		i := strings.LastIndex(why, "both touch ")
+		if i < 0 {
+			continue
+		}
+		overlaps++
+		if area := why[i+len("both touch "):]; !files[area] {
+			t.Errorf("%s waits on %q, not a file: %s", id, area, why)
+		}
+	}
+	t.Logf("%d free of any overlap, %d wait on a shared file, %d held", free, overlaps, len(wait)+len(start)-free-overlaps)
+	if overlaps > 25 || free < 26 { // 26 free, and 25 wait on files cited by more than one brief (7 on tests/LANDING-security.toml)
+		t.Fatalf("%d free and %d still wait on a shared file (51 did at 14:45Z)", free, overlaps)
 	}
 }
 
