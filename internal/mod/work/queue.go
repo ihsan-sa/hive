@@ -33,9 +33,10 @@ import (
 // brief on its other files starts, so waits never chain and two briefs never
 // wait on each other (task 163142 waited 6h behind 140258, itself held by a
 // stream of workers on its other files).
-// Once a worker has pushed, its task holds nothing back: a conflict it meets
-// later goes back to its worker with main to merge. Nothing here stops a
-// worker that has started.
+// Once a worker has pushed, its task holds nothing back, even when its worker
+// is sent back to it (findings, a red check, a reopen): a conflict it meets
+// later goes back to its worker with main to merge. While it works it still
+// holds a slot. Nothing here stops a worker that has started.
 //
 // A brief that only changes module prompts (every path it names is a .md
 // file under modules/) is quick: it goes first in line, after those the lead
@@ -112,6 +113,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	cfg := m.C.WS.LoadConfig()
 	working, quickWorking := 0, 0
 	var ahead, line []Task        // ahead: being worked on, or earlier in line
+	var sent []Task               // working on a pushed pull request: a slot, but no hold
 	starting := map[string]bool{} // queued ones whose worker is being started right now
 	m.mu.Lock()
 	for _, t := range tasks {
@@ -124,6 +126,13 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			// message resumes it (core.Runs), and then it counts again,
 			// even if that puts the workers past the limit (by as many as
 			// resume at once) until slots free; none start meanwhile.
+		case t.Stage == StageWorking && pushed(t):
+			// Its worker holds a slot, but it holds no one back: its pull
+			// request is open, so a conflict goes back to it with main to
+			// merge, as for one in testing. A reopened fix round (task
+			// 61fa1fd766, PR #601) held 34 briefs the second it woke.
+			working++
+			sent = append(sent, t)
 		case t.Stage == StageWorking || t.Queued(): // or a queued one being started right now
 			ahead = append(ahead, t)
 			working++
@@ -136,7 +145,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		// touch its files waited on one for hours (task 135947 held about 60).
 	}
 	m.mu.Unlock()
-	for _, t := range ahead { // areas takes m.mu
+	for _, t := range append(slices.Clone(ahead), sent...) { // areas takes m.mu
 		if m.quick(t) {
 			quickWorking++
 		}
@@ -223,6 +232,13 @@ func (t Task) FilesWait() time.Duration {
 		return 0
 	}
 	return time.Since(t.FilesSince)
+}
+
+// pushed reports whether t's own pull request is open: its worker was sent
+// back on findings, a red check or a conflict, or the task reopened. A
+// checkpoint's pull request doesn't count: the worker is still on the brief.
+func pushed(t Task) bool {
+	return t.PR.Number != 0 && t.Checkpoint == "" && t.PR.State != "CLOSED" && t.PR.State != "MERGED"
 }
 
 // quiet reports whether t's worker keeps ending turns without finishing.

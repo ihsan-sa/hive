@@ -701,3 +701,31 @@ func TestQueueKeepsItsHolder(t *testing.T) {
 		t.Fatalf("after the first holder pushed: reason %q", got.Reason)
 	}
 }
+
+// A working task whose pull request is already open (its worker sent back on
+// findings, or the task reopened) holds no brief on its files back: a
+// conflict goes back to it with main to merge. Its worker still holds a slot.
+// A checkpoint's pull request holds as before.
+func TestPushedWorkerHoldsNoOne(t *testing.T) {
+	m := queueRig(t)
+	back := file(t, m, "the reopened one", "In internal/core/effects.go.")
+	fix := file(t, m, "the queue fix", "In internal/core/effects.go too.")
+	back.Stage, back.Worker, fix.Stage = StageWorking, "wp", StageQueued
+	back.Checkpoint, back.PR = "abc123", core.PR{Number: 601, State: "OPEN"}
+	m.save(&back, "")
+	m.save(&fix, "")
+	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], back.ID) {
+		t.Fatalf("the fix doesn't wait on a working checkpoint: %q", wait[fix.ID])
+	}
+	back.Checkpoint = ""
+	m.save(&back, "")
+	if start, wait := m.admit(m.List(nil)); !start[fix.ID] {
+		t.Fatalf("the fix still waits on a pushed one sent back: %q", wait[fix.ID])
+	}
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	if start, wait := m.admit(m.List(nil)); start[fix.ID] || !strings.Contains(wait[fix.ID], "max_workers") {
+		t.Fatalf("a pushed one's worker gave up its slot: %q", wait[fix.ID])
+	}
+}
