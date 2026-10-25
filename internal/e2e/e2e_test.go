@@ -235,7 +235,7 @@ func (h *hive) launch() {
 // sees another pid, so there it is the start time instead.
 func ours(info api.DaemonInfo, pid int, launched time.Time) bool {
 	if os.Getenv("HIVE_E2E_WRAPPED") != "" {
-		return info.Started.After(launched)
+		return !info.Started.Before(launched) // a coarse clock can stamp both at one instant
 	}
 	return info.PID == pid
 }
