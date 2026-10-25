@@ -262,6 +262,9 @@ func (m *Module) Status(r core.Run) map[string]any {
 		}
 		for i, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {
 			line := fmt.Sprintf("[%s] %s (%s)", t.Stage, t.Label(), t.ID)
+			if t.Gain() {
+				line += " · aims at a gain"
+			}
 			if t.Queued() && t.Reason != "" {
 				line += ": " + t.Reason
 			} else if t.PR.URL != "" {
