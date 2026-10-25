@@ -36,6 +36,30 @@ type Manifest struct {
 	// schedule ("every 4h"); config.json's schedules override it. When one
 	// is due the system journals module.scheduled, which the program reads.
 	Schedule map[string]string `json:"schedule,omitempty"`
+	// Ops are calls agents make as `hive agent <op>`, and the person from the
+	// control center, each answered by the module (see runner/ops.go).
+	Ops map[string]Op `json:"ops,omitempty"`
+}
+
+// Op is one call a module answers: a program run once per call (the call's
+// arguments as JSON on stdin, the answer on stdout), and optionally an agent
+// that answers instead when the call carries Agent.Arg.
+type Op struct {
+	Help  string   `json:"help"`
+	Exec  []string `json:"exec"`
+	Agent *OpAgent `json:"agent,omitempty"`
+}
+
+// OpAgent is a short agent run that answers a question: its role prompt is a
+// file in the module, it runs on Model unless the person routes its role,
+// and it stops at its budget or after Minutes.
+type OpAgent struct {
+	Arg       string  `json:"arg"`  // the argument that asks for it; its value is the question
+	Role      string  `json:"role"` // the run's role, for routes and the dashboard
+	Prompt    string  `json:"prompt"`
+	Model     string  `json:"model,omitempty"`
+	BudgetUSD float64 `json:"budget_usd,omitempty"`
+	Minutes   int     `json:"minutes,omitempty"`
 }
 
 // Source is the host-written record of where a module came from.

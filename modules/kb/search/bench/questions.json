@@ -1,0 +1,89 @@
+{
+  "note": "Picked on 2026-10-25 (~02:00Z) by reading the KB's record/ files, notes and the journal for 2026-10-24 01:55Z to 2026-10-25 02:00Z: the person's three questions plus 11 of mixed kinds whose answers span connected task, run, risk, person, gate and note files.",
+  "questions": [
+    {
+      "q": "why was #111 reverted",
+      "answer": "#111 (task 261024-015726-45d2d27ed7, Set up the Hive files) added the test command 'go vet ./... && go test -short ./...'; after it merged (1e83d08b) the check failed with '/bin/sh: 1: go: not found', so improve filed revert task 261024-020043-5f804b138f (PR #115, 'the tests went red after it merged'). The real cause was no Go toolchain visible in the sandbox, so #115 was left open/closed unmerged and task 261024-020903-ee8c32309a (#116, PR #144) made a missing tool count as \"can't run\" instead of red.",
+      "expect": ["record/task/261024-020043-5f804b138f.md", "record/task/261024-015726-45d2d27ed7.md", "record/task/261024-020903-ee8c32309a.md", "record/effect/hive.md"],
+      "also": ["record/chat/lead.md", "record/task/261024-015819-d700743333.md"]
+    },
+    {
+      "q": "what blocks the gate",
+      "answer": "The recursive gate judges one change at a time (20-40 min each) and rolls back almost every fix as 'nothing moved beyond the noise' (ties), could not run at all 15:30-17:50Z because main's own short tests failed in its sandbox (fixed by #476), and failed candidates on internal/gate TestMeter because of a long socket path (task 261024-213942-b2a9266433). The person's own-check rule (#472, task 261024-185842-9de7970b1d) and hand-merge batches were the way out; later rollbacks show e2e 0/3 vs control 3/3 and a noisy benchmark.",
+      "expect": ["record/gate/hive.md", "gate-ties-rolled-back-changes-no-probe-can-measure.md", "record/chat/lead.md", "record/task/261024-213942-b2a9266433.md"],
+      "also": ["gate-rule-a-change-s-own-check-that-the-old-hive-fails-and-t.md", "record/task/261024-185842-9de7970b1d.md", "blocked-the-first-self-proposed-change-that-beats-the-benchm.md", "step-back-2026-10-24-the-gate-exists-but-gates-nothing-no-sc.md", "record/task/261024-231016-fb4c3cb910.md"]
+    },
+    {
+      "q": "which merges skipped a security read",
+      "answer": "Early on 2026-10-24 the merge step didn't read tests/LANDING-security.toml, so #148 (plan usage) and #149 (several plan logins) merged without a security read despite touching internal/core/runs.go and internal/harness; the lead then found #152, #156, #161, #162, #163/#169, #165, #168, #143, #170, and later #167 (internal/daemon/daemon.go) and #174 (effects.go) did too. The fix is task 261024-024555-ae93e33ac7 (PR #175): a merge waits for checks and lands only at the head its security read saw.",
+      "expect": ["record/chat/lead.md", "record/task/261024-024555-ae93e33ac7.md", "record/task/261024-021130-822a4fd9db.md", "record/task/261024-021141-eb7d05dc2c.md"],
+      "also": ["record/task/261024-021213-cc7273c48a.md", "record/task/261024-025417-6e9a2ae247.md", "record/task/261024-021206-77d470a5df.md", "record/task/261024-021207-f356faa785.md"]
+    },
+    {
+      "q": "has the PR that gives the Hive project a benchmark score landed, and why does it keep coming back for approval?",
+      "answer": "PR #412 (task 261024-073323-39b67b4b25, issue #264) adds a score (cmd/hive-score running the gate's HMAC-signed TestBenchmark plus e2e pass rate) to .hive/project.json, so every new head needs a merge approval; wardens approved it about a dozen times (e.g. 261024-145811-cefc2cdd0e, 261024-182228-c26e46b4ca, 261025-000822-94bb4b7148) and the person said merge at 23:34Z. It still hadn't merged by 00:28Z: the hand-merge batch skipped it as CONFLICTING and it waits for the serial recursive gate.",
+      "expect": ["record/task/261024-073323-39b67b4b25.md", "record/risk/261025-000822-94bb4b7148.md", "record/person/261024-233443-62f8e4bcae.md", "record/risk/261024-224152-7a52ee28b2.md"],
+      "also": ["record/risk/261024-182228-c26e46b4ca.md", "record/risk/261024-145811-cefc2cdd0e.md", "record/person/261025-000916-633a165159.md", "step-back-2026-10-24-the-gate-exists-but-gates-nothing-no-sc.md"]
+    },
+    {
+      "q": "why did run w-261024-135947-4611ecc5f7 go quiet for hours, and what did the lead change because of it?",
+      "answer": "On the open harness gpt-oss-120b printed 'hive agent finish' as text instead of running it, so the worker for PR #439 (OpenRouter free models first) kept ending turns without finishing and sat quiet 20:26-22:30Z while ~60 briefs waited on it. At 22:25Z the lead set the hive worker route back to claude:opus, claude:sonnet; the fix that runs a printed finish is w-261024-204134-50eafa2d49, itself blocked on a CI rerun.",
+      "expect": ["gpt-oss-120b-can-t-be-trusted-with-hive-worker-turns.md", "record/run/w-261024-135947-4611ecc5f7.md", "record/config.md", "record/task/261024-135947-4611ecc5f7.md"],
+      "also": ["blocked-a-worker-on-an-open-harness-that-writes-hive-agent-f.md", "model-trials-2026-10-24-gpt-oss-120b-and-free-nemotron-both-.md"]
+    },
+    {
+      "q": "the workspace lock in internal/daemon/lock.go was supposed to stop two daemons; why did a second one still start?",
+      "answer": "#449 (task 261024-174207-569f6db9d5) added the workspace lock and was hand-merged with v0.1.66 (warden request 261024-204300-e3e3223953), but two daemons started again: the second is launched by h0-waiting-poke.service in the person's session (uid 1000) while the Hive's unit runs as uid 1003, so the lock may not hold across users. Task 261024-184737-7a008c4bb4 (#450, PR #474) adds a per-turn claim and stops a second launcher.",
+      "expect": ["449-s-workspace-lock-didn-t-stop-the-second-daemon.md", "record/task/261024-174207-569f6db9d5.md", "record/task/261024-184737-7a008c4bb4.md", "record/risk/261024-204300-e3e3223953.md"],
+      "also": ["record/risk/261024-192720-b078ce4f02.md", "record/run/w-261024-184737-7a008c4bb4.md", "blocked-the-first-self-proposed-change-that-beats-the-benchm.md"]
+    },
+    {
+      "q": "what was making TestModuleLifecycle flaky on Windows and macOS, and who fixed it?",
+      "answer": "A race in the test: modules.Registry.Install clones the module before record() writes its source, so the test could capture first.Release as \"\" and its update wait passed before modules.update ran. Worker w-261024-085008-bca3de4392 (task 261024-085008-bca3de4392, PR #292) fixed it in a4ef61d by waiting for a non-empty release.",
+      "expect": ["testmodulelifecycle-windows-flake-cause-and-fix.md", "record/run/w-261024-085008-bca3de4392.md", "record/task/261024-085008-bca3de4392.md"],
+      "also": ["blocked-self-update-restarts-under-a-system-unit-too-without.md"]
+    },
+    {
+      "q": "why were the KB search and KB dreaming tasks filed twice, and which ones are the live ones?",
+      "answer": "At 07:49Z (03:49 local) the person said the work 'has to go in the module ... not the core', so the lead held the first tasks 261024-074115-cd29a6fca9 (#269, dreams) and 261024-074144-a7fdccf3e9 (#270, search) and refiled them as module programs under modules/kb: 261024-074958-c9596b74b3 (#272, later PR #537) and 261024-074959-0cdbbee20e. That became the rule that new features are module programs, not internal/.",
+      "expect": ["new-features-are-built-as-module-programs-not-in-internal.md", "record/task/261024-074115-cd29a6fca9.md", "record/task/261024-074958-c9596b74b3.md", "record/task/261024-074144-a7fdccf3e9.md"],
+      "also": ["kb-is-for-agents-knowing-what-s-running-and-how-to-do-things.md", "record/chat/lead.md", "module-layout-revised-standard-modules-stay-in-the-hive-repo.md"]
+    },
+    {
+      "q": "what happened to the Windows e2e flake follow-up PR #433 at the recursive gate, and how did it end up landing?",
+      "answer": "Its head fe55aed9 (task 261024-122534-69ebdecb25) was gated three times: a tie at 19:57Z, then 'worse: benchmark passes 2/3, the control 3/3' at 22:56Z (though it only touched test files, showing the measure is noisy), then e2e 0/3 at 23:39Z. That rollback led to task 261024-231016-fb4c3cb910 (#507, measure the gate's noise). #433 was finally merged by hand at 23:09Z (d63192d5) in the person-approved warden batch 261024-224152-7a52ee28b2.",
+      "expect": ["record/task/261024-122534-69ebdecb25.md", "record/gate/hive.md", "record/task/261024-231016-fb4c3cb910.md", "record/risk/261024-224152-7a52ee28b2.md"],
+      "also": ["record/chat/lead.md", "record/person/261024-225606-5e2570162d.md"]
+    },
+    {
+      "q": "the model trials of gpt-oss-120b and the free OpenRouter model did their tasks, so why did they end up stopped?",
+      "answer": "Both small Go tasks (CSV column summer, task 261024-161853-d600e29938, PR #3; word counter, task 261024-155412-6ac837de5a, PR #4) passed review and reached merging, but the Hive-RSI-Lab org token lacks Checks read, so reading check-runs failed with HTTP 403 and the tasks 'gave up after repeated errors'. The deepseek-v4-pro LRU trial stopped the same way.",
+      "expect": ["record/model/trials.md", "model-trials-2026-10-24-gpt-oss-120b-and-free-nemotron-both-.md", "record/task/261024-161853-d600e29938.md", "record/task/261024-155412-6ac837de5a.md"],
+      "also": ["gpt-oss-120b-can-t-be-trusted-with-hive-worker-turns.md"]
+    },
+    {
+      "q": "why did the warden refuse to merge the openrouter LRU-cache trial PR in the trials project?",
+      "answer": "Request 261025-000447-80154c5949 (from w-261024-173547-d7dd49a1e7, PR #11 in Hive-RSI-Lab/hive-trials) also set .hive/project.json test to 'go test -race ./...'; the warden declined (leave open) because one trial's PR shouldn't set the project-wide test gate that other trials are judged by, trials may not all be Go, and -race needs cgo/gcc; it asked to drop the project.json change and propose the test command separately.",
+      "expect": ["record/risk/261025-000447-80154c5949.md", "record/task/261024-173547-d7dd49a1e7.md", "record/person/261025-000647-a031d85580.md"],
+      "also": ["record/person/261025-000647-f72e58dcfd.md", "record/model/trials.md"]
+    },
+    {
+      "q": "did the owner let the warden hand-merge the leads-priority fix #430, and if not why?",
+      "answer": "No. The warden passed request 261024-234444-2c4f4a6381 (squash-merge PR #430, task 261024-154424-cb860e9068, 'Leads answer however busy the machine is') to the person because it acts in their name; the person declined at 23:46Z (person 261024-234504-5a9239cf77) because the PR had moved to head 156eacd5 where the sandboxed e2e check fails in TestBwrapGateKeepsAndRollsBack, and asked to try again once the new head's checks pass.",
+      "expect": ["record/person/261024-234504-5a9239cf77.md", "record/risk/261024-234444-2c4f4a6381.md", "record/task/261024-154424-cb860e9068.md"],
+      "also": ["record/risk/261024-224152-7a52ee28b2.md", "record/chat/lead.md"]
+    },
+    {
+      "q": "why is task 261024-021139-e5070e4f93 (self-update under a system unit) blocked?",
+      "answer": "Its PR #159's forge checks were red, but not from the branch: its tree was identical to main because main's 8a2236b already carried the self-update work, and CI failed on newer main code (TestControlCenterInTmux stopping at the new failure-report prompt, TestInstallerShareAnswer on Windows, TestModuleLifecycle on macOS). The worker w-261024-021139-e5070e4f93 had nothing to fix and said main needs fixing first.",
+      "expect": ["blocked-self-update-restarts-under-a-system-unit-too-without.md", "record/task/261024-021139-e5070e4f93.md", "record/run/w-261024-021139-e5070e4f93.md"],
+      "also": ["testmodulelifecycle-windows-flake-cause-and-fix.md"]
+    },
+    {
+      "q": "what did the owner decide about changes that only tie at the recursive gate?",
+      "answer": "At 22:16Z (autobox for the person) the rule became: a change that brings its own check that the current Hive fails and the new one passes, with nothing else worse, counts as better; the same goes for the person's asks, which must prove themselves. #472 (task 261024-185842-9de7970b1d, issue #454) implements it for fixed bugs and was hand-merged with the person's OK (request 261024-223208-4f73c0746e); task 261024-221630-e6c0ce0873 adds acceptance checks for features.",
+      "expect": ["gate-rule-a-change-s-own-check-that-the-old-hive-fails-and-t.md", "record/task/261024-185842-9de7970b1d.md", "record/risk/261024-223208-4f73c0746e.md", "gate-ties-rolled-back-changes-no-probe-can-measure.md"],
+      "also": ["record/task/261024-221630-e6c0ce0873.md", "record/chat/lead.md"]
+    }
+  ]
+}

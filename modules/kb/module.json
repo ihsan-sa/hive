@@ -1,9 +1,16 @@
 {
   "name": "kb",
-  "description": "The knowledge base: the Hive's memory across projects and runs. Every journal event is filed under record/ on its own; agents search it with `hive agent search`, read it directly and write notes with `hive agent remember`; a scheduled filer consolidates new notes, and the module's dream program (dream/) works over the whole knowledge base and the record every few hours and at quiet moments: it merges duplicate notes into living notes, links related notes both ways, distils the record into project summaries and a practice note, retires notes later events contradict, and writes a digest of what the Hive learned under dreams/.",
+  "description": "The knowledge base: the Hive's memory across projects and runs. Every journal event is filed under record/ on its own; agents search it with `hive agent search` (the module's own search program, search/: each file once, ranked by words, the entities that tie files together and the links between notes, with why each matched; `--deep \"question\"` sends a small research agent that digs and answers with sources), read it directly and write notes with `hive agent remember`; a scheduled filer consolidates new notes, and the module's dream program (dream/) works over the whole knowledge base and the record every few hours and at quiet moments: it merges duplicate notes into living notes, links related notes both ways, distils the record into project summaries and a practice note, retires notes later events contradict, and writes a digest of what the Hive learned under dreams/.",
   "provides": {"schedules": ["kb.file", "kb.dream"], "procedures": ["searching.md"]},
   "projects": ["*"],
   "exec": ["go", "run", "./dream/main.go", "./dream/notes.go", "./dream/record.go", "./dream/plan.go", "./dream/distil.go", "./dream/link.go", "./dream/digest.go"],
   "hooks": ["idle", "kb"],
-  "schedule": {"kb.dream": "every 4h"}
+  "schedule": {"kb.dream": "every 4h"},
+  "ops": {
+    "search": {
+      "help": "{\"query\", \"limit\": \"n or all\"} or {\"deep\": \"a question\"}",
+      "exec": ["go", "run", "./search/main.go", "./search/index.go", "./search/rank.go", "./search/render.go", "./search/bench.go", "op"],
+      "agent": {"arg": "deep", "role": "kb-researcher", "prompt": "researcher.md", "model": "haiku", "budget_usd": 0.4, "minutes": 8}
+    }
+  }
 }

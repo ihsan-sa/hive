@@ -31,6 +31,10 @@ paths = [
   # module-reviewer read, so its program's source needs this one.
   "modules/*/module.json",
   "modules/kb/dream/**",
+  # The search op's program, run as the person on every agent's search; it
+  # alone keeps isolated projects' notes and the record out of a caller's
+  # results (HIVE_KB_HIDE).
+  "modules/kb/search/**",
 
   # Mounts and covers for a run, effects applied outside the sandbox, the
   # hard ceiling, login and token handling, and the workspace paths that

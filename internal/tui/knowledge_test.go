@@ -82,7 +82,8 @@ func TestKnowledgeSection(t *testing.T) {
 		t.Fatal("/ opened no search box")
 	}
 	m.input.SetValue("zebra")
-	key("enter")
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	run(m, cmd) // no Hive answers here, so the built-in word match does
 	if len(m.stack) != 1 || !strings.Contains(m.stack[0].text, "record/tasks/t1.md") {
 		t.Fatalf("search didn't find the record: %+v", m.stack)
 	}
@@ -136,6 +137,22 @@ func TestKnowledgeRecentlyUpdated(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if len(m.stack) != 1 || m.stack[0].id != "zebra.md" || !strings.Contains(m.stack[0].text, "zebra parser") {
 		t.Fatalf("enter on a recent entry didn't open it: %+v", m.stack)
+	}
+}
+
+// run runs cmd and what it batches, feeding each message back to m.
+func run(m *model, cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		for _, c := range msg {
+			run(m, c)
+		}
+	case nil:
+	default:
+		m.Update(msg)
 	}
 }
 

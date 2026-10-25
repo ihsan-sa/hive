@@ -828,6 +828,33 @@ func (s *server) routes() http.Handler {
 		}
 		return "ok", a.Runner.Retry(b.Module)
 	})
+	// The person's call to an op a module answers, such as the Knowledge tab's
+	// search: a question starts the op's agent and returns its run, whose
+	// answer a GET with ?run= reads once it has one.
+	h("/api/op", func(r *http.Request) (any, error) {
+		if r.Method == http.MethodGet {
+			text, done := a.Runner.Answer(r.URL.Query().Get("run"))
+			return map[string]any{"text": text, "done": done}, nil
+		}
+		var b struct {
+			Op       string
+			Args     json.RawMessage
+			Question string
+		}
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		if !a.Runner.ModuleOp(b.Op) {
+			return nil, fmt.Errorf("no module answers %q", b.Op)
+		}
+		person := core.Run{RunSpec: core.RunSpec{ID: "person", Role: "person"}}
+		if b.Question != "" {
+			id, err := a.Runner.StartAgent(person, b.Op, b.Question)
+			return map[string]string{"run": id}, err
+		}
+		out, err := a.Runner.Call(person, b.Op, b.Args)
+		return map[string]any{"text": out}, err
+	})
 	h("/api/project", func(r *http.Request) (any, error) {
 		var b projects.Spec
 		if err := decode(r, &b); err != nil {

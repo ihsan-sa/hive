@@ -25,9 +25,12 @@ func TestKBArgsTakeLimitAnywhere(t *testing.T) {
 		{"login", "--limit", "all"},
 		{"--limit", "all", "login"},
 	} {
-		if q, l := kbArgs(args); q != "login" || l != "all" {
-			t.Errorf("kbArgs(%q) = %q, %q; want login, all", args, q, l)
+		if q, l, d := kbArgs(args); q != "login" || l != "all" || d {
+			t.Errorf("kbArgs(%q) = %q, %q, %v; want login, all, false", args, q, l, d)
 		}
+	}
+	if q, _, d := kbArgs([]string{"why", "--deep", "reverted"}); q != "why reverted" || !d {
+		t.Errorf("kbArgs with --deep = %q, %v", q, d)
 	}
 }
 
