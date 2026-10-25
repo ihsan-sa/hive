@@ -55,3 +55,28 @@ func TestCheckRefusesANullSeat(t *testing.T) {
 		t.Fatalf("a null seat passed: %v", err)
 	}
 }
+
+// Turning sharing on again keeps when it was first turned on, so events
+// between the last report and now aren't skipped; off and on again starts over.
+func TestSetShareOnAgainKeepsSince(t *testing.T) {
+	var c Config
+	c.SetShare(true)
+	c.Share = "2026-01-02T03:04:05Z"
+	id := c.InstallID
+	c.SetShare(true)
+	if c.Share != "2026-01-02T03:04:05Z" || c.InstallID != id {
+		t.Fatalf("on again moved sharing to %q, id %q (was %q)", c.Share, c.InstallID, id)
+	}
+	// An id lost while on (a hand edit, a config from a share bundle) comes back.
+	c.InstallID = ""
+	c.SetShare(true)
+	if c.Share != "2026-01-02T03:04:05Z" || c.InstallID == "" {
+		t.Fatalf("on again without an id: share %q, id %q", c.Share, c.InstallID)
+	}
+	id = c.InstallID
+	c.SetShare(false)
+	c.SetShare(true)
+	if c.Share == "2026-01-02T03:04:05Z" || c.InstallID != id {
+		t.Fatalf("off then on kept %q, id %q (was %q)", c.Share, c.InstallID, id)
+	}
+}

@@ -174,6 +174,8 @@ A value of @path reads that file. Common ops:
   feedback  --text "..." [--about "agents/worker.md"]   what about the Hive got in your way, for the person
   schedule  --in 2h --text "..."                 a wake-up message to yourself
   status                                         projects, work in flight, scores
+  github    --pr N | --checks sha | --annotations id | --path "repos/o/r/..." [--repo o/r]
+                                                 GitHub's API on the person's login, cached; never curl api.github.com
 The loop is every agent's: these act on your own project's tasks, on the record with your run id.
   rerun-checks [--task id]                      the failed forge checks (CI jobs) on a PR's head (yours by default)
                                                  run again, for a flake; at most 2 per head, the merge waits for them
