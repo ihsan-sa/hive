@@ -1484,11 +1484,17 @@ func (m *Module) test(t *Task, p core.Project) error {
 			m.raiseCantRun(p, c)
 			return m.dropCheckpoint(t, p, "the tests "+c.CantRun+", which is no verdict on it")
 		}
-		t.CantRuns++
+		if c.Tool != "" {
+			// Only a missing tool counts toward red: a commit can fake
+			// that from its own output, but not a full disk or quota,
+			// which is the machine's fault and only waits.
+			t.CantRuns++
+		}
 		return m.cantRun(t, p, c)
 	}
 	t.CantRuns = 0
 	m.RanCheck(p.Name, "test")
+	m.CloseCantRunAsk(p.Name, "cant-run:"+t.ID, "its tests run now")
 	if strings.HasPrefix(t.Reason, "the tests can't run") {
 		t.Reason = "" // the tool is there now
 	}
@@ -1603,6 +1609,17 @@ func (m *Module) cantRunRed(t *Task, p core.Project, c core.Check) error {
 	t.CantRuns = 0
 	m.giveUp(t, fmt.Sprintf("the tests %s, %d tries in a row, which now counts as red; the person is asked for %s", c.CantRun, CantRunTries, tool))
 	return nil
+}
+
+// CloseCantRunAsk answers the person's open "install the tool" ask with ref
+// for them once it is stale (the tests run, or the change is tested again),
+// so it leaves their Waiting list. A later run of tries asks afresh.
+func (m *Module) CloseCantRunAsk(project, ref, why string) {
+	for _, a := range m.C.Person.Open() {
+		if a.Ref == ref && a.Project == project && a.Kind == "question" {
+			m.C.Person.Answer(a.ID, "ok", "the Hive, not the person: "+why)
+		}
+	}
 }
 
 func (m *Module) raiseCantRun(p core.Project, c core.Check) {
@@ -3254,6 +3271,7 @@ func (m *Module) Recheck(id, back, by string) error {
 		return fmt.Errorf("task %s was stopped by the person (%s); only they can bring it back", id, t.Reason)
 	}
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns = "", 0, 0, 0, 0, 0
+	m.CloseCantRunAsk(t.Project, "cant-run:"+t.ID, "the change is tested again, asked by "+by)
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
 			return err
