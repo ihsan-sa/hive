@@ -887,17 +887,21 @@ func TestRequiredChecks(t *testing.T) {
 	}
 }
 
-// Two changes that each add to docs/log.md, docs/status.md and
-// docs/architecture.md merge into main one after the other: the repository's
-// own .gitattributes marks them merge=union, so bringing the second branch up
-// to date keeps both entries instead of sending it back as a conflict. Without
-// those lines the same merge conflicts.
+// Two changes that each add to docs/log.md and docs/status.md merge into main
+// one after the other: the repository's own .gitattributes marks them
+// merge=union, so bringing the second branch up to date keeps both entries
+// instead of sending it back as a conflict. Without those lines the same merge
+// conflicts. docs/architecture.md is edited in place and isn't union: the same
+// two additions to it conflict either way.
 func TestAdditiveDocsMergeWithoutConflict(t *testing.T) {
 	attrs, err := os.ReadFile(filepath.Join("..", "..", ".gitattributes"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	docs := []string{"docs/log.md", "docs/status.md", "docs/architecture.md"}
+	docs := []string{"docs/log.md", "docs/status.md"}
+	if !strings.Contains(string(attrs), "docs/log.md merge=union") || strings.Contains(string(attrs), "docs/architecture.md merge=union") {
+		t.Fatalf(".gitattributes should mark log.md union and leave architecture.md alone:\n%s", attrs)
+	}
 	for _, union := range []bool{true, false} {
 		t.Run(fmt.Sprint("union=", union), func(t *testing.T) {
 			c, f := testHive(t)

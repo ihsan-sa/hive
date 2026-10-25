@@ -213,3 +213,22 @@ func setJSON(t *testing.T, task *Task, set map[string]any) {
 		t.Fatal(err)
 	}
 }
+
+// Checks cancelled because a newer push replaced their head broke nothing
+// (the incident of PR #414): the task waits for the newer head's own run,
+// with no re-run and no "can't start" alert.
+func TestForgeChecksCancelledBySupersedingPushRaiseNothing(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	cancelled := core.CheckRun{Name: "test", State: core.CheckCantStart, Detail: "cancelled"}
+	f.SetChecks(p.Repo, task.SHA, cancelled)
+	newer := pushHead(t, f, task.Branch, map[string]string{"x.txt": "1"}) // pushed while the merge step ran
+	main, _ := m.C.Effects.Sync(p)
+	wait, err := m.forgeChecks(task, p, main)
+	if err != nil || !wait {
+		t.Fatalf("wait %v, err %v", wait, err)
+	}
+	if task.Reruns[task.SHA] != 0 || alerts(m, "main-red") != 0 || !strings.Contains(task.Reason, "a newer push replaced it") || !strings.Contains(task.Reason, core.Short(newer)) {
+		t.Fatalf("reruns %v, %d alerts, reason %q", task.Reruns, alerts(m, "main-red"), task.Reason)
+	}
+}
