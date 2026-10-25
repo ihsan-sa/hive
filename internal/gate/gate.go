@@ -69,6 +69,7 @@ type Report struct {
 	Unit        UnitReport `json:"unit"`                        // the vet and short-test step, each side's failures named
 	Fixes       FixReport  `json:"fixes"`                       // the candidate's own new tests, run on both sides
 	Transient   bool       `json:"transient,omitempty"`         // could not run for a cause that may pass (load, a flake on both sides): try again soon
+	Alone       bool       `json:"alone,omitempty"`             // could not run for a cause tied to this candidate alone (preparing its build, the run's clock): another change at this base would not hit it
 	Sig         string     `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
 }
 
@@ -139,6 +140,7 @@ func Run(cfg Config) (rep Report, err error) {
 			// is not the candidate's failure and no lesson is written.
 			rep.Error, rep.CantRun = err.Error(), true
 			rep.Transient = errors.As(err, new(transient))
+			rep.Alone = errors.As(err, new(alone))
 			rep.Verdict = Verdict{Reason: "the gate could not run: " + err.Error()}
 		case !rep.Verdict.Keep && len(rep.Verdict.Regressions) == 0 && len(rep.Verdict.Unmeasured) > 0:
 			rep.CantRun = true // a probe failed on both sides: that path was never measured
@@ -208,7 +210,11 @@ func Run(cfg Config) (rep Report, err error) {
 				var own *ownFailure
 				if !errors.As(e, &own) {
 					// The gate's own step (the clone, the module download): could not run.
-					return rep, fmt.Errorf("preparing %s's build: %v", c.Name, e)
+					err = fmt.Errorf("preparing %s's build: %v", c.Name, e)
+					if c == cand {
+						err = alone{err} // its own go.mod, its own sha: another change may fare otherwise
+					}
+					return rep, err
 				}
 				buildErrs[c] = e
 				continue
@@ -340,7 +346,11 @@ func Run(cfg Config) (rep Report, err error) {
 				out *[]Result
 			}{{cand, &rep.Candidate}, {ctrl, &rep.Control}} {
 				if time.Now().After(deadline) {
-					return rep, fmt.Errorf("out of time (%s) before %s's %s", cfg.Timeout, side.c.Name, name)
+					err = fmt.Errorf("out of time (%s) before %s's %s", cfg.Timeout, side.c.Name, name)
+					if slowerAlone(rep.Candidate, rep.Control) {
+						err = alone{err} // the candidate took the time; on a slow machine both would
+					}
+					return rep, err
 				}
 				cfg.log("rep %d: %s on %s", rep0+1, name, side.c.Name)
 				start, spent := time.Now(), side.c.Meter.Bytes()
@@ -370,6 +380,19 @@ func Run(cfg Config) (rep Report, err error) {
 		rep.Verdict.Reason += "; failing on both sides, so the environment's and not counted: " + failureNames(rep.Unit.Shared, modulePath(cand.Src))
 	}
 	return rep, nil
+}
+
+// slowerAlone says the candidate took more time than the control over the
+// probes both ran. The candidate goes first, so it may have run one more;
+// that one is left out, or a machine slow for both would blame it.
+func slowerAlone(cand, ctrl []Result) bool {
+	n := min(len(cand), len(ctrl))
+	var c, k float64
+	for i := 0; i < n; i++ {
+		c += cand[i].Seconds
+		k += ctrl[i].Seconds
+	}
+	return c > k
 }
 
 func hasMetric(r Result, name string) bool {
@@ -496,7 +519,7 @@ func prefetch(cfg Config, c *Child) error {
 	}
 	cmd := exec.Command("go", "mod", "download")
 	cmd.Dir = c.Src
-	cmd.Env = append(cleanEnv(), "HOME="+filepath.Join(dir, "home"), "GOCACHE="+filepath.Join(dir, "gocache"), "GOROOT="+c.Go.Root, "GOMODCACHE="+c.Go.ModCache,
+	cmd.Env = append(cleanEnv(), "HOME="+filepath.Join(dir, "home"), "GOCACHE="+goCache("", filepath.Join(dir, "gocache")), "GOROOT="+c.Go.Root, "GOMODCACHE="+c.Go.ModCache,
 		"GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GOVCS=*:off", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go mod download: %v: %s", err, tail(string(out), 600))
@@ -627,6 +650,14 @@ func whose(cand, ctrl *Child, errs map[*Child]error, why string) error {
 	}
 	return nil
 }
+
+// alone is a could-not-run tied to this candidate (preparing its own build,
+// the run's clock): no verdict on it, but no reason for another change at
+// the same base to wait either.
+type alone struct{ err error }
+
+func (a alone) Error() string { return a.err.Error() }
+func (a alone) Unwrap() error { return a.err }
 
 // candidateFault is a failure of the candidate itself before it was
 // measured (it does not build, fails its own checks, rewrote its binary):

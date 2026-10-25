@@ -1,8 +1,8 @@
 name: ci
-# PRs, a published release and a manual run (gh workflow run ci) get all three systems, so a
-# change that's red on macOS or Windows is caught before it merges, not at the next release.
-# Pushes to main run on Linux only: their PR already ran the rest, and macOS minutes bill at
-# 10x and Windows at 2x.
+# Linux only for now, on the person's word (issue #564): macOS and Windows are paused until the
+# self-improvement loop is tight, so nothing in the merge path waits on them. To bring them back,
+# add macos-latest and windows-latest to the test matrix (and to runners in
+# internal/mod/release/prerelease.go) and the cross-system vet steps.
 on:
   push:
     branches: [main]
@@ -11,7 +11,7 @@ on:
     types: [published]
   workflow_dispatch:
 concurrency:
-  # Keyed by event too, so a push to main never cancels a manual three-system run on main.
+  # Keyed by event too, so a push to main never cancels a manual run on main.
   group: ci-${{ github.event_name }}-${{ github.ref }}
   # Only a PR's superseded run is cancelled: every push to main finishes its run, so a
   # change waiting on main's result gets one however fast merges come.
@@ -24,9 +24,9 @@ jobs:
   # Linux's own (ownJobs and alsoOwn in internal/mod/release/prerelease.go); keep them unnamed.
   test:
     strategy:
-      fail-fast: false # a release's run names every system's failures, not only the first
+      fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -51,16 +51,6 @@ jobs:
           grep -n -e '--- FAIL' -e '^panic:' "$RUNNER_TEMP/suite.log" | head -20 | while IFS=: read -r n _; do
             echo "::error::$(sed -n "$n,$((n + 30))p" "$RUNNER_TEMP/suite.log" | awk 'BEGIN { ORS = "%0A" } { gsub(/\r/, ""); gsub(/%/, "%25"); print substr($0, 1, 300) }')"
           done
-      # After the suite, so a cross-system vet failure never hides the Linux result,
-      # and !cancelled(), so a Linux failure never hides a cross-system one.
-      - name: vet darwin
-        if: "!cancelled() && matrix.os == 'ubuntu-latest'"
-        shell: bash
-        run: GOOS=darwin go vet ./...
-      - name: vet windows
-        if: "!cancelled() && matrix.os == 'ubuntu-latest'"
-        shell: bash
-        run: GOOS=windows go vet ./...
   sandboxed-e2e:
     # The end to end with agents under bubblewrap, the default sandbox on Linux, so a sandbox
     # break goes red on a PR. The runner's Ubuntu blocks unprivileged user namespaces through

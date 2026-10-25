@@ -265,11 +265,8 @@ func (o *Ops) registerCore() {
 		if err := Bind(a, &f); err != nil {
 			return nil, err
 		}
-		if f.Status != "done" && f.Status != "blocked" {
-			return nil, errors.New(`status must be "done" or "blocked"`)
-		}
-		if strings.TrimSpace(f.Account) == "" {
-			return nil, errors.New("account is required: say what you did, or why you stopped")
+		if err := f.check(); err != nil {
+			return nil, err
 		}
 		o.rs.append("run.finish", struct {
 			ID     string `json:"id"`
