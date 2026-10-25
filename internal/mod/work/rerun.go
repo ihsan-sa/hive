@@ -113,8 +113,11 @@ func (m *Module) RerunChecks(id, by string) (string, error) {
 
 // claim marks a task busy for a change from outside its step, waiting for a
 // running step to end, so neither saves over the other.
-func (m *Module) claim(id string) bool {
-	for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+func (m *Module) claim(id string) bool { return m.claimWithin(id, 30*time.Second) }
+
+// claimWithin is claim, giving up after d.
+func (m *Module) claimWithin(id string, d time.Duration) bool {
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
 		m.mu.Lock()
 		if !m.busy[id] {
 			m.busy[id] = true

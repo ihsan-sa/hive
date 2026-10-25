@@ -115,7 +115,7 @@ func (m *Module) join(b Brief, own string) (Task, string, bool) {
 	slices.Reverse(open) // oldest first, so a third brief joins the first
 	for _, o := range open {
 		why := match(b, o)
-		if why == "" || !m.claim(o.ID) {
+		if why == "" || !m.claimWithin(o.ID, 2*time.Second) { // one a long step holds is skipped, so other briefs don't wait long on filing
 			continue
 		}
 		t, ok := m.Get(o.ID) // afresh, now no step holds it
