@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 )
 
@@ -32,7 +34,7 @@ type workspaceLock struct{ f *os.File }
 
 func (l *workspaceLock) Release() {
 	if l != nil && l.f != nil {
-		unlock(l.f)
+		proc.Unlock(l.f)
 		l.f.Close()
 		l.f = nil
 	}
@@ -58,9 +60,16 @@ func (e *AlreadyRunning) Error() string {
 	return s + "; this one exits (`" + core.Cmd + " stop` ends the running one)"
 }
 
+// stopWait is how long a daemon waits for the lock while its holder doesn't
+// answer: a daemon shutting down holds it until it has exited, which a
+// Windows runner has taken seconds to do.
+var stopWait = 30 * time.Second
+
 // lockWorkspace takes the workspace's daemon lock, trying for up to wait
-// (an update's restart waits out the daemon it replaces) or once.
-func lockWorkspace(ws core.Workspace, wait time.Duration) (*workspaceLock, error) {
+// (an update's restart waits out the daemon it replaces, a start waits out
+// one stopping) or once. With unlessUp it stops waiting as soon as a daemon
+// there answers; a hand-off waits even for one that still answers.
+func lockWorkspace(ws core.Workspace, wait time.Duration, unlessUp bool) (*workspaceLock, error) {
 	if err := os.MkdirAll(ws.Private(), 0o700); err != nil {
 		return nil, err
 	}
@@ -69,7 +78,7 @@ func lockWorkspace(ws core.Workspace, wait time.Duration) (*workspaceLock, error
 		return nil, err
 	}
 	for end := time.Now().Add(wait); ; time.Sleep(100 * time.Millisecond) {
-		ok, err := tryLock(f)
+		ok, err := proc.TryLock(f)
 		if err != nil {
 			f.Close()
 			return nil, err
@@ -77,7 +86,7 @@ func lockWorkspace(ws core.Workspace, wait time.Duration) (*workspaceLock, error
 		if ok {
 			break
 		}
-		if time.Now().After(end) {
+		if time.Now().After(end) || unlessUp && running(ws) {
 			var h holder
 			raw, _ := core.SafeRead(lockFile(ws), 4096)
 			json.Unmarshal(raw, &h)
@@ -104,3 +113,36 @@ func startedBy() string {
 	}
 	return by
 }
+
+// lockHeld reports whether a daemon holds the workspace's lock: one that is
+// starting up holds it before it writes daemon.json.
+func lockHeld(ws core.Workspace) bool {
+	f, err := os.OpenFile(lockFile(ws), os.O_RDWR, 0)
+	if err != nil {
+		return false // never locked, or not ours to read: starting one says which
+	}
+	defer f.Close()
+	ok, err := proc.TryLock(f)
+	if ok {
+		proc.Unlock(f)
+	}
+	return !ok && err == nil
+}
+
+// bootWait is how long a command waits for a daemon that holds the lock to
+// come up, rather than start another (a slow start has taken over 30s).
+var bootWait = time.Minute
+
+// booting waits for a daemon that is starting on the workspace, so a command
+// run as the unit's daemon starts doesn't start a second one. It gives up
+// when the lock is let go with no daemon up, as when that one failed.
+func booting(ws core.Workspace) (*api.Client, bool) {
+	for end := time.Now().Add(bootWait); lockHeld(ws) && time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		if c, ok := Running(ws); ok {
+			return c, true
+		}
+	}
+	return Running(ws)
+}
+
+func running(ws core.Workspace) bool { _, ok := Running(ws); return ok }

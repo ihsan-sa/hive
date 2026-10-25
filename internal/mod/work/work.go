@@ -118,6 +118,7 @@ type Task struct {
 	MainWaitOn string    `json:"main_wait_on,omitempty"`
 	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
 	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
+	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
 	Failures   int       `json:"failures"`
 	CloseFail  int       `json:"close_fail,omitempty"` // failed tries to close the issue
 	Attempt    int       `json:"attempt"`              // fresh workers handed this task
@@ -318,11 +319,13 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim"} (aim: fix, the default, or gain for a change aimed at a measurable gain, which on the Hive's own repository merges only if the recursive gate shows it)`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: []string{"worker", "lead"}, Help: `{"task","aim":"fix"|"gain","why"} (a worker's own task by default) -> sets whether the task is a fix, which merges on its tests, checks and reads, or aims at a measurable gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: []string{"lead"}, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); with back, its worker gets that text and works on`, Fn: m.opRecheck})
-	c.Runs.Ops().Register(core.Op{Name: "ready_pr", Roles: []string{"lead"}, Help: `{"task"} -> takes the task's PR out of draft, only while its head is the task's own commit; it still merges only through the Hive's gate. One stopped on "still a draft" comes back`, Fn: m.opReady})
 	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: []string{"worker", "lead"}, Help: `{"task"} (a worker's own task by default) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
 	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: []string{"lead"}, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed), hold keeps one waiting until released, now starts those first even past a brief on the same files (why says so, on the record), for a fix the one it waits on needs. A started worker is never stopped`, Fn: m.opQueue})
 	c.Runs.Ops().Register(core.Op{Name: "landed", Roles: []string{"lead"}, Help: `{"task","why","merge"} -> ends a task in any stage as merged when its PR is merged on the forge or its commits are on main (merge names the main commit when they were squashed there), so the briefs waiting on it start; refused while its PR is open and its work isn't on main`, Fn: m.opLanded})
 	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Roles: []string{"lead"}, Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (follow-ups and reverts included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs still pass their gate and wait ready`, Fn: m.opHold})
+	c.Runs.Ops().Register(core.Op{Name: "pr_ready", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","why"} -> marks the Hive's own PR ready for review, so a merge waiting on the draft goes on (a task stopped over the draft comes back)`, Fn: m.opPRReady})
+	c.Runs.Ops().Register(core.Op{Name: "pr_draft", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","why"} -> marks the Hive's own PR a draft, posting why: its task waits (it isn't stopped) and merges once marked ready with pr_ready`, Fn: m.opPRDraft})
+	c.Runs.Ops().Register(core.Op{Name: "pr_close", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
 	c.Person.Handle("merge", m.onPersonMerge)
 	c.Effects.MergeHeld = m.MergeHeld
 	return m
@@ -1732,17 +1735,18 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	// A draft goes through the same gate as any PR: nobody outside the Hive
 	// reads its PRs, so the merge readies it once every read cleared its head
 	// (core.Effects.Merge). One whose head moved past the commit the Hive read
-	// isn't readied; it waits, counting no failure.
+	// isn't readied, nor one the lead holds as a draft (pr_draft); each waits,
+	// counting no failure.
 	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
 	if err != nil {
 		return err
 	}
-	if pr.Draft && pr.HeadSHA != t.SHA {
+	if pr.Draft && (pr.HeadSHA != t.SHA || t.DraftWhy != "") {
 		return m.waitDraft(t, pr)
 	}
 	if !t.DraftSince.IsZero() {
-		t.Reason, t.DraftSince, t.DraftTold = "", time.Time{}, false
-		m.save(t, "its head is the commit read again; on through the gate")
+		t.Reason, t.DraftSince, t.DraftTold, t.DraftWhy = "", time.Time{}, false, ""
+		m.save(t, "its head is the commit read and the lead holds no draft; on through the gate")
 	}
 	main, err := m.C.Effects.Sync(p)
 	if err != nil {
@@ -1825,7 +1829,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 // holdGap is how long a held task waits before the gate looks again.
 var holdGap = time.Minute
 
-const draftWait = "a draft whose head moved past the commit the Hive read"
+const draftWait = "waiting as a draft"
 
 // draftTell is how long a draft waits before the lead hears of it, once.
 var draftTell = 24 * time.Hour
@@ -1838,7 +1842,10 @@ func (m *Module) waitDraft(t *Task, pr core.PR) error {
 	m.mu.Lock()
 	m.later[t.ID] = time.Now().Add(3 * time.Minute)
 	m.mu.Unlock()
-	reason := fmt.Sprintf("%s (its head is %s, the read was of %s); it isn't readied until its head is one the Hive's gate cleared", draftWait, core.Short(pr.HeadSHA), core.Short(t.SHA))
+	reason := fmt.Sprintf("%s whose head moved past the commit the Hive read (its head is %s, the read was of %s); it isn't readied until its head is one the Hive's gate cleared", draftWait, core.Short(pr.HeadSHA), core.Short(t.SHA))
+	if t.DraftWhy != "" {
+		reason = draftWait + " (held by the lead: " + t.DraftWhy + "); it merges once the PR is marked ready (pr_ready)"
+	}
 	if t.DraftSince.IsZero() {
 		t.DraftSince = time.Now().UTC()
 	}
@@ -1849,7 +1856,7 @@ func (m *Module) waitDraft(t *Task, pr core.PR) error {
 	if !t.DraftTold && time.Since(t.DraftSince) >= draftTell {
 		t.DraftTold = true
 		m.save(t, "told the lead the draft has waited since "+t.DraftSince.Format("2006-01-02 15:04Z"))
-		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited since %s: %s. Its worker's next commit goes through the gate, or recheck it.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), t.DraftSince.Format("2006-01-02 15:04Z"), reason))
+		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited since %s: %s.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), t.DraftSince.Format("2006-01-02 15:04Z"), reason))
 	}
 	return nil
 }
@@ -2699,48 +2706,6 @@ func (m *Module) opRecheck(r core.Run, args json.RawMessage) (any, error) {
 		return nil, err
 	}
 	return map[string]string{"task": a.Task, "note": "back in the pipeline; you'll be told the outcome"}, nil
-}
-
-// Ready takes a task's PR out of draft at the task's own commit, and brings
-// the task back if it was stopped on the draft.
-func (m *Module) Ready(id string) error {
-	t, ok := m.Get(id)
-	if !ok {
-		return core.ErrNotFound
-	}
-	if t.PR.Number == 0 || t.SHA == "" {
-		return fmt.Errorf("task %s has no pull request yet", id)
-	}
-	p, err := m.project(&t)
-	if err != nil {
-		return err
-	}
-	if err := m.C.Effects.ReadyPR(p, t.PR.Number, t.SHA); err != nil {
-		return err
-	}
-	if stoppedOnDraft(t) {
-		return m.Recheck(id, "")
-	}
-	m.save(&t, fmt.Sprintf("PR #%d marked ready at %s", t.PR.Number, core.Short(t.SHA)))
-	return nil
-}
-
-func (m *Module) opReady(r core.Run, args json.RawMessage) (any, error) {
-	var a struct{ Task string }
-	if err := core.Bind(args, &a); err != nil {
-		return nil, err
-	}
-	t, ok := m.Get(a.Task)
-	if !ok {
-		return nil, core.ErrNotFound
-	}
-	if err := m.C.Runs.Walled(r, t.Project); err != nil {
-		return nil, err
-	}
-	if err := m.Ready(a.Task); err != nil {
-		return nil, err
-	}
-	return map[string]string{"task": a.Task, "note": "marked ready; it merges once the Hive's gate clears its head"}, nil
 }
 
 // Retry hands a blocked or stopped task to a fresh worker on the same branch

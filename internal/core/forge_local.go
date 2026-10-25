@@ -343,6 +343,13 @@ func (l *Local) ClosePR(repo string, number int, comment string) error {
 	return nil
 }
 
+func (l *Local) DeleteBranch(repo, branch string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, err := Git(l.RepoPath(repo), "update-ref", "-d", "refs/heads/"+branch)
+	return err
+}
+
 func (l *Local) CloseIssue(repo string, number int) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

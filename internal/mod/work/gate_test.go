@@ -306,9 +306,6 @@ func TestMovedDraftIsNotReadied(t *testing.T) {
 	if m.due(*task) {
 		t.Fatal("a waiting draft is looked at again before its next look")
 	}
-	if err := m.Ready(task.ID); err == nil {
-		t.Fatal("the lead's ready went through on a head the Hive didn't read")
-	}
 	old := draftTell
 	draftTell = 0
 	t.Cleanup(func() { draftTell = old })
@@ -323,6 +320,38 @@ func TestMovedDraftIsNotReadied(t *testing.T) {
 	}
 	if task.Stage != StageMerged || !task.DraftSince.IsZero() || readied(m) != 1 {
 		t.Fatalf("stage %q, reason %q, draft since %v, readied %d", task.Stage, task.Reason, task.DraftSince, readied(m))
+	}
+}
+
+// A draft the lead holds (pr_draft) isn't readied though its head was read:
+// it waits, counting no failure, and merges once the lead marks it ready.
+func TestLeadHeldDraftIsNotReadied(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	m.save(task, "")
+	if _, err := m.MarkDraft(task.ID, "lead", "waiting on #12 first"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := m.Get(task.ID)
+	for range 5 {
+		m.settle(&got, m.step(&got))
+	}
+	pr, _ := forge.GetPR(p.Repo, got.PR.Number)
+	if got.Stage != StageMerging || got.Failures != 0 || !pr.Draft || readied(m) != 0 || !strings.Contains(got.Reason, "held by the lead: waiting on #12 first") {
+		t.Fatalf("stage %q, failures %d, draft %v, readied %d, reason %q", got.Stage, got.Failures, pr.Draft, readied(m), got.Reason)
+	}
+	m.save(&got, "")
+	if _, err := m.MarkReady(task.ID, "lead", "#12 merged"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = m.Get(task.ID)
+	for i := 0; i < 5 && got.Stage == StageMerging; i++ {
+		m.settle(&got, m.step(&got))
+	}
+	if got.Stage != StageMerged || got.DraftWhy != "" {
+		t.Fatalf("stage %q, draft why %q, log %v", got.Stage, got.DraftWhy, got.Log)
 	}
 }
 
