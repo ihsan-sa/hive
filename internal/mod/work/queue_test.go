@@ -523,8 +523,8 @@ func TestQueueReplay1445(t *testing.T) {
 }
 
 // A working task whose worker has gone quiet holds no brief back past its
-// quiet alert: the brief on its file starts, and the quiet worker still
-// counts toward max_workers.
+// quiet alert: the brief on its file starts, and the quiet worker's slot is
+// free until it resumes, when it counts toward max_workers again.
 func TestQuietWorkerHoldsNoOne(t *testing.T) {
 	m := queueRig(t)
 	p, _ := m.C.Projects.Get("p")
@@ -552,7 +552,14 @@ func TestQuietWorkerHoldsNoOne(t *testing.T) {
 	cfg := m.C.WS.LoadConfig()
 	cfg.MaxWorkers = 1
 	m.C.WS.SaveConfig(cfg)
-	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], "max_workers") {
-		t.Fatalf("a quiet worker's slot was given away: %q", wait[fix.ID])
+	if start, wait := m.admit(m.List(nil)); !start[fix.ID] {
+		t.Fatalf("a quiet worker still holds its slot: %q", wait[fix.ID])
+	}
+	m.C.Runs.SetStatus("wq", core.StatusRunning, "a message arrived")
+	other := file(t, m, "another one", "In internal/core/runs.go.")
+	other.Stage = StageQueued
+	m.save(&other, "")
+	if start, wait := m.admit(m.List(nil)); start[other.ID] || !strings.Contains(wait[other.ID], "max_workers") {
+		t.Fatalf("a resumed worker's slot was given away: %q", wait[other.ID])
 	}
 }
