@@ -29,6 +29,12 @@ func (Codex) LoginCommand() []string { return []string{"codex", "login", "--devi
 // login, api.openai.com on an API key.
 func (Codex) APIHosts() []string { return []string{"chatgpt.com", "api.openai.com"} }
 
+// Models are those Codex's 0.153 release lists; a Claude model on Codex runs
+// Codex's own default.
+func (Codex) Models() []string {
+	return []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"}
+}
+
 func (Codex) Args(t Turn) []string {
 	a := []string{"exec"}
 	if t.Resume {

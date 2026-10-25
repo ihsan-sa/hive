@@ -25,7 +25,6 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
-	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
@@ -157,11 +156,11 @@ func handedOver(ws core.Workspace) (*api.Client, bool) {
 // checkHarness refuses a harness the Hive can't run, so a bad name fails when
 // it is set or the Hive starts, not when the first agent does.
 func checkHarness(c core.Config) error {
-	if _, err := harness.Get(c.Harness); err != nil {
+	if _, err := c.Harnesses().Get(c.Harness); err != nil {
 		return err
 	}
 	for name, p := range c.Projects {
-		if _, err := harness.Get(p.Harness); err != nil {
+		if _, err := c.Harnesses().Get(p.Harness); err != nil {
 			return fmt.Errorf("project %s: %w", name, err)
 		}
 	}

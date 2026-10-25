@@ -8,8 +8,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
 // installWorkers puts the workers module's harness specs in ws's modules.
@@ -24,7 +22,6 @@ func installWorkers(t *testing.T, ws Workspace) {
 		}
 		os.WriteFile(filepath.Join(dir, f), raw, 0o644)
 	}
-	harness.UseModules(ws.Modules())
 }
 
 // A turn on a module's harness: its own prompt (the system prompt ahead of
@@ -35,7 +32,7 @@ func TestModuleHarnessTurn(t *testing.T) {
 	installWorkers(t, c.WS)
 	cfg := c.WS.LoadConfig()
 	cfg.Egress.Roles = map[string][]string{"reviewer": {"example.com"}}
-	h, err := harness.Get("cursor")
+	h, err := c.WS.Harnesses().Get("cursor")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +62,7 @@ func TestModuleHarnessTurn(t *testing.T) {
 		t.Fatalf("egress: %q", spec.Allow)
 	}
 
-	oc, _ := harness.Get("opencode")
+	oc, _ := c.WS.Harnesses().Get("opencode")
 	r.Harness, r.ReadOnly, r.Schema = "opencode", false, `{"type":"object"}`
 	spec, err = c.Runs.sandboxSpec(cfg, isolatedSB{}, oc, r, 1, false, prompt, nil, "")
 	if err != nil {
@@ -146,7 +143,7 @@ func TestModuleHarnessKey(t *testing.T) {
 	if env, err := tok.AgentEnv(Login{Harness: "opencode"}, ""); err != nil || env != nil {
 		t.Fatalf("opencode needs no key: %q %v", env, err)
 	}
-	if service("cursor") != "Cursor" {
-		t.Fatal(service("cursor"))
+	if c.Runs.service("cursor") != "Cursor" {
+		t.Fatal(c.Runs.service("cursor"))
 	}
 }

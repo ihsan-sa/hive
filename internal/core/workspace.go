@@ -176,7 +176,23 @@ type Config struct {
 	InstallID string `json:"install_id,omitempty"`
 	// ShareBundleURL is where `hive share` sends its bundle; empty is the developer's endpoint.
 	ShareBundleURL string `json:"share_bundle_url,omitempty"`
+
+	// harnesses are those of the workspace the config was read from.
+	harnesses *harness.Registry
 }
+
+// Harnesses are the harnesses this config can name: its workspace's, or for
+// a config read from no workspace, those UseModules last pointed at.
+func (c Config) Harnesses() *harness.Registry {
+	if c.harnesses != nil {
+		return c.harnesses
+	}
+	return harness.Default()
+}
+
+// Harnesses are the harnesses this workspace can run: the built-in ones and
+// those its installed modules declare.
+func (w Workspace) Harnesses() *harness.Registry { return harness.For(w.Modules()) }
 
 // Sharing says whether sharing is on and since when.
 func (c Config) Sharing() (time.Time, bool) {
@@ -312,7 +328,7 @@ func (c Config) Check() error {
 		if t.Harness == "" {
 			continue
 		}
-		if _, err := harness.Get(t.Harness); err != nil {
+		if _, err := c.Harnesses().Get(t.Harness); err != nil {
 			return fmt.Errorf("tribunal seat %s on harness %s can't sit: %v", t.Model, t.Harness, err)
 		}
 		if _, ok := c.Models[t.Model]; HarnessName(t.Harness) == "open" && !ok {
@@ -371,10 +387,10 @@ func (w Workspace) LoadConfig() Config {
 // ReadConfig is LoadConfig with what's wrong in config.json: a value it
 // couldn't read (every field that did read is kept) or a setting Check refuses.
 func (w Workspace) ReadConfig() (Config, error) {
-	harness.UseModules(w.Modules()) // the harnesses its modules declare are among those Check knows
 	cfgMu.Lock()
 	defer cfgMu.Unlock()
 	c := DefaultConfig()
+	c.harnesses = w.Harnesses() // the harnesses its modules declare are among those Check knows
 	raw, err := os.ReadFile(w.ConfigPath())
 	if err == nil {
 		err = json.Unmarshal(raw, &c)

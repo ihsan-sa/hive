@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
-	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
@@ -81,7 +80,7 @@ func Login(all bool) error {
 func AddLogin(ws core.Workspace, h, name string) error {
 	h = core.HarnessName(h)
 	env := core.LoginDirEnv[h]
-	hn, err := harness.Get(h)
+	hn, err := ws.Harnesses().Get(h)
 	if env == "" || err != nil {
 		return fmt.Errorf("%s has no separate logins", h)
 	}

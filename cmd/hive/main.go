@@ -974,9 +974,9 @@ func cmdHarness(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	harness.UseModules(ws.Modules())
+	hs := ws.Harnesses()
 	spec := func(name string) (*harness.Spec, bool) {
-		h, err := harness.Get(name)
+		h, err := hs.Get(name)
 		s, ok := h.(*harness.Spec)
 		if err != nil || !ok {
 			fmt.Fprintf(os.Stderr, "%q is not a module's harness; `%s harness` lists them\n", name, core.Cmd)
@@ -985,7 +985,7 @@ func cmdHarness(args []string) int {
 	}
 	switch {
 	case len(args) == 0:
-		specs, bad := harness.Declared()
+		specs, bad := hs.Declared()
 		fmt.Println("Built in: claude, codex, open, fake.")
 		for _, s := range specs {
 			found := "not installed: `" + s.Program() + "` isn't on PATH"

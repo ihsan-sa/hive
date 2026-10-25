@@ -180,6 +180,7 @@ func (s *Spec) Name() string           { return s.ID }
 func (s *Spec) Program() string        { return s.Bin }
 func (s *Spec) LoginCommand() []string { return slices.Clone(s.Login) }
 func (s *Spec) APIHosts() []string     { return slices.Clone(s.Hosts) }
+func (s *Spec) Models() []string       { return slices.Clone(s.ModelList) }
 
 // File is where the spec was read from ("" for one built in code).
 func (s *Spec) File() string { return s.file }

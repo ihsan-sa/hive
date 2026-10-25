@@ -145,25 +145,8 @@ func Capped(h Harness, budget float64) error {
 	return nil
 }
 
-// Models are the models a harness knows, the default first. The open
-// harness knows only the models the config names, and a module's harness
-// those its spec lists. Codex's are those its
-// 0.153 release lists; a Claude model on Codex runs Codex's own default.
-func Models(harness string) []string {
-	if !builtin(harness) {
-		if s, ok := lookup(harness, false); ok {
-			return slices.Clone(s.ModelList)
-		}
-		return nil
-	}
-	switch harness {
-	case "open":
-		return nil
-	case "codex":
-		return []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"}
-	}
-	return []string{"opus", "sonnet", "fable", "haiku"}
-}
+// claudeModels are the models Claude Code knows, the default first.
+var claudeModels = []string{"opus", "sonnet", "fable", "haiku"}
 
 // Claude is Claude Code in print mode with stream-json output.
 type Claude struct{}
@@ -174,6 +157,7 @@ func (Claude) ReadOnlyTools()         {}
 func (Claude) Program() string        { return "claude" }
 func (Claude) LoginCommand() []string { return []string{"claude", "auth", "login"} }
 func (Claude) APIHosts() []string     { return []string{"api.anthropic.com"} }
+func (Claude) Models() []string       { return slices.Clone(claudeModels) }
 
 func (Claude) Args(t Turn) []string {
 	a := []string{"-p", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--setting-sources", "project"}

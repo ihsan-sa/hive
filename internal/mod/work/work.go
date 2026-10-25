@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
-	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 )
@@ -3083,7 +3082,7 @@ func (m *Module) seatModel(p core.Project, seat string) (harnessName, model stri
 	if pick.Harness == "" {
 		pick.Harness = harnessName
 	}
-	if _, err := harness.Get(pick.Harness); err != nil {
+	if _, err := cfg.Harnesses().Get(pick.Harness); err != nil {
 		m.seatAlert(p, seat, fmt.Sprintf("The %s seat of %s names harness %q, which the Hive doesn't have; it reads on the reviewer's (%s) instead.", seat, p.Name, pick.Harness, model))
 		return harnessName, model, nil
 	}

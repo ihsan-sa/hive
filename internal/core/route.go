@@ -115,7 +115,7 @@ func (c Config) Pick(entry string) (Pick, error) {
 		return Pick{Harness: "open", Model: entry}, nil
 	}
 	if h, m, ok := strings.Cut(entry, ":"); ok {
-		if _, err := harness.Get(h); err == nil {
+		if _, err := c.Harnesses().Get(h); err == nil {
 			if HarnessName(h) == "open" {
 				if _, ok := c.Models[m]; !ok {
 					return Pick{}, fmt.Errorf("%q: no model %q in models", entry, m)

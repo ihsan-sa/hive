@@ -734,7 +734,7 @@ func (rs *Runs) Start(s RunSpec) (Run, error) {
 	if s.Harness == "" {
 		s.Harness = "claude"
 	}
-	h, err := harness.Get(s.Harness)
+	h, err := rs.ws.Harnesses().Get(s.Harness)
 	if err != nil {
 		return Run{}, err
 	}
@@ -1290,7 +1290,7 @@ type TurnLog struct {
 // ReadTurn parses one turn's output.
 func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 	var tl TurnLog
-	h, err := harness.Get(r.HarnessAt(turn))
+	h, err := rs.ws.Harnesses().Get(r.HarnessAt(turn))
 	if err != nil { // a module's harness since removed: nothing to read the turn with
 		return tl
 	}
@@ -1435,7 +1435,7 @@ func (rs *Runs) endTurn(r Run) {
 		keyRefused = tl.Result.IsError && tl.Result.APIStatus == 401 && ran.Harness == "open" && rs.anthropicModel(r.Model) && turns == 1
 		if !tl.Result.IsError {
 			rs.Up(ran, "it answered")
-		} else if !keyRefused && cantAnswer(ran, tl.Result, Unreachable(service(r.Harness), tl.Result.Text), turns, runs) {
+		} else if !keyRefused && cantAnswer(ran, tl.Result, Unreachable(rs.service(r.Harness), tl.Result.Text), turns, runs) {
 			d := rs.markDown(r, ran, tl.Result)
 			down = &d
 		}
@@ -1474,7 +1474,7 @@ func (rs *Runs) endTurn(r Run) {
 		// Under WSL, sandbox-exec's own early failures go to .wsl.
 		out := rs.ws.TurnOut(r.ID, r.Turn)
 		errTail := strings.TrimSpace(tail(out+".err", 400) + "\n" + tail(out+".wsl", 400))
-		te.Offline = Unreachable(service(r.Harness), errTail)
+		te.Offline = Unreachable(rs.service(r.Harness), errTail)
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = "interrupted; retrying on its checkout" + suffix(errTail)
 		te.Queue = []string{"Your previous turn was interrupted. Your checkout and commits are intact. Continue where you left off."}
@@ -1498,7 +1498,7 @@ func (rs *Runs) endTurn(r Run) {
 	case tl.Result.IsError:
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = "harness error; retrying" + suffix(Clip(tl.Result.Text, 200))
-		te.Offline = Unreachable(service(r.Harness), tl.Result.Text)
+		te.Offline = Unreachable(rs.service(r.Harness), tl.Result.Text)
 		te.Queue = []string{"The previous turn hit an error (" + Clip(tl.Result.Text, 200) + "). Continue where you left off."}
 	case cur.Finish != nil:
 		te.Status = StatusDone
@@ -1595,14 +1595,14 @@ func Unreachable(service, text string) string {
 }
 
 // service names what a harness talks to.
-func service(h string) string {
+func (rs *Runs) service(h string) string {
 	switch HarnessName(h) {
 	case "codex":
 		return "Codex"
 	case "open":
 		return "the model server"
 	}
-	if s, err := harness.Get(h); err == nil {
+	if s, err := rs.ws.Harnesses().Get(h); err == nil {
 		if s, ok := s.(*harness.Spec); ok {
 			return s.Display()
 		}
@@ -1716,7 +1716,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		}
 		r.Harness, r.Model = pick.Harness, pick.Model
 	}
-	h, err := harness.Get(r.Harness)
+	h, err := rs.ws.Harnesses().Get(r.Harness)
 	if err != nil { // a module's harness since removed
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(5 * time.Minute)})
 		return

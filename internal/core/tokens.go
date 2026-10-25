@@ -130,7 +130,7 @@ func (t *Tokens) AgentEnv(l Login, home string) ([]string, error) {
 		}
 		return []string{"CLAUDE_CODE_OAUTH_TOKEN=" + tok}, nil
 	}
-	if h, err := harness.Get(l.Harness); err == nil {
+	if h, err := t.ws.Harnesses().Get(l.Harness); err == nil {
 		if s, ok := h.(*harness.Spec); ok {
 			return t.ws.specEnv(s)
 		}

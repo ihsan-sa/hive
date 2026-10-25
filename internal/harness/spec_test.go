@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -277,5 +278,47 @@ func TestLiveModuleHarness(t *testing.T) {
 				t.Fatalf("resumed into session %s, not %s", got, turn.SessionID)
 			}
 		})
+	}
+}
+
+// Each modules folder has its own registry, so two workspaces side by side
+// never see each other's harnesses; a registry reads its modules once and
+// again only when one of their files changes.
+func TestRegistryPerFolderAndCached(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	write := func(dir, p, s string) {
+		os.MkdirAll(filepath.Dir(filepath.Join(dir, p)), 0o755)
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spec := `{"name": "goose", "program": "goose", "models": ["%s"], "parse": [{"match": {"type": "x"}, "event": "text", "text": "t"}]}`
+	write(a, "m/module.json", `{"name": "m", "provides": {"harnesses": ["goose.json"]}}`)
+	write(a, "m/goose.json", fmt.Sprintf(spec, "m1"))
+	ra, rb := For(a), For(b)
+	if For(a) != ra {
+		t.Fatal("a folder's registry is made again")
+	}
+	if _, err := ra.Get("goose"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rb.Get("goose"); err == nil || slices.Contains(rb.Names(), "goose") {
+		t.Fatal("one workspace's harness showed in another's")
+	}
+	// Unchanged files: the read is kept.
+	ra.Names()
+	first := ra.declared["goose"]
+	ra.stamp = ra.fingerprint() // past the fresh-write window
+	ra.Names()
+	if ra.declared["goose"] != first {
+		t.Fatal("unchanged modules were read again")
+	}
+	// The spec rewritten in place (a module update) is read again.
+	write(a, "m/goose.json", fmt.Sprintf(spec, "m2-longer"))
+	if m := ra.Models("goose"); !slices.Equal(m, []string{"m2-longer"}) {
+		t.Fatalf("an updated spec wasn't read: %v", m)
+	}
+	if m := ra.Models("claude-code"); m[0] != "opus" || ra.Models("open") != nil || ra.Models("codex")[0] != "gpt-6-astra" {
+		t.Fatalf("built-in models: %v", m)
 	}
 }
