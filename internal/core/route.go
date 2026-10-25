@@ -22,6 +22,36 @@ type OpenModel struct {
 	API      string `json:"api,omitempty"`     // "openai" (the default) or "anthropic"
 	Key      bool   `json:"key,omitempty"`     // it needs an API key, which the person stores with `hive model key <name>`
 	Context  int    `json:"context,omitempty"` // tokens it holds; the agent trims its history to fit (0: 32000)
+	Price    *Price `json:"price,omitempty"`   // what a paid tier charges; none is free, or not known
+}
+
+// Price is what a model charges, in USD per million tokens. A turn's cost is
+// its tokens at this price (the cache's reads and writes as input).
+type Price struct {
+	Input  float64 `json:"input"`
+	Output float64 `json:"output"`
+}
+
+// Cost is t at p.
+func (p Price) Cost(t harness.Tokens) float64 {
+	return (float64(t.Input+t.CacheRead+t.CacheWrite)*p.Input + float64(t.Output)*p.Output) / 1e6
+}
+
+// Holds is nil when a run on m can be held to a budget: one that costs
+// nothing, or one with a price the open agent counts against it as it goes.
+// A model with a key and no price may be a paid tier whose spend nobody
+// counts, and Claude Code (an Anthropic API) prices a turn as Claude's.
+func (m OpenModel) Holds(budget float64) error {
+	free := m.Price == nil && !m.Key || m.Price != nil && *m.Price == Price{}
+	switch {
+	case budget <= 0 || free:
+		return nil
+	case m.Price == nil:
+		return errors.New("it needs a key and has no price, so what it spends isn't known; set its price in config.json (0 for a free tier)")
+	case m.Anthropic():
+		return errors.New("Claude Code runs it and can't hold a turn to the vendor's price")
+	}
+	return nil
 }
 
 // APIs are the kinds of endpoint a named model can be on.
@@ -37,6 +67,9 @@ func (m OpenModel) Where() string {
 	s := m.Model + " at " + m.Endpoint
 	if m.Anthropic() {
 		s += " (Anthropic API, on Claude Code)"
+	}
+	if m.Price != nil {
+		s += fmt.Sprintf(", $%g/$%g per million tokens in/out", m.Price.Input, m.Price.Output)
 	}
 	return s
 }

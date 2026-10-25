@@ -693,6 +693,9 @@ func (w Workspace) openEnv(name string) ([]string, error) {
 	if m.Context > 0 {
 		env = append(env, fmt.Sprintf("HIVE_OPEN_CONTEXT=%d", m.Context))
 	}
+	if m.Price != nil {
+		env = append(env, fmt.Sprintf("HIVE_OPEN_PRICE=%g,%g", m.Price.Input, m.Price.Output))
+	}
 	raw, err := os.ReadFile(w.OpenKey(name))
 	switch {
 	case err == nil && strings.TrimSpace(string(raw)) != "":

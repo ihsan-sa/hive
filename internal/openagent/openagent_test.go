@@ -238,6 +238,25 @@ func TestReadOnlyGrepSkipsLinks(t *testing.T) {
 	}
 }
 
+// A turn on a priced model counts its tokens and stops at its budget, and
+// its result line carries the tokens, so the run manager costs the turn.
+func TestBudgetStopsTheTurn(t *testing.T) {
+	s := &stub{replies: []func(http.ResponseWriter){
+		call("bash", map[string]string{"command": "echo one"}),
+		call("bash", map[string]string{"command": "echo two"}),
+		say("done"),
+	}}
+	a, _ := agent(t, s)
+	a.Price, a.Budget = [2]float64{1, 4}, 0.001 // 1234 prompt tokens at $1/M is past it
+	res := result(t, a, a.Turn(context.Background(), []Message{{Role: "user", Content: "go"}}, func([]Message) {}))
+	if !res.IsError || !strings.Contains(res.Text, "budget") || len(s.got) != 1 {
+		t.Fatalf("result %+v after %d requests", res, len(s.got))
+	}
+	if res.Tokens == nil || res.Tokens.Input != 1234 || res.Tokens.Output == 0 {
+		t.Fatalf("tokens %+v", res.Tokens)
+	}
+}
+
 // The conversation is trimmed to the model's context: old tool output goes
 // first, and the system prompt, the ask and the latest steps stay whole.
 func TestFit(t *testing.T) {

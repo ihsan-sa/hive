@@ -376,6 +376,56 @@ func TestEndpointHoldsNoKey(t *testing.T) {
 	}
 }
 
+// A named model's price costs its turns, and a run with a budget starts on
+// it only if that budget can be held: a free model, or one the open agent
+// counts at a price.
+func TestModelPriceAndBudget(t *testing.T) {
+	p := Price{Input: 2, Output: 8}
+	if got := p.Cost(harness.Tokens{Input: 400_000, CacheRead: 100_000, Output: 250_000}); got != 3 {
+		t.Fatalf("cost %v, want 3", got)
+	}
+	for _, tc := range []struct {
+		m  OpenModel
+		ok bool
+	}{
+		{OpenModel{}, true}, // on this machine
+		{OpenModel{Key: true}, false},
+		{OpenModel{Key: true, Price: &Price{}}, true}, // a free tier, said so
+		{OpenModel{Key: true, Price: &p}, true},
+		{OpenModel{Key: true, Price: &p, API: "anthropic"}, false},
+		{OpenModel{Key: true, Price: &Price{}, API: "anthropic"}, true},
+	} {
+		if err := tc.m.Holds(1); (err == nil) != tc.ok {
+			t.Errorf("%+v: %v", tc.m, err)
+		}
+		if tc.m.Holds(0) != nil {
+			t.Errorf("%+v refuses no budget", tc.m)
+		}
+	}
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.Models = map[string]OpenModel{"paid": {Endpoint: "https://api.example.com/v1", Model: "x", Key: true}}
+	c.WS.SaveConfig(cfg)
+	if _, err := c.Runs.Start(RunSpec{Role: "worker", Harness: "open", Model: "paid", Budget: 1, Checkout: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "price") {
+		t.Fatalf("a budget on an unpriced paid model started: %v", err)
+	}
+	// A priced model's turn costs its tokens at the price, whatever the line says.
+	cfg.Models["paid"] = OpenModel{Endpoint: "https://api.example.com/v1", Model: "x", Key: true, Price: &Price{Input: 2, Output: 8}}
+	c.WS.SaveConfig(cfg)
+	r, err := c.Runs.Start(RunSpec{ID: "p1", Role: "worker", Harness: "open", Model: "paid", Brief: "b", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Turn = 1
+	out := c.WS.TurnOut(r.ID, 1)
+	os.MkdirAll(filepath.Dir(out), 0o755)
+	os.WriteFile(out, []byte(`{"type":"result","subtype":"success","is_error":false,"result":"ok","total_cost_usd":0,"usage":{"input_tokens":500000,"output_tokens":125000},"session_id":"s1"}`+"\n"), 0o600)
+	c.Runs.endTurn(r)
+	if got, _ := c.Runs.Get("p1"); got.Cost != 2 {
+		t.Fatalf("cost %v, want 2", got.Cost)
+	}
+}
+
 // At a usage limit a run moves to the next model on its route that has
 // room, as a fresh session told why, and the turn says which model it ran on;
 // with no route it waits for the reset.
