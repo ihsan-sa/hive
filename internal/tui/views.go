@@ -275,6 +275,9 @@ func (m *model) taskLine(t work.Task) string {
 	}
 	if (t.Queued() || t.Stage == work.StageMerging) && t.Reason != "" {
 		progress = stDim.Render("  " + core.Clip(t.Reason, 70))
+		if t.FilesWait() >= time.Hour { // passed by later briefs on its other files meanwhile
+			progress = stDim.Render("  " + ago(t.FilesSince) + " on others' files: " + core.Clip(t.Reason, 60))
+		}
 	}
 	if t.Stage == work.StageTesting && slices.ContainsFunc(m.st.Checks.Waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
 		progress = stDim.Render("  waiting for a check slot")

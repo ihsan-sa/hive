@@ -146,6 +146,11 @@ type Task struct {
 	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
 	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
 	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
+	// FilesSince is when a queued brief began waiting, tick after tick, on
+	// other briefs' files (queue.go); FilesTold says the lead was told it
+	// has waited long, once per wait.
+	FilesSince time.Time `json:"files_since,omitempty"`
+	FilesTold  bool      `json:"files_told,omitempty"`
 	Failures   int       `json:"failures"`
 	CloseFail  int       `json:"close_fail,omitempty"` // failed tries to close the issue
 	Attempt    int       `json:"attempt"`              // fresh workers handed this task
@@ -715,10 +720,17 @@ func (m *Module) Tick() {
 }
 
 // waits records why a queued task waits, when that is new. A machine hold's
-// live figures after " (" change every tick, so only a new kind is saved.
+// live figures after " (" change every tick, so only a new kind is saved. A
+// brief that has waited on other briefs' files since filesTell ago, passed
+// meanwhile by later briefs on its other files, is told to the lead once.
 func (m *Module) waits(t Task, why string) {
+	since := time.Time{}
+	if onFiles(why) {
+		since = cmp.Or(t.FilesSince, time.Now().UTC())
+	}
+	tell := !since.IsZero() && !t.FilesTold && time.Since(since) >= filesTell
 	kind, _, _ := strings.Cut(why, " (")
-	if t.Stage == StageQueued && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+	if t.Stage == StageQueued && since.Equal(t.FilesSince) && !tell && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
 		return
 	}
 	m.mu.Lock()
@@ -728,11 +740,20 @@ func (m *Module) waits(t Task, why string) {
 	}
 	m.busy[t.ID] = true
 	m.mu.Unlock()
-	t.Stage, t.Reason = StageQueued, why
-	m.save(&t, "")
+	t.Stage, t.Reason, t.FilesSince = StageQueued, why, since
+	t.FilesTold = t.FilesTold && !since.IsZero() || tell
+	note := ""
+	if tell {
+		note = "told the lead it has waited on other briefs' files since " + since.Format("2006-01-02 15:04Z")
+	}
+	m.save(&t, note)
 	m.mu.Lock()
 	delete(m.busy, t.ID)
 	m.mu.Unlock()
+	if tell {
+		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited on other briefs' files since %s, while later briefs on its other files went ahead; now %s. `queue --now %s --why ...` starts it past them, or hold the ones on its files.",
+			t.Label(), t.ID, since.Format("2006-01-02 15:04Z"), why, t.ID))
+	}
 }
 
 // Wait returns once every step Tick started has ended, so a test's folders
@@ -1078,6 +1099,7 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 		t.Branch = "hive/" + t.ID
 	}
 	t.Worker, t.Stage, t.Failures, t.Reason, t.Now = id, StageWorking, 0, "", false
+	t.FilesSince, t.FilesTold = time.Time{}, false
 	m.save(t, "worker "+id+" started")
 	return nil
 }
