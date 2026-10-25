@@ -1166,6 +1166,7 @@ type MergeRequest struct {
 	SHA     string
 	Main    string
 	Subject string
+	Gain    bool // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
 	// Task is the work task the PR is of: an unread change merges only while
 	// no ordinary reader has read any head of it.
 	Task string
@@ -1202,9 +1203,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		}
 		return "", fmt.Errorf("refusing to merge %s: it changes %s, on %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), SecurityList, need)
 	}
-	if p.Self {
+	if p.Self && m.Gain {
 		if g, ok := e.GateResult(p.Name, m.SHA, m.Main); !ok || g.Outcome != GateKeep {
-			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself merges only once the recursive gate kept it against main at %s", short(m.SHA), short(m.Main))
+			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate kept it against main at %s", short(m.SHA), short(m.Main))
 		}
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)

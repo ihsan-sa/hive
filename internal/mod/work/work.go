@@ -49,15 +49,19 @@ const (
 
 // Task is one piece of work from ask to merge.
 type Task struct {
-	ID        string     `json:"id"`
-	Project   string     `json:"project"`
-	Title     string     `json:"title"`
-	Done      string     `json:"done"`
-	Known     string     `json:"known"`
-	From      string     `json:"from"` // run id, person, or sweep run
-	Chat      string     `json:"chat,omitempty"`
-	Thread    string     `json:"thread,omitempty"`
-	Kind      string     `json:"kind"` // work | revert | helper (spawned, no issue)
+	ID      string `json:"id"`
+	Project string `json:"project"`
+	Title   string `json:"title"`
+	Done    string `json:"done"`
+	Known   string `json:"known"`
+	From    string `json:"from"` // run id, person, or sweep run
+	Chat    string `json:"chat,omitempty"`
+	Thread  string `json:"thread,omitempty"`
+	Kind    string `json:"kind"` // work | revert | helper (spawned, no issue)
+	// Aim is AimGain for a change aimed at a measurable gain, which on the
+	// Hive's own repository goes through the recursive gate; anything else
+	// (empty included) is a fix, which merges on its tests, checks and reads.
+	Aim       string     `json:"aim,omitempty"`
 	Stage     string     `json:"stage"`
 	Reason    string     `json:"reason,omitempty"`
 	Order     int        `json:"order,omitempty"`     // its place in the queue the lead set; 0 goes after, as filed
@@ -158,6 +162,34 @@ func (t Task) PROf(mergeSHA string) core.PR {
 // Label is the title clipped for a heading, an issue, a PR or a message; the
 // agents get the whole ask.
 func (t Task) Label() string { return core.Clip(t.Title, 120) }
+
+// A task's aims: a fix (the default) or a measurable gain.
+const (
+	AimFix  = "fix"
+	AimGain = "gain"
+)
+
+// Gain says the task aims at a measurable gain rather than a fix.
+func (t Task) Gain() bool { return t.Aim == AimGain }
+
+// AimWord says which the task is.
+func (t Task) AimWord() string {
+	if t.Gain() {
+		return "an improvement (aims at a measurable gain)"
+	}
+	return "a fix"
+}
+
+// aimOf checks an aim as given: empty or fix is a fix.
+func aimOf(s string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", AimFix:
+		return "", nil
+	case AimGain:
+		return AimGain, nil
+	}
+	return "", fmt.Errorf("an aim is %q or %q, not %q", AimFix, AimGain, s)
+}
 
 // setDiff records the head's own diff; seat tries counted on another diff are
 // dropped, so a seat starts fresh on a diff that moved without a send-back.
@@ -293,7 +325,8 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
-	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project"}`, Fn: m.opBrief})
+	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim"} (aim: fix, the default, or gain for a change aimed at a measurable gain, which on the Hive's own repository merges only if the recursive gate shows it)`, Fn: m.opBrief})
+	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: []string{"worker", "lead"}, Help: `{"task","aim":"fix"|"gain","why"} (a worker's own task by default) -> sets whether the task is a fix, which merges on its tests, checks and reads, or aims at a measurable gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: []string{"lead"}, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); with back, its worker gets that text and works on`, Fn: m.opRecheck})
 	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: []string{"worker", "lead"}, Help: `{"task"} (a worker's own task by default) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
 	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: []string{"lead"}, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed), hold keeps one waiting until released, now starts those first even past a brief on the same files (why says so, on the record), for a fix the one it waits on needs. A started worker is never stopped`, Fn: m.opQueue})
@@ -364,6 +397,7 @@ type Brief struct {
 	From    string            `json:"from"`
 	Chat    string            `json:"chat"`
 	Thread  string            `json:"thread"`
+	Aim     string            `json:"aim"` // fix (the default) or gain
 	Inputs  map[string]string `json:"-"`
 	// FollowUp is the task whose review advice this brief follows up; only the
 	// Hive sets it.
@@ -387,10 +421,64 @@ func (m *Module) File(b Brief) (Task, error) {
 	if _, ok := m.C.Projects.Get(b.Project); !ok {
 		return Task{}, fmt.Errorf("no project %q", b.Project)
 	}
-	t := &Task{ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
+	aim, err := aimOf(b.Aim)
+	if err != nil {
+		return Task{}, err
+	}
+	t := &Task{Aim: aim, ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
 		From: b.From, Chat: b.Chat, Thread: b.Thread, FollowUp: b.FollowUp, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Model: b.Model, Created: time.Now().UTC()}
 	m.save(t, "filed by "+b.From)
 	return *t, nil
+}
+
+// opAim sets a task's aim: a worker its own, the lead any.
+func (m *Module) opAim(r core.Run, args json.RawMessage) (any, error) {
+	var a struct{ Task, Aim, Why string }
+	if err := core.Bind(args, &a); err != nil {
+		return nil, err
+	}
+	aim, err := aimOf(a.Aim)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(a.Aim) == "" {
+		return nil, errors.New("say the aim: --aim fix or --aim gain")
+	}
+	if strings.TrimSpace(a.Why) == "" {
+		return nil, errors.New("say why with --why (it goes on the record)")
+	}
+	t, ok := m.Get(a.Task)
+	if a.Task == "" {
+		if r.Role != "worker" {
+			return nil, errors.New("name the task: --task <id>")
+		}
+		t, ok = m.taskOf(r.ID)
+	}
+	if !ok {
+		return nil, fmt.Errorf("no task %q", a.Task)
+	}
+	if r.Role == "worker" && t.Worker != r.ID {
+		return nil, fmt.Errorf("task %s isn't yours: a worker sets only its own task's aim", t.ID)
+	}
+	if err := m.C.Runs.Walled(r, t.Project); err != nil {
+		return nil, err
+	}
+	if t.Terminal() || t.Stage == StageMerged {
+		return nil, fmt.Errorf("task %s has already ended (%s)", t.ID, t.Stage)
+	}
+	if t.Aim != aim {
+		if !m.claim(t.ID) {
+			return nil, fmt.Errorf("task %s has a step running right now; ask again in a moment", t.ID)
+		}
+		t, _ = m.Get(t.ID) // as the last step left it
+		t.Aim = aim
+		m.save(&t, fmt.Sprintf("aim set to %s by %s: %s", t.AimWord(), r.ID, core.Clip(a.Why, 300)))
+		m.mu.Lock()
+		delete(m.later, t.ID) // the merge looks again at once
+		m.mu.Unlock()
+		m.release(t.ID)
+	}
+	return map[string]string{"task": t.ID, "aim": t.AimWord()}, nil
 }
 
 func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
@@ -834,6 +922,13 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	b.WriteString("## The project\n\n")
 	b.WriteString("- Goals: `.hive/goals.md`. Read it; report against it.\n")
 	fmt.Fprintf(&b, "- Tests: `%s`\n", orNone(cfg.Test))
+	if p.Self {
+		if t.Gain() {
+			b.WriteString("- Aim: an improvement. It merges only if the recursive gate shows a clear gain over the current Hive (a tie is rolled back). If it is a plain fix, say so with `hive agent aim --aim fix --why \"...\"`.\n")
+		} else {
+			b.WriteString("- Aim: a fix. It merges on its tests, checks and reads; every merge is still measured and a worse score reverted. If the change aims at a measurable gain, say so with `hive agent aim --aim gain --why \"...\"`, and the recursive gate must show it.\n")
+		}
+	}
 	if cfg.Score != nil {
 		fmt.Fprintf(&b, "- Score: `%s` (%s is better, tolerance %g).", cfg.Score.Command, cfg.Score.Direction, cfg.Score.Tolerance)
 		if best, ok := m.bestScore(p.Name); ok {
@@ -1731,7 +1826,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return nil
 	}
 	defer m.leaveMerge()
-	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Task: t.ID})
+	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Gain: t.Gain(), Task: t.ID})
 	if errors.Is(err, core.ErrDraft) { // made a draft since the look above
 		return m.waitDraft(t, pr)
 	}
