@@ -160,7 +160,8 @@ func TestQueueAreas(t *testing.T) {
 }
 
 // A symlink in the clone pointing outside it never names an area, so a brief
-// can't test whether a path on the machine exists.
+// can't test whether a path on the machine exists; one to a directory in it is
+// a directory, so no area either.
 func TestQueueAreasStayInsideTheClone(t *testing.T) {
 	m := queueRig(t)
 	outside := t.TempDir()
@@ -172,7 +173,8 @@ func TestQueueAreasStayInsideTheClone(t *testing.T) {
 	clone := m.C.WS.Project("p")
 	os.Symlink(outside, filepath.Join(clone, "out"))
 	os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(clone, "internal", "leak.txt"))
-	task := file(t, m, "fix it", "See out/secret.txt, internal/leak.txt and internal/core/effects.go.")
+	os.Symlink(filepath.Join(clone, "internal", "tui"), filepath.Join(clone, "internal", "ui")) // a directory, though Lstat says link
+	task := file(t, m, "fix it", "See out/secret.txt, internal/leak.txt, internal/ui and internal/core/effects.go.")
 	got := m.areas(task)
 	want := []string{"internal/core/effects.go"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {

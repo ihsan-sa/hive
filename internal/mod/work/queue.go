@@ -178,7 +178,7 @@ func (m *Module) areas(t Task) []string {
 		if err != nil || !inside(realRoot, real) {
 			continue
 		}
-		fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p)))
+		fi, err := os.Stat(real) // resolved, so a symlink to a directory is a directory
 		if err != nil {
 			continue
 		}
