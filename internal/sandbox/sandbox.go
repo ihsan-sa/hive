@@ -49,8 +49,13 @@ type Spec struct {
 	Local    []string `json:"local"`     // services on this machine the person granted, loopback ip:port (LocalGrant's)
 	// Guard is host paths no host interpreter's install may contain, as
 	// its bind would expose them: the workspace and the folders covered in it
-	// (Workspace.Guarded). Every mount's host path is guarded as well.
+	// (Workspace.Guarded). Every mount's host path is guarded as well. A spec
+	// with no guard binds no host interpreter's install at all.
 	Guard []string `json:"guard,omitempty"`
+	// Cover is host paths no host interpreter's install may sit inside either:
+	// the folders covered wherever agents read .hive (Workspace.Covered). Every
+	// hidden mount's host path is covered as well.
+	Cover []string `json:"cover,omitempty"`
 	UID   int      `json:"uid"`
 	GID   int      `json:"gid"`
 }

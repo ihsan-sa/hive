@@ -896,6 +896,29 @@ func TestMergeForgeCheckSendsItsLog(t *testing.T) {
 	}
 }
 
+// The forge checks a PR merged with main, so a branch behind main can fail
+// on a test only main has: the worker's main.bundle is that main, and the
+// message says the red may be main's.
+func TestMergeForgeCheckBundlesMainItRanOn(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	pushMain(t, f, map[string]string{"new_test.txt": "only on main"})
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	if msg := queued(m, "w1"); !strings.Contains(msg, "behind main at "+core.Short(main)) || !strings.Contains(msg, "$HIVE_RUN/main.bundle") {
+		t.Fatalf("message:\n%s", msg)
+	}
+	out := must(t, "", "bundle", "list-heads", filepath.Join(m.C.WS.RunRO("w1"), "main.bundle"))
+	if !strings.Contains(out, main) {
+		t.Fatalf("bundle heads %q, want main %s", out, main)
+	}
+}
+
 // A check red on the PR whose run on main at its base hasn't finished waits
 // for main's result instead of spending a round; once main passes it, the red
 // is the change's and goes back.

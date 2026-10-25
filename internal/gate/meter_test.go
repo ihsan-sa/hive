@@ -89,3 +89,22 @@ func TestMeter(t *testing.T) {
 		t.Errorf("sandboxed env: %s", env)
 	}
 }
+
+// The two sides' TMPDIRs are the same length, and shorter than their roots'
+// own folders: a socket a test binds there fits on both sides or on neither.
+func TestSideTmpEqualAndShort(t *testing.T) {
+	out := "/x/runs/gate-1/out"
+	cand := &Child{Name: "candidate", Root: filepath.Join(out, "candidate")}
+	ctrl := &Child{Name: "control", Root: filepath.Join(out, "control")}
+	if len(cand.Tmp()) != len(ctrl.Tmp()) || len(cand.Scratch()) != len(ctrl.Scratch()) {
+		t.Fatalf("unequal: %s %s, %s %s", cand.Tmp(), ctrl.Tmp(), cand.Scratch(), ctrl.Scratch())
+	}
+	if cand.Tmp() == ctrl.Tmp() || cand.Tmp() == cand.Scratch() || len(cand.Tmp()) >= len(filepath.Join(ctrl.Root, "tmp")) {
+		t.Fatalf("not distinct and short: %s %s %s", cand.Tmp(), ctrl.Tmp(), cand.Scratch())
+	}
+	for _, p := range []string{cand.Tmp(), cand.Scratch()} {
+		if !sideDir(filepath.Base(p)) {
+			t.Fatalf("%s is not tidied as a side folder", p)
+		}
+	}
+}

@@ -71,7 +71,7 @@ func (c *Child) judge(cfg *Config, timeout time.Duration, env []string, key stri
 			return "", err
 		}
 	}
-	scratch := filepath.Join(c.Root, "evaluator-tmp")
+	scratch := c.Scratch()
 	os.RemoveAll(scratch)
 	evHome := filepath.Join(c.Root, "evaluator-home")
 	for _, d := range []string{scratch, evHome} {
@@ -81,7 +81,7 @@ func (c *Child) judge(cfg *Config, timeout time.Duration, env []string, key stri
 	}
 	extra := []string{"TMPDIR=" + scratch, "HOME=" + evHome, "HIVE_E2E_BIN=" + c.Bin, "HIVE_E2E_WRAPPED=1"}
 	ro := []string{c.Eval.Test, c.Eval.Src}
-	var rw []string
+	rw := []string{scratch}
 	if c.Sandbox == "bwrap" {
 		// Code c landed runs sealed, in a sandbox the gate starts beside c's.
 		dir, err := os.MkdirTemp(shortTmp(), "hive-check-")
