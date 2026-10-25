@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
@@ -16,7 +17,7 @@ func TestHiveWorksOnItself(t *testing.T) {
 	t.Parallel()
 	h := start(t)
 	up := h.ws.LoadConfig().ReleaseRepo
-	h.seed(up, map[string]string{".hive/project.json": `{"test": "true", "dryrun": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.seed(up, map[string]string{".hive/project.json": `{"test": "true", "dryrun": "true"}`, ".hive/goals.md": "# Goals\n", scan.PublicList: "**\n"})
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "fix the hive itself: the sweep should say why it skipped"}, nil)
 	h.wait("the brief to land in the Hive's own project", 3*minute, taskStage("hive", "the sweep should say why it skipped", work.StageDone))
 	h.wait("a release on the fork", 2*minute, func(api.State) bool {
