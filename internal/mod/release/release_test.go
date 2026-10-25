@@ -1267,3 +1267,31 @@ func TestReleaseOnlyAtAGreenMain(t *testing.T) {
 		t.Fatalf("release %q", body)
 	}
 }
+
+// A kept merge whose checks failed on main is tried again on Tick, so a
+// re-run that passes releases it with no later merge; a refusal before the
+// checks are read is raised once however often the commit is retried.
+func TestReleaseAfterAPassingReRun(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	n.SetChecks("me/hive", "m1", core.CheckRun{Name: "test", State: core.CheckFail})
+	m.AfterKept("hive", "m1")
+	m.retryWaiting()
+	if len(n.got) != 0 || journaledN(m, "release.ci_failed") != 1 || journaledN(m, "alert.raised") != 1 {
+		t.Fatalf("a red main was released or raised again: %v", n.got)
+	}
+	n.SetChecks("me/hive", "m1", core.CheckRun{Name: "test", State: core.CheckPass})
+	m.retryWaiting()
+	if len(n.got) != 1 || journaledN(m, "release.ci_passed") != 1 {
+		t.Fatalf("the passing re-run wasn't released: %v", n.got)
+	}
+
+	alerts := journaledN(m, "alert.raised")
+	for range 3 {
+		m.AfterKept("hive", "m9")
+	}
+	if got := journaledN(m, "alert.raised") - alerts; got != 1 || !strings.Contains(alertText(m), "no release at m9: it is not a merge") {
+		t.Fatalf("the refusal was raised %d times, want once: %q", got, alertText(m))
+	}
+}

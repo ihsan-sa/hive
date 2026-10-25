@@ -27,7 +27,8 @@ import (
 // machine isn't loaded: the brake is the machine. A brief that names a file
 // another brief names (one a worker is on, or ahead of it in line), or one
 // that worker has changed, waits until that worker is done, so the two don't
-// redo each other's work. A package or directory alone holds nothing back.
+// redo each other's work. A package or directory alone holds nothing back,
+// nor does a file when each brief names its own functions in it (apart).
 // A brief that itself waits on another's file holds no one back: a later
 // brief on its other files starts, so waits never chain and two briefs never
 // wait on each other (task 163142 waited 6h behind 140258, itself held by a
@@ -109,7 +110,6 @@ func (m *Module) quick(t Task) bool {
 // one waits. tasks is every task Tick looks at.
 func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]string) {
 	cfg := m.C.WS.LoadConfig()
-	start, wait = map[string]bool{}, map[string]string{}
 	working, quickWorking := 0, 0
 	var ahead, line []Task        // ahead: being worked on, or earlier in line
 	starting := map[string]bool{} // queued ones whose worker is being started right now
@@ -122,7 +122,8 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			// A quiet worker holds neither a slot nor anyone back: three
 			// held 3 of 8 slots for 10-12h while ~39 briefs waited. A
 			// message resumes it (core.Runs), and then it counts again,
-			// even if that puts the workers one past the limit for a while.
+			// even if that puts the workers past the limit (by as many as
+			// resume at once) until slots free; none start meanwhile.
 		case t.Stage == StageWorking || t.Queued(): // or a queued one being started right now
 			ahead = append(ahead, t)
 			working++
@@ -142,11 +143,6 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	}
 	m.inLine(line)
 	strain, _ := machine(cfg)
-	limit := m.paceWorkers(cfg, working, slices.ContainsFunc(line, func(t Task) bool { return !t.Held }))
-	full := fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
-	if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
-		full = "waiting for a worker (pace " + m.workers.String() + ")"
-	}
 	// planOK says the plan has room for a quick brief past the pace: read
 	// once, on need.
 	var planOK *bool
@@ -157,31 +153,52 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		}
 		return *planOK
 	}
-	for _, t := range line {
-		quick := m.quick(t)
-		switch o, area := m.overlap(t, ahead, holder(t.Reason)); {
-		case t.Held:
-			wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
-			continue // a held brief keeps no place that holds others back
-		case o != nil && !t.Now: // one the lead started now goes past the overlap
-			verb := "to land"
-			if o.Queued() && !start[o.ID] && !starting[o.ID] {
-				verb = "to go first"
-			}
-			wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s%s%s", o.Label(), o.ID, verb, bothTouch, area)
-			continue // one that waits on another holds no one back, so waits never chain
-		case working >= limit && (!quick || quickWorking > 0 || !plan()):
-			wait[t.ID] = full
-		case strain != "":
-			wait[t.ID] = "waiting: " + strain
-		default:
-			start[t.ID] = true
-			working++
-			if quick {
-				quickWorking++
-			}
+	// decide sorts the line at limit, and says whether a brief waits on the
+	// limit itself: only then may the pace grow, as a brief held, or waiting
+	// on another's files, would leave a new slot empty.
+	decide := func(limit int) (start map[string]bool, wait map[string]string, capped bool) {
+		start, wait = map[string]bool{}, map[string]string{}
+		working, quickWorking, ahead := working, quickWorking, slices.Clone(ahead)
+		full := fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
+		if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
+			full = "waiting for a worker (pace " + m.workers.String() + ")"
 		}
-		ahead = append(ahead, t)
+		for _, t := range line {
+			quick := m.quick(t)
+			switch o, area := m.overlap(t, ahead, holder(t.Reason)); {
+			case t.Held:
+				wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
+				continue // a held brief keeps no place that holds others back
+			case o != nil && !t.Now: // one the lead started now goes past the overlap
+				verb := "to land"
+				if o.Queued() && !start[o.ID] && !starting[o.ID] {
+					verb = "to go first"
+				}
+				wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s%s%s", o.Label(), o.ID, verb, bothTouch, area)
+				continue // one that waits on another holds no one back, so waits never chain
+			case working >= limit && (!quick || quickWorking > 0 || !plan()):
+				wait[t.ID], capped = full, true
+			case strain != "":
+				wait[t.ID] = "waiting: " + strain
+			default:
+				start[t.ID] = true
+				working++
+				if quick {
+					quickWorking++
+				}
+			}
+			ahead = append(ahead, t)
+		}
+		return start, wait, capped
+	}
+	// The pace moves on what waits at its limit now; if that moves it, the
+	// line is sorted again at the new one.
+	limit := m.paceWorkers(cfg, working, false)
+	start, wait, capped := decide(limit)
+	if capped {
+		if l := m.paceWorkers(cfg, working, true); l != limit {
+			start, wait, _ = decide(l)
+		}
 	}
 	return start, wait
 }
@@ -233,7 +250,8 @@ func holder(reason string) string {
 // it (task 232db4fc42 swapped between holders every few minutes for an hour).
 // A package or directory named in a brief holds nothing by itself: two
 // briefs in one package start together, and the second merges main if they
-// meet.
+// meet. Nor does a file both name when each names functions defined in it
+// and none is the other's (apart).
 func (m *Module) overlap(t Task, others []Task, prefer string) (*Task, string) {
 	mine := m.areas(t)
 	if len(mine) == 0 {
@@ -257,12 +275,94 @@ func (m *Module) overlap(t Task, others []Task, prefer string) (*Task, string) {
 			theirs[b] = true
 		}
 		for _, a := range mine {
+			if theirs[a] && m.apart(t, o, a) {
+				continue // each names its own functions in the file: they start side by side
+			}
 			if theirs[a] || m.edited(o, a) {
 				return &others[i], a
 			}
 		}
 	}
 	return nil, ""
+}
+
+// apart reports whether briefs t and o, which both name the file p, each name
+// at least one function, type or class defined in it and share none, so
+// their edits sit in separate parts of the file and merge cleanly: the four
+// at-once benchmark asks each implement one function of textkit/__init__.py
+// and ran one at a time behind each other (issue #727). A brief that names
+// no definition in p, or one the other names too, still waits, so two
+// workers don't redo each other's work (#399, #406); one whose edits do meet
+// merges main when it pushes, with its worker if need be.
+func (m *Module) apart(t, o Task, p string) bool {
+	defs := m.defs(t.Project, p)
+	if len(defs) == 0 {
+		return false
+	}
+	mine, theirs := named(t, defs), named(o, defs)
+	if len(mine) == 0 || len(theirs) == 0 {
+		return false
+	}
+	for d := range mine {
+		if theirs[d] {
+			return false
+		}
+	}
+	return true
+}
+
+// named is the definitions in defs that t's brief names as words, outside
+// the paths it names (textkit/__init__.py names no __init__).
+func named(t Task, defs map[string]bool) map[string]bool {
+	text := pathLike.ReplaceAllString(t.Title+"\n"+t.Done+"\n"+t.Known, " ")
+	out := map[string]bool{}
+	for _, w := range word.FindAllString(text, -1) {
+		if defs[w] {
+			out[w] = true
+		}
+	}
+	return out
+}
+
+var (
+	word = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+	// definition is a line that defines a name in the common languages:
+	// def, class, func (with a Go receiver), function, fn, type and the like.
+	definition = regexp.MustCompile(`(?m)^[ \t]*(?:(?:export|pub(?:\([^)]*\))?|async|static|public|private|protected)[ \t]+)*(?:def|class|func|function|fn|type|struct|enum|trait|interface)[ \t]+(?:\([^)]*\)[ \t]*)?([A-Za-z_][A-Za-z0-9_]*)`)
+)
+
+// defs is the names defined in the clone file p, read once per version of
+// the file; nil when it can't be read.
+func (m *Module) defs(project, p string) map[string]bool {
+	file := filepath.Join(m.C.WS.Project(project), filepath.FromSlash(p))
+	key := stamp(file)
+	m.mu.Lock()
+	got, ok := m.defCache[file]
+	m.mu.Unlock()
+	if ok && got.key == key {
+		return got.defs
+	}
+	b, err := core.SafeRead(file, 4<<20)
+	if err != nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, s := range definition.FindAllSubmatch(b, -1) {
+		out[string(s[1])] = true
+	}
+	m.mu.Lock()
+	if len(m.defCache) >= 256 {
+		clear(m.defCache)
+	}
+	m.defCache[file] = defEntry{key, out}
+	m.mu.Unlock()
+	return out
+}
+
+// defEntry is the names a file defines and the file stamp they were read at.
+type defEntry struct {
+	key  string
+	defs map[string]bool
 }
 
 // edited reports whether o's worker has changed the clone file p in its
