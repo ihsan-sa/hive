@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
 // The pace grows by one a step while work waits on it and nothing strains,
@@ -101,4 +103,54 @@ func TestPaceStartsAgainAtANewCeiling(t *testing.T) {
 	if l := p.next(now.Add(2*time.Second), 3, true, "", true, 2, 2); l != 2 {
 		t.Fatalf("a ceiling lowered to 2: %d", l)
 	}
+}
+
+// The pace's limit is what the queue and the check slots hold to: pulled
+// back to one, a second brief and a second check wait; grown to two, both go.
+func TestPaceHoldsAndFreesTheQueueAndChecks(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers, cfg.MaxChecks = 0, 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	m.C.WS.SaveConfig(cfg)
+	set := func(p *pace, l int, start int) {
+		p.mu.Lock()
+		p.limit, p.start, p.at, p.why = l, start, time.Now(), "pulled back: machine loaded"
+		p.mu.Unlock()
+	}
+	set(&m.workers, 1, defaultWorkers)
+	a := file(t, m, "first", "")
+	b := file(t, m, "second", "")
+	tick(m)
+	want := func(task Task, stage, reason string) {
+		t.Helper()
+		if got := stageOf(t, m, task); got.Stage != stage || !strings.Contains(got.Reason, reason) {
+			t.Fatalf("%q: stage %q reason %q, want %q with %q", task.Title, got.Stage, got.Reason, stage, reason)
+		}
+	}
+	want(a, StageWorking, "")
+	want(b, StageQueued, "waiting for a worker (pace 1 (pulled back: machine loaded))")
+	set(&m.workers, 2, defaultWorkers)
+	tick(m)
+	want(b, StageWorking, "")
+
+	set(&m.checks, 1, core.DefaultMaxChecks())
+	slots := m.C.Effects.Slots
+	first := slots.Acquire("p", "a", "test")
+	got := make(chan func())
+	go func() { got <- slots.Acquire("p", "b", "test") }()
+	select {
+	case <-got:
+		t.Fatal("a second check ran at a pace of 1")
+	case <-time.After(100 * time.Millisecond):
+	}
+	set(&m.checks, 2, core.DefaultMaxChecks())
+	slots.Fill()
+	select {
+	case second := <-got:
+		second()
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second check still waits at a pace of 2")
+	}
+	first()
 }
