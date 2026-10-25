@@ -472,6 +472,15 @@ func journaled(m *Module, kind string) (found bool) {
 	return
 }
 
+func journaledN(m *Module, kind string) (n int) {
+	m.C.J.Replay(func(e core.Event) {
+		if e.Kind == kind {
+			n++
+		}
+	})
+	return
+}
+
 // The Hive's own supersede is marked as the Hive's, not the person's word.
 func TestSupersedeIsTheHives(t *testing.T) {
 	m, _, merged, land := selfHive(t)
@@ -872,5 +881,94 @@ func TestReleaseSaysAnUnreadTag(t *testing.T) {
 	n.tagErr = nil
 	if got := m.Publish(); got != "published v0.0.1" {
 		t.Fatalf("Publish said %q once the tag read", got)
+	}
+}
+
+// A merge that runs past the wait look after look is hung, not slow: after
+// maxSkips looks the update installs anyway, each skipped look on the record.
+func TestAutoUpdateGoesAheadPastAHungMerge(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	m, exe := releaseAt(t, "v0.1.2", "me/hive")
+	m.PauseMerges = func(time.Duration) (func(), bool) { return func() {}, false }
+	for i := 1; i < maxSkips; i++ {
+		if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "a merge has run past") {
+			t.Fatalf("look %d: %q", i, msg)
+		}
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "old" {
+		t.Fatalf("installed before %d looks: %q", maxSkips, raw)
+	}
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") {
+		t.Fatalf("look %d: %q, %v", maxSkips, msg, err)
+	}
+	if n := journaledN(m, "hive.update_held"); n != maxSkips {
+		t.Fatalf("%d skipped looks on the record, want %d", n, maxSkips)
+	}
+}
+
+// When the restart after an install never comes, merges go on after the
+// grace, and the record says so.
+func TestMissedRestartIsRecorded(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	m, _ := releaseAt(t, "v0.1.2", "me/hive")
+	old := restartGrace
+	restartGrace = 10 * time.Millisecond
+	t.Cleanup(func() { restartGrace = old })
+	resumed := make(chan struct{})
+	m.PauseMerges = func(time.Duration) (func(), bool) { return func() { close(resumed) }, true }
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") {
+		t.Fatalf("%q, %v", msg, err)
+	}
+	select {
+	case <-resumed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("merges stayed paused past the grace")
+	}
+	if !journaled(m, "hive.update_unrestarted") {
+		t.Fatal("the missed restart isn't on the record")
+	}
+}
+
+// On the latest channel, the lag counts every full release between this one
+// and the newest, as following pre-releases does.
+func TestLatestChannelCountsEveryReleaseBehind(t *testing.T) {
+	serveAll(t, "v0.1.12", map[string]map[string]string{"v0.1.12": build("v12")}, false)
+	m, _ := releaseAt(t, "v0.1.10", "me/hive")
+	f := m.C.Effects.Forge.(*core.Local)
+	for _, tag := range []string{"v0.1.10", "v0.1.11", "v0.1.12", "v0.1.13"} {
+		f.CreateRelease("me/hive", tag, "sha-"+tag, "")
+		if tag != "v0.1.13" {
+			f.PublishRelease("me/hive", tag)
+		}
+	}
+	if _, _, _, err := m.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if newest, behind := m.Lag(); newest != "v0.1.12" || behind != 2 {
+		t.Fatalf("newest %q, %d behind; want v0.1.12, 2", newest, behind)
+	}
+}
+
+// Following pre-releases, the lag counts from this one, so the ones before
+// the latest full release count too.
+func TestPreReleaseLagCountsFromThisOne(t *testing.T) {
+	if runner() == "" {
+		t.Skip("the checks don't run on " + runtime.GOOS + "/" + runtime.GOARCH)
+	}
+	serveAll(t, "v0.1.12", map[string]map[string]string{"v0.1.12": build("v12")}, false)
+	m, _ := releaseAt(t, "v0.1.10", "me/hive")
+	cfg := m.C.WS.LoadConfig()
+	cfg.Channel = Prerelease
+	m.C.WS.SaveConfig(cfg)
+	f := m.C.Effects.Forge.(*core.Local)
+	for _, tag := range []string{"v0.1.11", "v0.1.12", "v0.1.13"} {
+		f.CreateRelease("me/hive", tag, "sha-"+tag, "")
+	}
+	f.PublishRelease("me/hive", "v0.1.12")
+	if _, _, _, err := m.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if newest, behind := m.Lag(); newest != "v0.1.13" || behind != 3 {
+		t.Fatalf("newest %q, %d behind; want v0.1.13, 3", newest, behind)
 	}
 }

@@ -274,10 +274,12 @@ type Module struct {
 	gateCantRun map[string]core.GateResult
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
-	// gate is shut.
+	// gate is shut, and idle, while a pause waits, closes when the last
+	// merge leaves.
 	gate    sync.Mutex
 	inMerge int
 	paused  bool
+	idle    chan struct{}
 }
 
 // New loads tasks and registers the brief op.
@@ -1893,11 +1895,12 @@ func (m *Module) enterMerge() bool {
 func (m *Module) leaveMerge() {
 	m.gate.Lock()
 	m.inMerge--
+	if m.inMerge == 0 && m.idle != nil {
+		close(m.idle)
+		m.idle = nil
+	}
 	m.gate.Unlock()
 }
-
-// gatePoll is how often PauseMerges looks whether the running merges ended.
-var gatePoll = 100 * time.Millisecond
 
 // PauseMerges shuts the gate before the forge merge, so no new merge starts,
 // and waits up to wait for the merges already past it to end and be
@@ -1909,6 +1912,11 @@ var gatePoll = 100 * time.Millisecond
 func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 	m.gate.Lock()
 	m.paused = true
+	idle := m.idle
+	if m.inMerge > 0 && idle == nil {
+		idle = make(chan struct{})
+		m.idle = idle
+	}
 	m.gate.Unlock()
 	var once sync.Once
 	resume = func() {
@@ -1918,16 +1926,14 @@ func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 			m.gate.Unlock()
 		})
 	}
-	for end := time.Now().Add(wait); ; time.Sleep(gatePoll) {
-		m.gate.Lock()
-		n := m.inMerge
-		m.gate.Unlock()
-		if n == 0 {
-			return resume, true
-		}
-		if !time.Now().Before(end) {
-			return resume, false
-		}
+	if idle == nil {
+		return resume, true
+	}
+	select {
+	case <-idle:
+		return resume, true
+	case <-time.After(wait):
+		return resume, false
 	}
 }
 

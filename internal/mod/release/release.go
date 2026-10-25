@@ -57,11 +57,15 @@ type Module struct {
 	shas  map[string]string
 	tried string
 	said1 string
-	// pre are the pre-releases newer than this one the last look read;
-	// newest and behind are what Lag reports, from the last Check.
-	pre    []string
+	// ahead are the releases newer than this one the last look read: every
+	// one following pre-releases, the full ones otherwise; newest and behind
+	// are what Lag reports, from the last Check.
+	ahead  []string
 	newest string
 	behind int
+	// skipped counts the looks in a row an update passed over because a
+	// merge ran past mergeWait.
+	skipped int
 	// updating is held while an update runs: AutoUpdate, from its schedule
 	// or follow, or `hive update`.
 	updating sync.Mutex
@@ -200,7 +204,7 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 		}
 	}
 	m.pmu.Lock()
-	m.pre = nil
+	m.ahead = nil
 	m.pmu.Unlock()
 	if m.Channel() == Prerelease {
 		after := core.Version
@@ -220,8 +224,20 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 			err = e
 		}
 	} else {
+		// Releases read through the login count every one between, so the
+		// lag means the same on both channels; without it, the latest alone.
+		var ahead []string
+		if out != "" && modules.Newer(core.Version, out) {
+			if rels, e := m.C.Effects.Forge.Releases(up); e == nil {
+				for _, r := range rels {
+					if !r.Prerelease && modules.Newer(core.Version, r.Tag) {
+						ahead = append(ahead, r.Tag)
+					}
+				}
+			}
+		}
 		m.pmu.Lock()
-		m.waits = nil
+		m.waits, m.ahead = nil, ahead
 		m.pmu.Unlock()
 	}
 	if tag != "" {
@@ -232,14 +248,14 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 }
 
 // lag records the newest release out and how many releases this one is
-// behind it: every pre-release the last look read, when following them, the
-// latest release and the one Check took.
+// behind it: every newer one the last look read, the latest release and the
+// one Check took.
 func (m *Module) lag(out ...string) {
 	m.pmu.Lock()
 	defer m.pmu.Unlock()
 	seen := map[string]bool{}
 	m.newest, m.behind = core.Version, 0
-	for _, t := range append(slices.Clone(m.pre), out...) {
+	for _, t := range append(slices.Clone(m.ahead), out...) {
 		if t == "" || seen[t] || !modules.Newer(core.Version, t) {
 			continue
 		}
@@ -342,15 +358,25 @@ func (m *Module) update(tag string) (string, error) {
 		}
 	}
 	// No merge starts from here to the restart, and any running ends first;
-	// tasks still in merging carry across and go on after it.
+	// tasks still in merging carry across and go on after it. A merge that
+	// runs past the wait look after look is hung, not slow: after maxSkips
+	// the update goes ahead, and the task in merging finds after the restart
+	// whether its merge landed.
 	resume := func() {}
 	if m.PauseMerges != nil {
 		var ok bool
 		if resume, ok = m.PauseMerges(mergeWait); !ok {
-			resume()
-			return "waiting: a merge has run past " + mergeWait.String() + "; " + tag + " installs at the next look", nil
+			m.skipped++
+			text := fmt.Sprintf("a merge has run past %s at %d looks in a row", mergeWait, m.skipped)
+			if m.skipped < maxSkips {
+				resume()
+				m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "looks": m.skipped, "text": text})
+				return "waiting: " + text + "; " + tag + " installs at the next look", nil
+			}
+			m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "looks": m.skipped, "forced": true, "text": text + "; installing anyway"})
 		}
 	}
+	m.skipped = 0
 	installed := false
 	defer func() {
 		if !installed {
@@ -410,7 +436,10 @@ func (m *Module) update(tag string) (string, error) {
 	installed = true
 	// Merges stay paused until the restart; one that never comes (a
 	// supervisor that doesn't restart, a failed start) lets them go on.
-	time.AfterFunc(restartGrace, resume)
+	time.AfterFunc(restartGrace, func() {
+		m.C.J.MustAppend("hive.update_unrestarted", map[string]any{"to": tag, "text": fmt.Sprintf("the restart into %s didn't come within %s; merges go on", tag, restartGrace)})
+		resume()
+	})
 	if m.Restart != nil {
 		go func() { time.Sleep(time.Second); m.Restart() }()
 	}
@@ -447,6 +476,10 @@ func (m *Module) pin(cfg core.Config, tag string, on bool) error {
 
 // mergeWait is the most an update waits for the merges already running.
 var mergeWait = 2 * time.Minute
+
+// maxSkips is how many looks in a row an update waits on a merge running
+// past mergeWait before it installs anyway.
+const maxSkips = 3
 
 // restartGrace is how long merges stay paused after an update installs,
 // waiting for its restart.

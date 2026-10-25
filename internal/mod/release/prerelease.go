@@ -135,10 +135,13 @@ func (m *Module) prerelease(repo, after string) (tag string, why []string, err e
 	if err != nil {
 		return "", nil, fmt.Errorf("following pre-releases reads them through the GitHub login, which failed: %w", err)
 	}
-	var tags []string
+	var tags, ahead []string // tags are the candidates; ahead counts the lag from this one
 	for _, r := range rels {
 		if r.Prerelease && modules.Newer(after, r.Tag) {
 			tags = append(tags, r.Tag)
+		}
+		if modules.Newer(core.Version, r.Tag) {
+			ahead = append(ahead, r.Tag)
 		}
 	}
 	slices.SortFunc(tags, func(a, b string) int {
@@ -148,7 +151,7 @@ func (m *Module) prerelease(repo, after string) (tag string, why []string, err e
 		return -1
 	})
 	m.pmu.Lock()
-	m.pre = tags
+	m.ahead = ahead
 	for k := range m.red { // a tag no longer newer than this one is never read again
 		if r, t, _ := strings.Cut(k, "@"); r == repo && !slices.Contains(tags, t) {
 			delete(m.red, k)
