@@ -13,6 +13,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"sort"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
@@ -131,12 +133,62 @@ func TestBenchmark(t *testing.T) {
 		}
 	}
 	out, _ := json.Marshal(map[string]any{"score": score, "asks_finished": finished, "commits_landed": commits, "asks": n, "seconds": seconds, "at_once": atOnce,
-		"asks_done_reported": done, "cost_usd_reported": cost})
+		"asks_done_reported": done, "cost_usd_reported": cost, "worker_messages_reported": workerMessages(readJournal(h))})
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write(out)
 	fmt.Println("BENCH " + string(out) + " " + hex.EncodeToString(mac.Sum(nil)))
 	if commits < n {
 		t.Errorf("%d commits landed on %s's main for %d asks (the Hive said %d were done)", commits, repo, n, done)
+	}
+}
+
+// workerMessages counts the messages one worker sent another (msg.sent
+// between two runs created as workers), read from the measured Hive's own
+// journal: a prompt change that asks agents to talk to each other shows here,
+// on the real harness. It is the Hive's own count, so it is shown, not judged.
+func workerMessages(raw []byte) int {
+	workers := map[string]bool{}
+	n := 0
+	for _, l := range strings.Split(string(raw), "\n") {
+		var e core.Event
+		if json.Unmarshal([]byte(l), &e) != nil {
+			continue
+		}
+		switch e.Kind {
+		case "run.created":
+			var r core.RunSpec
+			if e.Decode(&r) == nil && r.Role == "worker" {
+				workers[r.ID] = true
+			}
+		case "msg.sent":
+			var m struct{ From, To string }
+			if e.Decode(&m) == nil && workers[m.From] && workers[m.To] && m.From != m.To {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func readJournal(h *hive) []byte {
+	raw, _ := os.ReadFile(filepath.Join(h.ws.Hive(), "events.jsonl"))
+	return raw
+}
+
+// Only a message from one worker to another counts: not one to or from a
+// lead, nor a worker writing to itself.
+func TestWorkerMessages(t *testing.T) {
+	j := `{"kind":"run.created","data":{"id":"w1","role":"worker"}}
+{"kind":"run.created","data":{"id":"w2","role":"worker"}}
+{"kind":"run.created","data":{"id":"l","role":"lead"}}
+{"kind":"msg.sent","data":{"from":"w1","to":"w2","text":"a flake"}}
+{"kind":"msg.sent","data":{"from":"w2","to":"w1","text":"thanks"}}
+{"kind":"msg.sent","data":{"from":"w1","to":"l","text":"done"}}
+{"kind":"msg.sent","data":{"from":"l","to":"w2","text":"go"}}
+{"kind":"msg.sent","data":{"from":"w1","to":"w1","text":"me"}}
+not json`
+	if n := workerMessages([]byte(j)); n != 2 {
+		t.Fatalf("counted %d worker-to-worker messages, want 2", n)
 	}
 }
 
