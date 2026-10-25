@@ -54,7 +54,7 @@ func (f *freeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // When a worker's harness hits its usage limit, the worker moves to the next
-// model on its route, here a free model on an OpenAI-compatible endpoint
+// model on its route that has finished work here, here a free model on an OpenAI-compatible endpoint
 // with a stored key, through the open harness, and its work lands; nothing
 // else moves, and the dashboard's state says which model each ran on.
 func TestFallbackToAFreeModel(t *testing.T) {
@@ -69,12 +69,19 @@ func TestFallbackToAFreeModel(t *testing.T) {
 	u, _ := url.Parse(srv.URL)
 	h := startWith(t, bin, func(c *core.Config) {
 		c.Models = map[string]core.OpenModel{"free": {Endpoint: srv.URL + "/v1", Model: "free-coder:7b", Key: true}}
-		c.Projects = map[string]core.ProjectSettings{"lab": {Routes: map[string][]string{"worker": {"fake:opus", "free"}}}}
+		c.Projects = map[string]core.ProjectSettings{"lab": {Routes: map[string][]string{"worker": {"fake:opus", "free"}}},
+			"tried": {Routes: map[string][]string{"worker": {"free"}}}}
 		c.Egress.Local = append(c.Egress.Local, u.Host) // what `hive egress grant` opens for a model server here
 	})
 	if err := h.ws.SaveOpenKey("free", "sk-free"); err != nil {
 		t.Fatal(err)
 	}
+	// A worker falls back only to a model that has finished work here, so
+	// the free model first lands one task of its own.
+	h.seed("me/tried", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "tried", "repo": "me/tried"}, nil)
+	h.post("/api/ask", map[string]string{"project": "tried", "title": "a first finish"}, nil)
+	h.wait("the free model's first task to land", 3*minute, taskStage("tried", "a first finish", work.StageDone))
 	h.seed("me/lab", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "lab", "repo": "me/lab"}, nil)
 	h.post("/api/ask", map[string]string{"project": "lab", "title": "work through a limit", "known": "FAKE:limit"}, nil)
@@ -86,6 +93,7 @@ func TestFallbackToAFreeModel(t *testing.T) {
 		switch {
 		case r.Task == tk.ID && r.Role == "worker":
 			worker = &st.Runs[i]
+		case r.Project == "tried" && r.Role == "worker":
 		case r.Harness != "fake":
 			t.Errorf("%s (%s) left its model for %s:%s; only the project's workers route there", r.ID, r.Role, r.Harness, r.Model)
 		}
@@ -423,7 +431,8 @@ func TestModelThatCantAnswer(t *testing.T) {
 		c.Models = map[string]core.OpenModel{
 			"router": {Endpoint: rs.URL + "/api/v1", Model: "nvidia/nemotron:free", Key: true},
 			"free":   {Endpoint: fs.URL + "/v1", Model: "free-coder:7b", Key: true}}
-		c.Projects = map[string]core.ProjectSettings{"lab": {Routes: map[string][]string{"worker": {"fake:opus", "router", "free"}}}}
+		c.Projects = map[string]core.ProjectSettings{"lab": {Routes: map[string][]string{"worker": {"fake:opus", "router", "free"}}},
+			"tried-router": {Routes: map[string][]string{"worker": {"router"}}}, "tried-free": {Routes: map[string][]string{"worker": {"free"}}}}
 		c.Egress.Local = append(c.Egress.Local, ru.Host, fu.Host)
 	})
 	for _, name := range []string{"router", "free"} {
@@ -431,6 +440,17 @@ func TestModelThatCantAnswer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A worker falls back only to a model that has finished here, so each
+	// lands a task of its own first, the router before its guardrail.
+	router.fixed.Store(true)
+	for _, name := range []string{"router", "free"} {
+		h.seed("me/tried-"+name, map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+		h.post("/api/project", map[string]any{"name": "tried-" + name, "repo": "me/tried-" + name}, nil)
+		h.post("/api/ask", map[string]string{"project": "tried-" + name, "title": "a first finish"}, nil)
+		h.wait(name+"'s first task to land", 3*minute, taskStage("tried-"+name, "a first finish", work.StageDone))
+	}
+	router.fixed.Store(false)
+	router.hits.Store(0)
 	h.seed("me/lab", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "lab", "repo": "me/lab"}, nil)
 	h.post("/api/ask", map[string]string{"project": "lab", "title": "work past a dead fallback", "known": "FAKE:limit"}, nil)

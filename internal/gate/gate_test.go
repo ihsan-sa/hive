@@ -219,7 +219,7 @@ func TestNoHostHome(t *testing.T) {
 	sha, _ := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
 	out := t.TempDir()
 	c := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: testSandbox(), Go: g}
-	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha))); err != nil {
+	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha)), ""); err != nil {
 		t.Fatal(err)
 	}
 	c.Extra = []string{"HOST_HOME=" + home, "BIN=" + c.Bin}
@@ -283,7 +283,7 @@ func TestBuildFetchesANewDependency(t *testing.T) {
 	})
 	out := filepath.Join(dir, "out")
 	c := &Child{Name: "candidate", Root: filepath.Join(out, "candidate"), Sandbox: testSandbox(), Go: g}
-	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha))); err != nil {
+	if err := build(Config{Repo: repo, Out: out}, c, strings.TrimSpace(string(sha)), ""); err != nil {
 		t.Fatal(err)
 	}
 	if !exists(c.Bin) {
