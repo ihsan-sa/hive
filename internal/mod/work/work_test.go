@@ -439,7 +439,7 @@ func helperRig(t *testing.T) (*Module, *flakyForge, core.Project) {
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
 	ws.SaveConfig(cfg)
 	forge := &flakyForge{Local: &core.Local{Dir: filepath.Join(dir, "forge")}}
-	if _, err := forge.EnsureRepo("me/p", ""); err != nil {
+	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {
 		t.Fatal(err)
 	}
 	seed := filepath.Join(dir, "seed")
@@ -480,7 +480,7 @@ func TestHelperFailedStartLeavesNoTask(t *testing.T) {
 // task could land its commits; the parent files a brief instead.
 func TestHelperOnEmptyProject(t *testing.T) {
 	m, forge, _ := helperRig(t)
-	if _, err := forge.EnsureRepo("me/e", ""); err != nil {
+	if _, err := forge.EnsureRepo("me/e", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.C.Projects.Add(core.Project{Name: "e", Repo: "me/e"}); err != nil {
