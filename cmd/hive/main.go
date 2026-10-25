@@ -185,6 +185,11 @@ func run(args []string) int {
 			return 2
 		}
 		return gate.Forward(args[0], args[2:])
+	case "gate-connect": // inside a gate's sandbox: ssh's ProxyCommand, through the meter
+		if len(args) != 2 {
+			return 2
+		}
+		return gate.Connect(args[0], args[1])
 	case "gate":
 		return cmdGate(args)
 	case "improve":
