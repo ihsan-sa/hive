@@ -142,8 +142,8 @@ func (GitHub) Name() string { return "github" }
 
 // OwnerTokens maps a lower-cased repo owner to a file holding the GitHub token
 // for that owner. An owner not listed (or whose file is unreadable, said once
-// on stderr) uses gh's own login. Both tokens act as the same user, so gh cannot hold them as two
-// logins; the effects process passes GH_TOKEN per call instead.
+// on stderr) uses gh's own login. Both tokens act as the same user, so gh
+// cannot hold them as two logins; the effects process passes GH_TOKEN per call instead.
 var OwnerTokens = map[string]string{
 	"hive-rsi-lab": "/home/hive/h0-org.token",
 }
