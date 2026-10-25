@@ -125,6 +125,15 @@ func TestRunsReadTheStateButNoSecret(t *testing.T) {
 			t.Errorf("%s can be read under /hive/state (covers %v)", p, covers)
 		}
 	}
+	// The same folders keep a host interpreter's install out of the bind.
+	for _, d := range covers {
+		if !slices.Contains(spec.Cover, d) || !slices.Contains(spec.Guard, d) {
+			t.Errorf("%s is covered for agents but not for host interpreters (guard %v, cover %v)", d, spec.Guard, spec.Cover)
+		}
+	}
+	if !slices.Contains(spec.Guard, c.WS.Root) {
+		t.Errorf("guard %v leaves out the workspace", spec.Guard)
+	}
 	if under(c.WS.TurnOut("r1", 1), c.WS.Private()) {
 		t.Errorf("turn logs are covered; agents read one another's")
 	}

@@ -30,8 +30,10 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -111,6 +113,17 @@ func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string)
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded CI runner mustn't hold fake turns
 	if hn := os.Getenv("HIVE_E2E_HARNESS"); hn != "" {
 		cfg.Harness = hn // a live probe: real agents, plan usage
+		if _, err := harness.Get(hn); err != nil {
+			// A module's harness (opencode): its module is a default one, which
+			// the daemon writes only after it checks the harness.
+			if err := modules.New(h.ws, nil).InstallDefaults(); err != nil {
+				t.Fatal(err)
+			}
+			harness.UseModules(h.ws.Modules())
+		}
+	}
+	if m := os.Getenv("HIVE_E2E_MODEL"); m != "" { // a harness whose default model isn't Claude's (opencode/big-pickle)
+		cfg.Model, cfg.LeadModel, cfg.ReviewerModel = m, m, m
 	}
 	if sb := os.Getenv("HIVE_E2E_SANDBOX"); sb == "auto" || (sb == "" && cfg.Harness != "fake" && sandboxed()) {
 		cfg.Sandbox = "auto" // a live probe takes the path people get
@@ -361,7 +374,7 @@ func (h *hive) messages(chatID string) []chat.Message {
 
 func (h *hive) seed(repo string, files map[string]string) {
 	h.t.Helper()
-	if _, err := h.forge.EnsureRepo(repo, ""); err != nil {
+	if _, err := h.forge.EnsureRepo(repo, "", false); err != nil {
 		h.t.Fatal(err)
 	}
 	tmp := h.t.TempDir()
@@ -1475,7 +1488,8 @@ var adopt func()
 var contain func(t *testing.T, pid int) func()
 
 // TestLiveWorker is the plain path on a real harness: run it with
-// HIVE_E2E_HARNESS=claude or codex. A brief goes to a worker, its PR to a
+// HIVE_E2E_HARNESS=claude or codex, or a module's harness (HIVE_E2E_HARNESS=opencode
+// HIVE_E2E_MODEL=opencode/big-pickle). A brief goes to a worker, its PR to a
 // reviewer whose verdict is structured, and it merges.
 func TestLiveWorker(t *testing.T) {
 	if os.Getenv("HIVE_E2E_HARNESS") == "" {

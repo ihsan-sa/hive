@@ -21,9 +21,10 @@ type Change struct {
 // Recent lists the n entries changed most lately, newest first, from the
 // knowledge base's git history: notes and practice, which the filer and
 // `remember` commit. The record is kept out of git and rebuilt on its own,
-// and the Hive's own source is reseeded at every start, so neither shows.
+// and the Hive's own source is reseeded at every start, so neither shows;
+// nor do the dream's digests, which the Knowledge tab pins above these.
 func Recent(dir string, n int) []Change {
-	out, err := core.Git(dir, "-c", "core.quotePath=false", "log", "--no-renames", "--name-status", "--format=%x01%ct", "-n", "300", "--", ".", ":(exclude)"+SelfDir)
+	out, err := core.Git(dir, "-c", "core.quotePath=false", "log", "--no-renames", "--name-status", "--format=%x01%ct", "-n", "300", "--", ".", ":(exclude)"+SelfDir, ":(exclude)"+dreamDir)
 	if err != nil {
 		return nil
 	}

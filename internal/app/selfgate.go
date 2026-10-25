@@ -71,7 +71,11 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 			cmd.Stdout, cmd.Stderr = log, log
 		}
 		runErr := cmd.Run()
-		gate.Reap(j.Out) // a gate killed or crashed mid-run left its children
+		// A gate killed or crashed mid-run left its children. Reap runs here
+		// as the person: only on a run folder of the Hive's own.
+		if rel, err := filepath.Rel(ws.Gates(), j.Out); err == nil && filepath.IsLocal(rel) {
+			gate.Reap(j.Out)
+		}
 		g := readReport(j, runErr, ctx.Err())
 		g.Note = note
 		return g
@@ -138,7 +142,7 @@ func readReport(j work.GateJob, runErr, ctxErr error) core.GateResult {
 		g.Reason = "the gate left no report: " + fmt.Sprint(runErr)
 		return g
 	}
-	g.Reason, g.Sandbox, g.Transient = rep.Verdict.Reason, rep.Sandbox, rep.Transient
+	g.Reason, g.Sandbox, g.Transient, g.Alone, g.Conflicts = rep.Verdict.Reason, rep.Sandbox, rep.Transient, rep.Alone, rep.Conflicts
 	if g.Reason == "" {
 		g.Reason = rep.Error
 	}

@@ -33,6 +33,7 @@ type localState struct {
 	Jobs     map[string][]WorkflowJob `json:"jobs,omitempty"`   // repo#run -> its jobs
 	Logs     map[string]string        `json:"logs,omitempty"`   // repo url -> a check's log
 	Reruns   map[string]int           `json:"reruns,omitempty"` // repo@sha -> re-runs of its failed checks asked
+	Public   map[string]bool          `json:"public,omitempty"` // repos made public
 }
 
 type localIssue struct {
@@ -72,7 +73,7 @@ func (l *Local) save(s localState) {
 	WriteFileAtomic(filepath.Join(l.Dir, "state.json"), raw, 0o644)
 }
 
-func (l *Local) EnsureRepo(repo, _ string) (bool, error) {
+func (l *Local) EnsureRepo(repo, _ string, public bool) (bool, error) {
 	p := l.RepoPath(repo)
 	if Exists(p) {
 		return false, nil
@@ -80,10 +81,27 @@ func (l *Local) EnsureRepo(repo, _ string) (bool, error) {
 	if err := os.MkdirAll(p, 0o755); err != nil {
 		return false, err
 	}
+	if public {
+		l.mu.Lock()
+		s := l.load()
+		if s.Public == nil {
+			s.Public = map[string]bool{}
+		}
+		s.Public[repo] = true
+		l.save(s)
+		l.mu.Unlock()
+	}
 	if _, err := Git(p, "init", "--bare", "-b", "main"); err != nil {
 		return true, err
 	}
 	return true, foreground(p)
+}
+
+// IsPublic says whether repo was made public.
+func (l *Local) IsPublic(repo string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.load().Public[repo]
 }
 
 // foreground keeps a bare repo's auto maintenance after a push in the
@@ -119,6 +137,14 @@ func (l *Local) Clone(repo, dir string) error {
 }
 
 func (l *Local) DefaultBranch(string) string { return "main" }
+
+func (l *Local) File(repo, path string) (string, error) {
+	out, err := Git(l.RepoPath(repo), "show", "main:"+path)
+	if err != nil {
+		return "", ErrNotFound
+	}
+	return out, nil
+}
 
 // IsEmpty reports whether the bare repository has no refs.
 func (l *Local) IsEmpty(repo string) (bool, error) {
@@ -247,6 +273,32 @@ func (l *Local) SetDraft(repo string, number int, draft bool) error {
 			l.save(s)
 			return nil
 		}
+	}
+	return ErrNotFound
+}
+
+// ReadyPR takes a draft out of draft while its head is still sha.
+func (l *Local) ReadyPR(repo string, number int, sha string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	for i := range s.PRs[repo] {
+		p := &s.PRs[repo][i]
+		if p.Number != number {
+			continue
+		}
+		if p.State != "OPEN" {
+			return fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
+		}
+		l.refresh(repo, p)
+		if p.HeadSHA != sha {
+			return fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+		}
+		if p.Draft {
+			p.Draft = false
+			l.save(s)
+		}
+		return nil
 	}
 	return ErrNotFound
 }

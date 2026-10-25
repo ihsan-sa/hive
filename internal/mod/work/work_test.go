@@ -23,14 +23,27 @@ type flakyForge struct {
 	down   bool
 	users  int
 	refuse bool
-	hold   chan struct{} // the first User call waits for it to close
-	closed []int
-	bodies []string
+	// checksRefused refuses the token every read of checks, as GitHub does
+	// a token without Checks: read on a repo with workflows, in the words
+	// GitHub.Checks gives (TestChecksRefusedWithoutWorkflows pins them).
+	checksRefused bool
+	checksAsked   int
+	hold          chan struct{} // the first User call waits for it to close
+	closed        []int
+	bodies        []string
 }
 
 func (f *flakyForge) CreatePR(repo, head, base, title, body string) (core.PR, error) {
 	f.bodies = append(f.bodies, body)
 	return f.Local.CreatePR(repo, head, base, title, body)
+}
+
+func (f *flakyForge) Checks(repo, sha string) ([]core.CheckRun, error) {
+	f.checksAsked++
+	if f.checksRefused {
+		return nil, errors.New("gh api repos/" + repo + "/commits/" + sha + "/check-runs?per_page=100: gh: Resource not accessible by personal access token (HTTP 403)")
+	}
+	return f.Local.Checks(repo, sha)
 }
 
 func (f *flakyForge) User() (string, error) {
@@ -150,8 +163,10 @@ func TestOutageBacksOffAndWakes(t *testing.T) {
 	m, forge, task, _ := noCommitRig(t, 0)
 	var gaps []time.Duration
 	for range 20 {
+		// From just before the step: a slow save (Windows) mustn't read 30s as 29s.
+		before := time.Now()
 		m.settle(task, errors.New("dial tcp: lookup api.github.com: no such host"))
-		gaps = append(gaps, time.Until(task.Retry).Round(time.Second))
+		gaps = append(gaps, task.Retry.Sub(before).Truncate(time.Second))
 	}
 	why := "can't reach GitHub: no internet connection"
 	if task.Stage != StageLanding || task.Failures != 0 || m.Offline() != why || !logged(task, why+"; retrying") {
@@ -344,6 +359,45 @@ func TestGiveUpComesBack(t *testing.T) {
 	}
 }
 
+// A task stuck on its way to the merge (here waiting on a stale commit's
+// checks) is the lead's to retry: recheck takes it back to landing with fresh
+// counts, a stuck checkpoint is dropped while its worker goes on, and a step
+// running on the task refuses it.
+func TestRecheckRetriesAStuckMerge(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage, task.SHA, task.Round, task.Failures = StageMerging, "2125f74e", 2, 4
+	task.Reason = "waiting for the forge's checks on 2125f74e"
+	m.save(task, task.Reason)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.mu.Unlock()
+	if err := m.Recheck(task.ID, ""); err == nil || !strings.Contains(err.Error(), "step running") {
+		t.Fatalf("retried under a running step: %v", err)
+	}
+	m.mu.Lock()
+	delete(m.busy, task.ID)
+	m.mu.Unlock()
+	if err := m.Recheck(task.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := m.Get(task.ID)
+	if got.Stage != StageLanding || got.Failures+got.Round != 0 || got.Reason != "" || !logged(&got, "retried from merging") {
+		t.Fatalf("not back to landing with fresh counts: %+v", got)
+	}
+
+	got.Stage, got.Checkpoint = StageTesting, "2125f74e"
+	m.save(&got, "a checkpoint")
+	if err := m.Recheck(task.ID, "try again"); err == nil {
+		t.Fatal("sent back a worker still working past its checkpoint")
+	}
+	if err := m.Recheck(task.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = m.Get(task.ID); got.Stage != StageWorking || got.Checkpoint != "" {
+		t.Fatalf("the checkpoint should be dropped: %+v", got)
+	}
+}
+
 // A task the person stopped, from the control center or by leaving its PR
 // open, stays stopped: the lead can neither recheck it nor send its worker back.
 func TestPersonStopHolds(t *testing.T) {
@@ -437,7 +491,7 @@ func helperRig(t *testing.T) (*Module, *flakyForge, core.Project) {
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
 	ws.SaveConfig(cfg)
 	forge := &flakyForge{Local: &core.Local{Dir: filepath.Join(dir, "forge")}}
-	if _, err := forge.EnsureRepo("me/p", ""); err != nil {
+	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {
 		t.Fatal(err)
 	}
 	seed := filepath.Join(dir, "seed")
@@ -478,7 +532,7 @@ func TestHelperFailedStartLeavesNoTask(t *testing.T) {
 // task could land its commits; the parent files a brief instead.
 func TestHelperOnEmptyProject(t *testing.T) {
 	m, forge, _ := helperRig(t)
-	if _, err := forge.EnsureRepo("me/e", ""); err != nil {
+	if _, err := forge.EnsureRepo("me/e", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.C.Projects.Add(core.Project{Name: "e", Repo: "me/e"}); err != nil {
@@ -820,5 +874,49 @@ func TestQueueNowPastOverlap(t *testing.T) {
 	m.C.WS.SaveConfig(cfg)
 	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], "max_workers") {
 		t.Fatalf("now went past max_workers: %q", wait[fix.ID])
+	}
+}
+
+// A PR merged on the forge outside the Hive (by the person, or the lead
+// through gh) while forgeChecks holds it on a check main fails too ends as
+// merged at the forge's merge commit, as the Hive's own merge does: the chat
+// hears, OnMerged runs, and the brief queued behind it starts.
+func TestMergedOnForgeWhileHeld(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	task.Chat = m.Chat.EnsureProject("p").ID
+	m.save(task, "")
+	var merged []Task
+	m.OnMerged = func(t Task) { merged = append(merged, t) }
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPending})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.Reason == "" || len(merged) != 0 {
+		t.Fatalf("not held: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	waiting := file(t, m, "tune the feature", "See feature.txt.")
+	waiting.Stage = StageQueued
+	m.save(&waiting, "")
+
+	sha, err := f.MergePR(p.Repo, task.PR.Number, task.SHA, "work") // by hand, on the forge
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.step(task); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageMerged || task.MergeSHA != sha || task.Reason != "" || len(merged) != 1 || merged[0].MergeSHA != sha ||
+		!logged(task, "merged on the forge outside the Hive") {
+		t.Fatalf("stage %q, merge %q (want %s), reason %q, OnMerged %d, log %v", task.Stage, task.MergeSHA, sha, task.Reason, len(merged), task.Log)
+	}
+	if msgs := m.Chat.Messages("project:p"); len(msgs) == 0 || msgs[len(msgs)-1].Text != "Merged: work "+task.PR.URL {
+		t.Fatalf("chat %v", msgs)
+	}
+	if err := m.step(task); err != nil || task.Stage != StageDone {
+		t.Fatalf("stage %q: %v", task.Stage, err)
+	}
+	if start, _ := m.admit(m.List(nil)); !start[waiting.ID] {
+		t.Fatal("the brief behind it didn't start")
 	}
 }
