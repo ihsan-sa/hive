@@ -152,6 +152,7 @@ type Task struct {
 	FilesSince time.Time `json:"files_since,omitempty"`
 	FilesTold  bool      `json:"files_told,omitempty"`
 	Failures   int       `json:"failures"`
+	Kills      int       `json:"kills,omitempty"`      // steps in a row killed by their timeout (killCap)
 	CloseFail  int       `json:"close_fail,omitempty"` // failed tries to close the issue
 	Attempt    int       `json:"attempt"`              // fresh workers handed this task
 	Retry      time.Time `json:"retry,omitempty"`
@@ -809,6 +810,12 @@ func (m *Module) settle(t *Task, err error) {
 	downs = m.downs
 	m.mu.Unlock()
 	if err == nil {
+		// t is the tick's copy, which nothing saves after this, so a run of
+		// kills a step got through ends on the task as kept.
+		if cur, ok := m.Get(t.ID); ok && cur.Kills > 0 {
+			cur.Kills, t.Kills = 0, 0
+			m.save(&cur, "")
+		}
 		return
 	}
 	if rl := (*core.RateLimited)(nil); errors.As(err, &rl) {
@@ -829,13 +836,22 @@ func (m *Module) settle(t *Task, err error) {
 	if core.TimedOut(err.Error()) {
 		// A call killed by its timeout means the machine is loaded, which isn't
 		// the task's fault either: it waits a while without counting a failure.
+		// One killed every time for about an hour is stuck, not slow: it stops
+		// for the person, in words revive doesn't bring back.
 		m.mu.Lock()
 		m.slow = time.Now()
 		m.mu.Unlock()
+		t.Kills++
+		if t.Kills >= killCap {
+			t.Kills = 0
+			m.giveUp(t, fmt.Sprintf("gave up after %d steps in a row killed by their timeout (about %s): ", killCap, killCap*slowWait)+core.Clip(err.Error(), 300))
+			return
+		}
 		t.Retry = time.Now().Add(slowWait)
 		m.save(t, core.Clip(err.Error(), 300)+"; the machine is slow, so the task waits, then goes on")
 		return
 	}
+	t.Kills = 0
 	t.Failures++
 	t.Retry = time.Now().Add(time.Duration(min(t.Failures, 6)) * 30 * time.Second)
 	msg := err.Error()
@@ -849,6 +865,10 @@ func (m *Module) settle(t *Task, err error) {
 // slowWait is how long a task waits after a call killed by its timeout, and
 // how long the calls must stay clear of that before tasks it stopped return.
 const slowWait = 3 * time.Minute
+
+// killCap is how many steps in a row killed by their timeout stop a task:
+// about an hour of slowWait.
+const killCap = 20
 
 // backoff is the gap after the nth failed step of an outage: 30s doubling to
 // a 10 minute ceiling.
