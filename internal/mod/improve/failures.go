@@ -289,7 +289,7 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 		"text": core.Clip(why, 400) + " (" + p.Name + "). Not reverted; filed to fix on main."})
 	title := core.Clip("Make "+what+" pass on main again", 120)
 	if len(m.Work.List(func(w work.Task) bool { return w.Project == p.Name && w.Title == title && !w.Terminal() })) == 0 {
-		m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title,
+		m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title, Aim: work.AimFix, Why: core.Clip("red on main: "+what+" fail at "+core.Short(parent)+" and after "+core.Short(t.MergeSHA), 300),
 			Done:  "The tests pass on main again, every time, without reverting anything.",
 			Known: fmt.Sprintf("After %s merged as %s the tests went red, but the same tests fail at %s, main just before it, so the merge wasn't the cause and wasn't reverted. What failed: %s", t.Label(), core.Short(t.MergeSHA), core.Short(parent), core.Clip(bc.Output, 1500))})
 	}

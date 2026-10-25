@@ -81,6 +81,9 @@ func TestFlakeAfterMergeIsNotReverted(t *testing.T) {
 	if reverts(m) != 0 || !strings.Contains(flakeAlerts(m), "TestJoin") {
 		t.Fatalf("reverts %d, alerts %q", reverts(m), flakeAlerts(m))
 	}
+	if f := m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, "Fix the flaky") }); len(f) != 1 || !f[0].Fix() {
+		t.Fatalf("the flaky test's brief names its failure, so it is a fix (issue #568): %+v", f)
+	}
 }
 
 // A test that fails twice after a merge and nowhere else is a break, and
@@ -192,8 +195,12 @@ func TestRedAlreadyOnMainBeforeTheMergeIsNotReverted(t *testing.T) {
 	if reverts(m) != 0 {
 		t.Fatalf("a red main had before the merge was reverted: %d", reverts(m))
 	}
-	if filed := m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") }); len(filed) != 1 {
+	filed := m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") })
+	if len(filed) != 1 {
 		t.Fatalf("the red wasn't filed to fix: %d", len(filed))
+	}
+	if !filed[0].Fix() || !strings.Contains(filed[0].AimWhy, "TestClock") {
+		t.Fatalf("a red main's brief names its failure, so it is a fix (issue #568): %q", filed[0].AimWord())
 	}
 	// A second red merge on the same red main files it no second time.
 	sha = commit(map[string]string{"README.md": "another\n"})
