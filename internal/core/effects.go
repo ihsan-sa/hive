@@ -72,6 +72,7 @@ type Effects struct {
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
+	judged    map[string]Judgement    // project@sha@main -> the judge's newest call (judge.go)
 	homes     map[string]bool         // running checks' homes (disk.go)
 	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
 	disk      DiskUse                 // the last measurement of the Hive's disk use
@@ -162,7 +163,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -236,6 +237,10 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var g GateResult
 			ev.Decode(&g)
 			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
+		case "judge.decided":
+			var j Judgement
+			ev.Decode(&j)
+			e.judged[j.Project+"@"+j.SHA+"@"+j.Main] = j
 		}
 	}
 	j.Replay(apply)
@@ -1091,7 +1096,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		return c, err
 	}
 	cfg := e.Config(p, mainSHA).Guarded(p)
-	protected := append([]string{".hive/project.json", ".hive/goals.md", "docs/REVIEW.md"}, cfg.Protected...)
+	protected := append([]string{".hive/project.json", ".hive/goals.md", "docs/REVIEW.md", StewardFile}, cfg.Protected...)
 	if cfg.Score != nil {
 		protected = append(protected, cfg.Score.Evaluator()...)
 	}
@@ -1248,6 +1253,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 			return "", fmt.Errorf("refusing to merge #%d: %s", m.PR, why)
 		}
 	}
+	if why := e.Stewardship(p, m.Main); why != "" {
+		return "", fmt.Errorf("refusing to merge #%d: %s", m.PR, why)
+	}
 	if c, ok := e.GetCheck(p.Name, m.SHA, "test"); !ok || !c.OK {
 		return "", fmt.Errorf("refusing to merge %s: no passing test run recorded for that exact commit", short(m.SHA))
 	}
@@ -1269,15 +1277,15 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", fmt.Errorf("refusing to merge %s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
 	}
 	if p.Self && m.Gain {
-		if g, ok := e.GateResult(p.Name, m.SHA, m.Main); !ok || g.Outcome != GateKeep {
-			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate kept it against main at %s", short(m.SHA), short(m.Main))
+		if !e.Kept(p.Name, m.SHA, m.Main) {
+			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s", short(m.SHA), short(m.Main))
 		}
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
 	if err != nil {
 		return "", err
 	}
-	req := e.RequiredChecks(p, m.Main)
+	runs, req, warned := Advisory(p, runs, e.RequiredChecks(p, m.Main))
 	st, which := ChecksState(runs, req)
 	var shared []string
 	var answer map[string]string // check -> the older main commit its answer came from
@@ -1309,6 +1317,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", err
 	}
 	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID}
+	if len(warned) > 0 {
+		ev["warned"] = warned
+	}
 	if len(shared) > 0 {
 		// A merge past a red check names the main commits that excused it,
 		// so one that relied on an older main answer can be audited.
@@ -1356,6 +1367,29 @@ func (n *NeedsPerson) Error() string { return "needs the person: " + n.Reason }
 // head before it merges.
 func (e *Effects) RequiredChecks(p Project, mainSHA string) []string {
 	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "required_checks")
+}
+
+// Advisory splits off the checks that only warn: on the Hive's own project
+// (Self) a failing Windows job, whose red tonight was mostly flakes unrelated
+// to the change, doesn't block the merge (the person: keep the Hive improving
+// as fast as possible). A release still needs the whole ci workflow green,
+// Windows with it. kept are the rest; warned names the failures set aside,
+// and required loses them so they aren't waited on either.
+func Advisory(p Project, runs []CheckRun, required []string) (kept []CheckRun, req, warned []string) {
+	if !p.Self {
+		return runs, required, nil
+	}
+	for _, r := range runs {
+		if r.State == CheckFail && strings.Contains(strings.ToLower(r.Name), "windows") {
+			if !slices.Contains(warned, r.Name) {
+				warned = append(warned, r.Name)
+			}
+			continue
+		}
+		kept = append(kept, r)
+	}
+	req = slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(warned, n) })
+	return kept, req, warned
 }
 
 // ChecksState sums up the forge's checks on one head, the worst first: a

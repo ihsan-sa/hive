@@ -1152,6 +1152,27 @@ func TestLogExcerpt(t *testing.T) {
 	}
 }
 
+// Only the Hive's own project sets a red Windows job aside, and it is then
+// neither counted nor waited on as required; a pending one still counts.
+func TestAdvisory(t *testing.T) {
+	runs := []CheckRun{{Name: "test (windows-latest)", State: CheckFail}, {Name: "test (ubuntu-latest)", State: CheckPass}}
+	req := []string{"test (windows-latest)", "test (ubuntu-latest)"}
+	if kept, r, w := Advisory(Project{}, runs, req); len(kept) != 2 || len(r) != 2 || w != nil {
+		t.Fatalf("not self: %v %v %v", kept, r, w)
+	}
+	kept, r, w := Advisory(Project{Self: true}, runs, req)
+	if len(kept) != 1 || !slices.Equal(r, []string{"test (ubuntu-latest)"}) || !slices.Equal(w, []string{"test (windows-latest)"}) {
+		t.Fatalf("self: %v %v %v", kept, r, w)
+	}
+	if st, _ := ChecksState(kept, r); st != CheckPass {
+		t.Fatalf("state %s", st)
+	}
+	runs[0].State = CheckPending
+	if _, _, w := Advisory(Project{Self: true}, runs, req); w != nil {
+		t.Fatalf("a pending Windows job was set aside: %v", w)
+	}
+}
+
 func TestRedKeys(t *testing.T) {
 	out := "--- FAIL: TestClock (0.00s)\n    a_test.go:3: late\nFAIL\nFAIL\tx/a\t0.004s\nok  \tx/ok\t0.1s\n" +
 		"PASS\nFAIL\tx/exit\t0.002s\n" +

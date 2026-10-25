@@ -874,3 +874,49 @@ func TestReleaseSaysAnUnreadTag(t *testing.T) {
 		t.Fatalf("Publish said %q once the tag read", got)
 	}
 }
+
+// A Hive the release repository's record doesn't name as its steward
+// neither cuts a release there nor publishes one; the steward does.
+func TestNonStewardDoesNotRelease(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	f := n.Local
+	if _, err := f.EnsureRepo("me/hive", "", false); err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	for _, args := range [][]string{{"clone", "-q", f.RepoPath("me/hive"), tmp}} {
+		if _, err := core.Git("", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.MkdirAll(filepath.Join(tmp, ".hive"), 0o755)
+	os.WriteFile(filepath.Join(tmp, core.StewardFile), []byte(core.StewardRecord("H0")), 0o644)
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", "steward"}, {"push", "-q", "origin", "HEAD:main"}} {
+		if _, err := core.Git(tmp, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, _ := m.C.Projects.Get("hive")
+	p.Branch = "main"
+	sha, err := m.C.Effects.Sync(p)
+	if err != nil || sha == "" {
+		t.Fatalf("sync: %q %v", sha, err)
+	}
+	merged(1, "a1", sha)
+	land("a1", "r1")
+	m.AfterKept("hive", sha)
+	if len(n.got) != 0 || !strings.Contains(alertText(m), "steward is the Hive H0") {
+		t.Fatalf("a non-steward released: %v, alert %q", n.got, alertText(m))
+	}
+	id := filepath.Join(m.C.WS.Hive(), "hive-id")
+	other, _ := os.ReadFile(id)
+	os.WriteFile(id, []byte("H0\n"), 0o644)
+	m.AfterKept("hive", sha)
+	if len(n.got) != 1 {
+		t.Fatalf("the steward didn't release: %v, alert %q", n.got, alertText(m))
+	}
+	os.WriteFile(id, other, 0o644)
+	if out := m.Publish(); !strings.Contains(out, "not published") {
+		t.Fatalf("a non-steward published: %s", out)
+	}
+}

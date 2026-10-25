@@ -105,6 +105,10 @@ type Config struct {
 	BareAccepted string `json:"bare_accepted,omitempty"` // timestamp the warning was read
 	WSLDistro    string `json:"wsl_distro,omitempty"`
 	ReleaseRepo  string `json:"release_repo"`
+	// SelfFork is the owner (an organization) whose fork of release_repo this
+	// Hive works on itself in, when the person owns release_repo but another
+	// of their Hives is its steward (core.StewardFile).
+	SelfFork string `json:"self_fork,omitempty"`
 	// PublicOwners are the accounts or organizations where create_project
 	// may make a public repository and tell the person after; a public one
 	// anywhere else waits for their yes.
