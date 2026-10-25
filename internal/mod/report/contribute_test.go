@@ -19,13 +19,23 @@ type upstream struct {
 	issues   []string          // title + body
 	comments map[string]string // repo#n marker -> body
 	prs      []string          // repo head base
+	// github: named as the real forge, whose CreateIssue checks only the
+	// newest issues, so this one finds none: dedup is the module's lookup.
+	github bool
+}
+
+func (u *upstream) Name() string {
+	if u.github {
+		return "github"
+	}
+	return "local"
 }
 
 func (u *upstream) CreateIssue(repo, title, body, marker string) (core.Issue, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	for i, x := range u.issues {
-		if strings.Contains(x, marker) {
+		if strings.Contains(x, marker) && !u.github {
 			return core.Issue{Number: i + 1}, nil
 		}
 	}
@@ -171,11 +181,15 @@ func TestReceived(t *testing.T) {
 				raw, _ := json.Marshal(x)
 				fmt.Fprintf(w, "%s\n", raw)
 			}
-		case "/repos/" + core.DefaultReleaseRepo + "/issues":
-			json.NewEncoder(w).Encode([]map[string]any{
+		case "/search/issues":
+			if q := r.URL.Query().Get("q"); !strings.Contains(q, "repo:"+core.DefaultReleaseRepo) || !strings.Contains(q, issueMarker) {
+				http.Error(w, "bad query "+q, 422)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{
 				{"number": 7, "title": "Install failure (crash): the Hive stopped", "body": "...\n\n<!-- hive-report:0123456789ab -->"},
 				{"number": 8, "title": "Someone's own issue", "body": "not a report"},
-			})
+			}})
 		case "/repos/" + core.DefaultReleaseRepo + "/issues/7/comments":
 			json.NewEncoder(w).Encode([]map[string]any{
 				{"body": "Seen on install 0a0a0a0a0a 2 times, the last at x\n\n<!-- hive-install:0a0a0a0a0a -->"},
@@ -241,5 +255,62 @@ func TestLeadShareOp(t *testing.T) {
 	cfg := c.WS.LoadConfig()
 	if _, yes := Contributing(cfg); Level(cfg) != Everything || !yes {
 		t.Fatalf("after the yes: %s, contribute %q", Level(cfg), cfg.Contribute)
+	}
+}
+
+// On the real forge, whose own marker check sees only the newest issues, a
+// failure another install filed long ago is found by searching for its
+// fingerprint, and counted there instead of filed again; a search that
+// fails files nothing.
+func TestContributeFindsAnOldIssue(t *testing.T) {
+	var queries []string
+	fail := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		queries = append(queries, q)
+		if r.URL.Path != "/search/issues" || fail {
+			w.WriteHeader(403)
+			return
+		}
+		fp := strings.TrimSuffix(strings.Fields(strings.SplitN(q, issueMarker, 2)[1])[0], `"`)
+		json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{
+			{"number": 12, "body": "a near miss <!-- " + issueMarker + fp + "0 -->"},
+			{"number": 300, "body": "filed by another install\n\n<!-- " + issueMarker + fp + " -->"},
+		}})
+	}))
+	defer srv.Close()
+	old := githubAPI
+	githubAPI = srv.URL
+	defer func() { githubAPI = old }()
+
+	up := &upstream{comments: map[string]string{}, github: true}
+	c := openForge(t, up, func(cfg *core.Config) { SetContribute(cfg, true) })
+	c.J.MustAppend("task.saved", map[string]any{"id": "t1", "stage": "stopped", "reason": "tests failed"})
+	fail = true
+	(&Module{C: c}).Send()
+	if len(up.issues) != 0 || len(up.comments) != 0 {
+		t.Fatalf("a failed search filed %d issues", len(up.issues))
+	}
+	fail = false
+	c.J.MustAppend("task.saved", map[string]any{"id": "t2", "stage": "stopped", "reason": "tests failed"})
+	(&Module{C: c}).Send()
+	if len(up.issues) != 0 {
+		t.Fatalf("an issue another install filed was filed again:\n%s", up.issues)
+	}
+	if !strings.Contains(fmt.Sprint(up.comments), core.DefaultReleaseRepo+"#300 ") || !strings.Contains(fmt.Sprint(up.comments), "2 times") {
+		t.Fatalf("not counted on #300: %v", up.comments)
+	}
+	if q := queries[len(queries)-1]; !strings.Contains(q, "repo:"+core.DefaultReleaseRepo) || !strings.Contains(q, "in:body") {
+		t.Fatalf("searched %q", q)
+	}
+}
+
+// A word of hex letters is part of a failure's message, not an id.
+func TestFingerprintKeepsWords(t *testing.T) {
+	a := Report{Kind: "alert", Message: "page defaced in run 3fa9c2e1"}
+	b := Report{Kind: "alert", Message: "page defaced in run 77ab01ff"}
+	cc := Report{Kind: "alert", Message: "page acceded in run 77ab01ff"}
+	if Fingerprint(a) != Fingerprint(b) || Fingerprint(a) == Fingerprint(cc) {
+		t.Fatal("ids don't collapse, or words do")
 	}
 }

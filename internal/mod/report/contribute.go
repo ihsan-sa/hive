@@ -34,7 +34,7 @@ func Upstream(cfg core.Config) string {
 }
 
 var (
-	idLike  = regexp.MustCompile(`[0-9a-f]{7,}|\d+`)
+	idLike  = regexp.MustCompile(`[0-9a-f]{7,}|\d+`) // a hex run only with a digit in it, see Fingerprint
 	spacing = regexp.MustCompile(`\s+`)
 )
 
@@ -43,7 +43,12 @@ var (
 // seen at another time, in another run, is one issue.
 func Fingerprint(r Report) string {
 	msg := strings.ToLower(r.Message)
-	msg = idLike.ReplaceAllString(msg, "#")
+	msg = idLike.ReplaceAllStringFunc(msg, func(w string) string {
+		if strings.ContainsAny(w, "0123456789") {
+			return "#"
+		}
+		return w // a word such as "defaced"
+	})
 	msg = spacing.ReplaceAllString(msg, " ")
 	sum := sha256.Sum256([]byte(r.Kind + "\n" + core.Clip(msg, 200)))
 	return hex.EncodeToString(sum[:6])
@@ -111,6 +116,20 @@ func (m *Module) contribute(cfg core.Config) string {
 		x := st[fp]
 		if !x.Dirty || writes >= maxWrites {
 			continue
+		}
+		if x.Issue == 0 {
+			if forge.Name() == "github" {
+				// CreateIssue's own marker check reads only the newest
+				// issues; another install's may be older, so the
+				// fingerprint is looked up first. A failed lookup waits
+				// rather than risk a duplicate.
+				n, err := findIssue(up, fp)
+				if err != nil {
+					failed = err.Error()
+					continue
+				}
+				x.Issue = n
+			}
 		}
 		if x.Issue == 0 {
 			body := fmt.Sprintf("An install that said yes to contributing hit this failure (docs/report.md).\n\n- kind: `%s`\n- version: `%s`\n- os: `%s`\n\n%s\n", x.Kind, x.Version, x.OS, x.Message)

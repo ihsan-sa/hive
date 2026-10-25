@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -183,7 +184,16 @@ func issuesDigest(repo string) string {
 		Body     string `json:"body"`
 		Comments int    `json:"comments"`
 	}
-	if err := getJSON(fmt.Sprintf("%s/repos/%s/issues?state=open&per_page=100", githubAPI, repo), &issues); err != nil {
+	var found struct {
+		Items *[]struct {
+			Number   int    `json:"number"`
+			Title    string `json:"title"`
+			Body     string `json:"body"`
+			Comments int    `json:"comments"`
+		} `json:"items"`
+	}
+	found.Items = &issues
+	if err := getJSON(searchURL(repo, `"`+issueMarker+`" in:body is:issue is:open`), &found); err != nil {
 		return fmt.Sprintf("The contribute issues on %s couldn't be read: %s\n\n", repo, core.Clip(err.Error(), 300))
 	}
 	var lines []string
@@ -233,4 +243,30 @@ func getJSON(url string, v any) error {
 		return fmt.Errorf("%s answered %d", url, resp.StatusCode)
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(v)
+}
+
+// searchURL is GitHub's issue search in repo for q, so a contribute issue is
+// found however far back it was filed.
+func searchURL(repo, q string) string {
+	return githubAPI + "/search/issues?per_page=100&q=" + url.QueryEscape("repo:"+repo+" "+q)
+}
+
+// findIssue is the contribute issue upstream for fingerprint fp, open or
+// closed, or 0 when there is none.
+func findIssue(repo, fp string) (int, error) {
+	var found struct {
+		Items []struct {
+			Number int    `json:"number"`
+			Body   string `json:"body"`
+		} `json:"items"`
+	}
+	if err := getJSON(searchURL(repo, `"`+issueMarker+fp+`" in:body is:issue`), &found); err != nil {
+		return 0, err
+	}
+	for _, it := range found.Items {
+		if strings.Contains(it.Body, "<!-- "+issueMarker+fp+" -->") {
+			return it.Number, nil
+		}
+	}
+	return 0, nil
 }
