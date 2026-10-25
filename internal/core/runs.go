@@ -766,7 +766,7 @@ func (rs *Runs) pickLogin(h, model, home string, bare bool) (Login, []string, er
 	err := fmt.Errorf("every %s login is at its usage limit", HarnessName(h))
 	for _, l := range open {
 		var env []string
-		if env, err = rs.tokens.AgentEnv(l, home); err == nil || bare && l.Name == "" && errors.Is(err, ErrNoLogin) {
+		if env, err = rs.tokens.AgentEnv(l, home); err == nil || bare && l.Name == "" && (errors.Is(err, ErrNoLogin) || errors.Is(err, ErrNoKey)) {
 			return l, env, nil
 		}
 	}
@@ -1095,8 +1095,12 @@ type TurnLog struct {
 
 // ReadTurn parses one turn's output.
 func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
-	h, _ := harness.Get(r.HarnessAt(turn))
 	var tl TurnLog
+	h, err := harness.Get(r.HarnessAt(turn))
+	if err != nil { // a module's harness since removed: nothing to read the turn with
+		return tl
+	}
+	var used harness.Tokens // a harness that reports each step's tokens (usage events)
 	_ = ReadJSONL(rs.ws.TurnOut(r.ID, turn), func(line []byte) {
 		for _, ev := range h.Parse(line) {
 			switch ev.Kind {
@@ -1111,6 +1115,10 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 				tl.Limit = ev.RateLimit
 			case "context":
 				tl.Context = ev.Tokens
+			case "usage":
+				if ev.Usage != nil {
+					used.Add(*ev.Usage)
+				}
 			}
 			if ev.Kind == "text" || ev.Kind == "tool" {
 				tl.Steps = append(tl.Steps, ev)
@@ -1128,7 +1136,33 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 			tl.Result.Structured = json.RawMessage(tl.Result.Text)
 		}
 	}
+	if tl.Result != nil && tl.Result.Tokens == nil && used != (harness.Tokens{}) {
+		tl.Result.Tokens = &used
+	}
+	// A module's harness has no schema flag; its answer is the result's text.
+	if tl.Result != nil && !tl.Result.IsError && r.Schema != "" && tl.Result.Structured == nil && harness.AnswersInText(h) {
+		if a := answerJSON(tl.Result.Text); a != nil {
+			tl.Result.Structured = a
+		}
+	}
 	return tl
+}
+
+// answerJSON is the JSON object a reply ends with, inside a code fence or
+// not, or nil.
+func answerJSON(text string) json.RawMessage {
+	t := strings.TrimSpace(text)
+	if body, ok := strings.CutSuffix(t, "```"); ok {
+		if i := strings.LastIndex(body, "```"); i >= 0 {
+			t = strings.TrimSpace(strings.TrimPrefix(body[i+3:], "json"))
+		}
+	}
+	for i := 0; i < len(t); i++ {
+		if t[i] == '{' && (i == 0 || t[i-1] == '\n') && json.Valid([]byte(t[i:])) {
+			return json.RawMessage(t[i:])
+		}
+	}
+	return nil
 }
 
 func (rs *Runs) endTurn(r Run) {
@@ -1358,6 +1392,11 @@ func service(h string) string {
 	case "open":
 		return "the model server"
 	}
+	if s, err := harness.Get(h); err == nil {
+		if s, ok := s.(*harness.Spec); ok {
+			return s.Display()
+		}
+	}
 	return "Claude"
 }
 
@@ -1435,7 +1474,11 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		}
 		r.Harness, r.Model = pick.Harness, pick.Model
 	}
-	h, _ := harness.Get(r.Harness)
+	h, err := harness.Get(r.Harness)
+	if err != nil { // a module's harness since removed
+		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(5 * time.Minute)})
+		return
+	}
 	if HarnessName(r.Harness) == "open" {
 		h = cfg.Models[r.Model].Harness() // Claude Code for a model on an Anthropic-compatible API
 	}
@@ -1535,9 +1578,10 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	mounts := []sandbox.Mount{
 		{Host: r.Checkout, Inside: "/work", RW: !r.ReadOnly},
 		{Host: rs.ws.RunRO(r.ID), Inside: "/hive/run"},
-		// A read-only Codex turn can run commands (harness.Codex), so it gets
-		// no mailbox to send through, as Claude's, with read tools only, has none.
-		{Host: rs.ws.RunBox(r.ID), Inside: "/hive/box", RW: !(r.ReadOnly && h.Name() == "codex")},
+		// A read-only turn on a harness that can run commands then (Codex, a
+		// module's) gets no mailbox to send through, as Claude's, with read
+		// tools only, has none (harness.ReadOnlyTools).
+		{Host: rs.ws.RunBox(r.ID), Inside: "/hive/box", RW: !(r.ReadOnly && !harness.ReadOnlyTools(h))},
 		home,
 		{Host: rs.ws.KB(), Inside: "/hive/kb"},
 		{Host: rs.ws.Modules(), Inside: "/hive/modules"},
@@ -1644,11 +1688,32 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 			env = append(env, "HIVE_OPEN_HOME="+in(home))
 		}
 	}
+	// PWD is the checkout, not the daemon's own folder a bare run inherits:
+	// some harnesses (OpenCode) work in $PWD rather than their working dir.
+	env = append(env, "PWD="+in(mounts[0]))
 	env = append(env, tok...)
 	env = append(env, h.Env(t)...)
 	tools := rs.tools()
 	if h.Program() != "hive" {
 		tools = append(tools, h.Program())
+	}
+	stdin := promptFile
+	if p, ok := h.(harness.Prompter); ok {
+		// It is sent its own prompt (the system prompt ahead of it, say), on
+		// stdin or in its args.
+		raw, err := os.ReadFile(promptFile)
+		if err != nil {
+			return sandbox.Spec{}, err
+		}
+		t.Prompt = string(raw)
+		sent := p.Prompt(t)
+		if p.PromptArg() {
+			sent = ""
+		}
+		stdin = strings.TrimSuffix(promptFile, ".prompt") + ".stdin"
+		if err := os.WriteFile(stdin, []byte(sent), 0o644); err != nil {
+			return sandbox.Spec{}, err
+		}
 	}
 	argv := append([]string{h.Program()}, h.Args(t)...)
 	if !sb.Isolated() && h.Program() == "hive" && len(tools) > 0 {
@@ -1663,7 +1728,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	}
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
-		Stdin: promptFile, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
+		Stdin: stdin, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
 		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Guard: rs.ws.Guarded(), Cover: rs.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(),
 	}, nil
 }

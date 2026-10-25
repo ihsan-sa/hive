@@ -357,6 +357,7 @@ func (w Workspace) LoadConfig() Config {
 // ReadConfig is LoadConfig with what's wrong in config.json: a value it
 // couldn't read (every field that did read is kept) or a setting Check refuses.
 func (w Workspace) ReadConfig() (Config, error) {
+	harness.UseModules(w.Modules()) // the harnesses its modules declare are among those Check knows
 	cfgMu.Lock()
 	defer cfgMu.Unlock()
 	c := DefaultConfig()
