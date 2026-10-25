@@ -1958,13 +1958,15 @@ func (m *Module) followUp(t *Task, p core.Project) error {
 // bounded number of times, after which the work stops and says so. A revert
 // the Hive made has no worker, so it stops on the first findings.
 func (m *Module) sendBack(t *Task, p core.Project, findings string) error {
-	return m.sendBackWith(t, p, findings, "")
+	return m.sendBackWith(t, p, findings, "", false)
 }
 
 // sendBackWith sends findings back with detail (a red forge check's
-// summary) that goes in the worker's message only: the task keeps where the
-// whole of it is saved (ForgeLog), not the text.
-func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string) error {
+// summary, a gate report) that goes in the worker's message only: the task
+// keeps where the whole of it is saved (ForgeLog), not the text. bundled says
+// the caller already wrote main.bundle and said so (bundleForChecks);
+// otherwise bundleForFixes writes it.
+func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string, bundled bool) error {
 	// A worker's next push would open a new pull request over the person's close.
 	if closed, err := m.closedOnForge(t, p); closed || err != nil {
 		return err
@@ -1995,7 +1997,7 @@ func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string) 
 	if detail != "" {
 		msg += "\n\n" + detail
 	}
-	if detail == "" { // a red forge check's detail already carries bundleForChecks's bundle
+	if !bundled {
 		msg += m.bundleForFixes(t, p)
 	}
 	if err := m.C.Runs.Reopen(t.Worker, msg+"\n\nFix these in your checkout, commit, and finish again."); err != nil {
@@ -2448,7 +2450,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		}
 		findings := forgeFailed + core.Short(t.SHA) + ": " + checkDetail(which) + onMain
 		detail := m.forgeFailures(t, p, main, which, mainRuns, at)
-		return true, m.sendBackWith(t, p, findings+hint, detail)
+		return true, m.sendBackWith(t, p, findings+hint, detail, true) // forgeFailures wrote main.bundle
 	}
 	m.flaked(t, p, raw)
 	if note := "known flakes: the forge's checks " + strings.Join(excused, ", ") + " fail on " + core.Short(t.SHA) + " only in quarantined tests, so they don't count against it"; len(excused) > 0 && !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
