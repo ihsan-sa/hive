@@ -71,7 +71,9 @@ const gateReportFile = "gate-report.md"
 type gateRun struct {
 	key, task string
 	since     time.Time
-	out       string // its run folder, named before it starts so TidyGates never takes it
+	out       string             // its run folder, named before it starts so TidyGates never takes it
+	cancel    context.CancelFunc // ends it early, when its task no longer aims at a gain
+	dropped   bool               // cancelled on purpose: its verdict is nobody's and isn't recorded
 }
 
 // recursiveGate holds t, a change to the Hive aimed at a gain, until the
@@ -145,21 +147,39 @@ func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
 	job := GateJob{Project: p, Repo: m.C.WS.Project(p.Name), Head: t.SHA, Main: main,
 		Out: out, Lessons: filepath.Join(dir, "lessons.md"), Timeout: GateTimeout}
 	id := t.ID
+	ctx, cancel := context.WithTimeout(context.Background(), job.Timeout+15*time.Minute)
+	m.mu.Lock()
+	if m.gating != nil && m.gating.key == key {
+		m.gating.cancel = cancel
+		if m.gating.dropped {
+			cancel()
+		}
+	}
+	m.mu.Unlock()
 	m.save(t, fmt.Sprintf("the recursive gate started on %s against main at %s: an improvement is kept only on a clear gain", core.Short(t.SHA), core.Short(main)))
 	go func() {
 		defer m.steps.Done()
+		defer cancel()
 		var g core.GateResult
 		if m.Gate == nil {
 			g = core.GateResult{Outcome: core.GateCantRun, Reason: "this Hive has no gate runner set up"}
 		} else {
-			ctx, cancel := context.WithTimeout(context.Background(), job.Timeout+15*time.Minute)
 			g = m.Gate(ctx, job)
-			cancel()
 		}
 		g.Project, g.Head, g.Main, g.At = p.Name, job.Head, job.Main, time.Now().UTC()
 		if g.Outcome == "" {
 			g.Outcome = core.GateCantRun
 		}
+		m.mu.Lock()
+		if m.gating != nil && m.gating.key == key && m.gating.dropped {
+			// Its task stopped aiming at a gain mid-run: what it says now
+			// judges nothing, and must not hold the changes behind it.
+			m.gating = nil
+			delete(m.later, id)
+			m.mu.Unlock()
+			return
+		}
+		m.mu.Unlock()
 		m.C.Effects.RecordGate(g) // complete by construction; GateAtMain follows it
 		m.mu.Lock()
 		if m.gating != nil && m.gating.key == key {
@@ -168,6 +188,22 @@ func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
 		delete(m.later, id) // the task looks again at once
 		m.mu.Unlock()
 	}()
+}
+
+// dropGate cancels the gate run in flight for task id, if any, so the gains
+// queued behind it don't wait out a run whose verdict nobody needs. The slot
+// frees once the run has ended its children.
+func (m *Module) dropGate(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.gating == nil || m.gating.task != id || m.gating.dropped {
+		return false
+	}
+	m.gating.dropped = true
+	if m.gating.cancel != nil {
+		m.gating.cancel()
+	}
+	return true
 }
 
 // tellGate records a verdict on the task, and says it on the PR once, with
