@@ -113,6 +113,11 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			var ms Measurement
 			e.Decode(&ms)
 			m.scores[ms.Project] = append(m.scores[ms.Project], ms)
+		case "score.cant-run":
+			var x struct{ Project, SHA string }
+			if e.Decode(&x) == nil {
+				m.cantRuns[x.Project+"@"+x.SHA]++
+			}
 		case "score.covered":
 			var x Covered
 			if e.Decode(&x) == nil {
@@ -128,9 +133,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			}
 		case "effect.checked":
 			var c core.Check
-			if e.Decode(&c) == nil && c.CantRun != "" {
-				m.cantRuns[c.Project+"@"+c.SHA]++
-			}
+			e.Decode(&c)
 			if c.Kind == "test" && !c.OK && len(c.Failed) > 0 && time.Since(c.At) < flakeWindow {
 				fs := append(m.fails[c.Project], c)
 				for len(fs) > 0 && time.Since(fs[0].At) > flakeWindow {
@@ -454,14 +457,35 @@ func (m *Module) warnUnlisted(p core.Project, cfg core.ProjectConfig) {
 	}
 }
 
-// triedOut says sha's checks couldn't start work.CantRunTries times: a commit
-// can fake a missing tool (print "not found", exit 127), and its merge isn't
-// held unjudged on that forever. The count is every such check on the
-// commit's journal, so a restart doesn't start it over.
-func (m *Module) triedOut(project, sha string) bool {
+// triedOut counts one more measure of sha whose check couldn't find its tool
+// and says whether that makes work.CantRunTries: a commit can fake a missing
+// tool (print "not found", exit 127), and its merge isn't held unjudged on
+// that forever. A full disk or quota isn't counted: a commit can't fake that,
+// and it only waits. The count is journaled, so a restart doesn't start it
+// over, and it is one per measure however many checks that measure ran.
+func (m *Module) triedOut(project, sha string, cant core.Check) bool {
+	if cant.Tool == "" {
+		return false
+	}
+	m.C.J.MustAppend("score.cant-run", map[string]string{"project": project, "sha": sha, "tool": cant.Tool})
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.cantRuns[project+"@"+sha] >= work.CantRunTries
+}
+
+// closeCantRunAsks answers p's open asks for a tool a merge's measures
+// couldn't find, once main measures with a result at sha: the tool runs now,
+// or the merge that only claimed it was missing is gone.
+func (m *Module) closeCantRunAsks(p core.Project, sha string) {
+	measured := map[string]bool{}
+	for _, x := range m.Scores(p.Name) {
+		measured["cant-run:"+x.SHA] = true
+	}
+	for _, a := range m.C.Person.Open() {
+		if a.Project == p.Name && a.Kind == "question" && measured[a.Ref] {
+			m.C.Person.Answer(a.ID, "ok", "the Hive, not the person: main at "+core.Short(sha)+" measures with a result now")
+		}
+	}
 }
 
 // retryNoResult is how long a merge whose check couldn't start waits before
@@ -636,7 +660,7 @@ func (m *Module) afterMerge(t work.Task) {
 		ok, score, note = true, nil, "score did not produce a number: this merge's score command calls "+cant.Tool+", which isn't installed where checks run: "+note
 	case cant.CantRun != "" && m.introduced(p, t.MergeSHA, cant):
 		ok, note = false, "tests red: this merge's test command calls "+cant.Tool+", which isn't installed where checks run: "+note
-	case cant.CantRun != "" && m.triedOut(p.Name, t.MergeSHA):
+	case cant.CantRun != "" && m.triedOut(p.Name, t.MergeSHA, cant):
 		ok, note = false, fmt.Sprintf("%s %s, %d tries in a row since it merged, which counts as red: %s", cant.Kind, cant.CantRun, work.CantRunTries, note)
 		m.C.Person.Ask(core.Ask{Kind: "question", Ref: "cant-run:" + t.MergeSHA, Project: p.Name, Options: []string{"ok"},
 			Title:  "Install " + cmp.Or(cant.Tool, "a tool") + " where checks run for " + p.Name + "?",
@@ -645,6 +669,8 @@ func (m *Module) afterMerge(t work.Task) {
 		m.noResult(p, Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, Note: note, Version: m.version(p, t.MergeSHA, cfg), NoResult: true}, cant.Kind)
 		m.hold(p, t)
 		return
+	case cant.CantRun == "":
+		m.closeCantRunAsks(p, t.MergeSHA)
 	}
 	flake := ""
 	if !ok {
