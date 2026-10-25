@@ -783,17 +783,6 @@ func (m *Module) afterKept(project, sha string) {
 		m.hold(project, sha, why, manifest.String())
 		return
 	}
-	// The next tag is one past the highest anywhere: the release marked
-	// latest may be older than pre-releases, and their tags are taken.
-	tags, err := m.C.Effects.Forge.Tags(p.Repo)
-	if err != nil {
-		alert("no release at " + core.Short(sha) + ": can't list the tags: " + err.Error())
-		return
-	}
-	if newer := m.newerTag(p, sha, tags); newer != "" {
-		once("a newer release already covers it: " + newer)
-		return
-	}
 	scanAt := m.Scan
 	if scanAt == nil {
 		scanAt = m.scan
@@ -813,6 +802,13 @@ func (m *Module) afterKept(project, sha string) {
 			alert("dry run failed on " + core.Short(sha) + "; no release")
 			return
 		}
+	}
+	// The next tag is one past the highest anywhere: the release marked
+	// latest may be older than pre-releases, and their tags are taken.
+	tags, err := m.C.Effects.Forge.Tags(p.Repo)
+	if err != nil {
+		alert("no release at " + core.Short(sha) + ": can't list the tags: " + err.Error())
+		return
 	}
 	next := nextTag(append(tags, core.Version))
 	body := "Released by the Hive after " + core.Short(sha) + " kept its tests, main's checks and dry run green. It is a pre-release until " +
@@ -1423,56 +1419,14 @@ func (m *Module) diff(p core.Project, from, to string) ([]string, error) {
 }
 
 // nextTag is one past the highest vX.Y.Z among tags (v0.0.1 if none is).
-func nextTag(tags []string) string { return bump(highest(tags)) }
-
-// highest is the highest version among tags, v0.0.0 with none.
-func highest(tags []string) string {
+func nextTag(tags []string) string {
 	last := "v0.0.0"
 	for _, t := range tags {
 		if strings.HasPrefix(t, "v") && modules.Newer(last, t) {
 			last = t
 		}
 	}
-	return last
-}
-
-// newerTag names the highest version tag when it sits at sha or at a merge
-// the Hive made after it: a release cut outside the Hive (a warden's hand
-// cut) that merges, reading only hive.released, can't see. Measuring lags
-// main, so a merge kept late would otherwise be cut after a newer release,
-// as v0.1.111 and v0.1.112 were at commits older than v0.1.110's, without
-// the fixes it shipped. A tag at a commit the journal didn't merge says
-// nothing, and "" lets the release go on.
-func (m *Module) newerTag(p core.Project, sha string, tags []string) string {
-	tag := highest(tags)
-	if tag == "v0.0.0" {
-		return ""
-	}
-	at, err := m.C.Effects.Forge.TagCommit(p.Repo, tag)
-	if err != nil {
-		return ""
-	}
-	i, j, n := -1, -1, 0
-	m.C.J.Replay(func(e core.Event) {
-		var x struct {
-			MergeSHA string `json:"merge_sha"`
-			Project  string
-		}
-		if e.Kind != "effect.merged" || e.Decode(&x) != nil || x.Project != p.Name {
-			return
-		}
-		if x.MergeSHA == sha {
-			i = n
-		}
-		if x.MergeSHA == at {
-			j = n
-		}
-		n++
-	})
-	if i < 0 || j < i {
-		return ""
-	}
-	return tag + " at " + core.Short(at)
+	return bump(last)
 }
 
 func bump(tag string) string {
