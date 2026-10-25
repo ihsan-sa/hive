@@ -23,14 +23,27 @@ type flakyForge struct {
 	down   bool
 	users  int
 	refuse bool
-	hold   chan struct{} // the first User call waits for it to close
-	closed []int
-	bodies []string
+	// checksRefused refuses the token every read of checks, as GitHub does
+	// a token without Checks: read on a repo with workflows, in the words
+	// GitHub.Checks gives (TestChecksRefusedWithoutWorkflows pins them).
+	checksRefused bool
+	checksAsked   int
+	hold          chan struct{} // the first User call waits for it to close
+	closed        []int
+	bodies        []string
 }
 
 func (f *flakyForge) CreatePR(repo, head, base, title, body string) (core.PR, error) {
 	f.bodies = append(f.bodies, body)
 	return f.Local.CreatePR(repo, head, base, title, body)
+}
+
+func (f *flakyForge) Checks(repo, sha string) ([]core.CheckRun, error) {
+	f.checksAsked++
+	if f.checksRefused {
+		return nil, errors.New("gh api repos/" + repo + "/commits/" + sha + "/check-runs?per_page=100: gh: Resource not accessible by personal access token (HTTP 403)")
+	}
+	return f.Local.Checks(repo, sha)
 }
 
 func (f *flakyForge) User() (string, error) {

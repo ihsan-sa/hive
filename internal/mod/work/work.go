@@ -269,6 +269,9 @@ type Module struct {
 	// limit is when GitHub's pause on writes ends, and limitText why.
 	limit     time.Time
 	limitText string
+	// refusedAsked is when the checks of each task stopped on a checks
+	// refusal were last asked again, by id@sha (reviveRefused).
+	refusedAsked map[string]time.Time
 	// holds are the person's holds on each project's merges (hold.go), and
 	// holdPolled when each one's release condition may next be asked of the forge.
 	holds      map[string]*MergeHold
@@ -287,7 +290,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -782,6 +785,40 @@ func (m *Module) revive() {
 		}
 		t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.Stage = "", 0, 0, 0, 0, StageLanding
 		m.save(&t, "brought back: it stopped only because GitHub rate-limited the Hive's writes")
+	}
+	m.reviveRefused()
+}
+
+// reviveRefused brings back the tasks stopped because the token may not read
+// a head's checks, once those checks read now (the repo has no workflows, so
+// a refusal is no checks, or the permission was granted). Each task's head is
+// asked at most once an hour, so one whose repo has CI the token can't see
+// stays stopped without a call every tick, and comes back within the hour
+// of the permission being granted.
+func (m *Module) reviveRefused() {
+	const refusedAgain = time.Hour
+	for _, t := range m.List(func(t Task) bool {
+		return t.Stage == StageStopped && !t.ByPerson && t.SHA != "" && strings.HasPrefix(t.Reason, gaveUpOnErrors) && core.ChecksRefused(strings.TrimPrefix(t.Reason, gaveUpOnErrors))
+	}) {
+		key := t.ID + "@" + t.SHA
+		m.mu.Lock()
+		asked := time.Since(m.refusedAsked[key]) < refusedAgain
+		if !asked {
+			m.refusedAsked[key] = time.Now()
+		}
+		m.mu.Unlock()
+		if asked || m.workerStopped(t) {
+			continue
+		}
+		p, err := m.project(&t)
+		if err != nil {
+			continue
+		}
+		if _, err := m.C.Effects.Forge.Checks(p.Repo, t.SHA); err != nil {
+			continue
+		}
+		t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.Stage = "", 0, 0, 0, 0, StageLanding
+		m.save(&t, "brought back: the forge's checks on "+core.Short(t.SHA)+" read now, where the token was refused them before")
 	}
 }
 
