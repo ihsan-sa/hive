@@ -1,6 +1,10 @@
 package sandbox
 
-import "golang.org/x/sys/windows"
+import (
+	"os/exec"
+
+	"golang.org/x/sys/windows"
+)
 
 // group puts pid in a job object, so a timed-out check's children (its sh
 // and what that started) end with it: Windows has no process group to kill.
@@ -29,3 +33,6 @@ func group(pid int) func(kill bool) {
 		windows.CloseHandle(job)
 	}
 }
+
+// ownGroup is a no-op here: group puts the process in a job object instead.
+func ownGroup(*exec.Cmd) {}
