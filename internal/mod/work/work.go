@@ -2113,9 +2113,11 @@ func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 
 // upToDate decides whether t's branch must take main in before it merges.
 // It merges as it is while the forge says it merges cleanly: every main merge
-// moves the head past its reads and restarts its checks. Only a conflict, or
-// the forge's rule that the branch be up to date with main, brings main in.
-// While the forge is still working it out, t waits.
+// moves the head past its reads and restarts its checks. Here only a conflict,
+// or the forge's rule that the branch be up to date with main, brings main in;
+// on a self project the recursive gate brings it in too, later, so it judges
+// what would land (see recursiveGate). While the forge is still working it
+// out, t waits.
 func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
 		return false, nil
