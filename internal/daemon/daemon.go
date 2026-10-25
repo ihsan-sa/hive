@@ -28,6 +28,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -710,6 +711,22 @@ func (s *server) routes() http.Handler {
 		b["module"] = moduleOf(r)
 		a.C.J.MustAppend("module.reported", b)
 		return "ok", nil
+	})
+	h("/api/kb/notes", func(r *http.Request) (any, error) {
+		if err := s.reaches(r, ""); err != nil { // the shared notes are every project's
+			return nil, err
+		}
+		return a.KB.SharedNotes(), nil
+	})
+	h("/api/kb/dream", func(r *http.Request) (any, error) {
+		var p kb.Pass
+		if err := decode(r, &p); err != nil {
+			return nil, err
+		}
+		if err := s.reaches(r, ""); err != nil {
+			return nil, err
+		}
+		return a.KB.Dream(orStr(moduleOf(r), "person"), p)
 	})
 	h("/api/answer", func(r *http.Request) (any, error) {
 		var b struct{ ID, Answer, Note string }

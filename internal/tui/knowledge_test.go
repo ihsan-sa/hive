@@ -138,3 +138,26 @@ func TestKnowledgeRecentlyUpdated(t *testing.T) {
 		t.Fatalf("enter on a recent entry didn't open it: %+v", m.stack)
 	}
 }
+
+// The newest dream digest, what the Hive learned since last time, is pinned
+// at the top of the Knowledge tab and opens on enter.
+func TestKnowledgeDigestPinned(t *testing.T) {
+	m := testModel(120, 30)
+	t.Chdir(t.TempDir())
+	m.ws = core.Workspace{Root: "."}
+	dir := filepath.Join(m.ws.KB(), "dreams")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "2026-10-25-0000.md"), []byte("---\ntitle: What the Hive learned since an old pass\n---\n\nold\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "2026-10-25-0400.md"), []byte("---\ntitle: What the Hive learned since Sat Oct 25 00:00 UTC\n---\n\nMerged 3 notes.\n"), 0o644)
+	m.pick(sideRow{sec: secKB})
+	m.focus = 1
+	v := ansi.Strip(m.View())
+	if !strings.Contains(v, "Since last time") || !strings.Contains(v, "What the Hive learned since Sat Oct 25") || strings.Contains(v, "an old pass") {
+		t.Fatalf("the latest digest isn't pinned:\n%s", v)
+	}
+	checkWidth(t, m.View(), 120, 30, "knowledge digest")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.stack) != 1 || !strings.Contains(m.stack[0].text, "Merged 3 notes.") {
+		t.Fatalf("enter didn't open the digest: %+v", m.stack)
+	}
+}
