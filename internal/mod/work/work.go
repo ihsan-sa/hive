@@ -1894,8 +1894,15 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 				return true, nil
 			}
 			// A run on main that never finishes (a stuck runner, a status
-			// that never reports) counts as not run, and the lead hears of it.
-			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+" have run on main in "+p.Name+" at "+core.Short(main)+" for over "+mainWaitMax.String()+" without a result; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
+			// that never reports, a run cancelled with nothing finished
+			// before it) counts as not run, and the lead hears of it.
+			how := " have run on main in " + p.Name + " at " + core.Short(main) + " for over " + mainWaitMax.String() + " without a result"
+			if slices.ContainsFunc(mainRuns, func(mr core.CheckRun) bool {
+				return mr.State == core.CheckCantStart && slices.ContainsFunc(still, func(r core.CheckRun) bool { return r.Name == mr.Name })
+			}) {
+				how = " were cancelled or couldn't start on main in " + p.Name + " at " + core.Short(main) + ", with no finished run on its last " + fmt.Sprint(core.MainLookBack) + " commits, for over " + mainWaitMax.String()
+			}
+			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+how+"; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
 		}
 	}
 	names := core.CheckNames(which)
@@ -1961,14 +1968,16 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 var mainWaitMax = 45 * time.Minute
 
 // stillOnMain are the failed checks whose run on main is still going, or
-// that main has no run of yet while some of its checks are still listed as
-// starting.
+// was cancelled or couldn't start (no finished answer on main's recent
+// commits, so a cancelled run never decides it), or that main has no run of
+// yet while some of its checks are still listed as starting.
 func stillOnMain(failed, mainRuns []core.CheckRun) []core.CheckRun {
 	starting := slices.ContainsFunc(mainRuns, func(r core.CheckRun) bool { return r.State == core.CheckPending })
+	unanswered := func(mr core.CheckRun) bool { return mr.State == core.CheckPending || mr.State == core.CheckCantStart }
 	var still []core.CheckRun
 	for _, r := range failed {
 		named := func(mr core.CheckRun) bool { return mr.Name == r.Name }
-		if slices.ContainsFunc(mainRuns, func(mr core.CheckRun) bool { return named(mr) && mr.State == core.CheckPending }) ||
+		if slices.ContainsFunc(mainRuns, func(mr core.CheckRun) bool { return named(mr) && unanswered(mr) }) ||
 			(starting && !slices.ContainsFunc(mainRuns, named)) {
 			still = append(still, r)
 		}

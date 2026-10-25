@@ -273,3 +273,10 @@ func (rs *Runs) tickDown(cfg Config) {
 		rs.Up(p, "its config changed")
 	}
 }
+
+// anthropicModel reports whether the named model runs on Claude Code against
+// an Anthropic-compatible endpoint.
+func (rs *Runs) anthropicModel(name string) bool {
+	m, ok := rs.ws.LoadConfig().Models[name]
+	return ok && m.Anthropic()
+}

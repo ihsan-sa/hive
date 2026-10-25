@@ -193,6 +193,9 @@ func (f *anthropicModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	f.keys[r.Header.Get("X-Api-Key")] = true
+	if a := r.Header.Get("Authorization"); a != "" && a != "Bearer "+r.Header.Get("X-Api-Key") {
+		f.keys[a] = true
+	}
 	f.models[body.Model] = true
 	answered := false
 	for _, m := range body.Messages {
@@ -256,9 +259,15 @@ func (f *anthropicModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // lands; a hook or env the repo's .claude/settings.json plants takes no
 // effect. It needs Claude Code installed (no Claude login: none is used).
 //
+// A Claude login in the bare run's HOME is never found or sent to the
+// endpoint.
+//
 // With HIVE_E2E_ANTHROPIC="<endpoint> <model id>" and the key in
 // HIVE_E2E_ANTHROPIC_KEY, it is a live probe instead: a real worker on that
 // vendor's model (say https://api.moonshot.ai/anthropic kimi-k2-0905-preview).
+// HIVE_E2E_ANTHROPIC="<name>" probes a model this machine's Hive already has
+// set up, with the key stored by `hive model key <name>`. A live probe spends
+// the vendor's tokens, so it runs only when asked.
 func TestAnthropicModelWorker(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the bare Windows path has no shell for the fake model's command")
@@ -268,8 +277,12 @@ func TestAnthropicModelWorker(t *testing.T) {
 		t.Skip("Claude Code isn't installed")
 	}
 	live := strings.Fields(os.Getenv("HIVE_E2E_ANTHROPIC"))
-	if len(live) != 0 && (len(live) != 2 || os.Getenv("HIVE_E2E_ANTHROPIC_KEY") == "") {
-		t.Fatal(`HIVE_E2E_ANTHROPIC="<endpoint> <model id>", with the key in HIVE_E2E_ANTHROPIC_KEY`)
+	liveKey := os.Getenv("HIVE_E2E_ANTHROPIC_KEY")
+	if len(live) == 1 {
+		live, liveKey = storedModel(t, live[0])
+	}
+	if len(live) != 0 && (len(live) != 2 || liveKey == "") {
+		t.Fatal(`HIVE_E2E_ANTHROPIC="<endpoint> <model id>", with the key in HIVE_E2E_ANTHROPIC_KEY, or HIVE_E2E_ANTHROPIC="<name>" of a model with a stored key`)
 	}
 	t.Parallel()
 	fake := &anthropicModel{keys: map[string]bool{}, models: map[string]bool{},
@@ -277,17 +290,21 @@ func TestAnthropicModelWorker(t *testing.T) {
 			`printf 'from a vendor model\n' > anthropic.txt && git add anthropic.txt && git commit -qm "anthropic.txt" && hive agent finish --status done --account "anthropic.txt from the vendor model" --tested "none" && echo landed`}
 	endpoint, id, key := "", "vendor-coder-1", "sk-anthropic-e2e"
 	if len(live) == 2 {
-		endpoint, id, key = live[0], live[1], os.Getenv("HIVE_E2E_ANTHROPIC_KEY")
+		endpoint, id, key = live[0], live[1], liveKey
 	} else {
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
 		endpoint = srv.URL
 	}
 	u, _ := url.Parse(endpoint)
-	// Claude Code keeps its sessions under HOME on a bare run; this one's
-	// is the test's, with no Claude login in it. Claude Code would send even
+	// A bare run's HOME is the daemon's; this one's is the test's, with a
+	// decoy Claude login in it. Claude Code would send even
 	// a loopback request through a proxy the test's environment names.
-	env := []string{"HOME=" + t.TempDir(), "PATH=" + filepath.Dir(claude) + string(os.PathListSeparator) + os.Getenv("PATH"),
+	home := t.TempDir()
+	decoy := `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-DECOY","refreshToken":"sk-ant-ort01-DECOY","expiresAt":9999999999999,"scopes":["user:inference"],"subscriptionType":"max"}}`
+	os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
+	os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"), []byte(decoy), 0o600)
+	env := []string{"HOME=" + home, "PATH=" + filepath.Dir(claude) + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"ANTHROPIC_API_KEY=sk-not-the-model", "CLAUDE_CODE_OAUTH_TOKEN=not-the-model"}
 	if len(live) == 0 {
 		env = append(env, "NO_PROXY="+u.Hostname(), "no_proxy="+u.Hostname())
@@ -352,6 +369,24 @@ func TestAnthropicModelWorker(t *testing.T) {
 	if strings.Contains(out, "LEAK") || !strings.Contains(out, "landed") {
 		t.Fatalf("the tool's output: %s", out)
 	}
+}
+
+// storedModel reads the named model and its stored key from this machine's
+// Hive, for a live probe; it skips when either isn't there.
+func storedModel(t *testing.T, name string) ([]string, string) {
+	ws, ok := core.FindWorkspace()
+	if !ok {
+		t.Skip("no Hive on this machine to read model " + name + " from")
+	}
+	m, ok := ws.LoadConfig().Models[name]
+	if !ok || !m.Anthropic() {
+		t.Skipf("this machine's Hive has no Anthropic-compatible model %q", name)
+	}
+	raw, err := os.ReadFile(ws.OpenKey(name))
+	if err != nil || strings.TrimSpace(string(raw)) == "" {
+		t.Skipf("no key stored for %s: hive model key %s", name, name)
+	}
+	return []string{m.Endpoint, m.Model}, strings.TrimSpace(string(raw))
 }
 
 // guarded stands in for OpenRouter's free tier behind a guardrail that

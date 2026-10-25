@@ -27,6 +27,10 @@ func TestRerunFailedForgeChecks(t *testing.T) {
 		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
 	}
 
+	// A wait on main spent on this run of the checks.
+	task.MainWait, task.MainWaitOn = time.Now().Add(-mainWaitMax), task.SHA
+	m.save(task, "")
+
 	// Through the op, as the worker: its own task by default.
 	w1, _ := m.C.Runs.Get("w1")
 	out, err := m.C.Runs.Ops().Call(w1, "rerun-checks", json.RawMessage(`{}`))
@@ -39,6 +43,10 @@ func TestRerunFailedForgeChecks(t *testing.T) {
 	*task, _ = m.Get(task.ID)
 	if task.Round != 0 || task.Reruns[task.SHA] != 1 || !logHas(task, "round they cost is given back") {
 		t.Fatalf("round %d, reruns %v, log %v", task.Round, task.Reruns, task.Log)
+	}
+	// A wait on main spent on the first run isn't carried into the re-run's.
+	if !task.MainWait.IsZero() || task.MainWaitOn != "" {
+		t.Fatalf("the re-run kept the old wait on main (%v on %q)", task.MainWait, task.MainWaitOn)
 	}
 	other := core.Run{RunSpec: core.RunSpec{ID: "w2", Role: "worker", Project: "p"}}
 	if _, err := m.C.Runs.Ops().Call(other, "rerun-checks", json.RawMessage(`{"task":"t1"}`)); err == nil {
