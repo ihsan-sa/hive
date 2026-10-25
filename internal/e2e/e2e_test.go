@@ -85,6 +85,7 @@ type hive struct {
 	ws    core.Workspace
 	forge *core.Local
 	cmd   *exec.Cmd
+	ended chan struct{} // closed once cmd has exited
 	c     *api.Client
 	env   []string // added to the daemon's environment
 	exe   string   // the binary the daemon runs, when not bin
@@ -205,7 +206,9 @@ func (h *hive) launch() {
 	if contain != nil {
 		h.jobs = append(h.jobs, contain(h.t, cmd.Process.Pid))
 	}
-	go cmd.Wait()
+	ended := make(chan struct{})
+	h.ended = ended
+	go func() { cmd.Wait(); close(ended) }()
 	// A loaded Windows runner has taken over 30 seconds to start one.
 	began := time.Now()
 	for time.Since(began) < 2*time.Minute {
@@ -246,6 +249,20 @@ func binVersion(t *testing.T) string {
 }
 
 // kill ends the daemon abruptly, as a crash would.
+// gone waits up to d for the last launched daemon to exit, so the next one
+// doesn't find it still holding the Hive (a Windows runner can take seconds).
+func (h *hive) gone(d time.Duration) {
+	h.t.Helper()
+	if h.ended == nil {
+		return
+	}
+	select {
+	case <-h.ended:
+	case <-time.After(d):
+		h.t.Fatalf("the daemon still runs %v after it was stopped", d)
+	}
+}
+
 func (h *hive) kill() {
 	if h.cmd != nil && h.cmd.Process != nil {
 		h.cmd.Process.Kill()

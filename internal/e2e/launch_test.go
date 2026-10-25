@@ -280,6 +280,7 @@ func TestControlCenterFollowsARestart(t *testing.T) {
 		if _, err := cc.State(); err == nil {
 			t.Fatalf("restart %d: the old daemon still answers", i+1)
 		}
+		h.gone(time.Minute)
 		h.launch()
 		start := time.Now()
 		var err error
