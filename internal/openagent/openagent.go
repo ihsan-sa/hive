@@ -664,6 +664,11 @@ func (a *Agent) grep(pattern, root string) string {
 			}
 			return nil
 		}
+		if !d.Type().IsRegular() {
+			// A link the change under review planted would read past
+			// readable(), which checks only the root.
+			return nil
+		}
 		raw, err := os.ReadFile(p)
 		if err != nil || bytes.IndexByte(raw[:min(len(raw), 8000)], 0) >= 0 {
 			return nil

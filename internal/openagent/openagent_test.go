@@ -214,6 +214,30 @@ func TestReadOnlyAnswer(t *testing.T) {
 	}
 }
 
+// grep in a read-only turn reads no file through a link planted in the
+// checkout: readable() checks only the folder it starts at.
+func TestReadOnlyGrepSkipsLinks(t *testing.T) {
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(outside, "secret"), []byte("s3cret\n"), 0o644)
+	s := &stub{replies: []func(http.ResponseWriter){
+		call("grep", map[string]string{"pattern": "s3cret"}),
+		say("done"),
+	}}
+	a, _ := agent(t, s)
+	a.ReadOnly = true
+	if err := os.Symlink(filepath.Join(outside, "secret"), filepath.Join(a.Cwd, "planted")); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	os.Symlink(outside, filepath.Join(a.Cwd, "planted-dir"))
+	var saved []Message
+	a.Turn(context.Background(), []Message{{Role: "user", Content: "review"}}, func(m []Message) { saved = m })
+	for _, m := range saved {
+		if m.Role == "tool" && m.Content != "no matches" {
+			t.Fatalf("grep read through a link: %q", m.Content)
+		}
+	}
+}
+
 // The conversation is trimmed to the model's context: old tool output goes
 // first, and the system prompt, the ask and the latest steps stay whole.
 func TestFit(t *testing.T) {
