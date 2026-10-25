@@ -20,6 +20,7 @@ Dev runs without touching GitHub or plan usage: `HIVE_HOME=<dir> HIVE_FORGE=loca
 - [docs/status.md](docs/status.md): what's done, in flight, next. Read first.
 - [docs/overview.md](docs/overview.md): the plain account behind the README and its diagram (`docs/arch.json`). It repeats facts from status.md and goals.md; update it in the same change.
 - [docs/architecture.md](docs/architecture.md): packages, folder layout, data flow, invariants.
+- [docs/core.md](docs/core.md): what the core is, its measured size, and what moves out to modules. New functionality goes in a module unless it says core.
 - [docs/risk.md](docs/risk.md): risk tiers, warden, tribunal and the point of effect.
 - [docs/score.md](docs/score.md): the Hive project's score.
 - [docs/log.md](docs/log.md): decisions.
