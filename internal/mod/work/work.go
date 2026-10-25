@@ -127,6 +127,11 @@ type Task struct {
 	Noted      string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
 	NotedDiff  string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
 	HoldSaid   string    `json:"hold_said,omitempty"`  // the HoldKey of the hold the PR was last told of
+	// CantRuns counts the tries in a row its own tests couldn't start (a
+	// missing tool); past CantRunTries the hold goes to the person and counts
+	// as red. CantRunSaid is the PR told of a can't-run, once per PR.
+	CantRuns    int `json:"cant_runs,omitempty"`
+	CantRunSaid int `json:"cant_run_said,omitempty"`
 	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
 	Gate    *core.GateResult `json:"gate,omitempty"`
 	Log     []Entry          `json:"log,omitempty"`
@@ -1325,8 +1330,10 @@ func (m *Module) test(t *Task, p core.Project) error {
 			m.raiseCantRun(p, c)
 			return m.dropCheckpoint(t, p, "the tests "+c.CantRun+", which is no verdict on it")
 		}
+		t.CantRuns++
 		return m.cantRun(t, p, c)
 	}
+	t.CantRuns = 0
 	m.RanCheck(p.Name, "test")
 	if strings.HasPrefix(t.Reason, "the tests can't run") {
 		t.Reason = "" // the tool is there now
@@ -1393,23 +1400,52 @@ func (m *Module) test(t *Task, p core.Project) error {
 	return nil
 }
 
+// CantRunTries is how many tries in a row a check may fail to start before
+// that counts as red: a commit can print "not found" and exit 127 to look like
+// a missing tool, and it isn't held, nor its merge kept, on that forever.
+const CantRunTries = 6
+
 // cantRun holds a change whose tests couldn't start because a tool they call
 // is missing where checks run. That is no verdict on the change: it isn't
 // sent back or failed, and it is tested again every 10 minutes until the tool
-// is there. The PR and the dashboard hear once.
+// is there. The PR hears once, however often it is tried or the tool named
+// changes. After CantRunTries of its own tests in a row it is red: it is
+// stopped, never merged on it, and the person is asked for the tool.
 func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
+	if t.CantRuns >= CantRunTries {
+		return m.cantRunRed(t, p, c)
+	}
 	reason := "the tests " + c.CantRun + ", so this waits and is tested again every 10 minutes"
 	t.Retry = time.Now().Add(10 * time.Minute)
 	if t.Reason == reason {
 		m.save(t, "")
 		return nil
 	}
+	say := t.PR.Number != 0 && t.CantRunSaid != t.PR.Number
+	if say {
+		t.CantRunSaid = t.PR.Number
+	}
 	t.Reason = reason
 	m.save(t, reason)
 	m.raiseCantRun(p, c)
-	if t.PR.Number != 0 {
+	if say {
 		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
 	}
+	return nil
+}
+
+// cantRunRed ends a change whose own tests couldn't start CantRunTries times
+// in a row: it counts as red, so it is stopped unmerged, and the person gets
+// a Waiting ask naming the tool. Once it is installed, the lead's recheck
+// tests it again from a fresh count.
+func (m *Module) cantRunRed(t *Task, p core.Project, c core.Check) error {
+	tool := cmp.Or(c.Tool, "a tool")
+	m.C.Person.Ask(core.Ask{Kind: "question", Ref: "cant-run:" + t.ID, Project: p.Name, Options: []string{"ok"},
+		Title: "Install " + tool + " where checks run for " + p.Name + "?",
+		Detail: fmt.Sprintf("The tests of %q (%s) %s, %d tries in a row. That now counts as red: it is stopped and not merged. "+
+			"If %s is really missing, install it where checks run and the lead can bring the change back; if it isn't, the change only claims it is.", t.Label(), cmp.Or(t.PR.URL, t.ID), c.CantRun, t.CantRuns, tool)})
+	t.CantRuns = 0
+	m.giveUp(t, fmt.Sprintf("the tests %s, %d tries in a row, which now counts as red; the person is asked for %s", c.CantRun, CantRunTries, tool))
 	return nil
 }
 
@@ -2764,7 +2800,7 @@ func (m *Module) Recheck(id, back string) error {
 	if t.ByPerson || m.workerStopped(t) {
 		return fmt.Errorf("task %s was stopped by the person (%s); only they can bring it back", id, t.Reason)
 	}
-	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts = "", 0, 0, 0, 0
+	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns = "", 0, 0, 0, 0, 0
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
 			return err
