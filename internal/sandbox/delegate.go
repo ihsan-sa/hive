@@ -21,6 +21,9 @@ type Delegate struct {
 	Argv   []string // the module's program
 	Env    []string // its scrubbed environment
 	Dir    string   // its folder
+	// Started, if set, is called once a turn is handed over, so the room
+	// answer it went on isn't spent again.
+	Started func()
 }
 
 func (d *Delegate) Name() string   { return "module:" + d.Module + "@" + d.Where }
@@ -39,8 +42,12 @@ func (d *Delegate) Start(s Spec) (Proc, error) {
 	p, err := proc.StartDetached(argv, d.Env, d.Dir, "", s.Stdout+".dispatch")
 	if err != nil {
 		os.Remove(specPath)
+		return p, err
 	}
-	return p, err
+	if d.Started != nil {
+		d.Started()
+	}
+	return p, nil
 }
 
 // Run is for checks, which always run here.

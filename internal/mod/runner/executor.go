@@ -26,8 +26,9 @@ const RoomWait = 5 * time.Second
 const noRoomFor = 15 * time.Second
 
 // roomFor is how long a "room on <runner>" stands, so the work queue's
-// question and the launch that follows it ask once. The module still decides
-// at `turn`, and runs the turn here when its runner has filled since.
+// question and the launch that follows it ask once. A turn handed over
+// spends it, so the next launch asks again; the module still decides at
+// `turn`, and runs the turn here when its runner has filled since.
 const roomFor = 5 * time.Second
 
 // roomAnswer is an executor's last answer to `room`: the runner it named
@@ -65,7 +66,8 @@ func (r *Runner) Executor() (sandbox.Sandbox, string) {
 			r.mu.Unlock()
 		}
 		if a.where != "" {
-			return &sandbox.Delegate{Module: name, Where: a.where, Argv: argv, Env: env, Dir: m.Dir}, a.where
+			spent := func() { r.mu.Lock(); delete(r.rooms, name); r.mu.Unlock() }
+			return &sandbox.Delegate{Module: name, Where: a.where, Argv: argv, Env: env, Dir: m.Dir, Started: spent}, a.where
 		}
 	}
 	return nil, ""

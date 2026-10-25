@@ -82,6 +82,15 @@ func TestExecutorHandsTheSpecToTheModule(t *testing.T) {
 	}
 
 	os.WriteFile(filepath.Join(home, "full"), nil, 0o644)
+	if ex, _ := r.Executor(); ex != nil {
+		t.Fatal("a room answer was spent twice: the turn handed over didn't make the next launch ask again")
+	}
+	os.Remove(filepath.Join(home, "full"))
+	r.rooms = nil
+	if ex, _ := r.Executor(); ex == nil {
+		t.Fatal("an executor with room was passed over")
+	}
+	os.WriteFile(filepath.Join(home, "full"), nil, 0o644)
 	if ex, _ := r.Executor(); ex == nil {
 		t.Fatal("a module's room answer wasn't kept a moment, for the launch after the queue's question")
 	}
