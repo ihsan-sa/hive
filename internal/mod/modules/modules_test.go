@@ -104,12 +104,24 @@ func TestInstallMovesInWhole(t *testing.T) {
 		t.Fatal("a module still installing is listed")
 	}
 	os.RemoveAll(filepath.Join(ws.Modules(), ".other-1"))
+	// What a stopped install of ledger left goes; another module's stays.
+	stale, other := filepath.Join(ws.Modules(), ".ledger-"+core.NewID()), filepath.Join(ws.Modules(), ".ledger-x-"+core.NewID())
+	for _, d := range []string{stale, other} {
+		os.MkdirAll(filepath.Join(d, ".git"), 0o755)
+	}
+	if _, ok := r.Get("ledger"); ok {
+		t.Fatal("a stopped install is listed")
+	}
 	if m, err := r.Install(src, "ledger"); err != nil || m.Source.Release == "" || m.Source.Source != src {
 		t.Fatalf("installed without its record: %+v %v", m.Source, err)
 	}
 	if _, err := r.Install(src, "ledger"); err == nil {
 		t.Fatal("installed over an existing module")
 	}
+	if core.Exists(stale) || !core.Exists(other) {
+		t.Fatalf("stale install left: %v, another module's taken: %v", core.Exists(stale), !core.Exists(other))
+	}
+	os.RemoveAll(other)
 	entries, _ := os.ReadDir(ws.Modules())
 	for _, e := range entries {
 		if e.Name() != "ledger" && e.Name()[0] == '.' {

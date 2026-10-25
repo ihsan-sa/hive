@@ -1,0 +1,156 @@
+package work
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+)
+
+// The pace grows by one a step while work waits on it and nothing strains,
+// pulls back to three quarters of what runs under strain, changes at most
+// once a step, and keeps under the person's ceiling.
+func TestPaceGrowsShrinksAndKeepsTheCeiling(t *testing.T) {
+	var p pace
+	now := time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)
+	next := func(d time.Duration, running int, waiting bool, strain string, ceiling int) int {
+		now = now.Add(d)
+		return p.next(now, running, waiting, strain, true, 4, ceiling)
+	}
+	if l := next(0, 0, true, "", 0); l != 4 {
+		t.Fatalf("starts at %d, want 4", l)
+	}
+	if l := next(10*time.Second, 4, true, "", 0); l != 4 {
+		t.Fatalf("changed within a step: %d", l)
+	}
+	for want := 5; want <= 8; want++ { // the machine has room and briefs wait
+		if l := next(paceStep, want-1, true, "", 0); l != want {
+			t.Fatalf("grew to %d, want %d", l, want)
+		}
+	}
+	if l := next(paceStep, 3, true, "", 0); l != 8 {
+		t.Fatalf("grew while under its limit: %d", l)
+	}
+	if l := next(paceStep, 8, false, "", 0); l != 8 {
+		t.Fatalf("grew with nothing waiting: %d", l)
+	}
+	if l := next(paceStep, 8, true, "machine loaded (load 40 on 20 cores, limit 1 per core)", 0); l != 6 {
+		t.Fatalf("under strain: %d, want 6", l)
+	}
+	if !strings.Contains(p.String(), "pulled back: machine loaded") {
+		t.Fatalf("says %q", p.String())
+	}
+	if l := next(time.Second, 8, true, "machine loaded", 0); l != 6 {
+		t.Fatalf("pulled back again within a step: %d", l)
+	}
+	if l := next(paceStep, 1, true, "machine loaded", 0); l != 1 {
+		t.Fatalf("under strain with one running: %d, want 1", l)
+	}
+	for range 20 {
+		next(paceStep, p.limit, true, "", 0)
+	}
+	if l := next(paceStep, p.limit, true, "", 0); l != 22 {
+		t.Fatalf("with no ceiling it grows on: %d", l)
+	}
+	if l := next(time.Second, 22, true, "", 5); l != 5 || !strings.Contains(p.String(), "ceiling") {
+		t.Fatalf("over a ceiling of 5: %d (%s)", l, p.String())
+	}
+	if l := next(paceStep, 5, true, "", 5); l != 5 {
+		t.Fatalf("grew past the ceiling: %d", l)
+	}
+}
+
+// With no machine reading on, the pace can't see, so it stays at its start;
+// a spent plan still pulls it back, and it comes back to the start after. A
+// restart starts from what already runs.
+func TestPaceBlindAndAfterARestart(t *testing.T) {
+	var p pace
+	now := time.Now()
+	if l := p.next(now, 0, true, "", false, 4, 0); l != 4 {
+		t.Fatalf("starts at %d", l)
+	}
+	now = now.Add(paceStep)
+	if l := p.next(now, 4, true, "", false, 4, 0); l != 4 {
+		t.Fatalf("grew blind: %d", l)
+	}
+	now = now.Add(paceStep)
+	if l := p.next(now, 4, true, "the workers' plan is nearly spent (5% left)", false, 4, 0); l != 3 {
+		t.Fatalf("a spent plan: %d, want 3", l)
+	}
+	now = now.Add(paceStep)
+	if l := p.next(now, 3, true, "", false, 4, 0); l != 4 {
+		t.Fatalf("back after the plan: %d, want 4", l)
+	}
+	var r pace
+	if l := r.next(time.Now(), 20, true, "", true, 4, 0); l != 20 {
+		t.Fatalf("after a restart with 20 running: %d", l)
+	}
+	var c pace
+	if l := c.next(time.Now(), 20, true, "", true, 4, 8); l != 8 {
+		t.Fatalf("after a restart with 20 running under a ceiling of 8: %d", l)
+	}
+}
+
+// A ceiling the person sets or moves is where the pace starts again.
+func TestPaceStartsAgainAtANewCeiling(t *testing.T) {
+	var p pace
+	now := time.Now()
+	p.next(now, 1, true, "", true, 1, 1)
+	if l := p.next(now.Add(time.Second), 1, true, "", true, 3, 3); l != 3 {
+		t.Fatalf("a ceiling raised to 3: %d", l)
+	}
+	if l := p.next(now.Add(2*time.Second), 3, true, "", true, 2, 2); l != 2 {
+		t.Fatalf("a ceiling lowered to 2: %d", l)
+	}
+}
+
+// The pace's limit is what the queue and the check slots hold to: pulled
+// back to one, a second brief and a second check wait; grown to two, both go.
+func TestPaceHoldsAndFreesTheQueueAndChecks(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers, cfg.MaxChecks = 0, 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	m.C.WS.SaveConfig(cfg)
+	set := func(p *pace, l int, start int) {
+		p.mu.Lock()
+		p.limit, p.start, p.at, p.why = l, start, time.Now(), "pulled back: machine loaded"
+		p.mu.Unlock()
+	}
+	set(&m.workers, 1, defaultWorkers)
+	a := file(t, m, "first", "")
+	b := file(t, m, "second", "")
+	tick(m)
+	want := func(task Task, stage, reason string) {
+		t.Helper()
+		if got := stageOf(t, m, task); got.Stage != stage || !strings.Contains(got.Reason, reason) {
+			t.Fatalf("%q: stage %q reason %q, want %q with %q", task.Title, got.Stage, got.Reason, stage, reason)
+		}
+	}
+	want(a, StageWorking, "")
+	want(b, StageQueued, "waiting for a worker (pace 1 (pulled back: machine loaded))")
+	set(&m.workers, 2, defaultWorkers)
+	tick(m)
+	want(b, StageWorking, "")
+
+	set(&m.checks, 1, core.DefaultMaxChecks())
+	slots := m.C.Effects.Slots
+	first := slots.Acquire("p", "a", "test")
+	got := make(chan func())
+	go func() { got <- slots.Acquire("p", "b", "test") }()
+	select {
+	case <-got:
+		t.Fatal("a second check ran at a pace of 1")
+	case <-time.After(100 * time.Millisecond):
+	}
+	set(&m.checks, 2, core.DefaultMaxChecks())
+	slots.Fill()
+	select {
+	case second := <-got:
+		second()
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second check still waits at a pace of 2")
+	}
+	first()
+}

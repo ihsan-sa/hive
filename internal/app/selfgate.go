@@ -28,11 +28,13 @@ var (
 // gateExe is the binary that runs `hive gate`: the daemon's own.
 var gateExe = os.Executable
 
-// reachOK caches CheckReach on the children's token for an hour, so a
-// refusal isn't asked of GitHub on every run.
+// reachOK caches CheckReach on the children's token until ttl: an hour
+// for a verdict, so a refusal isn't asked of GitHub on every run, and five
+// minutes when the check couldn't learn the answer (a rate limit).
 var reachOK struct {
 	sync.Mutex
 	at  time.Time
+	ttl time.Duration
 	err error
 }
 
@@ -69,7 +71,11 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 			cmd.Stdout, cmd.Stderr = log, log
 		}
 		runErr := cmd.Run()
-		gate.Reap(j.Out) // a gate killed or crashed mid-run left its children
+		// A gate killed or crashed mid-run left its children. Reap runs here
+		// as the person: only on a run folder of the Hive's own.
+		if rel, err := filepath.Rel(ws.Gates(), j.Out); err == nil && filepath.IsLocal(rel) {
+			gate.Reap(j.Out)
+		}
 		g := readReport(j, runErr, ctx.Err())
 		g.Note = note
 		return g
@@ -90,9 +96,12 @@ func orgArgs(j work.GateJob) ([]string, string) {
 		return local, fmt.Sprintf("The gate ran on a local org: %s and %s hold the same token, and the children's token must not be the one that makes and deletes repositories.", orgFile, gateChildFile)
 	}
 	reachOK.Lock()
-	if reachOK.at.IsZero() || time.Since(reachOK.at) > time.Hour {
+	if reachOK.at.IsZero() || time.Since(reachOK.at) > reachOK.ttl {
 		reachOK.err = gate.CheckReach(gate.GitHub{Owner: gateOrg, Token: orgTok}, childTok, j.Project.Repo)
-		reachOK.at = time.Now()
+		reachOK.at, reachOK.ttl = time.Now(), time.Hour
+		if errors.Is(reachOK.err, gate.ErrReachUnknown) {
+			reachOK.ttl = 5 * time.Minute
+		}
 	}
 	err := reachOK.err
 	reachOK.Unlock()
@@ -133,7 +142,7 @@ func readReport(j work.GateJob, runErr, ctxErr error) core.GateResult {
 		g.Reason = "the gate left no report: " + fmt.Sprint(runErr)
 		return g
 	}
-	g.Reason, g.Sandbox, g.Transient = rep.Verdict.Reason, rep.Sandbox, rep.Transient
+	g.Reason, g.Sandbox, g.Transient, g.Alone, g.Conflicts = rep.Verdict.Reason, rep.Sandbox, rep.Transient, rep.Alone, rep.Conflicts
 	if g.Reason == "" {
 		g.Reason = rep.Error
 	}

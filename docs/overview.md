@@ -4,7 +4,7 @@ The Hive is a small team of AI agents that lives in one folder on your computer 
 
 ![The Hive's parts](arch.svg)
 
-The diagram is drawn from [arch.json](arch.json). To change it, edit that file and run `go test ./docs -run TestArch -update`; the same test fails if the two drift apart.
+The diagram is drawn from [arch.json](arch.json). To change it, edit that file and run `go test ./docs -run TestArch -update`; the same test fails if the two drift apart. Every sandbox in it, agents' and tests', reaches the network only through the proxy; the arrow is drawn from the lead for room.
 
 ## Its parts
 
@@ -21,7 +21,7 @@ The diagram is drawn from [arch.json](arch.json). To change it, edit that file a
 **The daemon.** `hive` keeps a background process running (it starts with the machine). It runs as you, outside every sandbox, and does everything that needs a credential or touches the host:
 
 - It writes every change of state to a journal (`.hive/events.jsonl`), so a restart picks up where it left off and never opens an issue, PR or run twice.
-- It starts agents, queues work (four workers at a time by default, fewer when the machine is busy) and runs the tests on the exact commit in a fresh sandboxed clone, with the test command from the main branch, so a worker can neither fake a pass nor change the command.
+- It starts agents, queues work (as many workers and checks at once as the machine and the plan carry: the number grows while there is room and pulls back under strain, under any ceiling the person sets) and runs the tests on the exact commit in a fresh sandboxed clone, with the test command from the main branch, so a worker can neither fake a pass nor change the command.
 - Its effects process is the only part that holds your GitHub login. It pushes `hive/*` branches, opens the PR and merges it pinned to the commit that was tested and read.
 - After a merge it measures the project's score, if it has one, and reverts the change if the score got worse; the reason goes into `.hive/lessons.md` for later briefs.
 - It runs an approved warden or tribunal step as you, as exactly the script that was approved (pinned by its digest).
@@ -59,6 +59,8 @@ The installer downloads the release binary for your platform from GitHub, checks
 More: [risk.md](risk.md) (tiers, warden, tribunal, egress), [architecture.md](architecture.md) (packages, folders, the path from ask to merge).
 
 ## Not here yet
+
+These repeat [status.md](status.md); when it changes, this list changes with it.
 
 - Slack, mail or phone out of the box (a module could add them), other people's workspaces on the same machine, a separate system user per agent, and sharing a GPU.
 - The macOS sandbox hasn't been tested, and Codex hasn't run with a real login.
