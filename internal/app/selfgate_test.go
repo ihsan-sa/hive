@@ -87,7 +87,9 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 	// goroutines move between threads, so the test can't nice itself in
 	// place: it runs itself once more as a process under nice -n CheckNice,
 	// where own reads CheckNice and the gate must read 19.
-	if nice && runtime.GOOS == "linux" && os.Getenv("HIVE_TEST_NICED") == "" {
+	// At the cap already (19: the Hive's own check inside a niced gate) the
+	// child would read the same level, so it is skipped.
+	if nice && runtime.GOOS == "linux" && own < 19 && os.Getenv("HIVE_TEST_NICED") == "" {
 		cmd := exec.Command("nice", "-n", strconv.Itoa(core.CheckNice), os.Args[0], "-test.run=^TestRunGateReadsTheVerdict$", "-test.count=1")
 		cmd.Env = append(os.Environ(), "HIVE_TEST_NICED=1")
 		if out, err := cmd.CombinedOutput(); err != nil {
