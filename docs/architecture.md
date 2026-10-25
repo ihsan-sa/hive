@@ -103,6 +103,7 @@ A manifest's `"schedule": {"<job>": "every 4h"}` names jobs the program serves, 
 
 Settings in `.hive/config.json`; none of them stops or parks work.
 
+- Leads come first (issue #421, [priority.md](priority.md)): a lead's turn is never held by pressure or `mem_floor_mb`, only under 256 MB available; each tick steps the leads before the other runs, and every run's processes are niced by role, the Hive-wide lead highest.
 - `max_output_tokens` (16000): sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` on each Claude turn, because a spend budget is checked only between turns and one reply can otherwise run long. 0 leaves Claude's own default.
 - `monthly_usd` (off): each turn's `cost_usd` is already in its `run.turn_ended` event; the runs fold it into a total per UTC month. Past the figure, the person is told once that month in the feed (`Person.Tell`, id `spend-YYYY-MM`) by `stats.SpendNotice` on the module tick list (the core keeps the total, `Runs.Spent`).
 - `mem_floor_mb` (1024), `mem_pressure_max` (10), `cpu_pressure_max` (40): before a turn starts, Linux's `MemAvailable` and memory and CPU pressure (`/proc/pressure/memory` and `cpu`, some avg10) are read. Past any limit the run waits, keeping its status, backoff and nudges, with the reason shown in the control center (`run.held`), and starts on the first tick after the machine recovers. Where those files don't exist (macOS, Windows) nothing is held; 0 turns a check off.
