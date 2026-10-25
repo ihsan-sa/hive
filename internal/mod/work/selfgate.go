@@ -115,12 +115,11 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		m.askGateFix(t, p, main, g)
 		return true, nil
 	}
-	// The gate judges what would land: a head that lacks main is brought up
-	// to date first, or it fails on what main has since fixed (a test that
-	// broke in the gate's sandbox, fixed on main after the branch was cut).
-	if moved, err := m.catchUp(t, p, main, "the recursive gate judges the change with main in"); moved || err != nil {
-		return true, err
-	}
+	// A head that lacks main goes to the gate as it is: the gate merges main
+	// into it in its own clone and judges what would land (docs/gate.md,
+	// Build), and Merge lands that head at that main. Bringing the branch up
+	// to date here instead pushed every waiting gain on each move of main
+	// and ran all their checks again, while one gate at a time judged them.
 	key := p.Name + "@" + t.SHA + "@" + main
 	// A run that couldn't run against this main, on any change, holds the
 	// others until its retry: the next would fail the same way. One whose
