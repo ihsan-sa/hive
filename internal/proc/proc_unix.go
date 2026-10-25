@@ -35,3 +35,14 @@ func Terminate(h Handle) error { return signal(h, syscall.SIGTERM) }
 
 // Kill sends SIGKILL to the process group.
 func Kill(h Handle) error { return signal(h, syscall.SIGKILL) }
+
+// Group starts cmd in a process group of its own, so KillGroup reaches what
+// it starts (the program `go run` builds and runs, for one).
+func Group(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
+
+// KillGroup kills cmd's process group.
+func KillGroup(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+}

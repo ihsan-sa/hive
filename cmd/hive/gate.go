@@ -18,7 +18,7 @@ import (
 
 const gateUsage = `usage: hive gate --repo <git> --head <sha> --base <sha> [--org Hive-RSI-Lab | --local-org <dir>] [--child-token-file f]
                  [--eval <sha, default base>] [--reps 3] [--bench 4] [--probes daemon,org,e2e,benchmark,recurse] [--depth 1]
-                 [--lessons .hive/lessons.md] [--allow-tie] [--timeout 2h] [--install <path>]  (installs only after a keep from bubblewrap-isolated children) [--out <dir>]
+                 [--lessons .hive/lessons.md] [--allow-tie] [--judged] [--timeout 2h] [--install <path>]  (installs only after a keep from bubblewrap-isolated children) [--out <dir>]
                  [--allow-bare]  (where bubblewrap cannot make namespaces; never with --org, never installed)
        hive gate --self-test [--out <dir>]      the gate on a trivial change, inside a child
        hive gate install --report <run>/report.json --target <path>   install a kept run's verified binary later
@@ -56,12 +56,13 @@ func cmdGate(args []string) int {
 	reps, bench, depth := fs.Int("reps", 3, ""), fs.Int("bench", 4, ""), fs.Int("depth", 1, "")
 	probes, lessons, out, install := fs.String("probes", "", ""), fs.String("lessons", "", ""), fs.String("out", "", ""), fs.String("install", "", "")
 	tie, self, bare := fs.Bool("allow-tie", false, ""), fs.Bool("self-test", false, ""), fs.Bool("allow-bare", false, "")
+	judged := fs.Bool("judged", false, "") // a judge weighs a measured verdict after, and writes its lesson
 	timeout := fs.Duration("timeout", 0, "")
 	if fs.Parse(args) != nil {
 		fmt.Fprintln(os.Stderr, gateUsage)
 		return 2
 	}
-	cfg := gate.Config{Repo: *repo, Head: *head, Base: *base, Eval: *eval, Out: *out, Reps: *reps, Bench: *bench, Depth: *depth, Lessons: *lessons, AllowBare: *bare, Timeout: *timeout,
+	cfg := gate.Config{Repo: *repo, Head: *head, Base: *base, Eval: *eval, Out: *out, Reps: *reps, Bench: *bench, Depth: *depth, Lessons: *lessons, Judged: *judged, AllowBare: *bare, Timeout: *timeout,
 		Options: gate.Options{AllowTie: *tie}, Log: func(s string) { fmt.Fprintln(os.Stderr, "gate:", s) }}
 	if *probes != "" {
 		cfg.Probes = strings.Split(*probes, ",")
