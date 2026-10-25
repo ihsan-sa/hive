@@ -1,0 +1,27 @@
+{
+  "name": "opencode",
+  "title": "OpenCode",
+  "description": "OpenCode (opencode.ai), open source, with `opencode run --format json`. Its free models (opencode/...) need no login; another provider's model (provider/model) needs that provider's login, which a bare run finds on this machine. The Hive's system prompt goes in as an instructions file.",
+  "program": "opencode",
+  "login": ["opencode", "auth", "login"],
+  "api_hosts": ["opencode.ai", "models.dev"],
+  "models": ["opencode/big-pickle", "opencode/glm-5.3-flash-free", "opencode/deepseek-v4.1-flash-free"],
+  "args": {
+    "start": ["run", "--format", "json", "--pure"],
+    "resume": ["--session", "{session}"],
+    "model": ["--model", "{model}"],
+    "read_only": ["--agent", "plan"],
+    "write": ["--auto"]
+  },
+  "env": ["OPENCODE_CONFIG_CONTENT={\"instructions\":[\"{system_file}\"],\"autoupdate\":false,\"share\":\"disabled\"}"],
+  "parse": [
+    {"match": {"type": "step_start"}, "event": "init", "session": "sessionID"},
+    {"match": {"type": "text"}, "event": "text", "text": "part.text"},
+    {"match": {"type": "tool_use"}, "event": "tool", "tool": "part.tool",
+     "text": "part.state.input.command|part.state.input.filePath|part.state.input.pattern|part.state.input.url|part.state.title"},
+    {"match": {"type": "step_finish"}, "event": "usage", "context": "part.tokens.input",
+     "tokens": {"input": "part.tokens.input", "output": "part.tokens.output", "cache_read": "part.tokens.cache.read", "cache_write": "part.tokens.cache.write"}},
+    {"match": {"type": "step_finish", "part.reason": "!tool-calls"}, "event": "result", "session": "sessionID"},
+    {"match": {"type": "error"}, "event": "result", "error": true, "text": "error.data.message|error.message|error.name", "session": "sessionID"}
+  ]
+}

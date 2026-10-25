@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -16,17 +17,16 @@ import (
 
 // The queue: a filed brief waits as queued until a worker can take it. Briefs
 // start in the order they were filed, or the order the lead set, and only as
-// many work at once as max_workers allows (the plan's limit, until its usage
-// reading is trusted) while the machine isn't loaded. A brief that names the
-// same files or area as one a worker is on (or ahead of it in line) waits
-// until that worker is done, so the two don't conflict and redo each other's
-// work. Once a worker has pushed, its task holds nothing back: a conflict it
-// meets later goes back to its worker with main to merge. Nothing here stops a
-// worker that has started.
+// many work at once as the pace allows (pace.go, under max_workers) while the
+// machine isn't loaded. A brief that names the same files or area as one a
+// worker is on (or ahead of it in line) waits until that worker is done, so
+// the two don't conflict and redo each other's work. Once a worker has
+// pushed, its task holds nothing back: a conflict it meets later goes back to
+// its worker with main to merge. Nothing here stops a worker that has started.
 //
 // A brief that only changes module prompts (every path it names is a .md
 // file under modules/) is quick: it goes first in line, after those the lead
-// started now, and may start past max_workers while no other quick brief is
+// started now, and may start past the pace while no other quick brief is
 // working, since a prompt edit takes a worker little time and plan. It still
 // waits on a brief on the same prompt, and on a strained machine.
 
@@ -101,9 +101,11 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		}
 	}
 	m.inLine(line)
-	machine := core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax)
-	if machine == "" {
-		machine = core.Loaded(cfg.LoadMax)
+	strain, _ := machine(cfg)
+	limit := m.paceWorkers(cfg, working, slices.ContainsFunc(line, func(t Task) bool { return !t.Held }))
+	full := fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
+	if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
+		full = "waiting for a worker (pace " + m.workers.String() + ")"
 	}
 	for _, t := range line {
 		quick := m.quick(t)
@@ -117,10 +119,10 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				verb = "to go first"
 			}
 			wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s: both touch %s", o.Label(), o.ID, verb, area)
-		case cfg.MaxWorkers > 0 && working >= cfg.MaxWorkers && (!quick || quickWorking > 0):
-			wait[t.ID] = fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
-		case machine != "":
-			wait[t.ID] = "waiting: " + machine
+		case working >= limit && (!quick || quickWorking > 0):
+			wait[t.ID] = full
+		case strain != "":
+			wait[t.ID] = "waiting: " + strain
 		default:
 			start[t.ID] = true
 			working++

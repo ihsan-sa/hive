@@ -1,0 +1,33 @@
+{
+  "name": "cursor",
+  "title": "Cursor",
+  "description": "Cursor's CLI agent in print mode with stream-json output. It takes no system prompt, so the Hive's goes ahead of a fresh session's first prompt. A sandboxed run gets the API key stored with `hive harness key cursor` (CURSOR_API_KEY); a bare run with none uses `cursor-agent login` on this machine.",
+  "program": "cursor-agent",
+  "login": ["cursor-agent", "login"],
+  "status": ["cursor-agent", "status"],
+  "key_env": "CURSOR_API_KEY",
+  "api_hosts": ["cursor.sh", "cursor.com"],
+  "models": ["auto"],
+  "prompt": "arg",
+  "system": "prompt",
+  "args": {
+    "start": ["--print", "--output-format", "stream-json", "--trust"],
+    "resume": ["--resume", "{session}"],
+    "model": ["--model", "{model}"],
+    "read_only": ["--mode", "ask"],
+    "write": ["--force"],
+    "sandboxed": ["--sandbox", "disabled"],
+    "end": ["{prompt}"]
+  },
+  "env": ["NO_OPEN_BROWSER=1"],
+  "parse": [
+    {"match": {"type": "system", "subtype": "init"}, "event": "init", "session": "session_id", "model": "model"},
+    {"match": {"type": "assistant"}, "event": "text", "text": "message.content.*.text"},
+    {"match": {"type": "tool_call", "subtype": "started"}, "event": "tool", "tool": "tool_call.@key",
+     "text": "tool_call.*.args.command|tool_call.*.args.path|tool_call.*.args.pattern|tool_call.*.args.globPattern|tool_call.*.args.url"},
+    {"match": {"type": "result", "is_error": "false"}, "event": "result", "session": "session_id", "subtype": "subtype",
+     "tokens": {"input": "usage.inputTokens|usage.input_tokens", "output": "usage.outputTokens|usage.output_tokens",
+                "cache_read": "usage.cacheReadTokens|usage.cache_read_input_tokens", "cache_write": "usage.cacheWriteTokens|usage.cache_creation_input_tokens"}},
+    {"match": {"type": "result", "is_error": "!false"}, "event": "result", "error": true, "text": "result|error", "session": "session_id", "subtype": "subtype"}
+  ]
+}
