@@ -184,8 +184,13 @@ func (m *Module) areas(t Task) []string {
 		if err != nil {
 			continue
 		}
-		if !fi.IsDir() && !isUnion(union, p) {
-			add(p)
+		// Keyed on where it resolves, so two names for one file are one area.
+		rel, err := filepath.Rel(realRoot, real)
+		if err != nil {
+			continue
+		}
+		if rel = filepath.ToSlash(rel); !fi.IsDir() && !isUnion(union, rel) {
+			add(rel)
 		}
 	}
 	m.mu.Lock()
