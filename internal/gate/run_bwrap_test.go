@@ -66,6 +66,7 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 	git("-C", repo, "add", "-A")
 	git("-C", repo, "commit", "-qm", "a trivial change")
 	head := git("-C", repo, "rev-parse", "HEAD")
+	git("-C", repo, "branch", "-f", "candidate", head) // a ref, so the gate's clone of repo holds the head
 	git("-C", repo, "checkout", "-q", "--detach", fork)
 	os.WriteFile(filepath.Join(repo, "docs", "gate-runs", "BASE.md"), []byte("The base moving on, for the gate's keep run.\n"), 0o644)
 	git("-C", repo, "add", "-A")
