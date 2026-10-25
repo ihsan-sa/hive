@@ -260,12 +260,14 @@ type editEntry struct {
 var pathLike = regexp.MustCompile(`[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+`)
 
 // areas are the files t's brief names that exist in its project's clone. A
-// directory or package is never one, even named on its own or as evidence,
-// so it holds no brief back for a whole run. A file that merges as union
-// (.gitattributes merge=union, like docs/log.md) isn't an area: both sides'
-// lines are kept. They are worked out once per brief text and
-// .gitattributes, so a doc main newly marks union frees the briefs that name
-// it.
+// file is only itself, so two briefs on different files of one package start
+// together, and a directory ("internal/mod", "internal/mod/work") is no area:
+// a brief names its package to say where it works, not that it edits every
+// file there, and holding on it queued most of the line behind one worker
+// (issues #399, #406). A file that merges as union (.gitattributes
+// merge=union, like docs/log.md) isn't an area: both sides' lines are kept.
+// They are worked out once per brief text and .gitattributes, so a doc main
+// newly marks union frees the briefs that name it.
 func (m *Module) areas(t Task) []string {
 	text := t.Title + "\n" + t.Done + "\n" + t.Known
 	root := m.C.WS.Project(t.Project)
@@ -306,12 +308,17 @@ func (m *Module) areas(t Task) []string {
 		if err != nil || !inside(realRoot, real) {
 			continue
 		}
-		fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p)))
+		fi, err := os.Stat(real) // resolved, so a symlink to a directory is a directory
 		if err != nil {
 			continue
 		}
-		if fi.Mode().IsRegular() && !isUnion(union, p) {
-			add(p)
+		// Keyed on where it resolves, so two names for one file are one area.
+		rel, err := filepath.Rel(realRoot, real)
+		if err != nil {
+			continue
+		}
+		if rel = filepath.ToSlash(rel); !fi.IsDir() && !isUnion(union, rel) {
+			add(rel)
 		}
 	}
 	m.mu.Lock()
