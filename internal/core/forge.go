@@ -513,8 +513,12 @@ func (p ghPR) pr() PR {
 
 const prFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,isDraft,body,mergeCommit,headRepositoryOwner"
 
+// listFields is prFields less the description: a list brings every PR on the
+// branch, and only GetPR's reader wants the body.
+const listFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,isDraft,mergeCommit,headRepositoryOwner"
+
 func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
-	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", prFields}
+	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", listFields}
 	// A fork's "owner:branch": gh matches the branch name alone, and once
 	// merged the next change needs a new pull request.
 	owner, branch, fork := strings.Cut(head, ":")
@@ -582,6 +586,9 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 		return "", fmt.Errorf("PR #%d: %w", number, ErrDraft)
 	}
 	if _, err := gh(repo, "pr", "merge", strconv.Itoa(number), "-R", repo, "--squash", "--match-head-commit", sha, "--subject", subject); err != nil {
+		if strings.Contains(err.Error(), "is still a draft") { // made a draft since the look above
+			return "", fmt.Errorf("PR #%d: %w", number, ErrDraft)
+		}
 		return "", err
 	}
 	for i := 0; i < 10; i++ {

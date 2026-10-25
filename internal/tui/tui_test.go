@@ -1209,3 +1209,13 @@ func TestToldHeadCountsTheLastDay(t *testing.T) {
 		t.Fatalf("head: %q", got)
 	}
 }
+
+// A draft waiting in merging says on its line whose read it waits on.
+func TestWaitingDraftSaysWhoseRead(t *testing.T) {
+	m := testModel(120, 40)
+	line := ansi.Strip(m.taskLine(work.Task{ID: "t1", Title: "Box change", Stage: work.StageMerging, PR: core.PR{Number: 9},
+		Reason: `a draft, waiting on its read (the PR says "Needs a perms read"); it merges once the PR is marked ready`}))
+	if !strings.Contains(line, `"Needs a perms read"`) {
+		t.Fatalf("the line doesn't say whose read: %q", line)
+	}
+}

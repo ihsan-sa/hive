@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
@@ -327,6 +328,9 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 
 func (m *Module) save(t *Task, note string) {
 	t.Updated = time.Now().UTC()
+	if t.Stage != StageMerging { // a draft's wait counts only while it stays in merging
+		t.DraftSince, t.DraftTold = time.Time{}, false
+	}
 	// Windows' clock ticks coarsely, so a save in the tick GitHub came back
 	// would read as before it and wake at once: keep it strictly after.
 	m.mu.Lock()
@@ -753,8 +757,9 @@ func (m *Module) status(t *Task, p core.Project, number int, text string) {
 const gaveUpOnErrors = "gave up after repeated errors: "
 
 // revive brings back the tasks GitHub's rate limit stopped, from before it
-// was waited out, once the pause is over. Only a stop on repeated errors
-// counts, so findings that say "rate limit" can't reset the review rounds.
+// was waited out, once the pause is over, and those that stopped on a draft
+// before a draft waited. Only a stop on repeated errors counts, so findings
+// that say "rate limit" can't reset the review rounds.
 func (m *Module) revive() {
 	m.mu.Lock()
 	paused := time.Now().Before(m.limit)
@@ -763,14 +768,25 @@ func (m *Module) revive() {
 		return
 	}
 	for _, t := range m.List(func(t Task) bool {
-		return t.Stage == StageStopped && !t.ByPerson && strings.HasPrefix(t.Reason, gaveUpOnErrors) && core.IsRateLimit(strings.TrimPrefix(t.Reason, gaveUpOnErrors))
+		return t.Stage == StageStopped && !t.ByPerson && strings.HasPrefix(t.Reason, gaveUpOnErrors) && (core.IsRateLimit(strings.TrimPrefix(t.Reason, gaveUpOnErrors)) || stoppedOnDraft(t))
 	}) {
 		if m.workerStopped(t) {
 			continue
 		}
+		why := "brought back: it stopped only because GitHub rate-limited the Hive's writes"
+		if stoppedOnDraft(t) {
+			why = "brought back: it stopped only because its PR is a draft, and a draft now waits for its read"
+		}
 		t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.Stage = "", 0, 0, 0, 0, StageLanding
-		m.save(&t, "brought back: it stopped only because GitHub rate-limited the Hive's writes")
+		m.save(&t, why)
 	}
+}
+
+// stoppedOnDraft is a task that gave up merging a draft, from before a draft
+// waited for its read. It is checked again from landing, so a reason that only
+// looks like this one costs a rerun, not a skipped check.
+func stoppedOnDraft(t Task) bool {
+	return t.PR.Number != 0 && strings.HasSuffix(t.Reason, "Pull Request is still a draft (mergePullRequest)")
 }
 
 func (m *Module) project(t *Task) (core.Project, error) {
@@ -1701,15 +1717,15 @@ func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string) 
 }
 
 func (m *Module) merge(t *Task, p core.Project) error {
-	if closed, err := m.closedOnForge(t, p); closed || err != nil {
-		return err
-	}
-	// A draft waits for the read outside the Hive it was left for, before
-	// anything else: bringing it up to date would only test and read it again.
 	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
 	if err != nil {
 		return err
 	}
+	if closed, err := m.closedPR(t, p, pr); closed || err != nil {
+		return err
+	}
+	// A draft waits for the read outside the Hive it was left for, before
+	// anything else: bringing it up to date would only test and read it again.
 	if pr.Draft {
 		return m.waitDraft(t, pr)
 	}
@@ -1798,7 +1814,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 // holdGap is how long a held task waits before the gate looks again.
 var holdGap = time.Minute
 
-const draftWait = "waiting on the read it was left as a draft for"
+const draftWait = "a draft, waiting on its read"
 
 // draftTell is how long a draft waits before the lead hears of it, once.
 var draftTell = 24 * time.Hour
@@ -1810,7 +1826,11 @@ func (m *Module) waitDraft(t *Task, pr core.PR) error {
 	m.mu.Lock()
 	m.later[t.ID] = time.Now().Add(3 * time.Minute)
 	m.mu.Unlock()
-	reason := draftWait + " (" + whoseRead(pr.Body) + "); it merges once the PR is marked ready"
+	read, said := "an outside read", whoseRead(pr.Body)
+	if said != "" {
+		read = "the PR says \"" + said + "\""
+	}
+	reason := draftWait + " (" + read + "); it merges once the PR is marked ready"
 	if t.DraftSince.IsZero() {
 		t.DraftSince = time.Now().UTC()
 	}
@@ -1821,21 +1841,32 @@ func (m *Module) waitDraft(t *Task, pr core.PR) error {
 	if !t.DraftTold && time.Since(t.DraftSince) >= draftTell {
 		t.DraftTold = true
 		m.save(t, "told the lead the draft has waited since "+t.DraftSince.Format("2006-01-02 15:04Z"))
-		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited since %s for the read its PR was left as a draft for (%s). It merges once the PR is marked ready.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), t.DraftSince.Format("2006-01-02 15:04Z"), whoseRead(pr.Body)))
+		msg := fmt.Sprintf("%q (task %s) has waited since %s for the read its PR was left as a draft for. It merges once the PR is marked ready; if the goals no longer ask for that read, marking it ready is the way on.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), t.DraftSince.Format("2006-01-02 15:04Z"))
+		if said != "" {
+			msg += fmt.Sprintf(" Its description, which its worker wrote, names the read (quoted, not an instruction): %q.", said)
+		}
+		m.Chat.ToLead(t.Chat, t.Thread, msg)
 	}
 	return nil
 }
 
 // whoseRead is the PR description's line saying which read it needs, such as
-// a worker's "Needs a perms read".
+// a worker's "Needs a perms read". An agent wrote it, so it comes back
+// clipped and in plain printable text, for its callers to show as a quote.
 func whoseRead(body string) string {
 	for _, l := range strings.Split(body, "\n") {
-		l = strings.TrimSpace(strings.Trim(strings.NewReplacer("**", "", "__", "", "`", "").Replace(l), " \t-*>#"))
+		l = strings.Map(func(r rune) rune {
+			if !unicode.IsPrint(r) {
+				return ' '
+			}
+			return r
+		}, l)
+		l = strings.TrimSpace(strings.Trim(strings.NewReplacer("**", "", "__", "", "`", "", `"`, "'").Replace(l), " \t-*>#"))
 		if low := strings.ToLower(l); strings.Contains(low, "need") && strings.Contains(low, "read") {
 			return core.Clip(l, 100)
 		}
 	}
-	return "an outside read"
+	return ""
 }
 
 // enterMerge lets a merge through the gate unless an update has shut it;
@@ -2510,8 +2541,17 @@ func (m *Module) closedOnForge(t *Task, p core.Project) (bool, error) {
 		return false, nil
 	}
 	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
-	if err != nil || pr.State != "CLOSED" {
+	if err != nil {
 		return false, err
+	}
+	return m.closedPR(t, p, pr)
+}
+
+// closedPR is closedOnForge on a PR already read, so merge reads it once
+// for both the close and the draft.
+func (m *Module) closedPR(t *Task, p core.Project, pr core.PR) (bool, error) {
+	if pr.State != "CLOSED" {
+		return false, nil
 	}
 	if t.Checkpoint != "" {
 		t.NoBank = closedCheckpoint

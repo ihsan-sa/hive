@@ -406,15 +406,6 @@ func TestPauseGivesUpOnALongMerge(t *testing.T) {
 	}
 }
 
-func TestWhoseRead(t *testing.T) {
-	if got := whoseRead("Adds a thing.\n\n- **Needs a perms read** (sandbox change)\n"); got != "Needs a perms read (sandbox change)" {
-		t.Fatalf("got %q", got)
-	}
-	if got := whoseRead("nothing said"); got != "an outside read" {
-		t.Fatalf("got %q", got)
-	}
-}
-
 // A change whose tests can't find their tool isn't failed or sent back: it
 // waits, the tool is named once, and with the tool there it goes on.
 func TestGateMissingToolCantRun(t *testing.T) {
@@ -578,6 +569,41 @@ func TestClosedCheckpointNotTold(t *testing.T) {
 	for _, c := range forge.Comments(p.Repo, task.PR.Number) {
 		if strings.Contains(c, "later commits") {
 			t.Fatalf("told a closed PR it takes later commits: %q", c)
+		}
+	}
+}
+
+// A draft closed while it waits stops as the person's call, rather than
+// waiting in merging for good; one that leaves merging drops its wait, so a
+// later draft wait starts its clock afresh.
+func TestClosedDraftStops(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	forge.SetDraft(p.Repo, task.PR.Number, true)
+	m.settle(task, m.step(task))
+	if task.DraftSince.IsZero() {
+		t.Fatalf("not waiting: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	forge.ClosePR(p.Repo, task.PR.Number, "")
+	m.settle(task, m.step(task))
+	if task.Stage != StageStopped || !task.ByPerson || !task.DraftSince.IsZero() || task.DraftTold {
+		t.Fatalf("stage %q, by person %v, draft since %v", task.Stage, task.ByPerson, task.DraftSince)
+	}
+}
+
+// The line a worker wrote naming its read is shown as a quote, in printable
+// text only; a description without one asks for an outside read.
+func TestWhoseRead(t *testing.T) {
+	for body, want := range map[string]string{
+		"Fixes the box.\n\n**Needs a perms read** before it lands.":    "Needs a perms read before it lands.",
+		"- Needs a `perms` read\x1b[2J \"now\"":                        "Needs a perms read [2J 'now'",
+		"Adds a thing.\n\n- **Needs a perms read** (sandbox change)\n": "Needs a perms read (sandbox change)",
+		"No read here.": "",
+	} {
+		if got := whoseRead(body); got != want {
+			t.Errorf("whoseRead(%q) = %q, want %q", body, got, want)
 		}
 	}
 }
