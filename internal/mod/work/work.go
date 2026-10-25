@@ -903,6 +903,11 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 		t.Stage, t.Failures = StageLanding, 0
 		m.save(t, "worker finished: "+core.Clip(finishText(r), 200))
 	case core.StatusBlocked:
+		// A worker that stops because its branch has nothing main lacks
+		// ends the task as landed, not blocked.
+		if done, err := m.landedHead(t, p, t.SHA); done || err != nil {
+			return err
+		}
 		t.Stage, t.Reason = StageBlocked, finishText(r)
 		m.save(t, "blocked: "+core.Clip(t.Reason, 300))
 		if t.Issue.Number != 0 {
@@ -1051,6 +1056,9 @@ func (m *Module) land(t *Task, p core.Project) error {
 		return nil
 	}
 	if errors.Is(err, core.ErrNoChanges) {
+		if done, err := m.landedHead(t, p, t.SHA); done || err != nil {
+			return err
+		}
 		m.noCommits(t, p, r)
 		return nil
 	}
@@ -1068,6 +1076,9 @@ func (m *Module) land(t *Task, p core.Project) error {
 		return nil
 	}
 	if err != nil {
+		return err
+	}
+	if done, err := m.landedHead(t, p, sha); done || err != nil {
 		return err
 	}
 	body := finishText(r)
@@ -1170,6 +1181,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 	}
 	main, err := m.C.Effects.Sync(p)
 	if err != nil {
+		return err
+	}
+	if done, err := m.alreadyLanded(t, p, main, t.SHA); done || err != nil {
 		return err
 	}
 	cfg := m.C.Effects.Config(p, main)
@@ -1624,6 +1638,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	}
 	main, err := m.C.Effects.Sync(p)
 	if err != nil {
+		return err
+	}
+	if done, err := m.alreadyLanded(t, p, main, t.SHA); done || err != nil {
 		return err
 	}
 	if wait, err := m.upToDate(t, p, main); wait || err != nil {
