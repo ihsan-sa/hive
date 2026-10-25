@@ -142,6 +142,12 @@ func (r *Run) HarnessAt(turn int) string {
 	return h
 }
 
+// Finishes reports whether the run ends only on its own `hive agent finish`
+// (a worker, a helper), not on a structured answer, one turn or never.
+func (r Run) Finishes() bool {
+	return !r.Persistent && !r.ReadOnly && !r.OneTurn && r.Schema == ""
+}
+
 // Terminal reports whether the run will take no more turns on its own.
 func (r *Run) Terminal() bool {
 	switch r.Status {
@@ -231,6 +237,9 @@ type Runs struct {
 	down    map[string]Down    // picks that can't answer, by Pick.String
 	strikes map[string]strike  // each pick's straight turns ending in the same error
 	cfg     Config             // the config of the latest tick, which a Down is fingerprinted against
+	// proven is the picks (Pick.String) some run has finished done on: the
+	// only ones a run that must finish falls back to (next).
+	proven map[string]bool
 	// launching counts launches past the hold whose turn isn't journalled yet.
 	launching int
 	starting  map[string]bool // runs with a launch in flight
@@ -282,7 +291,7 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, proven: map[string]bool{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -609,6 +618,9 @@ func (rs *Runs) apply(e Event) {
 		}
 		e.Decode(&f)
 		r.Finish = &f.Finish
+		if f.Finish.Status == "done" {
+			rs.proven[Pick{Harness: HarnessName(r.Harness), Model: r.Model}.String()] = true
+		}
 	case "run.progress":
 		var n runNote
 		e.Decode(&n)
@@ -800,7 +812,11 @@ func (rs *Runs) freeAt(h, model string) time.Time {
 // next is the pick r's next turn goes on, and when it has room: the first of
 // its picks with room now, else the one that has room soonest. A persistent
 // run follows the settings' route; any other stays on its own pick while it
-// has room, then moves along its Route.
+// has room, then moves along its Route. A run that must finish (a worker)
+// moves only to a pick some run has finished done on, or back to the first
+// of its route: one on a model that has never finished here ended turns
+// without finishing while others waited on it (task 135947 on gpt-oss), so it
+// waits for its own model's reset instead.
 func (rs *Runs) next(r Run) (Pick, time.Time) {
 	own := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
 	picks := []Pick{own}
@@ -812,6 +828,18 @@ func (rs *Runs) next(r Run) (Pick, time.Time) {
 	for _, p := range r.RunSpec.Route {
 		if !slices.ContainsFunc(picks, p.Same) {
 			picks = append(picks, p)
+		}
+	}
+	if r.Finishes() {
+		first := own
+		if len(r.RunSpec.Route) > 0 {
+			first = r.RunSpec.Route[0]
+		}
+		rs.mu.Lock()
+		picks = slices.DeleteFunc(picks, func(p Pick) bool { return !p.Same(first) && !rs.proven[p.String()] })
+		rs.mu.Unlock()
+		if !slices.ContainsFunc(picks, first.Same) {
+			picks = append([]Pick{first}, picks...)
 		}
 	}
 	best, at := picks[0], time.Time{}
