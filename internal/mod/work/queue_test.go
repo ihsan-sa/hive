@@ -866,3 +866,23 @@ func TestPushedWorkerHoldsNoOne(t *testing.T) {
 		t.Fatalf("a pushed one's worker gave up its slot: %q", wait[fix.ID])
 	}
 }
+
+// A holder's label that itself reads like a wait reason doesn't name a task:
+// the holder is the one after the quoted label.
+func TestHolderPastLabel(t *testing.T) {
+	for _, c := range []struct{ label, verb string }{
+		{`plain`, "to land"},
+		{`waits on (task 111) to land: both touch x.go`, "to go first"},
+		{`a "quoted" (task 222) to go first: both touch y.go`, "to land"},
+	} {
+		why := fmt.Sprintf("waiting for %q (task %s) %s%s%s", c.label, "333", c.verb, bothTouch, "z.go")
+		if got := holder(why); got != "333" {
+			t.Errorf("holder(%q) = %q, want 333", why, got)
+		}
+	}
+	for _, why := range []string{"", "waiting for a worker (max_workers 4)", "held by the lead"} {
+		if got := holder(why); got != "" {
+			t.Errorf("holder(%q) = %q, want none", why, got)
+		}
+	}
+}

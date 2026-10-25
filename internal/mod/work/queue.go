@@ -181,9 +181,13 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	decide := func(limit int) (start map[string]bool, wait map[string]string, capped bool) {
 		start, wait = map[string]bool{}, map[string]string{}
 		working, quickWorking, ahead := working, quickWorking, slices.Clone(ahead)
+		// The reason is saved with the task, so it names the limit but not
+		// its live value: the pace moved about every minute under load, and
+		// each move re-saved every waiting task with its whole brief (one
+		// 36 times in 40 minutes). The pace itself shows in Pace.
 		full := fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
 		if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
-			full = "waiting for a worker (pace " + m.workers.String() + ")"
+			full = "waiting for a worker (at the pace)"
 		}
 		for _, t := range line {
 			quick := m.quick(t)
@@ -201,7 +205,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			case working >= limit && (!quick || quickWorking > 0 || !plan()):
 				wait[t.ID], capped = full, true
 			case strain != "":
-				wait[t.ID] = "waiting: " + strain
+				wait[t.ID] = "waiting: " + steady(strain)
 			default:
 				start[t.ID] = true
 				working++
@@ -265,8 +269,10 @@ func (m *Module) quiet(t Task) bool {
 	return ok && r.Status == core.StatusQuiet
 }
 
-// waitsOn finds the task a queued one's reason says it waits for.
-var waitsOn = regexp.MustCompile(`\(task (\S+)\) to (?:land|go first): both touch `)
+// waitsOn finds the task a queued one's reason says it waits for. It reads
+// from the start, past the holder's label as %q wrote it, so a label that
+// itself reads "(task X) to land: both touch " never names X.
+var waitsOn = regexp.MustCompile(`^waiting for "(?:[^"\\]|\\.)*" \(task (\S+)\) to (?:land|go first): both touch `)
 
 // holder returns the task a wait reason names, or "".
 func holder(reason string) string {
