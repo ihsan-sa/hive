@@ -174,15 +174,22 @@ func TestPruneRemovesLeftovers(t *testing.T) {
 	defer done()
 	os.Chtimes(live, old, old)
 	stale := mk(filepath.Join(e.ws.CheckHomes(), "home-1"))
+	// A home this daemon didn't mark is a dead daemon's check's, however
+	// young: it goes at once, its stop file left to end the check if it runs.
+	orphan := filepath.Join(e.ws.CheckHomes(), "home-2")
+	os.MkdirAll(orphan, 0o755)
+	lone := filepath.Join(e.ws.CheckHomes(), "home-3.stop")
+	os.WriteFile(lone, nil, 0o600)
+	os.Chtimes(lone, old, old)
 	gate := mk(filepath.Join(e.ws.Gates(), "p", "abc-test-1"))
 	recursive := mk(filepath.Join(e.ws.Gates(), "p", "recursive"))
 	fresh := filepath.Join(e.ws.Gates(), "p", "def-test-2")
 	os.MkdirAll(fresh, 0o755)
 	t.Cleanup(func() { os.Chmod(filepath.Join(recursive, "x"), 0o755) })
-	if got := e.Prune(); !strings.Contains(got, "removed 2") {
+	if got := e.Prune(); !strings.Contains(got, "removed 3") {
 		t.Fatalf("prune said %q", got)
 	}
-	for p, want := range map[string]bool{live: true, stale: false, gate: false, recursive: true, fresh: true} {
+	for p, want := range map[string]bool{live: true, stale: false, orphan: false, orphan + ".stop": true, lone: false, gate: false, recursive: true, fresh: true} {
 		if Exists(p) != want {
 			t.Errorf("%s exists %v, want %v", p, Exists(p), want)
 		}
