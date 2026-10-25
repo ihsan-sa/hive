@@ -3,6 +3,7 @@ package work
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -578,20 +579,26 @@ func TestGatePace(t *testing.T) {
 	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
 	strain, watching := "", true
 	gateMachine = func(core.Config) (string, bool) { return strain, watching }
+	j, err := core.OpenJournal(filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	fresh := func() *Module { return &Module{C: &core.Core{J: j}} }
 	now := time.Now()
-	m := &Module{}
+	m := fresh()
 	cfg := core.Config{MaxGates: 0}
 	top := gateCeiling(cfg)
 	if l, _ := m.gateLimit(now, 0, cfg); l != min(2, top) {
 		t.Fatalf("start %d, want %d", l, min(2, top))
 	}
 	cfg.MaxGates = 4
-	m = &Module{}
+	m = fresh()
 	if l, _ := m.gateLimit(now, 4, cfg); l != 4 {
 		t.Fatalf("start under max_gates 4: %d", l)
 	}
 	cfg.MaxGates = 5
-	m = &Module{}
+	m = fresh()
 	m.gateLimit(now, 3, cfg) // starts at 5
 	m.gates.limit = 3        // as if pulled back
 	if l, _ := m.gateLimit(now.Add(gateStep-time.Second), 3, cfg); l != 3 {
@@ -610,8 +617,21 @@ func TestGatePace(t *testing.T) {
 	if l, why := m.gateLimit(now.Add(4*gateStep), 5, cfg); l != 3 || why != strain {
 		t.Fatalf("limit %d (%q) under strain, want 3", l, why)
 	}
+	var changes []string // a change past the first read is journaled
+	j.Replay(func(e core.Event) {
+		var c struct {
+			Limit    string
+			From, To int
+		}
+		if e.Kind == "pace.changed" && e.Decode(&c) == nil {
+			changes = append(changes, fmt.Sprintf("%s %d>%d", c.Limit, c.From, c.To))
+		}
+	})
+	if got := strings.Join(changes, ", "); got != "gates 3>4, gates 4>5, gates 5>3" {
+		t.Fatalf("journaled %q", got)
+	}
 	strain, watching, cfg.MaxGates = "", false, 0
-	m = &Module{}
+	m = fresh()
 	if l, _ := m.gateLimit(now, 0, cfg); l != 1 {
 		t.Fatalf("limit %d where the machine can't be read, want 1", l)
 	}

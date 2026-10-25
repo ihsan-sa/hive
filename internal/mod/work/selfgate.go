@@ -206,6 +206,7 @@ func (m *Module) gateLimit(now time.Time, running int, cfg core.Config) (int, st
 	m.gates.mu.Lock()
 	m.gates.step = gateStep
 	m.gates.mu.Unlock()
+	defer m.journal("gates", &m.gates, m.gates.get())
 	return m.gates.next(now, running, true, why, watching, start, top), why
 }
 

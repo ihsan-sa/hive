@@ -108,7 +108,6 @@ func (m *Module) quick(t Task) bool {
 // one waits. tasks is every task Tick looks at.
 func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]string) {
 	cfg := m.C.WS.LoadConfig()
-	start, wait = map[string]bool{}, map[string]string{}
 	working, quickWorking := 0, 0
 	var ahead, line []Task // ahead: being worked on, or earlier in line
 	m.mu.Lock()
@@ -139,11 +138,6 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	}
 	m.inLine(line)
 	strain, _ := machine(cfg)
-	limit := m.paceWorkers(cfg, working, slices.ContainsFunc(line, func(t Task) bool { return !t.Held }))
-	full := fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
-	if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
-		full = "waiting for a worker (pace " + m.workers.String() + ")"
-	}
 	// planOK says the plan has room for a quick brief past the pace: read
 	// once, on need.
 	var planOK *bool
@@ -154,31 +148,52 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		}
 		return *planOK
 	}
-	for _, t := range line {
-		quick := m.quick(t)
-		switch o, area := m.overlap(t, ahead); {
-		case t.Held:
-			wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
-			continue // a held brief keeps no place that holds others back
-		case o != nil && !t.Now: // one the lead started now goes past the overlap
-			verb := "to land"
-			if o.Queued() && !start[o.ID] {
-				verb = "to go first"
-			}
-			wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s: both touch %s", o.Label(), o.ID, verb, area)
-			continue // one that waits on another holds no one back, so waits never chain
-		case working >= limit && (!quick || quickWorking > 0 || !plan()):
-			wait[t.ID] = full
-		case strain != "":
-			wait[t.ID] = "waiting: " + strain
-		default:
-			start[t.ID] = true
-			working++
-			if quick {
-				quickWorking++
-			}
+	// decide sorts the line at limit, and says whether a brief waits on the
+	// limit itself: only then may the pace grow, as a brief held, or waiting
+	// on another's files, would leave a new slot empty.
+	decide := func(limit int) (start map[string]bool, wait map[string]string, capped bool) {
+		start, wait = map[string]bool{}, map[string]string{}
+		working, quickWorking, ahead := working, quickWorking, slices.Clone(ahead)
+		full := fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
+		if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
+			full = "waiting for a worker (pace " + m.workers.String() + ")"
 		}
-		ahead = append(ahead, t)
+		for _, t := range line {
+			quick := m.quick(t)
+			switch o, area := m.overlap(t, ahead); {
+			case t.Held:
+				wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
+				continue // a held brief keeps no place that holds others back
+			case o != nil && !t.Now: // one the lead started now goes past the overlap
+				verb := "to land"
+				if o.Queued() && !start[o.ID] {
+					verb = "to go first"
+				}
+				wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s: both touch %s", o.Label(), o.ID, verb, area)
+				continue // one that waits on another holds no one back, so waits never chain
+			case working >= limit && (!quick || quickWorking > 0 || !plan()):
+				wait[t.ID], capped = full, true
+			case strain != "":
+				wait[t.ID] = "waiting: " + strain
+			default:
+				start[t.ID] = true
+				working++
+				if quick {
+					quickWorking++
+				}
+			}
+			ahead = append(ahead, t)
+		}
+		return start, wait, capped
+	}
+	// The pace moves on what waits at its limit now; if that moves it, the
+	// line is sorted again at the new one.
+	limit := m.paceWorkers(cfg, working, false)
+	start, wait, capped := decide(limit)
+	if capped {
+		if l := m.paceWorkers(cfg, working, true); l != limit {
+			start, wait, _ = decide(l)
+		}
 	}
 	return start, wait
 }

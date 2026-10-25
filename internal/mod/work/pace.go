@@ -3,6 +3,9 @@ package work
 import (
 	"cmp"
 	"fmt"
+	"maps"
+	"runtime"
+	"slices"
 	"sync"
 	"time"
 
@@ -15,12 +18,16 @@ import (
 // grows by one a step; when the machine is strained (memory floor, memory or
 // CPU pressure, load per core: the same settings that hold a turn) or the
 // workers' plan is nearly spent, it pulls back to three quarters of what is
-// running. Nothing running is stopped; past the limit, work waits in order.
+// running, or to its start when nothing runs (the strain isn't the Hive's,
+// and from 1 it would take minutes to climb back). Nothing running is
+// stopped; past the limit, work waits in order.
 // It changes at most once a step, so the readings (load is a 1-minute
 // average) catch up with the last change before the next. max_workers and
 // max_checks, when set, are the person's ceilings and where the pace starts;
 // with no machine reading on, or none to read (no /proc, as on macOS or
-// Windows), it stays at its start, as it can't see.
+// Windows), it stays at its start, as it can't see. With no ceiling set, a
+// safety ceiling sized to the machine (safeWorkers, safeChecks) keeps the
+// pace from running away while its steps are untuned.
 
 // paceStep is the least time between two changes of a limit.
 const paceStep = time.Minute
@@ -57,7 +64,11 @@ func (p *pace) next(now time.Time, running int, waiting bool, strain string, wat
 	if now.Sub(p.at) >= cmp.Or(p.step, paceStep) {
 		switch {
 		case strain != "":
-			if l := max(1, min(p.limit, running)*3/4); l < p.limit {
+			l := max(1, min(p.limit, running)*3/4)
+			if running == 0 {
+				l = min(p.limit, start)
+			}
+			if l < p.limit {
 				p.limit, p.at, p.why = l, now, "pulled back: "+strain
 			}
 		case waiting && running >= p.limit && (top == 0 || p.limit < top):
@@ -68,6 +79,18 @@ func (p *pace) next(now time.Time, running int, waiting bool, strain string, wat
 		p.limit, p.why = top, "the ceiling"
 	}
 	return p.limit
+}
+
+// journal records a change of p's limit from before (0: its first read,
+// not recorded) as a pace.changed event, so a sweep can tune the steps
+// against what the machine and plan did.
+func (m *Module) journal(name string, p *pace, before int) {
+	p.mu.Lock()
+	limit, why := p.limit, p.why
+	p.mu.Unlock()
+	if before != 0 && limit != before {
+		m.C.J.MustAppend("pace.changed", map[string]any{"limit": name, "from": before, "to": limit, "why": why})
+	}
 }
 
 // get is the limit, 0 before its first read.
@@ -94,12 +117,23 @@ func machine(cfg core.Config) (string, bool) {
 	return why, core.Watched(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax)
 }
 
-// planSpent says when every model a worker would go on has under planFloor
-// of its plan left, all logins together, or "".
+// safeWorkers is the workers' ceiling when the person sets none: one a core,
+// as a worker's own builds and tests run beside the model's turns.
+func safeWorkers() int { return max(defaultWorkers, runtime.NumCPU()) }
+
+// safeChecks is the checks' ceiling when the person sets none: twice where
+// they start, as a check keeps several cores busy on its own.
+func safeChecks() int { return 2 * core.DefaultMaxChecks() }
+
+// planSpent says when every model a worker would go on, the workspace's
+// route or any project's own, has under planFloor of its plan left, all
+// logins together, or "".
 func (m *Module) planSpent(cfg core.Config) string {
 	room := 0.0
-	for _, p := range cfg.Route("worker", "") {
-		room = max(room, m.C.Runs.Headroom(p))
+	for _, project := range append([]string{""}, slices.Sorted(maps.Keys(cfg.Projects))...) {
+		for _, p := range cfg.Route("worker", project) {
+			room = max(room, m.C.Runs.Headroom(p))
+		}
 	}
 	if room >= planFloor {
 		return ""
@@ -114,7 +148,9 @@ func (m *Module) paceWorkers(cfg core.Config, working int, waiting bool) int {
 	if why == "" {
 		why = m.planSpent(cfg)
 	}
-	return m.workers.next(time.Now(), working, waiting, why, watching, cmp.Or(cfg.MaxWorkers, defaultWorkers), cfg.MaxWorkers)
+	before := m.workers.get()
+	defer m.journal("workers", &m.workers, before)
+	return m.workers.next(time.Now(), working, waiting, why, watching, cmp.Or(cfg.MaxWorkers, defaultWorkers), cmp.Or(cfg.MaxWorkers, safeWorkers()))
 }
 
 // checkSlots is the checks' limit for the slots: the pace's, or before its
@@ -128,7 +164,9 @@ func (m *Module) paceChecks() {
 	cfg := m.C.WS.LoadConfig()
 	running, waiting := m.C.Effects.Slots.State()
 	why, watching := machine(cfg)
-	m.checks.next(time.Now(), len(running), len(waiting) > 0, why, watching, cmp.Or(cfg.MaxChecks, core.DefaultMaxChecks()), cfg.MaxChecks)
+	before := m.checks.get()
+	defer m.journal("checks", &m.checks, before)
+	m.checks.next(time.Now(), len(running), len(waiting) > 0, why, watching, cmp.Or(cfg.MaxChecks, core.DefaultMaxChecks()), cmp.Or(cfg.MaxChecks, safeChecks()))
 	m.C.Effects.Slots.Fill()
 }
 
