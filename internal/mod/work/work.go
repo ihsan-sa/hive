@@ -1770,6 +1770,9 @@ func (m *Module) review(t *Task, p core.Project) error {
 		if err != nil {
 			return err
 		}
+		if done, err := m.alreadyLanded(t, p, main, t.SHA); done || err != nil { // main took the change meanwhile: nothing to read
+			return err
+		}
 		ch, err := m.C.Effects.Classify(p, main, t.SHA)
 		if err != nil {
 			return err
