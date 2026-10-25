@@ -1301,7 +1301,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	runs, req, warned := Advisory(p, runs, e.RequiredChecks(p, m.Main))
+	runs, req, warned := Advisory(p, runs, e.RequiredChecks(p, m.Main), e.AdvisoryChecks(p, m.Main))
 	st, which := ChecksState(runs, req)
 	var shared []string
 	var answer map[string]string // check -> the older main commit its answer came from
@@ -1330,8 +1330,8 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		}
 	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
-	if red := append(slices.Clone(shared), prose...); err != nil && len(red) > 0 && protectionRefused.MatchString(err.Error()) {
-		return "", &RefusedRed{Checks: red, Err: err}
+	if red := append(slices.Concat(shared, prose), warned...); err != nil && len(red) > 0 && protectionRefused.MatchString(err.Error()) {
+		return "", &RefusedRed{Checks: red, Warned: warned, Err: err}
 	}
 	if err != nil {
 		return "", err
@@ -1365,15 +1365,21 @@ func (e *Effects) ReadyPR(p Project, pr int, sha string) error {
 }
 
 // RefusedRed is the forge refusing a merge the Hive found no worse than main:
-// its branch rules want a check that is red on main too, so retrying won't
-// help until main is fixed or the person relaxes the rule.
+// its branch rules want a check that is red on main too, or one main's list
+// says only warns (Warned), so retrying won't help until main is fixed or the
+// person relaxes the rule.
 type RefusedRed struct {
 	Checks []string
+	Warned []string
 	Err    error
 }
 
 func (r *RefusedRed) Error() string {
-	return "the forge refused the merge: its branch rules want " + strings.Join(r.Checks, ", ") + ", red on main too (" + Clip(r.Err.Error(), 200) + ")"
+	why := ", red on main too"
+	if len(r.Warned) > 0 {
+		why = ", red here (" + strings.Join(r.Warned, ", ") + " only warn on the Hive's own PRs, per advisory_checks)"
+	}
+	return "the forge refused the merge: its branch rules want " + strings.Join(r.Checks, ", ") + why + " (" + Clip(r.Err.Error(), 200) + ")"
 }
 
 func (r *RefusedRed) Unwrap() error { return r.Err }
@@ -1392,26 +1398,31 @@ func (e *Effects) RequiredChecks(p Project, mainSHA string) []string {
 	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "required_checks")
 }
 
+// AdvisoryChecks are the forge's checks main's list says only warn on the
+// Hive's own PRs (Advisory).
+func (e *Effects) AdvisoryChecks(p Project, mainSHA string) []string {
+	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "advisory_checks")
+}
+
 // Advisory splits off the checks that only warn: on the Hive's own project
-// (Self) a failing Windows job, whose red tonight was mostly flakes unrelated
-// to the change, doesn't block the merge (the person: keep the Hive improving
-// as fast as possible). A release still needs the whole ci workflow green,
-// Windows with it. kept are the rest; warned names the failures set aside,
-// and required loses them so they aren't waited on either.
-func Advisory(p Project, runs []CheckRun, required []string) (kept []CheckRun, req, warned []string) {
-	if !p.Self {
+// (Self) a check named on main's advisory_checks (a Windows job, whose red was
+// mostly flakes unrelated to the change) doesn't hold the merge, red, pending
+// or unable to start (the person: keep the Hive improving as fast as
+// possible). A release still needs the whole ci workflow green. kept are the
+// rest; warned names the red ones set aside, and required loses every
+// advisory check so none is waited on.
+func Advisory(p Project, runs []CheckRun, required, advisory []string) (kept []CheckRun, req, warned []string) {
+	if !p.Self || len(advisory) == 0 {
 		return runs, required, nil
 	}
 	for _, r := range runs {
-		if r.State == CheckFail && strings.Contains(strings.ToLower(r.Name), "windows") {
-			if !slices.Contains(warned, r.Name) {
-				warned = append(warned, r.Name)
-			}
-			continue
+		if !slices.Contains(advisory, r.Name) || r.State == CheckPass {
+			kept = append(kept, r)
+		} else if r.State == CheckFail && !slices.Contains(warned, r.Name) {
+			warned = append(warned, r.Name)
 		}
-		kept = append(kept, r)
 	}
-	req = slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(warned, n) })
+	req = slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(advisory, n) })
 	return kept, req, warned
 }
 

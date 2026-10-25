@@ -17,7 +17,13 @@ import (
 // checks passed, with a gate that answers outcome and records its jobs.
 func selfRig(t *testing.T, files map[string]string, outcome string) (*Module, *Task, core.Project, *core.Local, *[]GateJob) {
 	t.Helper()
-	m, task, p, f := gateRig(t, false, files)
+	return selfRigSeeded(t, nil, files, outcome)
+}
+
+// selfRigSeeded is selfRig with more files on main to start with.
+func selfRigSeeded(t *testing.T, onMain, files map[string]string, outcome string) (*Module, *Task, core.Project, *core.Local, *[]GateJob) {
+	t.Helper()
+	m, task, p, f := gateRigSeeded(t, false, onMain, files)
 	p.Self = true
 	task.Aim = AimGain
 	reviewerLand(t, m, task, p, "r1")
