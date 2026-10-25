@@ -235,3 +235,63 @@ func (m *Module) fileFlaky(p core.Project, sha string, fs []failure, sum, out st
 		Done:  "The test passes every time: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails.",
 		Known: fmt.Sprintf("After a merge at %s the tests went red and passed when only what failed ran again, so the merge was kept. What failed: %s", core.Short(sha), sum)})
 }
+
+// redBefore runs what stayed red at t's merge again on main just before t
+// first merged. When every test that failed also fails there, the red isn't
+// new at this merge (main went red beside it: a clock, the environment, an
+// earlier merge), so reverting it would clear nothing: the red is filed to
+// fix instead. "" means the failure is new here, or that can't be told.
+func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
+	if strings.TrimSpace(test) == "" {
+		return ""
+	}
+	tc, ok := m.C.Effects.GetCheck(p.Name, t.MergeSHA, "test")
+	if !ok || tc.OK {
+		return ""
+	}
+	names := tc.Failed
+	if rc, ok := m.C.Effects.GetCheck(p.Name, t.MergeSHA, "retest"); ok && !rc.OK && len(rc.Failed) > 0 {
+		names = rc.Failed // what stayed red when it ran again
+	}
+	if len(names) == 0 {
+		return "" // nothing named to look for before it
+	}
+	first := t.MergeSHA
+	if len(t.Banks) > 0 {
+		first = t.Banks[0].MergeSHA // a checkpoint merged earlier is part of the change
+	}
+	out, err := core.Git(m.C.WS.Project(p.Name), "rev-parse", first+"^1")
+	parent := strings.TrimSpace(out)
+	m.mu.Lock()
+	own := slices.Contains(m.heads[t.ID], parent)
+	m.mu.Unlock()
+	if err != nil || parent == "" || own || !m.C.Effects.MainLine(p)[parent] {
+		return ""
+	}
+	log := tc.Output
+	if tc.Log != "" {
+		if b, err := core.SafeRead(tc.Log, 8<<20); err == nil && len(b) > 0 {
+			log = string(b)
+		}
+	}
+	bc := m.C.Effects.RunCheck(p, parent, "before", rerunCommand(test, failures(log)))
+	if bc.CantRun != "" || bc.OK {
+		return ""
+	}
+	for _, n := range names {
+		if !slices.Contains(bc.Failed, n) {
+			return ""
+		}
+	}
+	what := strings.Join(names, ", ")
+	why := "not new at this merge: " + what + " failed after it merged and fail too at " + core.Short(parent) + ", main just before it"
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": t.MergeSHA, "task": t.ID,
+		"text": core.Clip(why, 400) + " (" + p.Name + "). Not reverted; filed to fix on main."})
+	title := core.Clip("Make "+what+" pass on main again", 120)
+	if len(m.Work.List(func(w work.Task) bool { return w.Project == p.Name && w.Title == title && !w.Terminal() })) == 0 {
+		m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title,
+			Done:  "The tests pass on main again, every time, without reverting anything.",
+			Known: fmt.Sprintf("After %s merged as %s the tests went red, but the same tests fail at %s, main just before it, so the merge wasn't the cause and wasn't reverted. What failed: %s", t.Label(), core.Short(t.MergeSHA), core.Short(parent), core.Clip(bc.Output, 1500))})
+	}
+	return why
+}

@@ -186,6 +186,27 @@ func TestGateFailsOnMainOnly(t *testing.T) {
 	}
 }
 
+// A change whose every failing test main fails too is no worse than main: it
+// goes on rather than wait for main to go green, so the fix for a red main
+// (a revert, say) can land. One more failing test of its own and it waits.
+func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
+	named := map[string]string{".hive/project.json": `{"test": "r=0; [ -f BROKEN ] && { echo '--- FAIL: TestClock (0.01s)'; r=1; }; [ -f NEW ] && { echo '--- FAIL: TestNew (0.01s)'; r=1; }; exit $r"}`}
+	m, task, p, _ := gateRigSeeded(t, true, named, map[string]string{"feature.txt": "y"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 || strings.HasPrefix(task.Reason, "waiting on main") {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	m, task, p, _ = gateRigSeeded(t, true, named, map[string]string{"NEW": "x"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageTesting || !strings.HasPrefix(task.Reason, "waiting on main") {
+		t.Fatalf("a new failure beside main's went on: stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
 // Main's failure is raised once per main commit, even when main moves away
 // and back (A -> B -> A) and no task still names A.
 func TestGateMainRedOncePerCommit(t *testing.T) {

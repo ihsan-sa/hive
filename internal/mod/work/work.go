@@ -1300,13 +1300,23 @@ func (m *Module) test(t *Task, p core.Project) error {
 		if mc.CantRun != "" {
 			return m.cantRun(t, p, mc)
 		}
-		if !mc.OK {
+		switch {
+		case !mc.OK && !noWorse(c, mc):
 			return m.waitOnMain(t, p, main, mc)
+		case !mc.OK:
+			// Every test it fails main fails too: it is no worse than main,
+			// so it goes on rather than wait for the green it may be the fix
+			// for (a revert of what turned main red, say).
+			if strings.HasPrefix(t.Reason, "waiting on main") {
+				t.Reason = ""
+				m.save(t, "its tests fail on "+core.Short(t.SHA)+" only where main's fail at "+core.Short(main)+" ("+strings.Join(c.Failed, ", ")+"), so it is no worse than main and goes on")
+			}
+		default:
+			if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
+				return err
+			}
+			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
 		}
-		if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
-			return err
-		}
-		return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
 	}
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
 	if err != nil {
@@ -1428,6 +1438,21 @@ func (m *Module) mainTests(p core.Project, main, command string) (core.Check, er
 		return core.Check{}, err
 	}
 	return m.C.Effects.RunCheck(p, main, "test", command), nil
+}
+
+// noWorse says a red change fails only tests main's red run fails too, each
+// named, so the red is main's and the change may be its fix. A failure
+// either run doesn't name (a build, another runner) can't be told apart.
+func noWorse(c, mc core.Check) bool {
+	if len(c.Failed) == 0 || len(mc.Failed) == 0 {
+		return false
+	}
+	for _, n := range c.Failed {
+		if !slices.Contains(mc.Failed, n) {
+			return false
+		}
+	}
+	return true
 }
 
 // waitOnMain holds a red change while main's own tests are red, since the

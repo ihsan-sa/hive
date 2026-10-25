@@ -536,7 +536,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	e.mu.Lock()
 	e.diskFull = false
 	e.mu.Unlock()
-	if (kind == "test" || kind == "retest") && !c.OK {
+	if (kind == "test" || kind == "retest" || kind == "before") && !c.OK {
 		c.Failed = FailedTests(out)
 	}
 	if kind == "score" && c.OK {
