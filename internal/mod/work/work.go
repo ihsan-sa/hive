@@ -238,6 +238,8 @@ type Module struct {
 	mu    sync.Mutex
 	tasks map[string]*Task
 	busy  map[string]bool
+	// workers and checks are the limits the pace sets (pace.go).
+	workers, checks pace
 	// areaCache holds the paths each brief names (queue.go).
 	areaCache map[string]areaEntry
 	steps     sync.WaitGroup // the steps Tick started that are still going
@@ -336,6 +338,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "pr_close", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
 	c.Person.Handle("merge", m.onPersonMerge)
 	c.Effects.MergeHeld = m.MergeHeld
+	c.Effects.Slots.Resize(m.checkSlots)
 	return m
 }
 
@@ -603,6 +606,7 @@ func (m *Module) Revert(of Task, mergeSHA, reason string) (Task, error) {
 func (m *Module) Tick() {
 	m.revive()
 	m.draftsBack.Do(m.reviveDrafts)
+	m.paceChecks()
 	tasks := m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) })
 	start, wait := m.admit(tasks)
 	for _, t := range tasks {

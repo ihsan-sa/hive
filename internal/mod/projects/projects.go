@@ -360,9 +360,11 @@ func (m *Module) Status(r core.Run) map[string]any {
 	}
 	cfg := m.C.WS.LoadConfig()
 	running, waitingChecks := m.C.Effects.Slots.State()
+	pace := m.Work.Pace()
 	return map[string]any{"projects": ps, "waiting_on_person": waiting, "config": View(cfg),
-		"queue":  m.Work.Queue(r), // briefs waiting for a worker, in the order they start; the queue op reorders or holds them
-		"checks": fmt.Sprintf("%d running, %d waiting (max_checks %d)", len(running), len(waitingChecks), cfg.MaxChecks)}
+		"queue":   m.Work.Queue(r), // briefs waiting for a worker, in the order they start; the queue op reorders or holds them
+		"checks":  fmt.Sprintf("%d running, %d waiting (at once: %s; max_checks %d, 0 is no ceiling)", len(running), len(waitingChecks), pace["checks"], cfg.MaxChecks),
+		"workers": fmt.Sprintf("at once: %s; max_workers %d, 0 is no ceiling", pace["workers"], cfg.MaxWorkers)}
 }
 
 // ConfigView is the part of the config every agent may read, so it can say
