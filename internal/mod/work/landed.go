@@ -56,16 +56,8 @@ func (m *Module) Landed(id, mergeSHA, by, why string) (Task, error) {
 	if t.Checkpoint != "" { // its PR is the checkpoint's: say what merged and what didn't
 		m.save(&t, fmt.Sprintf("checkpoint %s is what merged%s", core.Short(t.Checkpoint), past))
 	}
-	t.MergeSHA, t.Stage, t.Reason, t.Checkpoint = merged, StageMerged, "", ""
-	m.save(&t, fmt.Sprintf("ended as landed by %s (%s, %s): %s", by, how, core.Short(merged), core.Clip(why, 300)))
-	if t.Kind == "revert" { // worded as the merge path words it
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Label(), "Revert: "), t.Lesson))
-	} else {
-		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Merged: %s %s", t.Label(), t.PR.URL))
-	}
-	if m.OnMerged != nil {
-		m.OnMerged(t)
-	}
+	t.Checkpoint = "" // ended, not banked: its worker is stopped
+	m.merged(&t, merged, fmt.Sprintf("ended as landed by %s (%s, %s): %s", by, how, core.Short(merged), core.Clip(why, 300)))
 	return t, nil
 }
 

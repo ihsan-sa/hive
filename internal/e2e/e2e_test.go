@@ -152,12 +152,12 @@ func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string)
 		for _, end := range h.jobs {
 			end()
 		}
-		// A git the daemon started (a gate's, a check's, the knowledge base's)
-		// can outlive it for a moment once killed, and t.TempDir's removal
-		// fails on a folder still being written; remove the Hive once it goes quiet.
-		for began := time.Now(); os.RemoveAll(h.ws.Root) != nil && time.Since(began) < 30*time.Second; {
-			time.Sleep(200 * time.Millisecond)
-		}
+		// What a daemon started outside its group (module programs, turns)
+		// outlives it once killed, and a git it started (a gate's, a check's,
+		// the knowledge base's) can for a moment; t.TempDir's removal fails on
+		// a folder still being written, so end those and remove the Hive once
+		// it goes quiet.
+		settle(dir, h.ws.Root)
 	})
 	h.launch()
 	return h
@@ -1524,6 +1524,24 @@ var adopt func()
 // contain puts a daemon, and what it starts from then on, in a group that
 // the returned func ends (Windows only).
 var contain func(t *testing.T, pid int) func()
+
+// strays kills every process still working in dir: one whose working
+// directory, executable or open file is in it, or whose command line or
+// environment names it (Linux only).
+var strays func(dir string)
+
+// settle ends what still works in dir and removes path, a folder in it,
+// trying again for a while if something still writes there.
+func settle(dir, path string) {
+	for began := time.Now(); time.Since(began) < 30*time.Second; time.Sleep(200 * time.Millisecond) {
+		if strays != nil {
+			strays(dir)
+		}
+		if os.RemoveAll(path) == nil {
+			return
+		}
+	}
+}
 
 // group makes cmd, before it starts, lead a process group of its own, and
 // returns what kills what is left in it (Unix only).

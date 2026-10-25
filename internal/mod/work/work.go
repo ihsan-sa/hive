@@ -338,7 +338,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 			return
 		}
 		if e.Kind == "alert.raised" || e.Kind == "alert.cleared" {
-			var a struct{ Kind, Project, SHA, Ref, Check string }
+			var a struct{ Kind, Project, SHA, Ref, Check, Key string }
 			if e.Decode(&a) != nil {
 				return
 			}
@@ -350,6 +350,8 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 				m.cantRunOpen[a.Project] = cmp.Or(a.Check, "test")
 			case a.Kind == "main-red" && a.SHA != "":
 				m.mainRed[a.Project+"@"+a.SHA] = true
+			case a.Kind == "check-warning" && a.Key != "":
+				m.mainRed[a.Project+"@"+a.Key] = true
 			}
 			m.mu.Unlock()
 			return
@@ -1948,12 +1950,32 @@ func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string) 
 	if detail != "" {
 		msg += "\n\n" + detail
 	}
+	msg += m.bundleForFixes(t, p, msg)
 	if err := m.C.Runs.Reopen(t.Worker, msg+"\n\nFix these in your checkout, commit, and finish again."); err != nil {
 		return err
 	}
 	t.Stage, t.Reviews, t.SeatTries = StageWorking, 0, nil
 	m.save(t, fmt.Sprintf("round %d: findings sent back to the worker", t.Round))
 	return nil
+}
+
+// bundleForFixes writes main to the worker's main.bundle and says so, so a
+// fix that needs main's newer commits (a reviewer's ask built on them) can
+// merge them. A message that already names a bundle (the forge's checks write
+// the main they ran on) keeps it. A bundle that can't be written leaves the
+// findings to go back without it.
+func (m *Module) bundleForFixes(t *Task, p core.Project, msg string) string {
+	if strings.Contains(msg, "main.bundle") {
+		return ""
+	}
+	main, err := core.Git(m.C.WS.Project(p.Name), "rev-parse", p.Branch) // before the bundle, so it holds at least this main
+	if err != nil {
+		return ""
+	}
+	if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle")); err != nil {
+		return ""
+	}
+	return "\n\n$HIVE_RUN/main.bundle holds main at " + core.Short(strings.TrimSpace(main)) + ": if a fix needs main's newer commits, `git fetch \"$HIVE_RUN/main.bundle\" main` and merge FETCH_HEAD."
 }
 
 func (m *Module) merge(t *Task, p core.Project) error {
@@ -2027,7 +2049,11 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if errors.As(err, &rr) {
 		// Retrying can't help until main is green again or the rule is
 		// relaxed, so it holds, said once, rather than failing toward a stop.
-		m.raiseOnce(p, main+"/refused", "GitHub's branch rules in "+p.Name+" refuse to merge PR #"+fmt.Sprint(t.PR.Number)+", though it is no worse than main: they want "+strings.Join(rr.Checks, ", ")+", red on main at "+core.Short(main)+" too. Fix main, or merge it yourself or relax the rule to let the fix land.")
+		say := "GitHub's branch rules in " + p.Name + " refuse to merge PR #" + fmt.Sprint(t.PR.Number) + ", though it is no worse than main: they want " + strings.Join(rr.Checks, ", ") + ", red on main at " + core.Short(main) + " too. Fix main, or merge it yourself or relax the rule to let the fix land."
+		if len(rr.Warned) > 0 {
+			say = "GitHub's branch rules in " + p.Name + " refuse to merge PR #" + fmt.Sprint(t.PR.Number) + ": they want " + strings.Join(rr.Checks, ", ") + ", and " + strings.Join(rr.Warned, ", ") + " only warn on the Hive's own PRs (advisory_checks in " + core.SecurityList + "). Drop them from the branch rule, or from advisory_checks, so the two agree."
+		}
+		m.raiseOnce(p, main+"/refused", say)
 		m.hold(t, p, "waiting on main: "+rr.Error())
 		return nil
 	}
@@ -2050,7 +2076,7 @@ func (m *Module) merged(t *Task, merged, note string) {
 		t.Banks = append(t.Banks, Bank{PR: t.PR, MergeSHA: merged}) // a revert of this merge names its PR
 		t.Branch, t.PR = fmt.Sprintf("hive/%s-%d", t.ID, t.Banked), core.PR{}
 		m.save(t, "checkpoint "+note+"; the worker keeps going")
-		m.C.Runs.Send(t.Worker, fmt.Sprintf("Your commit %s beat the best kept score and is merged into main as a checkpoint. Keep going on top of it on your branch, and leave that commit as it is (no amend, reset or rebase past it): the Hive lays what you commit after it onto main, so you needn't fetch main.", core.Short(t.Base)))
+		m.C.Runs.Send(t.Worker, fmt.Sprintf("Your commit %s is on main as a checkpoint: %s. Keep going on top of it on your branch, and leave that commit as it is (no amend, reset or rebase past it): the Hive lays what you commit after it onto main, so you needn't fetch main.", core.Short(t.Base), note))
 		if m.OnMerged != nil {
 			m.OnMerged(*t)
 		}
@@ -2229,7 +2255,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	if err != nil {
 		return true, err
 	}
-	runs, req, warned := core.Advisory(p, runs, m.C.Effects.RequiredChecks(p, main))
+	runs, req, warned := core.Advisory(p, runs, m.C.Effects.RequiredChecks(p, main), m.C.Effects.AdvisoryChecks(p, main))
 	st, which := core.ChecksState(runs, req)
 	if (st == core.CheckFail || st == core.CheckCantStart) && rerunning(t) {
 		m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+core.CheckNames(which)+")")
@@ -2410,8 +2436,12 @@ func (m *Module) warn(t *Task, p core.Project, warned []string) {
 	}
 	t.Warning = w
 	m.save(t, "warning: "+w)
-	m.comment(p.Repo, t.PR.Number, "Warning, not blocking: "+strings.Join(warned, ", ")+" fail on "+core.Short(t.SHA)+". On the Hive's own PRs a red Windows job doesn't hold the merge; a release still needs it green.")
-	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "check-warning", "project": p.Name, "key": t.SHA + "/warned", "text": "PR #" + fmt.Sprint(t.PR.Number) + ": " + w})
+	m.comment(p.Repo, t.PR.Number, "Warning, not blocking: "+strings.Join(warned, ", ")+" fail on "+core.Short(t.SHA)+". On the Hive's own PRs the checks on main's advisory_checks list don't hold the merge; a release still needs them green.")
+	// One alert a day per project: the task and its PR carry each one, and a
+	// red Windows on every self PR mustn't crowd the person's alerts.
+	if key := "warned/" + time.Now().Format(time.DateOnly); !m.raised(p, key) {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "check-warning", "project": p.Name, "key": key, "text": "PR #" + fmt.Sprint(t.PR.Number) + ": " + w + " (further ones today are on their tasks and PRs)"})
+	}
 }
 
 // mainWaitMax is how long a red check waits on main's run of it.
@@ -2582,13 +2612,18 @@ func checkDetail(runs []core.CheckRun) string {
 // raiseOnce raises a main-red alert (something in the environment holds
 // changes back) once per key, however many changes wait on it.
 func (m *Module) raiseOnce(p core.Project, key, text string) {
-	m.mu.Lock()
-	raised := m.mainRed[p.Name+"@"+key]
-	m.mainRed[p.Name+"@"+key] = true
-	m.mu.Unlock()
-	if !raised {
+	if !m.raised(p, key) {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": key, "text": text})
 	}
+}
+
+// raised says whether key was already raised for p, and marks it raised.
+func (m *Module) raised(p core.Project, key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	was := m.mainRed[p.Name+"@"+key]
+	m.mainRed[p.Name+"@"+key] = true
+	return was
 }
 
 // securityRead holds a PR that touches a path on main's security list until
