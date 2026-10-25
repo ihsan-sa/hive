@@ -785,7 +785,12 @@ func (m *Module) settle(t *Task, err error) {
 	downs = m.downs
 	m.mu.Unlock()
 	if err == nil {
-		t.Kills = 0
+		// t is the tick's copy, which nothing saves after this, so a run of
+		// kills a step got through ends on the task as kept.
+		if cur, ok := m.Get(t.ID); ok && cur.Kills > 0 {
+			cur.Kills, t.Kills = 0, 0
+			m.save(&cur, "")
+		}
 		return
 	}
 	if rl := (*core.RateLimited)(nil); errors.As(err, &rl) {

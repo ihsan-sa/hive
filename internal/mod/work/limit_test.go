@@ -234,17 +234,27 @@ func TestKilledCallWaitsAndStopsComeBack(t *testing.T) {
 func TestKilledEveryTimeStops(t *testing.T) {
 	m, _, task, _ := noCommitRig(t, 0)
 	killed := errors.New("git push: timed out after 5m0s, signal: killed")
-	for range killCap - 1 {
-		m.settle(task, killed)
+	m.save(task, "landing")
+	// Each step settles on a fresh copy of the task as kept, as a tick does.
+	settle := func(err error) {
+		cp, _ := m.Get(task.ID)
+		m.settle(&cp, err)
+		*task, _ = m.Get(task.ID)
 	}
-	m.settle(task, nil)
 	for range killCap - 1 {
-		m.settle(task, killed)
+		settle(killed)
+	}
+	settle(nil)
+	if task.Kills != 0 {
+		t.Fatalf("a step that got through left %d kills on the task as kept", task.Kills)
+	}
+	for range killCap - 1 {
+		settle(killed)
 	}
 	if task.Stage != StageLanding {
 		t.Fatalf("stopped though a step got through: %q %q", task.Stage, task.Reason)
 	}
-	m.settle(task, killed)
+	settle(killed)
 	if task.Stage != StageStopped || !strings.Contains(task.Reason, "in a row killed by their timeout") || task.Failures != 0 {
 		t.Fatalf("stage %q, reason %q, failures %d", task.Stage, task.Reason, task.Failures)
 	}

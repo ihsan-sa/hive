@@ -143,4 +143,7 @@ func TimedOut(text string) bool {
 	return timedOut.MatchString(text)
 }
 
+// timedOut is tied to the two producers' wording, runCmd's and gitOnce's
+// "timed out after 2m0s, signal: killed"; others (the gate's child, an open
+// agent's "[timed out after Ns]") say it their own way and aren't a call.
 var timedOut = regexp.MustCompile(`timed out after [0-9][0-9.µnmsh]*, `)
