@@ -44,10 +44,28 @@ func (w Workspace) Gates() string              { return filepath.Join(w.Hive(), 
 // made or a file renamed in it mid-turn is covered too.
 func (w Workspace) Private() string { return filepath.Join(w.Hive(), "private") }
 
+// Covered is the folders covered wherever agents read .hive: the login pool's
+// stored logins, module programs' homes and logs, and Private. No host
+// interpreter's install bound into a sandbox may hold one or sit inside one.
+// The paths are absolute, so a relative root still guards them.
+func (w Workspace) Covered() []string {
+	hive := filepath.Join(w.abs(), ".hive")
+	return []string{filepath.Join(hive, "logins"), filepath.Join(hive, "modules"), filepath.Join(hive, "private")}
+}
+
 // Guarded is what no host interpreter's install bound into a sandbox may
-// contain: the workspace and the folders covered wherever agents read .hive.
+// hold: the workspace and the folders covered in it. The covered folders are
+// listed as well as the root because any of them may be a symlink out of the
+// workspace, and then holding the root says nothing about them.
 func (w Workspace) Guarded() []string {
-	return []string{w.Root, filepath.Join(w.Hive(), "logins"), filepath.Join(w.Hive(), "modules"), w.Private()}
+	return append([]string{w.abs()}, w.Covered()...)
+}
+
+func (w Workspace) abs() string {
+	if a, err := filepath.Abs(w.Root); err == nil {
+		return a
+	}
+	return w.Root
 }
 
 // Checkouts is where agents' own checkouts of a project live.
@@ -87,9 +105,13 @@ type Config struct {
 	BareAccepted string `json:"bare_accepted,omitempty"` // timestamp the warning was read
 	WSLDistro    string `json:"wsl_distro,omitempty"`
 	ReleaseRepo  string `json:"release_repo"`
-	AutoUpdate   bool   `json:"auto_update"`
-	ReleasePin   string `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
-	PinnedAuto   bool   `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
+	// PublicOwners are the accounts or organizations where create_project
+	// may make a public repository and tell the person after; a public one
+	// anywhere else waits for their yes.
+	PublicOwners []string `json:"public_owners"`
+	AutoUpdate   bool     `json:"auto_update"`
+	ReleasePin   string   `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
+	PinnedAuto   bool     `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
 	// Channel is the releases auto-update follows: "latest", or "pre-release",
 	// each pre-release once its checks for this system pass. Empty is the
 	// default: pre-releases on the Hive whose own project is release_repo, the
@@ -296,6 +318,7 @@ func DefaultConfig() Config {
 		TribunalModels: []TribunalSeat{{Model: "opus"}, {Model: "sonnet"}, {Model: "fable"}},
 		Sandbox:        "auto",
 		ReleaseRepo:    DefaultReleaseRepo,
+		PublicOwners:   []string{"Hive-RSI-Lab"},
 		AutoUpdate:     true,
 		ReviewRounds:   3,
 		ChatMaxMB:      300,
