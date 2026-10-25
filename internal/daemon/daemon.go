@@ -266,6 +266,12 @@ func Run(ws core.Workspace, waitFor int) error {
 		}
 	})
 	a.C.J.Subscribe(s.onEvent)
+	if fresh, total := a.C.J.Breaks(); fresh > 0 {
+		// Two daemons on one workspace each count seq from their own start;
+		// say so, rather than leave it for someone reading events.jsonl.
+		a.C.J.MustAppend("alert.raised", map[string]any{"kind": "journal", "ref": "journal", "breaks": total,
+			"text": fmt.Sprintf("%d journal event(s) carry a seq that didn't rise past the one before: two Hive daemons wrote this workspace at once. Check that only one runs.", fresh)})
+	}
 	a.Release.Report()
 	settled := time.AfterFunc(release.SettleAfter, func() { release.Settled(ws) })
 	defer settled.Stop()

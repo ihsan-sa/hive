@@ -994,7 +994,7 @@ func (rs *Runs) Tick(cfg Config) {
 	slices.SortStableFunc(live, func(a, b Run) int { return a.Nice() - b.Nice() })
 	var wg sync.WaitGroup
 	for _, r := range live {
-		rs.stepAsync(r.ID, cfg, &wg)
+		rs.stepAsync(r, cfg, &wg)
 	}
 	go func() {
 		leads := make(chan struct{})
@@ -1015,40 +1015,50 @@ func (rs *Runs) Tick(cfg Config) {
 			log.Printf("runs: a lead's step is still going after 5s (%s); the other runs step now", strings.Join(slow, ", "))
 		}
 		for _, r := range rs.List(func(r *Run) bool { return !r.Lead() && (!r.Terminal() || r.Status == StatusRunning) }) {
-			rs.stepAsync(r.ID, cfg, nil)
+			rs.stepAsync(r, cfg, nil)
 		}
 	}()
 }
 
-// stepAsync steps the run in its own goroutine unless a step of it is under
-// way. It reads the run once it holds the step, never from the list it was
-// found in: a step that waited (behind the leads, or for a slow one) would
-// otherwise act on a status a later tick's step has moved on from, starting
-// a turn twice or ending one twice.
-func (rs *Runs) stepAsync(id string, cfg Config, wg *sync.WaitGroup) {
-	rs.mu.Lock()
-	if rs.busy[id] {
-		rs.mu.Unlock()
+// stepAsync steps a listed run in its own goroutine once it claims it
+// (claim: marked busy for one step, read as it is now), so a step that
+// waited (behind the leads, or for a slow one) never acts on a status a
+// later tick's step has moved on from, starting a turn twice or ending one
+// twice.
+func (rs *Runs) stepAsync(r Run, cfg Config, wg *sync.WaitGroup) {
+	r, ok := rs.claim(r)
+	if !ok {
 		return
 	}
-	rs.busy[id] = true
-	rs.mu.Unlock()
 	if wg != nil {
 		wg.Add(1)
 	}
 	go func() {
 		defer func() {
 			rs.mu.Lock()
-			delete(rs.busy, id)
+			delete(rs.busy, r.ID)
 			rs.mu.Unlock()
 			if wg != nil {
 				wg.Done()
 			}
 		}()
-		if r, ok := rs.Get(id); ok {
-			rs.step(r, cfg)
-		}
+		rs.step(r, cfg)
 	}()
+}
+
+// claim marks a listed run busy for one step and returns it as it is now:
+// the list can predate a step that ended since (a turn just started).
+func (rs *Runs) claim(r Run) (Run, bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.busy[r.ID] {
+		return r, false
+	}
+	rs.busy[r.ID] = true
+	if cur := rs.runs[r.ID]; cur != nil {
+		r = *cur
+	}
+	return r, true
 }
 
 func (rs *Runs) step(r Run, cfg Config) {
@@ -1089,6 +1099,11 @@ func (rs *Runs) watch(r Run) {
 		return
 	}
 	time.Sleep(200 * time.Millisecond) // let the last lines land
+	// A copy of the run older than now ends nothing: its turn ended already,
+	// and ending it again would clear the live turn after it.
+	if cur, ok := rs.Get(r.ID); !ok || cur.Status != StatusRunning || cur.Turn != r.Turn {
+		return
+	}
 	rs.ops.Drain(r)
 	rs.endTurn(r)
 }
