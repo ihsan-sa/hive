@@ -139,9 +139,18 @@ type Task struct {
 	// run at all while its required ones were awaited (head.go).
 	NoChecks   time.Time `json:"no_checks,omitempty"`
 	NoChecksOn string    `json:"no_checks_on,omitempty"`
+	// HeadWait is when the forge was first seen still showing HeadWaitOn,
+	// an earlier push of the Hive's than the task's head (head.go).
+	HeadWait   time.Time `json:"head_wait,omitempty"`
+	HeadWaitOn string    `json:"head_wait_on,omitempty"`
 	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
 	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
 	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
+	// FilesSince is when a queued brief began waiting, tick after tick, on
+	// other briefs' files (queue.go); FilesTold says the lead was told it
+	// has waited long, once per wait.
+	FilesSince time.Time `json:"files_since,omitempty"`
+	FilesTold  bool      `json:"files_told,omitempty"`
 	Failures   int       `json:"failures"`
 	CloseFail  int       `json:"close_fail,omitempty"` // failed tries to close the issue
 	Attempt    int       `json:"attempt"`              // fresh workers handed this task
@@ -369,7 +378,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 				m.cantRunOpen[a.Project] = cmp.Or(a.Check, "test")
 			case a.Kind == "main-red" && a.SHA != "":
 				m.mainRed[a.Project+"@"+a.SHA] = true
-			case a.Kind == "check-warning" && a.Key != "":
+			case (a.Kind == "check-warning" || a.Kind == "no-checks") && a.Key != "":
 				m.mainRed[a.Project+"@"+a.Key] = true
 			}
 			m.mu.Unlock()
@@ -711,10 +720,17 @@ func (m *Module) Tick() {
 }
 
 // waits records why a queued task waits, when that is new. A machine hold's
-// live figures after " (" change every tick, so only a new kind is saved.
+// live figures after " (" change every tick, so only a new kind is saved. A
+// brief that has waited on other briefs' files since filesTell ago, passed
+// meanwhile by later briefs on its other files, is told to the lead once.
 func (m *Module) waits(t Task, why string) {
+	since := time.Time{}
+	if onFiles(why) {
+		since = cmp.Or(t.FilesSince, time.Now().UTC())
+	}
+	tell := !since.IsZero() && !t.FilesTold && time.Since(since) >= filesTell
 	kind, _, _ := strings.Cut(why, " (")
-	if t.Stage == StageQueued && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+	if t.Stage == StageQueued && since.Equal(t.FilesSince) && !tell && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
 		return
 	}
 	m.mu.Lock()
@@ -724,11 +740,20 @@ func (m *Module) waits(t Task, why string) {
 	}
 	m.busy[t.ID] = true
 	m.mu.Unlock()
-	t.Stage, t.Reason = StageQueued, why
-	m.save(&t, "")
+	t.Stage, t.Reason, t.FilesSince = StageQueued, why, since
+	t.FilesTold = t.FilesTold && !since.IsZero() || tell
+	note := ""
+	if tell {
+		note = "told the lead it has waited on other briefs' files since " + since.Format("2006-01-02 15:04Z")
+	}
+	m.save(&t, note)
 	m.mu.Lock()
 	delete(m.busy, t.ID)
 	m.mu.Unlock()
+	if tell {
+		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited on other briefs' files since %s, while later briefs on its other files went ahead; now %s. `queue --now %s --why ...` starts it past them, or hold the ones on its files.",
+			t.Label(), t.ID, since.Format("2006-01-02 15:04Z"), why, t.ID))
+	}
 }
 
 // Wait returns once every step Tick started has ended, so a test's folders
@@ -1074,6 +1099,7 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 		t.Branch = "hive/" + t.ID
 	}
 	t.Worker, t.Stage, t.Failures, t.Reason, t.Now = id, StageWorking, 0, "", false
+	t.FilesSince, t.FilesTold = time.Time{}, false
 	m.save(t, "worker "+id+" started")
 	return nil
 }
@@ -2034,6 +2060,15 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if closed, err := m.closedPR(t, p, pr); closed || err != nil {
 		return err
 	}
+	if pr.Draft && pr.HeadSHA != t.SHA {
+		// A head the Hive pushed is reconciled as any PR's is; anyone
+		// else's commit on a draft waits for its read below.
+		if pushed, _ := m.C.Effects.Pushed(p.Name, t.Branch, pr.HeadSHA); pushed {
+			if wait, err := m.sameHead(t, p, pr.HeadSHA); wait || err != nil {
+				return err
+			}
+		}
+	}
 	if pr.Draft && (pr.HeadSHA != t.SHA || t.DraftWhy != "") {
 		return m.waitDraft(t, pr)
 	}
@@ -2373,7 +2408,8 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+how+"; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
 		}
 	}
-	if wait, err := m.noChecks(t, p, main, runs, st); wait || err != nil {
+	// Runs core.Advisory set aside still show the forge ran CI on the head.
+	if wait, err := m.noChecks(t, p, main, raw, st); wait || err != nil {
 		return wait, err
 	}
 	names := core.CheckNames(which)
@@ -2391,7 +2427,10 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		cancelled := !slices.ContainsFunc(which, func(r core.CheckRun) bool { return r.Detail != "cancelled" })
 		// Runs cancelled because a newer push to the PR replaced them (CI
 		// cancels a PR's superseded run) broke nothing: the newer head's own
-		// run is the one to wait for, and the next pass adopts it.
+		// run is the one to wait for, and the next pass adopts it. The PR is
+		// fetched again rather than taken from merge(): sameHead has already
+		// held t unless that copy's head was t.SHA, so only a fresh fetch
+		// sees a push that landed while the security read and checks ran.
 		if cancelled {
 			pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
 			if err != nil {
@@ -2804,6 +2843,14 @@ func checkDetail(runs []core.CheckRun) string {
 func (m *Module) raiseOnce(p core.Project, key, text string) {
 	if !m.raised(p, key) {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": key, "text": text})
+	}
+}
+
+// raiseKind raises an alert of its own kind once per key, as raiseOnce does,
+// for what holds a change back without main being red.
+func (m *Module) raiseKind(p core.Project, kind, key, text string) {
+	if !m.raised(p, key) {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": kind, "project": p.Name, "key": key, "text": text})
 	}
 }
 

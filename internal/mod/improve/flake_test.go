@@ -338,6 +338,34 @@ func TestVetRedOnlyRevertsTheMergeThatBroughtIt(t *testing.T) {
 	}
 }
 
+// A compile error in another language (tsc here) is named too, so a merge
+// measured while it keeps main red isn't reverted for it.
+func TestTscRedOnlyRevertsTheMergeThatBroughtIt(t *testing.T) {
+	m, commit, merge := tested(t)
+	tsc := "echo \"src/a.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.\"\nexit 2\n"
+	if ms := merge(commit(map[string]string{"t.sh": tsc})); ms.Kept || reverts(m) != 1 {
+		t.Fatalf("the merge that broke the build: %+v, reverts %d", ms, reverts(m))
+	}
+	if ms := merge(commit(map[string]string{"README.md": "only text\n"})); ms.Kept || !strings.Contains(ms.Note, "not new at this merge") || reverts(m) != 1 {
+		t.Fatalf("a merge on a tsc-red main: %+v, reverts %d", ms, reverts(m))
+	}
+}
+
+// A merge that clears a vet error on main lets tests run that vet stopped
+// just before it; what fails among them may have broken while vet hid it,
+// so the fix isn't reverted, and the failure is filed.
+func TestFailuresVetHidUntilItsFixAreNotTheFixs(t *testing.T) {
+	m, commit, merge := tested(t)
+	commit(map[string]string{"t.sh": "echo 'vet: e/a_test.go:225:42: not enough arguments in call to f'\nexit 1\n"}) // went red unmeasured
+	sha := commit(map[string]string{"t.sh": "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\nexit 1\n"})
+	if ms := merge(sha); ms.Kept || !strings.Contains(ms.Note, "can't be told new at this merge") || reverts(m) != 0 {
+		t.Fatalf("the merge that fixed vet: %+v, reverts %d", ms, reverts(m))
+	}
+	if len(m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") })) != 1 {
+		t.Fatal("what vet hid wasn't filed to fix")
+	}
+}
+
 // A merge that adds a failure no test name accounts for (a timeout) beside
 // a test main already failed is the merge's break: it is reverted.
 func TestUnnamedFailureBesideMainsRedIsReverted(t *testing.T) {
