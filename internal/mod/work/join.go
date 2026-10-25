@@ -1,0 +1,142 @@
+package work
+
+import (
+	"fmt"
+	"regexp"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+)
+
+// Joining: a brief an agent files whose ask matches an open task that no
+// worker has pushed for yet (filed, queued or being worked on) joins that task
+// as added context instead of starting a second worker on the same thing. A
+// match is a failing test both name in their title or done line,
+// a near-identical title, or the same named files under a similar title.
+// Pushed tasks aren't joined: their worker is done, so the added ask would be
+// lost. The person's asks and the Hive's own (follow-ups, trials) are always
+// filed as they come; an agent that means separate work says apart.
+
+var testName = regexp.MustCompile(`\b(?:Test|Benchmark|Fuzz)[A-Z][A-Za-z0-9_]*`)
+
+// match says why brief b is the same ask as task t, or "" when it isn't.
+func match(b Brief, t Task) string {
+	mine := names(testName, b.Title+"\n"+b.Done)
+	for _, n := range names(testName, t.Title+"\n"+t.Done+"\n"+strings.Join(t.Joined, "\n")) {
+		if slices.Contains(mine, n) {
+			return "both are about " + n
+		}
+	}
+	sim := likeness(b.Title, t.Title)
+	if sim >= 0.6 {
+		return "the titles are nearly the same"
+	}
+	if f := files(b.Title + "\n" + b.Done + "\n" + b.Known); sim >= 0.3 && len(f) > 0 && slices.Equal(f, files(t.Title+"\n"+t.Done+"\n"+t.Known)) {
+		return "both name " + strings.Join(f, ", ")
+	}
+	return ""
+}
+
+// names are the distinct matches of re in s, sorted.
+func names(re *regexp.Regexp, s string) []string {
+	out := re.FindAllString(s, -1)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// files are the file paths (a last part with an extension) a text names.
+func files(s string) []string {
+	var out []string
+	for _, p := range names(pathLike, s) {
+		p = strings.TrimRight(strings.TrimPrefix(p, "./"), ".")
+		if i := strings.LastIndex(p, "/"); i >= 0 && strings.Contains(p[i+1:], ".") {
+			out = append(out, p)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// stop are words too common in titles to make two of them alike.
+var stop = map[string]bool{"the": true, "and": true, "for": true, "with": true, "from": true, "that": true, "this": true, "into": true, "its": true, "are": true, "not": true, "when": true, "one": true, "all": true, "has": true, "but": true, "out": true, "own": true, "again": true, "instead": true}
+
+// likeness is the share of words two titles have in common (Jaccard).
+func likeness(a, b string) float64 {
+	words := func(s string) map[string]bool {
+		out := map[string]bool{}
+		for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+			return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+		}) {
+			if len(w) > 2 && !stop[w] {
+				out[w] = true
+			}
+		}
+		return out
+	}
+	x, y := words(a), words(b)
+	if len(x) == 0 || len(y) == 0 {
+		return 0
+	}
+	both := 0
+	for w := range x {
+		if y[w] {
+			both++
+		}
+	}
+	return float64(both) / float64(len(x)+len(y)-both)
+}
+
+// JoinedBy reports whether a brief run filed joined t.
+func (t Task) JoinedBy(run string) bool {
+	for _, e := range t.Log {
+		if e.Text == joinedNote+run || strings.HasPrefix(e.Text, joinedNote+run+":") {
+			return true
+		}
+	}
+	return false
+}
+
+const joinedNote = "joined by a brief from "
+
+// joinable reports whether a new brief may join t: open work on the
+// project that no worker has pushed for yet, and not the filer's own task.
+func joinable(t Task, b Brief, own string) bool {
+	return t.Kind == "work" && t.Project == b.Project && t.ID != own && t.Model == "" &&
+		(t.Stage == StageNew || t.Queued() || t.Stage == StageWorking)
+}
+
+// join adds b to the oldest open task it matches and returns that task and
+// why, or ok false when there is none and b is to be filed on its own.
+func (m *Module) join(b Brief, own string) (Task, string, bool) {
+	open := m.List(func(t Task) bool { return joinable(t, b, own) })
+	slices.Reverse(open) // oldest first, so a third brief joins the first
+	for _, o := range open {
+		why := match(b, o)
+		if why == "" || !m.claim(o.ID) {
+			continue
+		}
+		t, ok := m.Get(o.ID) // afresh, now no step holds it
+		if !ok || !joinable(t, b, own) {
+			m.release(o.ID)
+			continue
+		}
+		added := fmt.Sprintf("Also asked by %s (%s; joined here since %s): %s", b.From, time.Now().UTC().Format("15:04Z"), why, core.Clip(b.Title, 300))
+		if b.Done != "" {
+			added += "\nDone looks like: " + core.Clip(b.Done, 1500)
+		}
+		if b.Known != "" {
+			added += "\nKnown: " + core.Clip(b.Known, 3000)
+		}
+		t.Known = strings.TrimSpace(t.Known + "\n\n" + added)
+		t.Joined = append(t.Joined, b.Title+"\n"+b.Done)
+		m.save(&t, fmt.Sprintf("%s%s: %s", joinedNote, b.From, why))
+		if t.Stage == StageWorking && t.Worker != "" {
+			m.C.Runs.Send(t.Worker, "Another brief was filed for the same ask as your task, so it joins yours rather than starting a second worker. Cover it too, or say in your account what you left out:\n\n"+added)
+		}
+		m.release(o.ID)
+		return t, why, true
+	}
+	return Task{}, "", false
+}

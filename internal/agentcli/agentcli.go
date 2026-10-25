@@ -95,7 +95,7 @@ func Main(argv []string) int {
 
 // switches are the yes/no arguments, which may stand bare before another
 // --key; any other key takes the next word as its value, even "--help".
-var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true}
+var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "apart": true}
 
 // parseArgs accepts one JSON object, `-` for JSON on stdin, `--file x.json`,
 // or --key value pairs (a value of @path reads that file's text).
@@ -159,7 +159,7 @@ A value of @path reads that file. Common ops:
   inbox                                          messages waiting for you
   agents                                         who is running
   spawn     --role worker --brief "..." [--project p]   a helper; its account returns to you
-  brief     --title "..." --done "what done looks like" [--known "..."] [--project p]
+  brief     --title "..." --done "what done looks like" [--known "..."] [--project p] [--apart]
                                                  file an ask: it becomes an issue, a worker, a PR
   warden    --want "..." --why "..." --steps "..."   for anything past your reach; the person decides
   install   --tool python|uv|node|go [--version 3.12]   installs it for every agent, no root,

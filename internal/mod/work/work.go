@@ -54,7 +54,8 @@ type Task struct {
 	Title     string     `json:"title"`
 	Done      string     `json:"done"`
 	Known     string     `json:"known"`
-	From      string     `json:"from"` // run id, person, or sweep run
+	Joined    []string   `json:"joined,omitempty"` // the title and done line of each brief that joined it (join.go)
+	From      string     `json:"from"`             // run id, person, or sweep run
 	Chat      string     `json:"chat,omitempty"`
 	Thread    string     `json:"thread,omitempty"`
 	Kind      string     `json:"kind"` // work | revert | helper (spawned, no issue)
@@ -202,6 +203,7 @@ type Module struct {
 	busy  map[string]bool
 	// areaCache holds the paths each brief names (queue.go).
 	areaCache map[string]areaEntry
+	filing    sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
 	steps     sync.WaitGroup // the steps Tick started that are still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
@@ -281,7 +283,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
-	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project"}`, Fn: m.opBrief})
+	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","apart"} -> a new task; one matching an open task not yet pushed (a test both name, a near-identical title) joins it as added context instead, unless apart`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: []string{"lead"}, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); with back, its worker gets that text and works on`, Fn: m.opRecheck})
 	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: []string{"worker", "lead"}, Help: `{"task"} (a worker's own task by default) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
 	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: []string{"lead"}, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed), hold keeps one waiting until released, now starts those first even past a brief on the same files (why says so, on the record), for a fix the one it waits on needs. A started worker is never stopped`, Fn: m.opQueue})
@@ -358,6 +360,9 @@ type Brief struct {
 	FollowUp string `json:"-"`
 	// Model is the model a trial's worker runs on; only the trial op sets it.
 	Model string `json:"-"`
+	// Apart files an agent's brief as its own task even when it matches an
+	// open one (join.go).
+	Apart bool `json:"apart"`
 }
 
 // File creates a task from a brief.
@@ -409,6 +414,14 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 		return nil, err
 	}
 	b.Chat, b.Thread = m.thread(r)
+	m.filing.Lock() // two briefs on one ask filed at once still find each other
+	defer m.filing.Unlock()
+	if !b.Apart {
+		own, _ := m.taskOf(r.ID)
+		if t, why, ok := m.join(b, own.ID); ok {
+			return map[string]string{"task": t.ID, "joined": "true", "note": fmt.Sprintf("not filed anew: %s, so your brief joins open task %s (%q, %s) as added context; if it is different work, file it again with apart", why, t.ID, t.Label(), t.Stage)}, nil
+		}
+	}
 	t, err := m.File(b)
 	if err != nil {
 		return nil, err
