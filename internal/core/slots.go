@@ -38,6 +38,21 @@ var slotSeq int64
 // NewSlots makes a queue whose size is read from size.
 func NewSlots(size func() int) *Slots { return &Slots{size: size} }
 
+// Resize reads the size from size from now on, and starts what now has room.
+func (s *Slots) Resize(size func() int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.size = size
+	s.fill()
+}
+
+// Fill starts what has room, for a size that grew since the last hand-off.
+func (s *Slots) Fill() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fill()
+}
+
 // Acquire waits for a slot in order and returns its release.
 func (s *Slots) Acquire(project, sha, kind string) (release func()) {
 	s.mu.Lock()
@@ -83,6 +98,7 @@ func (s *Slots) State() (running, waiting []SlotUse) {
 	return running, waiting
 }
 
-// DefaultMaxChecks is a few checks at a time, sized to the machine: a check
-// (vet, build, tests) keeps several cores busy on its own, so 20 cores carry 3.
+// DefaultMaxChecks is where the checks' limit starts, sized to the machine: a
+// check (vet, build, tests) keeps several cores busy on its own, so 20 cores
+// carry 3. The work module's pace moves it from there.
 func DefaultMaxChecks() int { return max(2, runtime.NumCPU()/6) }

@@ -47,7 +47,9 @@ var ErrDraft = errors.New("the pull request is a draft, left for a read")
 type Forge interface {
 	Name() string
 	User() (string, error)
-	EnsureRepo(repo, description string) (created bool, err error)
+	// EnsureRepo makes repo, public or private, unless it exists; an
+	// existing repository's visibility is never changed (that is the person's).
+	EnsureRepo(repo, description string, public bool) (created bool, err error)
 	// Fork is owner's fork of repo, made on first need; owner "" is the
 	// person's own account, else an organization they can create repos in.
 	Fork(repo, owner string) (string, error)
@@ -97,6 +99,9 @@ type Forge interface {
 	// jobs of a pre-release's gates pass.
 	Releases(repo string) ([]Release, error)
 	RunJobs(repo string, run int64) ([]WorkflowJob, error)
+	// File is one file on repo's default branch; ErrNotFound when it has
+	// none (the release repository's steward record).
+	File(repo, path string) (string, error)
 }
 
 // CheckRun is one of the forge's own checks on a commit, such as a CI job.
@@ -233,10 +238,14 @@ func gh(repo string, args ...string) (string, error) {
 }
 
 // ghVerb names a gh command by its leading words, such as "pr create" or
-// "api repos/o/r/issues/3/comments".
+// "api repos/o/r/issues/3/comments". --paginate takes no value, so the path
+// after it still names a list read.
 func ghVerb(args []string) string {
 	var w []string
 	for _, a := range args {
+		if a == "--paginate" {
+			continue
+		}
 		if strings.HasPrefix(a, "-") || len(w) == 3 {
 			break
 		}
@@ -368,11 +377,15 @@ func ghLogin(repo string) (string, error) {
 // User is the login gh itself holds.
 func (GitHub) User() (string, error) { return gh("", "api", "user", "-q", ".login") }
 
-func (g GitHub) EnsureRepo(repo, description string) (bool, error) {
+func (g GitHub) EnsureRepo(repo, description string, public bool) (bool, error) {
 	if _, err := gh(repo, "repo", "view", repo, "--json", "name"); err == nil {
 		return false, nil
 	}
-	if _, err := gh(repo, "repo", "create", repo, "--private", "--description", description); err != nil {
+	visibility := "--private"
+	if public {
+		visibility = "--public"
+	}
+	if _, err := gh(repo, "repo", "create", repo, visibility, "--description", description); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -532,8 +545,12 @@ func (p ghPR) pr() PR {
 
 const prFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,isDraft,body,mergeCommit,headRepositoryOwner"
 
+// listFields is prFields less the description: a list brings every PR on the
+// branch, and only GetPR's reader wants the body.
+const listFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,isDraft,mergeCommit,headRepositoryOwner"
+
 func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
-	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", prFields}
+	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", listFields}
 	// A fork's "owner:branch": gh matches the branch name alone, and once
 	// merged the next change needs a new pull request.
 	owner, branch, fork := strings.Cut(head, ":")
@@ -676,9 +693,14 @@ const queuedTooLong = time.Hour
 // Checks lists GitHub's check runs and commit statuses on sha. A check suite
 // with no runs yet counts as pending, so a just-pushed head whose jobs aren't
 // listed yet doesn't read as having none.
+//
+// A token that may not read checks (a 403) on a head with no workflows reads
+// as no checks: there is no CI there to wait for, so the change goes on by
+// the Hive's own tests, as on a project with no forge checks at all.
 func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
+	none := ciless(repo, sha)
 	runs, err := ghPages[ghCheckRun](repo, "repos/"+repo+"/commits/"+sha+"/check-runs", "check_runs")
-	if err != nil {
+	if err = none(err); err != nil {
 		return nil, err
 	}
 	// A check run again is listed once per attempt; the newest one counts. A
@@ -704,7 +726,7 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 		Description string `json:"description"`
 		TargetURL   string `json:"target_url"`
 	}](repo, "repos/"+repo+"/commits/"+sha+"/status", "statuses")
-	if err != nil {
+	if err = none(err); err != nil {
 		return nil, err
 	}
 	for _, s := range statuses {
@@ -715,7 +737,7 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 		list = append(list, CheckRun{Name: s.Context, State: state, Detail: s.Description, URL: s.TargetURL})
 	}
 	suites, err := ghPages[ghSuite](repo, "repos/"+repo+"/commits/"+sha+"/check-suites", "check_suites")
-	if err != nil {
+	if err = none(err); err != nil {
 		return nil, err
 	}
 	for _, s := range suites {
@@ -724,6 +746,36 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 		}
 	}
 	return list, nil
+}
+
+// checksRefused is a forge refusing the token a read of a head's checks, as
+// gh words it: "gh api repos/o/r/commits/<sha>/check-runs?per_page=100: gh:
+// Resource not accessible by personal access token (HTTP 403)".
+var checksRefused = regexp.MustCompile(`^gh api repos/\S+/commits/[0-9a-f]+/(check-runs|check-suites|status)\S*: .*\(HTTP 403\)$`)
+
+// ChecksRefused reports whether err's text is GitHub.Checks refused the
+// token's read of a head's checks.
+func ChecksRefused(text string) bool { return checksRefused.MatchString(text) }
+
+// ciless returns a filter for the errors of reading sha's checks: a refusal
+// (HTTP 403) is dropped when sha has no .github/workflows (GitHub answers 404
+// for it), asked once and only on the first refusal; any other error stands.
+func ciless(repo, sha string) func(error) error {
+	asked, none := false, false
+	return func(err error) error {
+		if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+			return err
+		}
+		if !asked {
+			asked = true
+			_, werr := gh(repo, "api", "repos/"+repo+"/contents/.github/workflows?ref="+sha)
+			none = werr != nil && strings.Contains(werr.Error(), "HTTP 404")
+		}
+		if none {
+			return nil
+		}
+		return err
+	}
 }
 
 // ghPages reads every page of a GitHub list held under field of each page's
@@ -919,6 +971,14 @@ func (GitHub) ReleaseRuns(repo, sha string) ([]WorkflowRun, error) {
 	}
 	var runs []WorkflowRun
 	return runs, json.Unmarshal([]byte(out), &runs)
+}
+
+func (GitHub) File(repo, path string) (string, error) {
+	out, err := gh(repo, "api", "repos/"+repo+"/contents/"+path, "-H", "Accept: application/vnd.github.raw")
+	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+		return "", ErrNotFound
+	}
+	return out, err
 }
 
 func (GitHub) Releases(repo string) ([]Release, error) {

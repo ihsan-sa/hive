@@ -316,6 +316,80 @@ func TestChecksPaginates(t *testing.T) {
 	}
 }
 
+// A token refused the checks (HTTP 403) on a head with no workflows reads as
+// no checks, which ChecksState passes; with workflows there the refusal
+// stands, since there is CI the Hive can't see.
+func TestChecksRefusedWithoutWorkflows(t *testing.T) {
+	refused := "gh: Resource not accessible by personal access token (HTTP 403)"
+	for _, workflows := range []bool{false, true} {
+		calls := stubGH(t, func(args []string) (string, string, error) {
+			switch {
+			case strings.Contains(args[1], "contents/.github/workflows"):
+				if workflows {
+					return `[{"name":"ci.yml"}]`, "", nil
+				}
+				return "", "gh: Not Found (HTTP 404)", errors.New("exit status 1")
+			case strings.Contains(args[2], "check-runs"), strings.Contains(args[2], "check-suites"):
+				return "", refused, errors.New("exit status 1")
+			}
+			return "", "", nil
+		})
+		runs, err := GitHub{}.Checks("o/r", "abc")
+		if workflows {
+			// The stopped task's reason is this text, which revive matches.
+			want := "gh api repos/o/r/commits/abc/check-runs?per_page=100: " + refused
+			if err == nil || err.Error() != want || !ChecksRefused(err.Error()) {
+				t.Errorf("with workflows: runs %+v, err %v", runs, err)
+			}
+			continue
+		}
+		if err != nil || len(runs) != 0 {
+			t.Fatalf("no workflows: runs %+v, err %v", runs, err)
+		}
+		if st, _ := ChecksState(runs, nil); st != CheckPass {
+			t.Errorf("no workflows reads %s", st)
+		}
+		asked := 0
+		for _, c := range *calls {
+			if strings.Contains(c[1], "workflows") {
+				asked++
+				if !strings.Contains(c[1], "ref=abc") {
+					t.Errorf("asked for workflows off the head: %q", c)
+				}
+			}
+		}
+		if asked != 1 {
+			t.Errorf("asked for workflows %d times, want once", asked)
+		}
+	}
+}
+
+// The four tasks stopped on a checks refusal, their reasons as the journal
+// records them (after "gave up after repeated errors: "), read as one; a
+// refusal of another call doesn't.
+func TestChecksRefusedReasons(t *testing.T) {
+	const tail = "?per_page=100: gh: Resource not accessible by personal access token (HTTP 403)"
+	for _, r := range []string{
+		"gh api repos/Hive-RSI-Lab/hive-deck/commits/e3b0815699da94aede6f3d3a1c8b60e5ea532c87/check-runs" + tail,
+		"gh api repos/Hive-RSI-Lab/hive-dispatch/commits/23925cb03db4544ed170451a28aa905c00d66783/check-runs" + tail,
+		"gh api repos/Hive-RSI-Lab/hive-trials/commits/e5789b39d9d40ee34abf3b53886ee38529028feb/check-runs" + tail,
+		"gh api repos/Hive-RSI-Lab/hive-trials/commits/fa2ec42bff45ca0e5d059e4a6429e8c0495ebd36/check-runs" + tail,
+	} {
+		if !ChecksRefused(r) {
+			t.Errorf("not read as a checks refusal: %s", r)
+		}
+	}
+	for _, r := range []string{
+		"gh api: gh: Resource not accessible by personal access token (HTTP 403)",
+		"gh api repos/o/r/issues/3/comments: gh: Resource not accessible by personal access token (HTTP 403)",
+		"gh api repos/o/r/commits/abc/check-runs?per_page=100: gh: Bad credentials (HTTP 401)",
+	} {
+		if ChecksRefused(r) {
+			t.Errorf("read as a checks refusal: %s", r)
+		}
+	}
+}
+
 // An API read goes through gh's login as a plain GET, and a rate-limited one
 // comes back as RateLimited; the quota's reset is read from rate_limit.
 func TestAPIGetOnTheLogin(t *testing.T) {

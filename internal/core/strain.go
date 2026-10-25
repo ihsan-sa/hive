@@ -39,6 +39,25 @@ func strained(proc string, memFloorMB int, memPressureMax, cpuPressureMax float6
 	return ""
 }
 
+// Watched says whether any reading a limit turns on (Strained's and
+// Loaded's) exists on this machine: where none does (no /proc, as on macOS
+// or Windows) they never hold, so nothing is seen at all.
+func Watched(memFloorMB int, memPressureMax, cpuPressureMax, loadMax float64) bool {
+	return watched(procRoot, memFloorMB, memPressureMax, cpuPressureMax, loadMax)
+}
+
+func watched(proc string, memFloorMB int, memPressureMax, cpuPressureMax, loadMax float64) bool {
+	for _, r := range []struct {
+		on   bool
+		file string
+	}{{memFloorMB > 0, "meminfo"}, {memPressureMax > 0, "pressure/memory"}, {cpuPressureMax > 0, "pressure/cpu"}, {loadMax > 0, "loadavg"}} {
+		if _, err := os.Stat(proc + "/" + r.file); r.on && err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // procField reads the number after the first occurrence of key in a /proc
 // file. For a pressure file that is the "some" line, deliberately: "full"
 // (every task stalled at once) is rarely reached before the machine is lost.
