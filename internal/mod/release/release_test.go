@@ -834,8 +834,8 @@ func TestFailedReleaseRunStopsTheCut(t *testing.T) {
 	if _, ok := n.got["v0.0.2"]; ok {
 		t.Fatal("cut another release while the last one's release run failed")
 	}
-	if a := alerts(); len(a) != 2 || !strings.Contains(a[1], "no release at m2: v0.0.1 has no binaries, since its release run failure at its scan job") {
-		t.Fatalf("alerts %q", a)
+	if a := alerts(); len(a) != 1 {
+		t.Fatalf("the hold raised the failure again: %q", a)
 	}
 	m.AfterKept("hive", "m2")
 	held := 0
@@ -849,7 +849,7 @@ func TestFailedReleaseRunStopsTheCut(t *testing.T) {
 	}
 
 	asks := m.C.Person.Open()
-	if len(asks) != 1 || asks[0].Kind != "release" || !strings.Contains(asks[0].Title, "has no binaries") {
+	if len(asks) != 1 || asks[0].Kind != "release" || !strings.Contains(asks[0].Title, "v0.0.1 has no binaries, since its release run failure at its scan job") {
 		t.Fatalf("the hold asks %+v", asks)
 	}
 
@@ -865,6 +865,84 @@ func TestFailedReleaseRunStopsTheCut(t *testing.T) {
 	m.AfterKept("hive", "m3")
 	if _, ok := n.got["v0.0.2"]; !ok {
 		t.Fatal("the fix for a failed build was never released")
+	}
+}
+
+// v0.1.97 to v0.1.106: one release a merge, each failing the same update
+// check while the next was cut, and each raising its own alert. Once one
+// failed update, a merge that changes nothing update reads is held even while
+// the releases cut after it still run, and the one cause is raised once.
+func TestFailedUpdateStopsTheCut(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	fail := func(sha string) {
+		n.SetReleaseRuns("me/hive", sha,
+			core.WorkflowRun{Name: "release", Status: "completed", Conclusion: "success"},
+			core.WorkflowRun{Name: "update", Status: "completed", Conclusion: "failure", URL: "https://ci/update/" + sha},
+			core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"})
+	}
+	changes := map[string][]string{"m4": {"docs/status.md", "internal/mod/work/hold_test.go"}, "m5": {".github/workflows/update.yml"}}
+	m.Diff = func(_ core.Project, _, to string) ([]string, error) { return changes[to], nil }
+	cut := func(i int) {
+		merged(i, fmt.Sprint("a", i), fmt.Sprint("m", i))
+		land(fmt.Sprint("a", i), fmt.Sprint("r", i))
+		m.AfterKept("hive", fmt.Sprint("m", i))
+	}
+	alerts := func() (out []string) {
+		m.C.J.Replay(func(e core.Event) {
+			var a struct{ Text string }
+			if e.Kind == "alert.raised" && e.Decode(&a) == nil {
+				out = append(out, a.Text)
+			}
+		})
+		return out
+	}
+	// v0.0.1 and v0.0.2 are cut before either's checks end; v0.0.1 fails
+	// update, v0.0.2 is still running when m3 merges.
+	cut(1)
+	cut(2)
+	fail("m1")
+	n.SetReleaseRuns("me/hive", "m2", core.WorkflowRun{Name: "update", Status: "in_progress"})
+	changes["m3"] = []string{"README.md"}
+	cut(3)
+	if _, ok := n.got["v0.0.3"]; ok {
+		t.Fatal("cut a third release while the first failed update and nothing it reads changed")
+	}
+	if a := alerts(); len(a) != 1 || !strings.Contains(a[0], "no release at m3: v0.0.1 failed its release check, update failure (https://ci/update/m1)") {
+		t.Fatalf("alerts %q", a)
+	}
+	// Both fail the same way: Publish journals each, raising neither again.
+	fail("m2")
+	m.Publish()
+	cut(4)
+	m.Publish()
+	if a := alerts(); len(a) != 1 {
+		t.Fatalf("one cause raised %d alerts: %q", len(a), a)
+	}
+	if _, ok := n.got["v0.0.3"]; ok {
+		t.Fatal("cut a test-only change over a failed update")
+	}
+	// A change to what update reads is cut.
+	cut(5)
+	if _, ok := n.got["v0.0.3"]; !ok {
+		t.Fatal("the fix for update was never released")
+	}
+}
+
+// A failed ci, which reads every file, never holds the cut.
+func TestFailedCIDoesNotHoldTheCut(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	n.SetReleaseRuns("me/hive", "m1",
+		core.WorkflowRun{Name: "update", Status: "completed", Conclusion: "failure"},
+		core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "failure"})
+	m.Diff = func(core.Project, string, string) ([]string, error) { return []string{"README.md"}, nil }
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	if _, ok := n.got["v0.0.2"]; !ok {
+		t.Fatal("a failed ci held the cut")
 	}
 }
 
@@ -983,7 +1061,7 @@ func TestSkippedOrCancelledGateIsNotAPass(t *testing.T) {
 		n.SetReleaseRuns("me/hive", "m1",
 			core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"},
 			core.WorkflowRun{Name: "update", Status: "completed", Conclusion: conclusion, URL: "https://ci/update"})
-		if state, why := m.gates("me/hive", "m1"); state != "failed" || !strings.Contains(why, "update "+conclusion) {
+		if state, why, _ := m.gates("me/hive", "m1"); state != "failed" || !strings.Contains(why, "update "+conclusion) {
 			t.Fatalf("update %q: %s, %s", conclusion, state, why)
 		}
 	}

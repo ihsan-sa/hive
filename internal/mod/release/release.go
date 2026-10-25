@@ -756,7 +756,6 @@ func (m *Module) afterKept(project, sha string) {
 	}
 	if !approved {
 		if held := m.unbuilt(p, sha); held != "" {
-			alert("no release at " + core.Short(sha) + ": " + held)
 			why = append(why, held)
 		}
 	}
@@ -1136,7 +1135,7 @@ func (m *Module) Publish() string {
 			out = append(out, c.Tag+": not published, "+why)
 			continue
 		}
-		state, why := m.gates(p.Repo, c.SHA)
+		state, why, cause := m.gates(p.Repo, c.SHA)
 		switch state {
 		case "passed":
 			// The gates passed at c.SHA; the tag must still point there.
@@ -1163,14 +1162,12 @@ func (m *Module) Publish() string {
 			done[c.Project] = true
 			out = append(out, "published "+c.Tag)
 		case "failed":
-			if !failed[key] {
-				m.C.J.MustAppend("release.failed", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA, "why": why})
-				alert(c, c.Tag+" stays a pre-release, so installs stay where they are: "+why+". A re-run that passes publishes it.")
+			if !failed[key] && m.failed(c.Project, c.Tag, c.SHA, why, cause, "") {
+				alert(c, c.Tag+" stays a pre-release, so installs stay where they are: "+why+". A re-run that passes publishes it. "+failedSteps)
 			}
 			out = append(out, c.Tag+": "+why)
 		case "unbuilt":
-			if !failed[key] {
-				m.C.J.MustAppend("release.failed", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA, "why": why, "gate": "release"})
+			if !failed[key] && m.failed(c.Project, c.Tag, c.SHA, why, cause, "release") {
 				alert(c, c.Tag+" has no binaries, since its "+why+"; its update test has nothing to install, so an update failure there says nothing about updating. "+unbuiltSteps)
 			}
 			out = append(out, c.Tag+": "+why)
@@ -1188,18 +1185,57 @@ func (m *Module) Publish() string {
 	return strings.Join(out, "; ")
 }
 
+// failed journals that tag failed a release check, and says whether that
+// cause is new: no release since the last published one failed or was held
+// on it, so it is raised; the next releases failing the same way are not.
+func (m *Module) failed(project, tag, sha, why, cause, gate string) (raise bool) {
+	raise = !m.causeSaid(project, cause)
+	e := map[string]string{"project": project, "tag": tag, "sha": sha, "why": why, "cause": cause}
+	if gate != "" {
+		e["gate"] = gate
+	}
+	m.C.J.MustAppend("release.failed", e)
+	return raise
+}
+
+// causeSaid says whether a release since the project's last published one
+// failed or was held on cause.
+func (m *Module) causeSaid(project, cause string) (said bool) {
+	m.C.J.Replay(func(e core.Event) {
+		var x struct{ Project, Cause string }
+		if e.Decode(&x) != nil || x.Project != project {
+			return
+		}
+		switch e.Kind {
+		case "hive.published":
+			said = false
+		case "release.failed", "release.held":
+			said = said || cause != "" && x.Cause == cause
+		}
+	})
+	return said
+}
+
 // gates says "passed" when every gate passed in the release runs at sha,
 // else "unbuilt" (the release workflow itself failed, so no gate has binaries
-// to test), "failed" or "waiting", and why.
-func (m *Module) gates(repo, sha string) (state, why string) {
+// to test), "failed" or "waiting", and why. cause names what failed, the same
+// for every release that failed the same way: "release" and its failed jobs,
+// or the failed gates.
+func (m *Module) gates(repo, sha string) (state, why, cause string) {
 	runs, err := m.C.Effects.Forge.ReleaseRuns(repo, sha)
 	if err != nil {
-		return "waiting", "can't read its runs (" + core.Clip(err.Error(), 200) + ")"
+		return "waiting", "can't read its runs (" + core.Clip(err.Error(), 200) + ")", ""
 	}
-	if why, _ := m.buildFailed(repo, runs); why != "" {
-		return "unbuilt", why
+	if why, jobs := m.buildFailed(repo, runs); why != "" {
+		return "unbuilt", why, strings.Join(append([]string{"release"}, jobs...), " ")
 	}
-	var bad, wait []string
+	state, why, bad := judge(runs)
+	return state, why, strings.Join(bad, " ")
+}
+
+// judge reads the gates among a release's runs: bad are the gates that failed.
+func judge(runs []core.WorkflowRun) (state, why string, bad []string) {
+	var failed, wait []string
 	for _, g := range Gates {
 		i := slices.IndexFunc(runs, func(r core.WorkflowRun) bool { return r.Name == g })
 		switch {
@@ -1208,16 +1244,17 @@ func (m *Module) gates(repo, sha string) (state, why string) {
 		case runs[i].Status != "completed":
 			wait = append(wait, g)
 		case runs[i].Conclusion != "success":
-			bad = append(bad, g+" "+runs[i].Conclusion+" ("+runs[i].URL+")")
+			bad = append(bad, g)
+			failed = append(failed, g+" "+runs[i].Conclusion+" ("+runs[i].URL+")")
 		}
 	}
 	switch {
 	case len(bad) > 0:
-		return "failed", strings.Join(bad, ", ")
+		return "failed", strings.Join(failed, ", "), bad
 	case len(wait) > 0:
-		return "waiting", "waiting for " + strings.Join(wait, ", ")
+		return "waiting", "waiting for " + strings.Join(wait, ", "), nil
 	}
-	return "passed", ""
+	return "passed", "", nil
 }
 
 // unbuiltSteps is what the person does about a release whose release
@@ -1273,51 +1310,95 @@ func reads(jobs []string, path string) bool {
 	return false
 }
 
-// unbuilt says why no release is cut at sha while the newest one's release
-// workflow failed: a new tag that leaves what failed unchanged would only be
-// another release with no binaries. A commit that changes a file the failed
-// job reads is cut as usual, so a fix in the code is released; so is any
-// commit once that run passes on a re-run, or the person says "release". It
-// notes the hold once per tag in the journal; a release run or diff that
-// can't be read never holds the cut.
+// unbuilt says why no release is cut at sha while a release since the last
+// published one failed a release check (its release workflow, or the update
+// gate): a new tag that leaves what failed unchanged would only fail the same
+// way. It reads the newest such release with a verdict, so a cut is held even
+// while the releases cut after it still run; one that passed, or a failed ci
+// (which reads every file), never holds. A commit that changes a file the
+// failed check reads is cut as usual, so a fix in the code is released; so is
+// any commit once that check passes on a re-run, or the person says
+// "release". It notes the hold once per tag in the journal and raises it only
+// when no release failed or was held on the same cause; a release run or diff
+// that can't be read never holds the cut.
 func (m *Module) unbuilt(p core.Project, sha string) string {
-	var tag, at string
+	type rel struct{ Tag, SHA string }
+	var since []rel
 	held := map[string]bool{}
 	m.C.J.Replay(func(e core.Event) {
-		var x struct{ Project, Tag, SHA string }
+		var x struct {
+			Project, Tag, SHA string
+			Prerelease        bool
+		}
 		if e.Decode(&x) != nil || x.Project != p.Name {
 			return
 		}
 		switch e.Kind {
 		case "hive.released":
-			tag, at = x.Tag, x.SHA
+			if !x.Prerelease {
+				since = nil
+			}
+			since = append(since, rel{x.Tag, x.SHA})
+		case "hive.published":
+			since = slices.DeleteFunc(since, func(r rel) bool { return !modules.Newer(x.Tag, r.Tag) })
 		case "release.held":
 			held[x.Tag] = true
 		}
 	})
-	if tag == "" || at == sha {
+	if len(since) == 0 || since[len(since)-1].SHA == sha {
 		return ""
 	}
-	runs, err := m.C.Effects.Forge.ReleaseRuns(p.Repo, at)
-	if err != nil {
-		return ""
+	for i := len(since) - 1; i >= 0 && i >= len(since)-5; i-- {
+		r := since[i]
+		runs, err := m.C.Effects.Forge.ReleaseRuns(p.Repo, r.SHA)
+		if err != nil {
+			continue
+		}
+		why, jobs := m.buildFailed(p.Repo, runs)
+		touches := func(f string) bool { return reads(jobs, f) }
+		cause, steps, what := strings.Join(append([]string{"release"}, jobs...), " "), unbuiltSteps, " has no binaries, since its "
+		if why == "" {
+			state, w, bad := judge(runs)
+			switch {
+			case state == "waiting":
+				continue
+			case state == "passed" || slices.ContainsFunc(bad, func(g string) bool { return g != "update" }):
+				return ""
+			}
+			why, touches, cause, steps, what = w, updateReads, strings.Join(bad, " "), failedSteps, " failed its release check, "
+		}
+		diff := m.Diff
+		if diff == nil {
+			diff = m.diff
+		}
+		changed, err := diff(p, r.SHA, sha)
+		if err != nil || slices.ContainsFunc(changed, touches) {
+			return ""
+		}
+		text := r.Tag + what + why + ", and " + core.Short(sha) + " changes nothing that check reads. " + steps
+		if !held[r.Tag] {
+			raise := !m.causeSaid(p.Name, cause)
+			m.C.J.MustAppend("release.held", map[string]string{"project": p.Name, "tag": r.Tag, "sha": r.SHA, "why": why, "cause": cause})
+			if raise {
+				m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": p.Name, "text": "no release at " + core.Short(sha) + ": " + text})
+			}
+		}
+		return text
 	}
-	why, jobs := m.buildFailed(p.Repo, runs)
-	if why == "" {
-		return ""
-	}
-	diff := m.Diff
-	if diff == nil {
-		diff = m.diff
-	}
-	changed, err := diff(p, at, sha)
-	if err != nil || slices.ContainsFunc(changed, func(f string) bool { return reads(jobs, f) }) {
-		return ""
-	}
-	if !held[tag] {
-		m.C.J.MustAppend("release.held", map[string]string{"project": p.Name, "tag": tag, "sha": at, "why": why})
-	}
-	return tag + " has no binaries, since its " + why + ", and " + core.Short(sha) + " changes nothing that job reads. " + unbuiltSteps
+	return ""
+}
+
+// failedSteps is what the person does about a release that failed its update
+// gate.
+const failedSteps = "The Hive cuts no new release that leaves what failed unchanged, since it would fail the same way: " +
+	"the first kept merge that changes what update reads (" + ".github/workflows/update.yml, install/, the Go sources) is cut as usual, " +
+	"and the person's \"release\" on the hold's ask cuts one anyway."
+
+// updateReads says whether the update gate (update.yml) reads path: the
+// workflow, the installer it runs and the binary built from the Go sources.
+func updateReads(path string) bool {
+	return path == ".github/workflows/update.yml" || strings.HasPrefix(path, "install/") ||
+		path == "go.mod" || path == "go.sum" || strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go")
 }
 
 // diff lists the files that differ between two commits of the project.
