@@ -21,7 +21,7 @@ func TestAnEventBringsTheNextTickForward(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ticks := make(chan time.Time, 16)
-	go loop(ctx, j, func() { ticks <- time.Now() })
+	go loop(ctx, j, make(chan struct{}, 1), func() { ticks <- time.Now() })
 	<-ticks // the first tick is at once
 	time.Sleep(100 * time.Millisecond)
 	at := time.Now()
@@ -42,9 +42,33 @@ func TestATickThatAlwaysJournalsCantSpin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
 	defer cancel()
 	var n atomic.Int32
-	loop(ctx, j, func() { n.Add(1); j.MustAppend("noisy", map[string]string{}) })
+	loop(ctx, j, make(chan struct{}, 1), func() { n.Add(1); j.MustAppend("noisy", map[string]string{}) })
 	// 2.5s: the first tick, two of the second's, and wakeBurst early ones after each.
 	if got, most := int(n.Load()), 3*(wakeBurst+1); got > most {
 		t.Fatalf("%d ticks in 2.5s from a tick that always journals; want at most %d", got, most)
+	}
+}
+
+// TestEventsFromElsewhereArentCapped: a tick that doesn't journal is woken by
+// every event from elsewhere, past wakeBurst in a second, so a stream of
+// verdicts and requests doesn't wait out the second.
+func TestEventsFromElsewhereArentCapped(t *testing.T) {
+	j, err := core.OpenJournal(filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+	defer cancel()
+	go func() {
+		for ctx.Err() == nil {
+			j.MustAppend("verdict", map[string]string{})
+			time.Sleep(40 * time.Millisecond)
+		}
+	}()
+	var n atomic.Int32
+	loop(ctx, j, make(chan struct{}, 1), func() { n.Add(1) })
+	if got := int(n.Load()); got <= wakeBurst+1 {
+		t.Fatalf("%d ticks in 0.9s with an event from elsewhere every 40ms; want more than %d", got, wakeBurst+1)
 	}
 }

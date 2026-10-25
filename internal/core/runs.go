@@ -1267,7 +1267,7 @@ func (rs *Runs) watch(r Run) {
 	if proc.Alive(r.Proc) {
 		return
 	}
-	time.Sleep(200 * time.Millisecond) // let the last lines land
+	settled(out, 50*time.Millisecond, 200*time.Millisecond) // let the last lines land
 	// A copy of the run older than now ends nothing: its turn ended already,
 	// and ending it again would clear the live turn after it.
 	if cur, ok := rs.Get(r.ID); !ok || cur.Status != StatusRunning || cur.Turn != r.Turn {
@@ -1275,6 +1275,27 @@ func (rs *Runs) watch(r Run) {
 	}
 	rs.ops.Drain(r)
 	rs.endTurn(r)
+}
+
+// settled waits until the file at path has stopped growing for quiet, and at
+// most most in all.
+func settled(path string, quiet, most time.Duration) {
+	size := func() int64 {
+		if fi, err := os.Stat(path); err == nil {
+			return fi.Size()
+		}
+		return -1
+	}
+	end := time.Now().Add(most)
+	last, still := size(), time.Now()
+	for time.Now().Before(end) {
+		time.Sleep(10 * time.Millisecond)
+		if n := size(); n != last {
+			last, still = n, time.Now()
+		} else if time.Since(still) >= quiet {
+			return
+		}
+	}
 }
 
 // TurnLog parses a turn's output file.
