@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -672,12 +673,13 @@ func (m *Module) afterKept(project, sha string) {
 		case mg.Hand && mg.Record == "":
 			unrecorded = append(unrecorded, core.Short(mg.MergeSHA))
 			fmt.Fprintf(&manifest, "- %s, with no record of whose authority\n", name)
+		case mg.Hand && len(reads) > 0:
+			fmt.Fprintf(&manifest, "- %s on %s, read by %s\n", name, mg.Record, strings.Join(reads, ", "))
+		case mg.Hand && mg.PersonOK:
+			fmt.Fprintf(&manifest, "- %s on %s\n", name, mg.Record)
 		case mg.Hand:
-			fmt.Fprintf(&manifest, "- %s on %s", name, mg.Record)
-			if len(reads) > 0 {
-				fmt.Fprintf(&manifest, ", read by %s", strings.Join(reads, ", "))
-			}
-			manifest.WriteString("\n")
+			unread = append(unread, name)
+			fmt.Fprintf(&manifest, "- %s on %s, not read\n", name, mg.Record)
 		case len(reads) > 0:
 			fmt.Fprintf(&manifest, "- %s, read by %s\n", name, strings.Join(reads, ", "))
 		default:
@@ -701,7 +703,7 @@ func (m *Module) afterKept(project, sha string) {
 		why = append(why, strings.Join(unrecorded, ", ")+" merged outside the Hive with no recorded authority (no warden request names it)")
 	}
 	if len(unknown) > 0 {
-		why = append(why, "what "+strings.Join(unknown, ", ")+" changed can't be read")
+		why = append(why, "what "+strings.Join(unknown, ", ")+" changed, back to the last release, can't be read")
 	}
 	if len(why) > 0 && !approved {
 		m.hold(project, sha, why, manifest.String())
@@ -834,19 +836,28 @@ type merge struct {
 	Root     []string
 	Diff     string // the head's own diff (core.DiffID), whose reads carry to it
 	// Hand is a commit on main the Hive's pipeline didn't merge (a warden's
-	// or the person's hand merge); Record names the authority it was merged
-	// on, "" for none, and Unread says what it changed couldn't be read.
-	Hand   bool   `json:"-"`
-	Record string `json:"-"`
-	Unread bool   `json:"-"`
+	// or the person's hand merge, or a push); Record names the request that
+	// merged it, "" for none, and PersonOK says the person approved that
+	// request, which stands for a read. Unread says what it changed
+	// couldn't be read.
+	Hand     bool   `json:"-"`
+	Record   string `json:"-"`
+	PersonOK bool   `json:"-"`
+	Unread   bool   `json:"-"`
 }
 
+// handWalk is how far back main's line is walked for the last release
+// before a hand commit; past it, the commit waits for the person.
+const handWalk = 200
+
 // merges lists the project's merges after the one its last release was cut
-// at, up to the one that made upTo. upTo may be a commit on main the Hive
-// didn't merge: it comes last, after the Hive's merges main held before it,
-// marked Hand with the authority it was merged on. refuse says why there is
-// nothing to release: a release already covers upTo, or upTo is neither a
-// merge the journal saw nor a commit on main.
+// at, up to the one that made upTo. When upTo is a commit on main the Hive
+// didn't merge, it lists every commit on main's first-parent line since the
+// last release, oldest first: the Hive's merges as they are, and each other
+// commit marked Hand, with the request that merged it and what its own diff
+// changes, so no commit ships unlisted. refuse says why there is nothing to
+// release: a release already covers upTo, or upTo is neither a merge the
+// journal saw nor a commit on main.
 func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 	var all []merge
 	from, at := 0, -1
@@ -906,8 +917,8 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 	if released[upTo] {
 		return nil, "a release already covers it"
 	}
-	// Not the Hive's merge: it must be on main's line, after the merges
-	// listed before it.
+	// Not the Hive's merge: it must be on main's line, and every commit
+	// there since the last release is listed.
 	p, _ := m.C.Projects.Get(project)
 	dir := m.C.WS.Project(project)
 	raw, err := core.Git(dir, "rev-list", "--first-parent", "refs/remotes/origin/"+p.Branch)
@@ -916,43 +927,62 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 	if err != nil || i < 0 {
 		return nil, "it is not a merge the Hive made, nor a commit on main"
 	}
-	before := map[string]bool{}
-	for _, sha := range line[i+1:] {
-		before[sha] = true
-	}
-	at = -1
-	for j := len(all) - 1; j >= 0; j-- {
-		if before[all[j].MergeSHA] {
-			at = j
-			break
-		}
-	}
-	if at+1 < from {
+	if slices.ContainsFunc(line[:i], func(sha string) bool { return released[sha] }) {
 		return nil, "a newer release already covers it"
 	}
-	hand := merge{MergeSHA: upTo, PR: prs[upTo], Hand: true, Record: authority(reqs, order, upTo)}
-	if ch, err := m.C.Effects.Classify(p, upTo+"^", upTo); err != nil {
-		hand.Unread = true
-	} else {
-		hand.Root, hand.Diff = ch.Root, ch.DiffID
+	ours := map[string]int{}
+	for j, mg := range all {
+		ours[mg.MergeSHA] = j
 	}
-	return append(slices.Clone(all[from:at+1]), hand), ""
+	var since []string // newest first, down to the last release
+	bounded := false
+	for _, sha := range line[i:] {
+		if j, ok := ours[sha]; released[sha] || ok && j < from {
+			bounded = true
+			break
+		}
+		if len(since) == handWalk {
+			break
+		}
+		since = append(since, sha)
+	}
+	if !bounded && len(since) == handWalk {
+		// No release within reach: everything older waits for the person.
+		return []merge{{MergeSHA: upTo, PR: prs[upTo], Hand: true, Unread: true}}, ""
+	}
+	for _, sha := range slices.Backward(since) {
+		if j, ok := ours[sha]; ok {
+			out = append(out, all[j])
+			continue
+		}
+		hand := merge{MergeSHA: sha, PR: prs[sha], Hand: true}
+		hand.Record, hand.PersonOK = authority(reqs, order, sha)
+		if ch, err := m.C.Effects.Classify(p, sha+"^", sha); err != nil {
+			hand.Unread = true
+		} else {
+			hand.Root, hand.Diff = ch.Root, ch.DiffID
+		}
+		out = append(out, hand)
+	}
+	return out, ""
 }
 
 // request is what release reads of a warden request (the risk module's).
 type request struct {
-	ID, Project, Want, Steps, Script, Output, State, Outcome, Decision string
-	PersonOK                                                           bool `json:"person_ok"`
+	ID, Project, Script, Output, State, Outcome, Decision string
+	PersonOK                                              bool `json:"person_ok"`
 }
 
-// authority names the first request, of those journalled in order, that ran
-// to the end and names sha (its full name, or a prefix of 7 or more in its
-// want, steps, script or output, where a merge reports its commit), or ""
-// when none does.
-func authority(reqs map[string]request, order []string, sha string) string {
+// authority names the first request, of those journalled in order, that
+// merged sha: an approved script that merges ("gh pr merge", "git merge")
+// ran to the end and its output, which the daemon records from the run, not
+// the agent, carries sha's full name, as gh reports a merge commit. A
+// mention in an agent's words (want, why, steps) is no record. ok says the
+// person approved that request. "" when none did.
+func authority(reqs map[string]request, order []string, sha string) (record string, ok bool) {
 	for _, id := range order {
 		r := reqs[id]
-		if r.State != "done" || r.Outcome != "done" || !names(r.Want+"\n"+r.Steps+"\n"+r.Script+"\n"+r.Output, sha) {
+		if r.State != "done" || r.Outcome != "done" || r.Script == "" || !merging.MatchString(r.Script) || !names(r.Output, sha) {
 			continue
 		}
 		by := "a warden"
@@ -962,21 +992,19 @@ func authority(reqs map[string]request, order []string, sha string) string {
 		case r.Decision == "tribunal":
 			by = "a tribunal"
 		}
-		return "warden request " + id + ", approved by " + by
+		return "warden request " + id + ", approved by " + by, r.PersonOK
 	}
-	return ""
+	return "", false
 }
 
-// names says text names the commit sha: a hex word of 7 or more that starts it.
+// merging is a script that merges.
+var merging = regexp.MustCompile(`\b(gh\s+pr\s+merge|git\s+merge)\b`)
+
+// names says text names the commit sha in full, as a word of its own.
 func names(text, sha string) bool {
-	for _, w := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+	return len(sha) >= 40 && slices.Contains(strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
 		return !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f')
-	}) {
-		if len(w) >= 7 && strings.HasPrefix(sha, w) {
-			return true
-		}
-	}
-	return false
+	}), strings.ToLower(sha))
 }
 
 // Gates are the workflows that must pass in a release's own runs, on its
