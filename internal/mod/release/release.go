@@ -61,11 +61,15 @@ type Module struct {
 	shas  map[string]string
 	tried string
 	said1 string
-	// pre are the pre-releases newer than this one the last look read;
-	// newest and behind are what Lag reports, from the last Check.
-	pre    []string
+	// ahead are the releases newer than this one the last look read: every
+	// one following pre-releases, the full ones otherwise; newest and behind
+	// are what Lag reports, from the last Check.
+	ahead  []string
 	newest string
 	behind int
+	// skipped counts the looks in a row an update passed over because a
+	// merge ran past mergeWait.
+	skipped int
 	// updating is held while an update runs: AutoUpdate, from its schedule
 	// or follow, or `hive update`.
 	updating sync.Mutex
@@ -219,7 +223,7 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 		}
 	}
 	m.pmu.Lock()
-	m.pre = nil
+	m.ahead = nil
 	m.pmu.Unlock()
 	var stopped *limited // a look the rate limit stopped
 	if m.Channel() == Prerelease {
@@ -241,8 +245,20 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 			err = e
 		}
 	} else {
+		// Releases read through the login count every one between, so the
+		// lag means the same on both channels; without it, the latest alone.
+		var ahead []string
+		if out != "" && modules.Newer(core.Version, out) {
+			if rels, e := m.C.Effects.Forge.Releases(up); e == nil {
+				for _, r := range rels {
+					if !r.Prerelease && modules.Newer(core.Version, r.Tag) {
+						ahead = append(ahead, r.Tag)
+					}
+				}
+			}
+		}
 		m.pmu.Lock()
-		m.waits = nil
+		m.waits, m.ahead = nil, ahead
 		m.pmu.Unlock()
 	}
 	if tag != "" {
@@ -256,14 +272,14 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 }
 
 // lag records the newest release out and how many releases this one is
-// behind it: every pre-release the last look read, when following them, the
-// latest release and the one Check took.
+// behind it: every newer one the last look read, the latest release and the
+// one Check took.
 func (m *Module) lag(out ...string) {
 	m.pmu.Lock()
 	defer m.pmu.Unlock()
 	seen := map[string]bool{}
 	m.newest, m.behind = core.Version, 0
-	for _, t := range append(slices.Clone(m.pre), out...) {
+	for _, t := range append(slices.Clone(m.ahead), out...) {
 		if t == "" || seen[t] || !modules.Newer(core.Version, t) {
 			continue
 		}
@@ -366,15 +382,25 @@ func (m *Module) update(tag string) (string, error) {
 		}
 	}
 	// No merge starts from here to the restart, and any running ends first;
-	// tasks still in merging carry across and go on after it.
+	// tasks still in merging carry across and go on after it. A merge that
+	// runs past the wait look after look is hung, not slow: after maxSkips
+	// the update goes ahead, and the task in merging finds after the restart
+	// whether its merge landed.
 	resume := func() {}
 	if m.PauseMerges != nil {
 		var ok bool
 		if resume, ok = m.PauseMerges(mergeWait); !ok {
-			resume()
-			return "waiting: a merge has run past " + mergeWait.String() + "; " + tag + " installs at the next look", nil
+			m.skipped++
+			text := fmt.Sprintf("a merge has run past %s at %d looks in a row", mergeWait, m.skipped)
+			if m.skipped < maxSkips {
+				resume()
+				m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "looks": m.skipped, "text": text})
+				return "waiting: " + text + "; " + tag + " installs at the next look", nil
+			}
+			m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "looks": m.skipped, "forced": true, "text": text + "; installing anyway"})
 		}
 	}
+	m.skipped = 0
 	installed := false
 	defer func() {
 		if !installed {
@@ -434,7 +460,10 @@ func (m *Module) update(tag string) (string, error) {
 	installed = true
 	// Merges stay paused until the restart; one that never comes (a
 	// supervisor that doesn't restart, a failed start) lets them go on.
-	time.AfterFunc(restartGrace, resume)
+	time.AfterFunc(restartGrace, func() {
+		m.C.J.MustAppend("hive.update_unrestarted", map[string]any{"to": tag, "text": fmt.Sprintf("the restart into %s didn't come within %s; merges go on", tag, restartGrace)})
+		resume()
+	})
 	if m.Restart != nil {
 		go func() { time.Sleep(time.Second); m.Restart() }()
 	}
@@ -471,6 +500,10 @@ func (m *Module) pin(cfg core.Config, tag string, on bool) error {
 
 // mergeWait is the most an update waits for the merges already running.
 var mergeWait = 2 * time.Minute
+
+// maxSkips is how many looks in a row an update waits on a merge running
+// past mergeWait before it installs anyway.
+const maxSkips = 3
 
 // restartGrace is how long merges stay paused after an update installs,
 // waiting for its restart.
@@ -654,7 +687,10 @@ func fileSum(path string) (string, error) {
 // AfterKept cuts a release when a kept merge lands in the Hive's own project
 // and its dry run passes on that exact commit. The release names each change
 // merged since the last one and the reviewer runs that read its exact head. A
-// head with no read, or a change to a root path, waits for the person's word.
+// head with no read waits for the person's word. A change to a root path (what
+// runs with elevated rights) goes out once the Hive's own security reads passed
+// its diff (rootRead), and the person is told after; with no such read it waits
+// for the person too.
 // The release numbers on from this build, so the install switches to it at its
 // next update. In the person's fork it also asks the person whether to offer
 // the change upstream, one pull request that grows with each kept merge.
@@ -689,7 +725,7 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	var manifest strings.Builder
-	var root, unread []string
+	var root, unread, rootRead []string
 	for _, mg := range list {
 		if reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff); len(reads) > 0 {
 			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
@@ -697,12 +733,20 @@ func (m *Module) afterKept(project, sha string) {
 			unread = append(unread, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
 			fmt.Fprintf(&manifest, "- #%d at %s, not read\n", mg.PR, core.Short(mg.SHA))
 		}
-		root = append(root, mg.Root...)
+		if len(mg.Root) == 0 {
+			continue
+		}
+		if by := m.rootRead(project, mg); by != "" {
+			fmt.Fprintf(&manifest, "  its root paths (%s) passed %s\n", strings.Join(mg.Root, ", "), by)
+			rootRead = append(rootRead, fmt.Sprintf("#%d (%s)", mg.PR, strings.Join(mg.Root, ", ")))
+		} else {
+			root = append(root, mg.Root...)
+		}
 	}
 	approved := m.C.Effects.Approved("release", project, sha)
 	var why []string
 	if len(root) > 0 {
-		why = append(why, strings.Join(root, ", ")+" run with elevated rights")
+		why = append(why, strings.Join(root, ", ")+" run with elevated rights and no security read passed them")
 	}
 	if len(unread) > 0 {
 		why = append(why, strings.Join(unread, ", ")+" merged without a read of its exact commit")
@@ -749,6 +793,8 @@ func (m *Module) afterKept(project, sha string) {
 		strings.Join(Gates, " and ") + " pass on that commit; then it is the latest, which installs follow.\n\nWhat was read:\n\n" + manifest.String()
 	if approved {
 		body += "\nThe person released it.\n"
+	} else if len(rootRead) > 0 {
+		body += "\nIts root paths went out on the Hive's own security reads; the person is told after.\n"
 	}
 	if err := m.C.Effects.Forge.CreateRelease(p.Repo, next, sha, body); err != nil {
 		alert("release failed: " + err.Error())
@@ -773,6 +819,19 @@ func (m *Module) afterKept(project, sha string) {
 		rec["tag_sha"] = at
 	}
 	m.C.J.MustAppend("hive.released", rec)
+	// A release ask at one of the merges this release covers has nothing
+	// left to answer.
+	for _, a := range m.C.Person.Open() {
+		_, at, _ := strings.Cut(a.Ref, "@")
+		if a.Kind == "release" && a.Project == project && slices.ContainsFunc(list, func(mg merge) bool { return mg.MergeSHA == at }) {
+			m.C.Person.Answer(a.ID, "hold", "the Hive, not the person: "+next+" released it")
+		}
+	}
+	if len(rootRead) > 0 && !approved {
+		m.C.Person.Tell(core.Ask{Ref: "release:" + project + "@" + next, Project: project,
+			Title:  "Released " + next + " with changes to root paths: " + strings.Join(rootRead, ", "),
+			Detail: "They run with elevated rights. The Hive released them itself once its security seat and panel (or the box's outside read) said land on each one's own diff.\n\n" + manifest.String()})
+	}
 	f, up := m.C.Effects.Forge, m.C.WS.LoadConfig().ReleaseRepo
 	if p.Repo == up {
 		return
@@ -786,6 +845,20 @@ func (m *Module) afterKept(project, sha string) {
 	m.C.Person.Ask(core.Ask{Kind: "upstream", Ref: head, Project: project,
 		Title:  "Offer the Hive's changes to " + up + "?",
 		Detail: "The Hive released " + next + " on " + p.Repo + ". Yes opens one pull request on " + up + " in your name, which grows with each kept change."})
+}
+
+// rootRead says who passed a merge's root paths, as Effects.SecurityOK reads
+// a change to a root path on the security list: an outside read decides when
+// there is one, else the security seat and a majority of the panel said land
+// on its own diff. "" when nobody did.
+func (m *Module) rootRead(project string, mg merge) string {
+	if !m.C.Effects.SecurityOK(project, core.Change{Security: mg.Root, SecurityRoot: mg.Root, DiffID: mg.Diff}) {
+		return ""
+	}
+	if o, ok := m.C.Effects.OutsideRead(project, mg.Diff); ok {
+		return "the box's " + o.By + " read"
+	}
+	return "the security seat and a majority of its panel"
 }
 
 // refusedSteps is what the person does about a refused release. Its

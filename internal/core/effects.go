@@ -68,6 +68,7 @@ type Effects struct {
 	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
 	seats     map[string]map[string]Verdict     // project#diff -> security seat -> its latest verdict
 	hostMade  map[string]HostCommit
+	pushes    map[string][]string // project@branch -> each commit pushed to it, oldest first
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
@@ -162,7 +163,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -220,6 +221,11 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var h HostCommit
 			ev.Decode(&h)
 			e.hostMade[h.Project+"@"+h.SHA] = h
+		case "effect.pushed":
+			var pu struct{ Project, Branch, SHA string }
+			ev.Decode(&pu)
+			k := pu.Project + "@" + pu.Branch
+			e.pushes[k] = append(slices.DeleteFunc(e.pushes[k], func(s string) bool { return s == pu.SHA }), pu.SHA)
 		case "effect.approved":
 			var a struct{ Kind, Project, SHA string }
 			ev.Decode(&a)
@@ -609,6 +615,7 @@ var (
 	redPkgLine = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
 	redTest    = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
 	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |exit status |test timed out|# )|\[(build|setup) failed\]`)
+	redBuild   = regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+(?::\d+)?: (.+)`)
 )
 
 // RedKeys names what failed in a red go test run so two runs' reds can be
@@ -647,6 +654,21 @@ func RedKeys(out string) []string {
 	}
 	if !pkgs {
 		return FailedTests(out)
+	}
+	return keys
+}
+
+// StopKeys names, for a red run RedKeys names nothing in (go vet, or a build
+// that stopped the command before go test ran), each compile or vet error as
+// "file.go: message", its line left out so an edit above it doesn't make the
+// same error look new. The rest of the command didn't run, so these can show
+// a red isn't new at a merge but never that a change is no worse than main.
+func StopKeys(out string) []string {
+	var keys []string
+	for _, l := range strings.Split(out, "\n") {
+		if m := redBuild.FindStringSubmatch(strings.TrimRight(l, " \r")); m != nil && !slices.Contains(keys, m[1]+": "+m[2]) {
+			keys = append(keys, m[1]+": "+m[2])
+		}
 	}
 	return keys
 }
@@ -753,7 +775,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid()}
+		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: CheckNice}
 	over := watchHome(home, capB)
 	code, err := sb.Run(spec, timeout)
 	if over() && err == nil {
@@ -1011,6 +1033,15 @@ func (e *Effects) Approved(kind, project, sha string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.approvals[kind+":"+project+"@"+sha]
+}
+
+// Pushed says whether the Hive pushed sha to branch, and whether it is the
+// newest commit it pushed there.
+func (e *Effects) Pushed(project, branch, sha string) (pushed, last bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	all := e.pushes[project+"@"+branch]
+	return slices.Contains(all, sha), len(all) > 0 && all[len(all)-1] == sha
 }
 
 // HostMade returns a host-authored commit record.

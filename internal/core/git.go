@@ -125,5 +125,15 @@ func runCmd(timeout time.Duration, dir string, env []string, name string, args .
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("timed out after %s, %w", timeout, err)
+	}
 	return strings.TrimSpace(out.String()), strings.TrimSpace(errb.String()), err
+}
+
+// TimedOut reports whether an error's text is a host program killed, by its
+// timeout on a loaded machine or by the kernel short of memory: the machine
+// was slow, not the step wrong.
+func TimedOut(text string) bool {
+	return strings.Contains(text, "signal: killed")
 }

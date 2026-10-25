@@ -119,7 +119,7 @@ func (f Finish) check() error {
 
 // printedNudge is the next prompt for a turn that ended without finishing:
 // it says plainly when the answer held a command that was printed, not run.
-func printedNudge(text string) string {
+func printedNudge(r Run, text string) string {
 	op, args, ok := printedCommand(text)
 	if !ok {
 		return "You ended your turn without `hive agent finish`. Only a command you run reaches the Hive: writing it in your answer does nothing. If the work is done, commit, then run `hive agent finish --status done --account \"...\"` as a shell command (a tool call). If you can't finish, run it with status blocked and say why."
@@ -128,6 +128,8 @@ func printedNudge(text string) string {
 	if op == "finish" {
 		if err := (Finish{Status: args["status"], Account: args["account"]}).check(); err != nil {
 			why = " (and as written it would fail: " + err.Error() + ")"
+		} else if args["tested"] == "" && namesOnly(r, args["account"]) {
+			why = " (and its account only names the model: say what you did, or why you stopped)"
 		}
 	}
 	return "Your last answer was the text of `hive agent " + op + " ...`" + why + ". It was printed, not run: nothing reached the Hive. Run it as a shell command with your bash tool (a tool call), then end your turn."
@@ -135,18 +137,23 @@ func printedNudge(text string) string {
 
 // printedFinish is the finish a successful turn's answer printed instead of
 // running, when it would pass the finish op's checks. An account that only
-// names the model or the role (as gpt-oss-120b's did) gives way to --tested,
-// and the account says the Hive ran it, for the reviewer and the next agent.
+// names the model or the role (as gpt-oss-120b's did) gives way to --tested;
+// with no --tested there is no account, and the worker is nudged for one.
+// Claude Code runs its commands, so only the other harnesses' answers count,
+// and only when the finish is the answer's last command-like line: one
+// followed by more commands is a plan, not a finish. The finish is marked
+// Printed, and its unsure says the Hive ran it, for the reviewer and the
+// next agent.
 func printedFinish(r Run, res *harness.Result) (Finish, bool) {
-	if res == nil || res.IsError {
+	if res == nil || res.IsError || HarnessName(r.Harness) == "claude" {
 		return Finish{}, false
 	}
 	op, args, ok := printedCommand(res.Text)
-	if !ok || op != "finish" {
+	if !ok || op != "finish" || !lastCommand(res.Text) {
 		return Finish{}, false
 	}
-	f := Finish{Status: args["status"], Account: args["account"], Tested: args["tested"], Unsure: args["unsure"]}
-	if a := strings.TrimSpace(f.Account); f.Tested != "" && slices.ContainsFunc([]string{r.Model, r.Role, HarnessName(r.Harness)}, func(n string) bool { return n != "" && strings.EqualFold(a, n) }) {
+	f := Finish{Status: args["status"], Account: args["account"], Tested: args["tested"], Unsure: args["unsure"], Printed: true}
+	if namesOnly(r, f.Account) {
 		f.Account = f.Tested
 	}
 	if f.check() != nil {
@@ -154,4 +161,35 @@ func printedFinish(r Run, res *harness.Result) (Finish, bool) {
 	}
 	f.Unsure = strings.TrimSpace(f.Unsure + "\n(The agent printed this finish as its answer instead of running it; the Hive ran it for it.)")
 	return f, true
+}
+
+// namesOnly says an account is only the run's model, role or harness name.
+func namesOnly(r Run, account string) bool {
+	a := strings.TrimSpace(account)
+	return slices.ContainsFunc([]string{r.Model, r.Role, HarnessName(r.Harness)}, func(n string) bool { return n != "" && strings.EqualFold(a, n) })
+}
+
+// lastCommand says no command-like line (inside a code fence, or after a
+// "$ " prompt) comes after the answer's first `hive agent` line.
+func lastCommand(text string) bool {
+	lines := strings.Split(strings.ReplaceAll(text, "\\\n", " "), "\n")
+	fenced, seen := false, false
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "```") {
+			fenced = !fenced
+			continue
+		}
+		if strings.HasPrefix(strings.TrimLeft(t, "`$> \t"), "hive agent ") {
+			if seen {
+				return false
+			}
+			seen = true
+			continue
+		}
+		if seen && t != "" && (fenced || strings.HasPrefix(t, "$ ")) {
+			return false
+		}
+	}
+	return true
 }

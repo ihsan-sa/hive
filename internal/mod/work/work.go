@@ -54,10 +54,12 @@ type Task struct {
 	Title   string `json:"title"`
 	Done    string `json:"done"`
 	Known   string `json:"known"`
-	From    string `json:"from"` // run id, person, or sweep run
-	Chat    string `json:"chat,omitempty"`
-	Thread  string `json:"thread,omitempty"`
-	Kind    string `json:"kind"` // work | revert | helper (spawned, no issue)
+	// Joined is the title and done line of each brief that joined it (join.go).
+	Joined []string `json:"joined,omitempty"`
+	From   string   `json:"from"` // run id, person, or sweep run
+	Chat   string   `json:"chat,omitempty"`
+	Thread string   `json:"thread,omitempty"`
+	Kind   string   `json:"kind"` // work | revert | helper (spawned, no issue)
 	// Aim is AimGain for a change aimed at a measurable gain, which on the
 	// Hive's own repository goes through the recursive gate; anything else
 	// (empty included) is a fix, which merges on its tests, checks and reads.
@@ -79,7 +81,11 @@ type Task struct {
 	PR        core.PR    `json:"pr"`
 	Round     int        `json:"round"`
 	Conflicts int        `json:"conflicts"`
-	Reviews   int        `json:"reviews"`
+	// ConflictMain is the main a conflict last sent the worker to merge. A
+	// head that contains it resolved that conflict, so the next is main
+	// moving again and the count starts over: only unresolved ones add up.
+	ConflictMain string `json:"conflict_main,omitempty"`
+	Reviews      int    `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
 	// own diff, keyed by "diffID#seat". When the diff changes, the old
 	// tries are left behind and the seat starts fresh on the new diff.
@@ -122,6 +128,10 @@ type Task struct {
 	// so long, however often main moves meanwhile.
 	MainWait   time.Time `json:"main_wait,omitempty"`
 	MainWaitOn string    `json:"main_wait_on,omitempty"`
+	// NoChecks is when head NoChecksOn was first seen with no forge check
+	// run at all while its required ones were awaited (head.go).
+	NoChecks   time.Time `json:"no_checks,omitempty"`
+	NoChecksOn string    `json:"no_checks_on,omitempty"`
 	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
 	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
 	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
@@ -252,6 +262,7 @@ type Module struct {
 	editCache map[string]editEntry
 	// baseTrees holds the files of the bases working tasks started on (queue.go).
 	baseTrees map[string]map[string]string
+	filing    sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
 	steps     sync.WaitGroup // the steps Tick started that are still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
@@ -281,6 +292,8 @@ type Module struct {
 	// limit is when GitHub's pause on writes ends, and limitText why.
 	limit     time.Time
 	limitText string
+	// slow is when a call was last killed by its timeout (settle).
+	slow time.Time
 	// refusedAsked is when the checks of each task stopped on a checks
 	// refusal were last asked again, by id@sha (reviveRefused).
 	refusedAsked map[string]time.Time
@@ -294,10 +307,12 @@ type Module struct {
 	gateCantRun map[string]core.GateResult
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
-	// gate is shut.
+	// gate is shut, and idle, while a pause waits, closes when the last
+	// merge leaves.
 	gate    sync.Mutex
 	inMerge int
 	paused  bool
+	idle    chan struct{}
 }
 
 // New loads tasks and registers the brief op.
@@ -336,7 +351,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
-	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim"} (aim: fix, the default, or gain for a change aimed at a measurable gain, which on the Hive's own repository merges only if the recursive gate shows it)`, Fn: m.opBrief})
+	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","apart"} (aim: fix, the default, or gain for a change aimed at a measurable gain, which on the Hive's own repository merges only if the recursive gate shows it); one matching an open task not yet pushed (a test both name, a near-identical title) joins it as added context instead, unless apart`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: []string{"worker", "lead"}, Help: `{"task","aim":"fix"|"gain","why"} (a worker's own task by default) -> sets whether the task is a fix, which merges on its tests, checks and reads, or aims at a measurable gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: steerers, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
 	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: steerers, Help: `{"task"} (a worker's own task by default) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
@@ -422,6 +437,9 @@ type Brief struct {
 	FollowUp string `json:"-"`
 	// Model is the model a trial's worker runs on; only the trial op sets it.
 	Model string `json:"-"`
+	// Apart files an agent's brief as its own task even when it matches an
+	// open one (join.go).
+	Apart bool `json:"apart"`
 }
 
 // File creates a task from a brief.
@@ -533,6 +551,14 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 		return nil, err
 	}
 	b.Chat, b.Thread = m.thread(r)
+	m.filing.Lock() // two briefs on one ask filed at once still find each other
+	defer m.filing.Unlock()
+	if !b.Apart {
+		own, _ := m.taskOf(r.ID)
+		if t, why, ok := m.join(b, own.ID); ok {
+			return map[string]string{"task": t.ID, "joined": "true", "note": fmt.Sprintf("not filed anew: %s, so your brief joins open task %s (%q, %s) as added context; if it is different work, file it again with apart", why, t.ID, t.Label(), t.Stage)}, nil
+		}
+	}
 	t, err := m.File(b)
 	if err != nil {
 		return nil, err
@@ -731,6 +757,16 @@ func (m *Module) settle(t *Task, err error) {
 		m.save(t, why+"; retrying")
 		return
 	}
+	if core.TimedOut(err.Error()) {
+		// A call killed by its timeout means the machine is loaded, which isn't
+		// the task's fault either: it waits a while without counting a failure.
+		m.mu.Lock()
+		m.slow = time.Now()
+		m.mu.Unlock()
+		t.Retry = time.Now().Add(slowWait)
+		m.save(t, core.Clip(err.Error(), 300)+"; the machine is slow, so the task waits, then goes on")
+		return
+	}
 	t.Failures++
 	t.Retry = time.Now().Add(time.Duration(min(t.Failures, 6)) * 30 * time.Second)
 	msg := err.Error()
@@ -740,6 +776,10 @@ func (m *Module) settle(t *Task, err error) {
 	}
 	m.save(t, "error (will retry): "+core.Clip(msg, 300))
 }
+
+// slowWait is how long a task waits after a call killed by its timeout, and
+// how long the calls must stay clear of that before tasks it stopped return.
+const slowWait = 3 * time.Minute
 
 // backoff is the gap after the nth failed step of an outage: 30s doubling to
 // a 10 minute ceiling.
@@ -791,25 +831,37 @@ func (m *Module) status(t *Task, p core.Project, number int, text string) {
 const gaveUpOnErrors = "gave up after repeated errors: "
 
 // revive brings back the tasks GitHub's rate limit stopped, from before it
-// was waited out, once the pause is over. Only a stop on repeated errors
-// counts, so findings that say "rate limit" can't reset the review rounds.
+// was waited out, once the pause is over, and those stopped on calls killed
+// by their timeout, once no call has been for a while. Only a stop on
+// repeated errors counts, so findings that say "rate limit" can't reset the
+// review rounds.
 func (m *Module) revive() {
 	m.mu.Lock()
 	paused := time.Now().Before(m.limit)
+	slow := time.Since(m.slow) < slowWait
 	m.mu.Unlock()
-	if paused {
-		return
-	}
 	for _, t := range m.List(func(t Task) bool {
-		return t.Stage == StageStopped && !t.ByPerson && strings.HasPrefix(t.Reason, gaveUpOnErrors) && core.IsRateLimit(strings.TrimPrefix(t.Reason, gaveUpOnErrors))
+		return t.Stage == StageStopped && !t.ByPerson && strings.HasPrefix(t.Reason, gaveUpOnErrors)
 	}) {
+		why := strings.TrimPrefix(t.Reason, gaveUpOnErrors)
+		var said string
+		switch {
+		case !paused && core.IsRateLimit(why):
+			said = "brought back: it stopped only because GitHub rate-limited the Hive's writes"
+		case !slow && core.TimedOut(why):
+			said = "brought back: it stopped only because a call was killed by its timeout while the machine was loaded"
+		default:
+			continue
+		}
 		if m.workerStopped(t) {
 			continue
 		}
 		t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.Stage = "", 0, 0, 0, 0, StageLanding
-		m.save(&t, "brought back: it stopped only because GitHub rate-limited the Hive's writes")
+		m.save(&t, said)
 	}
-	m.reviveRefused()
+	if !paused {
+		m.reviveRefused()
+	}
 }
 
 // reviveRefused brings back the tasks stopped because the token may not read
@@ -1293,7 +1345,7 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 			return m.dropCheckpoint(t, p, "it conflicts with main")
 		}
 		if errors.Is(err, core.ErrConflict) {
-			return m.conflict(t, p, err)
+			return m.conflict(t, p, sha, err)
 		}
 		if err != nil {
 			return err
@@ -1589,7 +1641,8 @@ func (m *Module) mainTests(p core.Project, main, command string) (core.Check, er
 // its fix. A failure in its run that no test name accounts for (a timeout, a
 // panic or exit outside a test, a build failure) counts only where main's
 // run fails that package so too; one either run can't name at all can't be
-// told apart.
+// told apart. A run stopped by vet or the build (core.StopKeys) never ran its
+// tests, so matching main's vet error never makes a change no worse.
 func noWorse(c, mc core.Check) bool {
 	mine, mains := core.RedKeys(c.FullOutput()), core.RedKeys(mc.FullOutput())
 	if len(mine) == 0 || len(mains) == 0 {
@@ -1638,7 +1691,7 @@ func (m *Module) catchUp(t *Task, p core.Project, main, why string) (bool, error
 	}
 	if errors.Is(err, core.ErrConflict) {
 		t.Reason = ""
-		return true, m.conflict(t, p, err)
+		return true, m.conflict(t, p, t.SHA, err)
 	}
 	if err != nil {
 		return true, err
@@ -1911,6 +1964,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if done, err := m.alreadyLanded(t, p, main, t.SHA); done || err != nil {
 		return err
 	}
+	if wait, err := m.sameHead(t, p, pr.HeadSHA); wait || err != nil {
+		return err
+	}
 	if wait, err := m.upToDate(t, p, main); wait || err != nil {
 		return err
 	}
@@ -2042,11 +2098,12 @@ func (m *Module) enterMerge() bool {
 func (m *Module) leaveMerge() {
 	m.gate.Lock()
 	m.inMerge--
+	if m.inMerge == 0 && m.idle != nil {
+		close(m.idle)
+		m.idle = nil
+	}
 	m.gate.Unlock()
 }
-
-// gatePoll is how often PauseMerges looks whether the running merges ended.
-var gatePoll = 100 * time.Millisecond
 
 // PauseMerges shuts the gate before the forge merge, so no new merge starts,
 // and waits up to wait for the merges already past it to end and be
@@ -2058,6 +2115,11 @@ var gatePoll = 100 * time.Millisecond
 func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 	m.gate.Lock()
 	m.paused = true
+	idle := m.idle
+	if m.inMerge > 0 && idle == nil {
+		idle = make(chan struct{})
+		m.idle = idle
+	}
 	m.gate.Unlock()
 	var once sync.Once
 	resume = func() {
@@ -2067,16 +2129,14 @@ func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 			m.gate.Unlock()
 		})
 	}
-	for end := time.Now().Add(wait); ; time.Sleep(gatePoll) {
-		m.gate.Lock()
-		n := m.inMerge
-		m.gate.Unlock()
-		if n == 0 {
-			return resume, true
-		}
-		if !time.Now().Before(end) {
-			return resume, false
-		}
+	if idle == nil {
+		return resume, true
+	}
+	select {
+	case <-idle:
+		return resume, true
+	case <-time.After(wait):
+		return resume, false
 	}
 }
 
@@ -2172,6 +2232,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		if still := stillOnMain(which, mainRuns); len(still) > 0 {
 			if t.MainWaitOn != t.SHA {
 				t.MainWait, t.MainWaitOn = time.Now().UTC(), t.SHA
+				m.save(t, "") // the hold below may save nothing, and the next tick loads it afresh
 			}
 			if time.Since(t.MainWait) < mainWaitMax {
 				m.hold(t, p, "waiting on main: the forge's checks "+core.CheckNames(still)+" fail on "+core.Short(t.SHA)+" and still run on main at "+core.Short(main)+", whose result says whether the red is the change's")
@@ -2188,6 +2249,9 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			}
 			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+how+"; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
 		}
+	}
+	if wait, err := m.noChecks(t, p, main, runs, st); wait || err != nil {
+		return wait, err
 	}
 	names := core.CheckNames(which)
 	onMain := ""
@@ -2774,7 +2838,15 @@ func (m *Module) closedPR(t *Task, p core.Project, pr core.PR) (bool, error) {
 	return true, nil
 }
 
-func (m *Module) conflict(t *Task, p core.Project, why error) error {
+func (m *Module) conflict(t *Task, p core.Project, head string, why error) error {
+	dir := m.C.WS.Project(p.Name)
+	if t.ConflictMain != "" && head != "" {
+		if _, err := core.Git(dir, "merge-base", "--is-ancestor", t.ConflictMain, head); err == nil {
+			t.Conflicts = 0 // the worker merged the main it was sent; this conflict is main moving on
+		}
+	}
+	main, _ := core.Git(dir, "rev-parse", p.Branch) // before the bundle, so the bundle holds at least this main
+	t.ConflictMain = strings.TrimSpace(main)
 	t.Conflicts++
 	if t.Conflicts > 3 {
 		m.giveUp(t, "keeps conflicting with main")

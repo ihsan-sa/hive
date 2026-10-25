@@ -327,7 +327,13 @@ func TestMovedDraftIsNotReadied(t *testing.T) {
 	must(t, tmp, "add", "-A")
 	must(t, tmp, "commit", "-q", "-m", "unread")
 	must(t, tmp, "push", "-q", "origin", "HEAD:hive/t1")
+	// An update's pause doesn't hold it: it waits for its read before the gate.
+	resume, ok := m.PauseMerges(0)
 	m.settle(task, m.step(task))
+	resume()
+	if !ok || m.inMerge != 0 || !strings.HasPrefix(task.Reason, draftWait) {
+		t.Fatalf("paused %v, past the gate %d, reason %q", ok, m.inMerge, task.Reason)
+	}
 	updated := task.Updated
 	for range 12 {
 		m.settle(task, m.step(task))
