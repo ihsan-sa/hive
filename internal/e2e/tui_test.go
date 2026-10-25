@@ -120,11 +120,15 @@ func (x *term) pick(label string) {
 			if strings.HasPrefix(cur, label) {
 				return
 			}
-			x.keys(key)
 			moved := false
-			for j := 0; j < 40 && !moved; j++ { // let the screen catch up, 2s on a slow terminal
-				if moved = x.selected() != cur; !moved {
-					time.Sleep(50 * time.Millisecond)
+			// Let the screen catch up, 2s on a slow terminal, and press once
+			// more before taking a cursor that stays put for the list's end.
+			for try := 0; try < 2 && !moved; try++ {
+				x.keys(key)
+				for j := 0; j < 40 && !moved; j++ {
+					if moved = x.selected() != cur; !moved {
+						time.Sleep(50 * time.Millisecond)
+					}
 				}
 			}
 			if !moved {

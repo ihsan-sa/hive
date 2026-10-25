@@ -1237,3 +1237,34 @@ func TestToldHeadCountsTheLastDay(t *testing.T) {
 		t.Fatalf("head: %q", got)
 	}
 }
+
+// Schedules sit below the Routes group, past the first screen of a short
+// window: walking down to each scrolls it into view.
+func TestSchedulesReachableByScrolling(t *testing.T) {
+	m := testModel(80, 24)
+	m.st.Config.Models = map[string]core.OpenModel{"kimi": {Endpoint: "https://api.moonshot.ai/v1", Model: "kimi-k2"}}
+	m.section = secSettings
+	m.focus = 1
+	seen := map[string]bool{}
+	for i := 0; i < len(m.settings()); i++ {
+		if s := m.settings()[m.setSel]; s.group == "Schedules" && strings.Contains(ansi.Strip(m.View()), s.label) {
+			seen[s.label] = true
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if len(m.st.Config.Schedules) == 0 || strings.Contains(ansi.Strip(testModelSettingsTop(t)), "Schedules") {
+		t.Fatal("the test needs schedules below the first screen")
+	}
+	for name := range m.st.Config.Schedules {
+		if !seen[name] {
+			t.Errorf("schedule %s never showed as the cursor reached it", name)
+		}
+	}
+}
+
+func testModelSettingsTop(t *testing.T) string {
+	m := testModel(80, 24)
+	m.st.Config.Models = map[string]core.OpenModel{"kimi": {Endpoint: "https://api.moonshot.ai/v1", Model: "kimi-k2"}}
+	m.section, m.focus = secSettings, 1
+	return m.View()
+}
