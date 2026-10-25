@@ -156,10 +156,13 @@ type Task struct {
 	CantRuns    int `json:"cant_runs,omitempty"`
 	CantRunSaid int `json:"cant_run_said,omitempty"`
 	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
-	Gate    *core.GateResult `json:"gate,omitempty"`
-	Log     []Entry          `json:"log,omitempty"`
-	Created time.Time        `json:"created"`
-	Updated time.Time        `json:"updated"`
+	Gate *core.GateResult `json:"gate,omitempty"`
+	// GateAsked is the gate item last put to the person (askGateFix),
+	// task@head@main: one answer per head and main.
+	GateAsked string    `json:"gate_asked,omitempty"`
+	Log       []Entry   `json:"log,omitempty"`
+	Created   time.Time `json:"created"`
+	Updated   time.Time `json:"updated"`
 }
 
 // Retried is a head's red forge checks, run again once before the worker
@@ -333,10 +336,8 @@ type Module struct {
 	// holdPolled when each one's release condition may next be asked of the forge.
 	holds      map[string]*MergeHold
 	holdPolled map[string]time.Time
-	// gating are the recursive gate runs in flight by key (selfgate.go), and
-	// gateCantRun the last run per project and main that couldn't run.
-	gating      map[string]*gateRun
-	gateCantRun map[string]core.GateResult
+	// gating are the recursive gate runs in flight by key (selfgate.go).
+	gating map[string]*gateRun
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
 	// gate is shut, and idle, while a pause waits, closes when the last
@@ -396,6 +397,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "pr_draft", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","why"} -> marks the Hive's own PR a draft, posting why: its task waits (it isn't stopped) and merges once marked ready with pr_ready`, Fn: m.opPRDraft})
 	c.Runs.Ops().Register(core.Op{Name: "pr_close", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
 	c.Person.Handle("merge", m.onPersonMerge)
+	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
 	return m
@@ -424,6 +426,9 @@ func (m *Module) save(t *Task, note string) {
 		}
 	}
 	m.C.J.MustAppend("task.saved", t)
+	if was == StageMerging && t.Stage != StageMerging {
+		m.closeGateAsks(*t)
+	}
 	if t.Stage != was && (t.Stage == StageMerged || t.Stage == StageDone) {
 		m.steps.Add(1)
 		go func(t Task) { defer m.steps.Done(); m.ended(t) }(*t) // a large tree mustn't hold the save

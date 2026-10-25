@@ -805,11 +805,13 @@ func TestWhose(t *testing.T) {
 	cand, ctrl := &Child{Name: "candidate"}, &Child{Name: "control"}
 	boom := fmt.Errorf("boom")
 	var fault *candidateFault
-	if err := whose(cand, ctrl, map[*Child]error{cand: boom}, "x"); !errors.As(err, &fault) {
+	if err := whose(cand, ctrl, map[*Child]error{cand: boom}, "x"); !errors.As(err, &fault) || errors.As(err, new(base)) {
 		t.Errorf("the candidate alone: %v", err)
 	}
+	// The control failing, alone or with the candidate, is main's: every
+	// change at that base would hit it.
 	for _, errs := range []map[*Child]error{{cand: boom, ctrl: boom}, {ctrl: boom}} {
-		if err := whose(cand, ctrl, errs, "x"); err == nil || errors.As(err, &fault) {
+		if err := whose(cand, ctrl, errs, "x"); err == nil || errors.As(err, &fault) || !errors.As(err, new(base)) {
 			t.Errorf("%v: %v", errs, err)
 		}
 	}

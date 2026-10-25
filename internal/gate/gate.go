@@ -74,6 +74,7 @@ type Report struct {
 	Fixes       FixReport  `json:"fixes"`                       // the candidate's own new tests, run on both sides
 	Transient   bool       `json:"transient,omitempty"`         // could not run for a cause that may pass (load, a flake on both sides): try again soon
 	Alone       bool       `json:"alone,omitempty"`             // could not run for a cause tied to this candidate alone (preparing its build, the run's clock): another change at this base would not hit it
+	BaseFails   bool       `json:"base_fails,omitempty"`        // could not run for a cause in the base itself (the control fails a step): every change at this base would hit it
 	Measured    bool       `json:"measured,omitempty"`          // the verdict compares both sides' results (Decide), so a judge may weigh it
 	Sig         string     `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
 }
@@ -150,8 +151,8 @@ func Run(cfg Config) (rep Report, err error) {
 			// evaluator, the org, the clock): nothing was measured, so this
 			// is not the candidate's failure and no lesson is written.
 			rep.Error, rep.CantRun = err.Error(), true
-			rep.Transient = errors.As(err, new(transient))
 			rep.Alone = errors.As(err, new(alone))
+			rep.BaseFails = errors.As(err, new(base))
 			rep.Verdict = Verdict{Reason: "the gate could not run: " + err.Error()}
 		case !rep.Verdict.Keep && len(rep.Verdict.Regressions) == 0 && len(rep.Verdict.Unmeasured) > 0:
 			rep.CantRun = true // a probe failed on both sides: that path was never measured
@@ -712,12 +713,20 @@ func whose(cand, ctrl *Child, errs map[*Child]error, why string) error {
 	case ce != nil && ke == nil:
 		return &candidateFault{why, fmt.Errorf("the candidate %s: %v", why, ce)}
 	case ce != nil && ke != nil:
-		return fmt.Errorf("both sides %s, so the step itself cannot run here: the candidate: %v; the control: %v", why, ce, ke)
+		return base{fmt.Errorf("both sides %s, so the step itself cannot run here: the candidate: %v; the control: %v", why, ce, ke)}
 	case ke != nil:
-		return fmt.Errorf("the control %s: %v", why, ke)
+		return base{fmt.Errorf("the control %s: %v", why, ke)}
 	}
 	return nil
 }
+
+// base is a could-not-run whose cause is the base itself (the control fails
+// a step, alone or with the candidate): every change at that base would hit
+// it, so the work module remembers it until main moves.
+type base struct{ err error }
+
+func (b base) Error() string { return b.err.Error() }
+func (b base) Unwrap() error { return b.err }
 
 // alone is a could-not-run tied to this candidate (preparing its own build,
 // the run's clock): no verdict on it, but no reason for another change at

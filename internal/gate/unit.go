@@ -319,7 +319,7 @@ func judgeUnit(cand, ctrl *Child, errs map[*Child]error, mod string) (UnitReport
 	}
 	if len(cu.failures) == 0 {
 		if ku != nil && len(ku.failures) == 0 {
-			return u, transient{fmt.Errorf("both sides fail their vet or short tests naming no test, so the step itself cannot run here: the candidate: %v; the control: %v", cu, ku)}
+			return u, base{fmt.Errorf("both sides fail their vet or short tests naming no test, so the step itself cannot run here: the candidate: %v; the control: %v", cu, ku)}
 		}
 		// Nothing named: the whole step once more.
 		if again := unitTest(cand); again != nil {
@@ -384,7 +384,7 @@ func judgeUnit(cand, ctrl *Child, errs map[*Child]error, mod string) (UnitReport
 			if unnamed {
 				// The control failed naming nothing: that shows no failure
 				// shared, and none of the candidate's own either.
-				return u, transient{fmt.Errorf("the control fails the candidate's failures run again on it naming no test, so the step cannot be judged here: %s", (&unitFailure{failures: again}).Error())}
+				return u, base{fmt.Errorf("the control fails the candidate's failures run again on it naming no test, so the step cannot be judged here: %s", (&unitFailure{failures: again}).Error())}
 			}
 			for _, f := range again {
 				if slices.ContainsFunc(onCtrl, func(g TestFailure) bool { return g.key() == f.key() }) {
@@ -401,13 +401,6 @@ func judgeUnit(cand, ctrl *Child, errs map[*Child]error, mod string) (UnitReport
 	}
 	return u, nil
 }
-
-// transient is a could-not-run whose cause may pass (the machine's load, a
-// flake on both sides): the work module tries again soon.
-type transient struct{ err error }
-
-func (t transient) Error() string { return t.err.Error() }
-func (t transient) Unwrap() error { return t.err }
 
 // unsafeName is what failureNames keeps out of a package or test name: only the
 // characters Go allows in them, so the candidate's output carries no prose
