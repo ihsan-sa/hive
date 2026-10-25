@@ -73,6 +73,9 @@ func WindowWords(k string) string {
 	return strings.ReplaceAll(k, "_", " ")
 }
 
+// ResetsIn is how far off the window's reset is, as Until says it.
+func (w WindowUse) ResetsIn(now time.Time) string { return Until(w.ResetsAt, now) }
+
 // Until is how far off t is, to the minute: "3h31m", "12m", "2d4h".
 func Until(t, now time.Time) string {
 	d := t.Sub(now).Round(time.Minute)

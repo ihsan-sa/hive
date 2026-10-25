@@ -23,7 +23,6 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/daemon"
 	"github.com/ihsan-sa/hive-standalone-build/internal/fakeagent"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
-	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
@@ -929,23 +928,20 @@ func kbArgs(args []string) (query, limit string) {
 func planLine(p core.Plan, now time.Time) string {
 	s := fmt.Sprintf("plan %s: %s", text.Visible(p.Key()), text.Visible(p.Limit.Standing(now)))
 	for _, w := range p.Limit.WindowUses(now) {
-		s += "; " + windowWords(w, now)
+		name, at := text.Visible(w.Name), w.ResetsAt.Local().Format("Mon 15:04 MST")
+		switch {
+		case w.ResetsAt.IsZero():
+			s += fmt.Sprintf("; %s window %.0f%% used", name, w.Used*100)
+		case w.Stale:
+			s += fmt.Sprintf("; %s window reset at %s, no reading since (was %.0f%%)", name, at, w.Used*100)
+		default:
+			s += fmt.Sprintf("; %s window %.0f%% used, resets in %s (%s)", name, w.Used*100, w.ResetsIn(now), at)
+		}
 	}
 	if !p.At.IsZero() {
-		s += fmt.Sprintf(" (read %s ago)", harness.Until(now, p.At))
+		s += fmt.Sprintf(" (read %s ago)", now.Sub(p.At).Round(time.Minute))
 	}
 	return s
-}
-
-func windowWords(w harness.WindowUse, now time.Time) string {
-	name, at := text.Visible(w.Name), w.ResetsAt.Local().Format("Mon 15:04 MST")
-	switch {
-	case w.ResetsAt.IsZero():
-		return fmt.Sprintf("%s window %.0f%% used", name, w.Used*100)
-	case w.Stale:
-		return fmt.Sprintf("%s window reset at %s, no reading since (was %.0f%%)", name, at, w.Used*100)
-	}
-	return fmt.Sprintf("%s window %.0f%% used, resets in %s (%s)", name, w.Used*100, harness.Until(w.ResetsAt, now), at)
 }
 
 // approveOption is the option approve (the first) or refuse (the last) picks;
