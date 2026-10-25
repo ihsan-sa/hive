@@ -1,6 +1,6 @@
 {
   "name": "agents",
-  "description": "The orientation every agent starts with, and the role prompts: lead, worker, reviewer, sweep, filer, warden, tribunal, module reviewer.",
-  "provides": {"prompts": ["orientation.md", "lead.md", "worker.md", "reviewer.md", "sweep.md", "filer.md", "warden.md", "tribunal.md", "module-reviewer.md"]},
+  "description": "The orientation every agent starts with, and the role prompts: lead, worker, reviewer, sweep, filer, warden, tribunal, judge, module reviewer.",
+  "provides": {"prompts": ["orientation.md", "lead.md", "worker.md", "reviewer.md", "sweep.md", "filer.md", "warden.md", "tribunal.md", "judge.md", "module-reviewer.md"]},
   "projects": ["*"]
 }
