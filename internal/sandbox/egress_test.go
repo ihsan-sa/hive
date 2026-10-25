@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -226,7 +227,7 @@ func TestLocalGrant(t *testing.T) {
 func TestRelayConnect(t *testing.T) {
 	_, port := echo(t)
 	dest := "127.0.0.1:" + port
-	sock := filepath.Join(t.TempDir(), "egress.sock")
+	sock := shortSock(t, "egress.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Skip("no unix sockets:", err)
@@ -252,7 +253,7 @@ func TestForwardLocalSkipsWhatItCantBind(t *testing.T) {
 	}
 	ok := free.Addr().String()
 	free.Close()
-	sock := filepath.Join(t.TempDir(), "egress.sock")
+	sock := shortSock(t, "egress.sock")
 	var warn bytes.Buffer
 	held := forwardLocal([]string{"127.0.0.1:" + port, ok}, sock, &warn)
 	for _, ln := range held {
@@ -264,4 +265,21 @@ func TestForwardLocalSkipsWhatItCantBind(t *testing.T) {
 	if !strings.Contains(warn.String(), "127.0.0.1:"+port+" not forwarded") {
 		t.Fatalf("warned %q", warn.String())
 	}
+}
+
+// shortSock is a path for a unix socket in a short temp dir: a socket's path
+// is capped near 108 bytes, which a test's deep temp dir (a gate's child's)
+// can pass.
+func shortSock(t *testing.T, name string) string {
+	t.Helper()
+	base := ""
+	if fi, err := os.Stat("/tmp"); err == nil && fi.IsDir() {
+		base = "/tmp"
+	}
+	dir, err := os.MkdirTemp(base, "sock-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, name)
 }
