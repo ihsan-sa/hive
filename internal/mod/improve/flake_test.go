@@ -183,6 +183,47 @@ func TestOnlyMainsChecksMakeAFlake(t *testing.T) {
 	}
 }
 
+// A merge closed after main already moved past it and was measured (a pull
+// request that landed hours before its task closed) isn't measured again at
+// its old code: no score, no alert, no revert, only a note of what covered it.
+func TestMergeMainAlreadyHoldsIsNotMeasured(t *testing.T) {
+	m, commit, merge := tested(t)
+	old := commit(map[string]string{"t.sh": "echo '--- FAIL: TestClock (0.01s)'\nexit 1\n"})
+	fixed := commit(map[string]string{"t.sh": "true\n"})
+	if ms := merge(fixed); !ms.Kept {
+		t.Fatalf("main at the fix: %+v", ms)
+	}
+	before := len(m.Scores("p"))
+	m.afterMerge(work.Task{ID: "t0", Project: "p", MergeSHA: old})
+	if n := len(m.Scores("p")); n != before {
+		t.Fatalf("a merge main already holds was measured: %+v", m.Scores("p")[n-1])
+	}
+	if reverts(m) != 0 || flakeAlerts(m) != "" {
+		t.Fatalf("reverts %d, alerts %q", reverts(m), flakeAlerts(m))
+	}
+	var got []Covered
+	for _, e := range m.C.J.Since(0) {
+		var c Covered
+		if e.Kind == "score.covered" && e.Decode(&c) == nil {
+			got = append(got, c)
+		}
+	}
+	if len(got) != 1 || got[0].SHA != old || got[0].By != fixed || got[0].Task != "t0" {
+		t.Fatalf("covered: %+v", got)
+	}
+	if !m.measured("p", old) {
+		t.Fatal("a covered merge would be queued again after a restart")
+	}
+	if d := m.Digest(0, ""); !strings.Contains(d, core.Short(old)+" not measured: main already held it when measured at "+core.Short(fixed)) {
+		t.Fatalf("the digest doesn't show the covered merge:\n%s", d)
+	}
+	// A merge main doesn't hold beyond itself is still measured.
+	next := commit(map[string]string{"t.sh": "true\n# next\n"})
+	if ms := merge(next); ms.SHA != next || !ms.Kept {
+		t.Fatalf("a new merge: %+v", ms)
+	}
+}
+
 // A red after a merge that main already had just before it (a clock-bound
 // test, say) isn't the merge's: it is filed to fix, and nothing is reverted.
 func TestRedAlreadyOnMainBeforeTheMergeIsNotReverted(t *testing.T) {
