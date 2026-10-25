@@ -67,6 +67,8 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
                            (scanned first: it needs a handle list in .hive/private/scan-handles.txt or HIVE_SCAN_HANDLES)
   hive update              install the newest release [--release <tag>: that one, and stay on it]
+  hive remote <ssh host>   open the control center here for the Hive on another machine, over ssh [--hive <its hive command>]
+                           pasted images and dropped files then go from this computer to that Hive
   hive shutdown            stop the Hive (running agents finish their turn)
   hive uninstall           remove autostart and the binary's record; leaves your folder
   hive --version
@@ -312,6 +314,10 @@ func run(args []string) int {
 		return 0
 	case "uninstall":
 		return cmdUninstall()
+	case "remote":
+		return cmdRemote(args)
+	case "remote-info": // run over ssh by `hive remote`
+		return cmdRemoteInfo(args, os.Stdin, os.Stdout)
 	}
 	// A module whose manifest asks for it has a command of its own.
 	if ws, ok := core.FindWorkspace(); ok && cmd != "" {

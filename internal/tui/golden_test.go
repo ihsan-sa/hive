@@ -225,7 +225,8 @@ func TestDesignFrames(t *testing.T) {
 		for _, p := range []string{core.Workspace{}.KB(), filepath.Join("/home/you/hive", ".hive", "config.json")} {
 			got = strings.ReplaceAll(got, p, filepath.ToSlash(p))
 		}
-		if c.name == "02b-sending" || c.name == "02c-sent" { // the frame is the thread pane alone
+		got = strings.ReplaceAll(got, imageKey+" image", "alt+v image") // ctrl+v on macOS
+		if c.name == "02b-sending" || c.name == "02c-sent" {            // the frame is the thread pane alone
 			got = column(got, 72, 48, 16)
 		}
 		if os.Getenv("HIVE_UPDATE_FRAMES") != "" { // rewrite the frames; list the change in the PR

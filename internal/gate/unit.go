@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -78,7 +79,7 @@ func unitTest(c *Child) error {
 	u := &unitFailure{}
 	vet, verr := c.Exec(30*time.Minute, c.Src, "go", "vet", "./...")
 	if verr != nil {
-		u.failures = append(u.failures, vetFailures(vet)...)
+		u.failures = append(u.failures, vetFailures(vet, modulePath(c.Src))...)
 		u.out = vet
 	}
 	test, terr := c.Exec(30*time.Minute, c.Src, "go", "test", "-short", "-json", "./...")
@@ -96,8 +97,9 @@ func unitTest(c *Child) error {
 }
 
 // rerun runs the short tests of fs again on the side, once each and
-// uncached: the failures that remain.
-func rerun(c *Child, fs []TestFailure) []TestFailure {
+// uncached: the failures that remain. A run that fails naming nothing keeps
+// what it was asked for, and says so (unnamed).
+func rerun(c *Child, fs []TestFailure) (left []TestFailure, unnamed bool) {
 	defer c.with(offline...)()
 	var named, whole []string
 	byPkg := map[string]bool{}
@@ -116,13 +118,13 @@ func rerun(c *Child, fs []TestFailure) []TestFailure {
 			byPkg[f.Package] = true
 		}
 	}
-	var left []TestFailure
 	if len(vetPkgs) > 0 {
 		// vet reads code, not the machine: run once more only to be sure.
 		args := append([]string{"go", "vet"}, vetPkgs...)
 		if out, err := c.Exec(30*time.Minute, c.Src, args...); err != nil {
-			got := vetFailures(out)
+			got := vetFailures(out, modulePath(c.Src))
 			if len(got) == 0 { // it failed and named nothing: the vet failures stand
+				unnamed = true
 				got = slices.DeleteFunc(slices.Clone(fs), func(f TestFailure) bool { return f.Step != "go vet" })
 			}
 			left = append(left, got...)
@@ -144,6 +146,7 @@ func rerun(c *Child, fs []TestFailure) []TestFailure {
 		got, _ := testFailures(out)
 		if len(got) == 0 {
 			// It failed and named nothing: everything asked for still stands.
+			unnamed = true
 			for _, f := range fs {
 				if f.Step != "go vet" && slices.Contains(pkgs, f.Package) {
 					got = append(got, f)
@@ -167,7 +170,7 @@ func rerun(c *Child, fs []TestFailure) []TestFailure {
 		run(pkgs, "^("+strings.Join(q, "|")+")$")
 	}
 	run(whole, "")
-	return left
+	return left, unnamed
 }
 
 // testEvent is a line of go test -json.
@@ -232,16 +235,30 @@ func testFailures(out string) (fs []TestFailure, stray string) {
 	return fs, strings.Join(keepLast(strayLines, 20), "\n")
 }
 
-// vetHeader is the line go vet prints above a package's reports.
-var vetHeader = regexp.MustCompile(`^# (\S+)`)
+// vetHeader is the line go vet prints above a package's reports; a package's
+// tests are bracketed ("# [p]").
+var vetHeader = regexp.MustCompile(`^# \[?([^\s\]]+)\]?`)
+
+// vetFile is a report line naming its file, relative to the module's root.
+var vetFile = regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+`)
 
 // vetFailures reads go vet's output: each package it reported on, with its
-// reports.
-func vetFailures(out string) []TestFailure {
+// reports. A run that vets one package prints no header: a report there is
+// put on the package of its file, in module mod.
+func vetFailures(out, mod string) []TestFailure {
 	var fs []TestFailure
+	headed := false
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		pkg := ""
 		if m := vetHeader.FindStringSubmatch(line); m != nil {
-			fs = append(fs, TestFailure{Step: "go vet", Package: m[1]})
+			pkg, headed = m[1], true
+		} else if m := vetFile.FindStringSubmatch(line); m != nil && !headed && mod != "" && !filepath.IsAbs(m[1]) {
+			pkg = path.Join(mod, path.Dir(filepath.ToSlash(m[1])))
+		}
+		if pkg != "" && (len(fs) == 0 || fs[len(fs)-1].Package != pkg) {
+			fs = append(fs, TestFailure{Step: "go vet", Package: pkg})
+		}
+		if vetHeader.MatchString(line) {
 			continue
 		}
 		if len(fs) > 0 && strings.TrimSpace(line) != "" {
@@ -331,7 +348,7 @@ func judgeUnit(cand, ctrl *Child, errs map[*Child]error, mod string) (UnitReport
 		}
 	}
 	if len(only) > 0 {
-		still := rerun(cand, only)
+		still, _ := rerun(cand, only)
 		stillKey := map[string]bool{}
 		for _, f := range still {
 			stillKey[f.key()] = true
@@ -350,10 +367,27 @@ func judgeUnit(cand, ctrl *Child, errs map[*Child]error, mod string) (UnitReport
 				again = append(again, g)
 			}
 		}
+		// A package the control doesn't have can't fail there: its failures
+		// are the candidate's own, and asking the control would only fail to
+		// load it, naming nothing.
+		again = slices.DeleteFunc(again, func(f TestFailure) bool {
+			if hasPackage(ctrl.Src, mod, f.Package) {
+				return false
+			}
+			u.Own = append(u.Own, f)
+			return true
+		})
 		if len(again) > 0 {
-			onCtrl := rerun(ctrl, again)
+			// Shared only as the same failure: a package the candidate breaks
+			// whole is not excused by one test the control fails in it.
+			onCtrl, unnamed := rerun(ctrl, again)
+			if unnamed {
+				// The control failed naming nothing: that shows no failure
+				// shared, and none of the candidate's own either.
+				return u, transient{fmt.Errorf("the control fails the candidate's failures run again on it naming no test, so the step cannot be judged here: %s", (&unitFailure{failures: again}).Error())}
+			}
 			for _, f := range again {
-				if slices.ContainsFunc(onCtrl, func(g TestFailure) bool { return g.key() == f.key() || (f.Test == "" && g.Package == f.Package) }) {
+				if slices.ContainsFunc(onCtrl, func(g TestFailure) bool { return g.key() == f.key() }) {
 					u.Shared = append(u.Shared, f)
 				} else {
 					u.Own = append(u.Own, f)
@@ -410,6 +444,17 @@ func clip(s string, n int) string {
 		return string(r[:n])
 	}
 	return s
+}
+
+// hasPackage says whether src, the checkout of module mod, holds the Go
+// package pkg: a folder with a .go file in it. A package outside mod (or a
+// side with no module path) is taken to be there.
+func hasPackage(src, mod, pkg string) bool {
+	if src == "" || mod == "" || (pkg != mod && !strings.HasPrefix(pkg, mod+"/")) {
+		return true
+	}
+	files, _ := filepath.Glob(filepath.Join(src, filepath.FromSlash(strings.TrimPrefix(pkg, mod)), "*.go"))
+	return len(files) > 0
 }
 
 // modulePath is the module go.mod in src names, or "".
