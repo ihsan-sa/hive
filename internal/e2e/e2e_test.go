@@ -214,11 +214,18 @@ func (h *hive) launch() {
 	cmd.Dir = h.ws.Root
 	log, _ := os.OpenFile(filepath.Join(h.ws.Hive(), "daemon-test.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	cmd.Stdout, cmd.Stderr = log, log
+	var endGroup func()
+	if group != nil {
+		endGroup = group(cmd)
+	}
 	if err := cmd.Start(); err != nil {
 		h.t.Fatal(err)
 	}
 	log.Close() // the daemon has its own handle
 	h.cmd = cmd
+	if endGroup != nil {
+		h.jobs = append(h.jobs, endGroup)
+	}
 	if contain != nil {
 		h.jobs = append(h.jobs, contain(h.t, cmd.Process.Pid))
 	}
@@ -1486,6 +1493,10 @@ var adopt func()
 // contain puts a daemon, and what it starts from then on, in a group that
 // the returned func ends (Windows only).
 var contain func(t *testing.T, pid int) func()
+
+// group makes cmd, before it starts, lead a process group of its own, and
+// returns what kills what is left in it (Unix only).
+var group func(cmd *exec.Cmd) func()
 
 // TestLiveWorker is the plain path on a real harness: run it with
 // HIVE_E2E_HARNESS=claude or codex, or a module's harness (HIVE_E2E_HARNESS=opencode
