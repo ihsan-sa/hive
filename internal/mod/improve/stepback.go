@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -355,7 +356,7 @@ func (m *Module) score(s StepBack, r core.Run) {
 	s.Status, s.Note = "lost", fmt.Sprintf("the setup scored %g against the Hive's best %g", *c.Score, s.Best)
 	if !cfg.Score.WithinTolerance(s.Best, *c.Score) {
 		s.Status = "won"
-		s.Fault = m.fileFault(s, p, r, *cfg.Score)
+		s.Fault = m.fileFault(s, p, r, sha, *cfg.Score)
 	}
 	m.saveStepBack(s)
 }
@@ -380,7 +381,11 @@ func (m *Module) transcript(r core.Run, n int) string {
 // they go only to the task's worker, as a file on the host. A fault on an
 // isolated project, or with no Hive source to file against, asks the person
 // instead, and that local ask shows the setup.
-func (m *Module) fileFault(s StepBack, p core.Project, exp core.Run, sc core.Score) string {
+//
+// The commits the setup left (sha, from s.From) go to the worker too, as a
+// patch it can apply: when the step-back ran on the Hive itself they are the
+// change that already won, so the fault asks for them on main first.
+func (m *Module) fileFault(s StepBack, p core.Project, exp core.Run, sha string, sc core.Score) string {
 	var ids []string
 	var shown []core.Run
 	var spent float64
@@ -411,15 +416,44 @@ The setup ran as %s; the Hive's latest runs on the project were %s.
 			for _, r := range shown {
 				transcripts += fmt.Sprintf("## %s %s ($%.2f)\n\n%s\n", r.Role, r.ID, r.Cost, m.transcript(r, 1500))
 			}
-			t, err := m.Work.File(work.Brief{Project: self.Name, Title: title, From: s.Run, Known: report + "\nThe setup, and what each of those runs said and did, is in $HIVE_RUN/transcripts.md. Quote nothing from it in commits, the PR or your finish text: it can hold the project's own text.",
-				Inputs: map[string]string{"transcripts.md": transcripts},
-				Done:   "the prompt or module that held the Hive's agents back is changed, from what the transcripts show the simpler setup did that they didn't"})
+			known := report + "\nThe setup, and what each of those runs said and did, is in $HIVE_RUN/transcripts.md. Quote nothing from it in commits, the PR or your finish text: it can hold the project's own text."
+			inputs := map[string]string{"transcripts.md": transcripts}
+			done := "the prompt or module that held the Hive's agents back is changed, from what the transcripts show the simpler setup did that they didn't"
+			if patch, n := m.leftPatch(p, s.From, sha); n > 0 && p.Name == self.Name {
+				inputs["commits.patch"] = patch
+				known += fmt.Sprintf("\n\nThe setup's %d commit(s), the change that scored %g, are in $HIVE_RUN/commits.patch (git format-patch from %s). They start from the project's start, not main: apply them with `git am -3 $HIVE_RUN/commits.patch` and resolve what main changed since.", n, *s.Score, core.Short(s.From))
+				done = "the setup's commits in $HIVE_RUN/commits.patch are forward-ported onto main, keeping what still holds and saying in the account what was left out and why; then " + done
+			} else if n > 0 {
+				inputs["changes.patch"] = patch
+				known += fmt.Sprintf("\n\nWhat the setup changed in its copy (%d commit(s)) is in $HIVE_RUN/changes.patch, to compare with what the Hive's runs did; it is the project's code, so quote none of it either.", n)
+			}
+			t, err := m.Work.File(work.Brief{Project: self.Name, Title: title, From: s.Run, Known: known, Inputs: inputs, Done: done})
 			if err == nil {
 				return t.ID
 			}
 		}
 	}
 	return m.C.Person.Ask(core.Ask{Kind: "question", Ref: "stepback:" + s.ID, Project: p.Name, Title: title, Detail: report + "\nThe setup:\n\n" + string(set), Options: []string{"ok"}}).ID
+}
+
+// leftPatch is the commits from base to sha in p's host clone, as one
+// format-patch mbox, and how many there are; none when there are none, git
+// can't tell, or the patch is too large to hand over whole.
+func (m *Module) leftPatch(p core.Project, base, sha string) (string, int) {
+	if base == "" || sha == "" || base == sha {
+		return "", 0
+	}
+	dir := m.C.WS.Project(p.Name)
+	count, err := core.Git(dir, "rev-list", "--count", base+".."+sha)
+	n, _ := strconv.Atoi(strings.TrimSpace(count))
+	if err != nil || n == 0 {
+		return "", 0
+	}
+	patch, err := core.Git(dir, "format-patch", "--stdout", "--binary", "--no-signature", base+".."+sha)
+	if err != nil || patch == "" || len(patch) > 1<<20 {
+		return "", 0
+	}
+	return patch + "\n", n
 }
 
 // alert says how a project's step-back stands, as one alert that updates.
