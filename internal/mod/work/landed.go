@@ -178,3 +178,99 @@ func (m *Module) opLanded(r core.Run, args json.RawMessage) (any, error) {
 	}
 	return map[string]string{"task": t.ID, "merge": t.MergeSHA, "note": "ended as merged; the briefs waiting on it start as the queue allows"}, nil
 }
+
+// alreadyLanded ends t when its head sha brings nothing main doesn't already
+// have (its tree is main's, or merging it into main changes nothing): its
+// work landed through another task or by hand. Its PR is closed and its issue
+// closed, each naming the main commit that carries the work, and it is done:
+// no further test, read, merge or worker round, and not blocked or stopped.
+// Nothing is measured, as that commit was measured when it merged. A task
+// whose own PR is merged on the forge is left to the merge path, which records
+// and measures it. A checkpoint main already holds is dropped and the worker
+// keeps going.
+func (m *Module) alreadyLanded(t *Task, p core.Project, main, sha string) (bool, error) {
+	dir := m.C.WS.Project(p.Name)
+	if sha == "" || main == "" || !holds(dir, main, sha) {
+		return false, nil
+	}
+	open := false
+	if t.PR.Number != 0 {
+		pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
+		if err != nil {
+			return true, err
+		}
+		if pr.State == "MERGED" { // its own merge: the merge path records it, banks a checkpoint and measures it
+			return false, nil
+		}
+		open = pr.State == "OPEN"
+	}
+	if t.Checkpoint != "" {
+		return true, m.dropCheckpoint(t, p, "main at "+core.Short(main)+" already has everything in it")
+	}
+	at := carrier(dir, main, sha)
+	say := fmt.Sprintf("Already on main: %s carries this work, so there is nothing left to merge. Closing.", at)
+	if open {
+		if err := m.C.Effects.Forge.ClosePR(p.Repo, t.PR.Number, say); err != nil {
+			return true, err
+		}
+	}
+	if t.Worker != "" {
+		if r, ok := m.C.Runs.Get(t.Worker); ok && !r.Terminal() {
+			m.C.Runs.Stop(t.Worker, "its work is already on main")
+		}
+	}
+	t.MergeSHA, t.Stage, t.Reason, t.Failures = at, StageDone, "", 0
+	t.IssueOpen = t.Issue.Number != 0
+	m.save(t, fmt.Sprintf("already landed: main at %s carries its head %s", core.Short(at), core.Short(sha)))
+	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Already on main: %q, carried by %s. %s", t.Label(), core.Short(at), t.PR.URL))
+	if t.IssueOpen {
+		m.comment(p.Repo, t.Issue.Number, say)
+		m.closeIssue(t, p)
+	}
+	return true, nil
+}
+
+// carrier is the main commit that brought sha's change: the oldest on main's
+// first-parent line, going back from main, that still holds it. A line longer
+// than it looks back over names the oldest it looked at. A head that brought
+// main in is read as the branch was before (its first parent), so the commit
+// named is the one that landed the work, not main's newest.
+func carrier(dir, main, sha string) string {
+	for i := 0; i < 20; i++ {
+		prev, err := core.Git(dir, "rev-parse", "-q", "--verify", sha+"^2^{commit}")
+		if err != nil || strings.TrimSpace(prev) == "" {
+			break
+		}
+		first, err := core.Git(dir, "rev-parse", "-q", "--verify", sha+"^1^{commit}")
+		if err != nil || !holds(dir, main, strings.TrimSpace(first)) {
+			break
+		}
+		sha = strings.TrimSpace(first)
+	}
+	out, err := core.Git(dir, "rev-list", "--first-parent", "-n", "200", main)
+	lines := strings.Fields(out)
+	if err != nil || len(lines) == 0 {
+		return main
+	}
+	at := main
+	for _, c := range lines[1:] {
+		if !holds(dir, c, sha) {
+			break
+		}
+		at = c
+	}
+	return at
+}
+
+// landedHead is alreadyLanded against main as it is now, for a step that
+// hasn't synced main itself. A checkpoint in flight is left to its own steps.
+func (m *Module) landedHead(t *Task, p core.Project, sha string) (bool, error) {
+	if sha == "" || t.Checkpoint != "" {
+		return false, nil
+	}
+	main, err := m.C.Effects.Sync(p)
+	if err != nil {
+		return false, err
+	}
+	return m.alreadyLanded(t, p, main, sha)
+}

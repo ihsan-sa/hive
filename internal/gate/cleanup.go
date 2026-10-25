@@ -36,6 +36,22 @@ func Reap(out string) int {
 	return n
 }
 
+// Untidy reports whether the run in out still holds what Reap removes, so
+// a sweep over every past run reaps only those a dead gate left.
+func Untidy(out string) bool {
+	for _, dir := range runDirs(out) {
+		if !childRoot(filepath.Base(dir)) {
+			return true
+		}
+		for _, b := range bulk {
+			if _, err := os.Lstat(filepath.Join(dir, b)); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // childRoot is a side's or a sealed check's root in a run folder.
 func childRoot(name string) bool {
 	return name == "candidate" || name == "control" || strings.HasPrefix(name, "check-")

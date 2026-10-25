@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -125,6 +126,10 @@ type model struct {
 	notice    *api.Updated
 	help      bool
 	sel       selection // a mouse drag in progress
+
+	keyBurst bool         // pastes arrive as keys (a Windows console): see burst.go
+	burst    []tea.KeyMsg // keys held while they may be a paste
+	burstN   int
 }
 
 type stateMsg struct {
@@ -164,6 +169,7 @@ func Run(c *api.Client, ws core.Workspace) error {
 		json.Unmarshal(raw, &ui)
 	}
 	m.seen = ui.Seq
+	m.keyBurst = runtime.GOOS == "windows"
 	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
@@ -396,6 +402,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setFlash(string(msg))
 		return m, m.fetchState()
 	case clipMsg:
+		m.flash = "" // reading the clipboard…
 		switch {
 		case msg.text != nil:
 			var cmd tea.Cmd
@@ -404,12 +411,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.compose != m.composeN || !m.composing:
 			// read for a message that has since been sent or dropped
 		case msg.err != nil:
-			m.setFlash(msg.err.Error())
+			m.setFlash("error: " + msg.err.Error())
 		default:
 			m.files = append(m.files, msg.f)
 		}
 	case tea.KeyMsg:
+		if m.keyBurst {
+			return m.burstKey(msg)
+		}
 		return m.key(msg)
+	case burstMsg:
+		if int(msg) == m.burstN {
+			return m, m.flushBurst()
+		}
 	case tea.MouseMsg:
 		if ok, cmd := m.mouseSelect(msg); ok {
 			return m, cmd
@@ -688,9 +702,12 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.send(text)
 	case "ctrl+v", "alt+v":
 		// As in Claude Code: an image on the clipboard attaches; otherwise
-		// ctrl+v pastes text as before.
+		// ctrl+v pastes text as before. Windows Terminal keeps ctrl+v for its
+		// own paste, which sends nothing for an image, so there alt+v is the
+		// key, and it says why when no image comes.
 		if m.composing {
-			return m, readClipboard(true, m.composeN)
+			m.setFlash("reading the clipboard…")
+			return m, readClipboard(s == "ctrl+v", m.composeN)
 		}
 	}
 	if m.composing && k.Paste {
@@ -756,7 +773,7 @@ type clipMsg struct {
 func readClipboard(text bool, compose int) tea.Cmd {
 	return func() tea.Msg {
 		f, err := clipboardImage()
-		if text && (err == errNoImage || errors.Is(err, errNoTool)) {
+		if text && (errors.Is(err, errNoImage) || errors.Is(err, errNoTool)) {
 			return clipMsg{text: textarea.Paste(), compose: compose}
 		}
 		return clipMsg{f: f, err: err, compose: compose}
@@ -906,11 +923,11 @@ func (m *model) keys() []string {
 	case m.focus == 0:
 		return []string{"↑↓", "move", "enter", "open", "space", "collapse", "tab", "switch pane", "q", "quit"}
 	case m.section == secChats && m.takeover():
-		return []string{"enter", "send", "ctrl+j", "newline", "esc", "back to chat"}
+		return []string{"enter", "send", "ctrl+j", "newline", "esc", "back to chat", imageKey, "image"}
 	case m.section == secChats && m.focus == 2:
-		return []string{"enter", "send", "ctrl+j", "newline", "esc", "close thread", "← tab", "to the channel", "pgup pgdn", "scroll"}
+		return []string{"enter", "send", "ctrl+j", "newline", "esc", "close thread", "← tab", "to the channel", "pgup pgdn", "scroll", imageKey, "image"}
 	case m.section == secChats && m.composing:
-		return []string{"enter", "start thread", "ctrl+j", "newline", "esc", "leave box", "↑", "pick a thread", "tab", "switch pane"}
+		return []string{"enter", "start thread", "ctrl+j", "newline", "esc", "leave box", "↑", "pick a thread", "tab", "switch pane", imageKey, "image"}
 	case m.section == secChats && m.thread != "":
 		return []string{"↑↓", "thread", "→", "to the open thread", "pgup pgdn", "scroll", "space", "collapse", "n", "new thread"}
 	case m.section == secChats:
@@ -940,6 +957,12 @@ func (m *model) keys() []string {
 	return []string{"↑↓", "move", "enter", "change", "tab", "sidebar"}
 }
 
+// imageKey pastes a clipboard image. Windows Terminal, which WSL and SSH
+// sessions from Windows run in too, keeps ctrl+v for its own paste and sends
+// nothing when the clipboard holds only an image; alt+v gets through, as in
+// Claude Code. macOS terminals type a character for alt+v.
+var imageKey = map[bool]string{true: "ctrl+v", false: "alt+v"}[runtime.GOOS == "darwin"]
+
 func helpLines() []string {
 	return []string{"", stTitle.Render("Keys"), "",
 		"tab / shift+tab   switch pane: sidebar, main, thread",
@@ -954,6 +977,7 @@ func helpLines() []string {
 		"p / x             in Feedback, pass it to the lead / set it aside",
 		"/                 in Knowledge, search the knowledge base",
 		"ctrl+j            new line in a box",
+		fmt.Sprintf("%-18sin a box, attach the clipboard's image; paste or drop a file's path to attach it", imageKey),
 		"pgup pgdn, wheel  scroll; the wheel scrolls the pane under it",
 		"home end          the top or the end",
 		"q                 quit the control center; the Hive keeps working",
