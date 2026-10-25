@@ -35,6 +35,9 @@ type Module struct {
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
 	PauseMerges func(wait time.Duration) (resume func(), ok bool)
+	// Scan checks what a release at sha publishes before it is cut; nil is
+	// the identity and secret scan of the files on the commit's public list.
+	Scan func(p core.Project, sha string) error
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
 	// said holds project@tag for each pre-release whose wait or failed
@@ -707,6 +710,14 @@ func (m *Module) afterKept(project, sha string) {
 	}
 	if len(why) > 0 && !approved {
 		m.hold(project, sha, why, manifest.String())
+		return
+	}
+	scanAt := m.Scan
+	if scanAt == nil {
+		scanAt = m.scan
+	}
+	if err := scanAt(p, sha); err != nil {
+		alert("no release at " + core.Short(sha) + ", since its scan blocks it: " + err.Error())
 		return
 	}
 	cfg := m.C.Effects.Config(p, sha)
