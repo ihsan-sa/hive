@@ -288,13 +288,29 @@ func TestQueueAreasStayInsideTheClone(t *testing.T) {
 
 // A directory ("in internal/.", "docs/") and a doc that merges as union are
 // never areas, so they hold no brief back.
-func TestQueueAreasSkipTopLevelAndUnionDocs(t *testing.T) {
+func TestQueueAreasSkipDirectoriesAndUnionDocs(t *testing.T) {
 	m := queueRig(t)
 	task := file(t, m, "fix it", "Nothing like it in internal/. or cmd/..., see docs/log.md, docs/notes/plan.md, docs/ and internal/tui/views.go.")
 	got := m.areas(task)
 	want := []string{"internal/tui/views.go"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("areas %q, want %q", got, want)
+	}
+}
+
+// A file a brief only says another is on ("effects.go is on
+// internal/core/runs.go", "a path on it") is no area; one it adds to is.
+func TestQueueAreasSkipListsAFileIsOn(t *testing.T) {
+	m := queueRig(t)
+	for text, want := range map[string]string{
+		"internal/tui/views.go is on internal/core/runs.go: say so in the PR.":          "internal/tui/views.go",
+		"Both are 'on internal/core/runs.go'; a path on internal/core/effects.go too.":  "",
+		"Add internal/tui/views.go to internal/core/runs.go, which lists what's on it.": "internal/tui/views.go internal/core/runs.go",
+		"Work on internal/core/effects.go; the TUI is in internal/tui/views.go.":        "internal/core/effects.go internal/tui/views.go",
+	} {
+		if got := strings.Join(m.areas(file(t, m, "fix it", text)), " "); got != want {
+			t.Errorf("%q: areas %q, want %q", text, got, want)
+		}
 	}
 }
 

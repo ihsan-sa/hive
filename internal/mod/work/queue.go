@@ -559,6 +559,11 @@ type editEntry struct {
 
 var pathLike = regexp.MustCompile(`[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+`)
 
+// onList is the text before a path a brief only cites as a list a file is on
+// ("effects.go is on tests/LANDING-security.toml", "a path on it"), not one it
+// edits: 10 of 12 briefs that waited on the security list never changed it.
+var onList = regexp.MustCompile("(?i)\\b(?:is|are|paths?)\\s+['\"`]?on\\s+['\"`]?$")
+
 // areas are the files t's brief names that exist in its project's clone. A
 // file is only itself, so two briefs on different files of one package start
 // together, and a directory ("internal/mod", "internal/mod/work") is no area:
@@ -566,8 +571,10 @@ var pathLike = regexp.MustCompile(`[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+`)
 // file there, and holding on it queued most of the line behind one worker
 // (issues #399, #406). A file that merges as union (.gitattributes
 // merge=union, like docs/log.md) isn't an area: both sides' lines are kept.
-// They are worked out once per brief text and .gitattributes, so a doc main
-// newly marks union frees the briefs that name it.
+// Nor is a list a brief only says a file is on (onList); one that does edit
+// it after all merges main if they meet. They are worked out once per brief
+// text and .gitattributes, so a doc main newly marks union frees the briefs
+// that name it.
 func (m *Module) areas(t Task) []string {
 	text := t.Title + "\n" + t.Done + "\n" + t.Known
 	root := m.C.WS.Project(t.Project)
@@ -597,8 +604,11 @@ func (m *Module) areas(t Task) []string {
 			out = append(out, p)
 		}
 	}
-	for _, p := range pathLike.FindAllString(text, -1) {
-		p = path.Clean(strings.TrimRight(strings.TrimPrefix(p, "./"), "."))
+	for _, at := range pathLike.FindAllStringIndex(text, -1) {
+		if onList.MatchString(text[max(0, at[0]-24):at[0]]) {
+			continue
+		}
+		p := path.Clean(strings.TrimRight(strings.TrimPrefix(text[at[0]:at[1]], "./"), "."))
 		if p == "." || strings.HasPrefix(p, "..") || strings.HasPrefix(p, ".git/") {
 			continue
 		}
