@@ -42,6 +42,9 @@ type Module struct {
 	// Scan checks what a release at sha publishes before it is cut; nil is
 	// the identity and secret scan of the files on the commit's public list.
 	Scan func(p core.Project, sha string) error
+	// Rehearse runs the release build and an update to it at sha before a
+	// change merges; nil is RunCheck with rehearsal (premerge.go).
+	Rehearse func(p core.Project, sha string) core.Check
 	// Diff lists the files that differ between two commits; nil is git diff
 	// in the project's clone.
 	Diff func(p core.Project, from, to string) ([]string, error)

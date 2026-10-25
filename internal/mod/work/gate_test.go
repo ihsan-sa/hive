@@ -810,3 +810,35 @@ func TestSendBackBundlesMain(t *testing.T) {
 		t.Fatalf("bundle heads %q, want main %s", out, main)
 	}
 }
+
+// A change whose tests pass but whose release scan, release build or update
+// fails goes back to its worker with the failure named, before any read or
+// merge; what PreMerge only notes stays on the task's log and it goes on.
+func TestPreMergeSendsBack(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	var at, onMain string
+	m.PreMerge = func(_ core.Project, sha, main string) (string, string) {
+		at, onMain = sha, main
+		return "The release scan (hive-scan, as release.yml runs it) blocks it:\n\ndocs/a.md:1: handle 1", ""
+	}
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if main, _ := m.C.Effects.Sync(p); at != task.SHA || onMain != main {
+		t.Fatalf("PreMerge ran on %s against %s, want %s against %s", at, onMain, task.SHA, main)
+	}
+	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "docs/a.md:1: handle 1") {
+		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
+	}
+
+	m, task, p, _ = gateRig(t, false, map[string]string{"feature.txt": "y"})
+	m.PreMerge = func(core.Project, string, string) (string, string) {
+		return "", "the release scan was skipped: no handle list"
+	}
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage == StageWorking || task.Stage == StageTesting || !logHas(task, "before merge: the release scan was skipped") {
+		t.Fatalf("a note held the change: stage %q, reason %q", task.Stage, task.Reason)
+	}
+}

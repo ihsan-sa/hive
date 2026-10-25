@@ -292,6 +292,11 @@ type Module struct {
 	// unset, such a change can't be judged and waits.
 	Gate func(ctx context.Context, j GateJob) core.GateResult
 
+	// PreMerge runs what first breaks at release or update time on a
+	// change whose tests passed (the release module): back says why it goes
+	// back to its worker, note what was skipped or excused.
+	PreMerge func(p core.Project, sha, main string) (back, note string)
+
 	mu    sync.Mutex
 	tasks map[string]*Task
 	busy  map[string]bool
@@ -1583,6 +1588,21 @@ func (m *Module) test(t *Task, p core.Project) error {
 				return err
 			}
 			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
+		}
+	}
+	if m.PreMerge != nil {
+		back, note := m.PreMerge(p, t.SHA, main)
+		if note != "" {
+			m.save(t, "before merge: "+note)
+		}
+		if back != "" && t.Checkpoint != "" {
+			return m.dropCheckpoint(t, p, back)
+		}
+		if back != "" {
+			if ok, err := m.catchUp(t, p, main, "its release build, update or scan failed"); ok || err != nil {
+				return err
+			}
+			return m.sendBack(t, p, back)
 		}
 	}
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)

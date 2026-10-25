@@ -16,7 +16,7 @@ import (
 func (m *Module) scan(p core.Project, sha string) error {
 	deny, handles, err := scan.RunTime(os.Getenv, m.C.WS.Private())
 	if err != nil {
-		return err
+		return noLists{err}
 	}
 	dir := m.C.WS.Project(p.Name)
 	out, err := core.Git(dir, "ls-tree", "-r", "-z", "--name-only", sha)
@@ -30,3 +30,7 @@ func (m *Module) scan(p core.Project, sha string) error {
 	}
 	return scan.Run(strings.Split(strings.TrimRight(out, "\x00"), "\x00"), read, scan.Lists{Public: public, Deny: deny, Handles: handles})
 }
+
+// noLists is the scan refusing for want of its lists here, which is no
+// verdict on the commit.
+type noLists struct{ error }

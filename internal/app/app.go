@@ -82,6 +82,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Work.Gate = runGate(ws)
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
+	a.Work.PreMerge = a.Release.PreMerge
 	a.Models = models.New(c, a.Work)
 	a.Agents.Skip = a.Models.Benched
 	a.Improve.OnKept = a.Release.AfterKept
