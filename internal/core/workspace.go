@@ -161,6 +161,14 @@ type Config struct {
 	Share     string `json:"share,omitempty"`
 	ShareURL  string `json:"share_url,omitempty"`
 	InstallID string `json:"install_id,omitempty"`
+	// ShareAll is when the person chose to share everything (the report
+	// module's levels), empty otherwise; Contribute is when they said yes to
+	// contributing failures and fixes upstream, "off" once they said no.
+	ShareAll   string `json:"share_all,omitempty"`
+	Contribute string `json:"contribute,omitempty"`
+	// ReportsReadURL is where the developer's Hive reads the reports installs
+	// sent (docs/report.md); its key is the person's, under .hive/logins.
+	ReportsReadURL string `json:"reports_read_url,omitempty"`
 	// ShareBundleURL is where `hive share` sends its bundle; empty is the developer's endpoint.
 	ShareBundleURL string `json:"share_bundle_url,omitempty"`
 }

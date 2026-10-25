@@ -31,6 +31,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
@@ -806,6 +807,7 @@ func (s *server) routes() http.Handler {
 		if err := a.C.WS.SaveConfig(c); err != nil {
 			return nil, err
 		}
+		report.Changed(a.C.WS, cur, c)
 		if sandboxChanged(cur, c) {
 			a.C.ResetSandbox()
 		}

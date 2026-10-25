@@ -114,23 +114,28 @@ if (-not $env:HIVE_SKIP_WSL) {
 }
 
 Write-Host ''
-# Sharing failures stays off unless the person says yes. With no console, or
-# on Enter, it's no. HIVE_SHARE=yes|no answers ahead of time, and a reinstall
-# that was answered before doesn't ask again. The question is report.Question
-# word for word (TestQuestionSaysWhatIsSent). Releases before v0.1.18 have no
-# report command (any exit but 0 or 1 from `report asked`): they are installed
-# without the question, as their own installer did.
+# Sharing failures stays off unless the person says so. With no console, or
+# on Enter, it's off. HIVE_SHARE=off|failures|everything (or yes|no, yes being
+# failures) answers ahead of time, and a reinstall that was answered before
+# doesn't ask again. The question is report.Question word for word
+# (TestQuestionSaysWhatIsSent). Releases before v0.1.18 have no report command
+# (any exit but 0 or 1 from `report asked`): they are installed without the
+# question, as their own installer did. One with report but without the levels
+# refuses `report everything`, and gets `report on`, the failures.
 $share = $env:HIVE_SHARE
 $asked = Invoke-Native { & $exe report asked } -Quiet
 if ($asked -gt 1 -or $asked -lt 0) { $share = $null }
 elseif (-not $share -and $asked -ne 0) {
-  $share = 'no'
+  $share = 'off'
   if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
-    $share = Read-Host "`nSend failure and usage reports to the Hive developer so problems get fixed? Each failure report holds what failed, when and why (up to 2,000 characters), and the agent reply or the last lines of the task log (up to 4,000 characters). A usage report counts runs, turns, merges, reverts, cost and dropped reports, with the harness name and the time span it covers. Every report has the Hive version, the OS and a random install id. Secrets, emails and your home folder are scrubbed on this machine first. (y/N)"
+    $share = Read-Host "`nHow much should this Hive share with the Hive developer so problems get fixed: off, failures or everything? off sends nothing. failures sends failure and usage reports. Each failure report holds what failed, when and why (up to 2,000 characters), and the agent reply or the last lines of the task log (up to 4,000 characters). A usage report counts runs, turns, merges, reverts, cost and dropped reports, with the harness name and the time span it covers. Every report has the Hive version, the OS and a random install id. everything sends those reports and also the brief, notes and turn logs of each agent run, the chats, the Hive journal and the daemon log, written from when it was chosen, in batches of up to 8 MB each time reports go. Secrets, emails, your user and machine names and your home folder are scrubbed on this machine first. (off/failures/everything)"
   }
-  if (-not $share) { $share = 'no' }
+  if (-not $share) { $share = 'off' }
 }
-if ($share -match '^[yY]') { Invoke-Native { & $exe report on } | Out-Null }
+if ($share -match '^([eE]|all$)') {
+  if ((Invoke-Native { & $exe report everything } -Quiet) -ne 0) { Invoke-Native { & $exe report on } | Out-Null }
+}
+elseif ($share -match '^([fFyY]|on$)') { Invoke-Native { & $exe report on } | Out-Null }
 elseif ($share) { Invoke-Native { & $exe report off } | Out-Null }
 
 Write-Host "Installed $(& $exe --version). Run: $cmd"

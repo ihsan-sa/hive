@@ -279,14 +279,17 @@ func TestControlCenterInTmux(t *testing.T) {
 	// come from report.Question, so rewording it can't break this wait.
 	x.wait(20*time.Second, strings.Join(strings.Fields(report.Question)[:3], " "))
 	x.keys("Enter")
+	// Then the separate yes or no on contributing upstream: Enter is no.
+	x.wait(20*time.Second, strings.Join(strings.Fields(report.ContributeQuestion)[:3], " "))
+	x.keys("Enter")
 	s = x.until(time.Minute, "the sandbox or repository prompt", func(s string) bool {
 		return strings.Contains(s, "Type `bare`") || strings.Contains(s, "GitHub repository")
 	})
 	// The folder exists now and the daemon isn't up: point it at the fake
 	// harness, as a person's own settings would point it at Claude Code.
 	cfg := ws.LoadConfig()
-	if cfg.Share != "off" {
-		t.Fatalf("Enter at the share opt-in left share at %q, not off", cfg.Share)
+	if cfg.Share != "off" || cfg.Contribute != "off" {
+		t.Fatalf("Enter at the share opt-in left share at %q and contribute at %q, not off", cfg.Share, cfg.Contribute)
 	}
 	cfg.Harness = "fake"
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0

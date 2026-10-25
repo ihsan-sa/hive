@@ -978,11 +978,22 @@ func (m *model) settings() []setting {
 		}
 		return "off"
 	}
-	share := "off  (scrubbed; `" + core.Cmd + " report` shows what was sent)"
+	shown := "  (scrubbed; `" + core.Cmd + " report` shows what was sent)"
+	share := report.Level(c)
 	if since, on := c.Sharing(); on {
-		share = "on since " + since.Format("2006-01-02 15:04") + "  (scrubbed; `" + core.Cmd + " report` shows what was sent)"
-	} else if m.shareAsk {
-		share = report.Question + "  Enter: yes; any other key: no"
+		share += " since " + since.Format("2006-01-02 15:04")
+	}
+	share += shown
+	contribute := "off"
+	if since, on := report.Contributing(c); on {
+		contribute = "on since " + since.Format("2006-01-02 15:04") + " to " + report.Upstream(c)
+	}
+	switch m.shareAsk {
+	case "":
+	case "contribute":
+		contribute = report.ContributeQuestion + "  Enter: yes; any other key: no"
+	default:
+		share = "Share " + m.shareAsk + "? " + report.WhatIsSent(m.shareAsk) + "  Enter: yes; any other key: no"
 	}
 	sandboxVal := c.Sandbox
 	if m.st.Sandbox != "" {
@@ -1002,7 +1013,8 @@ func (m *model) settings() []setting {
 				return flashMsg("`" + core.Cmd + " update --release <tag>` installs and pins a release")
 			}
 		}},
-		{group: "General", label: "share reports", value: share, key: "share"},
+		{group: "General", label: "share with developer", value: share, key: "share", choices: report.Levels},
+		{group: "General", label: "contribute upstream", value: contribute, key: "contribute"},
 		{group: "Agents", label: "harness", value: c.Harness, key: "harness", choices: append(slices.Clone(harness.Names), custom)},
 		{group: "Agents", label: "worker model", value: c.Model, key: "model", choices: models},
 		{group: "Agents", label: "lead model", value: c.LeadModel, key: "lead_model", choices: models},
@@ -1096,9 +1108,18 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.keyPick(s[m.setSel], k)
 	}
 	ask := m.shareAsk // any key answers the question; only Enter on it is yes
-	m.shareAsk = false
-	if ask && k.String() != "enter" {
-		return m, nil
+	m.shareAsk = ""
+	if ask != "" {
+		if k.String() != "enter" {
+			return m, nil
+		}
+		c := m.st.Config
+		if ask == "contribute" {
+			report.SetContribute(&c, true)
+			return m, m.saveConfig(c, "contributing upstream")
+		}
+		report.SetLevel(&c, ask)
+		return m, m.saveConfig(c, "sharing "+ask)
 	}
 	switch k.String() {
 	case "up", "k":
@@ -1132,15 +1153,17 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			c.APIKeyOptIn = !c.APIKeyOptIn
 			return m, m.saveConfig(c, "API key use changed")
 		case "share":
-			// Turning it on asks the installers' question first, so this way
-			// in shows the same words; the second Enter is the yes.
-			_, on := m.st.Config.Sharing()
-			if !on && !ask {
-				m.shareAsk = true
-				return m, nil
+			m.picking, m.pickSel = true, max(0, slices.Index(cur.choices, report.Level(c)))
+			return m, nil
+		case "contribute":
+			// Saying yes shows the question first, as first run does; the
+			// second Enter is the yes. No is at once.
+			if _, on := report.Contributing(c); on {
+				report.SetContribute(&c, false)
+				return m, m.saveConfig(c, "not contributing upstream")
 			}
-			c.SetShare(!on)
-			return m, m.saveConfig(c, "sharing changed")
+			m.shareAsk = "contribute"
+			return m, nil
 		case "sandbox":
 			if c.Sandbox == "bare" {
 				c.Sandbox = "auto"
@@ -1305,6 +1328,14 @@ func (m *model) saveSetting(v string) tea.Cmd {
 	}
 	c := m.st.Config
 	switch key := s[m.setSel].key; {
+	case key == "share":
+		// More than now shows what it sends first; less is at once.
+		if slices.Index(report.Levels, v) > slices.Index(report.Levels, report.Level(c)) {
+			m.shareAsk = v
+			return nil
+		}
+		report.SetLevel(&c, v)
+		return m.saveConfig(c, "sharing "+v)
 	case key == "harness":
 		c.Harness = v
 	case key == "model":

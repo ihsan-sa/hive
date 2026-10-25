@@ -68,6 +68,9 @@ type Module struct {
 	OnKept func(project, sha string)
 	// Feedback lists agents' open feedback for the projects mine admits.
 	Feedback func(mine func(project string) bool) string
+	// Installs is the section on what installs sent the developer (the report
+	// module), on the developer's own Hive; empty elsewhere.
+	Installs func() string
 
 	mu       sync.Mutex
 	scores   map[string][]Measurement
@@ -916,6 +919,9 @@ func (m *Module) Digest(since int64, only string) string {
 		if fb := m.Feedback(mine); fb != "" {
 			b.WriteString("## Agents' feedback on the Hive, still open\n\n" + fb + "\n")
 		}
+	}
+	if m.Installs != nil && only == "" {
+		b.WriteString(m.Installs())
 	}
 	b.WriteString("## Recent chat\n\n")
 	for _, ch := range m.Chat.Chats() {

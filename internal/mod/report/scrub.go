@@ -1,8 +1,10 @@
 package report
 
 import (
+	"os"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -52,6 +54,9 @@ func Scrub(s, root string) string {
 			return r.re.ReplaceAllString(m, r.with)
 		})
 	}
+	for _, r := range names() {
+		s = r.re.ReplaceAllString(s, r.with)
+	}
 	return longRun.ReplaceAllStringFunc(s, func(m string) string {
 		if mixed(m) {
 			return "[secret]"
@@ -64,3 +69,39 @@ func Scrub(s, root string) string {
 func mixed(s string) bool {
 	return strings.ContainsAny(s, "0123456789") && strings.IndexFunc(s, func(r rune) bool { return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' }) >= 0
 }
+
+// commonNames are accounts named for a role, not a person, and words a
+// report needs.
+var commonNames = map[string]bool{"root": true, "hive": true, "user": true, "admin": true, "runner": true, "ubuntu": true, "home": true, "localhost": true}
+
+// names are the person's user name and the machine's name, as whole words:
+// they say who and where a report is from. A name under three characters
+// would scrub ordinary words, and is left.
+var names = sync.OnceValue(func() []struct {
+	re   *regexp.Regexp
+	with string
+} {
+	var out []struct {
+		re   *regexp.Regexp
+		with string
+	}
+	add := func(name, with string) {
+		if len(name) >= 3 {
+			out = append(out, struct {
+				re   *regexp.Regexp
+				with string
+			}{regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(name) + `\b`), with})
+		}
+	}
+	host, _ := os.Hostname()
+	host, _, _ = strings.Cut(host, ".")
+	if !commonNames[strings.ToLower(host)] {
+		add(host, "[machine]")
+	}
+	for _, u := range []string{os.Getenv("USER"), os.Getenv("USERNAME")} {
+		if !commonNames[strings.ToLower(u)] {
+			add(u, "[user]")
+		}
+	}
+	return out
+})

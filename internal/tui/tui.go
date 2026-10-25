@@ -66,7 +66,7 @@ type model struct {
 	flash   string
 	flashAt time.Time
 
-	shareAsk bool // Settings shows report.Question; Enter on it turns sharing on
+	shareAsk string // a level, or "contribute": Settings shows what it sends; Enter on it is the yes
 
 	side    int    // sidebar cursor
 	sideKey string // the row it's on, so rows coming and going above don't move it
