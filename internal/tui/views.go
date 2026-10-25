@@ -618,6 +618,9 @@ func (m *model) viewDetail(d *detail) []string {
 		}
 		kv("task", t.Label())
 		kv("stage", t.Stage+"  "+core.Clip(t.Reason, 200))
+		if t.Warning != "" {
+			kv("warning", core.Clip(t.Warning, 200))
+		}
 		kv("project", t.Project)
 		kv("aim", t.AimWord())
 		if t.Issue.Number > 0 {
@@ -1007,6 +1010,7 @@ func (m *model) settings() []setting {
 		{group: "General", label: "auto-update", value: onOff(c.AutoUpdate), key: "auto_update"},
 		{group: "General", label: "use ANTHROPIC_API_KEY", value: onOff(c.APIKeyOptIn), key: "api_key_opt_in"},
 		{group: "General", label: "release repo", value: c.ReleaseRepo, key: "release_repo"},
+		{group: "General", label: "self fork owner", value: c.SelfFork, key: "self_fork"},
 		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel", choices: []string{"default", "latest", "pre-release"}},
 		{group: "General", label: "release", value: m.st.Version + ", " + pinText(c.ReleasePin), action: func() tea.Cmd {
 			return func() tea.Msg {
@@ -1368,6 +1372,8 @@ func (m *model) saveSetting(v string) tea.Cmd {
 		c.WSLDistro = v
 	case key == "release_repo":
 		c.ReleaseRepo = v
+	case key == "self_fork":
+		c.SelfFork = v
 	case strings.HasPrefix(key, "schedule:"):
 		sched, err := scheduleHours(v)
 		if err != nil {
