@@ -101,7 +101,7 @@ func TestFixWinsOverAScoreDip(t *testing.T) {
 		t.Fatalf("a fix was reverted for a dip alone")
 	}
 	l := looks()
-	if len(l) != 1 || !strings.Contains(l[0].Known, "TestMerge fails") || !strings.Contains(l[0].Done, "git revert "+ms.SHA) {
+	if len(l) != 1 || !strings.Contains(l[0].Known, "TestMerge fails") || !strings.Contains(l[0].Done, "git revert "+ms.SHA) || !strings.Contains(l[0].Done, "--aim fix") {
 		t.Fatalf("want one brief to look into the dip, naming the fix and how to revert it: %+v", l)
 	}
 	if l[0].Fix() {

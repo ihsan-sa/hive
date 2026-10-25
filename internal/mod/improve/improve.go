@@ -702,7 +702,8 @@ func (m *Module) lookIntoDip(p core.Project, t work.Task, reason string) {
 	}
 	if _, err := m.Work.File(work.Brief{Project: p.Name, From: "improve", Chat: t.Chat, Thread: t.Thread, Title: title,
 		Done: "You judged what made the score dip and said so in your account. If the fix itself made things worse, " +
-			"revert it (`git revert " + t.MergeSHA + "`) and name what got worse; if the dip is noise or comes from elsewhere, " +
+			"revert it (`git revert " + t.MergeSHA + "`), name what got worse, and mark the revert a fix " +
+			"(`hive agent aim --aim fix --why \"reverts " + core.Short(t.MergeSHA) + ": <what got worse>\"`) so it doesn't wait for the gate; if the dip is noise or comes from elsewhere, " +
 			"say what, and win the score back without undoing the fix if you can.",
 		Known: fmt.Sprintf("Task %s, a fix (%s), merged at %s and was kept, since a known fix wins over a score dip: %s. "+
 			"The score is a data point, not the judge: a revert needs a judged read that the fix itself made things worse.",
