@@ -612,10 +612,49 @@ func (m *Module) introduced(p core.Project, sha string, cant core.Check) bool {
 	return now != before && names(now) && !names(before)
 }
 
+// measureLoop measures merges as they come. When it is behind, it takes
+// every merge waiting at once and measures each project's newest first, so
+// main is judged as it stands now; the older ones then come through
+// afterMerge covered by it, rather than each one holding the queue for a
+// whole measurement of code main has long moved past.
 func (m *Module) measureLoop() {
 	for t := range m.queue {
-		m.afterMerge(t)
+		batch := []work.Task{t}
+		for more := true; more; {
+			select {
+			case u := <-m.queue:
+				batch = append(batch, u)
+			default:
+				more = false
+			}
+		}
+		for _, t := range m.newestFirst(batch) {
+			m.afterMerge(t)
+		}
 	}
+}
+
+// newestFirst puts each project's newest merge on main ahead of the rest,
+// which keep their order.
+func (m *Module) newestFirst(batch []work.Task) []work.Task {
+	if len(batch) < 2 {
+		return batch
+	}
+	newest := map[string]int{}
+	for i, t := range batch {
+		if j, ok := newest[t.Project]; !ok || m.after(core.Project{Name: t.Project}, t.MergeSHA, batch[j].MergeSHA) {
+			newest[t.Project] = i
+		}
+	}
+	var first, rest []work.Task
+	for i, t := range batch {
+		if newest[t.Project] == i {
+			first = append(first, t)
+		} else {
+			rest = append(rest, t)
+		}
+	}
+	return append(first, rest...)
 }
 
 // Recover re-queues merges whose measurement didn't happen (after a restart).

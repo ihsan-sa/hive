@@ -39,11 +39,13 @@ type StepBack struct {
 	Setup   *Setup    `json:"setup,omitempty"`
 	Asked   int       `json:"asked,omitempty"`
 	From    string    `json:"from"` // the project's start
-	Best    float64   `json:"best"` // the Hive's best kept score when it began
+	Best    float64   `json:"best"` // the Hive's best kept score when it began, shown to the agent
 	Since   time.Time `json:"since,omitempty"`
 	Budget  float64   `json:"budget,omitempty"` // what the Hive spent on the project since the last step-back
 	Score   *float64  `json:"score,omitempty"`
-	Status  string    `json:"status"` // thinking | experimenting | scoring | won | lost | none | failed
+	Main    string    `json:"main,omitempty"`    // the Hive's main, scored beside the experiment as its control
+	Control *float64  `json:"control,omitempty"` // main's score, the number the experiment has to beat
+	Status  string    `json:"status"`            // thinking | experimenting | scoring | won | lost | none | failed
 	Note    string    `json:"note,omitempty"`
 	Fault   string    `json:"fault,omitempty"` // the task or person's ask it filed
 	Started time.Time `json:"started"`
@@ -165,6 +167,11 @@ func (m *Module) StartStepBack(p core.Project, why string) error {
 	if err != nil {
 		return m.fail(s, "could not fetch the project: "+err.Error())
 	}
+	if m.version(p, main, m.C.Effects.Config(p, main)) != m.versionOf(p, st) {
+		// Main is judged on a score improve hasn't measured yet: a setup
+		// from the start would be scored on one score and main on another.
+		return m.fail(s, "main's score differs from the one its start was measured on, and improve has not measured main on it yet")
+	}
 	dir, err := m.C.Effects.NewCheckout(p, id, main)
 	if err != nil {
 		return m.fail(s, "could not make a copy of the project: "+err.Error())
@@ -183,9 +190,9 @@ Its score (%s is better) started at %g, and the best the Hive has kept is %g. Th
 
 Ask two questions: is the whole approach right, and what is the simplest setup that might beat it?
 
-If a setup is worth testing, write it to $HIVE_BOX/experiment.json as {"why": "...", "system": "...", "asks": ["..."], "model": "..."}. The Hive runs it once in a fresh copy of the project at its start, in a worker's sandbox: one %s session, "system" appended to the harness's own system prompt (empty for none), the "asks" sent in turn in that session, on "model" (empty for %s). Nothing else is added, and it can only report on its own copy. It may spend $%.2f, what the Hive has spent on this project since the last step-back. The copy is then scored with the project's score command, and if it beats %g the Hive files a fault against its own setup with both scores.
+If a setup is worth testing, write it to $HIVE_BOX/experiment.json as {"why": "...", "system": "...", "asks": ["..."], "model": "..."}. The Hive runs it once in a fresh copy of the project at its start, in a worker's sandbox: one %s session, "system" appended to the harness's own system prompt (empty for none), the "asks" sent in turn in that session, on "model" (empty for %s). Nothing else is added, and it can only report on its own copy. It may spend $%.2f, what the Hive has spent on this project since the last step-back. The copy is then scored with the project's score command beside the Hive's main at that time, and if it beats main the Hive files a fault against its own setup with both scores.
 
-Write your reasoning to $HIVE_BOX/sweep.md, then finish.`, p.Name, why, p.Goals, better, *st.Score, s.Best, h, model, s.Budget, s.Best)
+Write your reasoning to $HIVE_BOX/sweep.md, then finish.`, p.Name, why, p.Goals, better, *st.Score, s.Best, h, model, s.Budget)
 	spec := m.Agents.Spec(id, "stepback", p.Name, dir, brief)
 	only := ""
 	if p.Hidden() {
@@ -308,8 +315,10 @@ func (m *Module) experiment(s StepBack, set Setup) {
 	m.saveStepBack(s)
 }
 
-// score scores what the experiment left with the project's score command and
-// files a fault when it beats the Hive's best.
+// score scores what the experiment left beside the Hive's main, both with
+// main's score command in the same window, and files a fault when the
+// experiment beats main. A stored best would go stale with the score's
+// version or the machine's load; a control scored now does neither.
 func (m *Module) score(s StepBack, r core.Run) {
 	p, ok := m.C.Projects.Get(s.Project)
 	if !ok {
@@ -342,8 +351,13 @@ func (m *Module) score(s StepBack, r core.Run) {
 		m.fail(s, "the experiment's score can't count: "+err.Error())
 		return
 	}
-	if k, _ := m.kept(p.Name); m.versionOf(p, k) != m.C.Effects.ScoreVersion(p, sha, *cfg.Score) {
-		m.fail(s, "the score changed since the experiment's start, so its number can't be compared with the Hive's best")
+	if m.C.Effects.ScoreVersion(p, main, *cfg.Score) != m.C.Effects.ScoreVersion(p, sha, *cfg.Score) {
+		m.fail(s, "the score changed since the experiment's start, so its number can't be compared with main's")
+		return
+	}
+	ctl := m.C.Effects.RunCheck(p, main, "score", cfg.Score.Command)
+	if !ctl.OK || ctl.Score == nil {
+		m.fail(s, "main, its control, did not score: "+core.Clip(ctl.Output, 300))
 		return
 	}
 	c := m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
@@ -351,9 +365,9 @@ func (m *Module) score(s StepBack, r core.Run) {
 		m.fail(s, "the experiment's copy did not score: "+core.Clip(c.Output, 300))
 		return
 	}
-	s.Score, s.Ended = c.Score, time.Now().UTC()
-	s.Status, s.Note = "lost", fmt.Sprintf("the setup scored %g against the Hive's best %g", *c.Score, s.Best)
-	if !cfg.Score.WithinTolerance(s.Best, *c.Score) {
+	s.Main, s.Control, s.Score, s.Ended = main, ctl.Score, c.Score, time.Now().UTC()
+	s.Status, s.Note = "lost", fmt.Sprintf("the setup scored %g against main's %g, scored beside it", *c.Score, *ctl.Score)
+	if cfg.Score.Beats(*c.Score, *ctl.Score) {
 		s.Status = "won"
 		s.Fault = m.fileFault(s, p, r, *cfg.Score)
 	}
@@ -398,13 +412,13 @@ func (m *Module) fileFault(s StepBack, p core.Project, exp core.Run, sc core.Sco
 	if sc.Direction == "lower" {
 		better = "lower"
 	}
-	title := fmt.Sprintf("The Hive's own setup lost to a simpler one on %s: %g against %g", p.Name, *s.Score, s.Best)
+	title := fmt.Sprintf("The Hive's own setup lost to a simpler one on %s: %g against %g", p.Name, *s.Score, *s.Control)
 	report := fmt.Sprintf(`A step-back on %s asked whether the Hive's approach is right and what the simplest setup is that might beat it, and ran its answer: one harness session sent %d ask(s).
 
-From the project's start at %s, the setup scored %g. The best the Hive has kept is %g (%s is better, tolerance %g). The setup cost $%.2f; the Hive's runs on the project since the last step-back cost $%.2f.
+From the project's start at %s, the setup scored %g. The Hive's main at %s, scored beside it, scored %g (%s is better, tolerance %g). The setup cost $%.2f; the Hive's runs on the project since the last step-back cost $%.2f.
 
 The setup ran as %s; the Hive's latest runs on the project were %s.
-`, p.Name, asks, core.Short(s.From), *s.Score, s.Best, better, sc.Tolerance, exp.Cost, spent, exp.ID, strings.Join(ids, ", "))
+`, p.Name, asks, core.Short(s.From), *s.Score, core.Short(s.Main), *s.Control, better, sc.Tolerance, exp.Cost, spent, exp.ID, strings.Join(ids, ", "))
 	for _, self := range m.C.Projects.List() {
 		if self.Self && !p.Hidden() {
 			transcripts := fmt.Sprintf("# The setup\n\n%s\n\n# What the setup did (run %s)\n\n%s\n# What the Hive's runs did, newest first\n\n", set, exp.ID, m.transcript(exp, 6000))
