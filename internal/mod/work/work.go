@@ -1613,7 +1613,8 @@ func (m *Module) mainTests(p core.Project, main, command string) (core.Check, er
 // its fix. A failure in its run that no test name accounts for (a timeout, a
 // panic or exit outside a test, a build failure) counts only where main's
 // run fails that package so too; one either run can't name at all can't be
-// told apart.
+// told apart. A run stopped by vet or the build (core.StopKeys) never ran its
+// tests, so matching main's vet error never makes a change no worse.
 func noWorse(c, mc core.Check) bool {
 	mine, mains := core.RedKeys(c.FullOutput()), core.RedKeys(mc.FullOutput())
 	if len(mine) == 0 || len(mains) == 0 {
