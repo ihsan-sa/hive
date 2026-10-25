@@ -63,7 +63,8 @@ type State struct {
 	Jobs       []system.JobState  `json:"jobs"`
 	Wakeups    []system.Wakeup    `json:"wakeups"`
 	Checks     Checks             `json:"checks"`
-	Disk       core.DiskUse       `json:"disk"` // the Hive's disk use and the room left, as the hive.clean job last measured
+	Workers    string             `json:"workers,omitempty"` // how many workers may work at once, and why (the work module's pace)
+	Disk       core.DiskUse       `json:"disk"`              // the Hive's disk use and the room left, as the hive.clean job last measured
 	Modules    []ModuleView       `json:"modules"`
 	Chats      []ChatView         `json:"chats"`
 	Requests   []risk.Request     `json:"requests"`
@@ -77,6 +78,7 @@ type State struct {
 type Checks struct {
 	Running []core.SlotUse `json:"running,omitempty"`
 	Waiting []core.SlotUse `json:"waiting,omitempty"`
+	Limit   string         `json:"limit,omitempty"` // how many may run at once, and why (the work module's pace)
 }
 
 // ProjectView is one project on the dashboard.

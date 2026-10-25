@@ -130,14 +130,14 @@ func (m *model) dashRows() []row {
 			live = append(live, r)
 		}
 	}
-	if add(row{key: "agents", text: fmt.Sprintf("agents (%d live)", len(live)), expand: len(live) > 0, def: true}) {
+	if add(row{key: "agents", text: fmt.Sprintf("agents (%d live)", len(live)) + limitNote("workers", m.st.Workers), expand: len(live) > 0, def: true}) {
 		for _, r := range live {
 			d := detail{kind: "run", id: r.ID, title: runLabel(r)}
 			add(row{key: "run:" + r.ID, depth: 1, text: m.runLine(r), open: &d})
 		}
 	}
 	ck := m.st.Checks
-	if add(row{key: "checks", text: fmt.Sprintf("checks (%d running, %d waiting)", len(ck.Running), len(ck.Waiting)), expand: len(ck.Running)+len(ck.Waiting) > 0, def: true}) {
+	if add(row{key: "checks", text: fmt.Sprintf("checks (%d running, %d waiting)", len(ck.Running), len(ck.Waiting)) + limitNote("at once", ck.Limit), expand: len(ck.Running)+len(ck.Waiting) > 0, def: true}) {
 		for _, u := range ck.Running {
 			add(row{key: fmt.Sprintf("check:%s:%s:%s", u.Project, u.SHA, u.Kind), depth: 1, text: fmt.Sprintf("%s  %s %s  %s  %s", stGood.Render("running"), u.Project, core.Short(u.SHA), u.Kind, stDim.Render(ago(u.Since)))})
 		}
@@ -1444,4 +1444,12 @@ func toldHead(told []core.Ask, now time.Time) string {
 		return fmt.Sprintf("done for you (%d recent)", len(told))
 	}
 	return fmt.Sprintf("done for you (%d in the last day, %d recent)", day, len(told))
+}
+
+// limitNote is a limit the pace set, dimmed after a heading, or "" for none.
+func limitNote(what, limit string) string {
+	if limit == "" {
+		return ""
+	}
+	return "  " + stDim.Render(what+" "+text.Visible(limit))
 }

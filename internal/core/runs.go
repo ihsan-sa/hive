@@ -753,6 +753,26 @@ func (rs *Runs) pickLogin(h, model, home string, bare bool) (Login, []string, er
 	return Login{}, nil, err
 }
 
+// Headroom is how much of its plan the least used login a turn on p could
+// take has left (1 - Plan.Used), 0 when every one is at its usage limit; a
+// pick with no logins at all says 1, since nothing is known against it.
+func (rs *Runs) Headroom(p Pick) float64 {
+	logins := rs.logins(p.Harness, p.Model)
+	now := time.Now()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	room := 0.0
+	if len(logins) == 0 {
+		room = 1
+	}
+	for _, l := range logins {
+		if pl := rs.plans[l.Key()]; !pl.Parked(now) {
+			room = max(room, 1-pl.Used(now))
+		}
+	}
+	return room
+}
+
 // logins are the logins a turn on harness h and model can go on. A model the
 // open harness runs is its own login, with its own limit.
 func (rs *Runs) logins(h, model string) []Login {
