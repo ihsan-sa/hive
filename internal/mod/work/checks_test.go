@@ -897,6 +897,66 @@ func TestMergeForgeCheckMainWaitSurvivesMainMoving(t *testing.T) {
 	}
 }
 
+// A red merged as no worse than main names, in its merge event, the older
+// main commit whose finished run excused it, so the merge can be audited.
+func TestMergeForgeCheckRecordsMainAnswer(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	base, _ := m.C.Effects.Sync(p)
+	pushMain(t, f, map[string]string{"a.txt": "1"})
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail})
+	f.SetChecks(p.Repo, base, core.CheckRun{Name: "test", State: core.CheckFail})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckCantStart, Detail: "cancelled"})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	var got struct {
+		Red    []string          `json:"red_on_main"`
+		Answer map[string]string `json:"main_answer"`
+	}
+	for _, e := range m.C.J.Since(0) {
+		if e.Kind == "effect.merged" {
+			e.Decode(&got)
+		}
+	}
+	if len(got.Red) != 1 || got.Red[0] != "test" || got.Answer["test"] != base {
+		t.Fatalf("merge event: %+v, want test excused by %s", got, core.Short(base))
+	}
+}
+
+// With no finished run on main's recent commits and main's newest run of the
+// check cancelled, a cancelled run doesn't decide it: the PR waits on main as
+// for a run still going, and goes back as its own only after mainWaitMax.
+func TestMergeForgeCheckWaitsOnCancelledMain(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "head/test"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckCantStart, Detail: "cancelled"})
+	mergeOnce(t, m, task, p)
+	if task.Round != 0 || !strings.HasPrefix(task.Reason, "waiting on main: ") {
+		t.Fatalf("round %d, reason %q", task.Round, task.Reason)
+	}
+	task.MainWait = time.Now().Add(-mainWaitMax - time.Minute)
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Round != 1 {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	said := ""
+	for _, e := range m.C.J.Since(0) {
+		var a struct{ Kind, Text string }
+		if e.Kind == "alert.raised" && e.Decode(&a) == nil && a.Kind == "main-red" {
+			said = a.Text
+		}
+	}
+	if !strings.Contains(said, "were cancelled or couldn't start on main") {
+		t.Fatalf("the lead heard %q", said)
+	}
+}
+
 // When the file can't be written, the message carries the log itself and no
 // stale path, and an excerpt line can't close its fence.
 func TestMergeForgeCheckLogInlineWhenUnsaved(t *testing.T) {
