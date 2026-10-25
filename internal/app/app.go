@@ -11,6 +11,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/forgeread"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
@@ -72,6 +73,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.System = system.New(c)
 	a.Risk = risk.New(c, a.Mods, a.Agents)
 	tools.New(c)
+	forgeread.New(c)
 	a.Work.Steps = a.Risk.Steps
 	a.Work.Weigh = a.Risk.Weigh
 	a.Work.Gate = runGate(ws)

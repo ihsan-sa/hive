@@ -68,7 +68,8 @@ type Module struct {
 // login and follows the redirect from a renamed repo. Tests point it elsewhere.
 var Site = "https://github.com"
 
-// API serves each release's notes. Tests point it elsewhere.
+// API serves each release's notes to a forge with no login to read them on
+// (GitHub reads them through gh). Tests point it elsewhere.
 var API = "https://api.github.com"
 
 // executable is the binary an update replaces, through any hive-v0 link.
@@ -120,19 +121,31 @@ func download(repo, tag, name, dir string) error {
 
 // Notes are the release notes of each version after from up to to, newest
 // first, each with its page; when they can't be fetched, the releases page.
-func Notes(repo, from, to string) string {
+// They are read on the forge's login when it has one, never on the anonymous
+// 60 an hour this machine's agents share.
+func Notes(f core.Forge, repo, from, to string) string {
 	var rels []struct {
 		Tag  string `json:"tag_name"`
 		Body string
 		URL  string `json:"html_url"`
 	}
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Get(API + "/repos/" + repo + "/releases?per_page=100")
-	if err == nil {
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			err = errors.New(resp.Status)
-		} else {
-			err = json.NewDecoder(resp.Body).Decode(&rels)
+	path := "repos/" + repo + "/releases?per_page=100"
+	var err error
+	if r, ok := f.(core.APIReader); ok {
+		var out string
+		if out, err = r.APIGet(repo, path); err == nil {
+			err = json.Unmarshal([]byte(out), &rels)
+		}
+	} else {
+		var resp *http.Response
+		resp, err = (&http.Client{Timeout: 30 * time.Second}).Get(API + "/" + path)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				err = errors.New(resp.Status)
+			} else {
+				err = json.NewDecoder(resp.Body).Decode(&rels)
+			}
 		}
 	}
 	var b strings.Builder
@@ -165,7 +178,9 @@ func AssetName(goos, goarch string) string {
 // release_repo and the person's own fork of it are followed, never a
 // repository an agent named, and a release whose checksums don't list this
 // platform's binary is passed over. Following pre-releases, it takes the
-// newest of release_repo's whose checks for this system passed, when newer.
+// newest of release_repo's whose checks for this system passed, when newer;
+// when GitHub's rate limit stopped that look and nothing newer is in hand,
+// the error says so and when it looks again.
 func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	up := m.C.WS.LoadConfig().ReleaseRepo
 	repos := []string{up}
@@ -199,12 +214,14 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	m.pmu.Lock()
 	m.pre = nil
 	m.pmu.Unlock()
+	var stopped *limited // a look the rate limit stopped
 	if m.Channel() == Prerelease {
 		after := core.Version
 		if modules.Newer(after, tag) {
 			after = tag
 		}
 		t, waits, e := m.prerelease(up, after)
+		errors.As(e, &stopped)
 		if e != nil {
 			waits = append(waits, e.Error())
 		}
@@ -223,6 +240,9 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	}
 	if tag != "" {
 		err = nil
+	}
+	if stopped != nil && (tag == "" || !modules.Newer(core.Version, tag)) {
+		err = stopped // not "nothing newer": the look didn't finish
 	}
 	m.lag(out, tag)
 	return repo, tag, tag != "" && modules.Newer(core.Version, tag), err
@@ -401,7 +421,7 @@ func (m *Module) update(tag string) (string, error) {
 	if err := m.pin(cfg, tag, pin); err != nil {
 		return "", err
 	}
-	notes := Notes(repo, core.Version, tag)
+	notes := Notes(m.C.Effects.Forge, repo, core.Version, tag)
 	unsigned := PublicKey == ""
 	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned})
 	installed = true

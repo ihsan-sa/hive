@@ -692,6 +692,36 @@ type CheckLogs interface {
 	CheckLog(repo string, r CheckRun) (string, error)
 }
 
+// APIReader is a forge that answers read-only API calls on the person's
+// login (5,000 an hour), so neither the daemon nor agents spend the anonymous
+// 60 an hour this machine's address shares. RateReset is when the login's
+// quota is next full again.
+type APIReader interface {
+	APIGet(repo, path string) (string, error)
+	RateReset(repo string) (time.Time, error)
+}
+
+// APIGet reads one API path with gh: a GET, never a write.
+func (GitHub) APIGet(repo, path string) (string, error) {
+	if strings.HasPrefix(path, "-") {
+		return "", fmt.Errorf("bad API path %q", path)
+	}
+	return gh(repo, "api", path)
+}
+
+// RateReset reads the login's core quota; GitHub doesn't count that read.
+func (GitHub) RateReset(repo string) (time.Time, error) {
+	out, err := gh(repo, "api", "rate_limit", "-q", ".resources.core.reset")
+	if err != nil {
+		return time.Time{}, err
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("reading the rate limit's reset: %w", err)
+	}
+	return time.Unix(n, 0), nil
+}
+
 var (
 	ghJobURL   = regexp.MustCompile(`/actions/runs/\d+/job/(\d+)`)
 	ghLogStamp = regexp.MustCompile(`(?m)^\d{4}-\d\d-\d\dT[0-9:.]+Z `)
