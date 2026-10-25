@@ -526,3 +526,53 @@ func TestOnlyUnresolvedConflictsCount(t *testing.T) {
 		t.Fatalf("stage %q, reason %q: want given up after four unresolved", task.Stage, task.Reason)
 	}
 }
+
+// The gates' limit starts at two, grows by one at most every gateStep while
+// the machine has room, never past one gate per gateCores cores or the
+// person's max_gates, pulls back under strain, and stays at one where the
+// machine can't be read.
+func TestGatePace(t *testing.T) {
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	strain, watching := "", true
+	gateMachine = func(core.Config) (string, bool) { return strain, watching }
+	now := time.Now()
+	m := &Module{}
+	cfg := core.Config{MaxGates: 0}
+	top := gateCeiling(cfg)
+	if l, _ := m.gateLimit(now, 0, cfg); l != min(2, top) {
+		t.Fatalf("start %d, want %d", l, min(2, top))
+	}
+	cfg.MaxGates = 4
+	m = &Module{}
+	if l, _ := m.gateLimit(now, 4, cfg); l != 4 {
+		t.Fatalf("start under max_gates 4: %d", l)
+	}
+	cfg.MaxGates = 5
+	m = &Module{}
+	m.gateLimit(now, 3, cfg) // starts at 5
+	m.gates.limit = 3        // as if pulled back
+	if l, _ := m.gateLimit(now.Add(gateStep-time.Second), 3, cfg); l != 3 {
+		t.Fatalf("grew to %d within %s", l, gateStep)
+	}
+	if l, _ := m.gateLimit(now.Add(gateStep), 3, cfg); l != 4 {
+		t.Fatalf("limit %d after %s with room, want 4", l, gateStep)
+	}
+	if l, _ := m.gateLimit(now.Add(2*gateStep), 4, cfg); l != 5 {
+		t.Fatalf("limit %d, want 5", l)
+	}
+	if l, _ := m.gateLimit(now.Add(3*gateStep), 5, cfg); l != 5 {
+		t.Fatalf("grew past max_gates to %d", l)
+	}
+	strain = "machine low on memory"
+	if l, why := m.gateLimit(now.Add(4*gateStep), 5, cfg); l != 3 || why != strain {
+		t.Fatalf("limit %d (%q) under strain, want 3", l, why)
+	}
+	strain, watching, cfg.MaxGates = "", false, 0
+	m = &Module{}
+	if l, _ := m.gateLimit(now, 0, cfg); l != 1 {
+		t.Fatalf("limit %d where the machine can't be read, want 1", l)
+	}
+	if l, _ := m.gateLimit(now.Add(gateStep), 1, cfg); l != 1 {
+		t.Fatalf("grew to %d unseen", l)
+	}
+}

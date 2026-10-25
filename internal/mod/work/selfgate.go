@@ -152,7 +152,8 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 // per gateCores cores or the person's max_gates. Past the first, a new gate
 // starts only while the machine has gateMemMB free and its load per core is
 // at most gateLoadMax, besides the turn's own limits; a gate running is
-// never stopped. Where the machine can't be read it stays at its start.
+// never stopped. Where the machine can't be read it stays at one, or at the
+// person's max_gates.
 const (
 	gateStep    = 10 * time.Minute
 	gateCores   = 6
@@ -181,10 +182,7 @@ func gateCeiling(cfg core.Config) int {
 // gateRoom says why no other gate starts now with running of them in
 // flight, or "". m.mu is held.
 func (m *Module) gateRoom(running int) string {
-	cfg := m.C.WS.LoadConfig()
-	why, watching := gateMachine(cfg)
-	top := gateCeiling(cfg)
-	limit := m.gates.next(time.Now(), running, true, why, watching, cmp.Or(cfg.MaxGates, min(2, top)), top)
+	limit, why := m.gateLimit(time.Now(), running, m.C.WS.LoadConfig())
 	switch {
 	case running >= limit:
 		return fmt.Sprintf("%d run at once here (limit %s), and every one is in use", running, m.gates.String())
@@ -192,6 +190,23 @@ func (m *Module) gateRoom(running int) string {
 		return fmt.Sprintf("%d running, and no room for another: %s", running, why)
 	}
 	return ""
+}
+
+// gateLimit moves the gates' limit at now with running of them in flight
+// and one more wanted, and says it with what strains the machine, or "".
+// Where the machine can't be read, a second gate starts only on the
+// person's max_gates: nothing would see it pile up.
+func (m *Module) gateLimit(now time.Time, running int, cfg core.Config) (int, string) {
+	why, watching := gateMachine(cfg)
+	top := gateCeiling(cfg)
+	start := cmp.Or(cfg.MaxGates, min(2, top))
+	if !watching && cfg.MaxGates == 0 {
+		start = 1
+	}
+	m.gates.mu.Lock()
+	m.gates.step = gateStep
+	m.gates.mu.Unlock()
+	return m.gates.next(now, running, true, why, watching, start, top), why
 }
 
 // startGate runs the gate on t's head in the background and records its
