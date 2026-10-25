@@ -105,8 +105,8 @@ func TestSelfGateCatchesUpFirst(t *testing.T) {
 	}
 }
 
-// A rollback goes back to the worker with the report and the lesson to
-// record, and the PR stays open.
+// A rollback goes back to the worker with the report, the lesson to record
+// and a fresh main.bundle, and the PR stays open.
 func TestSelfGateRollbackSendsBack(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
 	gateOnce(t, m, task, p)
@@ -118,6 +118,9 @@ func TestSelfGateRollbackSendsBack(t *testing.T) {
 	}
 	if raw, err := os.ReadFile(filepath.Join(m.C.WS.RunRO(task.Worker), gateReportFile)); err != nil || !strings.Contains(string(raw), "probe table") {
 		t.Fatalf("the worker has no report: %v", err)
+	}
+	if msg := queued(m, task.Worker); !strings.Contains(msg, "main.bundle holds main at") {
+		t.Fatalf("the rollback went back without main.bundle:\n%s", msg)
 	}
 	if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); !strings.Contains(c, "Recursive gate: ROLLED BACK") {
 		t.Fatalf("the PR doesn't say it was rolled back:\n%s", c)

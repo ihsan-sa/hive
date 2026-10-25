@@ -454,7 +454,7 @@ func (m *Module) gateBack(t *Task, p core.Project, g core.GateResult) error {
 	}
 	detail += fmt.Sprintf("\n\nThe change is kept only if the child Hive built from it does better than the current one, with no regression. Add this line to `.hive/lessons.md` with your fix, so it is on the record:\n\n- %s: the recursive gate rolled back %s (%s): %s",
 		time.Now().UTC().Format("2006-01-02"), core.Short(g.Head), t.Label(), g.Reason)
-	return m.sendBackWith(t, p, findings, strings.TrimSpace(detail))
+	return m.sendBackWith(t, p, findings, strings.TrimSpace(detail), false)
 }
 
 // gateRolledBack opens the findings a rollback sends back.
