@@ -7,15 +7,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
 
 func resetScope(t *testing.T) {
 	t.Helper()
-	scope.once, scope.prefix = sync.Once{}, nil
-	t.Cleanup(func() { scope.once, scope.prefix = sync.Once{}, nil })
+	scope.tried, scope.prefix = time.Time{}, nil
+	t.Cleanup(func() { scope.tried, scope.prefix = time.Time{}, nil })
 }
 
 // A check marked Scope runs through systemd-run --user --scope under the
@@ -59,6 +58,15 @@ func TestScopedWithoutAUserManager(t *testing.T) {
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 	if got := Scoped([]string{"/bin/true"}); len(got) != 1 || got[0] != "/bin/true" {
 		t.Fatalf("got %q", got)
+	}
+	// A user manager that answers later is used once the retry is due.
+	os.WriteFile(filepath.Join(dir, "systemd-run"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	if got := Scoped([]string{"/bin/true"}); len(got) != 1 {
+		t.Fatalf("probed again before the retry was due: %q", got)
+	}
+	scope.tried = time.Now().Add(-scopeRetry - time.Second)
+	if got := Scoped([]string{"/bin/true"}); len(got) == 1 || got[0] != filepath.Join(dir, "systemd-run") {
+		t.Fatalf("not scoped once the retry was due: %q", got)
 	}
 }
 

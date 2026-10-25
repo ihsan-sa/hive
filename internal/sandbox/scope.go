@@ -18,9 +18,15 @@ import (
 var checksSlice = "app-hivechecks.slice"
 
 var scope struct {
-	once   sync.Once
+	sync.Mutex
+	tried  time.Time
 	prefix []string // systemd-run and its flags, nil where it can't run
 }
+
+// scopeRetry is how long a probe that found no user manager stands before
+// the next scoped command tries again: one that starts after the daemon is
+// used without a restart.
+const scopeRetry = 10 * time.Minute
 
 // Scoped prefixes argv so it runs in a transient systemd user scope under
 // checksSlice, with a memory ceiling well under the Hive's share and CPU and
@@ -31,17 +37,22 @@ var scope struct {
 // the caller set hold as before. argv[0] is resolved here, in the daemon's
 // own environment, as Niced does. Where no systemd user manager answers
 // (macOS, WSL or a container without one, a system unit's daemon), argv
-// runs as it is.
+// runs as it is, and the probe runs again after scopeRetry.
 func Scoped(argv []string) []string {
-	scope.once.Do(func() { scope.prefix = scopePrefix() })
-	if scope.prefix == nil || len(argv) == 0 {
+	scope.Lock()
+	if scope.prefix == nil && time.Since(scope.tried) > scopeRetry {
+		scope.prefix, scope.tried = scopePrefix(), time.Now()
+	}
+	prefix := scope.prefix
+	scope.Unlock()
+	if prefix == nil || len(argv) == 0 {
 		return argv
 	}
 	prog, err := exec.LookPath(argv[0])
 	if err != nil {
 		return argv
 	}
-	return append(append(append([]string{}, scope.prefix...), prog), argv[1:]...)
+	return append(append(append([]string{}, prefix...), prog), argv[1:]...)
 }
 
 // scopePrefix finds systemd-run and tries it once, with the same flags a
