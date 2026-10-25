@@ -49,12 +49,30 @@ type answer struct {
 // New registers the github op.
 func New(c *core.Core) *Module {
 	m := &Module{C: c, Now: time.Now, cache: map[string]answer{}}
-	c.Runs.Ops().Register(core.Op{Name: "github", Help: `{"pr": N} the pull request, {"checks": sha} the check runs on a commit, {"annotations": check run id} a check's annotations, or {"path": "repos/owner/name/..."} any read under a project's repo; "repo" is your project's by default -> GitHub's JSON, read on the person's login and cached for a minute, so it spends nothing of the anonymous 60 calls an hour (don't curl api.github.com)`, Fn: m.op})
+	c.Runs.Ops().Register(core.Op{Name: "github", Help: `{"pr": N} the pull request, {"checks": sha} the check runs on a commit, {"annotations": check run id} a check's annotations, or {"path": "repos/owner/name/..."} a read under a project's repo of its pulls, issues, commits and their checks, check-runs, check-suites, actions runs and jobs, releases, contents or git objects; "repo" is your project's by default -> GitHub's JSON, read on the person's login and cached for a minute, so it spends nothing of the anonymous 60 calls an hour (don't curl api.github.com)`, Fn: m.op})
 	return m
 }
 
 // path is safe characters only, under repos/owner/name, with no "..".
 var pathRe = regexp.MustCompile(`^repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(/[A-Za-z0-9_./-]*)?(\?[A-Za-z0-9_.=&,-]*)?$`)
+
+// readable are the reads under a repo an agent may ask for: pull requests,
+// issues, commits and their checks, Actions runs and jobs, releases and the
+// repo's contents. Anything else (hooks, whose URLs are credentials,
+// variables, secrets, environments, keys, collaborators, invitations and
+// every other admin read) is the person's token's alone.
+var readable = regexp.MustCompile(`^(` +
+	`|/pulls(/[0-9]+(/(files|reviews|comments|commits))?)?` +
+	`|/issues(/[0-9]+(/comments)?)?` +
+	`|/commits(/[A-Za-z0-9_.-]+(/(check-runs|check-suites|status|statuses))?)?` +
+	`|/check-runs/[0-9]+(/annotations)?` +
+	`|/check-suites/[0-9]+(/check-runs)?` +
+	`|/actions/runs(/[0-9]+(/jobs)?)?` +
+	`|/actions/jobs/[0-9]+(/logs)?` +
+	`|/releases(/[0-9]+|/latest|/tags/[A-Za-z0-9_.-]+)?` +
+	`|/contents(/[A-Za-z0-9_./-]*)?` +
+	`|/git/(commits|trees|refs|tags)/[A-Za-z0-9_./-]+` +
+	`)$`)
 
 var (
 	numRe = regexp.MustCompile(`^[0-9]{1,12}$`)
@@ -100,6 +118,9 @@ func (m *Module) Read(r core.Run, path string) (string, error) {
 	g := pathRe.FindStringSubmatch(path)
 	if g == nil || strings.Contains(path, "..") {
 		return "", fmt.Errorf("%q is not a read under repos/owner/name/", path)
+	}
+	if !readable.MatchString(g[2]) {
+		return "", fmt.Errorf("%q is not a read agents may make: pull requests, issues, commits and their checks, Actions runs and jobs, releases and contents only", path)
 	}
 	repo := g[1]
 	if !m.mayRead(r, repo) {

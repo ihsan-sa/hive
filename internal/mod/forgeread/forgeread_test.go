@@ -92,7 +92,10 @@ func TestReadsStayInReach(t *testing.T) {
 			t.Errorf("%s read %s", project, args)
 		}
 	}
-	for _, args := range []string{`{"path":"repos/me/p/../q/pulls/1"}`, `{"path":"repos/me/p/%2e%2e/q/pulls/1"}`, `{"path":"user"}`, `{"path":"-X"}`, `{"pr":"1; rm"}`, `{}`} {
+	for _, args := range []string{`{"path":"repos/me/p/../q/pulls/1"}`, `{"path":"repos/me/p/%2e%2e/q/pulls/1"}`, `{"path":"user"}`, `{"path":"-X"}`, `{"pr":"1; rm"}`, `{}`,
+		`{"path":"repos/me/p/hooks"}`, `{"path":"repos/me/p/hooks/1/config"}`, `{"path":"repos/me/p/actions/variables"}`,
+		`{"path":"repos/me/p/actions/secrets"}`, `{"path":"repos/me/p/environments/prod/variables"}`, `{"path":"repos/me/p/keys"}`,
+		`{"path":"repos/me/p/collaborators"}`, `{"path":"repos/me/p/invitations"}`, `{"path":"repos/me/p/pulls/1/../../hooks"}`} {
 		if _, err := call(m, "p", args); err == nil {
 			t.Errorf("read %s", args)
 		}
