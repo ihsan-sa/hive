@@ -929,8 +929,12 @@ func TestWrapBreaksLongWords(t *testing.T) {
 func TestPlanUsageEscapesFeedNames(t *testing.T) {
 	m := testModel(200, 40)
 	evil := "five\x1b[2J\x1b[H\u009b31m\r\u202e\u200bhour"
+	// Names starting as a known window does still reach WindowWords' prefix
+	// cases, whether the window is running or has reset since.
+	known := map[string]harness.Window{"five_hour\x1b[2J\u202e": {Utilization: 0.2, ResetsAt: time.Now().Add(time.Hour)},
+		"seven_day\x1b[1A\u200b": {Utilization: 0.3, ResetsAt: time.Now().Add(-time.Minute)}}
 	m.st.Plans = []core.Plan{{Harness: "claude\x1b]0;x\x07", Login: "me\u2066", Limit: harness.RateLimit{Status: "allowed\x1b[1A", Window: evil,
-		Windows: map[string]harness.Window{evil: {Utilization: 0.5}}}}}
+		Windows: map[string]harness.Window{evil: {Utilization: 0.5}}}}, {Harness: "codex", Limit: harness.RateLimit{Status: "allowed", Windows: known}}}
 	var dash string
 	for _, r := range m.dashRows() {
 		if strings.HasPrefix(r.key, "plan:") {
@@ -938,8 +942,10 @@ func TestPlanUsageEscapesFeedNames(t *testing.T) {
 		}
 	}
 	for where, s := range map[string]string{"dashboard": dash, "usage line": m.usage(400)} {
-		if !strings.Contains(s, `five\x1b[2J\x1b[H\x9b31m\x0d\u202e\u200bhour`) {
-			t.Errorf("%s lacks the escaped window name: %q", where, s)
+		for _, want := range []string{`five\x1b[2J\x1b[H\x9b31m\x0d\u202e\u200bhour`, `5-hour\x1b[2J\u202e 20%`, `weekly\x1b[1A\u200b reset`} {
+			if !strings.Contains(s, want) {
+				t.Errorf("%s lacks the escaped window name %q: %q", where, want, s)
+			}
 		}
 		if strings.ContainsAny(s, "\x1b\x07\r\u009b\u202e\u200b\u2066") {
 			t.Errorf("%s sends a control or format character to the screen: %q", where, s)
@@ -1251,12 +1257,16 @@ func TestPlanUsageShowsResetsInPlainWords(t *testing.T) {
 			dash += r.text
 		}
 	}
-	for where, s := range map[string]string{"dashboard": dash, "usage line": m.usage(400)} {
-		for _, want := range []string{"near its limit", "weekly 89%, resets " + reset.Local().Format("Mon 15:04"), "5-hour reset"} {
-			if !strings.Contains(s, want) {
-				t.Errorf("%s lacks %q: %q", where, want, s)
+	// The usage line says how far off the reset is, which needs no zone; the
+	// dashboard adds the day, time and zone.
+	for where, want := range map[string][]string{dash: {"weekly 89%, resets " + reset.Local().Format("Mon 15:04 MST"), "(in 3h00m)"}, m.usage(400): {"weekly 89%, resets in 3h00m"}} {
+		for _, w := range append(want, "near its limit", "5-hour reset", "no reading since") {
+			if !strings.Contains(ansi.Strip(where), w) {
+				t.Errorf("%q lacks %q", where, w)
 			}
 		}
+	}
+	for where, s := range map[string]string{"dashboard": dash, "usage line": m.usage(400)} {
 		if strings.Contains(s, "allowed_warning") || strings.Contains(s, "38%") {
 			t.Errorf("%s shows the raw status or a window's share from before its reset: %q", where, s)
 		}

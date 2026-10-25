@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -30,13 +32,18 @@ const softTask = "An approved warden step can say it needs longer than 10 minute
 // they asked for, and whether the task landed. It judges nothing and fails
 // only if an arm can't be set up; the table is the result.
 //
-// Real agents (HIVE_E2E_HARNESS=claude) spend plan usage. The arms run side by
-// side, so the day's weather hits them all. Unless HIVE_SOFT_WARDENS=1, a
+// Real agents (HIVE_E2E_HARNESS=claude) spend plan usage. The arms run one at
+// a time (HIVE_SOFT_PARALLEL=2 runs two), each sub-Hive with one worker and
+// one check at once and pinned to softCPUs CPUs, and each arm's processes are
+// ended before the next starts: all seven side by side, uncapped, ran ~28
+// builds at once and swapped the machine (issue #771). On Linux a real run
+// must be under a memory ceiling of its own (docs/soft-layer.md). Unless HIVE_SOFT_WARDENS=1, a
 // sub-Hive asks the person (this test, which never answers) before anything
 // outside its project, so no warden's script ever runs on this machine for an
 // arm whose warden was told only "You are a warden."
 //
-//	HIVE_SOFT=all HIVE_E2E_HARNESS=claude HIVE_SOFT_OUT=/tmp/soft go test ./internal/e2e -run TestSoftLayer -timeout 3h -v
+//	systemd-run --user --scope -p MemoryHigh=2500M -p MemoryMax=3G -p MemorySwapMax=0 -p CPUWeight=20 -p IOWeight=20 \
+//	  env HIVE_SOFT=standard,essay HIVE_E2E_HARNESS=claude HIVE_SOFT_OUT=/tmp/soft go test ./internal/e2e -run TestSoftLayer -timeout 6h -v
 func TestSoftLayer(t *testing.T) {
 	list := os.Getenv("HIVE_SOFT")
 	if list == "" {
@@ -61,20 +68,34 @@ func TestSoftLayer(t *testing.T) {
 	if d, err := time.ParseDuration(os.Getenv("HIVE_SOFT_WAIT")); err == nil {
 		wait = d
 	}
+	if os.Getenv("HIVE_E2E_HARNESS") != "" && os.Getenv("HIVE_SOFT_UNBOUNDED") != "1" {
+		if why := unbounded(); why != "" {
+			t.Fatalf("a real soft-layer run needs a memory ceiling of its own, or a swapping machine takes the Hive's own runs with it (issue #771): %s. Run it under systemd-run --user --scope -p MemoryMax=3G -p MemorySwapMax=0 (docs/soft-layer.md), or set HIVE_SOFT_UNBOUNDED=1", why)
+		}
+	}
+	at := 1
+	if n, err := strconv.Atoi(os.Getenv("HIVE_SOFT_PARALLEL")); err == nil {
+		at = min(max(n, 1), 2)
+	}
 	out := os.Getenv("HIVE_SOFT_OUT")
 	if out == "" {
 		out = t.TempDir()
 	}
 	reps := make([]softlayer.Report, len(arms))
+	slots := make(chan struct{}, at)
 	t.Run("arms", func(t *testing.T) {
 		for i, arm := range arms {
 			t.Run(arm.Name, func(t *testing.T) {
 				t.Parallel()
+				slots <- struct{}{}
+				// Registered first, so it runs last: after the arm's daemon
+				// and what it left are ended and its folder removed.
+				t.Cleanup(func() { <-slots })
 				reps[i] = softArm(t, arm, string(essay), task, wait, filepath.Join(out, arm.Name))
 			})
 		}
 	})
-	table := fmt.Sprintf("Task: %s\n\nHarness: %s; each arm waited up to %s.\n\n%s", task, envOr("HIVE_E2E_HARNESS", "fake"), wait, softlayer.Table(reps))
+	table := fmt.Sprintf("Task: %s\n\nHarness: %s; each arm waited up to %s, %d at a time on %d CPUs each.%s\n\n%s", task, envOr("HIVE_E2E_HARNESS", "fake"), wait, at, softCPUs, cgroupPeak(), softlayer.Table(reps))
 	if err := os.WriteFile(filepath.Join(out, "table.md"), []byte(table), 0o644); err != nil {
 		t.Errorf("keeping the table: %v", err)
 	}
@@ -88,13 +109,21 @@ func envOr(k, def string) string {
 	return def
 }
 
+// softCPUs is how many CPUs one arm's sub-Hive runs on: its agents, its
+// checks' builds and their tests (go sizes -p and GOMAXPROCS to them).
+const softCPUs = 4
+
 // softArm runs one arm and keeps its journal, chats and report in keep.
 func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.Duration, keep string) softlayer.Report {
-	h := startWith(t, bin, func(c *core.Config) {
+	// The caps: one worker and one check at a time, set as the person's
+	// ceilings so the pace can't raise them, and builds of two packages at
+	// once where a check gets the daemon's environment (a bare sandbox).
+	h := startOn(t, softCPUs, bin, func(c *core.Config) {
 		if os.Getenv("HIVE_SOFT_WARDENS") != "1" {
 			c.Autonomy = 1
 		}
-	})
+		c.MaxWorkers, c.MaxChecks, c.MaxGates, c.Ceilings = 1, 1, 1, true
+	}, "GOFLAGS=-p=2", fmt.Sprintf("GOMAXPROCS=%d", softCPUs))
 	if err := arm.Install(h.ws.Modules(), essay); err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +141,7 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 	}
 	began := time.Now().UTC()
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": ask}, nil)
+	stopWatch := watchPeaks()
 
 	outcome := ""
 	for deadline := time.Now().Add(wait); outcome == ""; time.Sleep(10 * time.Second) {
@@ -124,6 +154,7 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 		}
 	}
 	h.quiesce()
+	peakMB, peakLoad := stopWatch()
 
 	f, err := os.Open(h.ws.Events())
 	if err != nil {
@@ -134,7 +165,7 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 	if err != nil {
 		t.Fatal(err)
 	}
-	rep.Variant, rep.Outcome = arm.Name, outcome
+	rep.Variant, rep.Outcome, rep.PeakMB, rep.PeakLoad = arm.Name, outcome, peakMB, peakLoad
 	if !armTookEffect(h, arm, essay) {
 		t.Errorf("%s: the sub-Hive's agents didn't start from the arm's prompts", arm.Name)
 	}
@@ -282,5 +313,170 @@ func copyNotes(t *testing.T, from, to string) {
 				t.Fatalf("copying the knowledge base's notes: %v", err)
 			}
 		}
+	}
+}
+
+// watchPeaks samples, every two seconds until the returned func is called,
+// the memory this test's processes hold (its own and every descendant's RSS,
+// the daemons' orphans included, since the test adopts them) and the
+// machine's 1-minute load, and that func returns the highest of each. Both
+// read /proc, so elsewhere they stay 0 and the table says "-".
+func watchPeaks() func() (int, float64) {
+	stop, done := make(chan struct{}), make(chan struct{})
+	mb, load := 0, 0.0
+	go func() {
+		defer close(done)
+		for {
+			mb, load = max(mb, int(treeRSS(os.Getpid())>>20)), max(load, load1())
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}()
+	return func() (int, float64) {
+		close(stop)
+		<-done
+		return mb, load
+	}
+}
+
+// treeRSS is the resident memory of pid and all its descendants, in bytes.
+func treeRSS(pid int) int64 {
+	kids := map[int][]int{}
+	rss := map[int]int64{}
+	dirs, _ := os.ReadDir("/proc")
+	for _, d := range dirs {
+		p, err := strconv.Atoi(d.Name())
+		if err != nil {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("/proc", d.Name(), "stat"))
+		if err != nil {
+			continue
+		}
+		// pid (comm) state ppid ... rss is field 24; comm may hold spaces.
+		f := strings.Fields(string(raw[strings.LastIndexByte(string(raw), ')')+1:]))
+		if len(f) < 22 {
+			continue
+		}
+		pp, _ := strconv.Atoi(f[1])
+		pages, _ := strconv.ParseInt(f[21], 10, 64)
+		kids[pp] = append(kids[pp], p)
+		rss[p] = pages * int64(os.Getpagesize())
+	}
+	var sum int64
+	for todo := []int{pid}; len(todo) > 0; {
+		p := todo[len(todo)-1]
+		todo = append(todo[:len(todo)-1], kids[p]...)
+		sum += rss[p]
+	}
+	return sum
+}
+
+// load1 is the machine's 1-minute load average, or 0 without /proc.
+func load1() float64 {
+	raw, _ := os.ReadFile("/proc/loadavg")
+	f := strings.Fields(string(raw))
+	if len(f) == 0 {
+		return 0
+	}
+	v, _ := strconv.ParseFloat(f[0], 64)
+	return v
+}
+
+// ownCgroup is this process's cgroup v2 folder, or "".
+func ownCgroup() string {
+	raw, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		return ""
+	}
+	for _, l := range strings.Split(string(raw), "\n") {
+		if rest, ok := strings.CutPrefix(l, "0::"); ok {
+			return filepath.Join("/sys/fs/cgroup", rest)
+		}
+	}
+	return ""
+}
+
+// softMemMax is the most a soft-layer run's memory ceiling may be: well under
+// the Hive's own 8 GB share, so a run that outgrows it is ended inside its own
+// cgroup and the Hive's runs never swap for it.
+const softMemMax = 4 << 30
+
+// unbounded says why this run has no memory ceiling of its own (its own
+// cgroup's memory.max, at most softMemMax, so the Hive's own 8 GB unit
+// doesn't count), or "" when it has one. Off Linux it can't tell, and says "".
+func unbounded() string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	cg := ownCgroup()
+	if cg == "" {
+		return "no cgroup v2 found for this process"
+	}
+	raw, err := os.ReadFile(filepath.Join(cg, "memory.max"))
+	if err != nil {
+		return "its cgroup " + cg + " has no memory.max"
+	}
+	v := strings.TrimSpace(string(raw))
+	if n, err := strconv.ParseInt(v, 10, 64); err != nil || n > softMemMax {
+		return fmt.Sprintf("its cgroup %s has memory.max %s, over %d MB", cg, v, softMemMax>>20)
+	}
+	return ""
+}
+
+// cgroupPeak is the most memory this run's own cgroup has held, said as a
+// sentence for the table, or "" without one (memory.peak, Linux 5.19).
+func cgroupPeak() string {
+	cg := ownCgroup()
+	if cg == "" || unbounded() != "" {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(cg, "memory.peak"))
+	n, err2 := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil || err2 != nil {
+		return ""
+	}
+	return fmt.Sprintf(" The run's cgroup peaked at %d MB.", n>>20)
+}
+
+// TestSoftCaps: a pinned start gives the process it starts, and what that
+// starts, softCPUs CPUs, and this process keeps all of its own; the sampler
+// sees this process's memory and the machine's load.
+func TestSoftCaps(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("pin and the samplers read Linux's /proc")
+	}
+	before := runtime.NumCPU()
+	if before <= softCPUs {
+		t.Skipf("only %d CPUs here", before)
+	}
+	cmd := exec.Command("/bin/sh", "-c", "grep Cpus_allowed_list /proc/self/status; /bin/sh -c 'grep Cpus_allowed_list /proc/self/status'")
+	var got []byte
+	err := pinned(softCPUs, func() error {
+		var err error
+		got, err = cmd.Output()
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("Cpus_allowed_list:\t0-%d", softCPUs-1)
+	if lines := strings.Split(strings.TrimSpace(string(got)), "\n"); len(lines) != 2 || lines[0] != want || lines[1] != want {
+		t.Errorf("a pinned child and its own child: %q, want %q twice", got, want)
+	}
+	threads, _ := filepath.Glob("/proc/self/task/*/status")
+	for _, th := range threads {
+		if raw, _ := os.ReadFile(th); strings.Contains(string(raw), want+"\n") {
+			t.Errorf("this process's thread %s was left pinned", th)
+		}
+	}
+	if mb := treeRSS(os.Getpid()) >> 20; mb <= 0 {
+		t.Errorf("this test's memory read as %d MB", mb)
+	}
+	if mb, _ := watchPeaks()(); mb <= 0 {
+		t.Errorf("the sampler's peak is %d MB", mb)
 	}
 }
