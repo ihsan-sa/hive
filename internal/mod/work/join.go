@@ -101,11 +101,18 @@ func (t Task) JoinedBy(run string) bool {
 const joinedNote = "joined by a brief from "
 
 // joinable reports whether a new brief may join t: open work on the
-// project that no worker has pushed for yet, with the same aim (a gain is
-// never folded into a fix), and not the filer's own task.
+// project that no worker has pushed for yet, taken the same way (a gain or
+// an unclear brief is never folded into a fix, nor a fix into a gain), and
+// not the filer's own task.
 func joinable(t Task, b Brief, own string) bool {
-	return t.Kind == "work" && t.Project == b.Project && t.ID != own && t.Model == "" && (b.Aim == AimGain) == t.Gain() &&
+	return t.Kind == "work" && t.Project == b.Project && t.ID != own && t.Model == "" && b.fix() == t.Fix() &&
 		(t.Stage == StageNew || t.Queued() || t.Stage == StageWorking)
+}
+
+// fix says the brief is clearly a fix: it says so and names the failure, as
+// File requires of one.
+func (b Brief) fix() bool {
+	return strings.EqualFold(strings.TrimSpace(b.Aim), AimFix) && strings.TrimSpace(b.Why) != ""
 }
 
 // join adds b to the oldest open task it matches and returns that task and

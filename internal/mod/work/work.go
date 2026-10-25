@@ -60,10 +60,13 @@ type Task struct {
 	Chat   string   `json:"chat,omitempty"`
 	Thread string   `json:"thread,omitempty"`
 	Kind   string   `json:"kind"` // work | revert | helper (spawned, no issue)
-	// Aim is AimGain for a change aimed at a measurable gain, which on the
-	// Hive's own repository goes through the recursive gate; anything else
-	// (empty included) is a fix, which merges on its tests, checks and reads.
+	// Aim is AimFix for a task clearly said to be a fix, with the failure it
+	// fixes named (AimWhy), which merges on its tests, checks and reads and
+	// which a score dip after it merges doesn't revert on its own. Anything
+	// else, AimGain or unclear (empty), is taken as a gain: on the Hive's own
+	// repository it goes through the recursive gate, and a dip reverts it.
 	Aim       string     `json:"aim,omitempty"`
+	AimWhy    string     `json:"aim_why,omitempty"` // why it was taken as what it is
 	Stage     string     `json:"stage"`
 	Reason    string     `json:"reason,omitempty"`
 	Order     int        `json:"order,omitempty"`     // its place in the queue the lead set; 0 goes after, as filed
@@ -176,30 +179,41 @@ func (t Task) PROf(mergeSHA string) core.PR {
 // agents get the whole ask.
 func (t Task) Label() string { return core.Clip(t.Title, 120) }
 
-// A task's aims: a fix (the default) or a measurable gain.
+// A task's aims: a clear fix, or a measurable gain. A task that says neither
+// is unclear, and is taken as a gain (issue #568).
 const (
 	AimFix  = "fix"
 	AimGain = "gain"
 )
 
-// Gain says the task aims at a measurable gain rather than a fix.
-func (t Task) Gain() bool { return t.Aim == AimGain }
+// Fix says the task is clearly a fix: its brief, worker or the lead said so
+// and named the failure. A revert undoes a merge already judged worse, so it
+// is one too.
+func (t Task) Fix() bool { return t.Aim == AimFix || t.Kind == "revert" }
 
-// AimWord says which the task is.
+// Gain says the task is taken as a gain: it aims at one, or it isn't clearly a fix.
+func (t Task) Gain() bool { return !t.Fix() }
+
+// AimWord says which the task was taken as, and why.
 func (t Task) AimWord() string {
-	if t.Gain() {
-		return "an improvement (aims at a measurable gain)"
+	switch {
+	case t.Kind == "revert":
+		return "a fix (a revert of a merge judged worse)"
+	case t.Fix():
+		return "a fix: " + orNone(t.AimWhy)
+	case t.Aim == AimGain && t.AimWhy != "":
+		return "a gain: " + t.AimWhy
+	case t.Aim == AimGain:
+		return "a gain (aims at a measurable gain)"
 	}
-	return "a fix"
+	return "a gain, as nothing says it is a fix with the failure named"
 }
 
-// aimOf checks an aim as given: empty or fix is a fix.
+// aimOf checks an aim as given: fix, gain, or empty for unclear.
 func aimOf(s string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "", AimFix:
-		return "", nil
-	case AimGain:
-		return AimGain, nil
+	switch a := strings.ToLower(strings.TrimSpace(s)); a {
+	case "", AimFix, AimGain:
+		return a, nil
 	}
 	return "", fmt.Errorf("an aim is %q or %q, not %q", AimFix, AimGain, s)
 }
@@ -351,8 +365,8 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
-	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","apart"} (aim: fix, the default, or gain for a change aimed at a measurable gain, which on the Hive's own repository merges only if the recursive gate shows it); one matching an open task not yet pushed (a test both name, a near-identical title) joins it as added context instead, unless apart`, Fn: m.opBrief})
-	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: []string{"worker", "lead"}, Help: `{"task","aim":"fix"|"gain","why"} (a worker's own task by default) -> sets whether the task is a fix, which merges on its tests, checks and reads, or aims at a measurable gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
+	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","why","apart"} (aim: fix, with why naming the failure it fixes, merges on its tests, checks and reads and isn't reverted for a score dip alone; anything else is taken as a gain, which on the Hive's own repository merges only if the recursive gate shows it); one matching an open task not yet pushed (a test both name, a near-identical title) and taken the same way joins it as added context instead, unless apart`, Fn: m.opBrief})
+	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: []string{"worker", "lead"}, Help: `{"task","aim":"fix"|"gain","why"} (a worker's own task by default) -> sets whether the task is a fix of the failure why names, which merges on its tests, checks and reads and isn't reverted for a score dip alone, or a gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: steerers, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
 	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: steerers, Help: `{"task"} (a worker's own task by default) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
 	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: steerers, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed), hold keeps one waiting until released, now starts those first even past a brief on the same files (why says so, on the record), for a fix the one it waits on needs. A started worker is never stopped`, Fn: m.opQueue})
@@ -430,7 +444,8 @@ type Brief struct {
 	From    string            `json:"from"`
 	Chat    string            `json:"chat"`
 	Thread  string            `json:"thread"`
-	Aim     string            `json:"aim"` // fix (the default) or gain
+	Aim     string            `json:"aim"` // fix (with the failure named in Why), gain, or empty for unclear: taken as a gain
+	Why     string            `json:"why"` // for a fix, the failure it fixes
 	Inputs  map[string]string `json:"-"`
 	// FollowUp is the task whose review advice this brief follows up; only the
 	// Hive sets it.
@@ -461,9 +476,13 @@ func (m *Module) File(b Brief) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	t := &Task{Aim: aim, ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
+	why := strings.TrimSpace(b.Why)
+	if aim == AimFix && why == "" {
+		return Task{}, errors.New("a fix names the failure it fixes (--why \"...\"); a change with no named failure is taken as a gain")
+	}
+	t := &Task{Aim: aim, AimWhy: core.Clip(why, 300), ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
 		From: b.From, Chat: b.Chat, Thread: b.Thread, FollowUp: b.FollowUp, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Model: b.Model, Created: time.Now().UTC()}
-	m.save(t, "filed by "+b.From)
+	m.save(t, "filed by "+b.From+", taken as "+t.AimWord())
 	return *t, nil
 }
 
@@ -505,13 +524,13 @@ func (m *Module) opAim(r core.Run, args json.RawMessage) (any, error) {
 	if r.Role == "worker" && aim != AimGain && t.Gain() && t.Gate != nil && t.Gate.Outcome == core.GateRollback {
 		return nil, fmt.Errorf("task %s was rolled back by the recursive gate, so it can't stop aiming at a gain on its own word: ask the lead (hive agent message --to lead), who can set its aim", t.ID)
 	}
-	if t.Aim != aim {
+	if t.Aim != aim || t.AimWhy != core.Clip(strings.TrimSpace(a.Why), 300) {
 		if !m.claim(t.ID) {
 			return nil, fmt.Errorf("task %s has a step running right now; ask again in a moment", t.ID)
 		}
 		t, _ = m.Get(t.ID) // as the last step left it
-		t.Aim = aim
-		m.save(&t, fmt.Sprintf("aim set to %s by %s: %s", t.AimWord(), r.ID, core.Clip(a.Why, 300)))
+		t.Aim, t.AimWhy = aim, core.Clip(strings.TrimSpace(a.Why), 300)
+		m.save(&t, fmt.Sprintf("aim set by %s: %s", r.ID, t.AimWord()))
 		if !t.Gain() && m.dropGate(t.ID) {
 			m.save(&t, "the recursive gate run on it was cancelled: a fix doesn't wait for the gate, and the changes queued behind it shouldn't either")
 		}
@@ -1053,10 +1072,10 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	b.WriteString("- Goals: `.hive/goals.md`. Read it; report against it.\n")
 	fmt.Fprintf(&b, "- Tests: `%s`\n", orNone(cfg.Test))
 	if p.Self {
-		if t.Gain() {
-			b.WriteString("- Aim: an improvement. It merges only if it shows a clear gain over the current Hive: a judge on another model weighs the recursive gate's numbers with the change, its brief and your account, and decides. If it is a plain fix, say so with `hive agent aim --aim fix --why \"...\"`.\n")
+		if t.Fix() {
+			b.WriteString("- Aim: a fix (" + orNone(t.AimWhy) + "). It merges on its tests, checks and reads; a score dip after it merges doesn't revert it on its own, but files a brief to look into it. If it isn't a fix of a named failure, say so with `hive agent aim --aim gain --why \"...\"`.\n")
 		} else {
-			b.WriteString("- Aim: a fix. It merges on its tests, checks and reads; every merge is still measured, and a lower score is reverted unless a judge, weighing it with the change, keeps it. If the change aims at a measurable gain, say so with `hive agent aim --aim gain --why \"...\"`, and the recursive gate must show it.\n")
+			fmt.Fprintf(&b, "- Aim: %s. It merges only if it shows a clear gain over the current Hive: a judge on another model weighs the recursive gate's numbers with the change, its brief and your account, and decides. If it is a fix, say so naming the failure it fixes (a bug, a failing test, a broken path) with `hive agent aim --aim fix --why \"...\"`.\n", t.AimWord())
 		}
 	}
 	if cfg.Score != nil {
@@ -1064,7 +1083,7 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 		if best, ok := m.bestScore(p.Name); ok {
 			fmt.Fprintf(&b, " Best kept score: %g.", best)
 		}
-		b.WriteString(" Every merge is measured; a lower score is reverted unless a judge, weighing it with the change, keeps it, so say in your account what the change is for.\n")
+		b.WriteString(" Every merge is measured; after a clear fix a lower score files a brief to look into it, and otherwise it is reverted unless a judge, weighing it with the change, keeps it, so say in your account what the change is for.\n")
 	}
 	if cfg.Score != nil && t.From != "hive" { // as checkpoint() skips the Hive's own setup brief
 		b.WriteString("- Commit each gain as you make it: a commit that beats the best kept score is tested, read and merged into main as a checkpoint while you keep working on top of it.\n")
@@ -1840,7 +1859,7 @@ func aimCheck(t *Task, p core.Project) string {
 	if !p.Self || t.Gain() || t.Kind == "revert" {
 		return ""
 	}
-	return "\n\n## The aim\n\nThis change to the Hive itself is declared a fix, so it merges without the recursive gate. If it is really aimed at a measurable gain (the brief names a target to beat, or the diff tunes the benchmark, the score or the gate to move a number), that is a finding: the worker must declare it with `hive agent aim --aim gain --why \"...\"` so the gate judges it. A fix that only touches those files to repair them is still a fix."
+	return "\n\n## The aim\n\nThis change to the Hive itself is declared a fix (" + core.Clip(t.AimWhy, 300) + "), so it merges without the recursive gate, and a score dip after it doesn't revert it on its own. If it fixes no failure the change itself shows, or is really aimed at a measurable gain (the brief names a target to beat, or the diff tunes the benchmark, the score or the gate to move a number), that is a finding: the worker must declare it with `hive agent aim --aim gain --why \"...\"` so the gate judges it. A fix that only touches those files to repair them is still a fix."
 }
 
 // keepAdvice adds a land's advice to the task once per item, unless the task
