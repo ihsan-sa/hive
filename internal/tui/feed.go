@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
@@ -278,7 +279,7 @@ func (m *model) usage(w int) string {
 	now := time.Now()
 	for _, p := range m.st.Plans {
 		s := text.Visible(p.Harness) + " " + standing(p, now)
-		for _, w := range p.WindowUses(now) {
+		for _, w := range p.Limit.WindowUses(now) {
 			s += " · " + windowShort(w, now, false)
 		}
 		parts = append(parts, s)
@@ -329,7 +330,7 @@ func waitStyle(n int) lipgloss.Style {
 // standing is the plan's state in plain words, coloured by how near its
 // limit the login is.
 func standing(p core.Plan, now time.Time) string {
-	s := text.Visible(p.Standing(now))
+	s := text.Visible(p.Limit.Standing(now))
 	switch {
 	case p.Parked(now):
 		return stBad.Render(s)
@@ -342,7 +343,7 @@ func standing(p core.Plan, now time.Time) string {
 // windowShort is one usage window and when it resets; a window that has reset
 // since the reading shows that instead of its old share. Long adds how far
 // off the reset is.
-func windowShort(w core.WindowUse, now time.Time, long bool) string {
+func windowShort(w harness.WindowUse, now time.Time, long bool) string {
 	name := text.Visible(w.Name)
 	switch {
 	case w.ResetsAt.IsZero():
@@ -352,7 +353,7 @@ func windowShort(w core.WindowUse, now time.Time, long bool) string {
 	}
 	s := fmt.Sprintf("%s %.0f%%, resets %s", name, w.Used*100, w.ResetsAt.Local().Format("Mon 15:04"))
 	if long {
-		s += stDim.Render(" (in " + core.Until(w.ResetsAt, now) + ")")
+		s += stDim.Render(" (in " + harness.Until(w.ResetsAt, now) + ")")
 	}
 	return s
 }

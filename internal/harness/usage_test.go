@@ -1,10 +1,8 @@
-package core
+package harness
 
 import (
 	"testing"
 	"time"
-
-	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
 // The person asked what allowed_warning means: the status reads in plain
@@ -13,8 +11,8 @@ import (
 func TestPlanReadsInPlainWords(t *testing.T) {
 	now := time.Date(2026, 10, 24, 2, 9, 0, 0, time.UTC)
 	reset := now.Add(3 * time.Hour)
-	p := Plan{Limit: harness.RateLimit{Status: "allowed_warning", Window: "seven_day", Utilization: 0.89, ResetsAt: reset,
-		Windows: map[string]harness.Window{"five_hour": {Utilization: 0.38, ResetsAt: now.Add(time.Hour)}}}}
+	p := RateLimit{Status: "allowed_warning", Window: "seven_day", Utilization: 0.89, ResetsAt: reset,
+		Windows: map[string]Window{"five_hour": {Utilization: 0.38, ResetsAt: now.Add(time.Hour)}}}
 	if got := p.Standing(now); got != "near its limit" {
 		t.Errorf("allowed_warning reads %q", got)
 	}

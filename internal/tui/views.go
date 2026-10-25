@@ -159,7 +159,7 @@ func (m *model) dashRows() []row {
 		now := time.Now()
 		for _, p := range m.st.Plans {
 			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), standing(p, now))
-			for _, w := range p.WindowUses(now) {
+			for _, w := range p.Limit.WindowUses(now) {
 				line += "  " + windowShort(w, now, true)
 			}
 			add(row{key: "plan:" + p.Key(), depth: 1, text: line})
