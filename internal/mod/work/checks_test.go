@@ -100,11 +100,13 @@ func TestMergeForgeCheckFails(t *testing.T) {
 	}
 }
 
-// A change to prose only (docs, as for goals once the person lets them
-// through) can't break a test on another system: a red Windows TestStepBack, which main passes, is no reason to send
+// A change to prose only (here the goals, which the person approved, as on
+// #524) can't break a test on another system: a red Windows TestStepBack, which main passes, is no reason to send
 // it back, and it isn't re-run either. It still waits for a check that runs.
 func TestMergeForgeCheckTextOnlyKept(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"docs/overview.md": "# The Hive\n\nA tight loop.\n"})
+	m, task, p, f := gateRig(t, false, map[string]string{".hive/goals.md": "# Goals\n\nA tight loop.\n"})
+	m.C.Effects.Approve("merge", p.Name, task.SHA)
+	reviewerLand(t, m, task, p, "r1")
 	toMerging(t, m, task, p)
 	main, _ := m.C.Effects.Sync(p)
 	win := core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, URL: "head/win"}

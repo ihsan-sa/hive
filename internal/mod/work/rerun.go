@@ -11,8 +11,10 @@ import (
 )
 
 // rerunsPerHead caps the re-runs of the forge's failed checks on one head, so
-// a check that fails for real can't be run again and again in place of a fix.
-const rerunsPerHead = 2
+// a check that fails for real can't be run again and again in place of a fix:
+// two asked for (rerun-checks) and the one the Hive makes itself when main has
+// no answer for the red (forgeChecks), which mustn't spend a worker's.
+const rerunsPerHead = 3
 
 // rerunGrace is how long after a re-run a failure still read on that head
 // waits instead of going back: the forge may not list the new attempt yet.
