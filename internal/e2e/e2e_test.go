@@ -1572,16 +1572,19 @@ var contain func(t *testing.T, pid int) func()
 var strays func(dir string)
 
 // settle ends what still works in dir and removes path, a folder in it,
-// trying again for a while if something still writes there.
-func settle(dir, path string) {
+// trying again for a while if something still writes there; the error is
+// the last try's, for a folder left behind.
+func settle(dir, path string) error {
+	var err error
 	for began := time.Now(); time.Since(began) < 30*time.Second; time.Sleep(200 * time.Millisecond) {
 		if strays != nil {
 			strays(dir)
 		}
-		if os.RemoveAll(path) == nil {
-			return
+		if err = os.RemoveAll(path); err == nil {
+			return nil
 		}
 	}
+	return err
 }
 
 // pin runs start, which starts a process, so that the process and all it
