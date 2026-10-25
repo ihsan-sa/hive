@@ -102,7 +102,7 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 		t.Fatalf("queue after ordering: %q", q)
 	}
 	tick(m)
-	want(d, StageQueued, "held by the lead")
+	want(d, StageQueued, "held by lead")
 
 	// a lands: its slot goes to e, the lead's first, not to the held d.
 	got := stageOf(t, m, a)
@@ -110,7 +110,7 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 	m.save(&got, "landed")
 	tick(m)
 	want(e, StageWorking, "")
-	want(d, StageQueued, "held by the lead")
+	want(d, StageQueued, "held by lead")
 	want(c, StageQueued, "both touch internal/core/effects.go")
 
 	// A lower cap holds new starts only: b and e work on.
@@ -197,6 +197,39 @@ func TestQueueQuickPromptBriefs(t *testing.T) {
 	m.save(&a, "landed")
 	if _, wait = m.admit(m.List(nil)); !strings.Contains(wait[mixed.ID], p1.ID) {
 		t.Fatalf("mixed: %q", wait[mixed.ID])
+	}
+}
+
+// Every agent owns the loop: a worker holds a queued brief on its own project
+// as the lead would, on the record by its run id, and one on another project
+// can't.
+func TestWorkerHoldsQueuedBrief(t *testing.T) {
+	m := queueRig(t)
+	a := file(t, m, "tidy the readme", "")
+	b := file(t, m, "cap the checks", "")
+	c := file(t, m, "a later idea", "")
+	tick(m)
+	worker := core.Run{RunSpec: core.RunSpec{ID: "w-" + a.ID, Role: "worker", Project: "p"}}
+	stranger := core.Run{RunSpec: core.RunSpec{ID: "w-other", Role: "worker", Project: "q"}}
+	if _, err := m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"hold":"`+c.ID+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := stageOf(t, m, c); got.Held {
+		t.Fatalf("a worker on another project held the brief: %+v", got)
+	}
+	if _, err := m.C.Runs.Ops().Call(worker, "queue", json.RawMessage(`{"hold":"`+c.ID+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	got := stageOf(t, m, c)
+	if !got.Held || got.HeldBy != worker.ID || !strings.Contains(got.Log[len(got.Log)-1].Text, "held by "+worker.ID) {
+		t.Fatalf("hold not recorded with the worker's id: %+v", got)
+	}
+	done := stageOf(t, m, b)
+	done.Stage = StageDone
+	m.save(&done, "landed")
+	tick(m)
+	if got := stageOf(t, m, c); got.Stage != StageQueued || got.Reason != "held by "+worker.ID {
+		t.Fatalf("held brief: stage %q reason %q", got.Stage, got.Reason)
 	}
 }
 
