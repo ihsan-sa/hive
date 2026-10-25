@@ -47,7 +47,8 @@ type Effects struct {
 	tools   func() []string
 	runs    *Runs
 
-	locks sync.Map
+	locks  sync.Map
+	unread sync.Map // project@main whose history MainAnswer couldn't read, journaled once
 
 	// MergeHeld is why a pull request on a project may not merge now (the
 	// person's hold on its merges, the work module), or "" if it may.
@@ -69,6 +70,13 @@ type Effects struct {
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
+	homes     map[string]bool         // running checks' homes (disk.go)
+	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
+	disk      DiskUse                 // the last measurement of the Hive's disk use
+	diskFull  bool                    // a check couldn't run for room, and the alert is out
+
+	// OnDiskFull runs once when checks first can't run for room (the clean job).
+	OnDiskFull func()
 }
 
 // Check is a host-run test or score on one commit.
@@ -80,6 +88,7 @@ type Check struct {
 	Score   *float64  `json:"score,omitempty"`
 	Output  string    `json:"output"`
 	CantRun string    `json:"cant_run,omitempty"` // why the command couldn't start (a missing tool): no verdict on the commit
+	Tool    string    `json:"tool,omitempty"`     // with CantRun: the tool the shell couldn't find
 	Log     string    `json:"log,omitempty"`      // the full output on the host, when it ran
 	Failed  []string  `json:"failed,omitempty"`   // the failing tests it names, read before the output is clipped
 	At      time.Time `json:"at"`
@@ -380,7 +389,7 @@ func (e *Effects) Snapshot(p Project, r Run, base string) (string, error) {
 	work := sandbox.Mount{Host: r.Checkout, Inside: "/work", RW: true}
 	git := "git -c safe.directory='*' -c core.hooksPath=/dev/null -c user.name=Hive -c user.email=hive@localhost -C " + shq(sandbox.InsidePath(sb, work))
 	script := git + " add -A && { " + git + " diff --cached --quiet || " + git + " commit -q --no-verify -m 'what the run left'; }"
-	if code, out, err := e.runSandboxed(sb, r.Project, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute); err != nil || code != 0 {
+	if code, out, err := e.runSandboxed(sb, r.Project, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute, nil, 0); err != nil || code != 0 {
 		return "", fmt.Errorf("could not commit what the run left: %v %s", err, Clip(out, 300))
 	}
 	return e.Extract(p, r, base)
@@ -405,7 +414,7 @@ func (e *Effects) ExtractInto(dir, lockKey string, r Run, base string) (string, 
 		rangeSpec = base + "..HEAD"
 	}
 	script := fmt.Sprintf("git -c safe.directory='*' -C %s bundle create %s %s", shq(sandbox.InsidePath(sb, work)), shq(bundle), rangeSpec)
-	code, logText, err := e.runSandboxed(sb, r.Project, r.ID+"-extract", []sandbox.Mount{work, outM}, script, false, 5*time.Minute)
+	code, logText, err := e.runSandboxed(sb, r.Project, r.ID+"-extract", []sandbox.Mount{work, outM}, script, false, 5*time.Minute, nil, 0)
 	if err != nil {
 		return "", err
 	}
@@ -486,17 +495,47 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	defer os.RemoveAll(dir)
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
-	code, out, err := e.runSandboxed(sb, p.Name, id, []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}, guardProgram(command), true, 30*time.Minute)
+	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
+	mods := e.goModules(sb, dir)
+	code, out, err := e.runSandboxed(sb, p.Name, id, append(mounts, mods.mounts...), guardProgram(command), true, 30*time.Minute, mods.env, e.checkCacheCap())
+	mods.done()
+	if mods.marker != "" && code != 0 && strings.Contains(out, staleModules) {
+		// The shared cache lacks what its marker promised: that is the
+		// cache's fault, not the commit's, so drop the marker and run once
+		// fetching its own.
+		os.Remove(mods.marker)
+		mods.note = "the shared module cache lacked a module; run again without it"
+		code, out, err = e.runSandboxed(sb, p.Name, id, mounts, guardProgram(command), true, 30*time.Minute, nil, e.checkCacheCap())
+	}
+	if mods.note != "" {
+		out = "hive: " + mods.note + "\n" + out
+	}
 	c.Output = out
+	if errors.Is(err, ErrHomeFull) {
+		c.CantRun = fmt.Sprintf("can't run: %v (%s)", err, Bytes(e.checkCacheCap()))
+		return record()
+	}
 	if err != nil {
 		c.Output = err.Error() + "\n" + out
+		if line := DiskFull(c.Output); line != "" {
+			c.CantRun = "can't run: the disk or a quota is full where checks run"
+			e.diskAlert(line)
+		}
 		return record()
 	}
 	c.OK = code == 0
 	if tool := MissingTool(code, out); tool != "" {
-		c.CantRun = "can't run: " + tool + " is not installed where checks run"
+		c.CantRun, c.Tool = "can't run: "+tool+" is not installed where checks run", tool
 		return record()
 	}
+	if line := DiskFull(out); !c.OK && line != "" {
+		c.OK, c.CantRun = false, "can't run: the disk or a quota is full where checks run"
+		e.diskAlert(line)
+		return record()
+	}
+	e.mu.Lock()
+	e.diskFull = false
+	e.mu.Unlock()
 	if (kind == "test" || kind == "retest") && !c.OK {
 		c.Failed = FailedTests(out)
 	}
@@ -512,9 +551,10 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 }
 
 // missingTool matches the shell's "not found" for a command looked up on the
-// PATH: dash's "/bin/sh: 1: go: not found", bash's "bash: go: command not found"
-// and env's "env: 'go': No such file or directory".
-var missingTool = regexp.MustCompile(`(?m)^(?:\S*sh: (?:line )?\d*:? ?([^\s/:']+): (?:command )?not found|env: '?([^\s/:']+)'?: No such file or directory)\s*$`)
+// PATH: dash's "/bin/sh: 1: go: not found", bash's "bash: go: command not found",
+// busybox's "sh: go: not found", zsh's "zsh:1: command not found: go" and env's
+// "env: 'go': No such file or directory" ('go' in a UTF-8 locale).
+var missingTool = regexp.MustCompile(`(?m)^(?:\S*sh: (?:line )?\d*:? ?([^\s/:']+): (?:command )?not found|env: ['‘]?([^\s/:'‘’]+)['’]?: No such file or directory|zsh:(?:\d+: )? ?command not found: ([^\s/:']+))\s*$`)
 
 // MissingTool names the tool a check's command couldn't find, or "" when it
 // ran. Only exit 127 with the shell's own message counts, and only for a bare
@@ -524,17 +564,26 @@ func MissingTool(code int, out string) string {
 		return ""
 	}
 	if m := missingTool.FindStringSubmatch(out); m != nil {
-		return m[1] + m[2]
+		return m[1] + m[2] + m[3]
 	}
 	return ""
 }
 
 // noVerdict says a recorded check couldn't start, so it isn't the commit's
 // answer. A failure recorded before checks carried cant_run is read from its
-// output: those kept "go: not found" as main's red result for good.
+// output: those kept "go: not found" as main's red result for good. Later
+// records say so themselves, so a real red that merely logs a "not found" line
+// stays cached, as does an old one that named its failing tests.
 func noVerdict(c Check) bool {
-	return c.CantRun != "" || (!c.OK && missingTool.MatchString(c.Output))
+	if c.CantRun != "" {
+		return true
+	}
+	return !c.OK && c.At.Before(cantRunRecorded) && len(c.Failed) == 0 && missingTool.MatchString(c.Output)
 }
+
+// cantRunRecorded is when every check came to carry cant_run (a day's margin
+// after it merged, for daemons that hadn't updated yet).
+var cantRunRecorded = time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
 
 var failedTest = regexp.MustCompile(`(?m)^\s*--- FAIL: (\S+)|^FAILED (\S+)`)
 
@@ -622,24 +671,31 @@ func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
 // runSandboxed runs a shell command in the sandbox and returns its exit code
 // and output. Its log goes in the project's own folder, which other runs
 // can't see when the project is isolated.
-func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []sandbox.Mount, script string, network bool, timeout time.Duration) (int, string, error) {
+// The command gets its own home under the cache folder, removed after; extra
+// is more environment where the sandbox has its own, and a capB over 0 ends
+// the command with ErrHomeFull once its home passes that many bytes.
+func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []sandbox.Mount, script string, network bool, timeout time.Duration, extra []string, capB int64) (int, string, error) {
 	logDir := filepath.Join(e.ws.Hive(), "checks", project)
 	os.MkdirAll(logDir, 0o755)
 	logPath := filepath.Join(logDir, id+".log")
 	os.Remove(logPath)
-	home, _ := os.MkdirTemp("", "hive-check-home-")
-	defer os.RemoveAll(home)
+	home, done := e.newHome()
+	defer done()
 	homeM := sandbox.Mount{Host: home, Inside: "/hive/home", RW: true}
 	mounts = append(mounts, homeM, sandbox.Mount{Host: e.ws.Tools(), Inside: sandbox.ToolsInside})
 	argv := []string{"/bin/sh", "-c", script}
-	env := sandbox.InsideEnv("/hive/home", network)
+	env := append(sandbox.InsideEnv("/hive/home", network), extra...)
 	if !sb.Isolated() {
 		env = nil
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), UID: os.Getuid(), GID: os.Getgid()}
+		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), UID: os.Getuid(), GID: os.Getgid()}
+	over := watchHome(home, capB)
 	code, err := sb.Run(spec, timeout)
+	if over() && err == nil {
+		err = ErrHomeFull
+	}
 	raw, _ := os.ReadFile(logPath)
 	errRaw, _ := os.ReadFile(logPath + ".err")
 	out := string(raw)
@@ -1129,8 +1185,10 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	req := e.RequiredChecks(p, m.Main)
 	st, which := ChecksState(runs, req)
 	var shared []string
+	var answer map[string]string // check -> the older main commit its answer came from
 	if st == CheckFail {
-		mainRuns, _, err := e.MainAnswer(p, m.Main, which)
+		mainRuns, at, err := e.MainAnswer(p, m.Main, which)
+		answer = at
 		if err != nil {
 			return "", err
 		}
@@ -1146,7 +1204,16 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	e.j.MustAppend("effect.merged", map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID})
+	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID}
+	if len(shared) > 0 {
+		// A merge past a red check names the main commits that excused it,
+		// so one that relied on an older main answer can be audited.
+		ev["red_on_main"] = shared
+		if len(answer) > 0 {
+			ev["main_answer"] = answer
+		}
+	}
+	e.j.MustAppend("effect.merged", ev)
 	return merged, nil
 }
 
@@ -1246,12 +1313,12 @@ func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string, tests Tests
 	return state, which, shared, byName
 }
 
-// mainLookBack is how many of main's commits, newest first, MainAnswer reads
+// MainLookBack is how many of main's commits, newest first, MainAnswer reads
 // for a finished run.
-const mainLookBack = 10
+const MainLookBack = 10
 
 // MainAnswer is main's runs of the checks that failed, each taken from the
-// newest commit on main's first-parent line, from main back mainLookBack
+// newest commit on main's first-parent line, from main back MainLookBack
 // commits, where every run of that name has finished (passed or failed). A
 // run still going, cancelled or that couldn't start is no answer: CI cancels
 // a run on main when the next push supersedes it, and while merges keep
@@ -1271,9 +1338,17 @@ func (e *Effects) MainAnswer(p Project, main string, failed []CheckRun) (runs []
 	if len(want) == 0 {
 		return runs, nil, nil
 	}
-	out, err := Git(e.ws.Project(p.Name), "rev-list", "--first-parent", "-n", strconv.Itoa(mainLookBack), main)
+	out, err := Git(e.ws.Project(p.Name), "rev-list", "--first-parent", "-n", strconv.Itoa(MainLookBack), main)
+	if err != nil {
+		// A stale or missing clone: main's own runs are all there is, and
+		// the journal says so once per main, so it doesn't pass unseen.
+		if _, seen := e.unread.LoadOrStore(p.Name+"@"+main, true); !seen {
+			e.j.MustAppend("effect.main_history_unread", map[string]string{"project": p.Name, "main": main, "error": Clip(err.Error(), 300)})
+		}
+		return runs, nil, nil
+	}
 	shas := strings.Fields(out)
-	if err != nil || len(shas) < 2 {
+	if len(shas) < 2 {
 		return runs, nil, nil // no history to read: main's own runs are all there is
 	}
 	at = map[string]string{}

@@ -92,6 +92,21 @@ func TestAlertsDedup(t *testing.T) {
 	}
 }
 
+// A status alert goes once its fault is cleared; the others stay.
+func TestAlertCleared(t *testing.T) {
+	s := &server{}
+	send := func(kind string, a map[string]string) {
+		raw, _ := json.Marshal(a)
+		s.onEvent(core.Event{Kind: kind, At: time.Now(), Data: raw})
+	}
+	send("alert.raised", map[string]string{"kind": "main-red", "ref": "cant-run:p", "project": "p", "text": "go is missing"})
+	send("alert.raised", map[string]string{"kind": "baseline", "project": "p", "key": "k", "text": "other"})
+	send("alert.cleared", map[string]string{"ref": "cant-run:p", "project": "p"})
+	if len(s.alerts) != 1 || s.alerts[0].Text != "other" {
+		t.Fatalf("alerts after the clear: %+v", s.alerts)
+	}
+}
+
 // A command run while a restart hands over waits for the new daemon instead of
 // starting one of its own, which would run two daemons on one workspace.
 func TestStartWaitsOutAHandOff(t *testing.T) {

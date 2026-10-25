@@ -3,11 +3,13 @@ package release
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -179,5 +181,101 @@ func TestRollBackRemovesWhatTheUpdateAdded(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(exe); string(raw) != "old" || core.Exists(added) {
 		t.Fatalf("binary %q, added still there: %v", raw, core.Exists(added))
+	}
+}
+
+// hold makes path a binary that can't be removed, as Windows refuses for one
+// still running (the daemon an earlier update replaced, running from its
+// .old): there it runs this test binary from path; elsewhere removeFile
+// refuses it. The returned func lets it go.
+func hold(t *testing.T, path string) func() {
+	if runtime.GOOS == "windows" {
+		self, err := os.Executable()
+		raw, _ := os.ReadFile(self)
+		if err != nil || os.WriteFile(path, raw, 0o755) != nil {
+			t.Fatal("can't copy the test binary")
+		}
+		cmd := exec.Command(path, "-test.run=^TestHeldBinary$")
+		cmd.Env = append(os.Environ(), "HIVE_TEST_HOLD=1")
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		let := func() { cmd.Process.Kill(); cmd.Wait() }
+		t.Cleanup(let)
+		if os.Remove(path) == nil {
+			t.Fatal("Windows removed a running binary")
+		}
+		return let
+	}
+	os.WriteFile(path, []byte("held"), 0o755)
+	held := true
+	r := removeFile
+	t.Cleanup(func() { removeFile = r })
+	removeFile = func(p string) error {
+		if raw, _ := os.ReadFile(p); held && string(raw) == "held" {
+			return errors.New("Access is denied.")
+		}
+		return os.Remove(p)
+	}
+	return func() { held = false }
+}
+
+// TestHeldBinary is what hold runs on Windows: a process that stays up.
+func TestHeldBinary(t *testing.T) {
+	if os.Getenv("HIVE_TEST_HOLD") == "" {
+		t.Skip("run by hold")
+	}
+	time.Sleep(time.Minute)
+}
+
+// The owner's Windows laptop (issue #252): `hive update` failed with "rename
+// hive.exe hive.exe.old: Access is denied." because the daemon an earlier
+// update replaced still ran from hive.exe.old. The stuck .old (and a stuck
+// .failed from an earlier rollback) moves aside, the update and its rollback
+// both work, and a later start sweeps what moved aside once it is let go.
+func TestUpdateWithAnOldStillRunning(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	m, exe := releaseAt(t, "v0.1.2", "me/hive")
+	letOld := hold(t, exe+".old")
+	letFailed := hold(t, exe+".failed")
+	if _, err := m.Update(""); err != nil {
+		t.Fatalf("update with a running .old: %v", err)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "new" {
+		t.Fatalf("binary after the update: %q", raw)
+	}
+	if raw, _ := os.ReadFile(exe + ".old"); string(raw) != "old" {
+		t.Fatalf(".old is %q, not the binary the update replaced", raw)
+	}
+	if !core.Exists(exe + ".old-1") {
+		t.Fatal("the running .old wasn't moved aside")
+	}
+	core.Version = "v9.9.9"
+	for i := 0; i <= failedStarts; i++ {
+		Boot(m.C.WS)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "old" {
+		t.Fatalf("binary after the rollback: %q", raw)
+	}
+	if raw, _ := os.ReadFile(exe + ".failed"); string(raw) != "new" || !core.Exists(exe+".failed-1") {
+		t.Fatalf(".failed is %q", raw)
+	}
+	Sweep(exe)
+	if !core.Exists(exe+".old-1") || !core.Exists(exe+".failed-1") {
+		t.Fatal("the sweep removed binaries still running")
+	}
+	letOld()
+	letFailed()
+	Sweep(exe)
+	if core.Exists(exe+".old-1") || core.Exists(exe+".failed-1") || !core.Exists(exe) {
+		t.Fatal("a later start didn't sweep what moved aside")
+	}
+}
+
+func TestOnDisk(t *testing.T) {
+	for in, want := range map[string]string{"hive.exe.old": "hive.exe", "hive.exe.old-12": "hive.exe", "hive.exe": "hive.exe", "hive.exe.older": "hive.exe.older", "hive.old-x": "hive.old-x"} {
+		if got := OnDisk(in); got != want {
+			t.Errorf("OnDisk(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
