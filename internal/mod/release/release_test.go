@@ -994,7 +994,8 @@ func TestSkippedOrCancelledGateIsNotAPass(t *testing.T) {
 // and the merges it named go out in the next release.
 func TestReleaseRefusesATagAtAnotherCommit(t *testing.T) {
 	m, n, merged, land := selfHive(t)
-	n.listed = func() { n.AddTag("me/hive", "v0.0.1", "evil") }
+	// The push races the cut's own listing, after the one tagged reads.
+	n.listed = func() { n.listed = func() { n.AddTag("me/hive", "v0.0.1", "evil") } }
 	merged(1, "a1", "m1")
 	land("a1", "r1")
 	m.AfterKept("hive", "m1")
@@ -1293,5 +1294,70 @@ func TestReleaseAfterAPassingReRun(t *testing.T) {
 	}
 	if got := journaledN(m, "alert.raised") - alerts; got != 1 || !strings.Contains(alertText(m), "no release at m9: it is not a merge") {
 		t.Fatalf("the refusal was raised %d times, want once: %q", got, alertText(m))
+	}
+}
+
+// v0.1.110 was cut by a warden's step at a commit newer than the Hive's last
+// merge, so no hive.released named it: a merge it already contains is not
+// cut again as a higher number carrying older code, and the next merge past
+// it is.
+func TestNoReleaseUnderATagThatContainsIt(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	n.AddRelease("me/hive", core.Release{Tag: "v0.1.110", Prerelease: true})
+	n.AddTag("me/hive", "v0.1.110", "newer")
+	n.AddRelease("me/hive", core.Release{Tag: "v0.1.109"})
+	n.AddTag("me/hive", "v0.1.109", "old")
+	history := map[string][]string{"newer": {"m1", "old"}, "old": nil}
+	m.Contains = func(_ core.Project, sha, at string) (bool, error) { return slices.Contains(history[at], sha), nil }
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	if n.calls != 0 || journaled(m, "hive.released") {
+		t.Fatalf("cut a release under v0.1.110, which already has m1: %v", n.got)
+	}
+	if a := alertText(m); !strings.Contains(a, "v0.1.110 at newer already contains it") {
+		t.Fatalf("the refusal doesn't name the tag: %q", a)
+	}
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	if rel, _ := n.LatestRelease("me/hive"); rel.Tag != "v0.1.111" {
+		t.Fatalf("the merge past v0.1.110 wasn't released: %+v", rel)
+	}
+}
+
+// contains reads the project's clone: a commit is in its own history and its
+// descendants', not its ancestors'.
+func TestContainsReadsTheClone(t *testing.T) {
+	m, _, _, _ := selfHive(t)
+	dir := m.C.WS.Project("hive")
+	os.MkdirAll(dir, 0o755)
+	commit := func(msg string) string {
+		for _, args := range [][]string{{"commit", "-q", "--allow-empty", "-m", msg}} {
+			if _, err := core.Git(dir, args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sha, _ := core.Git(dir, "rev-parse", "HEAD")
+		return strings.TrimSpace(sha)
+	}
+	if _, err := core.Git(dir, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	core.Git(dir, "config", "user.email", "t@t")
+	core.Git(dir, "config", "user.name", "t")
+	old, newer := commit("old"), ""
+	newer = commit("newer")
+	p, _ := m.C.Projects.Get("hive")
+	for _, c := range []struct {
+		sha, at string
+		want    bool
+	}{{old, newer, true}, {newer, newer, true}, {newer, old, false}} {
+		if got, err := m.contains(p, c.sha, c.at); err != nil || got != c.want {
+			t.Errorf("contains(%s, %s) = %v, %v; want %v", c.sha[:7], c.at[:7], got, err, c.want)
+		}
+	}
+	if _, err := m.contains(p, old, strings.Repeat("ab", 20)); err == nil {
+		t.Error("a tag commit the clone can't fetch read as known")
 	}
 }
