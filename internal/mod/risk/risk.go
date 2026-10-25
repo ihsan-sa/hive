@@ -919,6 +919,11 @@ func (m *Module) Install(spec, from, project string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if from != "" && plan.Trust == "unlisted" && plan.Index == "" && strings.HasPrefix(plan.Repo, "https://") {
+		if err := modules.PublicHost(plan.Repo); err != nil { // the daemon fetches past the sandbox's egress
+			return "", err
+		}
+	}
 	if from != "" && plan.Trust == "unlisted" && plan.Index == "" && !strings.HasPrefix(plan.Repo, "https://") {
 		// A path or file:// URL an agent names could be any repository on
 		// this machine: nothing is read from it before the person's yes.
@@ -1097,6 +1102,11 @@ func (m *Module) onModuleUpdate(a core.Ask) {
 	}
 	if a.Answer != "update" {
 		m.Mod.Skip(plan.Name, plan.Sha)
+		return
+	}
+	if !plan.Listed() && (strings.Contains(a.Title, "(core-team)?") || strings.Contains(a.Title, "(reviewed)?")) {
+		// The yes was to a listing; the index has moved since, so the commit is unlisted now.
+		m.C.Person.Tell(core.Ask{Ref: a.ID, Title: "Module " + plan.Name + " not updated: the index no longer pins " + core.Clip(plan.Sha, 12) + "; the next check asks again"})
 		return
 	}
 	if _, err := m.Mod.Upgrade(plan); err != nil {

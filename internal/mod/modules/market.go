@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -223,6 +225,8 @@ func checkRepo(repo string, localOK bool) error {
 	switch {
 	case repo == "" || strings.HasPrefix(repo, "-") || strings.ContainsAny(repo, "\x00\n\r"):
 		return fmt.Errorf("repo %q is not a repository", repo)
+	case strings.HasPrefix(repo, "https://") && !localOK:
+		return PublicHost(repo) // an index online can't point the daemon at this machine's services
 	case strings.HasPrefix(repo, "https://"):
 		return nil
 	case localOK && local(repo):
@@ -237,14 +241,40 @@ func checkRepo(repo string, localOK bool) error {
 // global or system config, a home of its own (no credential helper, no
 // .netrc), and only the https and file transports.
 func anonGit(timeout time.Duration, args ...string) (string, error) {
+	return anonGitIn(timeout, "", args...)
+}
+
+// anonGitIn is anonGit in a clone's folder: checkout and diff there, too,
+// read none of the person's config (an LFS smudge or a textconv driver).
+func anonGitIn(timeout time.Duration, dir string, args ...string) (string, error) {
 	home, err := os.MkdirTemp("", "hive-git-home-")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(home)
 	env := []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "HOME=" + home, "XDG_CONFIG_HOME=" + home, "USERPROFILE=" + home,
-		"GIT_ALLOW_PROTOCOL=https:file", "GIT_SSH_COMMAND=false"}
-	return core.GitEnvT(timeout, "", env, append([]string{"-c", "credential.helper=", "-c", "http.cookieFile="}, args...)...)
+		"GIT_ALLOW_PROTOCOL=https:file", "GIT_SSH_COMMAND=false", "GIT_LFS_SKIP_SMUDGE=1", "GIT_TERMINAL_PROMPT=0"}
+	return core.GitEnvT(timeout, dir, env, append([]string{"-c", "credential.helper=", "-c", "http.cookieFile=", "-c", "http.followRedirects=false"}, args...)...)
+}
+
+// PublicHost refuses an https URL whose host is this machine or a private
+// network: the daemon fetches on the host, past the sandbox's egress, so an
+// agent's URL must not reach what agents can't.
+func PublicHost(repo string) error {
+	u, err := url.Parse(repo)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return fmt.Errorf("%q is not an https:// URL", repo)
+	}
+	ips, err := net.LookupIP(u.Hostname())
+	if err != nil {
+		return fmt.Errorf("%s: %w", u.Hostname(), err)
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+			return fmt.Errorf("%s is on this machine or a private network (%s)", u.Hostname(), ip)
+		}
+	}
+	return nil
 }
 
 func safePath(p string) error {
@@ -417,7 +447,7 @@ func (r *Registry) fetch(p Plan, from string, keep func(tree string, p Plan) err
 			want = "HEAD"
 		}
 	}
-	if _, err := core.Git(tmp, "checkout", "-q", want+"^{commit}"); err != nil {
+	if _, err := anonGitIn(10*time.Minute, tmp, "checkout", "-q", want+"^{commit}"); err != nil {
 		return p, fmt.Errorf("%s has no commit %s", p.Repo, want)
 	}
 	sha, err := core.Git(tmp, "rev-parse", "HEAD")
@@ -428,7 +458,13 @@ func (r *Registry) fetch(p Plan, from string, keep func(tree string, p Plan) err
 		return p, fmt.Errorf("%s at %s is commit %s, not the one pinned", p.Repo, p.Sha, sha)
 	}
 	p.Sha, p.Release = sha, releaseAt(tmp, sha)
-	tree := filepath.Join(tmp, filepath.FromSlash(p.Path))
+	tree, err := inside(tmp, filepath.Join(tmp, filepath.FromSlash(p.Path)))
+	if err != nil {
+		return p, fmt.Errorf("%s: folder %q: %w", p.Repo, p.Path, err)
+	}
+	if fi, err := os.Lstat(filepath.Join(tree, "module.json")); err == nil && !fi.Mode().IsRegular() {
+		return p, fmt.Errorf("%s: its module.json is a link, not a file", p.Repo)
+	}
 	raw, err := os.ReadFile(filepath.Join(tree, "module.json"))
 	if err != nil {
 		return p, fmt.Errorf("%s has no module.json in %q at %s", p.Repo, p.Path, sha[:12])
@@ -454,15 +490,15 @@ func (r *Registry) fetch(p Plan, from string, keep func(tree string, p Plan) err
 		p.Needs = asks // unlisted: what it declares is what the person is shown and grants
 	}
 	if from != "" && from != sha {
-		if _, err := core.Git(tmp, "cat-file", "-e", from+"^{commit}"); err != nil {
+		if _, err := anonGitIn(time.Minute, tmp, "cat-file", "-e", from+"^{commit}"); err != nil {
 			p.Diff = fmt.Sprintf("The installed commit %s is no longer in %s: read the whole module.", from, p.Repo)
 		} else {
 			args := []string{"diff", from, sha}
 			if p.Path != "" {
 				args = append(args, "--", p.Path)
 			}
-			stat, _ := core.Git(tmp, append([]string{"diff", "--stat", from, sha}, args[3:]...)...)
-			full, _ := core.Git(tmp, args...)
+			stat, _ := anonGitIn(time.Minute, tmp, append([]string{"diff", "--no-ext-diff", "--no-textconv", "--stat", from, sha}, args[3:]...)...)
+			full, _ := anonGitIn(time.Minute, tmp, append([]string{"diff", "--no-ext-diff", "--no-textconv"}, args[1:]...)...)
 			p.Diff = core.Clip(stat+"\n\n"+full, 40000)
 		}
 	}
@@ -472,6 +508,27 @@ func (r *Registry) fetch(p Plan, from string, keep func(tree string, p Plan) err
 		}
 	}
 	return p, nil
+}
+
+// inside resolves dir's links and refuses it unless it is still root or in
+// it: a repository can commit a link (a -> /) and name a folder through it.
+func inside(root, dir string) (string, error) {
+	r, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	d, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", errors.New("not in the repository")
+	}
+	if rel, err := filepath.Rel(r, d); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", errors.New("leads out of the repository")
+	}
+	fi, err := os.Stat(d)
+	if err != nil || !fi.IsDir() {
+		return "", errors.New("not a folder in the repository")
+	}
+	return d, nil
 }
 
 // releaseAt names a commit by its highest release tag, else its short sha.

@@ -1361,12 +1361,49 @@ func TestInstallNameIsOnlyAName(t *testing.T) {
 	g := newRig(t, 2)
 	g.c.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
 	lead, _ := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir()})
-	for _, args := range []map[string]string{{"name": "project:secret"}, {"name": "x=project:secret"}, {"url": "project:secret"}} {
+	for _, args := range []map[string]string{{"name": "project:secret"}, {"name": "x=project:secret"}, {"url": "project:secret"}, {"url": "https://127.0.0.1/x.git"}, {"url": "https://localhost:8080/x"}, {"url": "https://10.0.0.5/x"}} {
 		if _, err := g.call(lead, "install_module", args); err == nil {
 			t.Errorf("%v was accepted", args)
 		}
 	}
 	if len(g.c.Person.Open()) != 0 || len(g.m.List()) != 0 {
 		t.Fatal("a refused install was filed")
+	}
+}
+
+// A warden's yes is to a listing: if the index moves its pin while the update
+// is weighed, the commit is no longer listed and isn't installed on that yes.
+func TestUpdateWhosePinMovedIsNotInstalled(t *testing.T) {
+	g := newRig(t, 2)
+	src, v1 := moduleRepo(t, "greet", `{"name": "greet"}`)
+	g.index(modules.Listing{Name: "greet", Repo: src, Sha: v1, Trust: "reviewed"})
+	p, _ := g.m.Mod.Resolve("greet")
+	if _, err := g.m.Mod.Install(p); err != nil {
+		t.Fatal(err)
+	}
+	commitAll := func(file string) string {
+		os.WriteFile(filepath.Join(src, file), []byte(file+"\n"), 0o644)
+		core.Git(src, "add", "-A")
+		core.Git(src, "commit", "-q", "-m", file)
+		sha, _ := core.Git(src, "rev-parse", "HEAD")
+		return sha
+	}
+	v2 := commitAll("two.md")
+	g.index(modules.Listing{Name: "greet", Repo: src, Sha: v2, Trust: "reviewed"})
+	g.m.UpdateModules()
+	reqs := g.m.List()
+	if len(reqs) != 1 {
+		t.Fatalf("requests %+v", reqs)
+	}
+	v3 := commitAll("three.md")
+	g.index(modules.Listing{Name: "greet", Repo: src, Sha: v3, Trust: "reviewed"})
+	g.m.Mod.Listings() // the cache is fresh within five minutes; read the moved pin as a later check would
+	g.m.Mod.Outdated()
+	if err := g.decide(reqs[0], map[string]string{"decision": "do", "reason": "fine"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if m, _ := g.m.Mod.Get("greet"); m.Source.Commit != v1 || m.Source.Trust != "reviewed" {
+		t.Fatalf("installed on a yes to a pin that moved: %+v", m.Source)
 	}
 }

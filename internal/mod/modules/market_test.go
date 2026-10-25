@@ -3,10 +3,15 @@ package modules
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -247,5 +252,89 @@ func TestInstallListsOnlyAWholeCopy(t *testing.T) {
 				t.Fatalf("listed before it was whole: %+v", m.Source)
 			}
 		}
+	}
+}
+
+// A repository can commit a link out of itself and name a folder through it,
+// or make module.json a link: both are refused and nothing is copied.
+func TestFolderThroughALinkIsRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("links need privileges on Windows")
+	}
+	r, ws := newRegistry(t)
+	secret := filepath.Join(t.TempDir(), "private")
+	os.MkdirAll(secret, 0o755)
+	os.WriteFile(filepath.Join(secret, "module.json"), []byte(`{"name": "private"}`), 0o644)
+	os.WriteFile(filepath.Join(secret, "secret.md"), []byte("the private project's notes\n"), 0o644)
+	src := filepath.Join(t.TempDir(), "evil")
+	os.MkdirAll(filepath.Join(src, "inner"), 0o755)
+	os.Symlink("/", filepath.Join(src, "a"))
+	os.Symlink(filepath.Join(secret, "module.json"), filepath.Join(src, "inner", "module.json"))
+	commit(t, src, map[string]string{"README.md": "x\n"})
+	for _, spec := range []string{"evil=" + src + "//a" + secret, "evil=" + src + "//inner"} {
+		if _, err := r.Resolve(spec); err == nil {
+			t.Errorf("%s resolved", spec)
+		}
+	}
+	if entries, _ := os.ReadDir(ws.Modules()); len(entries) != 0 {
+		t.Fatalf("copied %v", entries)
+	}
+}
+
+// anonGit keeps the person's credential helper and .netrc out: a server
+// asking for a login gets nothing from it, where plain git (the control) uses both.
+func TestAnonGitUsesNoCredentials(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the helper is a shell function")
+	}
+	var mu sync.Mutex
+	var auths []string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		mu.Lock()
+		auths = append(auths, req.Header.Get("Authorization"))
+		mu.Unlock()
+		w.Header().Set("WWW-Authenticate", `Basic realm="x"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	t.Setenv("GIT_SSL_NO_VERIFY", "1")
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		t.Setenv(k, "") // the test server is on loopback
+	}
+	home := t.TempDir()
+	mark := filepath.Join(home, "helper-ran")
+	os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[credential]\n\thelper = \"!f() { touch "+mark+"; echo username=u; echo password=p; }; f\"\n"), 0o644)
+	os.WriteFile(filepath.Join(home, ".netrc"), []byte("machine 127.0.0.1 login netrcuser password netrcpass\n"), 0o600)
+	clone := func(anon bool) {
+		dir := filepath.Join(t.TempDir(), "c")
+		if anon {
+			anonGit(time.Minute, "clone", "-q", "--", srv.URL+"/x.git", dir)
+			return
+		}
+		core.GitEnvT(time.Minute, "", []string{"HOME=" + home, "XDG_CONFIG_HOME=" + home, "GIT_CONFIG_GLOBAL=" + filepath.Join(home, ".gitconfig")}, "clone", "-q", "--", srv.URL+"/x.git", dir)
+	}
+	clone(false)
+	mu.Lock()
+	control := strings.Join(auths, ",")
+	auths = nil
+	mu.Unlock()
+	if !core.Exists(mark) || control == "," || control == "" {
+		t.Skipf("the control used neither the helper nor .netrc (auth %q), so this git can't show the difference", control)
+	}
+	os.Remove(mark)
+	t.Setenv("HOME", home) // what the daemon has: the person's home
+	clone(true)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(auths) == 0 {
+		t.Fatal("anonGit never reached the server, so this shows nothing")
+	}
+	for _, a := range auths {
+		if a != "" {
+			t.Fatalf("anonGit sent a login: %q", a)
+		}
+	}
+	if core.Exists(mark) {
+		t.Fatal("anonGit ran the person's credential helper")
 	}
 }

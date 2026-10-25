@@ -26,7 +26,7 @@ The code is `internal/mod/modules/market.go` (index, plan, fetch, install, updat
 
 Together these are its **reach**. Declare all of it. A module asking for anything its listing doesn't declare is refused at install, and its program won't start if its `module.json` later asks for more than it was installed with.
 
-A module can sit at the root of its repository or in a folder of a repository holding several (`path` in the listing). Only that folder is installed, without `.git`, at exactly the pinned commit. Symlinks are not copied.
+A module can sit at the root of its repository or in a folder of a repository holding several (`path` in the listing). Only that folder is installed, without `.git`, at exactly the pinned commit. Symlinks are not copied. A folder reached through a link that leads out of the repository is refused, and so is a `module.json` that is a link.
 
 ## Listing it
 
@@ -49,7 +49,7 @@ An index is a git repository (or, for your own, any folder) with `index.json` at
 }
 ```
 
-- `repo` is an `https://` URL. Only an index kept in a folder on this machine (your own) may list a `file://` URL or an absolute path. ssh URLs aren't accepted, since they would use the person's keys. Listings that break these rules are dropped, and the reason is shown as the index's error.
+- `repo` is an `https://` URL on a public host. An index online can't list this machine or a private network, and an agent can't name one either: the daemon fetches past the sandbox's egress. Only an index kept in a folder on this machine (your own) may list a `file://` URL or an absolute path. ssh URLs aren't accepted, since they would use the person's keys. Listings that break these rules are dropped, and the reason is shown as the index's error.
 - `sha` is the full 40-character commit. An install checks out exactly that commit and refuses if the repository doesn't have it.
 - `trust` is `core-team` (the Hive's own, Hive-RSI-Lab) or `reviewed` (listed after the Hive's security read, plus a tribunal for anything that runs a program or asks for a credential). Anything else counts as `unlisted`. Only the Hive's own index (`https://github.com/Hive-RSI-Lab/marketplace`) can say `core-team`. Another index's `core-team` reads as `reviewed`.
 - `read` is the read behind that trust: who read it, at which commit, and what they found. The person and the warden see it before saying yes.
