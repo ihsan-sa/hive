@@ -342,7 +342,7 @@ func (h *hive) messages(chatID string) []chat.Message {
 
 func (h *hive) seed(repo string, files map[string]string) {
 	h.t.Helper()
-	if _, err := h.forge.EnsureRepo(repo, ""); err != nil {
+	if _, err := h.forge.EnsureRepo(repo, "", false); err != nil {
 		h.t.Fatal(err)
 	}
 	tmp := h.t.TempDir()

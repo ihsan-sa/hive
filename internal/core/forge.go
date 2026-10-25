@@ -47,7 +47,9 @@ var ErrDraft = errors.New("the pull request is a draft, left for a read")
 type Forge interface {
 	Name() string
 	User() (string, error)
-	EnsureRepo(repo, description string) (created bool, err error)
+	// EnsureRepo makes repo, public or private, unless it exists; an
+	// existing repository's visibility is never changed (that is the person's).
+	EnsureRepo(repo, description string, public bool) (created bool, err error)
 	// Fork is owner's fork of repo, made on first need; owner "" is the
 	// person's own account, else an organization they can create repos in.
 	Fork(repo, owner string) (string, error)
@@ -349,11 +351,15 @@ func ghLogin(repo string) (string, error) {
 // User is the login gh itself holds.
 func (GitHub) User() (string, error) { return gh("", "api", "user", "-q", ".login") }
 
-func (g GitHub) EnsureRepo(repo, description string) (bool, error) {
+func (g GitHub) EnsureRepo(repo, description string, public bool) (bool, error) {
 	if _, err := gh(repo, "repo", "view", repo, "--json", "name"); err == nil {
 		return false, nil
 	}
-	if _, err := gh(repo, "repo", "create", repo, "--private", "--description", description); err != nil {
+	visibility := "--private"
+	if public {
+		visibility = "--public"
+	}
+	if _, err := gh(repo, "repo", "create", repo, visibility, "--description", description); err != nil {
 		return false, err
 	}
 	return true, nil

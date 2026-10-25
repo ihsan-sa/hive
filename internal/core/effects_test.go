@@ -45,7 +45,7 @@ func testHive(t *testing.T) (*Core, *Local) {
 // seedRepo creates repo on the local forge with files on main.
 func seedRepo(t *testing.T, f *Local, repo string, files map[string]string) {
 	t.Helper()
-	if _, err := f.EnsureRepo(repo, ""); err != nil {
+	if _, err := f.EnsureRepo(repo, "", false); err != nil {
 		t.Fatal(err)
 	}
 	tmp := t.TempDir()

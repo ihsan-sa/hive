@@ -87,9 +87,13 @@ type Config struct {
 	BareAccepted string `json:"bare_accepted,omitempty"` // timestamp the warning was read
 	WSLDistro    string `json:"wsl_distro,omitempty"`
 	ReleaseRepo  string `json:"release_repo"`
-	AutoUpdate   bool   `json:"auto_update"`
-	ReleasePin   string `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
-	PinnedAuto   bool   `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
+	// PublicOwners are the accounts or organizations where create_project
+	// may make a public repository and tell the person after; a public one
+	// anywhere else waits for their yes.
+	PublicOwners []string `json:"public_owners"`
+	AutoUpdate   bool     `json:"auto_update"`
+	ReleasePin   string   `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
+	PinnedAuto   bool     `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
 	// Channel is the releases auto-update follows: "latest", or "pre-release",
 	// each pre-release once its checks for this system pass. Empty is the
 	// default: pre-releases on the Hive whose own project is release_repo, the
@@ -291,6 +295,7 @@ func DefaultConfig() Config {
 		TribunalModels: []TribunalSeat{{Model: "opus"}, {Model: "sonnet"}, {Model: "fable"}},
 		Sandbox:        "auto",
 		ReleaseRepo:    DefaultReleaseRepo,
+		PublicOwners:   []string{"Hive-RSI-Lab"},
 		AutoUpdate:     true,
 		ReviewRounds:   3,
 		ChatMaxMB:      300,
