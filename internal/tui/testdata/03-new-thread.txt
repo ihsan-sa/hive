@@ -33,4 +33,4 @@
                       │  │   please.                                                                                  │
                       │  ╰────────────────────────────────────────────────────────────────────────────────────────────╯
 ──────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────
- enter start thread   ctrl+j newline   esc leave box   ↑ pick a thread   tab switch pane
+ enter start thread   ctrl+j newline   esc leave box   ↑ pick a thread   tab switch pane   alt+v image

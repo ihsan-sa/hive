@@ -16,7 +16,7 @@ func tested(t *testing.T) (m *Module, commit func(files map[string]string) strin
 	t.Helper()
 	m = rig(t)
 	forge := m.C.Effects.Forge.(*core.Local)
-	if _, err := forge.EnsureRepo("me/p", ""); err != nil {
+	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {
 		t.Fatal(err)
 	}
 	src := t.TempDir()
@@ -177,5 +177,43 @@ func TestOnlyMainsChecksMakeAFlake(t *testing.T) {
 	}
 	if reverts(m) != 1 || flakeAlerts(m) != "" {
 		t.Fatalf("reverts %d, alerts %q", reverts(m), flakeAlerts(m))
+	}
+}
+
+// A red after a merge that main already had just before it (a clock-bound
+// test, say) isn't the merge's: it is filed to fix, and nothing is reverted.
+func TestRedAlreadyOnMainBeforeTheMergeIsNotReverted(t *testing.T) {
+	m, commit, merge := tested(t)
+	commit(map[string]string{"t.sh": "echo '--- FAIL: TestClock (0.01s)'\nexit 1\n"}) // went red unmeasured
+	sha := commit(map[string]string{"README.md": "an unrelated change\n"})
+	if ms := merge(sha); ms.Kept || ms.TestsOK || !strings.Contains(ms.Note, "not new at this merge") || !strings.Contains(ms.Note, "not reverted") {
+		t.Fatalf("measured %+v", ms)
+	}
+	if reverts(m) != 0 {
+		t.Fatalf("a red main had before the merge was reverted: %d", reverts(m))
+	}
+	if filed := m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") }); len(filed) != 1 {
+		t.Fatalf("the red wasn't filed to fix: %d", len(filed))
+	}
+	// A second red merge on the same red main files it no second time.
+	sha = commit(map[string]string{"README.md": "another\n"})
+	m.afterMerge(work.Task{ID: "t2", Project: "p", MergeSHA: sha})
+	if reverts(m) != 0 || len(m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") })) != 1 {
+		t.Fatalf("reverts %d on a second merge", reverts(m))
+	}
+}
+
+// A merge that adds a failure no test name accounts for (a timeout) beside
+// a test main already failed is the merge's break: it is reverted.
+func TestUnnamedFailureBesideMainsRedIsReverted(t *testing.T) {
+	m, commit, merge := tested(t)
+	red := "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\n"
+	commit(map[string]string{"t.sh": red + "exit 1\n"}) // went red unmeasured
+	sha := commit(map[string]string{"t.sh": red + "echo 'panic: test timed out after 2s'\necho 'FAIL\tp/b\t2.01s'\nexit 1\n"})
+	if ms := merge(sha); ms.Kept || strings.Contains(ms.Note, "not new at this merge") {
+		t.Fatalf("measured %+v", ms)
+	}
+	if reverts(m) != 1 {
+		t.Fatalf("a timeout beside main's red wasn't reverted: %d", reverts(m))
 	}
 }
