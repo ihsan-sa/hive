@@ -700,6 +700,10 @@ func (m *Module) afterKept(project, sha string) {
 		m.hold(project, sha, root, unread, manifest.String())
 		return
 	}
+	if why := m.unbuilt(p); why != "" {
+		alert("no release at " + core.Short(sha) + ": " + why)
+		return
+	}
 	scanAt := m.Scan
 	if scanAt == nil {
 		scanAt = m.scan
@@ -992,6 +996,12 @@ func (m *Module) Publish() string {
 				alert(c, c.Tag+" stays a pre-release, so installs stay where they are: "+why+". A re-run that passes publishes it.")
 			}
 			out = append(out, c.Tag+": "+why)
+		case "unbuilt":
+			if !failed[key] {
+				m.C.J.MustAppend("release.failed", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA, "why": why, "gate": "release"})
+				alert(c, c.Tag+" has no binaries, since its "+why+"; its update test has nothing to install, so an update failure there says nothing about updating. "+unbuiltSteps)
+			}
+			out = append(out, c.Tag+": "+why)
 		default:
 			if time.Since(c.At) > lateAfter && !m.said[key] {
 				m.said[key] = true
@@ -1007,11 +1017,15 @@ func (m *Module) Publish() string {
 }
 
 // gates says "passed" when every gate passed in the release runs at sha,
-// else "failed" or "waiting", and why.
+// else "unbuilt" (the release workflow itself failed, so no gate has binaries
+// to test), "failed" or "waiting", and why.
 func (m *Module) gates(repo, sha string) (state, why string) {
 	runs, err := m.C.Effects.Forge.ReleaseRuns(repo, sha)
 	if err != nil {
 		return "waiting", "can't read its runs (" + core.Clip(err.Error(), 200) + ")"
+	}
+	if why := m.buildFailed(repo, runs); why != "" {
+		return "unbuilt", why
 	}
 	var bad, wait []string
 	for _, g := range Gates {
@@ -1032,6 +1046,72 @@ func (m *Module) gates(repo, sha string) (state, why string) {
 		return "waiting", "waiting for " + strings.Join(wait, ", ")
 	}
 	return "passed", ""
+}
+
+// unbuiltSteps is what the person does about a release whose release
+// workflow failed.
+const unbuiltSteps = "The Hive cuts no new release until this one's release run passes, since each would be as empty. " +
+	"A failed scan job most often means the repository secrets HIVE_SCAN_HANDLES and HIVE_SCAN_DENY are missing " +
+	"(Settings, Secrets and variables, Actions), or the scan found something in a file .hive/public.txt names; " +
+	"its log names the file and line. Fix that, re-run the release run, then its update run, and once they pass it is published and releases go on."
+
+// buildFailed says why the release workflow (release.yml: scan, build, sign)
+// failed among a release's runs, naming the jobs that failed, or "" when it
+// passed, still runs or hasn't started.
+func (m *Module) buildFailed(repo string, runs []core.WorkflowRun) string {
+	i := slices.IndexFunc(runs, func(r core.WorkflowRun) bool { return r.Name == "release" })
+	if i < 0 || runs[i].Status != "completed" || runs[i].Conclusion == "success" {
+		return ""
+	}
+	r, at := runs[i], ""
+	if jobs, err := m.C.Effects.Forge.RunJobs(repo, r.ID); err == nil {
+		var bad []string
+		for _, j := range jobs {
+			if j.Status == "completed" && j.Conclusion != "success" && j.Conclusion != "skipped" {
+				bad = append(bad, j.Name)
+			}
+		}
+		if len(bad) > 0 {
+			at = " at its " + strings.Join(bad, ", ") + " job"
+		}
+	}
+	return "release run " + r.Conclusion + at + " (" + r.URL + ")"
+}
+
+// unbuilt says why no release is cut while the newest one's release workflow
+// failed: each new tag would only be another release with no binaries. It
+// raises nothing itself, but notes the hold once per tag in the journal; a
+// release run that can't be read never holds the cut.
+func (m *Module) unbuilt(p core.Project) string {
+	var tag, sha string
+	held := map[string]bool{}
+	m.C.J.Replay(func(e core.Event) {
+		var x struct{ Project, Tag, SHA string }
+		if e.Decode(&x) != nil || x.Project != p.Name {
+			return
+		}
+		switch e.Kind {
+		case "hive.released":
+			tag, sha = x.Tag, x.SHA
+		case "release.held":
+			held[x.Tag] = true
+		}
+	})
+	if tag == "" {
+		return ""
+	}
+	runs, err := m.C.Effects.Forge.ReleaseRuns(p.Repo, sha)
+	if err != nil {
+		return ""
+	}
+	why := m.buildFailed(p.Repo, runs)
+	if why == "" {
+		return ""
+	}
+	if !held[tag] {
+		m.C.J.MustAppend("release.held", map[string]string{"project": p.Name, "tag": tag, "sha": sha, "why": why})
+	}
+	return tag + " has no binaries, since its " + why + ". " + unbuiltSteps
 }
 
 // nextTag is one past the highest vX.Y.Z among tags (v0.0.1 if none is).

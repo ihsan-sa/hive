@@ -21,6 +21,7 @@ on:
         required: false
 permissions:
   contents: read
+  actions: read # to see the release run fail, rather than wait out its binaries
 jobs:
   # A Hive following pre-releases reads these legs as "update (<os>-latest, ...)" (ownJobs in
   # internal/mod/release/prerelease.go); keep the job unnamed and os first in the matrix.
@@ -54,6 +55,11 @@ jobs:
           for i in $(seq $tries); do
             n=$(gh release view "$to" -R "$GITHUB_REPOSITORY" --json assets -q '.assets | length') || n=0
             [ "$n" -ge 3 ] && break
+            # A release run that failed (its scan, say) never attaches them: say so, not that updating broke.
+            if [ "$GITHUB_EVENT_NAME" = release ]; then
+              c=$(gh run list -R "$GITHUB_REPOSITORY" -w release -e release -c "$GITHUB_SHA" --json conclusion -q '.[0].conclusion' 2>/dev/null) || c=
+              case "$c" in ''|success) ;; *) echo "::error::release $to has no binaries: its release run ended $c (see its scan, build and sign jobs), so there is nothing to update to; this is not an update failure"; exit 1 ;; esac
+            fi
             echo "waiting for $to's binaries ($n so far)"; sleep 20
           done
           [ "$n" -ge 3 ] || { echo "::error::release $to never got its binaries"; exit 1; }
