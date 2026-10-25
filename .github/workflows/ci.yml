@@ -2,7 +2,10 @@ name: ci
 # Linux only for now, on the person's word (issue #564): macOS and Windows are paused until the
 # self-improvement loop is tight, so nothing in the merge path waits on them. To bring them back,
 # add macos-latest and windows-latest to the test matrix (and to runners in
-# internal/mod/release/prerelease.go) and the cross-system vet steps.
+# internal/mod/release/prerelease.go) and the cross-system vet steps. Keep windows-latest in
+# the matrix for pushes to main too (issue #595; before the pause pushes ran Linux only): a PR
+# red on Windows is weighed against main's result for the same check, and without a Windows
+# run on main a Windows-only red first surfaces on an unrelated PR.
 on:
   push:
     branches: [main]

@@ -615,6 +615,7 @@ var (
 	redPkgLine = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
 	redTest    = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
 	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |exit status |test timed out|# )|\[(build|setup) failed\]`)
+	redBuild   = regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+(?::\d+)?: (.+)`)
 )
 
 // RedKeys names what failed in a red go test run so two runs' reds can be
@@ -653,6 +654,21 @@ func RedKeys(out string) []string {
 	}
 	if !pkgs {
 		return FailedTests(out)
+	}
+	return keys
+}
+
+// StopKeys names, for a red run RedKeys names nothing in (go vet, or a build
+// that stopped the command before go test ran), each compile or vet error as
+// "file.go: message", its line left out so an edit above it doesn't make the
+// same error look new. The rest of the command didn't run, so these can show
+// a red isn't new at a merge but never that a change is no worse than main.
+func StopKeys(out string) []string {
+	var keys []string
+	for _, l := range strings.Split(out, "\n") {
+		if m := redBuild.FindStringSubmatch(strings.TrimRight(l, " \r")); m != nil && !slices.Contains(keys, m[1]+": "+m[2]) {
+			keys = append(keys, m[1]+": "+m[2])
+		}
 	}
 	return keys
 }
