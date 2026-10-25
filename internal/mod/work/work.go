@@ -1047,7 +1047,7 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 		if !strings.Contains(t.Reason, "quiet") {
 			t.Reason = "worker is quiet: " + r.Reason
 			m.save(t, t.Reason)
-			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "quiet", "run": r.ID, "task": t.ID, "text": "worker " + r.ID + " keeps ending turns without finishing"})
+			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "quiet", "run": r.ID, "task": t.ID, "text": "worker " + r.ID + " keeps ending turns without finishing; briefs that waited on its task start without it"})
 		}
 	default:
 		return m.checkpoint(t, p, r)
