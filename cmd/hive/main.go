@@ -1099,7 +1099,7 @@ func planLine(p core.Plan, now time.Time) string {
 		}
 	}
 	if !p.At.IsZero() {
-		s += fmt.Sprintf(" (read %s ago)", now.Sub(p.At).Round(time.Minute))
+		s += " (read " + harness.Until(now, p.At) + " ago)"
 	}
 	return s
 }
