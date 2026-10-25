@@ -108,8 +108,7 @@ func (m *Module) quiet(t Task) bool {
 }
 
 // overlap returns the first task in others on t's project whose brief names
-// a file t's brief names too, or a directory one of them names on its own
-// that holds the other's file or directory, and that area.
+// a file t's brief names too, and that file.
 func (m *Module) overlap(t Task, others []Task) (*Task, string) {
 	mine := m.areas(t)
 	if len(mine) == 0 {
@@ -121,10 +120,7 @@ func (m *Module) overlap(t Task, others []Task) (*Task, string) {
 		}
 		for _, a := range mine {
 			for _, b := range m.areas(o) {
-				if a == b || strings.HasPrefix(b, a+"/") || strings.HasPrefix(a, b+"/") {
-					if len(b) < len(a) {
-						a = b
-					}
+				if a == b {
 					return &others[i], a
 				}
 			}
@@ -135,11 +131,12 @@ func (m *Module) overlap(t Task, others []Task) (*Task, string) {
 
 var pathLike = regexp.MustCompile(`[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+`)
 
-// areas are the paths t's brief names that exist in its project's clone. A
+// areas are the files t's brief names that exist in its project's clone. A
 // file is only itself, so two briefs on different files of one package start
-// together; a directory counts when the brief names it, unless it is at the
-// top level ("internal", "docs"), which would hold everything under it. A
-// file that merges as union (.gitattributes merge=union, like docs/log.md)
+// together, and a directory ("internal/mod", "internal/mod/work") is no area:
+// a brief names its package to say where it works, not that it edits every
+// file there, and holding on it queued most of the line behind one worker
+// (issue #399). A file that merges as union (.gitattributes merge=union, like docs/log.md)
 // isn't an area: both sides' lines are kept. They are worked out once per
 // brief text and .gitattributes, so a doc main newly marks union frees the
 // briefs that name it.
@@ -183,15 +180,17 @@ func (m *Module) areas(t Task) []string {
 		if err != nil || !inside(realRoot, real) {
 			continue
 		}
-		fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p)))
+		fi, err := os.Stat(real) // resolved, so a symlink to a directory is a directory
 		if err != nil {
 			continue
 		}
-		switch {
-		case fi.IsDir() && !strings.Contains(p, "/"): // a top-level directory, as in "internal/."
-		case !fi.IsDir() && isUnion(union, p):
-		default:
-			add(p)
+		// Keyed on where it resolves, so two names for one file are one area.
+		rel, err := filepath.Rel(realRoot, real)
+		if err != nil {
+			continue
+		}
+		if rel = filepath.ToSlash(rel); !fi.IsDir() && !isUnion(union, rel) {
+			add(rel)
 		}
 	}
 	m.mu.Lock()
