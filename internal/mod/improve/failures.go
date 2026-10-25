@@ -237,7 +237,9 @@ func (m *Module) fileFlaky(p core.Project, sha string, fs []failure, sum, out st
 }
 
 // redBefore runs what stayed red at t's merge again on main just before t
-// first merged. When every test that failed also fails there, the red isn't
+// first merged. When everything that failed (core.RedKeys: each test by its
+// package, and a package's failure no test name accounts for) also fails
+// there, the red isn't
 // new at this merge (main went red beside it: a clock, the environment, an
 // earlier merge), so reverting it would clear nothing: the red is filed to
 // fix instead. "" means the failure is new here, or that can't be told.
@@ -249,11 +251,11 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	if !ok || tc.OK {
 		return ""
 	}
-	names := tc.Failed
-	if rc, ok := m.C.Effects.GetCheck(p.Name, t.MergeSHA, "retest"); ok && !rc.OK && len(rc.Failed) > 0 {
-		names = rc.Failed // what stayed red when it ran again
-	}
-	if len(names) == 0 {
+	// The whole first run, not the rerun of what failed: a package that
+	// failed with no test named (a timeout, a panic, an exit) counts too.
+	log := tc.FullOutput()
+	keys := core.RedKeys(log)
+	if len(keys) == 0 {
 		return "" // nothing named to look for before it
 	}
 	first := t.MergeSHA
@@ -268,22 +270,20 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	if err != nil || parent == "" || own || !m.C.Effects.MainLine(p)[parent] {
 		return ""
 	}
-	log := tc.Output
-	if tc.Log != "" {
-		if b, err := core.SafeRead(tc.Log, 8<<20); err == nil && len(b) > 0 {
-			log = string(b)
-		}
-	}
 	bc := m.C.Effects.RunCheck(p, parent, "before", rerunCommand(test, failures(log)))
 	if bc.CantRun != "" || bc.OK {
 		return ""
 	}
-	for _, n := range names {
-		if !slices.Contains(bc.Failed, n) {
+	before := core.RedKeys(bc.FullOutput())
+	for _, k := range keys {
+		if !slices.Contains(before, k) {
 			return ""
 		}
 	}
-	what := strings.Join(names, ", ")
+	what := strings.Join(tc.Failed, ", ")
+	if what == "" {
+		what = strings.Join(keys, ", ")
+	}
 	why := "not new at this merge: " + what + " failed after it merged and fail too at " + core.Short(parent) + ", main just before it"
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": t.MergeSHA, "task": t.ID,
 		"text": core.Clip(why, 400) + " (" + p.Name + "). Not reverted; filed to fix on main."})

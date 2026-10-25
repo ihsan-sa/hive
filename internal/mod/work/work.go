@@ -1440,15 +1440,19 @@ func (m *Module) mainTests(p core.Project, main, command string) (core.Check, er
 	return m.C.Effects.RunCheck(p, main, "test", command), nil
 }
 
-// noWorse says a red change fails only tests main's red run fails too, each
-// named, so the red is main's and the change may be its fix. A failure
-// either run doesn't name (a build, another runner) can't be told apart.
+// noWorse says a red change fails only what main's red run fails too, each
+// test by its package and name, so the red is main's and the change may be
+// its fix. A failure in its run that no test name accounts for (a timeout, a
+// panic or exit outside a test, a build failure) counts only where main's
+// run fails that package so too; one either run can't name at all can't be
+// told apart.
 func noWorse(c, mc core.Check) bool {
-	if len(c.Failed) == 0 || len(mc.Failed) == 0 {
+	mine, mains := core.RedKeys(c.FullOutput()), core.RedKeys(mc.FullOutput())
+	if len(mine) == 0 || len(mains) == 0 {
 		return false
 	}
-	for _, n := range c.Failed {
-		if !slices.Contains(mc.Failed, n) {
+	for _, k := range mine {
+		if !slices.Contains(mains, k) {
 			return false
 		}
 	}

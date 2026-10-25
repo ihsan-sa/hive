@@ -202,3 +202,18 @@ func TestRedAlreadyOnMainBeforeTheMergeIsNotReverted(t *testing.T) {
 		t.Fatalf("reverts %d on a second merge", reverts(m))
 	}
 }
+
+// A merge that adds a failure no test name accounts for (a timeout) beside
+// a test main already failed is the merge's break: it is reverted.
+func TestUnnamedFailureBesideMainsRedIsReverted(t *testing.T) {
+	m, commit, merge := tested(t)
+	red := "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\n"
+	commit(map[string]string{"t.sh": red + "exit 1\n"}) // went red unmeasured
+	sha := commit(map[string]string{"t.sh": red + "echo 'panic: test timed out after 2s'\necho 'FAIL\tp/b\t2.01s'\nexit 1\n"})
+	if ms := merge(sha); ms.Kept || strings.Contains(ms.Note, "not new at this merge") {
+		t.Fatalf("measured %+v", ms)
+	}
+	if reverts(m) != 1 {
+		t.Fatalf("a timeout beside main's red wasn't reverted: %d", reverts(m))
+	}
+}
