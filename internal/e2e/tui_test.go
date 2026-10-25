@@ -122,7 +122,7 @@ func (x *term) pick(label string) {
 			}
 			x.keys(key)
 			moved := false
-			for j := 0; j < 10 && !moved; j++ { // let the screen catch up
+			for j := 0; j < 40 && !moved; j++ { // let the screen catch up, 2s on a slow terminal
 				if moved = x.selected() != cur; !moved {
 					time.Sleep(50 * time.Millisecond)
 				}

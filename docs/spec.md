@@ -12,7 +12,7 @@ Three things make it different from a coding assistant. It keeps working when yo
 
 ## 2. Principles
 
-These come from the owner's design and are the bar every later decision is held to.
+These come from the owner's design, the essay [The Hive](the-hive-essay.md), and are the bar every later decision is held to. Section 17 lists where the Hive departs from the essay today.
 
 - **A small core, everything else a module.** The core does five things: it runs agents in separate checkouts, it holds every credential in one effects process that acts on agents' behalf, it lets agents spawn and message one another, it enforces one hard safety ceiling, and it keeps state so work survives a restart. Anything else that can be upgraded and released is a module: the chat, the knowledge base, the self-improvement sweep, the system module, a worker prompt, a single script. The core should stay small enough to read in one sitting.
 - **Agents are generic.** Every agent is the same harness started with the same short orientation document. A role is only what the agent is asked to do and what it has been granted. Workers pick modules and procedures at will, so an old procedure dies when nobody picks it any more.
@@ -178,3 +178,15 @@ Lessons from building the first version. Each cost real time.
 - One access check made agents unable to message or start work across projects, and seven features quietly depended on it. Test cross-project messaging early.
 - Naming projects by the last part of their repository path lets two collide. Give each project a unique name and its own folder.
 - A lead cut off from all work is too rigid. Let it do small things and run subagents itself.
+
+## 17. Departures from the essay
+
+The owner's design is the essay [The Hive](the-hive-essay.md) (<https://ihsan.cc/writing/the-hive>, 2026-10-21); section 2's principles come from it, and it is the architecture the Hive is built against. Where the Hive departs from it today is listed here. Each is a known gap in the Hive, not a change of the essay: closing one moves the Hive toward the essay, and when a gap closes its line goes.
+
+- **Separate unix users per agent.** The essay has agents work "in separate worktrees and unix users". The Hive runs every agent as the one user, each run in its own checkout and its own sandbox (bubblewrap on Linux), which walls the Hive off from the host rather than agents off from each other (section 9, and section 14 leaves per-agent users out of v1).
+- **Harness adapters in the agents module.** The essay's agent/harness module "contains the agents deployed to The Hive, and the adapters which enable different models and harnesses to be used". The Hive's agents module holds only the orientation and the role prompts; the harness adapters (Claude Code, Codex, the open harness, the fake) are compiled into the `hive` binary in `internal/harness`, so a new harness is a release of the Hive, not a module release.
+- **Slack, phone and email.** The essay's person reaches any agent "via Slack, email, and phone calls", and lists Slack and phone modules. None of them is built; the chat module and the control center are the one channel (section 14).
+- **Library and system management modules.** The essay's library module (filing and updating documents in the web library) is not built, and the system module only keeps schedules and wake-ups, with no server-resource management or GPU dispatch (section 14).
+- **Modules owned by projects.** In the essay large modules are owned by projects that live on the Hive and release them. The default modules are kept in the Hive's own repository (`modules/`) and ship inside the `hive` binary, rather than each being its own project and repository.
+- **Small fixes merged by their worker.** In the essay "small fixes and changes ... are merged by the worker that made them". In the Hive no agent holds a credential, so every merge, small ones included, is done by the effects process once the tests pass on the exact commit (section 8).
+- **The document agents are spawned with.** The essay's agents start with a `GOALS.md` document on how the core works and where things are. The Hive's is the agents module's `orientation.md` plus the run's brief; each project's goals are in its `.hive/goals.md`.
