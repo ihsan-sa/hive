@@ -45,6 +45,9 @@ type Module struct {
 	// Diff lists the files that differ between two commits; nil is git diff
 	// in the project's clone.
 	Diff func(p core.Project, from, to string) ([]string, error)
+	// Contains says whether commit tagSHA has sha in its history; nil is
+	// git merge-base in the project's clone.
+	Contains func(p core.Project, sha, tagSHA string) (bool, error)
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
 	// said holds project@tag for each pre-release whose wait or failed
@@ -732,6 +735,9 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	list, refuse := m.merges(project, sha)
+	if refuse == "" {
+		refuse = m.tagged(p, sha)
+	}
 	if refuse != "" {
 		once(refuse)
 		return
@@ -1333,6 +1339,74 @@ func (m *Module) unbuilt(p core.Project, sha string) string {
 		m.C.J.MustAppend("release.held", map[string]string{"project": p.Name, "tag": tag, "sha": at, "why": why})
 	}
 	return tag + " has no binaries, since its " + why + ", and " + core.Short(sha) + " changes nothing that job reads. " + unbuiltSteps
+}
+
+// tagChecks is how many of the highest version tags tagged reads.
+const tagChecks = 10
+
+// tagged says why no release is cut at sha when one of the highest version
+// tags already has it in its history, whoever cut that tag: merges only
+// knows the Hive's own releases, and a tag cut by hand or a warden's step
+// at a newer commit would otherwise get a higher number carrying older code,
+// which an install following pre-releases takes as an update. A tag or
+// history that can't be read never holds the cut.
+func (m *Module) tagged(p core.Project, sha string) string {
+	tags, err := m.C.Effects.Forge.Tags(p.Repo)
+	if err != nil {
+		return ""
+	}
+	var versions []string
+	for _, t := range tags {
+		if strings.HasPrefix(t, "v") && modules.Newer("v0.0.0", t) && !slices.Contains(versions, t) {
+			versions = append(versions, t)
+		}
+	}
+	slices.SortFunc(versions, func(a, b string) int {
+		if modules.Newer(b, a) {
+			return -1
+		}
+		if modules.Newer(a, b) {
+			return 1
+		}
+		return 0
+	})
+	contains := m.Contains
+	if contains == nil {
+		contains = m.contains
+	}
+	for _, t := range versions[:min(len(versions), tagChecks)] {
+		at, err := m.C.Effects.Forge.TagCommit(p.Repo, t)
+		if err != nil || at == "" {
+			continue
+		}
+		if at == sha {
+			return t + " is already cut at it"
+		}
+		if in, err := contains(p, sha, at); err == nil && in {
+			return t + " at " + core.Short(at) + " already contains it, so a new tag would carry older code under a higher number"
+		}
+	}
+	return ""
+}
+
+// contains says whether sha is tagSHA or one of its ancestors, fetching
+// tagSHA into the project's clone when it hasn't got it.
+func (m *Module) contains(p core.Project, sha, tagSHA string) (bool, error) {
+	dir := m.C.WS.Project(p.Name)
+	full, err := core.Git(dir, "rev-parse", "--verify", sha+"^{commit}")
+	if err != nil {
+		return false, err
+	}
+	if _, err := core.Git(dir, "rev-parse", "--verify", tagSHA+"^{commit}"); err != nil {
+		if _, err := core.GitT(5*time.Minute, dir, "fetch", "-q", "--no-tags", "origin", tagSHA); err != nil {
+			return false, err
+		}
+	}
+	base, err := core.Git(dir, "merge-base", sha, tagSHA)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(base) == strings.TrimSpace(full), nil
 }
 
 // diff lists the files that differ between two commits of the project.
