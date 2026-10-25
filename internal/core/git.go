@@ -94,6 +94,9 @@ func gitOnce(timeout time.Duration, dir string, env []string, args ...string) (s
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("timed out after %s, %w", timeout, err)
+	}
 	if err != nil {
 		return strings.TrimSpace(out.String()), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}
@@ -131,9 +134,13 @@ func runCmd(timeout time.Duration, dir string, env []string, name string, args .
 	return strings.TrimSpace(out.String()), strings.TrimSpace(errb.String()), err
 }
 
-// TimedOut reports whether an error's text is a host program killed, by its
-// timeout on a loaded machine or by the kernel short of memory: the machine
-// was slow, not the step wrong.
+// TimedOut reports whether an error's text is a host program killed by its
+// own timeout (the "timed out after" runCmd and gitOnce put first): the
+// machine was slow, not the step wrong. A kill with no timeout behind it (the
+// kernel short of memory inside a step's own work) isn't one, nor is a test's
+// own "test timed out after 2s" panic.
 func TimedOut(text string) bool {
-	return strings.Contains(text, "signal: killed")
+	return timedOut.MatchString(text)
 }
+
+var timedOut = regexp.MustCompile(`timed out after [0-9][0-9.µnmsh]*, `)
