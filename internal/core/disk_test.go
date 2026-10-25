@@ -495,3 +495,23 @@ func TestRemoveCheckout(t *testing.T) {
 		t.Fatal("a checkout that's gone was removed again")
 	}
 }
+
+// The disk measurement names each part once and says where the rest is.
+func TestMeasureDiskNamesTheRest(t *testing.T) {
+	c, _ := testHive(t)
+	big := filepath.Join(c.WS.Hive(), "spill", "deep", "f")
+	os.MkdirAll(filepath.Dir(big), 0o755)
+	os.WriteFile(big, make([]byte, 1<<20), 0o644)
+	os.MkdirAll(c.WS.Runs(), 0o755)
+	os.WriteFile(filepath.Join(c.WS.Runs(), "r"), make([]byte, 4096), 0o644)
+	d := c.Effects.MeasureDisk()
+	var sum int64
+	named := map[string]int64{}
+	for _, p := range d.Parts {
+		sum += p.Bytes
+		named[p.Name] = p.Bytes
+	}
+	if named["runs"] < 4096 || named["other, most in .hive/spill"] != 1<<20 || sum > d.Total || d.Total != Size(c.WS.Root) {
+		t.Fatalf("parts %+v, total %d (walked %d)", d.Parts, d.Total, Size(c.WS.Root))
+	}
+}

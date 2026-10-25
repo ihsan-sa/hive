@@ -622,6 +622,7 @@ func (e *Effects) MeasureDisk() DiskUse {
 		at[ws.Checkouts(p.Name())] = 0
 	}
 	var total int64
+	other := map[string]int64{}
 	filepath.WalkDir(ws.Root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -635,10 +636,22 @@ func (e *Effects) MeasureDisk() DiskUse {
 		if d.Type().IsRegular() {
 			if fi, err := d.Info(); err == nil {
 				total += fi.Size()
+				other[topOf(ws.Root, p)] += fi.Size()
 			}
 		}
 		return nil
 	})
+	// What no part names is told by the biggest folder holding it, so a
+	// total far past the parts says where the rest went.
+	var top string
+	for k, n := range other {
+		if k != "" && (top == "" || n > other[top]) {
+			top = k
+		}
+	}
+	if top != "" {
+		parts = append(parts, DiskPart{Name: "other, most in " + top, Bytes: other[top]})
+	}
 	if ms, _ := filepath.Glob(filepath.Join(os.TempDir(), "hive-check-home-*")); len(ms) > 0 {
 		for _, m := range ms {
 			parts[1].Bytes += Size(m)
@@ -668,6 +681,19 @@ func (e *Effects) room() []Room {
 
 // roomOf is statRoom, swapped in tests.
 var roomOf = statRoom
+
+// topOf is the folder two levels under root that holds p ("" for a file
+// directly in root), as a slash path.
+func topOf(root, p string) string {
+	rel, err := filepath.Rel(root, filepath.Dir(p))
+	if err != nil || rel == "." {
+		return ""
+	}
+	if parts := strings.SplitN(filepath.ToSlash(rel), "/", 3); len(parts) > 2 {
+		rel = parts[0] + "/" + parts[1]
+	}
+	return filepath.ToSlash(rel)
+}
 
 // Disk is the last measurement (zero before the first).
 func (e *Effects) Disk() DiskUse {
