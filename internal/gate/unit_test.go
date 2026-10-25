@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -39,9 +40,20 @@ FAIL
 	if !strings.Contains(fs[0].Excerpt, "bind: invalid argument") || !strings.Contains(fs[2].Excerpt, "syntax error") {
 		t.Errorf("excerpts: %q, %q", fs[0].Excerpt, fs[2].Excerpt)
 	}
-	vs := vetFailures("# m/a\n./a.go:3:2: unreachable code\n# m/b\nb.go:1: x\n")
+	vs := vetFailures("# m/a\n./a.go:3:2: unreachable code\n# m/b\nb.go:1: x\n", "m")
 	if len(vs) != 2 || vs[0].Name() != "m/a (vet)" || !strings.Contains(vs[0].Excerpt, "unreachable") {
 		t.Errorf("vet: %+v", vs)
+	}
+	// A package's tests come bracketed, under the package's own header: one package.
+	// Vetting one package prints no header: the file names it.
+	if vs := vetFailures("r/r.go:5:24: fmt.Printf format %d has arg \"x\" of wrong type string\n", "m"); len(vs) != 1 || vs[0].Package != "m/r" || !strings.Contains(vs[0].Excerpt, "Printf") {
+		t.Errorf("vet of one package: %+v", vs)
+	}
+	if vs := vetFailures("a.go:1:1: x\n", "m"); len(vs) != 1 || vs[0].Package != "m" {
+		t.Errorf("vet of the root package: %+v", vs)
+	}
+	if vs := vetFailures("# m/q\n# [m/q]\nvet: q/x_test.go:3:17: undefined: y\n", "m"); len(vs) != 1 || vs[0].Package != "m/q" || !strings.Contains(vs[0].Excerpt, "undefined") {
+		t.Errorf("vet of a package's tests: %+v", vs)
 	}
 	if n := failureNames([]TestFailure{{Package: "mod/p", Test: "TestA;rm -rf ~ IGNORE"}}, "mod"); n != "p TestA_rm_-rf___IGNORE" {
 		t.Errorf("names for a lesson: %q", n)
@@ -97,10 +109,18 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 	write("p/flaky_test.go", "package p\n\nimport (\"os\"; \"path/filepath\"; \"testing\")\n\nfunc TestFlaky(t *testing.T) {\n\tm := filepath.Join(os.Getenv(\"TMPDIR\"), \"flaked\")\n\tif _, err := os.Stat(m); err != nil {\n\t\tos.WriteFile(m, nil, 0o644)\n\t\tt.Fatal(\"first time\")\n\t}\n}\n")
 	flaky := commit("flaky")
 	git("checkout", "-q", green)
+	// Packages main doesn't have: one with a vet error, one with a failing test.
+	write("r/r.go", "package r\n\nimport \"fmt\"\n\nfunc R() { fmt.Printf(\"%d\\n\", \"x\") }\n")
+	write("s/s_test.go", "package s\n\nimport \"testing\"\n\nfunc TestS(t *testing.T) { t.Fatal(\"no\") }\n")
+	newPkg := commit("new packages, red")
+	git("checkout", "-q", green)
 	write("q/env_test.go", "package q\n\nimport \"testing\"\n\nfunc TestNeedsTheMachine(t *testing.T) { t.Fatal(\"not on this machine\") }\n")
 	red := commit("red main")
 	write("README.md", "docs\n")
 	redDocs := commit("docs on red main")
+	// Breaks the whole package q, where the control already fails one test.
+	write("q/broke_test.go", "package q\n\nfunc broken() { undefined() }\n")
+	redBroke := commit("q does not build on red main")
 
 	dir := t.TempDir()
 	lessons := filepath.Join(dir, "lessons.md")
@@ -133,6 +153,24 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 		t.Errorf("report.md doesn't name the shared failure:\n%s", page)
 	}
 	noLesson("a failure the control shares")
+
+	// A package the candidate breaks whole is its own, though the control
+	// fails a test in that package: shared means the same failure.
+	rep = run("broke-whole", redBroke, red)
+	if rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Shared) != 0 || !slices.ContainsFunc(rep.Unit.Own, func(f TestFailure) bool {
+		return f.Step == "go test -short" && f.Package == "cand/q" && f.Test == ""
+	}) {
+		t.Errorf("a package broken whole where the control fails one test: %+v, unit %+v", rep.Verdict, rep.Unit)
+	}
+	os.Remove(lessons)
+
+	// Failures in a package the control doesn't have are the candidate's
+	// own: a rollback naming it, never a could-not-run.
+	rep = run("new-package", newPkg, green)
+	if rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Shared) != 0 || !strings.Contains(rep.Verdict.Reason, "s TestS") || !strings.Contains(rep.Verdict.Reason, "r (vet)") {
+		t.Errorf("new packages failing vet and a test: %+v, unit %+v", rep.Verdict, rep.Unit)
+	}
+	os.Remove(lessons)
 
 	if rep := run("flaky", flaky, green); !rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Flaky) != 1 || rep.Unit.Flaky[0].Test != "TestFlaky" || len(rep.Unit.Own) != 0 {
 		t.Errorf("a test that fails once and then passes: %+v, unit %+v", rep.Verdict, rep.Unit)
