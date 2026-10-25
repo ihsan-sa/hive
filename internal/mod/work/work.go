@@ -1297,6 +1297,9 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 	if err != nil {
 		return err
 	}
+	if pr.Number != t.PR.Number {
+		t.DraftWhy = "" // the lead held another PR, not this fresh one
+	}
 	if t.PR.Number != 0 && t.SHA != sha {
 		m.status(t, p, pr.Number, fmt.Sprintf("New commit %s after round %d.", core.Short(sha), t.Round))
 	}
@@ -2866,6 +2869,9 @@ func (m *Module) Recheck(id, back string) error {
 	}
 	if t.Stage != StageBlocked && t.Stage != StageStopped {
 		return fmt.Errorf("task %s is %s, not blocked, stopped or on its way to merge", id, t.Stage)
+	}
+	if strings.HasPrefix(t.Reason, closedByLead) {
+		return fmt.Errorf("task %s was %s and its PR is closed, so it doesn't come back; file the work again as a new brief if it is still wanted", id, core.Clip(t.Reason, 300))
 	}
 	if t.ByPerson || m.workerStopped(t) {
 		return fmt.Errorf("task %s was stopped by the person (%s); only they can bring it back", id, t.Reason)
