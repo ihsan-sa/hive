@@ -17,11 +17,17 @@ import (
 // it, whatever started that one; once that one ends, a daemon starts there.
 func TestSecondDaemonOnAWorkspaceExits(t *testing.T) {
 	if root := os.Getenv("HIVE_LOCK_HELPER"); root != "" {
-		if _, err := lockWorkspace(core.Workspace{Root: root}, 0); err != nil {
+		l, err := lockWorkspace(core.Workspace{Root: root}, 0)
+		if err != nil {
 			os.Stdout.WriteString("lock: " + err.Error() + "\n")
 			os.Exit(1)
 		}
 		os.Stdout.WriteString("locked\n")
+		if os.Getenv("HIVE_LOCK_STOPPING") != "" {
+			l.Stopping()
+			time.Sleep(time.Second)
+			os.Exit(0)
+		}
 		time.Sleep(time.Minute)
 		os.Exit(0)
 	}
@@ -59,4 +65,28 @@ func TestSecondDaemonOnAWorkspaceExits(t *testing.T) {
 		t.Fatalf("the lock outlived its daemon: %v", err)
 	}
 	l.Release()
+}
+
+// A daemon started while the one before it is still shutting down (it no
+// longer answers, but holds the workspace) waits for it instead of exiting.
+func TestDaemonWaitsOutOneShuttingDown(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	os.MkdirAll(ws.Hive(), 0o755)
+	first := exec.Command(os.Args[0], "-test.run", "^TestSecondDaemonOnAWorkspaceExits$")
+	first.Env = append(os.Environ(), "HIVE_LOCK_HELPER="+ws.Root, "HIVE_LOCK_STOPPING=1")
+	out, _ := first.StdoutPipe()
+	if err := first.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer first.Process.Kill()
+	if line, _ := bufio.NewReader(out).ReadString('\n'); line != "locked\n" {
+		t.Fatalf("the first daemon didn't take the workspace: %q", line)
+	}
+	time.Sleep(200 * time.Millisecond) // it marks itself stopping
+	l, err := takeWorkspace(ws, 0)
+	if err != nil {
+		t.Fatalf("a daemon exited while the one before it shut down: %v", err)
+	}
+	l.Release()
+	first.Wait()
 }

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,9 @@ type holder struct {
 	PID     int       `json:"pid"`
 	Started time.Time `json:"started"`
 	By      string    `json:"by"` // what started it: a systemd unit, or the parent process
+	// Stopping: it is shutting down, so a daemon starting now waits for the
+	// lock rather than exit.
+	Stopping bool `json:"stopping,omitempty"`
 }
 
 // lockFile is the daemon's exclusive lock on its workspace: one daemon runs
@@ -28,7 +32,21 @@ type holder struct {
 func lockFile(ws core.Workspace) string { return filepath.Join(ws.Private(), "daemon.lock") }
 
 // workspaceLock is a held lock; Release is safe to call more than once.
-type workspaceLock struct{ f *os.File }
+type workspaceLock struct {
+	f *os.File
+	h holder
+}
+
+// Stopping marks the holder as shutting down.
+func (l *workspaceLock) Stopping() {
+	if l == nil || l.f == nil {
+		return
+	}
+	l.h.Stopping = true
+	raw, _ := json.Marshal(l.h)
+	l.f.Truncate(0)
+	l.f.WriteAt(raw, 0)
+}
 
 func (l *workspaceLock) Release() {
 	if l != nil && l.f != nil {
@@ -85,10 +103,22 @@ func lockWorkspace(ws core.Workspace, wait time.Duration) (*workspaceLock, error
 			return nil, &AlreadyRunning{Root: ws.Root, By: h}
 		}
 	}
-	raw, _ := json.Marshal(holder{PID: os.Getpid(), Started: time.Now().UTC(), By: startedBy()})
+	h := holder{PID: os.Getpid(), Started: time.Now().UTC(), By: startedBy()}
+	raw, _ := json.Marshal(h)
 	f.Truncate(0)
 	f.WriteAt(raw, 0)
-	return &workspaceLock{f: f}, nil
+	return &workspaceLock{f: f, h: h}, nil
+}
+
+// takeWorkspace is lockWorkspace that also waits out a daemon on its way out
+// after a shutdown, still letting go of the workspace (a start right after
+// `hive stop`, or a control center's restart).
+func takeWorkspace(ws core.Workspace, wait time.Duration) (*workspaceLock, error) {
+	l, err := lockWorkspace(ws, wait)
+	if held := (*AlreadyRunning)(nil); errors.As(err, &held) && held.By.Stopping {
+		l, err = lockWorkspace(ws, 30*time.Second)
+	}
+	return l, err
 }
 
 // startedBy names what started this daemon: its parent, and the systemd

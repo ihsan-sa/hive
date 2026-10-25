@@ -179,7 +179,7 @@ func Run(ws core.Workspace, waitFor int) error {
 		// mustn't leave the Hive down, with nothing to start it again.
 		wait = 2 * time.Minute
 	}
-	lock, err := lockWorkspace(ws, wait)
+	lock, err := takeWorkspace(ws, wait)
 	if err != nil {
 		if waitFor > 0 {
 			fmt.Printf("hive: %s: the daemon an update replaced (pid %d) still held the workspace after %s more, so the Hive stays down until it is started again\n",
@@ -288,6 +288,7 @@ func Run(ws core.Workspace, waitFor int) error {
 	go func() { <-sig; cancel() }()
 	a.Run(ctx)
 	a.C.J.MustAppend("hive.stopped", map[string]string{"pid": strconv.Itoa(os.Getpid())})
+	lock.Stopping()
 	shut, done := context.WithTimeout(context.Background(), 3*time.Second)
 	defer done()
 	err = srv.Shutdown(shut)
