@@ -341,6 +341,9 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 
 func (m *Module) save(t *Task, note string) {
 	t.Updated = time.Now().UTC()
+	if t.Stage != StageMerging { // a draft's wait counts only while it stays in merging
+		t.DraftSince, t.DraftTold = time.Time{}, false
+	}
 	// Windows' clock ticks coarsely, so a save in the tick GitHub came back
 	// would read as before it and wake at once: keep it strictly after.
 	m.mu.Lock()
@@ -1848,9 +1851,6 @@ func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string) 
 }
 
 func (m *Module) merge(t *Task, p core.Project) error {
-	if closed, err := m.closedOnForge(t, p); closed || err != nil {
-		return err
-	}
 	// A draft goes through the same gate as any PR: nobody outside the Hive
 	// reads its PRs, so the merge readies it once every read cleared its head
 	// (core.Effects.Merge). One whose head moved past the commit the Hive read
@@ -1858,6 +1858,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	// counting no failure.
 	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
 	if err != nil {
+		return err
+	}
+	if closed, err := m.closedPR(t, p, pr); closed || err != nil {
 		return err
 	}
 	if pr.Draft && (pr.HeadSHA != t.SHA || t.DraftWhy != "") {
@@ -2692,6 +2695,12 @@ func (m *Module) closedOnForge(t *Task, p core.Project) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return m.closedPR(t, p, pr)
+}
+
+// closedPR is closedOnForge on a PR already read, so merge reads it once
+// for the merge or close and the draft.
+func (m *Module) closedPR(t *Task, p core.Project, pr core.PR) (bool, error) {
 	if pr.State == "MERGED" {
 		if pr.MergeSHA == "" { // the forge hasn't said where yet: look next tick
 			return true, nil

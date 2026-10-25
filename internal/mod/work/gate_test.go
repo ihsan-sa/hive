@@ -753,3 +753,24 @@ func TestClosedCheckpointNotTold(t *testing.T) {
 		}
 	}
 }
+
+// A draft closed while it waits stops as the person's call, rather than
+// waiting in merging for good; one that leaves merging drops its wait, so a
+// later draft wait starts its clock afresh.
+func TestClosedDraftStops(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	forge.SetDraft(p.Repo, task.PR.Number, true)
+	task.DraftWhy = "the lead holds it" // else the gate would ready it
+	m.settle(task, m.step(task))
+	if task.DraftSince.IsZero() {
+		t.Fatalf("not waiting: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	forge.ClosePR(p.Repo, task.PR.Number, "")
+	m.settle(task, m.step(task))
+	if task.Stage != StageStopped || !task.ByPerson || !task.DraftSince.IsZero() || task.DraftTold {
+		t.Fatalf("stage %q, by person %v, draft since %v", task.Stage, task.ByPerson, task.DraftSince)
+	}
+}

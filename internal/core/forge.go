@@ -542,8 +542,12 @@ func (p ghPR) pr() PR {
 
 const prFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,isDraft,body,mergeCommit,headRepositoryOwner"
 
+// listFields is prFields less the description: a list brings every PR on the
+// branch, and only GetPR's reader wants the body.
+const listFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,isDraft,mergeCommit,headRepositoryOwner"
+
 func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
-	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", prFields}
+	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", listFields}
 	// A fork's "owner:branch": gh matches the branch name alone, and once
 	// merged the next change needs a new pull request.
 	owner, branch, fork := strings.Cut(head, ":")
