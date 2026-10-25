@@ -377,10 +377,21 @@ func TestRecheckRetriesAStuckMerge(t *testing.T) {
 	m.mu.Lock()
 	delete(m.busy, task.ID)
 	m.mu.Unlock()
+	task.Retry = time.Now().Add(time.Hour) // backed off before the retry
+	m.save(task, "rate limited")
+	m.mu.Lock()
+	m.later[task.ID] = time.Now().Add(time.Hour)
+	m.mu.Unlock()
 	if err := m.Recheck(task.ID, "", "lead"); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := m.Get(task.ID)
+	m.mu.Lock()
+	due := m.due(got)
+	m.mu.Unlock()
+	if !due {
+		t.Fatalf("the retry still waits out the backoff from before it: retry %v", got.Retry)
+	}
 	if got.Stage != StageLanding || got.Failures+got.Round != 0 || got.Reason != "" || !logged(&got, "retried from merging") {
 		t.Fatalf("not back to landing with fresh counts: %+v", got)
 	}

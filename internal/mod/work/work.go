@@ -3254,6 +3254,7 @@ func (m *Module) Recheck(id, back, by string) error {
 		return fmt.Errorf("task %s was stopped by the person (%s); only they can bring it back", id, t.Reason)
 	}
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns = "", 0, 0, 0, 0, 0
+	m.goNow(&t)
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
 			return err
@@ -3265,6 +3266,15 @@ func (m *Module) Recheck(id, back, by string) error {
 	t.Stage = StageLanding
 	m.save(&t, "checks run again on its commits, asked by "+by)
 	return nil
+}
+
+// goNow drops a task's backoff and hold, so a retry asked for by hand runs on
+// the next tick, not after an outage's or rate limit's wait from before it.
+func (m *Module) goNow(t *Task) {
+	t.Retry = time.Time{}
+	m.mu.Lock()
+	delete(m.later, t.ID)
+	m.mu.Unlock()
 }
 
 // inFlight reports whether a task in stage is on its way from its worker's
@@ -3305,6 +3315,7 @@ func (m *Module) retryInFlight(id, back, by string) error {
 		return m.dropCheckpoint(&t, p, "the lead retried it from "+was)
 	}
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts = "", 0, 0, 0, 0
+	m.goNow(&t)
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
 			return err
