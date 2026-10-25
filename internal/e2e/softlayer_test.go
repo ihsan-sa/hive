@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,11 +66,24 @@ func TestSoftLayer(t *testing.T) {
 	if out == "" {
 		out = t.TempDir()
 	}
+	// One arm at a time by default, two at most: seven real sub-Hives side by
+	// side took the machine to a load of 600 and its memory ceiling
+	// (2026-10-25). An arm's daemon and turns are stopped when its subtest
+	// ends, before the next arm starts.
+	par := 1
+	if n, err := strconv.Atoi(os.Getenv("HIVE_SOFT_PARALLEL")); err == nil {
+		par = min(max(n, 1), 2)
+	}
+	slots := make(chan struct{}, par)
 	reps := make([]softlayer.Report, len(arms))
 	t.Run("arms", func(t *testing.T) {
 		for i, arm := range arms {
 			t.Run(arm.Name, func(t *testing.T) {
-				t.Parallel()
+				if par > 1 {
+					t.Parallel()
+				}
+				slots <- struct{}{}
+				t.Cleanup(func() { <-slots }) // first registered, so it runs after the arm's Hive is stopped
 				reps[i] = softArm(t, arm, string(essay), task, wait, filepath.Join(out, arm.Name))
 			})
 		}
@@ -94,6 +108,7 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 		if os.Getenv("HIVE_SOFT_WARDENS") != "1" {
 			c.Autonomy = 1
 		}
+		c.MaxWorkers, c.MaxChecks = 1, 1 // one worker and one check at a time
 	})
 	if err := arm.Install(h.ws.Modules(), essay); err != nil {
 		t.Fatal(err)
@@ -266,11 +281,46 @@ func seedSource(t *testing.T, h *hive, repo string) {
 	if out, err := exec.Command("tar", "-xf", tar, "-C", tmp).CombinedOutput(); err != nil {
 		t.Fatal(err, string(out))
 	}
+	if err := throttleChecks(filepath.Join(tmp, ".hive", "project.json")); err != nil {
+		t.Fatal(err)
+	}
 	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", "The Hive at " + shortSHA(strings.TrimSpace(head))}, {"push", "-q", "origin", "HEAD:main"}} {
 		if _, err := core.Git(tmp, args...); err != nil {
 			t.Fatal(err)
 		}
 	}
+}
+
+// goThrottle caps the Go toolchain's parallelism in a sub-Hive's checks: a
+// check's sandbox gets a fixed environment, so the cap goes in the command.
+// It keeps the GOFLAGS the check already has (the shared module cache's
+// -mod=readonly).
+const goThrottle = `export GOMAXPROCS=4 GOFLAGS="${GOFLAGS:+$GOFLAGS }-p=2"; `
+
+// throttleChecks puts goThrottle in front of the clone's test and score
+// commands, so the sub-Hive's own checks and score run on a few cores.
+func throttleChecks(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var p map[string]any
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return err
+	}
+	if c, ok := p["test"].(string); ok {
+		p["test"] = goThrottle + c
+	}
+	if sc, ok := p["score"].(map[string]any); ok {
+		if c, ok := sc["command"].(string); ok {
+			sc["command"] = goThrottle + c
+		}
+	}
+	out, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0o644)
 }
 
 // copyNotes copies a knowledge base's notes (its top-level .md files and

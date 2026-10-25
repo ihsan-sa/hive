@@ -1570,7 +1570,8 @@ func settle(dir, path string) {
 		if strays != nil {
 			strays(dir)
 		}
-		if os.RemoveAll(path) == nil {
+		// RemoveTree: a Go module cache's folders are read-only.
+		if core.RemoveTree(path) == nil {
 			return
 		}
 	}

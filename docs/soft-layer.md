@@ -22,13 +22,14 @@ From lots of comms (`chatty`) to none (`quiet`), and from very specific (`standa
 
 ## How an arm runs
 
-`TestSoftLayer` (`internal/e2e/softlayer_test.go`), per arm and side by side:
+`TestSoftLayer` (`internal/e2e/softlayer_test.go`), one arm at a time (`HIVE_SOFT_PARALLEL=2` for two at once, never more):
 
 1. A fresh Hive (its own workspace and local forge), its agents module replaced by the arm's (written with a source record that isn't `builtin`, so the default install never restores the standard prompts; `TestInstallSurvivesTheDefaults`).
 2. This Hive's state: its committed source as the project `hive` (with `.hive/goals.md`, `lessons.md` and `project.json`, so the same tests and score), and, with `HIVE_SOFT_KB=<kb>`, the knowledge base's notes and `practice/` (not `record/`).
-3. One real task, in the lead's chat: by default an open fix from this Hive's queue (261024-213942, the gate's unequal TMPDIRs that failed `TestMeter` on the candidate alone); `HIVE_SOFT_TASK` gives another.
+3. One real task, in the lead's chat: by default an open fix from this Hive's queue (261024-192651, issue #460: an approved warden step can say it needs longer than 10 minutes); `HIVE_SOFT_TASK` gives another. The first default, the gate's unequal TMPDIRs, landed as 4425272 before any real run.
 4. A local forge has no CI, so the test stands in for the forge checks main's `tests/LANDING-security.toml` requires (`test (ubuntu-latest)`, `sandboxed-e2e`), reporting them passed on each open PR's head. Without that, the first fake run showed, every arm waits at "waiting for the forge's checks" forever. Editing the clone's list instead breaks its own `TestRequiredChecks`, so the sub-Hive's tests would be red on main. The sub-Hive's own tests, reads and score still decide.
-5. Wait until a change lands on its main or `HIVE_SOFT_WAIT` runs out (90 minutes on a real harness), then observe.
+5. Each sub-Hive has `max_workers` 1 and `max_checks` 1, and the clone's test and score commands start with `GOMAXPROCS=4` and `GOFLAGS=-p=2` (a check's sandbox gets a fixed environment, so the cap goes in the command). The first real run, all seven arms side by side on 2026-10-25, took the machine to a load of about 600 and its 8 GB memory ceiling, and the box froze it. An arm's daemon and turns are stopped when its subtest ends, before the next arm starts; one whose daemon stops answering is reported so, with its journal and daemon log kept. The arms don't share a Go build or module cache: each check gets a home of its own and each sub-Hive its own module cache, and sharing them would take a core change; one arm at a time keeps that cost serial.
+6. Wait until a change lands on its main or `HIVE_SOFT_WAIT` runs out (90 minutes on a real harness), then observe.
 
 The test checks that every run the sub-Hive made started from the arm's orientation, and fails only if an arm can't be set up; it judges nothing. Each arm's journal, chats, runs, `main.log` and `report.json` go in `HIVE_SOFT_OUT/<arm>/`, and the table in `HIVE_SOFT_OUT/table.md`.
 
@@ -38,7 +39,7 @@ The test checks that every run the sub-Hive made started from the arm's orientat
 # the pipeline, on the fake harness (prompts don't steer the fake agent)
 HIVE_SOFT=standard,vague HIVE_SOFT_STATE=demo go test ./internal/e2e -run TestSoftLayer -v
 # the experiment: real agents, plan usage, on a host with a Claude login
-HIVE_SOFT=all HIVE_E2E_HARNESS=claude HIVE_SOFT_KB=~/hive/.hive/kb HIVE_SOFT_OUT=~/hive/.hive/soft-layer/<run> \
+HIVE_SOFT=standard,essay HIVE_E2E_HARNESS=claude HIVE_SOFT_KB=~/hive/.hive/kb HIVE_SOFT_OUT=~/hive/.hive/soft-layer/<run> \
   go test ./internal/e2e -run TestSoftLayer -timeout 3h -v
 ```
 
@@ -58,6 +59,8 @@ HIVE_SOFT=all HIVE_E2E_HARNESS=claude HIVE_SOFT_KB=~/hive/.hive/kb HIVE_SOFT_OUT
 So the standard prompts make a hub, not a hive: almost every message goes through the lead, and the "talk to each other like a hive" paragraph (204ddf0) is too new to show here. The arms test whether any wording changes that, and what it costs.
 
 ## Results
+
+**First real run (2026-10-25, 13:16Z, all seven arms side by side, from 3d2020e):** no result. Within about 35 minutes the `essay` arm's sub-Hive daemon stopped answering (connection refused), and the test then lost its record to `t.Fatal`; the machine reached a load of about 600 and its memory ceiling, and the box froze the run. Hence the shape above: one arm at a time, capped inside, starting with `standard` against `essay`.
 
 Not run on real agents yet: a sub-Hive needs the host's Claude login, which an agent's sandbox doesn't hold (`claude -p` there says "Not logged in"), so the real run goes to a warden on the host, from main once this lands (follow-up brief filed with this change).
 
