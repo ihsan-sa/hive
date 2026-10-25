@@ -186,6 +186,42 @@ func TestGateFailsOnMainOnly(t *testing.T) {
 	}
 }
 
+// A change whose every failing test main fails too is no worse than main: it
+// goes on rather than wait for main to go green, so the fix for a red main
+// (a revert, say) can land. Anything more of its own and it waits: another
+// failing test, the same test in another package, or a package failing with
+// no test named (a timeout) beside main's failure.
+func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
+	const red = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\n"
+	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": red + "exit 1\n"}
+	m, task, p, _ := gateRigSeeded(t, false, onMain, map[string]string{"feature.txt": "y"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 || strings.HasPrefix(task.Reason, "waiting on main") {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	for name, more := range map[string]string{
+		"another test":          "echo '--- FAIL: TestNew (0.01s)'\necho 'FAIL\tp/b\t0.01s'\n",
+		"another package":       "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/b\t0.01s'\n",
+		"a timeout":             "echo 'panic: test timed out after 2s'\necho 'FAIL\tp/b\t2.01s'\n",
+		"no test named":         "echo 'PASS'\necho 'FAIL\tp/b\t0.01s'\n",
+		"a panic beside a test": "echo '--- FAIL: TestClock (0.01s)'\necho 'panic: boom'\necho 'FAIL\tp/a\t0.01s'\n",
+	} {
+		script := red + more + "exit 1\n"
+		if name == "a panic beside a test" {
+			script = more + "exit 1\n"
+		}
+		m, task, p, _ := gateRigSeeded(t, false, onMain, map[string]string{"t.sh": script})
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+		if task.Stage != StageTesting || !strings.HasPrefix(task.Reason, "waiting on main") {
+			t.Fatalf("%s beside main's failure went on: stage %q, reason %q", name, task.Stage, task.Reason)
+		}
+	}
+}
+
 // Main's failure is raised once per main commit, even when main moves away
 // and back (A -> B -> A) and no task still names A.
 func TestGateMainRedOncePerCommit(t *testing.T) {

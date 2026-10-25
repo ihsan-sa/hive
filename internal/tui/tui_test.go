@@ -1219,3 +1219,21 @@ func TestWaitingDraftSaysWhoseRead(t *testing.T) {
 		t.Fatalf("the line doesn't say whose read: %q", line)
 	}
 }
+
+// The dashboard shows the newest measured size and how it moved since the
+// measure before, skipping measures with none.
+func TestSizeLine(t *testing.T) {
+	ms := []improve.Measurement{
+		{Size: map[string]float64{"core_lines": 13800, "binary_bytes": 21e6}},
+		{},
+		{Size: map[string]float64{"core_lines": 13874, "binary_bytes": 21e6, "go_lines": 40000}},
+		{},
+	}
+	got := ansi.Strip(sizeLine(ms))
+	if want := "size  core 13874 lines (+74)  binary 21.0 MB  go_lines 40000"; got != want {
+		t.Fatalf("sizeLine = %q, want %q", got, want)
+	}
+	if sizeLine([]improve.Measurement{{}}) != "" {
+		t.Fatal("no size measured should show no line")
+	}
+}

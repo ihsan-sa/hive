@@ -4,7 +4,7 @@ The Hive is a small team of AI agents that lives in one folder on your computer 
 
 ![The Hive's parts](arch.svg)
 
-The diagram is drawn from [arch.json](arch.json). To change it, edit that file and run `go test ./docs -run TestArch -update`; the same test fails if the two drift apart.
+The diagram is drawn from [arch.json](arch.json). To change it, edit that file and run `go test ./docs -run TestArch -update`; the same test fails if the two drift apart. Every sandbox in it, agents' and tests', reaches the network only through the proxy; the arrow is drawn from the lead for room.
 
 ## Its parts
 
@@ -59,6 +59,8 @@ The installer downloads the release binary for your platform from GitHub, checks
 More: [risk.md](risk.md) (tiers, warden, tribunal, egress), [architecture.md](architecture.md) (packages, folders, the path from ask to merge).
 
 ## Not here yet
+
+These repeat [status.md](status.md); when it changes, this list changes with it.
 
 - Slack, mail or phone out of the box (a module could add them), other people's workspaces on the same machine, a separate system user per agent, and sharing a GPU.
 - The macOS sandbox hasn't been tested, and Codex hasn't run with a real login.

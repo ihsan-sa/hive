@@ -824,3 +824,47 @@ func TestQueueNowPastOverlap(t *testing.T) {
 		t.Fatalf("now went past max_workers: %q", wait[fix.ID])
 	}
 }
+
+// A PR merged on the forge outside the Hive (by the person, or the lead
+// through gh) while forgeChecks holds it on a check main fails too ends as
+// merged at the forge's merge commit, as the Hive's own merge does: the chat
+// hears, OnMerged runs, and the brief queued behind it starts.
+func TestMergedOnForgeWhileHeld(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	task.Chat = m.Chat.EnsureProject("p").ID
+	m.save(task, "")
+	var merged []Task
+	m.OnMerged = func(t Task) { merged = append(merged, t) }
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPending})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.Reason == "" || len(merged) != 0 {
+		t.Fatalf("not held: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	waiting := file(t, m, "tune the feature", "See feature.txt.")
+	waiting.Stage = StageQueued
+	m.save(&waiting, "")
+
+	sha, err := f.MergePR(p.Repo, task.PR.Number, task.SHA, "work") // by hand, on the forge
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.step(task); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageMerged || task.MergeSHA != sha || task.Reason != "" || len(merged) != 1 || merged[0].MergeSHA != sha ||
+		!logged(task, "merged on the forge outside the Hive") {
+		t.Fatalf("stage %q, merge %q (want %s), reason %q, OnMerged %d, log %v", task.Stage, task.MergeSHA, sha, task.Reason, len(merged), task.Log)
+	}
+	if msgs := m.Chat.Messages("project:p"); len(msgs) == 0 || msgs[len(msgs)-1].Text != "Merged: work "+task.PR.URL {
+		t.Fatalf("chat %v", msgs)
+	}
+	if err := m.step(task); err != nil || task.Stage != StageDone {
+		t.Fatalf("stage %q: %v", task.Stage, err)
+	}
+	if start, _ := m.admit(m.List(nil)); !start[waiting.ID] {
+		t.Fatal("the brief behind it didn't start")
+	}
+}

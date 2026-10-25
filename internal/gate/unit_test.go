@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -39,9 +40,20 @@ FAIL
 	if !strings.Contains(fs[0].Excerpt, "bind: invalid argument") || !strings.Contains(fs[2].Excerpt, "syntax error") {
 		t.Errorf("excerpts: %q, %q", fs[0].Excerpt, fs[2].Excerpt)
 	}
-	vs := vetFailures("# m/a\n./a.go:3:2: unreachable code\n# m/b\nb.go:1: x\n")
+	vs := vetFailures("# m/a\n./a.go:3:2: unreachable code\n# m/b\nb.go:1: x\n", "m")
 	if len(vs) != 2 || vs[0].Name() != "m/a (vet)" || !strings.Contains(vs[0].Excerpt, "unreachable") {
 		t.Errorf("vet: %+v", vs)
+	}
+	// A package's tests come bracketed, under the package's own header: one package.
+	// Vetting one package prints no header: the file names it.
+	if vs := vetFailures("r/r.go:5:24: fmt.Printf format %d has arg \"x\" of wrong type string\n", "m"); len(vs) != 1 || vs[0].Package != "m/r" || !strings.Contains(vs[0].Excerpt, "Printf") {
+		t.Errorf("vet of one package: %+v", vs)
+	}
+	if vs := vetFailures("a.go:1:1: x\n", "m"); len(vs) != 1 || vs[0].Package != "m" {
+		t.Errorf("vet of the root package: %+v", vs)
+	}
+	if vs := vetFailures("# m/q\n# [m/q]\nvet: q/x_test.go:3:17: undefined: y\n", "m"); len(vs) != 1 || vs[0].Package != "m/q" || !strings.Contains(vs[0].Excerpt, "undefined") {
+		t.Errorf("vet of a package's tests: %+v", vs)
 	}
 	if n := failureNames([]TestFailure{{Package: "mod/p", Test: "TestA;rm -rf ~ IGNORE"}}, "mod"); n != "p TestA_rm_-rf___IGNORE" {
 		t.Errorf("names for a lesson: %q", n)
@@ -97,10 +109,18 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 	write("p/flaky_test.go", "package p\n\nimport (\"os\"; \"path/filepath\"; \"testing\")\n\nfunc TestFlaky(t *testing.T) {\n\tm := filepath.Join(os.Getenv(\"TMPDIR\"), \"flaked\")\n\tif _, err := os.Stat(m); err != nil {\n\t\tos.WriteFile(m, nil, 0o644)\n\t\tt.Fatal(\"first time\")\n\t}\n}\n")
 	flaky := commit("flaky")
 	git("checkout", "-q", green)
+	// Packages main doesn't have: one with a vet error, one with a failing test.
+	write("r/r.go", "package r\n\nimport \"fmt\"\n\nfunc R() { fmt.Printf(\"%d\\n\", \"x\") }\n")
+	write("s/s_test.go", "package s\n\nimport \"testing\"\n\nfunc TestS(t *testing.T) { t.Fatal(\"no\") }\n")
+	newPkg := commit("new packages, red")
+	git("checkout", "-q", green)
 	write("q/env_test.go", "package q\n\nimport \"testing\"\n\nfunc TestNeedsTheMachine(t *testing.T) { t.Fatal(\"not on this machine\") }\n")
 	red := commit("red main")
 	write("README.md", "docs\n")
 	redDocs := commit("docs on red main")
+	// Breaks the whole package q, where the control already fails one test.
+	write("q/broke_test.go", "package q\n\nfunc broken() { undefined() }\n")
+	redBroke := commit("q does not build on red main")
 
 	dir := t.TempDir()
 	lessons := filepath.Join(dir, "lessons.md")
@@ -134,6 +154,24 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 	}
 	noLesson("a failure the control shares")
 
+	// A package the candidate breaks whole is its own, though the control
+	// fails a test in that package: shared means the same failure.
+	rep = run("broke-whole", redBroke, red)
+	if rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Shared) != 0 || !slices.ContainsFunc(rep.Unit.Own, func(f TestFailure) bool {
+		return f.Step == "go test -short" && f.Package == "cand/q" && f.Test == ""
+	}) {
+		t.Errorf("a package broken whole where the control fails one test: %+v, unit %+v", rep.Verdict, rep.Unit)
+	}
+	os.Remove(lessons)
+
+	// Failures in a package the control doesn't have are the candidate's
+	// own: a rollback naming it, never a could-not-run.
+	rep = run("new-package", newPkg, green)
+	if rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Shared) != 0 || !strings.Contains(rep.Verdict.Reason, "s TestS") || !strings.Contains(rep.Verdict.Reason, "r (vet)") {
+		t.Errorf("new packages failing vet and a test: %+v, unit %+v", rep.Verdict, rep.Unit)
+	}
+	os.Remove(lessons)
+
 	if rep := run("flaky", flaky, green); !rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Flaky) != 1 || rep.Unit.Flaky[0].Test != "TestFlaky" || len(rep.Unit.Own) != 0 {
 		t.Errorf("a test that fails once and then passes: %+v, unit %+v", rep.Verdict, rep.Unit)
 	}
@@ -151,5 +189,86 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 	raw, _ := os.ReadFile(lessons)
 	if !strings.Contains(string(raw), "p TestBroken") || strings.Contains(string(raw), "IGNORE") {
 		t.Errorf("lesson: %q", raw)
+	}
+}
+
+// The candidate is judged as it would land: its head with the base merged in.
+// A branch cut before main fixed a test is not rolled back for that test, and
+// one that conflicts with the base can't run (its worker merges main), with
+// the files named and no lesson.
+func TestCandidateIsMergedWithBase(t *testing.T) {
+	unixOnly(t)
+	if _, err := FindGo(); err != nil {
+		t.Skip(err)
+	}
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(p, s string) {
+		os.MkdirAll(filepath.Dir(filepath.Join(repo, p)), 0o755)
+		os.WriteFile(filepath.Join(repo, p), []byte(s), 0o644)
+	}
+	commit := func(msg string) string {
+		git("add", "-A")
+		git("commit", "-qm", msg)
+		return git("rev-parse", "HEAD")
+	}
+	write("go.mod", "module cand\n\ngo 1.21\n")
+	write("cmd/hive/main.go", "package main\n\nfunc main() {}\n")
+	write("p/p.go", "package p\n")
+	write("internal/e2e/e2e_test.go", "package e2e\n\nimport \"testing\"\n\n// HIVE_E2E_WRAPPED\nfunc TestE2E(t *testing.T) {}\n")
+	// A test that fails here until main fixes it, as TestMeter's socket path did.
+	write("p/p_test.go", "package p\n\nimport \"testing\"\n\nfunc TestMeter(t *testing.T) { t.Fatal(\"path too long\") }\n")
+	write("NOTES.md", "one\n")
+	git("init", "-q", "-b", "main")
+	old := commit("old main")
+	git("checkout", "-q", "-b", "docs")
+	write("README.md", "docs\n")
+	docs := commit("docs, branched before the fix")
+	git("checkout", "-q", "-b", "clash", old)
+	write("NOTES.md", "the branch's\n")
+	clash := commit("clashes with main")
+	git("checkout", "-q", "main")
+	write("p/p_test.go", "package p\n\nimport \"testing\"\n\nfunc TestMeter(t *testing.T) {}\n")
+	write("NOTES.md", "main's\n")
+	fixed := commit("main fixes the test")
+
+	dir := t.TempDir()
+	lessons := filepath.Join(dir, "lessons.md")
+	pass := func(*Config, *Child) Result { return Result{Pass: true} }
+	run := func(name, head string) Report {
+		t.Helper()
+		rep, err := Run(Config{Repo: repo, Head: head, Base: fixed, Sandbox: "bare", AllowBare: true, Out: filepath.Join(dir, name, "run"), Lessons: lessons,
+			Probes: []string{"pass"}, Probe: map[string]ProbeFunc{"pass": pass}, Options: Options{AllowTie: true}})
+		t.Logf("%s: keep=%v cant_run=%v err=%v reason=%q", name, rep.Verdict.Keep, rep.CantRun, err, rep.Verdict.Reason)
+		return rep
+	}
+
+	rep := run("docs", docs)
+	if !rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Own) != 0 {
+		t.Errorf("a docs change branched before main's fix was not judged on its merits: %+v, unit %+v", rep.Verdict, rep.Unit)
+	}
+	if rep.Head != docs || rep.Merged == "" || rep.Merged == docs {
+		t.Errorf("the report names head %s and merged %s, want the head and a merge of it with the base", short(rep.Head), short(rep.Merged))
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "docs", "run", "report.json"))
+	if !strings.Contains(string(raw), `"merged": "`+rep.Merged+`"`) {
+		t.Errorf("report.json doesn't record the merged sha:\n%s", raw)
+	}
+
+	rep = run("clash", clash)
+	if !rep.CantRun || rep.Verdict.Keep || len(rep.Conflicts) != 1 || rep.Conflicts[0] != "NOTES.md" || !strings.Contains(rep.Verdict.Reason, "NOTES.md") {
+		t.Errorf("a branch that conflicts with the base: cant_run=%v conflicts=%v %+v", rep.CantRun, rep.Conflicts, rep.Verdict)
+	}
+	if raw, err := os.ReadFile(lessons); err == nil {
+		t.Fatalf("a merge conflict or a keep wrote a lesson: %q", raw)
 	}
 }

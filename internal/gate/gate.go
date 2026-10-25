@@ -51,6 +51,7 @@ const MaxDepth = 2
 type Report struct {
 	ID          string     `json:"id"`
 	Head        string     `json:"head"`
+	Merged      string     `json:"merged,omitempty"` // what the candidate was built from: Head with Base merged in (Head itself when it already holds Base)
 	Base        string     `json:"base"`
 	Sandbox     string     `json:"sandbox"`
 	Started     time.Time  `json:"started"`
@@ -65,10 +66,12 @@ type Report struct {
 	CandBin     string     `json:"candidate_bin,omitempty"`     // the verified copy of the candidate's binary
 	CandSHA256  string     `json:"candidate_sha256,omitempty"`  // its hash, taken right after the build
 	CantRun     bool       `json:"cant_run,omitempty"`          // the gate could not run or measure: neither a keep nor the candidate's rollback
+	Conflicts   []string   `json:"conflicts,omitempty"`         // the files where Head and Base conflict: cant_run, and the worker merges main
 	CandVersion string     `json:"candidate_version,omitempty"` // what its --version must say: the gate stamps it at build time
 	Unit        UnitReport `json:"unit"`                        // the vet and short-test step, each side's failures named
 	Fixes       FixReport  `json:"fixes"`                       // the candidate's own new tests, run on both sides
 	Transient   bool       `json:"transient,omitempty"`         // could not run for a cause that may pass (load, a flake on both sides): try again soon
+	Alone       bool       `json:"alone,omitempty"`             // could not run for a cause tied to this candidate alone (preparing its build, the run's clock): another change at this base would not hit it
 	Sig         string     `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
 }
 
@@ -128,7 +131,13 @@ func Run(cfg Config) (rep Report, err error) {
 		}
 		rep.Seconds = time.Since(t0).Seconds()
 		var fault *candidateFault
+		var conflict *mergeConflict
 		switch {
+		case errors.As(err, &conflict):
+			// The change can't land as it stands: its worker merges main, and
+			// nothing was measured, so it is no rollback and no lesson.
+			rep.Error, rep.CantRun, rep.Alone, rep.Conflicts = err.Error(), true, true, conflict.files
+			rep.Verdict = Verdict{Reason: err.Error()}
 		case errors.As(err, &fault):
 			// The candidate itself failed before it could be measured: a rollback.
 			rep.Error = err.Error()
@@ -139,6 +148,7 @@ func Run(cfg Config) (rep Report, err error) {
 			// is not the candidate's failure and no lesson is written.
 			rep.Error, rep.CantRun = err.Error(), true
 			rep.Transient = errors.As(err, new(transient))
+			rep.Alone = errors.As(err, new(alone))
 			rep.Verdict = Verdict{Reason: "the gate could not run: " + err.Error()}
 		case !rep.Verdict.Keep && len(rep.Verdict.Regressions) == 0 && len(rep.Verdict.Unmeasured) > 0:
 			rep.CantRun = true // a probe failed on both sides: that path was never measured
@@ -195,20 +205,35 @@ func Run(cfg Config) (rep Report, err error) {
 	var built []*Child
 	buildErrs := map[*Child]error{}
 	for _, c := range []*Child{cand, ctrl} {
-		sha := cfg.Head
+		sha, merge := cfg.Head, cfg.Base // the candidate as it would land: its head with the base merged in
 		if c == ctrl {
-			sha = cfg.Base
+			sha, merge = cfg.Base, ""
 		}
 		if err = c.Prepare(); err != nil {
 			return rep, err
 		}
 		if c.Bin == "" {
 			cfg.log("building %s at %s", c.Name, short(sha))
-			if e := build(cfg, c, sha); e != nil {
+			e := build(cfg, c, sha, merge)
+			if c == cand && c.Commit != "" {
+				rep.Merged = c.Commit
+				if c.Commit != sha {
+					cfg.log("  with %s merged in, at %s", short(merge), short(c.Commit))
+				}
+			}
+			if e != nil {
 				var own *ownFailure
+				var conflict *mergeConflict
+				if errors.As(e, &conflict) {
+					return rep, e
+				}
 				if !errors.As(e, &own) {
 					// The gate's own step (the clone, the module download): could not run.
-					return rep, fmt.Errorf("preparing %s's build: %v", c.Name, e)
+					err = fmt.Errorf("preparing %s's build: %v", c.Name, e)
+					if c == cand {
+						err = alone{err} // its own go.mod, its own sha: another change may fare otherwise
+					}
+					return rep, err
 				}
 				buildErrs[c] = e
 				continue
@@ -340,7 +365,11 @@ func Run(cfg Config) (rep Report, err error) {
 				out *[]Result
 			}{{cand, &rep.Candidate}, {ctrl, &rep.Control}} {
 				if time.Now().After(deadline) {
-					return rep, fmt.Errorf("out of time (%s) before %s's %s", cfg.Timeout, side.c.Name, name)
+					err = fmt.Errorf("out of time (%s) before %s's %s", cfg.Timeout, side.c.Name, name)
+					if slowerAlone(rep.Candidate, rep.Control) {
+						err = alone{err} // the candidate took the time; on a slow machine both would
+					}
+					return rep, err
 				}
 				cfg.log("rep %d: %s on %s", rep0+1, name, side.c.Name)
 				start, spent := time.Now(), side.c.Meter.Bytes()
@@ -370,6 +399,19 @@ func Run(cfg Config) (rep Report, err error) {
 		rep.Verdict.Reason += "; failing on both sides, so the environment's and not counted: " + failureNames(rep.Unit.Shared, modulePath(cand.Src))
 	}
 	return rep, nil
+}
+
+// slowerAlone says the candidate took more time than the control over the
+// probes both ran. The candidate goes first, so it may have run one more;
+// that one is left out, or a machine slow for both would blame it.
+func slowerAlone(cand, ctrl []Result) bool {
+	n := min(len(cand), len(ctrl))
+	var c, k float64
+	for i := 0; i < n; i++ {
+		c += cand[i].Seconds
+		k += ctrl[i].Seconds
+	}
+	return c > k
 }
 
 func hasMetric(r Result, name string) bool {
@@ -437,14 +479,15 @@ func pickSandbox(cfg Config) (string, error) {
 	return "bare", nil
 }
 
-// build clones the repository clean, checks out exactly sha and builds the
-// binary, stamped with the commit's version, into a folder the child can
-// write only while it builds. Nothing of the side's own code has run yet.
-func build(cfg Config, c *Child, sha string) error {
+// build clones the repository clean, checks out exactly sha (with merge
+// merged in, if given) and builds the binary, stamped with sha's version,
+// into a folder the child can write only while it builds. Nothing of the
+// side's own code has run yet.
+func build(cfg Config, c *Child, sha, merge string) error {
 	if sha == "" {
 		return fmt.Errorf("no commit given")
 	}
-	if err := checkout(cfg, c, sha); err != nil {
+	if err := checkout(cfg, c, sha, merge); err != nil {
 		return err
 	}
 	if err := c.Prepare(); err != nil {
@@ -513,8 +556,11 @@ func gitRun(dir string, name string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// checkout clones the repository clean into c.Src at exactly sha.
-func checkout(cfg Config, c *Child, sha string) error {
+// checkout clones the repository clean into c.Src at exactly sha, then
+// merges merge into it when sha lacks it: the change as it would land, so a
+// bug the base has since fixed is not counted against it. A merge that
+// conflicts is a *mergeConflict. c.Commit is where the tree ends up.
+func checkout(cfg Config, c *Child, sha, merge string) error {
 	c.Src = filepath.Join(cfg.Out, "src-"+c.Name)
 	run := func(dir, name string, args ...string) (string, error) { return gitRun(dir, name, args...) }
 	if out, err := run("", "git", "clone", "-q", "--no-checkout", cfg.Repo, c.Src); err != nil {
@@ -530,7 +576,42 @@ func checkout(cfg Config, c *Child, sha string) error {
 	if st, _ := run(c.Src, "git", "status", "--porcelain"); strings.TrimSpace(st) != "" {
 		return fmt.Errorf("checkout is not clean: %s", tail(st, 200))
 	}
+	c.Commit = got
+	if merge == "" {
+		return nil
+	}
+	if _, err := run(c.Src, "git", "merge-base", "--is-ancestor", merge, "HEAD"); err == nil {
+		return nil // the head already holds the base
+	}
+	// No hooks, a fixed identity: the merge runs nothing of either side's.
+	out, err := run(c.Src, "git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=hive gate", "-c", "user.email=gate@hive.invalid",
+		"merge", "-q", "--no-edit", "--no-ff", "-m", "gate: merge "+short(merge)+" into "+short(sha), merge)
+	if err != nil {
+		files, _ := run(c.Src, "git", "diff", "--name-only", "--diff-filter=U")
+		run(c.Src, "git", "merge", "--abort")
+		if fs := strings.Fields(files); len(fs) > 0 {
+			return &mergeConflict{base: merge, files: fs}
+		}
+		return fmt.Errorf("merging %s into %s: %v: %s", short(merge), short(sha), err, tail(out, 300))
+	}
+	got, _ = run(c.Src, "git", "rev-parse", "HEAD")
+	c.Commit = strings.TrimSpace(got)
+	if st, _ := run(c.Src, "git", "status", "--porcelain"); strings.TrimSpace(st) != "" {
+		return fmt.Errorf("the merge is not clean: %s", tail(st, 200))
+	}
 	return nil
+}
+
+// mergeConflict is the candidate's head conflicting with the base it is
+// judged against: the gate can't build the change as it would land, and its
+// worker merges main. Not a rollback.
+type mergeConflict struct {
+	base  string
+	files []string
+}
+
+func (m *mergeConflict) Error() string {
+	return fmt.Sprintf("the candidate conflicts with the base %s in %s: its branch needs main merged in", short(m.base), strings.Join(m.files, ", "))
 }
 
 // write saves the report as JSON and as a page, and adds a line to the log of
@@ -559,6 +640,9 @@ func (r Report) Markdown() string {
 	cand := short(r.Head)
 	if cand == "" {
 		cand = "prebuilt"
+	}
+	if r.Merged != "" && r.Merged != r.Head {
+		cand += " merged with " + short(r.Base) + " at " + short(r.Merged)
 	}
 	if r.CandVersion != "" {
 		cand += " (" + r.CandVersion + ")"
@@ -590,6 +674,9 @@ func (r Report) Markdown() string {
 			}
 			fmt.Fprintf(&b, "| %s | %d | %v | %.1f | %s | %s |\n", x.Probe, x.Rep, x.Pass, x.Seconds, strings.Join(ms, " "), strings.ReplaceAll(tail(x.Detail, 120), "\n", " "))
 		}
+	}
+	for _, f := range r.Conflicts {
+		fmt.Fprintf(&b, "- conflicts: %s\n", f)
 	}
 	if r.Error != "" && len(r.Unit.Candidate)+len(r.Unit.Control) == 0 {
 		fmt.Fprintf(&b, "\n%s\n", fenced(tail(r.Error, 3000)))
@@ -627,6 +714,14 @@ func whose(cand, ctrl *Child, errs map[*Child]error, why string) error {
 	}
 	return nil
 }
+
+// alone is a could-not-run tied to this candidate (preparing its own build,
+// the run's clock): no verdict on it, but no reason for another change at
+// the same base to wait either.
+type alone struct{ err error }
+
+func (a alone) Error() string { return a.err.Error() }
+func (a alone) Unwrap() error { return a.err }
 
 // candidateFault is a failure of the candidate itself before it was
 // measured (it does not build, fails its own checks, rewrote its binary):
