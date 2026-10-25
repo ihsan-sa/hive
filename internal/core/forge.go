@@ -99,6 +99,9 @@ type Forge interface {
 	// jobs of a pre-release's gates pass.
 	Releases(repo string) ([]Release, error)
 	RunJobs(repo string, run int64) ([]WorkflowJob, error)
+	// File is one file on repo's default branch; ErrNotFound when it has
+	// none (the release repository's steward record).
+	File(repo, path string) (string, error)
 }
 
 // CheckRun is one of the forge's own checks on a commit, such as a CI job.
@@ -671,11 +674,27 @@ func (GitHub) SetDraft(repo string, number int, draft bool) error {
 }
 
 func (GitHub) DeleteBranch(repo, branch string) error {
+	if err := HiveBranch(branch); err != nil {
+		return err
+	}
 	_, err := gh(repo, "api", "-X", "DELETE", "repos/"+repo+"/git/refs/heads/"+branch)
 	if err != nil && strings.Contains(err.Error(), "Reference does not exist") {
 		return nil
 	}
 	return err
+}
+
+// hiveBranchName is what a branch the Hive made looks like: hive/ and then
+// plain path segments.
+var hiveBranchName = regexp.MustCompile(`^hive/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$`)
+
+// HiveBranch refuses a branch name that isn't plainly one of the Hive's own,
+// so a forge never deletes another branch or builds an odd API path from it.
+func HiveBranch(branch string) error {
+	if !hiveBranchName.MatchString(branch) || strings.Contains(branch, "..") || strings.HasSuffix(branch, ".lock") {
+		return fmt.Errorf("branch %q isn't one of the Hive's own (hive/...)", branch)
+	}
+	return nil
 }
 
 func (GitHub) CloseIssue(repo string, number int) error {
@@ -968,6 +987,14 @@ func (GitHub) ReleaseRuns(repo, sha string) ([]WorkflowRun, error) {
 	}
 	var runs []WorkflowRun
 	return runs, json.Unmarshal([]byte(out), &runs)
+}
+
+func (GitHub) File(repo, path string) (string, error) {
+	out, err := gh(repo, "api", "repos/"+repo+"/contents/"+path, "-H", "Accept: application/vnd.github.raw")
+	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+		return "", ErrNotFound
+	}
+	return out, err
 }
 
 func (GitHub) Releases(repo string) ([]Release, error) {

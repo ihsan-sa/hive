@@ -7,5 +7,5 @@ import "embed"
 
 // FS is the default modules' files.
 //
-//go:embed agents chat kb improve system
+//go:embed agents chat kb improve system workers
 var FS embed.FS

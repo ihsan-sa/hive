@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -129,7 +130,50 @@ func (t *Tokens) AgentEnv(l Login, home string) ([]string, error) {
 		}
 		return []string{"CLAUDE_CODE_OAUTH_TOKEN=" + tok}, nil
 	}
+	if h, err := harness.Get(l.Harness); err == nil {
+		if s, ok := h.(*harness.Spec); ok {
+			return t.ws.specEnv(s)
+		}
+	}
 	return nil, errors.New("no token source for harness " + l.Harness)
+}
+
+// ErrNoKey means a module's harness needs an API key in a sandbox and the
+// person stored none; a bare run uses the harness's own login on the host.
+var ErrNoKey = errors.New("no API key stored")
+
+// HarnessKey is where the API key of a module's harness is kept: under
+// .hive/logins, which no run sees.
+func (w Workspace) HarnessKey(h string) string {
+	return filepath.Join(w.LoginsDir(h), "key")
+}
+
+// SaveHarnessKey stores a module harness's API key, readable only by the person.
+func (w Workspace) SaveHarnessKey(h, key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" || strings.ContainsAny(key, "\r\n") {
+		return errors.New("a key is one non-empty line")
+	}
+	if err := os.MkdirAll(w.LoginsDir(h), 0o700); err != nil {
+		return err
+	}
+	return WriteFileAtomic(w.HarnessKey(h), []byte(key+"\n"), 0o600)
+}
+
+// specEnv hands a module's harness its stored key in the variable its spec
+// names, as Claude Code gets its token.
+func (w Workspace) specEnv(s *harness.Spec) ([]string, error) {
+	if s.KeyEnv == "" {
+		return nil, nil
+	}
+	raw, err := os.ReadFile(w.HarnessKey(s.Name()))
+	if k := strings.TrimSpace(string(raw)); err == nil && k != "" {
+		return []string{s.KeyEnv + "=" + k}, nil
+	}
+	if s.KeyOptional {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("%w for the %s harness: the person stores one with `%s harness key %s`, or runs bare on its own login", ErrNoKey, s.Name(), Cmd, s.Name())
 }
 
 type claudeCreds struct {
