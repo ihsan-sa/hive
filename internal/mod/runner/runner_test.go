@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
@@ -170,5 +171,25 @@ func TestReviewThatCannotBeRecorded(t *testing.T) {
 	}
 	if n := r.count("alert.raised") + r.count("module.reviewed"); n != 0 {
 		t.Fatalf("%d events for a vote that was never recorded", n)
+	}
+}
+
+// A program that isn't on the PATH raises one alert saying so, not one per
+// try, and is tried again only hourly.
+func TestMissingProgramAlertsOnce(t *testing.T) {
+	r, m, _ := newRunner(t, "door")
+	m.Exec = []string{"hive-no-such-program-xyz"}
+	for range 3 {
+		c := &child{commit: "local", wait: time.Second}
+		r.start("door", c, m)
+		if time.Until(c.next) < 50*time.Minute {
+			t.Fatalf("tried again in %s", time.Until(c.next))
+		}
+	}
+	if n := r.count("alert.raised"); n != 1 {
+		t.Fatalf("%d alerts, want 1", n)
+	}
+	if !strings.HasPrefix(r.Status("door"), "could not start") {
+		t.Fatalf("status %q", r.Status("door"))
 	}
 }

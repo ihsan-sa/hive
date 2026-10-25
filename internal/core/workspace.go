@@ -105,6 +105,10 @@ type Config struct {
 	BareAccepted string `json:"bare_accepted,omitempty"` // timestamp the warning was read
 	WSLDistro    string `json:"wsl_distro,omitempty"`
 	ReleaseRepo  string `json:"release_repo"`
+	// SelfFork is the owner (an organization) whose fork of release_repo this
+	// Hive works on itself in, when the person owns release_repo but another
+	// of their Hives is its steward (core.StewardFile).
+	SelfFork string `json:"self_fork,omitempty"`
 	// PublicOwners are the accounts or organizations where create_project
 	// may make a public repository and tell the person after; a public one
 	// anywhere else waits for their yes.
@@ -132,15 +136,17 @@ type Config struct {
 	MemFloorMB     int     `json:"mem_floor_mb"`
 	MemPressureMax float64 `json:"mem_pressure_max"`
 	CPUPressureMax float64 `json:"cpu_pressure_max"`
-	// MaxWorkers is how many workers may work at once: a plan carries only so
-	// many, so until its usage reading is trusted this number is the limit.
-	// Briefs past it wait in the queue, in order; 0 is no limit.
+	// MaxWorkers is the most workers that may work at once, the person's
+	// ceiling: below it the work module's pace sets the limit from what the
+	// machine and the plan carry (internal/mod/work/pace.go). Briefs past the
+	// limit wait in the queue, in order; 0 is no ceiling.
 	MaxWorkers int `json:"max_workers"`
 	// LoadMax holds new workers while the machine's 1-minute load per core is
 	// over it (Linux /proc/loadavg); 0 is off.
 	LoadMax float64 `json:"load_max"`
-	// MaxChecks is how many checks (the gate's tests, scores and dry runs,
-	// improve's measures) run at once; the rest wait in order. 0 is no limit.
+	// MaxChecks is the most checks (the gate's tests, scores and dry runs,
+	// improve's measures) that run at once, a ceiling over the pace as
+	// MaxWorkers is; the rest wait in order. 0 is no ceiling.
 	MaxChecks int `json:"max_checks"`
 	// CheckCacheMaxMB caps one check's own home (its build cache and
 	// scratch): past it the check is ended as can't-run; 0 is the default
@@ -327,9 +333,7 @@ func DefaultConfig() Config {
 		MemFloorMB:      1024,
 		MemPressureMax:  10,
 		CPUPressureMax:  40,
-		MaxWorkers:      4,
 		LoadMax:         1,
-		MaxChecks:       DefaultMaxChecks(),
 		PlateauMerges:   3,
 		Schedules: map[string]string{
 			"improve.sweep":    "every 12h",
@@ -357,6 +361,7 @@ func (w Workspace) LoadConfig() Config {
 // ReadConfig is LoadConfig with what's wrong in config.json: a value it
 // couldn't read (every field that did read is kept) or a setting Check refuses.
 func (w Workspace) ReadConfig() (Config, error) {
+	harness.UseModules(w.Modules()) // the harnesses its modules declare are among those Check knows
 	cfgMu.Lock()
 	defer cfgMu.Unlock()
 	c := DefaultConfig()
