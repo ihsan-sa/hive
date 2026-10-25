@@ -44,10 +44,28 @@ func (w Workspace) Gates() string              { return filepath.Join(w.Hive(), 
 // made or a file renamed in it mid-turn is covered too.
 func (w Workspace) Private() string { return filepath.Join(w.Hive(), "private") }
 
+// Covered is the folders covered wherever agents read .hive: the login pool's
+// stored logins, module programs' homes and logs, and Private. No host
+// interpreter's install bound into a sandbox may hold one or sit inside one.
+// The paths are absolute, so a relative root still guards them.
+func (w Workspace) Covered() []string {
+	hive := filepath.Join(w.abs(), ".hive")
+	return []string{filepath.Join(hive, "logins"), filepath.Join(hive, "modules"), filepath.Join(hive, "private")}
+}
+
 // Guarded is what no host interpreter's install bound into a sandbox may
-// contain: the workspace and the folders covered wherever agents read .hive.
+// hold: the workspace and the folders covered in it. The covered folders are
+// listed as well as the root because any of them may be a symlink out of the
+// workspace, and then holding the root says nothing about them.
 func (w Workspace) Guarded() []string {
-	return []string{w.Root, filepath.Join(w.Hive(), "logins"), filepath.Join(w.Hive(), "modules"), w.Private()}
+	return append([]string{w.abs()}, w.Covered()...)
+}
+
+func (w Workspace) abs() string {
+	if a, err := filepath.Abs(w.Root); err == nil {
+		return a
+	}
+	return w.Root
 }
 
 // Checkouts is where agents' own checkouts of a project live.

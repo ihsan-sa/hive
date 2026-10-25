@@ -89,6 +89,7 @@ func Probe() error {
 		Mounts: []Mount{{Host: work, Inside: "/work", RW: true}},
 		Stdout: filepath.Join(dir, "out"),
 		UID:    os.Getuid(), GID: os.Getgid(),
+		// No Guard: it runs /bin/sh alone, so it binds no host interpreter.
 	}
 	specPath := filepath.Join(dir, "spec.json")
 	if err := WriteSpec(specPath, s); err != nil {
@@ -284,8 +285,12 @@ var interpreters = []string{"python3", "python", "node", "uv", "go"}
 func hostInterpreters(a *initArgs) {
 	home, _ := os.UserHomeDir()
 	guard := append([]string{}, a.Spec.Guard...)
+	cover := append([]string{}, a.Spec.Cover...)
 	for _, m := range a.Spec.Mounts {
 		guard = append(guard, m.Host)
+		if m.Hide {
+			cover = append(cover, m.Host)
+		}
 	}
 	var dirs []string
 	for _, n := range interpreters {
@@ -293,7 +298,7 @@ func hostInterpreters(a *initArgs) {
 		if err != nil || filepath.Base(p) == "snap" {
 			continue
 		}
-		root, ok := installRoot(p, home, guard)
+		root, ok := installRoot(p, home, guard, cover)
 		if !ok {
 			continue
 		}
@@ -313,13 +318,17 @@ func hostInterpreters(a *initArgs) {
 // else the bin alone. It is never the home, anything above it or a dot-dir
 // right under it (~/.local, ~/.cargo hold keyrings and tokens), nor anything
 // that holds a guarded path (the workspace, the folders covered in it, a
-// mount's host path), so a python at /data/bin with lib/ beside it is bound as
-// /data/bin alone when the workspace is under /data. ok is false when only
-// such a dir would do, or when the home is unknown, relative or can't be
-// resolved. So a python installed straight into ~/.local (bin and lib both
+// mount's host path), nor anything inside a covered folder (cover: the
+// folders covered wherever agents read .hive, and every hidden mount), so a
+// python at /data/bin with lib/ beside it is bound as /data/bin alone when the
+// workspace is under /data, and one under .hive/private is not bound at all;
+// one inside the workspace elsewhere is. ok is false when only such a dir
+// would do, when the home is unknown, relative or can't be resolved, and when
+// there is no guard or a guarded or covered path is not absolute (a spec that
+// can't say what to keep out binds nothing). So a python installed straight into ~/.local (bin and lib both
 // there) is bound as its bin alone: it starts inside but can't find its lib.
 // Install it with uv or into a prefix of its own.
-func installRoot(p, home string, guard []string) (root string, ok bool) {
+func installRoot(p, home string, guard, cover []string) (root string, ok bool) {
 	dir := filepath.Dir(p)
 	if underSystem(dir) {
 		return "", true
@@ -335,17 +344,14 @@ func installRoot(p, home string, guard []string) (root string, ok bool) {
 	if err != nil {
 		return "", false
 	}
-	var held []string
-	for _, g := range guard {
-		if !filepath.IsAbs(g) {
-			continue
-		}
-		g = filepath.Clean(g)
-		held = append(held, g)
-		if r, err := resolveExisting(g); err == nil && r != g {
-			held = append(held, r)
-		}
+	if len(guard) == 0 {
+		return "", false
 	}
+	held, ok := resolveAll(slices.Concat(guard, cover))
+	if !ok {
+		return "", false
+	}
+	covered, _ := resolveAll(cover)
 	cands := []string{dir}
 	if up := filepath.Dir(dir); filepath.Base(dir) == "bin" {
 		if fi, err := os.Stat(filepath.Join(up, "lib")); err == nil && fi.IsDir() {
@@ -362,6 +368,11 @@ next:
 				continue next
 			}
 		}
+		for _, c := range covered {
+			if holds(c, r) {
+				return "", false
+			}
+		}
 		return r, true
 	}
 	return "", false
@@ -371,6 +382,22 @@ next:
 func holds(r, p string) bool {
 	rel, err := filepath.Rel(r, p)
 	return err == nil && (rel == "." || rel != ".." && !strings.HasPrefix(rel, "../"))
+}
+
+// resolveAll is each path cleaned, and resolved too when that differs; ok is
+// false when one is not absolute.
+func resolveAll(paths []string) (out []string, ok bool) {
+	for _, g := range paths {
+		if !filepath.IsAbs(g) {
+			return nil, false
+		}
+		g = filepath.Clean(g)
+		out = append(out, g)
+		if r, err := resolveExisting(g); err == nil && r != g {
+			out = append(out, r)
+		}
+	}
+	return out, true
 }
 
 // resolveExisting resolves the symlinks in p's longest existing prefix and
