@@ -54,6 +54,11 @@ type Effects struct {
 	// person's hold on its merges, the work module), or "" if it may.
 	MergeHeld func(project string, pr int) string
 
+	// Quarantined are a project's known flaky tests (the improve module's
+	// quarantine): a forge check whose log fails only these doesn't hold a
+	// merge. Unset, none are.
+	Quarantined func(project string) []string
+
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
 
@@ -1182,6 +1187,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	runs, excused := Excuse(runs, e.FailingTests(p.Repo), e.Quarantine(p.Name))
 	req := e.RequiredChecks(p, m.Main)
 	st, which := ChecksState(runs, req)
 	var shared []string
@@ -1205,6 +1211,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", err
 	}
 	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID}
+	if len(excused) > 0 {
+		ev["quarantined"] = excused // red only on known flakes
+	}
 	if len(shared) > 0 {
 		// A merge past a red check names the main commits that excused it,
 		// so one that relied on an older main answer can be audited.
@@ -1311,6 +1320,40 @@ func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string, tests Tests
 	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(shared, n) })
 	state, which = ChecksState(kept, req)
 	return state, which, shared, byName
+}
+
+// Excuse marks as passing each failed check whose log names failing tests,
+// every one of them quarantined (a known flake), so it counts against no
+// head; excused names those checks. A check whose log can't be read or names
+// no tests is never excused: only a named test can be known to be a flake.
+func Excuse(runs []CheckRun, tests TestsOf, quarantined []string) (out []CheckRun, excused []string) {
+	if tests == nil || len(quarantined) == 0 {
+		return runs, nil
+	}
+	out = slices.Clone(runs)
+	for i, r := range out {
+		if r.State != CheckFail {
+			continue
+		}
+		names, ok := tests(r)
+		if !ok || slices.ContainsFunc(names, func(n string) bool { return !slices.Contains(quarantined, n) }) {
+			continue
+		}
+		out[i].State = CheckPass
+		out[i].Detail = "fails only the quarantined " + strings.Join(names, ", ")
+		if !slices.Contains(excused, r.Name) {
+			excused = append(excused, r.Name)
+		}
+	}
+	return out, excused
+}
+
+// Quarantine is the project's quarantined tests, or none with no quarantine.
+func (e *Effects) Quarantine(project string) []string {
+	if e.Quarantined == nil {
+		return nil
+	}
+	return e.Quarantined(project)
 }
 
 // MainLookBack is how many of main's commits, newest first, MainAnswer reads

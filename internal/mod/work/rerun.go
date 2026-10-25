@@ -94,14 +94,7 @@ func (m *Module) RerunChecks(id, by string) (string, error) {
 	if n == 0 {
 		return "", fmt.Errorf("the forge has no finished failed run on %s to re-run: one may still be going, or never started (%s), which a re-run doesn't fix; a startup failure is often the workflow file itself, and one awaiting approval is the repo owner's to approve", core.Short(t.SHA), core.CheckNames(failed))
 	}
-	if t.Reruns == nil {
-		t.Reruns = map[string]int{}
-	}
-	t.Reruns[t.SHA]++
-	t.RerunAt = time.Now().UTC()
-	// A wait on main belongs to one run of the checks: the re-run's red
-	// starts its own, not one already spent.
-	t.MainWait, t.MainWaitOn = time.Time{}, ""
+	m.retried(&t, failed, m.C.Effects.FailingTests(p.Repo))
 	note := fmt.Sprintf("re-ran the forge's failed checks on %s (%s) for %s, %d of %d on this head", core.Short(t.SHA), core.CheckNames(failed), by, t.Reruns[t.SHA], rerunsPerHead)
 	if t.Stage == StageWorking && t.Round > 0 && strings.HasPrefix(t.Findings, forgeFailed+core.Short(t.SHA)) {
 		t.Round--

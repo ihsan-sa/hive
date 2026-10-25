@@ -1083,6 +1083,24 @@ func TestChecksAgainstMainByTests(t *testing.T) {
 	}
 }
 
+// Only a check whose log names failing tests, every one quarantined, is
+// excused; one naming none, or a test outside the quarantine, still fails.
+func TestExcuse(t *testing.T) {
+	logs := map[string][]string{"flaky": {"TestA", "TestB"}, "mixed": {"TestA", "TestC"}}
+	tests := func(r CheckRun) ([]string, bool) { n, ok := logs[r.URL]; return n, ok }
+	runs := []CheckRun{{Name: "win", State: CheckFail, URL: "flaky"}, {Name: "mac", State: CheckFail, URL: "mixed"}, {Name: "lint", State: CheckFail, URL: "none"}, {Name: "linux", State: CheckPass, URL: "flaky"}}
+	out, excused := Excuse(runs, tests, []string{"TestA", "TestB"})
+	if len(excused) != 1 || excused[0] != "win" || out[0].State != CheckPass || !strings.Contains(out[0].Detail, "quarantined TestA, TestB") || out[1].State != CheckFail || out[2].State != CheckFail || runs[0].State != CheckFail {
+		t.Fatalf("excused %v, runs %+v", excused, out)
+	}
+	if _, excused := Excuse(runs, tests, nil); excused != nil {
+		t.Fatalf("no quarantine excused %v", excused)
+	}
+	if _, excused := Excuse(runs, nil, []string{"TestA", "TestB"}); excused != nil {
+		t.Fatalf("no logs excused %v", excused)
+	}
+}
+
 func TestGitHubLogStamp(t *testing.T) {
 	log := "2026-10-24T08:00:00.1234567Z --- FAIL: TestX (0.01s)\n2026-10-24T08:00:01.0Z FAIL\n"
 	if got := FailedTests(ghLogStamp.ReplaceAllString(log, "")); len(got) != 1 || got[0] != "TestX" {
