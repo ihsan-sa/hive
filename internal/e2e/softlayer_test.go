@@ -116,7 +116,13 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 	outcome := ""
 	for deadline := time.Now().Add(wait); outcome == ""; time.Sleep(10 * time.Second) {
 		standInCI(h, "me/"+project)
-		st := h.state()
+		// A sub-Hive whose daemon stops answering is a result too: its
+		// journal and daemon log are still kept below, not lost to t.Fatal.
+		st, err := h.c.State()
+		if err != nil {
+			outcome = "the sub-Hive's daemon stopped answering after " + time.Since(began).Round(time.Second).String() + ": " + err.Error()
+			break
+		}
 		if tk, ok := landed(st, project); ok {
 			outcome = "landed " + shortSHA(tk.MergeSHA) + " after " + time.Since(began).Round(time.Second).String()
 		} else if time.Now().After(deadline) {
@@ -153,6 +159,9 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 		err = os.WriteFile(filepath.Join(keep, "events.jsonl"), j, 0o644)
 	}
 	kept("events.jsonl", err)
+	if log, err := os.ReadFile(filepath.Join(h.ws.Hive(), "daemon-test.log")); err == nil {
+		kept("daemon.log", os.WriteFile(filepath.Join(keep, "daemon.log"), log, 0o644))
+	}
 	for what, from := range map[string]string{"chats": h.ws.Chats(), "runs": h.ws.Runs()} {
 		if out, err := exec.Command("cp", "-r", from, filepath.Join(keep, what)).CombinedOutput(); err != nil {
 			kept(what, fmt.Errorf("%v: %s", err, out))
