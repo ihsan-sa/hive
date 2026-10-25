@@ -22,8 +22,9 @@ type Project struct {
 	Private     bool      `json:"private,omitempty"`  // walled one way: reads the shared Hive, and none sees it
 	Self        bool      `json:"self,omitempty"`     // the Hive's own source
 	Demo        bool      `json:"demo,omitempty"`
-	Goals       string    `json:"goals,omitempty"` // the person's words when they made it
-	Ready       bool      `json:"ready,omitempty"` // cloned and set up; until then setup is retried
+	Visibility  string    `json:"visibility,omitempty"` // public or private, as the Hive made it; "" for a repository it adopted
+	Goals       string    `json:"goals,omitempty"`      // the person's words when they made it
+	Ready       bool      `json:"ready,omitempty"`      // cloned and set up; until then setup is retried
 	Created     time.Time `json:"created"`
 }
 

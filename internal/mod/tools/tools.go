@@ -77,7 +77,7 @@ func (m *Module) Install(tool, version string, allow []string) (string, error) {
 	os.MkdirAll(logs, 0o755)
 	log := filepath.Join(logs, "tools-"+core.NewID()+".log")
 	spec := installSpec(sb, m.C.WS.Tools(), home, m.C.Tools(), log, tool, version, allow)
-	spec.Guard = m.C.WS.Guarded()
+	spec.Guard, spec.Cover = m.C.WS.Guarded(), m.C.WS.Covered()
 	code, err := sb.Run(spec, 20*time.Minute)
 	var out string
 	for _, p := range []string{log, log + ".err", log + ".wsl"} {

@@ -173,7 +173,7 @@ func TestHostInterpreterReachesInside(t *testing.T) {
 	}
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", filepath.Join(home, ".local/bin")+":/usr/bin:/bin")
-	a := initArgs{Spec: Spec{Env: InsideEnv("/hive/home", false)}}
+	a := initArgs{Spec: Spec{Env: InsideEnv("/hive/home", false), Guard: []string{filepath.Join(home, "hive")}}}
 	hostInterpreters(&a)
 	if !slices.Equal(a.Roots, []string{inst}) {
 		t.Fatalf("roots %q, want only %s", a.Roots, inst)
@@ -233,7 +233,7 @@ func TestInstallRootNeverBindsMore(t *testing.T) {
 		{homeBin, link, filepath.Join(home, "bin"), true},
 		{uvLocal, gone, "", false},
 	} {
-		got, ok := installRoot(c.p, c.home, nil)
+		got, ok := installRoot(c.p, c.home, []string{"/nowhere/hive"}, nil)
 		if got != c.want || ok != c.ok {
 			t.Errorf("installRoot(%s, %q) = %q, %v; want %q, %v", c.p, c.home, got, ok, c.want, c.ok)
 		}
@@ -270,30 +270,38 @@ func TestInstallRootKeepsTheWorkspaceOut(t *testing.T) {
 	ws := filepath.Join(data, "hive")
 	private := filepath.Join(ws, ".hive", "private")
 	py := mkTree(t, data, "bin/python3", "lib/python3.12/os.py", "hive/.hive/private/daemon.json",
-		"hive/bin/python3", "opt/py/bin/python3", "opt/py/lib/x", "keep/bin/python3", "keep/lib/x", "keep/secret/token")
+		"hive/bin/python3", "opt/py/bin/python3", "opt/py/lib/x", "keep/bin/python3", "keep/lib/x", "keep/secret/token", "hive/.hive/private/py/bin/python3", "hive/.hive/private/py/lib/x")
 	guard := []string{ws, filepath.Join(ws, ".hive", "logins"), filepath.Join(ws, ".hive", "modules"), private}
 	// The same workspace reached through a symlink is still kept out.
 	link := filepath.Join(t.TempDir(), "ws")
 	if err := os.Symlink(ws, link); err != nil {
 		t.Fatal(err)
 	}
+	cover := guard[1:]
 	for _, c := range []struct {
-		name, p string
-		guard   []string
-		want    string
-		ok      bool
+		name, p      string
+		guard, cover []string
+		want         string
+		ok           bool
 	}{
-		{"workspace under the install", py[0], guard, filepath.Join(data, "bin"), true},
-		{"workspace through a symlink", py[0], []string{link}, filepath.Join(data, "bin"), true},
-		{"masked path under the install", py[0], []string{private}, filepath.Join(data, "bin"), true},
-		{"masked path not made yet", py[0], []string{filepath.Join(link, ".hive", "logins")}, filepath.Join(data, "bin"), true},
-		{"bin holding the workspace", py[0], []string{filepath.Join(data, "bin", "hive")}, "", false},
-		{"install inside the workspace", py[3], guard, filepath.Join(ws, "bin"), true},
-		{"allowed root beside the workspace", py[4], guard, filepath.Join(data, "opt/py"), true},
-		{"no guard binds the install", py[0], nil, data, true},
-		{"masked path inside the install", py[6], []string{py[8]}, filepath.Join(data, "keep/bin"), true},
+		{"workspace under the install", py[0], guard, cover, filepath.Join(data, "bin"), true},
+		{"workspace through a symlink", py[0], []string{link}, nil, filepath.Join(data, "bin"), true},
+		{"masked path under the install", py[0], []string{private}, nil, filepath.Join(data, "bin"), true},
+		{"masked path not made yet", py[0], []string{filepath.Join(link, ".hive", "logins")}, nil, filepath.Join(data, "bin"), true},
+		{"bin holding the workspace", py[0], []string{filepath.Join(data, "bin", "hive")}, nil, "", false},
+		{"install inside the workspace", py[3], guard, cover, filepath.Join(ws, "bin"), true},
+		{"install inside a covered folder", py[9], guard, cover, "", false},
+		{"install inside a covered folder through a symlink", py[9], []string{link}, []string{filepath.Join(link, ".hive", "private")}, "", false},
+		{"install inside a covered folder given as a guard only", py[9], guard, nil, filepath.Join(private, "py"), true},
+		{"allowed root beside the workspace", py[4], guard, cover, filepath.Join(data, "opt/py"), true},
+		{"unguarded binds nothing", py[0], nil, nil, "", false},
+		{"relative guard binds nothing", py[4], []string{"hive"}, nil, "", false},
+		{"empty guard binds nothing", py[4], []string{ws, ""}, nil, "", false},
+		{"relative cover binds nothing", py[4], guard, []string{".hive/private"}, "", false},
+		{"unrelated guard binds the install", py[0], []string{"/nowhere/hive"}, nil, data, true},
+		{"masked path inside the install", py[6], []string{py[8]}, nil, filepath.Join(data, "keep/bin"), true},
 	} {
-		got, ok := installRoot(c.p, home, c.guard)
+		got, ok := installRoot(c.p, home, c.guard, c.cover)
 		if got != c.want || ok != c.ok {
 			t.Errorf("%s: installRoot(%s) = %q, %v; want %q, %v", c.name, c.p, got, ok, c.want, c.ok)
 		}
@@ -310,12 +318,27 @@ func TestInstallRootKeepsTheWorkspaceOut(t *testing.T) {
 	t.Setenv("PATH", filepath.Join(data, "bin")+":/usr/bin:/bin")
 	for _, s := range []Spec{
 		{Env: InsideEnv("/hive/home", false), Guard: []string{private}},
-		{Env: InsideEnv("/hive/home", false), Mounts: []Mount{{Host: filepath.Join(ws, "projects", "p"), Inside: "/work"}}},
+		{Env: InsideEnv("/hive/home", false), Guard: []string{"/nowhere/hive"}, Mounts: []Mount{{Host: filepath.Join(ws, "projects", "p"), Inside: "/work"}}},
 	} {
 		a := initArgs{Spec: s}
 		hostInterpreters(&a)
 		if !slices.Equal(a.Roots, []string{filepath.Join(data, "bin")}) {
 			t.Errorf("spec %+v: roots %q, want only %s", s, a.Roots, filepath.Join(data, "bin"))
+		}
+	}
+	// One inside a covered folder, given as the cover or as a hidden mount, is
+	// not bound and not put on PATH; nor is anything when the spec has no guard.
+	inPrivate := filepath.Join(private, "py", "bin")
+	t.Setenv("PATH", inPrivate+":/usr/bin:/bin")
+	for _, s := range []Spec{
+		{Env: InsideEnv("/hive/home", false), Guard: guard, Cover: cover},
+		{Env: InsideEnv("/hive/home", false), Guard: []string{ws}, Mounts: []Mount{{Host: private, Inside: "/hive/state/private", Hide: true}}},
+		{Env: InsideEnv("/hive/home", false)},
+	} {
+		a := initArgs{Spec: s}
+		hostInterpreters(&a)
+		if len(a.Roots) != 0 || strings.Contains(strings.Join(a.Spec.Env, " "), inPrivate) {
+			t.Errorf("spec %+v: roots %q, env %q", s, a.Roots, a.Spec.Env)
 		}
 	}
 }

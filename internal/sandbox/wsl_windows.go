@@ -195,6 +195,11 @@ func (w *WSL) translate(s Spec) Spec {
 		guard[i] = WinToWSL(g)
 	}
 	s.Guard = guard
+	cover := make([]string, len(s.Cover))
+	for i, c := range s.Cover {
+		cover[i] = WinToWSL(c)
+	}
+	s.Cover = cover
 	tools := make([]string, len(s.Tools))
 	for i, t := range s.Tools {
 		if filepath.IsAbs(t) {

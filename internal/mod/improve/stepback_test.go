@@ -29,7 +29,7 @@ func rig(t *testing.T) *Module {
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
 	ws.SaveConfig(cfg)
 	forge := &core.Local{Dir: filepath.Join(dir, "forge")}
-	if _, err := forge.EnsureRepo("me/hive", ""); err != nil {
+	if _, err := forge.EnsureRepo("me/hive", "", false); err != nil {
 		t.Fatal(err)
 	}
 	src := t.TempDir()

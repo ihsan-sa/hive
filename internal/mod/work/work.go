@@ -1032,6 +1032,9 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 			return err
 		}
 		t.Stage, t.Reason = StageBlocked, finishText(r)
+		if r.Finish == nil {
+			t.Reason = r.Reason // the Hive ended it: say why, not its last words
+		}
 		m.save(t, "blocked: "+core.Clip(t.Reason, 300))
 		if t.Issue.Number != 0 {
 			m.comment(p.Repo, t.Issue.Number, "The worker stopped:\n\n"+t.Reason)
@@ -1047,7 +1050,7 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 		if !strings.Contains(t.Reason, "quiet") {
 			t.Reason = "worker is quiet: " + r.Reason
 			m.save(t, t.Reason)
-			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "quiet", "run": r.ID, "task": t.ID, "text": "worker " + r.ID + " keeps ending turns without finishing"})
+			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "quiet", "run": r.ID, "task": t.ID, "text": "worker " + r.ID + " keeps ending turns without finishing; briefs that waited on its task start without it"})
 		}
 	default:
 		return m.checkpoint(t, p, r)
@@ -1342,13 +1345,23 @@ func (m *Module) test(t *Task, p core.Project) error {
 		if mc.CantRun != "" {
 			return m.cantRun(t, p, mc)
 		}
-		if !mc.OK {
+		switch {
+		case !mc.OK && !noWorse(c, mc):
 			return m.waitOnMain(t, p, main, mc)
+		case !mc.OK:
+			// Every test it fails main fails too: it is no worse than main,
+			// so it goes on rather than wait for the green it may be the fix
+			// for (a revert of what turned main red, say).
+			if strings.HasPrefix(t.Reason, "waiting on main") {
+				t.Reason = ""
+				m.save(t, "its tests fail on "+core.Short(t.SHA)+" only where main's fail at "+core.Short(main)+" ("+strings.Join(c.Failed, ", ")+"), so it is no worse than main and goes on")
+			}
+		default:
+			if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
+				return err
+			}
+			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
 		}
-		if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
-			return err
-		}
-		return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
 	}
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
 	if err != nil {
@@ -1470,6 +1483,25 @@ func (m *Module) mainTests(p core.Project, main, command string) (core.Check, er
 		return core.Check{}, err
 	}
 	return m.C.Effects.RunCheck(p, main, "test", command), nil
+}
+
+// noWorse says a red change fails only what main's red run fails too, each
+// test by its package and name, so the red is main's and the change may be
+// its fix. A failure in its run that no test name accounts for (a timeout, a
+// panic or exit outside a test, a build failure) counts only where main's
+// run fails that package so too; one either run can't name at all can't be
+// told apart.
+func noWorse(c, mc core.Check) bool {
+	mine, mains := core.RedKeys(c.FullOutput()), core.RedKeys(mc.FullOutput())
+	if len(mine) == 0 || len(mains) == 0 {
+		return false
+	}
+	for _, k := range mine {
+		if !slices.Contains(mains, k) {
+			return false
+		}
+	}
+	return true
 }
 
 // waitOnMain holds a red change while main's own tests are red, since the
@@ -2145,6 +2177,7 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		fmt.Fprintf(&short, format, a...)
 	}
 	both("# The forge's failed checks on %s\n\nPR #%d, task %s, based on main at %s.\n", core.Short(t.SHA), t.PR.Number, t.ID, core.Short(main))
+	both("%s", m.bundleForChecks(t, p, main))
 	logs := 0
 	for _, r := range failed {
 		both("\n## %s\n\n", r.Name)
@@ -2188,6 +2221,25 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		fmt.Fprintf(&short, "\nThe end of each failed step's log is in $HIVE_RUN/%s, kept there for later rounds.\n", forgeFailuresFile)
 	}
 	return short.String()
+}
+
+// bundleForChecks writes main as the forge's checks saw it to the worker's
+// main.bundle and says so. The forge runs a pull request's checks on it merged
+// with main, so a branch behind main fails on tests only main has; without
+// that main in $HIVE_RUN (an older bundle, or none), the worker can neither
+// see nor run them, and reads main's change as its own.
+func (m *Module) bundleForChecks(t *Task, p core.Project, main string) string {
+	if t.Worker == "" {
+		return ""
+	}
+	if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle")); err != nil {
+		return ""
+	}
+	fetch := "`git fetch \"$HIVE_RUN/main.bundle\" main`"
+	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
+		return "$HIVE_RUN/main.bundle holds main at " + core.Short(main) + " (" + fetch + ").\n"
+	}
+	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. $HIVE_RUN/main.bundle holds main at " + core.Short(main) + ": " + fetch + ", then merge FETCH_HEAD to see and run what the checks ran.\n"
 }
 
 // fenceFor is a ~ fence longer than any run of ~ or ` that starts a line of
@@ -2331,7 +2383,7 @@ func (m *Module) securityRead(t *Task, p core.Project, main string) (bool, error
 	if seats[0] != core.SeatSecurity {
 		who = "the Hive's security panel"
 	}
-	m.hold(t, p, fmt.Sprintf("waiting on a security read from %s at %s, since it changes %s, on %s; a read of an earlier head counts only while this change's own diff is the same (an outside read from the box's perms seat or architect counts too: `%s read %s %s land|fix --by perms`)", who, core.Short(t.SHA), strings.Join(ch.Security, ", "), core.SecurityList, core.Cmd, t.ID, core.Short(t.SHA)))
+	m.hold(t, p, fmt.Sprintf("waiting on a security read from %s at %s, since it changes %s, %s; a read of an earlier head counts only while this change's own diff is the same (an outside read from the box's perms seat or architect counts too: `%s read %s %s land|fix --by perms`)", who, core.Short(t.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), core.Cmd, t.ID, core.Short(t.SHA)))
 	return true, nil
 }
 
@@ -2462,7 +2514,11 @@ func (m *Module) seatAlert(p core.Project, seat, text string) {
 // securityRules is what a security seat reads the change for.
 func securityRules(ch core.Change) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "## You are the Hive's security read\n\nThis change touches %s, on `%s`: files where a mistake weakens the sandbox, leaks a credential or runs something outside the sandbox. The ordinary reviewer reads it for the brief; you read it only for that. A land here lets it merge with no read from outside the Hive, so say fix for anything that:\n\n", "`"+strings.Join(ch.Security, "`, `")+"`", core.SecurityList)
+	where := "on `" + core.SecurityList + "`"
+	if len(ch.Unlisted) > 0 {
+		where = ch.SecurityWhere()
+	}
+	fmt.Fprintf(&b, "## You are the Hive's security read\n\nThis change touches %s, %s: files where a mistake weakens the sandbox, leaks a credential or runs something outside the sandbox. The ordinary reviewer reads it for the brief; you read it only for that. A land here lets it merge with no read from outside the Hive, so say fix for anything that:\n\n", "`"+strings.Join(ch.Security, "`, `")+"`", where)
 	b.WriteString("- widens what a sandboxed run can see, write or reach (mounts, covers, egress, the private folders, the daemon's token);\n")
 	b.WriteString("- lets a credential (a token, a login, the forge's environment) reach a run, a log, a comment or a script that didn't have it;\n")
 	b.WriteString("- runs something outside the sandbox, or as the person, that an agent can choose or edit, or moves the point of effect past its checks (a pinned digest, the ceiling, an approval);\n")
