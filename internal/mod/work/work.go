@@ -112,6 +112,10 @@ type Task struct {
 	// so long, however often main moves meanwhile.
 	MainWait   time.Time `json:"main_wait,omitempty"`
 	MainWaitOn string    `json:"main_wait_on,omitempty"`
+	// NoChecks is when head NoChecksOn was first seen with no forge check
+	// run at all while its required ones were awaited (head.go).
+	NoChecks   time.Time `json:"no_checks,omitempty"`
+	NoChecksOn string    `json:"no_checks_on,omitempty"`
 	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
 	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
 	Failures   int       `json:"failures"`
@@ -1626,6 +1630,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if err != nil {
 		return err
 	}
+	if wait, err := m.sameHead(t, p, pr.HeadSHA); wait || err != nil {
+		return err
+	}
 	if wait, err := m.upToDate(t, p, main); wait || err != nil {
 		return err
 	}
@@ -1897,6 +1904,9 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			// that never reports) counts as not run, and the lead hears of it.
 			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+" have run on main in "+p.Name+" at "+core.Short(main)+" for over "+mainWaitMax.String()+" without a result; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
 		}
+	}
+	if wait, err := m.noChecks(t, p, main, runs, st); wait || err != nil {
+		return wait, err
 	}
 	names := core.CheckNames(which)
 	onMain := ""
