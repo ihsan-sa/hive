@@ -81,6 +81,23 @@ FAIL
 	if v := Decide([]Result{res("e2e", false)}, []Result{res("e2e", true)}, Options{}); !strings.HasSuffix(v.Reason, "e2e passes 0/1, the control 1/1") {
 		t.Errorf("a failure naming no test: %q", v.Reason)
 	}
+	// The control's failing tests stand next to the candidate's, so a new
+	// failure is told from one main has too.
+	v = Decide([]Result{fail("TestA"), fail("TestA")}, []Result{fail("TestB"), {Probe: "e2e", Pass: true}}, Options{})
+	if want := "e2e passes 0/2, the control 1/2 (failing: TestA 2/2; the control failing: TestB 1/2)"; !strings.HasSuffix(v.Reason, want) {
+		t.Errorf("regression %q, want it to end %q", v.Reason, want)
+	}
+	v = Decide([]Result{fail("TestA")}, []Result{fail("TestA", "TestB")}, Options{})
+	if want := "e2e failed on both sides (0/1, the control 0/1) (failing: TestA 1/1; the control failing: TestA 1/1, TestB 1/1)"; v.Keep || !slices.Equal(v.Unmeasured, []string{want}) {
+		t.Errorf("unmeasured %q, want %q", v.Unmeasured, want)
+	}
+	v = Decide([]Result{fail("TestA"), {Probe: "e2e", Pass: true}}, []Result{fail("TestB"), {Probe: "e2e", Pass: true}}, Options{})
+	if want := "e2e passes 1/2, the control 1/2, failing different tests (failing: TestA 1/2; the control failing: TestB 1/2)"; v.Keep || !slices.Equal(v.Differs, []string{want}) {
+		t.Errorf("a tie failing different tests: %+v, want differs %q", v, want)
+	}
+	if v := Decide([]Result{fail("TestA"), {Probe: "e2e", Pass: true}}, []Result{fail("TestA"), {Probe: "e2e", Pass: true}}, Options{}); len(v.Differs) > 0 {
+		t.Errorf("a tie failing the same tests differs: %q", v.Differs)
+	}
 }
 
 // Noise decides: the same 5% gain is real when the runs agree and nothing when they scatter.

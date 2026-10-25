@@ -65,6 +65,14 @@ func TestAlreadyLandedThroughAnotherTask(t *testing.T) {
 			if err := m.step(task); err != nil || task.Stage != StageDone || len(m.C.Runs.List(nil)) != before {
 				t.Fatalf("stage %q, runs %d (were %d): %v", task.Stage, len(m.C.Runs.List(nil)), before, err)
 			}
+			for _, r := range m.C.Runs.List(nil) {
+				if strings.HasPrefix(r.ID, "r-"+task.ID) {
+					t.Fatalf("a reviewer %s was started", r.ID)
+				}
+			}
+			if task.Reviewer != "" {
+				t.Fatalf("reviewer %q", task.Reviewer)
+			}
 		})
 	}
 }
