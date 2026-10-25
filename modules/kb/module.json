@@ -1,6 +1,13 @@
 {
   "name": "kb",
-  "description": "The knowledge base: the Hive's memory across projects and runs. Every journal event is filed under record/ on its own; agents search it with `hive agent search`, read it directly and write notes with `hive agent remember`; a scheduled filer consolidates the notes.",
+  "description": "The knowledge base: the Hive's memory across projects and runs. Every journal event is filed under record/ on its own; agents search it with `hive agent search` (the module's own search program, search/: each file once, ranked by words, the entities that tie files together and the links between notes, with why each matched; `--deep \"question\"` sends a small research agent that digs and answers with sources), read it directly and write notes with `hive agent remember`; a scheduled filer consolidates the notes.",
   "provides": {"schedules": ["kb.file"], "procedures": ["searching.md"]},
-  "projects": ["*"]
+  "projects": ["*"],
+  "ops": {
+    "search": {
+      "help": "{\"query\", \"limit\": \"n or all\"} or {\"deep\": \"a question\"}",
+      "exec": ["go", "run", "./search/main.go", "./search/index.go", "./search/rank.go", "./search/render.go", "./search/bench.go", "op"],
+      "agent": {"arg": "deep", "role": "kb-researcher", "prompt": "researcher.md", "model": "haiku", "budget_usd": 0.4, "minutes": 8}
+    }
+  }
 }

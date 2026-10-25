@@ -116,6 +116,18 @@ func Main(argv []string) int {
 		text = string(raw)
 	case "warden":
 		err = warden(all)
+	case "kb-researcher":
+		// It searches with the question's words and answers from the best file.
+		q := regexp.MustCompile(`Question \(from [^)]*\): (.*)`).FindStringSubmatch(all)
+		var found json.RawMessage
+		if len(q) > 1 {
+			found, err = call("search", map[string]string{"query": q[1]}, time.Minute)
+		}
+		var hits string
+		json.Unmarshal(found, &hits)
+		first, _, _ := strings.Cut(hits, "\n")
+		file, _, _ := strings.Cut(strings.TrimPrefix(first, "1. "), " ")
+		structured = map[string]any{"answer": "FAKE: the best match is " + file, "sources": []string{file}}
 	case "tribunal", "module-reviewer":
 		vote := "approve"
 		if strings.Contains(all, "FAKE:paneldecline") {

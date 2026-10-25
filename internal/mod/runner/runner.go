@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,8 @@ type Runner struct {
 	status map[string]string
 	tries  map[string]int // reviews started this life, by module and commit
 	busy   bool
+	ops    map[string]*modOp // ops modules answer, by name
+	opsWhy map[string]string // by module folder: "" when its ops may run, else why not
 }
 
 type child struct {
@@ -72,22 +75,30 @@ func (r *Runner) Tick() {
 		r.C.J.MustAppend("hive.idle", map[string]string{})
 	}
 	r.busy = busy
-	if r.API == "" {
-		return
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.procs == nil {
 		r.procs, r.status, r.tries = map[string]*child{}, map[string]string{}, map[string]int{}
 	}
+	mods := r.Mods.List()
+	r.syncOps(mods)
+	r.opsWhy = map[string]string{}
 	seen := map[string]bool{}
-	for _, m := range r.Mods.List() {
-		if len(m.Exec) == 0 {
+	for _, m := range mods {
+		// A program starts once the API is up; ops run without it.
+		if len(m.Exec) == 0 && len(m.Ops) == 0 || len(m.Ops) == 0 && r.API == "" {
 			continue
 		}
 		name := filepath.Base(m.Dir)
-		seen[name] = true
 		commit, why := r.cleared(name, m)
+		r.opsWhy[name] = why
+		if len(m.Exec) == 0 || r.API == "" {
+			if r.status[name] = why; why == "" {
+				r.status[name] = "answers its ops"
+			}
+			continue
+		}
+		seen[name] = true
 		c := r.procs[name]
 		if c != nil && (why != "" || c.commit != commit) {
 			r.kill(c)
@@ -188,14 +199,30 @@ func (r *Runner) review(id, commit string, m modules.Module) error {
 	}
 	brief := fmt.Sprintf(`Read the module in your working folder, at commit %s from %s.
 
-The Hive will run %q from that folder on the person's machine, outside the sandbox, as the person, with no forge credential in its environment and its HOME set to a folder of its own. It asks to serve these hooks: %s. Its manifest says: %q.
+The Hive will run %q from that folder on the person's machine, outside the sandbox, as the person, with no forge credential in its environment and its HOME set to a folder of its own. It asks to serve these hooks: %s. It answers these ops, each a program run the same way once per call, with the caller's arguments on stdin: %s. Its manifest says: %q.
 
 Approve only if the code does what the manifest says and nothing else. Decline if it reads or sends credentials or logins (gh, git, ssh, cloud, browser), writes outside its own folder and HOME, keeps a login, token or other secret anywhere but HOME (every agent can read its folder), starts other programs it does not need, fetches and runs code, or hides what it does. Your final answer is the structured vote: vote (approve or decline) and reason.`,
-		commit, m.Source.Source, strings.Join(m.Exec, " "), strings.Join(m.Hooks, ", "), m.Description)
+		commit, m.Source.Source, strings.Join(m.Exec, " "), strings.Join(m.Hooks, ", "), opsOf(m), m.Description)
 	s := r.Agents.Spec(id, "module-reviewer", "", dir, brief)
 	s.ReadOnly, s.Schema = true, VoteSchema
 	_, err = r.C.Runs.Start(s)
 	return err
+}
+
+func opsOf(m modules.Module) string {
+	var out []string
+	for name, o := range m.Ops {
+		s := fmt.Sprintf("%s (%q", name, strings.Join(o.Exec, " "))
+		if o.Agent != nil {
+			s += fmt.Sprintf("; or an agent on the module's prompt %s when the call has %q", o.Agent.Prompt, o.Agent.Arg)
+		}
+		out = append(out, s+")")
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return "none"
+	}
+	return strings.Join(out, ", ")
 }
 
 func copyTree(from, to string) error {

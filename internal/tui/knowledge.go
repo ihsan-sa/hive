@@ -91,7 +91,11 @@ func (m *model) keyKB(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.kbSel++
 		}
 	case "/":
-		return m, m.edit("words to search for", "")
+		m.kbDeep = false
+		return m, m.edit("words, ids or #PR numbers to search for", "")
+	case "?":
+		m.kbDeep = true
+		return m, m.edit("a question for a deep search (a small agent digs; minutes, cents)", "")
 	case "esc", "left", "h", "backspace":
 		if m.kbDir != "" {
 			up := path.Base(m.kbDir)
@@ -127,12 +131,57 @@ func (m *model) keyKB(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // searchKB opens what the knowledge base says about the words, as `hive kb`
-// and agents' `hive agent search` find it.
-func (m *model) searchKB(q string) tea.Cmd {
+// and agents' `hive agent search` find it: the kb module's search through the
+// Hive, or the built-in word match when the Hive can't answer. A deep search
+// sends the module's research agent with the words as its question and shows
+// its answer, with sources, once it has one.
+func (m *model) searchKB(q string, deep bool) tea.Cmd {
 	if q == "" {
 		return nil
 	}
-	return m.push(detail{kind: "text", id: "search:" + q, title: "search: " + q, text: shown(kb.Find(m.ws.KB(), q, ""))})
+	if deep {
+		id := "deep:" + q
+		cmd := m.push(detail{kind: "text", id: id, title: "deep search: " + q, text: "Digging: a small research agent reads the knowledge base and the record to answer this, within a few minutes and cents. Its answer, with sources, shows here."})
+		return tea.Batch(cmd, func() tea.Msg {
+			var s struct{ Run string }
+			if m.c == nil {
+				return kbFoundMsg{id, "The deep search needs the Hive running."}
+			}
+			if err := m.c.Do("POST", "/api/op", map[string]any{"op": "search", "question": q}, &s); err != nil {
+				return kbFoundMsg{id, "The deep search couldn't start: " + err.Error()}
+			}
+			for end := time.Now().Add(20 * time.Minute); time.Now().Before(end); time.Sleep(2 * time.Second) {
+				var a struct {
+					Text string
+					Done bool
+				}
+				if err := m.c.Do("GET", "/api/op?run="+s.Run, nil, &a); err == nil && a.Done {
+					return kbFoundMsg{id, a.Text}
+				}
+			}
+			return kbFoundMsg{id, "The deep search " + s.Run + " has no answer yet; its run is in Agents."}
+		})
+	}
+	id := "search:" + q
+	cmd := m.push(detail{kind: "text", id: id, title: "search: " + q, text: "searching…"})
+	return tea.Batch(cmd, func() tea.Msg {
+		var a struct{ Text string }
+		if m.c != nil && m.c.Do("POST", "/api/op", map[string]any{"op": "search", "args": map[string]string{"query": q}}, &a) == nil && a.Text != "" {
+			return kbFoundMsg{id, a.Text}
+		}
+		return kbFoundMsg{id, kb.Find(m.ws.KB(), q, "")}
+	})
+}
+
+// kbFoundMsg is a search's answer for the detail opened as id.
+type kbFoundMsg struct{ id, text string }
+
+func (m *model) kbFound(msg kbFoundMsg) {
+	for i := range m.stack {
+		if d := &m.stack[i]; d.kind == "text" && d.id == msg.id {
+			d.text = shown(msg.text)
+		}
+	}
 }
 
 // shown spells out control characters line by line, so a note can't restyle
@@ -152,9 +201,13 @@ func (m *model) viewKB() []string {
 		lines = append(lines, wrap("The knowledge base is the Hive's memory across projects and runs: notes agents leave, and the record of everything the Hive did. Agents search it before they say what happened; so can you.", min(w, 72))...)
 		lines = append(lines, "")
 	}
-	search := stTitle.Render("/") + " " + stDim.Render("search")
+	search := stTitle.Render("/") + " " + stDim.Render("search") + "   " + stTitle.Render("?") + " " + stDim.Render("ask (deep search)")
 	if m.editing {
-		search = stTitle.Render("/") + " " + m.input.View()
+		mark := "/"
+		if m.kbDeep {
+			mark = "?"
+		}
+		search = stTitle.Render(mark) + " " + m.input.View()
 	}
 	lines = append(lines, search, "")
 	es := m.kbEntries()

@@ -42,6 +42,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive improve             run an improvement sweep now
   hive gate ...            try a candidate Hive against the current one in child Hives (docs/gate.md)
   hive kb [words]          search the knowledge base: notes and everything the Hive did [--limit n|all]
+                           [--deep]: a research agent answers the words as a question, with sources
   hive answer <id> <opt>   answer something waiting on you
   hive approve <id> [note] say yes to it (its first option)
   hive refuse <id> [note]  say no to it (its last option)
@@ -160,13 +161,12 @@ func run(args []string) int {
 			fmt.Fprintln(os.Stderr, core.Cmd+":", err)
 			return 1
 		}
-		query, limit := kbArgs(args)
+		query, limit, deep := kbArgs(args)
 		if query == "" {
 			fmt.Println("The knowledge base is the folder " + ws.KB() + "; its record/ has a file per task, request, run, chat and project.")
 			return 0
 		}
-		fmt.Println(kb.Find(ws.KB(), query, limit))
-		return 0
+		return cmdKB(ws, query, limit, deep)
 	case "gate-check": // inside a gate's sandbox: ask the gate for a sealed run
 		if len(args) < 3 || args[1] != "--" {
 			return 2
@@ -898,9 +898,9 @@ func pretty(v any) string {
 	return string(raw)
 }
 
-// kbArgs splits `hive kb` arguments into the search words and a --limit
-// value, which may come before, between or after the words.
-func kbArgs(args []string) (query, limit string) {
+// kbArgs splits `hive kb` arguments into the search words, a --limit value
+// and --deep, which may come before, between or after the words.
+func kbArgs(args []string) (query, limit string, deep bool) {
 	var words []string
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--limit" && i+1 < len(args) {
@@ -908,9 +908,57 @@ func kbArgs(args []string) (query, limit string) {
 			i++
 			continue
 		}
+		if args[i] == "--deep" {
+			deep = true
+			continue
+		}
 		words = append(words, args[i])
 	}
-	return strings.Join(words, " "), limit
+	return strings.Join(words, " "), limit, deep
+}
+
+// cmdKB asks the running Hive's kb module, which answers the search op with
+// its own program; with no Hive running it searches with the built-in word
+// match. --deep needs the Hive: it starts the module's research agent and
+// waits for its answer.
+func cmdKB(ws core.Workspace, query, limit string, deep bool) int {
+	c, up := daemon.Running(ws)
+	if deep {
+		if !up {
+			fmt.Fprintln(os.Stderr, core.Cmd+": kb --deep needs the Hive running (`"+core.Cmd+" daemon`)")
+			return 1
+		}
+		var s struct{ Run string }
+		if err := c.Do("POST", "/api/op", map[string]any{"op": "search", "question": query}, &s); err != nil {
+			fmt.Fprintln(os.Stderr, core.Cmd+":", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "digging ("+s.Run+") …")
+		for {
+			var a struct {
+				Text string
+				Done bool
+			}
+			if err := c.Do("GET", "/api/op?run="+s.Run, nil, &a); err != nil {
+				fmt.Fprintln(os.Stderr, core.Cmd+":", err)
+				return 1
+			}
+			if a.Done {
+				fmt.Println(a.Text)
+				return 0
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}
+	if up {
+		var a struct{ Text string }
+		if err := c.Do("POST", "/api/op", map[string]any{"op": "search", "args": map[string]string{"query": query, "limit": limit}}, &a); err == nil {
+			fmt.Println(a.Text)
+			return 0
+		}
+	}
+	fmt.Println(kb.Find(ws.KB(), query, limit))
+	return 0
 }
 
 // planLine is a plan's usage for hive status. The reset carries its zone and

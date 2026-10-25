@@ -111,6 +111,7 @@ type model struct {
 	kbNewAt time.Time   // when they were read
 	setSel  int
 	editing bool
+	kbDeep  bool // the open search box asks a deep search
 	picking bool // a setting's pick-list is open
 	pickSel int
 	optSel  int
@@ -376,6 +377,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.addEvents(msg)
 	case chatMsg:
 		m.msgs[msg.id] = msg.msgs
+	case kbFoundMsg:
+		m.kbFound(msg)
 	case runMsg:
 		m.runs[msg.d.Run.ID] = msg.d
 	case taskMsg:
@@ -675,7 +678,7 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editing = false
 			m.input.Blur()
 			if m.section == secKB {
-				return m, m.searchKB(text)
+				return m, m.searchKB(text, m.kbDeep)
 			}
 			return m, m.saveSetting(text)
 		}
@@ -894,6 +897,8 @@ func (m *model) keys() []string {
 	switch {
 	case m.showSince || m.help:
 		return []string{"any key", "close"}
+	case m.editing && m.section == secKB && m.kbDeep:
+		return []string{"enter", "ask", "esc", "cancel"}
 	case m.editing && m.section == secKB:
 		return []string{"enter", "search", "esc", "cancel"}
 	case m.editing:

@@ -76,6 +76,9 @@ func Main(argv []string) int {
 	if op == "install" {
 		wait = 25 * time.Minute // a download and an unpack, in the Hive's own sandbox
 	}
+	if _, deep := args["deep"]; deep {
+		wait = 15 * time.Minute // a research agent digs, within its own time limit
+	}
 	res, err := Call(op, args, wait)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "hive agent "+op+":", err)
@@ -165,7 +168,10 @@ A value of @path reads that file. Common ops:
   install   --tool python|uv|node|go [--version 3.12]   installs it for every agent, no root,
                                                  on your PATH at once; give the call a 25-minute timeout
   install   --system "sudo apt-get install -y x" --why "..."   a root install: goes to the person
-  search    --query "words" [--limit n|all]     the knowledge base pieces that match, best first
+  search    --query "words, ids, #PR" [--limit n|all]   the knowledge base files that match, best first,
+                                                 each once, with why (the words, an id or PR, a connection)
+  search    --deep "a question"                  a small research agent digs through the knowledge base
+                                                 and the record and answers with sources (minutes, cents)
   remember  --title "..." --text "..." [--tags a,b]   write to the knowledge base
   feedback  --text "..." [--about "agents/worker.md"]   what about the Hive got in your way, for the person
   schedule  --in 2h --text "..."                 a wake-up message to yourself
