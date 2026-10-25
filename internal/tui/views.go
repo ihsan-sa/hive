@@ -287,6 +287,9 @@ func (m *model) runLine(r core.Run) string {
 	if r.Reason != "" && r.Status != core.StatusRunning {
 		extra = r.Reason
 	}
+	if r.Finish != nil && r.Finish.Printed {
+		extra = "(finish printed, the Hive ran it) " + extra
+	}
 	return fmt.Sprintf("%s  %s  %s  turn %d  $%.2f  %dk ctx  %s  %s", runLabel(r), status, text.Visible(core.HarnessName(r.Harness)+":"+r.Model), r.Turn, r.Cost, r.Context/1000, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
 }
 
@@ -577,6 +580,9 @@ func (m *model) viewDetail(d *detail) []string {
 		kv("context", fmt.Sprintf("%dk tokens", r.Context/1000))
 		if r.Progress != "" {
 			kv("progress", r.Progress+"  "+ago(r.ProgressAt))
+		}
+		if r.Finish != nil && r.Finish.Printed {
+			kv("finish", stWarn.Render(r.Finish.Status+", printed: the agent wrote it as its answer and the Hive ran it"))
 		}
 		lines = append(lines, "", stTitle.Render("brief"))
 		lines = append(lines, indent(wrap(core.Clip(r.Brief, 1200), w-2), "  ")...)

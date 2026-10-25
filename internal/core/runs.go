@@ -68,6 +68,7 @@ type Finish struct {
 	Account string `json:"account"`
 	Tested  string `json:"tested,omitempty"`
 	Unsure  string `json:"unsure,omitempty"`
+	Printed bool   `json:"printed,omitempty"` // the agent printed it as its answer and the Hive ran it
 }
 
 // Run is a live or past agent.
@@ -613,10 +614,12 @@ func (rs *Runs) apply(e Event) {
 		}
 	case "run.finish":
 		var f struct {
-			ID     string `json:"id"`
-			Finish Finish `json:"finish"`
+			ID      string `json:"id"`
+			Finish  Finish `json:"finish"`
+			Printed bool   `json:"printed"` // where the first printed finishes said so
 		}
 		e.Decode(&f)
+		f.Finish.Printed = f.Finish.Printed || f.Printed
 		r.Finish = &f.Finish
 		if f.Finish.Status == "done" {
 			rs.proven[Pick{Harness: HarnessName(r.Harness), Model: r.Model}.String()] = true
@@ -1315,7 +1318,7 @@ func (rs *Runs) endTurn(r Run) {
 		te.Status, te.Reason = StatusIdle, "waiting: "+cur.Waiting
 	case cur.Nudges < 2:
 		te.Status, te.Reason = StatusIdle, "nudged: ended a turn without finishing"
-		te.Queue = []string{printedNudge(tl.Result.Text)}
+		te.Queue = []string{printedNudge(r, tl.Result.Text)}
 	case te.Head == cur.Head && cur.Still+1 >= StillTurns:
 		// Its nudges changed nothing: it can't follow the finish protocol,
 		// so it ends and frees its slot instead of holding it quiet.
