@@ -657,11 +657,27 @@ func (GitHub) SetDraft(repo string, number int, draft bool) error {
 }
 
 func (GitHub) DeleteBranch(repo, branch string) error {
+	if err := HiveBranch(branch); err != nil {
+		return err
+	}
 	_, err := gh(repo, "api", "-X", "DELETE", "repos/"+repo+"/git/refs/heads/"+branch)
 	if err != nil && strings.Contains(err.Error(), "Reference does not exist") {
 		return nil
 	}
 	return err
+}
+
+// hiveBranchName is what a branch the Hive made looks like: hive/ and then
+// plain path segments.
+var hiveBranchName = regexp.MustCompile(`^hive/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$`)
+
+// HiveBranch refuses a branch name that isn't plainly one of the Hive's own,
+// so a forge never deletes another branch or builds an odd API path from it.
+func HiveBranch(branch string) error {
+	if !hiveBranchName.MatchString(branch) || strings.Contains(branch, "..") || strings.HasSuffix(branch, ".lock") {
+		return fmt.Errorf("branch %q isn't one of the Hive's own (hive/...)", branch)
+	}
+	return nil
 }
 
 func (GitHub) CloseIssue(repo string, number int) error {
