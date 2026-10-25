@@ -780,3 +780,24 @@ func TestClosedDraftStops(t *testing.T) {
 		t.Fatalf("stage %q, by person %v, draft since %v", task.Stage, task.ByPerson, task.DraftSince)
 	}
 }
+
+// Findings sent back carry main as a bundle, so a fix that needs main's newer
+// commits can merge them; a message from the forge's checks keeps its own.
+func TestSendBackBundlesMain(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	pushMain(t, f, map[string]string{"newer.txt": "only on main"})
+	main, _ := m.C.Effects.Sync(p)
+	if err := m.sendBack(task, p, "The reviewer asked for fixes: use main's newer helper"); err != nil || task.Stage != StageWorking {
+		t.Fatalf("stage %q, err %v", task.Stage, err)
+	}
+	if msg := queued(m, task.Worker); !strings.Contains(msg, "main.bundle holds main at "+core.Short(main)) {
+		t.Fatalf("message:\n%s", msg)
+	}
+	out := must(t, "", "bundle", "list-heads", filepath.Join(m.C.WS.RunRO(task.Worker), "main.bundle"))
+	if !strings.Contains(out, main) {
+		t.Fatalf("bundle heads %q, want main %s", out, main)
+	}
+}
