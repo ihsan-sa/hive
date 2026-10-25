@@ -152,3 +152,27 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 		t.Error("a run that could not measure wrote a lesson")
 	}
 }
+
+// When the GitHub org leg can't be set up (here gh fails), the run goes on
+// with a local org and the report says why, rather than leave the change
+// unjudged; what it made on either org is removed.
+func TestBwrapOrgFallsBackToLocal(t *testing.T) {
+	needBwrap(t)
+	hive := builtHive(t)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	os.MkdirAll(bin, 0o755)
+	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\necho 'HTTP 403: forbidden' >&2\nexit 1\n"), 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	rep, err := Run(Config{CandBin: hive, CtrlBin: hive, Self: hive, Out: filepath.Join(dir, "out", "run"), Sandbox: "bwrap", Reps: 1,
+		Probes: []string{"org"}, Org: GitHub{Owner: "Lab", Token: "org-secret"}, Options: Options{AllowTie: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rep.OrgNote, "local org instead of Lab") || !strings.Contains(rep.OrgNote, "403") {
+		t.Errorf("org note %q", rep.OrgNote)
+	}
+	if !rep.Verdict.Keep || len(rep.Leaked) != 0 || len(rep.Cleaned) != 2 || !strings.HasSuffix(rep.Cleaned[0], "-local") {
+		t.Errorf("verdict %+v, repos %v cleaned %v leaked %v", rep.Verdict, rep.Repos, rep.Cleaned, rep.Leaked)
+	}
+}
