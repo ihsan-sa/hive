@@ -24,6 +24,7 @@ Dev runs without touching GitHub or plan usage: `HIVE_HOME=<dir> HIVE_FORGE=loca
 - [docs/risk.md](docs/risk.md): risk tiers, warden, tribunal and the point of effect.
 - [docs/priority.md](docs/priority.md): leads answer however busy the machine is: the strain exemption, leads-first ticks and nice levels.
 - [docs/score.md](docs/score.md): the Hive project's score.
+- [docs/judge.md](docs/judge.md): a model's judgement decides whether a change is kept; the numbers are one thing it weighs.
 - [docs/log.md](docs/log.md): decisions.
 - [docs/spec.md](docs/spec.md): the build spec.
 - [LEARNINGS.md](LEARNINGS.md): gotchas.

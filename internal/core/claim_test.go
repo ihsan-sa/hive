@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -83,6 +84,17 @@ func TestTwoDaemonsStartATurnOnce(t *testing.T) {
 	if got := n.Load(); got != int32(len(runs)) {
 		t.Fatalf("a retry started a claimed turn again: %d starts for %d turns", got, len(runs))
 	}
+	// Each daemon that backed off says so once in the record, not per turn.
+	said := 0
+	for _, e := range a.J.Since(0) {
+		var al map[string]string
+		if e.Kind == "alert.raised" && e.Decode(&al) == nil && al["ref"] == "turn-claim" {
+			said++
+		}
+	}
+	if said < 1 || said > 2 {
+		t.Errorf("%d back-off alerts for two daemons, want one each that backed off", said)
+	}
 }
 
 // A dead daemon's claim is taken over, but not while the turn it started
@@ -94,10 +106,10 @@ func TestATurnClaimOutlivesItsDaemonOnlyWhileTheTurnRuns(t *testing.T) {
 	}
 	c, _ := testHive(t)
 	rs := c.Runs
-	if err := rs.claimTurn("w1", 3); err != nil {
+	if _, err := rs.claimTurn("w1", 3); err != nil {
 		t.Fatal(err)
 	}
-	if err := rs.claimTurn("w1", 3); err != nil {
+	if _, err := rs.claimTurn("w1", 3); err != nil {
 		t.Fatalf("this daemon's own claim refused it: %v", err)
 	}
 	dead := proc.Handle{PID: 1 << 30}
@@ -106,19 +118,48 @@ func TestATurnClaimOutlivesItsDaemonOnlyWhileTheTurnRuns(t *testing.T) {
 		rs.withClaim("w1", func(turnClaim) (turnClaim, error) { return cl, nil })
 	}
 	write(turnClaim{Turn: 3, Daemon: dead, Agent: agent})
-	if err := rs.claimTurn("w1", 3); err == nil {
+	if _, err := rs.claimTurn("w1", 3); err == nil {
 		t.Fatal("a turn whose process still runs was claimed again")
 	}
-	if err := rs.claimTurn("w1", 4); err != nil {
+	if _, err := rs.claimTurn("w1", 4); err != nil {
 		t.Fatalf("the next turn: %v", err)
 	}
 	write(turnClaim{Turn: 3, Daemon: dead, Agent: proc.Handle{PID: 1 << 30}})
-	if err := rs.claimTurn("w1", 3); err != nil {
+	if took, err := rs.claimTurn("w1", 3); err != nil {
 		t.Fatalf("a dead daemon's ended turn wasn't taken over: %v", err)
+	} else if !strings.Contains(took, "claimed turn 3") {
+		t.Errorf("the takeover isn't named: %q", took)
 	}
 	other := sleeper(t)
 	write(turnClaim{Turn: 5, Daemon: other})
-	if err := rs.claimTurn("w1", 4); err == nil {
+	if _, err := rs.claimTurn("w1", 4); err == nil {
 		t.Fatal("a live daemon's claim on a later turn was taken")
+	}
+}
+
+// A claim that won't parse is replaced, not read as held; a turn.lock that
+// isn't a plain file is refused rather than followed.
+func TestATurnClaimRefusesALinkedLock(t *testing.T) {
+	c, _ := testHive(t)
+	rs := c.Runs
+	os.MkdirAll(rs.ws.RunHost("w1"), 0o755)
+	os.WriteFile(rs.claimFile("w1"), []byte("{not json"), 0o600)
+	if _, err := rs.claimTurn("w1", 1); err != nil {
+		t.Fatalf("a corrupt claim held the turn: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	lock := filepath.Join(rs.ws.RunHost("w2"), "turn.lock")
+	os.MkdirAll(filepath.Dir(lock), 0o755)
+	target := filepath.Join(t.TempDir(), "planted")
+	if err := os.Symlink(target, lock); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rs.claimTurn("w2", 1); err == nil {
+		t.Error("a symlinked turn.lock was followed")
+	}
+	if _, err := os.Stat(target); err == nil {
+		t.Error("the claim created a file through the link")
 	}
 }

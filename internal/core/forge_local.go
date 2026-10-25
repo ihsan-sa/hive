@@ -369,9 +369,17 @@ func (l *Local) ClosePR(repo string, number int, comment string) error {
 	return nil
 }
 
+// DeleteBranch deletes one of the Hive's branches; one already gone counts
+// as deleted, as on GitHub.
 func (l *Local) DeleteBranch(repo, branch string) error {
+	if err := HiveBranch(branch); err != nil {
+		return err
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if _, err := Git(l.RepoPath(repo), "rev-parse", "--verify", "-q", "refs/heads/"+branch); err != nil {
+		return nil
+	}
 	_, err := Git(l.RepoPath(repo), "update-ref", "-d", "refs/heads/"+branch)
 	return err
 }

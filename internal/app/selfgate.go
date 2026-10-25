@@ -57,7 +57,7 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 		if err := os.MkdirAll(j.Out, 0o755); err != nil {
 			return core.GateResult{Outcome: core.GateCantRun, Reason: err.Error()}
 		}
-		args := []string{"gate", "--repo", j.Repo, "--head", j.Head, "--base", j.Main, "--out", j.Out, "--lessons", j.Lessons, "--timeout", j.Timeout.String()}
+		args := []string{"gate", "--repo", j.Repo, "--head", j.Head, "--base", j.Main, "--out", j.Out, "--lessons", j.Lessons, "--judged", "--timeout", j.Timeout.String()}
 		if j.AllowTie {
 			args = append(args, "--allow-tie")
 		}
@@ -146,7 +146,7 @@ func readReport(j work.GateJob, runErr, ctxErr error) core.GateResult {
 		g.Reason = "the gate left no report: " + fmt.Sprint(runErr)
 		return g
 	}
-	g.Reason, g.Sandbox, g.Transient, g.Alone, g.Conflicts = rep.Verdict.Reason, rep.Sandbox, rep.Transient, rep.Alone, rep.Conflicts
+	g.Reason, g.Sandbox, g.Transient, g.Alone, g.Conflicts, g.Measured = rep.Verdict.Reason, rep.Sandbox, rep.Transient, rep.Alone, rep.Conflicts, rep.Measured && !rep.CantRun
 	if g.Reason == "" {
 		g.Reason = rep.Error
 	}

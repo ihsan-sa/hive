@@ -156,15 +156,11 @@ func (m *model) dashRows() []row {
 		}
 	}
 	if add(row{key: "plans", text: "plan usage", expand: len(m.st.Plans) > 0, def: true}) {
+		now := time.Now()
 		for _, p := range m.st.Plans {
-			status := text.Visible(p.Limit.Status)
-			if status == "rejected" {
-				status = stBad.Render("limited") + ", resets " + p.Limit.ResetsAt.Local().Format("Mon 15:04")
-			}
-			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), status)
-			for _, k := range sortedKeys(p.Limit.Windows) {
-				wnd := p.Limit.Windows[k]
-				line += fmt.Sprintf("  %s %.0f%%", text.Visible(k), wnd.Utilization*100)
+			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), standing(p, now))
+			for _, w := range p.Limit.WindowUses(now) {
+				line += "  " + windowShort(w, now, true)
 			}
 			add(row{key: "plan:" + p.Key(), depth: 1, text: line})
 		}
@@ -607,6 +603,9 @@ func (m *model) viewDetail(d *detail) []string {
 		}
 		kv("task", t.Label())
 		kv("stage", t.Stage+"  "+core.Clip(t.Reason, 200))
+		if t.Warning != "" {
+			kv("warning", core.Clip(t.Warning, 200))
+		}
 		kv("project", t.Project)
 		kv("aim", t.AimWord())
 		if t.Issue.Number > 0 {
@@ -1032,7 +1031,17 @@ func (m *model) settings() []setting {
 		if v == "" {
 			v = "none"
 		}
-		s = append(s, setting{group: "Routes", label: role, value: v, key: "route:" + role, choices: routeChoices(c, role)})
+		s = append(s, setting{group: "Routes", label: role, value: v, key: "route:" + role, choices: routeChoices(c, role, "")})
+	}
+	// A project's own routes (set by the lead's route op or config.json)
+	// show under it and change or clear the same way.
+	for _, pv := range m.st.Projects {
+		for _, role := range core.RouteRoles {
+			if own := c.Projects[pv.Name].Routes[role]; len(own) > 0 {
+				s = append(s, setting{group: "Routes", label: role + " for " + pv.Name, value: strings.Join(c.Shown(role, pv.Name), ", "),
+					key: "route:" + role + ":" + pv.Name, choices: routeChoices(c, role, pv.Name)})
+			}
+		}
 	}
 	for _, name := range sortedKeys(c.Models) {
 		x := c.Models[name]
@@ -1232,19 +1241,24 @@ func routeEntry(c core.Config, m string) string {
 }
 
 // routeNow is the route a pick changes: the role's own, else what it runs on
-// now (its model setting, or the tribunal's seats).
-func routeNow(c core.Config, role string) []string {
+// now (its model setting, or the tribunal's seats). A project's is only its own.
+func routeNow(c core.Config, role, project string) []string {
 	var out []string
 	add := func(e string) {
 		if e != "" && !slices.Contains(out, e) {
 			out = append(out, e)
 		}
 	}
-	switch own := c.Routes[role]; {
+	own := c.Routes[role]
+	if project != "" {
+		own = c.Projects[project].Routes[role]
+	}
+	switch {
 	case len(own) > 0:
 		for _, e := range own {
 			add(routeEntry(c, e))
 		}
+	case project != "":
 	case role == "tribunal":
 		for _, t := range c.Seats("") {
 			if t.Harness == "open" {
@@ -1261,8 +1275,8 @@ func routeNow(c core.Config, role string) []string {
 
 // routeChoices are a route's pick-list: add each known model that isn't on
 // it, remove each that is, and clear the role's own route.
-func routeChoices(c core.Config, role string) []string {
-	now := routeNow(c, role)
+func routeChoices(c core.Config, role, project string) []string {
+	now := routeNow(c, role, project)
 	var out []string
 	for _, m := range routeModels(c) {
 		if slices.Contains(now, m) {
@@ -1274,9 +1288,10 @@ func routeChoices(c core.Config, role string) []string {
 	return append(out, "clear")
 }
 
-// routeEdit is c with one pick from a route's pick-list made.
-func routeEdit(c core.Config, role, choice string) core.Config {
-	now := routeNow(c, role)
+// routeEdit is c with one pick from a route's pick-list made, in project
+// ("" for the workspace).
+func routeEdit(c core.Config, role, project, choice string) core.Config {
+	now := routeNow(c, role, project)
 	switch {
 	case choice == "clear":
 		now = nil
@@ -1287,15 +1302,29 @@ func routeEdit(c core.Config, role, choice string) core.Config {
 	default:
 		return c
 	}
-	c.Routes = maps.Clone(c.Routes)
-	if c.Routes == nil {
-		c.Routes = map[string][]string{}
+	set := func(routes map[string][]string) map[string][]string {
+		routes = maps.Clone(routes)
+		if routes == nil {
+			routes = map[string][]string{}
+		}
+		if len(now) == 0 {
+			delete(routes, role)
+		} else {
+			routes[role] = now
+		}
+		return routes
 	}
-	if len(now) == 0 {
-		delete(c.Routes, role)
-	} else {
-		c.Routes[role] = now
+	if project == "" {
+		c.Routes = set(c.Routes)
+		return c
 	}
+	c.Projects = maps.Clone(c.Projects)
+	if c.Projects == nil {
+		c.Projects = map[string]core.ProjectSettings{}
+	}
+	ps := c.Projects[project]
+	ps.Routes = set(ps.Routes)
+	c.Projects[project] = ps
 	return c
 }
 
@@ -1341,7 +1370,8 @@ func (m *model) saveSetting(v string) tea.Cmd {
 		}
 		c.Projects[p] = ps
 	case strings.HasPrefix(key, "route:"):
-		c = routeEdit(c, strings.TrimPrefix(key, "route:"), v)
+		role, project, _ := strings.Cut(strings.TrimPrefix(key, "route:"), ":")
+		c = routeEdit(c, role, project, v)
 	case key == "channel":
 		if c.Channel = v; v == "default" {
 			c.Channel = ""
@@ -1489,6 +1519,37 @@ func toldHead(told []core.Ask, now time.Time) string {
 		return fmt.Sprintf("done for you (%d recent)", len(told))
 	}
 	return fmt.Sprintf("done for you (%d in the last day, %d recent)", day, len(told))
+}
+
+// standing is the plan's state in plain words, coloured by how near its
+// limit the login is.
+func standing(p core.Plan, now time.Time) string {
+	s := text.Visible(p.Limit.Standing(now))
+	switch {
+	case p.Parked(now):
+		return stBad.Render(s)
+	case p.Limit.Status == "allowed_warning" && p.Limit.ResetsAt.After(now):
+		return stWarn.Render(s)
+	}
+	return s
+}
+
+// windowShort is one usage window and when it resets; a window that has reset
+// since the reading shows that instead of its old share. Long adds how far
+// off the reset is.
+func windowShort(w harness.WindowUse, now time.Time, long bool) string {
+	name := text.Visible(w.Name)
+	switch {
+	case w.ResetsAt.IsZero():
+		return fmt.Sprintf("%s %.0f%%", name, w.Used*100)
+	case w.Stale:
+		return fmt.Sprintf("%s reset %s", name, stDim.Render(w.ResetsAt.Local().Format("Mon 15:04")))
+	}
+	s := fmt.Sprintf("%s %.0f%%, resets %s", name, w.Used*100, w.ResetsAt.Local().Format("Mon 15:04"))
+	if long {
+		s += stDim.Render(" (in " + w.ResetsIn(now) + ")")
+	}
+	return s
 }
 
 // limitNote is a limit the pace set, dimmed after a heading, or "" for none.

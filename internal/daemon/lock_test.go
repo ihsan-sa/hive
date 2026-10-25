@@ -211,3 +211,72 @@ func TestPingFailsOnceStopping(t *testing.T) {
 		t.Fatal("a stopping daemon still answers ping")
 	}
 }
+
+// A unit that takes the start but brings no daemon up (failed, at its start
+// limit, or naming a binary that has moved) doesn't leave the command
+// waiting for nothing: it starts a daemon itself.
+func TestACommandStartsADaemonWhenTheUnitBringsNone(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd is Linux's")
+	}
+	ws := core.Workspace{Root: t.TempDir()}
+	os.MkdirAll(ws.Hive(), 0o755)
+	home, bin := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	unit := filepath.Join(home, ".config", "systemd", "user", "hive.service")
+	os.MkdirAll(filepath.Dir(unit), 0o755)
+	// Written with a trailing slash: still this workspace's unit.
+	os.WriteFile(unit, []byte("[Service]\nEnvironment=HIVE_HOME="+ws.Root+"/\nExecStart=/moved/hive daemon\n"), 0o644)
+	calls := filepath.Join(t.TempDir(), "calls")
+	os.WriteFile(filepath.Join(bin, "systemctl"), []byte("#!/bin/sh\necho \"$*\" >> '"+calls+"'\n[ \"$2\" = is-active ] && echo failed\nexit 0\n"), 0o755)
+	defer func(f func() (string, error)) { executable = f }(executable)
+	spawned := filepath.Join(t.TempDir(), "spawned")
+	os.WriteFile(filepath.Join(bin, "fake-hive"), []byte("#!/bin/sh\n: > '"+spawned+"'\n"), 0o755)
+	executable = func() (string, error) { return filepath.Join(bin, "fake-hive"), nil }
+	defer func(w time.Duration) { unitWait = w }(unitWait)
+	unitWait = 300 * time.Millisecond
+	go func() {
+		for !core.Exists(spawned) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		serveDaemon(t, ws, 0)
+	}()
+	if _, err := Start(ws); err != nil {
+		t.Fatalf("Start with a unit that brings no daemon: %v", err)
+	}
+	if raw, _ := os.ReadFile(calls); !strings.Contains(string(raw), "--user start --no-block hive.service") {
+		t.Fatalf("the unit wasn't tried first: %q", raw)
+	}
+}
+
+// Two plain daemons starting from cold on one workspace: the one that loses
+// the lock exits once the winner answers, not after the whole stopWait.
+func TestTwoColdStartsLeaveOneDaemon(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	os.MkdirAll(ws.Hive(), 0o755)
+	type result struct {
+		l   *workspaceLock
+		err error
+	}
+	got := make(chan result, 2)
+	for range 2 {
+		go func() { l, err := lockWorkspace(ws, stopWait, true); got <- result{l, err} }()
+	}
+	first := <-got
+	if first.err != nil {
+		t.Fatalf("neither start took the workspace: %v", first.err)
+	}
+	defer first.l.Release()
+	start := time.Now()
+	serveDaemon(t, ws, 300*time.Millisecond) // the winner comes up
+	second := <-got
+	var held *AlreadyRunning
+	if !errors.As(second.err, &held) {
+		second.l.Release()
+		t.Fatalf("the second start ran on: %v", second.err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("the second start took %s to exit after the first answered", d)
+	}
+}

@@ -701,6 +701,11 @@ func (rs *Runs) Start(s RunSpec) (Run, error) {
 	if err := harness.Capped(h, s.Budget); err != nil {
 		return Run{}, err
 	}
+	if HarnessName(s.Harness) == "open" {
+		if err := rs.ws.LoadConfig().Models[s.Model].Holds(s.Budget); err != nil {
+			return Run{}, fmt.Errorf("a run with a budget won't start on %s: %v", s.Model, err)
+		}
+	}
 	for _, d := range []string{rs.ws.RunHost(s.ID), rs.ws.RunRO(s.ID), filepath.Join(rs.ws.RunBox(s.ID), "outbox"), filepath.Join(rs.ws.RunBox(s.ID), "inbox"), rs.ws.RunHome(s.ID)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return Run{}, err
@@ -1298,6 +1303,13 @@ func (rs *Runs) endTurn(r Run) {
 		}
 		tl.Limit = &l
 	}
+	if p := rs.ws.LoadConfig().Models[r.Model].Price; HarnessName(r.Harness) == "open" && p != nil && tl.Result != nil && tl.Result.Tokens != nil {
+		// The harness counts no vendor's prices; a priced model's turn costs
+		// its tokens at the price the person set.
+		res := *tl.Result
+		res.CostUSD = p.Cost(*res.Tokens)
+		tl.Result = &res
+	}
 	if tl.Limit != nil {
 		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
 	}
@@ -1642,15 +1654,23 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	r.Session = session
 	// One process per turn: another daemon on this workspace may have started it.
-	if err := rs.claimTurn(r.ID, turn); err != nil {
+	took, err := rs.claimTurn(r.ID, turn)
+	if err != nil {
 		rs.mu.Lock()
-		said := rs.backedOff[r.ID] == turn
+		said, first := rs.backedOff[r.ID] == turn, len(rs.backedOff) == 0
 		rs.backedOff[r.ID] = turn
 		rs.mu.Unlock()
 		if !said {
 			fmt.Printf("hive: %s's turn %d isn't started here: %v\n", r.ID, turn, err)
 		}
+		if first { // once per daemon, so a second daemon shows in the record and on the dashboard
+			rs.append("alert.raised", map[string]string{"kind": "daemon", "ref": "turn-claim", "text": fmt.Sprintf("This daemon (pid %d) backed off %s's turn %d: %v. Two daemons may be running on this workspace.", os.Getpid(), r.ID, turn, err)})
+		}
 		return
+	}
+	if took != "" {
+		fmt.Printf("hive: %s's turn %d is started again here: %s\n", r.ID, turn, took)
+		rs.append("alert.raised", map[string]string{"kind": "daemon", "ref": "turn-takeover-" + r.ID, "text": fmt.Sprintf("%s's turn %d is started again: %s before journalling its start.", r.ID, turn, took)})
 	}
 	promptFile := filepath.Join(rs.ws.RunHost(r.ID), fmt.Sprintf("turn-%03d.prompt", turn))
 	if err := os.WriteFile(promptFile, []byte(prompt), 0o644); err != nil {
