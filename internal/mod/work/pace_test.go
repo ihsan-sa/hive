@@ -130,7 +130,18 @@ func TestPaceHoldsAndFreesTheQueueAndChecks(t *testing.T) {
 		}
 	}
 	want(a, StageWorking, "")
-	want(b, StageQueued, "waiting for a worker (pace 1 (pulled back: machine loaded))")
+	want(b, StageQueued, "waiting for a worker (at the pace)")
+	// The pace moving at the same limit or below leaves a waiting task as
+	// saved: its reason doesn't carry the live pace.
+	saved := stageOf(t, m, b).Updated
+	set(&m.workers, 1, defaultWorkers)
+	m.workers.mu.Lock()
+	m.workers.why = "grew: room on the machine and plan"
+	m.workers.mu.Unlock()
+	tick(m)
+	if got := stageOf(t, m, b); !got.Updated.Equal(saved) {
+		t.Fatalf("a pace move re-saved a waiting task: reason %q", got.Reason)
+	}
 	set(&m.workers, 2, defaultWorkers)
 	tick(m)
 	want(b, StageWorking, "")
