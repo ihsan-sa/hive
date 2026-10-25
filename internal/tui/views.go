@@ -607,6 +607,9 @@ func (m *model) viewDetail(d *detail) []string {
 		}
 		kv("task", t.Label())
 		kv("stage", t.Stage+"  "+core.Clip(t.Reason, 200))
+		if t.Warning != "" {
+			kv("warning", core.Clip(t.Warning, 200))
+		}
 		kv("project", t.Project)
 		kv("aim", t.AimWord())
 		if t.Issue.Number > 0 {
