@@ -156,7 +156,9 @@ func (m *Module) planSpent(cfg core.Config) string {
 }
 
 // paceWorkers is the workers' limit now, with working of them at work and
-// waiting saying briefs wait for one.
+// waiting saying briefs wait for one. working leaves out quiet workers (see
+// admit): they use no machine or plan, so the pace grows only when the
+// active ones fill the limit, and a pull-back under strain starts from them.
 func (m *Module) paceWorkers(cfg core.Config, working int, waiting bool) int {
 	why, watching := machine(cfg)
 	if why == "" {

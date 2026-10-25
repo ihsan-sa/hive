@@ -135,6 +135,9 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	cur := m.gating[key]
 	var out, full string
 	if cur == nil {
+		// A run on this task's earlier head (or main) judges what no longer
+		// lands: it ends, as a change of aim ends it, and frees its slot.
+		m.dropGateLocked(t.ID, key)
 		if full = m.gateRoom(len(m.gating)); full == "" {
 			out = filepath.Join(m.C.WS.Gates(), p.Name, "recursive", time.Now().UTC().Format("060102-150405")+"-"+core.Short(t.SHA))
 			if m.gating == nil {
@@ -277,9 +280,14 @@ func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
 func (m *Module) dropGate(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.dropGateLocked(id, "")
+}
+
+// dropGateLocked is dropGate with m.mu held, sparing the run keyed keep.
+func (m *Module) dropGateLocked(id, keep string) bool {
 	dropped := false
 	for _, r := range m.gating {
-		if r.task != id || r.dropped {
+		if r.task != id || r.key == keep || r.dropped {
 			continue
 		}
 		r.dropped, dropped = true, true
@@ -446,7 +454,7 @@ func (m *Module) gateBack(t *Task, p core.Project, g core.GateResult) error {
 	}
 	detail += fmt.Sprintf("\n\nThe change is kept only if the child Hive built from it does better than the current one, with no regression. Add this line to `.hive/lessons.md` with your fix, so it is on the record:\n\n- %s: the recursive gate rolled back %s (%s): %s",
 		time.Now().UTC().Format("2006-01-02"), core.Short(g.Head), t.Label(), g.Reason)
-	return m.sendBackWith(t, p, findings, strings.TrimSpace(detail))
+	return m.sendBackWith(t, p, findings, strings.TrimSpace(detail), false)
 }
 
 // gateRolledBack opens the findings a rollback sends back.

@@ -105,8 +105,8 @@ func TestSelfGateCatchesUpFirst(t *testing.T) {
 	}
 }
 
-// A rollback goes back to the worker with the report and the lesson to
-// record, and the PR stays open.
+// A rollback goes back to the worker with the report, the lesson to record
+// and a fresh main.bundle, and the PR stays open.
 func TestSelfGateRollbackSendsBack(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
 	gateOnce(t, m, task, p)
@@ -118,6 +118,9 @@ func TestSelfGateRollbackSendsBack(t *testing.T) {
 	}
 	if raw, err := os.ReadFile(filepath.Join(m.C.WS.RunRO(task.Worker), gateReportFile)); err != nil || !strings.Contains(string(raw), "probe table") {
 		t.Fatalf("the worker has no report: %v", err)
+	}
+	if msg := queued(m, task.Worker); !strings.Contains(msg, "main.bundle holds main at") {
+		t.Fatalf("the rollback went back without main.bundle:\n%s", msg)
 	}
 	if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); !strings.Contains(c, "Recursive gate: ROLLED BACK") {
 		t.Fatalf("the PR doesn't say it was rolled back:\n%s", c)
@@ -802,5 +805,25 @@ func TestGatePace(t *testing.T) {
 	}
 	if l, _ := m.gateLimit(now.Add(gateStep), 1, cfg); l != 1 {
 		t.Fatalf("grew to %d unseen", l)
+	}
+}
+
+// A task whose head moved while its gate ran starts a run on the new head
+// and ends the one on the old: its verdict would judge what no longer lands.
+func TestNewHeadCancelsItsOldGate(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	maxGates(m, 3)
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) (string, bool) { return "", true }
+	cancelled := false
+	old := &gateRun{key: p.Name + "@oldhead@main", task: task.ID, cancel: func() { cancelled = true }}
+	other := &gateRun{key: "other", task: "t9", cancel: func() { t.Error("another task's run was cancelled") }}
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{old.key: old, other.key: other}
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if !old.dropped || !cancelled || other.dropped || len(*jobs) != 1 || (*jobs)[0].Head != task.SHA {
+		t.Fatalf("old dropped %v cancelled %v, other dropped %v, %d runs: want the old head's run ended and the new one started", old.dropped, cancelled, other.dropped, len(*jobs))
 	}
 }
