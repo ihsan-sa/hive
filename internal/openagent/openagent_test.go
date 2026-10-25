@@ -303,4 +303,20 @@ func TestKeyMainOnce(t *testing.T) {
 	if code := KeyMain([]string{f}); code == 0 {
 		t.Fatal("a second call handed out a key")
 	}
+	// A link planted at the key's name is removed, never read through.
+	if os.PathSeparator != '/' {
+		return
+	}
+	other := filepath.Join(t.TempDir(), "theirs")
+	os.WriteFile(other, []byte("sk-theirs"), 0o600)
+	os.Symlink(other, f)
+	if code := KeyMain([]string{f}); code == 0 {
+		t.Fatal("the helper read a key through a link")
+	}
+	if _, err := os.Lstat(f); !os.IsNotExist(err) {
+		t.Fatal("the link outlived the helper")
+	}
+	if raw, _ := os.ReadFile(other); string(raw) != "sk-theirs" {
+		t.Fatal("the link's target was touched")
+	}
 }

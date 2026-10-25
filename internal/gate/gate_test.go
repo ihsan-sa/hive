@@ -490,6 +490,10 @@ func TestMain(m *testing.M) {
 		if f := strings.Fields(string(out)); len(f) == 2 {
 			os.Setenv("GOMODCACHE", f[0])
 			os.Setenv("GOCACHE", f[1])
+			// The sides build in it too: the standard library compiles once,
+			// not once per side and run, which under load took past the
+			// package's timeout.
+			testGoCache = f[1]
 		}
 	}
 	dir, _ := os.MkdirTemp("", "gate-test-config-")

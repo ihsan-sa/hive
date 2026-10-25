@@ -25,6 +25,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
 	"github.com/ihsan-sa/hive-standalone-build/internal/openagent"
@@ -56,13 +57,14 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive egress grant <host:port>   open one to every sandboxed run (loopback only, e.g. 127.0.0.1:11434)
   hive egress revoke <host:port>  close it again
   hive model               the named models (free ones too) and the routes that pick each role's model
-  hive model add <name> <endpoint> <model id> [--key]   a model on an OpenAI-compatible endpoint, e.g.
+  hive model add <name> <endpoint> <model id> [--key] [--no-probe]   a model on an OpenAI-compatible endpoint, e.g.
                            hive model add qwen http://127.0.0.1:11434/v1 qwen2.5-coder:14b
                            [--anthropic]: its API is Anthropic-compatible, so Claude Code runs it, e.g.
                            hive model add kimi https://api.moonshot.ai/anthropic kimi-k2-0905-preview --key --anthropic
   hive model key <name>    store its API key, read from stdin (kept where no agent can read it)
   hive model rm <name>     forget it and its key
   hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
+                           (scanned first: it needs a handle list in .hive/private/scan-handles.txt or HIVE_SCAN_HANDLES)
   hive update              install the newest release [--release <tag>: that one, and stay on it]
   hive shutdown            stop the Hive (running agents finish their turn)
   hive uninstall           remove autostart and the binary's record; leaves your folder
@@ -600,6 +602,9 @@ func cmdStatus() int {
 		for _, p := range st.Plans {
 			fmt.Println(planLine(p, time.Now()))
 		}
+		for _, d := range st.Down {
+			fmt.Printf("model %s, so runs skip it; tried again %s\n", text.Visible(d.Line()), d.Retry.Local().Format("Mon 15:04"))
+		}
 		if len(st.Asks) > 0 {
 			fmt.Println("\nwaiting on you:")
 			for _, a := range st.Asks {
@@ -776,7 +781,7 @@ func cmdModel(args []string) int {
 		return 1
 	}
 	usage := func() int {
-		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" model [add <name> <endpoint> <model id> [--key] [--anthropic] | key <name> | rm <name>]")
+		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" model [add <name> <endpoint> <model id> [--key] [--anthropic] [--no-probe] | key <name> | rm <name>]")
 		return 2
 	}
 	if len(args) == 0 {
@@ -802,13 +807,15 @@ func cmdModel(args []string) int {
 	}
 	switch {
 	case args[0] == "add" && len(args) >= 4:
-		m := core.OpenModel{Endpoint: args[2], Model: args[3]}
+		m, noProbe := core.OpenModel{Endpoint: args[2], Model: args[3]}, false
 		for _, f := range args[4:] {
 			switch f {
 			case "--key":
 				m.Key = true
 			case "--anthropic":
 				m.API = "anthropic"
+			case "--no-probe":
+				noProbe = true
 			default:
 				return usage()
 			}
@@ -817,6 +824,26 @@ func cmdModel(args []string) int {
 			cfg.Models = map[string]core.OpenModel{}
 		}
 		cfg.Models[args[1]] = m
+		if err := cfg.Check(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		// One real request first: a model that can't answer isn't added.
+		var err error
+		if !noProbe {
+			err = models.Probe(ws, args[1], m)
+		}
+		switch {
+		case noProbe:
+			fmt.Println("Not tried (--no-probe); runs mark it down if it can't answer.")
+		case errors.Is(err, models.ErrNoKey):
+			fmt.Printf("Not tried yet: %v; storing it tries it.\n", err)
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "%s can't answer, so it wasn't added: %v\n%s\n", args[1], err, probeFix(cfg, args[1], err))
+			return 1
+		default:
+			fmt.Printf("%s answered.\n", args[1])
+		}
 	case args[0] == "rm" && len(args) == 2:
 		delete(cfg.Models, args[1])
 		os.Remove(ws.OpenKey(args[1]))
@@ -832,6 +859,11 @@ func cmdModel(args []string) int {
 			return 1
 		}
 		fmt.Println("Stored; runs on " + args[1] + " use it from their next turn.")
+		if err := models.Probe(ws, args[1], cfg.Models[args[1]]); err != nil {
+			fmt.Fprintf(os.Stderr, "But %s can't answer with it: %v\n%s\n", args[1], err, probeFix(cfg, args[1], err))
+			return 1
+		}
+		fmt.Printf("%s answered.\n", args[1])
 		return 0
 	default:
 		return usage()
@@ -846,6 +878,11 @@ func cmdModel(args []string) int {
 	}
 	fmt.Println("Saved. Route a role to it in Settings, or ask the lead.")
 	return 0
+}
+
+// probeFix is what would let named model name answer, read from its probe's error.
+func probeFix(cfg core.Config, name string, err error) string {
+	return core.Down{Pick: core.Pick{Harness: "open", Model: name}, Status: openagent.Status(err), Text: err.Error()}.Fix(cfg)
 }
 
 func cmdUninstall() int {

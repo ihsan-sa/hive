@@ -34,6 +34,9 @@ type Journal struct {
 	f    *os.File
 	seq  int64
 	subs []func(Event)
+	// breaks counts events whose seq didn't rise past the one before: two
+	// writers on one file. flagged is the count an earlier start reported.
+	breaks, flagged int
 }
 
 // OpenJournal opens (or creates) the journal at path and reads its last seq.
@@ -42,7 +45,19 @@ func OpenJournal(path string) (*Journal, error) {
 		return nil, err
 	}
 	j := &Journal{path: path}
-	if err := j.Replay(func(e Event) { j.seq = e.Seq }); err != nil {
+	if err := j.Replay(func(e Event) {
+		if e.Seq <= j.seq {
+			j.breaks++
+		}
+		j.seq = max(j.seq, e.Seq) // after two writers, the next seq is still new
+		var a struct {
+			Kind   string `json:"kind"`
+			Breaks int    `json:"breaks"`
+		}
+		if e.Kind == "alert.raised" && e.Decode(&a) == nil && a.Kind == "journal" {
+			j.flagged = max(j.flagged, a.Breaks)
+		}
+	}); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -51,6 +66,13 @@ func OpenJournal(path string) (*Journal, error) {
 	}
 	j.f = f
 	return j, nil
+}
+
+// Breaks returns how many events' seq didn't rise since an earlier start
+// reported them (none if it did): a sign two daemons wrote the journal at
+// once, and the total so far.
+func (j *Journal) Breaks() (fresh, total int) {
+	return max(j.breaks-j.flagged, 0), j.breaks
 }
 
 // Subscribe registers fn to be called (synchronously, after the write) for each new event.

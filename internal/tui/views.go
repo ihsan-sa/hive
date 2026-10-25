@@ -19,6 +19,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
@@ -163,6 +164,13 @@ func (m *model) dashRows() []row {
 				line += fmt.Sprintf("  %s %.0f%%", text.Visible(k), wnd.Utilization*100)
 			}
 			add(row{key: "plan:" + p.Key(), depth: 1, text: line})
+		}
+	}
+	if len(m.st.Down) > 0 && add(row{key: "down", text: fmt.Sprintf("models that can't answer (%d)", len(m.st.Down)), expand: true, def: true}) {
+		for _, d := range m.st.Down {
+			line := stBad.Render(text.Visible(d.Pick.String())) + "  tried again " + d.Retry.Local().Format("Mon 15:04") + "  " + text.Visible(core.Clip(d.Text, 160))
+			dt := detail{kind: "text", id: d.Pick.String(), title: d.Pick.String() + " can't answer", text: text.Visible(d.Line()) + "\n\n" + text.Visible(d.Fix(m.st.Config))}
+			add(row{key: "down:" + d.Pick.String(), depth: 1, text: line, open: &dt})
 		}
 	}
 	if add(row{key: "logins", text: "logins", expand: len(m.st.Logins) > 0, def: true}) {
@@ -428,6 +436,14 @@ func (m *model) viewTree() []string {
 		lines = append([]string{stDim.Render(rel), ""}, lines...)
 		sel += 2
 	}
+	if d := m.st.Disk; !d.At.IsZero() {
+		style := stDim
+		if d.Low() {
+			style = stWarn
+		}
+		lines = append([]string{style.Render("Disk: " + d.String() + "."), ""}, lines...)
+		sel += 2
+	}
 	if m.st.Offline != "" {
 		lines = append([]string{stWarn.Render(strings.ToUpper(m.st.Offline[:1]) + m.st.Offline[1:] + "; the work picks up again on its own."), ""}, lines...)
 		sel += 2
@@ -550,6 +566,7 @@ func (m *model) viewDetail(d *detail) []string {
 		kv("task", t.Label())
 		kv("stage", t.Stage+"  "+core.Clip(t.Reason, 200))
 		kv("project", t.Project)
+		kv("aim", t.AimWord())
 		if t.Issue.Number > 0 {
 			kv("issue", fmt.Sprintf("#%d %s", t.Issue.Number, t.Issue.URL))
 		}
@@ -919,9 +936,11 @@ func (m *model) settings() []setting {
 		}
 		return "off"
 	}
-	share := "off"
+	share := "off  (scrubbed; `" + core.Cmd + " report` shows what was sent)"
 	if since, on := c.Sharing(); on {
-		share = "on since " + since.Format("2006-01-02 15:04")
+		share = "on since " + since.Format("2006-01-02 15:04") + "  (scrubbed; `" + core.Cmd + " report` shows what was sent)"
+	} else if m.shareAsk {
+		share = report.Question + "  Enter: yes; any other key: no"
 	}
 	sandboxVal := c.Sandbox
 	if m.st.Sandbox != "" {
@@ -941,7 +960,7 @@ func (m *model) settings() []setting {
 				return flashMsg("`" + core.Cmd + " update --release <tag>` installs and pins a release")
 			}
 		}},
-		{group: "General", label: "share failures", value: share + "  (scrubbed; `" + core.Cmd + " report` shows what was sent)", key: "share"},
+		{group: "General", label: "share reports", value: share, key: "share"},
 		{group: "Agents", label: "harness", value: c.Harness, key: "harness", choices: append(slices.Clone(harness.Names), custom)},
 		{group: "Agents", label: "worker model", value: c.Model, key: "model", choices: models},
 		{group: "Agents", label: "lead model", value: c.LeadModel, key: "lead_model", choices: models},
@@ -1034,6 +1053,11 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.picking && m.setSel < len(s) && s[m.setSel].choices != nil {
 		return m.keyPick(s[m.setSel], k)
 	}
+	ask := m.shareAsk // any key answers the question; only Enter on it is yes
+	m.shareAsk = false
+	if ask && k.String() != "enter" {
+		return m, nil
+	}
 	switch k.String() {
 	case "up", "k":
 		if m.setSel > 0 {
@@ -1066,7 +1090,13 @@ func (m *model) keySettings(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			c.APIKeyOptIn = !c.APIKeyOptIn
 			return m, m.saveConfig(c, "API key use changed")
 		case "share":
+			// Turning it on asks the installers' question first, so this way
+			// in shows the same words; the second Enter is the yes.
 			_, on := m.st.Config.Sharing()
+			if !on && !ask {
+				m.shareAsk = true
+				return m, nil
+			}
 			c.SetShare(!on)
 			return m, m.saveConfig(c, "sharing changed")
 		case "sandbox":

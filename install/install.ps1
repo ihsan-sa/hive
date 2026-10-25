@@ -126,7 +126,7 @@ if ($asked -gt 1 -or $asked -lt 0) { $share = $null }
 elseif (-not $share -and $asked -ne 0) {
   $share = 'no'
   if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
-    $share = Read-Host "`nSend failure reports to the Hive developer so they get fixed? Each failure report holds what failed, when and why (up to 2,000 characters), and the agent reply or the last lines of the task log (up to 4,000 characters). A usage report counts runs, turns, merges, reverts, cost and dropped reports, with the harness name. Every report has the Hive version, the OS and a random install id. Secrets, emails and your home folder are scrubbed on this machine first. (y/N)"
+    $share = Read-Host "`nSend failure and usage reports to the Hive developer so problems get fixed? Each failure report holds what failed, when and why (up to 2,000 characters), and the agent reply or the last lines of the task log (up to 4,000 characters). A usage report counts runs, turns, merges, reverts, cost and dropped reports, with the harness name and the time span it covers. Every report has the Hive version, the OS and a random install id. Secrets, emails and your home folder are scrubbed on this machine first. (y/N)"
   }
   if (-not $share) { $share = 'no' }
 }
