@@ -29,31 +29,31 @@ The packages measured as the core, read by `tests/core-size.sh`:
 
 ## Measured on every merge
 
-`sh tests/core-size.sh` prints `core_lines` (non-test Go lines in the packages above), `go_lines` (every non-test Go line) and `binary_bytes` (the binary built as a release is: `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w"`); `--lines` skips the build. The improve module runs it on each merge and at the start, in a clean checkout in the sandbox like the tests, and keeps what it printed with that merge's score (`Measurement.Size` in `.hive/scores/<project>.jsonl` and the `score.measured` event). The dashboard shows the newest under the project, with how much it moved since the merge before. It is shown, never judged: a merge isn't kept or reverted on its size.
+`sh tests/core-size.sh` prints `core_lines` (non-test Go lines in the packages above), `go_lines` (every non-test Go line) and `binary_bytes` (the binary built as a release is: `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w"`); `--lines` skips the build. The improve module runs it in a clean checkout in the sandbox like the tests, and keeps what it printed with that measure's score (`Measurement.Size` in `.hive/scores/<project>.jsonl` and the `score.measured` event). A merge runs it with `--lines`, a few seconds, so the release build doesn't hold a check slot on every merge; the start (every daemon start and Hive update) runs it whole, so `binary_bytes` moves per release. The dashboard shows each figure's newest under the project, with how much it moved since the one before, and flags the measures since the last size that recorded none (the measure's note says why), so the tracking can't quietly stop. It is shown, never judged: a merge isn't kept or reverted on its size.
 
-A project names its own command as `"size"` in `.hive/project.json` (any command printing `name value` lines); a self project with none runs `tests/core-size.sh` while its tree has it.
+A project names its own command as `"size"` in `.hive/project.json` (any command printing `name value` lines); a self project with none runs `tests/core-size.sh` while its tree has it. Like `test` and `score`, it comes from the merged tree and runs only in the sandbox; `.hive/project.json` is a protected path as a whole, so a change to it, `size` included, waits for the person's approval to merge. If the measure ever runs outside the sandbox, this command must be weighed like the others.
 
-On main as this page landed (2026-10-25): core 16,356 lines, every package 41,356, binary 16.4 MB (linux/amd64).
+The current figures are on the dashboard and in the scores file, or run the script; this page keeps none, so it can't go stale.
 
 ## What isn't core, and where it goes
 
 Every other package is module material. Most are compiled-in modules already (`internal/mod/*`, ticked through the registry); "goes to" is the installable module (`modules/`) or client it belongs with.
 
-| Package | Lines | Goes to |
-|---|---|---|
-| `internal/harness`, `internal/openagent`, `internal/fakeagent` | 726, 673, 863 | the agents module: harness adapters (Claude, Codex, open, fake), the open harness's agent loop, the scripted test agent. The core keeps only the `Harness` interface and a registry |
-| `internal/mod/agents`, `internal/mod/models` | 105, 309 | the agents module: role prompts, the spawner, model routes |
-| `internal/tui`, `internal/text` | 4,777, 36 | the control center, a client of the control API: it should import `internal/api` alone, not the core or modules |
-| `internal/mod/release`, `internal/setup` | 1,508, 457 | a release/update module: releases, self-update, install, login, doctor, autostart |
-| `internal/mod/improve`, `internal/gate`, `internal/demo` | 1,729, 2,894, 27 | the improve module: measure and keep/revert, sweeps, step-backs, the recursive gate and its benchmark project |
-| `internal/mod/kb` | 919 | the kb module |
-| `internal/mod/risk` | 1,016 | a risk module: wardens, tribunals, approved scripts. The ceiling itself stays core |
-| `internal/mod/chat`, `internal/mod/feedback` | 578, 211 | the chat module |
-| `internal/mod/work` | 3,741 | a work module: ask → issue → PR → review → merge. The core keeps runs, spawning and the merge guarantees it calls |
-| `internal/mod/projects` | 320 | a projects module: adding and onboarding projects (the registry stays core) |
-| `internal/mod/system` | 260 | the system module: schedules and wake-ups |
-| `internal/mod/tools` | 411 | a tools module: runtimes agents install |
-| `internal/mod/stats`, `internal/mod/report` | 338, 613 | the control center's figures; the opt-in sharing report |
+| Package | Goes to |
+|---|---|
+| `internal/harness`, `internal/openagent`, `internal/fakeagent` | the agents module: harness adapters (Claude, Codex, open, fake), the open harness's agent loop, the scripted test agent. The core keeps only the `Harness` interface and a registry |
+| `internal/mod/agents`, `internal/mod/models` | the agents module: role prompts, the spawner, model routes |
+| `internal/tui`, `internal/text` | the control center, a client of the control API: it should import `internal/api` alone, not the core or modules |
+| `internal/mod/release`, `internal/setup` | a release/update module: releases, self-update, install, login, doctor, autostart |
+| `internal/mod/improve`, `internal/gate`, `internal/demo` | the improve module: measure and keep/revert, sweeps, step-backs, the recursive gate and its benchmark project |
+| `internal/mod/kb` | the kb module |
+| `internal/mod/risk` | a risk module: wardens, tribunals, approved scripts. The ceiling itself stays core |
+| `internal/mod/chat`, `internal/mod/feedback` | the chat module |
+| `internal/mod/work` | a work module: ask → issue → PR → review → merge. The core keeps runs, spawning and the merge guarantees it calls |
+| `internal/mod/projects` | a projects module: adding and onboarding projects (the registry stays core) |
+| `internal/mod/system` | the system module: schedules and wake-ups |
+| `internal/mod/tools` | a tools module: runtimes agents install |
+| `internal/mod/stats`, `internal/mod/report` | the control center's figures; the opt-in sharing report |
 
 Inside the core packages, these parts are module material too: harness specifics in `runs.go` (Codex homes and usage, open-model keys) and `tokens.go` (each harness's credential reader and renewal), `route.go` (model routes, open models), `ceiling.go`'s `Tier` and `Route` (who weighs a step), `forge_local.go` (a dev and test forge), `app/selfgate.go` (the gate's runner), the daemon's routes for chat, feedback, projects, release and work, and `cmd/hive`'s verbs for kb, improve, gate, report, share, model and update.
 

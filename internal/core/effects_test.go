@@ -400,11 +400,15 @@ func TestMainBundleLeavesNoTemp(t *testing.T) {
 	c, _, p, _ := setupProject(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.bundle")
-	if err := c.Effects.MainBundle(p, path); err != nil {
+	head, err := c.Effects.MainBundle(p, path)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if want, _ := Git(c.WS.Project(p.Name), "rev-parse", p.Branch); head != strings.TrimSpace(want) {
+		t.Fatalf("head %q, want main %q", head, want)
+	}
 	os.MkdirAll(filepath.Join(dir, "blocked", "x"), 0o755) // a non-empty directory can't be renamed over
-	if err := c.Effects.MainBundle(p, filepath.Join(dir, "blocked")); err == nil {
+	if _, err := c.Effects.MainBundle(p, filepath.Join(dir, "blocked")); err == nil {
 		t.Fatal("rename over a directory should fail")
 	}
 	if left, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(left) != 0 {

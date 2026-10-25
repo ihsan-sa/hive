@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
@@ -80,6 +81,42 @@ func TestFakedCantRunMergeTurnsRed(t *testing.T) {
 	}
 	if !asked {
 		t.Fatal("the person isn't asked for the tool")
+	}
+	counted := 0
+	for _, e := range m.C.J.Since(0) {
+		if e.Kind == "score.cant-run" {
+			counted++
+		}
+	}
+	if counted != work.CantRunTries {
+		t.Fatalf("%d tries counted over %d measures, want one each", counted, work.CantRunTries)
+	}
+
+	// Once main measures with a result again, the ask is stale and closed.
+	merge(map[string]string{".hive/project.json": `{"test": "true", "score": {"command": "sh ./score.sh", "direction": "higher"}}`})
+	for _, a := range m.C.Person.Open() {
+		if a.Ref == "cant-run:"+ms.SHA {
+			t.Fatalf("the ask stays open after main measures again: %+v", a)
+		}
+	}
+}
+
+// A full disk or quota is the machine's fault, which a commit can't fake: it
+// never counts toward red, however long it lasts.
+func TestFullDiskNeverTriesOut(t *testing.T) {
+	m, _ := scored(t)
+	full := core.Check{Kind: "test", CantRun: "can't run: the disk or a quota is full where checks run"}
+	for i := 0; i < 2*work.CantRunTries; i++ {
+		if m.triedOut("p", "abc", full) {
+			t.Fatalf("a full disk counted as red after %d measures", i+1)
+		}
+	}
+	tool := core.Check{Kind: "test", CantRun: "can't run: x is not installed where checks run", Tool: "x"}
+	for i := 1; i < work.CantRunTries; i++ {
+		m.triedOut("p", "abc", tool)
+	}
+	if !m.triedOut("p", "abc", tool) {
+		t.Fatalf("a missing tool isn't red after %d measures", work.CantRunTries)
 	}
 }
 

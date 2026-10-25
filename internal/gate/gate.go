@@ -74,6 +74,7 @@ type Report struct {
 	Fixes       FixReport  `json:"fixes"`                       // the candidate's own new tests, run on both sides
 	Transient   bool       `json:"transient,omitempty"`         // could not run for a cause that may pass (load, a flake on both sides): try again soon
 	Alone       bool       `json:"alone,omitempty"`             // could not run for a cause tied to this candidate alone (preparing its build, the run's clock): another change at this base would not hit it
+	BaseFails   bool       `json:"base_fails,omitempty"`        // could not run for a cause in the base itself (the control fails a step): every change at this base would hit it
 	Measured    bool       `json:"measured,omitempty"`          // the verdict compares both sides' results (Decide), so a judge may weigh it
 	Sig         string     `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
 }
@@ -150,8 +151,8 @@ func Run(cfg Config) (rep Report, err error) {
 			// evaluator, the org, the clock): nothing was measured, so this
 			// is not the candidate's failure and no lesson is written.
 			rep.Error, rep.CantRun = err.Error(), true
-			rep.Transient = errors.As(err, new(transient))
 			rep.Alone = errors.As(err, new(alone))
+			rep.BaseFails = errors.As(err, new(base))
 			rep.Verdict = Verdict{Reason: "the gate could not run: " + err.Error()}
 		case !rep.Verdict.Keep && len(rep.Verdict.Regressions) == 0 && len(rep.Verdict.Unmeasured) > 0:
 			rep.CantRun = true // a probe failed on both sides: that path was never measured
@@ -218,18 +219,18 @@ func Run(cfg Config) (rep Report, err error) {
 		if c.Bin == "" {
 			cfg.log("building %s at %s", c.Name, short(sha))
 			e := build(cfg, c, sha, merge)
+			var conflict *mergeConflict
+			if errors.As(e, &conflict) {
+				return rep, e // never merged: report.json names no merged tree
+			}
 			if c == cand && c.Commit != "" {
 				rep.Merged = c.Commit
-				if c.Commit != sha {
+				if c.Commit != c.Head {
 					cfg.log("  with %s merged in, at %s", short(merge), short(c.Commit))
 				}
 			}
 			if e != nil {
 				var own *ownFailure
-				var conflict *mergeConflict
-				if errors.As(e, &conflict) {
-					return rep, e
-				}
 				if !errors.As(e, &own) {
 					// The gate's own step (the clone, the module download): could not run.
 					err = fmt.Errorf("preparing %s's build: %v", c.Name, e)
@@ -580,7 +581,7 @@ func checkout(cfg Config, c *Child, sha, merge string) error {
 	if st, _ := run(c.Src, "git", "status", "--porcelain"); strings.TrimSpace(st) != "" {
 		return fmt.Errorf("checkout is not clean: %s", tail(st, 200))
 	}
-	c.Commit = got
+	c.Head, c.Commit = got, got
 	if merge == "" {
 		return nil
 	}
@@ -676,7 +677,11 @@ func (r Report) Markdown() string {
 			for _, m := range x.Metrics {
 				ms = append(ms, fmt.Sprintf("%s=%.4g", m.Name, m.Value))
 			}
-			fmt.Fprintf(&b, "| %s | %d | %v | %.1f | %s | %s |\n", x.Probe, x.Rep, x.Pass, x.Seconds, strings.Join(ms, " "), strings.ReplaceAll(tail(x.Detail, 120), "\n", " "))
+			detail := tail(x.Detail, 120)
+			if len(x.Failed) > 0 { // what matters is at its start: the failing tests and what each said
+				detail = clip(x.Detail, 400)
+			}
+			fmt.Fprintf(&b, "| %s | %d | %v | %.1f | %s | %s |\n", x.Probe, x.Rep, x.Pass, x.Seconds, strings.Join(ms, " "), strings.ReplaceAll(strings.ReplaceAll(detail, "\n", " "), "|", "\\|"))
 		}
 	}
 	for _, f := range r.Conflicts {
@@ -712,12 +717,20 @@ func whose(cand, ctrl *Child, errs map[*Child]error, why string) error {
 	case ce != nil && ke == nil:
 		return &candidateFault{why, fmt.Errorf("the candidate %s: %v", why, ce)}
 	case ce != nil && ke != nil:
-		return fmt.Errorf("both sides %s, so the step itself cannot run here: the candidate: %v; the control: %v", why, ce, ke)
+		return base{fmt.Errorf("both sides %s, so the step itself cannot run here: the candidate: %v; the control: %v", why, ce, ke)}
 	case ke != nil:
-		return fmt.Errorf("the control %s: %v", why, ke)
+		return base{fmt.Errorf("the control %s: %v", why, ke)}
 	}
 	return nil
 }
+
+// base is a could-not-run whose cause is the base itself (the control fails
+// a step, alone or with the candidate): every change at that base would hit
+// it, so the work module remembers it until main moves.
+type base struct{ err error }
+
+func (b base) Error() string { return b.err.Error() }
+func (b base) Unwrap() error { return b.err }
 
 // alone is a could-not-run tied to this candidate (preparing its own build,
 // the run's clock): no verdict on it, but no reason for another change at

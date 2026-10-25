@@ -378,7 +378,7 @@ func (m *Module) bundleFor(ch *Chat, p core.Project, id string) {
 		return
 	}
 	os.MkdirAll(m.C.WS.RunRO(id), 0o755)
-	if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(id), "main.bundle")); err != nil {
+	if _, err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(id), "main.bundle")); err != nil {
 		m.C.J.MustAppend("chat.sync_failed", map[string]string{"chat": ch.ID, "project": p.Name, "error": "bundle: " + err.Error()})
 	}
 }
