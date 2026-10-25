@@ -1076,7 +1076,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		return c, err
 	}
 	cfg := e.Config(p, mainSHA).Guarded(p)
-	protected := append([]string{".hive/project.json", ".hive/goals.md", "docs/REVIEW.md"}, cfg.Protected...)
+	protected := append([]string{".hive/project.json", ".hive/goals.md", "docs/REVIEW.md", StewardFile}, cfg.Protected...)
 	if cfg.Score != nil {
 		protected = append(protected, cfg.Score.Evaluator()...)
 	}
@@ -1232,6 +1232,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		if why := e.MergeHeld(p.Name, m.PR); why != "" {
 			return "", fmt.Errorf("refusing to merge #%d: %s", m.PR, why)
 		}
+	}
+	if why := e.Stewardship(p, m.Main); why != "" {
+		return "", fmt.Errorf("refusing to merge #%d: %s", m.PR, why)
 	}
 	if c, ok := e.GetCheck(p.Name, m.SHA, "test"); !ok || !c.OK {
 		return "", fmt.Errorf("refusing to merge %s: no passing test run recorded for that exact commit", short(m.SHA))
