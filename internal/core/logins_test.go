@@ -306,3 +306,43 @@ func TestPlanAheadOfItsWindow(t *testing.T) {
 		t.Fatalf("a week's per-model window is paced as a week: %v, want 0.61", a)
 	}
 }
+
+// At 95% of its weekly window a login takes no turns until the week resets
+// (the person, 10-25): the other login takes them, and with both there a
+// turn waits for the first week's reset, not the five-hour one's.
+func TestWeeklyStopParksALogin(t *testing.T) {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, twoLogins{}, func() []string { return nil })
+	now := time.Now()
+	five, week := now.Add(time.Hour), now.Add(5*time.Hour+24*time.Hour)
+	read := func(login string, weekly float64, resets time.Time) {
+		rs.append("plan.usage", Plan{Harness: "claude", Login: login, Limit: harness.RateLimit{Status: "allowed_warning", ResetsAt: resets, Window: "seven_day", Utilization: weekly,
+			Windows: map[string]harness.Window{"five_hour": {Utilization: 0.2, ResetsAt: five}, "seven_day": {Utilization: weekly, ResetsAt: resets}}}})
+	}
+	read("claude", 0.94, week)
+	read("claude:work", 0.5, week.Add(time.Hour))
+	if rs.Plans()[0].Parked(now) {
+		t.Fatal("a login at 94% of its week is parked")
+	}
+	read("claude", 0.95, week)
+	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false); err != nil || l.Key() != "claude:work" {
+		t.Fatalf("with the machine's login at 95%% of its week, picked %s (%v)", l.Key(), err)
+	}
+	if h := rs.Headroom(Pick{Harness: "claude", Model: "opus"}); h < 0.49 || h > 0.51 {
+		t.Fatalf("headroom %v, want the other login's 0.5", h)
+	}
+	read("claude:work", 0.97, week.Add(time.Hour))
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false); err == nil || !strings.Contains(err.Error(), "95% of its weekly window") {
+		t.Fatalf("with every login at 95%% of its week: %v", err)
+	}
+	if at := rs.freeAt("claude", "opus"); at.Before(week) || at.After(week.Add(time.Minute)) {
+		t.Fatalf("free at %v, want the week's reset %v", at, week)
+	}
+	if rs.Plans()[0].Parked(week.Add(time.Second)) {
+		t.Fatal("the login stays parked after its week resets")
+	}
+}
