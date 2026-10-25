@@ -49,6 +49,7 @@ An index is a git repository (or, for your own, any folder) with `index.json` at
 }
 ```
 
+- `repo` is an `https://` URL. Only an index kept in a folder on this machine (your own) may list a `file://` URL or an absolute path. ssh URLs aren't accepted, since they would use the person's keys. Listings that break these rules are dropped, and the reason is shown as the index's error.
 - `sha` is the full 40-character commit. An install checks out exactly that commit and refuses if the repository doesn't have it.
 - `trust` is `core-team` (the Hive's own, Hive-RSI-Lab) or `reviewed` (listed after the Hive's security read, plus a tribunal for anything that runs a program or asks for a credential). Anything else counts as `unlisted`. Only the Hive's own index (`https://github.com/Hive-RSI-Lab/marketplace`) can say `core-team`. Another index's `core-team` reads as `reviewed`.
 - `read` is the read behind that trust: who read it, at which commit, and what they found. The person and the warden see it before saying yes.
@@ -65,7 +66,7 @@ Three ways, one path:
 - Go to the control center's **Modules** tab. Below the installed modules, `[+]` rows are what the indexes list. Press enter on one to see its manifest, trust and read, then `i` to install.
 - Run `hive module add slack`, or `hive module add slack@<sha>` for another commit, or `hive module add <git URL>[//folder][@ref]`.
 
-An install fetches the commit, checks it against the listing, and shows what the module declares. Then it is routed by trust:
+An install fetches the commit as nobody in particular (no git config, credential helper or `.netrc` of the person's; https and file only), checks it against the listing, and shows what the module declares. One exception: when an agent names a path on this machine, nothing is read from it before the person's yes, because it could be any of their repositories. A name that is one of the Hive's own projects means that project, whoever asks. Then it is routed by trust:
 
 | trust | who says yes |
 |---|---|

@@ -1243,8 +1243,8 @@ func TestUnlistedModuleWaitsForThePerson(t *testing.T) {
 			ask = a
 		}
 	}
-	if ask.ID == "" || !strings.Contains(ask.Detail, "unlisted") || !strings.Contains(ask.Detail, "runs a program; hooks: source") || !strings.Contains(ask.Detail, sha) {
-		t.Fatalf("the person's ask: %+v", ask)
+	if ask.ID == "" || !strings.Contains(ask.Title, "unlisted") || !strings.Contains(ask.Detail, "reads nothing from it before your yes") {
+		t.Fatalf("the person's ask for a path an agent named: %+v", ask)
 	}
 	if _, ok := g.m.Mod.Get("door"); ok {
 		t.Fatal("installed before the person said yes")
@@ -1258,6 +1258,35 @@ func TestUnlistedModuleWaitsForThePerson(t *testing.T) {
 	}
 	if m, _ := g.m.Mod.Get("door"); m.Source.Commit != sha || m.Source.Trust != "unlisted" {
 		t.Fatalf("installed %+v", m.Source)
+	}
+	// The person's own install of it is read first, and shows what it declares.
+	src, sha = moduleRepo(t, "bell", `{"name": "bell", "exec": ["./bell"], "hooks": ["source"]}`)
+	msg, err := g.m.Install(src, "", "")
+	if err != nil || !strings.Contains(msg, "runs a program; hooks: source") || !strings.Contains(msg, sha) || !strings.Contains(msg, "waits for the person") {
+		t.Fatalf("the person's install: %q %v", msg, err)
+	}
+}
+
+// A listing whose repo git could read as an option is dropped from its index,
+// so nothing is cloned and no command runs.
+func TestDashRepoIsRefused(t *testing.T) {
+	g := newRig(t, 2)
+	mark := filepath.Join(t.TempDir(), "ran")
+	g.index(modules.Listing{Name: "evil", Repo: "--upload-pack=touch " + mark, Sha: strings.Repeat("a", 40), Trust: "reviewed"},
+		modules.Listing{Name: "ssh", Repo: "git@example.com:x/y.git", Sha: strings.Repeat("a", 40), Trust: "reviewed"})
+	if _, err := g.m.Install("evil", "", ""); err == nil || !strings.Contains(err.Error(), "no index lists") {
+		t.Fatalf("a dash repo: %v", err)
+	}
+	if list, errs := g.m.Mod.Listings(); len(list) != 0 || len(errs) != 1 || !strings.Contains(errs[0], "not a repository") {
+		t.Fatalf("listings %+v, errors %v", list, errs)
+	}
+	for _, spec := range []string{"--upload-pack=touch " + mark, "x=--upload-pack=touch " + mark, "ext::sh -c touch% " + mark} {
+		if _, err := g.m.Install(spec, "", ""); err == nil {
+			t.Errorf("%q was accepted", spec)
+		}
+	}
+	if core.Exists(mark) {
+		t.Fatal("a command ran")
 	}
 }
 

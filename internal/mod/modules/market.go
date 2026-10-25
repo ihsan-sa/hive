@@ -159,7 +159,10 @@ func readIndex(src string) ([]Listing, error) {
 				return nil, err
 			}
 			defer os.RemoveAll(tmp)
-			if _, err := core.GitT(2*time.Minute, "", "clone", "-q", "--depth", "1", src, tmp); err != nil {
+			if err := checkRepo(src, true); err != nil {
+				return nil, err
+			}
+			if _, err := anonGit(30*time.Second, "clone", "-q", "--depth", "1", "--", src, tmp); err != nil {
 				return nil, err
 			}
 			dir = tmp
@@ -178,8 +181,12 @@ func readIndex(src string) ([]Listing, error) {
 	}
 	var bad []string
 	var list []Listing
+	onMachine := core.Exists(src) // the person's own index may list folders on this machine
 	for _, l := range idx.Modules {
 		switch {
+		case checkRepo(l.Repo, onMachine) != nil:
+			bad = append(bad, l.Name+": "+checkRepo(l.Repo, onMachine).Error())
+			continue
 		case !nameRe.MatchString(l.Name):
 			bad = append(bad, fmt.Sprintf("%q: not a module name", l.Name))
 			continue
@@ -203,6 +210,41 @@ func readIndex(src string) ([]Listing, error) {
 		return list, errors.New("skipped " + strings.Join(bad, "; "))
 	}
 	return list, nil
+}
+
+// local says whether a repository or index is a folder on this machine.
+func local(s string) bool { return strings.HasPrefix(s, "file://") || filepath.IsAbs(s) }
+
+// checkRepo accepts where a module or index may come from: an https:// URL,
+// or, where localOK, a file:// URL or an absolute path. Nothing git could
+// read as an option, and no other transport (ssh would use the person's keys,
+// ext:: runs commands).
+func checkRepo(repo string, localOK bool) error {
+	switch {
+	case repo == "" || strings.HasPrefix(repo, "-") || strings.ContainsAny(repo, "\x00\n\r"):
+		return fmt.Errorf("repo %q is not a repository", repo)
+	case strings.HasPrefix(repo, "https://"):
+		return nil
+	case localOK && local(repo):
+		return nil
+	case localOK:
+		return fmt.Errorf("repo %q: give an https:// URL or a folder on this machine", repo)
+	}
+	return fmt.Errorf("repo %q: an index online may list only https:// repositories", repo)
+}
+
+// anonGit runs git for a fetch from outside as nobody in particular: no
+// global or system config, a home of its own (no credential helper, no
+// .netrc), and only the https and file transports.
+func anonGit(timeout time.Duration, args ...string) (string, error) {
+	home, err := os.MkdirTemp("", "hive-git-home-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(home)
+	env := []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "HOME=" + home, "XDG_CONFIG_HOME=" + home, "USERPROFILE=" + home,
+		"GIT_ALLOW_PROTOCOL=https:file", "GIT_SSH_COMMAND=false"}
+	return core.GitEnvT(timeout, "", env, append([]string{"-c", "credential.helper=", "-c", "http.cookieFile="}, args...)...)
 }
 
 func safePath(p string) error {
@@ -312,6 +354,9 @@ func (r *Registry) PlanFor(spec string) (Plan, error) {
 		if err := safePath(dir); err != nil {
 			return Plan{}, err
 		}
+		if err := checkRepo(repo, true); err != nil {
+			return Plan{}, err
+		}
 		return Plan{Name: name, Repo: repo, Path: dir, Sha: ref, Trust: "unlisted"}, nil
 	}
 	list, errs := r.listings(false)
@@ -360,7 +405,10 @@ func (r *Registry) fetch(p Plan, from string, keep func(tree string, p Plan) err
 		return p, err
 	}
 	defer os.RemoveAll(tmp)
-	if _, err := core.GitT(10*time.Minute, "", "clone", "-q", "--no-checkout", p.Repo, tmp); err != nil {
+	if err := checkRepo(p.Repo, true); err != nil {
+		return p, err
+	}
+	if _, err := anonGit(10*time.Minute, "clone", "-q", "--no-checkout", "--", p.Repo, tmp); err != nil {
 		return p, fmt.Errorf("fetching %s: %w", p.Repo, err)
 	}
 	want := p.Sha

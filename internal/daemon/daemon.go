@@ -777,6 +777,22 @@ func (s *server) routes() http.Handler {
 		list, errs := a.Mods.Listings()
 		return map[string]any{"modules": list, "errors": errs, "indexes": modules.Indexes(a.C.WS.LoadConfig())}, nil
 	})
+	h("/api/module/indexes", func(r *http.Request) (any, error) {
+		var b struct{ Add, Remove string }
+		if err := decode(r, &b); err != nil {
+			return nil, err
+		}
+		cfg := a.C.WS.LoadConfig()
+		idx := slices.DeleteFunc(slices.Clone(modules.Indexes(cfg)), func(s string) bool { return s == b.Add || s == b.Remove })
+		if b.Add != "" {
+			idx = append(idx, b.Add)
+		}
+		if len(idx) == 0 {
+			return nil, errors.New("keep at least one index; with none listed, the Hive's own is read")
+		}
+		cfg.Indexes = idx
+		return idx, a.C.WS.SaveConfig(cfg)
+	})
 	h("/api/module/add", func(r *http.Request) (any, error) {
 		var b struct{ Spec string }
 		if err := decode(r, &b); err != nil {

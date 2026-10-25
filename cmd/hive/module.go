@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
@@ -72,35 +71,29 @@ func cmdModule(args []string) int {
 			fmt.Println(msg)
 			return nil
 		})
-	case args[0] == "index" && (len(args) == 1 || len(args) == 3 && (args[1] == "add" || args[1] == "rm")):
+	case args[0] == "index" && len(args) == 1:
 		ws, err := workspace()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		cfg := ws.LoadConfig()
-		idx := modules.Indexes(cfg)
-		if len(args) == 1 {
-			for _, i := range idx {
-				fmt.Println(i)
-			}
-			return 0
+		for _, i := range modules.Indexes(ws.LoadConfig()) {
+			fmt.Println(i)
 		}
-		idx = slices.DeleteFunc(slices.Clone(idx), func(s string) bool { return s == args[2] })
-		if args[1] == "add" {
-			idx = append(idx, args[2])
-		}
-		if len(idx) == 0 {
-			fmt.Fprintln(os.Stderr, "keep at least one index; with none listed, the Hive's own is read")
-			return 1
-		}
-		cfg.Indexes = idx
-		if err := ws.SaveConfig(cfg); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		fmt.Println("Modules install from: " + strings.Join(idx, ", "))
 		return 0
+	case args[0] == "index" && len(args) == 3 && (args[1] == "add" || args[1] == "rm"):
+		body := map[string]string{"add": args[2]}
+		if args[1] == "rm" {
+			body = map[string]string{"remove": args[2]}
+		}
+		return withClient(func(c *api.Client) error {
+			var idx []string
+			if err := c.Do("POST", "/api/module/indexes", body, &idx); err != nil {
+				return err
+			}
+			fmt.Println("Modules install from: " + strings.Join(idx, ", "))
+			return nil
+		})
 	}
 	fmt.Fprint(os.Stderr, strings.ReplaceAll(moduleUsage, "hive ", core.Cmd+" "))
 	return 2

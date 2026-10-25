@@ -912,9 +912,22 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 // the run that asked, "" for the person. It says what was declared and who
 // decides.
 func (m *Module) Install(spec, from, project string) (string, error) {
+	if _, ok := m.C.Projects.Get(spec); ok {
+		spec = "project:" + spec // a name that is one of the Hive's own projects is that project, whoever asks
+	}
 	plan, err := m.Mod.PlanFor(spec)
 	if err != nil {
 		return "", err
+	}
+	if from != "" && plan.Trust == "unlisted" && plan.Index == "" && !strings.HasPrefix(plan.Repo, "https://") {
+		// A path or file:// URL an agent names could be any repository on
+		// this machine: nothing is read from it before the person's yes.
+		a := m.C.Person.Ask(core.Ask{Kind: "module", Ref: spec, From: from, Project: project,
+			Title: "Install module from " + plan.Repo + " (unlisted)?",
+			Detail: "An agent asked to install a module from " + plan.Repo + ", a repository on this machine. The Hive reads nothing from it before your yes, so what it declares isn't shown. " +
+				"On install it is fetched, its module.json's reach is what it gets, and a program it carries starts only after a review of its code.",
+			Options: []string{"install", "decline"}})
+		return "Unlisted, on this machine: it waits for the person (ask " + a.ID + "), and nothing is read from it before their yes.", nil
 	}
 	if plan.Trust == "project" {
 		p, ok := m.C.Projects.Get(plan.Project)
