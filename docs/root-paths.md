@@ -4,7 +4,7 @@ Design for `hive-repo-guards-its-root-paths` (issue #141).
 
 ## What it does for the person
 
-Spec section 10 lets a project's settings class paths as **high** (a change needs a second, separate read) or **root** (it runs with elevated rights: high, and the release waits for the person). The gate already did this, but the Hive's own `.hive/project.json` names no classes, so a change to the sandbox or to the code that runs approved scripts on the person's machine got the same single read as a TUI tweak, and released with nobody asked.
+Spec section 10 lets a project's settings class paths as **high** (a change needs a second, separate read) or **root** (it runs with elevated rights: high, and the release waits for the Hive's security seat and panel, then tells the person after; see docs/risk.md). The gate already did this, but the Hive's own `.hive/project.json` names no classes, so a change to the sandbox or to the code that runs approved scripts on the person's machine got the same single read as a TUI tweak, and released with nobody asked.
 
 Now a self project (`Project.Self`, the Hive's own source) always guards a built-in set of paths, on top of whatever its project.json adds:
 
@@ -22,7 +22,7 @@ Now a self project (`Project.Self`, the Hive's own source) always guards a built
 
 Every project, self or not, also protects `docs/REVIEW.md` next to `.hive/goals.md` and `.hive/project.json`: it is the person's intent the reviewer reads from main, so a change to it waits for an approval (the person's, or a warden's by autonomy) and is never a small docs change that merges on tests alone.
 
-A change touching a root path needs two separate land reads of its exact commit to merge, and the release that carries it holds for the person's "release". A change touching a high path needs the two reads and releases on its own. The person sees the same holds and asks they already do; nothing new to learn.
+A change touching a root path needs two separate land reads of its exact commit to merge, and the release that carries it goes out once the security seat and panel passed its diff, with the person told after (it held for the person's "release" until 24 Oct 2026). A change touching a high path needs the two reads and releases on its own. The person sees the same holds and asks they already do; nothing new to learn.
 
 ## How it fits
 
