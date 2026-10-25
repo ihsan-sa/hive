@@ -202,6 +202,30 @@ func TestPruneRemovesLeftovers(t *testing.T) {
 	}
 }
 
+// The measure names agents' homes, and what no part names shows as the rest,
+// so the parts add to the total.
+func TestMeasureDiskNamesEverything(t *testing.T) {
+	c, _ := testHive(t)
+	t.Setenv("TMPDIR", t.TempDir())
+	ws := c.Effects.ws
+	put := func(p string, n int) {
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, make([]byte, n), 0o644)
+	}
+	put(filepath.Join(ws.RunHome("w-1"), ".cache", "go-build", "a"), 5000)
+	put(filepath.Join(ws.Hive(), "unnamed", "b"), 3000)
+	d := c.Effects.MeasureDisk()
+	parts := map[string]int64{}
+	var sum int64
+	for _, p := range d.Parts {
+		parts[p.Name] = p.Bytes
+		sum += p.Bytes
+	}
+	if parts["agents' homes"] != 5000 || parts["the rest"] < 3000 || sum != d.Total {
+		t.Fatalf("parts %v add to %d, total %d", parts, sum, d.Total)
+	}
+}
+
 func TestBytes(t *testing.T) {
 	for n, want := range map[int64]string{0: "0 B", 1023: "1023 B", 1536: "1.5 KB", 3 << 30: "3.0 GB"} {
 		if got := Bytes(n); got != want {

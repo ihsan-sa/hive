@@ -537,7 +537,8 @@ func (e *Effects) MeasureDisk() DiskUse {
 	for _, p := range projects {
 		checkouts += Size(ws.Checkouts(p.Name()))
 	}
-	homes := Size(ws.CheckHomes())
+	inside := Size(ws.CheckHomes())
+	homes := inside
 	if ms, _ := filepath.Glob(filepath.Join(os.TempDir(), "hive-check-home-*")); len(ms) > 0 {
 		for _, m := range ms {
 			homes += Size(m)
@@ -546,7 +547,15 @@ func (e *Effects) MeasureDisk() DiskUse {
 	d := DiskUse{At: time.Now().UTC(), Total: Size(ws.Root), Parts: []DiskPart{
 		{"agents' checkouts", checkouts}, {"check homes", homes}, {"Go module cache", Size(ws.GoModCache())},
 		{"check checkouts and gates", Size(ws.Gates())}, {"runs", Size(ws.Runs())}, {"tools", Size(ws.Tools())},
+		{"agents' homes", Size(filepath.Join(ws.Private(), "runs"))}, {"scratch", Size(filepath.Join(ws.Hive(), "scratch"))},
 	}}
+	// What no part names is said too, so a folder that grows unnamed shows
+	// (the temp check homes are outside the workspace, so not in Total).
+	rest := d.Total - inside + homes
+	for _, p := range d.Parts {
+		rest -= p.Bytes
+	}
+	d.Parts = append(d.Parts, DiskPart{"the rest", max(rest, 0)})
 	slices.SortStableFunc(d.Parts, func(a, b DiskPart) int { return cmp.Compare(b.Bytes, a.Bytes) })
 	for _, r := range []Room{{Name: "workspace", Path: ws.Root}, {Name: "temp", Path: os.TempDir()}} {
 		if free, size, ok := statRoom(r.Path); ok {

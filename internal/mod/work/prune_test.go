@@ -73,3 +73,57 @@ func TestCheckoutsGoWhenTheTaskEnds(t *testing.T) {
 		t.Fatal("a task stopped for a week is still waiting for its worker")
 	}
 }
+
+// A run's private folder goes by its checkout's rule, and the caches in an
+// ended run's home go once it has sat idle an hour; a run still going keeps
+// its home whole.
+func TestRunHomesGo(t *testing.T) {
+	m, _, task, p := noCommitRig(t, 0)
+	ws := m.C.WS
+	put := func(id, rel string) string {
+		f := filepath.Join(ws.RunHome(id), rel)
+		os.MkdirAll(filepath.Dir(f), 0o755)
+		os.WriteFile(f, []byte("data"), 0o444)
+		return f
+	}
+	start := func(id, role, status string) {
+		if _, err := m.C.Runs.Start(core.RunSpec{ID: id, Role: role, Project: p.Name, Task: "t1", Harness: "fake"}); err != nil {
+			t.Fatal(err)
+		}
+		if status != "" {
+			m.C.Runs.SetStatus(id, status, "")
+		}
+	}
+	start("w-t1", "worker", core.StatusDone)
+	start("rv1", "reviewer", "")
+	task.Worker, task.Stage = "w-t1", StageReviewing
+	m.save(task, "reviewing")
+	wCache, wSession := put("w-t1", ".cache/go-build/x"), put("w-t1", ".claude/projects/s.jsonl")
+	wMods := put("w-t1", "go/pkg/mod/m/f.go")
+	os.Chmod(filepath.Dir(wMods), 0o555)
+	rCache := put("rv1", ".cache/go-build/x")
+	orphan := filepath.Join(ws.Private(), "runs", "gone-run")
+	os.MkdirAll(orphan, 0o755)
+	old := time.Now().Add(-48 * time.Hour)
+	os.Chtimes(orphan, old, old)
+
+	m.pruneRunHomes(time.Now())
+	for f, want := range map[string]bool{wCache: true, wSession: true, rCache: true, orphan: false} {
+		if core.Exists(f) != want {
+			t.Fatalf("just ended: %s exists %v, want %v", f, !want, want)
+		}
+	}
+	m.pruneRunHomes(time.Now().Add(2 * time.Hour))
+	for f, want := range map[string]bool{wCache: false, wMods: false, wSession: true, rCache: true} {
+		if core.Exists(f) != want {
+			t.Fatalf("an hour idle: %s exists %v, want %v", f, !want, want)
+		}
+	}
+	task.Stage = StageMerged
+	m.save(task, "merged")
+	m.Wait()
+	m.pruneRunHomes(time.Now())
+	if core.Exists(ws.RunPrivate("w-t1")) || !core.Exists(rCache) {
+		t.Fatal("a merged task's worker home stayed, or a running reviewer's went")
+	}
+}

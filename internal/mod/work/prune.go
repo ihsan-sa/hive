@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -22,10 +23,22 @@ import (
 //   - a folder no run names, once staleRun old.
 //
 // A run that hasn't ended keeps its checkout, whatever its task says.
+//
+// A run's private folder (its home and CODEX_HOME, which nothing else
+// removed) goes by the same rule. Before that, the caches in its home go once
+// it has ended and sat idle for staleCache: a Go build cache filled by one
+// `go test ./...` is a gigabyte or more, and every run kept its own, so the
+// Hive grew by ~50 GB in eight hours that hive.clean never named. A run
+// brought back after that rebuilds what it needs.
 const (
-	staleTask = 7 * 24 * time.Hour
-	staleRun  = 24 * time.Hour
+	staleTask  = 7 * 24 * time.Hour
+	staleRun   = 24 * time.Hour
+	staleCache = time.Hour
 )
+
+// homeCaches are what of a run's home is a cache: the XDG cache (Go's build
+// cache, pip's, uv's), GOPATH's module cache and npm's.
+var homeCaches = []string{".cache", filepath.Join("go", "pkg"), ".npm"}
 
 // over reports whether a task can no longer bring its worker back.
 func over(t Task, now time.Time) bool {
@@ -78,10 +91,53 @@ func (m *Module) PruneCheckouts() string {
 			}
 		}
 	}
-	if n == 0 {
+	var did []string
+	if n > 0 {
+		did = append(did, fmt.Sprintf("removed %d checkout(s), %s", n, core.Bytes(freed)))
+	}
+	if s := m.pruneRunHomes(now); s != "" {
+		did = append(did, s)
+	}
+	return strings.Join(did, ", ")
+}
+
+// pruneRunHomes removes the private folders of spent runs and the caches in
+// the homes of runs that ended staleCache ago.
+func (m *Module) pruneRunHomes(now time.Time) string {
+	root := filepath.Join(m.C.WS.Private(), "runs")
+	entries, _ := os.ReadDir(root)
+	homes, caches := 0, 0
+	var freed int64
+	for _, e := range entries {
+		id, dir := e.Name(), filepath.Join(root, e.Name())
+		if !e.IsDir() {
+			continue
+		}
+		if m.spent(id, now, dir) {
+			size := core.Size(dir)
+			if core.RemoveTree(dir) == nil {
+				homes, freed = homes+1, freed+size
+			}
+			continue
+		}
+		if r, ok := m.C.Runs.Get(id); !ok || !r.Terminal() || now.Sub(r.Updated) < staleCache {
+			continue
+		}
+		for _, c := range homeCaches {
+			p := filepath.Join(m.C.WS.RunHome(id), c)
+			if fi, err := os.Lstat(p); err != nil || !fi.IsDir() {
+				continue
+			}
+			size := core.Size(p)
+			if core.RemoveTree(p) == nil {
+				caches, freed = caches+1, freed+size
+			}
+		}
+	}
+	if homes == 0 && caches == 0 {
 		return ""
 	}
-	return fmt.Sprintf("removed %d checkout(s), %s", n, core.Bytes(freed))
+	return fmt.Sprintf("removed %d spent run(s)' homes and %d cache folder(s) of ended runs, %s", homes, caches, core.Bytes(freed))
 }
 
 // ended removes a task's spent checkouts as it ends (merged or done).
