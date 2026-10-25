@@ -151,11 +151,12 @@ func StepsFrom(turn int, evs []harness.Event) []Step {
 
 // Client talks to a running daemon.
 type Client struct {
-	Info DaemonInfo // daemon.json as Dial read it; Do never changes it
-	ws   core.Workspace
-	mu   sync.Mutex
-	cur  DaemonInfo // the daemon Do last reached, which a restart moves
-	http *http.Client
+	Info   DaemonInfo                 // daemon.json as Dial read it; Do never changes it
+	info   func() (DaemonInfo, error) // daemon.json now: the file, or what a Remote last heard
+	remote bool                       // reached through a Remote's SSH proxy
+	mu     sync.Mutex
+	cur    DaemonInfo // the daemon Do last reached, which a restart moves
+	http   *http.Client
 }
 
 // Dial reads daemon.json and returns a client (without checking liveness).
@@ -164,7 +165,7 @@ func Dial(ws core.Workspace) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{Info: info, cur: info, ws: ws, http: &http.Client{Timeout: 60 * time.Second}}, nil
+	return &Client{Info: info, cur: info, info: func() (DaemonInfo, error) { return readInfo(ws) }, http: &http.Client{Timeout: 60 * time.Second}}, nil
 }
 
 func readInfo(ws core.Workspace) (DaemonInfo, error) {
@@ -183,12 +184,21 @@ func readInfo(ws core.Workspace) (DaemonInfo, error) {
 // one to exit, then opens the workspace before it listens.
 const restartWait = 30 * time.Second
 
+// remoteLag is how long a Remote waits to hear of a new daemon (remote-info
+// looks once a second) before taking a failed request as the Hive being down.
+const remoteLag = 3 * time.Second
+
 // Do calls an endpoint; body may be nil; out may be nil. When the daemon
 // can't be reached while a restart is under way (daemon.json says the old one
 // is restarting, or already names a new one), Do keeps dialling for up to
 // restartWait and sends the request to the new daemon. Otherwise a failed
 // dial is returned at once.
 func (c *Client) Do(method, path string, body, out any) error {
+	if c.remote {
+		if _, e := c.info(); e != nil { // the ssh session ended: say so, not a refused request
+			return fmt.Errorf("%w; quit and run `%s remote` again", e, core.Cmd)
+		}
+	}
 	c.mu.Lock()
 	info := c.cur
 	c.mu.Unlock()
@@ -196,14 +206,17 @@ func (c *Client) Do(method, path string, body, out any) error {
 	if errors.Is(err, errUnauthorized) {
 		// A new daemon on the old port has a new token: daemon.json names it.
 		// Refused, the request did nothing, so sending it again is safe.
-		if next, e := readInfo(c.ws); e == nil && !next.Restarting && next.Token != info.Token {
+		if next, e := c.info(); e == nil && !next.Restarting && next.Token != info.Token {
 			info = next
 			err = c.do(info, method, path, body, out)
 		}
 	}
-	for end := time.Now().Add(restartWait); dialFailed(err) && time.Now().Before(end); {
-		next, e := readInfo(c.ws)
-		if e != nil || (!next.Restarting && next.PID == from) {
+	start := time.Now()
+	for end := start.Add(restartWait); c.dialFailed(err) && time.Now().Before(end); {
+		next, e := c.info()
+		// A Remote hears of a new daemon up to a second after the old one
+		// goes, so it gives the news remoteLag to arrive.
+		if e != nil || (!next.Restarting && next.PID == from && (!c.remote || time.Since(start) > remoteLag)) {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -220,10 +233,18 @@ func (c *Client) Do(method, path string, body, out any) error {
 
 var errUnauthorized = errors.New("unauthorized")
 
-func dialFailed(err error) bool {
+// dialFailed: the request never went out, so sending it again is safe.
+// Through SSH's proxy a daemon that's gone fails the proxy's CONNECT, which
+// Go's SOCKS dialer reports as "socks connect". Anything later (a reset, an
+// EOF, a timeout) may come after the daemon took the request, and is never
+// sent again: a chat message would be posted twice.
+func (c *Client) dialFailed(err error) bool {
 	var op *net.OpError
-	return errors.As(err, &op) && op.Op == "dial"
+	return errors.As(err, &op) && (op.Op == "dial" || c.remote && op.Op == "socks connect")
 }
+
+// Remote: the client reaches its daemon through a Remote's SSH session.
+func (c *Client) Remote() bool { return c.remote }
 
 func (c *Client) do(info DaemonInfo, method, path string, body, out any) error {
 	var rd io.Reader

@@ -82,13 +82,17 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		switch {
 		case t.Queued() && !m.busy[t.ID]:
 			line = append(line, t)
+		case t.Stage == StageWorking && m.quiet(t):
+			working++ // a quiet worker holds a slot but no one back
 		case t.Stage == StageWorking || t.Queued(): // or a queued one being started right now
 			ahead = append(ahead, t)
 			working++
 		}
 		// The rest hold no one back: new ones join the line once issued, and
 		// pushed ones (landing, testing, reviewing, merging) merge main on
-		// a conflict, with their worker if need be.
+		// a conflict, with their worker if need be. Nor does a working task
+		// whose worker has gone quiet: it may never finish, and briefs that
+		// touch its files waited on one for hours (task 135947 held about 60).
 	}
 	m.mu.Unlock()
 	for _, t := range ahead { // areas takes m.mu
@@ -127,6 +131,12 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		ahead = append(ahead, t)
 	}
 	return start, wait
+}
+
+// quiet reports whether t's worker keeps ending turns without finishing.
+func (m *Module) quiet(t Task) bool {
+	r, ok := m.C.Runs.Get(t.Worker)
+	return ok && r.Status == core.StatusQuiet
 }
 
 // overlap returns the first task in others on t's project whose brief names

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -124,5 +125,91 @@ func TestIsolatedProjectRecordsMoveAndStayOutOfReach(t *testing.T) {
 	}
 	if _, err := ops.Call(sweep, "brief", json.RawMessage(`{"title":"t","done":"d","project":"secret"}`)); err == nil {
 		t.Error("a normal run filed work in an isolated project")
+	}
+}
+
+// create_project makes a private repository unless asked otherwise; a
+// public one in public_owners (Hive-RSI-Lab) is made and the person told
+// after; a public one anywhere else waits for the person's yes, and is
+// made only then. An existing repository keeps its visibility.
+func TestCreateProjectVisibility(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ws.LoadConfig()
+	cfg.Harness = "fake"
+	if err := ws.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	forge := &core.Local{Dir: t.TempDir()}
+	a, err := New(ws, forge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.C.Close()
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead-1", Role: "lead"}}
+	create := func(args string) map[string]any {
+		t.Helper()
+		out, err := a.C.Runs.Ops().Call(lead, "create_project", json.RawMessage(args))
+		if err != nil {
+			t.Fatalf("%s: %v", args, err)
+		}
+		raw, _ := json.Marshal(out)
+		var m map[string]any
+		json.Unmarshal(raw, &m)
+		return m
+	}
+	visibility := func(name string) string {
+		p, _ := a.C.Projects.Get(name)
+		return p.Visibility
+	}
+
+	create(`{"name":"plain","description":"a private one"}`)
+	if forge.IsPublic("local/plain") || visibility("plain") != "private" {
+		t.Fatalf("the default isn't private: public %v, recorded %q", forge.IsPublic("local/plain"), visibility("plain"))
+	}
+
+	create(`{"repo":"Hive-RSI-Lab/hive-mod","description":"a module","visibility":"public"}`)
+	if !forge.IsPublic("Hive-RSI-Lab/hive-mod") || visibility("hive-mod") != "public" {
+		t.Fatal("a public repository in Hive-RSI-Lab wasn't made public")
+	}
+	if told := a.C.Person.Told(10); len(told) == 0 || !strings.Contains(told[0].Title, "Hive-RSI-Lab/hive-mod") {
+		t.Fatalf("the person wasn't told of the public repository: %+v", told)
+	}
+	st, _ := a.C.Runs.Ops().Call(lead, "status", nil)
+	if raw, _ := json.Marshal(st); !strings.Contains(string(raw), `"visibility":"public"`) {
+		t.Fatalf("status doesn't show the visibility: %s", raw)
+	}
+
+	out := create(`{"repo":"someone/elsewhere","visibility":"public"}`)
+	id, _ := out["waiting_on_person"].(string)
+	if id == "" || core.Exists(forge.RepoPath("someone/elsewhere")) {
+		t.Fatalf("a public repository outside the org didn't wait for the person: %v", out)
+	}
+	if _, ok := a.C.Projects.Get("elsewhere"); ok {
+		t.Fatal("the project was made before the person's yes")
+	}
+	if _, err := a.C.Person.Answer(id, "yes", ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200 && visibility("elsewhere") == ""; i++ {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !forge.IsPublic("someone/elsewhere") || visibility("elsewhere") != "public" {
+		t.Fatal("the person's yes didn't make the public repository")
+	}
+
+	// An existing private repository asked to be public stays as it is.
+	if _, err := forge.EnsureRepo("Hive-RSI-Lab/old", "", false); err != nil {
+		t.Fatal(err)
+	}
+	out = create(`{"repo":"Hive-RSI-Lab/old","visibility":"public"}`)
+	if forge.IsPublic("Hive-RSI-Lab/old") || out["note"] == nil {
+		t.Fatalf("an existing repository's visibility changed, or no note said it didn't: %v", out)
+	}
+
+	if _, err := a.C.Runs.Ops().Call(lead, "create_project", json.RawMessage(`{"name":"x","visibility":"internal"}`)); err == nil {
+		t.Fatal("an unknown visibility was taken")
 	}
 }
