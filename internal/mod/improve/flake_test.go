@@ -211,6 +211,9 @@ func TestMergeMainAlreadyHoldsIsNotMeasured(t *testing.T) {
 	if !m.measured("p", old) {
 		t.Fatal("a covered merge would be queued again after a restart")
 	}
+	if d := m.Digest(0, ""); !strings.Contains(d, core.Short(old)+" not measured: main already held it when measured at "+core.Short(fixed)) {
+		t.Fatalf("the digest doesn't show the covered merge:\n%s", d)
+	}
 	// A merge main doesn't hold beyond itself is still measured.
 	next := commit(map[string]string{"t.sh": "true\n# next\n"})
 	if ms := merge(next); ms.SHA != next || !ms.Kept {

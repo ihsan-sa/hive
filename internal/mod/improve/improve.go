@@ -75,7 +75,7 @@ type Module struct {
 	fails    map[string][]core.Check // project -> recent red test checks that name their failing tests
 	heads    map[string][]string     // task id -> every head it had
 	merged   map[string]time.Time    // merge sha -> when it merged
-	covered  map[string]bool         // project/sha -> a merge main already held when it closed
+	covered  map[string][]Covered    // project -> merges main already held when they closed
 
 	stepbacks map[string]*StepBack
 	busy      map[string]bool
@@ -86,7 +86,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, covered: map[string]bool{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, covered: map[string][]Covered{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -99,7 +99,8 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 		case "score.covered":
 			var x Covered
 			if e.Decode(&x) == nil {
-				m.covered[x.Project+"/"+x.SHA] = true
+				x.At = e.At
+				m.covered[x.Project] = append(m.covered[x.Project], x)
 			}
 		case "sweep.saved":
 			var s Sweep
@@ -197,7 +198,7 @@ func (m *Module) versionOf(p core.Project, x Measurement) string {
 func (m *Module) measured(project, sha string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.covered[project+"/"+sha] {
+	if slices.ContainsFunc(m.covered[project], func(c Covered) bool { return c.SHA == sha }) {
 		return true
 	}
 	for _, ms := range m.scores[project] {
@@ -436,19 +437,24 @@ func (m *Module) superseded(p core.Project, sha string) bool {
 // Covered is a merge that wasn't measured on its own: main already held it
 // when it was measured at By.
 type Covered struct {
-	Project string `json:"project"`
-	SHA     string `json:"sha"`
-	Task    string `json:"task"`
-	By      string `json:"by"`
+	Project string    `json:"project"`
+	SHA     string    `json:"sha"`
+	Task    string    `json:"task"`
+	By      string    `json:"by"`
+	At      time.Time `json:"-"`
 }
 
 // coveredBy is a commit already measured on p's main that contains sha, so
 // measuring sha now would test old code (a pull request that landed hours
-// before its task closed) and blame it on main.
+// before its task closed) and blame it on main. Main is linear, so the newest
+// measurement with a result is the one to ask.
 func (m *Module) coveredBy(p core.Project, sha string) string {
 	for _, x := range slices.Backward(m.Scores(p.Name)) {
-		if !x.NoResult && m.after(p, x.SHA, sha) {
-			return x.SHA
+		if !x.NoResult {
+			if m.after(p, x.SHA, sha) {
+				return x.SHA
+			}
+			return ""
 		}
 	}
 	return ""
@@ -784,6 +790,15 @@ func (m *Module) Digest(since int64, only string) string {
 				kept = "no-result"
 			}
 			fmt.Fprintf(&b, "- %s %s score=%s kept=%s %s\n", x.At.Format("01-02 15:04"), core.Short(x.SHA), sc, kept, core.Clip(x.Note, 200))
+		}
+		m.mu.Lock()
+		cov := m.covered[p.Name]
+		m.mu.Unlock()
+		if len(cov) > 5 {
+			cov = cov[len(cov)-5:]
+		}
+		for _, c := range cov {
+			fmt.Fprintf(&b, "- %s %s not measured: main already held it when measured at %s (task %s)\n", c.At.Format("01-02 15:04"), core.Short(c.SHA), core.Short(c.By), c.Task)
 		}
 		b.WriteString("\nWork:\n")
 		for i, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {
