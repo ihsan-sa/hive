@@ -921,10 +921,17 @@ func TestFailedUpdateStopsTheCut(t *testing.T) {
 	if _, ok := n.got["v0.0.3"]; ok {
 		t.Fatal("cut a test-only change over a failed update")
 	}
-	// A change to what update reads is cut.
+	// A change to what update reads is cut: update.yml, or release.yml,
+	// which builds and stamps the binary update installs.
 	cut(5)
 	if _, ok := n.got["v0.0.3"]; !ok {
 		t.Fatal("the fix for update was never released")
+	}
+	fail("m5")
+	changes["m6"] = []string{".github/workflows/release.yml"}
+	cut(6)
+	if _, ok := n.got["v0.0.4"]; !ok {
+		t.Fatal("a fix in release.yml was held over a failed update")
 	}
 }
 
@@ -944,6 +951,15 @@ func TestFailedCIDoesNotHoldTheCut(t *testing.T) {
 	if _, ok := n.got["v0.0.2"]; !ok {
 		t.Fatal("a failed ci held the cut")
 	}
+	n.SetReleaseRuns("me/hive", "m1",
+		core.WorkflowRun{Name: "update", Status: "completed", Conclusion: "success"},
+		core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "failure"})
+	m.Publish()
+	m.C.J.Replay(func(e core.Event) {
+		if e.Kind == "alert.raised" && strings.Contains(string(e.Data), "what update reads") {
+			t.Fatalf("a ci failure's alert speaks of update's hold: %s", e.Data)
+		}
+	})
 }
 
 // The person's "release" on the hold's ask cuts one though the newest

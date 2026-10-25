@@ -1163,7 +1163,11 @@ func (m *Module) Publish() string {
 			out = append(out, "published "+c.Tag)
 		case "failed":
 			if !failed[key] && m.failed(c.Project, c.Tag, c.SHA, why, cause, "") {
-				alert(c, c.Tag+" stays a pre-release, so installs stay where they are: "+why+". A re-run that passes publishes it. "+failedSteps)
+				text := c.Tag + " stays a pre-release, so installs stay where they are: " + why + ". A re-run that passes publishes it."
+				if cause == "update" { // only a failed update holds the cut (unbuilt)
+					text += " " + failedSteps
+				}
+				alert(c, text)
 			}
 			out = append(out, c.Tag+": "+why)
 		case "unbuilt":
@@ -1391,13 +1395,16 @@ func (m *Module) unbuilt(p core.Project, sha string) string {
 // failedSteps is what the person does about a release that failed its update
 // gate.
 const failedSteps = "The Hive cuts no new release that leaves what failed unchanged, since it would fail the same way: " +
-	"the first kept merge that changes what update reads (" + ".github/workflows/update.yml, install/, the Go sources) is cut as usual, " +
+	"the first kept merge that changes what update reads (update.yml, release.yml, install/, modules/, the Go sources) is cut as usual, " +
 	"and the person's \"release\" on the hold's ask cuts one anyway."
 
 // updateReads says whether the update gate (update.yml) reads path: the
-// workflow, the installer it runs and the binary built from the Go sources.
+// workflow, the installer it runs, and the binary it installs: release.yml
+// builds, names and stamps it (core.Version), from the Go sources and the
+// modules they embed (modules/system's hive.update schedule among them).
 func updateReads(path string) bool {
-	return path == ".github/workflows/update.yml" || strings.HasPrefix(path, "install/") ||
+	return path == ".github/workflows/update.yml" || path == ".github/workflows/release.yml" ||
+		strings.HasPrefix(path, "install/") || strings.HasPrefix(path, "modules/") ||
 		path == "go.mod" || path == "go.sum" || strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go")
 }
 
