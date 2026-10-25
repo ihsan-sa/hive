@@ -390,12 +390,17 @@ func TestBacklogIsMeasuredAtTheNewestMerge(t *testing.T) {
 	b := commit(map[string]string{"README.md": "b\n"})
 	c := commit(map[string]string{"README.md": "c\n"})
 	queued := []work.Task{{ID: "ta", Project: "p", MergeSHA: a}, {ID: "tc", Project: "p", MergeSHA: c}, {ID: "tb", Project: "p", MergeSHA: b}}
-	got := m.newestFirst(queued)
-	if got[0].MergeSHA != c || len(got) != 3 {
-		t.Fatalf("not the newest first: %+v", got)
+	bs := m.batches(queued)
+	if len(bs) != 1 || len(bs[0]) != 3 || bs[0][0].MergeSHA != a || bs[0][1].MergeSHA != b || bs[0][2].MergeSHA != c {
+		t.Fatalf("not in main's order: %+v", bs)
 	}
-	for _, x := range got {
-		m.afterMerge(x)
+	for _, x := range queued {
+		m.queue <- x
+	}
+	for deadline := time.Now().Add(30 * time.Second); !m.measured("p", a) || !m.measured("p", b) || !m.measured("p", c); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the backlog was never measured")
+		}
 	}
 	if ms := m.Scores("p"); len(ms) != 1 || ms[0].SHA != c || !ms[0].Kept {
 		t.Fatalf("measured: %+v", ms)
@@ -412,5 +417,39 @@ func TestBacklogIsMeasuredAtTheNewestMerge(t *testing.T) {
 	m2.queue <- queued[2]
 	if d := m2.drain(queued[0]); len(d) != 3 || d[0].ID != "ta" || d[2].ID != "tb" {
 		t.Fatalf("drain: %+v", d)
+	}
+}
+
+// A backlog whose newest merge is red isn't blamed on it: the older merges are
+// measured in main's order, and the one that broke main is the one reverted.
+func TestBacklogRedIsBlamedOnTheMergeThatBroughtIt(t *testing.T) {
+	m, commit, _ := tested(t)
+	a := commit(map[string]string{"README.md": "a\n"})
+	b := commit(map[string]string{"t.sh": "echo '--- FAIL: TestJoin (0.09s)'\nexit 1\n"})
+	c := commit(map[string]string{"README.md": "c\n"})
+	for _, sha := range []string{a, b, c} { // when each merged, so a red checked later at c isn't "without" b
+		m.C.J.MustAppend("effect.merged", map[string]string{"project": "p", "merge_sha": sha})
+	}
+	for _, x := range []work.Task{{ID: "tc", Project: "p", MergeSHA: c}, {ID: "ta", Project: "p", MergeSHA: a}, {ID: "tb", Project: "p", MergeSHA: b}} {
+		m.queue <- x
+	}
+	for deadline := time.Now().Add(60 * time.Second); len(m.Scores("p")) < 3; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the backlog was never measured: %+v", m.Scores("p"))
+		}
+	}
+	got := map[string]Measurement{}
+	for _, ms := range m.Scores("p") {
+		got[ms.SHA] = ms
+	}
+	if !got[a].Kept || got[b].Kept || got[c].Kept {
+		t.Fatalf("measured: %+v", m.Scores("p"))
+	}
+	rs := m.Work.List(func(t work.Task) bool { return t.Kind == "revert" })
+	if len(rs) != 1 || rs[0].RevertSHA != b {
+		t.Fatalf("reverts: %+v; measured %+v", rs, m.Scores("p"))
+	}
+	if !strings.Contains(got[c].Note, "not reverted") {
+		t.Fatalf("the newest merge was blamed for a red it found: %+v", got[c])
 	}
 }

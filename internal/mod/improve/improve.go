@@ -87,6 +87,7 @@ type Module struct {
 	lifted    map[string]time.Time                                                                    // project\x00test -> when its fix merged
 	fixMerged map[string]bool                                                                         // fix tasks whose merge lifted their test
 	kin       map[string]string                                                                       // task id -> the task it follows up or reverts
+	probed    map[string]probe                                                                        // merge sha -> its measurement, held back while the older merges of its batch are measured
 	judging   map[string]string                                                                       // merge sha -> its project, while its judge decides it (judge.go)
 	judges    sync.WaitGroup                                                                          // judgeMerge calls in flight
 	askJudge  func(p core.Project, t work.Task, ms Measurement, reason string) (core.Judgement, bool) // tests' stand-in for runJudge
@@ -102,7 +103,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, fixMerged: map[string]bool{}, kin: map[string]string{}, judging: map[string]string{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, fixMerged: map[string]bool{}, kin: map[string]string{}, judging: map[string]string{}, probed: map[string]probe{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -586,6 +587,19 @@ func (m *Module) coveredBy(p core.Project, sha string) (Measurement, bool) {
 	return Measurement{}, false
 }
 
+// clean says a measurement would be kept as it stands: tests green and the
+// score, if any, within its tolerance of the best kept under the same score.
+func (m *Module) clean(p core.Project, cfg core.ProjectConfig, sha string, ok bool, score *float64) bool {
+	if !ok || cfg.Score == nil {
+		return ok
+	}
+	if score == nil {
+		return false
+	}
+	k, has := m.kept(p.Name)
+	return !has || k.Best == nil || m.versionOf(p, k) != m.version(p, sha, cfg) || cfg.Score.WithinTolerance(*score, *k.Best)
+}
+
 // introduced says the merge itself brought in the command that calls the
 // missing tool: the same command on main before it didn't name that tool. A
 // misspelt tool is then the change's fault, and red, not a wait. A tool
@@ -612,10 +626,24 @@ func (m *Module) introduced(p core.Project, sha string, cant core.Check) bool {
 	return now != before && names(now) && !names(before)
 }
 
+// measureLoop measures what is queued a batch at a time: each project's
+// newest merge on main first, so a backlog behind a score run (issue #774:
+// merges of 10:48 measured at 14:26) costs one run when main is fine, and the
+// older merges are covered by it (coveredBy). When the newest isn't kept as
+// it stands (red, or the score past its tolerance), nothing is blamed on it
+// yet: the older merges are measured in main's order, so a revert or a judge
+// lands on the merge that brought the fall, and the newest after them.
 func (m *Module) measureLoop() {
 	for t := range m.queue {
-		for _, x := range m.newestFirst(m.drain(t)) {
-			m.afterMerge(x)
+		for _, b := range m.batches(m.drain(t)) {
+			newest, older := b[len(b)-1], b[:len(b)-1]
+			deferred := m.measureMerge(newest, len(older) > 0)
+			for _, x := range older {
+				m.afterMerge(x)
+			}
+			if deferred {
+				m.afterMerge(newest)
+			}
 		}
 	}
 }
@@ -633,40 +661,32 @@ func (m *Module) drain(t work.Task) []work.Task {
 	}
 }
 
-// newestFirst moves each project's newest merge on main to the front, so it
-// is measured first and the older ones are covered by it (coveredBy), one
-// ancestry check each. Measured one at a time in the order they merged, a
-// score run per merge fell hours behind a busy main (issue #774: merges of
-// 10:48 measured at 14:26), so nothing new was kept or released.
-func (m *Module) newestFirst(ts []work.Task) []work.Task {
-	newest, synced := map[string]int{}, map[string]bool{}
-	for i, t := range ts {
-		j, ok := newest[t.Project]
+// batches groups ts by project, each group in main's order, oldest first.
+func (m *Module) batches(ts []work.Task) [][]work.Task {
+	var out [][]work.Task
+	at := map[string]int{}
+	for _, t := range ts {
+		i, ok := at[t.Project]
 		if !ok {
-			newest[t.Project] = i
+			at[t.Project], out = len(out), append(out, []work.Task{t})
 			continue
 		}
 		p, ok := m.C.Projects.Get(t.Project)
 		if !ok {
+			out[i] = append(out[i], t)
 			continue
 		}
-		if !synced[p.Name] { // the clone must hold both to compare them
-			synced[p.Name] = true
+		if len(out[i]) == 1 { // the clone must hold them all to order them
 			m.C.Effects.Sync(p)
 		}
-		if m.after(p, t.MergeSHA, ts[j].MergeSHA) {
-			newest[t.Project] = i
+		b := out[i]
+		j := len(b)
+		for j > 0 && m.after(p, b[j-1].MergeSHA, t.MergeSHA) {
+			j--
 		}
+		out[i] = slices.Insert(b, j, t)
 	}
-	var out, rest []work.Task
-	for i, t := range ts {
-		if newest[t.Project] == i {
-			out = append(out, t)
-		} else {
-			rest = append(rest, t)
-		}
-	}
-	return append(out, rest...)
+	return out
 }
 
 // Recover re-queues merges whose measurement didn't happen (after a restart).
@@ -689,27 +709,54 @@ func (m *Module) Recover() {
 }
 
 // afterMerge measures main at the merge and keeps or reverts.
-func (m *Module) afterMerge(t work.Task) {
+func (m *Module) afterMerge(t work.Task) { m.measureMerge(t, false) }
+
+// probe is a measurement held back by measureMerge, used when its merge
+// comes up again rather than run a second time.
+type probe struct {
+	ok    bool
+	score *float64
+	note  string
+	cant  core.Check
+}
+
+// measureMerge is afterMerge. With batch set (older merges of the batch wait
+// behind it) a measurement that wouldn't be kept as it stands is held back
+// and deferred is true: the caller measures the older merges first.
+func (m *Module) measureMerge(t work.Task, batch bool) (deferred bool) {
 	p, ok := m.C.Projects.Get(t.Project)
 	if !ok || m.measured(p.Name, t.MergeSHA) || m.superseded(p, t.MergeSHA) {
-		return
+		return false
 	}
 	if m.judgingBefore(p.Name, t.MergeSHA) {
 		// An earlier merge's judge decides the baseline this one is measured
 		// against: wait for it, rather than judge the same fall again.
 		go func() { time.Sleep(judgeHold); m.queue <- t }()
-		return
+		return false
 	}
 	if _, err := m.C.Effects.Sync(p); err != nil {
 		go func() { time.Sleep(time.Minute); m.queue <- t }()
-		return
+		return false
 	}
 	if by, ok := m.coveredBy(p, t.MergeSHA); ok {
 		m.C.J.MustAppend("score.covered", Covered{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, By: by.SHA, Red: !by.Kept})
-		return
+		return false
 	}
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
-	ok, score, note, cant := m.measure(p, t.MergeSHA)
+	m.mu.Lock()
+	pr, probed := m.probed[t.MergeSHA]
+	delete(m.probed, t.MergeSHA)
+	m.mu.Unlock()
+	if !probed {
+		pr.ok, pr.score, pr.note, pr.cant = m.measure(p, t.MergeSHA)
+	}
+	ok, score, note, cant := pr.ok, pr.score, pr.note, pr.cant
+	if batch && cant.CantRun == "" && !m.clean(p, cfg, t.MergeSHA, ok, score) {
+		m.mu.Lock()
+		m.probed[t.MergeSHA] = pr
+		m.mu.Unlock()
+		return true
+	}
 	switch {
 	case cant.CantRun != "" && m.introduced(p, t.MergeSHA, cant) && cant.Kind == "score":
 		ok, score, note = true, nil, "score did not produce a number: this merge's score command calls "+cant.Tool+", which isn't installed where checks run: "+note
@@ -723,7 +770,7 @@ func (m *Module) afterMerge(t work.Task) {
 	case cant.CantRun != "":
 		m.noResult(p, Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, Note: note, Version: m.version(p, t.MergeSHA, cfg), NoResult: true}, cant.Kind)
 		m.hold(p, t)
-		return
+		return false
 	case cant.CantRun == "":
 		m.closeCantRunAsks(p, t.MergeSHA)
 	}
@@ -755,7 +802,7 @@ func (m *Module) afterMerge(t work.Task) {
 	case !ok && flake != "":
 		ms.Note = flake + "; not reverted; " + note
 		m.record(ms)
-		return
+		return false
 	case !ok:
 		reason = "the tests went red after it merged: " + strings.TrimPrefix(note, "tests red: ")
 	case cfg.Score != nil && score == nil:
@@ -775,7 +822,7 @@ func (m *Module) afterMerge(t work.Task) {
 		if m.OnKept != nil {
 			m.OnKept(p.Name, t.MergeSHA)
 		}
-		return
+		return false
 	}
 	if !worse {
 		ms.Kept = true
@@ -792,7 +839,7 @@ func (m *Module) afterMerge(t work.Task) {
 		if m.OnKept != nil {
 			m.OnKept(p.Name, t.MergeSHA)
 		}
-		return
+		return false
 	}
 	ms.Note = reason
 	if ok {
@@ -809,9 +856,10 @@ func (m *Module) afterMerge(t work.Task) {
 			m.judges.Add(1)
 			go m.judgeMerge(p, t, ms, reason)
 		}
-		return
+		return false
 	}
 	m.revert(p, t, ms, reason)
+	return false
 }
 
 // revert records main as worse after t's merge, and files its revert.
