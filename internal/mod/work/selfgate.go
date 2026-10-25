@@ -12,12 +12,15 @@ import (
 )
 
 // The recursive gate on the Hive's own repository (docs/gate.md): once a
-// self project's change has passed its tests, reads and the forge's checks,
+// self project's change aimed at a gain (Task.Aim) has passed its tests,
+// reads and the forge's checks,
 // the daemon runs `hive gate` on its exact head, merged with current main,
 // against main, and it merges only if the gate keeps it. A rollback goes back
 // to the worker with the report, and so does a head that conflicts with main
-// (to merge it, no rollback); a gate that can't run (no bubblewrap, no Go)
-// leaves it waiting, never merged unjudged. One gate runs at a time, for at most GateTimeout.
+// (to merge it, no rollback); a gate that can't run (no bubblewrap, no Go) leaves it waiting,
+// never merged unjudged. One gate runs at a time, for at most GateTimeout.
+// A fix doesn't wait for it: it merges as in any project, and the score
+// measured after the merge still reverts it if main got worse.
 
 // GateJob is one gate run the work module asks for.
 type GateJob struct {
@@ -25,7 +28,7 @@ type GateJob struct {
 	Repo     string // the host's clone of the project, which holds both commits
 	Head     string // the candidate: the PR's exact head
 	Main     string // the control: main as the merge would see it
-	AllowTie bool   // a docs- or prompt-only change, or a revert: kept when it breaks nothing
+	AllowTie bool   // kept when it breaks nothing; the work module never sets it, since an improvement must show a gain
 	Out      string // the run's folder; its report.md and report.json go here
 	Lessons  string // where a rollback's lesson is written on this machine
 	Timeout  time.Duration
@@ -63,10 +66,11 @@ type gateRun struct {
 	since     time.Time
 }
 
-// recursiveGate holds t until the recursive gate has kept its head against
-// main; the bool says it waits (or went back).
+// recursiveGate holds t, a change to the Hive aimed at a gain, until the
+// recursive gate has kept its head against main; the bool says it waits (or
+// went back). A fix passes straight on.
 func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, error) {
-	if !p.Self {
+	if !p.Self || !t.Gain() {
 		return false, nil
 	}
 	g, ok := m.C.Effects.GateResult(p.Name, t.SHA, main)
@@ -123,15 +127,11 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 // startGate runs the gate on t's head in the background and records its
 // verdict; m.gating is already set to key, and m.steps counts it.
 func (m *Module) startGate(t *Task, p core.Project, main, key string) {
-	tie := t.Kind == "revert"
-	if ch, err := m.C.Effects.Classify(p, main, t.SHA); err == nil && textOnly(ch.Files) {
-		tie = true
-	}
 	dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
-	job := GateJob{Project: p, Repo: m.C.WS.Project(p.Name), Head: t.SHA, Main: main, AllowTie: tie,
+	job := GateJob{Project: p, Repo: m.C.WS.Project(p.Name), Head: t.SHA, Main: main,
 		Out: filepath.Join(dir, time.Now().UTC().Format("060102-150405")+"-"+core.Short(t.SHA)), Lessons: filepath.Join(dir, "lessons.md"), Timeout: GateTimeout}
 	id := t.ID
-	m.save(t, fmt.Sprintf("the recursive gate started on %s against main at %s%s", core.Short(t.SHA), core.Short(main), map[bool]string{true: ", ties allowed (docs, prompts or a revert)"}[tie]))
+	m.save(t, fmt.Sprintf("the recursive gate started on %s against main at %s: an improvement is kept only on a clear gain", core.Short(t.SHA), core.Short(main)))
 	go func() {
 		defer m.steps.Done()
 		var g core.GateResult
@@ -223,19 +223,6 @@ func GateWord(outcome string) string {
 		return "ROLLED BACK"
 	}
 	return "COULD NOT RUN"
-}
-
-// textOnly says every file is prose: docs, or the agents' prompts (markdown),
-// which the gate keeps on a tie.
-func textOnly(files []string) bool {
-	for _, f := range files {
-		switch strings.ToLower(filepath.Ext(f)) {
-		case ".md", ".txt", ".rst", ".adoc":
-		default:
-			return false
-		}
-	}
-	return len(files) > 0
 }
 
 // gateLessons are the recursive gate's lessons on this machine that main's
