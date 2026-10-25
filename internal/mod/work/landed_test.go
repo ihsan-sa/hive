@@ -13,9 +13,9 @@ import (
 // brought the work, it is done, not blocked or stopped, nothing more is run
 // for it, and nothing is measured. So does one whose branch brought main in
 // and has no own diff left, and the commit named is still the one that landed
-// the work, not main's newest.
+// the work, not main's newest. One waiting for its read gets no reviewer.
 func TestAlreadyLandedThroughAnotherTask(t *testing.T) {
-	for _, stage := range []string{StageTesting, StageMerging} {
+	for _, stage := range []string{StageTesting, StageReviewing, StageMerging} {
 		t.Run(stage, func(t *testing.T) {
 			m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 			is, err := f.CreateIssue(p.Repo, "work", "", marker(task.ID))
