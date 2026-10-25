@@ -20,6 +20,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1583,8 +1584,24 @@ func settle(dir, path string) error {
 		if err = os.RemoveAll(path); err == nil {
 			return nil
 		}
+		writable(path)
 	}
 	return err
+}
+
+// writable gives back write permission on every folder under path that lacks
+// it: Go's module cache (a real check's .hive/cache/gomod) is read-only, and
+// removing it otherwise fails the test that made it (the soft layer's real
+// run, 2026-10-25).
+func writable(path string) {
+	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			if info, err := d.Info(); err == nil && info.Mode().Perm()&0o200 == 0 {
+				os.Chmod(p, info.Mode().Perm()|0o700)
+			}
+		}
+		return nil
+	})
 }
 
 // pin runs start, which starts a process, so that the process and all it
@@ -1859,5 +1876,22 @@ func TestStepBack(t *testing.T) {
 	}
 	if score, _ := core.Git(h.ws.Project("win"), "show", "origin/main:score.txt"); strings.TrimSpace(score) != "5" {
 		t.Fatalf("the experiment reached the project's own tree: score.txt on main is %q", score)
+	}
+}
+
+// TestSettleRemovesReadOnlyFolders: a Hive whose checks filled Go's module
+// cache (read-only folders) is still removed after its test.
+func TestSettleRemovesReadOnlyFolders(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hive")
+	ro := filepath.Join(path, ".hive", "cache", "gomod", "golang.org", "x", "text@v0.3.8")
+	if err := os.MkdirAll(ro, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(ro, "width.go"), []byte("package width\n"), 0o444)
+	os.Chmod(ro, 0o555)
+	settle(dir, path)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("still there after settle: %v", err)
 	}
 }

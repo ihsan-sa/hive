@@ -75,6 +75,29 @@ So the standard prompts make a hub, not a hive: almost every message goes throug
 
 ## Results
 
+A sub-Hive needs the host's Claude login, which an agent's sandbox doesn't hold (`claude -p` there says "Not logged in"), so a real run goes to a warden on the host. The step limit is 10 minutes, so the warden starts it as a detached `systemd-run --user` service with the scope's limits, not as a scope.
+
+### `standard` against `essay`, under the caps (2026-10-25, real4)
+
+Task 261025-165948, issue #822. A warden step (request 261025-182842) started the unit `hive-soft-261025-real4` from main 45079e9: `MemoryHigh=2500M`, `MemoryMax=3G`, `MemorySwapMax=0`, `CPUWeight=20`, `IOWeight=20`, `Nice=10`. It waited for the earlier five-arm run (real3) to end, so one arm ran on the machine at a time, and then ran 21:19-21:55Z. Each sub-Hive cloned the host's main at that moment (6043ef38c), whose tests were green; the task was the default one, the `# hive-timeout:` line on an approved warden step. Output: `~/hive/.hive/soft-layer/261025-real4/`.
+
+| arm | outcome | minutes | runs | turns | messages | peer | briefs | helpers | asks | finished | notes | feedback | merged | peak MB | peak load |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| standard | landed f9f2749b0 after 17m1s | 17 | 5 | 6 | 0 | 0 | 2 | 0 | 0 | done 1 | 0 | 0 | 1 | 866 | 49.4 |
+| essay | landed b1f4df6b7 after 17m21s | 18 | 5 | 6 | 0 | 0 | 2 | 0 | 0 | done 1 | 0 | 0 | 1 | 842 | 52.8 |
+
+The run's cgroup peaked at 2126 MB, under the 3 GB ceiling. That was with a lead, a worker and a reviewer at a time, and nothing swapped. Peak load is the whole machine's, the Hive's own work included. The test exited FAIL only because `t.TempDir` couldn't remove each sub-Hive's read-only Go module cache; `settle` now makes those folders writable first (`TestSettleRemovesReadOnlyFolders`).
+
+What each arm did:
+
+- **Same shape, same time.** Lead files the ask as a fix (one brief), worker commits in about 3 minutes, its tests wait about 11 minutes behind the score run on main (`max_checks` 1), then tests, a reader and the security reader land it; the second brief is the automatic review follow-up, which the test stops. Of the 17 minutes, the queue is two thirds.
+- **The `essay` worker built what was asked; the `standard` worker didn't.** `essay`: a `# hive-timeout: <duration>` line in the script, read by one `StepTimeout` that the warden's decision and the run both call, capped at 4h, bad values refused at decision, "timed out after X", the warden and tribunal prompts and `docs/risk.md` updated (79 lines). `standard`: `--timeout` flags on `hive agent warden` and `decide` instead of a line in the script (105 lines). Both readers, the security reader included, passed it. That is the same drift `chatty`'s worker made in real3: the brief's mechanism replaced by a nearby one, and review checking the code, not the code against the brief.
+- **No hive, either way.** No messages at all, no `hive agent status`, no knowledge-base search, no notes, no feedback, no asks. With one worker at a time there is no peer to talk to, so this run can't show lateral talk; it shows only that neither wording makes a lone worker reach for the Hive's memory.
+
+So on one real task, the person's essay with one-line roles did as well as the standard prompts, a little better in fidelity, at the same cost. One task and one run each is an anecdote, not a measurement: the next runs add the other arms one or two at a time, and a task that needs two workers at once is what can show whether any arm talks laterally.
+
+### The other five arms (real3)
+
 **Third real run: the other five arms (2026-10-25, 16:17-21:17Z, from 9b5cde4, one at a time, 60 minutes each, same caps).** Output in `~/hive/.hive/soft-layer/261025-real3/`. The machine held.
 
 | arm | outcome | runs | turns | messages | peer | briefs | asks | merged | the ask's design | main's red fix |
@@ -95,6 +118,8 @@ What differed, arm by arm:
 - **philosophy**: like `standard`, with the most careful follow-up: the reviewer's follow-up worker also found and fixed a real flake (`internal/gate` reap tests reading `/proc/<pid>/environ` before execve sets it) instead of filing it. Its project lead reported main's new starting score.
 - **vague**: the one arm whose reviewer said `fix` (a doc comment the worker's change had split), and the only lead that scheduled its own wake-ups to check back (at :08 and :38). Its red fix, test-only like `essay`'s, was still waiting for its check when the hour ran out, so it merged nothing.
 
+### `standard` against `essay`, first time (real2)
+
 **Second real run: `standard` against `essay` (2026-10-25, 15:34-16:13Z, from eeaeeea, one at a time, Opus, in a unit capped at 4 CPUs and 6 GB).** Output in `~/hive/.hive/soft-layer/261025-real2/`. The machine held.
 
 | arm | outcome (as the test then read it) | runs | turns | messages | peer | briefs | asks | merged |
@@ -111,10 +136,12 @@ The merge in both arms was not the ask. Both sub-Hives started from a red main: 
 5. improve raised "main has no starting score" in the project's chat; the project's lead diagnosed the cause in under a minute and filed a fix, which merged in 7-8 minutes. Here the arms differ: `standard`'s fix lets a path through the sandbox-path guard whenever it exists on the host (`core.Exists`), weakening a guard in production code, and its security seat landed it; `essay`'s keeps the guard and makes only the tests set its roots aside (`sandboxRoots`, `hostTemp(t)`), the narrower fix.
 6. The test took that merge as the arm landing and stopped it, with each reviewer's follow-up just started. Fixed with this change: an arm now ends only when the lead's own task merges (`askLanded`).
 
-**How each arm behaves, across both runs.** The same, nearly step for step. In seven arms, from the Hive's full prompts to one sentence, no agent sent another a message (0 in every arm, `chatty` included) and nobody asked past their reach, wrote a note or gave feedback: everything went person → lead → brief → worker → reviewer → seat, and improve → project lead → brief, with the chats as the only talk. So the soft layer, at any wording tried, doesn't make these agents behave as a hive on a task like this; the hard layer does the coordinating (the brief, the queue, the review schema, the merge path, improve's alerts), and the agents fill the slots it gives them. The one-line roles (`essay`, `essay-tools`, `philosophy`, `vague`) were as fast and as on-brief as the full ones; the only off-brief design came from the arm with the most words (`chatty`). Where the arms did differ, it was in judgement within a slot, not in shape: four of seven fixed the red main by loosening a production guard and two by changing tests only, and both kinds passed the security seat. One task and one run per arm can't tell those apart from chance. The baseline's peer talk (2 worker→worker messages in H0's 76) came from many workers on related tasks over a day, which one task with one worker at a time never sets up: a test of "behave as a hive" needs tasks that overlap.
+### How each arm behaves
+
+**How each arm behaves, across the runs (real2, real3 and real4).** The same, nearly step for step. In seven arms, from the Hive's full prompts to one sentence, no agent sent another a message (0 in every arm, `chatty` included) and nobody asked past their reach, wrote a note or gave feedback: everything went person → lead → brief → worker → reviewer → seat, and improve → project lead → brief, with the chats as the only talk. So the soft layer, at any wording tried, doesn't make these agents behave as a hive on a task like this; the hard layer does the coordinating (the brief, the queue, the review schema, the merge path, improve's alerts), and the agents fill the slots it gives them. The one-line roles (`essay`, `essay-tools`, `philosophy`, `vague`) were as fast and as on-brief as the full ones; the off-brief designs (a `--timeout` flag in place of the script's line) came from the arms with the most words, `chatty` in real3 and `standard` in real4, and both passed review. Where the arms did differ, it was in judgement within a slot, not in shape: four of seven fixed the red main by loosening a production guard and two by changing tests only, and both kinds passed the security seat. One task and one run per arm can't tell those apart from chance. The baseline's peer talk (2 worker→worker messages in H0's 76) came from many workers on related tasks over a day, which one task with one worker at a time never sets up: a test of "behave as a hive" needs tasks that overlap.
+
+### All seven at once (real1)
 
 **First real run (2026-10-25, 13:16Z, all seven arms side by side, from 3d2020e):** no result. Within about 35 minutes the `essay` arm's sub-Hive daemon stopped answering (connection refused), and the test then lost its record to `t.Fatal`; the machine reached a load of about 600 and its memory ceiling, and the box froze the run. Hence the shape above: one arm at a time, capped inside, starting with `standard` against `essay`.
-
-A sub-Hive needs the host's Claude login, which an agent's sandbox doesn't hold, so the real runs are a warden's step on the host. A step is ended after 10 minutes (`risk.ExecTimeout`, until #460 lands), so the step only starts the run, detached in a systemd user unit.
 
 On the fake harness, which ignores its prompts, the runs show the pipeline only: every arm installs and is used (the test checks each run's system prompt), on the demo project an ask lands in about 30 seconds, and on the clone of the Hive's own source (`philosophy`, 2026-10-25) the default task went lead → worker → the clone's full `go vet` and short tests → review → merge in 50 seconds, with no messages. The first clone runs (`quiet`, `essay`) found the one hard-layer gap a sub-Hive of the Hive's source hits: the forge checks no local forge runs (step 4).
