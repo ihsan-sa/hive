@@ -804,3 +804,23 @@ func TestGatePace(t *testing.T) {
 		t.Fatalf("grew to %d unseen", l)
 	}
 }
+
+// A task whose head moved while its gate ran starts a run on the new head
+// and ends the one on the old: its verdict would judge what no longer lands.
+func TestNewHeadCancelsItsOldGate(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	maxGates(m, 3)
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) (string, bool) { return "", true }
+	cancelled := false
+	old := &gateRun{key: p.Name + "@oldhead@main", task: task.ID, cancel: func() { cancelled = true }}
+	other := &gateRun{key: "other", task: "t9", cancel: func() { t.Error("another task's run was cancelled") }}
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{old.key: old, other.key: other}
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if !old.dropped || !cancelled || other.dropped || len(*jobs) != 1 || (*jobs)[0].Head != task.SHA {
+		t.Fatalf("old dropped %v cancelled %v, other dropped %v, %d runs: want the old head's run ended and the new one started", old.dropped, cancelled, other.dropped, len(*jobs))
+	}
+}

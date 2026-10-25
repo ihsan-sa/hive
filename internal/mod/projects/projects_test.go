@@ -14,7 +14,7 @@ import (
 // The status op shows agents only the allow-listed settings: a config with
 // every field set to a secret shows none of it outside the list.
 func TestStatusConfigIsAllowListed(t *testing.T) {
-	allowed := []string{"autonomy", "harness", "model", "lead_model", "reviewer_model", "tribunal_models", "model_choices", "schedules", "review_rounds", "plateau_merges", "max_workers", "max_checks", "auto_update"}
+	allowed := []string{"autonomy", "harness", "model", "lead_model", "reviewer_model", "tribunal_models", "model_choices", "schedules", "review_rounds", "plateau_merges", "max_workers", "max_checks", "max_gates", "auto_update"}
 	var c core.Config
 	v := reflect.ValueOf(&c).Elem()
 	for i := range v.NumField() {

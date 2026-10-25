@@ -753,16 +753,26 @@ func (f *candidateFault) Error() string { return f.err.Error() }
 func (f *candidateFault) Unwrap() error { return f.err }
 
 // noteLesson records a rollback where the next worker reads it. Gates run
-// side by side share the file, so the lesson is appended in one write.
+// side by side share the file, so the lesson is appended in one write, and a
+// fresh file comes in with its header whole (linked into place, which only
+// one gate can do), never as an empty file another gate also heads.
 func noteLesson(cfg Config, rep Report) {
 	if cfg.Lessons == "" {
 		return
 	}
 	os.MkdirAll(filepath.Dir(cfg.Lessons), 0o755)
+	if f, err := os.CreateTemp(filepath.Dir(cfg.Lessons), ".lessons-*"); err == nil {
+		_, werr := f.WriteString(lessonsHeader)
+		if f.Close() == nil && werr == nil {
+			os.Chmod(f.Name(), 0o644)
+			os.Link(f.Name(), cfg.Lessons) // fails where the file is there
+		}
+		os.Remove(f.Name())
+	}
 	raw, _ := os.ReadFile(cfg.Lessons)
 	s := ""
 	if strings.TrimSpace(string(raw)) == "" {
-		s = "# Lessons\n\nWhat was tried and why it didn't stay. Read before working here.\n\n"
+		s = lessonsHeader // there but empty: an older gate's, or the person's
 	} else if !strings.HasSuffix(string(raw), "\n") {
 		s = "\n"
 	}
@@ -777,3 +787,5 @@ func noteLesson(cfg Config, rep Report) {
 	f.WriteString(s)
 	f.Close()
 }
+
+const lessonsHeader = "# Lessons\n\nWhat was tried and why it didn't stay. Read before working here.\n\n"
