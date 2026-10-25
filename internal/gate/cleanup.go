@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,9 @@ func Reap(out string) int {
 	if err != nil || abs == "/" {
 		return 0
 	}
+	if fi, err := os.Lstat(abs); err != nil || !fi.IsDir() {
+		return 0 // a symlink in out's place is not a run's folder
+	}
 	n := reap(abs)
 	tidy(abs)
 	return n
@@ -60,48 +64,66 @@ func childRoot(name string) bool {
 // runDirs are the folders a run makes in out: the only places a process
 // counts as the run's by its program or working directory. Anything else in
 // out (a shell or an editor a person has open there) is matched only by
-// rootEnv, which the gate alone sets.
+// rootEnv, which the gate alone sets. A symlink is never one of them.
 func runDirs(out string) []string {
 	var dirs []string
 	ents, _ := os.ReadDir(out)
 	for _, e := range ents {
 		name := e.Name()
 		if e.IsDir() && (childRoot(name) || name == "evaluator" || name == "prefetch" ||
-			strings.HasPrefix(name, "src-") || strings.HasPrefix(name, "built-")) {
+			strings.HasPrefix(name, "src-") || strings.HasPrefix(name, "built-") || sideDir(name)) {
 			dirs = append(dirs, filepath.Join(out, name))
 		}
 	}
 	return dirs
 }
 
+// sideDir is a child's TMPDIR or its evaluator's scratch (Child.side).
+func sideDir(name string) bool {
+	return len(name) == 8 && (strings.HasPrefix(name, "t-") || strings.HasPrefix(name, "e-"))
+}
+
 // bulk is what a child root holds besides its logs: its home, scratch,
-// caches and clone. Its workspace ("hive", with the daemon's log and
-// journal) and the nested run ("grandchild", tidied by its own gate) stay.
-var bulk = []string{"home", "tmp", "gocache", "gopath", "org-clone", "evaluator-home", "evaluator-tmp"}
+// caches and clone, and in its workspace ("hive") the project clones and
+// the binaries and tools the child's daemon fetched. The workspace's daemon
+// log, journal and runs stay, and so does the nested run ("grandchild",
+// tidied by its own gate). The gate's children run the fake harness, so
+// home holds no harness's session logs; one that ran a real harness would
+// keep those first.
+var bulk = []string{"home", "tmp", "gocache", "gopath", "org-clone", "evaluator-home", "evaluator-tmp",
+	"hive/projects", "hive/.hive/bin", "hive/.hive/tools"}
 
 // tidy removes the run's checkouts, binaries and caches: only folders it
 // names itself, never anything else a person keeps in out.
 func tidy(out string) {
+	root, err := os.OpenRoot(out)
+	if err != nil {
+		return
+	}
+	defer root.Close()
 	for _, dir := range runDirs(out) {
-		if !childRoot(filepath.Base(dir)) {
-			removeTree(dir)
+		name := filepath.Base(dir)
+		if !childRoot(name) {
+			removeIn(root, name)
 			continue
 		}
 		for _, b := range bulk {
-			removeTree(filepath.Join(dir, b))
+			removeIn(root, filepath.Join(name, b))
 		}
 	}
-	os.Remove(filepath.Join(out, "org")) // a local org, once its repositories are deleted
+	root.Remove("org") // a local org, once its repositories are deleted
 }
 
-// removeTree removes p, making its folders writable first: a module cache is
-// read-only.
-func removeTree(p string) {
-	filepath.WalkDir(p, func(path string, d os.DirEntry, err error) error {
+// removeIn removes rel under root, making its folders writable first: a
+// module cache is read-only. Every step stays inside root, so a symlink a
+// bare candidate swaps in for a folder mid-walk can't turn the chmod or the
+// removal onto the host's files.
+func removeIn(root *os.Root, rel string) {
+	fs.WalkDir(root.FS(), filepath.ToSlash(rel), func(path string, d fs.DirEntry, err error) error {
 		if d != nil && d.IsDir() {
-			os.Chmod(path, 0o755)
+			root.Chmod(path, 0o755)
 		}
 		return nil
 	})
-	os.RemoveAll(p)
+	root.RemoveAll(rel)
 }
