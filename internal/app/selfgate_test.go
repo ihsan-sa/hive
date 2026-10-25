@@ -47,7 +47,8 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 	}{
 		{"0", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true, Reason: "better"}}, false, core.GateKeep, "better"},
 		{"0", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true, Reason: "a tie"}}, true, core.GateKeep, "a tie"},
-		{"1", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Reason: "not better"}}, false, core.GateRollback, "not better"},
+		{"1", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Measured: true, Verdict: gate.Verdict{Reason: "not better"}}, false, core.GateRollback, "not better"},
+		{"1", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Error: "x", Verdict: gate.Verdict{Reason: "the candidate fails its own vet or short tests"}}, false, core.GateRollback, "own vet"},
 		{"3", &gate.Report{Head: "h", Base: "m", CantRun: true, Verdict: gate.Verdict{Reason: "the gate could not run: no bubblewrap"}}, false, core.GateCantRun, "no bubblewrap"},
 		{"0", &gate.Report{Head: "h", Base: "m", Sandbox: "bare", Verdict: gate.Verdict{Keep: true}}, false, core.GateCantRun, "sandbox \"bare\""},
 		{"0", &gate.Report{Head: "other", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true}}, false, core.GateCantRun, "not this head"},
@@ -64,12 +65,12 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 		j := work.GateJob{Project: core.Project{Name: "hive", Repo: "ihsan-sa/hive", Self: true}, Repo: "/repo", Head: "h", Main: "m", AllowTie: tc.tie,
 			Out: filepath.Join(dir, "runs", string(rune('a'+i))), Lessons: filepath.Join(dir, "lessons.md"), Timeout: time.Hour}
 		g := run(context.Background(), j)
-		if g.Outcome != tc.want || !strings.Contains(g.Reason, tc.reason) {
+		if g.Outcome != tc.want || !strings.Contains(g.Reason, tc.reason) || g.Measured != (tc.rep != nil && tc.rep.Measured) {
 			t.Fatalf("case %d: %s %q, want %s with %q", i, g.Outcome, g.Reason, tc.want, tc.reason)
 		}
 		raw, _ := os.ReadFile(args)
 		a := string(raw)
-		if !strings.Contains(a, "--head h --base m") || !strings.Contains(a, "--local-org") || strings.Contains(a, "--allow-bare") || strings.Contains(a, "--allow-tie") != tc.tie {
+		if !strings.Contains(a, "--head h --base m") || !strings.Contains(a, "--local-org") || !strings.Contains(a, "--judged") || strings.Contains(a, "--allow-bare") || strings.Contains(a, "--allow-tie") != tc.tie {
 			t.Fatalf("case %d: gate called with %q", i, a)
 		}
 	}

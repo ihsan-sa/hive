@@ -17,16 +17,20 @@ const (
 // measured against main at Main. A change to the Hive itself aimed at a gain
 // merges only on a keep for exactly that head and main (Effects.Merge).
 type GateResult struct {
-	Project   string    `json:"project"`
-	Head      string    `json:"head"`
-	Main      string    `json:"main"`
-	Outcome   string    `json:"outcome"`
-	Reason    string    `json:"reason"`
-	Report    string    `json:"report,omitempty"`    // the run's report.md on this machine
-	Sandbox   string    `json:"sandbox,omitempty"`   // what the children ran in
-	Note      string    `json:"note,omitempty"`      // how the run was set up, when the person should hear it (the org leg skipped)
-	Transient bool      `json:"transient,omitempty"` // a can't-run whose cause may pass (the machine's load, a flake on both sides): tried again soon
-	At        time.Time `json:"at"`
+	Project   string `json:"project"`
+	Head      string `json:"head"`
+	Main      string `json:"main"`
+	Outcome   string `json:"outcome"`
+	Reason    string `json:"reason"`
+	Report    string `json:"report,omitempty"`    // the run's report.md on this machine
+	Sandbox   string `json:"sandbox,omitempty"`   // what the children ran in
+	Note      string `json:"note,omitempty"`      // how the run was set up, when the person should hear it (the org leg skipped)
+	Transient bool   `json:"transient,omitempty"` // a can't-run whose cause may pass (the machine's load, a flake on both sides): tried again soon
+	// Measured says the outcome came from comparing both sides' results, so
+	// the judge weighs it (judge.go); a candidate that failed before it was
+	// measured (it doesn't build, fails its own tests) is rolled back as is.
+	Measured bool      `json:"measured,omitempty"`
+	At       time.Time `json:"at"`
 }
 
 // RecordGate records a gate run's verdict. Only the daemon calls it, from the

@@ -72,9 +72,12 @@ type Module struct {
 	spells   map[string]spell     // task id -> its current stage and since when
 	took     map[string][]float64 // task stage -> seconds its recent spells took
 	stalls   map[string]*Stall
-	fails    map[string][]core.Check // project -> recent red test checks that name their failing tests
-	heads    map[string][]string     // task id -> every head it had
-	merged   map[string]time.Time    // merge sha -> when it merged
+	fails    map[string][]core.Check                                                                 // project -> recent red test checks that name their failing tests
+	heads    map[string][]string                                                                     // task id -> every head it had
+	merged   map[string]time.Time                                                                    // merge sha -> when it merged
+	judging  map[string]bool                                                                         // merge sha -> its judge is deciding it (judge.go)
+	judges   sync.WaitGroup                                                                          // judgeMerge calls in flight
+	askJudge func(p core.Project, t work.Task, ms Measurement, reason string) (core.Judgement, bool) // tests' stand-in for runJudge
 
 	stepbacks map[string]*StepBack
 	busy      map[string]bool
@@ -85,7 +88,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, judging: map[string]bool{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -549,6 +552,24 @@ func (m *Module) afterMerge(t work.Task) {
 	if ok {
 		ms.Note += "; " + note
 	}
+	if ok && score != nil && t.Kind != "revert" {
+		// Only the score says worse: a model's judgement decides, the score
+		// being one thing it weighs (judge.go).
+		m.mu.Lock()
+		busy := m.judging[t.MergeSHA]
+		m.judging[t.MergeSHA] = true
+		m.mu.Unlock()
+		if !busy {
+			m.judges.Add(1)
+			go m.judgeMerge(p, t, ms, reason)
+		}
+		return
+	}
+	m.revert(p, t, ms, reason)
+}
+
+// revert records main as worse after t's merge, and files its revert.
+func (m *Module) revert(p core.Project, t work.Task, ms Measurement, reason string) {
 	m.record(ms)
 	if t.Kind == "revert" {
 		m.C.Person.Ask(core.Ask{Kind: "question", Ref: "revert-bad:" + t.ID, Project: p.Name,

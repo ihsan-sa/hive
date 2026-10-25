@@ -31,6 +31,7 @@ type Config struct {
 	OrgToken   string   // the org token the gate itself uses to make and delete test repositories; children never hold it
 	ChildToken string   // the contents-only token the children hold (empty: they hold none and the org probe is skipped)
 	Lessons    string   // .hive/lessons.md to append to on a rollback
+	Judged     bool     // a judge decides a measured verdict after the run, and writes its lesson itself
 	Depth      int      // levels of gating the children may still do (capped at MaxDepth)
 	MaxRepos   int      // most org repositories one run may make (default 4)
 	Timeout    time.Duration
@@ -69,6 +70,7 @@ type Report struct {
 	Unit        UnitReport `json:"unit"`                        // the vet and short-test step, each side's failures named
 	Fixes       FixReport  `json:"fixes"`                       // the candidate's own new tests, run on both sides
 	Transient   bool       `json:"transient,omitempty"`         // could not run for a cause that may pass (load, a flake on both sides): try again soon
+	Measured    bool       `json:"measured,omitempty"`          // the verdict compares both sides' results (Decide), so a judge may weigh it
 	Sig         string     `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
 }
 
@@ -146,7 +148,7 @@ func Run(cfg Config) (rep Report, err error) {
 		}
 		rep.sign()
 		write(cfg, rep)
-		if !rep.Verdict.Keep && !rep.CantRun {
+		if !rep.Verdict.Keep && !rep.CantRun && !(cfg.Judged && rep.Measured) {
 			noteLesson(cfg, rep)
 		}
 	}()
@@ -366,6 +368,7 @@ func Run(cfg Config) (rep Report, err error) {
 		opts.Fixed = append(opts.Fixed, f.String())
 	}
 	rep.Verdict = Decide(rep.Candidate, rep.Control, opts)
+	rep.Measured = true
 	if len(rep.Unit.Shared) > 0 {
 		rep.Verdict.Reason += "; failing on both sides, so the environment's and not counted: " + failureNames(rep.Unit.Shared, modulePath(cand.Src))
 	}

@@ -82,16 +82,18 @@ type Task struct {
 	// SeatTries counts each security seat's unusable verdicts on this head's
 	// own diff, keyed by "diffID#seat". When the diff changes, the old
 	// tries are left behind and the seat starts fresh on the new diff.
-	SeatTries map[string]int    `json:"seat_tries,omitempty"`
-	Reviewer  string            `json:"reviewer,omitempty"`
-	Findings  string            `json:"findings,omitempty"`
-	MergeSHA  string            `json:"merge_sha,omitempty"`
-	RevertOf  string            `json:"revert_of,omitempty"`  // task id
-	RevertSHA string            `json:"revert_sha,omitempty"` // the merge being reverted
-	Lesson    string            `json:"lesson,omitempty"`
-	Advice    []string          `json:"advice,omitempty"`       // a land's reviewer advice, filed as one follow-up once merged
-	FollowUp  string            `json:"follow_up_of,omitempty"` // the task whose review advice this follows up
-	Inputs    map[string]string `json:"inputs,omitempty"`       // files its worker reads in $HIVE_RUN, kept off the issue
+	SeatTries map[string]int `json:"seat_tries,omitempty"`
+	// JudgeTries counts the judge's unusable answers on each gated head@main.
+	JudgeTries map[string]int    `json:"judge_tries,omitempty"`
+	Reviewer   string            `json:"reviewer,omitempty"`
+	Findings   string            `json:"findings,omitempty"`
+	MergeSHA   string            `json:"merge_sha,omitempty"`
+	RevertOf   string            `json:"revert_of,omitempty"`  // task id
+	RevertSHA  string            `json:"revert_sha,omitempty"` // the merge being reverted
+	Lesson     string            `json:"lesson,omitempty"`
+	Advice     []string          `json:"advice,omitempty"`       // a land's reviewer advice, filed as one follow-up once merged
+	FollowUp   string            `json:"follow_up_of,omitempty"` // the task whose review advice this follows up
+	Inputs     map[string]string `json:"inputs,omitempty"`       // files its worker reads in $HIVE_RUN, kept off the issue
 	// Model makes the task a trial of that model: its worker runs on it
 	// alone, with no fallback, and the checks stay on their own models.
 	Model string `json:"model,omitempty"`
@@ -909,9 +911,9 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	fmt.Fprintf(&b, "- Tests: `%s`\n", orNone(cfg.Test))
 	if p.Self {
 		if t.Gain() {
-			b.WriteString("- Aim: an improvement. It merges only if the recursive gate shows a clear gain over the current Hive (a tie is rolled back). If it is a plain fix, say so with `hive agent aim --aim fix --why \"...\"`.\n")
+			b.WriteString("- Aim: an improvement. It merges only if it shows a clear gain over the current Hive: a judge on another model weighs the recursive gate's numbers with the change, its brief and your account, and decides. If it is a plain fix, say so with `hive agent aim --aim fix --why \"...\"`.\n")
 		} else {
-			b.WriteString("- Aim: a fix. It merges on its tests, checks and reads; every merge is still measured and a worse score reverted. If the change aims at a measurable gain, say so with `hive agent aim --aim gain --why \"...\"`, and the recursive gate must show it.\n")
+			b.WriteString("- Aim: a fix. It merges on its tests, checks and reads; every merge is still measured, and a lower score is reverted unless a judge, weighing it with the change, keeps it. If the change aims at a measurable gain, say so with `hive agent aim --aim gain --why \"...\"`, and the recursive gate must show it.\n")
 		}
 	}
 	if cfg.Score != nil {
@@ -919,7 +921,7 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 		if best, ok := m.bestScore(p.Name); ok {
 			fmt.Fprintf(&b, " Best kept score: %g.", best)
 		}
-		b.WriteString(" Every merge is measured; a lower score is reverted.\n")
+		b.WriteString(" Every merge is measured; a lower score is reverted unless a judge, weighing it with the change, keeps it, so say in your account what the change is for.\n")
 	}
 	if cfg.Score != nil && t.From != "hive" { // as checkpoint() skips the Hive's own setup brief
 		b.WriteString("- Commit each gain as you make it: a commit that beats the best kept score is tested, read and merged into main as a checkpoint while you keep working on top of it.\n")

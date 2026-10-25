@@ -121,11 +121,13 @@ func TestRunKeepsAndRollsBack(t *testing.T) {
 		}
 	}
 	ctrl := fakeBin(t, dir, "ctrl", "v1", true)
+	judged := false
 	run := func(cand string, scores map[string]float64) (Report, string) {
-		org := filepath.Join(dir, "org-"+filepath.Base(cand))
-		lessons := filepath.Join(dir, "lessons-"+filepath.Base(cand), ".hive", "lessons.md")
-		rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, "out-"+filepath.Base(cand)+"-x", "run"), Reps: 2, Sandbox: "bare", AllowBare: true,
-			Probes: []string{"org", "score"}, Probe: map[string]ProbeFunc{"score": probe(scores)}, Org: Local{Dir: org}, Lessons: lessons})
+		tag := filepath.Base(cand) + fmt.Sprint(judged)
+		org := filepath.Join(dir, "org-"+tag)
+		lessons := filepath.Join(dir, "lessons-"+tag, ".hive", "lessons.md")
+		rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, "out-"+tag+"-x", "run"), Reps: 2, Sandbox: "bare", AllowBare: true,
+			Probes: []string{"org", "score"}, Probe: map[string]ProbeFunc{"score": probe(scores)}, Org: Local{Dir: org}, Lessons: lessons, Judged: judged})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,8 +145,13 @@ func TestRunKeepsAndRollsBack(t *testing.T) {
 		t.Errorf("good candidate: %+v lessons %q", rep.Verdict, lessons)
 	}
 	rep, lessons := run(bad, scores)
-	if rep.Verdict.Keep || !strings.Contains(lessons, "rolled back") || !strings.Contains(lessons, "score") {
+	if rep.Verdict.Keep || !rep.Measured || !strings.Contains(lessons, "rolled back") || !strings.Contains(lessons, "score") {
 		t.Errorf("bad candidate: %+v lessons %q", rep.Verdict, lessons)
+	}
+	// With a judge after it, a measured rollback's lesson is the judge's to write.
+	judged = true
+	if rep, lessons := run(bad, scores); rep.Verdict.Keep || !rep.Measured || lessons != "" {
+		t.Errorf("judged bad candidate: %+v lessons %q", rep.Verdict, lessons)
 	}
 }
 

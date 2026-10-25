@@ -15,7 +15,8 @@ import (
 // self project's change aimed at a gain (Task.Aim) has passed its tests,
 // reads and the forge's checks,
 // the daemon runs `hive gate` on its exact head against current main, and it
-// merges only if the gate keeps it. A rollback goes back to the worker with
+// merges only if the gate keeps it, as its judge calls a verdict that
+// measured both sides (judge.go). A rollback goes back to the worker with
 // the report; a gate that can't run (no bubblewrap, no Go) leaves it waiting,
 // never merged unjudged. One gate runs at a time, for at most GateTimeout.
 // A fix doesn't wait for it: it merges as in any project, and the score
@@ -75,10 +76,15 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	g, ok := m.C.Effects.GateResult(p.Name, t.SHA, main)
 	if ok && (g.Outcome != core.GateCantRun || time.Now().Before(retryAfter(g))) {
 		m.tellGate(t, p, g)
-		switch g.Outcome {
-		case core.GateKeep:
-			return false, nil
-		case core.GateRollback:
+		if g.Outcome == core.GateKeep || g.Outcome == core.GateRollback {
+			// The numbers are one thing the judge weighs; its call decides.
+			keep, wait, err := m.judgeGate(t, p, g)
+			switch {
+			case wait || err != nil:
+				return true, err
+			case keep:
+				return false, nil
+			}
 			return true, m.gateBack(t, p, g)
 		}
 		m.hold(t, p, fmt.Sprintf("%s, which can't run here (%s); it never merges unjudged, and the gate tries again after %s", GateWait, core.Clip(g.Reason, 300), retryAfter(g).Format("15:04Z")))
@@ -191,6 +197,9 @@ func (m *Module) tellGate(t *Task, p core.Project, g core.GateResult) {
 // gateBack sends a rolled-back head to its worker with the report.
 func (m *Module) gateBack(t *Task, p core.Project, g core.GateResult) error {
 	findings := fmt.Sprintf("%s%s against main at %s: %s", gateRolledBack, core.Short(g.Head), core.Short(g.Main), g.Reason)
+	if j, ok := m.C.Effects.Judgement(p.Name, g.Head, g.Main); ok && j.At.After(g.At) {
+		findings += fmt.Sprintf("\n\nIts judge (%s), weighing those numbers with the change, decided to roll it back: %s", j.Model, j.Summary)
+	}
 	if t.Checkpoint != "" {
 		return m.dropCheckpoint(t, p, findings)
 	}
