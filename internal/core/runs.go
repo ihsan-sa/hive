@@ -276,6 +276,7 @@ type Runs struct {
 	launching, leadLaunching int
 	starting                 map[string]bool // runs with a launch in flight
 	deferred                 map[string]int  // ticks a run's launch has waited behind leads', in a row
+	passing                  bool            // a tick's pass over the other runs is waiting for the leads' steps
 	self                     proc.Handle     // this daemon, as a turn's claimant (claim.go)
 	backedOff                map[string]int  // the turn each run last backed off from, said once
 	waking                   sync.Mutex      // one wake at a time, so a run is woken once
@@ -1054,7 +1055,18 @@ func (rs *Runs) Tick(cfg Config) {
 	for _, r := range live {
 		rs.stepAsync(r, cfg, &wg)
 	}
+	// One pass over the other runs waits at a time: while a tick's is still
+	// waiting for the leads' steps, the ticks that come meanwhile skip
+	// theirs, rather than pile up a waiting goroutine each.
+	rs.mu.Lock()
+	if rs.passing {
+		rs.mu.Unlock()
+		return
+	}
+	rs.passing = true
+	rs.mu.Unlock()
 	go func() {
+		defer func() { rs.mu.Lock(); rs.passing = false; rs.mu.Unlock() }()
 		leads := make(chan struct{})
 		go func() { wg.Wait(); close(leads) }()
 		select {
