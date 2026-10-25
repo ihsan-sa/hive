@@ -10,7 +10,7 @@ The diagram is drawn from [arch.json](arch.json). To change it, edit that file a
 
 **You.** You talk to the lead in the control center (`hive`) or from a shell (`hive ask "..."`). The control center also shows what waits on you (**Waiting**), what the agents are doing, the knowledge base and the settings.
 
-**The agents.** Each is a Claude Code session, a Codex session (so far run only against a scripted stand-in, not a real Codex login) or any OpenAI-compatible model through the Hive's own agent loop ([models.md](models.md)). Each turn runs in a sandbox of its own.
+**The agents.** Each is a Claude Code session, a Codex session (so far run only against a scripted stand-in, not a real Codex login), any OpenAI-compatible model through the Hive's own agent loop ([models.md](models.md)), or a harness a module declares: the default `workers` module adds OpenCode and Cursor (Cursor not yet run for real) ([harnesses.md](harnesses.md)). Each turn runs in a sandbox of its own.
 
 - The **lead** turns what you say into briefs, one per piece of work, and answers you.
 - A **worker** takes one brief and builds it in its own checkout of the project, then commits.
