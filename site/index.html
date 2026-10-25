@@ -43,11 +43,9 @@ try { var t = localStorage.getItem('ihsan-theme'); if (t) document.documentEleme
 
 <section id="install">
   <h2>Install</h2>
-  <p>macOS and Linux, in a terminal:</p>
+  <p>Linux only for now: new releases aren't built for macOS or Windows while the self-improvement loop is the focus (<a href="https://github.com/ihsan-sa/hive/issues/564">issue #564</a>), and their installers say so. In a terminal:</p>
   <pre><code>curl -fsSL https://hive.ihsan.cc/install.sh | sh</code></pre>
-  <p>Windows, in PowerShell. On Windows PowerShell 5.1, run <code>[Net.ServicePointManager]::SecurityProtocol = 'Tls12'</code> first so the download can use TLS 1.2.</p>
-  <pre><code>irm https://hive.ihsan.cc/install.ps1 | iex</code></pre>
-  <p>Then run <code>hive</code>. On Windows, agents are sandboxed inside WSL 2, and the installer sets up Claude Code there.</p>
+  <p>Then run <code>hive</code>.</p>
 </section>
 
 <section id="use">

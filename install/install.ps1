@@ -56,7 +56,12 @@ function Test-Outside([string]$Dir, [string]$Old) {
 
 Write-Host "Downloading the Hive ($version) from $repo ..."
 $base = if ($version -ne 'latest') { "https://github.com/$repo/releases/download/$version" } else { "https://github.com/$repo/releases/latest/download" }
-foreach ($a in $assets) {
+Invoke-WebRequest "$base/checksums.txt" -OutFile (Join-Path $tmp 'checksums.txt') -UseBasicParsing
+# Releases are built for Linux only for now (issue #564): say so rather than fail on a missing download.
+if (-not (Select-String -Path (Join-Path $tmp 'checksums.txt') -Pattern ' hive-windows-amd64\.exe$' -Quiet)) {
+  throw "the Hive is Linux only for now, so release $version has no hive-windows-amd64.exe (https://github.com/ihsan-sa/hive/issues/564)"
+}
+foreach ($a in $assets[1..2]) {
   Invoke-WebRequest "$base/$a" -OutFile (Join-Path $tmp $a) -UseBasicParsing
 }
 foreach ($a in $assets[1..2]) {

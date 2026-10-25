@@ -10,6 +10,8 @@ You talk to a lead in a chat. The lead turns what you say into briefs. Workers b
 
 ## Install
 
+**Linux only for now** ([issue #564](https://github.com/ihsan-sa/hive/issues/564)): new releases carry no macOS or Windows binary while the self-improvement loop is the focus, so the macOS and Windows installers stop with a message saying so, and macOS and Windows installs get no updates until those builds return.
+
 macOS / Linux:
 
     curl -fsSL https://hive.ihsan.cc/install.sh | sh
