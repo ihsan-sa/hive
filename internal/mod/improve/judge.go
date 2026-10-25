@@ -40,6 +40,19 @@ func (m *Module) judgingBefore(project, sha string) bool {
 	return false
 }
 
+// judgeRunning says another merge of project is with a judge judgeMerge is
+// running, not only marked after a restart.
+func (m *Module) judgeRunning(project, sha string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for s, j := range m.judging {
+		if j.project == project && s != sha && j.running {
+			return true
+		}
+	}
+	return false
+}
+
 // judgeMerge puts a merge whose score fell, tests green, to the judge
 // (docs/judge.md): a model weighs the score with the change, its brief and
 // the score's history, and decides whether main keeps it. A keep moves the

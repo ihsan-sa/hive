@@ -679,7 +679,10 @@ func (m *Module) afterMerge(t work.Task) {
 	}
 	if m.judgingBefore(p.Name, t.MergeSHA) {
 		// An earlier merge's judge decides the baseline this one is measured
-		// against: wait for it, rather than judge the same fall again.
+		// against: wait for it, rather than judge the same fall again. A
+		// mark of its own from a restart stays while a running judge holds
+		// it; two marks alone never hold each other.
+		later = m.judgeRunning(p.Name, t.MergeSHA)
 		go func() { time.Sleep(judgeHold); m.queue <- t }()
 		return
 	}

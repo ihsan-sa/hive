@@ -120,3 +120,19 @@ func TestJudgedDrift(t *testing.T) {
 		t.Fatalf("a new best of the score's own still counts %d judged keeps", n)
 	}
 }
+
+// A fall in the score of a merge that touches security-listed files reverts
+// as the score says, with no judge: its read of the diff is what an
+// injection there would reach.
+func TestSecurityFallRevertsUnjudged(t *testing.T) {
+	m, merge := scored(t)
+	m.askJudge = nil
+	merge(map[string]string{core.SecurityList: "paths = [\"secure/**\"]\n"})
+	ms := merge(map[string]string{"n.txt": "4\n", "secure/gate.go": "package secure\n"})
+	if ms.Kept || !strings.Contains(ms.Note, "security-listed") {
+		t.Fatalf("a security-listed fall: %+v", ms)
+	}
+	if n := len(m.C.Runs.List(func(r *core.Run) bool { return r.Role == core.JudgeRole })); n != 0 {
+		t.Fatalf("%d judge runs on a security-listed fall", n)
+	}
+}
