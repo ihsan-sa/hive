@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -219,15 +220,21 @@ type Runs struct {
 	// follows a changed setting; empty keeps the run's own and its Route.
 	Route func(Run) []Pick
 
-	mu    sync.Mutex
-	runs  map[string]*Run
-	plans map[string]Plan
-	busy  map[string]bool    // runs whose tick work is in flight
-	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
-	holds map[string]string  // why no new turn starts (a restart waiting for a quiet moment), by who holds them
+	mu      sync.Mutex
+	runs    map[string]*Run
+	plans   map[string]Plan
+	busy    map[string]bool    // runs whose tick work is in flight
+	spent   map[string]float64 // "2006-01" (UTC) -> what runs cost that month
+	holds   map[string]string  // why no new turn starts (a restart waiting for a quiet moment), by who holds them
+	down    map[string]Down    // picks that can't answer, by Pick.String
+	strikes map[string]strike  // each pick's straight turns ending in the same error
+	cfg     Config             // the config of the latest tick, which a Down is fingerprinted against
 	// launching counts launches past the hold whose turn isn't journalled yet.
 	launching int
-	waking    sync.Mutex // one wake at a time, so a run is woken once
+	starting  map[string]bool // runs with a launch in flight
+	waking    sync.Mutex      // one wake at a time, so a run is woken once
+	self      proc.Handle     // this daemon, as a turn's claimant (claim.go)
+	backedOff map[string]int  // the turn each run last backed off from, said once
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -273,7 +280,7 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -419,7 +426,8 @@ type turnEnded struct {
 	Reason      string          `json:"reason,omitempty"`
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
 	Queue       []string        `json:"queue,omitempty"`
-	Offline     string          `json:"offline,omitempty"` // why the harness couldn't reach its service, in one plain line
+	Offline     string          `json:"offline,omitempty"`     // why the harness couldn't reach its service, in one plain line
+	Unavailable string          `json:"unavailable,omitempty"` // the pick it ran on can't answer (Down), so it moved or waits without a retry's backoff
 }
 
 // egressRefused is the hosts a turn's egress proxy refused, and each
@@ -490,10 +498,13 @@ type runNote struct {
 
 // apply folds one event into the in-memory state. Called on replay and on append.
 func (rs *Runs) apply(e Event) {
-	if !strings.HasPrefix(e.Kind, "run.") && e.Kind != "plan.usage" {
+	if !strings.HasPrefix(e.Kind, "run.") && e.Kind != "plan.usage" && e.Kind != "model.down" && e.Kind != "model.up" {
 		return
 	}
 	switch e.Kind {
+	case "model.down", "model.up":
+		rs.applyDown(e)
+		return
 	case "run.created":
 		var s RunSpec
 		e.Decode(&s)
@@ -551,6 +562,7 @@ func (rs *Runs) apply(e Event) {
 		}
 		r.Status, r.Reason, r.ParkedUntil, r.Offline = t.Status, t.Reason, t.ParkedUntil, t.Offline
 		r.Proc = proc.Handle{}
+		rs.strikeTurn(Pick{Harness: HarnessName(r.Harness), Model: r.Model}, r.ID, t.Result)
 		if t.Context > 0 {
 			r.Context = t.Context
 		}
@@ -563,7 +575,7 @@ func (rs *Runs) apply(e Event) {
 				r.Retries = 0
 			}
 		}
-		if t.Status == StatusParked && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
+		if t.Status == StatusParked && t.Unavailable == "" && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
 			r.Retries++
 		}
 		if len(t.Queue) > 0 {
@@ -751,7 +763,8 @@ func (rs *Runs) logins(h, model string) []Login {
 }
 
 // freeAt is when a login for harness h and model next has room: now if one
-// has, else the earliest reset.
+// has, else the earliest reset; a pick that can't answer (Down) waits for
+// its retry too.
 func (rs *Runs) freeAt(h, model string) time.Time {
 	now := time.Now()
 	var at time.Time
@@ -760,13 +773,20 @@ func (rs *Runs) freeAt(h, model string) time.Time {
 	for _, l := range rs.logins(h, model) {
 		p := rs.plans[l.Key()]
 		if !p.Parked(now) {
-			return now
+			at = now
+			break
 		}
 		if at.IsZero() || p.Limit.ResetsAt.Before(at) {
 			at = p.Limit.ResetsAt
 		}
 	}
-	return at.Add(15 * time.Second)
+	if at != now {
+		at = at.Add(15 * time.Second)
+	}
+	if d, ok := rs.down[Pick{Harness: HarnessName(h), Model: model}.String()]; ok && d.Retry.After(at) {
+		at = d.Retry
+	}
+	return at
 }
 
 // next is the pick r's next turn goes on, and when it has room: the first of
@@ -932,19 +952,32 @@ func (rs *Runs) Interrupt(id string) bool {
 
 // Tick advances every run one step: mailboxes, finished turns, due turns.
 func (rs *Runs) Tick(cfg Config) {
+	rs.tickDown(cfg)
 	for _, r := range rs.List(func(r *Run) bool { return !r.Terminal() || r.Status == StatusRunning }) {
-		rs.mu.Lock()
-		if rs.busy[r.ID] {
-			rs.mu.Unlock()
+		r, ok := rs.claim(r)
+		if !ok {
 			continue
 		}
-		rs.busy[r.ID] = true
-		rs.mu.Unlock()
 		go func(r Run) {
 			defer func() { rs.mu.Lock(); delete(rs.busy, r.ID); rs.mu.Unlock() }()
 			rs.step(r, cfg)
 		}(r)
 	}
+}
+
+// claim marks a listed run busy for one step and returns it as it is now:
+// the list can predate a step that ended since (a turn just started).
+func (rs *Runs) claim(r Run) (Run, bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.busy[r.ID] {
+		return r, false
+	}
+	rs.busy[r.ID] = true
+	if cur := rs.runs[r.ID]; cur != nil {
+		r = *cur
+	}
+	return r, true
 }
 
 func (rs *Runs) step(r Run, cfg Config) {
@@ -985,6 +1018,11 @@ func (rs *Runs) watch(r Run) {
 		return
 	}
 	time.Sleep(200 * time.Millisecond) // let the last lines land
+	// A copy of the run older than now ends nothing: its turn ended already,
+	// and ending it again would clear the live turn after it.
+	if cur, ok := rs.Get(r.ID); !ok || cur.Status != StatusRunning || cur.Turn != r.Turn {
+		return
+	}
 	rs.ops.Drain(r)
 	rs.endTurn(r)
 }
@@ -1079,6 +1117,38 @@ func (rs *Runs) endTurn(r Run) {
 		rs.dropOpenKey(r.ID)
 	}
 	cur, _ := rs.Get(r.ID)
+	finishes := r.Role == "worker" && !r.Persistent && r.Schema == "" && !r.ReadOnly && !r.OneTurn
+	if f, ok := printedFinish(r, tl.Result); ok && finishes && cur.Finish == nil && !cur.StopAsked && !limited && dropErr == nil {
+		// A worker wrote its finish as its answer instead of running it: the
+		// Hive runs it on its behalf, with the same flags and the same checks.
+		// Only workers: a lead or chat agent showing the command is explaining.
+		rs.append("run.finish", struct {
+			ID      string `json:"id"`
+			Finish  Finish `json:"finish"`
+			Printed bool   `json:"printed"`
+		}{r.ID, f, true})
+		cur.Finish = &f
+	}
+	// A pick that answers is back; one whose error says it can't answer
+	// is skipped by every run until it can (Down).
+	ran := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
+	var down *Down
+	// A 401 through Claude Code (an Anthropic-compatible model) comes back as
+	// its apiKeyHelper failing: it asks the one-shot helper again and gets
+	// nothing. The first such turn retries with the key handed over afresh;
+	// a second in a row is a key the endpoint won't take, and marks the
+	// model down as any 401 does, so the run moves on its route.
+	var keyRefused bool
+	if tl.Result != nil && !limited {
+		turns, runs := rs.strikesWith(ran, r.ID, tl.Result)
+		keyRefused = tl.Result.IsError && tl.Result.APIStatus == 401 && ran.Harness == "open" && rs.anthropicModel(r.Model) && turns == 1
+		if !tl.Result.IsError {
+			rs.Up(ran, "it answered")
+		} else if !keyRefused && cantAnswer(ran, tl.Result, Unreachable(service(r.Harness), tl.Result.Text), turns, runs) {
+			d := rs.markDown(r, ran, tl.Result)
+			down = &d
+		}
+	}
 	switch {
 	case dropErr != nil:
 		te.Status, te.Reason = StatusBlocked, codexTokenStuck+dropErr.Error()
@@ -1110,6 +1180,21 @@ func (rs *Runs) endTurn(r Run) {
 		te.Queue = []string{"Your previous turn was interrupted. Your checkout and commits are intact. Continue where you left off."}
 	case tl.Result.Subtype == "error_max_budget_usd":
 		te.Status, te.Reason = StatusDone, "spent its budget"
+	case keyRefused:
+		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
+		te.Reason = fmt.Sprintf("the endpoint refused %s's key mid-turn, and a turn is handed the key only once; the next turn gets it afresh (if this repeats, store it again with `%s model key %s`)", r.Model, Cmd, r.Model)
+		te.Queue = []string{"Your previous turn was cut off when the model's endpoint refused its key. Your checkout and commits are intact. Continue where you left off."}
+	case down != nil:
+		// As at a usage limit: the next pick with room takes the next turn
+		// at once, else it waits for the first reset, with no backoff.
+		pick, until := rs.next(r)
+		te.Status, te.ParkedUntil, te.Unavailable = StatusParked, until, ran.String()
+		te.Reason = ran.String() + cantAnswerWhy + "resumes " + until.Local().Format("Mon 15:04")
+		te.Queue = []string{ran.String() + " couldn't answer (" + Clip(down.Text, 200) + "), so your turn waited for a model that can. Continue where you left off."}
+		if !until.After(time.Now()) {
+			te.Reason = ran.String() + cantAnswerWhy + "moving to " + pick.String()
+			te.Queue = nil // launch tells it why it moved
+		}
 	case tl.Result.IsError:
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = "harness error; retrying" + suffix(Clip(tl.Result.Text, 200))
@@ -1128,7 +1213,7 @@ func (rs *Runs) endTurn(r Run) {
 		te.Status, te.Reason = StatusIdle, "waiting: "+cur.Waiting
 	case cur.Nudges < 2:
 		te.Status, te.Reason = StatusIdle, "nudged: ended a turn without finishing"
-		te.Queue = []string{"You ended your turn without `hive agent finish`. If the work is done, commit and finish with an account. If you can't finish, finish with status blocked and say why."}
+		te.Queue = []string{printedNudge(tl.Result.Text)}
 	default:
 		te.Status, te.Reason = StatusQuiet, "keeps ending turns without finishing; flagged for the lead"
 	}
@@ -1220,13 +1305,19 @@ const PendingSep = "\n\n---\n\n"
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run, cfg Config) {
 	rs.mu.Lock()
-	if len(rs.holds) > 0 {
+	// A turn starts at most once: not over a live one, nor from a copy of
+	// the run older than its last turn, nor beside another launch of it.
+	if cur := rs.runs[r.ID]; len(rs.holds) > 0 || cur == nil || cur.Status == StatusRunning || cur.Turn != r.Turn || rs.starting[r.ID] {
 		rs.mu.Unlock()
 		return
 	}
+	if rs.starting == nil {
+		rs.starting = map[string]bool{}
+	}
+	rs.starting[r.ID] = true
 	rs.launching++
 	rs.mu.Unlock()
-	defer func() { rs.mu.Lock(); rs.launching--; rs.mu.Unlock() }()
+	defer func() { rs.mu.Lock(); rs.launching--; delete(rs.starting, r.ID); rs.mu.Unlock() }()
 	if why := Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax); why != "" {
 		// The hold keeps the run's status, so a parked run keeps its backoff
 		// and a nudged one its count; the live figures after " (" change
@@ -1254,7 +1345,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		if pick.Harness != from.Harness || pick.Harness == "open" {
 			r.SessionLive = false
 			why := "the settings route you there"
-			if rs.freeAt(from.Harness, from.Model).After(time.Now()) {
+			if d, ok := rs.downFor(from); ok {
+				why = from.String() + " can't answer (" + Clip(d.Text, 200) + ")"
+			} else if rs.freeAt(from.Harness, from.Model).After(time.Now()) {
 				why = from.String() + " is at its usage limit"
 			}
 			moved = fmt.Sprintf("You now run on %s: %s. This is a fresh session on your brief above; your checkout, commits and notes are as you left them, so look at them (git log, $HIVE_BOX/notes.md) and continue.", pick, why)
@@ -1289,6 +1382,17 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		prompt = "Continue."
 	}
 	r.Session = session
+	// One process per turn: another daemon on this workspace may have started it.
+	if err := rs.claimTurn(r.ID, turn); err != nil {
+		rs.mu.Lock()
+		said := rs.backedOff[r.ID] == turn
+		rs.backedOff[r.ID] = turn
+		rs.mu.Unlock()
+		if !said {
+			fmt.Printf("hive: %s's turn %d isn't started here: %v\n", r.ID, turn, err)
+		}
+		return
+	}
 	promptFile := filepath.Join(rs.ws.RunHost(r.ID), fmt.Sprintf("turn-%03d.prompt", turn))
 	if err := os.WriteFile(promptFile, []byte(prompt), 0o644); err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(time.Minute)})
@@ -1331,6 +1435,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	started = true
+	rs.claimed(r.ID, turn, p)
 	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness})
 }
 
@@ -1442,7 +1547,16 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 				if tools := rs.tools(); !sb.Isolated() && len(tools) > 0 {
 					hive = tools[0]
 				}
-				t.KeyCommand = fmt.Sprintf("%q open-key %q", hive, keyIn)
+				t.KeyCommand = shellWord(hive, sb.Isolated()) + " open-key " + shellWord(keyIn, sb.Isolated())
+			}
+			// Its own config folder, so a Claude login in the HOME of a bare
+			// run is never found: none can reach the vendor's endpoint.
+			if err := realDir(filepath.Join(rs.ws.RunHome(r.ID), ".claude-open")); err != nil {
+				return sandbox.Spec{}, err
+			}
+			t.ConfigDir = in(home) + "/.claude-open"
+			if !sb.Isolated() {
+				t.ConfigDir = filepath.Join(in(home), ".claude-open")
 			}
 			tok = nil // the endpoint and id go in Claude Code's own settings
 		} else {
@@ -1651,19 +1765,33 @@ func (rs *Runs) openKey(id string, tok []string, keyIn string) ([]string, error)
 	return append(out, "HIVE_OPEN_KEY_FILE="+keyIn), nil
 }
 
-// openKeyDir makes the key file's folder in the run's home, which the agent
-// can write: a link (or file) an earlier turn left in its place is removed,
-// never followed, so the daemon writes the key nowhere else.
-func (rs *Runs) openKeyDir(id string) error {
-	dir := filepath.Dir(rs.openKeyFile(id))
+// openKeyDir makes the key file's folder in the run's home.
+func (rs *Runs) openKeyDir(id string) error { return realDir(filepath.Dir(rs.openKeyFile(id))) }
+
+// realDir makes a folder in a run's home, which the agent can write: a link
+// (or file) an earlier turn left in its place is removed, never followed, so
+// the daemon writes nothing elsewhere and the harness reads nothing from
+// elsewhere.
+func realDir(dir string) error {
 	if fi, err := os.Lstat(dir); err == nil && !fi.IsDir() {
 		os.Remove(dir) // the link itself
 	}
+	os.MkdirAll(filepath.Dir(dir), 0o755) // the run's home, the daemon's own
 	os.Mkdir(dir, 0o700)
 	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
 		return fmt.Errorf("%s is not a real folder", dir)
 	}
 	return nil
+}
+
+// shellWord quotes s as one word for the shell Claude Code runs its key
+// helper with: POSIX quoting, so a path holding $ or ` is never expanded;
+// on bare Windows, cmd's double quotes (a Windows path holds no ").
+func shellWord(s string, isolated bool) string {
+	if runtime.GOOS == "windows" && !isolated {
+		return `"` + s + `"`
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // dropOpenKey deletes a key file a turn left, read or not, and only inside a

@@ -34,6 +34,9 @@ type Module struct {
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
 	PauseMerges func(wait time.Duration) (resume func(), ok bool)
+	// Scan checks what a release at sha publishes before it is cut; nil is
+	// the identity and secret scan of the files on the commit's public list.
+	Scan func(p core.Project, sha string) error
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
 	// said holds project@tag for each pre-release whose wait or failed
@@ -495,6 +498,7 @@ func Rename(root, from string) string {
 	exe := executable()
 	dir, base := filepath.Split(exe)
 	ext := filepath.Ext(base)
+	Sweep(OnDisk(exe))
 	if base != "hive-v0"+ext || (from != "v0.1.0" && from != "v0.1.1" && from != "v0.1.2") {
 		os.Remove(filepath.Join(dir, "hive-v0"+ext+".old")) // left by a rename on Windows
 		return ""
@@ -515,6 +519,16 @@ func Rename(root, from string) string {
 	return target
 }
 
+// OnDisk is the path a binary an update renamed aside (to <name>.old, or
+// <name>.old-<n> by makeWay) came from: Linux reports a running file by its
+// new name.
+func OnDisk(exe string) string {
+	if i := strings.LastIndex(exe, ".old"); i >= 0 && strings.Trim(strings.TrimPrefix(exe[i+4:], "-"), "0123456789") == "" {
+		return exe[:i]
+	}
+	return exe
+}
+
 // autostart points a registered autostart at exe.
 var autostart = func(exe, root string) {
 	if setup.AutostartEnabled() {
@@ -533,7 +547,10 @@ func replace(src, dst string) error {
 		return err
 	}
 	old := dst + ".old"
-	os.Remove(old)
+	if err := makeWay(old); err != nil {
+		os.Remove(next)
+		return err
+	}
 	if core.Exists(dst) {
 		if err := os.Rename(dst, old); err != nil {
 			return err
@@ -544,6 +561,43 @@ func replace(src, dst string) error {
 		return err
 	}
 	return nil
+}
+
+// removeFile is os.Remove; a test fails it as Windows does for a running image.
+var removeFile = os.Remove
+
+// makeWay clears path for a rename onto it: it removes what is there or, when
+// that fails (Windows can rename a running image but not delete it, as the
+// daemon an earlier update replaced, still running from its .old), moves it
+// aside to <path>-<n>, which Sweep removes on a later start.
+func makeWay(path string) error {
+	if removeFile(path) == nil || !core.Exists(path) {
+		return nil
+	}
+	for n := 1; n < 1000; n++ {
+		aside := fmt.Sprintf("%s-%d", path, n)
+		if !core.Exists(aside) {
+			return os.Rename(path, aside)
+		}
+	}
+	return errors.New(path + " can't be removed or moved aside")
+}
+
+// Sweep removes what makeWay moved aside beside exe and the binaries an
+// update installs with it, once nothing runs from them; one still running
+// stays for the next start.
+func Sweep(exe string) {
+	dir := filepath.Dir(exe)
+	for _, name := range append([]string{filepath.Base(exe)}, alongside[runtime.GOOS]...) {
+		for _, kind := range []string{".old-", ".failed-"} {
+			left, _ := filepath.Glob(filepath.Join(dir, name+kind+"*"))
+			for _, f := range left {
+				if n := strings.TrimPrefix(f, filepath.Join(dir, name+kind)); n != "" && strings.Trim(n, "0123456789") == "" {
+					removeFile(f)
+				}
+			}
+		}
+	}
 }
 
 func parseSums(raw []byte) (map[string]string, error) {
@@ -620,6 +674,14 @@ func (m *Module) afterKept(project, sha string) {
 	approved := m.C.Effects.Approved("release", project, sha)
 	if (len(root) > 0 || len(unread) > 0) && !approved {
 		m.hold(project, sha, root, unread, manifest.String())
+		return
+	}
+	scanAt := m.Scan
+	if scanAt == nil {
+		scanAt = m.scan
+	}
+	if err := scanAt(p, sha); err != nil {
+		alert("no release at " + core.Short(sha) + ", since its scan blocks it: " + err.Error())
 		return
 	}
 	cfg := m.C.Effects.Config(p, sha)

@@ -37,6 +37,9 @@ type Result struct {
 type Options struct {
 	Floor    float64 // a metric must move by at least this share of the control's mean (default 2%)
 	AllowTie bool    // keep a candidate that regresses nothing and gains nothing
+	// Fixed are the candidate's own tests that pass on it and fail on the
+	// control (findFixes): each is a gain.
+	Fixed []string
 }
 
 // Verdict is the gate's decision and every reason behind it.
@@ -173,6 +176,7 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 			v.Regressions = append(v.Regressions, text)
 		}
 	}
+	v.Gains = append(v.Gains, o.Fixed...)
 	switch {
 	case len(v.Regressions) > 0:
 		v.Reason = "worse than the current Hive: " + v.Regressions[0]

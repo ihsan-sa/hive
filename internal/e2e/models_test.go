@@ -10,9 +10,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -182,6 +185,9 @@ func (f *anthropicModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	f.keys[r.Header.Get("X-Api-Key")] = true
+	if a := r.Header.Get("Authorization"); a != "" && a != "Bearer "+r.Header.Get("X-Api-Key") {
+		f.keys[a] = true
+	}
 	f.models[body.Model] = true
 	answered := false
 	for _, m := range body.Messages {
@@ -245,9 +251,15 @@ func (f *anthropicModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // lands; a hook or env the repo's .claude/settings.json plants takes no
 // effect. It needs Claude Code installed (no Claude login: none is used).
 //
+// A Claude login in the bare run's HOME is never found or sent to the
+// endpoint.
+//
 // With HIVE_E2E_ANTHROPIC="<endpoint> <model id>" and the key in
 // HIVE_E2E_ANTHROPIC_KEY, it is a live probe instead: a real worker on that
 // vendor's model (say https://api.moonshot.ai/anthropic kimi-k2-0905-preview).
+// HIVE_E2E_ANTHROPIC="<name>" probes a model this machine's Hive already has
+// set up, with the key stored by `hive model key <name>`. A live probe spends
+// the vendor's tokens, so it runs only when asked.
 func TestAnthropicModelWorker(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the bare Windows path has no shell for the fake model's command")
@@ -257,8 +269,12 @@ func TestAnthropicModelWorker(t *testing.T) {
 		t.Skip("Claude Code isn't installed")
 	}
 	live := strings.Fields(os.Getenv("HIVE_E2E_ANTHROPIC"))
-	if len(live) != 0 && (len(live) != 2 || os.Getenv("HIVE_E2E_ANTHROPIC_KEY") == "") {
-		t.Fatal(`HIVE_E2E_ANTHROPIC="<endpoint> <model id>", with the key in HIVE_E2E_ANTHROPIC_KEY`)
+	liveKey := os.Getenv("HIVE_E2E_ANTHROPIC_KEY")
+	if len(live) == 1 {
+		live, liveKey = storedModel(t, live[0])
+	}
+	if len(live) != 0 && (len(live) != 2 || liveKey == "") {
+		t.Fatal(`HIVE_E2E_ANTHROPIC="<endpoint> <model id>", with the key in HIVE_E2E_ANTHROPIC_KEY, or HIVE_E2E_ANTHROPIC="<name>" of a model with a stored key`)
 	}
 	t.Parallel()
 	fake := &anthropicModel{keys: map[string]bool{}, models: map[string]bool{},
@@ -266,17 +282,21 @@ func TestAnthropicModelWorker(t *testing.T) {
 			`printf 'from a vendor model\n' > anthropic.txt && git add anthropic.txt && git commit -qm "anthropic.txt" && hive agent finish --status done --account "anthropic.txt from the vendor model" --tested "none" && echo landed`}
 	endpoint, id, key := "", "vendor-coder-1", "sk-anthropic-e2e"
 	if len(live) == 2 {
-		endpoint, id, key = live[0], live[1], os.Getenv("HIVE_E2E_ANTHROPIC_KEY")
+		endpoint, id, key = live[0], live[1], liveKey
 	} else {
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
 		endpoint = srv.URL
 	}
 	u, _ := url.Parse(endpoint)
-	// Claude Code keeps its sessions under HOME on a bare run; this one's
-	// is the test's, with no Claude login in it. Claude Code would send even
+	// A bare run's HOME is the daemon's; this one's is the test's, with a
+	// decoy Claude login in it. Claude Code would send even
 	// a loopback request through a proxy the test's environment names.
-	env := []string{"HOME=" + t.TempDir(), "PATH=" + filepath.Dir(claude) + string(os.PathListSeparator) + os.Getenv("PATH"),
+	home := t.TempDir()
+	decoy := `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-DECOY","refreshToken":"sk-ant-ort01-DECOY","expiresAt":9999999999999,"scopes":["user:inference"],"subscriptionType":"max"}}`
+	os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
+	os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"), []byte(decoy), 0o600)
+	env := []string{"HOME=" + home, "PATH=" + filepath.Dir(claude) + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"ANTHROPIC_API_KEY=sk-not-the-model", "CLAUDE_CODE_OAUTH_TOKEN=not-the-model"}
 	if len(live) == 0 {
 		env = append(env, "NO_PROXY="+u.Hostname(), "no_proxy="+u.Hostname())
@@ -341,4 +361,149 @@ func TestAnthropicModelWorker(t *testing.T) {
 	if strings.Contains(out, "LEAK") || !strings.Contains(out, "landed") {
 		t.Fatalf("the tool's output: %s", out)
 	}
+}
+
+// storedModel reads the named model and its stored key from this machine's
+// Hive, for a live probe; it skips when either isn't there.
+func storedModel(t *testing.T, name string) ([]string, string) {
+	ws, ok := core.FindWorkspace()
+	if !ok {
+		t.Skip("no Hive on this machine to read model " + name + " from")
+	}
+	m, ok := ws.LoadConfig().Models[name]
+	if !ok || !m.Anthropic() {
+		t.Skipf("this machine's Hive has no Anthropic-compatible model %q", name)
+	}
+	raw, err := os.ReadFile(ws.OpenKey(name))
+	if err != nil || strings.TrimSpace(string(raw)) == "" {
+		t.Skipf("no key stored for %s: hive model key %s", name, name)
+	}
+	return []string{m.Endpoint, m.Model}, strings.TrimSpace(string(raw))
+}
+
+// guarded stands in for OpenRouter's free tier behind a guardrail that
+// excludes the model: it answers every request 404 until it is fixed, then
+// as a free model does.
+type guarded struct {
+	fixed atomic.Bool
+	hits  atomic.Int32
+	model *freeModel
+}
+
+func (g *guarded) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	g.hits.Add(1)
+	if g.fixed.Load() {
+		g.model.ServeHTTP(w, r)
+		return
+	}
+	w.WriteHeader(http.StatusNotFound)
+	w.Write([]byte(`{"error":{"message":"0 endpoints out of 1 requested are available matching your guardrail restrictions and data policy. Free model training violation (guardrail): 1 endpoint excluded; configurable at https://openrouter.ai/workspaces/default/guardrails","code":404}}`))
+}
+
+// A worker at its usage limit moves to a model that answers 404: the model
+// is marked as one that can't answer, the worker moves at once to the next
+// pick (no backoff park), the person is told once with the error and the
+// fix, and so is the lead's chat; once the model is fixed and its config
+// changes it is back, and the next worker routed to it lands on it.
+func TestModelThatCantAnswer(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the open harness's shell tool is bash; the sandboxed Windows path runs it in WSL, the bare one has none")
+	}
+	t.Parallel()
+	router := &guarded{model: &freeModel{auth: map[string]bool{}, models: map[string]bool{},
+		command: `printf 'from the router\n' > router.txt && git add router.txt && git commit -qm "router.txt" && hive agent finish --status done --account "router.txt" --tested "none"`}}
+	free := &freeModel{auth: map[string]bool{}, models: map[string]bool{},
+		command: `printf 'from a free model\n' > free.txt && git add free.txt && git commit -qm "free.txt" && hive agent finish --status done --account "free.txt from the free model" --tested "none"`}
+	rs, fs := httptest.NewServer(router), httptest.NewServer(free)
+	defer rs.Close()
+	defer fs.Close()
+	ru, _ := url.Parse(rs.URL)
+	fu, _ := url.Parse(fs.URL)
+	h := startWith(t, bin, func(c *core.Config) {
+		c.Models = map[string]core.OpenModel{
+			"router": {Endpoint: rs.URL + "/api/v1", Model: "nvidia/nemotron:free", Key: true},
+			"free":   {Endpoint: fs.URL + "/v1", Model: "free-coder:7b", Key: true}}
+		c.Projects = map[string]core.ProjectSettings{"lab": {Routes: map[string][]string{"worker": {"fake:opus", "router", "free"}}}}
+		c.Egress.Local = append(c.Egress.Local, ru.Host, fu.Host)
+	})
+	for _, name := range []string{"router", "free"} {
+		if err := h.ws.SaveOpenKey(name, "sk-"+name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.seed("me/lab", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.post("/api/project", map[string]any{"name": "lab", "repo": "me/lab"}, nil)
+	h.post("/api/ask", map[string]string{"project": "lab", "title": "work past a dead fallback", "known": "FAKE:limit"}, nil)
+	st := h.wait("the worker to skip the 404ing model and land on the next", 3*minute, taskStage("lab", "work past a dead fallback", work.StageDone))
+	h.wait("free.txt on main", minute, h.onMain("me/lab", "free.txt", "from a free model"))
+	tk, _ := task(st, "lab", "work past a dead fallback")
+	if router.hits.Load() == 0 {
+		t.Fatal("the worker never tried the router")
+	}
+	st = h.wait("the told item", minute, func(st api.State) bool {
+		return slices.ContainsFunc(st.Told, func(a core.Ask) bool { return strings.HasPrefix(a.ID, "model-down-open-router-") })
+	})
+	if len(st.Down) != 1 || st.Down[0].Pick.Model != "router" || st.Down[0].Status != 404 || !strings.Contains(st.Down[0].Text, "guardrail") {
+		t.Fatalf("down: %+v", st.Down)
+	}
+	// The journal: no backoff park on the router, one notice, one line in the lead's chat.
+	worker := ""
+	var told, posted int
+	raw, _ := os.ReadFile(filepath.Join(h.ws.Hive(), "events.jsonl"))
+	for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var e core.Event
+		var d struct {
+			ID, Reason, Chat, Text, Task, Role string
+			Detail                             string
+		}
+		if json.Unmarshal([]byte(l), &e) != nil || e.Decode(&d) != nil {
+			continue
+		}
+		switch e.Kind {
+		case "run.created":
+			if d.Task == tk.ID && d.Role == "worker" {
+				worker = d.ID
+			}
+		case "run.turn_ended":
+			if d.ID == worker && strings.Contains(d.Reason, "retrying") {
+				t.Errorf("the worker parked for a retry: %s", d.Reason)
+			}
+		case "person.told":
+			if strings.HasPrefix(d.ID, "model-down-") {
+				told++
+				if !strings.Contains(d.Detail, "https://openrouter.ai/workspaces/default/guardrails") || !strings.Contains(d.Detail, "Free model training violation") {
+					t.Errorf("the notice: %s", d.Detail)
+				}
+			}
+		case "chat.posted":
+			if d.Chat == "lead" && strings.Contains(d.Text, "open:router can't answer") {
+				posted++
+			}
+		}
+	}
+	if worker == "" || told != 1 || posted != 1 {
+		t.Fatalf("worker %q, told %d, lead chat lines %d", worker, told, posted)
+	}
+	// A worker routed only to the router parks on it, an hour out.
+	cfg := h.ws.LoadConfig()
+	cfg.Projects["lab"] = core.ProjectSettings{Routes: map[string][]string{"worker": {"router"}}}
+	h.ws.SaveConfig(cfg)
+	h.post("/api/ask", map[string]string{"project": "lab", "title": "use the router again"}, nil)
+	h.wait("the router's worker to park on it", 2*minute, func(st api.State) bool {
+		tk, ok := task(st, "lab", "use the router again")
+		return ok && slices.ContainsFunc(st.Runs, func(r core.Run) bool {
+			return r.ID == tk.Worker && r.Status == core.StatusParked && strings.Contains(r.Reason, "open:router can't answer") && r.ParkedUntil.After(time.Now().Add(30*time.Minute))
+		})
+	})
+	// The person fixes the guardrail and the model's config changes: it is
+	// back, and the parked worker resumes on it at once and lands.
+	router.fixed.Store(true)
+	cfg = h.ws.LoadConfig()
+	m := cfg.Models["router"]
+	m.Context = 64000
+	cfg.Models["router"] = m
+	h.ws.SaveConfig(cfg)
+	h.wait("the router to come back", minute, func(st api.State) bool { return len(st.Down) == 0 })
+	h.wait("the parked worker to resume on the router and land", 3*minute, taskStage("lab", "use the router again", work.StageDone))
+	h.wait("router.txt on main", minute, h.onMain("me/lab", "router.txt", "from the router"))
 }

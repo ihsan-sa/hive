@@ -20,6 +20,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
@@ -1044,6 +1045,42 @@ func TestSettingChangesAtOnce(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.st.Config.LeadModel != modelChoices(m.st.Config)[1] {
 		t.Fatalf("lead model %q after picking %q", m.st.Config.LeadModel, modelChoices(m.st.Config)[1])
+	}
+}
+
+// Turning sharing on in Settings shows report.Question first, as the
+// installers do: Enter on it is yes, any other key is no.
+func TestSettingsShareAsksTheQuestion(t *testing.T) {
+	m := testModel(120, 36)
+	m.section = secSettings
+	for i, s := range m.settings() {
+		if s.key == "share" {
+			m.setSel = i
+		}
+	}
+	if _, on := m.st.Config.Sharing(); on {
+		t.Fatal("sharing starts on")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if _, on := m.st.Config.Sharing(); on || !strings.Contains(m.settings()[m.setSel].value, report.Question) {
+		t.Fatalf("first enter: on %v, shows %q", on, m.settings()[m.setSel].value)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if _, on := m.st.Config.Sharing(); on || strings.Contains(m.settings()[m.setSel].value, report.Question) {
+		t.Fatal("another key didn't answer no")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Fatal("enter on the question saved nothing")
+	}
+	if _, on := m.st.Config.Sharing(); !on {
+		t.Fatal("enter on the question didn't turn sharing on")
+	}
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Fatal("turning it off saved nothing")
+	}
+	if _, on := m.st.Config.Sharing(); on {
+		t.Fatal("turning it off asked or didn't")
 	}
 }
 

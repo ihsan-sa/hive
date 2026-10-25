@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,6 +64,10 @@ type Forge interface {
 	GetPR(repo string, number int) (PR, error)
 	MergePR(repo string, number int, sha, subject string) (string, error)
 	ClosePR(repo string, number int, comment string) error
+	// SetDraft marks an open pull request a draft or ready for review.
+	SetDraft(repo string, number int, draft bool) error
+	// DeleteBranch deletes a branch; one already gone counts as deleted.
+	DeleteBranch(repo, branch string) error
 	CloseIssue(repo string, number int) error // an issue already closed counts as closed
 	// Checks are the forge's own checks (CI jobs) on exactly sha.
 	Checks(repo, sha string) ([]CheckRun, error)
@@ -148,22 +153,36 @@ var OwnerTokens = map[string]string{
 }
 
 // ghEnv is the environment that makes gh and git's gh credential helper use
-// the token configured for repo's owner, or nothing to keep gh's login.
+// the token configured for repo's owner, or nothing to keep gh's login. Under
+// the system service install.sh writes, the token comes first from systemd's
+// credential <owner>.token (root's file, which only the service can read), then
+// from OwnerTokens; an empty one keeps gh's login.
 func ghEnv(repo string) []string {
-	owner, _, _ := strings.Cut(repo, "/")
-	path := OwnerTokens[strings.ToLower(owner)]
-	if path == "" {
+	owner, _, _ := strings.Cut(strings.ToLower(repo), "/")
+	if owner == "" || strings.ContainsAny(owner, `/\.`) {
 		return nil
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil
+	for _, path := range []string{credential(owner + ".token"), OwnerTokens[owner]} {
+		if path == "" {
+			continue
+		}
+		if b, err := os.ReadFile(path); err == nil {
+			if tok := strings.TrimSpace(string(b)); tok != "" {
+				return []string{"GH_TOKEN=" + tok}
+			}
+		}
 	}
-	tok := strings.TrimSpace(string(b))
-	if tok == "" {
-		return nil
+	return nil
+}
+
+// credential is the path of a systemd credential the service was given, or
+// "" outside one.
+func credential(name string) string {
+	dir := os.Getenv("CREDENTIALS_DIRECTORY")
+	if dir == "" {
+		return ""
 	}
-	return []string{"GH_TOKEN=" + tok}
+	return filepath.Join(dir, name)
 }
 
 // ghRun runs gh and returns its stdout and stderr. Tests replace it.
@@ -227,7 +246,7 @@ func ghWrites(args []string) bool {
 		}
 		return false
 	}
-	return len(args) > 1 && slices.Contains([]string{"create", "comment", "merge", "close", "edit", "delete", "rerun"}, args[1])
+	return len(args) > 1 && slices.Contains([]string{"create", "comment", "merge", "close", "edit", "delete", "rerun", "ready"}, args[1])
 }
 
 // RateLimited is GitHub asking the Hive to slow down: a secondary rate limit
@@ -567,6 +586,9 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 		return "", fmt.Errorf("PR #%d: %w", number, ErrDraft)
 	}
 	if _, err := gh(repo, "pr", "merge", strconv.Itoa(number), "-R", repo, "--squash", "--match-head-commit", sha, "--subject", subject); err != nil {
+		if draftRefused.MatchString(err.Error()) { // made a draft since the look above
+			return "", fmt.Errorf("PR #%d: %w (%v)", number, ErrDraft, err)
+		}
 		return "", err
 	}
 	for i := 0; i < 10; i++ {
@@ -584,6 +606,27 @@ func (GitHub) ClosePR(repo string, number int, comment string) error {
 	return err
 }
 
+// draftRefused is how GitHub refuses to merge a draft ("Pull Request is
+// still a draft (mergePullRequest)").
+var draftRefused = regexp.MustCompile(`(?i)is still a draft`)
+
+func (GitHub) SetDraft(repo string, number int, draft bool) error {
+	args := []string{"pr", "ready", strconv.Itoa(number), "-R", repo}
+	if draft {
+		args = append(args, "--undo")
+	}
+	_, err := gh(repo, args...)
+	return err
+}
+
+func (GitHub) DeleteBranch(repo, branch string) error {
+	_, err := gh(repo, "api", "-X", "DELETE", "repos/"+repo+"/git/refs/heads/"+branch)
+	if err != nil && strings.Contains(err.Error(), "Reference does not exist") {
+		return nil
+	}
+	return err
+}
+
 func (GitHub) CloseIssue(repo string, number int) error {
 	_, err := gh(repo, "issue", "close", strconv.Itoa(number), "-R", repo)
 	return err
@@ -597,21 +640,15 @@ const queuedTooLong = time.Hour
 // with no runs yet counts as pending, so a just-pushed head whose jobs aren't
 // listed yet doesn't read as having none.
 func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
-	out, err := gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/check-runs?per_page=100")
+	runs, err := ghPages[ghCheckRun](repo, "repos/"+repo+"/commits/"+sha+"/check-runs", "check_runs")
 	if err != nil {
-		return nil, err
-	}
-	var runs struct {
-		CheckRuns []ghCheckRun `json:"check_runs"`
-	}
-	if err := json.Unmarshal([]byte(out), &runs); err != nil {
 		return nil, err
 	}
 	// A check run again is listed once per attempt; the newest one counts. A
 	// re-run still queued may have no start yet, so its larger id decides.
 	newest := map[string]ghCheckRun{}
 	var order []string
-	for _, r := range runs.CheckRuns {
+	for _, r := range runs {
 		old, seen := newest[r.Name]
 		if !seen {
 			order = append(order, r.Name)
@@ -624,44 +661,57 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 	for _, name := range order {
 		list = append(list, newest[name].check(time.Now()))
 	}
-	out, err = gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/status")
+	statuses, err := ghPages[struct {
+		Context     string `json:"context"`
+		State       string `json:"state"`
+		Description string `json:"description"`
+		TargetURL   string `json:"target_url"`
+	}](repo, "repos/"+repo+"/commits/"+sha+"/status", "statuses")
 	if err != nil {
 		return nil, err
 	}
-	var st struct {
-		Statuses []struct {
-			Context     string `json:"context"`
-			State       string `json:"state"`
-			Description string `json:"description"`
-			TargetURL   string `json:"target_url"`
-		} `json:"statuses"`
-	}
-	if err := json.Unmarshal([]byte(out), &st); err != nil {
-		return nil, err
-	}
-	for _, s := range st.Statuses {
+	for _, s := range statuses {
 		state := map[string]string{"success": CheckPass, "failure": CheckFail, "error": CheckCantStart}[s.State]
 		if state == "" {
 			state = CheckPending
 		}
 		list = append(list, CheckRun{Name: s.Context, State: state, Detail: s.Description, URL: s.TargetURL})
 	}
-	out, err = gh(repo, "api", "repos/"+repo+"/commits/"+sha+"/check-suites?per_page=100")
+	suites, err := ghPages[ghSuite](repo, "repos/"+repo+"/commits/"+sha+"/check-suites", "check_suites")
 	if err != nil {
 		return nil, err
 	}
-	var suites struct {
-		CheckSuites []ghSuite `json:"check_suites"`
-	}
-	if err := json.Unmarshal([]byte(out), &suites); err != nil {
-		return nil, err
-	}
-	for _, s := range suites.CheckSuites {
+	for _, s := range suites {
 		if s.pending(time.Now()) {
 			list = append(list, CheckRun{Name: s.App.Slug, State: CheckPending, Detail: "suite " + s.Status + ", no jobs listed yet"})
 		}
 	}
 	return list, nil
+}
+
+// ghPages reads every page of a GitHub list held under field of each page's
+// object (check-runs, statuses and check-suites come 100 a page at most), so
+// a head with more checks than one page holds still shows them all. gh prints
+// one item per jq result, compact or indented; the decoder takes either.
+func ghPages[T any](repo, path, field string) ([]T, error) {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	out, err := gh(repo, "api", "--paginate", path+sep+"per_page=100", "-q", "."+field+"[]")
+	if err != nil {
+		return nil, err
+	}
+	var list []T
+	for dec := json.NewDecoder(strings.NewReader(out)); ; {
+		var item T
+		if err := dec.Decode(&item); err == io.EOF {
+			return list, nil
+		} else if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", field, err)
+		}
+		list = append(list, item)
+	}
 }
 
 // CheckLogs is a forge that can read a check's log, so a check red on both a

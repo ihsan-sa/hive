@@ -18,6 +18,7 @@ func selfRig(t *testing.T, files map[string]string, outcome string) (*Module, *T
 	t.Helper()
 	m, task, p, f := gateRig(t, false, files)
 	p.Self = true
+	task.Aim = AimGain
 	reviewerLand(t, m, task, p, "r1")
 	toMerging(t, m, task, p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPass})
@@ -52,7 +53,7 @@ func gateOnce(t *testing.T, m *Module, task *Task, p core.Project) {
 func TestSelfGateKeepMerges(t *testing.T) {
 	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	main, _ := m.C.Effects.Sync(p)
-	if _, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: task.PR.Number, SHA: task.SHA, Main: main, Subject: "x"}); err == nil || !strings.Contains(err.Error(), "recursive gate") {
+	if _, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: task.PR.Number, SHA: task.SHA, Main: main, Subject: "x", Gain: true}); err == nil || !strings.Contains(err.Error(), "recursive gate") {
 		t.Fatalf("a self merge with no gate verdict went through: %v", err)
 	}
 	mergeOnce(t, m, task, p)
@@ -76,6 +77,22 @@ func TestSelfGateKeepMerges(t *testing.T) {
 	}
 	if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); !strings.Contains(c, "Recursive gate: KEPT") || !strings.Contains(c, "probe table") {
 		t.Fatalf("the PR doesn't carry the gate's report:\n%s", c)
+	}
+}
+
+// A head that lacks main is brought up to date before the gate runs: the
+// gate judges what would land, not a branch cut before main fixed a test.
+func TestSelfGateCatchesUpFirst(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	pushMain(t, f, map[string]string{"other.go": "package p\n"})
+	old := task.SHA
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if len(*jobs) != 0 {
+		t.Fatalf("the gate ran on %s, a head without main", core.Short((*jobs)[0].Head))
+	}
+	if task.SHA == old || task.Stage != StageTesting {
+		t.Fatalf("stage %q, head moved %v: want brought up to date and tested again", task.Stage, task.SHA != old)
 	}
 }
 
@@ -186,9 +203,10 @@ func TestSelfGateWithoutRunnerWaits(t *testing.T) {
 	}
 }
 
-// Docs and prompts run with ties allowed; one gate runs at a time; a
-// project that isn't the Hive's own never waits for one.
-func TestSelfGateTiesAndTurns(t *testing.T) {
+// An improvement must show a gain: even docs and prompts run with no ties
+// allowed; one gate runs at a time; a project that isn't the Hive's own
+// never waits for one.
+func TestSelfGateNoTiesAndTurns(t *testing.T) {
 	m, task, p, _, jobs := selfRig(t, map[string]string{"docs/note.md": "x\n", "modules/agents/worker.md": "y\n"}, core.GateKeep)
 	m.mu.Lock()
 	m.gating = &gateRun{key: "other", task: "t9"}
@@ -202,11 +220,12 @@ func TestSelfGateTiesAndTurns(t *testing.T) {
 	delete(m.later, task.ID)
 	m.mu.Unlock()
 	gateOnce(t, m, task, p)
-	if len(*jobs) != 1 || !(*jobs)[0].AllowTie || task.Stage != StageMerged {
-		t.Fatalf("%d runs (%+v), stage %q: want one tie-allowed run and a merge", len(*jobs), *jobs, task.Stage)
+	if len(*jobs) != 1 || (*jobs)[0].AllowTie || task.Stage != StageMerged {
+		t.Fatalf("%d runs (%+v), stage %q: want one run with no ties and a merge", len(*jobs), *jobs, task.Stage)
 	}
 
 	m2, task2, p2, f2 := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	task2.Aim = AimGain
 	m2.Gate = func(context.Context, GateJob) core.GateResult {
 		t.Fatal("gated a project that isn't the Hive's")
 		return core.GateResult{}
@@ -216,6 +235,80 @@ func TestSelfGateTiesAndTurns(t *testing.T) {
 	mergeOnce(t, m2, task2, p2)
 	if task2.Stage != StageMerged {
 		t.Fatalf("stage %q, reason %q", task2.Stage, task2.Reason)
+	}
+}
+
+// A fix to the Hive itself (the default aim, as every task filed before
+// aims existed) merges on its tests, reads and checks, with no gate run.
+func TestSelfFixMergesWithoutTheGate(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
+	task.Aim = ""
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if len(*jobs) != 0 {
+		t.Fatalf("%d gate runs on a fix, want none", len(*jobs))
+	}
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q: want a fix merged", task.Stage, task.Reason)
+	}
+}
+
+// The lead turns an improvement waiting for the gate into a fix, and it
+// merges; a worker sets only its own task's aim; an aim is fix or gain.
+func TestAimOp(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	m.mu.Lock()
+	m.gating = &gateRun{key: "other", task: "t9"}
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	if !strings.HasPrefix(task.Reason, GateWait) {
+		t.Fatalf("reason %q: want waiting for the gate", task.Reason)
+	}
+	lead := core.Run{ID: "lead-1", Role: "lead"}
+	other := core.Run{ID: "w-other", Role: "worker"}
+	if _, err := m.opAim(other, []byte(`{"task":"`+task.ID+`","aim":"fix","why":"x"}`)); err == nil {
+		t.Fatal("a worker set another task's aim")
+	}
+	if _, err := m.opAim(lead, []byte(`{"task":"`+task.ID+`","aim":"huge","why":"x"}`)); err == nil {
+		t.Fatal("took an aim that is neither fix nor gain")
+	}
+	if _, err := m.opAim(lead, []byte(`{"task":"`+task.ID+`","aim":"fix"}`)); err == nil {
+		t.Fatal("set an aim with no why")
+	}
+	if _, err := m.opAim(lead, []byte(`{"task":"`+task.ID+`","aim":"fix","why":"a plain fix"}`)); err != nil {
+		t.Fatal(err)
+	}
+	*task, _ = m.Get(task.ID)
+	if task.Gain() || !strings.Contains(task.Log[len(task.Log)-1].Text, "a plain fix") {
+		t.Fatalf("aim %q, log %+v", task.Aim, task.Log[len(task.Log)-1])
+	}
+	mergeOnce(t, m, task, p)
+	if len(*jobs) != 0 || task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("%d runs, stage %q, reason %q: want the fix merged without the gate", len(*jobs), task.Stage, task.Reason)
+	}
+	own := core.Run{ID: task.Worker, Role: "worker"}
+	if _, err := m.opAim(own, []byte(`{"aim":"gain","why":"x"}`)); err == nil {
+		t.Fatal("set the aim of a merged task")
+	}
+}
+
+// A brief may say it aims at a gain, and its worker's brief says which it is.
+func TestBriefAim(t *testing.T) {
+	m, _, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	if _, err := m.File(Brief{Project: p.Name, Title: "x", Aim: "bigger"}); err == nil {
+		t.Fatal("filed a brief with an aim that is neither fix nor gain")
+	}
+	g, err := m.File(Brief{Project: p.Name, Title: "faster merges", Aim: "gain"})
+	if err != nil || !g.Gain() {
+		t.Fatalf("aim %q, %v", g.Aim, err)
+	}
+	fx, _ := m.File(Brief{Project: p.Name, Title: "a fix"})
+	main, _ := m.C.Effects.Sync(p)
+	if b := m.renderBrief(&g, p, main); !strings.Contains(b, "Aim: an improvement") {
+		t.Fatalf("the brief doesn't say it aims at a gain:\n%s", b)
+	}
+	if b := m.renderBrief(&fx, p, main); !strings.Contains(b, "Aim: a fix") {
+		t.Fatalf("the brief doesn't say it is a fix:\n%s", b)
 	}
 }
 
