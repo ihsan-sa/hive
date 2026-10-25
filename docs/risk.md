@@ -36,6 +36,14 @@ A host-made revert goes through the same gate: a revert of a merge that touched 
 
 Known gap: a clean PR merges as it is onto the newest main (main is merged in only on a conflict, or when the forge requires the branch to be up to date), so the combined tree is tested by neither the Hive nor the PR's own CI, which ran on the PR merged with main at push time. A semantic clash between the two is caught after merge: improve measures main after every merge and reverts a change that leaves it red or worse. Turning on the forge's "require branches to be up to date" rule for a project closes the gap at the cost of a catch-up and a CI restart for every merge.
 
+## The release repository's steward
+
+Only one of the person's Hives merges and releases in `release_repo`: the Hive whose id (`.hive/hive-id`, read-only to every sandbox) is the first word of `.hive/steward` on its main. `Effects.Stewardship` checks the record before every merge and release in that repository, for any project there, not only the self one; a release reads it at main as it is now, not at the tag. A record it can't read refuses: the commit is read in the local clone, falling back to main as last fetched, and only a file that is absent at a readable commit counts as no record. Another Hive works in a fork in the owner named as `self_fork` and offers its changes upstream; the steward itself works in the upstream even with `self_fork` set.
+
+The record is protected, so a change to it is a protected-path merge: the person's word, or at autonomy 2 and above a warden's in their place, as for goals. That is enough here, since only the steward (or, before any record, a Hive that already works in the upstream) can merge in the release repository at all.
+
+Until the record exists, the grandfather path stays open: a Hive that already worked in the upstream before the record (H0) still merges there, and a new one works there only with the person's `steward: true` word on `/api/project`. The steward files the change that writes the record once (a brief "Record this Hive (<id>) as the steward of …"); merging it closes the path. The id is generated (`hive-…`) unless the person writes a name of their own (H0) into `.hive/hive-id` first; a rename while that brief is open raises an alert asking them to stop it, and the claim is filed again under the new name. A Hive that loses `.hive/hive-id` gets a new id and is refused the upstream; writing the old id back, or changing `.hive/steward`, recovers it. Handing stewardship to another Hive is the same: a change to `.hive/steward` naming it.
+
 ## Point of effect
 
 `execute` runs in the daemon (the effects process), never in an agent's sandbox:

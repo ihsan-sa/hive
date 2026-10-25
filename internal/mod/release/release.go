@@ -1153,7 +1153,7 @@ func (m *Module) Publish() string {
 			continue // an older one stays a pre-release
 		}
 		checked[c.Project]++
-		if why := m.C.Effects.Stewardship(p, c.SHA); why != "" {
+		if why := m.C.Effects.Stewardship(p, "refs/remotes/origin/"+p.Branch); why != "" { // the record as main reads it now, which may postdate the tag
 			out = append(out, c.Tag+": not published, "+why)
 			continue
 		}
