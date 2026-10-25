@@ -426,12 +426,166 @@ func TestReachPolicy(t *testing.T) {
 	if err := CheckReach(GitHub{Owner: "Lab"}, "ghp_classic", ""); err == nil {
 		t.Error("a classic token passed")
 	}
-	old := listReach
-	defer func() { listReach = old }()
-	listReach = func(GitHub, string) ([]Access, error) { return []Access{{Repo: "Lab/hive", Push: true}}, nil }
-	if err := CheckReach(GitHub{Owner: "Lab"}, "github_pat_x", "https://github.com/ihsan-sa/hive"); err == nil {
-		t.Error("an org-wide token on an org with other repositories passed")
+}
+
+// TestCheckReachProbesTheToken replays GitHub's answers for tokens of an
+// owner who administers ihsan-sa/hive (private), ihsan-sa/notes (public) and
+// Lab/hive-trials. The listings mark all of them admin whatever the token,
+// as GitHub does for a fine-grained token; only the probes, made with the
+// token itself, tell a narrow token from a wide one.
+func TestCheckReachProbesTheToken(t *testing.T) {
+	gr := "Lab/gate-1700000000-0a1b2c3d-candidate"
+	row := func(repos ...string) string {
+		var b strings.Builder
+		for _, r := range repos {
+			b.WriteString(r + "\ttrue\ttrue\n")
+		}
+		return b.String()
 	}
+	cases := []struct {
+		name, token string
+		gh          map[string]string // args -> output, as `gh api --include` prints it
+		ok, unknown bool
+	}{
+		{"narrow: the test org's repositories, contents write", "github_pat_narrow", map[string]string{
+			reachUser: row("ihsan-sa/notes", gr), reachOrg: row(gr),
+			blobCall("ihsan-sa/notes"): ghDenied, keysCall("ihsan-sa/notes"): ghDenied,
+		}, true, false},
+		{"org-wide on an org that holds another repository", "github_pat_wide", map[string]string{
+			reachUser: row("ihsan-sa/notes", "Lab/hive-trials"), reachOrg: row("Lab/hive-trials", gr),
+			blobCall("ihsan-sa/notes"): ghDenied, keysCall("ihsan-sa/notes"): ghDenied,
+			blobCall("Lab/hive-trials"): ghInvalid,
+		}, false, false},
+		{"all of the owner's repositories", "github_pat_all", map[string]string{
+			reachUser: row("ihsan-sa/hive", "ihsan-sa/notes"), reachOrg: "",
+			blobCall("ihsan-sa/hive"): ghInvalid,
+		}, false, false},
+		{"administration but not contents", "github_pat_admin", map[string]string{
+			reachUser: row("Lab/hive-trials"), reachOrg: row("Lab/hive-trials"),
+			blobCall("Lab/hive-trials"): ghNotFound, keysCall("Lab/hive-trials"): "HTTP/2.0 200 OK\n\n[]",
+		}, false, false},
+		{"a probe GitHub keeps refusing for its rate", "github_pat_limited", map[string]string{
+			reachUser: row("ihsan-sa/notes"), reachOrg: "",
+			blobCall("ihsan-sa/notes"): ghLimited,
+		}, false, true},
+		{"classic, refused before any call", "ghp_classic", map[string]string{}, false, false},
+	}
+	fakeClock(t)
+	for _, c := range cases {
+		replay(t, c.token, func(call string) (string, bool) { out, ok := c.gh[call]; return out, ok })
+		err := CheckReach(GitHub{Owner: "Lab"}, c.token, "https://github.com/ihsan-sa/hive")
+		if (err == nil) != c.ok || errors.Is(err, ErrReachUnknown) != c.unknown {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	if err := CheckReach(GitHub{Owner: "ihsan-sa"}, "github_pat_x", "https://github.com/ihsan-sa/hive"); err == nil {
+		t.Error("the gated repository's owner as the test org passed")
+	}
+}
+
+// TestCheckReachAtScale: a narrow token whose owner has 300 public
+// repositories, all listed as admin, passes, though GitHub refuses any burst
+// past its 900 points a minute.
+func TestCheckReachAtScale(t *testing.T) {
+	var repos []string
+	var listing strings.Builder
+	for i := range 300 {
+		r := fmt.Sprintf("ihsan-sa/public-%d", i)
+		repos = append(repos, r)
+		listing.WriteString(r + "\ttrue\ttrue\n")
+	}
+	now := fakeClock(t)
+	var spent []struct {
+		at     time.Time
+		points int
+	}
+	calls := 0
+	replay(t, "github_pat_narrow", func(call string) (string, bool) {
+		switch call {
+		case reachUser:
+			return listing.String(), true
+		case reachOrg:
+			return "", true
+		}
+		calls++
+		points := 1
+		if strings.HasPrefix(call, "-X POST") {
+			points = 5
+		}
+		used := points
+		for _, s := range spent {
+			if now().Sub(s.at) < time.Minute {
+				used += s.points
+			}
+		}
+		if used > 900 {
+			return ghLimited, true
+		}
+		spent = append(spent, struct {
+			at     time.Time
+			points int
+		}{now(), points})
+		return ghDenied, true
+	})
+	if err := CheckReach(GitHub{Owner: "Lab"}, "github_pat_narrow", "https://github.com/ihsan-sa/hive"); err != nil {
+		t.Fatalf("a narrow token was refused: %v", err)
+	}
+	if calls != 2*len(repos) {
+		t.Errorf("%d probes for %d repositories", calls, len(repos))
+	}
+}
+
+const (
+	reachUser  = "/user/repos?per_page=100&affiliation=owner,collaborator,organization_member"
+	reachOrg   = "/orgs/Lab/repos?per_page=100&type=all"
+	ghDenied   = "HTTP/2.0 403 Forbidden\nX-Accepted-Github-Permissions: contents=write\n\n" + `{"message":"Resource not accessible by personal access token","status":"403"}` + "\ngh: Resource not accessible by personal access token (HTTP 403)"
+	ghNotFound = "HTTP/2.0 404 Not Found\n\n" + `{"message":"Not Found","status":"404"}` + "\ngh: Not Found (HTTP 404)"
+	ghInvalid  = "HTTP/2.0 422 Unprocessable Entity\n\n" + `{"message":"Invalid request.\n\n\"content\" wasn't supplied.","status":"422"}` + "\ngh: Invalid request. (HTTP 422)"
+	ghLimited  = "HTTP/2.0 403 Forbidden\nRetry-After: 60\n\n" + `{"message":"You have exceeded a secondary rate limit."}` + "\ngh: You have exceeded a secondary rate limit. (HTTP 403)"
+)
+
+func blobCall(r string) string { return "-X POST /repos/" + r + "/git/blobs -f encoding=utf-8" }
+func keysCall(r string) string { return "/repos/" + r + "/keys?per_page=1" }
+
+// replay answers gh api calls made with token from answer, keyed by the
+// call's arguments (a listing by its path alone, a probe without --include);
+// an answer naming an HTTP error status fails as gh does.
+func replay(t *testing.T, token string, answer func(call string) (string, bool)) {
+	old := ghAPI
+	t.Cleanup(func() { ghAPI = old })
+	ghAPI = func(tok string, args ...string) (string, error) {
+		if tok != token {
+			t.Errorf("called with %s, not %s", tok, token)
+		}
+		switch args[0] {
+		case "--paginate": // the listings, with their jq filter
+			args = args[1:2]
+		case "--include":
+			args = args[1:]
+		default:
+			t.Errorf("a probe without --include: %v", args)
+		}
+		call := strings.Join(args, " ")
+		out, ok := answer(call)
+		if !ok {
+			t.Errorf("unrecorded call gh api %s", call)
+			return "", fmt.Errorf("unrecorded")
+		}
+		if m := httpStatus.FindStringSubmatch(out); m != nil && m[1][0] != '2' {
+			return out, fmt.Errorf("exit status 1")
+		}
+		return out, nil
+	}
+}
+
+// fakeClock makes the reach check's sleeps advance a fake clock.
+func fakeClock(t *testing.T) func() time.Time {
+	at := time.Unix(1700000000, 0)
+	oldSleep, oldNow := reachSleep, reachNow
+	t.Cleanup(func() { reachSleep, reachNow = oldSleep, oldNow })
+	reachSleep = func(d time.Duration) { at = at.Add(d) }
+	reachNow = func() time.Time { return at }
+	return reachNow
 }
 
 func TestInstallToChecks(t *testing.T) {
@@ -490,6 +644,10 @@ func TestMain(m *testing.M) {
 		if f := strings.Fields(string(out)); len(f) == 2 {
 			os.Setenv("GOMODCACHE", f[0])
 			os.Setenv("GOCACHE", f[1])
+			// The sides build in it too: the standard library compiles once,
+			// not once per side and run, which under load took past the
+			// package's timeout.
+			testGoCache = f[1]
 		}
 	}
 	dir, _ := os.MkdirTemp("", "gate-test-config-")
