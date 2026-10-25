@@ -135,6 +135,8 @@ func TestRealKeyOnAFakeLabelledLine(t *testing.T) {
 		"sk-ant-...",
 		"password: [secret]",
 		"https://x-access-token:${TOKEN}@github.com/me/repo",
+		"a brokered org leg with no child token: 261024-225610-163a3bc0d0.",
+		"token: r-261025-081832-f0ffb403d4-43295337-0",
 	} {
 		if hits := Text("f", []byte(line), lists()); len(hits) != 0 {
 			t.Errorf("no key, but %q hit: %v", line, hits)

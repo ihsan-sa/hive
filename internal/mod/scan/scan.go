@@ -183,13 +183,19 @@ var keys = []struct {
 	{"a secret assigned to a name", regexp.MustCompile(`(?i)[a-z0-9_.-]*(token|secret|passw(or)?d|api[_-]?key|access[_-]?key|client[_-]?secret)[a-z0-9_.-]*["']?\s*[:=]\s*["']?([A-Za-z0-9+/_.=-]{20,})`)},
 }
 
+// hiveID is the shape of the Hive's own task and run ids (261024-225610-163a3bc0d0,
+// r-261025-081832-f0ffb403d4-43295337-0), which prose names after a word
+// like "token:" ("a brokered org leg with no child token: 261024-...").
+var hiveID = regexp.MustCompile(`^([a-z]+-)?[0-9]{6}-[0-9]{6}-[0-9a-f]{10}([-.][0-9a-z.-]*)?$`)
+
 // placeholder says a match is no key: a value with few distinct characters
 // (ghp_xxxx..., sk-0000...) or, for a value assigned to a name, one without
-// both letters and digits (a variable or a word, not a key).
+// both letters and digits (a variable or a word, not a key) or one of the
+// Hive's own ids.
 func placeholder(what, m string, sub []string) bool {
 	if what == "a secret assigned to a name" {
 		v := sub[len(sub)-1]
-		return !strings.ContainsAny(v, "0123456789") || !strings.ContainsFunc(v, func(r rune) bool { return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' }) || distinct(v) < 10
+		return !strings.ContainsAny(v, "0123456789") || !strings.ContainsFunc(v, func(r rune) bool { return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' }) || distinct(v) < 10 || hiveID.MatchString(v)
 	}
 	return what != "a private key" && distinct(m) < 10
 }
