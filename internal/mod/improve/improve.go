@@ -614,8 +614,59 @@ func (m *Module) introduced(p core.Project, sha string, cant core.Check) bool {
 
 func (m *Module) measureLoop() {
 	for t := range m.queue {
-		m.afterMerge(t)
+		for _, x := range m.newestFirst(m.drain(t)) {
+			m.afterMerge(x)
+		}
 	}
+}
+
+// drain is t and every merge queued behind it.
+func (m *Module) drain(t work.Task) []work.Task {
+	ts := []work.Task{t}
+	for {
+		select {
+		case x := <-m.queue:
+			ts = append(ts, x)
+		default:
+			return ts
+		}
+	}
+}
+
+// newestFirst moves each project's newest merge on main to the front, so it
+// is measured first and the older ones are covered by it (coveredBy), one
+// ancestry check each. Measured one at a time in the order they merged, a
+// score run per merge fell hours behind a busy main (issue #774: merges of
+// 10:48 measured at 14:26), so nothing new was kept or released.
+func (m *Module) newestFirst(ts []work.Task) []work.Task {
+	newest, synced := map[string]int{}, map[string]bool{}
+	for i, t := range ts {
+		j, ok := newest[t.Project]
+		if !ok {
+			newest[t.Project] = i
+			continue
+		}
+		p, ok := m.C.Projects.Get(t.Project)
+		if !ok {
+			continue
+		}
+		if !synced[p.Name] { // the clone must hold both to compare them
+			synced[p.Name] = true
+			m.C.Effects.Sync(p)
+		}
+		if m.after(p, t.MergeSHA, ts[j].MergeSHA) {
+			newest[t.Project] = i
+		}
+	}
+	var out, rest []work.Task
+	for i, t := range ts {
+		if newest[t.Project] == i {
+			out = append(out, t)
+		} else {
+			rest = append(rest, t)
+		}
+	}
+	return append(out, rest...)
 }
 
 // Recover re-queues merges whose measurement didn't happen (after a restart).

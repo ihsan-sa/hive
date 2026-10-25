@@ -380,3 +380,37 @@ func TestUnnamedFailureBesideMainsRedIsReverted(t *testing.T) {
 		t.Fatalf("a timeout beside main's red wasn't reverted: %d", reverts(m))
 	}
 }
+
+// Merges queued behind a score run are measured at the newest on main, and
+// the older ones are covered by it (issue #774): one at a time in the order
+// they merged, measuring fell hours behind a busy main and nothing was kept.
+func TestBacklogIsMeasuredAtTheNewestMerge(t *testing.T) {
+	m, commit, _ := tested(t)
+	a := commit(map[string]string{"README.md": "a\n"})
+	b := commit(map[string]string{"README.md": "b\n"})
+	c := commit(map[string]string{"README.md": "c\n"})
+	queued := []work.Task{{ID: "ta", Project: "p", MergeSHA: a}, {ID: "tc", Project: "p", MergeSHA: c}, {ID: "tb", Project: "p", MergeSHA: b}}
+	got := m.newestFirst(queued)
+	if got[0].MergeSHA != c || len(got) != 3 {
+		t.Fatalf("not the newest first: %+v", got)
+	}
+	for _, x := range got {
+		m.afterMerge(x)
+	}
+	if ms := m.Scores("p"); len(ms) != 1 || ms[0].SHA != c || !ms[0].Kept {
+		t.Fatalf("measured: %+v", ms)
+	}
+	m.mu.Lock()
+	cov := slices.Clone(m.covered["p"])
+	m.mu.Unlock()
+	if len(cov) != 2 || cov[0].SHA != a || cov[1].SHA != b || cov[0].By != c || cov[1].By != c {
+		t.Fatalf("covered: %+v", cov)
+	}
+	// drain takes the whole queue behind the merge the loop woke for.
+	m2 := &Module{queue: make(chan work.Task, 4)}
+	m2.queue <- queued[1]
+	m2.queue <- queued[2]
+	if d := m2.drain(queued[0]); len(d) != 3 || d[0].ID != "ta" || d[2].ID != "tb" {
+		t.Fatalf("drain: %+v", d)
+	}
+}
