@@ -139,6 +139,10 @@ type Task struct {
 	// run at all while its required ones were awaited (head.go).
 	NoChecks   time.Time `json:"no_checks,omitempty"`
 	NoChecksOn string    `json:"no_checks_on,omitempty"`
+	// HeadWait is when the forge was first seen still showing HeadWaitOn,
+	// an earlier push of the Hive's than the task's head (head.go).
+	HeadWait   time.Time `json:"head_wait,omitempty"`
+	HeadWaitOn string    `json:"head_wait_on,omitempty"`
 	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
 	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
 	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
@@ -369,7 +373,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 				m.cantRunOpen[a.Project] = cmp.Or(a.Check, "test")
 			case a.Kind == "main-red" && a.SHA != "":
 				m.mainRed[a.Project+"@"+a.SHA] = true
-			case a.Kind == "check-warning" && a.Key != "":
+			case (a.Kind == "check-warning" || a.Kind == "no-checks") && a.Key != "":
 				m.mainRed[a.Project+"@"+a.Key] = true
 			}
 			m.mu.Unlock()
@@ -2034,6 +2038,15 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if closed, err := m.closedPR(t, p, pr); closed || err != nil {
 		return err
 	}
+	if pr.Draft && pr.HeadSHA != t.SHA {
+		// A head the Hive pushed is reconciled as any PR's is; anyone
+		// else's commit on a draft waits for its read below.
+		if pushed, _ := m.C.Effects.Pushed(p.Name, t.Branch, pr.HeadSHA); pushed {
+			if wait, err := m.sameHead(t, p, pr.HeadSHA); wait || err != nil {
+				return err
+			}
+		}
+	}
 	if pr.Draft && (pr.HeadSHA != t.SHA || t.DraftWhy != "") {
 		return m.waitDraft(t, pr)
 	}
@@ -2373,7 +2386,8 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+how+"; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
 		}
 	}
-	if wait, err := m.noChecks(t, p, main, runs, st); wait || err != nil {
+	// Runs core.Advisory set aside still show the forge ran CI on the head.
+	if wait, err := m.noChecks(t, p, main, raw, st); wait || err != nil {
 		return wait, err
 	}
 	names := core.CheckNames(which)
@@ -2807,6 +2821,14 @@ func checkDetail(runs []core.CheckRun) string {
 func (m *Module) raiseOnce(p core.Project, key, text string) {
 	if !m.raised(p, key) {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": key, "text": text})
+	}
+}
+
+// raiseKind raises an alert of its own kind once per key, as raiseOnce does,
+// for what holds a change back without main being red.
+func (m *Module) raiseKind(p core.Project, kind, key, text string) {
+	if !m.raised(p, key) {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": kind, "project": p.Name, "key": key, "text": text})
 	}
 }
 
