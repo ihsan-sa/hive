@@ -1083,21 +1083,80 @@ func TestChecksAgainstMainByTests(t *testing.T) {
 	}
 }
 
-// Only a check whose log names failing tests, every one quarantined, is
-// excused; one naming none, or a test outside the quarantine, still fails.
+// A check is excused only when it shows a failure in quarantined tests
+// alone: its log names them and nothing else failing, one step failed, and
+// any step it skipped main's run skips too.
 func TestExcuse(t *testing.T) {
-	logs := map[string][]string{"flaky": {"TestA", "TestB"}, "mixed": {"TestA", "TestC"}}
-	tests := func(r CheckRun) ([]string, bool) { n, ok := logs[r.URL]; return n, ok }
-	runs := []CheckRun{{Name: "win", State: CheckFail, URL: "flaky"}, {Name: "mac", State: CheckFail, URL: "mixed"}, {Name: "lint", State: CheckFail, URL: "none"}, {Name: "linux", State: CheckPass, URL: "flaky"}}
-	out, excused := Excuse(runs, tests, []string{"TestA", "TestB"})
-	if len(excused) != 1 || excused[0] != "win" || out[0].State != CheckPass || !strings.Contains(out[0].Detail, "quarantined TestA, TestB") || out[1].State != CheckFail || out[2].State != CheckFail || runs[0].State != CheckFail {
-		t.Fatalf("excused %v, runs %+v", excused, out)
+	flaky := "--- FAIL: TestA (0.1s)\n--- FAIL: TestB (0.2s)\nFAIL\nFAIL\tgithub.com/x/a\t1.0s\nok  \tgithub.com/x/b\t0.3s\n"
+	logs := map[string]string{
+		"flaky":   flaky,
+		"mixed":   "--- FAIL: TestA (0.1s)\n--- FAIL: TestC (0.1s)\nFAIL\nFAIL\tgithub.com/x/a\t1.0s\n",
+		"build":   flaky + "# github.com/x/c\nc/c.go:3:1: syntax error\nFAIL\tgithub.com/x/c [build failed]\n",
+		"timeout": flaky + "panic: test timed out after 10m0s\n\trunning tests:\n\t\tTestSlow (10m0s)\nFAIL\tgithub.com/x/d\t600.1s\n",
+		"pkgred":  flaky + "FAIL\tgithub.com/x/e\t0.1s\n",
+		"twostep": flaky,
+		"skips":   flaky,
+		"skips2":  flaky,
 	}
-	if _, excused := Excuse(runs, tests, nil); excused != nil {
-		t.Fatalf("no quarantine excused %v", excused)
+	read := JobRead{
+		Failure: func(r CheckRun) (CheckFailure, bool) {
+			log, ok := logs[r.URL]
+			return CheckFailure{Tests: FailedTests(log), OnlyTests: OnlyTests(log)}, ok
+		},
+		Steps: func(r CheckRun) ([]JobStep, bool) {
+			test := JobStep{Name: "the suite", Conclusion: "failure"}
+			switch r.URL {
+			case "twostep":
+				return []JobStep{test, {Name: "vet", Conclusion: "failure"}}, true
+			case "skips", "skips2":
+				return []JobStep{test, {Name: "vet darwin", Conclusion: "skipped"}, {Name: "end to end", Conclusion: "skipped"}}, true
+			case "main/skips":
+				return []JobStep{{Name: "the suite", Conclusion: "success"}, {Name: "vet darwin", Conclusion: "skipped"}, {Name: "end to end", Conclusion: "success"}}, true
+			case "main/skips2":
+				return []JobStep{{Name: "the suite", Conclusion: "success"}, {Name: "vet darwin", Conclusion: "skipped"}, {Name: "end to end", Conclusion: "skipped"}}, true
+			case "none":
+				return nil, false
+			}
+			return []JobStep{{Name: "checkout", Conclusion: "success"}, test}, true
+		},
 	}
-	if _, excused := Excuse(runs, nil, []string{"TestA", "TestB"}); excused != nil {
-		t.Fatalf("no logs excused %v", excused)
+	q := []string{"TestA", "TestB"}
+	for url, want := range map[string]bool{"flaky": true, "mixed": false, "build": false, "timeout": false, "pkgred": false, "twostep": false, "skips": false, "skips2": true, "none": false} {
+		runs := []CheckRun{{Name: url, State: CheckFail, URL: url}, {Name: "linux", State: CheckPass, URL: "flaky"}}
+		mainRuns := []CheckRun{{Name: "skips", State: CheckPass, URL: "main/skips"}, {Name: "skips2", State: CheckPass, URL: "main/skips2"}}
+		out, excused := Excuse(runs, mainRuns, read, q)
+		if got := len(excused) == 1 && excused[0] == url && out[0].State == CheckPass && strings.Contains(out[0].Detail, "quarantined TestA, TestB"); got != want {
+			t.Errorf("%s: excused %v (%+v), want %v", url, excused, out, want)
+		}
+		if runs[0].State != CheckFail {
+			t.Fatal("Excuse changed its input")
+		}
+	}
+	// A skipped step with no finished main run to compare with excuses nothing.
+	if _, excused := Excuse([]CheckRun{{Name: "skips2", State: CheckFail, URL: "skips2"}}, []CheckRun{{Name: "skips2", State: CheckPending, URL: "main/skips2"}}, read, q); excused != nil {
+		t.Errorf("no main answer excused %v", excused)
+	}
+	runs := []CheckRun{{Name: "win", State: CheckFail, URL: "flaky"}}
+	if _, excused := Excuse(runs, nil, read, nil); excused != nil {
+		t.Errorf("no quarantine excused %v", excused)
+	}
+	if _, excused := Excuse(runs, nil, JobRead{Failure: read.Failure}, q); excused != nil {
+		t.Errorf("unread steps excused %v", excused)
+	}
+}
+
+func TestOnlyTests(t *testing.T) {
+	for log, want := range map[string]bool{
+		"--- FAIL: TestA (0.1s)\nFAIL\nFAIL\tx/a\t0.1s\nok  \tx/b\t0.2s\n?   \tx/c\t[no test files]\n": true,
+		"FAILED tests/t.py::test_a - assert 1\n1 failed, 3 passed\n":                                   true,
+		"--- FAIL: TestA (0.1s)\nFAIL\nFAIL\tx/a\t0.1s\nFAIL\tx/b\t0.1s\n":                             false, // x/b red with no test named
+		"--- FAIL: TestA (0.1s)\nFAIL\tx/a\t0.1s\nFAIL\tx/b [setup failed]\n":                          false,
+		"--- FAIL: TestA (0.1s)\n    panic: boom [recovered]\n":                                        false,
+		"FAILED tests/t.py::test_a\nERROR tests/u.py - ImportError\n1 failed, 1 error\n":               false,
+	} {
+		if got := OnlyTests(log); got != want {
+			t.Errorf("OnlyTests(%q) = %v, want %v", log, got, want)
+		}
 	}
 }
 

@@ -81,6 +81,31 @@ func TestQuarantine(t *testing.T) {
 	if slices.Contains(m.QuarantinedTests("hive"), "TestModuleLifecycle") {
 		t.Fatal("one red after the fix quarantined it again")
 	}
+	// A later save of the merged fix (a note) lifts nothing more: the red
+	// since still counts, and a second one quarantines it again.
+	fix.Log = append(fix.Log, work.Entry{Text: "measured"})
+	m.C.J.MustAppend("task.saved", fix)
+	sight(m, "t5", "https://ci/6", "TestModuleLifecycle")
+	if !slices.Contains(m.QuarantinedTests("hive"), "TestModuleLifecycle") {
+		t.Fatal("a later save of the fix dropped the reds seen since its merge")
+	}
+}
+
+// A task and its own follow-up, or two tasks on the same head, are one
+// change: their reds aren't two unrelated branches.
+func TestQuarantineNeedsUnrelatedBranches(t *testing.T) {
+	m := rig(t)
+	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "follow up", FollowUp: "t1"})
+	sight(m, "t1", "https://ci/1", "TestX")
+	sight(m, "f1", "https://ci/2", "TestX")
+	m.C.J.MustAppend("forge.tests_failed", map[string]any{"project": "hive", "task": "t2", "sha": "abct1", "check": "c", "url": "https://ci/3", "tests": []string{"TestX"}})
+	if q := m.QuarantinedTests("hive"); len(q) != 0 {
+		t.Fatalf("one change's reds quarantined %v", q)
+	}
+	sight(m, "t3", "https://ci/4", "TestX")
+	if q := m.QuarantinedTests("hive"); !slices.Equal(q, []string{"TestX"}) {
+		t.Fatalf("quarantined %v", q)
+	}
 }
 
 // Reds older than the window don't count.
@@ -97,5 +122,11 @@ func TestQuarantineAgesOut(t *testing.T) {
 	time.Sleep(time.Millisecond)
 	if q := m.QuarantinedTests("hive"); len(q) != 0 {
 		t.Fatalf("aged-out reds quarantined %v", q)
+	}
+	m.mu.Lock()
+	n := len(m.sighted)
+	m.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d emptied keys kept", n)
 	}
 }

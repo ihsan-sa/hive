@@ -32,6 +32,7 @@ type localState struct {
 	Checks   map[string][]CheckRun    `json:"checks,omitempty"` // repo@sha
 	Jobs     map[string][]WorkflowJob `json:"jobs,omitempty"`   // repo#run -> its jobs
 	Logs     map[string]string        `json:"logs,omitempty"`   // repo url -> a check's log
+	Steps    map[string][]JobStep     `json:"steps,omitempty"`  // repo url -> a check's steps
 	Reruns   map[string]int           `json:"reruns,omitempty"` // repo@sha -> re-runs of its failed checks asked
 }
 
@@ -429,6 +430,29 @@ func (l *Local) SetCheckLog(repo, url, log string) {
 		s.Logs = map[string]string{}
 	}
 	s.Logs[repo+" "+url] = log
+	l.save(s)
+}
+
+// CheckSteps are the steps set on a check's URL.
+func (l *Local) CheckSteps(repo string, r CheckRun) ([]JobStep, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	steps, ok := l.load().Steps[repo+" "+r.URL]
+	if !ok {
+		return nil, fmt.Errorf("no steps for %s", r.Name)
+	}
+	return steps, nil
+}
+
+// SetCheckSteps sets the steps of the check at url, as a CI would list them.
+func (l *Local) SetCheckSteps(repo, url string, steps ...JobStep) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	if s.Steps == nil {
+		s.Steps = map[string][]JobStep{}
+	}
+	s.Steps[repo+" "+url] = steps
 	l.save(s)
 }
 

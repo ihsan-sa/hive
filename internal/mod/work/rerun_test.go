@@ -260,7 +260,8 @@ func TestForgeQuarantinedFailureIgnored(t *testing.T) {
 	}
 	toMerging(t, m, task, p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (macos-latest)", State: core.CheckFail, URL: "https://ci/mac"}, core.CheckRun{Name: "lint", State: core.CheckPass})
-	f.SetCheckLog(p.Repo, "https://ci/mac", "--- FAIL: TestStalls (2.0s)\n--- FAIL: TestModuleLifecycle (1.0s)\nFAIL\n")
+	f.SetCheckLog(p.Repo, "https://ci/mac", "--- FAIL: TestStalls (2.0s)\n--- FAIL: TestModuleLifecycle (1.0s)\nFAIL\nFAIL\tgithub.com/x/hive/internal/e2e\t300.1s\n")
+	f.SetCheckSteps(p.Repo, "https://ci/mac", core.JobStep{Name: "checkout", Conclusion: "success"}, core.JobStep{Name: "the suite", Conclusion: "failure"})
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerged || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 0 {
 		t.Fatalf("stage %q, round %d, %d re-runs, reason %q", task.Stage, task.Round, f.Reruns(p.Repo, task.SHA), task.Reason)
@@ -280,6 +281,25 @@ func TestForgeQuarantinedFailureIgnored(t *testing.T) {
 	}
 	if len(ev.Quarantined) != 1 || ev.Quarantined[0] != "test (macos-latest)" {
 		t.Fatalf("merge event quarantined %v", ev.Quarantined)
+	}
+}
+
+// A quarantined test failing alongside a failure that names no test (a
+// package that doesn't build, here) shows no failure in flakes alone: the
+// check counts, and the PR goes back.
+func TestForgeQuarantineKeepsBuildFailure(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	m.C.Effects.Quarantined = func(string) []string { return []string{"TestStalls"} }
+	toMerging(t, m, task, p)
+	rerunOnce(task)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPass})
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "https://ci/1"})
+	f.SetCheckLog(p.Repo, "https://ci/1", "--- FAIL: TestStalls (2.0s)\nFAIL\nFAIL\tx/e2e\t3.0s\n# x/win\nwin.go:3:1: undefined: syscall.Foo\nFAIL\tx/win [build failed]\n")
+	f.SetCheckSteps(p.Repo, "https://ci/1", core.JobStep{Name: "the suite", Conclusion: "failure"})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Round != 1 || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
 	}
 }
 

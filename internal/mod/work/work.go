@@ -1884,14 +1884,13 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	tests := m.C.Effects.FailingTests(p.Repo)
 	m.sightings(t, p, runs, tests, "", nil)
 	raw := runs
-	runs, excused := core.Excuse(runs, tests, m.C.Effects.Quarantine(p.Name))
 	req := m.C.Effects.RequiredChecks(p, main)
 	st, which := core.ChecksState(runs, req)
 	if (st == core.CheckFail || st == core.CheckCantStart) && rerunning(t) && t.Retried.before(which) {
 		m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+core.CheckNames(which)+")")
 		return true, nil
 	}
-	var shared, byName []string
+	var shared, byName, excused []string
 	var mainRuns []core.CheckRun
 	var at map[string]string
 	if st == core.CheckFail {
@@ -1899,6 +1898,9 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			return true, err
 		}
 		m.sightings(t, p, mainRuns, tests, main, at)
+		// Known flakes count against no head, as Effects.Merge rules too;
+		// main's runs show which skipped steps the job always skips.
+		runs, excused = core.Excuse(runs, mainRuns, m.C.Effects.JobRead(p.Repo), m.C.Effects.Quarantine(p.Name))
 		st, which, shared, byName = core.ChecksAgainstMain(runs, mainRuns, req, tests)
 	}
 	if st == core.CheckFail {

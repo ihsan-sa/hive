@@ -1,6 +1,7 @@
 package improve
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"sort"
@@ -68,7 +69,13 @@ func (m *Module) applyQuarantine(e core.Event) {
 		}
 	case "task.saved":
 		var t work.Task
-		if e.Decode(&t) != nil || !strings.HasPrefix(t.Title, flakyTitle) {
+		if e.Decode(&t) != nil {
+			return
+		}
+		if kin := cmp.Or(t.FollowUp, t.RevertOf); kin != "" {
+			m.kin[t.ID] = kin
+		}
+		if !strings.HasPrefix(t.Title, flakyTitle) {
 			return
 		}
 		test := strings.TrimPrefix(t.Title, flakyTitle)
@@ -77,10 +84,21 @@ func (m *Module) applyQuarantine(e core.Event) {
 		}
 		k := flakeKey(t.Project, test)
 		m.fixes[k] = t.ID
-		if t.MergeSHA != "" && e.At.After(m.lifted[k]) {
-			m.lifted[k] = e.At
+		// The lift is the fix's merge, once: a later save of the same task
+		// (a note, a revert) mustn't drop the reds seen since.
+		if t.MergeSHA != "" && !m.fixMerged[t.ID] {
+			m.fixMerged[t.ID] = true
+			if e.At.After(m.lifted[k]) {
+				m.lifted[k] = e.At
+			}
 		}
 	}
+}
+
+// related reports whether one task follows up or reverts the other, so
+// their branches carry the same change; m.mu is held.
+func (m *Module) related(a, b string) bool {
+	return m.kin[a] == b || m.kin[b] == a || (m.kin[a] != "" && m.kin[a] == m.kin[b])
 }
 
 // flake is the quarantine entry for k, if its sightings make one; m.mu is held.
@@ -92,7 +110,11 @@ func (m *Module) flake(k string) (Flake, bool) {
 			ev = append(ev, s)
 		}
 	}
-	m.sighted[k] = ev // the rest has aged out or was fixed
+	if len(ev) == 0 {
+		delete(m.sighted, k) // aged out or fixed: nothing left to keep
+		return Flake{}, false
+	}
+	m.sighted[k] = ev
 	var why []string
 	if i := slices.IndexFunc(ev, func(s Sighting) bool { return s.Main }); i >= 0 {
 		why = append(why, "failed on main at "+core.Short(ev[i].SHA))
@@ -100,11 +122,19 @@ func (m *Module) flake(k string) (Flake, bool) {
 	if i := slices.IndexFunc(ev, func(s Sighting) bool { return s.Rerun }); i >= 0 {
 		why = append(why, "passed when run again on "+core.Short(ev[i].SHA)+" (task "+ev[i].Task+")")
 	}
+	// Unrelated branches: two tasks, neither following up or reverting the
+	// other, red on different heads, neither of which the other task had.
 	var tasks []string
+	var heads []string
 	for _, s := range ev {
-		if s.Task != "" && !s.Main && !slices.Contains(tasks, s.Task) {
-			tasks = append(tasks, s.Task)
+		if s.Task == "" || s.Main || slices.Contains(tasks, s.Task) {
+			continue
 		}
+		if slices.ContainsFunc(tasks, func(o string) bool { return m.related(s.Task, o) || slices.Contains(m.heads[o], s.SHA) }) ||
+			slices.ContainsFunc(heads, func(h string) bool { return h == s.SHA || slices.Contains(m.heads[s.Task], h) }) {
+			continue
+		}
+		tasks, heads = append(tasks, s.Task), append(heads, s.SHA)
 	}
 	if len(tasks) >= 2 {
 		why = append(why, fmt.Sprintf("failed on %d unrelated branches (tasks %s)", len(tasks), strings.Join(tasks, ", ")))

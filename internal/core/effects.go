@@ -74,6 +74,7 @@ type Effects struct {
 	hostMade  map[string]HostCommit
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
+	steps     map[string][]JobStep    // repo url -> a finished check's steps
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
 	homes     map[string]bool         // running checks' homes (disk.go)
 	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
@@ -1187,10 +1188,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	runs, excused := Excuse(runs, e.FailingTests(p.Repo), e.Quarantine(p.Name))
 	req := e.RequiredChecks(p, m.Main)
 	st, which := ChecksState(runs, req)
-	var shared []string
+	var shared, excused []string
 	var answer map[string]string // check -> the older main commit its answer came from
 	if st == CheckFail {
 		mainRuns, at, err := e.MainAnswer(p, m.Main, which)
@@ -1198,6 +1198,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		runs, excused = Excuse(runs, mainRuns, e.JobRead(p.Repo), e.Quarantine(p.Name))
 		st, which, shared, _ = ChecksAgainstMain(runs, mainRuns, req, e.FailingTests(p.Repo))
 	}
 	if st != CheckPass {
@@ -1322,12 +1323,24 @@ func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string, tests Tests
 	return state, which, shared, byName
 }
 
-// Excuse marks as passing each failed check whose log names failing tests,
-// every one of them quarantined (a known flake), so it counts against no
-// head; excused names those checks. A check whose log can't be read or names
-// no tests is never excused: only a named test can be known to be a flake.
-func Excuse(runs []CheckRun, tests TestsOf, quarantined []string) (out []CheckRun, excused []string) {
-	if tests == nil || len(quarantined) == 0 {
+// JobRead reads a forge check's job: its log's failure, and its steps. A
+// nil func reads nothing.
+type JobRead struct {
+	Failure func(CheckRun) (CheckFailure, bool)
+	Steps   func(CheckRun) ([]JobStep, bool)
+}
+
+// Excuse marks as passing each failed check that failed only in quarantined
+// tests (known flakes), so it counts against no head; excused names those
+// checks. A failure only in such tests is shown, never assumed: the log
+// names failing tests, all quarantined, and nothing else failing (no build
+// or setup failure, panic, timeout or package red apart from them,
+// CheckFailure.OnlyTests); exactly one of the job's steps failed; and every
+// step it skipped was skipped on main's finished run of that check too, so
+// no step the red kept from running goes unchecked. Anything unread excuses
+// nothing.
+func Excuse(runs, mainRuns []CheckRun, read JobRead, quarantined []string) (out []CheckRun, excused []string) {
+	if read.Failure == nil || read.Steps == nil || len(quarantined) == 0 {
 		return runs, nil
 	}
 	out = slices.Clone(runs)
@@ -1335,17 +1348,126 @@ func Excuse(runs []CheckRun, tests TestsOf, quarantined []string) (out []CheckRu
 		if r.State != CheckFail {
 			continue
 		}
-		names, ok := tests(r)
-		if !ok || slices.ContainsFunc(names, func(n string) bool { return !slices.Contains(quarantined, n) }) {
+		f, ok := read.Failure(r)
+		if !ok || !f.OnlyTests || len(f.Tests) == 0 || slices.ContainsFunc(f.Tests, func(n string) bool { return !slices.Contains(quarantined, n) }) {
+			continue
+		}
+		if !stepsShown(r, mainRuns, read.Steps) {
 			continue
 		}
 		out[i].State = CheckPass
-		out[i].Detail = "fails only the quarantined " + strings.Join(names, ", ")
+		out[i].Detail = "fails only the quarantined " + strings.Join(f.Tests, ", ")
 		if !slices.Contains(excused, r.Name) {
 			excused = append(excused, r.Name)
 		}
 	}
 	return out, excused
+}
+
+// stepsShown reports whether r's job failed in one step and skipped only
+// steps that main's finished runs of its name skip as well.
+func stepsShown(r CheckRun, mainRuns []CheckRun, steps func(CheckRun) ([]JobStep, bool)) bool {
+	head, ok := steps(r)
+	if !ok {
+		return false
+	}
+	failed := 0
+	var skipped []string
+	for _, s := range head {
+		switch s.Conclusion {
+		case "success":
+		case "skipped":
+			skipped = append(skipped, s.Name)
+		default: // failure, timed_out, cancelled, or not finished
+			failed++
+		}
+	}
+	if failed != 1 {
+		return false
+	}
+	if len(skipped) == 0 {
+		return true
+	}
+	seen := false
+	for _, mr := range mainRuns {
+		if mr.Name != r.Name || (mr.State != CheckPass && mr.State != CheckFail) {
+			continue
+		}
+		ms, ok := steps(mr)
+		if !ok {
+			return false
+		}
+		if slices.ContainsFunc(ms, func(s JobStep) bool { return slices.Contains(skipped, s.Name) && s.Conclusion != "skipped" }) {
+			return false
+		}
+		seen = true
+	}
+	return seen
+}
+
+var (
+	// notATest is a failure in a log that names no test: a package that
+	// didn't build or set up, a panic (which ends the whole test binary), a
+	// timeout, or pytest's errors.
+	notATest  = regexp.MustCompile(`(?m)\[(?:build|setup) failed\]|^\s*panic: |test timed out|^ERROR |\b\d+ errors?\b|^=+ ERRORS =+`)
+	pkgResult = regexp.MustCompile(`^(ok|FAIL|\?)\s*\t\S+`)
+)
+
+// OnlyTests reports whether a log shows nothing failing apart from the tests
+// it names: no failure of notATest's kinds, and no package red ("FAIL\tpkg")
+// without a named test failing in it.
+func OnlyTests(log string) bool {
+	if notATest.MatchString(log) {
+		return false
+	}
+	named := false
+	for _, line := range strings.Split(strings.ReplaceAll(log, "\r\n", "\n"), "\n") {
+		if failedTest.MatchString(line) {
+			named = true
+			continue
+		}
+		if m := pkgResult.FindStringSubmatch(line); m != nil {
+			if m[1] == "FAIL" && !named {
+				return false
+			}
+			named = false
+		}
+	}
+	return true
+}
+
+// JobRead reads repo's forge checks' logs and steps, each once.
+func (e *Effects) JobRead(repo string) JobRead {
+	var jr JobRead
+	if _, ok := e.Forge.(CheckLogs); ok {
+		jr.Failure = func(r CheckRun) (CheckFailure, bool) { return e.CheckFailure(repo, r) }
+	}
+	if cs, ok := e.Forge.(CheckSteps); ok {
+		jr.Steps = func(r CheckRun) ([]JobStep, bool) {
+			if r.URL == "" {
+				return nil, false
+			}
+			key := repo + " " + r.URL
+			e.mu.Lock()
+			steps, seen := e.steps[key]
+			e.mu.Unlock()
+			if seen {
+				return steps, true
+			}
+			steps, err := cs.CheckSteps(repo, r)
+			if err != nil {
+				return nil, false
+			}
+			e.mu.Lock()
+			if e.steps == nil || len(e.steps) > 500 {
+				e.steps = map[string][]JobStep{}
+			}
+			e.steps[key] = steps
+			e.mu.Unlock()
+			return steps, true
+		}
+	}
+	return jr
 }
 
 // Quarantine is the project's quarantined tests, or none with no quarantine.
@@ -1487,6 +1609,8 @@ func (e *Effects) FailingTests(repo string) TestsOf {
 type CheckFailure struct {
 	Tests   []string `json:"tests,omitempty"`
 	Excerpt string   `json:"excerpt,omitempty"`
+	// OnlyTests says the log shows nothing failing apart from Tests.
+	OnlyTests bool `json:"only_tests,omitempty"`
 }
 
 // CheckFailure reads a failed check's log on repo's forge with the Hive's own
@@ -1509,7 +1633,7 @@ func (e *Effects) CheckFailure(repo string, r CheckRun) (CheckFailure, bool) {
 	if err != nil {
 		return CheckFailure{}, false // not kept: the next pass tries again
 	}
-	f = CheckFailure{Tests: FailedTests(log), Excerpt: LogExcerpt(log, ExcerptLines)}
+	f = CheckFailure{Tests: FailedTests(log), Excerpt: LogExcerpt(log, ExcerptLines), OnlyTests: OnlyTests(log)}
 	e.mu.Lock()
 	if e.failing == nil || len(e.failing) > 500 {
 		e.failing = map[string]CheckFailure{}
