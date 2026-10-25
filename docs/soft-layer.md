@@ -22,7 +22,7 @@ From lots of comms (`chatty`) to none (`quiet`), and from very specific (`standa
 
 ## How an arm runs
 
-`TestSoftLayer` (`internal/e2e/softlayer_test.go`), per arm and side by side:
+`TestSoftLayer` (`internal/e2e/softlayer_test.go`), per arm, one arm at a time (see *Fitting the machine*):
 
 1. A fresh Hive (its own workspace and local forge), its agents module replaced by the arm's (written with a source record that isn't `builtin`, so the default install never restores the standard prompts; `TestInstallSurvivesTheDefaults`).
 2. This Hive's state: its committed source as the project `hive` (with `.hive/goals.md`, `lessons.md` and `project.json`, so the same tests and score), and, with `HIVE_SOFT_KB=<kb>`, the knowledge base's notes and `practice/` (not `record/`).
@@ -38,9 +38,24 @@ The test checks that every run the sub-Hive made started from the arm's orientat
 # the pipeline, on the fake harness (prompts don't steer the fake agent)
 HIVE_SOFT=standard,vague HIVE_SOFT_STATE=demo go test ./internal/e2e -run TestSoftLayer -v
 # the experiment: real agents, plan usage, on a host with a Claude login
-HIVE_SOFT=all HIVE_E2E_HARNESS=claude HIVE_SOFT_KB=~/hive/.hive/kb HIVE_SOFT_OUT=~/hive/.hive/soft-layer/<run> \
-  go test ./internal/e2e -run TestSoftLayer -timeout 3h -v
+systemd-run --user --scope -p MemoryHigh=2500M -p MemoryMax=3G -p MemorySwapMax=0 -p CPUWeight=20 -p IOWeight=20 \
+  env HIVE_SOFT=standard,essay HIVE_E2E_HARNESS=claude HIVE_SOFT_KB=~/hive/.hive/kb HIVE_SOFT_OUT=~/hive/.hive/soft-layer/<run> \
+  go test ./internal/e2e -run 'TestSoftLayer$' -timeout 4h -v
 ```
+
+## Fitting the machine
+
+The first real run (2026-10-25, issue #771) started all seven arms side by side, each sub-Hive with no ceilings and its checks building on every core: about 28 builds and test runs at once, load ~600 on 20 cores, disks saturated, the Hive's 8 GB share full and swapping, until Autobox froze and then stopped it (and the lead's login check was killed while it was frozen). So now:
+
+- **One arm at a time.** `HIVE_SOFT_PARALLEL=2` runs two; more isn't allowed. An arm's slot is freed only after its daemon, what it left running and its folder are gone, so the next arm starts on a quiet machine. Seven arms one by one at up to 90 minutes each is a long run: start with `standard,essay` and add arms in later runs.
+- **Capped inside.** Each sub-Hive has `max_workers` 1, `max_checks` 1 and `max_gates` 1, saved as the person's ceilings so its pace can't raise them. Its daemon is started pinned to 4 CPUs (`softCPUs`), and CPU affinity passes to everything it starts, sandboxed checks included; Go sizes `GOMAXPROCS`, `go build -p` and `go test`'s parallelism to it, so no arm builds on more than 4 cores whatever its checks' environment. Where a check does get the daemon's environment (a bare sandbox), it also has `GOFLAGS=-p=2` and `GOMAXPROCS=4`.
+- **Under a memory ceiling of its own.** On Linux a real run (`HIVE_E2E_HARNESS` set) refuses to start unless its own cgroup has a `memory.max` of at most 4 GiB: run it under a `systemd-run --user --scope` as above, with `MemorySwapMax=0`, so a run that outgrows its ceiling ends inside it, without the machine swapping and without touching the Hive's own runs. `HIVE_SOFT_UNBOUNDED=1` skips the check.
+- **Measured.** Each arm's row in the table has its peak memory (the summed RSS of the test's processes and their descendants, sampled every 2 seconds) and the machine's highest 1-minute load while it ran; under a cgroup the table also gives the cgroup's own `memory.peak`.
+
+Not shared: the Go build and module caches. Each check builds in a home of its own that is removed after it (`internal/core/disk.go`), and each sub-Hive keeps its own module cache, which its own prune may empty, so a cache shared across sub-Hives could be emptied under another's check. With one arm at a time the cost is one module download per arm.
+
+The dry run on the fake harness (2026-10-25, `HIVE_SOFT=standard,essay` on the clone of the Hive's own source, the default task): the arms ran one after the other, each went lead → worker → the clone's `go vet` and short tests → review → merge in about 3 minutes, and the test's processes peaked at 341 MB (`standard`) and 484 MB (`essay`). The peak load, 39 and 37, is the machine's, other Hive work included. Real agents add their harness processes (a lead, a worker and a reviewer at a time with these ceilings), which is what the 3 GB ceiling leaves room for.
+
 
 ## What is observed
 
