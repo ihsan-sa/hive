@@ -22,6 +22,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 | `internal/setup` | First run, `hive login`, `hive doctor`, autostart (HKCU Run / systemd user / LaunchAgent). |
 | `modules/` | Default module content (orientation + role prompts, manifests), embedded and written to `.modules/` on first run. |
 | `internal/demo` | Demo project template (textkit: tests + score). |
+| `internal/softlayer`, `cmd/hive-soft` | The soft-layer experiment ([soft-layer.md](soft-layer.md)): arms of the agents module's prompts, installed into sub-Hives by `TestSoftLayer`, and an observer that reads any Hive's journal (runs, who messaged whom, briefs, helpers, asks, merges). Outside the daemon; nothing in the Hive imports it. |
 
 ## Folder on disk (`~/hive`)
 
