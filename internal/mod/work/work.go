@@ -2265,9 +2265,23 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+" ("+names+")"+onMain)
 		return true, nil
 	case core.CheckCantStart:
+		cancelled := !slices.ContainsFunc(which, func(r core.CheckRun) bool { return r.Detail != "cancelled" })
+		// Runs cancelled because a newer push to the PR replaced them (CI
+		// cancels a PR's superseded run) broke nothing: the newer head's own
+		// run is the one to wait for, and the next pass adopts it.
+		if cancelled {
+			pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
+			if err != nil {
+				return true, err
+			}
+			if pr.HeadSHA != "" && pr.HeadSHA != t.SHA {
+				m.hold(t, p, "the forge's checks "+names+" on "+core.Short(t.SHA)+" were cancelled because a newer push replaced it; PR #"+fmt.Sprint(t.PR.Number)+" is at "+core.Short(pr.HeadSHA)+", whose checks count")
+				return true, nil
+			}
+		}
 		// A run cancelled on this very head (CI's concurrency group, a
 		// runner lost) gets one re-run of its own before anyone hears of it.
-		if t.Reruns[t.SHA] == 0 && !slices.ContainsFunc(which, func(r core.CheckRun) bool { return r.Detail != "cancelled" }) {
+		if t.Reruns[t.SHA] == 0 && cancelled {
 			if n, err := m.C.Effects.Forge.RerunFailed(p.Repo, t.SHA); err != nil {
 				return true, err
 			} else if n > 0 {
