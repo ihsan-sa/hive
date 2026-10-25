@@ -172,6 +172,8 @@ A value of @path reads that file. Common ops:
   install   --system "sudo apt-get install -y x" --why "..."   a root install: goes to the person
   search    --query "words" [--limit n|all]     the knowledge base pieces that match, best first
   remember  --title "..." --text "..." [--tags a,b]   write to the knowledge base
+  problem   --text "..." [--where "..."]          post what you ran into on the Hive's problems board, with
+            [--id id --also "..." | --solved "how"]   your run id; add to one or close it; problems lists them
   feedback  --text "..." [--about "agents/worker.md"]   what about the Hive got in your way, for the person
   schedule  --in 2h --text "..."                 a wake-up message to yourself
   status                                         projects, work in flight, scores

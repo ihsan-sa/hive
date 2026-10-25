@@ -21,6 +21,9 @@ type Agents struct {
 	// Skip, when set, benches a pick from every route (a model whose trial
 	// didn't finish).
 	Skip func(core.Pick) bool
+	// Board, when set, is the section a run of role in project gets after
+	// its brief: the Hive's open problems (the problems module).
+	Board func(role, project string) string
 }
 
 // System is the appended system prompt for a role: orientation, the role,
@@ -68,6 +71,11 @@ func (a *Agents) Route(role, project string) []core.Pick {
 // Spec builds a run spec with the role's system prompt, grants and model.
 func (a *Agents) Spec(id, role, project, checkout, brief string) core.RunSpec {
 	route := a.Route(role, project)
+	if a.Board != nil {
+		if board := a.Board(role, project); board != "" {
+			brief += "\n\n" + board
+		}
+	}
 	s := core.RunSpec{ID: id, Role: role, Project: project, Checkout: checkout, Harness: route[0].Harness, Model: route[0].Model,
 		System: a.System(role, project), Brief: brief, Route: route}
 	if p, ok := a.C.Projects.Get(project); ok && p.Isolated {
