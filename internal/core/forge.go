@@ -141,8 +141,8 @@ type GitHub struct{}
 func (GitHub) Name() string { return "github" }
 
 // OwnerTokens maps a lower-cased repo owner to a file holding the GitHub token
-// for that owner. An owner not listed (or whose file is unreadable) uses gh's
-// own login. Both tokens act as the same user, so gh cannot hold them as two
+// for that owner. An owner not listed (or whose file is unreadable, said once
+// on stderr) uses gh's own login. Both tokens act as the same user, so gh cannot hold them as two
 // logins; the effects process passes GH_TOKEN per call instead.
 var OwnerTokens = map[string]string{
 	"hive-rsi-lab": "/home/hive/h0-org.token",
@@ -158,18 +158,30 @@ func ghEnv(repo string) []string {
 	if owner == "" || strings.ContainsAny(owner, `/\.`) {
 		return nil
 	}
-	for _, path := range []string{credential(owner + ".token"), OwnerTokens[owner]} {
+	for i, path := range []string{credential(owner + ".token"), OwnerTokens[owner]} {
 		if path == "" {
 			continue
 		}
-		if b, err := os.ReadFile(path); err == nil {
+		b, err := os.ReadFile(path)
+		if err == nil {
 			if tok := strings.TrimSpace(string(b)); tok != "" {
 				return []string{"GH_TOKEN=" + tok}
+			}
+		} else if i == 1 { // a listed file, unlike a credential, is meant to be there
+			if _, said := unreadTokens.LoadOrStore(owner+"\x00"+path, true); !said {
+				fmt.Fprintf(tokenLog, "%s token file %s for %s can't be read, using gh's own login: %v\n", time.Now().Format(time.RFC3339), path, owner, err)
 			}
 		}
 	}
 	return nil
 }
+
+// unreadTokens holds each owner and listed token file already said to be
+// unreadable, so the fallback is said once, not on every gh call.
+var unreadTokens sync.Map
+
+// tokenLog is where that is said. Tests replace it.
+var tokenLog io.Writer = os.Stderr
 
 // credential is the path of a systemd credential the service was given, or
 // "" outside one.
