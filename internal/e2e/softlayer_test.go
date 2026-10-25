@@ -222,7 +222,7 @@ func stages(st api.State, project string) string {
 // its .hive goals and lessons, to repo as one commit on main.
 func seedSource(t *testing.T, h *hive, repo string) {
 	t.Helper()
-	if _, err := h.forge.EnsureRepo(repo, ""); err != nil {
+	if _, err := h.forge.EnsureRepo(repo, "", false); err != nil {
 		t.Fatal(err)
 	}
 	head, err := core.Git(filepath.Join("..", ".."), "rev-parse", "HEAD")
