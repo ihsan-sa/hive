@@ -64,7 +64,7 @@ func stageOf(t *testing.T, m *Module, task Task) Task {
 }
 
 // Briefs start a worker in the order they were filed, only as many as
-// max_workers; one naming the package another works in waits for it;
+// max_workers; one naming the file another works on waits for it;
 // the rest wait as queued, saying why. The lead's order goes first, a held
 // brief waits until released, and a lower cap never stops a started worker.
 func TestQueueCapsOrdersAndGroups(t *testing.T) {
@@ -72,7 +72,7 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
 	a := file(t, m, "tidy the readme", "")
 	b := file(t, m, "cap the checks", "Checks run via internal/core/effects.go.")
-	c := file(t, m, "hold strained turns", "Anywhere in internal/core, launch.")
+	c := file(t, m, "hold strained turns", "Also in internal/core/effects.go, launch.")
 	d := file(t, m, "show the queue", "On the dashboard, internal/tui/views.go.")
 	e := file(t, m, "a later idea", "")
 	tick(m)
@@ -86,7 +86,7 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 	}
 	want(a, StageWorking, "")
 	want(b, StageWorking, "")
-	want(c, StageQueued, `waiting for "cap the checks" (task `+b.ID+") to land: both touch internal/core")
+	want(c, StageQueued, `waiting for "cap the checks" (task `+b.ID+") to land: both touch internal/core/effects.go")
 	want(d, StageQueued, "waiting for a worker (max_workers 2)")
 	want(e, StageQueued, "waiting for a worker")
 	if r, ok := m.C.Runs.Get("w-" + d.ID); ok {
@@ -111,7 +111,7 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 	tick(m)
 	want(e, StageWorking, "")
 	want(d, StageQueued, "held by the lead")
-	want(c, StageQueued, "both touch internal/core")
+	want(c, StageQueued, "both touch internal/core/effects.go")
 
 	// A lower cap holds new starts only: b and e work on.
 	cfg := m.C.WS.LoadConfig()
@@ -147,13 +147,13 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 	}
 }
 
-// A brief names its area only by paths that exist in the project, so a repo
-// name or a URL doesn't tie unrelated briefs together.
+// A brief names its area only by files that exist in the project, so a repo
+// name, a URL or a package's directory doesn't tie unrelated briefs together.
 func TestQueueAreas(t *testing.T) {
 	m := queueRig(t)
 	task := file(t, m, "fix it", "In ihsan-sa/hive, see https://github.com/x/y and internal/core/effects.go, internal/tui/, ./internal/core/runs.go.")
 	got := m.areas(task)
-	want := []string{"internal/core/effects.go", "internal/tui", "internal/core/runs.go"}
+	want := []string{"internal/core/effects.go", "internal/core/runs.go"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("areas %q, want %q", got, want)
 	}
@@ -180,7 +180,7 @@ func TestQueueAreasStayInsideTheClone(t *testing.T) {
 	}
 }
 
-// A top-level directory ("in internal/.") and a doc that merges as union are
+// A directory ("in internal/.", "docs/") and a doc that merges as union are
 // never areas, so they hold no brief back.
 func TestQueueAreasSkipTopLevelAndUnionDocs(t *testing.T) {
 	m := queueRig(t)
@@ -194,8 +194,8 @@ func TestQueueAreasSkipTopLevelAndUnionDocs(t *testing.T) {
 
 // Only a real conflict holds a brief back: two briefs on different files of
 // one package start together, as do two that share only a union doc or a
-// top-level directory; one naming the package on its own waits for the
-// worker on a file in it, but not once that worker has pushed.
+// directory, even one naming the package on its own (issue #399); one naming
+// a file a worker is on waits for it, but not once that worker has pushed.
 func TestQueueHoldsOnlyRealConflicts(t *testing.T) {
 	m := queueRig(t)
 	cfg := m.C.WS.LoadConfig()
@@ -203,26 +203,27 @@ func TestQueueHoldsOnlyRealConflicts(t *testing.T) {
 	m.C.WS.SaveConfig(cfg)
 	a := file(t, m, "cap the checks", "In internal/core/effects.go; log it in docs/log.md. Nothing in internal/.")
 	b := file(t, m, "hold strained turns", "In internal/core/runs.go; log it in docs/log.md. Nothing in internal/.")
-	c := file(t, m, "rework the core", "All of internal/core.")
+	c := file(t, m, "rework the core", "All of internal/core and internal/tui.")
+	d := file(t, m, "split the effects", "Again internal/core/effects.go.")
 	tick(m)
-	for _, task := range []Task{a, b} {
+	for _, task := range []Task{a, b, c} {
 		if got := stageOf(t, m, task); got.Stage != StageWorking {
 			t.Fatalf("%q: stage %q reason %q, want working", task.Title, got.Stage, got.Reason)
 		}
 	}
-	if got := stageOf(t, m, c); got.Stage != StageQueued || !strings.Contains(got.Reason, "both touch internal/core") {
-		t.Fatalf("package brief: stage %q reason %q", got.Stage, got.Reason)
+	if got := stageOf(t, m, d); got.Stage != StageQueued || !strings.HasSuffix(got.Reason, "both touch internal/core/effects.go") {
+		t.Fatalf("same-file brief: stage %q reason %q", got.Stage, got.Reason)
 	}
 
-	// Both workers push: their tasks are testing and reviewing, and c starts.
+	// Both workers push: their tasks are testing and reviewing, and d starts.
 	for id, stage := range map[string]string{a.ID: StageTesting, b.ID: StageReviewing} {
 		got, _ := m.Get(id)
 		got.Stage = stage
 		m.save(&got, "pushed")
 	}
 	tick(m)
-	if got := stageOf(t, m, c); got.Stage != StageWorking {
-		t.Fatalf("package brief behind pushed tasks: stage %q reason %q", got.Stage, got.Reason)
+	if got := stageOf(t, m, d); got.Stage != StageWorking {
+		t.Fatalf("same-file brief behind pushed tasks: stage %q reason %q", got.Stage, got.Reason)
 	}
 }
 
