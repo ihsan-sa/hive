@@ -268,6 +268,40 @@ func (m *Module) apply(rt Route) (core.Config, error) {
 	return cfg, nil
 }
 
+// Record journals each route that differs between before and after as
+// config.routed by who, the way the route op does: a change made in
+// Settings is on the record with what it was.
+func Record(j *core.Journal, before, after core.Config, by string) {
+	where := map[string]bool{"": true}
+	for p := range before.Projects {
+		where[p] = true
+	}
+	for p := range after.Projects {
+		where[p] = true
+	}
+	routes := func(c core.Config, p string) map[string][]string {
+		if p == "" {
+			return c.Routes
+		}
+		return c.Projects[p].Routes
+	}
+	for _, p := range slices.Sorted(maps.Keys(where)) {
+		was, now := routes(before, p), routes(after, p)
+		roles := map[string]bool{}
+		for r := range was {
+			roles[r] = true
+		}
+		for r := range now {
+			roles[r] = true
+		}
+		for _, role := range slices.Sorted(maps.Keys(roles)) {
+			if !slices.Equal(was[role], now[role]) {
+				j.MustAppend("config.routed", Route{Role: role, Project: p, Models: now[role], By: by, From: was[role]})
+			}
+		}
+	}
+}
+
 func pickNames(ps []core.Pick) []string {
 	var out []string
 	for _, p := range ps {

@@ -997,27 +997,55 @@ func TestRouteIsAPickList(t *testing.T) {
 	if !slices.Contains(cur.choices, "add codex:"+harness.Models("codex")[0]) {
 		t.Fatalf("no Codex model to route to: %q", cur.choices)
 	}
-	if w := routeEdit(c, "warden", "add codex:gpt-5.5"); w.Check() != nil || w.Route("warden", "")[1] != (core.Pick{Harness: "codex", Model: "gpt-5.5"}) {
+	if w := routeEdit(c, "warden", "", "add codex:gpt-5.5"); w.Check() != nil || w.Route("warden", "")[1] != (core.Pick{Harness: "codex", Model: "gpt-5.5"}) {
 		t.Fatalf("warden on Codex: %v (%v)", w.Route("warden", ""), w.Check())
 	}
-	c = routeEdit(c, "worker", "add kimi")
+	c = routeEdit(c, "worker", "", "add kimi")
 	if !slices.Equal(c.Routes["worker"], []string{"claude:opus", "kimi"}) {
 		t.Fatalf("add after the model it runs on now: %v", c.Routes["worker"])
 	}
-	c = routeEdit(c, "worker", "remove claude:opus")
+	c = routeEdit(c, "worker", "", "remove claude:opus")
 	if !slices.Equal(c.Routes["worker"], []string{"kimi"}) || c.Check() != nil {
 		t.Fatalf("remove: %v (%v)", c.Routes["worker"], c.Check())
 	}
-	if ch := routeChoices(c, "worker"); !slices.Contains(ch, "remove kimi") || !slices.Contains(ch, "add claude:opus") {
+	if ch := routeChoices(c, "worker", ""); !slices.Contains(ch, "remove kimi") || !slices.Contains(ch, "add claude:opus") {
 		t.Fatalf("choices after: %q", ch)
 	}
-	c = routeEdit(c, "fallback", "add kimi")
+	c = routeEdit(c, "fallback", "", "add kimi")
 	if !slices.Equal(c.Routes["fallback"], []string{"kimi"}) {
 		t.Fatalf("fallback starts empty: %v", c.Routes["fallback"])
 	}
-	c = routeEdit(c, "worker", "clear")
+	c = routeEdit(c, "worker", "", "clear")
 	if _, ok := c.Routes["worker"]; ok || c.Route("worker", "")[0] != (core.Pick{Harness: "claude", Model: "opus"}) {
 		t.Fatalf("clear: %v", c.Routes)
+	}
+}
+
+// A project's own route shows under Routes and changes there, apart from
+// the workspace's.
+func TestProjectRouteInSettings(t *testing.T) {
+	c := core.DefaultConfig()
+	c.Models = map[string]core.OpenModel{"kimi": {Endpoint: "https://api.moonshot.ai/v1", Model: "kimi-k2-0905-preview", Key: true}}
+	c.Projects = map[string]core.ProjectSettings{"demo": {Routes: map[string][]string{"worker": {"kimi"}}}}
+	m := testModel(80, 24)
+	m.st.Config = c
+	m.st.Projects = []api.ProjectView{{Name: "demo"}}
+	var row setting
+	for _, s := range m.settings() {
+		if s.key == "route:worker:demo" {
+			row = s
+		}
+	}
+	if row.label != "worker for demo" || row.value != "open:kimi" || !slices.Contains(row.choices, "remove kimi") {
+		t.Fatalf("project route row: %+v", row)
+	}
+	c = routeEdit(c, "worker", "demo", "add claude:sonnet")
+	if !slices.Equal(c.Projects["demo"].Routes["worker"], []string{"kimi", "claude:sonnet"}) || len(c.Routes["worker"]) > 0 || c.Check() != nil {
+		t.Fatalf("project add: %v, workspace %v (%v)", c.Projects["demo"].Routes, c.Routes, c.Check())
+	}
+	c = routeEdit(c, "worker", "demo", "clear")
+	if _, ok := c.Projects["demo"].Routes["worker"]; ok {
+		t.Fatalf("project clear: %v", c.Projects["demo"].Routes)
 	}
 }
 

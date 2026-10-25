@@ -28,6 +28,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -783,6 +784,7 @@ func (s *server) routes() http.Handler {
 		if err := a.C.WS.SaveConfig(c); err != nil {
 			return nil, err
 		}
+		models.Record(a.C.J, cur, c, "person (Settings)")
 		if sandboxChanged(cur, c) {
 			a.C.ResetSandbox()
 		}
