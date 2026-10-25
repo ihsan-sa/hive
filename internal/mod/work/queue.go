@@ -27,7 +27,8 @@ import (
 // machine isn't loaded: the brake is the machine. A brief that names a file
 // another brief names (one a worker is on, or ahead of it in line), or one
 // that worker has changed, waits until that worker is done, so the two don't
-// redo each other's work. A package or directory alone holds nothing back.
+// redo each other's work. A package or directory alone holds nothing back,
+// nor does a file when each brief names its own functions in it (apart).
 // A brief that itself waits on another's file holds no one back: a later
 // brief on its other files starts, so waits never chain and two briefs never
 // wait on each other (task 163142 waited 6h behind 140258, itself held by a
@@ -251,7 +252,8 @@ func holder(reason string) string {
 // it (task 232db4fc42 swapped between holders every few minutes for an hour).
 // A package or directory named in a brief holds nothing by itself: two
 // briefs in one package start together, and the second merges main if they
-// meet.
+// meet. Nor does a file both name when each names functions defined in it
+// and none is the other's (apart).
 func (m *Module) overlap(t Task, others []Task, prefer string) (*Task, string) {
 	mine := m.areas(t)
 	if len(mine) == 0 {
@@ -275,12 +277,94 @@ func (m *Module) overlap(t Task, others []Task, prefer string) (*Task, string) {
 			theirs[b] = true
 		}
 		for _, a := range mine {
+			if theirs[a] && m.apart(t, o, a) {
+				continue // each names its own functions in the file: they start side by side
+			}
 			if theirs[a] || m.edited(o, a) {
 				return &others[i], a
 			}
 		}
 	}
 	return nil, ""
+}
+
+// apart reports whether briefs t and o, which both name the file p, each name
+// at least one function, type or class defined in it and share none, so
+// their edits sit in separate parts of the file and merge cleanly: the four
+// at-once benchmark asks each implement one function of textkit/__init__.py
+// and ran one at a time behind each other (issue #727). A brief that names
+// no definition in p, or one the other names too, still waits, so two
+// workers don't redo each other's work (#399, #406); one whose edits do meet
+// merges main when it pushes, with its worker if need be.
+func (m *Module) apart(t, o Task, p string) bool {
+	defs := m.defs(t.Project, p)
+	if len(defs) == 0 {
+		return false
+	}
+	mine, theirs := named(t, defs), named(o, defs)
+	if len(mine) == 0 || len(theirs) == 0 {
+		return false
+	}
+	for d := range mine {
+		if theirs[d] {
+			return false
+		}
+	}
+	return true
+}
+
+// named is the definitions in defs that t's brief names as words, outside
+// the paths it names (textkit/__init__.py names no __init__).
+func named(t Task, defs map[string]bool) map[string]bool {
+	text := pathLike.ReplaceAllString(t.Title+"\n"+t.Done+"\n"+t.Known, " ")
+	out := map[string]bool{}
+	for _, w := range word.FindAllString(text, -1) {
+		if defs[w] {
+			out[w] = true
+		}
+	}
+	return out
+}
+
+var (
+	word = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+	// definition is a line that defines a name in the common languages:
+	// def, class, func (with a Go receiver), function, fn, type and the like.
+	definition = regexp.MustCompile(`(?m)^[ \t]*(?:(?:export|pub(?:\([^)]*\))?|async|static|public|private|protected)[ \t]+)*(?:def|class|func|function|fn|type|struct|enum|trait|interface)[ \t]+(?:\([^)]*\)[ \t]*)?([A-Za-z_][A-Za-z0-9_]*)`)
+)
+
+// defs is the names defined in the clone file p, read once per version of
+// the file; nil when it can't be read.
+func (m *Module) defs(project, p string) map[string]bool {
+	file := filepath.Join(m.C.WS.Project(project), filepath.FromSlash(p))
+	key := stamp(file)
+	m.mu.Lock()
+	got, ok := m.defCache[file]
+	m.mu.Unlock()
+	if ok && got.key == key {
+		return got.defs
+	}
+	b, err := core.SafeRead(file, 4<<20)
+	if err != nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, s := range definition.FindAllSubmatch(b, -1) {
+		out[string(s[1])] = true
+	}
+	m.mu.Lock()
+	if len(m.defCache) >= 256 {
+		clear(m.defCache)
+	}
+	m.defCache[file] = defEntry{key, out}
+	m.mu.Unlock()
+	return out
+}
+
+// defEntry is the names a file defines and the file stamp they were read at.
+type defEntry struct {
+	key  string
+	defs map[string]bool
 }
 
 // edited reports whether o's worker has changed the clone file p in its
