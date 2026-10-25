@@ -95,7 +95,7 @@ func Main(argv []string) int {
 
 // switches are the yes/no arguments, which may stand bare before another
 // --key; any other key takes the next word as its value, even "--help".
-var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "apart": true}
+var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "delete_branch": true, "apart": true}
 
 // parseArgs accepts one JSON object, `-` for JSON on stdin, `--file x.json`,
 // or --key value pairs (a value of @path reads that file's text).
@@ -180,6 +180,10 @@ A value of @path reads that file. Common ops:
             [--now id --why "..."]               (lead) start it first, past a brief on the same files
   landed    --task id --why "..." [--merge sha]  (lead) end a task whose PR merged on the forge or whose
                                                  work is on main, so the briefs waiting on it start
+  pr_ready  --task id [--why "..."]              (lead) mark the Hive's own PR ready; its merge goes on
+  pr_draft  --task id --why "..."                (lead) mark it a draft; its task waits, not stopped
+  pr_close  --task id --comment "..." [--delete_branch]   (lead) close it with a comment, ending its
+                                                 task (or --project p --pr N in place of --task)
   models                                         named models, each role's route, what each agent runs on, trials
   route     --role worker --models "a,b" [--project p]   (lead) the models a role runs on, in fallback order
   trial     --model m --project test --title "..." --done "..."   (lead) one brief's worker on that model alone`

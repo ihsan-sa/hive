@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 )
 
 // bundleCap is just under the 100 MB the bundle endpoint takes.
@@ -89,6 +90,9 @@ func share(ws core.Workspace, url string, limit int64, yes bool, in io.Reader, o
 	}
 	if len(parts) == 0 {
 		return errors.New("nothing in this Hive fits in one bundle")
+	}
+	if err := scanParts(ws, parts); err != nil {
+		return errors.New("nothing sent: " + err.Error())
 	}
 	fmt.Fprintf(out, "This sends %s from %s:\n", mb(total), ws.Hive())
 	listParts(out, parts)
@@ -334,4 +338,32 @@ func (c *countWriter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	c.n += int64(n)
 	return n, err
+}
+
+// scanParts is the identity and secret scan of what the bundle sends: every
+// file of parts, which the shared set names, against the deny and handle
+// lists given at run time (scan.RunTime). A hit, or no handle list, sends
+// nothing.
+func scanParts(ws core.Workspace, parts []part) error {
+	deny, handles, err := scan.RunTime(os.Getenv, ws.Private())
+	if err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(ws.Hive())
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	var names []string
+	for _, p := range parts {
+		names = append(names, p.files...)
+	}
+	read := func(rel string) ([]byte, error) {
+		data, err := readNoFollow(root, rel)
+		if err != nil {
+			return nil, nil // gone or swapped since the walk, so the bundle leaves it out too
+		}
+		return data, nil
+	}
+	return scan.Run(names, read, scan.Lists{Public: []string{"**"}, Deny: deny, Handles: handles})
 }
