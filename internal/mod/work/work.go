@@ -239,6 +239,8 @@ type Module struct {
 	mu    sync.Mutex
 	tasks map[string]*Task
 	busy  map[string]bool
+	// workers and checks are the limits the pace sets (pace.go).
+	workers, checks pace
 	// areaCache holds the paths each brief names (queue.go).
 	areaCache map[string]areaEntry
 	steps     sync.WaitGroup // the steps Tick started that are still going
@@ -337,6 +339,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "pr_close", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
 	c.Person.Handle("merge", m.onPersonMerge)
 	c.Effects.MergeHeld = m.MergeHeld
+	c.Effects.Slots.Resize(m.checkSlots)
 	return m
 }
 
@@ -472,6 +475,9 @@ func (m *Module) opAim(r core.Run, args json.RawMessage) (any, error) {
 	if t.Terminal() || t.Stage == StageMerged {
 		return nil, fmt.Errorf("task %s has already ended (%s)", t.ID, t.Stage)
 	}
+	if r.Role == "worker" && aim != AimGain && t.Gain() && t.Gate != nil && t.Gate.Outcome == core.GateRollback {
+		return nil, fmt.Errorf("task %s was rolled back by the recursive gate, so it can't stop aiming at a gain on its own word: ask the lead (hive agent message --to lead), who can set its aim", t.ID)
+	}
 	if t.Aim != aim {
 		if !m.claim(t.ID) {
 			return nil, fmt.Errorf("task %s has a step running right now; ask again in a moment", t.ID)
@@ -479,6 +485,9 @@ func (m *Module) opAim(r core.Run, args json.RawMessage) (any, error) {
 		t, _ = m.Get(t.ID) // as the last step left it
 		t.Aim = aim
 		m.save(&t, fmt.Sprintf("aim set to %s by %s: %s", t.AimWord(), r.ID, core.Clip(a.Why, 300)))
+		if !t.Gain() && m.dropGate(t.ID) {
+			m.save(&t, "the recursive gate run on it was cancelled: a fix doesn't wait for the gate, and the changes queued behind it shouldn't either")
+		}
 		m.mu.Lock()
 		delete(m.later, t.ID) // the merge looks again at once
 		m.mu.Unlock()
@@ -598,6 +607,7 @@ func (m *Module) Revert(of Task, mergeSHA, reason string) (Task, error) {
 func (m *Module) Tick() {
 	m.revive()
 	m.draftsBack.Do(m.reviveDrafts)
+	m.paceChecks()
 	tasks := m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) })
 	start, wait := m.admit(tasks)
 	for _, t := range tasks {
@@ -1693,6 +1703,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 			round = "a checkpoint"
 			account = w.Brief + "\n\n## A checkpoint\n\nThe worker is still running and hasn't written its account yet. This commit is a checkpoint of its unfinished work, put up because it beats the best kept score; it merges on its own while the worker keeps going. Read it as a change that must be safe to merge as it stands, not as the finished task."
 		}
+		account += aimCheck(t, p)
 		brief := fmt.Sprintf("Review %s of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", round, t.ID, t.Label())
 		spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
@@ -1755,6 +1766,16 @@ func (m *Module) review(t *Task, p core.Project) error {
 		return m.dropCheckpoint(t, p, "the reviewer asked for fixes:\n\n"+fb.String())
 	}
 	return m.sendBack(t, p, "The reviewer asked for fixes on "+core.Short(t.SHA)+":\n\n"+fb.String())
+}
+
+// aimCheck asks the reader of a change to the Hive itself declared a fix to
+// say so when it is aimed at a gain: the aim is declared, not worked out,
+// and a gain filed as a fix would skip the recursive gate.
+func aimCheck(t *Task, p core.Project) string {
+	if !p.Self || t.Gain() || t.Kind == "revert" {
+		return ""
+	}
+	return "\n\n## The aim\n\nThis change to the Hive itself is declared a fix, so it merges without the recursive gate. If it is really aimed at a measurable gain (the brief names a target to beat, or the diff tunes the benchmark, the score or the gate to move a number), that is a finding: the worker must declare it with `hive agent aim --aim gain --why \"...\"` so the gate judges it. A fix that only touches those files to repair them is still a fix."
 }
 
 // keepAdvice adds a land's advice to the task once per item, unless the task

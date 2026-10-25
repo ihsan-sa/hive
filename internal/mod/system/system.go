@@ -17,7 +17,8 @@ import (
 // Job is a named scheduled action provided by a module.
 type Job struct {
 	Name    string
-	AtStart bool // run soon after the daemon starts, not only after one interval
+	AtStart bool   // run soon after the daemon starts, not only after one interval
+	Default string // its schedule when config.json and the defaults name none
 	Fn      func() (string, error)
 }
 
@@ -107,6 +108,19 @@ func (m *Module) Register(j Job) {
 	m.mu.Unlock()
 }
 
+// RegisterModule adds a job a module program serves, which has a default
+// schedule of its own. It never takes over a built-in job of the same name
+// (one with no default), and reports whether the job is now the module's.
+func (m *Module) RegisterModule(j Job) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if have, ok := m.jobs[j.Name]; ok && (have.Default == "" || have.Default == j.Default) {
+		return have.Default != ""
+	}
+	m.jobs[j.Name] = j
+	return true
+}
+
 // Schedule is a parsed schedule string.
 type Schedule struct {
 	Every time.Duration
@@ -168,10 +182,7 @@ func (m *Module) Tick() {
 	var due []Job
 	cfg := m.C.WS.LoadConfig()
 	for name, j := range m.jobs {
-		s, err := Parse(cfg.Schedules[name])
-		if err != nil {
-			s, _ = Parse(core.DefaultConfig().Schedules[name])
-		}
+		s := m.schedule(cfg, j)
 		if !m.running[name] && s.Due(now, m.last[name], m.started, j.AtStart) {
 			m.running[name] = true
 			due = append(due, j)
@@ -191,6 +202,17 @@ func (m *Module) Tick() {
 		m.C.Runs.Send(w.Run, "[wake-up you scheduled] "+w.Text)
 		m.C.J.MustAppend("system.woke", w)
 	}
+}
+
+// schedule is a job's schedule: config.json's, else the Hive's default, else
+// the job's own.
+func (m *Module) schedule(cfg core.Config, j Job) Schedule {
+	for _, text := range []string{cfg.Schedules[j.Name], core.DefaultConfig().Schedules[j.Name], j.Default} {
+		if s, err := Parse(text); err == nil {
+			return s
+		}
+	}
+	return Schedule{Off: true}
 }
 
 // RunNow runs a job immediately (from the control center).
@@ -238,8 +260,12 @@ func (m *Module) Jobs() []JobState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []JobState
-	for name := range m.jobs {
-		out = append(out, JobState{Name: name, Schedule: cfg.Schedules[name], Last: m.last[name], Result: m.results[name], Running: m.running[name]})
+	for name, j := range m.jobs {
+		sched := cfg.Schedules[name]
+		if _, err := Parse(sched); err != nil && j.Default != "" {
+			sched = j.Default
+		}
+		out = append(out, JobState{Name: name, Schedule: sched, Last: m.last[name], Result: m.results[name], Running: m.running[name]})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
