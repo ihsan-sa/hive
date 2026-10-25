@@ -13,15 +13,16 @@ func sight(m *Module, task, url string, tests ...string) {
 	m.C.J.MustAppend("forge.tests_failed", map[string]any{"project": "hive", "task": task, "branch": "hive/" + task, "sha": "abc" + task, "check": "test (windows-latest)", "url": url, "tests": tests})
 }
 
-// A test red on one branch alone is that branch's; red on a second,
-// unrelated branch, on main, or passing when run again, it is quarantined,
-// with its evidence, and gets one fix task. The fix's merge lifts it.
+// A test red on one branch alone is that branch's, even when it passed on a
+// re-run there; red on a second, unrelated branch or on main, it is
+// quarantined, with its evidence, and gets one fix task. The fix's merge
+// lifts it.
 func TestQuarantine(t *testing.T) {
 	m := rig(t)
 	sight(m, "t1", "https://ci/1", "TestModuleLifecycle", "TestMine")
 	sight(m, "t1", "https://ci/1", "TestModuleLifecycle") // the same run read again
 	sight(m, "t1", "https://ci/2", "TestModuleLifecycle") // the same branch, another attempt
-	if q := m.QuarantinedTests("hive"); len(q) != 0 {
+	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
 		t.Fatalf("one branch's red quarantined %v", q)
 	}
 	sight(m, "t2", "https://ci/3", "TestModuleLifecycle")
@@ -32,11 +33,17 @@ func TestQuarantine(t *testing.T) {
 	for _, f := range q {
 		names = append(names, f.Test)
 	}
-	if !slices.Equal(names, []string{"TestModuleLifecycle", "TestReportSharing", "TestStalls"}) || len(m.Quarantine("other")) != 0 {
+	// A pass on t3's own re-run is no quarantine: t3's code may have made it.
+	if !slices.Equal(names, []string{"TestModuleLifecycle", "TestReportSharing"}) || len(m.Quarantine("other")) != 0 {
 		t.Fatalf("quarantined %v", names)
 	}
-	if len(q[0].Evidence) != 3 || !strings.Contains(q[0].Why, "failed on 2 unrelated branches (tasks t1, t2)") || !strings.Contains(q[1].Why, "failed on main") || !strings.Contains(q[2].Why, "passed when run again") {
+	if len(q[0].Evidence) != 3 || !strings.Contains(q[0].Why, "failed on 2 unrelated branches (tasks t1, t2)") || !strings.Contains(q[1].Why, "failed on main") {
 		t.Fatalf("quarantine %+v", q)
+	}
+	// Seen on another, unrelated branch too, it is.
+	sight(m, "t6", "https://ci/7", "TestStalls")
+	if !slices.Contains(m.QuarantinedTests("hive", ""), "TestStalls") {
+		t.Fatal("a flake on two branches not quarantined")
 	}
 
 	m.fileQuarantined()
@@ -73,12 +80,12 @@ func TestQuarantine(t *testing.T) {
 	// that counts again.
 	fix.MergeSHA, fix.Stage = "fixed", work.StageMerged
 	m.C.J.MustAppend("task.saved", fix)
-	if slices.Contains(m.QuarantinedTests("hive"), "TestModuleLifecycle") {
+	if slices.Contains(m.QuarantinedTests("hive", ""), "TestModuleLifecycle") {
 		t.Fatal("a fixed test stays quarantined")
 	}
 	time.Sleep(time.Millisecond)
 	sight(m, "t4", "https://ci/5", "TestModuleLifecycle")
-	if slices.Contains(m.QuarantinedTests("hive"), "TestModuleLifecycle") {
+	if slices.Contains(m.QuarantinedTests("hive", ""), "TestModuleLifecycle") {
 		t.Fatal("one red after the fix quarantined it again")
 	}
 	// A later save of the merged fix (a note) lifts nothing more: the red
@@ -86,7 +93,7 @@ func TestQuarantine(t *testing.T) {
 	fix.Log = append(fix.Log, work.Entry{Text: "measured"})
 	m.C.J.MustAppend("task.saved", fix)
 	sight(m, "t5", "https://ci/6", "TestModuleLifecycle")
-	if !slices.Contains(m.QuarantinedTests("hive"), "TestModuleLifecycle") {
+	if !slices.Contains(m.QuarantinedTests("hive", ""), "TestModuleLifecycle") {
 		t.Fatal("a later save of the fix dropped the reds seen since its merge")
 	}
 }
@@ -99,11 +106,11 @@ func TestQuarantineNeedsUnrelatedBranches(t *testing.T) {
 	sight(m, "t1", "https://ci/1", "TestX")
 	sight(m, "f1", "https://ci/2", "TestX")
 	m.C.J.MustAppend("forge.tests_failed", map[string]any{"project": "hive", "task": "t2", "sha": "abct1", "check": "c", "url": "https://ci/3", "tests": []string{"TestX"}})
-	if q := m.QuarantinedTests("hive"); len(q) != 0 {
+	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
 		t.Fatalf("one change's reds quarantined %v", q)
 	}
 	sight(m, "t3", "https://ci/4", "TestX")
-	if q := m.QuarantinedTests("hive"); !slices.Equal(q, []string{"TestX"}) {
+	if q := m.QuarantinedTests("hive", ""); !slices.Equal(q, []string{"TestX"}) {
 		t.Fatalf("quarantined %v", q)
 	}
 }
@@ -113,14 +120,14 @@ func TestQuarantineAgesOut(t *testing.T) {
 	m := rig(t)
 	sight(m, "t1", "https://ci/1", "TestOld")
 	sight(m, "t2", "https://ci/2", "TestOld")
-	if len(m.QuarantinedTests("hive")) != 1 {
+	if len(m.QuarantinedTests("hive", "")) != 1 {
 		t.Fatal("not quarantined")
 	}
 	old := quarantineWindow
 	quarantineWindow = time.Nanosecond
 	t.Cleanup(func() { quarantineWindow = old })
 	time.Sleep(time.Millisecond)
-	if q := m.QuarantinedTests("hive"); len(q) != 0 {
+	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
 		t.Fatalf("aged-out reds quarantined %v", q)
 	}
 	m.mu.Lock()
@@ -128,5 +135,28 @@ func TestQuarantineAgesOut(t *testing.T) {
 	m.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("%d emptied keys kept", n)
+	}
+}
+
+// A PR is excused only on evidence from outside its task: its own reds, its
+// re-runs' passes and its follow-ups' reds don't count for it.
+func TestQuarantineNotOnItsOwnEvidence(t *testing.T) {
+	m := rig(t)
+	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "follow up", FollowUp: "t1"})
+	sight(m, "t1", "https://ci/1", "pkg::TestX")
+	m.C.J.MustAppend("forge.flaked", map[string]any{"project": "hive", "task": "t1", "sha": "abct1", "checks": []string{"test"}, "tests": []string{"pkg::TestX"}})
+	sight(m, "f1", "https://ci/2", "pkg::TestX")
+	sight(m, "t2", "https://ci/3", "pkg::TestX")
+	if q := m.QuarantinedTests("hive", "t1"); len(q) != 0 {
+		t.Fatalf("t1's own evidence quarantined %v for it", q)
+	}
+	if q := m.QuarantinedTests("hive", "t2"); len(q) != 0 {
+		t.Fatalf("t2 excused on one other change's reds: %v", q)
+	}
+	sight(m, "t3", "https://ci/4", "pkg::TestX")
+	for _, task := range []string{"t1", "t2", "t3", ""} {
+		if q := m.QuarantinedTests("hive", task); !slices.Equal(q, []string{"pkg::TestX"}) {
+			t.Fatalf("for %q: quarantined %v", task, q)
+		}
 	}
 }

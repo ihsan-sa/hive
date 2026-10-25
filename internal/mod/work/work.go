@@ -1765,7 +1765,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return nil
 	}
 	defer m.leaveMerge()
-	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Gain: t.Gain()})
+	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Gain: t.Gain(), Task: t.ID})
 	if errors.Is(err, core.ErrDraft) { // made a draft since the look above
 		return m.waitDraft(t, pr)
 	}
@@ -1977,7 +1977,8 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		return true, err
 	}
 	tests := m.C.Effects.FailingTests(p.Repo)
-	m.sightings(t, p, runs, tests, "", nil)
+	keys := m.keysOf(p.Repo)
+	m.sightings(t, p, runs, keys, "", nil)
 	raw := runs
 	req := m.C.Effects.RequiredChecks(p, main)
 	st, which := core.ChecksState(runs, req)
@@ -1992,10 +1993,16 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		if mainRuns, at, err = m.C.Effects.MainAnswer(p, main, which); err != nil {
 			return true, err
 		}
-		m.sightings(t, p, mainRuns, tests, main, at)
+		m.sightings(t, p, mainRuns, keys, main, at)
 		// Known flakes count against no head, as Effects.Merge rules too;
 		// main's runs show which skipped steps the job always skips.
-		runs, excused = core.Excuse(runs, mainRuns, m.C.Effects.JobRead(p.Repo), m.C.Effects.Quarantine(p.Name))
+		if q := m.C.Effects.Quarantine(p.Name, t.ID); len(q) > 0 {
+			ch, err := m.C.Effects.Classify(p, main, t.SHA)
+			if err != nil {
+				return true, err
+			}
+			runs, excused = m.C.Effects.Excused(p, main, t.ID, ch.Files, runs, mainRuns)
+		}
 		st, which, shared, byName = core.ChecksAgainstMain(runs, mainRuns, req, tests)
 	}
 	if st == core.CheckFail {
@@ -2061,7 +2068,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			if n, err := m.C.Effects.Forge.RerunFailed(p.Repo, t.SHA); err != nil {
 				return true, err
 			} else if n > 0 {
-				m.retried(t, which, tests)
+				m.retried(t, which, keys)
 				m.save(t, "re-ran the forge's failed checks "+names+" on "+core.Short(t.SHA)+" once before sending them back, in case they are flakes")
 				m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+names+"), run again once before a red goes back")
 				return true, nil
@@ -2097,7 +2104,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 }
 
 // sightings journals, once per failed check, the tests its log names as
-// failing, on t's head or, with main set, on main (at[name] the older main
+// failing, with their packages (keysOf), on t's head or, with main set, on main (at[name] the older main
 // commit the run came from): the improve module quarantines a test seen
 // failing on main or on unrelated branches.
 func (m *Module) sightings(t *Task, p core.Project, runs []core.CheckRun, tests core.TestsOf, main string, at map[string]string) {
@@ -2129,6 +2136,18 @@ func (m *Module) sightings(t *Task, p core.Project, runs []core.CheckRun, tests 
 			ev["task"], ev["branch"], ev["sha"] = t.ID, t.Branch, t.SHA
 		}
 		m.C.J.MustAppend("forge.tests_failed", ev)
+	}
+}
+
+// keysOf names a failed check's tests with their packages (pkg::TestX), as
+// the quarantine keys them; ok is false when the log can't place them all.
+func (m *Module) keysOf(repo string) core.TestsOf {
+	if m.C.Effects.FailingTests(repo) == nil {
+		return nil
+	}
+	return func(r core.CheckRun) ([]string, bool) {
+		f, ok := m.C.Effects.CheckFailure(repo, r)
+		return f.Keys, ok && len(f.Keys) > 0
 	}
 }
 

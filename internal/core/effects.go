@@ -55,9 +55,10 @@ type Effects struct {
 	MergeHeld func(project string, pr int) string
 
 	// Quarantined are a project's known flaky tests (the improve module's
-	// quarantine): a forge check whose log fails only these doesn't hold a
-	// merge. Unset, none are.
-	Quarantined func(project string) []string
+	// quarantine), keyed package::test, as shown by evidence from outside
+	// task (none of its own branches' reds counts for it): a forge check
+	// that fails only these doesn't hold task's merge. Unset, none are.
+	Quarantined func(project, task string) []string
 
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
@@ -1148,7 +1149,8 @@ type MergeRequest struct {
 	SHA     string
 	Main    string
 	Subject string
-	Gain    bool // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
+	Gain    bool   // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
+	Task    string // the task whose PR it is: the quarantine excuses it only on evidence from outside it
 }
 
 // Merge merges the PR only at sha, and only when the host's own records show
@@ -1199,7 +1201,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		runs, excused = Excuse(runs, mainRuns, e.JobRead(p.Repo), e.Quarantine(p.Name))
+		runs, excused = e.Excused(p, m.Main, m.Task, ch.Files, runs, mainRuns)
 		st, which, shared, _ = ChecksAgainstMain(runs, mainRuns, req, e.FailingTests(p.Repo))
 	}
 	if st != CheckPass {
@@ -1332,16 +1334,18 @@ type JobRead struct {
 }
 
 // Excuse marks as passing each failed check that failed only in quarantined
-// tests (known flakes), so it counts against no head; excused names those
-// checks. A failure only in such tests is shown, never assumed: the log
-// names failing tests, all quarantined, and nothing else failing (no build
-// or setup failure, panic, timeout or package red apart from them,
-// CheckFailure.OnlyTests); exactly one of the job's steps failed; and every
-// step it skipped was skipped on main's finished run of that check too, so
-// no step the red kept from running goes unchecked. Anything unread excuses
-// nothing.
-func Excuse(runs, mainRuns []CheckRun, read JobRead, quarantined []string) (out []CheckRun, excused []string) {
-	if read.Failure == nil || read.Steps == nil || len(quarantined) == 0 {
+// tests (known flakes, keyed package::test), so it counts against no head;
+// excused names those checks. A failure only in such tests is shown, never
+// assumed: the log's failing tests, each with its package, are all
+// quarantined, and it shows nothing else failing (no build or setup failure,
+// panic, timeout, package red apart from them or failing test with no
+// package, CheckFailure.OnlyTests); none of their packages is one the head
+// changes (touched), so a change can't break a quarantined test and pass;
+// exactly one of the job's steps failed; and every step it skipped was
+// skipped on main's finished run of that check too, so no step the red kept
+// from running goes unchecked. Anything unread excuses nothing.
+func Excuse(runs, mainRuns []CheckRun, read JobRead, quarantined []string, touched func(key string) bool) (out []CheckRun, excused []string) {
+	if read.Failure == nil || read.Steps == nil || len(quarantined) == 0 || touched == nil {
 		return runs, nil
 	}
 	out = slices.Clone(runs)
@@ -1350,14 +1354,14 @@ func Excuse(runs, mainRuns []CheckRun, read JobRead, quarantined []string) (out 
 			continue
 		}
 		f, ok := read.Failure(r)
-		if !ok || !f.OnlyTests || len(f.Tests) == 0 || slices.ContainsFunc(f.Tests, func(n string) bool { return !slices.Contains(quarantined, n) }) {
+		if !ok || !f.OnlyTests || len(f.Keys) == 0 || slices.ContainsFunc(f.Keys, func(k string) bool { return !slices.Contains(quarantined, k) || touched(k) }) {
 			continue
 		}
 		if !stepsShown(r, mainRuns, read.Steps) {
 			continue
 		}
 		out[i].State = CheckPass
-		out[i].Detail = "fails only the quarantined " + strings.Join(f.Tests, ", ")
+		out[i].Detail = "fails only the quarantined " + strings.Join(f.Keys, ", ")
 		if !slices.Contains(excused, r.Name) {
 			excused = append(excused, r.Name)
 		}
@@ -1437,6 +1441,81 @@ func OnlyTests(log string) bool {
 	return true
 }
 
+// FailedTestKeys names a log's failing tests with their packages: Go's
+// "--- FAIL: TestX" as pkg::TestX, from the "FAIL\tpkg" line that closes
+// its package's output, and pytest's "FAILED path::test" as it is. ok is
+// false when a failing Go test has no package line to place it in.
+func FailedTestKeys(log string) (keys []string, ok bool) {
+	var pending []string
+	add := func(k string) {
+		if !slices.Contains(keys, k) && len(keys) < 50 {
+			keys = append(keys, k)
+		}
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(log, "\r\n", "\n"), "\n") {
+		if m := failedTest.FindStringSubmatch(line); m != nil {
+			if m[2] != "" {
+				add(m[2])
+			} else if !slices.Contains(pending, m[1]) {
+				pending = append(pending, m[1])
+			}
+			continue
+		}
+		if m := pkgResult.FindStringSubmatch(line); m != nil {
+			if m[1] == "FAIL" {
+				pkg := strings.Fields(strings.TrimSpace(line[len(m[1]):]))[0]
+				for _, n := range pending {
+					add(pkg + "::" + n)
+				}
+			}
+			pending = nil
+		}
+	}
+	return keys, len(pending) == 0
+}
+
+// KeyDir is the directory of a test key's package: a pytest file's own
+// directory, or a Go package's within module. ok is false when it can't be
+// told (a Go package outside module, or no module).
+func KeyDir(key, module string) (string, bool) {
+	where, _, found := strings.Cut(key, "::")
+	switch {
+	case !found:
+		return "", false
+	case strings.HasSuffix(where, ".py"):
+		return path.Dir(where), true
+	case module == "":
+		return "", false
+	case where == module:
+		return ".", true
+	case strings.HasPrefix(where, module+"/"):
+		return strings.TrimPrefix(where, module+"/"), true
+	}
+	return "", false
+}
+
+var goModule = regexp.MustCompile(`(?m)^module\s+"?([^\s"]+)`)
+
+// Excused is Excuse for task's PR on p at head: the quarantine as evidence
+// from outside task shows it, and files the head changes against main, a
+// test whose package they touch (or whose package can't be placed) never
+// excused.
+func (e *Effects) Excused(p Project, main, task string, files []string, runs, mainRuns []CheckRun) ([]CheckRun, []string) {
+	q := e.Quarantine(p.Name, task)
+	if len(q) == 0 {
+		return runs, nil
+	}
+	module := ""
+	if m := goModule.FindStringSubmatch(e.ReadFile(p, main, "go.mod")); m != nil {
+		module = m[1]
+	}
+	touched := func(key string) bool {
+		dir, ok := KeyDir(key, module)
+		return !ok || slices.ContainsFunc(files, func(f string) bool { return path.Dir(f) == dir })
+	}
+	return Excuse(runs, mainRuns, e.JobRead(p.Repo), q, touched)
+}
+
 // JobRead reads repo's forge checks' logs and steps, each once.
 func (e *Effects) JobRead(repo string) JobRead {
 	var jr JobRead
@@ -1471,12 +1550,13 @@ func (e *Effects) JobRead(repo string) JobRead {
 	return jr
 }
 
-// Quarantine is the project's quarantined tests, or none with no quarantine.
-func (e *Effects) Quarantine(project string) []string {
+// Quarantine is the project's quarantined tests as evidence from outside
+// task shows them, or none with no quarantine.
+func (e *Effects) Quarantine(project, task string) []string {
 	if e.Quarantined == nil {
 		return nil
 	}
-	return e.Quarantined(project)
+	return e.Quarantined(project, task)
 }
 
 // MainLookBack is how many of main's commits, newest first, MainAnswer reads
@@ -1610,7 +1690,9 @@ func (e *Effects) FailingTests(repo string) TestsOf {
 type CheckFailure struct {
 	Tests   []string `json:"tests,omitempty"`
 	Excerpt string   `json:"excerpt,omitempty"`
-	// OnlyTests says the log shows nothing failing apart from Tests.
+	// Keys are the failing tests with their packages (FailedTestKeys).
+	Keys []string `json:"keys,omitempty"`
+	// OnlyTests says the log shows nothing failing apart from Keys.
 	OnlyTests bool `json:"only_tests,omitempty"`
 }
 
@@ -1634,7 +1716,8 @@ func (e *Effects) CheckFailure(repo string, r CheckRun) (CheckFailure, bool) {
 	if err != nil {
 		return CheckFailure{}, false // not kept: the next pass tries again
 	}
-	f = CheckFailure{Tests: FailedTests(log), Excerpt: LogExcerpt(log, ExcerptLines), OnlyTests: OnlyTests(log)}
+	keys, placed := FailedTestKeys(log)
+	f = CheckFailure{Tests: FailedTests(log), Keys: keys, Excerpt: LogExcerpt(log, ExcerptLines), OnlyTests: placed && OnlyTests(log)}
 	e.mu.Lock()
 	if e.failing == nil || len(e.failing) > 500 {
 		e.failing = map[string]CheckFailure{}

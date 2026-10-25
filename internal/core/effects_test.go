@@ -1089,19 +1089,23 @@ func TestChecksAgainstMainByTests(t *testing.T) {
 func TestExcuse(t *testing.T) {
 	flaky := "--- FAIL: TestA (0.1s)\n--- FAIL: TestB (0.2s)\nFAIL\nFAIL\tgithub.com/x/a\t1.0s\nok  \tgithub.com/x/b\t0.3s\n"
 	logs := map[string]string{
-		"flaky":   flaky,
-		"mixed":   "--- FAIL: TestA (0.1s)\n--- FAIL: TestC (0.1s)\nFAIL\nFAIL\tgithub.com/x/a\t1.0s\n",
-		"build":   flaky + "# github.com/x/c\nc/c.go:3:1: syntax error\nFAIL\tgithub.com/x/c [build failed]\n",
-		"timeout": flaky + "panic: test timed out after 10m0s\n\trunning tests:\n\t\tTestSlow (10m0s)\nFAIL\tgithub.com/x/d\t600.1s\n",
-		"pkgred":  flaky + "FAIL\tgithub.com/x/e\t0.1s\n",
-		"twostep": flaky,
-		"skips":   flaky,
-		"skips2":  flaky,
+		"flaky":    flaky,
+		"mixed":    "--- FAIL: TestA (0.1s)\n--- FAIL: TestC (0.1s)\nFAIL\nFAIL\tgithub.com/x/a\t1.0s\n",
+		"build":    flaky + "# github.com/x/c\nc/c.go:3:1: syntax error\nFAIL\tgithub.com/x/c [build failed]\n",
+		"timeout":  flaky + "panic: test timed out after 10m0s\n\trunning tests:\n\t\tTestSlow (10m0s)\nFAIL\tgithub.com/x/d\t600.1s\n",
+		"pkgred":   flaky + "FAIL\tgithub.com/x/e\t0.1s\n",
+		"twostep":  flaky,
+		"skips":    flaky,
+		"skips2":   flaky,
+		"touched":  flaky,
+		"elsepkg":  "--- FAIL: TestA (0.1s)\nFAIL\nFAIL\tgithub.com/x/z\t1.0s\n",
+		"unplaced": "--- FAIL: TestA (0.1s)\n--- FAIL: TestB (0.2s)\n",
 	}
 	read := JobRead{
 		Failure: func(r CheckRun) (CheckFailure, bool) {
 			log, ok := logs[r.URL]
-			return CheckFailure{Tests: FailedTests(log), OnlyTests: OnlyTests(log)}, ok
+			keys, placed := FailedTestKeys(log)
+			return CheckFailure{Tests: FailedTests(log), Keys: keys, OnlyTests: placed && OnlyTests(log)}, ok
 		},
 		Steps: func(r CheckRun) ([]JobStep, bool) {
 			test := JobStep{Name: "the suite", Conclusion: "failure"}
@@ -1120,12 +1124,14 @@ func TestExcuse(t *testing.T) {
 			return []JobStep{{Name: "checkout", Conclusion: "success"}, test}, true
 		},
 	}
-	q := []string{"TestA", "TestB"}
-	for url, want := range map[string]bool{"flaky": true, "mixed": false, "build": false, "timeout": false, "pkgred": false, "twostep": false, "skips": false, "skips2": true, "none": false} {
+	q := []string{"github.com/x/a::TestA", "github.com/x/a::TestB"}
+	for url, want := range map[string]bool{"flaky": true, "mixed": false, "build": false, "timeout": false, "pkgred": false, "twostep": false, "skips": false, "skips2": true, "none": false,
+		"touched": false, "elsepkg": false, "unplaced": false} {
+		touched := func(key string) bool { return url == "touched" }
 		runs := []CheckRun{{Name: url, State: CheckFail, URL: url}, {Name: "linux", State: CheckPass, URL: "flaky"}}
 		mainRuns := []CheckRun{{Name: "skips", State: CheckPass, URL: "main/skips"}, {Name: "skips2", State: CheckPass, URL: "main/skips2"}}
-		out, excused := Excuse(runs, mainRuns, read, q)
-		if got := len(excused) == 1 && excused[0] == url && out[0].State == CheckPass && strings.Contains(out[0].Detail, "quarantined TestA, TestB"); got != want {
+		out, excused := Excuse(runs, mainRuns, read, q, touched)
+		if got := len(excused) == 1 && excused[0] == url && out[0].State == CheckPass && strings.Contains(out[0].Detail, "quarantined github.com/x/a::TestA, github.com/x/a::TestB"); got != want {
 			t.Errorf("%s: excused %v (%+v), want %v", url, excused, out, want)
 		}
 		if runs[0].State != CheckFail {
@@ -1133,15 +1139,34 @@ func TestExcuse(t *testing.T) {
 		}
 	}
 	// A skipped step with no finished main run to compare with excuses nothing.
-	if _, excused := Excuse([]CheckRun{{Name: "skips2", State: CheckFail, URL: "skips2"}}, []CheckRun{{Name: "skips2", State: CheckPending, URL: "main/skips2"}}, read, q); excused != nil {
+	if _, excused := Excuse([]CheckRun{{Name: "skips2", State: CheckFail, URL: "skips2"}}, []CheckRun{{Name: "skips2", State: CheckPending, URL: "main/skips2"}}, read, q, func(string) bool { return false }); excused != nil {
 		t.Errorf("no main answer excused %v", excused)
 	}
 	runs := []CheckRun{{Name: "win", State: CheckFail, URL: "flaky"}}
-	if _, excused := Excuse(runs, nil, read, nil); excused != nil {
+	if _, excused := Excuse(runs, nil, read, nil, func(string) bool { return false }); excused != nil {
 		t.Errorf("no quarantine excused %v", excused)
 	}
-	if _, excused := Excuse(runs, nil, JobRead{Failure: read.Failure}, q); excused != nil {
+	if _, excused := Excuse(runs, nil, JobRead{Failure: read.Failure}, q, func(string) bool { return false }); excused != nil {
 		t.Errorf("unread steps excused %v", excused)
+	}
+}
+
+// A failing test's key carries its package, from the line that closes the
+// package's output; a Go failure with no such line can't be placed.
+func TestFailedTestKeys(t *testing.T) {
+	log := "=== RUN   TestA\n--- FAIL: TestA (0.1s)\n    --- FAIL: TestA/sub (0.0s)\nFAIL\nFAIL\tgithub.com/x/a\t0.1s\nok  \tgithub.com/x/b\t0.2s\n--- FAIL: TestA (0.1s)\nFAIL\nFAIL\tgithub.com/x/c\t0.3s\nFAILED tests/t.py::test_a - assert 1\n"
+	keys, ok := FailedTestKeys(log)
+	if want := []string{"github.com/x/a::TestA", "github.com/x/a::TestA/sub", "github.com/x/c::TestA", "tests/t.py::test_a"}; !ok || !slices.Equal(keys, want) {
+		t.Fatalf("keys %v (%v), want %v", keys, ok, want)
+	}
+	if _, ok := FailedTestKeys("--- FAIL: TestA (0.1s)\nFAIL\n"); ok {
+		t.Fatal("a failure with no package line was placed")
+	}
+	for key, want := range map[string]string{"github.com/x/internal/e2e::TestA": "internal/e2e", "github.com/x::TestA": ".", "tests/u/t.py::test_a": "tests/u", "other.org/y::TestA": "", "TestA": ""} {
+		dir, ok := KeyDir(key, "github.com/x")
+		if dir != want || ok != (want != "") {
+			t.Errorf("KeyDir(%q) = %q %v, want %q", key, dir, ok, want)
+		}
 	}
 }
 

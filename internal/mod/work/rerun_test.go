@@ -174,13 +174,38 @@ func TestRerunChecksWalled(t *testing.T) {
 	}
 }
 
+// e2eKey is a test's quarantine key in the module flakeRig seeds.
+const e2eKey = "example.com/p/e2e::"
+
+// flakeRig is gateRig on a Go module (example.com/p), with quarantined, keyed
+// package::test, quarantined for its task's PR alone.
+func flakeRig(t *testing.T, files map[string]string, quarantined ...string) (*Module, *Task, core.Project, *core.Local) {
+	m, task, p, f := gateRigSeeded(t, false, map[string]string{"go.mod": "module example.com/p\n"}, files)
+	m.C.Effects.Quarantined = func(project, id string) []string {
+		if project != p.Name || id != task.ID {
+			return nil
+		}
+		return quarantined
+	}
+	return m, task, p, f
+}
+
+// e2eLog is a go test log where tests fail in example.com/p/e2e.
+func e2eLog(tests ...string) string {
+	var b strings.Builder
+	for _, n := range tests {
+		b.WriteString("--- FAIL: " + n + " (1.0s)\n")
+	}
+	return b.String() + "FAIL\nFAIL\texample.com/p/e2e\t300.1s\nok  \texample.com/p/core\t1.2s\n"
+}
+
 // A red forge check is run again before it goes back: a pass on the re-run
-// merges, spends no round and is recorded as a flake, once.
+// merges, spends no round and is recorded as a flake, once, keyed by package.
 func TestForgeFlakePassesOnRerun(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, URL: "https://ci/1"})
-	f.SetCheckLog(p.Repo, "https://ci/1", "--- FAIL: TestModuleLifecycle (3.1s)\nFAIL\n")
+	f.SetCheckLog(p.Repo, "https://ci/1", e2eLog("TestModuleLifecycle"))
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerging || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 1 || queued(m, "w1") != "" {
 		t.Fatalf("stage %q, round %d, %d re-runs, reason %q", task.Stage, task.Round, f.Reruns(p.Repo, task.SHA), task.Reason)
@@ -191,24 +216,22 @@ func TestForgeFlakePassesOnRerun(t *testing.T) {
 	if task.Stage != StageMerged || task.Round != 0 || prState(t, f, task.PR.Number) != "MERGED" {
 		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
 	}
-	var flaked []struct {
+	type flake struct {
 		Task, SHA string
 		Tests     []string
 	}
+	var flaked []flake
 	for _, e := range m.C.J.Since(0) {
 		if e.Kind == "forge.flaked" {
-			var x struct {
-				Task, SHA string
-				Tests     []string
-			}
+			var x flake
 			e.Decode(&x)
 			flaked = append(flaked, x)
 		}
 	}
-	if len(flaked) != 1 || flaked[0].Task != task.ID || flaked[0].SHA != task.SHA || len(flaked[0].Tests) != 1 || flaked[0].Tests[0] != "TestModuleLifecycle" {
+	if len(flaked) != 1 || flaked[0].Task != task.ID || flaked[0].SHA != task.SHA || len(flaked[0].Tests) != 1 || flaked[0].Tests[0] != e2eKey+"TestModuleLifecycle" {
 		t.Fatalf("flakes recorded: %+v", flaked)
 	}
-	if !logHas(task, "a flake: the forge's checks test (windows-latest) (TestModuleLifecycle) failed on") {
+	if !logHas(task, "a flake: the forge's checks test (windows-latest) ("+e2eKey+"TestModuleLifecycle) failed on") {
 		t.Fatalf("log %v", task.Log)
 	}
 }
@@ -221,13 +244,13 @@ func TestForgeRealFailureGoesBack(t *testing.T) {
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPass})
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "https://ci/1"})
-	f.SetCheckLog(p.Repo, "https://ci/1", "--- FAIL: TestBroken (0.1s)\nFAIL\n")
+	f.SetCheckLog(p.Repo, "https://ci/1", e2eLog("TestBroken"))
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerging || task.Round != 0 {
 		t.Fatalf("first red: stage %q, round %d", task.Stage, task.Round)
 	}
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "https://ci/2"})
-	f.SetCheckLog(p.Repo, "https://ci/2", "--- FAIL: TestBroken (0.1s)\nFAIL\n")
+	f.SetCheckLog(p.Repo, "https://ci/2", e2eLog("TestBroken"))
 	m.later = map[string]time.Time{}
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, forgeFailed) || prState(t, f, task.PR.Number) != "OPEN" {
@@ -239,7 +262,7 @@ func TestForgeRealFailureGoesBack(t *testing.T) {
 			Task  string
 			Tests []string
 		}
-		if e.Kind == "forge.tests_failed" && e.Decode(&x) == nil && x.Task == task.ID && len(x.Tests) == 1 && x.Tests[0] == "TestBroken" {
+		if e.Kind == "forge.tests_failed" && e.Decode(&x) == nil && x.Task == task.ID && len(x.Tests) == 1 && x.Tests[0] == e2eKey+"TestBroken" {
 			seen++
 		}
 	}
@@ -251,16 +274,10 @@ func TestForgeRealFailureGoesBack(t *testing.T) {
 // A check failing only quarantined tests doesn't send a PR back or hold it:
 // it merges with no re-run and the PR says why.
 func TestForgeQuarantinedFailureIgnored(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	m.C.Effects.Quarantined = func(project string) []string {
-		if project != p.Name {
-			return nil
-		}
-		return []string{"TestStalls", "TestModuleLifecycle"}
-	}
+	m, task, p, f := flakeRig(t, map[string]string{"feature.txt": "y"}, e2eKey+"TestStalls", e2eKey+"TestModuleLifecycle")
 	toMerging(t, m, task, p)
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (macos-latest)", State: core.CheckFail, URL: "https://ci/mac"}, core.CheckRun{Name: "lint", State: core.CheckPass})
-	f.SetCheckLog(p.Repo, "https://ci/mac", "--- FAIL: TestStalls (2.0s)\n--- FAIL: TestModuleLifecycle (1.0s)\nFAIL\nFAIL\tgithub.com/x/hive/internal/e2e\t300.1s\n")
+	f.SetCheckLog(p.Repo, "https://ci/mac", e2eLog("TestStalls", "TestModuleLifecycle"))
 	f.SetCheckSteps(p.Repo, "https://ci/mac", core.JobStep{Name: "checkout", Conclusion: "success"}, core.JobStep{Name: "the suite", Conclusion: "failure"})
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerged || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 0 {
@@ -284,37 +301,55 @@ func TestForgeQuarantinedFailureIgnored(t *testing.T) {
 	}
 }
 
-// A quarantined test failing alongside a failure that names no test (a
-// package that doesn't build, here) shows no failure in flakes alone: the
-// check counts, and the PR goes back.
-func TestForgeQuarantineKeepsBuildFailure(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	m.C.Effects.Quarantined = func(string) []string { return []string{"TestStalls"} }
+// redOnce sets one red check "test" on t's head with log, main passing it,
+// the head's one re-run already spent.
+func redOnce(t *testing.T, m *Module, task *Task, p core.Project, f *core.Local, log string) {
+	t.Helper()
 	toMerging(t, m, task, p)
 	rerunOnce(task)
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPass})
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "https://ci/1"})
-	f.SetCheckLog(p.Repo, "https://ci/1", "--- FAIL: TestStalls (2.0s)\nFAIL\nFAIL\tx/e2e\t3.0s\n# x/win\nwin.go:3:1: undefined: syscall.Foo\nFAIL\tx/win [build failed]\n")
+	f.SetCheckLog(p.Repo, "https://ci/1", log)
 	f.SetCheckSteps(p.Repo, "https://ci/1", core.JobStep{Name: "the suite", Conclusion: "failure"})
 	mergeOnce(t, m, task, p)
+}
+
+func sentBack(t *testing.T, f *core.Local, task *Task) {
+	t.Helper()
 	if task.Stage != StageWorking || task.Round != 1 || prState(t, f, task.PR.Number) != "OPEN" {
 		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
 	}
 }
 
+// A quarantined test failing alongside a failure that names no test (a
+// package that doesn't build, here) shows no failure in flakes alone: the
+// check counts, and the PR goes back.
+func TestForgeQuarantineKeepsBuildFailure(t *testing.T) {
+	m, task, p, f := flakeRig(t, map[string]string{"feature.txt": "y"}, e2eKey+"TestStalls")
+	redOnce(t, m, task, p, f, e2eLog("TestStalls")+"# example.com/p/win\nwin.go:3:1: undefined: syscall.Foo\nFAIL\texample.com/p/win [build failed]\n")
+	sentBack(t, f, task)
+}
+
 // A check that fails a test outside the quarantine as well still counts.
 func TestForgeQuarantineKeepsOtherFailures(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	m.C.Effects.Quarantined = func(string) []string { return []string{"TestStalls"} }
-	toMerging(t, m, task, p)
-	rerunOnce(task)
-	main, _ := m.C.Effects.Sync(p)
-	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPass})
-	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "https://ci/1"})
-	f.SetCheckLog(p.Repo, "https://ci/1", "--- FAIL: TestStalls (2.0s)\n--- FAIL: TestMine (0.1s)\nFAIL\n")
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageWorking || task.Round != 1 || prState(t, f, task.PR.Number) != "OPEN" {
-		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
-	}
+	m, task, p, f := flakeRig(t, map[string]string{"feature.txt": "y"}, e2eKey+"TestStalls")
+	redOnce(t, m, task, p, f, e2eLog("TestStalls", "TestMine"))
+	sentBack(t, f, task)
+}
+
+// The quarantine is keyed by package: a test of the same name failing in
+// another package isn't the quarantined one.
+func TestForgeQuarantineKeysByPackage(t *testing.T) {
+	m, task, p, f := flakeRig(t, map[string]string{"feature.txt": "y"}, e2eKey+"TestStalls")
+	redOnce(t, m, task, p, f, "--- FAIL: TestStalls (2.0s)\nFAIL\nFAIL\texample.com/p/core\t3.0s\n")
+	sentBack(t, f, task)
+}
+
+// A change to a quarantined test's own package is never excused for it: a
+// change mustn't break a known flake for real and pass.
+func TestForgeQuarantineNotForItsOwnPackage(t *testing.T) {
+	m, task, p, f := flakeRig(t, map[string]string{"e2e/testdata.txt": "y"}, e2eKey+"TestStalls")
+	redOnce(t, m, task, p, f, e2eLog("TestStalls"))
+	sentBack(t, f, task)
 }

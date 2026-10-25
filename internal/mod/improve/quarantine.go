@@ -32,11 +32,14 @@ type Sighting struct {
 	Rerun  bool      `json:"rerun,omitempty"` // passed when run again
 }
 
-// A Flake is a quarantined test: seen failing in the last quarantineWindow
-// on main, on two or more unrelated branches, or on a head where it passed
-// when run again. A forge check that fails only quarantined tests doesn't
-// send a PR back or hold its merge. Task fixes it; its merge lifts the
-// quarantine, and only later reds count again.
+// A Flake is a quarantined test, keyed package::test: seen failing in the
+// last quarantineWindow on main or on two or more unrelated branches. A pass
+// on a re-run is evidence for that branch, never a quarantine on its own: a
+// change's own code can fail once and pass the next time. A forge check
+// that fails only quarantined tests doesn't send a PR back or hold its
+// merge, judged on evidence from outside that PR's task (QuarantinedTests).
+// Task fixes it; its merge lifts the quarantine, and only later reds count
+// again.
 type Flake struct {
 	Project   string     `json:"project"`
 	Test      string     `json:"test"`
@@ -101,8 +104,16 @@ func (m *Module) related(a, b string) bool {
 	return m.kin[a] == b || m.kin[b] == a || (m.kin[a] != "" && m.kin[a] == m.kin[b])
 }
 
-// flake is the quarantine entry for k, if its sightings make one; m.mu is held.
-func (m *Module) flake(k string) (Flake, bool) {
+// outside reports whether sighting s is evidence for task's PR: not from
+// task itself, a task related to it, or a head task had. Every sighting is
+// for "" (the dashboard's view); m.mu is held.
+func (m *Module) outside(s Sighting, task string) bool {
+	return task == "" || s.Task == "" || (s.Task != task && !m.related(s.Task, task) && !slices.Contains(m.heads[task], s.SHA))
+}
+
+// flake is the quarantine entry for k on evidence from outside task, if its
+// sightings make one; m.mu is held.
+func (m *Module) flake(k, task string) (Flake, bool) {
 	project, test, _ := strings.Cut(k, "\x00")
 	var ev []Sighting
 	for _, s := range m.sighted[k] {
@@ -115,12 +126,10 @@ func (m *Module) flake(k string) (Flake, bool) {
 		return Flake{}, false
 	}
 	m.sighted[k] = ev
+	ev = slices.DeleteFunc(slices.Clone(ev), func(s Sighting) bool { return !m.outside(s, task) })
 	var why []string
 	if i := slices.IndexFunc(ev, func(s Sighting) bool { return s.Main }); i >= 0 {
 		why = append(why, "failed on main at "+core.Short(ev[i].SHA))
-	}
-	if i := slices.IndexFunc(ev, func(s Sighting) bool { return s.Rerun }); i >= 0 {
-		why = append(why, "passed when run again on "+core.Short(ev[i].SHA)+" (task "+ev[i].Task+")")
 	}
 	// Unrelated branches: two tasks, neither following up or reverting the
 	// other, red on different heads, neither of which the other task had.
@@ -147,14 +156,17 @@ func (m *Module) flake(k string) (Flake, bool) {
 
 // Quarantine is project's quarantined tests ("" for every project's), by
 // project and test, each with its fix task.
-func (m *Module) Quarantine(project string) []Flake {
+func (m *Module) Quarantine(project string) []Flake { return m.quarantine(project, "") }
+
+// quarantine is Quarantine on evidence from outside task.
+func (m *Module) quarantine(project, task string) []Flake {
 	m.mu.Lock()
 	var out []Flake
 	for k := range m.sighted {
 		if project != "" && !strings.HasPrefix(k, project+"\x00") {
 			continue
 		}
-		if f, ok := m.flake(k); ok {
+		if f, ok := m.flake(k, task); ok {
 			out = append(out, f)
 		}
 	}
@@ -170,10 +182,12 @@ func (m *Module) Quarantine(project string) []Flake {
 	return out
 }
 
-// QuarantinedTests names project's quarantined tests (core.Effects.Quarantined).
-func (m *Module) QuarantinedTests(project string) []string {
+// QuarantinedTests names project's tests quarantined on evidence from
+// outside task, so no task's own reds or re-runs excuse it
+// (core.Effects.Quarantined).
+func (m *Module) QuarantinedTests(project, task string) []string {
 	var names []string
-	for _, f := range m.Quarantine(project) {
+	for _, f := range m.quarantine(project, task) {
 		names = append(names, f.Test)
 	}
 	return names
