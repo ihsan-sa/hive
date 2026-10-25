@@ -269,7 +269,40 @@ func (h *hive) kill() {
 	if h.cmd != nil && h.cmd.Process != nil {
 		h.cmd.Process.Kill()
 		h.exited(30 * time.Second)
+		h.left(10 * time.Second)
 	}
+}
+
+// left ends what the killed daemon left working in its workspace (a
+// module's job, such as kb's dream run with go run, and the git it commits
+// with) and waits up to d for it to go, so the test's folder isn't removed
+// while they still write into it. Linux only, from /proc.
+func (h *hive) left(d time.Duration) {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	root := h.ws.Root + string(filepath.Separator)
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		dirs, _ := filepath.Glob("/proc/[0-9]*/cwd")
+		busy := false
+		for _, l := range dirs {
+			cwd, err := os.Readlink(l)
+			if err != nil || !strings.HasPrefix(cwd+string(filepath.Separator), root) {
+				continue
+			}
+			busy = true
+			var pid int
+			if _, err := fmt.Sscanf(filepath.Base(filepath.Dir(l)), "%d", &pid); err == nil && pid != os.Getpid() {
+				if p, err := os.FindProcess(pid); err == nil {
+					p.Kill()
+				}
+			}
+		}
+		if !busy {
+			return
+		}
+	}
+	h.t.Logf("processes still work in %s after %v", h.ws.Root, d)
 }
 
 // exited waits up to d for the daemon last launched to exit, so a new one
