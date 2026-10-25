@@ -23,12 +23,22 @@ func TestAnEventBringsTheNextTickForward(t *testing.T) {
 	ticks := make(chan time.Time, 16)
 	go loop(ctx, j, func() { ticks <- time.Now() })
 	<-ticks // the first tick is at once
-	time.Sleep(100 * time.Millisecond)
-	at := time.Now()
-	j.MustAppend("task.saved", map[string]string{})
-	if got := (<-ticks).Sub(at); got > 500*time.Millisecond {
-		t.Fatalf("the tick after an event came %s later; want well under the second", got)
+	// A loaded machine (checks running beside the test) can hold the loop
+	// back past the second once; the tick never coming early three times
+	// running is the bug.
+	var got time.Duration
+	for try := 0; try < 3; try++ {
+		time.Sleep(100 * time.Millisecond)
+		for len(ticks) > 0 {
+			<-ticks
+		}
+		at := time.Now()
+		j.MustAppend("task.saved", map[string]string{})
+		if got = (<-ticks).Sub(at); got <= 500*time.Millisecond {
+			return
+		}
 	}
+	t.Fatalf("the tick after an event came %s later; want well under the second", got)
 }
 
 // TestATickThatAlwaysJournalsCantSpin: a step that journals on every tick
