@@ -22,6 +22,9 @@ func queueRig(t *testing.T) *Module {
 		os.MkdirAll(filepath.Join(seed, filepath.Dir(f)), 0o755)
 		os.WriteFile(filepath.Join(seed, f), []byte("package x\n"), 0o644)
 	}
+	os.MkdirAll(filepath.Join(seed, "textkit"), 0o755)
+	os.WriteFile(filepath.Join(seed, "textkit", "__init__.py"), []byte("class Box:\n    def __init__(self):\n        pass\n\n\ndef truncate(text, width):\n    raise NotImplementedError\n\n\nasync def slugify(text):\n    raise NotImplementedError\n\n\ndef wrap(text, width):\n    raise NotImplementedError\n"), 0o644)
+	os.WriteFile(filepath.Join(seed, "internal", "tui", "views.go"), []byte("package tui\n\nfunc (m *Model) render() string { return \"\" }\n\ntype Pane struct{}\n"), 0o644)
 	os.WriteFile(filepath.Join(seed, ".gitattributes"), []byte("* text=auto\n# additive\ndocs/log.md merge=union\nplan.md merge=union\n"), 0o644)
 	mustGit(t, seed, "add", "-A")
 	mustGit(t, seed, "commit", "-q", "-m", "source")
@@ -327,6 +330,35 @@ func TestQueueHoldsOnlyRealConflicts(t *testing.T) {
 	tick(m)
 	if got := stageOf(t, m, d); got.Stage != StageWorking {
 		t.Fatalf("same-file brief behind pushed tasks: stage %q reason %q", got.Stage, got.Reason)
+	}
+}
+
+// Briefs that name the same file start side by side when each names its own
+// functions in it (issue #727: the four at-once benchmark asks ran one at a
+// time); one naming no definition there, or one another names too, waits.
+// The path itself names nothing (textkit/__init__.py is no __init__).
+func TestQueueSameFileApartFunctions(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 8
+	m.C.WS.SaveConfig(cfg)
+	a := file(t, m, "In textkit, implement truncate in textkit/__init__.py.", "")
+	b := file(t, m, "In textkit, implement slugify in textkit/__init__.py.", "")
+	c := file(t, m, "In textkit, implement wrap in textkit/__init__.py.", "")
+	d := file(t, m, "Tidy textkit/__init__.py.", "")
+	e := file(t, m, "Make wrap and slugify share a helper", "In textkit/__init__.py.")
+	f := file(t, m, "Draw the pane", "render() in internal/tui/views.go.")
+	g := file(t, m, "Size the Pane", "In internal/tui/views.go.")
+	tick(m)
+	for _, task := range []Task{a, b, c, f, g} {
+		if got := stageOf(t, m, task); got.Stage != StageWorking {
+			t.Fatalf("%q: stage %q reason %q, want working", task.Title, got.Stage, got.Reason)
+		}
+	}
+	for _, task := range []Task{d, e} {
+		if got := stageOf(t, m, task); got.Stage != StageQueued || !strings.HasSuffix(got.Reason, "both touch textkit/__init__.py") {
+			t.Fatalf("%q: stage %q reason %q, want waiting on the file", task.Title, got.Stage, got.Reason)
+		}
 	}
 }
 
