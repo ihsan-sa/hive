@@ -127,6 +127,11 @@ type Task struct {
 	Noted      string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
 	NotedDiff  string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
 	HoldSaid   string    `json:"hold_said,omitempty"`  // the HoldKey of the hold the PR was last told of
+	// CantRuns counts the tries in a row its own tests couldn't start (a
+	// missing tool); past CantRunTries the hold goes to the person and counts
+	// as red. CantRunSaid is the PR told of a can't-run, once per PR.
+	CantRuns    int `json:"cant_runs,omitempty"`
+	CantRunSaid int `json:"cant_run_said,omitempty"`
 	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
 	Gate    *core.GateResult `json:"gate,omitempty"`
 	Log     []Entry          `json:"log,omitempty"`
@@ -264,6 +269,9 @@ type Module struct {
 	// limit is when GitHub's pause on writes ends, and limitText why.
 	limit     time.Time
 	limitText string
+	// refusedAsked is when the checks of each task stopped on a checks
+	// refusal were last asked again, by id@sha (reviveRefused).
+	refusedAsked map[string]time.Time
 	// holds are the person's holds on each project's merges (hold.go), and
 	// holdPolled when each one's release condition may next be asked of the forge.
 	holds      map[string]*MergeHold
@@ -282,7 +290,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, mainRed: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -778,6 +786,40 @@ func (m *Module) revive() {
 		t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.Stage = "", 0, 0, 0, 0, StageLanding
 		m.save(&t, "brought back: it stopped only because GitHub rate-limited the Hive's writes")
 	}
+	m.reviveRefused()
+}
+
+// reviveRefused brings back the tasks stopped because the token may not read
+// a head's checks, once those checks read now (the repo has no workflows, so
+// a refusal is no checks, or the permission was granted). Each task's head is
+// asked at most once an hour, so one whose repo has CI the token can't see
+// stays stopped without a call every tick, and comes back within the hour
+// of the permission being granted.
+func (m *Module) reviveRefused() {
+	const refusedAgain = time.Hour
+	for _, t := range m.List(func(t Task) bool {
+		return t.Stage == StageStopped && !t.ByPerson && t.SHA != "" && strings.HasPrefix(t.Reason, gaveUpOnErrors) && core.ChecksRefused(strings.TrimPrefix(t.Reason, gaveUpOnErrors))
+	}) {
+		key := t.ID + "@" + t.SHA
+		m.mu.Lock()
+		asked := time.Since(m.refusedAsked[key]) < refusedAgain
+		if !asked {
+			m.refusedAsked[key] = time.Now()
+		}
+		m.mu.Unlock()
+		if asked || m.workerStopped(t) {
+			continue
+		}
+		p, err := m.project(&t)
+		if err != nil {
+			continue
+		}
+		if _, err := m.C.Effects.Forge.Checks(p.Repo, t.SHA); err != nil {
+			continue
+		}
+		t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.Stage = "", 0, 0, 0, 0, StageLanding
+		m.save(&t, "brought back: the forge's checks on "+core.Short(t.SHA)+" read now, where the token was refused them before")
+	}
 }
 
 // stoppedOnDraft says t was stopped by the merge's repeated refusal of a
@@ -1032,6 +1074,9 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 			return err
 		}
 		t.Stage, t.Reason = StageBlocked, finishText(r)
+		if r.Finish == nil {
+			t.Reason = r.Reason // the Hive ended it: say why, not its last words
+		}
 		m.save(t, "blocked: "+core.Clip(t.Reason, 300))
 		if t.Issue.Number != 0 {
 			m.comment(p.Repo, t.Issue.Number, "The worker stopped:\n\n"+t.Reason)
@@ -1322,8 +1367,10 @@ func (m *Module) test(t *Task, p core.Project) error {
 			m.raiseCantRun(p, c)
 			return m.dropCheckpoint(t, p, "the tests "+c.CantRun+", which is no verdict on it")
 		}
+		t.CantRuns++
 		return m.cantRun(t, p, c)
 	}
+	t.CantRuns = 0
 	m.RanCheck(p.Name, "test")
 	if strings.HasPrefix(t.Reason, "the tests can't run") {
 		t.Reason = "" // the tool is there now
@@ -1390,23 +1437,52 @@ func (m *Module) test(t *Task, p core.Project) error {
 	return nil
 }
 
+// CantRunTries is how many tries in a row a check may fail to start before
+// that counts as red: a commit can print "not found" and exit 127 to look like
+// a missing tool, and it isn't held, nor its merge kept, on that forever.
+const CantRunTries = 6
+
 // cantRun holds a change whose tests couldn't start because a tool they call
 // is missing where checks run. That is no verdict on the change: it isn't
 // sent back or failed, and it is tested again every 10 minutes until the tool
-// is there. The PR and the dashboard hear once.
+// is there. The PR hears once, however often it is tried or the tool named
+// changes. After CantRunTries of its own tests in a row it is red: it is
+// stopped, never merged on it, and the person is asked for the tool.
 func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
+	if t.CantRuns >= CantRunTries {
+		return m.cantRunRed(t, p, c)
+	}
 	reason := "the tests " + c.CantRun + ", so this waits and is tested again every 10 minutes"
 	t.Retry = time.Now().Add(10 * time.Minute)
 	if t.Reason == reason {
 		m.save(t, "")
 		return nil
 	}
+	say := t.PR.Number != 0 && t.CantRunSaid != t.PR.Number
+	if say {
+		t.CantRunSaid = t.PR.Number
+	}
 	t.Reason = reason
 	m.save(t, reason)
 	m.raiseCantRun(p, c)
-	if t.PR.Number != 0 {
+	if say {
 		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
 	}
+	return nil
+}
+
+// cantRunRed ends a change whose own tests couldn't start CantRunTries times
+// in a row: it counts as red, so it is stopped unmerged, and the person gets
+// a Waiting ask naming the tool. Once it is installed, the lead's recheck
+// tests it again from a fresh count.
+func (m *Module) cantRunRed(t *Task, p core.Project, c core.Check) error {
+	tool := cmp.Or(c.Tool, "a tool")
+	m.C.Person.Ask(core.Ask{Kind: "question", Ref: "cant-run:" + t.ID, Project: p.Name, Options: []string{"ok"},
+		Title: "Install " + tool + " where checks run for " + p.Name + "?",
+		Detail: fmt.Sprintf("The tests of %q (%s) %s, %d tries in a row. That now counts as red: it is stopped and not merged. "+
+			"If %s is really missing, install it where checks run and the lead can bring the change back; if it isn't, the change only claims it is.", t.Label(), cmp.Or(t.PR.URL, t.ID), c.CantRun, t.CantRuns, tool)})
+	t.CantRuns = 0
+	m.giveUp(t, fmt.Sprintf("the tests %s, %d tries in a row, which now counts as red; the person is asked for %s", c.CantRun, CantRunTries, tool))
 	return nil
 }
 
@@ -2174,6 +2250,7 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		fmt.Fprintf(&short, format, a...)
 	}
 	both("# The forge's failed checks on %s\n\nPR #%d, task %s, based on main at %s.\n", core.Short(t.SHA), t.PR.Number, t.ID, core.Short(main))
+	both("%s", m.bundleForChecks(t, p, main))
 	logs := 0
 	for _, r := range failed {
 		both("\n## %s\n\n", r.Name)
@@ -2217,6 +2294,25 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		fmt.Fprintf(&short, "\nThe end of each failed step's log is in $HIVE_RUN/%s, kept there for later rounds.\n", forgeFailuresFile)
 	}
 	return short.String()
+}
+
+// bundleForChecks writes main as the forge's checks saw it to the worker's
+// main.bundle and says so. The forge runs a pull request's checks on it merged
+// with main, so a branch behind main fails on tests only main has; without
+// that main in $HIVE_RUN (an older bundle, or none), the worker can neither
+// see nor run them, and reads main's change as its own.
+func (m *Module) bundleForChecks(t *Task, p core.Project, main string) string {
+	if t.Worker == "" {
+		return ""
+	}
+	if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle")); err != nil {
+		return ""
+	}
+	fetch := "`git fetch \"$HIVE_RUN/main.bundle\" main`"
+	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
+		return "$HIVE_RUN/main.bundle holds main at " + core.Short(main) + " (" + fetch + ").\n"
+	}
+	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. $HIVE_RUN/main.bundle holds main at " + core.Short(main) + ": " + fetch + ", then merge FETCH_HEAD to see and run what the checks ran.\n"
 }
 
 // fenceFor is a ~ fence longer than any run of ~ or ` that starts a line of
@@ -2741,7 +2837,7 @@ func (m *Module) Recheck(id, back string) error {
 	if t.ByPerson || m.workerStopped(t) {
 		return fmt.Errorf("task %s was stopped by the person (%s); only they can bring it back", id, t.Reason)
 	}
-	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts = "", 0, 0, 0, 0
+	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns = "", 0, 0, 0, 0, 0
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
 			return err

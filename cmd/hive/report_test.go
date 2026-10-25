@@ -85,17 +85,20 @@ func TestInstallerShareAnswer(t *testing.T) {
 	if from < 0 || to < from {
 		t.Fatal("the sharing block moved in install.sh")
 	}
-	block := src[from:to+len("esac")] + "\n"
+	// The installer runs under set -eu, so a failing answer must not end it.
+	block := "set -eu\n" + src[from:to+len("esac")] + "\necho finished\n"
 	for _, c := range []struct {
 		name, typed, want string
 		asked             bool
 		noTTY             bool
+		fails             bool
 	}{
 		{name: "Enter", typed: "\n", want: "report off"},
 		{name: "yes", typed: "y\n", want: "report on"},
 		{name: "no", typed: "n\n", want: "report off"},
 		{name: "no terminal", noTTY: true, want: "report off"},
 		{name: "answered before", typed: "y\n", asked: true, want: ""},
+		{name: "answer not recorded", typed: "y\n", fails: true, want: "report on"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -107,6 +110,9 @@ func TestInstallerShareAnswer(t *testing.T) {
 			// sh on Windows (Git's) reads a backslash as an escape, so it gets
 			// the paths with forward slashes.
 			fake := "#!/bin/sh\n[ \"$*\" = \"report asked\" ] && exit " + asked + "\necho \"$*\" >> '" + filepath.ToSlash(log) + "'\n"
+			if c.fails {
+				fake += "exit 1\n"
+			}
 			os.WriteFile(filepath.Join(dir, "hive"), []byte(fake), 0o755)
 			if c.noTTY {
 				tty = filepath.Join(dir, "missing", "tty")
@@ -115,14 +121,91 @@ func TestInstallerShareAnswer(t *testing.T) {
 			}
 			cmd := exec.Command(sh, "-c", block)
 			cmd.Env = append(os.Environ(), "DIR="+filepath.ToSlash(dir), "CMD=hive", "HIVE_TTY="+filepath.ToSlash(tty), "HIVE_SHARE=")
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("%v: %s", err, out)
+			out, err := cmd.CombinedOutput()
+			if err != nil || !strings.Contains(string(out), "finished") {
+				t.Fatalf("the install stopped at the sharing answer: %v: %s", err, out)
 			}
 			got, _ := os.ReadFile(log)
 			if strings.TrimSpace(string(got)) != c.want {
 				t.Fatalf("installer ran %q, want %q", got, c.want)
 			}
 			if asked, _ := os.ReadFile(tty); !c.noTTY && !c.asked && !strings.Contains(string(asked), "\n"+report.Question+" (y/N) ") {
+				t.Fatalf("the installer asked something other than report.Question:\n%s", asked)
+			}
+		})
+	}
+}
+
+// install.ps1's sharing block, as TestInstallerShareAnswer holds install.sh:
+// Enter and no console are kept as no, y as yes, an answer ahead counts, and
+// an install already answered, or a release without `report`, isn't asked. It
+// runs where PowerShell is: the Windows CI job, or pwsh elsewhere.
+func TestInstallerShareAnswerPowerShell(t *testing.T) {
+	ps, err := exec.LookPath("pwsh")
+	if err != nil {
+		if ps, err = exec.LookPath("powershell"); err != nil {
+			t.Skip("no PowerShell")
+		}
+	}
+	raw, err := os.ReadFile("../../install/install.ps1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	fnFrom := strings.Index(src, "function Invoke-Native")
+	fnTo := fnFrom + strings.Index(src[max(fnFrom, 0):], "\n}\n")
+	from := strings.Index(src, "# Sharing failures")
+	to := from + strings.Index(src[max(from, 0):], "\n\n")
+	console := "[Environment]::UserInteractive -and -not [Console]::IsInputRedirected"
+	if fnFrom < 0 || fnTo < fnFrom || from < 0 || to < from || !strings.Contains(src[from:to], console) {
+		t.Fatal("the sharing block or Invoke-Native moved in install.ps1")
+	}
+	// The console and Read-Host are stood in for: the test's PowerShell has
+	// no console to type at.
+	block := strings.Replace(src[from:to], console, "$console", 1)
+	for _, c := range []struct {
+		name, typed, share, want string
+		asked                    int
+		noConsole                bool
+	}{
+		{name: "Enter", typed: "", want: "report off", asked: 1},
+		{name: "yes", typed: "y", want: "report on", asked: 1},
+		{name: "no", typed: "n", want: "report off", asked: 1},
+		{name: "no console", noConsole: true, want: "report off", asked: 1},
+		{name: "answered ahead", share: "yes", noConsole: true, want: "report on", asked: 1},
+		{name: "answered before", typed: "y", want: "", asked: 0},
+		{name: "a release without report", typed: "y", want: "", asked: 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			log, prompt := filepath.Join(dir, "calls"), filepath.Join(dir, "prompt")
+			q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+			console := "$true"
+			if c.noConsole {
+				console = "$false"
+			}
+			script := "$ErrorActionPreference = 'Stop'\n" + src[fnFrom:fnTo+2] + "\n" +
+				"$console = " + console + "\n" +
+				"function Read-Host([string]$Prompt) { Set-Content -LiteralPath " + q(prompt) + " -Value $Prompt; " + q(c.typed) + " }\n" +
+				"$exe = { if (\"$args\" -eq 'report asked') { $global:LASTEXITCODE = " + fmt.Sprint(c.asked) + "; return }; " +
+				"Add-Content -LiteralPath " + q(log) + " -Value \"$args\"; $global:LASTEXITCODE = 0 }\n" +
+				block + "\nWrite-Host finished\n"
+			file := filepath.Join(dir, "share.ps1")
+			os.WriteFile(file, []byte(script), 0o600)
+			cmd := exec.Command(ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file)
+			cmd.Env = append(os.Environ(), "HIVE_SHARE="+c.share)
+			out, err := cmd.CombinedOutput()
+			if err != nil || !strings.Contains(string(out), "finished") {
+				t.Fatalf("%v: %s", err, out)
+			}
+			got, _ := os.ReadFile(log)
+			if strings.TrimSpace(string(got)) != c.want {
+				t.Fatalf("installer ran %q, want %q", got, c.want)
+			}
+			asked, _ := os.ReadFile(prompt)
+			if wantAsked := !c.noConsole && c.asked == 1 && c.share == ""; wantAsked != (len(asked) > 0) {
+				t.Fatalf("asked %q, want asked: %v", asked, wantAsked)
+			} else if wantAsked && !strings.Contains(string(asked), "\n"+report.Question+" (y/N)") {
 				t.Fatalf("the installer asked something other than report.Question:\n%s", asked)
 			}
 		})

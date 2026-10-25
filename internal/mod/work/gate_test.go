@@ -67,7 +67,7 @@ func gateRigSeeded(t *testing.T, mainRed bool, onMain, files map[string]string) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.Close() })
-	forge.EnsureRepo("me/p", "")
+	forge.EnsureRepo("me/p", "", false)
 	seed := map[string]string{".hive/project.json": `{"test": "test ! -f BROKEN && { test ! -f NEEDTOOL || hive-gate-tool-xyz; }"}`, "README.md": "# p\n"}
 	if mainRed {
 		seed["BROKEN"] = "x"
@@ -563,6 +563,56 @@ func TestGateMissingToolCantRun(t *testing.T) {
 	}
 	if task.Stage == StageTesting || task.Stage == StageWorking || task.Reason != "" {
 		t.Fatalf("with the tool there: stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
+// A change faking a missing tool (exit 127 with "not found", a new tool each
+// time) gets one can't-run comment however often it is tried; after
+// CantRunTries it counts as red: stopped, not merged, and the person is asked
+// for the tool by name.
+func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
+	m, task, p, forge := gateRigSeeded(t, false,
+		map[string]string{".hive/project.json": `{"test": "test ! -f FAKE || { echo \"sh: 1: tool$$: not found\"; exit 127; }"}`},
+		map[string]string{"FAKE": "x"})
+	before, _ := m.C.Effects.Sync(p)
+	for i := 1; i < CantRunTries; i++ {
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+		if task.Stage != StageTesting {
+			t.Fatalf("try %d: stage %q, want it still waiting", i, task.Stage)
+		}
+	}
+	said := 0
+	for _, c := range forge.Comments(p.Repo, task.PR.Number) {
+		if strings.Contains(c, "can't run") {
+			said++
+		}
+	}
+	if said != 1 {
+		t.Fatalf("%d can't-run comments on the PR over %d tries, want 1", said, CantRunTries-1)
+	}
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageStopped || !strings.Contains(task.Reason, "counts as red") {
+		t.Fatalf("after %d tries: stage %q, reason %q", CantRunTries, task.Stage, task.Reason)
+	}
+	var ask core.Ask
+	for _, a := range m.C.Person.Open() {
+		if a.Ref == "cant-run:"+task.ID {
+			ask = a
+		}
+	}
+	if !strings.Contains(ask.Title, "Install tool") {
+		t.Fatalf("the person isn't asked for the tool by name: %+v", ask)
+	}
+	if after, _ := m.C.Effects.Sync(p); after != before {
+		t.Fatal("a change whose tests never ran was merged")
+	}
+	err := m.Recheck(task.ID, "")
+	if got, _ := m.Get(task.ID); err != nil || got.CantRuns != 0 {
+		t.Fatalf("the lead's recheck: %v, count %d, want a fresh count", err, got.CantRuns)
 	}
 }
 
