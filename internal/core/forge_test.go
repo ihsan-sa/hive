@@ -57,7 +57,7 @@ func TestGitHubForkOwner(t *testing.T) {
 
 func TestLocalForkOwner(t *testing.T) {
 	l := &Local{Dir: t.TempDir()}
-	if _, err := l.EnsureRepo("me/p", ""); err != nil {
+	if _, err := l.EnsureRepo("me/p", "", false); err != nil {
 		t.Fatal(err)
 	}
 	for owner, want := range map[string]string{"": "local/p", "lab": "lab/p"} {
@@ -137,5 +137,26 @@ func TestGitHubSuitePending(t *testing.T) {
 		if got := c.s.pending(now); got != c.want {
 			t.Errorf("%+v: %v, want %v", c.s, got, c.want)
 		}
+	}
+}
+
+// EnsureRepo asks gh for the visibility it was given, and never touches a
+// repository that already exists.
+func TestGitHubEnsureRepoVisibility(t *testing.T) {
+	log := fakeGH(t, "")
+	// The fake gh finds no repository: "repo view" fails.
+	script := "#!/bin/sh\necho \"$*\" >> " + log + "\n[ \"$1 $2\" = \"repo view\" ] && exit 1\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(filepath.Dir(log), "gh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, public := range []bool{false, true} {
+		if created, err := (GitHub{}).EnsureRepo("Hive-RSI-Lab/m", "d", public); err != nil || !created {
+			t.Fatalf("public %v: created %v, %v", public, created, err)
+		}
+	}
+	raw, _ := os.ReadFile(log)
+	calls := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(calls) != 4 || !strings.Contains(calls[1], "repo create Hive-RSI-Lab/m --private") || !strings.Contains(calls[3], "repo create Hive-RSI-Lab/m --public") {
+		t.Fatalf("calls: %q", calls)
 	}
 }

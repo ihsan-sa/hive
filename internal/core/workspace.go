@@ -44,10 +44,28 @@ func (w Workspace) Gates() string              { return filepath.Join(w.Hive(), 
 // made or a file renamed in it mid-turn is covered too.
 func (w Workspace) Private() string { return filepath.Join(w.Hive(), "private") }
 
+// Covered is the folders covered wherever agents read .hive: the login pool's
+// stored logins, module programs' homes and logs, and Private. No host
+// interpreter's install bound into a sandbox may hold one or sit inside one.
+// The paths are absolute, so a relative root still guards them.
+func (w Workspace) Covered() []string {
+	hive := filepath.Join(w.abs(), ".hive")
+	return []string{filepath.Join(hive, "logins"), filepath.Join(hive, "modules"), filepath.Join(hive, "private")}
+}
+
 // Guarded is what no host interpreter's install bound into a sandbox may
-// contain: the workspace and the folders covered wherever agents read .hive.
+// hold: the workspace and the folders covered in it. The covered folders are
+// listed as well as the root because any of them may be a symlink out of the
+// workspace, and then holding the root says nothing about them.
 func (w Workspace) Guarded() []string {
-	return []string{w.Root, filepath.Join(w.Hive(), "logins"), filepath.Join(w.Hive(), "modules"), w.Private()}
+	return append([]string{w.abs()}, w.Covered()...)
+}
+
+func (w Workspace) abs() string {
+	if a, err := filepath.Abs(w.Root); err == nil {
+		return a
+	}
+	return w.Root
 }
 
 // Checkouts is where agents' own checkouts of a project live.
@@ -87,9 +105,17 @@ type Config struct {
 	BareAccepted string `json:"bare_accepted,omitempty"` // timestamp the warning was read
 	WSLDistro    string `json:"wsl_distro,omitempty"`
 	ReleaseRepo  string `json:"release_repo"`
-	AutoUpdate   bool   `json:"auto_update"`
-	ReleasePin   string `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
-	PinnedAuto   bool   `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
+	// SelfFork is the owner (an organization) whose fork of release_repo this
+	// Hive works on itself in, when the person owns release_repo but another
+	// of their Hives is its steward (core.StewardFile).
+	SelfFork string `json:"self_fork,omitempty"`
+	// PublicOwners are the accounts or organizations where create_project
+	// may make a public repository and tell the person after; a public one
+	// anywhere else waits for their yes.
+	PublicOwners []string `json:"public_owners"`
+	AutoUpdate   bool     `json:"auto_update"`
+	ReleasePin   string   `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
+	PinnedAuto   bool     `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
 	// Channel is the releases auto-update follows: "latest", or "pre-release",
 	// each pre-release once its checks for this system pass. Empty is the
 	// default: pre-releases on the Hive whose own project is release_repo, the
@@ -110,15 +136,17 @@ type Config struct {
 	MemFloorMB     int     `json:"mem_floor_mb"`
 	MemPressureMax float64 `json:"mem_pressure_max"`
 	CPUPressureMax float64 `json:"cpu_pressure_max"`
-	// MaxWorkers is how many workers may work at once: a plan carries only so
-	// many, so until its usage reading is trusted this number is the limit.
-	// Briefs past it wait in the queue, in order; 0 is no limit.
+	// MaxWorkers is the most workers that may work at once, the person's
+	// ceiling: below it the work module's pace sets the limit from what the
+	// machine and the plan carry (internal/mod/work/pace.go). Briefs past the
+	// limit wait in the queue, in order; 0 is no ceiling.
 	MaxWorkers int `json:"max_workers"`
 	// LoadMax holds new workers while the machine's 1-minute load per core is
 	// over it (Linux /proc/loadavg); 0 is off.
 	LoadMax float64 `json:"load_max"`
-	// MaxChecks is how many checks (the gate's tests, scores and dry runs,
-	// improve's measures) run at once; the rest wait in order. 0 is no limit.
+	// MaxChecks is the most checks (the gate's tests, scores and dry runs,
+	// improve's measures) that run at once, a ceiling over the pace as
+	// MaxWorkers is; the rest wait in order. 0 is no ceiling.
 	MaxChecks int `json:"max_checks"`
 	// CheckCacheMaxMB caps one check's own home (its build cache and
 	// scratch): past it the check is ended as can't-run; 0 is the default
@@ -296,6 +324,7 @@ func DefaultConfig() Config {
 		TribunalModels: []TribunalSeat{{Model: "opus"}, {Model: "sonnet"}, {Model: "fable"}},
 		Sandbox:        "auto",
 		ReleaseRepo:    DefaultReleaseRepo,
+		PublicOwners:   []string{"Hive-RSI-Lab"},
 		AutoUpdate:     true,
 		ReviewRounds:   3,
 		ChatMaxMB:      300,
@@ -304,9 +333,7 @@ func DefaultConfig() Config {
 		MemFloorMB:      1024,
 		MemPressureMax:  10,
 		CPUPressureMax:  40,
-		MaxWorkers:      4,
 		LoadMax:         1,
-		MaxChecks:       DefaultMaxChecks(),
 		PlateauMerges:   3,
 		Schedules: map[string]string{
 			"improve.sweep":    "every 12h",
@@ -334,6 +361,7 @@ func (w Workspace) LoadConfig() Config {
 // ReadConfig is LoadConfig with what's wrong in config.json: a value it
 // couldn't read (every field that did read is kept) or a setting Check refuses.
 func (w Workspace) ReadConfig() (Config, error) {
+	harness.UseModules(w.Modules()) // the harnesses its modules declare are among those Check knows
 	cfgMu.Lock()
 	defer cfgMu.Unlock()
 	c := DefaultConfig()
