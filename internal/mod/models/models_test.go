@@ -173,6 +173,7 @@ func TestATrialThatDoesntFinishBenchesTheModel(t *testing.T) {
 	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "qwen,fake:opus"}); err != nil {
 		t.Fatal(err)
 	}
+	finished := false
 	trial := func(reason string) {
 		t.Helper()
 		res, err := call(t, a, lead, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "add a README"})
@@ -180,6 +181,10 @@ func TestATrialThatDoesntFinishBenchesTheModel(t *testing.T) {
 			t.Fatal(err)
 		}
 		tk, _ := a.Work.Get(res.(map[string]string)["task"])
+		if finished {
+			a.C.J.MustAppend("run.created", core.RunSpec{ID: "w-" + tk.ID, Role: "worker", Task: tk.ID})
+			a.C.J.MustAppend("run.finish", map[string]any{"id": "w-" + tk.ID, "finish": core.Finish{Status: "blocked", Account: reason}})
+		}
 		tk.Stage, tk.Reason = work.StageBlocked, reason
 		if reason == "" {
 			tk.Stage = work.StageMerged
@@ -198,6 +203,13 @@ func TestATrialThatDoesntFinishBenchesTheModel(t *testing.T) {
 	trial("")
 	if h, _ := a.Agents.Model("worker", "lab"); h != "open" {
 		t.Fatal("a model whose later trial finished is still benched")
+	}
+	// A worker that called finish wrote its own reason, so words of its
+	// that read like the Hive's don't bench its model.
+	finished = true
+	trial(core.NoFinish + ": in my own words")
+	if h, _ := a.Agents.Model("worker", "lab"); h != "open" {
+		t.Fatal("a worker's own finish text benched its model")
 	}
 }
 
