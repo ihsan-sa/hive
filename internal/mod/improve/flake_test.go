@@ -251,6 +251,21 @@ func TestRedAlreadyOnMainBeforeTheMergeIsNotReverted(t *testing.T) {
 	}
 }
 
+// The same failures listed in another order are filed to fix once.
+func TestRedOnMainInAnotherOrderIsFiledOnce(t *testing.T) {
+	m, commit, merge := tested(t)
+	commit(map[string]string{"t.sh": "echo '--- FAIL: TestB (0.01s)'\necho '--- FAIL: TestA (0.01s)'\nexit 1\n"})
+	if ms := merge(commit(map[string]string{"README.md": "one\n"})); !strings.Contains(ms.Note, "not new at this merge") {
+		t.Fatalf("measured %+v", ms)
+	}
+	commit(map[string]string{"t.sh": "echo '--- FAIL: TestA (0.01s)'\necho '--- FAIL: TestB (0.01s)'\nexit 1\n"})
+	m.afterMerge(work.Task{ID: "t2", Project: "p", MergeSHA: commit(map[string]string{"README.md": "two\n"})})
+	filed := m.Work.List(func(t work.Task) bool { return strings.HasSuffix(t.Title, "pass on main again") })
+	if len(filed) != 1 || !strings.Contains(filed[0].Title, "TestA, TestB") || reverts(m) != 0 {
+		t.Fatalf("filed %d, reverts %d", len(filed), reverts(m))
+	}
+}
+
 // A vet or compile error prints no test or package line to name it by, only
 // "file.go:line:col: message". The merge that brought it is reverted; one
 // measured on main while it stays red (a goals-only change) is not.

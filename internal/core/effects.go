@@ -56,6 +56,12 @@ type Effects struct {
 	// person's hold on its merges, the work module), or "" if it may.
 	MergeHeld func(project string, pr int) string
 
+	// Quarantined are a project's known flaky tests (the improve module's
+	// quarantine), keyed package::test, as shown by evidence from outside
+	// task (none of its own branches' reds counts for it): a forge check
+	// that fails only these doesn't hold task's merge. Unset, none are.
+	Quarantined func(project, task string) []string
+
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
 
@@ -72,6 +78,7 @@ type Effects struct {
 	pushes    map[string][]string // project@branch -> each commit pushed to it, oldest first
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
+	steps     map[string][]JobStep    // repo url -> a finished check's steps
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
 	judged    map[string]Judgement    // project@sha@main -> the judge's newest call (judge.go)
 	homes     map[string]bool         // running checks' homes (disk.go)
@@ -613,28 +620,36 @@ func FailedTests(out string) []string {
 }
 
 var (
-	redPkgLine = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
-	redTest    = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
-	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |exit status |test timed out|# )|\[(build|setup) failed\]`)
+	// GoPkgLine and GoFailLine are go test's line closing a package's
+	// output ("FAIL\tpkg\t0.1s", "FAIL pkg [build failed]") and the line
+	// naming a failed test; RedKeys and improve's failures read both.
+	GoPkgLine  = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
+	GoFailLine = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
+	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |test timed out)|\[(build|setup) failed\]`)
 	redBuild   = regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+(?::\d+)?: (.+)`)
 )
 
 // RedKeys names what failed in a red go test run so two runs' reds can be
 // compared: each failing test with its package ("pkg TestX"), and "pkg !"
 // for a package that failed in a way no test name accounts for (no test
-// named, a build failure, a timeout, a panic or exit outside a test). Output
+// named, a build failure, a timeout, a panic or exit outside a test). go test
+// run in a package's directory ends an ordinary failure with "FAIL" then
+// "exit status 1"; only an exit with no "FAIL" just before it (os.Exit in a
+// test) counts as unnamed. A build's "# pkg" header counts at column 0 only.
+// Output
 // with no go package lines falls back to FailedTests' names. Nil means
 // nothing could be named.
 func RedKeys(out string) []string {
 	var keys, tests []string
-	odd, pkgs := false, false
+	odd, pkgs, prev := false, false, ""
 	add := func(k string) {
 		if !slices.Contains(keys, k) {
 			keys = append(keys, k)
 		}
 	}
 	for _, l := range strings.Split(out, "\n") {
-		if m := redPkgLine.FindStringSubmatch(l); m != nil && strings.ContainsAny(m[2], "/.") {
+		t := strings.TrimSpace(l)
+		if m := GoPkgLine.FindStringSubmatch(l); m != nil && strings.ContainsAny(m[2], "/.") {
 			pkgs = true
 			if m[1] == "FAIL" {
 				for _, t := range tests {
@@ -644,13 +659,16 @@ func RedKeys(out string) []string {
 					add(m[2] + " !")
 				}
 			}
-			tests, odd = nil, false
+			tests, odd, prev = nil, false, ""
 			continue
 		}
-		if m := redTest.FindStringSubmatch(l); m != nil {
+		if m := GoFailLine.FindStringSubmatch(l); m != nil {
 			tests = append(tests, m[1])
-		} else if redOdd.MatchString(strings.TrimSpace(l)) {
+		} else if redOdd.MatchString(t) || strings.HasPrefix(l, "# ") || strings.HasPrefix(t, "exit status ") && prev != "FAIL" {
 			odd = true
+		}
+		if t != "" {
+			prev = t
 		}
 	}
 	if !pkgs {
@@ -1258,7 +1276,8 @@ type MergeRequest struct {
 	SHA     string
 	Main    string
 	Subject string
-	Gain    bool // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
+	Gain    bool   // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
+	Task    string // the task whose PR it is: the quarantine excuses it only on evidence from outside it
 }
 
 // Merge merges the PR only at sha, and only when the host's own records show
@@ -1304,7 +1323,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	}
 	runs, req, warned := Advisory(p, runs, e.RequiredChecks(p, m.Main), e.AdvisoryChecks(p, m.Main))
 	st, which := ChecksState(runs, req)
-	var shared []string
+	var shared, excused []string
 	var answer map[string]string // check -> the older main commit its answer came from
 	if st == CheckFail {
 		mainRuns, at, err := e.MainAnswer(p, m.Main, which)
@@ -1312,6 +1331,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		runs, excused = e.Excused(p, m.Main, m.Task, ch.Files, runs, mainRuns)
 		st, which, shared, _ = ChecksAgainstMain(runs, mainRuns, req, e.FailingTests(p.Repo))
 	}
 	var prose []string
@@ -1338,6 +1358,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", err
 	}
 	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID}
+	if len(excused) > 0 {
+		ev["quarantined"] = excused // red only on known flakes
+	}
 	if len(warned) > 0 {
 		ev["warned"] = warned
 	}
@@ -1493,6 +1516,239 @@ func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string, tests Tests
 	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(shared, n) })
 	state, which = ChecksState(kept, req)
 	return state, which, shared, byName
+}
+
+// JobRead reads a forge check's job: its log's failure, and its steps. A
+// nil func reads nothing.
+type JobRead struct {
+	Failure func(CheckRun) (CheckFailure, bool)
+	Steps   func(CheckRun) ([]JobStep, bool)
+}
+
+// Excuse marks as passing each failed check that failed only in quarantined
+// tests (known flakes, keyed package::test), so it counts against no head;
+// excused names those checks. A failure only in such tests is shown, never
+// assumed: the log's failing tests, each with its package, are all
+// quarantined, and it shows nothing else failing (no build or setup failure,
+// panic, timeout, package red apart from them or failing test with no
+// package, CheckFailure.OnlyTests); none of their packages is one the head
+// changes (touched), so a change can't break a quarantined test and pass;
+// exactly one of the job's steps failed; and every step it skipped was
+// skipped on main's finished run of that check too, so no step the red kept
+// from running goes unchecked. Anything unread excuses nothing.
+func Excuse(runs, mainRuns []CheckRun, read JobRead, quarantined []string, touched func(key string) bool) (out []CheckRun, excused []string) {
+	if read.Failure == nil || read.Steps == nil || len(quarantined) == 0 || touched == nil {
+		return runs, nil
+	}
+	out = slices.Clone(runs)
+	for i, r := range out {
+		if r.State != CheckFail {
+			continue
+		}
+		f, ok := read.Failure(r)
+		if !ok || !f.OnlyTests || len(f.Keys) == 0 || slices.ContainsFunc(f.Keys, func(k string) bool { return !slices.Contains(quarantined, k) || touched(k) }) {
+			continue
+		}
+		if !stepsShown(r, mainRuns, read.Steps) {
+			continue
+		}
+		out[i].State = CheckPass
+		out[i].Detail = "fails only the quarantined " + strings.Join(f.Keys, ", ")
+		if !slices.Contains(excused, r.Name) {
+			excused = append(excused, r.Name)
+		}
+	}
+	return out, excused
+}
+
+// stepsShown reports whether r's job failed in one step and skipped only
+// steps that main's finished runs of its name skip as well.
+func stepsShown(r CheckRun, mainRuns []CheckRun, steps func(CheckRun) ([]JobStep, bool)) bool {
+	head, ok := steps(r)
+	if !ok {
+		return false
+	}
+	failed := 0
+	var skipped []string
+	for _, s := range head {
+		switch s.Conclusion {
+		case "success":
+		case "skipped":
+			skipped = append(skipped, s.Name)
+		default: // failure, timed_out, cancelled, or not finished
+			failed++
+		}
+	}
+	if failed != 1 {
+		return false
+	}
+	if len(skipped) == 0 {
+		return true
+	}
+	seen := false
+	for _, mr := range mainRuns {
+		if mr.Name != r.Name || (mr.State != CheckPass && mr.State != CheckFail) {
+			continue
+		}
+		ms, ok := steps(mr)
+		if !ok {
+			return false
+		}
+		if slices.ContainsFunc(ms, func(s JobStep) bool { return slices.Contains(skipped, s.Name) && s.Conclusion != "skipped" }) {
+			return false
+		}
+		seen = true
+	}
+	return seen
+}
+
+var (
+	// notATest is a failure in a log that names no test: a package that
+	// didn't build or set up, a panic (which ends the whole test binary), a
+	// timeout, or pytest's errors.
+	notATest  = regexp.MustCompile(`(?m)\[(?:build|setup) failed\]|^\s*panic: |test timed out|^ERROR |\b\d+ errors?\b|^=+ ERRORS =+`)
+	pkgResult = regexp.MustCompile(`^(ok|FAIL|\?)\s*\t\S+`)
+)
+
+// OnlyTests reports whether a log shows nothing failing apart from the tests
+// it names: no failure of notATest's kinds, and no package red ("FAIL\tpkg")
+// without a named test failing in it.
+func OnlyTests(log string) bool {
+	if notATest.MatchString(log) {
+		return false
+	}
+	named := false
+	for _, line := range strings.Split(strings.ReplaceAll(log, "\r\n", "\n"), "\n") {
+		if failedTest.MatchString(line) {
+			named = true
+			continue
+		}
+		if m := pkgResult.FindStringSubmatch(line); m != nil {
+			if m[1] == "FAIL" && !named {
+				return false
+			}
+			named = false
+		}
+	}
+	return true
+}
+
+// FailedTestKeys names a log's failing tests with their packages: Go's
+// "--- FAIL: TestX" as pkg::TestX, from the "FAIL\tpkg" line that closes
+// its package's output, and pytest's "FAILED path::test" as it is. ok is
+// false when a failing Go test has no package line to place it in.
+func FailedTestKeys(log string) (keys []string, ok bool) {
+	var pending []string
+	add := func(k string) {
+		if !slices.Contains(keys, k) && len(keys) < 50 {
+			keys = append(keys, k)
+		}
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(log, "\r\n", "\n"), "\n") {
+		if m := failedTest.FindStringSubmatch(line); m != nil {
+			if m[2] != "" {
+				add(m[2])
+			} else if !slices.Contains(pending, m[1]) {
+				pending = append(pending, m[1])
+			}
+			continue
+		}
+		if m := pkgResult.FindStringSubmatch(line); m != nil {
+			if m[1] == "FAIL" {
+				pkg := strings.Fields(strings.TrimSpace(line[len(m[1]):]))[0]
+				for _, n := range pending {
+					add(pkg + "::" + n)
+				}
+			}
+			pending = nil
+		}
+	}
+	return keys, len(pending) == 0
+}
+
+// KeyDir is the directory of a test key's package: a pytest file's own
+// directory, or a Go package's within module. ok is false when it can't be
+// told (a Go package outside module, or no module).
+func KeyDir(key, module string) (string, bool) {
+	where, _, found := strings.Cut(key, "::")
+	switch {
+	case !found:
+		return "", false
+	case strings.HasSuffix(where, ".py"):
+		return path.Dir(where), true
+	case module == "":
+		return "", false
+	case where == module:
+		return ".", true
+	case strings.HasPrefix(where, module+"/"):
+		return strings.TrimPrefix(where, module+"/"), true
+	}
+	return "", false
+}
+
+var goModule = regexp.MustCompile(`(?m)^module\s+"?([^\s"]+)`)
+
+// Excused is Excuse for task's PR on p at head: the quarantine as evidence
+// from outside task shows it, and files the head changes against main, a
+// test whose package they touch (or whose package can't be placed) never
+// excused.
+func (e *Effects) Excused(p Project, main, task string, files []string, runs, mainRuns []CheckRun) ([]CheckRun, []string) {
+	q := e.Quarantine(p.Name, task)
+	if len(q) == 0 {
+		return runs, nil
+	}
+	module := ""
+	if m := goModule.FindStringSubmatch(e.ReadFile(p, main, "go.mod")); m != nil {
+		module = m[1]
+	}
+	touched := func(key string) bool {
+		dir, ok := KeyDir(key, module)
+		return !ok || slices.ContainsFunc(files, func(f string) bool { return path.Dir(f) == dir })
+	}
+	return Excuse(runs, mainRuns, e.JobRead(p.Repo), q, touched)
+}
+
+// JobRead reads repo's forge checks' logs and steps, each once.
+func (e *Effects) JobRead(repo string) JobRead {
+	var jr JobRead
+	if _, ok := e.Forge.(CheckLogs); ok {
+		jr.Failure = func(r CheckRun) (CheckFailure, bool) { return e.CheckFailure(repo, r) }
+	}
+	if cs, ok := e.Forge.(CheckSteps); ok {
+		jr.Steps = func(r CheckRun) ([]JobStep, bool) {
+			if r.URL == "" {
+				return nil, false
+			}
+			key := repo + " " + r.URL
+			e.mu.Lock()
+			steps, seen := e.steps[key]
+			e.mu.Unlock()
+			if seen {
+				return steps, true
+			}
+			steps, err := cs.CheckSteps(repo, r)
+			if err != nil {
+				return nil, false
+			}
+			e.mu.Lock()
+			if e.steps == nil || len(e.steps) > 500 {
+				e.steps = map[string][]JobStep{}
+			}
+			e.steps[key] = steps
+			e.mu.Unlock()
+			return steps, true
+		}
+	}
+	return jr
+}
+
+// Quarantine is the project's quarantined tests as evidence from outside
+// task shows them, or none with no quarantine.
+func (e *Effects) Quarantine(project, task string) []string {
+	if e.Quarantined == nil {
+		return nil
+	}
+	return e.Quarantined(project, task)
 }
 
 // ProseOnly says every file is prose (markdown, reStructuredText, AsciiDoc:
@@ -1663,6 +1919,10 @@ func (e *Effects) FailingTests(repo string) TestsOf {
 type CheckFailure struct {
 	Tests   []string `json:"tests,omitempty"`
 	Excerpt string   `json:"excerpt,omitempty"`
+	// Keys are the failing tests with their packages (FailedTestKeys).
+	Keys []string `json:"keys,omitempty"`
+	// OnlyTests says the log shows nothing failing apart from Keys.
+	OnlyTests bool `json:"only_tests,omitempty"`
 }
 
 // CheckFailure reads a failed check's log on repo's forge with the Hive's own
@@ -1685,7 +1945,8 @@ func (e *Effects) CheckFailure(repo string, r CheckRun) (CheckFailure, bool) {
 	if err != nil {
 		return CheckFailure{}, false // not kept: the next pass tries again
 	}
-	f = CheckFailure{Tests: FailedTests(log), Excerpt: LogExcerpt(log, ExcerptLines)}
+	keys, placed := FailedTestKeys(log)
+	f = CheckFailure{Tests: FailedTests(log), Keys: keys, Excerpt: LogExcerpt(log, ExcerptLines), OnlyTests: placed && OnlyTests(log)}
 	e.mu.Lock()
 	if e.failing == nil || len(e.failing) > 500 {
 		e.failing = map[string]CheckFailure{}

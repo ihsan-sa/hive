@@ -12,7 +12,7 @@ Code: `cmd/hive-score` (output format tested in `main_test.go`).
 
 `hive-score` compiles `internal/e2e` once, then runs on the fake harness, one after the other:
 
-1. **The benchmark**: `TestBenchmark` with `HIVE_BENCH=4`, the same test the recursive gate judges with (docs/gate.md): four asks on the demo textkit project, judged from what landed on textkit's main, on inputs drawn fresh for the run, with answers worked out by the test, not from what the Hive says. Its BENCH line is signed with a key `hive-score` hands it on stdin, and a line that doesn't verify counts as no line.
+1. **The benchmark, six times**: `TestBenchmark` with `HIVE_BENCH=4`, the same test the recursive gate judges with (docs/gate.md): four asks on the demo textkit project, judged from what landed on textkit's main, on inputs drawn fresh for the run, with answers worked out by the test, not from what the Hive says. Three runs ask one by one, as the gate does; three ask **all at once** (`HIVE_BENCH_AT_ONCE=1`), as work reaches a real Hive. The at-once runs are the loop itself: how soon queued briefs start, how many work side by side, and how four branches that all edit `textkit/__init__.py` land on a main that moves under them. Each BENCH line is signed with a key `hive-score` hands it on stdin, and a line that doesn't verify counts as no line. The test looks every tenth of a second for an ask to end, so its seconds are the Hive's, not its own polling.
 2. **The rest of the e2e suite** (`TestBenchmark` skipped). A test that fails is run once more on its own; a pass then counts as a pass (and is reported as flaky), since improve files flakes as work of their own. A test that never reports (a panic, the suite's timeout) counts as failed; skipped tests (the live probes, tmux) are left out.
 
 It needs `go`, `git` and `python3` (the benchmark runs textkit with it). The command looks `git` and `python3` up in the shell before `go run` (a missing `go` fails the shell's own lookup), and runs a missing one so the shell prints its own `sh: 1: <tool>: not found` and the command exits 127: improve reads that as "can't run", not a score. The lookup has to be in the command: `go run` exits 1 whatever its program exits with, so a 127 from inside `hive-score` would never reach improve (`TestMissingToolCantRun` runs the command from project.json without python3 and checks `core.MissingTool` names it).
@@ -21,36 +21,55 @@ It needs `go`, `git` and `python3` (the benchmark runs textkit with it). The com
 
 ```
 score = 100 × e2e pass rate
-      + 10 × benchmark score          (textkit's 6 functions right on fresh inputs)
-      + 10 × asks finished            (the 4 asked ones among them)
-      − benchmark seconds / 6
+      + 10 × benchmark score          (textkit's 6 functions right on fresh inputs, averaged over the six runs)
+      + 10 × asks finished            (the 4 asked ones among them, averaged likewise)
+      + 15 × log2(180 / seconds)      (seconds: the six runs together)
 ```
 
-The best is 200 less the time. Correctness dominates: one more function right (+10 or +20) outweighs a minute saved, and one e2e test of 40 is 2.5 points. A benchmark that prints no valid BENCH line scores 0 on both its terms and is charged its wall time. The output is the parts, one line each, and the number alone on the last line:
+The speed term is on a log scale: every halving of the loop's time is worth 15 points however fast the Hive already is, and a seventh faster (13%) is about 3, the tolerance. When any run misses an ask (or prints no valid BENCH line), every run is charged its whole bound (2 minutes), the slowest a run can be, so landing the work always outweighs doing it faster. One e2e test of 43 is 2.3 points. 180 s is about three times what the six runs took when this started; where it sits moves every score alike. The output is the parts, one line each, and the number alone on the last line:
 
 ```
-benchmark: 6/6 functions right, 4/4 asks finished, 55.8s
-e2e: 40/40 passed (0 only on a second run)
-190.70
+benchmark, one by one: 6/6 functions right, 4/4 asks finished, 11.4s
+benchmark, all at once: 6/6 functions right, 4/4 asks finished, 6.8s
+...
+e2e: 43/43 passed (0 only on a second run)
+225.70
 ```
 
 **Cost** isn't in it yet. The benchmark's `cost_usd_reported` is the Hive's own count, which the gate doesn't judge either, and on the fake harness it is 0. Once cost is counted from outside (the gate's meter counts egress bytes; nothing meters a run under improve yet), it goes in as a penalty like time, below correctness.
 
+## Why it changed (issue #673)
+
+Until 2026-10-25 the score was `100 × pass rate + 10 × score + 10 × asks − seconds / 6`, with one benchmark run, asked one by one. About 30 measured merges in a row, big loop fixes among them (#470, #534, #571), scored 190.62-190.72: the only term that moved was the benchmark's seconds, at a point for every 6 s, and asked one by one the benchmark never had two briefs in the queue at once, so a change to how the loop queues, runs side by side or lands couldn't show. Once the loop woke on journal events (the milestone change, 79f3b11) the benchmark took 11.6 s and the time term had 2 points left in it, under the tolerance: no further speed-up could ever be kept as a gain.
+
+Measured on this machine (20 cores), 2026-10-25, with this score:
+
+| Hive | one by one | all at once | e2e | score |
+|---|---|---|---|---|
+| main at 46b24b0 (after the milestone) | 10.5-13.5 s | 6.4-8.3 s | 43/43 | 224.29, 224.74, 225.70, 225.50 (old score: 198.07) |
+| before the milestone (f6b3f0a) | 56.3 s | 30.1 s | 43/43 | 192.1, worked out from those seconds (measured with two runs of each; old score: about 190.7) |
+
+So the milestone's change is about +33 here, against +7 on the old score, and the next halving of the loop's time is worth another 15, where on the old score it was worth under 1.
+
+What it still doesn't see, found while making it: the at-once runs take the same time with one worker as with four (7.0-7.6 s with `defaultWorkers` set to 1). All four asks name `textkit/__init__.py`, and the queue holds a brief that names a file another working brief names until that one has pushed (internal/mod/work/queue.go), so they run one at a time whatever the pace allows; what the at-once runs gain over one by one is the next worker starting while the last change is checked, read and merged. A change that lets such briefs work side by side moves the score; the pace alone doesn't. That rule is a real cost on the Hive's own work too (queued-to-working was about an hour on 2026-10-24's merges).
+
 ## What moves it, and what doesn't
 
-On the fake harness the fake worker writes the asked function, so the benchmark's score is 6/6 and asks 4/4 unless the pipeline breaks (an ask that never lands, a merge that goes wrong). What moves day to day is the **benchmark's seconds**: how fast the Hive takes four asks from brief to merged on main. A real harness would measure how good the work is, but costs plan usage and hours, so the score doesn't use one; the gate's `HIVE_E2E_HARNESS=claude` is the place for that.
+On the fake harness the fake worker writes the asked function, so the functions are 6/6 and asks 4/4 unless the pipeline breaks (an ask that never lands, a merge that goes wrong, which costs every run its bound). What moves day to day is the **loop's seconds**: how fast the Hive takes four asks from brief to merged on main, one by one and all at once. A real harness would measure how good the work is, but costs plan usage and hours, so the score doesn't use one; the gate's `HIVE_E2E_HARNESS=claude` is the place for that.
 
-So on this score "beats your benchmark" means: the Hive gets the same asks right in less time, or gets more of its own suite passing. A change that makes it no faster and breaks nothing is a tie, kept within the tolerance.
+So on this score "beats your benchmark" means: the Hive gets the same asks right in about a seventh less time, or gets more of its own suite passing. A change that makes it no faster and breaks nothing is a tie, kept within the tolerance. The score is one data point for a judgement (docs/judge.md), not the judgement itself.
 
 ## Time and noise
 
-On this machine (20 cores), 2026-10-24, six runs at the Hive of main fa3376e: 190.70, 190.63, 190.63, 190.74, 190.65 and 190.68 (the second alongside `go vet ./... && go test -short ./...`, the fourth alongside a second whole e2e suite). The benchmark took 55.6-56.2 s each time (the fake harness paces its turns, so its seconds barely move) and all 40 e2e tests passed every time. A run takes **about 5 minutes**: under a minute to build, about 1 minute for the benchmark and 4 for the suite. Its bounds are 7 minutes for the benchmark, 10 for the suite and 6 for re-running what failed, so with the build it stays inside the check's own 30; a test cut off by a bound counts as failed.
+On this machine (20 cores), 2026-10-25, four runs at main 46b24b0 while the Hive's own work kept the load at 20-44: 224.74, 224.29, 225.70 and 225.50, a spread of 1.4, about half the tolerance. With two runs of each way of asking instead of three the spread was 2.8 over six runs, too close to the tolerance, so it is three.
 
-The tolerance (3) is far above that spread, and above one e2e test failing twice in a row (2.5), so a merge that changes nothing is kept rather than reverted on a slow run. A real gain in time needs the benchmark to be 18 s faster. Two things add noise: other checks sharing the machine (`max_checks`), which slow the benchmark and can flake a timing-bound e2e test (the second run absorbs most of it), and the fake harness's own pacing.
+A run takes **about 3 minutes**: under a minute to build, about 1.5 for the six benchmark runs and 2 for the suite. Each benchmark run is bounded at 2 minutes, the suite at 10 and the re-run of what failed at 6, so with the build it stays inside the check's own 30; a test cut off by a bound counts as failed.
+
+The at-once runs vary most (6.5-8.6 s for one run): the queue and the loop's ticks land differently each time. Three runs of each way of asking, added up, keep that under the tolerance. Other checks sharing the machine (`max_checks`) slow every run and can flake a timing-bound e2e test (the second run absorbs most of it).
 
 ## First value on main
 
-190.70 (then 190.63, 190.63, 190.74, 190.65, 190.68), measured by hand on this change's branch, whose Hive is main at fa3376e. improve records the kept baseline itself when it measures the merge of this change.
+The first measure of the merge of this change starts a new baseline (it changes the evaluator), at about 225 where the old score had 198.
 
 ## Evaluator paths
 

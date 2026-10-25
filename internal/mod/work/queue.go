@@ -41,6 +41,9 @@ import (
 // working, since a prompt edit takes a worker little time and plan. It still
 // waits on a brief on the same prompt, on a strained machine and on a plan
 // near its end.
+//
+// A worker that has gone quiet (it keeps ending turns without finishing)
+// counts toward neither max_workers nor any brief's wait until it resumes.
 
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
@@ -114,7 +117,10 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		case t.Queued() && !m.busy[t.ID]:
 			line = append(line, t)
 		case t.Stage == StageWorking && m.quiet(t):
-			working++ // a quiet worker holds a slot but no one back
+			// A quiet worker holds neither a slot nor anyone back: three
+			// held 3 of 8 slots for 10-12h while ~39 briefs waited. A
+			// message resumes it (core.Runs), and then it counts again,
+			// even if that puts the workers one past the limit for a while.
 		case t.Stage == StageWorking || t.Queued(): // or a queued one being started right now
 			ahead = append(ahead, t)
 			working++

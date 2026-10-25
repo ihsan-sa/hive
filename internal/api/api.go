@@ -89,6 +89,8 @@ type ProjectView struct {
 	Scores []improve.Measurement `json:"scores"`
 	Best   *float64              `json:"best,omitempty"`
 	Hold   *work.MergeHold       `json:"hold,omitempty"` // the person's hold on its merges
+	// Flakes are its quarantined tests, each with the task that fixes it.
+	Flakes []improve.Flake `json:"flakes,omitempty"`
 }
 
 // Updated is the update that brought in this version, with its release notes;

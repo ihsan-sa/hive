@@ -39,7 +39,10 @@ func main() {
 		if !ok {
 			fail(fmt.Errorf("no variant %q", fs.Arg(0)))
 		}
-		text, _ := os.ReadFile(*essay)
+		text, err := os.ReadFile(*essay)
+		if err != nil && v.NeedsEssay() {
+			fail(fmt.Errorf("the %s arm needs the essay: %w", v.Name, err))
+		}
 		files, err := v.Build(string(text))
 		fail(err)
 		for _, r := range softlayer.Roles {
