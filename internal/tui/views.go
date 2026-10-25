@@ -156,15 +156,11 @@ func (m *model) dashRows() []row {
 		}
 	}
 	if add(row{key: "plans", text: "plan usage", expand: len(m.st.Plans) > 0, def: true}) {
+		now := time.Now()
 		for _, p := range m.st.Plans {
-			status := text.Visible(p.Limit.Status)
-			if status == "rejected" {
-				status = stBad.Render("limited") + ", resets " + p.Limit.ResetsAt.Local().Format("Mon 15:04")
-			}
-			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), status)
-			for _, k := range sortedKeys(p.Limit.Windows) {
-				wnd := p.Limit.Windows[k]
-				line += fmt.Sprintf("  %s %.0f%%", text.Visible(k), wnd.Utilization*100)
+			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), standing(p, now))
+			for _, w := range p.Limit.WindowUses(now) {
+				line += "  " + windowShort(w, now, true)
 			}
 			add(row{key: "plan:" + p.Key(), depth: 1, text: line})
 		}
@@ -1523,6 +1519,37 @@ func toldHead(told []core.Ask, now time.Time) string {
 		return fmt.Sprintf("done for you (%d recent)", len(told))
 	}
 	return fmt.Sprintf("done for you (%d in the last day, %d recent)", day, len(told))
+}
+
+// standing is the plan's state in plain words, coloured by how near its
+// limit the login is.
+func standing(p core.Plan, now time.Time) string {
+	s := text.Visible(p.Limit.Standing(now))
+	switch {
+	case p.Parked(now):
+		return stBad.Render(s)
+	case p.Limit.Status == "allowed_warning" && p.Limit.ResetsAt.After(now):
+		return stWarn.Render(s)
+	}
+	return s
+}
+
+// windowShort is one usage window and when it resets; a window that has reset
+// since the reading shows that instead of its old share. Long adds how far
+// off the reset is.
+func windowShort(w harness.WindowUse, now time.Time, long bool) string {
+	name := text.Visible(w.Name)
+	switch {
+	case w.ResetsAt.IsZero():
+		return fmt.Sprintf("%s %.0f%%", name, w.Used*100)
+	case w.Stale:
+		return fmt.Sprintf("%s reset %s", name, stDim.Render(w.ResetsAt.Local().Format("Mon 15:04")))
+	}
+	s := fmt.Sprintf("%s %.0f%%, resets %s", name, w.Used*100, w.ResetsAt.Local().Format("Mon 15:04"))
+	if long {
+		s += stDim.Render(" (in " + w.ResetsIn(now) + ")")
+	}
+	return s
 }
 
 // limitNote is a limit the pace set, dimmed after a heading, or "" for none.

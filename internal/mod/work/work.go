@@ -124,6 +124,10 @@ type Task struct {
 	// so long, however often main moves meanwhile.
 	MainWait   time.Time `json:"main_wait,omitempty"`
 	MainWaitOn string    `json:"main_wait_on,omitempty"`
+	// NoChecks is when head NoChecksOn was first seen with no forge check
+	// run at all while its required ones were awaited (head.go).
+	NoChecks   time.Time `json:"no_checks,omitempty"`
+	NoChecksOn string    `json:"no_checks_on,omitempty"`
 	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
 	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
 	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
@@ -297,10 +301,12 @@ type Module struct {
 	gateCantRun map[string]core.GateResult
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
-	// gate is shut.
+	// gate is shut, and idle, while a pause waits, closes when the last
+	// merge leaves.
 	gate    sync.Mutex
 	inMerge int
 	paused  bool
+	idle    chan struct{}
 }
 
 // New loads tasks and registers the brief op.
@@ -1925,6 +1931,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if done, err := m.alreadyLanded(t, p, main, t.SHA); done || err != nil {
 		return err
 	}
+	if wait, err := m.sameHead(t, p, pr.HeadSHA); wait || err != nil {
+		return err
+	}
 	if wait, err := m.upToDate(t, p, main); wait || err != nil {
 		return err
 	}
@@ -2056,11 +2065,12 @@ func (m *Module) enterMerge() bool {
 func (m *Module) leaveMerge() {
 	m.gate.Lock()
 	m.inMerge--
+	if m.inMerge == 0 && m.idle != nil {
+		close(m.idle)
+		m.idle = nil
+	}
 	m.gate.Unlock()
 }
-
-// gatePoll is how often PauseMerges looks whether the running merges ended.
-var gatePoll = 100 * time.Millisecond
 
 // PauseMerges shuts the gate before the forge merge, so no new merge starts,
 // and waits up to wait for the merges already past it to end and be
@@ -2072,6 +2082,11 @@ var gatePoll = 100 * time.Millisecond
 func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 	m.gate.Lock()
 	m.paused = true
+	idle := m.idle
+	if m.inMerge > 0 && idle == nil {
+		idle = make(chan struct{})
+		m.idle = idle
+	}
 	m.gate.Unlock()
 	var once sync.Once
 	resume = func() {
@@ -2081,16 +2096,14 @@ func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 			m.gate.Unlock()
 		})
 	}
-	for end := time.Now().Add(wait); ; time.Sleep(gatePoll) {
-		m.gate.Lock()
-		n := m.inMerge
-		m.gate.Unlock()
-		if n == 0 {
-			return resume, true
-		}
-		if !time.Now().Before(end) {
-			return resume, false
-		}
+	if idle == nil {
+		return resume, true
+	}
+	select {
+	case <-idle:
+		return resume, true
+	case <-time.After(wait):
+		return resume, false
 	}
 }
 
@@ -2186,6 +2199,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		if still := stillOnMain(which, mainRuns); len(still) > 0 {
 			if t.MainWaitOn != t.SHA {
 				t.MainWait, t.MainWaitOn = time.Now().UTC(), t.SHA
+				m.save(t, "") // the hold below may save nothing, and the next tick loads it afresh
 			}
 			if time.Since(t.MainWait) < mainWaitMax {
 				m.hold(t, p, "waiting on main: the forge's checks "+core.CheckNames(still)+" fail on "+core.Short(t.SHA)+" and still run on main at "+core.Short(main)+", whose result says whether the red is the change's")
@@ -2202,6 +2216,9 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			}
 			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+how+"; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
 		}
+	}
+	if wait, err := m.noChecks(t, p, main, runs, st); wait || err != nil {
+		return wait, err
 	}
 	names := core.CheckNames(which)
 	onMain := ""
