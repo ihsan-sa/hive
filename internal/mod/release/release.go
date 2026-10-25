@@ -862,9 +862,9 @@ type merge struct {
 const handWalk = 200
 
 // merges lists the project's merges after the one its last release was cut
-// at, up to the one that made upTo. When upTo is a commit on main the Hive
-// didn't merge, it lists every commit on main's first-parent line since the
-// last release, oldest first: the Hive's merges as they are, and each other
+// at, up to the one that made upTo. When main's line in the host clone holds
+// upTo, it lists every commit on that first-parent line since the last
+// release, oldest first: the Hive's merges as they are, and each other
 // commit marked Hand, with the request that merged it and what its own diff
 // changes, so no commit ships unlisted. refuse says why there is nothing to
 // release: a release already covers upTo, or upTo is neither a merge the
@@ -922,20 +922,22 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 	if at >= 0 && at < from {
 		return nil, "a newer release already covers it"
 	}
-	if at >= 0 {
-		return all[from : at+1], ""
-	}
-	if released[upTo] {
+	if at < 0 && released[upTo] {
 		return nil, "a release already covers it"
 	}
-	// Not the Hive's merge: it must be on main's line, and every commit
-	// there since the last release is listed.
+	// Every commit on main's line since the last release is listed, the
+	// Hive's merges and any other, so a hand commit can't ship unnamed
+	// with the next merge. Only when the clone hasn't upTo on main's line
+	// does a Hive merge fall back to the journal's list.
 	p, _ := m.C.Projects.Get(project)
 	dir := m.C.WS.Project(project)
 	raw, err := core.Git(dir, "rev-list", "--first-parent", "refs/remotes/origin/"+p.Branch)
 	line := strings.Fields(raw)
 	i := slices.Index(line, upTo)
-	if err != nil || i < 0 {
+	switch {
+	case (err != nil || i < 0) && at >= 0:
+		return all[from : at+1], ""
+	case err != nil || i < 0:
 		return nil, "it is not a merge the Hive made, nor a commit on main"
 	}
 	if slices.ContainsFunc(line[:i], func(sha string) bool { return released[sha] }) {
@@ -957,9 +959,10 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 		}
 		since = append(since, sha)
 	}
-	if !bounded && len(since) == handWalk {
-		// No release within reach: everything older waits for the person.
-		return []merge{{MergeSHA: upTo, PR: prs[upTo], Hand: true, Unread: true}}, ""
+	if !bounded && len(since) == handWalk && len(line) > i+handWalk {
+		// No release within reach: what is older goes unread, and waits
+		// for the person.
+		out = append(out, merge{MergeSHA: line[i+handWalk], Hand: true, Unread: true})
 	}
 	for _, sha := range slices.Backward(since) {
 		if j, ok := ours[sha]; ok {

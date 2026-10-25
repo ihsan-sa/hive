@@ -1000,3 +1000,38 @@ func TestHandMergeOfARootPathWaits(t *testing.T) {
 		}
 	}
 }
+
+// A hand commit with no record, held for the person, doesn't ship with the
+// Hive's next merge: the release at that merge lists and holds it too, and
+// the person's word there releases both.
+func TestHandMergeBeforeAHiveMergeWaits(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	c := mainLine(t, m, "hand.go", "two.go")
+	m.AfterKept("hive", c[0])
+	merged(2, "a2", c[1])
+	land("a2", "r2")
+	m.AfterKept("hive", c[1])
+	asks := m.C.Person.Open()
+	if len(n.got) != 0 || len(asks) != 1 || asks[0].Ref != "hive@"+c[1] || !strings.Contains(asks[0].Title, core.Short(c[0])+" merged outside the Hive with no recorded authority") {
+		t.Fatalf("the Hive's merge released an unrecorded hand commit without the person: %v %+v", n.got, asks)
+	}
+	asks[0].Answer = "release"
+	m.OnPerson(asks[0])
+	if body := n.got["v0.0.1"]; !strings.Contains(body, "hand-merged at "+core.Short(c[0])+", with no record") || !strings.Contains(body, "#2 at a2, read by r2") {
+		t.Fatalf("the release should name the hand commit and the Hive's merge: %q", body)
+	}
+}
+
+// A root path changed in a hand commit holds the release at a later Hive
+// merge, though the hand commit has the person's record.
+func TestRootHandCommitHoldsTheNextHiveMerge(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	c := mainLine(t, m, "install/root.sh", "two.go")
+	mergedBy(m, "req-1", c[0], true)
+	merged(2, "a2", c[1])
+	land("a2", "r2")
+	m.AfterKept("hive", c[1])
+	if asks := m.C.Person.Open(); len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, "install/root.sh") {
+		t.Fatalf("a root hand commit shipped with the Hive's merge: %v %+v", n.got, asks)
+	}
+}
