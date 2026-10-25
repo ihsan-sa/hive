@@ -1,6 +1,7 @@
 package work
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -186,5 +187,43 @@ func TestChecksRefusedStopsComeBack(t *testing.T) {
 	}
 	if o, _ := m.Get("t3"); o.Stage != StageStopped {
 		t.Fatal("a refusal quoted in another reason brought the task back")
+	}
+}
+
+// A call killed by its timeout on a loaded machine waits without counting a
+// failure, and a task stopped on one before (as 261024-154424-cb860e9068 was)
+// comes back once calls have stayed clear of it for a while.
+func TestKilledCallWaitsAndStopsComeBack(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	for range 20 {
+		m.settle(task, errors.New("gh pr view 430: timed out after 2m0s, signal: killed"))
+	}
+	if task.Stage != StageLanding || task.Failures != 0 || m.due(*task) || !logged(task, "the machine is slow") {
+		t.Fatalf("stage %q, failures %d, due %v, log %v", task.Stage, task.Failures, m.due(*task), task.Log)
+	}
+	if m.Offline() != "" {
+		t.Fatalf("a slow machine read as GitHub offline: %q", m.Offline())
+	}
+
+	m.giveUp(task, "gave up after repeated errors: gh pr view 430: signal: killed")
+	held := &Task{ID: "t2", Project: "p", Kind: "work", Stage: StageStopped, ByPerson: true, Reason: "gave up after repeated errors: gh pr view 430: signal: killed"}
+	m.save(held, "stopped")
+	planted := &Task{ID: "t3", Project: "p", Kind: "work", Stage: StageStopped, Reason: "stopped after 3 rounds of fixes: signal: killed"}
+	m.save(planted, "stopped")
+	m.revive()
+	if got, _ := m.Get(task.ID); got.Stage != StageStopped {
+		t.Fatalf("brought back while calls are still killed: %q", got.Stage)
+	}
+	m.slow = time.Now().Add(-slowWait - time.Second)
+	m.revive()
+	got, _ := m.Get(task.ID)
+	if got.Stage != StageLanding || got.Failures != 0 || got.Reason != "" || !logged(&got, "killed by its timeout") {
+		t.Fatalf("not brought back: %+v", got)
+	}
+	if h, _ := m.Get("t2"); h.Stage != StageStopped {
+		t.Fatal("a task the person stopped came back")
+	}
+	if o, _ := m.Get("t3"); o.Stage != StageStopped {
+		t.Fatal("a kill quoted in another reason brought the task back")
 	}
 }
