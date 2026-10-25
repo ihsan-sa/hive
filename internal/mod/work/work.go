@@ -2331,7 +2331,7 @@ func (m *Module) securityRead(t *Task, p core.Project, main string) (bool, error
 	if seats[0] != core.SeatSecurity {
 		who = "the Hive's security panel"
 	}
-	m.hold(t, p, fmt.Sprintf("waiting on a security read from %s at %s, since it changes %s, on %s; a read of an earlier head counts only while this change's own diff is the same (an outside read from the box's perms seat or architect counts too: `%s read %s %s land|fix --by perms`)", who, core.Short(t.SHA), strings.Join(ch.Security, ", "), core.SecurityList, core.Cmd, t.ID, core.Short(t.SHA)))
+	m.hold(t, p, fmt.Sprintf("waiting on a security read from %s at %s, since it changes %s, %s; a read of an earlier head counts only while this change's own diff is the same (an outside read from the box's perms seat or architect counts too: `%s read %s %s land|fix --by perms`)", who, core.Short(t.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), core.Cmd, t.ID, core.Short(t.SHA)))
 	return true, nil
 }
 
@@ -2462,7 +2462,11 @@ func (m *Module) seatAlert(p core.Project, seat, text string) {
 // securityRules is what a security seat reads the change for.
 func securityRules(ch core.Change) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "## You are the Hive's security read\n\nThis change touches %s, on `%s`: files where a mistake weakens the sandbox, leaks a credential or runs something outside the sandbox. The ordinary reviewer reads it for the brief; you read it only for that. A land here lets it merge with no read from outside the Hive, so say fix for anything that:\n\n", "`"+strings.Join(ch.Security, "`, `")+"`", core.SecurityList)
+	where := "on `" + core.SecurityList + "`"
+	if len(ch.Unlisted) > 0 {
+		where = ch.SecurityWhere()
+	}
+	fmt.Fprintf(&b, "## You are the Hive's security read\n\nThis change touches %s, %s: files where a mistake weakens the sandbox, leaks a credential or runs something outside the sandbox. The ordinary reviewer reads it for the brief; you read it only for that. A land here lets it merge with no read from outside the Hive, so say fix for anything that:\n\n", "`"+strings.Join(ch.Security, "`, `")+"`", where)
 	b.WriteString("- widens what a sandboxed run can see, write or reach (mounts, covers, egress, the private folders, the daemon's token);\n")
 	b.WriteString("- lets a credential (a token, a login, the forge's environment) reach a run, a log, a comment or a script that didn't have it;\n")
 	b.WriteString("- runs something outside the sandbox, or as the person, that an agent can choose or edit, or moves the point of effect past its checks (a pinned digest, the ceiling, an approval);\n")

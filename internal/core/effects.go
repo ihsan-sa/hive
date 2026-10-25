@@ -966,18 +966,33 @@ type Change struct {
 	Small     bool     `json:"small"`
 	Protected []string `json:"protected,omitempty"`
 	High      []string `json:"high,omitempty"` // files in a high or root class
-	// Security are files on main's SecurityList: the change merges only
-	// after a security read said land on its diff (SecurityOK).
+	// Security are files on main's SecurityList, or in the project's root
+	// class: the change merges only after a security read said land on its
+	// diff (SecurityOK).
 	Security []string `json:"security,omitempty"`
 	// SecurityRoot are those of them that run with elevated rights (the
 	// list's root entries, or the project's root class): they need the
 	// panel's read as well.
 	SecurityRoot []string `json:"security_root,omitempty"`
-	Root         []string `json:"root,omitempty"`    // files that run with elevated rights
-	DiffID       string   `json:"diff_id,omitempty"` // names Diff (DiffID)
-	Diff         string   `json:"-"`
+	// Unlisted are those of them the list doesn't name: in the root class only.
+	Unlisted []string `json:"unlisted,omitempty"`
+	Root     []string `json:"root,omitempty"`    // files that run with elevated rights
+	DiffID   string   `json:"diff_id,omitempty"` // names Diff (DiffID)
+	Diff     string   `json:"-"`
 	// ProtectedDiff is the diff of the protected files alone, shown to the person who approves it.
 	ProtectedDiff string `json:"-"`
+}
+
+// SecurityWhere says why the change's Security files need a security read:
+// they are on SecurityList, in the project's root class, or some of each.
+func (c Change) SecurityWhere() string {
+	switch {
+	case len(c.Unlisted) == 0:
+		return "on " + SecurityList
+	case len(c.Unlisted) == len(c.Security):
+		return "in the project's root class (which runs with elevated rights)"
+	}
+	return "on " + SecurityList + " or in the project's root class (" + strings.Join(c.Unlisted, ", ") + ")"
 }
 
 var docExt = []string{".md", ".txt", ".rst", ".adoc"}
@@ -1026,10 +1041,16 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		if under(file, cfg.Root) {
 			c.Root = append(c.Root, file)
 		}
-		if matchAny(file, security) || matchAny(file, root) {
+		// What runs with elevated rights (the list's root entries, or the
+		// project's root class) needs the security read and its panel,
+		// whether or not the list's paths name it.
+		if elevated := matchAny(file, root) || under(file, cfg.Root); elevated || matchAny(file, security) {
 			c.Security = append(c.Security, file)
-			if matchAny(file, root) || under(file, cfg.Root) {
+			if elevated {
 				c.SecurityRoot = append(c.SecurityRoot, file)
+			}
+			if !matchAny(file, root) && !matchAny(file, security) {
+				c.Unlisted = append(c.Unlisted, file)
 			}
 		}
 		// .gitattributes picks merge drivers: merge=union on code would
@@ -1172,7 +1193,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		if len(ch.SecurityRoot) > 0 {
 			need += " and a majority of its panel"
 		}
-		return "", fmt.Errorf("refusing to merge %s: it changes %s, on %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), SecurityList, need)
+		return "", fmt.Errorf("refusing to merge %s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
 	}
 	if p.Self && m.Gain {
 		if g, ok := e.GateResult(p.Name, m.SHA, m.Main); !ok || g.Outcome != GateKeep {
