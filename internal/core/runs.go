@@ -242,6 +242,8 @@ type Runs struct {
 	launching int
 	starting  map[string]bool // runs with a launch in flight
 	waking    sync.Mutex      // one wake at a time, so a run is woken once
+	self      proc.Handle     // this daemon, as a turn's claimant (claim.go)
+	backedOff map[string]int  // the turn each run last backed off from, said once
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -287,7 +289,7 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, proven: map[string]bool{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, proven: map[string]bool{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -1396,6 +1398,17 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		prompt = "Continue."
 	}
 	r.Session = session
+	// One process per turn: another daemon on this workspace may have started it.
+	if err := rs.claimTurn(r.ID, turn); err != nil {
+		rs.mu.Lock()
+		said := rs.backedOff[r.ID] == turn
+		rs.backedOff[r.ID] = turn
+		rs.mu.Unlock()
+		if !said {
+			fmt.Printf("hive: %s's turn %d isn't started here: %v\n", r.ID, turn, err)
+		}
+		return
+	}
 	promptFile := filepath.Join(rs.ws.RunHost(r.ID), fmt.Sprintf("turn-%03d.prompt", turn))
 	if err := os.WriteFile(promptFile, []byte(prompt), 0o644); err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(time.Minute)})
@@ -1438,6 +1451,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	started = true
+	rs.claimed(r.ID, turn, p)
 	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness})
 }
 

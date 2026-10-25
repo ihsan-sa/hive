@@ -33,6 +33,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
@@ -86,9 +87,10 @@ type hive struct {
 	forge *core.Local
 	cmd   *exec.Cmd
 	c     *api.Client
-	env   []string // added to the daemon's environment
-	exe   string   // the binary the daemon runs, when not bin
-	jobs  []func() // end what each daemon left running (Windows)
+	env   []string      // added to the daemon's environment
+	exe   string        // the binary the daemon runs, when not bin
+	jobs  []func()      // end what each daemon left running (Windows)
+	ended chan struct{} // closed once the daemon process last launched has exited
 }
 
 func start(t *testing.T, env ...string) *hive { return startWith(t, bin, nil, env...) }
@@ -102,6 +104,8 @@ func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string)
 	if err := h.ws.Init(); err != nil {
 		t.Fatal(err)
 	}
+	// A handle list, since the scan on every release and export fails without one.
+	os.WriteFile(filepath.Join(h.ws.Private(), scan.HandlesFile), []byte("nobody-in-this-test\n"), 0o600)
 	cfg := h.ws.LoadConfig()
 	cfg.Harness, cfg.AutoUpdate = "fake", false
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded CI runner mustn't hold fake turns
@@ -205,7 +209,9 @@ func (h *hive) launch() {
 	if contain != nil {
 		h.jobs = append(h.jobs, contain(h.t, cmd.Process.Pid))
 	}
-	go cmd.Wait()
+	ended := make(chan struct{})
+	h.ended = ended
+	go func() { cmd.Wait(); close(ended) }()
 	// A loaded Windows runner has taken over 30 seconds to start one.
 	began := time.Now()
 	for time.Since(began) < 2*time.Minute {
@@ -249,7 +255,20 @@ func binVersion(t *testing.T) string {
 func (h *hive) kill() {
 	if h.cmd != nil && h.cmd.Process != nil {
 		h.cmd.Process.Kill()
-		time.Sleep(300 * time.Millisecond)
+		h.exited(30 * time.Second)
+	}
+}
+
+// exited waits up to d for the daemon last launched to exit, so a new one
+// isn't refused as a second daemon on the workspace (slow on Windows).
+func (h *hive) exited(d time.Duration) {
+	if h.ended == nil {
+		return
+	}
+	select {
+	case <-h.ended:
+	case <-time.After(d):
+		h.t.Logf("the daemon (pid %d) hasn't exited after %v", h.cmd.Process.Pid, d)
 	}
 }
 
@@ -914,7 +933,7 @@ func TestStalls(t *testing.T) {
 func TestPersonModulesRelease(t *testing.T) {
 	t.Parallel()
 	h := start(t)
-	h.seed("me/self", map[string]string{".hive/project.json": `{"test": "true", "dryrun": "true"}`, ".hive/goals.md": "# Goals\n"})
+	h.seed("me/self", map[string]string{".hive/project.json": `{"test": "true", "dryrun": "true"}`, ".hive/goals.md": "# Goals\n", scan.PublicList: "**\n"})
 	h.post("/api/project", map[string]any{"name": "self", "repo": "me/self", "self": true}, nil)
 
 	h.post("/api/ask", map[string]string{"project": "self", "title": "needs a package", "known": "FAKE:needpackage"}, nil)
