@@ -1593,7 +1593,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 	}
 	t.setDiff(ch.DiffID)
 	switch {
-	case len(ch.Protected) > 0 && !m.C.Effects.Approved("merge", p.Name, t.SHA):
+	case len(ch.Protected) > 0 && !m.C.Effects.ApprovedDiff("merge", p.Name, t.SHA, ch.DiffID):
 		t.Stage = StagePerson
 		a := mergeAsk(t, p, ch)
 		// Saved before Weigh: a warden's answer may reach onPersonMerge first.
@@ -3307,7 +3307,11 @@ func (m *Module) onPersonMerge(a core.Ask) {
 		return
 	}
 	if a.Answer == "merge" || a.Answer == "yes" {
-		m.C.Effects.Approve("merge", t.Project, sha)
+		diff := ""
+		if sha == t.SHA {
+			diff = t.Diff // set from this head's Classify just before the ask
+		}
+		m.C.Effects.ApproveDiff("merge", t.Project, sha, diff)
 		t.Stage = StageTesting // test() routes to a read or the merge
 		m.save(&t, "the person approved")
 		return
