@@ -6,12 +6,15 @@ package improve
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +40,9 @@ type Measurement struct {
 	Version  string    `json:"version,omitempty"` // the score's version (Effects.ScoreVersion); a new one starts a new baseline
 	Note     string    `json:"note"`
 	At       time.Time `json:"at"`
+	// Size is what the project's size command printed ("name value" lines),
+	// for the Hive itself the core's size (docs/core.md): shown, never judged.
+	Size map[string]float64 `json:"size,omitempty"`
 }
 
 // Sweep is one notice run.
@@ -258,6 +264,54 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score), cant
 }
 
+// SelfSize is the Hive's own size command, run for a self project whose
+// project.json names none while the script is in its tree.
+const SelfSize = "sh tests/core-size.sh"
+
+// size runs the project's size command (project.json "size") on sha in a
+// clean checkout and reads each "name value" line it prints. It is nil when
+// there is no command or it fails: a size is shown, never judged.
+func (m *Module) size(p core.Project, sha string) map[string]float64 {
+	var pc struct{ Size string }
+	json.Unmarshal([]byte(m.C.Effects.ReadFile(p, sha, ".hive/project.json")), &pc)
+	cmd := strings.TrimSpace(pc.Size)
+	if cmd == "" && p.Self && m.C.Effects.ReadFile(p, sha, "tests/core-size.sh") != "" {
+		cmd = SelfSize
+	}
+	if cmd == "" {
+		return nil
+	}
+	c := m.C.Effects.RunCheck(p, sha, "size", cmd)
+	if !c.OK || c.Log == "" {
+		return nil
+	}
+	out, err := core.SafeRead(c.Log, 1<<20) // the full log: a check's Output is clipped to one line
+	if err != nil {
+		return nil
+	}
+	return sizes(string(out))
+}
+
+// sizes reads "name value" lines; any other line is left out.
+func sizes(out string) map[string]float64 {
+	var got map[string]float64
+	for _, l := range strings.Split(out, "\n") {
+		f := strings.Fields(l)
+		if len(f) != 2 {
+			continue
+		}
+		v, err := strconv.ParseFloat(f[1], 64)
+		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+			continue
+		}
+		if got == nil {
+			got = map[string]float64{}
+		}
+		got[f[0]] = v
+	}
+	return got
+}
+
 // Tick measures the starting point of projects that have none yet. A red
 // start is measured again until there is a number.
 func (m *Module) Tick() {
@@ -299,6 +353,7 @@ func (m *Module) baseline(p core.Project) {
 		return
 	}
 	m.warnUnlisted(p, cfg)
+	ms.Size = m.size(p, main)
 	if ok && (score != nil || cfg.Score == nil) {
 		ms.Kept, ms.Best = true, score
 		m.record(ms)
@@ -504,12 +559,15 @@ func (m *Module) afterMerge(t work.Task) {
 	if !ok {
 		flake = m.seenElsewhere(p, t)
 	}
+	if !ok && flake == "" && cant.CantRun == "" {
+		flake = m.redBefore(p, t, cfg.Test)
+	}
 	k, hasBest := m.kept(p.Name)
 	best := 0.0
 	if hasBest {
 		best = *k.Best
 	}
-	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg)}
+	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg), Size: m.size(p, t.MergeSHA)}
 	if !hasBest || m.versionOf(p, k) != ms.Version {
 		m.warnUnlisted(p, cfg)
 		if hasBest {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,5 +79,28 @@ func TestGhEnvFromCredentials(t *testing.T) {
 		if got := ghEnv(repo); got != nil {
 			t.Fatalf("%q read %v", repo, got)
 		}
+	}
+}
+
+// An unreadable listed token file falls back to gh's login and says so once,
+// naming the file and the owner.
+func TestGhEnvSaysOnceWhenTokenFileUnreadable(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "gone.token")
+	withOwnerTokens(t, map[string]string{"hive-rsi-lab": missing})
+	t.Setenv("CREDENTIALS_DIRECTORY", t.TempDir()) // no credential: that is never said
+	var buf strings.Builder
+	old := tokenLog
+	tokenLog = &buf
+	t.Cleanup(func() { tokenLog = old })
+
+	for range 3 {
+		if got := ghEnv("Hive-RSI-Lab/x"); got != nil {
+			t.Fatalf("should keep gh's login, got %v", got)
+		}
+	}
+	ghEnv("ihsan-sa/hive")
+	out := buf.String()
+	if strings.Count(out, "\n") != 1 || !strings.Contains(out, missing) || !strings.Contains(out, "hive-rsi-lab") {
+		t.Fatalf("want one line naming %s and hive-rsi-lab, got %q", missing, out)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -119,6 +120,9 @@ func (m *Module) sendReports(cfg core.Config) (string, error) {
 	fails, use, seq, read := m.Build(cfg)
 	queue := Waiting(ws)
 	if len(fails) > 0 || nonzero(use.Usage) {
+		// A run that stopped between keeping the queue and marking the
+		// journal left these reports queued, and they were just built again.
+		queue = slices.DeleteFunc(queue, func(r Report) bool { return builtAgain(r, fails, use) })
 		// The newest reports fit the cap, with room for the usage report,
 		// which counts the failures that didn't.
 		queue = append(queue, fails...)
@@ -181,6 +185,19 @@ func (m *Module) sendReports(cfg core.Config) (string, error) {
 	}
 	save(ws, nil)
 	return fmt.Sprintf("sent %d, refused %d", sent, refused), nil
+}
+
+// builtAgain says a queued report is one of fails, or a usage report use
+// covers: one whose events start where use's do.
+func builtAgain(r Report, fails []Report, use Report) bool {
+	if r.Type == "usage" {
+		from, _, _ := strings.Cut(r.Message, " to ")
+		start, _, _ := strings.Cut(use.Message, " to ")
+		return r.Message != "" && from == start
+	}
+	return slices.ContainsFunc(fails, func(f Report) bool {
+		return f.Kind == r.Kind && f.At == r.At && f.Message == r.Message
+	})
 }
 
 // dropped says the endpoint refused a report for good: not the schema, no

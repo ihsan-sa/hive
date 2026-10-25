@@ -28,6 +28,10 @@ var scrubbers = []struct {
 	{regexp.MustCompile(`(/home/|/Users/)[^/\s"']+|/root\b|(?i)\b[a-z]:\\users\\[^\\\s"']+`), "~"},
 }
 
+// outcome is a match that stays: "authentication: failed" or "authenticated:
+// false" says how a login went, not a key.
+var outcome = regexp.MustCompile(`(?i)^authenticat(e|ed|ion)\s*:\s*(failed|false|true|ok|succeeded|required|denied|error)$`)
+
 // longRun is the last pass: a long run with letters and digits is a key; one
 // without digits is a word or a path.
 var longRun = regexp.MustCompile(`[A-Za-z0-9+/_=-]{32,}`)
@@ -43,7 +47,12 @@ func Scrub(s, root string) string {
 		s = strings.ReplaceAll(s, h, "~")
 	}
 	for _, r := range scrubbers {
-		s = r.re.ReplaceAllString(s, r.with)
+		s = r.re.ReplaceAllStringFunc(s, func(m string) string {
+			if outcome.MatchString(m) {
+				return m
+			}
+			return r.re.ReplaceAllString(m, r.with)
+		})
 	}
 	for _, r := range names() {
 		s = r.re.ReplaceAllString(s, r.with)

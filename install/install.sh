@@ -179,10 +179,12 @@ elif [ -z "$share" ] && [ "$asked" -ne 0 ]; then
     [ -n "$share" ] || share=off # Enter is off, and is kept as off
   fi
 fi
+# A failed answer (the config folder can't be written) warns and the install
+# goes on: the person can answer again with `report off|failures|everything`.
 case "$share" in
   "") ;;
-  [eE]*|[aA][lL][lL]) "$DIR/$CMD" report everything 2>/dev/null || "$DIR/$CMD" report on ;;
-  [fF]*|[yY]*|[oO][nN]) "$DIR/$CMD" report on ;;
-  *) "$DIR/$CMD" report off ;;
+  [eE]*|[aA][lL][lL]) "$DIR/$CMD" report everything 2>/dev/null || "$DIR/$CMD" report on || echo "warning: sharing wasn't recorded; run: $CMD report everything" >&2 ;;
+  [fF]*|[yY]*|[oO][nN]) "$DIR/$CMD" report on || echo "warning: sharing wasn't recorded; run: $CMD report failures" >&2 ;;
+  *) "$DIR/$CMD" report off || echo "warning: sharing wasn't recorded; run: $CMD report off" >&2 ;;
 esac
 echo "Installed. Run: $CMD"
