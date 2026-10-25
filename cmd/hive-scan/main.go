@@ -21,6 +21,12 @@ import (
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "hive-scan:", err)
+		if os.Getenv("GITHUB_ACTIONS") == "true" {
+			// An annotation, which the forge serves to anyone, unlike the job's log:
+			// the Hive reads why its release scan failed. A hit names file, line and
+			// kind only, so this prints no key, deny word or handle.
+			fmt.Println(annotation(err))
+		}
 		os.Exit(1)
 	}
 	fmt.Println("hive-scan: nothing to keep from publishing")
@@ -47,4 +53,10 @@ func run(args []string) error {
 	names := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
 	read := func(name string) ([]byte, error) { return os.ReadFile(filepath.Join(dir, filepath.FromSlash(name))) }
 	return scan.Run(names, read, scan.Lists{Public: scan.ParseList(string(public), false), Deny: deny, Handles: handles})
+}
+
+// annotation is err as a GitHub Actions error annotation, its lines kept.
+func annotation(err error) string {
+	r := strings.NewReplacer("%", "%25", "\r", "%0D", "\n", "%0A")
+	return "::error title=hive-scan::" + r.Replace(err.Error())
 }
