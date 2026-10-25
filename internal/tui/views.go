@@ -1556,32 +1556,30 @@ func toldHead(told []core.Ask, now time.Time) string {
 // standing is the plan's state in plain words, coloured by how near its
 // limit the login is.
 func standing(p core.Plan, now time.Time) string {
-	s := text.Visible(p.Limit.Standing(now))
-	switch {
-	case p.Parked(now):
+	s := text.Visible(p.Standing(now))
+	switch p.Limit.Level(now) {
+	case harness.LevelBad:
 		return stBad.Render(s)
-	case p.Limit.Status == "allowed_warning" && p.Limit.ResetsAt.After(now):
+	case harness.LevelWarn:
 		return stWarn.Render(s)
 	}
 	return s
 }
 
 // windowShort is one usage window and when it resets; a window that has reset
-// since the reading shows that instead of its old share. Long adds how far
-// off the reset is.
+// since the reading says so instead of showing its old share. Short says how
+// far off the reset is, which needs no zone; long adds the day, time and zone.
 func windowShort(w harness.WindowUse, now time.Time, long bool) string {
-	name := text.Visible(w.Name)
+	name, at := text.Visible(w.Name), w.ResetsAt.Local().Format("Mon 15:04 MST")
 	switch {
 	case w.ResetsAt.IsZero():
 		return fmt.Sprintf("%s %.0f%%", name, w.Used*100)
 	case w.Stale:
-		return fmt.Sprintf("%s reset %s", name, stDim.Render(w.ResetsAt.Local().Format("Mon 15:04")))
+		return fmt.Sprintf("%s reset %s", name, stDim.Render(at+", no reading since"))
+	case !long:
+		return fmt.Sprintf("%s %.0f%%, resets in %s", name, w.Used*100, w.ResetsIn(now))
 	}
-	s := fmt.Sprintf("%s %.0f%%, resets %s", name, w.Used*100, w.ResetsAt.Local().Format("Mon 15:04"))
-	if long {
-		s += stDim.Render(" (in " + w.ResetsIn(now) + ")")
-	}
-	return s
+	return fmt.Sprintf("%s %.0f%%, resets %s", name, w.Used*100, at) + stDim.Render(" (in "+w.ResetsIn(now)+")")
 }
 
 // limitNote is a limit the pace set, dimmed after a heading, or "" for none.
