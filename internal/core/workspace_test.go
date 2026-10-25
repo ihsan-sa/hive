@@ -30,6 +30,25 @@ func TestLeadModel(t *testing.T) {
 	}
 }
 
+// A config saved before public_owners keeps the default owner, so a public
+// repository there isn't quietly turned into an ask; one that lists its own,
+// even none, keeps that.
+func TestPublicOwnersFromAnOlderConfig(t *testing.T) {
+	for _, c := range []struct{ name, raw, want string }{
+		{"older config", `{"model": "opus"}`, "[Hive-RSI-Lab]"},
+		{"its own", `{"public_owners": ["me"]}`, "[me]"},
+		{"none", `{"public_owners": []}`, "[]"},
+	} {
+		ws := Workspace{Root: t.TempDir()}
+		if err := WriteFileAtomic(ws.ConfigPath(), []byte(c.raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprint(ws.LoadConfig().PublicOwners); got != c.want {
+			t.Errorf("%s: public_owners %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
 // Writers racing on one file each get their own temp file: one named by the
 // date alone was shared by every write that day, so a rename found it gone
 // (or, on Windows, open in the other writer).

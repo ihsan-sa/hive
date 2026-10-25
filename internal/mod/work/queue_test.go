@@ -563,3 +563,38 @@ func TestQuietWorkerHoldsNoOne(t *testing.T) {
 		t.Fatalf("a resumed worker's slot was given away: %q", wait[other.ID])
 	}
 }
+
+// A brief that waits on one worker keeps saying so when another that also
+// touches its files starts ahead of it: the reason, and the saved task, stay
+// as they were until the first lets go (task 232db4fc42 swapped between
+// holders on runs.go and work.go every few minutes for an hour, issue #676).
+func TestQueueKeepsItsHolder(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 5
+	m.C.WS.SaveConfig(cfg)
+	x := file(t, m, "cap the checks", "In internal/core/effects.go.")
+	tick(m)
+	a := file(t, m, "rework effects and runs", "internal/core/effects.go and internal/core/runs.go.")
+	tick(m)
+	first := stageOf(t, m, a)
+	if first.Stage != StageQueued || !strings.Contains(first.Reason, "(task "+x.ID+") to land") {
+		t.Fatalf("overlapping brief: stage %q reason %q", first.Stage, first.Reason)
+	}
+	y := file(t, m, "hold strained turns", "In internal/core/runs.go.")
+	tick(m)
+	if got := stageOf(t, m, y); got.Stage != StageWorking {
+		t.Fatalf("brief behind a waiting one: stage %q reason %q, want working", got.Stage, got.Reason)
+	}
+	if got := stageOf(t, m, a); got.Reason != first.Reason || !got.Updated.Equal(first.Updated) {
+		t.Fatalf("reason moved from %q (%s) to %q (%s)", first.Reason, first.Updated, got.Reason, got.Updated)
+	}
+	// Once x lets go, a waits on y.
+	got, _ := m.Get(x.ID)
+	got.Stage = StageTesting
+	m.save(&got, "pushed")
+	tick(m)
+	if got := stageOf(t, m, a); !strings.Contains(got.Reason, "(task "+y.ID+") to land") {
+		t.Fatalf("after the first holder pushed: reason %q", got.Reason)
+	}
+}

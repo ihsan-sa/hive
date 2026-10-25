@@ -6,10 +6,10 @@
 //
 // It compiles internal/e2e once and runs, one after the other on the fake
 // harness, the benchmark the recursive gate judges with (TestBenchmark, all
-// four asks on the demo textkit project) twice, once asked one by one and
-// once all at once, which is the loop itself (the queue, workers side by side,
+// four asks on the demo textkit project) six times, three asked one by one and
+// three all at once, which is the loop itself (the queue, workers side by side,
 // branches landing on a main that moves), and then the rest of the e2e suite,
-// a failed test run again once. What it judges is measured outside the Hive:
+// a failed test run again once on its own. What it judges is measured outside the Hive:
 // each benchmark's score, asks finished and seconds come from its BENCH line,
 // which the test works out from textkit's main on fresh inputs and signs with
 // a key this command hands it on stdin. How they combine, and the noise, is in
@@ -94,45 +94,82 @@ func run() (string, error) {
 		runs = append(runs, Run{AtOnce: atOnce, Bench: b, Err: err})
 	}
 
-	listed, _ := runSuite(suite, pkg, "", time.Minute, nil, "-test.list", ".")
+	listed, err := runSuite(suite, pkg, "", time.Minute, nil, "-test.list", ".")
 	var names []string
 	for _, l := range strings.Fields(listed) {
 		if strings.HasPrefix(l, "Test") && l != "TestBenchmark" {
 			names = append(names, l)
 		}
 	}
+	if err != nil || len(names) == 0 {
+		// Not a score: 0/0 would read as a 100-point regression.
+		return "", fmt.Errorf("could not list the e2e suite's tests: %v\n%s", err, listed)
+	}
+	// The tests the parent commit declares: one the candidate dropped counts
+	// as failed, so deleting a failing test can't raise the pass rate.
+	before, _ := exec.Command("git", "-C", pkg, "grep", "-h", "^func Test", "HEAD^", "--", ".").Output()
 	first, _ := runSuite(suite, pkg, "", suiteTimeout, nil, "-test.skip", "^TestBenchmark$", "-test.v", "-test.timeout", suiteTimeout.String())
 	res := ParseResults(first)
-	var again []string
-	for _, n := range names {
-		if r := res[n]; r != "pass" && r != "skip" {
-			again = append(again, regexp.QuoteMeta(n))
-		}
-	}
 	flaky := 0
-	if len(again) > 0 {
-		second, _ := runSuite(suite, pkg, "", rerunTimeout, nil, "-test.run", "^("+strings.Join(again, "|")+")$", "-test.v", "-test.timeout", rerunTimeout.String())
-		for n, r := range ParseResults(second) {
-			if r == "pass" && res[n] != "pass" {
-				res[n] = "pass"
-				flaky++
-			}
+	// Each failed test runs again in a process of its own, so one that panics
+	// doesn't take its neighbours down with it, all within one bound.
+	end := time.Now().Add(rerunTimeout)
+	for _, n := range names {
+		left := time.Until(end).Truncate(time.Second)
+		if r := res[n]; r == "pass" || r == "skip" || left < 10*time.Second {
+			continue
+		}
+		again, _ := runSuite(suite, pkg, "", left, nil, "-test.run", "^"+regexp.QuoteMeta(n)+"$", "-test.v", "-test.timeout", left.String())
+		if ParseResults(again)[n] == "pass" {
+			res[n] = "pass"
+			flaky++
 		}
 	}
-	e := E2E{Flaky: flaky}
+	e, failed := Tally(names, Declared(string(before)), res)
+	e.Flaky = flaky
+	return Report(runs, e, failed), nil
+}
+
+// declared matches a top-level test's declaration in a _test.go file.
+var declared = regexp.MustCompile(`^func (Test\w+)\(\w+ \*testing\.T\)`)
+
+// Declared reads the test names from `git grep` lines of declarations,
+// TestBenchmark left out (it is scored on its own).
+func Declared(src string) []string {
+	var names []string
+	for _, l := range strings.Split(src, "\n") {
+		if m := declared.FindStringSubmatch(l); m != nil && m[1] != "TestBenchmark" {
+			names = append(names, m[1])
+		}
+	}
+	return names
+}
+
+// Tally counts the suite's results: names are the candidate's tests, before
+// those the parent commit declared. A test that failed, never reported (a
+// panic, the timeout) or is gone from the candidate counts as failed; a
+// skipped one is left out.
+func Tally(names, before []string, res map[string]string) (E2E, []string) {
+	var e E2E
 	var failed []string
+	for _, n := range before {
+		if !slices.Contains(names, n) {
+			e.Run++
+			failed = append(failed, n+" (deleted)")
+		}
+	}
 	for _, n := range names {
 		switch res[n] {
 		case "skip":
 		case "pass":
 			e.Passed++
 			e.Run++
-		default: // failed, or never reported (a panic or the timeout)
+		default:
 			e.Run++
 			failed = append(failed, n)
 		}
 	}
-	return Report(runs, e, failed), nil
+	return e, failed
 }
 
 // runSuite runs the compiled e2e suite in its package directory, on the fake

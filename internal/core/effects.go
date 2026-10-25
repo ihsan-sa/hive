@@ -80,6 +80,7 @@ type Effects struct {
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
 	steps     map[string][]JobStep    // repo url -> a finished check's steps
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
+	gateMains map[string]GateResult   // project@main -> the newest can't-run there not tied to its head (GateAtMain)
 	judged    map[string]Judgement    // project@sha@main -> the judge's newest call (judge.go)
 	homes     map[string]bool         // running checks' homes (disk.go)
 	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
@@ -171,7 +172,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs, sweep: sandbox.Sweep,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -244,7 +245,18 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 		case "gate.judged":
 			var g GateResult
 			ev.Decode(&g)
+			if prev, ok := e.gateMains[g.Project+"@"+g.Main]; ok && prev.MainFails && g.MainFails {
+				g.Repeats = prev.Repeats + 1
+			}
 			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
+			switch {
+			case g.Outcome == GateCantRun && (g.Alone || len(g.Conflicts) > 0):
+				// Its own cause: the others at this main go on as they were.
+			case g.Outcome == GateCantRun:
+				e.gateMains[g.Project+"@"+g.Main] = g
+			default:
+				delete(e.gateMains, g.Project+"@"+g.Main)
+			}
 		case "judge.decided":
 			var j Judgement
 			ev.Decode(&j)
@@ -626,7 +638,19 @@ var (
 	GoPkgLine  = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
 	GoFailLine = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
 	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |test timed out)|\[(build|setup) failed\]`)
-	redBuild   = regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+(?::\d+)?: (.+)`)
+	// A compiler's or vet's error on one line: go and go vet
+	// ("a.go:3:4: msg"), javac ("A.java:3: error: msg"), tsc
+	// ("a.ts(3,4): error TS2322: msg", or "a.ts:3:4 - error TS2322: msg").
+	redBuild = []*regexp.Regexp{
+		regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+(?::\d+)?: (.+)`),
+		regexp.MustCompile(`^(\S+\.java):\d+: (error: .+)`),
+		regexp.MustCompile(`^(\S+\.[cm]?[jt]sx?)\(\d+,\d+\): (error TS\d+: .+)`),
+		regexp.MustCompile(`^(\S+\.[cm]?[jt]sx?):\d+:\d+ - (error TS\d+: .+)`),
+	}
+	// rustc says the error first and where on the next line.
+	rustErr, rustAt = regexp.MustCompile(`^(error(?:\[E\d+\])?: .+)`), regexp.MustCompile(`^\s*--> (\S+\.rs):\d+:\d+`)
+	// A python traceback names its frames, then the error at column 0.
+	pyAt, pyErr = regexp.MustCompile(`^\s*File "([^"]+\.py)", line \d+`), regexp.MustCompile(`^([A-Za-z_][\w.]*(?:Error|Exception|Exit)\b.*)`)
 )
 
 // RedKeys names what failed in a red go test run so two runs' reds can be
@@ -678,15 +702,40 @@ func RedKeys(out string) []string {
 }
 
 // StopKeys names, for a red run RedKeys names nothing in (go vet, or a build
-// that stopped the command before go test ran), each compile or vet error as
-// "file.go: message", its line left out so an edit above it doesn't make the
-// same error look new. The rest of the command didn't run, so these can show
-// a red isn't new at a merge but never that a change is no worse than main.
+// that stopped the command before the tests ran), each compile or vet error
+// as "file: message", its line left out so an edit above it doesn't make the
+// same error look new: go, javac, tsc and rustc errors, and the error a
+// python traceback ends in, by the last file it names. The rest of the
+// command didn't run, so these can show a red isn't new at a merge but never
+// that a change is no worse than main.
 func StopKeys(out string) []string {
 	var keys []string
+	add := func(file, msg string) {
+		if k := file + ": " + msg; !slices.Contains(keys, k) {
+			keys = append(keys, k)
+		}
+	}
+	rust, py := "", ""
 	for _, l := range strings.Split(out, "\n") {
-		if m := redBuild.FindStringSubmatch(strings.TrimRight(l, " \r")); m != nil && !slices.Contains(keys, m[1]+": "+m[2]) {
-			keys = append(keys, m[1]+": "+m[2])
+		l = strings.TrimRight(l, " \r")
+		if m := rustAt.FindStringSubmatch(l); m != nil && rust != "" {
+			add(m[1], rust)
+		}
+		rust = ""
+		if m := rustErr.FindStringSubmatch(l); m != nil {
+			rust = m[1]
+		}
+		if m := pyAt.FindStringSubmatch(l); m != nil {
+			py = m[1]
+		} else if m := pyErr.FindStringSubmatch(l); m != nil && py != "" {
+			add(py, m[1])
+			py = ""
+		}
+		for _, re := range redBuild {
+			if m := re.FindStringSubmatch(l); m != nil {
+				add(m[1], m[2])
+				break
+			}
 		}
 	}
 	return keys
@@ -994,6 +1043,12 @@ func (e *Effects) SecurityOK(project string, ch Change) bool {
 func OwnDiff(dir, base, sha string) string {
 	out, _ := Git(dir, "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", base, sha)
 	return out
+}
+
+// Between is the diff from one commit to another in p's host clone, "" when
+// git can't tell (one of them isn't fetched).
+func (e *Effects) Between(p Project, from, to string) string {
+	return OwnDiff(e.ws.Project(p.Name), from, to)
 }
 
 // DiffID names a change's own diff (the diff from its merge base with main to
@@ -1313,8 +1368,10 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", fmt.Errorf("refusing to merge %s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
 	}
 	if p.Self && m.Gain {
-		if !e.Kept(p.Name, m.SHA, m.Main) {
-			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s", short(m.SHA), short(m.Main))
+		// Or once the person landed that exact head unjudged, the gate
+		// unable to judge at main (the work module's "gate" ask).
+		if !e.Kept(p.Name, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA) {
+			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
 		}
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
@@ -2230,20 +2287,27 @@ func (e *Effects) hostCommit(p Project, dir string, h HostCommit) (string, error
 	return sha, nil
 }
 
-// MainBundle writes main as a bundle a worker can fetch to resolve conflicts.
+// MainBundle writes main as a bundle a worker can fetch to resolve conflicts,
+// and returns the commit it holds (read under the same lock, so it is the
+// bundle's head even if main moves just after).
 // It is written under a temp name and renamed, so a fetch running now sees the old or the new file whole.
-func (e *Effects) MainBundle(p Project, path string) error {
+func (e *Effects) MainBundle(p Project, path string) (string, error) {
 	defer e.lock(p.Name)()
+	dir := e.ws.Project(p.Name)
+	head, err := Git(dir, "rev-parse", "--verify", p.Branch)
+	if err != nil {
+		return "", err
+	}
 	tmp := path + ".tmp"
-	if _, err := Git(e.ws.Project(p.Name), "bundle", "create", tmp, p.Branch); err != nil {
+	if _, err := Git(dir, "bundle", "create", tmp, p.Branch); err != nil {
 		os.Remove(tmp)
-		return err
+		return "", err
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
-		return err
+		return "", err
 	}
-	return nil
+	return strings.TrimSpace(head), nil
 }
 
 func appendLine(path, header, line string) error {

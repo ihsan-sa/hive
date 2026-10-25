@@ -400,11 +400,15 @@ func TestMainBundleLeavesNoTemp(t *testing.T) {
 	c, _, p, _ := setupProject(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.bundle")
-	if err := c.Effects.MainBundle(p, path); err != nil {
+	head, err := c.Effects.MainBundle(p, path)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if want, _ := Git(c.WS.Project(p.Name), "rev-parse", p.Branch); head != strings.TrimSpace(want) {
+		t.Fatalf("head %q, want main %q", head, want)
+	}
 	os.MkdirAll(filepath.Join(dir, "blocked", "x"), 0o755) // a non-empty directory can't be renamed over
-	if err := c.Effects.MainBundle(p, filepath.Join(dir, "blocked")); err == nil {
+	if _, err := c.Effects.MainBundle(p, filepath.Join(dir, "blocked")); err == nil {
 		t.Fatal("rename over a directory should fail")
 	}
 	if left, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(left) != 0 {
@@ -1337,6 +1341,21 @@ func TestRedKeys(t *testing.T) {
 	}
 	if moved := StopKeys(strings.Replace(vet, ":225:42:", ":230:9:", 1)); !slices.Equal(moved, StopKeys(vet)) {
 		t.Fatalf("the same vet error a few lines down: %q", moved)
+	}
+	for _, c := range []struct{ name, out, moved, want string }{
+		{"javac", "src/A.java:12: error: cannot find symbol\n  symbol: f\n1 error\n", ":12:", "src/A.java: error: cannot find symbol"},
+		{"tsc", "src/a.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.\n", "(12,5)", "src/a.ts: error TS2322: Type 'string' is not assignable to type 'number'."},
+		{"tsc pretty", "src/a.tsx:12:5 - error TS2304: Cannot find name 'x'.\n\n12 x\n", ":12:5", "src/a.tsx: error TS2304: Cannot find name 'x'."},
+		{"rustc", "error[E0308]: mismatched types\n  --> src/main.rs:12:18\n   |\nerror: aborting due to 1 previous error\nerror: could not compile `x`\n", ":12:", "src/main.rs: error[E0308]: mismatched types"},
+		{"python", "Traceback (most recent call last):\n  File \"/x/run.py\", line 1, in <module>\n  File \"/x/a.py\", line 12\n    def f(\n         ^\nSyntaxError: '(' was never closed\n", "line 12", "/x/a.py: SyntaxError: '(' was never closed"},
+	} {
+		got := StopKeys(c.out)
+		if len(got) != 1 || got[0] != c.want {
+			t.Fatalf("%s: %q", c.name, got)
+		}
+		if moved := StopKeys(strings.Replace(c.out, c.moved, strings.ReplaceAll(c.moved, "12", "30"), 1)); !slices.Equal(moved, got) {
+			t.Fatalf("%s a few lines down: %q", c.name, moved)
+		}
 	}
 	if got := RedKeys("vet: something\n"); got != nil {
 		t.Fatalf("nothing named: %q", got)

@@ -131,3 +131,16 @@ func TestHandedOffWaitStaysOutOfHistory(t *testing.T) {
 		t.Fatalf("merging history has %d spells, want only t2's", n)
 	}
 }
+
+// The lead told a task is stuck is told the op that retries it.
+func TestRetryHint(t *testing.T) {
+	if h := retryHint("task:abc"); !strings.Contains(h, "hive agent recheck --task abc") {
+		t.Fatalf("task hint: %q", h)
+	}
+	if h := retryHint("run:w1"); h != "" {
+		t.Fatalf("a run has no recheck: %q", h)
+	}
+	if h := retryHint("checks@2125f74e"); !strings.Contains(h, "recheck --task <id>") {
+		t.Fatalf("shared wait hint: %q", h)
+	}
+}

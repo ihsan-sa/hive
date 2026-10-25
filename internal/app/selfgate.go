@@ -150,7 +150,7 @@ func readReport(j work.GateJob, runErr, ctxErr error) core.GateResult {
 		g.Reason = "the gate left no report: " + fmt.Sprint(runErr)
 		return g
 	}
-	g.Reason, g.Sandbox, g.Transient, g.Alone, g.Conflicts, g.Measured = rep.Verdict.Reason, rep.Sandbox, rep.Transient, rep.Alone, rep.Conflicts, rep.Measured && !rep.CantRun
+	g.Reason, g.Sandbox, g.Transient, g.Alone, g.Conflicts, g.Measured, g.MainFails = rep.Verdict.Reason, rep.Sandbox, rep.Transient, rep.Alone, rep.Conflicts, rep.Measured && !rep.CantRun, rep.BaseFails
 	if g.Reason == "" {
 		g.Reason = rep.Error
 	}

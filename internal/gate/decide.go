@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 // Metric is one number a probe measured. Higher says which way is better.
@@ -31,6 +32,7 @@ type Result struct {
 	Detail  string   `json:"detail,omitempty"`
 	Seconds float64  `json:"seconds"`
 	Metrics []Metric `json:"metrics,omitempty"`
+	Failed  []string `json:"failed,omitempty"` // the tests that failed in it, by name, for a probe that runs tests
 }
 
 // Options tune how much better counts as better.
@@ -81,7 +83,10 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 	if o.Floor == 0 {
 		o.Floor = 0.02
 	}
-	type tally struct{ pass, n int }
+	type tally struct {
+		pass, n int
+		failed  map[string]int // test name: the runs it failed in
+	}
 	given := map[key][]string{}
 	count := func(rs []Result) (map[string]*tally, map[key][]float64, map[key]bool) {
 		t, m, hi := map[string]*tally{}, map[key][]float64{}, map[key]bool{}
@@ -91,6 +96,12 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 			}
 			t[r.Probe].n++
 			if !r.Pass {
+				for _, f := range r.Failed {
+					if t[r.Probe].failed == nil {
+						t[r.Probe].failed = map[string]int{}
+					}
+					t[r.Probe].failed[f]++
+				}
 				continue
 			}
 			t[r.Probe].pass++
@@ -137,7 +148,7 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 				// cannot count as even.
 				v.Unmeasured = append(v.Unmeasured, fmt.Sprintf("%s failed on both sides (0/%d, the control 0/%d)", p, c.n, k.n))
 			} else if cr < kr {
-				v.Regressions = append(v.Regressions, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n))
+				v.Regressions = append(v.Regressions, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n)+failing(c.failed, c.n))
 			} else if cr > kr {
 				v.Gains = append(v.Gains, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n))
 			}
@@ -192,4 +203,30 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 		v.Reason = "not better than the current Hive: nothing moved beyond the noise"
 	}
 	return v
+}
+
+// failing names the tests that failed in a probe's runs, most often first,
+// with how many of n runs each failed in: " (failing: TestA 3/3, TestB 1/3)".
+func failing(f map[string]int, n int) string {
+	if len(f) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(f))
+	for t := range f {
+		names = append(names, t)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if f[names[i]] != f[names[j]] {
+			return f[names[i]] > f[names[j]]
+		}
+		return names[i] < names[j]
+	})
+	more := ""
+	if len(names) > 5 {
+		names, more = names[:5], fmt.Sprintf(" and %d more", len(names)-5)
+	}
+	for i, t := range names {
+		names[i] = fmt.Sprintf("%s %d/%d", t, f[t], n)
+	}
+	return " (failing: " + strings.Join(names, ", ") + more + ")"
 }

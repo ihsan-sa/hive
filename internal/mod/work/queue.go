@@ -110,7 +110,8 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	cfg := m.C.WS.LoadConfig()
 	start, wait = map[string]bool{}, map[string]string{}
 	working, quickWorking := 0, 0
-	var ahead, line []Task // ahead: being worked on, or earlier in line
+	var ahead, line []Task        // ahead: being worked on, or earlier in line
+	starting := map[string]bool{} // queued ones whose worker is being started right now
 	m.mu.Lock()
 	for _, t := range tasks {
 		switch {
@@ -124,6 +125,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		case t.Stage == StageWorking || t.Queued(): // or a queued one being started right now
 			ahead = append(ahead, t)
 			working++
+			starting[t.ID] = t.Queued()
 		}
 		// The rest hold no one back: new ones join the line once issued, and
 		// pushed ones (landing, testing, reviewing, merging) merge main on
@@ -156,13 +158,13 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	}
 	for _, t := range line {
 		quick := m.quick(t)
-		switch o, area := m.overlap(t, ahead); {
+		switch o, area := m.overlap(t, ahead, holder(t.Reason)); {
 		case t.Held:
 			wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
 			continue // a held brief keeps no place that holds others back
 		case o != nil && !t.Now: // one the lead started now goes past the overlap
 			verb := "to land"
-			if o.Queued() && !start[o.ID] {
+			if o.Queued() && !start[o.ID] && !starting[o.ID] {
 				verb = "to go first"
 			}
 			wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s: both touch %s", o.Label(), o.ID, verb, area)
@@ -189,17 +191,41 @@ func (m *Module) quiet(t Task) bool {
 	return ok && r.Status == core.StatusQuiet
 }
 
+// waitsOn finds the task a queued one's reason says it waits for.
+var waitsOn = regexp.MustCompile(`\(task (\S+)\) to (?:land|go first): both touch `)
+
+// holder returns the task a wait reason names, or "".
+func holder(reason string) string {
+	if s := waitsOn.FindStringSubmatch(reason); s != nil {
+		return s[1]
+	}
+	return ""
+}
+
 // overlap returns the first task in others on t's project whose brief names
 // a file t's brief names too, or whose worker has changed one in its
-// checkout, and that file. A package or directory named in a brief holds
-// nothing by itself: two briefs in one package start together, and the
-// second merges main if they meet.
-func (m *Module) overlap(t Task, others []Task) (*Task, string) {
+// checkout, and that file. The task prefer (the one t already waits for) is
+// asked first, so a brief that overlaps several keeps one reason until that
+// one lets go, rather than being saved anew each time another starts ahead of
+// it (task 232db4fc42 swapped between holders every few minutes for an hour).
+// A package or directory named in a brief holds nothing by itself: two
+// briefs in one package start together, and the second merges main if they
+// meet.
+func (m *Module) overlap(t Task, others []Task, prefer string) (*Task, string) {
 	mine := m.areas(t)
 	if len(mine) == 0 {
 		return nil, ""
 	}
+	order := make([]int, 0, len(others))
 	for i, o := range others {
+		if o.ID == prefer {
+			order = append([]int{i}, order...)
+		} else {
+			order = append(order, i)
+		}
+	}
+	for _, i := range order {
+		o := others[i]
 		if o.Project != t.Project || o.ID == t.ID {
 			continue
 		}
