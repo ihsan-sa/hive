@@ -60,9 +60,16 @@ func (e *AlreadyRunning) Error() string {
 	return s + "; this one exits (`" + core.Cmd + " stop` ends the running one)"
 }
 
+// stopWait is how long a daemon waits for the lock while its holder doesn't
+// answer: a daemon shutting down holds it until it has exited, which a
+// Windows runner has taken seconds to do.
+var stopWait = 30 * time.Second
+
 // lockWorkspace takes the workspace's daemon lock, trying for up to wait
-// (an update's restart waits out the daemon it replaces) or once.
-func lockWorkspace(ws core.Workspace, wait time.Duration) (*workspaceLock, error) {
+// (an update's restart waits out the daemon it replaces, a start waits out
+// one stopping) or once. With unlessUp it stops waiting as soon as a daemon
+// there answers; a hand-off waits even for one that still answers.
+func lockWorkspace(ws core.Workspace, wait time.Duration, unlessUp bool) (*workspaceLock, error) {
 	if err := os.MkdirAll(ws.Private(), 0o700); err != nil {
 		return nil, err
 	}
@@ -79,7 +86,7 @@ func lockWorkspace(ws core.Workspace, wait time.Duration) (*workspaceLock, error
 		if ok {
 			break
 		}
-		if time.Now().After(end) {
+		if time.Now().After(end) || unlessUp && running(ws) {
 			var h holder
 			raw, _ := core.SafeRead(lockFile(ws), 4096)
 			json.Unmarshal(raw, &h)
@@ -137,3 +144,5 @@ func booting(ws core.Workspace) (*api.Client, bool) {
 	}
 	return Running(ws)
 }
+
+func running(ws core.Workspace) bool { _, ok := Running(ws); return ok }
