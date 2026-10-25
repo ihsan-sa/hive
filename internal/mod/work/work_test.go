@@ -23,14 +23,27 @@ type flakyForge struct {
 	down   bool
 	users  int
 	refuse bool
-	hold   chan struct{} // the first User call waits for it to close
-	closed []int
-	bodies []string
+	// checksRefused refuses the token every read of checks, as GitHub does
+	// a token without Checks: read on a repo with workflows, in the words
+	// GitHub.Checks gives (TestChecksRefusedWithoutWorkflows pins them).
+	checksRefused bool
+	checksAsked   int
+	hold          chan struct{} // the first User call waits for it to close
+	closed        []int
+	bodies        []string
 }
 
 func (f *flakyForge) CreatePR(repo, head, base, title, body string) (core.PR, error) {
 	f.bodies = append(f.bodies, body)
 	return f.Local.CreatePR(repo, head, base, title, body)
+}
+
+func (f *flakyForge) Checks(repo, sha string) ([]core.CheckRun, error) {
+	f.checksAsked++
+	if f.checksRefused {
+		return nil, errors.New("gh api repos/" + repo + "/commits/" + sha + "/check-runs?per_page=100: gh: Resource not accessible by personal access token (HTTP 403)")
+	}
+	return f.Local.Checks(repo, sha)
 }
 
 func (f *flakyForge) User() (string, error) {
@@ -343,6 +356,45 @@ func TestGiveUpComesBack(t *testing.T) {
 	m.save(&got, "done")
 	if err := m.Recheck(task.ID, "", "lead"); err == nil {
 		t.Fatal("a done task was rechecked")
+	}
+}
+
+// A task stuck on its way to the merge (here waiting on a stale commit's
+// checks) is the lead's to retry: recheck takes it back to landing with fresh
+// counts, a stuck checkpoint is dropped while its worker goes on, and a step
+// running on the task refuses it.
+func TestRecheckRetriesAStuckMerge(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage, task.SHA, task.Round, task.Failures = StageMerging, "2125f74e", 2, 4
+	task.Reason = "waiting for the forge's checks on 2125f74e"
+	m.save(task, task.Reason)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.mu.Unlock()
+	if err := m.Recheck(task.ID, "", "lead"); err == nil || !strings.Contains(err.Error(), "step running") {
+		t.Fatalf("retried under a running step: %v", err)
+	}
+	m.mu.Lock()
+	delete(m.busy, task.ID)
+	m.mu.Unlock()
+	if err := m.Recheck(task.ID, "", "lead"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := m.Get(task.ID)
+	if got.Stage != StageLanding || got.Failures+got.Round != 0 || got.Reason != "" || !logged(&got, "retried from merging") {
+		t.Fatalf("not back to landing with fresh counts: %+v", got)
+	}
+
+	got.Stage, got.Checkpoint = StageTesting, "2125f74e"
+	m.save(&got, "a checkpoint")
+	if err := m.Recheck(task.ID, "try again", "lead"); err == nil {
+		t.Fatal("sent back a worker still working past its checkpoint")
+	}
+	if err := m.Recheck(task.ID, "", "lead"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = m.Get(task.ID); got.Stage != StageWorking || got.Checkpoint != "" {
+		t.Fatalf("the checkpoint should be dropped: %+v", got)
 	}
 }
 

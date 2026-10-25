@@ -566,6 +566,56 @@ func TestGateMissingToolCantRun(t *testing.T) {
 	}
 }
 
+// A change faking a missing tool (exit 127 with "not found", a new tool each
+// time) gets one can't-run comment however often it is tried; after
+// CantRunTries it counts as red: stopped, not merged, and the person is asked
+// for the tool by name.
+func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
+	m, task, p, forge := gateRigSeeded(t, false,
+		map[string]string{".hive/project.json": `{"test": "test ! -f FAKE || { echo \"sh: 1: tool$$: not found\"; exit 127; }"}`},
+		map[string]string{"FAKE": "x"})
+	before, _ := m.C.Effects.Sync(p)
+	for i := 1; i < CantRunTries; i++ {
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+		if task.Stage != StageTesting {
+			t.Fatalf("try %d: stage %q, want it still waiting", i, task.Stage)
+		}
+	}
+	said := 0
+	for _, c := range forge.Comments(p.Repo, task.PR.Number) {
+		if strings.Contains(c, "can't run") {
+			said++
+		}
+	}
+	if said != 1 {
+		t.Fatalf("%d can't-run comments on the PR over %d tries, want 1", said, CantRunTries-1)
+	}
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageStopped || !strings.Contains(task.Reason, "counts as red") {
+		t.Fatalf("after %d tries: stage %q, reason %q", CantRunTries, task.Stage, task.Reason)
+	}
+	var ask core.Ask
+	for _, a := range m.C.Person.Open() {
+		if a.Ref == "cant-run:"+task.ID {
+			ask = a
+		}
+	}
+	if !strings.Contains(ask.Title, "Install tool") {
+		t.Fatalf("the person isn't asked for the tool by name: %+v", ask)
+	}
+	if after, _ := m.C.Effects.Sync(p); after != before {
+		t.Fatal("a change whose tests never ran was merged")
+	}
+	err := m.Recheck(task.ID, "", "lead")
+	if got, _ := m.Get(task.ID); err != nil || got.CantRuns != 0 {
+		t.Fatalf("the lead's recheck: %v, count %d, want a fresh count", err, got.CantRuns)
+	}
+}
+
 // A checkpoint whose tests can't find their tool is dropped with that reason:
 // not a failure, nothing sent back, its round unspent, and the tool named once.
 // The alert clears once the tests run.
@@ -701,5 +751,26 @@ func TestClosedCheckpointNotTold(t *testing.T) {
 		if strings.Contains(c, "later commits") {
 			t.Fatalf("told a closed PR it takes later commits: %q", c)
 		}
+	}
+}
+
+// A draft closed while it waits stops as the person's call, rather than
+// waiting in merging for good; one that leaves merging drops its wait, so a
+// later draft wait starts its clock afresh.
+func TestClosedDraftStops(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	forge.SetDraft(p.Repo, task.PR.Number, true)
+	task.DraftWhy = "the lead holds it" // else the gate would ready it
+	m.settle(task, m.step(task))
+	if task.DraftSince.IsZero() {
+		t.Fatalf("not waiting: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	forge.ClosePR(p.Repo, task.PR.Number, "")
+	m.settle(task, m.step(task))
+	if task.Stage != StageStopped || !task.ByPerson || !task.DraftSince.IsZero() || task.DraftTold {
+		t.Fatalf("stage %q, by person %v, draft since %v", task.Stage, task.ByPerson, task.DraftSince)
 	}
 }

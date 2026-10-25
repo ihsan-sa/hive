@@ -179,10 +179,11 @@ A value of @path reads that file. Common ops:
 The loop is every agent's: these act on your own project's tasks, on the record with your run id.
   rerun-checks [--task id]                      the failed forge checks (CI jobs) on a PR's head (yours by default)
                                                  run again, for a flake; at most 2 per head, the merge waits for them
-  recheck   --task id [--back "..."]             a blocked or stopped task's commits checked again, or its worker
-                                                 given what remains
   queue     [--order id,id] [--hold id] [--release id]   briefs waiting for a worker, in order
             [--now id --why "..."]               start it first, past a brief on the same files
+  recheck   --task id [--back "..."]           a blocked or stopped task, or one stuck on its way to
+                                                 the merge (say on a stale commit's checks), is pushed and
+                                                 checked again from its head; --back sends its worker that
   landed    --task id --why "..." [--merge sha]  end a task whose PR merged on the forge or whose
                                                  work is on main, so the briefs waiting on it start
   pr_ready  --task id [--why "..."]              (lead) mark the Hive's own PR ready; its merge goes on

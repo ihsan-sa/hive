@@ -138,6 +138,7 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 
 	lab := &Child{Name: "fixes", Root: filepath.Join(cfg.Out, "fixes"), Sandbox: cand.Sandbox, Go: cand.Go, Meter: cand.Meter, Fwd: cand.Fwd}
 	defer os.RemoveAll(lab.Root)
+	defer os.RemoveAll(lab.Tmp())
 	type tally struct {
 		pass, fail int
 		norun      bool // did not build or run: no evidence
