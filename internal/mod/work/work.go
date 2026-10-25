@@ -1991,7 +1991,10 @@ func (m *Module) reviewRules(p core.Project, main string) string {
 
 // followUp files a merged task's review advice as one follow-up brief. The
 // task is saved merged before this runs and done after, so a restart in
-// between finds the brief already filed and doesn't file it again.
+// between finds the brief already filed and doesn't file it again. It is
+// filed as a fix of what the reviewer found: it hardens a change that already
+// passed, so no gate probe would see it move and, taken as a gain, it would
+// tie and be rolled back.
 func (m *Module) followUp(t *Task, p core.Project) error {
 	if len(t.Advice) == 0 || len(m.List(func(x Task) bool { return x.FollowUp == t.ID })) > 0 {
 		return nil
@@ -2001,6 +2004,7 @@ func (m *Module) followUp(t *Task, p core.Project) error {
 		url = t.Banks[len(t.Banks)-1].PR.URL
 	}
 	_, err := m.File(Brief{Project: p.Name, From: t.Reviewer, Chat: t.Chat, Thread: t.Thread, FollowUp: t.ID,
+		Aim: AimFix, Why: core.Clip("the review of "+t.Label()+" found: "+strings.Join(t.Advice, "; "), 300),
 		Title: "Follow up the review of " + core.Clip(t.Label(), 100),
 		Done:  "Each item below is done, or judged not worth doing with the reason in your account.",
 		Known: "The reviewer landed " + url + ", now merged, with this advice:\n\n- " + strings.Join(t.Advice, "\n- ")})
