@@ -122,7 +122,7 @@ func (m *Module) MarkReady(id, by, why string) (string, error) {
 	case t.ByPerson || m.workerStopped(t):
 		return note + fmt.Sprintf("; task %s stays stopped: the person stopped it", t.ID), nil
 	}
-	if err := m.Recheck(id, ""); err != nil {
+	if err := m.Recheck(id, "", by); err != nil {
 		return "", err
 	}
 	return note + "; it had stopped over the draft, so it is back and checked again", nil
