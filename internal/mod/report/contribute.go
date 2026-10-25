@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 )
 
 // maxWrites caps what one run writes upstream (issues, comments and the
@@ -92,6 +93,13 @@ func (m *Module) contribute(cfg core.Config) string {
 	if forge == nil {
 		return "nothing contributed: no forge"
 	}
+	// Everything here is published, so it passes the publish scan first,
+	// as `hive share` does; without its lists nothing goes and the
+	// failures wait, unread.
+	lists, err := m.publishLists()
+	if err != nil {
+		return "nothing contributed: the publish scan can't run: " + core.Clip(err.Error(), 300)
+	}
 	since, _ := Contributing(cfg)
 	fails, _, seq, read := m.build(cfg, since, "report.contributed")
 	st := loadFiled(ws)
@@ -112,9 +120,26 @@ func (m *Module) contribute(cfg core.Config) string {
 	}
 	sort.Slice(fps, func(i, j int) bool { return st[fps[i]].Last < st[fps[j]].Last })
 	writes, opened, failed := 0, 0, ""
+	var stopped []string
 	for _, fp := range fps {
 		x := st[fp]
 		if !x.Dirty || writes >= maxWrites {
+			continue
+		}
+		title := "Install failure (" + x.Kind + "): " + core.Clip(x.Message, 80)
+		body := fmt.Sprintf("An install that said yes to contributing hit this failure (docs/report.md).\n\n- kind: `%s`\n- version: `%s`\n- os: `%s`\n\n%s\n", x.Kind, x.Version, x.OS, x.Message)
+		if x.Log != "" {
+			body += "\n```\n" + core.Clip(strings.ReplaceAll(x.Log, "```", "'''"), 1500) + "\n```\n"
+		}
+		times := "once"
+		if x.Count > 1 {
+			times = fmt.Sprintf("%d times", x.Count)
+		}
+		comment := fmt.Sprintf("Seen on install %s %s, the last at %s on %s (%s).", tag, times, x.Last, x.Version, x.OS)
+		if why := held("issue "+fp, lists, title, body, comment); why != "" {
+			// Not filed, now or for this occurrence; a later one tries again.
+			x.Dirty = false
+			stopped = append(stopped, why)
 			continue
 		}
 		if x.Issue == 0 {
@@ -132,11 +157,7 @@ func (m *Module) contribute(cfg core.Config) string {
 			}
 		}
 		if x.Issue == 0 {
-			body := fmt.Sprintf("An install that said yes to contributing hit this failure (docs/report.md).\n\n- kind: `%s`\n- version: `%s`\n- os: `%s`\n\n%s\n", x.Kind, x.Version, x.OS, x.Message)
-			if x.Log != "" {
-				body += "\n```\n" + core.Clip(strings.ReplaceAll(x.Log, "```", "'''"), 1500) + "\n```\n"
-			}
-			iss, err := forge.CreateIssue(up, "Install failure ("+x.Kind+"): "+core.Clip(x.Message, 80), body, "<!-- "+issueMarker+fp+" -->")
+			iss, err := forge.CreateIssue(up, title, body, "<!-- "+issueMarker+fp+" -->")
 			writes++
 			if err != nil {
 				failed = err.Error()
@@ -144,11 +165,7 @@ func (m *Module) contribute(cfg core.Config) string {
 			}
 			x.Issue, opened = iss.Number, opened+1
 		}
-		times := "once"
-		if x.Count > 1 {
-			times = fmt.Sprintf("%d times", x.Count)
-		}
-		err := forge.StatusComment(up, x.Issue, "<!-- "+installMarker+tag+" -->", fmt.Sprintf("Seen on install %s %s, the last at %s on %s (%s).", tag, times, x.Last, x.Version, x.OS))
+		err := forge.StatusComment(up, x.Issue, "<!-- "+installMarker+tag+" -->", comment)
 		writes++
 		if err != nil {
 			failed = err.Error()
@@ -167,7 +184,10 @@ func (m *Module) contribute(cfg core.Config) string {
 	if failed != "" {
 		out += "; " + core.Clip(failed, 200)
 	}
-	if pr := m.offerFixes(cfg, since, maxWrites-writes); pr != "" {
+	if len(stopped) > 0 {
+		out += fmt.Sprintf("; the publish scan held %d: %s", len(stopped), strings.Join(stopped, "; "))
+	}
+	if pr := m.offerFixes(cfg, since, maxWrites-writes, lists); pr != "" {
 		out += "; " + pr
 	}
 	return out
@@ -177,7 +197,7 @@ func (m *Module) contribute(cfg core.Config) string {
 // as one pull request from the person's fork, the repo they chose for the
 // Hive's own project. A Hive working in the upstream itself has nothing to
 // offer; nothing merged before the yes, or already offered, is said again.
-func (m *Module) offerFixes(cfg core.Config, since time.Time, room int) string {
+func (m *Module) offerFixes(cfg core.Config, since time.Time, room int, lists scan.Lists) string {
 	forge, up := m.C.Effects.Forge, Upstream(cfg)
 	var did []string
 	for _, p := range m.C.Projects.List() {
@@ -227,16 +247,23 @@ func (m *Module) offerFixes(cfg core.Config, since time.Time, room int) string {
 		if branch == "" {
 			branch = forge.DefaultBranch(p.Repo)
 		}
-		body := "Changes the Hive working on " + p.Repo + " made to the Hive's own code, offered by its install because the person said yes to contributing (docs/report.md). Each passed that Hive's own gate and review; judge them as any outside contribution.\n"
-		pr, err := forge.CreatePR(up, owner+":"+branch, forge.DefaultBranch(up), "Changes from "+p.Repo, body)
-		room--
-		if err != nil {
-			did = append(did, "couldn't offer "+p.Repo+": "+core.Clip(err.Error(), 200))
-			continue
-		}
-		list := "Merged on " + p.Repo + " since its install said yes to contributing:\n"
+		body := "Changes a Hive made to the Hive's own code on its fork, offered by its install because the person said yes to contributing (docs/report.md). Each passed that Hive's own gate and review; judge them as any outside contribution.\n"
+		title := "Changes from an install's fork"
+		list := "Merged on the fork since its install said yes to contributing:\n"
 		for _, t := range titles {
 			list += "- " + t + "\n"
+		}
+		// The fork's owner is in the pull request's head, which a fork's
+		// offer can't leave out; the text it carries passes the scan.
+		if why := held("offer "+p.Name, lists, title, body, list); why != "" {
+			did = append(did, "the publish scan held the offer from "+p.Name+": "+why)
+			continue
+		}
+		pr, err := forge.CreatePR(up, owner+":"+branch, forge.DefaultBranch(up), title, body)
+		room--
+		if err != nil {
+			did = append(did, "couldn't offer "+p.Name+": "+core.Clip(err.Error(), 200))
+			continue
 		}
 		forge.StatusComment(up, pr.Number, "<!-- hive-offer:"+installTag(cfg.InstallID)+" -->", list)
 		room--

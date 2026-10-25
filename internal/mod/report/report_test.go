@@ -11,6 +11,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report/contracttest"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 )
 
 // gen makes a token body of n characters from alphabet, so no key-shaped
@@ -128,6 +129,9 @@ func TestScrubKeepsPlainText(t *testing.T) {
 // open makes a core on a fresh workspace with the given config.
 func open(t *testing.T, edit func(*core.Config)) *core.Core {
 	t.Helper()
+	// The publish scan's lists, as an install that set them up has them.
+	t.Setenv(scan.HandlesEnv, "zed-handle")
+	t.Setenv(scan.DenyEnv, "codename-bluebird")
 	ws := core.Workspace{Root: t.TempDir()}
 	if err := ws.Init(); err != nil {
 		t.Fatal(err)

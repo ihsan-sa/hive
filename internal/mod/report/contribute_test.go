@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 )
 
 // upstream is a stand-in forge recording what is written to it.
@@ -312,5 +313,58 @@ func TestFingerprintKeepsWords(t *testing.T) {
 	cc := Report{Kind: "alert", Message: "page acceded in run 77ab01ff"}
 	if Fingerprint(a) != Fingerprint(b) || Fingerprint(a) == Fingerprint(cc) {
 		t.Fatal("ids don't collapse, or words do")
+	}
+}
+
+// Both outward paths pass the publish scan (issue #370), as `hive share`
+// does: with no handle list nothing goes, and a part or an issue with a key
+// Scrub doesn't know, a deny word or a handle is held, never sent.
+func TestPublishScanGatesWhatLeaves(t *testing.T) {
+	b := newBundles(t)
+	up := &upstream{comments: map[string]string{}}
+	c := openForge(t, up, func(cfg *core.Config) { cfg.ShareBundleURL = b.URL; SetContribute(cfg, true) })
+	Save(c.WS, Everything, "")
+	webhook := "ya29.a0AfH6SMBx1y2z3w4v5u6t7s" // a Google OAuth token, a shape Scrub doesn't know
+	if Scrub(webhook, "") != webhook {
+		t.Fatal("Scrub knows this shape now: pick one only the scan knows")
+	}
+	write(t, c.WS, "runs/w1/host/turn-001.jsonl", `{"text":"posting to `+webhook+`"}`+"\n")
+	write(t, c.WS, "runs/w1/box/notes.md", "fine notes")
+	write(t, c.WS, "runs/w2/box/notes.md", "ask Zed-Handle about it")
+	write(t, c.WS, "runs/w3/box/notes.md", "the codename-bluebird plan")
+	c.J.MustAppend("task.saved", map[string]any{"id": "t1", "stage": "blocked", "reason": "send it to " + webhook})
+	c.J.MustAppend("task.saved", map[string]any{"id": "t2", "stage": "blocked", "reason": "Zed-Handle should look"})
+	c.J.MustAppend("task.saved", map[string]any{"id": "t3", "stage": "blocked", "reason": "a plain reason"})
+
+	// No handle list: nothing at all goes, and the failures wait.
+	t.Setenv(scan.HandlesEnv, "")
+	res, _ := (&Module{C: c}).Send()
+	if len(b.batches()) != 0 || len(up.issues)+len(up.comments) != 0 || !strings.Contains(res, "publish scan can't run") {
+		t.Fatalf("without a handle list: %q, %d batches, %d issues", res, len(b.batches()), len(up.issues))
+	}
+
+	t.Setenv(scan.HandlesEnv, "zed-handle")
+	res, _ = (&Module{C: c}).Send()
+	if len(b.batches()) != 1 {
+		t.Fatalf("%q: %d batches", res, len(b.batches()))
+	}
+	got := fmt.Sprint(b.batches()[0])
+	if strings.Contains(got, "ya29.") || strings.Contains(strings.ToLower(got), "zed-handle") || strings.Contains(got, "bluebird") || !strings.Contains(got, "fine notes") {
+		t.Fatalf("the batch carried what the scan stops, or left out what it passes: %s", got)
+	}
+	if !strings.Contains(res, "publish scan held 4 parts") || strings.Contains(res, "a0AfH6") || strings.Contains(strings.ToLower(res), "zed-handle") {
+		t.Fatalf("the result doesn't say what was held, or says the thing itself: %q", res)
+	}
+	all := strings.Join(up.issues, "\n")
+	if len(up.issues) != 1 || !strings.Contains(all, "a plain reason") || strings.Contains(all, "ya29.") || strings.Contains(strings.ToLower(all), "zed-handle") {
+		t.Fatalf("%q\nissues filed (%d): %s", res, len(up.issues), all)
+	}
+	if !strings.Contains(res, "the publish scan held 2") {
+		t.Fatalf("the held issues aren't said: %q", res)
+	}
+	// The held parts are tried again, not marked sent.
+	(&Module{C: c}).Send()
+	if bs := b.batches(); len(bs) != 1 {
+		t.Fatalf("a held part went later: %v", bs[len(bs)-1])
 	}
 }

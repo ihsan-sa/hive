@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -78,6 +79,9 @@ type Batch struct {
 	OS      string `json:"os"`
 	At      string `json:"at"`
 	Parts   []Part `json:"parts"`
+	// Held are the parts the publish scan stopped, with what it found
+	// (never the thing): they stay unsent and are tried again next time.
+	Held []string `json:"-"`
 }
 
 func batchState(ws core.Workspace) string { return filepath.Join(Dir(ws), "batches.json") }
@@ -133,6 +137,10 @@ func tailFile(rel string) bool {
 // batches will have got to once it is sent.
 func (m *Module) buildBatch(cfg core.Config) ([]byte, Batch, batches, error) {
 	ws := m.C.WS
+	lists, err := m.publishLists()
+	if err != nil {
+		return nil, Batch{}, batches{}, fmt.Errorf("the publish scan can't run, so nothing goes: %v", err)
+	}
 	since, _ := everythingSince(cfg)
 	st := loadBatches(ws)
 	if !st.Since.Equal(since) {
@@ -194,6 +202,12 @@ func (m *Module) buildBatch(cfg core.Config) ([]byte, Batch, batches, error) {
 		if len(piece) == 0 {
 			continue
 		}
+		// What `hive share` would refuse never goes: the part waits, and
+		// its file isn't marked sent.
+		if why := held(d.rel, lists, text); why != "" {
+			man.Held = append(man.Held, why)
+			continue
+		}
 		name := ".hive/" + d.rel
 		if from > 0 {
 			name += fmt.Sprintf("@%d", from)
@@ -238,10 +252,14 @@ func (m *Module) sendBatch(cfg core.Config) string {
 	if err != nil {
 		return "no batch: " + err.Error()
 	}
+	note := ""
+	if len(man.Held) > 0 {
+		note = fmt.Sprintf("; the publish scan held %d parts: %s", len(man.Held), strings.Join(man.Held, "; "))
+	}
 	if body == nil {
 		raw, _ := json.Marshal(st)
 		core.WriteFileAtomic(batchState(ws), raw, 0o600)
-		return "no batch: nothing new"
+		return "no batch: nothing new" + note
 	}
 	req, err := http.NewRequest("POST", BundleURL(cfg), bytes.NewReader(body))
 	if err != nil {
@@ -266,5 +284,5 @@ func (m *Module) sendBatch(cfg core.Config) string {
 	for _, p := range man.Parts {
 		n += p.Bytes
 	}
-	return fmt.Sprintf("batch of %d files, %d KB", len(man.Parts), (n+1023)>>10)
+	return fmt.Sprintf("batch of %d files, %d KB", len(man.Parts), (n+1023)>>10) + note
 }
