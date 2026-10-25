@@ -2230,20 +2230,27 @@ func (e *Effects) hostCommit(p Project, dir string, h HostCommit) (string, error
 	return sha, nil
 }
 
-// MainBundle writes main as a bundle a worker can fetch to resolve conflicts.
+// MainBundle writes main as a bundle a worker can fetch to resolve conflicts,
+// and returns the commit it holds (read under the same lock, so it is the
+// bundle's head even if main moves just after).
 // It is written under a temp name and renamed, so a fetch running now sees the old or the new file whole.
-func (e *Effects) MainBundle(p Project, path string) error {
+func (e *Effects) MainBundle(p Project, path string) (string, error) {
 	defer e.lock(p.Name)()
+	dir := e.ws.Project(p.Name)
+	head, err := Git(dir, "rev-parse", "--verify", p.Branch)
+	if err != nil {
+		return "", err
+	}
 	tmp := path + ".tmp"
-	if _, err := Git(e.ws.Project(p.Name), "bundle", "create", tmp, p.Branch); err != nil {
+	if _, err := Git(dir, "bundle", "create", tmp, p.Branch); err != nil {
 		os.Remove(tmp)
-		return err
+		return "", err
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
-		return err
+		return "", err
 	}
-	return nil
+	return strings.TrimSpace(head), nil
 }
 
 func appendLine(path, header, line string) error {

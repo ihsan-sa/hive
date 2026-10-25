@@ -1375,3 +1375,39 @@ func TestVetRedOnlyAsMainIsNotNoWorse(t *testing.T) {
 		t.Fatal("a branch failing only main's own test wasn't no worse")
 	}
 }
+
+// The message names the commit main.bundle holds: if the clone's main moved
+// past the one the checks ran on, it says both.
+func TestMergeForgeCheckBundleNamesItsHead(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	rerunSpent(task)
+	pushMain(t, f, map[string]string{"new_test.txt": "only on main"})
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPass})
+	clone := m.C.WS.Project(p.Name)
+	next := strings.TrimSpace(must(t, clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", main+"^{tree}", "-p", main, "-m", "moved"))
+	must(t, clone, "update-ref", "refs/heads/"+p.Branch, next)
+	msg := m.forgeFailures(task, p, main, []core.CheckRun{{Name: "test", State: core.CheckFail}}, nil, nil)
+	if !strings.Contains(msg, "holds main at "+core.Short(next)+", which main has moved to since the checks ran on "+core.Short(main)) {
+		t.Fatalf("message:\n%s", msg)
+	}
+}
+
+// A main.bundle that can't be written is journaled and said, not dropped.
+func TestMergeForgeCheckBundleFailureIsRecorded(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	main := strings.TrimSpace(must(t, m.C.WS.Project(p.Name), "rev-parse", p.Branch))
+	os.MkdirAll(filepath.Join(m.C.WS.RunRO(task.Worker), "main.bundle", "x"), 0o755) // a non-empty directory can't be renamed over
+	msg := m.forgeFailures(task, p, main, []core.CheckRun{{Name: "test", State: core.CheckFail}}, nil, nil)
+	if !strings.Contains(msg, "main.bundle couldn't be updated") {
+		t.Fatalf("message:\n%s", msg)
+	}
+	for _, e := range m.C.J.Since(0) {
+		if e.Kind == "task.bundle_failed" && strings.Contains(string(e.Data), task.ID) {
+			return
+		}
+	}
+	t.Fatal("no task.bundle_failed event")
+}
