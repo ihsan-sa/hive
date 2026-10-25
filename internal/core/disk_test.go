@@ -174,15 +174,22 @@ func TestPruneRemovesLeftovers(t *testing.T) {
 	defer done()
 	os.Chtimes(live, old, old)
 	stale := mk(filepath.Join(e.ws.CheckHomes(), "home-1"))
+	// A home this daemon didn't mark is a dead daemon's check's, however
+	// young: it goes at once, its stop file left to end the check if it runs.
+	orphan := filepath.Join(e.ws.CheckHomes(), "home-2")
+	os.MkdirAll(orphan, 0o755)
+	lone := filepath.Join(e.ws.CheckHomes(), "home-3.stop")
+	os.WriteFile(lone, nil, 0o600)
+	os.Chtimes(lone, old, old)
 	gate := mk(filepath.Join(e.ws.Gates(), "p", "abc-test-1"))
 	recursive := mk(filepath.Join(e.ws.Gates(), "p", "recursive"))
 	fresh := filepath.Join(e.ws.Gates(), "p", "def-test-2")
 	os.MkdirAll(fresh, 0o755)
 	t.Cleanup(func() { os.Chmod(filepath.Join(recursive, "x"), 0o755) })
-	if got := e.Prune(); !strings.Contains(got, "removed 2") {
+	if got := e.Prune(); !strings.Contains(got, "removed 3") {
 		t.Fatalf("prune said %q", got)
 	}
-	for p, want := range map[string]bool{live: true, stale: false, gate: false, recursive: true, fresh: true} {
+	for p, want := range map[string]bool{live: true, stale: false, orphan: false, orphan + ".stop": true, lone: false, gate: false, recursive: true, fresh: true} {
 		if Exists(p) != want {
 			t.Errorf("%s exists %v, want %v", p, Exists(p), want)
 		}
@@ -271,5 +278,28 @@ func TestPrefetchReadsOnlyTheCheckout(t *testing.T) {
 		if why := localReplace(dir, ok); why != "" {
 			t.Errorf("%q: %s", ok, why)
 		}
+	}
+}
+
+// The prefetch's go runs with telemetry off: in its fresh home go would
+// otherwise take the daily upload token and leave a detached child writing
+// into the cache after RemoveTree (issue #514).
+func TestPrefetchTurnsTelemetryOff(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the shared module cache is for Linux sandboxes")
+	}
+	c, _ := testHive(t)
+	removesCache(t, c)
+	seen := filepath.Join(t.TempDir(), "mode")
+	goBin := filepath.Join(c.WS.Tools(), "go", "bin", "go")
+	os.MkdirAll(filepath.Dir(goBin), 0o755)
+	os.WriteFile(goBin, []byte("#!/bin/sh\ncat \"$XDG_CONFIG_HOME/go/telemetry/mode\" > "+seen+"\n"), 0o755)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n"), 0o644)
+	if err := c.Effects.prefetch(dir); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(seen); strings.TrimSpace(string(raw)) != "off" {
+		t.Fatalf("go saw telemetry mode %q", raw)
 	}
 }

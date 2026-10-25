@@ -163,8 +163,10 @@ func TestOutageBacksOffAndWakes(t *testing.T) {
 	m, forge, task, _ := noCommitRig(t, 0)
 	var gaps []time.Duration
 	for range 20 {
+		// From just before the step: a slow save (Windows) mustn't read 30s as 29s.
+		before := time.Now()
 		m.settle(task, errors.New("dial tcp: lookup api.github.com: no such host"))
-		gaps = append(gaps, time.Until(task.Retry).Round(time.Second))
+		gaps = append(gaps, task.Retry.Sub(before).Truncate(time.Second))
 	}
 	why := "can't reach GitHub: no internet connection"
 	if task.Stage != StageLanding || task.Failures != 0 || m.Offline() != why || !logged(task, why+"; retrying") {

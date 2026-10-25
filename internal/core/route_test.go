@@ -2,6 +2,7 @@ package core
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -193,11 +194,12 @@ func TestAnthropicModelTurn(t *testing.T) {
 	}
 	argv, env := strings.Join(spec.Argv, " "), strings.Join(spec.Env, "\n")
 	if spec.Argv[0] != "claude" || !strings.Contains(argv, "--model kimi-k2-0905-preview") ||
-		!strings.Contains(argv, `--settings {"apiKeyHelper":"\"hive\" open-key \"/hive/home/.hive-open/key\"","disableAllHooks":true`) {
+		!strings.Contains(argv, `--settings {"apiKeyHelper":"'hive' open-key '/hive/home/.hive-open/key'","disableAllHooks":true`) {
 		t.Errorf("argv %q", spec.Argv)
 	}
 	for _, want := range []string{"ANTHROPIC_BASE_URL=https://api.moonshot.ai/anthropic", "ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2-0905-preview",
-		"ANTHROPIC_SMALL_FAST_MODEL=kimi-k2-0905-preview", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000"} {
+		"ANTHROPIC_SMALL_FAST_MODEL=kimi-k2-0905-preview", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000",
+		"CLAUDE_CONFIG_DIR=/hive/home/.claude-open"} {
 		if !slices.Contains(spec.Env, want) {
 			t.Errorf("env lacks %s: %q", want, spec.Env)
 		}
@@ -249,6 +251,20 @@ func TestAnthropicModelTurn(t *testing.T) {
 	}
 }
 
+// The key helper's words are shell-quoted: a path holding $, a backtick or
+// a quote reaches the helper as written, never expanded.
+func TestShellWord(t *testing.T) {
+	if os.PathSeparator != '/' {
+		t.Skip("the POSIX shell")
+	}
+	for _, s := range []string{"/w/hive", "/w/$HOME/x", "/w/`id`/x", "/w/it's/x", `/w/a"b\c`} {
+		out, err := exec.Command("sh", "-c", "printf %s "+shellWord(s, false)).Output()
+		if err != nil || string(out) != s {
+			t.Errorf("%q came through as %q (%v)", s, out, err)
+		}
+	}
+}
+
 // The daemon writes a model's key into the run's home, which the agent can
 // write: a link an earlier turn planted at the key's folder or file is
 // replaced, never followed, so the key lands nowhere else and nothing
@@ -295,6 +311,17 @@ func TestOpenKeyFollowsNoLink(t *testing.T) {
 	c.Runs.dropOpenKey("l-file")
 	if !Exists(filepath.Join(elsewhere, "key")) {
 		t.Fatal("dropping the key deleted a file outside the run's home")
+	}
+
+	// Claude Code's config folder planted as a link to a Claude login
+	// elsewhere is replaced by a real, empty one.
+	cfgDir := filepath.Join(home, ".claude-open")
+	os.Symlink(elsewhere, cfgDir)
+	if err := realDir(cfgDir); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Lstat(cfgDir); !fi.IsDir() || Exists(filepath.Join(cfgDir, "key")) {
+		t.Fatal("the config folder is still a link")
 	}
 }
 
@@ -373,6 +400,96 @@ func TestFallbackAtALimit(t *testing.T) {
 	}
 }
 
+// A vendor's 429, as Claude Code reports it on an Anthropic-compatible model
+// (no rate_limit_info, and words that needn't say "limit"), parks that model
+// and moves the run to the next on its route; a key refused mid-turn says so
+// plainly and retries afresh, without marking the model down.
+func TestVendorLimitMovesToFallback(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.Models = map[string]OpenModel{
+		"kimi": {Endpoint: "https://api.moonshot.ai/anthropic", Model: "kimi-k2", API: "anthropic", Key: true},
+		"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"},
+	}
+	c.WS.SaveConfig(cfg)
+	_, err := c.Runs.Start(RunSpec{ID: "v1", Role: "worker", Harness: "open", Model: "kimi", Brief: "b", Checkout: t.TempDir(),
+		Route: []Pick{{Harness: "open", Model: "kimi"}, {Harness: "open", Model: "free"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := func(turn int, line string) Run {
+		r, _ := c.Runs.Get("v1")
+		r.Turn, r.Login = turn, "open:kimi"
+		out := c.WS.TurnOut(r.ID, turn)
+		os.MkdirAll(filepath.Dir(out), 0o755)
+		os.WriteFile(out, []byte(line+"\n"), 0o600)
+		c.Runs.endTurn(r)
+		got, _ := c.Runs.Get("v1")
+		return got
+	}
+	got := end(1, `{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Your apiKeyHelper script is failing · This usually means you need to re-authenticate with your provider · Run /status to see the script's error output","session_id":"s1"}`)
+	if got.Status != StatusParked || !strings.Contains(got.Reason, "refused kimi's key mid-turn") || !strings.Contains(got.Reason, "model key kimi") {
+		t.Fatalf("a key refused mid-turn: %s %q", got.Status, got.Reason)
+	}
+	if d := c.Runs.Down(); len(d) != 0 {
+		t.Fatalf("a key refused mid-turn marked the model down: %+v", d)
+	}
+	got = end(2, `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"API Error: Request rejected (429) · Your account org-x request reached organization max RPM: 3","session_id":"s1"}`)
+	if got.Status != StatusParked || got.Reason != "usage limit; moving to open:free" {
+		t.Fatalf("a vendor's 429: %s %q", got.Status, got.Reason)
+	}
+	if !c.Runs.freeAt("open", "kimi").After(time.Now().Add(30 * time.Minute)) {
+		t.Fatal("the vendor's model isn't parked")
+	}
+	if d := c.Runs.Down(); len(d) != 0 {
+		t.Fatalf("a vendor's 429 is a limit, not a model that can't answer: %+v", d)
+	}
+	if p, at := c.Runs.next(got); p.Model != "free" || at.After(time.Now()) {
+		t.Fatalf("next after a vendor's 429: %v at %v", p, at)
+	}
+}
+
+// A key the endpoint won't take at all (refused on two turns in a row, the
+// second with the key handed over afresh) marks the model down as any 401
+// does, and the run moves at once to the next pick on its route.
+func TestKeyRefusedTwiceMovesToFallback(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.Models = map[string]OpenModel{
+		"kimi": {Endpoint: "https://api.moonshot.ai/anthropic", Model: "kimi-k2", API: "anthropic", Key: true},
+		"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"},
+	}
+	c.WS.SaveConfig(cfg)
+	if _, err := c.Runs.Start(RunSpec{ID: "v2", Role: "worker", Harness: "open", Model: "kimi", Brief: "b", Checkout: t.TempDir(),
+		Route: []Pick{{Harness: "open", Model: "kimi"}, {Harness: "open", Model: "free"}}}); err != nil {
+		t.Fatal(err)
+	}
+	refused := `{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Your apiKeyHelper script is failing · This usually means you need to re-authenticate with your provider · Run /status to see the script's error output","session_id":"s1"}`
+	end := func(turn int) Run {
+		r, _ := c.Runs.Get("v2")
+		r.Turn, r.Login = turn, "open:kimi"
+		out := c.WS.TurnOut(r.ID, turn)
+		os.MkdirAll(filepath.Dir(out), 0o755)
+		os.WriteFile(out, []byte(refused+"\n"), 0o600)
+		c.Runs.endTurn(r)
+		got, _ := c.Runs.Get("v2")
+		return got
+	}
+	if got := end(1); !strings.Contains(got.Reason, "refused kimi's key mid-turn") || len(c.Runs.Down()) != 0 {
+		t.Fatalf("the first refusal: %q, down %+v", got.Reason, c.Runs.Down())
+	}
+	got := end(2)
+	if d := c.Runs.Down(); len(d) != 1 || d[0].Pick.Model != "kimi" || d[0].Status != 401 {
+		t.Fatalf("the second refusal left the model up: %+v", d)
+	}
+	if got.Status != StatusParked || !strings.Contains(got.Reason, "moving to open:free") {
+		t.Fatalf("the second refusal: %s %q", got.Status, got.Reason)
+	}
+	if p, at := c.Runs.next(got); p.Model != "free" || at.After(time.Now()) {
+		t.Fatalf("next after a refused key: %v at %v", p, at)
+	}
+}
+
 // A run's turn starts at most once. On 2026-10-24 a run moving off a model
 // at its limit got two live sessions on one checkout: two launches of the
 // same run, one beside the other and one from a copy older than the turn
@@ -445,4 +562,59 @@ func (s countSB) Start(spec sandbox.Spec) (sandbox.Proc, error) {
 	*s.n++
 	s.mu.Unlock()
 	return s.startSB.Start(spec)
+}
+
+// Tick steps a run as it is when the step begins, not as it was listed: a
+// run listed idle whose turn started since is stepped as running, so it is
+// watched rather than launched again.
+func TestTickStepsTheRunAsItIsNow(t *testing.T) {
+	c, _ := testHive(t)
+	var args []string
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return startSB{args: &args}, nil }
+	r, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake", Model: "opus", Brief: "the brief", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, c.WS.LoadConfig())
+	c.Runs.SetStatus("w1", StatusIdle, "") // the first turn ended
+	listed, _ := c.Runs.Get("w1")
+	c.Runs.launch(listed, c.WS.LoadConfig()) // a turn starts after the list was read
+	got, ok := c.Runs.claim(listed)
+	if !ok || got.Status != StatusRunning || got.Turn != 2 {
+		t.Fatalf("claimed %v: %s at turn %d, want running at turn 2", ok, got.Status, got.Turn)
+	}
+	if _, again := c.Runs.claim(listed); again {
+		t.Fatal("a run claimed twice before its step ended")
+	}
+}
+
+// A watch from a copy older than the run's last turn ends nothing: that
+// turn ended already, and ending it again would clear the live one after it.
+func TestWatchFromAStaleCopyEndsNothing(t *testing.T) {
+	c, _ := testHive(t)
+	var args []string
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return startSB{args: &args}, nil }
+	r, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake", Model: "opus", Brief: "the brief", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, c.WS.LoadConfig())
+	stale, _ := c.Runs.Get("w1") // running turn 1
+	c.Runs.SetStatus("w1", StatusIdle, "")
+	cur, _ := c.Runs.Get("w1")
+	c.Runs.launch(cur, c.WS.LoadConfig()) // turn 2 is live
+	c.Runs.watch(stale)
+	got, _ := c.Runs.Get("w1")
+	if got.Status != StatusRunning || got.Turn != 2 {
+		t.Fatalf("after a stale watch: %s at turn %d, want running at turn 2", got.Status, got.Turn)
+	}
+	for _, e := range c.J.Since(0) {
+		if e.Kind == "run.turn_ended" {
+			t.Fatalf("a stale watch ended a turn: %s", e.Data)
+		}
+	}
+	c.Runs.watch(got) // the live copy still ends its turn
+	if got, _ = c.Runs.Get("w1"); got.Status == StatusRunning {
+		t.Fatal("the current copy's watch didn't end the turn")
+	}
 }

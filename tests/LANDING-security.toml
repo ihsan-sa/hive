@@ -52,6 +52,9 @@ paths = [
   # Which credentials reach an agent's turn.
   "internal/harness/**",
 
+  # Agents' reads of GitHub on the person's login: which repos and paths.
+  "internal/mod/forgeread/**",
+
   # The open harness holds a model's key and runs the model's shell commands;
   # routes decide which model and endpoint a run's turn goes to.
   "internal/openagent/**",
@@ -60,6 +63,12 @@ paths = [
   # Self-update and install scripts.
   "install/**",
   "internal/mod/release/**",
+
+  # The identity and secret scan on every release and export, and the list of
+  # the files a release publishes, which it reads.
+  "internal/mod/scan/**",
+  "cmd/hive-scan/**",
+  ".hive/public.txt",
 
   # CI and release workflows run with repository secrets.
   ".github/workflows/**",

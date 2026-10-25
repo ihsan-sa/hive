@@ -53,6 +53,8 @@ func TestGhWrites(t *testing.T) {
 		"api -X PATCH repos/o/r/issues/comments/9 -f body=x": true,
 		"api repos/o/r/issues/3/comments -f body=x":          true,
 		"run rerun 7 --failed -R o/r":                        true,
+		"pr ready 3 -R o/r --undo":                           true,
+		"api -X DELETE repos/o/r/git/refs/heads/hive/x":      true,
 	} {
 		if got := ghWrites(strings.Fields(args)); got != want {
 			t.Errorf("%s: writes %v, want %v", args, got, want)
@@ -226,6 +228,49 @@ func TestChecksNewestAttemptByID(t *testing.T) {
 	}
 }
 
+// ReadyPR runs gh pr ready, a write, only while the draft's head is the
+// commit it names; a moved head or a PR already ready runs nothing.
+func TestGitHubReadyPRAtItsHead(t *testing.T) {
+	head, draft := "aaaa1111", true
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		if args[0] == "pr" && args[1] == "view" {
+			return `{"number":7,"state":"OPEN","headRefOid":"` + head + `","isDraft":` + map[bool]string{true: "true", false: "false"}[draft] + `}`, "", nil
+		}
+		return "", "", nil
+	})
+	readies := func() (n int) {
+		for _, c := range *calls {
+			if c[0] == "pr" && c[1] == "ready" {
+				n++
+			}
+		}
+		return n
+	}
+	if err := (GitHub{}).ReadyPR("o/r", 7, "bbbb2222"); err == nil || readies() != 0 {
+		t.Fatalf("readied a moved head: %v, %d", err, readies())
+	}
+	if err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || readies() != 1 {
+		t.Fatalf("ready at its head: %v, %d", err, readies())
+	}
+	draft = false
+	if err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || readies() != 1 {
+		t.Fatalf("readied one already ready: %v, %d", err, readies())
+	}
+	if !ghWrites([]string{"pr", "ready", "7"}) {
+		t.Fatal("gh pr ready isn't counted a write")
+	}
+}
+
+// GitHub's refusal to merge a draft reads as ErrDraft, so the task waits.
+func TestDraftRefusedReadsAsDraft(t *testing.T) {
+	if !draftRefused.MatchString("gh pr merge: GraphQL: Pull Request is still a draft (mergePullRequest)") {
+		t.Fatal("GitHub's draft refusal isn't recognised")
+	}
+	if draftRefused.MatchString("gh pr merge: Pull request is not mergeable") {
+		t.Fatal("another refusal reads as a draft")
+	}
+}
+
 // Checks reads every page of check runs, statuses and suites (a head past
 // 100 check runs still shows its 101st), and takes gh's items whether it
 // printed them compact or indented. The replies are the item shapes GitHub's
@@ -342,5 +387,38 @@ func TestChecksRefusedReasons(t *testing.T) {
 		if ChecksRefused(r) {
 			t.Errorf("read as a checks refusal: %s", r)
 		}
+	}
+}
+
+// An API read goes through gh's login as a plain GET, and a rate-limited one
+// comes back as RateLimited; the quota's reset is read from rate_limit.
+func TestAPIGetOnTheLogin(t *testing.T) {
+	limited := false
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		switch {
+		case args[1] == "rate_limit":
+			return "1792900000\n", "", nil
+		case limited:
+			return "", "HTTP 403: API rate limit exceeded for user ID 1.", errors.New("exit status 1")
+		}
+		return `{"number":7}`, "", nil
+	})
+	var r APIReader = GitHub{}
+	if out, err := r.APIGet("o/r", "repos/o/r/pulls/7"); err != nil || out != `{"number":7}` {
+		t.Fatalf("read: %q, %v", out, err)
+	}
+	if got := strings.Join((*calls)[0], " "); got != "api repos/o/r/pulls/7" || ghWrites((*calls)[0]) {
+		t.Fatalf("gh called as %q", got)
+	}
+	if _, err := r.APIGet("o/r", "-X"); err == nil {
+		t.Fatal("a flag passed as the path")
+	}
+	limited = true
+	var rl *RateLimited
+	if _, err := r.APIGet("o/r", "repos/o/r/pulls/7"); !errors.As(err, &rl) {
+		t.Fatalf("rate-limited read: %v", err)
+	}
+	if at, err := r.RateReset("o/r"); err != nil || at.Unix() != 1792900000 {
+		t.Fatalf("reset %v, %v", at, err)
 	}
 }
