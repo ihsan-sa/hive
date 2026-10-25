@@ -1,5 +1,7 @@
 # Status - 2026-10-22
 
+[overview.md](overview.md) repeats a few facts from here (the untested macOS sandbox, Codex without a real login, the gate not yet keeping a change on merit). When one of them changes, change it there too.
+
 Done:
 - Root install for a worker user (`sudo HIVE_USER=<name> sh install.sh`, issue #371): every write in the worker's home is the worker's and stops on a failed one; root-owned 0600 token files reach the sandboxed `hive-<name>.service` as systemd credentials; a rerun naming another repo is refused (docs/log.md). `tests/install/run.sh` runs it on a fresh debian:13 with no network, planted links included (needs docker; not yet run); `cmd/hive/install_test.go` covers the unprivileged part.
 - Opt-in sharing of failures and usage with the developer ([report.md](report.md)): asked by the installer (from the terminal, `HIVE_SHARE=yes|no` ahead of time, no without a terminal) or else at first run, off unless yes; scrubbed on the machine; `hive report`, Settings. Unit (scrubber table, one report per failure plus usage, the 25 cap, 400 dropped, 429 and unreachable kept, field patterns) and e2e `TestReportSharing` (local endpoint that checks the contract: off sends nothing, one blocked task sends one failure and one usage report).
