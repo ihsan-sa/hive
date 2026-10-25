@@ -126,11 +126,7 @@ func (a *App) moduleJobs() {
 		}
 		name := filepath.Base(m.Dir)
 		for job, every := range m.Schedule {
-			// A built-in job (no default of its own) is never taken over.
-			if have := a.System.Default(job); a.System.Has(job) && (have == "" || have == every) {
-				continue
-			}
-			a.System.Register(system.Job{Name: job, Default: every, Fn: func() (string, error) {
+			a.System.RegisterModule(system.Job{Name: job, Default: every, Fn: func() (string, error) {
 				a.C.J.MustAppend("module.scheduled", map[string]string{"module": name, "job": job})
 				return "asked module " + name, nil
 			}})

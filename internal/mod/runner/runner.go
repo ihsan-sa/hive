@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -263,7 +264,14 @@ func (r *Runner) start(name string, c *child, m modules.Module) {
 	at := time.Now()
 	if err := cmd.Start(); err != nil {
 		log.Close()
-		r.status[name] = "could not start: " + err.Error()
+		why := "could not start: " + err.Error()
+		if errors.Is(err, exec.ErrNotFound) && r.status[name] != why {
+			// It backs off and tries again, but a missing program (go, for a
+			// module run with go run) won't appear on its own: say so once.
+			r.C.J.MustAppend("alert.raised", map[string]string{"kind": "module", "ref": "module:" + name + ":missing", "module": name,
+				"text": fmt.Sprintf("module %s can't start: %q is not on the Hive's PATH. Install it, or put it on the PATH the daemon runs with, and the module starts on its next try.", name, argv[0])})
+		}
+		r.status[name] = why
 		r.C.J.MustAppend("module.exited", map[string]string{"module": name, "error": err.Error()})
 		c.next, c.wait = at.Add(c.wait), min(c.wait*2, 5*time.Minute)
 		return

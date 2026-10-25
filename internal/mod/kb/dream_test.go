@@ -19,6 +19,7 @@ import (
 func TestDreamPass(t *testing.T) {
 	ws, c, mods := freshWorkspace(t)
 	c.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	c.Projects.Add(core.Project{Name: "mine", Repo: "me/mine", Private: true})
 	m := New(c, &agents.Agents{C: c, Mod: mods})
 	a, _ := m.Write(Note{Title: "Gate", Text: "first", Project: "hive"})
 	b, _ := m.Write(Note{Title: "Gate", Text: "second", Project: "hive"})
@@ -40,7 +41,7 @@ func TestDreamPass(t *testing.T) {
 	if !slices.Contains(paths, "gate.md") || !slices.Contains(paths, "gate-2.md") || !slices.Contains(paths, "practice/risk.md") || slices.ContainsFunc(paths, func(p string) bool { return strings.HasPrefix(p, "record/") }) {
 		t.Fatalf("shared %v", paths)
 	}
-	if !slices.Contains(shared.Shipped, "practice/risk.md") || !slices.Equal(shared.Hidden, []string{"secret"}) {
+	if !slices.Contains(shared.Shipped, "practice/risk.md") || !slices.Equal(shared.Hidden, []string{"mine", "secret"}) {
 		t.Fatalf("shipped %v hidden %v", shared.Shipped, shared.Hidden)
 	}
 
@@ -49,6 +50,7 @@ func TestDreamPass(t *testing.T) {
 		"nested":        {Path: "notes/x.md", Text: "x"},
 		"record":        {Path: "record/task/t.md", Text: "x"},
 		"isolated":      {Path: "x.md", Text: "---\ntitle: x\nproject: secret\n---\n\nx\n"},
+		"private":       {Path: "x.md", Text: "---\ntitle: x\nproject: mine\n---\n\nx\n"},
 		"stale":         {Path: "gate.md", Text: "x", Was: "0"},
 		"gone":          {Path: "nope.md", Remove: true, Was: "0"},
 		"overwrite new": {Path: "gate.md", Text: "x"},

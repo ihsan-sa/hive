@@ -108,19 +108,17 @@ func (m *Module) Register(j Job) {
 	m.mu.Unlock()
 }
 
-// Has says whether a job is registered.
-func (m *Module) Has(name string) bool {
+// RegisterModule adds a job a module program serves, which has a default
+// schedule of its own. It never takes over a built-in job of the same name
+// (one with no default), and reports whether the job is now the module's.
+func (m *Module) RegisterModule(j Job) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, ok := m.jobs[name]
-	return ok
-}
-
-// Default is a registered job's own default schedule.
-func (m *Module) Default(name string) string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.jobs[name].Default
+	if have, ok := m.jobs[j.Name]; ok && (have.Default == "" || have.Default == j.Default) {
+		return have.Default != ""
+	}
+	m.jobs[j.Name] = j
+	return true
 }
 
 // Schedule is a parsed schedule string.

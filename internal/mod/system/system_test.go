@@ -115,3 +115,29 @@ func TestJobDefaultSchedule(t *testing.T) {
 		t.Fatal("config.json's schedule didn't override the default")
 	}
 }
+
+// A module program's job never takes over a built-in job of the same name,
+// and registering it again each tick keeps the one it has.
+func TestModuleJobNeverReplacesABuiltin(t *testing.T) {
+	dir := t.TempDir()
+	c, err := core.Open(core.Workspace{Root: filepath.Join(dir, "hive")}, &core.Local{Dir: filepath.Join(dir, "forge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	m := New(c)
+	builtin := func() (string, error) { return "builtin", nil }
+	m.Register(Job{Name: "kb.file", Fn: builtin})
+	if m.RegisterModule(Job{Name: "kb.file", Default: "every 1m", Fn: func() (string, error) { return "module", nil }}) {
+		t.Fatal("a module job took over a built-in one")
+	}
+	if out, _ := m.jobs["kb.file"].Fn(); out != "builtin" {
+		t.Fatalf("kb.file runs %q", out)
+	}
+	if !m.RegisterModule(Job{Name: "kb.dream", Default: "every 4h", Fn: builtin}) || !m.RegisterModule(Job{Name: "kb.dream", Default: "every 4h", Fn: builtin}) {
+		t.Fatal("a module job wasn't registered, or not kept")
+	}
+	if !m.RegisterModule(Job{Name: "kb.dream", Default: "every 2h", Fn: builtin}) || m.jobs["kb.dream"].Default != "every 2h" {
+		t.Fatal("a module's changed default didn't take")
+	}
+}

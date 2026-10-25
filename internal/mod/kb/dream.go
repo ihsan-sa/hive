@@ -163,7 +163,7 @@ func (m *Module) Dream(module string, p Pass) (string, error) {
 		}
 		seen[c.Path] = true
 		if proj, ok := m.isolatedIn(c.Text); ok && !c.Remove {
-			return "", fmt.Errorf("refused: %s names isolated project %s", c.Path, proj)
+			return "", fmt.Errorf("refused: %s names hidden project %s", c.Path, proj)
 		}
 		file := filepath.Join(kb, filepath.FromSlash(c.Path))
 		fi, err := os.Lstat(file)

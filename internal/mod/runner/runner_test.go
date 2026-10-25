@@ -172,3 +172,20 @@ func TestReviewThatCannotBeRecorded(t *testing.T) {
 		t.Fatalf("%d events for a vote that was never recorded", n)
 	}
 }
+
+// A program that isn't on the PATH raises one alert saying so, not one per
+// try, while the runner keeps trying.
+func TestMissingProgramAlertsOnce(t *testing.T) {
+	r, m, _ := newRunner(t, "door")
+	m.Exec = []string{"hive-no-such-program-xyz"}
+	for range 3 {
+		c := &child{commit: "local"}
+		r.start("door", c, m)
+	}
+	if n := r.count("alert.raised"); n != 1 {
+		t.Fatalf("%d alerts, want 1", n)
+	}
+	if !strings.HasPrefix(r.Status("door"), "could not start") {
+		t.Fatalf("status %q", r.Status("door"))
+	}
+}
