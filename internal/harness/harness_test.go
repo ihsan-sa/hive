@@ -252,3 +252,12 @@ func TestResultTokens(t *testing.T) {
 		t.Errorf("codex: %+v", r.Tokens)
 	}
 }
+
+// A window the harness sent without a reset has none, not one in 1970 that
+// would read as long past.
+func TestWindowWithoutResetHasNone(t *testing.T) {
+	evs := Claude{}.Parse([]byte(`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","unifiedWindows":{"seven_day":{"utilization":0.3}}}}`))
+	if len(evs) != 1 || evs[0].RateLimit == nil || !evs[0].RateLimit.Windows["seven_day"].ResetsAt.IsZero() {
+		t.Fatalf("got %+v", evs)
+	}
+}

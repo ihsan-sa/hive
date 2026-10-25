@@ -1209,3 +1209,28 @@ func TestToldHeadCountsTheLastDay(t *testing.T) {
 		t.Fatalf("head: %q", got)
 	}
 }
+
+// Each plan reads in plain words and shows when every window resets, while
+// the login is still running, not only once it is limited.
+func TestPlanUsageShowsResetsInPlainWords(t *testing.T) {
+	m := testModel(200, 40)
+	reset := time.Now().Add(3 * time.Hour)
+	m.st.Plans = []core.Plan{{Harness: "claude", Limit: harness.RateLimit{Status: "allowed_warning", Window: "seven_day", Utilization: 0.89, ResetsAt: reset,
+		Windows: map[string]harness.Window{"five_hour": {Utilization: 0.38, ResetsAt: time.Now().Add(-time.Minute)}}}}}
+	var dash string
+	for _, r := range m.dashRows() {
+		if strings.HasPrefix(r.key, "plan:") {
+			dash += r.text
+		}
+	}
+	for where, s := range map[string]string{"dashboard": dash, "usage line": m.usage(400)} {
+		for _, want := range []string{"near its limit", "weekly 89%, resets " + reset.Local().Format("Mon 15:04"), "5-hour reset"} {
+			if !strings.Contains(s, want) {
+				t.Errorf("%s lacks %q: %q", where, want, s)
+			}
+		}
+		if strings.Contains(s, "allowed_warning") || strings.Contains(s, "38%") {
+			t.Errorf("%s shows the raw status or a window's share from before its reset: %q", where, s)
+		}
+	}
+}

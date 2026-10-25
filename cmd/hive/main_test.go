@@ -69,19 +69,24 @@ func TestApproveRefuseNeverGuess(t *testing.T) {
 }
 
 // The owner read "resets Sat 01:40" at 02:09Z as a reset already past; it was
-// 05:40Z printed in EDT with no zone. The line now says how far off it is.
+// 05:40Z printed in EDT with no zone. The line now says how far off it is,
+// in plain words, and every window says when it resets, not only a limited one.
 func TestPlanLineSaysWhenTheResetIs(t *testing.T) {
 	reset := time.Date(2026, 10, 24, 5, 40, 0, 0, time.UTC)
 	now := time.Date(2026, 10, 24, 2, 9, 0, 0, time.UTC)
 	p := core.Plan{Harness: "claude", Login: "claude", At: now.Add(-time.Minute), Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour", Utilization: 0.28,
-		Windows: map[string]harness.Window{"five_hour": {Utilization: 0.28, ResetsAt: reset}, "seven_day": {Utilization: 0.36}}}}
+		Windows: map[string]harness.Window{"five_hour": {Utilization: 0.28, ResetsAt: reset}, "seven_day": {Utilization: 0.36, ResetsAt: reset.Add(48 * time.Hour)}}}}
 	got := planLine(p, now)
-	for _, want := range []string{"28% of the five_hour window", "resets in 3h31m0s", "seven_day 36%"} {
+	for _, want := range []string{"within its limit", "5-hour window 28% used, resets in 3h31m", "weekly window 36% used, resets in 2d3h"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q lacks %q", got, want)
 		}
 	}
-	if got := planLine(p, reset.Add(time.Minute)); !strings.Contains(got, "window reset at") || !strings.Contains(got, "no reading since") {
+	p.Limit.Status = "allowed_warning"
+	if got := planLine(p, now); !strings.Contains(got, "near its limit") || strings.Contains(got, "allowed_warning") {
+		t.Errorf("allowed_warning should read in plain words: %q", got)
+	}
+	if got := planLine(p, reset.Add(time.Minute)); !strings.Contains(got, "5-hour window reset at") || !strings.Contains(got, "no reading since (was 28%)") || strings.Contains(got, "within its limit") {
 		t.Errorf("a reading past its reset should say so: %q", got)
 	}
 }
@@ -104,7 +109,7 @@ func TestPlanLineEscapesFeedNames(t *testing.T) {
 			t.Errorf("a control or format character reaches the screen: %q", got)
 		}
 	}
-	if got := planLine(p, now); !strings.Contains(got, `allowed\x1b]0;x\x07`) || !strings.Contains(got, `seven\x1b[Kday\u2066 10%`) {
+	if got := planLine(p, now); !strings.Contains(got, `allowed\x1b]0;x\x07`) || !strings.Contains(got, `seven\x1b[Kday\u2066 window 10%`) {
 		t.Errorf("the status and the other windows should be escaped too: %q", got)
 	}
 }

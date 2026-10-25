@@ -281,7 +281,11 @@ func (Claude) Parse(line []byte) []Event {
 			rl.ResetsAt = time.Unix(ri.ResetsAt, 0).UTC()
 		}
 		for k, w := range ri.UnifiedWindows {
-			rl.Windows[k] = Window{Utilization: w.Utilization, ResetsAt: time.Unix(w.ResetsAt, 0).UTC()}
+			wnd := Window{Utilization: w.Utilization}
+			if w.ResetsAt > 0 { // 0 is "didn't say", not 1970
+				wnd.ResetsAt = time.Unix(w.ResetsAt, 0).UTC()
+			}
+			rl.Windows[k] = wnd
 		}
 		// Claude Code sends the binding window's utilization only under
 		// unifiedWindows, not at the top level, when the status is allowed.

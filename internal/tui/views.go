@@ -153,15 +153,11 @@ func (m *model) dashRows() []row {
 		}
 	}
 	if add(row{key: "plans", text: "plan usage", expand: len(m.st.Plans) > 0, def: true}) {
+		now := time.Now()
 		for _, p := range m.st.Plans {
-			status := text.Visible(p.Limit.Status)
-			if status == "rejected" {
-				status = stBad.Render("limited") + ", resets " + p.Limit.ResetsAt.Local().Format("Mon 15:04")
-			}
-			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), status)
-			for _, k := range sortedKeys(p.Limit.Windows) {
-				wnd := p.Limit.Windows[k]
-				line += fmt.Sprintf("  %s %.0f%%", text.Visible(k), wnd.Utilization*100)
+			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), standing(p, now))
+			for _, w := range p.WindowUses(now) {
+				line += "  " + windowShort(w, now, true)
 			}
 			add(row{key: "plan:" + p.Key(), depth: 1, text: line})
 		}
