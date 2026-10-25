@@ -14,8 +14,8 @@ const (
 )
 
 // GateResult is the recursive gate's verdict on a self project's head,
-// measured against main at Main. A change to the Hive itself merges only on
-// a keep for exactly that head and main (Effects.Merge).
+// measured against main at Main. A change to the Hive itself aimed at a gain
+// merges only on a keep for exactly that head and main (Effects.Merge).
 type GateResult struct {
 	Project   string    `json:"project"`
 	Head      string    `json:"head"`
@@ -26,6 +26,8 @@ type GateResult struct {
 	Sandbox   string    `json:"sandbox,omitempty"`   // what the children ran in
 	Note      string    `json:"note,omitempty"`      // how the run was set up, when the person should hear it (the org leg skipped)
 	Transient bool      `json:"transient,omitempty"` // a can't-run whose cause may pass (the machine's load, a flake on both sides): tried again soon
+	Conflicts []string  `json:"conflicts,omitempty"` // a can't-run because the head conflicts with main in these files: its worker merges main
+	Alone     bool      `json:"alone,omitempty"`     // a can't-run tied to this head alone (preparing its build, out of time): other heads at this main don't wait on it
 	At        time.Time `json:"at"`
 }
 

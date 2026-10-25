@@ -34,7 +34,7 @@ func stewardHive(t *testing.T, files map[string]string) (*Module, *core.Local) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.Close() })
-	if _, err := forge.EnsureRepo("local/hive", ""); err != nil {
+	if _, err := forge.EnsureRepo("local/hive", "", false); err != nil {
 		t.Fatal(err)
 	}
 	tmp := t.TempDir()

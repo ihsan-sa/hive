@@ -90,10 +90,14 @@ type Config struct {
 	// SelfFork is the owner (an organization) whose fork of release_repo this
 	// Hive works on itself in, when the person owns release_repo but another
 	// of their Hives is its steward (core.StewardFile).
-	SelfFork   string `json:"self_fork,omitempty"`
-	AutoUpdate bool   `json:"auto_update"`
-	ReleasePin string `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
-	PinnedAuto bool   `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
+	SelfFork string `json:"self_fork,omitempty"`
+	// PublicOwners are the accounts or organizations where create_project
+	// may make a public repository and tell the person after; a public one
+	// anywhere else waits for their yes.
+	PublicOwners []string `json:"public_owners"`
+	AutoUpdate   bool     `json:"auto_update"`
+	ReleasePin   string   `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
+	PinnedAuto   bool     `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
 	// Channel is the releases auto-update follows: "latest", or "pre-release",
 	// each pre-release once its checks for this system pass. Empty is the
 	// default: pre-releases on the Hive whose own project is release_repo, the
@@ -152,13 +156,18 @@ func (c Config) Sharing() (time.Time, bool) {
 }
 
 // SetShare records the person's answer; turning it on makes the install id.
+// Turning it on when it is already on keeps the time it was turned on, so
+// events since then that no run has reported yet still are, and still makes
+// an id it lacks (report.Send asks for `report on` then).
 func (c *Config) SetShare(on bool) {
-	c.Share = "off"
-	if on {
-		c.Share = time.Now().UTC().Format(time.RFC3339Nano)
-		if c.InstallID == "" {
-			c.InstallID = NewUUID()
+	if _, already := c.Sharing(); !on || !already {
+		c.Share = "off"
+		if on {
+			c.Share = time.Now().UTC().Format(time.RFC3339Nano)
 		}
+	}
+	if on && c.InstallID == "" {
+		c.InstallID = NewUUID()
 	}
 }
 
@@ -295,6 +304,7 @@ func DefaultConfig() Config {
 		TribunalModels: []TribunalSeat{{Model: "opus"}, {Model: "sonnet"}, {Model: "fable"}},
 		Sandbox:        "auto",
 		ReleaseRepo:    DefaultReleaseRepo,
+		PublicOwners:   []string{"Hive-RSI-Lab"},
 		AutoUpdate:     true,
 		ReviewRounds:   3,
 		ChatMaxMB:      300,

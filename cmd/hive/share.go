@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 )
 
 // bundleCap is just under the 100 MB the bundle endpoint takes.
@@ -89,6 +90,9 @@ func share(ws core.Workspace, url string, limit int64, yes bool, in io.Reader, o
 	}
 	if len(parts) == 0 {
 		return errors.New("nothing in this Hive fits in one bundle")
+	}
+	if err := scanParts(ws, parts); err != nil {
+		return errors.New("nothing sent: " + err.Error())
 	}
 	fmt.Fprintf(out, "This sends %s from %s:\n", mb(total), ws.Hive())
 	listParts(out, parts)
@@ -195,6 +199,9 @@ func writeBundle(w io.Writer, ws core.Workspace, parts []part) (int64, error) {
 			if err != nil {
 				continue // gone or swapped since the walk
 			}
+			if rel == "config.json" {
+				data = unlinkedConfig(data)
+			}
 			f, err := zw.CreateHeader(&zip.FileHeader{Name: ".hive/" + rel, Method: zip.Deflate, Modified: time.Now()})
 			if err != nil {
 				return 0, err
@@ -210,6 +217,27 @@ func writeBundle(w io.Writer, ws core.Workspace, parts []part) (int64, error) {
 	}
 	err = zw.Close()
 	return cw.n, err
+}
+
+// reportKeys tie a config to the install's anonymous reports
+// (docs/report.md); a bundle leaves them out, so it can't be matched to them.
+var reportKeys = []string{"install_id", "share_url"}
+
+// unlinkedConfig is config.json without reportKeys. A config that isn't a
+// JSON object goes as it is: nothing in it can be read as an install id.
+func unlinkedConfig(data []byte) []byte {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(data, &m) != nil {
+		return data
+	}
+	for _, k := range reportKeys {
+		delete(m, k)
+	}
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return data
+	}
+	return append(out, '\n')
 }
 
 // readNoFollow reads the slash path rel under root one name at a time,
@@ -334,4 +362,32 @@ func (c *countWriter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	c.n += int64(n)
 	return n, err
+}
+
+// scanParts is the identity and secret scan of what the bundle sends: every
+// file of parts, which the shared set names, against the deny and handle
+// lists given at run time (scan.RunTime). A hit, or no handle list, sends
+// nothing.
+func scanParts(ws core.Workspace, parts []part) error {
+	deny, handles, err := scan.RunTime(os.Getenv, ws.Private())
+	if err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(ws.Hive())
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	var names []string
+	for _, p := range parts {
+		names = append(names, p.files...)
+	}
+	read := func(rel string) ([]byte, error) {
+		data, err := readNoFollow(root, rel)
+		if err != nil {
+			return nil, nil // gone or swapped since the walk, so the bundle leaves it out too
+		}
+		return data, nil
+	}
+	return scan.Run(names, read, scan.Lists{Public: []string{"**"}, Deny: deny, Handles: handles})
 }
