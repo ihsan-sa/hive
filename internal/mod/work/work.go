@@ -1929,12 +1929,32 @@ func (m *Module) sendBackWith(t *Task, p core.Project, findings, detail string) 
 	if detail != "" {
 		msg += "\n\n" + detail
 	}
+	msg += m.bundleForFixes(t, p, msg)
 	if err := m.C.Runs.Reopen(t.Worker, msg+"\n\nFix these in your checkout, commit, and finish again."); err != nil {
 		return err
 	}
 	t.Stage, t.Reviews, t.SeatTries = StageWorking, 0, nil
 	m.save(t, fmt.Sprintf("round %d: findings sent back to the worker", t.Round))
 	return nil
+}
+
+// bundleForFixes writes main to the worker's main.bundle and says so, so a
+// fix that needs main's newer commits (a reviewer's ask built on them) can
+// merge them. A message that already names a bundle (the forge's checks write
+// the main they ran on) keeps it. A bundle that can't be written leaves the
+// findings to go back without it.
+func (m *Module) bundleForFixes(t *Task, p core.Project, msg string) string {
+	if strings.Contains(msg, "main.bundle") {
+		return ""
+	}
+	main, err := core.Git(m.C.WS.Project(p.Name), "rev-parse", p.Branch) // before the bundle, so it holds at least this main
+	if err != nil {
+		return ""
+	}
+	if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle")); err != nil {
+		return ""
+	}
+	return "\n\n$HIVE_RUN/main.bundle holds main at " + core.Short(strings.TrimSpace(main)) + ": if a fix needs main's newer commits, `git fetch \"$HIVE_RUN/main.bundle\" main` and merge FETCH_HEAD."
 }
 
 func (m *Module) merge(t *Task, p core.Project) error {
