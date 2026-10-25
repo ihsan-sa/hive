@@ -1,6 +1,7 @@
 package work
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -517,6 +518,36 @@ func TestOwnSecurityReadLands(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"), "Security read (security)") {
 		t.Fatal("the seat's read isn't on the PR")
+	}
+}
+
+// A fix to the Hive itself skips the recursive gate, not the security read:
+// one that changes a listed path waits for the seat's land like any other.
+func TestSelfFixStillWaitsForSecurityRead(t *testing.T) {
+	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
+	p.Self = true
+	task.Aim = ""
+	m.Gate = func(context.Context, GateJob) core.GateResult {
+		t.Error("the gate ran on a fix")
+		return core.GateResult{Outcome: core.GateKeep}
+	}
+	reviewerLand(t, m, task, p, "r1")
+	toMerging(t, m, task, p)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "security") || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("stage %q, reason %q: a self fix on a listed path didn't wait for its security read", task.Stage, task.Reason)
+	}
+	main, _ := m.C.Effects.Sync(p)
+	if _, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: task.PR.Number, SHA: task.SHA, Main: main, Gain: false}); err == nil || !strings.Contains(err.Error(), "security read") {
+		t.Fatalf("Effects.Merge took a self fix on a listed path unread: %v", err)
+	}
+	seatSays(t, m, task, core.SeatSecurity, "land")
+	mergeOnce(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q after the seat's land", task.Stage, task.Reason)
 	}
 }
 

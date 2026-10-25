@@ -165,11 +165,14 @@ type Hit struct {
 	When  string `json:"when"`
 	Text  string `json:"text"`
 	score int
+	tier  int // 0 a living note the dream made, 1 any other, 2 a retired note
 }
 
 // Search returns the pieces of the knowledge base under dir (notes whole,
 // record files entry by entry) that match the most words of query, newest
-// first among equals, skipping the folders in hide (relative to dir).
+// first among equals, skipping the folders in hide (relative to dir). A
+// living note the dream consolidated ranks first when it matches at least
+// half as well as the best hit, and a retired note ranks last.
 func Search(dir, query string, hide ...string) []Hit {
 	var terms []string
 	for _, w := range strings.Fields(strings.ToLower(query)) {
@@ -220,11 +223,32 @@ func Search(dir, query string, hide ...string) []Hit {
 			} else if len(p) >= 16 {
 				h.When = p[:16]
 			}
+			h.tier = 1
+			if !strings.HasPrefix(h.File, "record/") {
+				switch head := header(p); {
+				case head["retired"] != "":
+					h.tier = 2
+				case head["consolidated"] != "":
+					h.tier = 0
+				}
+			}
 			hits = append(hits, h)
 		}
 		return nil
 	})
+	best := 0
+	for _, h := range hits {
+		best = max(best, h.score)
+	}
+	for i := range hits {
+		if hits[i].tier == 0 && 2*hits[i].score < best {
+			hits[i].tier = 1
+		}
+	}
 	sort.SliceStable(hits, func(i, j int) bool {
+		if hits[i].tier != hits[j].tier {
+			return hits[i].tier < hits[j].tier
+		}
 		if hits[i].score != hits[j].score {
 			return hits[i].score > hits[j].score
 		}
@@ -259,4 +283,20 @@ func Find(dir, query, limit string, hide ...string) string {
 		fmt.Fprintf(&b, "%d more match; ask again with --limit all (or a bigger number) to see them.", more)
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// header reads a note's "---" header into its fields.
+func header(note string) map[string]string {
+	out := map[string]string{}
+	rest, ok := strings.CutPrefix(note, "---\n")
+	if !ok {
+		return out
+	}
+	head, _, _ := strings.Cut(rest, "\n---\n")
+	for _, l := range strings.Split(head, "\n") {
+		if k, v, ok := strings.Cut(l, ":"); ok {
+			out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	return out
 }

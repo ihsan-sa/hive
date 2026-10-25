@@ -144,14 +144,14 @@ func (m *model) dashRows() []row {
 			live = append(live, r)
 		}
 	}
-	if add(row{key: "agents", text: fmt.Sprintf("agents (%d live)", len(live)), expand: len(live) > 0, def: true}) {
+	if add(row{key: "agents", text: fmt.Sprintf("agents (%d live)", len(live)) + limitNote("workers", m.st.Workers), expand: len(live) > 0, def: true}) {
 		for _, r := range live {
 			d := detail{kind: "run", id: r.ID, title: runLabel(r)}
 			add(row{key: "run:" + r.ID, depth: 1, text: m.runLine(r), open: &d})
 		}
 	}
 	ck := m.st.Checks
-	if add(row{key: "checks", text: fmt.Sprintf("checks (%d running, %d waiting)", len(ck.Running), len(ck.Waiting)), expand: len(ck.Running)+len(ck.Waiting) > 0, def: true}) {
+	if add(row{key: "checks", text: fmt.Sprintf("checks (%d running, %d waiting)", len(ck.Running), len(ck.Waiting)) + limitNote("at once", ck.Limit), expand: len(ck.Running)+len(ck.Waiting) > 0, def: true}) {
 		for _, u := range ck.Running {
 			add(row{key: fmt.Sprintf("check:%s:%s:%s", u.Project, u.SHA, u.Kind), depth: 1, text: fmt.Sprintf("%s  %s %s  %s  %s", stGood.Render("running"), u.Project, core.Short(u.SHA), u.Kind, stDim.Render(ago(u.Since)))})
 		}
@@ -1014,7 +1014,7 @@ func (m *model) settings() []setting {
 			}
 		}},
 		{group: "General", label: "share reports", value: share, key: "share"},
-		{group: "Agents", label: "harness", value: c.Harness, key: "harness", choices: append(slices.Clone(harness.Names), custom)},
+		{group: "Agents", label: "harness", value: c.Harness, key: "harness", choices: append(harness.Names(), custom)},
 		{group: "Agents", label: "worker model", value: c.Model, key: "model", choices: models},
 		{group: "Agents", label: "lead model", value: c.LeadModel, key: "lead_model", choices: models},
 		{group: "Agents", label: "reviewer model", value: c.ReviewerModel, key: "reviewer_model", choices: models},
@@ -1030,7 +1030,7 @@ func (m *model) settings() []setting {
 		}
 		s = append(s, setting{group: "Agents", label: "model for " + p, value: v, key: "project:" + p, choices: append([]string{"default"}, models...)})
 		// The open harness runs a named model, which the model setting picks.
-		hs := slices.DeleteFunc(append([]string{"default"}, harness.Names...), func(h string) bool { return h == "open" })
+		hs := slices.DeleteFunc(append([]string{"default"}, harness.Names()...), func(h string) bool { return h == "open" })
 		s = append(s, setting{group: "Agents", label: "harness for " + p, value: cmp.Or(c.Projects[p].Harness, "default"), key: "project-harness:" + p, choices: hs})
 	}
 	s = append(s, setting{group: "Agents", label: "review rounds", value: strconv.Itoa(c.ReviewRounds), key: "review_rounds"})
@@ -1219,7 +1219,7 @@ func routeModels(c core.Config) []string {
 			add(routeEntry(c, m))
 		}
 	}
-	for _, h := range harness.Names {
+	for _, h := range harness.Names() {
 		if h == "open" || h == "fake" || h == core.HarnessName(c.Harness) {
 			continue
 		}
@@ -1497,4 +1497,12 @@ func toldHead(told []core.Ask, now time.Time) string {
 		return fmt.Sprintf("done for you (%d recent)", len(told))
 	}
 	return fmt.Sprintf("done for you (%d in the last day, %d recent)", day, len(told))
+}
+
+// limitNote is a limit the pace set, dimmed after a heading, or "" for none.
+func limitNote(what, limit string) string {
+	if limit == "" {
+		return ""
+	}
+	return "  " + stDim.Render(what+" "+text.Visible(limit))
 }

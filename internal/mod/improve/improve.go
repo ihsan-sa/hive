@@ -87,6 +87,7 @@ type Module struct {
 	lifted    map[string]time.Time    // project\x00test -> when its fix merged
 	fixMerged map[string]bool         // fix tasks whose merge lifted their test
 	kin       map[string]string       // task id -> the task it follows up or reverts
+	covered   map[string][]Covered    // project -> merges main already held when they closed
 	cantRuns  map[string]int          // project@sha -> its checks that couldn't start
 
 	stepbacks map[string]*StepBack
@@ -98,7 +99,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, fixMerged: map[string]bool{}, kin: map[string]string{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, fixMerged: map[string]bool{}, kin: map[string]string{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -109,6 +110,12 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			var ms Measurement
 			e.Decode(&ms)
 			m.scores[ms.Project] = append(m.scores[ms.Project], ms)
+		case "score.covered":
+			var x Covered
+			if e.Decode(&x) == nil {
+				x.At = e.At
+				m.covered[x.Project] = append(m.covered[x.Project], x)
+			}
 		case "sweep.saved":
 			var s Sweep
 			e.Decode(&s)
@@ -209,6 +216,9 @@ func (m *Module) versionOf(p core.Project, x Measurement) string {
 func (m *Module) measured(project, sha string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if slices.ContainsFunc(m.covered[project], func(c Covered) bool { return c.SHA == sha }) {
+		return true
+	}
 	for _, ms := range m.scores[project] {
 		if ms.SHA == sha && !ms.NoResult && (ms.Kept || ms.Task != "") {
 			return true
@@ -502,6 +512,32 @@ func (m *Module) superseded(p core.Project, sha string) bool {
 	return noResult && slices.ContainsFunc(later, func(l string) bool { return m.after(p, l, sha) })
 }
 
+// Covered is a merge that wasn't measured on its own: main already held it
+// when it was measured at By.
+type Covered struct {
+	Project string    `json:"project"`
+	SHA     string    `json:"sha"`
+	Task    string    `json:"task"`
+	By      string    `json:"by"`
+	At      time.Time `json:"-"`
+}
+
+// coveredBy is a commit already measured on p's main that contains sha, so
+// measuring sha now would test old code (a pull request that landed hours
+// before its task closed) and blame it on main. Main is linear, so the newest
+// measurement with a result is the one to ask.
+func (m *Module) coveredBy(p core.Project, sha string) string {
+	for _, x := range slices.Backward(m.Scores(p.Name)) {
+		if !x.NoResult {
+			if m.after(p, x.SHA, sha) {
+				return x.SHA
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
 // introduced says the merge itself brought in the command that calls the
 // missing tool: the same command on main before it didn't name that tool. A
 // misspelt tool is then the change's fault, and red, not a wait. A tool
@@ -561,6 +597,10 @@ func (m *Module) afterMerge(t work.Task) {
 	}
 	if _, err := m.C.Effects.Sync(p); err != nil {
 		go func() { time.Sleep(time.Minute); m.queue <- t }()
+		return
+	}
+	if by := m.coveredBy(p, t.MergeSHA); by != "" {
+		m.C.J.MustAppend("score.covered", Covered{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, By: by})
 		return
 	}
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
@@ -836,6 +876,15 @@ func (m *Module) Digest(since int64, only string) string {
 				kept = "no-result"
 			}
 			fmt.Fprintf(&b, "- %s %s score=%s kept=%s %s\n", x.At.Format("01-02 15:04"), core.Short(x.SHA), sc, kept, core.Clip(x.Note, 200))
+		}
+		m.mu.Lock()
+		cov := m.covered[p.Name]
+		m.mu.Unlock()
+		if len(cov) > 5 {
+			cov = cov[len(cov)-5:]
+		}
+		for _, c := range cov {
+			fmt.Fprintf(&b, "- %s %s not measured: main already held it when measured at %s (task %s)\n", c.At.Format("01-02 15:04"), core.Short(c.SHA), core.Short(c.By), c.Task)
 		}
 		b.WriteString("\nWork:\n")
 		for i, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {
