@@ -17,7 +17,7 @@ func queueRig(t *testing.T) *Module {
 	m, forge, _ := helperRig(t)
 	seed := filepath.Join(t.TempDir(), "seed")
 	mustGit(t, "", "clone", "-q", forge.RepoPath("me/p"), seed)
-	for _, f := range []string{"internal/core/effects.go", "internal/core/runs.go", "internal/tui/views.go", "docs/log.md", "docs/notes/plan.md"} {
+	for _, f := range []string{"internal/core/effects.go", "internal/core/runs.go", "internal/tui/views.go", "docs/log.md", "docs/notes/plan.md", "modules/agents/worker.md", "modules/kb/filer.md"} {
 		os.MkdirAll(filepath.Join(seed, filepath.Dir(f)), 0o755)
 		os.WriteFile(filepath.Join(seed, f), []byte("package x\n"), 0o644)
 	}
@@ -144,6 +144,72 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 	out, _ = m.opQueue(lead, json.RawMessage(`{"hold":["`+c.ID+`"]}`))
 	if notes := out.(map[string]any)["notes"].([]string); len(notes) != 1 || !strings.Contains(notes[0], "left the queue") {
 		t.Fatalf("notes %q", notes)
+	}
+}
+
+// A brief that only changes module prompts goes to the top of the line and
+// may start past the worker limit, one at a time; one that names code too
+// waits its turn.
+func TestQueueQuickPromptBriefs(t *testing.T) {
+	m := queueRig(t) // max_workers 2
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
+	a := file(t, m, "cap the checks", "In internal/core/effects.go.")
+	b := file(t, m, "hold strained turns", "In internal/core/runs.go.")
+	c := file(t, m, "show the queue", "In internal/tui/views.go.")
+	mixed := file(t, m, "worker prompt and code", "In modules/agents/worker.md and internal/tui/views.go.")
+	p1 := file(t, m, "word the worker prompt", "In modules/agents/worker.md.")
+	p2 := file(t, m, "word the filer prompt", "In modules/kb/filer.md; see docs/log.md.")
+	if m.quick(mixed) || !m.quick(p1) || !m.quick(p2) || m.quick(a) {
+		t.Fatalf("quick: mixed %v, p1 %v, p2 %v, a %v", m.quick(mixed), m.quick(p1), m.quick(p2), m.quick(a))
+	}
+	// A package, a directory or a file still to be made, named next to a
+	// prompt, is code work: not quick. A prompt still to be made is.
+	for known, want := range map[string]bool{
+		"modules/agents/lead.md and the queue in internal/mod/work.": false,
+		"modules/kb/filer.md and the modules/kb/dream package.":      false,
+		"modules/agents/lead.md, and a new internal/core/pace.go.":   false,
+		"modules/agents/../../x/y.md":                                false,
+		"A new modules/agents/scout.md, logged in docs/log.md.":      true,
+	} {
+		if got := m.quick(Task{Project: "p", Known: known}); got != want {
+			t.Errorf("quick(%q) = %v, want %v", known, got, want)
+		}
+	}
+	for _, task := range []*Task{&a, &b, &c, &mixed, &p1, &p2} {
+		task.Stage = StageQueued
+		m.save(task, "")
+	}
+	q := m.Queue(lead)
+	if len(q) != 6 || !strings.Contains(q[0], p1.ID) || !strings.Contains(q[1], p2.ID) || !strings.Contains(q[2], a.ID) {
+		t.Fatalf("queue: %q", q)
+	}
+	for _, task := range []*Task{&a, &b} {
+		task.Stage = StageWorking
+		m.save(task, "")
+	}
+	start, wait := m.admit(m.List(nil))
+	if !start[p1.ID] {
+		t.Fatalf("the prompt brief waits past a full cap: %q", wait[p1.ID])
+	}
+	for _, task := range []Task{p2, c} {
+		if !strings.Contains(wait[task.ID], "max_workers 2") {
+			t.Fatalf("%q: %q, want waiting for a worker", task.Title, wait[task.ID])
+		}
+	}
+	// A quick worker on: the next quick brief waits for a slot like any other.
+	p1.Stage = StageWorking
+	m.save(&p1, "")
+	if start, wait = m.admit(m.List(nil)); start[p2.ID] || !strings.Contains(wait[p2.ID], "max_workers 2") {
+		t.Fatalf("a second quick brief went past the cap: %q", wait[p2.ID])
+	}
+	// The mixed brief names p1's prompt: it waits on p1 even with a slot free.
+	if !strings.Contains(wait[mixed.ID], p1.ID) {
+		t.Fatalf("mixed: %q", wait[mixed.ID])
+	}
+	a.Stage = StageDone
+	m.save(&a, "landed")
+	if _, wait = m.admit(m.List(nil)); !strings.Contains(wait[mixed.ID], p1.ID) {
+		t.Fatalf("mixed: %q", wait[mixed.ID])
 	}
 }
 

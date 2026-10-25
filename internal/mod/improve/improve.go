@@ -871,7 +871,7 @@ func (m *Module) TickSweeps() {
 		dir := filepath.Join(m.C.WS.Hive(), "improve", "sweeps")
 		os.MkdirAll(dir, 0o755)
 		os.WriteFile(filepath.Join(dir, s.ID+".md"), report, 0o644)
-		for _, t := range m.Work.List(func(t work.Task) bool { return t.From == r.ID }) {
+		for _, t := range m.Work.List(func(t work.Task) bool { return t.From == r.ID || t.JoinedBy(r.ID) }) {
 			s.Asks = append(s.Asks, t.ID)
 		}
 		s.Status, s.Report, s.Ended = r.Status, core.Clip(string(report), 2000), time.Now().UTC()

@@ -82,7 +82,7 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		// The head can't be merged with main as the gate sees it: its worker
 		// merges main. No rollback, and the gate runs again on the new head.
 		m.tellGate(t, p, g)
-		return true, m.conflict(t, p, fmt.Errorf("the recursive gate: %s", g.Reason))
+		return true, m.conflict(t, p, t.SHA, fmt.Errorf("the recursive gate: %s", g.Reason))
 	}
 	if ok && (g.Outcome != core.GateCantRun || time.Now().Before(retryAfter(g))) {
 		m.tellGate(t, p, g)

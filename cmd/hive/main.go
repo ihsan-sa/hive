@@ -1074,21 +1074,26 @@ func kbArgs(args []string) (query, limit string) {
 	return strings.Join(words, " "), limit
 }
 
-// planLine is a plan's usage for hive status. The reset carries its zone and
-// how far off it is, and a reading whose window has since reset says so
+// planLine is a plan's usage for hive status, in plain words: how near its
+// limit the login is, then each window's share and when it resets, with the
+// zone and how far off. A window that has reset since the reading says so
 // rather than passing its old number off as current. Names from the usage
 // feed are escaped, so none can rewrite the screen.
 func planLine(p core.Plan, now time.Time) string {
-	l, key, window := p.Limit, text.Visible(p.Key()), text.Visible(p.Limit.Window)
-	at := l.ResetsAt.Local().Format("Mon 15:04 MST")
-	if !l.ResetsAt.After(now) {
-		return fmt.Sprintf("plan %s: the %s window reset at %s, no reading since (last %.0f%%, read %s ago)", key, window, at, l.Utilization*100, now.Sub(p.At).Round(time.Minute))
-	}
-	s := fmt.Sprintf("plan %s: %s, %.0f%% of the %s window, resets in %s (%s)", key, text.Visible(l.Status), l.Utilization*100, window, l.ResetsAt.Sub(now).Round(time.Minute), at)
-	for _, k := range slices.Sorted(maps.Keys(l.Windows)) {
-		if k != l.Window {
-			s += fmt.Sprintf("; %s %.0f%%", text.Visible(k), l.Windows[k].Utilization*100)
+	s := fmt.Sprintf("plan %s: %s", text.Visible(p.Key()), text.Visible(p.Limit.Standing(now)))
+	for _, w := range p.Limit.WindowUses(now) {
+		name, at := text.Visible(w.Name), w.ResetsAt.Local().Format("Mon 15:04 MST")
+		switch {
+		case w.ResetsAt.IsZero():
+			s += fmt.Sprintf("; %s window %.0f%% used", name, w.Used*100)
+		case w.Stale:
+			s += fmt.Sprintf("; %s window reset at %s, no reading since (was %.0f%%)", name, at, w.Used*100)
+		default:
+			s += fmt.Sprintf("; %s window %.0f%% used, resets in %s (%s)", name, w.Used*100, w.ResetsIn(now), at)
 		}
+	}
+	if !p.At.IsZero() {
+		s += fmt.Sprintf(" (read %s ago)", now.Sub(p.At).Round(time.Minute))
 	}
 	return s
 }

@@ -95,7 +95,7 @@ func Main(argv []string) int {
 
 // switches are the yes/no arguments, which may stand bare before another
 // --key; any other key takes the next word as its value, even "--help".
-var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "delete_branch": true}
+var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "delete_branch": true, "apart": true}
 
 // parseArgs accepts one JSON object, `-` for JSON on stdin, `--file x.json`,
 // or --key value pairs (a value of @path reads that file's text).
@@ -159,7 +159,7 @@ A value of @path reads that file. Common ops:
   inbox                                          messages waiting for you
   agents                                         who is running
   spawn     --role worker --brief "..." [--project p]   a helper; its account returns to you
-  brief     --title "..." --done "what done looks like" [--known "..."] [--project p] [--aim fix --why "the failure"]
+  brief     --title "..." --done "what done looks like" [--known "..."] [--project p] [--aim fix --why "the failure"] [--apart]
                                                  file an ask: it becomes an issue, a worker, a PR; taken as a
                                                  gain unless --aim fix names the failure it fixes
   aim       --aim fix|gain --why "..." [--task id]   your task (the lead: any) is a fix of the failure --why

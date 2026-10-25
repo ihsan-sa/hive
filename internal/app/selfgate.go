@@ -15,6 +15,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
 // The test org a self project's gate makes its fresh repositories in, when
@@ -62,7 +63,10 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 		}
 		org, note := orgArgs(j)
 		args = append(args, org...)
-		cmd := exec.CommandContext(ctx, exe, args...)
+		// The gate and all it starts (builds, child Hives, the e2e suite) run
+		// under every lead's priority, as a check does.
+		argv := sandbox.Niced(append([]string{exe}, args...), core.CheckNice)
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = j.Out
 		cmd.WaitDelay = time.Minute
 		dieWithDaemon(cmd)

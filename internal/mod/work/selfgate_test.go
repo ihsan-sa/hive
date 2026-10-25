@@ -2,6 +2,7 @@ package work
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -486,5 +487,25 @@ func TestAimCheckOnSelfFixes(t *testing.T) {
 		if s := aimCheck(c.t, c.p); s != "" {
 			t.Fatalf("aim %q kind %q self %v: got %q", c.t.Aim, c.t.Kind, c.p.Self, s)
 		}
+	}
+}
+
+// A worker that merged the main its last conflict sent starts the count over
+// when main moves on and conflicts again; one that didn't keeps adding up.
+func TestOnlyUnresolvedConflictsCount(t *testing.T) {
+	m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
+	task.Conflicts, task.ConflictMain = 3, task.SHA // the head holds the main it was sent
+	if err := m.conflict(task, p, task.SHA, errors.New("main moved")); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageWorking || task.Conflicts != 1 || task.ConflictMain == "" {
+		t.Fatalf("stage %q, conflicts %d, main %q: want a fresh count and sent back", task.Stage, task.Conflicts, task.ConflictMain)
+	}
+	task.Conflicts, task.ConflictMain = 3, strings.Repeat("ab", 20) // a main the head never merged
+	if err := m.conflict(task, p, task.SHA, errors.New("still")); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageStopped || !strings.Contains(task.Reason, "keeps conflicting") {
+		t.Fatalf("stage %q, reason %q: want given up after four unresolved", task.Stage, task.Reason)
 	}
 }
