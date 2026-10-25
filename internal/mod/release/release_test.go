@@ -395,7 +395,22 @@ func selfHive(t *testing.T) (*Module, *notes, func(int, string, string, ...strin
 	m, _ := releaseAt(t, "0.0.0-dev", "me/hive") // a source build, so tags count from v0.0.0
 	n := &notes{Local: m.C.Effects.Forge.(*core.Local), got: map[string]string{}}
 	m.C.Effects.Forge = n
-	m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true})
+	m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true, Branch: "main"})
+	// A clone whose main has no steward record, which the release reads.
+	if _, err := n.Local.EnsureRepo("me/hive", "", false); err != nil {
+		t.Fatal(err)
+	}
+	seed := t.TempDir()
+	for _, args := range [][]string{{"clone", "-q", n.Local.RepoPath("me/hive"), seed},
+		{"-C", seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "seed"}, {"-C", seed, "push", "-q", "origin", "HEAD:main"}} {
+		if _, err := core.Git("", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, _ := m.C.Projects.Get("hive")
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
 	m.Scan = func(core.Project, string) error { return nil } // scan_test.go tests the scan
 	merged := func(pr int, sha, mergeSHA string, root ...string) {
 		m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": pr, "sha": sha, "merge_sha": mergeSHA, "root": root})
