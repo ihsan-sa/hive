@@ -450,6 +450,19 @@ func TestRateLimitedLookSaysSoAndWaitsForTheReset(t *testing.T) {
 			if !at.Equal(reset.Add(-followEvery)) {
 				t.Fatalf("the next look is due at %v, want the reset %v", at.Add(followEvery), reset)
 			}
+			// The follow's goroutine moves m.followed and said1 before it
+			// journals: wait for its line, or the replay below can run first.
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				n := 0
+				m.C.J.Replay(func(e core.Event) {
+					if e.Kind == "release.follow" {
+						n++
+					}
+				})
+				if n > 0 {
+					break
+				}
+			}
 			m.followed1(m.AutoUpdate())
 			follows, alerts := 0, 0
 			m.C.J.Replay(func(e core.Event) {
