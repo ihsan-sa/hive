@@ -2069,7 +2069,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	}
 	if note := "text only: the forge's checks " + strings.Join(unminded, ", ") + " fail on " + core.Short(t.SHA) + ", which changes only docs or prompts and can't break them, so it merges"; len(unminded) > 0 && !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
 		m.save(t, note)
-		m.comment(p.Repo, t.PR.Number, "Merging though "+strings.Join(unminded, ", ")+" fail here: this change touches only text (docs, goals, prompts), which the Hive's own test and gate have already run against, so a red forge check isn't its own.")
+		m.comment(p.Repo, t.PR.Number, "Merging though "+strings.Join(unminded, ", ")+" fail here: this change touches only text (docs, goals, prompts), which the Hive's own tests have already run against on Linux, so a red forge check on another system or a flake isn't its own.")
 	}
 	// Said once per head and main: a merge hold or a failed merge brings t
 	// back here every holdGap, and a repeat would crowd out its log.

@@ -125,6 +125,39 @@ func TestMergeForgeCheckTextOnlyKept(t *testing.T) {
 	}
 }
 
+// The same with the red check on main's required_checks list: a prose
+// change leaves it out of what must pass, both in the merge's own checks and
+// in Effects.Merge, which records it as red_on_prose. A required check that
+// hasn't passed still holds.
+func TestMergeForgeCheckTextOnlyRequiredRed(t *testing.T) {
+	list := map[string]string{core.SecurityList: "paths = []\nrequired_checks = [\"test (windows-latest)\", \"sandboxed-e2e\"]\n"}
+	m, task, p, f := gateRigSeeded(t, false, list, map[string]string{"docs/overview.md": "# The Hive\n"})
+	toMerging(t, m, task, p)
+	win := core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail}
+	f.SetChecks(p.Repo, task.SHA, win)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.Round != 0 || !strings.Contains(task.Reason, "sandboxed-e2e") {
+		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	m.later = map[string]time.Time{}
+	f.SetChecks(p.Repo, task.SHA, win, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	var got struct {
+		Prose []string `json:"red_on_prose"`
+	}
+	for _, e := range m.C.J.Since(0) {
+		if e.Kind == "effect.merged" {
+			e.Decode(&got)
+		}
+	}
+	if len(got.Prose) != 1 || got.Prose[0] != "test (windows-latest)" {
+		t.Fatalf("merge event: %+v", got)
+	}
+}
+
 // logHas reports whether a line of task's log contains text.
 func logHas(task *Task, text string) bool {
 	for _, e := range task.Log {

@@ -1324,8 +1324,8 @@ func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string, tests Tests
 // ProseOnly says every file is prose (markdown, reStructuredText, AsciiDoc:
 // docs, goals, the agents' prompts) and none is under a testdata directory,
 // where tests read files as their data. A plain .txt file may be such data
-// anywhere, so it isn't prose. Its own tests and the gate run every test that
-// reads such a change, so a red forge check on it (another system, a flake)
+// anywhere, so it isn't prose. The Hive's own tests ran every test that reads
+// such a change on Linux, so a red forge check on it (another system, a flake)
 // isn't its own.
 func ProseOnly(files []string) bool {
 	for _, f := range files {

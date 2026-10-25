@@ -1131,3 +1131,15 @@ func TestProseOnly(t *testing.T) {
 		}
 	}
 }
+
+// ChecksBesidesFailures leaves a failed check out of the required list too,
+// while a required check not yet reported still holds.
+func TestChecksBesidesFailures(t *testing.T) {
+	runs := []CheckRun{{Name: "win", State: CheckFail}, {Name: "linux", State: CheckPass}}
+	if st, _, failed := ChecksBesidesFailures(runs, []string{"win", "linux"}); st != CheckPass || len(failed) != 1 || failed[0] != "win" {
+		t.Fatalf("state %q, failed %v", st, failed)
+	}
+	if st, which, _ := ChecksBesidesFailures(runs, []string{"win", "e2e"}); st != CheckPending || len(which) != 1 || which[0].Name != "e2e" {
+		t.Fatalf("state %q, which %v", st, which)
+	}
+}
