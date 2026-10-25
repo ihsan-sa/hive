@@ -153,3 +153,84 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 		t.Errorf("lesson: %q", raw)
 	}
 }
+
+// The candidate is judged as it would land: its head with the base merged in.
+// A branch cut before main fixed a test is not rolled back for that test, and
+// one that conflicts with the base can't run (its worker merges main), with
+// the files named and no lesson.
+func TestCandidateIsMergedWithBase(t *testing.T) {
+	unixOnly(t)
+	if _, err := FindGo(); err != nil {
+		t.Skip(err)
+	}
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(p, s string) {
+		os.MkdirAll(filepath.Dir(filepath.Join(repo, p)), 0o755)
+		os.WriteFile(filepath.Join(repo, p), []byte(s), 0o644)
+	}
+	commit := func(msg string) string {
+		git("add", "-A")
+		git("commit", "-qm", msg)
+		return git("rev-parse", "HEAD")
+	}
+	write("go.mod", "module cand\n\ngo 1.21\n")
+	write("cmd/hive/main.go", "package main\n\nfunc main() {}\n")
+	write("p/p.go", "package p\n")
+	write("internal/e2e/e2e_test.go", "package e2e\n\nimport \"testing\"\n\n// HIVE_E2E_WRAPPED\nfunc TestE2E(t *testing.T) {}\n")
+	// A test that fails here until main fixes it, as TestMeter's socket path did.
+	write("p/p_test.go", "package p\n\nimport \"testing\"\n\nfunc TestMeter(t *testing.T) { t.Fatal(\"path too long\") }\n")
+	write("NOTES.md", "one\n")
+	git("init", "-q", "-b", "main")
+	old := commit("old main")
+	git("checkout", "-q", "-b", "docs")
+	write("README.md", "docs\n")
+	docs := commit("docs, branched before the fix")
+	git("checkout", "-q", "-b", "clash", old)
+	write("NOTES.md", "the branch's\n")
+	clash := commit("clashes with main")
+	git("checkout", "-q", "main")
+	write("p/p_test.go", "package p\n\nimport \"testing\"\n\nfunc TestMeter(t *testing.T) {}\n")
+	write("NOTES.md", "main's\n")
+	fixed := commit("main fixes the test")
+
+	dir := t.TempDir()
+	lessons := filepath.Join(dir, "lessons.md")
+	pass := func(*Config, *Child) Result { return Result{Pass: true} }
+	run := func(name, head string) Report {
+		t.Helper()
+		rep, err := Run(Config{Repo: repo, Head: head, Base: fixed, Sandbox: "bare", AllowBare: true, Out: filepath.Join(dir, name, "run"), Lessons: lessons,
+			Probes: []string{"pass"}, Probe: map[string]ProbeFunc{"pass": pass}, Options: Options{AllowTie: true}})
+		t.Logf("%s: keep=%v cant_run=%v err=%v reason=%q", name, rep.Verdict.Keep, rep.CantRun, err, rep.Verdict.Reason)
+		return rep
+	}
+
+	rep := run("docs", docs)
+	if !rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Own) != 0 {
+		t.Errorf("a docs change branched before main's fix was not judged on its merits: %+v, unit %+v", rep.Verdict, rep.Unit)
+	}
+	if rep.Head != docs || rep.Merged == "" || rep.Merged == docs {
+		t.Errorf("the report names head %s and merged %s, want the head and a merge of it with the base", short(rep.Head), short(rep.Merged))
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "docs", "run", "report.json"))
+	if !strings.Contains(string(raw), `"merged": "`+rep.Merged+`"`) {
+		t.Errorf("report.json doesn't record the merged sha:\n%s", raw)
+	}
+
+	rep = run("clash", clash)
+	if !rep.CantRun || rep.Verdict.Keep || len(rep.Conflicts) != 1 || rep.Conflicts[0] != "NOTES.md" || !strings.Contains(rep.Verdict.Reason, "NOTES.md") {
+		t.Errorf("a branch that conflicts with the base: cant_run=%v conflicts=%v %+v", rep.CantRun, rep.Conflicts, rep.Verdict)
+	}
+	if raw, err := os.ReadFile(lessons); err == nil {
+		t.Fatalf("a merge conflict or a keep wrote a lesson: %q", raw)
+	}
+}

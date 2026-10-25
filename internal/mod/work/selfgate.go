@@ -13,10 +13,11 @@ import (
 
 // The recursive gate on the Hive's own repository (docs/gate.md): once a
 // self project's change has passed its tests, reads and the forge's checks,
-// the daemon runs `hive gate` on its exact head against current main, and it
-// merges only if the gate keeps it. A rollback goes back to the worker with
-// the report; a gate that can't run (no bubblewrap, no Go) leaves it waiting,
-// never merged unjudged. One gate runs at a time, for at most GateTimeout.
+// the daemon runs `hive gate` on its exact head, merged with current main,
+// against main, and it merges only if the gate keeps it. A rollback goes back
+// to the worker with the report, and so does a head that conflicts with main
+// (to merge it, no rollback); a gate that can't run (no bubblewrap, no Go)
+// leaves it waiting, never merged unjudged. One gate runs at a time, for at most GateTimeout.
 
 // GateJob is one gate run the work module asks for.
 type GateJob struct {
@@ -69,6 +70,12 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		return false, nil
 	}
 	g, ok := m.C.Effects.GateResult(p.Name, t.SHA, main)
+	if ok && g.Outcome == core.GateCantRun && len(g.Conflicts) > 0 {
+		// The head can't be merged with main as the gate sees it: its worker
+		// merges main. No rollback, and the gate runs again on the new head.
+		m.tellGate(t, p, g)
+		return true, m.conflict(t, p, fmt.Errorf("the recursive gate: %s", g.Reason))
+	}
 	if ok && (g.Outcome != core.GateCantRun || time.Now().Before(retryAfter(g))) {
 		m.tellGate(t, p, g)
 		switch g.Outcome {
@@ -147,7 +154,7 @@ func (m *Module) startGate(t *Task, p core.Project, main, key string) {
 		if m.gateCantRun == nil {
 			m.gateCantRun = map[string]core.GateResult{}
 		}
-		if g.Outcome == core.GateCantRun {
+		if g.Outcome == core.GateCantRun && len(g.Conflicts) == 0 { // a conflict is the head's alone
 			m.gateCantRun[p.Name+"@"+job.Main] = g
 		} else {
 			delete(m.gateCantRun, p.Name+"@"+job.Main)
@@ -182,7 +189,7 @@ func (m *Module) tellGate(t *Task, p core.Project, g core.GateResult) {
 	if g.Note != "" {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "gate", "ref": "gate-note:" + p.Name, "project": p.Name, "text": g.Note})
 	}
-	if g.Outcome == core.GateCantRun {
+	if g.Outcome == core.GateCantRun && len(g.Conflicts) == 0 {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "gate", "ref": "gate:" + p.Name, "project": p.Name,
 			"text": fmt.Sprintf("the recursive gate can't run in %s, so PR #%d waits unmerged: %s", p.Name, t.PR.Number, core.Clip(g.Reason, 300))})
 	}

@@ -24,7 +24,7 @@ type Evaluator struct {
 // trusts as it trusts itself; the candidate never runs in this step.
 func buildEvaluator(cfg Config, g Go, sha string) (*Evaluator, error) {
 	c := &Child{Name: "evaluator"}
-	if err := checkout(cfg, c, sha); err != nil {
+	if err := checkout(cfg, c, sha, ""); err != nil {
 		return nil, err
 	}
 	// The suite must know to run the binary in a sandbox of its own (the

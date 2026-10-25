@@ -26,6 +26,7 @@ type GateResult struct {
 	Sandbox   string    `json:"sandbox,omitempty"`   // what the children ran in
 	Note      string    `json:"note,omitempty"`      // how the run was set up, when the person should hear it (the org leg skipped)
 	Transient bool      `json:"transient,omitempty"` // a can't-run whose cause may pass (the machine's load, a flake on both sides): tried again soon
+	Conflicts []string  `json:"conflicts,omitempty"` // a can't-run because the head conflicts with main in these files: its worker merges main
 	At        time.Time `json:"at"`
 }
 
