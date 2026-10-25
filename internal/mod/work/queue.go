@@ -121,7 +121,8 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			// A quiet worker holds neither a slot nor anyone back: three
 			// held 3 of 8 slots for 10-12h while ~39 briefs waited. A
 			// message resumes it (core.Runs), and then it counts again,
-			// even if that puts the workers one past the limit for a while.
+			// even if that puts the workers past the limit (by as many as
+			// resume at once) until slots free; none start meanwhile.
 		case t.Stage == StageWorking || t.Queued(): // or a queued one being started right now
 			ahead = append(ahead, t)
 			working++
