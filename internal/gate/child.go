@@ -2,8 +2,6 @@ package gate
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -127,19 +125,7 @@ type Child struct {
 // Home is the child's HOME; Workspace is its HIVE_HOME; Tmp its TMPDIR.
 func (c *Child) Home() string      { return filepath.Join(c.Root, "home") }
 func (c *Child) Workspace() string { return filepath.Join(c.Root, "hive") }
-func (c *Child) Tmp() string       { return c.side("t") }
-
-// Scratch is the TMPDIR of the evaluator's suite judging the child.
-func (c *Child) Scratch() string { return c.side("e") }
-
-// side is a folder of the child's beside its root, named by a fixed-length
-// tag of the root's name: "candidate" and "control" differ in length, and a
-// test that binds a unix socket under its TMPDIR (capped at 108 bytes) must
-// not pass on one side and fail on the other. It is shorter, too.
-func (c *Child) side(kind string) string {
-	sum := sha256.Sum256([]byte(filepath.Base(c.Root)))
-	return filepath.Join(filepath.Dir(c.Root), kind+"-"+hex.EncodeToString(sum[:3]))
-}
+func (c *Child) Tmp() string       { return filepath.Join(c.Root, "tmp") }
 
 // Env is the child's whole environment.
 func (c *Child) Env() []string {
@@ -247,7 +233,7 @@ func (c *Child) bwrapArgs(dir string) []string {
 			args = append(args, "--ro-bind", p, p)
 		}
 	}
-	rw := append([]string{c.Root, c.Tmp()}, c.RW...)
+	rw := append([]string{c.Root}, c.RW...)
 	if c.Building {
 		rw = append(rw, c.BinDir)
 	}
