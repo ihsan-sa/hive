@@ -496,7 +496,7 @@ func prefetch(cfg Config, c *Child) error {
 	}
 	cmd := exec.Command("go", "mod", "download")
 	cmd.Dir = c.Src
-	cmd.Env = append(cleanEnv(), "HOME="+filepath.Join(dir, "home"), "GOCACHE="+filepath.Join(dir, "gocache"), "GOROOT="+c.Go.Root, "GOMODCACHE="+c.Go.ModCache,
+	cmd.Env = append(cleanEnv(), "HOME="+filepath.Join(dir, "home"), "GOCACHE="+goCache("", filepath.Join(dir, "gocache")), "GOROOT="+c.Go.Root, "GOMODCACHE="+c.Go.ModCache,
 		"GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GOVCS=*:off", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go mod download: %v: %s", err, tail(string(out), 600))
