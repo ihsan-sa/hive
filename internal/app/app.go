@@ -83,7 +83,6 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
 	a.Models = models.New(c, a.Work)
-	a.Agents.Skip = a.Models.Benched
 	a.Improve.OnKept = a.Release.AfterKept
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
 	for _, tick := range []func(){stats.SpendNotice{C: c}.Tick, a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.moduleJobs, a.Runner.Tick, a.Models.Tick} {

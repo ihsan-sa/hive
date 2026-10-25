@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -17,9 +16,6 @@ import (
 type Agents struct {
 	C   *core.Core
 	Mod *modules.Registry
-	// Skip, when set, benches a pick from every route (a model whose trial
-	// didn't finish).
-	Skip func(core.Pick) bool
 }
 
 // System is the appended system prompt for a role: orientation, the role,
@@ -51,17 +47,9 @@ func (a *Agents) Model(role, project string) (harness, model string) {
 	return p.Harness, p.Model
 }
 
-// Route is the picks a run of role in project goes on, in fallback order,
-// less those Skip benches while any other is left.
+// Route is the picks a run of role in project goes on, in fallback order.
 func (a *Agents) Route(role, project string) []core.Pick {
-	route := a.C.WS.LoadConfig().Route(role, project)
-	if a.Skip == nil {
-		return route
-	}
-	if kept := slices.DeleteFunc(slices.Clone(route), a.Skip); len(kept) > 0 {
-		return kept
-	}
-	return route
+	return a.C.WS.LoadConfig().Route(role, project)
 }
 
 // Spec builds a run spec with the role's system prompt, grants and model.
