@@ -2391,7 +2391,10 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		cancelled := !slices.ContainsFunc(which, func(r core.CheckRun) bool { return r.Detail != "cancelled" })
 		// Runs cancelled because a newer push to the PR replaced them (CI
 		// cancels a PR's superseded run) broke nothing: the newer head's own
-		// run is the one to wait for, and the next pass adopts it.
+		// run is the one to wait for, and the next pass adopts it. The PR is
+		// fetched again rather than taken from merge(): sameHead has already
+		// held t unless that copy's head was t.SHA, so only a fresh fetch
+		// sees a push that landed while the security read and checks ran.
 		if cancelled {
 			pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
 			if err != nil {
