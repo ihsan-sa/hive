@@ -448,8 +448,8 @@ func TestHighClassNeedsTwoReads(t *testing.T) {
 	if len(ch.SecurityRoot) != 1 || len(ch.Security) != 1 {
 		t.Fatalf("a root-class path should need the security read and its panel: %+v", ch)
 	}
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "panel") {
-		t.Fatalf("merged a root path on the ordinary reads alone: %v", err)
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "panel") || !strings.Contains(err.Error(), "in the project's root class") {
+		t.Fatalf("merged a root path on the ordinary reads alone, or didn't say it's in the root class: %v", err)
 	}
 	seat := func(run, seat, verdict, diff string) {
 		t.Helper()

@@ -674,6 +674,9 @@ func TestRootClassNeedsPanel(t *testing.T) {
 	if task.Stage != StageMerging || !strings.Contains(task.Reason, "the Hive's security reviewer") {
 		t.Fatalf("a root-class path skipped the security seat: stage %q, reason %q", task.Stage, task.Reason)
 	}
+	if !strings.Contains(task.Reason, "in the project's root class") || strings.Contains(task.Reason, "on "+core.SecurityList) {
+		t.Fatalf("the hold doesn't say the path is in the root class: %q", task.Reason)
+	}
 	seatSays(t, m, task, core.SeatSecurity, "land")
 	mergeOnce(t, m, task, p)
 	mergeOnce(t, m, task, p)
