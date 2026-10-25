@@ -159,8 +159,12 @@ A value of @path reads that file. Common ops:
   inbox                                          messages waiting for you
   agents                                         who is running
   spawn     --role worker --brief "..." [--project p]   a helper; its account returns to you
-  brief     --title "..." --done "what done looks like" [--known "..."] [--project p] [--apart]
-                                                 file an ask: it becomes an issue, a worker, a PR
+  brief     --title "..." --done "what done looks like" [--known "..."] [--project p] [--aim gain] [--apart]
+                                                 file an ask: it becomes an issue, a worker, a PR; a fix by
+                                                 default, or with --aim gain an improvement the gate must show
+  aim       --aim fix|gain --why "..." [--task id]   your task (the lead: any) is a fix, which merges on its
+                                                 tests and reads, or aims at a gain, which on the Hive's own
+                                                 repository merges only on the recursive gate's clear gain
   warden    --want "..." --why "..." --steps "..."   for anything past your reach; the person decides
   install   --tool python|uv|node|go [--version 3.12]   installs it for every agent, no root,
                                                  on your PATH at once; give the call a 25-minute timeout

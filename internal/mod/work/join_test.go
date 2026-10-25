@@ -22,7 +22,8 @@ func brief(t *testing.T, m *Module, from string, b map[string]any) map[string]st
 // apart (as #290 and #291 were), one naming no path the queue could hold it
 // by: the second joins the first as added context, so one worker takes it.
 // A brief filed once that worker has started joins it too, and its worker is
-// told. Different work, or work its filer says is apart, is filed on its own.
+// told. Different work, a gain on the same test, or work its filer says is
+// apart, is filed on its own.
 func TestDuplicateBriefJoinsOpenTask(t *testing.T) {
 	m := queueRig(t)
 	first := brief(t, m, "w-one", map[string]any{"title": "TestBlockedWorkComesBack times out on the Windows runner",
@@ -59,11 +60,12 @@ func TestDuplicateBriefJoinsOpenTask(t *testing.T) {
 
 	other := brief(t, m, "w-two", map[string]any{"title": "Show the queue on the dashboard", "known": "internal/tui/views.go"})
 	apart := brief(t, m, "w-two", map[string]any{"title": "TestBlockedWorkComesBack also needs a Linux leg", "apart": true})
-	if other["task"] == task.ID || apart["task"] == task.ID || other["joined"] != "" || apart["joined"] != "" {
-		t.Fatalf("separate work joined the task: %v / %v", other, apart)
+	gain := brief(t, m, "w-two", map[string]any{"title": "TestBlockedWorkComesBack runs in half the time", "done": "TestBlockedWorkComesBack takes 20s", "aim": "gain"})
+	if other["task"] == task.ID || apart["task"] == task.ID || gain["task"] == task.ID || other["joined"] != "" || apart["joined"] != "" || gain["joined"] != "" {
+		t.Fatalf("separate work joined the task: %v / %v / %v", other, apart, gain)
 	}
-	if n := len(m.List(nil)); n != 3 {
-		t.Fatalf("want three tasks, got %d", n)
+	if n := len(m.List(nil)); n != 4 {
+		t.Fatalf("want four tasks, got %d", n)
 	}
 }
 
