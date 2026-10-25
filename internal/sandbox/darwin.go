@@ -72,7 +72,7 @@ func (s *Seatbelt) Start(sp Spec) (Proc, error) {
 		return Proc{}, err
 	}
 	env := withPathPrefix(append(SeatbeltEnv(sp, port), "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), pathDirs(sp))
-	argv := append([]string{"sandbox-exec", "-f", pf}, sp.Argv...)
+	argv := Niced(append([]string{"sandbox-exec", "-f", pf}, sp.Argv...), sp.Nice)
 	p, err := proc.StartDetached(argv, env, sp.Cwd, sp.Stdin, sp.Stdout)
 	if err != nil {
 		e.Close()
@@ -139,5 +139,5 @@ func (s *Seatbelt) Run(sp Spec, timeout time.Duration) (int, error) {
 		return -1, err
 	}
 	env := withPathPrefix(append(SeatbeltEnv(sp, port), "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), pathDirs(sp))
-	return runSync(append([]string{"sandbox-exec", "-f", pf}, sp.Argv...), env, sp.Cwd, sp.Stdin, sp.Stdout, timeout)
+	return runSync(Niced(append([]string{"sandbox-exec", "-f", pf}, sp.Argv...), sp.Nice), env, sp.Cwd, sp.Stdin, sp.Stdout, timeout)
 }

@@ -58,6 +58,9 @@ type Spec struct {
 	Cover []string `json:"cover,omitempty"`
 	UID   int      `json:"uid"`
 	GID   int      `json:"gid"`
+	// Nice is the Unix nice value the command runs at, 0 the daemon's own;
+	// a process can only go higher (lower priority), so it is never raised.
+	Nice int `json:"nice,omitempty"`
 }
 
 // Proc identifies a started, detached command.
@@ -124,7 +127,7 @@ func (Bare) Check() error   { return nil }
 func (Bare) Start(s Spec) (Proc, error) {
 	env := append(os.Environ(), s.Env...)
 	env = withPathPrefix(env, pathDirs(s))
-	return proc.StartDetached(s.Argv, env, s.Cwd, s.Stdin, s.Stdout)
+	return proc.StartDetached(Niced(s.Argv, s.Nice), env, s.Cwd, s.Stdin, s.Stdout)
 }
 
 func toolDirs(tools []string) []string {

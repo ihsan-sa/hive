@@ -238,9 +238,9 @@ func (m *Module) fileFlaky(p core.Project, sha string, fs []failure, sum, out st
 
 // redBefore runs what stayed red at t's merge again on main just before t
 // first merged. When everything that failed (core.RedKeys: each test by its
-// package, and a package's failure no test name accounts for) also fails
-// there, the red isn't
-// new at this merge (main went red beside it: a clock, the environment, an
+// package, and a package's failure no test name accounts for; core.StopKeys
+// when vet or the build stopped the command before any test ran) also fails
+// there, the red isn't new at this merge (main went red beside it: a clock, the environment, an
 // earlier merge), so reverting it would clear nothing: the red is filed to
 // fix instead. "" means the failure is new here, or that can't be told.
 func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
@@ -254,7 +254,10 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	// The whole first run, not the rerun of what failed: a package that
 	// failed with no test named (a timeout, a panic, an exit) counts too.
 	log := tc.FullOutput()
-	keys := core.RedKeys(log)
+	keys, stopped := core.RedKeys(log), false
+	if len(keys) == 0 {
+		keys, stopped = core.StopKeys(log), true // vet or the build stopped the command
+	}
 	if len(keys) == 0 {
 		return "" // nothing named to look for before it
 	}
@@ -275,6 +278,9 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 		return ""
 	}
 	before := core.RedKeys(bc.FullOutput())
+	if stopped {
+		before = core.StopKeys(bc.FullOutput())
+	}
 	for _, k := range keys {
 		if !slices.Contains(before, k) {
 			return ""
