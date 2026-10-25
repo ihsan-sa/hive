@@ -210,7 +210,7 @@ func TestQueueQuickPromptBriefs(t *testing.T) {
 		t.Fatalf("the prompt brief waits past a full pace: %q", wait[p1.ID])
 	}
 	for _, task := range []Task{p2, c} {
-		if !strings.Contains(wait[task.ID], "pace 2") {
+		if !strings.Contains(wait[task.ID], "at the pace") {
 			t.Fatalf("%q: %q, want waiting for a worker", task.Title, wait[task.ID])
 		}
 	}
@@ -229,14 +229,14 @@ func TestQueueQuickPromptBriefs(t *testing.T) {
 			Windows: map[string]harness.Window{"five_hour": {Utilization: u, ResetsAt: reset}}}})
 	}
 	plan(0.95)
-	if start, wait = m.admit(m.List(nil)); start[p1.ID] || !strings.Contains(wait[p1.ID], "pace 2") {
+	if start, wait = m.admit(m.List(nil)); start[p1.ID] || !strings.Contains(wait[p1.ID], "at the pace") {
 		t.Fatalf("the prompt brief started on a spent plan: %q", wait[p1.ID])
 	}
 	plan(0.1)
 	// A quick worker on: the next quick brief waits for a slot like any other.
 	p1.Stage = StageWorking
 	m.save(&p1, "")
-	if start, wait = m.admit(m.List(nil)); start[p2.ID] || !strings.Contains(wait[p2.ID], "pace 2") {
+	if start, wait = m.admit(m.List(nil)); start[p2.ID] || !strings.Contains(wait[p2.ID], "at the pace") {
 		t.Fatalf("a second quick brief went past the pace: %q", wait[p2.ID])
 	}
 	// The mixed brief names p1's prompt: it waits on p1 even with a slot free.
@@ -257,7 +257,7 @@ func TestQueueQuickPromptBriefs(t *testing.T) {
 	m.save(&p1, "")
 	m.C.Runs.SetStatus("wp1", core.StatusQuiet, "keeps ending turns without finishing")
 	m.workers = pace{limit: 1, start: defaultWorkers, at: time.Now(), why: "the start"}
-	if start, wait = m.admit(m.List(nil)); start[p2.ID] || !strings.Contains(wait[p2.ID], "pace 1") {
+	if start, wait = m.admit(m.List(nil)); start[p2.ID] || !strings.Contains(wait[p2.ID], "at the pace") {
 		t.Fatalf("a second quick brief went past the pace beside a quiet one: %q", wait[p2.ID])
 	}
 }
