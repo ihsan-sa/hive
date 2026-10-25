@@ -1,6 +1,7 @@
 package release
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"slices"
@@ -87,7 +88,46 @@ func (m *Module) follow() {
 	if p, ok := readPending(m.C.WS); ok && p.To == core.Version && p.RolledBack == "" {
 		return
 	}
-	go func() { m.followed1(m.AutoUpdate()) }()
+	go func() {
+		msg, err := m.AutoUpdate()
+		var l *limited
+		if errors.As(err, &l) { // the next look waits for the login's quota
+			m.pmu.Lock()
+			if at := l.until.Add(-followEvery); at.After(m.followed) {
+				m.followed = at
+			}
+			m.pmu.Unlock()
+		}
+		m.followed1(msg, err)
+	}()
+}
+
+// limited is a look for a newer release that GitHub's rate limit stopped:
+// not "nothing newer", and no fault, so it says when the next look is.
+type limited struct {
+	until time.Time
+	text  string
+}
+
+func (l *limited) Error() string {
+	return "GitHub's rate limit on the login stopped the look for a newer release; it looks again after " +
+		l.until.UTC().Format("15:04Z") + " (" + l.text + ")"
+}
+
+// limit is err as limited when it is GitHub's rate limit, else nil. The look
+// again waits for the login's quota to reset, when the forge can say when.
+func (m *Module) limit(repo string, err error) *limited {
+	var rl *core.RateLimited
+	if !errors.As(err, &rl) {
+		return nil
+	}
+	until := rl.Until
+	if r, ok := m.C.Effects.Forge.(core.APIReader); ok {
+		if at, e := r.RateReset(repo); e == nil && at.After(until) {
+			until = at
+		}
+	}
+	return &limited{until, core.Clip(rl.Text, 200)}
 }
 
 // followed1 records what one follow did when it differs from the last: in
@@ -98,6 +138,10 @@ func (m *Module) followed1(msg string, err error) {
 		return
 	}
 	key := msg
+	var l *limited
+	if errors.As(err, &l) { // said once while it lasts, and no alert: nothing failed
+		msg, key, err = l.Error(), "limited", nil
+	}
 	if err != nil {
 		msg = "failed: " + err.Error()
 		m.pmu.Lock()
@@ -132,6 +176,9 @@ func (m *Module) prerelease(repo, after string) (tag string, why []string, err e
 	}
 	f := m.C.Effects.Forge
 	rels, err := f.Releases(repo)
+	if l := m.limit(repo, err); l != nil {
+		return "", nil, l
+	}
 	if err != nil {
 		return "", nil, fmt.Errorf("following pre-releases reads them through the GitHub login, which failed: %w", err)
 	}
@@ -173,7 +220,10 @@ func (m *Module) prerelease(repo, after string) (tag string, why []string, err e
 			}
 			read++
 		}
-		state, w := m.ownGates(repo, t)
+		state, w, err := m.ownGates(repo, t)
+		if err != nil {
+			return "", why, err
+		}
 		if state == "passed" {
 			if e := hasBinary(repo, t); e != nil {
 				why = append(why, t+": "+e.Error())
@@ -188,16 +238,17 @@ func (m *Module) prerelease(repo, after string) (tag string, why []string, err e
 
 // ownGates says "passed" once every gate's jobs for this system passed in
 // the release's own runs, at its tag's commit, else "failed" or "waiting",
-// and why. A red verdict is kept for recheckRed.
-func (m *Module) ownGates(repo, tag string) (state, why string) {
+// and why. A red verdict is kept for recheckRed. A read GitHub's rate limit
+// stopped ends the look, as limited.
+func (m *Module) ownGates(repo, tag string) (state, why string, err error) {
 	key := repo + "@" + tag
 	m.pmu.Lock()
 	red, ok := m.red[key]
 	m.pmu.Unlock()
 	if ok && time.Since(red.at) < recheckRed {
-		return "failed", red.why
+		return "failed", red.why, nil
 	}
-	state, why = m.readOwnGates(repo, tag)
+	state, why, err = m.readOwnGates(repo, tag)
 	if state == "failed" {
 		m.pmu.Lock()
 		if m.red == nil {
@@ -206,7 +257,7 @@ func (m *Module) ownGates(repo, tag string) (state, why string) {
 		m.red[key] = verdict{time.Now(), why}
 		m.pmu.Unlock()
 	}
-	return state, why
+	return state, why, err
 }
 
 type verdict struct {
@@ -244,15 +295,21 @@ func (m *Module) tagCommit(repo, tag string) (string, error) {
 	return sha, err
 }
 
-func (m *Module) readOwnGates(repo, tag string) (state, why string) {
+func (m *Module) readOwnGates(repo, tag string) (state, why string, err error) {
 	f := m.C.Effects.Forge
 	sha, err := m.tagCommit(repo, tag)
+	if l := m.limit(repo, err); l != nil {
+		return "", "", l
+	}
 	if err != nil {
-		return "waiting", "can't read its commit (" + core.Clip(err.Error(), 200) + ")"
+		return "waiting", "can't read its commit (" + core.Clip(err.Error(), 200) + ")", nil
 	}
 	runs, err := f.ReleaseRuns(repo, sha)
+	if l := m.limit(repo, err); l != nil {
+		return "", "", l
+	}
 	if err != nil {
-		return "waiting", "can't read its runs (" + core.Clip(err.Error(), 200) + ")"
+		return "waiting", "can't read its runs (" + core.Clip(err.Error(), 200) + ")", nil
 	}
 	runner := runner()
 	var bad, wait []string
@@ -263,6 +320,9 @@ func (m *Module) readOwnGates(repo, tag string) (state, why string) {
 			continue
 		}
 		jobs, err := f.RunJobs(repo, runs[i].ID)
+		if l := m.limit(repo, err); l != nil {
+			return "", "", l
+		}
 		if err != nil {
 			wait = append(wait, g+" (can't read its jobs)")
 			continue
@@ -286,9 +346,9 @@ func (m *Module) readOwnGates(repo, tag string) (state, why string) {
 	}
 	switch {
 	case len(bad) > 0:
-		return "failed", strings.Join(bad, ", ")
+		return "failed", strings.Join(bad, ", "), nil
 	case len(wait) > 0:
-		return "waiting", "waiting for " + strings.Join(wait, ", ")
+		return "waiting", "waiting for " + strings.Join(wait, ", "), nil
 	}
-	return "passed", ""
+	return "passed", "", nil
 }
