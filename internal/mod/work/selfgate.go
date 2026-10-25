@@ -88,7 +88,13 @@ type gateRun struct {
 // went back). A fix passes straight on, and so does a head the person landed
 // while the gate couldn't judge at main (askGateFix).
 func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, error) {
-	if !p.Self || !t.Gain() || m.C.Effects.Approved("gate", p.Name, t.SHA) {
+	if !p.Self || !t.Gain() {
+		return false, nil
+	}
+	if t.Checkpoint != "" { // opened while it was a fix; part of a gain never merges
+		return true, m.dropCheckpoint(t, p, noBankGain)
+	}
+	if m.C.Effects.Approved("gate", p.Name, t.SHA) {
 		return false, nil
 	}
 	g, ok := m.C.Effects.GateResult(p.Name, t.SHA, main)
