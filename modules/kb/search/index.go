@@ -3,6 +3,7 @@ package main
 import (
 	"hash/fnv"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -143,8 +144,8 @@ func entity(w, prev string, out map[string]int) {
 	for _, r := range roots {
 		if strings.HasPrefix(w, r) && len(w) > len(r) && !strings.ContainsAny(w, "#:") {
 			out["file:"+w]++
-			out["file:"+filepath.Base(w)]++
-			for d := filepath.Dir(w); strings.Contains(d, "/"); d = filepath.Dir(d) {
+			out["file:"+path.Base(w)]++
+			for d := path.Dir(w); strings.Contains(d, "/"); d = path.Dir(d) {
 				out["file:"+d]++
 			}
 			if p := strings.Split(w, "/"); len(p) > 2 && (p[0] == "internal" && p[1] == "mod" || p[0] == "modules") {
@@ -275,7 +276,7 @@ func Load(dir string, hide []string) *Index {
 			ix.ByEnt[e] = append(ix.ByEnt[e], i)
 		}
 		if d.Kind == "note" || d.Kind == "practice" {
-			ix.ByNote[strings.TrimSuffix(filepath.Base(d.Path), ".md")] = i
+			ix.ByNote[strings.TrimSuffix(path.Base(d.Path), ".md")] = i
 		}
 	}
 	if len(ix.Docs) > 0 {
@@ -366,7 +367,7 @@ func parse(rel, raw string, boiler map[uint64]bool) *Doc {
 	default:
 		d.Kind, d.Prior = "note", 1.3
 	}
-	name := strings.TrimSuffix(filepath.Base(rel), ".md")
+	name := strings.TrimSuffix(path.Base(rel), ".md")
 	if d.Kind == "record" {
 		head, _, _ := strings.Cut(raw, "\n")
 		d.Title = strings.TrimPrefix(head, "# ")
