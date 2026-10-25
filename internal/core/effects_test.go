@@ -107,7 +107,8 @@ func commitInCheckout(t *testing.T, c *Core, p Project, id, base, file, content 
 
 func TestMergeNeedsCheckAndVerdictOnExactCommit(t *testing.T) {
 	c, f, p, main := setupProject(t)
-	r, _ := commitInCheckout(t, c, p, "w1", main, "feature.go", "package demo\n// feature\n")
+	// Over the unread line, so it needs a read.
+	r, _ := commitInCheckout(t, c, p, "w1", main, "feature.go", "package demo\n"+strings.Repeat("// feature\n", DefaultUnreadMax))
 	sha, err := c.Effects.Extract(p, r, main)
 	if err != nil {
 		t.Fatal(err)

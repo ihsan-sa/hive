@@ -930,6 +930,7 @@ func (s *server) state() api.State {
 			pv.Hold = &h
 		}
 		pv.Goals = readGoals(a.C.WS.Project(p.Name))
+		pv.Reads = a.Work.ReadStats(p.Name)
 		n := 0
 		for _, t := range a.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {
 			if !t.Terminal() || n < 10 {

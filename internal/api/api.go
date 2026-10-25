@@ -87,6 +87,7 @@ type ProjectView struct {
 	Scores []improve.Measurement `json:"scores"`
 	Best   *float64              `json:"best,omitempty"`
 	Hold   *work.MergeHold       `json:"hold,omitempty"` // the person's hold on its merges
+	Reads  work.ReadStats        `json:"reads"`          // reads per merge and each seat's land rate
 }
 
 // Updated is the update that brought in this version, with its release notes;

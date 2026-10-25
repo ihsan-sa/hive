@@ -582,6 +582,9 @@ func cmdStatus() int {
 			if p.Hold != nil {
 				fmt.Printf("  %s; `%s hold %s --lift` lifts it\n", text.Visible(p.Hold.Text()), core.Cmd, p.Name)
 			}
+			if l := p.Reads.Line(); l != "" {
+				fmt.Printf("  %s\n", l)
+			}
 			for _, t := range p.Tasks {
 				if !t.Terminal() {
 					fmt.Printf("  [%s] %s  %s\n", t.Stage, t.Label(), t.PR.URL)

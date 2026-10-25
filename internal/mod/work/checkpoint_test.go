@@ -13,7 +13,7 @@ import (
 func checkpointRig(t *testing.T, best float64, score string) (*Module, *Task, core.Project) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"score.val": score + "\n"})
 	base := must(t, m.C.WS.Project(p.Name), "rev-parse", task.SHA+"^")
-	pushMain(t, forge, map[string]string{".hive/project.json": `{"test": "test ! -f BROKEN", "score": {"command": "cat score.val", "direction": "higher"}}`})
+	pushMain(t, forge, map[string]string{".hive/project.json": `{"test": "test ! -f BROKEN", "score": {"command": "cat score.val", "direction": "higher"}, "unread_max_lines": -1}`})
 	if _, err := m.C.Effects.Sync(p); err != nil {
 		t.Fatal(err)
 	}
