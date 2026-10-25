@@ -390,8 +390,9 @@ type defEntry struct {
 // main's tip holds it is not the worker's change either: a worker that has
 // merged main carries main's later changes, and those held briefs on files
 // it never touched. The checkout is read as files (host git never runs
-// there); a path that leaves it through a symlink counts as unchanged. Each
-// answer is kept until the file (or a symlink's target), the base or main
+// there); a symlink is its link text, as git keeps it, and a path that
+// leaves the checkout through a symlinked directory counts as unchanged.
+// Each answer is kept until the file, the base or main
 // moves; none is given or kept while the base's tree can't be read.
 func (m *Module) edited(o Task, p string) bool {
 	if o.Stage != StageWorking || o.Worker == "" || o.Base == "" {
@@ -404,7 +405,7 @@ func (m *Module) edited(o Task, p string) bool {
 	file := filepath.Join(r.Checkout, filepath.FromSlash(p))
 	cacheKey := o.Worker + "\x00" + p
 	tip := m.mainTip(o.Project)
-	key := o.Base + "\x00" + tip + "\x00" + stamp(file) + "\x00" + stampTarget(file)
+	key := o.Base + "\x00" + tip + "\x00" + stamp(file)
 	m.mu.Lock()
 	got, ok := m.editCache[cacheKey]
 	m.mu.Unlock()
@@ -457,12 +458,26 @@ func (m *Module) mainTip(project string) string {
 func differs(tree map[string]string, checkout, p string) bool {
 	blob, inBase := tree[p]
 	file := filepath.Join(checkout, filepath.FromSlash(p))
-	if _, err := os.Lstat(file); errors.Is(err, os.ErrNotExist) {
+	fi, err := os.Lstat(file)
+	if errors.Is(err, os.ErrNotExist) {
 		return inBase // removed, or never there
 	}
 	realRoot, err := filepath.EvalSymlinks(checkout)
 	if err != nil {
 		return false
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		// Git keeps a symlink as its link text, read without following it,
+		// so the link itself must sit inside the checkout.
+		dir, err := filepath.EvalSymlinks(filepath.Dir(file))
+		if err != nil || !inside(realRoot, dir) {
+			return false
+		}
+		link, err := os.Readlink(file)
+		if err != nil {
+			return false
+		}
+		return !inBase || blobID([]byte(filepath.ToSlash(link)), len(blob)) != blob
 	}
 	if real, err := filepath.EvalSymlinks(file); err != nil || !inside(realRoot, real) {
 		return false
@@ -616,16 +631,6 @@ type areaEntry struct {
 // stamp is a file's size and modification time, "" when it is missing.
 func stamp(p string) string {
 	fi, err := os.Lstat(p)
-	if err != nil {
-		return ""
-	}
-	return fmt.Sprintf("%d %d", fi.Size(), fi.ModTime().UnixNano())
-}
-
-// stampTarget is stamp of what p resolves to, so an edit to a symlink's
-// target alone moves it too.
-func stampTarget(p string) string {
-	fi, err := os.Stat(p)
 	if err != nil {
 		return ""
 	}

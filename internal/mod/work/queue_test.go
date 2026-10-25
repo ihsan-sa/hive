@@ -548,6 +548,52 @@ func TestQueueMergedMainIsNotAnEdit(t *testing.T) {
 	m.mu.Unlock()
 }
 
+// A symlink is its link text, as git keeps it: a file made a link counts
+// as changed, wherever the link points, and one the base already held as a
+// link counts as unchanged until the link text moves.
+func TestQueueEditSeesSymlinks(t *testing.T) {
+	m := queueRig(t)
+	p, _ := m.C.Projects.Get("p")
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+	origin, _ := core.Git(m.C.WS.Project("p"), "remote", "get-url", "origin")
+	seed := filepath.Join(t.TempDir(), "seed")
+	mustGit(t, "", "clone", "-q", strings.TrimSpace(origin), seed)
+	if err := os.Symlink("effects.go", filepath.Join(seed, "internal/core/link.go")); err != nil {
+		t.Skip(err)
+	}
+	mustGit(t, seed, "add", "-A")
+	mustGit(t, seed, "commit", "-q", "-m", "a link")
+	mustGit(t, seed, "push", "-q", "origin", "HEAD:"+p.Branch)
+	a := file(t, m, "cap the checks", "Somewhere in internal/core.")
+	tick(m)
+	got := stageOf(t, m, a)
+	r, _ := m.C.Runs.Get(got.Worker)
+	if got.Stage != StageWorking {
+		t.Fatalf("stage %q", got.Stage)
+	}
+	link := filepath.Join(r.Checkout, "internal/core/link.go")
+	if m.edited(got, "internal/core/link.go") {
+		t.Fatal("a link as the base holds it is seen as changed")
+	}
+	os.WriteFile(filepath.Join(r.Checkout, "internal/core/effects.go"), []byte("package x // its target changed\n"), 0o644)
+	if m.edited(got, "internal/core/link.go") {
+		t.Fatal("a link whose text didn't move is seen as changed")
+	}
+	os.Remove(link)
+	os.Symlink("runs.go", link)
+	if !m.edited(got, "internal/core/link.go") {
+		t.Fatal("a link pointed elsewhere isn't seen")
+	}
+	runs := filepath.Join(r.Checkout, "internal/core/runs.go")
+	os.Remove(runs)
+	os.Symlink("/etc/hostname", runs)
+	if !m.edited(got, "internal/core/runs.go") {
+		t.Fatal("a file made a link isn't seen")
+	}
+}
+
 // moveMain commits f on the forge's main and syncs the host clone to it.
 func moveMain(t *testing.T, m *Module, f, content string) {
 	t.Helper()
