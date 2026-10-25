@@ -247,6 +247,8 @@ type Module struct {
 	// read) is next looked at; kept in memory, so a restart looks at once.
 	// Guarded by mu: due reads it with mu held, hold takes mu itself.
 	later map[string]time.Time
+	// draftsBack brings back, once a run, the tasks stopped on a draft merge.
+	draftsBack sync.Once
 	// prPolled is when each task waiting for the person last had its pull
 	// request looked up, so a close there is seen without a call every tick.
 	prPolled map[string]time.Time
@@ -583,6 +585,7 @@ func (m *Module) Revert(of Task, mergeSHA, reason string) (Task, error) {
 // for a worker goes only when the queue lets it, and otherwise says why it waits.
 func (m *Module) Tick() {
 	m.revive()
+	m.draftsBack.Do(m.reviveDrafts)
 	tasks := m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) })
 	start, wait := m.admit(tasks)
 	for _, t := range tasks {
@@ -774,6 +777,27 @@ func (m *Module) revive() {
 		}
 		t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.Stage = "", 0, 0, 0, 0, StageLanding
 		m.save(&t, "brought back: it stopped only because GitHub rate-limited the Hive's writes")
+	}
+}
+
+// stoppedOnDraft says t was stopped by the merge's repeated refusal of a
+// draft, from before the Hive readied the drafts it cleared.
+func stoppedOnDraft(t Task) bool {
+	why := strings.TrimPrefix(t.Reason, gaveUpOnErrors)
+	return t.Stage == StageStopped && !t.ByPerson && strings.HasPrefix(t.Reason, gaveUpOnErrors) &&
+		(strings.Contains(why, "is still a draft") || strings.Contains(why, core.ErrDraft.Error()))
+}
+
+// reviveDrafts brings back the tasks stopped only because their PR was a
+// draft: they go through the gate again, which readies a draft it clears.
+func (m *Module) reviveDrafts() {
+	for _, t := range m.List(stoppedOnDraft) {
+		if m.Recheck(t.ID, "") != nil {
+			continue
+		}
+		if t, ok := m.Get(t.ID); ok {
+			m.save(&t, "brought back: it stopped only because its PR was a draft, which the Hive now readies once its gate clears the head")
+		}
 	}
 }
 
@@ -1722,18 +1746,21 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if closed, err := m.closedOnForge(t, p); closed || err != nil {
 		return err
 	}
-	// A draft waits for the read outside the Hive it was left for, before
-	// anything else: bringing it up to date would only test and read it again.
+	// A draft goes through the same gate as any PR: nobody outside the Hive
+	// reads its PRs, so the merge readies it once every read cleared its head
+	// (core.Effects.Merge). One whose head moved past the commit the Hive read
+	// isn't readied, nor one the lead holds as a draft (pr_draft); each waits,
+	// counting no failure.
 	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
 	if err != nil {
 		return err
 	}
-	if pr.Draft {
+	if pr.Draft && (pr.HeadSHA != t.SHA || t.DraftWhy != "") {
 		return m.waitDraft(t, pr)
 	}
 	if !t.DraftSince.IsZero() {
 		t.Reason, t.DraftSince, t.DraftTold, t.DraftWhy = "", time.Time{}, false, ""
-		m.save(t, "marked ready; merging")
+		m.save(t, "its head is the commit read and the lead holds no draft; on through the gate")
 	}
 	main, err := m.C.Effects.Sync(p)
 	if err != nil {
@@ -1770,7 +1797,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	}
 	defer m.leaveMerge()
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Gain: t.Gain()})
-	if errors.Is(err, core.ErrDraft) { // made a draft since the look above
+	if errors.Is(err, core.ErrDraft) { // made a draft again between the ready and the merge
 		return m.waitDraft(t, pr)
 	}
 	var np *core.NeedsPerson
@@ -1819,23 +1846,23 @@ func (m *Module) merge(t *Task, p core.Project) error {
 // holdGap is how long a held task waits before the gate looks again.
 var holdGap = time.Minute
 
-const draftWait = "waiting on the read it was left as a draft for"
+const draftWait = "waiting as a draft"
 
 // draftTell is how long a draft waits before the lead hears of it, once.
 var draftTell = 24 * time.Hour
 
-// waitDraft parks a merge while its PR is a draft: no failure is counted, it
-// looks again every few minutes, saving only what changed, and it merges once
-// the PR is marked ready. One that waits long is told to the lead once.
+// waitDraft parks a merge while its PR is a draft the Hive can't ready: no
+// failure is counted, it looks again every few minutes, saving only what
+// changed, and it goes on once the head is the commit read, or a new commit
+// of the worker's is read. One that waits long is told to the lead once.
 func (m *Module) waitDraft(t *Task, pr core.PR) error {
 	m.mu.Lock()
 	m.later[t.ID] = time.Now().Add(3 * time.Minute)
 	m.mu.Unlock()
-	who := whoseRead(pr.Body)
+	reason := fmt.Sprintf("%s whose head moved past the commit the Hive read (its head is %s, the read was of %s); it isn't readied until its head is one the Hive's gate cleared", draftWait, core.Short(pr.HeadSHA), core.Short(t.SHA))
 	if t.DraftWhy != "" {
-		who = "held by the lead: " + t.DraftWhy
+		reason = draftWait + " (held by the lead: " + t.DraftWhy + "); it merges once the PR is marked ready (pr_ready)"
 	}
-	reason := draftWait + " (" + who + "); it merges once the PR is marked ready"
 	if t.DraftSince.IsZero() {
 		t.DraftSince = time.Now().UTC()
 	}
@@ -1846,21 +1873,9 @@ func (m *Module) waitDraft(t *Task, pr core.PR) error {
 	if !t.DraftTold && time.Since(t.DraftSince) >= draftTell {
 		t.DraftTold = true
 		m.save(t, "told the lead the draft has waited since "+t.DraftSince.Format("2006-01-02 15:04Z"))
-		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited since %s for the read its PR was left as a draft for (%s). It merges once the PR is marked ready.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), t.DraftSince.Format("2006-01-02 15:04Z"), who))
+		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited since %s: %s.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), t.DraftSince.Format("2006-01-02 15:04Z"), reason))
 	}
 	return nil
-}
-
-// whoseRead is the PR description's line saying which read it needs, such as
-// a worker's "Needs a perms read".
-func whoseRead(body string) string {
-	for _, l := range strings.Split(body, "\n") {
-		l = strings.TrimSpace(strings.Trim(strings.NewReplacer("**", "", "__", "", "`", "").Replace(l), " \t-*>#"))
-		if low := strings.ToLower(l); strings.Contains(low, "need") && strings.Contains(low, "read") {
-			return core.Clip(l, 100)
-		}
-	}
-	return "an outside read"
 }
 
 // enterMerge lets a merge through the gate unless an update has shut it;

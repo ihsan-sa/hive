@@ -63,6 +63,9 @@ type Forge interface {
 	FindPR(repo, head string) (PR, bool, error)
 	GetPR(repo string, number int) (PR, error)
 	MergePR(repo string, number int, sha, subject string) (string, error)
+	// ReadyPR takes a draft out of draft, only while its head is exactly
+	// sha; one already ready is left as it is.
+	ReadyPR(repo string, number int, sha string) error
 	ClosePR(repo string, number int, comment string) error
 	// SetDraft marks an open pull request a draft or ready for review.
 	SetDraft(repo string, number int, draft bool) error
@@ -611,6 +614,28 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 		time.Sleep(2 * time.Second)
 	}
 	return "", errors.New("merge reported success but the PR is not merged yet")
+}
+
+// ReadyPR marks a draft ready for review with the token for repo's owner,
+// refusing once its head moved past sha. The merge after it is bound to sha
+// by --match-head-commit, so a push between the look and the ready can't
+// merge what wasn't read.
+func (g GitHub) ReadyPR(repo string, number int, sha string) error {
+	p, err := g.GetPR(repo, number)
+	if err != nil {
+		return err
+	}
+	if p.State != "OPEN" {
+		return fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
+	}
+	if p.HeadSHA != sha {
+		return fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+	}
+	if !p.Draft {
+		return nil
+	}
+	_, err = gh(repo, "pr", "ready", strconv.Itoa(number), "-R", repo)
+	return err
 }
 
 func (GitHub) ClosePR(repo string, number int, comment string) error {
