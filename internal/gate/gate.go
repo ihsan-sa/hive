@@ -666,6 +666,12 @@ func (r Report) Markdown() string {
 	for _, g := range r.Verdict.Regressions {
 		fmt.Fprintf(&b, "- regression: %s\n", g)
 	}
+	for _, g := range r.Verdict.Unmeasured {
+		fmt.Fprintf(&b, "- unmeasured: %s\n", g)
+	}
+	for _, g := range r.Verdict.Differs {
+		fmt.Fprintf(&b, "- differs: %s\n", g)
+	}
 	table := func(name string, rs []Result) {
 		if len(rs) == 0 {
 			fmt.Fprintf(&b, "\n## %s\n\nNo probe ran: the run stopped before them.\n", name)
