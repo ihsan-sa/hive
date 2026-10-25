@@ -1311,10 +1311,16 @@ func TestSizeLine(t *testing.T) {
 		{Size: map[string]float64{"core_lines": 13800, "binary_bytes": 21e6}},
 		{},
 		{Size: map[string]float64{"core_lines": 13874, "binary_bytes": 21e6, "go_lines": 40000}},
-		{},
+		{Size: map[string]float64{"core_lines": 13870, "go_lines": 40010}}, // a merge counts lines only
+		{NoResult: true},
 	}
 	got := ansi.Strip(sizeLine(ms))
-	if want := "size  core 13874 lines (+74)  binary 21.0 MB  go_lines 40000"; got != want {
+	if want := "size  core 13870 lines (-4)  binary 21.0 MB  go_lines 40010 (+10)"; got != want {
+		t.Fatalf("sizeLine = %q, want %q", got, want)
+	}
+	// Measures that recorded no size after one that did are flagged.
+	got = ansi.Strip(sizeLine(append(ms, improve.Measurement{}, improve.Measurement{})))
+	if want := "size  core 13870 lines (-4)  binary 21.0 MB  go_lines 40010 (+10)  none recorded on the last 2 measures"; got != want {
 		t.Fatalf("sizeLine = %q, want %q", got, want)
 	}
 	if sizeLine([]improve.Measurement{{}}) != "" {

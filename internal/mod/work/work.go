@@ -156,10 +156,13 @@ type Task struct {
 	CantRuns    int `json:"cant_runs,omitempty"`
 	CantRunSaid int `json:"cant_run_said,omitempty"`
 	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
-	Gate    *core.GateResult `json:"gate,omitempty"`
-	Log     []Entry          `json:"log,omitempty"`
-	Created time.Time        `json:"created"`
-	Updated time.Time        `json:"updated"`
+	Gate *core.GateResult `json:"gate,omitempty"`
+	// GateAsked is the gate item last put to the person (askGateFix),
+	// task@head@main: one answer per head and main.
+	GateAsked string    `json:"gate_asked,omitempty"`
+	Log       []Entry   `json:"log,omitempty"`
+	Created   time.Time `json:"created"`
+	Updated   time.Time `json:"updated"`
 }
 
 // Retried is a head's red forge checks, run again once before the worker
@@ -333,10 +336,8 @@ type Module struct {
 	// holdPolled when each one's release condition may next be asked of the forge.
 	holds      map[string]*MergeHold
 	holdPolled map[string]time.Time
-	// gating are the recursive gate runs in flight by key (selfgate.go), and
-	// gateCantRun the last run per project and main that couldn't run.
-	gating      map[string]*gateRun
-	gateCantRun map[string]core.GateResult
+	// gating are the recursive gate runs in flight by key (selfgate.go).
+	gating map[string]*gateRun
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
 	// gate is shut, and idle, while a pause waits, closes when the last
@@ -396,6 +397,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "pr_draft", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","why"} -> marks the Hive's own PR a draft, posting why: its task waits (it isn't stopped) and merges once marked ready with pr_ready`, Fn: m.opPRDraft})
 	c.Runs.Ops().Register(core.Op{Name: "pr_close", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
 	c.Person.Handle("merge", m.onPersonMerge)
+	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
 	return m
@@ -424,6 +426,9 @@ func (m *Module) save(t *Task, note string) {
 		}
 	}
 	m.C.J.MustAppend("task.saved", t)
+	if was == StageMerging && t.Stage != StageMerging {
+		m.closeGateAsks(*t)
+	}
 	if t.Stage != was && (t.Stage == StageMerged || t.Stage == StageDone) {
 		m.steps.Add(1)
 		go func(t Task) { defer m.steps.Done(); m.ended(t) }(*t) // a large tree mustn't hold the save
@@ -1484,11 +1489,17 @@ func (m *Module) test(t *Task, p core.Project) error {
 			m.raiseCantRun(p, c)
 			return m.dropCheckpoint(t, p, "the tests "+c.CantRun+", which is no verdict on it")
 		}
-		t.CantRuns++
+		if c.Tool != "" {
+			// Only a missing tool counts toward red: a commit can fake
+			// that from its own output, but not a full disk or quota,
+			// which is the machine's fault and only waits.
+			t.CantRuns++
+		}
 		return m.cantRun(t, p, c)
 	}
 	t.CantRuns = 0
 	m.RanCheck(p.Name, "test")
+	m.CloseCantRunAsk(p.Name, "cant-run:"+t.ID, "its tests run now")
 	if strings.HasPrefix(t.Reason, "the tests can't run") {
 		t.Reason = "" // the tool is there now
 	}
@@ -1603,6 +1614,17 @@ func (m *Module) cantRunRed(t *Task, p core.Project, c core.Check) error {
 	t.CantRuns = 0
 	m.giveUp(t, fmt.Sprintf("the tests %s, %d tries in a row, which now counts as red; the person is asked for %s", c.CantRun, CantRunTries, tool))
 	return nil
+}
+
+// CloseCantRunAsk answers the person's open "install the tool" ask with ref
+// for them once it is stale (the tests run, or the change is tested again),
+// so it leaves their Waiting list. A later run of tries asks afresh.
+func (m *Module) CloseCantRunAsk(project, ref, why string) {
+	for _, a := range m.C.Person.Open() {
+		if a.Ref == ref && a.Project == project && a.Kind == "question" {
+			m.C.Person.Answer(a.ID, "ok", "the Hive, not the person: "+why)
+		}
+	}
 }
 
 func (m *Module) raiseCantRun(p core.Project, c core.Check) {
@@ -1991,14 +2013,12 @@ func (m *Module) bundleForFixes(t *Task, p core.Project, msg string) string {
 	if strings.Contains(msg, "main.bundle") {
 		return ""
 	}
-	main, err := core.Git(m.C.WS.Project(p.Name), "rev-parse", p.Branch) // before the bundle, so it holds at least this main
+	main, err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle"))
 	if err != nil {
+		m.bundleFailed(t, p, err)
 		return ""
 	}
-	if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle")); err != nil {
-		return ""
-	}
-	return "\n\n$HIVE_RUN/main.bundle holds main at " + core.Short(strings.TrimSpace(main)) + ": if a fix needs main's newer commits, `git fetch \"$HIVE_RUN/main.bundle\" main` and merge FETCH_HEAD."
+	return "\n\n$HIVE_RUN/main.bundle holds main at " + core.Short(main) + ": if a fix needs main's newer commits, `git fetch \"$HIVE_RUN/main.bundle\" main` and merge FETCH_HEAD."
 }
 
 func (m *Module) merge(t *Task, p core.Project) error {
@@ -2696,14 +2716,26 @@ func (m *Module) bundleForChecks(t *Task, p core.Project, main string) string {
 	if t.Worker == "" {
 		return ""
 	}
-	if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle")); err != nil {
-		return ""
+	head, err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle"))
+	if err != nil {
+		m.bundleFailed(t, p, err)
+		return "$HIVE_RUN/main.bundle couldn't be updated to main at " + core.Short(main) + "; an older one there may not hold what the checks ran.\n"
+	}
+	holds := "$HIVE_RUN/main.bundle holds main at " + core.Short(head)
+	if head != main {
+		holds += ", which main has moved to since the checks ran on " + core.Short(main)
 	}
 	fetch := "`git fetch \"$HIVE_RUN/main.bundle\" main`"
 	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
-		return "$HIVE_RUN/main.bundle holds main at " + core.Short(main) + " (" + fetch + ").\n"
+		return holds + " (" + fetch + ").\n"
 	}
-	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. $HIVE_RUN/main.bundle holds main at " + core.Short(main) + ": " + fetch + ", then merge FETCH_HEAD to see and run what the checks ran.\n"
+	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. " + holds + ": " + fetch + ", then merge FETCH_HEAD to see and run what the checks ran.\n"
+}
+
+// bundleFailed journals a main.bundle that couldn't be written, so a worker
+// left with an older one (or none) shows why on the record.
+func (m *Module) bundleFailed(t *Task, p core.Project, err error) {
+	m.C.J.MustAppend("task.bundle_failed", map[string]string{"task": t.ID, "project": p.Name, "worker": t.Worker, "error": err.Error()})
 }
 
 // fenceFor is a ~ fence longer than any run of ~ or ` that starts a line of
@@ -3129,13 +3161,17 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 		m.comment(p.Repo, t.PR.Number, "Stopping: the branch keeps conflicting with main. The pull request stays open.")
 		return nil
 	}
-	if err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle")); err != nil {
+	if _, err := m.C.Effects.MainBundle(p, filepath.Join(m.C.WS.RunRO(t.Worker), "main.bundle")); err != nil {
 		return err
 	}
 	msg := "Main moved and your branch conflicts with it. Fetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
 	if d := (*core.DoubledError)(nil); errors.As(why, &d) {
 		msg = "Main moved, and merging it into your branch keeps both sides of lines you and main each changed (these docs merge as union), so these end up more than once:\n\n- " +
 			strings.Join(d.Lines, "\n- ") + "\n\nFetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, keep each of these once, run the tests, commit, and finish again."
+	}
+	if g := (*gateConflict)(nil); errors.As(why, &g) && len(g.files) > 0 {
+		msg = "Main moved, and the recursive gate, merging it into your branch to judge the change as it would land, found conflicts in:\n\n- " +
+			strings.Join(g.files, "\n- ") + "\n\nFetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
 	}
 	if err := m.C.Runs.Reopen(t.Worker, msg); err != nil {
 		return err
@@ -3254,6 +3290,8 @@ func (m *Module) Recheck(id, back, by string) error {
 		return fmt.Errorf("task %s was stopped by the person (%s); only they can bring it back", id, t.Reason)
 	}
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns = "", 0, 0, 0, 0, 0
+	m.goNow(&t)
+	m.CloseCantRunAsk(t.Project, "cant-run:"+t.ID, "the change is tested again, asked by "+by)
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
 			return err
@@ -3265,6 +3303,15 @@ func (m *Module) Recheck(id, back, by string) error {
 	t.Stage = StageLanding
 	m.save(&t, "checks run again on its commits, asked by "+by)
 	return nil
+}
+
+// goNow drops a task's backoff and hold, so a retry asked for by hand runs on
+// the next tick, not after an outage's or rate limit's wait from before it.
+func (m *Module) goNow(t *Task) {
+	t.Retry = time.Time{}
+	m.mu.Lock()
+	delete(m.later, t.ID)
+	m.mu.Unlock()
 }
 
 // inFlight reports whether a task in stage is on its way from its worker's
@@ -3305,6 +3352,7 @@ func (m *Module) retryInFlight(id, back, by string) error {
 		return m.dropCheckpoint(&t, p, "the lead retried it from "+was)
 	}
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts = "", 0, 0, 0, 0
+	m.goNow(&t)
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
 			return err

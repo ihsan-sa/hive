@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
 // The pace grows by one a step while work waits on it and nothing strains,
@@ -236,5 +237,27 @@ func TestPaceGrowsOnlyForBriefsTheLimitHolds(t *testing.T) {
 		if got := stageOf(t, m, task); got.Stage != StageWorking {
 			t.Fatalf("%q: stage %q reason %q", task.Title, got.Stage, got.Reason)
 		}
+	}
+}
+
+// Workers pull back when their plan runs well ahead of its five-hour window,
+// as on 10-25, when it ran out over an hour before each reset; on the clock
+// they don't.
+func TestPacePullsBackAheadOfTheWindow(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	pick := cfg.Route("worker", "")[0]
+	read := func(u float64, left time.Duration) {
+		reset := time.Now().Add(left)
+		m.C.J.MustAppend("plan.usage", core.Plan{Harness: pick.Harness, Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour",
+			Windows: map[string]harness.Window{"five_hour": {Utilization: u, ResetsAt: reset}}}})
+	}
+	read(0.5, 3*time.Hour)
+	if why := m.planSpent(cfg); why != "" {
+		t.Fatalf("on the clock: %q", why)
+	}
+	read(0.8, 3*time.Hour)
+	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of its five-hour window") {
+		t.Fatalf("40%% ahead: %q", why)
 	}
 }

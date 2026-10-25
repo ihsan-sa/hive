@@ -219,3 +219,80 @@ func TestHeadroomCountsEveryLogin(t *testing.T) {
 		t.Fatalf("one parked, one at 95%%: %v, want 0.05", h)
 	}
 }
+
+// A reading taken before the limit, from a turn that ends after it, doesn't
+// lift the park (10-25 10:41: a 0.97 reading after a rejected one started a
+// turn only for it to be turned away); a reset or a later window does.
+func TestStaleReadingKeepsThePark(t *testing.T) {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, noOwnLogin{}, func() []string { return nil })
+	reset := time.Now().Add(time.Hour)
+	read := func(status string, u float64, at time.Time) {
+		rs.append("plan.usage", Plan{Harness: "claude", Login: "claude", Limit: harness.RateLimit{Status: status, ResetsAt: at, Window: "five_hour",
+			Utilization: u, Windows: map[string]harness.Window{"five_hour": {Utilization: u, ResetsAt: at}}}})
+	}
+	parked := func() bool { return rs.Plans()[0].Parked(time.Now()) }
+	read("rejected", 1, reset)
+	read("allowed_warning", 0.97, reset)
+	if !parked() {
+		t.Fatal("a stale reading in the same window lifted the park")
+	}
+	read("allowed", 0.1, reset.Add(5*time.Hour))
+	if parked() {
+		t.Fatal("a reading from the next window keeps the login parked")
+	}
+}
+
+// With the machine's login at its limit and an added one with no
+// credential, the run is parked for the limit, not for "not logged in".
+func TestLimitIsTheReasonOverAMissingLogin(t *testing.T) {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, ownAndEmpty{}, func() []string { return nil })
+	rs.append("plan.usage", Plan{Harness: "claude", Login: "claude", Limit: harness.RateLimit{Status: "rejected", ResetsAt: time.Now().Add(time.Hour)}})
+	_, _, err = rs.pickLogin("claude", "", t.TempDir(), false)
+	if err == nil || !strings.HasPrefix(err.Error(), "every claude login is at its usage limit") || !strings.Contains(err.Error(), "claude:empty") {
+		t.Fatalf("parked for %v", err)
+	}
+}
+
+// ownAndEmpty is the machine's login and an added one with no credential.
+type ownAndEmpty struct{}
+
+func (ownAndEmpty) Logins(h string) []Login {
+	return []Login{{Harness: "claude"}, {Harness: "claude", Name: "empty"}}
+}
+func (ownAndEmpty) AgentEnv(l Login, home string) ([]string, error) {
+	if l.Name == "empty" {
+		return nil, ErrNoLogin
+	}
+	return []string{"TOKEN=x"}, nil
+}
+
+// Ahead is a five-hour window's use beyond the share of it passed: 99% used
+// with 64 minutes left (10-25 10:36) is 20% ahead; the week isn't paced.
+func TestPlanAheadOfItsWindow(t *testing.T) {
+	now := time.Now()
+	p := Plan{Limit: harness.RateLimit{Windows: map[string]harness.Window{
+		"five_hour": {Utilization: 0.99, ResetsAt: now.Add(64 * time.Minute)},
+		"seven_day": {Utilization: 0.9, ResetsAt: now.Add(6 * 24 * time.Hour)},
+	}}}
+	if a := p.Ahead(now); a < 0.19 || a > 0.21 {
+		t.Fatalf("ahead %v, want 0.2", a)
+	}
+	p.Limit.Windows["five_hour"] = harness.Window{Utilization: 0.5, ResetsAt: now.Add(4 * time.Hour)}
+	if a := p.Ahead(now); a < 0.29 || a > 0.31 {
+		t.Fatalf("half spent in the first hour: %v, want 0.3", a)
+	}
+	p.Limit.Windows["five_hour"] = harness.Window{Utilization: 0.3, ResetsAt: now.Add(2 * time.Hour)}
+	if a := p.Ahead(now); a != 0 {
+		t.Fatalf("behind the clock: %v, want 0", a)
+	}
+}

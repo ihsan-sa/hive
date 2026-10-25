@@ -17,13 +17,14 @@ import (
 // plan carry. While something waits on the limit and nothing is strained, it
 // grows by one a step; when the machine is strained (memory floor, memory or
 // CPU pressure, load per core: the same settings that hold a turn) or the
-// workers' plan is nearly spent, it pulls back to three quarters of what is
-// running, or to its start when nothing runs (the strain isn't the Hive's,
-// and from 1 it would take minutes to climb back). Nothing running is
-// stopped; past the limit, work waits in order.
-// It changes at most once a step, so the readings (load is a 1-minute
-// average) catch up with the last change before the next. max_workers and
-// max_checks, when set, are the person's ceilings and where the pace starts;
+// workers' plan is nearly spent or running ahead of its five-hour window,
+// it pulls back to three quarters of what is running, or to its start when
+// nothing runs (the strain isn't the Hive's, and from 1 it would take
+// minutes to climb back). Nothing running is stopped; past the limit, work
+// waits in order. It changes at most once a step, so the readings (load is
+// a 1-minute average) catch up with the last change before the next.
+// max_workers and max_checks, when set, are the person's ceilings and where
+// the pace starts;
 // with no machine reading on, or none to read (no /proc, as on macOS or
 // Windows), it stays at its start, as it can't see. With no ceiling set, a
 // safety ceiling sized to the machine (safeWorkers, safeChecks) keeps the
@@ -34,6 +35,12 @@ const paceStep = time.Minute
 
 // planFloor is the share of the plan left below which workers pull back.
 const planFloor = 0.1
+
+// aheadSlack is how far ahead of its five-hour window the workers' plan may
+// run before workers pull back: a burst early in a window is fine, a pace
+// that spends it an hour before its reset is not (10-25: three windows ran
+// out 50 to 100 minutes early, and nothing moved until the reset).
+const aheadSlack = 0.15
 
 // defaultWorkers is where the workers' limit starts when no ceiling is set.
 const defaultWorkers = 4
@@ -127,18 +134,25 @@ func safeChecks() int { return 2 * core.DefaultMaxChecks() }
 
 // planSpent says when every model a worker would go on, the workspace's
 // route or any project's own, has under planFloor of its plan left, all
-// logins together, or "".
+// logins together, or is spending its five-hour window more than aheadSlack
+// ahead of the clock, or "".
 func (m *Module) planSpent(cfg core.Config) string {
-	room := 0.0
+	room, ahead := 0.0, -1.0
 	for _, project := range append([]string{""}, slices.Sorted(maps.Keys(cfg.Projects))...) {
 		for _, p := range cfg.Route("worker", project) {
 			room = max(room, m.C.Runs.Headroom(p))
+			if a := m.C.Runs.Ahead(p); ahead < 0 || a < ahead {
+				ahead = a
+			}
 		}
 	}
-	if room >= planFloor {
-		return ""
+	switch {
+	case room < planFloor:
+		return fmt.Sprintf("the workers' plan is nearly spent (%.0f%% left)", room*100)
+	case ahead > aheadSlack:
+		return fmt.Sprintf("the workers' plan is %.0f%% ahead of its five-hour window and would run out before it resets", ahead*100)
 	}
-	return fmt.Sprintf("the workers' plan is nearly spent (%.0f%% left)", room*100)
+	return ""
 }
 
 // paceWorkers is the workers' limit now, with working of them at work and

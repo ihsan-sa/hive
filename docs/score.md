@@ -13,7 +13,7 @@ Code: `cmd/hive-score` (output format tested in `main_test.go`).
 `hive-score` compiles `internal/e2e` once, then runs on the fake harness, one after the other:
 
 1. **The benchmark, six times**: `TestBenchmark` with `HIVE_BENCH=4`, the same test the recursive gate judges with (docs/gate.md): four asks on the demo textkit project, judged from what landed on textkit's main, on inputs drawn fresh for the run, with answers worked out by the test, not from what the Hive says. Three runs ask one by one, as the gate does; three ask **all at once** (`HIVE_BENCH_AT_ONCE=1`), as work reaches a real Hive. The at-once runs are the loop itself: how soon queued briefs start, how many work side by side, and how four branches that all edit `textkit/__init__.py` land on a main that moves under them. Each BENCH line is signed with a key `hive-score` hands it on stdin, and a line that doesn't verify counts as no line. The test looks every tenth of a second for an ask to end, so its seconds are the Hive's, not its own polling.
-2. **The rest of the e2e suite** (`TestBenchmark` skipped). A test that fails is run once more on its own; a pass then counts as a pass (and is reported as flaky), since improve files flakes as work of their own. A test that never reports (a panic, the suite's timeout) counts as failed; skipped tests (the live probes, tmux) are left out.
+2. **The rest of the e2e suite** (`TestBenchmark` skipped). A test that fails is run once more, in a process of its own so one that panics can't fail its neighbours; a pass then counts as a pass (and is reported as flaky), since improve files flakes as work of their own. A test that never reports (a panic, the suite's timeout) counts as failed; skipped tests (the live probes, tmux) are left out. A test the parent commit (`HEAD^`) declares in `internal/e2e` and the candidate doesn't counts as failed (reported as `(deleted)`), so deleting a failing test can't raise the pass rate. If the suite's test list can't be read, `hive-score` exits 1 rather than print 0/0 as a score.
 
 It needs `go`, `git` and `python3` (the benchmark runs textkit with it). The command looks `git` and `python3` up in the shell before `go run` (a missing `go` fails the shell's own lookup), and runs a missing one so the shell prints its own `sh: 1: <tool>: not found` and the command exits 127: improve reads that as "can't run", not a score. The lookup has to be in the command: `go run` exits 1 whatever its program exits with, so a 127 from inside `hive-score` would never reach improve (`TestMissingToolCantRun` runs the command from project.json without python3 and checks `core.MissingTool` names it).
 
@@ -69,11 +69,14 @@ The at-once runs vary most (6.5-8.6 s for one run): the queue and the loop's tic
 
 ## First value on main
 
-The first measure of the merge of this change starts a new baseline (it changes the evaluator), at about 225 where the old score had 198.
+The first score improve measured, inside the daemon's check sandbox, was **190.71** at a521c3a (2026-10-25 04:15 UTC), against 190.70 measured by hand on the branch: python3, git and the e2e suite run there as they do bare. The step-back then ran against it (best 198.08 by 12:27 UTC that day), so it has a number to beat. The first measure of the merge of the current score (c297e7a) starts a new baseline (it changes the evaluator), at about 225 where the old score had 198.
 
 ## Evaluator paths
 
-`./cmd/hive-score` (from the command), `internal/e2e/benchmark_test.go` (the asks and how they are judged) and `internal/demo/` (textkit, what the asks work on) are the score's evaluator: a change to them is the person's to merge and starts a new baseline. The rest of `internal/e2e` isn't listed, since every change to the suite would otherwise wait on the person. That leaves one way to raise the pass rate without fixing anything, deleting a failing test; the review and the gate (which grades every candidate with the base's suite) are what catch it.
+`./cmd/hive-score` (from the command), `internal/e2e/benchmark_test.go` (the asks and how they are judged) and `internal/demo/` (textkit, what the asks work on) are the score's evaluator: a change to them is the person's to merge and starts a new baseline. The rest of `internal/e2e` isn't listed, since every change to the suite would otherwise wait on the person. A deleted test counts as failed against the parent's list, so a test removed on purpose costs 2.3 points once (under the tolerance), and two at once are a revert unless the person merges it. What the score itself doesn't catch, and the review must:
+
+- **Skipping a failing test** (`t.Skip`, a build tag): skipped tests are left out of the rate.
+- **The fake agent's own time.** What `internal/fakeagent` does in a turn (none of its sleeps are on the benchmark's path today) is part of the benchmark's seconds, and it isn't an evaluator path, since the rest of the suite drives it. A change that makes the fake worker cut corners or wait less makes the fake work quicker, not the Hive, and would beat the benchmark; review reads a change there as touching the score.
 
 ## What a score changes for the Hive's own work
 
