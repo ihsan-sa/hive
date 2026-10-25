@@ -214,8 +214,10 @@ func (m *Module) quiet(t Task) bool {
 	return ok && r.Status == core.StatusQuiet
 }
 
-// waitsOn finds the task a queued one's reason says it waits for.
-var waitsOn = regexp.MustCompile(`\(task (\S+)\) to (?:land|go first): both touch `)
+// waitsOn finds the task a queued one's reason says it waits for. It reads
+// from the start, past the holder's label as %q wrote it, so a label that
+// itself reads "(task X) to land: both touch " never names X.
+var waitsOn = regexp.MustCompile(`^waiting for "(?:[^"\\]|\\.)*" \(task (\S+)\) to (?:land|go first): both touch `)
 
 // holder returns the task a wait reason names, or "".
 func holder(reason string) string {
