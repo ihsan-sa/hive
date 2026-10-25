@@ -69,6 +69,31 @@ func TestAlreadyLandedThroughAnotherTask(t *testing.T) {
 	}
 }
 
+// A task whose work landed further back than carrier looks names the oldest
+// commit it looked at, and its PR's comment says an older one may carry it.
+func TestAlreadyLandedFarBackIsApproximate(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	task.Stage = StageTesting
+	m.save(task, "")
+	pushMain(t, f, map[string]string{"feature.txt": "y"})
+	pushMain(t, f, map[string]string{"a.txt": "1"})
+	oldest, _ := m.C.Effects.Sync(p)
+	pushMain(t, f, map[string]string{"b.txt": "2"})
+	main, _ := m.C.Effects.Sync(p)
+	defer func(n int) { carrierBack = n }(carrierBack)
+	carrierBack = 1
+	if at, exact := carrier(m.C.WS.Project(p.Name), main, task.SHA); at != oldest || exact {
+		t.Fatalf("carrier %s exact %v, want %s approximate", at, exact, oldest)
+	}
+	if err := m.step(task); err != nil {
+		t.Fatal(err)
+	}
+	cs := f.Comments(p.Repo, task.PR.Number)
+	if task.Stage != StageDone || task.MergeSHA != oldest || len(cs) == 0 || !strings.Contains(cs[len(cs)-1], oldest+" or an older commit carries") {
+		t.Fatalf("stage %q, merge %s, comments %q", task.Stage, task.MergeSHA, cs)
+	}
+}
+
 // A worker that stops blocked because its branch is identical to main ends the
 // task as landed rather than blocked.
 func TestBlockedOnLandedWorkIsLanded(t *testing.T) {

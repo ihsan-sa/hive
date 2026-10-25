@@ -887,17 +887,21 @@ func TestRequiredChecks(t *testing.T) {
 	}
 }
 
-// Two changes that each add to docs/log.md, docs/status.md and
-// docs/architecture.md merge into main one after the other: the repository's
-// own .gitattributes marks them merge=union, so bringing the second branch up
-// to date keeps both entries instead of sending it back as a conflict. Without
-// those lines the same merge conflicts.
+// Two changes that each add to docs/log.md and docs/status.md merge into main
+// one after the other: the repository's own .gitattributes marks them
+// merge=union, so bringing the second branch up to date keeps both entries
+// instead of sending it back as a conflict. Without those lines the same merge
+// conflicts. docs/architecture.md is edited in place and isn't union: the same
+// two additions to it conflict either way.
 func TestAdditiveDocsMergeWithoutConflict(t *testing.T) {
 	attrs, err := os.ReadFile(filepath.Join("..", "..", ".gitattributes"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	docs := []string{"docs/log.md", "docs/status.md", "docs/architecture.md"}
+	docs := []string{"docs/log.md", "docs/status.md"}
+	if !strings.Contains(string(attrs), "docs/log.md merge=union") || strings.Contains(string(attrs), "docs/architecture.md merge=union") {
+		t.Fatalf(".gitattributes should mark log.md union and leave architecture.md alone:\n%s", attrs)
+	}
 	for _, union := range []bool{true, false} {
 		t.Run(fmt.Sprint("union=", union), func(t *testing.T) {
 			c, f := testHive(t)
@@ -1254,24 +1258,61 @@ func TestLogExcerpt(t *testing.T) {
 	}
 }
 
-// Only the Hive's own project sets a red Windows job aside, and it is then
-// neither counted nor waited on as required; a pending one still counts.
+// A plain text file or anything under testdata is data a test may read, not
+// prose: its red counts as any code change's.
+func TestProseOnly(t *testing.T) {
+	for files, want := range map[string]bool{
+		".hive/goals.md":                 true,
+		"docs/a.md,.modules/agents/x.md": true,
+		"feature.txt":                    false,
+		"internal/x/testdata/golden.md":  false,
+		"docs/a.md,main.go":              false,
+	} {
+		if got := ProseOnly(strings.Split(files, ",")); got != want {
+			t.Errorf("ProseOnly(%s) = %v, want %v", files, got, want)
+		}
+	}
+}
+
+// ChecksBesidesFailures leaves a failed check out of the required list too,
+// while a required check not yet reported still holds.
+func TestChecksBesidesFailures(t *testing.T) {
+	runs := []CheckRun{{Name: "win", State: CheckFail}, {Name: "linux", State: CheckPass}}
+	if st, _, failed := ChecksBesidesFailures(runs, []string{"win", "linux"}); st != CheckPass || len(failed) != 1 || failed[0] != "win" {
+		t.Fatalf("state %q, failed %v", st, failed)
+	}
+	if st, which, _ := ChecksBesidesFailures(runs, []string{"win", "e2e"}); st != CheckPending || len(which) != 1 || which[0].Name != "e2e" {
+		t.Fatalf("state %q, which %v", st, which)
+	}
+}
+
+// Only the Hive's own project sets a listed check aside, by its exact name,
+// and it is then neither counted nor waited on as required, red or pending.
 func TestAdvisory(t *testing.T) {
-	runs := []CheckRun{{Name: "test (windows-latest)", State: CheckFail}, {Name: "test (ubuntu-latest)", State: CheckPass}}
+	runs := []CheckRun{{Name: "test (windows-latest)", State: CheckFail}, {Name: "test (ubuntu-latest)", State: CheckPass}, {Name: "lint-windows", State: CheckPass}}
 	req := []string{"test (windows-latest)", "test (ubuntu-latest)"}
-	if kept, r, w := Advisory(Project{}, runs, req); len(kept) != 2 || len(r) != 2 || w != nil {
+	adv := []string{"test (windows-latest)"}
+	if kept, r, w := Advisory(Project{}, runs, req, adv); len(kept) != 3 || len(r) != 2 || w != nil {
 		t.Fatalf("not self: %v %v %v", kept, r, w)
 	}
-	kept, r, w := Advisory(Project{Self: true}, runs, req)
-	if len(kept) != 1 || !slices.Equal(r, []string{"test (ubuntu-latest)"}) || !slices.Equal(w, []string{"test (windows-latest)"}) {
+	if kept, r, w := Advisory(Project{Self: true}, runs, req, nil); len(kept) != 3 || len(r) != 2 || w != nil {
+		t.Fatalf("no list: %v %v %v", kept, r, w)
+	}
+	kept, r, w := Advisory(Project{Self: true}, runs, req, adv)
+	if len(kept) != 2 || !slices.Equal(r, []string{"test (ubuntu-latest)"}) || !slices.Equal(w, []string{"test (windows-latest)"}) {
 		t.Fatalf("self: %v %v %v", kept, r, w)
 	}
 	if st, _ := ChecksState(kept, r); st != CheckPass {
 		t.Fatalf("state %s", st)
 	}
-	runs[0].State = CheckPending
-	if _, _, w := Advisory(Project{Self: true}, runs, req); w != nil {
-		t.Fatalf("a pending Windows job was set aside: %v", w)
+	runs[2].State = CheckFail // named like Windows, but not on the list
+	if _, _, w := Advisory(Project{Self: true}, runs, req, adv); !slices.Equal(w, []string{"test (windows-latest)"}) {
+		t.Fatalf("an unlisted check was set aside: %v", w)
+	}
+	runs[0].State, runs[2].State = CheckPending, CheckPass
+	kept, r, w = Advisory(Project{Self: true}, runs, req, adv)
+	if st, _ := ChecksState(kept, r); st != CheckPass || w != nil {
+		t.Fatalf("a pending advisory check held the merge: %s %v", st, w)
 	}
 }
 
@@ -1286,6 +1327,16 @@ func TestRedKeys(t *testing.T) {
 	}
 	if got := RedKeys("FAILED tests/a.py::test_x\n"); len(got) != 1 || got[0] != "tests/a.py::test_x" {
 		t.Fatalf("pytest: %q", got)
+	}
+	vet := "# x/e\n# [x/e]\nvet: e/a_test.go:225:42: not enough arguments in call to f\n\thave (string)\n\twant (string, bool)\n"
+	if got := RedKeys(vet); got != nil {
+		t.Fatalf("vet's errors name no test: %q", got)
+	}
+	if got := StopKeys(vet); len(got) != 1 || got[0] != "e/a_test.go: not enough arguments in call to f" {
+		t.Fatalf("vet: %q", got)
+	}
+	if moved := StopKeys(strings.Replace(vet, ":225:42:", ":230:9:", 1)); !slices.Equal(moved, StopKeys(vet)) {
+		t.Fatalf("the same vet error a few lines down: %q", moved)
 	}
 	if got := RedKeys("vet: something\n"); got != nil {
 		t.Fatalf("nothing named: %q", got)

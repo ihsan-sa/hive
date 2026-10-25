@@ -74,10 +74,12 @@ type Effects struct {
 	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
 	seats     map[string]map[string]Verdict     // project#diff -> security seat -> its latest verdict
 	hostMade  map[string]HostCommit
+	pushes    map[string][]string // project@branch -> each commit pushed to it, oldest first
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
 	steps     map[string][]JobStep    // repo url -> a finished check's steps
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
+	judged    map[string]Judgement    // project@sha@main -> the judge's newest call (judge.go)
 	homes     map[string]bool         // running checks' homes (disk.go)
 	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
 	disk      DiskUse                 // the last measurement of the Hive's disk use
@@ -168,7 +170,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}, gates: map[string]GateResult{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -226,6 +228,11 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var h HostCommit
 			ev.Decode(&h)
 			e.hostMade[h.Project+"@"+h.SHA] = h
+		case "effect.pushed":
+			var pu struct{ Project, Branch, SHA string }
+			ev.Decode(&pu)
+			k := pu.Project + "@" + pu.Branch
+			e.pushes[k] = append(slices.DeleteFunc(e.pushes[k], func(s string) bool { return s == pu.SHA }), pu.SHA)
 		case "effect.approved":
 			var a struct{ Kind, Project, SHA string }
 			ev.Decode(&a)
@@ -237,6 +244,10 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var g GateResult
 			ev.Decode(&g)
 			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
+		case "judge.decided":
+			var j Judgement
+			ev.Decode(&j)
+			e.judged[j.Project+"@"+j.SHA+"@"+j.Main] = j
 		}
 	}
 	j.Replay(apply)
@@ -611,6 +622,7 @@ var (
 	redPkgLine = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
 	redTest    = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
 	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |exit status |test timed out|# )|\[(build|setup) failed\]`)
+	redBuild   = regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+(?::\d+)?: (.+)`)
 )
 
 // RedKeys names what failed in a red go test run so two runs' reds can be
@@ -649,6 +661,21 @@ func RedKeys(out string) []string {
 	}
 	if !pkgs {
 		return FailedTests(out)
+	}
+	return keys
+}
+
+// StopKeys names, for a red run RedKeys names nothing in (go vet, or a build
+// that stopped the command before go test ran), each compile or vet error as
+// "file.go: message", its line left out so an edit above it doesn't make the
+// same error look new. The rest of the command didn't run, so these can show
+// a red isn't new at a merge but never that a change is no worse than main.
+func StopKeys(out string) []string {
+	var keys []string
+	for _, l := range strings.Split(out, "\n") {
+		if m := redBuild.FindStringSubmatch(strings.TrimRight(l, " \r")); m != nil && !slices.Contains(keys, m[1]+": "+m[2]) {
+			keys = append(keys, m[1]+": "+m[2])
+		}
 	}
 	return keys
 }
@@ -755,7 +782,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid()}
+		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: CheckNice}
 	over := watchHome(home, capB)
 	code, err := sb.Run(spec, timeout)
 	if over() && err == nil {
@@ -1015,6 +1042,15 @@ func (e *Effects) Approved(kind, project, sha string) bool {
 	return e.approvals[kind+":"+project+"@"+sha]
 }
 
+// Pushed says whether the Hive pushed sha to branch, and whether it is the
+// newest commit it pushed there.
+func (e *Effects) Pushed(project, branch, sha string) (pushed, last bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	all := e.pushes[project+"@"+branch]
+	return slices.Contains(all, sha), len(all) > 0 && all[len(all)-1] == sha
+}
+
 // HostMade returns a host-authored commit record.
 func (e *Effects) HostMade(project, sha string) (HostCommit, bool) {
 	e.mu.Lock()
@@ -1265,15 +1301,15 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", fmt.Errorf("refusing to merge %s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
 	}
 	if p.Self && m.Gain {
-		if g, ok := e.GateResult(p.Name, m.SHA, m.Main); !ok || g.Outcome != GateKeep {
-			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate kept it against main at %s", short(m.SHA), short(m.Main))
+		if !e.Kept(p.Name, m.SHA, m.Main) {
+			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s", short(m.SHA), short(m.Main))
 		}
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
 	if err != nil {
 		return "", err
 	}
-	runs, req, warned := Advisory(p, runs, e.RequiredChecks(p, m.Main))
+	runs, req, warned := Advisory(p, runs, e.RequiredChecks(p, m.Main), e.AdvisoryChecks(p, m.Main))
 	st, which := ChecksState(runs, req)
 	var shared, excused []string
 	var answer map[string]string // check -> the older main commit its answer came from
@@ -1285,6 +1321,10 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		}
 		runs, excused = e.Excused(p, m.Main, m.Task, ch.Files, runs, mainRuns)
 		st, which, shared, _ = ChecksAgainstMain(runs, mainRuns, req, e.FailingTests(p.Repo))
+	}
+	var prose []string
+	if st == CheckFail && ProseOnly(ch.Files) {
+		st, which, prose = ChecksBesidesFailures(runs, req)
 	}
 	if st != CheckPass {
 		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
@@ -1299,8 +1339,8 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		}
 	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
-	if err != nil && len(shared) > 0 && protectionRefused.MatchString(err.Error()) {
-		return "", &RefusedRed{Checks: shared, Err: err}
+	if red := append(slices.Concat(shared, prose), warned...); err != nil && len(red) > 0 && protectionRefused.MatchString(err.Error()) {
+		return "", &RefusedRed{Checks: red, Warned: warned, Err: err}
 	}
 	if err != nil {
 		return "", err
@@ -1320,6 +1360,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 			ev["main_answer"] = answer
 		}
 	}
+	if len(prose) > 0 {
+		ev["red_on_prose"] = prose // a change to prose alone, which can't break them
+	}
 	e.j.MustAppend("effect.merged", ev)
 	return merged, nil
 }
@@ -1334,15 +1377,21 @@ func (e *Effects) ReadyPR(p Project, pr int, sha string) error {
 }
 
 // RefusedRed is the forge refusing a merge the Hive found no worse than main:
-// its branch rules want a check that is red on main too, so retrying won't
-// help until main is fixed or the person relaxes the rule.
+// its branch rules want a check that is red on main too, or one main's list
+// says only warns (Warned), so retrying won't help until main is fixed or the
+// person relaxes the rule.
 type RefusedRed struct {
 	Checks []string
+	Warned []string
 	Err    error
 }
 
 func (r *RefusedRed) Error() string {
-	return "the forge refused the merge: its branch rules want " + strings.Join(r.Checks, ", ") + ", red on main too (" + Clip(r.Err.Error(), 200) + ")"
+	why := ", red on main too"
+	if len(r.Warned) > 0 {
+		why = ", red here (" + strings.Join(r.Warned, ", ") + " only warn on the Hive's own PRs, per advisory_checks)"
+	}
+	return "the forge refused the merge: its branch rules want " + strings.Join(r.Checks, ", ") + why + " (" + Clip(r.Err.Error(), 200) + ")"
 }
 
 func (r *RefusedRed) Unwrap() error { return r.Err }
@@ -1361,26 +1410,31 @@ func (e *Effects) RequiredChecks(p Project, mainSHA string) []string {
 	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "required_checks")
 }
 
+// AdvisoryChecks are the forge's checks main's list says only warn on the
+// Hive's own PRs (Advisory).
+func (e *Effects) AdvisoryChecks(p Project, mainSHA string) []string {
+	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "advisory_checks")
+}
+
 // Advisory splits off the checks that only warn: on the Hive's own project
-// (Self) a failing Windows job, whose red tonight was mostly flakes unrelated
-// to the change, doesn't block the merge (the person: keep the Hive improving
-// as fast as possible). A release still needs the whole ci workflow green,
-// Windows with it. kept are the rest; warned names the failures set aside,
-// and required loses them so they aren't waited on either.
-func Advisory(p Project, runs []CheckRun, required []string) (kept []CheckRun, req, warned []string) {
-	if !p.Self {
+// (Self) a check named on main's advisory_checks (a Windows job, whose red was
+// mostly flakes unrelated to the change) doesn't hold the merge, red, pending
+// or unable to start (the person: keep the Hive improving as fast as
+// possible). A release still needs the whole ci workflow green. kept are the
+// rest; warned names the red ones set aside, and required loses every
+// advisory check so none is waited on.
+func Advisory(p Project, runs []CheckRun, required, advisory []string) (kept []CheckRun, req, warned []string) {
+	if !p.Self || len(advisory) == 0 {
 		return runs, required, nil
 	}
 	for _, r := range runs {
-		if r.State == CheckFail && strings.Contains(strings.ToLower(r.Name), "windows") {
-			if !slices.Contains(warned, r.Name) {
-				warned = append(warned, r.Name)
-			}
-			continue
+		if !slices.Contains(advisory, r.Name) || r.State == CheckPass {
+			kept = append(kept, r)
+		} else if r.State == CheckFail && !slices.Contains(warned, r.Name) {
+			warned = append(warned, r.Name)
 		}
-		kept = append(kept, r)
 	}
-	req = slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(warned, n) })
+	req = slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(advisory, n) })
 	return kept, req, warned
 }
 
@@ -1683,6 +1737,43 @@ func (e *Effects) Quarantine(project, task string) []string {
 		return nil
 	}
 	return e.Quarantined(project, task)
+}
+
+// ProseOnly says every file is prose (markdown, reStructuredText, AsciiDoc:
+// docs, goals, the agents' prompts) and none is under a testdata directory,
+// where tests read files as their data. A plain .txt file may be such data
+// anywhere, so it isn't prose. The Hive's own tests ran every test that reads
+// such a change on Linux, so a red forge check on it (another system, a flake)
+// isn't its own.
+func ProseOnly(files []string) bool {
+	for _, f := range files {
+		f = filepath.ToSlash(f)
+		switch strings.ToLower(filepath.Ext(f)) {
+		case ".md", ".rst", ".adoc":
+		default:
+			return false
+		}
+		if strings.HasPrefix(f, "testdata/") || strings.Contains(f, "/testdata/") {
+			return false
+		}
+	}
+	return len(files) > 0
+}
+
+// ChecksBesidesFailures sums up runs as ChecksState does with every failed
+// check left out (and not required), and names those.
+func ChecksBesidesFailures(runs []CheckRun, required []string) (state string, which []CheckRun, failed []string) {
+	var kept []CheckRun
+	for _, r := range runs {
+		if r.State != CheckFail {
+			kept = append(kept, r)
+		} else if !slices.Contains(failed, r.Name) {
+			failed = append(failed, r.Name)
+		}
+	}
+	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(failed, n) })
+	state, which = ChecksState(kept, req)
+	return state, which, failed
 }
 
 // MainLookBack is how many of main's commits, newest first, MainAnswer reads

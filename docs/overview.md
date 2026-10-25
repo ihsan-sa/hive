@@ -33,6 +33,8 @@ The diagram is drawn from [arch.json](arch.json). To change it, edit that file a
 
 ## Install
 
+**Linux only for now** ([issue #564](https://github.com/ihsan-sa/hive/issues/564)): new releases carry no macOS or Windows binary while the self-improvement loop is the focus, so the macOS and Windows installers stop with a message saying so, and macOS and Windows installs get no updates until those builds return.
+
 macOS or Linux:
 
     curl -fsSL https://hive.ihsan.cc/install.sh | sh
@@ -64,4 +66,4 @@ These repeat [status.md](status.md); when it changes, this list changes with it.
 
 - Slack, mail or phone out of the box (a module could add them), other people's workspaces on the same machine, a separate system user per agent, and sharing a GPU.
 - The macOS sandbox hasn't been tested, and Codex hasn't run with a real login.
-- The recursive gate ([gate.md](gate.md)), which keeps a change to the Hive itself only if a child Hive built from it does better, exists and runs on every change to the Hive's own repository that aims at a measurable gain (a fix just merges, and the score after the merge still reverts it if main got worse), but hasn't yet kept a change because it beat the current Hive.
+- The recursive gate ([gate.md](gate.md)), which keeps a change to the Hive itself only if a child Hive built from it does better, exists and runs on every change to the Hive's own repository taken as a gain, which is any change not clearly a fix of a named failure (a clear fix just merges, and a score dip after it files a brief to look into it rather than reverting it), but hasn't yet kept a change because it beat the current Hive.

@@ -23,6 +23,8 @@ func TestRerunFailedForgeChecks(t *testing.T) {
 	}
 	flaky := core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/attempt1"}
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass}, flaky)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass}) // an answer, so no re-run of the Hive's own
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerging || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 1 || !strings.Contains(task.Reason, "run again once before a red goes back") {
 		t.Fatalf("first red: stage %q, round %d, %d re-runs, reason %q", task.Stage, task.Round, f.Reruns(p.Repo, task.SHA), task.Reason)
@@ -79,12 +81,16 @@ func TestRerunFailedForgeChecks(t *testing.T) {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
 
-	// The cap: a third re-run doesn't go.
-	if _, err := m.RerunChecks(task.ID, "lead"); err == nil || !strings.Contains(err.Error(), "most for one head") {
-		t.Fatalf("third re-run on one head: %v", err)
+	// The cap: a third re-run goes, a fourth doesn't.
+	if _, err := m.RerunChecks(task.ID, "lead"); err != nil {
+		t.Fatal(err)
 	}
-	if f.Reruns(p.Repo, task.SHA) != 2 {
-		t.Fatalf("%d re-runs on the forge, want 2", f.Reruns(p.Repo, task.SHA))
+	f.SetChecks(p.Repo, task.SHA, again)
+	if _, err := m.RerunChecks(task.ID, "lead"); err == nil || !strings.Contains(err.Error(), "most for one head") {
+		t.Fatalf("fourth re-run on one head: %v", err)
+	}
+	if f.Reruns(p.Repo, task.SHA) != 3 {
+		t.Fatalf("%d re-runs on the forge, want 3", f.Reruns(p.Repo, task.SHA))
 	}
 
 	*task, _ = m.Get(task.ID)
@@ -306,7 +312,7 @@ func TestForgeQuarantinedFailureIgnored(t *testing.T) {
 func redOnce(t *testing.T, m *Module, task *Task, p core.Project, f *core.Local, log string) {
 	t.Helper()
 	toMerging(t, m, task, p)
-	rerunOnce(task)
+	rerunSpent(task)
 	main, _ := m.C.Effects.Sync(p)
 	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPass})
 	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, URL: "https://ci/1"})

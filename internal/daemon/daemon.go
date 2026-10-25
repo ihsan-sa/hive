@@ -29,6 +29,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -81,26 +82,55 @@ func StartAfter(ws core.Workspace, waitFor int) (*api.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The Hive's own unit, when it serves this workspace, is what starts the
-	// daemon, so the unit and a command can't each start one.
-	if waitFor > 0 || !setup.StartUnit(ws.Root) {
+	detached := func() error {
 		env := append(os.Environ(), "HIVE_HOME="+ws.Root)
 		args := []string{exe, "daemon"}
 		if waitFor > 0 {
 			args = append(args, "--wait-for", strconv.Itoa(waitFor))
 		}
-		if _, err := proc.StartDetached(args, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log")); err != nil {
+		_, err := proc.StartDetached(args, env, ws.Root, "", filepath.Join(ws.Hive(), "daemon.log"))
+		return err
+	}
+	// The Hive's own unit, when it serves this workspace, is what starts the
+	// daemon, so the unit and a command can't each start one. A unit that
+	// brings none up (failed, at its start limit, or naming a binary that has
+	// moved) never takes the lock: then the command starts one itself.
+	unit := waitFor == 0 && setup.StartUnit(ws.Root)
+	if !unit {
+		if err := detached(); err != nil {
 			return nil, err
 		}
 	}
-	for i := 0; i < 100; i++ {
+	for start := time.Now(); time.Since(start) < startWait; {
 		time.Sleep(200 * time.Millisecond)
 		if c, ok := Running(ws); ok {
 			return c, nil
 		}
+		if unit && time.Since(start) > unitWait && !lockHeld(ws) {
+			fmt.Fprintf(os.Stderr, "hive: systemd's hive.service (%s) didn't start a daemon in %s; starting one here\n", or(setup.UnitState(), "state unknown"), unitWait)
+			unit, start = false, time.Now() // its daemon gets the full wait
+			if err := detached(); err != nil {
+				return nil, err
+			}
+		}
 	}
 	log, _ := os.ReadFile(filepath.Join(ws.Hive(), "daemon.log.err"))
+	if unit {
+		return nil, fmt.Errorf("the Hive didn't start: systemd's hive.service is %s and its daemon didn't answer (`systemctl --user status hive.service` says why): %s", or(setup.UnitState(), "in a state systemctl can't say"), core.Clip(string(log), 600))
+	}
 	return nil, fmt.Errorf("the Hive didn't start: %s", core.Clip(string(log), 600))
+}
+
+// startWait is how long a command waits for the daemon it started; unitWait
+// how long it gives the unit before starting one itself, unless the unit's
+// daemon holds the lock and is still starting.
+var startWait, unitWait = 20 * time.Second, 8 * time.Second
+
+func or(s, alt string) string {
+	if s == "" {
+		return alt
+	}
+	return s
 }
 
 // handOffWait covers a restart's gap: the old daemon exits within a few
@@ -202,6 +232,9 @@ func Run(ws core.Workspace, waitFor int) error {
 	defer func() { lock.Release() }() // the lock held at the end, which a failed hand-off retakes
 	if _, ok := Running(ws); ok {
 		return errors.New("the Hive is already running")
+	}
+	if setup.DropDoubledAutostart(ws.Root) {
+		fmt.Println("hive: removed ~/.config/autostart/hive.desktop: the systemd unit starts the Hive, and a second launcher at login only makes a daemon that exits")
 	}
 	exe := release.Rename(ws.Root, from)
 	if inUnit && (waitFor > 0 || exe != "") {
@@ -806,6 +839,7 @@ func (s *server) routes() http.Handler {
 		if err := a.C.WS.SaveConfig(c); err != nil {
 			return nil, err
 		}
+		models.Record(a.C.J, cur, c, "person (Settings)")
 		if sandboxChanged(cur, c) {
 			a.C.ResetSandbox()
 		}

@@ -17,7 +17,7 @@ func queueRig(t *testing.T) *Module {
 	m, forge, _ := helperRig(t)
 	seed := filepath.Join(t.TempDir(), "seed")
 	mustGit(t, "", "clone", "-q", forge.RepoPath("me/p"), seed)
-	for _, f := range []string{"internal/core/effects.go", "internal/core/runs.go", "internal/tui/views.go", "docs/log.md", "docs/notes/plan.md"} {
+	for _, f := range []string{"internal/core/effects.go", "internal/core/runs.go", "internal/tui/views.go", "docs/log.md", "docs/notes/plan.md", "modules/agents/worker.md", "modules/kb/filer.md"} {
 		os.MkdirAll(filepath.Join(seed, filepath.Dir(f)), 0o755)
 		os.WriteFile(filepath.Join(seed, f), []byte("package x\n"), 0o644)
 	}
@@ -102,7 +102,7 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 		t.Fatalf("queue after ordering: %q", q)
 	}
 	tick(m)
-	want(d, StageQueued, "held by the lead")
+	want(d, StageQueued, "held by lead")
 
 	// a lands: its slot goes to e, the lead's first, not to the held d.
 	got := stageOf(t, m, a)
@@ -110,7 +110,7 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 	m.save(&got, "landed")
 	tick(m)
 	want(e, StageWorking, "")
-	want(d, StageQueued, "held by the lead")
+	want(d, StageQueued, "held by lead")
 	want(c, StageQueued, "both touch internal/core/effects.go")
 
 	// A lower cap holds new starts only: b and e work on.
@@ -144,6 +144,105 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 	out, _ = m.opQueue(lead, json.RawMessage(`{"hold":["`+c.ID+`"]}`))
 	if notes := out.(map[string]any)["notes"].([]string); len(notes) != 1 || !strings.Contains(notes[0], "left the queue") {
 		t.Fatalf("notes %q", notes)
+	}
+}
+
+// A brief that only changes module prompts goes to the top of the line and
+// may start past the worker limit, one at a time; one that names code too
+// waits its turn.
+func TestQueueQuickPromptBriefs(t *testing.T) {
+	m := queueRig(t) // max_workers 2
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
+	a := file(t, m, "cap the checks", "In internal/core/effects.go.")
+	b := file(t, m, "hold strained turns", "In internal/core/runs.go.")
+	c := file(t, m, "show the queue", "In internal/tui/views.go.")
+	mixed := file(t, m, "worker prompt and code", "In modules/agents/worker.md and internal/tui/views.go.")
+	p1 := file(t, m, "word the worker prompt", "In modules/agents/worker.md.")
+	p2 := file(t, m, "word the filer prompt", "In modules/kb/filer.md; see docs/log.md.")
+	if m.quick(mixed) || !m.quick(p1) || !m.quick(p2) || m.quick(a) {
+		t.Fatalf("quick: mixed %v, p1 %v, p2 %v, a %v", m.quick(mixed), m.quick(p1), m.quick(p2), m.quick(a))
+	}
+	// A package, a directory or a file still to be made, named next to a
+	// prompt, is code work: not quick. A prompt still to be made is.
+	for known, want := range map[string]bool{
+		"modules/agents/lead.md and the queue in internal/mod/work.": false,
+		"modules/kb/filer.md and the modules/kb/dream package.":      false,
+		"modules/agents/lead.md, and a new internal/core/pace.go.":   false,
+		"modules/agents/../../x/y.md":                                false,
+		"A new modules/agents/scout.md, logged in docs/log.md.":      true,
+	} {
+		if got := m.quick(Task{Project: "p", Known: known}); got != want {
+			t.Errorf("quick(%q) = %v, want %v", known, got, want)
+		}
+	}
+	for _, task := range []*Task{&a, &b, &c, &mixed, &p1, &p2} {
+		task.Stage = StageQueued
+		m.save(task, "")
+	}
+	q := m.Queue(lead)
+	if len(q) != 6 || !strings.Contains(q[0], p1.ID) || !strings.Contains(q[1], p2.ID) || !strings.Contains(q[2], a.ID) {
+		t.Fatalf("queue: %q", q)
+	}
+	for _, task := range []*Task{&a, &b} {
+		task.Stage = StageWorking
+		m.save(task, "")
+	}
+	start, wait := m.admit(m.List(nil))
+	if !start[p1.ID] {
+		t.Fatalf("the prompt brief waits past a full cap: %q", wait[p1.ID])
+	}
+	for _, task := range []Task{p2, c} {
+		if !strings.Contains(wait[task.ID], "max_workers 2") {
+			t.Fatalf("%q: %q, want waiting for a worker", task.Title, wait[task.ID])
+		}
+	}
+	// A quick worker on: the next quick brief waits for a slot like any other.
+	p1.Stage = StageWorking
+	m.save(&p1, "")
+	if start, wait = m.admit(m.List(nil)); start[p2.ID] || !strings.Contains(wait[p2.ID], "max_workers 2") {
+		t.Fatalf("a second quick brief went past the cap: %q", wait[p2.ID])
+	}
+	// The mixed brief names p1's prompt: it waits on p1 even with a slot free.
+	if !strings.Contains(wait[mixed.ID], p1.ID) {
+		t.Fatalf("mixed: %q", wait[mixed.ID])
+	}
+	a.Stage = StageDone
+	m.save(&a, "landed")
+	if _, wait = m.admit(m.List(nil)); !strings.Contains(wait[mixed.ID], p1.ID) {
+		t.Fatalf("mixed: %q", wait[mixed.ID])
+	}
+}
+
+// Every agent owns the loop: a worker holds a queued brief on its own project
+// as the lead would, on the record by its run id, and one on another project
+// can't.
+func TestWorkerHoldsQueuedBrief(t *testing.T) {
+	m := queueRig(t)
+	a := file(t, m, "tidy the readme", "")
+	b := file(t, m, "cap the checks", "")
+	c := file(t, m, "a later idea", "")
+	tick(m)
+	worker := core.Run{RunSpec: core.RunSpec{ID: "w-" + a.ID, Role: "worker", Project: "p"}}
+	stranger := core.Run{RunSpec: core.RunSpec{ID: "w-other", Role: "worker", Project: "q"}}
+	if _, err := m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"hold":"`+c.ID+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := stageOf(t, m, c); got.Held {
+		t.Fatalf("a worker on another project held the brief: %+v", got)
+	}
+	if _, err := m.C.Runs.Ops().Call(worker, "queue", json.RawMessage(`{"hold":"`+c.ID+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	got := stageOf(t, m, c)
+	if !got.Held || got.HeldBy != worker.ID || !strings.Contains(got.Log[len(got.Log)-1].Text, "held by "+worker.ID) {
+		t.Fatalf("hold not recorded with the worker's id: %+v", got)
+	}
+	done := stageOf(t, m, b)
+	done.Stage = StageDone
+	m.save(&done, "landed")
+	tick(m)
+	if got := stageOf(t, m, c); got.Stage != StageQueued || got.Reason != "held by "+worker.ID {
+		t.Fatalf("held brief: stage %q reason %q", got.Stage, got.Reason)
 	}
 }
 
@@ -227,6 +326,30 @@ func TestQueueHoldsOnlyRealConflicts(t *testing.T) {
 	tick(m)
 	if got := stageOf(t, m, d); got.Stage != StageWorking {
 		t.Fatalf("same-file brief behind pushed tasks: stage %q reason %q", got.Stage, got.Reason)
+	}
+}
+
+// A brief that waits on a working one's file holds no later brief back: one
+// on its other file starts, rather than waiting for it to go first while it
+// waits in turn (tasks 140258 and 163142, issue #493).
+func TestQueueWaitsNeverChain(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 5
+	m.C.WS.SaveConfig(cfg)
+	a := file(t, m, "cap the checks", "In internal/core/effects.go.")
+	tick(m)
+	b := file(t, m, "rework effects and views", "internal/core/effects.go and internal/tui/views.go.")
+	c := file(t, m, "show the queue", "On the dashboard, internal/tui/views.go.")
+	tick(m)
+	if got := stageOf(t, m, a); got.Stage != StageWorking {
+		t.Fatalf("first brief: stage %q reason %q", got.Stage, got.Reason)
+	}
+	if got := stageOf(t, m, b); got.Stage != StageQueued || !strings.Contains(got.Reason, ") to land: both touch ") {
+		t.Fatalf("overlapping brief: stage %q reason %q", got.Stage, got.Reason)
+	}
+	if got := stageOf(t, m, c); got.Stage != StageWorking {
+		t.Fatalf("brief behind a waiting one: stage %q reason %q, want working", got.Stage, got.Reason)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 )
 
@@ -37,6 +38,9 @@ type Module struct {
 	// Scan checks what a release at sha publishes before it is cut; nil is
 	// the identity and secret scan of the files on the commit's public list.
 	Scan func(p core.Project, sha string) error
+	// Diff lists the files that differ between two commits; nil is git diff
+	// in the project's clone.
+	Diff func(p core.Project, from, to string) ([]string, error)
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
 	// said holds project@tag for each pre-release whose wait or failed
@@ -57,11 +61,15 @@ type Module struct {
 	shas  map[string]string
 	tried string
 	said1 string
-	// pre are the pre-releases newer than this one the last look read;
-	// newest and behind are what Lag reports, from the last Check.
-	pre    []string
+	// ahead are the releases newer than this one the last look read: every
+	// one following pre-releases, the full ones otherwise; newest and behind
+	// are what Lag reports, from the last Check.
+	ahead  []string
 	newest string
 	behind int
+	// skipped counts the looks in a row an update passed over because a
+	// merge ran past mergeWait.
+	skipped int
 	// updating is held while an update runs: AutoUpdate, from its schedule
 	// or follow, or `hive update`.
 	updating sync.Mutex
@@ -215,7 +223,7 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 		}
 	}
 	m.pmu.Lock()
-	m.pre = nil
+	m.ahead = nil
 	m.pmu.Unlock()
 	var stopped *limited // a look the rate limit stopped
 	if m.Channel() == Prerelease {
@@ -237,8 +245,20 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 			err = e
 		}
 	} else {
+		// Releases read through the login count every one between, so the
+		// lag means the same on both channels; without it, the latest alone.
+		var ahead []string
+		if out != "" && modules.Newer(core.Version, out) {
+			if rels, e := m.C.Effects.Forge.Releases(up); e == nil {
+				for _, r := range rels {
+					if !r.Prerelease && modules.Newer(core.Version, r.Tag) {
+						ahead = append(ahead, r.Tag)
+					}
+				}
+			}
+		}
 		m.pmu.Lock()
-		m.waits = nil
+		m.waits, m.ahead = nil, ahead
 		m.pmu.Unlock()
 	}
 	if tag != "" {
@@ -252,14 +272,14 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 }
 
 // lag records the newest release out and how many releases this one is
-// behind it: every pre-release the last look read, when following them, the
-// latest release and the one Check took.
+// behind it: every newer one the last look read, the latest release and the
+// one Check took.
 func (m *Module) lag(out ...string) {
 	m.pmu.Lock()
 	defer m.pmu.Unlock()
 	seen := map[string]bool{}
 	m.newest, m.behind = core.Version, 0
-	for _, t := range append(slices.Clone(m.pre), out...) {
+	for _, t := range append(slices.Clone(m.ahead), out...) {
 		if t == "" || seen[t] || !modules.Newer(core.Version, t) {
 			continue
 		}
@@ -362,15 +382,25 @@ func (m *Module) update(tag string) (string, error) {
 		}
 	}
 	// No merge starts from here to the restart, and any running ends first;
-	// tasks still in merging carry across and go on after it.
+	// tasks still in merging carry across and go on after it. A merge that
+	// runs past the wait look after look is hung, not slow: after maxSkips
+	// the update goes ahead, and the task in merging finds after the restart
+	// whether its merge landed.
 	resume := func() {}
 	if m.PauseMerges != nil {
 		var ok bool
 		if resume, ok = m.PauseMerges(mergeWait); !ok {
-			resume()
-			return "waiting: a merge has run past " + mergeWait.String() + "; " + tag + " installs at the next look", nil
+			m.skipped++
+			text := fmt.Sprintf("a merge has run past %s at %d looks in a row", mergeWait, m.skipped)
+			if m.skipped < maxSkips {
+				resume()
+				m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "looks": m.skipped, "text": text})
+				return "waiting: " + text + "; " + tag + " installs at the next look", nil
+			}
+			m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "looks": m.skipped, "forced": true, "text": text + "; installing anyway"})
 		}
 	}
+	m.skipped = 0
 	installed := false
 	defer func() {
 		if !installed {
@@ -430,7 +460,10 @@ func (m *Module) update(tag string) (string, error) {
 	installed = true
 	// Merges stay paused until the restart; one that never comes (a
 	// supervisor that doesn't restart, a failed start) lets them go on.
-	time.AfterFunc(restartGrace, resume)
+	time.AfterFunc(restartGrace, func() {
+		m.C.J.MustAppend("hive.update_unrestarted", map[string]any{"to": tag, "text": fmt.Sprintf("the restart into %s didn't come within %s; merges go on", tag, restartGrace)})
+		resume()
+	})
 	if m.Restart != nil {
 		go func() { time.Sleep(time.Second); m.Restart() }()
 	}
@@ -467,6 +500,10 @@ func (m *Module) pin(cfg core.Config, tag string, on bool) error {
 
 // mergeWait is the most an update waits for the merges already running.
 var mergeWait = 2 * time.Minute
+
+// maxSkips is how many looks in a row an update waits on a merge running
+// past mergeWait before it installs anyway.
+const maxSkips = 3
 
 // restartGrace is how long merges stay paused after an update installs,
 // waiting for its restart.
@@ -650,7 +687,10 @@ func fileSum(path string) (string, error) {
 // AfterKept cuts a release when a kept merge lands in the Hive's own project
 // and its dry run passes on that exact commit. The release names each change
 // merged since the last one and the reviewer runs that read its exact head. A
-// head with no read, or a change to a root path, waits for the person's word.
+// head with no read waits for the person's word. A change to a root path (what
+// runs with elevated rights) goes out once the Hive's own security reads passed
+// its diff (rootRead), and the person is told after; with no such read it waits
+// for the person too.
 // The release numbers on from this build, so the install switches to it at its
 // next update. In the person's fork it also asks the person whether to offer
 // the change upstream, one pull request that grows with each kept merge.
@@ -685,7 +725,7 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	var manifest strings.Builder
-	var root, unread []string
+	var root, unread, rootRead []string
 	for _, mg := range list {
 		if reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff); len(reads) > 0 {
 			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
@@ -693,11 +733,32 @@ func (m *Module) afterKept(project, sha string) {
 			unread = append(unread, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
 			fmt.Fprintf(&manifest, "- #%d at %s, not read\n", mg.PR, core.Short(mg.SHA))
 		}
-		root = append(root, mg.Root...)
+		if len(mg.Root) == 0 {
+			continue
+		}
+		if by := m.rootRead(project, mg); by != "" {
+			fmt.Fprintf(&manifest, "  its root paths (%s) passed %s\n", strings.Join(mg.Root, ", "), by)
+			rootRead = append(rootRead, fmt.Sprintf("#%d (%s)", mg.PR, strings.Join(mg.Root, ", ")))
+		} else {
+			root = append(root, mg.Root...)
+		}
 	}
 	approved := m.C.Effects.Approved("release", project, sha)
-	if (len(root) > 0 || len(unread) > 0) && !approved {
-		m.hold(project, sha, root, unread, manifest.String())
+	var why []string
+	if len(root) > 0 {
+		why = append(why, strings.Join(root, ", ")+" run with elevated rights and no security read passed them")
+	}
+	if len(unread) > 0 {
+		why = append(why, strings.Join(unread, ", ")+" merged without a read of its exact commit")
+	}
+	if !approved {
+		if held := m.unbuilt(p, sha); held != "" {
+			alert("no release at " + core.Short(sha) + ": " + held)
+			why = append(why, held)
+		}
+	}
+	if len(why) > 0 && !approved {
+		m.hold(project, sha, why, manifest.String())
 		return
 	}
 	scanAt := m.Scan
@@ -732,6 +793,8 @@ func (m *Module) afterKept(project, sha string) {
 		strings.Join(Gates, " and ") + " pass on that commit; then it is the latest, which installs follow.\n\nWhat was read:\n\n" + manifest.String()
 	if approved {
 		body += "\nThe person released it.\n"
+	} else if len(rootRead) > 0 {
+		body += "\nIts root paths went out on the Hive's own security reads; the person is told after.\n"
 	}
 	if err := m.C.Effects.Forge.CreateRelease(p.Repo, next, sha, body); err != nil {
 		alert("release failed: " + err.Error())
@@ -756,6 +819,19 @@ func (m *Module) afterKept(project, sha string) {
 		rec["tag_sha"] = at
 	}
 	m.C.J.MustAppend("hive.released", rec)
+	// A release ask at one of the merges this release covers has nothing
+	// left to answer.
+	for _, a := range m.C.Person.Open() {
+		_, at, _ := strings.Cut(a.Ref, "@")
+		if a.Kind == "release" && a.Project == project && slices.ContainsFunc(list, func(mg merge) bool { return mg.MergeSHA == at }) {
+			m.C.Person.Answer(a.ID, "hold", "the Hive, not the person: "+next+" released it")
+		}
+	}
+	if len(rootRead) > 0 && !approved {
+		m.C.Person.Tell(core.Ask{Ref: "release:" + project + "@" + next, Project: project,
+			Title:  "Released " + next + " with changes to root paths: " + strings.Join(rootRead, ", "),
+			Detail: "They run with elevated rights. The Hive released them itself once its security seat and panel (or the box's outside read) said land on each one's own diff.\n\n" + manifest.String()})
+	}
 	f, up := m.C.Effects.Forge, m.C.WS.LoadConfig().ReleaseRepo
 	if p.Repo == up {
 		return
@@ -769,6 +845,20 @@ func (m *Module) afterKept(project, sha string) {
 	m.C.Person.Ask(core.Ask{Kind: "upstream", Ref: head, Project: project,
 		Title:  "Offer the Hive's changes to " + up + "?",
 		Detail: "The Hive released " + next + " on " + p.Repo + ". Yes opens one pull request on " + up + " in your name, which grows with each kept change."})
+}
+
+// rootRead says who passed a merge's root paths, as Effects.SecurityOK reads
+// a change to a root path on the security list: an outside read decides when
+// there is one, else the security seat and a majority of the panel said land
+// on its own diff. "" when nobody did.
+func (m *Module) rootRead(project string, mg merge) string {
+	if !m.C.Effects.SecurityOK(project, core.Change{Security: mg.Root, SecurityRoot: mg.Root, DiffID: mg.Diff}) {
+		return ""
+	}
+	if o, ok := m.C.Effects.OutsideRead(project, mg.Diff); ok {
+		return "the box's " + o.By + " read"
+	}
+	return "the security seat and a majority of its panel"
 }
 
 // refusedSteps is what the person does about a refused release. Its
@@ -800,19 +890,12 @@ func (m *Module) onUpstream(a core.Ask) {
 
 // hold asks the person to release sha, and answers any older release ask for
 // the project, which this one covers, so a stale answer can't release.
-func (m *Module) hold(project, sha string, root, unread []string, manifest string) {
+func (m *Module) hold(project, sha string, why []string, manifest string) {
 	ref := project + "@" + sha
 	for _, a := range m.C.Person.Open() {
 		if a.Kind == "release" && a.Project == project && a.Ref != ref {
 			m.C.Person.Answer(a.ID, "hold", "the Hive, not the person: superseded, a release ask at "+core.Short(sha)+" covers it")
 		}
-	}
-	var why []string
-	if len(root) > 0 {
-		why = append(why, strings.Join(root, ", ")+" run with elevated rights")
-	}
-	if len(unread) > 0 {
-		why = append(why, strings.Join(unread, ", ")+" merged without a read of its exact commit")
 	}
 	m.C.Person.Ask(core.Ask{Kind: "release", Ref: ref, Project: project,
 		Title:  "Release the Hive at " + core.Short(sha) + "? " + strings.Join(why, "; "),
@@ -992,6 +1075,12 @@ func (m *Module) Publish() string {
 				alert(c, c.Tag+" stays a pre-release, so installs stay where they are: "+why+". A re-run that passes publishes it.")
 			}
 			out = append(out, c.Tag+": "+why)
+		case "unbuilt":
+			if !failed[key] {
+				m.C.J.MustAppend("release.failed", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA, "why": why, "gate": "release"})
+				alert(c, c.Tag+" has no binaries, since its "+why+"; its update test has nothing to install, so an update failure there says nothing about updating. "+unbuiltSteps)
+			}
+			out = append(out, c.Tag+": "+why)
 		default:
 			if time.Since(c.At) > lateAfter && !m.said[key] {
 				m.said[key] = true
@@ -1007,11 +1096,15 @@ func (m *Module) Publish() string {
 }
 
 // gates says "passed" when every gate passed in the release runs at sha,
-// else "failed" or "waiting", and why.
+// else "unbuilt" (the release workflow itself failed, so no gate has binaries
+// to test), "failed" or "waiting", and why.
 func (m *Module) gates(repo, sha string) (state, why string) {
 	runs, err := m.C.Effects.Forge.ReleaseRuns(repo, sha)
 	if err != nil {
 		return "waiting", "can't read its runs (" + core.Clip(err.Error(), 200) + ")"
+	}
+	if why, _ := m.buildFailed(repo, runs); why != "" {
+		return "unbuilt", why
 	}
 	var bad, wait []string
 	for _, g := range Gates {
@@ -1032,6 +1125,115 @@ func (m *Module) gates(repo, sha string) (state, why string) {
 		return "waiting", "waiting for " + strings.Join(wait, ", ")
 	}
 	return "passed", ""
+}
+
+// unbuiltSteps is what the person does about a release whose release
+// workflow failed.
+const unbuiltSteps = "The Hive cuts no new release that leaves what failed unchanged, since it would be as empty: " +
+	"a failed scan job most often means the repository secrets HIVE_SCAN_HANDLES and HIVE_SCAN_DENY are missing " +
+	"(Settings, Secrets and variables, Actions); set them and re-run its release run, then its update run, and once they pass it is published and releases go on. " +
+	"A failure in the code (a scan hit its log names, a build or sign error, release.yml itself) is fixed in a new commit: " +
+	"the first kept merge that changes what the failed job reads is cut as usual, and the person's \"release\" on the hold's ask cuts one anyway."
+
+// buildFailed says why the release workflow (release.yml: scan, build, sign)
+// failed among a release's runs, naming the jobs that failed, or "" when it
+// passed, still runs or hasn't started. jobs are the failed jobs' names, none
+// when they can't be read or none failed (a cancelled run).
+func (m *Module) buildFailed(repo string, runs []core.WorkflowRun) (why string, jobs []string) {
+	i := slices.IndexFunc(runs, func(r core.WorkflowRun) bool { return r.Name == "release" })
+	if i < 0 || runs[i].Status != "completed" || runs[i].Conclusion == "success" {
+		return "", nil
+	}
+	r, at := runs[i], ""
+	if all, err := m.C.Effects.Forge.RunJobs(repo, r.ID); err == nil {
+		for _, j := range all {
+			if j.Status == "completed" && j.Conclusion != "success" && j.Conclusion != "skipped" {
+				jobs = append(jobs, j.Name)
+			}
+		}
+		if len(jobs) > 0 {
+			at = " at its " + strings.Join(jobs, ", ") + " job"
+		}
+	}
+	return "release run " + r.Conclusion + at + " (" + r.URL + ")", jobs
+}
+
+// reads says whether a release.yml job reads path. The scan reads every
+// public file, but the daemon's own scan passed at the failed commit before
+// it was cut, so a scan failure in CI is the lists or the scan itself, not
+// the files; build and sign read the Go sources. Any other job, or none
+// named, reads release.yml and the Go sources.
+func reads(jobs []string, path string) bool {
+	if path == ".github/workflows/release.yml" {
+		return true
+	}
+	scanPath := path == scan.PublicList || strings.HasPrefix(path, "cmd/hive-scan/") || strings.HasPrefix(path, "internal/mod/scan/")
+	build := path == "go.mod" || path == "go.sum" || strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go")
+	if len(jobs) == 0 {
+		return scanPath || build
+	}
+	for _, j := range jobs {
+		if j == "scan" && scanPath || j != "scan" && build {
+			return true
+		}
+	}
+	return false
+}
+
+// unbuilt says why no release is cut at sha while the newest one's release
+// workflow failed: a new tag that leaves what failed unchanged would only be
+// another release with no binaries. A commit that changes a file the failed
+// job reads is cut as usual, so a fix in the code is released; so is any
+// commit once that run passes on a re-run, or the person says "release". It
+// notes the hold once per tag in the journal; a release run or diff that
+// can't be read never holds the cut.
+func (m *Module) unbuilt(p core.Project, sha string) string {
+	var tag, at string
+	held := map[string]bool{}
+	m.C.J.Replay(func(e core.Event) {
+		var x struct{ Project, Tag, SHA string }
+		if e.Decode(&x) != nil || x.Project != p.Name {
+			return
+		}
+		switch e.Kind {
+		case "hive.released":
+			tag, at = x.Tag, x.SHA
+		case "release.held":
+			held[x.Tag] = true
+		}
+	})
+	if tag == "" || at == sha {
+		return ""
+	}
+	runs, err := m.C.Effects.Forge.ReleaseRuns(p.Repo, at)
+	if err != nil {
+		return ""
+	}
+	why, jobs := m.buildFailed(p.Repo, runs)
+	if why == "" {
+		return ""
+	}
+	diff := m.Diff
+	if diff == nil {
+		diff = m.diff
+	}
+	changed, err := diff(p, at, sha)
+	if err != nil || slices.ContainsFunc(changed, func(f string) bool { return reads(jobs, f) }) {
+		return ""
+	}
+	if !held[tag] {
+		m.C.J.MustAppend("release.held", map[string]string{"project": p.Name, "tag": tag, "sha": at, "why": why})
+	}
+	return tag + " has no binaries, since its " + why + ", and " + core.Short(sha) + " changes nothing that job reads. " + unbuiltSteps
+}
+
+// diff lists the files that differ between two commits of the project.
+func (m *Module) diff(p core.Project, from, to string) ([]string, error) {
+	out, err := core.Git(m.C.WS.Project(p.Name), "diff", "--name-only", "-z", from, to)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Split(strings.TrimRight(out, "\x00"), "\x00"), nil
 }
 
 // nextTag is one past the highest vX.Y.Z among tags (v0.0.1 if none is).

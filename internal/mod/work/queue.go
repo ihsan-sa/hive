@@ -2,6 +2,7 @@ package work
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
@@ -26,20 +27,38 @@ import (
 // another brief names (one a worker is on, or ahead of it in line), or one
 // that worker has changed, waits until that worker is done, so the two don't
 // redo each other's work. A package or directory alone holds nothing back.
+// A brief that itself waits on another's file holds no one back: a later
+// brief on its other files starts, so waits never chain and two briefs never
+// wait on each other (task 163142 waited 6h behind 140258, itself held by a
+// stream of workers on its other files).
 // Once a worker has pushed, its task holds nothing back: a conflict it meets
 // later goes back to its worker with main to merge. Nothing here stops a
 // worker that has started.
+//
+// A brief that only changes module prompts (every path it names is a .md
+// file under modules/) is quick: it goes first in line, after those the lead
+// started now, and may start past the pace while no other quick brief is
+// working, since a prompt edit takes a worker little time and plan. It still
+// waits on a brief on the same prompt, on a strained machine and on a plan
+// near its end.
 
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
 
-// inLine sorts waiting tasks: those the lead started now first, then those it
-// ordered, in its order, then the rest as filed.
-func inLine(q []Task) {
+// inLine sorts waiting tasks: those the lead started now first, then quick
+// ones, then those the lead ordered, in its order, then the rest as filed.
+func (m *Module) inLine(q []Task) {
+	quick := map[string]bool{}
+	for _, t := range q {
+		quick[t.ID] = m.quick(t)
+	}
 	sort.SliceStable(q, func(i, j int) bool {
 		a, b := q[i], q[j]
 		if a.Now != b.Now {
 			return a.Now
+		}
+		if quick[a.ID] != quick[b.ID] {
+			return quick[a.ID]
 		}
 		if (a.Order > 0) != (b.Order > 0) {
 			return a.Order > 0
@@ -51,12 +70,43 @@ func inLine(q []Task) {
 	})
 }
 
+// quick reports whether t's brief only changes module prompts: it names at
+// least one path, and every path-like word in it is a .md file under modules/
+// (one that doesn't exist yet counts) or a merge=union file in the clone. A
+// package, a directory, a code file or a file still to be made, named
+// alongside a prompt, makes it an ordinary brief.
+func (m *Module) quick(t Task) bool {
+	m.areas(t) // clones the project when no worker has yet
+	text := t.Title + "\n" + t.Done + "\n" + t.Known
+	root := m.C.WS.Project(t.Project)
+	var union []attrRule
+	read, n := false, 0
+	for _, p := range pathLike.FindAllString(text, -1) {
+		p = path.Clean(strings.TrimRight(strings.TrimPrefix(p, "./"), "."))
+		switch {
+		case p == ".." || strings.HasPrefix(p, "../"): // never looked up outside the clone
+			return false
+		case strings.HasPrefix(p, "modules/") && path.Ext(p) == ".md":
+			n++
+		default:
+			if !read {
+				union, read = unionRules(root), true
+			}
+			fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p)))
+			if err != nil || fi.IsDir() || !isUnion(union, p) {
+				return false
+			}
+		}
+	}
+	return n > 0
+}
+
 // admit decides which waiting tasks start a worker now, and why each other
 // one waits. tasks is every task Tick looks at.
 func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]string) {
 	cfg := m.C.WS.LoadConfig()
 	start, wait = map[string]bool{}, map[string]string{}
-	working := 0
+	working, quickWorking := 0, 0
 	var ahead, line []Task // ahead: being worked on, or earlier in line
 	m.mu.Lock()
 	for _, t := range tasks {
@@ -76,17 +126,33 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		// touch its files waited on one for hours (task 135947 held about 60).
 	}
 	m.mu.Unlock()
-	inLine(line)
+	for _, t := range ahead { // areas takes m.mu
+		if m.quick(t) {
+			quickWorking++
+		}
+	}
+	m.inLine(line)
 	strain, _ := machine(cfg)
 	limit := m.paceWorkers(cfg, working, slices.ContainsFunc(line, func(t Task) bool { return !t.Held }))
 	full := fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
 	if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
 		full = "waiting for a worker (pace " + m.workers.String() + ")"
 	}
+	// planOK says the plan has room for a quick brief past the pace: read
+	// once, on need.
+	var planOK *bool
+	plan := func() bool {
+		if planOK == nil {
+			ok := m.planSpent(cfg) == ""
+			planOK = &ok
+		}
+		return *planOK
+	}
 	for _, t := range line {
+		quick := m.quick(t)
 		switch o, area := m.overlap(t, ahead); {
 		case t.Held:
-			wait[t.ID] = "held by the lead"
+			wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
 			continue // a held brief keeps no place that holds others back
 		case o != nil && !t.Now: // one the lead started now goes past the overlap
 			verb := "to land"
@@ -94,13 +160,17 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				verb = "to go first"
 			}
 			wait[t.ID] = fmt.Sprintf("waiting for %q (task %s) %s: both touch %s", o.Label(), o.ID, verb, area)
-		case working >= limit:
+			continue // one that waits on another holds no one back, so waits never chain
+		case working >= limit && (!quick || quickWorking > 0 || !plan()):
 			wait[t.ID] = full
 		case strain != "":
 			wait[t.ID] = "waiting: " + strain
 		default:
 			start[t.ID] = true
 			working++
+			if quick {
+				quickWorking++
+			}
 		}
 		ahead = append(ahead, t)
 	}
@@ -487,6 +557,9 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		case m.C.Runs.Walled(r, t.Project) != nil:
 			notes = append(notes, "no task "+id)
 			continue
+		case m.reach(r, t.Project) != nil:
+			notes = append(notes, fmt.Sprintf("%s is on project %s; you steer only your own", id, t.Project))
+			continue
 		case !t.Queued():
 			notes = append(notes, fmt.Sprintf("%s has left the queue (%s); a started worker isn't stopped by the queue", id, t.Stage))
 			continue
@@ -507,7 +580,8 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		}
 		if c.held != nil && *c.held != t.Held {
 			t.Held, note = *c.held, map[bool]string{true: "held by " + r.ID, false: "released by " + r.ID}[*c.held]
-			if !t.Held && t.Reason == "held by the lead" {
+			t.HeldBy = map[bool]string{true: r.ID}[t.Held]
+			if !t.Held && strings.HasPrefix(t.Reason, "held by ") {
 				t.Reason = ""
 			}
 		}
@@ -539,7 +613,7 @@ func (l *ids) UnmarshalJSON(b []byte) error {
 // Queue lists the waiting briefs r may see, in the order they will start.
 func (m *Module) Queue(r core.Run) []string {
 	line := m.List(func(t Task) bool { return t.Queued() && m.C.Runs.Walled(r, t.Project) == nil })
-	inLine(line)
+	m.inLine(line)
 	out := []string{}
 	for i, t := range line {
 		out = append(out, fmt.Sprintf("%d. %s %q (%s)%s", i+1, t.ID, t.Label(), t.Project, suffixed(t.Reason)))

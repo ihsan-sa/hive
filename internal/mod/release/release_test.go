@@ -435,6 +435,75 @@ func TestReleaseNamesItsReads(t *testing.T) {
 	}
 }
 
+// seated journals a security seat's verdict on the own diff diff.
+func seated(m *Module, sha, diff, seat, verdict string) {
+	m.C.J.MustAppend("effect.verdict", core.Verdict{Project: "hive", SHA: sha, Run: "s-" + seat, Verdict: verdict, Diff: diff, Seat: seat})
+}
+
+// A merge to a root path whose own diff the security seat and a majority of
+// the panel passed is released by the Hive itself, and the person is told
+// after instead of asked.
+func TestRootReleaseOnTheHivesReads(t *testing.T) {
+	m, n, _, land := selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh"}, "diff": "d2"})
+	land("a2", "r2")
+	seated(m, "a2", "d2", core.SeatSecurity, "land")
+	seated(m, "a2", "d2", core.PanelSeat(0), "land")
+	m.AfterKept("hive", "m2")
+	if len(n.got) != 0 || len(m.C.Person.Open()) != 1 {
+		t.Fatalf("one panel land of three released a root change: %v", n.got)
+	}
+	seated(m, "a2", "d2", core.PanelSeat(1), "land")
+	m.AfterKept("hive", "m2")
+	body := n.got["v0.0.1"]
+	if !strings.Contains(body, "install/root.sh) passed the security seat") || strings.Contains(body, "The person released it") {
+		t.Fatalf("the release should say the Hive's reads passed its root paths: %q", body)
+	}
+	if open := m.C.Person.Open(); len(open) != 0 {
+		t.Fatalf("the earlier release ask should be answered by the release: %+v", open)
+	}
+	told := m.C.Person.Told(5)
+	if len(told) != 1 || !strings.Contains(told[0].Title, "Released v0.0.1") || !strings.Contains(told[0].Title, "#2 (install/root.sh)") {
+		t.Fatalf("the person should be told after: %+v", told)
+	}
+}
+
+// A root-class path off the security list never gets a seat's read, so the
+// release that carries it waits for the person, read or not.
+func TestRootPathNoSeatReadsHolds(t *testing.T) {
+	m, n, _, land := selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 4, "sha": "a4", "merge_sha": "m4", "root": []string{".github/CODEOWNERS"}, "diff": "d4"})
+	land("a4", "r4")
+	m.AfterKept("hive", "m4")
+	asks := m.C.Person.Open()
+	if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, ".github/CODEOWNERS run with elevated rights and no security read passed them") {
+		t.Fatalf("a root path no seat read should hold for the person: %v %+v", n.got, asks)
+	}
+	if len(m.C.Person.Told(5)) != 0 {
+		t.Fatal("told the person about a release that didn't go out")
+	}
+}
+
+// A release with an unread merge still waits for the person, even when every
+// root path in it passed the Hive's security reads.
+func TestUnreadMergeStillHeldWithRootRead(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh"}, "diff": "d2"})
+	land("a2", "r2")
+	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
+		seated(m, "a2", "d2", seat, "land")
+	}
+	merged(3, "a3", "m3")
+	m.AfterKept("hive", "m3")
+	asks := m.C.Person.Open()
+	if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, "#3 at a3 merged without a read") || strings.Contains(asks[0].Title, "elevated") {
+		t.Fatalf("an unread merge should hold the release for the person, on that alone: %v %+v", n.got, asks)
+	}
+	if len(m.C.Person.Told(5)) != 0 {
+		t.Fatal("told the person about a release that didn't go out")
+	}
+}
+
 // An answer to an older release ask, given after a newer release was cut,
 // never releases the older merge under a newer tag.
 func TestStaleReleaseAnswer(t *testing.T) {
@@ -469,6 +538,15 @@ func TestStaleReleaseAnswer(t *testing.T) {
 
 func journaled(m *Module, kind string) (found bool) {
 	m.C.J.Replay(func(e core.Event) { found = found || e.Kind == kind })
+	return
+}
+
+func journaledN(m *Module, kind string) (n int) {
+	m.C.J.Replay(func(e core.Event) {
+		if e.Kind == kind {
+			n++
+		}
+	})
 	return
 }
 
@@ -707,6 +785,140 @@ func TestReleasePublishesOnlyAfterItsGates(t *testing.T) {
 	}
 }
 
+// v0.1.73 to v0.1.78: release.yml failed at its scan job, so the tags had no
+// binaries and update failed waiting for them. Publish names the release run
+// and its scan job, not update, and the cut stops until that run passes.
+func TestFailedReleaseRunStopsTheCut(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	n.SetReleaseRuns("me/hive", "m1",
+		core.WorkflowRun{ID: 7, Name: "release", Status: "completed", Conclusion: "failure", URL: "https://ci/release"},
+		core.WorkflowRun{Name: "update", Status: "completed", Conclusion: "failure", URL: "https://ci/update"},
+		core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"})
+	n.SetRunJobs("me/hive", 7,
+		core.WorkflowJob{Name: "scan", Status: "completed", Conclusion: "failure"},
+		core.WorkflowJob{Name: "build", Status: "completed", Conclusion: "skipped"})
+	alerts := func() (out []string) {
+		m.C.J.Replay(func(e core.Event) {
+			var a struct{ Text string }
+			if e.Kind == "alert.raised" && e.Decode(&a) == nil {
+				out = append(out, a.Text)
+			}
+		})
+		return out
+	}
+	if got := m.Publish(); !strings.Contains(got, "release run failure at its scan job (https://ci/release)") || strings.Contains(got, "update") {
+		t.Fatalf("Publish said %q", got)
+	}
+	a := alerts()
+	if len(a) != 1 || !strings.Contains(a[0], "v0.0.1 has no binaries") || !strings.Contains(a[0], "HIVE_SCAN_HANDLES") || strings.Contains(a[0], "A re-run that passes") {
+		t.Fatalf("alerts %q", a)
+	}
+	m.Publish()
+	if len(alerts()) != 1 {
+		t.Fatalf("the failure was raised again: %q", alerts())
+	}
+
+	changes := map[string][]string{"m2": {"README.md", "cmd/hive/main_test.go"}, "m3": {"internal/mod/release/release.go"}}
+	m.Diff = func(_ core.Project, from, to string) ([]string, error) {
+		if from != "m1" {
+			t.Fatalf("diffed from %s", from)
+		}
+		return changes[to], nil
+	}
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	if _, ok := n.got["v0.0.2"]; ok {
+		t.Fatal("cut another release while the last one's release run failed")
+	}
+	if a := alerts(); len(a) != 2 || !strings.Contains(a[1], "no release at m2: v0.0.1 has no binaries, since its release run failure at its scan job") {
+		t.Fatalf("alerts %q", a)
+	}
+	m.AfterKept("hive", "m2")
+	held := 0
+	m.C.J.Replay(func(e core.Event) {
+		if e.Kind == "release.held" {
+			held++
+		}
+	})
+	if held != 1 {
+		t.Fatalf("%d release.held events", held)
+	}
+
+	asks := m.C.Person.Open()
+	if len(asks) != 1 || asks[0].Kind != "release" || !strings.Contains(asks[0].Title, "has no binaries") {
+		t.Fatalf("the hold asks %+v", asks)
+	}
+
+	// A build failure fixed in the code: a re-run of v0.0.1 can never pass,
+	// so the first commit that changes what the build reads is cut.
+	n.SetRunJobs("me/hive", 7, core.WorkflowJob{Name: "build", Status: "completed", Conclusion: "failure"})
+	m.AfterKept("hive", "m2")
+	if _, ok := n.got["v0.0.2"]; ok {
+		t.Fatal("a test-only change was cut over a failed build")
+	}
+	merged(3, "a3", "m3")
+	land("a3", "r3")
+	m.AfterKept("hive", "m3")
+	if _, ok := n.got["v0.0.2"]; !ok {
+		t.Fatal("the fix for a failed build was never released")
+	}
+}
+
+// The person's "release" on the hold's ask cuts one though the newest
+// release's run failed and nothing it reads changed.
+func TestPersonReleasesPastAFailedReleaseRun(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	n.SetReleaseRuns("me/hive", "m1", core.WorkflowRun{ID: 7, Name: "release", Status: "completed", Conclusion: "cancelled"})
+	m.Diff = func(core.Project, string, string) ([]string, error) { return []string{"README.md"}, nil }
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	asks := m.C.Person.Open()
+	if _, ok := n.got["v0.0.2"]; ok || len(asks) != 1 {
+		t.Fatalf("cut %v, asks %+v", n.got, asks)
+	}
+	asks[0].Answer = "release"
+	m.OnPerson(asks[0])
+	if _, ok := n.got["v0.0.2"]; !ok {
+		t.Fatal("the person's release didn't cut")
+	}
+}
+
+func TestFailedReleaseRunRerunLiftsTheHold(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	n.SetReleaseRuns("me/hive", "m1", core.WorkflowRun{ID: 7, Name: "release", Status: "completed", Conclusion: "failure"})
+	m.Diff = func(core.Project, string, string) ([]string, error) { return []string{"README.md"}, nil }
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	if _, ok := n.got["v0.0.2"]; ok {
+		t.Fatal("cut while the release run failed")
+	}
+	// The person sets the secrets and re-runs release, then update: it is
+	// published and the cut goes on.
+	n.SetReleaseRuns("me/hive", "m1",
+		core.WorkflowRun{ID: 8, Name: "release", Status: "completed", Conclusion: "success"},
+		core.WorkflowRun{Name: "update", Status: "completed", Conclusion: "success"},
+		core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"})
+	if got := m.Publish(); got != "published v0.0.1" {
+		t.Fatalf("Publish said %q", got)
+	}
+	m.AfterKept("hive", "m2")
+	if _, ok := n.got["v0.0.2"]; !ok {
+		t.Fatal("the cut didn't go on once the release run passed")
+	}
+}
+
 // Of the pre-releases waiting, the newest that passed is published; an older
 // one still waiting stays a pre-release and is no longer checked.
 func TestPublishSkipsOlderPreReleases(t *testing.T) {
@@ -872,6 +1084,95 @@ func TestReleaseSaysAnUnreadTag(t *testing.T) {
 	n.tagErr = nil
 	if got := m.Publish(); got != "published v0.0.1" {
 		t.Fatalf("Publish said %q once the tag read", got)
+	}
+}
+
+// A merge that runs past the wait look after look is hung, not slow: after
+// maxSkips looks the update installs anyway, each skipped look on the record.
+func TestAutoUpdateGoesAheadPastAHungMerge(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	m, exe := releaseAt(t, "v0.1.2", "me/hive")
+	m.PauseMerges = func(time.Duration) (func(), bool) { return func() {}, false }
+	for i := 1; i < maxSkips; i++ {
+		if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "a merge has run past") {
+			t.Fatalf("look %d: %q", i, msg)
+		}
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "old" {
+		t.Fatalf("installed before %d looks: %q", maxSkips, raw)
+	}
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") {
+		t.Fatalf("look %d: %q, %v", maxSkips, msg, err)
+	}
+	if n := journaledN(m, "hive.update_held"); n != maxSkips {
+		t.Fatalf("%d skipped looks on the record, want %d", n, maxSkips)
+	}
+}
+
+// When the restart after an install never comes, merges go on after the
+// grace, and the record says so.
+func TestMissedRestartIsRecorded(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	m, _ := releaseAt(t, "v0.1.2", "me/hive")
+	old := restartGrace
+	restartGrace = 10 * time.Millisecond
+	t.Cleanup(func() { restartGrace = old })
+	resumed := make(chan struct{})
+	m.PauseMerges = func(time.Duration) (func(), bool) { return func() { close(resumed) }, true }
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") {
+		t.Fatalf("%q, %v", msg, err)
+	}
+	select {
+	case <-resumed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("merges stayed paused past the grace")
+	}
+	if !journaled(m, "hive.update_unrestarted") {
+		t.Fatal("the missed restart isn't on the record")
+	}
+}
+
+// On the latest channel, the lag counts every full release between this one
+// and the newest, as following pre-releases does.
+func TestLatestChannelCountsEveryReleaseBehind(t *testing.T) {
+	serveAll(t, "v0.1.12", map[string]map[string]string{"v0.1.12": build("v12")}, false)
+	m, _ := releaseAt(t, "v0.1.10", "me/hive")
+	f := m.C.Effects.Forge.(*core.Local)
+	for _, tag := range []string{"v0.1.10", "v0.1.11", "v0.1.12", "v0.1.13"} {
+		f.CreateRelease("me/hive", tag, "sha-"+tag, "")
+		if tag != "v0.1.13" {
+			f.PublishRelease("me/hive", tag)
+		}
+	}
+	if _, _, _, err := m.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if newest, behind := m.Lag(); newest != "v0.1.12" || behind != 2 {
+		t.Fatalf("newest %q, %d behind; want v0.1.12, 2", newest, behind)
+	}
+}
+
+// Following pre-releases, the lag counts from this one, so the ones before
+// the latest full release count too.
+func TestPreReleaseLagCountsFromThisOne(t *testing.T) {
+	if runner() == "" {
+		t.Skip("the checks don't run on " + runtime.GOOS + "/" + runtime.GOARCH)
+	}
+	serveAll(t, "v0.1.12", map[string]map[string]string{"v0.1.12": build("v12")}, false)
+	m, _ := releaseAt(t, "v0.1.10", "me/hive")
+	cfg := m.C.WS.LoadConfig()
+	cfg.Channel = Prerelease
+	m.C.WS.SaveConfig(cfg)
+	f := m.C.Effects.Forge.(*core.Local)
+	for _, tag := range []string{"v0.1.11", "v0.1.12", "v0.1.13"} {
+		f.CreateRelease("me/hive", tag, "sha-"+tag, "")
+	}
+	f.PublishRelease("me/hive", "v0.1.12")
+	if _, _, _, err := m.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if newest, behind := m.Lag(); newest != "v0.1.13" || behind != 3 {
+		t.Fatalf("newest %q, %d behind; want v0.1.13, 3", newest, behind)
 	}
 }
 

@@ -154,11 +154,53 @@ func StartUnit(root string) bool {
 	if runtime.GOOS != "linux" {
 		return false
 	}
-	raw, err := os.ReadFile(userUnit())
-	if err != nil || !strings.Contains(string(raw), "\nEnvironment=HIVE_HOME="+root+"\n") {
+	if !unitServes(root) {
 		return false
 	}
 	return exec.Command("systemctl", "--user", "start", "--no-block", "hive.service").Run() == nil
+}
+
+// unitServes reports whether the Hive's user unit names root as its
+// HIVE_HOME, written with a trailing slash or through a symlink or not.
+func unitServes(root string) bool {
+	raw, err := os.ReadFile(userUnit())
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Environment=HIVE_HOME="); ok && samePath(strings.Trim(v, `"`), root) {
+			return true
+		}
+	}
+	return false
+}
+
+func samePath(a, b string) bool {
+	norm := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			p = r
+		}
+		return filepath.Clean(p)
+	}
+	return norm(a) == norm(b)
+}
+
+// UnitState is what systemd says of the Hive's user unit (active,
+// activating, failed, ...), empty where it can't say.
+func UnitState() string {
+	out, _ := exec.Command("systemctl", "--user", "is-active", "hive.service").Output()
+	return strings.TrimSpace(string(out))
+}
+
+// DropDoubledAutostart removes a desktop autostart left beside the Hive's
+// user unit for the workspace at root (from before EnableAutostartAt removed
+// it), so a login fires one launcher. It reports whether it removed one.
+func DropDoubledAutostart(root string) bool {
+	if runtime.GOOS != "linux" || !unitServes(root) {
+		return false
+	}
+	home, _ := os.UserHomeDir()
+	return os.Remove(filepath.Join(home, ".config", "autostart", "hive.desktop")) == nil
 }
 
 // DisableAutostart undoes EnableAutostart.

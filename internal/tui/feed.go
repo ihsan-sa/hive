@@ -275,13 +275,11 @@ func (m *model) usage(w int) string {
 		return stBad.Render(clip("Agents can't start: "+m.st.SandboxErr, w))
 	}
 	var parts []string
+	now := time.Now()
 	for _, p := range m.st.Plans {
-		s := text.Visible(p.Harness)
-		if p.Limit.Status == "rejected" {
-			s += " " + stBad.Render("limited") + " until " + p.Limit.ResetsAt.Local().Format("Mon 15:04")
-		}
-		for _, k := range sortedKeys(p.Limit.Windows) {
-			s += fmt.Sprintf(" · %s %.0f%%", text.Visible(strings.ReplaceAll(k, "_", " ")), p.Limit.Windows[k].Utilization*100)
+		s := text.Visible(p.Harness) + " " + standing(p, now)
+		for _, w := range p.Limit.WindowUses(now) {
+			s += " · " + windowShort(w, now, false)
 		}
 		parts = append(parts, s)
 	}

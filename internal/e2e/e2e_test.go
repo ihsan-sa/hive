@@ -139,10 +139,25 @@ func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string)
 	// Before the launch, so a daemon that is slow to answer is ended too.
 	t.Cleanup(func() {
 		h.quiesce()
+		// A clean shutdown first, so module programs (the kb's dream, run
+		// with go run) are stopped and waited for before the folder goes.
+		if h.c != nil && h.ended != nil {
+			h.c.Do("POST", "/api/shutdown", nil, nil)
+			select {
+			case <-h.ended:
+			case <-time.After(20 * time.Second):
+			}
+		}
 		h.kill()
 		for _, end := range h.jobs {
 			end()
 		}
+		// What a daemon started outside its group (module programs, turns)
+		// outlives it once killed, and a git it started (a gate's, a check's,
+		// the knowledge base's) can for a moment; t.TempDir's removal fails on
+		// a folder still being written, so end those and remove the Hive once
+		// it goes quiet.
+		settle(dir, h.ws.Root)
 	})
 	h.launch()
 	return h
@@ -214,11 +229,18 @@ func (h *hive) launch() {
 	cmd.Dir = h.ws.Root
 	log, _ := os.OpenFile(filepath.Join(h.ws.Hive(), "daemon-test.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	cmd.Stdout, cmd.Stderr = log, log
+	var endGroup func()
+	if group != nil {
+		endGroup = group(cmd)
+	}
 	if err := cmd.Start(); err != nil {
 		h.t.Fatal(err)
 	}
 	log.Close() // the daemon has its own handle
 	h.cmd = cmd
+	if endGroup != nil {
+		h.jobs = append(h.jobs, endGroup)
+	}
 	if contain != nil {
 		h.jobs = append(h.jobs, contain(h.t, cmd.Process.Pid))
 	}
@@ -248,7 +270,7 @@ func (h *hive) launch() {
 // sees another pid, so there it is the start time instead.
 func ours(info api.DaemonInfo, pid int, launched time.Time) bool {
 	if os.Getenv("HIVE_E2E_WRAPPED") != "" {
-		return info.Started.After(launched)
+		return !info.Started.Before(launched) // a coarse clock can stamp both at one instant
 	}
 	return info.PID == pid
 }
@@ -663,7 +685,16 @@ func TestCheckpointsBankEachGain(t *testing.T) {
 		}
 		finished = finished || e.Kind == "run.finish" && d.ID == tk.Worker
 		if e.Kind == "effect.merged" {
-			s, _ := core.Git(h.ws.Project("bank"), "show", d.MergeSHA+":score.txt")
+			// The task shows done once the forge merged; the clone may not
+			// have fetched the last merge yet (seen on Windows), so fetch until it has.
+			var s string
+			h.wait("the clone to fetch "+d.MergeSHA, minute, func(api.State) bool {
+				var err error
+				if s, err = core.Git(h.ws.Project("bank"), "show", d.MergeSHA+":score.txt"); err != nil {
+					core.Git(h.ws.Project("bank"), "fetch", "-q", "origin")
+				}
+				return err == nil
+			})
 			merges = append(merges, fmt.Sprintf("%s/%v", strings.TrimSpace(s), finished))
 		}
 	}
@@ -875,8 +906,10 @@ func TestStalls(t *testing.T) {
 	h.ws.SaveConfig(cfg)
 	h.seed("me/stall", map[string]string{".hive/project.json": `{"test": "if [ -f STALL ]; then sleep 60; fi"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "stall", "repo": "me/stall"}, nil)
-	// History: a worker here has taken about 13 seconds (8 asleep), so the limit is about 39 without moving.
-	for title, known := range map[string]string{"history one": "FAKE:slowworker:8", "history two": ""} {
+	// History: a worker here has taken about 13 seconds (11 asleep; the loop
+	// ticks soon after each step, so little else), so the limit is about 39
+	// without moving, well over the slow worker's 22 on a slow runner.
+	for title, known := range map[string]string{"history one": "FAKE:slowworker:11", "history two": ""} {
 		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
 		h.wait(title+" to land", 3*minute, taskStage("stall", title, work.StageDone))
 	}
@@ -1126,7 +1159,9 @@ func TestWaitingReachesThePerson(t *testing.T) {
 // dashboard never lists it as merging and main never takes it.
 func TestClosedPRStops(t *testing.T) {
 	t.Parallel()
-	h := start(t)
+	// At autonomy 1 the merge waits on the person, not on a fake warden that
+	// answers in a fraction of a second, so the test sees it waiting.
+	h := startWith(t, bin, func(c *core.Config) { c.Autonomy = 1 })
 	h.seed("me/closed", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "closed", "repo": "me/closed"}, nil)
 	h.post("/api/ask", map[string]string{"project": "closed", "title": "edit the goals", "known": "FAKE:goals"}, nil)
@@ -1382,8 +1417,10 @@ func TestHostPython(t *testing.T) {
 }
 
 // TestAgentsReadTheHive: a worker reads another run's log, a chat, a warden's
-// log and the journal from $HIVE_STATE. Under the sandbox (HIVE_E2E_SANDBOX=auto)
-// it can change none of them and reads no secret; a bare run is unsandboxed by
+// log, the journal and config.json from $HIVE_STATE. Under the sandbox
+// (HIVE_E2E_SANDBOX=auto) it can change none of them, so no agent adds a model,
+// changes an endpoint or a route, and it reads no secret (a named model's key
+// among them); a bare run is unsandboxed by
 // the person's choice, so there only the reads are checked.
 func TestAgentsReadTheHive(t *testing.T) {
 	t.Parallel()
@@ -1391,6 +1428,7 @@ func TestAgentsReadTheHive(t *testing.T) {
 	login := filepath.Join(h.ws.Hive(), "logins", "codex", "spare")
 	os.MkdirAll(login, 0o700)
 	os.WriteFile(filepath.Join(login, "auth.json"), []byte(`{"refresh_token": "planted"}`), 0o600)
+	h.ws.SaveOpenKey("spare", "sk-planted") // a named model's key, which `hive model key` stores
 	h.seed("me/peek", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "peek", "repo": "me/peek"}, nil)
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "hello"}, nil)
@@ -1417,7 +1455,7 @@ func TestAgentsReadTheHive(t *testing.T) {
 		}
 		return false
 	})
-	for _, want := range []string{"log read=true", "chat read=true", "warden read=true", "journal read=true"} {
+	for _, want := range []string{"log read=true", "chat read=true", "warden read=true", "journal read=true", "config read=true"} {
 		if !strings.Contains(account, want) {
 			t.Errorf("account lacks %q: %s", want, account)
 		}
@@ -1486,6 +1524,28 @@ var adopt func()
 // contain puts a daemon, and what it starts from then on, in a group that
 // the returned func ends (Windows only).
 var contain func(t *testing.T, pid int) func()
+
+// strays kills every process still working in dir: one whose working
+// directory, executable or open file is in it, or whose command line or
+// environment names it (Linux only).
+var strays func(dir string)
+
+// settle ends what still works in dir and removes path, a folder in it,
+// trying again for a while if something still writes there.
+func settle(dir, path string) {
+	for began := time.Now(); time.Since(began) < 30*time.Second; time.Sleep(200 * time.Millisecond) {
+		if strays != nil {
+			strays(dir)
+		}
+		if os.RemoveAll(path) == nil {
+			return
+		}
+	}
+}
+
+// group makes cmd, before it starts, lead a process group of its own, and
+// returns what kills what is left in it (Unix only).
+var group func(cmd *exec.Cmd) func()
 
 // TestLiveWorker is the plain path on a real harness: run it with
 // HIVE_E2E_HARNESS=claude or codex, or a module's harness (HIVE_E2E_HARNESS=opencode

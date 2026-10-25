@@ -121,11 +121,13 @@ func TestRunKeepsAndRollsBack(t *testing.T) {
 		}
 	}
 	ctrl := fakeBin(t, dir, "ctrl", "v1", true)
+	judged := false
 	run := func(cand string, scores map[string]float64) (Report, string) {
-		org := filepath.Join(dir, "org-"+filepath.Base(cand))
-		lessons := filepath.Join(dir, "lessons-"+filepath.Base(cand), ".hive", "lessons.md")
-		rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, "out-"+filepath.Base(cand)+"-x", "run"), Reps: 2, Sandbox: "bare", AllowBare: true,
-			Probes: []string{"org", "score"}, Probe: map[string]ProbeFunc{"score": probe(scores)}, Org: Local{Dir: org}, Lessons: lessons})
+		tag := filepath.Base(cand) + fmt.Sprint(judged)
+		org := filepath.Join(dir, "org-"+tag)
+		lessons := filepath.Join(dir, "lessons-"+tag, ".hive", "lessons.md")
+		rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, "out-"+tag+"-x", "run"), Reps: 2, Sandbox: "bare", AllowBare: true,
+			Probes: []string{"org", "score"}, Probe: map[string]ProbeFunc{"score": probe(scores)}, Org: Local{Dir: org}, Lessons: lessons, Judged: judged})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,8 +145,13 @@ func TestRunKeepsAndRollsBack(t *testing.T) {
 		t.Errorf("good candidate: %+v lessons %q", rep.Verdict, lessons)
 	}
 	rep, lessons := run(bad, scores)
-	if rep.Verdict.Keep || !strings.Contains(lessons, "rolled back") || !strings.Contains(lessons, "score") {
+	if rep.Verdict.Keep || !rep.Measured || !strings.Contains(lessons, "rolled back") || !strings.Contains(lessons, "score") {
 		t.Errorf("bad candidate: %+v lessons %q", rep.Verdict, lessons)
+	}
+	// With a judge after it, a measured rollback's lesson is the judge's to write.
+	judged = true
+	if rep, lessons := run(bad, scores); rep.Verdict.Keep || !rep.Measured || lessons != "" {
+		t.Errorf("judged bad candidate: %+v lessons %q", rep.Verdict, lessons)
 	}
 }
 
@@ -480,6 +487,31 @@ func TestCheckReachProbesTheToken(t *testing.T) {
 	}
 	if err := CheckReach(GitHub{Owner: "ihsan-sa"}, "github_pat_x", "https://github.com/ihsan-sa/hive"); err == nil {
 		t.Error("the gated repository's owner as the test org passed")
+	}
+}
+
+// A repository in both listings is probed once, and a probe GitHub answers
+// with something else (409, an empty repository) refuses, naming the
+// repository and the answer.
+func TestCheckReachProbeTrouble(t *testing.T) {
+	fakeClock(t)
+	blobs := 0
+	replay(t, "github_pat_x", func(call string) (string, bool) {
+		switch call {
+		case reachUser, reachOrg:
+			return "Lab/empty\ttrue\ttrue\n", true
+		case blobCall("Lab/empty"):
+			blobs++
+			return "HTTP/2.0 409 Conflict\n\n" + `{"message":"Git Repository is empty."}` + "\ngh: Git Repository is empty. (HTTP 409)", true
+		}
+		return "", false
+	})
+	err := CheckReach(GitHub{Owner: "Lab"}, "github_pat_x", "https://github.com/ihsan-sa/hive")
+	if !errors.Is(err, ErrReachUnknown) || !strings.Contains(err.Error(), "Lab/empty") || !strings.Contains(err.Error(), "409") {
+		t.Errorf("refusal: %v", err)
+	}
+	if blobs != 1 {
+		t.Errorf("Lab/empty probed %d times", blobs)
 	}
 }
 
