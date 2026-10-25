@@ -1819,6 +1819,9 @@ func (m *Module) review(t *Task, p core.Project) error {
 		if err != nil {
 			return err
 		}
+		if strings.TrimSpace(ch.Diff) == "" { // alreadyLanded takes a truly empty one: this diff couldn't be read
+			return fmt.Errorf("the diff of %s against main %s came out empty; not handing a reviewer nothing to read", core.Short(t.SHA), core.Short(main))
+		}
 		dir, err := m.C.Effects.NewCheckout(p, id, t.SHA)
 		if err != nil {
 			return err
