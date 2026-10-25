@@ -186,6 +186,47 @@ func TestDropAttaches(t *testing.T) {
 	if c, ok := cmd().(clipMsg); !ok || c.text == nil {
 		t.Fatalf("ctrl+v with no tool: %+v", c)
 	}
+	// alt+v, the image key where the terminal keeps ctrl+v, says why no
+	// image came instead of pasting text.
+	_, cmd = m.keyInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v"), Alt: true})
+	if m.flash != "reading the clipboard…" {
+		t.Fatalf("alt+v shows nothing while it reads: %q", m.flash)
+	}
+	c, ok := cmd().(clipMsg)
+	if !ok || c.text != nil || c.err == nil {
+		t.Fatalf("alt+v with no tool: %+v", c)
+	}
+	m.Update(c)
+	if !strings.HasPrefix(m.flash, "error: ") || !strings.Contains(m.flash, "clipboard") {
+		t.Fatalf("alt+v's error isn't shown: %q", m.flash)
+	}
+}
+
+// TestPowerShellFailureSays: PowerShell that fails says why, where before
+// its error read as an empty clipboard and a paste changed nothing.
+func TestPowerShellFailureSays(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("a shell script stands in for powershell.exe")
+	}
+	if _, err := os.Stat(winPowerShell); err == nil {
+		t.Skip("a real powershell.exe is reachable here")
+	}
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "powershell.exe"), []byte("#!/bin/sh\necho 'Add-Type : Cannot add type.' >&2\necho 'more' >&2\nexit 1\n"), 0o755)
+	t.Setenv("PATH", bin)
+	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
+	for _, v := range []string{"WAYLAND_DISPLAY", "DISPLAY", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"} {
+		t.Setenv(v, "")
+	}
+	_, err := clipboardImage()
+	if !errors.Is(err, errNoImage) || !strings.Contains(err.Error(), "powershell.exe couldn't read it: Add-Type : Cannot add type.") {
+		t.Fatalf("got %v", err)
+	}
+	// One that runs and finds no image is just no image.
+	os.WriteFile(filepath.Join(bin, "powershell.exe"), []byte("#!/bin/sh\n"), 0o755)
+	if _, err := clipboardImage(); err != errNoImage {
+		t.Fatalf("empty: %v", err)
+	}
 }
 
 // TestClipboardTools: a tool with no image passes to the next one.
@@ -232,7 +273,7 @@ func TestClipboardPerSetup(t *testing.T) {
 		{"Windows binary in Windows Terminal", clipSetup{goos: "windows"}, []string{"powershell", "pwsh"}, []string{"powershell", "paste its path"}, []string{"xclip"}},
 		{"Linux binary under WSL", clipSetup{goos: "linux", wsl: true}, []string{"powershell.exe", winPowerShell, "pwsh.exe"}, []string{"WSL", "paste its path"}, []string{"xclip"}},
 		{"WSL with WSLg", clipSetup{goos: "linux", wsl: true, wayland: true, x11: true}, []string{"powershell.exe", winPowerShell, "pwsh.exe", "wl-paste", "xclip"}, nil, nil},
-		{"Linux host over SSH from Windows", clipSetup{goos: "linux", ssh: true}, nil, []string{"SSH", "scp", "paste its path"}, []string{"xclip", "wl-clipboard"}},
+		{"Linux host over SSH from Windows", clipSetup{goos: "linux", ssh: true}, nil, []string{"SSH", "scp", "path of a file on this machine", "remote "}, []string{"xclip", "wl-clipboard"}},
 		{"SSH forwarding X", clipSetup{goos: "linux", ssh: true, x11: true}, []string{"xclip"}, []string{"SSH"}, nil},
 		{"Linux desktop", clipSetup{goos: "linux", wayland: true}, []string{"wl-paste"}, []string{"wl-clipboard", "xclip"}, nil},
 		{"Linux console", clipSetup{goos: "linux"}, nil, []string{"no display", "paste its path"}, []string{"xclip"}},

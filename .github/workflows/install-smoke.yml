@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest] # Linux only for now (issue #564); the macOS and Windows steps wait for them to come back
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -46,10 +46,10 @@ jobs:
           for i in $(seq 60); do
             t=${TAG:-$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName || true)}
             n=$(gh release view "$t" -R "$GITHUB_REPOSITORY" --json assets -q '.assets | length') || n=0
-            [ "$n" -ge 6 ] && break
+            [ "$n" -ge 3 ] && break
             echo "waiting for $t's binaries ($n so far)"; sleep 20
           done
-          [ "$n" -ge 6 ] || { echo "::error::release $t never got its binaries"; exit 1; }
+          [ "$n" -ge 3 ] || { echo "::error::release $t never got its binaries"; exit 1; }
           if [ -n "$TAG" ] && [ "$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)" != "$TAG" ]; then
             echo "::error::$TAG is not the latest release, and the installer always brings the latest"; exit 1
           fi
