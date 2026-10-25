@@ -677,7 +677,11 @@ func (r Report) Markdown() string {
 			for _, m := range x.Metrics {
 				ms = append(ms, fmt.Sprintf("%s=%.4g", m.Name, m.Value))
 			}
-			fmt.Fprintf(&b, "| %s | %d | %v | %.1f | %s | %s |\n", x.Probe, x.Rep, x.Pass, x.Seconds, strings.Join(ms, " "), strings.ReplaceAll(tail(x.Detail, 120), "\n", " "))
+			detail := tail(x.Detail, 120)
+			if len(x.Failed) > 0 { // what matters is at its start: the failing tests and what each said
+				detail = clip(x.Detail, 400)
+			}
+			fmt.Fprintf(&b, "| %s | %d | %v | %.1f | %s | %s |\n", x.Probe, x.Rep, x.Pass, x.Seconds, strings.Join(ms, " "), strings.ReplaceAll(strings.ReplaceAll(detail, "\n", " "), "|", "\\|"))
 		}
 	}
 	for _, f := range r.Conflicts {
