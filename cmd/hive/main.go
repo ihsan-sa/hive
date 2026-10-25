@@ -64,6 +64,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive model key <name>    store its API key, read from stdin (kept where no agent can read it)
   hive model rm <name>     forget it and its key
   hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
+                           (scanned first: it needs a handle list in .hive/private/scan-handles.txt or HIVE_SCAN_HANDLES)
   hive update              install the newest release [--release <tag>: that one, and stay on it]
   hive shutdown            stop the Hive (running agents finish their turn)
   hive uninstall           remove autostart and the binary's record; leaves your folder
