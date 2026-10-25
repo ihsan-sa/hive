@@ -17,6 +17,9 @@ import (
 func scored(t *testing.T) (m *Module, merge func(files map[string]string, as ...work.Task) Measurement) {
 	t.Helper()
 	m = rig(t)
+	m.askJudge = func(core.Project, work.Task, Measurement, string) (core.Judgement, bool) {
+		return core.Judgement{Verdict: core.GateRollback, Model: "stand-in", Summary: "the fall is real"}, true
+	}
 	forge := m.C.Effects.Forge.(*core.Local)
 	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {
 		t.Fatal(err)
@@ -63,6 +66,7 @@ func scored(t *testing.T) (m *Module, merge func(files map[string]string, as ...
 		}
 		task.Project, task.MergeSHA = "p", strings.TrimSpace(sha)
 		m.afterMerge(task)
+		m.judges.Wait() // a fall in the score goes to the judge first
 		ms := m.Scores("p")
 		return ms[len(ms)-1]
 	}

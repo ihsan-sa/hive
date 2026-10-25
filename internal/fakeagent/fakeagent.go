@@ -114,6 +114,10 @@ func Main(argv []string) int {
 		structured = review(all)
 		raw, _ := json.Marshal(structured)
 		text = string(raw)
+	case "judge":
+		structured = judge(all)
+		raw, _ := json.Marshal(structured)
+		text = string(raw)
 	case "warden":
 		err = warden(all)
 	case "tribunal", "module-reviewer":
@@ -840,6 +844,28 @@ func review(all string) map[string]any {
 		return map[string]any{"verdict": "land", "summary": "looks right", "advice": []string{"FAKE advice: name the helper for what it does"}, "token": tok}
 	}
 	return map[string]any{"verdict": "land", "summary": "looks right", "findings": []any{}, "token": tok}
+}
+
+var judgeToken = regexp.MustCompile(`Judge token: (\w+)`)
+
+// judge goes with the numbers, unless the change asks FAKE:judgekeep or
+// FAKE:judgerollback of it.
+func judge(all string) map[string]any {
+	tok := ""
+	if m := judgeToken.FindStringSubmatch(all); m != nil {
+		tok = m[1]
+	}
+	verdict := "rollback"
+	if strings.Contains(all, "The numbers alone say: keep.") {
+		verdict = "keep"
+	}
+	switch {
+	case strings.Contains(all, "FAKE:judgekeep"):
+		verdict = "keep"
+	case strings.Contains(all, "FAKE:judgerollback"):
+		verdict = "rollback"
+	}
+	return map[string]any{"verdict": verdict, "summary": "FAKE judge", "token": tok}
 }
 
 func run(name string, args ...string) (string, error) {

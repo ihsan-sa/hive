@@ -610,7 +610,7 @@ func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
 	if after, _ := m.C.Effects.Sync(p); after != before {
 		t.Fatal("a change whose tests never ran was merged")
 	}
-	err := m.Recheck(task.ID, "")
+	err := m.Recheck(task.ID, "", "lead")
 	if got, _ := m.Get(task.ID); err != nil || got.CantRuns != 0 {
 		t.Fatalf("the lead's recheck: %v, count %d, want a fresh count", err, got.CantRuns)
 	}
@@ -672,7 +672,7 @@ func TestClosedPRStopsTheTask(t *testing.T) {
 	if after, _ := m.C.Effects.Sync(p); after != before {
 		t.Fatalf("main moved from %s to %s after the PR was closed", before, after)
 	}
-	if err := m.Recheck(task.ID, ""); err == nil {
+	if err := m.Recheck(task.ID, "", "lead"); err == nil {
 		t.Fatal("the lead brought back a task the person closed")
 	}
 	if _, err := forge.MergePR(p.Repo, task.PR.Number, task.SHA, "x"); err == nil {
