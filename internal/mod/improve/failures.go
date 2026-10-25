@@ -20,9 +20,8 @@ type failure struct {
 }
 
 var (
-	pkgLine  = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
-	testLine = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
-	// The same marks in a check's stored output, whose whitespace is folded.
+	// core.GoPkgLine's and core.GoFailLine's marks in a check's stored
+	// output, whose whitespace is folded.
 	foldedPkg  = regexp.MustCompile(`FAIL\s+(\S+/\S+)(\s+\[(build|setup) failed\]|\s+[\d.]+s)`)
 	foldedTest = regexp.MustCompile(`--- FAIL: (\S+) \([\d.]+s\)\s*([^-]{0,160})`)
 )
@@ -37,7 +36,7 @@ func failures(out string) []failure {
 	var tests, says []string
 	var block []string // lines since the last package line
 	for _, l := range strings.Split(out, "\n") {
-		if m := pkgLine.FindStringSubmatch(l); m != nil && strings.ContainsAny(m[2], "/.") {
+		if m := core.GoPkgLine.FindStringSubmatch(l); m != nil && strings.ContainsAny(m[2], "/.") {
 			if m[1] == "FAIL" {
 				f := failure{Pkg: m[2], Tests: tests, Says: says, Build: strings.Contains(m[4], "failed")}
 				if len(f.Tests) == 0 {
@@ -49,7 +48,7 @@ func failures(out string) []failure {
 			continue
 		}
 		block = append(block, l)
-		if m := testLine.FindStringSubmatch(l); m != nil {
+		if m := core.GoFailLine.FindStringSubmatch(l); m != nil {
 			tests = append(tests, m[1])
 			says = append(says, "")
 			continue
@@ -273,7 +272,13 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	if err != nil || parent == "" || own || !m.C.Effects.MainLine(p)[parent] {
 		return ""
 	}
-	bc := m.C.Effects.RunCheck(p, parent, "before", rerunCommand(test, failures(log)))
+	// Only what failed runs again, unless a package failed with no test
+	// named: a timeout or a build failure the filtered run may never reach.
+	cmd := rerunCommand(test, failures(log))
+	if slices.ContainsFunc(keys, func(k string) bool { return strings.HasSuffix(k, " !") }) {
+		cmd = test
+	}
+	bc := m.C.Effects.RunCheck(p, parent, "before", cmd)
 	if bc.CantRun != "" || bc.OK {
 		return ""
 	}
@@ -286,10 +291,14 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 			return ""
 		}
 	}
-	what := strings.Join(tc.Failed, ", ")
-	if what == "" {
-		what = strings.Join(keys, ", ")
+	// Sorted, so the same failures listed in another order make the same
+	// title and are filed once.
+	names := slices.Clone(tc.Failed)
+	if len(names) == 0 {
+		names = slices.Clone(keys)
 	}
+	slices.Sort(names)
+	what := strings.Join(slices.Compact(names), ", ")
 	why := "not new at this merge: " + what + " failed after it merged and fail too at " + core.Short(parent) + ", main just before it"
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": t.MergeSHA, "task": t.ID,
 		"text": core.Clip(why, 400) + " (" + p.Name + "). Not reverted; filed to fix on main."})

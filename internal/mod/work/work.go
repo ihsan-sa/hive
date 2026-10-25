@@ -1512,11 +1512,13 @@ func (m *Module) test(t *Task, p core.Project) error {
 		case !mc.OK:
 			// Every test it fails main fails too: it is no worse than main,
 			// so it goes on rather than wait for the green it may be the fix
-			// for (a revert of what turned main red, say).
+			// for (a revert of what turned main red, say). Journaled every
+			// time, so a change that hid a new failure by printing only
+			// main's names can be found after the fact.
 			if strings.HasPrefix(t.Reason, "waiting on main") {
 				t.Reason = ""
-				m.save(t, "its tests fail on "+core.Short(t.SHA)+" only where main's fail at "+core.Short(main)+" ("+strings.Join(c.Failed, ", ")+"), so it is no worse than main and goes on")
 			}
+			m.save(t, "its tests fail on "+core.Short(t.SHA)+" only where main's fail at "+core.Short(main)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 400)+"), so it is no worse than main and goes on")
 		default:
 			if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
 				return err

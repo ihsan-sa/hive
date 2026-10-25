@@ -201,6 +201,9 @@ func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
 	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 || strings.HasPrefix(task.Reason, "waiting on main") {
 		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
 	}
+	if !logHas(task, "only where main's fail at") || !logHas(task, "p/a TestClock") {
+		t.Fatalf("going on past main's red left no note naming what failed: %+v", task.Log)
+	}
 	for name, more := range map[string]string{
 		"another test":          "echo '--- FAIL: TestNew (0.01s)'\necho 'FAIL\tp/b\t0.01s'\n",
 		"another package":       "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/b\t0.01s'\n",
