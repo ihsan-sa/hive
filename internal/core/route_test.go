@@ -138,6 +138,19 @@ func TestOpenModelTurn(t *testing.T) {
 			t.Errorf("argv %q", spec.Argv)
 		}
 	}
+	// A named model's host widens only its own harness's runs: a run on
+	// another harness, even on a model of the same name, keeps its list.
+	for _, hn := range []string{"claude", "fake", "codex"} {
+		oh, _ := harness.Get(hn)
+		r := Run{RunSpec: RunSpec{ID: "x-" + hn, Role: "worker", Harness: hn, Model: "free"}}
+		spec, err := c.Runs.sandboxSpec(cfg, isolatedSB{}, oh, r, 1, false, "p", nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(spec.Allow, "openrouter.ai") {
+			t.Errorf("a %s run reaches the open model's host: %q", hn, spec.Allow)
+		}
+	}
 	// The key reaches the turn as a file in its home, never in its environment.
 	r := Run{RunSpec: RunSpec{ID: "o-key", Role: "worker", Harness: "open", Model: "free"}}
 	os.MkdirAll(c.WS.RunHome(r.ID), 0o755)
@@ -341,6 +354,75 @@ func TestOpenHostIsPublicOnly(t *testing.T) {
 		if got := c.openHost("m"); got != want {
 			t.Errorf("%s: %q, want %q", ep, got, want)
 		}
+	}
+}
+
+// An endpoint never carries a credential, which agents would see; a key
+// would cross a public network unencrypted only on plain http to a public host.
+func TestEndpointHoldsNoKey(t *testing.T) {
+	c := DefaultConfig()
+	for _, ep := range []string{"https://me:sk-1@api.example.com/v1", "https://api.example.com/v1?key=sk-1", "https://api.example.com/v1#sk-1"} {
+		c.Models = map[string]OpenModel{"m": {Endpoint: ep, Model: "x"}}
+		if err := c.Check(); err == nil || strings.Contains(err.Error(), "sk-1") {
+			t.Errorf("%s: %v", ep, err)
+		}
+	}
+	for ep, want := range map[string]bool{"http://api.example.com/v1": true, "https://api.example.com/v1": false,
+		"http://127.0.0.1:11434/v1": false, "http://192.168.1.2:8000/v1": false, "http://localhost:8000/v1": false} {
+		c.Models = map[string]OpenModel{"m": {Endpoint: ep, Model: "x"}}
+		if c.Check() != nil || c.Plaintext("m") != want {
+			t.Errorf("%s: plaintext %v, want %v (%v)", ep, c.Plaintext("m"), want, c.Check())
+		}
+	}
+}
+
+// A named model's price costs its turns, and a run with a budget starts on
+// it only if that budget can be held: a free model, or one the open agent
+// counts at a price.
+func TestModelPriceAndBudget(t *testing.T) {
+	p := Price{Input: 2, Output: 8}
+	if got := p.Cost(harness.Tokens{Input: 400_000, CacheRead: 100_000, Output: 250_000}); got != 3 {
+		t.Fatalf("cost %v, want 3", got)
+	}
+	for _, tc := range []struct {
+		m  OpenModel
+		ok bool
+	}{
+		{OpenModel{}, true}, // on this machine
+		{OpenModel{Key: true}, false},
+		{OpenModel{Key: true, Price: &Price{}}, true}, // a free tier, said so
+		{OpenModel{Key: true, Price: &p}, true},
+		{OpenModel{Key: true, Price: &p, API: "anthropic"}, false},
+		{OpenModel{Key: true, Price: &Price{}, API: "anthropic"}, true},
+	} {
+		if err := tc.m.Holds(1); (err == nil) != tc.ok {
+			t.Errorf("%+v: %v", tc.m, err)
+		}
+		if tc.m.Holds(0) != nil {
+			t.Errorf("%+v refuses no budget", tc.m)
+		}
+	}
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.Models = map[string]OpenModel{"paid": {Endpoint: "https://api.example.com/v1", Model: "x", Key: true}}
+	c.WS.SaveConfig(cfg)
+	if _, err := c.Runs.Start(RunSpec{Role: "worker", Harness: "open", Model: "paid", Budget: 1, Checkout: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "price") {
+		t.Fatalf("a budget on an unpriced paid model started: %v", err)
+	}
+	// A priced model's turn costs its tokens at the price, whatever the line says.
+	cfg.Models["paid"] = OpenModel{Endpoint: "https://api.example.com/v1", Model: "x", Key: true, Price: &Price{Input: 2, Output: 8}}
+	c.WS.SaveConfig(cfg)
+	r, err := c.Runs.Start(RunSpec{ID: "p1", Role: "worker", Harness: "open", Model: "paid", Brief: "b", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Turn = 1
+	out := c.WS.TurnOut(r.ID, 1)
+	os.MkdirAll(filepath.Dir(out), 0o755)
+	os.WriteFile(out, []byte(`{"type":"result","subtype":"success","is_error":false,"result":"ok","total_cost_usd":0,"usage":{"input_tokens":500000,"output_tokens":125000},"session_id":"s1"}`+"\n"), 0o600)
+	c.Runs.endTurn(r)
+	if got, _ := c.Runs.Get("p1"); got.Cost != 2 {
+		t.Fatalf("cost %v, want 2", got.Cost)
 	}
 }
 
@@ -648,4 +730,53 @@ func proven(c *Core, model string) {
 	id := "trial-" + model
 	c.J.MustAppend("run.created", RunSpec{ID: id, Role: "worker", Harness: "open", Model: model})
 	c.J.MustAppend("run.finish", map[string]any{"id": id, "finish": Finish{Status: "done"}})
+}
+
+// A run proves the pick every one of its turns ran on, named as its route
+// names it: one started from its route's first pick proves that pick, and
+// one that moved partway proves neither of the picks it ran on.
+func TestProofIsAWholeRunOnOnePick(t *testing.T) {
+	c, _ := testHive(t)
+	first := Pick{Harness: "claude", Model: "opus"}
+	finish := func(id string, turns ...Pick) {
+		c.J.MustAppend("run.created", RunSpec{ID: id, Role: "worker", Harness: first.Harness, Model: first.Model, Route: []Pick{first}})
+		for i, p := range turns {
+			c.J.MustAppend("run.turn_started", turnStarted{ID: id, Turn: i + 1, Harness: p.Harness, Model: p.Model})
+		}
+		c.J.MustAppend("run.finish", map[string]any{"id": id, "finish": Finish{Status: "done"}})
+	}
+	finish("moved", first, Pick{Harness: "open", Model: "free"})
+	if c.Runs.proven["open:free"] || c.Runs.proven[first.String()] {
+		t.Fatalf("a run that moved partway proved a pick: %v", c.Runs.proven)
+	}
+	finish("whole", first, first)
+	if !c.Runs.proven[first.String()] {
+		t.Fatalf("a run wholly on its route's first pick didn't prove it as the route names it: %v", c.Runs.proven)
+	}
+}
+
+// A worker at a limit that won't fall back to a model no run has finished
+// on says so in its reason, so the person knows a trial there would let it.
+func TestUnprovenFallbackSaysSo(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.Models = map[string]OpenModel{
+		"kimi": {Endpoint: "https://api.moonshot.ai/anthropic", Model: "kimi-k2", API: "anthropic", Key: true},
+		"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"},
+	}
+	c.WS.SaveConfig(cfg)
+	if _, err := c.Runs.Start(RunSpec{ID: "v1", Role: "worker", Harness: "open", Model: "kimi", Brief: "b", Checkout: t.TempDir(),
+		Route: []Pick{{Harness: "open", Model: "kimi"}, {Harness: "open", Model: "free"}}}); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := c.Runs.Get("v1")
+	r.Turn, r.Login = 1, "open:kimi"
+	out := c.WS.TurnOut(r.ID, 1)
+	os.MkdirAll(filepath.Dir(out), 0o755)
+	os.WriteFile(out, []byte(`{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"API Error: Request rejected (429) · Your account org-x request reached organization max RPM: 3","session_id":"s1"}`+"\n"), 0o600)
+	c.Runs.endTurn(r)
+	got, _ := c.Runs.Get("v1")
+	if got.Status != StatusParked || !strings.HasPrefix(got.Reason, "usage limit; resumes") || !strings.Contains(got.Reason, "no worker has finished on open:free yet") {
+		t.Fatalf("a skipped unproven fallback: %s %q", got.Status, got.Reason)
+	}
 }

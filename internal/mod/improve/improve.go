@@ -69,21 +69,29 @@ type Module struct {
 	// Feedback lists agents' open feedback for the projects mine admits.
 	Feedback func(mine func(project string) bool) string
 
-	mu       sync.Mutex
-	scores   map[string][]Measurement
-	sweeps   map[string]*Sweep
-	queue    chan work.Task
-	lastSeen int64 // journal seq at the last sweep start
-	retryAt  map[string]time.Time
-	pending  map[string]held      // project -> its newest merge waiting on a missing tool
-	spells   map[string]spell     // task id -> its current stage and since when
-	took     map[string][]float64 // task stage -> seconds its recent spells took
-	stalls   map[string]*Stall
-	fails    map[string][]core.Check // project -> recent red test checks that name their failing tests
-	heads    map[string][]string     // task id -> every head it had
-	merged   map[string]time.Time    // merge sha -> when it merged
-	covered  map[string][]Covered    // project -> merges main already held when they closed
-	cantRuns map[string]int          // project@sha -> its checks that couldn't start
+	mu        sync.Mutex
+	scores    map[string][]Measurement
+	sweeps    map[string]*Sweep
+	queue     chan work.Task
+	lastSeen  int64 // journal seq at the last sweep start
+	retryAt   map[string]time.Time
+	pending   map[string]held      // project -> its newest merge waiting on a missing tool
+	spells    map[string]spell     // task id -> its current stage and since when
+	took      map[string][]float64 // task stage -> seconds its recent spells took
+	stalls    map[string]*Stall
+	fails     map[string][]core.Check                                                                 // project -> recent red test checks that name their failing tests
+	heads     map[string][]string                                                                     // task id -> every head it had
+	merged    map[string]time.Time                                                                    // merge sha -> when it merged
+	sighted   map[string][]Sighting                                                                   // project\x00test -> its recent reds in the forge's checks (quarantine.go)
+	fixes     map[string]string                                                                       // project\x00test -> the task filed to fix it
+	lifted    map[string]time.Time                                                                    // project\x00test -> when its fix merged
+	fixMerged map[string]bool                                                                         // fix tasks whose merge lifted their test
+	kin       map[string]string                                                                       // task id -> the task it follows up or reverts
+	judging   map[string]string                                                                       // merge sha -> its project, while its judge decides it (judge.go)
+	judges    sync.WaitGroup                                                                          // judgeMerge calls in flight
+	askJudge  func(p core.Project, t work.Task, ms Measurement, reason string) (core.Judgement, bool) // tests' stand-in for runJudge
+	covered   map[string][]Covered                                                                    // project -> merges main already held when they closed
+	cantRuns  map[string]int                                                                          // project@sha -> its checks that couldn't start
 
 	stepbacks map[string]*StepBack
 	busy      map[string]bool
@@ -94,16 +102,22 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, fixMerged: map[string]bool{}, kin: map[string]string{}, judging: map[string]string{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		m.applyStall(e)
+		m.applyQuarantine(e)
 		switch e.Kind {
 		case "score.measured":
 			var ms Measurement
 			e.Decode(&ms)
 			m.scores[ms.Project] = append(m.scores[ms.Project], ms)
+		case "score.cant-run":
+			var x struct{ Project, SHA string }
+			if e.Decode(&x) == nil {
+				m.cantRuns[x.Project+"@"+x.SHA]++
+			}
 		case "score.covered":
 			var x Covered
 			if e.Decode(&x) == nil {
@@ -119,9 +133,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			}
 		case "effect.checked":
 			var c core.Check
-			if e.Decode(&c) == nil && c.CantRun != "" {
-				m.cantRuns[c.Project+"@"+c.SHA]++
-			}
+			e.Decode(&c)
 			if c.Kind == "test" && !c.OK && len(c.Failed) > 0 && time.Since(c.At) < flakeWindow {
 				fs := append(m.fails[c.Project], c)
 				for len(fs) > 0 && time.Since(fs[0].At) > flakeWindow {
@@ -156,6 +168,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	w.OnMerged = func(t work.Task) { m.queue <- t }
 	work.BestScore = m.Best
 	work.Measured = m.measured
+	c.Effects.Quarantined = m.QuarantinedTests
 	go m.measureLoop()
 	return m
 }
@@ -277,31 +290,46 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 }
 
 // SelfSize is the Hive's own size command, run for a self project whose
-// project.json names none while the script is in its tree.
-const SelfSize = "sh tests/core-size.sh"
+// project.json names none while the script is in its tree. A merge counts
+// lines only (SelfLines): the release build would hold a check slot for a
+// minute on every merge, so the binary is measured at the start, which comes
+// with every daemon start and Hive update.
+const (
+	SelfSize  = "sh tests/core-size.sh"
+	SelfLines = SelfSize + " --lines"
+)
 
 // size runs the project's size command (project.json "size") on sha in a
-// clean checkout and reads each "name value" line it prints. It is nil when
-// there is no command or it fails: a size is shown, never judged.
-func (m *Module) size(p core.Project, sha string) map[string]float64 {
+// clean checkout and reads each "name value" line it prints; full says
+// whether the Hive's own counts its binary too. It is nil when there is no
+// command or it fails: a size is shown, never judged. A command that ran and
+// gave nothing says so in the note, so the record shows sizes stopped.
+func (m *Module) size(p core.Project, sha string, full bool) (map[string]float64, string) {
 	var pc struct{ Size string }
 	json.Unmarshal([]byte(m.C.Effects.ReadFile(p, sha, ".hive/project.json")), &pc)
 	cmd := strings.TrimSpace(pc.Size)
 	if cmd == "" && p.Self && m.C.Effects.ReadFile(p, sha, "tests/core-size.sh") != "" {
-		cmd = SelfSize
+		cmd = SelfLines
+		if full {
+			cmd = SelfSize
+		}
 	}
 	if cmd == "" {
-		return nil
+		return nil, ""
 	}
 	c := m.C.Effects.RunCheck(p, sha, "size", cmd)
 	if !c.OK || c.Log == "" {
-		return nil
+		return nil, "; size not recorded: " + core.Clip(cmp.Or(c.Output, "the size command failed"), 200)
 	}
 	out, err := core.SafeRead(c.Log, 1<<20) // the full log: a check's Output is clipped to one line
 	if err != nil {
-		return nil
+		return nil, "; size not recorded: " + err.Error()
 	}
-	return sizes(string(out))
+	got := sizes(string(out))
+	if got == nil {
+		return nil, "; size not recorded: the size command printed no \"name value\" line"
+	}
+	return got, ""
 }
 
 // sizes reads "name value" lines; any other line is left out.
@@ -328,6 +356,7 @@ func sizes(out string) map[string]float64 {
 // start is measured again until there is a number.
 func (m *Module) Tick() {
 	m.Watch()
+	m.fileQuarantined()
 	if _, err := m.C.Sandbox(); err != nil {
 		return
 	}
@@ -365,7 +394,9 @@ func (m *Module) baseline(p core.Project) {
 		return
 	}
 	m.warnUnlisted(p, cfg)
-	ms.Size = m.size(p, main)
+	var sizeNote string
+	ms.Size, sizeNote = m.size(p, main, true)
+	ms.Note += sizeNote
 	if ok && (score != nil || cfg.Score == nil) {
 		ms.Kept, ms.Best = true, score
 		m.record(ms)
@@ -426,14 +457,35 @@ func (m *Module) warnUnlisted(p core.Project, cfg core.ProjectConfig) {
 	}
 }
 
-// triedOut says sha's checks couldn't start work.CantRunTries times: a commit
-// can fake a missing tool (print "not found", exit 127), and its merge isn't
-// held unjudged on that forever. The count is every such check on the
-// commit's journal, so a restart doesn't start it over.
-func (m *Module) triedOut(project, sha string) bool {
+// triedOut counts one more measure of sha whose check couldn't find its tool
+// and says whether that makes work.CantRunTries: a commit can fake a missing
+// tool (print "not found", exit 127), and its merge isn't held unjudged on
+// that forever. A full disk or quota isn't counted: a commit can't fake that,
+// and it only waits. The count is journaled, so a restart doesn't start it
+// over, and it is one per measure however many checks that measure ran.
+func (m *Module) triedOut(project, sha string, cant core.Check) bool {
+	if cant.Tool == "" {
+		return false
+	}
+	m.C.J.MustAppend("score.cant-run", map[string]string{"project": project, "sha": sha, "tool": cant.Tool})
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.cantRuns[project+"@"+sha] >= work.CantRunTries
+}
+
+// closeCantRunAsks answers p's open asks for a tool a merge's measures
+// couldn't find, once main measures with a result at sha: the tool runs now,
+// or the merge that only claimed it was missing is gone.
+func (m *Module) closeCantRunAsks(p core.Project, sha string) {
+	measured := map[string]bool{}
+	for _, x := range m.Scores(p.Name) {
+		measured["cant-run:"+x.SHA] = true
+	}
+	for _, a := range m.C.Person.Open() {
+		if a.Project == p.Name && a.Kind == "question" && measured[a.Ref] {
+			m.C.Person.Answer(a.ID, "ok", "the Hive, not the person: main at "+core.Short(sha)+" measures with a result now")
+		}
+	}
 }
 
 // retryNoResult is how long a merge whose check couldn't start waits before
@@ -505,29 +557,33 @@ func (m *Module) superseded(p core.Project, sha string) bool {
 }
 
 // Covered is a merge that wasn't measured on its own: main already held it
-// when it was measured at By.
+// when it was measured at By. Red says that measurement wasn't kept, so the
+// change went in under a red main and a reader can't take it as cleared.
 type Covered struct {
 	Project string    `json:"project"`
 	SHA     string    `json:"sha"`
 	Task    string    `json:"task"`
 	By      string    `json:"by"`
+	Red     bool      `json:"red,omitempty"`
 	At      time.Time `json:"-"`
 }
 
-// coveredBy is a commit already measured on p's main that contains sha, so
+// coveredBy is the measurement of a commit on p's main that contains sha, so
 // measuring sha now would test old code (a pull request that landed hours
 // before its task closed) and blame it on main. Main is linear, so the newest
-// measurement with a result is the one to ask.
-func (m *Module) coveredBy(p core.Project, sha string) string {
+// measurement with a result is the one to ask: one ancestry check, however
+// long the history. It trusts measurements to be recorded in main's order, so
+// a merge that comes back late (held for a missing tool, or requeued after a
+// failed sync while a later merge was measured) is covered by that later
+// measurement, red or not, as superseded already treats it; the Red mark on
+// its score.covered line is what tells a reader the later red may be its.
+func (m *Module) coveredBy(p core.Project, sha string) (Measurement, bool) {
 	for _, x := range slices.Backward(m.Scores(p.Name)) {
 		if !x.NoResult {
-			if m.after(p, x.SHA, sha) {
-				return x.SHA
-			}
-			return ""
+			return x, m.after(p, x.SHA, sha)
 		}
 	}
-	return ""
+	return Measurement{}, false
 }
 
 // introduced says the merge itself brought in the command that calls the
@@ -587,12 +643,18 @@ func (m *Module) afterMerge(t work.Task) {
 	if !ok || m.measured(p.Name, t.MergeSHA) || m.superseded(p, t.MergeSHA) {
 		return
 	}
+	if m.judgingBefore(p.Name, t.MergeSHA) {
+		// An earlier merge's judge decides the baseline this one is measured
+		// against: wait for it, rather than judge the same fall again.
+		go func() { time.Sleep(judgeHold); m.queue <- t }()
+		return
+	}
 	if _, err := m.C.Effects.Sync(p); err != nil {
 		go func() { time.Sleep(time.Minute); m.queue <- t }()
 		return
 	}
-	if by := m.coveredBy(p, t.MergeSHA); by != "" {
-		m.C.J.MustAppend("score.covered", Covered{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, By: by})
+	if by, ok := m.coveredBy(p, t.MergeSHA); ok {
+		m.C.J.MustAppend("score.covered", Covered{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, By: by.SHA, Red: !by.Kept})
 		return
 	}
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
@@ -602,7 +664,7 @@ func (m *Module) afterMerge(t work.Task) {
 		ok, score, note = true, nil, "score did not produce a number: this merge's score command calls "+cant.Tool+", which isn't installed where checks run: "+note
 	case cant.CantRun != "" && m.introduced(p, t.MergeSHA, cant):
 		ok, note = false, "tests red: this merge's test command calls "+cant.Tool+", which isn't installed where checks run: "+note
-	case cant.CantRun != "" && m.triedOut(p.Name, t.MergeSHA):
+	case cant.CantRun != "" && m.triedOut(p.Name, t.MergeSHA, cant):
 		ok, note = false, fmt.Sprintf("%s %s, %d tries in a row since it merged, which counts as red: %s", cant.Kind, cant.CantRun, work.CantRunTries, note)
 		m.C.Person.Ask(core.Ask{Kind: "question", Ref: "cant-run:" + t.MergeSHA, Project: p.Name, Options: []string{"ok"},
 			Title:  "Install " + cmp.Or(cant.Tool, "a tool") + " where checks run for " + p.Name + "?",
@@ -611,6 +673,8 @@ func (m *Module) afterMerge(t work.Task) {
 		m.noResult(p, Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, Note: note, Version: m.version(p, t.MergeSHA, cfg), NoResult: true}, cant.Kind)
 		m.hold(p, t)
 		return
+	case cant.CantRun == "":
+		m.closeCantRunAsks(p, t.MergeSHA)
 	}
 	flake := ""
 	if !ok {
@@ -624,7 +688,9 @@ func (m *Module) afterMerge(t work.Task) {
 	if hasBest {
 		best = *k.Best
 	}
-	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg), Size: m.size(p, t.MergeSHA)}
+	size, sizeNote := m.size(p, t.MergeSHA, false)
+	note += sizeNote
+	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg), Size: size}
 	if !hasBest || m.versionOf(p, k) != ms.Version {
 		m.warnUnlisted(p, cfg)
 		if hasBest {
@@ -632,7 +698,7 @@ func (m *Module) afterMerge(t work.Task) {
 			hasBest, ms.Note = false, "the score changed, so this starts a new baseline; "+note
 		}
 	}
-	worse := !ok
+	worse, dip := !ok, false
 	reason := ""
 	switch {
 	case !ok && flake != "":
@@ -644,7 +710,21 @@ func (m *Module) afterMerge(t work.Task) {
 	case cfg.Score != nil && score == nil:
 		worse, reason = true, "the score stopped producing a number"
 	case cfg.Score != nil && hasBest && !cfg.Score.WithinTolerance(*score, best):
-		worse, reason = true, fmt.Sprintf("the score fell to %g from the best kept %g (tolerance %g)", *score, best, cfg.Score.Tolerance)
+		worse, dip, reason = true, true, fmt.Sprintf("the score fell to %g from the best kept %g (tolerance %g)", *score, best, cfg.Score.Tolerance)
+	}
+	if dip && t.Kind != "revert" && t.Fix() {
+		// A known fix wins over a dip (issue #568): it stays, main's score
+		// is the baseline from here, and a brief looks into the dip; only
+		// that look, judging the fix itself made things worse, reverts it.
+		m.lookIntoDip(p, t, reason)
+		b := *score
+		ms.Kept, ms.Best = true, &b
+		ms.Note = "kept as a fix (" + core.Clip(t.AimWhy, 200) + ") though " + reason + "; a brief looks into the dip; " + note
+		m.record(ms)
+		if m.OnKept != nil {
+			m.OnKept(p.Name, t.MergeSHA)
+		}
+		return
 	}
 	if !worse {
 		ms.Kept = true
@@ -667,6 +747,24 @@ func (m *Module) afterMerge(t work.Task) {
 	if ok {
 		ms.Note += "; " + note
 	}
+	if ok && score != nil && t.Kind != "revert" {
+		// Only the score says worse: a model's judgement decides, the score
+		// being one thing it weighs (judge.go).
+		m.mu.Lock()
+		_, busy := m.judging[t.MergeSHA]
+		m.judging[t.MergeSHA] = p.Name
+		m.mu.Unlock()
+		if !busy {
+			m.judges.Add(1)
+			go m.judgeMerge(p, t, ms, reason)
+		}
+		return
+	}
+	m.revert(p, t, ms, reason)
+}
+
+// revert records main as worse after t's merge, and files its revert.
+func (m *Module) revert(p core.Project, t work.Task, ms Measurement, reason string) {
 	m.record(ms)
 	if t.Kind == "revert" {
 		m.C.Person.Ask(core.Ask{Kind: "question", Ref: "revert-bad:" + t.ID, Project: p.Name,
@@ -676,6 +774,25 @@ func (m *Module) afterMerge(t work.Task) {
 	}
 	if _, err := m.Work.Revert(t, t.MergeSHA, reason); err != nil {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "revert", "project": p.Name, "text": "could not file a revert: " + err.Error()})
+	}
+}
+
+// lookIntoDip files, once per merge, the brief that judges a fix's score
+// dip: what caused it, and whether the fix itself made things worse.
+func (m *Module) lookIntoDip(p core.Project, t work.Task, reason string) {
+	title := core.Clip("Look into the score dip after "+core.Short(t.MergeSHA)+": "+t.Label(), 120)
+	if len(m.Work.List(func(x work.Task) bool { return x.Project == p.Name && x.Title == title })) > 0 {
+		return
+	}
+	if _, err := m.Work.File(work.Brief{Project: p.Name, From: "improve", Chat: t.Chat, Thread: t.Thread, Title: title,
+		Done: "You judged what made the score dip and said so in your account. If the fix itself made things worse, " +
+			"revert it (`git revert " + t.MergeSHA + "`), name what got worse, and mark the revert a fix " +
+			"(`hive agent aim --aim fix --why \"reverts " + core.Short(t.MergeSHA) + ": <what got worse>\"`) so it doesn't wait for the gate; if the dip is noise or comes from elsewhere, " +
+			"say what, and win the score back without undoing the fix if you can.",
+		Known: fmt.Sprintf("Task %s, a fix (%s), merged at %s and was kept, since a known fix wins over a score dip: %s. "+
+			"The score is a data point, not the judge: a revert needs a judged read that the fix itself made things worse.",
+			t.ID, core.Clip(t.AimWhy, 300), core.Short(t.MergeSHA), reason)}); err != nil {
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "dip", "project": p.Name, "text": "could not file a look into a fix's score dip: " + err.Error()})
 	}
 }
 
@@ -811,7 +928,7 @@ func (m *Module) TickSweeps() {
 		dir := filepath.Join(m.C.WS.Hive(), "improve", "sweeps")
 		os.MkdirAll(dir, 0o755)
 		os.WriteFile(filepath.Join(dir, s.ID+".md"), report, 0o644)
-		for _, t := range m.Work.List(func(t work.Task) bool { return t.From == r.ID }) {
+		for _, t := range m.Work.List(func(t work.Task) bool { return t.From == r.ID || t.JoinedBy(r.ID) }) {
 			s.Asks = append(s.Asks, t.ID)
 		}
 		s.Status, s.Report, s.Ended = r.Status, core.Clip(string(report), 2000), time.Now().UTC()
@@ -858,6 +975,20 @@ func (m *Module) Digest(since int64, only string) string {
 			fmt.Fprintf(&b, "Best kept score: %g\n\n", best)
 		}
 		b.WriteString("Recent measurements of main:\n")
+		m.mu.Lock()
+		cov := slices.Clone(m.covered[p.Name])
+		m.mu.Unlock()
+		if len(ms) > 0 { // covered merges from the same stretch as the measurements shown
+			cov = slices.DeleteFunc(cov, func(c Covered) bool { return c.At.Before(ms[0].At) })
+		}
+		if len(cov) > 5 {
+			cov = cov[len(cov)-5:]
+		}
+		type line struct {
+			at   time.Time
+			text string
+		}
+		var lines []line
 		for _, x := range ms {
 			sc := "-"
 			if x.Score != nil {
@@ -867,16 +998,18 @@ func (m *Module) Digest(since int64, only string) string {
 			if x.NoResult {
 				kept = "no-result"
 			}
-			fmt.Fprintf(&b, "- %s %s score=%s kept=%s %s\n", x.At.Format("01-02 15:04"), core.Short(x.SHA), sc, kept, core.Clip(x.Note, 200))
-		}
-		m.mu.Lock()
-		cov := m.covered[p.Name]
-		m.mu.Unlock()
-		if len(cov) > 5 {
-			cov = cov[len(cov)-5:]
+			lines = append(lines, line{x.At, fmt.Sprintf("%s score=%s kept=%s %s", core.Short(x.SHA), sc, kept, core.Clip(x.Note, 200))})
 		}
 		for _, c := range cov {
-			fmt.Fprintf(&b, "- %s %s not measured: main already held it when measured at %s (task %s)\n", c.At.Format("01-02 15:04"), core.Short(c.SHA), core.Short(c.By), c.Task)
+			state := "kept"
+			if c.Red {
+				state = "red, so this change went in under a red main"
+			}
+			lines = append(lines, line{c.At, fmt.Sprintf("%s (task %s) not measured: main already held it when measured at %s, which was %s", core.Short(c.SHA), c.Task, core.Short(c.By), state)})
+		}
+		slices.SortStableFunc(lines, func(a, b line) int { return a.at.Compare(b.at) })
+		for _, l := range lines {
+			fmt.Fprintf(&b, "- %s %s\n", l.at.Format("01-02 15:04"), l.text)
 		}
 		b.WriteString("\nWork:\n")
 		for i, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 // Metric is one number a probe measured. Higher says which way is better.
@@ -31,6 +32,7 @@ type Result struct {
 	Detail  string   `json:"detail,omitempty"`
 	Seconds float64  `json:"seconds"`
 	Metrics []Metric `json:"metrics,omitempty"`
+	Failed  []string `json:"failed,omitempty"` // the tests that failed in it, by name, for a probe that runs tests
 }
 
 // Options tune how much better counts as better.
@@ -49,6 +51,9 @@ type Verdict struct {
 	Regressions []string `json:"regressions,omitempty"`
 	Gains       []string `json:"gains,omitempty"`
 	Unmeasured  []string `json:"unmeasured,omitempty"` // probes that failed on both sides: never measured
+	// Differs names probes that pass as often on both sides but fail
+	// different tests: not judged, shown so a new failure isn't hidden by a tie.
+	Differs []string `json:"differs,omitempty"`
 }
 
 func mean(v []float64) float64 {
@@ -81,7 +86,10 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 	if o.Floor == 0 {
 		o.Floor = 0.02
 	}
-	type tally struct{ pass, n int }
+	type tally struct {
+		pass, n int
+		failed  map[string]int // test name: the runs it failed in
+	}
 	given := map[key][]string{}
 	count := func(rs []Result) (map[string]*tally, map[key][]float64, map[key]bool) {
 		t, m, hi := map[string]*tally{}, map[key][]float64{}, map[key]bool{}
@@ -91,6 +99,12 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 			}
 			t[r.Probe].n++
 			if !r.Pass {
+				for _, f := range r.Failed {
+					if t[r.Probe].failed == nil {
+						t[r.Probe].failed = map[string]int{}
+					}
+					t[r.Probe].failed[f]++
+				}
 				continue
 			}
 			t[r.Probe].pass++
@@ -135,11 +149,15 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 			if c.pass == 0 && k.pass == 0 {
 				// Broken on both sides: that path was never measured, so it
 				// cannot count as even.
-				v.Unmeasured = append(v.Unmeasured, fmt.Sprintf("%s failed on both sides (0/%d, the control 0/%d)", p, c.n, k.n))
+				// Naming each side's failing tests shows whether they are the
+				// same ones (a stale base or the environment) or new.
+				v.Unmeasured = append(v.Unmeasured, fmt.Sprintf("%s failed on both sides (0/%d, the control 0/%d)", p, c.n, k.n)+failing(c.failed, c.n, k.failed, k.n))
 			} else if cr < kr {
-				v.Regressions = append(v.Regressions, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n))
+				v.Regressions = append(v.Regressions, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n)+failing(c.failed, c.n, k.failed, k.n))
 			} else if cr > kr {
-				v.Gains = append(v.Gains, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n))
+				v.Gains = append(v.Gains, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n)+failing(c.failed, c.n, k.failed, k.n))
+			} else if !sameTests(c.failed, k.failed) {
+				v.Differs = append(v.Differs, fmt.Sprintf("%s passes %d/%d, the control %d/%d, failing different tests", p, c.pass, c.n, k.pass, k.n)+failing(c.failed, c.n, k.failed, k.n))
 			}
 		}
 	}
@@ -192,4 +210,58 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 		v.Reason = "not better than the current Hive: nothing moved beyond the noise"
 	}
 	return v
+}
+
+// failing names the tests that failed in each side's runs of a probe, most
+// often first, with how many of its runs each failed in:
+// " (failing: TestA 3/3, TestB 1/3; the control failing: TestB 2/3)".
+func failing(c map[string]int, cn int, k map[string]int, kn int) string {
+	var parts []string
+	if t := tests(c, cn); t != "" {
+		parts = append(parts, "failing: "+t)
+	}
+	if t := tests(k, kn); t != "" {
+		parts = append(parts, "the control failing: "+t)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, "; ") + ")"
+}
+
+// sameTests says whether two sides failed the same tests, however often.
+func sameTests(a, b map[string]int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for t := range a {
+		if b[t] == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func tests(f map[string]int, n int) string {
+	if len(f) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(f))
+	for t := range f {
+		names = append(names, t)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if f[names[i]] != f[names[j]] {
+			return f[names[i]] > f[names[j]]
+		}
+		return names[i] < names[j]
+	})
+	more := ""
+	if len(names) > 5 {
+		names, more = names[:5], fmt.Sprintf(" and %d more", len(names)-5)
+	}
+	for i, t := range names {
+		names[i] = fmt.Sprintf("%s %d/%d", t, f[t], n)
+	}
+	return strings.Join(names, ", ") + more
 }

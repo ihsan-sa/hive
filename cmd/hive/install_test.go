@@ -45,6 +45,13 @@ func installer(t *testing.T, home string, env ...string) (string, bool, []string
 	calls := filepath.Join(dir, "curl-calls")
 	curl := "#!/bin/sh\necho \"$2\" >> '" + calls + "'\ncp \"" + serve + "/${2##*/}\" \"$4\"\n"
 	os.WriteFile(filepath.Join(stubs, "curl"), []byte(curl), 0o755)
+	for _, e := range env {
+		if k := "FAKE_UNAME="; strings.HasPrefix(e, k) { // uname -s says this; -m is the real one
+			real, _ := exec.LookPath("uname")
+			uname := "#!/bin/sh\n[ \"$1\" = -s ] && { echo " + e[len(k):] + "; exit; }\nexec " + real + " \"$@\"\n"
+			os.WriteFile(filepath.Join(stubs, "uname"), []byte(uname), 0o755)
+		}
+	}
 	cmd := exec.Command("sh", script)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "PATH="+stubs+":"+os.Getenv("PATH"), "HOME="+home, "HIVE_USER=", "HIVE_REPO=", "HIVE_BIN_DIR=",
@@ -53,6 +60,18 @@ func installer(t *testing.T, home string, env ...string) (string, bool, []string
 	out, err := cmd.CombinedOutput()
 	raw, _ := os.ReadFile(calls)
 	return string(out), err == nil, strings.Fields(string(raw))
+}
+
+// A release without this system's binary (Linux only for now, issue #564)
+// says so before downloading anything but the checksums.
+func TestInstallerSaysLinuxOnly(t *testing.T) {
+	out, ok, calls := installer(t, t.TempDir(), "FAKE_UNAME=Darwin")
+	if ok || !strings.Contains(out, "Linux only for now") || !strings.Contains(out, "issues/564") {
+		t.Fatalf("want the Linux-only message, got ok=%v:\n%s", ok, out)
+	}
+	if len(calls) != 1 || !strings.HasSuffix(calls[0], "/checksums.txt") {
+		t.Fatalf("it fetched %v", calls)
+	}
 }
 
 // A repo name is owner/name, matched whole: anything else is refused before

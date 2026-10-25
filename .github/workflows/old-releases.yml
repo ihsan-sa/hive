@@ -2,10 +2,10 @@ name: old-releases
 # update.yml runs this checkout's installers to install an older release, which lacks
 # commands added since (v0.1.33's installer called `report`, new in v0.1.18, and every
 # update leg failed with a usage error). This catches that at the PR, not the release.
-# The installer is the same script on macOS, so Linux and Windows run it. A PR runs it
-# only when it touches the installers or the commands they call, to spare the minutes of
-# four legs (two of them Windows) on every other PR; a published release and a manual run
-# (gh workflow run old-releases) always do.
+# Linux only for now (issue #564); when Windows comes back, so do its install.ps1 legs and
+# steps (git show 65b1651:.github/workflows/old-releases.yml). A PR runs it only when it
+# touches the installers or the commands they call, to spare the minutes on every other PR;
+# a published release and a manual run (gh workflow run old-releases) always do.
 on:
   pull_request:
     paths:
@@ -54,23 +54,10 @@ jobs:
           # An empty version would install `latest` and pass the grep below on anything.
           [ -n "$v" ] || { echo "::error::no release to install"; exit 1; }
           echo "HIVE_VERSION=$v" >> "$GITHUB_ENV"
-          # Forward slashes on Windows too (D:/a/_temp), which both pwsh and Git Bash read.
-          tmp=$RUNNER_TEMP
-          if [ "$RUNNER_OS" = Windows ]; then tmp=$(cygpath -m "$RUNNER_TEMP"); fi
-          { echo "HIVE_HOME=$tmp/hive"; echo "HIVE_BIN_DIR=$tmp/bin"; } >> "$GITHUB_ENV"
-      - name: install it (Linux)
-        if: runner.os != 'Windows'
+          { echo "HIVE_HOME=$RUNNER_TEMP/hive"; echo "HIVE_BIN_DIR=$RUNNER_TEMP/bin"; } >> "$GITHUB_ENV"
+      - name: install it
         run: sh install/install.sh
-      - name: install it (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          HIVE_SKIP_WSL: '1'
-          HIVE_NO_PATH: '1'
-        run: ./install/install.ps1
       - name: it is the release asked for
         run: |
-          exe=$HIVE_BIN_DIR/$HIVE_CMD
-          if [ "$RUNNER_OS" = Windows ]; then exe=$exe.exe; fi
-          "$exe" --version | tee version.txt
+          "$HIVE_BIN_DIR/$HIVE_CMD" --version | tee version.txt
           grep -qwF -- "$HIVE_VERSION" version.txt

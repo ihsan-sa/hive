@@ -155,7 +155,7 @@ func (a *App) Clean() string {
 			return 0
 		}
 		tidied++
-		return gate.Reap(out)
+		return gate.ReapLeft(out)
 	}); tidied > 0 {
 		did = append(did, fmt.Sprintf("tidied %d gate run(s) a dead gate left, ending %d process(es)", tidied, n))
 	}
@@ -183,18 +183,55 @@ func (a *App) Tick() {
 	a.Mods.Tick()
 }
 
-// Run ticks until ctx ends.
+// wakeGap and wakeBurst bound the ticks a journal event brings forward: one
+// comes wakeGap after the event, so a burst of events is one tick, and at most
+// wakeBurst come between two of the second's ticks, so a step that journals
+// on every tick can't spin the loop.
+const (
+	wakeGap   = 20 * time.Millisecond
+	wakeBurst = 8
+)
+
+// Run ticks every second until ctx ends, and soon after each journal event:
+// a step that ends (a task saved, a turn ended, a verdict) lets the next one
+// go at once instead of waiting out the second.
 func (a *App) Run(ctx context.Context) {
 	a.Improve.Recover()
 	go a.C.WatchLogins(ctx, time.Minute)
+	loop(ctx, a.C.J, a.Tick)
+}
+
+// loop calls tick every second until ctx ends, and wakeGap after an event
+// lands in j, at most wakeBurst times between two of the second's ticks.
+func loop(ctx context.Context, j *core.Journal, tick func()) {
+	wake := make(chan struct{}, 1)
+	j.Subscribe(func(core.Event) {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	})
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
+	woken := 0
 	for {
-		a.Tick()
+		tick()
+		early := wake
+		if woken >= wakeBurst {
+			early = nil
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			woken = 0
+		case <-early:
+			woken++
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wakeGap):
+			}
 		}
 	}
 }

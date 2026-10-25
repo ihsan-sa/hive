@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -105,5 +106,24 @@ func TestTypedKeysStayKeys(t *testing.T) {
 	m.Update(burstMsg(m.burstN - 1))
 	if len(m.burst) != 1 {
 		t.Fatalf("a stale tick flushed the burst")
+	}
+}
+
+// TestRolloverStaysKeys: fast typing with key rollover lands three keys
+// inside burstGap, but milliseconds apart rather than a console read's
+// microseconds, so "ok" and Enter typed in a rush send the message instead
+// of pasting a line break.
+func TestRolloverStaysKeys(t *testing.T) {
+	at := time.Unix(0, 0)
+	burstClock = func() time.Time { at = at.Add(8 * time.Millisecond); return at }
+	t.Cleanup(func() { burstClock = time.Now })
+	m := testModel(100, 30)
+	m.keyBurst = true
+	m.section = secChats
+	m.focusBox("")
+	keys(m, "ok\n")
+	settle(m)
+	if m.sent != 1 || m.input.Value() != "" {
+		t.Fatalf("rolled-over typing: sent %d input %q", m.sent, m.input.Value())
 	}
 }

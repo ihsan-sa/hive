@@ -129,9 +129,14 @@ trap 'rm -rf "$tmp"' EXIT
 echo "Downloading the Hive ($asset, $VERSION) from $REPO ..."
 base="https://github.com/$REPO/releases/download/$VERSION"
 [ "$VERSION" = latest ] && base="https://github.com/$REPO/releases/latest/download"
-curl -fsSL "$base/$asset" -o "$tmp/$asset"
 curl -fsSL "$base/checksums.txt" -o "$tmp/checksums.txt"
 want=$(awk -v a="$asset" '$2 == a || $2 == "*" a {print $1; exit}' "$tmp/checksums.txt")
+# Releases are built for Linux only for now (issue #564): say so rather than fail on a missing download.
+if [ -z "$want" ] && [ "$os" != linux ]; then
+  echo "$CMD: the Hive is Linux only for now, so release $VERSION has no $asset (https://github.com/ihsan-sa/hive/issues/564)" >&2
+  exit 1
+fi
+curl -fsSL "$base/$asset" -o "$tmp/$asset"
 if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$tmp/$asset" | awk '{print $1}'); else got=$(shasum -a 256 "$tmp/$asset" | awk '{print $1}'); fi
 if [ -z "$want" ] || [ "$want" != "$got" ]; then echo "$CMD: checksum mismatch; not installing" >&2; exit 1; fi
 

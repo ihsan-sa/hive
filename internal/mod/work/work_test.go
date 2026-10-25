@@ -345,7 +345,7 @@ func TestGiveUpComesBack(t *testing.T) {
 	if task.Stage != StageStopped {
 		t.Fatalf("stage %q", task.Stage)
 	}
-	if err := m.Recheck(task.ID, ""); err != nil {
+	if err := m.Recheck(task.ID, "", "lead"); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := m.Get(task.ID)
@@ -354,7 +354,7 @@ func TestGiveUpComesBack(t *testing.T) {
 	}
 	got.Stage = StageDone
 	m.save(&got, "done")
-	if err := m.Recheck(task.ID, ""); err == nil {
+	if err := m.Recheck(task.ID, "", "lead"); err == nil {
 		t.Fatal("a done task was rechecked")
 	}
 }
@@ -371,26 +371,37 @@ func TestRecheckRetriesAStuckMerge(t *testing.T) {
 	m.mu.Lock()
 	m.busy[task.ID] = true
 	m.mu.Unlock()
-	if err := m.Recheck(task.ID, ""); err == nil || !strings.Contains(err.Error(), "step running") {
+	if err := m.Recheck(task.ID, "", "lead"); err == nil || !strings.Contains(err.Error(), "step running") {
 		t.Fatalf("retried under a running step: %v", err)
 	}
 	m.mu.Lock()
 	delete(m.busy, task.ID)
 	m.mu.Unlock()
-	if err := m.Recheck(task.ID, ""); err != nil {
+	task.Retry = time.Now().Add(time.Hour) // backed off before the retry
+	m.save(task, "rate limited")
+	m.mu.Lock()
+	m.later[task.ID] = time.Now().Add(time.Hour)
+	m.mu.Unlock()
+	if err := m.Recheck(task.ID, "", "lead"); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := m.Get(task.ID)
+	m.mu.Lock()
+	due := m.due(got)
+	m.mu.Unlock()
+	if !due {
+		t.Fatalf("the retry still waits out the backoff from before it: retry %v", got.Retry)
+	}
 	if got.Stage != StageLanding || got.Failures+got.Round != 0 || got.Reason != "" || !logged(&got, "retried from merging") {
 		t.Fatalf("not back to landing with fresh counts: %+v", got)
 	}
 
 	got.Stage, got.Checkpoint = StageTesting, "2125f74e"
 	m.save(&got, "a checkpoint")
-	if err := m.Recheck(task.ID, "try again"); err == nil {
+	if err := m.Recheck(task.ID, "try again", "lead"); err == nil {
 		t.Fatal("sent back a worker still working past its checkpoint")
 	}
-	if err := m.Recheck(task.ID, ""); err != nil {
+	if err := m.Recheck(task.ID, "", "lead"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = m.Get(task.ID); got.Stage != StageWorking || got.Checkpoint != "" {
@@ -411,7 +422,7 @@ func TestPersonStopHolds(t *testing.T) {
 			m.onPersonMerge(core.Ask{Ref: task.ID + "@abc", Answer: "leave open"})
 		}
 		for _, back := range []string{"", "try again"} {
-			if err := m.Recheck(task.ID, back); err == nil || !strings.Contains(err.Error(), "by the person") {
+			if err := m.Recheck(task.ID, back, "lead"); err == nil || !strings.Contains(err.Error(), "by the person") {
 				t.Fatalf("%s: recheck %q got %v", how, back, err)
 			}
 		}
@@ -445,7 +456,7 @@ func TestPersonStoppedWorkerHolds(t *testing.T) {
 			m.save(task, task.Reason)
 		}
 		for _, back := range []string{"", "try again"} {
-			if err := m.Recheck(task.ID, back); err == nil || !strings.Contains(err.Error(), "by the person") {
+			if err := m.Recheck(task.ID, back, "lead"); err == nil || !strings.Contains(err.Error(), "by the person") {
 				t.Fatalf("marked %v: recheck %q got %v", marked, back, err)
 			}
 		}

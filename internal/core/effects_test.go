@@ -400,11 +400,15 @@ func TestMainBundleLeavesNoTemp(t *testing.T) {
 	c, _, p, _ := setupProject(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.bundle")
-	if err := c.Effects.MainBundle(p, path); err != nil {
+	head, err := c.Effects.MainBundle(p, path)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if want, _ := Git(c.WS.Project(p.Name), "rev-parse", p.Branch); head != strings.TrimSpace(want) {
+		t.Fatalf("head %q, want main %q", head, want)
+	}
 	os.MkdirAll(filepath.Join(dir, "blocked", "x"), 0o755) // a non-empty directory can't be renamed over
-	if err := c.Effects.MainBundle(p, filepath.Join(dir, "blocked")); err == nil {
+	if _, err := c.Effects.MainBundle(p, filepath.Join(dir, "blocked")); err == nil {
 		t.Fatal("rename over a directory should fail")
 	}
 	if left, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(left) != 0 {
@@ -887,17 +891,21 @@ func TestRequiredChecks(t *testing.T) {
 	}
 }
 
-// Two changes that each add to docs/log.md, docs/status.md and
-// docs/architecture.md merge into main one after the other: the repository's
-// own .gitattributes marks them merge=union, so bringing the second branch up
-// to date keeps both entries instead of sending it back as a conflict. Without
-// those lines the same merge conflicts.
+// Two changes that each add to docs/log.md and docs/status.md merge into main
+// one after the other: the repository's own .gitattributes marks them
+// merge=union, so bringing the second branch up to date keeps both entries
+// instead of sending it back as a conflict. Without those lines the same merge
+// conflicts. docs/architecture.md is edited in place and isn't union: the same
+// two additions to it conflict either way.
 func TestAdditiveDocsMergeWithoutConflict(t *testing.T) {
 	attrs, err := os.ReadFile(filepath.Join("..", "..", ".gitattributes"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	docs := []string{"docs/log.md", "docs/status.md", "docs/architecture.md"}
+	docs := []string{"docs/log.md", "docs/status.md"}
+	if !strings.Contains(string(attrs), "docs/log.md merge=union") || strings.Contains(string(attrs), "docs/architecture.md merge=union") {
+		t.Fatalf(".gitattributes should mark log.md union and leave architecture.md alone:\n%s", attrs)
+	}
 	for _, union := range []bool{true, false} {
 		t.Run(fmt.Sprint("union=", union), func(t *testing.T) {
 			c, f := testHive(t)
@@ -1119,6 +1127,108 @@ func TestChecksAgainstMainByTests(t *testing.T) {
 	}
 }
 
+// A check is excused only when it shows a failure in quarantined tests
+// alone: its log names them and nothing else failing, one step failed, and
+// any step it skipped main's run skips too.
+func TestExcuse(t *testing.T) {
+	flaky := "--- FAIL: TestA (0.1s)\n--- FAIL: TestB (0.2s)\nFAIL\nFAIL\tgithub.com/x/a\t1.0s\nok  \tgithub.com/x/b\t0.3s\n"
+	logs := map[string]string{
+		"flaky":    flaky,
+		"mixed":    "--- FAIL: TestA (0.1s)\n--- FAIL: TestC (0.1s)\nFAIL\nFAIL\tgithub.com/x/a\t1.0s\n",
+		"build":    flaky + "# github.com/x/c\nc/c.go:3:1: syntax error\nFAIL\tgithub.com/x/c [build failed]\n",
+		"timeout":  flaky + "panic: test timed out after 10m0s\n\trunning tests:\n\t\tTestSlow (10m0s)\nFAIL\tgithub.com/x/d\t600.1s\n",
+		"pkgred":   flaky + "FAIL\tgithub.com/x/e\t0.1s\n",
+		"twostep":  flaky,
+		"skips":    flaky,
+		"skips2":   flaky,
+		"touched":  flaky,
+		"elsepkg":  "--- FAIL: TestA (0.1s)\nFAIL\nFAIL\tgithub.com/x/z\t1.0s\n",
+		"unplaced": "--- FAIL: TestA (0.1s)\n--- FAIL: TestB (0.2s)\n",
+	}
+	read := JobRead{
+		Failure: func(r CheckRun) (CheckFailure, bool) {
+			log, ok := logs[r.URL]
+			keys, placed := FailedTestKeys(log)
+			return CheckFailure{Tests: FailedTests(log), Keys: keys, OnlyTests: placed && OnlyTests(log)}, ok
+		},
+		Steps: func(r CheckRun) ([]JobStep, bool) {
+			test := JobStep{Name: "the suite", Conclusion: "failure"}
+			switch r.URL {
+			case "twostep":
+				return []JobStep{test, {Name: "vet", Conclusion: "failure"}}, true
+			case "skips", "skips2":
+				return []JobStep{test, {Name: "vet darwin", Conclusion: "skipped"}, {Name: "end to end", Conclusion: "skipped"}}, true
+			case "main/skips":
+				return []JobStep{{Name: "the suite", Conclusion: "success"}, {Name: "vet darwin", Conclusion: "skipped"}, {Name: "end to end", Conclusion: "success"}}, true
+			case "main/skips2":
+				return []JobStep{{Name: "the suite", Conclusion: "success"}, {Name: "vet darwin", Conclusion: "skipped"}, {Name: "end to end", Conclusion: "skipped"}}, true
+			case "none":
+				return nil, false
+			}
+			return []JobStep{{Name: "checkout", Conclusion: "success"}, test}, true
+		},
+	}
+	q := []string{"github.com/x/a::TestA", "github.com/x/a::TestB"}
+	for url, want := range map[string]bool{"flaky": true, "mixed": false, "build": false, "timeout": false, "pkgred": false, "twostep": false, "skips": false, "skips2": true, "none": false,
+		"touched": false, "elsepkg": false, "unplaced": false} {
+		touched := func(key string) bool { return url == "touched" }
+		runs := []CheckRun{{Name: url, State: CheckFail, URL: url}, {Name: "linux", State: CheckPass, URL: "flaky"}}
+		mainRuns := []CheckRun{{Name: "skips", State: CheckPass, URL: "main/skips"}, {Name: "skips2", State: CheckPass, URL: "main/skips2"}}
+		out, excused := Excuse(runs, mainRuns, read, q, touched)
+		if got := len(excused) == 1 && excused[0] == url && out[0].State == CheckPass && strings.Contains(out[0].Detail, "quarantined github.com/x/a::TestA, github.com/x/a::TestB"); got != want {
+			t.Errorf("%s: excused %v (%+v), want %v", url, excused, out, want)
+		}
+		if runs[0].State != CheckFail {
+			t.Fatal("Excuse changed its input")
+		}
+	}
+	// A skipped step with no finished main run to compare with excuses nothing.
+	if _, excused := Excuse([]CheckRun{{Name: "skips2", State: CheckFail, URL: "skips2"}}, []CheckRun{{Name: "skips2", State: CheckPending, URL: "main/skips2"}}, read, q, func(string) bool { return false }); excused != nil {
+		t.Errorf("no main answer excused %v", excused)
+	}
+	runs := []CheckRun{{Name: "win", State: CheckFail, URL: "flaky"}}
+	if _, excused := Excuse(runs, nil, read, nil, func(string) bool { return false }); excused != nil {
+		t.Errorf("no quarantine excused %v", excused)
+	}
+	if _, excused := Excuse(runs, nil, JobRead{Failure: read.Failure}, q, func(string) bool { return false }); excused != nil {
+		t.Errorf("unread steps excused %v", excused)
+	}
+}
+
+// A failing test's key carries its package, from the line that closes the
+// package's output; a Go failure with no such line can't be placed.
+func TestFailedTestKeys(t *testing.T) {
+	log := "=== RUN   TestA\n--- FAIL: TestA (0.1s)\n    --- FAIL: TestA/sub (0.0s)\nFAIL\nFAIL\tgithub.com/x/a\t0.1s\nok  \tgithub.com/x/b\t0.2s\n--- FAIL: TestA (0.1s)\nFAIL\nFAIL\tgithub.com/x/c\t0.3s\nFAILED tests/t.py::test_a - assert 1\n"
+	keys, ok := FailedTestKeys(log)
+	if want := []string{"github.com/x/a::TestA", "github.com/x/a::TestA/sub", "github.com/x/c::TestA", "tests/t.py::test_a"}; !ok || !slices.Equal(keys, want) {
+		t.Fatalf("keys %v (%v), want %v", keys, ok, want)
+	}
+	if _, ok := FailedTestKeys("--- FAIL: TestA (0.1s)\nFAIL\n"); ok {
+		t.Fatal("a failure with no package line was placed")
+	}
+	for key, want := range map[string]string{"github.com/x/internal/e2e::TestA": "internal/e2e", "github.com/x::TestA": ".", "tests/u/t.py::test_a": "tests/u", "other.org/y::TestA": "", "TestA": ""} {
+		dir, ok := KeyDir(key, "github.com/x")
+		if dir != want || ok != (want != "") {
+			t.Errorf("KeyDir(%q) = %q %v, want %q", key, dir, ok, want)
+		}
+	}
+}
+
+func TestOnlyTests(t *testing.T) {
+	for log, want := range map[string]bool{
+		"--- FAIL: TestA (0.1s)\nFAIL\nFAIL\tx/a\t0.1s\nok  \tx/b\t0.2s\n?   \tx/c\t[no test files]\n": true,
+		"FAILED tests/t.py::test_a - assert 1\n1 failed, 3 passed\n":                                   true,
+		"--- FAIL: TestA (0.1s)\nFAIL\nFAIL\tx/a\t0.1s\nFAIL\tx/b\t0.1s\n":                             false, // x/b red with no test named
+		"--- FAIL: TestA (0.1s)\nFAIL\tx/a\t0.1s\nFAIL\tx/b [setup failed]\n":                          false,
+		"--- FAIL: TestA (0.1s)\n    panic: boom [recovered]\n":                                        false,
+		"FAILED tests/t.py::test_a\nERROR tests/u.py - ImportError\n1 failed, 1 error\n":               false,
+	} {
+		if got := OnlyTests(log); got != want {
+			t.Errorf("OnlyTests(%q) = %v, want %v", log, got, want)
+		}
+	}
+}
+
 func TestGitHubLogStamp(t *testing.T) {
 	log := "2026-10-24T08:00:00.1234567Z --- FAIL: TestX (0.01s)\n2026-10-24T08:00:01.0Z FAIL\n"
 	if got := FailedTests(ghLogStamp.ReplaceAllString(log, "")); len(got) != 1 || got[0] != "TestX" {
@@ -1152,6 +1262,64 @@ func TestLogExcerpt(t *testing.T) {
 	}
 }
 
+// A plain text file or anything under testdata is data a test may read, not
+// prose: its red counts as any code change's.
+func TestProseOnly(t *testing.T) {
+	for files, want := range map[string]bool{
+		".hive/goals.md":                 true,
+		"docs/a.md,.modules/agents/x.md": true,
+		"feature.txt":                    false,
+		"internal/x/testdata/golden.md":  false,
+		"docs/a.md,main.go":              false,
+	} {
+		if got := ProseOnly(strings.Split(files, ",")); got != want {
+			t.Errorf("ProseOnly(%s) = %v, want %v", files, got, want)
+		}
+	}
+}
+
+// ChecksBesidesFailures leaves a failed check out of the required list too,
+// while a required check not yet reported still holds.
+func TestChecksBesidesFailures(t *testing.T) {
+	runs := []CheckRun{{Name: "win", State: CheckFail}, {Name: "linux", State: CheckPass}}
+	if st, _, failed := ChecksBesidesFailures(runs, []string{"win", "linux"}); st != CheckPass || len(failed) != 1 || failed[0] != "win" {
+		t.Fatalf("state %q, failed %v", st, failed)
+	}
+	if st, which, _ := ChecksBesidesFailures(runs, []string{"win", "e2e"}); st != CheckPending || len(which) != 1 || which[0].Name != "e2e" {
+		t.Fatalf("state %q, which %v", st, which)
+	}
+}
+
+// Only the Hive's own project sets a listed check aside, by its exact name,
+// and it is then neither counted nor waited on as required, red or pending.
+func TestAdvisory(t *testing.T) {
+	runs := []CheckRun{{Name: "test (windows-latest)", State: CheckFail}, {Name: "test (ubuntu-latest)", State: CheckPass}, {Name: "lint-windows", State: CheckPass}}
+	req := []string{"test (windows-latest)", "test (ubuntu-latest)"}
+	adv := []string{"test (windows-latest)"}
+	if kept, r, w := Advisory(Project{}, runs, req, adv); len(kept) != 3 || len(r) != 2 || w != nil {
+		t.Fatalf("not self: %v %v %v", kept, r, w)
+	}
+	if kept, r, w := Advisory(Project{Self: true}, runs, req, nil); len(kept) != 3 || len(r) != 2 || w != nil {
+		t.Fatalf("no list: %v %v %v", kept, r, w)
+	}
+	kept, r, w := Advisory(Project{Self: true}, runs, req, adv)
+	if len(kept) != 2 || !slices.Equal(r, []string{"test (ubuntu-latest)"}) || !slices.Equal(w, []string{"test (windows-latest)"}) {
+		t.Fatalf("self: %v %v %v", kept, r, w)
+	}
+	if st, _ := ChecksState(kept, r); st != CheckPass {
+		t.Fatalf("state %s", st)
+	}
+	runs[2].State = CheckFail // named like Windows, but not on the list
+	if _, _, w := Advisory(Project{Self: true}, runs, req, adv); !slices.Equal(w, []string{"test (windows-latest)"}) {
+		t.Fatalf("an unlisted check was set aside: %v", w)
+	}
+	runs[0].State, runs[2].State = CheckPending, CheckPass
+	kept, r, w = Advisory(Project{Self: true}, runs, req, adv)
+	if st, _ := ChecksState(kept, r); st != CheckPass || w != nil {
+		t.Fatalf("a pending advisory check held the merge: %s %v", st, w)
+	}
+}
+
 func TestRedKeys(t *testing.T) {
 	out := "--- FAIL: TestClock (0.00s)\n    a_test.go:3: late\nFAIL\nFAIL\tx/a\t0.004s\nok  \tx/ok\t0.1s\n" +
 		"PASS\nFAIL\tx/exit\t0.002s\n" +
@@ -1164,7 +1332,67 @@ func TestRedKeys(t *testing.T) {
 	if got := RedKeys("FAILED tests/a.py::test_x\n"); len(got) != 1 || got[0] != "tests/a.py::test_x" {
 		t.Fatalf("pytest: %q", got)
 	}
+	vet := "# x/e\n# [x/e]\nvet: e/a_test.go:225:42: not enough arguments in call to f\n\thave (string)\n\twant (string, bool)\n"
+	if got := RedKeys(vet); got != nil {
+		t.Fatalf("vet's errors name no test: %q", got)
+	}
+	if got := StopKeys(vet); len(got) != 1 || got[0] != "e/a_test.go: not enough arguments in call to f" {
+		t.Fatalf("vet: %q", got)
+	}
+	if moved := StopKeys(strings.Replace(vet, ":225:42:", ":230:9:", 1)); !slices.Equal(moved, StopKeys(vet)) {
+		t.Fatalf("the same vet error a few lines down: %q", moved)
+	}
+	for _, c := range []struct{ name, out, moved, want string }{
+		{"javac", "src/A.java:12: error: cannot find symbol\n  symbol: f\n1 error\n", ":12:", "src/A.java: error: cannot find symbol"},
+		{"tsc", "src/a.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.\n", "(12,5)", "src/a.ts: error TS2322: Type 'string' is not assignable to type 'number'."},
+		{"tsc pretty", "src/a.tsx:12:5 - error TS2304: Cannot find name 'x'.\n\n12 x\n", ":12:5", "src/a.tsx: error TS2304: Cannot find name 'x'."},
+		{"rustc", "error[E0308]: mismatched types\n  --> src/main.rs:12:18\n   |\nerror: aborting due to 1 previous error\nerror: could not compile `x`\n", ":12:", "src/main.rs: error[E0308]: mismatched types"},
+		{"python", "Traceback (most recent call last):\n  File \"/x/run.py\", line 1, in <module>\n  File \"/x/a.py\", line 12\n    def f(\n         ^\nSyntaxError: '(' was never closed\n", "line 12", "/x/a.py: SyntaxError: '(' was never closed"},
+	} {
+		got := StopKeys(c.out)
+		if len(got) != 1 || got[0] != c.want {
+			t.Fatalf("%s: %q", c.name, got)
+		}
+		if moved := StopKeys(strings.Replace(c.out, c.moved, strings.ReplaceAll(c.moved, "12", "30"), 1)); !slices.Equal(moved, got) {
+			t.Fatalf("%s a few lines down: %q", c.name, moved)
+		}
+	}
 	if got := RedKeys("vet: something\n"); got != nil {
 		t.Fatalf("nothing named: %q", got)
+	}
+	if got := RedKeys("--- FAIL: TestX (0.00s)\n    # a log line\nFAIL\nFAIL\tx/a\t0.01s\n"); !slices.Equal(got, []string{"x/a TestX"}) {
+		t.Fatalf("a test's log line starting '# ' isn't a build header: %q", got)
+	}
+}
+
+// go1.27.3's own output, run in each package's directory ("go test", no
+// package list), which prints "exit status 1" after every failing package.
+func TestRedKeysExitStatus(t *testing.T) {
+	// a: TestX fails, so testing prints FAIL and exits 1.
+	ordinary := "--- FAIL: TestX (0.00s)\n    a_test.go:3: bad\nFAIL\nexit status 1\nFAIL\tx/m/a\t0.001s\n"
+	if got := RedKeys(ordinary); !slices.Equal(got, []string{"x/m/a TestX"}) {
+		t.Fatalf("an ordinary failure's exit status counted as unnamed: %q", got)
+	}
+	// b: TestY fails, then TestZ calls os.Exit(1) before testing prints FAIL.
+	exited := "--- FAIL: TestY (0.00s)\n    b_test.go:3: bad\nexit status 1\nFAIL\tx/m/b\t0.001s\n"
+	if got := RedKeys(exited); !slices.Equal(got, []string{"x/m/b TestY", "x/m/b !"}) {
+		t.Fatalf("an exit beside a named failure went unnamed: %q", got)
+	}
+}
+
+// SecurityWhere names why a change needs a security read: the list, the
+// project's root class, or, for a mixed change, both with the unlisted files.
+func TestSecurityWhere(t *testing.T) {
+	for _, c := range []struct {
+		ch   Change
+		want string
+	}{
+		{Change{Security: []string{"tests/a.go"}}, "on " + SecurityList},
+		{Change{Security: []string{".github/x.yml"}, Unlisted: []string{".github/x.yml"}}, "in the project's root class (which runs with elevated rights)"},
+		{Change{Security: []string{"tests/a.go", ".github/x.yml"}, Unlisted: []string{".github/x.yml"}}, "on " + SecurityList + " or in the project's root class (.github/x.yml)"},
+	} {
+		if got := c.ch.SecurityWhere(); got != c.want {
+			t.Errorf("%v: %q, want %q", c.ch.Security, got, c.want)
+		}
 	}
 }

@@ -49,27 +49,48 @@ func TestParseResults(t *testing.T) {
 }
 
 // The output ends with the number alone on its line, which is what improve
-// reads, and one more function right outweighs a minute saved.
+// reads; landing the work outweighs doing it faster, and the loop's speed
+// counts the same for the same share saved, however fast the Hive already is.
 func TestReportFormat(t *testing.T) {
-	b := Bench{Score: 6, AsksFinished: 4, Asks: 4, Seconds: 60}
-	out := Report(b, nil, E2E{Run: 40, Passed: 39, Flaky: 1}, []string{"TestStalls"})
+	full := func(seq, par float64) []Run {
+		var runs []Run
+		for range benchReps {
+			runs = append(runs, Run{Bench: Bench{Score: 6, AsksFinished: 4, Asks: 4, Seconds: seq}}, Run{AtOnce: true, Bench: Bench{Score: 6, AsksFinished: 4, Asks: 4, Seconds: par}})
+		}
+		return runs
+	}
+	out := Report(full(20, 10), E2E{Run: 40, Passed: 39, Flaky: 1}, []string{"TestStalls"})
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	last := lines[len(lines)-1]
 	v, err := strconv.ParseFloat(last, 64)
 	if err != nil || strings.TrimSpace(last) != last {
 		t.Fatalf("last line %q is not a number alone: %v", last, err)
 	}
-	if want := 100*39.0/40 + 100 - 10; math.Abs(v-want) > 0.005 {
+	if want := 100*39.0/40 + 100 + 15; math.Abs(v-want) > 0.005 { // 90s in all is one halving of refSeconds
 		t.Fatalf("score %g, want %g", v, want)
 	}
-	if !strings.Contains(out, "39/40 passed (1 only on a second run); failed: TestStalls") {
-		t.Fatalf("report does not say what made it:\n%s", out)
+	for _, want := range []string{"one by one: 6/6 functions right, 4/4 asks finished, 20.0s", "all at once: 6/6", "39/40 passed (1 only on a second run); failed: TestStalls"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("report does not say %q:\n%s", want, out)
+		}
 	}
-	worse := Score(Bench{Score: 5, AsksFinished: 3, Seconds: 0}, E2E{Run: 40, Passed: 40})
-	if worse >= Score(Bench{Score: 6, AsksFinished: 4, Seconds: 60}, E2E{Run: 40, Passed: 40}) {
-		t.Fatal("a minute saved outweighed a function landed")
+	e := E2E{Run: 40, Passed: 40}
+	if d := Score(full(8.7, 8.7), e) - Score(full(10, 10), e); d < 3 || d > 3.1 {
+		t.Fatalf("13%% faster is %.2f points, want about the tolerance (3)", d)
 	}
-	if out := Report(Bench{Seconds: 900}, errors.New("no BENCH line"), E2E{}, nil); !strings.HasSuffix(out, "\n-150.00\n") {
+	if a, b := Score(full(1, 1), e)-Score(full(2, 2), e), Score(full(20, 20), e)-Score(full(40, 40), e); math.Abs(a-b) > 1e-9 {
+		t.Fatalf("a halving is worth %g fast and %g slow", a, b)
+	}
+	missed := full(1, 1)
+	missed[1].Score, missed[1].AsksFinished = 5, 3
+	if Score(missed, e) >= Score(full(benchTimeout.Seconds(), benchTimeout.Seconds()), e) {
+		t.Fatal("a fast run that missed an ask outscored a slow one that landed them all")
+	}
+	if !strings.Contains(Report(missed, e, nil), "every run is charged its bound (120s)") {
+		t.Fatal("a missed ask's charge isn't reported")
+	}
+	broken := []Run{{Err: errors.New("no BENCH line")}, {AtOnce: true, Err: errors.New("no BENCH line")}, {Err: errors.New("no BENCH line")}, {AtOnce: true, Err: errors.New("no BENCH line")}}
+	if out := Report(broken, E2E{}, nil); !strings.Contains(out, "all at once: no BENCH line; counted as nothing landed") || !strings.HasSuffix(out, "\n-21.23\n") {
 		t.Fatalf("a benchmark that failed must still give a number:\n%s", out)
 	}
 }
@@ -104,5 +125,21 @@ func TestMissingToolCantRun(t *testing.T) {
 	code := cmd.ProcessState.ExitCode()
 	if tool := core.MissingTool(code, string(out)); tool != "python3" {
 		t.Fatalf("exit %d, %q: improve would not read python3 as missing", code, out)
+	}
+}
+
+// A test the parent declared and the candidate dropped counts as failed, so
+// deleting a failing test can't raise the pass rate; a skipped one is left out.
+func TestTally(t *testing.T) {
+	before := Declared("func TestMain(m *testing.M) {\nfunc TestA(t *testing.T) {\nfunc TestBenchmark(t *testing.T) {\nfunc TestGone(t *testing.T) {\nfunc TestC(t *testing.T) {\n")
+	if !slices.Equal(before, []string{"TestA", "TestGone", "TestC"}) {
+		t.Fatalf("declared %v", before)
+	}
+	e, failed := Tally([]string{"TestA", "TestC", "TestNew", "TestQuiet"}, before, map[string]string{"TestA": "pass", "TestC": "skip", "TestNew": "pass"})
+	if e != (E2E{Run: 4, Passed: 2}) || !slices.Equal(failed, []string{"TestGone (deleted)", "TestQuiet"}) {
+		t.Fatalf("got %+v, %v", e, failed)
+	}
+	if e, _ := Tally([]string{"TestA"}, nil, map[string]string{"TestA": "pass"}); e != (E2E{Run: 1, Passed: 1}) {
+		t.Fatalf("with no parent: %+v", e)
 	}
 }

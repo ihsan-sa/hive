@@ -1,11 +1,13 @@
 package gate
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -240,14 +242,20 @@ func TestCandidateIsMergedWithBase(t *testing.T) {
 	write("p/p_test.go", "package p\n\nimport \"testing\"\n\nfunc TestMeter(t *testing.T) {}\n")
 	write("NOTES.md", "main's\n")
 	fixed := commit("main fixes the test")
+	write("LATER.md", "on top of main\n")
+	ahead := commit("already holds main")
+	git("checkout", "-q", fixed)
 
 	dir := t.TempDir()
 	lessons := filepath.Join(dir, "lessons.md")
 	pass := func(*Config, *Child) Result { return Result{Pass: true} }
+	var logged []string
 	run := func(name, head string) Report {
 		t.Helper()
+		logged = nil
 		rep, err := Run(Config{Repo: repo, Head: head, Base: fixed, Sandbox: "bare", AllowBare: true, Out: filepath.Join(dir, name, "run"), Lessons: lessons,
-			Probes: []string{"pass"}, Probe: map[string]ProbeFunc{"pass": pass}, Options: Options{AllowTie: true}})
+			Probes: []string{"pass"}, Probe: map[string]ProbeFunc{"pass": pass}, Options: Options{AllowTie: true},
+			Log: func(s string) { logged = append(logged, s) }})
 		t.Logf("%s: keep=%v cant_run=%v err=%v reason=%q", name, rep.Verdict.Keep, rep.CantRun, err, rep.Verdict.Reason)
 		return rep
 	}
@@ -268,7 +276,34 @@ func TestCandidateIsMergedWithBase(t *testing.T) {
 	if !rep.CantRun || rep.Verdict.Keep || len(rep.Conflicts) != 1 || rep.Conflicts[0] != "NOTES.md" || !strings.Contains(rep.Verdict.Reason, "NOTES.md") {
 		t.Errorf("a branch that conflicts with the base: cant_run=%v conflicts=%v %+v", rep.CantRun, rep.Conflicts, rep.Verdict)
 	}
+	if rep.Merged != "" {
+		t.Errorf("a branch that never merged reports merged %s", short(rep.Merged))
+	}
+
+	// An abbreviated head that already holds the base: no merge, and none logged.
+	rep = run("ahead", ahead[:9])
+	if rep.Merged != ahead || strings.Contains(strings.Join(logged, "\n"), "merged in") {
+		t.Errorf("a head holding the base: merged %s, log:\n%s", short(rep.Merged), strings.Join(logged, "\n"))
+	}
 	if raw, err := os.ReadFile(lessons); err == nil {
 		t.Fatalf("a merge conflict or a keep wrote a lesson: %q", raw)
+	}
+}
+
+// Gates that roll back at once into a fresh lessons.md write its header once.
+func TestNoteLessonHeaderOnce(t *testing.T) {
+	lessons := filepath.Join(t.TempDir(), ".hive", "lessons.md")
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			noteLesson(Config{Lessons: lessons}, Report{ID: fmt.Sprintf("gate-%d", i), Head: "abc", Verdict: Verdict{Reason: "nothing moved"}})
+		}()
+	}
+	wg.Wait()
+	raw, _ := os.ReadFile(lessons)
+	if n, m := strings.Count(string(raw), "# Lessons"), strings.Count(string(raw), "- The gate rolled back"); n != 1 || m != 8 || !strings.HasPrefix(string(raw), lessonsHeader) {
+		t.Fatalf("%d headers, %d lessons:\n%s", n, m, raw)
 	}
 }

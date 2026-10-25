@@ -15,6 +15,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
 // The test org a self project's gate makes its fresh repositories in, when
@@ -30,12 +31,15 @@ var gateExe = os.Executable
 
 // reachOK caches CheckReach on the children's token until ttl: an hour
 // for a verdict, so a refusal isn't asked of GitHub on every run, and five
-// minutes when the check couldn't learn the answer (a rate limit).
+// minutes when the check couldn't learn the answer (a rate limit). It is
+// kept for one pair of tokens: a token changed on disk is checked afresh.
+// The gate is told a pass (--reach-checked), so it doesn't probe again.
 var reachOK struct {
 	sync.Mutex
-	at  time.Time
-	ttl time.Duration
-	err error
+	at     time.Time
+	ttl    time.Duration
+	tokens string
+	err    error
 }
 
 // runGate runs the recursive gate for the work module: `hive gate` from the
@@ -56,13 +60,16 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 		if err := os.MkdirAll(j.Out, 0o755); err != nil {
 			return core.GateResult{Outcome: core.GateCantRun, Reason: err.Error()}
 		}
-		args := []string{"gate", "--repo", j.Repo, "--head", j.Head, "--base", j.Main, "--out", j.Out, "--lessons", j.Lessons, "--timeout", j.Timeout.String()}
+		args := []string{"gate", "--repo", j.Repo, "--head", j.Head, "--base", j.Main, "--out", j.Out, "--lessons", j.Lessons, "--judged", "--timeout", j.Timeout.String()}
 		if j.AllowTie {
 			args = append(args, "--allow-tie")
 		}
 		org, note := orgArgs(j)
 		args = append(args, org...)
-		cmd := exec.CommandContext(ctx, exe, args...)
+		// The gate and all it starts (builds, child Hives, the e2e suite) run
+		// under every lead's priority, as a check does.
+		argv := sandbox.Niced(append([]string{exe}, args...), core.CheckNice)
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = j.Out
 		cmd.WaitDelay = time.Minute
 		dieWithDaemon(cmd)
@@ -96,9 +103,10 @@ func orgArgs(j work.GateJob) ([]string, string) {
 		return local, fmt.Sprintf("The gate ran on a local org: %s and %s hold the same token, and the children's token must not be the one that makes and deletes repositories.", orgFile, gateChildFile)
 	}
 	reachOK.Lock()
-	if reachOK.at.IsZero() || time.Since(reachOK.at) > reachOK.ttl {
+	tokens := orgTok + "\x00" + childTok + "\x00" + j.Project.Repo
+	if reachOK.at.IsZero() || time.Since(reachOK.at) > reachOK.ttl || reachOK.tokens != tokens {
 		reachOK.err = gate.CheckReach(gate.GitHub{Owner: gateOrg, Token: orgTok}, childTok, j.Project.Repo)
-		reachOK.at, reachOK.ttl = time.Now(), time.Hour
+		reachOK.at, reachOK.ttl, reachOK.tokens = time.Now(), time.Hour, tokens
 		if errors.Is(reachOK.err, gate.ErrReachUnknown) {
 			reachOK.ttl = 5 * time.Minute
 		}
@@ -108,7 +116,7 @@ func orgArgs(j work.GateJob) ([]string, string) {
 	if err != nil {
 		return local, fmt.Sprintf("The gate ran on a local org instead of %s: %v", gateOrg, err)
 	}
-	return []string{"--org", gateOrg, "--org-token-file", orgFile, "--child-token-file", gateChildFile}, ""
+	return []string{"--org", gateOrg, "--org-token-file", orgFile, "--child-token-file", gateChildFile, "--reach-checked"}, ""
 }
 
 func readToken(path string) string {
@@ -142,7 +150,7 @@ func readReport(j work.GateJob, runErr, ctxErr error) core.GateResult {
 		g.Reason = "the gate left no report: " + fmt.Sprint(runErr)
 		return g
 	}
-	g.Reason, g.Sandbox, g.Transient, g.Alone, g.Conflicts = rep.Verdict.Reason, rep.Sandbox, rep.Transient, rep.Alone, rep.Conflicts
+	g.Reason, g.Sandbox, g.Transient, g.Alone, g.Conflicts, g.Measured, g.MainFails = rep.Verdict.Reason, rep.Sandbox, rep.Transient, rep.Alone, rep.Conflicts, rep.Measured && !rep.CantRun, rep.BaseFails
 	if g.Reason == "" {
 		g.Reason = rep.Error
 	}

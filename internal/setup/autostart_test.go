@@ -139,3 +139,40 @@ func TestUnitReplacesALoginAutostart(t *testing.T) {
 		t.Fatal("a unit serving another workspace was started")
 	}
 }
+
+// The unit serves a workspace however its root is written (a trailing slash,
+// a symlink), and a daemon starting beside it removes a desktop autostart
+// left from an install that had both.
+func TestUnitServesItsRootAndDropsADoubledAutostart(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd is Linux's")
+	}
+	home, root := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	link := filepath.Join(t.TempDir(), "ws")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Dir(userUnit()), 0o755)
+	desk := filepath.Join(home, ".config", "autostart", "hive.desktop")
+	os.MkdirAll(filepath.Dir(desk), 0o755)
+	for _, written := range []string{root, root + "/", link, `"` + root + `"`} {
+		os.WriteFile(userUnit(), []byte("[Service]\nEnvironment=HIVE_HOME="+written+"\nExecStart=/x/hive daemon\n"), 0o644)
+		if !unitServes(root) {
+			t.Errorf("a unit naming %s doesn't serve %s", written, root)
+		}
+	}
+	if unitServes(t.TempDir()) {
+		t.Error("the unit serves another workspace")
+	}
+	os.WriteFile(desk, []byte("[Desktop Entry]\n"), 0o644)
+	if DropDoubledAutostart(t.TempDir()) {
+		t.Fatal("another workspace's start removed the autostart")
+	}
+	if !DropDoubledAutostart(root) {
+		t.Fatal("the doubled autostart stayed")
+	}
+	if _, err := os.Stat(desk); err == nil {
+		t.Error("hive.desktop is still there")
+	}
+}

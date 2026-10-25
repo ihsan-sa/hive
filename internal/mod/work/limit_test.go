@@ -1,6 +1,7 @@
 package work
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -186,5 +187,95 @@ func TestChecksRefusedStopsComeBack(t *testing.T) {
 	}
 	if o, _ := m.Get("t3"); o.Stage != StageStopped {
 		t.Fatal("a refusal quoted in another reason brought the task back")
+	}
+}
+
+// A call killed by its timeout on a loaded machine waits without counting a
+// failure, and a task stopped on one before (as 261024-154424-cb860e9068 was)
+// comes back once calls have stayed clear of it for a while.
+func TestKilledCallWaitsAndStopsComeBack(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	for range killCap - 1 {
+		m.settle(task, errors.New("gh pr view 430: timed out after 2m0s, signal: killed"))
+	}
+	if task.Stage != StageLanding || task.Failures != 0 || m.due(*task) || !logged(task, "the machine is slow") {
+		t.Fatalf("stage %q, failures %d, due %v, log %v", task.Stage, task.Failures, m.due(*task), task.Log)
+	}
+	if m.Offline() != "" {
+		t.Fatalf("a slow machine read as GitHub offline: %q", m.Offline())
+	}
+
+	m.giveUp(task, "gave up after repeated errors: gh pr view 430: timed out after 2m0s, signal: killed")
+	held := &Task{ID: "t2", Project: "p", Kind: "work", Stage: StageStopped, ByPerson: true, Reason: "gave up after repeated errors: gh pr view 430: timed out after 2m0s, signal: killed"}
+	m.save(held, "stopped")
+	planted := &Task{ID: "t3", Project: "p", Kind: "work", Stage: StageStopped, Reason: "stopped after 3 rounds of fixes: timed out after 2m0s, signal: killed"}
+	m.save(planted, "stopped")
+	m.revive()
+	if got, _ := m.Get(task.ID); got.Stage != StageStopped {
+		t.Fatalf("brought back while calls are still killed: %q", got.Stage)
+	}
+	m.slow = time.Now().Add(-slowWait - time.Second)
+	m.revive()
+	got, _ := m.Get(task.ID)
+	if got.Stage != StageLanding || got.Failures != 0 || got.Reason != "" || !logged(&got, "killed by its timeout") {
+		t.Fatalf("not brought back: %+v", got)
+	}
+	if h, _ := m.Get("t2"); h.Stage != StageStopped {
+		t.Fatal("a task the person stopped came back")
+	}
+	if o, _ := m.Get("t3"); o.Stage != StageStopped {
+		t.Fatal("a kill quoted in another reason brought the task back")
+	}
+}
+
+// A step killed by its timeout every time stops after killCap of them in a
+// row, says why, and stays stopped once the machine is quiet; a step that
+// gets through starts the count again.
+func TestKilledEveryTimeStops(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	killed := errors.New("git push: timed out after 5m0s, signal: killed")
+	m.save(task, "landing")
+	// Each step settles on a fresh copy of the task as kept, as a tick does.
+	settle := func(err error) {
+		cp, _ := m.Get(task.ID)
+		m.settle(&cp, err)
+		*task, _ = m.Get(task.ID)
+	}
+	for range killCap - 1 {
+		settle(killed)
+	}
+	settle(nil)
+	if task.Kills != 0 {
+		t.Fatalf("a step that got through left %d kills on the task as kept", task.Kills)
+	}
+	for range killCap - 1 {
+		settle(killed)
+	}
+	if task.Stage != StageLanding {
+		t.Fatalf("stopped though a step got through: %q %q", task.Stage, task.Reason)
+	}
+	settle(killed)
+	if task.Stage != StageStopped || !strings.Contains(task.Reason, "in a row killed by their timeout") || task.Failures != 0 {
+		t.Fatalf("stage %q, reason %q, failures %d", task.Stage, task.Reason, task.Failures)
+	}
+	m.slow = time.Now().Add(-slowWait - time.Second)
+	m.revive()
+	if got, _ := m.Get(task.ID); got.Stage != StageStopped {
+		t.Fatalf("a task stuck on one call came back: %q", got.Stage)
+	}
+}
+
+// Only a kill by the Hive's own timeout reads as a slow machine: a kill with
+// no timeout behind it (the kernel short of memory) or a test's own timeout
+// panic is the step's to answer for.
+func TestOnlyTimeoutKillsAreSlow(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	m.settle(task, errors.New("go test: signal: killed"))
+	if task.Failures != 1 || task.Kills != 0 {
+		t.Fatalf("an OOM kill: failures %d, kills %d", task.Failures, task.Kills)
+	}
+	m.settle(task, errors.New("panic: test timed out after 2s\nFAIL p 2.01s"))
+	if task.Failures != 2 || task.Kills != 0 {
+		t.Fatalf("a test's timeout: failures %d, kills %d", task.Failures, task.Kills)
 	}
 }

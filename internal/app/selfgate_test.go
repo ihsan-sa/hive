@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
 // The daemon's gate runner reads a keep only from a gate that said keep by
@@ -31,7 +34,7 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 	cfg.Harness = "claude"
 	ws.SaveConfig(cfg)
 	script := filepath.Join(dir, "hive-gate.sh")
-	os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" > \"$GATE_ARGS\"\n[ -n \"$GATE_REPORT\" ] && cp \"$GATE_REPORT\" report.json\nexit $GATE_EXIT\n"), 0o755)
+	os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" > \"$GATE_ARGS\"\nps -o nice= -p $$ > \"$GATE_ARGS.nice\" 2>/dev/null\n[ -n \"$GATE_REPORT\" ] && cp \"$GATE_REPORT\" report.json\nexit $GATE_EXIT\n"), 0o755)
 	old, oldChild := gateExe, gateChildFile
 	gateExe = func() (string, error) { return script, nil }
 	gateChildFile = filepath.Join(dir, "no-such.token")
@@ -39,6 +42,8 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 	args := filepath.Join(dir, "args")
 	t.Setenv("GATE_ARGS", args)
 	run := runGate(ws)
+	// The test process stands for the daemon: the gate must run under it.
+	own, nice := ownNice(t)
 	for i, tc := range []struct {
 		exit         string
 		rep          *gate.Report
@@ -47,7 +52,8 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 	}{
 		{"0", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true, Reason: "better"}}, false, core.GateKeep, "better"},
 		{"0", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true, Reason: "a tie"}}, true, core.GateKeep, "a tie"},
-		{"1", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Reason: "not better"}}, false, core.GateRollback, "not better"},
+		{"1", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Measured: true, Verdict: gate.Verdict{Reason: "not better"}}, false, core.GateRollback, "not better"},
+		{"1", &gate.Report{Head: "h", Base: "m", Sandbox: "bwrap", Error: "x", Verdict: gate.Verdict{Reason: "the candidate fails its own vet or short tests"}}, false, core.GateRollback, "own vet"},
 		{"3", &gate.Report{Head: "h", Base: "m", CantRun: true, Verdict: gate.Verdict{Reason: "the gate could not run: no bubblewrap"}}, false, core.GateCantRun, "no bubblewrap"},
 		{"0", &gate.Report{Head: "h", Base: "m", Sandbox: "bare", Verdict: gate.Verdict{Keep: true}}, false, core.GateCantRun, "sandbox \"bare\""},
 		{"0", &gate.Report{Head: "other", Base: "m", Sandbox: "bwrap", Verdict: gate.Verdict{Keep: true}}, false, core.GateCantRun, "not this head"},
@@ -64,19 +70,79 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 		j := work.GateJob{Project: core.Project{Name: "hive", Repo: "ihsan-sa/hive", Self: true}, Repo: "/repo", Head: "h", Main: "m", AllowTie: tc.tie,
 			Out: filepath.Join(dir, "runs", string(rune('a'+i))), Lessons: filepath.Join(dir, "lessons.md"), Timeout: time.Hour}
 		g := run(context.Background(), j)
-		if g.Outcome != tc.want || !strings.Contains(g.Reason, tc.reason) {
+		if g.Outcome != tc.want || !strings.Contains(g.Reason, tc.reason) || g.Measured != (tc.rep != nil && tc.rep.Measured) {
 			t.Fatalf("case %d: %s %q, want %s with %q", i, g.Outcome, g.Reason, tc.want, tc.reason)
 		}
 		raw, _ := os.ReadFile(args)
 		a := string(raw)
-		if !strings.Contains(a, "--head h --base m") || !strings.Contains(a, "--local-org") || strings.Contains(a, "--allow-bare") || strings.Contains(a, "--allow-tie") != tc.tie {
+		if !strings.Contains(a, "--head h --base m") || !strings.Contains(a, "--local-org") || !strings.Contains(a, "--judged") || strings.Contains(a, "--allow-bare") || strings.Contains(a, "--allow-tie") != tc.tie {
 			t.Fatalf("case %d: gate called with %q", i, a)
 		}
+		if nice {
+			checkGateNice(t, strconv.Itoa(i), args+".nice", own)
+		}
 	}
+	// Under a daemon already niced (the Hive runs its own test checks at
+	// CheckNice, and the gate's child runs too) the gate goes lower still,
+	// to the kernel's cap. Linux nices a thread, not a process, and Go's
+	// goroutines move between threads, so the test can't nice itself in
+	// place: it runs itself once more as a process under nice -n CheckNice,
+	// where own reads CheckNice and the gate must read 19.
+	// At the cap already (19: the Hive's own check inside a niced gate) the
+	// child would read the same level, so it is skipped.
+	if nice && runtime.GOOS == "linux" && own < 19 && os.Getenv("HIVE_TEST_NICED") == "" {
+		cmd := exec.Command("nice", "-n", strconv.Itoa(core.CheckNice), os.Args[0], "-test.run=^TestRunGateReadsTheVerdict$", "-test.count=1")
+		cmd.Env = append(os.Environ(), "HIVE_TEST_NICED=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("this test under nice -n %d: %v\n%s", core.CheckNice, err, out)
+		}
+	}
+
 	cfg.Harness = "fake"
 	ws.SaveConfig(cfg)
 	if g := run(context.Background(), work.GateJob{Out: filepath.Join(dir, "fake")}); g.Outcome != core.GateKeep || g.Sandbox != "fake" {
 		t.Fatalf("the fake harness: %+v", g)
+	}
+}
+
+// ownNice is the nice level the test process runs at, read as the gate's
+// stand-in reads its own, and whether there is a nice here to check at all.
+func ownNice(t *testing.T) (int, bool) {
+	t.Helper()
+	if _, err := exec.LookPath("nice"); err != nil {
+		return 0, false
+	}
+	raw, err := exec.Command("ps", "-o", "nice=", "-p", strconv.Itoa(os.Getpid())).Output()
+	if err != nil {
+		t.Fatalf("reading the test process's own nice level: %v", err)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("the test process's own nice level read as %q", raw)
+	}
+	return n, true
+}
+
+// checkGateNice reads the level the gate's stand-in ran at from path and
+// holds it under the daemon's (the test process's) own: `nice -n` adds
+// CheckNice to it, capped at 19 (sandbox.Lowered). macOS reports a level
+// on its own scale (15 asked read back as 5 on the forge's runner), so
+// there it is only held under the daemon's own.
+func checkGateNice(t *testing.T, label, path string, own int) {
+	t.Helper()
+	raw, _ := os.ReadFile(path)
+	got, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("case %s: the gate's nice read as %q", label, raw)
+	}
+	if runtime.GOOS == "darwin" {
+		if got <= own {
+			t.Fatalf("case %s: the gate ran at nice %d, the daemon's own is %d; want it under", label, got, own)
+		}
+		return
+	}
+	if want := sandbox.Lowered(own, core.CheckNice); got != want {
+		t.Fatalf("case %s: the gate ran at nice %d under a daemon at %d, want %d", label, got, own, want)
 	}
 }
 

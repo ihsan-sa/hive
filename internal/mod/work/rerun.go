@@ -11,8 +11,10 @@ import (
 )
 
 // rerunsPerHead caps the re-runs of the forge's failed checks on one head, so
-// a check that fails for real can't be run again and again in place of a fix.
-const rerunsPerHead = 2
+// a check that fails for real can't be run again and again in place of a fix:
+// two asked for (rerun-checks) and the one the Hive makes itself when main has
+// no answer for the red (forgeChecks), which mustn't spend a worker's.
+const rerunsPerHead = 3
 
 // rerunGrace is how long after a re-run a failure still read on that head
 // waits instead of going back: the forge may not list the new attempt yet.
@@ -36,10 +38,7 @@ func (m *Module) opRerunChecks(r core.Run, args json.RawMessage) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("no task %q", a.Task)
 	}
-	if r.Role == "worker" && t.Worker != r.ID {
-		return nil, fmt.Errorf("task %s isn't yours: a worker re-runs only its own task's checks", t.ID)
-	}
-	if err := m.C.Runs.Walled(r, t.Project); err != nil {
+	if err := m.reach(r, t.Project); err != nil {
 		return nil, err
 	}
 	note, err := m.RerunChecks(t.ID, r.ID)
@@ -94,14 +93,7 @@ func (m *Module) RerunChecks(id, by string) (string, error) {
 	if n == 0 {
 		return "", fmt.Errorf("the forge has no finished failed run on %s to re-run: one may still be going, or never started (%s), which a re-run doesn't fix; a startup failure is often the workflow file itself, and one awaiting approval is the repo owner's to approve", core.Short(t.SHA), core.CheckNames(failed))
 	}
-	if t.Reruns == nil {
-		t.Reruns = map[string]int{}
-	}
-	t.Reruns[t.SHA]++
-	t.RerunAt = time.Now().UTC()
-	// A wait on main belongs to one run of the checks: the re-run's red
-	// starts its own, not one already spent.
-	t.MainWait, t.MainWaitOn = time.Time{}, ""
+	m.retried(&t, failed, m.keysOf(p.Repo))
 	note := fmt.Sprintf("re-ran the forge's failed checks on %s (%s) for %s, %d of %d on this head", core.Short(t.SHA), core.CheckNames(failed), by, t.Reruns[t.SHA], rerunsPerHead)
 	if t.Stage == StageWorking && t.Round > 0 && strings.HasPrefix(t.Findings, forgeFailed+core.Short(t.SHA)) {
 		t.Round--
@@ -113,8 +105,11 @@ func (m *Module) RerunChecks(id, by string) (string, error) {
 
 // claim marks a task busy for a change from outside its step, waiting for a
 // running step to end, so neither saves over the other.
-func (m *Module) claim(id string) bool {
-	for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+func (m *Module) claim(id string) bool { return m.claimWithin(id, 30*time.Second) }
+
+// claimWithin is claim, giving up after d.
+func (m *Module) claimWithin(id string, d time.Duration) bool {
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
 		m.mu.Lock()
 		if !m.busy[id] {
 			m.busy[id] = true

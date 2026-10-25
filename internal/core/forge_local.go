@@ -32,6 +32,7 @@ type localState struct {
 	Checks   map[string][]CheckRun    `json:"checks,omitempty"` // repo@sha
 	Jobs     map[string][]WorkflowJob `json:"jobs,omitempty"`   // repo#run -> its jobs
 	Logs     map[string]string        `json:"logs,omitempty"`   // repo url -> a check's log
+	Steps    map[string][]JobStep     `json:"steps,omitempty"`  // repo url -> a check's steps
 	Reruns   map[string]int           `json:"reruns,omitempty"` // repo@sha -> re-runs of its failed checks asked
 	Public   map[string]bool          `json:"public,omitempty"` // repos made public
 }
@@ -208,6 +209,20 @@ func (l *Local) refresh(repo string, p *localPR) {
 	}
 	p.HeadSHA = l.head(repo, p.Head)
 	dir, base := l.RepoPath(repo), "refs/heads/"+cmp.Or(p.Base, "main")
+	// MergePR pushes its squash before it saves the PR as merged: a process
+	// killed in between left its own merge on main under an open PR, which
+	// GitHub, merging on its side, never shows. That squash is its merge. It
+	// is found by the trailer only MergePR writes, not the " (#N)" subject,
+	// which a repo cloned from GitHub already has for numbers the local forge
+	// hands out again. It is one git log over the last 200 commits per read of
+	// an open PR: fine for tests and dev runs; cache it per base sha if the
+	// local forge ever runs in a heavier loop.
+	if out, err := Git(dir, "log", "--first-parent", "-n", "200", "-F", "--grep="+localMergeTrailer(p.Number), "--format=%H", base); err == nil {
+		if f := strings.Fields(out); len(f) > 0 {
+			p.State, p.MergeSHA = "MERGED", f[0]
+			return
+		}
+	}
 	p.Mergeable, p.MergeState = "MERGEABLE", "CLEAN"
 	// merge-tree exits 1 on a conflict; any other failure (an older git) leaves
 	// it to the merge itself to refuse.
@@ -303,6 +318,18 @@ func (l *Local) ReadyPR(repo string, number int, sha string) error {
 	return ErrNotFound
 }
 
+// LocalMergeMessage is the local forge's squash message for PR number at
+// head: GitHub's "subject (#N)", and a trailer that marks it as this forge's
+// own merge.
+func LocalMergeMessage(subject string, number int, head string) string {
+	return fmt.Sprintf("%s (#%d)\n\n%s %s", subject, number, localMergeTrailer(number), head)
+}
+
+// localMergeTrailer ends in a space so #1 doesn't match #12.
+func localMergeTrailer(number int) string {
+	return fmt.Sprintf("Hive-Local-Merge: #%d ", number)
+}
+
 // MergePR squashes the PR's head onto main, refusing if the head moved.
 func (l *Local) MergePR(repo string, number int, sha, subject string) (string, error) {
 	l.mu.Lock()
@@ -313,13 +340,14 @@ func (l *Local) MergePR(repo string, number int, sha, subject string) (string, e
 		if p.Number != number {
 			continue
 		}
+		l.refresh(repo, p)
 		if p.State == "MERGED" {
+			l.save(s)
 			return p.MergeSHA, nil
 		}
 		if p.State == "CLOSED" {
 			return "", fmt.Errorf("PR #%d was closed without merging", number)
 		}
-		l.refresh(repo, p)
 		if p.HeadSHA != sha {
 			return "", fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
 		}
@@ -340,7 +368,7 @@ func (l *Local) MergePR(repo string, number int, sha, subject string) (string, e
 		if _, err := Git(tmp, "merge", "--squash", sha); err != nil {
 			return "", fmt.Errorf("conflict: %v", err)
 		}
-		if _, err := Git(tmp, "commit", "-q", "--allow-empty", "-m", fmt.Sprintf("%s (#%d)", subject, number)); err != nil {
+		if _, err := Git(tmp, "commit", "-q", "--allow-empty", "-m", LocalMergeMessage(subject, number, sha)); err != nil {
 			return "", err
 		}
 		if _, err := Git(tmp, "push", "-q", "origin", "HEAD:main"); err != nil {
@@ -369,9 +397,17 @@ func (l *Local) ClosePR(repo string, number int, comment string) error {
 	return nil
 }
 
+// DeleteBranch deletes one of the Hive's branches; one already gone counts
+// as deleted, as on GitHub.
 func (l *Local) DeleteBranch(repo, branch string) error {
+	if err := HiveBranch(branch); err != nil {
+		return err
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if _, err := Git(l.RepoPath(repo), "rev-parse", "--verify", "-q", "refs/heads/"+branch); err != nil {
+		return nil
+	}
 	_, err := Git(l.RepoPath(repo), "update-ref", "-d", "refs/heads/"+branch)
 	return err
 }
@@ -488,6 +524,29 @@ func (l *Local) SetCheckLog(repo, url, log string) {
 		s.Logs = map[string]string{}
 	}
 	s.Logs[repo+" "+url] = log
+	l.save(s)
+}
+
+// CheckSteps are the steps set on a check's URL.
+func (l *Local) CheckSteps(repo string, r CheckRun) ([]JobStep, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	steps, ok := l.load().Steps[repo+" "+r.URL]
+	if !ok {
+		return nil, fmt.Errorf("no steps for %s", r.Name)
+	}
+	return steps, nil
+}
+
+// SetCheckSteps sets the steps of the check at url, as a CI would list them.
+func (l *Local) SetCheckSteps(repo, url string, steps ...JobStep) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	if s.Steps == nil {
+		s.Steps = map[string][]JobStep{}
+	}
+	s.Steps[repo+" "+url] = steps
 	l.save(s)
 }
 

@@ -66,6 +66,10 @@ paths = [
   "internal/openagent/**",
   "internal/core/route.go",
 
+  # The route op and the person's yes that it waits for before a check seat
+  # (reviewer, security, warden, tribunal) moves to another model.
+  "internal/mod/models/**",
+
   # Self-update and install scripts.
   "install/**",
   "internal/mod/release/**",
@@ -90,6 +94,15 @@ paths = [
 required_checks = [
   "test (ubuntu-latest)",
   "sandboxed-e2e",
+]
+
+# The forge's checks that only warn on the Hive's own PRs (read from main): red
+# here, one doesn't send the change back, and pending or unable to start it
+# isn't waited on; the task and PR say so. A release still needs them green.
+# Exact names; a check left off holds the merge as any other does. Windows is
+# paused for now (issue #564); this keeps its job advisory when it returns.
+advisory_checks = [
+  "test (windows-latest)",
 ]
 
 # What runs with elevated rights: CI and release with the repository's

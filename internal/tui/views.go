@@ -120,6 +120,17 @@ func (m *model) dashRows() []row {
 				add(row{key: "sc:" + x.SHA + x.At.String(), depth: 2, text: fmt.Sprintf("%s  %s  %s  %s  %s", x.At.Local().Format("Mon 15:04"), core.Short(x.SHA), v, mark, stDim.Render(core.Clip(x.Note, 80)))})
 			}
 		}
+		if len(p.Flakes) > 0 && add(row{key: "flakes:" + p.Name, depth: 1, text: fmt.Sprintf("known flakes, quarantined (%d)", len(p.Flakes)), expand: true}) {
+			for _, f := range p.Flakes {
+				fix := stWarn.Render("no fix task yet")
+				var open *detail
+				if f.Task != "" {
+					fix = "fix: " + f.Task + " " + stDim.Render(f.TaskStage)
+					open = &detail{kind: "task", id: f.Task, title: core.Clip(text.Visible(f.Test), 40)}
+				}
+				add(row{key: "flake:" + p.Name + f.Test, depth: 2, text: fmt.Sprintf("%s  %s  %s", text.Visible(f.Test), fix, stDim.Render(text.Visible(core.Clip(f.Why, 100)))), open: open})
+			}
+		}
 		if add(row{key: "done:" + p.Name, depth: 1, text: fmt.Sprintf("recent work (%d)", len(done)), expand: len(done) > 0}) {
 			for _, t := range done {
 				d := detail{kind: "task", id: t.ID, title: core.Clip(t.Label(), 40)}
@@ -156,15 +167,11 @@ func (m *model) dashRows() []row {
 		}
 	}
 	if add(row{key: "plans", text: "plan usage", expand: len(m.st.Plans) > 0, def: true}) {
+		now := time.Now()
 		for _, p := range m.st.Plans {
-			status := text.Visible(p.Limit.Status)
-			if status == "rejected" {
-				status = stBad.Render("limited") + ", resets " + p.Limit.ResetsAt.Local().Format("Mon 15:04")
-			}
-			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), status)
-			for _, k := range sortedKeys(p.Limit.Windows) {
-				wnd := p.Limit.Windows[k]
-				line += fmt.Sprintf("  %s %.0f%%", text.Visible(k), wnd.Utilization*100)
+			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), standing(p, now))
+			for _, w := range p.Limit.WindowUses(now) {
+				line += "  " + windowShort(w, now, true)
 			}
 			add(row{key: "plan:" + p.Key(), depth: 1, text: line})
 		}
@@ -268,6 +275,9 @@ func (m *model) taskLine(t work.Task) string {
 	}
 	if (t.Queued() || t.Stage == work.StageMerging) && t.Reason != "" {
 		progress = stDim.Render("  " + core.Clip(t.Reason, 70))
+		if t.FilesWait() >= time.Hour { // passed by later briefs on its other files meanwhile
+			progress = stDim.Render("  " + ago(t.FilesSince) + " on others' files: " + core.Clip(t.Reason, 60))
+		}
 	}
 	if t.Stage == work.StageTesting && slices.ContainsFunc(m.st.Checks.Waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
 		progress = stDim.Render("  waiting for a check slot")
@@ -291,6 +301,9 @@ func (m *model) runLine(r core.Run) string {
 	if r.Reason != "" && r.Status != core.StatusRunning {
 		extra = r.Reason
 	}
+	if r.Finish != nil && r.Finish.Printed {
+		extra = "(finish printed, the Hive ran it) " + extra
+	}
 	if r.Status == core.StatusRunning && r.Where != "" {
 		status += " on " + text.Visible(r.Where)
 	}
@@ -299,19 +312,28 @@ func (m *model) runLine(r core.Run) string {
 
 // sizeLine is the newest measured size (for the Hive, its core's: docs/core.md)
 // and how it moved since the measure before it, or "" when none was measured.
+// Each figure is its own newest, as the Hive's binary is measured only at the
+// start; measures since the last size that recorded none are flagged, so sizes
+// can't quietly stop being recorded.
 func sizeLine(ms []improve.Measurement) string {
-	var now, before map[string]float64
-	for i := len(ms) - 1; i >= 0 && before == nil; i-- {
+	now, before := map[string]float64{}, map[string]float64{}
+	missed := 0
+	for i := len(ms) - 1; i >= 0 && (len(now) == 0 || len(before) < len(now)); i-- {
 		if ms[i].Size == nil {
+			if len(now) == 0 && !ms[i].NoResult {
+				missed++
+			}
 			continue
 		}
-		if now == nil {
-			now = ms[i].Size
-		} else {
-			before = ms[i].Size
+		for k, v := range ms[i].Size {
+			if _, ok := now[k]; !ok {
+				now[k] = v
+			} else if _, ok := before[k]; !ok {
+				before[k] = v
+			}
 		}
 	}
-	if now == nil {
+	if len(now) == 0 {
 		return ""
 	}
 	moved := func(k string) string {
@@ -332,6 +354,9 @@ func sizeLine(ms []improve.Measurement) string {
 		if k != "core_lines" && k != "binary_bytes" {
 			parts = append(parts, text.Visible(k)+" "+fmtNum(now[k])+moved(k))
 		}
+	}
+	if missed > 0 {
+		parts = append(parts, stWarn.Render(fmt.Sprintf("none recorded on the last %d measures", missed)))
 	}
 	return "size  " + strings.Join(parts, "  ")
 }
@@ -588,6 +613,9 @@ func (m *model) viewDetail(d *detail) []string {
 		if r.Progress != "" {
 			kv("progress", r.Progress+"  "+ago(r.ProgressAt))
 		}
+		if r.Finish != nil && r.Finish.Printed {
+			kv("finish", stWarn.Render(r.Finish.Status+", printed: the agent wrote it as its answer and the Hive ran it"))
+		}
 		lines = append(lines, "", stTitle.Render("brief"))
 		lines = append(lines, indent(wrap(core.Clip(r.Brief, 1200), w-2), "  ")...)
 		lines = append(lines, "", stTitle.Render("steps"))
@@ -613,6 +641,9 @@ func (m *model) viewDetail(d *detail) []string {
 		}
 		kv("task", t.Label())
 		kv("stage", t.Stage+"  "+core.Clip(t.Reason, 200))
+		if t.Warning != "" {
+			kv("warning", core.Clip(t.Warning, 200))
+		}
 		kv("project", t.Project)
 		kv("aim", t.AimWord())
 		if t.Issue.Number > 0 {
@@ -1038,7 +1069,17 @@ func (m *model) settings() []setting {
 		if v == "" {
 			v = "none"
 		}
-		s = append(s, setting{group: "Routes", label: role, value: v, key: "route:" + role, choices: routeChoices(c, role)})
+		s = append(s, setting{group: "Routes", label: role, value: v, key: "route:" + role, choices: routeChoices(c, role, "")})
+	}
+	// A project's own routes (set by the lead's route op or config.json)
+	// show under it and change or clear the same way.
+	for _, pv := range m.st.Projects {
+		for _, role := range core.RouteRoles {
+			if own := c.Projects[pv.Name].Routes[role]; len(own) > 0 {
+				s = append(s, setting{group: "Routes", label: role + " for " + pv.Name, value: strings.Join(c.Shown(role, pv.Name), ", "),
+					key: "route:" + role + ":" + pv.Name, choices: routeChoices(c, role, pv.Name)})
+			}
+		}
 	}
 	for _, name := range sortedKeys(c.Models) {
 		x := c.Models[name]
@@ -1238,19 +1279,24 @@ func routeEntry(c core.Config, m string) string {
 }
 
 // routeNow is the route a pick changes: the role's own, else what it runs on
-// now (its model setting, or the tribunal's seats).
-func routeNow(c core.Config, role string) []string {
+// now (its model setting, or the tribunal's seats). A project's is only its own.
+func routeNow(c core.Config, role, project string) []string {
 	var out []string
 	add := func(e string) {
 		if e != "" && !slices.Contains(out, e) {
 			out = append(out, e)
 		}
 	}
-	switch own := c.Routes[role]; {
+	own := c.Routes[role]
+	if project != "" {
+		own = c.Projects[project].Routes[role]
+	}
+	switch {
 	case len(own) > 0:
 		for _, e := range own {
 			add(routeEntry(c, e))
 		}
+	case project != "":
 	case role == "tribunal":
 		for _, t := range c.Seats("") {
 			if t.Harness == "open" {
@@ -1267,8 +1313,8 @@ func routeNow(c core.Config, role string) []string {
 
 // routeChoices are a route's pick-list: add each known model that isn't on
 // it, remove each that is, and clear the role's own route.
-func routeChoices(c core.Config, role string) []string {
-	now := routeNow(c, role)
+func routeChoices(c core.Config, role, project string) []string {
+	now := routeNow(c, role, project)
 	var out []string
 	for _, m := range routeModels(c) {
 		if slices.Contains(now, m) {
@@ -1280,9 +1326,10 @@ func routeChoices(c core.Config, role string) []string {
 	return append(out, "clear")
 }
 
-// routeEdit is c with one pick from a route's pick-list made.
-func routeEdit(c core.Config, role, choice string) core.Config {
-	now := routeNow(c, role)
+// routeEdit is c with one pick from a route's pick-list made, in project
+// ("" for the workspace).
+func routeEdit(c core.Config, role, project, choice string) core.Config {
+	now := routeNow(c, role, project)
 	switch {
 	case choice == "clear":
 		now = nil
@@ -1293,15 +1340,29 @@ func routeEdit(c core.Config, role, choice string) core.Config {
 	default:
 		return c
 	}
-	c.Routes = maps.Clone(c.Routes)
-	if c.Routes == nil {
-		c.Routes = map[string][]string{}
+	set := func(routes map[string][]string) map[string][]string {
+		routes = maps.Clone(routes)
+		if routes == nil {
+			routes = map[string][]string{}
+		}
+		if len(now) == 0 {
+			delete(routes, role)
+		} else {
+			routes[role] = now
+		}
+		return routes
 	}
-	if len(now) == 0 {
-		delete(c.Routes, role)
-	} else {
-		c.Routes[role] = now
+	if project == "" {
+		c.Routes = set(c.Routes)
+		return c
 	}
+	c.Projects = maps.Clone(c.Projects)
+	if c.Projects == nil {
+		c.Projects = map[string]core.ProjectSettings{}
+	}
+	ps := c.Projects[project]
+	ps.Routes = set(ps.Routes)
+	c.Projects[project] = ps
 	return c
 }
 
@@ -1347,7 +1408,8 @@ func (m *model) saveSetting(v string) tea.Cmd {
 		}
 		c.Projects[p] = ps
 	case strings.HasPrefix(key, "route:"):
-		c = routeEdit(c, strings.TrimPrefix(key, "route:"), v)
+		role, project, _ := strings.Cut(strings.TrimPrefix(key, "route:"), ":")
+		c = routeEdit(c, role, project, v)
 	case key == "channel":
 		if c.Channel = v; v == "default" {
 			c.Channel = ""
@@ -1495,6 +1557,37 @@ func toldHead(told []core.Ask, now time.Time) string {
 		return fmt.Sprintf("done for you (%d recent)", len(told))
 	}
 	return fmt.Sprintf("done for you (%d in the last day, %d recent)", day, len(told))
+}
+
+// standing is the plan's state in plain words, coloured by how near its
+// limit the login is.
+func standing(p core.Plan, now time.Time) string {
+	s := text.Visible(p.Limit.Standing(now))
+	switch {
+	case p.Parked(now):
+		return stBad.Render(s)
+	case p.Limit.Status == "allowed_warning" && p.Limit.ResetsAt.After(now):
+		return stWarn.Render(s)
+	}
+	return s
+}
+
+// windowShort is one usage window and when it resets; a window that has reset
+// since the reading shows that instead of its old share. Long adds how far
+// off the reset is.
+func windowShort(w harness.WindowUse, now time.Time, long bool) string {
+	name := text.Visible(w.Name)
+	switch {
+	case w.ResetsAt.IsZero():
+		return fmt.Sprintf("%s %.0f%%", name, w.Used*100)
+	case w.Stale:
+		return fmt.Sprintf("%s reset %s", name, stDim.Render(w.ResetsAt.Local().Format("Mon 15:04")))
+	}
+	s := fmt.Sprintf("%s %.0f%%, resets %s", name, w.Used*100, w.ResetsAt.Local().Format("Mon 15:04"))
+	if long {
+		s += stDim.Render(" (in " + w.ResetsIn(now) + ")")
+	}
+	return s
 }
 
 // limitNote is a limit the pace set, dimmed after a heading, or "" for none.

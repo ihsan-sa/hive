@@ -41,10 +41,19 @@ func runSync(argv, env []string, dir, stdin, stdout string, timeout time.Duratio
 	if err = cmd.Start(); err != nil {
 		return -1, err
 	}
+	// The timeout kills argv alone, and a finished argv may have left a job
+	// running: what is left of its group ends once argv exits, before Wait
+	// reaps argv and frees its group's id where the platform allows (exited).
 	end := group(cmd.Process.Pid)
+	ended := exited(cmd.Process.Pid)
+	if ended {
+		end(true)
+	}
 	err = cmd.Wait()
+	if !ended {
+		end(true)
+	}
 	timedOut := ctx.Err() == context.DeadlineExceeded
-	end(true) // the timeout killed argv alone, and a finished argv may have left a job running
 	if timedOut {
 		return -1, ErrTimeout
 	}
@@ -65,8 +74,22 @@ func openInput(path string) (*os.File, error) {
 	return os.Open(path)
 }
 
+// OwnerEnv tags every process a bare synchronous command starts with the
+// daemon that started it (proc.OwnerID). Pdeathsig ends the command itself
+// when the daemon dies, and its group ends when it returns, but nothing ends
+// the rest of its group, or what it detached, after a daemon crash: Sweep
+// does, by this tag, once its daemon is gone. A daemon clears it from its own
+// environment as it starts (cmd/hive), so a daemon some check started never
+// passes a dead daemon's tag on to its agents' turns.
+const OwnerEnv = "HIVE_SYNC_OWNER"
+
+var owner = proc.OwnerID()
+
 // Run runs s to completion directly on the host.
 func (Bare) Run(s Spec, timeout time.Duration) (int, error) {
 	env := withPathPrefix(append(os.Environ(), s.Env...), pathDirs(s))
-	return runSync(s.Argv, env, s.Cwd, s.Stdin, s.Stdout, timeout)
+	if owner != "" {
+		env = append(env, OwnerEnv+"="+owner)
+	}
+	return runSync(Niced(s.Argv, s.Nice), env, s.Cwd, s.Stdin, s.Stdout, timeout)
 }

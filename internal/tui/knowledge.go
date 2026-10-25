@@ -84,6 +84,9 @@ func (m *model) recentKB() []kb.Change {
 }
 
 func (m *model) keyKB(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.remote { // the folder here is an empty cache: listing or searching it would quietly show nothing
+		return m, nil
+	}
 	es := m.kbEntries()
 	m.kbSel = min(m.kbSel, max(0, len(es)-1))
 	switch k.String() {
@@ -157,7 +160,7 @@ func (m *model) viewKB() []string {
 		lines = append(lines, wrap("The knowledge base is the Hive's memory across projects and runs: notes agents leave, and the record of everything the Hive did. Agents search it before they say what happened; so can you.", min(w, 72))...)
 		lines = append(lines, "")
 	}
-	if m.c != nil && m.c.Remote() {
+	if m.remote {
 		return append(lines, wrap("This control center reaches the Hive over ssh, and the knowledge base is a folder on the Hive's machine, so it isn't shown here. Run `"+core.Cmd+" kb [words]` there to search it.", min(w, 72))...)
 	}
 	search := stTitle.Render("/") + " " + stDim.Render("search")

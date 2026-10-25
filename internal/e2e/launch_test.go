@@ -87,7 +87,7 @@ func TestHarnesses(t *testing.T) {
 	h.post("/api/config", cfg, nil)
 
 	for name, want := range refused {
-		ws := core.Workspace{Root: filepath.Join(t.TempDir(), "hive")}
+		ws := core.Workspace{Root: filepath.Join(settledDir(t), "hive")}
 		if err := ws.Init(); err != nil {
 			t.Fatal(err)
 		}
@@ -95,7 +95,7 @@ func TestHarnesses(t *testing.T) {
 		c.Harness = name
 		ws.SaveConfig(c)
 		cmd := exec.Command(bin, "daemon")
-		cmd.Env = append(os.Environ(), "HIVE_HOME="+ws.Root, "HIVE_FORGE=local:"+t.TempDir())
+		cmd.Env = append(os.Environ(), "HIVE_HOME="+ws.Root, "HIVE_FORGE=local:"+settledDir(t))
 		done := make(chan struct{})
 		var out []byte
 		var err error
@@ -110,6 +110,18 @@ func TestHarnesses(t *testing.T) {
 			t.Errorf("starting with harness %s: %v %s", name, err, out)
 		}
 	}
+}
+
+// settledDir is a temp dir removed once whatever a refused daemon left
+// running (a git it started in the knowledge base) has stopped writing into
+// it; t.TempDir fails the test on the first "directory not empty".
+func settledDir(t *testing.T) string {
+	dir, err := os.MkdirTemp("", "hive-e2e-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { settle(dir, dir) })
+	return dir
 }
 
 // TestLiveAskLands: a real lead briefs a change in the demo project, a real
@@ -203,10 +215,14 @@ func moduleLifecycle(t *testing.T, real bool) {
 	}
 
 	h.seed("local/greet", map[string]string{"skill.md": "The codeword is FIG77.\n"})
+	seeded, _ := core.Git(h.forge.RepoPath("local/greet"), "rev-parse", "main")
 	h.post("/api/job", map[string]string{"name": "modules.update"}, nil)
-	h.wait("greet to update to the newer commit", minute, func(st api.State) bool {
+	// The release a source without tags gets is its commit, short: waiting
+	// for that commit, not any change from first, means a record that moved
+	// for another reason can't pass the wait before the update has run.
+	h.wait("greet to update to the seeded commit", minute, func(st api.State) bool {
 		m, ok := module(st)
-		return ok && m.Release != first.Release
+		return ok && m.Release != "" && m.Release != first.Release && strings.HasPrefix(seeded, m.Release)
 	})
 	if skill, _ := os.ReadFile(filepath.Join(h.ws.Modules(), dir, "skill.md")); !strings.Contains(string(skill), "FIG77") {
 		t.Errorf("the updated module's skill: %q", skill)

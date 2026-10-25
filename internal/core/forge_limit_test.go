@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -420,5 +421,42 @@ func TestAPIGetOnTheLogin(t *testing.T) {
 	}
 	if at, err := r.RateReset("o/r"); err != nil || at.Unix() != 1792900000 {
 		t.Fatalf("reset %v, %v", at, err)
+	}
+}
+
+// A gh call killed by its timeout says so even when gh had written to stderr.
+func TestGhKilledSaysTimedOut(t *testing.T) {
+	old := ghRun
+	defer func() { ghRun = old }()
+	ghRun = func(string, []string) (string, string, error) {
+		return "", "partial output", errors.New("timed out after 2m0s, signal: killed")
+	}
+	_, err := gh("o/r", "pr", "view", "430")
+	if err == nil || !TimedOut(err.Error()) || !strings.Contains(err.Error(), "partial output") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+// A host program past its timeout is killed, and its error says why.
+func TestRunCmdTimeoutSaysSo(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("no sleep")
+	}
+	_, _, err := runCmd(100*time.Millisecond, "", nil, "sleep", "5")
+	if err == nil || !TimedOut(err.Error()) || !strings.Contains(err.Error(), "timed out after 100ms") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+// TimedOut is the Hive's own timeout killing a call, git's or gh's, not any
+// kill: the kernel's OOM kill and a test's own timeout panic are the step's.
+func TestTimedOutIsOnlyTheHivesTimeout(t *testing.T) {
+	if _, err := gitOnce(time.Nanosecond, t.TempDir(), nil, "version"); err == nil || !TimedOut(err.Error()) {
+		t.Fatalf("git killed by its timeout: %v", err)
+	}
+	for _, s := range []string{"go test: signal: killed", "panic: test timed out after 2s\nFAIL\tp\t2.01s"} {
+		if TimedOut(s) {
+			t.Errorf("%q read as a timeout", s)
+		}
 	}
 }

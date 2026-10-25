@@ -107,6 +107,7 @@ type Child struct {
 	Name     string // "candidate", "control", or "evaluator-<side>"
 	Src      string // the checkout the binary was built from (read-only to the child)
 	Commit   string // the commit Src is at: for the candidate, its head with the base merged in
+	Head     string // the full sha checked out, before any merge: Commit differs from it only when the base was merged in
 	Bin      string // the binary; read-only to the child
 	BinDir   string // where the build writes Bin; writable only while Building
 	Root     string // everything the child writes is under here

@@ -201,6 +201,9 @@ func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
 	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 || strings.HasPrefix(task.Reason, "waiting on main") {
 		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
 	}
+	if !logHas(task, "only where main's fail at") || !logHas(task, "p/a TestClock") {
+		t.Fatalf("going on past main's red left no note naming what failed: %+v", task.Log)
+	}
 	for name, more := range map[string]string{
 		"another test":          "echo '--- FAIL: TestNew (0.01s)'\necho 'FAIL\tp/b\t0.01s'\n",
 		"another package":       "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/b\t0.01s'\n",
@@ -327,7 +330,13 @@ func TestMovedDraftIsNotReadied(t *testing.T) {
 	must(t, tmp, "add", "-A")
 	must(t, tmp, "commit", "-q", "-m", "unread")
 	must(t, tmp, "push", "-q", "origin", "HEAD:hive/t1")
+	// An update's pause doesn't hold it: it waits for its read before the gate.
+	resume, ok := m.PauseMerges(0)
 	m.settle(task, m.step(task))
+	resume()
+	if !ok || m.inMerge != 0 || !strings.HasPrefix(task.Reason, draftWait) {
+		t.Fatalf("paused %v, past the gate %d, reason %q", ok, m.inMerge, task.Reason)
+	}
 	updated := task.Updated
 	for range 12 {
 		m.settle(task, m.step(task))
@@ -610,9 +619,14 @@ func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
 	if after, _ := m.C.Effects.Sync(p); after != before {
 		t.Fatal("a change whose tests never ran was merged")
 	}
-	err := m.Recheck(task.ID, "")
+	err := m.Recheck(task.ID, "", "lead")
 	if got, _ := m.Get(task.ID); err != nil || got.CantRuns != 0 {
 		t.Fatalf("the lead's recheck: %v, count %d, want a fresh count", err, got.CantRuns)
+	}
+	for _, a := range m.C.Person.Open() {
+		if a.Ref == "cant-run:"+task.ID {
+			t.Fatalf("the ask stays open once the change is tested again: %+v", a)
+		}
 	}
 }
 
@@ -672,7 +686,7 @@ func TestClosedPRStopsTheTask(t *testing.T) {
 	if after, _ := m.C.Effects.Sync(p); after != before {
 		t.Fatalf("main moved from %s to %s after the PR was closed", before, after)
 	}
-	if err := m.Recheck(task.ID, ""); err == nil {
+	if err := m.Recheck(task.ID, "", "lead"); err == nil {
 		t.Fatal("the lead brought back a task the person closed")
 	}
 	if _, err := forge.MergePR(p.Repo, task.PR.Number, task.SHA, "x"); err == nil {
@@ -772,5 +786,27 @@ func TestClosedDraftStops(t *testing.T) {
 	m.settle(task, m.step(task))
 	if task.Stage != StageStopped || !task.ByPerson || !task.DraftSince.IsZero() || task.DraftTold {
 		t.Fatalf("stage %q, by person %v, draft since %v", task.Stage, task.ByPerson, task.DraftSince)
+	}
+}
+
+// Findings sent back carry main as a bundle, so a fix that needs main's newer
+// commits can merge them, even when the reviewer's own words name main.bundle;
+// a message from the forge's checks keeps its own.
+func TestSendBackBundlesMain(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	pushMain(t, f, map[string]string{"newer.txt": "only on main"})
+	main, _ := m.C.Effects.Sync(p)
+	if err := m.sendBack(task, p, "The reviewer asked for fixes: use main's newer helper, as main.bundle would show"); err != nil || task.Stage != StageWorking {
+		t.Fatalf("stage %q, err %v", task.Stage, err)
+	}
+	if msg := queued(m, task.Worker); !strings.Contains(msg, "main.bundle holds main at "+core.Short(main)) {
+		t.Fatalf("message:\n%s", msg)
+	}
+	out := must(t, "", "bundle", "list-heads", filepath.Join(m.C.WS.RunRO(task.Worker), "main.bundle"))
+	if !strings.Contains(out, main) {
+		t.Fatalf("bundle heads %q, want main %s", out, main)
 	}
 }

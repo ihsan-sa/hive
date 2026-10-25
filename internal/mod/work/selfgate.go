@@ -1,10 +1,13 @@
 package work
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,10 +18,12 @@ import (
 // self project's change aimed at a gain (Task.Aim) has passed its tests,
 // reads and the forge's checks,
 // the daemon runs `hive gate` on its exact head, merged with current main,
-// against main, and it merges only if the gate keeps it. A rollback goes back
-// to the worker with the report, and so does a head that conflicts with main
-// (to merge it, no rollback); a gate that can't run (no bubblewrap, no Go) leaves it waiting,
-// never merged unjudged. One gate runs at a time, for at most GateTimeout.
+// against main, and it merges only if the gate keeps it, as its judge calls a
+// verdict that measured both sides (judge.go). A rollback goes back to the
+// worker with the report, and so does a head that conflicts with main (to
+// merge it, no rollback); a gate that can't run (no bubblewrap, no Go) leaves it waiting,
+// never merged unjudged. As many gates run at once as the machine carries
+// (gatePace, below), each for at most GateTimeout.
 // A fix doesn't wait for it: it merges as in any project, and the score
 // measured after the merge still reverts it if main got worse.
 
@@ -42,16 +47,25 @@ const GateWait = "waiting for the recursive gate"
 var GateTimeout = 2 * time.Hour
 
 // gateRetry is how long a gate that couldn't run waits before it tries again;
-// gateRetrySoon, when the cause may pass (the machine's load, a test that
-// failed on both sides).
+// gateRetrySoon, when the cause may pass (the machine's load, a probe that
+// failed on both sides); when main itself fails in the gate, every run at
+// that main would build and test both sides only to fail the same way, so it
+// is remembered until main moves: gateRetry, doubling with each repeat there,
+// up to gateRetryMain.
 var (
 	gateRetry     = time.Hour
 	gateRetrySoon = 10 * time.Minute
+	gateRetryMain = 6 * time.Hour
 )
 
 // retryAfter is when a gate that couldn't run tries again.
 func retryAfter(g core.GateResult) time.Time {
-	if g.Transient {
+	switch {
+	case g.MainFails:
+		// An hour the first time, doubling with each repeat at that main:
+		// a loaded machine can look like main failing.
+		return g.At.Add(min(gateRetry<<min(g.Repeats, 8), gateRetryMain))
+	case g.Transient:
 		return g.At.Add(gateRetrySoon)
 	}
 	return g.At.Add(gateRetry)
@@ -60,7 +74,7 @@ func retryAfter(g core.GateResult) time.Time {
 // gateReportFile is the report as the worker sent back reads it, in $HIVE_RUN.
 const gateReportFile = "gate-report.md"
 
-// gateRun is the gate run in flight: one at a time on this machine.
+// gateRun is a gate run in flight; m.gating holds them by key.
 type gateRun struct {
 	key, task string
 	since     time.Time
@@ -71,9 +85,10 @@ type gateRun struct {
 
 // recursiveGate holds t, a change to the Hive aimed at a gain, until the
 // recursive gate has kept its head against main; the bool says it waits (or
-// went back). A fix passes straight on.
+// went back). A fix passes straight on, and so does a head the person landed
+// while the gate couldn't judge at main (askGateFix).
 func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, error) {
-	if !p.Self || !t.Gain() {
+	if !p.Self || !t.Gain() || m.C.Effects.Approved("gate", p.Name, t.SHA) {
 		return false, nil
 	}
 	g, ok := m.C.Effects.GateResult(p.Name, t.SHA, main)
@@ -81,17 +96,23 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		// The head can't be merged with main as the gate sees it: its worker
 		// merges main. No rollback, and the gate runs again on the new head.
 		m.tellGate(t, p, g)
-		return true, m.conflict(t, p, fmt.Errorf("the recursive gate: %s", g.Reason))
+		return true, m.conflict(t, p, t.SHA, &gateConflict{reason: g.Reason, files: g.Conflicts})
 	}
 	if ok && (g.Outcome != core.GateCantRun || time.Now().Before(retryAfter(g))) {
 		m.tellGate(t, p, g)
-		switch g.Outcome {
-		case core.GateKeep:
-			return false, nil
-		case core.GateRollback:
+		if g.Outcome == core.GateKeep || g.Outcome == core.GateRollback {
+			// The numbers are one thing the judge weighs; its call decides.
+			keep, wait, err := m.judgeGate(t, p, g)
+			switch {
+			case wait || err != nil:
+				return true, err
+			case keep:
+				return false, nil
+			}
 			return true, m.gateBack(t, p, g)
 		}
 		m.hold(t, p, fmt.Sprintf("%s, which can't run here (%s); it never merges unjudged, and the gate tries again after %s", GateWait, core.Clip(g.Reason, 300), retryAfter(g).Format("15:04Z")))
+		m.askGateFix(t, p, main, g)
 		return true, nil
 	}
 	// The gate judges what would land: a head that lacks main is brought up
@@ -101,37 +122,112 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		return true, err
 	}
 	key := p.Name + "@" + t.SHA + "@" + main
-	m.mu.Lock()
 	// A run that couldn't run against this main, on any change, holds the
 	// others until its retry: the next would fail the same way. One whose
 	// cause was that change alone (its own build, its clock) holds nobody.
-	if last, ok := m.gateCantRun[p.Name+"@"+main]; ok && last.Head != t.SHA && time.Now().Before(retryAfter(last)) {
-		m.mu.Unlock()
+	// The journal keeps it, so a restart doesn't run it again either.
+	if last, ok := m.C.Effects.GateAtMain(p.Name, main); ok && last.Head != t.SHA && time.Now().Before(retryAfter(last)) {
 		m.hold(t, p, fmt.Sprintf("%s: it couldn't run against main at %s on %s (%s); it tries again after %s", GateWait, core.Short(main), core.Short(last.Head), core.Clip(last.Reason, 300), retryAfter(last).Format("15:04Z")))
+		m.askGateFix(t, p, main, last)
 		return true, nil
 	}
-	cur := m.gating
-	var out string
+	m.mu.Lock()
+	cur := m.gating[key]
+	var out, full string
 	if cur == nil {
-		out = filepath.Join(m.C.WS.Gates(), p.Name, "recursive", time.Now().UTC().Format("060102-150405")+"-"+core.Short(t.SHA))
-		m.gating = &gateRun{key: key, task: t.ID, since: time.Now().UTC(), out: out}
-		m.steps.Add(1)
+		// A run on this task's earlier head (or main) judges what no longer
+		// lands: it ends, as a change of aim ends it, and frees its slot.
+		m.dropGateLocked(t.ID, key)
+		if full = m.gateRoom(len(m.gating)); full == "" {
+			out = filepath.Join(m.C.WS.Gates(), p.Name, "recursive", time.Now().UTC().Format("060102-150405")+"-"+core.Short(t.SHA))
+			if m.gating == nil {
+				m.gating = map[string]*gateRun{}
+			}
+			m.gating[key] = &gateRun{key: key, task: t.ID, since: time.Now().UTC(), out: out}
+			m.steps.Add(1)
+		}
 	}
 	m.mu.Unlock()
 	switch {
-	case cur == nil:
+	case cur != nil:
+		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), cur.since.Format("15:04Z"), GateTimeout))
+	case full != "":
+		m.hold(t, p, GateWait+": "+full)
+	default:
 		m.startGate(t, p, main, key, out)
 		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), time.Now().UTC().Format("15:04Z"), GateTimeout))
-	case cur.key == key:
-		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), cur.since.Format("15:04Z"), GateTimeout))
-	default:
-		m.hold(t, p, GateWait+": it runs one change at a time, and another is being gated")
 	}
 	return true, nil
 }
 
+// How many gates run at once is a pace, as workers and checks are
+// (pace.go), but slower and guarded: a gate is two Hives, the e2e suite, the
+// benchmark and a grandchild, so the limit starts at two (one where the
+// machine has under gateCores cores for each), grows by one at most every
+// gateStep while gains wait and the machine has room, and never past one
+// per gateCores cores or the person's max_gates. Past the first, a new gate
+// starts only while the machine has gateMemMB free and its load per core is
+// at most gateLoadMax, besides the turn's own limits; a gate running is
+// never stopped. Where the machine can't be read it stays at one, or at the
+// person's max_gates.
+const (
+	gateStep    = 10 * time.Minute
+	gateCores   = 6
+	gateMemMB   = 4096
+	gateLoadMax = 1.0
+)
+
+// gateMachine says why the machine has no room for another gate, or "", and
+// whether any reading is there to see; a test sets its own.
+var gateMachine = func(cfg core.Config) (string, bool) {
+	why, watching := machine(cfg)
+	if why == "" {
+		why = core.Strained(gateMemMB, 0, 0)
+	}
+	if why == "" {
+		why = core.Loaded(gateLoadMax)
+	}
+	return why, watching || core.Watched(gateMemMB, 0, 0, gateLoadMax)
+}
+
+// gateCeiling is the most gates that run at once here.
+func gateCeiling(cfg core.Config) int {
+	return cmp.Or(cfg.MaxGates, max(1, runtime.NumCPU()/gateCores))
+}
+
+// gateRoom says why no other gate starts now with running of them in
+// flight, or "". m.mu is held.
+func (m *Module) gateRoom(running int) string {
+	limit, why := m.gateLimit(time.Now(), running, m.C.WS.LoadConfig())
+	switch {
+	case running >= limit:
+		return fmt.Sprintf("%d run at once here (limit %s), and every one is in use", running, m.gates.String())
+	case running > 0 && why != "":
+		return fmt.Sprintf("%d running, and no room for another: %s", running, why)
+	}
+	return ""
+}
+
+// gateLimit moves the gates' limit at now with running of them in flight
+// and one more wanted, and says it with what strains the machine, or "".
+// Where the machine can't be read, a second gate starts only on the
+// person's max_gates: nothing would see it pile up.
+func (m *Module) gateLimit(now time.Time, running int, cfg core.Config) (int, string) {
+	why, watching := gateMachine(cfg)
+	top := gateCeiling(cfg)
+	start := cmp.Or(cfg.MaxGates, min(2, top))
+	if !watching && cfg.MaxGates == 0 {
+		start = 1
+	}
+	m.gates.mu.Lock()
+	m.gates.step = gateStep
+	m.gates.mu.Unlock()
+	defer m.journal("gates", &m.gates, m.gates.get())
+	return m.gates.next(now, running, true, why, watching, start, top), why
+}
+
 // startGate runs the gate on t's head in the background and records its
-// verdict in out; m.gating is already set to key, and m.steps counts it.
+// verdict in out; m.gating already holds key, and m.steps counts it.
 func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
 	dir := filepath.Dir(out)
 	job := GateJob{Project: p, Repo: m.C.WS.Project(p.Name), Head: t.SHA, Main: main,
@@ -139,9 +235,9 @@ func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
 	id := t.ID
 	ctx, cancel := context.WithTimeout(context.Background(), job.Timeout+15*time.Minute)
 	m.mu.Lock()
-	if m.gating != nil && m.gating.key == key {
-		m.gating.cancel = cancel
-		if m.gating.dropped {
+	if r := m.gating[key]; r != nil {
+		r.cancel = cancel
+		if r.dropped {
 			cancel()
 		}
 	}
@@ -161,50 +257,45 @@ func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
 			g.Outcome = core.GateCantRun
 		}
 		m.mu.Lock()
-		if m.gating != nil && m.gating.key == key && m.gating.dropped {
+		if r := m.gating[key]; r != nil && r.dropped {
 			// Its task stopped aiming at a gain mid-run: what it says now
 			// judges nothing, and must not hold the changes behind it.
-			m.gating = nil
+			delete(m.gating, key)
 			delete(m.later, id)
 			m.mu.Unlock()
 			return
 		}
 		m.mu.Unlock()
-		m.C.Effects.RecordGate(g) // complete by construction
+		m.C.Effects.RecordGate(g) // complete by construction; GateAtMain follows it
 		m.mu.Lock()
-		if m.gating != nil && m.gating.key == key {
-			m.gating = nil
-		}
-		if m.gateCantRun == nil {
-			m.gateCantRun = map[string]core.GateResult{}
-		}
-		switch {
-		case g.Outcome == core.GateCantRun && (g.Alone || len(g.Conflicts) > 0):
-			// Its own cause: the others at this main go on as they were.
-		case g.Outcome == core.GateCantRun:
-			m.gateCantRun[p.Name+"@"+job.Main] = g
-		default:
-			delete(m.gateCantRun, p.Name+"@"+job.Main)
-		}
+		delete(m.gating, key)
 		delete(m.later, id) // the task looks again at once
 		m.mu.Unlock()
 	}()
 }
 
 // dropGate cancels the gate run in flight for task id, if any, so the gains
-// queued behind it don't wait out a run whose verdict nobody needs. The slot
-// frees once the run has ended its children.
+// queued behind it don't wait out a run whose verdict nobody needs. Its
+// slot frees once the run has ended its children.
 func (m *Module) dropGate(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.gating == nil || m.gating.task != id || m.gating.dropped {
-		return false
+	return m.dropGateLocked(id, "")
+}
+
+// dropGateLocked is dropGate with m.mu held, sparing the run keyed keep.
+func (m *Module) dropGateLocked(id, keep string) bool {
+	dropped := false
+	for _, r := range m.gating {
+		if r.task != id || r.key == keep || r.dropped {
+			continue
+		}
+		r.dropped, dropped = true, true
+		if r.cancel != nil {
+			r.cancel()
+		}
 	}
-	m.gating.dropped = true
-	if m.gating.cancel != nil {
-		m.gating.cancel()
-	}
-	return true
+	return dropped
 }
 
 // tellGate records a verdict on the task, and says it on the PR once, with
@@ -215,6 +306,9 @@ func (m *Module) tellGate(t *Task, p core.Project, g core.GateResult) {
 	}
 	gv := g
 	t.Gate = &gv
+	if g.Outcome != core.GateCantRun {
+		m.settleGateAsk(p, "the recursive gate judges again, on "+core.Short(g.Head)+" against main at "+core.Short(g.Main))
+	}
 	m.save(t, "the recursive gate: "+GateWord(g.Outcome)+": "+core.Clip(g.Reason, 300))
 	var b strings.Builder
 	fmt.Fprintf(&b, "**Recursive gate: %s** on %s against main at %s: %s\n", GateWord(g.Outcome), core.Short(g.Head), core.Short(g.Main), g.Reason)
@@ -238,9 +332,117 @@ func (m *Module) tellGate(t *Task, p core.Project, g core.GateResult) {
 	}
 }
 
+// gateFixPaths are the gate's own code: a change to them may be what lets
+// the gate judge again where main itself fails in it.
+var gateFixPaths = []string{"internal/gate/", "internal/app/selfgate.go", "internal/core/selfgate.go", "internal/mod/work/selfgate.go", "cmd/hive/gate.go"}
+
+// askGateFix gives the person one Waiting item, per project, to land t when
+// the gate can't judge at main because main itself fails in it, and t
+// changes the gate: the gate can't judge its own fix, and every change aimed
+// at a gain waits on it. Landing it is the person's call; the score measured
+// after the merge still reverts it if main got worse.
+func (m *Module) askGateFix(t *Task, p core.Project, main string, g core.GateResult) {
+	if !g.MainFails || t.PR.Number == 0 {
+		return
+	}
+	// Asked once per head and main: an answer stands until either moves.
+	ref := "gate-fix:" + t.ID + "@" + t.SHA + "@" + main
+	if t.GateAsked == ref {
+		return
+	}
+	for _, a := range m.C.Person.Open() {
+		if a.Kind != "gate" || a.Project != p.Name {
+			continue
+		}
+		if why := m.gateAskStale(a); why != "" {
+			m.C.Person.Answer(a.ID, "keep waiting", "the Hive, not the person: "+why)
+			continue
+		}
+		return // one item at a time, and another change's is open
+	}
+	ch, err := m.C.Effects.Classify(p, main, t.SHA)
+	if err != nil || !slices.ContainsFunc(ch.Files, func(f string) bool {
+		return slices.ContainsFunc(gateFixPaths, func(pre string) bool { return strings.HasPrefix(f, pre) })
+	}) {
+		return
+	}
+	m.C.Person.Ask(core.Ask{Kind: "gate", Ref: ref, Project: p.Name, From: t.Worker,
+		Title: fmt.Sprintf("Land %q unjudged? The recursive gate can't judge at main %s, and this change is to the gate", t.Label(), core.Short(main)),
+		Detail: fmt.Sprintf("Main itself fails in the gate (on %s: %s), so no change aimed at a gain can be judged until the gate is fixed, and this change touches the gate's code. \"merge\" lands it at exactly %s, without the gate's verdict or its judge's; the score measured after the merge still reverts it if main got worse. \"keep waiting\" leaves it for the gate, and you aren't asked again until its head or main moves. PR: %s",
+			core.Short(g.Head), core.Clip(g.Reason, 500), core.Short(t.SHA), t.PR.URL),
+		Options: []string{"merge", "keep waiting"}})
+	t.GateAsked = ref
+	m.save(t, "")
+}
+
+// gateRef reads a gate item's task and head.
+func gateRef(ref string) (id, sha string) {
+	id, rest, _ := strings.Cut(strings.TrimPrefix(ref, "gate-fix:"), "@")
+	sha, _, _ = strings.Cut(rest, "@")
+	return id, sha
+}
+
+// gateAskStale says why an open gate item no longer stands (its task is
+// gone, left merging or moved to another head), or "" while it does.
+func (m *Module) gateAskStale(a core.Ask) string {
+	id, sha := gateRef(a.Ref)
+	t, ok := m.Get(id)
+	switch {
+	case !ok:
+		return "its task is gone"
+	case t.Stage != StageMerging:
+		return "its task is " + t.Stage + " now"
+	case t.SHA != sha:
+		return "the change moved on to " + core.Short(t.SHA)
+	}
+	return ""
+}
+
+// closeGateAsks answers t's open gate item for the person once t leaves
+// merging (merged, closed, stopped, sent back): "merge" would do nothing
+// there, and the item would keep another gate fix from being asked.
+func (m *Module) closeGateAsks(t Task) {
+	for _, a := range m.C.Person.Open() {
+		if id, _ := gateRef(a.Ref); a.Kind == "gate" && id == t.ID {
+			m.C.Person.Answer(a.ID, "keep waiting", "the Hive, not the person: its task is "+t.Stage+" now")
+		}
+	}
+}
+
+// onPersonGate lands the head the person said to merge through askGateFix,
+// if it is still the task's head; it goes on through the merge's own checks.
+func (m *Module) onPersonGate(a core.Ask) {
+	if a.Answer != "merge" {
+		return
+	}
+	id, sha := gateRef(a.Ref)
+	t, ok := m.Get(id)
+	if !ok || t.SHA != sha || t.Stage != StageMerging {
+		return
+	}
+	m.C.Effects.Approve("gate", t.Project, sha)
+	m.mu.Lock()
+	delete(m.later, t.ID) // the task looks again at once
+	m.mu.Unlock()
+	m.save(&t, "the person landed "+core.Short(sha)+" without the recursive gate, which couldn't judge at main")
+}
+
+// settleGateAsk closes the project's open gate item once the gate judges
+// again: the change it names goes back to being judged.
+func (m *Module) settleGateAsk(p core.Project, why string) {
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "gate" && a.Project == p.Name {
+			m.C.Person.Answer(a.ID, "keep waiting", why)
+		}
+	}
+}
+
 // gateBack sends a rolled-back head to its worker with the report.
 func (m *Module) gateBack(t *Task, p core.Project, g core.GateResult) error {
 	findings := fmt.Sprintf("%s%s against main at %s: %s", gateRolledBack, core.Short(g.Head), core.Short(g.Main), g.Reason)
+	if j, ok := m.C.Effects.Judgement(p.Name, g.Head, g.Main); ok && j.At.After(g.At) {
+		findings += fmt.Sprintf("\n\nIts judge (%s), weighing those numbers with the change, decided to roll it back: %s", j.Model, j.Summary)
+	}
 	if t.Checkpoint != "" {
 		return m.dropCheckpoint(t, p, findings)
 	}
@@ -252,7 +454,7 @@ func (m *Module) gateBack(t *Task, p core.Project, g core.GateResult) error {
 	}
 	detail += fmt.Sprintf("\n\nThe change is kept only if the child Hive built from it does better than the current one, with no regression. Add this line to `.hive/lessons.md` with your fix, so it is on the record:\n\n- %s: the recursive gate rolled back %s (%s): %s",
 		time.Now().UTC().Format("2006-01-02"), core.Short(g.Head), t.Label(), g.Reason)
-	return m.sendBackWith(t, p, findings, strings.TrimSpace(detail))
+	return m.sendBackWith(t, p, findings, strings.TrimSpace(detail), false)
 }
 
 // gateRolledBack opens the findings a rollback sends back.
@@ -292,7 +494,7 @@ func (m *Module) gateLessons(p core.Project, onMain string) []string {
 	return out
 }
 
-// TidyGates hands reap every recursive gate run folder but the one in
+// TidyGates hands reap every recursive gate run folder but those in
 // flight, for the hive.clean job: a gate that died with its daemon (or was
 // killed past its time) left its children and its bulk (checkouts, homes,
 // Go caches) there, and only a later Reap of that folder ends them. The
@@ -306,7 +508,7 @@ func (m *Module) TidyGates(reap func(out string) int) int {
 		dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
 		ents, _ := os.ReadDir(dir)
 		for _, e := range ents {
-			if out := filepath.Join(dir, e.Name()); e.IsDir() && (m.gating == nil || m.gating.out != out) {
+			if out := filepath.Join(dir, e.Name()); e.IsDir() && !m.gateLive(out) {
 				outs = append(outs, out)
 			}
 		}
@@ -318,3 +520,22 @@ func (m *Module) TidyGates(reap func(out string) int) int {
 	}
 	return n
 }
+
+// gateLive says a run in flight owns the folder out. m.mu is held.
+func (m *Module) gateLive(out string) bool {
+	for _, r := range m.gating {
+		if r.out == out {
+			return true
+		}
+	}
+	return false
+}
+
+// gateConflict is the recursive gate finding the head conflicts with main:
+// the worker is told which files, as the gate's merge found them.
+type gateConflict struct {
+	reason string
+	files  []string
+}
+
+func (g *gateConflict) Error() string { return "the recursive gate: " + g.reason }

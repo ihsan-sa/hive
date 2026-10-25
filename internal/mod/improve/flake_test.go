@@ -3,8 +3,10 @@ package improve
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -80,6 +82,9 @@ func TestFlakeAfterMergeIsNotReverted(t *testing.T) {
 	}
 	if reverts(m) != 0 || !strings.Contains(flakeAlerts(m), "TestJoin") {
 		t.Fatalf("reverts %d, alerts %q", reverts(m), flakeAlerts(m))
+	}
+	if f := m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, "Fix the flaky") }); len(f) != 1 || !f[0].Fix() {
+		t.Fatalf("the flaky test's brief names its failure, so it is a fix (issue #568): %+v", f)
 	}
 }
 
@@ -211,13 +216,63 @@ func TestMergeMainAlreadyHoldsIsNotMeasured(t *testing.T) {
 	if !m.measured("p", old) {
 		t.Fatal("a covered merge would be queued again after a restart")
 	}
-	if d := m.Digest(0, ""); !strings.Contains(d, core.Short(old)+" not measured: main already held it when measured at "+core.Short(fixed)) {
+	if d := m.Digest(0, ""); !strings.Contains(d, core.Short(old)+" (task t0) not measured: main already held it when measured at "+core.Short(fixed)+", which was kept") {
 		t.Fatalf("the digest doesn't show the covered merge:\n%s", d)
 	}
 	// A merge main doesn't hold beyond itself is still measured.
 	next := commit(map[string]string{"t.sh": "true\n# next\n"})
 	if ms := merge(next); ms.SHA != next || !ms.Kept {
 		t.Fatalf("a new merge: %+v", ms)
+	}
+}
+
+// A merge covered by a red measurement says so, so a reader can tell the
+// change went in under a red main rather than being cleared by it.
+func TestMergeCoveredByARedMainSaysSo(t *testing.T) {
+	m, commit, merge := tested(t)
+	old := commit(map[string]string{"README.md": "an older change\n"})
+	bad := commit(map[string]string{"t.sh": "echo '--- FAIL: TestJoin (0.09s)'\nexit 1\n"})
+	if ms := merge(bad); ms.Kept {
+		t.Fatalf("main at the break: %+v", ms)
+	}
+	m.afterMerge(work.Task{ID: "t0", Project: "p", MergeSHA: old})
+	m.mu.Lock()
+	cov := slices.Clone(m.covered["p"])
+	m.mu.Unlock()
+	if len(cov) != 1 || cov[0].By != bad || !cov[0].Red {
+		t.Fatalf("covered: %+v", cov)
+	}
+	if d := m.Digest(0, ""); !strings.Contains(d, "measured at "+core.Short(bad)+", which was red") {
+		t.Fatalf("the digest doesn't say the covering measurement was red:\n%s", d)
+	}
+}
+
+// An earlier checkpoint that Recover queues after the task's latest merge was
+// measured is covered by that measurement, not measured at its old code.
+func TestRecoveredCheckpointIsCovered(t *testing.T) {
+	m, commit, merge := tested(t)
+	bank := commit(map[string]string{"README.md": "the checkpoint\n"})
+	last := commit(map[string]string{"README.md": "the checkpoint\nand the rest\n"})
+	if ms := merge(last); !ms.Kept {
+		t.Fatalf("main at the latest merge: %+v", ms)
+	}
+	before := len(m.Scores("p"))
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t1", Project: "p", Title: "change t1", Stage: work.StageMerged, MergeSHA: last, Updated: time.Now(),
+		Banks: []work.Bank{{MergeSHA: bank}}})
+	m.Recover()
+	for deadline := time.Now().Add(30 * time.Second); !m.measured("p", bank); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the recovered checkpoint was never covered")
+		}
+	}
+	if n := len(m.Scores("p")); n != before {
+		t.Fatalf("the checkpoint was measured on its own: %+v", m.Scores("p")[n-1])
+	}
+	m.mu.Lock()
+	cov := slices.Clone(m.covered["p"])
+	m.mu.Unlock()
+	if len(cov) != 1 || cov[0].SHA != bank || cov[0].By != last || cov[0].Red {
+		t.Fatalf("covered: %+v", cov)
 	}
 }
 
@@ -233,14 +288,81 @@ func TestRedAlreadyOnMainBeforeTheMergeIsNotReverted(t *testing.T) {
 	if reverts(m) != 0 {
 		t.Fatalf("a red main had before the merge was reverted: %d", reverts(m))
 	}
-	if filed := m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") }); len(filed) != 1 {
+	filed := m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") })
+	if len(filed) != 1 {
 		t.Fatalf("the red wasn't filed to fix: %d", len(filed))
+	}
+	if !filed[0].Fix() || !strings.Contains(filed[0].AimWhy, "TestClock") {
+		t.Fatalf("a red main's brief names its failure, so it is a fix (issue #568): %q", filed[0].AimWord())
 	}
 	// A second red merge on the same red main files it no second time.
 	sha = commit(map[string]string{"README.md": "another\n"})
 	m.afterMerge(work.Task{ID: "t2", Project: "p", MergeSHA: sha})
 	if reverts(m) != 0 || len(m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") })) != 1 {
 		t.Fatalf("reverts %d on a second merge", reverts(m))
+	}
+}
+
+// The same failures listed in another order are filed to fix once.
+func TestRedOnMainInAnotherOrderIsFiledOnce(t *testing.T) {
+	m, commit, merge := tested(t)
+	commit(map[string]string{"t.sh": "echo '--- FAIL: TestB (0.01s)'\necho '--- FAIL: TestA (0.01s)'\nexit 1\n"})
+	if ms := merge(commit(map[string]string{"README.md": "one\n"})); !strings.Contains(ms.Note, "not new at this merge") {
+		t.Fatalf("measured %+v", ms)
+	}
+	commit(map[string]string{"t.sh": "echo '--- FAIL: TestA (0.01s)'\necho '--- FAIL: TestB (0.01s)'\nexit 1\n"})
+	m.afterMerge(work.Task{ID: "t2", Project: "p", MergeSHA: commit(map[string]string{"README.md": "two\n"})})
+	filed := m.Work.List(func(t work.Task) bool { return strings.HasSuffix(t.Title, "pass on main again") })
+	if len(filed) != 1 || !strings.Contains(filed[0].Title, "TestA, TestB") || reverts(m) != 0 {
+		t.Fatalf("filed %d, reverts %d", len(filed), reverts(m))
+	}
+}
+
+// A vet or compile error prints no test or package line to name it by, only
+// "file.go:line:col: message". The merge that brought it is reverted; one
+// measured on main while it stays red (a goals-only change) is not.
+func TestVetRedOnlyRevertsTheMergeThatBroughtIt(t *testing.T) {
+	m, commit, merge := tested(t)
+	vet := "echo '# x/e'\necho 'vet: e/a_test.go:225:42: not enough arguments in call to f'\nexit 1\n"
+	if ms := merge(commit(map[string]string{"t.sh": vet})); ms.Kept || strings.Contains(ms.Note, "not new at this merge") || reverts(m) != 1 {
+		t.Fatalf("the merge that broke vet: %+v, reverts %d", ms, reverts(m))
+	}
+	for i, f := range []string{".hive/goals.md", "README.md"} {
+		sha := commit(map[string]string{f: "only text\n"})
+		if ms := merge(sha); ms.Kept || !strings.Contains(ms.Note, "not new at this merge") {
+			t.Fatalf("merge %d on a vet-red main: %+v", i, ms)
+		}
+	}
+	if reverts(m) != 1 {
+		t.Fatalf("merges measured while main stayed red were reverted: %d", reverts(m))
+	}
+}
+
+// A compile error in another language (tsc here) is named too, so a merge
+// measured while it keeps main red isn't reverted for it.
+func TestTscRedOnlyRevertsTheMergeThatBroughtIt(t *testing.T) {
+	m, commit, merge := tested(t)
+	tsc := "echo \"src/a.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.\"\nexit 2\n"
+	if ms := merge(commit(map[string]string{"t.sh": tsc})); ms.Kept || reverts(m) != 1 {
+		t.Fatalf("the merge that broke the build: %+v, reverts %d", ms, reverts(m))
+	}
+	if ms := merge(commit(map[string]string{"README.md": "only text\n"})); ms.Kept || !strings.Contains(ms.Note, "not new at this merge") || reverts(m) != 1 {
+		t.Fatalf("a merge on a tsc-red main: %+v, reverts %d", ms, reverts(m))
+	}
+}
+
+// A merge that clears a vet error on main lets tests run that vet stopped
+// just before it; what fails among them may have broken while vet hid it,
+// so the fix isn't reverted, and the failure is filed.
+func TestFailuresVetHidUntilItsFixAreNotTheFixs(t *testing.T) {
+	m, commit, merge := tested(t)
+	commit(map[string]string{"t.sh": "echo 'vet: e/a_test.go:225:42: not enough arguments in call to f'\nexit 1\n"}) // went red unmeasured
+	sha := commit(map[string]string{"t.sh": "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\nexit 1\n"})
+	if ms := merge(sha); ms.Kept || !strings.Contains(ms.Note, "can't be told new at this merge") || reverts(m) != 0 {
+		t.Fatalf("the merge that fixed vet: %+v, reverts %d", ms, reverts(m))
+	}
+	if len(m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") })) != 1 {
+		t.Fatal("what vet hid wasn't filed to fix")
 	}
 }
 

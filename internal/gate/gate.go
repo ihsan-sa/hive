@@ -30,7 +30,9 @@ type Config struct {
 	Org        Org      // the fresh test repository's host; nil runs without one
 	OrgToken   string   // the org token the gate itself uses to make and delete test repositories; children never hold it
 	ChildToken string   // the contents-only token the children hold (empty: they hold none and the org probe is skipped)
+	ReachOK    bool     // the caller passed CheckReach on these tokens within the hour (the daemon), so the gate doesn't probe again
 	Lessons    string   // .hive/lessons.md to append to on a rollback
+	Judged     bool     // a judge decides a measured verdict after the run, and writes its lesson itself
 	Depth      int      // levels of gating the children may still do (capped at MaxDepth)
 	MaxRepos   int      // most org repositories one run may make (default 4)
 	Timeout    time.Duration
@@ -72,6 +74,8 @@ type Report struct {
 	Fixes       FixReport  `json:"fixes"`                       // the candidate's own new tests, run on both sides
 	Transient   bool       `json:"transient,omitempty"`         // could not run for a cause that may pass (load, a flake on both sides): try again soon
 	Alone       bool       `json:"alone,omitempty"`             // could not run for a cause tied to this candidate alone (preparing its build, the run's clock): another change at this base would not hit it
+	BaseFails   bool       `json:"base_fails,omitempty"`        // could not run for a cause in the base itself (the control fails a step): every change at this base would hit it
+	Measured    bool       `json:"measured,omitempty"`          // the verdict compares both sides' results (Decide), so a judge may weigh it
 	Sig         string     `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
 }
 
@@ -147,8 +151,8 @@ func Run(cfg Config) (rep Report, err error) {
 			// evaluator, the org, the clock): nothing was measured, so this
 			// is not the candidate's failure and no lesson is written.
 			rep.Error, rep.CantRun = err.Error(), true
-			rep.Transient = errors.As(err, new(transient))
 			rep.Alone = errors.As(err, new(alone))
+			rep.BaseFails = errors.As(err, new(base))
 			rep.Verdict = Verdict{Reason: "the gate could not run: " + err.Error()}
 		case !rep.Verdict.Keep && len(rep.Verdict.Regressions) == 0 && len(rep.Verdict.Unmeasured) > 0:
 			rep.CantRun = true // a probe failed on both sides: that path was never measured
@@ -156,7 +160,7 @@ func Run(cfg Config) (rep Report, err error) {
 		}
 		rep.sign()
 		write(cfg, rep)
-		if !rep.Verdict.Keep && !rep.CantRun {
+		if !rep.Verdict.Keep && !rep.CantRun && !(cfg.Judged && rep.Measured) {
 			noteLesson(cfg, rep)
 		}
 	}()
@@ -171,7 +175,7 @@ func Run(cfg Config) (rep Report, err error) {
 			return rep, fmt.Errorf("the gate runs from a test binary (%s): set Config.Self to a hive binary", filepath.Base(self))
 		}
 	}
-	if g, ok := cfg.Org.(GitHub); ok && cfg.ChildToken != "" {
+	if g, ok := cfg.Org.(GitHub); ok && cfg.ChildToken != "" && !cfg.ReachOK {
 		if err = CheckReach(g, cfg.ChildToken, cfg.Repo); err != nil {
 			return rep, err
 		}
@@ -215,18 +219,18 @@ func Run(cfg Config) (rep Report, err error) {
 		if c.Bin == "" {
 			cfg.log("building %s at %s", c.Name, short(sha))
 			e := build(cfg, c, sha, merge)
+			var conflict *mergeConflict
+			if errors.As(e, &conflict) {
+				return rep, e // never merged: report.json names no merged tree
+			}
 			if c == cand && c.Commit != "" {
 				rep.Merged = c.Commit
-				if c.Commit != sha {
+				if c.Commit != c.Head {
 					cfg.log("  with %s merged in, at %s", short(merge), short(c.Commit))
 				}
 			}
 			if e != nil {
 				var own *ownFailure
-				var conflict *mergeConflict
-				if errors.As(e, &conflict) {
-					return rep, e
-				}
 				if !errors.As(e, &own) {
 					// The gate's own step (the clone, the module download): could not run.
 					err = fmt.Errorf("preparing %s's build: %v", c.Name, e)
@@ -374,7 +378,7 @@ func Run(cfg Config) (rep Report, err error) {
 				cfg.log("rep %d: %s on %s", rep0+1, name, side.c.Name)
 				start, spent := time.Now(), side.c.Meter.Bytes()
 				r := p(&cfg, side.c)
-				reap(cfg.Out) // a probe's daemons end with it
+				reap(cfg.Out, true) // a probe's daemons end with it
 				r.Probe, r.Rep, r.Seconds = name, rep0+1, time.Since(start).Seconds()
 				if r.Pass && hasMetric(r, "score") { // a benchmark, whatever its name
 					// Cost, counted by the meter, lower is better, and judged
@@ -395,6 +399,7 @@ func Run(cfg Config) (rep Report, err error) {
 		opts.Fixed = append(opts.Fixed, f.String())
 	}
 	rep.Verdict = Decide(rep.Candidate, rep.Control, opts)
+	rep.Measured = true
 	if len(rep.Unit.Shared) > 0 {
 		rep.Verdict.Reason += "; failing on both sides, so the environment's and not counted: " + failureNames(rep.Unit.Shared, modulePath(cand.Src))
 	}
@@ -576,7 +581,7 @@ func checkout(cfg Config, c *Child, sha, merge string) error {
 	if st, _ := run(c.Src, "git", "status", "--porcelain"); strings.TrimSpace(st) != "" {
 		return fmt.Errorf("checkout is not clean: %s", tail(st, 200))
 	}
-	c.Commit = got
+	c.Head, c.Commit = got, got
 	if merge == "" {
 		return nil
 	}
@@ -661,6 +666,12 @@ func (r Report) Markdown() string {
 	for _, g := range r.Verdict.Regressions {
 		fmt.Fprintf(&b, "- regression: %s\n", g)
 	}
+	for _, g := range r.Verdict.Unmeasured {
+		fmt.Fprintf(&b, "- unmeasured: %s\n", g)
+	}
+	for _, g := range r.Verdict.Differs {
+		fmt.Fprintf(&b, "- differs: %s\n", g)
+	}
 	table := func(name string, rs []Result) {
 		if len(rs) == 0 {
 			fmt.Fprintf(&b, "\n## %s\n\nNo probe ran: the run stopped before them.\n", name)
@@ -672,7 +683,11 @@ func (r Report) Markdown() string {
 			for _, m := range x.Metrics {
 				ms = append(ms, fmt.Sprintf("%s=%.4g", m.Name, m.Value))
 			}
-			fmt.Fprintf(&b, "| %s | %d | %v | %.1f | %s | %s |\n", x.Probe, x.Rep, x.Pass, x.Seconds, strings.Join(ms, " "), strings.ReplaceAll(tail(x.Detail, 120), "\n", " "))
+			detail := tail(x.Detail, 120)
+			if len(x.Failed) > 0 { // what matters is at its start: the failing tests and what each said
+				detail = clip(x.Detail, 400)
+			}
+			fmt.Fprintf(&b, "| %s | %d | %v | %.1f | %s | %s |\n", x.Probe, x.Rep, x.Pass, x.Seconds, strings.Join(ms, " "), strings.ReplaceAll(strings.ReplaceAll(detail, "\n", " "), "|", "\\|"))
 		}
 	}
 	for _, f := range r.Conflicts {
@@ -708,12 +723,20 @@ func whose(cand, ctrl *Child, errs map[*Child]error, why string) error {
 	case ce != nil && ke == nil:
 		return &candidateFault{why, fmt.Errorf("the candidate %s: %v", why, ce)}
 	case ce != nil && ke != nil:
-		return fmt.Errorf("both sides %s, so the step itself cannot run here: the candidate: %v; the control: %v", why, ce, ke)
+		return base{fmt.Errorf("both sides %s, so the step itself cannot run here: the candidate: %v; the control: %v", why, ce, ke)}
 	case ke != nil:
-		return fmt.Errorf("the control %s: %v", why, ke)
+		return base{fmt.Errorf("the control %s: %v", why, ke)}
 	}
 	return nil
 }
+
+// base is a could-not-run whose cause is the base itself (the control fails
+// a step, alone or with the candidate): every change at that base would hit
+// it, so the work module remembers it until main moves.
+type base struct{ err error }
+
+func (b base) Error() string { return b.err.Error() }
+func (b base) Unwrap() error { return b.err }
 
 // alone is a could-not-run tied to this candidate (preparing its own build,
 // the run's clock): no verdict on it, but no reason for another change at
@@ -735,23 +758,40 @@ type candidateFault struct {
 func (f *candidateFault) Error() string { return f.err.Error() }
 func (f *candidateFault) Unwrap() error { return f.err }
 
-// noteLesson records a rollback where the next worker reads it.
+// noteLesson records a rollback where the next worker reads it. Gates run
+// side by side share the file, so the lesson is appended in one write, and a
+// fresh file comes in with its header whole (linked into place, which only
+// one gate can do), never as an empty file another gate also heads.
 func noteLesson(cfg Config, rep Report) {
 	if cfg.Lessons == "" {
 		return
 	}
 	os.MkdirAll(filepath.Dir(cfg.Lessons), 0o755)
-	raw, _ := os.ReadFile(cfg.Lessons)
-	s := string(raw)
-	if strings.TrimSpace(s) == "" {
-		s = "# Lessons\n\nWhat was tried and why it didn't stay. Read before working here.\n\n"
+	if f, err := os.CreateTemp(filepath.Dir(cfg.Lessons), ".lessons-*"); err == nil {
+		_, werr := f.WriteString(lessonsHeader)
+		if f.Close() == nil && werr == nil {
+			os.Chmod(f.Name(), 0o644)
+			os.Link(f.Name(), cfg.Lessons) // fails where the file is there
+		}
+		os.Remove(f.Name())
 	}
-	if !strings.HasSuffix(s, "\n") {
-		s += "\n"
+	raw, _ := os.ReadFile(cfg.Lessons)
+	s := ""
+	if strings.TrimSpace(string(raw)) == "" {
+		s = lessonsHeader // there but empty: an older gate's, or the person's
+	} else if !strings.HasSuffix(string(raw), "\n") {
+		s = "\n"
 	}
 	// Text from the candidate's own output never goes here: a lesson is read by
 	// the next worker as instructions.
 	reason := rep.Verdict.Reason // Decide's words, or a fixed candidateFault.why
 	s += fmt.Sprintf("- The gate rolled back %s (run %s): %s\n", short(rep.Head), rep.ID, reason)
-	os.WriteFile(cfg.Lessons, []byte(s), 0o644)
+	f, err := os.OpenFile(cfg.Lessons, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	f.WriteString(s)
+	f.Close()
 }
+
+const lessonsHeader = "# Lessons\n\nWhat was tried and why it didn't stay. Read before working here.\n\n"

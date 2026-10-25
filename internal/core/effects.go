@@ -47,6 +47,7 @@ type Effects struct {
 	sandbox func() (sandbox.Sandbox, error)
 	tools   func() []string
 	runs    *Runs
+	sweep   func() int // sandbox.Sweep; a test points it away from the host
 
 	locks  sync.Map
 	unread sync.Map // project@main whose history MainAnswer couldn't read, journaled once
@@ -54,6 +55,12 @@ type Effects struct {
 	// MergeHeld is why a pull request on a project may not merge now (the
 	// person's hold on its merges, the work module), or "" if it may.
 	MergeHeld func(project string, pr int) string
+
+	// Quarantined are a project's known flaky tests (the improve module's
+	// quarantine), keyed package::test, as shown by evidence from outside
+	// task (none of its own branches' reds counts for it): a forge check
+	// that fails only these doesn't hold task's merge. Unset, none are.
+	Quarantined func(project, task string) []string
 
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
@@ -68,9 +75,13 @@ type Effects struct {
 	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
 	seats     map[string]map[string]Verdict     // project#diff -> security seat -> its latest verdict
 	hostMade  map[string]HostCommit
+	pushes    map[string][]string // project@branch -> each commit pushed to it, oldest first
 	approvals map[string]bool
 	failing   map[string]CheckFailure // repo url -> what a failed check's log says
+	steps     map[string][]JobStep    // repo url -> a finished check's steps
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
+	gateMains map[string]GateResult   // project@main -> the newest can't-run there not tied to its head (GateAtMain)
+	judged    map[string]Judgement    // project@sha@main -> the judge's newest call (judge.go)
 	homes     map[string]bool         // running checks' homes (disk.go)
 	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
 	disk      DiskUse                 // the last measurement of the Hive's disk use
@@ -160,8 +171,8 @@ type HostCommit struct {
 
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
-	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, approvals: map[string]bool{}, gates: map[string]GateResult{}}
+	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs, sweep: sandbox.Sweep,
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -219,6 +230,11 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var h HostCommit
 			ev.Decode(&h)
 			e.hostMade[h.Project+"@"+h.SHA] = h
+		case "effect.pushed":
+			var pu struct{ Project, Branch, SHA string }
+			ev.Decode(&pu)
+			k := pu.Project + "@" + pu.Branch
+			e.pushes[k] = append(slices.DeleteFunc(e.pushes[k], func(s string) bool { return s == pu.SHA }), pu.SHA)
 		case "effect.approved":
 			var a struct{ Kind, Project, SHA string }
 			ev.Decode(&a)
@@ -229,7 +245,22 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 		case "gate.judged":
 			var g GateResult
 			ev.Decode(&g)
+			if prev, ok := e.gateMains[g.Project+"@"+g.Main]; ok && prev.MainFails && g.MainFails {
+				g.Repeats = prev.Repeats + 1
+			}
 			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
+			switch {
+			case g.Outcome == GateCantRun && (g.Alone || len(g.Conflicts) > 0):
+				// Its own cause: the others at this main go on as they were.
+			case g.Outcome == GateCantRun:
+				e.gateMains[g.Project+"@"+g.Main] = g
+			default:
+				delete(e.gateMains, g.Project+"@"+g.Main)
+			}
+		case "judge.decided":
+			var j Judgement
+			ev.Decode(&j)
+			e.judged[j.Project+"@"+j.SHA+"@"+j.Main] = j
 		}
 	}
 	j.Replay(apply)
@@ -601,27 +632,48 @@ func FailedTests(out string) []string {
 }
 
 var (
-	redPkgLine = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
-	redTest    = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
-	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |exit status |test timed out|# )|\[(build|setup) failed\]`)
+	// GoPkgLine and GoFailLine are go test's line closing a package's
+	// output ("FAIL\tpkg\t0.1s", "FAIL pkg [build failed]") and the line
+	// naming a failed test; RedKeys and improve's failures read both.
+	GoPkgLine  = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
+	GoFailLine = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
+	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |test timed out)|\[(build|setup) failed\]`)
+	// A compiler's or vet's error on one line: go and go vet
+	// ("a.go:3:4: msg"), javac ("A.java:3: error: msg"), tsc
+	// ("a.ts(3,4): error TS2322: msg", or "a.ts:3:4 - error TS2322: msg").
+	redBuild = []*regexp.Regexp{
+		regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+(?::\d+)?: (.+)`),
+		regexp.MustCompile(`^(\S+\.java):\d+: (error: .+)`),
+		regexp.MustCompile(`^(\S+\.[cm]?[jt]sx?)\(\d+,\d+\): (error TS\d+: .+)`),
+		regexp.MustCompile(`^(\S+\.[cm]?[jt]sx?):\d+:\d+ - (error TS\d+: .+)`),
+	}
+	// rustc says the error first and where on the next line.
+	rustErr, rustAt = regexp.MustCompile(`^(error(?:\[E\d+\])?: .+)`), regexp.MustCompile(`^\s*--> (\S+\.rs):\d+:\d+`)
+	// A python traceback names its frames, then the error at column 0.
+	pyAt, pyErr = regexp.MustCompile(`^\s*File "([^"]+\.py)", line \d+`), regexp.MustCompile(`^([A-Za-z_][\w.]*(?:Error|Exception|Exit)\b.*)`)
 )
 
 // RedKeys names what failed in a red go test run so two runs' reds can be
 // compared: each failing test with its package ("pkg TestX"), and "pkg !"
 // for a package that failed in a way no test name accounts for (no test
-// named, a build failure, a timeout, a panic or exit outside a test). Output
+// named, a build failure, a timeout, a panic or exit outside a test). go test
+// run in a package's directory ends an ordinary failure with "FAIL" then
+// "exit status 1"; only an exit with no "FAIL" just before it (os.Exit in a
+// test) counts as unnamed. A build's "# pkg" header counts at column 0 only.
+// Output
 // with no go package lines falls back to FailedTests' names. Nil means
 // nothing could be named.
 func RedKeys(out string) []string {
 	var keys, tests []string
-	odd, pkgs := false, false
+	odd, pkgs, prev := false, false, ""
 	add := func(k string) {
 		if !slices.Contains(keys, k) {
 			keys = append(keys, k)
 		}
 	}
 	for _, l := range strings.Split(out, "\n") {
-		if m := redPkgLine.FindStringSubmatch(l); m != nil && strings.ContainsAny(m[2], "/.") {
+		t := strings.TrimSpace(l)
+		if m := GoPkgLine.FindStringSubmatch(l); m != nil && strings.ContainsAny(m[2], "/.") {
 			pkgs = true
 			if m[1] == "FAIL" {
 				for _, t := range tests {
@@ -631,17 +683,60 @@ func RedKeys(out string) []string {
 					add(m[2] + " !")
 				}
 			}
-			tests, odd = nil, false
+			tests, odd, prev = nil, false, ""
 			continue
 		}
-		if m := redTest.FindStringSubmatch(l); m != nil {
+		if m := GoFailLine.FindStringSubmatch(l); m != nil {
 			tests = append(tests, m[1])
-		} else if redOdd.MatchString(strings.TrimSpace(l)) {
+		} else if redOdd.MatchString(t) || strings.HasPrefix(l, "# ") || strings.HasPrefix(t, "exit status ") && prev != "FAIL" {
 			odd = true
+		}
+		if t != "" {
+			prev = t
 		}
 	}
 	if !pkgs {
 		return FailedTests(out)
+	}
+	return keys
+}
+
+// StopKeys names, for a red run RedKeys names nothing in (go vet, or a build
+// that stopped the command before the tests ran), each compile or vet error
+// as "file: message", its line left out so an edit above it doesn't make the
+// same error look new: go, javac, tsc and rustc errors, and the error a
+// python traceback ends in, by the last file it names. The rest of the
+// command didn't run, so these can show a red isn't new at a merge but never
+// that a change is no worse than main.
+func StopKeys(out string) []string {
+	var keys []string
+	add := func(file, msg string) {
+		if k := file + ": " + msg; !slices.Contains(keys, k) {
+			keys = append(keys, k)
+		}
+	}
+	rust, py := "", ""
+	for _, l := range strings.Split(out, "\n") {
+		l = strings.TrimRight(l, " \r")
+		if m := rustAt.FindStringSubmatch(l); m != nil && rust != "" {
+			add(m[1], rust)
+		}
+		rust = ""
+		if m := rustErr.FindStringSubmatch(l); m != nil {
+			rust = m[1]
+		}
+		if m := pyAt.FindStringSubmatch(l); m != nil {
+			py = m[1]
+		} else if m := pyErr.FindStringSubmatch(l); m != nil && py != "" {
+			add(py, m[1])
+			py = ""
+		}
+		for _, re := range redBuild {
+			if m := re.FindStringSubmatch(l); m != nil {
+				add(m[1], m[2])
+				break
+			}
+		}
 	}
 	return keys
 }
@@ -748,7 +843,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid()}
+		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: CheckNice}
 	over := watchHome(home, capB)
 	code, err := sb.Run(spec, timeout)
 	if over() && err == nil {
@@ -950,6 +1045,12 @@ func OwnDiff(dir, base, sha string) string {
 	return out
 }
 
+// Between is the diff from one commit to another in p's host clone, "" when
+// git can't tell (one of them isn't fetched).
+func (e *Effects) Between(p Project, from, to string) string {
+	return OwnDiff(e.ws.Project(p.Name), from, to)
+}
+
 // DiffID names a change's own diff (the diff from its merge base with main to
 // its head) so that a head whose own diff is the same gets the same name,
 // whatever main it was brought up to date with. Hunk positions and text
@@ -1006,6 +1107,15 @@ func (e *Effects) Approved(kind, project, sha string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.approvals[kind+":"+project+"@"+sha]
+}
+
+// Pushed says whether the Hive pushed sha to branch, and whether it is the
+// newest commit it pushed there.
+func (e *Effects) Pushed(project, branch, sha string) (pushed, last bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	all := e.pushes[project+"@"+branch]
+	return slices.Contains(all, sha), len(all) > 0 && all[len(all)-1] == sha
 }
 
 // HostMade returns a host-authored commit record.
@@ -1221,7 +1331,8 @@ type MergeRequest struct {
 	SHA     string
 	Main    string
 	Subject string
-	Gain    bool // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
+	Gain    bool   // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
+	Task    string // the task whose PR it is: the quarantine excuses it only on evidence from outside it
 }
 
 // Merge merges the PR only at sha, and only when the host's own records show
@@ -1257,17 +1368,19 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", fmt.Errorf("refusing to merge %s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
 	}
 	if p.Self && m.Gain {
-		if g, ok := e.GateResult(p.Name, m.SHA, m.Main); !ok || g.Outcome != GateKeep {
-			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate kept it against main at %s", short(m.SHA), short(m.Main))
+		// Or once the person landed that exact head unjudged, the gate
+		// unable to judge at main (the work module's "gate" ask).
+		if !e.Kept(p.Name, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA) {
+			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
 		}
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
 	if err != nil {
 		return "", err
 	}
-	req := e.RequiredChecks(p, m.Main)
+	runs, req, warned := Advisory(p, runs, e.RequiredChecks(p, m.Main), e.AdvisoryChecks(p, m.Main))
 	st, which := ChecksState(runs, req)
-	var shared []string
+	var shared, excused []string
 	var answer map[string]string // check -> the older main commit its answer came from
 	if st == CheckFail {
 		mainRuns, at, err := e.MainAnswer(p, m.Main, which)
@@ -1275,7 +1388,12 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		runs, excused = e.Excused(p, m.Main, m.Task, ch.Files, runs, mainRuns)
 		st, which, shared, _ = ChecksAgainstMain(runs, mainRuns, req, e.FailingTests(p.Repo))
+	}
+	var prose []string
+	if st == CheckFail && ProseOnly(ch.Files) {
+		st, which, prose = ChecksBesidesFailures(runs, req)
 	}
 	if st != CheckPass {
 		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
@@ -1290,13 +1408,19 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		}
 	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
-	if err != nil && len(shared) > 0 && protectionRefused.MatchString(err.Error()) {
-		return "", &RefusedRed{Checks: shared, Err: err}
+	if red := append(slices.Concat(shared, prose), warned...); err != nil && len(red) > 0 && protectionRefused.MatchString(err.Error()) {
+		return "", &RefusedRed{Checks: red, Warned: warned, Err: err}
 	}
 	if err != nil {
 		return "", err
 	}
 	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID}
+	if len(excused) > 0 {
+		ev["quarantined"] = excused // red only on known flakes
+	}
+	if len(warned) > 0 {
+		ev["warned"] = warned
+	}
 	if len(shared) > 0 {
 		// A merge past a red check names the main commits that excused it,
 		// so one that relied on an older main answer can be audited.
@@ -1304,6 +1428,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		if len(answer) > 0 {
 			ev["main_answer"] = answer
 		}
+	}
+	if len(prose) > 0 {
+		ev["red_on_prose"] = prose // a change to prose alone, which can't break them
 	}
 	e.j.MustAppend("effect.merged", ev)
 	return merged, nil
@@ -1319,15 +1446,21 @@ func (e *Effects) ReadyPR(p Project, pr int, sha string) error {
 }
 
 // RefusedRed is the forge refusing a merge the Hive found no worse than main:
-// its branch rules want a check that is red on main too, so retrying won't
-// help until main is fixed or the person relaxes the rule.
+// its branch rules want a check that is red on main too, or one main's list
+// says only warns (Warned), so retrying won't help until main is fixed or the
+// person relaxes the rule.
 type RefusedRed struct {
 	Checks []string
+	Warned []string
 	Err    error
 }
 
 func (r *RefusedRed) Error() string {
-	return "the forge refused the merge: its branch rules want " + strings.Join(r.Checks, ", ") + ", red on main too (" + Clip(r.Err.Error(), 200) + ")"
+	why := ", red on main too"
+	if len(r.Warned) > 0 {
+		why = ", red here (" + strings.Join(r.Warned, ", ") + " only warn on the Hive's own PRs, per advisory_checks)"
+	}
+	return "the forge refused the merge: its branch rules want " + strings.Join(r.Checks, ", ") + why + " (" + Clip(r.Err.Error(), 200) + ")"
 }
 
 func (r *RefusedRed) Unwrap() error { return r.Err }
@@ -1344,6 +1477,34 @@ func (n *NeedsPerson) Error() string { return "needs the person: " + n.Reason }
 // head before it merges.
 func (e *Effects) RequiredChecks(p Project, mainSHA string) []string {
 	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "required_checks")
+}
+
+// AdvisoryChecks are the forge's checks main's list says only warn on the
+// Hive's own PRs (Advisory).
+func (e *Effects) AdvisoryChecks(p Project, mainSHA string) []string {
+	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "advisory_checks")
+}
+
+// Advisory splits off the checks that only warn: on the Hive's own project
+// (Self) a check named on main's advisory_checks (a Windows job, whose red was
+// mostly flakes unrelated to the change) doesn't hold the merge, red, pending
+// or unable to start (the person: keep the Hive improving as fast as
+// possible). A release still needs the whole ci workflow green. kept are the
+// rest; warned names the red ones set aside, and required loses every
+// advisory check so none is waited on.
+func Advisory(p Project, runs []CheckRun, required, advisory []string) (kept []CheckRun, req, warned []string) {
+	if !p.Self || len(advisory) == 0 {
+		return runs, required, nil
+	}
+	for _, r := range runs {
+		if !slices.Contains(advisory, r.Name) || r.State == CheckPass {
+			kept = append(kept, r)
+		} else if r.State == CheckFail && !slices.Contains(warned, r.Name) {
+			warned = append(warned, r.Name)
+		}
+	}
+	req = slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(advisory, n) })
+	return kept, req, warned
 }
 
 // ChecksState sums up the forge's checks on one head, the worst first: a
@@ -1412,6 +1573,276 @@ func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string, tests Tests
 	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(shared, n) })
 	state, which = ChecksState(kept, req)
 	return state, which, shared, byName
+}
+
+// JobRead reads a forge check's job: its log's failure, and its steps. A
+// nil func reads nothing.
+type JobRead struct {
+	Failure func(CheckRun) (CheckFailure, bool)
+	Steps   func(CheckRun) ([]JobStep, bool)
+}
+
+// Excuse marks as passing each failed check that failed only in quarantined
+// tests (known flakes, keyed package::test), so it counts against no head;
+// excused names those checks. A failure only in such tests is shown, never
+// assumed: the log's failing tests, each with its package, are all
+// quarantined, and it shows nothing else failing (no build or setup failure,
+// panic, timeout, package red apart from them or failing test with no
+// package, CheckFailure.OnlyTests); none of their packages is one the head
+// changes (touched), so a change can't break a quarantined test and pass;
+// exactly one of the job's steps failed; and every step it skipped was
+// skipped on main's finished run of that check too, so no step the red kept
+// from running goes unchecked. Anything unread excuses nothing.
+func Excuse(runs, mainRuns []CheckRun, read JobRead, quarantined []string, touched func(key string) bool) (out []CheckRun, excused []string) {
+	if read.Failure == nil || read.Steps == nil || len(quarantined) == 0 || touched == nil {
+		return runs, nil
+	}
+	out = slices.Clone(runs)
+	for i, r := range out {
+		if r.State != CheckFail {
+			continue
+		}
+		f, ok := read.Failure(r)
+		if !ok || !f.OnlyTests || len(f.Keys) == 0 || slices.ContainsFunc(f.Keys, func(k string) bool { return !slices.Contains(quarantined, k) || touched(k) }) {
+			continue
+		}
+		if !stepsShown(r, mainRuns, read.Steps) {
+			continue
+		}
+		out[i].State = CheckPass
+		out[i].Detail = "fails only the quarantined " + strings.Join(f.Keys, ", ")
+		if !slices.Contains(excused, r.Name) {
+			excused = append(excused, r.Name)
+		}
+	}
+	return out, excused
+}
+
+// stepsShown reports whether r's job failed in one step and skipped only
+// steps that main's finished runs of its name skip as well.
+func stepsShown(r CheckRun, mainRuns []CheckRun, steps func(CheckRun) ([]JobStep, bool)) bool {
+	head, ok := steps(r)
+	if !ok {
+		return false
+	}
+	failed := 0
+	var skipped []string
+	for _, s := range head {
+		switch s.Conclusion {
+		case "success":
+		case "skipped":
+			skipped = append(skipped, s.Name)
+		default: // failure, timed_out, cancelled, or not finished
+			failed++
+		}
+	}
+	if failed != 1 {
+		return false
+	}
+	if len(skipped) == 0 {
+		return true
+	}
+	seen := false
+	for _, mr := range mainRuns {
+		if mr.Name != r.Name || (mr.State != CheckPass && mr.State != CheckFail) {
+			continue
+		}
+		ms, ok := steps(mr)
+		if !ok {
+			return false
+		}
+		if slices.ContainsFunc(ms, func(s JobStep) bool { return slices.Contains(skipped, s.Name) && s.Conclusion != "skipped" }) {
+			return false
+		}
+		seen = true
+	}
+	return seen
+}
+
+var (
+	// notATest is a failure in a log that names no test: a package that
+	// didn't build or set up, a panic (which ends the whole test binary), a
+	// timeout, or pytest's errors.
+	notATest  = regexp.MustCompile(`(?m)\[(?:build|setup) failed\]|^\s*panic: |test timed out|^ERROR |\b\d+ errors?\b|^=+ ERRORS =+`)
+	pkgResult = regexp.MustCompile(`^(ok|FAIL|\?)\s*\t\S+`)
+)
+
+// OnlyTests reports whether a log shows nothing failing apart from the tests
+// it names: no failure of notATest's kinds, and no package red ("FAIL\tpkg")
+// without a named test failing in it.
+func OnlyTests(log string) bool {
+	if notATest.MatchString(log) {
+		return false
+	}
+	named := false
+	for _, line := range strings.Split(strings.ReplaceAll(log, "\r\n", "\n"), "\n") {
+		if failedTest.MatchString(line) {
+			named = true
+			continue
+		}
+		if m := pkgResult.FindStringSubmatch(line); m != nil {
+			if m[1] == "FAIL" && !named {
+				return false
+			}
+			named = false
+		}
+	}
+	return true
+}
+
+// FailedTestKeys names a log's failing tests with their packages: Go's
+// "--- FAIL: TestX" as pkg::TestX, from the "FAIL\tpkg" line that closes
+// its package's output, and pytest's "FAILED path::test" as it is. ok is
+// false when a failing Go test has no package line to place it in.
+func FailedTestKeys(log string) (keys []string, ok bool) {
+	var pending []string
+	add := func(k string) {
+		if !slices.Contains(keys, k) && len(keys) < 50 {
+			keys = append(keys, k)
+		}
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(log, "\r\n", "\n"), "\n") {
+		if m := failedTest.FindStringSubmatch(line); m != nil {
+			if m[2] != "" {
+				add(m[2])
+			} else if !slices.Contains(pending, m[1]) {
+				pending = append(pending, m[1])
+			}
+			continue
+		}
+		if m := pkgResult.FindStringSubmatch(line); m != nil {
+			if m[1] == "FAIL" {
+				pkg := strings.Fields(strings.TrimSpace(line[len(m[1]):]))[0]
+				for _, n := range pending {
+					add(pkg + "::" + n)
+				}
+			}
+			pending = nil
+		}
+	}
+	return keys, len(pending) == 0
+}
+
+// KeyDir is the directory of a test key's package: a pytest file's own
+// directory, or a Go package's within module. ok is false when it can't be
+// told (a Go package outside module, or no module).
+func KeyDir(key, module string) (string, bool) {
+	where, _, found := strings.Cut(key, "::")
+	switch {
+	case !found:
+		return "", false
+	case strings.HasSuffix(where, ".py"):
+		return path.Dir(where), true
+	case module == "":
+		return "", false
+	case where == module:
+		return ".", true
+	case strings.HasPrefix(where, module+"/"):
+		return strings.TrimPrefix(where, module+"/"), true
+	}
+	return "", false
+}
+
+var goModule = regexp.MustCompile(`(?m)^module\s+"?([^\s"]+)`)
+
+// Excused is Excuse for task's PR on p at head: the quarantine as evidence
+// from outside task shows it, and files the head changes against main, a
+// test whose package they touch (or whose package can't be placed) never
+// excused.
+func (e *Effects) Excused(p Project, main, task string, files []string, runs, mainRuns []CheckRun) ([]CheckRun, []string) {
+	q := e.Quarantine(p.Name, task)
+	if len(q) == 0 {
+		return runs, nil
+	}
+	module := ""
+	if m := goModule.FindStringSubmatch(e.ReadFile(p, main, "go.mod")); m != nil {
+		module = m[1]
+	}
+	touched := func(key string) bool {
+		dir, ok := KeyDir(key, module)
+		return !ok || slices.ContainsFunc(files, func(f string) bool { return path.Dir(f) == dir })
+	}
+	return Excuse(runs, mainRuns, e.JobRead(p.Repo), q, touched)
+}
+
+// JobRead reads repo's forge checks' logs and steps, each once.
+func (e *Effects) JobRead(repo string) JobRead {
+	var jr JobRead
+	if _, ok := e.Forge.(CheckLogs); ok {
+		jr.Failure = func(r CheckRun) (CheckFailure, bool) { return e.CheckFailure(repo, r) }
+	}
+	if cs, ok := e.Forge.(CheckSteps); ok {
+		jr.Steps = func(r CheckRun) ([]JobStep, bool) {
+			if r.URL == "" {
+				return nil, false
+			}
+			key := repo + " " + r.URL
+			e.mu.Lock()
+			steps, seen := e.steps[key]
+			e.mu.Unlock()
+			if seen {
+				return steps, true
+			}
+			steps, err := cs.CheckSteps(repo, r)
+			if err != nil {
+				return nil, false
+			}
+			e.mu.Lock()
+			if e.steps == nil || len(e.steps) > 500 {
+				e.steps = map[string][]JobStep{}
+			}
+			e.steps[key] = steps
+			e.mu.Unlock()
+			return steps, true
+		}
+	}
+	return jr
+}
+
+// Quarantine is the project's quarantined tests as evidence from outside
+// task shows them, or none with no quarantine.
+func (e *Effects) Quarantine(project, task string) []string {
+	if e.Quarantined == nil {
+		return nil
+	}
+	return e.Quarantined(project, task)
+}
+
+// ProseOnly says every file is prose (markdown, reStructuredText, AsciiDoc:
+// docs, goals, the agents' prompts) and none is under a testdata directory,
+// where tests read files as their data. A plain .txt file may be such data
+// anywhere, so it isn't prose. The Hive's own tests ran every test that reads
+// such a change on Linux, so a red forge check on it (another system, a flake)
+// isn't its own.
+func ProseOnly(files []string) bool {
+	for _, f := range files {
+		f = filepath.ToSlash(f)
+		switch strings.ToLower(filepath.Ext(f)) {
+		case ".md", ".rst", ".adoc":
+		default:
+			return false
+		}
+		if strings.HasPrefix(f, "testdata/") || strings.Contains(f, "/testdata/") {
+			return false
+		}
+	}
+	return len(files) > 0
+}
+
+// ChecksBesidesFailures sums up runs as ChecksState does with every failed
+// check left out (and not required), and names those.
+func ChecksBesidesFailures(runs []CheckRun, required []string) (state string, which []CheckRun, failed []string) {
+	var kept []CheckRun
+	for _, r := range runs {
+		if r.State != CheckFail {
+			kept = append(kept, r)
+		} else if !slices.Contains(failed, r.Name) {
+			failed = append(failed, r.Name)
+		}
+	}
+	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(failed, n) })
+	state, which = ChecksState(kept, req)
+	return state, which, failed
 }
 
 // MainLookBack is how many of main's commits, newest first, MainAnswer reads
@@ -1545,6 +1976,10 @@ func (e *Effects) FailingTests(repo string) TestsOf {
 type CheckFailure struct {
 	Tests   []string `json:"tests,omitempty"`
 	Excerpt string   `json:"excerpt,omitempty"`
+	// Keys are the failing tests with their packages (FailedTestKeys).
+	Keys []string `json:"keys,omitempty"`
+	// OnlyTests says the log shows nothing failing apart from Keys.
+	OnlyTests bool `json:"only_tests,omitempty"`
 }
 
 // CheckFailure reads a failed check's log on repo's forge with the Hive's own
@@ -1567,7 +2002,8 @@ func (e *Effects) CheckFailure(repo string, r CheckRun) (CheckFailure, bool) {
 	if err != nil {
 		return CheckFailure{}, false // not kept: the next pass tries again
 	}
-	f = CheckFailure{Tests: FailedTests(log), Excerpt: LogExcerpt(log, ExcerptLines)}
+	keys, placed := FailedTestKeys(log)
+	f = CheckFailure{Tests: FailedTests(log), Keys: keys, Excerpt: LogExcerpt(log, ExcerptLines), OnlyTests: placed && OnlyTests(log)}
 	e.mu.Lock()
 	if e.failing == nil || len(e.failing) > 500 {
 		e.failing = map[string]CheckFailure{}
@@ -1851,20 +2287,27 @@ func (e *Effects) hostCommit(p Project, dir string, h HostCommit) (string, error
 	return sha, nil
 }
 
-// MainBundle writes main as a bundle a worker can fetch to resolve conflicts.
+// MainBundle writes main as a bundle a worker can fetch to resolve conflicts,
+// and returns the commit it holds (read under the same lock, so it is the
+// bundle's head even if main moves just after).
 // It is written under a temp name and renamed, so a fetch running now sees the old or the new file whole.
-func (e *Effects) MainBundle(p Project, path string) error {
+func (e *Effects) MainBundle(p Project, path string) (string, error) {
 	defer e.lock(p.Name)()
+	dir := e.ws.Project(p.Name)
+	head, err := Git(dir, "rev-parse", "--verify", p.Branch)
+	if err != nil {
+		return "", err
+	}
 	tmp := path + ".tmp"
-	if _, err := Git(e.ws.Project(p.Name), "bundle", "create", tmp, p.Branch); err != nil {
+	if _, err := Git(dir, "bundle", "create", tmp, p.Branch); err != nil {
 		os.Remove(tmp)
-		return err
+		return "", err
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
-		return err
+		return "", err
 	}
-	return nil
+	return strings.TrimSpace(head), nil
 }
 
 func appendLine(path, header, line string) error {

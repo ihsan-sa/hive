@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -122,6 +123,11 @@ func Exec(specPath string) int {
 		return 125
 	}
 	os.Remove(specPath) // it may carry a short-lived token; don't leave it on disk
+	if s.Nice > 0 {
+		// This launcher, the init it starts and the command inherit it, so a
+		// check or a worker's turn yields the cpu to a lead's.
+		lowerPriority(s.Nice)
+	}
 	errf := os.Stderr
 	if s.Stdout != "" {
 		if f, err := proc.OpenOutput(s.Stdout + ".err"); err == nil {
@@ -141,6 +147,10 @@ func Exec(specPath string) int {
 	defer os.RemoveAll(rt)
 	if held, err := holdRuntime(rt); err == nil {
 		defer held.Close()
+	} else {
+		// It runs on, but a sweep reads its folder as a legacy one, gone
+		// after runtimeStale (egress.sock with it) even while it still runs.
+		fmt.Fprintln(errf, "sandbox: can't hold the runtime folder's lock:", err)
 	}
 	args := initArgs{Spec: s, Root: filepath.Join(rt, "root"), Tools: map[string]string{}}
 	if err := os.Mkdir(args.Root, 0o755); err != nil {
@@ -822,4 +832,24 @@ func (Linux) Run(s Spec, timeout time.Duration) (int, error) {
 		return -1, err
 	}
 	return runSync([]string{self, "sandbox-exec", "--spec", specPath}, os.Environ(), "/", "", "", timeout)
+}
+
+// lowerPriority puts the calling thread `by` under the daemon's level,
+// capped at 19 (Lowered), and keeps its goroutine on that thread for good:
+// Linux nices a thread, not a process, and the sandbox forked later from
+// this goroutine inherits the level only if nothing has moved it to another
+// thread first. The level adds to the daemon's own, as `nice -n` does for
+// the bare and Seatbelt sandboxes (the raw getpriority answers 20 minus the
+// nice level). Going lower needs no privilege, and failing to is no reason
+// not to run.
+func lowerPriority(by int) {
+	if by <= 0 {
+		return
+	}
+	runtime.LockOSThread()
+	cur := 0
+	if prio, err := unix.Getpriority(unix.PRIO_PROCESS, 0); err == nil {
+		cur = 20 - prio
+	}
+	unix.Setpriority(unix.PRIO_PROCESS, 0, Lowered(cur, by))
 }

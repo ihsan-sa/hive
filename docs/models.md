@@ -119,8 +119,7 @@ on a host where Yama's `ptrace_scope` is 0 a tool in the same sandbox, as the
 same user, could read it through `/proc/<pid>/mem`. The open agent makes
 itself non-dumpable, which closes that for it; Claude Code is a program the
 Hive doesn't control, so for it the exposure is the key of the model the run
-is already on. A turn's cost isn't counted on either kind of named model:
-Claude Code would price another vendor's tokens as Claude's.
+is already on.
 
 `TestAnthropicModelTurn` holds the turn's command, environment and egress;
 `TestAnthropicModelWorker` (e2e) runs a worker on real Claude Code against a
@@ -140,6 +139,42 @@ endpoint's public host besides its egress list; an endpoint on this machine or
 a private network (any IP that isn't public, `localhost`) only through the
 person's `hive egress grant`. Ollama's default context is small:
 set `OLLAMA_CONTEXT_LENGTH` (or a Modelfile's `num_ctx`) to the `context` given here.
+
+An endpoint holds no user, password, query or fragment (config.json is
+refused with one): agents see endpoints in the models op and the person in
+`hive model`, so a key goes only through `hive model key`. `hive model add
+--key` and `hive model key` refuse a plain `http://` endpoint on a public
+host, where the key would cross the network unencrypted; http is for this
+machine or a private network. `hive model add` says when it replaces a model
+of the same name, and `hive model rm` removes nothing (model or key) while a
+route or model setting still names it, and says which.
+
+A hosted tier sees the work it runs: the brief, the checkout's files the agent
+reads, its tool output and notes. Route a private or isolated project to one
+only on purpose; a project's own route (`projects.<name>.routes`) keeps the
+others off it.
+
+### Prices and budgets
+
+A turn's cost is never what the harness's line says (the open agent knows no
+prices, and Claude Code prices another vendor's tokens as Claude's). A paid
+tier can carry its price, in USD per million tokens:
+
+```json
+"deepseek": {"endpoint": "https://api.deepseek.com/v1", "model": "deepseek-chat", "key": true,
+             "price": {"input": 0.27, "output": 1.1}}
+```
+
+Its turns then cost their tokens at that price (the cache's reads and writes
+as input) in the run's cost, the dashboard and the monthly spend. A model with
+no price counts $0. A run with a budget (a step-back's) starts on a named
+model only if the budget can be held (`OpenModel.Holds`): a model that costs
+nothing (no key, or a price of 0 for a free tier), or one with a price on the
+open agent, which counts each request's tokens and ends the turn once it
+reaches the budget. A keyed model with no price, or a priced one on Claude
+Code (which can't hold a turn to a vendor's price), refuses it. A budgeted run
+that moves to a named model along its route at a usage limit isn't checked
+again there.
 
 ## Routes and fallback
 
@@ -167,7 +202,15 @@ at their usage limit (every login of that harness parked, or the named model's
 own limit), its next turn goes on the first pick with room; changing harness
 (or open model) starts a fresh session on its brief, told why and that its
 checkout and notes are intact. With no pick free it waits for the soonest
-reset. A lead follows the settings' route at every turn. The dashboard's agent
+reset. A run that must finish (a worker) moves only to a pick some run has
+finished done on with every turn on that pick (a trial, or real work that
+started there), or back to its route's first: a model that never finished here
+ended turns without finishing while others waited on it. A run proves the pick
+as its route names it, since a run starts on its route's first pick. Proof is
+Hive-wide and kept from the journal; a worker that skips an unproven pick at
+a limit says so in its parked reason ("no worker has finished on open:qwen
+yet"), so a trial there lets it fall back. A worker gone quiet moves to a
+proven pick only when it is next woken. A lead follows the settings' route at every turn. The dashboard's agent
 lines and `hive agent models` say which `harness:model` each agent runs on.
 
 ### A model that can't answer
@@ -206,6 +249,13 @@ A run parked waiting on a pick that comes back looks again at once.
 config.json and journals `config.routed` with who, the role and what it was. A
 check seat's route waits for the person's yes in Waiting (ask kind `route`).
 The lead never adds a model or its key; those are the person's.
+
+Any agent can spawn a helper on a model by name (`hive agent spawn --model`),
+a named model included, so a helper can spend a hosted tier's free quota at
+an agent's choice; a plain model name runs on its project's harness. Routes
+in Settings are the person's: each change, workspace or a project's own
+(listed under Routes once the project has one), is journalled as
+`config.routed` by `person (Settings)` with what it was.
 
 ## Trying a model
 

@@ -95,7 +95,7 @@ func Main(argv []string) int {
 
 // switches are the yes/no arguments, which may stand bare before another
 // --key; any other key takes the next word as its value, even "--help".
-var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "delete_branch": true}
+var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "delete_branch": true, "apart": true}
 
 // parseArgs accepts one JSON object, `-` for JSON on stdin, `--file x.json`,
 // or --key value pairs (a value of @path reads that file's text).
@@ -159,11 +159,12 @@ A value of @path reads that file. Common ops:
   inbox                                          messages waiting for you
   agents                                         who is running
   spawn     --role worker --brief "..." [--project p]   a helper; its account returns to you
-  brief     --title "..." --done "what done looks like" [--known "..."] [--project p] [--aim gain]
-                                                 file an ask: it becomes an issue, a worker, a PR; a fix by
-                                                 default, or with --aim gain an improvement the gate must show
-  aim       --aim fix|gain --why "..." [--task id]   your task (the lead: any) is a fix, which merges on its
-                                                 tests and reads, or aims at a gain, which on the Hive's own
+  brief     --title "..." --done "what done looks like" [--known "..."] [--project p] [--aim fix --why "the failure"] [--apart]
+                                                 file an ask: it becomes an issue, a worker, a PR; taken as a
+                                                 gain unless --aim fix names the failure it fixes
+  aim       --aim fix|gain --why "..." [--task id]   your task (the lead: any) is a fix of the failure --why
+                                                 names, which merges on its tests and reads and isn't reverted
+                                                 for a score dip alone, or a gain, which on the Hive's own
                                                  repository merges only on the recursive gate's clear gain
   warden    --want "..." --why "..." --steps "..."   for anything past your reach; the person decides
   install   --tool python|uv|node|go [--version 3.12]   installs it for every agent, no root,
@@ -176,14 +177,15 @@ A value of @path reads that file. Common ops:
   status                                         projects, work in flight, scores
   github    --pr N | --checks sha | --annotations id | --path "repos/o/r/..." [--repo o/r]
                                                  GitHub's API on the person's login, cached; never curl api.github.com
-  rerun-checks [--task id]                      the failed forge checks (CI jobs) on your PR's head run again,
-                                                 for a flake; at most 2 per head, the merge waits for them
-  queue     [--order id,id] [--hold id] [--release id]   (lead) briefs waiting for a worker, in order
-            [--now id --why "..."]               (lead) start it first, past a brief on the same files
-  recheck   --task id [--back "..."]           (lead) a blocked or stopped task, or one stuck on its way to
+The loop is every agent's: these act on your own project's tasks, on the record with your run id.
+  rerun-checks [--task id]                      the failed forge checks (CI jobs) on a PR's head (yours by default)
+                                                 run again, for a flake; at most 2 per head, the merge waits for them
+  queue     [--order id,id] [--hold id] [--release id]   briefs waiting for a worker, in order
+            [--now id --why "..."]               start it first, past a brief on the same files
+  recheck   --task id [--back "..."]           a blocked or stopped task, or one stuck on its way to
                                                  the merge (say on a stale commit's checks), is pushed and
                                                  checked again from its head; --back sends its worker that
-  landed    --task id --why "..." [--merge sha]  (lead) end a task whose PR merged on the forge or whose
+  landed    --task id --why "..." [--merge sha]  end a task whose PR merged on the forge or whose
                                                  work is on main, so the briefs waiting on it start
   pr_ready  --task id [--why "..."]              (lead) mark the Hive's own PR ready; its merge goes on
   pr_draft  --task id --why "..."                (lead) mark it a draft; its task waits, not stopped

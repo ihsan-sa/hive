@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -77,8 +78,16 @@ func TestExecutorHandsTheSpecToTheModule(t *testing.T) {
 		t.Errorf("spec handed over: %+v, %v", s, err)
 	}
 	env, _ := os.ReadFile(filepath.Join(home, "env"))
-	if !strings.Contains(string(env), "HOME="+home+"\n") || strings.Contains(string(env), "HIVE_") || strings.Contains(string(env), "GH_TOKEN") {
-		t.Errorf("turn's environment:\n%s", env)
+	// Variables are matched by name: CI's ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE
+	// has "HIVE_" inside it.
+	lines := strings.Split(string(env), "\n")
+	if !slices.Contains(lines, "HOME="+home) {
+		t.Errorf("turn's HOME isn't the module's %s", home)
+	}
+	for _, kv := range lines {
+		if strings.HasPrefix(kv, "HIVE_") || strings.HasPrefix(kv, "GH_TOKEN=") {
+			t.Errorf("turn's environment holds %s", kv)
+		}
 	}
 
 	os.WriteFile(filepath.Join(home, "full"), nil, 0o644)

@@ -161,3 +161,27 @@ func TestKnowledgeDigestPinned(t *testing.T) {
 		t.Fatalf("enter didn't open the digest: %+v", m.stack)
 	}
 }
+
+// TestKnowledgeRemote: over ssh the knowledge base is on the Hive's machine,
+// so the pane says so and its keys don't list or search the empty folder here.
+func TestKnowledgeRemote(t *testing.T) {
+	m := testModel(120, 30)
+	t.Chdir(t.TempDir())
+	m.ws = core.Workspace{Root: "."}
+	m.remote = true
+	m.pick(sideRow{sec: secKB})
+	m.focus = 1
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	if m.editing {
+		t.Fatal("/ opened a search of the empty folder here")
+	}
+	v := ansi.Strip(m.View())
+	for _, bad := range []string{m.ws.KB(), "/ search", "enter open"} {
+		if strings.Contains(v, bad) {
+			t.Fatalf("remote Knowledge shows %q:\n%s", bad, v)
+		}
+	}
+	if !strings.Contains(v, "over ssh") {
+		t.Fatalf("remote Knowledge doesn't say why:\n%s", v)
+	}
+}

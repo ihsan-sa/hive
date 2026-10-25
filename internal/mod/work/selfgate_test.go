@@ -2,8 +2,11 @@ package work
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,7 +19,13 @@ import (
 // checks passed, with a gate that answers outcome and records its jobs.
 func selfRig(t *testing.T, files map[string]string, outcome string) (*Module, *Task, core.Project, *core.Local, *[]GateJob) {
 	t.Helper()
-	m, task, p, f := gateRig(t, false, files)
+	return selfRigSeeded(t, nil, files, outcome)
+}
+
+// selfRigSeeded is selfRig with more files on main to start with.
+func selfRigSeeded(t *testing.T, onMain, files map[string]string, outcome string) (*Module, *Task, core.Project, *core.Local, *[]GateJob) {
+	t.Helper()
+	m, task, p, f := gateRigSeeded(t, false, onMain, files)
 	p.Self = true
 	task.Aim = AimGain
 	reviewerLand(t, m, task, p, "r1")
@@ -96,8 +105,8 @@ func TestSelfGateCatchesUpFirst(t *testing.T) {
 	}
 }
 
-// A rollback goes back to the worker with the report and the lesson to
-// record, and the PR stays open.
+// A rollback goes back to the worker with the report, the lesson to record
+// and a fresh main.bundle, and the PR stays open.
 func TestSelfGateRollbackSendsBack(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
 	gateOnce(t, m, task, p)
@@ -109,6 +118,9 @@ func TestSelfGateRollbackSendsBack(t *testing.T) {
 	}
 	if raw, err := os.ReadFile(filepath.Join(m.C.WS.RunRO(task.Worker), gateReportFile)); err != nil || !strings.Contains(string(raw), "probe table") {
 		t.Fatalf("the worker has no report: %v", err)
+	}
+	if msg := queued(m, task.Worker); !strings.Contains(msg, "main.bundle holds main at") {
+		t.Fatalf("the rollback went back without main.bundle:\n%s", msg)
 	}
 	if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); !strings.Contains(c, "Recursive gate: ROLLED BACK") {
 		t.Fatalf("the PR doesn't say it was rolled back:\n%s", c)
@@ -132,11 +144,15 @@ func TestSelfGateConflictSendsBackToMerge(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(m.C.WS.RunRO(task.Worker), "main.bundle")); err != nil {
 		t.Fatalf("the worker has no main to merge: %v", err)
 	}
+	if msg := queued(m, task.Worker); !strings.Contains(msg, "recursive gate") || !strings.Contains(msg, "- NOTES.md") {
+		t.Fatalf("the worker isn't told where the gate's merge conflicts: %q", msg)
+	}
 	if prState(t, f, task.PR.Number) != "OPEN" || alerts(m, "gate") != 0 {
 		t.Fatalf("PR %s, %d alerts: want open and no can't-run alert", prState(t, f, task.PR.Number), alerts(m, "gate"))
 	}
-	if len(m.gateCantRun) != 0 {
-		t.Fatalf("a conflict holds other changes: %+v", m.gateCantRun)
+	main, _ := m.C.Effects.Sync(p)
+	if g, ok := m.C.Effects.GateAtMain(p.Name, main); ok {
+		t.Fatalf("a conflict holds other changes: %+v", g)
 	}
 }
 
@@ -200,16 +216,14 @@ func TestSelfGateTransientRetriesSooner(t *testing.T) {
 func TestSelfGateCantRunHoldsOthersAtTheSameMain(t *testing.T) {
 	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	main, _ := m.C.Effects.Sync(p)
-	m.mu.Lock()
-	m.gateCantRun = map[string]core.GateResult{p.Name + "@" + main: {Outcome: core.GateCantRun, Head: "0ther", Main: main, Reason: "no bubblewrap", At: time.Now()}}
-	m.mu.Unlock()
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Outcome: core.GateCantRun, Head: "0ther", Main: main, Reason: "no bubblewrap", At: time.Now()})
 	mergeOnce(t, m, task, p)
 	m.Wait()
 	if len(*jobs) != 0 || !strings.Contains(task.Reason, "couldn't run against main") {
 		t.Fatalf("%d runs, reason %q: want held behind the other change's can't-run", len(*jobs), task.Reason)
 	}
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Outcome: core.GateCantRun, Head: "0ther", Main: main, At: time.Now().Add(-2 * gateRetry)})
 	m.mu.Lock()
-	m.gateCantRun[p.Name+"@"+main] = core.GateResult{Outcome: core.GateCantRun, Head: "0ther", Main: main, At: time.Now().Add(-2 * gateRetry)}
 	delete(m.later, task.ID)
 	m.mu.Unlock()
 	gateOnce(t, m, task, p)
@@ -230,11 +244,157 @@ func TestSelfGateCantRunAloneHoldsNobody(t *testing.T) {
 	}
 	gateOnce(t, m, task, p)
 	main, _ := m.C.Effects.Sync(p)
-	m.mu.Lock()
-	_, held := m.gateCantRun[p.Name+"@"+main]
-	m.mu.Unlock()
+	_, held := m.C.Effects.GateAtMain(p.Name, main)
 	if len(*jobs) != 1 || held {
 		t.Fatalf("%d runs, held %v: want the run recorded without holding others", len(*jobs), held)
+	}
+}
+
+// A gate that can't judge because main itself fails in it is remembered: no
+// other change at that main runs it, and a change to the gate's own code
+// gets the person one Waiting item to land it. "merge" lands that exact
+// head; a gate that judges again closes the item.
+func TestSelfGateMainFailsAsksToLandTheGateFix(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"internal/gate/unit.go": "package gate\n"}, core.GateCantRun)
+	inner := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+		g := inner(ctx, j)
+		g.MainFails = true
+		return g
+	}
+	gateOnce(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	if g, ok := m.C.Effects.GateAtMain(p.Name, main); !ok || !g.MainFails || retryAfter(g).Sub(g.At) != gateRetry {
+		t.Fatalf("remembered %+v %v: want main's failure kept for gateRetry the first time", g, ok)
+	}
+	var asks []core.Ask
+	for i := 0; i < 3; i++ {
+		m.mu.Lock()
+		delete(m.later, task.ID)
+		m.mu.Unlock()
+		mergeOnce(t, m, task, p)
+		asks = nil
+		for _, a := range m.C.Person.Open() {
+			if a.Kind == "gate" {
+				asks = append(asks, a)
+			}
+		}
+	}
+	m.Wait()
+	if len(*jobs) != 1 || len(asks) != 1 || !strings.Contains(asks[0].Ref, task.SHA) || task.Stage != StageMerging {
+		t.Fatalf("%d runs, asks %+v, stage %q: want one run and one Waiting item naming the head", len(*jobs), asks, task.Stage)
+	}
+	if _, err := m.C.Person.Answer(asks[0].ID, "merge", ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200 && !m.C.Effects.Approved("gate", p.Name, task.SHA); i++ {
+		time.Sleep(10 * time.Millisecond) // the handler runs on its own
+	}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" || len(*jobs) != 1 {
+		t.Fatalf("stage %q, %d runs: want merged at the head the person landed, with no other run", task.Stage, len(*jobs))
+	}
+}
+
+// Main failing in the gate again at the same main holds longer each time,
+// up to gateRetryMain.
+func TestSelfGateMainFailsHoldGrows(t *testing.T) {
+	m, _, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
+	main, _ := m.C.Effects.Sync(p)
+	var holds []time.Duration
+	for i := 0; i < 5; i++ {
+		m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Head: "h", Main: main, Outcome: core.GateCantRun, MainFails: true, At: time.Now()})
+		g, _ := m.C.Effects.GateAtMain(p.Name, main)
+		holds = append(holds, retryAfter(g).Sub(g.At))
+	}
+	want := []time.Duration{gateRetry, 2 * gateRetry, 4 * gateRetry, gateRetryMain, gateRetryMain}
+	if !slices.Equal(holds, want) {
+		t.Fatalf("holds %v, want %v", holds, want)
+	}
+}
+
+// "keep waiting" stands: the person isn't asked again about that head at
+// that main. An item whose PR the lead closed leaves Waiting.
+func TestSelfGateFixAskOnceAndClosedWithItsPR(t *testing.T) {
+	m, task, p, _, _ := selfRig(t, map[string]string{"internal/gate/unit.go": "package gate\n"}, core.GateCantRun)
+	inner := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+		g := inner(ctx, j)
+		g.MainFails = true
+		return g
+	}
+	gateOnce(t, m, task, p)
+	gates := func() (open int) {
+		for _, a := range m.C.Person.Open() {
+			if a.Kind == "gate" {
+				open++
+			}
+		}
+		return open
+	}
+	var id string
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "gate" {
+			id = a.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("no gate item")
+	}
+	if _, err := m.C.Person.Answer(id, "keep waiting", ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		m.mu.Lock()
+		delete(m.later, task.ID)
+		m.mu.Unlock()
+		*task, _ = m.Get(task.ID)
+		mergeOnce(t, m, task, p)
+	}
+	if n := gates(); n != 0 {
+		t.Fatalf("%d gate items open after the person said keep waiting: want none", n)
+	}
+	// A new head or main is a new question (its ref differs; cleared here).
+	*task, _ = m.Get(task.ID)
+	task.GateAsked = ""
+	m.save(task, "")
+	m.mu.Lock()
+	delete(m.later, task.ID)
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	if n := gates(); n != 1 {
+		t.Fatalf("%d gate items: want one again", n)
+	}
+	if _, err := m.ClosePR(task.ID, "lead", "superseded", false); err != nil {
+		t.Fatal(err)
+	}
+	if n := gates(); n != 0 {
+		t.Fatalf("%d gate items open after the lead closed the PR: want none", n)
+	}
+}
+
+// A change that isn't to the gate gets no Waiting item when main fails in
+// the gate; it waits, and the item an earlier one raised closes once the
+// gate judges again.
+func TestSelfGateMainFailsAsksNothingOfOtherChanges(t *testing.T) {
+	m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
+	inner := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+		g := inner(ctx, j)
+		g.MainFails = true
+		return g
+	}
+	gateOnce(t, m, task, p)
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "gate" {
+			t.Fatalf("asked %+v for a change not to the gate", a)
+		}
+	}
+	old := m.C.Person.Ask(core.Ask{Kind: "gate", Ref: "gate-fix:t0@abc", Project: p.Name, Options: []string{"merge", "keep waiting"}})
+	main, _ := m.C.Effects.Sync(p)
+	m.tellGate(task, p, core.GateResult{Project: p.Name, Head: task.SHA, Main: main, Outcome: core.GateRollback, Reason: "worse", At: time.Now()})
+	if a, _ := m.C.Person.Get(old.ID); a.Answer != "keep waiting" {
+		t.Fatalf("item %+v: want closed once the gate judges again", a)
 	}
 }
 
@@ -248,16 +408,24 @@ func TestSelfGateWithoutRunnerWaits(t *testing.T) {
 	}
 }
 
+// maxGates sets the person's ceiling on gates at once.
+func maxGates(m *Module, n int) {
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxGates = n
+	m.C.WS.SaveConfig(cfg)
+}
+
 // An improvement must show a gain: even docs and prompts run with no ties
-// allowed; one gate runs at a time; a project that isn't the Hive's own
-// never waits for one.
+// allowed; past the gates' limit a change waits its turn; a project that
+// isn't the Hive's own never waits for one.
 func TestSelfGateNoTiesAndTurns(t *testing.T) {
 	m, task, p, _, jobs := selfRig(t, map[string]string{"docs/note.md": "x\n", "modules/agents/worker.md": "y\n"}, core.GateKeep)
+	maxGates(m, 1)
 	m.mu.Lock()
-	m.gating = &gateRun{key: "other", task: "t9"}
+	m.gating = map[string]*gateRun{"other": {key: "other", task: "t9"}}
 	m.mu.Unlock()
 	mergeOnce(t, m, task, p)
-	if !strings.Contains(task.Reason, "one change at a time") || len(*jobs) != 0 {
+	if !strings.Contains(task.Reason, "every one is in use") || len(*jobs) != 0 {
 		t.Fatalf("reason %q, %d runs: want waiting its turn", task.Reason, len(*jobs))
 	}
 	m.mu.Lock()
@@ -283,11 +451,11 @@ func TestSelfGateNoTiesAndTurns(t *testing.T) {
 	}
 }
 
-// A fix to the Hive itself (the default aim, as every task filed before
-// aims existed) merges on its tests, reads and checks, with no gate run.
+// A clear fix to the Hive itself merges on its tests, reads and checks,
+// with no gate run.
 func TestSelfFixMergesWithoutTheGate(t *testing.T) {
 	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
-	task.Aim = ""
+	task.Aim, task.AimWhy = AimFix, "TestMerge fails: the merge never lands"
 	mergeOnce(t, m, task, p)
 	m.Wait()
 	if len(*jobs) != 0 {
@@ -298,12 +466,31 @@ func TestSelfFixMergesWithoutTheGate(t *testing.T) {
 	}
 }
 
+// A change that says neither fix nor gain is unclear, and is taken as a gain
+// (issue #568): it waits for the gate, and the gate's rollback holds it.
+func TestUnclearIsTakenAsAGain(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
+	task.Aim, task.AimWhy = "", ""
+	if !task.Gain() || !strings.Contains(task.AimWord(), "nothing says it is a fix") {
+		t.Fatalf("an unclear task is %q, want a gain", task.AimWord())
+	}
+	gateOnce(t, m, task, p)
+	if len(*jobs) != 1 || task.Stage == StageMerged || prState(t, f, task.PR.Number) == "MERGED" {
+		t.Fatalf("%d gate runs, stage %q: want an unclear change gated and not merged", len(*jobs), task.Stage)
+	}
+	rv := Task{Kind: "revert"}
+	if rv.Gain() {
+		t.Fatal("a revert waits for the gate")
+	}
+}
+
 // The lead turns an improvement waiting for the gate into a fix, and it
 // merges; a worker sets only its own task's aim; an aim is fix or gain.
 func TestAimOp(t *testing.T) {
 	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	maxGates(m, 1)
 	m.mu.Lock()
-	m.gating = &gateRun{key: "other", task: "t9"}
+	m.gating = map[string]*gateRun{"other": {key: "other", task: "t9"}}
 	m.mu.Unlock()
 	mergeOnce(t, m, task, p)
 	if !strings.HasPrefix(task.Reason, GateWait) {
@@ -324,7 +511,7 @@ func TestAimOp(t *testing.T) {
 		t.Fatal(err)
 	}
 	*task, _ = m.Get(task.ID)
-	if task.Gain() || !strings.Contains(task.Log[len(task.Log)-1].Text, "a plain fix") {
+	if task.Gain() || !strings.Contains(task.Log[len(task.Log)-1].Text, "a plain fix") || task.AimWord() != "a fix: a plain fix" {
 		t.Fatalf("aim %q, log %+v", task.Aim, task.Log[len(task.Log)-1])
 	}
 	mergeOnce(t, m, task, p)
@@ -337,8 +524,53 @@ func TestAimOp(t *testing.T) {
 	}
 }
 
+// More than one gate runs at once while the machine has room for another:
+// with one in flight, a second change starts its own run, and it waits while
+// the machine is strained.
+func TestSelfGatesRunSideBySide(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	maxGates(m, 2)
+	strain := "machine low on memory (900 MB free, floor 4096 MB)"
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) (string, bool) { return strain, true }
+	release := make(chan struct{})
+	gate := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult { <-release; return gate(ctx, j) }
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{"other": {key: "other", task: "t9"}}
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	if !strings.Contains(task.Reason, "no room for another") || len(*jobs) != 0 {
+		t.Fatalf("reason %q, %d runs: want waiting while the machine is strained", task.Reason, len(*jobs))
+	}
+	strain = ""
+	m.mu.Lock()
+	delete(m.later, task.ID)
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	m.mu.Lock()
+	n := len(m.gating)
+	m.mu.Unlock()
+	if n != 2 || !strings.Contains(task.Reason, "started") {
+		t.Fatalf("%d runs in flight, reason %q: want a second run beside the first", n, task.Reason)
+	}
+	close(release)
+	m.Wait()
+	m.mu.Lock()
+	delete(m.later, task.ID)
+	_, other := m.gating["other"]
+	m.mu.Unlock()
+	if !other || len(*jobs) != 1 {
+		t.Fatalf("other in flight %v, %d runs: want this one done and the other still running", other, len(*jobs))
+	}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q: want merged on its keep", task.Stage, task.Reason)
+	}
+}
+
 // Turning an improvement into a fix while its gate runs cancels that run, so
-// the one gate slot frees for the gains behind it; the cancelled run records
+// its gate slot frees for the gains behind it; the cancelled run records
 // no verdict and holds nobody.
 func TestAimFixCancelsItsGate(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
@@ -363,10 +595,11 @@ func TestAimFixCancelsItsGate(t *testing.T) {
 		t.Fatal("the gate run went on after its task became a fix")
 	}
 	m.mu.Lock()
-	gating, cantRun := m.gating, len(m.gateCantRun)
+	gating := len(m.gating)
 	m.mu.Unlock()
-	if gating != nil || cantRun != 0 {
-		t.Fatalf("gating %+v, %d can't-run holds: want the slot free and nobody held", gating, cantRun)
+	_, held := m.C.Effects.GateAtMain(p.Name, main)
+	if gating != 0 || held {
+		t.Fatalf("%d gating, held %v: want the slot free and nobody held", gating, held)
 	}
 	if g, ok := m.C.Effects.GateResult(p.Name, task.SHA, main); ok {
 		t.Fatalf("a cancelled run recorded a verdict: %+v", g)
@@ -401,23 +634,37 @@ func TestWorkerCantUnaimARolledBackGain(t *testing.T) {
 	}
 }
 
-// A brief may say it aims at a gain, and its worker's brief says which it is.
+// A brief may say it aims at a gain or is a fix naming its failure; one that
+// says neither is taken as a gain; its worker's brief says which, and why.
 func TestBriefAim(t *testing.T) {
 	m, _, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	if _, err := m.File(Brief{Project: p.Name, Title: "x", Aim: "bigger"}); err == nil {
 		t.Fatal("filed a brief with an aim that is neither fix nor gain")
 	}
+	if _, err := m.File(Brief{Project: p.Name, Title: "x", Aim: "fix"}); err == nil {
+		t.Fatal("filed a fix that names no failure")
+	}
 	g, err := m.File(Brief{Project: p.Name, Title: "faster merges", Aim: "gain"})
 	if err != nil || !g.Gain() {
 		t.Fatalf("aim %q, %v", g.Aim, err)
 	}
-	fx, _ := m.File(Brief{Project: p.Name, Title: "a fix"})
+	fx, err := m.File(Brief{Project: p.Name, Title: "a fix", Aim: "fix", Why: "TestMerge fails"})
+	if err != nil || !fx.Fix() || fx.AimWhy != "TestMerge fails" {
+		t.Fatalf("aim %q (%q), %v", fx.Aim, fx.AimWhy, err)
+	}
+	u, _ := m.File(Brief{Project: p.Name, Title: "tidy the merge loop"})
+	if !u.Gain() || !strings.Contains(u.Log[len(u.Log)-1].Text, "taken as a gain") {
+		t.Fatalf("an unclear brief: aim %q, log %+v", u.Aim, u.Log)
+	}
 	main, _ := m.C.Effects.Sync(p)
-	if b := m.renderBrief(&g, p, main); !strings.Contains(b, "Aim: an improvement") {
+	if b := m.renderBrief(&g, p, main); !strings.Contains(b, "Aim: a gain (aims at a measurable gain)") {
 		t.Fatalf("the brief doesn't say it aims at a gain:\n%s", b)
 	}
-	if b := m.renderBrief(&fx, p, main); !strings.Contains(b, "Aim: a fix") {
+	if b := m.renderBrief(&fx, p, main); !strings.Contains(b, "Aim: a fix (TestMerge fails)") {
 		t.Fatalf("the brief doesn't say it is a fix:\n%s", b)
+	}
+	if b := m.renderBrief(&u, p, main); !strings.Contains(b, "Aim: a gain, as nothing says it is a fix") {
+		t.Fatalf("the brief doesn't say it is taken as a gain:\n%s", b)
 	}
 }
 
@@ -440,18 +687,143 @@ func TestGateLessonsReachTheBrief(t *testing.T) {
 }
 
 // The reader of a change to the Hive declared a fix is asked to flag one
-// aimed at a gain; a gain, a revert or another project's change isn't.
+// aimed at a gain; a gain, an unclear change (taken as a gain), a revert or
+// another project's change isn't.
 func TestAimCheckOnSelfFixes(t *testing.T) {
 	self, other := core.Project{Name: "hive", Self: true}, core.Project{Name: "p"}
-	if s := aimCheck(&Task{}, self); !strings.Contains(s, "declared a fix") || !strings.Contains(s, "--aim gain") {
+	if s := aimCheck(&Task{Aim: AimFix, AimWhy: "TestMerge fails"}, self); !strings.Contains(s, "declared a fix (TestMerge fails)") || !strings.Contains(s, "--aim gain") {
 		t.Fatalf("a self fix's reader isn't asked about its aim: %q", s)
 	}
 	for _, c := range []struct {
 		t *Task
 		p core.Project
-	}{{&Task{Aim: AimGain}, self}, {&Task{Kind: "revert"}, self}, {&Task{}, other}} {
+	}{{&Task{Aim: AimGain}, self}, {&Task{}, self}, {&Task{Kind: "revert"}, self}, {&Task{Aim: AimFix, AimWhy: "x"}, other}} {
 		if s := aimCheck(c.t, c.p); s != "" {
 			t.Fatalf("aim %q kind %q self %v: got %q", c.t.Aim, c.t.Kind, c.p.Self, s)
 		}
+	}
+}
+
+// A worker that merged the main its last conflict sent starts the count over
+// when main moves on and conflicts again; one that didn't keeps adding up.
+func TestOnlyUnresolvedConflictsCount(t *testing.T) {
+	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
+	dir := m.C.WS.Project(p.Name)
+	pushMain(t, f, map[string]string{"other.txt": "a\n"})
+	sent, _ := m.C.Effects.Sync(p) // the main the third conflict sent
+	tree, err := core.Git(dir, "merge-tree", "--write-tree", task.SHA, sent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := core.Git(dir, "commit-tree", "-p", task.SHA, "-p", sent, "-m", "merge main", strings.TrimSpace(tree))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head = strings.TrimSpace(head) // the worker merged it
+	pushMain(t, f, map[string]string{"feature.go": "package q\n"})
+	moved, _ := m.C.Effects.Sync(p) // and main moved on, conflicting again
+	task.Conflicts, task.ConflictMain = 3, sent
+	if err := m.conflict(task, p, head, errors.New("main moved")); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageWorking || task.Conflicts != 1 || task.ConflictMain != moved {
+		t.Fatalf("stage %q, conflicts %d, main %q: want a fresh count, sent back to merge %s", task.Stage, task.Conflicts, task.ConflictMain, moved)
+	}
+	for range 3 { // sent back again and again without merging what it was sent
+		if err := m.conflict(task, p, head, errors.New("still")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task.Stage != StageStopped || !strings.Contains(task.Reason, "keeps conflicting") {
+		t.Fatalf("stage %q, reason %q: want given up after four unresolved", task.Stage, task.Reason)
+	}
+}
+
+// The gates' limit starts at two, grows by one at most every gateStep while
+// the machine has room, never past one gate per gateCores cores or the
+// person's max_gates, pulls back under strain, and stays at one where the
+// machine can't be read.
+func TestGatePace(t *testing.T) {
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	strain, watching := "", true
+	gateMachine = func(core.Config) (string, bool) { return strain, watching }
+	j, err := core.OpenJournal(filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	fresh := func() *Module { return &Module{C: &core.Core{J: j}} }
+	now := time.Now()
+	m := fresh()
+	cfg := core.Config{MaxGates: 0}
+	top := gateCeiling(cfg)
+	if l, _ := m.gateLimit(now, 0, cfg); l != min(2, top) {
+		t.Fatalf("start %d, want %d", l, min(2, top))
+	}
+	cfg.MaxGates = 4
+	m = fresh()
+	if l, _ := m.gateLimit(now, 4, cfg); l != 4 {
+		t.Fatalf("start under max_gates 4: %d", l)
+	}
+	cfg.MaxGates = 5
+	m = fresh()
+	m.gateLimit(now, 3, cfg) // starts at 5
+	m.gates.limit = 3        // as if pulled back
+	if l, _ := m.gateLimit(now.Add(gateStep-time.Second), 3, cfg); l != 3 {
+		t.Fatalf("grew to %d within %s", l, gateStep)
+	}
+	if l, _ := m.gateLimit(now.Add(gateStep), 3, cfg); l != 4 {
+		t.Fatalf("limit %d after %s with room, want 4", l, gateStep)
+	}
+	if l, _ := m.gateLimit(now.Add(2*gateStep), 4, cfg); l != 5 {
+		t.Fatalf("limit %d, want 5", l)
+	}
+	if l, _ := m.gateLimit(now.Add(3*gateStep), 5, cfg); l != 5 {
+		t.Fatalf("grew past max_gates to %d", l)
+	}
+	strain = "machine low on memory"
+	if l, why := m.gateLimit(now.Add(4*gateStep), 5, cfg); l != 3 || why != strain {
+		t.Fatalf("limit %d (%q) under strain, want 3", l, why)
+	}
+	var changes []string // a change past the first read is journaled
+	j.Replay(func(e core.Event) {
+		var c struct {
+			Limit    string
+			From, To int
+		}
+		if e.Kind == "pace.changed" && e.Decode(&c) == nil {
+			changes = append(changes, fmt.Sprintf("%s %d>%d", c.Limit, c.From, c.To))
+		}
+	})
+	if got := strings.Join(changes, ", "); got != "gates 3>4, gates 4>5, gates 5>3" {
+		t.Fatalf("journaled %q", got)
+	}
+	strain, watching, cfg.MaxGates = "", false, 0
+	m = fresh()
+	if l, _ := m.gateLimit(now, 0, cfg); l != 1 {
+		t.Fatalf("limit %d where the machine can't be read, want 1", l)
+	}
+	if l, _ := m.gateLimit(now.Add(gateStep), 1, cfg); l != 1 {
+		t.Fatalf("grew to %d unseen", l)
+	}
+}
+
+// A task whose head moved while its gate ran starts a run on the new head
+// and ends the one on the old: its verdict would judge what no longer lands.
+func TestNewHeadCancelsItsOldGate(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	maxGates(m, 3)
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) (string, bool) { return "", true }
+	cancelled := false
+	old := &gateRun{key: p.Name + "@oldhead@main", task: task.ID, cancel: func() { cancelled = true }}
+	other := &gateRun{key: "other", task: "t9", cancel: func() { t.Error("another task's run was cancelled") }}
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{old.key: old, other.key: other}
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if !old.dropped || !cancelled || other.dropped || len(*jobs) != 1 || (*jobs)[0].Head != task.SHA {
+		t.Fatalf("old dropped %v cancelled %v, other dropped %v, %d runs: want the old head's run ended and the new one started", old.dropped, cancelled, other.dropped, len(*jobs))
 	}
 }

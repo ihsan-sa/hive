@@ -20,9 +20,8 @@ type failure struct {
 }
 
 var (
-	pkgLine  = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
-	testLine = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
-	// The same marks in a check's stored output, whose whitespace is folded.
+	// core.GoPkgLine's and core.GoFailLine's marks in a check's stored
+	// output, whose whitespace is folded.
 	foldedPkg  = regexp.MustCompile(`FAIL\s+(\S+/\S+)(\s+\[(build|setup) failed\]|\s+[\d.]+s)`)
 	foldedTest = regexp.MustCompile(`--- FAIL: (\S+) \([\d.]+s\)\s*([^-]{0,160})`)
 )
@@ -37,7 +36,7 @@ func failures(out string) []failure {
 	var tests, says []string
 	var block []string // lines since the last package line
 	for _, l := range strings.Split(out, "\n") {
-		if m := pkgLine.FindStringSubmatch(l); m != nil && strings.ContainsAny(m[2], "/.") {
+		if m := core.GoPkgLine.FindStringSubmatch(l); m != nil && strings.ContainsAny(m[2], "/.") {
 			if m[1] == "FAIL" {
 				f := failure{Pkg: m[2], Tests: tests, Says: says, Build: strings.Contains(m[4], "failed")}
 				if len(f.Tests) == 0 {
@@ -49,7 +48,7 @@ func failures(out string) []failure {
 			continue
 		}
 		block = append(block, l)
-		if m := testLine.FindStringSubmatch(l); m != nil {
+		if m := core.GoFailLine.FindStringSubmatch(l); m != nil {
 			tests = append(tests, m[1])
 			says = append(says, "")
 			continue
@@ -231,16 +230,16 @@ func (m *Module) fileFlaky(p core.Project, sha string, fs []failure, sum, out st
 		return
 	}
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": p.Name, "sha": sha, "text": "a flaky test in " + p.Name + " failed at " + core.Short(sha) + " and passed on rerun: " + core.Clip(sum, 300)})
-	m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title,
+	m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title, Aim: work.AimFix, Why: "flaky test: " + core.Clip(what, 200) + " failed at " + core.Short(sha) + " and passed on rerun",
 		Done:  "The test passes every time: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails.",
 		Known: fmt.Sprintf("After a merge at %s the tests went red and passed when only what failed ran again, so the merge was kept. What failed: %s", core.Short(sha), sum)})
 }
 
 // redBefore runs what stayed red at t's merge again on main just before t
 // first merged. When everything that failed (core.RedKeys: each test by its
-// package, and a package's failure no test name accounts for) also fails
-// there, the red isn't
-// new at this merge (main went red beside it: a clock, the environment, an
+// package, and a package's failure no test name accounts for; core.StopKeys
+// when vet or the build stopped the command before any test ran) also fails
+// there, the red isn't new at this merge (main went red beside it: a clock, the environment, an
 // earlier merge), so reverting it would clear nothing: the red is filed to
 // fix instead. "" means the failure is new here, or that can't be told.
 func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
@@ -254,7 +253,10 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	// The whole first run, not the rerun of what failed: a package that
 	// failed with no test named (a timeout, a panic, an exit) counts too.
 	log := tc.FullOutput()
-	keys := core.RedKeys(log)
+	keys, stopped := core.RedKeys(log), false
+	if len(keys) == 0 {
+		keys, stopped = core.StopKeys(log), true // vet or the build stopped the command
+	}
 	if len(keys) == 0 {
 		return "" // nothing named to look for before it
 	}
@@ -270,28 +272,55 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	if err != nil || parent == "" || own || !m.C.Effects.MainLine(p)[parent] {
 		return ""
 	}
-	bc := m.C.Effects.RunCheck(p, parent, "before", rerunCommand(test, failures(log)))
+	// Only what failed runs again, unless a package failed with no test
+	// named: a timeout or a build failure the filtered run may never reach.
+	cmd := rerunCommand(test, failures(log))
+	if slices.ContainsFunc(keys, func(k string) bool { return strings.HasSuffix(k, " !") }) {
+		cmd = test
+	}
+	bc := m.C.Effects.RunCheck(p, parent, "before", cmd)
 	if bc.CantRun != "" || bc.OK {
 		return ""
 	}
 	before := core.RedKeys(bc.FullOutput())
+	if stopped {
+		before = core.StopKeys(bc.FullOutput())
+	}
+	// Main just before was stopped by vet or the build, so its tests never
+	// ran: this merge fixed that, and what fails now may have been hidden
+	// behind it since any merge in that stretch. Comparing further back
+	// can't clear this merge, and reverting it only brings the stop back.
+	hidden := !stopped && len(before) == 0 && len(core.StopKeys(bc.FullOutput())) > 0
 	for _, k := range keys {
-		if !slices.Contains(before, k) {
+		if !hidden && !slices.Contains(before, k) {
 			return ""
 		}
 	}
-	what := strings.Join(tc.Failed, ", ")
-	if what == "" {
-		what = strings.Join(keys, ", ")
+	// Sorted, so the same failures listed in another order make the same
+	// title and are filed once.
+	names := slices.Clone(tc.Failed)
+	if len(names) == 0 {
+		names = slices.Clone(keys)
 	}
+	slices.Sort(names)
+	what := strings.Join(slices.Compact(names), ", ")
 	why := "not new at this merge: " + what + " failed after it merged and fail too at " + core.Short(parent) + ", main just before it"
+	known := fmt.Sprintf("After %s merged as %s the tests went red, but the same tests fail at %s, main just before it, so the merge wasn't the cause and wasn't reverted.", t.Label(), core.Short(t.MergeSHA), core.Short(parent))
+	switch {
+	case stopped:
+		why += " (vet or the build stopped the command, so the tests behind it didn't run at either)"
+		known += " Vet or the build stopped the command at both, so the tests behind it didn't run: they may fail too once it is fixed."
+	case hidden:
+		why = "can't be told new at this merge: " + what + " failed after it merged, and at " + core.Short(parent) + ", main just before it, vet or the build stopped the command before any test ran, so they may have failed there unseen; this merge cleared that stop, and reverting it only brings the stop back"
+		known = fmt.Sprintf("After %s merged as %s it cleared a vet or build error that stopped main's tests at %s, main just before it, and tests that couldn't run there fail now. They may have broken at any merge while main was stopped, so this one wasn't reverted.", t.Label(), core.Short(t.MergeSHA), core.Short(parent))
+	}
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": t.MergeSHA, "task": t.ID,
 		"text": core.Clip(why, 400) + " (" + p.Name + "). Not reverted; filed to fix on main."})
 	title := core.Clip("Make "+what+" pass on main again", 120)
 	if len(m.Work.List(func(w work.Task) bool { return w.Project == p.Name && w.Title == title && !w.Terminal() })) == 0 {
-		m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title,
+		m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title, Aim: work.AimFix, Why: core.Clip("red on main: "+what+" fail at "+core.Short(parent)+" and after "+core.Short(t.MergeSHA), 300),
 			Done:  "The tests pass on main again, every time, without reverting anything.",
-			Known: fmt.Sprintf("After %s merged as %s the tests went red, but the same tests fail at %s, main just before it, so the merge wasn't the cause and wasn't reverted. What failed: %s", t.Label(), core.Short(t.MergeSHA), core.Short(parent), core.Clip(bc.Output, 1500))})
+			Known: known + " What failed: " + core.Clip(tc.Output, 1500) + "\n\nAt " + core.Short(parent) + ": " + core.Clip(bc.Output, 1000)})
 	}
 	return why
 }

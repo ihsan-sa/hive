@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -83,24 +84,62 @@ func probeOrg(cfg *Config, c *Child) Result {
 	return Result{Pass: true, Detail: c.Repo}
 }
 
-var failed = regexp.MustCompile(`(?m)^--- FAIL: (\S+)`)
-
 // probeE2E is the evaluator's e2e suite (the base's tests, the same for both
-// sides) run against the child's own binary.
+// sides) run against the child's own binary. A failure names each failing
+// test and the first line of what it said, which is where t.Fatalf puts its
+// file, line and message: the end of the output is the tail of a status dump.
 func probeE2E(cfg *Config, c *Child) Result {
 	if c.Eval == nil {
 		return Result{Pass: true, Detail: "prebuilt binary: no evaluator to test with"}
 	}
 	out, err := c.judge(cfg, time.Hour, nil, "")
 	if err != nil {
-		names := failed.FindAllStringSubmatch(out, -1)
-		var fs []string
-		for _, n := range names {
-			fs = append(fs, n[1])
+		names, said := goTestFailures(out)
+		if len(names) == 0 {
+			return Result{Detail: "failed naming no test: " + tail(out, 300)}
 		}
-		return Result{Detail: "failed: " + strings.Join(fs, ", ") + " " + tail(out, 300)}
+		lines := make([]string, len(names))
+		for i, n := range names {
+			lines[i] = n
+			if said[n] != "" {
+				lines[i] += ": " + said[n]
+			}
+		}
+		return Result{Detail: "failed: " + strings.Join(lines, "; "), Failed: names}
 	}
 	return Result{Pass: true}
+}
+
+// failLine is go test's line for a failing test. A name goes into the
+// verdict, and so into a lesson, so only one shaped like a Go test's counts:
+// the output passed through the side's sandbox.
+var failLine = regexp.MustCompile(`^\s*--- FAIL: (Test[A-Za-z0-9_]{0,80}(?:/[A-Za-z0-9_#.+=-]{1,80}){0,3}) \(`)
+
+// goTestFailures reads go test's plain output: the tests that failed, in
+// order, and the first line each said (clipped). A parent that failed only
+// with its subtests is named by them.
+func goTestFailures(out string) (names []string, said map[string]string) {
+	said = map[string]string{}
+	cur := ""
+	for _, line := range strings.Split(out, "\n") {
+		if m := failLine.FindStringSubmatch(line); m != nil {
+			if _, seen := said[m[1]]; !seen {
+				names = append(names, m[1])
+				said[m[1]] = ""
+			}
+			cur = m[1]
+			continue
+		}
+		t := strings.TrimSpace(line)
+		if cur != "" && said[cur] == "" && t != "" && !strings.HasPrefix(t, "=== ") && t != "FAIL" {
+			said[cur] = clip(t, 200)
+		}
+		cur = ""
+	}
+	names = slices.DeleteFunc(names, func(n string) bool {
+		return slices.ContainsFunc(names, func(m string) bool { return strings.HasPrefix(m, n+"/") })
+	})
+	return names, said
 }
 
 var benchLine = regexp.MustCompile(`(?m)^BENCH (\{.*\}) ([0-9a-f]{64})$`)

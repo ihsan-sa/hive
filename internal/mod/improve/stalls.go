@@ -157,7 +157,7 @@ func (m *Module) Watch() {
 	var causes []string
 	for _, t := range m.Work.List(func(t work.Task) bool { return !t.Terminal() && t.Stage != work.StagePerson }) {
 		now["task:"+t.ID] = t.Stage
-		// The recursive gate runs one change at a time on its own clock.
+		// The recursive gate runs on its own clock, as many at once as the machine carries.
 		if t.Queued() || strings.HasPrefix(t.Reason, work.GateWait) || t.Stage == work.StageTesting && slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
 			continue
 		}
@@ -273,8 +273,20 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 	m.C.J.MustAppend("stall.saved", *s)
 	text := m.alertStall(*s)
 	if s.Told {
-		m.Chat.Notify(chat, thread, "Stuck: "+text)
+		m.Chat.Notify(chat, thread, "Stuck: "+text+retryHint(s.Key))
 	}
+}
+
+// retryHint names, for the lead, the op that takes a stuck task back to
+// landing from its branch's head; a stuck run has none.
+func retryHint(key string) string {
+	if id, ok := strings.CutPrefix(key, "task:"); ok {
+		return "; `hive agent recheck --task " + id + "` retries it from its branch's head"
+	}
+	if strings.HasPrefix(key, "run:") {
+		return ""
+	}
+	return "; `hive agent recheck --task <id>` retries each from its branch's head"
 }
 
 // alertStall raises or updates the one alert for s.

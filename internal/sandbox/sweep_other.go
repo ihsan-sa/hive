@@ -3,4 +3,4 @@
 package sandbox
 
 // sweepRuntime is Linux's alone: only its sandbox-exec makes runtime folders.
-func sweepRuntime() int { return 0 }
+func sweepRuntime(...string) int { return 0 }

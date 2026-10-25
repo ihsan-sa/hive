@@ -13,9 +13,9 @@ import (
 // brought the work, it is done, not blocked or stopped, nothing more is run
 // for it, and nothing is measured. So does one whose branch brought main in
 // and has no own diff left, and the commit named is still the one that landed
-// the work, not main's newest.
+// the work, not main's newest. One waiting for its read gets no reviewer.
 func TestAlreadyLandedThroughAnotherTask(t *testing.T) {
-	for _, stage := range []string{StageTesting, StageMerging} {
+	for _, stage := range []string{StageTesting, StageReviewing, StageMerging} {
 		t.Run(stage, func(t *testing.T) {
 			m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 			is, err := f.CreateIssue(p.Repo, "work", "", marker(task.ID))
@@ -65,7 +65,40 @@ func TestAlreadyLandedThroughAnotherTask(t *testing.T) {
 			if err := m.step(task); err != nil || task.Stage != StageDone || len(m.C.Runs.List(nil)) != before {
 				t.Fatalf("stage %q, runs %d (were %d): %v", task.Stage, len(m.C.Runs.List(nil)), before, err)
 			}
+			for _, r := range m.C.Runs.List(nil) {
+				if strings.HasPrefix(r.ID, "r-"+task.ID) {
+					t.Fatalf("a reviewer %s was started", r.ID)
+				}
+			}
+			if task.Reviewer != "" {
+				t.Fatalf("reviewer %q", task.Reviewer)
+			}
 		})
+	}
+}
+
+// A task whose work landed further back than carrier looks names the oldest
+// commit it looked at, and its PR's comment says an older one may carry it.
+func TestAlreadyLandedFarBackIsApproximate(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	task.Stage = StageTesting
+	m.save(task, "")
+	pushMain(t, f, map[string]string{"feature.txt": "y"})
+	pushMain(t, f, map[string]string{"a.txt": "1"})
+	oldest, _ := m.C.Effects.Sync(p)
+	pushMain(t, f, map[string]string{"b.txt": "2"})
+	main, _ := m.C.Effects.Sync(p)
+	defer func(n int) { carrierBack = n }(carrierBack)
+	carrierBack = 1
+	if at, exact := carrier(m.C.WS.Project(p.Name), main, task.SHA); at != oldest || exact {
+		t.Fatalf("carrier %s exact %v, want %s approximate", at, exact, oldest)
+	}
+	if err := m.step(task); err != nil {
+		t.Fatal(err)
+	}
+	cs := f.Comments(p.Repo, task.PR.Number)
+	if task.Stage != StageDone || task.MergeSHA != oldest || len(cs) == 0 || !strings.Contains(cs[len(cs)-1], oldest+" or an older commit carries") {
+		t.Fatalf("stage %q, merge %s, comments %q", task.Stage, task.MergeSHA, cs)
 	}
 }
 

@@ -23,6 +23,17 @@ const burstGap = 25 * time.Millisecond
 // burstMin is the fewest keys that read as a paste; fewer replay as keys.
 const burstMin = 3
 
+// burstPace is the slowest a paste comes on average, key to key. A console
+// read hands over a paste's keys microseconds apart, many at a time, so even
+// a long one split across reads averages well under it. Fast typing with key
+// rollover can land three keys inside burstGap of each other, but each a few
+// milliseconds apart at least, so it reads as keys: "ok" and Enter typed in a
+// rush still sends the message instead of adding a line.
+const burstPace = 3 * time.Millisecond
+
+// burstClock is when a key arrives; tests set it.
+var burstClock = time.Now
+
 type burstMsg int // the burst it closes, by number
 
 // burstable keys can be part of a paste: what a pasted character turns into.
@@ -45,6 +56,11 @@ func (m *model) burstKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		_, cmd := m.key(k)
 		return m, tea.Batch(flush, cmd)
 	}
+	now := burstClock()
+	if len(m.burst) == 0 {
+		m.burstT0 = now
+	}
+	m.burstT1 = now
 	m.burst = append(m.burst, k)
 	m.burstN++
 	n := m.burstN
@@ -52,15 +68,16 @@ func (m *model) burstKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // flushBurst hands the held keys on: as one paste when there are enough of
-// them and they aren't one key repeating (a held key arrives as a burst
-// too), otherwise one by one.
+// them, they came faster than fingers, and they aren't one key repeating (a
+// held key arrives as a burst too), otherwise one by one.
 func (m *model) flushBurst() tea.Cmd {
 	keys := m.burst
 	m.burst = nil
 	if len(keys) == 0 {
 		return nil
 	}
-	if text, ok := burstText(keys); ok {
+	fast := len(keys) > 1 && m.burstT1.Sub(m.burstT0) < burstPace*time.Duration(len(keys)-1)
+	if text, ok := burstText(keys); ok && fast {
 		_, cmd := m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text), Paste: true})
 		return cmd
 	}

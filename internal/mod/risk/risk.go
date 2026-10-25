@@ -540,7 +540,9 @@ func (m *Module) convene(req *Request) error {
 				s = m.Agents.Spec(id, "tribunal", req.Project, dir, m.panelBrief(*req, 1, i))
 				// The seat sees the case and nothing else: no other project, no module.
 				s.ReadOnly, s.Isolated, s.Modules = true, true, nil
-				s.Schema, s.Model, s.Inputs = VoteSchema, seat.Model, map[string]string{"script.sh": req.Script}
+				// A seat at its limit waits rather than moving along the
+				// tribunal's route onto another seat's model.
+				s.Schema, s.Model, s.Inputs, s.Route = VoteSchema, seat.Model, map[string]string{"script.sh": req.Script}, nil
 				if seat.Harness != "" {
 					s.Harness = seat.Harness
 				}
@@ -861,6 +863,19 @@ func (m *Module) onAnswer(a core.Ask) {
 	m.tell(req, text)
 }
 
+// SandboxRoots are where an agent's sandbox mounts its checkout and the
+// Hive's folders; a path under one doesn't exist on the host.
+var SandboxRoots = []string{"/work", "/hive"}
+
+func inSandbox(p string) bool {
+	for _, r := range SandboxRoots {
+		if p == r || strings.HasPrefix(p, r+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 	var a struct{ URL, Project string }
 	if err := core.Bind(args, &a); err != nil {
@@ -879,7 +894,9 @@ func (m *Module) opInstall(r core.Run, args json.RawMessage) (any, error) {
 		}
 		a.URL = m.C.WS.Project(a.Project)
 	}
-	if p := strings.TrimPrefix(a.URL, "file://"); p == "/work" || strings.HasPrefix(p, "/work/") || strings.HasPrefix(p, "/hive/") {
+	// Only a path the agent typed is judged: one resolved from --project is
+	// the host's own, wherever the Hive's folder happens to live.
+	if p := strings.TrimPrefix(a.URL, "file://"); a.Project == "" && inSandbox(p) {
 		return nil, errors.New("that path is inside your sandbox, and the install runs on the host where it doesn't exist: build the module as a project of its own and install it with --project <name>")
 	}
 	if !strings.HasPrefix(a.URL, "https://") && !strings.HasPrefix(a.URL, "git@") && !strings.HasPrefix(a.URL, "file://") && !core.Exists(a.URL) {

@@ -108,6 +108,7 @@ type model struct {
 	fbSel   string // the feedback item selected, by id
 	modSel  int
 	kbDir   string // the knowledge base folder shown, relative to its root
+	remote  bool   // the Hive is on another machine: its knowledge base isn't here
 	kbSel   int
 	kbNew   []kb.Change // the knowledge base's recently updated entries
 	kbNewAt time.Time   // when they were read
@@ -130,6 +131,8 @@ type model struct {
 	keyBurst bool         // pastes arrive as keys (a Windows console): see burst.go
 	burst    []tea.KeyMsg // keys held while they may be a paste
 	burstN   int
+	burstT0  time.Time // when the held burst's first key came
+	burstT1  time.Time // and its last
 }
 
 type stateMsg struct {
@@ -193,7 +196,7 @@ func newModel(c *api.Client, ws core.Workspace) *model {
 	in.BlurredStyle.Text, in.BlurredStyle.CursorLine = stDim, stDim
 	in.FocusedStyle.Placeholder, in.BlurredStyle.Placeholder = stDim, stDim
 	in.KeyMap.InsertNewline.SetKeys("ctrl+j", "alt+enter")
-	return &model{c: c, ws: ws, open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
+	return &model{c: c, ws: ws, remote: c != nil && c.Remote(), open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
 		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, drafts: map[string]string{}, places: map[string]place{}, stages: map[string]string{}, input: in, threadSel: -1, feedSel: -1}
 }
 
@@ -879,7 +882,7 @@ func (m *model) viewMain(w int) pane {
 			}
 		}
 		note = fmt.Sprintf("%d installed · %d on", len(m.st.Modules), on)
-	case m.section == secKB:
+	case m.section == secKB && !m.remote:
 		note = filepath.Join(m.ws.KB(), filepath.FromSlash(m.kbDir))
 	case m.section == secSettings:
 		note = filepath.Join(m.st.Workspace, ".hive", "config.json")
@@ -944,6 +947,8 @@ func (m *model) keys() []string {
 		return []string{"↑↓", "move", "←→", "pick", "enter", "answer", "tab", "sidebar"}
 	case m.section == secFeedback:
 		return m.feedbackKeys()
+	case m.section == secKB && m.remote:
+		return []string{"tab", "sidebar"}
 	case m.section == secKB:
 		return []string{"↑↓", "move", "enter", "open", "/", "search", "esc", "up a folder", "tab", "sidebar"}
 	case m.section == secModules:

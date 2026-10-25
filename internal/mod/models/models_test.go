@@ -71,6 +71,14 @@ func TestLeadRoutes(t *testing.T) {
 	if len(routed) != 1 || !strings.Contains(routed[0], `"by":"`+lead.ID) {
 		t.Fatalf("journal: %q", routed)
 	}
+	// The route op saves config.json, but only the route: an agent can't
+	// widen where public repositories go by riding along on it.
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "qwen,fake:opus", "public_owners": []string{"evil"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.C.WS.LoadConfig().PublicOwners; !slices.Equal(got, cfg.PublicOwners) {
+		t.Fatalf("a route op changed public_owners: %v", got)
+	}
 	spec := a.Agents.Spec("w1", "worker", "lab", t.TempDir(), "brief")
 	if spec.Harness != "open" || spec.Model != "qwen" || len(spec.Route) != 2 || spec.Route[1] != (core.Pick{Harness: "fake", Model: "opus"}) {
 		t.Fatalf("a new worker: %s:%s, route %v", spec.Harness, spec.Model, spec.Route)
@@ -238,5 +246,28 @@ func TestRouteProbesTheModel(t *testing.T) {
 	a.Models.Probe = func(core.Workspace, string, core.OpenModel) error { t.Fatal("probed again"); return nil }
 	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "router,fake:opus"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A route changed in Settings goes on the record as the route op's does:
+// by whom, in which project, and from what.
+func TestSettingsRouteIsRecorded(t *testing.T) {
+	a, _ := hiveWithModels(t)
+	before := a.C.WS.LoadConfig()
+	after := before
+	after.Routes = map[string][]string{"worker": {"qwen"}}
+	after.Projects = map[string]core.ProjectSettings{"lab": {Routes: map[string][]string{"reviewer": {"fake:opus"}}}}
+	models.Record(a.C.J, before, after, "person (Settings)")
+	models.Record(a.C.J, after, after, "person (Settings)") // nothing changed: nothing recorded
+	var got []models.Route
+	a.C.J.Replay(func(e core.Event) {
+		var r models.Route
+		if e.Kind == "config.routed" && e.Decode(&r) == nil {
+			got = append(got, r)
+		}
+	})
+	if len(got) != 2 || got[0].Role != "worker" || got[0].Project != "" || !slices.Equal(got[0].Models, []string{"qwen"}) ||
+		got[1].Role != "reviewer" || got[1].Project != "lab" || got[1].By != "person (Settings)" || got[1].From != nil {
+		t.Fatalf("recorded %+v", got)
 	}
 }

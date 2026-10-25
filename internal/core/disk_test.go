@@ -161,7 +161,9 @@ func TestCheckHomeCap(t *testing.T) {
 // the self gate's folder, and runs' homes live under the cache, gone after.
 func TestPruneRemovesLeftovers(t *testing.T) {
 	c, _ := testHive(t)
+	t.Setenv("TMPDIR", t.TempDir()) // the temp homes Prune looks for are the test's, not the host's
 	e := c.Effects
+	e.sweep = func() int { return sandbox.SweepIn(t.TempDir(), os.TempDir()) }
 	old := time.Now().Add(-2 * staleAfter)
 	mk := func(p string) string {
 		os.MkdirAll(filepath.Join(p, "x"), 0o755)
@@ -278,6 +280,26 @@ func TestPrefetchReadsOnlyTheCheckout(t *testing.T) {
 		if why := localReplace(dir, ok); why != "" {
 			t.Errorf("%q: %s", ok, why)
 		}
+	}
+}
+
+// A go command run on a throwaway home collects no telemetry there, so no
+// detached child of go's writes under the home after go has exited and
+// races its removal.
+func TestPrefetchHomeHasTelemetryOff(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("no go here")
+	}
+	home := t.TempDir()
+	cmd := exec.Command(goBin, "env", "GOTELEMETRY")
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "USERPROFILE=" + home, "SystemRoot=" + os.Getenv("SystemRoot"), "GOENV=off", "GOTOOLCHAIN=local"}, goTelemetryOff(home)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go env: %v %s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != "off" {
+		t.Fatalf("go's telemetry mode on the prefetch home is %q, want off", got)
 	}
 }
 

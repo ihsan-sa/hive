@@ -134,6 +134,33 @@ got=$(printf hello | "$1" sh -c '
 	}
 }
 
+// The fixes step under bubblewrap: its lab reuses the candidate's sandbox,
+// meter and forwarder, and its tree, build cache and the module cache (the
+// repo needs golang.org/x/sys from it, offline) are bound so its tests build
+// and run there, and the step finds the same fixes it finds bare.
+func TestBwrapFindFixes(t *testing.T) {
+	needBwrap(t)
+	sum, err := os.ReadFile("../../go.sum")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, l := range strings.Split(string(sum), "\n") {
+		if strings.HasPrefix(l, "golang.org/x/sys v0.38.0") {
+			lines = append(lines, l)
+		}
+	}
+	extra := map[string]string{
+		"go.mod":       "module example.com/m\n\ngo 1.24.0\n\nrequire golang.org/x/sys v0.38.0\n",
+		"go.sum":       strings.Join(lines, "\n") + "\n",
+		"calc/page.go": "package calc\n\nimport \"golang.org/x/sys/unix\"\n\nvar page = unix.Getpagesize\n",
+	}
+	probe, m := meteredChild(t, "probe")
+	checkFindFixes(t, extra, func(name, root string) *Child {
+		return &Child{Name: name, Root: root, Sandbox: "bwrap", Go: probe.Go, Meter: m, Fwd: probe.Fwd}
+	})
+}
+
 // A deadline on a child kills everything it started, not only its first
 // process.
 func TestDeadlineKillsTheTree(t *testing.T) {

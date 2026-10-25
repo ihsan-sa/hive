@@ -1,0 +1,226 @@
+package improve
+
+import (
+	"cmp"
+	"fmt"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+)
+
+// quarantineWindow is how far back a forge failure counts toward a test's
+// quarantine.
+var quarantineWindow = 24 * time.Hour
+
+// flakyTitle starts the title of the task that fixes a flaky test.
+const flakyTitle = "Fix the flaky "
+
+// A Sighting is one red of a test in the forge's checks: on a PR's head, on
+// main, or on a head whose re-run then passed.
+type Sighting struct {
+	At     time.Time `json:"at"`
+	Task   string    `json:"task,omitempty"`
+	Branch string    `json:"branch,omitempty"`
+	SHA    string    `json:"sha,omitempty"`
+	Check  string    `json:"check,omitempty"`
+	URL    string    `json:"url,omitempty"`
+	Main   bool      `json:"main,omitempty"`
+	Rerun  bool      `json:"rerun,omitempty"` // passed when run again
+}
+
+// A Flake is a quarantined test, keyed package::test: seen failing in the
+// last quarantineWindow on main or on two or more unrelated branches. A pass
+// on a re-run is evidence for that branch, never a quarantine on its own: a
+// change's own code can fail once and pass the next time. A forge check
+// that fails only quarantined tests doesn't send a PR back or hold its
+// merge, judged on evidence from outside that PR's task (QuarantinedTests).
+// Task fixes it; its merge lifts the quarantine, and only later reds count
+// again.
+type Flake struct {
+	Project   string     `json:"project"`
+	Test      string     `json:"test"`
+	Why       string     `json:"why"`
+	Evidence  []Sighting `json:"evidence"`
+	Task      string     `json:"task,omitempty"`
+	TaskStage string     `json:"task_stage,omitempty"`
+}
+
+func flakeKey(project, test string) string { return project + "\x00" + test }
+
+// applyQuarantine takes in a journal event's sightings and fix tasks; m.mu is held.
+func (m *Module) applyQuarantine(e core.Event) {
+	switch e.Kind {
+	case "forge.tests_failed", "forge.flaked":
+		var x struct {
+			Project, Task, Branch, SHA, Check, URL string
+			Main                                   bool
+			Tests                                  []string
+		}
+		if e.Decode(&x) != nil || time.Since(e.At) > quarantineWindow {
+			return
+		}
+		for _, test := range x.Tests {
+			k := flakeKey(x.Project, test)
+			if x.URL != "" && slices.ContainsFunc(m.sighted[k], func(s Sighting) bool { return s.URL == x.URL }) {
+				continue
+			}
+			m.sighted[k] = append(m.sighted[k], Sighting{At: e.At, Task: x.Task, Branch: x.Branch, SHA: x.SHA, Check: x.Check, URL: x.URL, Main: x.Main, Rerun: e.Kind == "forge.flaked"})
+		}
+	case "task.saved":
+		var t work.Task
+		if e.Decode(&t) != nil {
+			return
+		}
+		if kin := cmp.Or(t.FollowUp, t.RevertOf); kin != "" {
+			m.kin[t.ID] = kin
+		}
+		if !strings.HasPrefix(t.Title, flakyTitle) {
+			return
+		}
+		test := strings.TrimPrefix(t.Title, flakyTitle)
+		if strings.ContainsAny(test, ", ") {
+			return // one task for several tests: each still files its own
+		}
+		k := flakeKey(t.Project, test)
+		m.fixes[k] = t.ID
+		// The lift is the fix's merge, once: a later save of the same task
+		// (a note, a revert) mustn't drop the reds seen since.
+		if t.MergeSHA != "" && !m.fixMerged[t.ID] {
+			m.fixMerged[t.ID] = true
+			if e.At.After(m.lifted[k]) {
+				m.lifted[k] = e.At
+			}
+		}
+	}
+}
+
+// related reports whether one task follows up or reverts the other, so
+// their branches carry the same change; m.mu is held.
+func (m *Module) related(a, b string) bool {
+	return m.kin[a] == b || m.kin[b] == a || (m.kin[a] != "" && m.kin[a] == m.kin[b])
+}
+
+// outside reports whether sighting s is evidence for task's PR: not from
+// task itself, a task related to it, or a head task had. Every sighting is
+// for "" (the dashboard's view); m.mu is held.
+func (m *Module) outside(s Sighting, task string) bool {
+	return task == "" || s.Task == "" || (s.Task != task && !m.related(s.Task, task) && !slices.Contains(m.heads[task], s.SHA))
+}
+
+// flake is the quarantine entry for k on evidence from outside task, if its
+// sightings make one; m.mu is held.
+func (m *Module) flake(k, task string) (Flake, bool) {
+	project, test, _ := strings.Cut(k, "\x00")
+	var ev []Sighting
+	for _, s := range m.sighted[k] {
+		if time.Since(s.At) < quarantineWindow && s.At.After(m.lifted[k]) {
+			ev = append(ev, s)
+		}
+	}
+	if len(ev) == 0 {
+		delete(m.sighted, k) // aged out or fixed: nothing left to keep
+		return Flake{}, false
+	}
+	m.sighted[k] = ev
+	ev = slices.DeleteFunc(slices.Clone(ev), func(s Sighting) bool { return !m.outside(s, task) })
+	var why []string
+	if i := slices.IndexFunc(ev, func(s Sighting) bool { return s.Main }); i >= 0 {
+		why = append(why, "failed on main at "+core.Short(ev[i].SHA))
+	}
+	// Unrelated branches: two tasks, neither following up or reverting the
+	// other, red on different heads, neither of which the other task had.
+	var tasks []string
+	var heads []string
+	for _, s := range ev {
+		if s.Task == "" || s.Main || slices.Contains(tasks, s.Task) {
+			continue
+		}
+		if slices.ContainsFunc(tasks, func(o string) bool { return m.related(s.Task, o) || slices.Contains(m.heads[o], s.SHA) }) ||
+			slices.ContainsFunc(heads, func(h string) bool { return h == s.SHA || slices.Contains(m.heads[s.Task], h) }) {
+			continue
+		}
+		tasks, heads = append(tasks, s.Task), append(heads, s.SHA)
+	}
+	if len(tasks) >= 2 {
+		why = append(why, fmt.Sprintf("failed on %d unrelated branches (tasks %s)", len(tasks), strings.Join(tasks, ", ")))
+	}
+	if len(why) == 0 {
+		return Flake{}, false
+	}
+	return Flake{Project: project, Test: test, Why: strings.Join(why, "; ") + " in the last " + quarantineWindow.String(), Evidence: ev, Task: m.fixes[k]}, true
+}
+
+// Quarantine is project's quarantined tests ("" for every project's), by
+// project and test, each with its fix task.
+func (m *Module) Quarantine(project string) []Flake { return m.quarantine(project, "") }
+
+// quarantine is Quarantine on evidence from outside task.
+func (m *Module) quarantine(project, task string) []Flake {
+	m.mu.Lock()
+	var out []Flake
+	for k := range m.sighted {
+		if project != "" && !strings.HasPrefix(k, project+"\x00") {
+			continue
+		}
+		if f, ok := m.flake(k, task); ok {
+			out = append(out, f)
+		}
+	}
+	m.mu.Unlock()
+	for i := range out {
+		if t, ok := m.Work.Get(out[i].Task); ok && out[i].Task != "" {
+			out[i].TaskStage = t.Stage
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Project+"\x00"+out[i].Test < out[j].Project+"\x00"+out[j].Test
+	})
+	return out
+}
+
+// QuarantinedTests names project's tests quarantined on evidence from
+// outside task, so no task's own reds or re-runs excuse it
+// (core.Effects.Quarantined).
+func (m *Module) QuarantinedTests(project, task string) []string {
+	var names []string
+	for _, f := range m.quarantine(project, task) {
+		names = append(names, f.Test)
+	}
+	return names
+}
+
+// fileQuarantined gives each quarantined test with no open fix task one.
+func (m *Module) fileQuarantined() {
+	for _, f := range m.Quarantine("") {
+		if t, ok := m.Work.Get(f.Task); ok && f.Task != "" && !t.Terminal() {
+			continue
+		}
+		title := flakyTitle + f.Test
+		if len(m.Work.List(func(t work.Task) bool { return t.Project == f.Project && t.Title == title && !t.Terminal() })) > 0 {
+			continue
+		}
+		var ev []string
+		for _, s := range f.Evidence {
+			where := "task " + s.Task + " (" + s.Branch + ")"
+			if s.Main {
+				where = "main"
+			}
+			line := fmt.Sprintf("- %s: %s at %s, check %s", s.At.Format("01-02 15:04"), where, core.Short(s.SHA), s.Check)
+			if s.Rerun {
+				line += ", passed when run again"
+			}
+			if s.URL != "" {
+				line += " " + s.URL
+			}
+			ev = append(ev, line)
+		}
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": f.Project, "sha": f.Test, "text": "quarantined the flaky " + f.Test + " in " + f.Project + ": it " + f.Why})
+		m.Work.File(work.Brief{Project: f.Project, From: "improve", Title: title,
+			Done:  "The test passes every time on every platform the forge's checks run: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails. Once this merges the quarantine on it is lifted, so its next red sends a PR back again.",
+			Known: "The test is quarantined (a known flake): a forge check failing only it doesn't send a PR back. It " + f.Why + ". Where it failed:\n" + strings.Join(ev, "\n")})
+	}
+}

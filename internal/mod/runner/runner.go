@@ -21,6 +21,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
+	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
 // Scopes is the slice of the control API each hook may call. The daemon never
@@ -62,6 +63,7 @@ type child struct {
 	token  string
 	paths  map[string]bool
 	cmd    *exec.Cmd
+	done   chan struct{} // closed once cmd has exited
 	wait   time.Duration
 	next   time.Time
 }
@@ -247,6 +249,11 @@ func (r *Runner) start(name string, c *child, m modules.Module) {
 	}
 	cmd.Env = append(env, "HOME="+home, "USERPROFILE="+home, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "APPDATA="+filepath.Join(home, ".config"),
 		"HIVE_API="+r.API, "HIVE_MODULE="+name, "HIVE_MODULE_TOKEN="+c.token)
+	// Telemetry off, as for the prefetch: in its fresh config folder `go run`
+	// counts and uploads from a detached child that outlives a kill.
+	os.MkdirAll(filepath.Join(home, ".config", "go", "telemetry"), 0o755)
+	os.WriteFile(filepath.Join(home, ".config", "go", "telemetry", "mode"), []byte("off\n"), 0o644)
+	proc.Group(cmd)
 	log, _ := os.OpenFile(filepath.Join(home, "module.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	cmd.Stdout, cmd.Stderr = log, log
 	at := time.Now()
@@ -267,12 +274,14 @@ func (r *Runner) start(name string, c *child, m modules.Module) {
 		}
 		return
 	}
-	c.cmd = cmd
+	done := make(chan struct{})
+	c.cmd, c.done = cmd, done
 	r.status[name] = "running"
 	r.C.J.MustAppend("module.started", map[string]any{"module": name, "commit": c.commit, "pid": cmd.Process.Pid, "hooks": m.Hooks})
 	go func() {
 		err := cmd.Wait()
 		log.Close()
+		close(done)
 		msg := "exited"
 		if err != nil {
 			msg = err.Error()
@@ -291,10 +300,11 @@ func (r *Runner) start(name string, c *child, m modules.Module) {
 	}()
 }
 
-// kill stops a module's program; its token dies with it.
+// kill stops a module's program and what it started (the binary `go run`
+// built, for one); its token dies with it.
 func (r *Runner) kill(c *child) {
 	if c.cmd != nil {
-		c.cmd.Process.Kill()
+		proc.KillGroup(c.cmd)
 		c.cmd = nil
 	}
 }
@@ -355,11 +365,22 @@ func (r *Runner) Status(name string) string {
 	return r.status[name]
 }
 
-// Close stops every module's program.
+// Close stops every module's program and waits a little for each to go, so
+// none still writes in its home once the daemon has stopped.
 func (r *Runner) Close() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	var done []chan struct{}
 	for _, c := range r.procs {
+		if c.cmd != nil && c.done != nil {
+			done = append(done, c.done)
+		}
 		r.kill(c)
+	}
+	r.mu.Unlock()
+	for _, d := range done {
+		select {
+		case <-d:
+		case <-time.After(5 * time.Second):
+		}
 	}
 }

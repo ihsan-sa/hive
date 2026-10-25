@@ -94,6 +94,9 @@ func gitOnce(timeout time.Duration, dir string, env []string, args ...string) (s
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("timed out after %s, %w", timeout, err)
+	}
 	if err != nil {
 		return strings.TrimSpace(out.String()), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}
@@ -125,5 +128,22 @@ func runCmd(timeout time.Duration, dir string, env []string, name string, args .
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("timed out after %s, %w", timeout, err)
+	}
 	return strings.TrimSpace(out.String()), strings.TrimSpace(errb.String()), err
 }
+
+// TimedOut reports whether an error's text is a host program killed by its
+// own timeout (the "timed out after" runCmd and gitOnce put first): the
+// machine was slow, not the step wrong. A kill with no timeout behind it (the
+// kernel short of memory inside a step's own work) isn't one, nor is a test's
+// own "test timed out after 2s" panic.
+func TimedOut(text string) bool {
+	return timedOut.MatchString(text)
+}
+
+// timedOut is tied to the two producers' wording, runCmd's and gitOnce's
+// "timed out after 2m0s, signal: killed"; others (the gate's child, an open
+// agent's "[timed out after Ns]") say it their own way and aren't a call.
+var timedOut = regexp.MustCompile(`timed out after [0-9][0-9.µnmsh]*, `)

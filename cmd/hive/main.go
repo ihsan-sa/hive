@@ -483,6 +483,7 @@ func cmdDaemon(args []string) int {
 		}
 		return 0
 	}
+	os.Unsetenv(sandbox.OwnerEnv) // a check's tag, if a check started this daemon
 	if err := daemon.Run(ws, *waitFor); err != nil {
 		fmt.Fprintln(os.Stderr, core.Cmd+" daemon:", err)
 		if code, ok := err.(daemon.ExitCode); ok {
@@ -847,10 +848,18 @@ func cmdModel(args []string) int {
 		if cfg.Models == nil {
 			cfg.Models = map[string]core.OpenModel{}
 		}
+		was, replaced := cfg.Models[args[1]]
 		cfg.Models[args[1]] = m
 		if err := cfg.Check(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
+		}
+		if m.Key && cfg.Plaintext(args[1]) {
+			fmt.Fprintf(os.Stderr, "%s is plain http on a public host, so its key would cross the network unencrypted; use its https:// endpoint\n", m.Endpoint)
+			return 1
+		}
+		if replaced {
+			fmt.Printf("Replacing %s (was %s).\n", args[1], was.Where())
 		}
 		// One real request first: a model that can't answer isn't added.
 		var err error
@@ -869,11 +878,36 @@ func cmdModel(args []string) int {
 			fmt.Printf("%s answered.\n", args[1])
 		}
 	case args[0] == "rm" && len(args) == 2:
+		if _, ok := cfg.Models[args[1]]; !ok {
+			fmt.Fprintf(os.Stderr, "no model %q\n", args[1])
+			return 1
+		}
+		// A route naming it would read the bare name as a model of the
+		// harness once it's gone, so both stay until no route does.
+		if on := routesNaming(cfg, args[1]); len(on) > 0 {
+			fmt.Fprintf(os.Stderr, "%s is still named by %s; take it off there first (Settings, or ask the lead), so nothing was removed.\n", args[1], strings.Join(on, ", "))
+			return 1
+		}
 		delete(cfg.Models, args[1])
+		// The key goes only once the config without the model is saved.
+		if err := cfg.Check(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if err := ws.SaveConfig(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 		os.Remove(ws.OpenKey(args[1]))
+		fmt.Println("Removed " + args[1] + " and its key.")
+		return 0
 	case args[0] == "key" && len(args) == 2:
 		if _, ok := cfg.Models[args[1]]; !ok {
 			fmt.Fprintf(os.Stderr, "no model %q; add it first\n", args[1])
+			return 1
+		}
+		if cfg.Plaintext(args[1]) {
+			fmt.Fprintf(os.Stderr, "%s is plain http on a public host, so its key would cross the network unencrypted; point it at its https:// endpoint first (%s model add)\n", cfg.Models[args[1]].Endpoint, core.Cmd)
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, "Paste the key and press Enter:")
@@ -902,6 +936,42 @@ func cmdModel(args []string) int {
 	}
 	fmt.Println("Saved. Route a role to it in Settings, or ask the lead.")
 	return 0
+}
+
+// routesNaming are the routes and model settings that name model name, as
+// "worker", "worker in lab" or "the lead model".
+func routesNaming(cfg core.Config, name string) []string {
+	var out []string
+	for what, m := range map[string]string{"the worker model": cfg.Model, "the lead model": cfg.LeadModel, "the reviewer model": cfg.ReviewerModel} {
+		if m == name {
+			out = append(out, what)
+		}
+	}
+	slices.Sort(out)
+	for _, t := range cfg.TribunalModels {
+		if t.Model == name && (t.Harness == "" || t.Harness == "open") {
+			out = append(out, "a tribunal seat")
+		}
+	}
+	for _, p := range slices.Sorted(maps.Keys(cfg.Projects)) {
+		if cfg.Projects[p].Model == name {
+			out = append(out, "the model for "+p)
+		}
+	}
+	for _, role := range slices.Sorted(maps.Keys(cfg.Routes)) {
+		if slices.Contains(cfg.Routes[role], name) || slices.Contains(cfg.Routes[role], "open:"+name) {
+			out = append(out, role)
+		}
+	}
+	for _, p := range slices.Sorted(maps.Keys(cfg.Projects)) {
+		routes := cfg.Projects[p].Routes
+		for _, role := range slices.Sorted(maps.Keys(routes)) {
+			if slices.Contains(routes[role], name) || slices.Contains(routes[role], "open:"+name) {
+				out = append(out, role+" in "+p)
+			}
+		}
+	}
+	return out
 }
 
 func cmdHarness(args []string) int {
@@ -1016,21 +1086,26 @@ func kbArgs(args []string) (query, limit string) {
 	return strings.Join(words, " "), limit
 }
 
-// planLine is a plan's usage for hive status. The reset carries its zone and
-// how far off it is, and a reading whose window has since reset says so
+// planLine is a plan's usage for hive status, in plain words: how near its
+// limit the login is, then each window's share and when it resets, with the
+// zone and how far off. A window that has reset since the reading says so
 // rather than passing its old number off as current. Names from the usage
 // feed are escaped, so none can rewrite the screen.
 func planLine(p core.Plan, now time.Time) string {
-	l, key, window := p.Limit, text.Visible(p.Key()), text.Visible(p.Limit.Window)
-	at := l.ResetsAt.Local().Format("Mon 15:04 MST")
-	if !l.ResetsAt.After(now) {
-		return fmt.Sprintf("plan %s: the %s window reset at %s, no reading since (last %.0f%%, read %s ago)", key, window, at, l.Utilization*100, now.Sub(p.At).Round(time.Minute))
-	}
-	s := fmt.Sprintf("plan %s: %s, %.0f%% of the %s window, resets in %s (%s)", key, text.Visible(l.Status), l.Utilization*100, window, l.ResetsAt.Sub(now).Round(time.Minute), at)
-	for _, k := range slices.Sorted(maps.Keys(l.Windows)) {
-		if k != l.Window {
-			s += fmt.Sprintf("; %s %.0f%%", text.Visible(k), l.Windows[k].Utilization*100)
+	s := fmt.Sprintf("plan %s: %s", text.Visible(p.Key()), text.Visible(p.Limit.Standing(now)))
+	for _, w := range p.Limit.WindowUses(now) {
+		name, at := text.Visible(w.Name), w.ResetsAt.Local().Format("Mon 15:04 MST")
+		switch {
+		case w.ResetsAt.IsZero():
+			s += fmt.Sprintf("; %s window %.0f%% used", name, w.Used*100)
+		case w.Stale:
+			s += fmt.Sprintf("; %s window reset at %s, no reading since (was %.0f%%)", name, at, w.Used*100)
+		default:
+			s += fmt.Sprintf("; %s window %.0f%% used, resets in %s (%s)", name, w.Used*100, w.ResetsIn(now), at)
 		}
+	}
+	if !p.At.IsZero() {
+		s += fmt.Sprintf(" (read %s ago)", now.Sub(p.At).Round(time.Minute))
 	}
 	return s
 }
