@@ -75,9 +75,20 @@ func lockWorkspace(ws core.Workspace, wait time.Duration, unlessUp bool) (*works
 	}
 	f, err := os.OpenFile(lockFile(ws), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
+		// As when another user's launcher made the file first: say whose it
+		// is, since a unit retrying this every 10s says nothing else.
+		if owner := fileOwner(lockFile(ws)); owner != "" {
+			return nil, fmt.Errorf("%w (the file belongs to %s; this daemon runs as %s, so it can't take the workspace until that file goes)", err, owner, fileOwnerOf(os.Getuid()))
+		}
 		return nil, err
 	}
-	for end := time.Now().Add(wait); ; time.Sleep(100 * time.Millisecond) {
+	readHolder := func() (h holder) {
+		raw, _ := core.SafeRead(lockFile(ws), 4096)
+		json.Unmarshal(raw, &h)
+		return h
+	}
+	said := false
+	for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
 		ok, err := proc.TryLock(f)
 		if err != nil {
 			f.Close()
@@ -86,12 +97,15 @@ func lockWorkspace(ws core.Workspace, wait time.Duration, unlessUp bool) (*works
 		if ok {
 			break
 		}
-		if time.Now().After(end) || unlessUp && running(ws) {
-			var h holder
-			raw, _ := core.SafeRead(lockFile(ws), 4096)
-			json.Unmarshal(raw, &h)
+		if time.Since(start) > wait || unlessUp && running(ws) {
 			f.Close()
-			return nil, &AlreadyRunning{Root: ws.Root, By: h}
+			return nil, &AlreadyRunning{Root: ws.Root, By: readHolder()}
+		}
+		if !said && time.Since(start) > 2*time.Second {
+			// A pause at boot, or behind a hung daemon, reads from daemon.log.
+			said = true
+			h := readHolder()
+			fmt.Printf("hive: daemon pid %d (started by %s) holds %s but doesn't answer; waiting up to %s for it to come up or let go\n", h.PID, or(h.By, "something unknown"), ws.Root, wait.Round(time.Second))
 		}
 	}
 	raw, _ := json.Marshal(holder{PID: os.Getpid(), Started: time.Now().UTC(), By: startedBy()})
@@ -137,9 +151,15 @@ var bootWait = time.Minute
 // run as the unit's daemon starts doesn't start a second one. It gives up
 // when the lock is let go with no daemon up, as when that one failed.
 func booting(ws core.Workspace) (*api.Client, bool) {
-	for end := time.Now().Add(bootWait); lockHeld(ws) && time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+	said := false
+	for start := time.Now(); lockHeld(ws) && time.Since(start) < bootWait; time.Sleep(200 * time.Millisecond) {
 		if c, ok := Running(ws); ok {
 			return c, true
+		}
+		if !said && time.Since(start) > 3*time.Second {
+			// A hung holder stalls the command a minute: say why.
+			said = true
+			fmt.Fprintf(os.Stderr, "hive: waiting up to %s for the daemon starting on %s (it holds the workspace lock but doesn't answer yet)\n", bootWait.Round(time.Second), ws.Root)
 		}
 	}
 	return Running(ws)
