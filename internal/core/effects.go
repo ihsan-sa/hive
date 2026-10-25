@@ -615,6 +615,7 @@ var (
 	redPkgLine = regexp.MustCompile(`^(ok|FAIL|\?)\s+(\S+)(\s+\[([^\]]+)\])?`)
 	redTest    = regexp.MustCompile(`^\s*--- FAIL: (\S+)`)
 	redOdd     = regexp.MustCompile(`^(panic: |fatal error: |exit status |test timed out|# )|\[(build|setup) failed\]`)
+	redBuild   = regexp.MustCompile(`^(?:vet: )?(\S+\.go):\d+(?::\d+)?: (.+)`)
 )
 
 // RedKeys names what failed in a red go test run so two runs' reds can be
@@ -653,6 +654,21 @@ func RedKeys(out string) []string {
 	}
 	if !pkgs {
 		return FailedTests(out)
+	}
+	return keys
+}
+
+// StopKeys names, for a red run RedKeys names nothing in (go vet, or a build
+// that stopped the command before go test ran), each compile or vet error as
+// "file.go: message", its line left out so an edit above it doesn't make the
+// same error look new. The rest of the command didn't run, so these can show
+// a red isn't new at a merge but never that a change is no worse than main.
+func StopKeys(out string) []string {
+	var keys []string
+	for _, l := range strings.Split(out, "\n") {
+		if m := redBuild.FindStringSubmatch(strings.TrimRight(l, " \r")); m != nil && !slices.Contains(keys, m[1]+": "+m[2]) {
+			keys = append(keys, m[1]+": "+m[2])
+		}
 	}
 	return keys
 }
@@ -1297,6 +1313,10 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		}
 		st, which, shared, _ = ChecksAgainstMain(runs, mainRuns, req, e.FailingTests(p.Repo))
 	}
+	var prose []string
+	if st == CheckFail && ProseOnly(ch.Files) {
+		st, which, prose = ChecksBesidesFailures(runs, req)
+	}
 	if st != CheckPass {
 		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
 	}
@@ -1310,8 +1330,8 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		}
 	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
-	if err != nil && len(shared) > 0 && protectionRefused.MatchString(err.Error()) {
-		return "", &RefusedRed{Checks: shared, Err: err}
+	if red := append(slices.Clone(shared), prose...); err != nil && len(red) > 0 && protectionRefused.MatchString(err.Error()) {
+		return "", &RefusedRed{Checks: red, Err: err}
 	}
 	if err != nil {
 		return "", err
@@ -1327,6 +1347,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		if len(answer) > 0 {
 			ev["main_answer"] = answer
 		}
+	}
+	if len(prose) > 0 {
+		ev["red_on_prose"] = prose // a change to prose alone, which can't break them
 	}
 	e.j.MustAppend("effect.merged", ev)
 	return merged, nil
@@ -1458,6 +1481,43 @@ func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string, tests Tests
 	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(shared, n) })
 	state, which = ChecksState(kept, req)
 	return state, which, shared, byName
+}
+
+// ProseOnly says every file is prose (markdown, reStructuredText, AsciiDoc:
+// docs, goals, the agents' prompts) and none is under a testdata directory,
+// where tests read files as their data. A plain .txt file may be such data
+// anywhere, so it isn't prose. The Hive's own tests ran every test that reads
+// such a change on Linux, so a red forge check on it (another system, a flake)
+// isn't its own.
+func ProseOnly(files []string) bool {
+	for _, f := range files {
+		f = filepath.ToSlash(f)
+		switch strings.ToLower(filepath.Ext(f)) {
+		case ".md", ".rst", ".adoc":
+		default:
+			return false
+		}
+		if strings.HasPrefix(f, "testdata/") || strings.Contains(f, "/testdata/") {
+			return false
+		}
+	}
+	return len(files) > 0
+}
+
+// ChecksBesidesFailures sums up runs as ChecksState does with every failed
+// check left out (and not required), and names those.
+func ChecksBesidesFailures(runs []CheckRun, required []string) (state string, which []CheckRun, failed []string) {
+	var kept []CheckRun
+	for _, r := range runs {
+		if r.State != CheckFail {
+			kept = append(kept, r)
+		} else if !slices.Contains(failed, r.Name) {
+			failed = append(failed, r.Name)
+		}
+	}
+	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(failed, n) })
+	state, which = ChecksState(kept, req)
+	return state, which, failed
 }
 
 // MainLookBack is how many of main's commits, newest first, MainAnswer reads

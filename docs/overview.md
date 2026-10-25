@@ -33,6 +33,8 @@ The diagram is drawn from [arch.json](arch.json). To change it, edit that file a
 
 ## Install
 
+**Linux only for now** ([issue #564](https://github.com/ihsan-sa/hive/issues/564)): new releases carry no macOS or Windows binary while the self-improvement loop is the focus, so the macOS and Windows installers stop with a message saying so, and macOS and Windows installs get no updates until those builds return.
+
 macOS or Linux:
 
     curl -fsSL https://hive.ihsan.cc/install.sh | sh

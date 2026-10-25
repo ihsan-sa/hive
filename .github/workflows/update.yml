@@ -1,6 +1,7 @@
 name: update
 # A Hive installed from an older release updates itself to the release under test while it
-# runs, on Linux (macOS and Windows are paused for now, issue #564). `previous` is the newest
+# runs, on Linux (macOS and Windows are paused for now, issue #564; their steps, the Windows
+# reinstall check among them, are in git show 65b1651:.github/workflows/update.yml). `previous` is the newest
 # full release before it, installed as `hive`; v0.1.2 is installed as `hive-v0` from the repo's old name, so its update also goes
 # through GitHub's rename redirect and renames the command to `hive`. A manual run tests the
 # latest release, or the tag given: gh workflow run update.yml -f tag=v0.1.3
@@ -21,6 +22,7 @@ on:
         required: false
 permissions:
   contents: read
+  actions: read # to see the release run fail, rather than wait out its binaries
 jobs:
   # A Hive following pre-releases reads these legs as "update (<os>-latest, ...)" (ownJobs in
   # internal/mod/release/prerelease.go); keep the job unnamed and os first in the matrix.
@@ -28,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest] # Linux only for now (issue #564); the macOS and Windows steps wait for them to come back
+        os: [ubuntu-latest] # Linux only for now (issue #564)
         # TestInstallerOldReleases (cmd/hive/report_test.go) mimics these old releases with
         # stand-ins, and old-releases.yml installs them: change those with this list.
         from: [previous, v0.1.2]
@@ -54,6 +56,11 @@ jobs:
           for i in $(seq $tries); do
             n=$(gh release view "$to" -R "$GITHUB_REPOSITORY" --json assets -q '.assets | length') || n=0
             [ "$n" -ge 3 ] && break
+            # A release run that failed (its scan, say) never attaches them: say so, not that updating broke.
+            if [ "$GITHUB_EVENT_NAME" = release ]; then
+              c=$(gh run list -R "$GITHUB_REPOSITORY" -w release -e release -c "$GITHUB_SHA" --json conclusion -q '.[0].conclusion' 2>/dev/null) || c=
+              case "$c" in ''|success) ;; *) echo "::error::release $to has no binaries: its release run ended $c (see its scan, build and sign jobs), so there is nothing to update to; this is not an update failure"; exit 1 ;; esac
+            fi
             echo "waiting for $to's binaries ($n so far)"; sleep 20
           done
           [ "$n" -ge 3 ] || { echo "::error::release $to never got its binaries"; exit 1; }
@@ -72,23 +79,13 @@ jobs:
           bin=$RUNNER_TEMP/bin
           { echo "to=$to"; echo "pre=$pre"; echo "from=$from"; echo "cmd=$cmd"; echo "repo=$repo"; echo "skip=$skip"; echo "bin=$bin"; } >> "$GITHUB_OUTPUT"
           { echo "HIVE_HOME=$RUNNER_TEMP/hive"; echo "HIVE_BIN_DIR=$bin"; } >> "$GITHUB_ENV"
-      - name: install the old release (Linux, macOS)
-        if: steps.pick.outputs.skip == 'false' && runner.os != 'Windows'
+      - name: install the old release
+        if: steps.pick.outputs.skip == 'false'
         env:
           HIVE_VERSION: ${{ steps.pick.outputs.from }}
           HIVE_CMD: ${{ steps.pick.outputs.cmd }}
           HIVE_REPO: ${{ steps.pick.outputs.repo }}
         run: sh install/install.sh
-      - name: install the old release (Windows)
-        if: steps.pick.outputs.skip == 'false' && runner.os == 'Windows'
-        shell: pwsh
-        env:
-          HIVE_VERSION: ${{ steps.pick.outputs.from }}
-          HIVE_CMD: ${{ steps.pick.outputs.cmd }}
-          HIVE_REPO: ${{ steps.pick.outputs.repo }}
-          HIVE_SKIP_WSL: '1'
-          HIVE_NO_PATH: '1'
-        run: ./install/install.ps1
       - name: start it with auto-update off, then turn it on while it runs
         if: steps.pick.outputs.skip == 'false'
         env:
@@ -113,10 +110,8 @@ jobs:
         run: |
           case "$RUNNER_OS-$RUNNER_ARCH" in
             Linux-X64) asset=hive-linux-amd64 ;; Linux-ARM64) asset=hive-linux-arm64 ;;
-            macOS-X64) asset=hive-darwin-amd64 ;; macOS-ARM64) asset=hive-darwin-arm64 ;;
-            Windows-X64) asset=hive-windows-amd64.exe ;; *) echo "::error::no asset for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
+            *) echo "::error::no asset for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
           esac
-          ext=; [ "$RUNNER_OS" = Windows ] && ext=.exe
           gh release download "$TO" -R "$GITHUB_REPOSITORY" -p "$asset" -D "$RUNNER_TEMP/new"
           # Releases before v0.1.4 keep daemon.json in .hive. A restarting daemon leaves it behind
           # for the new one, so it is kept across the old daemon's stop.
@@ -125,9 +120,8 @@ jobs:
           pid=$(sed -n 's/.*"pid": *\([0-9]*\).*/\1/p' "$info")
           "$BIN/$CMD" shutdown
           cp "$RUNNER_TEMP/daemon.json" "$info"
-          # Windows holds the exe a moment after its process ends.
-          for i in $(seq 10); do cp "$RUNNER_TEMP/new/$asset" "$BIN/$CMD$ext" && break; sleep 2; done
-          chmod +x "$BIN/$CMD$ext"
+          cp "$RUNNER_TEMP/new/$asset" "$BIN/$CMD"
+          chmod +x "$BIN/$CMD"
           "$BIN/$CMD" daemon --detach --wait-for "$pid"
       - name: it moves to the new release by itself
         if: steps.pick.outputs.skip == 'false'
@@ -154,44 +148,8 @@ jobs:
           TO: ${{ steps.pick.outputs.to }}
           BIN: ${{ steps.pick.outputs.bin }}
         run: |
-          if [ "$RUNNER_OS" = Windows ]; then cmd.exe //c "$(cygpath -w "$BIN/hive-v0.cmd")" status | tee alias.txt
-          else "$BIN/hive-v0" status | tee alias.txt; fi
+          "$BIN/hive-v0" status | tee alias.txt
           grep -q "^Hive $TO " alias.txt
-      - name: a reinstall retires an old Programs\hive-v0 and keeps the user PATH as stored (Windows)
-        if: steps.pick.outputs.skip == 'false' && runner.os == 'Windows' && steps.pick.outputs.cmd == 'hive-v0'
-        shell: pwsh
-        env:
-          HIVE_VERSION: ${{ steps.pick.outputs.to }}
-          HIVE_REPO: ${{ github.repository }}
-          HIVE_SKIP_WSL: '1'
-          HIVE_NO_PATH: '1'
-          BIN: ${{ steps.pick.outputs.bin }}
-        run: |
-          # A pwsh failure leaves no annotation, and job logs need a login: name it in one.
-          try {
-            ./install/path_check.ps1
-            # The updated daemon stands in for the old install: the installer must stop it,
-            # point its login autostart at the new install and remove the old folder.
-            $old = Join-Path $env:LOCALAPPDATA 'Programs\hive-v0'
-            New-Item -ItemType Directory -Force $old | Out-Null
-            Copy-Item (Join-Path $env:BIN 'hive.exe') (Join-Path $old 'hive-v0.exe')
-            $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-            if (-not (Test-Path $run)) { New-Item $run | Out-Null } # the runner's profile has no Run key
-            Set-ItemProperty $run -Name Hive -Value "`"$old\hive-v0.exe`" daemon --detach"
-            $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
-            $path = ($k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') -split ';' | Where-Object { $_ }) -join ';'
-            $k.SetValue('Path', "$path;$old", 'ExpandString')
-            ./install/install.ps1
-            $got = (Get-ItemProperty $run -Name Hive).Hive
-            Remove-ItemProperty $run -Name Hive
-            if (Test-Path $old) { throw 'the old folder is still there' }
-            if ($got -like '*hive-v0*' -or $got -notlike '*hive.exe" daemon --detach') { throw "the autostart is '$got'" }
-            $now = $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
-            if ($now -cne $path -or $k.GetValueKind('Path') -ne 'ExpandString') { throw "the user PATH went from '$path;$old' to '$now' ($($k.GetValueKind('Path')))" }
-          } catch {
-            Write-Host "::error::$(($_.Exception.Message + ' ' + $_.InvocationInfo.PositionMessage) -replace '%', '%25' -replace '\r?\n', '%0A')"
-            throw
-          }
       - name: the daemon's log
         if: always() && steps.pick.outputs.skip == 'false'
         run: |
