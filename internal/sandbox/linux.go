@@ -144,6 +144,9 @@ func Exec(specPath string) int {
 		return fail(err)
 	}
 	defer os.RemoveAll(rt)
+	if held, err := holdRuntime(rt); err == nil {
+		defer held.Close()
+	}
 	args := initArgs{Spec: s, Root: filepath.Join(rt, "root"), Tools: map[string]string{}}
 	if err := os.Mkdir(args.Root, 0o755); err != nil {
 		return fail(err)

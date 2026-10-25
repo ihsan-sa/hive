@@ -15,11 +15,15 @@ var ErrTimeout = errors.New("timed out")
 
 // runSync runs argv and returns its exit code. The exit code comes from the
 // host-side process, never from anything the sandboxed command printed.
+// Whatever argv started and left running ends when it returns, however it
+// returns, and argv itself ends if the daemon dies first.
 func runSync(argv, env []string, dir, stdin, stdout string, timeout time.Duration) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Env, cmd.Dir = env, dir
+	ownGroup(cmd)
+	dieWithDaemon(cmd)
 	in, err := openInput(stdin)
 	if err != nil {
 		return -1, err
@@ -40,7 +44,7 @@ func runSync(argv, env []string, dir, stdin, stdout string, timeout time.Duratio
 	end := group(cmd.Process.Pid)
 	err = cmd.Wait()
 	timedOut := ctx.Err() == context.DeadlineExceeded
-	end(timedOut) // the timeout killed argv alone; what it started goes too
+	end(true) // the timeout killed argv alone, and a finished argv may have left a job running
 	if timedOut {
 		return -1, ErrTimeout
 	}

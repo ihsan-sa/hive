@@ -684,7 +684,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 	homeM := sandbox.Mount{Host: home, Inside: "/hive/home", RW: true}
 	mounts = append(mounts, homeM, sandbox.Mount{Host: e.ws.Tools(), Inside: sandbox.ToolsInside})
 	argv := []string{"/bin/sh", "-c", script}
-	env := append(sandbox.InsideEnv("/hive/home", network), extra...)
+	env := append(checkTmp(sandbox.InsideEnv("/hive/home", network)), extra...)
 	if !sb.Isolated() {
 		env = nil
 		argv = hostShell(script)

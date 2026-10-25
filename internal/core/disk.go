@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,10 +53,14 @@ func (w Workspace) goSums() string { return filepath.Join(w.Cache(), "gomod-sums
 // GoModInside is where checks see the module cache.
 const GoModInside = "/hive/gomod"
 
+// homeTmp is the check's temp folder (TMPDIR) inside its home.
+const homeTmp = "tmp"
+
 const (
 	checkCacheDefaultMB = 8192
 	modCacheMax         = 20 << 30 // past this the hourly sweep empties the module cache
 	staleAfter          = 3 * time.Hour
+	stopGrace           = time.Minute // a stop file outlives its home this long, so its sandbox sees it
 )
 
 // homeEvery is how often a running check's home is measured against its cap.
@@ -322,19 +325,23 @@ func (e *Effects) prefetch(dir string) error {
 }
 
 // newHome makes a check's own home under the cache folder, marked live until
-// the returned func removes it.
+// the returned func removes it. It is made and marked in one step, so Prune
+// never sees a home of this daemon's that isn't marked. The home holds the
+// check's temp folder (homeTmp) too: the sandbox's own /tmp is memory, and a
+// Go build's test binaries there would take gigabytes of it per check.
 func (e *Effects) newHome() (string, func()) {
 	os.MkdirAll(e.ws.CheckHomes(), 0o755)
+	e.mu.Lock()
 	home, err := os.MkdirTemp(e.ws.CheckHomes(), "home-")
 	if err != nil {
 		home, _ = os.MkdirTemp("", "hive-check-home-")
 	}
-	e.mu.Lock()
 	if e.homes == nil {
 		e.homes = map[string]bool{}
 	}
 	e.homes[home] = true
 	e.mu.Unlock()
+	os.Mkdir(filepath.Join(home, homeTmp), 0o700)
 	return home, func() {
 		RemoveTree(home)
 		os.Remove(home + ".stop")
@@ -417,13 +424,18 @@ func (e *Effects) RemoveCheckout(project, id string) error {
 
 // Prune removes what checks left behind: homes of checks no longer running,
 // the temp homes older builds made, clean checkouts and prefetch folders a
-// crash left, and the module cache once it is past its cap and no check is
-// using it. It returns what it removed.
+// crash left, sandboxes' runtime folders and unread specs, and the module
+// cache once it is past its cap and no check is using it. It returns what it
+// removed.
+//
+// A home under the workspace that this daemon hasn't marked live belongs to
+// a check whose daemon is gone (only one daemon runs on a workspace), so it
+// goes at once, not after staleAfter: Prune first writes its stop file,
+// which ends that check's sandbox within a second if it still runs (one
+// started by a build that didn't end checks with their daemon). The stop
+// file stays until a later sweep finds it alone and stopGrace old.
 func (e *Effects) Prune() string {
 	now := time.Now()
-	e.mu.Lock()
-	live := maps.Clone(e.homes)
-	e.mu.Unlock()
 	var gone []string
 	var freed int64
 	drop := func(p string) {
@@ -432,25 +444,44 @@ func (e *Effects) Prune() string {
 			gone, freed = append(gone, p), freed+n
 		}
 	}
-	old := func(p string) bool {
+	old := func(p string, after time.Duration) bool {
 		fi, err := os.Lstat(p)
-		return err == nil && now.Sub(fi.ModTime()) > staleAfter
+		return err == nil && now.Sub(fi.ModTime()) > after
 	}
-	globs := []string{filepath.Join(e.ws.CheckHomes(), "home-*"), filepath.Join(os.TempDir(), "hive-check-home-*"), filepath.Join(e.ws.Cache(), "prefetch-*")}
-	for _, g := range globs {
+	live := func(p string) bool {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return e.homes[p]
+	}
+	homes, _ := filepath.Glob(filepath.Join(e.ws.CheckHomes(), "home-*"))
+	for _, p := range homes {
+		switch {
+		case strings.HasSuffix(p, ".stop"):
+			if !Exists(strings.TrimSuffix(p, ".stop")) && old(p, stopGrace) {
+				os.Remove(p)
+			}
+		case !live(p):
+			os.WriteFile(p+".stop", nil, 0o600)
+			drop(p)
+		}
+	}
+	// The temp area is shared with other workspaces' Hives, whose homes this
+	// daemon can't tell from dead ones but by age.
+	for _, g := range []string{filepath.Join(os.TempDir(), "hive-check-home-*"), filepath.Join(e.ws.Cache(), "prefetch-*")} {
 		ms, _ := filepath.Glob(g)
 		for _, p := range ms {
-			if !live[p] && !strings.HasSuffix(p, ".stop") && old(p) {
+			if !live(p) && !strings.HasSuffix(p, ".stop") && old(p, staleAfter) {
 				drop(p)
 				os.Remove(p + ".stop")
 			}
 		}
 	}
+	sandboxes := sandbox.Sweep()
 	projects, _ := os.ReadDir(e.ws.Gates())
 	for _, pr := range projects {
 		dirs, _ := os.ReadDir(filepath.Join(e.ws.Gates(), pr.Name()))
 		for _, d := range dirs {
-			if p := filepath.Join(e.ws.Gates(), pr.Name(), d.Name()); d.IsDir() && d.Name() != "recursive" && old(p) {
+			if p := filepath.Join(e.ws.Gates(), pr.Name(), d.Name()); d.IsDir() && d.Name() != "recursive" && old(p, staleAfter) {
 				drop(p)
 			}
 		}
@@ -460,10 +491,14 @@ func (e *Effects) Prune() string {
 		drop(e.ws.GoModCache())
 		e.modMu.Unlock()
 	}
-	if len(gone) == 0 {
-		return ""
+	var did []string
+	if len(gone) > 0 {
+		did = append(did, fmt.Sprintf("removed %d leftover check folder(s), %s", len(gone), Bytes(freed)))
 	}
-	return fmt.Sprintf("removed %d leftover check folder(s), %s", len(gone), Bytes(freed))
+	if sandboxes > 0 {
+		did = append(did, fmt.Sprintf("%d dead sandbox's runtime folder(s) or spec(s)", sandboxes))
+	}
+	return strings.Join(did, ", ")
 }
 
 // DiskPart is one kind of thing the Hive keeps on disk.
@@ -614,5 +649,16 @@ func goTelemetryOff(home string) []string {
 	dir := filepath.Join(cfg, "go", "telemetry")
 	os.MkdirAll(dir, 0o755)
 	os.WriteFile(filepath.Join(dir, "mode"), []byte("off"), 0o644)
+	return env
+}
+
+// checkTmp points a check's TMPDIR at the temp folder in its home, on disk,
+// counted against its cap and removed with it.
+func checkTmp(env []string) []string {
+	for i, kv := range env {
+		if strings.HasPrefix(kv, "TMPDIR=") {
+			env[i] = "TMPDIR=/hive/home/" + homeTmp
+		}
+	}
 	return env
 }
