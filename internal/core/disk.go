@@ -297,8 +297,13 @@ func (e *Effects) prefetch(dir string) error {
 		return err
 	}
 	defer RemoveTree(tmp)
-	goTelemetryOff(tmp)
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + tmp, "XDG_CONFIG_HOME=" + filepath.Join(tmp, ".config"), "TMPDIR=" + tmp, "GOCACHE=" + filepath.Join(tmp, "gocache"), "GOPATH=" + filepath.Join(tmp, "gopath"),
+	// Telemetry off: in a fresh home go always takes its daily upload token
+	// and starts a detached child that can outlive it, still writing under
+	// tmp while RemoveTree empties it (issue #514).
+	conf := filepath.Join(tmp, "config")
+	os.MkdirAll(filepath.Join(conf, "go", "telemetry"), 0o755)
+	os.WriteFile(filepath.Join(conf, "go", "telemetry", "mode"), []byte("off\n"), 0o644)
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + tmp, "XDG_CONFIG_HOME=" + conf, "TMPDIR=" + tmp, "GOCACHE=" + filepath.Join(tmp, "gocache"), "GOPATH=" + filepath.Join(tmp, "gopath"),
 		"GOMODCACHE=" + e.ws.GoModCache(), "GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GOVCS=*:off", "GOWORK=off", "GOENV=off",
 		"CGO_ENABLED=0", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}
 	for _, k := range []string{"GOPROXY", "GOSUMDB", "GONOSUMDB", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
@@ -318,16 +323,6 @@ func (e *Effects) prefetch(dir string) error {
 	return nil
 }
 
-// goTelemetryOff turns the go command's telemetry off for a fresh home. Left
-// at its default ("local") with no mode file, go starts a detached child that
-// keeps writing under the home's .config after go exits, racing the home's
-// removal ("directory not empty").
-func goTelemetryOff(home string) {
-	dir := filepath.Join(home, ".config", "go", "telemetry")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "mode"), []byte("off\n"), 0o644)
-}
-
 // newHome makes a check's own home under the cache folder, marked live until
 // the returned func removes it.
 func (e *Effects) newHome() (string, func()) {
@@ -336,7 +331,6 @@ func (e *Effects) newHome() (string, func()) {
 	if err != nil {
 		home, _ = os.MkdirTemp("", "hive-check-home-")
 	}
-	goTelemetryOff(home)
 	e.mu.Lock()
 	if e.homes == nil {
 		e.homes = map[string]bool{}
