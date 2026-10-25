@@ -51,7 +51,7 @@ Measured on this machine (20 cores), 2026-10-25, with this score:
 
 So the milestone's change is about +33 here, against +7 on the old score, and the next halving of the loop's time is worth another 15, where on the old score it was worth under 1.
 
-What it still doesn't see, found while making it: the at-once runs take the same time with one worker as with four (7.0-7.6 s with `defaultWorkers` set to 1). All four asks name `textkit/__init__.py`, and the queue holds a brief that names a file another working brief names until that one has pushed (internal/mod/work/queue.go), so they run one at a time whatever the pace allows; what the at-once runs gain over one by one is the next worker starting while the last change is checked, read and merged. A change that lets such briefs work side by side moves the score; the pace alone doesn't. That rule is a real cost on the Hive's own work too (queued-to-working was about an hour on 2026-10-24's merges).
+Found while making it: the at-once runs took the same time with one worker as with four (7.0-7.6 s with `defaultWorkers` set to 1). All four asks name `textkit/__init__.py`, and the queue held a brief that names a file another working brief names until that one had pushed, so they ran one at a time whatever the pace allowed. Since issue #727 the queue lets briefs on one file start side by side when each names its own functions in it (`apart` in internal/mod/work/queue.go), and the at-once runs take 4.3-4.4 s (score 228.83 against 198.08).
 
 ## What moves it, and what doesn't
 
