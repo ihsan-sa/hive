@@ -1,0 +1,8 @@
+# The files a release of the Hive publishes and its scan reads (see
+# internal/mod/scan): one glob per line, `*` inside one path segment, `**`
+# across segments, `!glob` leaving files out. A release blocks on a key, a
+# deny word or a person's handle in any of them.
+**
+# Tests hold made-up keys on purpose, to test the scrubbers and this scan.
+!**/*_test.go
+!**/testdata/**
