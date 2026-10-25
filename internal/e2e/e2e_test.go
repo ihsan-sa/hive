@@ -835,8 +835,11 @@ func toldAbout(what string) func(api.State) bool {
 func TestStalls(t *testing.T) {
 	t.Parallel()
 	h := start(t)
+	// The history is built under a floor no history turn reaches, even on a
+	// slow runner: one the watcher acted on isn't history, and without it
+	// the limit falls to the floor and flags the slow worker.
 	cfg := h.ws.LoadConfig()
-	cfg.StallFloorSeconds = 20
+	cfg.StallFloorSeconds = 120
 	h.ws.SaveConfig(cfg)
 	h.seed("me/stall", map[string]string{".hive/project.json": `{"test": "if [ -f STALL ]; then sleep 60; fi"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "stall", "repo": "me/stall"}, nil)
@@ -845,6 +848,9 @@ func TestStalls(t *testing.T) {
 		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
 		h.wait(title+" to land", 3*minute, taskStage("stall", title, work.StageDone))
 	}
+	cfg = h.ws.LoadConfig()
+	cfg.StallFloorSeconds = 20
+	h.ws.SaveConfig(cfg)
 
 	asks := map[string]string{"hung worker": "FAKE:stallworker", "hung reviewer": "FAKE:stallreviewer", "hung check": "FAKE:stallcheck", "slow worker": "FAKE:slowworker:22"}
 	for title, known := range asks {
