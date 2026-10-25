@@ -196,13 +196,18 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 		if err != nil {
 			return core.Project{}, false, fmt.Errorf("who are you on %s? %v", f.Name(), err)
 		}
-		owner := ""
+		owner, mine := "", strings.HasPrefix(up, user+"/")
 		switch {
 		case slices.ContainsFunc(m.C.Projects.List(), func(p core.Project) bool { return p.Self && p.Repo == up }):
 			s.Repo = up // already working there, as H0 did before the record; merges and releases still check it
 		case s.Repo == "" && cfg.SelfFork != "":
-			owner = cfg.SelfFork
-		case s.Repo == "" && !strings.HasPrefix(up, user+"/"):
+			// The steward works in the upstream even with a fork owner named.
+			if mine && m.mayWorkIn(up, s.Steward) == nil {
+				s.Repo = up
+			} else {
+				owner = cfg.SelfFork
+			}
+		case s.Repo == "" && !mine:
 		default:
 			if err := m.mayWorkIn(up, s.Steward); err != nil {
 				return core.Project{}, false, err
@@ -296,13 +301,26 @@ func (m *Module) claim(p core.Project) {
 	}
 	id := m.C.WS.HiveID()
 	title := "Record this Hive (" + id + ") as the steward of " + up
-	if len(m.Work.List(func(t work.Task) bool { return t.Project == p.Name && t.Title == title })) > 0 {
-		return
+	// Earlier claims match on their kind, not their id: one filed before the
+	// person renamed .hive/hive-id names the old id, so it is theirs to stop.
+	for _, t := range m.Work.List(func(t work.Task) bool {
+		return t.Project == p.Name && strings.HasPrefix(t.Title, "Record this Hive (") && strings.HasSuffix(t.Title, ") as the steward of "+up)
+	}) {
+		if t.Title == title {
+			return
+		}
+		if !t.Terminal() {
+			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "project", "project": p.Name, "ref": "steward-claim:" + t.ID,
+				"text": "task " + t.ID + " would record " + up + "'s steward under an id this Hive no longer has (its .hive/hive-id now reads " + id + "): stop it, and this Hive files the claim again under " + id})
+			return
+		}
 	}
 	m.Work.File(work.Brief{Project: p.Name, From: "hive", Title: title,
 		Done: "`" + core.StewardFile + "` on main reads exactly:\n\n```\n" + core.StewardRecord(id) + "```",
 		Known: "Only one Hive merges and releases in " + up + ": the steward this file names. Until it exists, another Hive of the person's could work there too. " +
-			"The file is protected, so the person merges the change: that is their word that this Hive is the steward."})
+			"The file is protected, so the person merges the change: that is their word that this Hive is the steward. " +
+			"The id is this Hive's .hive/hive-id (" + id + "). For a name of their own (H0), the person writes it there and stops this task before merging; the Hive then files the claim again under that name. " +
+			"Keep .hive/hive-id: a Hive that loses it gets a new id and is refused " + up + " until the record names it again."})
 }
 
 // finish clones and sets up a registered project; safe to call again.
@@ -462,6 +480,7 @@ type ConfigView struct {
 	PlateauMerges  int                 `json:"plateau_merges"`
 	MaxWorkers     int                 `json:"max_workers"`
 	MaxChecks      int                 `json:"max_checks"`
+	MaxGates       int                 `json:"max_gates"`
 	AutoUpdate     bool                `json:"auto_update"`
 	Routes         map[string][]string `json:"routes,omitempty"` // each role's models in fallback order (the models op says more)
 	OpenModels     []string            `json:"open_models,omitempty"`
@@ -470,5 +489,5 @@ type ConfigView struct {
 // View is c as agents see it.
 func View(c core.Config) ConfigView {
 	return ConfigView{c.Autonomy, c.Harness, c.Model, c.LeadModel, c.ReviewerModel, c.TribunalModels,
-		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.MaxWorkers, c.MaxChecks, c.AutoUpdate, c.Routes, slices.Sorted(maps.Keys(c.Models))}
+		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.MaxWorkers, c.MaxChecks, c.MaxGates, c.AutoUpdate, c.Routes, slices.Sorted(maps.Keys(c.Models))}
 }

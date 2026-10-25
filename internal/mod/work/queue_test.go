@@ -2,6 +2,7 @@ package work
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,9 @@ func queueRig(t *testing.T) *Module {
 		os.MkdirAll(filepath.Join(seed, filepath.Dir(f)), 0o755)
 		os.WriteFile(filepath.Join(seed, f), []byte("package x\n"), 0o644)
 	}
+	os.MkdirAll(filepath.Join(seed, "textkit"), 0o755)
+	os.WriteFile(filepath.Join(seed, "textkit", "__init__.py"), []byte("class Box:\n    def __init__(self):\n        pass\n\n\ndef truncate(text, width):\n    raise NotImplementedError\n\n\nasync def slugify(text):\n    raise NotImplementedError\n\n\ndef wrap(text, width):\n    raise NotImplementedError\n"), 0o644)
+	os.WriteFile(filepath.Join(seed, "internal", "tui", "views.go"), []byte("package tui\n\nfunc (m *Model) render() string { return \"\" }\n\ntype Pane struct{}\n"), 0o644)
 	os.WriteFile(filepath.Join(seed, ".gitattributes"), []byte("* text=auto\n# additive\ndocs/log.md merge=union\nplan.md merge=union\n"), 0o644)
 	mustGit(t, seed, "add", "-A")
 	mustGit(t, seed, "commit", "-q", "-m", "source")
@@ -329,6 +333,35 @@ func TestQueueHoldsOnlyRealConflicts(t *testing.T) {
 	}
 }
 
+// Briefs that name the same file start side by side when each names its own
+// functions in it (issue #727: the four at-once benchmark asks ran one at a
+// time); one naming no definition there, or one another names too, waits.
+// The path itself names nothing (textkit/__init__.py is no __init__).
+func TestQueueSameFileApartFunctions(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 8
+	m.C.WS.SaveConfig(cfg)
+	a := file(t, m, "In textkit, implement truncate in textkit/__init__.py.", "")
+	b := file(t, m, "In textkit, implement slugify in textkit/__init__.py.", "")
+	c := file(t, m, "In textkit, implement wrap in textkit/__init__.py.", "")
+	d := file(t, m, "Tidy textkit/__init__.py.", "")
+	e := file(t, m, "Make wrap and slugify share a helper", "In textkit/__init__.py.")
+	f := file(t, m, "Draw the pane", "render() in internal/tui/views.go.")
+	g := file(t, m, "Size the Pane", "In internal/tui/views.go.")
+	tick(m)
+	for _, task := range []Task{a, b, c, f, g} {
+		if got := stageOf(t, m, task); got.Stage != StageWorking {
+			t.Fatalf("%q: stage %q reason %q, want working", task.Title, got.Stage, got.Reason)
+		}
+	}
+	for _, task := range []Task{d, e} {
+		if got := stageOf(t, m, task); got.Stage != StageQueued || !strings.HasSuffix(got.Reason, "both touch textkit/__init__.py") {
+			t.Fatalf("%q: stage %q reason %q, want waiting on the file", task.Title, got.Stage, got.Reason)
+		}
+	}
+}
+
 // A brief that waits on a working one's file holds no later brief back: one
 // on its other file starts, rather than waiting for it to go first while it
 // waits in turn (tasks 140258 and 163142, issue #493).
@@ -350,6 +383,76 @@ func TestQueueWaitsNeverChain(t *testing.T) {
 	}
 	if got := stageOf(t, m, c); got.Stage != StageWorking {
 		t.Fatalf("brief behind a waiting one: stage %q reason %q, want working", got.Stage, got.Reason)
+	}
+}
+
+// A brief that waits on other briefs' files keeps the time it began, shown
+// in the queue, and past filesTell the lead hears of it once; once it starts
+// the time goes (issue #701: a broad brief passed by later ones mustn't
+// starve unseen).
+func TestQueueTellsLeadOfLongFileWait(t *testing.T) {
+	m := queueRig(t)
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
+	a := file(t, m, "cap the checks", "In internal/core/effects.go.")
+	tick(m)
+	b := file(t, m, "rework effects", "internal/core/effects.go and internal/tui/views.go.")
+	tick(m)
+	got := stageOf(t, m, b)
+	if got.FilesSince.IsZero() || got.FilesTold {
+		t.Fatalf("waiting brief: since %v told %v reason %q", got.FilesSince, got.FilesTold, got.Reason)
+	}
+	since := got.FilesSince
+	tick(m)
+	if got = stageOf(t, m, b); !got.FilesSince.Equal(since) {
+		t.Fatalf("wait start moved from %v to %v", since, got.FilesSince)
+	}
+	got.FilesSince = time.Now().Add(-2 * time.Hour)
+	m.save(&got, "")
+	if q := strings.Join(m.Queue(lead), "\n"); !strings.Contains(q, "on other briefs' files for 2h0m0s") {
+		t.Fatalf("queue doesn't show the wait: %s", q)
+	}
+	old := filesTell
+	filesTell = time.Hour
+	t.Cleanup(func() { filesTell = old })
+	tick(m)
+	tick(m)
+	if got = stageOf(t, m, b); !got.FilesTold || strings.Count(fmt.Sprint(got.Log), "told the lead") != 1 {
+		t.Fatalf("told %v, log %v", got.FilesTold, got.Log)
+	}
+	if _, err := m.opQueue(lead, json.RawMessage(`{"now":["`+b.ID+`"],"why":"it has waited long"}`)); err != nil {
+		t.Fatal(err)
+	}
+	tick(m)
+	if got = stageOf(t, m, b); got.Stage != StageWorking || !got.FilesSince.IsZero() || got.FilesTold {
+		t.Fatalf("started brief: stage %q since %v told %v", got.Stage, got.FilesSince, got.FilesTold)
+	}
+	_ = a
+}
+
+// Moving a brief in line says the next tick weighs it, not the wait the old
+// line gave it, so the reply never shows two briefs waiting on each other
+// (issue #701: 163142 still read "waiting for 140258 to go first" in the
+// reply that put it first, while 140258 already waited for it to land).
+func TestQueueOrderDropsStaleWait(t *testing.T) {
+	m := queueRig(t)
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	file(t, m, "tidy the readme", "")
+	tick(m)
+	b := file(t, m, "rework effects", "internal/core/effects.go.")
+	c := file(t, m, "cap the checks", "In internal/core/effects.go.")
+	tick(m)
+	if got := stageOf(t, m, c); !strings.Contains(got.Reason, b.ID+") to go first") {
+		t.Fatalf("before: %q", got.Reason)
+	}
+	out, err := m.opQueue(lead, json.RawMessage(`{"order":["`+c.ID+`"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := fmt.Sprint(out); strings.Contains(q, b.ID+") to go first") || !strings.Contains(q, "the next tick weighs it") {
+		t.Fatalf("reply shows the old wait: %s", q)
 	}
 }
 
@@ -398,6 +501,140 @@ func TestQueueHoldsWhatAWorkerChanged(t *testing.T) {
 	}
 	if got := m.editCache[odd.Worker+"\x00internal/core/runs.go"]; strings.HasPrefix(got.key, odd.Base) {
 		t.Fatal("an answer without a base tree was kept")
+	}
+}
+
+// A worker that has merged main carries main's later changes; those aren't
+// its edits and hold no brief, while a file it changed itself still does.
+// Its answers go once its task leaves working.
+func TestQueueMergedMainIsNotAnEdit(t *testing.T) {
+	m := queueRig(t)
+	a := file(t, m, "cap the checks", "Somewhere in internal/core.")
+	tick(m)
+	got := stageOf(t, m, a)
+	r, _ := m.C.Runs.Get(got.Worker)
+	if got.Stage != StageWorking {
+		t.Fatalf("stage %q", got.Stage)
+	}
+	// main moves on runs.go; the worker merges it, and edits effects.go.
+	moveMain(t, m, "internal/core/runs.go", "package x // main's\n")
+	os.WriteFile(filepath.Join(r.Checkout, "internal/core/runs.go"), []byte("package x // main's\n"), 0o644)
+	os.WriteFile(filepath.Join(r.Checkout, "internal/core/effects.go"), []byte("package x // mine\n"), 0o644)
+	b := file(t, m, "hold strained turns", "In internal/core/runs.go.")
+	c := file(t, m, "cap the effects", "In internal/core/effects.go.")
+	tick(m)
+	if got := stageOf(t, m, b); got.Stage != StageWorking {
+		t.Fatalf("a brief on main's change waits: stage %q reason %q", got.Stage, got.Reason)
+	}
+	if got := stageOf(t, m, c); got.Stage != StageQueued || !strings.Contains(got.Reason, "both touch internal/core/effects.go") {
+		t.Fatalf("a brief on the worker's own change: stage %q reason %q", got.Stage, got.Reason)
+	}
+	m.mu.Lock()
+	n := len(m.editCache)
+	m.mu.Unlock()
+	if n == 0 {
+		t.Fatal("no answers kept while working")
+	}
+	done := stageOf(t, m, a)
+	done.Stage = StageReviewing
+	m.save(&done, "")
+	m.admit(m.List(nil))
+	m.mu.Lock()
+	for k := range m.editCache {
+		if strings.HasPrefix(k, done.Worker+"\x00") {
+			t.Errorf("an answer for a worker no longer working is kept: %q", k)
+		}
+	}
+	m.mu.Unlock()
+}
+
+// A symlink is its link text, as git keeps it: a file made a link counts
+// as changed, wherever the link points, and one the base already held as a
+// link counts as unchanged until the link text moves.
+func TestQueueEditSeesSymlinks(t *testing.T) {
+	m := queueRig(t)
+	p, _ := m.C.Projects.Get("p")
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+	origin, _ := core.Git(m.C.WS.Project("p"), "remote", "get-url", "origin")
+	seed := filepath.Join(t.TempDir(), "seed")
+	mustGit(t, "", "clone", "-q", strings.TrimSpace(origin), seed)
+	if err := os.Symlink("effects.go", filepath.Join(seed, "internal/core/link.go")); err != nil {
+		t.Skip(err)
+	}
+	mustGit(t, seed, "add", "-A")
+	mustGit(t, seed, "commit", "-q", "-m", "a link")
+	mustGit(t, seed, "push", "-q", "origin", "HEAD:"+p.Branch)
+	a := file(t, m, "cap the checks", "Somewhere in internal/core.")
+	tick(m)
+	got := stageOf(t, m, a)
+	r, _ := m.C.Runs.Get(got.Worker)
+	if got.Stage != StageWorking {
+		t.Fatalf("stage %q", got.Stage)
+	}
+	link := filepath.Join(r.Checkout, "internal/core/link.go")
+	if m.edited(got, "internal/core/link.go") {
+		t.Fatal("a link as the base holds it is seen as changed")
+	}
+	os.WriteFile(filepath.Join(r.Checkout, "internal/core/effects.go"), []byte("package x // its target changed\n"), 0o644)
+	if m.edited(got, "internal/core/link.go") {
+		t.Fatal("a link whose text didn't move is seen as changed")
+	}
+	os.Remove(link)
+	os.Symlink("runs.go", link)
+	if !m.edited(got, "internal/core/link.go") {
+		t.Fatal("a link pointed elsewhere isn't seen")
+	}
+	runs := filepath.Join(r.Checkout, "internal/core/runs.go")
+	os.Remove(runs)
+	os.Symlink("/etc/hostname", runs)
+	if !m.edited(got, "internal/core/runs.go") {
+		t.Fatal("a file made a link isn't seen")
+	}
+}
+
+// moveMain commits f on the forge's main and syncs the host clone to it.
+func moveMain(t *testing.T, m *Module, f, content string) {
+	t.Helper()
+	p, _ := m.C.Projects.Get("p")
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+	origin, err := core.Git(m.C.WS.Project("p"), "remote", "get-url", "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := filepath.Join(t.TempDir(), "seed")
+	mustGit(t, "", "clone", "-q", strings.TrimSpace(origin), seed)
+	os.MkdirAll(filepath.Join(seed, filepath.Dir(f)), 0o755)
+	os.WriteFile(filepath.Join(seed, f), []byte(content), 0o644)
+	mustGit(t, seed, "add", "-A")
+	mustGit(t, seed, "commit", "-q", "-m", "main moves")
+	mustGit(t, seed, "push", "-q", "origin", "HEAD:"+p.Branch)
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Two briefs citing the goals start together; the goals hold a brief only
+// once a worker has changed them.
+func TestQueueGoalsHoldOnlyWhenChanged(t *testing.T) {
+	m := queueRig(t)
+	moveMain(t, m, ".hive/goals.md", "goals\n")
+	a := file(t, m, "one", "As .hive/goals.md says.")
+	b := file(t, m, "two", "As .hive/goals.md says too.")
+	tick(m)
+	for _, task := range []Task{a, b} {
+		if got := stageOf(t, m, task); got.Stage != StageWorking {
+			t.Fatalf("%q: stage %q reason %q", task.Title, got.Stage, got.Reason)
+		}
+	}
+	got := stageOf(t, m, a)
+	r, _ := m.C.Runs.Get(got.Worker)
+	os.WriteFile(filepath.Join(r.Checkout, ".hive/goals.md"), []byte("changed\n"), 0o644)
+	if !m.edited(got, ".hive/goals.md") {
+		t.Fatal("goals a worker changed aren't seen as changed")
 	}
 }
 
@@ -517,8 +754,11 @@ func TestQueueReplay1445(t *testing.T) {
 		}
 	}
 	t.Logf("%d free of any overlap, %d wait on a shared file, %d held", free, overlaps, len(wait)+len(start)-free-overlaps)
-	if overlaps > 25 || free < 26 { // 26 free, and 25 wait on files cited by more than one brief (7 on tests/LANDING-security.toml)
-		t.Fatalf("%d free and %d still wait on a shared file (51 did at 14:45Z)", free, overlaps)
+	// Pinned both ways: fewer free is a hold come back, more is a same-file
+	// hold that quietly stopped working. The 18 left wait on files more than
+	// one brief cites (7 on tests/LANDING-security.toml); none on the goals.
+	if overlaps != 18 || free != 33 {
+		t.Fatalf("%d free and %d wait on a shared file, want 33 and 18 (51 waited at 14:45Z)", free, overlaps)
 	}
 }
 
@@ -561,5 +801,60 @@ func TestQuietWorkerHoldsNoOne(t *testing.T) {
 	m.save(&other, "")
 	if start, wait := m.admit(m.List(nil)); start[other.ID] || !strings.Contains(wait[other.ID], "max_workers") {
 		t.Fatalf("a resumed worker's slot was given away: %q", wait[other.ID])
+	}
+}
+
+// A brief that waits on one worker keeps saying so when another that also
+// touches its files starts ahead of it: the reason, and the saved task, stay
+// as they were until the first lets go (task 232db4fc42 swapped between
+// holders on runs.go and work.go every few minutes for an hour, issue #676).
+func TestQueueKeepsItsHolder(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 5
+	m.C.WS.SaveConfig(cfg)
+	x := file(t, m, "cap the checks", "In internal/core/effects.go.")
+	tick(m)
+	a := file(t, m, "rework effects and runs", "internal/core/effects.go and internal/core/runs.go.")
+	tick(m)
+	first := stageOf(t, m, a)
+	if first.Stage != StageQueued || !strings.Contains(first.Reason, "(task "+x.ID+") to land") {
+		t.Fatalf("overlapping brief: stage %q reason %q", first.Stage, first.Reason)
+	}
+	y := file(t, m, "hold strained turns", "In internal/core/runs.go.")
+	tick(m)
+	if got := stageOf(t, m, y); got.Stage != StageWorking {
+		t.Fatalf("brief behind a waiting one: stage %q reason %q, want working", got.Stage, got.Reason)
+	}
+	if got := stageOf(t, m, a); got.Reason != first.Reason || !got.Updated.Equal(first.Updated) {
+		t.Fatalf("reason moved from %q (%s) to %q (%s)", first.Reason, first.Updated, got.Reason, got.Updated)
+	}
+	// Once x lets go, a waits on y.
+	got, _ := m.Get(x.ID)
+	got.Stage = StageTesting
+	m.save(&got, "pushed")
+	tick(m)
+	if got := stageOf(t, m, a); !strings.Contains(got.Reason, "(task "+y.ID+") to land") {
+		t.Fatalf("after the first holder pushed: reason %q", got.Reason)
+	}
+}
+
+// A holder's label that itself reads like a wait reason doesn't name a task:
+// the holder is the one after the quoted label.
+func TestHolderPastLabel(t *testing.T) {
+	for _, c := range []struct{ label, verb string }{
+		{`plain`, "to land"},
+		{`waits on (task 111) to land: both touch x.go`, "to go first"},
+		{`a "quoted" (task 222) to go first: both touch y.go`, "to land"},
+	} {
+		why := fmt.Sprintf("waiting for %q (task %s) %s%s%s", c.label, "333", c.verb, bothTouch, "z.go")
+		if got := holder(why); got != "333" {
+			t.Errorf("holder(%q) = %q, want 333", why, got)
+		}
+	}
+	for _, why := range []string{"", "waiting for a worker (max_workers 4)", "held by the lead"} {
+		if got := holder(why); got != "" {
+			t.Errorf("holder(%q) = %q, want none", why, got)
+		}
 	}
 }

@@ -130,7 +130,18 @@ func TestPaceHoldsAndFreesTheQueueAndChecks(t *testing.T) {
 		}
 	}
 	want(a, StageWorking, "")
-	want(b, StageQueued, "waiting for a worker (pace 1 (pulled back: machine loaded))")
+	want(b, StageQueued, "waiting for a worker (at the pace)")
+	// The pace moving at the same limit or below leaves a waiting task as
+	// saved: its reason doesn't carry the live pace.
+	saved := stageOf(t, m, b).Updated
+	set(&m.workers, 1, defaultWorkers)
+	m.workers.mu.Lock()
+	m.workers.why = "grew: room on the machine and plan"
+	m.workers.mu.Unlock()
+	tick(m)
+	if got := stageOf(t, m, b); !got.Updated.Equal(saved) {
+		t.Fatalf("a pace move re-saved a waiting task: reason %q", got.Reason)
+	}
 	set(&m.workers, 2, defaultWorkers)
 	tick(m)
 	want(b, StageWorking, "")
@@ -154,6 +165,90 @@ func TestPaceHoldsAndFreesTheQueueAndChecks(t *testing.T) {
 		t.Fatal("the second check still waits at a pace of 2")
 	}
 	first()
+}
+
+// Under strain with nothing running, the strain isn't the Hive's: the limit
+// stays, at most at its start, rather than falling to 1 and taking minutes
+// to climb back. This holds for the checks' pace as for the workers'.
+func TestPaceUnderStrainWithNothingRunning(t *testing.T) {
+	now := time.Now()
+	for _, c := range []struct {
+		name               string
+		limit, start, want int
+	}{
+		{"grown past its start", 8, 4, 4},
+		{"below its start", 3, 4, 3},
+		{"the checks at their start", 2, 2, 2},
+	} {
+		p := pace{limit: c.limit, start: c.start, at: now.Add(-paceStep)}
+		if l := p.next(now, 0, true, "machine loaded", true, c.start, 0); l != c.want {
+			t.Errorf("%s: %d, want %d", c.name, l, c.want)
+		}
+	}
+}
+
+// With no ceiling set, the workers' and checks' paces still stop at a
+// ceiling sized to the machine.
+func TestPaceHasASafetyCeiling(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers, cfg.MaxChecks = 0, 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 1e6 // watched, never strained
+	if _, watching := machine(cfg); !watching {
+		t.Skip("no /proc/loadavg here")
+	}
+	m.C.WS.SaveConfig(cfg)
+	m.workers = pace{limit: safeWorkers(), start: defaultWorkers, at: time.Now().Add(-paceStep)}
+	if l := m.paceWorkers(cfg, safeWorkers(), true); l != safeWorkers() {
+		t.Fatalf("workers grew past the safety ceiling %d: %d", safeWorkers(), l)
+	}
+	m.checks = pace{limit: safeChecks(), start: core.DefaultMaxChecks(), at: time.Now().Add(-paceStep)}
+	m.paceChecks()
+	if l := m.checks.get(); l != safeChecks() {
+		t.Fatalf("checks past the safety ceiling %d: %d", safeChecks(), l)
+	}
+}
+
+// The workers' pace grows only for a brief that waits on the limit itself:
+// one waiting on another's files would leave the new slot empty. When it
+// does grow, the brief starts in the same tick.
+func TestPaceGrowsOnlyForBriefsTheLimitHolds(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers, cfg.MaxChecks = 0, 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 1e6
+	if _, watching := machine(cfg); !watching {
+		t.Skip("no /proc/loadavg here")
+	}
+	m.C.WS.SaveConfig(cfg)
+	set := func(l int) {
+		m.workers.mu.Lock()
+		m.workers.limit, m.workers.start, m.workers.at = l, defaultWorkers, time.Now().Add(-paceStep)
+		m.workers.mu.Unlock()
+	}
+	set(1)
+	a := file(t, m, "cap the checks", "Checks run via internal/core/effects.go.")
+	tick(m)
+	b := file(t, m, "hold strained turns", "Also in internal/core/effects.go, launch.")
+	set(1)
+	tick(m)
+	if got := stageOf(t, m, b); got.Stage != StageQueued || !strings.Contains(got.Reason, "both touch") {
+		t.Fatalf("overlapping brief: stage %q reason %q", got.Stage, got.Reason)
+	}
+	if l := m.workers.get(); l != 1 {
+		t.Fatalf("grew for a brief that waits on another's files: %d", l)
+	}
+	c := file(t, m, "show the queue", "On the dashboard, internal/tui/views.go.")
+	set(1)
+	tick(m)
+	if l := m.workers.get(); l != 2 {
+		t.Fatalf("didn't grow for a brief the limit holds: %d", l)
+	}
+	for _, task := range []Task{a, c} {
+		if got := stageOf(t, m, task); got.Stage != StageWorking {
+			t.Fatalf("%q: stage %q reason %q", task.Title, got.Stage, got.Reason)
+		}
+	}
 }
 
 // Workers pull back when their plan runs well ahead of its five-hour window,

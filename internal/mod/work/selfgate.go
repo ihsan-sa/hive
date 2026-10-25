@@ -135,6 +135,9 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	cur := m.gating[key]
 	var out, full string
 	if cur == nil {
+		// A run on this task's earlier head (or main) judges what no longer
+		// lands: it ends, as a change of aim ends it, and frees its slot.
+		m.dropGateLocked(t.ID, key)
 		if full = m.gateRoom(len(m.gating)); full == "" {
 			out = filepath.Join(m.C.WS.Gates(), p.Name, "recursive", time.Now().UTC().Format("060102-150405")+"-"+core.Short(t.SHA))
 			if m.gating == nil {
@@ -198,9 +201,10 @@ func (m *Module) gateRoom(running int) string {
 	limit, why := m.gateLimit(time.Now(), running, m.C.WS.LoadConfig())
 	switch {
 	case running >= limit:
-		return fmt.Sprintf("%d run at once here (limit %s), and every one is in use", running, m.gates.String())
+		// Saved with the task: the live limit stays out (see Pace).
+		return "as many run at once here as may now, and every one is in use"
 	case running > 0 && why != "":
-		return fmt.Sprintf("%d running, and no room for another: %s", running, why)
+		return "no room for another: " + steady(why)
 	}
 	return ""
 }
@@ -219,6 +223,7 @@ func (m *Module) gateLimit(now time.Time, running int, cfg core.Config) (int, st
 	m.gates.mu.Lock()
 	m.gates.step = gateStep
 	m.gates.mu.Unlock()
+	defer m.journal("gates", &m.gates, m.gates.get())
 	return m.gates.next(now, running, true, why, watching, start, top), why
 }
 
@@ -276,9 +281,14 @@ func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
 func (m *Module) dropGate(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.dropGateLocked(id, "")
+}
+
+// dropGateLocked is dropGate with m.mu held, sparing the run keyed keep.
+func (m *Module) dropGateLocked(id, keep string) bool {
 	dropped := false
 	for _, r := range m.gating {
-		if r.task != id || r.dropped {
+		if r.task != id || r.key == keep || r.dropped {
 			continue
 		}
 		r.dropped, dropped = true, true
@@ -445,7 +455,7 @@ func (m *Module) gateBack(t *Task, p core.Project, g core.GateResult) error {
 	}
 	detail += fmt.Sprintf("\n\nThe change is kept only if the child Hive built from it does better than the current one, with no regression. Add this line to `.hive/lessons.md` with your fix, so it is on the record:\n\n- %s: the recursive gate rolled back %s (%s): %s",
 		time.Now().UTC().Format("2006-01-02"), core.Short(g.Head), t.Label(), g.Reason)
-	return m.sendBackWith(t, p, findings, strings.TrimSpace(detail))
+	return m.sendBackWith(t, p, findings, strings.TrimSpace(detail), false)
 }
 
 // gateRolledBack opens the findings a rollback sends back.

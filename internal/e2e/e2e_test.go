@@ -91,6 +91,7 @@ type hive struct {
 	c     *api.Client
 	env   []string      // added to the daemon's environment
 	exe   string        // the binary the daemon runs, when not bin
+	cpus  int           // the daemon, and all it starts, run on this many CPUs (Linux; 0 is all)
 	jobs  []func()      // end what each daemon left running (Windows)
 	ended chan struct{} // closed once the daemon process last launched has exited
 }
@@ -101,8 +102,15 @@ func start(t *testing.T, env ...string) *hive { return startWith(t, bin, nil, en
 // test's settings.
 func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string) *hive {
 	t.Helper()
+	return startOn(t, 0, exe, prep, env...)
+}
+
+// startOn is startWith with the daemon and everything it starts pinned to
+// cpus CPUs (0 is all of them), where pin can.
+func startOn(t *testing.T, cpus int, exe string, prep func(*core.Config), env ...string) *hive {
+	t.Helper()
 	dir := t.TempDir()
-	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env, exe: exe}
+	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env, exe: exe, cpus: cpus}
 	if err := h.ws.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +241,7 @@ func (h *hive) launch() {
 	if group != nil {
 		endGroup = group(cmd)
 	}
-	if err := cmd.Start(); err != nil {
+	if err := pinned(h.cpus, cmd.Start); err != nil {
 		h.t.Fatal(err)
 	}
 	log.Close() // the daemon has its own handle
@@ -1564,17 +1572,32 @@ var contain func(t *testing.T, pid int) func()
 var strays func(dir string)
 
 // settle ends what still works in dir and removes path, a folder in it,
-// trying again for a while if something still writes there.
-func settle(dir, path string) {
+// trying again for a while if something still writes there; the error is
+// the last try's, for a folder left behind.
+func settle(dir, path string) error {
+	var err error
 	for began := time.Now(); time.Since(began) < 30*time.Second; time.Sleep(200 * time.Millisecond) {
 		if strays != nil {
 			strays(dir)
 		}
 		// RemoveTree: a Go module cache's folders are read-only.
-		if core.RemoveTree(path) == nil {
-			return
+		if err = core.RemoveTree(path); err == nil {
+			return nil
 		}
 	}
+	return err
+}
+
+// pin runs start, which starts a process, so that the process and all it
+// starts run on cpus CPUs (Linux only).
+var pin func(cpus int, start func() error) error
+
+// pinned runs start through pin when there is a cap and a pin.
+func pinned(cpus int, start func() error) error {
+	if cpus <= 0 || pin == nil {
+		return start()
+	}
+	return pin(cpus, start)
 }
 
 // group makes cmd, before it starts, lead a process group of its own, and

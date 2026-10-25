@@ -21,6 +21,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 )
@@ -31,6 +32,9 @@ type Module struct {
 	// Restart is called after a new binary is in place (the daemon re-execs).
 	Restart func()
 	locks   sync.Map // project -> *sync.Mutex held while a release is decided
+	// refused is each project's last "sha: why" that stopped a release
+	// before main's checks were read, raised once so a retry doesn't repeat it.
+	refused sync.Map
 	// PauseMerges stops new merges and waits up to the given time for the
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
@@ -41,6 +45,9 @@ type Module struct {
 	// Diff lists the files that differ between two commits; nil is git diff
 	// in the project's clone.
 	Diff func(p core.Project, from, to string) ([]string, error)
+	// Contains says whether commit tagSHA has sha in its history; nil is
+	// git merge-base in the project's clone.
+	Contains func(p core.Project, sha, tagSHA string) (bool, error)
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
 	// said holds project@tag for each pre-release whose wait or failed
@@ -715,15 +722,27 @@ func (m *Module) afterKept(project, sha string) {
 	alert := func(text string) {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": project, "text": text})
 	}
+	// A refusal here comes again on each retry of a commit that waits on
+	// main's checks (retryWaiting), so each is raised once per commit.
+	once := func(why string) {
+		text := "no release at " + core.Short(sha) + ": " + why
+		if last, _ := m.refused.Swap(project, sha+": "+why); last != sha+": "+why {
+			alert(text)
+		}
+	}
 	if why := m.C.Effects.Stewardship(p, sha); why != "" {
-		alert("no release at " + core.Short(sha) + ": " + why)
+		once(why)
 		return
 	}
 	list, refuse := m.merges(project, sha)
+	if refuse == "" {
+		refuse = m.tagged(p, sha)
+	}
 	if refuse != "" {
-		alert("no release at " + core.Short(sha) + ": " + refuse)
+		once(refuse)
 		return
 	}
+	m.refused.Delete(project)
 	var manifest strings.Builder
 	var root, unread, rootRead []string
 	for _, mg := range list {
@@ -852,13 +871,15 @@ func (m *Module) afterKept(project, sha string) {
 
 // mainGreen says whether main's own checks (CI) passed at sha, so the Hive
 // offers or cuts a release only at a commit its CI found green. A failure is
-// raised once and the cut waits for the next kept merge; one still running,
-// that can't start or can't be read is journaled as release.ci_waiting once,
-// and Tick tries the newest such commit again (retryWaiting).
+// raised once; one still running, that can't start or can't be read is
+// journaled as release.ci_waiting once. Either way Tick tries the newest such
+// commit again (retryWaiting), so a re-run that passes releases it, as does
+// the next kept merge whose checks pass. A release needs the whole ci
+// workflow green: core.Advisory's checks, set aside for merges, count here.
 func (m *Module) mainGreen(p core.Project, sha string) bool {
 	state, which := core.CheckPending, ""
 	if runs, err := m.C.Effects.Forge.Checks(p.Repo, sha); err != nil {
-		which = "can't read its checks (" + core.Clip(err.Error(), 200) + ")"
+		which = "can't read its checks (" + core.Clip(report.Scrub(err.Error(), ""), 200) + ")"
 	} else {
 		var bad []core.CheckRun
 		state, bad = core.ChecksState(runs, m.C.Effects.RequiredChecks(p, sha))
@@ -875,7 +896,7 @@ func (m *Module) mainGreen(p core.Project, sha string) bool {
 		if last.SHA != sha || last.Kind != "release.ci_failed" {
 			m.C.J.MustAppend("release.ci_failed", map[string]string{"project": p.Name, "sha": sha, "checks": which})
 			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": p.Name,
-				"text": "no release at " + core.Short(sha) + ": its checks failed on main (" + which + "); the next kept merge whose checks pass is released"})
+				"text": "no release at " + core.Short(sha) + ": its checks failed on main (" + which + "); it is released if a re-run of them passes, or the next kept merge whose checks pass is"})
 		}
 	default:
 		if last.SHA != sha || last.Kind != "release.ci_waiting" {
@@ -912,8 +933,8 @@ func (m *Module) ciState(project string) (last ciWait) {
 }
 
 // retryWaiting tries again the newest kept merge of each self project whose
-// release waits on main's checks; one still waiting after lateAfter is raised
-// once.
+// release waits on main's checks or found them failed (a re-run may pass);
+// one still waiting after lateAfter is raised once.
 func (m *Module) retryWaiting() {
 	if m.said == nil {
 		m.said = map[string]bool{}
@@ -923,7 +944,7 @@ func (m *Module) retryWaiting() {
 			continue
 		}
 		w := m.ciState(p.Name)
-		if w.Kind != "release.ci_waiting" {
+		if w.Kind != "release.ci_waiting" && w.Kind != "release.ci_failed" {
 			continue
 		}
 		func() {
@@ -1132,7 +1153,7 @@ func (m *Module) Publish() string {
 			continue // an older one stays a pre-release
 		}
 		checked[c.Project]++
-		if why := m.C.Effects.Stewardship(p, c.SHA); why != "" {
+		if why := m.C.Effects.Stewardship(p, "refs/remotes/origin/"+p.Branch); why != "" { // the record as main reads it now, which may postdate the tag
 			out = append(out, c.Tag+": not published, "+why)
 			continue
 		}
@@ -1318,6 +1339,74 @@ func (m *Module) unbuilt(p core.Project, sha string) string {
 		m.C.J.MustAppend("release.held", map[string]string{"project": p.Name, "tag": tag, "sha": at, "why": why})
 	}
 	return tag + " has no binaries, since its " + why + ", and " + core.Short(sha) + " changes nothing that job reads. " + unbuiltSteps
+}
+
+// tagChecks is how many of the highest version tags tagged reads.
+const tagChecks = 10
+
+// tagged says why no release is cut at sha when one of the highest version
+// tags already has it in its history, whoever cut that tag: merges only
+// knows the Hive's own releases, and a tag cut by hand or a warden's step
+// at a newer commit would otherwise get a higher number carrying older code,
+// which an install following pre-releases takes as an update. A tag or
+// history that can't be read never holds the cut.
+func (m *Module) tagged(p core.Project, sha string) string {
+	tags, err := m.C.Effects.Forge.Tags(p.Repo)
+	if err != nil {
+		return ""
+	}
+	var versions []string
+	for _, t := range tags {
+		if strings.HasPrefix(t, "v") && modules.Newer("v0.0.0", t) && !slices.Contains(versions, t) {
+			versions = append(versions, t)
+		}
+	}
+	slices.SortFunc(versions, func(a, b string) int {
+		if modules.Newer(b, a) {
+			return -1
+		}
+		if modules.Newer(a, b) {
+			return 1
+		}
+		return 0
+	})
+	contains := m.Contains
+	if contains == nil {
+		contains = m.contains
+	}
+	for _, t := range versions[:min(len(versions), tagChecks)] {
+		at, err := m.C.Effects.Forge.TagCommit(p.Repo, t)
+		if err != nil || at == "" {
+			continue
+		}
+		if at == sha {
+			return t + " is already cut at it"
+		}
+		if in, err := contains(p, sha, at); err == nil && in {
+			return t + " at " + core.Short(at) + " already contains it, so a new tag would carry older code under a higher number"
+		}
+	}
+	return ""
+}
+
+// contains says whether sha is tagSHA or one of its ancestors, fetching
+// tagSHA into the project's clone when it hasn't got it.
+func (m *Module) contains(p core.Project, sha, tagSHA string) (bool, error) {
+	dir := m.C.WS.Project(p.Name)
+	full, err := core.Git(dir, "rev-parse", "--verify", sha+"^{commit}")
+	if err != nil {
+		return false, err
+	}
+	if _, err := core.Git(dir, "rev-parse", "--verify", tagSHA+"^{commit}"); err != nil {
+		if _, err := core.GitT(5*time.Minute, dir, "fetch", "-q", "--no-tags", "origin", tagSHA); err != nil {
+			return false, err
+		}
+	}
+	base, err := core.Git(dir, "merge-base", sha, tagSHA)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(base) == strings.TrimSpace(full), nil
 }
 
 // diff lists the files that differ between two commits of the project.

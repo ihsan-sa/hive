@@ -96,7 +96,10 @@ func TestKilledGateLeavesNoDaemon(t *testing.T) {
 
 // A process a dead gate's child detached (setsid, out of every group the
 // gate could kill) is ended by the next gate's sweep, always: unlike
-// TestKilledGateLeavesNoDaemon, nothing here can end it first.
+// TestKilledGateLeavesNoDaemon, nothing here can end it first. Another
+// test process's sweep (a gate test or a second run of this one) may end the
+// orphan before this one does, so it is the orphan's end that is checked,
+// not reapOrphans' count, and within seconds rather than its 60s sleep.
 func TestDeadGatesOrphanIsReaped(t *testing.T) {
 	gone := exec.Command("true")
 	if err := gone.Run(); err != nil {
@@ -117,11 +120,16 @@ func TestDeadGatesOrphanIsReaped(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { live.Process.Kill(); live.Wait() })
-	if n := reapOrphans(); n < 1 {
-		t.Errorf("reapOrphans ended %d processes, want the orphan", n)
-	}
-	if err := orphan.Wait(); err == nil {
-		t.Error("the dead gate's orphan wasn't killed")
+	n := reapOrphans()
+	waited := make(chan error, 1)
+	go func() { waited <- orphan.Wait() }()
+	select {
+	case err := <-waited:
+		if err == nil {
+			t.Error("the dead gate's orphan wasn't killed")
+		}
+	case <-time.After(10 * time.Second):
+		t.Errorf("the dead gate's orphan wasn't killed (reapOrphans ended %d)", n)
 	}
 	if syscall.Kill(live.Process.Pid, 0) != nil {
 		t.Error("reapOrphans killed a process of a gate that still runs")

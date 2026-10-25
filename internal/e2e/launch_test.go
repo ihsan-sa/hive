@@ -120,7 +120,11 @@ func settledDir(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { settle(dir, dir) })
+	t.Cleanup(func() {
+		if err := settle(dir, dir); err != nil {
+			t.Logf("left %s behind: something still writes there: %v", dir, err)
+		}
+	})
 	return dir
 }
 
@@ -215,13 +219,31 @@ func moduleLifecycle(t *testing.T, real bool) {
 	}
 
 	h.seed("local/greet", map[string]string{"skill.md": "The codeword is FIG77.\n"})
+	seeded, _ := core.Git(h.forge.RepoPath("local/greet"), "rev-parse", "main")
 	h.post("/api/job", map[string]string{"name": "modules.update"}, nil)
-	h.wait("greet to update to the newer commit", minute, func(st api.State) bool {
+	// The release a source without tags gets is its commit, short: waiting
+	// for that commit, not any change from first, means a record that moved
+	// for another reason can't pass the wait before the update has run.
+	st = h.wait("greet to update to the seeded commit", minute, func(st api.State) bool {
 		m, ok := module(st)
-		return ok && m.Release != first.Release
+		return ok && m.Release != "" && m.Release != first.Release && strings.HasPrefix(seeded, m.Release)
 	})
 	if skill, _ := os.ReadFile(filepath.Join(h.ws.Modules(), dir, "skill.md")); !strings.Contains(string(skill), "FIG77") {
-		t.Errorf("the updated module's skill: %q", skill)
+		// With the release already matching the seeded commit, what the
+		// folder's checkout says tells an update that never ran from files
+		// a checkout left behind.
+		m, _ := module(st)
+		head, _ := core.Git(filepath.Join(h.ws.Modules(), dir), "rev-parse", "HEAD")
+		status, _ := core.Git(filepath.Join(h.ws.Modules(), dir), "status", "--short")
+		var evs []core.Event
+		h.c.Do("GET", "/api/events", nil, &evs)
+		var updated []string
+		for _, e := range evs {
+			if e.Kind == "module.updated" {
+				updated = append(updated, string(e.Data))
+			}
+		}
+		t.Errorf("the updated module's skill: %q (release %s, first %s, seeded %s, folder HEAD %s, status %q, module.updated %v)", skill, m.Release, first.Release, seeded, head, status, updated)
 	}
 }
 
