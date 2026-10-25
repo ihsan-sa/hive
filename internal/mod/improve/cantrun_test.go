@@ -50,6 +50,39 @@ func TestMissingToolIsNoResult(t *testing.T) {
 	}
 }
 
+// A merge whose tests keep faking a missing tool (a new name each time) is
+// held only work.CantRunTries measures: then it counts as red, the person is
+// asked for the tool, and it is reverted as any red merge is.
+func TestFakedCantRunMergeTurnsRed(t *testing.T) {
+	m, merge := scored(t)
+	defer func(d time.Duration) { retryNoResult = d }(retryNoResult)
+	retryNoResult = time.Hour // the test measures again itself
+	ms := merge(map[string]string{".hive/project.json": `{"test": "echo \"sh: 1: tool$$: not found\"; exit 127", "score": {"command": "sh ./score.sh", "direction": "higher"}}`})
+	if !ms.NoResult {
+		t.Fatalf("the first measure should be no result: %+v", ms)
+	}
+	for i := 1; i < work.CantRunTries; i++ {
+		if m.measured("p", ms.SHA) {
+			t.Fatalf("judged after %d tries, want %d", i, work.CantRunTries)
+		}
+		m.afterMerge(work.Task{ID: ms.Task, Project: "p", MergeSHA: ms.SHA})
+	}
+	all := m.Scores("p")
+	if last := all[len(all)-1]; last.NoResult || last.Kept || last.TestsOK || !strings.Contains(last.Note, "counts as red") {
+		t.Fatalf("after %d tries the merge should be red: %+v", work.CantRunTries, last)
+	}
+	if n := len(m.Work.List(func(t work.Task) bool { return t.Kind == "revert" })); n != 1 {
+		t.Fatalf("%d reverts filed, want 1", n)
+	}
+	asked := false
+	for _, a := range m.C.Person.Open() {
+		asked = asked || a.Ref == "cant-run:"+ms.SHA && strings.Contains(a.Title, "Install tool")
+	}
+	if !asked {
+		t.Fatal("the person isn't asked for the tool")
+	}
+}
+
 // cantRunAlertOpen says the journal leaves p's can't-run alert open.
 func cantRunAlertOpen(m *Module) (open bool) {
 	for _, e := range m.C.J.Since(0) {
