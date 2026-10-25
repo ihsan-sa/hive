@@ -253,6 +253,7 @@ func TestShareScanBlocksTheBundle(t *testing.T) {
 		"a key in a run":     {".hive/runs/r1/output.log", "printed " + key + " (a fake token)", "[an Anthropic key] (a fake token)"},
 		"a handle in chat":   {".hive/chats/lead.jsonl", "{}\n{\"text\":\"ask Alice-K\"}", `{"text":"ask [a handle]"}`},
 		"a handle in a name": {".hive/chats/alice-k.jsonl", "{}", "nothing sent: "},
+		"a cut-off key":      {".hive/runs/r1/output.log", "     1\t-----" + "BEGIN RSA PRIVATE KEY-----\n     2\t" + strings.Repeat("Zq9xW2vB7nK4", 5), "nothing sent: "},
 		"no handle list":     {".hive/private/scan-handles.txt", "", "nothing sent: "},
 	} {
 		ws := shareFixture(t)

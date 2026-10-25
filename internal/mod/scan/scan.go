@@ -252,15 +252,22 @@ func Text(name string, data []byte, l Lists) []Hit {
 	return hits
 }
 
-// keyArmour starts a private key; keyBody is one more line of one: base64,
-// a header such as Proc-Type, or the end line, each a whole line. A turn log
-// splits lines with a JSON "\n", which counts as a line's end too.
+// keyArmour starts a private key and keyEnd ends one.
 var (
 	keyArmour = regexp.MustCompile(`-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY( BLOCK)?-----`)
-	keyBody   = regexp.MustCompile(`^(?:\r?\n|(?:\\r)?\\n)([A-Za-z0-9+/=]*|[A-Za-z-]+: [^\n\\"]*|-----END [A-Z0-9 ]*-----)(?:\r?\n|(?:\\r)?\\n|"|$)`)
+	keyEnd    = regexp.MustCompile(`-----END ([A-Z0-9]+ )*PRIVATE KEY( BLOCK)?-----`)
 )
 
-// scrubKeyBlocks replaces each private key, armour and body, with its kind.
+// maxKeyBlock is the most text from a private key's armour to its end that
+// scrubKeyBlocks takes out: a 4096-bit RSA key is about 3.3 KB, and a turn
+// log's line numbers and escapes can double that.
+const maxKeyBlock = 32 << 10
+
+// scrubKeyBlocks replaces each private key whose end it finds, armour, body
+// and whatever each line carries before it (line numbers, quoting,
+// indentation), with its kind. An armour with no end within maxKeyBlock is
+// left as it is, so the scan, which flags the armour, still blocks it: the
+// body could be anywhere after it, cut off or prefixed past recognising.
 func scrubKeyBlocks(s string) string {
 	var b strings.Builder
 	for {
@@ -268,30 +275,29 @@ func scrubKeyBlocks(s string) string {
 		if ix == nil {
 			return b.String() + s
 		}
-		b.WriteString(s[:ix[0]] + "[a private key]")
-		s = s[ix[1]:]
-		for {
-			m := keyBody.FindStringSubmatchIndex(s)
-			if m == nil {
-				break
-			}
-			line := s[m[2]:m[3]]
-			s = s[m[3]:] // the line's own end starts the next one
-			if strings.HasPrefix(line, "-----END") {
-				break
-			}
+		rest := s[ix[1]:]
+		end := keyEnd.FindStringIndex(rest[:min(len(rest), maxKeyBlock)])
+		if end == nil || keyArmour.MatchString(rest[:end[0]]) {
+			b.WriteString(s[:ix[1]]) // no end, or another key starts first: leave it to block
+			s = rest
+			continue
 		}
+		b.WriteString(s[:ix[0]] + "[a private key]")
+		s = rest[end[1]:]
 	}
 }
 
 // Scrub is data with what Text would flag replaced by its kind in brackets:
-// every key (a private key with its body, and of a secret assigned to a
+// every key (a private key through its end line, and of a secret assigned to a
 // name only the value), every deny word and every handle. It is for what is
 // sent to be read, such as `hive share`'s bundle of run logs that quote the
 // tests' made-up keys; what it returns is still scanned before it goes.
 func Scrub(data []byte, l Lists) []byte {
 	s := scrubKeyBlocks(string(data))
 	for _, k := range keys {
+		if k.what == "a private key" {
+			continue // scrubKeyBlocks took out every whole one; what is left must block
+		}
 		var b strings.Builder
 		last := 0
 		for _, ix := range k.re.FindAllStringSubmatchIndex(s, -1) {

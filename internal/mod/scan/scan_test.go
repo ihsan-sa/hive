@@ -249,8 +249,10 @@ func TestNoHandleListFails(t *testing.T) {
 func TestScrubLeavesNothingToFlag(t *testing.T) {
 	l := Lists{Public: []string{"**"}, Deny: []string{"Project Nightjar"}, Handles: []string{"carol", "alice-k"}}
 	var b strings.Builder
-	for line := range keyLines() {
-		b.WriteString("logged " + line + " here\n")
+	for line, what := range keyLines() {
+		if what != "a private key" { // an armour with no end blocks: see below
+			b.WriteString("logged " + line + " here\n")
+		}
 	}
 	body := gen(rand.New(rand.NewSource(4)), 64, b64)
 	b.WriteString(begin + "OPENSSH PRIVATE KEY-----\n" + body + "\n-----END OPENSSH PRIVATE KEY-----\n")
@@ -268,6 +270,34 @@ func TestScrubLeavesNothingToFlag(t *testing.T) {
 	}
 	if strings.Contains(out, body) {
 		t.Errorf("a private key's body survived:\n%s", out)
+	}
+}
+
+// A private key whose lines carry a prefix (a Read tool's line numbers in a
+// JSON turn log, quoting, indentation) goes whole, prefixes and all; one
+// whose end isn't there keeps its armour, so the scan still blocks it.
+func TestScrubPrefixedAndCutOffKeys(t *testing.T) {
+	r := rand.New(rand.NewSource(5))
+	l := Lists{Public: []string{"**"}, Handles: []string{"nobody-at-all"}}
+	b1, b2 := gen(r, 64, b64), gen(r, 40, b64)
+	for name, in := range map[string]string{
+		"numbered in JSON": `{"type":"tool_result","content":"     1\t` + begin + `RSA PRIVATE KEY-----\n     2\t` + b1 + `\n     3\t` + b2 + `\n     4\t-----END RSA PRIVATE KEY-----\n"}`,
+		"quoted":           "> " + begin + "OPENSSH PRIVATE KEY-----\n> " + b1 + "\n> " + b2 + "\n> -----END OPENSSH PRIVATE KEY-----\n",
+		"indented":         "key: |\n  " + begin + "EC PRIVATE KEY-----\n  " + b1 + "\n  " + b2 + "\n  -----END EC PRIVATE KEY-----\nnext: 1\n",
+	} {
+		out := string(Scrub([]byte(in), l))
+		if strings.Contains(out, b1) || strings.Contains(out, b2) || !strings.Contains(out, "[a private key]") || len(Text("f", []byte(out), l)) != 0 {
+			t.Errorf("%s: want the key gone, got:\n%s", name, out)
+		}
+	}
+	for name, in := range map[string]string{
+		"cut off":      `{"content":"     1\t` + begin + `RSA PRIVATE KEY-----\n     2\t` + b1 + `\n     3\t` + b2 + ` (clipped)"}`,
+		"end too far":  begin + "RSA PRIVATE KEY-----\n" + strings.Repeat(b1+"\n", maxKeyBlock/64) + "-----END RSA PRIVATE KEY-----\n",
+		"a second key": begin + "RSA PRIVATE KEY-----\n" + b1 + "\n" + begin + "EC PRIVATE KEY-----\n" + b2 + "\n-----END EC PRIVATE KEY-----\n",
+	} {
+		if out := Scrub([]byte(in), l); !has(Text("f", out, l), "a private key") {
+			t.Errorf("%s: a key with no end of its own passed the scan after the scrub:\n%s", name, out)
+		}
 	}
 }
 
