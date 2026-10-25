@@ -138,6 +138,19 @@ func TestOpenModelTurn(t *testing.T) {
 			t.Errorf("argv %q", spec.Argv)
 		}
 	}
+	// A named model's host widens only its own harness's runs: a run on
+	// another harness, even on a model of the same name, keeps its list.
+	for _, hn := range []string{"claude", "fake", "codex"} {
+		oh, _ := harness.Get(hn)
+		r := Run{RunSpec: RunSpec{ID: "x-" + hn, Role: "worker", Harness: hn, Model: "free"}}
+		spec, err := c.Runs.sandboxSpec(cfg, isolatedSB{}, oh, r, 1, false, "p", nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(spec.Allow, "openrouter.ai") {
+			t.Errorf("a %s run reaches the open model's host: %q", hn, spec.Allow)
+		}
+	}
 	// The key reaches the turn as a file in its home, never in its environment.
 	r := Run{RunSpec: RunSpec{ID: "o-key", Role: "worker", Harness: "open", Model: "free"}}
 	os.MkdirAll(c.WS.RunHome(r.ID), 0o755)
