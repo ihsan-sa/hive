@@ -1369,8 +1369,10 @@ func TestHostPython(t *testing.T) {
 }
 
 // TestAgentsReadTheHive: a worker reads another run's log, a chat, a warden's
-// log and the journal from $HIVE_STATE. Under the sandbox (HIVE_E2E_SANDBOX=auto)
-// it can change none of them and reads no secret; a bare run is unsandboxed by
+// log, the journal and config.json from $HIVE_STATE. Under the sandbox
+// (HIVE_E2E_SANDBOX=auto) it can change none of them, so no agent adds a model,
+// changes an endpoint or a route, and it reads no secret (a named model's key
+// among them); a bare run is unsandboxed by
 // the person's choice, so there only the reads are checked.
 func TestAgentsReadTheHive(t *testing.T) {
 	t.Parallel()
@@ -1378,6 +1380,7 @@ func TestAgentsReadTheHive(t *testing.T) {
 	login := filepath.Join(h.ws.Hive(), "logins", "codex", "spare")
 	os.MkdirAll(login, 0o700)
 	os.WriteFile(filepath.Join(login, "auth.json"), []byte(`{"refresh_token": "planted"}`), 0o600)
+	h.ws.SaveOpenKey("spare", "sk-planted") // a named model's key, which `hive model key` stores
 	h.seed("me/peek", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "peek", "repo": "me/peek"}, nil)
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "hello"}, nil)
@@ -1404,7 +1407,7 @@ func TestAgentsReadTheHive(t *testing.T) {
 		}
 		return false
 	})
-	for _, want := range []string{"log read=true", "chat read=true", "warden read=true", "journal read=true"} {
+	for _, want := range []string{"log read=true", "chat read=true", "warden read=true", "journal read=true", "config read=true"} {
 		if !strings.Contains(account, want) {
 			t.Errorf("account lacks %q: %s", want, account)
 		}
