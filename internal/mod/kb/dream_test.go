@@ -157,6 +157,20 @@ func TestDreamGuardsAndPutsBack(t *testing.T) {
 	if _, err := m.Dream("kb", Pass{Changes: []FileChange{{Path: "old.md", Text: text["old.md"] + "\nSee also [[gate]].\n", Was: was["old.md"]}}}); err != nil {
 		t.Errorf("relinking a note that already named a hidden project was refused: %v", err)
 	}
+	was, text = map[string]string{}, map[string]string{}
+	for _, n := range m.SharedNotes().Notes {
+		was[n.Path], text[n.Path] = hashOf([]byte(n.Text)), n.Text
+	}
+	if _, err := m.Dream("kb", Pass{Changes: []FileChange{
+		{Path: "gate.md", Text: text["gate.md"] + "\n" + text["old.md"], Was: was["gate.md"]},
+		{Path: "old.md", Remove: true, Was: was["old.md"]},
+	}}); err != nil {
+		t.Errorf("merging a note that named a hidden project was refused: %v", err)
+	}
+	was, text = map[string]string{}, map[string]string{}
+	for _, n := range m.SharedNotes().Notes {
+		was[n.Path], text[n.Path] = hashOf([]byte(n.Text)), n.Text
+	}
 
 	if runtime.GOOS == "windows" {
 		return

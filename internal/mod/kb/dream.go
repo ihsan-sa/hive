@@ -150,11 +150,14 @@ func (m *Module) Dream(module string, p Pass) (string, error) {
 		shipped[s] = true
 	}
 	var hidden []*regexp.Regexp
+	var hiddenNames []string
 	for _, pr := range m.C.Projects.List() {
 		if pr.Hidden() {
 			hidden = append(hidden, regexp.MustCompile(`\b`+regexp.QuoteMeta(pr.Name)+`\b`))
+			hiddenNames = append(hiddenNames, pr.Name)
 		}
 	}
+	named := make([]int, len(hidden)) // mentions the pass adds, by hidden project
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	seen := map[string]bool{}
@@ -201,11 +204,18 @@ func (m *Module) Dream(module string, p Pass) (string, error) {
 			old[c.Path] = raw
 		}
 		// The program keeps hidden projects' events out of what it writes; a
-		// hidden project's name the text didn't hold before is refused here too.
-		for _, re := range hidden {
-			if !c.Remove && len(re.FindAllStringIndex(c.Text, -1)) > len(re.FindAllIndex(old[c.Path], -1)) {
-				return "", fmt.Errorf("refused: %s names a hidden project", c.Path)
+		// pass whose files name a hidden project more often than they did (a
+		// merge only moves a mention) is refused here too.
+		for i, re := range hidden {
+			named[i] -= len(re.FindAllIndex(old[c.Path], -1))
+			if !c.Remove {
+				named[i] += len(re.FindAllStringIndex(c.Text, -1))
 			}
+		}
+	}
+	for i := range hidden {
+		if named[i] > 0 {
+			return "", fmt.Errorf("refused: the pass names hidden project %s", hiddenNames[i])
 		}
 	}
 	var wrote, removed []string

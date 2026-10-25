@@ -28,6 +28,7 @@ func distil(notes map[string]*Note, st *State, hidden map[string]bool, day strin
 	sort.Strings(projects)
 	var out []string
 	put := func(path, title, project, body string) {
+		body = unnamed(body, hidden)
 		if n := notes[path]; n != nil && n.Body == body {
 			return
 		}
