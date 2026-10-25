@@ -41,6 +41,31 @@ func (g GitHub) Create(name string) (string, error) {
 	return "https://github.com/" + g.Owner + "/" + name + ".git", nil
 }
 
+// githubHostKey is GitHub's published ed25519 host key, which ssh.github.com
+// serves on 443 too: a child's ssh trusts it and nothing else.
+const githubHostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+
+// DeployKey gives the repository name a fresh write deploy key, which reaches
+// that repository alone and goes with it when it is deleted. The private half
+// is written to dir; it returns that file and the ssh URL a child clones
+// (port 443, so it leaves through the meter like any HTTPS call).
+func (g GitHub) DeployKey(name, dir string) (key, url string, err error) {
+	key = filepath.Join(dir, "deploy-key")
+	os.Remove(key)
+	os.Remove(key + ".pub")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "hive-gate-"+name, "-f", key).CombinedOutput(); err != nil {
+		return "", "", fmt.Errorf("ssh-keygen: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	pub, err := os.ReadFile(key + ".pub")
+	if err != nil {
+		return "", "", err
+	}
+	if out, err := g.gh("api", "-X", "POST", "repos/"+g.Owner+"/"+name+"/keys", "-f", "title=hive gate "+name, "-f", "key="+strings.TrimSpace(string(pub)), "-F", "read_only=false"); err != nil {
+		return "", "", fmt.Errorf("deploy key on %s/%s: %v: %s", g.Owner, name, err, out)
+	}
+	return key, "ssh://git@ssh.github.com:443/" + g.Owner + "/" + name + ".git", nil
+}
+
 func (g GitHub) Delete(name string) error {
 	if out, err := g.gh("repo", "delete", g.Owner+"/"+name, "--yes"); err != nil {
 		return fmt.Errorf("delete %s/%s: %v: %s", g.Owner, name, err, out)
@@ -113,7 +138,8 @@ type Child struct {
 	Root     string // everything the child writes is under here
 	Repo     string // the child's org test repository, if the run has an org
 	RepoURL  string
-	Token    string // the contents-only org token, the only credential the child holds (never one that can make or delete repositories)
+	Token    string // a contents-only org token, given by hand (--child-token-file); never one that can make or delete repositories
+	Key      string // the private half of a deploy key on Repo alone: the only credential a child holds by default
 	Sandbox  string // "bwrap" or "bare"
 	Depth    int    // how many more levels the child may gate
 	Go       Go
@@ -166,8 +192,25 @@ func (c *Child) Env() []string {
 		// git reads its auth header from the environment, so the token is in no argv.
 		env = append(env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0=Authorization: Basic "+basic(c.Token))
 	}
+	if c.Key != "" {
+		// git's ssh reads only this config: the deploy key, GitHub's pinned
+		// host key, and the way out through the meter.
+		env = append(env, "GIT_SSH_COMMAND=ssh -F "+shQuote(c.Key+".ssh_config"))
+	}
 	return append(env, c.Extra...)
 }
+
+// writeSSHConfig writes the ssh config and known_hosts beside c.Key.
+func (c *Child) writeSSHConfig() error {
+	kh := c.Key + ".known_hosts"
+	if err := os.WriteFile(kh, []byte("[ssh.github.com]:443 "+githubHostKey+"\n"), 0o600); err != nil {
+		return err
+	}
+	conf := fmt.Sprintf("Host *\n  IdentityFile %q\n  IdentitiesOnly yes\n  UserKnownHostsFile %q\n  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking yes\n  HostKeyAlgorithms ssh-ed25519\n  BatchMode yes\n  ProxyCommand %q gate-connect %%h %%p\n", c.Key, kh, c.fwd())
+	return os.WriteFile(c.Key+".ssh_config", []byte(conf), 0o600)
+}
+
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // testGoCache, when set (by this package's tests only), is one build cache
 // every unsandboxed go command shares, so a test pays for compiling the
