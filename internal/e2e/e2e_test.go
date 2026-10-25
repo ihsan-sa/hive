@@ -143,13 +143,11 @@ func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string)
 		for _, end := range h.jobs {
 			end()
 		}
-		// A gate's or check's git can outlive a killed daemon for a moment
-		// (macOS has no job to end it with), and t.TempDir's removal fails on
-		// a folder still being written; remove them once they go quiet.
-		for _, d := range []string{h.ws.Gates(), filepath.Join(h.ws.Hive(), "checks")} {
-			for began := time.Now(); os.RemoveAll(d) != nil && time.Since(began) < 30*time.Second; {
-				time.Sleep(200 * time.Millisecond)
-			}
+		// A git the daemon started (a gate's, a check's, the knowledge base's)
+		// can outlive it for a moment once killed, and t.TempDir's removal
+		// fails on a folder still being written; remove the Hive once it goes quiet.
+		for began := time.Now(); os.RemoveAll(h.ws.Root) != nil && time.Since(began) < 30*time.Second; {
+			time.Sleep(200 * time.Millisecond)
 		}
 	})
 	h.launch()
