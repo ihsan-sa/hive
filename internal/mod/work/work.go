@@ -2070,7 +2070,7 @@ func (m *Module) merged(t *Task, merged, note string) {
 		t.Banks = append(t.Banks, Bank{PR: t.PR, MergeSHA: merged}) // a revert of this merge names its PR
 		t.Branch, t.PR = fmt.Sprintf("hive/%s-%d", t.ID, t.Banked), core.PR{}
 		m.save(t, "checkpoint "+note+"; the worker keeps going")
-		m.C.Runs.Send(t.Worker, fmt.Sprintf("Your commit %s beat the best kept score and is merged into main as a checkpoint. Keep going on top of it on your branch, and leave that commit as it is (no amend, reset or rebase past it): the Hive lays what you commit after it onto main, so you needn't fetch main.", core.Short(t.Base)))
+		m.C.Runs.Send(t.Worker, fmt.Sprintf("Your commit %s is on main as a checkpoint: %s. Keep going on top of it on your branch, and leave that commit as it is (no amend, reset or rebase past it): the Hive lays what you commit after it onto main, so you needn't fetch main.", core.Short(t.Base), note))
 		if m.OnMerged != nil {
 			m.OnMerged(*t)
 		}
