@@ -71,6 +71,14 @@ func TestLeadRoutes(t *testing.T) {
 	if len(routed) != 1 || !strings.Contains(routed[0], `"by":"`+lead.ID) {
 		t.Fatalf("journal: %q", routed)
 	}
+	// The route op saves config.json, but only the route: an agent can't
+	// widen where public repositories go by riding along on it.
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "qwen,fake:opus", "public_owners": []string{"evil"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.C.WS.LoadConfig().PublicOwners; !slices.Equal(got, cfg.PublicOwners) {
+		t.Fatalf("a route op changed public_owners: %v", got)
+	}
 	spec := a.Agents.Spec("w1", "worker", "lab", t.TempDir(), "brief")
 	if spec.Harness != "open" || spec.Model != "qwen" || len(spec.Route) != 2 || spec.Route[1] != (core.Pick{Harness: "fake", Model: "opus"}) {
 		t.Fatalf("a new worker: %s:%s, route %v", spec.Harness, spec.Model, spec.Route)
