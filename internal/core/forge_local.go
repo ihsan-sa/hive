@@ -209,6 +209,17 @@ func (l *Local) refresh(repo string, p *localPR) {
 	}
 	p.HeadSHA = l.head(repo, p.Head)
 	dir, base := l.RepoPath(repo), "refs/heads/"+cmp.Or(p.Base, "main")
+	// MergePR pushes its squash before it saves the PR as merged: a process
+	// killed in between left its own merge on main under an open PR, which
+	// GitHub, merging on its side, never shows. That squash is its merge.
+	if out, err := Git(dir, "log", "--first-parent", "-n", "200", "--format=%H %s", base); err == nil {
+		for _, line := range strings.Split(out, "\n") {
+			if sha, subject, ok := strings.Cut(strings.TrimSpace(line), " "); ok && strings.HasSuffix(subject, fmt.Sprintf(" (#%d)", p.Number)) {
+				p.State, p.MergeSHA = "MERGED", sha
+				return
+			}
+		}
+	}
 	p.Mergeable, p.MergeState = "MERGEABLE", "CLEAN"
 	// merge-tree exits 1 on a conflict; any other failure (an older git) leaves
 	// it to the merge itself to refuse.
@@ -314,13 +325,14 @@ func (l *Local) MergePR(repo string, number int, sha, subject string) (string, e
 		if p.Number != number {
 			continue
 		}
+		l.refresh(repo, p)
 		if p.State == "MERGED" {
+			l.save(s)
 			return p.MergeSHA, nil
 		}
 		if p.State == "CLOSED" {
 			return "", fmt.Errorf("PR #%d was closed without merging", number)
 		}
-		l.refresh(repo, p)
 		if p.HeadSHA != sha {
 			return "", fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
 		}

@@ -255,16 +255,24 @@ func TestSelfGateWithoutRunnerWaits(t *testing.T) {
 	}
 }
 
+// maxGates sets the person's ceiling on gates at once.
+func maxGates(m *Module, n int) {
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxGates = n
+	m.C.WS.SaveConfig(cfg)
+}
+
 // An improvement must show a gain: even docs and prompts run with no ties
-// allowed; one gate runs at a time; a project that isn't the Hive's own
-// never waits for one.
+// allowed; past the gates' limit a change waits its turn; a project that
+// isn't the Hive's own never waits for one.
 func TestSelfGateNoTiesAndTurns(t *testing.T) {
 	m, task, p, _, jobs := selfRig(t, map[string]string{"docs/note.md": "x\n", "modules/agents/worker.md": "y\n"}, core.GateKeep)
+	maxGates(m, 1)
 	m.mu.Lock()
-	m.gating = &gateRun{key: "other", task: "t9"}
+	m.gating = map[string]*gateRun{"other": {key: "other", task: "t9"}}
 	m.mu.Unlock()
 	mergeOnce(t, m, task, p)
-	if !strings.Contains(task.Reason, "one change at a time") || len(*jobs) != 0 {
+	if !strings.Contains(task.Reason, "every one is in use") || len(*jobs) != 0 {
 		t.Fatalf("reason %q, %d runs: want waiting its turn", task.Reason, len(*jobs))
 	}
 	m.mu.Lock()
@@ -327,8 +335,9 @@ func TestUnclearIsTakenAsAGain(t *testing.T) {
 // merges; a worker sets only its own task's aim; an aim is fix or gain.
 func TestAimOp(t *testing.T) {
 	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	maxGates(m, 1)
 	m.mu.Lock()
-	m.gating = &gateRun{key: "other", task: "t9"}
+	m.gating = map[string]*gateRun{"other": {key: "other", task: "t9"}}
 	m.mu.Unlock()
 	mergeOnce(t, m, task, p)
 	if !strings.HasPrefix(task.Reason, GateWait) {
@@ -362,8 +371,53 @@ func TestAimOp(t *testing.T) {
 	}
 }
 
+// More than one gate runs at once while the machine has room for another:
+// with one in flight, a second change starts its own run, and it waits while
+// the machine is strained.
+func TestSelfGatesRunSideBySide(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	maxGates(m, 2)
+	strain := "machine low on memory (900 MB free, floor 4096 MB)"
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) (string, bool) { return strain, true }
+	release := make(chan struct{})
+	gate := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult { <-release; return gate(ctx, j) }
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{"other": {key: "other", task: "t9"}}
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	if !strings.Contains(task.Reason, "no room for another") || len(*jobs) != 0 {
+		t.Fatalf("reason %q, %d runs: want waiting while the machine is strained", task.Reason, len(*jobs))
+	}
+	strain = ""
+	m.mu.Lock()
+	delete(m.later, task.ID)
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	m.mu.Lock()
+	n := len(m.gating)
+	m.mu.Unlock()
+	if n != 2 || !strings.Contains(task.Reason, "started") {
+		t.Fatalf("%d runs in flight, reason %q: want a second run beside the first", n, task.Reason)
+	}
+	close(release)
+	m.Wait()
+	m.mu.Lock()
+	delete(m.later, task.ID)
+	_, other := m.gating["other"]
+	m.mu.Unlock()
+	if !other || len(*jobs) != 1 {
+		t.Fatalf("other in flight %v, %d runs: want this one done and the other still running", other, len(*jobs))
+	}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q: want merged on its keep", task.Stage, task.Reason)
+	}
+}
+
 // Turning an improvement into a fix while its gate runs cancels that run, so
-// the one gate slot frees for the gains behind it; the cancelled run records
+// its gate slot frees for the gains behind it; the cancelled run records
 // no verdict and holds nobody.
 func TestAimFixCancelsItsGate(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
@@ -388,10 +442,10 @@ func TestAimFixCancelsItsGate(t *testing.T) {
 		t.Fatal("the gate run went on after its task became a fix")
 	}
 	m.mu.Lock()
-	gating, cantRun := m.gating, len(m.gateCantRun)
+	gating, cantRun := len(m.gating), len(m.gateCantRun)
 	m.mu.Unlock()
-	if gating != nil || cantRun != 0 {
-		t.Fatalf("gating %+v, %d can't-run holds: want the slot free and nobody held", gating, cantRun)
+	if gating != 0 || cantRun != 0 {
+		t.Fatalf("%d gating, %d can't-run holds: want the slot free and nobody held", gating, cantRun)
 	}
 	if g, ok := m.C.Effects.GateResult(p.Name, task.SHA, main); ok {
 		t.Fatalf("a cancelled run recorded a verdict: %+v", g)
@@ -513,5 +567,55 @@ func TestOnlyUnresolvedConflictsCount(t *testing.T) {
 	}
 	if task.Stage != StageStopped || !strings.Contains(task.Reason, "keeps conflicting") {
 		t.Fatalf("stage %q, reason %q: want given up after four unresolved", task.Stage, task.Reason)
+	}
+}
+
+// The gates' limit starts at two, grows by one at most every gateStep while
+// the machine has room, never past one gate per gateCores cores or the
+// person's max_gates, pulls back under strain, and stays at one where the
+// machine can't be read.
+func TestGatePace(t *testing.T) {
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	strain, watching := "", true
+	gateMachine = func(core.Config) (string, bool) { return strain, watching }
+	now := time.Now()
+	m := &Module{}
+	cfg := core.Config{MaxGates: 0}
+	top := gateCeiling(cfg)
+	if l, _ := m.gateLimit(now, 0, cfg); l != min(2, top) {
+		t.Fatalf("start %d, want %d", l, min(2, top))
+	}
+	cfg.MaxGates = 4
+	m = &Module{}
+	if l, _ := m.gateLimit(now, 4, cfg); l != 4 {
+		t.Fatalf("start under max_gates 4: %d", l)
+	}
+	cfg.MaxGates = 5
+	m = &Module{}
+	m.gateLimit(now, 3, cfg) // starts at 5
+	m.gates.limit = 3        // as if pulled back
+	if l, _ := m.gateLimit(now.Add(gateStep-time.Second), 3, cfg); l != 3 {
+		t.Fatalf("grew to %d within %s", l, gateStep)
+	}
+	if l, _ := m.gateLimit(now.Add(gateStep), 3, cfg); l != 4 {
+		t.Fatalf("limit %d after %s with room, want 4", l, gateStep)
+	}
+	if l, _ := m.gateLimit(now.Add(2*gateStep), 4, cfg); l != 5 {
+		t.Fatalf("limit %d, want 5", l)
+	}
+	if l, _ := m.gateLimit(now.Add(3*gateStep), 5, cfg); l != 5 {
+		t.Fatalf("grew past max_gates to %d", l)
+	}
+	strain = "machine low on memory"
+	if l, why := m.gateLimit(now.Add(4*gateStep), 5, cfg); l != 3 || why != strain {
+		t.Fatalf("limit %d (%q) under strain, want 3", l, why)
+	}
+	strain, watching, cfg.MaxGates = "", false, 0
+	m = &Module{}
+	if l, _ := m.gateLimit(now, 0, cfg); l != 1 {
+		t.Fatalf("limit %d where the machine can't be read, want 1", l)
+	}
+	if l, _ := m.gateLimit(now.Add(gateStep), 1, cfg); l != 1 {
+		t.Fatalf("grew to %d unseen", l)
 	}
 }
