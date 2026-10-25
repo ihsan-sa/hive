@@ -218,18 +218,18 @@ func Run(cfg Config) (rep Report, err error) {
 		if c.Bin == "" {
 			cfg.log("building %s at %s", c.Name, short(sha))
 			e := build(cfg, c, sha, merge)
+			var conflict *mergeConflict
+			if errors.As(e, &conflict) {
+				return rep, e // never merged: report.json names no merged tree
+			}
 			if c == cand && c.Commit != "" {
 				rep.Merged = c.Commit
-				if c.Commit != sha {
+				if c.Commit != c.Head {
 					cfg.log("  with %s merged in, at %s", short(merge), short(c.Commit))
 				}
 			}
 			if e != nil {
 				var own *ownFailure
-				var conflict *mergeConflict
-				if errors.As(e, &conflict) {
-					return rep, e
-				}
 				if !errors.As(e, &own) {
 					// The gate's own step (the clone, the module download): could not run.
 					err = fmt.Errorf("preparing %s's build: %v", c.Name, e)
@@ -580,7 +580,7 @@ func checkout(cfg Config, c *Child, sha, merge string) error {
 	if st, _ := run(c.Src, "git", "status", "--porcelain"); strings.TrimSpace(st) != "" {
 		return fmt.Errorf("checkout is not clean: %s", tail(st, 200))
 	}
-	c.Commit = got
+	c.Head, c.Commit = got, got
 	if merge == "" {
 		return nil
 	}

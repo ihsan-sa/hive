@@ -139,6 +139,9 @@ func TestSelfGateConflictSendsBackToMerge(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(m.C.WS.RunRO(task.Worker), "main.bundle")); err != nil {
 		t.Fatalf("the worker has no main to merge: %v", err)
 	}
+	if msg := queued(m, task.Worker); !strings.Contains(msg, "recursive gate") || !strings.Contains(msg, "- NOTES.md") {
+		t.Fatalf("the worker isn't told where the gate's merge conflicts: %q", msg)
+	}
 	if prState(t, f, task.PR.Number) != "OPEN" || alerts(m, "gate") != 0 {
 		t.Fatalf("PR %s, %d alerts: want open and no can't-run alert", prState(t, f, task.PR.Number), alerts(m, "gate"))
 	}

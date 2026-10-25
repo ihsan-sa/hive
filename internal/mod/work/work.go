@@ -2979,6 +2979,10 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 		msg = "Main moved, and merging it into your branch keeps both sides of lines you and main each changed (these docs merge as union), so these end up more than once:\n\n- " +
 			strings.Join(d.Lines, "\n- ") + "\n\nFetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, keep each of these once, run the tests, commit, and finish again."
 	}
+	if g := (*gateConflict)(nil); errors.As(why, &g) && len(g.files) > 0 {
+		msg = "Main moved, and the recursive gate, merging it into your branch to judge the change as it would land, found conflicts in:\n\n- " +
+			strings.Join(g.files, "\n- ") + "\n\nFetch main with `git fetch \"$HIVE_RUN/main.bundle\" main`, merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
+	}
 	if err := m.C.Runs.Reopen(t.Worker, msg); err != nil {
 		return err
 	}
