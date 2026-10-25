@@ -13,6 +13,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/softlayer"
 )
 
@@ -138,7 +139,7 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 			outcome = "the sub-Hive's daemon stopped answering after " + time.Since(began).Round(time.Second).String() + ": " + err.Error()
 			break
 		}
-		if tk, ok := landed(st, project); ok {
+		if tk, ok := askLanded(st, project); ok {
 			outcome = "landed " + shortSHA(tk.MergeSHA) + " after " + time.Since(began).Round(time.Second).String()
 		} else if time.Now().After(deadline) {
 			outcome = "not landed: " + stages(st, project)
@@ -238,6 +239,21 @@ func standInCI(h *hive, repo string) {
 			h.forge.SetChecks(repo, pr.HeadSHA, runs...)
 		}
 	}
+}
+
+// askLanded finds the asked task merged: one the lead filed from its chat.
+// Another merge (a fix the project's lead filed for a red main, say) is
+// counted in the report's merges but doesn't end the arm: in the first real
+// run (2026-10-25) both arms "landed" that way while the ask still waited.
+func askLanded(st api.State, project string) (work.Task, bool) {
+	for _, p := range st.Projects {
+		for _, t := range p.Tasks {
+			if p.Name == project && t.Chat == "lead" && t.Stage == work.StageDone && t.MergeSHA != "" && !strings.HasPrefix(t.Title, "Revert") {
+				return t, true
+			}
+		}
+	}
+	return work.Task{}, false
 }
 
 func shortSHA(s string) string { return s[:min(len(s), 9)] }
