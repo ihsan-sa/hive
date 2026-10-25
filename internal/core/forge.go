@@ -47,7 +47,9 @@ var ErrDraft = errors.New("the pull request is a draft, left for a read")
 type Forge interface {
 	Name() string
 	User() (string, error)
-	EnsureRepo(repo, description string) (created bool, err error)
+	// EnsureRepo makes repo, public or private, unless it exists; an
+	// existing repository's visibility is never changed (that is the person's).
+	EnsureRepo(repo, description string, public bool) (created bool, err error)
 	// Fork is owner's fork of repo, made on first need; owner "" is the
 	// person's own account, else an organization they can create repos in.
 	Fork(repo, owner string) (string, error)
@@ -368,11 +370,15 @@ func ghLogin(repo string) (string, error) {
 // User is the login gh itself holds.
 func (GitHub) User() (string, error) { return gh("", "api", "user", "-q", ".login") }
 
-func (g GitHub) EnsureRepo(repo, description string) (bool, error) {
+func (g GitHub) EnsureRepo(repo, description string, public bool) (bool, error) {
 	if _, err := gh(repo, "repo", "view", repo, "--json", "name"); err == nil {
 		return false, nil
 	}
-	if _, err := gh(repo, "repo", "create", repo, "--private", "--description", description); err != nil {
+	visibility := "--private"
+	if public {
+		visibility = "--public"
+	}
+	if _, err := gh(repo, "repo", "create", repo, visibility, "--description", description); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -755,6 +761,36 @@ func ghPages[T any](repo, path, field string) ([]T, error) {
 // head and main can be told apart by the tests failing in it.
 type CheckLogs interface {
 	CheckLog(repo string, r CheckRun) (string, error)
+}
+
+// APIReader is a forge that answers read-only API calls on the person's
+// login (5,000 an hour), so neither the daemon nor agents spend the anonymous
+// 60 an hour this machine's address shares. RateReset is when the login's
+// quota is next full again.
+type APIReader interface {
+	APIGet(repo, path string) (string, error)
+	RateReset(repo string) (time.Time, error)
+}
+
+// APIGet reads one API path with gh: a GET, never a write.
+func (GitHub) APIGet(repo, path string) (string, error) {
+	if strings.HasPrefix(path, "-") {
+		return "", fmt.Errorf("bad API path %q", path)
+	}
+	return gh(repo, "api", path)
+}
+
+// RateReset reads the login's core quota; GitHub doesn't count that read.
+func (GitHub) RateReset(repo string) (time.Time, error) {
+	out, err := gh(repo, "api", "rate_limit", "-q", ".resources.core.reset")
+	if err != nil {
+		return time.Time{}, err
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("reading the rate limit's reset: %w", err)
+	}
+	return time.Unix(n, 0), nil
 }
 
 var (
