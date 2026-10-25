@@ -56,6 +56,22 @@ type Agent struct {
 	Out                  io.Writer
 	Client               *http.Client
 	Sleep                func(time.Duration) // waits out a short rate limit
+	Price                [2]float64          // USD per million input and output tokens; zero is free
+	Budget               float64             // USD the turn may spend at Price; 0 is no cap
+
+	in, out int64 // the turn's tokens so far
+}
+
+// spent is what the turn has cost so far at its price.
+func (a *Agent) spent() float64 {
+	return (float64(a.in)*a.Price[0] + float64(a.out)*a.Price[1]) / 1e6
+}
+
+// done is result line r with the turn's tokens and cost.
+func (a *Agent) done(r map[string]any) map[string]any {
+	r["usage"] = map[string]any{"input_tokens": a.in, "output_tokens": a.out}
+	r["total_cost_usd"] = a.spent()
+	return r
 }
 
 // KeyMain is `hive open-key FILE`: it prints the model key the run manager
@@ -113,6 +129,7 @@ func Main(argv []string) int {
 	addDir := fl.String("add-dir", "", "")
 	schemaFile := fl.String("schema-file", "", "")
 	maxOut := fl.Int("max-output", 0, "")
+	budget := fl.Float64("max-budget-usd", 0, "")
 	if err := fl.Parse(argv); err != nil || *session == "" {
 		fmt.Fprintln(os.Stderr, "usage: hive open-agent --session S --model NAME [--resume] [--system-file F] [--readonly --add-dir D] [--schema-file F]")
 		return 2
@@ -121,6 +138,11 @@ func Main(argv []string) int {
 		ReadOnly: *readonly, MaxOutput: *maxOut, MaxSteps: 200, Out: os.Stdout, Sleep: time.Sleep,
 		Client: &http.Client{Timeout: 20 * time.Minute}}
 	a.Context, _ = strconv.Atoi(os.Getenv("HIVE_OPEN_CONTEXT"))
+	a.Budget = *budget
+	if in, out, ok := strings.Cut(os.Getenv("HIVE_OPEN_PRICE"), ","); ok {
+		a.Price[0], _ = strconv.ParseFloat(in, 64)
+		a.Price[1], _ = strconv.ParseFloat(out, 64)
+	}
 	noDump()
 	if f := os.Getenv("HIVE_OPEN_KEY_FILE"); f != "" {
 		// The run manager hands the key over in a file, deleted before any
@@ -137,7 +159,7 @@ func Main(argv []string) int {
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	for _, k := range []string{"HIVE_OPEN_ENDPOINT", "HIVE_OPEN_MODEL", "HIVE_OPEN_KEY", "HIVE_OPEN_KEY_FILE", "HIVE_OPEN_CONTEXT", "HIVE_OPEN_HOME"} {
+	for _, k := range []string{"HIVE_OPEN_ENDPOINT", "HIVE_OPEN_MODEL", "HIVE_OPEN_KEY", "HIVE_OPEN_KEY_FILE", "HIVE_OPEN_CONTEXT", "HIVE_OPEN_HOME", "HIVE_OPEN_PRICE"} {
 		os.Unsetenv(k)
 	}
 	if a.Model == "" {
@@ -209,10 +231,18 @@ func (a *Agent) preamble() string {
 // Turn runs the loop until the model answers without a tool call, returning
 // the result line.
 func (a *Agent) Turn(ctx context.Context, msgs []Message, save func([]Message)) map[string]any {
+	return a.done(a.turn(ctx, msgs, save))
+}
+
+func (a *Agent) turn(ctx context.Context, msgs []Message, save func([]Message)) map[string]any {
 	tools := a.tools()
 	last := ""
 	for step := 0; step < a.MaxSteps; step++ {
 		msgs = a.fit(msgs)
+		if a.Budget > 0 && a.spent() >= a.Budget {
+			save(msgs)
+			return errResult(fmt.Sprintf("the turn reached its budget of $%.2f on %s", a.Budget, a.Model), 0)
+		}
 		reply, tokens, err := a.chat(ctx, msgs, tools)
 		if err != nil {
 			var le *limitErr
@@ -394,7 +424,8 @@ func (a *Agent) chat(ctx context.Context, msgs []Message, tools []map[string]any
 				Message Message `json:"message"`
 			} `json:"choices"`
 			Usage struct {
-				Prompt int `json:"prompt_tokens"`
+				Prompt     int `json:"prompt_tokens"`
+				Completion int `json:"completion_tokens"`
 			} `json:"usage"`
 			Error *struct {
 				Message string `json:"message"`
@@ -440,6 +471,11 @@ func (a *Agent) chat(ctx context.Context, msgs []Message, tools []map[string]any
 		if tokens == 0 {
 			tokens = size(msgs) / 4
 		}
+		wrote := r.Usage.Completion
+		if wrote == 0 {
+			wrote = (len(m.Content) + len(fmt.Sprint(m.ToolCalls))) / 4
+		}
+		a.in, a.out = a.in+int64(tokens), a.out+int64(wrote)
 		return m, tokens, nil
 	}
 }
@@ -662,6 +698,11 @@ func (a *Agent) grep(pattern, root string) string {
 			if d.Name() == ".git" || d.Name() == "node_modules" {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			// A link the change under review planted would read past
+			// readable(), which checks only the root.
 			return nil
 		}
 		raw, err := os.ReadFile(p)
