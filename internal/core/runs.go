@@ -89,6 +89,8 @@ type Run struct {
 	Retries     int             `json:"retries"`
 	Offline     string          `json:"offline,omitempty"` // its last turn couldn't reach its service, and why
 	Nudges      int             `json:"nudges"`
+	Head        string          `json:"head,omitempty"`  // its checkout's HEAD log (size, time) at its last turn's end
+	Still       int             `json:"still,omitempty"` // turns in a row that ended with that log unchanged
 	Login       string          `json:"login,omitempty"` // the login its latest turn went on
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
@@ -138,6 +140,12 @@ func (r *Run) HarnessAt(turn int) string {
 		h = r.Moves[i].From
 	}
 	return h
+}
+
+// Finishes reports whether the run ends only on its own `hive agent finish`
+// (a worker, a helper), not on a structured answer, one turn or never.
+func (r Run) Finishes() bool {
+	return !r.Persistent && !r.ReadOnly && !r.OneTurn && r.Schema == ""
 }
 
 // Terminal reports whether the run will take no more turns on its own.
@@ -229,6 +237,9 @@ type Runs struct {
 	down    map[string]Down    // picks that can't answer, by Pick.String
 	strikes map[string]strike  // each pick's straight turns ending in the same error
 	cfg     Config             // the config of the latest tick, which a Down is fingerprinted against
+	// proven is the picks (Pick.String) some run has finished done on: the
+	// only ones a run that must finish falls back to (next).
+	proven map[string]bool
 	// launching counts launches past the hold whose turn isn't journalled yet.
 	launching int
 	starting  map[string]bool // runs with a launch in flight
@@ -280,7 +291,7 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, proven: map[string]bool{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -428,6 +439,7 @@ type turnEnded struct {
 	Queue       []string        `json:"queue,omitempty"`
 	Offline     string          `json:"offline,omitempty"`     // why the harness couldn't reach its service, in one plain line
 	Unavailable string          `json:"unavailable,omitempty"` // the pick it ran on can't answer (Down), so it moved or waits without a retry's backoff
+	Head        string          `json:"head,omitempty"`        // the checkout's HEAD log at the turn's end
 }
 
 // egressRefused is the hosts a turn's egress proxy refused, and each
@@ -584,6 +596,11 @@ func (rs *Runs) apply(e Event) {
 		if strings.HasPrefix(t.Reason, "nudged") {
 			r.Nudges++
 		}
+		if t.Head == r.Head {
+			r.Still++
+		} else {
+			r.Head, r.Still = t.Head, 0
+		}
 	case "run.queued":
 		var n runNote
 		e.Decode(&n)
@@ -601,6 +618,9 @@ func (rs *Runs) apply(e Event) {
 		}
 		e.Decode(&f)
 		r.Finish = &f.Finish
+		if f.Finish.Status == "done" {
+			rs.proven[Pick{Harness: HarnessName(r.Harness), Model: r.Model}.String()] = true
+		}
 	case "run.progress":
 		var n runNote
 		e.Decode(&n)
@@ -610,7 +630,7 @@ func (rs *Runs) apply(e Event) {
 		e.Decode(&n)
 		r.Status, r.Reason, r.ParkedUntil = n.Status, n.Reason, n.Until
 		if n.Status == StatusQueued || n.Status == StatusIdle {
-			r.Nudges = 0
+			r.Nudges, r.Still = 0, 0
 		}
 	case "run.held":
 		var n runNote
@@ -623,7 +643,7 @@ func (rs *Runs) apply(e Event) {
 		e.Decode(&n)
 		r.Waiting = n.Text
 	case "run.reopened":
-		r.Finish, r.StopAsked, r.Nudges = nil, false, 0
+		r.Finish, r.StopAsked, r.Nudges, r.Still = nil, false, 0, 0
 	}
 }
 
@@ -792,7 +812,11 @@ func (rs *Runs) freeAt(h, model string) time.Time {
 // next is the pick r's next turn goes on, and when it has room: the first of
 // its picks with room now, else the one that has room soonest. A persistent
 // run follows the settings' route; any other stays on its own pick while it
-// has room, then moves along its Route.
+// has room, then moves along its Route. A run that must finish (a worker)
+// moves only to a pick some run has finished done on, or back to the first
+// of its route: one on a model that has never finished here ended turns
+// without finishing while others waited on it (task 135947 on gpt-oss), so it
+// waits for its own model's reset instead.
 func (rs *Runs) next(r Run) (Pick, time.Time) {
 	own := Pick{Harness: HarnessName(r.Harness), Model: r.Model}
 	picks := []Pick{own}
@@ -804,6 +828,18 @@ func (rs *Runs) next(r Run) (Pick, time.Time) {
 	for _, p := range r.RunSpec.Route {
 		if !slices.ContainsFunc(picks, p.Same) {
 			picks = append(picks, p)
+		}
+	}
+	if r.Finishes() {
+		first := own
+		if len(r.RunSpec.Route) > 0 {
+			first = r.RunSpec.Route[0]
+		}
+		rs.mu.Lock()
+		picks = slices.DeleteFunc(picks, func(p Pick) bool { return !p.Same(first) && !rs.proven[p.String()] })
+		rs.mu.Unlock()
+		if !slices.ContainsFunc(picks, first.Same) {
+			picks = append([]Pick{first}, picks...)
 		}
 	}
 	best, at := picks[0], time.Time{}
@@ -1108,7 +1144,7 @@ func (rs *Runs) endTurn(r Run) {
 	if tl.Limit != nil {
 		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
 	}
-	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Session: tl.Session, Context: tl.Context, Result: tl.Result}
+	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Session: tl.Session, Context: tl.Context, Result: tl.Result, Head: headMark(r.Checkout)}
 	var dropErr error
 	if HarnessName(r.Harness) == "codex" {
 		dropErr = rs.dropCodexHome(r.ID)
@@ -1214,6 +1250,10 @@ func (rs *Runs) endTurn(r Run) {
 	case cur.Nudges < 2:
 		te.Status, te.Reason = StatusIdle, "nudged: ended a turn without finishing"
 		te.Queue = []string{printedNudge(tl.Result.Text)}
+	case te.Head == cur.Head && cur.Still+1 >= StillTurns:
+		// Its nudges changed nothing: it can't follow the finish protocol,
+		// so it ends and frees its slot instead of holding it quiet.
+		te.Status, te.Reason = StatusBlocked, NoFinish+": it was nudged twice to call `hive agent finish`, and the turns after made no new commit and ended without it"
 	default:
 		te.Status, te.Reason = StatusQuiet, "keeps ending turns without finishing; flagged for the lead"
 	}
@@ -1242,6 +1282,27 @@ func (rs *Runs) endTurn(r Run) {
 			rs.Send(p.ID, fmt.Sprintf("[%s %s finished]\n%s", r.Role, r.ID, account))
 		}
 	}
+}
+
+// NoFinish begins the reason a run ends blocked for never calling finish.
+const NoFinish = "doesn't finish"
+
+// StillTurns is how many turns in a row, the ones answering its two nudges,
+// may end without finishing and without a new commit before a run ends
+// blocked; one that commits stays quiet for the lead.
+const StillTurns = 2
+
+// headMark is the size and time of a checkout's HEAD log, which a commit (or
+// any move of HEAD) changes; it is read without running git there.
+func headMark(checkout string) string {
+	if checkout == "" {
+		return ""
+	}
+	fi, err := os.Lstat(filepath.Join(checkout, ".git", "logs", "HEAD"))
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprint(fi.Size(), " ", fi.ModTime().UnixNano())
 }
 
 func suffix(s string) string {

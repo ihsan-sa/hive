@@ -47,7 +47,9 @@ var ErrDraft = errors.New("the pull request is a draft, left for a read")
 type Forge interface {
 	Name() string
 	User() (string, error)
-	EnsureRepo(repo, description string) (created bool, err error)
+	// EnsureRepo makes repo, public or private, unless it exists; an
+	// existing repository's visibility is never changed (that is the person's).
+	EnsureRepo(repo, description string, public bool) (created bool, err error)
 	// Fork is owner's fork of repo, made on first need; owner "" is the
 	// person's own account, else an organization they can create repos in.
 	Fork(repo, owner string) (string, error)
@@ -63,6 +65,9 @@ type Forge interface {
 	FindPR(repo, head string) (PR, bool, error)
 	GetPR(repo string, number int) (PR, error)
 	MergePR(repo string, number int, sha, subject string) (string, error)
+	// ReadyPR takes a draft out of draft, only while its head is exactly
+	// sha; one already ready is left as it is.
+	ReadyPR(repo string, number int, sha string) error
 	ClosePR(repo string, number int, comment string) error
 	// SetDraft marks an open pull request a draft or ready for review.
 	SetDraft(repo string, number int, draft bool) error
@@ -365,11 +370,15 @@ func ghLogin(repo string) (string, error) {
 // User is the login gh itself holds.
 func (GitHub) User() (string, error) { return gh("", "api", "user", "-q", ".login") }
 
-func (g GitHub) EnsureRepo(repo, description string) (bool, error) {
+func (g GitHub) EnsureRepo(repo, description string, public bool) (bool, error) {
 	if _, err := gh(repo, "repo", "view", repo, "--json", "name"); err == nil {
 		return false, nil
 	}
-	if _, err := gh(repo, "repo", "create", repo, "--private", "--description", description); err != nil {
+	visibility := "--private"
+	if public {
+		visibility = "--public"
+	}
+	if _, err := gh(repo, "repo", "create", repo, visibility, "--description", description); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -613,6 +622,28 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 	return "", errors.New("merge reported success but the PR is not merged yet")
 }
 
+// ReadyPR marks a draft ready for review with the token for repo's owner,
+// refusing once its head moved past sha. The merge after it is bound to sha
+// by --match-head-commit, so a push between the look and the ready can't
+// merge what wasn't read.
+func (g GitHub) ReadyPR(repo string, number int, sha string) error {
+	p, err := g.GetPR(repo, number)
+	if err != nil {
+		return err
+	}
+	if p.State != "OPEN" {
+		return fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
+	}
+	if p.HeadSHA != sha {
+		return fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+	}
+	if !p.Draft {
+		return nil
+	}
+	_, err = gh(repo, "pr", "ready", strconv.Itoa(number), "-R", repo)
+	return err
+}
+
 func (GitHub) ClosePR(repo string, number int, comment string) error {
 	_, err := gh(repo, "pr", "close", strconv.Itoa(number), "-R", repo, "--comment", comment)
 	return err
@@ -730,6 +761,36 @@ func ghPages[T any](repo, path, field string) ([]T, error) {
 // head and main can be told apart by the tests failing in it.
 type CheckLogs interface {
 	CheckLog(repo string, r CheckRun) (string, error)
+}
+
+// APIReader is a forge that answers read-only API calls on the person's
+// login (5,000 an hour), so neither the daemon nor agents spend the anonymous
+// 60 an hour this machine's address shares. RateReset is when the login's
+// quota is next full again.
+type APIReader interface {
+	APIGet(repo, path string) (string, error)
+	RateReset(repo string) (time.Time, error)
+}
+
+// APIGet reads one API path with gh: a GET, never a write.
+func (GitHub) APIGet(repo, path string) (string, error) {
+	if strings.HasPrefix(path, "-") {
+		return "", fmt.Errorf("bad API path %q", path)
+	}
+	return gh(repo, "api", path)
+}
+
+// RateReset reads the login's core quota; GitHub doesn't count that read.
+func (GitHub) RateReset(repo string) (time.Time, error) {
+	out, err := gh(repo, "api", "rate_limit", "-q", ".resources.core.reset")
+	if err != nil {
+		return time.Time{}, err
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("reading the rate limit's reset: %w", err)
+	}
+	return time.Unix(n, 0), nil
 }
 
 var (
