@@ -92,7 +92,7 @@ func TestLeadClosesItsPR(t *testing.T) {
 		t.Fatal("readied a closed PR")
 	}
 	// Recheck says the lead closed it, not the person, and leaves it ended.
-	if err := m.Recheck("t1", ""); err == nil || !strings.Contains(err.Error(), "closed by the lead") || strings.Contains(err.Error(), "the person") {
+	if err := m.Recheck("t1", "", "lead"); err == nil || !strings.Contains(err.Error(), "closed by the lead") || strings.Contains(err.Error(), "the person") {
 		t.Fatalf("recheck of a closed task: %v", err)
 	}
 	// Closing again, with the PR already closed and the branch gone, says so.

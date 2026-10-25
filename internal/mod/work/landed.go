@@ -169,7 +169,7 @@ func (m *Module) opLanded(r core.Run, args json.RawMessage) (any, error) {
 	if !ok {
 		return nil, core.ErrNotFound
 	}
-	if err := m.C.Runs.Walled(r, t.Project); err != nil {
+	if err := m.reach(r, t.Project); err != nil {
 		return nil, err
 	}
 	t, err := m.Landed(a.Task, a.Merge, r.ID, a.Why)
