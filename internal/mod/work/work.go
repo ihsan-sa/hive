@@ -79,7 +79,11 @@ type Task struct {
 	PR        core.PR    `json:"pr"`
 	Round     int        `json:"round"`
 	Conflicts int        `json:"conflicts"`
-	Reviews   int        `json:"reviews"`
+	// ConflictMain is the main a conflict last sent the worker to merge. A
+	// head that contains it resolved that conflict, so the next is main
+	// moving again and the count starts over: only unresolved ones add up.
+	ConflictMain string `json:"conflict_main,omitempty"`
+	Reviews      int    `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
 	// own diff, keyed by "diffID#seat". When the diff changes, the old
 	// tries are left behind and the seat starts fresh on the new diff.
@@ -1295,7 +1299,7 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 			return m.dropCheckpoint(t, p, "it conflicts with main")
 		}
 		if errors.Is(err, core.ErrConflict) {
-			return m.conflict(t, p, err)
+			return m.conflict(t, p, sha, err)
 		}
 		if err != nil {
 			return err
@@ -1640,7 +1644,7 @@ func (m *Module) catchUp(t *Task, p core.Project, main, why string) (bool, error
 	}
 	if errors.Is(err, core.ErrConflict) {
 		t.Reason = ""
-		return true, m.conflict(t, p, err)
+		return true, m.conflict(t, p, t.SHA, err)
 	}
 	if err != nil {
 		return true, err
@@ -2780,7 +2784,15 @@ func (m *Module) closedPR(t *Task, p core.Project, pr core.PR) (bool, error) {
 	return true, nil
 }
 
-func (m *Module) conflict(t *Task, p core.Project, why error) error {
+func (m *Module) conflict(t *Task, p core.Project, head string, why error) error {
+	dir := m.C.WS.Project(p.Name)
+	if t.ConflictMain != "" && head != "" {
+		if _, err := core.Git(dir, "merge-base", "--is-ancestor", t.ConflictMain, head); err == nil {
+			t.Conflicts = 0 // the worker merged the main it was sent; this conflict is main moving on
+		}
+	}
+	main, _ := core.Git(dir, "rev-parse", p.Branch) // before the bundle, so the bundle holds at least this main
+	t.ConflictMain = strings.TrimSpace(main)
 	t.Conflicts++
 	if t.Conflicts > 3 {
 		m.giveUp(t, "keeps conflicting with main")
