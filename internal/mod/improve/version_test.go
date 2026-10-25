@@ -20,7 +20,7 @@ func scored(t *testing.T) (m *Module, merge func(files map[string]string) Measur
 		return core.Judgement{Verdict: core.GateRollback, Model: "stand-in", Summary: "the fall is real"}, true
 	}
 	forge := m.C.Effects.Forge.(*core.Local)
-	if _, err := forge.EnsureRepo("me/p", ""); err != nil {
+	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {
 		t.Fatal(err)
 	}
 	src := t.TempDir()
