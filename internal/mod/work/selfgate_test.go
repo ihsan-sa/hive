@@ -703,17 +703,32 @@ func TestAimCheckOnSelfFixes(t *testing.T) {
 // A worker that merged the main its last conflict sent starts the count over
 // when main moves on and conflicts again; one that didn't keeps adding up.
 func TestOnlyUnresolvedConflictsCount(t *testing.T) {
-	m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
-	task.Conflicts, task.ConflictMain = 3, task.SHA // the head holds the main it was sent
-	if err := m.conflict(task, p, task.SHA, errors.New("main moved")); err != nil {
+	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
+	dir := m.C.WS.Project(p.Name)
+	pushMain(t, f, map[string]string{"other.txt": "a\n"})
+	sent, _ := m.C.Effects.Sync(p) // the main the third conflict sent
+	tree, err := core.Git(dir, "merge-tree", "--write-tree", task.SHA, sent)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Stage != StageWorking || task.Conflicts != 1 || task.ConflictMain == "" {
-		t.Fatalf("stage %q, conflicts %d, main %q: want a fresh count and sent back", task.Stage, task.Conflicts, task.ConflictMain)
-	}
-	task.Conflicts, task.ConflictMain = 3, strings.Repeat("ab", 20) // a main the head never merged
-	if err := m.conflict(task, p, task.SHA, errors.New("still")); err != nil {
+	head, err := core.Git(dir, "commit-tree", "-p", task.SHA, "-p", sent, "-m", "merge main", strings.TrimSpace(tree))
+	if err != nil {
 		t.Fatal(err)
+	}
+	head = strings.TrimSpace(head) // the worker merged it
+	pushMain(t, f, map[string]string{"feature.go": "package q\n"})
+	moved, _ := m.C.Effects.Sync(p) // and main moved on, conflicting again
+	task.Conflicts, task.ConflictMain = 3, sent
+	if err := m.conflict(task, p, head, errors.New("main moved")); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageWorking || task.Conflicts != 1 || task.ConflictMain != moved {
+		t.Fatalf("stage %q, conflicts %d, main %q: want a fresh count, sent back to merge %s", task.Stage, task.Conflicts, task.ConflictMain, moved)
+	}
+	for range 3 { // sent back again and again without merging what it was sent
+		if err := m.conflict(task, p, head, errors.New("still")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if task.Stage != StageStopped || !strings.Contains(task.Reason, "keeps conflicting") {
 		t.Fatalf("stage %q, reason %q: want given up after four unresolved", task.Stage, task.Reason)
