@@ -306,19 +306,28 @@ func (m *model) runLine(r core.Run) string {
 
 // sizeLine is the newest measured size (for the Hive, its core's: docs/core.md)
 // and how it moved since the measure before it, or "" when none was measured.
+// Each figure is its own newest, as the Hive's binary is measured only at the
+// start; measures since the last size that recorded none are flagged, so sizes
+// can't quietly stop being recorded.
 func sizeLine(ms []improve.Measurement) string {
-	var now, before map[string]float64
-	for i := len(ms) - 1; i >= 0 && before == nil; i-- {
+	now, before := map[string]float64{}, map[string]float64{}
+	missed := 0
+	for i := len(ms) - 1; i >= 0 && (len(now) == 0 || len(before) < len(now)); i-- {
 		if ms[i].Size == nil {
+			if len(now) == 0 && !ms[i].NoResult {
+				missed++
+			}
 			continue
 		}
-		if now == nil {
-			now = ms[i].Size
-		} else {
-			before = ms[i].Size
+		for k, v := range ms[i].Size {
+			if _, ok := now[k]; !ok {
+				now[k] = v
+			} else if _, ok := before[k]; !ok {
+				before[k] = v
+			}
 		}
 	}
-	if now == nil {
+	if len(now) == 0 {
 		return ""
 	}
 	moved := func(k string) string {
@@ -339,6 +348,9 @@ func sizeLine(ms []improve.Measurement) string {
 		if k != "core_lines" && k != "binary_bytes" {
 			parts = append(parts, text.Visible(k)+" "+fmtNum(now[k])+moved(k))
 		}
+	}
+	if missed > 0 {
+		parts = append(parts, stWarn.Render(fmt.Sprintf("none recorded on the last %d measures", missed)))
 	}
 	return "size  " + strings.Join(parts, "  ")
 }

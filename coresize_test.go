@@ -1,7 +1,10 @@
 package hive
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -33,5 +36,35 @@ func TestCoreSize(t *testing.T) {
 	}
 	if got["core_lines"] <= 0 || got["go_lines"] <= got["core_lines"] {
 		t.Fatalf("core %d of %d lines: the core should be some of the Go, not none or all", got["core_lines"], got["go_lines"])
+	}
+	// Every package docs/core.md names is a Go package, named once.
+	doc, err := os.ReadFile("docs/core.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^<!-- core: (.*) -->$`).FindSubmatch(doc)
+	if m == nil {
+		t.Fatal("docs/core.md has no <!-- core: ... --> line")
+	}
+	wd, _ := os.Getwd()
+	list, err := exec.Command("go", "list", "-f", "{{.Dir}}", "./...").Output()
+	if err != nil {
+		t.Fatalf("go list: %v", err)
+	}
+	pkgs := map[string]bool{}
+	for _, d := range strings.Split(strings.TrimSpace(string(list)), "\n") {
+		if rel, err := filepath.Rel(wd, d); err == nil {
+			pkgs[filepath.ToSlash(rel)] = true
+		}
+	}
+	seen := map[string]bool{}
+	for _, p := range strings.Fields(string(m[1])) {
+		if seen[p] {
+			t.Errorf("docs/core.md names %s twice", p)
+		}
+		seen[p] = true
+		if !pkgs[p] {
+			t.Errorf("docs/core.md names %s, which isn't a package under go list", p)
+		}
 	}
 }
