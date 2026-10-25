@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 )
 
@@ -221,7 +222,7 @@ func noTool(s clipSetup) error {
 	switch {
 	case s.ssh && !s.wsl:
 		// The terminal holds the clipboard, and no terminal hands an image over SSH.
-		return fmt.Errorf("%w: over SSH this control center can't reach the clipboard of the computer you're on. Copy the image to this machine (for example `scp shot.png <host>:`) and paste its path here, or run the control center on that computer", errNoTool)
+		return fmt.Errorf("%w: over SSH this control center can't reach your computer's clipboard. Paste or drop the path of a file on this machine (scp it here first), or run `%s remote <host>` on your computer and paste there", errNoTool, core.Cmd)
 	case s.wsl:
 		return fmt.Errorf("%w: powershell.exe isn't reachable from WSL (is C: mounted, with Windows interop on?). Drop the image's file onto the window, or paste its path", errNoTool)
 	case s.goos == "windows":
@@ -244,10 +245,27 @@ func clipboardImage() (chat.File, error) {
 			continue
 		}
 		err = errNoImage
-		out, _ := exec.Command(t.argv[0], t.argv[1:]...).Output()
+		var stderr bytes.Buffer
+		cmd := exec.Command(t.argv[0], t.argv[1:]...)
+		cmd.Stderr = &stderr
+		out, e := cmd.Output()
 		if img, e := t.decode(out); e == nil && bytes.HasPrefix(img, pngMagic) {
 			return chat.File{Name: "pasted.png", Data: img}, nil
 		}
+		if tool := strings.ToLower(filepath.Base(t.argv[0])); e != nil && (strings.HasPrefix(tool, "pwsh") || strings.HasPrefix(tool, "powershell")) {
+			// PowerShell exits 0 with no image; failing, it says why, which
+			// would otherwise read as an empty clipboard.
+			err = toolFailed(t.argv[0], e, stderr.String())
+		}
 	}
 	return chat.File{}, err
+}
+
+// toolFailed is errNoImage with why the clipboard tool failed.
+func toolFailed(tool string, err error, stderr string) error {
+	why, _, _ := strings.Cut(strings.TrimSpace(stderr), "\n")
+	if why == "" {
+		why = err.Error()
+	}
+	return fmt.Errorf("%w: %s couldn't read it: %s", errNoImage, filepath.Base(tool), strings.TrimSpace(why))
 }

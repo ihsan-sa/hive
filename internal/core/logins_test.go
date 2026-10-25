@@ -189,3 +189,33 @@ func TestLoginPoolPicksTheLeastUsedByItsWindows(t *testing.T) {
 		t.Fatalf("once the added login is fuller, the machine's own goes first, got %s", l.Key())
 	}
 }
+
+// Headroom is the least used login's share left, all logins together: one
+// login near its limit leaves the other's room, and with both spent or
+// parked there is next to none.
+func TestHeadroomCountsEveryLogin(t *testing.T) {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, twoLogins{}, func() []string { return nil })
+	pick := Pick{Harness: "claude", Model: "opus"}
+	if h := rs.Headroom(pick); h != 1 {
+		t.Fatalf("with no readings: %v, want 1", h)
+	}
+	reset := time.Now().Add(time.Hour)
+	used := func(login, status string, u float64) {
+		rs.append("plan.usage", Plan{Harness: "claude", Login: login, Limit: harness.RateLimit{Status: status, ResetsAt: reset,
+			Windows: map[string]harness.Window{"five_hour": {Utilization: u, ResetsAt: reset}}}})
+	}
+	used("claude", "allowed", 0.95)
+	used("claude:work", "allowed", 0.6)
+	if h := rs.Headroom(pick); h < 0.39 || h > 0.41 {
+		t.Fatalf("one login at 60%%: %v, want 0.4", h)
+	}
+	used("claude:work", "rejected", 1)
+	if h := rs.Headroom(pick); h < 0.04 || h > 0.06 {
+		t.Fatalf("one parked, one at 95%%: %v, want 0.05", h)
+	}
+}

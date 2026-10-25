@@ -4,14 +4,18 @@
 package improve
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +41,9 @@ type Measurement struct {
 	Version  string    `json:"version,omitempty"` // the score's version (Effects.ScoreVersion); a new one starts a new baseline
 	Note     string    `json:"note"`
 	At       time.Time `json:"at"`
+	// Size is what the project's size command printed ("name value" lines),
+	// for the Hive itself the core's size (docs/core.md): shown, never judged.
+	Size map[string]float64 `json:"size,omitempty"`
 }
 
 // Sweep is one notice run.
@@ -75,6 +82,8 @@ type Module struct {
 	fails    map[string][]core.Check // project -> recent red test checks that name their failing tests
 	heads    map[string][]string     // task id -> every head it had
 	merged   map[string]time.Time    // merge sha -> when it merged
+	covered  map[string][]Covered    // project -> merges main already held when they closed
+	cantRuns map[string]int          // project@sha -> its checks that couldn't start
 
 	stepbacks map[string]*StepBack
 	busy      map[string]bool
@@ -85,7 +94,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -95,6 +104,12 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			var ms Measurement
 			e.Decode(&ms)
 			m.scores[ms.Project] = append(m.scores[ms.Project], ms)
+		case "score.covered":
+			var x Covered
+			if e.Decode(&x) == nil {
+				x.At = e.At
+				m.covered[x.Project] = append(m.covered[x.Project], x)
+			}
 		case "sweep.saved":
 			var s Sweep
 			e.Decode(&s)
@@ -104,7 +119,10 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			}
 		case "effect.checked":
 			var c core.Check
-			if e.Decode(&c) == nil && c.Kind == "test" && !c.OK && len(c.Failed) > 0 && time.Since(c.At) < flakeWindow {
+			if e.Decode(&c) == nil && c.CantRun != "" {
+				m.cantRuns[c.Project+"@"+c.SHA]++
+			}
+			if c.Kind == "test" && !c.OK && len(c.Failed) > 0 && time.Since(c.At) < flakeWindow {
 				fs := append(m.fails[c.Project], c)
 				for len(fs) > 0 && time.Since(fs[0].At) > flakeWindow {
 					fs = fs[1:]
@@ -191,6 +209,9 @@ func (m *Module) versionOf(p core.Project, x Measurement) string {
 func (m *Module) measured(project, sha string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if slices.ContainsFunc(m.covered[project], func(c Covered) bool { return c.SHA == sha }) {
+		return true
+	}
 	for _, ms := range m.scores[project] {
 		if ms.SHA == sha && !ms.NoResult && (ms.Kept || ms.Task != "") {
 			return true
@@ -255,6 +276,54 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score), cant
 }
 
+// SelfSize is the Hive's own size command, run for a self project whose
+// project.json names none while the script is in its tree.
+const SelfSize = "sh tests/core-size.sh"
+
+// size runs the project's size command (project.json "size") on sha in a
+// clean checkout and reads each "name value" line it prints. It is nil when
+// there is no command or it fails: a size is shown, never judged.
+func (m *Module) size(p core.Project, sha string) map[string]float64 {
+	var pc struct{ Size string }
+	json.Unmarshal([]byte(m.C.Effects.ReadFile(p, sha, ".hive/project.json")), &pc)
+	cmd := strings.TrimSpace(pc.Size)
+	if cmd == "" && p.Self && m.C.Effects.ReadFile(p, sha, "tests/core-size.sh") != "" {
+		cmd = SelfSize
+	}
+	if cmd == "" {
+		return nil
+	}
+	c := m.C.Effects.RunCheck(p, sha, "size", cmd)
+	if !c.OK || c.Log == "" {
+		return nil
+	}
+	out, err := core.SafeRead(c.Log, 1<<20) // the full log: a check's Output is clipped to one line
+	if err != nil {
+		return nil
+	}
+	return sizes(string(out))
+}
+
+// sizes reads "name value" lines; any other line is left out.
+func sizes(out string) map[string]float64 {
+	var got map[string]float64
+	for _, l := range strings.Split(out, "\n") {
+		f := strings.Fields(l)
+		if len(f) != 2 {
+			continue
+		}
+		v, err := strconv.ParseFloat(f[1], 64)
+		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+			continue
+		}
+		if got == nil {
+			got = map[string]float64{}
+		}
+		got[f[0]] = v
+	}
+	return got
+}
+
 // Tick measures the starting point of projects that have none yet. A red
 // start is measured again until there is a number.
 func (m *Module) Tick() {
@@ -296,6 +365,7 @@ func (m *Module) baseline(p core.Project) {
 		return
 	}
 	m.warnUnlisted(p, cfg)
+	ms.Size = m.size(p, main)
 	if ok && (score != nil || cfg.Score == nil) {
 		ms.Kept, ms.Best = true, score
 		m.record(ms)
@@ -354,6 +424,16 @@ func (m *Module) warnUnlisted(p core.Project, cfg core.ProjectConfig) {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "score-paths", "ref": "score-paths:" + p.Name, "project": p.Name,
 			"text": p.Name + "'s score lists no evaluator files in its `paths`, so a change could alter how it's scored; list the files the score reads in .hive/project.json"})
 	}
+}
+
+// triedOut says sha's checks couldn't start work.CantRunTries times: a commit
+// can fake a missing tool (print "not found", exit 127), and its merge isn't
+// held unjudged on that forever. The count is every such check on the
+// commit's journal, so a restart doesn't start it over.
+func (m *Module) triedOut(project, sha string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cantRuns[project+"@"+sha] >= work.CantRunTries
 }
 
 // retryNoResult is how long a merge whose check couldn't start waits before
@@ -424,6 +504,32 @@ func (m *Module) superseded(p core.Project, sha string) bool {
 	return noResult && slices.ContainsFunc(later, func(l string) bool { return m.after(p, l, sha) })
 }
 
+// Covered is a merge that wasn't measured on its own: main already held it
+// when it was measured at By.
+type Covered struct {
+	Project string    `json:"project"`
+	SHA     string    `json:"sha"`
+	Task    string    `json:"task"`
+	By      string    `json:"by"`
+	At      time.Time `json:"-"`
+}
+
+// coveredBy is a commit already measured on p's main that contains sha, so
+// measuring sha now would test old code (a pull request that landed hours
+// before its task closed) and blame it on main. Main is linear, so the newest
+// measurement with a result is the one to ask.
+func (m *Module) coveredBy(p core.Project, sha string) string {
+	for _, x := range slices.Backward(m.Scores(p.Name)) {
+		if !x.NoResult {
+			if m.after(p, x.SHA, sha) {
+				return x.SHA
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
 // introduced says the merge itself brought in the command that calls the
 // missing tool: the same command on main before it didn't name that tool. A
 // misspelt tool is then the change's fault, and red, not a wait. A tool
@@ -485,6 +591,10 @@ func (m *Module) afterMerge(t work.Task) {
 		go func() { time.Sleep(time.Minute); m.queue <- t }()
 		return
 	}
+	if by := m.coveredBy(p, t.MergeSHA); by != "" {
+		m.C.J.MustAppend("score.covered", Covered{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, By: by})
+		return
+	}
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
 	ok, score, note, cant := m.measure(p, t.MergeSHA)
 	switch {
@@ -492,6 +602,11 @@ func (m *Module) afterMerge(t work.Task) {
 		ok, score, note = true, nil, "score did not produce a number: this merge's score command calls "+cant.Tool+", which isn't installed where checks run: "+note
 	case cant.CantRun != "" && m.introduced(p, t.MergeSHA, cant):
 		ok, note = false, "tests red: this merge's test command calls "+cant.Tool+", which isn't installed where checks run: "+note
+	case cant.CantRun != "" && m.triedOut(p.Name, t.MergeSHA):
+		ok, note = false, fmt.Sprintf("%s %s, %d tries in a row since it merged, which counts as red: %s", cant.Kind, cant.CantRun, work.CantRunTries, note)
+		m.C.Person.Ask(core.Ask{Kind: "question", Ref: "cant-run:" + t.MergeSHA, Project: p.Name, Options: []string{"ok"},
+			Title:  "Install " + cmp.Or(cant.Tool, "a tool") + " where checks run for " + p.Name + "?",
+			Detail: "Main of " + p.Name + " at " + core.Short(t.MergeSHA) + " (" + t.Label() + ") " + cant.CantRun + " every time it was measured since it merged. That now counts as red, so the merge is reverted. If the tool is really missing, install it where checks run; if it isn't, the change only claimed it was."})
 	case cant.CantRun != "":
 		m.noResult(p, Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, Note: note, Version: m.version(p, t.MergeSHA, cfg), NoResult: true}, cant.Kind)
 		m.hold(p, t)
@@ -501,12 +616,15 @@ func (m *Module) afterMerge(t work.Task) {
 	if !ok {
 		flake = m.seenElsewhere(p, t)
 	}
+	if !ok && flake == "" && cant.CantRun == "" {
+		flake = m.redBefore(p, t, cfg.Test)
+	}
 	k, hasBest := m.kept(p.Name)
 	best := 0.0
 	if hasBest {
 		best = *k.Best
 	}
-	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg)}
+	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg), Size: m.size(p, t.MergeSHA)}
 	if !hasBest || m.versionOf(p, k) != ms.Version {
 		m.warnUnlisted(p, cfg)
 		if hasBest {
@@ -750,6 +868,15 @@ func (m *Module) Digest(since int64, only string) string {
 				kept = "no-result"
 			}
 			fmt.Fprintf(&b, "- %s %s score=%s kept=%s %s\n", x.At.Format("01-02 15:04"), core.Short(x.SHA), sc, kept, core.Clip(x.Note, 200))
+		}
+		m.mu.Lock()
+		cov := m.covered[p.Name]
+		m.mu.Unlock()
+		if len(cov) > 5 {
+			cov = cov[len(cov)-5:]
+		}
+		for _, c := range cov {
+			fmt.Fprintf(&b, "- %s %s not measured: main already held it when measured at %s (task %s)\n", c.At.Format("01-02 15:04"), core.Short(c.SHA), core.Short(c.By), c.Task)
 		}
 		b.WriteString("\nWork:\n")
 		for i, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {

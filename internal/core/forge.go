@@ -47,7 +47,9 @@ var ErrDraft = errors.New("the pull request is a draft, left for a read")
 type Forge interface {
 	Name() string
 	User() (string, error)
-	EnsureRepo(repo, description string) (created bool, err error)
+	// EnsureRepo makes repo, public or private, unless it exists; an
+	// existing repository's visibility is never changed (that is the person's).
+	EnsureRepo(repo, description string, public bool) (created bool, err error)
 	// Fork is owner's fork of repo, made on first need; owner "" is the
 	// person's own account, else an organization they can create repos in.
 	Fork(repo, owner string) (string, error)
@@ -63,6 +65,9 @@ type Forge interface {
 	FindPR(repo, head string) (PR, bool, error)
 	GetPR(repo string, number int) (PR, error)
 	MergePR(repo string, number int, sha, subject string) (string, error)
+	// ReadyPR takes a draft out of draft, only while its head is exactly
+	// sha; one already ready is left as it is.
+	ReadyPR(repo string, number int, sha string) error
 	ClosePR(repo string, number int, comment string) error
 	// SetDraft marks an open pull request a draft or ready for review.
 	SetDraft(repo string, number int, draft bool) error
@@ -94,6 +99,9 @@ type Forge interface {
 	// jobs of a pre-release's gates pass.
 	Releases(repo string) ([]Release, error)
 	RunJobs(repo string, run int64) ([]WorkflowJob, error)
+	// File is one file on repo's default branch; ErrNotFound when it has
+	// none (the release repository's steward record).
+	File(repo, path string) (string, error)
 }
 
 // CheckRun is one of the forge's own checks on a commit, such as a CI job.
@@ -145,9 +153,9 @@ type GitHub struct{}
 func (GitHub) Name() string { return "github" }
 
 // OwnerTokens maps a lower-cased repo owner to a file holding the GitHub token
-// for that owner. An owner not listed (or whose file is unreadable) uses gh's
-// own login. Both tokens act as the same user, so gh cannot hold them as two
-// logins; the effects process passes GH_TOKEN per call instead.
+// for that owner. An owner not listed (or whose file is unreadable, said once
+// on stderr) uses gh's own login. Both tokens act as the same user, so gh
+// cannot hold them as two logins; the effects process passes GH_TOKEN per call instead.
 var OwnerTokens = map[string]string{
 	"hive-rsi-lab": "/home/hive/h0-org.token",
 }
@@ -162,18 +170,30 @@ func ghEnv(repo string) []string {
 	if owner == "" || strings.ContainsAny(owner, `/\.`) {
 		return nil
 	}
-	for _, path := range []string{credential(owner + ".token"), OwnerTokens[owner]} {
+	for i, path := range []string{credential(owner + ".token"), OwnerTokens[owner]} {
 		if path == "" {
 			continue
 		}
-		if b, err := os.ReadFile(path); err == nil {
+		b, err := os.ReadFile(path)
+		if err == nil {
 			if tok := strings.TrimSpace(string(b)); tok != "" {
 				return []string{"GH_TOKEN=" + tok}
+			}
+		} else if i == 1 { // a listed file, unlike a credential, is meant to be there
+			if _, said := unreadTokens.LoadOrStore(owner+"\x00"+path, true); !said {
+				fmt.Fprintf(tokenLog, "%s token file %s for %s can't be read, using gh's own login: %v\n", time.Now().Format(time.RFC3339), path, owner, err)
 			}
 		}
 	}
 	return nil
 }
+
+// unreadTokens holds each owner and listed token file already said to be
+// unreadable, so the fallback is said once, not on every gh call.
+var unreadTokens sync.Map
+
+// tokenLog is where that is said. Tests replace it.
+var tokenLog io.Writer = os.Stderr
 
 // credential is the path of a systemd credential the service was given, or
 // "" outside one.
@@ -218,10 +238,14 @@ func gh(repo string, args ...string) (string, error) {
 }
 
 // ghVerb names a gh command by its leading words, such as "pr create" or
-// "api repos/o/r/issues/3/comments".
+// "api repos/o/r/issues/3/comments". --paginate takes no value, so the path
+// after it still names a list read.
 func ghVerb(args []string) string {
 	var w []string
 	for _, a := range args {
+		if a == "--paginate" {
+			continue
+		}
 		if strings.HasPrefix(a, "-") || len(w) == 3 {
 			break
 		}
@@ -353,11 +377,15 @@ func ghLogin(repo string) (string, error) {
 // User is the login gh itself holds.
 func (GitHub) User() (string, error) { return gh("", "api", "user", "-q", ".login") }
 
-func (g GitHub) EnsureRepo(repo, description string) (bool, error) {
+func (g GitHub) EnsureRepo(repo, description string, public bool) (bool, error) {
 	if _, err := gh(repo, "repo", "view", repo, "--json", "name"); err == nil {
 		return false, nil
 	}
-	if _, err := gh(repo, "repo", "create", repo, "--private", "--description", description); err != nil {
+	visibility := "--private"
+	if public {
+		visibility = "--public"
+	}
+	if _, err := gh(repo, "repo", "create", repo, visibility, "--description", description); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -517,8 +545,12 @@ func (p ghPR) pr() PR {
 
 const prFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,isDraft,body,mergeCommit,headRepositoryOwner"
 
+// listFields is prFields less the description: a list brings every PR on the
+// branch, and only GetPR's reader wants the body.
+const listFields = "number,url,state,headRefOid,mergeable,mergeStateStatus,isDraft,mergeCommit,headRepositoryOwner"
+
 func (g GitHub) FindPR(repo, head string) (PR, bool, error) {
-	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", prFields}
+	args := []string{"pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", listFields}
 	// A fork's "owner:branch": gh matches the branch name alone, and once
 	// merged the next change needs a new pull request.
 	owner, branch, fork := strings.Cut(head, ":")
@@ -601,6 +633,28 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 	return "", errors.New("merge reported success but the PR is not merged yet")
 }
 
+// ReadyPR marks a draft ready for review with the token for repo's owner,
+// refusing once its head moved past sha. The merge after it is bound to sha
+// by --match-head-commit, so a push between the look and the ready can't
+// merge what wasn't read.
+func (g GitHub) ReadyPR(repo string, number int, sha string) error {
+	p, err := g.GetPR(repo, number)
+	if err != nil {
+		return err
+	}
+	if p.State != "OPEN" {
+		return fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
+	}
+	if p.HeadSHA != sha {
+		return fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+	}
+	if !p.Draft {
+		return nil
+	}
+	_, err = gh(repo, "pr", "ready", strconv.Itoa(number), "-R", repo)
+	return err
+}
+
 func (GitHub) ClosePR(repo string, number int, comment string) error {
 	_, err := gh(repo, "pr", "close", strconv.Itoa(number), "-R", repo, "--comment", comment)
 	return err
@@ -620,11 +674,27 @@ func (GitHub) SetDraft(repo string, number int, draft bool) error {
 }
 
 func (GitHub) DeleteBranch(repo, branch string) error {
+	if err := HiveBranch(branch); err != nil {
+		return err
+	}
 	_, err := gh(repo, "api", "-X", "DELETE", "repos/"+repo+"/git/refs/heads/"+branch)
 	if err != nil && strings.Contains(err.Error(), "Reference does not exist") {
 		return nil
 	}
 	return err
+}
+
+// hiveBranchName is what a branch the Hive made looks like: hive/ and then
+// plain path segments.
+var hiveBranchName = regexp.MustCompile(`^hive/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$`)
+
+// HiveBranch refuses a branch name that isn't plainly one of the Hive's own,
+// so a forge never deletes another branch or builds an odd API path from it.
+func HiveBranch(branch string) error {
+	if !hiveBranchName.MatchString(branch) || strings.Contains(branch, "..") || strings.HasSuffix(branch, ".lock") {
+		return fmt.Errorf("branch %q isn't one of the Hive's own (hive/...)", branch)
+	}
+	return nil
 }
 
 func (GitHub) CloseIssue(repo string, number int) error {
@@ -639,9 +709,14 @@ const queuedTooLong = time.Hour
 // Checks lists GitHub's check runs and commit statuses on sha. A check suite
 // with no runs yet counts as pending, so a just-pushed head whose jobs aren't
 // listed yet doesn't read as having none.
+//
+// A token that may not read checks (a 403) on a head with no workflows reads
+// as no checks: there is no CI there to wait for, so the change goes on by
+// the Hive's own tests, as on a project with no forge checks at all.
 func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
+	none := ciless(repo, sha)
 	runs, err := ghPages[ghCheckRun](repo, "repos/"+repo+"/commits/"+sha+"/check-runs", "check_runs")
-	if err != nil {
+	if err = none(err); err != nil {
 		return nil, err
 	}
 	// A check run again is listed once per attempt; the newest one counts. A
@@ -667,7 +742,7 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 		Description string `json:"description"`
 		TargetURL   string `json:"target_url"`
 	}](repo, "repos/"+repo+"/commits/"+sha+"/status", "statuses")
-	if err != nil {
+	if err = none(err); err != nil {
 		return nil, err
 	}
 	for _, s := range statuses {
@@ -678,7 +753,7 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 		list = append(list, CheckRun{Name: s.Context, State: state, Detail: s.Description, URL: s.TargetURL})
 	}
 	suites, err := ghPages[ghSuite](repo, "repos/"+repo+"/commits/"+sha+"/check-suites", "check_suites")
-	if err != nil {
+	if err = none(err); err != nil {
 		return nil, err
 	}
 	for _, s := range suites {
@@ -687,6 +762,36 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 		}
 	}
 	return list, nil
+}
+
+// checksRefused is a forge refusing the token a read of a head's checks, as
+// gh words it: "gh api repos/o/r/commits/<sha>/check-runs?per_page=100: gh:
+// Resource not accessible by personal access token (HTTP 403)".
+var checksRefused = regexp.MustCompile(`^gh api repos/\S+/commits/[0-9a-f]+/(check-runs|check-suites|status)\S*: .*\(HTTP 403\)$`)
+
+// ChecksRefused reports whether err's text is GitHub.Checks refused the
+// token's read of a head's checks.
+func ChecksRefused(text string) bool { return checksRefused.MatchString(text) }
+
+// ciless returns a filter for the errors of reading sha's checks: a refusal
+// (HTTP 403) is dropped when sha has no .github/workflows (GitHub answers 404
+// for it), asked once and only on the first refusal; any other error stands.
+func ciless(repo, sha string) func(error) error {
+	asked, none := false, false
+	return func(err error) error {
+		if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+			return err
+		}
+		if !asked {
+			asked = true
+			_, werr := gh(repo, "api", "repos/"+repo+"/contents/.github/workflows?ref="+sha)
+			none = werr != nil && strings.Contains(werr.Error(), "HTTP 404")
+		}
+		if none {
+			return nil
+		}
+		return err
+	}
 }
 
 // ghPages reads every page of a GitHub list held under field of each page's
@@ -718,6 +823,36 @@ func ghPages[T any](repo, path, field string) ([]T, error) {
 // head and main can be told apart by the tests failing in it.
 type CheckLogs interface {
 	CheckLog(repo string, r CheckRun) (string, error)
+}
+
+// APIReader is a forge that answers read-only API calls on the person's
+// login (5,000 an hour), so neither the daemon nor agents spend the anonymous
+// 60 an hour this machine's address shares. RateReset is when the login's
+// quota is next full again.
+type APIReader interface {
+	APIGet(repo, path string) (string, error)
+	RateReset(repo string) (time.Time, error)
+}
+
+// APIGet reads one API path with gh: a GET, never a write.
+func (GitHub) APIGet(repo, path string) (string, error) {
+	if strings.HasPrefix(path, "-") {
+		return "", fmt.Errorf("bad API path %q", path)
+	}
+	return gh(repo, "api", path)
+}
+
+// RateReset reads the login's core quota; GitHub doesn't count that read.
+func (GitHub) RateReset(repo string) (time.Time, error) {
+	out, err := gh(repo, "api", "rate_limit", "-q", ".resources.core.reset")
+	if err != nil {
+		return time.Time{}, err
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("reading the rate limit's reset: %w", err)
+	}
+	return time.Unix(n, 0), nil
 }
 
 var (
@@ -852,6 +987,14 @@ func (GitHub) ReleaseRuns(repo, sha string) ([]WorkflowRun, error) {
 	}
 	var runs []WorkflowRun
 	return runs, json.Unmarshal([]byte(out), &runs)
+}
+
+func (GitHub) File(repo, path string) (string, error) {
+	out, err := gh(repo, "api", "repos/"+repo+"/contents/"+path, "-H", "Accept: application/vnd.github.raw")
+	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+		return "", ErrNotFound
+	}
+	return out, err
 }
 
 func (GitHub) Releases(repo string) ([]Release, error) {

@@ -3,14 +3,18 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
 	hive "github.com/ihsan-sa/hive-standalone-build"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/forgeread"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
@@ -72,15 +76,17 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.System = system.New(c)
 	a.Risk = risk.New(c, a.Mods, a.Agents)
 	tools.New(c)
+	forgeread.New(c)
 	a.Work.Steps = a.Risk.Steps
 	a.Work.Weigh = a.Risk.Weigh
 	a.Work.Gate = runGate(ws)
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
 	a.Models = models.New(c, a.Work)
+	a.Agents.Skip = a.Models.Benched
 	a.Improve.OnKept = a.Release.AfterKept
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
-	for _, tick := range []func(){a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.Runner.Tick, a.Models.Tick} {
+	for _, tick := range []func(){stats.SpendNotice{C: c}.Tick, a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.moduleJobs, a.Runner.Tick, a.Models.Tick} {
 		a.Mods.Builtin(tick)
 	}
 	c.Person.Handle("release", a.Release.OnPerson)
@@ -115,6 +121,24 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	return a, nil
 }
 
+// moduleJobs registers the jobs module programs serve (a manifest's
+// "schedule"). A due one is journaled as module.scheduled, which the program
+// reads off the journal like any hook; the daemon never calls it.
+func (a *App) moduleJobs() {
+	for _, m := range a.Mods.List() {
+		if len(m.Exec) == 0 {
+			continue
+		}
+		name := filepath.Base(m.Dir)
+		for job, every := range m.Schedule {
+			a.System.RegisterModule(system.Job{Name: job, Default: every, Fn: func() (string, error) {
+				a.C.J.MustAppend("module.scheduled", map[string]string{"module": name, "job": job})
+				return "asked module " + name, nil
+			}})
+		}
+	}
+}
+
 // Clean removes spent checkouts and what checks left behind, then measures
 // the Hive's disk use for the dashboard (the hive.clean job).
 func (a *App) Clean() string {
@@ -123,6 +147,16 @@ func (a *App) Clean() string {
 		if s != "" {
 			did = append(did, s)
 		}
+	}
+	tidied := 0
+	if n := a.Work.TidyGates(func(out string) int {
+		if !gate.Untidy(out) {
+			return 0
+		}
+		tidied++
+		return gate.Reap(out)
+	}); tidied > 0 {
+		did = append(did, fmt.Sprintf("tidied %d gate run(s) a dead gate left, ending %d process(es)", tidied, n))
 	}
 	d := a.C.Effects.MeasureDisk()
 	if len(did) == 0 {

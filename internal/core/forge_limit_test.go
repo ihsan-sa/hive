@@ -228,6 +228,39 @@ func TestChecksNewestAttemptByID(t *testing.T) {
 	}
 }
 
+// ReadyPR runs gh pr ready, a write, only while the draft's head is the
+// commit it names; a moved head or a PR already ready runs nothing.
+func TestGitHubReadyPRAtItsHead(t *testing.T) {
+	head, draft := "aaaa1111", true
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		if args[0] == "pr" && args[1] == "view" {
+			return `{"number":7,"state":"OPEN","headRefOid":"` + head + `","isDraft":` + map[bool]string{true: "true", false: "false"}[draft] + `}`, "", nil
+		}
+		return "", "", nil
+	})
+	readies := func() (n int) {
+		for _, c := range *calls {
+			if c[0] == "pr" && c[1] == "ready" {
+				n++
+			}
+		}
+		return n
+	}
+	if err := (GitHub{}).ReadyPR("o/r", 7, "bbbb2222"); err == nil || readies() != 0 {
+		t.Fatalf("readied a moved head: %v, %d", err, readies())
+	}
+	if err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || readies() != 1 {
+		t.Fatalf("ready at its head: %v, %d", err, readies())
+	}
+	draft = false
+	if err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || readies() != 1 {
+		t.Fatalf("readied one already ready: %v, %d", err, readies())
+	}
+	if !ghWrites([]string{"pr", "ready", "7"}) {
+		t.Fatal("gh pr ready isn't counted a write")
+	}
+}
+
 // GitHub's refusal to merge a draft reads as ErrDraft, so the task waits.
 func TestDraftRefusedReadsAsDraft(t *testing.T) {
 	if !draftRefused.MatchString("gh pr merge: GraphQL: Pull Request is still a draft (mergePullRequest)") {
@@ -280,5 +313,112 @@ func TestChecksPaginates(t *testing.T) {
 		if len(c) < 5 || c[1] != "--paginate" || !strings.Contains(c[2], "per_page=100") || c[3] != "-q" {
 			t.Errorf("gh %q doesn't read every page", c)
 		}
+	}
+}
+
+// A token refused the checks (HTTP 403) on a head with no workflows reads as
+// no checks, which ChecksState passes; with workflows there the refusal
+// stands, since there is CI the Hive can't see.
+func TestChecksRefusedWithoutWorkflows(t *testing.T) {
+	refused := "gh: Resource not accessible by personal access token (HTTP 403)"
+	for _, workflows := range []bool{false, true} {
+		calls := stubGH(t, func(args []string) (string, string, error) {
+			switch {
+			case strings.Contains(args[1], "contents/.github/workflows"):
+				if workflows {
+					return `[{"name":"ci.yml"}]`, "", nil
+				}
+				return "", "gh: Not Found (HTTP 404)", errors.New("exit status 1")
+			case strings.Contains(args[2], "check-runs"), strings.Contains(args[2], "check-suites"):
+				return "", refused, errors.New("exit status 1")
+			}
+			return "", "", nil
+		})
+		runs, err := GitHub{}.Checks("o/r", "abc")
+		if workflows {
+			// The stopped task's reason is this text, which revive matches.
+			want := "gh api repos/o/r/commits/abc/check-runs?per_page=100: " + refused
+			if err == nil || err.Error() != want || !ChecksRefused(err.Error()) {
+				t.Errorf("with workflows: runs %+v, err %v", runs, err)
+			}
+			continue
+		}
+		if err != nil || len(runs) != 0 {
+			t.Fatalf("no workflows: runs %+v, err %v", runs, err)
+		}
+		if st, _ := ChecksState(runs, nil); st != CheckPass {
+			t.Errorf("no workflows reads %s", st)
+		}
+		asked := 0
+		for _, c := range *calls {
+			if strings.Contains(c[1], "workflows") {
+				asked++
+				if !strings.Contains(c[1], "ref=abc") {
+					t.Errorf("asked for workflows off the head: %q", c)
+				}
+			}
+		}
+		if asked != 1 {
+			t.Errorf("asked for workflows %d times, want once", asked)
+		}
+	}
+}
+
+// The four tasks stopped on a checks refusal, their reasons as the journal
+// records them (after "gave up after repeated errors: "), read as one; a
+// refusal of another call doesn't.
+func TestChecksRefusedReasons(t *testing.T) {
+	const tail = "?per_page=100: gh: Resource not accessible by personal access token (HTTP 403)"
+	for _, r := range []string{
+		"gh api repos/Hive-RSI-Lab/hive-deck/commits/e3b0815699da94aede6f3d3a1c8b60e5ea532c87/check-runs" + tail,
+		"gh api repos/Hive-RSI-Lab/hive-dispatch/commits/23925cb03db4544ed170451a28aa905c00d66783/check-runs" + tail,
+		"gh api repos/Hive-RSI-Lab/hive-trials/commits/e5789b39d9d40ee34abf3b53886ee38529028feb/check-runs" + tail,
+		"gh api repos/Hive-RSI-Lab/hive-trials/commits/fa2ec42bff45ca0e5d059e4a6429e8c0495ebd36/check-runs" + tail,
+	} {
+		if !ChecksRefused(r) {
+			t.Errorf("not read as a checks refusal: %s", r)
+		}
+	}
+	for _, r := range []string{
+		"gh api: gh: Resource not accessible by personal access token (HTTP 403)",
+		"gh api repos/o/r/issues/3/comments: gh: Resource not accessible by personal access token (HTTP 403)",
+		"gh api repos/o/r/commits/abc/check-runs?per_page=100: gh: Bad credentials (HTTP 401)",
+	} {
+		if ChecksRefused(r) {
+			t.Errorf("read as a checks refusal: %s", r)
+		}
+	}
+}
+
+// An API read goes through gh's login as a plain GET, and a rate-limited one
+// comes back as RateLimited; the quota's reset is read from rate_limit.
+func TestAPIGetOnTheLogin(t *testing.T) {
+	limited := false
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		switch {
+		case args[1] == "rate_limit":
+			return "1792900000\n", "", nil
+		case limited:
+			return "", "HTTP 403: API rate limit exceeded for user ID 1.", errors.New("exit status 1")
+		}
+		return `{"number":7}`, "", nil
+	})
+	var r APIReader = GitHub{}
+	if out, err := r.APIGet("o/r", "repos/o/r/pulls/7"); err != nil || out != `{"number":7}` {
+		t.Fatalf("read: %q, %v", out, err)
+	}
+	if got := strings.Join((*calls)[0], " "); got != "api repos/o/r/pulls/7" || ghWrites((*calls)[0]) {
+		t.Fatalf("gh called as %q", got)
+	}
+	if _, err := r.APIGet("o/r", "-X"); err == nil {
+		t.Fatal("a flag passed as the path")
+	}
+	limited = true
+	var rl *RateLimited
+	if _, err := r.APIGet("o/r", "repos/o/r/pulls/7"); !errors.As(err, &rl) {
+		t.Fatalf("rate-limited read: %v", err)
+	}
+	if at, err := r.RateReset("o/r"); err != nil || at.Unix() != 1792900000 {
+		t.Fatalf("reset %v, %v", at, err)
 	}
 }

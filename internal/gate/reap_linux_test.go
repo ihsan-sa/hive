@@ -68,14 +68,17 @@ func TestKilledGateLeavesNoDaemon(t *testing.T) {
 	g.Wait()
 	time.Sleep(300 * time.Millisecond)
 	if len(daemonsUnder(out)) == 0 {
-		t.Skip("the daemon ended with its gate here: nothing left to reap")
-	}
-	if n := reapOrphans(); n == 0 {
-		t.Errorf("the next gate ended none of what the killed one left")
-	}
-	time.Sleep(200 * time.Millisecond)
-	if left := daemonsUnder(out); len(left) > 0 {
-		t.Errorf("daemons %v outlived the gate that started them", left)
+		// Not a skip: Reap below still runs. TestDeadGatesOrphanIsReaped
+		// covers the next gate's sweep whatever happened here.
+		t.Log("the daemon ended with its gate here: the next gate had nothing to end")
+	} else {
+		if n := reapOrphans(); n == 0 {
+			t.Errorf("the next gate ended none of what the killed one left")
+		}
+		time.Sleep(200 * time.Millisecond)
+		if left := daemonsUnder(out); len(left) > 0 {
+			t.Errorf("daemons %v outlived the gate that started them", left)
+		}
 	}
 	Reap(out)
 	if _, err := os.Stat(filepath.Join(out, "candidate", "gocache")); err == nil {
@@ -90,12 +93,76 @@ func TestKilledGateLeavesNoDaemon(t *testing.T) {
 	}
 }
 
+// A process a dead gate's child detached (setsid, out of every group the
+// gate could kill) is ended by the next gate's sweep, always: unlike
+// TestKilledGateLeavesNoDaemon, nothing here can end it first.
+func TestDeadGatesOrphanIsReaped(t *testing.T) {
+	gone := exec.Command("true")
+	if err := gone.Run(); err != nil {
+		t.Fatal(err)
+	}
+	ns, _ := os.Readlink("/proc/self/ns/pid")
+	dead := strconv.Itoa(gone.Process.Pid) + ".1@" + ns
+	orphan := exec.Command("sleep", "60")
+	orphan.Env = append(os.Environ(), ownerEnv+"="+dead)
+	orphan.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := orphan.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { orphan.Process.Kill() })
+	live := exec.Command("sleep", "60")
+	live.Env = append(os.Environ(), ownerEnv+"="+owner)
+	if err := live.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { live.Process.Kill(); live.Wait() })
+	if n := reapOrphans(); n < 1 {
+		t.Errorf("reapOrphans ended %d processes, want the orphan", n)
+	}
+	if err := orphan.Wait(); err == nil {
+		t.Error("the dead gate's orphan wasn't killed")
+	}
+	if syscall.Kill(live.Process.Pid, 0) != nil {
+		t.Error("reapOrphans killed a process of a gate that still runs")
+	}
+}
+
+// Reap leaves the host alone when a candidate swaps a folder of the run
+// for a symlink: nothing outside out is chmodded or removed.
+func TestReapStaysInsideOut(t *testing.T) {
+	out, host := t.TempDir(), t.TempDir()
+	os.MkdirAll(filepath.Join(host, "keep"), 0o500)
+	cand := filepath.Join(out, "candidate")
+	os.MkdirAll(cand, 0o755)
+	for _, b := range []string{"home", "gocache"} {
+		if err := os.Symlink(host, filepath.Join(cand, b)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.Symlink(host, filepath.Join(out, "src-candidate"))
+	link := filepath.Join(t.TempDir(), "out")
+	os.Symlink(out, link)
+	Reap(link)
+	if _, err := os.Lstat(filepath.Join(cand, "home")); err != nil {
+		t.Error("Reap followed a symlink given as out")
+	}
+	Reap(out)
+	fi, err := os.Stat(filepath.Join(host, "keep"))
+	if err != nil {
+		t.Fatalf("Reap removed a host folder through a symlink: %v", err)
+	}
+	if fi.Mode().Perm() != 0o500 {
+		t.Errorf("Reap chmodded a host folder through a symlink to %v", fi.Mode().Perm())
+	}
+	os.Chmod(filepath.Join(host, "keep"), 0o755)
+}
+
 // Reap ends a process of the run, but not a shell or an editor a person has
 // open in --out, and keeps the children's logs while it removes their caches.
 func TestReapKeepsWhatIsNotTheRuns(t *testing.T) {
 	out := t.TempDir()
 	cand := filepath.Join(out, "candidate")
-	for _, d := range []string{"gocache", filepath.Join("hive", ".hive")} {
+	for _, d := range []string{"gocache", filepath.Join("hive", ".hive"), filepath.Join("hive", "projects", "lab")} {
 		os.MkdirAll(filepath.Join(cand, d), 0o755)
 	}
 	os.WriteFile(filepath.Join(cand, "hive", ".hive", "daemon.log"), []byte("log"), 0o644)
@@ -111,6 +178,9 @@ func TestReapKeepsWhatIsNotTheRuns(t *testing.T) {
 	person := start(out)
 	inRoot := start(filepath.Join(cand, "hive"))
 	tagged := start(t.TempDir(), rootEnv+"="+cand)
+	if !Untidy(out) {
+		t.Error("a run with its caches left reads as tidy")
+	}
 	if n := Reap(out); n != 2 {
 		t.Errorf("Reap ended %d processes, want 2", n)
 	}
@@ -122,11 +192,16 @@ func TestReapKeepsWhatIsNotTheRuns(t *testing.T) {
 	if syscall.Kill(person.Process.Pid, 0) != nil {
 		t.Error("Reap killed a process that only had --out open")
 	}
-	if _, err := os.Stat(filepath.Join(cand, "gocache")); err == nil {
-		t.Error("the child's cache was kept")
+	for _, b := range []string{"gocache", filepath.Join("hive", "projects")} {
+		if _, err := os.Stat(filepath.Join(cand, b)); err == nil {
+			t.Errorf("the child's %s was kept", b)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(cand, "hive", ".hive", "daemon.log")); err != nil {
 		t.Errorf("the child's daemon.log went: %v", err)
+	}
+	if Untidy(out) {
+		t.Error("a reaped run still reads as untidy")
 	}
 }
 
