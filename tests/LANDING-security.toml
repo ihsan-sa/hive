@@ -52,6 +52,9 @@ paths = [
   # Which credentials reach an agent's turn.
   "internal/harness/**",
 
+  # Agents' reads of GitHub on the person's login: which repos and paths.
+  "internal/mod/forgeread/**",
+
   # The open harness holds a model's key and runs the model's shell commands;
   # routes decide which model and endpoint a run's turn goes to.
   "internal/openagent/**",
