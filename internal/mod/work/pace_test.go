@@ -1,6 +1,7 @@
 package work
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -270,5 +271,30 @@ func TestPacePullsBackAheadOfTheWindow(t *testing.T) {
 	read(0.8, 3*time.Hour)
 	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of its five-hour window") {
 		t.Fatalf("40%% ahead: %q", why)
+	}
+}
+
+// A check of a task queued briefs wait on ranks first, a fix's next, and the
+// rest, or a sha no task holds, not at all (issue #838).
+func TestCheckRankFreesThenFixes(t *testing.T) {
+	m, _, _ := helperRig(t)
+	put := func(tk Task) {
+		m.mu.Lock()
+		m.tasks[tk.ID] = &tk
+		m.mu.Unlock()
+	}
+	put(Task{ID: "blocker", Project: "p", SHA: "s1", Stage: StageTesting, Title: "holds"})
+	put(Task{ID: "fix", Project: "p", SHA: "s2", Stage: StageTesting, Aim: AimFix})
+	put(Task{ID: "gain", Project: "p", SHA: "s3", Stage: StageTesting})
+	put(Task{ID: "done", Project: "p", SHA: "s4", Stage: StageDone})
+	put(Task{ID: "waiter", Project: "p", Stage: StageQueued, Reason: fmt.Sprintf("waiting for %q (task %s) to land: both touch a.go", "holds", "blocker")})
+	put(Task{ID: "waiter2", Project: "p", Stage: StageQueued, Reason: fmt.Sprintf("waiting for %q (task %s) to land: both touch a.go", "x", "done")})
+	for sha, want := range map[string]int{"s1": rankFrees, "s2": rankFix, "s3": 0, "s4": 0, "nobody": 0} {
+		if got := m.checkRank("p", sha, "test"); got != want {
+			t.Errorf("rank of %s: %d, want %d", sha, got, want)
+		}
+	}
+	if got := m.checkRank("other", "s1", "test"); got != 0 {
+		t.Errorf("another project's sha ranked %d", got)
 	}
 }
