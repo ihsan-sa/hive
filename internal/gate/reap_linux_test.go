@@ -35,6 +35,26 @@ func daemonsUnder(out string) []int {
 	return pids
 }
 
+// daemonsLeft waits up to wait for the gate run's daemons to be gone and
+// returns those still there. A killed process needs the CPU to exit, and on
+// a throttled machine, or one blocked in I/O, that takes more than a moment.
+func daemonsLeft(out string, wait time.Duration) []int {
+	left := daemonsUnder(out)
+	for end := time.Now().Add(wait); len(left) > 0 && time.Now().Before(end); left = daemonsUnder(out) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	return left
+}
+
+// running reports whether pid still runs: neither gone nor a zombie.
+func running(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	z, _ := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	return !bytes.Contains(z, []byte(") Z"))
+}
+
 // A gate killed mid-run (no deferred cleanup runs) leaves its child's
 // daemon orphaned, detached from every group the gate could kill; the next
 // gate ends it, and the daemon's Reap of the run folder ends it and removes
@@ -76,8 +96,7 @@ func TestKilledGateLeavesNoDaemon(t *testing.T) {
 		if n := reapOrphans(); n == 0 {
 			t.Errorf("the next gate ended none of what the killed one left")
 		}
-		time.Sleep(200 * time.Millisecond)
-		if left := daemonsUnder(out); len(left) > 0 {
+		if left := daemonsLeft(out, 15*time.Second); len(left) > 0 {
 			t.Errorf("daemons %v outlived the gate that started them", left)
 		}
 	}
@@ -86,10 +105,11 @@ func TestKilledGateLeavesNoDaemon(t *testing.T) {
 		t.Error("the run's caches were not removed")
 	}
 	for _, p := range pids {
-		if syscall.Kill(p, 0) == nil {
-			if z, _ := os.ReadFile("/proc/" + strconv.Itoa(p) + "/stat"); !bytes.Contains(z, []byte(") Z")) {
-				t.Errorf("daemon %d still runs", p)
-			}
+		for end := time.Now().Add(15 * time.Second); running(p) && time.Now().Before(end); {
+			time.Sleep(100 * time.Millisecond)
+		}
+		if running(p) {
+			t.Errorf("daemon %d still runs", p)
 		}
 	}
 }

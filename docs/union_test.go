@@ -7,10 +7,9 @@ import (
 	"testing"
 )
 
-// architecture.md merges as union (.gitattributes), so a merge where both
-// sides changed one bullet keeps both copies instead of stopping on a
-// conflict. Each bullet that opens with a name in backticks (a setting, a
-// package) names it once.
+// A hand-resolved merge of architecture.md can keep both sides' copy of a
+// bullet both changed. Each bullet that opens with a name in backticks (a
+// setting, a package) names it once.
 func TestArchitectureBulletsOnce(t *testing.T) {
 	b, err := os.ReadFile("architecture.md")
 	if err != nil {

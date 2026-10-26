@@ -9,21 +9,26 @@ import (
 // A child inherits the CPU affinity of the thread that forks it, and passes
 // it on: the sandbox, a check's go build and its test binaries all start
 // from it, and Go sizes GOMAXPROCS (so go build's -p and go test's
-// parallelism) to it. So the start runs on a locked thread narrowed to cpus
-// of the CPUs this process may use, which gets its own mask back after.
+// parallelism) to it. So the start runs on a locked thread narrowed to the
+// slot-th group of cpus of the CPUs this process may use (pickCPUs), which
+// gets its own mask back after.
 func init() {
-	pin = func(cpus int, start func() error) error {
+	pin = func(cpus, slot int, start func() error) error {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		var all unix.CPUSet
 		if unix.SchedGetaffinity(0, &all) != nil || all.Count() <= cpus {
 			return start()
 		}
-		var some unix.CPUSet
-		for c := 0; some.Count() < cpus; c++ {
+		var allowed []int
+		for c := 0; len(allowed) < all.Count(); c++ {
 			if all.IsSet(c) {
-				some.Set(c)
+				allowed = append(allowed, c)
 			}
+		}
+		var some unix.CPUSet
+		for _, c := range pickCPUs(allowed, cpus, slot) {
+			some.Set(c)
 		}
 		if unix.SchedSetaffinity(0, &some) != nil {
 			return start()
