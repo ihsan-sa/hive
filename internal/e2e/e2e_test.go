@@ -93,6 +93,7 @@ type hive struct {
 	env   []string      // added to the daemon's environment
 	exe   string        // the binary the daemon runs, when not bin
 	cpus  int           // the daemon, and all it starts, run on this many CPUs (Linux; 0 is all)
+	slot  int           // which group of cpus CPUs (pickCPUs)
 	jobs  []func()      // end what each daemon left running (Windows)
 	ended chan struct{} // closed once the daemon process last launched has exited
 }
@@ -103,15 +104,15 @@ func start(t *testing.T, env ...string) *hive { return startWith(t, bin, nil, en
 // test's settings.
 func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string) *hive {
 	t.Helper()
-	return startOn(t, 0, exe, prep, env...)
+	return startOn(t, 0, 0, exe, prep, env...)
 }
 
 // startOn is startWith with the daemon and everything it starts pinned to
-// cpus CPUs (0 is all of them), where pin can.
-func startOn(t *testing.T, cpus int, exe string, prep func(*core.Config), env ...string) *hive {
+// cpus CPUs (0 is all of them), the slot-th group of them, where pin can.
+func startOn(t *testing.T, cpus, slot int, exe string, prep func(*core.Config), env ...string) *hive {
 	t.Helper()
 	dir := t.TempDir()
-	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env, exe: exe, cpus: cpus}
+	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env, exe: exe, cpus: cpus, slot: slot}
 	if err := h.ws.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +243,7 @@ func (h *hive) launch() {
 	if group != nil {
 		endGroup = group(cmd)
 	}
-	if err := pinned(h.cpus, cmd.Start); err != nil {
+	if err := pinned(h.cpus, h.slot, cmd.Start); err != nil {
 		h.t.Fatal(err)
 	}
 	log.Close() // the daemon has its own handle
@@ -1605,15 +1606,27 @@ func writable(path string) {
 }
 
 // pin runs start, which starts a process, so that the process and all it
-// starts run on cpus CPUs (Linux only).
-var pin func(cpus int, start func() error) error
+// starts run on cpus CPUs, the slot-th such group of this process's own
+// (Linux only).
+var pin func(cpus, slot int, start func() error) error
 
 // pinned runs start through pin when there is a cap and a pin.
-func pinned(cpus int, start func() error) error {
+func pinned(cpus, slot int, start func() error) error {
 	if cpus <= 0 || pin == nil {
 		return start()
 	}
-	return pin(cpus, start)
+	return pin(cpus, slot, start)
+}
+
+// pickCPUs is the slot-th group of cpus CPUs in allowed (this process's own,
+// in order), so two pinned daemons don't share theirs; with too few CPUs for
+// that slot it wraps around to the first groups.
+func pickCPUs(allowed []int, cpus, slot int) []int {
+	if len(allowed) <= cpus {
+		return allowed
+	}
+	from := slot % (len(allowed) / cpus) * cpus
+	return allowed[from : from+cpus]
 }
 
 // group makes cmd, before it starts, lead a process group of its own, and
@@ -1792,11 +1805,16 @@ func TestStepBack(t *testing.T) {
 		if name == "zero" {
 			paid = ""
 		}
+		// With its goals already in the repo, no unpaid "Set up the Hive
+		// files" task is filed, whose merge could plateau the score before
+		// the paid one spends anything.
+		goals := "Make the score high. FAKE:stepback" + name
 		h.seed("me/"+name, map[string]string{
 			".hive/project.json": `{"test": "true", "score": {"command": "cat score.txt", "direction": "higher", "tolerance": 0}` + protected + `}`,
+			".hive/goals.md":     "# Goals\n\n" + goals + "\n",
 			"score.txt":          "5\n",
 		})
-		h.post("/api/project", map[string]any{"name": name, "repo": "me/" + name, "isolated": name == "lose", "goals": "Make the score high. FAKE:stepback" + name}, nil)
+		h.post("/api/project", map[string]any{"name": name, "repo": "me/" + name, "isolated": name == "lose", "goals": goals}, nil)
 		h.post("/api/ask", map[string]string{"project": name, "title": "tidy " + name, "known": "a change that leaves the score alone" + paid}, nil)
 	}
 	stepback := func(st api.State, project string) (improve.StepBack, bool) {

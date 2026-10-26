@@ -2,6 +2,7 @@ package harness
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,7 +20,9 @@ import (
 // the installed modules (UseModules), so adding a harness changes no Go code.
 //
 // Placeholders in args and env values: {session}, {model}, {prompt},
-// {system_file}, {system_text}, {run_dir}, {schema_file}, {config_dir}.
+// {system_file}, {system_text}, {run_dir}, {schema_file}, {config_dir}, and
+// {system_file_json}, the system file's path escaped to sit inside a JSON
+// string (a Windows path's backslashes, a quote).
 type Spec struct {
 	ID          string   `json:"name"`
 	Title       string   `json:"title,omitempty"`
@@ -133,9 +136,20 @@ func ParseSpec(raw []byte) (*Spec, error) {
 	case len(s.Rules) == 0:
 		return nil, fmt.Errorf("harness %s has no parse rules", s.ID)
 	}
+	for name, argv := range map[string][]string{"login": s.Login, "status": s.Status} {
+		// `hive harness login` runs this as the person, outside the sandbox:
+		// it runs the harness's own program and nothing else.
+		if len(argv) > 0 && argv[0] != s.Bin {
+			return nil, fmt.Errorf("harness %s: %s runs %q, not its program %s", s.ID, name, argv[0], s.Bin)
+		}
+	}
 	for _, e := range s.Envs {
-		if k, _, ok := strings.Cut(e, "="); !ok || !envName.MatchString(k) {
+		k, _, ok := strings.Cut(e, "=")
+		if !ok || !envName.MatchString(k) {
 			return nil, fmt.Errorf("harness %s: env %q is not NAME=value", s.ID, e)
+		}
+		if reservedEnv(k) || k == s.KeyEnv {
+			return nil, fmt.Errorf("harness %s: env %s is the Hive's to set", s.ID, k)
 		}
 	}
 	for _, h := range s.Hosts {
@@ -155,6 +169,37 @@ func ParseSpec(raw []byte) (*Spec, error) {
 		return nil, fmt.Errorf("harness %s takes its prompt as an arg, but no arg holds {prompt}", s.ID)
 	}
 	return &s, nil
+}
+
+// reservedEnv are variables the Hive sets for a turn itself, or that change
+// how any program or the egress proxy behaves: a spec's env, added last,
+// would otherwise replace them.
+func reservedEnv(k string) bool {
+	k = strings.ToUpper(k)
+	switch k {
+	case "PATH", "HOME", "PWD", "USER", "SHELL", "TMPDIR", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
+		"NODE_OPTIONS", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "GIT_SSL_CAINFO", "REQUESTS_CA_BUNDLE":
+		return true
+	}
+	return strings.HasPrefix(k, "HIVE_") || strings.HasPrefix(k, "LD_") || strings.HasPrefix(k, "DYLD_")
+}
+
+// MaxArg is the longest single argument a turn's program is started with:
+// Linux refuses one over 128 KiB (MAX_ARG_STRLEN) with E2BIG.
+const MaxArg = 128<<10 - 1
+
+// ErrArgTooLong is a turn whose args can't be passed to its program.
+var ErrArgTooLong = errors.New("an argument is too long to start the harness with")
+
+// CheckArgs refuses argv with an argument longer than MaxArg, saying which
+// harness and how long, rather than letting the start fail with E2BIG.
+func CheckArgs(name string, argv []string) error {
+	for _, a := range argv {
+		if len(a) > MaxArg {
+			return fmt.Errorf("%w: %s would get its prompt or system prompt as one argument of %d KiB, and Linux allows %d KiB; shorten the brief or messages, or run it on a harness that reads its prompt on stdin", ErrArgTooLong, name, len(a)>>10, (MaxArg+1)>>10)
+		}
+	}
+	return nil
 }
 
 // LoadSpec reads a spec file.
@@ -256,7 +301,14 @@ func (s *Spec) fill(x string, t Turn) string {
 		"{session}", t.SessionID, "{model}", t.Model, "{prompt}", s.Prompt(t),
 		"{system_file}", t.SystemFile, "{system_text}", t.SystemText, "{run_dir}", t.RunDir,
 		"{schema_file}", t.SchemaFile, "{config_dir}", t.ConfigDir,
+		"{system_file_json}", jsonBody(t.SystemFile),
 	).Replace(x)
+}
+
+// jsonBody is v escaped to go inside a JSON string's quotes.
+func jsonBody(v string) string {
+	raw, _ := json.Marshal(v)
+	return string(raw[1 : len(raw)-1])
 }
 
 // Parse applies every rule that matches the line, in order.

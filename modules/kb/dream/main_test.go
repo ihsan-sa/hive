@@ -288,3 +288,42 @@ func TestMergeKeepsProjectsApart(t *testing.T) {
 		t.Fatalf("merged across projects: %+v", p.Merged)
 	}
 }
+
+// A person's line in the lead's own run's chat reaches the digest; a line,
+// sweep report or task title naming a hidden project doesn't, and a note
+// whose header names one is left alone, so the kb module never refuses the
+// pass for it. A Blocked note is retired by its title only when one task has it.
+func TestHiddenNamesStayOut(t *testing.T) {
+	st := record(t)
+	ev := func(seq int64, kind string, data map[string]any) {
+		raw, _ := json.Marshal(data)
+		st.fold(Event{Seq: seq, At: t0.Add(-time.Hour), Kind: kind, Data: raw}, "kb")
+	}
+	ev(20, "run.created", map[string]any{"id": "l-1", "role": "lead"})
+	ev(21, "chat.posted", map[string]any{"chat": "agent:l-1", "from": "person", "text": "keep the lead going"})
+	ev(22, "chat.posted", map[string]any{"chat": "lead", "from": "person", "text": "then do vault next"})
+	ev(23, "sweep.saved", map[string]any{"status": "done", "report": "vault is slow"})
+	ev(24, "task.saved", map[string]any{"id": "t-x", "title": "Move vault's notes", "project": "hive", "stage": "merged"})
+	ev(25, "task.saved", map[string]any{"id": "t-y", "title": "Fix the flake", "project": "hive", "stage": "merged"})
+	ev(26, "task.saved", map[string]any{"id": "t-z", "title": "Fix the flake", "project": "hive", "stage": "working"})
+	notes := []Shared{
+		{Path: "old-plan.md", Text: "---\ntitle: Old plan\nproject: vault\ndate: 2026-10-01\n---\n\nthe vault plan\n"},
+		{Path: "old-plan-2.md", Text: "---\ntitle: Old plan\nproject: vault\ndate: 2026-10-02\n---\n\nmore of it\n"},
+		{Path: "blocked-fix-the-flake.md", Text: "---\ntitle: Blocked: Fix the flake\ndate: 2026-10-01\n---\n\nwaiting\n"},
+	}
+	p := plan(t, notes, st)
+	for _, c := range p.Changes {
+		if strings.HasPrefix(c.Path, "old-plan") {
+			t.Errorf("a pass touched %s, whose header names a hidden project", c.Path)
+		}
+		if strings.Contains(c.Text, "vault") {
+			t.Errorf("%s names the hidden project:\n%s", c.Path, c.Text)
+		}
+	}
+	if len(p.Retired) != 0 {
+		t.Errorf("retired %+v by a title two tasks share", p.Retired)
+	}
+	if d := text(apply(t, notes, p), p.Digest); !strings.Contains(d, "keep the lead going") {
+		t.Errorf("the lead's run's chat line is missing:\n%s", d)
+	}
+}
