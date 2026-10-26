@@ -195,7 +195,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				continue // one that waits on another holds no one back, so waits never chain
 			case working >= limit && (!quick || quickWorking > 0 || !plan()):
 				wait[t.ID], capped = full, true
-			case strain != "":
+			case loadHolds(strain, working, cmp.Or(cfg.MaxWorkers, defaultWorkers)):
 				wait[t.ID] = "waiting: " + steady(strain)
 			default:
 				start[t.ID] = true
