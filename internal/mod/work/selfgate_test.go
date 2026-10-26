@@ -988,3 +988,25 @@ func TestMainMovingKeepsTheGateRunning(t *testing.T) {
 		t.Fatalf("dropped %v cancelled %v, %d runs, stage %q, reason %q: want the run going on and the task waiting on it", run.dropped, cancelled, len(*jobs), task.Stage, task.Reason)
 	}
 }
+
+// A task whose head moves (a merge of main, a fix sent back) ends its
+// gate's run on the old head as it is saved, freeing the slot for the gains
+// queued behind it instead of holding it until the new head reaches the
+// gate. A run on the head it keeps goes on.
+func TestNewHeadFreesItsOldGateAtOnce(t *testing.T) {
+	m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	cancelled := 0
+	same := &gateRun{key: p.Name + "@" + task.SHA + "@main", task: task.ID, head: task.SHA, main: "main", cancel: func() { cancelled++ }}
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{same.key: same}
+	m.mu.Unlock()
+	m.save(task, "looked again")
+	if same.dropped || cancelled != 0 {
+		t.Fatalf("a run on the task's own head was ended")
+	}
+	task.SHA, task.Stage = "newhead", StageTesting
+	m.save(task, "pushed newhead")
+	if !same.dropped || cancelled != 1 || !strings.Contains(task.Log[len(task.Log)-1].Text, "earlier head ends") {
+		t.Fatalf("dropped %v, cancelled %d, log %q: want the old head's run ended and said", same.dropped, cancelled, task.Log[len(task.Log)-1].Text)
+	}
+}
