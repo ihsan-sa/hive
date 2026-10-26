@@ -775,6 +775,26 @@ func (c Check) FullOutput() string {
 	return c.Output
 }
 
+// NoWorse says a red run c fails only what main's red run mc fails too,
+// each test by its package and name, so the red is main's and the change
+// may be its fix. A failure in c that no test name accounts for (a timeout,
+// a panic or exit outside a test, a build failure) counts only where main's
+// run fails that package so too; one either run can't name at all can't be
+// told apart. A run stopped by vet or the build (StopKeys) never ran its
+// tests, so matching main's vet error never makes a change no worse.
+func NoWorse(c, mc Check) bool {
+	mine, mains := RedKeys(c.FullOutput()), RedKeys(mc.FullOutput())
+	if len(mine) == 0 || len(mains) == 0 {
+		return false
+	}
+	for _, k := range mine {
+		if !slices.Contains(mains, k) {
+			return false
+		}
+	}
+	return true
+}
+
 // scoreOf reads the score from a score command's output: the last word of
 // the last line ("score: 42"), or failing that the one line that is a number
 // alone, so a bench can print its result and then per-run detail. Two such
@@ -1366,14 +1386,21 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	p := m.Project
 	if e.MergeHeld != nil {
 		if why := e.MergeHeld(p.Name, m.PR); why != "" {
-			return "", fmt.Errorf("refusing to merge #%d: %s", m.PR, why)
+			return "", refuse("#%d: %s", m.PR, why)
 		}
 	}
 	if why := e.Stewardship(p, m.Main); why != "" {
-		return "", fmt.Errorf("refusing to merge #%d: %s", m.PR, why)
+		return "", refuse("#%d: %s", m.PR, why)
 	}
-	if c, ok := e.GetCheck(p.Name, m.SHA, "test"); !ok || !c.OK {
-		return "", fmt.Errorf("refusing to merge %s: no passing test run recorded for that exact commit", short(m.SHA))
+	if c, ok := e.GetCheck(p.Name, m.SHA, "test"); !ok {
+		return "", refuse("%s: no test run recorded for that exact commit", short(m.SHA))
+	} else if !c.OK {
+		// Red only where main's own run at m.Main is red too: no worse than
+		// main, as the work module's testing stage let it on, so the fix for
+		// a red main can land.
+		if mc, ok := e.GetCheck(p.Name, m.Main, "test"); !ok || mc.OK || !NoWorse(c, mc) {
+			return "", refuse("%s: its test run is red beyond what main's own run at %s fails too (or main's has no record)", short(m.SHA), short(m.Main))
+		}
 	}
 	ch, err := e.Classify(p, m.Main, m.SHA)
 	if err != nil {
@@ -1383,20 +1410,20 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
 	}
 	if !ch.Small && !e.readOK(p, ch, m.SHA) {
-		return "", fmt.Errorf("refusing to merge %s: no land verdict bound to that exact commit", short(m.SHA))
+		return "", refuse("%s: no land verdict bound to that exact commit", short(m.SHA))
 	}
 	if !e.SecurityOK(p.Name, ch) {
 		need := "the Hive's security seat"
 		if len(ch.SecurityRoot) > 0 {
 			need += " and a majority of its panel"
 		}
-		return "", fmt.Errorf("refusing to merge %s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
+		return "", refuse("%s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
 	}
 	if p.Self && m.Gain {
 		// Or once the person landed that exact head at that main unjudged,
 		// the gate unable to judge there (the work module's "gate" ask).
 		if !e.Kept(p, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA+"@"+m.Main) {
-			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
+			return "", refuse("%s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
 		}
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
@@ -1421,7 +1448,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		st, which, prose = ChecksBesidesFailures(runs, req)
 	}
 	if st != CheckPass {
-		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
+		return "", refuse("%s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
 	}
 	// Every read above is the Hive's own and bound to sha, and nobody outside
 	// the Hive reads its PRs, so a draft it cleared is its to ready.
@@ -1492,6 +1519,16 @@ func (r *RefusedRed) Unwrap() error { return r.Err }
 
 // protectionRefused is how GitHub says a branch rule refused a merge.
 var protectionRefused = regexp.MustCompile(`(?i)required status check|base branch policy|protected branch|repository rule violation`)
+
+// Refusal is Merge declining a merge one of its own conditions doesn't
+// allow yet, so the task can say what holds it.
+type Refusal string
+
+func (r Refusal) Error() string { return string(r) }
+
+func refuse(format string, a ...any) error {
+	return Refusal(fmt.Sprintf("refusing to merge "+format, a...))
+}
 
 // NeedsPerson means only the person can take this step.
 type NeedsPerson struct{ Reason string }
@@ -2005,6 +2042,11 @@ type CheckFailure struct {
 	Keys []string `json:"keys,omitempty"`
 	// OnlyTests says the log shows nothing failing apart from Keys.
 	OnlyTests bool `json:"only_tests,omitempty"`
+	// Head and Base are the commits the forge merged before running the
+	// check (TestedMerge): a pull request's checks run on its head merged
+	// with main as it was then, which may be older than main now.
+	Head string `json:"head,omitempty"`
+	Base string `json:"base,omitempty"`
 }
 
 // CheckFailure reads a failed check's log on repo's forge with the Hive's own
@@ -2029,6 +2071,7 @@ func (e *Effects) CheckFailure(repo string, r CheckRun) (CheckFailure, bool) {
 	}
 	keys, placed := FailedTestKeys(log)
 	f = CheckFailure{Tests: FailedTests(log), Keys: keys, Excerpt: LogExcerpt(log, ExcerptLines), OnlyTests: placed && OnlyTests(log)}
+	f.Head, f.Base = TestedMerge(log)
 	e.mu.Lock()
 	if e.failing == nil || len(e.failing) > 500 {
 		e.failing = map[string]CheckFailure{}
@@ -2075,6 +2118,20 @@ func LogExcerpt(log string, n int) string {
 		}
 	}
 	return strings.Join(lines[start:end], "\n")
+}
+
+// ghTestMerge is the merge commit GitHub runs a pull request's checks on,
+// whose message its checkout step prints ("HEAD is now at a9ae988 Merge
+// <head> into <base>").
+var ghTestMerge = regexp.MustCompile(`\bMerge ([0-9a-f]{40}) into ([0-9a-f]{40})\b`)
+
+// TestedMerge is the head and base a CI job's log says it merged and ran
+// on, or "" for both when it names no such merge (a push, not a PR).
+func TestedMerge(log string) (head, base string) {
+	if m := ghTestMerge.FindStringSubmatch(log); m != nil {
+		return m[1], m[2]
+	}
+	return "", ""
 }
 
 // CheckNames lists checks by name, for a message.

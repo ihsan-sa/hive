@@ -307,6 +307,33 @@ func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
 	}
 }
 
+// The change the testing stage let on as no worse than main merges: the
+// merge's own gate takes a red test run whose every failure main's run
+// shares, rather than refuse it as untested and hold it till it gives up.
+func TestGateNoWorseThanRedMainMerges(t *testing.T) {
+	const red = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\nexit 1\n"
+	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": red}
+	m, task, p, f := gateRigSeeded(t, false, onMain, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
+// A merge the gate refuses says what refused it, not the reason of a hold it
+// already passed (a security read, say).
+func TestMergeRefusalReplacesStaleReason(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	task.Stage, task.Reason = StageMerging, "waiting on a security read from the Hive's security reviewer"
+	if err := m.merge(task, p); err == nil {
+		t.Fatal("a commit with no test run merged")
+	}
+	if !strings.HasPrefix(task.Reason, "refusing to merge") || !strings.Contains(task.Reason, "no test run recorded") {
+		t.Fatalf("reason %q", task.Reason)
+	}
+}
+
 // Main's failure is raised once per main commit, even when main moves away
 // and back (A -> B -> A) and no task still names A.
 func TestGateMainRedOncePerCommit(t *testing.T) {

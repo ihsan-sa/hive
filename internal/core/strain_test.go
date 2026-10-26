@@ -291,18 +291,20 @@ func TestOverlappingTicksStepEachRunOnce(t *testing.T) {
 		})
 		return n
 	}
-	// settled: no pass over the other runs waits, and no run's step is going.
+	// settled: no pass over the other runs waits, and no step or launch is
+	// still going; a fixed sleep for that fails on a loaded machine, where a
+	// launch can outlast it.
 	settled := func() {
 		t.Helper()
-		for end := time.Now().Add(15 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
 			c.Runs.mu.Lock()
-			done := !c.Runs.passing && len(c.Runs.busy) == 0
+			done := !c.Runs.passing && len(c.Runs.busy) == 0 && c.Runs.launching == 0
 			c.Runs.mu.Unlock()
 			if done {
 				return
 			}
 		}
-		t.Fatal("the ticks' steps never settled")
+		t.Fatal("the ticks' steps are still going after 30s")
 	}
 	ticks := func() {
 		for i := 0; i < 3; i++ {
