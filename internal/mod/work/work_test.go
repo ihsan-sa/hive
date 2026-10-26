@@ -85,6 +85,7 @@ func noCommitRig(t *testing.T, fail int) (*Module, *flakyForge, *Task, core.Proj
 	}
 	a := &agents.Agents{C: c}
 	m := New(c, a, chat.New(c, a))
+	t.Cleanup(m.Wait) // a task's checkouts go off the save's path
 	task := &Task{ID: "t1", Project: "p", Title: "restart the box", Kind: "work", Stage: StageLanding, Issue: core.Issue{Number: 7}}
 	return m, forge, task, p
 }
@@ -786,6 +787,21 @@ func TestFollowUpOnceAfterMerge(t *testing.T) {
 	keepAdvice(tk, []string{" name it better ", "", "test it"}) // a second read repeats one item
 	if strings.Join(tk.Advice, "|") != "name it better|test it" {
 		t.Fatalf("advice: %q", tk.Advice)
+	}
+}
+
+// A review follow-up filed before followUp named its aim, still queued with
+// none, is taken as a fix; one its worker or the lead aimed at a gain is a gain.
+func TestUnaimedFollowUpIsAFix(t *testing.T) {
+	fu := Task{ID: "t2", Title: "Follow up the review of x", FollowUp: "t1"}
+	if !fu.Fix() || !strings.Contains(fu.AimWord(), "follow-up of t1") {
+		t.Fatalf("an unaimed follow-up is taken as %s", fu.AimWord())
+	}
+	if fu.Aim = AimGain; fu.Fix() {
+		t.Fatal("a follow-up aimed at a gain is taken as a fix")
+	}
+	if plain := (Task{ID: "t3"}); plain.Fix() {
+		t.Fatal("an unaimed brief that follows up nothing is taken as a fix")
 	}
 }
 
