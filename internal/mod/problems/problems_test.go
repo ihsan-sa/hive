@@ -112,3 +112,19 @@ func TestBoardSurvivesRestart(t *testing.T) {
 		t.Fatalf("after restart: %+v", got)
 	}
 }
+
+// Solving needs a word on how.
+func TestSolveNeedsHow(t *testing.T) {
+	c, m := open(t)
+	w := core.Run{RunSpec: core.RunSpec{ID: "w-1", Role: "worker"}}
+	p, err := m.Post(w, "", "flaky e2e")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(t, c, w, "problem", map[string]string{"id": p.ID, "solved": "  "}); err == nil {
+		t.Fatal("solved with no word on how")
+	}
+	if got, _ := m.Get(p.ID); !got.Open() {
+		t.Fatalf("closed anyway: %+v", got)
+	}
+}

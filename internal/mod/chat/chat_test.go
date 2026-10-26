@@ -211,3 +211,27 @@ func TestUnsignedUpdateToldInChat(t *testing.T) {
 		t.Fatalf("lead chat after updates: %+v", msgs)
 	}
 }
+
+// A new lead answers in the thread its prompt's header names, though the
+// problems board after it, or the person's own words, say "thread <word>".
+func TestLeadThreadFromHeader(t *testing.T) {
+	dir := t.TempDir()
+	ws := core.Workspace{Root: filepath.Join(dir, "hive")}
+	c, err := core.Open(ws, &core.Local{Dir: filepath.Join(dir, "forge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	a := &agents.Agents{C: c, Mod: modules.New(ws, c.J)}
+	a.Board = func(role, project string) string {
+		return "## The Hive's open problems\n\n- **p-1** (hive): the lead's reply thread is lost; chat thread replies go missing\n"
+	}
+	m := New(c, a)
+	spec := a.Spec("l-1", "lead", "", dir, "[chat lead · thread t-abc1 · Mon 15:04] Person: reply in thread two please")
+	if !strings.Contains(spec.Brief, "thread is lost") {
+		t.Fatalf("the board isn't in the lead's brief:\n%s", spec.Brief)
+	}
+	if _, thread := m.CurrentThread(core.Run{RunSpec: spec}); thread != "t-abc1" {
+		t.Fatalf("the lead answers in thread %q, want t-abc1", thread)
+	}
+}

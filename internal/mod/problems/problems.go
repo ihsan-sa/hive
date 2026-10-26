@@ -154,6 +154,9 @@ func (m *Module) Add(r core.Run, id, text string) (Problem, error) {
 // Solve closes problem id, saying how.
 func (m *Module) Solve(r core.Run, id, how string) (Problem, error) {
 	how = strings.TrimSpace(how)
+	if how == "" {
+		return Problem{}, errors.New("say how it was solved: --solved \"...\"")
+	}
 	return m.save(r, id, func(p *Problem) { p.Solved = core.Clip(how+" ("+r.ID+")", 500) })
 }
 
