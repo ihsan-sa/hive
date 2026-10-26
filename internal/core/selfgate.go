@@ -19,19 +19,20 @@ const (
 // measured against main at Main. A change to the Hive itself aimed at a gain
 // merges only on a keep for exactly that head and main (Effects.Merge).
 type GateResult struct {
-	Project   string   `json:"project"`
-	Head      string   `json:"head"`
-	Main      string   `json:"main"`
-	Outcome   string   `json:"outcome"`
-	Reason    string   `json:"reason"`
-	Report    string   `json:"report,omitempty"`     // the run's report.md on this machine
-	Sandbox   string   `json:"sandbox,omitempty"`    // what the children ran in
-	Note      string   `json:"note,omitempty"`       // how the run was set up, when the person should hear it (the org leg skipped)
-	Transient bool     `json:"transient,omitempty"`  // a can't-run whose cause may pass (the machine's load, a flake on both sides): tried again soon
-	Conflicts []string `json:"conflicts,omitempty"`  // a can't-run because the head conflicts with main in these files: its worker merges main
-	Alone     bool     `json:"alone,omitempty"`      // a can't-run tied to this head alone (preparing its build, out of time): other heads at this main don't wait on it
-	MainFails bool     `json:"main_fails,omitempty"` // a can't-run whose cause is main itself (the control fails a step): every head at this main would hit it
-	Repeats   int      `json:"-"`                    // how many MainFails at this main came before it in a row, counted on replay
+	Project   string    `json:"project"`
+	Head      string    `json:"head"`
+	Main      string    `json:"main"`
+	Outcome   string    `json:"outcome"`
+	Reason    string    `json:"reason"`
+	Report    string    `json:"report,omitempty"`     // the run's report.md on this machine
+	Sandbox   string    `json:"sandbox,omitempty"`    // what the children ran in
+	Note      string    `json:"note,omitempty"`       // how the run was set up, when the person should hear it (the org leg skipped)
+	Transient bool      `json:"transient,omitempty"`  // a can't-run whose cause may pass (the machine's load, a flake on both sides): tried again soon
+	Conflicts []string  `json:"conflicts,omitempty"`  // a can't-run because the head conflicts with main in these files: its worker merges main
+	Alone     bool      `json:"alone,omitempty"`      // a can't-run tied to this head alone (preparing its build, out of time): other heads at this main don't wait on it
+	MainFails bool      `json:"main_fails,omitempty"` // a can't-run whose cause is main itself (the control fails a step): every head at this main would hit it
+	Repeats   int       `json:"-"`                    // how many MainFails at this main came before it in a row, counted on replay
+	Started   time.Time `json:"started,omitempty"`    // when the run began: one that ran beside the last MainFails doesn't add a repeat
 	// Measured says the outcome came from comparing both sides' results, so
 	// the judge weighs it (judge.go); a candidate that failed before it was
 	// measured (it doesn't build, fails its own tests) is rolled back as is.
