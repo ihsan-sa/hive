@@ -219,9 +219,46 @@ func (p Plan) Key() string {
 	return p.Login
 }
 
-// Parked reports whether the plan is at its usage limit until a reset still ahead.
-func (p Plan) Parked(now time.Time) bool {
-	return p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now)
+// WeeklyStop is the share of its weekly window at which a login stops
+// taking turns until the week resets: the person asked (10-25) that the
+// Hive pause at 95% of the week and pick up again after the reset, rather
+// than spend the last of it.
+const WeeklyStop = 0.95
+
+// Parked reports whether the plan is at its usage limit, or at WeeklyStop of
+// its weekly window, until a reset still ahead.
+func (p Plan) Parked(now time.Time) bool { return !p.ParkedUntil(now).IsZero() }
+
+// ParkedUntil is when a parked plan (Parked) takes turns again, the later of
+// its limit's reset and its week's; zero when it isn't parked.
+func (p Plan) ParkedUntil(now time.Time) time.Time {
+	var at time.Time
+	if p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now) {
+		at = p.Limit.ResetsAt
+	}
+	if w, ok := p.Weekly(now); ok && w.Utilization >= WeeklyStop && w.ResetsAt.After(at) {
+		at = w.ResetsAt
+	}
+	return at
+}
+
+// Standing is the login's state in plain words (RateLimit.Standing), or
+// that it has stopped at WeeklyStop of its week until the reset.
+func (p Plan) Standing(now time.Time) string {
+	if w, ok := p.Weekly(now); ok && w.Utilization >= WeeklyStop && !(p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now)) {
+		return fmt.Sprintf("paused at %.0f%% of its week until it resets", WeeklyStop*100)
+	}
+	return p.Limit.Standing(now)
+}
+
+// Weekly is the plan's weekly window (seven_day) while it runs at now: from
+// the windows, or the top level when that is the window it reports.
+func (p Plan) Weekly(now time.Time) (harness.Window, bool) {
+	w, ok := p.Limit.Windows["seven_day"]
+	if !ok && p.Limit.Window == "seven_day" {
+		w, ok = harness.Window{Utilization: p.Limit.Utilization, ResetsAt: p.Limit.ResetsAt}, true
+	}
+	return w, ok && w.ResetsAt.After(now)
 }
 
 // Used is how much of its plan the login has used: the fullest of its usage
@@ -850,7 +887,7 @@ func (rs *Runs) pickLogin(h, model, home string, bare bool) (Login, []string, er
 	}
 	sort.SliceStable(open, func(i, j int) bool { return use(open[i]) < use(open[j]) })
 	rs.mu.Unlock()
-	limit := fmt.Errorf("every %s login is at its usage limit", HarnessName(h))
+	limit := fmt.Errorf("every %s login is at its usage limit or %.0f%% of its weekly window", HarnessName(h), WeeklyStop*100)
 	err := limit
 	for _, l := range open {
 		env, e := rs.tokens.AgentEnv(l, home)
@@ -931,13 +968,13 @@ func (rs *Runs) freeAt(h, model string) time.Time {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	for _, l := range rs.logins(h, model) {
-		p := rs.plans[l.Key()]
-		if !p.Parked(now) {
+		until := rs.plans[l.Key()].ParkedUntil(now)
+		if until.IsZero() {
 			at = now
 			break
 		}
-		if at.IsZero() || p.Limit.ResetsAt.Before(at) {
-			at = p.Limit.ResetsAt
+		if at.IsZero() || until.Before(at) {
+			at = until
 		}
 	}
 	if at != now {
