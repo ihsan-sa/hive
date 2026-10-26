@@ -1,10 +1,12 @@
 package release
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
@@ -83,5 +85,81 @@ func TestReleaseScanAtTheCommit(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "alice") || strings.Contains(err.Error(), key) {
 		t.Fatalf("the failure prints what it found: %v", err)
+	}
+}
+
+// A missing handle list reaches the person as one standing ask in Waiting,
+// not an alert on every check; their done tries the release again, and a
+// scan that reads a list answers the ask.
+func TestNoHandleListAsksThePersonOnce(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	m.C.Person.Handle("scan_handles", m.onHandles) // as New does
+	missing := true
+	m.Scan = func(core.Project, string) error {
+		if missing {
+			return fmt.Errorf("%w: put one handle per line in the list", scan.ErrNoHandles)
+		}
+		return nil
+	}
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	for range 3 {
+		m.AfterKept("hive", "m1")
+	}
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	if a := alerts(m); len(a) != 0 {
+		t.Fatalf("a missing handle list alerts: %q", a)
+	}
+	open := m.C.Person.Open()
+	if len(open) != 1 || open[0].Kind != "scan_handles" || !strings.Contains(open[0].Detail, "one handle per line") {
+		t.Fatalf("want one standing handle-list ask, got %+v", open)
+	}
+	if len(n.got) != 0 || journaled(m, "hive.released") {
+		t.Fatalf("released with no handle list: %v", n.got)
+	}
+	// Done with the list still missing asks again; done once it's there releases.
+	m.C.Person.Answer(open[0].ID, "done", "")
+	again := waitFor(t, func() []core.Ask { return m.C.Person.Open() }, func(a []core.Ask) bool { return len(a) == 1 && a[0].ID != open[0].ID })
+	missing = false
+	m.C.Person.Answer(again[0].ID, "done", "")
+	waitFor(t, func() bool { return journaled(m, "hive.released") }, func(ok bool) bool { return ok })
+	if !journaled(m, "hive.released") {
+		t.Fatal("done with the list written didn't release")
+	}
+	if open := m.C.Person.Open(); len(open) != 0 {
+		t.Fatalf("asks left open after the release: %+v", open)
+	}
+}
+
+// A scan found in its own run answers the standing ask with no word from
+// the person.
+func TestHandleListFoundAnswersTheAsk(t *testing.T) {
+	m, _, merged, land := selfHive(t)
+	m.Scan = func(core.Project, string) error { return scan.ErrNoHandles }
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	if len(m.C.Person.Open()) != 1 {
+		t.Fatal("no handle-list ask")
+	}
+	m.Scan = func(core.Project, string) error { return nil }
+	m.AfterKept("hive", "m1")
+	if open := m.C.Person.Open(); len(open) != 0 || !journaled(m, "hive.released") {
+		t.Fatalf("the ask stands after a scan read a list: %+v", open)
+	}
+}
+
+// waitFor polls get until ok, as person handlers run on their own goroutine.
+func waitFor[T any](t *testing.T, get func() T, ok func(T) bool) T {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if v := get(); ok(v) || time.Now().After(deadline) {
+			if !ok(v) {
+				t.Fatalf("waited, still %+v", v)
+			}
+			return v
+		}
 	}
 }
