@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,7 +17,10 @@ import (
 // runs/<id>/host/turn.claim, naming itself and the turn, under a lock on
 // turn.lock before it starts the turn; a claim by another live daemon for
 // this turn or a later one makes it back off. A dead daemon's claim is taken
-// over, unless the agent it started still runs.
+// over, unless the agent it started still runs. And no daemon, this one
+// included, starts a turn while the claim's agent still runs: a run whose
+// status was knocked off running mid-turn (two fix rounds reopening it 2 s
+// apart, issue #1022) would otherwise get a twin in its checkout.
 type turnClaim struct {
 	Turn   int         `json:"turn"`
 	Daemon proc.Handle `json:"daemon"`
@@ -37,6 +41,9 @@ func (rs *Runs) claimFile(id string) string { return filepath.Join(rs.ws.RunHost
 // means that daemon died between claiming the turn and journalling its start.
 func (rs *Runs) claimTurn(id string, turn int) (took string, err error) {
 	err = rs.withClaim(id, func(c turnClaim) (turnClaim, error) {
+		if sameProc(c.Daemon, rs.self) && proc.Alive(c.Agent) {
+			return c, fmt.Errorf("%w: turn %d's process %d still runs", errTurnLive, c.Turn, c.Agent.PID)
+		}
 		if c.Daemon.PID > 0 && c.Turn >= turn && !sameProc(c.Daemon, rs.self) {
 			if proc.Alive(c.Daemon) {
 				return c, fmt.Errorf("daemon pid %d claimed turn %d", c.Daemon.PID, c.Turn)
@@ -53,6 +60,9 @@ func (rs *Runs) claimTurn(id string, turn int) (took string, err error) {
 	})
 	return took, err
 }
+
+// errTurnLive is this daemon's own turn of the run still running.
+var errTurnLive = errors.New("its last turn hasn't ended")
 
 // claimed records the claimed turn's process, so a daemon taking over a
 // dead one's claim doesn't start the turn again while it runs.

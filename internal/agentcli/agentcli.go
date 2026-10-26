@@ -184,6 +184,7 @@ A value of @path reads that file. Common ops:
   search    --query "words" [--limit n|all]     the knowledge base pieces that match, best first
   remember  --title "..." --text "..." [--tags a,b]   write to the knowledge base
   feedback  --text "..." [--about "agents/worker.md"]   what about the Hive got in your way, for the person
+  feedback  --fixed <feedback id> --task <task id>   that task fixes it: it closes when the task lands
   schedule  --in 2h --text "..."                 a wake-up message to yourself
   status                                         projects, work in flight, scores
   github    --pr N | --checks sha | --annotations id | --path "repos/o/r/..." [--repo o/r]

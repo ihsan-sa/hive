@@ -742,17 +742,32 @@ func TestInstallWithProjectUnderSandboxRoot(t *testing.T) {
 }
 
 // The daemon's own temporary folder is the host's even under a sandbox root,
-// as when the score's e2e daemon runs with TMPDIR under /hive.
+// as when the score's e2e daemon runs with TMPDIR under /hive; a path is
+// judged by where it points, and a TMPDIR that is a root exempts nothing.
 func TestDaemonTempIsNotSandbox(t *testing.T) {
 	tmp := t.TempDir()
+	root := filepath.Dir(tmp)
 	t.Setenv("TMPDIR", tmp)
 	defer func(r []string) { sandboxRoots = r }(sandboxRoots)
-	sandboxRoots = []string{tmp, "/work"}
+	sandboxRoots = []string{root, "/work"}
 	if inSandbox(filepath.Join(tmp, "echo")) {
 		t.Error("a path in the daemon's temp folder was taken for a sandbox path")
 	}
 	if !inSandbox("/work/wordcount") {
 		t.Error("/work/wordcount isn't a sandbox path any more")
+	}
+	if !inSandbox(tmp + "/../../" + filepath.Base(root) + "/x") {
+		t.Error("a path with .. that points out of the temp folder took its exemption")
+	}
+	if !inSandbox(tmp + "/../x") {
+		t.Error("a path with .. back into the root was let through")
+	}
+	if !inSandbox("/work/a/../../work/b") {
+		t.Error("a path with .. dodged the sandbox roots")
+	}
+	t.Setenv("TMPDIR", root)
+	if !inSandbox(filepath.Join(root, "x")) {
+		t.Error("a TMPDIR that is a sandbox root exempted the whole root")
 	}
 }
 
