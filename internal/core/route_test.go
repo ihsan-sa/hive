@@ -465,7 +465,7 @@ func TestFallbackAtALimit(t *testing.T) {
 	if p, at := c.Runs.next(r); p.Harness != "open" || at.After(time.Now()) {
 		t.Fatalf("next at a limit: %v at %v", p, at)
 	}
-	c.Runs.SetStatus("w1", StatusIdle, "") // the first turn ended
+	c.Runs.append("run.turn_ended", turnEnded{ID: "w1", Turn: 1, Status: StatusIdle}) // the first turn ended
 	r, _ = c.Runs.Get("w1")
 	c.Runs.launch(r, c.WS.LoadConfig())
 	got, _ := c.Runs.Get("w1")
@@ -626,7 +626,7 @@ func TestTurnStartsOnceWhenARunMoves(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Runs.launch(r, c.WS.LoadConfig())
-	c.Runs.SetStatus("w1", StatusIdle, "") // the first turn ended
+	c.Runs.append("run.turn_ended", turnEnded{ID: "w1", Turn: 1, Status: StatusIdle}) // the first turn ended
 	c.Runs.append("plan.usage", Plan{Harness: "fake", Login: "fake", Limit: harness.RateLimit{Status: "rejected", ResetsAt: time.Now().Add(time.Hour)}})
 	r, _ = c.Runs.Get("w1")
 
@@ -681,7 +681,7 @@ func TestTickStepsTheRunAsItIsNow(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Runs.launch(r, c.WS.LoadConfig())
-	c.Runs.SetStatus("w1", StatusIdle, "") // the first turn ended
+	c.Runs.append("run.turn_ended", turnEnded{ID: "w1", Turn: 1, Status: StatusIdle}) // the first turn ended
 	listed, _ := c.Runs.Get("w1")
 	c.Runs.launch(listed, c.WS.LoadConfig()) // a turn starts after the list was read
 	got, ok := c.Runs.claim(listed)
@@ -704,8 +704,9 @@ func TestWatchFromAStaleCopyEndsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Runs.launch(r, c.WS.LoadConfig())
-	stale, _ := c.Runs.Get("w1") // running turn 1
-	c.Runs.SetStatus("w1", StatusIdle, "")
+	stale, _ := c.Runs.Get("w1")                                                      // running turn 1
+	c.Runs.append("run.turn_ended", turnEnded{ID: "w1", Turn: 1, Status: StatusIdle}) // the first turn ended
+	ended := c.J.Seq()
 	cur, _ := c.Runs.Get("w1")
 	c.Runs.launch(cur, c.WS.LoadConfig()) // turn 2 is live
 	c.Runs.watch(stale)
@@ -714,7 +715,7 @@ func TestWatchFromAStaleCopyEndsNothing(t *testing.T) {
 		t.Fatalf("after a stale watch: %s at turn %d, want running at turn 2", got.Status, got.Turn)
 	}
 	for _, e := range c.J.Since(0) {
-		if e.Kind == "run.turn_ended" {
+		if e.Kind == "run.turn_ended" && e.Seq > ended {
 			t.Fatalf("a stale watch ended a turn: %s", e.Data)
 		}
 	}

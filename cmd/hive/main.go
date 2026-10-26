@@ -726,6 +726,14 @@ func cmdDoctor(args []string) int {
 	} else {
 		fmt.Println("· doesn't start with the machine (run `" + core.Cmd + "` once to set it up)")
 	}
+	switch twins, err := twinTurns(ws.Events(), time.Now().Add(-24*time.Hour)); {
+	case err != nil:
+		fail("✗ journal: %v\n", err)
+	case len(twins) > 0:
+		fail("✗ %d turns started in the last day while the same run's last turn still ran (issue #1022), e.g. %s\n", len(twins), twins[len(twins)-1])
+	default:
+		fmt.Println("✓ no turn started in the last day while its run's last turn still ran")
+	}
 	if _, running := daemon.Running(ws); running {
 		fmt.Println("✓ running")
 	} else {
