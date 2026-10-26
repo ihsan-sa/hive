@@ -16,14 +16,22 @@ import (
 // The pace: how many workers, and how many checks, start at once is not a
 // fixed number but a limit that sets itself from what the machine and the
 // plan carry. While something waits on the limit and nothing is strained, it
-// grows by one a step; when the machine is strained (memory floor, memory or
-// CPU pressure, load per core: the same settings that hold a turn) or the
-// workers' plan is nearly spent or running ahead of its five-hour window,
-// it pulls back to three quarters of what is running, or to its start when
-// nothing runs (the strain isn't the Hive's, and from 1 it would take
-// minutes to climb back). Nothing running is stopped; past the limit, work
-// waits in order. It changes at most once a step, so the readings (load is
-// a 1-minute average) catch up with the last change before the next.
+// grows by one once nothing has strained for a growStep; when the machine is
+// strained (memory floor, memory or CPU pressure, load per core: the same
+// settings that hold a turn) or the workers' plan is nearly spent or running
+// ahead of its five-hour or weekly window, it pulls back to three quarters
+// of what is running, or to its start when nothing runs (the strain isn't
+// the Hive's, and from 1 it would take minutes to climb back). Load alone
+// never pulls it under its start: on 10-25 a load of 27-46 on 20 cores came
+// from child Hives and builds beside 2-3 live turns, and cutting the workers
+// to 1 or 2 hardly moved it while 51 tasks waited. Nor does load alone hold
+// a worker from starting while fewer than the start work (loadHolds), and it
+// doesn't hide a spent or ahead plan, which still pulls the workers under
+// it. Nothing running is stopped; past the limit, work waits in order. It
+// pulls back at most once a step, so the readings (load is a 1-minute
+// average) catch up with the last change before the next, and grows more
+// slowly than it pulls back, so a load hovering round its limit doesn't
+// swing it every minute (10-25: 30-55 changes an hour, 1,2,1,2,3,4,3,…).
 // max_workers and max_checks, when set, are the person's ceilings and where
 // the pace starts;
 // with no machine reading on, or none to read (no /proc, as on macOS or
@@ -34,13 +42,18 @@ import (
 // paceStep is the least time between two changes of a limit.
 const paceStep = time.Minute
 
+// growStep is the least time since the last change, and since the last
+// strain, before a limit grows.
+const growStep = 5 * time.Minute
+
 // planFloor is the share of the plan left below which workers pull back.
 const planFloor = 0.1
 
-// aheadSlack is how far ahead of its five-hour window the workers' plan may
-// run before workers pull back: a burst early in a window is fine, a pace
-// that spends it an hour before its reset is not (10-25: three windows ran
-// out 50 to 100 minutes early, and nothing moved until the reset).
+// aheadSlack is how far ahead of a usage window (five-hour or weekly), as a
+// share of the window, the workers' plan may run before workers pull back: a
+// burst early in a window is fine, a pace that spends it before its reset is
+// not (10-25: three five-hour windows ran out 50 to 100 minutes early, and
+// one login's week was 75% gone a day in, the other two's already out).
 const aheadSlack = 0.15
 
 // defaultWorkers is where the workers' limit starts when no ceiling is set.
@@ -54,7 +67,13 @@ type pace struct {
 	at    time.Time
 	why   string
 	step  time.Duration // the least time between two changes; 0 is paceStep
+	shown time.Time     // when a strain was last seen
 }
+
+// onlyLoad says whether strain is the load per core alone (core.Loaded's
+// reason), which doesn't pull a limit under its start, nor hold a worker
+// from starting under it (loadHolds).
+func onlyLoad(strain string) bool { return strings.HasPrefix(strain, "machine loaded") }
 
 // next moves the limit for running things with waiting ones wanting more,
 // strain saying what strains the machine or plan ("" for nothing), watching
@@ -69,19 +88,27 @@ func (p *pace) next(now time.Time, running int, waiting bool, strain string, wat
 	if p.limit == 0 || start != p.start { // a restart starts from what already runs
 		p.limit, p.start, p.at, p.why = max(start, min(running, cmp.Or(top, running))), start, now, "the start"
 	}
-	if now.Sub(p.at) >= cmp.Or(p.step, paceStep) {
-		switch {
-		case strain != "":
-			l := max(1, min(p.limit, running)*3/4)
-			if running == 0 {
-				l = min(p.limit, start)
-			}
-			if l < p.limit {
-				p.limit, p.at, p.why = l, now, "pulled back: "+strain
-			}
-		case waiting && running >= p.limit && (top == 0 || p.limit < top):
-			p.limit, p.at, p.why = p.limit+1, now, "grew: room on the machine and plan"
+	step := cmp.Or(p.step, paceStep)
+	switch {
+	case strain != "":
+		p.shown = now
+		if now.Sub(p.at) < step {
+			break
 		}
+		floor := 1
+		if onlyLoad(strain) {
+			floor = start
+		}
+		l := max(floor, min(p.limit, running)*3/4)
+		if running == 0 {
+			l = min(p.limit, start)
+		}
+		if l < p.limit {
+			p.limit, p.at, p.why = l, now, "pulled back: "+strain
+		}
+	case waiting && running >= p.limit && (top == 0 || p.limit < top) &&
+		now.Sub(p.at) >= max(step, growStep) && now.Sub(p.shown) >= max(step, growStep):
+		p.limit, p.at, p.why = p.limit+1, now, "grew: room on the machine and plan"
 	}
 	if top > 0 && p.limit > top {
 		p.limit, p.why = top, "the ceiling"
@@ -125,6 +152,13 @@ func machine(cfg core.Config) (string, bool) {
 	return why, core.Watched(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax)
 }
 
+// loadHolds says whether strain holds a new worker with working of them at
+// work from start: every strain does, but load alone only past the start, as
+// the few workers there aren't what loads the machine.
+func loadHolds(strain string, working, start int) bool {
+	return strain != "" && (!onlyLoad(strain) || working >= start)
+}
+
 // steady is a strain without its readings ("machine loaded", not the load
 // now), for a reason saved with a task: readings that move each minute would
 // re-save it each minute.
@@ -143,7 +177,7 @@ func safeChecks() int { return 2 * core.DefaultMaxChecks() }
 
 // planSpent says when every model a worker would go on, the workspace's
 // route or any project's own, has under planFloor of its plan left, all
-// logins together, or is spending its five-hour window more than aheadSlack
+// logins together, or is spending a usage window more than aheadSlack
 // ahead of the clock, or "".
 func (m *Module) planSpent(cfg core.Config) string {
 	room, ahead := 0.0, -1.0
@@ -159,7 +193,7 @@ func (m *Module) planSpent(cfg core.Config) string {
 	case room < planFloor:
 		return fmt.Sprintf("the workers' plan is nearly spent (%.0f%% left)", room*100)
 	case ahead > aheadSlack:
-		return fmt.Sprintf("the workers' plan is %.0f%% ahead of its five-hour window and would run out before it resets", ahead*100)
+		return fmt.Sprintf("the workers' plan is %.0f%% ahead of the clock in a usage window and would run out before it resets", ahead*100)
 	}
 	return ""
 }
@@ -170,8 +204,8 @@ func (m *Module) planSpent(cfg core.Config) string {
 // active ones fill the limit, and a pull-back under strain starts from them.
 func (m *Module) paceWorkers(cfg core.Config, working int, waiting bool) int {
 	why, watching := machine(cfg)
-	if why == "" {
-		why = m.planSpent(cfg)
+	if why == "" || onlyLoad(why) { // load alone stops at the start; the plan doesn't
+		why = cmp.Or(m.planSpent(cfg), why)
 	}
 	before := m.workers.get()
 	defer m.journal("workers", &m.workers, before)
