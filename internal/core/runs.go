@@ -242,6 +242,23 @@ func (p Plan) ParkedUntil(now time.Time) time.Time {
 	return at
 }
 
+// stale reports whether p, a reading short of a rejection taken while old is
+// parked, was taken before the park: it parks the login for less time, and
+// the window that parked old (its week, at WeeklyStop, or its limit's)
+// hasn't reset since. A week's park is measured against the week's reset,
+// not the five-hour one the reading's top level often carries.
+func (p Plan) stale(old Plan, now time.Time) bool {
+	until := old.ParkedUntil(now)
+	if !p.ParkedUntil(now).Before(until) {
+		return false
+	}
+	if w, ok := old.Weekly(now); ok && w.Utilization >= WeeklyStop && w.ResetsAt.Equal(until) {
+		pw, ok := p.Weekly(now)
+		return !ok || !pw.ResetsAt.After(until)
+	}
+	return !p.Limit.ResetsAt.After(until)
+}
+
 // Standing is the login's state in plain words (RateLimit.Standing), or
 // that it has stopped at WeeklyStop of its week until the reset.
 func (p Plan) Standing(now time.Time) string {
@@ -643,7 +660,7 @@ func (rs *Runs) apply(e Event) {
 		// A turn that started before the limit can end after it with a
 		// reading taken before it: that doesn't lift the park, or the next
 		// turn starts only to be turned away (10-25, 10:41).
-		if old := rs.plans[p.Key()]; old.Parked(e.At) && p.Limit.Status != "rejected" && !p.Limit.ResetsAt.After(old.Limit.ResetsAt) {
+		if old := rs.plans[p.Key()]; old.Parked(e.At) && p.Limit.Status != "rejected" && p.stale(old, e.At) {
 			return
 		}
 		rs.plans[p.Key()] = p
