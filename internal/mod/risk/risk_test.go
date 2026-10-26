@@ -111,12 +111,13 @@ func contains(l []string, s string) bool {
 }
 
 // eventually polls ok for up to four seconds.
+// eventually waits up to a minute for ok: a module's install clones and
+// builds, which on a slow, throttled machine took longer than 4s.
 func eventually(ok func() bool) bool {
-	for i := 0; i < 200; i++ {
+	for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		if ok() {
 			return true
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
 	return ok()
 }
@@ -710,6 +711,8 @@ func TestInstallRefusesSandboxPath(t *testing.T) {
 // path, so it isn't refused, while the same path typed is.
 func TestInstallWithProjectUnderSandboxRoot(t *testing.T) {
 	g := newRig(t, 1)
+	// The daemon's temporary folder is exempt, and the workspace sits in it.
+	t.Setenv("TMPDIR", t.TempDir())
 	defer func(r []string) { sandboxRoots = r }(sandboxRoots)
 	sandboxRoots = []string{g.c.WS.Root}
 	g.c.Projects.Add(core.Project{Name: "tool", Repo: "me/tool"})
@@ -735,6 +738,21 @@ func TestInstallWithProjectUnderSandboxRoot(t *testing.T) {
 	}
 	if filed != 1 {
 		t.Fatalf("want one install ask for %s, got %+v", dir, g.c.Person.Open())
+	}
+}
+
+// The daemon's own temporary folder is the host's even under a sandbox root,
+// as when the score's e2e daemon runs with TMPDIR under /hive.
+func TestDaemonTempIsNotSandbox(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	defer func(r []string) { sandboxRoots = r }(sandboxRoots)
+	sandboxRoots = []string{tmp, "/work"}
+	if inSandbox(filepath.Join(tmp, "echo")) {
+		t.Error("a path in the daemon's temp folder was taken for a sandbox path")
+	}
+	if !inSandbox("/work/wordcount") {
+		t.Error("/work/wordcount isn't a sandbox path any more")
 	}
 }
 

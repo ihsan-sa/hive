@@ -867,7 +867,14 @@ func (m *Module) onAnswer(a core.Ask) {
 // Hive's folders; a path under one doesn't exist on the host.
 var sandboxRoots = []string{"/work", "/hive"}
 
+// inSandbox reports whether p is an agent's sandbox path. The daemon's own
+// temporary folder is the host's even when it sits under a root (a daemon
+// that itself runs in a sandbox, as the gate's and the score's e2e daemons
+// do, with TMPDIR under /hive).
 func inSandbox(p string) bool {
+	if tmp := filepath.Clean(os.TempDir()); p == tmp || strings.HasPrefix(p, tmp+"/") {
+		return false
+	}
 	for _, r := range sandboxRoots {
 		if p == r || strings.HasPrefix(p, r+"/") {
 			return true
