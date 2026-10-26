@@ -274,8 +274,8 @@ func tests(f map[string]int, n int) string {
 // CloseCalls names the probes whose pass counts differ on the two sides by
 // one run's worth at most (2/3 against 3/3, 0/3 against 1/3): a single flaky
 // run could turn them either way, so the gate runs them again before it
-// decides. A probe that passes as often on both sides, or two runs apart, is
-// not close.
+// decides. A probe that passes as often on both sides, two runs apart, or
+// never on one side and always on the other, is not close.
 func CloseCalls(cand, ctrl []Result) []string {
 	type tally struct{ pass, n int }
 	count := func(rs []Result) map[string]*tally {
@@ -299,7 +299,8 @@ func CloseCalls(cand, ctrl []Result) []string {
 			continue
 		}
 		cr, kr := float64(c.pass)/float64(c.n), float64(k.pass)/float64(k.n)
-		if cr != kr && math.Abs(cr-kr) <= 1/float64(min(c.n, k.n))+1e-9 {
+		opposite := (c.pass == 0 && k.pass == k.n) || (k.pass == 0 && c.pass == c.n) // 0/1 against 1/1 is no close call
+		if !opposite && cr != kr && math.Abs(cr-kr) <= 1/float64(min(c.n, k.n))+1e-9 {
 			out = append(out, p)
 		}
 	}

@@ -976,6 +976,8 @@ func TestCloseCalls(t *testing.T) {
 		{[]Result{fail, fail, pass}, []Result{pass, pass, pass}, false},
 		{[]Result{fail, pass, pass}, []Result{pass, fail, pass}, false},
 		{[]Result{pass, pass, pass}, nil, false},
+		{[]Result{fail}, []Result{pass}, false},
+		{[]Result{pass}, []Result{fail}, false},
 	} {
 		if got := len(CloseCalls(c.cand, c.ctrl)) > 0; got != c.close {
 			t.Errorf("CloseCalls(%v, %v) close %v, want %v", c.cand, c.ctrl, got, c.close)
