@@ -42,6 +42,10 @@ const (
 	DenyFile    = "scan-deny.txt"
 )
 
+// ErrNoHandles is the failure of a scan with no handle list: one only the
+// person can mend, by writing the list, so callers ask them rather than alert.
+var ErrNoHandles = errors.New("no handle list was given, so the scan can't look for people's handles and refuses to pass")
+
 // Lists is what one scan reads.
 type Lists struct {
 	Public  []string // globs of the published files; "!glob" leaves some out
@@ -98,7 +102,7 @@ func RunTime(env func(string) string, private string) (deny, handles []string, e
 		if private != "" {
 			where += " or " + filepath.Join(private, HandlesFile)
 		}
-		return nil, nil, errors.New("no handle list was given, so the scan can't look for people's handles and refuses to pass: put one handle per line in " + where)
+		return nil, nil, fmt.Errorf("%w: put one handle per line in %s", ErrNoHandles, where)
 	}
 	return deny, handles, nil
 }
@@ -346,7 +350,7 @@ func Run(names []string, read func(string) ([]byte, error), l Lists) error {
 		return errors.New("no public list, so the scan can't tell what is published and refuses to pass")
 	}
 	if len(l.Handles) == 0 {
-		return errors.New("no handle list was given, so the scan can't look for people's handles and refuses to pass")
+		return ErrNoHandles
 	}
 	files := Files(names, l.Public)
 	if len(files) == 0 {
