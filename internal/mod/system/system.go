@@ -20,6 +20,8 @@ type Job struct {
 	AtStart bool   // run soon after the daemon starts, not only after one interval
 	Default string // its schedule when config.json and the defaults name none
 	Fn      func() (string, error)
+
+	module bool // a module program serves it (RegisterModule)
 }
 
 // Wakeup is an agent's scheduled message to itself.
@@ -117,8 +119,22 @@ func (m *Module) RegisterModule(j Job) bool {
 	if have, ok := m.jobs[j.Name]; ok && (have.Default == "" || have.Default == j.Default) {
 		return have.Default != ""
 	}
+	j.module = true
 	m.jobs[j.Name] = j
 	return true
+}
+
+// KeepModuleJobs drops the jobs module programs served that no manifest names
+// any more (a module removed, or a schedule taken out of its manifest), so
+// none keeps asking a program that isn't there.
+func (m *Module) KeepModuleJobs(names map[string]bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for n, j := range m.jobs {
+		if j.module && !names[n] {
+			delete(m.jobs, n)
+		}
+	}
 }
 
 // Schedule is a parsed schedule string.
