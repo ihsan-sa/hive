@@ -1337,3 +1337,24 @@ func TestSizeLine(t *testing.T) {
 		t.Fatal("no size measured should show no line")
 	}
 }
+
+// A state poll sent before a settings save lands doesn't put the old value
+// back; one sent after it does, if the daemon refused the save.
+func TestASavedSettingDoesntFlickBack(t *testing.T) {
+	m := testModel(100, 30)
+	old := m.st.Config
+	c := old
+	c.ReviewRounds = old.ReviewRounds + 1
+	m.fetchState() // a poll in flight, its saved count taken before the save
+	stale := stateMsg{st: sample(), saved: m.saved}
+	m.saveConfig(c, "saved")
+	m.Update(stale)
+	if m.st.Config.ReviewRounds != c.ReviewRounds {
+		t.Fatalf("a poll from before the save showed review rounds %d", m.st.Config.ReviewRounds)
+	}
+	m.Update(savedMsg{n: m.saves, flash: "error: refused"})
+	m.Update(stateMsg{st: sample(), saved: m.saved})
+	if m.st.Config.ReviewRounds != old.ReviewRounds {
+		t.Fatal("the daemon's settings didn't come back after a refused save")
+	}
+}
