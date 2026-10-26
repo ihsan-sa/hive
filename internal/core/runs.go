@@ -1480,10 +1480,6 @@ func answerJSON(text string) json.RawMessage {
 	return nil
 }
 
-// passedResetWait is how long a turn at its limit waits when the reset its
-// harness named has already passed (endTurn).
-const passedResetWait = 15 * time.Second
-
 func (rs *Runs) endTurn(r Run) {
 	tl := rs.ReadTurn(r, r.Turn)
 	if HarnessName(r.Harness) == "codex" {
@@ -1504,18 +1500,19 @@ func (rs *Runs) endTurn(r Run) {
 	limited := tl.Result != nil && tl.Result.Limited || (tl.Limit != nil && tl.Limit.Status == "rejected" && (tl.Result == nil || tl.Result.IsError))
 	if limited {
 		// Park the login until its reset (an hour when the harness didn't
-		// say). A reset it named that has passed since, as the turn ended,
-		// is a window already open again: a short wait, not the hour.
+		// say). A reset it named that has passed by the turn's end is a
+		// limit that is over, not one with no reset: it waits a minute, so a
+		// harness repeating a stale reset doesn't spin, not the hour that
+		// parked the fake agent's three-second limit on a slow runner (PR #800).
 		l := harness.RateLimit{}
 		if tl.Limit != nil {
 			l = *tl.Limit
 		}
 		l.Status = "rejected"
-		switch now := time.Now(); {
-		case l.ResetsAt.IsZero():
-			l.ResetsAt = now.Add(time.Hour)
-		case !l.ResetsAt.After(now):
-			l.ResetsAt = now.Add(passedResetWait)
+		if l.ResetsAt.IsZero() {
+			l.ResetsAt = time.Now().Add(time.Hour)
+		} else if !l.ResetsAt.After(time.Now()) {
+			l.ResetsAt = time.Now().Add(time.Minute)
 		}
 		tl.Limit = &l
 	}

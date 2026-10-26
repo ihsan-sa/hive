@@ -376,10 +376,9 @@ func TestCodexUsageFromItsSessionFile(t *testing.T) {
 	}
 }
 
-// A reset the harness named that has passed by the time the turn ends (a
-// slow machine, a window that just rolled over) is a short wait, not the
-// hour a limit with no reset at all gets.
-func TestPassedResetWaitsBriefly(t *testing.T) {
+// A limit whose reset has passed by the turn's end is over: it parks the
+// login a minute, not the hour a limit that names no reset gets (#858).
+func TestLimitWhoseResetPassedWaitsAMinute(t *testing.T) {
 	ws := Workspace{Root: t.TempDir()}
 	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
 	if err != nil {
@@ -401,14 +400,17 @@ func TestPassedResetWaitsBriefly(t *testing.T) {
 	os.WriteFile(ws.TurnOut("r1", r.Turn), []byte(`{"type":"thread.started","thread_id":"th1"}
 {"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again later."}}
 `), 0o600)
+	reset := time.Now().Add(-5 * time.Second)
 	day := filepath.Join(home, "sessions", "2026", "10", "25")
 	os.MkdirAll(day, 0o700)
-	os.WriteFile(filepath.Join(day, "rollout-th1.jsonl"), fmt.Appendf(nil,
-		`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":100,"window_minutes":300,"resets_at":%d}}}}`+"\n",
-		time.Now().UTC().Format(time.RFC3339Nano), time.Now().Add(-5*time.Second).Unix()), 0o600)
+	os.WriteFile(filepath.Join(day, "rollout-2026-10-25T10-00-00-th1.jsonl"), []byte(fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":4200}},"rate_limits":{"primary":{"used_percent":100,"window_minutes":300,"resets_at":%d}}}}`+"\n",
+		time.Now().UTC().Format(time.RFC3339Nano), reset.Unix())), 0o600)
 	rs.endTurn(r)
-	got, _ := rs.Get("r1")
-	if got.Status != StatusParked || time.Until(got.ParkedUntil) > time.Minute {
-		t.Fatalf("run is %q until %v, want a wait of under a minute", got.Status, got.ParkedUntil)
+	p := rs.plans["codex"]
+	if wait := time.Until(p.Limit.ResetsAt); p.Limit.Status != "rejected" || wait <= 0 || wait > 2*time.Minute {
+		t.Fatalf("parked %v, want about a minute: %+v", wait, p)
+	}
+	if got, _ := rs.Get("r1"); got.Status != StatusParked || time.Until(got.ParkedUntil) > 2*time.Minute {
+		t.Fatalf("run is %q until %v, want a minute at most", got.Status, got.ParkedUntil)
 	}
 }

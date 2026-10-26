@@ -111,6 +111,35 @@ func TestNoCommitsWithoutSteps(t *testing.T) {
 	}
 }
 
+// A review follow-up whose worker finished done with no commit judged every
+// item in its account, so it is done and its issue closed; one that finished
+// blocked, or a plain ask with no commit, still blocks.
+func TestFollowUpNoCommitsIsDone(t *testing.T) {
+	m, forge, task, p := noCommitRig(t, 0)
+	task.FollowUp = "t0"
+	done := core.Run{RunSpec: core.RunSpec{ID: "w1"}, Finish: &core.Finish{Status: core.StatusDone, Account: "each item judged not worth doing"}}
+	m.noCommits(task, p, done)
+	if task.Stage != StageDone || len(forge.closed) != 1 {
+		t.Fatalf("stage %q, reason %q, closed %v", task.Stage, task.Reason, forge.closed)
+	}
+	if c := forge.Comments("me/p", 7); len(c) != 1 || !strings.Contains(c[0], "each item judged not worth doing") {
+		t.Fatalf("comments %q", c)
+	}
+
+	m, _, task, p = noCommitRig(t, 0)
+	task.FollowUp = "t0"
+	m.noCommits(task, p, core.Run{RunSpec: core.RunSpec{ID: "w1"}, Finish: &core.Finish{Status: core.StatusBlocked, Account: "stuck"}})
+	if task.Stage != StageBlocked {
+		t.Fatalf("a blocked follow-up: stage %q", task.Stage)
+	}
+
+	m, _, task, p = noCommitRig(t, 0)
+	m.noCommits(task, p, done)
+	if task.Stage != StageBlocked {
+		t.Fatalf("a plain ask: stage %q", task.Stage)
+	}
+}
+
 // A step still pending when the worker finishes blocks the task and is named
 // as pending, not as a failure.
 func TestNoCommitsWithPendingStep(t *testing.T) {
@@ -757,6 +786,21 @@ func TestFollowUpOnceAfterMerge(t *testing.T) {
 	keepAdvice(tk, []string{" name it better ", "", "test it"}) // a second read repeats one item
 	if strings.Join(tk.Advice, "|") != "name it better|test it" {
 		t.Fatalf("advice: %q", tk.Advice)
+	}
+}
+
+// A review follow-up filed before followUp named its aim, still queued with
+// none, is taken as a fix; one its worker or the lead aimed at a gain is a gain.
+func TestUnaimedFollowUpIsAFix(t *testing.T) {
+	fu := Task{ID: "t2", Title: "Follow up the review of x", FollowUp: "t1"}
+	if !fu.Fix() || !strings.Contains(fu.AimWord(), "follow-up of t1") {
+		t.Fatalf("an unaimed follow-up is taken as %s", fu.AimWord())
+	}
+	if fu.Aim = AimGain; fu.Fix() {
+		t.Fatal("a follow-up aimed at a gain is taken as a fix")
+	}
+	if plain := (Task{ID: "t3"}); plain.Fix() {
+		t.Fatal("an unaimed brief that follows up nothing is taken as a fix")
 	}
 }
 
