@@ -265,8 +265,7 @@ type tally struct {
 // files are the candidate's (cand), and so is its testdata: all of them for
 // "", else only the named file and those the control (ctrl) has alike.
 func (c *Child) reset(src, cand, ctrl string, ov map[string]string) error {
-	for _, d := range []string{"tree", "cover", "home", "tmp", "gopath", "hive"} {
-		p := filepath.Join(c.Root, d)
+	for _, p := range []string{filepath.Join(c.Root, "tree"), filepath.Join(c.Root, "cover"), c.Home(), c.Tmp(), filepath.Join(c.Root, "gopath"), c.Workspace()} {
 		if err := os.RemoveAll(p); err != nil {
 			makeWritable(p)
 			if err := os.RemoveAll(p); err != nil {
