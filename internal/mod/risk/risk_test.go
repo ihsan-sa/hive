@@ -111,12 +111,13 @@ func contains(l []string, s string) bool {
 }
 
 // eventually polls ok for up to four seconds.
+// eventually waits up to a minute for ok: a module's install clones and
+// builds, which on a slow, throttled machine took longer than 4s.
 func eventually(ok func() bool) bool {
-	for i := 0; i < 200; i++ {
+	for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		if ok() {
 			return true
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
 	return ok()
 }
