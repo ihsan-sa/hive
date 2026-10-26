@@ -409,7 +409,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
-	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","why","apart"} (aim: fix, with why naming the failure it fixes, merges on its tests, checks and reads and isn't reverted for a score dip alone; anything else is taken as a gain, which on the Hive's own repository merges only if the recursive gate shows it); one matching an open task not yet pushed (a test both name, a near-identical title) and taken the same way joins it as added context instead, unless apart`, Fn: m.opBrief})
+	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","why","apart","asked"} (aim: fix, with why naming the failure it fixes, merges on its tests, checks and reads and isn't reverted for a score dip alone; anything else is taken as a gain, which on the Hive's own repository merges only if the recursive gate shows it); one matching an open task not yet pushed (a test both name, a near-identical title) and taken the same way joins it as added context instead, unless apart; while the project's open tasks outnumber its merges over the last 6 hours (at least 10), a new gain isn't filed, but a fix is, and so is the person's ask given in their words as asked`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: []string{"worker", "lead"}, Help: `{"task","aim":"fix"|"gain","why"} (a worker's own task by default) -> sets whether the task is a fix of the failure why names, which merges on its tests, checks and reads and isn't reverted for a score dip alone, or a gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: steerers, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
 	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: steerers, Help: `{"task"} (a worker's own task by default) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
@@ -503,6 +503,9 @@ type Brief struct {
 	// Apart files an agent's brief as its own task even when it matches an
 	// open one (join.go).
 	Apart bool `json:"apart"`
+	// Asked is the person's words, when an agent files their ask: it is
+	// filed however long the backlog (inflow.go), with the words in its known.
+	Asked string `json:"asked"`
 }
 
 // File creates a task from a brief.
@@ -660,6 +663,14 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 		own, _ := m.taskOf(r.ID)
 		if t, why, ok := m.join(b, own.ID); ok {
 			return map[string]string{"task": t.ID, "joined": "true", "note": fmt.Sprintf("not filed anew: %s, so your brief joins open task %s (%q, %s) as added context; if it is different work, file it again with apart", why, t.ID, t.Label(), t.Stage)}, nil
+		}
+	}
+	if asked := strings.TrimSpace(b.Asked); asked != "" {
+		b.Known = strings.TrimSpace("The person asked: " + core.Clip(asked, 1500) + "\n\n" + b.Known)
+	} else if !b.fix() && strings.TrimSpace(b.Aim) != AimFix {
+		if why := m.slowed(b.Project, time.Now()); why != "" {
+			m.C.J.MustAppend("brief.slowed", map[string]string{"project": b.Project, "from": b.From, "title": core.Clip(b.Title, 200)})
+			return nil, errors.New(why)
 		}
 	}
 	t, err := m.File(b)
