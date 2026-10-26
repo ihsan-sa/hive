@@ -74,6 +74,25 @@ So the standard prompts make a hub, not a hive: almost every message goes throug
 
 ## Results
 
-Not run on real agents yet: a sub-Hive needs the host's Claude login, which an agent's sandbox doesn't hold (`claude -p` there says "Not logged in"), so the real run goes to a warden on the host, from main once this lands (follow-up brief filed with this change).
+A sub-Hive needs the host's Claude login, which an agent's sandbox doesn't hold (`claude -p` there says "Not logged in"), so a real run goes to a warden on the host. The step limit is 10 minutes, so the warden starts it as a detached `systemd-run --user` service with the scope's limits, not as a scope.
+
+### `standard` against `essay`, under the caps (2026-10-25, real4)
+
+Task 261025-165948, issue #822. A warden step (request 261025-182842) started the unit `hive-soft-261025-real4` from main 45079e9: `MemoryHigh=2500M`, `MemoryMax=3G`, `MemorySwapMax=0`, `CPUWeight=20`, `IOWeight=20`, `Nice=10`. It waited for the earlier five-arm run (real3) to end, so one arm ran on the machine at a time, and then ran 21:19-21:55Z. Each sub-Hive cloned the host's main at that moment (6043ef38c), whose tests were green; the task was the default one, the `# hive-timeout:` line on an approved warden step. Output: `~/hive/.hive/soft-layer/261025-real4/`.
+
+| arm | outcome | minutes | runs | turns | messages | peer | briefs | helpers | asks | finished | notes | feedback | merged | peak MB | peak load |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| standard | landed f9f2749b0 after 17m1s | 17 | 5 | 6 | 0 | 0 | 2 | 0 | 0 | done 1 | 0 | 0 | 1 | 866 | 49.4 |
+| essay | landed b1f4df6b7 after 17m21s | 18 | 5 | 6 | 0 | 0 | 2 | 0 | 0 | done 1 | 0 | 0 | 1 | 842 | 52.8 |
+
+The run's cgroup peaked at 2126 MB, under the 3 GB ceiling. That was with a lead, a worker and a reviewer at a time, and nothing swapped. Peak load is the whole machine's, the Hive's own work included. The test exited FAIL only because `t.TempDir` couldn't remove each sub-Hive's read-only Go module cache; `settle` now makes those folders writable first (`TestSettleRemovesReadOnlyFolders`).
+
+What each arm did:
+
+- **Same shape, same time.** Lead files the ask as a fix (one brief), worker commits in about 3 minutes, its tests wait about 11 minutes behind the score run on main (`max_checks` 1), then tests, a reader and the security reader land it; the second brief is the automatic review follow-up, which the test stops. Of the 17 minutes, the queue is two thirds.
+- **The `essay` worker built what was asked; the `standard` worker didn't.** `essay`: a `# hive-timeout: <duration>` line in the script, read by one `StepTimeout` that the warden's decision and the run both call, capped at 4h, bad values refused at decision, "timed out after X", the warden and tribunal prompts and `docs/risk.md` updated (79 lines). `standard`: `--timeout` flags on `hive agent warden` and `decide` instead of a line in the script (105 lines). Both readers, the security reader included, passed it. That is the same drift `chatty`'s worker made in real3: the brief's mechanism replaced by a nearby one, and review checking the code, not the code against the brief.
+- **No hive, either way.** No messages at all, no `hive agent status`, no knowledge-base search, no notes, no feedback, no asks. With one worker at a time there is no peer to talk to, so this run can't show lateral talk; it shows only that neither wording makes a lone worker reach for the Hive's memory.
+
+So on one real task, the person's essay with one-line roles did as well as the standard prompts, a little better in fidelity, at the same cost. One task and one run each is an anecdote, not a measurement: the next runs add the other arms one or two at a time, and a task that needs two workers at once is what can show whether any arm talks laterally.
 
 On the fake harness, which ignores its prompts, the runs show the pipeline only: every arm installs and is used (the test checks each run's system prompt), on the demo project an ask lands in about 30 seconds, and on the clone of the Hive's own source (`philosophy`, 2026-10-25) the default task went lead → worker → the clone's full `go vet` and short tests → review → merge in 50 seconds, with no messages. The first clone runs (`quiet`, `essay`) found the one hard-layer gap a sub-Hive of the Hive's source hits: the forge checks no local forge runs (step 4).
