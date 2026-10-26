@@ -76,6 +76,36 @@ func TestAWorkerThatNeverFinishesEndsBlocked(t *testing.T) {
 	}
 }
 
+// An agent ends a quiet run blocked only while it is still quiet and no turn
+// of it is starting; a message after doesn't wake it, as one does a run
+// blocked on its own.
+func TestEndQuietOnlyWhileQuiet(t *testing.T) {
+	c, _ := testHive(t)
+	c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker", Checkout: t.TempDir()})
+	c.Runs.SetStatus("w1", StatusIdle, "nudged")
+	if err := c.Runs.EndQuiet("w1", StoppedQuiet+"lead: x"); err == nil {
+		t.Fatal("ended a run that isn't quiet")
+	}
+	c.Runs.SetStatus("w1", StatusQuiet, "keeps ending turns")
+	c.Runs.mu.Lock()
+	c.Runs.starting = map[string]bool{"w1": true}
+	c.Runs.mu.Unlock()
+	if err := c.Runs.EndQuiet("w1", StoppedQuiet+"lead: x"); err == nil {
+		t.Fatal("ended a run whose turn is starting")
+	}
+	c.Runs.mu.Lock()
+	delete(c.Runs.starting, "w1")
+	c.Runs.mu.Unlock()
+	if err := c.Runs.EndQuiet("w1", StoppedQuiet+"lead: x"); err != nil {
+		t.Fatal(err)
+	}
+	c.J.MustAppend("run.queued", runNote{ID: "w1", Text: "late message"})
+	c.Runs.wake("w1")
+	if r, _ := c.Runs.Get("w1"); r.Status != StatusBlocked || !strings.HasPrefix(r.Reason, StoppedQuiet) {
+		t.Fatalf("after a message: %q (%q), want it still ended", r.Status, r.Reason)
+	}
+}
+
 // headMark reads the commit HEAD points at, as git does, from a loose ref,
 // packed refs and a worktree, without running git in the checkout.
 func TestHeadMarkReadsTheCommit(t *testing.T) {
