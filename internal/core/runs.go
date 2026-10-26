@@ -1206,7 +1206,7 @@ func (rs *Runs) wake(id string) {
 	rs.waking.Lock() // Send and endTurn can both see it; it's woken once
 	defer rs.waking.Unlock()
 	r, ok := rs.Get(id)
-	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) {
+	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) || strings.HasPrefix(r.Reason, StoppedQuiet) {
 		return
 	}
 	rs.append("run.reopened", runNote{ID: id})
@@ -1261,6 +1261,36 @@ func (rs *Runs) Progress(id, text string) {
 // SetStatus records a status change made by a module (e.g. handing a quiet run on).
 func (rs *Runs) SetStatus(id, status, reason string) {
 	rs.append("run.status", runNote{ID: id, Status: status, Reason: reason})
+}
+
+// StoppedQuiet opens the reason of a quiet run an agent ended with EndQuiet.
+const StoppedQuiet = "stopped while quiet by "
+
+// EndQuiet ends a quiet run blocked with reason (StoppedQuiet first), only if
+// it is still quiet and no turn of it is starting: a message that woke it
+// since the caller looked keeps it going. A message later doesn't wake it;
+// Reopen still does.
+func (rs *Runs) EndQuiet(id, reason string) error {
+	rs.mu.Lock()
+	cur := rs.runs[id]
+	switch {
+	case cur == nil:
+		rs.mu.Unlock()
+		return ErrNotFound
+	case cur.Status != StatusQuiet || rs.starting[id]:
+		rs.mu.Unlock()
+		return fmt.Errorf("run %s is %s, not quiet", id, cur.Status)
+	}
+	if rs.starting == nil {
+		rs.starting = map[string]bool{}
+	}
+	rs.starting[id] = true // launch refuses it meanwhile
+	rs.mu.Unlock()
+	rs.append("run.status", runNote{ID: id, Status: StatusBlocked, Reason: reason})
+	rs.mu.Lock()
+	delete(rs.starting, id)
+	rs.mu.Unlock()
+	return nil
 }
 
 // Stop ends a run on purpose; it will not be retried.
@@ -1847,8 +1877,9 @@ const PendingSep = "\n\n---\n\n"
 func (rs *Runs) launch(r Run, cfg Config) {
 	rs.mu.Lock()
 	// A turn starts at most once: not over a live one, nor from a copy of
-	// the run older than its last turn, nor beside another launch of it.
-	if cur := rs.runs[r.ID]; len(rs.holds) > 0 || cur == nil || cur.Status == StatusRunning || cur.Turn != r.Turn || rs.starting[r.ID] {
+	// the run older than its last turn or status (one ended meanwhile stays
+	// ended), nor beside another launch of it.
+	if cur := rs.runs[r.ID]; len(rs.holds) > 0 || cur == nil || cur.Status == StatusRunning || cur.Status != r.Status || cur.Turn != r.Turn || rs.starting[r.ID] {
 		rs.mu.Unlock()
 		return
 	}
