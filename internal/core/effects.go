@@ -2005,6 +2005,11 @@ type CheckFailure struct {
 	Keys []string `json:"keys,omitempty"`
 	// OnlyTests says the log shows nothing failing apart from Keys.
 	OnlyTests bool `json:"only_tests,omitempty"`
+	// Head and Base are the commits the forge merged before running the
+	// check (TestedMerge): a pull request's checks run on its head merged
+	// with main as it was then, which may be older than main now.
+	Head string `json:"head,omitempty"`
+	Base string `json:"base,omitempty"`
 }
 
 // CheckFailure reads a failed check's log on repo's forge with the Hive's own
@@ -2029,6 +2034,7 @@ func (e *Effects) CheckFailure(repo string, r CheckRun) (CheckFailure, bool) {
 	}
 	keys, placed := FailedTestKeys(log)
 	f = CheckFailure{Tests: FailedTests(log), Keys: keys, Excerpt: LogExcerpt(log, ExcerptLines), OnlyTests: placed && OnlyTests(log)}
+	f.Head, f.Base = TestedMerge(log)
 	e.mu.Lock()
 	if e.failing == nil || len(e.failing) > 500 {
 		e.failing = map[string]CheckFailure{}
@@ -2075,6 +2081,20 @@ func LogExcerpt(log string, n int) string {
 		}
 	}
 	return strings.Join(lines[start:end], "\n")
+}
+
+// ghTestMerge is the merge commit GitHub runs a pull request's checks on,
+// whose message its checkout step prints ("HEAD is now at a9ae988 Merge
+// <head> into <base>").
+var ghTestMerge = regexp.MustCompile(`\bMerge ([0-9a-f]{40}) into ([0-9a-f]{40})\b`)
+
+// TestedMerge is the head and base a CI job's log says it merged and ran
+// on, or "" for both when it names no such merge (a push, not a PR).
+func TestedMerge(log string) (head, base string) {
+	if m := ghTestMerge.FindStringSubmatch(log); m != nil {
+		return m[1], m[2]
+	}
+	return "", ""
 }
 
 // CheckNames lists checks by name, for a message.

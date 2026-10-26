@@ -1397,6 +1397,16 @@ func TestSecurityWhere(t *testing.T) {
 	}
 }
 
+func TestTestedMerge(t *testing.T) {
+	h, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	if gh, gb := TestedMerge("##[group]Run actions/checkout@v4\nHEAD is now at 1234567 Merge " + h + " into " + b + "\n"); gh != h || gb != b {
+		t.Fatalf("got %q %q", gh, gb)
+	}
+	if gh, gb := TestedMerge("HEAD is now at 1234567 a push\n"); gh != "" || gb != "" {
+		t.Fatalf("got %q %q", gh, gb)
+	}
+}
+
 // A branch that merged main after its checkpoint landed (#880) is brought up
 // to date, not sent back as conflicting: from the checkpoint, both sides would
 // carry main's later change to a line the branch then changed again.

@@ -2855,15 +2855,34 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		fmt.Fprintf(&whole, format, a...)
 		fmt.Fprintf(&short, format, a...)
 	}
-	both("# The forge's failed checks on %s\n\nPR #%d, task %s, based on main at %s.\n", core.Short(t.SHA), t.PR.Number, t.ID, core.Short(main))
-	both("%s", m.bundleForChecks(t, p, main))
+	// The main the checks ran with is the one their logs name, not main now:
+	// a fix that landed since is in main but wasn't in what they ran.
+	fails := make([]core.CheckFailure, len(failed))
+	reads := make([]bool, len(failed))
+	tested := ""
+	for i, r := range failed {
+		fails[i], reads[i] = m.C.Effects.CheckFailure(p.Repo, r)
+		if f := fails[i]; tested == "" && f.Base != "" && f.Head == t.SHA {
+			tested = f.Base
+		}
+	}
+	both("# The forge's failed checks on %s\n\n", core.Short(t.SHA))
+	switch {
+	case tested == "":
+		both("PR #%d, task %s. Main is at %s now; the checks' logs don't say which main they merged the branch with, which may be older.\n", t.PR.Number, t.ID, core.Short(main))
+	case tested == main:
+		both("PR #%d, task %s, run merged with main at %s.\n", t.PR.Number, t.ID, core.Short(main))
+	default:
+		both("PR #%d, task %s, run merged with main at %s, as the checks' logs say. Main has moved to %s since: what landed between isn't in what they ran, so a test failing here may be one main has fixed since (`git log %s..%s`).\n", t.PR.Number, t.ID, core.Short(tested), core.Short(main), core.Short(tested), core.Short(main))
+	}
+	both("%s", m.bundleForChecks(t, p, cmp.Or(tested, main)))
 	logs := 0
-	for _, r := range failed {
+	for i, r := range failed {
 		both("\n## %s\n\n", r.Name)
 		if r.URL != "" {
 			both("Link: %s\n", r.URL)
 		}
-		f, read := m.C.Effects.CheckFailure(p.Repo, r)
+		f, read := fails[i], reads[i]
 		switch {
 		case !read:
 			both("Failing tests: the log couldn't be read\n")
@@ -2874,6 +2893,8 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		}
 		if sha := at[r.Name]; sha != "" {
 			both("On main at %s (the newest commit whose run of it finished; at %s it was cancelled or still runs): %s\n", core.Short(sha), core.Short(main), m.onMain(p, r.Name, mainRuns))
+		} else if tested != "" && tested != main {
+			both("On main at %s (newer than the %s these checks ran with): %s\n", core.Short(main), core.Short(tested), m.onMain(p, r.Name, mainRuns))
 		} else {
 			both("On main at %s: %s\n", core.Short(main), m.onMain(p, r.Name, mainRuns))
 		}
@@ -2923,7 +2944,11 @@ func (m *Module) bundleForChecks(t *Task, p core.Project, main string) string {
 	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
 		return holds + " (" + fetchMain + ").\n"
 	}
-	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. " + holds + ": " + fetchMain + ", then merge FETCH_HEAD to see and run what the checks ran.\n"
+	merge := "merge FETCH_HEAD to see and run what the checks ran"
+	if head != main {
+		merge = "merge " + core.Short(main) + " (in it) to see and run what the checks ran, or FETCH_HEAD for main now"
+	}
+	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. " + holds + ": " + fetchMain + ", then " + merge + ".\n"
 }
 
 // bundleFailed journals a main.bundle that couldn't be written, so a worker
