@@ -163,3 +163,45 @@ func TestATurnClaimRefusesALinkedLock(t *testing.T) {
 		t.Error("the claim created a file through the link")
 	}
 }
+
+// Two reopens 2 s apart (a fix round sent twice) start one turn: the second
+// lands mid-turn and leaves the run running, and even a launch that gets
+// past that finds this daemon's own turn still running in the claim
+// (issue #1022).
+func TestASecondReopenMidTurnStartsNoTwin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sleep stands in for the agent")
+	}
+	c, _ := testHive(t)
+	rs := c.Runs
+	var n atomic.Int32
+	rs.sandbox = func() (sandbox.Sandbox, error) { return claimSB{n: &n, agent: sleeper(t)}, nil }
+	r, err := rs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := rs.ws.LoadConfig()
+	rs.launch(r, cfg)
+	if err := rs.Reopen("w1", "fix round"); err != nil {
+		t.Fatal(err)
+	}
+	r, _ = rs.Get("w1")
+	if r.Status != StatusRunning || !r.Reopened || len(r.Pending) != 1 {
+		t.Fatalf("a reopen mid-turn: status %s, reopened %v, %d pending; want running, reopened, the message waiting", r.Status, r.Reopened, len(r.Pending))
+	}
+	rs.launch(r, cfg)
+	r.Status = StatusIdle // a copy that missed the turn's start
+	rs.mu.Lock()
+	rs.runs["w1"].Status = StatusIdle
+	rs.mu.Unlock()
+	rs.launch(r, cfg)
+	if got := n.Load(); got != 1 {
+		t.Fatalf("%d turns started while the first still runs, want 1", got)
+	}
+	for _, e := range c.J.Since(0) {
+		var al map[string]string
+		if e.Kind == "alert.raised" && e.Decode(&al) == nil && al["ref"] == "turn-claim" {
+			t.Errorf("this daemon's own live turn was said as a second daemon: %s", al["text"])
+		}
+	}
+}

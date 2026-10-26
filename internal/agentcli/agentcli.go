@@ -96,7 +96,7 @@ func Main(argv []string) int {
 
 // switches are the yes/no arguments, which may stand bare before another
 // --key; any other key takes the next word as its value, even "--help".
-var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "delete_branch": true, "apart": true}
+var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "delete_branch": true, "apart": true, "fresh": true}
 
 // parseArgs accepts one JSON object, `-` for JSON on stdin, `--file x.json`,
 // or --key value pairs (a value of @path reads that file's text).
@@ -184,6 +184,7 @@ A value of @path reads that file. Common ops:
   search    --query "words" [--limit n|all]     the knowledge base pieces that match, best first
   remember  --title "..." --text "..." [--tags a,b]   write to the knowledge base
   feedback  --text "..." [--about "agents/worker.md"]   what about the Hive got in your way, for the person
+  feedback  --fixed <feedback id> --task <task id>   that task fixes it: it closes when the task lands
   schedule  --in 2h --text "..."                 a wake-up message to yourself
   status                                         projects, work in flight, scores
   github    --pr N | --checks sha | --annotations id | --path "repos/o/r/..." [--repo o/r]
@@ -198,6 +199,9 @@ The loop is every agent's: these act on your own project's tasks, on the record 
                                                  checked again from its head; --back sends its worker that
   landed    --task id --why "..." [--merge sha]  end a task whose PR merged on the forge or whose
                                                  work is on main, so the briefs waiting on it start
+  stop      --task id --why "..." [--fresh]   end a working task's quiet worker (one that keeps ending
+                                                 turns without finishing) as blocked; bring the task back
+                                                 with recheck, or --fresh hands it to a new worker at once
   pr_ready  --task id [--why "..."]              (lead) mark the Hive's own PR ready; its merge goes on
   pr_draft  --task id --why "..."                (lead) mark it a draft; its task waits, not stopped
   pr_close  --task id --comment "..." [--delete_branch]   (lead) close it with a comment, ending its
