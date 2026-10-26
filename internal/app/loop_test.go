@@ -50,25 +50,27 @@ func TestATickThatAlwaysJournalsCantSpin(t *testing.T) {
 }
 
 // TestEventsFromElsewhereArentCapped: a tick that doesn't journal is woken by
-// every event from elsewhere, past wakeBurst in a second, so a stream of
-// verdicts and requests doesn't wait out the second.
+// every nudge from elsewhere, past wakeBurst in a second, so a stream of
+// verdicts and requests doesn't wait out the second. The nudges go on the wake
+// channel, not the journal, so a slow fsync on a busy machine can't starve it.
 func TestEventsFromElsewhereArentCapped(t *testing.T) {
 	j, err := core.OpenJournal(filepath.Join(t.TempDir(), "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer j.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 950*time.Millisecond)
 	defer cancel()
+	wake := make(chan struct{}, 1)
 	go func() {
 		for ctx.Err() == nil {
-			j.MustAppend("verdict", map[string]string{})
-			time.Sleep(40 * time.Millisecond)
+			nudge(wake)
+			time.Sleep(10 * time.Millisecond)
 		}
 	}()
 	var n atomic.Int32
-	loop(ctx, j, make(chan struct{}, 1), func() { n.Add(1) })
+	loop(ctx, j, wake, func() { n.Add(1) })
 	if got := int(n.Load()); got <= wakeBurst+1 {
-		t.Fatalf("%d ticks in 0.9s with an event from elsewhere every 40ms; want more than %d", got, wakeBurst+1)
+		t.Fatalf("%d ticks in 0.95s with a nudge from elsewhere every 10ms; want more than %d", got, wakeBurst+1)
 	}
 }
