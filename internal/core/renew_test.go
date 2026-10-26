@@ -369,6 +369,59 @@ func TestHarnessBinRefusesAgentWritableFolders(t *testing.T) {
 	}
 }
 
+// A harness check killed on a loaded machine is retried before the person
+// hears of it: it is told only once it repeats askAfter times, and a check
+// that runs again in between clears it without a word.
+func TestKilledCheckIsRetriedBeforeTheAsk(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(4*time.Hour))
+	killed := "#!/bin/sh\nkill -9 $$\n"
+	os.WriteFile(filepath.Join(k.bin, "claude"), []byte(killed), 0o755)
+	k.skipBackoff()
+	k.tk.Watch()
+	if s := k.state(); s.Failures != 1 || !strings.Contains(s.Error, "killed") {
+		t.Fatalf("the killed check is a failure on record: %+v", s)
+	}
+	if n, _ := k.events("alert.raised"); n != 0 || len(k.asks()) != 0 {
+		t.Fatal("one killed check, hours from the expiry, isn't put to the person")
+	}
+	k.harness(renews(time.Now().Add(14 * time.Hour)))
+	k.skipBackoff()
+	k.tk.Watch()
+	if n, _ := k.events("alert.raised"); n != 0 || k.state().Error != "" {
+		t.Fatalf("a check that runs again clears it quietly: %d alerts, %+v", n, k.state())
+	}
+
+	os.WriteFile(filepath.Join(k.bin, "claude"), []byte(killed), 0o755)
+	for i := 1; i < askAfter; i++ {
+		k.skipBackoff()
+		k.tk.Watch()
+	}
+	if n, _ := k.events("alert.raised"); n != 0 {
+		t.Fatalf("not yet told after %d killed checks", askAfter-1)
+	}
+	k.skipBackoff()
+	k.tk.Watch()
+	if n, _ := k.events("alert.raised"); n != 1 || len(k.asks()) != 1 {
+		t.Fatalf("told once it repeats %d times: %d alerts, %d asks", askAfter, n, len(k.asks()))
+	}
+	k.skipBackoff()
+	k.tk.Watch()
+	if n, _ := k.events("alert.raised"); n != 1 {
+		t.Fatal("and told once")
+	}
+}
+
+// A killed check with the login near its expiry is put to the person at once.
+func TestKilledCheckNearExpiryIsToldAtOnce(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(30*time.Minute))
+	os.WriteFile(filepath.Join(k.bin, "claude"), []byte("#!/bin/sh\nkill -9 $$\n"), 0o755)
+	k.skipBackoff()
+	k.tk.Watch()
+	if n, _ := k.events("alert.raised"); n != 1 || len(k.asks()) != 1 {
+		t.Fatalf("near the expiry there's no time to wait: %d alerts", n)
+	}
+}
+
 // A renewal turned away by the plan's usage limit isn't a failure: the login
 // is parked until the limit resets, nothing is asked of the person (logging
 // in again changes nothing), an ask an earlier failure left open closes, a
