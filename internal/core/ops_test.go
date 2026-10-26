@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,6 +90,29 @@ func TestSpawnedHelper(t *testing.T) {
 	p, _ := c.Runs.Get("parent")
 	if created != 1 || len(p.Pending) != 2 || !strings.Contains(p.Pending[0], "pull request, task t-done") || strings.Contains(p.Pending[1], "pull request") {
 		t.Fatalf("started %d times, parent's queue %q", created, p.Pending)
+	}
+}
+
+// An agent spawns only workers and reviewers: a lead's role carries the
+// strain exemption and the top priority, so only the daemon makes one.
+func TestSpawnNeverMakesALead(t *testing.T) {
+	c, _ := testHive(t)
+	parent, err := c.Runs.Start(RunSpec{ID: "parent", Role: "worker", Harness: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := false
+	c.Runs.Ops().SetSpawner(func(Run, string, string, string, string) (RunSpec, error) {
+		asked = true
+		return RunSpec{}, errors.New("not reached")
+	})
+	for _, role := range []string{"lead", "warden", "sweep"} {
+		if _, err := c.Runs.Ops().Call(parent, "spawn", json.RawMessage(`{"role": "`+role+`", "brief": "x"}`)); err == nil || !strings.Contains(err.Error(), "workers or reviewers") {
+			t.Errorf("spawn as %s: %v, want refused", role, err)
+		}
+	}
+	if asked {
+		t.Fatal("the spawner was asked for a role an agent may not spawn")
 	}
 }
 
