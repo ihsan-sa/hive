@@ -195,7 +195,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				continue // one that waits on another holds no one back, so waits never chain
 			case working >= limit && (!quick || quickWorking > 0 || !plan()):
 				wait[t.ID], capped = full, true
-			case strain != "":
+			case loadHolds(strain, working, cmp.Or(cfg.MaxWorkers, defaultWorkers)):
 				wait[t.ID] = "waiting: " + steady(strain)
 			default:
 				start[t.ID] = true
@@ -782,7 +782,9 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 	}
 	var notes []string
 	if len(a.Order) > 0 { // a new order replaces the old one: the rest go after, as filed
-		for _, t := range m.List(func(t Task) bool { return t.Queued() && t.Order > 0 }) {
+		// Only in the caller's reach: another project's order is kept, and
+		// not one note each for the briefs it never named.
+		for _, t := range m.List(func(t Task) bool { return t.Queued() && t.Order > 0 && m.reach(r, t.Project) == nil }) {
 			if changes[t.ID] == nil {
 				at(t.ID).order = 0
 			}

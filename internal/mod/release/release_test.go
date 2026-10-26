@@ -395,7 +395,22 @@ func selfHive(t *testing.T) (*Module, *notes, func(int, string, string, ...strin
 	m, _ := releaseAt(t, "0.0.0-dev", "me/hive") // a source build, so tags count from v0.0.0
 	n := &notes{Local: m.C.Effects.Forge.(*core.Local), got: map[string]string{}}
 	m.C.Effects.Forge = n
-	m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true})
+	m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true, Branch: "main"})
+	// A clone whose main has no steward record, which the release reads.
+	if _, err := n.Local.EnsureRepo("me/hive", "", false); err != nil {
+		t.Fatal(err)
+	}
+	seed := t.TempDir()
+	for _, args := range [][]string{{"clone", "-q", n.Local.RepoPath("me/hive"), seed},
+		{"-C", seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "seed"}, {"-C", seed, "push", "-q", "origin", "HEAD:main"}} {
+		if _, err := core.Git("", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, _ := m.C.Projects.Get("hive")
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
 	m.Scan = func(core.Project, string) error { return nil } // scan_test.go tests the scan
 	merged := func(pr int, sha, mergeSHA string, root ...string) {
 		m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": pr, "sha": sha, "merge_sha": mergeSHA, "root": root})
@@ -468,8 +483,8 @@ func TestRootReleaseOnTheHivesReads(t *testing.T) {
 	}
 }
 
-// A root-class path off the security list never gets a seat's read, so the
-// release that carries it waits for the person, read or not.
+// A root path no security read passed (here no seat read its diff at all)
+// holds the release for the person.
 func TestRootPathNoSeatReadsHolds(t *testing.T) {
 	m, n, _, land := selfHive(t)
 	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 4, "sha": "a4", "merge_sha": "m4", "root": []string{".github/CODEOWNERS"}, "diff": "d4"})
@@ -481,6 +496,91 @@ func TestRootPathNoSeatReadsHolds(t *testing.T) {
 	}
 	if len(m.C.Person.Told(5)) != 0 {
 		t.Fatal("told the person about a release that didn't go out")
+	}
+}
+
+// A security read that ran and didn't pass holds the release: an outside fix
+// outweighs the seats' and panel's land, and a security seat's fix isn't
+// outweighed by the panel's majority.
+func TestRootReadThatFailedHolds(t *testing.T) {
+	for name, read := range map[string]func(m *Module){
+		"outside fix": func(m *Module) {
+			for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
+				seated(m, "a2", "d2", seat, "land")
+			}
+			m.C.J.MustAppend("effect.read", core.OutsideRead{Project: "hive", SHA: "a2", Diff: "d2", By: "perms", Verdict: "fix"})
+		},
+		"seat fix": func(m *Module) {
+			seated(m, "a2", "d2", core.SeatSecurity, "fix")
+			for _, seat := range []string{core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
+				seated(m, "a2", "d2", seat, "land")
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, n, _, land := selfHive(t)
+			m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh"}, "diff": "d2"})
+			land("a2", "r2")
+			read(m)
+			m.AfterKept("hive", "m2")
+			asks := m.C.Person.Open()
+			if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, "install/root.sh run with elevated rights") {
+				t.Fatalf("a root path whose security read said fix released: %v %+v", n.got, asks)
+			}
+			if len(m.C.Person.Told(5)) != 0 {
+				t.Fatal("told the person about a release that didn't go out")
+			}
+		})
+	}
+}
+
+// The seats read a merge's whole own diff, so their land passes every root
+// path in it, one on the security list and one only in the root class alike;
+// an outside land on its own does too.
+func TestRootReadCoversTheWholeDiff(t *testing.T) {
+	m, n, _, land := selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh", ".github/CODEOWNERS"}, "diff": "d2"})
+	land("a2", "r2")
+	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1)} {
+		seated(m, "a2", "d2", seat, "land")
+	}
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 3, "sha": "a3", "merge_sha": "m3", "root": []string{".github/CODEOWNERS"}, "diff": "d3"})
+	land("a3", "r3")
+	m.C.J.MustAppend("effect.read", core.OutsideRead{Project: "hive", SHA: "a3", Diff: "d3", By: "architect", Verdict: "land"})
+	m.AfterKept("hive", "m3")
+	body := n.got["v0.0.1"]
+	if !strings.Contains(body, "(install/root.sh, .github/CODEOWNERS) passed the security seat") || !strings.Contains(body, "(.github/CODEOWNERS) passed the box's architect read") {
+		t.Fatalf("both merges' root paths should pass on their reads: %v", n.got)
+	}
+}
+
+// A root merge recorded before effect.merged carried its diff can't be matched
+// to any read, so it holds, and the ask says why.
+func TestRootMergeWithNoDiffHolds(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(2, "a2", "m2", "install/root.sh")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	asks := m.C.Person.Open()
+	if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, "merge record names no diff") {
+		t.Fatalf("a root merge with no diff should hold and say why: %v %+v", n.got, asks)
+	}
+}
+
+// A cut answers only the release asks at merges it covers: one at a commit
+// no release covered, or another project's, stays open.
+func TestCutAnswersOnlyCoveredAsks(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	m.C.Person.Ask(core.Ask{Kind: "release", Ref: "hive@m9", Project: "hive", Title: "stray", Options: []string{"release", "hold"}})
+	m.C.Person.Ask(core.Ask{Kind: "release", Ref: "other@m2", Project: "other", Title: "other", Options: []string{"release", "hold"}})
+	m.AfterKept("hive", "m2")
+	if len(n.got) != 1 {
+		t.Fatalf("no release: %v", n.got)
+	}
+	if open := m.C.Person.Open(); len(open) != 2 {
+		t.Fatalf("the cut answered asks it doesn't cover: %+v", open)
 	}
 }
 

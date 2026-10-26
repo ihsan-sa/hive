@@ -35,6 +35,11 @@ type Module struct {
 	// refused is each project's last "sha: why" that stopped a release
 	// before main's checks were read, raised once so a retry doesn't repeat it.
 	refused sync.Map
+	// scanSaid is each project's last "sha: why" a scan blocked, alerted once.
+	scanSaid sync.Map
+	// handlesAt is the newest commit each project's missing handle list
+	// holds, released again when the person says the list is written.
+	handlesAt sync.Map
 	// PauseMerges stops new merges and waits up to the given time for the
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
@@ -758,6 +763,10 @@ func (m *Module) afterKept(project, sha string) {
 		if by := m.rootRead(project, mg); by != "" {
 			fmt.Fprintf(&manifest, "  its root paths (%s) passed %s\n", strings.Join(mg.Root, ", "), by)
 			rootRead = append(rootRead, fmt.Sprintf("#%d (%s)", mg.PR, strings.Join(mg.Root, ", ")))
+		} else if mg.Diff == "" {
+			// Merged before effect.merged carried the diff: no read can be
+			// matched to it.
+			root = append(root, fmt.Sprintf("%s (#%d's merge record names no diff)", strings.Join(mg.Root, ", "), mg.PR))
 		} else {
 			root = append(root, mg.Root...)
 		}
@@ -788,9 +797,18 @@ func (m *Module) afterKept(project, sha string) {
 		scanAt = m.scan
 	}
 	if err := scanAt(p, sha); err != nil {
-		alert("no release at " + core.Short(sha) + ", since its scan blocks it: " + err.Error())
+		if errors.Is(err, scan.ErrNoHandles) {
+			m.askHandles(project, sha, err)
+			return
+		}
+		// A retry meets the same hits at the same commit: said once.
+		if last, _ := m.scanSaid.Swap(project, sha+": "+err.Error()); last != sha+": "+err.Error() {
+			alert("no release at " + core.Short(sha) + ", since its scan blocks it: " + err.Error())
+		}
 		return
 	}
+	m.scanSaid.Delete(project)
+	m.handlesFound(project)
 	cfg := m.C.Effects.Config(p, sha)
 	if cfg.DryRun != "" {
 		c := m.C.Effects.RunCheck(p, sha, "dryrun", cfg.DryRun)
@@ -964,6 +982,12 @@ func (m *Module) retryWaiting() {
 // a change to a root path on the security list: an outside read decides when
 // there is one, else the security seat and a majority of the panel said land
 // on its own diff. "" when nobody did.
+//
+// mg.Root is the merge's root-class paths, each of which ChangeOf put in both
+// Security and SecurityRoot at merge, listed or not; so SecurityRoot here asks
+// for the panel majority on purpose. The seats read the whole own diff, so
+// their land passes all of a merge's root paths together. Only root paths
+// reach this: a high path's security read isn't checked again at release.
 func (m *Module) rootRead(project string, mg merge) string {
 	if !m.C.Effects.SecurityOK(project, core.Change{Security: mg.Root, SecurityRoot: mg.Root, DiffID: mg.Diff}) {
 		return ""
@@ -980,10 +1004,49 @@ func (m *Module) rootRead(project string, mg merge) string {
 // stands between the other commit and the signing key.
 const refusedSteps = "Its release run at that commit waits for approval in the release-signing environment: reject it, don't approve. Then delete the release and its tag."
 
+// askHandles puts the missing handle list to the person as one standing ask
+// in Waiting, never an alert per check: only they can write the file. The ask
+// keeps its place while it stands; the newest commit it holds is retried when
+// they answer done.
+func (m *Module) askHandles(project, sha string, err error) {
+	m.handlesAt.Store(project, sha)
+	m.C.Person.Ask(core.Ask{Kind: "scan_handles", Ref: project, Project: project, Options: []string{"done"},
+		Title: "Give the release scan its handle list: no release of " + project + " goes out without it",
+		Detail: "The release scan refuses to pass: " + err.Error() + ". Only you can write it: the file is in the Hive's private folder, which no agent reads. " +
+			"Until then nothing merged reaches a release (held since " + core.Short(sha) + "). Answer done once it is written and the Hive tries the release again."})
+}
+
+// handlesFound answers a standing handle-list ask once a scan reads a list;
+// with nothing held any more, its handler has nothing to retry.
+func (m *Module) handlesFound(project string) {
+	m.handlesAt.Delete(project)
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "scan_handles" && a.Project == project {
+			m.C.Person.Answer(a.ID, "done", "the Hive, not the person: the release scan read a handle list")
+		}
+	}
+}
+
+// onHandles is the person's word that the handle list is written: the commit
+// it held is released again, or the ask comes back if the list still isn't
+// there.
+func (m *Module) onHandles(a core.Ask) {
+	if a.Answer != "done" {
+		return
+	}
+	sha, ok := m.handlesAt.Load(a.Project)
+	if !ok {
+		return
+	}
+	defer m.lock(a.Project)()
+	m.afterKept(a.Project, sha.(string))
+}
+
 // New is the release module, with the person's answer to an upstream offer.
 func New(c *core.Core) *Module {
 	m := &Module{C: c}
 	c.Person.Handle("upstream", m.onUpstream)
+	c.Person.Handle("scan_handles", m.onHandles)
 	return m
 }
 
@@ -1153,7 +1216,7 @@ func (m *Module) Publish() string {
 			continue // an older one stays a pre-release
 		}
 		checked[c.Project]++
-		if why := m.C.Effects.Stewardship(p, c.SHA); why != "" {
+		if why := m.C.Effects.Stewardship(p, "refs/remotes/origin/"+p.Branch); why != "" { // the record as main reads it now, which may postdate the tag
 			out = append(out, c.Tag+": not published, "+why)
 			continue
 		}
