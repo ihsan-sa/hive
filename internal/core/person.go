@@ -35,6 +35,7 @@ type Person struct {
 	told     []Ask          // what was done for the person, oldest first: the newest keepTold
 	toldAt   map[string]int // told ID to its index in told
 	handlers map[string]func(Ask)
+	handling sync.WaitGroup // answers' handlers still running
 }
 
 // keepTold is how many things told stay in memory. Only the newest few are
@@ -208,10 +209,18 @@ func (p *Person) Answer(id, answer, note string) (Ask, error) {
 	c := *p.asks[id]
 	p.mu.Unlock()
 	if h != nil {
-		go h(c)
+		p.handling.Add(1)
+		go func() {
+			defer p.handling.Done()
+			h(c)
+		}()
 	}
 	return c, nil
 }
+
+// Handled waits until every answer's handler started so far has returned,
+// with what it appended filed by the journal's subscribers.
+func (p *Person) Handled() { p.handling.Wait() }
 
 // Open returns unanswered asks, oldest first.
 func (p *Person) Open() []Ask {
