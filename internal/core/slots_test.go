@@ -95,3 +95,21 @@ func inSlots(r, w []SlotUse, sha string) bool {
 	}
 	return false
 }
+
+func TestSlotsBusy(t *testing.T) {
+	s := NewSlots(func() int { return 1 })
+	if s.Busy() {
+		t.Fatal("busy while empty")
+	}
+	release := s.Acquire("p", "a", "test")
+	if !s.Busy() {
+		t.Fatal("not busy with every slot taken")
+	}
+	release()
+	if s.Busy() {
+		t.Fatal("busy after release")
+	}
+	if NewSlots(func() int { return 0 }).Busy() {
+		t.Fatal("an unlimited queue is never busy while nothing waits")
+	}
+}
