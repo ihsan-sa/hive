@@ -89,7 +89,7 @@ func (g *rig) decide(req Request, args map[string]string) error {
 
 // settle waits for a request to leave the given states.
 func (g *rig) settle(id string, from ...string) Request {
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 1500; i++ { // 30s: a loaded runner took more than 4
 		r, _ := g.m.get(id)
 		if !contains(from, r.State) {
 			return r
