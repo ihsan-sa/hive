@@ -10,12 +10,12 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
-// The lead's hand on the state of the Hive's own pull requests: mark one
+// Any agent's hand on the state of the Hive's own pull requests: mark one
 // ready or a draft, or close it with a comment, ending its task. Only a PR a
-// task opened counts as the Hive's own, and only in a project the lead
-// reaches; the lead holds no forge login, so the daemon acts for it.
+// task opened counts as the Hive's own, and only in a project the agent
+// reaches; no agent holds a forge login, so the daemon acts for it.
 
-// ownPR finds the task whose PR the lead names, by task id or by project and
+// ownPR finds the task whose PR an agent names, by task id or by project and
 // PR number, refusing a PR no task of the Hive opened.
 func (m *Module) ownPR(r core.Run, id, project string, number int) (Task, core.Project, error) {
 	t, ok := m.Get(id)
@@ -37,13 +37,13 @@ func (m *Module) ownPR(r core.Run, id, project string, number int) (Task, core.P
 			t, ok = found[0], true
 		}
 		if !ok {
-			return Task{}, core.Project{}, fmt.Errorf("PR #%d in %s isn't one the Hive opened for a task, so it isn't the lead's to change", number, project)
+			return Task{}, core.Project{}, fmt.Errorf("PR #%d in %s isn't one the Hive opened for a task, so it isn't the Hive's to change", number, project)
 		}
 	}
 	if !ok {
 		return Task{}, core.Project{}, fmt.Errorf("no task %q", id)
 	}
-	if err := m.C.Runs.Walled(r, t.Project); err != nil {
+	if err := m.reach(r, t.Project); err != nil {
 		return Task{}, core.Project{}, err
 	}
 	if t.PR.Number == 0 {

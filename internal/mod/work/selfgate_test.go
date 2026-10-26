@@ -487,7 +487,7 @@ func TestUnclearIsTakenAsAGain(t *testing.T) {
 }
 
 // The lead turns an improvement waiting for the gate into a fix, and it
-// merges; a worker sets only its own task's aim; an aim is fix or gain.
+// merges; an agent sets the aim of tasks on its own project; an aim is fix or gain.
 func TestAimOp(t *testing.T) {
 	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	maxGates(m, 1)
@@ -499,9 +499,12 @@ func TestAimOp(t *testing.T) {
 		t.Fatalf("reason %q: want waiting for the gate", task.Reason)
 	}
 	lead := core.Run{ID: "lead-1", Role: "lead"}
-	other := core.Run{ID: "w-other", Role: "worker"}
-	if _, err := m.opAim(other, []byte(`{"task":"`+task.ID+`","aim":"fix","why":"x"}`)); err == nil {
-		t.Fatal("a worker set another task's aim")
+	elsewhere := core.Run{ID: "w-other", Role: "worker", Project: "q"}
+	if _, err := m.opAim(elsewhere, []byte(`{"task":"`+task.ID+`","aim":"fix","why":"x"}`)); err == nil {
+		t.Fatal("a worker on another project set this task's aim")
+	}
+	if _, err := m.opAim(core.Run{ID: "w-mine"}, []byte(`{"aim":"fix","why":"x"}`)); err == nil {
+		t.Fatal("set an aim with no task named and none of its own")
 	}
 	if _, err := m.opAim(lead, []byte(`{"task":"`+task.ID+`","aim":"huge","why":"x"}`)); err == nil {
 		t.Fatal("took an aim that is neither fix nor gain")
@@ -876,5 +879,25 @@ func TestNewHeadCancelsItsOldGate(t *testing.T) {
 	m.Wait()
 	if !old.dropped || !cancelled || other.dropped || len(*jobs) != 1 || (*jobs)[0].Head != task.SHA {
 		t.Fatalf("old dropped %v cancelled %v, other dropped %v, %d runs: want the old head's run ended and the new one started", old.dropped, cancelled, other.dropped, len(*jobs))
+	}
+}
+
+// Any agent on a project may set a rolled-back gain's aim, but not the worker
+// whose change the gate rolled back: that would overrule the gate on its own
+// word.
+func TestAimAfterRollback(t *testing.T) {
+	m, task, _, _ := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	task.Aim, task.Gate = AimGain, &core.GateResult{Outcome: core.GateRollback}
+	m.save(task, "")
+	own := core.Run{ID: task.Worker, Role: "worker", Project: task.Project}
+	if _, err := m.opAim(own, []byte(`{"aim":"fix","why":"x"}`)); err == nil || !strings.Contains(err.Error(), "ask another agent") {
+		t.Fatalf("its own worker turned a rolled-back gain into a fix: %v", err)
+	}
+	peer := core.Run{ID: "w-peer", Role: "worker", Project: task.Project}
+	if _, err := m.opAim(peer, []byte(`{"task":"`+task.ID+`","aim":"fix","why":"it fixes the failing TestX"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := m.Get(task.ID); got.Gain() {
+		t.Fatalf("aim %q: want a fix", got.Aim)
 	}
 }

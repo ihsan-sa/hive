@@ -16,7 +16,7 @@ import (
 // the merge step lands nothing outside it (the Hive's own follow-ups,
 // reverts and checkpoints included). Held work still goes through its tests,
 // reads and checks, and waits as a ready pull request at the last step. The
-// person sets it (hive hold), or the lead on the person's word; it ends when
+// person sets it (hive hold), or any agent on the person's word; it ends when
 // one of them lifts it or its condition is met. core.Effects.Merge refuses a
 // held merge too, so nothing in the Hive merges past it.
 
@@ -31,7 +31,7 @@ type MergeHold struct {
 	Only    []int     `json:"only,omitempty"`  // pull requests that may still merge
 	Until   string    `json:"until,omitempty"` // "" until lifted, or UntilRelease
 	Since   []string  `json:"since,omitempty"` // repo@tag: the newest release on each watched repo when set
-	By      string    `json:"by"`              // person, or the lead run that set it on the person's word
+	By      string    `json:"by"`              // person, or the run that set it on the person's word
 	At      time.Time `json:"at"`
 }
 
@@ -220,7 +220,7 @@ func (l *prs) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// opHold is the lead setting or lifting a hold on the person's word.
+// opHold is an agent setting or lifting a hold on the person's word.
 func (m *Module) opHold(r core.Run, args json.RawMessage) (any, error) {
 	var a struct {
 		Project string `json:"project"`

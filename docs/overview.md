@@ -16,7 +16,7 @@ The diagram is drawn from [arch.json](arch.json). To change it, edit that file a
 - A **worker** takes one brief and builds it in its own checkout of the project, then commits.
 - A **reviewer** reads the exact commit, with read-only tools, and says land or fix. A fix goes back to the same worker, for a few rounds at most.
 - A **warden** weighs a step an agent can't take from inside its sandbox, such as installing a package. A step that is hard to undo also goes to a **tribunal**: three read-only agents, spread over models where you set more than one, who vote.
-- Every agent, not only the lead, may act on what keeps work moving (reorder or hold the queue, rerun a check, file a brief), and each such step goes on the record under its run.
+- Every agent is the same: lead, worker and sweep are names for what each was given, not ranks, and each holds the same ops on its own project (reorder or hold the queue, rerun a check, file a brief, set a task's aim, draft, ready or close the Hive's own PRs, route models), each step on the record under its run. Only the warden and tribunal (and the other check seats) are set apart.
 - A **sweep** reads the records for the next real gain and files it; a **filer** tidies the knowledge base; a **module reviewer** reads a module's code before it may run.
 
 **The daemon.** `hive` keeps a background process running (it starts with the machine). It runs as you, outside every sandbox, and does everything that needs a credential or touches the host:

@@ -149,7 +149,7 @@ func TestLeadClosesAPRWaitingOnThePerson(t *testing.T) {
 	}
 }
 
-// Only the Hive's own PRs, only in reach, only by the lead; a merged one
+// Only the Hive's own PRs, only in reach, by any agent but a check seat; a merged one
 // isn't closed.
 func TestPROpsOnlyTheHivesOwn(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
@@ -161,9 +161,13 @@ func TestPROpsOnlyTheHivesOwn(t *testing.T) {
 	if _, err := callOp(m, leadRun, "pr_close", `{"task":"t1","pr":`+strconv.Itoa(other.Number)+`,"comment":"x"}`); err == nil {
 		t.Fatal("a task id with another task's PR number")
 	}
-	worker := core.Run{RunSpec: core.RunSpec{ID: "w1", Role: "worker", Project: "p"}}
-	if _, err := callOp(m, worker, "pr_close", `{"task":"t1","comment":"x"}`); err == nil {
-		t.Fatal("a worker closed a PR")
+	seat := core.Run{RunSpec: core.RunSpec{ID: "r1", Role: "reviewer", Project: "p"}}
+	if _, err := callOp(m, seat, "pr_close", `{"task":"t1","comment":"x"}`); err == nil {
+		t.Fatal("a check seat closed a PR")
+	}
+	elsewhere := core.Run{RunSpec: core.RunSpec{ID: "w1", Role: "worker", Project: "q"}}
+	if _, err := callOp(m, elsewhere, "pr_close", `{"task":"t1","comment":"x"}`); err == nil {
+		t.Fatal("a worker on another project closed a PR")
 	}
 	m.C.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
 	walled := core.Run{RunSpec: core.RunSpec{ID: "lead2", Role: "lead", Project: "secret"}}

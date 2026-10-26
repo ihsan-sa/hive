@@ -1,4 +1,4 @@
-// Package models is the routing of agents to models: the lead's route op,
+// Package models is the routing of agents to models: the route op,
 // which sets the models a role runs on for the person (a check seat only
 // once the person says yes), the models op that shows how the Hive is routed
 // and what each agent runs on, and trials, which run one brief's worker on a
@@ -125,9 +125,9 @@ func New(c *core.Core, w *work.Module) *Module {
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "route", Roles: []string{"lead"}, Help: `{"role": "lead|worker|reviewer|security|warden|tribunal|sweep|fallback", "models": "a,b,c" (in fallback order; empty clears it), "project": "(optional) only this project"} -> sets the models that role runs on in config.json; a check seat (reviewer, security, warden, tribunal) changes only once the person says yes`, Fn: m.opRoute})
+	ops.Register(core.Op{Name: "route", Roles: core.Peers, Help: `{"role": "lead|worker|reviewer|security|warden|tribunal|sweep|fallback", "models": "a,b,c" (in fallback order; empty clears it), "project": "(optional) only this project"} -> sets the models that role runs on in config.json; a check seat (reviewer, security, warden, tribunal) changes only once the person says yes`, Fn: m.opRoute})
 	ops.Register(core.Op{Name: "models", Help: `{} -> the named models, the routes, which model each live agent runs on, and the trials and how they went`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.View(r), nil }})
-	ops.Register(core.Op{Name: "trial", Roles: []string{"lead"}, Help: `{"model": "a named model or harness:model", "project": "a test project", "title": "...", "done": "..."} -> a brief whose worker runs on that model alone; the checks stay on their own models, and how it went is recorded (models op)`, Fn: m.opTrial})
+	ops.Register(core.Op{Name: "trial", Roles: core.Peers, Help: `{"model": "a named model or harness:model", "project": "a test project", "title": "...", "done": "..."} -> a brief whose worker runs on that model alone; the checks stay on their own models, and how it went is recorded (models op)`, Fn: m.opTrial})
 	c.Person.Handle("route", m.onPerson)
 	return m
 }
@@ -150,7 +150,7 @@ func (m *Module) opRoute(r core.Run, args json.RawMessage) (any, error) {
 	}
 	if r.Project != "" && rt.Project != r.Project {
 		if rt.Project != "" {
-			return nil, fmt.Errorf("a project's lead routes only its own project, %s", r.Project)
+			return nil, fmt.Errorf("an agent with a project routes only that project, %s", r.Project)
 		}
 		rt.Project = r.Project
 	}
@@ -324,7 +324,7 @@ func (m *Module) opTrial(r core.Run, args json.RawMessage) (any, error) {
 		return nil, errors.New("a trial names the model, the project to try it on (a test project, not real work) and a title")
 	}
 	if r.Project != "" && b.Project != r.Project {
-		return nil, fmt.Errorf("a project's lead tries models only on its own project, %s", r.Project)
+		return nil, fmt.Errorf("an agent with a project tries models only on that project, %s", r.Project)
 	}
 	if err := m.C.Runs.Walled(r, b.Project); err != nil {
 		return nil, err

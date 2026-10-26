@@ -163,7 +163,7 @@ A value of @path reads that file. Common ops:
                                                  file an ask: it becomes an issue, a worker, a PR; a fix with
                                                  --aim fix --why, or when it names something broken;
                                                  else (or with --aim gain) taken as a gain
-  aim       --aim fix|gain --why "..." [--task id]   your task (the lead: any) is a fix of the failure --why
+  aim       --aim fix|gain --why "..." [--task id]   your task (or any on your project) is a fix of the failure --why
                                                  names, which merges on its tests and reads and isn't reverted
                                                  for a score dip alone, or a gain, which on the Hive's own
                                                  repository merges only on the recursive gate's clear gain
@@ -178,7 +178,9 @@ A value of @path reads that file. Common ops:
   status                                         projects, work in flight, scores
   github    --pr N | --checks sha | --annotations id | --path "repos/o/r/..." [--repo o/r]
                                                  GitHub's API on the person's login, cached; never curl api.github.com
-The loop is every agent's: these act on your own project's tasks, on the record with your run id.
+Every agent is the same: lead, worker and sweep are names, not ranks, and every op below is yours
+(only the warden and tribunal are set apart). These act on your own project's work, on the record
+with your run id.
   rerun-checks [--task id]                      the failed forge checks (CI jobs) on a PR's head (yours by default)
                                                  run again, for a flake; at most 2 per head, the merge waits for them
   queue     [--order id,id] [--hold id] [--release id]   briefs waiting for a worker, in order
@@ -188,10 +190,10 @@ The loop is every agent's: these act on your own project's tasks, on the record 
                                                  checked again from its head; --back sends its worker that
   landed    --task id --why "..." [--merge sha]  end a task whose PR merged on the forge or whose
                                                  work is on main, so the briefs waiting on it start
-  pr_ready  --task id [--why "..."]              (lead) mark the Hive's own PR ready; its merge goes on
-  pr_draft  --task id --why "..."                (lead) mark it a draft; its task waits, not stopped
-  pr_close  --task id --comment "..." [--delete_branch]   (lead) close it with a comment, ending its
+  pr_ready  --task id [--why "..."]              mark the Hive's own PR ready; its merge goes on
+  pr_draft  --task id --why "..."                mark it a draft; its task waits, not stopped
+  pr_close  --task id --comment "..." [--delete_branch]   close it with a comment, ending its
                                                  task (or --project p --pr N in place of --task)
   models                                         named models, each role's route, what each agent runs on, trials
-  route     --role worker --models "a,b" [--project p]   (lead) the models a role runs on, in fallback order
-  trial     --model m --project test --title "..." --done "..."   (lead) one brief's worker on that model alone`
+  route     --role worker --models "a,b" [--project p]   the models a role runs on, in fallback order
+  trial     --model m --project test --title "..." --done "..."   one brief's worker on that model alone`

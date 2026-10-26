@@ -242,10 +242,10 @@ says the model doesn't exist (not found, unknown or invalid model): their
 other errors, and a context too long, are one run's, which backs off alone.
 A run parked waiting on a pick that comes back looks again at once.
 
-## Asking the lead
+## Asking an agent
 
 `hive agent route --role worker --models "qwen,claude:opus" [--project p]`
-(lead only; a project's lead routes its own project) writes the route into
+(any agent but a check seat; one with a project routes only that project) writes the route into
 config.json and journals `config.routed` with who, the role and what it was. A
 check seat's route waits for the person's yes in Waiting (ask kind `route`).
 The lead never adds a model or its key; those are the person's.

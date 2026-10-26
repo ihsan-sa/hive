@@ -15,7 +15,7 @@ import (
 // this machine such as Ollama, or a hosted tier such as OpenRouter's free
 // models), which the open harness drives, or on an Anthropic-compatible one
 // (API "anthropic"), which Claude Code drives. Its name in Config.Models is
-// how routes, tribunal seats and the lead's route op refer to it.
+// how routes, tribunal seats and the route op refer to it.
 type OpenModel struct {
 	Endpoint string `json:"endpoint"`          // base URL, e.g. http://127.0.0.1:11434/v1
 	Model    string `json:"model"`             // the id the endpoint knows, e.g. qwen2.5-coder:14b
@@ -99,6 +99,12 @@ func (p Pick) Same(q Pick) bool {
 // list never moves them: a weaker model needs the checks more, so they go on
 // another model only where the person routes them themselves.
 var CheckRoles = []string{"reviewer", "security", "warden", "tribunal", JudgeRole}
+
+// Peers are the roles every agent outside the checks holds. Lead, worker and
+// sweep are names for the person's reading, not ranks: each may call the same
+// ops, on its own project's work, on the record by its run id. Only the check
+// seats (warden and tribunal above all) are set apart.
+var Peers = []string{"lead", "worker", "sweep"}
 
 // RouteRoles are the roles a route can name; "fallback" is the list every
 // other role moves along at a limit.
