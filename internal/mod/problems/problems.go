@@ -54,7 +54,7 @@ type Module struct {
 
 // quiet is the roles that weigh one thing on its own (a step, a change), whom
 // the board would only distract.
-var quiet = map[string]bool{"judge": true, "warden": true, "tribunal": true, "filer": true, "module-reviewer": true, "stepback": true}
+var quiet = map[string]bool{"judge": true, "warden": true, "tribunal": true, "filer": true, "module-reviewer": true, "stepback": true, "reviewer": true}
 
 // New loads the board from the journal and registers its ops.
 func New(c *core.Core) *Module {
