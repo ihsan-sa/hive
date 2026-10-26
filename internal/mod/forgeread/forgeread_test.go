@@ -2,6 +2,7 @@ package forgeread
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ type apiForge struct {
 	*core.Local
 	gets  []string
 	limit bool
+	gone  bool // GitHub answers 404
 }
 
 func (f *apiForge) APIGet(repo, path string) (string, error) {
@@ -23,6 +25,9 @@ func (f *apiForge) APIGet(repo, path string) (string, error) {
 		return "", &core.RateLimited{Until: time.Date(2026, 10, 24, 9, 30, 0, 0, time.UTC), Text: "HTTP 403: API rate limit exceeded"}
 	}
 	f.gets = append(f.gets, path)
+	if f.gone {
+		return "", errors.New("gh api " + path + ": gh: Not Found (HTTP 404)")
+	}
 	return `{"path":"` + path + `"}`, nil
 }
 
@@ -63,6 +68,7 @@ func TestReadsGoThroughTheLoginCached(t *testing.T) {
 		`{"pr":407}`:                           "repos/me/p/pulls/407",
 		`{"checks":"cbca162"}`:                 "repos/me/p/commits/cbca162/check-runs?per_page=100",
 		`{"annotations":"99","repo":"me/q"}`:   "repos/me/q/check-runs/99/annotations?per_page=100",
+		`{"annotations":30000000000}`:          "repos/me/p/check-runs/30000000000/annotations?per_page=100",
 		`{"path":"/repos/me/p/pulls/3/files"}`: "repos/me/p/pulls/3/files",
 	} {
 		out, err := call(m, "p", args)
@@ -70,12 +76,12 @@ func TestReadsGoThroughTheLoginCached(t *testing.T) {
 			t.Errorf("%s: %q, %v; want %s", args, out, err, want)
 		}
 	}
-	if len(f.gets) != 4 {
+	if len(f.gets) != 5 {
 		t.Fatalf("the same PR read twice within a minute reached GitHub: %q", f.gets)
 	}
 	*now = now.Add(2 * time.Minute)
 	call(m, "p", `{"pr":"407"}`)
-	if len(f.gets) != 5 {
+	if len(f.gets) != 6 {
 		t.Fatalf("a stale answer was served: %q", f.gets)
 	}
 }
@@ -95,7 +101,9 @@ func TestReadsStayInReach(t *testing.T) {
 	for _, args := range []string{`{"path":"repos/me/p/../q/pulls/1"}`, `{"path":"repos/me/p/%2e%2e/q/pulls/1"}`, `{"path":"user"}`, `{"path":"-X"}`, `{"pr":"1; rm"}`, `{}`,
 		`{"path":"repos/me/p/hooks"}`, `{"path":"repos/me/p/hooks/1/config"}`, `{"path":"repos/me/p/actions/variables"}`,
 		`{"path":"repos/me/p/actions/secrets"}`, `{"path":"repos/me/p/environments/prod/variables"}`, `{"path":"repos/me/p/keys"}`,
-		`{"path":"repos/me/p/collaborators"}`, `{"path":"repos/me/p/invitations"}`, `{"path":"repos/me/p/pulls/1/../../hooks"}`} {
+		`{"path":"repos/me/p/collaborators"}`, `{"path":"repos/me/p/invitations"}`, `{"path":"repos/me/p/pulls/1/../../hooks"}`,
+		`{"path":"repos/./p/pulls/1"}`, `{"path":"repos/me/p/./hooks"}`, `{"path":"repos/me/p/pulls?per_page=1;x"}`,
+		`{"path":"repos/me/p/pulls?q=a b"}`, `{"path":"repos/me/p/pulls?per_page=1#x"}`} {
 		if _, err := call(m, "p", args); err == nil {
 			t.Errorf("read %s", args)
 		}
@@ -103,7 +111,12 @@ func TestReadsStayInReach(t *testing.T) {
 	if _, err := call(m, "secret", `{"pr":"1"}`); err != nil {
 		t.Errorf("an isolated project can't read its own repo: %v", err)
 	}
-	if len(f.gets) != 1 {
+	for _, args := range []string{`{"path":"repos/me/p/pulls?per_page=5&state=closed"}`, `{"path":"repos/me/p/contents/docs/a.md?ref=main"}`} {
+		if _, err := call(m, "p", args); err != nil {
+			t.Errorf("an allowed query refused: %s: %v", args, err)
+		}
+	}
+	if len(f.gets) != 3 {
 		t.Fatalf("reads out of reach reached GitHub: %q", f.gets)
 	}
 }
@@ -127,5 +140,25 @@ func TestRateLimitAndBudget(t *testing.T) {
 	}
 	if _, err := call(m, "p", `{"pr":"1000"}`); err == nil || !strings.Contains(err.Error(), "most they may") {
 		t.Fatalf("past the budget: %v", err)
+	}
+}
+
+// A path GitHub refuses is kept as an answer is: asked again within the
+// minute, it costs no read.
+func TestRefusalsAreCached(t *testing.T) {
+	m, f, now := setup(t)
+	f.gone = true
+	for range 3 {
+		if _, err := call(m, "p", `{"pr":"404"}`); err == nil || !strings.Contains(err.Error(), "404") {
+			t.Fatalf("refused read: %v", err)
+		}
+	}
+	if len(f.gets) != 1 {
+		t.Fatalf("a refusal asked again reached GitHub: %q", f.gets)
+	}
+	f.gone = false
+	*now = now.Add(2 * time.Minute)
+	if _, err := call(m, "p", `{"pr":"404"}`); err != nil || len(f.gets) != 2 {
+		t.Fatalf("a stale refusal was served: %v, %q", err, f.gets)
 	}
 }

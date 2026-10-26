@@ -24,8 +24,10 @@ func TestAnEventBringsTheNextTickForward(t *testing.T) {
 	go loop(ctx, j, make(chan struct{}, 1), func() { ticks <- time.Now() })
 	<-ticks // the first tick is at once
 	time.Sleep(100 * time.Millisecond)
-	at := time.Now()
+	// Timed from when the event is in the journal: Append fsyncs before it
+	// wakes subscribers, and on a loaded disk that alone has taken 0.5-0.9s.
 	j.MustAppend("task.saved", map[string]string{})
+	at := time.Now()
 	if got := (<-ticks).Sub(at); got > 500*time.Millisecond {
 		t.Fatalf("the tick after an event came %s later; want well under the second", got)
 	}
