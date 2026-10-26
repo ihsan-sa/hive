@@ -1,6 +1,8 @@
 package work
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -316,6 +318,47 @@ func TestPacePullsBackAheadOfTheWindow(t *testing.T) {
 	}
 }
 
+// steady keeps a strain's words up to its first reading: one with no
+// readings is kept whole, and nested parentheses go with the first.
+func TestSteady(t *testing.T) {
+	for in, want := range map[string]string{
+		"":               "",
+		"machine loaded": "machine loaded",
+		"machine loaded (load 40 on 20 cores, limit 1 per core)":        "machine loaded",
+		"machine low on memory (900 MB free (of 16 GB), floor 4096 MB)": "machine low on memory",
+		"machine loaded(no space)":                                      "machine loaded(no space)",
+	} {
+		if got := steady(in); got != want {
+			t.Errorf("steady(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A check of a task queued briefs wait on ranks first, a fix's next, and the
+// rest, or a sha no task holds, not at all (issue #838).
+func TestCheckRankFreesThenFixes(t *testing.T) {
+	m, _, _ := helperRig(t)
+	put := func(tk Task) {
+		m.mu.Lock()
+		m.tasks[tk.ID] = &tk
+		m.mu.Unlock()
+	}
+	put(Task{ID: "blocker", Project: "p", SHA: "s1", Stage: StageTesting, Title: "holds"})
+	put(Task{ID: "fix", Project: "p", SHA: "s2", Stage: StageTesting, Aim: AimFix})
+	put(Task{ID: "gain", Project: "p", SHA: "s3", Stage: StageTesting})
+	put(Task{ID: "done", Project: "p", SHA: "s4", Stage: StageDone})
+	put(Task{ID: "waiter", Project: "p", Stage: StageQueued, Reason: fmt.Sprintf("waiting for %q (task %s) to land: both touch a.go", "holds", "blocker")})
+	put(Task{ID: "waiter2", Project: "p", Stage: StageQueued, Reason: fmt.Sprintf("waiting for %q (task %s) to land: both touch a.go", "x", "done")})
+	for sha, want := range map[string]int{"s1": rankFrees, "s2": rankFix, "s3": 0, "s4": 0, "nobody": 0} {
+		if got := m.checkRank("p", sha, "test"); got != want {
+			t.Errorf("rank of %s: %d, want %d", sha, got, want)
+		}
+	}
+	if got := m.checkRank("other", "s1", "test"); got != 0 {
+		t.Errorf("another project's sha ranked %d", got)
+	}
+}
+
 // Load alone holds no worker from starting up to the pace's start, only past
 // it; any other strain holds every start.
 func TestLoadHoldsOnlyPastTheStart(t *testing.T) {
@@ -327,6 +370,53 @@ func TestLoadHoldsOnlyPastTheStart(t *testing.T) {
 	}{{"", 9, false}, {load, 0, false}, {load, 3, false}, {load, 4, true}, {mem, 0, true}} {
 		if got := loadHolds(c.strain, c.working, 4); got != c.want {
 			t.Errorf("%q with %d at work: holds %v, want %v", c.strain, c.working, got, c.want)
+		}
+	}
+}
+
+// A gate's wait reason, saved with its task, stays the same as the gates'
+// limit and the machine's readings move: neither is in it.
+func TestGateRoomReasonHoldsAsTheLimitMoves(t *testing.T) {
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	strain := ""
+	gateMachine = func(core.Config) (string, bool) { return strain, true }
+	dir := t.TempDir()
+	j, err := core.OpenJournal(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	m := &Module{C: &core.Core{J: j, WS: core.Workspace{Root: filepath.Join(dir, "hive")}}}
+	maxGates(m, 5) // the ceiling and start, whatever the host's cores
+	limit := func(l int) {
+		m.gates.mu.Lock()
+		m.gates.limit, m.gates.start, m.gates.at = l, 5, time.Now()
+		m.gates.mu.Unlock()
+	}
+	full := ""
+	for _, l := range []int{1, 2, 3} {
+		limit(l)
+		got := m.gateRoom(l)
+		if full == "" {
+			full = got
+		}
+		if got == "" || got != full {
+			t.Fatalf("limit %d: reason %q, want %q at every limit", l, got, full)
+		}
+	}
+	strained := ""
+	for i, s := range []string{
+		"machine loaded (load 40 on 20 cores, limit 1 per core)",
+		"machine loaded (load 52 on 20 cores, limit 1 per core)",
+	} {
+		strain = s
+		limit(3 + i)
+		got := m.gateRoom(1)
+		if strained == "" {
+			strained = got
+		}
+		if got != "no room for another: machine loaded" || got != strained {
+			t.Fatalf("strain %q at limit %d: reason %q", s, 3+i, got)
 		}
 	}
 }

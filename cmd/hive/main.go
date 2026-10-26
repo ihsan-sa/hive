@@ -1038,6 +1038,8 @@ func cmdHarness(args []string) int {
 			fmt.Fprintf(os.Stderr, "%s has no login command of its own\n", s.Name())
 			return 1
 		}
+		// The spec comes from a module: say what it runs as the person, here.
+		fmt.Printf("Running %s's login from the %s module: %s\n", s.Name(), filepath.Base(filepath.Dir(s.File())), strings.Join(argv, " "))
 		cmd := exec.Command(argv[0], argv[1:]...)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 		if err := cmd.Run(); err != nil {
