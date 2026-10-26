@@ -85,6 +85,7 @@ type Effects struct {
 	judged    map[string]Judgement    // project@sha@main -> the judge's newest call (judge.go)
 	homes     map[string]bool         // running checks' homes (disk.go)
 	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
+	buildMu   sync.RWMutex            // the same for the projects' build caches
 	disk      DiskUse                 // the last measurement of the Hive's disk use
 	diskFull  bool                    // a check couldn't run for room, and the alert is out
 
@@ -530,7 +531,22 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
 	mods := e.goModules(sb, dir)
-	code, out, err := e.runSandboxed(sb, p.Name, id, append(mounts, mods.mounts...), guardProgram(command), true, 30*time.Minute, mods.env, e.checkCacheCap())
+	build := e.goBuild(sb, p, sha, dir)
+	run := func(withMods bool) (int, string, error) {
+		ms, env := append(slices.Clone(mounts), build.mounts...), slices.Clone(build.env)
+		if withMods {
+			ms, env = append(ms, mods.mounts...), append(env, mods.env...)
+		}
+		return e.runSandboxed(sb, p.Name, id, ms, guardProgram(command), true, 30*time.Minute, env, e.checkCacheCap())
+	}
+	code, out, err := run(true)
+	if len(build.mounts) > 0 && code != 0 && strings.Contains(out, "GOCACHEPROG") {
+		// The build cache's program failed, not the commit: run once
+		// without the shared build cache.
+		build.done()
+		build = goMods{note: "the shared build cache failed; run again without it", done: func() {}}
+		code, out, err = run(true)
+	}
 	mods.done()
 	if mods.marker != "" && code != 0 && strings.Contains(out, staleModules) {
 		// The shared cache lacks what its marker promised: that is the
@@ -538,10 +554,13 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		// fetching its own.
 		os.Remove(mods.marker)
 		mods.note = "the shared module cache lacked a module; run again without it"
-		code, out, err = e.runSandboxed(sb, p.Name, id, mounts, guardProgram(command), true, 30*time.Minute, nil, e.checkCacheCap())
+		code, out, err = run(false)
 	}
-	if mods.note != "" {
-		out = "hive: " + mods.note + "\n" + out
+	build.done()
+	for _, n := range []string{build.note, mods.note} {
+		if n != "" {
+			out = "hive: " + n + "\n" + out
+		}
 	}
 	c.Output = out
 	if errors.Is(err, ErrHomeFull) {

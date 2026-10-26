@@ -428,9 +428,16 @@ func (l *Local) CloseIssue(repo string, number int) error {
 
 // PRs lists a repo's pull requests (tests read them).
 func (l *Local) PRs(repo string) []PR {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
 	var out []PR
-	for _, p := range l.load().PRs[repo] {
-		out = append(out, p.PR)
+	for i := range s.PRs[repo] {
+		// As GetPR sees it: a squash pushed by a MergePR killed before it
+		// saved is that PR's merge. Read only, not saved: the daemon writing
+		// the same file is another process.
+		l.refresh(repo, &s.PRs[repo][i])
+		out = append(out, s.PRs[repo][i].PR)
 	}
 	return out
 }
