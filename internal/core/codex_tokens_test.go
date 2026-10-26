@@ -375,3 +375,42 @@ func TestCodexUsageFromItsSessionFile(t *testing.T) {
 		t.Fatalf("run is %q until %v, want parked until %v", got.Status, got.ParkedUntil, reset)
 	}
 }
+
+// A limit whose reset has passed by the turn's end is over: it parks the
+// login a minute, not the hour a limit that names no reset gets (#858).
+func TestLimitWhoseResetPassedWaitsAMinute(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { j.Close() })
+	rs := NewRuns(ws, j, nil, NewTokens(ws), func() []string { return nil })
+	r, err := rs.Start(RunSpec{ID: "r1", Harness: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(ws.RunPrivate("r1"), 0o700)
+	home, err := rs.freshCodexHome(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.TurnStarted = time.Now().Add(-time.Minute)
+	os.MkdirAll(filepath.Dir(ws.TurnOut("r1", r.Turn)), 0o700)
+	os.WriteFile(ws.TurnOut("r1", r.Turn), []byte(`{"type":"thread.started","thread_id":"th1"}
+{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again later."}}
+`), 0o600)
+	reset := time.Now().Add(-5 * time.Second)
+	day := filepath.Join(home, "sessions", "2026", "10", "25")
+	os.MkdirAll(day, 0o700)
+	os.WriteFile(filepath.Join(day, "rollout-2026-10-25T10-00-00-th1.jsonl"), []byte(fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":4200}},"rate_limits":{"primary":{"used_percent":100,"window_minutes":300,"resets_at":%d}}}}`+"\n",
+		time.Now().UTC().Format(time.RFC3339Nano), reset.Unix())), 0o600)
+	rs.endTurn(r)
+	p := rs.plans["codex"]
+	if wait := time.Until(p.Limit.ResetsAt); p.Limit.Status != "rejected" || wait <= 0 || wait > 2*time.Minute {
+		t.Fatalf("parked %v, want about a minute: %+v", wait, p)
+	}
+	if got, _ := rs.Get("r1"); got.Status != StatusParked || time.Until(got.ParkedUntil) > 2*time.Minute {
+		t.Fatalf("run is %q until %v, want a minute at most", got.Status, got.ParkedUntil)
+	}
+}

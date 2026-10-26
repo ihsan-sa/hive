@@ -1411,3 +1411,30 @@ func TestMergeForgeCheckBundleFailureIsRecorded(t *testing.T) {
 	}
 	t.Fatal("no task.bundle_failed event")
 }
+
+// The report names the main the checks' log says they ran with, not main at
+// report time: a test failing on an older main may be fixed on main now.
+func TestForgeFailuresNamesTheTestedMain(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	rerunSpent(task)
+	tested, _ := m.C.Effects.Sync(p)
+	pushMain(t, f, map[string]string{"fix.txt": "the fix, landed after the checks ran"})
+	main, _ := m.C.Effects.Sync(p)
+	if main == tested {
+		t.Fatal("main didn't move")
+	}
+	f.SetCheckLog(p.Repo, "head/test", "HEAD is now at a9ae988 Merge "+task.SHA+" into "+tested+"\n--- FAIL: TestX (0.1s)\n##[error]Process completed with exit code 1.\n")
+	msg := m.forgeFailures(task, p, main, []core.CheckRun{{Name: "test", State: core.CheckFail, URL: "head/test"}}, nil, nil)
+	for _, want := range []string{"run merged with main at " + core.Short(tested), "Main has moved to " + core.Short(main), "newer than the " + core.Short(tested)} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("no %q in message:\n%s", want, msg)
+		}
+	}
+	// A log that names no merge says main now may not be what ran.
+	f.SetCheckLog(p.Repo, "head/test2", "--- FAIL: TestX (0.1s)\n")
+	msg = m.forgeFailures(task, p, main, []core.CheckRun{{Name: "test", State: core.CheckFail, URL: "head/test2"}}, nil, nil)
+	if !strings.Contains(msg, "Main is at "+core.Short(main)+" now; the checks' logs don't say") {
+		t.Fatalf("message:\n%s", msg)
+	}
+}
