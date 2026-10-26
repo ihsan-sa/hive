@@ -751,7 +751,7 @@ func (m *Module) execute(id string) {
 	}
 	floor := m.C.WS.LoadConfig().Floor
 	if err := core.CeilingGuard(req.Script, floor, req.PersonOK); err != nil {
-		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.Ceiling(floor, req.Script)+", which is always yours to decide.", "run", "declined")
+		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.ScriptCeiling(floor, req.Script)+", which is always yours to decide.", "run", "declined")
 		m.act.Unlock()
 		if req.Settles == nil {
 			m.tell(req, err.Error()+"; the person decides.")
