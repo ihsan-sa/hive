@@ -198,10 +198,28 @@ func TestASecondReopenMidTurnStartsNoTwin(t *testing.T) {
 	if got := n.Load(); got != 1 {
 		t.Fatalf("%d turns started while the first still runs, want 1", got)
 	}
-	for _, e := range c.J.Since(0) {
-		var al map[string]string
-		if e.Kind == "alert.raised" && e.Decode(&al) == nil && al["ref"] == "turn-claim" {
-			t.Errorf("this daemon's own live turn was said as a second daemon: %s", al["text"])
+	claims := func() (n int) {
+		for _, e := range c.J.Since(0) {
+			var al map[string]string
+			if e.Kind == "alert.raised" && e.Decode(&al) == nil && al["ref"] == "turn-claim" {
+				n++
+			}
 		}
+		return n
+	}
+	if n := claims(); n != 0 {
+		t.Errorf("this daemon's own live turn was said as a second daemon %d times", n)
+	}
+	// A second daemon's claim afterwards is still said: the wait on its own
+	// turn didn't use up the once-per-daemon alert.
+	if _, err := rs.Start(RunSpec{ID: "w2", Role: "worker", Harness: "fake", Checkout: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	other := sleeper(t)
+	rs.withClaim("w2", func(turnClaim) (turnClaim, error) { return turnClaim{Turn: 1, Daemon: other}, nil })
+	r2, _ := rs.Get("w2")
+	rs.launch(r2, cfg)
+	if n := claims(); n != 1 {
+		t.Errorf("%d turn-claim alerts after another daemon's claim, want 1", n)
 	}
 }
