@@ -375,3 +375,40 @@ func TestCodexUsageFromItsSessionFile(t *testing.T) {
 		t.Fatalf("run is %q until %v, want parked until %v", got.Status, got.ParkedUntil, reset)
 	}
 }
+
+// A reset the harness named that has passed by the time the turn ends (a
+// slow machine, a window that just rolled over) is a short wait, not the
+// hour a limit with no reset at all gets.
+func TestPassedResetWaitsBriefly(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { j.Close() })
+	rs := NewRuns(ws, j, nil, NewTokens(ws), func() []string { return nil })
+	r, err := rs.Start(RunSpec{ID: "r1", Harness: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(ws.RunPrivate("r1"), 0o700)
+	home, err := rs.freshCodexHome(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.TurnStarted = time.Now().Add(-time.Minute)
+	os.MkdirAll(filepath.Dir(ws.TurnOut("r1", r.Turn)), 0o700)
+	os.WriteFile(ws.TurnOut("r1", r.Turn), []byte(`{"type":"thread.started","thread_id":"th1"}
+{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again later."}}
+`), 0o600)
+	day := filepath.Join(home, "sessions", "2026", "10", "25")
+	os.MkdirAll(day, 0o700)
+	os.WriteFile(filepath.Join(day, "rollout-th1.jsonl"), fmt.Appendf(nil,
+		`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":100,"window_minutes":300,"resets_at":%d}}}}`+"\n",
+		time.Now().UTC().Format(time.RFC3339Nano), time.Now().Add(-5*time.Second).Unix()), 0o600)
+	rs.endTurn(r)
+	got, _ := rs.Get("r1")
+	if got.Status != StatusParked || time.Until(got.ParkedUntil) > time.Minute {
+		t.Fatalf("run is %q until %v, want a wait of under a minute", got.Status, got.ParkedUntil)
+	}
+}
