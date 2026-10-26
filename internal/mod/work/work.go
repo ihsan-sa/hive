@@ -74,6 +74,7 @@ type Task struct {
 	HeldBy    string     `json:"held_by,omitempty"`   // the run that holds it
 	Now       bool       `json:"now,omitempty"`       // the lead starts it first, past an overlap hold (queue now)
 	Recheck   bool       `json:"recheck,omitempty"`   // landed again on the same commit, so its test runs again
+	Retested  string     `json:"retested,omitempty"`  // the head whose red tests ran once more while main's passed
 	ByPerson  bool       `json:"by_person,omitempty"` // the person stopped it or left it open, so the lead can't bring it back
 	Issue     core.Issue `json:"issue"`
 	Worker    string     `json:"worker,omitempty"`
@@ -288,13 +289,21 @@ type Module struct {
 	// OnMerged is called after a task's merge is recorded (the improve module measures).
 	OnMerged func(t Task)
 
+	// Retest runs what failed in a red test check once more on its own and
+	// says whether it passed then: a flake, which main is filed to fix
+	// (the improve module). Unset, a red stands.
+	Retest func(p core.Project, sha, test string, c core.Check, main bool) bool
+
 	// Gate runs the recursive gate on a self project's head (selfgate.go);
 	// unset, such a change can't be judged and waits.
 	Gate func(ctx context.Context, j GateJob) core.GateResult
 
 	mu    sync.Mutex
 	tasks map[string]*Task
-	busy  map[string]bool
+	// retesting is held while main's red tests run once more (mainTests).
+	retesting sync.Mutex
+	busy      map[string]bool
+	aims      map[string]aimAsk // aims asked while a step held the task, set as it ends
 	// workers, checks and gates are the limits the pace sets (pace.go,
 	// selfgate.go).
 	workers, checks, gates pace
@@ -364,7 +373,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, defCache: map[string]defEntry{}, baseTrees: map[string]map[string]string{}, mainTips: map[string]string{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, defCache: map[string]defEntry{}, baseTrees: map[string]map[string]string{}, mainTips: map[string]string{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -516,6 +525,9 @@ func (m *Module) File(b Brief) (Task, error) {
 		return Task{}, err
 	}
 	why := strings.TrimSpace(b.Why)
+	if aim == "" {
+		aim, why = b.aim()
+	}
 	if aim == AimFix && why == "" {
 		return Task{}, errors.New("a fix names the failure it fixes (--why \"...\"); a change with no named failure is taken as a gain")
 	}
@@ -563,22 +575,55 @@ func (m *Module) opAim(r core.Run, args json.RawMessage) (any, error) {
 	if r.Role == "worker" && aim != AimGain && t.Gain() && t.Gate != nil && t.Gate.Outcome == core.GateRollback {
 		return nil, fmt.Errorf("task %s was rolled back by the recursive gate, so it can't stop aiming at a gain on its own word: ask the lead (hive agent message --to lead), who can set its aim", t.ID)
 	}
-	if t.Aim != aim || t.AimWhy != core.Clip(strings.TrimSpace(a.Why), 300) {
-		if !m.claim(t.ID) {
-			return nil, fmt.Errorf("task %s has a step running right now; ask again in a moment", t.ID)
-		}
-		t, _ = m.Get(t.ID) // as the last step left it
-		t.Aim, t.AimWhy = aim, core.Clip(strings.TrimSpace(a.Why), 300)
-		m.save(&t, fmt.Sprintf("aim set by %s: %s", r.ID, t.AimWord()))
-		if !t.Gain() && m.dropGate(t.ID) {
-			m.save(&t, "the recursive gate run on it was cancelled: a fix doesn't wait for the gate, and the changes queued behind it shouldn't either")
+	ask := aimAsk{aim: aim, why: core.Clip(strings.TrimSpace(a.Why), 300), by: r.ID}
+	if t.Aim != ask.aim || t.AimWhy != ask.why {
+		if !m.claimWithin(t.ID, 2*time.Second) {
+			// A step can run for many minutes (a gate, a judge); the aim is
+			// set as it ends rather than refused, and a fix stops the gate now.
+			ask.dropped = aim == AimFix && m.dropGate(t.ID)
+			m.mu.Lock()
+			m.aims[t.ID] = ask
+			m.mu.Unlock()
+			t.Aim, t.AimWhy = ask.aim, ask.why
+			return map[string]string{"task": t.ID, "aim": t.AimWord(), "note": "a step is running on it; the aim is set as that step ends"}, nil
 		}
 		m.mu.Lock()
-		delete(m.later, t.ID) // the merge looks again at once
+		m.aims[t.ID] = ask
 		m.mu.Unlock()
-		m.release(t.ID)
+		m.release(t.ID) // sets it
+		t, _ = m.Get(t.ID)
 	}
 	return map[string]string{"task": t.ID, "aim": t.AimWord()}, nil
+}
+
+// aimAsk is an aim asked for a task, set when no step holds it.
+type aimAsk struct {
+	aim, why, by string
+	dropped      bool // a gate run on it was cancelled as it was asked
+}
+
+// setAim sets an aim asked for t while the caller holds it busy. A fix
+// cancels a gate run on it, and its merge looks again at once.
+func (m *Module) setAim(id string) {
+	m.mu.Lock()
+	ask, ok := m.aims[id]
+	delete(m.aims, id)
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	t, found := m.Get(id) // as the last step left it
+	if !found || t.Terminal() || t.Stage == StageMerged || t.Aim == ask.aim && t.AimWhy == ask.why {
+		return
+	}
+	t.Aim, t.AimWhy = ask.aim, ask.why
+	m.save(&t, fmt.Sprintf("aim set by %s: %s", ask.by, t.AimWord()))
+	if !t.Gain() && (m.dropGate(t.ID) || ask.dropped) {
+		m.save(&t, "the recursive gate run on it was cancelled: a fix doesn't wait for the gate, and the changes queued behind it shouldn't either")
+	}
+	m.mu.Lock()
+	delete(m.later, t.ID) // the merge looks again at once
+	m.mu.Unlock()
 }
 
 func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
@@ -718,7 +763,7 @@ func (m *Module) Tick() {
 		m.mu.Unlock()
 		go func(t Task) {
 			defer m.steps.Done()
-			defer func() { m.mu.Lock(); delete(m.busy, t.ID); m.mu.Unlock() }()
+			defer m.release(t.ID)
 			m.settle(&t, m.step(&t))
 		}(t)
 	}
@@ -1591,6 +1636,17 @@ func (m *Module) test(t *Task, p core.Project) error {
 			if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
 				return err
 			}
+			if t.Retested != t.SHA {
+				// A slow, busy machine fails a test CI passes: the whole
+				// check runs once more before the red counts, so merging
+				// still rests on a green run of this exact commit.
+				t.Retested, t.Recheck = t.SHA, true
+				if strings.HasPrefix(t.Reason, "waiting on main") {
+					t.Reason = ""
+				}
+				m.save(t, "its tests failed on "+core.Short(t.SHA)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 300)+") while main's pass, so they run once more before it counts")
+				return nil
+			}
 			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
 		}
 	}
@@ -1746,14 +1802,32 @@ func (m *Module) ownDiff(p core.Project, main, sha string) string {
 
 // mainTests is main's own test result, measured once per main commit (the
 // baseline and the post-merge measurement usually already have it).
+//
+// A red main runs what failed once more (Retest) before it holds anything:
+// passing then, it was a flake of a slow or busy machine, filed to fix, and
+// main counts as green. The answer is the newest "retest" check on main.
 func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
-	if c, ok := m.C.Effects.GetCheck(p.Name, main, "test"); ok {
+	c, ok := m.C.Effects.GetCheck(p.Name, main, "test")
+	if !ok {
+		if _, err := m.C.Sandbox(); err != nil {
+			return core.Check{}, err
+		}
+		c = m.C.Effects.RunCheck(p, main, "test", command)
+	}
+	if c.OK || c.CantRun != "" || m.Retest == nil {
+		return c, nil
+	}
+	m.retesting.Lock() // one retest of main, however many changes ask
+	defer m.retesting.Unlock()
+	if rc, ok := m.C.Effects.GetCheck(p.Name, main, "retest"); ok && !rc.At.Before(c.At) && rc.CantRun == "" {
+		c.OK = rc.OK
 		return c, nil
 	}
 	if _, err := m.C.Sandbox(); err != nil {
 		return core.Check{}, err
 	}
-	return m.C.Effects.RunCheck(p, main, "test", command), nil
+	c.OK = m.Retest(p, main, command, c, true)
+	return c, nil
 }
 
 // waitOnMain holds a red change while main's own tests are red, since the
@@ -2302,9 +2376,9 @@ func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 // It merges as it is while the forge says it merges cleanly: every main merge
 // moves the head past its reads and restarts its checks. Here only a conflict,
 // or the forge's rule that the branch be up to date with main, brings main in;
-// on a self project the recursive gate brings it in too, later, so it judges
-// what would land (see recursiveGate). While the forge is still working it
-// out, t waits.
+// on a self project the recursive gate merges main in its own clone, so it
+// judges what would land without moving the branch (see recursiveGate). While
+// the forge is still working it out, t waits.
 func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
 		return false, nil
@@ -3416,7 +3490,7 @@ func (m *Module) retryInFlight(id, back, by string) error {
 	if busy {
 		return fmt.Errorf("task %s has a step running right now; ask again in a moment", id)
 	}
-	defer func() { m.mu.Lock(); delete(m.busy, id); m.mu.Unlock() }()
+	defer m.release(id)
 	t, _ := m.Get(id) // as the last step left it
 	if !inFlight(t.Stage) {
 		return fmt.Errorf("task %s moved on to %s; look again", id, t.Stage)
