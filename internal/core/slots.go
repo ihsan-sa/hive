@@ -9,10 +9,12 @@ import (
 
 // Slots lets at most a few things run at once and starts the rest in the
 // order they asked, so a burst of checks waits its turn instead of piling
-// onto the machine together. Its size is read at every hand-off, so a
-// changed setting holds from the next start; one already running is never stopped.
+// onto the machine together; a higher rank (Prioritize) goes ahead of that
+// line. Its size is read at every hand-off, so a changed setting holds from
+// the next start; one already running is never stopped.
 type Slots struct {
 	size func() int // <= 0: no limit
+	rank func(project, sha, kind string) int
 
 	mu      sync.Mutex
 	running []SlotUse
@@ -25,6 +27,7 @@ type SlotUse struct {
 	SHA     string    `json:"sha"`
 	Kind    string    `json:"kind"`
 	Since   time.Time `json:"since"` // when it started, or began waiting
+	Rank    int       `json:"rank,omitempty"`
 	id      int64
 }
 
@@ -46,18 +49,51 @@ func (s *Slots) Resize(size func() int) {
 	s.fill()
 }
 
-// Fill starts what has room, for a size that grew since the last hand-off.
+// Prioritize ranks each waiter from now on: a higher rank starts first, and
+// equal ranks in the order they asked. rank is called without the slots'
+// lock, as a check asks and again at every Fill, so it may read what it
+// likes but never calls back into the slots.
+func (s *Slots) Prioritize(rank func(project, sha, kind string) int) {
+	s.mu.Lock()
+	s.rank = rank
+	s.mu.Unlock()
+	s.Fill()
+}
+
+// Fill ranks the waiters again and starts what has room, for a size that
+// grew or a rank that rose since the last hand-off.
 func (s *Slots) Fill() {
 	s.mu.Lock()
+	rank, waiting := s.rank, append([]slotWait(nil), s.waiting...)
+	s.mu.Unlock()
+	ranks := map[int64]int{}
+	if rank != nil {
+		for _, w := range waiting {
+			ranks[w.id] = rank(w.Project, w.SHA, w.Kind)
+		}
+	}
+	s.mu.Lock()
 	defer s.mu.Unlock()
+	for i := range s.waiting {
+		if r, ok := ranks[s.waiting[i].id]; ok {
+			s.waiting[i].Rank = r
+		}
+	}
 	s.fill()
 }
 
-// Acquire waits for a slot in order and returns its release.
+// Acquire waits for a slot, by rank and then in order, and returns its release.
 func (s *Slots) Acquire(project, sha, kind string) (release func()) {
 	s.mu.Lock()
+	rank := s.rank
+	s.mu.Unlock()
+	r := 0
+	if rank != nil {
+		r = rank(project, sha, kind)
+	}
+	s.mu.Lock()
 	slotSeq++
-	w := slotWait{SlotUse{Project: project, SHA: sha, Kind: kind, Since: time.Now().UTC(), id: slotSeq}, make(chan struct{})}
+	w := slotWait{SlotUse{Project: project, SHA: sha, Kind: kind, Since: time.Now().UTC(), Rank: r, id: slotSeq}, make(chan struct{})}
 	s.waiting = append(s.waiting, w)
 	s.fill()
 	s.mu.Unlock()
@@ -73,14 +109,21 @@ func (s *Slots) Acquire(project, sha, kind string) (release func()) {
 	}
 }
 
-// fill starts the oldest waiters while there is room. The caller holds s.mu.
+// fill starts the highest-ranked, then oldest, waiters while there is room.
+// The caller holds s.mu.
 func (s *Slots) fill() {
 	for len(s.waiting) > 0 {
 		if n := s.size(); n > 0 && len(s.running) >= n {
 			return
 		}
-		w := s.waiting[0]
-		s.waiting = s.waiting[1:]
+		next := 0
+		for i, w := range s.waiting {
+			if w.Rank > s.waiting[next].Rank {
+				next = i
+			}
+		}
+		w := s.waiting[next]
+		s.waiting = slices.Delete(s.waiting, next, next+1)
 		w.Since = time.Now().UTC()
 		s.running = append(s.running, w.SlotUse)
 		close(w.ready)
@@ -96,7 +139,8 @@ func (s *Slots) Busy() bool {
 	return len(s.waiting) > 0 || n > 0 && len(s.running) >= n
 }
 
-// State returns what holds a slot and what waits, each oldest first.
+// State returns what holds a slot, oldest first, and what waits, in the
+// order it will start.
 func (s *Slots) State() (running, waiting []SlotUse) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,6 +148,7 @@ func (s *Slots) State() (running, waiting []SlotUse) {
 	for _, w := range s.waiting {
 		waiting = append(waiting, w.SlotUse)
 	}
+	slices.SortStableFunc(waiting, func(a, b SlotUse) int { return b.Rank - a.Rank })
 	return running, waiting
 }
 

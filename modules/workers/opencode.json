@@ -13,7 +13,7 @@
     "read_only": ["--agent", "plan"],
     "write": ["--auto"]
   },
-  "env": ["OPENCODE_CONFIG_CONTENT={\"instructions\":[\"{system_file}\"],\"autoupdate\":false,\"share\":\"disabled\"}"],
+  "env": ["OPENCODE_CONFIG_CONTENT={\"instructions\":[\"{system_file_json}\"],\"autoupdate\":false,\"share\":\"disabled\"}"],
   "parse": [
     {"match": {"type": "step_start"}, "event": "init", "session": "sessionID"},
     {"match": {"type": "text"}, "event": "text", "text": "part.text"},

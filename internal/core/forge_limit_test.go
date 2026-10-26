@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ func stubGH(t *testing.T, reply func(args []string) (string, string, error)) *[]
 	t.Cleanup(func() { ghRun, ghPause = run, p })
 	ghPause = &pause{}
 	logins.Clear()
+	clear(workflowless.m)
 	var calls [][]string
 	ghRun = func(_ string, args []string) (string, string, error) {
 		calls = append(calls, args)
@@ -230,32 +232,41 @@ func TestChecksNewestAttemptByID(t *testing.T) {
 }
 
 // ReadyPR runs gh pr ready, a write, only while the draft's head is the
-// commit it names; a moved head or a PR already ready runs nothing.
+// commit it names; a moved head or a PR already ready runs nothing, and a
+// head that moves during the ready makes it a draft again.
 func TestGitHubReadyPRAtItsHead(t *testing.T) {
-	head, draft := "aaaa1111", true
+	head, draft, moveOnReady := "aaaa1111", true, ""
 	calls := stubGH(t, func(args []string) (string, string, error) {
 		if args[0] == "pr" && args[1] == "view" {
 			return `{"number":7,"state":"OPEN","headRefOid":"` + head + `","isDraft":` + map[bool]string{true: "true", false: "false"}[draft] + `}`, "", nil
 		}
+		if args[0] == "pr" && args[1] == "ready" && moveOnReady != "" {
+			head = moveOnReady
+		}
 		return "", "", nil
 	})
-	readies := func() (n int) {
+	count := func(undo bool) (n int) {
 		for _, c := range *calls {
-			if c[0] == "pr" && c[1] == "ready" {
+			if c[0] == "pr" && c[1] == "ready" && slices.Contains(c, "--undo") == undo {
 				n++
 			}
 		}
 		return n
 	}
-	if err := (GitHub{}).ReadyPR("o/r", 7, "bbbb2222"); err == nil || readies() != 0 {
-		t.Fatalf("readied a moved head: %v, %d", err, readies())
+	readies := func() int { return count(false) }
+	if ok, err := (GitHub{}).ReadyPR("o/r", 7, "bbbb2222"); !errors.Is(err, ErrHeadMoved) || ok || readies() != 0 {
+		t.Fatalf("readied a moved head: %v %v, %d", ok, err, readies())
 	}
-	if err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || readies() != 1 {
-		t.Fatalf("ready at its head: %v, %d", err, readies())
+	if ok, err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || !ok || readies() != 1 {
+		t.Fatalf("ready at its head: %v %v, %d", ok, err, readies())
+	}
+	moveOnReady = "cccc3333"
+	if ok, err := (GitHub{}).ReadyPR("o/r", 7, head); !errors.Is(err, ErrHeadMoved) || ok || readies() != 2 || count(true) != 1 {
+		t.Fatalf("a head moved during the ready: %v %v, readies %d, undone %d", ok, err, readies(), count(true))
 	}
 	draft = false
-	if err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || readies() != 1 {
-		t.Fatalf("readied one already ready: %v, %d", err, readies())
+	if ok, err := (GitHub{}).ReadyPR("o/r", 7, head); err != nil || ok || readies() != 2 {
+		t.Fatalf("readied one already ready: %v %v, %d", ok, err, readies())
 	}
 	if !ghWrites([]string{"pr", "ready", "7"}) {
 		t.Fatal("gh pr ready isn't counted a write")
@@ -361,6 +372,35 @@ func TestChecksRefusedWithoutWorkflows(t *testing.T) {
 		}
 		if asked != 1 {
 			t.Errorf("asked for workflows %d times, want once", asked)
+		}
+		// The head's answer is remembered: the next poll doesn't ask again.
+		if _, err := (GitHub{}).Checks("o/r", "abc"); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range (*calls)[len(*calls)-3:] {
+			if strings.Contains(c[1], "workflows") {
+				t.Errorf("asked for workflows again on the same head: %q", c)
+			}
+		}
+	}
+}
+
+// A rate limit's 403 on the checks is no refusal: it isn't read as no checks
+// and spends no call on the workflows.
+func TestChecksRateLimitIsNoRefusal(t *testing.T) {
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		if strings.Contains(strings.Join(args, " "), "check-runs") {
+			return "", "gh: You have exceeded a secondary rate limit (HTTP 403)", errors.New("exit status 1")
+		}
+		return "", "gh: Not Found (HTTP 404)", errors.New("exit status 1")
+	})
+	var rl *RateLimited
+	if _, err := (GitHub{}).Checks("o/r", "abc"); !errors.As(err, &rl) {
+		t.Fatalf("a rate limit read as %v", err)
+	}
+	for _, c := range *calls {
+		if strings.Contains(strings.Join(c, " "), "workflows") {
+			t.Errorf("asked for workflows on a rate limit: %q", c)
 		}
 	}
 }
