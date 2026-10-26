@@ -218,22 +218,14 @@ func (m *Module) checkSlots() int {
 	return cmp.Or(m.checks.get(), m.C.WS.LoadConfig().MaxChecks, core.DefaultMaxChecks())
 }
 
-// Check ranks: a check of a task queued briefs wait on goes first, then a
-// fix's, then the rest in the order they asked. The worker on #601 finished
-// with ~20 briefs waiting on it to land, and its check sat ~30 minutes
-// behind 31 others (issue #838).
-const (
-	rankFix   = 1
-	rankFrees = 2
-)
+// Check ranks: a fix's check goes first, then the rest in the order they
+// asked.
+const rankFix = 1
 
 // RankWhy says why a waiting check of rank r goes ahead of the line, or ""
 // for one that keeps its place, for the dashboard and the status op.
 func RankWhy(r int) string {
-	switch {
-	case r >= rankFrees:
-		return "frees queued briefs"
-	case r == rankFix:
+	if r >= rankFix {
 		return "a fix"
 	}
 	return ""
@@ -243,23 +235,13 @@ func RankWhy(r int) string {
 func (m *Module) checkRank(project, sha, _ string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var mine *Task
 	for _, t := range m.tasks {
 		if t.Project == project && t.SHA == sha && !t.Terminal() {
-			mine = t
-			break
+			if t.Fix() {
+				return rankFix
+			}
+			return 0
 		}
-	}
-	if mine == nil {
-		return 0
-	}
-	for _, t := range m.tasks {
-		if t.Queued() && holder(t.Reason) == mine.ID {
-			return rankFrees
-		}
-	}
-	if mine.Fix() {
-		return rankFix
 	}
 	return 0
 }

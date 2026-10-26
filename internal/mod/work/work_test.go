@@ -903,18 +903,20 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	}
 }
 
-// queue now starts a brief past the one it waits on, only with a reason, put
-// on its record; the max_workers cap still holds it.
-func TestQueueNowPastOverlap(t *testing.T) {
+// queue now puts a brief first in line, only with a reason, put on its
+// record; the max_workers cap still holds it.
+func TestQueueNowGoesFirst(t *testing.T) {
 	m := queueRig(t)
 	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
 	stuck := file(t, m, "the stuck one", "In internal/core/effects.go.")
+	other := file(t, m, "an earlier idea", "")
 	fix := file(t, m, "the queue fix", "In internal/core/effects.go too.")
-	stuck.Stage, fix.Stage = StageWorking, StageQueued
+	stuck.Stage, other.Stage, fix.Stage = StageWorking, StageQueued, StageQueued
 	m.save(&stuck, "")
+	m.save(&other, "")
 	m.save(&fix, "")
-	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], stuck.ID) {
-		t.Fatalf("the fix doesn't wait on the stuck one: %q", wait[fix.ID])
+	if start, wait := m.admit(m.List(nil)); !start[other.ID] || start[fix.ID] {
+		t.Fatalf("the earlier brief didn't take the slot: %q", wait[fix.ID])
 	}
 	if _, err := m.C.Runs.Ops().Call(lead, "queue", json.RawMessage(`{"now":"`+fix.ID+`"}`)); err == nil {
 		t.Fatal("started one now with no reason")
@@ -926,7 +928,7 @@ func TestQueueNowPastOverlap(t *testing.T) {
 	if !got.Now || !logged(&got, "it fixes what holds the queue") {
 		t.Fatalf("now %v, log %v", got.Now, got.Log)
 	}
-	if start, wait := m.admit(m.List(nil)); !start[fix.ID] {
+	if start, wait := m.admit(m.List(nil)); !start[fix.ID] || start[other.ID] {
 		t.Fatalf("the fix still waits: %q", wait[fix.ID])
 	}
 	cfg := m.C.WS.LoadConfig()
