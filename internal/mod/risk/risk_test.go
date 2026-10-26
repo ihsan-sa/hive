@@ -705,6 +705,21 @@ func TestInstallRefusesSandboxPath(t *testing.T) {
 	}
 }
 
+// The daemon's own temporary folder is the host's even under a sandbox root,
+// as when the score's e2e daemon runs with TMPDIR under /hive.
+func TestDaemonTempIsNotSandbox(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	defer func(r []string) { SandboxRoots = r }(SandboxRoots)
+	SandboxRoots = []string{tmp, "/work"}
+	if inSandbox(filepath.Join(tmp, "echo")) {
+		t.Error("a path in the daemon's temp folder was taken for a sandbox path")
+	}
+	if !inSandbox("/work/wordcount") {
+		t.Error("/work/wordcount isn't a sandbox path any more")
+	}
+}
+
 // A merge that changes the goals, the score or a setting, and a module
 // install, follow autonomy like any step: at 1 the person decides; above it a
 // warden does, its answer reaches the ask's handler as the person's would,
