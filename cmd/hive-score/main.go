@@ -272,26 +272,47 @@ const refSeconds = 180
 // each of textkit's functions right on fresh inputs and ten more for each
 // asked one, shared out over the runs, and the loop's speed: 15 points for
 // every halving of all the runs' seconds together, so 13% faster is about 3
-// points (the tolerance) whatever the Hive's speed already is. When any run
-// misses an ask, every run is charged its whole bound, the slowest a run can
-// be, so landing the work always outweighs doing it faster.
+// points (the tolerance) whatever the Hive's speed already is. Each way of
+// asking counts its fastest run for every one of its runs: the machine's load
+// only ever adds seconds (one slow run under six checks at once cost 5-20
+// points, issue #953), so the fastest is the closest to the Hive's own time.
+// When any run misses an ask, every run is charged its whole bound, the
+// slowest a run can be, so landing the work always outweighs doing it faster.
 func Score(runs []Run, e E2E) float64 {
 	rate := 0.0
 	if e.Run > 0 {
 		rate = float64(e.Passed) / float64(e.Run)
 	}
-	s, secs, missed := 100*rate, 0.0, len(runs) == 0
+	s, missed := 100*rate, len(runs) == 0
 	for _, r := range runs {
 		if r.Err == nil {
 			s += 10 / float64(len(runs)) * float64(r.Score+r.AsksFinished)
 		}
-		secs += r.Seconds
 		missed = missed || r.missed()
 	}
+	secs := Seconds(runs)
 	if missed {
 		secs = benchTimeout.Seconds() * float64(max(len(runs), 1))
 	}
 	return s + 15*math.Log2(refSeconds/max(secs, 0.1))
+}
+
+// Seconds is the loop's time the score counts: for each way of asking, its
+// fastest run's seconds once for each of its runs.
+func Seconds(runs []Run) float64 {
+	secs := 0.0
+	for _, atOnce := range []bool{false, true} {
+		n, fastest := 0, math.Inf(1)
+		for _, r := range runs {
+			if r.AtOnce == atOnce {
+				n, fastest = n+1, min(fastest, r.Seconds)
+			}
+		}
+		if n > 0 {
+			secs += float64(n) * fastest
+		}
+	}
+	return secs
 }
 
 // Report is the score's output: what made it, then the number on its own
@@ -311,6 +332,8 @@ func Report(runs []Run, e E2E, failed []string) string {
 	}
 	if slices.ContainsFunc(runs, Run.missed) {
 		fmt.Fprintf(&s, "benchmark: an ask didn't land, so every run is charged its bound (%.0fs)\n", benchTimeout.Seconds())
+	} else if len(runs) > 0 {
+		fmt.Fprintf(&s, "benchmark: %.1fs counted, each way's fastest run for each of its runs\n", Seconds(runs))
 	}
 	fmt.Fprintf(&s, "e2e: %d/%d passed (%d only on a second run)", e.Passed, e.Run, e.Flaky)
 	if len(failed) > 0 {

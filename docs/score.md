@@ -23,7 +23,7 @@ It needs `go`, `git` and `python3` (the benchmark runs textkit with it). The com
 score = 100 × e2e pass rate
       + 10 × benchmark score          (textkit's 6 functions right on fresh inputs, averaged over the six runs)
       + 10 × asks finished            (the 4 asked ones among them, averaged likewise)
-      + 15 × log2(180 / seconds)      (seconds: the six runs together)
+      + 15 × log2(180 / seconds)      (seconds: each way's fastest run, × 3 runs, the two ways together)
 ```
 
 The speed term is on a log scale: every halving of the loop's time is worth 15 points however fast the Hive already is, and a seventh faster (13%) is about 3, the tolerance. When any run misses an ask (or prints no valid BENCH line), every run is charged its whole bound (2 minutes), the slowest a run can be, so landing the work always outweighs doing it faster. One e2e test of 43 is 2.3 points. 180 s is about three times what the six runs took when this started; where it sits moves every score alike. The output is the parts, one line each, and the number alone on the last line:
@@ -32,6 +32,7 @@ The speed term is on a log scale: every halving of the loop's time is worth 15 p
 benchmark, one by one: 6/6 functions right, 4/4 asks finished, 11.4s
 benchmark, all at once: 6/6 functions right, 4/4 asks finished, 6.8s
 ...
+benchmark: 54.6s counted, each way's fastest run for each of its runs
 e2e: 43/43 passed (0 only on a second run)
 225.70
 ```
@@ -65,7 +66,9 @@ On this machine (20 cores), 2026-10-25, four runs at main 46b24b0 while the Hive
 
 A run takes **about 3 minutes**: under a minute to build, about 1.5 for the six benchmark runs and 2 for the suite. Each benchmark run is bounded at 2 minutes, the suite at 10 and the re-run of what failed at 6, so with the build it stays inside the check's own 30; a test cut off by a bound counts as failed.
 
-The at-once runs vary most (6.5-8.6 s for one run): the queue and the loop's ticks land differently each time. Three runs of each way of asking, added up, keep that under the tolerance. Other checks sharing the machine (`max_checks`) slow every run and can flake a timing-bound e2e test (the second run absorbs most of it).
+**Each way of asking counts its fastest run** (for each of its three runs, so the scale is the six runs together as before). The machine's load only ever adds seconds, so the fastest run is the closest to the Hive's own time. Issue #953: from about 8e66bdcd (2026-10-25 evening), with six checks at once (load 26-31 on 20 cores), 30 of 40 daemon score logs had one or more runs at 15-56 s where their siblings took 11.5 s (one by one) and 4-7 s (at once), and the speed term, then the six runs added up, swung from 9 to 28 points (standard deviation 4.8, against a tolerance of 3): 45079e9b, docs only over a commit that scored 219.36, scored 208.72 on runs of 18.0, 17.2 and 27.0 s, and 228.33 measured bare. Over the same 40 logs, the fastest run of each way gives 18-30 (standard deviation 2.7); the median of three, 12-29 (4.5), since often two of the three were slow. What it gives up: a change that makes the Hive slow only some of the time (a race that sometimes waits a tick) scores as its fast runs; the e2e suite and the at-once runs' landing are where that shows. When load slows all three runs of a way, the score still dips; a fix kept on such a dip sets the best kept to the low number.
+
+The at-once runs vary most (6.5-8.6 s for one run): the queue and the loop's ticks land differently each time. Three runs of each way of asking, the fastest counted, keep that under the tolerance on a quiet machine. Other checks sharing the machine (`max_checks`) slow every run and can flake a timing-bound e2e test (the second run absorbs most of it).
 
 ## First value on main
 

@@ -81,6 +81,20 @@ func TestReportFormat(t *testing.T) {
 	if a, b := Score(full(1, 1), e)-Score(full(2, 2), e), Score(full(20, 20), e)-Score(full(40, 40), e); math.Abs(a-b) > 1e-9 {
 		t.Fatalf("a halving is worth %g fast and %g slow", a, b)
 	}
+	// One run slowed by the machine's load (45079e9b: 27.0s where its
+	// siblings took 11.8s) doesn't move the score; a slower Hive, every run
+	// slower, still does.
+	slow := full(11.8, 6.4)
+	slow[4].Seconds, slow[3].Seconds = 27.0, 17.2
+	if d := Score(full(11.8, 6.4), e) - Score(slow, e); d != 0 {
+		t.Fatalf("one slow run of each way cost %.2f points", d)
+	}
+	if !strings.Contains(Report(slow, e, nil), "benchmark: 54.6s counted") {
+		t.Fatalf("the counted seconds aren't reported:\n%s", Report(slow, e, nil))
+	}
+	if d := Score(full(11.8, 6.4), e) - Score(full(14, 7.6), e); d < 3 {
+		t.Fatalf("a Hive a sixth slower lost only %.2f points", d)
+	}
 	missed := full(1, 1)
 	missed[1].Score, missed[1].AsksFinished = 5, 3
 	if Score(missed, e) >= Score(full(benchTimeout.Seconds(), benchTimeout.Seconds()), e) {
