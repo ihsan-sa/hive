@@ -1150,7 +1150,7 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 		if t.Fix() {
 			b.WriteString("- Aim: a fix (" + orNone(t.AimWhy) + "). It merges on its tests, checks and reads; a score dip after it merges doesn't revert it on its own, but files a brief to look into it. If it isn't a fix of a named failure, say so with `hive agent aim --aim gain --why \"...\"`.\n")
 		} else {
-			fmt.Fprintf(&b, "- Aim: %s. It merges only if it shows a clear gain over the current Hive: a judge on another model weighs the recursive gate's numbers with the change, its brief and your account, and decides. If it is a fix, say so naming the failure it fixes (a bug, a failing test, a broken path) with `hive agent aim --aim fix --why \"...\"`.\n", t.AimWord())
+			fmt.Fprintf(&b, "- Aim: %s. It merges only if it shows a clear gain over the current Hive: a judge on another model weighs the recursive gate's numbers with the change, its brief and your account, and decides. If it is a fix, say so naming the failure it fixes (a bug, a failing test, a broken path) with `hive agent aim --aim fix --why \"...\"`. A change no probe sees (a bug fix, a hardening) shows its gain by a test of its own that fails by name on the current Hive and passes on yours: the gate runs it on both sides, so write it against names main already has; a test that calls a function, field or constant the change adds doesn't build on the current Hive and counts for nothing.\n", t.AimWord())
 		}
 	}
 	if cfg.Score != nil {

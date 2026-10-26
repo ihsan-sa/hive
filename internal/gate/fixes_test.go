@@ -70,6 +70,14 @@ func fixRepo(t *testing.T, extra map[string]string) (repo string, sha map[string
 	write("calc/sub.go", "package calc\n\nfunc Sub(a, b int) int {\n\treturn a - b\n}\n")
 	write("calc/sub_test.go", "package calc\n\nimport \"testing\"\n\nfunc TestSub(t *testing.T) {\n\tif Sub(3, 2) != 1 {\n\t\tt.Fatal(Sub(3, 2))\n\t}\n}\n")
 	commit("fix+new")
+
+	// The fix's test in one file with a test of a new function and a helper
+	// that calls it: the file doesn't build on the control whole, but the
+	// fix's test cut to itself does.
+	git("checkout", "-q", "--detach", sha["fix"])
+	write("calc/sub.go", "package calc\n\nfunc Sub(a, b int) int {\n\treturn a - b\n}\n")
+	write("calc/add_test.go", "package calc\n\nimport (\n\t\"strconv\"\n\t\"testing\"\n)\n\n// two is what the fix's test adds.\nconst two = 2\n\nfunc TestAdd(t *testing.T) {\n\tif Add(two, 3) != 5 {\n\t\tt.Fatal(Add(two, 3))\n\t}\n}\n\nfunc one() int { return Sub(3, 2) }\n\nfunc TestSub(t *testing.T) {\n\tif one() != 1 {\n\t\tt.Fatal(strconv.Itoa(one()))\n\t}\n}\n")
+	commit("fix+new in one file")
 	return repo, sha
 }
 
@@ -126,6 +134,11 @@ func checkFindFixes(t *testing.T, extra map[string]string, side func(name, root 
 		t.Fatalf("the step's time is not in the report: %v\n%s", fr.Seconds, fr.markdown())
 	}
 
+	fr = run("fix+new in one file")
+	if len(fr.Fixes) != 1 || fr.Fixes[0].Test != "TestAdd" || !strings.Contains(strings.Join(fr.Notes, "\n"), "calc TestSub: does not build or run on the control, which has no Sub") {
+		t.Fatalf("a fix in one file with a test the control can't build was not counted cut to itself: %+v", fr)
+	}
+
 	fr = run("noop")
 	if len(fr.Fixes) != 0 || !strings.Contains(strings.Join(fr.Notes, "\n"), "does not build or run on the control") {
 		t.Fatalf("a test that cannot build on the control counted: %+v", fr)
@@ -137,6 +150,36 @@ func checkFindFixes(t *testing.T, extra map[string]string, side func(name, root 
 	fr = run("unrelated")
 	if len(fr.Fixes) != 0 || !strings.Contains(strings.Join(fr.Notes, "\n"), "runs none of the lines") {
 		t.Fatalf("a test that runs none of the change counted: %+v", fr)
+	}
+}
+
+func TestCutToTest(t *testing.T) {
+	src := "//go:build !windows\n\npackage p\n\nimport (\n\t\"fmt\"\n\tyaml \"gopkg.in/yaml.v3\"\n\t\"os\"\n\t\"testing\"\n\n\t\"example.com/m/v2\"\n)\n\ntype rig struct{ n int }\n\nfunc (r *rig) up() int { return r.n }\n\nfunc (r rig) gone() int { return New() }\n\nvar shared = 1\n\n// TestA is kept.\nfunc TestA(t *testing.T) {\n\tr := &rig{n: m.N}\n\tfmt.Println(r.up())\n}\n\nfunc TestB(t *testing.T) { os.Exit(New()) }\n\nfunc helper() { _ = yaml.Marshal }\n\nfunc init() {}\n"
+	other := filepath.Join(t.TempDir(), "other_test.go")
+	os.WriteFile(other, []byte("package p\n\nfunc TestC(t *testing.T) { _ = shared }\n"), 0o644)
+	got, err := cutToTest([]byte(src), "TestA", []string{other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(got)
+	for _, want := range []string{"//go:build !windows", "\"fmt\"", "\"example.com/m/v2\"", "type rig", "func (r *rig) up", "func (r rig) gone", "var shared", "func TestA", "func init"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("cut lost %s:\n%s", want, s)
+		}
+	}
+	for _, gone := range []string{"\"os\"", "yaml", "func TestB", "func helper"} {
+		if strings.Contains(s, gone) {
+			t.Errorf("cut kept %s:\n%s", gone, s)
+		}
+	}
+}
+
+func TestMissingNames(t *testing.T) {
+	out := `{"ImportPath":"m/w [m/w.test]","Action":"build-output","Output":"w/head_test.go:9:12: undefined: noChecksMax\n"}
+{"ImportPath":"m/w [m/w.test]","Action":"build-output","Output":"w/head_test.go:20:7: task.NoChecks undefined (type *Task has no field or method NoChecks)\n"}
+{"ImportPath":"m/w [m/w.test]","Action":"build-output","Output":"w/x_test.go:3:1: undefined: core.Scrub\n"}`
+	if got := strings.Join(missingNames(out), ", "); got != "noChecksMax, core.Scrub, Task.NoChecks" {
+		t.Fatalf("missing names: %q", got)
 	}
 }
 

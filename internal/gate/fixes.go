@@ -72,7 +72,8 @@ func safeName(s string) string { return clip(unsafeName.ReplaceAllString(s, "_")
 // runs a line the diff changed outside the tests. A test that does not build
 // or run on the control (it calls a new function) is no evidence either way;
 // when its whole package fails to build there, each test is tried again with
-// only its own file and the test files both sides have alike.
+// only its own file and the test files both sides have alike, and then, if
+// that file still doesn't build there, with the file cut to the test alone.
 func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 	note := func(f string, a ...any) { fr.Notes = append(fr.Notes, fmt.Sprintf(f, a...)) }
 	if cand.Src == "" || ctrl.Src == "" || cfg.Base == "" || cfg.Head == "" {
@@ -135,9 +136,9 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 			cover = append(cover, p)
 		}
 	}
-	whole := map[string]string{} // each tried test's package: all of the candidate's test files
+	whole := map[string]overlay{} // each tried test's package: all of the candidate's test files
 	for _, t := range tried {
-		whole[t.dir] = ""
+		whole[t.dir] = overlay{}
 	}
 
 	lab := &Child{Name: "fixes", Root: filepath.Join(cfg.Out, "fixes"), Sandbox: cand.Sandbox, Go: cand.Go, Meter: cand.Meter, Fwd: cand.Fwd}
@@ -150,7 +151,7 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 	// try runs tests on both sides, fixRounds times each, the side that
 	// starts picked at random (neither may count on going first), each tree
 	// laid out with the candidate's test files of ov.
-	try := func(tests []fixTest, ov map[string]string) (cands, ctrls map[fixTest]*tally, err error) {
+	try := func(tests []fixTest, ov map[string]overlay) (cands, ctrls map[fixTest]*tally, err error) {
 		cands, ctrls = map[fixTest]*tally{}, map[fixTest]*tally{}
 		for _, t := range tests {
 			cands[t], ctrls[t] = &tally{}, &tally{}
@@ -191,6 +192,7 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 						ctrls[t].fail++
 					} else if got == "" {
 						ctrls[t].norun = true
+						ctrls[t].needs = missingNames(out)
 					} else {
 						ctrls[t].pass++
 					}
@@ -220,7 +222,7 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 	}
 	for _, f := range files {
 		ts := again[f]
-		c, k, err := try(ts, map[string]string{path.Dir(f): path.Base(f)})
+		c, k, err := try(ts, map[string]overlay{path.Dir(f): {file: path.Base(f)}})
 		if err == errOutOfTime {
 			note("out of time trying tests again with only their own file")
 			break
@@ -235,11 +237,34 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 			}
 		}
 	}
+	// A file whose other tests (or a helper they use) name what only the
+	// candidate has still hides the tests beside them. Each test that still
+	// did not build on the control is tried once more alone, its file cut to
+	// the test and what it uses, the same cut on both sides.
+	for _, t := range tried {
+		if cands[t].pass < fixRounds || !ctrls[t].norun || !slices.Contains(files, t.file) {
+			continue
+		}
+		c, k, err := try([]fixTest{t}, map[string]overlay{t.dir: {file: path.Base(t.file), test: t.name}})
+		if err == errOutOfTime {
+			note("out of time trying tests again cut to themselves")
+			break
+		}
+		if err != nil {
+			note("%v", err)
+			return
+		}
+		if c[t].pass == fixRounds { // else the cut left out what it needs: no evidence
+			cands[t], ctrls[t] = c[t], k[t]
+		}
+	}
 	for _, t := range tried {
 		c, k := cands[t], ctrls[t]
 		switch {
 		case c.pass < fixRounds:
 			note("%s: does not pass on the candidate every time (%d/%d)", t, c.pass, fixRounds)
+		case k.norun && len(k.needs) > 0:
+			note("%s: does not build or run on the control, which has no %s: no evidence", t, strings.Join(k.needs, ", "))
 		case k.norun:
 			note("%s: does not build or run on the control: no evidence", t)
 		case k.fail < fixRounds:
@@ -256,15 +281,45 @@ func findFixes(cfg *Config, cand, ctrl *Child) (fr FixReport) {
 // tally is one side's runs of one test.
 type tally struct {
 	pass, fail int
-	norun      bool   // did not build or run: no evidence
-	covers     string // a changed line a passing run ran
+	norun      bool     // did not build or run: no evidence
+	needs      []string // what the build said it lacked, when it did not build
+	covers     string   // a changed line a passing run ran
+}
+
+// overlay is which of the candidate's test files a package gets: all of them
+// when file is "", else file and those both sides have alike, with file cut
+// to test and what it uses when test is set.
+type overlay struct{ file, test string }
+
+var (
+	undefinedName = regexp.MustCompile(`undefined: ([\pL_][\pL\pN_.]*)`)
+	missingMember = regexp.MustCompile(`\(type \*?(?:[\pL\pN_]+\.)?([\pL_][\pL\pN_]*) has no field or method ([\pL_][\pL\pN_]*)`)
+)
+
+// missingNames is what a failed build said it lacked: undefined names and
+// missing fields or methods, as Name or Type.Member, at most five.
+func missingNames(out string) []string {
+	var names []string
+	add := func(n string) {
+		if n = safeName(n); !slices.Contains(names, n) && len(names) < 5 {
+			names = append(names, n)
+		}
+	}
+	for _, m := range undefinedName.FindAllStringSubmatch(out, -1) {
+		add(m[1])
+	}
+	for _, m := range missingMember.FindAllStringSubmatch(out, -1) {
+		add(m[1] + "." + m[2])
+	}
+	return names
 }
 
 // reset puts a fresh tree of src at the lab's one path and empties the lab's
 // home and scratch; the build cache stays. In each dir of ov the tree's test
-// files are the candidate's (cand), and so is its testdata: all of them for
-// "", else only the named file and those the control (ctrl) has alike.
-func (c *Child) reset(src, cand, ctrl string, ov map[string]string) error {
+// files are the candidate's (cand), and so is its testdata: all of them, or
+// only the overlay's file (cut to its test) and those the control (ctrl) has
+// alike.
+func (c *Child) reset(src, cand, ctrl string, ov map[string]overlay) error {
 	for _, d := range []string{"tree", "cover", "home", "tmp", "gopath", "hive"} {
 		p := filepath.Join(c.Root, d)
 		if err := os.RemoveAll(p); err != nil {
@@ -284,8 +339,8 @@ func (c *Child) reset(src, cand, ctrl string, ov map[string]string) error {
 	if err := os.MkdirAll(filepath.Join(c.Root, "cover"), 0o755); err != nil {
 		return err
 	}
-	for dir, only := range ov {
-		if only == "" && src == cand {
+	for dir, o := range ov {
+		if o.file == "" && src == cand {
 			continue // the candidate's own tree already is that
 		}
 		dir := filepath.FromSlash(dir)
@@ -299,11 +354,29 @@ func (c *Child) reset(src, cand, ctrl string, ov map[string]string) error {
 		}
 		os.RemoveAll(filepath.Join(to, "testdata"))
 		files, _ := filepath.Glob(filepath.Join(from, "*_test.go"))
+		var kept []string
 		for _, f := range files {
-			if only != "" && filepath.Base(f) != only && !sameFile(f, filepath.Join(ctrl, dir, filepath.Base(f))) {
+			if o.file != "" && filepath.Base(f) != o.file && !sameFile(f, filepath.Join(ctrl, dir, filepath.Base(f))) {
 				continue
 			}
+			if o.test != "" && filepath.Base(f) == o.file {
+				continue // cut below, once the others are in
+			}
+			kept = append(kept, f)
 			if err := copyFile(f, filepath.Join(to, filepath.Base(f))); err != nil {
+				return err
+			}
+		}
+		if o.test != "" {
+			raw, err := os.ReadFile(filepath.Join(from, o.file))
+			if err != nil {
+				return err
+			}
+			cut, err := cutToTest(raw, o.test, kept)
+			if err != nil {
+				return fmt.Errorf("cutting %s to %s: %v", o.file, o.test, err)
+			}
+			if err := os.WriteFile(filepath.Join(to, o.file), cut, 0o644); err != nil {
 				return err
 			}
 		}
@@ -548,4 +621,144 @@ func (fr FixReport) markdown() string {
 		fmt.Fprintf(&b, "- the step took %s\n", time.Duration(fr.Seconds*float64(time.Second)))
 	}
 	return b.String()
+}
+
+// cutToTest is a test file cut to one test: the test, TestMain and init, and
+// the declarations of the file they use, as do the other test files of the
+// package (others) that stay beside it; then the imports still used. What
+// the file's other tests need, a name only the candidate has, goes with them.
+func cutToTest(src []byte, test string, others []string) ([]byte, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", src, parser.ParseComments|parser.SkipObjectResolution)
+	if err != nil {
+		return nil, err
+	}
+	used := map[string]bool{}
+	see := func(n ast.Node) {
+		ast.Inspect(n, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok {
+				used[id.Name] = true
+			}
+			return true
+		})
+	}
+	for _, o := range others {
+		g, err := parser.ParseFile(token.NewFileSet(), o, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range g.Decls {
+			see(d)
+		}
+	}
+	// names is what a declaration declares; a method is its receiver's type.
+	names := func(d ast.Decl) (ns []string) {
+		switch d := d.(type) {
+		case *ast.FuncDecl:
+			if d.Recv == nil || len(d.Recv.List) == 0 {
+				return []string{d.Name.Name}
+			}
+			t := d.Recv.List[0].Type
+			for {
+				switch x := t.(type) {
+				case *ast.StarExpr:
+					t = x.X
+					continue
+				case *ast.IndexExpr:
+					t = x.X
+					continue
+				case *ast.IndexListExpr:
+					t = x.X
+					continue
+				case *ast.Ident:
+					return []string{x.Name}
+				}
+				return nil
+			}
+		case *ast.GenDecl:
+			for _, s := range d.Specs {
+				switch s := s.(type) {
+				case *ast.TypeSpec:
+					ns = append(ns, s.Name.Name)
+				case *ast.ValueSpec:
+					for _, n := range s.Names {
+						ns = append(ns, n.Name)
+					}
+				}
+			}
+		}
+		return ns
+	}
+	keep := map[ast.Decl]bool{}
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && (fn.Name.Name == test || fn.Name.Name == "TestMain" || fn.Name.Name == "init") {
+			keep[d] = true
+			see(d)
+		}
+	}
+	for grew := true; grew; {
+		grew = false
+		for _, d := range f.Decls {
+			if gd, ok := d.(*ast.GenDecl); keep[d] || ok && gd.Tok == token.IMPORT {
+				continue
+			}
+			if slices.ContainsFunc(names(d), func(n string) bool { return n != "_" && used[n] }) {
+				keep[d], grew = true, true
+				see(d)
+			}
+		}
+	}
+	var decls []ast.Decl
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.IMPORT {
+			if keep[d] {
+				decls = append(decls, d)
+			}
+			continue
+		}
+		var specs []ast.Spec
+		for _, s := range gd.Specs {
+			if is := s.(*ast.ImportSpec); is.Name != nil && (is.Name.Name == "_" || is.Name.Name == ".") || used[importName(is)] {
+				specs = append(specs, s)
+			}
+		}
+		if len(specs) > 0 {
+			gd.Specs = specs
+			decls = append(decls, gd)
+		}
+	}
+	f.Decls = decls
+	// Only the comments before the package clause (build constraints) stay:
+	// the rest would land beside whatever is left.
+	var head []*ast.CommentGroup
+	for _, c := range f.Comments {
+		if c.End() < f.Package {
+			head = append(head, c)
+		}
+	}
+	f.Comments, f.Doc = head, nil
+	var b bytes.Buffer
+	if err := printer.Fprint(&b, fset, f); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+// importName is the name an import is used by: its own, else its path's
+// last element, past a major version (/v2) and a gopkg-style .v3, without a
+// go- prefix. A wrong guess drops a used import and the cut file doesn't
+// build: no evidence, as before the cut.
+func importName(is *ast.ImportSpec) string {
+	if is.Name != nil {
+		return is.Name.Name
+	}
+	p, _ := strconv.Unquote(is.Path.Value)
+	parts := strings.Split(p, "/")
+	n := parts[len(parts)-1]
+	if len(parts) > 1 && len(n) > 1 && n[0] == 'v' && strings.Trim(n[1:], "0123456789") == "" {
+		n = parts[len(parts)-2]
+	}
+	n, _, _ = strings.Cut(n, ".")
+	return strings.TrimPrefix(n, "go-")
 }
