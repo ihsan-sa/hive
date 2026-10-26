@@ -35,16 +35,17 @@ type Note struct {
 
 // Module is the knowledge base.
 type Module struct {
-	C      *core.Core
-	Agents *agents.Agents
-	mu     sync.Mutex
-	filing string        // running filer
-	Seeded time.Duration // how long the last SeedSelf took
+	C        *core.Core
+	Agents   *agents.Agents
+	mu       sync.Mutex
+	filing   string          // running filer
+	answered map[string]bool // researchers whose answer went to their asker
+	Seeded   time.Duration   // how long the last SeedSelf took
 }
 
 // New registers ops and makes sure the store is a repository.
 func New(c *core.Core, a *agents.Agents) *Module {
-	m := &Module{C: c, Agents: a}
+	m := &Module{C: c, Agents: a, answered: map[string]bool{}}
 	m.ensureRepo()
 	m.moveIsolated()
 	m.filePractice()
@@ -58,6 +59,8 @@ func New(c *core.Core, a *agents.Agents) *Module {
 			if m.filing == f.Run {
 				m.filing = ""
 			}
+		case "kb.answered":
+			m.answered[f.Run] = true
 		}
 	})
 	c.Runs.Ops().Register(core.Op{Name: "remember", Help: `{"title","text","tags"}`, Fn: func(r core.Run, args json.RawMessage) (any, error) {
@@ -72,10 +75,11 @@ func New(c *core.Core, a *agents.Agents) *Module {
 		}
 		return "saved as " + filepath.Base(path), nil
 	}})
-	c.Runs.Ops().Register(core.Op{Name: "search", Help: `{"query", "limit": "n or all"}`, Fn: func(r core.Run, args json.RawMessage) (any, error) {
+	c.Runs.Ops().Register(core.Op{Name: "search", Help: `{"query", "limit": "n or all", "deep": "a question for a researcher on a small model, answered as a message"}`, Fn: func(r core.Run, args json.RawMessage) (any, error) {
 		var q struct {
 			Query string
 			Limit json.RawMessage
+			Deep  json.RawMessage
 		}
 		if err := core.Bind(args, &q); err != nil {
 			return nil, err
@@ -87,6 +91,21 @@ func New(c *core.Core, a *agents.Agents) *Module {
 			if p.Hidden() && p.Name != r.Project {
 				hide = append(hide, "isolated/"+p.Name, "record")
 			}
+		}
+		// --deep "question", or --deep with --query.
+		var deep string
+		var v any
+		json.Unmarshal(q.Deep, &v)
+		switch d := v.(type) {
+		case string:
+			deep = d
+		case bool:
+			if d {
+				deep = q.Query
+			}
+		}
+		if deep != "" {
+			return m.Deep(r, deep, Find(c.WS.KB(), deep, "8", hide...))
 		}
 		return Find(c.WS.KB(), q.Query, strings.Trim(string(q.Limit), `"`), hide...), nil
 	}})
@@ -391,8 +410,10 @@ func (m *Module) File() (string, error) {
 	return id, nil
 }
 
-// Tick applies a finished filer's commits by fast-forward.
+// Tick sends finished deep searches' answers and applies a finished filer's
+// commits by fast-forward.
 func (m *Module) Tick() {
+	m.answerDeep()
 	m.mu.Lock()
 	id := m.filing
 	m.mu.Unlock()

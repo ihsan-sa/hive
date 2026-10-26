@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -84,32 +85,40 @@ func TestRecordFilesEveryEvent(t *testing.T) {
 	restart("1") // what is left of a cut "12"
 }
 
-// Search returns the matching entry, not its whole file, and the newest
-// state first when two match as well. Find shows the best limit of them and
-// says how many more matched, and marks an entry it clips.
+// Search returns each file once, its best entry first and the entries that
+// hold words the best one lacks with it, the newest state first when two
+// match as well. Find shows the best limit of them and says how many more
+// matched, and cuts a long entry to the lines that hold the words.
 func TestSearch(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "record", "task"), 0o755)
-	os.WriteFile(filepath.Join(dir, "record", "task", "t1.md"), []byte("# task t1\n\n### 2026-10-01 09:00 · task.saved · seq 1\n- title: Add login\n- stage: working\n\n### 2026-10-02 09:00 · task.saved · seq 9\n- stage: merged\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "record", "task", "t1.md"), []byte("# task t1\n\n### 2026-10-01 09:00 · task.saved · seq 1\n- title: Add login\n- stage: working\n\n### 2026-10-02 09:00 · task.saved · seq 9\n- stage: merged\n\n### 2026-10-03 09:00 · task.saved · seq 12\n- stage: merged\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "billing.md"), []byte("---\ntitle: Billing\ndate: 2026-09-01\n---\n\nInvoices go out monthly.\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "login-notes.md"), []byte("---\ntitle: Login\ndate: 2026-09-01\n---\n\nThe login page.\n"), 0o644)
 	hits := Search(dir, "login merged")
-	if len(hits) != 2 || !strings.Contains(hits[0].Text, "seq 9") {
+	if len(hits) != 2 || hits[0].File != "record/task/t1.md" || !strings.Contains(hits[0].Text, "seq 12") || len(hits[0].More) != 1 || !strings.Contains(hits[0].More[0], "seq 1\n") || hits[0].Others != 1 {
 		t.Fatalf("hits: %+v", hits)
+	}
+	if hits[0].Label != "title: Add login" || !slices.Contains(hits[0].Why, "matched login, merged") {
+		t.Errorf("label %q, why %q", hits[0].Label, hits[0].Why)
 	}
 	if hits := Search(dir, "invoices"); len(hits) != 1 || hits[0].File != "billing.md" {
 		t.Fatalf("hits: %+v", hits)
 	}
+	if hits := Search(dir, "invoice"); len(hits) != 1 || hits[0].File != "billing.md" {
+		t.Fatalf("a word's other form: %+v", hits)
+	}
 	if got := Find(dir, "zebra", ""); !strings.Contains(got, "doesn't cover") {
 		t.Fatal(got)
 	}
-	if got := Find(dir, "login merged", "1"); !strings.Contains(got, "seq 9") || strings.Contains(got, "seq 1\n") || !strings.Contains(got, "1 more match") {
+	if got := Find(dir, "login merged", "1"); !strings.Contains(got, "seq 12") || !strings.Contains(got, "seq 1\n") || strings.Count(got, "== ") != 1 || !strings.Contains(got, "1 more files match") || !strings.Contains(got, "1 more entries here match") {
 		t.Fatal(got)
 	}
-	if got := Find(dir, "login merged", "all"); !strings.Contains(got, "seq 1\n") || strings.Contains(got, "more match") {
+	if got := Find(dir, "login merged", "all"); strings.Count(got, "== ") != 2 || strings.Contains(got, "more files match") {
 		t.Fatal(got)
 	}
-	os.WriteFile(filepath.Join(dir, "long.md"), []byte("walrus "+strings.Repeat("x", 2000)), 0o644)
-	if got := Find(dir, "walrus", ""); !strings.Contains(got, "clipped; the rest is in long.md") {
+	os.WriteFile(filepath.Join(dir, "long.md"), []byte("intro\n"+strings.Repeat("x\n", 400)+"the walrus is here\n"+strings.Repeat("y\n", 400)), 0o644)
+	if got := Find(dir, "walrus", ""); !strings.Contains(got, "the walrus is here") || strings.Contains(got, "x\nx") || !strings.Contains(got, "clipped; the rest is in long.md") {
 		t.Fatal(got)
 	}
 	// One unreadable folder or file doesn't hide the rest of the knowledge base.
@@ -183,5 +192,48 @@ func TestPrivateNotesStayInTheProject(t *testing.T) {
 	}
 	if got := search("mine"); !strings.Contains(got, "isolated/mine/") {
 		t.Errorf("the private project's own search lost its note: %s", got)
+	}
+}
+
+// Search follows the connections between files: the query's PR number
+// picks its task, a task names its run and the task it reverts, a note its
+// [[links]], and a file named by a hit comes up with it, saying why.
+func TestSearchFollowsConnections(t *testing.T) {
+	dir := t.TempDir()
+	for _, d := range []string{"task", "run"} {
+		os.MkdirAll(filepath.Join(dir, "record", d), 0o755)
+	}
+	task, revert, run := "261024-015726-45d2d27ed7", "261024-020043-5f804b138f", "w-261024-015726-45d2d27ed7"
+	os.WriteFile(filepath.Join(dir, "record", "task", task+".md"), []byte("# task "+task+"\n\n### 2026-10-01 09:00 · task.saved · seq 1\n- id: "+task+"\n- title: Add login\n\n### 2026-10-01 10:00 · task.saved · seq 5\n- pr.number: 42\n- worker: "+run+"\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "record", "task", revert+".md"), []byte("# task "+revert+"\n\n### 2026-10-02 09:00 · task.saved · seq 9\n- id: "+revert+"\n- title: Revert: Add login\n- known: the tests went red after "+task+" merged, so it is reverted\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "record", "run", run+".md"), []byte("# run "+run+"\n\n### 2026-10-01 09:30 · run.created · seq 3\n- id: "+run+"\n- role: worker\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "gate.md"), []byte("---\ntitle: Gate\n---\n\nThe gate holds.\n\n## Related\n\n- [[login-notes]] · Login\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "login-notes.md"), []byte("---\ntitle: Login\n---\n\nThe login page.\n"), 0o644)
+	files := func(hits []Hit) map[string]Hit {
+		out := map[string]Hit{}
+		for _, h := range hits {
+			out[h.File] = h
+		}
+		return out
+	}
+	hits := Search(dir, "why was #42 reverted")
+	got := files(hits)
+	if hits[0].File != "record/task/"+task+".md" || !slices.Contains(hits[0].Why, "about #42") {
+		t.Fatalf("the PR's task isn't first: %+v", hits)
+	}
+	if h, ok := got["record/task/"+revert+".md"]; !ok || !slices.Contains(h.Links, "record/task/"+task+".md") {
+		t.Errorf("the revert doesn't name the task it reverts: %+v", h)
+	}
+	if h, ok := got["record/run/"+run+".md"]; !ok || !slices.Contains(h.Why, "named by record/task/"+task+".md") || h.Label != "role: worker" {
+		t.Errorf("the task's run didn't come up with it: %+v", hits)
+	}
+	if h, ok := files(Search(dir, run))["record/task/"+task+".md"]; !ok {
+		t.Errorf("a run's id doesn't find its task: %+v", h)
+	}
+	if h, ok := files(Search(dir, "gate holds"))["login-notes.md"]; !ok || !slices.Contains(h.Why, "named by gate.md") {
+		t.Errorf("a note's [[link]] isn't followed: %+v", h)
+	}
+	if out := Find(dir, "why was #42 reverted", ""); !strings.Contains(out, "names: record/run/"+run+".md") || !strings.Contains(out, "(about #42") {
+		t.Errorf("Find doesn't show the connections: %s", out)
 	}
 }

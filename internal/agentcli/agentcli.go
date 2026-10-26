@@ -96,7 +96,7 @@ func Main(argv []string) int {
 
 // switches are the yes/no arguments, which may stand bare before another
 // --key; any other key takes the next word as its value, even "--help".
-var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "delete_branch": true, "apart": true, "fresh": true}
+var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "delete_branch": true, "apart": true, "fresh": true, "deep": true}
 
 // parseArgs accepts one JSON object, `-` for JSON on stdin, `--file x.json`,
 // or --key value pairs (a value of @path reads that file's text).
@@ -181,7 +181,8 @@ A value of @path reads that file. Common ops:
   install   --tool python|uv|node|go [--version 3.12]   installs it for every agent, no root,
                                                  on your PATH at once; give the call a 25-minute timeout
   install   --system "sudo apt-get install -y x" --why "..."   a root install: goes to the person
-  search    --query "words" [--limit n|all]     the knowledge base pieces that match, best first
+  search    --query "words" [--limit n|all]     the knowledge base files that match, best first, with what they name
+  search    --deep "question"                   a researcher on a small model digs and answers as a message
   remember  --title "..." --text "..." [--tags a,b]   write to the knowledge base
   feedback  --text "..." [--about "agents/worker.md"]   what about the Hive got in your way, for the person
   feedback  --fixed <feedback id> --task <task id>   that task fixes it: it closes when the task lands

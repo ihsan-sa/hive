@@ -1,0 +1,65 @@
+{
+  "note": "Picked by hand on 2026-10-24/25 by an agent reading the KB record files (sweeps, step-backs, feedback, risk, release, stall, chat), on topics deliberately different from questions.json, and held out from tuning.",
+  "questions": [
+    {
+      "q": "why did every release attempt fail early in the morning with a tag that already exists?",
+      "answer": "After the person marked v0.1.4-v0.1.6 pre-release and v0.1.3 latest at 02:28Z, GitHub.LatestRelease (forge.go) took only the first entry of 'gh release list --limit 1' (v0.1.3), so the Hive bumped to v0.1.4 every time and 'gh release create v0.1.4' failed with HTTP 422 tag already exists (24 release alerts 02:30-03:26Z). The sweep filed task 261024-032744-d2f6804b69 (issue #188): pick one past the highest tag; it landed as PR #193 (merged 70872c21).",
+      "expect": ["record/sweep/sweep-261024-032634-c1a4b552fe.md", "record/task/261024-032744-d2f6804b69.md", "record/alert/hive.md"],
+      "also": ["record/sweep/sweep-261024-041135-9b20248223.md", "record/release/hive.md"]
+    },
+    {
+      "q": "why did so many tasks give up with 'Pull Request is still a draft' even though their reviews said land?",
+      "answer": "autobox had drafted the PRs on purpose to hold them for an outside perms read; the merge step counted each 'still a draft' as an error and gave up after 8 failures (5 tasks by 04:10, 13 by 06:30, 600-700 such lines). The first fix (task 261024-041206-277a0fcfe3, PR #202, park drafts) itself stopped on its own draft before eventually merging (97689f58). When the person said nobody outside reads the PRs any more, the lead had no op to ready a PR, so a sweep filed 261024-062744-45d2d0b001 (PR #414) for the Hive to ready its own drafts once its reads clear the head.",
+      "expect": ["record/sweep/sweep-261024-041135-9b20248223.md", "record/sweep/sweep-261024-062638-e798ab1081.md", "record/task/261024-041206-277a0fcfe3.md", "record/task/261024-062744-45d2d0b001.md"],
+      "also": []
+    },
+    {
+      "q": "why does the regular step-back on the hive project never finish?",
+      "answer": "Every scheduled step-back (16 stepback records, all status failed) ends with 'it has no score to beat': the hive project has no score command configured (project.json only has a test), so there is no best to compare against and each raises a stepback alert. A judgement step-back was written by hand instead by w-261024-141741-aa0f672c38, noting no benchmark score exists.",
+      "expect": ["record/stepback/stepback-261024-032633-b9d832cfd3.md", "step-back-2026-10-24-the-gate-exists-but-gates-nothing-no-sc.md", "record/alert/hive.md"],
+      "also": ["record/stepback/stepback-261024-182641-697c45ab4d.md", "record/sweep/sweep-261024-032634-c1a4b552fe.md"]
+    },
+    {
+      "q": "work in the deck, dispatch and trials projects kept stopping with an HTTP 403; what was going on?",
+      "answer": "Tasks on Hive-RSI-Lab repos (deck DDJ-FLX4 261024-154353-5c4bec3bc6, dispatch 261024-150956-d5ad28fa63, several trials tasks) gave up after repeated errors on 'gh api .../check-runs: Resource not accessible by personal access token (HTTP 403)': the org token lacks Checks read, and the merge step counts it as a failure and stops after 8. None of those repos even has workflows. Two briefs: 261024-171715-4c663ceef1 (ask the person once for the permission) and 261024-204125-39d8fc4b05 (issue #464, PR #516: a 403 on a repo without workflows means no checks, and stopped tasks come back).",
+      "expect": ["record/sweep/sweep-261025-003842-6babe484b8.md", "record/task/261024-204125-39d8fc4b05.md", "record/task/261024-154353-5c4bec3bc6.md", "record/task/261024-171715-4c663ceef1.md"],
+      "also": ["record/task/261024-150956-d5ad28fa63.md", "record/task/261024-183139-169770c931.md", "record/sweep/sweep-261024-213828-38cd835b1b.md"]
+    },
+    {
+      "q": "why did the person turn down the first request to run the recursive gate on the host, and what changed in the second ask?",
+      "answer": "The lead's warden request (T2) was approved by the warden but went to the person because the filter read 'no tokens' as touching a credential; the person (via autobox) declined because it would run unreviewed code outside any sandbox, next to a credential the box uses, with no cap on processes or disk. A duplicate request was declined by its warden. The re-ask ran clone/build/test/gate inside bwrap, hid /home/hive behind a tmpfs, and capped it with systemd-run (TasksMax 256, 4G memory, 400% CPU, 40 min); it was approved and ran (outcome done).",
+      "expect": ["record/risk/261024-064907-a71692561a.md", "record/risk/261024-065418-411b80c81a.md", "record/person/261024-065027-f967bc3738.md"],
+      "also": ["record/risk/261024-065038-65dba837cb.md", "record/chat/lead.md"]
+    },
+    {
+      "q": "the person said nothing should merge until the next release, so why did something merge anyway and what was done about it?",
+      "answer": "At 04:18Z the person allowed one PR for the v0.1.7 reds and nothing else until H0 ran the next release; #205 merged, then the Hive's auto-filed review follow-up #207 merged at 04:47Z and moved main past the commit the pending v0.1.8 release was for. There was no merge hold in the code. The sweep filed task 261024-054238-2cd9e31339 (issue #215, PR #255, merged 3594db7a): a 'hive hold' that stops every merge, follow-ups included, until lifted or the release is out. Its follow-up (#281) asked the person whether lifting a hold should be theirs alone.",
+      "expect": ["record/sweep/sweep-261024-054137-fcbe4481a4.md", "record/task/261024-054238-2cd9e31339.md", "record/chat/agent-w-261024-054238-2cd9e31339.md"],
+      "also": ["record/chat/agent-w-261024-082743-f0420fbe5d.md"]
+    },
+    {
+      "q": "why did TestLoginPoolPicksTheLeastUsedByItsWindows keep failing on main, and how was it fixed?",
+      "answer": "It was a clock time bomb: logins_test.go used shift := time.Until(recorded), which grows negative, so recorded resets landed in the past and H0's login read 0 used ('the less-used added login goes first, got claude'). improve blamed #223 and filed revert PR #298 (task 261024-105233-5490be1439), which failed the same test and stopped. The sweep filed 261024-105741-0f8f25feec (issue #299), but the fix came in PR #280's worker (Anthropic-compatible models), merged as 175848bc at 11:19. Later improve measured the old #253 sha bdced0a1 and raised a false flake alert for it.",
+      "expect": ["record/sweep/sweep-261024-105645-7a57c340e1.md", "record/task/261024-074858-9a090ed23b.md", "record/task/261024-105233-5490be1439.md", "record/sweep/sweep-261024-135651-72f26b6921.md"],
+      "also": ["record/task/261024-105741-0f8f25feec.md", "record/alert/hive.md", "record/effect/hive.md"]
+    },
+    {
+      "q": "PR #253 was merged on GitHub in the morning; why did its task and the queue behind it stay stuck for hours?",
+      "answer": "The person merged #253 at 07:53Z (bdced0a1), but the Hive never noticed: closedOnForge only handled CLOSED and the merging stage held on forge checks (red main windows-latest at a6c44d9d) before ever looking at a MERGED state. 27 of 42 queued tasks chained behind 261024-065119-4da72b5889. Sweeps filed 261024-114411-2ddbd1108b (merged on forge ends as merged) and 261024-131407-0da5b6a045 (PR #342, lead can end a task whose PR landed); the lead then ended 065119 as landed around 13:49.",
+      "expect": ["record/task/261024-065119-4da72b5889.md", "record/sweep/sweep-261024-114148-338f42b23f.md", "record/sweep/sweep-261024-131150-7e06610ba2.md", "record/task/261024-131407-0da5b6a045.md"],
+      "also": ["record/task/261024-114411-2ddbd1108b.md", "record/sweep/sweep-261024-135651-72f26b6921.md", "record/sweep/sweep-261024-075640-be03203e84.md"]
+    },
+    {
+      "q": "on PR #485, why did hive agent rerun-checks keep saying there was no finished failed run to re-run?",
+      "answer": "GitHub.RerunFailed (internal/core/forge.go) only re-runs workflow runs with status completed, and a run completes only when all its jobs end, but a fix round goes to the worker as soon as one job fails; so while other jobs were still running (run 40141761281, TestPrefetchReadsOnlyTheCheckout TempDir race) rerun-checks refused and the same round came back. Same on #496. The sweep filed 261024-235559-01d7a42630 (issue #521): a fix round waits until its run completes.",
+      "expect": ["record/feedback/261024-233249-0e847653ee.md", "record/feedback/261024-232824-b37d2407c7.md", "record/sweep/sweep-261024-235339-bcc2cd1a2c.md", "record/task/261024-235559-01d7a42630.md"],
+      "also": ["record/feedback/261024-234525-d27014156b.md", "record/feedback/261024-234837-b6cccab2be.md"]
+    },
+    {
+      "q": "what was PR #278 about the stall watcher, and why did it keep getting sent back to its worker?",
+      "answer": "Between 07:35 and 07:52 the stall watcher handed 10 merging tasks to the lead that were all waiting on red main (windows-latest at a6c44d9d), one handoff per task; the sweep filed 261024-075718-b00b80382f (issue #276, PR #278) so a named wait isn't counted as a stall, or one cause gets one alert. Its worker reported PR #278 was sent back five times for windows-latest failures that were main's or Windows e2e flakes, and that workers couldn't read Actions logs or re-run checks; it merged as 6067f839.",
+      "expect": ["record/task/261024-075718-b00b80382f.md", "record/sweep/sweep-261024-075640-be03203e84.md", "record/feedback/261024-120028-755fdfa9d0.md", "record/stall/hive.md"],
+      "also": ["record/feedback/261024-084212-8461a76043.md"]
+    }
+  ]
+}

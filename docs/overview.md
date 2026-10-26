@@ -28,7 +28,7 @@ The diagram is drawn from [arch.json](arch.json). To change it, edit that file a
 - It runs an approved warden or tribunal step as you, as exactly the script that was approved (pinned by its digest).
 - All agent traffic leaves through its egress proxy, which reaches public hosts only.
 
-**The knowledge base.** Plain markdown in a git repository (`.hive/kb`): notes agents leave, how a Hive works, the Hive's own source, and a record of every task, run and chat filed from the journal. Agents search it before they research; you read it under **Knowledge** or with `hive kb <words>`.
+**The knowledge base.** Plain markdown in a git repository (`.hive/kb`): notes agents leave, how a Hive works, the Hive's own source, and a record of every task, run and chat filed from the journal. Agents search it before they research: each file once, with why it matched and the files it names (a task its runs and PR, a note its links), and `--deep` hands a question to a small, budgeted researcher that follows those connections and answers as a message; you read it under **Knowledge** or with `hive kb <words>`.
 
 **Modules.** The pipeline and the default modules (chat, work, improve, risk, knowledge base, schedules and others) are compiled into the program; their prompts are files in `.modules/` you can change. You can add modules from git. A module that carries its own program runs as you, outside the sandbox, so it starts only after a module reviewer has read its code at that exact commit, and again after every update.
 
