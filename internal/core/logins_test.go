@@ -247,6 +247,37 @@ func TestStaleReadingKeepsThePark(t *testing.T) {
 	}
 }
 
+// A login parked at WeeklyStop of its week stays parked through a late
+// reading from a turn that started before the park, even one whose five-hour
+// window is later than the parking reading's (#875's review); the next week
+// lifts it.
+func TestStaleReadingKeepsTheWeeklyStop(t *testing.T) {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, noOwnLogin{}, func() []string { return nil })
+	week := time.Now().Add(3 * 24 * time.Hour)
+	read := func(five time.Time, weekly float64, weekReset time.Time) {
+		rs.append("plan.usage", Plan{Harness: "claude", Login: "claude", Limit: harness.RateLimit{Status: "allowed", ResetsAt: five, Window: "five_hour",
+			Windows: map[string]harness.Window{"five_hour": {Utilization: 0.2, ResetsAt: five}, "seven_day": {Utilization: weekly, ResetsAt: weekReset}}}})
+	}
+	parked := func() bool { return rs.Plans()[0].Parked(time.Now()) }
+	read(time.Now().Add(time.Hour), 0.96, week)
+	if !parked() {
+		t.Fatal("96% of the week didn't park the login")
+	}
+	read(time.Now().Add(2*time.Hour), 0.94, week)
+	if !parked() {
+		t.Fatal("a stale reading with a later five-hour reset lifted the weekly stop")
+	}
+	read(time.Now().Add(2*time.Hour), 0.01, week.Add(7*24*time.Hour))
+	if parked() {
+		t.Fatal("a reading from the next week keeps the login parked")
+	}
+}
+
 // With the machine's login at its limit and an added one with no
 // credential, the run is parked for the limit, not for "not logged in".
 func TestLimitIsTheReasonOverAMissingLogin(t *testing.T) {

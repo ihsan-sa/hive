@@ -10,17 +10,16 @@ import (
 // in the journal, when it last dreamed, and what the record says now, folded
 // from every event it read. It holds facts, not events, so it stays small.
 type State struct {
-	Cursor  int64             `json:"cursor"`
-	Born    time.Time         `json:"born"` // its first start
-	Last    time.Time         `json:"last"` // its last pass
-	Tasks   map[string]*Task  `json:"tasks"`
-	Runs    map[string]*Run   `json:"runs"`
-	Gates   []Judged          `json:"gates"`
-	Sweeps  []Report          `json:"sweeps"`
-	Steps   map[string]Report `json:"steps"` // the last step-back, by project
-	Said    []Said            `json:"said"`  // the person's latest lines
-	Alerts  map[string]int    `json:"alerts"`
-	Changed time.Time         `json:"changed"` // the newest event folded
+	Cursor int64             `json:"cursor"`
+	Born   time.Time         `json:"born"` // its first start
+	Last   time.Time         `json:"last"` // its last pass
+	Tasks  map[string]*Task  `json:"tasks"`
+	Runs   map[string]*Run   `json:"runs"`
+	Gates  []Judged          `json:"gates"`
+	Sweeps []Report          `json:"sweeps"`
+	Steps  map[string]Report `json:"steps"` // the last step-back, by project
+	Said   []Said            `json:"said"`  // the person's latest lines
+	Alerts map[string]int    `json:"alerts"`
 }
 
 // Task is a task's last state.
@@ -39,6 +38,7 @@ type Task struct {
 type Run struct {
 	Task    string    `json:"task,omitempty"`
 	Project string    `json:"project,omitempty"`
+	Role    string    `json:"role,omitempty"`
 	Status  string    `json:"status,omitempty"`
 	At      time.Time `json:"at,omitzero"`
 }
@@ -79,15 +79,17 @@ func newState() *State {
 	return &State{Tasks: map[string]*Task{}, Runs: map[string]*Run{}, Steps: map[string]Report{}, Alerts: map[string]int{}}
 }
 
-const keepGates, keepSweeps, keepSaid = 200, 3, 20
+// keepSaid is wide because hidden projects' lines are dropped only when the
+// digest is written: a busy hidden project mustn't push shared lines out.
+const keepGates, keepSweeps, keepSaid = 200, 3, 200
 
 // fold takes one event into the state. It returns the job a module.scheduled
 // event asks this module for, or "idle" for hive.idle.
 func (s *State) fold(e Event, me string) string {
 	s.Cursor = max(s.Cursor, e.Seq)
 	var d struct {
-		ID, Title, Project, Stage, Reason, Task, Status, Outcome, Head, Note, Report, Chat, From, Text, Kind, Module, Job string
-		Finish                                                                                                            struct{ Status string }
+		ID, Title, Project, Role, Stage, Reason, Task, Status, Outcome, Head, Note, Report, Chat, From, Text, Kind, Module, Job string
+		Finish                                                                                                                  struct{ Status string }
 	}
 	json.Unmarshal(e.Data, &d)
 	switch e.Kind {
@@ -109,7 +111,7 @@ func (s *State) fold(e Event, me string) string {
 			t.Blocked = e.At
 		}
 	case "run.created":
-		s.Runs[d.ID] = &Run{Task: d.Task, Project: d.Project}
+		s.Runs[d.ID] = &Run{Task: d.Task, Project: d.Project, Role: d.Role}
 	case "run.finish":
 		r := s.Runs[d.ID]
 		if r == nil {
@@ -149,10 +151,7 @@ func (s *State) fold(e Event, me string) string {
 		return ""
 	case "hive.idle":
 		return "idle"
-	default:
-		return ""
 	}
-	s.Changed = e.At
 	return ""
 }
 
@@ -165,22 +164,28 @@ func firstOf(s ...string) string {
 	return ""
 }
 
-// taskOf is the task a note is about: its run's, else the one titled so.
+// taskOf is the task a note is about: its run's, else the only one titled
+// so. Two tasks with the title (a later one filed again) name neither, so a
+// note is never retired for a task it isn't about.
 func (s *State) taskOf(run, title string) (string, *Task) {
 	if r := s.Runs[run]; r != nil && s.Tasks[r.Task] != nil {
 		return r.Task, s.Tasks[r.Task]
 	}
-	id, best := "", (*Task)(nil)
+	id, found := "", (*Task)(nil)
 	for k, t := range s.Tasks {
-		if title != "" && strings.EqualFold(t.Title, title) && (best == nil || t.At.After(best.At) || (t.At.Equal(best.At) && k > id)) {
-			id, best = k, t
+		if title != "" && strings.EqualFold(t.Title, title) {
+			if found != nil {
+				return "", nil
+			}
+			id, found = k, t
 		}
 	}
-	return id, best
+	return id, found
 }
 
 // chatProject is the project a chat belongs to: none for the lead's, the
-// project's own, or an agent chat's run's. A chat whose project can't be
+// project's own, or an agent chat's run's (none for a lead's own run with no
+// project). A chat whose project can't be
 // worked out (a run it never saw created, a kind it doesn't know) is not
 // known, and a caller keeping hidden projects out leaves it out.
 func (s *State) chatProject(chat string) (string, bool) {
@@ -190,7 +195,7 @@ func (s *State) chatProject(chat string) (string, bool) {
 	case strings.HasPrefix(chat, "project:"):
 		return strings.TrimPrefix(chat, "project:"), true
 	case strings.HasPrefix(chat, "agent:"):
-		if r := s.Runs[strings.TrimPrefix(chat, "agent:")]; r != nil && r.Project != "" {
+		if r := s.Runs[strings.TrimPrefix(chat, "agent:")]; r != nil && (r.Project != "" || r.Role == "lead") {
 			return r.Project, true
 		}
 	}

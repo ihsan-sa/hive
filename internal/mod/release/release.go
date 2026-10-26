@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -702,7 +703,8 @@ func fileSum(path string) (string, error) {
 // head with no read waits for the person's word. A change to a root path (what
 // runs with elevated rights) goes out once the Hive's own security reads passed
 // its diff (rootRead), and the person is told after; with no such read it waits
-// for the person too.
+// for the person too. While the newest release's release run failed, a merge
+// that changes nothing the failed job reads waits too (unbuilt).
 // The release numbers on from this build, so the install switches to it at its
 // next update. In the person's fork it also asks the person whether to offer
 // the change upstream, one pull request that grows with each kept merge.
@@ -740,14 +742,10 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	list, refuse := m.merges(project, sha)
-	if refuse == "" {
-		refuse = m.tagged(p, sha)
-	}
 	if refuse != "" {
 		once(refuse)
 		return
 	}
-	m.refused.Delete(project)
 	var manifest strings.Builder
 	var root, unread, rootRead []string
 	for _, mg := range list {
@@ -763,6 +761,10 @@ func (m *Module) afterKept(project, sha string) {
 		if by := m.rootRead(project, mg); by != "" {
 			fmt.Fprintf(&manifest, "  its root paths (%s) passed %s\n", strings.Join(mg.Root, ", "), by)
 			rootRead = append(rootRead, fmt.Sprintf("#%d (%s)", mg.PR, strings.Join(mg.Root, ", ")))
+		} else if mg.Diff == "" {
+			// Merged before effect.merged carried the diff: no read can be
+			// matched to it.
+			root = append(root, fmt.Sprintf("%s (#%d's merge record names no diff)", strings.Join(mg.Root, ", "), mg.PR))
 		} else {
 			root = append(root, mg.Root...)
 		}
@@ -771,6 +773,14 @@ func (m *Module) afterKept(project, sha string) {
 	if !approved && !m.mainGreen(p, sha) {
 		return
 	}
+	// The tags are read only once main's checks let the cut go ahead, so a
+	// commit retried while it waits on them (retryWaiting) costs no forge
+	// calls or fetches for them while the lock is held.
+	if refuse := m.tagged(p, sha); refuse != "" {
+		once(refuse)
+		return
+	}
+	m.refused.Delete(project)
 	var why []string
 	if len(root) > 0 {
 		why = append(why, strings.Join(root, ", ")+" run with elevated rights and no security read passed them")
@@ -977,6 +987,12 @@ func (m *Module) retryWaiting() {
 // a change to a root path on the security list: an outside read decides when
 // there is one, else the security seat and a majority of the panel said land
 // on its own diff. "" when nobody did.
+//
+// mg.Root is the merge's root-class paths, each of which ChangeOf put in both
+// Security and SecurityRoot at merge, listed or not; so SecurityRoot here asks
+// for the panel majority on purpose. The seats read the whole own diff, so
+// their land passes all of a merge's root paths together. Only root paths
+// reach this: a high path's security read isn't checked again at release.
 func (m *Module) rootRead(project string, mg merge) string {
 	if !m.C.Effects.SecurityOK(project, core.Change{Security: mg.Root, SecurityRoot: mg.Root, DiffID: mg.Diff}) {
 		return ""
@@ -1168,7 +1184,7 @@ func (m *Module) Publish() string {
 		At                time.Time
 	}
 	var cands []cand
-	failed := map[string]bool{}
+	failed := map[string]string{} // the gate each release.failed blamed, "" for the update test
 	m.C.J.Replay(func(e core.Event) {
 		var x struct {
 			Project, Tag, SHA string
@@ -1185,7 +1201,9 @@ func (m *Module) Publish() string {
 		case "hive.published":
 			cands = slices.DeleteFunc(cands, func(c cand) bool { return c.Project == x.Project && !modules.Newer(x.Tag, c.Tag) })
 		case "release.failed":
-			failed[x.Project+"@"+x.Tag] = true
+			var g struct{ Gate string }
+			e.Decode(&g)
+			failed[x.Project+"@"+x.Tag] = g.Gate
 		case "release.refused":
 			cands = slices.DeleteFunc(cands, func(c cand) bool { return c.Project == x.Project && c.Tag == x.Tag })
 		}
@@ -1236,7 +1254,7 @@ func (m *Module) Publish() string {
 			done[c.Project] = true
 			out = append(out, "published "+c.Tag)
 		case "failed":
-			if !failed[key] && m.failed(c.Project, c.Tag, c.SHA, why, cause, "") {
+			if _, said := failed[key]; !said && m.failed(c.Project, c.Tag, c.SHA, why, cause, "") {
 				text := c.Tag + " stays a pre-release, so installs stay where they are: " + why + ". A re-run that passes publishes it."
 				if cause == "update" { // only a failed update holds the cut (unbuilt)
 					text += " " + failedSteps
@@ -1245,7 +1263,9 @@ func (m *Module) Publish() string {
 			}
 			out = append(out, c.Tag+": "+why)
 		case "unbuilt":
-			if !failed[key] && m.failed(c.Project, c.Tag, c.SHA, why, cause, "release") {
+			// A release.failed from before the release run was told apart
+			// blamed the update test; the corrected alert goes out once too.
+			if g, said := failed[key]; (!said || g != "release") && m.failed(c.Project, c.Tag, c.SHA, why, cause, "release") {
 				alert(c, c.Tag+" has no binaries, since its "+why+"; its update test has nothing to install, so an update failure there says nothing about updating. "+unbuiltSteps)
 			}
 			out = append(out, c.Tag+": "+why)
@@ -1340,8 +1360,10 @@ func judge(runs []core.WorkflowRun) (state, why string, bad []string) {
 const unbuiltSteps = "The Hive cuts no new release that leaves what failed unchanged, since it would be as empty: " +
 	"a failed scan job most often means the repository secrets HIVE_SCAN_HANDLES and HIVE_SCAN_DENY are missing " +
 	"(Settings, Secrets and variables, Actions); set them and re-run its release run, then its update run, and once they pass it is published and releases go on. " +
-	"A failure in the code (a scan hit its log names, a build or sign error, release.yml itself) is fixed in a new commit: " +
-	"the first kept merge that changes what the failed job reads is cut as usual, and the person's \"release\" on the hold's ask cuts one anyway."
+	"A failure in the code (a build or sign error, release.yml itself) is fixed in a new commit: " +
+	"the first kept merge that changes what the failed job reads is cut as usual, and the person's \"release\" on the hold's ask cuts one anyway. " +
+	"A scan hit its log names in a public file passed the daemon's own scan, so CI's lists differ from the daemon's: " +
+	"a fix to that file alone is not cut by itself, so say \"release\" once it lands."
 
 // buildFailed says why the release workflow (release.yml: scan, build, sign)
 // failed among a release's runs, naming the jobs that failed, or "" when it
@@ -1434,7 +1456,7 @@ func (m *Module) unbuilt(p core.Project, sha string) string {
 	if len(since) == 0 || since[len(since)-1].SHA == sha {
 		return ""
 	}
-	for i := len(since) - 1; i >= 0 && i >= len(since)-5; i-- {
+	for i := len(since) - 1; i >= 0 && i >= len(since)-holdLooks; i-- {
 		r := since[i]
 		runs, err := m.C.Effects.Forge.ReleaseRuns(p.Repo, r.SHA)
 		if err != nil {
@@ -1466,13 +1488,19 @@ func (m *Module) unbuilt(p core.Project, sha string) string {
 			raise := !said[cause]
 			m.C.J.MustAppend("release.held", map[string]string{"project": p.Name, "tag": r.Tag, "sha": r.SHA, "why": why, "cause": cause})
 			if raise {
-				m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": p.Name, "text": "no release at " + core.Short(sha) + ": " + text})
+				m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": p.Name, "ref": "release:held:" + r.Tag,
+					"text": "no release at " + core.Short(sha) + ": " + text})
 			}
 		}
 		return text
 	}
 	return ""
 }
+
+// holdLooks is how many of the releases since the last published one
+// unbuilt reads, newest first, for one with a verdict: one ReleaseRuns call
+// each. A failure older than that many still-running releases isn't seen.
+const holdLooks = 5
 
 // failedSteps is what the person does about a release that failed its update
 // gate.
@@ -1531,7 +1559,13 @@ func (m *Module) tagged(p core.Project, sha string) string {
 		if at == sha {
 			return t + " is already cut at it"
 		}
-		if in, err := contains(p, sha, at); err == nil && in {
+		in, err := contains(p, sha, at)
+		if err != nil {
+			// The cut goes ahead, but a guard that can't read shows here.
+			log.Printf("release: %s: can't tell whether %s at %s contains %s: %v", p.Name, t, core.Short(at), core.Short(sha), err)
+			continue
+		}
+		if in {
 			return t + " at " + core.Short(at) + " already contains it, so a new tag would carry older code under a higher number"
 		}
 	}
@@ -1539,15 +1573,20 @@ func (m *Module) tagged(p core.Project, sha string) string {
 }
 
 // contains says whether sha is tagSHA or one of its ancestors, fetching
-// tagSHA into the project's clone when it hasn't got it.
+// tagSHA into the project's clone, with the token its owner's sync uses,
+// when it hasn't got it. Both come to git only as hex object names, so a
+// forge value can never be read as an option.
 func (m *Module) contains(p core.Project, sha, tagSHA string) (bool, error) {
+	if !hexName(sha) || !hexName(tagSHA) {
+		return false, fmt.Errorf("not a commit name: %q, %q", core.Clip(sha, 50), core.Clip(tagSHA, 50))
+	}
 	dir := m.C.WS.Project(p.Name)
 	full, err := core.Git(dir, "rev-parse", "--verify", sha+"^{commit}")
 	if err != nil {
 		return false, err
 	}
 	if _, err := core.Git(dir, "rev-parse", "--verify", tagSHA+"^{commit}"); err != nil {
-		if _, err := core.GitT(5*time.Minute, dir, "fetch", "-q", "--no-tags", "origin", tagSHA); err != nil {
+		if _, err := core.GitEnvT(5*time.Minute, dir, core.ForgeEnv(p.Repo), "fetch", "-q", "--no-tags", "origin", tagSHA); err != nil {
 			return false, err
 		}
 	}
@@ -1558,13 +1597,26 @@ func (m *Module) contains(p core.Project, sha, tagSHA string) (bool, error) {
 	return strings.TrimSpace(base) == strings.TrimSpace(full), nil
 }
 
+// hexName says whether s is a full or abbreviated hex object name.
+func hexName(s string) bool {
+	if len(s) < 4 || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			return false
+		}
+	}
+	return true
+}
+
 // diff lists the files that differ between two commits of the project.
 func (m *Module) diff(p core.Project, from, to string) ([]string, error) {
-	out, err := core.Git(m.C.WS.Project(p.Name), "diff", "--name-only", "-z", from, to)
+	out, err := core.Git(m.C.WS.Project(p.Name), "diff", "--name-only", "-z", "--end-of-options", from, to, "--")
 	if err != nil {
 		return nil, err
 	}
-	return strings.Split(strings.TrimRight(out, "\x00"), "\x00"), nil
+	return slices.DeleteFunc(strings.Split(out, "\x00"), func(f string) bool { return f == "" }), nil
 }
 
 // nextTag is one past the highest vX.Y.Z among tags (v0.0.1 if none is).
