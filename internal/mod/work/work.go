@@ -1308,6 +1308,13 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	if _, err := m.C.Sandbox(); err != nil {
 		return nil
 	}
+	// Weighing waits for a check slot, and the step holds the task while it
+	// waits: behind a backlog of checks, a worker that finished meanwhile
+	// sat in working for as long as the backlog took. A checkpoint is only
+	// a bonus, so it waits for a free slot instead, looked at again later.
+	if _, waiting := m.C.Effects.Slots.State(); len(waiting) > 0 {
+		return nil
+	}
 	sha, err := m.C.Effects.Extract(p, r, t.Base)
 	switch {
 	case errors.Is(err, core.ErrNoChanges):

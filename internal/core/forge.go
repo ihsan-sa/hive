@@ -878,7 +878,7 @@ func (GitHub) CheckSteps(repo string, r CheckRun) ([]JobStep, error) {
 // APIReader is a forge that answers read-only API calls on the person's
 // login (5,000 an hour), so neither the daemon nor agents spend the anonymous
 // 60 an hour this machine's address shares. RateReset is when the login's
-// quota is next full again.
+// quota is next full again, or the zero time while it isn't spent.
 type APIReader interface {
 	APIGet(repo, path string) (string, error)
 	RateReset(repo string) (time.Time, error)
@@ -893,14 +893,19 @@ func (GitHub) APIGet(repo, path string) (string, error) {
 }
 
 // RateReset reads the login's core quota; GitHub doesn't count that read.
+// While calls are left (a secondary limit, not the hour's quota) it is the
+// zero time: nothing to wait for past what GitHub itself asked.
 func (GitHub) RateReset(repo string) (time.Time, error) {
-	out, err := gh(repo, "api", "rate_limit", "-q", ".resources.core.reset")
+	out, err := gh(repo, "api", "rate_limit", "-q", `.resources.core | "\(.remaining) \(.reset)"`)
 	if err != nil {
 		return time.Time{}, err
 	}
-	n, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
-	if err != nil {
+	var left, n int64
+	if _, err := fmt.Sscan(out, &left, &n); err != nil {
 		return time.Time{}, fmt.Errorf("reading the rate limit's reset: %w", err)
+	}
+	if left > 0 {
+		return time.Time{}, nil
 	}
 	return time.Unix(n, 0), nil
 }
