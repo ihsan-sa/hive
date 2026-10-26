@@ -289,8 +289,8 @@ func TestSelfGateMainFailsAsksToLandTheGateFix(t *testing.T) {
 	if _, err := m.C.Person.Answer(asks[0].ID, "merge", ""); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 200 && !m.C.Effects.Approved("gate", p.Name, task.SHA+"@"+main); i++ {
-		time.Sleep(10 * time.Millisecond) // the handler runs on its own
+	for i := 0; i < 1000 && !m.C.Effects.Approved("gate", p.Name, task.SHA+"@"+main); i++ {
+		time.Sleep(10 * time.Millisecond) // the handler runs on its own; a loaded machine can take seconds
 	}
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" || len(*jobs) != 1 {

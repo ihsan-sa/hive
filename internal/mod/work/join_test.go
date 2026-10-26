@@ -57,6 +57,35 @@ func TestDuplicateBriefJoinsOpenTask(t *testing.T) {
 	if got, _ := m.Get(task.ID); !got.JoinedBy("sweep-x") || got.JoinedBy("sweep") {
 		t.Fatalf("the join isn't on the task's record: %v", got.Log)
 	}
+	// The issue was opened with w-two's ask in its body; sweep-x's, joined
+	// once it was open, goes on it as a comment, once however often it ticks.
+	tick(m)
+	tick(m)
+	forge := m.C.Effects.Forge.(*flakyForge)
+	var posted []string
+	for _, c := range forge.Comments("me/p", task.Issue.Number) {
+		if strings.Contains(c, "Another brief joined") {
+			posted = append(posted, c)
+		}
+	}
+	if len(posted) != 1 || !strings.Contains(posted[0], "Also asked by sweep-x") {
+		t.Fatalf("want sweep-x's ask on the issue once, got %q", posted)
+	}
+	if got, _ := m.Get(task.ID); got.JoinsPosted != 2 || len(got.Joins) != 2 {
+		t.Fatalf("joins %d, posted %d", len(got.Joins), got.JoinsPosted)
+	}
+	// The aim is read as File reads it: " Fix " with a failure joins the fix,
+	// " Gain" doesn't, and an aim that is neither is refused before it joins.
+	if fix := brief(t, m, "w-four", map[string]any{"title": "TestModuleLifecycle hangs", "done": "TestModuleLifecycle passes", "aim": " Fix ", "why": "it hangs"}); fix["task"] != task.ID {
+		t.Fatalf("a fix said as \" Fix \" didn't join the fix: %v", fix)
+	}
+	if g := brief(t, m, "w-four", map[string]any{"title": "TestModuleLifecycle hangs less", "done": "TestModuleLifecycle passes", "aim": " Gain", "why": "it hangs"}); g["task"] == task.ID {
+		t.Fatalf("a gain joined the fix: %v", g)
+	}
+	raw, _ := json.Marshal(map[string]any{"title": "TestModuleLifecycle hangs", "aim": "urgent", "why": "it hangs"})
+	if _, err := m.opBrief(core.Run{RunSpec: core.RunSpec{ID: "w-four", Role: "worker", Project: "p"}}, raw); err == nil {
+		t.Fatal("an aim that is neither fix nor gain was taken")
+	}
 
 	other := brief(t, m, "w-two", map[string]any{"title": "Show the queue on the dashboard", "known": "internal/tui/views.go"})
 	apart := brief(t, m, "w-two", map[string]any{"title": "TestBlockedWorkComesBack also needs a Linux leg", "apart": true})
@@ -70,8 +99,8 @@ func TestDuplicateBriefJoinsOpenTask(t *testing.T) {
 	if gain["task"] != apart["task"] || unclear["task"] != apart["task"] {
 		t.Fatalf("gains on one test didn't join each other: %v / %v / %v", apart, gain, unclear)
 	}
-	if n := len(m.List(nil)); n != 3 {
-		t.Fatalf("want three tasks, got %d", n)
+	if n := len(m.List(nil)); n != 4 {
+		t.Fatalf("want four tasks, got %d", n)
 	}
 }
 
@@ -124,5 +153,43 @@ func TestBoardStaysOutOfTheWorkersBrief(t *testing.T) {
 	}
 	if !strings.Contains(run.System, "FAKEBOARD") {
 		t.Fatal("the worker didn't get the board")
+	}
+}
+
+// A working task whose worker has finished but not yet pushed isn't joined,
+// since the worker would never read the added ask; the brief files on its own.
+// A lead's brief that joins a task has its thread told how that task ends.
+func TestJoinSkipsEndedWorkerAndTellsLeadThread(t *testing.T) {
+	m := queueRig(t)
+	first := brief(t, m, "w-one", map[string]any{"title": "TestQueueOrder fails on main", "aim": "fix", "why": "TestQueueOrder fails"})
+	tick(m)
+	task, _ := m.Get(first["task"])
+	if task.Stage != StageWorking {
+		t.Fatalf("not working: %s %s", task.Stage, task.Reason)
+	}
+	raw, _ := json.Marshal(map[string]any{"title": "TestQueueOrder is red", "aim": "fix", "why": "TestQueueOrder fails"})
+	out, err := m.opBrief(core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead", Project: "p"}}, raw)
+	if err != nil || out.(map[string]string)["task"] != task.ID {
+		t.Fatalf("the lead's brief didn't join: %v %v", out, err)
+	}
+	got, _ := m.Get(task.ID)
+	if len(got.Joins) != 1 || got.Joins[0].From != "lead" {
+		t.Fatalf("joins %+v", got.Joins)
+	}
+	got.Joins[0].Chat, got.Joins[0].Thread = "lead", "t-person" // as a lead's turn in a person's thread sets it
+	m.notify(&got, "Merged: TestQueueOrder")
+	var heard int
+	for _, msg := range m.Chat.Messages("lead") {
+		if msg.Thread == "t-person" && msg.Text == "Merged: TestQueueOrder" {
+			heard++
+		}
+	}
+	if heard != 1 {
+		t.Fatalf("the joined lead's thread heard the outcome %d times", heard)
+	}
+	m.C.Runs.SetStatus(task.Worker, core.StatusDone, "")
+	again := brief(t, m, "w-two", map[string]any{"title": "TestQueueOrder still red", "aim": "fix", "why": "TestQueueOrder fails"})
+	if again["task"] == task.ID || again["joined"] != "" {
+		t.Fatalf("a brief joined a task whose worker had ended: %v", again)
 	}
 }

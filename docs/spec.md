@@ -92,7 +92,7 @@ Risk is weighed in three classes, and each class has its own judge.
 
 - **T1, inside the Hive.** Editing a project, a module, a prompt, the knowledge base. The state is kept and a bad change is reverted, so workers weigh these themselves and get on with it.
 - **T2, outside the Hive but recoverable, or inside it but load-bearing.** Installing a package, changing a file elsewhere on the machine, publishing a page, changing the core or the effects process. A warden weighs these.
-- **T3, outside the Hive and hard to undo.** Spending money, minting or rotating a credential, sending mail or messages in the person's name to someone they haven't named, deleting work with no plan, opening the machine to the network. A tribunal weighs these, and a few of them always go to the person: real money, a new credential, opening the machine, and anything outward in their name.
+- **T3, outside the Hive and hard to undo.** Spending money, minting or rotating a credential, sending mail or messages in the person's name to someone they haven't named, deleting work with no plan, opening the machine to the network. A tribunal weighs these, and a few of them always go to the person: real money, a new credential, opening the machine, and anything outward in their name to other people (a mail, a post, a message). Merging, releasing or pushing on the person's own repository with the Hive's own login is not that, and a warden settles it.
 
 The person sets how much the Hive does on its own, from "ask me before anything outside the project" to "tell me after". That setting shifts where the lines between the classes sit; it never removes the person from the few things that are always theirs.
 

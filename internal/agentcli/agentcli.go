@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -95,7 +96,7 @@ func Main(argv []string) int {
 
 // switches are the yes/no arguments, which may stand bare before another
 // --key; any other key takes the next word as its value, even "--help".
-var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "delete_branch": true, "apart": true}
+var switches = map[string]bool{"self": true, "isolated": true, "demo": true, "small": true, "resume": true, "tests_ok": true, "lift": true, "delete_branch": true, "apart": true, "fresh": true}
 
 // parseArgs accepts one JSON object, `-` for JSON on stdin, `--file x.json`,
 // or --key value pairs (a value of @path reads that file's text).
@@ -118,7 +119,7 @@ func parseArgs(a []string) (map[string]any, error) {
 		}
 		k = strings.TrimPrefix(k, "--")
 		if k, v, ok := strings.Cut(k, "="); ok {
-			out[k] = v
+			out[k] = switchValue(k, v)
 			continue
 		}
 		if i+1 >= len(a) || switches[k] && strings.HasPrefix(a[i+1], "--") {
@@ -144,9 +145,18 @@ func parseArgs(a []string) (map[string]any, error) {
 			}
 			v = string(raw)
 		}
-		out[k] = v
+		out[k] = switchValue(k, v)
 	}
 	return out, nil
+}
+
+// switchValue is a switch's "true" or "false" as a yes or no, so --apart true
+// reads as --apart does; any other value is left as written.
+func switchValue(k, v string) any {
+	if b, err := strconv.ParseBool(v); switches[k] && err == nil {
+		return b
+	}
+	return v
 }
 
 // Usage is the short help agents see.
@@ -190,6 +200,9 @@ The loop is every agent's: these act on your own project's tasks, on the record 
                                                  checked again from its head; --back sends its worker that
   landed    --task id --why "..." [--merge sha]  end a task whose PR merged on the forge or whose
                                                  work is on main, so the briefs waiting on it start
+  stop      --task id --why "..." [--fresh]   end a working task's quiet worker (one that keeps ending
+                                                 turns without finishing) as blocked; bring the task back
+                                                 with recheck, or --fresh hands it to a new worker at once
   pr_ready  --task id [--why "..."]              (lead) mark the Hive's own PR ready; its merge goes on
   pr_draft  --task id --why "..."                (lead) mark it a draft; its task waits, not stopped
   pr_close  --task id --comment "..." [--delete_branch]   (lead) close it with a comment, ending its
