@@ -1520,12 +1520,22 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 }
 
 // noCommits ends a task whose worker made no commit. A helper's task is done, since its account already went to the agent that spawned it.
+// A review follow-up whose worker finished done is done: its done line lets it
+// judge every item not worth doing, with the reasons in its account.
 // An ask whose whole job was a step outside the checkout is done; anything else
 // is blocked.
 func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
 	if t.Kind == "helper" {
 		t.Stage = StageDone
 		m.save(t, "the helper made no commits, so nothing to land")
+		return
+	}
+	if t.FollowUp != "" && r.Finish != nil && r.Finish.Status == core.StatusDone {
+		t.Stage, t.IssueOpen, t.Failures = StageDone, true, 0
+		m.save(t, "done with no commit: the worker judged the review's advice in its account")
+		m.comment(p.Repo, t.Issue.Number, "Done with no commit, so nothing to merge: the worker judged each item of the review's advice.\n\n"+finishText(r))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q, with no commit; the worker judged the review's advice: %s", t.Label(), core.Clip(finishText(r), 300)))
+		m.closeIssue(t, p)
 		return
 	}
 	var steps string
