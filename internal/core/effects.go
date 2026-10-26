@@ -105,6 +105,7 @@ type Check struct {
 	Tool    string    `json:"tool,omitempty"`     // with CantRun: the tool the shell couldn't find
 	Log     string    `json:"log,omitempty"`      // the full output on the host, when it ran
 	Failed  []string  `json:"failed,omitempty"`   // the failing tests it names, read before the output is clipped
+	Keys    []string  `json:"keys,omitempty"`     // those tests with their packages (FailedTestKeys), when each can be placed
 	At      time.Time `json:"at"`
 }
 
@@ -616,6 +617,9 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	e.mu.Unlock()
 	if (kind == "test" || kind == "retest" || kind == "before") && !c.OK {
 		c.Failed = FailedTests(out)
+		if keys, ok := FailedTestKeys(out); ok {
+			c.Keys = keys
+		}
 	}
 	if kind == "score" && c.OK {
 		v, perr := scoreOf(out)
