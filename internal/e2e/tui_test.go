@@ -338,7 +338,12 @@ func TestControlCenterInTmux(t *testing.T) {
 	x.wait(time.Minute, "you → lead", "lead → ")
 	x.shot("dashboard feed")
 	x.keys("s")
-	x.wait(time.Minute, "Dashboard › status", "textkit  local/textkit", "work in flight (1)")
+	// The fake harness lands the work within a second or two, so it may be
+	// in flight still or merged already by the time the view opens.
+	x.until(time.Minute, "the status view with the work in flight or landed", func(s string) bool {
+		return strings.Contains(s, "Dashboard › status") && strings.Contains(s, "textkit  local/textkit") &&
+			(strings.Contains(s, "work in flight (1)") || strings.Contains(s, "recent work (1)"))
+	})
 	x.shot("dashboard with work running")
 	x.wait(3*time.Minute, "work in flight (0)", "recent work (1)")
 	x.pick("▸ recent work")
