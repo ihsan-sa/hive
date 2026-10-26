@@ -285,12 +285,24 @@ func TestOverlappingTicksStepEachRunOnce(t *testing.T) {
 		})
 		return n
 	}
+	// Every tick's late step has run once no pass waits behind the leads
+	// and no step or launch is still going; a fixed sleep for that fails on
+	// a loaded machine, where a launch can outlast it.
+	settled := func() bool {
+		c.Runs.mu.Lock()
+		defer c.Runs.mu.Unlock()
+		return !c.Runs.passing && len(c.Runs.busy) == 0 && c.Runs.launching == 0
+	}
 	ticks := func() {
 		for i := 0; i < 3; i++ {
 			c.Runs.Tick(cfg)
 			time.Sleep(600 * time.Millisecond)
 		}
-		time.Sleep(1500 * time.Millisecond) // every tick's late step has run by now
+		for end := time.Now().Add(30 * time.Second); !settled(); time.Sleep(50 * time.Millisecond) {
+			if time.Now().After(end) {
+				t.Fatal("the ticks' steps are still going after 30s")
+			}
+		}
 	}
 	if _, err := c.Runs.Start(RunSpec{ID: "worker", Role: "worker", Harness: "fake"}); err != nil {
 		t.Fatal(err)
@@ -319,7 +331,8 @@ func TestOverlappingTicksStepEachRunOnce(t *testing.T) {
 	if w, _ := c.Runs.Get("worker"); w.Status == StatusRunning {
 		t.Fatalf("the worker's turn never ended: %s %q", w.Status, w.Reason)
 	}
-	time.Sleep(time.Second) // every tick's late step has run by now
+	for end := time.Now().Add(30 * time.Second); !settled() && time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+	}
 	if n := count("run.turn_ended", "worker"); n != 1 {
 		t.Errorf("the worker's turn ended %d times across overlapping ticks, want 1", n)
 	}
