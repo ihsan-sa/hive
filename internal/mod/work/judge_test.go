@@ -2,8 +2,6 @@ package work
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -67,13 +65,10 @@ func TestJudgeKeepsOverTheNumbers(t *testing.T) {
 	if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); !strings.Contains(c, "Judge (") || !strings.Contains(c, "judge says keep") {
 		t.Fatalf("the PR doesn't carry the judgement:\n%s", c)
 	}
-	if raw, _ := os.ReadFile(filepath.Join(m.C.WS.Gates(), p.Name, "recursive", "lessons.md")); strings.Contains(string(raw), core.Short(task.SHA)) {
-		t.Fatalf("a kept change has a rollback lesson: %s", raw)
-	}
 }
 
 // A measured keep the judge rolls back goes back to the worker with the
-// judge's reasons, its lesson written, and the merge step refuses it.
+// judge's reasons, and the merge step refuses it.
 func TestJudgeRollsBackOverTheNumbers(t *testing.T) {
 	m, task, p, f := measuredRig(t, core.GateKeep)
 	main, _ := m.C.Effects.Sync(p)
@@ -86,9 +81,6 @@ func TestJudgeRollsBackOverTheNumbers(t *testing.T) {
 	}
 	if task.Stage != StageWorking || !strings.Contains(task.Findings, "judge says rollback") || !strings.Contains(task.Findings, "kept by the numbers, rolled back by its judge") || prState(t, f, task.PR.Number) != "OPEN" {
 		t.Fatalf("stage %q, findings %q: want sent back with the judge's reasons", task.Stage, task.Findings)
-	}
-	if raw, _ := os.ReadFile(filepath.Join(m.C.WS.Gates(), p.Name, "recursive", "lessons.md")); !strings.Contains(string(raw), core.Short(head)+" was kept by the gate's numbers and rolled back by its judge") || strings.Contains(string(raw), "judge says") {
-		t.Fatalf("lesson: %q", raw)
 	}
 }
 
@@ -129,21 +121,15 @@ func TestJudgeWeighsOnlyMeasuredVerdicts(t *testing.T) {
 
 // A measured rollback whose judge hangs, then gives nothing usable, stands
 // as the numbers said once JudgeTries runs are spent: the hung run is
-// stopped and counts as a try, and the gate's lesson is written, since the
-// gate left it to the judge.
-func TestJudgeWithNoAnswerLeavesTheLesson(t *testing.T) {
+// stopped and counts as a try.
+func TestJudgeWithNoAnswerLeavesTheNumbers(t *testing.T) {
 	m, task, p, _ := measuredRig(t, core.GateRollback)
 	main, _ := m.C.Effects.Sync(p)
-	head := task.SHA
 	gateOnce(t, m, task, p)
-	lessons := filepath.Join(m.C.WS.Gates(), p.Name, "recursive", "lessons.md")
 	for i := 0; i < JudgeTries; i++ {
 		id := "j-" + task.ID + "-" + core.Short(task.SHA) + "-" + core.Short(main) + "-" + string(rune('0'+i))
 		if _, ok := m.C.Runs.Get(id); !ok {
 			t.Fatalf("try %d: no judge run %s", i, id)
-		}
-		if raw, _ := os.ReadFile(lessons); strings.Contains(string(raw), core.Short(head)) {
-			t.Fatalf("try %d: a lesson before the numbers decided: %s", i, raw)
 		}
 		if i == 0 {
 			old := JudgeWait
@@ -170,9 +156,6 @@ func TestJudgeWithNoAnswerLeavesTheLesson(t *testing.T) {
 	if task.Stage != StageWorking {
 		t.Fatalf("stage %q, reason %q: want the numbers' rollback once the judge gave nothing usable", task.Stage, task.Reason)
 	}
-	if raw, _ := os.ReadFile(lessons); !strings.Contains(string(raw), "The gate rolled back "+core.Short(head)) || strings.Count(string(raw), core.Short(head)) != 1 {
-		t.Fatalf("lesson: %q", raw)
-	}
 }
 
 // A measured rollback of a change to security-listed files stands as the
@@ -186,9 +169,6 @@ func TestJudgeDoesNotOverrideASecurityRollback(t *testing.T) {
 	gateOnce(t, m, task, p)
 	if n := len(m.C.Runs.List(func(r *core.Run) bool { return r.Role == core.JudgeRole })); n != 0 || task.Stage != StageWorking {
 		t.Fatalf("%d judge runs, stage %q (%s): a security-listed rollback goes straight back", n, task.Stage, task.Reason)
-	}
-	if raw, _ := os.ReadFile(filepath.Join(m.C.WS.Gates(), p.Name, "recursive", "lessons.md")); !strings.Contains(string(raw), "The gate rolled back "+core.Short(task.SHA)) {
-		t.Fatalf("lesson: %q", raw)
 	}
 }
 
