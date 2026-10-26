@@ -41,7 +41,7 @@ func (m *Module) Landed(id, mergeSHA, by, why string) (Task, error) {
 	if busy {
 		return t, fmt.Errorf("task %s has a step running right now; ask again in a moment", id)
 	}
-	defer func() { m.mu.Lock(); delete(m.busy, id); m.mu.Unlock() }()
+	defer m.release(id)
 	t, _ = m.Get(id) // as the last step left it
 	merged, how, err := m.landedAt(&t, p, mergeSHA)
 	if err != nil {

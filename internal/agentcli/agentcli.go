@@ -170,8 +170,9 @@ A value of @path reads that file. Common ops:
   agents                                         who is running
   spawn     --role worker --brief "..." [--project p]   a helper; its account returns to you
   brief     --title "..." --done "what done looks like" [--known "..."] [--project p] [--aim fix --why "the failure"] [--apart]
-                                                 file an ask: it becomes an issue, a worker, a PR; taken as a
-                                                 gain unless --aim fix names the failure it fixes
+                                                 file an ask: it becomes an issue, a worker, a PR; a fix with
+                                                 --aim fix --why, or when it names something broken;
+                                                 else (or with --aim gain) taken as a gain
   aim       --aim fix|gain --why "..." [--task id]   your task (the lead: any) is a fix of the failure --why
                                                  names, which merges on its tests and reads and isn't reverted
                                                  for a score dip alone, or a gain, which on the Hive's own

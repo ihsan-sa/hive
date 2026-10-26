@@ -134,9 +134,10 @@ func joinable(t Task, b Brief, own string) bool {
 }
 
 // fix says the brief is clearly a fix: it says so and names the failure, as
-// File requires of one.
+// File requires of one, or it says no aim and names something broken.
 func (b Brief) fix() bool {
-	return strings.EqualFold(strings.TrimSpace(b.Aim), AimFix) && strings.TrimSpace(b.Why) != ""
+	aim, why := b.aim()
+	return aim == AimFix && why != ""
 }
 
 // join adds b to the oldest open task it matches and returns that task and

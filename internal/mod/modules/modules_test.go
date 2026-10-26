@@ -149,6 +149,22 @@ func TestInstallMovesInWhole(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(m.Dir, "ledger.md")); string(got) != "# ledger, newer\n" {
 		t.Fatalf("updated to %s, but the file reads %q", m.Source.Release, got)
 	}
+	// A rewrite at the same length, in the same second, with the module's copy
+	// carrying the old mtime, still reaches the file: checkout writes what the
+	// two commits' trees differ in, and diff --quiet re-reads a racy entry.
+	before, _ := os.Stat(filepath.Join(m.Dir, "ledger.md"))
+	os.WriteFile(filepath.Join(src, "ledger.md"), []byte("# ledger, NEWER\n"), 0o644)
+	if out, err := core.Git(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "same length"); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	os.Chtimes(filepath.Join(m.Dir, "ledger.md"), before.ModTime(), before.ModTime())
+	if changed := r.Update(); len(changed) != 1 {
+		t.Fatalf("update changed %v", changed)
+	}
+	m, _ = r.Get("ledger")
+	if got, _ := os.ReadFile(filepath.Join(m.Dir, "ledger.md")); string(got) != "# ledger, NEWER\n" {
+		t.Fatalf("updated to %s at the same length, but the file reads %q", m.Source.Release, got)
+	}
 }
 
 // A module being installed isn't listed until its clone is whole: a slow

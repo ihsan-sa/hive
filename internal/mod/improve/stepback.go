@@ -411,7 +411,7 @@ The setup ran as %s; the Hive's latest runs on the project were %s.
 			for _, r := range shown {
 				transcripts += fmt.Sprintf("## %s %s ($%.2f)\n\n%s\n", r.Role, r.ID, r.Cost, m.transcript(r, 1500))
 			}
-			t, err := m.Work.File(work.Brief{Project: self.Name, Title: title, From: s.Run, Known: report + "\nThe setup, and what each of those runs said and did, is in $HIVE_RUN/transcripts.md. Quote nothing from it in commits, the PR or your finish text: it can hold the project's own text.",
+			t, err := m.Work.File(work.Brief{Project: self.Name, Title: title, From: s.Run, Aim: work.AimGain, Why: "a simpler setup scored better; this aims to win that back", Known: report + "\nThe setup, and what each of those runs said and did, is in $HIVE_RUN/transcripts.md. Quote nothing from it in commits, the PR or your finish text: it can hold the project's own text.",
 				Inputs: map[string]string{"transcripts.md": transcripts},
 				Done:   "the prompt or module that held the Hive's agents back is changed, from what the transcripts show the simpler setup did that they didn't"})
 			if err == nil {
