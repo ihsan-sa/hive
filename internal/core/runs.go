@@ -370,7 +370,8 @@ type Runs struct {
 	deferred                 map[string]int  // ticks a run's launch has waited behind leads', in a row
 	passing                  bool            // a tick's pass over the other runs is waiting for the leads' steps
 	self                     proc.Handle     // this daemon, as a turn's claimant (claim.go)
-	backedOff                map[string]int  // the turn each run last backed off from, said once
+	backedOff                map[string]int  // the turn each run last backed off from for another daemon's claim, said once
+	turnLive                 map[string]int  // the turn each run last waited on its own last turn for, said once
 	waking                   sync.Mutex      // one wake at a time, so a run is woken once
 }
 
@@ -417,7 +418,7 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, proven: map[string]bool{}, ranOn: map[string]string{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, turnLive: map[string]int{}, proven: map[string]bool{}, ranOn: map[string]string{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -1704,6 +1705,8 @@ func (rs *Runs) endTurn(r Run) {
 	case cur.Finish != nil && cur.Reopened && len(cur.Pending) > 0:
 		// Reopened mid-turn, it stays running (issue #1022) and may then
 		// finish on what it was told before: the next turn hands it the rest.
+		// A blocked finish too, not ended blocked: the unread message may be
+		// what unblocks it.
 		te.Status, te.Reason = StatusIdle, reopenedMidTurn
 	case cur.Finish != nil:
 		te.Status = StatusDone
@@ -2016,9 +2019,15 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	// One process per turn: another daemon on this workspace may have started it.
 	took, err := rs.claimTurn(r.ID, turn)
 	if err != nil {
+		// A wait on this daemon's own live turn is kept apart, so it doesn't
+		// use up the once-per-daemon alert a second daemon's claim raises.
+		seen := rs.backedOff
+		if errors.Is(err, errTurnLive) {
+			seen = rs.turnLive
+		}
 		rs.mu.Lock()
-		said, first := rs.backedOff[r.ID] == turn, len(rs.backedOff) == 0
-		rs.backedOff[r.ID] = turn
+		said, first := seen[r.ID] == turn, len(seen) == 0
+		seen[r.ID] = turn
 		rs.mu.Unlock()
 		if !said {
 			fmt.Printf("hive: %s's turn %d isn't started here: %v\n", r.ID, turn, err)
