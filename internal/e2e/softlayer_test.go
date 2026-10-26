@@ -14,6 +14,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/softlayer"
 )
 
@@ -146,8 +147,14 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 	outcome := ""
 	for deadline := time.Now().Add(wait); outcome == ""; time.Sleep(10 * time.Second) {
 		standInCI(h, "me/"+project)
-		st := h.state()
-		if tk, ok := landed(st, project); ok {
+		// A sub-Hive whose daemon stops answering is a result too: its
+		// journal and daemon log are still kept below, not lost to t.Fatal.
+		st, err := h.c.State()
+		if err != nil {
+			outcome = "the sub-Hive's daemon stopped answering after " + time.Since(began).Round(time.Second).String() + ": " + err.Error()
+			break
+		}
+		if tk, ok := askLanded(st, project); ok {
 			outcome = "landed " + shortSHA(tk.MergeSHA) + " after " + time.Since(began).Round(time.Second).String()
 		} else if time.Now().After(deadline) {
 			outcome = "not landed: " + stages(st, project)
@@ -184,6 +191,9 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 		err = os.WriteFile(filepath.Join(keep, "events.jsonl"), j, 0o644)
 	}
 	kept("events.jsonl", err)
+	if log, err := os.ReadFile(filepath.Join(h.ws.Hive(), "daemon-test.log")); err == nil {
+		kept("daemon.log", os.WriteFile(filepath.Join(keep, "daemon.log"), log, 0o644))
+	}
 	for what, from := range map[string]string{"chats": h.ws.Chats(), "runs": h.ws.Runs()} {
 		if out, err := exec.Command("cp", "-r", from, filepath.Join(keep, what)).CombinedOutput(); err != nil {
 			kept(what, fmt.Errorf("%v: %s", err, out))
@@ -198,6 +208,21 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 	return rep
 }
 
+// askLanded finds the asked task merged: one the lead filed from its chat.
+// Another merge (a fix the project's lead filed for a red main, say) is
+// counted in the report's merges but doesn't end the arm: in the second real
+// run (2026-10-25) both arms "landed" that way while the ask still waited.
+func askLanded(st api.State, project string) (work.Task, bool) {
+	for _, p := range st.Projects {
+		for _, t := range p.Tasks {
+			if p.Name == project && t.Chat == "lead" && t.Stage == work.StageDone && t.MergeSHA != "" && !strings.HasPrefix(t.Title, "Revert") {
+				return t, true
+			}
+		}
+	}
+	return work.Task{}, false
+}
+
 // armTookEffect: the system prompt of every run the sub-Hive made starts
 // with the arm's orientation.
 func armTookEffect(h *hive, arm softlayer.Variant, essay string) bool {
@@ -210,13 +235,15 @@ func armTookEffect(h *hive, arm softlayer.Variant, essay string) bool {
 	for _, line := range strings.Split(string(raw), "\n") {
 		var e struct {
 			Kind string
-			Data struct{ System string }
+			Data struct{ ID string }
 		}
 		if json.Unmarshal([]byte(line), &e) != nil || e.Kind != "run.created" {
 			continue
 		}
 		runs++
-		if !strings.HasPrefix(e.Data.System, files["orientation"]) {
+		// the journal names a long system prompt; the run's ro folder has it
+		system, _ := os.ReadFile(filepath.Join(h.ws.RunRO(e.Data.ID), "system.md"))
+		if !strings.HasPrefix(string(system), files["orientation"]) {
 			return false
 		}
 	}
