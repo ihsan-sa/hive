@@ -78,8 +78,9 @@ func (e *Effects) GateResult(project, head, main string) (GateResult, bool) {
 
 // gateMeasures are what gives a gate verdict its meaning besides the
 // candidate itself: the gate's own code, the score's, the project's settings
-// and the tests. The score's evaluator paths join them (StandingGate).
-var gateMeasures = []string{"internal/gate", "internal/app/selfgate.go", "cmd/hive/gate.go", "cmd/hive-score", ".hive/project.json", "tests"}
+// and the tests, among them main's whole e2e suite, which grades both sides.
+// The score's evaluator paths join them (StandingGate).
+var gateMeasures = []string{"internal/gate", "internal/app/selfgate.go", "cmd/hive/gate.go", "cmd/hive-score", "internal/e2e", ".hive/project.json", "tests"}
 
 // StandingGate is the gate's verdict on head that holds at main: the one
 // against main itself, else the newest measured keep or rollback against an

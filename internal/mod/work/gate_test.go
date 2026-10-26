@@ -1,6 +1,7 @@
 package work
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -112,6 +113,9 @@ func gateRigSeeded(t *testing.T, mainRed bool, onMain, files map[string]string) 
 	pr, _ := forge.CreatePR(p.Repo, "hive/t1", "main", "work", "")
 	a := &agents.Agents{C: c, Mod: modules.New(ws, c.J)}
 	m := New(c, a, chat.New(c, a))
+	// A merged task's checkouts go off the save's path (ended): they must be
+	// gone before the workspace is closed and removed.
+	t.Cleanup(m.Wait)
 	task := &Task{ID: "t1", Project: "p", Title: "work", Kind: "work", Stage: StageTesting, Worker: "w1", Branch: "hive/t1", SHA: sha, PR: pr}
 	return m, task, p, forge
 }
@@ -307,6 +311,33 @@ func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
 	}
 }
 
+// The change the testing stage let on as no worse than main merges: the
+// merge's own gate takes a red test run whose every failure main's run
+// shares, rather than refuse it as untested and hold it till it gives up.
+func TestGateNoWorseThanRedMainMerges(t *testing.T) {
+	const red = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\nexit 1\n"
+	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": red}
+	m, task, p, f := gateRigSeeded(t, false, onMain, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
+// A merge the gate refuses says what refused it, not the reason of a hold it
+// already passed (a security read, say).
+func TestMergeRefusalReplacesStaleReason(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	task.Stage, task.Reason = StageMerging, "waiting on a security read from the Hive's security reviewer"
+	if err := m.merge(task, p); err == nil {
+		t.Fatal("a commit with no test run merged")
+	}
+	if !strings.HasPrefix(task.Reason, "refusing to merge") || !strings.Contains(task.Reason, "no test run recorded") {
+		t.Fatalf("reason %q", task.Reason)
+	}
+}
+
 // Main's failure is raised once per main commit, even when main moves away
 // and back (A -> B -> A) and no task still names A.
 func TestGateMainRedOncePerCommit(t *testing.T) {
@@ -419,6 +450,12 @@ func TestMovedDraftIsNotReadied(t *testing.T) {
 	if !ok || m.inMerge != 0 || !strings.HasPrefix(task.Reason, draftWait) {
 		t.Fatalf("paused %v, past the gate %d, reason %q", ok, m.inMerge, task.Reason)
 	}
+	// A merge that reaches the ready after the push isn't a failure: the
+	// moved head is ErrHeadMoved, and nothing is readied.
+	main, _ := m.C.Effects.Sync(p)
+	if _, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: task.PR.Number, SHA: task.SHA, Main: main, Task: task.ID, Draft: true}); !errors.Is(err, core.ErrHeadMoved) || readied(m) != 0 {
+		t.Fatalf("merge at a moved draft: %v, readied %d", err, readied(m))
+	}
 	updated := task.Updated
 	for range 12 {
 		m.settle(task, m.step(task))
@@ -483,7 +520,7 @@ func TestLeadHeldDraftIsNotReadied(t *testing.T) {
 }
 
 // A task stopped on GitHub's "still a draft" before the Hive readied its
-// drafts comes back once a run and merges through the gate; one stopped for
+// drafts comes back once and merges through the gate; one stopped for
 // anything else stays stopped.
 func TestStoppedOnDraftResumes(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
@@ -508,13 +545,20 @@ func TestStoppedOnDraftResumes(t *testing.T) {
 	if got.Stage != StageMerged || readied(m) != 1 {
 		t.Fatalf("stage %q, readied %d, log %v", got.Stage, readied(m), got.Log)
 	}
-	// Once a run: stopped on the draft again, it stays for the lead's recheck.
+	// Once a task: stopped on the draft again, it stays for the lead, across
+	// restarts too (the marker is on the task); another task stopped later in
+	// the run comes back on its own.
+	got.Stage, got.Reason = StageStopped, task.Reason
+	m.save(&got, got.Reason)
 	again := &Task{ID: "t3", Project: "p", Title: "again", Kind: "work", Stage: StageStopped, Reason: task.Reason}
 	m.save(again, again.Reason)
 	m.Tick()
 	m.Wait()
-	if a, _ := m.Get("t3"); a.Stage != StageStopped {
-		t.Fatalf("brought back twice in one run: %q", a.Stage)
+	if g, _ := m.Get(task.ID); g.Stage != StageStopped || !g.DraftRevived {
+		t.Fatalf("brought back twice: %q", g.Stage)
+	}
+	if a, _ := m.Get("t3"); a.Stage == StageStopped || !a.DraftRevived {
+		t.Fatalf("a task stopped later in the run stayed: %q, log %v", a.Stage, a.Log)
 	}
 }
 

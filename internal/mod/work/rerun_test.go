@@ -395,3 +395,30 @@ func TestForgeQuarantineNotForItsOwnPackage(t *testing.T) {
 	redOnce(t, m, task, p, f, e2eLog("TestStalls"))
 	sentBack(t, f, task)
 }
+
+// A step-back steers the loop it diagnoses on its own project, as a worker or
+// sweep does, and not another project's; a reviewer doesn't steer at all.
+func TestStepbackSteersItsProject(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	task.Stage, task.Reason = StageBlocked, "a flake"
+	m.save(task, "")
+	reviewer := core.Run{RunSpec: core.RunSpec{ID: "r-1", Role: "reviewer", Project: p.Name}}
+	if _, err := m.C.Runs.Ops().Call(reviewer, "recheck", json.RawMessage(`{"task":"`+task.ID+`"}`)); err == nil || !strings.Contains(err.Error(), "not granted") {
+		t.Fatalf("recheck from a reviewer: %v", err)
+	}
+	elsewhere := core.Run{RunSpec: core.RunSpec{ID: "stepback-q", Role: "stepback", Project: "q"}}
+	if _, err := m.C.Runs.Ops().Call(elsewhere, "recheck", json.RawMessage(`{"task":"`+task.ID+`"}`)); err == nil || !strings.Contains(err.Error(), "you act only on your own (q)") {
+		t.Fatalf("recheck from a step-back on another project: %v", err)
+	}
+	sb := core.Run{RunSpec: core.RunSpec{ID: "stepback-p", Role: "stepback", Project: p.Name}}
+	if _, err := m.C.Runs.Ops().Call(sb, "queue", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("queue from a step-back: %v", err)
+	}
+	if _, err := m.C.Runs.Ops().Call(sb, "recheck", json.RawMessage(`{"task":"`+task.ID+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := m.Get(task.ID); got.Stage != StageLanding || !logHas(&got, "asked by stepback-p") {
+		t.Fatalf("a step-back's recheck on its project: stage %q, log %v", got.Stage, got.Log)
+	}
+}

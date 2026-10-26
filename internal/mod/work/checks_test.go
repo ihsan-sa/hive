@@ -1367,11 +1367,11 @@ func TestRedWindowsBlocksOtherProjects(t *testing.T) {
 // stopped the command), so it isn't no worse than main: it waits on main.
 func TestVetRedOnlyAsMainIsNotNoWorse(t *testing.T) {
 	vet := core.Check{Output: "# x/e\nvet: e/a_test.go:225:42: not enough arguments in call to f\n"}
-	if noWorse(vet, vet) {
+	if core.NoWorse(vet, vet) {
 		t.Fatal("a branch whose tests vet stopped counted as no worse than main")
 	}
 	red := core.Check{Output: "--- FAIL: TestClock (0.00s)\nFAIL\tx/a\t0.01s\n"}
-	if !noWorse(red, red) {
+	if !core.NoWorse(red, red) {
 		t.Fatal("a branch failing only main's own test wasn't no worse")
 	}
 }
