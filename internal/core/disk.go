@@ -30,10 +30,13 @@ import (
 //     (outside the sandbox, running no code of the commit's: `go mod
 //     download`, as the recursive gate's prefetch does) once per go.mod and
 //     go.sum, and mounted read-only with GOPROXY=off and -mod=readonly.
-//   - A check's own home (its build cache) lives under the workspace's cache
-//     folder, is capped in size (config check_cache_max_mb) and removed after.
-//     A build cache shared between checks would let one commit's check plant
-//     outputs another commit's check trusts, so it is never shared.
+//   - A check's own home lives under the workspace's cache folder, is capped
+//     in size (config check_cache_max_mb) and removed after.
+//   - A Go project's build cache is shared only from main: a check of a
+//     commit on main's line writes the project's cache, and a check of any
+//     other commit reads it (read-only, through `hive gocacheprog`) and keeps
+//     what it builds in its home. So a check reuses what main's checks built
+//     and passed, and no commit's check can plant outputs another trusts.
 //   - A check that fails for want of room is can't-run, not red, and raises
 //     one alert that names what is using the room.
 //   - The hive.clean job (Prune here, work's PruneCheckouts) removes what
@@ -50,8 +53,16 @@ func (w Workspace) CheckHomes() string { return filepath.Join(w.Cache(), "homes"
 
 func (w Workspace) goSums() string { return filepath.Join(w.Cache(), "gomod-sums") }
 
+// GoBuildCache is a project's build cache, written only by checks of main.
+func (w Workspace) GoBuildCache(project string) string {
+	return filepath.Join(w.Cache(), "gobuild", project)
+}
+
 // GoModInside is where checks see the module cache.
 const GoModInside = "/hive/gomod"
+
+// GoBuildInside is where checks see the project's build cache.
+const GoBuildInside = "/hive/gobuild"
 
 // homeTmp is the check's temp folder (TMPDIR) inside its home.
 const homeTmp = "tmp"
@@ -59,6 +70,7 @@ const homeTmp = "tmp"
 const (
 	checkCacheDefaultMB = 8192
 	modCacheMax         = 20 << 30 // past this the hourly sweep empties the module cache
+	buildCacheMax       = 10 << 30 // and a project's build cache past this
 	staleAfter          = 3 * time.Hour
 	stopGrace           = time.Minute // a stop file outlives its home this long, so its sandbox sees it
 )
@@ -165,6 +177,78 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 	os.MkdirAll(e.ws.GoModCache(), 0o755) // a module with nothing to fetch still mounts it
 	return goMods{mounts: []sandbox.Mount{{Host: e.ws.GoModCache(), Inside: GoModInside}},
 		env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly", "GOPROXY=off"}, marker: marker, done: e.modMu.RUnlock}
+}
+
+// goBuild readies the project's shared build cache for a check of sha in dir,
+// where goModules would share the module cache. A commit on main's line
+// writes it; any other reads it through `hive gocacheprog` and writes only
+// its home. Either way the checkout's file times are made a function of
+// their content first, so a test that reads files is reused when they match.
+func (e *Effects) goBuild(sb sandbox.Sandbox, p Project, sha, dir string) goMods {
+	none := goMods{done: func() {}}
+	if !sb.Isolated() || runtime.GOOS != "linux" {
+		return none
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, "go.mod")); err != nil || !fi.Mode().IsRegular() {
+		return none
+	}
+	if err := stableTimes(dir); err != nil {
+		none.note = "build cache not shared: " + err.Error()
+		return none
+	}
+	shared := e.ws.GoBuildCache(p.Name)
+	e.buildMu.RLock() // Prune empties it only while no check reads or writes it
+	if e.MainLine(p)[sha] {
+		os.MkdirAll(shared, 0o755)
+		return goMods{mounts: []sandbox.Mount{{Host: shared, Inside: GoBuildInside, RW: true}},
+			env: []string{"GOCACHE=" + GoBuildInside}, done: e.buildMu.RUnlock}
+	}
+	if !Exists(shared) {
+		e.buildMu.RUnlock()
+		return none // nothing of main's built yet
+	}
+	return goMods{mounts: []sandbox.Mount{{Host: shared, Inside: GoBuildInside}},
+		env: []string{"GOCACHE=/hive/home/gocache", "GOCACHEPROG=/hive/bin/hive gocacheprog " + GoBuildInside + " /hive/home/gobuild"}, done: e.buildMu.RUnlock}
+}
+
+// stableTimes sets each tracked file's and folder's time in the checkout at
+// dir from its git object ID, so the same content has the same time in every
+// check. The go command reuses a passed test only if every file it opened
+// has the size and time it had then; a fresh checkout's times never match.
+// Times run over 17 years to the nanosecond: two contents sharing a size and
+// a time is a 1 in 2^59 chance. Symlinks are left as they are, and os.Root
+// keeps every change inside dir.
+func stableTimes(dir string) error {
+	out, err := Git(dir, "ls-tree", "-r", "-t", "-z", "HEAD")
+	if err != nil {
+		return err
+	}
+	top, err := Git(dir, "rev-parse", "HEAD^{tree}")
+	if err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	at := func(id string) time.Time {
+		v, _ := strconv.ParseUint(id[:min(len(id), 15)], 16, 64)
+		return time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(v % (1 << 29 * uint64(time.Second))))
+	}
+	// Deepest first: a folder's time is set after what is in it.
+	recs := strings.Split(strings.TrimSuffix(out, "\x00"), "\x00")
+	for i := len(recs) - 1; i >= 0; i-- {
+		meta, path, ok := strings.Cut(recs[i], "\t")
+		f := strings.Fields(meta)
+		if !ok || len(f) != 3 || f[0] == "120000" || f[1] == "commit" {
+			continue
+		}
+		if fi, err := root.Lstat(path); err == nil && fi.Mode()&fs.ModeSymlink == 0 {
+			root.Chtimes(path, at(f[2]), at(f[2]))
+		}
+	}
+	return root.Chtimes(".", at(strings.TrimSpace(top)), at(strings.TrimSpace(top)))
 }
 
 // localReplace says why go.mod's replace directives would lead the go command
@@ -495,6 +579,13 @@ func (e *Effects) Prune() string {
 		drop(e.ws.GoModCache())
 		e.modMu.Unlock()
 	}
+	builds, _ := filepath.Glob(e.ws.GoBuildCache("*"))
+	for _, b := range builds {
+		if Size(b) > buildCacheMax && e.buildMu.TryLock() {
+			drop(b)
+			e.buildMu.Unlock()
+		}
+	}
 	var did []string
 	if len(gone) > 0 {
 		did = append(did, fmt.Sprintf("removed %d leftover check folder(s), %s", len(gone), Bytes(freed)))
@@ -544,7 +635,7 @@ func (e *Effects) MeasureDisk() DiskUse {
 		}
 	}
 	d := DiskUse{At: time.Now().UTC(), Total: Size(ws.Root), Parts: []DiskPart{
-		{"agents' checkouts", checkouts}, {"check homes", homes}, {"Go module cache", Size(ws.GoModCache())},
+		{"agents' checkouts", checkouts}, {"check homes", homes}, {"Go module cache", Size(ws.GoModCache())}, {"Go build caches", Size(filepath.Join(ws.Cache(), "gobuild"))},
 		{"check checkouts and gates", Size(ws.Gates())}, {"runs", Size(ws.Runs())}, {"tools", Size(ws.Tools())},
 	}}
 	slices.SortStableFunc(d.Parts, func(a, b DiskPart) int { return cmp.Compare(b.Bytes, a.Bytes) })
