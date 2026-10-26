@@ -50,6 +50,10 @@ func TestLocalMergeKilledAfterPushIsMerged(t *testing.T) {
 	if got, err := f.GetPR(p.Repo, pr.Number); err != nil || got.State != "MERGED" || got.MergeSHA != squash {
 		t.Fatalf("PR %+v (want merged at %s): %v", got, squash, err)
 	}
+	// The list reads it the same, though nothing saved it as merged yet.
+	if prs := f.PRs(p.Repo); len(prs) != 1 || prs[0].State != "MERGED" || prs[0].MergeSHA != squash {
+		t.Fatalf("PRs %+v (want merged at %s)", prs, squash)
+	}
 	if m, err := f.MergePR(p.Repo, pr.Number, sha, "feature"); err != nil || m != squash {
 		t.Fatalf("merged again at %s (want %s): %v", m, squash, err)
 	}
