@@ -303,9 +303,10 @@ func TestGateRoomReasonHoldsAsTheLimitMoves(t *testing.T) {
 	}
 	defer j.Close()
 	m := &Module{C: &core.Core{J: j, WS: core.Workspace{Root: filepath.Join(dir, "hive")}}}
+	maxGates(m, 5) // the ceiling and start, whatever the host's cores
 	limit := func(l int) {
 		m.gates.mu.Lock()
-		m.gates.limit, m.gates.start, m.gates.at = l, min(2, gateCeiling(core.Config{})), time.Now()
+		m.gates.limit, m.gates.start, m.gates.at = l, 5, time.Now()
 		m.gates.mu.Unlock()
 	}
 	full := ""
