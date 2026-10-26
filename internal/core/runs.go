@@ -626,8 +626,10 @@ func (rs *Runs) apply(e Event) {
 		rs.applyDown(e)
 		return
 	case "run.created":
-		var s RunSpec
-		e.Decode(&s)
+		var c createdSpec
+		e.Decode(&c)
+		s := c.RunSpec
+		rs.load(&s, c.Stored)
 		rs.runs[s.ID] = &Run{RunSpec: s, Session: NewUUIDFrom(s.ID), Status: StatusQueued, Created: e.At, Updated: e.At}
 		return
 	case "plan.usage":
@@ -769,6 +771,84 @@ func (rs *Runs) apply(e Event) {
 	}
 }
 
+// createdSpec is run.created as journaled: a spec whose long texts (system
+// prompt, brief, inputs over inlineMax) are left out and named in Stored, read
+// back on replay from the run's ro folder, where Start wrote the same text.
+// The journal and the kb's record of it then carry names, not every brief,
+// diff and system prompt again.
+type createdSpec struct {
+	RunSpec
+	Stored []string `json:"stored,omitempty"` // "system", "brief" or "inputs/<name>"
+}
+
+const inlineMax = 1024
+
+// journaled is s with each long text that has a file of its own in ro left
+// out. A text whose file another overwrites (a brief under an input named
+// brief.md) or shares a name with stays inline.
+func journaled(s RunSpec) createdSpec {
+	files := s.files()
+	names := map[string]int{}
+	for k := range files {
+		names[filepath.Base(k)]++
+	}
+	own := func(key, text string) bool {
+		v, ok := files[key]
+		return ok && v == text && len(text) > inlineMax && names[filepath.Base(key)] == 1
+	}
+	c := createdSpec{RunSpec: s}
+	if own("system.md", s.System) {
+		c.System, c.Stored = "", append(c.Stored, "system")
+	}
+	if own("brief.md", s.Brief) {
+		c.Brief, c.Stored = "", append(c.Stored, "brief")
+	}
+	c.Inputs = nil
+	for k, v := range s.Inputs {
+		if own(k, v) {
+			c.Stored = append(c.Stored, "inputs/"+k)
+			continue
+		}
+		if c.Inputs == nil {
+			c.Inputs = map[string]string{}
+		}
+		c.Inputs[k] = v
+	}
+	sort.Strings(c.Stored)
+	return c
+}
+
+// files is what Start writes into the run's ro folder, by name.
+func (s RunSpec) files() map[string]string {
+	files := map[string]string{"system.md": s.System, "brief.md": s.Brief}
+	if s.Schema != "" {
+		files["schema.json"] = s.Schema
+	}
+	maps.Copy(files, s.Inputs)
+	return files
+}
+
+// load reads back into s the texts journaled lets out of run.created.
+func (rs *Runs) load(s *RunSpec, stored []string) {
+	read := func(name string) string {
+		raw, _ := os.ReadFile(filepath.Join(rs.ws.RunRO(s.ID), filepath.Base(name)))
+		return string(raw)
+	}
+	for _, f := range stored {
+		switch k, input := strings.CutPrefix(f, "inputs/"); {
+		case input:
+			if s.Inputs == nil {
+				s.Inputs = map[string]string{}
+			}
+			s.Inputs[k] = read(k)
+		case f == "system":
+			s.System = read("system.md")
+		case f == "brief":
+			s.Brief = read("brief.md")
+		}
+	}
+}
+
 func (rs *Runs) append(kind string, data any) { rs.j.MustAppend(kind, data) }
 
 // NewUUIDFrom makes a session uuid for a run (random; the id is only a label).
@@ -799,19 +879,12 @@ func (rs *Runs) Start(s RunSpec) (Run, error) {
 			return Run{}, err
 		}
 	}
-	files := map[string]string{"system.md": s.System, "brief.md": s.Brief}
-	if s.Schema != "" {
-		files["schema.json"] = s.Schema
-	}
-	for k, v := range s.Inputs {
-		files[k] = v
-	}
-	for name, content := range files {
+	for name, content := range s.files() {
 		if err := os.WriteFile(filepath.Join(rs.ws.RunRO(s.ID), filepath.Base(name)), []byte(content), 0o644); err != nil {
 			return Run{}, err
 		}
 	}
-	rs.append("run.created", s)
+	rs.append("run.created", journaled(s))
 	r, _ := rs.Get(s.ID)
 	return r, nil
 }
@@ -1426,14 +1499,20 @@ func (rs *Runs) endTurn(r Run) {
 	}
 	limited := tl.Result != nil && tl.Result.Limited || (tl.Limit != nil && tl.Limit.Status == "rejected" && (tl.Result == nil || tl.Result.IsError))
 	if limited {
-		// Park the login until its reset (an hour when the harness didn't say).
+		// Park the login until its reset (an hour when the harness didn't
+		// say). A reset it named that has passed by the turn's end is a
+		// limit that is over, not one with no reset: it waits a minute, so a
+		// harness repeating a stale reset doesn't spin, not the hour that
+		// parked the fake agent's three-second limit on a slow runner (PR #800).
 		l := harness.RateLimit{}
 		if tl.Limit != nil {
 			l = *tl.Limit
 		}
 		l.Status = "rejected"
-		if !l.ResetsAt.After(time.Now()) {
+		if l.ResetsAt.IsZero() {
 			l.ResetsAt = time.Now().Add(time.Hour)
+		} else if !l.ResetsAt.After(time.Now()) {
+			l.ResetsAt = time.Now().Add(time.Minute)
 		}
 		tl.Limit = &l
 	}
