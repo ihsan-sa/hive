@@ -82,7 +82,8 @@ type Run struct {
 	Turn        int             `json:"turn"`
 	Proc        proc.Handle     `json:"proc"`
 	Cost        float64         `json:"cost"`
-	Context     int             `json:"context,omitempty"` // tokens in its session at its last reply
+	Estimate    float64         `json:"estimate,omitempty"` // what its running turn has spent so far, priced from its replies' tokens (Estimate)
+	Context     int             `json:"context,omitempty"`  // tokens in its session at its last reply
 	Result      string          `json:"result,omitempty"`
 	Structured  json.RawMessage `json:"structured,omitempty"`
 	Finish      *Finish         `json:"finish,omitempty"`
@@ -425,13 +426,14 @@ type Runs struct {
 	// launching counts launches past the hold whose turn isn't journalled
 	// yet; leadLaunching those of leads, which the other roles' wait for.
 	launching, leadLaunching int
-	starting                 map[string]bool // runs with a launch in flight
-	deferred                 map[string]int  // ticks a run's launch has waited behind leads', in a row
-	passing                  bool            // a tick's pass over the other runs is waiting for the leads' steps
-	self                     proc.Handle     // this daemon, as a turn's claimant (claim.go)
-	backedOff                map[string]int  // the turn each run last backed off from for another daemon's claim, said once
-	turnLive                 map[string]int  // the turn each run last waited on its own last turn for, said once
-	waking                   sync.Mutex      // one wake at a time, so a run is woken once
+	starting                 map[string]bool      // runs with a launch in flight
+	deferred                 map[string]int       // ticks a run's launch has waited behind leads', in a row
+	passing                  bool                 // a tick's pass over the other runs is waiting for the leads' steps
+	self                     proc.Handle          // this daemon, as a turn's claimant (claim.go)
+	backedOff                map[string]int       // the turn each run last backed off from for another daemon's claim, said once
+	turnLive                 map[string]int       // the turn each run last waited on its own last turn for, said once
+	estimated                map[string]time.Time // the turn output's time at each running turn's last estimate
+	waking                   sync.Mutex           // one wake at a time, so a run is woken once
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -477,7 +479,7 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, turnLive: map[string]int{}, proven: map[string]bool{}, ranOn: map[string]string{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, turnLive: map[string]int{}, proven: map[string]bool{}, ranOn: map[string]string{}, estimated: map[string]time.Time{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -754,6 +756,7 @@ func (rs *Runs) apply(e Event) {
 		var t turnStarted
 		e.Decode(&t)
 		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login
+		r.Estimate = 0
 		if t.Session != "" {
 			r.Session = t.Session
 		}
@@ -785,7 +788,7 @@ func (rs *Runs) apply(e Event) {
 			r.Session = t.Session
 		}
 		r.Status, r.Reason, r.ParkedUntil, r.Offline = t.Status, t.Reason, t.ParkedUntil, t.Offline
-		r.Proc = proc.Handle{}
+		r.Proc, r.Estimate = proc.Handle{}, 0
 		rs.strikeTurn(Pick{Harness: HarnessName(r.Harness), Model: r.Model}, r.ID, t.Result)
 		if t.Context > 0 {
 			r.Context = t.Context
@@ -1530,6 +1533,7 @@ func (rs *Runs) watch(r Run) {
 		}
 		rs.mu.Unlock()
 	}
+	rs.estimate(r, out)
 	if proc.Alive(r.Proc) {
 		return
 	}
@@ -1564,6 +1568,59 @@ func settled(path string, quiet, most time.Duration) {
 	}
 }
 
+// estimate prices a running turn's replies so far, at most every ten seconds
+// of its output, so its cost moves before its result line says it.
+func (rs *Runs) estimate(r Run, out string) {
+	fi, err := os.Stat(out)
+	if err != nil {
+		return
+	}
+	rs.mu.Lock()
+	last, ok := rs.estimated[r.ID]
+	due := !ok || fi.ModTime().After(last.Add(10*time.Second))
+	if due {
+		rs.estimated[r.ID] = fi.ModTime()
+	}
+	rs.mu.Unlock()
+	if !due {
+		return
+	}
+	tl := rs.ReadTurn(r, r.Turn)
+	if tl.Result != nil {
+		return // the result line's cost is the turn's own
+	}
+	usd := Estimate(r, tl, rs.ws.LoadConfig())
+	rs.mu.Lock()
+	if x := rs.runs[r.ID]; x != nil && x.Status == StatusRunning && x.Turn == r.Turn {
+		x.Estimate = usd
+	}
+	rs.mu.Unlock()
+}
+
+// Estimate is what a turn's replies so far cost: a Claude model's at its
+// list price, a named open model's at the price the person set. Others (Codex,
+// an unpriced model) show none.
+func Estimate(r Run, tl TurnLog, cfg Config) float64 {
+	if tl.Used == (harness.Tokens{}) {
+		return 0
+	}
+	switch HarnessName(r.HarnessAt(r.Turn)) {
+	case "claude":
+		model := tl.Model
+		if model == "" {
+			model = r.Model
+		}
+		if p, ok := harness.PriceOf(model); ok {
+			return p.Cost(tl.Used)
+		}
+	case "open":
+		if p := cfg.Models[r.Model].Price; p != nil {
+			return p.Cost(tl.Used)
+		}
+	}
+	return 0
+}
+
 // TurnLog parses a turn's output file.
 type TurnLog struct {
 	SessionLive bool
@@ -1572,6 +1629,8 @@ type TurnLog struct {
 	Result      *harness.Result
 	Limit       *harness.RateLimit
 	Steps       []harness.Event
+	Model       string         // the model the harness said it began on
+	Used        harness.Tokens // the replies' tokens so far, from their usage lines
 }
 
 // ReadTurn parses one turn's output.
@@ -1581,13 +1640,17 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 	if err != nil { // a module's harness since removed: nothing to read the turn with
 		return tl
 	}
-	var used harness.Tokens // a harness that reports each step's tokens (usage events)
-	twice := false          // a second verdict in one turn: trust neither, nor rebuild one from the text
+	var used harness.Tokens                // a harness that reports each step's tokens (usage events)
+	replies := map[string]harness.Tokens{} // a named reply's latest usage, counted once
+	twice := false                         // a second verdict in one turn: trust neither, nor rebuild one from the text
 	_ = ReadJSONL(rs.ws.TurnOut(r.ID, turn), func(line []byte) {
 		for _, ev := range h.Parse(line) {
 			switch ev.Kind {
 			case "init":
 				tl.SessionLive, tl.Session = true, ev.SessionID
+				if ev.Model != "" {
+					tl.Model = ev.Model
+				}
 			case "result":
 				if tl.Result != nil && ev.Result != nil {
 					ev.Result.Structured, twice = nil, true
@@ -1598,7 +1661,9 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 			case "context":
 				tl.Context = ev.Tokens
 			case "usage":
-				if ev.Usage != nil {
+				if ev.Usage != nil && ev.Reply != "" {
+					replies[ev.Reply] = *ev.Usage
+				} else if ev.Usage != nil {
 					used.Add(*ev.Usage)
 				}
 			}
@@ -1607,6 +1672,10 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 			}
 		}
 	})
+	for _, u := range replies {
+		used.Add(u)
+	}
+	tl.Used = used
 	// A harness whose result carries no text (Codex) answers with its last message.
 	if tl.Result != nil && !tl.Result.IsError && tl.Result.Text == "" {
 		for _, s := range tl.Steps {

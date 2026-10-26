@@ -48,6 +48,7 @@ type Event struct {
 	Result    *Result
 	RateLimit *RateLimit
 	Usage     *Tokens // usage: one step's tokens, summed into a result that carries none
+	Reply     string  // usage: the reply it belongs to, when the harness names one; a later usage of the same reply replaces it
 }
 
 // Result ends a turn.
@@ -225,6 +226,7 @@ type claudeLine struct {
 	SessionID string `json:"session_id"`
 	Model     string `json:"model"`
 	Message   *struct {
+		ID      string `json:"id"`
 		Content []struct {
 			Type  string          `json:"type"`
 			Text  string          `json:"text"`
@@ -233,6 +235,7 @@ type claudeLine struct {
 		} `json:"content"`
 		Usage *struct {
 			Input         int `json:"input_tokens"`
+			Output        int `json:"output_tokens"`
 			CacheCreation int `json:"cache_creation_input_tokens"`
 			CacheRead     int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
@@ -277,6 +280,13 @@ func (Claude) Parse(line []byte) []Event {
 		var out []Event
 		if u := l.Message.Usage; u != nil {
 			out = append(out, Event{Kind: "context", Tokens: u.Input + u.CacheCreation + u.CacheRead})
+			// A reply from Claude's API names itself; Claude Code repeats its
+			// usage on each of its content blocks, so the last one counts.
+			// The open agent's replies name none, and their usage is only
+			// the context they held.
+			if id := l.Message.ID; id != "" {
+				out = append(out, Event{Kind: "usage", Reply: id, Usage: &Tokens{Input: int64(u.Input), Output: int64(u.Output), CacheRead: int64(u.CacheRead), CacheWrite: int64(u.CacheCreation)}})
+			}
 		}
 		for _, c := range l.Message.Content {
 			switch c.Type {
