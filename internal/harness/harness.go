@@ -153,7 +153,7 @@ func Capped(h Harness, budget float64) error {
 // 0.153 release lists; a Claude model on Codex runs Codex's own default.
 func Models(harness string) []string {
 	if !builtin(harness) {
-		if s, ok := lookup(harness, false); ok {
+		if s, ok := lookup(harness); ok {
 			return slices.Clone(s.ModelList)
 		}
 		return nil
