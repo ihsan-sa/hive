@@ -947,6 +947,9 @@ func TestFailedReleaseRunStopsTheCut(t *testing.T) {
 	if held != 1 {
 		t.Fatalf("%d release.held events", held)
 	}
+	if a := alerts(); len(a) != 2 {
+		t.Fatalf("each held merge raised the hold again: %q", a)
+	}
 
 	asks := m.C.Person.Open()
 	if len(asks) != 1 || asks[0].Kind != "release" || !strings.Contains(asks[0].Title, "has no binaries") {
@@ -970,6 +973,29 @@ func TestFailedReleaseRunStopsTheCut(t *testing.T) {
 
 // The person's "release" on the hold's ask cuts one though the newest
 // release's run failed and nothing it reads changed.
+// v0.1.111's release.failed came from a daemon that blamed update; the
+// corrected alert that names the release run still goes out once.
+func TestUnbuiltCorrectsAnOldUpdateBlame(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	m.C.J.MustAppend("release.failed", map[string]string{"project": "hive", "tag": "v0.0.1", "sha": "m1", "why": "update failure"})
+	n.SetReleaseRuns("me/hive", "m1", core.WorkflowRun{ID: 7, Name: "release", Status: "completed", Conclusion: "failure", URL: "https://ci/release"})
+	m.Publish()
+	m.Publish()
+	var said []string
+	m.C.J.Replay(func(e core.Event) {
+		var a struct{ Text string }
+		if e.Kind == "alert.raised" && e.Decode(&a) == nil {
+			said = append(said, a.Text)
+		}
+	})
+	if len(said) != 1 || !strings.Contains(said[0], "v0.0.1 has no binaries") {
+		t.Fatalf("alerts %q", said)
+	}
+}
+
 func TestPersonReleasesPastAFailedReleaseRun(t *testing.T) {
 	m, n, merged, land := selfHive(t)
 	merged(1, "a1", "m1")
@@ -1346,10 +1372,16 @@ func TestReleaseOnlyAtAGreenMain(t *testing.T) {
 	merged(2, "a2", "m2")
 	land("a2", "r2")
 	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPending})
+	listings := 0
+	n.listed = func() { listings++ }
 	m.AfterKept("hive", "m2")
 	m.retryWaiting()
+	n.listed = nil
 	if len(n.got) != 0 || len(m.C.Person.Open()) != 0 || journaledN(m, "release.ci_waiting") != 1 {
 		t.Fatalf("a running main was released or offered: %v %+v", n.got, m.C.Person.Open())
+	}
+	if listings != 0 {
+		t.Fatalf("a commit waiting on main's checks listed the tags %d times", listings)
 	}
 
 	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPass})
@@ -1459,5 +1491,8 @@ func TestContainsReadsTheClone(t *testing.T) {
 	}
 	if _, err := m.contains(p, old, strings.Repeat("ab", 20)); err == nil {
 		t.Error("a tag commit the clone can't fetch read as known")
+	}
+	if _, err := m.contains(p, old, "--upload-pack=touch x"); err == nil || !strings.Contains(err.Error(), "not a commit name") {
+		t.Errorf("a tag commit shaped like an option reached git: %v", err)
 	}
 }

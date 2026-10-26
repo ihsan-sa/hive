@@ -57,7 +57,9 @@ func TestAMeasuredGateVerdictStandsWhileMainMovesElsewhere(t *testing.T) {
 	m3 := commit("tests/bench.txt", "a harder benchmark\n")
 	mustGit(t, tmp, "reset", "-q", "--hard", m2)
 	m4 := commit("code.txt.go", "package demo // main's own\n")
-	for i, ref := range []string{head, m3, m4} {
+	mustGit(t, tmp, "reset", "-q", "--hard", m2)
+	m5 := commit("internal/e2e/flake_test.go", "package e2e // a flake fixed\n")
+	for i, ref := range []string{head, m3, m4, m5} {
 		mustGit(t, tmp, "push", "-q", "origin", ref+":refs/heads/b"+string(rune('0'+i)))
 	}
 	mustGit(t, c.WS.Project(p.Name), "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*")
@@ -72,6 +74,9 @@ func TestAMeasuredGateVerdictStandsWhileMainMovesElsewhere(t *testing.T) {
 	}
 	if _, ok := e.StandingGate(p, head, m4); ok {
 		t.Fatal("main changed the candidate's own file, and the keep still stood")
+	}
+	if _, ok := e.StandingGate(p, head, m5); ok {
+		t.Fatal("main changed the e2e suite that graded both sides, and the keep still stood")
 	}
 	other := commit("other.txt", "x\n")
 	mustGit(t, tmp, "push", "-q", "origin", other+":refs/heads/b9")

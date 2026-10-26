@@ -242,6 +242,23 @@ func (p Plan) ParkedUntil(now time.Time) time.Time {
 	return at
 }
 
+// stale reports whether p, a reading short of a rejection taken while old is
+// parked, was taken before the park: it parks the login for less time, and
+// the window that parked old (its week, at WeeklyStop, or its limit's)
+// hasn't reset since. A week's park is measured against the week's reset,
+// not the five-hour one the reading's top level often carries.
+func (p Plan) stale(old Plan, now time.Time) bool {
+	until := old.ParkedUntil(now)
+	if !p.ParkedUntil(now).Before(until) {
+		return false
+	}
+	if w, ok := old.Weekly(now); ok && w.Utilization >= WeeklyStop && w.ResetsAt.Equal(until) {
+		pw, ok := p.Weekly(now)
+		return !ok || !pw.ResetsAt.After(until)
+	}
+	return !p.Limit.ResetsAt.After(until)
+}
+
 // Standing is the login's state in plain words (RateLimit.Standing), or
 // that it has stopped at WeeklyStop of its week until the reset.
 func (p Plan) Standing(now time.Time) string {
@@ -607,6 +624,11 @@ func readRefusals(raw string) egressRefused {
 	return out
 }
 
+// harnessGone starts the reason of a run parked because no installed module
+// declares its harness any more; after harnessGoneTries such parks (about
+// 15 minutes) the run is blocked rather than tried again forever.
+const harnessGone, harnessGoneTries = "harness missing:", 3
+
 type runNote struct {
 	ID     string    `json:"id"`
 	Text   string    `json:"text,omitempty"`
@@ -643,7 +665,7 @@ func (rs *Runs) apply(e Event) {
 		// A turn that started before the limit can end after it with a
 		// reading taken before it: that doesn't lift the park, or the next
 		// turn starts only to be turned away (10-25, 10:41).
-		if old := rs.plans[p.Key()]; old.Parked(e.At) && p.Limit.Status != "rejected" && !p.Limit.ResetsAt.After(old.Limit.ResetsAt) {
+		if old := rs.plans[p.Key()]; old.Parked(e.At) && p.Limit.Status != "rejected" && p.stale(old, e.At) {
 			return
 		}
 		rs.plans[p.Key()] = p
@@ -717,10 +739,12 @@ func (rs *Runs) apply(e Event) {
 		if strings.HasPrefix(t.Reason, "nudged") {
 			r.Nudges++
 		}
-		if t.Head == r.Head {
-			r.Still++
-		} else {
+		// A parked turn (a limit, an interruption, an error) didn't end
+		// without finishing, so only a new commit counts from it.
+		if t.Head != r.Head {
 			r.Head, r.Still = t.Head, 0
+		} else if t.Status != StatusParked {
+			r.Still++
 		}
 	case "run.queued":
 		var n runNote
@@ -753,6 +777,9 @@ func (rs *Runs) apply(e Event) {
 		var n runNote
 		e.Decode(&n)
 		r.Status, r.Reason, r.ParkedUntil = n.Status, n.Reason, n.Until
+		if strings.HasPrefix(n.Reason, harnessGone) && n.Status == StatusParked {
+			r.Retries = n.N
+		}
 		if n.Status == StatusQueued || n.Status == StatusIdle {
 			r.Nudges, r.Still = 0, 0
 		}
@@ -953,11 +980,18 @@ func (rs *Runs) Plans() []Plan {
 func (rs *Runs) pickLogin(h, model, home string, bare bool) (Login, []string, error) {
 	logins := rs.logins(h, model)
 	now := time.Now()
+	// A renewal turned away by the login's usage limit parks it too: a turn
+	// on it would only be turned away the same.
+	renewing, _ := rs.tokens.(interface{ LimitedUntil(string) time.Time })
+	limited := map[string]bool{}
+	for _, l := range logins {
+		limited[l.Key()] = renewing != nil && renewing.LimitedUntil(l.Key()).After(now)
+	}
 	rs.mu.Lock()
 	use := func(l Login) float64 { return rs.plans[l.Key()].Used(now) }
 	var open []Login
 	for _, l := range logins {
-		if !rs.plans[l.Key()].Parked(now) {
+		if !limited[l.Key()] && !rs.plans[l.Key()].Parked(now) {
 			open = append(open, l)
 		}
 	}
@@ -1172,7 +1206,7 @@ func (rs *Runs) wake(id string) {
 	rs.waking.Lock() // Send and endTurn can both see it; it's woken once
 	defer rs.waking.Unlock()
 	r, ok := rs.Get(id)
-	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) {
+	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) || strings.HasPrefix(r.Reason, StoppedQuiet) {
 		return
 	}
 	rs.append("run.reopened", runNote{ID: id})
@@ -1227,6 +1261,36 @@ func (rs *Runs) Progress(id, text string) {
 // SetStatus records a status change made by a module (e.g. handing a quiet run on).
 func (rs *Runs) SetStatus(id, status, reason string) {
 	rs.append("run.status", runNote{ID: id, Status: status, Reason: reason})
+}
+
+// StoppedQuiet opens the reason of a quiet run an agent ended with EndQuiet.
+const StoppedQuiet = "stopped while quiet by "
+
+// EndQuiet ends a quiet run blocked with reason (StoppedQuiet first), only if
+// it is still quiet and no turn of it is starting: a message that woke it
+// since the caller looked keeps it going. A message later doesn't wake it;
+// Reopen still does.
+func (rs *Runs) EndQuiet(id, reason string) error {
+	rs.mu.Lock()
+	cur := rs.runs[id]
+	switch {
+	case cur == nil:
+		rs.mu.Unlock()
+		return ErrNotFound
+	case cur.Status != StatusQuiet || rs.starting[id]:
+		rs.mu.Unlock()
+		return fmt.Errorf("run %s is %s, not quiet", id, cur.Status)
+	}
+	if rs.starting == nil {
+		rs.starting = map[string]bool{}
+	}
+	rs.starting[id] = true // launch refuses it meanwhile
+	rs.mu.Unlock()
+	rs.append("run.status", runNote{ID: id, Status: StatusBlocked, Reason: reason})
+	rs.mu.Lock()
+	delete(rs.starting, id)
+	rs.mu.Unlock()
+	return nil
 }
 
 // Stop ends a run on purpose; it will not be retried.
@@ -1416,14 +1480,15 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 		return tl
 	}
 	var used harness.Tokens // a harness that reports each step's tokens (usage events)
+	twice := false          // a second verdict in one turn: trust neither, nor rebuild one from the text
 	_ = ReadJSONL(rs.ws.TurnOut(r.ID, turn), func(line []byte) {
 		for _, ev := range h.Parse(line) {
 			switch ev.Kind {
 			case "init":
 				tl.SessionLive, tl.Session = true, ev.SessionID
 			case "result":
-				if tl.Result != nil && ev.Result != nil { // a second verdict in one turn: trust neither
-					ev.Result.Structured = nil
+				if tl.Result != nil && ev.Result != nil {
+					ev.Result.Structured, twice = nil, true
 				}
 				tl.Result = ev.Result
 			case "ratelimit":
@@ -1447,7 +1512,7 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 				tl.Result.Text = s.Text
 			}
 		}
-		if r.Schema != "" && tl.Result.Structured == nil && json.Valid([]byte(tl.Result.Text)) {
+		if r.Schema != "" && tl.Result.Structured == nil && !twice && json.Valid([]byte(tl.Result.Text)) {
 			tl.Result.Structured = json.RawMessage(tl.Result.Text)
 		}
 	}
@@ -1455,7 +1520,7 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 		tl.Result.Tokens = &used
 	}
 	// A module's harness has no schema flag; its answer is the result's text.
-	if tl.Result != nil && !tl.Result.IsError && r.Schema != "" && tl.Result.Structured == nil && harness.AnswersInText(h) {
+	if tl.Result != nil && !tl.Result.IsError && r.Schema != "" && tl.Result.Structured == nil && !twice && harness.AnswersInText(h) {
 		if a := answerJSON(tl.Result.Text); a != nil {
 			tl.Result.Structured = a
 		}
@@ -1641,7 +1706,7 @@ func (rs *Runs) endTurn(r Run) {
 	case cur.Nudges < 2:
 		te.Status, te.Reason = StatusIdle, "nudged: ended a turn without finishing"
 		te.Queue = []string{printedNudge(r, tl.Result.Text)}
-	case te.Head == cur.Head && cur.Still+1 >= StillTurns:
+	case te.Head != "" && te.Head == cur.Head && cur.Still+1 >= StillTurns:
 		// Its nudges changed nothing: it can't follow the finish protocol,
 		// so it ends and frees its slot instead of holding it quiet.
 		te.Status, te.Reason = StatusBlocked, NoFinish+": it was nudged twice to call `hive agent finish`, and the turns after made no new commit and ended without it"
@@ -1683,17 +1748,66 @@ const NoFinish = "doesn't finish"
 // blocked; one that commits stays quiet for the lead.
 const StillTurns = 2
 
-// headMark is the size and time of a checkout's HEAD log, which a commit (or
-// any move of HEAD) changes; it is read without running git there.
+// headMark is the commit a checkout's HEAD points at, which only a new
+// commit (or a checkout) changes; it is read without running git there, and
+// is "" when it can't be read, so a run whose commits can't be seen stays
+// quiet rather than ending blocked.
 func headMark(checkout string) string {
 	if checkout == "" {
 		return ""
 	}
-	fi, err := os.Lstat(filepath.Join(checkout, ".git", "logs", "HEAD"))
+	dir := filepath.Join(checkout, ".git")
+	if b, err := SafeRead(dir, 4096); err == nil { // a worktree's .git is a file naming its git dir
+		if d, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir: "); ok {
+			dir = d
+			if !filepath.IsAbs(dir) {
+				dir = filepath.Join(checkout, dir)
+			}
+		}
+	}
+	head, err := SafeRead(filepath.Join(dir, "HEAD"), 4096)
 	if err != nil {
 		return ""
 	}
-	return fmt.Sprint(fi.Size(), " ", fi.ModTime().UnixNano())
+	ref, ok := strings.CutPrefix(strings.TrimSpace(string(head)), "ref: ")
+	if !ok {
+		return hashOnly(ref) // detached: the hash itself
+	}
+	if !strings.HasPrefix(ref, "refs/") || strings.Contains(ref, "..") {
+		return ""
+	}
+	common := dir
+	if b, err := SafeRead(filepath.Join(dir, "commondir"), 4096); err == nil {
+		if common = strings.TrimSpace(string(b)); !filepath.IsAbs(common) {
+			common = filepath.Join(dir, common)
+		}
+	}
+	for _, d := range []string{dir, common} {
+		if b, err := SafeRead(filepath.Join(d, filepath.FromSlash(ref)), 4096); err == nil {
+			return hashOnly(strings.TrimSpace(string(b)))
+		}
+	}
+	packed, _ := SafeRead(filepath.Join(common, "packed-refs"), 16<<20)
+	for _, line := range strings.Split(string(packed), "\n") {
+		if hash, name, ok := strings.Cut(strings.TrimSpace(line), " "); ok && name == ref {
+			return hashOnly(hash)
+		}
+	}
+	return ""
+}
+
+// hashOnly is s when it is a commit hash and "" otherwise, so what a
+// checkout's files say never goes on the record as anything but a hash.
+func hashOnly(s string) string {
+	if len(s) != 40 && len(s) != 64 {
+		return ""
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return ""
+		}
+	}
+	return s
 }
 
 func suffix(s string) string {
@@ -1763,8 +1877,9 @@ const PendingSep = "\n\n---\n\n"
 func (rs *Runs) launch(r Run, cfg Config) {
 	rs.mu.Lock()
 	// A turn starts at most once: not over a live one, nor from a copy of
-	// the run older than its last turn, nor beside another launch of it.
-	if cur := rs.runs[r.ID]; len(rs.holds) > 0 || cur == nil || cur.Status == StatusRunning || cur.Turn != r.Turn || rs.starting[r.ID] {
+	// the run older than its last turn or status (one ended meanwhile stays
+	// ended), nor beside another launch of it.
+	if cur := rs.runs[r.ID]; len(rs.holds) > 0 || cur == nil || cur.Status == StatusRunning || cur.Status != r.Status || cur.Turn != r.Turn || rs.starting[r.ID] {
 		rs.mu.Unlock()
 		return
 	}
@@ -1844,8 +1959,12 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		r.Harness, r.Model = pick.Harness, pick.Model
 	}
 	h, err := harness.Get(r.Harness)
-	if err != nil { // a module's harness since removed
-		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(5 * time.Minute)})
+	if err != nil { // a module's harness since removed: wait a while for it to come back, then stop and say so
+		if r.Retries >= harnessGoneTries {
+			rs.SetStatus(r.ID, StatusBlocked, fmt.Sprintf("%s %s, tried %d times: install the module that declares it again, or set another harness, and reopen the run", harnessGone, err, r.Retries+1))
+			return
+		}
+		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: harnessGone + " " + err.Error(), Until: time.Now().Add(5 * time.Minute), N: r.Retries + 1})
 		return
 	}
 	if HarnessName(r.Harness) == "open" {
@@ -1926,6 +2045,10 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			rs.dropOpenKey(r.ID) // no turn will end to delete the key
 		}
 	}()
+	if errors.Is(err, harness.ErrArgTooLong) { // the same prompt would fail every time
+		rs.SetStatus(r.ID, StatusBlocked, err.Error())
+		return
+	}
 	if err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(5 * time.Minute)})
 		return
@@ -2095,6 +2218,9 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	argv := append([]string{h.Program()}, h.Args(t)...)
 	if !sb.Isolated() && h.Program() == "hive" && len(tools) > 0 {
 		argv[0] = tools[0]
+	}
+	if err := harness.CheckArgs(h.Name(), argv); err != nil {
+		return sandbox.Spec{}, err
 	}
 	allow := cfg.Egress.For(r.Role)
 	if allow != nil {

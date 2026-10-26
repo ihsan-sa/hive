@@ -46,7 +46,7 @@ func newRunnerIn(t *testing.T, dir, name string) (*Runner, modules.Module, strin
 	}
 	commit, _ := core.Git(dir, "rev-parse", "HEAD")
 	m, _ := mods.Get(name)
-	r := &Runner{C: c, Mods: mods, Agents: &agents.Agents{C: c, Mod: mods}, status: map[string]string{}, tries: map[string]int{}}
+	r := &Runner{C: c, Mods: mods, Agents: &agents.Agents{C: c, Mod: mods}, status: map[string]string{}, tries: map[string]int{}, missing: map[string]bool{}}
 	return r, m, commit
 }
 
@@ -189,7 +189,20 @@ func TestMissingProgramAlertsOnce(t *testing.T) {
 	if n := r.count("alert.raised"); n != 1 {
 		t.Fatalf("%d alerts, want 1", n)
 	}
+	if n := r.count("module.exited"); n != 1 {
+		t.Fatalf("%d module.exited for the same failure, want 1", n)
+	}
 	if !strings.HasPrefix(r.Status("door"), "could not start") {
 		t.Fatalf("status %q", r.Status("door"))
+	}
+	// The PATH is fixed: the program starts and the alert is cleared.
+	m.Exec = []string{"go", "version"}
+	c := &child{commit: "local", wait: time.Second}
+	r.mu.Lock()
+	r.start("door", c, m)
+	r.mu.Unlock()
+	<-c.done
+	if n := r.count("alert.cleared"); n != 1 {
+		t.Fatalf("%d alerts cleared once it started, want 1", n)
 	}
 }

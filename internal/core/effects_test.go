@@ -120,8 +120,16 @@ func TestMergeNeedsCheckAndVerdictOnExactCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main, Subject: "feature"}
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no passing test") {
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no test run") {
 		t.Fatalf("merged without a test run: %v", err)
+	}
+	// A red run main's own run doesn't share (here main has none) is refused.
+	red := "echo '--- FAIL: TestClock (0.01s)'; echo 'FAIL\tp/a\t0.01s'; exit 1"
+	if ch := c.Effects.RunCheck(p, sha, "test", red); ch.OK {
+		t.Fatal("a failing test run passed")
+	}
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "red beyond") {
+		t.Fatalf("merged on a red test run main doesn't share: %v", err)
 	}
 	if ch := c.Effects.RunCheck(p, sha, "test", c.Effects.Config(p, main).Test); !ch.OK {
 		t.Fatalf("tests should pass: %s", ch.Output)
@@ -895,16 +903,16 @@ func TestRequiredChecks(t *testing.T) {
 // one after the other: the repository's own .gitattributes marks them
 // merge=union, so bringing the second branch up to date keeps both entries
 // instead of sending it back as a conflict. Without those lines the same merge
-// conflicts. docs/architecture.md is edited in place and isn't union: the same
-// two additions to it conflict either way.
+// conflicts. docs/architecture.md is edited in place and isn't union, which
+// the .gitattributes check below holds.
 func TestAdditiveDocsMergeWithoutConflict(t *testing.T) {
 	attrs, err := os.ReadFile(filepath.Join("..", "..", ".gitattributes"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	docs := []string{"docs/log.md", "docs/status.md"}
-	if !strings.Contains(string(attrs), "docs/log.md merge=union") || strings.Contains(string(attrs), "docs/architecture.md merge=union") {
-		t.Fatalf(".gitattributes should mark log.md union and leave architecture.md alone:\n%s", attrs)
+	if !strings.Contains(string(attrs), "docs/log.md merge=union") || !strings.Contains(string(attrs), "docs/status.md merge=union") || strings.Contains(string(attrs), "docs/architecture.md merge=union") {
+		t.Fatalf(".gitattributes should mark log.md and status.md union and leave architecture.md alone:\n%s", attrs)
 	}
 	for _, union := range []bool{true, false} {
 		t.Run(fmt.Sprint("union=", union), func(t *testing.T) {
@@ -1394,6 +1402,16 @@ func TestSecurityWhere(t *testing.T) {
 		if got := c.ch.SecurityWhere(); got != c.want {
 			t.Errorf("%v: %q, want %q", c.ch.Security, got, c.want)
 		}
+	}
+}
+
+func TestTestedMerge(t *testing.T) {
+	h, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	if gh, gb := TestedMerge("##[group]Run actions/checkout@v4\nHEAD is now at 1234567 Merge " + h + " into " + b + "\n"); gh != h || gb != b {
+		t.Fatalf("got %q %q", gh, gb)
+	}
+	if gh, gb := TestedMerge("HEAD is now at 1234567 a push\n"); gh != "" || gb != "" {
+		t.Fatalf("got %q %q", gh, gb)
 	}
 }
 

@@ -245,3 +245,32 @@ func TestCheckpointWaitsOutACheckBacklog(t *testing.T) {
 		t.Fatalf("not weighed once the backlog cleared: %v", task.Log)
 	}
 }
+
+// Every slot taken with nothing yet waiting holds the step just the same: the
+// commit waits for a free slot too.
+func TestCheckpointWaitsOutFullSlots(t *testing.T) {
+	m, task, p := checkpointRig(t, 5, "5")
+	slots := core.NewSlots(func() int { return 1 })
+	m.C.Effects.Slots = slots
+	release := slots.Acquire("other", "abc", "test")
+	done := make(chan error, 1)
+	go func() { done <- m.checkWorker(task, p) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the checkpoint waited for a check slot")
+	}
+	if task.Seen != "" {
+		t.Fatalf("weighed with every slot taken: seen %q, log %v", task.Seen, task.Log)
+	}
+	release()
+	if err := m.checkWorker(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if !logged(task, "doesn't beat the best kept score 5") {
+		t.Fatalf("not weighed once a slot was free: %v", task.Log)
+	}
+}
