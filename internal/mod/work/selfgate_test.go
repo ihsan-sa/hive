@@ -89,19 +89,21 @@ func TestSelfGateKeepMerges(t *testing.T) {
 	}
 }
 
-// A head that lacks main is brought up to date before the gate runs: the
-// gate judges what would land, not a branch cut before main fixed a test.
-func TestSelfGateCatchesUpFirst(t *testing.T) {
+// A head that lacks main goes to the gate as it is, against main: the gate
+// merges main in its own clone, so the branch isn't pushed and tested again
+// on every move of main while it waits for a gate.
+func TestSelfGateJudgesTheHeadWithMainIn(t *testing.T) {
 	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	pushMain(t, f, map[string]string{"other.go": "package p\n"})
+	main := strings.TrimSpace(must(t, f.RepoPath("me/p"), "rev-parse", "main"))
 	old := task.SHA
 	mergeOnce(t, m, task, p)
 	m.Wait()
-	if len(*jobs) != 0 {
-		t.Fatalf("the gate ran on %s, a head without main", core.Short((*jobs)[0].Head))
+	if task.SHA != old {
+		t.Fatalf("the branch moved to %s before the gate: want its head judged with main merged in by the gate", core.Short(task.SHA))
 	}
-	if task.SHA == old || task.Stage != StageTesting {
-		t.Fatalf("stage %q, head moved %v: want brought up to date and tested again", task.Stage, task.SHA != old)
+	if len(*jobs) != 1 || (*jobs)[0].Head != old || (*jobs)[0].Main != main {
+		t.Fatalf("gate jobs %+v: want one on %s against main at %s", *jobs, core.Short(old), core.Short(main))
 	}
 }
 
