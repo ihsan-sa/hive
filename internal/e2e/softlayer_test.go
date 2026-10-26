@@ -222,13 +222,15 @@ func armTookEffect(h *hive, arm softlayer.Variant, essay string) bool {
 	for _, line := range strings.Split(string(raw), "\n") {
 		var e struct {
 			Kind string
-			Data struct{ System string }
+			Data struct{ ID string }
 		}
 		if json.Unmarshal([]byte(line), &e) != nil || e.Kind != "run.created" {
 			continue
 		}
 		runs++
-		if !strings.HasPrefix(e.Data.System, files["orientation"]) {
+		// the journal names a long system prompt; the run's ro folder has it
+		system, _ := os.ReadFile(filepath.Join(h.ws.RunRO(e.Data.ID), "system.md"))
+		if !strings.HasPrefix(string(system), files["orientation"]) {
 			return false
 		}
 	}
