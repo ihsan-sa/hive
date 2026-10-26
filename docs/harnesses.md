@@ -23,7 +23,9 @@ whose spec doesn't list it; it runs on its own default.
 ## Logins
 
 - **Bare runs** use the harness's own login on this machine:
-  `hive harness login cursor` runs `cursor-agent login`.
+  `hive harness login cursor` runs `cursor-agent login`, printing the command
+  and the module it comes from first. A spec's `login` and `status` must run
+  its own `program`, since they run as the person, outside the sandbox.
 - **Sandboxed runs** have a home of their own, so the host's login isn't there.
   A harness whose spec names `key_env` gets the key the person stored with
   `hive harness key <name>` (kept in `.hive/logins/<name>/key`, which no run
@@ -50,18 +52,20 @@ A spec (see `modules/workers/cursor.json` and `opencode.json`):
 | `name` | what settings and routes call it; lower-case, not a built-in name |
 | `title`, `description` | how the person sees it |
 | `program` | a plain program name found on PATH (never a path) |
-| `login`, `status` | its own login command, and one that exits 0 when logged in |
+| `login`, `status` | its own login command, and one that exits 0 when logged in; each starts with `program` |
 | `key_env`, `key_optional` | the variable it reads an API key from (see Logins) |
-| `api_hosts` | hosts its client must reach, added to every run's egress (a host covers its subdomains) |
+| `api_hosts` | hosts its client must reach, added to the egress of runs on this harness only (a host covers its subdomains) |
 | `models` | models it knows, the default first |
 | `prompt` | `stdin` (default) or `arg`, where `{prompt}` in the args carries it |
 | `system` | `args` (default: the args or env name `{system_file}` / `{system_text}`) or `prompt`: the Hive's system prompt goes ahead of a fresh session's first prompt |
 | `args` | `start`, then `new` or `resume`, `model` (when the turn names one), `read_only` or `write`, `sandboxed` or `bare`, `schema` (when the turn has one), `end` |
-| `env` | `NAME=value` entries |
+| `env` | `NAME=value` entries; none may set what the Hive sets itself or what changes how programs or the proxy behave (`PATH`, `HOME`, `PWD`, `HIVE_*`, `*_PROXY`, `LD_*`, `NODE_OPTIONS`, CA bundles, its own `key_env`) |
 | `parse` | rules mapping its JSON output lines to the Hive's events |
 
 Placeholders in args and env: `{session}`, `{model}`, `{prompt}`,
-`{system_file}`, `{system_text}`, `{run_dir}`, `{schema_file}`, `{config_dir}`.
+`{system_file}`, `{system_text}`, `{run_dir}`, `{schema_file}`, `{config_dir}`,
+and `{system_file_json}`, the system file's path escaped to sit inside a JSON
+string (OpenCode's config in an env value; a bare Windows path has backslashes).
 A harness with no `schema` args is told the schema in its prompt, and its
 answer is the JSON object its last message ends with.
 
@@ -94,6 +98,25 @@ the input count includes the cached part.
   sandbox its checkout and mailbox are read-only: unlike Claude's read tools, a
   module's harness may run commands.
 - A run held to a budget won't start on one: the Hive can't cap its spend.
+- A harness that takes its prompt as an arg (Cursor) gets it as one argument,
+  with the system prompt ahead of it on a fresh session. Linux refuses one over
+  128 KiB, so such a turn is blocked saying so rather than failing to start.
+- Two modules declaring one name: a default module's wins, then the first by
+  folder name, so a module installed later can't take over `cursor` and the
+  key stored for it.
+- A run whose harness's module was removed waits 5 minutes, three times, for
+  it to come back, then is blocked saying what to do.
+- The specs are read again only when the modules folder, a module's folder,
+  its `module.json` or a spec has changed.
+- **Bare runs and read-only turns rest on the harness's own flags.** Bare,
+  Cursor runs with `--force` and OpenCode with `--auto`, and a read-only turn
+  is held only by Cursor's `--mode ask` or OpenCode's `--agent plan`; the Hive
+  has not checked that those block every shell and write tool (Codex has the
+  same gap). Sandboxed, the checkout and mailbox are read-only whatever the
+  harness does.
+- The key a sandboxed turn gets is in its environment, where the agent's own
+  commands can read it; egress limits where it can go. The open harness's
+  read-then-delete key file (risk.md) is stronger and isn't used here yet.
 - Its plan usage isn't read (only Claude's and Codex's are); a usage-limit
   error still parks it.
 

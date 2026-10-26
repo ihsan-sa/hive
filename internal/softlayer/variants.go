@@ -18,7 +18,7 @@ import (
 )
 
 // Roles are the prompt files of the agents module, orientation first.
-var Roles = []string{"orientation", "lead", "worker", "reviewer", "sweep", "filer", "warden", "tribunal", "module-reviewer"}
+var Roles = []string{"orientation", "lead", "worker", "reviewer", "sweep", "filer", "warden", "tribunal", "judge", "module-reviewer"}
 
 // Variant is one soft layer: a full set of agents-module prompt files.
 type Variant struct {
@@ -37,6 +37,7 @@ var oneLine = map[string]string{
 	"filer":           "You are the filer.",
 	"warden":          "You are a warden.",
 	"tribunal":        "You are a panelist of a tribunal.",
+	"judge":           "You are a judge.",
 	"module-reviewer": "You are a module reviewer.",
 }
 

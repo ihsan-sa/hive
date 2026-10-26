@@ -137,6 +137,8 @@ func TestRealKeyOnAFakeLabelledLine(t *testing.T) {
 		"password: [secret]",
 		"https://x-access-token:${TOKEN}@github.com/me/repo",
 		"a brokered org leg with no child token: 261024-225610-163a3bc0d0.",
+		"`CheckReach` reads the owner's role as the token's reach: 261024-163142-db224b11e8.",
+		"child token: 261024-163142-db224b11e8",
 		"token: r-261025-081832-f0ffb403d4-43295337-0",
 		"token: s-261025-050219-fa27843a7a-889bd97f-security-0",
 	} {

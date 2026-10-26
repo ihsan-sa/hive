@@ -187,6 +187,19 @@ func rerunCommand(test string, fs []failure) string {
 // that runs again. A pass is a flaky test, not a broken merge. cant is the
 // rerun when it couldn't start for want of a tool: no answer either way.
 func (m *Module) redTests(p core.Project, sha, test string, tc core.Check) (sum string, flaky bool, cant core.Check) {
+	return m.runAgain(p, sha, test, tc, true)
+}
+
+// retest is work's Retest: what failed in tc runs once more on its own, and
+// a pass then makes the red a flake. One on main is filed to fix, as a
+// measurement's is; one on a change's own head isn't, since the test may be
+// the change's own.
+func (m *Module) retest(p core.Project, sha, test string, tc core.Check, main bool) bool {
+	_, flaky, _ := m.runAgain(p, sha, test, tc, main)
+	return flaky
+}
+
+func (m *Module) runAgain(p core.Project, sha, test string, tc core.Check, file bool) (sum string, flaky bool, cant core.Check) {
 	out := tc.Output
 	if tc.Log != "" {
 		if b, err := core.SafeRead(tc.Log, 8<<20); err == nil && len(b) > 0 {
@@ -203,7 +216,9 @@ func (m *Module) redTests(p core.Project, sha, test string, tc core.Check) (sum 
 		return sum, false, rc // the rerun couldn't start: no answer either way
 	}
 	if rc.OK {
-		m.fileFlaky(p, sha, fs, sum, out)
+		if file {
+			m.fileFlaky(p, sha, fs, sum, out)
+		}
 		return sum, true, cant
 	}
 	return sum, false, cant
