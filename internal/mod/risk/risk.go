@@ -640,7 +640,7 @@ func (m *Module) Tick() {
 		switch req.State {
 		case "weighing":
 			w, ok := m.C.Runs.Get(req.Warden)
-			late := time.Since(req.Updated) > WardenTimeout
+			late := wardenLate(req, w, ok)
 			if late || ok && (w.Terminal() || w.Status == core.StatusQuiet) {
 				req.Reason = "It ended without deciding."
 				if late {
@@ -700,6 +700,22 @@ func (m *Module) Tick() {
 			go m.execute(req.ID)
 		}
 	}
+}
+
+// wardenLate says whether a warden has had its WardenTimeout to weigh. The
+// clock runs only while the warden can take turns: one parked on a usage
+// limit or still queued for a slot isn't late, and it restarts at the turn
+// that ends the wait, so a warden that never ran is never timed out to the
+// person.
+func wardenLate(req Request, w core.Run, ok bool) bool {
+	if ok && (w.Status == core.StatusParked || w.Status == core.StatusQueued) {
+		return false
+	}
+	from := req.Updated
+	if ok && w.TurnStarted.After(from) {
+		from = w.TurnStarted
+	}
+	return time.Since(from) > WardenTimeout
 }
 
 // execute runs an approved step here, in the effects process, as exactly the

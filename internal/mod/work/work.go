@@ -3640,6 +3640,8 @@ func (m *Module) workerStopped(t Task) bool {
 // steerers are the roles that keep the loop moving: every agent owns it, so
 // any of them orders and holds the queue, checks blocked work again, ends a
 // landed task and changes the Hive's own PRs, each on the record by its run id.
+// A step-back diagnoses a stalled loop and acts on what it finds rather
+// than routing the fix through a lead that may not answer for a while.
 var steerers = core.Peers
 
 // reach refuses a task outside r's own project: an agent with a project steers

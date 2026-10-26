@@ -100,11 +100,11 @@ func (p Pick) Same(q Pick) bool {
 // another model only where the person routes them themselves.
 var CheckRoles = []string{"reviewer", "security", "warden", "tribunal", JudgeRole}
 
-// Peers are the roles every agent outside the checks holds. Lead, worker and
-// sweep are names for the person's reading, not ranks: each may call the same
-// ops, on its own project's work, on the record by its run id. Only the check
-// seats (warden and tribunal above all) are set apart.
-var Peers = []string{"lead", "worker", "sweep"}
+// Peers are the roles every agent outside the checks holds. Lead, worker,
+// sweep and step-back are names for the person's reading, not ranks: each may
+// call the same ops, on its own project's work, on the record by its run id.
+// Only the check seats (warden and tribunal above all) are set apart.
+var Peers = []string{"lead", "worker", "sweep", "stepback"}
 
 // RouteRoles are the roles a route can name; "fallback" is the list every
 // other role moves along at a limit.
