@@ -1401,6 +1401,10 @@ type MergeRequest struct {
 	Subject string
 	Gain    bool   // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
 	Task    string // the task whose PR it is: the quarantine excuses it only on evidence from outside it
+	// Draft is the PR's state at the caller's last look: a draft is readied
+	// once every read is checked. One made a draft after that look isn't
+	// (the lead's pr_draft, say): MergePR refuses it with ErrDraft.
+	Draft bool
 }
 
 // Merge merges the PR only at sha, and only when the host's own records show
@@ -1475,9 +1479,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	}
 	// Every read above is the Hive's own and bound to sha, and nobody outside
 	// the Hive reads its PRs, so a draft it cleared is its to ready.
-	if pr, err := e.Forge.GetPR(p.Repo, m.PR); err != nil {
-		return "", err
-	} else if pr.Draft {
+	if m.Draft {
 		if err := e.ReadyPR(p, m.PR, m.SHA); err != nil {
 			return "", err
 		}
@@ -1511,13 +1513,14 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	return merged, nil
 }
 
-// ReadyPR takes the PR out of draft, only while its head is still sha.
+// ReadyPR takes the PR out of draft, only while its head is still sha; the
+// journal hears only when the forge changed something.
 func (e *Effects) ReadyPR(p Project, pr int, sha string) error {
-	if err := e.Forge.ReadyPR(p.Repo, pr, sha); err != nil {
-		return err
+	readied, err := e.Forge.ReadyPR(p.Repo, pr, sha)
+	if readied {
+		e.j.MustAppend("effect.readied", map[string]any{"project": p.Name, "pr": pr, "sha": sha})
 	}
-	e.j.MustAppend("effect.readied", map[string]any{"project": p.Name, "pr": pr, "sha": sha})
-	return nil
+	return err
 }
 
 // RefusedRed is the forge refusing a merge the Hive found no worse than main:

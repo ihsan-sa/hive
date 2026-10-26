@@ -441,7 +441,11 @@ func (e *Effects) prefetch(dir string) error {
 	// Telemetry off: in a fresh home go always takes its daily upload token
 	// and starts a detached child that can outlive it, still writing under
 	// tmp while RemoveTree empties it (issue #514).
-	env = append(env, goTelemetryOff(tmp)...)
+	off, err := goTelemetryOff(tmp)
+	if err != nil {
+		return fmt.Errorf("can't turn go's telemetry off: %v", err)
+	}
+	env = append(env, off...)
 	for _, k := range []string{"GOPROXY", "GOSUMDB", "GONOSUMDB", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
 		if v, ok := os.LookupEnv(k); ok {
 			env = append(env, k+"="+v)
@@ -875,7 +879,7 @@ func (e *Effects) diskAlert(line string) {
 // on Linux (XDG_CONFIG_HOME, which the returned env pins whatever the
 // host's), Library/Application Support on macOS, AppData on Windows (the
 // env names it there too, as go reads only the variable).
-func goTelemetryOff(home string) []string {
+func goTelemetryOff(home string) ([]string, error) {
 	var cfg string
 	var env []string
 	switch runtime.GOOS {
@@ -889,9 +893,13 @@ func goTelemetryOff(home string) []string {
 		env = append(env, "XDG_CONFIG_HOME="+cfg)
 	}
 	dir := filepath.Join(cfg, "go", "telemetry")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "mode"), []byte("off"), 0o644)
-	return env
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mode"), []byte("off"), 0o644); err != nil {
+		return nil, err
+	}
+	return env, nil
 }
 
 // checkTmp points a check's TMPDIR at the temp folder in its home, on disk,
