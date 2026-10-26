@@ -12,7 +12,7 @@ The diagram is drawn from [arch.json](arch.json). To change it, edit that file a
 
 **The agents.** Each is a Claude Code session, a Codex session (so far run only against a scripted stand-in, not a real Codex login) or any OpenAI-compatible model through the Hive's own agent loop ([models.md](models.md)). Each turn runs in a sandbox of its own.
 
-- The **lead** turns what you say into briefs, one per piece of work, and answers you.
+- The **lead** turns what you say into briefs, one per piece of work, and answers you. It answers however busy the machine is: a lead's turn isn't held by memory or CPU pressure (only under 256 MB free), starts ahead of queued workers and reviews, and runs at a higher priority than every other run ([priority.md](priority.md)).
 - A **worker** takes one brief and builds it in its own checkout of the project, then commits.
 - A **reviewer** reads the exact commit, with read-only tools, and says land or fix. A fix goes back to the same worker, for a few rounds at most.
 - A **warden** weighs a step an agent can't take from inside its sandbox, such as installing a package. A step that is hard to undo also goes to a **tribunal**: three read-only agents, spread over models where you set more than one, who vote.
