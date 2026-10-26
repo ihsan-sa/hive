@@ -1415,14 +1415,20 @@ func (rs *Runs) endTurn(r Run) {
 	}
 	limited := tl.Result != nil && tl.Result.Limited || (tl.Limit != nil && tl.Limit.Status == "rejected" && (tl.Result == nil || tl.Result.IsError))
 	if limited {
-		// Park the login until its reset (an hour when the harness didn't say).
+		// Park the login until its reset (an hour when the harness didn't
+		// say). A reset it named that has passed by the turn's end is a
+		// limit that is over, not one with no reset: it waits a minute, so a
+		// harness repeating a stale reset doesn't spin, not the hour that
+		// parked the fake agent's three-second limit on a slow runner (PR #800).
 		l := harness.RateLimit{}
 		if tl.Limit != nil {
 			l = *tl.Limit
 		}
 		l.Status = "rejected"
-		if !l.ResetsAt.After(time.Now()) {
+		if l.ResetsAt.IsZero() {
 			l.ResetsAt = time.Now().Add(time.Hour)
+		} else if !l.ResetsAt.After(time.Now()) {
+			l.ResetsAt = time.Now().Add(time.Minute)
 		}
 		tl.Limit = &l
 	}
