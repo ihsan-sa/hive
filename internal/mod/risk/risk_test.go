@@ -705,14 +705,47 @@ func TestInstallRefusesSandboxPath(t *testing.T) {
 	}
 }
 
+// When the Hive's own folder sits under a sandbox root (its home is /hive on
+// some machines), a project's folder does too; --project names the host's own
+// path, so it isn't refused, while the same path typed is.
+func TestInstallWithProjectUnderSandboxRoot(t *testing.T) {
+	g := newRig(t, 1)
+	defer func(r []string) { sandboxRoots = r }(sandboxRoots)
+	sandboxRoots = []string{g.c.WS.Root}
+	g.c.Projects.Add(core.Project{Name: "tool", Repo: "me/tool"})
+	dir := g.c.WS.Project("tool")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lead, err := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.call(lead, "install_module", map[string]string{"url": dir}); err == nil || !strings.Contains(err.Error(), "--project") {
+		t.Fatalf("a typed path under the root: want a refusal pointing at --project, got %v", err)
+	}
+	if _, err := g.call(lead, "install_module", map[string]string{"project": "tool"}); err != nil {
+		t.Fatalf("--project under a sandbox root was refused: %v", err)
+	}
+	filed := 0
+	for _, a := range g.c.Person.Open() {
+		if a.Kind == "module" && a.Ref == dir {
+			filed++
+		}
+	}
+	if filed != 1 {
+		t.Fatalf("want one install ask for %s, got %+v", dir, g.c.Person.Open())
+	}
+}
+
 // A merge that changes the goals, the score or a setting, and a module
 // install, follow autonomy like any step: at 1 the person decides; above it a
 // warden does, its answer reaches the ask's handler as the person's would,
 // and the person is told after.
 func TestAutonomyDecidesProtectedChanges(t *testing.T) {
 	// The module's source is a temporary repository, wherever TMPDIR is.
-	defer func(r []string) { SandboxRoots = r }(SandboxRoots)
-	SandboxRoots = nil
+	defer func(r []string) { sandboxRoots = r }(sandboxRoots)
+	sandboxRoots = nil
 	src := t.TempDir()
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "v1"}, {"tag", "v1.0.0"}} {
 		if _, err := core.Git(src, args...); err != nil {
