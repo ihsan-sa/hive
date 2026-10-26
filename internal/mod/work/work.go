@@ -216,8 +216,11 @@ const (
 
 // Fix says the task is clearly a fix: its brief, worker or the lead said so
 // and named the failure. A revert undoes a merge already judged worse, so it
-// is one too.
-func (t Task) Fix() bool { return t.Aim == AimFix || t.Kind == "revert" }
+// is one too, and so is a review follow-up that says no aim: one filed
+// before followUp named its aim hardens a change that already passed.
+func (t Task) Fix() bool {
+	return t.Aim == AimFix || t.Kind == "revert" || t.Aim == "" && t.FollowUp != ""
+}
 
 // Gain says the task is taken as a gain: it aims at one, or it isn't clearly a fix.
 func (t Task) Gain() bool { return !t.Fix() }
@@ -227,6 +230,8 @@ func (t Task) AimWord() string {
 	switch {
 	case t.Kind == "revert":
 		return "a fix (a revert of a merge judged worse)"
+	case t.Fix() && t.Aim == "":
+		return "a fix (a review follow-up of " + t.FollowUp + ", which already merged)"
 	case t.Fix():
 		return "a fix: " + orNone(t.AimWhy)
 	case t.Aim == AimGain && t.AimWhy != "":

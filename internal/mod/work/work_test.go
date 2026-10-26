@@ -789,6 +789,21 @@ func TestFollowUpOnceAfterMerge(t *testing.T) {
 	}
 }
 
+// A review follow-up filed before followUp named its aim, still queued with
+// none, is taken as a fix; one its worker or the lead aimed at a gain is a gain.
+func TestUnaimedFollowUpIsAFix(t *testing.T) {
+	fu := Task{ID: "t2", Title: "Follow up the review of x", FollowUp: "t1"}
+	if !fu.Fix() || !strings.Contains(fu.AimWord(), "follow-up of t1") {
+		t.Fatalf("an unaimed follow-up is taken as %s", fu.AimWord())
+	}
+	if fu.Aim = AimGain; fu.Fix() {
+		t.Fatal("a follow-up aimed at a gain is taken as a fix")
+	}
+	if plain := (Task{ID: "t3"}); plain.Fix() {
+		t.Fatal("an unaimed brief that follows up nothing is taken as a fix")
+	}
+}
+
 // The lead ends a task whose work is already on main, whatever stage it is
 // stuck in: not while its PR is open and main lacks its change; with the main
 // commit named when it was squashed there; at once when its PR was merged on
