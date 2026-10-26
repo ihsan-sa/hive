@@ -97,7 +97,8 @@ type Run struct {
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
 	StopAsked   bool            `json:"stop_asked,omitempty"`
-	Waiting     string          `json:"waiting,omitempty"` // what it ended its turn waiting for
+	Waiting     string          `json:"waiting,omitempty"`  // what it ended its turn waiting for
+	Reopened    bool            `json:"reopened,omitempty"` // reopened while its turn ran: the turn's finish doesn't end it
 	Created     time.Time       `json:"created"`
 	Updated     time.Time       `json:"updated"`
 	TurnStarted time.Time       `json:"turn_started,omitempty"`
@@ -703,7 +704,7 @@ func (rs *Runs) apply(e Event) {
 			on = ""
 		}
 		rs.ranOn[r.ID] = on
-		r.Waiting = ""
+		r.Waiting, r.Reopened = "", false
 		if t.Delivered <= len(r.Pending) {
 			r.Pending = r.Pending[t.Delivered:]
 		}
@@ -776,6 +777,13 @@ func (rs *Runs) apply(e Event) {
 	case "run.status":
 		var n runNote
 		e.Decode(&n)
+		if r.Status == StatusRunning && (n.Status == StatusIdle || n.Status == StatusQueued) {
+			// Only its end takes a running turn off running: a reopen that
+			// lands mid-turn (a second fix round, 2 s after the first) would
+			// let the next turn start beside it (issue #1022). Its message
+			// waits in Pending for the turn after.
+			break
+		}
 		r.Status, r.Reason, r.ParkedUntil = n.Status, n.Reason, n.Until
 		if strings.HasPrefix(n.Reason, harnessGone) && n.Status == StatusParked {
 			r.Retries = n.N
@@ -795,6 +803,7 @@ func (rs *Runs) apply(e Event) {
 		r.Waiting = n.Text
 	case "run.reopened":
 		r.Finish, r.StopAsked, r.Nudges, r.Still = nil, false, 0, 0
+		r.Reopened = r.Status == StatusRunning
 	}
 }
 
@@ -1662,6 +1671,10 @@ func (rs *Runs) endTurn(r Run) {
 		te.Reason = "harness error; retrying" + suffix(Clip(tl.Result.Text, 200))
 		te.Offline = Unreachable(service(r.Harness), tl.Result.Text)
 		te.Queue = []string{"The previous turn hit an error (" + Clip(tl.Result.Text, 200) + "). Continue where you left off."}
+	case cur.Finish != nil && cur.Reopened && len(cur.Pending) > 0:
+		// Reopened mid-turn, it stays running (issue #1022) and may then
+		// finish on what it was told before: the next turn hands it the rest.
+		te.Status, te.Reason = StatusIdle, reopenedMidTurn
 	case cur.Finish != nil:
 		te.Status = StatusDone
 		if cur.Finish.Status == "blocked" {
@@ -1689,6 +1702,9 @@ func (rs *Runs) endTurn(r Run) {
 		te.ParkedUntil = time.Now().Add(min(backoff(cur.Retries), 5*time.Minute))
 	}
 	rs.append("run.turn_ended", te)
+	if te.Reason == reopenedMidTurn {
+		rs.append("run.reopened", runNote{ID: r.ID}) // the finish it made before the message isn't its last
+	}
 	// A message that came in while it finished blocked wakes it. The run is
 	// read again, after the turn's end is recorded: one that landed since cur
 	// was read is not in cur, and its Send saw the run still running.
@@ -1709,6 +1725,9 @@ func (rs *Runs) endTurn(r Run) {
 		}
 	}
 }
+
+// reopenedMidTurn is why a run that finished in a turn it was reopened during takes another.
+const reopenedMidTurn = "reopened during its turn"
 
 // NoFinish begins the reason a run ends blocked for never calling finish.
 const NoFinish = "doesn't finish"
@@ -1972,6 +1991,12 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		rs.mu.Unlock()
 		if !said {
 			fmt.Printf("hive: %s's turn %d isn't started here: %v\n", r.ID, turn, err)
+		}
+		if errors.Is(err, errTurnLive) {
+			if !said { // not a second daemon: something took this run off running mid-turn
+				rs.append("alert.raised", map[string]string{"kind": "daemon", "ref": "turn-live-" + r.ID, "text": fmt.Sprintf("%s's turn %d was about to start while %v; it waits for that turn to end.", r.ID, turn, err)})
+			}
+			return
 		}
 		if first { // once per daemon, so a second daemon shows in the record and on the dashboard
 			rs.append("alert.raised", map[string]string{"kind": "daemon", "ref": "turn-claim", "text": fmt.Sprintf("This daemon (pid %d) backed off %s's turn %d: %v. Two daemons may be running on this workspace.", os.Getpid(), r.ID, turn, err)})
