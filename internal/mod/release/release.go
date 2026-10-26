@@ -35,6 +35,11 @@ type Module struct {
 	// refused is each project's last "sha: why" that stopped a release
 	// before main's checks were read, raised once so a retry doesn't repeat it.
 	refused sync.Map
+	// scanSaid is each project's last "sha: why" a scan blocked, alerted once.
+	scanSaid sync.Map
+	// handlesAt is the newest commit each project's missing handle list
+	// holds, released again when the person says the list is written.
+	handlesAt sync.Map
 	// PauseMerges stops new merges and waits up to the given time for the
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
@@ -45,6 +50,9 @@ type Module struct {
 	// Diff lists the files that differ between two commits; nil is git diff
 	// in the project's clone.
 	Diff func(p core.Project, from, to string) ([]string, error)
+	// Contains says whether commit tagSHA has sha in its history; nil is
+	// git merge-base in the project's clone.
+	Contains func(p core.Project, sha, tagSHA string) (bool, error)
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
 	// said holds project@tag for each pre-release whose wait or failed
@@ -732,6 +740,9 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	list, refuse := m.merges(project, sha)
+	if refuse == "" {
+		refuse = m.tagged(p, sha)
+	}
 	if refuse != "" {
 		once(refuse)
 		return
@@ -782,9 +793,18 @@ func (m *Module) afterKept(project, sha string) {
 		scanAt = m.scan
 	}
 	if err := scanAt(p, sha); err != nil {
-		alert("no release at " + core.Short(sha) + ", since its scan blocks it: " + err.Error())
+		if errors.Is(err, scan.ErrNoHandles) {
+			m.askHandles(project, sha, err)
+			return
+		}
+		// A retry meets the same hits at the same commit: said once.
+		if last, _ := m.scanSaid.Swap(project, sha+": "+err.Error()); last != sha+": "+err.Error() {
+			alert("no release at " + core.Short(sha) + ", since its scan blocks it: " + err.Error())
+		}
 		return
 	}
+	m.scanSaid.Delete(project)
+	m.handlesFound(project)
 	cfg := m.C.Effects.Config(p, sha)
 	if cfg.DryRun != "" {
 		c := m.C.Effects.RunCheck(p, sha, "dryrun", cfg.DryRun)
@@ -974,10 +994,49 @@ func (m *Module) rootRead(project string, mg merge) string {
 // stands between the other commit and the signing key.
 const refusedSteps = "Its release run at that commit waits for approval in the release-signing environment: reject it, don't approve. Then delete the release and its tag."
 
+// askHandles puts the missing handle list to the person as one standing ask
+// in Waiting, never an alert per check: only they can write the file. The ask
+// keeps its place while it stands; the newest commit it holds is retried when
+// they answer done.
+func (m *Module) askHandles(project, sha string, err error) {
+	m.handlesAt.Store(project, sha)
+	m.C.Person.Ask(core.Ask{Kind: "scan_handles", Ref: project, Project: project, Options: []string{"done"},
+		Title: "Give the release scan its handle list: no release of " + project + " goes out without it",
+		Detail: "The release scan refuses to pass: " + err.Error() + ". Only you can write it: the file is in the Hive's private folder, which no agent reads. " +
+			"Until then nothing merged reaches a release (held since " + core.Short(sha) + "). Answer done once it is written and the Hive tries the release again."})
+}
+
+// handlesFound answers a standing handle-list ask once a scan reads a list;
+// with nothing held any more, its handler has nothing to retry.
+func (m *Module) handlesFound(project string) {
+	m.handlesAt.Delete(project)
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "scan_handles" && a.Project == project {
+			m.C.Person.Answer(a.ID, "done", "the Hive, not the person: the release scan read a handle list")
+		}
+	}
+}
+
+// onHandles is the person's word that the handle list is written: the commit
+// it held is released again, or the ask comes back if the list still isn't
+// there.
+func (m *Module) onHandles(a core.Ask) {
+	if a.Answer != "done" {
+		return
+	}
+	sha, ok := m.handlesAt.Load(a.Project)
+	if !ok {
+		return
+	}
+	defer m.lock(a.Project)()
+	m.afterKept(a.Project, sha.(string))
+}
+
 // New is the release module, with the person's answer to an upstream offer.
 func New(c *core.Core) *Module {
 	m := &Module{C: c}
 	c.Person.Handle("upstream", m.onUpstream)
+	c.Person.Handle("scan_handles", m.onHandles)
 	return m
 }
 
@@ -1147,7 +1206,7 @@ func (m *Module) Publish() string {
 			continue // an older one stays a pre-release
 		}
 		checked[c.Project]++
-		if why := m.C.Effects.Stewardship(p, c.SHA); why != "" {
+		if why := m.C.Effects.Stewardship(p, "refs/remotes/origin/"+p.Branch); why != "" { // the record as main reads it now, which may postdate the tag
 			out = append(out, c.Tag+": not published, "+why)
 			continue
 		}
@@ -1333,6 +1392,74 @@ func (m *Module) unbuilt(p core.Project, sha string) string {
 		m.C.J.MustAppend("release.held", map[string]string{"project": p.Name, "tag": tag, "sha": at, "why": why})
 	}
 	return tag + " has no binaries, since its " + why + ", and " + core.Short(sha) + " changes nothing that job reads. " + unbuiltSteps
+}
+
+// tagChecks is how many of the highest version tags tagged reads.
+const tagChecks = 10
+
+// tagged says why no release is cut at sha when one of the highest version
+// tags already has it in its history, whoever cut that tag: merges only
+// knows the Hive's own releases, and a tag cut by hand or a warden's step
+// at a newer commit would otherwise get a higher number carrying older code,
+// which an install following pre-releases takes as an update. A tag or
+// history that can't be read never holds the cut.
+func (m *Module) tagged(p core.Project, sha string) string {
+	tags, err := m.C.Effects.Forge.Tags(p.Repo)
+	if err != nil {
+		return ""
+	}
+	var versions []string
+	for _, t := range tags {
+		if strings.HasPrefix(t, "v") && modules.Newer("v0.0.0", t) && !slices.Contains(versions, t) {
+			versions = append(versions, t)
+		}
+	}
+	slices.SortFunc(versions, func(a, b string) int {
+		if modules.Newer(b, a) {
+			return -1
+		}
+		if modules.Newer(a, b) {
+			return 1
+		}
+		return 0
+	})
+	contains := m.Contains
+	if contains == nil {
+		contains = m.contains
+	}
+	for _, t := range versions[:min(len(versions), tagChecks)] {
+		at, err := m.C.Effects.Forge.TagCommit(p.Repo, t)
+		if err != nil || at == "" {
+			continue
+		}
+		if at == sha {
+			return t + " is already cut at it"
+		}
+		if in, err := contains(p, sha, at); err == nil && in {
+			return t + " at " + core.Short(at) + " already contains it, so a new tag would carry older code under a higher number"
+		}
+	}
+	return ""
+}
+
+// contains says whether sha is tagSHA or one of its ancestors, fetching
+// tagSHA into the project's clone when it hasn't got it.
+func (m *Module) contains(p core.Project, sha, tagSHA string) (bool, error) {
+	dir := m.C.WS.Project(p.Name)
+	full, err := core.Git(dir, "rev-parse", "--verify", sha+"^{commit}")
+	if err != nil {
+		return false, err
+	}
+	if _, err := core.Git(dir, "rev-parse", "--verify", tagSHA+"^{commit}"); err != nil {
+		if _, err := core.GitT(5*time.Minute, dir, "fetch", "-q", "--no-tags", "origin", tagSHA); err != nil {
+			return false, err
+		}
+	}
+	base, err := core.Git(dir, "merge-base", sha, tagSHA)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(base) == strings.TrimSpace(full), nil
 }
 
 // diff lists the files that differ between two commits of the project.

@@ -167,11 +167,59 @@ func TestGateFailsOnBranchOnly(t *testing.T) {
 	if err := m.test(task, p); err != nil {
 		t.Fatal(err)
 	}
+	if task.Stage != StageTesting || !task.Recheck || task.Retested != task.SHA || task.Round != 0 {
+		t.Fatalf("a red on a green main should run once more first: stage %q, recheck %v, round %d", task.Stage, task.Recheck, task.Round)
+	}
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
 	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "The tests failed on your commit") {
 		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
 	}
 	if n := alerts(m, "main-red"); n != 0 {
 		t.Fatalf("%d main-red alerts on a green main", n)
+	}
+}
+
+// A test that fails once on a slow machine and passes run again isn't held
+// against the change: the whole check runs once more, and its green is what
+// the merge rests on.
+func TestFlakyBranchRunsOnceMore(t *testing.T) {
+	flag := filepath.Join(t.TempDir(), "ran")
+	cmd := fmt.Sprintf(`{"test": "test -f %s || { touch %s; exit 1; }"}`, flag, flag)
+	m, task, p, _ := gateRigSeeded(t, false, map[string]string{".hive/project.json": cmd}, map[string]string{"feature.txt": "y"})
+	for i := 0; i < 2; i++ {
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 {
+		t.Fatalf("a flake went back to the worker: stage %q, round %d", task.Stage, task.Round)
+	}
+	if c, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); !ok || !c.OK {
+		t.Fatal("no green run recorded for the head the merge rests on")
+	}
+}
+
+// A red main whose failures pass run again (a flake) holds nothing: no
+// main-red alert, and main is run again once however often it is asked.
+func TestFlakyMainHoldsNothing(t *testing.T) {
+	m, task, p, _ := gateRig(t, true, map[string]string{"feature.txt": "y"})
+	retests := 0
+	m.Retest = func(p core.Project, sha, _ string, _ core.Check, main bool) bool {
+		retests++
+		return main && m.C.Effects.RunCheck(p, sha, "retest", "true").OK
+	}
+	for i := 0; i < 2; i++ {
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task.Stage != StageWorking || task.Round != 1 {
+		t.Fatalf("a red change on a flaky main: stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	if n := alerts(m, "main-red"); n != 0 || retests != 1 {
+		t.Fatalf("%d main-red alerts and %d retests of main, want none and one", n, retests)
 	}
 }
 
@@ -790,7 +838,8 @@ func TestClosedDraftStops(t *testing.T) {
 }
 
 // Findings sent back carry main as a bundle, so a fix that needs main's newer
-// commits can merge them; a message from the forge's checks keeps its own.
+// commits can merge them, even when the reviewer's own words name main.bundle;
+// a message from the forge's checks keeps its own.
 func TestSendBackBundlesMain(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	if err := m.test(task, p); err != nil {
@@ -798,7 +847,7 @@ func TestSendBackBundlesMain(t *testing.T) {
 	}
 	pushMain(t, f, map[string]string{"newer.txt": "only on main"})
 	main, _ := m.C.Effects.Sync(p)
-	if err := m.sendBack(task, p, "The reviewer asked for fixes: use main's newer helper"); err != nil || task.Stage != StageWorking {
+	if err := m.sendBack(task, p, "The reviewer asked for fixes: use main's newer helper, as main.bundle would show"); err != nil || task.Stage != StageWorking {
 		t.Fatalf("stage %q, err %v", task.Stage, err)
 	}
 	if msg := queued(m, task.Worker); !strings.Contains(msg, "main.bundle holds main at "+core.Short(main)) {

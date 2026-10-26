@@ -42,6 +42,9 @@ paths = [
   "internal/core/forge.go",
   "internal/core/workspace.go",
 
+  # Which Hive may merge and release in the release repository.
+  "internal/core/steward.go",
+
   # Which sandbox a run gets, which ops a run may call, and git and gh run
   # on the host, outside the sandbox.
   "internal/core/core.go",
