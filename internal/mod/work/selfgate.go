@@ -160,7 +160,7 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	m.mu.Unlock()
 	switch {
 	case cur != nil && cur.main != "" && cur.main != main:
-		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s, where it started (%s, at most %s); main has moved to %s since, and the verdict counts here if main's commits since leave the change and what the gate measures alone", GateWait, core.Short(t.SHA), core.Short(cur.main), cur.since.Format("15:04Z"), GateTimeout, core.Short(main)))
+		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s); main has moved to %s, where the verdict counts if main's commits since miss its files and the gate's", GateWait, core.Short(t.SHA), core.Short(cur.main), cur.since.Format("15:04Z"), GateTimeout, core.Short(main)))
 	case cur != nil:
 		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), cur.since.Format("15:04Z"), GateTimeout))
 	case full != "":
