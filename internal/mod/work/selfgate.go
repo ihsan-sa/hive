@@ -201,9 +201,10 @@ func (m *Module) gateRoom(running int) string {
 	limit, why := m.gateLimit(time.Now(), running, m.C.WS.LoadConfig())
 	switch {
 	case running >= limit:
-		return fmt.Sprintf("%d run at once here (limit %s), and every one is in use", running, m.gates.String())
+		// Saved with the task: the live limit stays out (see Pace).
+		return "as many run at once here as may now, and every one is in use"
 	case running > 0 && why != "":
-		return fmt.Sprintf("%d running, and no room for another: %s", running, why)
+		return "no room for another: " + steady(why)
 	}
 	return ""
 }
