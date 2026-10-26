@@ -432,18 +432,21 @@ func TestRateLimitedLookSaysSoAndWaitsForTheReset(t *testing.T) {
 				t.Fatalf("rate-limited look: %q, %v, binary %q", msg, err, raw)
 			}
 			m.follow()
+			journalled := func() bool {
+				n := 0
+				m.C.J.Replay(func(e core.Event) {
+					if e.Kind == "release.follow" {
+						n++
+					}
+				})
+				return n > 0
+			}
+			// The follow has ended once it journalled what it found; its
+			// update ends before that.
 			deadline := time.Now().Add(5 * time.Second)
-			for time.Now().Before(deadline) {
-				m.pmu.Lock()
-				at := m.followed
-				m.pmu.Unlock()
-				if at.Equal(reset.Add(-followEvery)) {
-					break
-				}
+			for time.Now().Before(deadline) && !journalled() {
 				time.Sleep(10 * time.Millisecond)
 			}
-			m.updating.Lock() // the follow's update has ended
-			m.updating.Unlock()
 			m.pmu.Lock()
 			at := m.followed
 			m.pmu.Unlock()
