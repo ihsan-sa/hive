@@ -24,7 +24,9 @@ import (
 // and from 1 it would take minutes to climb back). Load alone never pulls it
 // under its start: on 10-25 a load of 27-46 on 20 cores came from child
 // Hives and builds beside 2-3 live turns, and cutting the workers to 1 or 2
-// hardly moved it while 51 tasks waited. Nothing running is stopped; past
+// hardly moved it while 51 tasks waited. Nor does load alone hold a worker
+// from starting while fewer than the start work (loadHolds), and it doesn't
+// hide a spent or ahead plan, which still pulls the workers under it. Nothing running is stopped; past
 // the limit, work waits in order. It pulls back at most once a step, so the
 // readings (load is a 1-minute average) catch up with the last change before
 // the next, and grows more slowly than it pulls back, so a load hovering
@@ -68,7 +70,8 @@ type pace struct {
 }
 
 // onlyLoad says whether strain is the load per core alone (core.Loaded's
-// reason), which doesn't pull a limit under its start.
+// reason), which doesn't pull a limit under its start, nor hold a worker
+// from starting under it (loadHolds).
 func onlyLoad(strain string) bool { return strings.HasPrefix(strain, "machine loaded") }
 
 // next moves the limit for running things with waiting ones wanting more,
@@ -148,6 +151,13 @@ func machine(cfg core.Config) (string, bool) {
 	return why, core.Watched(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax)
 }
 
+// loadHolds says whether strain holds a new worker with working of them at
+// work from start: every strain does, but load alone only past the start, as
+// the few workers there aren't what loads the machine.
+func loadHolds(strain string, working, start int) bool {
+	return strain != "" && (!onlyLoad(strain) || working >= start)
+}
+
 // steady is a strain without its readings ("machine loaded", not the load
 // now), for a reason saved with a task: readings that move each minute would
 // re-save it each minute.
@@ -193,8 +203,8 @@ func (m *Module) planSpent(cfg core.Config) string {
 // active ones fill the limit, and a pull-back under strain starts from them.
 func (m *Module) paceWorkers(cfg core.Config, working int, waiting bool) int {
 	why, watching := machine(cfg)
-	if why == "" {
-		why = m.planSpent(cfg)
+	if why == "" || onlyLoad(why) { // load alone stops at the start; the plan doesn't
+		why = cmp.Or(m.planSpent(cfg), why)
 	}
 	before := m.workers.get()
 	defer m.journal("workers", &m.workers, before)

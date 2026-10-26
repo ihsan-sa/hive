@@ -315,3 +315,39 @@ func TestPacePullsBackAheadOfTheWindow(t *testing.T) {
 		t.Fatalf("40%% ahead: %q", why)
 	}
 }
+
+// Load alone holds no worker from starting up to the pace's start, only past
+// it; any other strain holds every start.
+func TestLoadHoldsOnlyPastTheStart(t *testing.T) {
+	load, mem := "machine loaded (load 40 on 20 cores, limit 1 per core)", "machine low on memory (900 MB free, floor 1024 MB)"
+	for _, c := range []struct {
+		strain  string
+		working int
+		want    bool
+	}{{"", 9, false}, {load, 0, false}, {load, 3, false}, {load, 4, true}, {mem, 0, true}} {
+		if got := loadHolds(c.strain, c.working, 4); got != c.want {
+			t.Errorf("%q with %d at work: holds %v, want %v", c.strain, c.working, got, c.want)
+		}
+	}
+}
+
+// Under load, a plan running ahead of its window is still seen, and pulls the
+// workers under their start as load alone wouldn't.
+func TestPaceSeesThePlanUnderLoad(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 1e-9
+	if why, _ := machine(cfg); !onlyLoad(why) {
+		t.Skip("no load to read here")
+	}
+	m.C.WS.SaveConfig(cfg)
+	pick := cfg.Route("worker", "")[0]
+	reset := time.Now().Add(3 * time.Hour)
+	m.C.J.MustAppend("plan.usage", core.Plan{Harness: pick.Harness, Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour",
+		Windows: map[string]harness.Window{"five_hour": {Utilization: 0.8, ResetsAt: reset}}}})
+	m.workers = pace{limit: 4, start: defaultWorkers, at: time.Now().Add(-paceStep)}
+	if l := m.paceWorkers(cfg, 2, true); l != 1 || !strings.Contains(m.workers.String(), "ahead of its five-hour window") {
+		t.Fatalf("under load with the plan ahead: %s, want 1 for the plan", m.workers.String())
+	}
+}
