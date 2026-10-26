@@ -236,7 +236,7 @@ func (m *Module) opHold(r core.Run, args json.RawMessage) (any, error) {
 	if a.Project == "" {
 		return nil, errors.New("say which project")
 	}
-	if err := m.C.Runs.Walled(r, a.Project); err != nil {
+	if err := m.reach(r, a.Project); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(a.Why) == "" {

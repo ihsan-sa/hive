@@ -3507,12 +3507,16 @@ func (m *Module) workerStopped(t Task) bool {
 var steerers = core.Peers
 
 // reach refuses a task outside r's own project: an agent with a project steers
-// only there; one with none (the workspace lead, a sweep) any it can see.
+// only there, whatever its role; one with none (the workspace lead, a sweep)
+// any it can see.
 func (m *Module) reach(r core.Run, project string) error {
-	if r.Project != "" && project != r.Project && r.Role != "lead" {
+	if err := m.C.Runs.Walled(r, project); err != nil {
+		return err
+	}
+	if r.Project != "" && project != r.Project {
 		return fmt.Errorf("that task is on project %q; you act only on your own (%s)", project, r.Project)
 	}
-	return m.C.Runs.Walled(r, project)
+	return nil
 }
 
 func (m *Module) opRecheck(r core.Run, args json.RawMessage) (any, error) {
