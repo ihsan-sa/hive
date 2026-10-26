@@ -968,3 +968,45 @@ func TestNewHeadCancelsItsOldGate(t *testing.T) {
 		t.Fatalf("old dropped %v cancelled %v, other dropped %v, %d runs: want the old head's run ended and the new one started", old.dropped, cancelled, other.dropped, len(*jobs))
 	}
 }
+
+// A run on the task's same head goes on when main moves under it: main
+// moves more often than a gate takes, and restarting it there left no gate
+// ever finishing. Its verdict is judged against the main it ran on.
+func TestMainMovingKeepsTheGateRunning(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	maxGates(m, 3)
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) (string, bool) { return "", true }
+	cancelled := false
+	run := &gateRun{key: p.Name + "@" + task.SHA + "@oldmain", task: task.ID, head: task.SHA, main: "oldmain", since: time.Now(), cancel: func() { cancelled = true }}
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{run.key: run}
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if run.dropped || cancelled || len(*jobs) != 0 || task.Stage != StageMerging || !strings.Contains(task.Reason, "main has moved") {
+		t.Fatalf("dropped %v cancelled %v, %d runs, stage %q, reason %q: want the run going on and the task waiting on it", run.dropped, cancelled, len(*jobs), task.Stage, task.Reason)
+	}
+}
+
+// A task whose head moves (a merge of main, a fix sent back) ends its
+// gate's run on the old head as it is saved, freeing the slot for the gains
+// queued behind it instead of holding it until the new head reaches the
+// gate. A run on the head it keeps goes on.
+func TestNewHeadFreesItsOldGateAtOnce(t *testing.T) {
+	m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	cancelled := 0
+	same := &gateRun{key: p.Name + "@" + task.SHA + "@main", task: task.ID, head: task.SHA, main: "main", cancel: func() { cancelled++ }}
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{same.key: same}
+	m.mu.Unlock()
+	m.save(task, "looked again")
+	if same.dropped || cancelled != 0 {
+		t.Fatalf("a run on the task's own head was ended")
+	}
+	task.SHA, task.Stage = "newhead", StageTesting
+	m.save(task, "pushed newhead")
+	if !same.dropped || cancelled != 1 || !strings.Contains(task.Log[len(task.Log)-1].Text, "earlier head ends") {
+		t.Fatalf("dropped %v, cancelled %d, log %q: want the old head's run ended and said", same.dropped, cancelled, task.Log[len(task.Log)-1].Text)
+	}
+}
