@@ -3,10 +3,10 @@
 The Hive project (ihsan-sa/hive) has a score, so the improve module measures main after every merge, keeps or reverts against the best kept score, and the step-back (`improve.stepback`) has a number to beat. It is set in `.hive/project.json`:
 
 ```json
-"score": {"command": "for t in git python3; do command -v \"$t\" >/dev/null || { \"$t\"; exit 127; }; done; go run ./cmd/hive-score", "direction": "higher", "tolerance": 3, "paths": ["internal/e2e/benchmark_test.go", "internal/demo/"]}
+"score": {"command": "for t in git python3; do command -v \"$t\" >/dev/null || { \"$t\"; exit 127; }; done; go run ./cmd/hive-score", "direction": "higher", "tolerance": 3, "paths": ["cmd/hive-score/", "internal/e2e/benchmark_test.go", "internal/demo/"]}
 ```
 
-Code: `cmd/hive-score` (output format tested in `main_test.go`).
+Code: `cmd/hive-score` (output format tested in `main_test.go`). It is in the score's `paths` with the benchmark and the demo project, so a change to the formula alone starts a new baseline instead of reading as a gain or a loss.
 
 ## What it measures
 

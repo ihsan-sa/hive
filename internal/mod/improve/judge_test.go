@@ -75,9 +75,64 @@ func TestLaterMergeWaitsForTheJudge(t *testing.T) {
 	judgeHold = time.Hour
 	t.Cleanup(func() { judgeHold = old })
 	m.mu.Lock()
-	m.judging["earlier"] = "p"
+	m.judging["earlier"] = judgingMerge{project: "p", running: true}
 	m.mu.Unlock()
 	if ms := merge(map[string]string{"n.txt": "4\n"}); ms.Task != "" {
 		t.Fatalf("measured while an earlier merge was with its judge: %+v", ms)
+	}
+}
+
+// After a restart, a merge whose judge run is still going holds the
+// project's later merges again, until that merge comes back to be measured
+// and finds its judge run by id.
+func TestRestartHoldsLaterMergesForTheJudge(t *testing.T) {
+	m, merge := scored(t)
+	old := judgeHold
+	judgeHold = time.Hour
+	t.Cleanup(func() { judgeHold = old })
+	earlier := work.Task{ID: "t0", Project: "p", MergeSHA: "0123456789abcdef0123456789abcdef01234567"}
+	m.C.J.MustAppend("run.created", core.RunSpec{ID: "j-t0-" + core.Short(earlier.MergeSHA) + "-0", Role: core.JudgeRole, Project: "p"})
+	m.holdForJudge(earlier)
+	if ms := merge(map[string]string{"n.txt": "4\n"}); ms.Task != "" {
+		t.Fatalf("measured while a recovered merge was with its judge: %+v", ms)
+	}
+	m.afterMerge(earlier) // it comes back: the hold is its own to settle now
+	if ms := merge(map[string]string{"n.txt": "5\n"}); ms.Task == "" {
+		t.Fatal("a later merge still waits once the recovered one was handled")
+	}
+}
+
+// numbers.md says how far judges' keeps have lowered the baseline since the
+// score last set a best of its own.
+func TestJudgedDrift(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	hist := []Measurement{
+		{Kept: true, Best: f(10)},
+		{Kept: true, Best: f(9), Note: judgedKeep + " (x) though it fell"},
+		{Kept: false, Score: f(1)},
+		{Kept: true, Best: f(9)},
+		{Kept: true, Best: f(7.5), Note: judgedKeep + " (x) though it fell"},
+	}
+	if n, drop, before := judgedDrift(hist); n != 2 || drop != 2.5 || before != 10 {
+		t.Fatalf("drift %d %g %g, want 2 keeps, 2.5 down from 10", n, drop, before)
+	}
+	if n, _, _ := judgedDrift(append(hist, Measurement{Kept: true, Best: f(11)})); n != 0 {
+		t.Fatalf("a new best of the score's own still counts %d judged keeps", n)
+	}
+}
+
+// A fall in the score of a merge that touches security-listed files reverts
+// as the score says, with no judge: its read of the diff is what an
+// injection there would reach.
+func TestSecurityFallRevertsUnjudged(t *testing.T) {
+	m, merge := scored(t)
+	m.askJudge = nil
+	merge(map[string]string{core.SecurityList: "paths = [\"secure/**\"]\n"})
+	ms := merge(map[string]string{"n.txt": "4\n", "secure/gate.go": "package secure\n"})
+	if ms.Kept || !strings.Contains(ms.Note, "security-listed") {
+		t.Fatalf("a security-listed fall: %+v", ms)
+	}
+	if n := len(m.C.Runs.List(func(r *core.Run) bool { return r.Role == core.JudgeRole })); n != 0 {
+		t.Fatalf("%d judge runs on a security-listed fall", n)
 	}
 }

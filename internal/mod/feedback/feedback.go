@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -30,6 +31,9 @@ type Item struct {
 	Status  string    `json:"status"` // open | closed | passed (to a lead's chat)
 	Seen    bool      `json:"seen,omitempty"`
 	Note    string    `json:"note,omitempty"` // what the person did with it
+	// Task is the task an agent named as the fix; the item closes when that
+	// task lands (merged or done), so sweeps stop reading it as still open.
+	Task string `json:"task,omitempty"`
 }
 
 const (
@@ -42,14 +46,32 @@ const (
 type Module struct {
 	C *core.Core
 
-	mu    sync.Mutex
-	items map[string]*Item
+	mu     sync.Mutex
+	items  map[string]*Item
+	landed map[string]bool // tasks merged or done, from task.saved
+}
+
+// lands reads whether a task.saved event is a task that landed.
+func lands(e core.Event) (string, bool) {
+	var t struct{ ID, Stage string }
+	if e.Decode(&t) != nil || t.ID == "" {
+		return "", false
+	}
+	return t.ID, t.Stage == "merged" || t.Stage == "done"
 }
 
 // New loads the record and registers the feedback op.
 func New(c *core.Core) *Module {
-	m := &Module{C: c, items: map[string]*Item{}}
+	m := &Module{C: c, items: map[string]*Item{}, landed: map[string]bool{}}
 	apply := func(e core.Event) {
+		if e.Kind == "task.saved" {
+			if id, ok := lands(e); ok {
+				m.mu.Lock()
+				m.landed[id] = true
+				m.mu.Unlock()
+			}
+			return
+		}
 		if e.Kind != "feedback.saved" {
 			return
 		}
@@ -63,10 +85,30 @@ func New(c *core.Core) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
-	c.Runs.Ops().Register(core.Op{Name: "feedback", Help: `{"text": "what about the Hive got in your way or helped", "about": "(optional) the module, prompt, tool or part it is about"} -> shown to the person in the Feedback section and read by the next sweep`, Fn: func(r core.Run, args json.RawMessage) (any, error) {
-		var a struct{ Text, About string }
+	c.J.Subscribe(func(e core.Event) { // a fix that lands closes what it fixed
+		if e.Kind != "task.saved" {
+			return
+		}
+		if id, ok := lands(e); ok {
+			for _, it := range m.List(func(it Item) bool { return it.Status == Open && it.Task == id }) {
+				m.Close(it.ID, "fixed by task "+id)
+			}
+		}
+	})
+	c.Runs.Ops().Register(core.Op{Name: "feedback", Help: `{"text": "what about the Hive got in your way or helped", "about": "(optional) the module, prompt, tool or part it is about"} -> shown to the person in the Feedback section and read by the next sweep; or {"fixed": "<feedback id>", "task": "<task id>"} -> the item closes when that task lands (at once if it has)`, Fn: func(r core.Run, args json.RawMessage) (any, error) {
+		var a struct{ Text, About, Fixed, Task string }
 		if err := core.Bind(args, &a); err != nil {
 			return nil, err
+		}
+		if a.Fixed != "" || a.Task != "" {
+			it, err := m.Fix(r, a.Fixed, a.Task)
+			if err != nil {
+				return nil, err
+			}
+			if it.Status == Closed {
+				return "closed " + it.ID + ": task " + it.Task + " has landed", nil
+			}
+			return it.ID + " closes when task " + it.Task + " lands; until then sweeps see it as being fixed", nil
 		}
 		it, err := m.Add(r, a.About, a.Text)
 		if err != nil {
@@ -161,6 +203,32 @@ func (m *Module) Reopen(id string) (Item, error) {
 	return m.save(id, func(it *Item) error { it.Status, it.Note = Open, ""; return nil })
 }
 
+// Fix links an open item to the task that fixes it, for run r: a run with a
+// project may link that project's feedback and the Hive's own. An item whose
+// task has already landed closes at once.
+func (m *Module) Fix(r core.Run, id, task string) (Item, error) {
+	id, task = strings.TrimSpace(id), strings.TrimSpace(task)
+	if id == "" || task == "" {
+		return Item{}, errors.New("name both --fixed <feedback id> and --task <task id>")
+	}
+	if it, ok := m.Get(id); ok && r.Project != "" && it.Project != "" && it.Project != r.Project {
+		return Item{}, core.ErrNotFound
+	}
+	m.mu.Lock()
+	landed := m.landed[task]
+	m.mu.Unlock()
+	return m.save(id, func(it *Item) error {
+		if it.Status != Open {
+			return fmt.Errorf("%s is no longer open (%s)", it.ID, it.Status)
+		}
+		it.Task = task
+		if landed {
+			it.Status, it.Note = Closed, "fixed by task "+task
+		}
+		return nil
+	})
+}
+
 // Passed records that the person handed an item to a lead's chat.
 func (m *Module) Passed(id, chat string) (Item, error) {
 	return m.save(id, func(it *Item) error {
@@ -187,12 +255,17 @@ func Message(it Item) string {
 }
 
 // Digest lists the open feedback of the projects mine admits, for the
-// improvement sweep. Project-less feedback (the lead's, a sweep's) is the
-// Hive's own and is admitted as mine("") says.
+// improvement sweep, with each item's id and the task named to fix it.
+// Project-less feedback (the lead's, a sweep's) is the Hive's own and is
+// admitted as mine("") says. An item whose fix has landed is left out even
+// if its close was never journaled.
 func (m *Module) Digest(mine func(project string) bool) string {
+	m.mu.Lock()
+	landed := maps.Clone(m.landed)
+	m.mu.Unlock()
 	var b strings.Builder
 	for i, it := range m.List(func(it Item) bool {
-		return it.Status == Open && mine(it.Project)
+		return it.Status == Open && mine(it.Project) && !landed[it.Task]
 	}) {
 		if i >= 30 {
 			break
@@ -205,7 +278,11 @@ func (m *Module) Digest(mine func(project string) bool) string {
 		if it.About != "" {
 			about = " about " + it.About
 		}
-		fmt.Fprintf(&b, "- %s %s %s (%s)%s: %s\n", it.At.Format("01-02 15:04"), where, it.Role, it.Run, about, core.Clip(it.Text, 600))
+		fix := ""
+		if it.Task != "" {
+			fix = " [fix filed: task " + it.Task + ", not landed yet]"
+		}
+		fmt.Fprintf(&b, "- %s %s %s %s (%s)%s%s: %s\n", it.ID, it.At.Format("01-02 15:04"), where, it.Role, it.Run, about, fix, core.Clip(it.Text, 600))
 	}
 	return b.String()
 }

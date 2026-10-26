@@ -279,8 +279,12 @@ func (m *model) taskLine(t work.Task) string {
 			progress = stDim.Render("  " + ago(t.FilesSince) + " on others' files: " + core.Clip(t.Reason, 60))
 		}
 	}
-	if t.Stage == work.StageTesting && slices.ContainsFunc(m.st.Checks.Waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
-		progress = stDim.Render("  waiting for a check slot")
+	if i := slices.IndexFunc(m.st.Checks.Waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }); t.Stage == work.StageTesting && i >= 0 {
+		progress = fmt.Sprintf("  waiting for a check slot (%d ahead)", i)
+		if why := work.RankWhy(m.st.Checks.Waiting[i].Rank); why != "" {
+			progress = fmt.Sprintf("  waiting for a check slot (%d ahead; goes before the line: %s)", i, why)
+		}
+		progress = stDim.Render(progress)
 	}
 	pr := ""
 	if t.PR.Number > 0 {

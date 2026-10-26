@@ -2,10 +2,13 @@ package gate
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -33,6 +36,50 @@ func daemonsUnder(out string) []int {
 		}
 	}
 	return pids
+}
+
+// daemonsLeft waits up to wait for the gate run's daemons to be gone and
+// returns those still there. A killed process needs the CPU to exit, and on
+// a throttled machine, or one blocked in I/O, that takes more than a moment.
+func daemonsLeft(out string, wait time.Duration) []int {
+	left := daemonsUnder(out)
+	for end := time.Now().Add(wait); len(left) > 0 && time.Now().Before(end); left = daemonsUnder(out) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	return left
+}
+
+// running reports whether pid still runs: neither gone nor a zombie.
+func running(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	z, _ := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	return !bytes.Contains(z, []byte(") Z"))
+}
+
+// describe says, for a test's error, what each leftover pid is: its state
+// in /proc/<pid>/stat (D, an uninterruptible I/O wait, reads as a slow exit)
+// and whether it is new since the sweep (a daemon restarted, not escaped).
+func describe(pids, swept []int) string {
+	var b strings.Builder
+	for i, pid := range pids {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		state := "gone"
+		if stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat"); err == nil {
+			if j := bytes.LastIndexByte(stat, ')'); j >= 0 && j+2 < len(stat) {
+				state = string(stat[j+2])
+			}
+		}
+		fmt.Fprintf(&b, "%d (state %s", pid, state)
+		if !slices.Contains(swept, pid) {
+			b.WriteString(", started after the sweep")
+		}
+		b.WriteString(")")
+	}
+	return b.String()
 }
 
 // A gate killed mid-run (no deferred cleanup runs) leaves its child's
@@ -68,17 +115,18 @@ func TestKilledGateLeavesNoDaemon(t *testing.T) {
 	g.Process.Signal(syscall.SIGKILL)
 	g.Wait()
 	time.Sleep(300 * time.Millisecond)
-	if len(daemonsUnder(out)) == 0 {
+	swept := daemonsUnder(out)
+	if len(swept) == 0 {
 		// Not a skip: Reap below still runs. TestDeadGatesOrphanIsReaped
 		// covers the next gate's sweep whatever happened here.
 		t.Log("the daemon ended with its gate here: the next gate had nothing to end")
 	} else {
-		if n := reapOrphans(); n == 0 {
+		n := reapOrphans()
+		if n == 0 {
 			t.Errorf("the next gate ended none of what the killed one left")
 		}
-		time.Sleep(200 * time.Millisecond)
-		if left := daemonsUnder(out); len(left) > 0 {
-			t.Errorf("daemons %v outlived the gate that started them", left)
+		if left := daemonsLeft(out, 15*time.Second); len(left) > 0 {
+			t.Errorf("daemons %s outlived the gate that started them (the sweep ended %d of %v)", describe(left, swept), n, swept)
 		}
 	}
 	Reap(out)
@@ -86,10 +134,11 @@ func TestKilledGateLeavesNoDaemon(t *testing.T) {
 		t.Error("the run's caches were not removed")
 	}
 	for _, p := range pids {
-		if syscall.Kill(p, 0) == nil {
-			if z, _ := os.ReadFile("/proc/" + strconv.Itoa(p) + "/stat"); !bytes.Contains(z, []byte(") Z")) {
-				t.Errorf("daemon %d still runs", p)
-			}
+		for end := time.Now().Add(15 * time.Second); running(p) && time.Now().Before(end); {
+			time.Sleep(100 * time.Millisecond)
+		}
+		if running(p) {
+			t.Errorf("daemon %s still runs", describe([]int{p}, pids))
 		}
 	}
 }

@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// docs/architecture.md merges with merge=union, so a merge of main can keep
-// both sides' copy of a numbered step. No number repeats under one heading.
+// A hand-resolved merge of docs/architecture.md can keep both sides' copy of
+// a numbered step. No number repeats under one heading.
 func TestNoRepeatedNumberedStep(t *testing.T) {
 	raw, err := os.ReadFile("architecture.md")
 	if err != nil {

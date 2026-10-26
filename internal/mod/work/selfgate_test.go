@@ -289,8 +289,8 @@ func TestSelfGateMainFailsAsksToLandTheGateFix(t *testing.T) {
 	if _, err := m.C.Person.Answer(asks[0].ID, "merge", ""); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 200 && !m.C.Effects.Approved("gate", p.Name, task.SHA); i++ {
-		time.Sleep(10 * time.Millisecond) // the handler runs on its own
+	for i := 0; i < 1000 && !m.C.Effects.Approved("gate", p.Name, task.SHA+"@"+main); i++ {
+		time.Sleep(10 * time.Millisecond) // the handler runs on its own; a loaded machine can take seconds
 	}
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" || len(*jobs) != 1 {
@@ -312,6 +312,13 @@ func TestSelfGateMainFailsHoldGrows(t *testing.T) {
 	want := []time.Duration{gateRetry, 2 * gateRetry, 4 * gateRetry, gateRetryMain, gateRetryMain}
 	if !slices.Equal(holds, want) {
 		t.Fatalf("holds %v, want %v", holds, want)
+	}
+	// A run that started before the last failure was recorded ran beside
+	// it, at the same main: it adds no repeat.
+	g, _ := m.C.Effects.GateAtMain(p.Name, main)
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Head: "h2", Main: main, Outcome: core.GateCantRun, MainFails: true, Started: g.At.Add(-time.Minute), At: g.At.Add(time.Minute)})
+	if g2, _ := m.C.Effects.GateAtMain(p.Name, main); g2.Repeats != g.Repeats {
+		t.Fatalf("repeats %d after a run beside the last, want %d", g2.Repeats, g.Repeats)
 	}
 }
 
@@ -392,11 +399,94 @@ func TestSelfGateMainFailsAsksNothingOfOtherChanges(t *testing.T) {
 			t.Fatalf("asked %+v for a change not to the gate", a)
 		}
 	}
-	old := m.C.Person.Ask(core.Ask{Kind: "gate", Ref: "gate-fix:t0@abc", Project: p.Name, Options: []string{"merge", "keep waiting"}})
 	main, _ := m.C.Effects.Sync(p)
+	if task.GateAsked != "gate-fix:"+task.ID+"@"+task.SHA+"@"+main {
+		t.Fatalf("looked at %q: want the head and main remembered, so it isn't diffed on every look", task.GateAsked)
+	}
+	// A late verdict on another main leaves an item at this main open.
+	at := m.C.Person.Ask(core.Ask{Kind: "gate", Ref: "gate-fix:t1@abc@" + main, Project: p.Name, Options: []string{"merge", "keep waiting"}})
+	m.tellGate(task, p, core.GateResult{Project: p.Name, Head: task.SHA, Main: "0123456789abcdef0123456789abcdef01234567", Outcome: core.GateRollback, Reason: "worse", At: time.Now()})
+	if a, _ := m.C.Person.Get(at.ID); a.Answer != "" {
+		t.Fatalf("item %+v: want open, the verdict was at another main", a)
+	}
+	old := m.C.Person.Ask(core.Ask{Kind: "gate", Ref: "gate-fix:t0@abc", Project: p.Name, Options: []string{"merge", "keep waiting"}})
 	m.tellGate(task, p, core.GateResult{Project: p.Name, Head: task.SHA, Main: main, Outcome: core.GateRollback, Reason: "worse", At: time.Now()})
-	if a, _ := m.C.Person.Get(old.ID); a.Answer != "keep waiting" {
-		t.Fatalf("item %+v: want closed once the gate judges again", a)
+	for _, id := range []string{old.ID, at.ID} {
+		if a, _ := m.C.Person.Get(id); a.Answer != "keep waiting" {
+			t.Fatalf("item %+v: want closed once the gate judges again", a)
+		}
+	}
+}
+
+// mainFailsGateFix is a change to the gate's code waiting with its Waiting
+// item, main failing in the gate.
+func mainFailsGateFix(t *testing.T) (*Module, *Task, core.Project, *core.Local, core.Ask) {
+	t.Helper()
+	m, task, p, f, _ := selfRig(t, map[string]string{"internal/gate/unit.go": "package gate\n"}, core.GateCantRun)
+	inner := m.Gate
+	m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+		g := inner(ctx, j)
+		g.MainFails = true
+		return g
+	}
+	gateOnce(t, m, task, p)
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "gate" {
+			return m, task, p, f, a
+		}
+	}
+	t.Fatal("no gate item")
+	return nil, nil, p, nil, core.Ask{}
+}
+
+// A PR merged on the forge by hand closes its gate item.
+func TestSelfGateFixItemClosesWhenMergedOnForge(t *testing.T) {
+	m, task, p, f, item := mainFailsGateFix(t)
+	if _, err := f.MergePR(p.Repo, task.PR.Number, task.SHA, "work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.step(task); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := m.C.Person.Get(item.ID); task.Stage != StageMerged || a.Answer != "keep waiting" {
+		t.Fatalf("stage %q, item %+v: want merged and the item closed", task.Stage, a)
+	}
+}
+
+// Main moving is a new question: the item asked at the old main closes,
+// one at the new main opens, and a "merge" on the old one lands nothing
+// and says so.
+func TestSelfGateFixItemFollowsMain(t *testing.T) {
+	m, task, p, _, item := mainFailsGateFix(t)
+	old, _ := m.C.Effects.Sync(p)
+	moveMain(t, m, "other.txt", "x")
+	m.mu.Lock()
+	delete(m.later, task.ID)
+	m.mu.Unlock()
+	gateOnce(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	if a, _ := m.C.Person.Get(item.ID); main == old || a.Answer != "keep waiting" || !strings.Contains(a.Note, "main moved on") {
+		t.Fatalf("old item %+v: want closed once main moved", a)
+	}
+	var now []core.Ask
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "gate" {
+			now = append(now, a)
+		}
+	}
+	if len(now) != 1 || !strings.HasSuffix(now[0].Ref, "@"+main) || !strings.Contains(now[0].Detail, "internal/gate/unit.go") {
+		t.Fatalf("items %+v: want one at the new main naming the gate's files", now)
+	}
+	// The old item answered "merge" all the same (its handler, run as
+	// late as it can be): no approval, and the person hears it.
+	late := item
+	late.Answer = "merge"
+	m.onPersonGate(late)
+	if m.C.Effects.Approved("gate", p.Name, task.SHA+"@"+old) || m.C.Effects.Approved("gate", p.Name, task.SHA+"@"+main) {
+		t.Fatal("a late answer approved the head")
+	}
+	if told := m.C.Person.Told(5); len(told) == 0 || !strings.Contains(told[0].Title, "landed nothing") || !strings.Contains(told[0].Detail, "main moved on") {
+		t.Fatalf("told %+v: want the person told their answer did nothing", told)
 	}
 }
 
@@ -876,5 +966,25 @@ func TestNewHeadCancelsItsOldGate(t *testing.T) {
 	m.Wait()
 	if !old.dropped || !cancelled || other.dropped || len(*jobs) != 1 || (*jobs)[0].Head != task.SHA {
 		t.Fatalf("old dropped %v cancelled %v, other dropped %v, %d runs: want the old head's run ended and the new one started", old.dropped, cancelled, other.dropped, len(*jobs))
+	}
+}
+
+// A run on the task's same head goes on when main moves under it: main
+// moves more often than a gate takes, and restarting it there left no gate
+// ever finishing. Its verdict is judged against the main it ran on.
+func TestMainMovingKeepsTheGateRunning(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	maxGates(m, 3)
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) (string, bool) { return "", true }
+	cancelled := false
+	run := &gateRun{key: p.Name + "@" + task.SHA + "@oldmain", task: task.ID, head: task.SHA, main: "oldmain", since: time.Now(), cancel: func() { cancelled = true }}
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{run.key: run}
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if run.dropped || cancelled || len(*jobs) != 0 || task.Stage != StageMerging || !strings.Contains(task.Reason, "main has moved") {
+		t.Fatalf("dropped %v cancelled %v, %d runs, stage %q, reason %q: want the run going on and the task waiting on it", run.dropped, cancelled, len(*jobs), task.Stage, task.Reason)
 	}
 }

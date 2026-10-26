@@ -195,6 +195,8 @@ Ask two questions: is the whole approach right, and what is the simplest setup t
 
 If a setup is worth testing, write it to $HIVE_BOX/experiment.json as {"why": "...", "system": "...", "asks": ["..."], "model": "..."}. The Hive runs it once in a fresh copy of the project at its start, in a worker's sandbox: one %s session, "system" appended to the harness's own system prompt (empty for none), the "asks" sent in turn in that session, on "model" (empty for %s). Nothing else is added, and it can only report on its own copy. It may spend $%.2f, what the Hive has spent on this project since the last step-back. The copy is then scored with the project's score command beside the Hive's main at that time, and if it beats main the Hive files a fault against its own setup with both scores.
 
+If what holds the loop back is in its queue (off-loop work ahead of a fix, blocked work whose cause is fixed, a task that landed but sits in a stage), steer it yourself with queue, recheck, rerun-checks or landed, as the orientation says; don't route it through the lead.
+
 Write your reasoning to $HIVE_BOX/sweep.md, then finish.`, p.Name, why, p.Goals, better, *st.Score, s.Best, h, model, s.Budget)
 	spec := m.Agents.Spec(id, "stepback", p.Name, dir, brief)
 	only := ""
