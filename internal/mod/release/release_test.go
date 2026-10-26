@@ -1261,10 +1261,16 @@ func TestReleaseOnlyAtAGreenMain(t *testing.T) {
 	merged(2, "a2", "m2")
 	land("a2", "r2")
 	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPending})
+	listings := 0
+	n.listed = func() { listings++ }
 	m.AfterKept("hive", "m2")
 	m.retryWaiting()
+	n.listed = nil
 	if len(n.got) != 0 || len(m.C.Person.Open()) != 0 || journaledN(m, "release.ci_waiting") != 1 {
 		t.Fatalf("a running main was released or offered: %v %+v", n.got, m.C.Person.Open())
+	}
+	if listings != 0 {
+		t.Fatalf("a commit waiting on main's checks listed the tags %d times", listings)
 	}
 
 	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPass})
@@ -1374,5 +1380,8 @@ func TestContainsReadsTheClone(t *testing.T) {
 	}
 	if _, err := m.contains(p, old, strings.Repeat("ab", 20)); err == nil {
 		t.Error("a tag commit the clone can't fetch read as known")
+	}
+	if _, err := m.contains(p, old, "--upload-pack=touch x"); err == nil || !strings.Contains(err.Error(), "not a commit name") {
+		t.Errorf("a tag commit shaped like an option reached git: %v", err)
 	}
 }

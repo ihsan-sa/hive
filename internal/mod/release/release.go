@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -735,14 +736,10 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	list, refuse := m.merges(project, sha)
-	if refuse == "" {
-		refuse = m.tagged(p, sha)
-	}
 	if refuse != "" {
 		once(refuse)
 		return
 	}
-	m.refused.Delete(project)
 	var manifest strings.Builder
 	var root, unread, rootRead []string
 	for _, mg := range list {
@@ -766,6 +763,14 @@ func (m *Module) afterKept(project, sha string) {
 	if !approved && !m.mainGreen(p, sha) {
 		return
 	}
+	// The tags are read only once main's checks let the cut go ahead, so a
+	// commit retried while it waits on them (retryWaiting) costs no forge
+	// calls or fetches for them while the lock is held.
+	if refuse := m.tagged(p, sha); refuse != "" {
+		once(refuse)
+		return
+	}
+	m.refused.Delete(project)
 	var why []string
 	if len(root) > 0 {
 		why = append(why, strings.Join(root, ", ")+" run with elevated rights and no security read passed them")
@@ -1382,7 +1387,13 @@ func (m *Module) tagged(p core.Project, sha string) string {
 		if at == sha {
 			return t + " is already cut at it"
 		}
-		if in, err := contains(p, sha, at); err == nil && in {
+		in, err := contains(p, sha, at)
+		if err != nil {
+			// The cut goes ahead, but a guard that can't read shows here.
+			log.Printf("release: %s: can't tell whether %s at %s contains %s: %v", p.Name, t, core.Short(at), core.Short(sha), err)
+			continue
+		}
+		if in {
 			return t + " at " + core.Short(at) + " already contains it, so a new tag would carry older code under a higher number"
 		}
 	}
@@ -1390,15 +1401,20 @@ func (m *Module) tagged(p core.Project, sha string) string {
 }
 
 // contains says whether sha is tagSHA or one of its ancestors, fetching
-// tagSHA into the project's clone when it hasn't got it.
+// tagSHA into the project's clone, with the token its owner's sync uses,
+// when it hasn't got it. Both come to git only as hex object names, so a
+// forge value can never be read as an option.
 func (m *Module) contains(p core.Project, sha, tagSHA string) (bool, error) {
+	if !hexName(sha) || !hexName(tagSHA) {
+		return false, fmt.Errorf("not a commit name: %q, %q", core.Clip(sha, 50), core.Clip(tagSHA, 50))
+	}
 	dir := m.C.WS.Project(p.Name)
 	full, err := core.Git(dir, "rev-parse", "--verify", sha+"^{commit}")
 	if err != nil {
 		return false, err
 	}
 	if _, err := core.Git(dir, "rev-parse", "--verify", tagSHA+"^{commit}"); err != nil {
-		if _, err := core.GitT(5*time.Minute, dir, "fetch", "-q", "--no-tags", "origin", tagSHA); err != nil {
+		if _, err := core.GitEnvT(5*time.Minute, dir, core.ForgeEnv(p.Repo), "fetch", "-q", "--no-tags", "origin", tagSHA); err != nil {
 			return false, err
 		}
 	}
@@ -1407,6 +1423,19 @@ func (m *Module) contains(p core.Project, sha, tagSHA string) (bool, error) {
 		return false, err
 	}
 	return strings.TrimSpace(base) == strings.TrimSpace(full), nil
+}
+
+// hexName says whether s is a full or abbreviated hex object name.
+func hexName(s string) bool {
+	if len(s) < 4 || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			return false
+		}
+	}
+	return true
 }
 
 // diff lists the files that differ between two commits of the project.

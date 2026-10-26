@@ -161,6 +161,10 @@ var OwnerTokens = map[string]string{
 	"hive-rsi-lab": "/home/hive/h0-org.token",
 }
 
+// ForgeEnv is ghEnv for a module's git call to repo's remote in the host
+// clone, which never reaches a run.
+func ForgeEnv(repo string) []string { return ghEnv(repo) }
+
 // ghEnv is the environment that makes gh and git's gh credential helper use
 // the token configured for repo's owner, or nothing to keep gh's login. Under
 // the system service install.sh writes, the token comes first from systemd's
