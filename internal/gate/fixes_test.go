@@ -147,3 +147,30 @@ func TestTestFuncsSeeChangedBodies(t *testing.T) {
 		t.Fatalf("test funcs: %v / %v", a, b)
 	}
 }
+
+// reset empties the lab's TMPDIR, the sibling folder beside its root, so one
+// fix's run leaves nothing there for the next.
+func TestResetEmptiesTmp(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &Child{Root: filepath.Join(dir, "lab")}
+	if err := c.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	left := filepath.Join(c.Tmp(), "left-over")
+	if err := os.WriteFile(left, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.reset(src, src, src, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(left); !os.IsNotExist(err) {
+		t.Fatalf("reset left %s behind: %v", left, err)
+	}
+	if fi, err := os.Stat(c.Tmp()); err != nil || !fi.IsDir() {
+		t.Fatalf("reset did not remake the TMPDIR: %v", err)
+	}
+}

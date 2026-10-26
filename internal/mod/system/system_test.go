@@ -140,4 +140,11 @@ func TestModuleJobNeverReplacesABuiltin(t *testing.T) {
 	if !m.RegisterModule(Job{Name: "kb.dream", Default: "every 2h", Fn: builtin}) || m.jobs["kb.dream"].Default != "every 2h" {
 		t.Fatal("a module's changed default didn't take")
 	}
+	m.KeepModuleJobs(map[string]bool{})
+	if _, ok := m.jobs["kb.dream"]; ok {
+		t.Fatal("a module job no manifest names was kept")
+	}
+	if _, ok := m.jobs["kb.file"]; !ok {
+		t.Fatal("pruning module jobs took a built-in one")
+	}
 }

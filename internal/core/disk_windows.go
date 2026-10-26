@@ -15,3 +15,7 @@ func statRoom(path string) (free, size int64, ok bool) {
 	}
 	return int64(avail), int64(total), true
 }
+
+// quotaShown says statRoom's figures count a per-user quota: on Windows
+// GetDiskFreeSpaceEx's free space does.
+const quotaShown = true
