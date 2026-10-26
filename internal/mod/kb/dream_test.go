@@ -3,6 +3,7 @@ package kb
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -122,5 +123,73 @@ func TestSearchRanksConsolidatedFirst(t *testing.T) {
 	}
 	if !slices.Equal(got, []string{"c-living.md", "b-plain.md", "d-weak.md", "a-retired.md"}) {
 		t.Errorf("order %v", got)
+	}
+}
+
+// A pass can't write through a linked practice/ or dreams/ folder, can't name
+// a hidden project its text didn't name before, and a write that fails partway
+// leaves the knowledge base as it was.
+func TestDreamGuardsAndPutsBack(t *testing.T) {
+	ws, c, mods := freshWorkspace(t)
+	c.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
+	m := New(c, &agents.Agents{C: c, Mod: mods})
+	m.Write(Note{Title: "Gate", Text: "first", Project: "hive"})
+	m.Write(Note{Title: "Old", Text: "once about secret", Project: "hive"})
+	was := map[string]string{}
+	text := map[string]string{}
+	for _, n := range m.SharedNotes().Notes {
+		was[n.Path], text[n.Path] = hashOf([]byte(n.Text)), n.Text
+	}
+
+	outside := t.TempDir()
+	os.RemoveAll(filepath.Join(ws.KB(), "dreams"))
+	if err := os.Symlink(outside, filepath.Join(ws.KB(), "dreams")); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	if _, err := m.Dream("kb", Pass{Changes: []FileChange{{Path: "dreams/d.md", Text: "digest"}}}); err == nil || core.Exists(filepath.Join(outside, "d.md")) {
+		t.Errorf("a pass wrote through a linked dreams/: %v", err)
+	}
+	os.Remove(filepath.Join(ws.KB(), "dreams"))
+
+	if _, err := m.Dream("kb", Pass{Changes: []FileChange{{Path: "dreams/d.md", Text: "the secret project rolled back"}}}); err == nil {
+		t.Error("a digest naming a hidden project was taken")
+	}
+	if _, err := m.Dream("kb", Pass{Changes: []FileChange{{Path: "old.md", Text: text["old.md"] + "\nSee also [[gate]].\n", Was: was["old.md"]}}}); err != nil {
+		t.Errorf("relinking a note that already named a hidden project was refused: %v", err)
+	}
+	was, text = map[string]string{}, map[string]string{}
+	for _, n := range m.SharedNotes().Notes {
+		was[n.Path], text[n.Path] = hashOf([]byte(n.Text)), n.Text
+	}
+	if _, err := m.Dream("kb", Pass{Changes: []FileChange{
+		{Path: "gate.md", Text: text["gate.md"] + "\n" + text["old.md"], Was: was["gate.md"]},
+		{Path: "old.md", Remove: true, Was: was["old.md"]},
+	}}); err != nil {
+		t.Errorf("merging a note that named a hidden project was refused: %v", err)
+	}
+	was, text = map[string]string{}, map[string]string{}
+	for _, n := range m.SharedNotes().Notes {
+		was[n.Path], text[n.Path] = hashOf([]byte(n.Text)), n.Text
+	}
+
+	if runtime.GOOS == "windows" {
+		return
+	}
+	practice := filepath.Join(ws.KB(), "practice")
+	os.Chmod(practice, 0o555)
+	defer os.Chmod(practice, 0o755)
+	if core.Exists(filepath.Join(practice, ".probe")) || os.WriteFile(filepath.Join(practice, ".probe"), nil, 0o644) == nil {
+		t.Skip("a read-only folder is writable here")
+	}
+	_, err := m.Dream("kb", Pass{Changes: []FileChange{
+		{Path: "fine.md", Text: "fine"},
+		{Path: "gate.md", Text: "rewritten", Was: was["gate.md"]},
+		{Path: "practice/new.md", Text: "new"},
+	}})
+	if err == nil {
+		t.Fatal("a pass whose write failed was taken")
+	}
+	if raw, _ := os.ReadFile(filepath.Join(ws.KB(), "gate.md")); core.Exists(filepath.Join(ws.KB(), "fine.md")) || string(raw) != text["gate.md"] {
+		t.Error("a pass that failed partway left what it wrote")
 	}
 }

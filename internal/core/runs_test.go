@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -667,5 +668,64 @@ func TestHoldsSayWhyTurnsWait(t *testing.T) {
 	rs.Hold("")
 	if got := rs.Holds(); len(got) != 0 {
 		t.Fatalf("let go, still %q", got)
+	}
+}
+
+// run.created journals a run's long texts by name, not again in full: they
+// are in its ro folder already, and replay reads them back from there.
+func TestRunCreatedLeavesLongTextsInRO(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	path := filepath.Join(t.TempDir(), "j.jsonl")
+	j, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	long := func(s string) string { return strings.Repeat(s, 2000) }
+	specs := []RunSpec{
+		{ID: "w1", Role: "worker", Harness: "fake", System: long("S"), Brief: long("B"), Inputs: map[string]string{"diff.patch": long("D"), "sha": "abc"}},
+		// a reviewer's brief.md input overwrites the brief's file: the input is on disk, the brief stays inline
+		{ID: "r1", Role: "reviewer", Harness: "fake", System: long("S"), Brief: long("b"), Inputs: map[string]string{"brief.md": long("R")}},
+		// two inputs on one file name: neither is left out
+		{ID: "x1", Role: "worker", Harness: "fake", Brief: "short", Inputs: map[string]string{"a/n.txt": long("1"), "b/n.txt": long("2")}},
+	}
+	for _, s := range specs {
+		if _, err := rs.Start(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	j.Close()
+	raw, _ := os.ReadFile(path)
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var e Event
+		json.Unmarshal([]byte(line), &e)
+		var c createdSpec
+		e.Decode(&c)
+		switch c.ID {
+		case "w1":
+			if len(line) > 1000 || !slices.Equal(c.Stored, []string{"brief", "inputs/diff.patch", "system"}) || c.Inputs["sha"] != "abc" {
+				t.Errorf("w1 journaled %d bytes, stored %v", len(line), c.Stored)
+			}
+		case "r1":
+			if !slices.Equal(c.Stored, []string{"inputs/brief.md", "system"}) || c.Brief != long("b") {
+				t.Errorf("r1 stored %v", c.Stored)
+			}
+		case "x1":
+			if len(c.Stored) != 0 {
+				t.Errorf("x1 stored %v", c.Stored)
+			}
+		}
+	}
+	j2, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j2.Close()
+	again := NewRuns(ws, j2, nil, nil, func() []string { return nil })
+	for _, s := range specs {
+		r, _ := again.Get(s.ID)
+		if r.System != s.System || r.Brief != s.Brief || !maps.Equal(r.Inputs, s.Inputs) {
+			t.Errorf("%s replayed differs from its spec", s.ID)
+		}
 	}
 }

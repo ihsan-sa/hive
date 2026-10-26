@@ -3,10 +3,10 @@
 The Hive project (ihsan-sa/hive) has a score, so the improve module measures main after every merge, keeps or reverts against the best kept score, and the step-back (`improve.stepback`) has a number to beat. It is set in `.hive/project.json`:
 
 ```json
-"score": {"command": "for t in git python3; do command -v \"$t\" >/dev/null || { \"$t\"; exit 127; }; done; go run ./cmd/hive-score", "direction": "higher", "tolerance": 3, "paths": ["internal/e2e/benchmark_test.go", "internal/demo/"]}
+"score": {"command": "for t in git python3; do command -v \"$t\" >/dev/null || { \"$t\"; exit 127; }; done; go run ./cmd/hive-score", "direction": "higher", "tolerance": 3, "paths": ["cmd/hive-score/", "internal/e2e/benchmark_test.go", "internal/demo/"]}
 ```
 
-Code: `cmd/hive-score` (output format tested in `main_test.go`).
+Code: `cmd/hive-score` (output format tested in `main_test.go`). It is in the score's `paths` with the benchmark and the demo project, so a change to the formula alone starts a new baseline instead of reading as a gain or a loss.
 
 ## What it measures
 
@@ -82,5 +82,5 @@ The first score improve measured, inside the daemon's check sandbox, was **190.7
 
 - **Briefs.** The lead briefs a scored project with the person's goal as written, no `--done` bar, limit or steps of its own (modules/agents/lead.md): the score is the bar. Workers on this project see the score command, its tolerance and the best kept value in their brief, and that a lower score is reverted.
 - **Checkpoints.** Every worker commit on a scored project is extracted and scored; one that beats the best kept score by more than the tolerance merges as a checkpoint while the worker goes on. Here each of those is a full score run (about five minutes) in a check slot, beside the merges' tests.
-- **Step-backs.** `improve.stepback` now runs on this project when the best kept score stalls: a minimal setup tries the same goals in a fresh copy, scored with this command, and a win is filed as a fault in the Hive's own setup.
+- **Step-backs.** `improve.stepback` now runs on this project when the best kept score stalls: a minimal setup tries the same goals in a fresh copy, scored with this command, and a win is filed as a fault in the Hive's own setup. The fault's worker gets the setup's transcripts and its commits as a patch; on this project those commits are the change that won, so the fault asks for them forward-ported onto main first.
 - **Reverts.** A merge that scores below the best kept by more than the tolerance is reverted, with the reason in `.hive/lessons.md`. A merge that changes the evaluator starts a new baseline instead.
