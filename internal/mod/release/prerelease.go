@@ -115,7 +115,8 @@ func (l *limited) Error() string {
 }
 
 // limit is err as limited when it is GitHub's rate limit, else nil. The look
-// again waits for the login's quota to reset, when the forge can say when.
+// again waits for the login's quota to reset when the hour's quota is spent
+// and the forge can say when; a secondary limit waits only what GitHub asked.
 func (m *Module) limit(repo string, err error) *limited {
 	var rl *core.RateLimited
 	if !errors.As(err, &rl) {
