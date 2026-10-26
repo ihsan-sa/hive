@@ -53,9 +53,12 @@ type Runner struct {
 	mu     sync.Mutex
 	procs  map[string]*child
 	status map[string]string
-	tries  map[string]int // reviews started this life, by module and commit
-	busy   bool
-	rooms  map[string]roomAnswer // executors' last answers to `room`, by module
+	// missing holds the modules whose program wasn't on the PATH, with an
+	// alert standing until it starts.
+	missing map[string]bool
+	tries   map[string]int // reviews started this life, by module and commit
+	busy    bool
+	rooms   map[string]roomAnswer // executors' last answers to `room`, by module
 }
 
 type child struct {
@@ -85,7 +88,7 @@ func (r *Runner) Tick() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.procs == nil {
-		r.procs, r.status, r.tries = map[string]*child{}, map[string]string{}, map[string]int{}
+		r.procs, r.status, r.tries, r.missing = map[string]*child{}, map[string]string{}, map[string]int{}, map[string]bool{}
 	}
 	seen := map[string]bool{}
 	for _, m := range r.Mods.List() {
@@ -263,11 +266,14 @@ func (r *Runner) start(name string, c *child, m modules.Module) {
 		if errors.Is(err, exec.ErrNotFound) && r.status[name] != why {
 			// It backs off and tries again, but a missing program (go, for a
 			// module run with go run) won't appear on its own: say so once.
+			r.missing[name] = true
 			r.C.J.MustAppend("alert.raised", map[string]string{"kind": "module", "ref": "module:" + name + ":missing", "module": name,
 				"text": fmt.Sprintf("module %s can't start: %q is not on the Hive's PATH. Install it, or put it on the PATH the daemon runs with, and the module starts on its next try, within the hour, or at the Hive's next start.", name, argv[0])})
 		}
+		if r.status[name] != why { // a retry that fails the same way says nothing new
+			r.C.J.MustAppend("module.exited", map[string]string{"module": name, "error": err.Error()})
+		}
 		r.status[name] = why
-		r.C.J.MustAppend("module.exited", map[string]string{"module": name, "error": err.Error()})
 		c.next, c.wait = at.Add(c.wait), min(c.wait*2, 5*time.Minute)
 		if errors.Is(err, exec.ErrNotFound) {
 			c.next = at.Add(time.Hour) // it won't appear on its own; the alert says what to do
@@ -277,6 +283,10 @@ func (r *Runner) start(name string, c *child, m modules.Module) {
 	done := make(chan struct{})
 	c.cmd, c.done = cmd, done
 	r.status[name] = "running"
+	if r.missing[name] { // the PATH was fixed: the alert's fault is gone
+		delete(r.missing, name)
+		r.C.J.MustAppend("alert.cleared", map[string]string{"ref": "module:" + name + ":missing", "module": name})
+	}
 	r.C.J.MustAppend("module.started", map[string]any{"module": name, "commit": c.commit, "pid": cmd.Process.Pid, "hooks": m.Hooks})
 	go func() {
 		err := cmd.Wait()

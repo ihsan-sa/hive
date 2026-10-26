@@ -144,3 +144,34 @@ func TestJudgePickAvoidsTheAuthor(t *testing.T) {
 		t.Fatalf("the judge route first: %v", p)
 	}
 }
+
+// A measured verdict judged at an older main carries to a main that moved
+// elsewhere: no new gate runs, and the judge's call there decides, a keep
+// merging at the new main and a rollback sending the task back.
+func TestACarriedVerdictIsJudgedAtItsOwnMain(t *testing.T) {
+	for _, verdict := range []string{core.GateKeep, core.GateRollback} {
+		m, task, p, f := measuredRig(t, core.GateKeep)
+		gates := 0
+		inner := m.Gate
+		m.Gate = func(ctx context.Context, j GateJob) core.GateResult { gates++; return inner(ctx, j) }
+		old, _ := m.C.Effects.Sync(p)
+		gateOnce(t, m, task, p)
+		pushMain(t, f, map[string]string{"elsewhere.md": "main moved\n"})
+		judgeSays(t, m, task, old, verdict)
+		mergeOnce(t, m, task, p)
+		m.Wait()
+		if gates != 1 {
+			t.Fatalf("%s: %d gate runs, want the one at %s carried", verdict, gates, core.Short(old))
+		}
+		main, _ := m.C.Effects.Sync(p)
+		if main == old {
+			t.Fatal("main didn't move")
+		}
+		if verdict == core.GateKeep && (task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED") {
+			t.Fatalf("stage %q, reason %q: want the carried keep merged at %s", task.Stage, task.Reason, core.Short(main))
+		}
+		if verdict == core.GateRollback && (task.Stage != StageWorking || !strings.Contains(task.Findings, "judge says rollback") || prState(t, f, task.PR.Number) != "OPEN") {
+			t.Fatalf("stage %q, findings %q: want the carried rollback sent back", task.Stage, task.Findings)
+		}
+	}
+}

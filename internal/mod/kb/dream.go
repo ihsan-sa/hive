@@ -138,18 +138,30 @@ var dreamPathRe = regexp.MustCompile(`^(?:(practice|` + dreamDir + `)/)?[A-Za-z0
 // Dream checks a pass and commits it. A pass may write top-level notes,
 // practice docs other than the ones the module ships, and digests under
 // dreams/; it may remove notes, which it does when it merges them into
-// another, and old digests, but no practice doc. A note whose header names a hidden project, a path that
-// is not a plain file, or a file changed since the program read it refuses
-// the whole pass, and nothing is written.
+// another, and old digests, but no practice doc. A note whose header names a
+// hidden project, text that names one it didn't before, a path that is not a
+// plain file or folder, or a file changed since the program read it refuses
+// the whole pass, and nothing is written; a write that fails partway puts
+// back what the pass had written.
 func (m *Module) Dream(module string, p Pass) (string, error) {
 	kb := m.C.WS.KB()
 	shipped := map[string]bool{}
 	for _, s := range m.shipped() {
 		shipped[s] = true
 	}
+	var hidden []*regexp.Regexp
+	var hiddenNames []string
+	for _, pr := range m.C.Projects.List() {
+		if pr.Hidden() {
+			hidden = append(hidden, regexp.MustCompile(`\b`+regexp.QuoteMeta(pr.Name)+`\b`))
+			hiddenNames = append(hiddenNames, pr.Name)
+		}
+	}
+	named := make([]int, len(hidden)) // mentions the pass adds, by hidden project
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	seen := map[string]bool{}
+	old := map[string][]byte{} // what each path held, to put back if a write fails
 	for _, c := range p.Changes {
 		switch {
 		case !dreamPathRe.MatchString(c.Path) || c.Path == "README.md" || seen[c.Path]:
@@ -164,6 +176,13 @@ func (m *Module) Dream(module string, p Pass) (string, error) {
 		seen[c.Path] = true
 		if proj, ok := m.isolatedIn(c.Text); ok && !c.Remove {
 			return "", fmt.Errorf("refused: %s names hidden project %s", c.Path, proj)
+		}
+		if dir, _ := path.Split(c.Path); dir != "" {
+			// Lstat sees only the last element: a linked practice/ or dreams/
+			// would take the write out of the knowledge base.
+			if fi, err := os.Lstat(filepath.Join(kb, dir)); err == nil && !fi.IsDir() {
+				return "", fmt.Errorf("refused: %s is not a plain folder", dir)
+			}
 		}
 		file := filepath.Join(kb, filepath.FromSlash(c.Path))
 		fi, err := os.Lstat(file)
@@ -182,6 +201,21 @@ func (m *Module) Dream(module string, p Pass) (string, error) {
 			if hashOf(raw) != c.Was {
 				return "", fmt.Errorf("stale: %s changed since the pass read it", c.Path)
 			}
+			old[c.Path] = raw
+		}
+		// The program keeps hidden projects' events out of what it writes; a
+		// pass whose files name a hidden project more often than they did (a
+		// merge only moves a mention) is refused here too.
+		for i, re := range hidden {
+			named[i] -= len(re.FindAllIndex(old[c.Path], -1))
+			if !c.Remove {
+				named[i] += len(re.FindAllStringIndex(c.Text, -1))
+			}
+		}
+	}
+	for i := range hidden {
+		if named[i] > 0 {
+			return "", fmt.Errorf("refused: the pass names hidden project %s", hiddenNames[i])
 		}
 	}
 	var wrote, removed []string
@@ -196,7 +230,8 @@ func (m *Module) Dream(module string, p Pass) (string, error) {
 			wrote = append(wrote, c.Path)
 		}
 		if err != nil {
-			return "", err // what was written stays uncommitted; git shows it
+			m.undo(kb, wrote, removed, old)
+			return "", err
 		}
 	}
 	result := "nothing to change"
@@ -224,6 +259,19 @@ func (m *Module) Dream(module string, p Pass) (string, error) {
 	m.C.J.MustAppend("kb.dreamed", map[string]any{"module": module, "trigger": p.Trigger, "merged": p.Merged, "linked": p.Linked,
 		"distilled": p.Distilled, "retired": p.Retired, "digest": p.Digest, "seq": p.Seq, "files": len(wrote) + len(removed), "result": result})
 	return result, nil
+}
+
+// undo puts back what a pass that failed partway had written or removed, so
+// the knowledge base is left as it was.
+func (m *Module) undo(kb string, wrote, removed []string, old map[string][]byte) {
+	for _, p := range append(wrote, removed...) {
+		file := filepath.Join(kb, filepath.FromSlash(p))
+		if raw, ok := old[p]; ok {
+			os.WriteFile(file, raw, 0o644)
+		} else {
+			os.Remove(file)
+		}
+	}
 }
 
 func orDash(s string) string {
