@@ -312,6 +312,24 @@ func (m *Module) dropGateLocked(id, keep string) bool {
 	return dropped
 }
 
+// dropStaleGatesLocked ends t's runs in flight on a head other than its
+// own, or all of them once it has merged, finished or been stopped. m.mu
+// is held.
+func (m *Module) dropStaleGatesLocked(t *Task) bool {
+	ended := t.Stage == StageMerged || t.Stage == StageDone || t.Stage == StageStopped
+	dropped := false
+	for _, r := range m.gating {
+		if r.task != t.ID || r.dropped || r.head == "" || (r.head == t.SHA && !ended) {
+			continue
+		}
+		r.dropped, dropped = true, true
+		if r.cancel != nil {
+			r.cancel()
+		}
+	}
+	return dropped
+}
+
 // sameHeadLocked is task id's run in flight on head, against whatever
 // main, or nil. m.mu is held.
 func (m *Module) sameHeadLocked(id, head string) *gateRun {
