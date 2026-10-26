@@ -325,7 +325,7 @@ func (m *Module) apart(t, o Task, p string) bool {
 	if len(defs) == 0 {
 		return false
 	}
-	mine, theirs := named(t, defs), named(o, defs)
+	mine, theirs := named(t, p, defs), named(o, p, defs)
 	if len(mine) == 0 || len(theirs) == 0 {
 		return false
 	}
@@ -338,20 +338,50 @@ func (m *Module) apart(t, o Task, p string) bool {
 }
 
 // named is the definitions in defs that t's brief names as words, outside
-// the paths it names (textkit/__init__.py names no __init__).
-func named(t Task, defs map[string]bool) map[string]bool {
+// the paths it names and bare names of files like p (textkit/__init__.py or
+// __init__.py names no __init__). A common word ("run", "New", "file") that p
+// happens to define counts only written as code, in backticks or called, so
+// two briefs that rework one part of a large file in prose don't start
+// together on a word that isn't the definition at all.
+func named(t Task, p string, defs map[string]bool) map[string]bool {
 	text := pathLike.ReplaceAllString(t.Title+"\n"+t.Done+"\n"+t.Known, " ")
+	if ext := path.Ext(p); ext != "" {
+		text = bareName.ReplaceAllStringFunc(text, func(n string) string {
+			if b := strings.TrimRight(n, "."); len(b) > len(ext) && strings.HasSuffix(b, ext) {
+				return " "
+			}
+			return n
+		})
+	}
 	out := map[string]bool{}
-	for _, w := range word.FindAllString(text, -1) {
-		if defs[w] {
-			out[w] = true
+	for _, i := range word.FindAllStringIndex(text, -1) {
+		w := text[i[0]:i[1]]
+		if !defs[w] {
+			continue
 		}
+		if common[strings.ToLower(w)] && !(i[0] > 0 && text[i[0]-1] == '`') && !(i[1] < len(text) && strings.ContainsRune("`(", rune(text[i[1]]))) {
+			continue
+		}
+		out[w] = true
 	}
 	return out
 }
 
+// common is words briefs use in prose that code often defines too.
+var common = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`a add all and any apply build call check clear close config copy count
+		data default do done error file files find get handle help init is item key len line list load
+		log main make map name new next open parse path print read reset run save send set show size
+		start state status step stop string text the time to type update use value wait with write`) {
+		common[w] = true
+	}
+}
+
 var (
-	word = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+	word     = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+	bareName = regexp.MustCompile(`[A-Za-z0-9_.\-]+`)
 	// definition is a line that defines a name in the common languages:
 	// def, class, func (with a Go receiver), function, fn, type and the like.
 	definition = regexp.MustCompile(`(?m)^[ \t]*(?:(?:export|pub(?:\([^)]*\))?|async|static|public|private|protected)[ \t]+)*(?:def|class|func|function|fn|type|struct|enum|trait|interface)[ \t]+(?:\([^)]*\)[ \t]*)?([A-Za-z_][A-Za-z0-9_]*)`)

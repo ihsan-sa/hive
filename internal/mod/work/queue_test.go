@@ -362,6 +362,32 @@ func TestQueueSameFileApartFunctions(t *testing.T) {
 	}
 }
 
+// A brief names a definition only as a word of its own: a bare file name
+// (__init__.py) names nothing, and a common word the file defines (run, New)
+// counts only written as code.
+func TestNamedDefinitions(t *testing.T) {
+	defs := map[string]bool{"__init__": true, "run": true, "New": true, "slugify": true}
+	for text, want := range map[string]string{
+		"Implement slugify in __init__.py.":         "slugify",
+		"Fix __init__.py and run the tests":         "",
+		"Make New take a context":                   "",
+		"Make `New` take a context, and fix run()":  "New run",
+		"__init__ in textkit/__init__.py is a mess": "__init__",
+	} {
+		got := named(Task{Title: text}, "textkit/__init__.py", defs)
+		var names []string
+		for _, w := range strings.Fields(want) {
+			names = append(names, w)
+			if !got[w] {
+				t.Errorf("%q: %v lacks %s", text, got, w)
+			}
+		}
+		if len(got) != len(names) {
+			t.Errorf("%q: named %v, want %v", text, got, names)
+		}
+	}
+}
+
 // A brief that waits on a working one's file holds no later brief back: one
 // on its other file starts, rather than waiting for it to go first while it
 // waits in turn (tasks 140258 and 163142, issue #493).
