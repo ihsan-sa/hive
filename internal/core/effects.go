@@ -248,7 +248,10 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var g GateResult
 			ev.Decode(&g)
 			if prev, ok := e.gateMains[g.Project+"@"+g.Main]; ok && prev.MainFails && g.MainFails {
-				g.Repeats = prev.Repeats + 1
+				g.Repeats = prev.Repeats
+				if g.Started.IsZero() || !prev.At.After(g.Started) { // a run beside it saw the same main: no repeat
+					g.Repeats++
+				}
 			}
 			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
 			switch {
@@ -1116,7 +1119,9 @@ func DiffID(diff string) string {
 
 // Approve records the approval of a commit (the person's, or a warden's
 // when autonomy lets it decide): kind "merge" for a head
-// that changes protected paths, "release" for a merge held before release.
+// that changes protected paths, "release" for a merge held before release,
+// "gate" for a change to the gate landed unjudged at one main (sha is
+// head@main), while main itself fails in the gate.
 // The kinds stay apart, since a fast-forwarding forge merges a head as itself.
 func (e *Effects) Approve(kind, project, sha string) {
 	e.j.MustAppend("effect.approved", map[string]string{"kind": kind, "project": project, "sha": sha})
@@ -1388,9 +1393,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", fmt.Errorf("refusing to merge %s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
 	}
 	if p.Self && m.Gain {
-		// Or once the person landed that exact head unjudged, the gate
-		// unable to judge at main (the work module's "gate" ask).
-		if !e.Kept(p, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA) {
+		// Or once the person landed that exact head at that main unjudged,
+		// the gate unable to judge there (the work module's "gate" ask).
+		if !e.Kept(p, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA+"@"+m.Main) {
 			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
 		}
 	}
@@ -2000,6 +2005,11 @@ type CheckFailure struct {
 	Keys []string `json:"keys,omitempty"`
 	// OnlyTests says the log shows nothing failing apart from Keys.
 	OnlyTests bool `json:"only_tests,omitempty"`
+	// Head and Base are the commits the forge merged before running the
+	// check (TestedMerge): a pull request's checks run on its head merged
+	// with main as it was then, which may be older than main now.
+	Head string `json:"head,omitempty"`
+	Base string `json:"base,omitempty"`
 }
 
 // CheckFailure reads a failed check's log on repo's forge with the Hive's own
@@ -2024,6 +2034,7 @@ func (e *Effects) CheckFailure(repo string, r CheckRun) (CheckFailure, bool) {
 	}
 	keys, placed := FailedTestKeys(log)
 	f = CheckFailure{Tests: FailedTests(log), Keys: keys, Excerpt: LogExcerpt(log, ExcerptLines), OnlyTests: placed && OnlyTests(log)}
+	f.Head, f.Base = TestedMerge(log)
 	e.mu.Lock()
 	if e.failing == nil || len(e.failing) > 500 {
 		e.failing = map[string]CheckFailure{}
@@ -2072,6 +2083,20 @@ func LogExcerpt(log string, n int) string {
 	return strings.Join(lines[start:end], "\n")
 }
 
+// ghTestMerge is the merge commit GitHub runs a pull request's checks on,
+// whose message its checkout step prints ("HEAD is now at a9ae988 Merge
+// <head> into <base>").
+var ghTestMerge = regexp.MustCompile(`\bMerge ([0-9a-f]{40}) into ([0-9a-f]{40})\b`)
+
+// TestedMerge is the head and base a CI job's log says it merged and ran
+// on, or "" for both when it names no such merge (a push, not a PR).
+func TestedMerge(log string) (head, base string) {
+	if m := ghTestMerge.FindStringSubmatch(log); m != nil {
+		return m[1], m[2]
+	}
+	return "", ""
+}
+
 // CheckNames lists checks by name, for a message.
 func CheckNames(runs []CheckRun) string {
 	var names []string
@@ -2114,7 +2139,8 @@ func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.rea
 // merge. A base names the commit the merge is taken from instead of the
 // common ancestor: the branch's own commit that
 // main already holds as a squashed checkpoint, so only what came after it is
-// laid onto main.
+// laid onto main. A branch that has merged main since that checkpoint is
+// merged plainly, from its newer common ancestor with main.
 //
 // Attributes (merge=union and the rest) are read from main, not the branch:
 // a branch cut before main marked a file union merges it as main does, and a
@@ -2133,6 +2159,13 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 	}
 	// attr.tree needs git 2.46; an older git ignores the key and reads the branch's own.
 	attr := "attr.tree=" + mainSHA
+	if base != "" && mergedSince(dir, sha, mainSHA, base) {
+		// The branch merged main after its checkpoint, so its common
+		// ancestor with main is newer than the checkpoint and already holds
+		// the squashed copy: from the checkpoint, both sides would carry
+		// main's changes and the branch's edits on top of them would conflict.
+		base = ""
+	}
 	if base != "" {
 		// Exit status 1 is a conflict; anything else (such as a git older
 		// than 2.40, without --merge-base) is an error, not the worker's to fix.
@@ -2159,6 +2192,18 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 		return "", &DoubledError{Lines: d}
 	}
 	return e.hostCommit(p, dir, HostCommit{Project: p.Name, Kind: "update", Reviewed: sha, Main: mainSHA})
+}
+
+// mergedSince reports whether branch merged a commit of main after base:
+// their common ancestor is not one base already holds.
+func mergedSince(dir, branch, main, base string) bool {
+	mb, err := Git(dir, "merge-base", branch, main)
+	if err != nil {
+		return false
+	}
+	_, err = Git(dir, "merge-base", "--is-ancestor", strings.TrimSpace(mb), base)
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 1
 }
 
 // ErrConflict means a branch can't be brought up to date without the worker.
