@@ -539,10 +539,12 @@ func TestStoppedOnDraftResumes(t *testing.T) {
 	if o, _ := m.Get("t2"); o.Stage != StageStopped {
 		t.Fatalf("a task stopped on another error came back: %q", o.Stage)
 	}
-	for i := 0; i < 10 && got.Stage != StageMerged; i++ {
+	// The tick's own step may have taken it on through the merge (chain).
+	merged := func() bool { return got.Stage == StageMerged || got.Stage == StageDone }
+	for i := 0; i < 10 && !merged(); i++ {
 		m.settle(&got, m.step(&got))
 	}
-	if got.Stage != StageMerged || readied(m) != 1 {
+	if !merged() || readied(m) != 1 {
 		t.Fatalf("stage %q, readied %d, log %v", got.Stage, readied(m), got.Log)
 	}
 	// Once a task: stopped on the draft again, it stays for the lead, across
@@ -559,6 +561,20 @@ func TestStoppedOnDraftResumes(t *testing.T) {
 	}
 	if a, _ := m.Get("t3"); a.Stage == StageStopped || !a.DraftRevived {
 		t.Fatalf("a task stopped later in the run stayed: %q, log %v", a.Stage, a.Log)
+	}
+}
+
+// One tick takes a task through every stage that needs nothing to happen
+// first: its tests pass, the change is small, so it merges and is done in the
+// same pass instead of a tick for each stage.
+func TestOneTickChainsReadyStages(t *testing.T) {
+	m, task, _, _ := gateRig(t, false, map[string]string{"x.txt": "x\n"})
+	m.save(task, "")
+	m.Tick()
+	m.Wait()
+	got, _ := m.Get(task.ID)
+	if got.Stage != StageDone || got.MergeSHA == "" {
+		t.Fatalf("one tick left it in %q (merge %q), log %v", got.Stage, got.MergeSHA, got.Log)
 	}
 }
 

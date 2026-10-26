@@ -791,8 +791,41 @@ func (m *Module) Tick() {
 		go func(t Task) {
 			defer m.steps.Done()
 			defer m.release(t.ID)
-			m.settle(&t, m.step(&t))
+			m.chain(t)
 		}(t)
+	}
+}
+
+// chainSteps bounds the steps one tick takes a task through.
+const chainSteps = 8
+
+// chain steps t, and steps it again at once each time the step moved it on
+// to a stage with more to do, rather than leave that to the next tick: tests
+// that passed start their read, and a read that says land merges, in the same
+// pass. It stops on an error, a stage the step left as it was (waiting on a
+// check, a run or the forge), a queued stage (only Tick's admit starts those),
+// a retry gap, or after chainSteps steps. An aim asked meanwhile is set
+// between steps, as release sets it between ticks.
+func (m *Module) chain(t Task) {
+	for i := 1; ; i++ {
+		from := t.Stage
+		err := m.step(&t)
+		m.settle(&t, err)
+		if err != nil || i >= chainSteps {
+			return
+		}
+		m.setAim(t.ID)
+		next, ok := m.Get(t.ID)
+		if !ok || next.Stage == from || next.Terminal() || next.Queued() {
+			return
+		}
+		m.mu.Lock()
+		due := m.due(next)
+		m.mu.Unlock()
+		if !due {
+			return
+		}
+		t = next
 	}
 }
 
