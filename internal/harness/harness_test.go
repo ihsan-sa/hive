@@ -265,3 +265,23 @@ func TestWindowWithoutResetHasNone(t *testing.T) {
 		t.Fatalf("got %+v", evs)
 	}
 }
+
+// Only a free variant on OpenRouter passes; other endpoints aren't asked.
+func TestOpenRouterPaid(t *testing.T) {
+	for _, c := range []struct {
+		endpoint, model string
+		paid            bool
+	}{
+		{"https://openrouter.ai/api/v1", "nvidia/nemotron-3-ultra-550b-a55b:free", false},
+		{"https://openrouter.ai/api/v1", "anthropic/claude-opus-5", true},
+		{"https://OpenRouter.ai./api/v1", "openai/gpt-5", true},
+		{"https://eu.openrouter.ai/api/v1", "openrouter/auto", true},
+		{"https://openrouter.ai/api/v1", "meta/llama:freeish", true},
+		{"https://notopenrouter.ai/v1", "anything", false},
+		{"http://127.0.0.1:11434/v1", "qwen2.5-coder:14b", false},
+	} {
+		if err := OpenRouterPaid(c.endpoint, c.model); (err != nil) != c.paid {
+			t.Errorf("%s %s: %v, want paid %v", c.endpoint, c.model, err, c.paid)
+		}
+	}
+}

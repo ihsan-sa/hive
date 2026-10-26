@@ -974,7 +974,11 @@ func (rs *Runs) Start(s RunSpec) (Run, error) {
 		return Run{}, err
 	}
 	if HarnessName(s.Harness) == "open" {
-		if err := rs.ws.LoadConfig().Models[s.Model].Holds(s.Budget); err != nil {
+		m := rs.ws.LoadConfig().Models[s.Model]
+		if err := harness.OpenRouterPaid(m.Endpoint, m.Model); err != nil {
+			return Run{}, fmt.Errorf("a run won't start on %s: %v", s.Model, err)
+		}
+		if err := m.Holds(s.Budget); err != nil {
 			return Run{}, fmt.Errorf("a run with a budget won't start on %s: %v", s.Model, err)
 		}
 	}
@@ -2082,7 +2086,12 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	if HarnessName(r.Harness) == "open" {
-		h = cfg.Models[r.Model].Harness() // Claude Code for a model on an Anthropic-compatible API
+		m := cfg.Models[r.Model]
+		if err := harness.OpenRouterPaid(m.Endpoint, m.Model); err != nil {
+			rs.SetStatus(r.ID, StatusBlocked, fmt.Sprintf("no turn on %s: %v; route the run to a free model and reopen it", r.Model, err))
+			return
+		}
+		h = m.Harness() // Claude Code for a model on an Anthropic-compatible API
 	}
 	turn := r.Turn + 1
 	// A session that never came up is started fresh under a new id; one that
