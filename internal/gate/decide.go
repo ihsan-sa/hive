@@ -51,6 +51,9 @@ type Verdict struct {
 	Regressions []string `json:"regressions,omitempty"`
 	Gains       []string `json:"gains,omitempty"`
 	Unmeasured  []string `json:"unmeasured,omitempty"` // probes that failed on both sides: never measured
+	// Differs names probes that pass as often on both sides but fail
+	// different tests: not judged, shown so a new failure isn't hidden by a tie.
+	Differs []string `json:"differs,omitempty"`
 }
 
 func mean(v []float64) float64 {
@@ -146,11 +149,20 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 			if c.pass == 0 && k.pass == 0 {
 				// Broken on both sides: that path was never measured, so it
 				// cannot count as even.
-				v.Unmeasured = append(v.Unmeasured, fmt.Sprintf("%s failed on both sides (0/%d, the control 0/%d)", p, c.n, k.n))
+				// Naming each side's failing tests shows whether they are the
+				// same ones (a stale base or the environment) or new.
+				v.Unmeasured = append(v.Unmeasured, fmt.Sprintf("%s failed on both sides (0/%d, the control 0/%d)", p, c.n, k.n)+failing(c.failed, c.n, k.failed, k.n))
+			} else if cr != kr && c.pass > 0 && k.pass > 0 && math.Abs(cr-kr) <= 1/float64(min(c.n, k.n))+1e-9 {
+				// One run apart with the probe passing on both sides: a single
+				// flaky run decides nothing (2/3 against 3/3 is noise at n=3).
+				// Shown, not judged, like a tie failing different tests.
+				v.Differs = append(v.Differs, fmt.Sprintf("%s passes %d/%d, the control %d/%d, within one run's noise", p, c.pass, c.n, k.pass, k.n)+failing(c.failed, c.n, k.failed, k.n))
 			} else if cr < kr {
-				v.Regressions = append(v.Regressions, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n)+failing(c.failed, c.n))
+				v.Regressions = append(v.Regressions, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n)+failing(c.failed, c.n, k.failed, k.n))
 			} else if cr > kr {
-				v.Gains = append(v.Gains, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n))
+				v.Gains = append(v.Gains, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n)+failing(c.failed, c.n, k.failed, k.n))
+			} else if !sameTests(c.failed, k.failed) {
+				v.Differs = append(v.Differs, fmt.Sprintf("%s passes %d/%d, the control %d/%d, failing different tests", p, c.pass, c.n, k.pass, k.n)+failing(c.failed, c.n, k.failed, k.n))
 			}
 		}
 	}
@@ -205,9 +217,37 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 	return v
 }
 
-// failing names the tests that failed in a probe's runs, most often first,
-// with how many of n runs each failed in: " (failing: TestA 3/3, TestB 1/3)".
-func failing(f map[string]int, n int) string {
+// failing names the tests that failed in each side's runs of a probe, most
+// often first, with how many of its runs each failed in:
+// " (failing: TestA 3/3, TestB 1/3; the control failing: TestB 2/3)".
+func failing(c map[string]int, cn int, k map[string]int, kn int) string {
+	var parts []string
+	if t := tests(c, cn); t != "" {
+		parts = append(parts, "failing: "+t)
+	}
+	if t := tests(k, kn); t != "" {
+		parts = append(parts, "the control failing: "+t)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, "; ") + ")"
+}
+
+// sameTests says whether two sides failed the same tests, however often.
+func sameTests(a, b map[string]int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for t := range a {
+		if b[t] == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func tests(f map[string]int, n int) string {
 	if len(f) == 0 {
 		return ""
 	}
@@ -228,5 +268,5 @@ func failing(f map[string]int, n int) string {
 	for i, t := range names {
 		names[i] = fmt.Sprintf("%s %d/%d", t, f[t], n)
 	}
-	return " (failing: " + strings.Join(names, ", ") + more + ")"
+	return strings.Join(names, ", ") + more
 }

@@ -9,9 +9,9 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
-// The pace grows by one a step while work waits on it and nothing strains,
-// pulls back to three quarters of what runs under strain, changes at most
-// once a step, and keeps under the person's ceiling.
+// The pace grows by one a growStep while work waits on it and nothing
+// strains, pulls back to three quarters of what runs under strain, changes at
+// most once a step, and keeps under the person's ceiling.
 func TestPaceGrowsShrinksAndKeepsTheCeiling(t *testing.T) {
 	var p pace
 	now := time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)
@@ -26,14 +26,14 @@ func TestPaceGrowsShrinksAndKeepsTheCeiling(t *testing.T) {
 		t.Fatalf("changed within a step: %d", l)
 	}
 	for want := 5; want <= 8; want++ { // the machine has room and briefs wait
-		if l := next(paceStep, want-1, true, "", 0); l != want {
+		if l := next(growStep, want-1, true, "", 0); l != want {
 			t.Fatalf("grew to %d, want %d", l, want)
 		}
 	}
-	if l := next(paceStep, 3, true, "", 0); l != 8 {
+	if l := next(growStep, 3, true, "", 0); l != 8 {
 		t.Fatalf("grew while under its limit: %d", l)
 	}
-	if l := next(paceStep, 8, false, "", 0); l != 8 {
+	if l := next(growStep, 8, false, "", 0); l != 8 {
 		t.Fatalf("grew with nothing waiting: %d", l)
 	}
 	if l := next(paceStep, 8, true, "machine loaded (load 40 on 20 cores, limit 1 per core)", 0); l != 6 {
@@ -45,20 +45,63 @@ func TestPaceGrowsShrinksAndKeepsTheCeiling(t *testing.T) {
 	if l := next(time.Second, 8, true, "machine loaded", 0); l != 6 {
 		t.Fatalf("pulled back again within a step: %d", l)
 	}
-	if l := next(paceStep, 1, true, "machine loaded", 0); l != 1 {
-		t.Fatalf("under strain with one running: %d, want 1", l)
+	if l := next(paceStep, 1, true, "machine loaded", 0); l != 4 {
+		t.Fatalf("under load alone with one running: %d, want its start 4", l)
+	}
+	if l := next(paceStep, 1, true, "machine under memory pressure (30.00%, limit 20%)", 0); l != 1 {
+		t.Fatalf("under memory pressure with one running: %d, want 1", l)
 	}
 	for range 20 {
-		next(paceStep, p.limit, true, "", 0)
+		next(growStep, p.limit, true, "", 0)
 	}
-	if l := next(paceStep, p.limit, true, "", 0); l != 22 {
+	if l := next(growStep, p.limit, true, "", 0); l != 22 {
 		t.Fatalf("with no ceiling it grows on: %d", l)
 	}
 	if l := next(time.Second, 22, true, "", 5); l != 5 || !strings.Contains(p.String(), "ceiling") {
 		t.Fatalf("over a ceiling of 5: %d (%s)", l, p.String())
 	}
-	if l := next(paceStep, 5, true, "", 5); l != 5 {
+	if l := next(growStep, 5, true, "", 5); l != 5 {
 		t.Fatalf("grew past the ceiling: %d", l)
+	}
+}
+
+// A load hovering round its limit, strained one minute and not the next as
+// on 10-25 from 18:00Z, doesn't swing the pace every minute: it pulls back
+// no further than its start, and grows only after a growStep with no strain.
+func TestPaceSettlesUnderAHoveringLoad(t *testing.T) {
+	p := pace{limit: 6, start: 4}
+	now := time.Date(2026, 10, 25, 18, 0, 0, 0, time.UTC)
+	p.at = now.Add(-growStep)
+	changes, last := 0, p.limit
+	for i := range 120 { // two hours, a reading a minute
+		now = now.Add(paceStep)
+		strain := ""
+		if i%2 == 0 {
+			strain = "machine loaded (load 30 on 20 cores, limit 1 per core)"
+		}
+		l := p.next(now, p.limit, true, strain, true, 4, 0)
+		if l < 4 {
+			t.Fatalf("minute %d: load alone pulled the pace under its start: %d", i, l)
+		}
+		if l != last {
+			changes, last = changes+1, l
+		}
+	}
+	if changes > 2 {
+		t.Fatalf("the pace changed %d times in two hours of a hovering load", changes)
+	}
+	if last != 4 {
+		t.Fatalf("settled at %d, want its start 4", last)
+	}
+	for range 3 { // the load clears: still no growth within a growStep of it
+		now = now.Add(paceStep)
+		if l := p.next(now, 4, true, "", true, 4, 0); l != 4 {
+			t.Fatalf("grew within a growStep of the last strain: %d", l)
+		}
+	}
+	now = now.Add(paceStep)
+	if l := p.next(now, 4, true, "", true, 4, 0); l != 5 {
+		t.Fatalf("a growStep clear: %d, want 5", l)
 	}
 }
 
@@ -79,7 +122,7 @@ func TestPaceBlindAndAfterARestart(t *testing.T) {
 	if l := p.next(now, 4, true, "the workers' plan is nearly spent (5% left)", false, 4, 0); l != 3 {
 		t.Fatalf("a spent plan: %d, want 3", l)
 	}
-	now = now.Add(paceStep)
+	now = now.Add(growStep)
 	if l := p.next(now, 3, true, "", false, 4, 0); l != 4 {
 		t.Fatalf("back after the plan: %d, want 4", l)
 	}
@@ -130,7 +173,18 @@ func TestPaceHoldsAndFreesTheQueueAndChecks(t *testing.T) {
 		}
 	}
 	want(a, StageWorking, "")
-	want(b, StageQueued, "waiting for a worker (pace 1 (pulled back: machine loaded))")
+	want(b, StageQueued, "waiting for a worker (at the pace)")
+	// The pace moving at the same limit or below leaves a waiting task as
+	// saved: its reason doesn't carry the live pace.
+	saved := stageOf(t, m, b).Updated
+	set(&m.workers, 1, defaultWorkers)
+	m.workers.mu.Lock()
+	m.workers.why = "grew: room on the machine and plan"
+	m.workers.mu.Unlock()
+	tick(m)
+	if got := stageOf(t, m, b); !got.Updated.Equal(saved) {
+		t.Fatalf("a pace move re-saved a waiting task: reason %q", got.Reason)
+	}
 	set(&m.workers, 2, defaultWorkers)
 	tick(m)
 	want(b, StageWorking, "")
@@ -156,6 +210,90 @@ func TestPaceHoldsAndFreesTheQueueAndChecks(t *testing.T) {
 	first()
 }
 
+// Under strain with nothing running, the strain isn't the Hive's: the limit
+// stays, at most at its start, rather than falling to 1 and taking minutes
+// to climb back. This holds for the checks' pace as for the workers'.
+func TestPaceUnderStrainWithNothingRunning(t *testing.T) {
+	now := time.Now()
+	for _, c := range []struct {
+		name               string
+		limit, start, want int
+	}{
+		{"grown past its start", 8, 4, 4},
+		{"below its start", 3, 4, 3},
+		{"the checks at their start", 2, 2, 2},
+	} {
+		p := pace{limit: c.limit, start: c.start, at: now.Add(-paceStep)}
+		if l := p.next(now, 0, true, "machine loaded", true, c.start, 0); l != c.want {
+			t.Errorf("%s: %d, want %d", c.name, l, c.want)
+		}
+	}
+}
+
+// With no ceiling set, the workers' and checks' paces still stop at a
+// ceiling sized to the machine.
+func TestPaceHasASafetyCeiling(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers, cfg.MaxChecks = 0, 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 1e6 // watched, never strained
+	if _, watching := machine(cfg); !watching {
+		t.Skip("no /proc/loadavg here")
+	}
+	m.C.WS.SaveConfig(cfg)
+	m.workers = pace{limit: safeWorkers(), start: defaultWorkers, at: time.Now().Add(-paceStep)}
+	if l := m.paceWorkers(cfg, safeWorkers(), true); l != safeWorkers() {
+		t.Fatalf("workers grew past the safety ceiling %d: %d", safeWorkers(), l)
+	}
+	m.checks = pace{limit: safeChecks(), start: core.DefaultMaxChecks(), at: time.Now().Add(-paceStep)}
+	m.paceChecks()
+	if l := m.checks.get(); l != safeChecks() {
+		t.Fatalf("checks past the safety ceiling %d: %d", safeChecks(), l)
+	}
+}
+
+// The workers' pace grows only for a brief that waits on the limit itself:
+// one waiting on another's files would leave the new slot empty. When it
+// does grow, the brief starts in the same tick.
+func TestPaceGrowsOnlyForBriefsTheLimitHolds(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers, cfg.MaxChecks = 0, 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 1e6
+	if _, watching := machine(cfg); !watching {
+		t.Skip("no /proc/loadavg here")
+	}
+	m.C.WS.SaveConfig(cfg)
+	set := func(l int) {
+		m.workers.mu.Lock()
+		m.workers.limit, m.workers.start, m.workers.at = l, defaultWorkers, time.Now().Add(-growStep)
+		m.workers.mu.Unlock()
+	}
+	set(1)
+	a := file(t, m, "cap the checks", "Checks run via internal/core/effects.go.")
+	tick(m)
+	b := file(t, m, "hold strained turns", "Also in internal/core/effects.go, launch.")
+	set(1)
+	tick(m)
+	if got := stageOf(t, m, b); got.Stage != StageQueued || !strings.Contains(got.Reason, "both touch") {
+		t.Fatalf("overlapping brief: stage %q reason %q", got.Stage, got.Reason)
+	}
+	if l := m.workers.get(); l != 1 {
+		t.Fatalf("grew for a brief that waits on another's files: %d", l)
+	}
+	c := file(t, m, "show the queue", "On the dashboard, internal/tui/views.go.")
+	set(1)
+	tick(m)
+	if l := m.workers.get(); l != 2 {
+		t.Fatalf("didn't grow for a brief the limit holds: %d", l)
+	}
+	for _, task := range []Task{a, c} {
+		if got := stageOf(t, m, task); got.Stage != StageWorking {
+			t.Fatalf("%q: stage %q reason %q", task.Title, got.Stage, got.Reason)
+		}
+	}
+}
+
 // Workers pull back when their plan runs well ahead of its five-hour window,
 // as on 10-25, when it ran out over an hour before each reset; on the clock
 // they don't.
@@ -173,7 +311,66 @@ func TestPacePullsBackAheadOfTheWindow(t *testing.T) {
 		t.Fatalf("on the clock: %q", why)
 	}
 	read(0.8, 3*time.Hour)
-	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of its five-hour window") {
+	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of the clock") {
 		t.Fatalf("40%% ahead: %q", why)
+	}
+}
+
+// Load alone holds no worker from starting up to the pace's start, only past
+// it; any other strain holds every start.
+func TestLoadHoldsOnlyPastTheStart(t *testing.T) {
+	load, mem := "machine loaded (load 40 on 20 cores, limit 1 per core)", "machine low on memory (900 MB free, floor 1024 MB)"
+	for _, c := range []struct {
+		strain  string
+		working int
+		want    bool
+	}{{"", 9, false}, {load, 0, false}, {load, 3, false}, {load, 4, true}, {mem, 0, true}} {
+		if got := loadHolds(c.strain, c.working, 4); got != c.want {
+			t.Errorf("%q with %d at work: holds %v, want %v", c.strain, c.working, got, c.want)
+		}
+	}
+}
+
+// Under load, a plan running ahead of its window is still seen, and pulls the
+// workers under their start as load alone wouldn't.
+func TestPaceSeesThePlanUnderLoad(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 1e-9
+	if why, _ := machine(cfg); !onlyLoad(why) {
+		t.Skip("no load to read here")
+	}
+	m.C.WS.SaveConfig(cfg)
+	pick := cfg.Route("worker", "")[0]
+	reset := time.Now().Add(3 * time.Hour)
+	m.C.J.MustAppend("plan.usage", core.Plan{Harness: pick.Harness, Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour",
+		Windows: map[string]harness.Window{"five_hour": {Utilization: 0.8, ResetsAt: reset}}}})
+	m.workers = pace{limit: 4, start: defaultWorkers, at: time.Now().Add(-paceStep)}
+	if l := m.paceWorkers(cfg, 2, true); l != 1 || !strings.Contains(m.workers.String(), "ahead of the clock") {
+		t.Fatalf("under load with the plan ahead: %s, want 1 for the plan", m.workers.String())
+	}
+}
+
+// The week is paced too: on 10-25 a login's week stood at 75% a day after
+// its reset, on course to run out five and a half days early, while its
+// five-hour window was on the clock.
+func TestPacePullsBackAheadOfTheWeek(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	pick := cfg.Route("worker", "")[0]
+	read := func(week float64, weekLeft time.Duration) {
+		reset := time.Now().Add(3 * time.Hour)
+		m.C.J.MustAppend("plan.usage", core.Plan{Harness: pick.Harness, Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour",
+			Windows: map[string]harness.Window{"five_hour": {Utilization: 0.3, ResetsAt: reset},
+				"seven_day": {Utilization: week, ResetsAt: time.Now().Add(weekLeft)}}}})
+	}
+	read(0.5, 3*24*time.Hour)
+	if why := m.planSpent(cfg); why != "" {
+		t.Fatalf("on the clock in the week: %q", why)
+	}
+	read(0.75, 6*24*time.Hour)
+	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of the clock") {
+		t.Fatalf("a week 75%% spent in its first day: %q", why)
 	}
 }

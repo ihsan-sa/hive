@@ -3,6 +3,7 @@ package work
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -88,24 +89,26 @@ func TestSelfGateKeepMerges(t *testing.T) {
 	}
 }
 
-// A head that lacks main is brought up to date before the gate runs: the
-// gate judges what would land, not a branch cut before main fixed a test.
-func TestSelfGateCatchesUpFirst(t *testing.T) {
+// A head that lacks main goes to the gate as it is, against main: the gate
+// merges main in its own clone, so the branch isn't pushed and tested again
+// on every move of main while it waits for a gate.
+func TestSelfGateJudgesTheHeadWithMainIn(t *testing.T) {
 	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	pushMain(t, f, map[string]string{"other.go": "package p\n"})
+	main := strings.TrimSpace(must(t, f.RepoPath("me/p"), "rev-parse", "main"))
 	old := task.SHA
 	mergeOnce(t, m, task, p)
 	m.Wait()
-	if len(*jobs) != 0 {
-		t.Fatalf("the gate ran on %s, a head without main", core.Short((*jobs)[0].Head))
+	if task.SHA != old {
+		t.Fatalf("the branch moved to %s before the gate: want its head judged with main merged in by the gate", core.Short(task.SHA))
 	}
-	if task.SHA == old || task.Stage != StageTesting {
-		t.Fatalf("stage %q, head moved %v: want brought up to date and tested again", task.Stage, task.SHA != old)
+	if len(*jobs) != 1 || (*jobs)[0].Head != old || (*jobs)[0].Main != main {
+		t.Fatalf("gate jobs %+v: want one on %s against main at %s", *jobs, core.Short(old), core.Short(main))
 	}
 }
 
-// A rollback goes back to the worker with the report and the lesson to
-// record, and the PR stays open.
+// A rollback goes back to the worker with the report, the lesson to record
+// and a fresh main.bundle, and the PR stays open.
 func TestSelfGateRollbackSendsBack(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
 	gateOnce(t, m, task, p)
@@ -117,6 +120,9 @@ func TestSelfGateRollbackSendsBack(t *testing.T) {
 	}
 	if raw, err := os.ReadFile(filepath.Join(m.C.WS.RunRO(task.Worker), gateReportFile)); err != nil || !strings.Contains(string(raw), "probe table") {
 		t.Fatalf("the worker has no report: %v", err)
+	}
+	if msg := queued(m, task.Worker); !strings.Contains(msg, "main.bundle holds main at") {
+		t.Fatalf("the rollback went back without main.bundle:\n%s", msg)
 	}
 	if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); !strings.Contains(c, "Recursive gate: ROLLED BACK") {
 		t.Fatalf("the PR doesn't say it was rolled back:\n%s", c)
@@ -610,6 +616,39 @@ func TestAimFixCancelsItsGate(t *testing.T) {
 	}
 }
 
+// An aim asked while a step holds the task isn't refused: it is set as the
+// step ends, and a fix cancels the gate at once.
+func TestAimWhileAStepRuns(t *testing.T) {
+	m, task, _, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.gating = map[string]*gateRun{"g": {key: "g", task: task.ID}}
+	m.mu.Unlock()
+	lead := core.Run{ID: "lead-1", Role: "lead"}
+	done := make(chan error, 1)
+	go func() {
+		out, err := m.opAim(lead, []byte(`{"task":"`+task.ID+`","aim":"fix","why":"a plain fix"}`))
+		if err == nil && !strings.Contains(out.(map[string]string)["note"], "as that step ends") {
+			err = fmt.Errorf("no note that it waits: %+v", out)
+		}
+		done <- err
+	}()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	dropped := m.gating["g"].dropped
+	m.mu.Unlock()
+	if got, _ := m.Get(task.ID); !got.Gain() || !dropped {
+		t.Fatalf("aim %q before the step ended, gate dropped %v: want unchanged, and the gate cancelled", got.Aim, dropped)
+	}
+	m.release(task.ID)
+	got, _ := m.Get(task.ID)
+	if n := len(got.Log); got.Gain() || got.AimWhy != "a plain fix" || n < 2 || !strings.Contains(got.Log[n-2].Text, "aim set by lead-1") || !strings.Contains(got.Log[n-1].Text, "cancelled") {
+		t.Fatalf("aim %q (%q), log %+v after the step: want the fix set and its gate's cancel said", got.Aim, got.AimWhy, got.Log)
+	}
+}
+
 // A worker whose gain the gate rolled back can't make it a fix on its own
 // word, which would let a change move its own bar; the lead can.
 func TestWorkerCantUnaimARolledBackGain(t *testing.T) {
@@ -651,6 +690,22 @@ func TestBriefAim(t *testing.T) {
 	u, _ := m.File(Brief{Project: p.Name, Title: "tidy the merge loop"})
 	if !u.Gain() || !strings.Contains(u.Log[len(u.Log)-1].Text, "taken as a gain") {
 		t.Fatalf("an unclear brief: aim %q, log %+v", u.Aim, u.Log)
+	}
+	// A brief that says no aim but names something broken is a fix.
+	for _, b := range []Brief{
+		{Title: "The pace pulls back on check timeouts, flakes and slow turns"},
+		{Title: "A review follow-up whose worker makes no change ends done, not blocked"},
+		{Title: "forge-failures.md names main as the base", Known: "It names today's main. The base it names is wrong when CI tested an older one."},
+		{Title: "aim can be set while a step runs", Known: "hive agent aim was refused three times."},
+	} {
+		b.Project = p.Name
+		fb, err := m.File(b)
+		if err != nil || !fb.Fix() || !strings.HasPrefix(fb.AimWhy, "the brief names something broken: ") {
+			t.Fatalf("%q: aim %q (%q), %v: want a fix", b.Title, fb.Aim, fb.AimWhy, err)
+		}
+	}
+	if fb, _ := m.File(Brief{Project: p.Name, Title: "speed up the fix path", Known: "The gate fails often.", Aim: "gain"}); !fb.Gain() {
+		t.Fatalf("a brief that says it aims at a gain was taken as %s", fb.AimWord())
 	}
 	main, _ := m.C.Effects.Sync(p)
 	if b := m.renderBrief(&g, p, main); !strings.Contains(b, "Aim: a gain (aims at a measurable gain)") {
@@ -743,20 +798,26 @@ func TestGatePace(t *testing.T) {
 	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
 	strain, watching := "", true
 	gateMachine = func(core.Config) (string, bool) { return strain, watching }
+	j, err := core.OpenJournal(filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	fresh := func() *Module { return &Module{C: &core.Core{J: j}} }
 	now := time.Now()
-	m := &Module{}
+	m := fresh()
 	cfg := core.Config{MaxGates: 0}
 	top := gateCeiling(cfg)
 	if l, _ := m.gateLimit(now, 0, cfg); l != min(2, top) {
 		t.Fatalf("start %d, want %d", l, min(2, top))
 	}
 	cfg.MaxGates = 4
-	m = &Module{}
+	m = fresh()
 	if l, _ := m.gateLimit(now, 4, cfg); l != 4 {
 		t.Fatalf("start under max_gates 4: %d", l)
 	}
 	cfg.MaxGates = 5
-	m = &Module{}
+	m = fresh()
 	m.gateLimit(now, 3, cfg) // starts at 5
 	m.gates.limit = 3        // as if pulled back
 	if l, _ := m.gateLimit(now.Add(gateStep-time.Second), 3, cfg); l != 3 {
@@ -775,12 +836,45 @@ func TestGatePace(t *testing.T) {
 	if l, why := m.gateLimit(now.Add(4*gateStep), 5, cfg); l != 3 || why != strain {
 		t.Fatalf("limit %d (%q) under strain, want 3", l, why)
 	}
+	var changes []string // a change past the first read is journaled
+	j.Replay(func(e core.Event) {
+		var c struct {
+			Limit    string
+			From, To int
+		}
+		if e.Kind == "pace.changed" && e.Decode(&c) == nil {
+			changes = append(changes, fmt.Sprintf("%s %d>%d", c.Limit, c.From, c.To))
+		}
+	})
+	if got := strings.Join(changes, ", "); got != "gates 3>4, gates 4>5, gates 5>3" {
+		t.Fatalf("journaled %q", got)
+	}
 	strain, watching, cfg.MaxGates = "", false, 0
-	m = &Module{}
+	m = fresh()
 	if l, _ := m.gateLimit(now, 0, cfg); l != 1 {
 		t.Fatalf("limit %d where the machine can't be read, want 1", l)
 	}
 	if l, _ := m.gateLimit(now.Add(gateStep), 1, cfg); l != 1 {
 		t.Fatalf("grew to %d unseen", l)
+	}
+}
+
+// A task whose head moved while its gate ran starts a run on the new head
+// and ends the one on the old: its verdict would judge what no longer lands.
+func TestNewHeadCancelsItsOldGate(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	maxGates(m, 3)
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) (string, bool) { return "", true }
+	cancelled := false
+	old := &gateRun{key: p.Name + "@oldhead@main", task: task.ID, cancel: func() { cancelled = true }}
+	other := &gateRun{key: "other", task: "t9", cancel: func() { t.Error("another task's run was cancelled") }}
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{old.key: old, other.key: other}
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if !old.dropped || !cancelled || other.dropped || len(*jobs) != 1 || (*jobs)[0].Head != task.SHA {
+		t.Fatalf("old dropped %v cancelled %v, other dropped %v, %d runs: want the old head's run ended and the new one started", old.dropped, cancelled, other.dropped, len(*jobs))
 	}
 }

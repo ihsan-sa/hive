@@ -392,13 +392,14 @@ func TestChecksRefusedReasons(t *testing.T) {
 }
 
 // An API read goes through gh's login as a plain GET, and a rate-limited one
-// comes back as RateLimited; the quota's reset is read from rate_limit.
+// comes back as RateLimited; the quota's reset is read from rate_limit, and
+// is no wait while calls are left (a secondary limit).
 func TestAPIGetOnTheLogin(t *testing.T) {
-	limited := false
+	limited, left := false, "0"
 	calls := stubGH(t, func(args []string) (string, string, error) {
 		switch {
 		case args[1] == "rate_limit":
-			return "1792900000\n", "", nil
+			return left + " 1792900000\n", "", nil
 		case limited:
 			return "", "HTTP 403: API rate limit exceeded for user ID 1.", errors.New("exit status 1")
 		}
@@ -421,6 +422,10 @@ func TestAPIGetOnTheLogin(t *testing.T) {
 	}
 	if at, err := r.RateReset("o/r"); err != nil || at.Unix() != 1792900000 {
 		t.Fatalf("reset %v, %v", at, err)
+	}
+	left = "4211"
+	if at, err := r.RateReset("o/r"); err != nil || !at.IsZero() {
+		t.Fatalf("a reset to wait for with calls left: %v, %v", at, err)
 	}
 }
 
@@ -445,5 +450,18 @@ func TestRunCmdTimeoutSaysSo(t *testing.T) {
 	_, _, err := runCmd(100*time.Millisecond, "", nil, "sleep", "5")
 	if err == nil || !TimedOut(err.Error()) || !strings.Contains(err.Error(), "timed out after 100ms") {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// TimedOut is the Hive's own timeout killing a call, git's or gh's, not any
+// kill: the kernel's OOM kill and a test's own timeout panic are the step's.
+func TestTimedOutIsOnlyTheHivesTimeout(t *testing.T) {
+	if _, err := gitOnce(time.Nanosecond, t.TempDir(), nil, "version"); err == nil || !TimedOut(err.Error()) {
+		t.Fatalf("git killed by its timeout: %v", err)
+	}
+	for _, s := range []string{"go test: signal: killed", "panic: test timed out after 2s\nFAIL\tp\t2.01s"} {
+		if TimedOut(s) {
+			t.Errorf("%q read as a timeout", s)
+		}
 	}
 }

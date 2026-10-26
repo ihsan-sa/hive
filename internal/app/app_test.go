@@ -199,6 +199,7 @@ func TestCreateProjectVisibility(t *testing.T) {
 	if !forge.IsPublic("someone/elsewhere") || visibility("elsewhere") != "public" {
 		t.Fatal("the person's yes didn't make the public repository")
 	}
+	a.C.Person.Handled()
 
 	// An existing private repository asked to be public stays as it is.
 	if _, err := forge.EnsureRepo("Hive-RSI-Lab/old", "", false); err != nil {
@@ -295,6 +296,8 @@ func TestCreateProjectPublicNo(t *testing.T) {
 	if !told() {
 		t.Fatal("the asking run wasn't told of the no")
 	}
+	// The no's handler may still be filing its events under the temp dir.
+	a.C.Person.Handled()
 	if _, ok := a.C.Projects.Get("nope"); ok || core.Exists(forge.RepoPath("someone/nope")) {
 		t.Fatal("a no still made the project")
 	}

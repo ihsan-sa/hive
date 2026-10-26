@@ -166,6 +166,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
 	w.OnMerged = func(t work.Task) { m.queue <- t }
+	w.Retest = m.retest
 	work.BestScore = m.Best
 	work.Measured = m.measured
 	c.Effects.Quarantined = m.QuarantinedTests
@@ -824,6 +825,9 @@ func (m *Module) lookIntoDip(p core.Project, t work.Task, reason string) {
 		return
 	}
 	if _, err := m.Work.File(work.Brief{Project: p.Name, From: "improve", Chat: t.Chat, Thread: t.Thread, Title: title,
+		// The failure its known quotes is the fix's, not one of its own; a
+		// revert it finds needed is marked a fix by its worker.
+		Aim: work.AimGain, Why: "a look into a fix's score dip, judged on the score",
 		Done: "You judged what made the score dip and said so in your account. If the fix itself made things worse, " +
 			"revert it (`git revert " + t.MergeSHA + "`), name what got worse, and mark the revert a fix " +
 			"(`hive agent aim --aim fix --why \"reverts " + core.Short(t.MergeSHA) + ": <what got worse>\"`) so it doesn't wait for the gate; if the dip is noise or comes from elsewhere, " +

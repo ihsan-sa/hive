@@ -141,13 +141,18 @@ type Config struct {
 	// machine and the plan carry (internal/mod/work/pace.go). Briefs past the
 	// limit wait in the queue, in order; 0 is no ceiling.
 	MaxWorkers int `json:"max_workers"`
-	// LoadMax holds new workers while the machine's 1-minute load per core is
-	// over it (Linux /proc/loadavg); 0 is off.
+	// LoadMax holds new workers past the pace's start while the machine's
+	// 1-minute load per core is over it (Linux /proc/loadavg); 0 is off.
 	LoadMax float64 `json:"load_max"`
 	// MaxChecks is the most checks (the gate's tests, scores and dry runs,
 	// improve's measures) that run at once, a ceiling over the pace as
 	// MaxWorkers is; the rest wait in order. 0 is no ceiling.
 	MaxChecks int `json:"max_checks"`
+	// Ceilings says max_workers and max_checks are the person's ceilings. A
+	// config without it is from before the pace (internal/mod/work/pace.go),
+	// when every install saved the then defaults (4, and the checks' start):
+	// reading one clears those two values, so the pace can grow there.
+	Ceilings bool `json:"ceilings"`
 	// MaxGates is the most recursive gate runs (self projects' gains, each
 	// two child Hives and their suites) at once, a ceiling over their pace;
 	// 0 is one per 6 cores (internal/mod/work/selfgate.go).
@@ -338,6 +343,7 @@ func DefaultConfig() Config {
 		MemPressureMax:  10,
 		CPUPressureMax:  40,
 		LoadMax:         1,
+		Ceilings:        true,
 		PlateauMerges:   3,
 		Schedules: map[string]string{
 			"improve.sweep":    "every 12h",
@@ -376,9 +382,19 @@ func (w Workspace) ReadConfig() (Config, error) {
 		// lead's; the old default ("sonnet") moves the lead to opus.
 		var had struct {
 			LeadModel *string `json:"lead_model"`
+			Ceilings  *bool   `json:"ceilings"`
 		}
 		if json.Unmarshal(raw, &had) == nil && had.LeadModel == nil && c.Model != "sonnet" {
 			c.LeadModel = c.Model
+		}
+		if had.Ceilings == nil {
+			if c.MaxWorkers == 4 {
+				c.MaxWorkers = 0
+			}
+			if c.MaxChecks == DefaultMaxChecks() {
+				c.MaxChecks = 0
+			}
+			c.Ceilings = true
 		}
 	} else if os.IsNotExist(err) {
 		err = nil
