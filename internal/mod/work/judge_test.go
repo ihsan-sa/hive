@@ -177,13 +177,25 @@ func TestACarriedVerdictIsJudgedAtItsOwnMain(t *testing.T) {
 	}
 }
 
-// A measured keep doesn't wait on a judge that has been parked JudgeParkWait
-// (issue #983): the judge is stopped, the numbers merge it, and the PR says
-// no judge weighed it. A rollback whose
-// judge is parked still waits, as the judge may keep it.
+// A clear keep, a metric gain beyond the gate's noise, doesn't wait on a
+// judge that has been parked JudgeParkWait (issue #983): the judge is
+// stopped, the numbers merge it, and the PR says no judge weighed it. A
+// rollback, or a keep won on a pass rate the control's flake could have
+// given it, still waits for its judge.
 func TestAParkedJudgeDoesntHoldAKeep(t *testing.T) {
-	for _, outcome := range []string{core.GateKeep, core.GateRollback} {
+	for _, c := range []struct{ outcome, reason string }{
+		{core.GateKeep, "better than the current Hive with no regression: benchmark seconds: candidate 5.468, control 11.55 (noise ±2.54, n=3/3)"},
+		{core.GateKeep, "better than the current Hive with no regression: e2e passes 3/3, the control 1/3"},
+		{core.GateRollback, "worse than the current Hive: e2e passes 1/3, the control 3/3"},
+	} {
+		outcome, clear := c.outcome, strings.Contains(c.reason, "noise")
 		m, task, p, f := measuredRig(t, outcome)
+		inner := m.Gate
+		m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+			g := inner(ctx, j)
+			g.Reason = c.reason
+			return g
+		}
 		main, _ := m.C.Effects.Sync(p)
 		gateOnce(t, m, task, p)
 		id := "j-" + task.ID + "-" + core.Short(task.SHA) + "-" + core.Short(main) + "-0"
@@ -208,9 +220,11 @@ func TestAParkedJudgeDoesntHoldAKeep(t *testing.T) {
 		again()
 		JudgeParkWait = wait
 		r, _ := m.C.Runs.Get(id)
-		if outcome == core.GateRollback {
+		if !clear {
+			// A rollback, or a keep won on a pass rate the control's flake
+			// could have given it, waits for its judge.
 			if task.Stage != StageMerging || !strings.Contains(task.Reason, "judge") || r.Terminal() {
-				t.Fatalf("a rollback with its judge parked: stage %q, reason %q, judge %s", task.Stage, task.Reason, r.Status)
+				t.Fatalf("%s with its judge parked: stage %q, reason %q, judge %s", c.reason, task.Stage, task.Reason, r.Status)
 			}
 			continue
 		}
