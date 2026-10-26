@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -133,7 +132,6 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 			}
 			t.JudgeTries[key] = JudgeTries
 			m.save(t, "the gate's numbers decide unjudged: "+why)
-			m.gateLesson(p, g, "")
 			return false, false, nil
 		}
 		w, _ := m.C.Runs.Get(t.Worker)
@@ -178,9 +176,6 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 		t.JudgeTries[key]++
 		if t.JudgeTries[key] >= JudgeTries {
 			m.save(t, fmt.Sprintf("the judge gave no usable answer %d times, so the gate's numbers decide: %s", JudgeTries, GateWord(g.Outcome)))
-			if !numbers {
-				m.gateLesson(p, g, "") // the gate left it to the judge (--judged)
-			}
 			return numbers, false, nil
 		}
 		m.save(t, "the judge gave no usable answer; asking again")
@@ -193,36 +188,5 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 	word := map[string]string{core.GateKeep: "KEEP", core.GateRollback: "ROLL BACK"}
 	m.comment(p.Repo, t.PR.Number, fmt.Sprintf("**Judge (%s): %s** %s against main at %s; the gate's numbers said %s.\n\n%s", r.Model, word[verdict], core.Short(g.Head), core.Short(g.Main), GateWord(g.Outcome), summary))
 	m.save(t, fmt.Sprintf("the judge (%s): %s; the gate's numbers said %s", r.Model, word[verdict], GateWord(g.Outcome)))
-	if verdict == core.GateRollback {
-		// The gate leaves a measured rollback's lesson to the judge (--judged).
-		m.gateLesson(p, g, r.Model)
-	}
 	return verdict == core.GateKeep, false, nil
-}
-
-// gateLesson writes a measured rollback's line to the recursive gate's
-// lessons, which the gate left to the judge (--judged): judge names the
-// model that rolled it back, "" when the numbers decided. The line is the
-// gate's own words, never the judge's: its summary read the candidate's diff.
-func (m *Module) gateLesson(p core.Project, g core.GateResult, judge string) {
-	lessons := filepath.Join(m.C.WS.Gates(), p.Name, "recursive", "lessons.md")
-	raw, _ := os.ReadFile(lessons)
-	s := string(raw)
-	if strings.TrimSpace(s) == "" {
-		s = "# Lessons\n\nWhat was tried and why it didn't stay. Read before working here.\n\n"
-	}
-	if !strings.HasSuffix(s, "\n") {
-		s += "\n"
-	}
-	day := time.Now().UTC().Format("2006-01-02")
-	switch {
-	case judge == "":
-		s += fmt.Sprintf("- The gate rolled back %s (%s): %s\n", core.Short(g.Head), day, g.Reason)
-	case g.Outcome == core.GateKeep:
-		s += fmt.Sprintf("- %s was kept by the gate's numbers and rolled back by its judge (%s, %s); the numbers said: %s\n", core.Short(g.Head), judge, day, g.Reason)
-	default:
-		s += fmt.Sprintf("- The gate rolled back %s (%s), as its judge decided: %s\n", core.Short(g.Head), day, g.Reason)
-	}
-	os.MkdirAll(filepath.Dir(lessons), 0o755)
-	os.WriteFile(lessons, []byte(s), 0o644)
 }

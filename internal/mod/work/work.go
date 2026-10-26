@@ -1274,7 +1274,6 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 				items = append(items, l)
 			}
 		}
-		items = append(items, m.gateLessons(p, lessons)...)
 		if len(items) > 12 {
 			items = items[len(items)-12:]
 		}
