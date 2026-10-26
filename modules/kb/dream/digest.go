@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -84,6 +85,8 @@ func digest(in Input, p Pass, notes map[string]*Note, hidden map[string]bool, da
 			said = append(said, "- "+s.At.UTC().Format("Jan 2 15:04")+" in "+s.Chat+": “"+clip(s.Text, 160)+"”")
 		}
 	}
+	learned = slices.DeleteFunc(learned, func(l string) bool { return unnamed(l, hidden) == "" })
+	said = slices.DeleteFunc(said, func(l string) bool { return unnamed(l, hidden) == "" })
 	if len(said) > 3 {
 		said = said[len(said)-3:]
 	}

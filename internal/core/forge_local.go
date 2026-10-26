@@ -293,7 +293,7 @@ func (l *Local) SetDraft(repo string, number int, draft bool) error {
 }
 
 // ReadyPR takes a draft out of draft while its head is still sha.
-func (l *Local) ReadyPR(repo string, number int, sha string) error {
+func (l *Local) ReadyPR(repo string, number int, sha string) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	s := l.load()
@@ -303,19 +303,20 @@ func (l *Local) ReadyPR(repo string, number int, sha string) error {
 			continue
 		}
 		if p.State != "OPEN" {
-			return fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
+			return false, fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
 		}
 		l.refresh(repo, p)
 		if p.HeadSHA != sha {
-			return fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+			return false, fmt.Errorf("PR #%d head is %s, not the checked commit %s: %w", number, short(p.HeadSHA), short(sha), ErrHeadMoved)
 		}
-		if p.Draft {
-			p.Draft = false
-			l.save(s)
+		if !p.Draft {
+			return false, nil
 		}
-		return nil
+		p.Draft = false
+		l.save(s)
+		return true, nil
 	}
-	return ErrNotFound
+	return false, ErrNotFound
 }
 
 // LocalMergeMessage is the local forge's squash message for PR number at
@@ -427,9 +428,16 @@ func (l *Local) CloseIssue(repo string, number int) error {
 
 // PRs lists a repo's pull requests (tests read them).
 func (l *Local) PRs(repo string) []PR {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
 	var out []PR
-	for _, p := range l.load().PRs[repo] {
-		out = append(out, p.PR)
+	for i := range s.PRs[repo] {
+		// As GetPR sees it: a squash pushed by a MergePR killed before it
+		// saved is that PR's merge. Read only, not saved: the daemon writing
+		// the same file is another process.
+		l.refresh(repo, &s.PRs[repo][i])
+		out = append(out, s.PRs[repo][i].PR)
 	}
 	return out
 }
