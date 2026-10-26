@@ -1011,3 +1011,23 @@ func TestBriefAimReplay927(t *testing.T) {
 		t.Fatalf("%d of %d briefs taken as fixes (%v)", fixes, len(briefs), by)
 	}
 }
+
+// A run on the task's same head goes on when main moves under it: main
+// moves more often than a gate takes, and restarting it there left no gate
+// ever finishing. Its verdict is judged against the main it ran on.
+func TestMainMovingKeepsTheGateRunning(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	maxGates(m, 3)
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) (string, bool) { return "", true }
+	cancelled := false
+	run := &gateRun{key: p.Name + "@" + task.SHA + "@oldmain", task: task.ID, head: task.SHA, main: "oldmain", since: time.Now(), cancel: func() { cancelled = true }}
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{run.key: run}
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if run.dropped || cancelled || len(*jobs) != 0 || task.Stage != StageMerging || !strings.Contains(task.Reason, "main has moved") {
+		t.Fatalf("dropped %v cancelled %v, %d runs, stage %q, reason %q: want the run going on and the task waiting on it", run.dropped, cancelled, len(*jobs), task.Stage, task.Reason)
+	}
+}

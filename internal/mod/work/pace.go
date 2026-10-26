@@ -227,6 +227,18 @@ const (
 	rankFrees = 2
 )
 
+// RankWhy says why a waiting check of rank r goes ahead of the line, or ""
+// for one that keeps its place, for the dashboard and the status op.
+func RankWhy(r int) string {
+	switch {
+	case r >= rankFrees:
+		return "frees queued briefs"
+	case r == rankFix:
+		return "a fix"
+	}
+	return ""
+}
+
 // checkRank ranks a check of sha on project by the task whose head it is.
 func (m *Module) checkRank(project, sha, _ string) int {
 	m.mu.Lock()

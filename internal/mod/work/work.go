@@ -1401,7 +1401,7 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	// waits: behind a backlog of checks, a worker that finished meanwhile
 	// sat in working for as long as the backlog took. A checkpoint is only
 	// a bonus, so it waits for a free slot instead, looked at again later.
-	if _, waiting := m.C.Effects.Slots.State(); len(waiting) > 0 {
+	if m.C.Effects.Slots.Busy() {
 		return nil
 	}
 	sha, err := m.C.Effects.Extract(p, r, t.Base)
