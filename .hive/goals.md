@@ -14,6 +14,23 @@ Soft layers are a big part of that loop (23:21): sub-Hives in this Hive's state,
 
 You land a change you proposed yourself, which beats your benchmark, with nobody in between. Then you release it and update your own install to that release.
 
+## Then the real-evaluation milestone
+
+From the person, via the box session (2026-10-25 19:27 local), with a ChatGPT review of what labs working on recursive self-improvement would look for: "one convincing result showing that its self-improvement produces better performance on real work."
+
+The milestone: show, on held-out real work, that the Hive after its own improvement does better than it did before improving and better than plain Claude Code.
+
+- Three arms: plain Claude Code, a frozen Hive (self-improvement off), and the Hive after autonomous improvement.
+- The same tasks, model version, tools and total inference budget for each.
+- Measured from outside: verified completion, total cost (reviewers, failed attempts and retries included), elapsed time, and human interventions.
+- A small pilot first, then 30-50 substantial tasks across several repositories, with repeated runs.
+- The held-out tasks stay apart from anything the Hive's own improvement loop sees (its benchmark, gate, e2e and score).
+- A short, reproducible report: exact commits, failures, and which changes the agents found versus what the person did.
+
+It has its own project, hive-eval, whose `.hive/goals.md` holds the same ask. It measures the loop above rather than replacing it: the first milestone comes first, and changes to the Hive that this one needs (a frozen mode, budget accounting, counting interventions) count as work for this project.
+
+Where it stands (2026-10-26): hive-eval exists with its goals and a README; no pilot has run yet.
+
 ## First change (done)
 
 Done: #114 (a token per repo owner) merged, and has been live on this machine since v0.1.17. H0 now runs v0.1.57 (since 2026-10-24 14:25Z) and follows pre-releases by itself (#237, #322); releases/latest is v0.1.55. Releases go out unsigned for now, by the person's choice. The ask as written:

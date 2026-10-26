@@ -111,12 +111,13 @@ func contains(l []string, s string) bool {
 }
 
 // eventually polls ok for up to four seconds.
+// eventually waits up to a minute for ok: a module's install clones and
+// builds, which on a slow, throttled machine took longer than 4s.
 func eventually(ok func() bool) bool {
-	for i := 0; i < 200; i++ {
+	for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		if ok() {
 			return true
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
 	return ok()
 }
@@ -702,6 +703,21 @@ func TestInstallRefusesSandboxPath(t *testing.T) {
 	}
 	if asks := g.c.Person.Open(); len(asks) != 0 {
 		t.Fatalf("a refused install reached the person: %+v", asks)
+	}
+}
+
+// The daemon's own temporary folder is the host's even under a sandbox root,
+// as when the score's e2e daemon runs with TMPDIR under /hive.
+func TestDaemonTempIsNotSandbox(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	defer func(r []string) { SandboxRoots = r }(SandboxRoots)
+	SandboxRoots = []string{tmp, "/work"}
+	if inSandbox(filepath.Join(tmp, "echo")) {
+		t.Error("a path in the daemon's temp folder was taken for a sandbox path")
+	}
+	if !inSandbox("/work/wordcount") {
+		t.Error("/work/wordcount isn't a sandbox path any more")
 	}
 }
 
