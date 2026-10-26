@@ -61,6 +61,7 @@ type Module struct {
 
 	mu     sync.Mutex
 	trials map[string]Trial // recorded, by task
+	order  map[string]int   // each recorded trial's place in the journal, by task
 }
 
 // ErrNoKey is a Probe of a model that needs a key nobody has stored yet.
@@ -110,7 +111,7 @@ func downOf(downs []core.Down, p core.Pick) (core.Down, bool) {
 
 // New registers the ops and the person's answer to a check seat's route.
 func New(c *core.Core, w *work.Module) *Module {
-	m := &Module{C: c, Work: w, trials: map[string]Trial{}, Probe: Probe}
+	m := &Module{C: c, Work: w, trials: map[string]Trial{}, order: map[string]int{}, Probe: Probe}
 	apply := func(e core.Event) {
 		if e.Kind != "model.trial" {
 			return
@@ -119,6 +120,7 @@ func New(c *core.Core, w *work.Module) *Module {
 		if e.Decode(&t) == nil {
 			m.mu.Lock()
 			m.trials[t.Task] = t
+			m.order[t.Task] = len(m.order) + 1
 			m.mu.Unlock()
 		}
 	}
@@ -363,11 +365,14 @@ func (m *Module) Tick() {
 			continue
 		}
 		tr := Trial{Task: t.ID, Model: t.Model, Project: t.Project, Title: t.Title, Outcome: t.Stage, Reason: t.Reason, Rounds: t.Reviews,
-			Minutes: int(t.Updated.Sub(t.Created).Minutes()), NoFinish: t.Stage == work.StageBlocked && strings.HasPrefix(t.Reason, core.NoFinish)}
+			Minutes: int(t.Updated.Sub(t.Created).Minutes())}
+		finished := false // a worker that called finish wrote its own reason, whatever its words
 		for _, r := range m.C.Runs.List(func(r *core.Run) bool { return r.Task == t.ID && r.Role == "worker" }) {
 			tr.Turns += r.Turn
 			tr.Cost += r.Cost
+			finished = finished || r.Finish != nil
 		}
+		tr.NoFinish = t.Stage == work.StageBlocked && strings.HasPrefix(t.Reason, core.NoFinish) && !finished
 		m.C.J.MustAppend("model.trial", tr)
 	}
 }
@@ -379,9 +384,10 @@ func (m *Module) Benched(p core.Pick) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var last Trial
+	at := 0
 	for _, t := range m.trials {
-		if tp, err := cfg.Pick(t.Model); err == nil && tp.Same(p) && t.Task > last.Task {
-			last = t
+		if tp, err := cfg.Pick(t.Model); err == nil && tp.Same(p) && m.order[t.Task] > at {
+			last, at = t, m.order[t.Task]
 		}
 	}
 	return last.NoFinish

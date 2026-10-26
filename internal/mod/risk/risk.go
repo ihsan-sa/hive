@@ -863,9 +863,9 @@ func (m *Module) onAnswer(a core.Ask) {
 	m.tell(req, text)
 }
 
-// SandboxRoots are where an agent's sandbox mounts its checkout and the
+// sandboxRoots are where an agent's sandbox mounts its checkout and the
 // Hive's folders; a path under one doesn't exist on the host.
-var SandboxRoots = []string{"/work", "/hive"}
+var sandboxRoots = []string{"/work", "/hive"}
 
 // inSandbox reports whether p is an agent's sandbox path. The daemon's own
 // temporary folder is the host's even when it sits under a root (a daemon
@@ -875,7 +875,7 @@ func inSandbox(p string) bool {
 	if tmp := filepath.Clean(os.TempDir()); p == tmp || strings.HasPrefix(p, tmp+"/") {
 		return false
 	}
-	for _, r := range SandboxRoots {
+	for _, r := range sandboxRoots {
 		if p == r || strings.HasPrefix(p, r+"/") {
 			return true
 		}
