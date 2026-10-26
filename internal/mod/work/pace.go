@@ -26,8 +26,8 @@ import (
 // Hives and builds beside 2-3 live turns, and cutting the workers to 1 or 2
 // hardly moved it while 51 tasks waited. Nor does load alone hold a worker
 // from starting while fewer than the start work (loadHolds), and it doesn't
-// hide a spent or ahead plan, which still pulls the workers under it. Nothing running is stopped; past
-// the limit, work waits in order. It pulls back at most once a step, so the
+// hide a spent or ahead plan, which still pulls the workers under it.
+// Nothing running is stopped; past the limit, work waits in order. It pulls back at most once a step, so the
 // readings (load is a 1-minute average) catch up with the last change before
 // the next, and grows more slowly than it pulls back, so a load hovering
 // round its limit doesn't swing it every minute (10-25: 30-55 changes an
