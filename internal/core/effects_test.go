@@ -120,8 +120,16 @@ func TestMergeNeedsCheckAndVerdictOnExactCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main, Subject: "feature"}
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no passing test") {
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no test run") {
 		t.Fatalf("merged without a test run: %v", err)
+	}
+	// A red run main's own run doesn't share (here main has none) is refused.
+	red := "echo '--- FAIL: TestClock (0.01s)'; echo 'FAIL\tp/a\t0.01s'; exit 1"
+	if ch := c.Effects.RunCheck(p, sha, "test", red); ch.OK {
+		t.Fatal("a failing test run passed")
+	}
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "red beyond") {
+		t.Fatalf("merged on a red test run main doesn't share: %v", err)
 	}
 	if ch := c.Effects.RunCheck(p, sha, "test", c.Effects.Config(p, main).Test); !ch.OK {
 		t.Fatalf("tests should pass: %s", ch.Output)
@@ -1394,6 +1402,16 @@ func TestSecurityWhere(t *testing.T) {
 		if got := c.ch.SecurityWhere(); got != c.want {
 			t.Errorf("%v: %q, want %q", c.ch.Security, got, c.want)
 		}
+	}
+}
+
+func TestTestedMerge(t *testing.T) {
+	h, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	if gh, gb := TestedMerge("##[group]Run actions/checkout@v4\nHEAD is now at 1234567 Merge " + h + " into " + b + "\n"); gh != h || gb != b {
+		t.Fatalf("got %q %q", gh, gb)
+	}
+	if gh, gb := TestedMerge("HEAD is now at 1234567 a push\n"); gh != "" || gb != "" {
+		t.Fatalf("got %q %q", gh, gb)
 	}
 }
 
