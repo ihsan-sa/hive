@@ -758,6 +758,10 @@ func (m *Module) afterKept(project, sha string) {
 		if by := m.rootRead(project, mg); by != "" {
 			fmt.Fprintf(&manifest, "  its root paths (%s) passed %s\n", strings.Join(mg.Root, ", "), by)
 			rootRead = append(rootRead, fmt.Sprintf("#%d (%s)", mg.PR, strings.Join(mg.Root, ", ")))
+		} else if mg.Diff == "" {
+			// Merged before effect.merged carried the diff: no read can be
+			// matched to it.
+			root = append(root, fmt.Sprintf("%s (#%d's merge record names no diff)", strings.Join(mg.Root, ", "), mg.PR))
 		} else {
 			root = append(root, mg.Root...)
 		}
@@ -964,6 +968,12 @@ func (m *Module) retryWaiting() {
 // a change to a root path on the security list: an outside read decides when
 // there is one, else the security seat and a majority of the panel said land
 // on its own diff. "" when nobody did.
+//
+// mg.Root is the merge's root-class paths, each of which ChangeOf put in both
+// Security and SecurityRoot at merge, listed or not; so SecurityRoot here asks
+// for the panel majority on purpose. The seats read the whole own diff, so
+// their land passes all of a merge's root paths together. Only root paths
+// reach this: a high path's security read isn't checked again at release.
 func (m *Module) rootRead(project string, mg merge) string {
 	if !m.C.Effects.SecurityOK(project, core.Change{Security: mg.Root, SecurityRoot: mg.Root, DiffID: mg.Diff}) {
 		return ""
