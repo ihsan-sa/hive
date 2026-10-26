@@ -130,6 +130,15 @@ func (s *Slots) fill() {
 	}
 }
 
+// Busy says whether an Acquire now would wait: every slot is taken, or
+// something already waits its turn.
+func (s *Slots) Busy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.size()
+	return len(s.waiting) > 0 || n > 0 && len(s.running) >= n
+}
+
 // State returns what holds a slot, oldest first, and what waits, in the
 // order it will start.
 func (s *Slots) State() (running, waiting []SlotUse) {
