@@ -13,3 +13,15 @@ func TestSwitchesAndValues(t *testing.T) {
 		t.Fatalf("parsed %v", got)
 	}
 }
+
+// A switch given true or false, as --apart true or --apart=false, reads as a
+// yes or no, while another key's "true" stays text.
+func TestSwitchValues(t *testing.T) {
+	got, err := parseArgs([]string{"--apart", "true", "--self=false", "--text", "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["apart"] != true || got["self"] != false || got["text"] != "true" {
+		t.Fatalf("parsed %v", got)
+	}
+}

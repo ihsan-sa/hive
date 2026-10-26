@@ -153,7 +153,7 @@ func Capped(h Harness, budget float64) error {
 // 0.153 release lists; a Claude model on Codex runs Codex's own default.
 func Models(harness string) []string {
 	if !builtin(harness) {
-		if s, ok := lookup(harness, false); ok {
+		if s, ok := lookup(harness); ok {
 			return slices.Clone(s.ModelList)
 		}
 		return nil
@@ -336,6 +336,18 @@ func LooksLimited(s string) bool {
 	return strings.Contains(s, "usage limit") || strings.Contains(s, "hit your limit") ||
 		(strings.Contains(s, "limit") && strings.Contains(s, "reset"))
 }
+
+// SaysLimited is the stricter LooksLimited, for where a miss is only a
+// failure asked about but a false match hides one: s names a usage, weekly or
+// hour limit, or a limit with when it resets ("resets 3pm"), not merely both
+// words somewhere.
+func SaysLimited(s string) bool {
+	l := strings.ToLower(s)
+	return strings.Contains(l, "usage limit") || namedLimit.MatchString(l) ||
+		strings.Contains(l, "limit") && limitReset.MatchString(l)
+}
+
+var namedLimit = regexp.MustCompile(`hit your (?:\w+ )?limit|(?:weekly|hour|session|opus|sonnet) limit`)
 
 // limitReset finds when a usage-limit message says the limit resets:
 // "resets Oct 26, 1pm (America/New_York)", "resets 3:30pm", "resets Oct 28, 12am".
