@@ -21,6 +21,14 @@ import (
 // decide alone.
 const JudgeTries = 3
 
+// JudgeParkWait is the longest a gate's keep waits on a parked judge: a
+// judge parked past it (at a usage limit, a model that can't answer) is
+// stopped and the numbers decide, since a keep beyond the gate's noise needs
+// no judge to merge. On 10-26 #868's keep waited 8 hours on a judge parked at
+// every login's limit while main stood still for 12 (issue #983). A rollback
+// still waits: the judge may keep what the numbers missed.
+const JudgeParkWait = 30 * time.Minute
+
 // JudgeCase is one change put to the judge.
 type JudgeCase struct {
 	ID      string // the run: named by the change, so a restart finds it
@@ -73,7 +81,8 @@ func ReadJudgement(r core.Run) (verdict, summary string, ok bool) {
 // judgeGate is the judge's call on a gate verdict that measured both sides:
 // keep says it merges, wait that the task is held for the judge. A verdict
 // that measured nothing (the candidate failed on its own first) stands as is,
-// as do the numbers once the judge gave no usable answer JudgeTries times.
+// as do the numbers once the judge gave no usable answer JudgeTries times,
+// and a keep whose judge is parked past JudgeParkWait.
 func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wait bool, err error) {
 	numbers := g.Outcome == core.GateKeep
 	if !g.Measured {
@@ -103,6 +112,15 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 		}
 		m.hold(t, p, fmt.Sprintf("%s: the gate said %s on %s, and its judge (%s) is weighing that with the change", GateWait, GateWord(g.Outcome), core.Short(g.Head), spec.Model))
 		return false, true, nil
+	}
+	if !r.Terminal() && g.Outcome == core.GateKeep && r.Status == core.StatusParked && r.ParkedUntil.After(time.Now().Add(JudgeParkWait)) {
+		m.C.Runs.Stop(r.ID, "the gate's keep merges on its numbers rather than wait for this judge")
+		if t.JudgeTries == nil {
+			t.JudgeTries = map[string]int{}
+		}
+		t.JudgeTries[key] = JudgeTries
+		m.save(t, fmt.Sprintf("the judge (%s) is parked until %s (%s), so the gate's keep, beyond its noise, merges on its numbers", r.Model, r.ParkedUntil.UTC().Format("15:04Z"), core.Clip(r.Reason, 200)))
+		return true, false, nil
 	}
 	if !r.Terminal() {
 		m.hold(t, p, fmt.Sprintf("%s: the gate said %s on %s, and its judge (%s) is weighing that with the change", GateWait, GateWord(g.Outcome), core.Short(g.Head), r.Model))

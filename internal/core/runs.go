@@ -225,18 +225,29 @@ func (p Plan) Key() string {
 // than spend the last of it.
 const WeeklyStop = 0.95
 
+// Reserved says whether role's runs may spend the reserve, the last of a
+// week past WeeklyStop: the checks (CheckRoles), so a change already written
+// can still be read, judged and merged. On 10-26 a gate's keep waited over
+// 8 hours for its judge, parked at 95% of every login's week, and main
+// didn't move for 12 (issue #983).
+func Reserved(role string) bool { return slices.Contains(CheckRoles, role) }
+
 // Parked reports whether the plan is at its usage limit, or at WeeklyStop of
 // its weekly window, until a reset still ahead.
 func (p Plan) Parked(now time.Time) bool { return !p.ParkedUntil(now).IsZero() }
 
 // ParkedUntil is when a parked plan (Parked) takes turns again, the later of
 // its limit's reset and its week's; zero when it isn't parked.
-func (p Plan) ParkedUntil(now time.Time) time.Time {
+func (p Plan) ParkedUntil(now time.Time) time.Time { return p.parkedFor(now, false) }
+
+// parkedFor is ParkedUntil for a run that may spend the reserve (Reserved)
+// or not: the reserve stops only at the usage limit itself.
+func (p Plan) parkedFor(now time.Time, reserve bool) time.Time {
 	var at time.Time
 	if p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now) {
 		at = p.Limit.ResetsAt
 	}
-	if w, ok := p.Weekly(now); ok && w.Utilization >= WeeklyStop && w.ResetsAt.After(at) {
+	if w, ok := p.Weekly(now); ok && !reserve && w.Utilization >= WeeklyStop && w.ResetsAt.After(at) {
 		at = w.ResetsAt
 	}
 	return at
@@ -974,23 +985,26 @@ func (rs *Runs) Plans() []Plan {
 
 // pickLogin chooses the login for a run's next turn: of those not parked at
 // their usage limit, the least used (Plan.Used), the machine's own first on a
-// tie. A
+// tie; a check (Reserved) takes the reserve past WeeklyStop too. A
 // bare run whose machine login has no credential file the Hive can read gets
 // no token, so the harness's own login on the host still works.
-func (rs *Runs) pickLogin(h, model, home string, bare bool) (Login, []string, error) {
+func (rs *Runs) pickLogin(h, model, home string, bare, reserve bool) (Login, []string, error) {
 	logins := rs.logins(h, model)
 	now := time.Now()
 	rs.mu.Lock()
 	use := func(l Login) float64 { return rs.plans[l.Key()].Used(now) }
 	var open []Login
 	for _, l := range logins {
-		if !rs.plans[l.Key()].Parked(now) {
+		if rs.plans[l.Key()].parkedFor(now, reserve).IsZero() {
 			open = append(open, l)
 		}
 	}
 	sort.SliceStable(open, func(i, j int) bool { return use(open[i]) < use(open[j]) })
 	rs.mu.Unlock()
 	limit := fmt.Errorf("every %s login is at its usage limit or %.0f%% of its weekly window", HarnessName(h), WeeklyStop*100)
+	if reserve {
+		limit = fmt.Errorf("every %s login is at its usage limit", HarnessName(h))
+	}
 	err := limit
 	for _, l := range open {
 		env, e := rs.tokens.AgentEnv(l, home)
@@ -1064,14 +1078,14 @@ func (rs *Runs) logins(h, model string) []Login {
 
 // freeAt is when a login for harness h and model next has room: now if one
 // has, else the earliest reset; a pick that can't answer (Down) waits for
-// its retry too.
-func (rs *Runs) freeAt(h, model string) time.Time {
+// its retry too. A check (Reserved) has room up to the limit itself.
+func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	now := time.Now()
 	var at time.Time
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	for _, l := range rs.logins(h, model) {
-		until := rs.plans[l.Key()].ParkedUntil(now)
+		until := rs.plans[l.Key()].parkedFor(now, reserve)
 		if until.IsZero() {
 			at = now
 			break
@@ -1101,7 +1115,7 @@ func (rs *Runs) next(r Run) (Pick, time.Time) {
 	picks, _ := rs.picks(r)
 	best, at := picks[0], time.Time{}
 	for _, p := range picks {
-		free := rs.freeAt(p.Harness, p.Model)
+		free := rs.freeAt(p.Harness, p.Model, Reserved(r.Role))
 		if !free.After(time.Now()) {
 			return p, free
 		}
@@ -1913,7 +1927,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			why := "the settings route you there"
 			if d, ok := rs.downFor(from); ok {
 				why = from.String() + " can't answer (" + Clip(d.Text, 200) + ")"
-			} else if rs.freeAt(from.Harness, from.Model).After(time.Now()) {
+			} else if rs.freeAt(from.Harness, from.Model, Reserved(r.Role)).After(time.Now()) {
 				why = from.String() + " is at its usage limit"
 			}
 			moved = fmt.Sprintf("You now run on %s: %s. This is a fresh session on your brief above; your checkout, commits and notes are as you left them, so look at them (git log, $HIVE_BOX/notes.md) and continue.", pick, why)
@@ -1992,9 +2006,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			}
 		}()
 	}
-	login, tok, err := rs.pickLogin(r.Harness, r.Model, codexHome, !sb.Isolated())
+	login, tok, err := rs.pickLogin(r.Harness, r.Model, codexHome, !sb.Isolated(), Reserved(r.Role))
 	if err != nil {
-		until := rs.freeAt(r.Harness, r.Model)
+		until := rs.freeAt(r.Harness, r.Model, Reserved(r.Role))
 		if !until.After(time.Now()) {
 			until = time.Now().Add(5 * time.Minute)
 		}

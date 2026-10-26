@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
@@ -172,6 +173,39 @@ func TestACarriedVerdictIsJudgedAtItsOwnMain(t *testing.T) {
 		}
 		if verdict == core.GateRollback && (task.Stage != StageWorking || !strings.Contains(task.Findings, "judge says rollback") || prState(t, f, task.PR.Number) != "OPEN") {
 			t.Fatalf("stage %q, findings %q: want the carried rollback sent back", task.Stage, task.Findings)
+		}
+	}
+}
+
+// A measured keep doesn't wait on a judge parked past JudgeParkWait (issue
+// #983): the judge is stopped and the numbers merge it. A rollback whose
+// judge is parked still waits, as the judge may keep it.
+func TestAParkedJudgeDoesntHoldAKeep(t *testing.T) {
+	for _, outcome := range []string{core.GateKeep, core.GateRollback} {
+		m, task, p, f := measuredRig(t, outcome)
+		main, _ := m.C.Effects.Sync(p)
+		gateOnce(t, m, task, p)
+		id := "j-" + task.ID + "-" + core.Short(task.SHA) + "-" + core.Short(main) + "-0"
+		if _, ok := m.C.Runs.Get(id); !ok {
+			t.Fatalf("%s: no judge run %s", outcome, id)
+		}
+		m.C.J.MustAppend("run.status", map[string]any{"id": id, "status": core.StatusParked, "reason": "login for claude: every claude login is at its usage limit", "until": time.Now().Add(8 * time.Hour)})
+		m.mu.Lock()
+		delete(m.later, task.ID)
+		m.mu.Unlock()
+		mergeOnce(t, m, task, p)
+		r, _ := m.C.Runs.Get(id)
+		if outcome == core.GateRollback {
+			if task.Stage != StageMerging || !strings.Contains(task.Reason, "judge") || r.Terminal() {
+				t.Fatalf("a rollback with its judge parked: stage %q, reason %q, judge %s", task.Stage, task.Reason, r.Status)
+			}
+			continue
+		}
+		if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+			t.Fatalf("a keep with its judge parked: stage %q, reason %q", task.Stage, task.Reason)
+		}
+		if r.Status != core.StatusStopped {
+			t.Fatalf("the parked judge is %s, want stopped", r.Status)
 		}
 	}
 }

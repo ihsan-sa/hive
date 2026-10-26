@@ -541,7 +541,7 @@ func TestVendorLimitMovesToFallback(t *testing.T) {
 	if got.Status != StatusParked || got.Reason != "usage limit; moving to open:free" {
 		t.Fatalf("a vendor's 429: %s %q", got.Status, got.Reason)
 	}
-	if !c.Runs.freeAt("open", "kimi").After(time.Now().Add(30 * time.Minute)) {
+	if !c.Runs.freeAt("open", "kimi", false).After(time.Now().Add(30 * time.Minute)) {
 		t.Fatal("the vendor's model isn't parked")
 	}
 	if d := c.Runs.Down(); len(d) != 0 {

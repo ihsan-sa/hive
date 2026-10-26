@@ -35,27 +35,27 @@ func TestLoginPoolParksALimitedLogin(t *testing.T) {
 		rs.append("plan.usage", Plan{Harness: "claude", Login: login, Limit: harness.RateLimit{Status: "rejected", ResetsAt: reset}})
 	}
 
-	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false); l.Key() != "claude" {
+	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false, false); l.Key() != "claude" {
 		t.Fatalf("with room on both, the machine's own login goes first, got %s", l.Key())
 	}
 	soon, later := time.Now().Add(time.Hour), time.Now().Add(2*time.Hour)
 	park("claude", later)
-	l, env, err := rs.pickLogin("claude", "", t.TempDir(), false)
+	l, env, err := rs.pickLogin("claude", "", t.TempDir(), false, false)
 	if err != nil || l.Key() != "claude:work" || env[0] != "TOKEN=claude:work" {
 		t.Fatalf("a parked login is passed over: %v %v %v", l, env, err)
 	}
-	if time.Until(rs.freeAt("claude", "")) > time.Second {
+	if time.Until(rs.freeAt("claude", "", false)) > time.Second {
 		t.Fatal("a run limited on one login moves to the other at once")
 	}
 	park("claude:work", soon)
-	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false); err == nil {
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err == nil {
 		t.Fatal("with every login parked, no login is handed out")
 	}
-	if at := rs.freeAt("claude", ""); at.Before(soon) || at.After(soon.Add(time.Minute)) {
+	if at := rs.freeAt("claude", "", false); at.Before(soon) || at.After(soon.Add(time.Minute)) {
 		t.Fatalf("runs wait for the first reset, got %v want ~%v", at, soon)
 	}
 	park("claude", time.Now().Add(-time.Minute))
-	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false); l.Key() != "claude" {
+	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false, false); l.Key() != "claude" {
 		t.Fatalf("a login whose reset has passed takes runs again, got %s", l.Key())
 	}
 }
@@ -77,10 +77,10 @@ func TestBareRunKeepsTheHostLogin(t *testing.T) {
 	}
 	defer j.Close()
 	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, noOwnLogin{}, func() []string { return nil })
-	if l, env, err := rs.pickLogin("claude", "", "", true); err != nil || l.Key() != "claude" || len(env) != 0 {
+	if l, env, err := rs.pickLogin("claude", "", "", true, false); err != nil || l.Key() != "claude" || len(env) != 0 {
 		t.Fatalf("bare: %v %v %v", l, env, err)
 	}
-	if _, _, err := rs.pickLogin("claude", "", "", false); err == nil {
+	if _, _, err := rs.pickLogin("claude", "", "", false, false); err == nil {
 		t.Fatal("a sandboxed run started with no credential")
 	}
 }
@@ -128,7 +128,7 @@ func TestLoginPoolRoutesByWindowUsage(t *testing.T) {
 	}
 	used("claude", 0.28)
 	used("claude:work", 0.05)
-	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false); l.Key() != "claude:work" {
+	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false, false); l.Key() != "claude:work" {
 		t.Fatalf("the less used login takes the run, got %s", l.Key())
 	}
 	for _, p := range rs.Plans() {
@@ -180,12 +180,12 @@ func TestLoginPoolPicksTheLeastUsedByItsWindows(t *testing.T) {
 		"seven_day": {Utilization: 0.10, ResetsAt: time.Now().Add(48 * time.Hour)},
 	}}}
 	rs.append("plan.usage", work)
-	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false); l.Key() != "claude:work" {
+	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false, false); l.Key() != "claude:work" {
 		t.Fatalf("the less-used added login goes first, got %s", l.Key())
 	}
 	work.Limit.Windows["seven_day"] = harness.Window{Utilization: 0.50, ResetsAt: time.Now().Add(48 * time.Hour)}
 	rs.append("plan.usage", work)
-	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false); l.Key() != "claude" {
+	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false, false); l.Key() != "claude" {
 		t.Fatalf("once the added login is fuller, the machine's own goes first, got %s", l.Key())
 	}
 }
@@ -288,7 +288,7 @@ func TestLimitIsTheReasonOverAMissingLogin(t *testing.T) {
 	defer j.Close()
 	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, ownAndEmpty{}, func() []string { return nil })
 	rs.append("plan.usage", Plan{Harness: "claude", Login: "claude", Limit: harness.RateLimit{Status: "rejected", ResetsAt: time.Now().Add(time.Hour)}})
-	_, _, err = rs.pickLogin("claude", "", t.TempDir(), false)
+	_, _, err = rs.pickLogin("claude", "", t.TempDir(), false, false)
 	if err == nil || !strings.HasPrefix(err.Error(), "every claude login is at its usage limit") || !strings.Contains(err.Error(), "claude:empty") {
 		t.Fatalf("parked for %v", err)
 	}
@@ -360,20 +360,41 @@ func TestWeeklyStopParksALogin(t *testing.T) {
 		t.Fatal("a login at 94% of its week is parked")
 	}
 	read("claude", 0.95, week)
-	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false); err != nil || l.Key() != "claude:work" {
+	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err != nil || l.Key() != "claude:work" {
 		t.Fatalf("with the machine's login at 95%% of its week, picked %s (%v)", l.Key(), err)
 	}
 	if h := rs.Headroom(Pick{Harness: "claude", Model: "opus"}); h < 0.49 || h > 0.51 {
 		t.Fatalf("headroom %v, want the other login's 0.5", h)
 	}
 	read("claude:work", 0.97, week.Add(time.Hour))
-	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false); err == nil || !strings.Contains(err.Error(), "95% of its weekly window") {
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err == nil || !strings.Contains(err.Error(), "95% of its weekly window") {
 		t.Fatalf("with every login at 95%% of its week: %v", err)
 	}
-	if at := rs.freeAt("claude", "opus"); at.Before(week) || at.After(week.Add(time.Minute)) {
+	if at := rs.freeAt("claude", "opus", false); at.Before(week) || at.After(week.Add(time.Minute)) {
 		t.Fatalf("free at %v, want the week's reset %v", at, week)
 	}
 	if rs.Plans()[0].Parked(week.Add(time.Second)) {
 		t.Fatal("the login stays parked after its week resets")
+	}
+
+	// The checks (reviewer, judge...) take the reserve past 95% of the week, so
+	// a written change is still read, judged and merged (issue #983); only the
+	// usage limit itself parks them.
+	if !Reserved(JudgeRole) || !Reserved("reviewer") || Reserved("worker") || Reserved("lead") {
+		t.Fatal("the reserve is the checks'")
+	}
+	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false, true); err != nil || l.Key() != "claude" {
+		t.Fatalf("a check with every login past 95%% of its week picked %s (%v), want the least used", l.Key(), err)
+	}
+	if at := rs.freeAt("claude", "opus", true); time.Until(at) > time.Second {
+		t.Fatalf("a check is free at %v, want now", at)
+	}
+	rs.append("plan.usage", Plan{Harness: "claude", Login: "claude", Limit: harness.RateLimit{Status: "rejected", ResetsAt: five}})
+	rs.append("plan.usage", Plan{Harness: "claude", Login: "claude:work", Limit: harness.RateLimit{Status: "rejected", ResetsAt: five.Add(time.Hour)}})
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, true); err == nil {
+		t.Fatal("a check took a login at its usage limit")
+	}
+	if at := rs.freeAt("claude", "opus", true); at.Before(five) || at.After(five.Add(time.Minute)) {
+		t.Fatalf("a check at the limit is free at %v, want the limit's reset %v", at, five)
 	}
 }
