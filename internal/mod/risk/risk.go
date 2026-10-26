@@ -870,15 +870,18 @@ var sandboxRoots = []string{"/work", "/hive"}
 // inSandbox reports whether p is an agent's sandbox path. The daemon's own
 // temporary folder is the host's even when it sits under a root (a daemon
 // that itself runs in a sandbox, as the gate's and the score's e2e daemons
-// do, with TMPDIR under /hive).
+// do, with TMPDIR under /hive), but only when it is strictly deeper than the
+// root: a TMPDIR of /hive itself exempts nothing. The daemon's TMPDIR must
+// never be one an agent can write to, or an agent could offer a path there.
 func inSandbox(p string) bool {
-	if tmp := filepath.Clean(os.TempDir()); p == tmp || strings.HasPrefix(p, tmp+"/") {
-		return false
-	}
+	p = filepath.Clean(p)
+	tmp := filepath.Clean(os.TempDir())
 	for _, r := range sandboxRoots {
-		if p == r || strings.HasPrefix(p, r+"/") {
-			return true
+		if p != r && !strings.HasPrefix(p, r+"/") {
+			continue
 		}
+		deeper := strings.HasPrefix(tmp, r+"/")
+		return !deeper || (p != tmp && !strings.HasPrefix(p, tmp+"/"))
 	}
 	return false
 }
