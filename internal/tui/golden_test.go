@@ -481,3 +481,50 @@ func TestChatKeepsItsThread(t *testing.T) {
 		t.Fatalf("back: thread %q, scroll %d (was %d)", m.thread, m.chScroll, scrolled)
 	}
 }
+
+// Scrolled up, the channel says how to get back, and end (ctrl+end from a box
+// with text in it) jumps to the bottom from the new-thread box, the channel and
+// the reply box.
+func TestEndJumpsBackToTheBottom(t *testing.T) {
+	m := designModel(120, 24)
+	replyDraft(m)
+	m.input.SetValue("")
+	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.chScroll == 0 || !strings.Contains(m.View(), "end for the bottom") {
+		t.Fatalf("scrolled up: scroll %d, and the channel doesn't say how to get back", m.chScroll)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+	if m.chScroll != 0 || strings.Contains(m.View(), "end for the bottom") {
+		t.Fatalf("G in the channel: scroll %d", m.chScroll)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")}) // into the new-thread box
+	if !m.composing || m.reply != "" {
+		t.Fatalf("n: composing %v, reply %q", m.composing, m.reply)
+	}
+	m.input.SetValue("draft")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if m.chScroll == 0 || m.input.Value() != "draft" {
+		t.Fatalf("end with a draft took the channel: scroll %d, draft %q", m.chScroll, m.input.Value())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlEnd})
+	if m.chScroll != 0 || m.input.Value() != "draft" {
+		t.Fatalf("ctrl+end in the box: scroll %d, draft %q", m.chScroll, m.input.Value())
+	}
+	m.input.SetValue("")
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if m.chScroll != 0 {
+		t.Fatalf("end in the empty box: scroll %d", m.chScroll)
+	}
+	replyDraft(m)
+	m.input.SetValue("")
+	if m.Update(tea.KeyMsg{Type: tea.KeyPgUp}); m.thScroll == 0 {
+		t.Fatal("pgup in the reply box didn't scroll the thread")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if m.thScroll != 0 {
+		t.Fatalf("end in the reply box: thread scroll %d", m.thScroll)
+	}
+}

@@ -484,7 +484,7 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "esc", "left", "h":
 		m.focus = 0
-	case "pgup", "pgdown", "home", "end":
+	case "pgup", "pgdown", "home", "end", "G":
 		m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
 	case "n", "i":
 		return m, m.focusBox("")
@@ -651,6 +651,9 @@ func (m *model) viewChannel(w int) pane {
 		selStart, selEnd = 0, 0
 	}
 	p.body = stack(append(lines, ""), bx, m.h-4, &m.chScroll, selStart, selEnd, true)
+	if i := len(p.body) - len(bx) - 1; m.chFree && m.chScroll > 0 && i >= 0 { // scrolled away from the bottom: say how to get back
+		p.body[i] = "   " + stDim.Render(clip("↓ newer below · end for the bottom", w-6))
+	}
 	return p
 }
 

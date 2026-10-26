@@ -678,6 +678,18 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.threadSel, m.chFree = len(threads(m.msgs[m.chat]))-1, false
 			return m, nil
 		}
+	case "ctrl+end", "end":
+		if s == "end" && (m.editing || m.input.Value() != "") { // end belongs to the text while there is any
+			break
+		}
+		if m.reply != "" {
+			m.thScroll = 0
+			return m, nil
+		}
+		if !m.editing { // back to the bottom of the channel
+			m.chScroll, m.chFree = 0, true
+			return m, nil
+		}
 	case "pgup", "pgdown":
 		if m.reply != "" {
 			m.thScroll = scroll(m.thScroll, s, m.h-4)
@@ -981,7 +993,7 @@ func helpLines() []string {
 		"ctrl+j            new line in a box",
 		fmt.Sprintf("%-18sin a box, attach the clipboard's image; paste or drop a file's path to attach it", imageKey),
 		"pgup pgdn, wheel  scroll; the wheel scrolls the pane under it",
-		"home end          the top or the end",
+		"home end          the top or the end; in a chat's empty box (or ctrl+end), end jumps back to the bottom",
 		"q                 quit the control center; the Hive keeps working",
 		"", stDim.Render("any key to close")}
 }
