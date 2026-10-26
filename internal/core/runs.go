@@ -88,6 +88,7 @@ type Run struct {
 	Finish      *Finish         `json:"finish,omitempty"`
 	Pending     []string        `json:"pending,omitempty"`
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
+	ParkedSince time.Time       `json:"parked_since,omitempty"` // when it last went from another status to parked
 	Retries     int             `json:"retries"`
 	Offline     string          `json:"offline,omitempty"` // its last turn couldn't reach its service, and why
 	Nudges      int             `json:"nudges"`
@@ -97,7 +98,8 @@ type Run struct {
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
 	StopAsked   bool            `json:"stop_asked,omitempty"`
-	Waiting     string          `json:"waiting,omitempty"` // what it ended its turn waiting for
+	Waiting     string          `json:"waiting,omitempty"`  // what it ended its turn waiting for
+	Reopened    bool            `json:"reopened,omitempty"` // reopened while its turn ran: the turn's finish doesn't end it
 	Created     time.Time       `json:"created"`
 	Updated     time.Time       `json:"updated"`
 	TurnStarted time.Time       `json:"turn_started,omitempty"`
@@ -225,37 +227,112 @@ func (p Plan) Key() string {
 // than spend the last of it.
 const WeeklyStop = 0.95
 
-// Parked reports whether the plan is at its usage limit, or at WeeklyStop of
-// its weekly window, until a reset still ahead.
+// FiveHourStop is the same for the five-hour window: the person asked
+// (10-26) that the Hive leave the last tenth of it to them, to keep working
+// with the plan themselves while the Hive waits for the reset.
+const FiveHourStop = 0.90
+
+// CheckReserve is the share of a week below WeeklyStop kept for the checks
+// and leads (Reserved): every other run stops at WeeklyStop-CheckReserve, so
+// a change already written can still be read, judged and merged, and
+// WeeklyStop stays the ceiling for all. On 10-26 a gate's keep waited over 8
+// hours for its judge, parked at 95% of every login's week, and main didn't
+// move for 12 (issue #983). The five-hour stop has no reserve: its last
+// tenth is the person's.
+const CheckReserve = 0.05
+
+// Reserved says whether role's runs may spend the reserve: the checks
+// (CheckRoles), and the leads, which answer however busy the machine is
+// (docs/priority.md) and stopped at WeeklyStop before the reserve.
+func Reserved(role string) bool { return role == "lead" || slices.Contains(CheckRoles, role) }
+
+// stops are the windows a login stops at short of its limit, and where; the
+// week's (WeeklyStop) less CheckReserve for a run that isn't Reserved.
+var stops = []struct {
+	window  string
+	at      float64
+	reserve float64
+	name    string
+}{{"seven_day", WeeklyStop, CheckReserve, "week"}, {"five_hour", FiveHourStop, 0, "five-hour window"}}
+
+// Parked reports whether the plan is at its usage limit, or at one of its
+// stops (WeeklyStop less CheckReserve, FiveHourStop) for a run that isn't
+// Reserved, until a reset still ahead.
 func (p Plan) Parked(now time.Time) bool { return !p.ParkedUntil(now).IsZero() }
 
-// ParkedUntil is when a parked plan (Parked) takes turns again, the later of
-// its limit's reset and its week's; zero when it isn't parked.
-func (p Plan) ParkedUntil(now time.Time) time.Time {
+// ParkedUntil is when a parked plan (Parked) takes turns again, the latest
+// of its limit's reset and those of the windows at their stop; zero when it
+// isn't parked.
+func (p Plan) ParkedUntil(now time.Time) time.Time { return p.parkedFor(now, false) }
+
+// parkedFor is ParkedUntil for a run that may spend the reserve (Reserved)
+// or not: the reserve runs on to WeeklyStop.
+func (p Plan) parkedFor(now time.Time, reserve bool) time.Time {
 	var at time.Time
 	if p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now) {
 		at = p.Limit.ResetsAt
 	}
-	if w, ok := p.Weekly(now); ok && w.Utilization >= WeeklyStop && w.ResetsAt.After(at) {
+	if w, _, ok := p.stopped(now, reserve); ok && w.ResetsAt.After(at) {
 		at = w.ResetsAt
 	}
 	return at
 }
 
+// stopped is the window of p at its stop that resets last, and its name.
+func (p Plan) stopped(now time.Time, reserve bool) (harness.Window, string, bool) {
+	var out harness.Window
+	var name string
+	for _, s := range stops {
+		at := s.at
+		if !reserve {
+			at -= s.reserve
+		}
+		if w, ok := p.window(s.window, now); ok && w.Utilization >= at && w.ResetsAt.After(out.ResetsAt) {
+			out, name = w, s.window
+		}
+	}
+	return out, name, name != ""
+}
+
+// stale reports whether p, a reading short of a rejection taken while old is
+// parked, was taken before the park: it parks the login for less time, and
+// the window that parked old (one at its stop, or its limit's) hasn't reset
+// since. A stop is measured against its own window's reset, not the one the
+// reading's top level carries.
+func (p Plan) stale(old Plan, now time.Time) bool {
+	until := old.ParkedUntil(now)
+	if !p.ParkedUntil(now).Before(until) {
+		return false
+	}
+	if w, k, ok := old.stopped(now, false); ok && w.ResetsAt.Equal(until) {
+		pw, ok := p.window(k, now)
+		return !ok || !pw.ResetsAt.After(until)
+	}
+	return !p.Limit.ResetsAt.After(until)
+}
+
 // Standing is the login's state in plain words (RateLimit.Standing), or
-// that it has stopped at WeeklyStop of its week until the reset.
+// that it has stopped at one of its stops until that window resets.
 func (p Plan) Standing(now time.Time) string {
-	if w, ok := p.Weekly(now); ok && w.Utilization >= WeeklyStop && !(p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now)) {
-		return fmt.Sprintf("paused at %.0f%% of its week until it resets", WeeklyStop*100)
+	if w, k, ok := p.stopped(now, false); ok && !(p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now)) {
+		for _, s := range stops {
+			if s.window != k {
+				continue
+			}
+			if w.Utilization < s.at {
+				return fmt.Sprintf("paused at %.0f%% of its %s until it resets; the checks and leads run on to %.0f%%", (s.at-s.reserve)*100, s.name, s.at*100)
+			}
+			return fmt.Sprintf("paused at %.0f%% of its %s until it resets", s.at*100, s.name)
+		}
 	}
 	return p.Limit.Standing(now)
 }
 
-// Weekly is the plan's weekly window (seven_day) while it runs at now: from
-// the windows, or the top level when that is the window it reports.
-func (p Plan) Weekly(now time.Time) (harness.Window, bool) {
-	w, ok := p.Limit.Windows["seven_day"]
-	if !ok && p.Limit.Window == "seven_day" {
+// window is the plan's window k while it runs at now: from the windows, or
+// the top level when that is the window it reports.
+func (p Plan) window(k string, now time.Time) (harness.Window, bool) {
+	w, ok := p.Limit.Windows[k]
+	if !ok && p.Limit.Window == k {
 		w, ok = harness.Window{Utilization: p.Limit.Utilization, ResetsAt: p.Limit.ResetsAt}, true
 	}
 	return w, ok && w.ResetsAt.After(now)
@@ -353,7 +430,8 @@ type Runs struct {
 	passing                  bool            // a tick's pass over the other runs is waiting for the leads' steps
 	leadWait                 time.Duration   // how long the other runs wait for the leads' steps (0: 5s)
 	self                     proc.Handle     // this daemon, as a turn's claimant (claim.go)
-	backedOff                map[string]int  // the turn each run last backed off from, said once
+	backedOff                map[string]int  // the turn each run last backed off from for another daemon's claim, said once
+	turnLive                 map[string]int  // the turn each run last waited on its own last turn for, said once
 	waking                   sync.Mutex      // one wake at a time, so a run is woken once
 }
 
@@ -400,7 +478,7 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, proven: map[string]bool{}, ranOn: map[string]string{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, turnLive: map[string]int{}, proven: map[string]bool{}, ranOn: map[string]string{}}
 	rs.ops = NewOps(rs)
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
@@ -608,6 +686,11 @@ func readRefusals(raw string) egressRefused {
 	return out
 }
 
+// harnessGone starts the reason of a run parked because no installed module
+// declares its harness any more; after harnessGoneTries such parks (about
+// 15 minutes) the run is blocked rather than tried again forever.
+const harnessGone, harnessGoneTries = "harness missing:", 3
+
 type runNote struct {
 	ID     string    `json:"id"`
 	Text   string    `json:"text,omitempty"`
@@ -644,7 +727,7 @@ func (rs *Runs) apply(e Event) {
 		// A turn that started before the limit can end after it with a
 		// reading taken before it: that doesn't lift the park, or the next
 		// turn starts only to be turned away (10-25, 10:41).
-		if old := rs.plans[p.Key()]; old.Parked(e.At) && p.Limit.Status != "rejected" && !p.Limit.ResetsAt.After(old.Limit.ResetsAt) {
+		if old := rs.plans[p.Key()]; old.Parked(e.At) && p.Limit.Status != "rejected" && p.stale(old, e.At) {
 			return
 		}
 		rs.plans[p.Key()] = p
@@ -659,6 +742,14 @@ func (rs *Runs) apply(e Event) {
 		return
 	}
 	r.Updated = e.At
+	was := r.Status
+	defer func() {
+		if r.Status != StatusParked {
+			r.ParkedSince = time.Time{}
+		} else if was != StatusParked {
+			r.ParkedSince = e.At
+		}
+	}()
 	switch e.Kind {
 	case "run.turn_started":
 		var t turnStarted
@@ -682,7 +773,7 @@ func (rs *Runs) apply(e Event) {
 			on = ""
 		}
 		rs.ranOn[r.ID] = on
-		r.Waiting = ""
+		r.Waiting, r.Reopened = "", false
 		if t.Delivered <= len(r.Pending) {
 			r.Pending = r.Pending[t.Delivered:]
 		}
@@ -718,10 +809,12 @@ func (rs *Runs) apply(e Event) {
 		if strings.HasPrefix(t.Reason, "nudged") {
 			r.Nudges++
 		}
-		if t.Head == r.Head {
-			r.Still++
-		} else {
+		// A parked turn (a limit, an interruption, an error) didn't end
+		// without finishing, so only a new commit counts from it.
+		if t.Head != r.Head {
 			r.Head, r.Still = t.Head, 0
+		} else if t.Status != StatusParked {
+			r.Still++
 		}
 	case "run.queued":
 		var n runNote
@@ -753,7 +846,17 @@ func (rs *Runs) apply(e Event) {
 	case "run.status":
 		var n runNote
 		e.Decode(&n)
+		if r.Status == StatusRunning && (n.Status == StatusIdle || n.Status == StatusQueued) {
+			// Only its end takes a running turn off running: a reopen that
+			// lands mid-turn (a second fix round, 2 s after the first) would
+			// let the next turn start beside it (issue #1022). Its message
+			// waits in Pending for the turn after.
+			break
+		}
 		r.Status, r.Reason, r.ParkedUntil = n.Status, n.Reason, n.Until
+		if strings.HasPrefix(n.Reason, harnessGone) && n.Status == StatusParked {
+			r.Retries = n.N
+		}
 		if n.Status == StatusQueued || n.Status == StatusIdle {
 			r.Nudges, r.Still = 0, 0
 		}
@@ -769,6 +872,7 @@ func (rs *Runs) apply(e Event) {
 		r.Waiting = n.Text
 	case "run.reopened":
 		r.Finish, r.StopAsked, r.Nudges, r.Still = nil, false, 0, 0
+		r.Reopened = r.Status == StatusRunning
 	}
 }
 
@@ -948,23 +1052,34 @@ func (rs *Runs) Plans() []Plan {
 
 // pickLogin chooses the login for a run's next turn: of those not parked at
 // their usage limit, the least used (Plan.Used), the machine's own first on a
-// tie. A
+// tie; a check (Reserved) takes the reserve up to WeeklyStop too. A
 // bare run whose machine login has no credential file the Hive can read gets
 // no token, so the harness's own login on the host still works.
-func (rs *Runs) pickLogin(h, model, home string, bare bool) (Login, []string, error) {
+func (rs *Runs) pickLogin(h, model, home string, bare, reserve bool) (Login, []string, error) {
 	logins := rs.logins(h, model)
 	now := time.Now()
+	// A renewal turned away by the login's usage limit parks it too: a turn
+	// on it would only be turned away the same.
+	renewing, _ := rs.tokens.(interface{ LimitedUntil(string) time.Time })
+	limited := map[string]bool{}
+	for _, l := range logins {
+		limited[l.Key()] = renewing != nil && renewing.LimitedUntil(l.Key()).After(now)
+	}
 	rs.mu.Lock()
 	use := func(l Login) float64 { return rs.plans[l.Key()].Used(now) }
 	var open []Login
 	for _, l := range logins {
-		if !rs.plans[l.Key()].Parked(now) {
+		if !limited[l.Key()] && rs.plans[l.Key()].parkedFor(now, reserve).IsZero() {
 			open = append(open, l)
 		}
 	}
 	sort.SliceStable(open, func(i, j int) bool { return use(open[i]) < use(open[j]) })
 	rs.mu.Unlock()
-	limit := fmt.Errorf("every %s login is at its usage limit or %.0f%% of its weekly window", HarnessName(h), WeeklyStop*100)
+	week := WeeklyStop
+	if !reserve {
+		week -= CheckReserve
+	}
+	limit := fmt.Errorf("every %s login is at its usage limit, %.0f%% of its weekly window or %.0f%% of its five-hour one", HarnessName(h), week*100, FiveHourStop*100)
 	err := limit
 	for _, l := range open {
 		env, e := rs.tokens.AgentEnv(l, home)
@@ -1038,14 +1153,14 @@ func (rs *Runs) logins(h, model string) []Login {
 
 // freeAt is when a login for harness h and model next has room: now if one
 // has, else the earliest reset; a pick that can't answer (Down) waits for
-// its retry too.
-func (rs *Runs) freeAt(h, model string) time.Time {
+// its retry too. A check (Reserved) has room up to WeeklyStop.
+func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	now := time.Now()
 	var at time.Time
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	for _, l := range rs.logins(h, model) {
-		until := rs.plans[l.Key()].ParkedUntil(now)
+		until := rs.plans[l.Key()].parkedFor(now, reserve)
 		if until.IsZero() {
 			at = now
 			break
@@ -1075,7 +1190,7 @@ func (rs *Runs) next(r Run) (Pick, time.Time) {
 	picks, _ := rs.picks(r)
 	best, at := picks[0], time.Time{}
 	for _, p := range picks {
-		free := rs.freeAt(p.Harness, p.Model)
+		free := rs.freeAt(p.Harness, p.Model, Reserved(r.Role))
 		if !free.After(time.Now()) {
 			return p, free
 		}
@@ -1173,7 +1288,7 @@ func (rs *Runs) wake(id string) {
 	rs.waking.Lock() // Send and endTurn can both see it; it's woken once
 	defer rs.waking.Unlock()
 	r, ok := rs.Get(id)
-	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) {
+	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) || strings.HasPrefix(r.Reason, StoppedQuiet) {
 		return
 	}
 	rs.append("run.reopened", runNote{ID: id})
@@ -1228,6 +1343,36 @@ func (rs *Runs) Progress(id, text string) {
 // SetStatus records a status change made by a module (e.g. handing a quiet run on).
 func (rs *Runs) SetStatus(id, status, reason string) {
 	rs.append("run.status", runNote{ID: id, Status: status, Reason: reason})
+}
+
+// StoppedQuiet opens the reason of a quiet run an agent ended with EndQuiet.
+const StoppedQuiet = "stopped while quiet by "
+
+// EndQuiet ends a quiet run blocked with reason (StoppedQuiet first), only if
+// it is still quiet and no turn of it is starting: a message that woke it
+// since the caller looked keeps it going. A message later doesn't wake it;
+// Reopen still does.
+func (rs *Runs) EndQuiet(id, reason string) error {
+	rs.mu.Lock()
+	cur := rs.runs[id]
+	switch {
+	case cur == nil:
+		rs.mu.Unlock()
+		return ErrNotFound
+	case cur.Status != StatusQuiet || rs.starting[id]:
+		rs.mu.Unlock()
+		return fmt.Errorf("run %s is %s, not quiet", id, cur.Status)
+	}
+	if rs.starting == nil {
+		rs.starting = map[string]bool{}
+	}
+	rs.starting[id] = true // launch refuses it meanwhile
+	rs.mu.Unlock()
+	rs.append("run.status", runNote{ID: id, Status: StatusBlocked, Reason: reason})
+	rs.mu.Lock()
+	delete(rs.starting, id)
+	rs.mu.Unlock()
+	return nil
 }
 
 // Stop ends a run on purpose; it will not be retried.
@@ -1400,7 +1545,7 @@ func (rs *Runs) watch(r Run) {
 	if proc.Alive(r.Proc) {
 		return
 	}
-	time.Sleep(200 * time.Millisecond) // let the last lines land
+	settled(out, 50*time.Millisecond, 200*time.Millisecond) // let the last lines land
 	// A copy of the run older than now ends nothing: its turn ended already,
 	// and ending it again would clear the live turn after it.
 	if cur, ok := rs.Get(r.ID); !ok || cur.Status != StatusRunning || cur.Turn != r.Turn {
@@ -1408,6 +1553,27 @@ func (rs *Runs) watch(r Run) {
 	}
 	rs.ops.Drain(r)
 	rs.endTurn(r)
+}
+
+// settled waits until the file at path has stopped growing for quiet, and at
+// most most in all.
+func settled(path string, quiet, most time.Duration) {
+	size := func() int64 {
+		if fi, err := os.Stat(path); err == nil {
+			return fi.Size()
+		}
+		return -1
+	}
+	end := time.Now().Add(most)
+	last, still := size(), time.Now()
+	for time.Now().Before(end) {
+		time.Sleep(10 * time.Millisecond)
+		if n := size(); n != last {
+			last, still = n, time.Now()
+		} else if time.Since(still) >= quiet {
+			return
+		}
+	}
 }
 
 // TurnLog parses a turn's output file.
@@ -1428,14 +1594,15 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 		return tl
 	}
 	var used harness.Tokens // a harness that reports each step's tokens (usage events)
+	twice := false          // a second verdict in one turn: trust neither, nor rebuild one from the text
 	_ = ReadJSONL(rs.ws.TurnOut(r.ID, turn), func(line []byte) {
 		for _, ev := range h.Parse(line) {
 			switch ev.Kind {
 			case "init":
 				tl.SessionLive, tl.Session = true, ev.SessionID
 			case "result":
-				if tl.Result != nil && ev.Result != nil { // a second verdict in one turn: trust neither
-					ev.Result.Structured = nil
+				if tl.Result != nil && ev.Result != nil {
+					ev.Result.Structured, twice = nil, true
 				}
 				tl.Result = ev.Result
 			case "ratelimit":
@@ -1459,7 +1626,7 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 				tl.Result.Text = s.Text
 			}
 		}
-		if r.Schema != "" && tl.Result.Structured == nil && json.Valid([]byte(tl.Result.Text)) {
+		if r.Schema != "" && tl.Result.Structured == nil && !twice && json.Valid([]byte(tl.Result.Text)) {
 			tl.Result.Structured = json.RawMessage(tl.Result.Text)
 		}
 	}
@@ -1467,7 +1634,7 @@ func (rs *Runs) ReadTurn(r Run, turn int) TurnLog {
 		tl.Result.Tokens = &used
 	}
 	// A module's harness has no schema flag; its answer is the result's text.
-	if tl.Result != nil && !tl.Result.IsError && r.Schema != "" && tl.Result.Structured == nil && harness.AnswersInText(h) {
+	if tl.Result != nil && !tl.Result.IsError && r.Schema != "" && tl.Result.Structured == nil && !twice && harness.AnswersInText(h) {
 		if a := answerJSON(tl.Result.Text); a != nil {
 			tl.Result.Structured = a
 		}
@@ -1639,6 +1806,12 @@ func (rs *Runs) endTurn(r Run) {
 		te.Reason = "harness error; retrying" + suffix(Clip(tl.Result.Text, 200))
 		te.Offline = Unreachable(service(r.Harness), tl.Result.Text)
 		te.Queue = []string{"The previous turn hit an error (" + Clip(tl.Result.Text, 200) + "). Continue where you left off."}
+	case cur.Finish != nil && cur.Reopened && len(cur.Pending) > 0:
+		// Reopened mid-turn, it stays running (issue #1022) and may then
+		// finish on what it was told before: the next turn hands it the rest.
+		// A blocked finish too, not ended blocked: the unread message may be
+		// what unblocks it.
+		te.Status, te.Reason = StatusIdle, reopenedMidTurn
 	case cur.Finish != nil:
 		te.Status = StatusDone
 		if cur.Finish.Status == "blocked" {
@@ -1653,7 +1826,7 @@ func (rs *Runs) endTurn(r Run) {
 	case cur.Nudges < 2:
 		te.Status, te.Reason = StatusIdle, "nudged: ended a turn without finishing"
 		te.Queue = []string{printedNudge(r, tl.Result.Text)}
-	case te.Head == cur.Head && cur.Still+1 >= StillTurns:
+	case te.Head != "" && te.Head == cur.Head && cur.Still+1 >= StillTurns:
 		// Its nudges changed nothing: it can't follow the finish protocol,
 		// so it ends and frees its slot instead of holding it quiet.
 		te.Status, te.Reason = StatusBlocked, NoFinish+": it was nudged twice to call `hive agent finish`, and the turns after made no new commit and ended without it"
@@ -1666,6 +1839,9 @@ func (rs *Runs) endTurn(r Run) {
 		te.ParkedUntil = time.Now().Add(min(backoff(cur.Retries), 5*time.Minute))
 	}
 	rs.append("run.turn_ended", te)
+	if te.Reason == reopenedMidTurn {
+		rs.append("run.reopened", runNote{ID: r.ID}) // the finish it made before the message isn't its last
+	}
 	// A message that came in while it finished blocked wakes it. The run is
 	// read again, after the turn's end is recorded: one that landed since cur
 	// was read is not in cur, and its Send saw the run still running.
@@ -1687,6 +1863,9 @@ func (rs *Runs) endTurn(r Run) {
 	}
 }
 
+// reopenedMidTurn is why a run that finished in a turn it was reopened during takes another.
+const reopenedMidTurn = "reopened during its turn"
+
 // NoFinish begins the reason a run ends blocked for never calling finish.
 const NoFinish = "doesn't finish"
 
@@ -1695,17 +1874,66 @@ const NoFinish = "doesn't finish"
 // blocked; one that commits stays quiet for the lead.
 const StillTurns = 2
 
-// headMark is the size and time of a checkout's HEAD log, which a commit (or
-// any move of HEAD) changes; it is read without running git there.
+// headMark is the commit a checkout's HEAD points at, which only a new
+// commit (or a checkout) changes; it is read without running git there, and
+// is "" when it can't be read, so a run whose commits can't be seen stays
+// quiet rather than ending blocked.
 func headMark(checkout string) string {
 	if checkout == "" {
 		return ""
 	}
-	fi, err := os.Lstat(filepath.Join(checkout, ".git", "logs", "HEAD"))
+	dir := filepath.Join(checkout, ".git")
+	if b, err := SafeRead(dir, 4096); err == nil { // a worktree's .git is a file naming its git dir
+		if d, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir: "); ok {
+			dir = d
+			if !filepath.IsAbs(dir) {
+				dir = filepath.Join(checkout, dir)
+			}
+		}
+	}
+	head, err := SafeRead(filepath.Join(dir, "HEAD"), 4096)
 	if err != nil {
 		return ""
 	}
-	return fmt.Sprint(fi.Size(), " ", fi.ModTime().UnixNano())
+	ref, ok := strings.CutPrefix(strings.TrimSpace(string(head)), "ref: ")
+	if !ok {
+		return hashOnly(ref) // detached: the hash itself
+	}
+	if !strings.HasPrefix(ref, "refs/") || strings.Contains(ref, "..") {
+		return ""
+	}
+	common := dir
+	if b, err := SafeRead(filepath.Join(dir, "commondir"), 4096); err == nil {
+		if common = strings.TrimSpace(string(b)); !filepath.IsAbs(common) {
+			common = filepath.Join(dir, common)
+		}
+	}
+	for _, d := range []string{dir, common} {
+		if b, err := SafeRead(filepath.Join(d, filepath.FromSlash(ref)), 4096); err == nil {
+			return hashOnly(strings.TrimSpace(string(b)))
+		}
+	}
+	packed, _ := SafeRead(filepath.Join(common, "packed-refs"), 16<<20)
+	for _, line := range strings.Split(string(packed), "\n") {
+		if hash, name, ok := strings.Cut(strings.TrimSpace(line), " "); ok && name == ref {
+			return hashOnly(hash)
+		}
+	}
+	return ""
+}
+
+// hashOnly is s when it is a commit hash and "" otherwise, so what a
+// checkout's files say never goes on the record as anything but a hash.
+func hashOnly(s string) string {
+	if len(s) != 40 && len(s) != 64 {
+		return ""
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return ""
+		}
+	}
+	return s
 }
 
 func suffix(s string) string {
@@ -1775,8 +2003,9 @@ const PendingSep = "\n\n---\n\n"
 func (rs *Runs) launch(r Run, cfg Config) {
 	rs.mu.Lock()
 	// A turn starts at most once: not over a live one, nor from a copy of
-	// the run older than its last turn, nor beside another launch of it.
-	if cur := rs.runs[r.ID]; len(rs.holds) > 0 || cur == nil || cur.Status == StatusRunning || cur.Turn != r.Turn || rs.starting[r.ID] {
+	// the run older than its last turn or status (one ended meanwhile stays
+	// ended), nor beside another launch of it.
+	if cur := rs.runs[r.ID]; len(rs.holds) > 0 || cur == nil || cur.Status == StatusRunning || cur.Status != r.Status || cur.Turn != r.Turn || rs.starting[r.ID] {
 		rs.mu.Unlock()
 		return
 	}
@@ -1848,7 +2077,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			why := "the settings route you there"
 			if d, ok := rs.downFor(from); ok {
 				why = from.String() + " can't answer (" + Clip(d.Text, 200) + ")"
-			} else if rs.freeAt(from.Harness, from.Model).After(time.Now()) {
+			} else if rs.freeAt(from.Harness, from.Model, Reserved(r.Role)).After(time.Now()) {
 				why = from.String() + " is at its usage limit"
 			}
 			moved = fmt.Sprintf("You now run on %s: %s. This is a fresh session on your brief above; your checkout, commits and notes are as you left them, so look at them (git log, $HIVE_BOX/notes.md) and continue.", pick, why)
@@ -1856,8 +2085,12 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		r.Harness, r.Model = pick.Harness, pick.Model
 	}
 	h, err := harness.Get(r.Harness)
-	if err != nil { // a module's harness since removed
-		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(5 * time.Minute)})
+	if err != nil { // a module's harness since removed: wait a while for it to come back, then stop and say so
+		if r.Retries >= harnessGoneTries {
+			rs.SetStatus(r.ID, StatusBlocked, fmt.Sprintf("%s %s, tried %d times: install the module that declares it again, or set another harness, and reopen the run", harnessGone, err, r.Retries+1))
+			return
+		}
+		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: harnessGone + " " + err.Error(), Until: time.Now().Add(5 * time.Minute), N: r.Retries + 1})
 		return
 	}
 	if HarnessName(r.Harness) == "open" {
@@ -1890,12 +2123,24 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	// One process per turn: another daemon on this workspace may have started it.
 	took, err := rs.claimTurn(r.ID, turn)
 	if err != nil {
+		// A wait on this daemon's own live turn is kept apart, so it doesn't
+		// use up the once-per-daemon alert a second daemon's claim raises.
+		seen := rs.backedOff
+		if errors.Is(err, errTurnLive) {
+			seen = rs.turnLive
+		}
 		rs.mu.Lock()
-		said, first := rs.backedOff[r.ID] == turn, len(rs.backedOff) == 0
-		rs.backedOff[r.ID] = turn
+		said, first := seen[r.ID] == turn, len(seen) == 0
+		seen[r.ID] = turn
 		rs.mu.Unlock()
 		if !said {
 			fmt.Printf("hive: %s's turn %d isn't started here: %v\n", r.ID, turn, err)
+		}
+		if errors.Is(err, errTurnLive) {
+			if !said { // not a second daemon: something took this run off running mid-turn
+				rs.append("alert.raised", map[string]string{"kind": "daemon", "ref": "turn-live-" + r.ID, "text": fmt.Sprintf("%s's turn %d was about to start while %v; it waits for that turn to end.", r.ID, turn, err)})
+			}
+			return
 		}
 		if first { // once per daemon, so a second daemon shows in the record and on the dashboard
 			rs.append("alert.raised", map[string]string{"kind": "daemon", "ref": "turn-claim", "text": fmt.Sprintf("This daemon (pid %d) backed off %s's turn %d: %v. Two daemons may be running on this workspace.", os.Getpid(), r.ID, turn, err)})
@@ -1923,9 +2168,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			}
 		}()
 	}
-	login, tok, err := rs.pickLogin(r.Harness, r.Model, codexHome, !sb.Isolated())
+	login, tok, err := rs.pickLogin(r.Harness, r.Model, codexHome, !sb.Isolated(), Reserved(r.Role))
 	if err != nil {
-		until := rs.freeAt(r.Harness, r.Model)
+		until := rs.freeAt(r.Harness, r.Model, Reserved(r.Role))
 		if !until.After(time.Now()) {
 			until = time.Now().Add(5 * time.Minute)
 		}
@@ -1938,6 +2183,10 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			rs.dropOpenKey(r.ID) // no turn will end to delete the key
 		}
 	}()
+	if errors.Is(err, harness.ErrArgTooLong) { // the same prompt would fail every time
+		rs.SetStatus(r.ID, StatusBlocked, err.Error())
+		return
+	}
 	if err != nil {
 		rs.append("run.status", runNote{ID: r.ID, Status: StatusParked, Reason: err.Error(), Until: time.Now().Add(5 * time.Minute)})
 		return
@@ -2107,6 +2356,9 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	argv := append([]string{h.Program()}, h.Args(t)...)
 	if !sb.Isolated() && h.Program() == "hive" && len(tools) > 0 {
 		argv[0] = tools[0]
+	}
+	if err := harness.CheckArgs(h.Name(), argv); err != nil {
+		return sandbox.Spec{}, err
 	}
 	allow := cfg.Egress.For(r.Role)
 	if allow != nil {

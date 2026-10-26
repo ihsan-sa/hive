@@ -1,12 +1,15 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // An experiment run may only report on its own copy: it can't spawn helpers,
@@ -140,4 +143,59 @@ func TestAppendAfterCloseIsDropped(t *testing.T) {
 	}
 	j.Close()
 	j.MustAppend("task.saved", map[string]string{"id": "late"})
+}
+
+// A new request in a live run's outbox wakes the loop once, not on every look.
+func TestANewRequestWakesTheLoopOnce(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, NewTokens(ws), func() []string { return nil })
+	rs.runs["w1"] = &Run{RunSpec: RunSpec{ID: "w1"}, Status: StatusRunning}
+	outbox := filepath.Join(ws.RunBox("w1"), "outbox")
+	os.MkdirAll(outbox, 0o755)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var woken atomic.Int32
+	go rs.WatchRequests(ctx, 5*time.Millisecond, func() { woken.Add(1) })
+	time.Sleep(30 * time.Millisecond)
+	if n := woken.Load(); n != 0 {
+		t.Fatalf("an empty outbox woke the loop %d times", n)
+	}
+	os.WriteFile(filepath.Join(outbox, "r1.json"), []byte(`{"op":"progress"}`), 0o600)
+	time.Sleep(60 * time.Millisecond)
+	if n := woken.Load(); n != 1 {
+		t.Fatalf("one request woke the loop %d times; want once", n)
+	}
+}
+
+// settled waits for the last lines of a file still being written, and ends
+// soon once it stops growing.
+func TestSettledWaitsForTheLastLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.jsonl")
+	os.WriteFile(path, []byte("a\n"), 0o600)
+	go func() {
+		for i := 0; i < 4; i++ {
+			time.Sleep(20 * time.Millisecond)
+			f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+			f.WriteString("line\n")
+			f.Close()
+		}
+	}()
+	start := time.Now()
+	settled(path, 50*time.Millisecond, time.Second)
+	if raw, _ := os.ReadFile(path); strings.Count(string(raw), "line") != 4 {
+		t.Fatalf("settled after %s with %q; want all four lines", time.Since(start), raw)
+	}
+	start = time.Now()
+	settled(path, 50*time.Millisecond, 200*time.Millisecond)
+	if d := time.Since(start); d >= 150*time.Millisecond {
+		t.Fatalf("a still file took %s to settle; want about 50ms", d)
+	}
 }

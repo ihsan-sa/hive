@@ -35,27 +35,27 @@ func TestLoginPoolParksALimitedLogin(t *testing.T) {
 		rs.append("plan.usage", Plan{Harness: "claude", Login: login, Limit: harness.RateLimit{Status: "rejected", ResetsAt: reset}})
 	}
 
-	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false); l.Key() != "claude" {
+	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false, false); l.Key() != "claude" {
 		t.Fatalf("with room on both, the machine's own login goes first, got %s", l.Key())
 	}
 	soon, later := time.Now().Add(time.Hour), time.Now().Add(2*time.Hour)
 	park("claude", later)
-	l, env, err := rs.pickLogin("claude", "", t.TempDir(), false)
+	l, env, err := rs.pickLogin("claude", "", t.TempDir(), false, false)
 	if err != nil || l.Key() != "claude:work" || env[0] != "TOKEN=claude:work" {
 		t.Fatalf("a parked login is passed over: %v %v %v", l, env, err)
 	}
-	if time.Until(rs.freeAt("claude", "")) > time.Second {
+	if time.Until(rs.freeAt("claude", "", false)) > time.Second {
 		t.Fatal("a run limited on one login moves to the other at once")
 	}
 	park("claude:work", soon)
-	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false); err == nil {
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err == nil {
 		t.Fatal("with every login parked, no login is handed out")
 	}
-	if at := rs.freeAt("claude", ""); at.Before(soon) || at.After(soon.Add(time.Minute)) {
+	if at := rs.freeAt("claude", "", false); at.Before(soon) || at.After(soon.Add(time.Minute)) {
 		t.Fatalf("runs wait for the first reset, got %v want ~%v", at, soon)
 	}
 	park("claude", time.Now().Add(-time.Minute))
-	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false); l.Key() != "claude" {
+	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false, false); l.Key() != "claude" {
 		t.Fatalf("a login whose reset has passed takes runs again, got %s", l.Key())
 	}
 }
@@ -77,10 +77,10 @@ func TestBareRunKeepsTheHostLogin(t *testing.T) {
 	}
 	defer j.Close()
 	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, noOwnLogin{}, func() []string { return nil })
-	if l, env, err := rs.pickLogin("claude", "", "", true); err != nil || l.Key() != "claude" || len(env) != 0 {
+	if l, env, err := rs.pickLogin("claude", "", "", true, false); err != nil || l.Key() != "claude" || len(env) != 0 {
 		t.Fatalf("bare: %v %v %v", l, env, err)
 	}
-	if _, _, err := rs.pickLogin("claude", "", "", false); err == nil {
+	if _, _, err := rs.pickLogin("claude", "", "", false, false); err == nil {
 		t.Fatal("a sandboxed run started with no credential")
 	}
 }
@@ -128,7 +128,7 @@ func TestLoginPoolRoutesByWindowUsage(t *testing.T) {
 	}
 	used("claude", 0.28)
 	used("claude:work", 0.05)
-	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false); l.Key() != "claude:work" {
+	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false, false); l.Key() != "claude:work" {
 		t.Fatalf("the less used login takes the run, got %s", l.Key())
 	}
 	for _, p := range rs.Plans() {
@@ -180,12 +180,12 @@ func TestLoginPoolPicksTheLeastUsedByItsWindows(t *testing.T) {
 		"seven_day": {Utilization: 0.10, ResetsAt: time.Now().Add(48 * time.Hour)},
 	}}}
 	rs.append("plan.usage", work)
-	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false); l.Key() != "claude:work" {
+	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false, false); l.Key() != "claude:work" {
 		t.Fatalf("the less-used added login goes first, got %s", l.Key())
 	}
 	work.Limit.Windows["seven_day"] = harness.Window{Utilization: 0.50, ResetsAt: time.Now().Add(48 * time.Hour)}
 	rs.append("plan.usage", work)
-	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false); l.Key() != "claude" {
+	if l, _, _ := rs.pickLogin("claude", "", t.TempDir(), false, false); l.Key() != "claude" {
 		t.Fatalf("once the added login is fuller, the machine's own goes first, got %s", l.Key())
 	}
 }
@@ -209,14 +209,14 @@ func TestHeadroomCountsEveryLogin(t *testing.T) {
 		rs.append("plan.usage", Plan{Harness: "claude", Login: login, Limit: harness.RateLimit{Status: status, ResetsAt: reset,
 			Windows: map[string]harness.Window{"five_hour": {Utilization: u, ResetsAt: reset}}}})
 	}
-	used("claude", "allowed", 0.95)
+	used("claude", "allowed", 0.88)
 	used("claude:work", "allowed", 0.6)
 	if h := rs.Headroom(pick); h < 0.39 || h > 0.41 {
 		t.Fatalf("one login at 60%%: %v, want 0.4", h)
 	}
 	used("claude:work", "rejected", 1)
-	if h := rs.Headroom(pick); h < 0.04 || h > 0.06 {
-		t.Fatalf("one parked, one at 95%%: %v, want 0.05", h)
+	if h := rs.Headroom(pick); h < 0.11 || h > 0.13 {
+		t.Fatalf("one parked, one at 88%%: %v, want 0.12", h)
 	}
 }
 
@@ -247,6 +247,37 @@ func TestStaleReadingKeepsThePark(t *testing.T) {
 	}
 }
 
+// A login parked at WeeklyStop of its week stays parked through a late
+// reading from a turn that started before the park, even one whose five-hour
+// window is later than the parking reading's (#875's review); the next week
+// lifts it.
+func TestStaleReadingKeepsTheWeeklyStop(t *testing.T) {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, noOwnLogin{}, func() []string { return nil })
+	week := time.Now().Add(3 * 24 * time.Hour)
+	read := func(five time.Time, weekly float64, weekReset time.Time) {
+		rs.append("plan.usage", Plan{Harness: "claude", Login: "claude", Limit: harness.RateLimit{Status: "allowed", ResetsAt: five, Window: "five_hour",
+			Windows: map[string]harness.Window{"five_hour": {Utilization: 0.2, ResetsAt: five}, "seven_day": {Utilization: weekly, ResetsAt: weekReset}}}})
+	}
+	parked := func() bool { return rs.Plans()[0].Parked(time.Now()) }
+	read(time.Now().Add(time.Hour), 0.96, week)
+	if !parked() {
+		t.Fatal("96% of the week didn't park the login")
+	}
+	read(time.Now().Add(2*time.Hour), 0.94, week)
+	if !parked() {
+		t.Fatal("a stale reading with a later five-hour reset lifted the weekly stop")
+	}
+	read(time.Now().Add(2*time.Hour), 0.01, week.Add(7*24*time.Hour))
+	if parked() {
+		t.Fatal("a reading from the next week keeps the login parked")
+	}
+}
+
 // With the machine's login at its limit and an added one with no
 // credential, the run is parked for the limit, not for "not logged in".
 func TestLimitIsTheReasonOverAMissingLogin(t *testing.T) {
@@ -257,7 +288,7 @@ func TestLimitIsTheReasonOverAMissingLogin(t *testing.T) {
 	defer j.Close()
 	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, ownAndEmpty{}, func() []string { return nil })
 	rs.append("plan.usage", Plan{Harness: "claude", Login: "claude", Limit: harness.RateLimit{Status: "rejected", ResetsAt: time.Now().Add(time.Hour)}})
-	_, _, err = rs.pickLogin("claude", "", t.TempDir(), false)
+	_, _, err = rs.pickLogin("claude", "", t.TempDir(), false, false)
 	if err == nil || !strings.HasPrefix(err.Error(), "every claude login is at its usage limit") || !strings.Contains(err.Error(), "claude:empty") {
 		t.Fatalf("parked for %v", err)
 	}
@@ -308,8 +339,11 @@ func TestPlanAheadOfItsWindow(t *testing.T) {
 }
 
 // At 95% of its weekly window a login takes no turns until the week resets
-// (the person, 10-25): the other login takes them, and with both there a
-// turn waits for the first week's reset, not the five-hour one's.
+// (the person, 10-25), and every run but the checks stops CheckReserve
+// before, at 90% (issue #983): the other login takes them, and with both
+// there a turn waits for the first week's reset, not the five-hour one's.
+// The checks spend the reserve between, so a written change is still read,
+// judged and merged, and stop at 95% like the rest.
 func TestWeeklyStopParksALogin(t *testing.T) {
 	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
 	if err != nil {
@@ -323,26 +357,111 @@ func TestWeeklyStopParksALogin(t *testing.T) {
 		rs.append("plan.usage", Plan{Harness: "claude", Login: login, Limit: harness.RateLimit{Status: "allowed_warning", ResetsAt: resets, Window: "seven_day", Utilization: weekly,
 			Windows: map[string]harness.Window{"five_hour": {Utilization: 0.2, ResetsAt: five}, "seven_day": {Utilization: weekly, ResetsAt: resets}}}})
 	}
-	read("claude", 0.94, week)
+	if !Reserved(JudgeRole) || !Reserved("reviewer") || !Reserved("lead") || Reserved("worker") || Reserved("sweep") {
+		t.Fatal("the reserve is the checks' and the leads'")
+	}
+	read("claude", 0.89, week)
 	read("claude:work", 0.5, week.Add(time.Hour))
 	if rs.Plans()[0].Parked(now) {
-		t.Fatal("a login at 94% of its week is parked")
+		t.Fatal("a login at 89% of its week is parked")
 	}
-	read("claude", 0.95, week)
-	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false); err != nil || l.Key() != "claude:work" {
-		t.Fatalf("with the machine's login at 95%% of its week, picked %s (%v)", l.Key(), err)
+	read("claude", 0.92, week)
+	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err != nil || l.Key() != "claude:work" {
+		t.Fatalf("with the machine's login at 92%% of its week, picked %s (%v)", l.Key(), err)
 	}
 	if h := rs.Headroom(Pick{Harness: "claude", Model: "opus"}); h < 0.49 || h > 0.51 {
 		t.Fatalf("headroom %v, want the other login's 0.5", h)
 	}
-	read("claude:work", 0.97, week.Add(time.Hour))
-	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false); err == nil || !strings.Contains(err.Error(), "95% of its weekly window") {
-		t.Fatalf("with every login at 95%% of its week: %v", err)
+	read("claude:work", 0.93, week.Add(time.Hour))
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err == nil || !strings.Contains(err.Error(), "90% of its weekly window") {
+		t.Fatalf("with every login past 90%% of its week: %v", err)
 	}
-	if at := rs.freeAt("claude", "opus"); at.Before(week) || at.After(week.Add(time.Minute)) {
+	if at := rs.freeAt("claude", "opus", false); at.Before(week) || at.After(week.Add(time.Minute)) {
 		t.Fatalf("free at %v, want the week's reset %v", at, week)
+	}
+	if s := rs.Plans()[0].Standing(now); !strings.Contains(s, "paused at 90%") || !strings.Contains(s, "checks and leads run on to 95%") {
+		t.Fatalf("standing %q", s)
+	}
+	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false, true); err != nil || l.Key() != "claude" {
+		t.Fatalf("a check with every login between 90%% and 95%% of its week picked %s (%v), want the least used", l.Key(), err)
+	}
+	if at := rs.freeAt("claude", "opus", true); time.Until(at) > time.Second {
+		t.Fatalf("a check is free at %v, want now", at)
+	}
+	read("claude", 0.95, week)
+	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false, true); err != nil || l.Key() != "claude:work" {
+		t.Fatalf("a check with the machine's login at 95%% picked %s (%v)", l.Key(), err)
+	}
+	read("claude:work", 0.97, week.Add(time.Hour))
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, true); err == nil || !strings.Contains(err.Error(), "95% of its weekly window") {
+		t.Fatalf("a check with every login at 95%% of its week: %v", err)
+	}
+	if at := rs.freeAt("claude", "opus", true); at.Before(week) || at.After(week.Add(time.Minute)) {
+		t.Fatalf("a check at 95%% is free at %v, want the week's reset %v", at, week)
+	}
+	if s := rs.Plans()[0].Standing(now); !strings.Contains(s, "paused at 95%") {
+		t.Fatalf("standing %q", s)
 	}
 	if rs.Plans()[0].Parked(week.Add(time.Second)) {
 		t.Fatal("the login stays parked after its week resets")
+	}
+}
+
+// At 90% of its five-hour window a login takes no turns until that window
+// resets (the person, 10-26: the rest is theirs, to work with the plan
+// themselves): the other login takes them, with both there a turn waits for
+// the first five-hour reset, and a late reading from before the stop doesn't
+// lift it.
+func TestFiveHourStopParksALogin(t *testing.T) {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, twoLogins{}, func() []string { return nil })
+	now := time.Now()
+	five, week := now.Add(time.Hour), now.Add(3*24*time.Hour)
+	read := func(login string, used float64, resets time.Time) {
+		rs.append("plan.usage", Plan{Harness: "claude", Login: login, Limit: harness.RateLimit{Status: "allowed", ResetsAt: resets, Window: "five_hour",
+			Windows: map[string]harness.Window{"five_hour": {Utilization: used, ResetsAt: resets}, "seven_day": {Utilization: 0.11, ResetsAt: week}}}})
+	}
+	plan := func(key string) Plan {
+		for _, p := range rs.Plans() {
+			if p.Key() == key {
+				return p
+			}
+		}
+		t.Fatalf("no plan %s", key)
+		return Plan{}
+	}
+	read("claude", 0.89, five)
+	read("claude:work", 0.5, five.Add(time.Hour))
+	if plan("claude").Parked(now) {
+		t.Fatal("a login at 89% of its five hours is parked")
+	}
+	read("claude", 0.90, five)
+	if s := plan("claude").Standing(now); s != "paused at 90% of its five-hour window until it resets" {
+		t.Fatalf("standing %q", s)
+	}
+	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err != nil || l.Key() != "claude:work" {
+		t.Fatalf("with the machine's login at 90%% of its five hours, picked %s (%v)", l.Key(), err)
+	}
+	read("claude", 0.85, five)
+	if !plan("claude").Parked(now) {
+		t.Fatal("a stale reading from before the stop lifted it")
+	}
+	read("claude:work", 0.93, five.Add(time.Hour))
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err == nil || !strings.Contains(err.Error(), "90% of its five-hour one") {
+		t.Fatalf("with every login at 90%% of its five hours: %v", err)
+	}
+	// The five hours' last tenth is the person's: the checks' reserve is the week's alone.
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, true); err == nil {
+		t.Fatal("a check took a login at 90% of its five hours")
+	}
+	if at := rs.freeAt("claude", "opus", false); at.Before(five) || at.After(five.Add(time.Minute)) {
+		t.Fatalf("free at %v, want the five-hour reset %v", at, five)
+	}
+	if plan("claude").Parked(five.Add(time.Second)) {
+		t.Fatal("the login stays parked after its five hours reset")
 	}
 }

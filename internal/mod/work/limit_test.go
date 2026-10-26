@@ -188,6 +188,10 @@ func TestChecksRefusedStopsComeBack(t *testing.T) {
 	if o, _ := m.Get("t3"); o.Stage != StageStopped {
 		t.Fatal("a refusal quoted in another reason brought the task back")
 	}
+	m.revive()
+	if _, ok := m.refusedAsked[task.ID+"@"+sha]; ok {
+		t.Error("a task that came back is still remembered as asked")
+	}
 }
 
 // A call killed by its timeout on a loaded machine waits without counting a

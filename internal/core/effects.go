@@ -105,6 +105,7 @@ type Check struct {
 	Tool    string    `json:"tool,omitempty"`     // with CantRun: the tool the shell couldn't find
 	Log     string    `json:"log,omitempty"`      // the full output on the host, when it ran
 	Failed  []string  `json:"failed,omitempty"`   // the failing tests it names, read before the output is clipped
+	Keys    []string  `json:"keys,omitempty"`     // those tests with their packages (FailedTestKeys), when each can be placed
 	At      time.Time `json:"at"`
 }
 
@@ -552,11 +553,30 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	}
 	mods.done()
 	if mods.marker != "" && code != 0 && strings.Contains(out, staleModules) {
-		// The shared cache lacks what its marker promised: that is the
-		// cache's fault, not the commit's, so drop the marker and run once
-		// fetching its own.
-		os.Remove(mods.marker)
-		mods.note = "the shared module cache lacked a module; run again without it"
+		// Offline, the check couldn't have a module: not the commit's fault,
+		// so it runs once more fetching its own, in a checkout the first run
+		// hasn't written to. If go.sum names the module the cache lacked
+		// what its marker promised, and the marker goes; if not, the check
+		// needs more than the cache can hold, and later checks of the same
+		// go.mod and go.sum skip it.
+		if cacheLacked(out, mods.sum) {
+			os.Remove(mods.marker)
+			mods.note = "the shared module cache lacked a module; run again without it"
+		} else {
+			os.WriteFile(mods.marker+ownModules, nil, 0o644)
+			mods.note = "the check needs a module go.sum doesn't name; run again fetching its own"
+		}
+		again, cerr := e.cleanCheckout(p, sha, kind)
+		if cerr != nil {
+			build.done()
+			c.Output = "could not make a clean checkout: " + cerr.Error()
+			return c
+		}
+		defer os.RemoveAll(again)
+		if len(build.mounts) > 0 {
+			stableTimes(again) // as goBuild made the first checkout's, for the shared build cache
+		}
+		mounts = []sandbox.Mount{{Host: again, Inside: "/work", RW: true}}
 		code, out, err = run(false)
 	}
 	build.done()
@@ -583,7 +603,11 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.CantRun, c.Tool = "can't run: "+tool+" is not installed where checks run", tool
 		return record()
 	}
-	if line := DiskFull(out); !c.OK && line != "" {
+	line := DiskFull(out)
+	if line == "" && !c.OK && (DiskUse{Room: e.room()}).Low() {
+		line = toolDiskFull(out)
+	}
+	if !c.OK && line != "" {
 		c.OK, c.CantRun = false, "can't run: the disk or a quota is full where checks run"
 		e.diskAlert(line)
 		return record()
@@ -593,6 +617,9 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	e.mu.Unlock()
 	if (kind == "test" || kind == "retest" || kind == "before") && !c.OK {
 		c.Failed = FailedTests(out)
+		if keys, ok := FailedTestKeys(out); ok {
+			c.Keys = keys
+		}
 	}
 	if kind == "score" && c.OK {
 		v, perr := scoreOf(out)
@@ -1378,6 +1405,10 @@ type MergeRequest struct {
 	Subject string
 	Gain    bool   // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
 	Task    string // the task whose PR it is: the quarantine excuses it only on evidence from outside it
+	// Draft is the PR's state at the caller's last look: a draft is readied
+	// once every read is checked. One made a draft after that look isn't
+	// (the lead's pr_draft, say): MergePR refuses it with ErrDraft.
+	Draft bool
 }
 
 // Merge merges the PR only at sha, and only when the host's own records show
@@ -1452,9 +1483,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	}
 	// Every read above is the Hive's own and bound to sha, and nobody outside
 	// the Hive reads its PRs, so a draft it cleared is its to ready.
-	if pr, err := e.Forge.GetPR(p.Repo, m.PR); err != nil {
-		return "", err
-	} else if pr.Draft {
+	if m.Draft {
 		if err := e.ReadyPR(p, m.PR, m.SHA); err != nil {
 			return "", err
 		}
@@ -1488,13 +1517,14 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	return merged, nil
 }
 
-// ReadyPR takes the PR out of draft, only while its head is still sha.
+// ReadyPR takes the PR out of draft, only while its head is still sha; the
+// journal hears only when the forge changed something.
 func (e *Effects) ReadyPR(p Project, pr int, sha string) error {
-	if err := e.Forge.ReadyPR(p.Repo, pr, sha); err != nil {
-		return err
+	readied, err := e.Forge.ReadyPR(p.Repo, pr, sha)
+	if readied {
+		e.j.MustAppend("effect.readied", map[string]any{"project": p.Name, "pr": pr, "sha": sha})
 	}
-	e.j.MustAppend("effect.readied", map[string]any{"project": p.Name, "pr": pr, "sha": sha})
-	return nil
+	return err
 }
 
 // RefusedRed is the forge refusing a merge the Hive found no worse than main:

@@ -1,6 +1,8 @@
 package core
 
 import (
+	"cmp"
+	"math"
 	"runtime"
 	"slices"
 	"sync"
@@ -10,11 +12,12 @@ import (
 // Slots lets at most a few things run at once and starts the rest in the
 // order they asked, so a burst of checks waits its turn instead of piling
 // onto the machine together; a higher rank (Prioritize) goes ahead of that
-// line. Its size is read at every hand-off, so a changed setting holds from
+// line, but never past one that has waited slotPatience. Its size is read at every hand-off, so a changed setting holds from
 // the next start; one already running is never stopped.
 type Slots struct {
-	size func() int // <= 0: no limit
-	rank func(project, sha, kind string) int
+	size     func() int // <= 0: no limit
+	rank     func(project, sha, kind string) int
+	patience time.Duration
 
 	mu      sync.Mutex
 	running []SlotUse
@@ -38,8 +41,13 @@ type slotWait struct {
 
 var slotSeq int64
 
+// slotPatience is how long a waiter can be passed over by higher ranks: a
+// steady stream of ranked checks would otherwise keep a rank-0 one waiting
+// for good.
+const slotPatience = time.Hour
+
 // NewSlots makes a queue whose size is read from size.
-func NewSlots(size func() int) *Slots { return &Slots{size: size} }
+func NewSlots(size func() int) *Slots { return &Slots{size: size, patience: slotPatience} }
 
 // Resize reads the size from size from now on, and starts what now has room.
 func (s *Slots) Resize(size func() int) {
@@ -109,17 +117,20 @@ func (s *Slots) Acquire(project, sha, kind string) (release func()) {
 	}
 }
 
-// fill starts the highest-ranked, then oldest, waiters while there is room.
-// The caller holds s.mu.
+// fill starts the highest-ranked, then oldest, waiters while there is room;
+// the oldest goes first once it has waited past the patience. The caller
+// holds s.mu.
 func (s *Slots) fill() {
 	for len(s.waiting) > 0 {
 		if n := s.size(); n > 0 && len(s.running) >= n {
 			return
 		}
 		next := 0
-		for i, w := range s.waiting {
-			if w.Rank > s.waiting[next].Rank {
-				next = i
+		if time.Since(s.waiting[0].Since) < s.patience { // waiters keep the order they asked
+			for i, w := range s.waiting {
+				if w.Rank > s.waiting[next].Rank {
+					next = i
+				}
 			}
 		}
 		w := s.waiting[next]
@@ -128,6 +139,15 @@ func (s *Slots) fill() {
 		s.running = append(s.running, w.SlotUse)
 		close(w.ready)
 	}
+}
+
+// Busy says whether an Acquire now would wait: every slot is taken, or
+// something already waits its turn.
+func (s *Slots) Busy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.size()
+	return len(s.waiting) > 0 || n > 0 && len(s.running) >= n
 }
 
 // State returns what holds a slot, oldest first, and what waits, in the
@@ -139,7 +159,13 @@ func (s *Slots) State() (running, waiting []SlotUse) {
 	for _, w := range s.waiting {
 		waiting = append(waiting, w.SlotUse)
 	}
-	slices.SortStableFunc(waiting, func(a, b SlotUse) int { return b.Rank - a.Rank })
+	key := func(u SlotUse) int {
+		if time.Since(u.Since) >= s.patience {
+			return math.MaxInt // waited long enough: in the order they asked
+		}
+		return u.Rank
+	}
+	slices.SortStableFunc(waiting, func(a, b SlotUse) int { return cmp.Compare(key(b), key(a)) })
 	return running, waiting
 }
 

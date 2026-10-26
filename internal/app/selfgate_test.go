@@ -68,14 +68,14 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 		t.Setenv("GATE_REPORT", rep)
 		t.Setenv("GATE_EXIT", tc.exit)
 		j := work.GateJob{Project: core.Project{Name: "hive", Repo: "ihsan-sa/hive", Self: true}, Repo: "/repo", Head: "h", Main: "m", AllowTie: tc.tie,
-			Out: filepath.Join(dir, "runs", string(rune('a'+i))), Lessons: filepath.Join(dir, "lessons.md"), Timeout: time.Hour}
+			Out: filepath.Join(dir, "runs", string(rune('a'+i))), Timeout: time.Hour}
 		g := run(context.Background(), j)
 		if g.Outcome != tc.want || !strings.Contains(g.Reason, tc.reason) || g.Measured != (tc.rep != nil && tc.rep.Measured) {
 			t.Fatalf("case %d: %s %q, want %s with %q", i, g.Outcome, g.Reason, tc.want, tc.reason)
 		}
 		raw, _ := os.ReadFile(args)
 		a := string(raw)
-		if !strings.Contains(a, "--head h --base m") || !strings.Contains(a, "--local-org") || !strings.Contains(a, "--judged") || strings.Contains(a, "--allow-bare") || strings.Contains(a, "--allow-tie") != tc.tie {
+		if !strings.Contains(a, "--head h --base m") || !strings.Contains(a, "--local-org") || strings.Contains(a, "--allow-bare") || strings.Contains(a, "--allow-tie") != tc.tie {
 			t.Fatalf("case %d: gate called with %q", i, a)
 		}
 		if nice {
