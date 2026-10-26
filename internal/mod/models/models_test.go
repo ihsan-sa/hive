@@ -303,7 +303,10 @@ func TestAModelThatKeepsEndingBlockedStopsBeingFirst(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		a.C.J.MustAppend("run.created", core.RunSpec{ID: "w-" + tk.ID, Role: "worker", Task: tk.ID, Project: project, Harness: "open", Model: "qwen"})
+		a.C.J.MustAppend("run.created", core.RunSpec{ID: "w-" + tk.ID, Role: "worker", Task: tk.ID, Project: project, Harness: "open", Model: "qwen",
+			Route: []core.Pick{{Harness: "open", Model: "qwen"}, {Harness: "open", Model: "other"}}})
+		// It fell back to another model on the same harness: still qwen's.
+		a.C.J.MustAppend("run.turn_started", map[string]any{"id": "w-" + tk.ID, "turn": 2, "model": "other", "harness": "open"})
 		tk.Stage, tk.Updated = stage, time.Now().Add(time.Duration(n)*time.Second)
 		a.C.J.MustAppend("task.saved", tk)
 		a.Models.Tick()
@@ -332,6 +335,11 @@ func TestAModelThatKeepsEndingBlockedStopsBeingFirst(t *testing.T) {
 	view, _ := json.Marshal(a.Models.View(lead))
 	if !strings.Contains(string(view), "open:qwen on lab goes after") {
 		t.Fatalf("view %s", view)
+	}
+	// A restart routes as before it, without waiting for a tick.
+	again := models.New(a.C, a.Work)
+	if again.Demoted("lab", core.Pick{Harness: "open", Model: "qwen"}) == "" {
+		t.Fatal("a restart forgot the demotion until its first tick")
 	}
 	ended("lab", work.StageMerged)
 	if got := first("lab"); got != "open:qwen" {
