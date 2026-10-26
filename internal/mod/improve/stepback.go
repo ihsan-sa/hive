@@ -1,6 +1,7 @@
 package improve
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -66,6 +67,7 @@ func (m *Module) StepBacks(project string) []StepBack {
 			out = append(out, *s)
 		}
 	}
+	slices.SortFunc(out, func(a, b StepBack) int { return cmp.Or(a.Started.Compare(b.Started), strings.Compare(a.ID, b.ID)) })
 	return out
 }
 

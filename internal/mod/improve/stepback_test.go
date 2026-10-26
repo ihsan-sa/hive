@@ -232,7 +232,12 @@ func TestStepBackComparesWithMainScoredBesideIt(t *testing.T) {
 		sb := StepBack{ID: fmt.Sprintf("stepback-%d", i), Run: fmt.Sprintf("stepback-%d", i), Exp: id, Project: "p", From: from, Best: 5,
 			Status: "scoring", Setup: &Setup{Asks: []string{"go"}}}
 		m.score(sb, r)
-		got := m.StepBacks("p")[i]
+		var got StepBack
+		for _, x := range m.StepBacks("p") { // StepBacks keeps no order
+			if x.ID == sb.ID {
+				got = x
+			}
+		}
 		if got.Status != c.status || got.Control == nil || *got.Control != 8 || !strings.Contains(got.Note, "main's 8") {
 			t.Fatalf("a setup scoring %s against main's 8 (stale best 5) must have %s: %+v", c.n, c.status, got)
 		}
