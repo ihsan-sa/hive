@@ -84,7 +84,7 @@ func New(c *core.Core) *Module {
 			if err != nil {
 				return nil, err
 			}
-			out := "posted as " + p.ID + "; every agent's brief carries it until it is solved"
+			out := "posted as " + p.ID + "; every agent started from now carries it until it is solved"
 			if like := m.like(p, r.Project); len(like) > 0 {
 				out += ". Open problems that look alike (add to one with --id <id> --also, and close yours with --solved \"same as <id>\"):\n" + lines(like)
 			}
@@ -271,7 +271,7 @@ func lines(list []Problem) string {
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// Brief is the board's section of a run's first prompt: the open problems a
+// Brief is the board's section of a run's system prompt: the open problems a
 // run of role in project may see, latest first, or "" when there are none or
 // the role weighs one thing on its own.
 func (m *Module) Brief(role, project string) string {

@@ -103,3 +103,26 @@ func TestBriefMatch(t *testing.T) {
 		t.Error("the same file under another title is the same ask")
 	}
 }
+
+// The problems board reaches a worker in its system prompt, never in its
+// brief: the brief is handed on to its reviewers and judges, whom the board
+// would only distract.
+func TestBoardStaysOutOfTheWorkersBrief(t *testing.T) {
+	m := queueRig(t)
+	m.Agents.Board = func(role, project string) string {
+		return "## The Hive's open problems\n\n- **p-1** (hive): FAKEBOARD flaky e2e\n"
+	}
+	brief(t, m, "w-one", map[string]any{"title": "Show the queue on the dashboard", "done": "the dashboard lists it"})
+	tick(m)
+	tasks := m.List(nil)
+	if len(tasks) != 1 || tasks[0].Worker == "" {
+		t.Fatalf("no worker started: %+v", tasks)
+	}
+	run, _ := m.C.Runs.Get(tasks[0].Worker)
+	if strings.Contains(run.Brief, "FAKEBOARD") {
+		t.Fatalf("the board is in the worker's brief, which its reviewers get:\n%s", run.Brief)
+	}
+	if !strings.Contains(run.System, "FAKEBOARD") {
+		t.Fatal("the worker didn't get the board")
+	}
+}
