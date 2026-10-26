@@ -104,22 +104,23 @@ const joinedNote = "joined by a brief from "
 // project that no worker has pushed for yet, taken the same way (a gain or
 // an unclear brief is never folded into a fix, nor a fix into a gain), and
 // not the filer's own task.
-func joinable(t Task, b Brief, own string) bool {
-	return t.Kind == "work" && t.Project == b.Project && t.ID != own && t.Model == "" && b.fix() == t.Fix() &&
+func joinable(t Task, b Brief, self bool, own string) bool {
+	return t.Kind == "work" && t.Project == b.Project && t.ID != own && t.Model == "" && b.fix(self) == t.Fix() &&
 		(t.Stage == StageNew || t.Queued() || t.Stage == StageWorking)
 }
 
 // fix says the brief is clearly a fix: it says so and names the failure, as
 // File requires of one, or it says no aim and names something broken.
-func (b Brief) fix() bool {
-	aim, why := b.aim()
+func (b Brief) fix(self bool) bool {
+	aim, why := b.aim(self)
 	return aim == AimFix && why != ""
 }
 
 // join adds b to the oldest open task it matches and returns that task and
 // why, or ok false when there is none and b is to be filed on its own.
 func (m *Module) join(b Brief, own string) (Task, string, bool) {
-	open := m.List(func(t Task) bool { return joinable(t, b, own) })
+	self := m.selfProject(b.Project)
+	open := m.List(func(t Task) bool { return joinable(t, b, self, own) })
 	slices.Reverse(open) // oldest first, so a third brief joins the first
 	for _, o := range open {
 		why := match(b, o)
@@ -127,7 +128,7 @@ func (m *Module) join(b Brief, own string) (Task, string, bool) {
 			continue
 		}
 		t, ok := m.Get(o.ID) // afresh, now no step holds it
-		if !ok || !joinable(t, b, own) {
+		if !ok || !joinable(t, b, self, own) {
 			m.release(o.ID)
 			continue
 		}

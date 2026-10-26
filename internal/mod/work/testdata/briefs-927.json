@@ -1,0 +1,1542 @@
+[
+{
+"id": "261024-015726-45d2d27ed7",
+"from": "hive",
+"title": "Set up the Hive files for hive"
+},
+{
+"id": "261024-015755-a3f383a160",
+"from": "lead",
+"title": "Pick a GitHub token per repo owner"
+},
+{
+"id": "261024-015819-d700743333",
+"from": "lead",
+"title": "The recursive gate: a candidate Hive must beat the current one in a child Hive"
+},
+{
+"id": "261024-020903-ee8c32309a",
+"from": "lead",
+"title": "A check that can't find its own tool says \"can't run\", not red"
+},
+{
+"id": "261024-021130-822a4fd9db",
+"from": "lead",
+"title": "The Hive reads its own Claude plan usage right"
+},
+{
+"id": "261024-021131-8847c1dfd9",
+"from": "lead",
+"title": "A worker the person stops stays stopped"
+},
+{
+"id": "261024-021132-f86e2b50f7",
+"from": "lead",
+"title": "Two answers at once to one ask can't both be recorded; approve without options doesn't panic"
+},
+{
+"id": "261024-021133-96050936e8",
+"from": "lead",
+"title": "internal/tui/views.go is gofmt-clean, and stays so"
+},
+{
+"id": "261024-021134-c4e84a3f58",
+"from": "lead",
+"title": "Warden requests that only rule a trigger word out reach a warden, not the person"
+},
+{
+"id": "261024-021135-b535baf5a6",
+"from": "lead",
+"title": "The tribunal forms a panel when an ask is long"
+},
+{
+"id": "261024-021136-5a35aeb512",
+"from": "lead",
+"title": "A person can read the diff they're asked to merge, and approves the ask they selected"
+},
+{
+"id": "261024-021137-b2172d9e89",
+"from": "lead",
+"title": "An agent can reach a local service it is testing, like Ollama on 127.0.0.1"
+},
+{
+"id": "261024-021138-f37fb0c858",
+"from": "lead",
+"title": "A person can find the knowledge base"
+},
+{
+"id": "261024-021139-e5070e4f93",
+"from": "lead",
+"title": "Self-update restarts under a system unit too, without killing live runs"
+},
+{
+"id": "261024-021140-a910df3757",
+"from": "lead",
+"title": "Unblocking a run doesn't leave its Codex token folder behind"
+},
+{
+"id": "261024-021141-eb7d05dc2c",
+"from": "lead",
+"title": "Several Claude and Codex plan logins work on this Hive"
+},
+{
+"id": "261024-021142-a4e3ef2ef7",
+"from": "lead",
+"title": "The real GitHub path works end to end: fork, PR, merge, release"
+},
+{
+"id": "261024-021143-085767d530",
+"from": "lead",
+"title": "Live probes: dev builds, update restarts, leads see pushes"
+},
+{
+"id": "261024-021206-77d470a5df",
+"from": "lead",
+"title": "Finish PR #38: baseline-names-what-is-missing"
+},
+{
+"id": "261024-021207-f356faa785",
+"from": "lead",
+"title": "Finish PR #47: hive-review-reads-the-owners-intent"
+},
+{
+"id": "261024-021208-5424918b85",
+"from": "lead",
+"title": "Finish PR #37: installs-share-failures-opt-in"
+},
+{
+"id": "261024-021209-6517d662cd",
+"from": "lead",
+"title": "Finish PR #35: lead-knows-how-modules-are-made"
+},
+{
+"id": "261024-021210-0528556745",
+"from": "lead",
+"title": "Finish PR #81: open-goals-bank-each-gain"
+},
+{
+"id": "261024-021211-c337aed927",
+"from": "lead",
+"title": "Finish PR #42: sandboxes-see-the-host-python"
+},
+{
+"id": "261024-021212-8275ec2583",
+"from": "lead",
+"title": "Finish PR #33: waiting-requests-reach-the-person"
+},
+{
+"id": "261024-021213-cc7273c48a",
+"from": "lead",
+"title": "Agents can send feedback, and it has a tab (feedback-from-agents-and-a-tab)"
+},
+{
+"id": "261024-021214-9bf80f56c7",
+"from": "lead",
+"title": "The control center scrolls, collapses and groups right (tui-scrolls-collapses-and-groups-right)"
+},
+{
+"id": "261024-021215-6dcf193327",
+"from": "lead",
+"title": "The control center's text wraps and reads well (tui-text-wraps-and-reads-well)"
+},
+{
+"id": "261024-021216-cec4c3d089",
+"from": "lead",
+"title": "The Hive's repo guards its root paths (hive-repo-guards-its-root-paths)"
+},
+{
+"id": "261024-021217-7ded73ca1f",
+"from": "lead",
+"title": "Sharing has three levels (sharing-has-three-levels)"
+},
+{
+"id": "261024-023346-40d7dd42e4",
+"from": "lead",
+"title": "Releases publish only after ci and the update test pass, and the update test is green again"
+},
+{
+"id": "261024-023741-855a9d1384",
+"from": "lead",
+"title": "Workers and checks start in the lead's order, only as many as the plan and machine can carry"
+},
+{
+"id": "261024-024248-08565d1c09",
+"from": "sweep",
+"title": "TestJoinMidStepHearsTheResult stops flaking, and Sharing has three levels lands again"
+},
+{
+"id": "261024-024249-323ff305cc",
+"from": "sweep",
+"title": "A red-after-merge names the failing test and tells a flake from a break before reverting"
+},
+{
+"id": "261024-024555-ae93e33ac7",
+"from": "lead",
+"title": "A merge waits for the PR's GitHub checks and lands only at the head its security read saw"
+},
+{
+"id": "261024-025228-8c76f97040",
+"from": "lead",
+"title": "A flaky test doesn't revert good work; bring back sharing's three levels"
+},
+{
+"id": "261024-025330-44e66434df",
+"from": "lead",
+"title": "The Waiting view can't be tricked into approving an unseen ask or hiding a script"
+},
+{
+"id": "261024-025417-6e9a2ae247",
+"from": "lead",
+"title": "The repo's root-path guard can't be slipped past, and covers the owner's intent"
+},
+{
+"id": "261024-025819-8414cb3b5e",
+"from": "w",
+"title": "Bring back: sharing has three levels (re-land #163)"
+},
+{
+"id": "261024-030010-d1295f0ad7",
+"from": "lead",
+"title": "hive status escapes the usage window names it prints"
+},
+{
+"id": "261024-031330-a2b483edf3",
+"from": "lead",
+"title": "The Hive posts far less on GitHub, backs off when GitHub says too quickly, and logs gh's real error"
+},
+{
+"id": "261024-032057-6e3f3ce2b3",
+"from": "lead",
+"title": "Approve only the ask the person saw, on the first key after it was drawn"
+},
+{
+"id": "261024-032058-b640a1a2c9",
+"from": "lead",
+"title": "Self-update rolls back a failed restart, and releases are signed and checked"
+},
+{
+"id": "261024-032744-d2f6804b69",
+"from": "sweep",
+"title": "Releases pick a tag that doesn't exist yet, so a green main actually releases"
+},
+{
+"id": "261024-033140-e9200023ef",
+"from": "lead",
+"title": "Main's ci is green: checkpoint tests don't leave git writing after they end"
+},
+{
+"id": "261024-033228-a64b69e13a",
+"from": "lead",
+"title": "Hardening from perms' reads: rerun quoting, revive cap, own comments, queue areas, go.work/vendor, flake names, hidden leads"
+},
+{
+"id": "261024-033333-1ff1f75f5f",
+"from": "lead",
+"title": "An update tells the person plainly when a release was unsigned"
+},
+{
+"id": "261024-034200-bc208ebd32",
+"from": "lead",
+"title": "The release workflow can't be injected, signs only behind a protected environment, and publishes only the gated commit"
+},
+{
+"id": "261024-034218-b548adb0c3",
+"from": "lead",
+"title": "A printed test name can't turn the flake rerun into no tests, and create_project refuses an unknown caller project"
+},
+{
+"id": "261024-041206-277a0fcfe3",
+"from": "sweep",
+"title": "A PR left as a draft for an outside read waits for it, instead of failing the merge and stopping"
+},
+{
+"id": "261024-041835-bb39d5167b",
+"from": "lead",
+"title": "v0.1.7's reds: ci green on macOS and Windows, and the Windows update test passes"
+},
+{
+"id": "261024-054044-37e1b02d5e",
+"from": "lead",
+"title": "Control center fixes the person hit: slow settings, threads opening by themselves, space on a selected thread, reconnect after update, image paste on Windows"
+},
+{
+"id": "261024-054045-254a7871d6",
+"from": "lead",
+"title": "The share opt-in says exactly what it sends"
+},
+{
+"id": "261024-054046-9937696278",
+"from": "lead",
+"title": "The host-python install root can't expose the workspace"
+},
+{
+"id": "261024-054047-ba2ec5374c",
+"from": "lead",
+"title": "--help prints help on every hive command and never acts"
+},
+{
+"id": "261024-054048-b74a6e05af",
+"from": "lead",
+"title": "A task whose PR was closed on GitHub ends instead of showing as merging"
+},
+{
+"id": "261024-054055-2ef2c33031",
+"from": "sweep",
+"title": "Append-only docs (docs/log.md, docs/status.md) stop causing merge conflicts between PRs"
+},
+{
+"id": "261024-054238-2cd9e31339",
+"from": "sweep",
+"title": "A person's merge hold stops every merge, follow-ups included, until it's lifted or its condition is met"
+},
+{
+"id": "261024-054406-a5a3b19edd",
+"from": "lead",
+"title": "Windows ci is green, so a release can become latest"
+},
+{
+"id": "261024-054407-2c28ff627f",
+"from": "lead",
+"title": "An agent's cost reads what it really spent"
+},
+{
+"id": "261024-055923-de5161d473",
+"from": "lead",
+"title": "The Hive does its own security reads; perms and autobox only steer when it goes off track"
+},
+{
+"id": "261024-061457-fc9533ce41",
+"from": "lead",
+"title": "H0 follows pre-releases and updates as soon as each one is safe for its own system"
+},
+{
+"id": "261024-062136-77d429eee6",
+"from": "lead",
+"title": "Goals: the interim outside-read rule is lifted; the Hive's own reads decide"
+},
+{
+"id": "261024-062621-25e20d9732",
+"from": "lead",
+"title": "Steps that already ran are told in the feed, not left waiting for a 'seen'"
+},
+{
+"id": "261024-062744-45d2d0b001",
+"from": "sweep",
+"title": "The Hive readies its own draft PRs once its own reads clear the head, and tasks stopped on 'still a draft' resume"
+},
+{
+"id": "261024-063550-03787db1d4",
+"from": "lead",
+"title": "The Hive's commits show up as the Hive, not as claude"
+},
+{
+"id": "261024-064733-6709db2626",
+"from": "w",
+"title": "Elevated-rights paths get a tribunal panel's security read before merging"
+},
+{
+"id": "261024-065119-4da72b5889",
+"from": "lead",
+"title": "Main's ci is green again: TestControlCenterInTmux gets past the new first-run prompt"
+},
+{
+"id": "261024-065147-e24ccd0b98",
+"from": "lead",
+"title": "H0 takes each pre-release as soon as it's published, not after its ci"
+},
+{
+"id": "261024-065256-1d17b15b70",
+"from": "lead",
+"title": "The lead can ready, draft and close the Hive's own PRs"
+},
+{
+"id": "261024-065535-e12db13ffe",
+"from": "lead",
+"title": "Windows update works when a previous hive.exe.old is still in use"
+},
+{
+"id": "261024-070541-f233a7459a",
+"from": "lead",
+"title": "Goals say where things stand and what the person has asked for since"
+},
+{
+"id": "261024-070947-7f427eb09c",
+"from": "lead",
+"title": "Agents can run on Codex, picked per role or per project like Claude"
+},
+{
+"id": "261024-071007-77f1be4c9a",
+"from": "lead",
+"title": "Harnesses plug in as modules: Cursor and open harnesses join Claude and Codex"
+},
+{
+"id": "261024-071123-03de5503be",
+"from": "lead",
+"title": "The Hive can run 24/7 on free models through open harnesses, with models set in settings or by asking the lead"
+},
+{
+"id": "261024-071229-9627c59668",
+"from": "sweep",
+"title": "A brief that mentions a top-level directory (\"in internal/.\") no longer queues behind every brief under it"
+},
+{
+"id": "261024-071429-b71bcb27d9",
+"from": "lead",
+"title": "Every agent can find the person's Hive essay, the architecture spec"
+},
+{
+"id": "261024-071525-8c97d3cdfe",
+"from": "lead",
+"title": "Keep the core as lightweight as possible: say what the core is, measure it, and move the rest out"
+},
+{
+"id": "261024-071821-eb706a9379",
+"from": "lead",
+"title": "Modules install from a marketplace index, including other people's"
+},
+{
+"id": "261024-072058-7a1945e026",
+"from": "lead",
+"title": "create_project can make a public repo"
+},
+{
+"id": "261024-073323-39b67b4b25",
+"from": "lead",
+"title": "The Hive project has a score, so step-backs run and 'beats your benchmark' means a number"
+},
+{
+"id": "261024-073703-7c441e7ce3",
+"from": "lead",
+"title": "A PR that's no worse than main merges while main is red, so a fix can land"
+},
+{
+"id": "261024-073704-570877890c",
+"from": "lead",
+"title": "Main's Windows test and the update test are green again"
+},
+{
+"id": "261024-074048-2d0f2590dc",
+"from": "lead",
+"title": "Every step-back makes a judgement pass, with or without a score"
+},
+{
+"id": "261024-074115-cd29a6fca9",
+"from": "lead",
+"title": "The knowledge base dreams: it consolidates, connects and distils its memories on its own"
+},
+{
+"id": "261024-074144-a7fdccf3e9",
+"from": "lead",
+"title": "KB search finds connections, and can dig agentically"
+},
+{
+"id": "261024-074858-9a090ed23b",
+"from": "w",
+"title": "Models with an Anthropic-compatible API (Kimi, DeepSeek, GLM) run through Claude Code"
+},
+{
+"id": "261024-074958-c9596b74b3",
+"from": "lead",
+"title": "The knowledge base dreams: it consolidates, connects and distils its memories on its own (in the kb module)"
+},
+{
+"id": "261024-074959-0cdbbee20e",
+"from": "lead",
+"title": "KB search finds connections, and can dig agentically (in the kb module)"
+},
+{
+"id": "261024-075000-965056ef05",
+"from": "lead",
+"title": "Every step-back makes a judgement pass, with or without a score (in the improve module)"
+},
+{
+"id": "261024-075633-6901e9e68f",
+"from": "lead",
+"title": "Root-path releases and no-worse fixes go through without waiting for the person"
+},
+{
+"id": "261024-075718-b00b80382f",
+"from": "sweep",
+"title": "The stall watcher doesn't hand the lead tasks that are waiting on a known cause like red main; one cause gets one alert"
+},
+{
+"id": "261024-080252-601344770b",
+"from": "lead",
+"title": "Checks never run out of room: a shared module cache, bounded build caches, and old checkouts cleaned"
+},
+{
+"id": "261024-082826-4f0131a221",
+"from": "lead",
+"title": "A check faking can't-run can't spam comments or dodge a revert forever"
+},
+{
+"id": "261024-083009-9d6b601545",
+"from": "w",
+"title": "Windows e2e flakes: TestReportSharing and TestModuleLifecycle on a slow runner"
+},
+{
+"id": "261024-083426-4f14945d70",
+"from": "lead",
+"title": "H0's updater doesn't share the 60-an-hour anonymous GitHub limit with agents"
+},
+{
+"id": "261024-084430-918bf5a70c",
+"from": "sweep",
+"title": "A task whose work already landed on main closes as landed, with its PR and issue, instead of cycling"
+},
+{
+"id": "261024-085137-904cf6876a",
+"from": "w",
+"title": "TestBlockedWorkComesBack times out on the Windows runner"
+},
+{
+"id": "261024-085235-bbe4a6a517",
+"from": "w",
+"title": "Windows CI e2e flakes: TestBlockedWorkComesBack never wakes the tool worker; daemon start takes 21s copying source into the KB"
+},
+{
+"id": "261024-105045-090814edef",
+"from": "lead",
+"title": "The Claude login renews itself, and says so loudly when it can't"
+},
+{
+"id": "261024-105050-06553ae541",
+"from": "w",
+"title": "e2e tests flake on the slow macOS/Windows runners and block unrelated PRs"
+},
+{
+"id": "261024-105147-160f09e960",
+"from": "sweep",
+"title": "A brief that duplicates an open task joins it instead of starting another worker"
+},
+{
+"id": "261024-105148-49e7de4a8f",
+"from": "sweep",
+"title": "A worker or the lead can rerun a PR's failed forge checks"
+},
+{
+"id": "261024-105741-0f8f25feec",
+"from": "sweep",
+"title": "Main is green again: TestLoginPoolPicksTheLeastUsedByItsWindows stops depending on the clock"
+},
+{
+"id": "261024-105742-4ee8d85767",
+"from": "sweep",
+"title": "A revert after main goes red first checks the failure is new at that merge, and a fix for red main doesn't wait for main to go green"
+},
+{
+"id": "261024-113729-940b976850",
+"from": "lead",
+"title": "A red forge check is re-run once, and known flakes are quarantined, before a PR is sent back"
+},
+{
+"id": "261024-113832-d8d194d0c9",
+"from": "w",
+"title": "TestReportSharing times out on windows-latest at main 175848b"
+},
+{
+"id": "261024-114411-2ddbd1108b",
+"from": "sweep",
+"title": "A task whose PR was merged on the forge ends as merged, instead of sitting in merging and holding the queue"
+},
+{
+"id": "261024-114417-da90f27a26",
+"from": "sweep",
+"title": "The queue holds a brief back only for a real conflict: not for a whole big package, a union-merged doc, or a blocker that is only waiting on checks"
+},
+{
+"id": "261024-122652-be91a9f364",
+"from": "lead",
+"title": "H0 updates even when work never stops: it waits for one merge to finish, not for a quiet Hive"
+},
+{
+"id": "261024-122736-8c74e4bfce",
+"from": "sweep",
+"title": "A PR sent back for a red forge check comes with the failed test's log and main's state for that same check"
+},
+{
+"id": "261024-123916-f5f26600e3",
+"from": "lead",
+"title": "Releases become latest again: the installer works with the older release it installs"
+},
+{
+"id": "261024-125128-903ef82a6b",
+"from": "w",
+"title": "work: a person's Stop/Retry/Recheck can be saved over by a running step (check-then-save race)"
+},
+{
+"id": "261024-131407-0da5b6a045",
+"from": "sweep",
+"title": "The lead can end a task whose PR already landed, and start a queue fix past the overlap hold, so the queue can't deadlock behind what it fixes"
+},
+{
+"id": "261024-132338-0628468534",
+"from": "lead",
+"title": "The dashboard shows spend and recent activity, and the Knowledge tab shows what's new"
+},
+{
+"id": "261024-132339-4ef501d5ff",
+"from": "lead",
+"title": "A key jumps back to the bottom of a channel"
+},
+{
+"id": "261024-132340-8035d51956",
+"from": "lead",
+"title": "The always-yours filter doesn't fire on 'no tokens' in a parenthesis"
+},
+{
+"id": "261024-132737-f54d427b15",
+"from": "w",
+"title": "A turn's cost shows live, as an estimate, before its result line"
+},
+{
+"id": "261024-135103-c11bb8f0f0",
+"from": "lead",
+"title": "OpenRouter models are free-only, enforced"
+},
+{
+"id": "261024-135947-4611ecc5f7",
+"from": "lead",
+"title": "OpenRouter: free models first, paid ones only inside the \\$10 monthly budget"
+},
+{
+"id": "261024-135959-f18913c4de",
+"from": "sweep",
+"title": "improve doesn't measure a merge that main already contains as if it were new"
+},
+{
+"id": "261024-140317-caacdf7f83",
+"from": "lead",
+"title": "Every change to the Hive itself lands only if the recursive gate keeps it"
+},
+{
+"id": "261024-140343-2065c30c2a",
+"from": "lead",
+"title": "Main's ci runs finish, and a job waiting on main uses the latest finished answer"
+},
+{
+"id": "261024-140601-cb5f06eb5a",
+"from": "lead",
+"title": "Pasting into the chat box works on Windows, and an image can reach a Hive over SSH"
+},
+{
+"id": "261024-140838-2463132f8a",
+"from": "lead",
+"title": "Only one Hive is the steward of ihsan-sa/hive; another Hive of the same person gets a fork"
+},
+{
+"id": "261024-141051-b4f9c48664",
+"from": "lead",
+"title": "Sharing with H0 has levels (off, failures, everything) and a separate 'contribute' choice, set in Settings"
+},
+{
+"id": "261024-141724-cc842a9998",
+"from": "lead",
+"title": "Score runs are rate-limited per worker commit"
+},
+{
+"id": "261024-141725-b833c07ab6",
+"from": "lead",
+"title": "Share leaves out sandbox specs and can't be hung by a FIFO"
+},
+{
+"id": "261024-141726-619f8af5bc",
+"from": "lead",
+"title": "Say once when a listed token file can't be read"
+},
+{
+"id": "261024-141727-33bac219c0",
+"from": "lead",
+"title": "A README and diagram that say plainly what the Hive is"
+},
+{
+"id": "261024-141728-e0ec25cf19",
+"from": "lead",
+"title": "Nothing the Hive publishes carries an identity or a secret"
+},
+{
+"id": "261024-141729-db6f0b775c",
+"from": "lead",
+"title": "The installer is tested on a clean machine and holds up to its security reads"
+},
+{
+"id": "261024-141957-629b018789",
+"from": "lead",
+"title": "Opening the Hive checks for an update first"
+},
+{
+"id": "261024-142208-25ca663e99",
+"from": "w",
+"title": "The first self-proposed change that beats the benchmark through the gate, released, with H0 on it (the milestone run)"
+},
+{
+"id": "261024-142219-f25fac4f67",
+"from": "w",
+"title": "Reads are proportionate to the change: a small, unguarded diff merges on its tests and checks, and a reader doesn't re-run what the check ran"
+},
+{
+"id": "261024-142228-7fe38c4d25",
+"from": "w",
+"title": "'Nobody in between' is measured: each merge and release counts the outside hands it took"
+},
+{
+"id": "261024-142239-bcce915d7f",
+"from": "lead",
+"title": "Worker and check limits set themselves from what the machine and the plan can carry"
+},
+{
+"id": "261024-142303-2607badffe",
+"from": "lead",
+"title": "Enter sends a message once, and a sent message never vanishes"
+},
+{
+"id": "261024-142343-cf6ae8d6b8",
+"from": "lead",
+"title": "The chat box and threads behave: scroll up in a thread, jump to the bottom, send once, nothing vanishes"
+},
+{
+"id": "261024-142526-e405943bbb",
+"from": "lead",
+"title": "The chat box and threads behave: scroll, jump to the bottom, send once, nothing vanishes, room above the box"
+},
+{
+"id": "261024-142619-0b7b28e924",
+"from": "lead",
+"title": "The chat box and threads behave: scroll, jump to the bottom, send once, nothing vanishes, room above the box"
+},
+{
+"id": "261024-142710-ff671ee2bc",
+"from": "lead",
+"title": "The control center's chat and pages behave: scroll, jump to bottom, send once, room above the box, expand/collapse by level"
+},
+{
+"id": "261024-142835-d27e71cfe6",
+"from": "lead",
+"title": "Goals say where things stand today (supersedes #380)"
+},
+{
+"id": "261024-143004-8b8f0676a3",
+"from": "lead",
+"title": "The control center: scroll, jump to bottom, send once, room above the box, expand by level, every agent in the sidebar, colour by role"
+},
+{
+"id": "261024-143355-97c5830dd4",
+"from": "lead",
+"title": "An update shows itself: a banner with progress, and the control center never looks frozen"
+},
+{
+"id": "261024-143804-ecfa1d6376",
+"from": "lead",
+"title": "Every step-back makes a judgement pass, with or without a score (in the improve module)"
+},
+{
+"id": "261024-143820-07ad38661a",
+"from": "lead",
+"title": "Every step-back makes a judgement pass, with or without a score (in the improve module)"
+},
+{
+"id": "261024-144307-401042ced1",
+"from": "lead",
+"title": "The queue runs briefs in parallel unless they'd really edit the same files"
+},
+{
+"id": "261024-144507-9106b80488",
+"from": "lead",
+"title": "Agents talk to each other, and the dashboard shows it"
+},
+{
+"id": "261024-144709-915a49752d",
+"from": "lead",
+"title": "Agents talk to each other, and the dashboard shows it"
+},
+{
+"id": "261024-144734-350a1bf0c5",
+"from": "sweep",
+"title": "The lead can amend a queued brief in place and withdraw one it filed, so a re-filed ask doesn't leave held copies behind"
+},
+{
+"id": "261024-144747-e9fea64101",
+"from": "sweep",
+"title": "A named directory alone never holds a brief back: two briefs in one package run at once, and the second merges main"
+},
+{
+"id": "261024-145013-2c11a022f9",
+"from": "lead",
+"title": "A Claude Design brief and package of the control center, kept current"
+},
+{
+"id": "261024-145014-5b2af42353",
+"from": "lead",
+"title": "Goals: credit autobox's answers to autobox, and the module layout as decided"
+},
+{
+"id": "261024-145906-cb97eeeffe",
+"from": "lead",
+"title": "Every panel seat's verdict is counted, and a merge waits for the whole panel"
+},
+{
+"id": "261024-150755-93035507b6",
+"from": "lead",
+"title": "The control center: scroll, jump to bottom, send once, room above the box, expand by level, every agent in the sidebar, colour by role"
+},
+{
+"id": "261024-150921-27c2d4e4ac",
+"from": "w",
+"title": "Record the first real recursive-gate run on the tower"
+},
+{
+"id": "261024-154330-f661658fee",
+"from": "lead",
+"title": "Leads answer however busy the machine is"
+},
+{
+"id": "261024-154424-cb860e9068",
+"from": "lead",
+"title": "Leads answer however busy the machine is, and get top priority"
+},
+{
+"id": "261024-155233-2ea1efb0f2",
+"from": "sweep",
+"title": "The recursive gate runs again: its verdict names the failing test, and a failure the control shares never rolls a candidate back"
+},
+{
+"id": "261024-155252-891570f2b8",
+"from": "sweep",
+"title": "A route step that can't answer is dropped and the person told once: the OpenRouter fallback has 404'd on every real turn"
+},
+{
+"id": "261024-160050-9a78b312fe",
+"from": "lead",
+"title": "Goals: credit autobox's answers to autobox, and the module layout as decided"
+},
+{
+"id": "261024-162000-95f41e4e3d",
+"from": "sweep",
+"title": "The gate's real-org ask reaches the person once as a Waiting item, with the exact fix, and the alert names a remedy that can be followed"
+},
+{
+"id": "261024-162010-17f66ff45f",
+"from": "sweep",
+"title": "The lead can set the effort level per role, as it sets the model"
+},
+{
+"id": "261024-162327-e336ee90e1",
+"from": "w",
+"title": "The person can run the lead's settings ops over the API: POST /api/op for route, workers and rerun_checks"
+},
+{
+"id": "261024-163142-db224b11e8",
+"from": "lead",
+"title": "The gate's token reach check counts what the token can do, not what its owner can"
+},
+{
+"id": "261024-171248-675fd2c295",
+"from": "lead",
+"title": "The lead can add a model on an endpoint whose key the person already gave"
+},
+{
+"id": "261024-171358-3234fbcac1",
+"from": "lead",
+"title": "The agent that spawns or briefs a worker chooses its harness and model"
+},
+{
+"id": "261024-171714-0165a06788",
+"from": "sweep",
+"title": "A gate that can't judge at the current main doesn't hold every merge: the control's failure is remembered, and the person gets one Waiting item to land the gate fix"
+},
+{
+"id": "261024-171715-4c663ceef1",
+"from": "sweep",
+"title": "A forge token missing a permission is one Hive-wide condition, not a task's failures: the person is asked once with the exact fix, and the stopped tasks come back when it is granted"
+},
+{
+"id": "261024-171716-ce853ab062",
+"from": "sweep",
+"title": "A brief filed hours ago isn't passed over forever by newer ones the lead puts first: waiting age counts, and the lead sees the oldest waits"
+},
+{
+"id": "261024-171841-96c88abd96",
+"from": "lead",
+"title": "The lead manages models itself: add, trial, drop and route, on the keys it has, inside the caps"
+},
+{
+"id": "261024-173833-f65251e8d2",
+"from": "lead",
+"title": "A stale git lock in a project clone doesn't stall every check"
+},
+{
+"id": "261024-174207-569f6db9d5",
+"from": "lead",
+"title": "Only one daemon runs per workspace, and the gate never leaves child daemons behind"
+},
+{
+"id": "261024-174241-b2f82b5d52",
+"from": "lead",
+"title": "Only one daemon per workspace, and gate runs leave no daemons behind"
+},
+{
+"id": "261024-174301-2f7050eb10",
+"from": "lead",
+"title": "A module's program runs inside the sandbox, with only its own home and what it declares"
+},
+{
+"id": "261024-181008-a5bb511404",
+"from": "sweep",
+"title": "A forge call killed by its timeout on a loaded machine doesn't count against the task, and tasks stopped on it come back"
+},
+{
+"id": "261024-181009-1d22811556",
+"from": "sweep",
+"title": "Main's short tests pass in the recursive gate's sandbox, and its verdict names the failing test"
+},
+{
+"id": "261024-184737-7a008c4bb4",
+"from": "lead",
+"title": "One turn runs in one process, and two launchers can't start two daemons"
+},
+{
+"id": "261024-184855-bca90f2978",
+"from": "w",
+"title": "The recursive gate's 'fails its own vet or short tests' hides which test failed"
+},
+{
+"id": "261024-185553-a8dc23bdd3",
+"from": "w",
+"title": "A run's turn is started at most once: no two live sessions on one checkout"
+},
+{
+"id": "261024-185756-27d6f72b48",
+"from": "lead",
+"title": "A check cancelled because a newer push replaced it isn't 'can't start'"
+},
+{
+"id": "261024-185842-9de7970b1d",
+"from": "lead",
+"title": "The gate counts a fixed bug as a gain: the candidate's new tests pass on it and fail on the control"
+},
+{
+"id": "261024-185923-bebef39482",
+"from": "lead",
+"title": "A merge made by hand on the person's or a warden's authority can still be released"
+},
+{
+"id": "261024-191324-61fa1fd766",
+"from": "w",
+"title": "Core seam for the dispatch module: an executor hook (a turn's sandbox spec handed to a module) and hive <module> commands"
+},
+{
+"id": "261024-192422-53d58c0803",
+"from": "w",
+"title": "The recursive gate can allow a tie for a change the brief says moves nothing measurable"
+},
+{
+"id": "261024-192611-d17793ddbf",
+"from": "sweep",
+"title": "A model trial that stops on the Hive's own trouble isn't counted against the model"
+},
+{
+"id": "261024-192651-ed793376e5",
+"from": "w",
+"title": "An approved warden step can say it needs longer than 10 minutes"
+},
+{
+"id": "261024-192653-eb135172f5",
+"from": "sweep",
+"title": "The recursive gate judges the change as it would land: the candidate is its branch merged with the gate's base"
+},
+{
+"id": "261024-204125-39d8fc4b05",
+"from": "sweep",
+"title": "A forge with no CI isn't a failure: a check-runs 403 on a repo without workflows means no checks, and the tasks it stopped come back"
+},
+{
+"id": "261024-204126-a4aea6e815",
+"from": "sweep",
+"title": "A worker whose model never calls finish frees its slot: after the nudges it ends blocked, and a trial records 'doesn't finish' for that model"
+},
+{
+"id": "261024-204134-50eafa2d49",
+"from": "sweep",
+"title": "A worker on an open harness that writes 'hive agent finish ...' as its answer instead of running it gets finished, or told exactly why not"
+},
+{
+"id": "261024-212941-a6a0506343",
+"from": "lead",
+"title": "One flaky e2e run on the control doesn't count as the candidate being better"
+},
+{
+"id": "261024-213942-b2a9266433",
+"from": "sweep",
+"title": "The recursive gate gives both sides equal, short TMPDIRs, and no test binds a unix socket under t.TempDir()"
+},
+{
+"id": "261024-214247-77e7c596ee",
+"from": "lead",
+"title": "The recursive gate judges more than one change at a time, within what the machine can carry"
+},
+{
+"id": "261024-220115-9c7b18ebb9",
+"from": "lead",
+"title": "Goals record milestones and standing asks, not live status"
+},
+{
+"id": "261024-221630-e6c0ce0873",
+"from": "lead",
+"title": "A change can bring its own acceptance check, run against both Hives' binaries, and that counts as doing better"
+},
+{
+"id": "261024-222520-2c4e6ada19",
+"from": "sweep",
+"title": "A task others wait on is never left with a worker that can't finish: no fallback to an unproven model, and a quiet head lets its queue go"
+},
+{
+"id": "261024-222816-592d03e8b1",
+"from": "lead",
+"title": "A task never waits forever on checks for a commit that is no longer its PR's head"
+},
+{
+"id": "261024-223324-c3b04f6852",
+"from": "lead",
+"title": "Two queued briefs never wait on each other: the queue breaks a mutual wait"
+},
+{
+"id": "261024-223530-16427c9db0",
+"from": "lead",
+"title": "Clear fixes just merge; only a change aimed at a gain goes through the recursive gate, and it must show a clear gain"
+},
+{
+"id": "261024-225610-163a3bc0d0",
+"from": "lead",
+"title": "The gate's children reach only their own org repos through a broker the gate holds, with no key of their own"
+},
+{
+"id": "261024-225631-60f2f90ff3",
+"from": "lead",
+"title": "Wardens and reads weigh a change by what it could really do, and don't treat every agent as out to get the Hive"
+},
+{
+"id": "261024-231016-fb4c3cb910",
+"from": "lead",
+"title": "Score a change by more than a pass count: measure the noise, and add a judgement of whether it is actually better"
+},
+{
+"id": "261024-231017-29cdad9656",
+"from": "lead",
+"title": "The Hive's checks clean up after themselves and never starve the person's session or a lead"
+},
+{
+"id": "261024-231910-960895ca28",
+"from": "lead",
+"title": "Every login has a name the person can set or change, the machine's own included"
+},
+{
+"id": "261024-232458-ab8b485f92",
+"from": "lead",
+"title": "Plan usage reads in plain words and always shows when each window resets"
+},
+{
+"id": "261024-232523-25b12e3af9",
+"from": "w",
+"title": "Module-cache tests race their own cleanup: TestChecksShareTheModuleCache and TestPrefetchReadsOnlyTheCheckout"
+},
+{
+"id": "261024-232847-f3026ebcd9",
+"from": "lead",
+"title": "TestPrefetchReadsOnlyTheCheckout cleans up without racing its TempDir"
+},
+{
+"id": "261024-234524-2865799f5f",
+"from": "w",
+"title": "TestControlCenterFollowsARestart fails on Windows: the restarted daemon finds the old one still running"
+},
+{
+"id": "261024-235147-663b18d20d",
+"from": "w",
+"title": "A self gate that runs on a local org because a token file is missing says so"
+},
+{
+"id": "261024-235559-01d7a42630",
+"from": "sweep",
+"title": "A fix round for a failed forge check waits until its run completes, so rerun-checks can re-run it"
+},
+{
+"id": "261025-001539-ac2bef61a8",
+"from": "w",
+"title": "TestChecksShareTheModuleCache flakes: TempDir cleanup finds .hive not empty"
+},
+{
+"id": "261025-002321-ce50f32325",
+"from": "lead",
+"title": "TestControlCenterFollowsARestart passes on Windows CI every time"
+},
+{
+"id": "261025-014330-7217e7699e",
+"from": "lead",
+"title": "Goals carry today's standing asks: fixes just merge, proportionate reads, leads always alive, scoring with judgement, test repos in Hive-RSI-Lab"
+},
+{
+"id": "261025-014406-6b37a01d2e",
+"from": "sweep",
+"title": "A worker's main.bundle carries the main its PR's forge checks ran against"
+},
+{
+"id": "261025-020220-1b168b6c4f",
+"from": "w",
+"title": "The windows-latest e2e job is flaky: a different internal/e2e test fails on each run"
+},
+{
+"id": "261025-020359-8c427fb803",
+"from": "lead",
+"title": "A failing check that main has no answer for, on a change it can't touch, doesn't send the change back"
+},
+{
+"id": "261025-021121-4d4f1d5200",
+"from": "sweep",
+"title": "The recursive gate's e2e probe names the failing test when it fails"
+},
+{
+"id": "261025-021122-29b926c0cc",
+"from": "sweep",
+"title": "The lead can retry a task stuck in merging on a stale commit"
+},
+{
+"id": "261025-025305-04f896da8e",
+"from": "lead",
+"title": "A model's judgement decides whether a change is kept; the score is one data point it weighs"
+},
+{
+"id": "261025-025938-b9d44de574",
+"from": "lead",
+"title": "Agents talk to each other like a hive (prompt change in modules/agents only)"
+},
+{
+"id": "261025-030003-ebb0cc33e4",
+"from": "lead",
+"title": "A small change to a module's prompts goes straight to the top and runs at once"
+},
+{
+"id": "261025-030024-b3c6e4cca4",
+"from": "lead",
+"title": "Prompt experiments: run the same test tasks in child Hives whose agents module differs, and report what changes"
+},
+{
+"id": "261025-031325-ad7261f47c",
+"from": "lead",
+"title": "On the Hive's own PRs, a failing Windows CI job warns and doesn't block"
+},
+{
+"id": "261025-031429-192fb24613",
+"from": "lead",
+"title": "Always maximum autonomy: wardens settle what they can and the person is the exception (warden, reviewer and lead prompts)"
+},
+{
+"id": "261025-031728-5fa759459f",
+"from": "lead",
+"title": "Linux only for now: CI and releases build and test on Linux alone"
+},
+{
+"id": "261025-031806-8cc5619294",
+"from": "lead",
+"title": "Every agent owns the RSI loop: same standing as the lead to pause what's in the way and push what closes it"
+},
+{
+"id": "261025-032039-c5e5465bbc",
+"from": "lead",
+"title": "A known fix wins over a score dip; a change that's unclear is judged as a gain"
+},
+{
+"id": "261025-032040-3218249825",
+"from": "lead",
+"title": "Versions: 1.0 is the first release stable enough for the person's own projects; 2.0 only when an upgrade would break an existing setup"
+},
+{
+"id": "261025-032252-aebbfd79f3",
+"from": "lead",
+"title": "Soft-layer experiments: clone this Hive's state into isolated sub-Hives with very different agent prompts, give them a real RSI task, and observe"
+},
+{
+"id": "261025-035215-8dfa503652",
+"from": "w",
+"title": "TestModuleLifecycle fails on macOS: the updated module's skill still reads PLUM42"
+},
+{
+"id": "261025-042441-8d53c75c0a",
+"from": "w",
+"title": "The gate closes a PR whose diff against main is empty as already merged"
+},
+{
+"id": "261025-042442-52eccd7d89",
+"from": "w",
+"title": "Main's push CI runs a Windows job too"
+},
+{
+"id": "261025-042618-c275d8b8b1",
+"from": "sweep",
+"title": "docs/architecture.md merges normally again, not as union"
+},
+{
+"id": "261025-042619-be4625e43e",
+"from": "sweep",
+"title": "A worker sent back on review findings gets a fresh main.bundle"
+},
+{
+"id": "261025-044346-77a0e0f766",
+"from": "lead",
+"title": "Goals carry the person's late-night direction: RSI loop first, always maximum autonomy, every agent equal"
+},
+{
+"id": "261025-044347-e76b18e4e2",
+"from": "w",
+"title": "H0's max_workers 8 and max_checks 2 become ceilings once the pace (#376) lands: set both to 0 on the person's word"
+},
+{
+"id": "261025-045050-de0d9b6a8d",
+"from": "w",
+"title": "Run the soft-layer arms on real agents on the host and write up how each behaves"
+},
+{
+"id": "261025-064225-0711e63d3e",
+"from": "sweep",
+"title": "A quiet worker doesn't hold a max_workers slot"
+},
+{
+"id": "261025-064651-3b91583e0b",
+"from": "w",
+"title": "internal/e2e doesn't compile on main: softlayer_test.go calls EnsureRepo with 2 arguments"
+},
+{
+"id": "261025-071925-d0eba2d17e",
+"from": "lead",
+"title": "A login at its usage limit isn't a renewal failure: it's parked until its reset, with no ask"
+},
+{
+"id": "261025-074005-81ef0b5d11",
+"from": "lead",
+"title": "status.md and architecture.md stop using merge=union, which duplicates edited lines"
+},
+{
+"id": "261025-074152-9d7a266ad6",
+"from": "sweep",
+"title": "The Hive takes the benchmark's four asks from brief to merged on main faster"
+},
+{
+"id": "261025-075126-daf0fb1416",
+"from": "w",
+"title": "Flag duplicate bullets that a merge=union catch-up leaves in docs"
+},
+{
+"id": "261025-080836-95ac01603d",
+"from": "w",
+"title": "Flag duplicate bullets that union merges leave in docs/status.md and docs/architecture.md"
+},
+{
+"id": "261025-081619-6f29de7737",
+"from": "lead",
+"title": "A branch that keeps up with a fast-moving main isn't given up on: only unresolved conflicts count"
+},
+{
+"id": "261025-081622-232db4fc42",
+"from": "lead",
+"title": "The Hive takes the benchmark's four asks from brief to merged on main faster"
+},
+{
+"id": "261025-081832-f0ffb403d4",
+"from": "sweep",
+"title": "Releases ship again: a failed release scan stops the cut and says why, instead of empty tags blamed on the update test"
+},
+{
+"id": "261025-083159-4a43975862",
+"from": "lead",
+"title": "improve reverts only the merge that turned main red, never every merge measured while it was red"
+},
+{
+"id": "261025-083414-852d1640c7",
+"from": "lead",
+"title": "e2e tests stop the Hive they started before their TempDir is removed (no 'directory not empty' at cleanup)"
+},
+{
+"id": "261025-084706-cb3d8da233",
+"from": "lead",
+"title": "The release module offers only a commit whose main ci passed"
+},
+{
+"id": "261025-090146-ea5ec8952c",
+"from": "sweep",
+"title": "A PR whose base is behind main is built and vetted merged with main before it merges, so two clean merges can't break main's compile"
+},
+{
+"id": "261025-101655-3f19ba3d94",
+"from": "w",
+"title": "Checks and gate runs get a memory ceiling: a systemd user scope with MemoryHigh and a lower CPUWeight"
+},
+{
+"id": "261025-102801-cd7aa140ad",
+"from": "sweep",
+"title": "docs/status.md merges normally too, so a branch's edit to it is never duplicated or dropped"
+},
+{
+"id": "261025-114242-5d6c18ba69",
+"from": "lead",
+"title": "The release update test passes: updating from the previous release and from v0.1.2 to the new one works"
+},
+{
+"id": "261025-114505-fe5e548813",
+"from": "sweep",
+"title": "The five-hour window running out parks the Hive as a limit, not 'not logged in', and the Hive doesn't sit idle an hour each cycle"
+},
+{
+"id": "261025-123258-4d5d04f3c9",
+"from": "w",
+"title": "Core step 2: move the built-in harness adapters behind the harness registry"
+},
+{
+"id": "261025-123918-b608e9f5ce",
+"from": "lead",
+"title": "The release scan passes again: docs/gate-runs/README.md:12 is a false positive, and the rule stops matching task ids"
+},
+{
+"id": "261025-124109-fabe4d20b6",
+"from": "sweep",
+"title": "No new release is cut while the last one failed a release check nothing since has touched; one failing cause raises one alert"
+},
+{
+"id": "261025-125442-74c84c0d58",
+"from": "w",
+"title": "The pace pulls back on check timeouts, flakes and slow turns, not only machine load"
+},
+{
+"id": "261025-130410-5b774fac26",
+"from": "lead",
+"title": "A task that aims at a gain isn't merged as checkpoints past the gate"
+},
+{
+"id": "261025-141527-6eb126cb24",
+"from": "lead",
+"title": "Soft-layer runs fit the machine: one arm at a time, capped builds, under a memory limit"
+},
+{
+"id": "261025-141831-128e30a981",
+"from": "sweep",
+"title": "A login check killed or timed out on a loaded machine is retried before the person is asked; the ask goes out only on repeated failures or a near expiry"
+},
+{
+"id": "261025-141909-aa959fb909",
+"from": "lead",
+"title": "improve measures every merge on main again: nothing measured since 13:12 though #760, #761 and #752 merged"
+},
+{
+"id": "261025-145000-7565618366",
+"from": "lead",
+"title": "improve measures main's newest commit, not every merge in turn, so releases aren't hours behind main"
+},
+{
+"id": "261025-150253-7c506e8488",
+"from": "sweep",
+"title": "A review follow-up whose worker judges every item and makes no change ends done, not blocked"
+},
+{
+"id": "261025-150816-a32605fa74",
+"from": "hive",
+"title": "Record this Hive (hive-ce874a32-c482) as the steward of ihsan-sa/hive"
+},
+{
+"id": "261025-151828-9393d71b76",
+"from": "w",
+"title": "forge-failures.md names today's main as the base when CI tested an older one"
+},
+{
+"id": "261025-155346-bceb051ec4",
+"from": "w",
+"title": "The gate's Fixes step finds no evidence in most daemon runs: the candidate's tests don't build on the control"
+},
+{
+"id": "261025-161000-2f8ecd9fb4",
+"from": "lead",
+"title": "Main's risk tests pass in the Hive's own checks: the sandbox-path refusal applies only to a path an agent gave"
+},
+{
+"id": "261025-161611-15a5593b79",
+"from": "w",
+"title": "A PR held by Effects.Merge's refusal says so, instead of keeping a stale 'waiting on a security read' reason"
+},
+{
+"id": "261025-163448-cb9e826060",
+"from": "sweep",
+"title": "The pace keeps the weekly plan window on pace too, not only the five-hour one"
+},
+{
+"id": "261025-163504-f10452a52b",
+"from": "sweep",
+"title": "No release is cut from a commit an existing tag already contains, whoever cut that tag"
+},
+{
+"id": "261025-163505-50b27ecda8",
+"from": "sweep",
+"title": "hive.clean says what holds the Hive's disk, and bounds what grows"
+},
+{
+"id": "261025-163727-5d15978167",
+"from": "lead",
+"title": "Tests that pass on CI don't fail the Hive's own checks on a slow, throttled machine"
+},
+{
+"id": "261025-165948-6a0d1cf0a8",
+"from": "w",
+"title": "Redo the soft-layer real run under the new caps: standard against essay first"
+},
+{
+"id": "261025-171637-2120b790b2",
+"from": "sweep",
+"title": "A reopened task whose PR is already pushed doesn't hold the queue: it merges main on a conflict, like a task in testing"
+},
+{
+"id": "261025-172231-75e33764ed",
+"from": "lead",
+"title": "Tree search over candidate Hives: branch changes in parallel child Hives, let each fix its own fallout, keep the stable best, archive the rest"
+},
+{
+"id": "261025-172240-11bad7ab29",
+"from": "lead",
+"title": "Before a change merges, the paths that broke today run on it: release dry run, H0's update, and the Hive's own check environment"
+},
+{
+"id": "261025-174848-8f6fa5a8f6",
+"from": "lead",
+"title": "Goals carry the person's tree-search idea"
+},
+{
+"id": "261025-180301-edf84efa7d",
+"from": "sweep",
+"title": "A check that frees queued tasks, or a fix's check, gets the next slot ahead of the FIFO line"
+},
+{
+"id": "261025-184929-c9afb33b86",
+"from": "sweep",
+"title": "The journal doesn't carry each run's inputs: run.created records names, not the brief, diff and system prompt"
+},
+{
+"id": "261025-184930-d939136662",
+"from": "sweep",
+"title": "The lead can stop a run that has gone quiet, so a stuck trial worker doesn't hold a slot for a day"
+},
+{
+"id": "261025-193118-7e45bb9fbc",
+"from": "sweep",
+"title": "The worker pace settles instead of swinging every minute, and doesn't throttle workers for load they don't cause"
+},
+{
+"id": "261025-201048-b11c73b524",
+"from": "w",
+"title": "A usage limit whose reported reset has just passed parks the login an hour; TestCodexEndToEnd flakes on it"
+},
+{
+"id": "261025-201828-22817a66be",
+"from": "lead",
+"title": "At 95% of a plan's weekly window, its login stops taking turns until the week resets; with every plan there, the Hive pauses"
+},
+{
+"id": "261025-205906-48c5010c0e",
+"from": "w",
+"title": "A protected merge approved at one head isn't re-asked when the branch is only updated onto a newer main"
+},
+{
+"id": "261025-210331-8d966be5a3",
+"from": "sweep",
+"title": "A release held on the person's handle list reaches them as one standing ask in Waiting, not as an alert on every check"
+},
+{
+"id": "261025-220709-56490cb3fe",
+"from": "w",
+"title": "A branch that already contains main isn't sent back as conflicting: UpdateBranch's checkpoint merge-base sees both sides' copies of main's changes"
+},
+{
+"id": "261025-222214-5920e55ea5",
+"from": "lead",
+"title": "A Hive-wide problems board every agent reads and writes, carried into every brief with the Hive's philosophy"
+},
+{
+"id": "261025-222531-89c49c2553",
+"from": "lead",
+"title": "The Hive works as a hive, not top down: agents own areas, pick their own work, and hand-offs go to whoever owns the problem, not the lead"
+},
+{
+"id": "261025-222958-948849b1cd",
+"from": "lead",
+"title": "Every agent is the same: roles are names, and nothing but warden and tribunal is set apart (agents module prompts, and ops still marked lead-only)"
+},
+{
+"id": "261025-223223-ac742afa75",
+"from": "sweep",
+"title": "A local test check that fails while main is green re-runs only the failing tests once before sending the worker back"
+},
+{
+"id": "261025-223343-11006bd8bb",
+"from": "lead",
+"title": "Hive behaviour is the obvious path: what others hit and who works nearby shows up where an agent already looks"
+},
+{
+"id": "261025-223556-0aceba0dc2",
+"from": "lead",
+"title": "Research: what makes collaboration the natural path, from companies, open source, nature and multi-agent systems, mapped to the Hive"
+},
+{
+"id": "261025-223750-76bb026d40",
+"from": "lead",
+"title": "Audit: what the Hive forces on agents, what each part costs, and what can go"
+},
+{
+"id": "261025-223848-121be863f9",
+"from": "lead",
+"title": "The person's yes on a protected merge holds while the change's own diff is the same: a merge of main into the branch doesn't ask again"
+},
+{
+"id": "261025-224244-c62a5e4882",
+"from": "lead",
+"title": "A brief that names something broken is a fix, not 'unclear': gains are the exception, and aim can be set while a step runs"
+},
+{
+"id": "261025-232249-e8f84876ef",
+"from": "sweep",
+"title": "Filing slows to what the loop can merge: sweeps and leads add no new gains while the testing backlog grows"
+},
+{
+"id": "261025-232819-31146cc2eb",
+"from": "lead",
+"title": "One e2e flake no longer decides a gate verdict: a one-rep difference is a tie, and close calls get more reps"
+},
+{
+"id": "261025-232820-77f033e6b0",
+"from": "lead",
+"title": "Goals carry the real-evaluation milestone"
+},
+{
+"id": "261026-000327-7cb37df87f",
+"from": "sweep",
+"title": "A queued task isn't re-journaled every time the pace moves: the live pace stays out of its saved reason"
+},
+{
+"id": "261026-003430-19e938f707",
+"from": "w",
+"title": "Fix the flaky TestOverlappingTicksStepEachRunOnce (internal/core)"
+},
+{
+"id": "261026-004841-1dffcc787f",
+"from": "sweep",
+"title": "A fix round where the worker commits nothing doesn't spend a review round: the worker hears its head didn't move"
+},
+{
+"id": "261026-014916-3ba6f16332",
+"from": "w",
+"title": "Module jobs (kb dream's go run and its git) outlive a SIGKILLed daemon"
+},
+{
+"id": "261026-021841-211620aee7",
+"from": "sweep",
+"title": "A step-back can steer the queue it diagnoses: grant it queue, recheck, rerun-checks and landed"
+},
+{
+"id": "261026-031209-79615b60ce",
+"from": "w",
+"title": "The score's speed term swings 5-20 points on one slow benchmark run under machine load (tolerance 3)"
+}
+]

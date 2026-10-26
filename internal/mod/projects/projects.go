@@ -316,6 +316,7 @@ func (m *Module) claim(p core.Project) {
 		}
 	}
 	m.Work.File(work.Brief{Project: p.Name, From: "hive", Title: title,
+		Aim: work.AimGain, Why: "a record the person merges; nothing is broken", // its known names failures only as background
 		Done: "`" + core.StewardFile + "` on main reads exactly:\n\n```\n" + core.StewardRecord(id) + "```",
 		Known: "Only one Hive merges and releases in " + up + ": the steward this file names. Until it exists, another Hive of the person's could work there too. " +
 			"The file is protected, so the person merges the change: that is their word that this Hive is the steward. " +
@@ -359,6 +360,7 @@ func (m *Module) finish(p core.Project) (core.Project, error) {
 		title := "Set up the Hive files for " + p.Name
 		if len(m.Work.List(func(t work.Task) bool { return t.Project == p.Name && t.Title == title })) == 0 {
 			m.Work.File(work.Brief{Project: p.Name, From: "hive", Title: title,
+				Aim: work.AimGain, Why: "the project's setup; nothing is broken",
 				Done:  "`.hive/goals.md` holds the person's goals in their own words; `.hive/project.json` names the test command and, if one fits, a score (command, direction, tolerance, and in `paths` every file the score reads: scripts it calls, tests, data; the command prints its number as the last word of its output or alone on exactly one line); `.hive/lessons.md` exists.",
 				Known: "The person's words about this project: " + orDefault(goals, p.Description)})
 		}

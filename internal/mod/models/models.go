@@ -339,6 +339,7 @@ func (m *Module) opTrial(r core.Run, args json.RawMessage) (any, error) {
 	}
 	chat, thread := m.Work.Chat.CurrentThread(r)
 	t, err := m.Work.File(work.Brief{Project: b.Project, Title: b.Title, Done: b.Done, From: r.ID, Chat: chat, Thread: thread, Model: b.Model,
+		Aim: work.AimGain, Why: "a trial of a model, judged on the work it does",
 		Known: "This is a trial of the model " + pick.String() + ": the worker runs on it alone."})
 	if err != nil {
 		return nil, err

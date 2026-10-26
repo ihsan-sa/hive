@@ -517,7 +517,8 @@ func (m *Module) File(b Brief) (Task, error) {
 		}
 		return Task{}, fmt.Errorf("say which project (one of: %s)", strings.Join(names, ", "))
 	}
-	if _, ok := m.C.Projects.Get(b.Project); !ok {
+	p, ok := m.C.Projects.Get(b.Project)
+	if !ok {
 		return Task{}, fmt.Errorf("no project %q", b.Project)
 	}
 	aim, err := aimOf(b.Aim)
@@ -526,7 +527,7 @@ func (m *Module) File(b Brief) (Task, error) {
 	}
 	why := strings.TrimSpace(b.Why)
 	if aim == "" {
-		aim, why = b.aim()
+		aim, why = b.aim(p.Self)
 	}
 	if aim == AimFix && why == "" {
 		return Task{}, errors.New("a fix names the failure it fixes (--why \"...\"); a change with no named failure is taken as a gain")
@@ -583,9 +584,18 @@ func (m *Module) opAim(r core.Run, args json.RawMessage) (any, error) {
 			ask.dropped = aim == AimFix && m.dropGate(t.ID)
 			m.mu.Lock()
 			m.aims[t.ID] = ask
+			free := !m.busy[t.ID] // the step ended before the ask was stored, so no release will set it
+			if free {
+				m.busy[t.ID] = true
+			}
 			m.mu.Unlock()
-			t.Aim, t.AimWhy = ask.aim, ask.why
-			return map[string]string{"task": t.ID, "aim": t.AimWord(), "note": "a step is running on it; the aim is set as that step ends"}, nil
+			if !free {
+				t.Aim, t.AimWhy = ask.aim, ask.why
+				return map[string]string{"task": t.ID, "aim": t.AimWord(), "note": "a step is running on it; the aim is set as that step ends"}, nil
+			}
+			m.release(t.ID) // sets it
+			t, _ = m.Get(t.ID)
+			return map[string]string{"task": t.ID, "aim": t.AimWord()}, nil
 		}
 		m.mu.Lock()
 		m.aims[t.ID] = ask
@@ -797,9 +807,7 @@ func (m *Module) waits(t Task, why string) {
 		note = "told the lead it has waited on other briefs' files since " + since.Format("2006-01-02 15:04Z")
 	}
 	m.save(&t, note)
-	m.mu.Lock()
-	delete(m.busy, t.ID)
-	m.mu.Unlock()
+	m.release(t.ID)
 	if tell {
 		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited on other briefs' files since %s, while later briefs on its other files went ahead; now %s. `queue --now %s --why ...` starts it past them, or hold the ones on its files.",
 			t.Label(), t.ID, since.Format("2006-01-02 15:04Z"), why, t.ID))

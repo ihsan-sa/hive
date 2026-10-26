@@ -831,9 +831,7 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		if note != "" {
 			m.save(&t, note)
 		}
-		m.mu.Lock()
-		delete(m.busy, id)
-		m.mu.Unlock()
+		m.release(id) // an aim asked while it was held is set now
 	}
 	return map[string]any{"queue": m.Queue(r), "notes": notes}, nil
 }

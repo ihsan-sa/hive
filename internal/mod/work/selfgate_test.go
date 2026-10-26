@@ -2,6 +2,7 @@ package work
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -673,6 +674,7 @@ func TestWorkerCantUnaimARolledBackGain(t *testing.T) {
 // says neither is taken as a gain; its worker's brief says which, and why.
 func TestBriefAim(t *testing.T) {
 	m, _, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	m.C.Projects.Update(p) // the Hive's own project
 	if _, err := m.File(Brief{Project: p.Name, Title: "x", Aim: "bigger"}); err == nil {
 		t.Fatal("filed a brief with an aim that is neither fix nor gain")
 	}
@@ -691,12 +693,12 @@ func TestBriefAim(t *testing.T) {
 	if !u.Gain() || !strings.Contains(u.Log[len(u.Log)-1].Text, "taken as a gain") {
 		t.Fatalf("an unclear brief: aim %q, log %+v", u.Aim, u.Log)
 	}
-	// A brief that says no aim but names something broken is a fix.
+	// A brief to the Hive that says no aim but names something broken in its
+	// title is a fix.
 	for _, b := range []Brief{
 		{Title: "The pace pulls back on check timeouts, flakes and slow turns"},
 		{Title: "A review follow-up whose worker makes no change ends done, not blocked"},
-		{Title: "forge-failures.md names main as the base", Known: "It names today's main. The base it names is wrong when CI tested an older one."},
-		{Title: "aim can be set while a step runs", Known: "hive agent aim was refused three times."},
+		{Title: "Main's Windows test and the update test are green again"},
 	} {
 		b.Project = p.Name
 		fb, err := m.File(b)
@@ -704,6 +706,18 @@ func TestBriefAim(t *testing.T) {
 			t.Fatalf("%q: aim %q (%q), %v: want a fix", b.Title, fb.Aim, fb.AimWhy, err)
 		}
 	}
+	// Its known is background, not its own failure; another project's
+	// brief leans on that project's score.
+	if fb, _ := m.File(Brief{Project: p.Name, Title: "Tree search over candidate Hives", Known: "Nested bwrap is refused on this host. The gate fails often."}); !fb.Gain() {
+		t.Fatalf("a failure word in the known made it %s", fb.AimWord())
+	}
+	p.Self = false
+	m.C.Projects.Update(p)
+	if fb, _ := m.File(Brief{Project: p.Name, Title: "Words with apostrophes aren't split"}); !fb.Gain() {
+		t.Fatalf("another project's brief was inferred %s", fb.AimWord())
+	}
+	p.Self = true
+	m.C.Projects.Update(p)
 	if fb, _ := m.File(Brief{Project: p.Name, Title: "speed up the fix path", Known: "The gate fails often.", Aim: "gain"}); !fb.Gain() {
 		t.Fatalf("a brief that says it aims at a gain was taken as %s", fb.AimWord())
 	}
@@ -876,5 +890,34 @@ func TestNewHeadCancelsItsOldGate(t *testing.T) {
 	m.Wait()
 	if !old.dropped || !cancelled || other.dropped || len(*jobs) != 1 || (*jobs)[0].Head != task.SHA {
 		t.Fatalf("old dropped %v cancelled %v, other dropped %v, %d runs: want the old head's run ended and the new one started", old.dropped, cancelled, other.dropped, len(*jobs))
+	}
+}
+
+// The reading of a brief that says no aim, pinned on the record: every
+// brief the lead, a sweep or a worker filed to the Hive by 2026-10-26 13:00Z
+// with no aim (issue #927). When the known was read too, 193 of these 308
+// were taken as fixes, many of them feature asks (tree search, soft-layer
+// experiments, goals updates) whose known only mentioned a failure as
+// background. Read by the title alone, 137 of 308 are:
+// lead 64, sweep 51, worker 22.
+func TestBriefAimReplay927(t *testing.T) {
+	var briefs []struct{ ID, From, Title string }
+	b, err := os.ReadFile("testdata/briefs-927.json")
+	if err != nil || json.Unmarshal(b, &briefs) != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	fixes, by := 0, map[string]int{}
+	for _, x := range briefs {
+		if aim, _ := (Brief{Title: x.Title}).aim(true); aim == AimFix {
+			fixes++
+			by[x.From]++
+		}
+		if aim, _ := (Brief{Title: x.Title}).aim(false); aim != "" {
+			t.Fatalf("%q: another project's brief was inferred %s", x.Title, aim)
+		}
+	}
+	t.Logf("%d of %d taken as fixes: %v", fixes, len(briefs), by)
+	if len(briefs) != 308 || fixes != 137 || by["lead"] != 64 || by["sweep"] != 51 || by["w"] != 22 {
+		t.Fatalf("%d of %d briefs taken as fixes (%v)", fixes, len(briefs), by)
 	}
 }

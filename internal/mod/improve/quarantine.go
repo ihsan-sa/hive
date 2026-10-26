@@ -220,6 +220,7 @@ func (m *Module) fileQuarantined() {
 		}
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": f.Project, "sha": f.Test, "text": "quarantined the flaky " + f.Test + " in " + f.Project + ": it " + f.Why})
 		m.Work.File(work.Brief{Project: f.Project, From: "improve", Title: title,
+			Aim: work.AimFix, Why: core.Clip("flaky test: "+f.Test+" "+f.Why, 300),
 			Done:  "The test passes every time on every platform the forge's checks run: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails. Once this merges the quarantine on it is lifted, so its next red sends a PR back again.",
 			Known: "The test is quarantined (a known flake): a forge check failing only it doesn't send a PR back. It " + f.Why + ". Where it failed:\n" + strings.Join(ev, "\n")})
 	}
