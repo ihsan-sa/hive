@@ -19,7 +19,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 | `internal/api` | API types + client. |
 | `internal/tui` | Control center (Bubble Tea): Chats, Dashboard, Waiting, Feedback, Knowledge, Modules, Settings. |
 | `internal/text` | `Visible`: spells out control, bidi and zero-width characters so text from outside (the usage feed, ask titles) can't rewrite the terminal. |
-| `internal/setup` | First run, `hive login`, `hive doctor`, autostart (HKCU Run / systemd user / LaunchAgent). |
+| `internal/setup` | First run, `hive login`, `hive doctor` (which also checks the journal for a turn started while its run's last still ran, issue #1022; `cmd/hive/twins.go`), autostart (HKCU Run / systemd user / LaunchAgent). |
 | `modules/` | Default module content (orientation + role prompts, manifests), embedded and written to `.modules/` on first run. |
 | `internal/demo` | Demo project template (textkit: tests + score). |
 | `internal/softlayer`, `cmd/hive-soft` | The soft-layer experiment ([soft-layer.md](soft-layer.md)): arms of the agents module's prompts, installed into sub-Hives by `TestSoftLayer`, and an observer that reads any Hive's journal (runs, who messaged whom, briefs, helpers, asks, merges). Outside the daemon; nothing in the Hive imports it. |
