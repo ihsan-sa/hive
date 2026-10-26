@@ -66,17 +66,17 @@ Fired = in the 63 hours above.
 
 ## The removals, ranked by cost saved for protection lost
 
-Each is filed as its own brief (below). The ones on top save the most and protect against nothing that isn't caught elsewhere.
+Each is filed as its own brief, named after it. The ones on top save the most and protect against nothing that isn't caught elsewhere.
 
-1. **Notifications that need nothing don't wake the lead.** ~19% of spend; the feed and record already carry them.
-2. **No file-overlap hold before a worker starts.** Two thirds of queue time; a conflict still goes back to its worker at merge.
-3. **Review advice isn't filed as work.** A third of all tasks; the advice stays on the merged PR and a sweep can take what matters.
-4. **Read-only seats get their role and the change, not the orientation and the whole goals and lessons.** About a third off each of 2795 runs.
-5. **Gate rollbacks don't write lessons.** ~250 words off every brief and review; the gate's own record keeps them.
-6. **The gate runs one rep a side, and more only when the first differs.** About two thirds of 31 machine-hours, and of the strain that holds workers.
-7. **The stall watcher retries a stuck task itself before telling the lead.**
-8. **The orientation says only what an agent can't find out.** 1272 words to about 500, measured on the soft-layer arms.
-9. **The lead's prompt drops the procedure its tools already explain.** After 2, 3 and 6.
+1. **Notifications that need nothing don't wake the lead.** ~19% of spend; the feed and record already carry them. (task 261026-170749-e6ed2cecc4)
+2. **No file-overlap hold before a worker starts.** Two thirds of queue time; a conflict still goes back to its worker at merge. (task 261026-170804-db6e0e11dc)
+3. **Review advice isn't filed as work.** A third of all tasks; the advice stays on the merged PR and a sweep can take what matters. (task 261026-170805-f52d0f3aaf)
+4. **Read-only seats get their role and the change, not the orientation and the whole goals and lessons.** About a third off each of 2795 runs. (task 261026-170806-7df12681f1)
+5. **Gate rollbacks don't write lessons.** ~250 words off every brief and review; the gate's own record keeps them. (task 261026-170807-de44f58af1)
+6. **The gate runs one rep a side, and more only when the first differs.** About two thirds of 31 machine-hours, and of the strain that holds workers. (task 261026-170819-6159251230)
+7. **The stall watcher retries a stuck task itself before telling the lead.** (task 261026-170820-936f322d78)
+8. **The orientation says only what an agent can't find out.** 1272 words to about 500, measured on the soft-layer arms. (task 261026-170821-0fd5179b1a)
+9. **The lead's prompt drops the procedure its tools already explain.** After 2, 3 and 6. (task 261026-170821-4e9b2fd137)
 
 Not filed, for the person: whether a prose or prompt change taken as a gain needs the gate at all. Of the gate's rollbacks most were "nothing moved beyond the noise", which a prompt change can't move on the fake harness; the goals say a gain must show itself at the gate, so it is theirs to change.
 
