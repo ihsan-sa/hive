@@ -22,7 +22,7 @@ From lots of comms (`chatty`) to none (`quiet`), and from very specific (`standa
 
 ## How an arm runs
 
-`TestSoftLayer` (`internal/e2e/softlayer_test.go`), per arm and side by side:
+`TestSoftLayer` (`internal/e2e/softlayer_test.go`), per arm, one arm at a time (see *Fitting the machine*):
 
 1. A fresh Hive (its own workspace and local forge), its agents module replaced by the arm's (written with a source record that isn't `builtin`, so the default install never restores the standard prompts; `TestInstallSurvivesTheDefaults`).
 2. This Hive's state: its committed source as the project `hive` (with `.hive/goals.md`, `lessons.md` and `project.json`, so the same tests and score), and, with `HIVE_SOFT_KB=<kb>`, the knowledge base's notes and `practice/` (not `record/`).
@@ -38,9 +38,24 @@ The test checks that every run the sub-Hive made started from the arm's orientat
 # the pipeline, on the fake harness (prompts don't steer the fake agent)
 HIVE_SOFT=standard,vague HIVE_SOFT_STATE=demo go test ./internal/e2e -run TestSoftLayer -v
 # the experiment: real agents, plan usage, on a host with a Claude login
-HIVE_SOFT=all HIVE_E2E_HARNESS=claude HIVE_SOFT_KB=~/hive/.hive/kb HIVE_SOFT_OUT=~/hive/.hive/soft-layer/<run> \
-  go test ./internal/e2e -run TestSoftLayer -timeout 3h -v
+systemd-run --user --scope -p MemoryHigh=2500M -p MemoryMax=3G -p MemorySwapMax=0 -p CPUWeight=20 -p IOWeight=20 \
+  env HIVE_SOFT=standard,essay HIVE_E2E_HARNESS=claude HIVE_SOFT_KB=~/hive/.hive/kb HIVE_SOFT_OUT=~/hive/.hive/soft-layer/<run> \
+  go test ./internal/e2e -run 'TestSoftLayer$' -timeout 4h -v
 ```
+
+## Fitting the machine
+
+The first real run (2026-10-25, issue #771) started all seven arms side by side, each sub-Hive with no ceilings and its checks building on every core: about 28 builds and test runs at once, load ~600 on 20 cores, disks saturated, the Hive's 8 GB share full and swapping, until Autobox froze and then stopped it (and the lead's login check was killed while it was frozen). So now:
+
+- **One arm at a time.** `HIVE_SOFT_PARALLEL=2` runs two; more isn't allowed. An arm's slot is freed only after its daemon, what it left running and its folder are gone, so the next arm starts on a quiet machine. Seven arms one by one at up to 90 minutes each is a long run: start with `standard,essay` and add arms in later runs.
+- **Capped inside.** Each sub-Hive has `max_workers` 1, `max_checks` 1 and `max_gates` 1, saved as the person's ceilings so its pace can't raise them. Its daemon is started pinned to 4 CPUs (`softCPUs`), and CPU affinity passes to everything it starts, sandboxed checks included; Go sizes `GOMAXPROCS`, `go build -p` and `go test`'s parallelism to it, so no arm builds on more than 4 cores whatever its checks' environment. Where a check does get the daemon's environment (a bare sandbox), it also has `GOFLAGS=-p=2` and `GOMAXPROCS=4`.
+- **Under a memory ceiling of its own.** On Linux a real run (`HIVE_E2E_HARNESS` set) refuses to start unless its own cgroup has a `memory.max` of at most 4 GiB: run it under a `systemd-run --user --scope` as above, with `MemorySwapMax=0`, so a run that outgrows its ceiling ends inside it, without the machine swapping and without touching the Hive's own runs. `HIVE_SOFT_UNBOUNDED=1` skips the check.
+- **Measured.** Each arm's row in the table has its peak memory (the summed RSS of the test's processes and their descendants, sampled every 2 seconds) and the machine's highest 1-minute load while it ran; under a cgroup the table also gives the cgroup's own `memory.peak`.
+
+Not shared: the Go build and module caches. Each check builds in a home of its own that is removed after it (`internal/core/disk.go`), and each sub-Hive keeps its own module cache, which its own prune may empty, so a cache shared across sub-Hives could be emptied under another's check. With one arm at a time the cost is one module download per arm.
+
+The dry run on the fake harness (2026-10-25, `HIVE_SOFT=standard,essay` on the clone of the Hive's own source, the default task): the arms ran one after the other, each went lead → worker → the clone's `go vet` and short tests → review → merge in about 3 minutes, and the test's processes peaked at 341 MB (`standard`) and 484 MB (`essay`). The peak load, 39 and 37, is the machine's, other Hive work included. Real agents add their harness processes (a lead, a worker and a reviewer at a time with these ceilings), which is what the 3 GB ceiling leaves room for.
+
 
 ## What is observed
 
@@ -59,6 +74,25 @@ So the standard prompts make a hub, not a hive: almost every message goes throug
 
 ## Results
 
-Not run on real agents yet: a sub-Hive needs the host's Claude login, which an agent's sandbox doesn't hold (`claude -p` there says "Not logged in"), so the real run goes to a warden on the host, from main once this lands (follow-up brief filed with this change).
+A sub-Hive needs the host's Claude login, which an agent's sandbox doesn't hold (`claude -p` there says "Not logged in"), so a real run goes to a warden on the host. The step limit is 10 minutes, so the warden starts it as a detached `systemd-run --user` service with the scope's limits, not as a scope.
+
+### `standard` against `essay`, under the caps (2026-10-25, real4)
+
+Task 261025-165948, issue #822. A warden step (request 261025-182842) started the unit `hive-soft-261025-real4` from main 45079e9: `MemoryHigh=2500M`, `MemoryMax=3G`, `MemorySwapMax=0`, `CPUWeight=20`, `IOWeight=20`, `Nice=10`. It waited for the earlier five-arm run (real3) to end, so one arm ran on the machine at a time, and then ran 21:19-21:55Z. Each sub-Hive cloned the host's main at that moment (6043ef38c), whose tests were green; the task was the default one, the `# hive-timeout:` line on an approved warden step. Output: `~/hive/.hive/soft-layer/261025-real4/`.
+
+| arm | outcome | minutes | runs | turns | messages | peer | briefs | helpers | asks | finished | notes | feedback | merged | peak MB | peak load |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| standard | landed f9f2749b0 after 17m1s | 17 | 5 | 6 | 0 | 0 | 2 | 0 | 0 | done 1 | 0 | 0 | 1 | 866 | 49.4 |
+| essay | landed b1f4df6b7 after 17m21s | 18 | 5 | 6 | 0 | 0 | 2 | 0 | 0 | done 1 | 0 | 0 | 1 | 842 | 52.8 |
+
+The run's cgroup peaked at 2126 MB, under the 3 GB ceiling. That was with a lead, a worker and a reviewer at a time, and nothing swapped. Peak load is the whole machine's, the Hive's own work included. The test exited FAIL only because `t.TempDir` couldn't remove each sub-Hive's read-only Go module cache; `settle` now makes those folders writable first (`TestSettleRemovesReadOnlyFolders`).
+
+What each arm did:
+
+- **Same shape, same time.** Lead files the ask as a fix (one brief), worker commits in about 3 minutes, its tests wait about 11 minutes behind the score run on main (`max_checks` 1), then tests, a reader and the security reader land it; the second brief is the automatic review follow-up, which the test stops. Of the 17 minutes, the queue is two thirds.
+- **The `essay` worker built what was asked; the `standard` worker didn't.** `essay`: a `# hive-timeout: <duration>` line in the script, read by one `StepTimeout` that the warden's decision and the run both call, capped at 4h, bad values refused at decision, "timed out after X", the warden and tribunal prompts and `docs/risk.md` updated (79 lines). `standard`: `--timeout` flags on `hive agent warden` and `decide` instead of a line in the script (105 lines). Both readers, the security reader included, passed it. That is the same drift `chatty`'s worker made in real3: the brief's mechanism replaced by a nearby one, and review checking the code, not the code against the brief.
+- **No hive, either way.** No messages at all, no `hive agent status`, no knowledge-base search, no notes, no feedback, no asks. With one worker at a time there is no peer to talk to, so this run can't show lateral talk; it shows only that neither wording makes a lone worker reach for the Hive's memory.
+
+So on one real task, the person's essay with one-line roles did as well as the standard prompts, a little better in fidelity, at the same cost. One task and one run each is an anecdote, not a measurement: the next runs add the other arms one or two at a time, and a task that needs two workers at once is what can show whether any arm talks laterally.
 
 On the fake harness, which ignores its prompts, the runs show the pipeline only: every arm installs and is used (the test checks each run's system prompt), on the demo project an ask lands in about 30 seconds, and on the clone of the Hive's own source (`philosophy`, 2026-10-25) the default task went lead → worker → the clone's full `go vet` and short tests → review → merge in 50 seconds, with no messages. The first clone runs (`quiet`, `essay`) found the one hard-layer gap a sub-Hive of the Hive's source hits: the forge checks no local forge runs (step 4).

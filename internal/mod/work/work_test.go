@@ -728,7 +728,8 @@ func TestReviewRulesFromMain(t *testing.T) {
 
 // Advice from a land is filed once, when the task merges: a step repeated
 // after a restart files no second brief, a follow-up's own advice files none,
-// and on a scored project the follow-up keeps its done line.
+// on a scored project the follow-up keeps its done line, and it is taken as a
+// fix of what the review found, not a gain for the gate.
 func TestFollowUpOnceAfterMerge(t *testing.T) {
 	m, p := rigAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`)
 	tk := &Task{ID: "t9", Project: "p", Title: "add a helper", Kind: "work", Stage: StageMerged, Reviewer: "r-t9", Advice: []string{"name it better"}}
@@ -744,6 +745,9 @@ func TestFollowUpOnceAfterMerge(t *testing.T) {
 		t.Fatalf("follow-ups: %+v", fs)
 	}
 	fu := fs[0]
+	if !fu.Fix() || !strings.Contains(fu.AimWhy, "name it better") {
+		t.Fatalf("the follow-up is taken as %s (%q), not a fix", fu.AimWord(), fu.AimWhy)
+	}
 	if d := doneFor(&fu, true); !strings.Contains(d, "judged not worth doing") {
 		t.Fatalf("the follow-up lost its done line: %q", d)
 	}

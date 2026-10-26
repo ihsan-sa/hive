@@ -184,6 +184,7 @@ func probeBenchmark(cfg *Config, c *Child) Result {
 		Seconds  *float64 `json:"seconds"`
 		Done     float64  `json:"asks_done_reported"`
 		Cost     float64  `json:"cost_usd_reported"`
+		Messages float64  `json:"worker_messages_reported"`
 	}
 	if json.Unmarshal([]byte(m[1]), &b) != nil || b.Score == nil || b.Finished == nil || b.Commits == nil || b.Seconds == nil {
 		return Result{Detail: "the evaluator's BENCH line lacks what is judged (an evaluator from before the outside measure?): " + m[1]}
@@ -196,7 +197,8 @@ func probeBenchmark(cfg *Config, c *Child) Result {
 		{Name: "score", Value: *b.Score, Higher: true}, {Name: "asks_finished", Value: *b.Finished, Higher: true},
 		{Name: "seconds", Value: *b.Seconds, Given: same},
 		{Name: "commits_landed", Value: *b.Commits, Higher: true, Info: true},
-		{Name: "asks_done_reported", Value: b.Done, Higher: true, Info: true}, {Name: "cost_usd_reported", Value: b.Cost, Info: true}}}
+		{Name: "asks_done_reported", Value: b.Done, Higher: true, Info: true}, {Name: "cost_usd_reported", Value: b.Cost, Info: true},
+		{Name: "worker_messages_reported", Value: b.Messages, Higher: true, Info: true}}}
 }
 
 // probeRecurse has the child gate a trivial change of its own through a

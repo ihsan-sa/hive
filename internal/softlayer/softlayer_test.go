@@ -136,7 +136,11 @@ func TestObserve(t *testing.T) {
 		t.Errorf("runs %v, finished %v, merged %d", rep.Runs, rep.Finished, rep.Merged)
 	}
 	rep.Variant = "vague"
-	if tab := Table([]Report{rep}); !strings.Contains(tab, "| vague |") || !strings.Contains(tab, "worker→worker 1") {
+	if tab := Table([]Report{rep}); !strings.Contains(tab, "| vague |") || !strings.Contains(tab, "worker→worker 1") || !strings.HasSuffix(strings.Split(tab, "\n")[2], "| - | - |") {
 		t.Errorf("table:\n%s", tab)
+	}
+	rep.PeakMB, rep.PeakLoad = 2900, 6.25
+	if tab := Table([]Report{rep}); !strings.Contains(tab, "| 2900 | 6.2 |") {
+		t.Errorf("an arm's peaks aren't in the table:\n%s", tab)
 	}
 }
