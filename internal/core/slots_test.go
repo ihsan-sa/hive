@@ -157,3 +157,41 @@ func TestSlotsRankGoesFirst(t *testing.T) {
 		t.Fatalf("started in order %v", order)
 	}
 }
+
+func TestSlotsPatienceStopsPassingOver(t *testing.T) {
+	s := NewSlots(func() int { return 1 })
+	s.Prioritize(func(_, sha, _ string) int {
+		if sha == "plain" {
+			return 0
+		}
+		return 2
+	})
+	s.patience = 50 * time.Millisecond
+	hold := s.Acquire("p", "first", "test")
+	started := make(chan string, 10)
+	ask := func(sha string) {
+		go func() {
+			rel := s.Acquire("p", sha, "test")
+			started <- sha
+			rel()
+		}()
+		for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+			if r, w := s.State(); inSlots(r, w, sha) {
+				break
+			}
+			if time.Now().After(end) {
+				t.Fatalf("%s never queued", sha)
+			}
+		}
+	}
+	ask("plain")
+	time.Sleep(60 * time.Millisecond)
+	ask("ranked")
+	if _, w := s.State(); len(w) != 2 || w[0].SHA != "plain" {
+		t.Fatalf("waiting %+v", w)
+	}
+	hold()
+	if a, b := <-started, <-started; a != "plain" || b != "ranked" {
+		t.Fatalf("started %s then %s", a, b)
+	}
+}
