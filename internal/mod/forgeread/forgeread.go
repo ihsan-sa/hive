@@ -2,6 +2,10 @@
 // its check runs, a check's annotations) on the person's login, cached and
 // held to a budget, so agents stop spending the anonymous 60 calls an hour
 // this machine's address shares with the daemon's own update checks.
+//
+// The cache and the budget are held in memory and start afresh when the
+// daemon restarts. The cache is keyed by path alone, shared across runs, so
+// a run's reach (mayRead) is checked before the cache is.
 package forgeread
 
 import (
@@ -10,6 +14,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +49,7 @@ type Module struct {
 type answer struct {
 	at   time.Time
 	body string
+	err  error // GitHub's refusal (a 404, a 403), kept as long as an answer
 }
 
 // New registers the github op.
@@ -53,7 +59,8 @@ func New(c *core.Core) *Module {
 	return m
 }
 
-// path is safe characters only, under repos/owner/name, with no "..".
+// path is safe characters only, under repos/owner/name; Read refuses "." and
+// ".." segments.
 var pathRe = regexp.MustCompile(`^repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(/[A-Za-z0-9_./-]*)?(\?[A-Za-z0-9_.=&,-]*)?$`)
 
 // readable are the reads under a repo an agent may ask for: pull requests,
@@ -87,7 +94,12 @@ func (m *Module) op(r core.Run, args json.RawMessage) (any, error) {
 	if err := core.Bind(args, &req); err != nil {
 		return nil, err
 	}
-	arg := func(v any) string { return strings.TrimSpace(fmt.Sprint(v)) }
+	arg := func(v any) string {
+		if f, ok := v.(float64); ok { // a JSON number: never "3e+10"
+			return strconv.FormatFloat(f, 'f', -1, 64)
+		}
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
 	repo := req.Repo
 	if repo == "" {
 		if p, ok := m.C.Projects.Get(r.Project); ok {
@@ -116,7 +128,7 @@ func (m *Module) op(r core.Run, args json.RawMessage) (any, error) {
 // read on the login, within the budget.
 func (m *Module) Read(r core.Run, path string) (string, error) {
 	g := pathRe.FindStringSubmatch(path)
-	if g == nil || strings.Contains(path, "..") {
+	if g == nil || slices.ContainsFunc(strings.Split(strings.SplitN(path, "?", 2)[0], "/"), func(s string) bool { return s == "." || s == ".." }) {
 		return "", fmt.Errorf("%q is not a read under repos/owner/name/", path)
 	}
 	if !readable.MatchString(g[2]) {
@@ -134,7 +146,7 @@ func (m *Module) Read(r core.Run, path string) (string, error) {
 	m.mu.Lock()
 	if a, ok := m.cache[path]; ok && now.Sub(a.at) < fresh {
 		m.mu.Unlock()
-		return a.body, nil
+		return a.body, a.err
 	}
 	m.sent = slices.DeleteFunc(m.sent, func(t time.Time) bool { return now.Sub(t) >= time.Hour })
 	if len(m.sent) >= budget {
@@ -150,15 +162,29 @@ func (m *Module) Read(r core.Run, path string) (string, error) {
 		if errors.As(err, &rl) {
 			return "", fmt.Errorf("GitHub's rate limit on the login: try again after %s (%s)", rl.Until.UTC().Format("15:04Z"), core.Clip(rl.Text, 200))
 		}
+		// A refusal (gh's "HTTP 404" and the like) is kept as an answer is,
+		// so an agent asking again for a path that isn't there doesn't spend
+		// the budget each time; a timeout or a fault on this side isn't.
+		if strings.Contains(err.Error(), "HTTP 4") {
+			m.keep(path, answer{now, "", err})
+		}
 		return "", err
 	}
 	if len(body) > most {
 		body = body[:most] + "\n[cut at " + fmt.Sprint(most) + " bytes; ask for less with ?per_page=]"
 	}
+	m.keep(path, answer{now, body, nil})
+	return body, nil
+}
+
+// keep caches one path's answer, making room when the cache is full.
+func (m *Module) keep(path string, a answer) {
+	now := a.at
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if len(m.cache) >= kept {
-		for k, a := range m.cache {
-			if now.Sub(a.at) >= fresh {
+		for k, old := range m.cache {
+			if now.Sub(old.at) >= fresh {
 				delete(m.cache, k)
 			}
 		}
@@ -166,9 +192,7 @@ func (m *Module) Read(r core.Run, path string) (string, error) {
 			clear(m.cache)
 		}
 	}
-	m.cache[path] = answer{now, body}
-	m.mu.Unlock()
-	return body, nil
+	m.cache[path] = a
 }
 
 // mayRead says whether run r may read repo on the login: its own project's,
