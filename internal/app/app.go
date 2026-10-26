@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	hive "github.com/ihsan-sa/hive-standalone-build"
@@ -84,6 +85,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Release = release.New(c)
 	a.Models = models.New(c, a.Work)
 	a.Agents.Skip = a.Models.Benched
+	a.Agents.Demote = a.Models.Demoted
 	a.Improve.OnKept = a.Release.AfterKept
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
 	for _, tick := range []func(){stats.SpendNotice{C: c}.Tick, a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.moduleJobs, a.Runner.Tick, a.Models.Tick} {
@@ -125,18 +127,21 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 // "schedule"). A due one is journaled as module.scheduled, which the program
 // reads off the journal like any hook; the daemon never calls it.
 func (a *App) moduleJobs() {
+	names := map[string]bool{}
 	for _, m := range a.Mods.List() {
 		if len(m.Exec) == 0 {
 			continue
 		}
 		name := filepath.Base(m.Dir)
 		for job, every := range m.Schedule {
+			names[job] = true
 			a.System.RegisterModule(system.Job{Name: job, Default: every, Fn: func() (string, error) {
 				a.C.J.MustAppend("module.scheduled", map[string]string{"module": name, "job": job})
 				return "asked module " + name, nil
 			}})
 		}
 	}
+	a.System.KeepModuleJobs(names)
 }
 
 // Clean removes spent checkouts and what checks left behind, then measures
@@ -182,13 +187,16 @@ func (a *App) Tick() {
 	a.Mods.Tick()
 }
 
-// wakeGap and wakeBurst bound the ticks a journal event brings forward: one
-// comes wakeGap after the event, so a burst of events is one tick, and at most
-// wakeBurst come between two of the second's ticks, so a step that journals
-// on every tick can't spin the loop.
+// wakeGap, wakeBurst and wakeMost bound the ticks a journal event brings
+// forward: one comes wakeGap after the event, so a burst of events is one
+// tick. After a tick that itself journaled, at most wakeBurst come between two
+// of the second's ticks, so a step that journals on every tick can't spin the
+// loop; events from elsewhere (a verdict, a request, a turn that ended) wake
+// it up to wakeMost times, so the next step doesn't wait out the second.
 const (
 	wakeGap   = 20 * time.Millisecond
 	wakeBurst = 8
+	wakeMost  = 40
 )
 
 // Run ticks every second until ctx ends, and soon after each journal event:
@@ -197,35 +205,49 @@ const (
 func (a *App) Run(ctx context.Context) {
 	a.Improve.Recover()
 	go a.C.WatchLogins(ctx, time.Minute)
-	loop(ctx, a.C.J, a.Tick)
+	wake := make(chan struct{}, 1)
+	go a.C.Runs.WatchRequests(ctx, 50*time.Millisecond, func() { nudge(wake) })
+	loop(ctx, a.C.J, wake, a.Tick)
+}
+
+// nudge wakes the loop, once however many nudges come before it looks.
+func nudge(wake chan struct{}) {
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
 }
 
 // loop calls tick every second until ctx ends, and wakeGap after an event
-// lands in j, at most wakeBurst times between two of the second's ticks.
-func loop(ctx context.Context, j *core.Journal, tick func()) {
-	wake := make(chan struct{}, 1)
+// lands in j or something sends on wake: at most wakeBurst times between two of the second's ticks when
+// the tick before journaled while it ran, and at most wakeMost otherwise.
+func loop(ctx context.Context, j *core.Journal, wake chan struct{}, tick func()) {
+	var events atomic.Int64
 	j.Subscribe(func(core.Event) {
-		select {
-		case wake <- struct{}{}:
-		default:
-		}
+		events.Add(1)
+		nudge(wake)
 	})
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
-	woken := 0
+	woken, spun := 0, 0
 	for {
+		before := events.Load()
 		tick()
+		journaled := events.Load() != before
 		early := wake
-		if woken >= wakeBurst {
+		if woken >= wakeMost || (journaled && spun >= wakeBurst) {
 			early = nil
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			woken = 0
+			woken, spun = 0, 0
 		case <-early:
 			woken++
+			if journaled {
+				spun++
+			}
 			select {
 			case <-ctx.Done():
 				return

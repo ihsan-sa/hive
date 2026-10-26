@@ -30,10 +30,13 @@ import (
 //     (outside the sandbox, running no code of the commit's: `go mod
 //     download`, as the recursive gate's prefetch does) once per go.mod and
 //     go.sum, and mounted read-only with GOPROXY=off and -mod=readonly.
-//   - A check's own home (its build cache) lives under the workspace's cache
-//     folder, is capped in size (config check_cache_max_mb) and removed after.
-//     A build cache shared between checks would let one commit's check plant
-//     outputs another commit's check trusts, so it is never shared.
+//   - A check's own home lives under the workspace's cache folder, is capped
+//     in size (config check_cache_max_mb) and removed after.
+//   - A Go project's build cache is shared only from main: a check of a
+//     commit on main's line writes the project's cache, and a check of any
+//     other commit reads it (read-only, through `hive gocacheprog`) and keeps
+//     what it builds in its home. So a check reuses what main's checks built
+//     and passed, and no commit's check can plant outputs another trusts.
 //   - A check that fails for want of room is can't-run, not red, and raises
 //     one alert that names what is using the room.
 //   - The hive.clean job (Prune here, work's PruneCheckouts) removes what
@@ -50,8 +53,16 @@ func (w Workspace) CheckHomes() string { return filepath.Join(w.Cache(), "homes"
 
 func (w Workspace) goSums() string { return filepath.Join(w.Cache(), "gomod-sums") }
 
+// GoBuildCache is a project's build cache, written only by checks of main.
+func (w Workspace) GoBuildCache(project string) string {
+	return filepath.Join(w.Cache(), "gobuild", project)
+}
+
 // GoModInside is where checks see the module cache.
 const GoModInside = "/hive/gomod"
+
+// GoBuildInside is where checks see the project's build cache.
+const GoBuildInside = "/hive/gobuild"
 
 // homeTmp is the check's temp folder (TMPDIR) inside its home.
 const homeTmp = "tmp"
@@ -59,6 +70,7 @@ const homeTmp = "tmp"
 const (
 	checkCacheDefaultMB = 8192
 	modCacheMax         = 20 << 30 // past this the hourly sweep empties the module cache
+	buildCacheMax       = 10 << 30 // and a project's build cache past this
 	staleAfter          = 3 * time.Hour
 	stopGrace           = time.Minute // a stop file outlives its home this long, so its sandbox sees it
 )
@@ -81,6 +93,14 @@ func DiskFull(out string) string {
 	if len(FailedTests(out)) > 0 {
 		return ""
 	}
+	return toolDiskFull(out)
+}
+
+// toolDiskFull is DiskFull's line whether or not tests failed. RunCheck
+// takes it when a place checks write is short of room as the check ends:
+// a real full disk can make a test fail too, and then the failure is the
+// disk's.
+func toolDiskFull(out string) string {
 	for _, l := range strings.Split(out, "\n") {
 		if l != "" && l[0] != ' ' && l[0] != '\t' && diskFull.MatchString(l) {
 			return strings.TrimSpace(l)
@@ -92,6 +112,27 @@ func DiskFull(out string) string {
 // staleModules is what a check prints when the shared module cache lacks a
 // module its marker says is there (the cache was emptied under it).
 const staleModules = "module lookup disabled by GOPROXY=off"
+
+// ownModules marks a go.mod and go.sum whose check needed a module they don't
+// name (`go run x@latest`, a tool fetched by version): the shared cache can't
+// serve it, so later checks of the same files fetch their own from the start
+// instead of running twice.
+const ownModules = ".own"
+
+var missingModule = regexp.MustCompile(`(\S+)@(\S+): ` + regexp.QuoteMeta(staleModules))
+
+// cacheLacked says why a check that printed staleModules failed: the shared
+// cache lacked a module go.sum names (its fault: true), or the check wanted
+// one go.sum doesn't name (false). A line it can't read counts as the cache's.
+func cacheLacked(out string, sum []byte) bool {
+	m := missingModule.FindStringSubmatch(out)
+	if m == nil {
+		return true
+	}
+	mod, ver := m[1], m[2]
+	s := "\n" + string(sum)
+	return strings.Contains(s, "\n"+mod+" "+ver+" ") || strings.Contains(s, "\n"+mod+" "+ver+"/go.mod ")
+}
 
 // checkCacheCap is one check's home cap in bytes.
 func (e *Effects) checkCacheCap() int64 {
@@ -110,6 +151,7 @@ type goMods struct {
 	env    []string
 	note   string
 	marker string
+	sum    []byte // the go.sum the marker is for
 	done   func()
 }
 
@@ -147,6 +189,10 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 	h := sha256.Sum256(append(append(mod, 0), sum...))
 	key := hex.EncodeToString(h[:8])
 	marker := filepath.Join(e.ws.goSums(), key)
+	if Exists(marker + ownModules) {
+		none.note = "modules not prefetched: a check of this go.mod and go.sum needed a module they don't name"
+		return none
+	}
 	e.modMu.RLock() // Prune empties the cache only while no check fetches into or reads it
 	if !Exists(marker) {
 		unlock := e.lock("gomod:" + key)
@@ -157,6 +203,18 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 				none.note = "modules not prefetched: " + err.Error()
 				return none
 			}
+			// A go.mod can name modules enough to fill the disk; past its
+			// cap the cache serves no new marker and the clean job empties
+			// it once no check reads it.
+			if Size(e.ws.GoModCache()) > modCacheMax {
+				unlock()
+				e.modMu.RUnlock()
+				if e.OnDiskFull != nil {
+					go e.OnDiskFull()
+				}
+				none.note = "modules not prefetched: the shared module cache is past its cap until the clean job empties it"
+				return none
+			}
 			os.MkdirAll(e.ws.goSums(), 0o755)
 			os.WriteFile(marker, nil, 0o644)
 		}
@@ -164,27 +222,109 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 	}
 	os.MkdirAll(e.ws.GoModCache(), 0o755) // a module with nothing to fetch still mounts it
 	return goMods{mounts: []sandbox.Mount{{Host: e.ws.GoModCache(), Inside: GoModInside}},
-		env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly", "GOPROXY=off"}, marker: marker, done: e.modMu.RUnlock}
+		env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly", "GOPROXY=off"}, marker: marker, sum: sum, done: e.modMu.RUnlock}
+}
+
+// goBuild readies the project's shared build cache for a check of sha in dir,
+// where goModules would share the module cache. A commit on main's line
+// writes it; any other reads it through `hive gocacheprog` and writes only
+// its home. Either way the checkout's file times are made a function of
+// their content first, so a test that reads files is reused when they match.
+func (e *Effects) goBuild(sb sandbox.Sandbox, p Project, sha, dir string) goMods {
+	none := goMods{done: func() {}}
+	if !sb.Isolated() || runtime.GOOS != "linux" {
+		return none
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, "go.mod")); err != nil || !fi.Mode().IsRegular() {
+		return none
+	}
+	if err := stableTimes(dir); err != nil {
+		none.note = "build cache not shared: " + err.Error()
+		return none
+	}
+	shared := e.ws.GoBuildCache(p.Name)
+	e.buildMu.RLock() // Prune empties it only while no check reads or writes it
+	if e.MainLine(p)[sha] {
+		os.MkdirAll(shared, 0o755)
+		return goMods{mounts: []sandbox.Mount{{Host: shared, Inside: GoBuildInside, RW: true}},
+			env: []string{"GOCACHE=" + GoBuildInside}, done: e.buildMu.RUnlock}
+	}
+	if !Exists(shared) {
+		e.buildMu.RUnlock()
+		return none // nothing of main's built yet
+	}
+	return goMods{mounts: []sandbox.Mount{{Host: shared, Inside: GoBuildInside}},
+		env: []string{"GOCACHE=/hive/home/gocache", "GOCACHEPROG=/hive/bin/hive gocacheprog " + GoBuildInside + " /hive/home/gobuild"}, done: e.buildMu.RUnlock}
+}
+
+// stableTimes sets each tracked file's and folder's time in the checkout at
+// dir from its git object ID, so the same content has the same time in every
+// check. The go command reuses a passed test only if every file it opened
+// has the size and time it had then; a fresh checkout's times never match.
+// Times run over 17 years to the nanosecond: two contents sharing a size and
+// a time is a 1 in 2^59 chance. Symlinks are left as they are, and os.Root
+// keeps every change inside dir.
+func stableTimes(dir string) error {
+	out, err := Git(dir, "ls-tree", "-r", "-t", "-z", "HEAD")
+	if err != nil {
+		return err
+	}
+	top, err := Git(dir, "rev-parse", "HEAD^{tree}")
+	if err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	at := func(id string) time.Time {
+		v, _ := strconv.ParseUint(id[:min(len(id), 15)], 16, 64)
+		return time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(v % (1 << 29 * uint64(time.Second))))
+	}
+	// Deepest first: a folder's time is set after what is in it.
+	recs := strings.Split(strings.TrimSuffix(out, "\x00"), "\x00")
+	for i := len(recs) - 1; i >= 0; i-- {
+		meta, path, ok := strings.Cut(recs[i], "\t")
+		f := strings.Fields(meta)
+		if !ok || len(f) != 3 || f[0] == "120000" || f[1] == "commit" {
+			continue
+		}
+		if fi, err := root.Lstat(path); err == nil && fi.Mode()&fs.ModeSymlink == 0 {
+			root.Chtimes(path, at(f[2]), at(f[2]))
+		}
+	}
+	return root.Chtimes(".", at(strings.TrimSpace(top)), at(strings.TrimSpace(top)))
 }
 
 // localReplace says why go.mod's replace directives would lead the go command
 // out of the checkout at dir, or "": a folder target must be relative, stay
 // inside dir and reach it through no symlink. It doesn't parse directives or
-// blocks (go accepts "replace(" as well as "replace ("): every line with "=>"
-// outside a comment is a replacement, and the token after it, quoted or not,
-// is its target. A target it can't read refuses the prefetch.
+// blocks (go accepts "replace(" as well as "replace ("): it splits each line
+// into tokens as go's lexer does, every line with an "=>" token is a
+// replacement, and the token after it, quoted or not, is its target. A line
+// it can't read, or with more than one "=>", refuses the prefetch.
 func localReplace(dir, mod string) string {
 	for _, l := range strings.Split(mod, "\n") {
-		_, rest, ok := cutArrow(l)
-		if !ok {
-			continue
+		toks, ok := modTokens(l)
+		arrows, named := 0, 0
+		var target string
+		for i, t := range toks {
+			if t.text == "=>" && !t.quoted {
+				arrows++
+				if i+1 < len(toks) {
+					target = toks[i+1].text
+				}
+			}
+			if strings.Contains(t.text, "=>") {
+				named++
+			}
 		}
-		target, ok := firstToken(rest)
-		if !ok {
+		if !ok && strings.Contains(l, "=>") || named > 1 || named == 1 && (arrows != 1 || target == "") {
 			return "a replace in go.mod can't be read"
 		}
-		if !dirPath(target) {
-			continue // a module path, fetched from the proxy
+		if arrows == 0 || !dirPath(target) {
+			continue // no replace, or a module path, fetched from the proxy
 		}
 		if strings.ContainsAny(target, `\:`) || strings.HasPrefix(target, "/") {
 			return "a replace names a folder outside the checkout"
@@ -205,24 +345,50 @@ func localReplace(dir, mod string) string {
 	return ""
 }
 
-// cutArrow finds the first "=>" on a go.mod line outside quotes and before a
-// comment, and returns what follows it.
-func cutArrow(l string) (before, after string, ok bool) {
-	for i := 0; i < len(l); i++ {
+// modToken is one token of a go.mod line, unquoted.
+type modToken struct {
+	text   string
+	quoted bool
+}
+
+// modTokens splits a go.mod line into tokens as go's lexer
+// (golang.org/x/mod/modfile) does, up to a comment: a string quoted at a
+// token's start, one of the punctuation characters ()[]{}, or a run of
+// anything else but space, which a "//" ends. So "=>" is the arrow only as a
+// token of its own ("a=>b" is one token to go). ok is false for a string with
+// no end or one that doesn't unquote.
+func modTokens(l string) (toks []modToken, ok bool) {
+	for i := 0; i < len(l); {
+		c := l[i]
 		switch {
-		case l[i] == '"' || l[i] == '`':
+		case c == ' ' || c == '\t' || c == '\r':
+			i++
+		case strings.HasPrefix(l[i:], "//"):
+			return toks, true
+		case c == '"' || c == '`':
 			j := closing(l, i)
 			if j < 0 {
-				return "", "", false
+				return toks, false
 			}
-			i = j
-		case strings.HasPrefix(l[i:], "//"):
-			return "", "", false
-		case strings.HasPrefix(l[i:], "=>"):
-			return l[:i], l[i+2:], true
+			t := l[i+1 : j]
+			if c == '"' {
+				var err error
+				if t, err = strconv.Unquote(l[i : j+1]); err != nil {
+					return toks, false
+				}
+			}
+			toks, i = append(toks, modToken{t, true}), j+1
+		case strings.IndexByte("()[]{},", c) >= 0:
+			toks, i = append(toks, modToken{text: string(c)}), i+1
+		default:
+			j := i
+			for j < len(l) && strings.IndexByte(" \t\r()[]{},", l[j]) < 0 && !strings.HasPrefix(l[j:], "//") {
+				j++
+			}
+			toks, i = append(toks, modToken{text: l[i:j]}), j
 		}
 	}
-	return "", "", false
+	return toks, true
 }
 
 // closing is the index of the quote closing the string that starts at i, or -1.
@@ -238,37 +404,6 @@ func closing(l string, i int) int {
 		}
 	}
 	return -1
-}
-
-// firstToken reads the first go.mod token of s, unquoting a quoted one. An
-// unquoted token ends at a space, a parenthesis or a comment.
-func firstToken(s string) (string, bool) {
-	s = strings.TrimLeft(s, " \t\r")
-	if s == "" {
-		return "", false
-	}
-	if s[0] == '"' || s[0] == '`' {
-		j := closing(s, 0)
-		if j < 0 {
-			return "", false
-		}
-		if s[0] == '`' {
-			return s[1:j], true
-		}
-		t, err := strconv.Unquote(s[:j+1])
-		return t, err == nil
-	}
-	end := strings.IndexAny(s, " \t\r()")
-	if c := strings.Index(s, "//"); c >= 0 && (end < 0 || c < end) {
-		end = c
-	}
-	if end == 0 {
-		return "", false
-	}
-	if end > 0 {
-		s = s[:end]
-	}
-	return s, true
 }
 
 // dirPath reports whether a replace target is a folder, as the go command
@@ -306,7 +441,11 @@ func (e *Effects) prefetch(dir string) error {
 	// Telemetry off: in a fresh home go always takes its daily upload token
 	// and starts a detached child that can outlive it, still writing under
 	// tmp while RemoveTree empties it (issue #514).
-	env = append(env, goTelemetryOff(tmp)...)
+	off, err := goTelemetryOff(tmp)
+	if err != nil {
+		return fmt.Errorf("can't turn go's telemetry off: %v", err)
+	}
+	env = append(env, off...)
 	for _, k := range []string{"GOPROXY", "GOSUMDB", "GONOSUMDB", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
 		if v, ok := os.LookupEnv(k); ok {
 			env = append(env, k+"="+v)
@@ -419,8 +558,37 @@ func (e *Effects) RemoveCheckout(project, id string) error {
 	if !Exists(dir) {
 		return nil
 	}
-	defer e.lock(project)()
-	return RemoveTree(dir)
+	// Under the project's lock it is only moved aside, into the cache (on
+	// the same filesystem, so a rename): removing a large checkout there
+	// would hold up a push and other git work on the project meanwhile.
+	// Marked live, Prune leaves it to this call; one a crash left goes there.
+	os.MkdirAll(e.ws.Cache(), 0o755)
+	aside := filepath.Join(e.ws.Cache(), "removing-"+NewID())
+	e.mu.Lock()
+	if e.homes == nil {
+		e.homes = map[string]bool{}
+	}
+	e.homes[aside] = true
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		delete(e.homes, aside)
+		e.mu.Unlock()
+	}()
+	unlock := e.lock(project)
+	err := os.Rename(dir, aside)
+	if err != nil {
+		err = RemoveTree(dir)
+	}
+	unlock()
+	if err == nil {
+		err = RemoveTree(aside)
+	}
+	if err != nil {
+		return err
+	}
+	e.j.MustAppend("effect.checkout_removed", map[string]string{"project": project, "id": id})
+	return nil
 }
 
 // Prune removes what checks left behind: homes of checks no longer running,
@@ -471,7 +639,7 @@ func (e *Effects) Prune() string {
 	}
 	// The temp area is shared with other workspaces' Hives, whose homes this
 	// daemon can't tell from dead ones but by age.
-	for _, g := range []string{filepath.Join(os.TempDir(), "hive-check-home-*"), filepath.Join(e.ws.Cache(), "prefetch-*")} {
+	for _, g := range []string{filepath.Join(os.TempDir(), "hive-check-home-*"), filepath.Join(e.ws.Cache(), "prefetch-*"), filepath.Join(e.ws.Cache(), "removing-*")} {
 		ms, _ := filepath.Glob(g)
 		for _, p := range ms {
 			if !live(p) && !strings.HasSuffix(p, ".stop") && old(p, staleAfter) {
@@ -494,6 +662,13 @@ func (e *Effects) Prune() string {
 		RemoveTree(e.ws.goSums()) // first, so no marker outlives its modules
 		drop(e.ws.GoModCache())
 		e.modMu.Unlock()
+	}
+	builds, _ := filepath.Glob(e.ws.GoBuildCache("*"))
+	for _, b := range builds {
+		if Size(b) > buildCacheMax && e.buildMu.TryLock() {
+			drop(b)
+			e.buildMu.Unlock()
+		}
 	}
 	var did []string
 	if len(gone) > 0 {
@@ -529,35 +704,90 @@ type Room struct {
 	Size int64  `json:"size"`
 }
 
-// MeasureDisk measures the Hive's disk use now and keeps it for Disk.
+// MeasureDisk measures the Hive's disk use now and keeps it for Disk. It
+// walks the workspace once: each part's folder is sized as the walk reaches
+// it and counted in the total too, so nothing is walked twice.
 func (e *Effects) MeasureDisk() DiskUse {
 	ws := e.ws
-	var checkouts int64
+	parts := []DiskPart{{Name: "agents' checkouts"}, {Name: "check homes"}, {Name: "Go module cache"},
+		{Name: "check checkouts and gates"}, {Name: "runs"}, {Name: "tools"}, {Name: "Go build caches"}}
+	at := map[string]int{ws.CheckHomes(): 1, ws.GoModCache(): 2, ws.Gates(): 3, ws.Runs(): 4, ws.Tools(): 5, filepath.Join(ws.Cache(), "gobuild"): 6}
 	projects, _ := os.ReadDir(ws.Projects())
 	for _, p := range projects {
-		checkouts += Size(ws.Checkouts(p.Name()))
+		at[ws.Checkouts(p.Name())] = 0
 	}
-	homes := Size(ws.CheckHomes())
+	var total int64
+	other := map[string]int64{}
+	filepath.WalkDir(ws.Root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if i, ok := at[p]; ok && d.IsDir() {
+			n := Size(p)
+			parts[i].Bytes += n
+			total += n
+			return filepath.SkipDir
+		}
+		if d.Type().IsRegular() {
+			if fi, err := d.Info(); err == nil {
+				total += fi.Size()
+				other[topOf(ws.Root, p)] += fi.Size()
+			}
+		}
+		return nil
+	})
+	// What no part names is told by the biggest folder holding it, so a
+	// total far past the parts says where the rest went.
+	var top string
+	for k, n := range other {
+		if k != "" && (top == "" || n > other[top]) {
+			top = k
+		}
+	}
+	if top != "" {
+		parts = append(parts, DiskPart{Name: "other, most in " + top, Bytes: other[top]})
+	}
 	if ms, _ := filepath.Glob(filepath.Join(os.TempDir(), "hive-check-home-*")); len(ms) > 0 {
 		for _, m := range ms {
-			homes += Size(m)
+			parts[1].Bytes += Size(m)
 		}
 	}
-	d := DiskUse{At: time.Now().UTC(), Total: Size(ws.Root), Parts: []DiskPart{
-		{"agents' checkouts", checkouts}, {"check homes", homes}, {"Go module cache", Size(ws.GoModCache())},
-		{"check checkouts and gates", Size(ws.Gates())}, {"runs", Size(ws.Runs())}, {"tools", Size(ws.Tools())},
-	}}
+	d := DiskUse{At: time.Now().UTC(), Total: total, Parts: parts}
 	slices.SortStableFunc(d.Parts, func(a, b DiskPart) int { return cmp.Compare(b.Bytes, a.Bytes) })
-	for _, r := range []Room{{Name: "workspace", Path: ws.Root}, {Name: "temp", Path: os.TempDir()}} {
-		if free, size, ok := statRoom(r.Path); ok {
-			r.Free, r.Size = free, size
-			d.Room = append(d.Room, r)
-		}
-	}
+	d.Room = e.room()
 	e.mu.Lock()
 	e.disk = d
 	e.mu.Unlock()
 	return d
+}
+
+// room is the room left now where the Hive and its checks write. It is a
+// statfs each, no walk, so it is cheap to read as a check ends.
+func (e *Effects) room() []Room {
+	var rs []Room
+	for _, r := range []Room{{Name: "workspace", Path: e.ws.Root}, {Name: "temp", Path: os.TempDir()}} {
+		if free, size, ok := roomOf(r.Path); ok {
+			r.Free, r.Size = free, size
+			rs = append(rs, r)
+		}
+	}
+	return rs
+}
+
+// roomOf is statRoom, swapped in tests.
+var roomOf = statRoom
+
+// topOf is the folder two levels under root that holds p ("" for a file
+// directly in root), as a slash path.
+func topOf(root, p string) string {
+	rel, err := filepath.Rel(root, filepath.Dir(p))
+	if err != nil || rel == "." {
+		return ""
+	}
+	if parts := strings.SplitN(filepath.ToSlash(rel), "/", 3); len(parts) > 2 {
+		rel = parts[0] + "/" + parts[1]
+	}
+	return filepath.ToSlash(rel)
 }
 
 // Disk is the last measurement (zero before the first).
@@ -581,6 +811,9 @@ func (d DiskUse) String() string {
 	}
 	for _, r := range d.Room {
 		s += fmt.Sprintf("; %s %s free of %s", r.Name, Bytes(r.Free), Bytes(r.Size))
+	}
+	if len(d.Room) > 0 && !quotaShown {
+		s += " (a per-user quota doesn't show in these)"
 	}
 	return s
 }
@@ -619,9 +852,18 @@ func (e *Effects) diskAlert(line string) {
 	if raised {
 		return
 	}
-	d := e.MeasureDisk()
+	// The hourly hive.clean job's measurement names what uses the room; the
+	// workspace is walked again here only if there is none from the last
+	// hours, as a walk while checks wait on room only adds to their wait.
+	d := e.Disk()
+	if time.Since(d.At) > 2*time.Hour {
+		d = e.MeasureDisk()
+	} else {
+		d.Room = e.room()
+	}
+	// The line is a check's output, so it is quoted as such.
 	e.j.MustAppend("alert.raised", map[string]string{"kind": "disk", "ref": "disk",
-		"text": "Checks can't run: the disk or a quota is full where they write (" + Clip(line, 200) + "). T" + strings.TrimPrefix(d.String(), "t") + ". Nothing is judged red meanwhile; old checkouts and check folders are being cleaned."})
+		"text": "Checks can't run: the disk or a quota is full where they write (" + strconv.Quote(Clip(line, 200)) + "). T" + strings.TrimPrefix(d.String(), "t") + ". Nothing is judged red meanwhile; old checkouts and check folders are being cleaned."})
 	if e.OnDiskFull != nil {
 		go e.OnDiskFull()
 	}
@@ -637,7 +879,7 @@ func (e *Effects) diskAlert(line string) {
 // on Linux (XDG_CONFIG_HOME, which the returned env pins whatever the
 // host's), Library/Application Support on macOS, AppData on Windows (the
 // env names it there too, as go reads only the variable).
-func goTelemetryOff(home string) []string {
+func goTelemetryOff(home string) ([]string, error) {
 	var cfg string
 	var env []string
 	switch runtime.GOOS {
@@ -651,9 +893,13 @@ func goTelemetryOff(home string) []string {
 		env = append(env, "XDG_CONFIG_HOME="+cfg)
 	}
 	dir := filepath.Join(cfg, "go", "telemetry")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "mode"), []byte("off"), 0o644)
-	return env
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mode"), []byte("off"), 0o644); err != nil {
+		return nil, err
+	}
+	return env, nil
 }
 
 // checkTmp points a check's TMPDIR at the temp folder in its home, on disk,

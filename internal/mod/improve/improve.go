@@ -87,7 +87,7 @@ type Module struct {
 	lifted    map[string]time.Time                                                                    // project\x00test -> when its fix merged
 	fixMerged map[string]bool                                                                         // fix tasks whose merge lifted their test
 	kin       map[string]string                                                                       // task id -> the task it follows up or reverts
-	judging   map[string]string                                                                       // merge sha -> its project, while its judge decides it (judge.go)
+	judging   map[string]judgingMerge                                                                 // merge sha -> while its judge decides it (judge.go)
 	judges    sync.WaitGroup                                                                          // judgeMerge calls in flight
 	askJudge  func(p core.Project, t work.Task, ms Measurement, reason string) (core.Judgement, bool) // tests' stand-in for runJudge
 	covered   map[string][]Covered                                                                    // project -> merges main already held when they closed
@@ -102,7 +102,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, fixMerged: map[string]bool{}, kin: map[string]string{}, judging: map[string]string{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, fixMerged: map[string]bool{}, kin: map[string]string{}, judging: map[string]judgingMerge{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -166,6 +166,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
 	w.OnMerged = func(t work.Task) { m.queue <- t }
+	w.Retest = m.retest
 	work.BestScore = m.Best
 	work.Measured = m.measured
 	c.Effects.Quarantined = m.QuarantinedTests
@@ -632,24 +633,62 @@ func (m *Module) Recover() {
 			}
 		}
 		if !m.measured(t.Project, t.MergeSHA) {
+			m.holdForJudge(t)
 			m.queue <- t
+		}
+	}
+}
+
+// holdForJudge marks a merge whose judge run is still going after a restart
+// as with its judge, so later merges of its project wait for the baseline it
+// settles from the start, not only once it is measured again.
+func (m *Module) holdForJudge(t work.Task) {
+	for i := 0; i < work.JudgeTries; i++ {
+		if r, ok := m.C.Runs.Get(fmt.Sprintf("j-%s-%s-%d", t.ID, core.Short(t.MergeSHA), i)); ok && !r.Terminal() {
+			m.mu.Lock()
+			if _, busy := m.judging[t.MergeSHA]; !busy {
+				m.judging[t.MergeSHA] = judgingMerge{project: t.Project}
+			}
+			m.mu.Unlock()
+			return
 		}
 	}
 }
 
 // afterMerge measures main at the merge and keeps or reverts.
 func (m *Module) afterMerge(t work.Task) {
+	m.mu.Lock()
+	j := m.judging[t.MergeSHA]
+	m.mu.Unlock()
+	if j.running {
+		return // with its judge already: measuring it again would only repeat the checks
+	}
+	// A mark found after a restart (holdForJudge) holds later merges until
+	// this one is settled here, or with its judge again, which finds its run
+	// by id; it stays only while a failed sync brings the merge back.
+	later := false
+	defer func() {
+		m.mu.Lock()
+		if j, ok := m.judging[t.MergeSHA]; ok && !j.running && !later {
+			delete(m.judging, t.MergeSHA)
+		}
+		m.mu.Unlock()
+	}()
 	p, ok := m.C.Projects.Get(t.Project)
 	if !ok || m.measured(p.Name, t.MergeSHA) || m.superseded(p, t.MergeSHA) {
 		return
 	}
 	if m.judgingBefore(p.Name, t.MergeSHA) {
 		// An earlier merge's judge decides the baseline this one is measured
-		// against: wait for it, rather than judge the same fall again.
+		// against: wait for it, rather than judge the same fall again. A
+		// mark of its own from a restart stays while a running judge holds
+		// it; two marks alone never hold each other.
+		later = m.judgeRunning(p.Name, t.MergeSHA)
 		go func() { time.Sleep(judgeHold); m.queue <- t }()
 		return
 	}
 	if _, err := m.C.Effects.Sync(p); err != nil {
+		later = true
 		go func() { time.Sleep(time.Minute); m.queue <- t }()
 		return
 	}
@@ -751,8 +790,8 @@ func (m *Module) afterMerge(t work.Task) {
 		// Only the score says worse: a model's judgement decides, the score
 		// being one thing it weighs (judge.go).
 		m.mu.Lock()
-		_, busy := m.judging[t.MergeSHA]
-		m.judging[t.MergeSHA] = p.Name
+		busy := m.judging[t.MergeSHA].running
+		m.judging[t.MergeSHA] = judgingMerge{project: p.Name, running: true}
 		m.mu.Unlock()
 		if !busy {
 			m.judges.Add(1)

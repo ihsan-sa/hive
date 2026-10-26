@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -35,6 +36,11 @@ type Module struct {
 	// refused is each project's last "sha: why" that stopped a release
 	// before main's checks were read, raised once so a retry doesn't repeat it.
 	refused sync.Map
+	// scanSaid is each project's last "sha: why" a scan blocked, alerted once.
+	scanSaid sync.Map
+	// handlesAt is the newest commit each project's missing handle list
+	// holds, released again when the person says the list is written.
+	handlesAt sync.Map
 	// PauseMerges stops new merges and waits up to the given time for the
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
@@ -697,7 +703,8 @@ func fileSum(path string) (string, error) {
 // head with no read waits for the person's word. A change to a root path (what
 // runs with elevated rights) goes out once the Hive's own security reads passed
 // its diff (rootRead), and the person is told after; with no such read it waits
-// for the person too.
+// for the person too. While the newest release's release run failed, a merge
+// that changes nothing the failed job reads waits too (unbuilt).
 // The release numbers on from this build, so the install switches to it at its
 // next update. In the person's fork it also asks the person whether to offer
 // the change upstream, one pull request that grows with each kept merge.
@@ -735,14 +742,10 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	list, refuse := m.merges(project, sha)
-	if refuse == "" {
-		refuse = m.tagged(p, sha)
-	}
 	if refuse != "" {
 		once(refuse)
 		return
 	}
-	m.refused.Delete(project)
 	var manifest strings.Builder
 	var root, unread, rootRead []string
 	for _, mg := range list {
@@ -758,6 +761,10 @@ func (m *Module) afterKept(project, sha string) {
 		if by := m.rootRead(project, mg); by != "" {
 			fmt.Fprintf(&manifest, "  its root paths (%s) passed %s\n", strings.Join(mg.Root, ", "), by)
 			rootRead = append(rootRead, fmt.Sprintf("#%d (%s)", mg.PR, strings.Join(mg.Root, ", ")))
+		} else if mg.Diff == "" {
+			// Merged before effect.merged carried the diff: no read can be
+			// matched to it.
+			root = append(root, fmt.Sprintf("%s (#%d's merge record names no diff)", strings.Join(mg.Root, ", "), mg.PR))
 		} else {
 			root = append(root, mg.Root...)
 		}
@@ -766,6 +773,14 @@ func (m *Module) afterKept(project, sha string) {
 	if !approved && !m.mainGreen(p, sha) {
 		return
 	}
+	// The tags are read only once main's checks let the cut go ahead, so a
+	// commit retried while it waits on them (retryWaiting) costs no forge
+	// calls or fetches for them while the lock is held.
+	if refuse := m.tagged(p, sha); refuse != "" {
+		once(refuse)
+		return
+	}
+	m.refused.Delete(project)
 	var why []string
 	if len(root) > 0 {
 		why = append(why, strings.Join(root, ", ")+" run with elevated rights and no security read passed them")
@@ -774,8 +789,13 @@ func (m *Module) afterKept(project, sha string) {
 		why = append(why, strings.Join(unread, ", ")+" merged without a read of its exact commit")
 	}
 	if !approved {
-		if held := m.unbuilt(p, sha); held != "" {
-			alert("no release at " + core.Short(sha) + ": " + held)
+		if held, tag, first := m.unbuilt(p, sha); held != "" {
+			// Raised once per held tag, with its release.held, and keyed by
+			// it: every kept merge while the hold lasts would say the same.
+			if first {
+				m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": project, "ref": "release:held:" + tag,
+					"text": "no release at " + core.Short(sha) + ": " + held})
+			}
 			why = append(why, held)
 		}
 	}
@@ -788,9 +808,18 @@ func (m *Module) afterKept(project, sha string) {
 		scanAt = m.scan
 	}
 	if err := scanAt(p, sha); err != nil {
-		alert("no release at " + core.Short(sha) + ", since its scan blocks it: " + err.Error())
+		if errors.Is(err, scan.ErrNoHandles) {
+			m.askHandles(project, sha, err)
+			return
+		}
+		// A retry meets the same hits at the same commit: said once.
+		if last, _ := m.scanSaid.Swap(project, sha+": "+err.Error()); last != sha+": "+err.Error() {
+			alert("no release at " + core.Short(sha) + ", since its scan blocks it: " + err.Error())
+		}
 		return
 	}
+	m.scanSaid.Delete(project)
+	m.handlesFound(project)
 	cfg := m.C.Effects.Config(p, sha)
 	if cfg.DryRun != "" {
 		c := m.C.Effects.RunCheck(p, sha, "dryrun", cfg.DryRun)
@@ -933,8 +962,9 @@ func (m *Module) ciState(project string) (last ciWait) {
 }
 
 // retryWaiting tries again the newest kept merge of each self project whose
-// release waits on main's checks or found them failed (a re-run may pass);
-// one still waiting after lateAfter is raised once.
+// release waits on main's checks or found them failed (a re-run may pass),
+// or the newest merge after it whose checks passed (greenAfter); one still
+// waiting after lateAfter is raised once.
 func (m *Module) retryWaiting() {
 	if m.said == nil {
 		m.said = map[string]bool{}
@@ -949,7 +979,11 @@ func (m *Module) retryWaiting() {
 		}
 		func() {
 			defer m.lock(p.Name)()
-			m.afterKept(p.Name, w.SHA)
+			sha := w.SHA
+			if next := m.greenAfter(p, w.SHA); next != "" {
+				sha = next
+			}
+			m.afterKept(p.Name, sha)
 		}()
 		key := p.Name + "@ci:" + w.SHA
 		if now := m.ciState(p.Name); now.Kind == "release.ci_waiting" && now.SHA == w.SHA && time.Since(w.At) > lateAfter && !m.said[key] {
@@ -960,10 +994,55 @@ func (m *Module) retryWaiting() {
 	}
 }
 
+// greenAfterN is how many of the newest merges after a waiting one
+// greenAfter reads the checks of.
+const greenAfterN = 10
+
+// greenAfter is the newest of the project's merges after sha whose checks
+// passed on main, or "" when none did. A commit whose ci run GitHub cancelled
+// (one queued run replaces another) has no checks and would wait forever, and
+// one that failed may be fixed after it: a green descendant carries it into a
+// release. It only reads the checks, journaling nothing; afterKept does.
+func (m *Module) greenAfter(p core.Project, sha string) string {
+	var later []string
+	m.C.J.Replay(func(e core.Event) {
+		var x struct {
+			Project  string
+			MergeSHA string `json:"merge_sha"`
+		}
+		if e.Kind != "effect.merged" || e.Decode(&x) != nil || x.Project != p.Name || x.MergeSHA == "" {
+			return
+		}
+		if x.MergeSHA == sha {
+			later = []string{} // only the merges after the newest sighting count
+			return
+		}
+		if later != nil {
+			later = append(later, x.MergeSHA)
+		}
+	})
+	for i, n := len(later)-1, 0; i >= 0 && n < greenAfterN; i, n = i-1, n+1 {
+		runs, err := m.C.Effects.Forge.Checks(p.Repo, later[i])
+		if err != nil {
+			continue
+		}
+		if state, _ := core.ChecksState(runs, m.C.Effects.RequiredChecks(p, later[i])); state == core.CheckPass {
+			return later[i]
+		}
+	}
+	return ""
+}
+
 // rootRead says who passed a merge's root paths, as Effects.SecurityOK reads
 // a change to a root path on the security list: an outside read decides when
 // there is one, else the security seat and a majority of the panel said land
 // on its own diff. "" when nobody did.
+//
+// mg.Root is the merge's root-class paths, each of which ChangeOf put in both
+// Security and SecurityRoot at merge, listed or not; so SecurityRoot here asks
+// for the panel majority on purpose. The seats read the whole own diff, so
+// their land passes all of a merge's root paths together. Only root paths
+// reach this: a high path's security read isn't checked again at release.
 func (m *Module) rootRead(project string, mg merge) string {
 	if !m.C.Effects.SecurityOK(project, core.Change{Security: mg.Root, SecurityRoot: mg.Root, DiffID: mg.Diff}) {
 		return ""
@@ -980,10 +1059,49 @@ func (m *Module) rootRead(project string, mg merge) string {
 // stands between the other commit and the signing key.
 const refusedSteps = "Its release run at that commit waits for approval in the release-signing environment: reject it, don't approve. Then delete the release and its tag."
 
+// askHandles puts the missing handle list to the person as one standing ask
+// in Waiting, never an alert per check: only they can write the file. The ask
+// keeps its place while it stands; the newest commit it holds is retried when
+// they answer done.
+func (m *Module) askHandles(project, sha string, err error) {
+	m.handlesAt.Store(project, sha)
+	m.C.Person.Ask(core.Ask{Kind: "scan_handles", Ref: project, Project: project, Options: []string{"done"},
+		Title: "Give the release scan its handle list: no release of " + project + " goes out without it",
+		Detail: "The release scan refuses to pass: " + err.Error() + ". Only you can write it: the file is in the Hive's private folder, which no agent reads. " +
+			"Until then nothing merged reaches a release (held since " + core.Short(sha) + "). Answer done once it is written and the Hive tries the release again."})
+}
+
+// handlesFound answers a standing handle-list ask once a scan reads a list;
+// with nothing held any more, its handler has nothing to retry.
+func (m *Module) handlesFound(project string) {
+	m.handlesAt.Delete(project)
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "scan_handles" && a.Project == project {
+			m.C.Person.Answer(a.ID, "done", "the Hive, not the person: the release scan read a handle list")
+		}
+	}
+}
+
+// onHandles is the person's word that the handle list is written: the commit
+// it held is released again, or the ask comes back if the list still isn't
+// there.
+func (m *Module) onHandles(a core.Ask) {
+	if a.Answer != "done" {
+		return
+	}
+	sha, ok := m.handlesAt.Load(a.Project)
+	if !ok {
+		return
+	}
+	defer m.lock(a.Project)()
+	m.afterKept(a.Project, sha.(string))
+}
+
 // New is the release module, with the person's answer to an upstream offer.
 func New(c *core.Core) *Module {
 	m := &Module{C: c}
 	c.Person.Handle("upstream", m.onUpstream)
+	c.Person.Handle("scan_handles", m.onHandles)
 	return m
 }
 
@@ -1116,7 +1234,7 @@ func (m *Module) Publish() string {
 		At                time.Time
 	}
 	var cands []cand
-	failed := map[string]bool{}
+	failed := map[string]string{} // the gate each release.failed blamed, "" for the update test
 	m.C.J.Replay(func(e core.Event) {
 		var x struct {
 			Project, Tag, SHA string
@@ -1133,7 +1251,9 @@ func (m *Module) Publish() string {
 		case "hive.published":
 			cands = slices.DeleteFunc(cands, func(c cand) bool { return c.Project == x.Project && !modules.Newer(x.Tag, c.Tag) })
 		case "release.failed":
-			failed[x.Project+"@"+x.Tag] = true
+			var g struct{ Gate string }
+			e.Decode(&g)
+			failed[x.Project+"@"+x.Tag] = g.Gate
 		case "release.refused":
 			cands = slices.DeleteFunc(cands, func(c cand) bool { return c.Project == x.Project && c.Tag == x.Tag })
 		}
@@ -1184,13 +1304,15 @@ func (m *Module) Publish() string {
 			done[c.Project] = true
 			out = append(out, "published "+c.Tag)
 		case "failed":
-			if !failed[key] {
+			if _, said := failed[key]; !said {
 				m.C.J.MustAppend("release.failed", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA, "why": why})
 				alert(c, c.Tag+" stays a pre-release, so installs stay where they are: "+why+". A re-run that passes publishes it.")
 			}
 			out = append(out, c.Tag+": "+why)
 		case "unbuilt":
-			if !failed[key] {
+			// A release.failed from before the release run was told apart
+			// blamed the update test; the corrected alert goes out once too.
+			if g, said := failed[key]; !said || g != "release" {
 				m.C.J.MustAppend("release.failed", map[string]string{"project": c.Project, "tag": c.Tag, "sha": c.SHA, "why": why, "gate": "release"})
 				alert(c, c.Tag+" has no binaries, since its "+why+"; its update test has nothing to install, so an update failure there says nothing about updating. "+unbuiltSteps)
 			}
@@ -1246,8 +1368,10 @@ func (m *Module) gates(repo, sha string) (state, why string) {
 const unbuiltSteps = "The Hive cuts no new release that leaves what failed unchanged, since it would be as empty: " +
 	"a failed scan job most often means the repository secrets HIVE_SCAN_HANDLES and HIVE_SCAN_DENY are missing " +
 	"(Settings, Secrets and variables, Actions); set them and re-run its release run, then its update run, and once they pass it is published and releases go on. " +
-	"A failure in the code (a scan hit its log names, a build or sign error, release.yml itself) is fixed in a new commit: " +
-	"the first kept merge that changes what the failed job reads is cut as usual, and the person's \"release\" on the hold's ask cuts one anyway."
+	"A failure in the code (a build or sign error, release.yml itself) is fixed in a new commit: " +
+	"the first kept merge that changes what the failed job reads is cut as usual, and the person's \"release\" on the hold's ask cuts one anyway. " +
+	"A scan hit its log names in a public file passed the daemon's own scan, so CI's lists differ from the daemon's: " +
+	"a fix to that file alone is not cut by itself, so say \"release\" once it lands."
 
 // buildFailed says why the release workflow (release.yml: scan, build, sign)
 // failed among a release's runs, naming the jobs that failed, or "" when it
@@ -1299,10 +1423,10 @@ func reads(jobs []string, path string) bool {
 // another release with no binaries. A commit that changes a file the failed
 // job reads is cut as usual, so a fix in the code is released; so is any
 // commit once that run passes on a re-run, or the person says "release". It
-// notes the hold once per tag in the journal; a release run or diff that
-// can't be read never holds the cut.
-func (m *Module) unbuilt(p core.Project, sha string) string {
-	var tag, at string
+// notes the hold once per tag in the journal, first saying it did; a release
+// run or diff that can't be read never holds the cut.
+func (m *Module) unbuilt(p core.Project, sha string) (why, tag string, first bool) {
+	var at string
 	held := map[string]bool{}
 	m.C.J.Replay(func(e core.Event) {
 		var x struct{ Project, Tag, SHA string }
@@ -1317,15 +1441,15 @@ func (m *Module) unbuilt(p core.Project, sha string) string {
 		}
 	})
 	if tag == "" || at == sha {
-		return ""
+		return "", "", false
 	}
 	runs, err := m.C.Effects.Forge.ReleaseRuns(p.Repo, at)
 	if err != nil {
-		return ""
+		return "", "", false
 	}
 	why, jobs := m.buildFailed(p.Repo, runs)
 	if why == "" {
-		return ""
+		return "", "", false
 	}
 	diff := m.Diff
 	if diff == nil {
@@ -1333,12 +1457,12 @@ func (m *Module) unbuilt(p core.Project, sha string) string {
 	}
 	changed, err := diff(p, at, sha)
 	if err != nil || slices.ContainsFunc(changed, func(f string) bool { return reads(jobs, f) }) {
-		return ""
+		return "", "", false
 	}
 	if !held[tag] {
 		m.C.J.MustAppend("release.held", map[string]string{"project": p.Name, "tag": tag, "sha": at, "why": why})
 	}
-	return tag + " has no binaries, since its " + why + ", and " + core.Short(sha) + " changes nothing that job reads. " + unbuiltSteps
+	return tag + " has no binaries, since its " + why + ", and " + core.Short(sha) + " changes nothing that job reads. " + unbuiltSteps, tag, !held[tag]
 }
 
 // tagChecks is how many of the highest version tags tagged reads.
@@ -1382,7 +1506,13 @@ func (m *Module) tagged(p core.Project, sha string) string {
 		if at == sha {
 			return t + " is already cut at it"
 		}
-		if in, err := contains(p, sha, at); err == nil && in {
+		in, err := contains(p, sha, at)
+		if err != nil {
+			// The cut goes ahead, but a guard that can't read shows here.
+			log.Printf("release: %s: can't tell whether %s at %s contains %s: %v", p.Name, t, core.Short(at), core.Short(sha), err)
+			continue
+		}
+		if in {
 			return t + " at " + core.Short(at) + " already contains it, so a new tag would carry older code under a higher number"
 		}
 	}
@@ -1390,15 +1520,20 @@ func (m *Module) tagged(p core.Project, sha string) string {
 }
 
 // contains says whether sha is tagSHA or one of its ancestors, fetching
-// tagSHA into the project's clone when it hasn't got it.
+// tagSHA into the project's clone, with the token its owner's sync uses,
+// when it hasn't got it. Both come to git only as hex object names, so a
+// forge value can never be read as an option.
 func (m *Module) contains(p core.Project, sha, tagSHA string) (bool, error) {
+	if !hexName(sha) || !hexName(tagSHA) {
+		return false, fmt.Errorf("not a commit name: %q, %q", core.Clip(sha, 50), core.Clip(tagSHA, 50))
+	}
 	dir := m.C.WS.Project(p.Name)
 	full, err := core.Git(dir, "rev-parse", "--verify", sha+"^{commit}")
 	if err != nil {
 		return false, err
 	}
 	if _, err := core.Git(dir, "rev-parse", "--verify", tagSHA+"^{commit}"); err != nil {
-		if _, err := core.GitT(5*time.Minute, dir, "fetch", "-q", "--no-tags", "origin", tagSHA); err != nil {
+		if _, err := core.GitEnvT(5*time.Minute, dir, core.ForgeEnv(p.Repo), "fetch", "-q", "--no-tags", "origin", tagSHA); err != nil {
 			return false, err
 		}
 	}
@@ -1409,13 +1544,26 @@ func (m *Module) contains(p core.Project, sha, tagSHA string) (bool, error) {
 	return strings.TrimSpace(base) == strings.TrimSpace(full), nil
 }
 
+// hexName says whether s is a full or abbreviated hex object name.
+func hexName(s string) bool {
+	if len(s) < 4 || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			return false
+		}
+	}
+	return true
+}
+
 // diff lists the files that differ between two commits of the project.
 func (m *Module) diff(p core.Project, from, to string) ([]string, error) {
-	out, err := core.Git(m.C.WS.Project(p.Name), "diff", "--name-only", "-z", from, to)
+	out, err := core.Git(m.C.WS.Project(p.Name), "diff", "--name-only", "-z", "--end-of-options", from, to, "--")
 	if err != nil {
 		return nil, err
 	}
-	return strings.Split(strings.TrimRight(out, "\x00"), "\x00"), nil
+	return slices.DeleteFunc(strings.Split(out, "\x00"), func(f string) bool { return f == "" }), nil
 }
 
 // nextTag is one past the highest vX.Y.Z among tags (v0.0.1 if none is).

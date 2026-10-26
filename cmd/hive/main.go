@@ -25,6 +25,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/daemon"
 	"github.com/ihsan-sa/hive-standalone-build/internal/fakeagent"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
+	"github.com/ihsan-sa/hive-standalone-build/internal/gocache"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
@@ -133,6 +134,8 @@ func run(args []string) int {
 		return 0
 	case "sandbox-inner":
 		return sandbox.Inner(args)
+	case "gocacheprog": // a check's GOCACHEPROG (core.goBuild)
+		return gocache.Main(args)
 	case "sandbox-probe":
 		sb, err := sandbox.Select(sandbox.Options{Mode: "auto"})
 		if err != nil {
@@ -722,6 +725,14 @@ func cmdDoctor(args []string) int {
 	} else {
 		fmt.Println("· doesn't start with the machine (run `" + core.Cmd + "` once to set it up)")
 	}
+	switch twins, err := twinTurns(ws.Events(), time.Now().Add(-24*time.Hour)); {
+	case err != nil:
+		fail("✗ journal: %v\n", err)
+	case len(twins) > 0:
+		fail("✗ %d turns started in the last day while the same run's last turn still ran (issue #1022), e.g. %s\n", len(twins), twins[len(twins)-1])
+	default:
+		fmt.Println("✓ no turn started in the last day while its run's last turn still ran")
+	}
 	if _, running := daemon.Running(ws); running {
 		fmt.Println("✓ running")
 	} else {
@@ -1034,6 +1045,8 @@ func cmdHarness(args []string) int {
 			fmt.Fprintf(os.Stderr, "%s has no login command of its own\n", s.Name())
 			return 1
 		}
+		// The spec comes from a module: say what it runs as the person, here.
+		fmt.Printf("Running %s's login from the %s module: %s\n", s.Name(), filepath.Base(filepath.Dir(s.File())), strings.Join(argv, " "))
 		cmd := exec.Command(argv[0], argv[1:]...)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 		if err := cmd.Run(); err != nil {
