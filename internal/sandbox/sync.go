@@ -67,11 +67,21 @@ func runSync(argv, env []string, dir, stdin, stdout string, timeout time.Duratio
 	return 0, nil
 }
 
-func scoped(s Spec, argv []string) []string {
+// runScoped runs argv under the checks' ceiling when s asks for it
+// (Scoped). A scoped run that ends at once with status 1, systemd-run's own
+// failure, while the probe now fails too (the user manager went away after
+// it answered) never ran argv, so argv runs again as it is.
+func runScoped(s Spec, argv, env []string, dir, stdin, stdout string, timeout time.Duration) (int, error) {
+	in := argv
 	if s.Scope {
-		return Scoped(argv)
+		in = Scoped(argv)
 	}
-	return argv
+	start := time.Now()
+	code, err := runSync(in, env, dir, stdin, stdout, timeout)
+	if len(in) != len(argv) && err == nil && code == 1 && time.Since(start) < 10*time.Second && !reprobe() {
+		return runSync(argv, env, dir, stdin, stdout, timeout)
+	}
+	return code, err
 }
 
 func openInput(path string) (*os.File, error) {
@@ -98,5 +108,5 @@ func (Bare) Run(s Spec, timeout time.Duration) (int, error) {
 	if owner != "" {
 		env = append(env, OwnerEnv+"="+owner)
 	}
-	return runSync(scoped(s, Niced(s.Argv, s.Nice)), env, s.Cwd, s.Stdin, s.Stdout, timeout)
+	return runScoped(s, Niced(s.Argv, s.Nice), env, s.Cwd, s.Stdin, s.Stdout, timeout)
 }

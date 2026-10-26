@@ -68,6 +68,12 @@ func TestScopedWithoutAUserManager(t *testing.T) {
 	if got := Scoped([]string{"/bin/true"}); len(got) == 1 || got[0] != filepath.Join(dir, "systemd-run") {
 		t.Fatalf("not scoped once the retry was due: %q", got)
 	}
+	// And one that goes away stops being used at the next retry.
+	os.WriteFile(filepath.Join(dir, "systemd-run"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	scope.tried = time.Now().Add(-scopeRetry - time.Second)
+	if got := Scoped([]string{"/bin/true"}); len(got) != 1 {
+		t.Fatalf("still scoped after the user manager went: %q", got)
+	}
 }
 
 // Under a real user manager, a check that grows past its ceiling is ended
@@ -122,5 +128,36 @@ func TestCheckOverItsCeilingIsEnded(t *testing.T) {
 	}
 	if gap > 2*time.Second {
 		t.Fatalf("this process stalled %s while the hog ran", gap)
+	}
+}
+
+// A user manager that answered the probe and then went away fails the
+// scoped run before the command starts: the command runs once, unscoped,
+// and the scope is off until a probe answers again.
+func TestScopeLostRunsUnscoped(t *testing.T) {
+	resetScope(t)
+	dir := t.TempDir()
+	run := filepath.Join(dir, "systemd-run")
+	os.WriteFile(run, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	if got := Scoped([]string{"true"}); got[0] != run {
+		t.Fatalf("not scoped: %q", got)
+	}
+	os.WriteFile(run, []byte("#!/bin/sh\necho 'Failed to connect to bus' >&2\nexit 1\n"), 0o755)
+	ran := filepath.Join(dir, "ran")
+	code, err := Bare{}.Run(Spec{Argv: []string{"sh", "-c", "echo ran >> " + ran}, Scope: true}, time.Minute)
+	if raw, _ := os.ReadFile(ran); err != nil || code != 0 || string(raw) != "ran\n" {
+		t.Fatalf("code %d, %v, ran %q", code, err, raw)
+	}
+	if scope.prefix != nil {
+		t.Fatal("still scoped after the probe failed")
+	}
+	// A command's own status 1 under a manager that answers stands.
+	os.WriteFile(run, []byte("#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n"), 0o755)
+	scope.tried = time.Time{}
+	os.Remove(ran)
+	code, err = Bare{}.Run(Spec{Argv: []string{"sh", "-c", "echo ran >> " + ran + "; exit 1"}, Scope: true}, time.Minute)
+	if raw, _ := os.ReadFile(ran); err != nil || code != 1 || string(raw) != "ran\n" {
+		t.Fatalf("code %d, %v, ran %q", code, err, raw)
 	}
 }

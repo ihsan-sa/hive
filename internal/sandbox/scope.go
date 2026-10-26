@@ -23,9 +23,9 @@ var scope struct {
 	prefix []string // systemd-run and its flags, nil where it can't run
 }
 
-// scopeRetry is how long a probe that found no user manager stands before
-// the next scoped command tries again: one that starts after the daemon is
-// used without a restart.
+// scopeRetry is how long a probe's answer stands before the next scoped
+// command tries again: a user manager that starts after the daemon is used
+// without a restart, and one that goes away stops costing checks their run.
 const scopeRetry = 10 * time.Minute
 
 // Scoped prefixes argv so it runs in a transient systemd user scope under
@@ -37,10 +37,10 @@ const scopeRetry = 10 * time.Minute
 // the caller set hold as before. argv[0] is resolved here, in the daemon's
 // own environment, as Niced does. Where no systemd user manager answers
 // (macOS, WSL or a container without one, a system unit's daemon), argv
-// runs as it is, and the probe runs again after scopeRetry.
+// runs as it is. The probe runs again after scopeRetry, whatever it found.
 func Scoped(argv []string) []string {
 	scope.Lock()
-	if scope.prefix == nil && time.Since(scope.tried) > scopeRetry {
+	if time.Since(scope.tried) > scopeRetry {
 		scope.prefix, scope.tried = scopePrefix(), time.Now()
 	}
 	prefix := scope.prefix
@@ -53,6 +53,14 @@ func Scoped(argv []string) []string {
 		return argv
 	}
 	return append(append(append([]string{}, prefix...), prog), argv[1:]...)
+}
+
+// reprobe tries the user manager afresh and says whether it answers.
+func reprobe() bool {
+	scope.Lock()
+	defer scope.Unlock()
+	scope.prefix, scope.tried = scopePrefix(), time.Now()
+	return scope.prefix != nil
 }
 
 // scopePrefix finds systemd-run and tries it once, with the same flags a
