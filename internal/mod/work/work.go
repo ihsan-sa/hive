@@ -216,8 +216,11 @@ const (
 
 // Fix says the task is clearly a fix: its brief, worker or the lead said so
 // and named the failure. A revert undoes a merge already judged worse, so it
-// is one too.
-func (t Task) Fix() bool { return t.Aim == AimFix || t.Kind == "revert" }
+// is one too, and so is a review follow-up that says no aim: one filed
+// before followUp named its aim hardens a change that already passed.
+func (t Task) Fix() bool {
+	return t.Aim == AimFix || t.Kind == "revert" || t.Aim == "" && t.FollowUp != ""
+}
 
 // Gain says the task is taken as a gain: it aims at one, or it isn't clearly a fix.
 func (t Task) Gain() bool { return !t.Fix() }
@@ -227,6 +230,8 @@ func (t Task) AimWord() string {
 	switch {
 	case t.Kind == "revert":
 		return "a fix (a revert of a merge judged worse)"
+	case t.Fix() && t.Aim == "":
+		return "a fix (a review follow-up of " + t.FollowUp + ", which already merged)"
 	case t.Fix():
 		return "a fix: " + orNone(t.AimWhy)
 	case t.Aim == AimGain && t.AimWhy != "":
@@ -412,7 +417,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","why","apart"} (aim: fix, with why naming the failure it fixes, merges on its tests, checks and reads and isn't reverted for a score dip alone; anything else is taken as a gain, which on the Hive's own repository merges only if the recursive gate shows it); one matching an open task not yet pushed (a test both name, a near-identical title) and taken the same way joins it as added context instead, unless apart`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: []string{"worker", "lead"}, Help: `{"task","aim":"fix"|"gain","why"} (a worker's own task by default) -> sets whether the task is a fix of the failure why names, which merges on its tests, checks and reads and isn't reverted for a score dip alone, or a gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: steerers, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
-	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: steerers, Help: `{"task"} (a worker's own task by default) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
+	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: steerers, Help: `{"task"} (a worker's own task by default; a worker may name any task on its project, the lead and a sweep must name one) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
 	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: steerers, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed), hold keeps one waiting until released, now starts those first even past a brief on the same files (why says so, on the record), for a fix the one it waits on needs. A started worker is never stopped`, Fn: m.opQueue})
 	c.Runs.Ops().Register(core.Op{Name: "landed", Roles: steerers, Help: `{"task","why","merge"} -> ends a task in any stage as merged when its PR is merged on the forge or its commits are on main (merge names the main commit when they were squashed there), so the briefs waiting on it start; refused while its PR is open and its work isn't on main`, Fn: m.opLanded})
 	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Roles: []string{"lead"}, Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (follow-ups and reverts included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs still pass their gate and wait ready`, Fn: m.opHold})
@@ -1520,12 +1525,22 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 }
 
 // noCommits ends a task whose worker made no commit. A helper's task is done, since its account already went to the agent that spawned it.
+// A review follow-up whose worker finished done is done: its done line lets it
+// judge every item not worth doing, with the reasons in its account.
 // An ask whose whole job was a step outside the checkout is done; anything else
 // is blocked.
 func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
 	if t.Kind == "helper" {
 		t.Stage = StageDone
 		m.save(t, "the helper made no commits, so nothing to land")
+		return
+	}
+	if t.FollowUp != "" && r.Finish != nil && r.Finish.Status == core.StatusDone {
+		t.Stage, t.IssueOpen, t.Failures = StageDone, true, 0
+		m.save(t, "done with no commit: the worker judged the review's advice in its account")
+		m.comment(p.Repo, t.Issue.Number, "Done with no commit, so nothing to merge: the worker judged each item of the review's advice.\n\n"+finishText(r))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q, with no commit; the worker judged the review's advice: %s", t.Label(), core.Clip(finishText(r), 300)))
+		m.closeIssue(t, p)
 		return
 	}
 	var steps string
@@ -1636,10 +1651,14 @@ func (m *Module) test(t *Task, p core.Project) error {
 			if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
 				return err
 			}
+			if t.Retested != t.SHA && m.failsAgain(p, t.SHA, cfg.Test, c) {
+				return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+", and again when only the failing tests ran once more:\n\n"+core.Clip(c.Output, 3000))
+			}
 			if t.Retested != t.SHA {
-				// A slow, busy machine fails a test CI passes: the whole
-				// check runs once more before the red counts, so merging
-				// still rests on a green run of this exact commit.
+				// A slow, busy machine fails a test CI passes: what failed
+				// passed run on its own, so the whole check runs once more
+				// before the red counts, and merging still rests on a green
+				// run of this exact commit.
 				t.Retested, t.Recheck = t.SHA, true
 				if strings.HasPrefix(t.Reason, "waiting on main") {
 					t.Reason = ""
@@ -1798,6 +1817,20 @@ func (m *Module) ownDiff(p core.Project, main, sha string) string {
 		return ""
 	}
 	return core.DiffID(core.OwnDiff(dir, base, sha))
+}
+
+// failsAgain runs only what failed in a red check of a change's head once
+// more (Retest) and says whether it failed again: a red that repeats is the
+// change's, and goes back without a whole second run. A pass, or a rerun
+// that couldn't start, is no verdict: the whole check runs again, since what
+// failed is read from the commit's own output and merging rests on a green
+// run of the whole check.
+func (m *Module) failsAgain(p core.Project, sha, command string, c core.Check) bool {
+	if m.Retest == nil || m.Retest(p, sha, command, c, false) {
+		return false
+	}
+	rc, ok := m.C.Effects.GetCheck(p.Name, sha, "retest")
+	return ok && !rc.OK && rc.CantRun == "" && !rc.At.Before(c.At)
 }
 
 // mainTests is main's own test result, measured once per main commit (the
@@ -3572,7 +3605,9 @@ func (m *Module) workerStopped(t Task) bool {
 var steerers = []string{"lead", "worker", "sweep"}
 
 // reach refuses a task outside r's own project: an agent with a project steers
-// only there; one with none (the workspace lead, a sweep) any it can see.
+// only there; one with none (the workspace lead, and a sweep, which reads the
+// whole Hive's records) any it can see, on purpose. A project lead is held by
+// Walled alone.
 func (m *Module) reach(r core.Run, project string) error {
 	if r.Project != "" && project != r.Project && r.Role != "lead" {
 		return fmt.Errorf("that task is on project %q; you act only on your own (%s)", project, r.Project)
