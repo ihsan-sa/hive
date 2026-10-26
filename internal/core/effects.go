@@ -81,9 +81,11 @@ type Effects struct {
 	steps     map[string][]JobStep    // repo url -> a finished check's steps
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
 	gateMains map[string]GateResult   // project@main -> the newest can't-run there not tied to its head (GateAtMain)
+	standing  map[string]bool         // project@head@verdict's main@main -> whether that verdict still stands there (StandingGate)
 	judged    map[string]Judgement    // project@sha@main -> the judge's newest call (judge.go)
 	homes     map[string]bool         // running checks' homes (disk.go)
 	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
+	buildMu   sync.RWMutex            // the same for the projects' build caches
 	disk      DiskUse                 // the last measurement of the Hive's disk use
 	diskFull  bool                    // a check couldn't run for room, and the alert is out
 
@@ -172,7 +174,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs, sweep: sandbox.Sweep,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}, standing: map[string]bool{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -529,7 +531,22 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
 	mods := e.goModules(sb, dir)
-	code, out, err := e.runSandboxed(sb, p.Name, id, append(mounts, mods.mounts...), guardProgram(command), true, 30*time.Minute, mods.env, e.checkCacheCap())
+	build := e.goBuild(sb, p, sha, dir)
+	run := func(withMods bool) (int, string, error) {
+		ms, env := append(slices.Clone(mounts), build.mounts...), slices.Clone(build.env)
+		if withMods {
+			ms, env = append(ms, mods.mounts...), append(env, mods.env...)
+		}
+		return e.runSandboxed(sb, p.Name, id, ms, guardProgram(command), true, 30*time.Minute, env, e.checkCacheCap())
+	}
+	code, out, err := run(true)
+	if len(build.mounts) > 0 && code != 0 && strings.Contains(out, "GOCACHEPROG") {
+		// The build cache's program failed, not the commit: run once
+		// without the shared build cache.
+		build.done()
+		build = goMods{note: "the shared build cache failed; run again without it", done: func() {}}
+		code, out, err = run(true)
+	}
 	mods.done()
 	if mods.marker != "" && code != 0 && strings.Contains(out, staleModules) {
 		// The shared cache lacks what its marker promised: that is the
@@ -537,10 +554,13 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		// fetching its own.
 		os.Remove(mods.marker)
 		mods.note = "the shared module cache lacked a module; run again without it"
-		code, out, err = e.runSandboxed(sb, p.Name, id, mounts, guardProgram(command), true, 30*time.Minute, nil, e.checkCacheCap())
+		code, out, err = run(false)
 	}
-	if mods.note != "" {
-		out = "hive: " + mods.note + "\n" + out
+	build.done()
+	for _, n := range []string{build.note, mods.note} {
+		if n != "" {
+			out = "hive: " + n + "\n" + out
+		}
 	}
 	c.Output = out
 	if errors.Is(err, ErrHomeFull) {
@@ -1370,7 +1390,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if p.Self && m.Gain {
 		// Or once the person landed that exact head unjudged, the gate
 		// unable to judge at main (the work module's "gate" ask).
-		if !e.Kept(p.Name, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA) {
+		if !e.Kept(p, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA) {
 			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
 		}
 	}

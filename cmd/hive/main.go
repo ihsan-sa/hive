@@ -25,6 +25,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/daemon"
 	"github.com/ihsan-sa/hive-standalone-build/internal/fakeagent"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
+	"github.com/ihsan-sa/hive-standalone-build/internal/gocache"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
@@ -134,6 +135,8 @@ func run(args []string) int {
 		return 0
 	case "sandbox-inner":
 		return sandbox.Inner(args)
+	case "gocacheprog": // a check's GOCACHEPROG (core.goBuild)
+		return gocache.Main(args)
 	case "sandbox-probe":
 		sb, err := sandbox.Select(sandbox.Options{Mode: "auto"})
 		if err != nil {
@@ -1097,7 +1100,7 @@ func kbArgs(args []string) (query, limit string) {
 // rather than passing its old number off as current. Names from the usage
 // feed are escaped, so none can rewrite the screen.
 func planLine(p core.Plan, now time.Time) string {
-	s := fmt.Sprintf("plan %s: %s", text.Visible(p.Key()), text.Visible(p.Limit.Standing(now)))
+	s := fmt.Sprintf("plan %s: %s", text.Visible(p.Key()), text.Visible(p.Standing(now)))
 	for _, w := range p.Limit.WindowUses(now) {
 		name, at := text.Visible(w.Name), w.ResetsAt.Local().Format("Mon 15:04 MST")
 		switch {

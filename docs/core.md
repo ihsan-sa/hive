@@ -23,6 +23,8 @@ So the core is the skeleton and nothing else. **New functionality goes into a mo
 
 The executor hook is core because only launch knows a turn's spec and when the machine holds it; what runs the turn elsewhere (hive-dispatch's SSH runners) is the module's. `hive <name>` is the seam step 4 below asks for, for module programs.
 
+What a check sees is part of the merge guarantees, so the choice of its caches is core: `core/disk.go`'s `goBuild` and `stableTimes` (#920, about 80 lines) decide whether a check writes main's build cache or reads it read-only; the cache program itself (`internal/gocache`, `hive gocacheprog`) is outside the core.
+
 The last row is core only as the place the skeleton runs: what a module adds to it (an API route, a CLI verb) is module material and moves out (step 4 below).
 
 The packages measured as the core, read by `tests/core-size.sh`:

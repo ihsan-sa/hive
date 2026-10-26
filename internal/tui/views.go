@@ -1535,6 +1535,9 @@ func loginLine(l core.LoginState) string {
 		renewed = "renewed " + l.Renewed.Local().Format("Mon 15:04")
 	}
 	line := fmt.Sprintf("%s  %s  %s", text.Visible(l.Login), exp, stDim.Render(renewed))
+	if l.Limited.After(time.Now()) {
+		line += "  " + stWarn.Render("at its usage limit") + " until " + l.Limited.Local().Format("Mon 15:04") + stDim.Render(": renews after it resets")
+	}
 	if l.Error != "" {
 		line += "  " + stBad.Render("can't renew") + ": " + text.Visible(core.Clip(l.Error, 120))
 		if l.Run != "" {
@@ -1562,7 +1565,7 @@ func toldHead(told []core.Ask, now time.Time) string {
 // standing is the plan's state in plain words, coloured by how near its
 // limit the login is.
 func standing(p core.Plan, now time.Time) string {
-	s := text.Visible(p.Limit.Standing(now))
+	s := text.Visible(p.Standing(now))
 	switch p.Limit.Level(now) {
 	case harness.LevelBad:
 		return stBad.Render(s)
