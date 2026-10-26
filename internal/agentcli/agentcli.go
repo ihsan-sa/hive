@@ -40,6 +40,8 @@ func Call(op string, args any, wait time.Duration) (json.RawMessage, error) {
 	}
 	resp := filepath.Join(box, "inbox", id+".json")
 	deadline := time.Now().Add(wait)
+	// Most replies come within a tick of the daemon, so look soon and back off.
+	pause := 10 * time.Millisecond
 	for time.Now().Before(deadline) {
 		if data, err := os.ReadFile(resp); err == nil {
 			os.Remove(resp)
@@ -56,7 +58,10 @@ func Call(op string, args any, wait time.Duration) (json.RawMessage, error) {
 			}
 			return r.Result, nil
 		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(pause)
+		if pause *= 2; pause > 250*time.Millisecond {
+			pause = 250 * time.Millisecond
+		}
 	}
 	return nil, fmt.Errorf("no reply to %s within %s (the Hive may be restarting; the request is queued and will still be handled)", op, wait)
 }
