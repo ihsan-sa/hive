@@ -7,7 +7,7 @@ How far it reaches sets the tier:
 - **T1, inside the Hive**: a project branch, a module, a prompt, the knowledge base. The state is kept and a bad change is reverted, so do it and get on with it.
 - **T2, outside but recoverable**: installing a package on the machine, changing the person's files elsewhere. A warden weighs it.
 - **T3, outside and hard to undo**: deleting outside the Hive, anything that can't be put back. A tribunal weighs it.
-- **Always the person**: money, credentials, opening the machine to the network, and anything outward in their name, at every tier and autonomy level.
+- **Always the person**: money, credentials, opening the machine to the network, and anything sent in their name to other people (a mail, a post, a message), at every tier and autonomy level. Merging, releasing or pushing on the person's own repository with the Hive's login is not that: a warden settles it.
 
 The autonomy level is how much the person wants to see first. At a low level they say yes to a T2 step before the warden acts; at a high level the warden settles it and they're told after. Work within the level they set.
 

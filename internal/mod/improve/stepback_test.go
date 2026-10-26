@@ -83,7 +83,7 @@ func won(t *testing.T, m *Module, isolated bool) (core.Run, string) {
 	exp := said(t, m, "stepback-1-exp", "p", "SECRET-SETUP ran make")
 	nine := 9.0
 	s := StepBack{ID: "stepback-1", Run: "stepback-1", Project: "p", Score: &nine, Best: 5, Setup: &Setup{Why: "SECRET-WHY", Asks: []string{"SECRET-ASK"}}}
-	return exp, m.fileFault(s, p, exp, core.Score{Direction: "SECRET-DIR"})
+	return exp, m.fileFault(s, p, exp, "", core.Score{Direction: "SECRET-DIR"})
 }
 
 // A fault files the scores, the count of asks and the run ids against the
@@ -116,6 +116,46 @@ func TestFaultKeepsTranscriptsOffTheIssue(t *testing.T) {
 		if time.Now().After(end) {
 			t.Fatalf("the worker never got the transcripts: %+v", m.Work.List(func(t work.Task) bool { return t.ID == id }))
 		}
+	}
+}
+
+// A step-back on the Hive itself hands its worker the setup's commits as a
+// patch that applies, and asks for them on main first.
+func TestSelfFaultHandsOverTheCommits(t *testing.T) {
+	m := rig(t)
+	p, _ := m.C.Projects.Get("hive")
+	from, err := m.C.Effects.Sync(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := m.C.WS.Project("hive")
+	os.WriteFile(filepath.Join(dir, "win.txt"), []byte("the winning change\n"), 0o644)
+	for _, args := range [][]string{{"add", "win.txt"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "the setup's win"}} {
+		if out, err := core.Git(dir, args...); err != nil {
+			t.Fatal(out, err)
+		}
+	}
+	sha, _ := core.Git(dir, "rev-parse", "HEAD")
+	core.Git(dir, "reset", "-q", "--hard", from)
+	exp := said(t, m, "stepback-2-exp", "hive", "ran make")
+	nine := 9.0
+	s := StepBack{ID: "stepback-2", Run: "stepback-2", Project: "hive", From: from, Score: &nine, Best: 5, Setup: &Setup{Asks: []string{"win"}}}
+	id := m.fileFault(s, p, exp, sha, core.Score{})
+	task := m.Work.List(func(t work.Task) bool { return t.ID == id })[0]
+	if !strings.Contains(task.Known, "1 commit(s)") || !strings.Contains(task.Known, "git am -3") || !strings.Contains(task.Done, "forward-ported onto main") {
+		t.Fatalf("the fault must point its worker at the commits that won:\n%s\n%s", task.Known, task.Done)
+	}
+	patch := task.Inputs["commits.patch"]
+	if !strings.Contains(patch, "the setup's win") || !strings.Contains(patch, "+the winning change") {
+		t.Fatalf("the patch lacks the setup's commit:\n%s", patch)
+	}
+	pf := filepath.Join(t.TempDir(), "commits.patch")
+	os.WriteFile(pf, []byte(patch), 0o644)
+	if out, err := core.Git(dir, "-c", "user.name=t", "-c", "user.email=t@t", "am", "-q", "-3", pf); err != nil {
+		t.Fatalf("the patch does not apply: %v %s", out, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "win.txt")); string(got) != "the winning change\n" {
+		t.Fatalf("applied, the patch left %q", got)
 	}
 }
 

@@ -223,7 +223,7 @@ func (m *Module) ClosePR(id, by, comment string, deleteBranch bool) (string, err
 			m.C.Person.Answer(a.ID, "leave open", "the Hive, not the person: the lead closed the PR")
 		}
 	}
-	m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Closed without merging: %s %s (%s)", t.Label(), t.PR.URL, core.Clip(comment, 300)))
+	m.notify(&t, fmt.Sprintf("Closed without merging: %s %s (%s)", t.Label(), t.PR.URL, core.Clip(comment, 300)))
 	return note, nil
 }
 

@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -366,4 +367,166 @@ func TestHarnessBinRefusesAgentWritableFolders(t *testing.T) {
 	if _, err := k.tk.harnessBin("claude"); err == nil || !strings.Contains(err.Error(), "agents can write") {
 		t.Fatalf("a harness under .hive is refused: %v", err)
 	}
+}
+
+// A harness check killed on a loaded machine is retried before the person
+// hears of it: it is told only once it repeats askAfter times, and a check
+// that runs again in between clears it without a word.
+func TestKilledCheckIsRetriedBeforeTheAsk(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(4*time.Hour))
+	killed := "#!/bin/sh\nkill -9 $$\n"
+	os.WriteFile(filepath.Join(k.bin, "claude"), []byte(killed), 0o755)
+	k.skipBackoff()
+	k.tk.Watch()
+	if s := k.state(); s.Failures != 1 || !strings.Contains(s.Error, "killed") {
+		t.Fatalf("the killed check is a failure on record: %+v", s)
+	}
+	if n, _ := k.events("alert.raised"); n != 0 || len(k.asks()) != 0 {
+		t.Fatal("one killed check, hours from the expiry, isn't put to the person")
+	}
+	k.harness(renews(time.Now().Add(14 * time.Hour)))
+	k.skipBackoff()
+	k.tk.Watch()
+	if n, _ := k.events("alert.raised"); n != 0 || k.state().Error != "" {
+		t.Fatalf("a check that runs again clears it quietly: %d alerts, %+v", n, k.state())
+	}
+
+	os.WriteFile(filepath.Join(k.bin, "claude"), []byte(killed), 0o755)
+	for i := 1; i < askAfter; i++ {
+		k.skipBackoff()
+		k.tk.Watch()
+	}
+	if n, _ := k.events("alert.raised"); n != 0 {
+		t.Fatalf("not yet told after %d killed checks", askAfter-1)
+	}
+	k.skipBackoff()
+	k.tk.Watch()
+	if n, _ := k.events("alert.raised"); n != 1 || len(k.asks()) != 1 {
+		t.Fatalf("told once it repeats %d times: %d alerts, %d asks", askAfter, n, len(k.asks()))
+	}
+	k.skipBackoff()
+	k.tk.Watch()
+	if n, _ := k.events("alert.raised"); n != 1 {
+		t.Fatal("and told once")
+	}
+}
+
+// A killed check with the login near its expiry is put to the person at once.
+func TestKilledCheckNearExpiryIsToldAtOnce(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(30*time.Minute))
+	os.WriteFile(filepath.Join(k.bin, "claude"), []byte("#!/bin/sh\nkill -9 $$\n"), 0o755)
+	k.skipBackoff()
+	k.tk.Watch()
+	if n, _ := k.events("alert.raised"); n != 1 || len(k.asks()) != 1 {
+		t.Fatalf("near the expiry there's no time to wait: %d alerts", n)
+	}
+}
+
+// A renewal turned away by the plan's usage limit isn't a failure: the login
+// is parked until the limit resets, nothing is asked of the person (logging
+// in again changes nothing), an ask an earlier failure left open closes, a
+// restart keeps it parked, and after the reset it renews as before.
+func TestRenewAtItsUsageLimitIsParkedWithNoAsk(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(3*time.Minute))
+	k.harness(`echo "refresh token revoked" >&2; exit 1`)
+	k.tk.Watch()
+	if len(k.asks()) != 1 {
+		t.Fatal("a real failure is asked about")
+	}
+	reset := time.Now().Add(50 * time.Hour).In(time.UTC)
+	said := "You've hit your weekly limit · resets " + reset.Format("Jan 2, 3pm") + " (UTC)"
+	k.harness(fmt.Sprintf(`echo %q; exit 1`, said))
+	k.skipBackoff()
+	k.tk.Watch()
+	s := k.state()
+	want := reset.Truncate(time.Hour)
+	if s.Error != "" || s.Failures != 0 || !s.Limited.Equal(want) {
+		t.Fatalf("the login is parked until its reset %s, not failing: %+v", want, s)
+	}
+	if len(k.asks()) != 0 {
+		t.Fatalf("the open ask closes and none is raised: %+v", k.asks())
+	}
+	if _, last := k.events("alert.raised"); !strings.Contains(last, "at its usage limit until") {
+		t.Fatalf("the failure's alert gives way to the park: %q", last)
+	}
+	if n, _ := k.events("login.limited"); n != 1 {
+		t.Fatalf("the park is on record once, got %d", n)
+	}
+	calls := k.calls()
+	k.tk.Watch()
+	k.tk = NewTokens(k.tk.ws)
+	k.tk.Track(k.j, k.p)
+	k.tk.Watch()
+	if k.calls() != calls || len(k.asks()) != 0 || !k.state().Limited.Equal(want) {
+		t.Fatalf("parked, even across a restart, it isn't tried before its reset: calls %d→%d, %+v", calls, k.calls(), k.state())
+	}
+
+	k.harness(renews(time.Now().Add(8 * time.Hour)))
+	k.skipBackoff() // the reset has come
+	k.tk.Watch()
+	if s := k.state(); s.Error != "" || s.Renewed.IsZero() || !s.Limited.IsZero() {
+		t.Fatalf("after the reset it renews and is no longer parked: %+v", s)
+	}
+}
+
+// A limit that doesn't say when it resets parks the login for limitWait.
+func TestRenewAtALimitWithNoResetWaits(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(3*time.Minute))
+	k.harness(`echo "Claude AI usage limit reached" >&2; exit 1`)
+	k.tk.Watch()
+	if s := k.state(); s.Error != "" || time.Until(s.Limited) < limitWait-time.Minute || len(k.asks()) != 0 {
+		t.Fatalf("parked for limitWait with no ask: %+v", s)
+	}
+}
+
+// A limit that names no reset is journaled once, not on each hourly try; a
+// reset far off (a misread date) parks the login no longer than limitMost; a
+// failed check of the harness while parked leaves it parked, live and after
+// a restart alike; and a parked login isn't handed to turns.
+func TestRenewParkIsBoundedAndReplaysAsLive(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(3*time.Minute))
+	k.harness(`echo "Claude AI usage limit reached" >&2; exit 1`)
+	k.tk.Watch()
+	k.skipBackoff()
+	k.tk.Watch()
+	if n, _ := k.events("login.limited"); n != 1 || k.calls() != 2 {
+		t.Fatalf("two tries of a limit with no reset, journaled once: %d events, %d calls", n, k.calls())
+	}
+
+	far := time.Now().AddDate(0, 5, 0).In(time.UTC)
+	k.harness(fmt.Sprintf(`echo %q; exit 1`, "You've hit your weekly limit · resets "+far.Format("Jan 2, 3pm")+" (UTC)"))
+	k.skipBackoff()
+	k.tk.Watch()
+	until := k.state().Limited
+	if d := time.Until(until); d > limitMost || d < limitMost-time.Minute {
+		t.Fatalf("a reset months away parks it for limitMost, got %v", d)
+	}
+	if !k.tk.LimitedUntil("claude:work").Equal(until) {
+		t.Fatal("LimitedUntil reads the park")
+	}
+
+	k.tk.done(Login{Harness: "claude", Name: "work"}, time.Time{}, errors.New("claude --version: exit 1"), tried)
+	if s := k.state(); !s.Limited.Equal(until) {
+		t.Fatalf("a failed check leaves it parked: %+v", s)
+	}
+	k.tk = NewTokens(k.tk.ws)
+	k.tk.Track(k.j, k.p)
+	if s := k.state(); !s.Limited.Equal(until) {
+		t.Fatalf("and so does a restart: %+v", s)
+	}
+
+	j, _ := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	defer j.Close()
+	rs := NewRuns(k.tk.ws, j, nil, parkedTokens{k.tk}, func() []string { return nil })
+	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false); err != nil || l.Key() != "claude" {
+		t.Fatalf("the parked login is passed over for the other: %v %v", l.Key(), err)
+	}
+}
+
+// parkedTokens lists twoLogins' logins with tk's renewal state.
+type parkedTokens struct{ *Tokens }
+
+func (parkedTokens) Logins(h string) []Login { return twoLogins{}.Logins(h) }
+func (parkedTokens) AgentEnv(l Login, home string) ([]string, error) {
+	return twoLogins{}.AgentEnv(l, home)
 }

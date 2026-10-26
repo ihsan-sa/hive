@@ -81,9 +81,11 @@ type Effects struct {
 	steps     map[string][]JobStep    // repo url -> a finished check's steps
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
 	gateMains map[string]GateResult   // project@main -> the newest can't-run there not tied to its head (GateAtMain)
+	standing  map[string]bool         // project@head@verdict's main@main -> whether that verdict still stands there (StandingGate)
 	judged    map[string]Judgement    // project@sha@main -> the judge's newest call (judge.go)
 	homes     map[string]bool         // running checks' homes (disk.go)
 	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
+	buildMu   sync.RWMutex            // the same for the projects' build caches
 	disk      DiskUse                 // the last measurement of the Hive's disk use
 	diskFull  bool                    // a check couldn't run for room, and the alert is out
 
@@ -172,7 +174,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs, sweep: sandbox.Sweep,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}, standing: map[string]bool{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -246,7 +248,10 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var g GateResult
 			ev.Decode(&g)
 			if prev, ok := e.gateMains[g.Project+"@"+g.Main]; ok && prev.MainFails && g.MainFails {
-				g.Repeats = prev.Repeats + 1
+				g.Repeats = prev.Repeats
+				if g.Started.IsZero() || !prev.At.After(g.Started) { // a run beside it saw the same main: no repeat
+					g.Repeats++
+				}
 			}
 			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
 			switch {
@@ -529,18 +534,55 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
 	mods := e.goModules(sb, dir)
-	code, out, err := e.runSandboxed(sb, p.Name, id, append(mounts, mods.mounts...), guardProgram(command), true, 30*time.Minute, mods.env, e.checkCacheCap())
+	build := e.goBuild(sb, p, sha, dir)
+	run := func(withMods bool) (int, string, error) {
+		ms, env := append(slices.Clone(mounts), build.mounts...), slices.Clone(build.env)
+		if withMods {
+			ms, env = append(ms, mods.mounts...), append(env, mods.env...)
+		}
+		return e.runSandboxed(sb, p.Name, id, ms, guardProgram(command), true, 30*time.Minute, env, e.checkCacheCap())
+	}
+	code, out, err := run(true)
+	if len(build.mounts) > 0 && code != 0 && strings.Contains(out, "GOCACHEPROG") {
+		// The build cache's program failed, not the commit: run once
+		// without the shared build cache.
+		build.done()
+		build = goMods{note: "the shared build cache failed; run again without it", done: func() {}}
+		code, out, err = run(true)
+	}
 	mods.done()
 	if mods.marker != "" && code != 0 && strings.Contains(out, staleModules) {
-		// The shared cache lacks what its marker promised: that is the
-		// cache's fault, not the commit's, so drop the marker and run once
-		// fetching its own.
-		os.Remove(mods.marker)
-		mods.note = "the shared module cache lacked a module; run again without it"
-		code, out, err = e.runSandboxed(sb, p.Name, id, mounts, guardProgram(command), true, 30*time.Minute, nil, e.checkCacheCap())
+		// Offline, the check couldn't have a module: not the commit's fault,
+		// so it runs once more fetching its own, in a checkout the first run
+		// hasn't written to. If go.sum names the module the cache lacked
+		// what its marker promised, and the marker goes; if not, the check
+		// needs more than the cache can hold, and later checks of the same
+		// go.mod and go.sum skip it.
+		if cacheLacked(out, mods.sum) {
+			os.Remove(mods.marker)
+			mods.note = "the shared module cache lacked a module; run again without it"
+		} else {
+			os.WriteFile(mods.marker+ownModules, nil, 0o644)
+			mods.note = "the check needs a module go.sum doesn't name; run again fetching its own"
+		}
+		again, cerr := e.cleanCheckout(p, sha, kind)
+		if cerr != nil {
+			build.done()
+			c.Output = "could not make a clean checkout: " + cerr.Error()
+			return c
+		}
+		defer os.RemoveAll(again)
+		if len(build.mounts) > 0 {
+			stableTimes(again) // as goBuild made the first checkout's, for the shared build cache
+		}
+		mounts = []sandbox.Mount{{Host: again, Inside: "/work", RW: true}}
+		code, out, err = run(false)
 	}
-	if mods.note != "" {
-		out = "hive: " + mods.note + "\n" + out
+	build.done()
+	for _, n := range []string{build.note, mods.note} {
+		if n != "" {
+			out = "hive: " + n + "\n" + out
+		}
 	}
 	c.Output = out
 	if errors.Is(err, ErrHomeFull) {
@@ -560,7 +602,11 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.CantRun, c.Tool = "can't run: "+tool+" is not installed where checks run", tool
 		return record()
 	}
-	if line := DiskFull(out); !c.OK && line != "" {
+	line := DiskFull(out)
+	if line == "" && !c.OK && (DiskUse{Room: e.room()}).Low() {
+		line = toolDiskFull(out)
+	}
+	if !c.OK && line != "" {
 		c.OK, c.CantRun = false, "can't run: the disk or a quota is full where checks run"
 		e.diskAlert(line)
 		return record()
@@ -750,6 +796,26 @@ func (c Check) FullOutput() string {
 		}
 	}
 	return c.Output
+}
+
+// NoWorse says a red run c fails only what main's red run mc fails too,
+// each test by its package and name, so the red is main's and the change
+// may be its fix. A failure in c that no test name accounts for (a timeout,
+// a panic or exit outside a test, a build failure) counts only where main's
+// run fails that package so too; one either run can't name at all can't be
+// told apart. A run stopped by vet or the build (StopKeys) never ran its
+// tests, so matching main's vet error never makes a change no worse.
+func NoWorse(c, mc Check) bool {
+	mine, mains := RedKeys(c.FullOutput()), RedKeys(mc.FullOutput())
+	if len(mine) == 0 || len(mains) == 0 {
+		return false
+	}
+	for _, k := range mine {
+		if !slices.Contains(mains, k) {
+			return false
+		}
+	}
+	return true
 }
 
 // scoreOf reads the score from a score command's output: the last word of
@@ -1096,7 +1162,9 @@ func DiffID(diff string) string {
 
 // Approve records the approval of a commit (the person's, or a warden's
 // when autonomy lets it decide): kind "merge" for a head
-// that changes protected paths, "release" for a merge held before release.
+// that changes protected paths, "release" for a merge held before release,
+// "gate" for a change to the gate landed unjudged at one main (sha is
+// head@main), while main itself fails in the gate.
 // The kinds stay apart, since a fast-forwarding forge merges a head as itself.
 func (e *Effects) Approve(kind, project, sha string) {
 	e.j.MustAppend("effect.approved", map[string]string{"kind": kind, "project": project, "sha": sha})
@@ -1333,6 +1401,10 @@ type MergeRequest struct {
 	Subject string
 	Gain    bool   // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
 	Task    string // the task whose PR it is: the quarantine excuses it only on evidence from outside it
+	// Draft is the PR's state at the caller's last look: a draft is readied
+	// once every read is checked. One made a draft after that look isn't
+	// (the lead's pr_draft, say): MergePR refuses it with ErrDraft.
+	Draft bool
 }
 
 // Merge merges the PR only at sha, and only when the host's own records show
@@ -1341,14 +1413,21 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	p := m.Project
 	if e.MergeHeld != nil {
 		if why := e.MergeHeld(p.Name, m.PR); why != "" {
-			return "", fmt.Errorf("refusing to merge #%d: %s", m.PR, why)
+			return "", refuse("#%d: %s", m.PR, why)
 		}
 	}
 	if why := e.Stewardship(p, m.Main); why != "" {
-		return "", fmt.Errorf("refusing to merge #%d: %s", m.PR, why)
+		return "", refuse("#%d: %s", m.PR, why)
 	}
-	if c, ok := e.GetCheck(p.Name, m.SHA, "test"); !ok || !c.OK {
-		return "", fmt.Errorf("refusing to merge %s: no passing test run recorded for that exact commit", short(m.SHA))
+	if c, ok := e.GetCheck(p.Name, m.SHA, "test"); !ok {
+		return "", refuse("%s: no test run recorded for that exact commit", short(m.SHA))
+	} else if !c.OK {
+		// Red only where main's own run at m.Main is red too: no worse than
+		// main, as the work module's testing stage let it on, so the fix for
+		// a red main can land.
+		if mc, ok := e.GetCheck(p.Name, m.Main, "test"); !ok || mc.OK || !NoWorse(c, mc) {
+			return "", refuse("%s: its test run is red beyond what main's own run at %s fails too (or main's has no record)", short(m.SHA), short(m.Main))
+		}
 	}
 	ch, err := e.Classify(p, m.Main, m.SHA)
 	if err != nil {
@@ -1358,20 +1437,20 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
 	}
 	if !ch.Small && !e.readOK(p, ch, m.SHA) {
-		return "", fmt.Errorf("refusing to merge %s: no land verdict bound to that exact commit", short(m.SHA))
+		return "", refuse("%s: no land verdict bound to that exact commit", short(m.SHA))
 	}
 	if !e.SecurityOK(p.Name, ch) {
 		need := "the Hive's security seat"
 		if len(ch.SecurityRoot) > 0 {
 			need += " and a majority of its panel"
 		}
-		return "", fmt.Errorf("refusing to merge %s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
+		return "", refuse("%s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
 	}
 	if p.Self && m.Gain {
-		// Or once the person landed that exact head unjudged, the gate
-		// unable to judge at main (the work module's "gate" ask).
-		if !e.Kept(p.Name, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA) {
-			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
+		// Or once the person landed that exact head at that main unjudged,
+		// the gate unable to judge there (the work module's "gate" ask).
+		if !e.Kept(p, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA+"@"+m.Main) {
+			return "", refuse("%s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
 		}
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
@@ -1396,13 +1475,11 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		st, which, prose = ChecksBesidesFailures(runs, req)
 	}
 	if st != CheckPass {
-		return "", fmt.Errorf("refusing to merge %s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
+		return "", refuse("%s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
 	}
 	// Every read above is the Hive's own and bound to sha, and nobody outside
 	// the Hive reads its PRs, so a draft it cleared is its to ready.
-	if pr, err := e.Forge.GetPR(p.Repo, m.PR); err != nil {
-		return "", err
-	} else if pr.Draft {
+	if m.Draft {
 		if err := e.ReadyPR(p, m.PR, m.SHA); err != nil {
 			return "", err
 		}
@@ -1436,13 +1513,14 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	return merged, nil
 }
 
-// ReadyPR takes the PR out of draft, only while its head is still sha.
+// ReadyPR takes the PR out of draft, only while its head is still sha; the
+// journal hears only when the forge changed something.
 func (e *Effects) ReadyPR(p Project, pr int, sha string) error {
-	if err := e.Forge.ReadyPR(p.Repo, pr, sha); err != nil {
-		return err
+	readied, err := e.Forge.ReadyPR(p.Repo, pr, sha)
+	if readied {
+		e.j.MustAppend("effect.readied", map[string]any{"project": p.Name, "pr": pr, "sha": sha})
 	}
-	e.j.MustAppend("effect.readied", map[string]any{"project": p.Name, "pr": pr, "sha": sha})
-	return nil
+	return err
 }
 
 // RefusedRed is the forge refusing a merge the Hive found no worse than main:
@@ -1467,6 +1545,16 @@ func (r *RefusedRed) Unwrap() error { return r.Err }
 
 // protectionRefused is how GitHub says a branch rule refused a merge.
 var protectionRefused = regexp.MustCompile(`(?i)required status check|base branch policy|protected branch|repository rule violation`)
+
+// Refusal is Merge declining a merge one of its own conditions doesn't
+// allow yet, so the task can say what holds it.
+type Refusal string
+
+func (r Refusal) Error() string { return string(r) }
+
+func refuse(format string, a ...any) error {
+	return Refusal(fmt.Sprintf("refusing to merge "+format, a...))
+}
 
 // NeedsPerson means only the person can take this step.
 type NeedsPerson struct{ Reason string }
@@ -1980,6 +2068,11 @@ type CheckFailure struct {
 	Keys []string `json:"keys,omitempty"`
 	// OnlyTests says the log shows nothing failing apart from Keys.
 	OnlyTests bool `json:"only_tests,omitempty"`
+	// Head and Base are the commits the forge merged before running the
+	// check (TestedMerge): a pull request's checks run on its head merged
+	// with main as it was then, which may be older than main now.
+	Head string `json:"head,omitempty"`
+	Base string `json:"base,omitempty"`
 }
 
 // CheckFailure reads a failed check's log on repo's forge with the Hive's own
@@ -2004,6 +2097,7 @@ func (e *Effects) CheckFailure(repo string, r CheckRun) (CheckFailure, bool) {
 	}
 	keys, placed := FailedTestKeys(log)
 	f = CheckFailure{Tests: FailedTests(log), Keys: keys, Excerpt: LogExcerpt(log, ExcerptLines), OnlyTests: placed && OnlyTests(log)}
+	f.Head, f.Base = TestedMerge(log)
 	e.mu.Lock()
 	if e.failing == nil || len(e.failing) > 500 {
 		e.failing = map[string]CheckFailure{}
@@ -2052,6 +2146,20 @@ func LogExcerpt(log string, n int) string {
 	return strings.Join(lines[start:end], "\n")
 }
 
+// ghTestMerge is the merge commit GitHub runs a pull request's checks on,
+// whose message its checkout step prints ("HEAD is now at a9ae988 Merge
+// <head> into <base>").
+var ghTestMerge = regexp.MustCompile(`\bMerge ([0-9a-f]{40}) into ([0-9a-f]{40})\b`)
+
+// TestedMerge is the head and base a CI job's log says it merged and ran
+// on, or "" for both when it names no such merge (a push, not a PR).
+func TestedMerge(log string) (head, base string) {
+	if m := ghTestMerge.FindStringSubmatch(log); m != nil {
+		return m[1], m[2]
+	}
+	return "", ""
+}
+
 // CheckNames lists checks by name, for a message.
 func CheckNames(runs []CheckRun) string {
 	var names []string
@@ -2094,7 +2202,8 @@ func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.rea
 // merge. A base names the commit the merge is taken from instead of the
 // common ancestor: the branch's own commit that
 // main already holds as a squashed checkpoint, so only what came after it is
-// laid onto main.
+// laid onto main. A branch that has merged main since that checkpoint is
+// merged plainly, from its newer common ancestor with main.
 //
 // Attributes (merge=union and the rest) are read from main, not the branch:
 // a branch cut before main marked a file union merges it as main does, and a
@@ -2113,6 +2222,13 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 	}
 	// attr.tree needs git 2.46; an older git ignores the key and reads the branch's own.
 	attr := "attr.tree=" + mainSHA
+	if base != "" && mergedSince(dir, sha, mainSHA, base) {
+		// The branch merged main after its checkpoint, so its common
+		// ancestor with main is newer than the checkpoint and already holds
+		// the squashed copy: from the checkpoint, both sides would carry
+		// main's changes and the branch's edits on top of them would conflict.
+		base = ""
+	}
 	if base != "" {
 		// Exit status 1 is a conflict; anything else (such as a git older
 		// than 2.40, without --merge-base) is an error, not the worker's to fix.
@@ -2139,6 +2255,18 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 		return "", &DoubledError{Lines: d}
 	}
 	return e.hostCommit(p, dir, HostCommit{Project: p.Name, Kind: "update", Reviewed: sha, Main: mainSHA})
+}
+
+// mergedSince reports whether branch merged a commit of main after base:
+// their common ancestor is not one base already holds.
+func mergedSince(dir, branch, main, base string) bool {
+	mb, err := Git(dir, "merge-base", branch, main)
+	if err != nil {
+		return false
+	}
+	_, err = Git(dir, "merge-base", "--is-ancestor", strings.TrimSpace(mb), base)
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 1
 }
 
 // ErrConflict means a branch can't be brought up to date without the worker.

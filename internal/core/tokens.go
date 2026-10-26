@@ -306,10 +306,31 @@ type LoginState struct {
 	Error    string    `json:"error,omitempty"`
 	Failures int       `json:"failures,omitempty"` // in a row
 	Run      string    `json:"run,omitempty"`      // what the person runs to renew it by hand
+	Limited  time.Time `json:"limited,omitempty"`  // at its usage limit: parked until this reset
 	next     time.Time // no renewal before this: the backoff after a failure
 	checked  time.Time // when the harness was last tried
 	byCheck  bool      // the failure is the harness not running, not a renewal
 	stuckAt  time.Time // the expiry when it failed: a later one was renewed by hand
+	told     bool      // this run of failures was put to the person
+}
+
+// askAfter and askWithin are when a failure that may be the machine's load
+// (the harness killed or timed out) is put to the person: once it has failed
+// this many times in a row, or once the login runs out this soon. Any other
+// failure is put to them at once.
+var askAfter, askWithin = 3, time.Hour
+
+// transient reports whether error text e is a run killed or timed out, as a
+// loaded machine does to it, rather than one that ran and failed.
+func transient(e string) bool {
+	return strings.Contains(e, "signal: killed") || strings.Contains(e, "signal: terminated") ||
+		strings.Contains(e, "deadline exceeded")
+}
+
+// tell reports whether a run of failures that stands at failures, whose last
+// error is e, with the login running out at exp, is put to the person now.
+func tell(failures int, e string, exp, now time.Time) bool {
+	return !transient(e) || failures >= askAfter || exp.IsZero() || exp.Sub(now) < askWithin
 }
 
 // Track records renewals in journal j and puts a failure to the person
@@ -317,7 +338,7 @@ type LoginState struct {
 // an unresolved failure with its count, so a restart doesn't tell it afresh.
 func (t *Tokens) Track(j *Journal, p *Person) {
 	j.Replay(func(e Event) {
-		if e.Kind != "login.renewed" && e.Kind != "login.renew_failed" {
+		if e.Kind != "login.renewed" && e.Kind != "login.renew_failed" && e.Kind != "login.limited" {
 			return
 		}
 		var r struct {
@@ -326,14 +347,22 @@ func (t *Tokens) Track(j *Journal, p *Person) {
 			Expires  time.Time `json:"expires"`
 			Failures int       `json:"failures"`
 			ByCheck  bool      `json:"by_check"`
+			Until    time.Time `json:"until"`
 		}
 		e.Decode(&r)
 		s := t.stateLocked(r.Login)
 		s.Expires = r.Expires
+		if e.Kind == "login.limited" {
+			s.Limited, s.next, s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt, s.told = r.Until, r.Until, time.Time{}, "", 0, false, time.Time{}, false
+			return
+		}
 		if e.Kind == "login.renewed" {
-			s.Renewed, s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt = e.At, time.Time{}, "", 0, false, time.Time{}
+			// Only a renewal ends a park, as live: a failure since (a check of
+			// the harness) leaves it parked.
+			s.Renewed, s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt, s.told, s.Limited = e.At, time.Time{}, "", 0, false, time.Time{}, false, time.Time{}
 		} else {
 			s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt = e.At, r.Error, max(r.Failures, 1), r.ByCheck, r.Expires
+			s.told = s.told && s.Failures > 1 || tell(s.Failures, r.Error, r.Expires, e.At)
 		}
 	})
 	t.mu.Lock()
@@ -357,12 +386,23 @@ func (t *Tokens) States() []LoginState {
 	defer t.mu.Unlock()
 	var out []LoginState
 	for _, s := range t.state {
-		if !s.Expires.IsZero() || !s.Renewed.IsZero() || s.Error != "" {
+		if !s.Expires.IsZero() || !s.Renewed.IsZero() || s.Error != "" || !s.Limited.IsZero() {
 			out = append(out, *s)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Login < out[j].Login })
 	return out
+}
+
+// LimitedUntil is when login key's park at its usage limit, found by a
+// renewal, ends; zero or past when it isn't parked.
+func (t *Tokens) LimitedUntil(key string) time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if s := t.state[key]; s != nil {
+		return s.Limited
+	}
+	return time.Time{}
 }
 
 // Retry is the person saying they renewed login key by hand: the next look
@@ -496,6 +536,9 @@ func (t *Tokens) renew(l Login, before time.Time) error {
 	}
 	cmd.Dir = os.TempDir()
 	out, err := cmd.CombinedOutput()
+	if err != nil && harness.SaysLimited(string(out)) {
+		return &limitedError{until: harness.LimitResets(string(out), time.Now()), said: harnessSaid(out)}
+	}
 	if err != nil {
 		return fmt.Errorf("`%s` exited with %v: %s", bin, err, harnessSaid(out))
 	}
@@ -603,6 +646,26 @@ func harnessSaid(out []byte) string {
 	return Clip(s, 300)
 }
 
+// limitedError is a renewal call turned away because the login's plan is at
+// its usage limit: the login itself is fine, logging in again changes
+// nothing, and the call can only work once the limit resets at until (zero
+// when the harness didn't say).
+type limitedError struct {
+	until time.Time
+	said  string
+}
+
+func (e *limitedError) Error() string { return "at its usage limit: " + e.said }
+
+// limitWait is how long a limited login is parked when the harness doesn't
+// say when its limit resets, and limitMost the longest any reset it names
+// parks it: a week's window and a day, so a misread date can't park it for
+// months.
+const (
+	limitWait = time.Hour
+	limitMost = 8 * 24 * time.Hour
+)
+
 // What done records: a renewal the Hive ran, a try of the harness, or an
 // expiry that moved on its own after a failure.
 const (
@@ -613,12 +676,19 @@ const (
 
 // done records how a renewal or a try of the harness (how) of login l went;
 // exp is its expiry after. A failure goes to the journal and the daemon's log
-// every time, and the first of a run of them raises an alert and asks the
-// person to renew the login by hand, with what to run. A success after
-// failures says so in the same alert and closes the ask.
+// every time; the first of a run of them raises an alert and asks the person
+// to renew the login by hand, with what to run, unless it was killed or timed
+// out, which is asked only once it repeats or the login nears its expiry (see
+// tell). A success after a told failure says so in the same alert and closes
+// the ask. A login at its usage limit is neither: see parked.
 func (t *Tokens) done(l Login, exp time.Time, err error, how int) {
 	now := time.Now()
 	key := l.Key()
+	var lim *limitedError
+	if errors.As(err, &lim) {
+		t.parked(l, exp, lim, now)
+		return
+	}
 	t.mu.Lock()
 	s := t.stateLocked(key)
 	if !exp.IsZero() {
@@ -628,19 +698,24 @@ func (t *Tokens) done(l Login, exp time.Time, err error, how int) {
 	switch {
 	case err != nil:
 		s.Failures++
-		first = s.Failures == 1
+		s.told = s.told && s.Failures > 1 // a run after the person's done is told afresh
 		s.Failed, s.Error, s.Run, s.byCheck, s.stuckAt = now, err.Error(), renewByHand(l, err), how == tried, s.Expires
+		first = !s.told && tell(s.Failures, s.Error, s.Expires, now)
+		s.told = s.told || first
 		s.next = now.Add(time.Minute << min(s.Failures-1, 4))
 		if s.next.Sub(now) > 15*time.Minute {
 			s.next = now.Add(15 * time.Minute)
 		}
+		if s.Limited.After(s.next) {
+			s.next = s.Limited // still parked: a failure elsewhere doesn't bring the renewal forward
+		}
 	case how != tried:
-		recovered = s.Error != ""
-		s.Renewed, s.Failed, s.Error, s.Run, s.Failures, s.byCheck, s.stuckAt = now, time.Time{}, "", "", 0, false, time.Time{}
+		recovered = s.told
+		s.Renewed, s.Failed, s.Error, s.Run, s.Failures, s.byCheck, s.stuckAt, s.Limited, s.told = now, time.Time{}, "", "", 0, false, time.Time{}, time.Time{}, false
 		s.next = now.Add(time.Minute)
 	case s.byCheck: // the harness runs again; nothing was renewed
-		recovered = s.Error != ""
-		s.Failed, s.Error, s.Run, s.Failures, s.byCheck, s.next = time.Time{}, "", "", 0, false, time.Time{}
+		recovered = s.told
+		s.Failed, s.Error, s.Run, s.Failures, s.byCheck, s.next, s.told = time.Time{}, "", "", 0, false, time.Time{}, false
 	}
 	c := *s
 	j, p := t.j, t.person
@@ -679,6 +754,51 @@ func (t *Tokens) done(l Login, exp time.Time, err error, how int) {
 				if a.Kind == "login" && a.Ref == key {
 					p.Answer(a.ID, "done", why)
 				}
+			}
+		}
+	}
+}
+
+// parked records that login l's renewal was turned away by its usage limit:
+// not a failure, so nothing is asked of the person, who can't change it. The
+// login waits for its reset (or limitWait, when the harness didn't say)
+// before the next try; the first park of a run of them is journaled (again
+// only when a reset it names moves), and an earlier failure's alert and ask
+// are closed, being no longer the person's.
+func (t *Tokens) parked(l Login, exp time.Time, lim *limitedError, now time.Time) {
+	key := l.Key()
+	until := lim.until
+	if !until.After(now) {
+		until = now.Add(limitWait)
+	}
+	if until.Sub(now) > limitMost {
+		until = now.Add(limitMost)
+	}
+	t.mu.Lock()
+	s := t.stateLocked(key)
+	if !exp.IsZero() {
+		s.Expires = exp
+	}
+	failing, told := s.Error != "", s.told
+	fresh := failing || s.Limited.IsZero() || !lim.until.IsZero() && !s.Limited.Equal(until)
+	s.Limited, s.next = until, until
+	s.Failed, s.Error, s.Run, s.Failures, s.byCheck, s.stuckAt, s.told = time.Time{}, "", "", 0, false, time.Time{}, false
+	c := *s
+	j, p := t.j, t.person
+	t.mu.Unlock()
+
+	fmt.Fprintf(os.Stderr, "%s login %s: at its usage limit, renewal parked until %s\n", now.Format(time.RFC3339), key, until.Format(time.RFC3339))
+	if j == nil || !fresh {
+		return
+	}
+	j.MustAppend("login.limited", map[string]any{"login": key, "expires": c.Expires, "until": until, "said": lim.said})
+	if told { // the failure's alert gives way
+		j.MustAppend("alert.raised", map[string]string{"kind": "login", "ref": "login:" + key, "text": fmt.Sprintf("The %s login is at its usage limit until %s; it renews after the reset", key, until.Local().Format("Mon 15:04"))})
+	}
+	if p != nil {
+		for _, a := range p.Open() {
+			if a.Kind == "login" && a.Ref == key {
+				p.Answer(a.ID, "done", "at its usage limit until "+until.Local().Format("Mon 15:04")+"; nothing to renew by hand")
 			}
 		}
 	}

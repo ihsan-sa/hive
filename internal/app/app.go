@@ -126,18 +126,21 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 // "schedule"). A due one is journaled as module.scheduled, which the program
 // reads off the journal like any hook; the daemon never calls it.
 func (a *App) moduleJobs() {
+	names := map[string]bool{}
 	for _, m := range a.Mods.List() {
 		if len(m.Exec) == 0 {
 			continue
 		}
 		name := filepath.Base(m.Dir)
 		for job, every := range m.Schedule {
+			names[job] = true
 			a.System.RegisterModule(system.Job{Name: job, Default: every, Fn: func() (string, error) {
 				a.C.J.MustAppend("module.scheduled", map[string]string{"module": name, "job": job})
 				return "asked module " + name, nil
 			}})
 		}
 	}
+	a.System.KeepModuleJobs(names)
 }
 
 // Clean removes spent checkouts and what checks left behind, then measures

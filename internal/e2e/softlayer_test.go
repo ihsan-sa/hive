@@ -14,6 +14,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/softlayer"
 )
 
@@ -82,20 +83,31 @@ func TestSoftLayer(t *testing.T) {
 		out = t.TempDir()
 	}
 	reps := make([]softlayer.Report, len(arms))
-	slots := make(chan struct{}, at)
+	// Each running arm holds a slot, and its slot picks its CPUs, so two
+	// arms at once don't share theirs.
+	slots := make(chan int, at)
+	for i := range at {
+		slots <- i
+	}
 	t.Run("arms", func(t *testing.T) {
 		for i, arm := range arms {
 			t.Run(arm.Name, func(t *testing.T) {
 				t.Parallel()
-				slots <- struct{}{}
+				slot := <-slots
 				// Registered first, so it runs last: after the arm's daemon
 				// and what it left are ended and its folder removed.
-				t.Cleanup(func() { <-slots })
-				reps[i] = softArm(t, arm, string(essay), task, wait, filepath.Join(out, arm.Name))
+				t.Cleanup(func() { slots <- slot })
+				reps[i] = softArm(t, arm, slot, string(essay), task, wait, filepath.Join(out, arm.Name))
 			})
 		}
 	})
-	table := fmt.Sprintf("Task: %s\n\nHarness: %s; each arm waited up to %s, %d at a time on %d CPUs each.%s\n\n%s", task, envOr("HIVE_E2E_HARNESS", "fake"), wait, at, softCPUs, cgroupPeak(), softlayer.Table(reps))
+	both := ""
+	if at > 1 {
+		// The test adopts both daemons' orphans, so the sampler can't tell
+		// one arm's processes from the other's.
+		both = " With two arms at a time, an arm's peak MB includes the other arm's processes while both ran."
+	}
+	table := fmt.Sprintf("Task: %s\n\nHarness: %s; each arm waited up to %s, %d at a time on %d CPUs each.%s%s\n\n%s", task, envOr("HIVE_E2E_HARNESS", "fake"), wait, at, softCPUs, both, cgroupPeak(), softlayer.Table(reps))
 	if err := os.WriteFile(filepath.Join(out, "table.md"), []byte(table), 0o644); err != nil {
 		t.Errorf("keeping the table: %v", err)
 	}
@@ -113,12 +125,13 @@ func envOr(k, def string) string {
 // checks' builds and their tests (go sizes -p and GOMAXPROCS to them).
 const softCPUs = 4
 
-// softArm runs one arm and keeps its journal, chats and report in keep.
-func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.Duration, keep string) softlayer.Report {
+// softArm runs one arm, on the slot-th group of softCPUs CPUs, and keeps its
+// journal, chats and report in keep.
+func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, wait time.Duration, keep string) softlayer.Report {
 	// The caps: one worker and one check at a time, set as the person's
 	// ceilings so the pace can't raise them, and builds of two packages at
 	// once where a check gets the daemon's environment (a bare sandbox).
-	h := startOn(t, softCPUs, bin, func(c *core.Config) {
+	h := startOn(t, softCPUs, slot, bin, func(c *core.Config) {
 		if os.Getenv("HIVE_SOFT_WARDENS") != "1" {
 			c.Autonomy = 1
 		}
@@ -146,8 +159,14 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 	outcome := ""
 	for deadline := time.Now().Add(wait); outcome == ""; time.Sleep(10 * time.Second) {
 		standInCI(h, "me/"+project)
-		st := h.state()
-		if tk, ok := landed(st, project); ok {
+		// A sub-Hive whose daemon stops answering is a result too: its
+		// journal and daemon log are still kept below, not lost to t.Fatal.
+		st, err := h.c.State()
+		if err != nil {
+			outcome = "the sub-Hive's daemon stopped answering after " + time.Since(began).Round(time.Second).String() + ": " + err.Error()
+			break
+		}
+		if tk, ok := askLanded(st, project); ok {
 			outcome = "landed " + shortSHA(tk.MergeSHA) + " after " + time.Since(began).Round(time.Second).String()
 		} else if time.Now().After(deadline) {
 			outcome = "not landed: " + stages(st, project)
@@ -184,6 +203,9 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 		err = os.WriteFile(filepath.Join(keep, "events.jsonl"), j, 0o644)
 	}
 	kept("events.jsonl", err)
+	if log, err := os.ReadFile(filepath.Join(h.ws.Hive(), "daemon-test.log")); err == nil {
+		kept("daemon.log", os.WriteFile(filepath.Join(keep, "daemon.log"), log, 0o644))
+	}
 	for what, from := range map[string]string{"chats": h.ws.Chats(), "runs": h.ws.Runs()} {
 		if out, err := exec.Command("cp", "-r", from, filepath.Join(keep, what)).CombinedOutput(); err != nil {
 			kept(what, fmt.Errorf("%v: %s", err, out))
@@ -198,6 +220,21 @@ func softArm(t *testing.T, arm softlayer.Variant, essay, task string, wait time.
 	return rep
 }
 
+// askLanded finds the asked task merged: one the lead filed from its chat.
+// Another merge (a fix the project's lead filed for a red main, say) is
+// counted in the report's merges but doesn't end the arm: in the second real
+// run (2026-10-25) both arms "landed" that way while the ask still waited.
+func askLanded(st api.State, project string) (work.Task, bool) {
+	for _, p := range st.Projects {
+		for _, t := range p.Tasks {
+			if p.Name == project && t.Chat == "lead" && t.Stage == work.StageDone && t.MergeSHA != "" && !strings.HasPrefix(t.Title, "Revert") {
+				return t, true
+			}
+		}
+	}
+	return work.Task{}, false
+}
+
 // armTookEffect: the system prompt of every run the sub-Hive made starts
 // with the arm's orientation.
 func armTookEffect(h *hive, arm softlayer.Variant, essay string) bool {
@@ -210,13 +247,15 @@ func armTookEffect(h *hive, arm softlayer.Variant, essay string) bool {
 	for _, line := range strings.Split(string(raw), "\n") {
 		var e struct {
 			Kind string
-			Data struct{ System string }
+			Data struct{ ID string }
 		}
 		if json.Unmarshal([]byte(line), &e) != nil || e.Kind != "run.created" {
 			continue
 		}
 		runs++
-		if !strings.HasPrefix(e.Data.System, files["orientation"]) {
+		// the journal names a long system prompt; the run's ro folder has it
+		system, _ := os.ReadFile(filepath.Join(h.ws.RunRO(e.Data.ID), "system.md"))
+		if !strings.HasPrefix(string(system), files["orientation"]) {
 			return false
 		}
 	}
@@ -405,9 +444,10 @@ func ownCgroup() string {
 // cgroup and the Hive's runs never swap for it.
 const softMemMax = 4 << 30
 
-// unbounded says why this run has no memory ceiling of its own (its own
-// cgroup's memory.max, at most softMemMax, so the Hive's own 8 GB unit
-// doesn't count), or "" when it has one. Off Linux it can't tell, and says "".
+// unbounded says why this run has no memory ceiling of its own (the
+// smallest memory.max of its cgroup and those above it, at most softMemMax,
+// so the Hive's own 8 GB unit doesn't count), or "" when it has one. Off
+// Linux it can't tell, and says "".
 func unbounded() string {
 	if runtime.GOOS != "linux" {
 		return ""
@@ -416,15 +456,27 @@ func unbounded() string {
 	if cg == "" {
 		return "no cgroup v2 found for this process"
 	}
-	raw, err := os.ReadFile(filepath.Join(cg, "memory.max"))
-	if err != nil {
-		return "its cgroup " + cg + " has no memory.max"
-	}
-	v := strings.TrimSpace(string(raw))
-	if n, err := strconv.ParseInt(v, 10, 64); err != nil || n > softMemMax {
-		return fmt.Sprintf("its cgroup %s has memory.max %s, over %d MB", cg, v, softMemMax>>20)
+	if n, ok := cgroupMemMax("/sys/fs/cgroup", cg); !ok || n > softMemMax {
+		return fmt.Sprintf("neither its cgroup %s nor one above it has a memory.max of at most %d MB", cg, softMemMax>>20)
 	}
 	return ""
+}
+
+// cgroupMemMax is the smallest memory.max of cg and the cgroups above it,
+// up to root (/sys/fs/cgroup), and whether any of them set one: a parent
+// scope's ceiling holds its children too.
+func cgroupMemMax(root, cg string) (int64, bool) {
+	least, found := int64(0), false
+	for d := cg; strings.HasPrefix(d, root+string(filepath.Separator)); d = filepath.Dir(d) {
+		raw, err := os.ReadFile(filepath.Join(d, "memory.max"))
+		if err != nil {
+			continue // the root, or a controller not enabled here
+		}
+		if n, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); err == nil && (!found || n < least) {
+			least, found = n, true
+		}
+	}
+	return least, found
 }
 
 // cgroupPeak is the most memory this run's own cgroup has held, said as a
@@ -443,33 +495,43 @@ func cgroupPeak() string {
 }
 
 // TestSoftCaps: a pinned start gives the process it starts, and what that
-// starts, softCPUs CPUs, and this process keeps all of its own; the sampler
-// sees this process's memory and the machine's load.
+// starts, softCPUs of this process's own CPUs (the slot-th group of them,
+// whichever CPUs it may use), and this process keeps all of its own; the
+// sampler sees this process's memory and the machine's load.
 func TestSoftCaps(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("pin and the samplers read Linux's /proc")
 	}
-	before := runtime.NumCPU()
-	if before <= softCPUs {
-		t.Skipf("only %d CPUs here", before)
-	}
-	cmd := exec.Command("/bin/sh", "-c", "grep Cpus_allowed_list /proc/self/status; /bin/sh -c 'grep Cpus_allowed_list /proc/self/status'")
-	var got []byte
-	err := pinned(softCPUs, func() error {
-		var err error
-		got, err = cmd.Output()
-		return err
-	})
+	status, err := os.ReadFile("/proc/self/status")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := fmt.Sprintf("Cpus_allowed_list:\t0-%d", softCPUs-1)
-	if lines := strings.Split(strings.TrimSpace(string(got)), "\n"); len(lines) != 2 || lines[0] != want || lines[1] != want {
-		t.Errorf("a pinned child and its own child: %q, want %q twice", got, want)
+	allowed := cpusAllowed(string(status))
+	if len(allowed) <= softCPUs {
+		t.Skipf("only %d CPUs here", len(allowed))
+	}
+	for slot := range min(2, len(allowed)/softCPUs) {
+		cmd := exec.Command("/bin/sh", "-c", "cat /proc/self/status; echo ---; /bin/sh -c 'cat /proc/self/status'")
+		var got []byte
+		err := pinned(softCPUs, slot, func() error {
+			var err error
+			got, err = cmd.Output()
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fmt.Sprint(allowed[slot*softCPUs : (slot+1)*softCPUs])
+		child, grandchild, _ := strings.Cut(string(got), "---")
+		for _, st := range []string{child, grandchild} {
+			if g := fmt.Sprint(cpusAllowed(st)); g != want {
+				t.Errorf("slot %d: a pinned child and its own child run on %s, want %s", slot, g, want)
+			}
+		}
 	}
 	threads, _ := filepath.Glob("/proc/self/task/*/status")
 	for _, th := range threads {
-		if raw, _ := os.ReadFile(th); strings.Contains(string(raw), want+"\n") {
+		if raw, _ := os.ReadFile(th); fmt.Sprint(cpusAllowed(string(raw))) != fmt.Sprint(allowed) {
 			t.Errorf("this process's thread %s was left pinned", th)
 		}
 	}
@@ -478,5 +540,52 @@ func TestSoftCaps(t *testing.T) {
 	}
 	if mb, _ := watchPeaks()(); mb <= 0 {
 		t.Errorf("the sampler's peak is %d MB", mb)
+	}
+}
+
+// cpusAllowed is the CPUs a /proc/<pid>/status says it may run on, in
+// order, from its Cpus_allowed_list ("0-3,8,10-11").
+func cpusAllowed(status string) []int {
+	var cpus []int
+	for _, l := range strings.Split(status, "\n") {
+		list, ok := strings.CutPrefix(l, "Cpus_allowed_list:")
+		if !ok {
+			continue
+		}
+		for _, r := range strings.Split(strings.TrimSpace(list), ",") {
+			lo, hi, _ := strings.Cut(r, "-")
+			a, err := strconv.Atoi(lo)
+			if err != nil {
+				continue
+			}
+			b, err := strconv.Atoi(hi)
+			if err != nil {
+				b = a
+			}
+			for c := a; c <= b; c++ {
+				cpus = append(cpus, c)
+			}
+		}
+	}
+	return cpus
+}
+
+// TestSoftLimitAbove: a memory ceiling on a cgroup above this one counts.
+func TestSoftLimitAbove(t *testing.T) {
+	root := t.TempDir()
+	leaf := filepath.Join(root, "user.slice", "run-1.scope", "leaf")
+	os.MkdirAll(leaf, 0o755)
+	set := func(dir, v string) { os.WriteFile(filepath.Join(dir, "memory.max"), []byte(v+"\n"), 0o644) }
+	set(root, "1024") // the root has none; one written there isn't read
+	set(leaf, "max")
+	set(filepath.Dir(leaf), "3221225472")
+	set(filepath.Dir(filepath.Dir(leaf)), "8589934592")
+	if n, ok := cgroupMemMax(root, leaf); !ok || n != 3<<30 {
+		t.Errorf("the smallest ceiling above an unlimited leaf: %d %v, want 3 GiB", n, ok)
+	}
+	set(filepath.Dir(leaf), "max")
+	set(filepath.Dir(filepath.Dir(leaf)), "max")
+	if n, ok := cgroupMemMax(root, leaf); ok {
+		t.Errorf("no ceiling anywhere read as %d", n)
 	}
 }

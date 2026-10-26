@@ -14,6 +14,23 @@ Soft layers are a big part of that loop (23:21): sub-Hives in this Hive's state,
 
 You land a change you proposed yourself, which beats your benchmark, with nobody in between. Then you release it and update your own install to that release.
 
+## Then the real-evaluation milestone
+
+From the person, via the box session (2026-10-25 19:27 local), with a ChatGPT review of what labs working on recursive self-improvement would look for: "one convincing result showing that its self-improvement produces better performance on real work."
+
+The milestone: show, on held-out real work, that the Hive after its own improvement does better than it did before improving and better than plain Claude Code.
+
+- Three arms: plain Claude Code, a frozen Hive (self-improvement off), and the Hive after autonomous improvement.
+- The same tasks, model version, tools and total inference budget for each.
+- Measured from outside: verified completion, total cost (reviewers, failed attempts and retries included), elapsed time, and human interventions.
+- A small pilot first, then 30-50 substantial tasks across several repositories, with repeated runs.
+- The held-out tasks stay apart from anything the Hive's own improvement loop sees (its benchmark, gate, e2e and score).
+- A short, reproducible report: exact commits, failures, and which changes the agents found versus what the person did.
+
+It has its own project, hive-eval, whose `.hive/goals.md` holds the same ask. It measures the loop above rather than replacing it: the first milestone comes first, and changes to the Hive that this one needs (a frozen mode, budget accounting, counting interventions) count as work for this project.
+
+Where it stands (2026-10-26): hive-eval exists with its goals and a README; no pilot has run yet.
+
 ## First change (done)
 
 Done: #114 (a token per repo owner) merged, and has been live on this machine since v0.1.17. H0 now runs v0.1.57 (since 2026-10-24 14:25Z) and follows pre-releases by itself (#237, #322); releases/latest is v0.1.55. Releases go out unsigned for now, by the person's choice. The ask as written:
@@ -30,10 +47,11 @@ For a candidate change:
 
 Anything may be used for this: nested sandboxed Hives, rollback to an earlier version. Don't narrow it to one test path.
 
-Where it stands (2026-10-24 ~16:00Z): the gate exists and is wired in, but the first milestone is not met yet: nothing has been kept by the gate because it beat the current Hive.
+Where it stands (2026-10-25 ~20:00Z): the gate runs on every change to the Hive taken as a gain, under bubblewrap, always on a local org so far, and a judge on another model (docs/judge.md) now decides keep or rollback with the gate's numbers as one thing it weighs. The first milestone is not met yet: no kept change has been released and run here.
 
-- The gate is #146, merged at ~14:03Z. It must run on this machine, and this machine forbids a sandbox inside a sandbox (kernel.apparmor_restrict_unprivileged_userns=1 refuses nested bwrap), so the child Hive runs in a sibling sandbox, not a nested one. Under real bubblewrap in ci, TestBwrapGateKeepsAndRollsBack kept a trivial candidate (a tie is allowed) and rolled back a broken one, and the recursion worked.
-- Since #390 (14:56Z) the gate runs on every change to the Hive. Every gate run since has kept nothing, for two causes: some candidates failed tests in the gate's own sandbox that pass elsewhere (the fix is task 261024-155233-2ea1efb0f2), and others ran but were not better than the current Hive, with nothing moving beyond the noise (6b7f01027, 233ff59a2, fe55aed96, dbef4678f in .hive/lessons.md). The project still has no score for the child to beat (task 261024-073323-39b67b4b25, still open). The milestone run itself is task 261024-142208-25ca663e99.
+- The gate is #146 (merged 2026-10-24 ~14:03Z) and has run on every change since #390 (14:56Z). This machine forbids a sandbox inside a sandbox (kernel.apparmor_restrict_unprivileged_userns=1 refuses nested bwrap), so each child Hive runs in a sibling sandbox, not a nested one.
+- 59 verdicts to 2026-10-25 20:00Z: 5 keep, 32 rollback, 22 could not run. Most rollbacks are "nothing moved beyond the noise" or e2e flakes (.hive/lessons.md). Of the keeps, 6861de9da, 915afeb06 and c99cedc3e won only because the control flaked on e2e (3/3 against 2/3), and 2e4786cce was a tie when ties were allowed. 0fde98f1c (2026-10-25 17:05Z) is the first keep on merit: it fixed a test that fails on the control (internal/mod/work TestQueueSameFileApartFunctions), and the judge agreed the gain was real.
+- What stands between that and the milestone is the release: H0 runs v0.1.110; v0.1.111 failed its update test, and from v0.1.112 every cut has stopped at the release scan, which refuses to pass until the person gives its handle list (HIVE_SCAN_HANDLES).
 - The org leg: the test org is Hive-RSI-Lab, which owns the fork Hive-RSI-Lab/hive that the gate's reach check must handle. /home/hive/h0-gate.token is gone; test runs make their own private repos in Hive-RSI-Lab instead (see Standing asks).
 - Alongside: Codex can be picked per role (#398); the optional modules have their own projects (dispatch: Hive-RSI-Lab/hive-dispatch, deck: Hive-RSI-Lab/hive-deck, trials: Hive-RSI-Lab/hive-trials); the Claude login renews itself (#323).
 
@@ -62,7 +80,8 @@ What the person has asked that holds from now on, in their words where they gave
 - **Keep the goals current.** "ok make sure youre updating your goals regularly, and same for subprocesses etc.": this file, and each module's and child Hive's own goals (where one exists), are checked against the record at least every few hours and after each milestone step. Also, the lead's prompt (modules/agents/lead.md) asks the lead to review goals against the record at least every few hours and after each milestone step.
 - **Fixes just merge; the loop stays tight.** "many of these changes arent actually with the aim of recursive improvement but rather clear fixes. THose hsould just merge. Or they should have a clear maxxed out gain"; "We need a tight loop otherwise non of this works at all" (2026-10-24, 18:34 local). A fix merges on its tests, checks and reads; only a change that claims a gain must show it at the recursive gate. Every merge is still measured and a worse score reverted.
 - **Reads in proportion to the change.** "at somepoint we need to ship stuff and cant always assume every agent is out to get the hive. And also what the possible impact of a change rlly could be like" (18:43). How hard a change is read follows what it could actually do, not the worst case for every change.
-- **Leads are always alive.** "leads shouldn't be pausing, they need to be alive" (the person's words, through autobox, 19:14). A lead is always awake and answering; when there isn't room, other work waits, never the lead.
+- **Leads are always alive.** "leads shouldn't be pausing, they need to be alive" (the person's words, through autobox, 19:14). A lead is always awake and answering; when there isn't room, other work waits, never the lead. One bound: the weekly stop below parks leads too, once every login a lead could use is there.
+- **Pause at 95% of the week.** "When your weekly usage reaches 95%, please pause your work, and pick it back up when the week resets. If you haven't paused yourself by then, I'll stop you at 95% and start you again after the reset." (2026-10-25, 16:18 local). A login at 95% of its plan's weekly window takes no turns until that week resets (#875); with every login of a pick there, its runs wait, leads included, since the person would otherwise stop the whole Hive. Other plans (Codex, free models) keep working.
 - **Score with judgement.** "Some of the score should be a judgment of whether the change is actually better, not only numbers" (the person's idea, through autobox, 19:06); new tests especially should score well. At the gate, autobox's answer for the person (18:16): a change whose own check fails on the current Hive and passes on the new one, with nothing else worse, counts as better, the person's asks included ("show it does what I asked and the current one doesn't"). Everything else stays strict.
 - **Test repos in Hive-RSI-Lab, no second org.** "the person doesn't want a second org" (autobox, 18:52): test runs make their own private repos in Hive-RSI-Lab, each run reaching only its own repos, with nothing new for the person to make.
 - **Clean up and leave room for the person.** The Hive cleans up after its own checks and never starves the person's own session (autobox, 19:06).

@@ -271,11 +271,26 @@ func TestPrefetchReadsOnlyTheCheckout(t *testing.T) {
 	if g := c.Effects.goModules(isolated{}, dir); strings.Contains(g.note, "secret") {
 		t.Fatalf("go's output reached the note: %q", g.note)
 	}
+	// go's lexer reads "=>" as the arrow only on its own, and ends a target
+	// at its punctuation: a second "=>", or a target that reads as inside
+	// the checkout only up to a comma, refuses the prefetch.
+	for _, bad := range []string{
+		"module m\nreplace a=>b v1 => ../x\n",
+		"module m\nreplace example.com/x => ./..,x\n",
+		"module m\nreplace example.com/x => ./x => ../y\n",
+		"module m\nreplace example.com/x=>./x\n",
+		"module m\nreplace example.com/x \"=>\" ../x\n",
+	} {
+		if localReplace(dir, bad) == "" {
+			t.Errorf("%q was taken", bad)
+		}
+	}
 	// A replace to a plain folder inside the checkout is fine.
 	for _, ok := range []string{
 		"module m\nreplace example.com/x => ./x\nreplace example.com/y => example.com/z v1.2.3\n",
 		"module m\nreplace(\n\texample.com/x => \"./a b\" // in the checkout\n)\n",
 		"module m // => /not/a/replace\n",
+		"module m\nreplace example.com/x v1.0.0 => ./x // a=>b\n",
 	} {
 		if why := localReplace(dir, ok); why != "" {
 			t.Errorf("%q: %s", ok, why)
@@ -292,8 +307,12 @@ func TestPrefetchHomeHasTelemetryOff(t *testing.T) {
 		t.Skip("no go here")
 	}
 	home := t.TempDir()
+	off, err := goTelemetryOff(home)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(goBin, "env", "GOTELEMETRY")
-	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "USERPROFILE=" + home, "SystemRoot=" + os.Getenv("SystemRoot"), "GOENV=off", "GOTOOLCHAIN=local"}, goTelemetryOff(home)...)
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "USERPROFILE=" + home, "SystemRoot=" + os.Getenv("SystemRoot"), "GOENV=off", "GOTOOLCHAIN=local"}, off...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go env: %v %s", err, out)
@@ -323,5 +342,241 @@ func TestPrefetchTurnsTelemetryOff(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(seen); strings.TrimSpace(string(raw)) != "off" {
 		t.Fatalf("go saw telemetry mode %q", raw)
+	}
+}
+
+// mapped is an isolated sandbox that runs on the host, each mount's inside
+// path standing for its host path, and keeps every spec it ran.
+type mapped struct {
+	sandbox.Bare
+	specs *[]sandbox.Spec
+}
+
+func (mapped) Isolated() bool { return true }
+
+func (m mapped) Run(s sandbox.Spec, timeout time.Duration) (int, error) {
+	*m.specs = append(*m.specs, s)
+	script := s.Argv[len(s.Argv)-1]
+	for _, mt := range s.Mounts {
+		if s.Cwd == mt.Inside {
+			s.Cwd = mt.Host
+		}
+		script = strings.ReplaceAll(script, mt.Inside, mt.Host)
+	}
+	s.Argv = []string{"/bin/sh", "-c", script}
+	var env []string
+	for _, kv := range s.Env {
+		if !strings.HasPrefix(kv, "TMPDIR=") && !strings.HasPrefix(kv, "HOME=") && !strings.HasPrefix(kv, "PATH=") {
+			env = append(env, kv)
+		}
+	}
+	s.Env = env
+	return m.Bare.Run(s, timeout)
+}
+
+// A check that couldn't have a module offline runs once more without the
+// shared cache, in a checkout the first run never wrote to. If go.sum names
+// the module, the cache lacked it and its marker goes; if not, the check
+// needs more than the cache holds, and later checks skip the cache at once.
+func TestStaleModuleCacheRunsAgain(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the shared module cache is for Linux sandboxes")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go on PATH")
+	}
+	c, f := testHive(t)
+	removesCache(t, c)
+	seedRepo(t, f, "me/gomod", map[string]string{
+		"go.mod":             "module example.com/m\n\ngo 1.21\n",
+		"go.sum":             "example.com/x v1.0.0 h1:abc=\nexample.com/x v1.0.0/go.mod h1:def=\n",
+		".hive/project.json": `{"test": "true"}`,
+	})
+	p, err := c.Projects.Add(Project{Name: "gomod", Repo: "me/gomod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	main, err := c.Effects.Sync(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var specs []sandbox.Spec
+	c.Effects.sandbox = func() (sandbox.Sandbox, error) { return mapped{specs: &specs}, nil }
+	// Offline it can't have the module it names; online it passes, but only
+	// in a checkout no earlier run wrote to.
+	check := func(missing string) string {
+		return `test -e dirty && { echo "a used checkout"; exit 3; }; touch dirty; ` +
+			`[ "$GOPROXY" = off ] && { echo "go: ` + missing + `: ` + staleModules + `"; exit 1; }; exit 0`
+	}
+	sharedIn := func(s sandbox.Spec) bool {
+		return slices.ContainsFunc(s.Mounts, func(m sandbox.Mount) bool { return m.Inside == GoModInside })
+	}
+	markers := func() []string {
+		es, _ := os.ReadDir(c.WS.goSums())
+		var names []string
+		for _, e := range es {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+
+	ch := c.Effects.RunCheck(p, main, "test", check("example.com/x@v1.0.0"))
+	if !ch.OK || ch.CantRun != "" {
+		t.Fatalf("named module: %+v", ch)
+	}
+	if len(specs) != 2 || !sharedIn(specs[0]) || sharedIn(specs[1]) || slices.Contains(specs[1].Env, "GOPROXY=off") {
+		t.Fatalf("named module: %d runs, want the shared cache then none", len(specs))
+	}
+	if m := markers(); len(m) != 0 {
+		t.Fatalf("the cache lacked what its marker promised, and the marker stayed: %v", m)
+	}
+
+	specs = nil
+	if ch := c.Effects.RunCheck(p, main, "test", check("example.com/tool@latest")); !ch.OK || !strings.Contains(ch.Output, "doesn't name") {
+		t.Fatalf("unnamed module: %+v", ch)
+	}
+	if m := markers(); len(m) != 2 || !slices.ContainsFunc(m, func(n string) bool { return strings.HasSuffix(n, ownModules) }) {
+		t.Fatalf("markers %v, want the go.sum's and its own-modules mark", m)
+	}
+	specs = nil
+	if ch := c.Effects.RunCheck(p, main, "test", check("example.com/tool@latest")); !ch.OK || len(specs) != 1 || sharedIn(specs[0]) {
+		t.Fatalf("a later check of the same go.sum ran %d time(s) (%+v)", len(specs), ch)
+	}
+}
+
+// A test that fails because the disk filled under it is can't-run when the
+// room where checks write is short as the check ends, and the commit's red
+// when there is room (its message only quotes the error).
+func TestFullDiskFailingATest(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	low := false
+	saved := roomOf
+	roomOf = func(path string) (int64, int64, bool) {
+		if low {
+			return 1 << 20, 100 << 20, true
+		}
+		return 90 << 20, 100 << 20, true
+	}
+	t.Cleanup(func() { roomOf = saved })
+	failing := `printf -- '--- FAIL: TestBig (0.00s)\nwrite /tmp/x: no space left on device\nFAIL\n'; exit 1`
+	if ch := c.Effects.RunCheck(p, main, "test", failing); ch.CantRun != "" || len(ch.Failed) != 1 {
+		t.Fatalf("with room: %+v", ch)
+	}
+	low = true
+	if ch := c.Effects.RunCheck(p, main, "test", failing); !strings.Contains(ch.CantRun, "disk") {
+		t.Fatalf("short of room: %+v", ch)
+	}
+	// What a test printed indented is still its own words.
+	if ch := c.Effects.RunCheck(p, main, "test", `printf -- '--- FAIL: TestX (0.00s)\n    x_test.go:9: no space left on device\n'; exit 1`); ch.CantRun != "" {
+		t.Fatalf("a test's own words: %+v", ch)
+	}
+	if !strings.Contains(c.Effects.Disk().String(), "quota") && !quotaShown {
+		t.Fatal("the room figures don't say a per-user quota is missing from them")
+	}
+}
+
+// A checkout is moved aside under the project's lock and removed after, and
+// its removal is on the record.
+func TestRemoveCheckout(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	dir, err := c.Effects.NewCheckout(p, "w-1", main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := 0
+	c.J.Subscribe(func(e Event) {
+		if e.Kind == "effect.checkout_removed" {
+			removed++
+		}
+	})
+	if err := c.Effects.RemoveCheckout(p.Name, "w-1"); err != nil || Exists(dir) || removed != 1 {
+		t.Fatalf("err %v, still there %v, %d events", err, Exists(dir), removed)
+	}
+	if left, _ := filepath.Glob(filepath.Join(c.WS.Cache(), "removing-*")); len(left) != 0 {
+		t.Fatalf("left aside: %v", left)
+	}
+	if c.Effects.RemoveCheckout(p.Name, "w-1") != nil || removed != 1 {
+		t.Fatal("a checkout that's gone was removed again")
+	}
+}
+
+// The disk measurement names each part once and says where the rest is.
+func TestMeasureDiskNamesTheRest(t *testing.T) {
+	c, _ := testHive(t)
+	big := filepath.Join(c.WS.Hive(), "spill", "deep", "f")
+	os.MkdirAll(filepath.Dir(big), 0o755)
+	os.WriteFile(big, make([]byte, 1<<20), 0o644)
+	os.MkdirAll(c.WS.Runs(), 0o755)
+	os.WriteFile(filepath.Join(c.WS.Runs(), "r"), make([]byte, 4096), 0o644)
+	d := c.Effects.MeasureDisk()
+	var sum int64
+	named := map[string]int64{}
+	for _, p := range d.Parts {
+		sum += p.Bytes
+		named[p.Name] = p.Bytes
+	}
+	if named["runs"] < 4096 || named["other, most in .hive/spill"] != 1<<20 || sum > d.Total || d.Total != Size(c.WS.Root) {
+		t.Fatalf("parts %+v, total %d (walked %d)", d.Parts, d.Total, Size(c.WS.Root))
+	}
+}
+
+// A check of a commit on main writes the project's build cache; a check of
+// any other commit reads it, read-only, through the cache program, and only
+// once main has built something. Each checkout's file times follow content.
+func TestOnlyMainWritesTheBuildCache(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the shared build cache is for Linux sandboxes")
+	}
+	c, _, p, main := setupProject(t)
+	checkout := func() string {
+		dir, err := c.Effects.cleanCheckout(p, main, "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		return dir
+	}
+	dir := checkout()
+	other := strings.Repeat("0", 40)
+	if g := c.Effects.goBuild(isolated{}, p, main, dir); g.mounts != nil {
+		t.Fatal("a checkout with no go.mod got a build cache")
+	}
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n"), 0o644)
+	if g := c.Effects.goBuild(isolated{}, p, other, dir); g.mounts != nil {
+		t.Fatalf("a branch got a build cache before main built one: %+v", g)
+	}
+	g := c.Effects.goBuild(isolated{}, p, main, dir)
+	g.done()
+	if len(g.mounts) != 1 || g.mounts[0].Host != c.WS.GoBuildCache(p.Name) || !g.mounts[0].RW || !slices.Equal(g.env, []string{"GOCACHE=" + GoBuildInside}) {
+		t.Fatalf("main's check: %+v", g)
+	}
+	g = c.Effects.goBuild(isolated{}, p, other, dir)
+	g.done()
+	if len(g.mounts) != 1 || g.mounts[0].RW || g.mounts[0].Inside != GoBuildInside || !slices.ContainsFunc(g.env, func(kv string) bool {
+		return kv == "GOCACHEPROG=/hive/bin/hive gocacheprog "+GoBuildInside+" /hive/home/gobuild"
+	}) {
+		t.Fatalf("a branch's check: %+v", g)
+	}
+	if g := c.Effects.goBuild(sandbox.Bare{}, p, main, dir); g.mounts != nil {
+		t.Fatal("a bare run got the shared build cache")
+	}
+	// The same content has the same time in another checkout, long past;
+	// other content has another.
+	again := checkout()
+	stableTimes(again)
+	times := func(d, name string) time.Time {
+		fi, err := os.Stat(filepath.Join(d, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.ModTime()
+	}
+	for _, name := range []string{"README.md", ".hive", ".hive/goals.md", "."} {
+		if a, b := times(dir, name), times(again, name); !a.Equal(b) || time.Since(a) < 24*time.Hour {
+			t.Errorf("%s: %v and %v", name, a, b)
+		}
+	}
+	if times(dir, "README.md").Equal(times(dir, ".hive/goals.md")) {
+		t.Error("two contents share a time")
 	}
 }

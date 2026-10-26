@@ -98,6 +98,30 @@ FAIL
 	if v := Decide([]Result{fail("TestA"), {Probe: "e2e", Pass: true}}, []Result{fail("TestA"), {Probe: "e2e", Pass: true}}, Options{}); len(v.Differs) > 0 {
 		t.Errorf("a tie failing the same tests differs: %q", v.Differs)
 	}
+	// One flaky run on either side decides nothing: 2/3 against 3/3 is
+	// neither a regression nor a gain, only shown; two runs apart still is.
+	pass := Result{Probe: "e2e", Pass: true}
+	v = Decide([]Result{fail("TestStalls"), pass, pass}, []Result{pass, pass, pass}, Options{})
+	if want := "e2e passes 2/3, the control 3/3, within one run's noise (failing: TestStalls 1/3)"; v.Keep || len(v.Regressions) > 0 || !slices.Equal(v.Differs, []string{want}) || !strings.HasPrefix(v.Reason, "not better") {
+		t.Errorf("a candidate flake: %+v, want differs %q", v, want)
+	}
+	if v := Decide([]Result{pass, pass, pass}, []Result{fail("TestA"), pass, pass}, Options{}); v.Keep || len(v.Gains) > 0 {
+		t.Errorf("a control flake was kept as a gain: %+v", v)
+	}
+	if v := Decide([]Result{pass, pass, pass}, []Result{fail("TestA"), pass, pass}, Options{AllowTie: true}); !v.Keep {
+		t.Errorf("a control flake under ties allowed was not kept: %+v", v)
+	}
+	// At n=2 one run is half the rate, and still noise: 1/2 against 2/2
+	// decides nothing either way; 0/2 against 2/2 still does.
+	if v := Decide([]Result{fail("TestA"), pass}, []Result{pass, pass}, Options{}); len(v.Regressions) > 0 || len(v.Differs) != 1 {
+		t.Errorf("a candidate flake at n=2: %+v", v)
+	}
+	if v := Decide([]Result{pass, pass}, []Result{fail("TestA"), pass}, Options{}); v.Keep || len(v.Gains) > 0 {
+		t.Errorf("a control flake at n=2 was kept as a gain: %+v", v)
+	}
+	if v := Decide([]Result{fail("TestA"), fail("TestA")}, []Result{pass, pass}, Options{}); len(v.Regressions) != 1 {
+		t.Errorf("0/2 against 2/2 is not a regression: %+v", v)
+	}
 }
 
 // Noise decides: the same 5% gain is real when the runs agree and nothing when they scatter.

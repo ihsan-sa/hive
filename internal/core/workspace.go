@@ -141,8 +141,8 @@ type Config struct {
 	// machine and the plan carry (internal/mod/work/pace.go). Briefs past the
 	// limit wait in the queue, in order; 0 is no ceiling.
 	MaxWorkers int `json:"max_workers"`
-	// LoadMax holds new workers while the machine's 1-minute load per core is
-	// over it (Linux /proc/loadavg); 0 is off.
+	// LoadMax holds new workers past the pace's start while the machine's
+	// 1-minute load per core is over it (Linux /proc/loadavg); 0 is off.
 	LoadMax float64 `json:"load_max"`
 	// MaxChecks is the most checks (the gate's tests, scores and dry runs,
 	// improve's measures) that run at once, a ceiling over the pace as

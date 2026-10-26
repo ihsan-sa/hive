@@ -432,37 +432,52 @@ func TestRateLimitedLookSaysSoAndWaitsForTheReset(t *testing.T) {
 				t.Fatalf("rate-limited look: %q, %v, binary %q", msg, err, raw)
 			}
 			m.follow()
-			deadline := time.Now().Add(5 * time.Second)
-			for time.Now().Before(deadline) {
-				m.pmu.Lock()
-				at := m.followed
-				m.pmu.Unlock()
-				if at.Equal(reset.Add(-followEvery)) {
-					break
-				}
-				time.Sleep(10 * time.Millisecond)
+			// The follow has ended once it journals what it did: it moves
+			// followed before it journals, so waiting on followed alone
+			// raced the journal on a slow machine.
+			journalled := func() bool {
+				n := 0
+				m.C.J.Replay(func(e core.Event) {
+					if e.Kind == "release.follow" {
+						n++
+					}
+				})
+				return n > 0
 			}
-			m.updating.Lock() // the follow's update has ended
-			m.updating.Unlock()
+			for deadline := time.Now().Add(time.Minute); !journalled(); time.Sleep(10 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("the follow journalled nothing in a minute")
+				}
+			}
 			m.pmu.Lock()
 			at := m.followed
 			m.pmu.Unlock()
 			if !at.Equal(reset.Add(-followEvery)) {
 				t.Fatalf("the next look is due at %v, want the reset %v", at.Add(followEvery), reset)
 			}
-			m.followed1(m.AutoUpdate())
-			follows, alerts := 0, 0
-			m.C.J.Replay(func(e core.Event) {
-				switch e.Kind {
-				case "release.follow":
-					follows++
-					if !strings.Contains(string(e.Data), "rate limit") {
-						t.Errorf("journalled %s", e.Data)
+			count := func() (follows, alerts int) {
+				m.C.J.Replay(func(e core.Event) {
+					switch e.Kind {
+					case "release.follow":
+						follows++
+						if !strings.Contains(string(e.Data), "rate limit") {
+							t.Errorf("journalled %s", e.Data)
+						}
+					case "alert.raised":
+						alerts++
 					}
-				case "alert.raised":
-					alerts++
+				})
+				return
+			}
+			// The follow's goroutine sets the next look before it journals,
+			// so wait for its event, not only for the time.
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				if n, _ := count(); n > 0 {
+					break
 				}
-			})
+			}
+			m.followed1(m.AutoUpdate())
+			follows, alerts := count()
 			if follows != 1 || alerts != 0 {
 				t.Fatalf("a rate limit journalled %d times with %d alerts, want once and none", follows, alerts)
 			}
