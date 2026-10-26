@@ -51,7 +51,7 @@ Measured on this machine (20 cores), 2026-10-25, with this score:
 
 So the milestone's change is about +33 here, against +7 on the old score, and the next halving of the loop's time is worth another 15, where on the old score it was worth under 1.
 
-What it still doesn't see, found while making it: the at-once runs take the same time with one worker as with four (7.0-7.6 s with `defaultWorkers` set to 1). All four asks name `textkit/__init__.py`, and the queue holds a brief that names a file another working brief names until that one has pushed (internal/mod/work/queue.go), so they run one at a time whatever the pace allows; what the at-once runs gain over one by one is the next worker starting while the last change is checked, read and merged. A change that lets such briefs work side by side moves the score; the pace alone doesn't. That rule is a real cost on the Hive's own work too (queued-to-working was about an hour on 2026-10-24's merges).
+Found while making it: the at-once runs took the same time with one worker as with four (7.0-7.6 s with `defaultWorkers` set to 1). All four asks name `textkit/__init__.py`, and the queue held a brief that names a file another working brief names until that one had pushed, so they ran one at a time whatever the pace allowed. Since issue #727 the queue lets briefs on one file start side by side when each names its own functions in it (`apart` in internal/mod/work/queue.go), and the at-once runs take 4.3-4.4 s (score 228.83 against 198.08).
 
 ## What moves it, and what doesn't
 
@@ -82,5 +82,5 @@ The first score improve measured, inside the daemon's check sandbox, was **190.7
 
 - **Briefs.** The lead briefs a scored project with the person's goal as written, no `--done` bar, limit or steps of its own (modules/agents/lead.md): the score is the bar. Workers on this project see the score command, its tolerance and the best kept value in their brief, and that a lower score is reverted.
 - **Checkpoints.** Every worker commit on a scored project is extracted and scored; one that beats the best kept score by more than the tolerance merges as a checkpoint while the worker goes on. Here each of those is a full score run (about five minutes) in a check slot, beside the merges' tests.
-- **Step-backs.** `improve.stepback` now runs on this project when the best kept score stalls: a minimal setup tries the same goals in a fresh copy, scored with this command, and a win is filed as a fault in the Hive's own setup.
+- **Step-backs.** `improve.stepback` now runs on this project when the best kept score stalls: a minimal setup tries the same goals in a fresh copy, scored with this command, and a win is filed as a fault in the Hive's own setup. The fault's worker gets the setup's transcripts and its commits as a patch; on this project those commits are the change that won, so the fault asks for them forward-ported onto main first.
 - **Reverts.** A merge that scores below the best kept by more than the tolerance is reverted, with the reason in `.hive/lessons.md`. A merge that changes the evaluator starts a new baseline instead.

@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,13 +58,36 @@ func StewardRecord(id string) string {
 
 // Stewardship says whether this Hive may merge and release in p's repository
 // at sha: "" when it may (p isn't the release repository, the record names
-// this Hive, or no Hive is recorded yet), else why not.
+// this Hive, or no Hive is recorded yet), else why not. A record it can't
+// read refuses, so a broken clone never skips the check.
 func (e *Effects) Stewardship(p Project, sha string) string {
 	up := e.ws.LoadConfig().ReleaseRepo
-	if !p.Self || up == "" || p.Repo != up {
+	if up == "" || p.Repo != up {
 		return ""
 	}
-	return StewardRefusal(up, ParseSteward(e.ReadFile(p, sha, StewardFile)), e.ws.HiveID())
+	raw, err := e.stewardAt(p, sha)
+	if err != nil {
+		return "can't read " + up + "'s steward record (" + StewardFile + ") at " + Short(sha) + ", so this Hive won't merge or release there: " + Clip(err.Error(), 200)
+	}
+	return StewardRefusal(up, ParseSteward(raw), e.ws.HiveID())
+}
+
+// stewardAt is the record in p's clone at sha, or at main as last fetched
+// when the clone hasn't fetched sha yet: "" with no error when that commit
+// has no such file, an error when git can't read either.
+func (e *Effects) stewardAt(p Project, sha string) (string, error) {
+	dir := e.ws.Project(p.Name)
+	if _, err := Git(dir, "rev-parse", "--verify", "-q", sha+"^{commit}"); err != nil {
+		sha = "refs/remotes/origin/" + p.Branch
+		if _, err2 := Git(dir, "rev-parse", "--verify", "-q", sha+"^{commit}"); p.Branch == "" || err2 != nil {
+			return "", fmt.Errorf("neither that commit nor main is in the clone: %v", err)
+		}
+	}
+	out, err := Git(dir, "ls-tree", "--name-only", sha, "--", StewardFile)
+	if err != nil || strings.TrimSpace(out) == "" {
+		return "", err
+	}
+	return Git(dir, "show", sha+":"+StewardFile)
 }
 
 // StewardRefusal says why Hive id may not work in up, whose record names
