@@ -248,7 +248,10 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var g GateResult
 			ev.Decode(&g)
 			if prev, ok := e.gateMains[g.Project+"@"+g.Main]; ok && prev.MainFails && g.MainFails {
-				g.Repeats = prev.Repeats + 1
+				g.Repeats = prev.Repeats
+				if g.Started.IsZero() || !prev.At.After(g.Started) { // a run beside it saw the same main: no repeat
+					g.Repeats++
+				}
 			}
 			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
 			switch {
@@ -1136,7 +1139,9 @@ func DiffID(diff string) string {
 
 // Approve records the approval of a commit (the person's, or a warden's
 // when autonomy lets it decide): kind "merge" for a head
-// that changes protected paths, "release" for a merge held before release.
+// that changes protected paths, "release" for a merge held before release,
+// "gate" for a change to the gate landed unjudged at one main (sha is
+// head@main), while main itself fails in the gate.
 // The kinds stay apart, since a fast-forwarding forge merges a head as itself.
 func (e *Effects) Approve(kind, project, sha string) {
 	e.j.MustAppend("effect.approved", map[string]string{"kind": kind, "project": project, "sha": sha})
@@ -1415,9 +1420,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", refuse("%s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
 	}
 	if p.Self && m.Gain {
-		// Or once the person landed that exact head unjudged, the gate
-		// unable to judge at main (the work module's "gate" ask).
-		if !e.Kept(p, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA) {
+		// Or once the person landed that exact head at that main unjudged,
+		// the gate unable to judge there (the work module's "gate" ask).
+		if !e.Kept(p, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA+"@"+m.Main) {
 			return "", refuse("%s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
 		}
 	}
@@ -2151,7 +2156,8 @@ func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.rea
 // merge. A base names the commit the merge is taken from instead of the
 // common ancestor: the branch's own commit that
 // main already holds as a squashed checkpoint, so only what came after it is
-// laid onto main.
+// laid onto main. A branch that has merged main since that checkpoint is
+// merged plainly, from its newer common ancestor with main.
 //
 // Attributes (merge=union and the rest) are read from main, not the branch:
 // a branch cut before main marked a file union merges it as main does, and a
@@ -2170,6 +2176,13 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 	}
 	// attr.tree needs git 2.46; an older git ignores the key and reads the branch's own.
 	attr := "attr.tree=" + mainSHA
+	if base != "" && mergedSince(dir, sha, mainSHA, base) {
+		// The branch merged main after its checkpoint, so its common
+		// ancestor with main is newer than the checkpoint and already holds
+		// the squashed copy: from the checkpoint, both sides would carry
+		// main's changes and the branch's edits on top of them would conflict.
+		base = ""
+	}
 	if base != "" {
 		// Exit status 1 is a conflict; anything else (such as a git older
 		// than 2.40, without --merge-base) is an error, not the worker's to fix.
@@ -2196,6 +2209,18 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 		return "", &DoubledError{Lines: d}
 	}
 	return e.hostCommit(p, dir, HostCommit{Project: p.Name, Kind: "update", Reviewed: sha, Main: mainSHA})
+}
+
+// mergedSince reports whether branch merged a commit of main after base:
+// their common ancestor is not one base already holds.
+func mergedSince(dir, branch, main, base string) bool {
+	mb, err := Git(dir, "merge-base", branch, main)
+	if err != nil {
+		return false
+	}
+	_, err = Git(dir, "merge-base", "--is-ancestor", strings.TrimSpace(mb), base)
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 1
 }
 
 // ErrConflict means a branch can't be brought up to date without the worker.

@@ -61,7 +61,7 @@ func uses(p, dir string) bool {
 		}
 	}
 	for _, f := range []string{"cmdline", "environ"} {
-		if raw, err := os.ReadFile(filepath.Join(p, f)); err == nil && strings.Contains(string(raw), dir) {
+		if raw, err := os.ReadFile(filepath.Join(p, f)); err == nil && names(string(raw), dir) {
 			return true
 		}
 	}
@@ -72,6 +72,47 @@ func uses(p, dir string) bool {
 		}
 	}
 	return false
+}
+
+// names tells whether text (a command line or environment, NUL-separated,
+// with paths inside values such as PATH=a:b or --bind=a) names dir or a path
+// under it: an occurrence of dir counts only where the path ends there, so a
+// sibling such as .../0010 doesn't match .../001.
+func names(text, dir string) bool {
+	for i := strings.Index(text, dir); i >= 0; {
+		end := i + len(dir)
+		if end == len(text) || !continues(text[end]) {
+			return true
+		}
+		j := strings.Index(text[i+1:], dir)
+		if j < 0 {
+			break
+		}
+		i += 1 + j
+	}
+	return false
+}
+
+// continues tells whether c can carry a path's last name on.
+func continues(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_'
+}
+
+func TestNamesNeedsAPathBoundary(t *testing.T) {
+	dir := "/tmp/T/001"
+	for text, want := range map[string]bool{
+		"sh\x00-c\x00cd /tmp/T/001/hive":      true,
+		"bwrap\x00--bind\x00/tmp/T/001\x00/x": true,
+		"PATH=/bin:/tmp/T/001:/usr/bin":       true,
+		"HOME=/tmp/T/001":                     true,
+		"HOME=/tmp/T/0010":                    false,
+		"HOME=/tmp/T/0010\x00X=/tmp/T/001.d":  false,
+		"HOME=/tmp/T/0010\x00X=/tmp/T/001/a":  true,
+	} {
+		if got := names(text, dir); got != want {
+			t.Errorf("names(%q) = %v, want %v", text, got, want)
+		}
+	}
 }
 
 // TestStraysEnded: a process in a session of its own, writing in a test's
