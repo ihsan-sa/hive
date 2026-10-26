@@ -2288,6 +2288,10 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		m.hold(t, p, why)
 		return nil
 	}
+	if why := m.keptFirst(t, p, main); why != "" {
+		m.hold(t, p, why)
+		return nil
+	}
 	if !m.enterMerge() { // the Hive is about to restart into an update
 		m.mu.Lock()
 		m.later[t.ID] = time.Now().Add(holdGap)
