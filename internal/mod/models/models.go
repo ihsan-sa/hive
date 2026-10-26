@@ -62,7 +62,21 @@ type Module struct {
 	mu     sync.Mutex
 	trials map[string]Trial // recorded, by task
 	order  map[string]int   // each recorded trial's place in the journal, by task
+	// demoted is each project's worker picks whose runs keep ending without
+	// a merge, by demoteKey, with why: Tick works it out from the tasks.
+	demoted map[string]string
 }
+
+// demoteAfter is the ended tasks in a row, each blocked, a pick's workers
+// start on a project before it stops being that project's first pick; and
+// demoteFor how long the latest of them keeps it off the front, so the
+// person's order gets another try.
+const (
+	demoteAfter = 2
+	demoteFor   = 7 * 24 * time.Hour
+)
+
+func demoteKey(project string, p core.Pick) string { return project + "\x00" + p.String() }
 
 // ErrNoKey is a Probe of a model that needs a key nobody has stored yet.
 var ErrNoKey = errors.New("it needs a key, and none is stored yet")
@@ -111,7 +125,7 @@ func downOf(downs []core.Down, p core.Pick) (core.Down, bool) {
 
 // New registers the ops and the person's answer to a check seat's route.
 func New(c *core.Core, w *work.Module) *Module {
-	m := &Module{C: c, Work: w, trials: map[string]Trial{}, order: map[string]int{}, Probe: Probe}
+	m := &Module{C: c, Work: w, trials: map[string]Trial{}, order: map[string]int{}, demoted: map[string]string{}, Probe: Probe}
 	apply := func(e core.Event) {
 		if e.Kind != "model.trial" {
 			return
@@ -375,6 +389,72 @@ func (m *Module) Tick() {
 		tr.NoFinish = t.Stage == work.StageBlocked && strings.HasPrefix(t.Reason, core.NoFinish) && !finished
 		m.C.J.MustAppend("model.trial", tr)
 	}
+	m.tickDemoted()
+}
+
+// tickDemoted works out the picks whose workers keep ending blocked on a
+// project: of the ended tasks (not trials) whose first worker started on a
+// pick, the latest demoteAfter or more ended blocked with no merge or done
+// after them, the latest within demoteFor. A task the person or the Hive
+// stopped doesn't count either way.
+func (m *Module) tickDemoted() {
+	first := map[string]core.Run{} // each task's first worker
+	for _, r := range m.C.Runs.List(func(r *core.Run) bool { return r.Role == "worker" && r.Task != "" }) {
+		if f, ok := first[r.Task]; !ok || r.Created.Before(f.Created) {
+			first[r.Task] = r
+		}
+	}
+	tasks := m.Work.List(func(t work.Task) bool {
+		return t.Model == "" && t.Project != "" && first[t.ID].ID != "" &&
+			(t.Stage == work.StageMerged || t.Stage == work.StageDone || t.Stage == work.StageBlocked)
+	})
+	slices.SortFunc(tasks, func(a, b work.Task) int { return a.Updated.Compare(b.Updated) })
+	type run struct {
+		n    int
+		last time.Time
+		ids  []string
+	}
+	streak := map[string]*run{}
+	for _, t := range tasks {
+		key := demoteKey(t.Project, startPick(first[t.ID]))
+		if t.Stage != work.StageBlocked {
+			delete(streak, key)
+			continue
+		}
+		s := streak[key]
+		if s == nil {
+			s = &run{}
+			streak[key] = s
+		}
+		s.n, s.last = s.n+1, t.Updated
+		s.ids = append(s.ids, t.ID)
+	}
+	demoted := map[string]string{}
+	for key, s := range streak {
+		if s.n >= demoteAfter && time.Since(s.last) < demoteFor {
+			demoted[key] = fmt.Sprintf("its last %d worker tasks here ended blocked without a merge (%s)", s.n, strings.Join(s.ids[max(0, len(s.ids)-3):], ", "))
+		}
+	}
+	m.mu.Lock()
+	m.demoted = demoted
+	m.mu.Unlock()
+}
+
+// startPick is the pick a worker's first turn went on: its own until it
+// moved, then its route's first.
+func startPick(r core.Run) core.Pick {
+	if len(r.Moves) > 0 && len(r.Route) > 0 {
+		return r.Route[0]
+	}
+	return core.Pick{Harness: core.HarnessName(r.Harness), Model: r.Model}
+}
+
+// Demoted says why p is no longer the first worker pick on project ("" when
+// it is not): its workers there keep ending without a merge.
+func (m *Module) Demoted(project string, p core.Pick) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.demoted[demoteKey(project, p)]
 }
 
 // Benched says whether routing skips p: the latest recorded trial of that
@@ -436,7 +516,17 @@ func (m *Module) View(r core.Run) map[string]any {
 	for _, d := range m.C.Runs.Down() {
 		down = append(down, downLine(d, cfg))
 	}
-	return map[string]any{"models": named, "routes": routes, "agents": agents, "trials": trials, "trials_running": running, "unavailable": down}
+	var demoted []string
+	m.mu.Lock()
+	for key, why := range m.demoted {
+		project, pick, _ := strings.Cut(key, "\x00")
+		if m.C.Runs.Walled(r, project) == nil {
+			demoted = append(demoted, fmt.Sprintf("%s on %s goes after the rest of its worker route: %s", pick, project, why))
+		}
+	}
+	m.mu.Unlock()
+	slices.Sort(demoted)
+	return map[string]any{"models": named, "routes": routes, "agents": agents, "trials": trials, "trials_running": running, "unavailable": down, "demoted": demoted}
 }
 
 // downLine is a Down with when it is tried again and the fix.

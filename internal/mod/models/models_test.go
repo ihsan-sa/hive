@@ -2,6 +2,7 @@ package models_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -280,5 +281,60 @@ func TestSettingsRouteIsRecorded(t *testing.T) {
 	if len(got) != 2 || got[0].Role != "worker" || got[0].Project != "" || !slices.Equal(got[0].Models, []string{"qwen"}) ||
 		got[1].Role != "reviewer" || got[1].Project != "lab" || got[1].By != "person (Settings)" || got[1].From != nil {
 		t.Fatalf("recorded %+v", got)
+	}
+}
+
+// A model whose workers on a project keep ending blocked stops being that
+// project's first worker pick, and stays on its route to fall back to; a
+// merge on it puts it back in front, and other projects keep their order.
+func TestAModelThatKeepsEndingBlockedStopsBeingFirst(t *testing.T) {
+	a, lead := hiveWithModels(t)
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "qwen,fake:opus"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.C.Projects.Add(core.Project{Name: "other", Repo: "me/other"}); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	ended := func(project, stage string) {
+		t.Helper()
+		n++
+		tk, err := a.Work.File(work.Brief{Project: project, Title: fmt.Sprintf("task %d", n), From: lead.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.C.J.MustAppend("run.created", core.RunSpec{ID: "w-" + tk.ID, Role: "worker", Task: tk.ID, Project: project, Harness: "open", Model: "qwen"})
+		tk.Stage, tk.Updated = stage, time.Now().Add(time.Duration(n)*time.Second)
+		a.C.J.MustAppend("task.saved", tk)
+		a.Models.Tick()
+	}
+	first := func(project string) string {
+		h, m := a.Agents.Model("worker", project)
+		return h + ":" + m
+	}
+	ended("lab", work.StageBlocked)
+	if got := first("lab"); got != "open:qwen" {
+		t.Fatalf("one blocked task moved the pick: %s", got)
+	}
+	ended("lab", work.StageBlocked)
+	if got := first("lab"); got != "fake:opus" {
+		t.Fatalf("a model that keeps ending blocked is still first: %s", got)
+	}
+	if r := a.Agents.Route("worker", "lab"); len(r) != 2 || r[1].String() != "open:qwen" {
+		t.Fatalf("the demoted pick left the route: %v", r)
+	}
+	if got := first("other"); got != "open:qwen" {
+		t.Fatalf("another project's order moved: %s", got)
+	}
+	if h, _ := a.Agents.Model("reviewer", "lab"); h == "open" {
+		t.Fatal("not a worker route")
+	}
+	view, _ := json.Marshal(a.Models.View(lead))
+	if !strings.Contains(string(view), "open:qwen on lab goes after") {
+		t.Fatalf("view %s", view)
+	}
+	ended("lab", work.StageMerged)
+	if got := first("lab"); got != "open:qwen" {
+		t.Fatalf("a merge didn't put the model back in front: %s", got)
 	}
 }
