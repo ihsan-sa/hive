@@ -464,6 +464,12 @@ func (m *Module) save(t *Task, note string) {
 	if prev := m.tasks[t.ID]; prev != nil {
 		was = prev.Stage
 	}
+	// A gate run on a head the task has left (a merge of main, a fix sent
+	// back) or a task that ended judges nothing that lands: it ends now and
+	// frees its slot, not once the new head reaches the gate hours later.
+	if m.dropStaleGatesLocked(t) {
+		note = strings.TrimPrefix(note+"; the recursive gate's run on its earlier head ends, freeing its slot", "; ")
+	}
 	m.mu.Unlock()
 	if note != "" {
 		t.Log = append(t.Log, Entry{At: t.Updated, Text: note})
@@ -1290,7 +1296,6 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 				items = append(items, l)
 			}
 		}
-		items = append(items, m.gateLessons(p, lessons)...)
 		if len(items) > 12 {
 			items = items[len(items)-12:]
 		}
@@ -3666,9 +3671,11 @@ func (m *Module) workerStopped(t Task) bool {
 }
 
 // steerers are the roles that keep the loop moving: every agent owns it, so
-// a worker or sweep orders and holds the queue, checks blocked work again and
-// ends a landed task as the lead does, each on the record by its run id.
-var steerers = []string{"lead", "worker", "sweep"}
+// a worker, sweep or step-back orders and holds the queue, checks blocked work
+// again and ends a landed task as the lead does, each on the record by its run
+// id. A step-back diagnoses a stalled loop and acts on what it finds rather
+// than routing the fix through a lead that may not answer for a while.
+var steerers = []string{"lead", "worker", "sweep", "stepback"}
 
 // reach refuses a task outside r's own project: an agent with a project steers
 // only there; one with none (the workspace lead, and a sweep, which reads the
