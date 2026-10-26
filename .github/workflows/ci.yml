@@ -95,7 +95,13 @@ jobs:
         # HIVE_GATE_BWRAP=1 turns the gate's bwrap tests' skip into a failure, so they run here:
         # the allowlist hides the host, the meter is the only way out, sealed code runs in a sibling
         # sandbox, no sandbox starts inside another, and a deadline kills a child's whole tree.
-        run: go test ./internal/gate/ -count=1 -timeout 30m -v -run 'Bwrap|Build|Deadline|NoSandbox' 2>&1 | tee "$RUNNER_TEMP/gate.log"; test "${PIPESTATUS[0]}" = 0 && ! grep -q -- "--- SKIP" "$RUNNER_TEMP/gate.log"
+        # It needs a runner where unprivileged user namespaces work (the step above turns them on);
+        # without them the tests fail rather than skip, so a runner image change shows up red.
+        # pipefail: a failing go test fails the step through tee; a skipped test fails it too.
+        run: |
+          set -o pipefail
+          go test ./internal/gate/ -count=1 -timeout 30m -v -run 'Bwrap|Build|Deadline|NoSandbox' 2>&1 | tee "$RUNNER_TEMP/gate.log"
+          if grep -- "--- SKIP" "$RUNNER_TEMP/gate.log"; then exit 1; fi
         shell: bash
         env:
           HIVE_GATE_BWRAP: "1"
@@ -119,6 +125,7 @@ jobs:
             echo "::error::$(sed -n "$n,$((n + 40))p" "$RUNNER_TEMP/gate.log" | awk 'BEGIN { ORS = "%0A" } { gsub(/\r/, ""); gsub(/%/, "%25"); print substr($0, 1, 300) }')"
           done
       - name: end to end under bubblewrap
+        if: "!cancelled()" # a red gate step above doesn't hide this result
         run: go test ./internal/e2e/ -timeout 30m
         env:
           HIVE_E2E_SANDBOX: auto

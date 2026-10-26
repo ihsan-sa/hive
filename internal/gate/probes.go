@@ -227,6 +227,17 @@ func probeRecurse(cfg *Config, c *Child) Result {
 	case rep.Error != "" || len(rep.Leaked) > 0 || len(rep.Candidate) == 0:
 		return Result{Detail: fmt.Sprintf("the nested gate did not finish clean (error: %v, repos left: %d, candidate results: %d)", rep.Error != "", len(rep.Leaked), len(rep.Candidate))}
 	}
+	// A clean rollback alone could be every grandchild probe failing on both
+	// sides; the gate works inside a child only if its candidate's probes ran.
+	failed := 0
+	for _, r := range rep.Candidate {
+		if !r.Pass {
+			failed++
+		}
+	}
+	if failed > 0 {
+		return Result{Detail: fmt.Sprintf("the nested gate's candidate failed %d of its %d probe runs", failed, len(rep.Candidate))}
+	}
 	return Result{Pass: true, Detail: fmt.Sprintf("nested gate %s rolled back its self-test (%d candidate results, %d repos made and removed)", rep.ID, len(rep.Candidate), len(rep.Cleaned))}
 }
 

@@ -43,7 +43,7 @@ func buildEvaluator(cfg Config, g Go, sha string) (*Evaluator, error) {
 	cmd := exec.Command("go", "test", "-c", "-o", ev.Test, "./internal/e2e/")
 	cmd.Dir = c.Src
 	cmd.Env = append(cleanEnv(), "HOME="+filepath.Join(dir, "home"), "GOCACHE="+goCache("", filepath.Join(dir, "gocache")), "TMPDIR="+filepath.Join(dir, "tmp"),
-		"GOROOT="+g.Root, "GOMODCACHE="+g.ModCache, "GOFLAGS=-mod=readonly", "GIT_CONFIG_GLOBAL=/dev/null")
+		"GOROOT="+g.Root, "GOMODCACHE="+g.ModCache, "GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GIT_CONFIG_GLOBAL=/dev/null")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("compiling its e2e tests: %v: %s", err, tail(string(out), 600))
 	}

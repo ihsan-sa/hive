@@ -73,6 +73,14 @@ paths = [
   # (reviewer, security, warden, tribunal) moves to another model.
   "internal/mod/models/**",
 
+  # The recursive gate runs every change to the Hive in its own bubblewrap
+  # allowlist, with the meter its only way out and sealed code in a sibling
+  # sandbox, and installs and health-checks a binary on the host.
+  "internal/gate/child.go",
+  "internal/gate/meter.go",
+  "internal/gate/launch.go",
+  "internal/gate/install.go",
+
   # Self-update and install scripts.
   "install/**",
   "internal/mod/release/**",

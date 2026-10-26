@@ -42,6 +42,9 @@ func TestDecide(t *testing.T) {
 		{"candidate missing a probe", nil, []Result{res("e2e", true)}, Options{}, false, "did not run"},
 		{"faster by doing less is not a gain", []Result{res("bench", true, score(2), Metric{Name: "seconds", Value: 10, Given: []string{"score"}})}, []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 100, Given: []string{"score"}})}, Options{}, false, "worse"},
 		{"faster at the same work is a gain", []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 50, Given: []string{"score"}})}, []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 100, Given: []string{"score"}})}, Options{}, true, "seconds"},
+		{"a judged metric the candidate drops is a regression", []Result{res("bench", true, score(6))}, []Result{res("bench", true, score(6), secs(100))}, Options{AllowTie: true}, false, "does not"},
+		{"a metric whose direction the sides disagree on is a regression", []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 500, Higher: true})}, []Result{res("bench", true, score(6), secs(100))}, Options{}, false, "higher"},
+		{"an info metric the candidate drops is not judged", []Result{res("bench", true, score(8))}, []Result{res("bench", true, score(6), Metric{Name: "note", Value: 1, Info: true})}, Options{}, true, "better"},
 		{"cheaper at the same work is a gain", []Result{res("bench", true, score(6), Metric{Name: "egress_bytes", Value: 5e5, Given: []string{"score"}})}, []Result{res("bench", true, score(6), Metric{Name: "egress_bytes", Value: 1e6, Given: []string{"score"}})}, Options{}, true, "egress_bytes"},
 		{"a side's own word is not judged", []Result{res("bench", true, Metric{Name: "cost", Value: 1, Info: true})}, []Result{res("bench", true, Metric{Name: "cost", Value: 9, Info: true})}, Options{}, false, "not better"},
 	}

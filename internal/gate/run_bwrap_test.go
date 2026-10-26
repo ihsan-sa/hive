@@ -41,9 +41,15 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 	}
 	dir := t.TempDir()
 	broken := filepath.Join(dir, "broken", "hive")
-	os.MkdirAll(filepath.Dir(broken), 0o755)
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(os.MkdirAll(filepath.Dir(broken), 0o755))
 	// Answers --version, starts no daemon.
-	os.WriteFile(broken, []byte("#!/bin/sh\ncase \"$1\" in --version) echo hive 0.0.0-broken ;; *) echo broken >&2; exit 1 ;; esac\n"), 0o755)
+	must(os.WriteFile(broken, []byte("#!/bin/sh\ncase \"$1\" in --version) echo hive 0.0.0-broken ;; *) echo broken >&2; exit 1 ;; esac\n"), 0o755))
 
 	// The keep run builds both sides from commits, as a real gate does: a
 	// clone of this tree is the base, and a trivial commit on it the head.
@@ -62,13 +68,13 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 	// head with the base merged in, built and bound read-only as it would land.
 	git("clone", "-q", root, repo)
 	fork := git("-C", repo, "rev-parse", "HEAD")
-	os.WriteFile(filepath.Join(repo, "docs", "gate-runs", "TRIVIAL.md"), []byte("A trivial change, for the gate's keep run.\n"), 0o644)
+	must(os.WriteFile(filepath.Join(repo, "docs", "gate-runs", "TRIVIAL.md"), []byte("A trivial change, for the gate's keep run.\n"), 0o644))
 	git("-C", repo, "add", "-A")
 	git("-C", repo, "commit", "-qm", "a trivial change")
 	head := git("-C", repo, "rev-parse", "HEAD")
 	git("-C", repo, "branch", "-f", "candidate", head) // a ref, so the gate's clone of repo holds the head
 	git("-C", repo, "checkout", "-q", "--detach", fork)
-	os.WriteFile(filepath.Join(repo, "docs", "gate-runs", "BASE.md"), []byte("The base moving on, for the gate's keep run.\n"), 0o644)
+	must(os.WriteFile(filepath.Join(repo, "docs", "gate-runs", "BASE.md"), []byte("The base moving on, for the gate's keep run.\n"), 0o644))
 	git("-C", repo, "add", "-A")
 	git("-C", repo, "commit", "-qm", "the base moves on")
 	base := git("-C", repo, "rev-parse", "HEAD")

@@ -578,7 +578,8 @@ func (c *Child) with(env ...string) func() {
 // that asks for another Go cannot make the go command fetch and run it.
 // GOVCS=*:off: modules come only from the module proxy, so a go.mod cannot
 // make the go command run git or hg here against a URL the candidate chose
-// (a module only reachable that way fails the build: a rollback).
+// (a module only reachable that way is not fetched, and Run reports that
+// side as could not run, not as the candidate's rollback).
 func prefetch(cfg Config, c *Child) error {
 	dir := filepath.Join(cfg.Out, "prefetch")
 	for _, d := range []string{"home", "gocache"} {

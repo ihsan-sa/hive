@@ -123,7 +123,7 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 		return t, m, hi
 	}
 	ct, cm, chi := count(cand)
-	kt, km, _ := count(ctrl)
+	kt, km, khi := count(ctrl)
 	var v Verdict
 	probes := map[string]bool{}
 	for p := range ct {
@@ -166,11 +166,28 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 			}
 		}
 	}
+	// A judged metric the control reports and a passing candidate leaves out
+	// is a regression, so a probe can't hide a worse number by dropping it.
+	var gone []string
+	for k := range km {
+		if _, ok := cm[k]; !ok && ct[k.probe] != nil && ct[k.probe].pass > 0 {
+			gone = append(gone, fmt.Sprintf("%s %s: the control reports it, the candidate does not", k.probe, k.metric))
+		}
+	}
+	sort.Strings(gone)
+	v.Regressions = append(v.Regressions, gone...)
 	var mk []key
 	for k := range cm {
-		if _, ok := km[k]; ok {
-			mk = append(mk, k)
+		if _, ok := km[k]; !ok {
+			continue
 		}
+		if chi[k] != khi[k] {
+			// The direction is the control's to say; sides that disagree on
+			// it can't be compared.
+			v.Regressions = append(v.Regressions, fmt.Sprintf("%s %s: the candidate says %s is better, the control does not", k.probe, k.metric, map[bool]string{true: "higher", false: "lower"}[chi[k]]))
+			continue
+		}
+		mk = append(mk, k)
 	}
 	sort.Slice(mk, func(i, j int) bool { return mk[i].probe+mk[i].metric < mk[j].probe+mk[j].metric })
 	for _, k := range mk {
@@ -187,7 +204,7 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 			continue // judged only between sides that did the same work
 		}
 		diff := mean(a) - mean(b)
-		if !chi[k] {
+		if !khi[k] {
 			diff = -diff
 		}
 		margin := math.Max(o.Floor*math.Abs(mean(b)), 2*math.Sqrt(sd(a)*sd(a)/float64(len(a))+sd(b)*sd(b)/float64(len(b))))
