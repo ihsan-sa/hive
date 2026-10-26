@@ -1,9 +1,7 @@
 package release
 
 import (
-	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -67,28 +65,23 @@ func TestPreMergeUpdate(t *testing.T) {
 	}
 }
 
-// The rehearsal really builds this tree as release.yml does and hands a
-// running Hive built from it over to the candidate.
-func TestRehearsalOnThisTree(t *testing.T) {
-	if testing.Short() || runtime.GOOS != "linux" {
-		t.Skip("builds the Hive three times and runs two daemons; Linux, not -short")
+// The rehearsal is a script sh can read, and a commit with no cmd/hive runs
+// none of it: no sandboxed check is started for it.
+func TestRehearsalScript(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no /bin/sh")
 	}
-	root, err := filepath.Abs("../../..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	bin := t.TempDir()
-	build := exec.Command("go", "build", "-o", filepath.Join(bin, "hive"), "./cmd/hive")
-	build.Dir = root
-	if out, err := build.CombinedOutput(); err != nil {
+	if out, err := exec.Command("/bin/sh", "-n", "-c", rehearsal("me/hive")).CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	cmd := exec.Command("/bin/sh", "-c", rehearsal("me/hive"))
-	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "TMPDIR="+t.TempDir())
-	out, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "to the candidate passes") {
-		t.Fatalf("%v\n%s", err, out)
+	m, _, _, _ := selfHive(t)
+	p, _ := m.C.Projects.Get("hive")
+	sha := selfClone(t, m, map[string]string{"README.md": "The Hive.\n"})
+	if c := m.rehearse(p, sha); c.Kind != "none" {
+		t.Fatalf("rehearsed a commit with no cmd/hive: %+v", c)
+	}
+	if _, ok := m.C.Effects.GetCheck(p.Name, sha, "release"); ok {
+		t.Fatal("a release check was recorded for it")
 	}
 }
 

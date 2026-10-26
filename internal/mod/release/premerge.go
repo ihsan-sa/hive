@@ -40,6 +40,7 @@ func (m *Module) PreMerge(p core.Project, sha, main string) (back, note string) 
 	}
 	c := rehearse(p, sha)
 	switch {
+	case c.Kind == "none":
 	case c.CantRun != "":
 		notes = append(notes, "the release build and update "+c.CantRun)
 	case c.OK:
@@ -53,7 +54,12 @@ func (m *Module) PreMerge(p core.Project, sha, main string) (back, note string) 
 
 // rehearse runs the rehearsal on sha in a clean checkout in the sandbox,
 // once per commit.
+// A commit with no cmd/hive (a test's stand-in for the Hive's project) has
+// nothing to build or hand over, and runs nothing.
 func (m *Module) rehearse(p core.Project, sha string) core.Check {
+	if m.C.Effects.ReadFile(p, sha, "cmd/hive/main.go") == "" {
+		return core.Check{Kind: "none"}
+	}
 	if c, ok := m.C.Effects.GetCheck(p.Name, sha, "release"); ok && c.CantRun == "" {
 		return c
 	}
