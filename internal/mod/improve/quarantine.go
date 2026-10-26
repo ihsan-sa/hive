@@ -19,8 +19,9 @@ var quarantineWindow = 24 * time.Hour
 // flakyTitle starts the title of the task that fixes a flaky test.
 const flakyTitle = "Fix the flaky "
 
-// A Sighting is one red of a test in the forge's checks: on a PR's head, on
-// main, or on a head whose re-run then passed.
+// A Sighting is one red of a test in the forge's checks or the Hive's own
+// test check (Check "local test"): on a PR's head, on main, or on a head
+// whose re-run then passed.
 type Sighting struct {
 	At     time.Time `json:"at"`
 	Task   string    `json:"task,omitempty"`
@@ -70,6 +71,8 @@ func (m *Module) applyQuarantine(e core.Event) {
 			}
 			m.sighted[k] = append(m.sighted[k], Sighting{At: e.At, Task: x.Task, Branch: x.Branch, SHA: x.SHA, Check: x.Check, URL: x.URL, Main: x.Main, Rerun: e.Kind == "forge.flaked"})
 		}
+	case "effect.checked":
+		m.sightLocal(e)
 	case "task.saved":
 		var t work.Task
 		if e.Decode(&t) != nil {
@@ -95,6 +98,51 @@ func (m *Module) applyQuarantine(e core.Event) {
 				m.lifted[k] = e.At
 			}
 		}
+	}
+}
+
+// sightLocal takes in a red of the Hive's own test check: on a task's head
+// or on main, the same evidence as the forge's, and often the first, since a
+// busy machine shows a timing flake before CI does. A check on any other
+// commit (a gate's or step-back's candidate) is no sighting; m.mu is held.
+func (m *Module) sightLocal(e core.Event) {
+	var c core.Check
+	if e.Decode(&c) != nil || c.OK || c.CantRun != "" || time.Since(c.At) > quarantineWindow {
+		return
+	}
+	if c.Kind != "test" && c.Kind != "retest" && c.Kind != "before" {
+		return
+	}
+	keys := c.Keys
+	if keys == nil && len(c.Failed) > 0 {
+		keys, _ = core.FailedTestKeys(c.FullOutput()) // recorded before checks named packages
+	}
+	keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return !strings.Contains(k, "::") })
+	if len(keys) == 0 {
+		return
+	}
+	s := Sighting{At: c.At, SHA: c.SHA, Check: "local " + c.Kind}
+	_, s.Main = m.merged[c.SHA]
+	s.Main = s.Main || c.Kind == "before" // main just before a merge
+	if !s.Main {
+		var ids []string
+		for id, hs := range m.heads {
+			if slices.Contains(hs, c.SHA) {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			return
+		}
+		slices.Sort(ids)
+		s.Task = ids[0]
+	}
+	for _, test := range keys {
+		k := flakeKey(c.Project, test)
+		if slices.ContainsFunc(m.sighted[k], func(o Sighting) bool { return o.SHA == s.SHA && o.Check == s.Check }) {
+			continue
+		}
+		m.sighted[k] = append(m.sighted[k], s)
 	}
 }
 
@@ -205,7 +253,10 @@ func (m *Module) fileQuarantined() {
 		}
 		var ev []string
 		for _, s := range f.Evidence {
-			where := "task " + s.Task + " (" + s.Branch + ")"
+			where := "task " + s.Task
+			if s.Branch != "" {
+				where += " (" + s.Branch + ")"
+			}
 			if s.Main {
 				where = "main"
 			}

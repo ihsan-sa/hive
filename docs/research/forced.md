@@ -2,7 +2,7 @@
 
 Task 261025-223750-76bb026d40, issue #891. The person (2026-10-25): "how much of this is infra/forced on agents ... we dont want to overcomplicate or add more parts than necessary"; "the more constraints etc we add while building this the worse"; hive behaviour "should come naturally, not forced".
 
-Measured from this Hive's journal (`$HIVE_STATE/events.jsonl`, 2026-10-24 01:55Z to 2026-10-26 17:02Z, 63 hours, 103,840 events) and the run folders. Cost is Claude Code's `cost_usd` per turn (API-equivalent, not plan money; cumulative within a session, so taken as the difference). The scripts are in this run's box (`$HIVE_STATE/runs/w-261025-223750-76bb026d40/box/*.py`, each takes `events.jsonl`).
+Measured from this Hive's journal (`$HIVE_STATE/events.jsonl`, 2026-10-24 01:55Z to 2026-10-26 17:02Z, 63 hours, 103,840 events) and the run folders. Cost is Claude Code's `cost_usd` per turn (API-equivalent, not plan money; cumulative within a session, so taken as the difference). The scripts are in [`docs/research/forced/`](forced/) (each takes `events.jsonl`; rerun them after the removals land).
 
 ## Where the spend goes
 
@@ -34,7 +34,7 @@ System prompts as given to the latest run of each role (words): lead 2746, worke
 
 A **reviewer**, which can change nothing, gets the same 1272-word orientation on how to talk to the Hive, then a brief of ~4300 words: the ask, the account, `docs/REVIEW.md` (735), all of `.hive/goals.md` (1841) and `.hive/lessons.md` twice (in the brief's project section and again in full). That is 2795 runs.
 
-`.hive/lessons.md` ("what was reverted and why") is now mostly the gate's rollback lines: 8 of its 13 lines, three of them "nothing moved beyond the noise", which teach nothing and go into every brief and every review.
+`.hive/lessons.md` ("what was reverted and why") is now mostly the gate's rollback lines: 8 of its 10 entries, three of them "nothing moved beyond the noise", which teach nothing and go into every brief and every review.
 
 On the soft-layer real run (docs/soft-layer.md, real4) the essay with one-line roles did as well as the standard prompts on the same task, a little better in fidelity, at the same cost.
 
@@ -51,7 +51,7 @@ Fired = in the 63 hours above.
 | Fix/gain aim | which changes the gate sees | 102 tasks set to fix, 3 to gain | an op, a paragraph in the lead's prompt, re-labelling to skip the gate | keep while the gate is; shrinks with it |
 | Orientation in every role | one shared picture | every run | 1272 words × 3451 runs | **simplify**: cut to what `hive agent help` doesn't say; drop it for read-only seats |
 | Goals + lessons twice in each review | reviewer sees the person's intent | 2795 runs | ~3000 words a review | **simplify**: REVIEW.md stays, the rest by path |
-| Gate rollback lines in `lessons.md` | the next worker learns from a rollback | 8 of 13 lines | ~250 words in every brief and review | **remove**: lessons are reverts after merge |
+| Gate rollback lines in `lessons.md` | the next worker learns from a rollback | 8 of 10 entries | ~250 words in every brief and review | **remove**: lessons are reverts after merge |
 | Stall watcher → lead | a task stuck in a stage | 145 stalls, 141 handed to the lead; 28 of 40 such lead turns `NOOP` | lead turns, alerts | **simplify**: retry itself, tell the lead once if that fails |
 | Lead prompt procedures | the lead runs the queue, aims, models, holds | every lead turn | 2275 words | **simplify** after the removals above |
 | Security reader (security-listed paths only) | changes that act outside the box | 690 reads, 17 fix: a sandbox escape via `nice` on macOS, a symlink the daemon follows, a worker moving its own bar, a credential leak | ~$270 | **keep** |
