@@ -455,6 +455,12 @@ func (m *Module) save(t *Task, note string) {
 	if prev := m.tasks[t.ID]; prev != nil {
 		was = prev.Stage
 	}
+	// A gate run on a head the task has left (a merge of main, a fix sent
+	// back) or a task that ended judges nothing that lands: it ends now and
+	// frees its slot, not once the new head reaches the gate hours later.
+	if m.dropStaleGatesLocked(t) {
+		note = strings.TrimPrefix(note+"; the recursive gate's run on its earlier head ends, freeing its slot", "; ")
+	}
 	m.mu.Unlock()
 	if note != "" {
 		t.Log = append(t.Log, Entry{At: t.Updated, Text: note})
@@ -1268,7 +1274,6 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 				items = append(items, l)
 			}
 		}
-		items = append(items, m.gateLessons(p, lessons)...)
 		if len(items) > 12 {
 			items = items[len(items)-12:]
 		}
