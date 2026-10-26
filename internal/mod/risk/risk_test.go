@@ -211,6 +211,7 @@ func TestWardenEndsWithoutDeciding(t *testing.T) {
 		if status == "late" {
 			defer func(d time.Duration) { WardenTimeout = d }(WardenTimeout)
 			WardenTimeout = 0
+			g.c.Runs.SetStatus(req.Warden, core.StatusIdle, "")
 		} else {
 			g.c.Runs.SetStatus(req.Warden, status, "")
 		}
@@ -1273,5 +1274,42 @@ func TestLongAskFormsAPanel(t *testing.T) {
 	g.vote(req, "approve", "approve", "decline")
 	if got := g.settle(req.ID, "tribunal", "approved", "running"); got.State != "done" || !core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("the panel reached no verdict that ran: %+v", got)
+	}
+}
+
+// A warden parked on a usage limit, or queued for a slot, can't weigh, so its
+// time doesn't run out: the request waits for it rather than going to the
+// person unweighed. Once it can take turns, the clock runs again.
+func TestParkedWardenIsNotTimedOut(t *testing.T) {
+	defer func(d time.Duration) { WardenTimeout = d }(WardenTimeout)
+	for _, status := range []string{core.StatusParked, core.StatusQueued} {
+		g := newRig(t, 2)
+		req := g.request("install a tool", "x", "T2")
+		g.c.Runs.SetStatus(req.Warden, status, "every claude login is at its usage limit")
+		WardenTimeout = 0
+		g.m.Tick()
+		if got, _ := g.m.get(req.ID); got.State != "weighing" || got.Ask != "" {
+			t.Fatalf("a %s warden was timed out: %+v", status, got)
+		}
+		if w := g.run(req.Warden); w.Terminal() {
+			t.Fatalf("the %s warden was stopped", status)
+		}
+		g.c.Runs.SetStatus(req.Warden, core.StatusIdle, "")
+		g.m.Tick()
+		if got, _ := g.m.get(req.ID); got.State != "asked" {
+			t.Fatalf("a warden that can take turns, past its time, held after a %s spell: %+v", status, got)
+		}
+	}
+}
+
+func TestWardenClockStartsAtItsTurn(t *testing.T) {
+	now := time.Now()
+	req := Request{Updated: now.Add(-2 * WardenTimeout)}
+	w := core.Run{Status: core.StatusRunning, TurnStarted: now.Add(-WardenTimeout / 2)}
+	if wardenLate(req, w, true) {
+		t.Fatal("a warden whose first turn began after a long park was timed out from the request")
+	}
+	if !wardenLate(req, core.Run{Status: core.StatusRunning}, true) || !wardenLate(req, core.Run{}, false) {
+		t.Fatal("a warden past its time was not late")
 	}
 }
