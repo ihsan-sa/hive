@@ -2,6 +2,7 @@ package core
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,21 +10,43 @@ import (
 
 // A worker whose turns keep ending in prose is nudged twice; when the turns
 // answering its nudges make no commit either, it ends blocked and frees its
-// slot. One that keeps committing stays quiet for the lead.
+// slot. One that keeps committing, or whose commits can't be read, stays
+// quiet for the lead; touching the HEAD log isn't a commit.
 func TestAWorkerThatNeverFinishesEndsBlocked(t *testing.T) {
-	for _, commits := range []bool{false, true} {
-		t.Run(map[bool]string{false: "no commits", true: "commits"}[commits], func(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		turns string // each turn: . ends in prose, c commits too, p is parked on an error
+		nogit bool
+		want  string
+	}{
+		{"no commits", "...", false, StatusBlocked},
+		{"commits", ".cc", false, StatusQuiet},
+		{"no git", "...", true, StatusQuiet},
+		{"a parked turn isn't one without finishing", "..cp.", false, StatusQuiet},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			c, _ := testHive(t)
 			co := t.TempDir()
-			log := filepath.Join(co, ".git", "logs", "HEAD")
-			os.MkdirAll(filepath.Dir(log), 0o755)
-			os.WriteFile(log, []byte("0 1 commit\n"), 0o644)
+			git := filepath.Join(co, ".git")
+			log := filepath.Join(git, "logs", "HEAD")
+			ref := filepath.Join(git, "refs", "heads", "main")
+			if !tc.nogit {
+				os.MkdirAll(filepath.Dir(log), 0o755)
+				os.MkdirAll(filepath.Dir(ref), 0o755)
+				os.WriteFile(filepath.Join(git, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
+				os.WriteFile(ref, []byte(strings.Repeat("a", 40)+"\n"), 0o644)
+				os.WriteFile(log, []byte("0 1 commit\n"), 0o644)
+			}
 			c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker", Checkout: co})
 			var got Run
-			for turn := 1; turn <= 3; turn++ {
-				if commits && turn > 1 {
+			for i, kind := range tc.turns {
+				turn := i + 1
+				if kind == 'c' {
+					os.WriteFile(ref, []byte(strings.Repeat(string(rune('a'+turn)), 40)+"\n"), 0o644)
+				}
+				if !tc.nogit { // a touched HEAD log, without a commit, changes nothing
 					f, _ := os.OpenFile(log, os.O_APPEND|os.O_WRONLY, 0o644)
-					f.WriteString("1 2 commit\n")
+					f.WriteString("1 2 touch\n")
 					f.Close()
 				}
 				r, _ := c.Runs.Get("w1")
@@ -31,7 +54,11 @@ func TestAWorkerThatNeverFinishesEndsBlocked(t *testing.T) {
 				c.J.MustAppend("run.turn_started", turnStarted{ID: "w1", Turn: turn})
 				out := c.WS.TurnOut("w1", turn)
 				os.MkdirAll(filepath.Dir(out), 0o755)
-				os.WriteFile(out, []byte(`{"type":"result","subtype":"success","result":"All done.","session_id":"s1"}`+"\n"), 0o600)
+				line := `{"type":"result","subtype":"success","result":"All done.","session_id":"s1"}`
+				if kind == 'p' {
+					line = `{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom","session_id":"s1"}`
+				}
+				os.WriteFile(out, []byte(line+"\n"), 0o600)
 				r, _ = c.Runs.Get("w1")
 				c.Runs.endTurn(r)
 				got, _ = c.Runs.Get("w1")
@@ -40,13 +67,44 @@ func TestAWorkerThatNeverFinishesEndsBlocked(t *testing.T) {
 				}
 			}
 			switch {
-			case !commits && (got.Status != StatusBlocked || !strings.HasPrefix(got.Reason, NoFinish)):
-				t.Fatalf("after its nudges: %q (%q), want blocked: %s", got.Status, got.Reason, NoFinish)
-			case !commits && !got.Terminal():
-				t.Fatal("a blocked run holds its slot")
-			case commits && got.Status != StatusQuiet:
-				t.Fatalf("a committing run: %q (%q), want quiet", got.Status, got.Reason)
+			case got.Status != tc.want:
+				t.Fatalf("after its nudges: %q (%q), want %s", got.Status, got.Reason, tc.want)
+			case tc.want == StatusBlocked && (!strings.HasPrefix(got.Reason, NoFinish) || !got.Terminal()):
+				t.Fatalf("blocked as %q, terminal %v", got.Reason, got.Terminal())
 			}
 		})
+	}
+}
+
+// headMark reads the commit HEAD points at, as git does, from a loose ref,
+// packed refs and a worktree, without running git in the checkout.
+func TestHeadMarkReadsTheCommit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	co := t.TempDir()
+	run := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-C", dir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run(co, "init", "-q", "-b", "main")
+	run(co, "commit", "-q", "--allow-empty", "-m", "one")
+	if got, want := headMark(co), run(co, "rev-parse", "HEAD"); got != want {
+		t.Fatalf("loose ref: %q, want %q", got, want)
+	}
+	run(co, "pack-refs", "--all")
+	if got, want := headMark(co), run(co, "rev-parse", "HEAD"); got != want {
+		t.Fatalf("packed ref: %q, want %q", got, want)
+	}
+	wt := filepath.Join(t.TempDir(), "wt")
+	run(co, "worktree", "add", "-q", "-b", "side", wt)
+	run(wt, "commit", "-q", "--allow-empty", "-m", "two")
+	if got, want := headMark(wt), run(wt, "rev-parse", "HEAD"); got != want || got == headMark(co) {
+		t.Fatalf("worktree: %q, want %q", got, want)
 	}
 }

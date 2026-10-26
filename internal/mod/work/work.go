@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -216,8 +217,11 @@ const (
 
 // Fix says the task is clearly a fix: its brief, worker or the lead said so
 // and named the failure. A revert undoes a merge already judged worse, so it
-// is one too.
-func (t Task) Fix() bool { return t.Aim == AimFix || t.Kind == "revert" }
+// is one too, and so is a review follow-up that says no aim: one filed
+// before followUp named its aim hardens a change that already passed.
+func (t Task) Fix() bool {
+	return t.Aim == AimFix || t.Kind == "revert" || t.Aim == "" && t.FollowUp != ""
+}
 
 // Gain says the task is taken as a gain: it aims at one, or it isn't clearly a fix.
 func (t Task) Gain() bool { return !t.Fix() }
@@ -227,6 +231,8 @@ func (t Task) AimWord() string {
 	switch {
 	case t.Kind == "revert":
 		return "a fix (a revert of a merge judged worse)"
+	case t.Fix() && t.Aim == "":
+		return "a fix (a review follow-up of " + t.FollowUp + ", which already merged)"
 	case t.Fix():
 		return "a fix: " + orNone(t.AimWhy)
 	case t.Aim == AimGain && t.AimWhy != "":
@@ -423,6 +429,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
+	c.Effects.Slots.Prioritize(m.checkRank)
 	return m
 }
 
@@ -1010,9 +1017,18 @@ func (m *Module) revive() {
 // of the permission being granted.
 func (m *Module) reviveRefused() {
 	const refusedAgain = time.Hour
-	for _, t := range m.List(func(t Task) bool {
+	stopped := m.List(func(t Task) bool {
 		return t.Stage == StageStopped && !t.ByPerson && t.SHA != "" && strings.HasPrefix(t.Reason, gaveUpOnErrors) && core.ChecksRefused(strings.TrimPrefix(t.Reason, gaveUpOnErrors))
-	}) {
+	})
+	// A task that came back, or moved to another head, is asked no more.
+	keep := map[string]bool{}
+	for _, t := range stopped {
+		keep[t.ID+"@"+t.SHA] = true
+	}
+	m.mu.Lock()
+	maps.DeleteFunc(m.refusedAsked, func(k string, _ time.Time) bool { return !keep[k] })
+	m.mu.Unlock()
+	for _, t := range stopped {
 		key := t.ID + "@" + t.SHA
 		m.mu.Lock()
 		asked := time.Since(m.refusedAsked[key]) < refusedAgain
@@ -1520,12 +1536,22 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 }
 
 // noCommits ends a task whose worker made no commit. A helper's task is done, since its account already went to the agent that spawned it.
+// A review follow-up whose worker finished done is done: its done line lets it
+// judge every item not worth doing, with the reasons in its account.
 // An ask whose whole job was a step outside the checkout is done; anything else
 // is blocked.
 func (m *Module) noCommits(t *Task, p core.Project, r core.Run) {
 	if t.Kind == "helper" {
 		t.Stage = StageDone
 		m.save(t, "the helper made no commits, so nothing to land")
+		return
+	}
+	if t.FollowUp != "" && r.Finish != nil && r.Finish.Status == core.StatusDone {
+		t.Stage, t.IssueOpen, t.Failures = StageDone, true, 0
+		m.save(t, "done with no commit: the worker judged the review's advice in its account")
+		m.comment(p.Repo, t.Issue.Number, "Done with no commit, so nothing to merge: the worker judged each item of the review's advice.\n\n"+finishText(r))
+		m.Chat.Notify(t.Chat, t.Thread, fmt.Sprintf("Done: %q, with no commit; the worker judged the review's advice: %s", t.Label(), core.Clip(finishText(r), 300)))
+		m.closeIssue(t, p)
 		return
 	}
 	var steps string
@@ -1620,7 +1646,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 			return m.cantRun(t, p, mc)
 		}
 		switch {
-		case !mc.OK && !noWorse(c, mc):
+		case !mc.OK && !core.NoWorse(c, mc):
 			return m.waitOnMain(t, p, main, mc)
 		case !mc.OK:
 			// Every test it fails main fails too: it is no worse than main,
@@ -1846,26 +1872,6 @@ func (m *Module) mainTests(p core.Project, main, command string) (core.Check, er
 	}
 	c.OK = m.Retest(p, main, command, c, true)
 	return c, nil
-}
-
-// noWorse says a red change fails only what main's red run fails too, each
-// test by its package and name, so the red is main's and the change may be
-// its fix. A failure in its run that no test name accounts for (a timeout, a
-// panic or exit outside a test, a build failure) counts only where main's
-// run fails that package so too; one either run can't name at all can't be
-// told apart. A run stopped by vet or the build (core.StopKeys) never ran its
-// tests, so matching main's vet error never makes a change no worse.
-func noWorse(c, mc core.Check) bool {
-	mine, mains := core.RedKeys(c.FullOutput()), core.RedKeys(mc.FullOutput())
-	if len(mine) == 0 || len(mains) == 0 {
-		return false
-	}
-	for _, k := range mine {
-		if !slices.Contains(mains, k) {
-			return false
-		}
-	}
-	return true
 }
 
 // waitOnMain holds a red change while main's own tests are red, since the
@@ -2274,6 +2280,13 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		m.raiseOnce(p, main+"/refused", say)
 		m.hold(t, p, "waiting on main: "+rr.Error())
 		return nil
+	}
+	var rf core.Refusal
+	if errors.As(err, &rf) {
+		// Said as what holds it, not left on the last gate's reason (the
+		// security read it already passed, say); it still counts toward
+		// giving up, as a refusal that never clears should stop for the person.
+		t.Reason = rf.Error()
 	}
 	if err != nil {
 		return err
@@ -2839,15 +2852,34 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		fmt.Fprintf(&whole, format, a...)
 		fmt.Fprintf(&short, format, a...)
 	}
-	both("# The forge's failed checks on %s\n\nPR #%d, task %s, based on main at %s.\n", core.Short(t.SHA), t.PR.Number, t.ID, core.Short(main))
-	both("%s", m.bundleForChecks(t, p, main))
+	// The main the checks ran with is the one their logs name, not main now:
+	// a fix that landed since is in main but wasn't in what they ran.
+	fails := make([]core.CheckFailure, len(failed))
+	reads := make([]bool, len(failed))
+	tested := ""
+	for i, r := range failed {
+		fails[i], reads[i] = m.C.Effects.CheckFailure(p.Repo, r)
+		if f := fails[i]; tested == "" && f.Base != "" && f.Head == t.SHA {
+			tested = f.Base
+		}
+	}
+	both("# The forge's failed checks on %s\n\n", core.Short(t.SHA))
+	switch {
+	case tested == "":
+		both("PR #%d, task %s. Main is at %s now; the checks' logs don't say which main they merged the branch with, which may be older.\n", t.PR.Number, t.ID, core.Short(main))
+	case tested == main:
+		both("PR #%d, task %s, run merged with main at %s.\n", t.PR.Number, t.ID, core.Short(main))
+	default:
+		both("PR #%d, task %s, run merged with main at %s, as the checks' logs say. Main has moved to %s since: what landed between isn't in what they ran, so a test failing here may be one main has fixed since (`git log %s..%s`).\n", t.PR.Number, t.ID, core.Short(tested), core.Short(main), core.Short(tested), core.Short(main))
+	}
+	both("%s", m.bundleForChecks(t, p, cmp.Or(tested, main)))
 	logs := 0
-	for _, r := range failed {
+	for i, r := range failed {
 		both("\n## %s\n\n", r.Name)
 		if r.URL != "" {
 			both("Link: %s\n", r.URL)
 		}
-		f, read := m.C.Effects.CheckFailure(p.Repo, r)
+		f, read := fails[i], reads[i]
 		switch {
 		case !read:
 			both("Failing tests: the log couldn't be read\n")
@@ -2858,6 +2890,8 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		}
 		if sha := at[r.Name]; sha != "" {
 			both("On main at %s (the newest commit whose run of it finished; at %s it was cancelled or still runs): %s\n", core.Short(sha), core.Short(main), m.onMain(p, r.Name, mainRuns))
+		} else if tested != "" && tested != main {
+			both("On main at %s (newer than the %s these checks ran with): %s\n", core.Short(main), core.Short(tested), m.onMain(p, r.Name, mainRuns))
 		} else {
 			both("On main at %s: %s\n", core.Short(main), m.onMain(p, r.Name, mainRuns))
 		}
@@ -2907,7 +2941,11 @@ func (m *Module) bundleForChecks(t *Task, p core.Project, main string) string {
 	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
 		return holds + " (" + fetchMain + ").\n"
 	}
-	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. " + holds + ": " + fetchMain + ", then merge FETCH_HEAD to see and run what the checks ran.\n"
+	merge := "merge FETCH_HEAD to see and run what the checks ran"
+	if head != main {
+		merge = "merge " + core.Short(main) + " (in it) to see and run what the checks ran, or FETCH_HEAD for main now"
+	}
+	return "Your branch is behind main at " + core.Short(main) + ", and the forge runs the checks on it merged with main: a failing test may be main's, not yours. " + holds + ": " + fetchMain + ", then " + merge + ".\n"
 }
 
 // bundleFailed journals a main.bundle that couldn't be written, so a worker
