@@ -950,6 +950,26 @@ func TestFailedUpdateStopsTheCut(t *testing.T) {
 	}
 }
 
+// A refused tag is never published, so its failed update holds nothing, as
+// Publish drops it too.
+func TestRefusedReleaseDoesNotHoldTheCut(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	n.SetReleaseRuns("me/hive", "m1",
+		core.WorkflowRun{Name: "update", Status: "completed", Conclusion: "failure"},
+		core.WorkflowRun{Name: "ci", Status: "completed", Conclusion: "success"})
+	m.C.J.MustAppend("release.refused", map[string]string{"project": "hive", "tag": "v0.0.1", "sha": "m1", "tag_sha": "x"})
+	m.Diff = func(core.Project, string, string) ([]string, error) { return []string{"README.md"}, nil }
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	if _, ok := n.got["v0.0.2"]; !ok {
+		t.Fatal("a refused release's failed update held the cut")
+	}
+}
+
 // A failed ci, which reads every file, never holds the cut.
 func TestFailedCIDoesNotHoldTheCut(t *testing.T) {
 	m, n, merged, land := selfHive(t)

@@ -1402,11 +1402,11 @@ func reads(jobs []string, path string) bool {
 func (m *Module) unbuilt(p core.Project, sha string) string {
 	type rel struct{ Tag, SHA string }
 	var since []rel
-	held := map[string]bool{}
+	held, said := map[string]bool{}, map[string]bool{} // said: the causes causeSaid finds
 	m.C.J.Replay(func(e core.Event) {
 		var x struct {
-			Project, Tag, SHA string
-			Prerelease        bool
+			Project, Tag, SHA, Cause string
+			Prerelease               bool
 		}
 		if e.Decode(&x) != nil || x.Project != p.Name {
 			return
@@ -1419,8 +1419,16 @@ func (m *Module) unbuilt(p core.Project, sha string) string {
 			since = append(since, rel{x.Tag, x.SHA})
 		case "hive.published":
 			since = slices.DeleteFunc(since, func(r rel) bool { return !modules.Newer(x.Tag, r.Tag) })
-		case "release.held":
-			held[x.Tag] = true
+			clear(said)
+		case "release.refused": // as Publish: a refused tag is never published
+			since = slices.DeleteFunc(since, func(r rel) bool { return r.Tag == x.Tag })
+		case "release.held", "release.failed":
+			if e.Kind == "release.held" {
+				held[x.Tag] = true
+			}
+			if x.Cause != "" {
+				said[x.Cause] = true
+			}
 		}
 	})
 	if len(since) == 0 || since[len(since)-1].SHA == sha {
@@ -1455,7 +1463,7 @@ func (m *Module) unbuilt(p core.Project, sha string) string {
 		}
 		text := r.Tag + what + why + ", and " + core.Short(sha) + " changes nothing that check reads. " + steps
 		if !held[r.Tag] {
-			raise := !m.causeSaid(p.Name, cause)
+			raise := !said[cause]
 			m.C.J.MustAppend("release.held", map[string]string{"project": p.Name, "tag": r.Tag, "sha": r.SHA, "why": why, "cause": cause})
 			if raise {
 				m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": p.Name, "text": "no release at " + core.Short(sha) + ": " + text})
