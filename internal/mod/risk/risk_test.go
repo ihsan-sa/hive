@@ -211,6 +211,7 @@ func TestWardenEndsWithoutDeciding(t *testing.T) {
 		if status == "late" {
 			defer func(d time.Duration) { WardenTimeout = d }(WardenTimeout)
 			WardenTimeout = 0
+			g.c.Runs.SetStatus(req.Warden, core.StatusIdle, "")
 		} else {
 			g.c.Runs.SetStatus(req.Warden, status, "")
 		}
@@ -706,14 +707,79 @@ func TestInstallRefusesSandboxPath(t *testing.T) {
 	}
 }
 
+// When the Hive's own folder sits under a sandbox root (its home is /hive on
+// some machines), a project's folder does too; --project names the host's own
+// path, so it isn't refused, while the same path typed is.
+func TestInstallWithProjectUnderSandboxRoot(t *testing.T) {
+	g := newRig(t, 1)
+	// The daemon's temporary folder is exempt, and the workspace sits in it.
+	t.Setenv("TMPDIR", t.TempDir())
+	defer func(r []string) { sandboxRoots = r }(sandboxRoots)
+	sandboxRoots = []string{g.c.WS.Root}
+	g.c.Projects.Add(core.Project{Name: "tool", Repo: "me/tool"})
+	dir := g.c.WS.Project("tool")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lead, err := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.call(lead, "install_module", map[string]string{"url": dir}); err == nil || !strings.Contains(err.Error(), "--project") {
+		t.Fatalf("a typed path under the root: want a refusal pointing at --project, got %v", err)
+	}
+	if _, err := g.call(lead, "install_module", map[string]string{"project": "tool"}); err != nil {
+		t.Fatalf("--project under a sandbox root was refused: %v", err)
+	}
+	filed := 0
+	for _, a := range g.c.Person.Open() {
+		if a.Kind == "module" && a.Ref == dir {
+			filed++
+		}
+	}
+	if filed != 1 {
+		t.Fatalf("want one install ask for %s, got %+v", dir, g.c.Person.Open())
+	}
+}
+
+// The daemon's own temporary folder is the host's even under a sandbox root,
+// as when the score's e2e daemon runs with TMPDIR under /hive; a path is
+// judged by where it points, and a TMPDIR that is a root exempts nothing.
+func TestDaemonTempIsNotSandbox(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Dir(tmp)
+	t.Setenv("TMPDIR", tmp)
+	defer func(r []string) { sandboxRoots = r }(sandboxRoots)
+	sandboxRoots = []string{root, "/work"}
+	if inSandbox(filepath.Join(tmp, "echo")) {
+		t.Error("a path in the daemon's temp folder was taken for a sandbox path")
+	}
+	if !inSandbox("/work/wordcount") {
+		t.Error("/work/wordcount isn't a sandbox path any more")
+	}
+	if !inSandbox(tmp + "/../../" + filepath.Base(root) + "/x") {
+		t.Error("a path with .. that points out of the temp folder took its exemption")
+	}
+	if !inSandbox(tmp + "/../x") {
+		t.Error("a path with .. back into the root was let through")
+	}
+	if !inSandbox("/work/a/../../work/b") {
+		t.Error("a path with .. dodged the sandbox roots")
+	}
+	t.Setenv("TMPDIR", root)
+	if !inSandbox(filepath.Join(root, "x")) {
+		t.Error("a TMPDIR that is a sandbox root exempted the whole root")
+	}
+}
+
 // A merge that changes the goals, the score or a setting, and a module
 // install, follow autonomy like any step: at 1 the person decides; above it a
 // warden does, its answer reaches the ask's handler as the person's would,
 // and the person is told after.
 func TestAutonomyDecidesProtectedChanges(t *testing.T) {
 	// The module's source is a temporary repository, wherever TMPDIR is.
-	defer func(r []string) { SandboxRoots = r }(SandboxRoots)
-	SandboxRoots = nil
+	defer func(r []string) { sandboxRoots = r }(sandboxRoots)
+	sandboxRoots = nil
 	src := t.TempDir()
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "v1"}, {"tag", "v1.0.0"}} {
 		if _, err := core.Git(src, args...); err != nil {
@@ -1208,5 +1274,42 @@ func TestLongAskFormsAPanel(t *testing.T) {
 	g.vote(req, "approve", "approve", "decline")
 	if got := g.settle(req.ID, "tribunal", "approved", "running"); got.State != "done" || !core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("the panel reached no verdict that ran: %+v", got)
+	}
+}
+
+// A warden parked on a usage limit, or queued for a slot, can't weigh, so its
+// time doesn't run out: the request waits for it rather than going to the
+// person unweighed. Once it can take turns, the clock runs again.
+func TestParkedWardenIsNotTimedOut(t *testing.T) {
+	defer func(d time.Duration) { WardenTimeout = d }(WardenTimeout)
+	for _, status := range []string{core.StatusParked, core.StatusQueued} {
+		g := newRig(t, 2)
+		req := g.request("install a tool", "x", "T2")
+		g.c.Runs.SetStatus(req.Warden, status, "every claude login is at its usage limit")
+		WardenTimeout = 0
+		g.m.Tick()
+		if got, _ := g.m.get(req.ID); got.State != "weighing" || got.Ask != "" {
+			t.Fatalf("a %s warden was timed out: %+v", status, got)
+		}
+		if w := g.run(req.Warden); w.Terminal() {
+			t.Fatalf("the %s warden was stopped", status)
+		}
+		g.c.Runs.SetStatus(req.Warden, core.StatusIdle, "")
+		g.m.Tick()
+		if got, _ := g.m.get(req.ID); got.State != "asked" {
+			t.Fatalf("a warden that can take turns, past its time, held after a %s spell: %+v", status, got)
+		}
+	}
+}
+
+func TestWardenClockStartsAtItsTurn(t *testing.T) {
+	now := time.Now()
+	req := Request{Updated: now.Add(-2 * WardenTimeout)}
+	w := core.Run{Status: core.StatusRunning, TurnStarted: now.Add(-WardenTimeout / 2)}
+	if wardenLate(req, w, true) {
+		t.Fatal("a warden whose first turn began after a long park was timed out from the request")
+	}
+	if !wardenLate(req, core.Run{Status: core.StatusRunning}, true) || !wardenLate(req, core.Run{}, false) {
+		t.Fatal("a warden past its time was not late")
 	}
 }
