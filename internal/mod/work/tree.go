@@ -28,6 +28,7 @@ var (
 	treeWidth = 2 // children per rollback: the sent-back worker and one branch
 	treeDepth = 3 // levels below the root that may branch again
 	treeLive  = 3 // open nodes one tree may hold at once
+	treeTotal = 6 // branches one tree may ever file, so flaky rollbacks of a sent-back root don't keep costing workers
 )
 
 // treeOf names t's tree: its root's task id.
@@ -63,16 +64,19 @@ func (m *Module) branchOut(t *Task, p core.Project, g core.GateResult, judged st
 	if !p.Self || t.Checkpoint != "" || t.Kind != "work" || g.Head == "" || !fallout(g.Reason) || t.Depth >= treeDepth || slices.Contains(t.Branched, g.Head) {
 		return
 	}
-	open := 0
+	open, filed := 0, 0
 	for _, o := range m.List(func(o Task) bool { return sameTree(*t, o) || o.ID == t.treeOf() }) {
 		if !o.Terminal() && o.Stage != StageMerged {
 			open++
+		}
+		if o.Tree != "" {
+			filed++
 		}
 	}
 	if t.Tree == "" {
 		open++ // t itself, not yet named a tree's root
 	}
-	n := min(treeWidth-1, treeLive-open)
+	n := min(treeWidth-1, treeLive-open, treeTotal-filed)
 	if n <= 0 {
 		return
 	}
@@ -110,8 +114,20 @@ func (m *Module) archived(t *Task) bool {
 		return false
 	}
 	why := fmt.Sprintf("%s task %s of its tree (%s) merged as the tree's best", treeArchived, won[0].ID, t.treeOf())
-	if t.Worker != "" {
-		m.C.Runs.Stop(t.Worker, why)
+	// The worker ends blocked, as the stop op ends a quiet one, never with
+	// Runs.Stop: a stopped run is the person's, and recheck couldn't bring
+	// the node back (docs/log.md, #846). A turn in flight ends first.
+	if w, ok := m.C.Runs.Get(t.Worker); ok && t.Worker != "" && !w.Terminal() {
+		switch w.Status {
+		case core.StatusRunning:
+			return false // archived at a step after its turn ends
+		case core.StatusQuiet:
+			if m.C.Runs.EndQuiet(w.ID, core.StoppedQuiet+"the tree search: "+why) != nil {
+				return false
+			}
+		default:
+			m.C.Runs.SetStatus(w.ID, core.StatusBlocked, why)
+		}
 	}
 	m.dropGate(t.ID)
 	t.Stage, t.Reason = StageStopped, why

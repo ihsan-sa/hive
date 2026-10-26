@@ -77,6 +77,14 @@ func TestTreeNoBranchWithoutFallout(t *testing.T) {
 	if n := len(branchesOf(m, task.ID)); n != 0 {
 		t.Fatalf("%d branches at the tree's depth, want none", n)
 	}
+	// Nor does a tree that has filed its total of branches.
+	task.Depth = 0
+	defer func(n int) { treeTotal = n }(treeTotal)
+	treeTotal = 0
+	m.branchOut(task, p, core.GateResult{Head: "abd", Reason: "fails its own vet or short tests: x"}, "")
+	if n := len(branchesOf(m, task.ID)); n != 0 {
+		t.Fatalf("%d branches past the tree's total, want none", n)
+	}
 }
 
 // Once a node of the tree merges, the other open nodes are archived at
@@ -93,8 +101,17 @@ func TestTreeArchivesTheRest(t *testing.T) {
 	if task.Stage != StageStopped || !strings.HasPrefix(task.Reason, treeArchived) || !strings.Contains(task.Reason, b.ID) {
 		t.Fatalf("stage %q, reason %q: want the root archived for its merged branch", task.Stage, task.Reason)
 	}
-	if r, ok := m.C.Runs.Get(task.Worker); ok && !r.Terminal() {
-		t.Fatalf("the archived node's worker %s is still %s", r.ID, r.Status)
+	if r, ok := m.C.Runs.Get(task.Worker); ok && (!r.Terminal() || r.Status == core.StatusStopped || r.StopAsked) {
+		t.Fatalf("the archived node's worker %s is %s (stop asked %v): want it ended blocked, not stopped as the person", r.ID, r.Status, r.StopAsked)
+	}
+	// Recheck brings an archived node back, out of its tree, so it isn't
+	// archived again at its next step.
+	if err := m.Recheck(task.ID, "", "lead"); err != nil {
+		t.Fatalf("recheck refused an archived node: %v", err)
+	}
+	*task, _ = m.Get(task.ID)
+	if m.archived(task) || task.Stage == StageStopped {
+		t.Fatalf("stage %q, reason %q: the rechecked node was archived again", task.Stage, task.Reason)
 	}
 	// A task in no tree is never archived.
 	lone := Task{ID: "lone", Kind: "work", Stage: StageWorking}

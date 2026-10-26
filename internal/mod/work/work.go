@@ -3578,6 +3578,9 @@ func (m *Module) Recheck(id, back, by string) error {
 	if t.ByPerson || m.workerStopped(t) {
 		return fmt.Errorf("task %s was stopped by the person (%s); only they can bring it back", id, t.Reason)
 	}
+	if strings.HasPrefix(t.Reason, treeArchived) {
+		t.Tree, t.Branched = "", nil // brought back on its own: its tree's best no longer archives it (tree.go)
+	}
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns = "", 0, 0, 0, 0, 0
 	m.goNow(&t)
 	m.CloseCantRunAsk(t.Project, "cant-run:"+t.ID, "the change is tested again, asked by "+by)
