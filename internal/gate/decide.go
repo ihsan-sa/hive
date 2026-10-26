@@ -152,6 +152,11 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 				// Naming each side's failing tests shows whether they are the
 				// same ones (a stale base or the environment) or new.
 				v.Unmeasured = append(v.Unmeasured, fmt.Sprintf("%s failed on both sides (0/%d, the control 0/%d)", p, c.n, k.n)+failing(c.failed, c.n, k.failed, k.n))
+			} else if cr != kr && c.pass > 0 && k.pass > 0 && math.Abs(cr-kr) <= 1/float64(min(c.n, k.n))+1e-9 {
+				// One run apart with the probe passing on both sides: a single
+				// flaky run decides nothing (2/3 against 3/3 is noise at n=3).
+				// Shown, not judged, like a tie failing different tests.
+				v.Differs = append(v.Differs, fmt.Sprintf("%s passes %d/%d, the control %d/%d, within one run's noise", p, c.pass, c.n, k.pass, k.n)+failing(c.failed, c.n, k.failed, k.n))
 			} else if cr < kr {
 				v.Regressions = append(v.Regressions, fmt.Sprintf("%s passes %d/%d, the control %d/%d", p, c.pass, c.n, k.pass, k.n)+failing(c.failed, c.n, k.failed, k.n))
 			} else if cr > kr {
