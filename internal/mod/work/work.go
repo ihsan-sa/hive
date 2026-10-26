@@ -74,6 +74,7 @@ type Task struct {
 	HeldBy    string     `json:"held_by,omitempty"`   // the run that holds it
 	Now       bool       `json:"now,omitempty"`       // the lead starts it first, past an overlap hold (queue now)
 	Recheck   bool       `json:"recheck,omitempty"`   // landed again on the same commit, so its test runs again
+	Retested  string     `json:"retested,omitempty"`  // the head whose red tests ran once more while main's passed
 	ByPerson  bool       `json:"by_person,omitempty"` // the person stopped it or left it open, so the lead can't bring it back
 	Issue     core.Issue `json:"issue"`
 	Worker    string     `json:"worker,omitempty"`
@@ -291,14 +292,21 @@ type Module struct {
 	// OnMerged is called after a task's merge is recorded (the improve module measures).
 	OnMerged func(t Task)
 
+	// Retest runs what failed in a red test check once more on its own and
+	// says whether it passed then: a flake, which main is filed to fix
+	// (the improve module). Unset, a red stands.
+	Retest func(p core.Project, sha, test string, c core.Check, main bool) bool
+
 	// Gate runs the recursive gate on a self project's head (selfgate.go);
 	// unset, such a change can't be judged and waits.
 	Gate func(ctx context.Context, j GateJob) core.GateResult
 
 	mu    sync.Mutex
 	tasks map[string]*Task
-	busy  map[string]bool
-	aims  map[string]aimAsk // aims asked while a step held the task, set as it ends
+	// retesting is held while main's red tests run once more (mainTests).
+	retesting sync.Mutex
+	busy      map[string]bool
+	aims      map[string]aimAsk // aims asked while a step held the task, set as it ends
 	// workers, checks and gates are the limits the pace sets (pace.go,
 	// selfgate.go).
 	workers, checks, gates pace
@@ -1644,6 +1652,17 @@ func (m *Module) test(t *Task, p core.Project) error {
 			if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
 				return err
 			}
+			if t.Retested != t.SHA {
+				// A slow, busy machine fails a test CI passes: the whole
+				// check runs once more before the red counts, so merging
+				// still rests on a green run of this exact commit.
+				t.Retested, t.Recheck = t.SHA, true
+				if strings.HasPrefix(t.Reason, "waiting on main") {
+					t.Reason = ""
+				}
+				m.save(t, "its tests failed on "+core.Short(t.SHA)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 300)+") while main's pass, so they run once more before it counts")
+				return nil
+			}
 			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
 		}
 	}
@@ -1799,14 +1818,32 @@ func (m *Module) ownDiff(p core.Project, main, sha string) string {
 
 // mainTests is main's own test result, measured once per main commit (the
 // baseline and the post-merge measurement usually already have it).
+//
+// A red main runs what failed once more (Retest) before it holds anything:
+// passing then, it was a flake of a slow or busy machine, filed to fix, and
+// main counts as green. The answer is the newest "retest" check on main.
 func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
-	if c, ok := m.C.Effects.GetCheck(p.Name, main, "test"); ok {
+	c, ok := m.C.Effects.GetCheck(p.Name, main, "test")
+	if !ok {
+		if _, err := m.C.Sandbox(); err != nil {
+			return core.Check{}, err
+		}
+		c = m.C.Effects.RunCheck(p, main, "test", command)
+	}
+	if c.OK || c.CantRun != "" || m.Retest == nil {
+		return c, nil
+	}
+	m.retesting.Lock() // one retest of main, however many changes ask
+	defer m.retesting.Unlock()
+	if rc, ok := m.C.Effects.GetCheck(p.Name, main, "retest"); ok && !rc.At.Before(c.At) && rc.CantRun == "" {
+		c.OK = rc.OK
 		return c, nil
 	}
 	if _, err := m.C.Sandbox(); err != nil {
 		return core.Check{}, err
 	}
-	return m.C.Effects.RunCheck(p, main, "test", command), nil
+	c.OK = m.Retest(p, main, command, c, true)
+	return c, nil
 }
 
 // noWorse says a red change fails only what main's red run fails too, each
