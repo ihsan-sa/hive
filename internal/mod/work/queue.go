@@ -190,7 +190,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
 			full = "waiting for a worker (at the pace)"
 		}
-		hold := machineHold(strained, loaded, elsewhere)
+		hold := machineHold(strained, loaded, cmp.Or(cfg.MaxWorkers, defaultWorkers), elsewhere)
 		for _, t := range line {
 			quick := m.quick(t)
 			held := "" // asked only of a task nothing else holds back
@@ -207,7 +207,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				continue // one that waits on another holds no one back, so waits never chain
 			case working >= limit && (!quick || quickWorking > 0 || !plan()):
 				wait[t.ID], capped = full, true
-			case func() bool { held = hold(); return held != "" }():
+			case func() bool { held = hold(working); return held != "" }():
 				wait[t.ID] = "waiting: " + steady(held)
 			default:
 				start[t.ID] = true
@@ -232,15 +232,20 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	return start, wait
 }
 
-// machineHold says, for each task in line in turn, why the machine holds it
-// back, or "". A machine over load_max alone (loaded) holds every one, since
-// launch would run it here; one task a pass goes past a strained machine
-// while an executor module has room, since launch hands a strained turn to it.
-func machineHold(strained, loaded string, elsewhere func() bool) func() string {
+// machineHold says, for each task in line in turn with working workers at
+// work, why the machine holds it back, or "". A machine over load_max alone
+// (loaded) holds a new worker only from start on, as the few workers there
+// aren't what loads it, and never sends one elsewhere, since launch would
+// run it here; one task a pass goes past a strained machine while an
+// executor module has room, since launch hands a strained turn to it.
+func machineHold(strained, loaded string, start int, elsewhere func() bool) func(working int) string {
 	asked := false
-	return func() string {
+	return func(working int) string {
 		if strained == "" {
-			return loaded
+			if loaded != "" && working >= start {
+				return loaded
+			}
+			return ""
 		}
 		if !asked {
 			asked = true
@@ -804,7 +809,9 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 	}
 	var notes []string
 	if len(a.Order) > 0 { // a new order replaces the old one: the rest go after, as filed
-		for _, t := range m.List(func(t Task) bool { return t.Queued() && t.Order > 0 }) {
+		// Only in the caller's reach: another project's order is kept, and
+		// not one note each for the briefs it never named.
+		for _, t := range m.List(func(t Task) bool { return t.Queued() && t.Order > 0 && m.reach(r, t.Project) == nil }) {
 			if changes[t.ID] == nil {
 				at(t.ID).order = 0
 			}
