@@ -86,3 +86,41 @@ func TestAnswerAsEndTurnRecordsWakesIt(t *testing.T) {
 		t.Fatalf("ended %v; the run is %q (%q) with %d pending", ended, r.Status, r.Reason, len(r.Pending))
 	}
 }
+
+// A run reopened while its turn runs stays running (issue #1022); if it
+// then finishes on what it was told before, its turn ends idle and the next
+// turn hands it the message, its earlier finish cleared. That holds for a
+// blocked finish too: the message may be what unblocks it, and it hasn't
+// read it yet.
+func TestAFinishAfterAMidTurnReopenTakesAnotherTurn(t *testing.T) {
+	for _, tc := range []struct {
+		mid    bool
+		status string
+	}{{true, "done"}, {false, "done"}, {true, "blocked"}} {
+		mid := tc.mid
+		c, _ := testHive(t)
+		c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker"})
+		c.J.MustAppend("run.turn_started", turnStarted{ID: "w1", Turn: 1})
+		if mid {
+			if err := c.Runs.Reopen("w1", "fix round"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c.J.MustAppend("run.finish", map[string]any{"id": "w1", "finish": Finish{Status: tc.status, Account: "fixed"}})
+		r, _ := c.Runs.Get("w1")
+		out := c.WS.TurnOut("w1", 1)
+		os.MkdirAll(filepath.Dir(out), 0o755)
+		os.WriteFile(out, []byte(`{"type":"result","subtype":"success","result":"done","session_id":"s1"}`+"\n"), 0o600)
+		c.Runs.endTurn(r)
+		got, _ := c.Runs.Get("w1")
+		if !mid {
+			if got.Status != StatusDone {
+				t.Errorf("no reopen: the run is %q, want done", got.Status)
+			}
+			continue
+		}
+		if got.Status != StatusIdle || got.Finish != nil || got.Reopened || len(got.Pending) != 1 {
+			t.Fatalf("finished %s: the run is %q (%q), finish %v, reopened %v, %d pending; want idle, no finish, the message waiting", tc.status, got.Status, got.Reason, got.Finish, got.Reopened, len(got.Pending))
+		}
+	}
+}

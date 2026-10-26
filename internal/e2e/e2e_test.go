@@ -1846,7 +1846,7 @@ func TestStepBack(t *testing.T) {
 		t.Fatalf("the plateau didn't start it: %q", win.Why)
 	}
 	if win.Status != "won" || *win.Score != 9 || win.Best != 5 || win.Fault == "" || win.Budget <= 0 {
-		t.Fatalf("a winning setup must file a fault: %+v", win)
+		t.Fatalf("a winning setup must file a fault: %+v\n%s", win, onProject(st, "win"))
 	}
 	var fault core.Ask
 	for _, a := range st.Asks {
@@ -1870,7 +1870,7 @@ func TestStepBack(t *testing.T) {
 		t.Fatalf("a setup that spends its budget must stop there: %+v %+v", s, r)
 	}
 	if s := sb["rig"]; s.Status != "failed" || !strings.Contains(s.Note, "score.txt") {
-		t.Fatalf("a setup that changes what scores it must not count: %+v", s)
+		t.Fatalf("a setup that changes what scores it must not count: %+v\n%s", s, onProject(st, "rig"))
 	}
 	if s := sb["none"]; s.Status != "none" || s.Exp != "" || !strings.Contains(s.Note, "designed no experiment") {
 		t.Fatalf("a step-back that designs nothing runs nothing: %+v", s)
@@ -1895,6 +1895,29 @@ func TestStepBack(t *testing.T) {
 	if score, _ := core.Git(h.ws.Project("win"), "show", "origin/main:score.txt"); strings.TrimSpace(score) != "5" {
 		t.Fatalf("the experiment reached the project's own tree: score.txt on main is %q", score)
 	}
+}
+
+// onProject is what the Hive did on project, for a failure to show: its
+// runs with their cost, its tasks and its measured merges.
+func onProject(st api.State, project string) string {
+	var b strings.Builder
+	for _, r := range st.Runs {
+		if r.Project == project {
+			fmt.Fprintf(&b, "run %s %s created %s status %s cost %g\n", r.ID, r.Role, r.Created.Format(time.RFC3339Nano), r.Status, r.Cost)
+		}
+	}
+	for _, p := range st.Projects {
+		if p.Name != project {
+			continue
+		}
+		for _, t := range p.Tasks {
+			fmt.Fprintf(&b, "task %s %q from %s created %s stage %s worker %s\n", t.ID, t.Title, t.From, t.Created.Format(time.RFC3339Nano), t.Stage, t.Worker)
+		}
+		for _, x := range p.Scores {
+			fmt.Fprintf(&b, "score %s task %s kept %v at %s: %s\n", core.Short(x.SHA), x.Task, x.Kept, x.At.Format(time.RFC3339Nano), x.Note)
+		}
+	}
+	return b.String()
 }
 
 // TestSettleRemovesReadOnlyFolders: a Hive whose checks filled Go's module

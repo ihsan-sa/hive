@@ -30,3 +30,28 @@ func TestLimitResets(t *testing.T) {
 		}
 	}
 }
+
+// On the renewal path a false match hides a failure from the person, so only
+// a named limit, or a limit with its reset time, counts.
+func TestSaysLimited(t *testing.T) {
+	for _, s := range []string{
+		"You've hit your weekly limit · resets Oct 28, 12am (America/New_York)",
+		"5-hour limit reached ∙ resets 3:30pm",
+		"Claude AI usage limit reached",
+		"You've hit your limit · resets 1pm",
+		"limit reached, resets 2am (America/New_York)",
+	} {
+		if !SaysLimited(s) {
+			t.Errorf("%q is a limit", s)
+		}
+	}
+	for _, s := range []string{
+		"OAuth error: refresh token reset; retry limit exceeded",
+		"rate limit on the token endpoint; connection reset by peer",
+		"refresh token revoked",
+	} {
+		if SaysLimited(s) {
+			t.Errorf("%q isn't a usage limit", s)
+		}
+	}
+}

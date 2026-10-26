@@ -962,8 +962,9 @@ func (m *Module) ciState(project string) (last ciWait) {
 }
 
 // retryWaiting tries again the newest kept merge of each self project whose
-// release waits on main's checks or found them failed (a re-run may pass);
-// one still waiting after lateAfter is raised once.
+// release waits on main's checks or found them failed (a re-run may pass),
+// or the newest merge after it whose checks passed (greenAfter); one still
+// waiting after lateAfter is raised once.
 func (m *Module) retryWaiting() {
 	if m.said == nil {
 		m.said = map[string]bool{}
@@ -978,7 +979,11 @@ func (m *Module) retryWaiting() {
 		}
 		func() {
 			defer m.lock(p.Name)()
-			m.afterKept(p.Name, w.SHA)
+			sha := w.SHA
+			if next := m.greenAfter(p, w.SHA); next != "" {
+				sha = next
+			}
+			m.afterKept(p.Name, sha)
 		}()
 		key := p.Name + "@ci:" + w.SHA
 		if now := m.ciState(p.Name); now.Kind == "release.ci_waiting" && now.SHA == w.SHA && time.Since(w.At) > lateAfter && !m.said[key] {
@@ -987,6 +992,45 @@ func (m *Module) retryWaiting() {
 				"text": "no release at " + core.Short(w.SHA) + " yet: main's checks there haven't passed after " + lateAfter.String()})
 		}
 	}
+}
+
+// greenAfterN is how many of the newest merges after a waiting one
+// greenAfter reads the checks of.
+const greenAfterN = 10
+
+// greenAfter is the newest of the project's merges after sha whose checks
+// passed on main, or "" when none did. A commit whose ci run GitHub cancelled
+// (one queued run replaces another) has no checks and would wait forever, and
+// one that failed may be fixed after it: a green descendant carries it into a
+// release. It only reads the checks, journaling nothing; afterKept does.
+func (m *Module) greenAfter(p core.Project, sha string) string {
+	var later []string
+	m.C.J.Replay(func(e core.Event) {
+		var x struct {
+			Project  string
+			MergeSHA string `json:"merge_sha"`
+		}
+		if e.Kind != "effect.merged" || e.Decode(&x) != nil || x.Project != p.Name || x.MergeSHA == "" {
+			return
+		}
+		if x.MergeSHA == sha {
+			later = []string{} // only the merges after the newest sighting count
+			return
+		}
+		if later != nil {
+			later = append(later, x.MergeSHA)
+		}
+	})
+	for i, n := len(later)-1, 0; i >= 0 && n < greenAfterN; i, n = i-1, n+1 {
+		runs, err := m.C.Effects.Forge.Checks(p.Repo, later[i])
+		if err != nil {
+			continue
+		}
+		if state, _ := core.ChecksState(runs, m.C.Effects.RequiredChecks(p, later[i])); state == core.CheckPass {
+			return later[i]
+		}
+	}
+	return ""
 }
 
 // rootRead says who passed a merge's root paths, as Effects.SecurityOK reads
