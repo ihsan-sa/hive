@@ -468,10 +468,12 @@ func TestStoppedOnDraftResumes(t *testing.T) {
 	if o, _ := m.Get("t2"); o.Stage != StageStopped {
 		t.Fatalf("a task stopped on another error came back: %q", o.Stage)
 	}
-	for i := 0; i < 10 && got.Stage != StageMerged; i++ {
+	// A tick steps it on through the stages that go by themselves, so it
+	// may be merged and done by now.
+	for i := 0; i < 10 && got.Stage != StageMerged && got.Stage != StageDone; i++ {
 		m.settle(&got, m.step(&got))
 	}
-	if got.Stage != StageMerged || readied(m) != 1 {
+	if (got.Stage != StageMerged && got.Stage != StageDone) || !strings.Contains(fmt.Sprint(got.Log), "merged as") || readied(m) != 1 {
 		t.Fatalf("stage %q, readied %d, log %v", got.Stage, readied(m), got.Log)
 	}
 	// Once a run: stopped on the draft again, it stays for the lead's recheck.

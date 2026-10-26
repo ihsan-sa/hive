@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
 // An experiment run may only report on its own copy: it can't spawn helpers,
@@ -133,7 +135,7 @@ func TestANewRequestWakesTheLoopOnce(t *testing.T) {
 	}
 	defer j.Close()
 	rs := NewRuns(ws, j, nil, NewTokens(ws), func() []string { return nil })
-	rs.runs["w1"] = &Run{RunSpec: RunSpec{ID: "w1"}, Status: StatusRunning}
+	rs.runs["w1"] = &Run{RunSpec: RunSpec{ID: "w1"}, Status: StatusRunning, Proc: proc.Handle{PID: os.Getpid()}}
 	outbox := filepath.Join(ws.RunBox("w1"), "outbox")
 	os.MkdirAll(outbox, 0o755)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -148,6 +150,39 @@ func TestANewRequestWakesTheLoopOnce(t *testing.T) {
 	time.Sleep(60 * time.Millisecond)
 	if n := woken.Load(); n != 1 {
 		t.Fatalf("one request woke the loop %d times; want once", n)
+	}
+}
+
+// A running turn whose process has gone wakes the loop once, so its end
+// doesn't wait for the second's tick, and not again on every look.
+func TestAGoneTurnWakesTheLoopOnce(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, NewTokens(ws), func() []string { return nil })
+	rs.mu.Lock()
+	rs.runs["w1"] = &Run{RunSpec: RunSpec{ID: "w1"}, Status: StatusRunning, Turn: 1, Proc: proc.Handle{PID: os.Getpid()}}
+	rs.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var woken atomic.Int32
+	go rs.WatchRequests(ctx, 5*time.Millisecond, func() { woken.Add(1) })
+	time.Sleep(30 * time.Millisecond)
+	if n := woken.Load(); n != 0 {
+		t.Fatalf("a live turn woke the loop %d times", n)
+	}
+	rs.mu.Lock()
+	rs.runs["w1"].Proc = proc.Handle{}
+	rs.mu.Unlock()
+	time.Sleep(60 * time.Millisecond)
+	if n := woken.Load(); n != 1 {
+		t.Fatalf("a gone turn woke the loop %d times; want once", n)
 	}
 }
 

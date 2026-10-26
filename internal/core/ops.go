@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
 // Request is what an agent writes into its outbox. The caller's identity is
@@ -144,9 +146,10 @@ func (o *Ops) Drain(r Run) {
 }
 
 // WatchRequests looks in the outboxes of the runs a tick drains every poll
-// until ctx ends, and calls wake once for each request it hasn't seen, so a
-// finish or a message is handled at once instead of on the second's tick.
-// It only reads names: each run still drains its own outbox on its step.
+// until ctx ends, and calls wake once for each request it hasn't seen and for
+// each running turn whose process has gone, so a finish, a message or a
+// turn's end is handled at once instead of on the second's tick. It only
+// looks: each run still drains its outbox and ends its turn on its step.
 func (rs *Runs) WatchRequests(ctx context.Context, poll time.Duration, wake func()) {
 	seen := map[string]bool{}
 	for {
@@ -155,6 +158,13 @@ func (rs *Runs) WatchRequests(ctx context.Context, poll time.Duration, wake func
 		for _, r := range rs.List(func(r *Run) bool {
 			return r.Status == StatusRunning || r.Status == StatusIdle || r.Status == StatusQuiet
 		}) {
+			if r.Status == StatusRunning && !proc.Alive(r.Proc) {
+				k := fmt.Sprintf("%s/ended/%d", r.ID, r.Turn)
+				now[k] = true
+				if !seen[k] {
+					fresh = true
+				}
+			}
 			dir := filepath.Join(rs.ws.RunBox(r.ID), "outbox")
 			if !isRealDir(dir) {
 				continue

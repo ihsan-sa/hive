@@ -184,8 +184,8 @@ func (a *App) Tick() {
 }
 
 // wakeGap, wakeBurst and wakeMost bound the ticks a journal event brings
-// forward: one comes wakeGap after the event, so a burst of events is one
-// tick. After a tick that itself journaled, at most wakeBurst come between two
+// forward: at most one comes in each wakeGap, so a burst of events is one or
+// two ticks. After a tick that itself journaled, at most wakeBurst come between two
 // of the second's ticks, so a step that journals on every tick can't spin the
 // loop; events from elsewhere (a verdict, a request, a turn that ended) wake
 // it up to wakeMost times, so the next step doesn't wait out the second.
@@ -214,8 +214,8 @@ func nudge(wake chan struct{}) {
 	}
 }
 
-// loop calls tick every second until ctx ends, and wakeGap after an event
-// lands in j or something sends on wake: at most wakeBurst times between two of the second's ticks when
+// loop calls tick every second until ctx ends, and as soon after an event
+// lands in j or something sends on wake as wakeGap since the last tick allows: at most wakeBurst times between two of the second's ticks when
 // the tick before journaled while it ran, and at most wakeMost otherwise.
 func loop(ctx context.Context, j *core.Journal, wake chan struct{}, tick func()) {
 	var events atomic.Int64
@@ -227,7 +227,7 @@ func loop(ctx context.Context, j *core.Journal, wake chan struct{}, tick func())
 	defer t.Stop()
 	woken, spun := 0, 0
 	for {
-		before := events.Load()
+		last, before := time.Now(), events.Load()
 		tick()
 		journaled := events.Load() != before
 		early := wake
@@ -244,10 +244,12 @@ func loop(ctx context.Context, j *core.Journal, wake chan struct{}, tick func())
 			if journaled {
 				spun++
 			}
+			// An event that lands wakeGap or more after the last tick began
+			// ticks at once; one sooner waits out the rest of the gap.
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(wakeGap):
+			case <-time.After(time.Until(last.Add(wakeGap))):
 			}
 		}
 	}

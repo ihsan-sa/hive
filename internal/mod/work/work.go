@@ -764,9 +764,41 @@ func (m *Module) Tick() {
 		go func(t Task) {
 			defer m.steps.Done()
 			defer m.release(t.ID)
-			m.settle(&t, m.step(&t))
+			m.chain(t)
 		}(t)
 	}
+}
+
+// chain steps t, and steps it again at once while each step moves it on to
+// a stage that goes on by itself (a pushed task's test, read and merge), so a
+// task doesn't wait for the next tick between stages. A queued task waits
+// for the queue, and one that didn't move waits for its worker or reviewer.
+func (m *Module) chain(t Task) {
+	for range 10 {
+		was := t.Stage
+		err := m.step(&t)
+		m.settle(&t, err)
+		if err != nil || t.Stage == was || !chains(t.Stage) {
+			return
+		}
+		cur, ok := m.Get(t.ID)
+		m.mu.Lock()
+		due := ok && m.due(cur)
+		m.mu.Unlock()
+		if !due || cur.Stage != t.Stage {
+			return
+		}
+		t = cur
+	}
+}
+
+// chains says a task in stage goes on without waiting for anyone.
+func chains(stage string) bool {
+	switch stage {
+	case StageWorking, StageLanding, StageTesting, StageReviewing, StageMerging, StageMerged:
+		return true
+	}
+	return false
 }
 
 // waits records why a queued task waits, when that is new. A machine hold's
