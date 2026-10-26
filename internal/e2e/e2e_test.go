@@ -20,6 +20,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,6 +93,7 @@ type hive struct {
 	env   []string      // added to the daemon's environment
 	exe   string        // the binary the daemon runs, when not bin
 	cpus  int           // the daemon, and all it starts, run on this many CPUs (Linux; 0 is all)
+	slot  int           // which group of cpus CPUs (pickCPUs)
 	jobs  []func()      // end what each daemon left running (Windows)
 	ended chan struct{} // closed once the daemon process last launched has exited
 }
@@ -102,15 +104,15 @@ func start(t *testing.T, env ...string) *hive { return startWith(t, bin, nil, en
 // test's settings.
 func startWith(t *testing.T, exe string, prep func(*core.Config), env ...string) *hive {
 	t.Helper()
-	return startOn(t, 0, exe, prep, env...)
+	return startOn(t, 0, 0, exe, prep, env...)
 }
 
 // startOn is startWith with the daemon and everything it starts pinned to
-// cpus CPUs (0 is all of them), where pin can.
-func startOn(t *testing.T, cpus int, exe string, prep func(*core.Config), env ...string) *hive {
+// cpus CPUs (0 is all of them), the slot-th group of them, where pin can.
+func startOn(t *testing.T, cpus, slot int, exe string, prep func(*core.Config), env ...string) *hive {
 	t.Helper()
 	dir := t.TempDir()
-	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env, exe: exe, cpus: cpus}
+	h := &hive{t: t, ws: core.Workspace{Root: filepath.Join(dir, "hive")}, forge: &core.Local{Dir: filepath.Join(dir, "forge")}, env: env, exe: exe, cpus: cpus, slot: slot}
 	if err := h.ws.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +243,7 @@ func (h *hive) launch() {
 	if group != nil {
 		endGroup = group(cmd)
 	}
-	if err := pinned(h.cpus, cmd.Start); err != nil {
+	if err := pinned(h.cpus, h.slot, cmd.Start); err != nil {
 		h.t.Fatal(err)
 	}
 	log.Close() // the daemon has its own handle
@@ -1583,20 +1585,48 @@ func settle(dir, path string) error {
 		if err = os.RemoveAll(path); err == nil {
 			return nil
 		}
+		writable(path)
 	}
 	return err
 }
 
+// writable gives back write permission on every folder under path that lacks
+// it: Go's module cache (a real check's .hive/cache/gomod) is read-only, and
+// removing it otherwise fails the test that made it (the soft layer's real
+// run, 2026-10-25).
+func writable(path string) {
+	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			if info, err := d.Info(); err == nil && info.Mode().Perm()&0o200 == 0 {
+				os.Chmod(p, info.Mode().Perm()|0o700)
+			}
+		}
+		return nil
+	})
+}
+
 // pin runs start, which starts a process, so that the process and all it
-// starts run on cpus CPUs (Linux only).
-var pin func(cpus int, start func() error) error
+// starts run on cpus CPUs, the slot-th such group of this process's own
+// (Linux only).
+var pin func(cpus, slot int, start func() error) error
 
 // pinned runs start through pin when there is a cap and a pin.
-func pinned(cpus int, start func() error) error {
+func pinned(cpus, slot int, start func() error) error {
 	if cpus <= 0 || pin == nil {
 		return start()
 	}
-	return pin(cpus, start)
+	return pin(cpus, slot, start)
+}
+
+// pickCPUs is the slot-th group of cpus CPUs in allowed (this process's own,
+// in order), so two pinned daemons don't share theirs; with too few CPUs for
+// that slot it wraps around to the first groups.
+func pickCPUs(allowed []int, cpus, slot int) []int {
+	if len(allowed) <= cpus {
+		return allowed
+	}
+	from := slot % (len(allowed) / cpus) * cpus
+	return allowed[from : from+cpus]
 }
 
 // group makes cmd, before it starts, lead a process group of its own, and
@@ -1775,11 +1805,16 @@ func TestStepBack(t *testing.T) {
 		if name == "zero" {
 			paid = ""
 		}
+		// With its goals already in the repo, no unpaid "Set up the Hive
+		// files" task is filed, whose merge could plateau the score before
+		// the paid one spends anything.
+		goals := "Make the score high. FAKE:stepback" + name
 		h.seed("me/"+name, map[string]string{
 			".hive/project.json": `{"test": "true", "score": {"command": "cat score.txt", "direction": "higher", "tolerance": 0}` + protected + `}`,
+			".hive/goals.md":     "# Goals\n\n" + goals + "\n",
 			"score.txt":          "5\n",
 		})
-		h.post("/api/project", map[string]any{"name": name, "repo": "me/" + name, "isolated": name == "lose", "goals": "Make the score high. FAKE:stepback" + name}, nil)
+		h.post("/api/project", map[string]any{"name": name, "repo": "me/" + name, "isolated": name == "lose", "goals": goals}, nil)
 		h.post("/api/ask", map[string]string{"project": name, "title": "tidy " + name, "known": "a change that leaves the score alone" + paid}, nil)
 	}
 	stepback := func(st api.State, project string) (improve.StepBack, bool) {
@@ -1859,5 +1894,22 @@ func TestStepBack(t *testing.T) {
 	}
 	if score, _ := core.Git(h.ws.Project("win"), "show", "origin/main:score.txt"); strings.TrimSpace(score) != "5" {
 		t.Fatalf("the experiment reached the project's own tree: score.txt on main is %q", score)
+	}
+}
+
+// TestSettleRemovesReadOnlyFolders: a Hive whose checks filled Go's module
+// cache (read-only folders) is still removed after its test.
+func TestSettleRemovesReadOnlyFolders(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hive")
+	ro := filepath.Join(path, ".hive", "cache", "gomod", "golang.org", "x", "text@v0.3.8")
+	if err := os.MkdirAll(ro, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(ro, "width.go"), []byte("package width\n"), 0o444)
+	os.Chmod(ro, 0o555)
+	settle(dir, path)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("still there after settle: %v", err)
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 )
 
 // builtins are the harnesses compiled in, in the order a person sees them.
@@ -46,16 +45,17 @@ func builtinNames() []string {
 
 // Registry is the harnesses one workspace can run: the built-in ones and
 // those its installed modules declare. It reads the modules again only when
-// a module's files change, so a module installed or updated while the daemon
-// runs is found without a restart, and a picker that asks on every frame
-// costs a few stats.
+// the folder, a module's folder, its module.json or a spec has changed
+// (stamp), so a module installed while the daemon runs is found without a
+// restart, and the control center redrawing its settings costs a few stats
+// rather than reading every module.
 type Registry struct {
-	dir      string
-	mu       sync.Mutex
-	stamp    string
-	files    []string // the spec files the last read loaded, whose changes it watches
-	declared map[string]*Spec
-	loadErrs []string
+	dir       string
+	mu        sync.Mutex
+	declared  map[string]*Spec
+	loadErrs  []string
+	read      []string // the paths the last reload read, stamped
+	readStamp string
 }
 
 var (
@@ -101,74 +101,53 @@ func Names() []string                  { return Default().Names() }
 func Declared() ([]*Spec, []string)    { return Default().Declared() }
 func Models(harness string) []string   { return Default().Models(harness) }
 
-// fingerprint is what the modules folder holds that a read depends on: each
-// module's module.json and the spec files the last read loaded.
-func (r *Registry) fingerprint() string {
+// stamp is the size and modification time of each path, so a change to any
+// of them (a module added or removed changes the folder's own) reads again.
+func stamp(paths []string) string {
 	var b strings.Builder
-	ents, _ := os.ReadDir(r.dir)
-	for _, e := range ents {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-			continue
+	for _, p := range paths {
+		if fi, err := os.Stat(p); err == nil {
+			fmt.Fprintf(&b, "%d.%d;", fi.ModTime().UnixNano(), fi.Size())
+		} else {
+			b.WriteString("-;")
 		}
-		b.WriteString(e.Name())
-		stamp(&b, filepath.Join(r.dir, e.Name(), "module.json"))
-	}
-	for _, f := range r.files {
-		stamp(&b, f)
 	}
 	return b.String()
 }
 
-func stamp(b *strings.Builder, p string) {
-	if fi, err := os.Stat(p); err == nil {
-		fmt.Fprintf(b, "|%d.%d", fi.ModTime().UnixNano(), fi.Size())
-	} else {
-		b.WriteString("|-")
+// builtinModule says the Hive itself installed the module in dir (a default
+// one), from its .hive-source.json.
+func builtinModule(dir string) bool {
+	raw, err := os.ReadFile(filepath.Join(dir, ".hive-source.json"))
+	var src struct {
+		Source string `json:"source"`
 	}
-	b.WriteByte('\n')
+	return err == nil && json.Unmarshal(raw, &src) == nil && src.Source == "builtin"
 }
 
-// fresh reads the modules again if their files changed since the last read.
-// The caller holds r.mu.
-func (r *Registry) fresh() {
+// reload reads every installed module's harness specs. When two modules
+// declare one name, a default module's wins, then the first by folder name,
+// so a module installed later can't take over a name (and the key stored for
+// it) that a default one ships; a spec that doesn't parse is skipped and kept
+// in loadErrs for `hive harness`.
+func (r *Registry) reload() {
+	r.declared, r.loadErrs, r.read = map[string]*Spec{}, nil, nil
 	if r.dir == "" {
-		r.declared = map[string]*Spec{}
 		return
 	}
-	if fp := r.fingerprint(); r.declared == nil || fp != r.stamp {
-		r.reload()
-		// A file written within the clock's tick of this read may change
-		// again with the same stamp; leave the stamp empty so the next ask
-		// reads again.
-		if r.stamp = r.fingerprint(); time.Since(r.newest()) < time.Second {
-			r.stamp = ""
-		}
-	}
-}
-
-// newest is the latest change among the files the last read loaded.
-func (r *Registry) newest() time.Time {
-	var t time.Time
-	for _, f := range r.files {
-		if fi, err := os.Stat(f); err == nil && fi.ModTime().After(t) {
-			t = fi.ModTime()
-		}
-	}
-	return t
-}
-
-// reload reads every installed module's harness specs. Two modules declaring
-// one name keep the first by folder name; a spec that doesn't parse is
-// skipped and kept in loadErrs for `hive harness`.
-func (r *Registry) reload() {
-	r.declared, r.loadErrs, r.files = map[string]*Spec{}, nil, nil
+	r.read = append(r.read, r.dir)
+	defer func() { r.readStamp = stamp(r.read) }()
 	ents, _ := os.ReadDir(r.dir)
+	var dirs []string
 	for _, e := range ents {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-			continue
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			dirs = append(dirs, filepath.Join(r.dir, e.Name()))
 		}
-		dir := filepath.Join(r.dir, e.Name())
-		r.files = append(r.files, filepath.Join(dir, "module.json"))
+	}
+	sort.SliceStable(dirs, func(i, j int) bool { return builtinModule(dirs[i]) && !builtinModule(dirs[j]) })
+	for _, dir := range dirs {
+		name := filepath.Base(dir)
+		r.read = append(r.read, dir, filepath.Join(dir, "module.json"))
 		raw, err := os.ReadFile(filepath.Join(dir, "module.json"))
 		if err != nil {
 			continue
@@ -181,17 +160,17 @@ func (r *Registry) reload() {
 		}
 		for _, f := range m.Provides["harnesses"] {
 			if !filepath.IsLocal(f) {
-				r.loadErrs = append(r.loadErrs, fmt.Sprintf("%s: %s is outside the module", e.Name(), f))
+				r.loadErrs = append(r.loadErrs, fmt.Sprintf("%s: %s is outside the module", name, f))
 				continue
 			}
-			r.files = append(r.files, filepath.Join(dir, f))
+			r.read = append(r.read, filepath.Join(dir, f))
 			s, err := LoadSpec(filepath.Join(dir, f))
 			if err != nil {
-				r.loadErrs = append(r.loadErrs, e.Name()+": "+err.Error())
+				r.loadErrs = append(r.loadErrs, name+": "+err.Error())
 				continue
 			}
 			if _, dup := r.declared[s.ID]; dup {
-				r.loadErrs = append(r.loadErrs, fmt.Sprintf("%s: harness %s is already declared by another module", e.Name(), s.ID))
+				r.loadErrs = append(r.loadErrs, fmt.Sprintf("%s: harness %s is already declared by another module", name, s.ID))
 				continue
 			}
 			r.declared[s.ID] = s
@@ -199,10 +178,18 @@ func (r *Registry) reload() {
 	}
 }
 
+// load reads the specs again when what was read has changed. The caller
+// holds r.mu.
+func (r *Registry) load() {
+	if r.declared == nil || stamp(r.read) != r.readStamp {
+		r.reload()
+	}
+}
+
 func (r *Registry) lookup(name string) (*Spec, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.fresh()
+	r.load()
 	s, ok := r.declared[name]
 	return s, ok
 }
@@ -224,7 +211,7 @@ func (r *Registry) Get(name string) (Harness, error) {
 func (r *Registry) Names() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.fresh()
+	r.load()
 	mods := make([]string, 0, len(r.declared))
 	for n := range r.declared {
 		mods = append(mods, n)
@@ -238,7 +225,7 @@ func (r *Registry) Names() []string {
 func (r *Registry) Declared() ([]*Spec, []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.fresh()
+	r.load()
 	var out []*Spec
 	for _, s := range r.declared {
 		out = append(out, s)

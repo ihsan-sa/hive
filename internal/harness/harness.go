@@ -6,7 +6,9 @@ package harness
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -317,6 +319,53 @@ func LooksLimited(s string) bool {
 	s = strings.ToLower(s)
 	return strings.Contains(s, "usage limit") || strings.Contains(s, "hit your limit") ||
 		(strings.Contains(s, "limit") && strings.Contains(s, "reset"))
+}
+
+// limitReset finds when a usage-limit message says the limit resets:
+// "resets Oct 26, 1pm (America/New_York)", "resets 3:30pm", "resets Oct 28, 12am".
+var limitReset = regexp.MustCompile(`(?i)resets\s+(?:at\s+)?(?:([a-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s*\(([^)\s]+)\))?`)
+
+// LimitResets is when the usage limit message s says it resets, the first
+// such time after now; zero when s doesn't say. A time with no day is the
+// next one; a date with no year is the nearest one not long past.
+func LimitResets(s string, now time.Time) time.Time {
+	m := limitReset.FindStringSubmatch(s)
+	if m == nil {
+		return time.Time{}
+	}
+	loc := time.Local
+	if m[6] != "" {
+		if l, err := time.LoadLocation(m[6]); err == nil {
+			loc = l
+		}
+	}
+	hour, _ := strconv.Atoi(m[3])
+	minute, _ := strconv.Atoi(m[4])
+	if hour < 1 || hour > 12 || minute > 59 {
+		return time.Time{}
+	}
+	hour %= 12
+	if strings.EqualFold(m[5], "pm") {
+		hour += 12
+	}
+	n := now.In(loc)
+	if m[1] == "" {
+		t := time.Date(n.Year(), n.Month(), n.Day(), hour, minute, 0, 0, loc)
+		if !t.After(now) {
+			t = t.AddDate(0, 0, 1)
+		}
+		return t
+	}
+	mon, err := time.Parse("Jan", strings.ToUpper(m[1][:1])+strings.ToLower(m[1][1:]))
+	day, _ := strconv.Atoi(m[2])
+	if err != nil || day < 1 || day > 31 {
+		return time.Time{}
+	}
+	t := time.Date(n.Year(), mon.Month(), day, hour, minute, 0, 0, loc)
+	if now.Sub(t) > 180*24*time.Hour {
+		t = t.AddDate(1, 0, 0)
+	}
+	return t
 }
 
 func summarizeInput(raw json.RawMessage) string {

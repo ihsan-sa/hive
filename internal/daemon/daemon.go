@@ -29,6 +29,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -74,7 +75,7 @@ func StartAfter(ws core.Workspace, waitFor int) (*api.Client, error) {
 			return c, nil
 		}
 	}
-	if err := checkHarness(ws.LoadConfig()); err != nil {
+	if err := checkStartHarness(ws); err != nil {
 		return nil, err
 	}
 	exe, err := executable()
@@ -165,6 +166,21 @@ func checkHarness(c core.Config) error {
 		}
 	}
 	return nil
+}
+
+// checkStartHarness is checkHarness as the Hive starts. A harness a default
+// module declares (opencode, cursor) is found on a fresh workspace too: the
+// default modules are written first when the check would fail without them,
+// as the daemon would write them anyway once it opens the workspace.
+func checkStartHarness(ws core.Workspace) error {
+	c := ws.LoadConfig()
+	if checkHarness(c) == nil {
+		return nil
+	}
+	if err := modules.New(ws, nil).InstallDefaults(); err != nil {
+		return err
+	}
+	return checkHarness(c)
 }
 
 // sandboxChanged: a saved setting picks the sandbox again only when it names
@@ -259,7 +275,7 @@ func Run(ws core.Workspace, waitFor int) error {
 		return rolledBack(ws, back)
 	}
 	// After the update hand-off: a renamed binary runs this check in its own daemon.
-	if err := checkHarness(ws.LoadConfig()); err != nil {
+	if err := checkStartHarness(ws); err != nil {
 		return err
 	}
 	booted := time.Now()

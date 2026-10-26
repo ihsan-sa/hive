@@ -228,12 +228,30 @@ func TestWorkerHoldsQueuedBrief(t *testing.T) {
 	tick(m)
 	worker := core.Run{RunSpec: core.RunSpec{ID: "w-" + a.ID, Role: "worker", Project: "p"}}
 	stranger := core.Run{RunSpec: core.RunSpec{ID: "w-other", Role: "worker", Project: "q"}}
-	if _, err := m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"hold":"`+c.ID+`"}`)); err != nil {
+	out, err := m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"hold":"`+c.ID+`"}`))
+	if err != nil {
 		t.Fatal(err)
+	}
+	if notes := fmt.Sprint(out.(map[string]any)["notes"]); !strings.Contains(notes, c.ID+" is on project p; you steer only your own") {
+		t.Fatalf("the stranger wasn't refused by reach: %s", notes)
 	}
 	if got := stageOf(t, m, c); got.Held {
 		t.Fatalf("a worker on another project held the brief: %+v", got)
 	}
+	// A new order from the stranger touches only its own project's line: p's
+	// ordered brief keeps its place, with no note about a brief it never named.
+	placed := stageOf(t, m, c)
+	placed.Order = 1
+	m.save(&placed, "")
+	out, err = m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"order":"nope"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notes := fmt.Sprint(out.(map[string]any)["notes"]); strings.Contains(notes, c.ID) || stageOf(t, m, c).Order != 1 {
+		t.Fatalf("another project's order was reset or noted: %s, order %d", notes, stageOf(t, m, c).Order)
+	}
+	placed.Order = 0
+	m.save(&placed, "")
 	if _, err := m.C.Runs.Ops().Call(worker, "queue", json.RawMessage(`{"hold":"`+c.ID+`"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -288,13 +306,38 @@ func TestQueueAreasStayInsideTheClone(t *testing.T) {
 
 // A directory ("in internal/.", "docs/") and a doc that merges as union are
 // never areas, so they hold no brief back.
-func TestQueueAreasSkipTopLevelAndUnionDocs(t *testing.T) {
+func TestQueueAreasSkipDirectoriesAndUnionDocs(t *testing.T) {
 	m := queueRig(t)
 	task := file(t, m, "fix it", "Nothing like it in internal/. or cmd/..., see docs/log.md, docs/notes/plan.md, docs/ and internal/tui/views.go.")
 	got := m.areas(task)
 	want := []string{"internal/tui/views.go"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("areas %q, want %q", got, want)
+	}
+}
+
+// A list a brief only says a file is on ("effects.go is on tests/list.toml",
+// "a path on it") is no area; one it adds to is, and so is a code file
+// something "is on" ("the bug is on internal/core/runs.go").
+func TestQueueAreasSkipListsAFileIsOn(t *testing.T) {
+	m := queueRig(t)
+	p, _ := m.C.Projects.Get("p")
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+	clone := m.C.WS.Project("p")
+	os.MkdirAll(filepath.Join(clone, "tests"), 0o755)
+	os.WriteFile(filepath.Join(clone, "tests", "list.toml"), []byte("paths = []\n"), 0o644)
+	for text, want := range map[string]string{
+		"internal/tui/views.go is on tests/list.toml.":                            "internal/tui/views.go",
+		"Both are 'on tests/list.toml'; a path on tests/list.toml too.":           "",
+		"Add internal/tui/views.go to tests/list.toml, which lists what's on it.": "internal/tui/views.go tests/list.toml",
+		"Work on internal/core/effects.go; the TUI is in internal/tui/views.go.":  "internal/core/effects.go internal/tui/views.go",
+		"The bug is on internal/core/runs.go, line 12.":                           "internal/core/runs.go",
+	} {
+		if got := strings.Join(m.areas(file(t, m, "fix it", text)), " "); got != want {
+			t.Errorf("%q: areas %q, want %q", text, got, want)
+		}
 	}
 }
 

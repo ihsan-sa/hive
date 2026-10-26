@@ -16,6 +16,7 @@ func stubGH(t *testing.T, reply func(args []string) (string, string, error)) *[]
 	t.Cleanup(func() { ghRun, ghPause = run, p })
 	ghPause = &pause{}
 	logins.Clear()
+	clear(workflowless.m)
 	var calls [][]string
 	ghRun = func(_ string, args []string) (string, string, error) {
 		calls = append(calls, args)
@@ -362,6 +363,35 @@ func TestChecksRefusedWithoutWorkflows(t *testing.T) {
 		if asked != 1 {
 			t.Errorf("asked for workflows %d times, want once", asked)
 		}
+		// The head's answer is remembered: the next poll doesn't ask again.
+		if _, err := (GitHub{}).Checks("o/r", "abc"); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range (*calls)[len(*calls)-3:] {
+			if strings.Contains(c[1], "workflows") {
+				t.Errorf("asked for workflows again on the same head: %q", c)
+			}
+		}
+	}
+}
+
+// A rate limit's 403 on the checks is no refusal: it isn't read as no checks
+// and spends no call on the workflows.
+func TestChecksRateLimitIsNoRefusal(t *testing.T) {
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		if strings.Contains(strings.Join(args, " "), "check-runs") {
+			return "", "gh: You have exceeded a secondary rate limit (HTTP 403)", errors.New("exit status 1")
+		}
+		return "", "gh: Not Found (HTTP 404)", errors.New("exit status 1")
+	})
+	var rl *RateLimited
+	if _, err := (GitHub{}).Checks("o/r", "abc"); !errors.As(err, &rl) {
+		t.Fatalf("a rate limit read as %v", err)
+	}
+	for _, c := range *calls {
+		if strings.Contains(strings.Join(c, " "), "workflows") {
+			t.Errorf("asked for workflows on a rate limit: %q", c)
+		}
 	}
 }
 
@@ -392,13 +422,14 @@ func TestChecksRefusedReasons(t *testing.T) {
 }
 
 // An API read goes through gh's login as a plain GET, and a rate-limited one
-// comes back as RateLimited; the quota's reset is read from rate_limit.
+// comes back as RateLimited; the quota's reset is read from rate_limit, and
+// is no wait while calls are left (a secondary limit).
 func TestAPIGetOnTheLogin(t *testing.T) {
-	limited := false
+	limited, left := false, "0"
 	calls := stubGH(t, func(args []string) (string, string, error) {
 		switch {
 		case args[1] == "rate_limit":
-			return "1792900000\n", "", nil
+			return left + " 1792900000\n", "", nil
 		case limited:
 			return "", "HTTP 403: API rate limit exceeded for user ID 1.", errors.New("exit status 1")
 		}
@@ -421,6 +452,10 @@ func TestAPIGetOnTheLogin(t *testing.T) {
 	}
 	if at, err := r.RateReset("o/r"); err != nil || at.Unix() != 1792900000 {
 		t.Fatalf("reset %v, %v", at, err)
+	}
+	left = "4211"
+	if at, err := r.RateReset("o/r"); err != nil || !at.IsZero() {
+		t.Fatalf("a reset to wait for with calls left: %v, %v", at, err)
 	}
 }
 

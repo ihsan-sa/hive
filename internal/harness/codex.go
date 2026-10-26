@@ -189,8 +189,11 @@ func (c codexLimits) limit() *RateLimit {
 			continue
 		}
 		name := windowName(w.WindowMinutes, i)
-		at := time.Unix(w.ResetsAt, 0).UTC()
-		if w.ResetsAt == 0 {
+		var at time.Time // zero when Codex didn't say, not now or 1970
+		switch {
+		case w.ResetsAt > 0:
+			at = time.Unix(w.ResetsAt, 0).UTC()
+		case w.ResetsIn > 0:
 			at = time.Now().Add(time.Duration(w.ResetsIn) * time.Second).UTC()
 		}
 		used := w.UsedPercent / 100

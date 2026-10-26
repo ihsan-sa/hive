@@ -112,6 +112,9 @@ func gateRigSeeded(t *testing.T, mainRed bool, onMain, files map[string]string) 
 	pr, _ := forge.CreatePR(p.Repo, "hive/t1", "main", "work", "")
 	a := &agents.Agents{C: c, Mod: modules.New(ws, c.J)}
 	m := New(c, a, chat.New(c, a))
+	// A merged task's checkouts go off the save's path (ended): they must be
+	// gone before the workspace is closed and removed.
+	t.Cleanup(m.Wait)
 	task := &Task{ID: "t1", Project: "p", Title: "work", Kind: "work", Stage: StageTesting, Worker: "w1", Branch: "hive/t1", SHA: sha, PR: pr}
 	return m, task, p, forge
 }
@@ -167,11 +170,93 @@ func TestGateFailsOnBranchOnly(t *testing.T) {
 	if err := m.test(task, p); err != nil {
 		t.Fatal(err)
 	}
+	if task.Stage != StageTesting || !task.Recheck || task.Retested != task.SHA || task.Round != 0 {
+		t.Fatalf("a red on a green main should run once more first: stage %q, recheck %v, round %d", task.Stage, task.Recheck, task.Round)
+	}
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
 	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "The tests failed on your commit") {
 		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
 	}
 	if n := alerts(m, "main-red"); n != 0 {
 		t.Fatalf("%d main-red alerts on a green main", n)
+	}
+}
+
+// A test that fails once on a slow machine and passes run again isn't held
+// against the change: the whole check runs once more, and its green is what
+// the merge rests on.
+func TestFlakyBranchRunsOnceMore(t *testing.T) {
+	flag := filepath.Join(t.TempDir(), "ran")
+	cmd := fmt.Sprintf(`{"test": "test -f %s || { touch %s; exit 1; }"}`, flag, flag)
+	m, task, p, _ := gateRigSeeded(t, false, map[string]string{".hive/project.json": cmd}, map[string]string{"feature.txt": "y"})
+	for i := 0; i < 2; i++ {
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 {
+		t.Fatalf("a flake went back to the worker: stage %q, round %d", task.Stage, task.Round)
+	}
+	if c, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); !ok || !c.OK {
+		t.Fatal("no green run recorded for the head the merge rests on")
+	}
+}
+
+// A red on a green main whose failing tests fail again run on their own
+// goes back at once, without a whole second run; one whose failing tests
+// pass then runs the whole check once more, which the merge rests on.
+func TestBranchRetestsOnlyWhatFailed(t *testing.T) {
+	for _, again := range []bool{true, false} {
+		m, task, p, _ := gateRig(t, false, map[string]string{"BROKEN": "x"})
+		retests := 0
+		m.Retest = func(p core.Project, sha, _ string, _ core.Check, main bool) bool {
+			retests++
+			if main {
+				t.Fatal("main's green tests were retested")
+			}
+			return m.C.Effects.RunCheck(p, sha, "retest", map[bool]string{true: "false", false: "true"}[again]).OK
+		}
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+		if retests != 1 {
+			t.Fatalf("again %v: %d retests of the failing tests, want one", again, retests)
+		}
+		if again {
+			if task.Stage != StageWorking || task.Round != 1 || task.Recheck || !strings.Contains(task.Findings, "and again when only the failing tests ran") {
+				t.Fatalf("a red that repeats: stage %q, round %d, recheck %v, findings %q", task.Stage, task.Round, task.Recheck, task.Findings)
+			}
+			continue
+		}
+		if task.Stage != StageTesting || !task.Recheck || task.Retested != task.SHA || task.Round != 0 {
+			t.Fatalf("a flake: stage %q, recheck %v, round %d", task.Stage, task.Recheck, task.Round)
+		}
+	}
+}
+
+// A red main whose failures pass run again (a flake) holds nothing: no
+// main-red alert, and main is run again once however often it is asked.
+func TestFlakyMainHoldsNothing(t *testing.T) {
+	m, task, p, _ := gateRig(t, true, map[string]string{"feature.txt": "y"})
+	retests := 0
+	m.Retest = func(p core.Project, sha, _ string, _ core.Check, main bool) bool {
+		if main {
+			retests++
+		}
+		return m.C.Effects.RunCheck(p, sha, "retest", "true").OK
+	}
+	for i := 0; i < 2; i++ {
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task.Stage != StageWorking || task.Round != 1 {
+		t.Fatalf("a red change on a flaky main: stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
+	}
+	if n := alerts(m, "main-red"); n != 0 || retests != 1 {
+		t.Fatalf("%d main-red alerts and %d retests of main, want none and one", n, retests)
 	}
 }
 
@@ -222,6 +307,33 @@ func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
 		if task.Stage != StageTesting || !strings.HasPrefix(task.Reason, "waiting on main") {
 			t.Fatalf("%s beside main's failure went on: stage %q, reason %q", name, task.Stage, task.Reason)
 		}
+	}
+}
+
+// The change the testing stage let on as no worse than main merges: the
+// merge's own gate takes a red test run whose every failure main's run
+// shares, rather than refuse it as untested and hold it till it gives up.
+func TestGateNoWorseThanRedMainMerges(t *testing.T) {
+	const red = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\nexit 1\n"
+	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": red}
+	m, task, p, f := gateRigSeeded(t, false, onMain, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
+// A merge the gate refuses says what refused it, not the reason of a hold it
+// already passed (a security read, say).
+func TestMergeRefusalReplacesStaleReason(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	task.Stage, task.Reason = StageMerging, "waiting on a security read from the Hive's security reviewer"
+	if err := m.merge(task, p); err == nil {
+		t.Fatal("a commit with no test run merged")
+	}
+	if !strings.HasPrefix(task.Reason, "refusing to merge") || !strings.Contains(task.Reason, "no test run recorded") {
+		t.Fatalf("reason %q", task.Reason)
 	}
 }
 

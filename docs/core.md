@@ -21,6 +21,8 @@ So the core is the skeleton and nothing else. **New functionality goes into a mo
 | The module seam: how the core gains functionality (the registry and tick list, agent ops, the person's answers, scheduled jobs, module programs) | `internal/mod/modules`, `internal/mod/runner`, `Ops().Register`, `Person.Handle` |
 | The host process and its wiring: the daemon, its control API, the entry point | `internal/daemon`, `internal/api`, `internal/app`, `cmd/hive` |
 
+What a check sees is part of the merge guarantees, so the choice of its caches is core: `core/disk.go`'s `goBuild` and `stableTimes` (#920, about 80 lines) decide whether a check writes main's build cache or reads it read-only; the cache program itself (`internal/gocache`, `hive gocacheprog`) is outside the core.
+
 The last row is core only as the place the skeleton runs: what a module adds to it (an API route, a CLI verb) is module material and moves out (step 4 below).
 
 The packages measured as the core, read by `tests/core-size.sh`:

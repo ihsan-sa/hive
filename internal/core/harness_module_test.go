@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
 // installWorkers puts the workers module's harness specs in ws's modules.
@@ -145,5 +147,57 @@ func TestModuleHarnessKey(t *testing.T) {
 	}
 	if c.Runs.service("cursor") != "Cursor" {
 		t.Fatal(c.Runs.service("cursor"))
+	}
+}
+
+// A run whose harness's module was removed waits a few times for it to come
+// back, then is blocked saying why, rather than parked forever.
+func TestRunOnARemovedHarnessStops(t *testing.T) {
+	c, _ := testHive(t)
+	installWorkers(t, c.WS)
+	route := []Pick{{Harness: "opencode", Model: "opencode/big-pickle"}}
+	c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker", Harness: "opencode", Model: "opencode/big-pickle", Route: route})
+	os.RemoveAll(filepath.Join(c.WS.Modules(), "workers"))
+	cfg := c.WS.LoadConfig()
+	for i := 1; i <= harnessGoneTries+1; i++ {
+		r, _ := c.Runs.Get("w1")
+		c.Runs.launch(r, cfg)
+		got, _ := c.Runs.Get("w1")
+		if want := map[bool]string{true: StatusParked, false: StatusBlocked}[i <= harnessGoneTries]; got.Status != want || !strings.HasPrefix(got.Reason, harnessGone) {
+			t.Fatalf("launch %d: %s %q, want %s", i, got.Status, got.Reason, want)
+		}
+	}
+}
+
+// A second result in one turn leaves no verdict, not even one read back
+// from the last message's text.
+func TestTwoResultsLeaveNoVerdict(t *testing.T) {
+	c, _ := testHive(t)
+	installWorkers(t, c.WS)
+	step := `{"type":"text","sessionID":"s","part":{"text":"{\"verdict\": \"land\"}"}}` + "\n" +
+		`{"type":"step_finish","sessionID":"s","part":{"reason":"stop","tokens":{"input":5,"output":1}}}` + "\n"
+	r := Run{RunSpec: RunSpec{ID: "r4", Harness: "opencode", Schema: `{"type":"object"}`}}
+	os.MkdirAll(filepath.Dir(c.WS.TurnOut(r.ID, 1)), 0o755)
+	os.WriteFile(c.WS.TurnOut(r.ID, 1), []byte(step), 0o644)
+	if tl := c.Runs.ReadTurn(r, 1); tl.Result == nil || tl.Result.Structured == nil {
+		t.Fatalf("one result: %+v", tl.Result)
+	}
+	os.WriteFile(c.WS.TurnOut(r.ID, 1), []byte(step+step), 0o644)
+	if tl := c.Runs.ReadTurn(r, 1); tl.Result == nil || tl.Result.Structured != nil {
+		t.Fatalf("two results: %+v", tl.Result)
+	}
+}
+
+// A prompt too long for one argument stops the run with a clear reason
+// instead of failing to start with E2BIG every few minutes.
+func TestPromptTooLongForAnArg(t *testing.T) {
+	c, _ := testHive(t)
+	installWorkers(t, c.WS)
+	h, _ := c.WS.Harnesses().Get("cursor")
+	r := Run{RunSpec: RunSpec{ID: "r5", Role: "worker", Harness: "cursor", System: strings.Repeat("s", harness.MaxArg), Checkout: t.TempDir()}}
+	prompt := filepath.Join(t.TempDir(), "turn-001.prompt")
+	os.WriteFile(prompt, []byte("Fix it."), 0o644)
+	if _, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, r, 1, false, prompt, nil, ""); !errors.Is(err, harness.ErrArgTooLong) {
+		t.Fatalf("a system prompt and brief over 128 KiB: %v", err)
 	}
 }

@@ -161,6 +161,10 @@ var OwnerTokens = map[string]string{
 	"hive-rsi-lab": "/home/hive/h0-org.token",
 }
 
+// ForgeEnv is ghEnv for a module's git call to repo's remote in the host
+// clone, which never reaches a run.
+func ForgeEnv(repo string) []string { return ghEnv(repo) }
+
 // ghEnv is the environment that makes gh and git's gh credential helper use
 // the token configured for repo's owner, or nothing to keep gh's login. Under
 // the system service install.sh writes, the token comes first from systemd's
@@ -781,23 +785,53 @@ func ChecksRefused(text string) bool { return checksRefused.MatchString(text) }
 
 // ciless returns a filter for the errors of reading sha's checks: a refusal
 // (HTTP 403) is dropped when sha has no .github/workflows (GitHub answers 404
-// for it), asked once and only on the first refusal; any other error stands.
+// for it), asked only on a refusal and remembered per head, since a commit's
+// tree never changes; any other error stands. A rate limit's 403 is no
+// refusal. A 404 can also mean a private repo the token can't see, but the
+// 403 on its checks already says the token sees the repo.
+//
+// A head with no workflows can still carry statuses or check runs from an
+// outside app (CircleCI, a GitHub App); a refusal hides those, so such a repo
+// reads as having no checks (docs/risk.md).
 func ciless(repo, sha string) func(error) error {
-	asked, none := false, false
 	return func(err error) error {
-		if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+		var rl *RateLimited
+		if err == nil || errors.As(err, &rl) || !strings.Contains(err.Error(), "HTTP 403") {
 			return err
 		}
-		if !asked {
-			asked = true
-			_, werr := gh(repo, "api", "repos/"+repo+"/contents/.github/workflows?ref="+sha)
-			none = werr != nil && strings.Contains(werr.Error(), "HTTP 404")
-		}
-		if none {
+		if noWorkflows(repo, sha) {
 			return nil
 		}
 		return err
 	}
+}
+
+// workflowless remembers, by repo@sha, whether a head was found to have no
+// .github/workflows; only a definite answer (a 404 or a listing) is kept.
+var workflowless = struct {
+	sync.Mutex
+	m map[string]bool
+}{m: map[string]bool{}}
+
+func noWorkflows(repo, sha string) bool {
+	key := repo + "@" + sha
+	workflowless.Lock()
+	none, known := workflowless.m[key]
+	workflowless.Unlock()
+	if known {
+		return none
+	}
+	_, err := gh(repo, "api", "repos/"+repo+"/contents/.github/workflows?ref="+sha)
+	none = err != nil && strings.Contains(err.Error(), "HTTP 404")
+	if err == nil || none {
+		workflowless.Lock()
+		if len(workflowless.m) >= 1024 {
+			clear(workflowless.m)
+		}
+		workflowless.m[key] = none
+		workflowless.Unlock()
+	}
+	return none
 }
 
 // ghPages reads every page of a GitHub list held under field of each page's
@@ -861,7 +895,7 @@ func (GitHub) CheckSteps(repo string, r CheckRun) ([]JobStep, error) {
 // APIReader is a forge that answers read-only API calls on the person's
 // login (5,000 an hour), so neither the daemon nor agents spend the anonymous
 // 60 an hour this machine's address shares. RateReset is when the login's
-// quota is next full again.
+// quota is next full again, or the zero time while it isn't spent.
 type APIReader interface {
 	APIGet(repo, path string) (string, error)
 	RateReset(repo string) (time.Time, error)
@@ -876,14 +910,19 @@ func (GitHub) APIGet(repo, path string) (string, error) {
 }
 
 // RateReset reads the login's core quota; GitHub doesn't count that read.
+// While calls are left (a secondary limit, not the hour's quota) it is the
+// zero time: nothing to wait for past what GitHub itself asked.
 func (GitHub) RateReset(repo string) (time.Time, error) {
-	out, err := gh(repo, "api", "rate_limit", "-q", ".resources.core.reset")
+	out, err := gh(repo, "api", "rate_limit", "-q", `.resources.core | "\(.remaining) \(.reset)"`)
 	if err != nil {
 		return time.Time{}, err
 	}
-	n, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
-	if err != nil {
+	var left, n int64
+	if _, err := fmt.Sscan(out, &left, &n); err != nil {
 		return time.Time{}, fmt.Errorf("reading the rate limit's reset: %w", err)
+	}
+	if left > 0 {
+		return time.Time{}, nil
 	}
 	return time.Unix(n, 0), nil
 }
