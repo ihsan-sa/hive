@@ -220,13 +220,21 @@ func (m *Module) postJoins(t *Task, p core.Project) {
 
 // notify tells t's thread, and the thread of each lead whose brief joined
 // it, how t went.
-func (m *Module) notify(t *Task, text string) {
-	m.Chat.Notify(t.Chat, t.Thread, text)
+func (m *Module) notify(t *Task, text string) { m.tell(t, text, m.Chat.Notify) }
+
+// post puts how t went in the same threads without waking their leads, for
+// an outcome that needs nothing of them (a merge).
+func (m *Module) post(t *Task, text string) {
+	m.tell(t, text, func(c, th, s string) { m.Chat.Record(c, th, s) })
+}
+
+func (m *Module) tell(t *Task, text string, send func(chat, thread, text string)) {
+	send(t.Chat, t.Thread, text)
 	seen := map[[2]string]bool{{t.Chat, t.Thread}: true}
 	for _, j := range t.Joins {
 		if k := [2]string{j.Chat, j.Thread}; j.Thread != "" && !seen[k] {
 			seen[k] = true
-			m.Chat.Notify(j.Chat, j.Thread, text)
+			send(j.Chat, j.Thread, text)
 		}
 	}
 }

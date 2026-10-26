@@ -385,6 +385,15 @@ func (m *Module) bundleFor(ch *Chat, p core.Project, id string) {
 
 // Notify posts an outcome into a thread and tells the chat's lead.
 func (m *Module) Notify(chatID, thread, text string) {
+	if m.Record(chatID, thread, text) {
+		m.ToLead(chatID, thread, text)
+	}
+}
+
+// Record puts an outcome that needs nothing into a thread without waking the
+// chat's lead: the feed and the record carry it. It says whether the chat
+// exists.
+func (m *Module) Record(chatID, thread, text string) bool {
 	if chatID == "" {
 		chatID = "lead"
 	}
@@ -392,10 +401,10 @@ func (m *Module) Notify(chatID, thread, text string) {
 	ch := m.chats[chatID]
 	m.mu.Unlock()
 	if ch == nil {
-		return
+		return false
 	}
 	m.add(Message{Chat: chatID, Thread: thread, From: "hive", Name: "hive", Text: text})
-	m.ToLead(chatID, thread, text)
+	return true
 }
 
 // ToLead tells only the chat's lead, which judges what the person hears.
