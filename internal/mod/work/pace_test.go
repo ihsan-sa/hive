@@ -254,7 +254,7 @@ func TestPaceHasASafetyCeiling(t *testing.T) {
 }
 
 // The workers' pace grows only for a brief that waits on the limit itself:
-// one waiting on another's files would leave the new slot empty. When it
+// a held one would leave the new slot empty. When it
 // does grow, the brief starts in the same tick.
 func TestPaceGrowsOnlyForBriefsTheLimitHolds(t *testing.T) {
 	m := queueRig(t)
