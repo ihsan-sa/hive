@@ -746,8 +746,8 @@ func TestCheckpointsBankEachGain(t *testing.T) {
 	}
 }
 
-// A review reads the project's docs/REVIEW.md, goals and lessons from main,
-// and advice given with a land becomes one follow-up brief once it merges, not
+// A review reads the project's docs/REVIEW.md from main and is pointed at its
+// goals and lessons, and advice given with a land becomes one follow-up brief once it merges, not
 // a blocker. The fake gives advice on the follow-up's review too, which files
 // nothing more, so the chain stops at one.
 func TestReviewReadsTheRules(t *testing.T) {
@@ -764,7 +764,7 @@ func TestReviewReadsTheRules(t *testing.T) {
 	st := h.wait("the ask to merge", 3*minute, taskStage("rules", "add a helper", work.StageDone))
 	tk, _ := task(st, "rules", "add a helper")
 	brief, _ := os.ReadFile(filepath.Join(h.ws.RunRO(tk.Reviewer), "brief.md"))
-	for _, want := range []string{"walls the Hive off from the host", "Every agent sees the same thing", "## `.hive/lessons.md` on main"} {
+	for _, want := range []string{"walls the Hive off from the host", "`.hive/goals.md` and `.hive/lessons.md` are in your checkout"} {
 		if !strings.Contains(string(brief), want) {
 			t.Fatalf("the review brief lacks %q:\n%s", want, brief)
 		}
