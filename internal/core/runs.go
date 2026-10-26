@@ -739,10 +739,12 @@ func (rs *Runs) apply(e Event) {
 		if strings.HasPrefix(t.Reason, "nudged") {
 			r.Nudges++
 		}
-		if t.Head == r.Head {
-			r.Still++
-		} else {
+		// A parked turn (a limit, an interruption, an error) didn't end
+		// without finishing, so only a new commit counts from it.
+		if t.Head != r.Head {
 			r.Head, r.Still = t.Head, 0
+		} else if t.Status != StatusParked {
+			r.Still++
 		}
 	case "run.queued":
 		var n runNote
@@ -1667,7 +1669,7 @@ func (rs *Runs) endTurn(r Run) {
 	case cur.Nudges < 2:
 		te.Status, te.Reason = StatusIdle, "nudged: ended a turn without finishing"
 		te.Queue = []string{printedNudge(r, tl.Result.Text)}
-	case te.Head == cur.Head && cur.Still+1 >= StillTurns:
+	case te.Head != "" && te.Head == cur.Head && cur.Still+1 >= StillTurns:
 		// Its nudges changed nothing: it can't follow the finish protocol,
 		// so it ends and frees its slot instead of holding it quiet.
 		te.Status, te.Reason = StatusBlocked, NoFinish+": it was nudged twice to call `hive agent finish`, and the turns after made no new commit and ended without it"
@@ -1709,17 +1711,66 @@ const NoFinish = "doesn't finish"
 // blocked; one that commits stays quiet for the lead.
 const StillTurns = 2
 
-// headMark is the size and time of a checkout's HEAD log, which a commit (or
-// any move of HEAD) changes; it is read without running git there.
+// headMark is the commit a checkout's HEAD points at, which only a new
+// commit (or a checkout) changes; it is read without running git there, and
+// is "" when it can't be read, so a run whose commits can't be seen stays
+// quiet rather than ending blocked.
 func headMark(checkout string) string {
 	if checkout == "" {
 		return ""
 	}
-	fi, err := os.Lstat(filepath.Join(checkout, ".git", "logs", "HEAD"))
+	dir := filepath.Join(checkout, ".git")
+	if b, err := SafeRead(dir, 4096); err == nil { // a worktree's .git is a file naming its git dir
+		if d, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir: "); ok {
+			dir = d
+			if !filepath.IsAbs(dir) {
+				dir = filepath.Join(checkout, dir)
+			}
+		}
+	}
+	head, err := SafeRead(filepath.Join(dir, "HEAD"), 4096)
 	if err != nil {
 		return ""
 	}
-	return fmt.Sprint(fi.Size(), " ", fi.ModTime().UnixNano())
+	ref, ok := strings.CutPrefix(strings.TrimSpace(string(head)), "ref: ")
+	if !ok {
+		return hashOnly(ref) // detached: the hash itself
+	}
+	if !strings.HasPrefix(ref, "refs/") || strings.Contains(ref, "..") {
+		return ""
+	}
+	common := dir
+	if b, err := SafeRead(filepath.Join(dir, "commondir"), 4096); err == nil {
+		if common = strings.TrimSpace(string(b)); !filepath.IsAbs(common) {
+			common = filepath.Join(dir, common)
+		}
+	}
+	for _, d := range []string{dir, common} {
+		if b, err := SafeRead(filepath.Join(d, filepath.FromSlash(ref)), 4096); err == nil {
+			return hashOnly(strings.TrimSpace(string(b)))
+		}
+	}
+	packed, _ := SafeRead(filepath.Join(common, "packed-refs"), 16<<20)
+	for _, line := range strings.Split(string(packed), "\n") {
+		if hash, name, ok := strings.Cut(strings.TrimSpace(line), " "); ok && name == ref {
+			return hashOnly(hash)
+		}
+	}
+	return ""
+}
+
+// hashOnly is s when it is a commit hash and "" otherwise, so what a
+// checkout's files say never goes on the record as anything but a hash.
+func hashOnly(s string) string {
+	if len(s) != 40 && len(s) != 64 {
+		return ""
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return ""
+		}
+	}
+	return s
 }
 
 func suffix(s string) string {
