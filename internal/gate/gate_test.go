@@ -913,3 +913,72 @@ func TestOutOfTimeIsAloneOnlyWhenTheCandidateIsSlower(t *testing.T) {
 		t.Errorf("out of time with the candidate the slower side: not alone (%s)", rep.Error)
 	}
 }
+
+// A close call is run again before the gate decides: a candidate flake that
+// stays one run apart over six runs is a tie, and a test that fails one time
+// in three on the candidate shows as two runs apart and is a regression.
+// Probes that were not close are not run again.
+func TestCloseCallsRunAgain(t *testing.T) {
+	unixOnly(t)
+	dir := t.TempDir()
+	cand, ctrl := fakeBin(t, dir, "cand", "v2", true), fakeBin(t, dir, "ctrl", "v1", true)
+	run := func(tag string, fails map[int]bool) Report {
+		runs := map[string]int{}
+		flaky := func(cfg *Config, c *Child) Result {
+			runs[c.Bin]++
+			if c.Bin == cand && fails[runs[c.Bin]] {
+				return Result{Failed: []string{"TestStalls"}}
+			}
+			return Result{Pass: true}
+		}
+		steady := func(cfg *Config, c *Child) Result { return Result{Pass: true} }
+		rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, tag, "run"), Sandbox: "bare", AllowBare: true,
+			Probes: []string{"e2e", "daemon"}, Probe: map[string]ProbeFunc{"e2e": flaky, "daemon": steady}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rep
+	}
+	count := func(rs []Result, probe string) int {
+		n := 0
+		for _, r := range rs {
+			if r.Probe == probe {
+				n++
+			}
+		}
+		return n
+	}
+	rep := run("flake", map[int]bool{1: true})
+	if rep.Verdict.Keep || len(rep.Verdict.Regressions) > 0 || rep.Extra["e2e"] != 3 || count(rep.Candidate, "e2e") != 6 || count(rep.Control, "e2e") != 6 || count(rep.Candidate, "daemon") != 3 {
+		t.Errorf("one flake in six: extra %v, %+v", rep.Extra, rep.Verdict)
+	}
+	if !strings.Contains(rep.Markdown(), "close call: e2e run 3 more times a side") {
+		t.Errorf("the report doesn't say it ran a close call again:\n%s", rep.Markdown())
+	}
+	rep = run("breaks", map[int]bool{1: true, 4: true})
+	if rep.Verdict.Keep || rep.Extra["e2e"] != 1 || !strings.Contains(rep.Verdict.Reason, "e2e passes 2/4, the control 4/4") {
+		t.Errorf("one failure in three: extra %v, %+v", rep.Extra, rep.Verdict)
+	}
+	if rep := run("steady", nil); len(rep.Extra) > 0 || count(rep.Candidate, "e2e") != 3 {
+		t.Errorf("a probe that was not close ran again: %v", rep.Extra)
+	}
+}
+
+func TestCloseCalls(t *testing.T) {
+	pass, fail := Result{Probe: "e2e", Pass: true}, Result{Probe: "e2e"}
+	for _, c := range []struct {
+		cand, ctrl []Result
+		close      bool
+	}{
+		{[]Result{fail, pass, pass}, []Result{pass, pass, pass}, true},
+		{[]Result{pass, pass, pass}, []Result{pass, fail, pass}, true},
+		{[]Result{fail, fail, fail}, []Result{fail, pass, fail}, true},
+		{[]Result{fail, fail, pass}, []Result{pass, pass, pass}, false},
+		{[]Result{fail, pass, pass}, []Result{pass, fail, pass}, false},
+		{[]Result{pass, pass, pass}, nil, false},
+	} {
+		if got := len(CloseCalls(c.cand, c.ctrl)) > 0; got != c.close {
+			t.Errorf("CloseCalls(%v, %v) close %v, want %v", c.cand, c.ctrl, got, c.close)
+		}
+	}
+}

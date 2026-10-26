@@ -270,3 +270,39 @@ func tests(f map[string]int, n int) string {
 	}
 	return strings.Join(names, ", ") + more
 }
+
+// CloseCalls names the probes whose pass counts differ on the two sides by
+// one run's worth at most (2/3 against 3/3, 0/3 against 1/3): a single flaky
+// run could turn them either way, so the gate runs them again before it
+// decides. A probe that passes as often on both sides, or two runs apart, is
+// not close.
+func CloseCalls(cand, ctrl []Result) []string {
+	type tally struct{ pass, n int }
+	count := func(rs []Result) map[string]*tally {
+		t := map[string]*tally{}
+		for _, r := range rs {
+			if t[r.Probe] == nil {
+				t[r.Probe] = &tally{}
+			}
+			t[r.Probe].n++
+			if r.Pass {
+				t[r.Probe].pass++
+			}
+		}
+		return t
+	}
+	ct, kt := count(cand), count(ctrl)
+	var out []string
+	for p, c := range ct {
+		k := kt[p]
+		if k == nil {
+			continue
+		}
+		cr, kr := float64(c.pass)/float64(c.n), float64(k.pass)/float64(k.n)
+		if cr != kr && math.Abs(cr-kr) <= 1/float64(min(c.n, k.n))+1e-9 {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
+}

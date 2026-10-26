@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -26,6 +27,7 @@ type Config struct {
 	Out        string   // where the run's files and report go
 	Probes     []string // which probes to run (default all)
 	Reps       int      // repeats of every probe on each side, interleaved (default 3)
+	MaxReps    int      // a close call (pass counts one run apart) is run again up to this many times a side (default twice Reps)
 	Bench      int      // asks in the benchmark (default 4, the whole set)
 	Org        Org      // the fresh test repository's host; nil runs without one
 	OrgToken   string   // the org token the gate itself uses to make and delete test repositories; children never hold it
@@ -51,33 +53,34 @@ const MaxDepth = 2
 
 // Report is the record of a run.
 type Report struct {
-	ID          string     `json:"id"`
-	Head        string     `json:"head"`
-	Merged      string     `json:"merged,omitempty"` // what the candidate was built from: Head with Base merged in (Head itself when it already holds Base)
-	Base        string     `json:"base"`
-	Sandbox     string     `json:"sandbox"`
-	Started     time.Time  `json:"started"`
-	Seconds     float64    `json:"seconds"`
-	Candidate   []Result   `json:"candidate"`
-	Control     []Result   `json:"control"`
-	Verdict     Verdict    `json:"verdict"`
-	Repos       []string   `json:"repos,omitempty"`    // org repositories made
-	Cleaned     []string   `json:"cleaned,omitempty"`  // and removed
-	Leaked      []string   `json:"leaked,omitempty"`   // made and not removed
-	OrgNote     string     `json:"org_note,omitempty"` // why the run fell back from the GitHub org to a local one
-	Error       string     `json:"error,omitempty"`
-	CandBin     string     `json:"candidate_bin,omitempty"`     // the verified copy of the candidate's binary
-	CandSHA256  string     `json:"candidate_sha256,omitempty"`  // its hash, taken right after the build
-	CantRun     bool       `json:"cant_run,omitempty"`          // the gate could not run or measure: neither a keep nor the candidate's rollback
-	Conflicts   []string   `json:"conflicts,omitempty"`         // the files where Head and Base conflict: cant_run, and the worker merges main
-	CandVersion string     `json:"candidate_version,omitempty"` // what its --version must say: the gate stamps it at build time
-	Unit        UnitReport `json:"unit"`                        // the vet and short-test step, each side's failures named
-	Fixes       FixReport  `json:"fixes"`                       // the candidate's own new tests, run on both sides
-	Transient   bool       `json:"transient,omitempty"`         // could not run for a cause that may pass (load, a flake on both sides): try again soon
-	Alone       bool       `json:"alone,omitempty"`             // could not run for a cause tied to this candidate alone (preparing its build, the run's clock): another change at this base would not hit it
-	BaseFails   bool       `json:"base_fails,omitempty"`        // could not run for a cause in the base itself (the control fails a step): every change at this base would hit it
-	Measured    bool       `json:"measured,omitempty"`          // the verdict compares both sides' results (Decide), so a judge may weigh it
-	Sig         string     `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
+	ID          string         `json:"id"`
+	Head        string         `json:"head"`
+	Merged      string         `json:"merged,omitempty"` // what the candidate was built from: Head with Base merged in (Head itself when it already holds Base)
+	Base        string         `json:"base"`
+	Sandbox     string         `json:"sandbox"`
+	Started     time.Time      `json:"started"`
+	Seconds     float64        `json:"seconds"`
+	Candidate   []Result       `json:"candidate"`
+	Control     []Result       `json:"control"`
+	Verdict     Verdict        `json:"verdict"`
+	Repos       []string       `json:"repos,omitempty"`    // org repositories made
+	Cleaned     []string       `json:"cleaned,omitempty"`  // and removed
+	Leaked      []string       `json:"leaked,omitempty"`   // made and not removed
+	OrgNote     string         `json:"org_note,omitempty"` // why the run fell back from the GitHub org to a local one
+	Error       string         `json:"error,omitempty"`
+	CandBin     string         `json:"candidate_bin,omitempty"`     // the verified copy of the candidate's binary
+	CandSHA256  string         `json:"candidate_sha256,omitempty"`  // its hash, taken right after the build
+	CantRun     bool           `json:"cant_run,omitempty"`          // the gate could not run or measure: neither a keep nor the candidate's rollback
+	Conflicts   []string       `json:"conflicts,omitempty"`         // the files where Head and Base conflict: cant_run, and the worker merges main
+	CandVersion string         `json:"candidate_version,omitempty"` // what its --version must say: the gate stamps it at build time
+	Unit        UnitReport     `json:"unit"`                        // the vet and short-test step, each side's failures named
+	Fixes       FixReport      `json:"fixes"`                       // the candidate's own new tests, run on both sides
+	Transient   bool           `json:"transient,omitempty"`         // could not run for a cause that may pass (load, a flake on both sides): try again soon
+	Alone       bool           `json:"alone,omitempty"`             // could not run for a cause tied to this candidate alone (preparing its build, the run's clock): another change at this base would not hit it
+	BaseFails   bool           `json:"base_fails,omitempty"`        // could not run for a cause in the base itself (the control fails a step): every change at this base would hit it
+	Measured    bool           `json:"measured,omitempty"`          // the verdict compares both sides' results (Decide), so a judge may weigh it
+	Extra       map[string]int `json:"extra,omitempty"`             // the runs a side added to a probe that was a close call after Reps
+	Sig         string         `json:"sig,omitempty"`               // HMAC of the rest with the gate's key, which no child sees: only a signed report installs
 }
 
 // versionVar is where the build stamps the version; versionOf is what it
@@ -99,6 +102,9 @@ func Run(cfg Config) (rep Report, err error) {
 	t0 := time.Now()
 	if cfg.Reps <= 0 {
 		cfg.Reps = 3
+	}
+	if cfg.MaxReps < cfg.Reps {
+		cfg.MaxReps = 2 * cfg.Reps
 	}
 	if cfg.MaxRepos <= 0 {
 		cfg.MaxRepos = 4
@@ -404,25 +410,25 @@ func Run(cfg Config) (rep Report, err error) {
 
 	// The same work on both, interleaved, so the day's weather hits both.
 	deadline := time.Now().Add(cfg.Timeout)
-	for rep0 := 0; rep0 < cfg.Reps; rep0++ {
-		for _, name := range cfg.Probes {
+	runRep := func(rep0 int, probes []string) error {
+		for _, name := range probes {
 			p, ok := cfg.Probe[name]
 			if !ok {
 				p, ok = builtin[name]
 			}
 			if !ok {
-				return rep, fmt.Errorf("no probe %q", name)
+				return fmt.Errorf("no probe %q", name)
 			}
 			for _, side := range []struct {
 				c   *Child
 				out *[]Result
 			}{{cand, &rep.Candidate}, {ctrl, &rep.Control}} {
 				if time.Now().After(deadline) {
-					err = fmt.Errorf("out of time (%s) before %s's %s", cfg.Timeout, side.c.Name, name)
+					err := fmt.Errorf("out of time (%s) before %s's %s", cfg.Timeout, side.c.Name, name)
 					if slowerAlone(rep.Candidate, rep.Control) {
 						err = alone{err} // the candidate took the time; on a slow machine both would
 					}
-					return rep, err
+					return err
 				}
 				cfg.log("rep %d: %s on %s", rep0+1, name, side.c.Name)
 				start, spent := time.Now(), side.c.Meter.Bytes()
@@ -437,6 +443,36 @@ func Run(cfg Config) (rep Report, err error) {
 				*side.out = append(*side.out, r)
 				cfg.log("  %s %s: pass=%v %s", side.c.Name, name, r.Pass, r.Detail)
 			}
+		}
+		return nil
+	}
+	for rep0 := 0; rep0 < cfg.Reps; rep0++ {
+		if err = runRep(rep0, cfg.Probes); err != nil {
+			return rep, err
+		}
+	}
+	// A close call (pass counts one run apart) is run again, up to MaxReps,
+	// while it stays close and the time allows: one flake decides nothing,
+	// and a test that really fails more often on one side shows as two runs
+	// apart.
+	for rep0 := cfg.Reps; rep0 < cfg.MaxReps; rep0++ {
+		close := CloseCalls(rep.Candidate, rep.Control)
+		if len(close) == 0 {
+			break
+		}
+		if need := lastSeconds(rep.Candidate, close) + lastSeconds(rep.Control, close); time.Now().Add(time.Duration(need * 1.5 * float64(time.Second))).After(deadline) {
+			cfg.log("no time for another run of %s (about %.0fs)", strings.Join(close, ", "), need)
+			break
+		}
+		cfg.log("close call on %s: another run", strings.Join(close, ", "))
+		if err = runRep(rep0, close); err != nil {
+			return rep, err
+		}
+		for _, p := range close {
+			if rep.Extra == nil {
+				rep.Extra = map[string]int{}
+			}
+			rep.Extra[p]++
 		}
 	}
 	// The candidate's binary must be the one that was built and hashed.
@@ -466,6 +502,29 @@ func slowerAlone(cand, ctrl []Result) bool {
 		k += ctrl[i].Seconds
 	}
 	return c > k
+}
+
+// lastSeconds is how long the latest run of each named probe took on one side.
+func lastSeconds(rs []Result, probes []string) float64 {
+	t := 0.0
+	for _, p := range probes {
+		for i := len(rs) - 1; i >= 0; i-- {
+			if rs[i].Probe == p {
+				t += rs[i].Seconds
+				break
+			}
+		}
+	}
+	return t
+}
+
+func sortedKeys(m map[string]int) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }
 
 func hasMetric(r Result, name string) bool {
@@ -720,6 +779,9 @@ func (r Report) Markdown() string {
 	}
 	for _, g := range r.Verdict.Differs {
 		fmt.Fprintf(&b, "- differs: %s\n", g)
+	}
+	for _, p := range sortedKeys(r.Extra) {
+		fmt.Fprintf(&b, "- close call: %s run %d more times a side\n", p, r.Extra[p])
 	}
 	table := func(name string, rs []Result) {
 		if len(rs) == 0 {

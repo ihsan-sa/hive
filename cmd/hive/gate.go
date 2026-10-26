@@ -17,7 +17,7 @@ import (
 )
 
 const gateUsage = `usage: hive gate --repo <git> --head <sha> --base <sha> [--org Hive-RSI-Lab | --local-org <dir>] [--child-token-file f [--reach-checked]]
-                 [--eval <sha, default base>] [--reps 3] [--bench 4] [--probes daemon,org,e2e,benchmark,recurse] [--depth 1]
+                 [--eval <sha, default base>] [--reps 3] [--max-reps 6] [--bench 4] [--probes daemon,org,e2e,benchmark,recurse] [--depth 1]
                  [--lessons .hive/lessons.md] [--allow-tie] [--judged] [--timeout 2h] [--install <path>]  (installs only after a keep from bubblewrap-isolated children) [--out <dir>]
                  [--allow-bare]  (where bubblewrap cannot make namespaces; never with --org, never installed)
        hive gate --self-test [--out <dir>]      the gate on a trivial change, inside a child
@@ -54,6 +54,7 @@ func cmdGate(args []string) int {
 	repo, head, base, eval := fs.String("repo", "", ""), fs.String("head", "", ""), fs.String("base", "", ""), fs.String("eval", "", "")
 	org, localOrg, tokenFile, childFile := fs.String("org", "", ""), fs.String("local-org", "", ""), fs.String("org-token-file", "", ""), fs.String("child-token-file", "", "")
 	reps, bench, depth := fs.Int("reps", 3, ""), fs.Int("bench", 4, ""), fs.Int("depth", 1, "")
+	maxReps := fs.Int("max-reps", 0, "") // a close call is run again up to this many times a side (default twice --reps)
 	probes, lessons, out, install := fs.String("probes", "", ""), fs.String("lessons", "", ""), fs.String("out", "", ""), fs.String("install", "", "")
 	tie, self, bare := fs.Bool("allow-tie", false, ""), fs.Bool("self-test", false, ""), fs.Bool("allow-bare", false, "")
 	reachChecked := fs.Bool("reach-checked", false, "") // the daemon passed CheckReach on these tokens within the hour
@@ -63,7 +64,7 @@ func cmdGate(args []string) int {
 		fmt.Fprintln(os.Stderr, gateUsage)
 		return 2
 	}
-	cfg := gate.Config{Repo: *repo, Head: *head, Base: *base, Eval: *eval, Out: *out, Reps: *reps, Bench: *bench, Depth: *depth, Lessons: *lessons, Judged: *judged, AllowBare: *bare, Timeout: *timeout,
+	cfg := gate.Config{Repo: *repo, Head: *head, Base: *base, Eval: *eval, Out: *out, Reps: *reps, MaxReps: *maxReps, Bench: *bench, Depth: *depth, Lessons: *lessons, Judged: *judged, AllowBare: *bare, Timeout: *timeout,
 		Options: gate.Options{AllowTie: *tie}, Log: func(s string) { fmt.Fprintln(os.Stderr, "gate:", s) }}
 	if *probes != "" {
 		cfg.Probes = strings.Split(*probes, ",")
@@ -83,7 +84,7 @@ func cmdGate(args []string) int {
 			return 2
 		}
 		exe, _ := os.Executable()
-		cfg.CandBin, cfg.CtrlBin, cfg.Reps, cfg.Depth = exe, exe, 1, d-1
+		cfg.CandBin, cfg.CtrlBin, cfg.Reps, cfg.MaxReps, cfg.Depth = exe, exe, 1, 1, d-1
 		cfg.Probes = []string{"daemon", "org"}
 		if d > 1 {
 			cfg.Probes = append(cfg.Probes, "recurse")
