@@ -422,13 +422,14 @@ func TestChecksRefusedReasons(t *testing.T) {
 }
 
 // An API read goes through gh's login as a plain GET, and a rate-limited one
-// comes back as RateLimited; the quota's reset is read from rate_limit.
+// comes back as RateLimited; the quota's reset is read from rate_limit, and
+// is no wait while calls are left (a secondary limit).
 func TestAPIGetOnTheLogin(t *testing.T) {
-	limited := false
+	limited, left := false, "0"
 	calls := stubGH(t, func(args []string) (string, string, error) {
 		switch {
 		case args[1] == "rate_limit":
-			return "1792900000\n", "", nil
+			return left + " 1792900000\n", "", nil
 		case limited:
 			return "", "HTTP 403: API rate limit exceeded for user ID 1.", errors.New("exit status 1")
 		}
@@ -451,6 +452,10 @@ func TestAPIGetOnTheLogin(t *testing.T) {
 	}
 	if at, err := r.RateReset("o/r"); err != nil || at.Unix() != 1792900000 {
 		t.Fatalf("reset %v, %v", at, err)
+	}
+	left = "4211"
+	if at, err := r.RateReset("o/r"); err != nil || !at.IsZero() {
+		t.Fatalf("a reset to wait for with calls left: %v, %v", at, err)
 	}
 }
 

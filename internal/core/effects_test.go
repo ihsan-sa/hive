@@ -1396,3 +1396,78 @@ func TestSecurityWhere(t *testing.T) {
 		}
 	}
 }
+
+// A branch that merged main after its checkpoint landed (#880) is brought up
+// to date, not sent back as conflicting: from the checkpoint, both sides would
+// carry main's later change to a line the branch then changed again.
+func TestUpdateBranchAfterMergingMain(t *testing.T) {
+	c, f := testHive(t)
+	seedRepo(t, f, "me/upd", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n", "main.go": "package main\n\nvar x = 1\n"})
+	p, err := c.Projects.Add(Project{Name: "upd", Repo: "me/upd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, _ := c.Effects.Sync(p)
+	dir, err := c.Effects.NewCheckout(p, "w1", start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Project: p.Name, Checkout: dir, Harness: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := func(file, body string) string {
+		os.WriteFile(filepath.Join(dir, file), []byte(body), 0o644)
+		mustGit(t, dir, "add", "-A")
+		mustGit(t, dir, "commit", "-q", "-m", file)
+		sha, err := c.Effects.Extract(p, r, start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sha
+	}
+	land := func(name, sha string) string {
+		if err := c.Effects.Push(p, name, sha); err != nil {
+			t.Fatal(err)
+		}
+		pr, err := f.CreatePR(p.Repo, name, "main", name, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.MergePR(p.Repo, pr.Number, sha, name); err != nil {
+			t.Fatal(err)
+		}
+		main, _ := c.Effects.Sync(p)
+		return main
+	}
+	checkpoint := commit("a.go", "package main\n")
+	main := land("hive/w1", checkpoint)
+	// Another change lands on main: x becomes 2.
+	other, err := c.Effects.NewCheckout(p, "w2", main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(other, "main.go"), []byte("package main\n\nvar x = 2\n"), 0o644)
+	mustGit(t, other, "commit", "-q", "-am", "x=2")
+	r2, _ := c.Runs.Start(RunSpec{ID: "w2", Role: "worker", Project: p.Name, Checkout: other, Harness: "fake"})
+	o, err := c.Effects.Extract(p, r2, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main = land("hive/w2", o)
+	// The worker merges main, then changes x again on top of it.
+	bundle := filepath.Join(t.TempDir(), "main.bundle")
+	if _, err := c.Effects.MainBundle(p, bundle); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, dir, "fetch", "-q", bundle, "main")
+	mustGit(t, dir, "merge", "-q", "--no-edit", "FETCH_HEAD")
+	head := commit("main.go", "package main\n\nvar x = 3\n")
+	next, err := c.Effects.UpdateBranch(p, head, main, checkpoint)
+	if err != nil {
+		t.Fatalf("a branch holding main should update from its checkpoint: %v", err)
+	}
+	if got := mustGit(t, c.WS.Project(p.Name), "show", next+":main.go"); !strings.Contains(got, "x = 3") {
+		t.Fatalf("the update should keep the branch's edit:\n%s", got)
+	}
+}

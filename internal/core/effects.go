@@ -81,9 +81,11 @@ type Effects struct {
 	steps     map[string][]JobStep    // repo url -> a finished check's steps
 	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
 	gateMains map[string]GateResult   // project@main -> the newest can't-run there not tied to its head (GateAtMain)
+	standing  map[string]bool         // project@head@verdict's main@main -> whether that verdict still stands there (StandingGate)
 	judged    map[string]Judgement    // project@sha@main -> the judge's newest call (judge.go)
 	homes     map[string]bool         // running checks' homes (disk.go)
 	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
+	buildMu   sync.RWMutex            // the same for the projects' build caches
 	disk      DiskUse                 // the last measurement of the Hive's disk use
 	diskFull  bool                    // a check couldn't run for room, and the alert is out
 
@@ -172,7 +174,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs, sweep: sandbox.Sweep,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}, standing: map[string]bool{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -246,7 +248,10 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var g GateResult
 			ev.Decode(&g)
 			if prev, ok := e.gateMains[g.Project+"@"+g.Main]; ok && prev.MainFails && g.MainFails {
-				g.Repeats = prev.Repeats + 1
+				g.Repeats = prev.Repeats
+				if g.Started.IsZero() || !prev.At.After(g.Started) { // a run beside it saw the same main: no repeat
+					g.Repeats++
+				}
 			}
 			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
 			switch {
@@ -529,7 +534,22 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
 	mods := e.goModules(sb, dir)
-	code, out, err := e.runSandboxed(sb, p.Name, id, append(mounts, mods.mounts...), guardProgram(command), true, 30*time.Minute, mods.env, e.checkCacheCap())
+	build := e.goBuild(sb, p, sha, dir)
+	run := func(withMods bool) (int, string, error) {
+		ms, env := append(slices.Clone(mounts), build.mounts...), slices.Clone(build.env)
+		if withMods {
+			ms, env = append(ms, mods.mounts...), append(env, mods.env...)
+		}
+		return e.runSandboxed(sb, p.Name, id, ms, guardProgram(command), true, 30*time.Minute, env, e.checkCacheCap())
+	}
+	code, out, err := run(true)
+	if len(build.mounts) > 0 && code != 0 && strings.Contains(out, "GOCACHEPROG") {
+		// The build cache's program failed, not the commit: run once
+		// without the shared build cache.
+		build.done()
+		build = goMods{note: "the shared build cache failed; run again without it", done: func() {}}
+		code, out, err = run(true)
+	}
 	mods.done()
 	if mods.marker != "" && code != 0 && strings.Contains(out, staleModules) {
 		// The shared cache lacks what its marker promised: that is the
@@ -537,10 +557,13 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		// fetching its own.
 		os.Remove(mods.marker)
 		mods.note = "the shared module cache lacked a module; run again without it"
-		code, out, err = e.runSandboxed(sb, p.Name, id, mounts, guardProgram(command), true, 30*time.Minute, nil, e.checkCacheCap())
+		code, out, err = run(false)
 	}
-	if mods.note != "" {
-		out = "hive: " + mods.note + "\n" + out
+	build.done()
+	for _, n := range []string{build.note, mods.note} {
+		if n != "" {
+			out = "hive: " + n + "\n" + out
+		}
 	}
 	c.Output = out
 	if errors.Is(err, ErrHomeFull) {
@@ -1096,7 +1119,9 @@ func DiffID(diff string) string {
 
 // Approve records the approval of a commit (the person's, or a warden's
 // when autonomy lets it decide): kind "merge" for a head
-// that changes protected paths, "release" for a merge held before release.
+// that changes protected paths, "release" for a merge held before release,
+// "gate" for a change to the gate landed unjudged at one main (sha is
+// head@main), while main itself fails in the gate.
 // The kinds stay apart, since a fast-forwarding forge merges a head as itself.
 func (e *Effects) Approve(kind, project, sha string) {
 	e.j.MustAppend("effect.approved", map[string]string{"kind": kind, "project": project, "sha": sha})
@@ -1368,9 +1393,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", fmt.Errorf("refusing to merge %s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
 	}
 	if p.Self && m.Gain {
-		// Or once the person landed that exact head unjudged, the gate
-		// unable to judge at main (the work module's "gate" ask).
-		if !e.Kept(p.Name, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA) {
+		// Or once the person landed that exact head at that main unjudged,
+		// the gate unable to judge there (the work module's "gate" ask).
+		if !e.Kept(p, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA+"@"+m.Main) {
 			return "", fmt.Errorf("refusing to merge %s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
 		}
 	}
@@ -2094,7 +2119,8 @@ func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.rea
 // merge. A base names the commit the merge is taken from instead of the
 // common ancestor: the branch's own commit that
 // main already holds as a squashed checkpoint, so only what came after it is
-// laid onto main.
+// laid onto main. A branch that has merged main since that checkpoint is
+// merged plainly, from its newer common ancestor with main.
 //
 // Attributes (merge=union and the rest) are read from main, not the branch:
 // a branch cut before main marked a file union merges it as main does, and a
@@ -2113,6 +2139,13 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 	}
 	// attr.tree needs git 2.46; an older git ignores the key and reads the branch's own.
 	attr := "attr.tree=" + mainSHA
+	if base != "" && mergedSince(dir, sha, mainSHA, base) {
+		// The branch merged main after its checkpoint, so its common
+		// ancestor with main is newer than the checkpoint and already holds
+		// the squashed copy: from the checkpoint, both sides would carry
+		// main's changes and the branch's edits on top of them would conflict.
+		base = ""
+	}
 	if base != "" {
 		// Exit status 1 is a conflict; anything else (such as a git older
 		// than 2.40, without --merge-base) is an error, not the worker's to fix.
@@ -2139,6 +2172,18 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 		return "", &DoubledError{Lines: d}
 	}
 	return e.hostCommit(p, dir, HostCommit{Project: p.Name, Kind: "update", Reviewed: sha, Main: mainSHA})
+}
+
+// mergedSince reports whether branch merged a commit of main after base:
+// their common ancestor is not one base already holds.
+func mergedSince(dir, branch, main, base string) bool {
+	mb, err := Git(dir, "merge-base", branch, main)
+	if err != nil {
+		return false
+	}
+	_, err = Git(dir, "merge-base", "--is-ancestor", strings.TrimSpace(mb), base)
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 1
 }
 
 // ErrConflict means a branch can't be brought up to date without the worker.
