@@ -1636,10 +1636,14 @@ func (m *Module) test(t *Task, p core.Project) error {
 			if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
 				return err
 			}
+			if t.Retested != t.SHA && m.failsAgain(p, t.SHA, cfg.Test, c) {
+				return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+", and again when only the failing tests ran once more:\n\n"+core.Clip(c.Output, 3000))
+			}
 			if t.Retested != t.SHA {
-				// A slow, busy machine fails a test CI passes: the whole
-				// check runs once more before the red counts, so merging
-				// still rests on a green run of this exact commit.
+				// A slow, busy machine fails a test CI passes: what failed
+				// passed run on its own, so the whole check runs once more
+				// before the red counts, and merging still rests on a green
+				// run of this exact commit.
 				t.Retested, t.Recheck = t.SHA, true
 				if strings.HasPrefix(t.Reason, "waiting on main") {
 					t.Reason = ""
@@ -1798,6 +1802,20 @@ func (m *Module) ownDiff(p core.Project, main, sha string) string {
 		return ""
 	}
 	return core.DiffID(core.OwnDiff(dir, base, sha))
+}
+
+// failsAgain runs only what failed in a red check of a change's head once
+// more (Retest) and says whether it failed again: a red that repeats is the
+// change's, and goes back without a whole second run. A pass, or a rerun
+// that couldn't start, is no verdict: the whole check runs again, since what
+// failed is read from the commit's own output and merging rests on a green
+// run of the whole check.
+func (m *Module) failsAgain(p core.Project, sha, command string, c core.Check) bool {
+	if m.Retest == nil || m.Retest(p, sha, command, c, false) {
+		return false
+	}
+	rc, ok := m.C.Effects.GetCheck(p.Name, sha, "retest")
+	return ok && !rc.OK && rc.CantRun == "" && !rc.At.Before(c.At)
 }
 
 // mainTests is main's own test result, measured once per main commit (the
