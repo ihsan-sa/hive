@@ -121,7 +121,9 @@ func (m *Module) claimWithin(id string, d time.Duration) bool {
 	return false
 }
 
+// release frees a task, first setting an aim asked while it was held.
 func (m *Module) release(id string) {
+	m.setAim(id)
 	m.mu.Lock()
 	delete(m.busy, id)
 	m.mu.Unlock()
