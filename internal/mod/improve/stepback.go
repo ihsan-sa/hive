@@ -427,7 +427,7 @@ The setup ran as %s; the Hive's latest runs on the project were %s.
 				inputs["changes.patch"] = patch
 				known += fmt.Sprintf("\n\nWhat the setup changed in its copy (%d commit(s)) is in $HIVE_RUN/changes.patch, to compare with what the Hive's runs did; it is the project's code, so quote none of it either.", n)
 			}
-			t, err := m.Work.File(work.Brief{Project: self.Name, Title: title, From: s.Run, Known: known, Inputs: inputs, Done: done})
+			t, err := m.Work.File(work.Brief{Project: self.Name, Title: title, From: s.Run, Aim: work.AimGain, Why: "a simpler setup scored better; this aims to win that back", Known: known, Inputs: inputs, Done: done})
 			if err == nil {
 				return t.ID
 			}

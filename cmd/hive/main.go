@@ -1086,7 +1086,7 @@ func kbArgs(args []string) (query, limit string) {
 // rather than passing its old number off as current. Names from the usage
 // feed are escaped, so none can rewrite the screen.
 func planLine(p core.Plan, now time.Time) string {
-	s := fmt.Sprintf("plan %s: %s", text.Visible(p.Key()), text.Visible(p.Limit.Standing(now)))
+	s := fmt.Sprintf("plan %s: %s", text.Visible(p.Key()), text.Visible(p.Standing(now)))
 	for _, w := range p.Limit.WindowUses(now) {
 		name, at := text.Visible(w.Name), w.ResetsAt.Local().Format("Mon 15:04 MST")
 		switch {
@@ -1099,7 +1099,7 @@ func planLine(p core.Plan, now time.Time) string {
 		}
 	}
 	if !p.At.IsZero() {
-		s += fmt.Sprintf(" (read %s ago)", now.Sub(p.At).Round(time.Minute))
+		s += " (read " + harness.Until(now, p.At) + " ago)"
 	}
 	return s
 }
