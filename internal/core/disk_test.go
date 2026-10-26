@@ -349,3 +349,64 @@ func TestPrefetchTurnsTelemetryOff(t *testing.T) {
 		t.Fatalf("go saw telemetry mode %q", raw)
 	}
 }
+
+// A check of a commit on main writes the project's build cache; a check of
+// any other commit reads it, read-only, through the cache program, and only
+// once main has built something. Each checkout's file times follow content.
+func TestOnlyMainWritesTheBuildCache(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the shared build cache is for Linux sandboxes")
+	}
+	c, _, p, main := setupProject(t)
+	checkout := func() string {
+		dir, err := c.Effects.cleanCheckout(p, main, "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		return dir
+	}
+	dir := checkout()
+	other := strings.Repeat("0", 40)
+	if g := c.Effects.goBuild(isolated{}, p, main, dir); g.mounts != nil {
+		t.Fatal("a checkout with no go.mod got a build cache")
+	}
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n"), 0o644)
+	if g := c.Effects.goBuild(isolated{}, p, other, dir); g.mounts != nil {
+		t.Fatalf("a branch got a build cache before main built one: %+v", g)
+	}
+	g := c.Effects.goBuild(isolated{}, p, main, dir)
+	g.done()
+	if len(g.mounts) != 1 || g.mounts[0].Host != c.WS.GoBuildCache(p.Name) || !g.mounts[0].RW || !slices.Equal(g.env, []string{"GOCACHE=" + GoBuildInside}) {
+		t.Fatalf("main's check: %+v", g)
+	}
+	g = c.Effects.goBuild(isolated{}, p, other, dir)
+	g.done()
+	if len(g.mounts) != 1 || g.mounts[0].RW || g.mounts[0].Inside != GoBuildInside || !slices.ContainsFunc(g.env, func(kv string) bool {
+		return kv == "GOCACHEPROG=/hive/bin/hive gocacheprog "+GoBuildInside+" /hive/home/gobuild"
+	}) {
+		t.Fatalf("a branch's check: %+v", g)
+	}
+	if g := c.Effects.goBuild(sandbox.Bare{}, p, main, dir); g.mounts != nil {
+		t.Fatal("a bare run got the shared build cache")
+	}
+	// The same content has the same time in another checkout, long past;
+	// other content has another.
+	again := checkout()
+	stableTimes(again)
+	times := func(d, name string) time.Time {
+		fi, err := os.Stat(filepath.Join(d, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.ModTime()
+	}
+	for _, name := range []string{"README.md", ".hive", ".hive/goals.md", "."} {
+		if a, b := times(dir, name), times(again, name); !a.Equal(b) || time.Since(a) < 24*time.Hour {
+			t.Errorf("%s: %v and %v", name, a, b)
+		}
+	}
+	if times(dir, "README.md").Equal(times(dir, ".hive/goals.md")) {
+		t.Error("two contents share a time")
+	}
+}
