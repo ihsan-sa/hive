@@ -64,14 +64,15 @@ func (e *Effects) Judgement(project, sha, main string) (Judgement, bool) {
 	return j, ok
 }
 
-// Kept is the gate's verdict on head against main as it decides a merge: a
-// measured verdict as the judge called it, once it has; else the numbers.
-func (e *Effects) Kept(project, head, main string) bool {
-	g, ok := e.GateResult(project, head, main)
+// Kept is the gate's verdict on head that stands at main (StandingGate) as
+// it decides a merge: a measured verdict as the judge called it, once it
+// has; else the numbers.
+func (e *Effects) Kept(p Project, head, main string) bool {
+	g, ok := e.StandingGate(p, head, main)
 	if !ok {
 		return false
 	}
-	if j, ok := e.Judgement(project, head, main); ok && g.Measured && j.At.After(g.At) {
+	if j, ok := e.Judgement(p.Name, head, g.Main); ok && g.Measured && j.At.After(g.At) {
 		return j.Verdict == GateKeep
 	}
 	return g.Outcome == GateKeep
