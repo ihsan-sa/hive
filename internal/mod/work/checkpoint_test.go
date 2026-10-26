@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
@@ -205,5 +206,42 @@ func TestGainCheckpointDroppedFinalHeadGated(t *testing.T) {
 	gateOnce(t, m, task, p)
 	if len(*jobs) != 1 || task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
 		t.Fatalf("%d gate runs, stage %q, reason %q: want the whole head merged on the gate's keep", len(*jobs), task.Stage, task.Reason)
+	}
+}
+
+// While checks wait for a slot, a commit isn't weighed: the step would hold
+// the task behind the backlog, so a worker that finished meanwhile would sit
+// in working. The commit is weighed once the backlog clears.
+func TestCheckpointWaitsOutACheckBacklog(t *testing.T) {
+	m, task, p := checkpointRig(t, 5, "5")
+	slots := core.NewSlots(func() int { return 1 })
+	m.C.Effects.Slots = slots
+	release := slots.Acquire("other", "abc", "test")
+	go func() { slots.Acquire("other", "def", "test")() }()
+	for _, waiting := slots.State(); len(waiting) == 0; _, waiting = slots.State() {
+		time.Sleep(time.Millisecond)
+	}
+	done := make(chan error, 1)
+	go func() { done <- m.checkWorker(task, p) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the checkpoint waited for a check slot")
+	}
+	if task.Seen != "" || logged(task, "doesn't beat") {
+		t.Fatalf("weighed behind the backlog: seen %q, log %v", task.Seen, task.Log)
+	}
+	release()
+	for running, waiting := slots.State(); len(running)+len(waiting) > 0; running, waiting = slots.State() {
+		time.Sleep(time.Millisecond)
+	}
+	if err := m.checkWorker(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if !logged(task, "doesn't beat the best kept score 5") {
+		t.Fatalf("not weighed once the backlog cleared: %v", task.Log)
 	}
 }

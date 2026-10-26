@@ -306,8 +306,10 @@ type Module struct {
 	defCache map[string]defEntry
 	// baseTrees holds the files of the bases working tasks started on (queue.go).
 	baseTrees map[string]map[string]string
-	filing    sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
-	steps     sync.WaitGroup // the steps Tick started that are still going
+	// mainTips holds each project's main for one admit pass (queue.go).
+	mainTips map[string]string
+	filing   sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
+	steps    sync.WaitGroup // the steps Tick started that are still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -362,7 +364,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, defCache: map[string]defEntry{}, baseTrees: map[string]map[string]string{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, defCache: map[string]defEntry{}, baseTrees: map[string]map[string]string{}, mainTips: map[string]string{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -1305,6 +1307,13 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	if _, err := m.C.Sandbox(); err != nil {
 		return nil
 	}
+	// Weighing waits for a check slot, and the step holds the task while it
+	// waits: behind a backlog of checks, a worker that finished meanwhile
+	// sat in working for as long as the backlog took. A checkpoint is only
+	// a bonus, so it waits for a free slot instead, looked at again later.
+	if _, waiting := m.C.Effects.Slots.State(); len(waiting) > 0 {
+		return nil
+	}
 	sha, err := m.C.Effects.Extract(p, r, t.Base)
 	switch {
 	case errors.Is(err, core.ErrNoChanges):
@@ -2008,7 +2017,10 @@ func (m *Module) reviewRules(p core.Project, main string) string {
 
 // followUp files a merged task's review advice as one follow-up brief. The
 // task is saved merged before this runs and done after, so a restart in
-// between finds the brief already filed and doesn't file it again.
+// between finds the brief already filed and doesn't file it again. It is
+// filed as a fix of what the reviewer found: it hardens a change that already
+// passed, so no gate probe would see it move and, taken as a gain, it would
+// tie and be rolled back.
 func (m *Module) followUp(t *Task, p core.Project) error {
 	if len(t.Advice) == 0 || len(m.List(func(x Task) bool { return x.FollowUp == t.ID })) > 0 {
 		return nil
@@ -2018,6 +2030,7 @@ func (m *Module) followUp(t *Task, p core.Project) error {
 		url = t.Banks[len(t.Banks)-1].PR.URL
 	}
 	_, err := m.File(Brief{Project: p.Name, From: t.Reviewer, Chat: t.Chat, Thread: t.Thread, FollowUp: t.ID,
+		Aim: AimFix, Why: core.Clip("the review of "+t.Label()+" found: "+strings.Join(t.Advice, "; "), 300),
 		Title: "Follow up the review of " + core.Clip(t.Label(), 100),
 		Done:  "Each item below is done, or judged not worth doing with the reason in your account.",
 		Known: "The reviewer landed " + url + ", now merged, with this advice:\n\n- " + strings.Join(t.Advice, "\n- ")})
@@ -2321,9 +2334,9 @@ func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 // It merges as it is while the forge says it merges cleanly: every main merge
 // moves the head past its reads and restarts its checks. Here only a conflict,
 // or the forge's rule that the branch be up to date with main, brings main in;
-// on a self project the recursive gate brings it in too, later, so it judges
-// what would land (see recursiveGate). While the forge is still working it
-// out, t waits.
+// on a self project the recursive gate merges main in its own clone, so it
+// judges what would land without moving the branch (see recursiveGate). While
+// the forge is still working it out, t waits.
 func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
 		return false, nil
