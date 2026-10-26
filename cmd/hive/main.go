@@ -25,6 +25,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/daemon"
 	"github.com/ihsan-sa/hive-standalone-build/internal/fakeagent"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
+	"github.com/ihsan-sa/hive-standalone-build/internal/gocache"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
@@ -133,6 +134,8 @@ func run(args []string) int {
 		return 0
 	case "sandbox-inner":
 		return sandbox.Inner(args)
+	case "gocacheprog": // a check's GOCACHEPROG (core.goBuild)
+		return gocache.Main(args)
 	case "sandbox-probe":
 		sb, err := sandbox.Select(sandbox.Options{Mode: "auto"})
 		if err != nil {
