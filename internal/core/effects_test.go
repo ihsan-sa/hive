@@ -120,8 +120,16 @@ func TestMergeNeedsCheckAndVerdictOnExactCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main, Subject: "feature"}
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no passing test") {
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no test run") {
 		t.Fatalf("merged without a test run: %v", err)
+	}
+	// A red run main's own run doesn't share (here main has none) is refused.
+	red := "echo '--- FAIL: TestClock (0.01s)'; echo 'FAIL\tp/a\t0.01s'; exit 1"
+	if ch := c.Effects.RunCheck(p, sha, "test", red); ch.OK {
+		t.Fatal("a failing test run passed")
+	}
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "red beyond") {
+		t.Fatalf("merged on a red test run main doesn't share: %v", err)
 	}
 	if ch := c.Effects.RunCheck(p, sha, "test", c.Effects.Config(p, main).Test); !ch.OK {
 		t.Fatalf("tests should pass: %s", ch.Output)

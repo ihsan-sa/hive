@@ -1575,7 +1575,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 			return m.cantRun(t, p, mc)
 		}
 		switch {
-		case !mc.OK && !noWorse(c, mc):
+		case !mc.OK && !core.NoWorse(c, mc):
 			return m.waitOnMain(t, p, main, mc)
 		case !mc.OK:
 			// Every test it fails main fails too: it is no worse than main,
@@ -1754,26 +1754,6 @@ func (m *Module) mainTests(p core.Project, main, command string) (core.Check, er
 		return core.Check{}, err
 	}
 	return m.C.Effects.RunCheck(p, main, "test", command), nil
-}
-
-// noWorse says a red change fails only what main's red run fails too, each
-// test by its package and name, so the red is main's and the change may be
-// its fix. A failure in its run that no test name accounts for (a timeout, a
-// panic or exit outside a test, a build failure) counts only where main's
-// run fails that package so too; one either run can't name at all can't be
-// told apart. A run stopped by vet or the build (core.StopKeys) never ran its
-// tests, so matching main's vet error never makes a change no worse.
-func noWorse(c, mc core.Check) bool {
-	mine, mains := core.RedKeys(c.FullOutput()), core.RedKeys(mc.FullOutput())
-	if len(mine) == 0 || len(mains) == 0 {
-		return false
-	}
-	for _, k := range mine {
-		if !slices.Contains(mains, k) {
-			return false
-		}
-	}
-	return true
 }
 
 // waitOnMain holds a red change while main's own tests are red, since the
@@ -2182,6 +2162,13 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		m.raiseOnce(p, main+"/refused", say)
 		m.hold(t, p, "waiting on main: "+rr.Error())
 		return nil
+	}
+	var rf core.Refusal
+	if errors.As(err, &rf) {
+		// Said as what holds it, not left on the last gate's reason (the
+		// security read it already passed, say); it still counts toward
+		// giving up, as a refusal that never clears should stop for the person.
+		t.Reason = rf.Error()
 	}
 	if err != nil {
 		return err
