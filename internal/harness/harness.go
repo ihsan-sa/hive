@@ -337,6 +337,18 @@ func LooksLimited(s string) bool {
 		(strings.Contains(s, "limit") && strings.Contains(s, "reset"))
 }
 
+// SaysLimited is the stricter LooksLimited, for where a miss is only a
+// failure asked about but a false match hides one: s names a usage, weekly or
+// hour limit, or a limit with when it resets ("resets 3pm"), not merely both
+// words somewhere.
+func SaysLimited(s string) bool {
+	l := strings.ToLower(s)
+	return strings.Contains(l, "usage limit") || namedLimit.MatchString(l) ||
+		strings.Contains(l, "limit") && limitReset.MatchString(l)
+}
+
+var namedLimit = regexp.MustCompile(`hit your (?:\w+ )?limit|(?:weekly|hour|session|opus|sonnet) limit`)
+
 // limitReset finds when a usage-limit message says the limit resets:
 // "resets Oct 26, 1pm (America/New_York)", "resets 3:30pm", "resets Oct 28, 12am".
 var limitReset = regexp.MustCompile(`(?i)resets\s+(?:at\s+)?(?:([a-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s*\(([^)\s]+)\))?`)

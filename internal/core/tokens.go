@@ -336,9 +336,10 @@ func (t *Tokens) Track(j *Journal, p *Person) {
 			s.Limited, s.next, s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt = r.Until, r.Until, time.Time{}, "", 0, false, time.Time{}
 			return
 		}
-		s.Limited = time.Time{}
 		if e.Kind == "login.renewed" {
-			s.Renewed, s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt = e.At, time.Time{}, "", 0, false, time.Time{}
+			// Only a renewal ends a park, as live: a failure since (a check of
+			// the harness) leaves it parked.
+			s.Renewed, s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt, s.Limited = e.At, time.Time{}, "", 0, false, time.Time{}, time.Time{}
 		} else {
 			s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt = e.At, r.Error, max(r.Failures, 1), r.ByCheck, r.Expires
 		}
@@ -364,12 +365,23 @@ func (t *Tokens) States() []LoginState {
 	defer t.mu.Unlock()
 	var out []LoginState
 	for _, s := range t.state {
-		if !s.Expires.IsZero() || !s.Renewed.IsZero() || s.Error != "" {
+		if !s.Expires.IsZero() || !s.Renewed.IsZero() || s.Error != "" || !s.Limited.IsZero() {
 			out = append(out, *s)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Login < out[j].Login })
 	return out
+}
+
+// LimitedUntil is when login key's park at its usage limit, found by a
+// renewal, ends; zero or past when it isn't parked.
+func (t *Tokens) LimitedUntil(key string) time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if s := t.state[key]; s != nil {
+		return s.Limited
+	}
+	return time.Time{}
 }
 
 // Retry is the person saying they renewed login key by hand: the next look
@@ -503,7 +515,7 @@ func (t *Tokens) renew(l Login, before time.Time) error {
 	}
 	cmd.Dir = os.TempDir()
 	out, err := cmd.CombinedOutput()
-	if err != nil && harness.LooksLimited(string(out)) {
+	if err != nil && harness.SaysLimited(string(out)) {
 		return &limitedError{until: harness.LimitResets(string(out), time.Now()), said: harnessSaid(out)}
 	}
 	if err != nil {
@@ -625,8 +637,13 @@ type limitedError struct {
 func (e *limitedError) Error() string { return "at its usage limit: " + e.said }
 
 // limitWait is how long a limited login is parked when the harness doesn't
-// say when its limit resets.
-const limitWait = time.Hour
+// say when its limit resets, and limitMost the longest any reset it names
+// parks it: a week's window and a day, so a misread date can't park it for
+// months.
+const (
+	limitWait = time.Hour
+	limitMost = 8 * 24 * time.Hour
+)
 
 // What done records: a renewal the Hive ran, a try of the harness, or an
 // expiry that moved on its own after a failure.
@@ -721,20 +738,25 @@ func (t *Tokens) done(l Login, exp time.Time, err error, how int) {
 // parked records that login l's renewal was turned away by its usage limit:
 // not a failure, so nothing is asked of the person, who can't change it. The
 // login waits for its reset (or limitWait, when the harness didn't say)
-// before the next try; the first park of a run of them is journaled, and an
-// ask an earlier failure left open is closed, being no longer the person's.
+// before the next try; the first park of a run of them is journaled (again
+// only when a reset it names moves), and an earlier failure's alert and ask
+// are closed, being no longer the person's.
 func (t *Tokens) parked(l Login, exp time.Time, lim *limitedError, now time.Time) {
 	key := l.Key()
 	until := lim.until
 	if !until.After(now) {
 		until = now.Add(limitWait)
 	}
+	if until.Sub(now) > limitMost {
+		until = now.Add(limitMost)
+	}
 	t.mu.Lock()
 	s := t.stateLocked(key)
 	if !exp.IsZero() {
 		s.Expires = exp
 	}
-	fresh := s.Limited.IsZero() || !s.Limited.Equal(until)
+	failing := s.Error != ""
+	fresh := failing || s.Limited.IsZero() || !lim.until.IsZero() && !s.Limited.Equal(until)
 	s.Limited, s.next = until, until
 	s.Failed, s.Error, s.Run, s.Failures, s.byCheck, s.stuckAt = time.Time{}, "", "", 0, false, time.Time{}
 	c := *s
@@ -746,6 +768,9 @@ func (t *Tokens) parked(l Login, exp time.Time, lim *limitedError, now time.Time
 		return
 	}
 	j.MustAppend("login.limited", map[string]any{"login": key, "expires": c.Expires, "until": until, "said": lim.said})
+	if failing {
+		j.MustAppend("alert.raised", map[string]string{"kind": "login", "ref": "login:" + key, "text": fmt.Sprintf("The %s login is at its usage limit until %s; it renews after the reset", key, until.Local().Format("Mon 15:04"))})
+	}
 	if p != nil {
 		for _, a := range p.Open() {
 			if a.Kind == "login" && a.Ref == key {

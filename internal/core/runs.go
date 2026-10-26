@@ -953,11 +953,18 @@ func (rs *Runs) Plans() []Plan {
 func (rs *Runs) pickLogin(h, model, home string, bare bool) (Login, []string, error) {
 	logins := rs.logins(h, model)
 	now := time.Now()
+	// A renewal turned away by the login's usage limit parks it too: a turn
+	// on it would only be turned away the same.
+	renewing, _ := rs.tokens.(interface{ LimitedUntil(string) time.Time })
+	limited := map[string]bool{}
+	for _, l := range logins {
+		limited[l.Key()] = renewing != nil && renewing.LimitedUntil(l.Key()).After(now)
+	}
 	rs.mu.Lock()
 	use := func(l Login) float64 { return rs.plans[l.Key()].Used(now) }
 	var open []Login
 	for _, l := range logins {
-		if !rs.plans[l.Key()].Parked(now) {
+		if !limited[l.Key()] && !rs.plans[l.Key()].Parked(now) {
 			open = append(open, l)
 		}
 	}
