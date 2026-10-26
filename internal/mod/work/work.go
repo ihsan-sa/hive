@@ -593,8 +593,8 @@ func (m *Module) opAim(r core.Run, args json.RawMessage) (any, error) {
 	if t.Terminal() || t.Stage == StageMerged {
 		return nil, fmt.Errorf("task %s has already ended (%s)", t.ID, t.Stage)
 	}
-	if t.Worker == r.ID && aim != AimGain && t.Gain() && t.Gate != nil && t.Gate.Outcome == core.GateRollback {
-		return nil, fmt.Errorf("task %s was rolled back by the recursive gate, so it can't stop aiming at a gain on its own worker's word: ask another agent (hive agent message --to lead, or a run on related work), who can set its aim", t.ID)
+	if aim != AimGain && t.Gain() && t.Gate != nil && t.Gate.Outcome == core.GateRollback && m.spokenFor(r, t.Worker) {
+		return nil, fmt.Errorf("task %s was rolled back by the recursive gate, so it can't stop aiming at a gain on its own worker's word, nor a helper it spawned: ask another agent (hive agent message --to lead, or a run on related work that isn't yours), who can set its aim", t.ID)
 	}
 	ask := aimAsk{aim: aim, why: core.Clip(strings.TrimSpace(a.Why), 300), by: r.ID}
 	if t.Aim != ask.aim || t.AimWhy != ask.why {
@@ -3635,6 +3635,27 @@ func (m *Module) retryInFlight(id, back, by string) error {
 func (m *Module) workerStopped(t Task) bool {
 	r, ok := m.C.Runs.Get(t.Worker)
 	return ok && t.Worker != "" && (r.Status == core.StatusStopped || r.StopAsked)
+}
+
+// spokenFor says whether r is the worker or a helper down its spawn chain,
+// so a change can't move its own bar one hop removed.
+func (m *Module) spokenFor(r core.Run, worker string) bool {
+	if worker == "" {
+		return false
+	}
+	seen := map[string]bool{}
+	for id, parent := r.ID, r.Parent; !seen[id]; {
+		if id == worker || parent == worker {
+			return true
+		}
+		seen[id] = true
+		p, ok := m.C.Runs.Get(parent)
+		if parent == "" || !ok {
+			return false
+		}
+		id, parent = p.ID, p.Parent
+	}
+	return false
 }
 
 // steerers are the roles that keep the loop moving: every agent owns it, so

@@ -973,8 +973,8 @@ func TestNewHeadCancelsItsOldGate(t *testing.T) {
 }
 
 // Any agent on a project may set a rolled-back gain's aim, but not the worker
-// whose change the gate rolled back: that would overrule the gate on its own
-// word.
+// whose change the gate rolled back, nor a helper it spawned: that would
+// overrule the gate on its own word.
 func TestAimAfterRollback(t *testing.T) {
 	m, task, _, _ := gateRig(t, false, map[string]string{"x.txt": "x\n"})
 	task.Aim, task.Gate = AimGain, &core.GateResult{Outcome: core.GateRollback}
@@ -982,6 +982,10 @@ func TestAimAfterRollback(t *testing.T) {
 	own := core.Run{ID: task.Worker, Role: "worker", Project: task.Project}
 	if _, err := m.opAim(own, []byte(`{"aim":"fix","why":"x"}`)); err == nil || !strings.Contains(err.Error(), "ask another agent") {
 		t.Fatalf("its own worker turned a rolled-back gain into a fix: %v", err)
+	}
+	helper := core.Run{ID: "w-helper", Role: "worker", Project: task.Project, Parent: task.Worker}
+	if _, err := m.opAim(helper, []byte(`{"task":"`+task.ID+`","aim":"fix","why":"x"}`)); err == nil || !strings.Contains(err.Error(), "helper it spawned") {
+		t.Fatalf("a helper its worker spawned turned a rolled-back gain into a fix: %v", err)
 	}
 	peer := core.Run{ID: "w-peer", Role: "worker", Project: task.Project}
 	if _, err := m.opAim(peer, []byte(`{"task":"`+task.ID+`","aim":"fix","why":"it fixes the failing TestX"}`)); err != nil {
