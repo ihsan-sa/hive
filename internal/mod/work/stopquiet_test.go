@@ -42,6 +42,10 @@ func TestLeadStopsAQuietWorker(t *testing.T) {
 	if r, _ := m.C.Runs.Get("wq"); r.Status != core.StatusBlocked || !strings.Contains(r.Reason, "quiet a day") {
 		t.Fatalf("run %s: %q", r.Status, r.Reason)
 	}
+	m.C.Runs.Send("wq", "are you there?") // refused, as the run has ended
+	if r, _ := m.C.Runs.Get("wq"); r.Status != core.StatusBlocked {
+		t.Fatalf("a message woke the stopped run: %s %q", r.Status, r.Reason)
+	}
 	cur, _ := m.Get(stuck.ID)
 	if err := m.checkWorker(&cur, p); err != nil {
 		t.Fatal(err)

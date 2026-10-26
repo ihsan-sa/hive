@@ -9,17 +9,14 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
-// stoppedQuiet starts the reason a quiet worker's run ends with when an agent
-// stops it, so its task reads as blocked, not as the person's stop.
-const stoppedQuiet = "stopped while quiet by "
-
 // opStop ends a quiet worker's run, so a task whose worker keeps ending turns
 // without finishing doesn't sit working (holding its run and its task) for a
 // day until the person stops it. Only a quiet run: one taking turns, waiting on
 // an answer or parked is left alone. The run ends blocked, so its task goes
 // blocked on the next tick and is the steerer's to bring back with recheck
 // (its commits checked, or back sent to its worker); with fresh it goes at
-// once to a fresh worker on the same branch with the first one's notes.
+// once to a fresh worker on the same branch with the first one's notes. A
+// message to the ended run doesn't wake it (recheck's back reopens it).
 func (m *Module) opStop(r core.Run, args json.RawMessage) (any, error) {
 	var a struct {
 		Task, Why string
@@ -51,8 +48,10 @@ func (m *Module) opStop(r core.Run, args json.RawMessage) (any, error) {
 	if w.Status != core.StatusQuiet {
 		return nil, fmt.Errorf("worker %s is %s, not quiet; only a run that keeps ending turns without finishing is stopped this way (message it, or wait)", w.ID, w.Status)
 	}
-	why := core.Clip(stoppedQuiet+r.ID+": "+a.Why, 300)
-	m.C.Runs.SetStatus(w.ID, core.StatusBlocked, why)
+	why := core.Clip(core.StoppedQuiet+r.ID+": "+a.Why, 300)
+	if err := m.C.Runs.EndQuiet(w.ID, why); err != nil {
+		return nil, fmt.Errorf("%v (it took a turn since; message it, or wait)", err)
+	}
 	note := "its worker " + w.ID + " ended blocked; the task goes blocked on the next tick: bring it back with recheck"
 	if a.Fresh {
 		if err := m.Retry(t.ID); err != nil {

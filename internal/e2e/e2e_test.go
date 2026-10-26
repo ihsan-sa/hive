@@ -1792,11 +1792,16 @@ func TestStepBack(t *testing.T) {
 		if name == "zero" {
 			paid = ""
 		}
+		// With its goals already in the repo, no unpaid "Set up the Hive
+		// files" task is filed, whose merge could plateau the score before
+		// the paid one spends anything.
+		goals := "Make the score high. FAKE:stepback" + name
 		h.seed("me/"+name, map[string]string{
 			".hive/project.json": `{"test": "true", "score": {"command": "cat score.txt", "direction": "higher", "tolerance": 0}` + protected + `}`,
+			".hive/goals.md":     "# Goals\n\n" + goals + "\n",
 			"score.txt":          "5\n",
 		})
-		h.post("/api/project", map[string]any{"name": name, "repo": "me/" + name, "isolated": name == "lose", "goals": "Make the score high. FAKE:stepback" + name}, nil)
+		h.post("/api/project", map[string]any{"name": name, "repo": "me/" + name, "isolated": name == "lose", "goals": goals}, nil)
 		h.post("/api/ask", map[string]string{"project": name, "title": "tidy " + name, "known": "a change that leaves the score alone" + paid}, nil)
 	}
 	stepback := func(st api.State, project string) (improve.StepBack, bool) {
