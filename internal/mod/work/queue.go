@@ -562,7 +562,10 @@ var pathLike = regexp.MustCompile(`[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+`)
 // onList is the text before a path a brief only cites as a list a file is on
 // ("effects.go is on tests/LANDING-security.toml", "a path on it"), not one it
 // edits: 10 of 12 briefs that waited on the security list never changed it.
+// Only a list file reads so; "the bug is on internal/x.go" names what it edits.
 var onList = regexp.MustCompile("(?i)\\b(?:is|are|paths?)\\s+['\"`]?on\\s+['\"`]?$")
+
+var listFile = map[string]bool{".toml": true, ".txt": true, ".json": true, ".yml": true, ".yaml": true}
 
 // areas are the files t's brief names that exist in its project's clone. A
 // file is only itself, so two briefs on different files of one package start
@@ -605,10 +608,10 @@ func (m *Module) areas(t Task) []string {
 		}
 	}
 	for _, at := range pathLike.FindAllStringIndex(text, -1) {
-		if onList.MatchString(text[max(0, at[0]-24):at[0]]) {
+		p := path.Clean(strings.TrimRight(strings.TrimPrefix(text[at[0]:at[1]], "./"), "."))
+		if listFile[path.Ext(p)] && onList.MatchString(text[max(0, at[0]-24):at[0]]) {
 			continue
 		}
-		p := path.Clean(strings.TrimRight(strings.TrimPrefix(text[at[0]:at[1]], "./"), "."))
 		if p == "." || strings.HasPrefix(p, "..") || strings.HasPrefix(p, ".git/") {
 			continue
 		}

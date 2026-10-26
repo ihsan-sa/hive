@@ -316,15 +316,24 @@ func TestQueueAreasSkipDirectoriesAndUnionDocs(t *testing.T) {
 	}
 }
 
-// A file a brief only says another is on ("effects.go is on
-// internal/core/runs.go", "a path on it") is no area; one it adds to is.
+// A list a brief only says a file is on ("effects.go is on tests/list.toml",
+// "a path on it") is no area; one it adds to is, and so is a code file
+// something "is on" ("the bug is on internal/core/runs.go").
 func TestQueueAreasSkipListsAFileIsOn(t *testing.T) {
 	m := queueRig(t)
+	p, _ := m.C.Projects.Get("p")
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+	clone := m.C.WS.Project("p")
+	os.MkdirAll(filepath.Join(clone, "tests"), 0o755)
+	os.WriteFile(filepath.Join(clone, "tests", "list.toml"), []byte("paths = []\n"), 0o644)
 	for text, want := range map[string]string{
-		"internal/tui/views.go is on internal/core/runs.go: say so in the PR.":          "internal/tui/views.go",
-		"Both are 'on internal/core/runs.go'; a path on internal/core/effects.go too.":  "",
-		"Add internal/tui/views.go to internal/core/runs.go, which lists what's on it.": "internal/tui/views.go internal/core/runs.go",
-		"Work on internal/core/effects.go; the TUI is in internal/tui/views.go.":        "internal/core/effects.go internal/tui/views.go",
+		"internal/tui/views.go is on tests/list.toml.":                            "internal/tui/views.go",
+		"Both are 'on tests/list.toml'; a path on tests/list.toml too.":           "",
+		"Add internal/tui/views.go to tests/list.toml, which lists what's on it.": "internal/tui/views.go tests/list.toml",
+		"Work on internal/core/effects.go; the TUI is in internal/tui/views.go.":  "internal/core/effects.go internal/tui/views.go",
+		"The bug is on internal/core/runs.go, line 12.":                           "internal/core/runs.go",
 	} {
 		if got := strings.Join(m.areas(file(t, m, "fix it", text)), " "); got != want {
 			t.Errorf("%q: areas %q, want %q", text, got, want)
