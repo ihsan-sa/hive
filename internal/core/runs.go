@@ -88,6 +88,7 @@ type Run struct {
 	Finish      *Finish         `json:"finish,omitempty"`
 	Pending     []string        `json:"pending,omitempty"`
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
+	ParkedSince time.Time       `json:"parked_since,omitempty"` // when it last went from another status to parked
 	Retries     int             `json:"retries"`
 	Offline     string          `json:"offline,omitempty"` // its last turn couldn't reach its service, and why
 	Nudges      int             `json:"nudges"`
@@ -225,15 +226,32 @@ func (p Plan) Key() string {
 // than spend the last of it.
 const WeeklyStop = 0.95
 
-// Reserved says whether role's runs may spend the reserve, the last of a
-// week past WeeklyStop: the checks (CheckRoles), so a change already written
-// can still be read, judged and merged. On 10-26 a gate's keep waited over
-// 8 hours for its judge, parked at 95% of every login's week, and main
-// didn't move for 12 (issue #983).
-func Reserved(role string) bool { return slices.Contains(CheckRoles, role) }
+// CheckReserve is the share of a week below WeeklyStop kept for the checks
+// (Reserved): every other run stops at WeeklyStop-CheckReserve, so a change
+// already written can still be read, judged and merged, and WeeklyStop stays
+// the ceiling for all. On 10-26 a gate's keep waited over 8 hours for its
+// judge, parked at 95% of every login's week, and main didn't move for 12
+// (issue #983).
+const CheckReserve = 0.05
 
-// Parked reports whether the plan is at its usage limit, or at WeeklyStop of
-// its weekly window, until a reset still ahead.
+// Reserved says whether role's runs may spend the reserve: the checks
+// (CheckRoles), and the leads, which answer however busy the machine is
+// (docs/priority.md) and stopped at WeeklyStop before the reserve.
+func Reserved(role string) bool { return role == "lead" || slices.Contains(CheckRoles, role) }
+
+// weeklyMark is the share of its week at which a login takes no more of a
+// run's turns: WeeklyStop for a check or a lead, CheckReserve below it for
+// the rest.
+func weeklyMark(reserve bool) float64 {
+	if reserve {
+		return WeeklyStop
+	}
+	return WeeklyStop - CheckReserve
+}
+
+// Parked reports whether the plan is at its usage limit, or at
+// weeklyMark of its weekly window (where all but the checks stop), until a
+// reset still ahead.
 func (p Plan) Parked(now time.Time) bool { return !p.ParkedUntil(now).IsZero() }
 
 // ParkedUntil is when a parked plan (Parked) takes turns again, the later of
@@ -241,13 +259,13 @@ func (p Plan) Parked(now time.Time) bool { return !p.ParkedUntil(now).IsZero() }
 func (p Plan) ParkedUntil(now time.Time) time.Time { return p.parkedFor(now, false) }
 
 // parkedFor is ParkedUntil for a run that may spend the reserve (Reserved)
-// or not: the reserve stops only at the usage limit itself.
+// or not: the reserve runs on to WeeklyStop.
 func (p Plan) parkedFor(now time.Time, reserve bool) time.Time {
 	var at time.Time
 	if p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now) {
 		at = p.Limit.ResetsAt
 	}
-	if w, ok := p.Weekly(now); ok && !reserve && w.Utilization >= WeeklyStop && w.ResetsAt.After(at) {
+	if w, ok := p.Weekly(now); ok && w.Utilization >= weeklyMark(reserve) && w.ResetsAt.After(at) {
 		at = w.ResetsAt
 	}
 	return at
@@ -255,7 +273,7 @@ func (p Plan) parkedFor(now time.Time, reserve bool) time.Time {
 
 // stale reports whether p, a reading short of a rejection taken while old is
 // parked, was taken before the park: it parks the login for less time, and
-// the window that parked old (its week, at WeeklyStop, or its limit's)
+// the window that parked old (its week, at weeklyMark, or its limit's)
 // hasn't reset since. A week's park is measured against the week's reset,
 // not the five-hour one the reading's top level often carries.
 func (p Plan) stale(old Plan, now time.Time) bool {
@@ -263,7 +281,7 @@ func (p Plan) stale(old Plan, now time.Time) bool {
 	if !p.ParkedUntil(now).Before(until) {
 		return false
 	}
-	if w, ok := old.Weekly(now); ok && w.Utilization >= WeeklyStop && w.ResetsAt.Equal(until) {
+	if w, ok := old.Weekly(now); ok && w.Utilization >= weeklyMark(false) && w.ResetsAt.Equal(until) {
 		pw, ok := p.Weekly(now)
 		return !ok || !pw.ResetsAt.After(until)
 	}
@@ -271,9 +289,12 @@ func (p Plan) stale(old Plan, now time.Time) bool {
 }
 
 // Standing is the login's state in plain words (RateLimit.Standing), or
-// that it has stopped at WeeklyStop of its week until the reset.
+// that it has stopped at weeklyMark of its week until the reset.
 func (p Plan) Standing(now time.Time) string {
-	if w, ok := p.Weekly(now); ok && w.Utilization >= WeeklyStop && !(p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now)) {
+	if w, ok := p.Weekly(now); ok && w.Utilization >= weeklyMark(false) && !(p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now)) {
+		if w.Utilization < WeeklyStop {
+			return fmt.Sprintf("paused at %.0f%% of its week until it resets; the checks and leads run on to %.0f%%", weeklyMark(false)*100, WeeklyStop*100)
+		}
 		return fmt.Sprintf("paused at %.0f%% of its week until it resets", WeeklyStop*100)
 	}
 	return p.Limit.Standing(now)
@@ -691,6 +712,14 @@ func (rs *Runs) apply(e Event) {
 		return
 	}
 	r.Updated = e.At
+	was := r.Status
+	defer func() {
+		if r.Status != StatusParked {
+			r.ParkedSince = time.Time{}
+		} else if was != StatusParked {
+			r.ParkedSince = e.At
+		}
+	}()
 	switch e.Kind {
 	case "run.turn_started":
 		var t turnStarted
@@ -985,7 +1014,7 @@ func (rs *Runs) Plans() []Plan {
 
 // pickLogin chooses the login for a run's next turn: of those not parked at
 // their usage limit, the least used (Plan.Used), the machine's own first on a
-// tie; a check (Reserved) takes the reserve past WeeklyStop too. A
+// tie; a check (Reserved) takes the reserve up to WeeklyStop too. A
 // bare run whose machine login has no credential file the Hive can read gets
 // no token, so the harness's own login on the host still works.
 func (rs *Runs) pickLogin(h, model, home string, bare, reserve bool) (Login, []string, error) {
@@ -1001,10 +1030,7 @@ func (rs *Runs) pickLogin(h, model, home string, bare, reserve bool) (Login, []s
 	}
 	sort.SliceStable(open, func(i, j int) bool { return use(open[i]) < use(open[j]) })
 	rs.mu.Unlock()
-	limit := fmt.Errorf("every %s login is at its usage limit or %.0f%% of its weekly window", HarnessName(h), WeeklyStop*100)
-	if reserve {
-		limit = fmt.Errorf("every %s login is at its usage limit", HarnessName(h))
-	}
+	limit := fmt.Errorf("every %s login is at its usage limit or %.0f%% of its weekly window", HarnessName(h), weeklyMark(reserve)*100)
 	err := limit
 	for _, l := range open {
 		env, e := rs.tokens.AgentEnv(l, home)
@@ -1078,7 +1104,7 @@ func (rs *Runs) logins(h, model string) []Login {
 
 // freeAt is when a login for harness h and model next has room: now if one
 // has, else the earliest reset; a pick that can't answer (Down) waits for
-// its retry too. A check (Reserved) has room up to the limit itself.
+// its retry too. A check (Reserved) has room up to WeeklyStop.
 func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	now := time.Now()
 	var at time.Time

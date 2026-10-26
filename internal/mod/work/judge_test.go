@@ -177,8 +177,9 @@ func TestACarriedVerdictIsJudgedAtItsOwnMain(t *testing.T) {
 	}
 }
 
-// A measured keep doesn't wait on a judge parked past JudgeParkWait (issue
-// #983): the judge is stopped and the numbers merge it. A rollback whose
+// A measured keep doesn't wait on a judge that has been parked JudgeParkWait
+// (issue #983): the judge is stopped, the numbers merge it, and the PR says
+// no judge weighed it. A rollback whose
 // judge is parked still waits, as the judge may keep it.
 func TestAParkedJudgeDoesntHoldAKeep(t *testing.T) {
 	for _, outcome := range []string{core.GateKeep, core.GateRollback} {
@@ -190,10 +191,22 @@ func TestAParkedJudgeDoesntHoldAKeep(t *testing.T) {
 			t.Fatalf("%s: no judge run %s", outcome, id)
 		}
 		m.C.J.MustAppend("run.status", map[string]any{"id": id, "status": core.StatusParked, "reason": "login for claude: every claude login is at its usage limit", "until": time.Now().Add(8 * time.Hour)})
-		m.mu.Lock()
-		delete(m.later, task.ID)
-		m.mu.Unlock()
-		mergeOnce(t, m, task, p)
+		again := func() {
+			m.mu.Lock()
+			delete(m.later, task.ID)
+			m.mu.Unlock()
+			mergeOnce(t, m, task, p)
+		}
+		// Parked just now: it waits, however long the park says it lasts.
+		again()
+		if r, _ := m.C.Runs.Get(id); task.Stage != StageMerging || r.Terminal() {
+			t.Fatalf("%s: a judge parked a moment ago: stage %q, reason %q, judge %s", outcome, task.Stage, task.Reason, r.Status)
+		}
+		// Parked JudgeParkWait now.
+		wait := JudgeParkWait
+		JudgeParkWait = 0
+		again()
+		JudgeParkWait = wait
 		r, _ := m.C.Runs.Get(id)
 		if outcome == core.GateRollback {
 			if task.Stage != StageMerging || !strings.Contains(task.Reason, "judge") || r.Terminal() {
@@ -206,6 +219,9 @@ func TestAParkedJudgeDoesntHoldAKeep(t *testing.T) {
 		}
 		if r.Status != core.StatusStopped {
 			t.Fatalf("the parked judge is %s, want stopped", r.Status)
+		}
+		if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); !strings.Contains(c, "Judge bypassed") {
+			t.Fatalf("the PR doesn't say no judge weighed the keep:\n%s", c)
 		}
 	}
 }
