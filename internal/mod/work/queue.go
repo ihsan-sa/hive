@@ -293,8 +293,8 @@ func (m *Module) overlap(t Task, others []Task, prefer string) (*Task, string) {
 	}
 	for _, i := range order {
 		o := others[i]
-		if o.Project != t.Project || o.ID == t.ID {
-			continue
+		if o.Project != t.Project || o.ID == t.ID || sameTree(t, o) {
+			continue // nodes of one search tree work on the same files by design (tree.go)
 		}
 		theirs := map[string]bool{}
 		for _, b := range m.areas(o) {

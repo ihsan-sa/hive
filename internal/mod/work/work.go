@@ -167,6 +167,15 @@ type Task struct {
 	CantRunSaid int `json:"cant_run_said,omitempty"`
 	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
 	Gate *core.GateResult `json:"gate,omitempty"`
+	// A node of a search tree over candidate Hives (tree.go): Tree is its
+	// root's task id, Parent the task it branched from, Depth its level
+	// below the root, and Start the rolled-back commit its first worker
+	// starts from. Branched lists the heads of its own that have branched.
+	Tree     string   `json:"tree,omitempty"`
+	Parent   string   `json:"parent,omitempty"`
+	Depth    int      `json:"depth,omitempty"`
+	Start    string   `json:"start,omitempty"`
+	Branched []string `json:"branched,omitempty"`
 	// GateAsked is the gate item last put to the person (askGateFix),
 	// task@head@main: one answer per head and main.
 	GateAsked string    `json:"gate_asked,omitempty"`
@@ -491,6 +500,12 @@ type Brief struct {
 	FollowUp string `json:"-"`
 	// Model is the model a trial's worker runs on; only the trial op sets it.
 	Model string `json:"-"`
+	// Start, Tree, Parent and Depth make the task a branch of a search tree
+	// (tree.go); only the Hive sets them.
+	Start  string `json:"-"`
+	Tree   string `json:"-"`
+	Parent string `json:"-"`
+	Depth  int    `json:"-"`
 	// Apart files an agent's brief as its own task even when it matches an
 	// open one (join.go).
 	Apart bool `json:"apart"`
@@ -520,7 +535,8 @@ func (m *Module) File(b Brief) (Task, error) {
 		return Task{}, errors.New("a fix names the failure it fixes (--why \"...\"); a change with no named failure is taken as a gain")
 	}
 	t := &Task{Aim: aim, AimWhy: core.Clip(why, 300), ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
-		From: b.From, Chat: b.Chat, Thread: b.Thread, FollowUp: b.FollowUp, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Model: b.Model, Created: time.Now().UTC()}
+		From: b.From, Chat: b.Chat, Thread: b.Thread, FollowUp: b.FollowUp, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Model: b.Model, Created: time.Now().UTC(),
+		Start: b.Start, Tree: b.Tree, Parent: b.Parent, Depth: b.Depth}
 	m.save(t, "filed by "+b.From+", taken as "+t.AimWord())
 	return *t, nil
 }
@@ -1031,6 +1047,9 @@ func (m *Module) step(t *Task) error {
 	if err != nil {
 		return err
 	}
+	if m.archived(t) {
+		return nil
+	}
 	switch t.Stage {
 	case StageNew:
 		is, err := m.C.Effects.Forge.CreateIssue(p.Repo, t.Label(), m.issueBody(t, p), marker(t.ID))
@@ -1097,6 +1116,9 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 			return errors.New("the repository is empty; the project isn't set up yet")
 		}
 		start := base
+		if t.Start != "" && t.SHA == "" {
+			start = t.Start // a branch of a search tree starts from its parent's rolled-back head
+		}
 		if t.SHA != "" && t.Attempt > 0 {
 			start = t.SHA // the same branch: the first worker's commits are kept
 			base = t.Base

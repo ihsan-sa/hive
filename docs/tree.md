@@ -1,0 +1,14 @@
+# Tree search over candidate Hives
+
+Issue #829. The person, 2026-10-25: "what if we have changes get built very fast in parallel and have them spawn recursively so like changes and then new hives spawn fix those new fixes, etc, and just keep going down trees until we find one that works and is stable, pick that one, and archive the rest".
+
+Most stalls that day were the fallout of the fix before. Until now a rolled-back change went back to its one worker, so fixing fallout was a single line of tries. Now it is a tree (`internal/mod/work/tree.go`):
+
+- **Branch.** When the recursive gate, with the judge agreeing, rolls back a gain for fallout of its own (`fails its own vet or short tests`, or `worse than the current Hive`), the head goes back to its worker as before, and also branches: `treeWidth-1` sibling tasks (one today) start from the rolled-back commit. Each is told the fallout and a different angle to try (the smallest fix, another route to the same aim, narrowing the change). "Nothing moved beyond the noise" doesn't branch, because no fix of fallout helps a change that gains nothing.
+- **Recurse.** A branch is an ordinary gain on its own task and pull request. It is tested, read, and gated as a child Hive built from it, run on the e2e suite and the benchmark against the current Hive, and judged. A branch rolled back for its own fallout branches again, down to `treeDepth` (3) levels. One tree keeps at most `treeLive` (3) nodes open.
+- **Keep the stable best.** The first node of a tree to merge wins. It was kept over the gate's repeated rounds on both sides and by the judge on another model, and that is what "stable" means here. Since a branch carries its parent's commits, the winner lands the whole line it came from.
+- **Archive the rest.** At their next step, the tree's other open nodes are stopped with the reason `archived: task <id> of its tree (<root>) merged as the tree's best`. Their workers and gate runs are stopped too. Their branches and pull requests stay on the forge as they are, and `recheck` brings one back.
+
+Nodes of one tree may name the same files, so the queue doesn't hold one behind another. They do share the gate queue, the pace and `max_gates` with every other change. A tree adds workers, never more gates at once than the machine already allows; the Hive's share is about 8 GB, and one soft-layer run of 28 jobs drove the load to about 600. Branches are filed only on the Hive's own project (self), only for whole tasks (not checkpoints), and only once per head: the head is saved as branched before any branch is filed, so a restart never files one twice.
+
+Not yet: branching a change before its first gate (speculative siblings), dispatching branches to another machine (hive-dispatch), and widening the tree when the machine has room.

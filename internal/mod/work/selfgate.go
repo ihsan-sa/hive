@@ -442,9 +442,12 @@ func (m *Module) settleGateAsk(p core.Project, why string) {
 // gateBack sends a rolled-back head to its worker with the report.
 func (m *Module) gateBack(t *Task, p core.Project, g core.GateResult) error {
 	findings := fmt.Sprintf("%s%s against main at %s: %s", gateRolledBack, core.Short(g.Head), core.Short(g.Main), g.Reason)
+	judged := ""
 	if j, ok := m.C.Effects.Judgement(p.Name, g.Head, g.Main); ok && j.At.After(g.At) {
-		findings += fmt.Sprintf("\n\nIts judge (%s), weighing those numbers with the change, decided to roll it back: %s", j.Model, j.Summary)
+		judged = fmt.Sprintf("\n\nIts judge (%s), weighing those numbers with the change, decided to roll it back: %s", j.Model, j.Summary)
+		findings += judged
 	}
+	m.branchOut(t, p, g, judged)
 	if t.Checkpoint != "" {
 		return m.dropCheckpoint(t, p, findings)
 	}
