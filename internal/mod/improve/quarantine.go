@@ -1,7 +1,6 @@
 package improve
 
 import (
-	"cmp"
 	"fmt"
 	"slices"
 	"sort"
@@ -78,8 +77,8 @@ func (m *Module) applyQuarantine(e core.Event) {
 		if e.Decode(&t) != nil {
 			return
 		}
-		if kin := cmp.Or(t.FollowUp, t.RevertOf); kin != "" {
-			m.kin[t.ID] = kin
+		if t.RevertOf != "" {
+			m.kin[t.ID] = t.RevertOf
 		}
 		if !strings.HasPrefix(t.Title, flakyTitle) {
 			return
