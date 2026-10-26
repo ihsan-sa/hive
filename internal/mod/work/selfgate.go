@@ -91,7 +91,9 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	if !p.Self || !t.Gain() || m.C.Effects.Approved("gate", p.Name, t.SHA) {
 		return false, nil
 	}
-	g, ok := m.C.Effects.GateResult(p.Name, t.SHA, main)
+	// A measured verdict against an older main still counts while main's
+	// commits since leave the change and what the gate measures with alone.
+	g, ok := m.C.Effects.StandingGate(p, t.SHA, main)
 	if ok && g.Outcome == core.GateCantRun && len(g.Conflicts) > 0 {
 		// The head can't be merged with main as the gate sees it: its worker
 		// merges main. No rollback, and the gate runs again on the new head.
@@ -115,12 +117,11 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		m.askGateFix(t, p, main, g)
 		return true, nil
 	}
-	// The gate judges what would land: a head that lacks main is brought up
-	// to date first, or it fails on what main has since fixed (a test that
-	// broke in the gate's sandbox, fixed on main after the branch was cut).
-	if moved, err := m.catchUp(t, p, main, "the recursive gate judges the change with main in"); moved || err != nil {
-		return true, err
-	}
+	// A head that lacks main goes to the gate as it is: the gate merges main
+	// into it in its own clone and judges what would land (docs/gate.md,
+	// Build), and Merge lands that head at that main. Bringing the branch up
+	// to date here instead pushed every waiting gain on each move of main
+	// and ran all their checks again, while one gate at a time judged them.
 	key := p.Name + "@" + t.SHA + "@" + main
 	// A run that couldn't run against this main, on any change, holds the
 	// others until its retry: the next would fail the same way. One whose
@@ -201,9 +202,10 @@ func (m *Module) gateRoom(running int) string {
 	limit, why := m.gateLimit(time.Now(), running, m.C.WS.LoadConfig())
 	switch {
 	case running >= limit:
-		return fmt.Sprintf("%d run at once here (limit %s), and every one is in use", running, m.gates.String())
+		// Saved with the task: the live limit stays out (see Pace).
+		return "as many run at once here as may now, and every one is in use"
 	case running > 0 && why != "":
-		return fmt.Sprintf("%d running, and no room for another: %s", running, why)
+		return "no room for another: " + steady(why)
 	}
 	return ""
 }

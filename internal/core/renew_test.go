@@ -367,3 +367,57 @@ func TestHarnessBinRefusesAgentWritableFolders(t *testing.T) {
 		t.Fatalf("a harness under .hive is refused: %v", err)
 	}
 }
+
+// A renewal turned away by the plan's usage limit isn't a failure: the login
+// is parked until the limit resets, nothing is asked of the person (logging
+// in again changes nothing), an ask an earlier failure left open closes, a
+// restart keeps it parked, and after the reset it renews as before.
+func TestRenewAtItsUsageLimitIsParkedWithNoAsk(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(3*time.Minute))
+	k.harness(`echo "refresh token revoked" >&2; exit 1`)
+	k.tk.Watch()
+	if len(k.asks()) != 1 {
+		t.Fatal("a real failure is asked about")
+	}
+	reset := time.Now().Add(50 * time.Hour).In(time.UTC)
+	said := "You've hit your weekly limit · resets " + reset.Format("Jan 2, 3pm") + " (UTC)"
+	k.harness(fmt.Sprintf(`echo %q; exit 1`, said))
+	k.skipBackoff()
+	k.tk.Watch()
+	s := k.state()
+	want := reset.Truncate(time.Hour)
+	if s.Error != "" || s.Failures != 0 || !s.Limited.Equal(want) {
+		t.Fatalf("the login is parked until its reset %s, not failing: %+v", want, s)
+	}
+	if len(k.asks()) != 0 {
+		t.Fatalf("the open ask closes and none is raised: %+v", k.asks())
+	}
+	if n, _ := k.events("login.limited"); n != 1 {
+		t.Fatalf("the park is on record once, got %d", n)
+	}
+	calls := k.calls()
+	k.tk.Watch()
+	k.tk = NewTokens(k.tk.ws)
+	k.tk.Track(k.j, k.p)
+	k.tk.Watch()
+	if k.calls() != calls || len(k.asks()) != 0 || !k.state().Limited.Equal(want) {
+		t.Fatalf("parked, even across a restart, it isn't tried before its reset: calls %d→%d, %+v", calls, k.calls(), k.state())
+	}
+
+	k.harness(renews(time.Now().Add(8 * time.Hour)))
+	k.skipBackoff() // the reset has come
+	k.tk.Watch()
+	if s := k.state(); s.Error != "" || s.Renewed.IsZero() || !s.Limited.IsZero() {
+		t.Fatalf("after the reset it renews and is no longer parked: %+v", s)
+	}
+}
+
+// A limit that doesn't say when it resets parks the login for limitWait.
+func TestRenewAtALimitWithNoResetWaits(t *testing.T) {
+	k := newRenewKit(t, time.Now().Add(3*time.Minute))
+	k.harness(`echo "Claude AI usage limit reached" >&2; exit 1`)
+	k.tk.Watch()
+	if s := k.state(); s.Error != "" || time.Until(s.Limited) < limitWait-time.Minute || len(k.asks()) != 0 {
+		t.Fatalf("parked for limitWait with no ask: %+v", s)
+	}
+}
