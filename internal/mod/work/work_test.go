@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1086,4 +1087,36 @@ func mustRun(t *testing.T, m *Module, id string) core.Run {
 		t.Fatalf("no run %s", id)
 	}
 	return r
+}
+
+// A parent looping on spawn gets no second helper for the same brief, live or
+// just finished, and says which sibling has it; a different brief still goes,
+// up to maxLiveHelpers live at once.
+func TestSpawnRefusesARepeatedHelper(t *testing.T) {
+	m, _, _ := helperRig(t)
+	parent := core.Run{RunSpec: core.RunSpec{ID: "parent", Role: "worker"}}
+	first, err := m.Spawn(parent, "worker", "p", "Run the word counter task (wc) to completion\nand report", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Spawn(parent, "worker", "p", "  run the word counter task (WC)   to completion\nand report back with numbers", "")
+	if err == nil || !strings.Contains(err.Error(), first.ID) {
+		t.Fatalf("a repeat of a live helper: err %v, want one naming %s", err, first.ID)
+	}
+	m.C.Runs.Stop(first.ID, "test")
+	if _, err = m.Spawn(parent, "worker", "p", "Run the word counter task (wc) to completion\nand report", ""); err == nil || !strings.Contains(err.Error(), "finished") {
+		t.Fatalf("a repeat of a just-finished helper: err %v", err)
+	}
+	if _, err = m.Spawn(core.Run{RunSpec: core.RunSpec{ID: "other", Role: "worker"}}, "worker", "p", "Run the word counter task (wc) to completion\nand report", ""); err != nil {
+		t.Fatalf("another parent's helper with the same brief: %v", err)
+	}
+	for i := 0; i < maxLiveHelpers; i++ {
+		_, err = m.Spawn(parent, "worker", "p", "helper part "+strconv.Itoa(i), "")
+		if err != nil {
+			t.Fatalf("helper %d: %v", i, err)
+		}
+	}
+	if _, err = m.Spawn(parent, "worker", "p", "one more part", ""); err == nil || !strings.Contains(err.Error(), "helpers live") {
+		t.Fatalf("a helper past the cap: err %v", err)
+	}
 }
