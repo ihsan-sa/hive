@@ -171,8 +171,8 @@ func (m *Module) Watch() {
 	}
 	waits := map[string]*group{}
 	var causes []string
-	// A merged task's change is on main: what is left (its follow-up brief,
-	// then done) is the Hive's bookkeeping, which a recheck can't retry.
+	// A merged task's change is on main: what is left (its step to
+	// done) is the Hive's bookkeeping, which a recheck can't retry.
 	for _, t := range m.Work.List(func(t work.Task) bool {
 		return !t.Terminal() && t.Stage != work.StagePerson && t.Stage != work.StageMerged
 	}) {

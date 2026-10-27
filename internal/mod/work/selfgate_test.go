@@ -787,7 +787,7 @@ func TestBriefAim(t *testing.T) {
 	// A brief that says no aim but names something broken is a fix.
 	for _, b := range []Brief{
 		{Title: "The pace pulls back on check timeouts, flakes and slow turns"},
-		{Title: "A review follow-up whose worker makes no change ends done, not blocked"},
+		{Title: "A worker that makes no change ends done, not blocked"},
 		{Title: "forge-failures.md names main as the base", Known: "It names today's main. The base it names is wrong when CI tested an older one."},
 		{Title: "aim can be set while a step runs", Known: "hive agent aim was refused three times."},
 	} {

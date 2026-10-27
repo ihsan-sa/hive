@@ -449,7 +449,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "landed", Roles: steerers, Help: `{"task","why","merge"} -> ends a task in any stage as merged when its PR is merged on the forge or its commits are on main (merge names the main commit when they were squashed there), so the briefs waiting on it start; refused while its PR is open and its work isn't on main`, Fn: m.opLanded})
 	c.Runs.Ops().Register(core.Op{Name: "amend", Roles: steerers, Help: `{"task","title","done","known","why"} -> changes a brief no worker has started on yet (filed or queued) in place: each of title, done and known given replaces the old one, and its open issue gets the brief as amended; its filer's own, or (the lead) any but the person's. A wider ask goes here rather than in a new brief beside it`, Fn: m.opAmend})
 	c.Runs.Ops().Register(core.Op{Name: "withdraw", Roles: steerers, Help: `{"task","why","into"} -> takes back a brief no worker has started on yet: the task stops and its issue closes with why (and into, the task that covers it now); its filer's own, or (the lead) any but the person's. It doesn't come back with recheck`, Fn: m.opWithdraw})
-	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Roles: []string{"lead"}, Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (follow-ups and reverts included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs still pass their gate and wait ready`, Fn: m.opHold})
+	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Roles: []string{"lead"}, Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (the Hive's own reverts and checkpoints included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs still pass their gate and wait ready`, Fn: m.opHold})
 	c.Runs.Ops().Register(core.Op{Name: "pr_ready", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","why"} -> marks the Hive's own PR ready for review, so a merge waiting on the draft goes on (a task stopped over the draft comes back; the Hive brings one back on its own only once). Readying isn't a read: the PR may sit ready but unmerged until the gate clears its head`, Fn: m.opPRReady})
 	c.Runs.Ops().Register(core.Op{Name: "pr_draft", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","why"} -> marks the Hive's own PR a draft, posting why: its task waits (it isn't stopped) and merges once marked ready with pr_ready`, Fn: m.opPRDraft})
 	c.Runs.Ops().Register(core.Op{Name: "pr_close", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
@@ -3574,7 +3574,7 @@ func securityRules(ch core.Change) string {
 	return b.String()
 }
 
-// verdictText is a verdict's summary with its findings, one a line.
+// verdictText is a verdict's summary with its findings and advice, one a line.
 func verdictText(v core.Verdict) string {
 	var b strings.Builder
 	b.WriteString(v.Summary)
@@ -3584,6 +3584,9 @@ func verdictText(v core.Verdict) string {
 			loc = fmt.Sprintf("%s:%d", f.File, f.Line)
 		}
 		fmt.Fprintf(&b, "\n- `%s` %s", loc, f.Issue)
+	}
+	for _, a := range v.Advice {
+		fmt.Fprintf(&b, "\n- Advice: %s", a)
 	}
 	return b.String()
 }
