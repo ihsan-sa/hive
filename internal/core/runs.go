@@ -87,6 +87,7 @@ type Run struct {
 	Structured  json.RawMessage `json:"structured,omitempty"`
 	Finish      *Finish         `json:"finish,omitempty"`
 	Pending     []string        `json:"pending,omitempty"`
+	Given       []string        `json:"-"` // the messages its current or last turn was handed
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
 	ParkedSince time.Time       `json:"parked_since,omitempty"` // when it last went from another status to parked
 	Retries     int             `json:"retries"`
@@ -777,7 +778,9 @@ func (rs *Runs) apply(e Event) {
 		}
 		rs.ranOn[r.ID] = on
 		r.Waiting, r.Reopened = "", false
+		r.Given = nil
 		if t.Delivered <= len(r.Pending) {
+			r.Given = append(r.Given, r.Pending[:t.Delivered]...)
 			r.Pending = r.Pending[t.Delivered:]
 		}
 		r.ParkedUntil = time.Time{}
@@ -827,6 +830,7 @@ func (rs *Runs) apply(e Event) {
 		var n runNote
 		e.Decode(&n)
 		if n.N <= len(r.Pending) {
+			r.Given = append(r.Given, r.Pending[:n.N]...)
 			r.Pending = r.Pending[n.N:]
 		}
 	case "run.finish":
@@ -1300,10 +1304,15 @@ func (rs *Runs) wake(id string) {
 
 // Reopen lets a finished run take more turns (fix rounds go back to the same worker).
 // A Codex run whose token folder still won't delete stays blocked for it.
+// The same text again while a turn runs on it, handed or waiting, is
+// already being worked on: it takes no further turn (issue #1157).
 func (rs *Runs) Reopen(id, text string) error {
 	r, ok := rs.Get(id)
 	if !ok {
 		return ErrNotFound
+	}
+	if r.Status == StatusRunning && (slices.Contains(r.Given, text) || slices.Contains(r.Pending, text)) {
+		return nil
 	}
 	if r.Status == StatusStopped || r.StopAsked {
 		return fmt.Errorf("run %s was stopped on purpose (%s); it stays stopped", id, r.Reason)
@@ -1867,7 +1876,7 @@ func (rs *Runs) endTurn(r Run) {
 			account = fmt.Sprintf("status: %s\n%s\ntested: %s\nunsure: %s", cur.Finish.Status, cur.Finish.Account, cur.Finish.Tested, cur.Finish.Unsure)
 		}
 		if r.Task != "" && te.Status == StatusDone {
-			account += "\nwhere its commits go: their own pull request, task " + r.Task + "; the thread hears when it merges"
+			account += "\nwhere its commits go: their own pull request, task " + r.Task + "; you hear when it merges or stops"
 		}
 		if p, ok := rs.Get(r.Parent); ok && (!p.Terminal() || p.Persistent) {
 			rs.Send(p.ID, fmt.Sprintf("[%s %s finished]\n%s", r.Role, r.ID, account))

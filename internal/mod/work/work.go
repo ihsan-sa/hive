@@ -382,6 +382,7 @@ type Module struct {
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m.checks.loadCuts, m.gates.loadCuts = true, true // their builds and child Hives make the load
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -458,6 +459,7 @@ func (m *Module) overtaken(t *Task) bool {
 // this save isn't a steer itself, drops it, reporting whether it saved.
 func (m *Module) store(t *Task, note string, steer bool) bool {
 	now := time.Now().UTC()
+	loaded := t.Updated // when the copy was last saved, before it is stamped now
 	// Windows' clock ticks coarsely, so a save in the tick GitHub came back
 	// would read as before it and wake at once: keep it strictly after.
 	m.mu.Lock()
@@ -472,9 +474,12 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	if !t.Updated.After(m.online) {
 		t.Updated = m.online.Add(time.Nanosecond)
 	}
-	var was string
+	var was, live string
 	if prev := m.tasks[t.ID]; prev != nil {
 		was = prev.Stage
+		if loaded.Before(prev.Updated) { // a copy older than the last save: its head may be one the task has left
+			live = prev.SHA
+		}
 		if steer && !t.Updated.After(prev.Updated) { // after every copy a step holds
 			t.Updated = prev.Updated.Add(time.Nanosecond)
 		}
@@ -485,7 +490,9 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	// A gate run on a head the task has left (a merge of main, a fix sent
 	// back) or a task that ended judges nothing that lands: it ends now and
 	// frees its slot, not once the new head reaches the gate hours later.
-	if m.dropStaleGatesLocked(t) {
+	// A step saving a copy older than the last save may carry a head the
+	// task has since left, so the run on the live task's head is kept too.
+	if m.dropStaleGatesLocked(t, live) {
 		note = strings.TrimPrefix(note+"; the recursive gate's run on its earlier head ends, freeing its slot", "; ")
 	}
 	m.mu.Unlock()
@@ -1382,7 +1389,7 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 		if !strings.Contains(t.Reason, "quiet") {
 			t.Reason = "worker is quiet: " + r.Reason
 			m.save(t, t.Reason)
-			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "quiet", "run": r.ID, "task": t.ID, "text": "worker " + r.ID + " keeps ending turns without finishing; briefs that waited on its task start without it"})
+			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "quiet", "run": r.ID, "task": t.ID, "text": "worker " + r.ID + " keeps ending turns without finishing; briefs that waited on its task start without it. If it stays quiet, end it with `hive agent stop --task " + t.ID + " --why \"...\"` (add --fresh to hand the task to a new worker)"})
 		}
 	default:
 		return m.checkpoint(t, p, r)

@@ -464,3 +464,44 @@ func TestPacePullsBackAheadOfTheWeek(t *testing.T) {
 		t.Fatalf("a week 75%% spent in its first day: %q", why)
 	}
 }
+
+// Pulled under its start by CPU pressure, the workers' pace comes back to
+// its start a growStep after only load is left, as load alone would block
+// its growth for good; the checks' pace, whose builds make the load, may
+// stay under it.
+func TestPaceComesBackToTheStartUnderLoadAlone(t *testing.T) {
+	const load = "machine loaded (load 30 on 20 cores, limit 1.5 per core)"
+	now := time.Date(2026, 10, 26, 17, 0, 0, 0, time.UTC)
+	workers, checks := pace{}, pace{loadCuts: true}
+	for _, p := range []*pace{&workers, &checks} {
+		p.next(now, 4, true, "", true, 4, 0)
+		for i := range 4 {
+			p.next(now.Add(time.Duration(i+1)*paceStep), p.limit, true, "machine under cpu pressure (80.00%, limit 40%)", true, 4, 0)
+		}
+		if p.limit != 1 {
+			t.Fatalf("under cpu pressure: %d, want 1", p.limit)
+		}
+	}
+	at := now.Add(4 * paceStep)
+	for i := range 30 { // half an hour of load alone, a reading a minute
+		at = at.Add(paceStep)
+		w := workers.next(at, workers.limit, true, load, true, 4, 0)
+		c := checks.next(at, checks.limit, true, load, true, 4, 0)
+		if c != 1 {
+			t.Fatalf("minute %d: the checks' pace moved under load alone: %d", i, c)
+		}
+		if i < 4 && w != 1 {
+			t.Fatalf("minute %d: back within a growStep of the cpu pressure: %d", i, w)
+		}
+	}
+	if workers.limit != 4 || !strings.Contains(workers.String(), "back to the start") {
+		t.Fatalf("after load alone: %s, want back at its start 4", workers.String())
+	}
+	if l := checks.next(at.Add(paceStep), 4, true, load, true, 4, 0); l != 1 {
+		t.Fatalf("checks under load alone: %d, want 1", l)
+	}
+	fresh := pace{limit: 4, start: 4, at: now, loadCuts: true}
+	if l := fresh.next(now.Add(paceStep), 4, true, load, true, 4, 0); l != 3 {
+		t.Fatalf("checks at their start under load alone: %d, want 3", l)
+	}
+}
