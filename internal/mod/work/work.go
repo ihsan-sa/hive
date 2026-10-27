@@ -1662,7 +1662,7 @@ func (m *Module) land(t *Task, p core.Project) error {
 	if errors.Is(err, core.ErrNoChanges) && t.Banked > 0 {
 		t.Stage, t.IssueOpen, t.Failures = StageDone, true, 0
 		m.save(t, "done: everything the worker made was merged as checkpoints")
-		m.notify(t, fmt.Sprintf("Done: %q; all of it was merged as checkpoints.", t.Label()))
+		m.post(t, fmt.Sprintf("Done: %q; all of it was merged as checkpoints.", t.Label()))
 		m.closeIssue(t, p)
 		return nil
 	}
@@ -2564,7 +2564,7 @@ func (m *Module) mainRecorded(t *Task, p core.Project, main string) (bool, error
 func (m *Module) merged(t *Task, merged, note string) {
 	t.MergeSHA, t.Stage, t.Reason = merged, StageMerged, ""
 	if t.Checkpoint != "" {
-		m.notify(t, fmt.Sprintf("Merged a checkpoint of %s; its worker keeps going: %s", t.Label(), t.PR.URL))
+		m.post(t, fmt.Sprintf("Merged a checkpoint of %s; its worker keeps going: %s", t.Label(), t.PR.URL))
 		t.Base, t.Checkpoint, t.Stage = t.Checkpoint, "", StageWorking
 		t.Banked++
 		t.Banks = append(t.Banks, Bank{PR: t.PR, MergeSHA: merged}) // a revert of this merge names its PR
@@ -2582,7 +2582,7 @@ func (m *Module) merged(t *Task, merged, note string) {
 	if t.Kind == "revert" {
 		m.notify(t, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Label(), "Revert: "), t.Lesson))
 	} else {
-		m.notify(t, fmt.Sprintf("Merged: %s %s", t.Label(), t.PR.URL))
+		m.post(t, fmt.Sprintf("Merged: %s %s", t.Label(), t.PR.URL))
 	}
 	if m.OnMerged != nil {
 		m.OnMerged(*t)
