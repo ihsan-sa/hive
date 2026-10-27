@@ -48,11 +48,17 @@ func TestRestartRunsNewBinary(t *testing.T) {
 	defer func(f func() (string, error), g func() supervision) { executable, supervisor = f, g }(executable, supervisor)
 	executable = func() (string, error) { return filepath.Join(dir, "hive.old"), nil }
 	supervisor = func() supervision { return supervision{} } // whatever unit the tests run in
+	defer func(f func(time.Duration, int)) { exitWithin = f }(exitWithin)
+	var bound time.Duration
+	exitWithin = func(d time.Duration, _ int) { bound = d }
 	stopped := false
 	s := &server{a: &app.App{C: &core.Core{WS: ws}}, info: api.DaemonInfo{PID: os.Getpid(), Token: "t"}, cancel: func() { stopped = true }}
 	s.restart()
 	if !stopped {
 		t.Fatal("the old daemon didn't stop")
+	}
+	if bound <= 0 || bound >= takeOverWait {
+		t.Fatalf("the old daemon exits within %s of its restart, want a bound under the replacement's %s", bound, takeOverWait)
 	}
 	if c, err := api.Dial(ws); err != nil || !c.Info.Restarting {
 		t.Fatalf("daemon.json doesn't say a restart is under way: %v", err)
@@ -363,6 +369,8 @@ func restartWith(t *testing.T, sup supervision, outlive bool) (s *server, early,
 	c.J.MustAppend("run.turn_started", map[string]any{"id": "live", "turn": 1, "proc": turn})
 	defer func(f func() supervision, d time.Duration) { supervisor, quietPoll = f, d }(supervisor, quietPoll)
 	supervisor, quietPoll = func() supervision { return sup }, 20*time.Millisecond
+	defer func(f func(time.Duration, int)) { exitWithin = f }(exitWithin)
+	exitWithin = func(time.Duration, int) {}
 	var stopped atomic.Bool
 	s = &server{a: &app.App{C: c}, info: api.DaemonInfo{PID: os.Getpid(), Token: "t"}, cancel: func() { stopped.Store(true) }}
 	done := make(chan struct{})
