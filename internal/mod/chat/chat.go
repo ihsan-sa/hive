@@ -326,7 +326,7 @@ func (m *Module) deliverToLead(ch *Chat, text string, files ...File) error {
 	if err != nil {
 		return err
 	}
-	text += note
+	text = m.missed(ch) + text + note
 	name, project := "lead", ""
 	dir := filepath.Join(m.C.WS.Hive(), "leads", "main")
 	if ch.Kind == "project" {
@@ -364,6 +364,35 @@ func (m *Module) deliverToLead(ch *Chat, text string, files ...File) error {
 	c.Lead = id
 	m.C.J.MustAppend("chat.updated", c)
 	return nil
+}
+
+// missedMax is how many of the Hive's posts a new lead is told it missed.
+const missedMax = 5
+
+// missed is what the Hive posted in the chat while no lead was running
+// (after the last one ended, or ever, for a chat that never had one), newest
+// last: a notification reaches only a running lead, so a step-back's
+// judgement or an outcome posted between leads would otherwise steer no one.
+func (m *Module) missed(ch *Chat) string {
+	var since time.Time
+	if ch.Lead != "" {
+		if r, ok := m.C.Runs.Get(ch.Lead); ok {
+			since = r.Updated
+		}
+	}
+	var posts []string
+	for _, msg := range m.Messages(ch.ID) {
+		if msg.From == "hive" && msg.At.After(since) {
+			posts = append(posts, fmt.Sprintf("[notification · thread %s · %s] %s", msg.Thread, msg.At.Local().Format("Mon 15:04"), core.Clip(msg.Text, 1500)))
+		}
+	}
+	if len(posts) == 0 {
+		return ""
+	}
+	if len(posts) > missedMax {
+		posts = posts[len(posts)-missedMax:]
+	}
+	return "[posted in this chat while no lead was running]\n" + strings.Join(posts, "\n") + "\n\n"
 }
 
 // bundleFor puts main.bundle in an isolated project's run dir for its lead.

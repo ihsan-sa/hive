@@ -245,6 +245,9 @@ func (m *model) keySidebar(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch k.String() {
+	case "e", "E":
+		m.foldSidebar(k.String() == "e")
+		return m, nil
 	case " ", "enter":
 		if r.group {
 			m.closed[r.key] = !m.closed[r.key]
@@ -276,6 +279,46 @@ func (m *model) keySidebar(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.focus = 1
 	return m, m.markRead()
+}
+
+// foldSidebar opens the sidebar a level at a time, the project groups and
+// then the ended agents' folds in them, or closes it the same way back.
+func (m *model) foldSidebar(open bool) {
+	var groups, folds []string
+	for _, r := range m.rows(true) {
+		switch {
+		case r.group:
+			groups = append(groups, r.key)
+		case r.fold:
+			folds = append(folds, r.key)
+		}
+	}
+	anyOf := func(keys []string, f func(string) bool) bool {
+		for _, k := range keys {
+			if f(k) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case open && anyOf(groups, func(g string) bool { return m.closed[g] }):
+		for _, g := range groups {
+			m.closed[g] = false
+		}
+	case open:
+		for _, f := range folds {
+			m.open[f] = true
+		}
+	case anyOf(folds, func(f string) bool { return m.open[f] }):
+		for _, f := range folds {
+			m.open[f] = false
+		}
+	default:
+		for _, g := range groups {
+			m.closed[g] = true
+		}
+	}
 }
 
 // sideAt finds the cursor's row by its key, since chats come and go above it
@@ -472,7 +515,9 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.focusBox(m.thread)
 		}
 		if m.threadSel >= 0 && m.threadSel < len(ts) {
-			m.thread = ts[m.threadSel].id
+			if m.thread != ts[m.threadSel].id {
+				m.thread, m.thScroll = ts[m.threadSel].id, 0 // another thread opens at its newest
+			}
 			m.focus = 2
 			return m, m.focusBox(m.thread)
 		}
@@ -481,6 +526,10 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.threadSel >= 0 && m.threadSel < len(ts) {
 			id := "t:" + ts[m.threadSel].id
 			m.open[id] = !m.isOpen(ts, m.threadSel)
+		}
+	case "e", "E": // a channel has the one level: every thread open or closed
+		for _, t := range ts {
+			m.open["t:"+t.id] = s == "e"
 		}
 	case "esc", "left", "h":
 		m.focus = 0
@@ -737,10 +786,10 @@ func (m *model) viewThread(w int) pane {
 	tw := w - 5
 	var lines []string
 	add := func(ls ...string) { lines = append(lines, indent(ls, "   ")...) }
-	pending := 0
+	var pending []outMsg // sent, and not yet in the thread
 	for _, o := range m.outbox {
-		if o.chat == m.chat && o.thread == m.thread {
-			pending++
+		if o.chat == m.chat && o.thread == m.thread && m.echoes(o) <= o.had {
+			pending = append(pending, o)
 		}
 	}
 	for i, msg := range t.msgs {
@@ -748,17 +797,15 @@ func (m *model) viewThread(w int) pane {
 		add(m.body(msg.Text, tw)...)
 		add("")
 		if i == 0 {
-			n := len(t.msgs) - 1 + pending
+			n := len(t.msgs) - 1 + len(pending)
 			r := fmt.Sprintf("%d %s ", n, plural(n, "reply", "replies"))
 			add(stDim.Render(r+strings.Repeat("─", max(0, tw-len(r)))), "")
 		}
 	}
-	for _, o := range m.outbox {
-		if o.chat == m.chat && o.thread == m.thread {
-			add(stBoldF.Render("you") + "  " + stDim.Render("◌ sending…"))
-			add(indent(m.body(o.text, tw), "")...)
-			add("")
-		}
+	for _, o := range pending {
+		add(stBoldF.Render("you") + "  " + stDim.Render("◌ sending…"))
+		add(indent(m.body(o.text, tw), "")...)
+		add("")
 	}
 	_, name := m.where()
 	bx := m.compose("reply · "+name, "Reply to this thread…", m.thread, w-3)
