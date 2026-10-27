@@ -141,6 +141,37 @@ func TestDecideNoise(t *testing.T) {
 	}
 }
 
+// A time moves when every candidate rep beats every control rep, compared on
+// a log scale, however scattered the slower side (#1354: 8.2/7.7/8.6 s
+// against 55.3/11.4/23.7 s was called nothing moved).
+func TestDecideTime(t *testing.T) {
+	mk := func(vs ...float64) []Result {
+		var rs []Result
+		for _, v := range vs {
+			rs = append(rs, res("benchmark", true, Metric{Name: "seconds", Value: v, Time: true}))
+		}
+		return rs
+	}
+	if v := Decide(mk(8.2, 7.7, 8.6), mk(55.3, 11.4, 23.7), Options{}); !v.Keep || !strings.Contains(v.Reason, "no rep overlaps") {
+		t.Errorf("faster in every rep not kept: %v", v)
+	}
+	if v := Decide(mk(55.3, 11.4, 23.7), mk(8.2, 7.7, 8.6), Options{}); len(v.Regressions) != 1 {
+		t.Errorf("slower in every rep not a regression: %v", v)
+	}
+	// With fewer than 3 a side no overlap alone decides nothing.
+	if v := Decide(mk(8, 30), mk(31, 90), Options{}); v.Keep {
+		t.Errorf("2 a side kept on no overlap: %v", v)
+	}
+	// Apart but within the floor is nothing.
+	if v := Decide(mk(10, 10.01, 10.02), mk(10.03, 10.04, 10.05), Options{}); v.Keep || len(v.Regressions) > 0 {
+		t.Errorf("a 0.3%% move counted: %v", v)
+	}
+	// Overlapping reps fall back to the noise.
+	if v := Decide(mk(8, 13, 10.5), mk(10, 7, 13), Options{}); v.Keep || len(v.Regressions) > 0 {
+		t.Errorf("scattered times counted: %v", v)
+	}
+}
+
 func fakeBin(t *testing.T, dir, name, version string, ok bool) string {
 	p := filepath.Join(dir, name)
 	body := "#!/bin/sh\necho " + version + "\n"
@@ -882,7 +913,8 @@ func TestOutOfTimeIsAloneOnlyWhenTheCandidateIsSlower(t *testing.T) {
 		t.Helper()
 		slow := func(cfg *Config, c *Child) Result {
 			time.Sleep(map[string]time.Duration{"candidate": candWait, "control": ctrlWait}[c.Name])
-			return Result{Pass: true}
+			// The sides differ, so the run goes past its first rep.
+			return Result{Pass: true, Metrics: []Metric{{Name: "n", Value: map[string]float64{"candidate": 1, "control": 2}[c.Name], Higher: true}}}
 		}
 		rep, _ := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, name, "run"), Reps: 3, Sandbox: "bare", AllowBare: true,
 			Probes: []string{"slow"}, Probe: map[string]ProbeFunc{"slow": slow}, Timeout: timeout})
@@ -896,5 +928,32 @@ func TestOutOfTimeIsAloneOnlyWhenTheCandidateIsSlower(t *testing.T) {
 	}
 	if rep := run("cand-slow", 600*time.Millisecond, 10*time.Millisecond, 800*time.Millisecond); !rep.Alone {
 		t.Errorf("out of time with the candidate the slower side: not alone (%s)", rep.Error)
+	}
+}
+
+// The gate runs one rep a side, and the rest only when the first differs:
+// a tie beyond nothing but a single run's noise stops there.
+func TestMoreRepsOnlyWhenTheFirstDiffers(t *testing.T) {
+	unixOnly(t)
+	dir := t.TempDir()
+	cand, ctrl := fakeBin(t, dir, "cand", "v2", true), fakeBin(t, dir, "ctrl", "v1", true)
+	run := func(name string, cs, ks float64) Report {
+		t.Helper()
+		p := func(cfg *Config, c *Child) Result {
+			v := map[string]float64{"candidate": cs, "control": ks}[c.Name]
+			return Result{Pass: true, Metrics: []Metric{{Name: "seconds", Value: v}}}
+		}
+		rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, name, "run"), Reps: 3, Sandbox: "bare", AllowBare: true,
+			Probes: []string{"p"}, Probe: map[string]ProbeFunc{"p": p}})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return rep
+	}
+	if rep := run("same", 100, 105); len(rep.Candidate) != 1 || len(rep.Control) != 1 || rep.Verdict.Keep || !strings.Contains(rep.Verdict.Reason, "nothing moved") {
+		t.Errorf("a first rep within a single run's noise: %d/%d reps, %+v", len(rep.Candidate), len(rep.Control), rep.Verdict)
+	}
+	if rep := run("faster", 50, 100); len(rep.Candidate) != 3 || len(rep.Control) != 3 || !rep.Verdict.Keep {
+		t.Errorf("a first rep that differs: %d/%d reps, %+v", len(rep.Candidate), len(rep.Control), rep.Verdict)
 	}
 }

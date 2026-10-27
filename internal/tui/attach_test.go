@@ -313,3 +313,21 @@ func TestThisSetup(t *testing.T) {
 		t.Fatalf("setup %+v, want WSL over SSH", s)
 	}
 }
+
+// One PowerShell found under two names (WSL's PATH spells C:\WINDOWS in
+// capitals) runs once.
+func TestSameToolRunsOnce(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "powershell.exe")
+	os.WriteFile(a, nil, 0o755)
+	link := filepath.Join(dir, "ps")
+	if os.Symlink(a, link) == nil && !sameTool([]string{a}, link) {
+		t.Fatal("a link to a tool already run runs again")
+	}
+	if !sameTool([]string{"/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe"}, winPowerShell) {
+		t.Fatal("winPowerShell runs again after powershell.exe")
+	}
+	if sameTool([]string{a}, filepath.Join(dir, "pwsh.exe")) {
+		t.Fatal("pwsh is skipped as if it were powershell")
+	}
+}
