@@ -1092,7 +1092,7 @@ func TestPersonAnswersASettledAsk(t *testing.T) {
 				if a.Answer != want || a.Note != "my call" {
 					t.Fatalf("%s, %s: handler got %+v", route, answer, a)
 				}
-			case <-time.After(4 * time.Second):
+			case <-time.After(time.Minute): // four fsynced appends and two goroutines; a loaded gate took over 4s
 				t.Fatalf("%s, %s: the merge ask was never answered", route, answer)
 			}
 			if told := g.c.Person.Told(5); len(told) > 0 {
@@ -1149,7 +1149,7 @@ func TestPersonDoneSettlesAScriptlessAsk(t *testing.T) {
 			if a.Answer != want {
 				t.Fatalf("%s: handler got %+v, want %s", answer, a, want)
 			}
-		case <-time.After(4 * time.Second):
+		case <-time.After(time.Minute): // four fsynced appends and two goroutines; a loaded gate took over 4s
 			t.Fatalf("%s: the merge ask was never answered", answer)
 		}
 	}
