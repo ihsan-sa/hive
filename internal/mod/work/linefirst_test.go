@@ -122,6 +122,19 @@ func TestLineFirst(t *testing.T) {
 		t.Fatalf("a revert waited: %q", why)
 	}
 	task.Kind = "work"
+	task.Aim = AimFix // a fix doesn't wait out a gain's gate (issue #1825)
+	if why := m.lineFirst(task, p, main); why != "" {
+		t.Fatalf("a fix waited behind a gain in its gate: %q", why)
+	}
+	front.Reason = "its merged test passed" // past its gate: the fix waits
+	if why := m.lineFirst(task, p, main); !strings.HasPrefix(why, LineFirstWait) {
+		t.Fatalf("a fix behind a gain past its gate: %q", why)
+	}
+	front.Aim, front.Reason = AimFix, GateWait+" on it" // a fix in front holds it too
+	if why := m.lineFirst(task, p, main); !strings.HasPrefix(why, LineFirstWait) {
+		t.Fatalf("a fix behind a fix: %q", why)
+	}
+	front.Aim, task.Aim = "", ""
 	m.batches = map[string][]*mergeBatch{p.Name: {{front: front.ID, head: front.SHA, tip: main, ok: true, heads: map[string]string{task.ID: task.SHA}}}}
 	if why := m.lineFirst(task, p, main); why != "" {
 		t.Fatalf("a member of the front's own batch waited: %q", why)

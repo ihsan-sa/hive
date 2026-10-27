@@ -17,7 +17,12 @@ import (
 // it; one that leaves it standing goes on, as does one its batch tested.
 // Reverts don't wait, nor a measured keep (keptFirst orders those), and a
 // pass holds the others at most lineFirstFor from its test, so a front that
-// never gets through doesn't stop a project's merges.
+// never gets through doesn't stop a project's merges. Nor does a fix wait
+// behind a gain still waiting for or in its recursive gate (issue #1825):
+// a gate takes up to GateTimeout a slot, slots shrink under load, and some
+// twenty fixes whose tests passed sat behind one unmeasured gain. Main is
+// measured after the fix merges, and the gain's verdict still counts while
+// main's commits miss its files and the gate's.
 var lineFirstFor = 6 * time.Hour
 
 // LineFirstWait opens the reason of a task waiting behind an older PR's
@@ -43,6 +48,9 @@ func (m *Module) lineFirst(t *Task, p core.Project, main string) string {
 		was, at, ok := strings.Cut(u.MergedOK, "+")
 		if !ok || was != u.SHA || time.Since(u.MergedAt) > lineFirstFor || m.inBatchLocked(t, u, main) {
 			continue
+		}
+		if t.Fix() && u.Gain() && strings.HasPrefix(u.Reason, GateWait) {
+			continue // a fix doesn't wait out a gain's gate
 		}
 		ahead = append(ahead, front{&Task{ID: u.ID, Kind: u.Kind, PR: u.PR, SHA: u.SHA, Title: u.Title, MergedAt: u.MergedAt}, at})
 	}
