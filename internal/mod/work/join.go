@@ -17,7 +17,7 @@ import (
 // match is a failing test both name in their title or done line,
 // a near-identical title, or the same named files under a similar title.
 // Pushed tasks aren't joined: their worker is done, so the added ask would be
-// lost. The person's asks and the Hive's own (follow-ups, trials) are always
+// lost. The person's asks and the Hive's own (trials) are always
 // filed as they come; an agent that means separate work says apart.
 
 var testName = regexp.MustCompile(`\b(?:Test|Benchmark|Fuzz)[A-Z][A-Za-z0-9_]*`)
@@ -223,12 +223,18 @@ func (m *Module) postJoins(t *Task, p core.Project) {
 // any other agent still running as a message, since a worker that split its
 // work among helpers has no thread of its own to read.
 func (m *Module) notify(t *Task, text string) {
-	m.Chat.Notify(t.Chat, t.Thread, text)
 	if t.Kind == "helper" {
 		if r, ok := m.C.Runs.Get(t.From); ok && r.Role != "lead" && (!r.Terminal() || r.Persistent) {
 			m.C.Runs.Send(r.ID, fmt.Sprintf("[your helper's task %s] %s", t.ID, text))
 		}
 	}
+	m.notifyThreads(t, text)
+}
+
+// notifyThreads is notify without the message to a helper's spawner, for news
+// the spawner already has.
+func (m *Module) notifyThreads(t *Task, text string) {
+	m.Chat.Notify(t.Chat, t.Thread, text)
 	seen := map[[2]string]bool{{t.Chat, t.Thread}: true}
 	for _, j := range t.Joins {
 		if k := [2]string{j.Chat, j.Thread}; j.Thread != "" && !seen[k] {

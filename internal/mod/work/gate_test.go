@@ -136,7 +136,7 @@ func alerts(m *Module, kind string) (n int) {
 func TestGateFailsOnBoth(t *testing.T) {
 	m, task, p, forge := gateRig(t, true, map[string]string{"feature.txt": "y"})
 	for i := 0; i < 3; i++ {
-		if err := m.test(task, p); err != nil {
+		if err := testStep(m, task, p); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -151,13 +151,13 @@ func TestGateFailsOnBoth(t *testing.T) {
 	}
 	old := task.SHA
 	pushMain(t, forge, map[string]string{"BROKEN": ""})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Stage != StageTesting || task.SHA == old || task.Reason != "" || task.Round != 0 {
 		t.Fatalf("after main went green: stage %q, sha %s (was %s), reason %q, round %d", task.Stage, task.SHA, old, task.Reason, task.Round)
 	}
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Stage == StageTesting || task.Stage == StageWorking {
@@ -168,13 +168,13 @@ func TestGateFailsOnBoth(t *testing.T) {
 // A failure only the branch has still goes back to the worker.
 func TestGateFailsOnBranchOnly(t *testing.T) {
 	m, task, p, _ := gateRig(t, false, map[string]string{"BROKEN": "x"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Stage != StageTesting || !task.Recheck || task.Retested != task.SHA || task.Round != 0 {
 		t.Fatalf("a red on a green main should run once more first: stage %q, recheck %v, round %d", task.Stage, task.Recheck, task.Round)
 	}
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "The tests failed on your commit") {
@@ -193,7 +193,7 @@ func TestFlakyBranchRunsOnceMore(t *testing.T) {
 	cmd := fmt.Sprintf(`{"test": "test -f %s || { touch %s; exit 1; }"}`, flag, flag)
 	m, task, p, _ := gateRigSeeded(t, false, map[string]string{".hive/project.json": cmd}, map[string]string{"feature.txt": "y"})
 	for i := 0; i < 2; i++ {
-		if err := m.test(task, p); err != nil {
+		if err := testStep(m, task, p); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -219,7 +219,7 @@ func TestBranchRetestsOnlyWhatFailed(t *testing.T) {
 			}
 			return m.C.Effects.RunCheck(p, sha, "retest", map[bool]string{true: "false", false: "true"}[again]).OK
 		}
-		if err := m.test(task, p); err != nil {
+		if err := testStep(m, task, p); err != nil {
 			t.Fatal(err)
 		}
 		if retests != 1 {
@@ -249,7 +249,7 @@ func TestFlakyMainHoldsNothing(t *testing.T) {
 		return m.C.Effects.RunCheck(p, sha, "retest", "true").OK
 	}
 	for i := 0; i < 2; i++ {
-		if err := m.test(task, p); err != nil {
+		if err := testStep(m, task, p); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -264,7 +264,7 @@ func TestFlakyMainHoldsNothing(t *testing.T) {
 // A change that passes while main fails goes on, here because it fixes main.
 func TestGateFailsOnMainOnly(t *testing.T) {
 	m, task, p, _ := gateRig(t, true, map[string]string{"BROKEN": ""})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 {
@@ -281,7 +281,7 @@ func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
 	const red = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\n"
 	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": red + "exit 1\n"}
 	m, task, p, _ := gateRigSeeded(t, false, onMain, map[string]string{"feature.txt": "y"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 || strings.HasPrefix(task.Reason, "waiting on main") {
@@ -302,7 +302,7 @@ func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
 			script = more + "exit 1\n"
 		}
 		m, task, p, _ := gateRigSeeded(t, false, onMain, map[string]string{"t.sh": script})
-		if err := m.test(task, p); err != nil {
+		if err := testStep(m, task, p); err != nil {
 			t.Fatal(err)
 		}
 		if task.Stage != StageTesting || !strings.HasPrefix(task.Reason, "waiting on main") {
@@ -364,16 +364,16 @@ func TestMergeRefusalReplacesStaleReason(t *testing.T) {
 func TestGateMainRedOncePerCommit(t *testing.T) {
 	m, task, p, forge := gateRig(t, true, map[string]string{"feature.txt": "y"})
 	a, _ := m.C.Effects.Sync(p)
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	pushMain(t, forge, map[string]string{"other.txt": "z"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	// Moving main back relies on Sync's fetch being forced (+refs/heads/*).
 	must(t, forge.RepoPath("me/p"), "update-ref", "refs/heads/main", a)
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(task.Reason, core.Short(a)) {
@@ -391,7 +391,7 @@ func TestGateMainNeedsSandbox(t *testing.T) {
 	cfg := m.C.WS.LoadConfig()
 	cfg.BareAccepted = ""
 	m.C.WS.SaveConfig(cfg)
-	if err := m.test(task, p); err == nil {
+	if err := testStep(m, task, p); err == nil {
 		t.Fatal("the gate ran with no sandbox")
 	}
 	main, _ := m.C.Effects.Sync(p)
@@ -404,11 +404,11 @@ func TestGateMainNeedsSandbox(t *testing.T) {
 // still saying it waits on main.
 func TestGateWaitThenConflict(t *testing.T) {
 	m, task, p, forge := gateRig(t, true, map[string]string{"README.md": "branch\n"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	pushMain(t, forge, map[string]string{"BROKEN": "", "README.md": "main\n"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Stage != StageWorking || task.Reason != "" {
@@ -432,7 +432,7 @@ func TestClearedDraftIsReadiedAndMerged(t *testing.T) {
 	if err := forge.SetDraft(p.Repo, task.PR.Number, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 5 && task.Stage == StageMerging; i++ {
@@ -451,7 +451,7 @@ func TestClearedDraftIsReadiedAndMerged(t *testing.T) {
 // the commit read again it is readied and merges.
 func TestMovedDraftIsNotReadied(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Stage != StageMerging {
@@ -512,7 +512,7 @@ func TestMovedDraftIsNotReadied(t *testing.T) {
 // it waits, counting no failure, and merges once the lead marks it ready.
 func TestLeadHeldDraftIsNotReadied(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	m.save(task, "")
@@ -587,7 +587,7 @@ func TestStoppedOnDraftResumes(t *testing.T) {
 // failure; once the gate opens (or after the restart) it merges.
 func TestPausedMergeWaitsAtTheGate(t *testing.T) {
 	m, task, p, _ := gateRig(t, false, map[string]string{"x.txt": "x\n"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	resume, ok := m.PauseMerges(0)
@@ -612,7 +612,7 @@ func TestPausedMergeWaitsAtTheGate(t *testing.T) {
 // recorded before the pause returns.
 func TestPauseWaitsForTheRunningMerge(t *testing.T) {
 	m, task, p, _ := gateRig(t, false, map[string]string{"x.txt": "x\n"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	inside, finish := make(chan struct{}), make(chan struct{})
@@ -698,7 +698,7 @@ func TestPauseGivesUpOnALongMerge(t *testing.T) {
 func TestGateMissingToolCantRun(t *testing.T) {
 	m, task, p, _ := gateRig(t, false, map[string]string{"NEEDTOOL": "x"})
 	for i := 0; i < 2; i++ {
-		if err := m.test(task, p); err != nil {
+		if err := testStep(m, task, p); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -714,7 +714,7 @@ func TestGateMissingToolCantRun(t *testing.T) {
 	bin := t.TempDir()
 	os.WriteFile(filepath.Join(bin, "hive-gate-tool-xyz"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Stage == StageTesting || task.Stage == StageWorking || task.Reason != "" {
@@ -732,7 +732,7 @@ func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
 		map[string]string{"FAKE": "x"})
 	before, _ := m.C.Effects.Sync(p)
 	for i := 1; i < CantRunTries; i++ {
-		if err := m.test(task, p); err != nil {
+		if err := testStep(m, task, p); err != nil {
 			t.Fatal(err)
 		}
 		if task.Stage != StageTesting {
@@ -748,7 +748,7 @@ func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
 	if said != 1 {
 		t.Fatalf("%d can't-run comments on the PR over %d tries, want 1", said, CantRunTries-1)
 	}
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Stage != StageStopped || !strings.Contains(task.Reason, "counts as red") {
@@ -783,7 +783,7 @@ func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
 func TestCheckpointMissingToolDropped(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"NEEDTOOL": "x"})
 	task.Checkpoint = task.SHA
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Checkpoint != "" || task.Stage != StageWorking || task.Round != 0 {
@@ -802,7 +802,7 @@ func TestCheckpointMissingToolDropped(t *testing.T) {
 	bin := t.TempDir()
 	os.WriteFile(filepath.Join(bin, "hive-gate-tool-xyz"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	m.mu.Lock()
@@ -818,7 +818,7 @@ func TestCheckpointMissingToolDropped(t *testing.T) {
 // and merging forever), and nothing is merged.
 func TestClosedPRStopsTheTask(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	if err := m.test(task, p); err != nil || task.Stage != StageMerging {
+	if err := testStep(m, task, p); err != nil || task.Stage != StageMerging {
 		t.Fatalf("stage %q, err %v", task.Stage, err)
 	}
 	forge.ClosePR(p.Repo, task.PR.Number, "not wanted")
@@ -845,7 +845,7 @@ func TestClosedPRStopsTheTask(t *testing.T) {
 func TestClosedPRStopsTesting(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	forge.ClosePR(p.Repo, task.PR.Number, "not wanted")
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); ok || task.Stage != StageStopped || !task.ByPerson {
@@ -858,7 +858,7 @@ func TestClosedPRStopsTesting(t *testing.T) {
 func TestClosedPRStopsReviewAndSendBack(t *testing.T) {
 	for _, step := range []string{"review", "sendBack"} {
 		m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
-		if err := m.test(task, p); err != nil {
+		if err := testStep(m, task, p); err != nil {
 			t.Fatal(err)
 		}
 		forge.ClosePR(p.Repo, task.PR.Number, "not wanted")
@@ -879,7 +879,7 @@ func TestClosedPRStopsReviewAndSendBack(t *testing.T) {
 // looks again only after a while.
 func TestClosedPRStopsWaitingForPerson(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	task.Stage = StagePerson
@@ -900,7 +900,7 @@ func TestClosedPRStopsWaitingForPerson(t *testing.T) {
 // worker's later commits.
 func TestClosedCheckpointNotTold(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	task.Checkpoint = task.SHA
@@ -920,7 +920,7 @@ func TestClosedCheckpointNotTold(t *testing.T) {
 // later draft wait starts its clock afresh.
 func TestClosedDraftStops(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	forge.SetDraft(p.Repo, task.PR.Number, true)
@@ -941,7 +941,7 @@ func TestClosedDraftStops(t *testing.T) {
 // a message from the forge's checks keeps its own.
 func TestSendBackBundlesMain(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	pushMain(t, f, map[string]string{"newer.txt": "only on main"})

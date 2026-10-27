@@ -1256,6 +1256,11 @@ func TestFailedTestKeys(t *testing.T) {
 			t.Errorf("KeyDir(%q) = %q %v, want %q", key, dir, ok, want)
 		}
 	}
+	// The root package's tests read the whole tree: no change leaves them untouched.
+	if GoModule("module github.com/x\n\ngo 1.27\n") != "github.com/x" || !WholeTree("github.com/x::TestGofmt", "github.com/x") ||
+		WholeTree("github.com/x/a::TestA", "github.com/x") || WholeTree("t.py::test_a", "") {
+		t.Fatal("WholeTree misplaced a test")
+	}
 }
 
 func TestOnlyTests(t *testing.T) {
