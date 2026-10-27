@@ -101,7 +101,7 @@ type Task struct {
 	// UnknownSince is when the forge first couldn't say whether the PR
 	// merges cleanly; cleared once it can.
 	UnknownSince time.Time `json:"unknown_since,omitempty"`
-	Reviews  int    `json:"reviews"`
+	Reviews      int       `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
 	// own diff, keyed by "diffID#seat". When the diff changes, the old
 	// tries are left behind and the seat starts fresh on the new diff.
