@@ -14,10 +14,15 @@ on:
     types: [published]
   workflow_dispatch:
 concurrency:
-  # Keyed by event too, so a push to main never cancels a manual run on main.
-  group: ci-${{ github.event_name }}-${{ github.ref }}
-  # Only a PR's superseded run is cancelled: every push to main finishes its run, so a
-  # change waiting on main's result gets one however fast merges come.
+  # Keyed by event too, so a push to main never cancels a manual run on main. A PR's runs
+  # share a group and its superseded run is cancelled. Every other run (a push to main
+  # above all) gets a group of its own, keyed by its commit: GitHub keeps one running and
+  # one pending run per group and cancels the older pending one when a third arrives,
+  # whatever cancel-in-progress says, so a shared group left most of main's pushes with no
+  # result (issue #1057) and a release waiting on one waited forever.
+  # Two manual (or release) runs on one commit still share a group, so a third replaces the
+  # pending one: harmless, since they test the same code.
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 # Read-only whatever the repository's default is: no job here writes to it.
 permissions:

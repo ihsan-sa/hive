@@ -99,11 +99,11 @@ func TestQuarantine(t *testing.T) {
 	}
 }
 
-// A task and its own follow-up, or two tasks on the same head, are one
+// A task and its own revert, or two tasks on the same head, are one
 // change: their reds aren't two unrelated branches.
 func TestQuarantineNeedsUnrelatedBranches(t *testing.T) {
 	m := rig(t)
-	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "follow up", FollowUp: "t1"})
+	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "revert", RevertOf: "t1"})
 	sight(m, "t1", "https://ci/1", "TestX")
 	sight(m, "f1", "https://ci/2", "TestX")
 	m.C.J.MustAppend("forge.tests_failed", map[string]any{"project": "hive", "task": "t2", "sha": "abct1", "check": "c", "url": "https://ci/3", "tests": []string{"TestX"}})
@@ -140,10 +140,10 @@ func TestQuarantineAgesOut(t *testing.T) {
 }
 
 // A PR is excused only on evidence from outside its task: its own reds, its
-// re-runs' passes and its follow-ups' reds don't count for it.
+// re-runs' passes and its reverts' reds don't count for it.
 func TestQuarantineNotOnItsOwnEvidence(t *testing.T) {
 	m := rig(t)
-	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "follow up", FollowUp: "t1"})
+	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "revert", RevertOf: "t1"})
 	sight(m, "t1", "https://ci/1", "pkg::TestX")
 	m.C.J.MustAppend("forge.flaked", map[string]any{"project": "hive", "task": "t1", "sha": "abct1", "checks": []string{"test"}, "tests": []string{"pkg::TestX"}})
 	sight(m, "f1", "https://ci/2", "pkg::TestX")
@@ -201,5 +201,71 @@ func TestQuarantineFromLocalChecks(t *testing.T) {
 	fix := m.Work.List(func(t work.Task) bool { return t.Title == flakyTitle+key })
 	if len(fix) != 1 || !strings.Contains(fix[0].Known, "task t1 at headt1, check local test") {
 		t.Fatalf("fix tasks %+v", fix)
+	}
+}
+
+// A check run broken by its environment (its folder gone) or failing dozens
+// of tests at once is no sighting of any of them: two such runs on unrelated
+// heads quarantine nothing and file no fix briefs, and a waiting fix brief
+// filed on such runs before is taken back.
+func TestQuarantineSkipsBrokenRuns(t *testing.T) {
+	m := rig(t)
+	pkg := "github.com/x/hive/internal/core::"
+	key := pkg + "TestPrefetch"
+	gone := "--- FAIL: TestPrefetch (0.01s)\n    disk_test.go:318: go env: exit status 1 cannot determine current directory: getwd: no such file or directory\nFAIL\n"
+	var many []string
+	for i := range 12 {
+		many = append(many, pkg+"TestMany"+string(rune('A'+i)))
+	}
+	for _, id := range []string{"t1", "t2"} {
+		m.C.J.MustAppend("task.saved", work.Task{ID: id, Project: "hive", Title: "work " + id, SHA: "head" + id})
+		m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "head" + id, Kind: "test", Output: gone, Failed: []string{"TestPrefetch"}, Keys: []string{key}, At: time.Now().UTC()})
+		m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "head" + id, Kind: "retest", Output: "FAIL\n", Keys: many, At: time.Now().UTC()})
+		sight(m, id, "https://ci/"+id, "TestA", "TestB", "TestC", "TestD", "TestE", "TestF", "TestG", "TestH", "TestI", "TestJ", "TestK")
+	}
+	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
+		t.Fatalf("broken runs quarantined %v", q)
+	}
+	m.C.J.MustAppend("effect.merged", map[string]string{"project": "hive", "merge_sha": "main1"})
+	m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "main1", Kind: "test", Output: "fatal: this operation must be run in a work tree\n", Keys: []string{pkg + "TestMain"}, At: time.Now().UTC()})
+	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
+		t.Fatalf("a broken run on main quarantined %v", q)
+	}
+
+	stale, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + key, Done: "d", Known: "k"})
+	kept, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + pkg + "TestOther", Done: "d", Known: "k"})
+	m.fileQuarantined()
+	if n := len(m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) })); n != 2 {
+		t.Fatalf("%d fix tasks, want only the two filed by hand", n)
+	}
+	if got, _ := m.Work.Get(stale.ID); !got.Withdrawn() {
+		t.Fatalf("the brief filed on broken runs is %s (%s), want withdrawn", got.Stage, got.Reason)
+	}
+	if got, _ := m.Work.Get(kept.ID); got.Terminal() {
+		t.Fatalf("a brief for a test no broken run took down was taken back: %s", got.Reason)
+	}
+}
+
+// A test in the module's root package reads the whole tree (gofmt, the
+// core's size): two branches each with an unformatted file fail it, and
+// that is their content, not a flake. It is never quarantined, and a
+// waiting fix brief filed for it is taken back.
+func TestQuarantineSkipsWholeTreeTests(t *testing.T) {
+	m := rig(t)
+	m.modules["hive"] = "github.com/x/hive"
+	key := "github.com/x/hive::TestGofmt"
+	out := "--- FAIL: TestGofmt (0.3s)\n    gofmt_test.go:37: internal/mod/work/work.go is not gofmt-clean\nFAIL\nFAIL\tgithub.com/x/hive\t0.5s\n"
+	for _, id := range []string{"t1", "t2"} {
+		m.C.J.MustAppend("task.saved", work.Task{ID: id, Project: "hive", Title: "work " + id, SHA: "head" + id})
+		m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "head" + id, Kind: "test", Output: out, Failed: []string{"TestGofmt"}, Keys: []string{key}, At: time.Now().UTC()})
+		sight(m, id, "https://ci/"+id, key)
+	}
+	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
+		t.Fatalf("a whole-tree test quarantined: %v", q)
+	}
+	stale, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + key, Done: "d", Known: "k"})
+	m.fileQuarantined()
+	if got, _ := m.Work.Get(stale.ID); !got.Withdrawn() {
+		t.Fatalf("the brief for a whole-tree test is %s, want withdrawn", got.Stage)
 	}
 }

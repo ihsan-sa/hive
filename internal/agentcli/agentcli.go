@@ -40,6 +40,8 @@ func Call(op string, args any, wait time.Duration) (json.RawMessage, error) {
 	}
 	resp := filepath.Join(box, "inbox", id+".json")
 	deadline := time.Now().Add(wait)
+	// Most replies come within a tick of the daemon, so look soon and back off.
+	pause := 10 * time.Millisecond
 	for time.Now().Before(deadline) {
 		if data, err := os.ReadFile(resp); err == nil {
 			os.Remove(resp)
@@ -56,7 +58,10 @@ func Call(op string, args any, wait time.Duration) (json.RawMessage, error) {
 			}
 			return r.Result, nil
 		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(pause)
+		if pause *= 2; pause > 250*time.Millisecond {
+			pause = 250 * time.Millisecond
+		}
 	}
 	return nil, fmt.Errorf("no reply to %s within %s (the Hive may be restarting; the request is queued and will still be handled)", op, wait)
 }
@@ -199,6 +204,9 @@ The loop is every agent's: these act on your own project's tasks, on the record 
                                                  checked again from its head; --back sends its worker that
   landed    --task id --why "..." [--merge sha]  end a task whose PR merged on the forge or whose
                                                  work is on main, so the briefs waiting on it start
+  amend     --task id [--title ...] [--done ...] [--known ...] [--why ...]   change a brief no worker
+                                                 has started on, in place (yours; the lead: any but the person's)
+  withdraw  --task id --why "..." [--into id]   take back such a brief: it stops, its issue closes
   stop      --task id --why "..." [--fresh]   end a working task's quiet worker (one that keeps ending
                                                  turns without finishing) as blocked; bring the task back
                                                  with recheck, or --fresh hands it to a new worker at once
@@ -208,4 +216,6 @@ The loop is every agent's: these act on your own project's tasks, on the record 
                                                  task (or --project p --pr N in place of --task)
   models                                         named models, each role's route, what each agent runs on, trials
   route     --role worker --models "a,b" [--project p]   (lead) the models a role runs on, in fallback order
-  trial     --model m --project test --title "..." --done "..."   (lead) one brief's worker on that model alone`
+  trial     --model m --project test --title "..." --done "..."   (lead) one brief's worker on that model alone
+In $HIVE_STATE, logins/ and private/ (the daemon's token, every agent's home) are covered, and so are an
+isolated project's records (and the journal, while any project is isolated): hidden there, not missing.`

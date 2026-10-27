@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -127,7 +128,7 @@ func TestStackSurvivesTinyWindows(t *testing.T) {
 	for h := -1; h <= 8; h++ {
 		for _, sel := range [][2]int{{0, 0}, {0, 2}, {3, 9}} {
 			off := 5
-			stack(lines, append([]string(nil), bx...), h, &off, sel[0], sel[1], true)
+			stack(lines, append([]string(nil), bx...), h, &off, sel[0], sel[1], true, "end")
 		}
 	}
 	for h := 1; h <= 8; h++ {
@@ -406,7 +407,7 @@ func TestFeedRefreshesHeldChats(t *testing.T) {
 	}
 	m.Update(chatMsg{"lead", append(m.msgs["lead"],
 		chat.Message{ID: "4", Thread: "4", From: "lead-x", Text: "**First** new reply"},
-		chat.Message{ID: "5", Thread: "5", From: "lead-x", Text: "Second `new` reply"})})
+		chat.Message{ID: "5", Thread: "5", From: "lead-x", Text: "Second `new` reply"}), nil})
 	v := plain(m.View())
 	for _, want := range []string{"First new reply", "Second new reply"} {
 		if !strings.Contains(v, want) {
@@ -1335,5 +1336,181 @@ func TestSizeLine(t *testing.T) {
 	}
 	if sizeLine([]improve.Measurement{{}}) != "" {
 		t.Fatal("no size measured should show no line")
+	}
+}
+
+// A state poll sent before a settings save lands doesn't put the old value
+// back; one sent after it does, if the daemon refused the save.
+func TestASavedSettingDoesntFlickBack(t *testing.T) {
+	m := testModel(100, 30)
+	old := m.st.Config
+	c := old
+	c.ReviewRounds = old.ReviewRounds + 1
+	m.fetchState() // a poll in flight, its saved count taken before the save
+	stale := stateMsg{st: sample(), saved: m.saved}
+	m.saveConfig(c, "saved")
+	m.Update(stale)
+	if m.st.Config.ReviewRounds != c.ReviewRounds {
+		t.Fatalf("a poll from before the save showed review rounds %d", m.st.Config.ReviewRounds)
+	}
+	m.Update(savedMsg{n: m.saves, flash: "error: refused"})
+	m.Update(stateMsg{st: sample(), saved: m.saved})
+	if m.st.Config.ReviewRounds != old.ReviewRounds {
+		t.Fatal("the daemon's settings didn't come back after a refused save")
+	}
+}
+
+// A long thread scrolls from its reply box: the wheel, PgUp, and ↑ while the
+// box is empty; End and Ctrl+End come back to the newest reply, and a row
+// above the box says when newer lines are below.
+func TestThreadScrollsFromItsBox(t *testing.T) {
+	m := testModel(80, 20)
+	for i := 0; i < 12; i++ {
+		m.msgs["lead"] = append(m.msgs["lead"], chat.Message{ID: fmt.Sprint("r", i), Thread: "1", From: "lead-x", Name: "lead", Text: fmt.Sprintf("reply number %d", i), At: time.Now()})
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.focus != 2 || !m.composing {
+		t.Fatalf("the thread's box doesn't have the keys: focus %d", m.focus)
+	}
+	newest := "reply number 11"
+	if v := m.View(); !strings.Contains(v, newest) || strings.Contains(v, "newer below") {
+		t.Fatalf("the thread doesn't open on its newest reply:\n%s", v)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if v := m.View(); strings.Contains(v, newest) || !strings.Contains(v, "newer below · end") {
+		t.Fatalf("↑ in the empty box didn't scroll the thread:\n%s", v)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if !strings.Contains(m.View(), newest) {
+		t.Fatal("End didn't come back to the newest reply")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("draft")})
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if v := m.View(); strings.Contains(v, newest) || !strings.Contains(v, "newer below · ctrl+end") {
+		t.Fatalf("PgUp with a draft didn't scroll the thread:\n%s", v)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlEnd})
+	if v := m.View(); !strings.Contains(v, newest) || m.input.Value() != "draft" {
+		t.Fatalf("Ctrl+End didn't come back, or changed the draft %q", m.input.Value())
+	}
+}
+
+// End and G in the channel go to the newest message and drop the pick, so
+// nothing opens and nothing pulls the channel back up; Ctrl+End does it from
+// the new-thread box mid-sentence.
+func TestEndGoesToTheNewest(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	if strings.Contains(m.View(), "pull/3") {
+		t.Fatal("Home left the newest message on screen")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if v := m.View(); !strings.Contains(v, "pull/3") || m.thread != "" || m.threadSel != -1 || m.composing {
+		t.Fatalf("End: thread %q pick %d composing %v\n%s", m.thread, m.threadSel, m.composing, v)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("half a thought")})
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if strings.Contains(m.View(), "pull/3") {
+		t.Fatal("PgUp from the box didn't scroll the channel")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlEnd})
+	if v := m.View(); !strings.Contains(v, "pull/3") || m.input.Value() != "half a thought" {
+		t.Fatalf("Ctrl+End from the box: draft %q\n%s", m.input.Value(), v)
+	}
+}
+
+// The last message keeps a blank row between it and the box, however the
+// channel is scrolled.
+func TestRoomAboveTheBox(t *testing.T) {
+	for _, h := range []int{12, 20, 40} {
+		lines := strings.Split(plain(testModel(80, h).View()), "\n")
+		for i, l := range lines {
+			if strings.Contains(l, "╭") {
+				if above := strings.TrimSpace(strings.TrimLeft(lines[i-1], " ")); above != "" && !strings.HasSuffix(above, "│") && !strings.Contains(above, "waiting on you") {
+					t.Errorf("%d rows: %q right above the box", h, lines[i-1])
+				}
+				break
+			}
+		}
+	}
+}
+
+// A read of the chat that started before a send answers after it: the sent
+// message stays, and a read that already holds it doesn't show it twice.
+func TestSentMessageShowsOnce(t *testing.T) {
+	m := testModel(80, 24)
+	old := append([]chat.Message(nil), m.msgs["lead"]...)
+	sent := chat.Message{ID: "9", Thread: "9", From: "person", Name: "you", Text: "just sent", At: time.Now().Add(time.Second)}
+	m.Update(chatMsg{"lead", append(append([]chat.Message(nil), old...), sent), nil})
+	m.Update(sentMsg{out: outMsg{chat: "lead", text: "just sent"}, msg: sent})
+	if n := len(m.msgs["lead"]); n != len(old)+1 {
+		t.Fatalf("a read before the answer: %d messages, want %d", n, len(old)+1)
+	}
+	m.Update(chatMsg{"lead", old, nil}) // a read that started before the send
+	if n := len(m.msgs["lead"]); n != len(old)+1 {
+		t.Fatalf("a stale read dropped the sent message: %d messages", n)
+	}
+	m.Update(chatMsg{"lead", nil, errors.New("connection refused")})
+	if n := len(m.msgs["lead"]); n != len(old)+1 {
+		t.Fatalf("a failed read wiped the chat: %d messages", n)
+	}
+	m.Update(chatMsg{"lead", append(append([]chat.Message(nil), old...), sent), nil})
+	m.Update(chatMsg{"lead", old[:1], nil}) // the chat was reset after a read held the sent message
+	if n := len(m.msgs["lead"]); n != 1 {
+		t.Fatalf("a reset chat kept stale messages: %d messages, want 1", n)
+	}
+}
+
+// A reply the thread already has shows once, not again as sending.
+func TestSendingLineGoesWhenTheReplyIsIn(t *testing.T) {
+	m := testModel(80, 24)
+	m.thread, m.focus = "1", 2
+	m.focusBox("1")
+	m.input.SetValue("on it")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m.View(), "sending") {
+		t.Fatal("no sending line")
+	}
+	m.Update(chatMsg{id: "lead", msgs: append(append([]chat.Message(nil), m.msgs["lead"]...), chat.Message{ID: "9", Thread: "1", From: "person", Text: "on it", At: time.Now()})})
+	if strings.Contains(m.View(), "sending") {
+		t.Fatal("the reply shows twice: in the thread and as sending")
+	}
+}
+
+// Opening another thread starts it at its newest, not where the last was scrolled.
+func TestAnotherThreadOpensAtItsNewest(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.thread, m.thScroll, m.threadSel = "0", 50, 1
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.thread != "1" || m.thScroll != 0 {
+		t.Fatalf("thread %q scroll %d", m.thread, m.thScroll)
+	}
+}
+
+// End and Home from a terminal in application-cursor mode (ESC O F, ESC O H,
+// which bubbletea reads as alt+O then F or H) work like plain End and Home.
+func TestApplicationCursorEndAndHome(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	ss3 := func(r rune) {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}, Alt: true})
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	ss3('H')
+	if strings.Contains(m.View(), "pull/3") {
+		t.Fatal("ESC O H didn't go to the oldest")
+	}
+	ss3('F')
+	if v := m.View(); !strings.Contains(v, "pull/3") || m.composing {
+		t.Fatalf("ESC O F didn't go to the newest, or typed into a box:\n%s", v)
 	}
 }

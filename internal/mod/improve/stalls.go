@@ -22,10 +22,13 @@ type Stall struct {
 	Limit   float64   `json:"limit_s"` // seconds without moving that counted as stuck
 	Samples int       `json:"samples"` // past durations of the stage behind the limit
 	Tries   int       `json:"tries"`
-	Told    bool      `json:"told"` // handed to the lead; the watcher does nothing more
-	Did     string    `json:"did"`
-	At      time.Time `json:"at"` // last action
-	Moved   time.Time `json:"moved,omitempty"`
+	// Rechecked: the watcher retried this task from its branch's head; it
+	// does so once per task, so a task stuck again goes to the lead.
+	Rechecked bool      `json:"rechecked,omitempty"`
+	Told      bool      `json:"told"` // handed to the lead; the watcher does nothing more
+	Did       string    `json:"did"`
+	At        time.Time `json:"at"` // last action
+	Moved     time.Time `json:"moved,omitempty"`
 }
 
 type spell struct {
@@ -49,6 +52,18 @@ func waitCause(reason string) string {
 		return "waiting on main"
 	}
 	return work.HoldKey(reason)
+}
+
+// checked is the commit whose test t waits on in its stage: its head in
+// testing, its head merged with main in merging (work.mergedTests).
+func checked(t work.Task) string {
+	switch {
+	case t.Stage == work.StageTesting:
+		return t.SHA
+	case t.Stage == work.StageMerging && t.MergedTest != "":
+		return t.MergedTest
+	}
+	return ""
 }
 
 // waitKey is the stall key of the wait a task in project and stage shares.
@@ -135,8 +150,9 @@ func (m *Module) Stalls() []Stall {
 }
 
 // Watch acts on whatever has gone longer without moving than its stage
-// usually takes in this Hive: it restarts a hung turn once, then hands the
-// thing to the lead, and keeps one alert per stuck thing up to date.
+// usually takes in this Hive: it restarts a hung turn once, retries a stuck
+// task from its branch's head once (as the lead's recheck does), then hands
+// the thing to the lead, and keeps one alert per stuck thing up to date.
 func (m *Module) Watch() {
 	floor := time.Duration(m.C.WS.LoadConfig().StallFloorSeconds) * time.Second
 	if floor <= 0 {
@@ -155,10 +171,14 @@ func (m *Module) Watch() {
 	}
 	waits := map[string]*group{}
 	var causes []string
-	for _, t := range m.Work.List(func(t work.Task) bool { return !t.Terminal() && t.Stage != work.StagePerson }) {
+	// A merged task's change is on main: what is left (its follow-up brief,
+	// then done) is the Hive's bookkeeping, which a recheck can't retry.
+	for _, t := range m.Work.List(func(t work.Task) bool {
+		return !t.Terminal() && t.Stage != work.StagePerson && t.Stage != work.StageMerged
+	}) {
 		now["task:"+t.ID] = t.Stage
 		// The recursive gate runs on its own clock, as many at once as the machine carries.
-		if t.Queued() || strings.HasPrefix(t.Reason, work.GateWait) || t.Stage == work.StageTesting && slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
+		if t.Queued() || strings.HasPrefix(t.Reason, work.GateWait) || slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == checked(t) }) {
 			continue
 		}
 		if c := waitCause(t.Reason); c != "" && t.Stage != work.StageWorking && t.Stage != work.StageReviewing { // a run's own hang is still its own
@@ -186,9 +206,9 @@ func (m *Module) Watch() {
 		m.mu.Lock()
 		sp, took := m.spells[t.ID], append([]float64(nil), m.took[t.Stage]...)
 		m.mu.Unlock()
-		if t.Stage == work.StageTesting {
+		if sha := checked(t); sha != "" {
 			for _, u := range running {
-				if u.Project == t.Project && u.SHA == t.SHA {
+				if u.Project == t.Project && u.SHA == sha {
 					sp.since = latest(sp.since, u.Since)
 				}
 			}
@@ -246,6 +266,8 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 	if old := m.stalls[cur.Key]; old != nil && old.Stage == cur.Stage && old.Moved.IsZero() {
 		c := *old
 		s = &c
+	} else if old != nil {
+		cur.Rechecked = old.Rechecked // once per task, whatever stage it sticks in next
 	}
 	m.mu.Unlock()
 	if s.Told {
@@ -262,9 +284,20 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 	}
 	s.Tries++
 	s.Limit, s.Samples, s.At = limit.Seconds(), len(took), time.Now().UTC()
-	did := "restarted its turn"
-	if s.Tries > 1 || !m.C.Runs.Interrupt(run) {
+	var did string
+	var refused error
+	switch {
+	case s.Tries == 1 && m.C.Runs.Interrupt(run):
+		did = "restarted its turn"
+	case m.recheck(s, &refused):
+		did = "retried it from its branch's head"
+	default:
 		s.Told, did = true, "handed it to the lead"
+		if s.Rechecked {
+			did += ", having retried it from its branch's head once already"
+		} else if refused != nil {
+			did += " (a retry from its branch's head was refused: " + core.Clip(refused.Error(), 200) + ")"
+		}
 	}
 	if s.Did != "" {
 		s.Did += ", then "
@@ -275,6 +308,32 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 	if s.Told {
 		m.Chat.Notify(chat, thread, "Stuck: "+text+retryHint(s.Key))
 	}
+}
+
+// recheck retries a stuck task from its branch's head, as the lead's
+// recheck op does, if the watcher hasn't already for this task. Why the
+// retry was refused (a step still running on it, say) goes in refused.
+func (m *Module) recheck(s *Stall, refused *error) bool {
+	id, ok := strings.CutPrefix(s.Key, "task:")
+	if !ok || s.Rechecked {
+		return false
+	}
+	if t, ok := m.Work.Get(id); !ok || t.Stage != s.Stage || t.Terminal() || t.Stage == work.StageWorking {
+		return false // moved on since the watch began, or a worker's own, which only a run restart helps
+	}
+	// Its stall is on hand before the task leaves the stage, so the spell
+	// the watcher acted on stays out of the stage's history (actedOn).
+	c := *s
+	c.Rechecked = true
+	m.mu.Lock()
+	m.stalls[s.Key] = &c
+	m.mu.Unlock()
+	if err := m.Work.Recheck(id, "", "the stall watcher"); err != nil {
+		*refused = err
+		return false // the journaled record that follows replaces c
+	}
+	s.Rechecked = true
+	return true
 }
 
 // retryHint names, for the lead, the op that takes a stuck task back to

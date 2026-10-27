@@ -17,6 +17,9 @@ func TestLeadTurnStartsUnderStrainThatHoldsAWorker(t *testing.T) {
 	if core.Strained(1<<30, 0, 0) == "" {
 		t.Skip("no memory figure here to hold a turn on")
 	}
+	if why := core.Strained(core.LeadMemFloorMB, 0, 0); why != "" {
+		t.Skipf("the machine is under a lead's own floor, so the lead is held too: %s", why)
+	}
 	dir := t.TempDir()
 	ws := core.Workspace{Root: filepath.Join(dir, "hive")}
 	if err := ws.Init(); err != nil {

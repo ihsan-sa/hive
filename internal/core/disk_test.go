@@ -202,6 +202,48 @@ func TestPruneRemovesLeftovers(t *testing.T) {
 	}
 }
 
+// A running check's clean checkout is never pruned, though goBuild dates its
+// folders to 2001: Prune took the tree from under a check's tests, which then
+// failed on "getcwd() failed" (#1058). Once the check is done it goes, and so
+// does one a crash left: the mark is the daemon's memory, gone on restart.
+func TestPruneLeavesARunningChecksCheckout(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	e := c.Effects
+	e.sweep = func() int { return 0 }
+	checkout := func() string {
+		dir, err := e.cleanCheckout(p, main, "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { e.dropCheckout(dir) })
+		if err := stableTimes(dir); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	dir := checkout()
+	e.Prune()
+	if !Exists(filepath.Join(dir, "README.md")) {
+		t.Fatal("Prune removed a running check's checkout")
+	}
+	// The daemon crashed mid-check: the one that follows marks nothing live.
+	restarted := &Effects{ws: e.ws, sweep: func() int { return 0 }}
+	restarted.Prune()
+	if Exists(dir) {
+		t.Fatal("a crashed check's checkout outlived a restart's Prune")
+	}
+	// A done check leaves no mark behind to keep a folder at its path.
+	done := checkout()
+	e.dropCheckout(done)
+	os.MkdirAll(done, 0o755)
+	old := time.Now().Add(-2 * staleAfter)
+	os.Chtimes(done, old, old)
+	e.Prune()
+	if Exists(done) {
+		t.Fatal("dropCheckout left its checkout marked live")
+	}
+}
+
 func TestBytes(t *testing.T) {
 	for n, want := range map[int64]string{0: "0 B", 1023: "1023 B", 1536: "1.5 KB", 3 << 30: "3.0 GB"} {
 		if got := Bytes(n); got != want {
@@ -533,7 +575,7 @@ func TestOnlyMainWritesTheBuildCache(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { os.RemoveAll(dir) })
+		t.Cleanup(func() { c.Effects.dropCheckout(dir) })
 		return dir
 	}
 	dir := checkout()

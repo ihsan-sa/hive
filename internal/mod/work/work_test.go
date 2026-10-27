@@ -112,30 +112,11 @@ func TestNoCommitsWithoutSteps(t *testing.T) {
 	}
 }
 
-// A review follow-up whose worker finished done with no commit judged every
-// item in its account, so it is done and its issue closed; one that finished
-// blocked, or a plain ask with no commit, still blocks.
-func TestFollowUpNoCommitsIsDone(t *testing.T) {
-	m, forge, task, p := noCommitRig(t, 0)
-	task.FollowUp = "t0"
-	done := core.Run{RunSpec: core.RunSpec{ID: "w1"}, Finish: &core.Finish{Status: core.StatusDone, Account: "each item judged not worth doing"}}
-	m.noCommits(task, p, done)
-	if task.Stage != StageDone || len(forge.closed) != 1 {
-		t.Fatalf("stage %q, reason %q, closed %v", task.Stage, task.Reason, forge.closed)
-	}
-	if c := forge.Comments("me/p", 7); len(c) != 1 || !strings.Contains(c[0], "each item judged not worth doing") {
-		t.Fatalf("comments %q", c)
-	}
-
-	m, _, task, p = noCommitRig(t, 0)
-	task.FollowUp = "t0"
-	m.noCommits(task, p, core.Run{RunSpec: core.RunSpec{ID: "w1"}, Finish: &core.Finish{Status: core.StatusBlocked, Account: "stuck"}})
-	if task.Stage != StageBlocked {
-		t.Fatalf("a blocked follow-up: stage %q", task.Stage)
-	}
-
-	m, _, task, p = noCommitRig(t, 0)
-	m.noCommits(task, p, done)
+// A worker that finished done with no commit and no step outside the
+// checkout still blocks: nothing came of the ask.
+func TestNoCommitsIsBlocked(t *testing.T) {
+	m, _, task, p := noCommitRig(t, 0)
+	m.noCommits(task, p, core.Run{RunSpec: core.RunSpec{ID: "w1"}, Finish: &core.Finish{Status: core.StatusDone, Account: "nothing to do"}})
 	if task.Stage != StageBlocked {
 		t.Fatalf("a plain ask: stage %q", task.Stage)
 	}
@@ -622,6 +603,87 @@ func TestHelperCommitsGetTheirOwnPR(t *testing.T) {
 	}
 }
 
+// A helper that finishes done with commits goes on like any task, to a pull
+// request in testing, and the worker that spawned it hears how its task went
+// as a message, as it has no thread of its own; a lead hears in its thread.
+func TestHelperLandsAndItsSpawnerHears(t *testing.T) {
+	m, forge, p := helperRig(t)
+	parent, err := m.C.Runs.Start(m.Agents.Spec("w-parent", "worker", "p", t.TempDir(), "split the work"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := m.Spawn(parent, "worker", "p", "write the helper part", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(spec.Checkout, "helper.txt"), []byte("helped\n"), 0o644)
+	mustGit(t, spec.Checkout, "add", "-A")
+	mustGit(t, spec.Checkout, "commit", "-q", "-m", "helper work")
+	m.C.Runs.SetStatus(spec.ID, core.StatusDone, "")
+	for _, want := range []string{StageLanding, StageTesting} {
+		task, _ := m.Get(spec.Task)
+		if err := m.step(&task); err != nil {
+			t.Fatal(err)
+		}
+		if task.Stage != want {
+			t.Fatalf("stage %q, want %q: %v", task.Stage, want, task.Log)
+		}
+	}
+	task, _ := m.Get(spec.Task)
+	if pr, found, _ := forge.FindPR("me/p", task.Branch); !found || pr.HeadSHA != task.SHA {
+		t.Fatalf("no pull request for the helper's commit: %+v", pr)
+	}
+	before := len(mustRun(t, m, parent.ID).Pending) // the helper's finish account
+	toMerging(t, m, &task, p)
+	mergeOnce(t, m, &task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q; want merged", task.Stage, task.Reason)
+	}
+	r := mustRun(t, m, parent.ID)
+	if len(r.Pending) != before+1 || !strings.Contains(r.Pending[before], "Merged: write the helper part") || !strings.Contains(r.Pending[before], task.ID) {
+		t.Fatalf("the spawner wasn't told: %+v", r.Pending)
+	}
+	lead := &Task{ID: "t-lead", Kind: "helper", From: "lead"}
+	m.C.Runs.Start(core.RunSpec{ID: "lead", Role: "lead", Persistent: true, Checkout: t.TempDir()})
+	m.notify(lead, "Merged: the lead's helper")
+	if r, _ := m.C.Runs.Get("lead"); len(r.Pending) != 0 {
+		t.Fatalf("a lead was messaged besides its thread: %+v", r.Pending)
+	}
+}
+
+// A helper that finishes blocked tells its spawner once, by its own finish
+// account; the task's "Blocked:" line goes to the threads, not again to it.
+// One the Hive ended, which sent no account, is told by that line.
+func TestBlockedHelperTellsItsSpawnerOnce(t *testing.T) {
+	for _, finished := range []bool{true, false} {
+		m, _, _ := helperRig(t)
+		parent, err := m.C.Runs.Start(m.Agents.Spec("w-parent", "worker", "p", t.TempDir(), "split the work"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec, err := m.Spawn(parent, "worker", "p", "write the helper part", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if finished {
+			m.C.J.MustAppend("run.finish", map[string]any{"id": spec.ID, "finish": core.Finish{Status: core.StatusBlocked, Account: "can't reach the API"}})
+		}
+		m.C.Runs.SetStatus(spec.ID, core.StatusBlocked, "can't reach the API")
+		before := len(mustRun(t, m, parent.ID).Pending)
+		task, _ := m.Get(spec.Task)
+		if err := m.step(&task); err != nil {
+			t.Fatal(err)
+		}
+		if task.Stage != StageBlocked {
+			t.Fatalf("stage %q, want blocked: %v", task.Stage, task.Log)
+		}
+		heard := mustRun(t, m, parent.ID).Pending[before:]
+		if want := map[bool]int{true: 0, false: 1}[finished]; len(heard) != want {
+			t.Fatalf("finished by itself %v: the spawner heard %+v, want %d messages", finished, heard, want)
+		}
+	}
+}
+
 // A helper with no commits ends its task done, with nothing said on the forge:
 // its account already went to the agent that spawned it.
 func TestHelperNoCommitsIsDone(t *testing.T) {
@@ -752,56 +814,6 @@ func TestReviewRulesFromMain(t *testing.T) {
 	i, j := strings.Index(r, "## `docs/REVIEW.md` on main\n\n# Review\n\nsimple wins"), strings.Index(r, "`.hive/goals.md` and `.hive/lessons.md` are in your checkout")
 	if i < 0 || j < i || strings.Contains(r, "ship it") || strings.Contains(r, "don't do that again") {
 		t.Fatalf("rules:\n%s", r)
-	}
-}
-
-// Advice from a land is filed once, when the task merges: a step repeated
-// after a restart files no second brief, a follow-up's own advice files none,
-// on a scored project the follow-up keeps its done line, and it is taken as a
-// fix of what the review found, not a gain for the gate.
-func TestFollowUpOnceAfterMerge(t *testing.T) {
-	m, p := rigAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`)
-	tk := &Task{ID: "t9", Project: "p", Title: "add a helper", Kind: "work", Stage: StageMerged, Reviewer: "r-t9", Advice: []string{"name it better"}}
-	follows := func() []Task { return m.List(func(x Task) bool { return x.FollowUp != "" }) }
-	if err := m.followUp(tk, p); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.followUp(tk, p); err != nil { // the restart: still merged, filed already
-		t.Fatal(err)
-	}
-	fs := follows()
-	if len(fs) != 1 || fs[0].FollowUp != "t9" || fs[0].From != "r-t9" || !strings.Contains(fs[0].Known, "name it better") {
-		t.Fatalf("follow-ups: %+v", fs)
-	}
-	fu := fs[0]
-	if !fu.Fix() || !strings.Contains(fu.AimWhy, "name it better") {
-		t.Fatalf("the follow-up is taken as %s (%q), not a fix", fu.AimWord(), fu.AimWhy)
-	}
-	if d := doneFor(&fu, true); !strings.Contains(d, "judged not worth doing") {
-		t.Fatalf("the follow-up lost its done line: %q", d)
-	}
-	keepAdvice(&fu, []string{"and again"})
-	if len(fu.Advice) != 0 {
-		t.Fatalf("a follow-up kept advice, so the chain goes on: %v", fu.Advice)
-	}
-	keepAdvice(tk, []string{" name it better ", "", "test it"}) // a second read repeats one item
-	if strings.Join(tk.Advice, "|") != "name it better|test it" {
-		t.Fatalf("advice: %q", tk.Advice)
-	}
-}
-
-// A review follow-up filed before followUp named its aim, still queued with
-// none, is taken as a fix; one its worker or the lead aimed at a gain is a gain.
-func TestUnaimedFollowUpIsAFix(t *testing.T) {
-	fu := Task{ID: "t2", Title: "Follow up the review of x", FollowUp: "t1"}
-	if !fu.Fix() || !strings.Contains(fu.AimWord(), "follow-up of t1") {
-		t.Fatalf("an unaimed follow-up is taken as %s", fu.AimWord())
-	}
-	if fu.Aim = AimGain; fu.Fix() {
-		t.Fatal("a follow-up aimed at a gain is taken as a fix")
-	}
-	if plain := (Task{ID: "t3"}); plain.Fix() {
-		t.Fatal("an unaimed brief that follows up nothing is taken as a fix")
 	}
 }
 
@@ -979,4 +991,44 @@ func TestMergedOnForgeWhileHeld(t *testing.T) {
 	if start, _ := m.admit(m.List(nil)); !start[waiting.ID] {
 		t.Fatal("the brief behind it didn't start")
 	}
+}
+
+// The person's stop stands over a step running on an older copy of the task:
+// the step's later saves are dropped and it doesn't merge, and a tick doesn't
+// start a step on a copy taken before a save.
+func TestStopStandsOverARunningStep(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage = StageMerging
+	m.save(task, "on to the merge")
+	step, _ := m.Get(task.ID) // the tick's copy
+	if err := m.Stop(task.ID, "stopped by the person"); err != nil {
+		t.Fatal(err)
+	}
+	if !m.overtaken(&step) {
+		t.Fatal("a copy from before the stop isn't seen as overtaken")
+	}
+	step.Stage = StageLanding
+	m.save(&step, "the step's older copy")
+	if got, _ := m.Get(task.ID); got.Stage != StageStopped || !got.ByPerson {
+		t.Fatalf("the step saved over the person's stop: %+v", got)
+	}
+	cur, _ := m.Get(task.ID)
+	if m.overtaken(&cur) {
+		t.Fatal("a copy taken after the stop is overtaken")
+	}
+	m.mu.Lock()
+	ok := m.fresh(step)
+	m.mu.Unlock()
+	if ok {
+		t.Fatal("a copy from before a save reads as fresh")
+	}
+}
+
+func mustRun(t *testing.T, m *Module, id string) core.Run {
+	t.Helper()
+	r, ok := m.C.Runs.Get(id)
+	if !ok {
+		t.Fatalf("no run %s", id)
+	}
+	return r
 }
