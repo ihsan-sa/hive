@@ -472,7 +472,9 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.focusBox(m.thread)
 		}
 		if m.threadSel >= 0 && m.threadSel < len(ts) {
-			m.thread = ts[m.threadSel].id
+			if m.thread != ts[m.threadSel].id {
+				m.thread, m.thScroll = ts[m.threadSel].id, 0 // another thread opens at its newest
+			}
 			m.focus = 2
 			return m, m.focusBox(m.thread)
 		}
@@ -484,8 +486,10 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "esc", "left", "h":
 		m.focus = 0
-	case "pgup", "pgdown", "home", "end":
+	case "pgup", "pgdown", "home", "g":
 		m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
+	case "end", "G", "ctrl+end": // the newest line, letting go of the pick so nothing pulls it back
+		m.chScroll, m.chFree, m.threadSel = 0, true, -1
 	case "n", "i":
 		return m, m.focusBox("")
 	case "a":
@@ -528,7 +532,7 @@ func scroll(off int, key string, page int) int {
 		return off + map[string]int{"pgup": page - 2, "wheelup": 3}[key]
 	case "pgdown", "wheeldown":
 		return max(0, off-map[string]int{"pgdown": page - 2, "wheeldown": 3}[key])
-	case "home":
+	case "home", "g":
 		return 1 << 20
 	}
 	return 0
@@ -650,37 +654,67 @@ func (m *model) viewChannel(w int) pane {
 	if m.chFree { // scrolled by hand: the offset rules, not the selection
 		selStart, selEnd = 0, 0
 	}
-	p.body = stack(append(lines, ""), bx, m.h-4, &m.chScroll, selStart, selEnd, true)
+	p.body = stack(lines, bx, m.h-4, &m.chScroll, selStart, selEnd, true, m.moreBelow(1))
 	return p
 }
 
-// stack puts a box under the content: right after it when both fit (or on
-// the last rows, bottom set), else on the last rows with the content scrolled
-// (off lines up from its end, kept so lines [s0,s1) show).
-func stack(lines, bx []string, h int, off *int, s0, s1 int, bottom bool) []string {
+// stack puts a box under the content, a blank row apart: right after it
+// when both fit (or on the last rows, bottom set), else on the last rows with
+// the content scrolled (off lines up from its end, kept so lines [s0,s1)
+// show). Scrolled up, the row between says more is below and how to get there.
+func stack(lines, bx []string, h int, off *int, s0, s1 int, bottom bool, more string) []string {
 	for i := range bx {
 		bx[i] = "  " + bx[i]
 	}
-	room := max(0, h-len(bx))
+	for len(lines) > 0 && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
+		lines = lines[:len(lines)-1] // the gap row is the one blank above the box
+	}
+	gap := min(1, max(0, h-len(bx)-1)) // a screen too short for it keeps the box whole
+	room := max(0, h-len(bx)-gap)
 	if len(lines) <= room {
 		*off = 0
 		if bottom {
 			lines = append(make([]string, room-len(lines)), lines...)
 		}
-		return append(lines, bx...)
+		return append(append(lines, make([]string, gap)...), bx...)
 	}
 	*off = min(*off, len(lines)-room)
 	end := len(lines) - *off
-	if s1 > s0 { // keep the selected thread in view
+	if s1 = min(s1, len(lines)); s1 > s0 { // keep the selected thread in view
 		if s1 > end {
-			end = min(s1, len(lines))
+			end = s1
 		}
 		if s0 < end-room {
 			end = min(len(lines), s0+room)
 		}
 		*off = len(lines) - end
 	}
-	return append(lines[end-room:end], bx...)
+	out := append([]string(nil), lines[end-room:end]...)
+	if gap > 0 {
+		row := ""
+		if *off > 0 {
+			row = "   " + stDim.Render(more)
+		}
+		out = append(out, row)
+	}
+	return append(out, bx...)
+}
+
+// bottomKey is the key that jumps to the newest line from where the keys are.
+func (m *model) bottomKey() string {
+	if m.composing && m.input.Value() != "" {
+		return "ctrl+end"
+	}
+	return "end"
+}
+
+// moreBelow says what's below a scrolled pane, and the key that gets there
+// when the pane (pane 2 the thread) holds the keys.
+func (m *model) moreBelow(pane int) string {
+	if m.focus != pane || pane == 2 && !m.composing || pane == 1 && m.composing && m.reply != "" {
+		return "↓ newer below"
+	}
+	return "↓ newer below · " + m.bottomKey()
 }
 
 func (m *model) viewThread(w int) pane {
@@ -705,10 +739,10 @@ func (m *model) viewThread(w int) pane {
 	tw := w - 5
 	var lines []string
 	add := func(ls ...string) { lines = append(lines, indent(ls, "   ")...) }
-	pending := 0
+	var pending []outMsg // sent, and not yet in the thread
 	for _, o := range m.outbox {
-		if o.chat == m.chat && o.thread == m.thread {
-			pending++
+		if o.chat == m.chat && o.thread == m.thread && m.echoes(o) <= o.had {
+			pending = append(pending, o)
 		}
 	}
 	for i, msg := range t.msgs {
@@ -716,21 +750,19 @@ func (m *model) viewThread(w int) pane {
 		add(m.body(msg.Text, tw)...)
 		add("")
 		if i == 0 {
-			n := len(t.msgs) - 1 + pending
+			n := len(t.msgs) - 1 + len(pending)
 			r := fmt.Sprintf("%d %s ", n, plural(n, "reply", "replies"))
 			add(stDim.Render(r+strings.Repeat("─", max(0, tw-len(r)))), "")
 		}
 	}
-	for _, o := range m.outbox {
-		if o.chat == m.chat && o.thread == m.thread {
-			add(stBoldF.Render("you") + "  " + stDim.Render("◌ sending…"))
-			add(indent(m.body(o.text, tw), "")...)
-			add("")
-		}
+	for _, o := range pending {
+		add(stBoldF.Render("you") + "  " + stDim.Render("◌ sending…"))
+		add(indent(m.body(o.text, tw), "")...)
+		add("")
 	}
 	_, name := m.where()
 	bx := m.compose("reply · "+name, "Reply to this thread…", m.thread, w-3)
-	p.body = stack(lines, bx, m.h-4, &m.thScroll, 0, 0, false)
+	p.body = stack(lines, bx, m.h-4, &m.thScroll, 0, 0, false, m.moreBelow(2))
 	return p
 }
 

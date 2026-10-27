@@ -84,7 +84,7 @@ type Effects struct {
 	standing  map[string]bool           // project@head@verdict's main@main -> whether that verdict still stands there (StandingGate)
 	judged    map[string]Judgement      // project@sha@main -> the judge's newest call (judge.go)
 	errored   map[string]map[string]any // project#pr@sha -> the effect.merged a merge the forge answered with an error would have journaled
-	homes     map[string]bool           // running checks' homes (disk.go)
+	homes     map[string]bool           // folders in use that Prune leaves: running checks' homes and clean checkouts (disk.go)
 	modMu     sync.RWMutex              // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
 	buildMu   sync.RWMutex              // the same for the projects' build caches
 	disk      DiskUse                   // the last measurement of the Hive's disk use
@@ -540,7 +540,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.Output = "could not make a clean checkout: " + err.Error()
 		return c
 	}
-	defer os.RemoveAll(dir)
+	defer e.dropCheckout(dir)
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
@@ -582,7 +582,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 			c.Output = "could not make a clean checkout: " + cerr.Error()
 			return c
 		}
-		defer os.RemoveAll(again)
+		defer e.dropCheckout(again)
 		if len(build.mounts) > 0 {
 			stableTimes(again) // as goBuild made the first checkout's, for the shared build cache
 		}
@@ -885,6 +885,7 @@ func guardProgram(command string) string {
 // cleanCheckout clones the host clone fresh and checks out sha.
 func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
 	dir := filepath.Join(e.ws.Gates(), p.Name, fmt.Sprintf("%s-%s-%s", short(sha), kind, NewID()[14:]))
+	e.markLive(dir, true)
 	unlock := e.lock(p.Name)
 	_, err := GitT(10*time.Minute, "", "clone", "-q", "--no-local", "--no-hardlinks", "--no-checkout", e.ws.Project(p.Name), dir)
 	if err == nil {
@@ -895,10 +896,19 @@ func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
 		_, err = Git(dir, "checkout", "-q", "--detach", sha)
 	}
 	if err != nil {
-		os.RemoveAll(dir)
+		e.dropCheckout(dir)
 		return "", err
 	}
 	return dir, nil
+}
+
+// dropCheckout removes a clean checkout and its live mark. It is marked from
+// before its clone, so Prune never takes a running check's tree for a crash's
+// leftover: goBuild dates its folders to 2001 (stableTimes), past staleAfter
+// the moment the check starts.
+func (e *Effects) dropCheckout(dir string) {
+	os.RemoveAll(dir)
+	e.markLive(dir, false)
 }
 
 // runSandboxed runs a shell command in the sandbox and returns its exit code
@@ -1433,19 +1443,23 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if why := e.Stewardship(p, m.Main); why != "" {
 		return "", refuse("#%d: %s", m.PR, why)
 	}
+	ch, err := e.Classify(p, m.Main, m.SHA)
+	if err != nil {
+		return "", err
+	}
+	var flaky []string // a red local test run's known flakes, its only failures
 	if c, ok := e.GetCheck(p.Name, m.SHA, "test"); !ok {
 		return "", refuse("%s: no test run recorded for that exact commit", short(m.SHA))
 	} else if !c.OK {
 		// Red only where main's own run at m.Main is red too: no worse than
 		// main, as the work module's testing stage let it on, so the fix for
-		// a red main can land.
-		if mc, ok := e.GetCheck(p.Name, m.Main, "test"); !ok || mc.OK || !NoWorse(c, mc) {
-			return "", refuse("%s: its test run is red beyond what main's own run at %s fails too (or main's has no record)", short(m.SHA), short(m.Main))
+		// a red main can land. Or red only in quarantined tests, which count
+		// against no head, as the forge's checks below.
+		if flaky = e.ExcusedLocal(p, m.Main, m.Task, ch.Files, c); len(flaky) == 0 {
+			if mc, ok := e.GetCheck(p.Name, m.Main, "test"); !ok || mc.OK || !NoWorse(c, mc) {
+				return "", refuse("%s: its test run is red beyond what main's own run at %s fails too (or main's has no record)", short(m.SHA), short(m.Main))
+			}
 		}
-	}
-	ch, err := e.Classify(p, m.Main, m.SHA)
-	if err != nil {
-		return "", err
 	}
 	if len(ch.Protected) > 0 && !e.Approved("merge", p.Name, m.SHA) {
 		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
@@ -1501,6 +1515,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "root": ch.Root, "diff": ch.DiffID}
 	if len(excused) > 0 {
 		ev["quarantined"] = excused // red only on known flakes
+	}
+	if len(flaky) > 0 {
+		ev["quarantined_local"] = flaky // its own test run red only on known flakes
 	}
 	if len(warned) > 0 {
 		ev["warned"] = warned
@@ -1889,15 +1906,47 @@ func (e *Effects) Excused(p Project, main, task string, files []string, runs, ma
 	if len(q) == 0 {
 		return runs, nil
 	}
+	return Excuse(runs, mainRuns, e.JobRead(p.Repo), q, e.touched(p, main, files))
+}
+
+// touched reports whether a test key's package is one files (a head's
+// changes against main) touch, or can't be placed.
+func (e *Effects) touched(p Project, main string, files []string) func(key string) bool {
 	module := ""
 	if m := goModule.FindStringSubmatch(e.ReadFile(p, main, "go.mod")); m != nil {
 		module = m[1]
 	}
-	touched := func(key string) bool {
+	return func(key string) bool {
 		dir, ok := KeyDir(key, module)
 		return !ok || slices.ContainsFunc(files, func(f string) bool { return path.Dir(f) == dir })
 	}
-	return Excuse(runs, mainRuns, e.JobRead(p.Repo), q, touched)
+}
+
+// ExcusedLocal is Excused for the Hive's own red test check c of task's head
+// on p: the quarantined tests it fails, when they are all it fails, or none.
+// As with the forge's, it is shown, never assumed: c's full log is read (not
+// its clipped output), places every failing test in its package, shows
+// nothing else failing (OnlyTests), and every one is quarantined on evidence
+// from outside task in a package files don't touch.
+func (e *Effects) ExcusedLocal(p Project, main, task string, files []string, c Check) []string {
+	if c.OK || c.CantRun != "" || c.Log == "" {
+		return nil
+	}
+	q := e.Quarantine(p.Name, task)
+	if len(q) == 0 {
+		return nil
+	}
+	b, err := SafeRead(c.Log, 8<<20)
+	if err != nil || len(b) == 0 {
+		return nil
+	}
+	log := string(b)
+	keys, placed := FailedTestKeys(log)
+	touched := e.touched(p, main, files)
+	if !placed || len(keys) == 0 || !OnlyTests(log) || slices.ContainsFunc(keys, func(k string) bool { return !slices.Contains(q, k) || touched(k) }) {
+		return nil
+	}
+	return keys
 }
 
 // JobRead reads repo's forge checks' logs and steps, each once.
@@ -2263,7 +2312,7 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
+	defer e.dropCheckout(dir)
 	if _, err := Git(dir, "fetch", "-q", "origin", mainSHA); err != nil {
 		return "", err
 	}
@@ -2380,7 +2429,7 @@ func (e *Effects) Revert(p Project, mainSHA, mergeSHA, lesson string) (string, e
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
+	defer e.dropCheckout(dir)
 	if _, err := Git(dir, "revert", "--no-edit", mergeSHA); err != nil {
 		Git(dir, "revert", "--abort")
 		return "", fmt.Errorf("revert of %s does not apply cleanly: %v", short(mergeSHA), err)
@@ -2411,7 +2460,7 @@ func (e *Effects) Setup(p Project, base string, files map[string]string, message
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
+	defer e.dropCheckout(dir)
 	for path, content := range files {
 		full := filepath.Join(dir, filepath.FromSlash(path))
 		os.MkdirAll(filepath.Dir(full), 0o755)
