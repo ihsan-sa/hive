@@ -50,7 +50,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive refuse <id> [note]  say no to it (its last option)
   hive read <task|#pr> <sha> land|fix --by perms|architect [note]
                            record the box's perms seat's or architect's read of that head
-  hive hold <project> [why]  hold every merge on it, follow-ups included [--only 12,15] [--until release]
+  hive hold <project> [why]  hold every merge on it, the Hive's own included [--only 12,15] [--until release]
   hive hold <project> --lift [why]  lift the hold
   hive login               log in to Claude Code and GitHub with their own logins
   hive login add <name>    add another Claude login to spread runs over; add "codex" for Codex
@@ -724,6 +724,14 @@ func cmdDoctor(args []string) int {
 		fmt.Println("✓ starts with the machine")
 	} else {
 		fmt.Println("· doesn't start with the machine (run `" + core.Cmd + "` once to set it up)")
+	}
+	switch twins, err := twinTurns(ws.Events(), time.Now().Add(-24*time.Hour)); {
+	case err != nil:
+		fail("✗ journal: %v\n", err)
+	case len(twins) > 0:
+		fail("✗ %d turns started in the last day while the same run's last turn still ran (issue #1022), e.g. %s\n", len(twins), twins[len(twins)-1])
+	default:
+		fmt.Println("✓ no turn started in the last day while its run's last turn still ran")
 	}
 	if _, running := daemon.Running(ws); running {
 		fmt.Println("✓ running")

@@ -747,9 +747,8 @@ func TestCheckpointsBankEachGain(t *testing.T) {
 }
 
 // A review reads the project's docs/REVIEW.md, goals and lessons from main,
-// and advice given with a land becomes one follow-up brief once it merges, not
-// a blocker. The fake gives advice on the follow-up's review too, which files
-// nothing more, so the chain stops at one.
+// and advice given with a land stays on the pull request: it holds nothing and
+// is filed as no new task.
 func TestReviewReadsTheRules(t *testing.T) {
 	t.Parallel()
 	h := start(t)
@@ -769,64 +768,50 @@ func TestReviewReadsTheRules(t *testing.T) {
 			t.Fatalf("the review brief lacks %q:\n%s", want, brief)
 		}
 	}
-	follow := "Follow up the review of add a helper"
-	st = h.wait("the advice to land as a brief", 3*minute, taskStage("rules", follow, work.StageDone))
-	fu, _ := task(st, "rules", follow)
-	if fu.From != tk.Reviewer || fu.FollowUp != tk.ID || !strings.Contains(fu.Known, "FAKE advice") {
-		t.Fatalf("follow-up: %+v", fu)
+	if c := strings.Join(h.forge.Comments("me/rules", tk.PR.Number), "\n"); !strings.Contains(c, "Advice: FAKE advice") {
+		t.Fatalf("the advice isn't on the PR:\n%s", c)
 	}
-	n := 0
-	for _, p := range st.Projects {
+	time.Sleep(3 * time.Second) // a few more ticks, and nothing is filed
+	for _, p := range h.state().Projects {
 		for _, x := range p.Tasks {
-			if strings.HasPrefix(x.Title, "Follow up") {
-				n++
+			if x.From == tk.Reviewer {
+				t.Fatalf("the reviewer's advice was filed as a task: %+v", x)
 			}
 		}
 	}
-	if n != 1 {
-		t.Fatalf("%d follow-ups, want 1", n)
-	}
 }
 
-// A person's hold on merges stops the Hive's own review follow-up: it passes
-// its gate and waits as a ready PR, and merges once the hold is lifted. The
-// change the hold names merges under it.
-func TestHoldStopsFollowUps(t *testing.T) {
+// A person's hold on merges stops a change at the last step: it passes its
+// gate and waits as a ready PR, and merges once the hold names it.
+func TestHoldStopsMerges(t *testing.T) {
 	t.Parallel()
 	h := start(t)
 	h.seed("me/held", map[string]string{
 		".hive/project.json": `{"test": "true"}`,
 		".hive/goals.md":     "# Goals\n",
-		"docs/REVIEW.md":     "# Review\n\nFAKE:reviewadvice\n",
 		".hive/lessons.md":   "# Lessons\n\n",
 	})
 	h.post("/api/project", map[string]any{"name": "held", "repo": "me/held"}, nil)
 	h.post("/api/hold", map[string]any{"project": "held", "why": "nothing merges until the next release"}, nil)
 	h.post("/api/ask", map[string]string{"project": "held", "title": "add a helper"}, nil)
-	held := func(title string) func(api.State) bool {
-		return func(st api.State) bool {
-			tk, ok := task(st, "held", title)
-			return ok && tk.Stage == work.StageMerging && strings.Contains(tk.Reason, "merges held")
-		}
+	held := func(st api.State) bool {
+		tk, ok := task(st, "held", "add a helper")
+		return ok && tk.Stage == work.StageMerging && strings.Contains(tk.Reason, "merges held")
 	}
-	st := h.wait("the ask to wait on the hold", 3*minute, held("add a helper"))
-	tk, _ := task(st, "held", "add a helper")
-	h.post("/api/hold", map[string]any{"project": "held", "why": "only the helper may merge", "only": []int{tk.PR.Number}}, nil)
-	h.wait("the named PR to merge under the hold", 3*minute, taskStage("held", "add a helper", work.StageDone))
-	follow := "Follow up the review of add a helper"
-	st = h.wait("the follow-up to wait on the hold", 3*minute, held(follow))
+	h.wait("the ask to wait on the hold", 3*minute, held)
+	time.Sleep(3 * time.Second) // a few more ticks, and it still waits
+	st := h.state()
 	for _, p := range st.Projects {
-		if p.Name == "held" && (p.Hold == nil || !strings.Contains(p.Hold.Text(), "only the helper")) {
+		if p.Name == "held" && (p.Hold == nil || !strings.Contains(p.Hold.Text(), "until the next release")) {
 			t.Fatalf("the state doesn't show the hold: %+v", p.Hold)
 		}
 	}
-	time.Sleep(3 * time.Second) // a few more ticks, and it still waits
-	st = h.state()
-	if fu, _ := task(st, "held", follow); fu.Stage != work.StageMerging || fu.MergeSHA != "" {
-		t.Fatalf("the follow-up moved under the hold: %s %s", fu.Stage, fu.MergeSHA)
+	tk, _ := task(st, "held", "add a helper")
+	if tk.Stage != work.StageMerging || tk.MergeSHA != "" {
+		t.Fatalf("the ask moved under the hold: %s %s", tk.Stage, tk.MergeSHA)
 	}
-	h.post("/api/hold", map[string]any{"project": "held", "lift": true, "why": "the release is out"}, nil)
-	h.wait("the follow-up to merge once lifted", 3*minute, taskStage("held", follow, work.StageDone))
+	h.post("/api/hold", map[string]any{"project": "held", "why": "only the helper may merge", "only": []int{tk.PR.Number}}, nil)
+	h.wait("the named PR to merge under the hold", 3*minute, taskStage("held", "add a helper", work.StageDone))
 }
 
 // A worker isn't blamed for a failure main has too: its change waits with no
@@ -1846,7 +1831,7 @@ func TestStepBack(t *testing.T) {
 		t.Fatalf("the plateau didn't start it: %q", win.Why)
 	}
 	if win.Status != "won" || *win.Score != 9 || win.Best != 5 || win.Fault == "" || win.Budget <= 0 {
-		t.Fatalf("a winning setup must file a fault: %+v", win)
+		t.Fatalf("a winning setup must file a fault: %+v\n%s", win, onProject(st, "win"))
 	}
 	var fault core.Ask
 	for _, a := range st.Asks {
@@ -1870,20 +1855,20 @@ func TestStepBack(t *testing.T) {
 		t.Fatalf("a setup that spends its budget must stop there: %+v %+v", s, r)
 	}
 	if s := sb["rig"]; s.Status != "failed" || !strings.Contains(s.Note, "score.txt") {
-		t.Fatalf("a setup that changes what scores it must not count: %+v", s)
+		t.Fatalf("a setup that changes what scores it must not count: %+v\n%s", s, onProject(st, "rig"))
 	}
 	if s := sb["none"]; s.Status != "none" || s.Exp != "" || !strings.Contains(s.Note, "designed no experiment") {
 		t.Fatalf("a step-back that designs nothing runs nothing: %+v", s)
 	}
-	if s, ran := sb["zero"], runs[sb["zero"].Run].ID != ""; s.Status != "none" || ran || !strings.Contains(s.Note, "spent nothing") {
-		t.Fatalf("a step-back with nothing to spend must not run: %+v", s)
+	if s, ran := sb["zero"], runs[sb["zero"].Run].ID != ""; s.Status != "judged" || !s.Unspent || !ran || s.Exp != "" || !strings.Contains(s.Report, "FAKE judgement") {
+		t.Fatalf("a step-back with nothing to spend must judge goals not yet judged and run no experiment: %+v", s)
 	}
 	alerts := map[string]int{}
 	for _, a := range st.Alerts {
 		alerts[a.Ref]++
 	}
 	for _, name := range names {
-		if want := map[bool]int{true: 1}[name == "fail" || name == "rig" || name == "zero"]; alerts["stepback:"+name] != want {
+		if want := map[bool]int{true: 1}[name == "fail" || name == "rig"]; alerts["stepback:"+name] != want {
 			t.Fatalf("want %d step-back alert on %s, got %d: %+v", want, name, alerts["stepback:"+name], st.Alerts)
 		}
 	}
@@ -1895,6 +1880,81 @@ func TestStepBack(t *testing.T) {
 	if score, _ := core.Git(h.ws.Project("win"), "show", "origin/main:score.txt"); strings.TrimSpace(score) != "5" {
 		t.Fatalf("the experiment reached the project's own tree: score.txt on main is %q", score)
 	}
+}
+
+// A project with no score is still judged on the daemon's own step-back
+// schedule: the job finds the merge, the step-back ends judged with no
+// experiment, its judgement is said in the project's chat, and the project's
+// lead, started after it was said, is told it.
+func TestScheduledStepBackJudgesWithoutAScore(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/plain", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n\nKeep it plain.\n"})
+	h.post("/api/project", map[string]any{"name": "plain", "repo": "me/plain", "goals": "Keep it plain."}, nil)
+	h.post("/api/ask", map[string]string{"project": "plain", "title": "tidy plain", "known": "a change with no score to move FAKE:paid"}, nil)
+	h.wait("the merge to be measured", 4*minute, func(st api.State) bool {
+		for _, pv := range st.Projects {
+			for _, x := range pv.Scores {
+				if pv.Name == "plain" && x.Task != "" && !x.NoResult {
+					return true
+				}
+			}
+		}
+		return false
+	})
+	h.post("/api/job", map[string]string{"name": "improve.stepback"}, nil)
+	st := h.wait("the step-back to judge", 2*minute, func(st api.State) bool {
+		for _, s := range st.StepBacks {
+			if s.Project == "plain" && !s.Ended.IsZero() {
+				return true
+			}
+		}
+		return false
+	})
+	for _, s := range st.StepBacks {
+		if s.Project == "plain" && (s.Status != "judged" || !s.NoScore || s.Exp != "" || !strings.Contains(s.Report, "FAKE judgement") || s.Why != "it is the regular step-back") {
+			t.Fatalf("the scheduled step-back on a project with no score must end judged: %+v\n%s", s, onProject(st, "plain"))
+		}
+	}
+	said := false
+	for _, m := range h.messages("project:plain") {
+		said = said || (m.From == "hive" && strings.Contains(m.Text, "FAKE judgement"))
+	}
+	if !said {
+		t.Fatalf("the judgement was not said in the project's chat: %+v", h.messages("project:plain"))
+	}
+	h.post("/api/chat", map[string]string{"chat": "project:plain", "text": "how does it look?"}, nil)
+	h.wait("the project's lead to hear the judgement", minute, func(st api.State) bool {
+		for _, r := range st.Runs {
+			if r.Role == "lead" && r.Project == "plain" && strings.Contains(r.Brief, "FAKE judgement") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// onProject is what the Hive did on project, for a failure to show: its
+// runs with their cost, its tasks and its measured merges.
+func onProject(st api.State, project string) string {
+	var b strings.Builder
+	for _, r := range st.Runs {
+		if r.Project == project {
+			fmt.Fprintf(&b, "run %s %s created %s status %s cost %g\n", r.ID, r.Role, r.Created.Format(time.RFC3339Nano), r.Status, r.Cost)
+		}
+	}
+	for _, p := range st.Projects {
+		if p.Name != project {
+			continue
+		}
+		for _, t := range p.Tasks {
+			fmt.Fprintf(&b, "task %s %q from %s created %s stage %s worker %s\n", t.ID, t.Title, t.From, t.Created.Format(time.RFC3339Nano), t.Stage, t.Worker)
+		}
+		for _, x := range p.Scores {
+			fmt.Fprintf(&b, "score %s task %s kept %v at %s: %s\n", core.Short(x.SHA), x.Task, x.Kept, x.At.Format(time.RFC3339Nano), x.Note)
+		}
+	}
+	return b.String()
 }
 
 // TestSettleRemovesReadOnlyFolders: a Hive whose checks filled Go's module

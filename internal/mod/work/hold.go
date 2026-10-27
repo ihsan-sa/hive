@@ -13,8 +13,8 @@ import (
 )
 
 // A merge hold is the person's stop on a project's merges: while it is on,
-// the merge step lands nothing outside it (the Hive's own follow-ups,
-// reverts and checkpoints included). Held work still goes through its tests,
+// the merge step lands nothing outside it (the Hive's own reverts
+// and checkpoints included). Held work still goes through its tests,
 // reads and checks, and waits as a ready pull request at the last step. The
 // person sets it (hive hold), or the lead on the person's word; it ends when
 // one of them lifts it or its condition is met. core.Effects.Merge refuses a
@@ -112,7 +112,9 @@ func (m *Module) SetHold(h MergeHold) (MergeHold, error) {
 		return h, fmt.Errorf("until is %q or empty (until lifted), not %q", UntilRelease, h.Until)
 	}
 	h.At = time.Now().UTC()
+	m.holding.Lock()
 	m.C.J.MustAppend("merge.held", h)
+	m.holding.Unlock()
 	m.lookAgain(h.Project) // a changed hold may let one through
 	return h, nil
 }
@@ -189,8 +191,14 @@ func (m *Module) releasedSince(h MergeHold) bool {
 		if err != nil || r.Tag == "" || r.Tag == tag {
 			continue
 		}
-		m.lift(h.Project, "the Hive", fmt.Sprintf("release %s is out on %s, which the hold waited for", r.Tag, repo))
-		return true
+		// The forge was asked about h; a hold set since waits for its own release.
+		m.holding.Lock()
+		now, ok := m.Hold(h.Project)
+		if ok && now.At.Equal(h.At) {
+			m.lift(h.Project, "the Hive", fmt.Sprintf("release %s is out on %s, which the hold waited for", r.Tag, repo))
+		}
+		m.holding.Unlock()
+		return ok && now.At.Equal(h.At)
 	}
 	return false
 }

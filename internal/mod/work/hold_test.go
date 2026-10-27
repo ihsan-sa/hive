@@ -3,16 +3,15 @@ package work
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
-// heldRig is a gate rig whose task is the Hive's own follow-up, ready to merge.
+// heldRig is a gate rig whose task is ready to merge.
 func heldRig(t *testing.T) (*Module, *Task, core.Project, *core.Local) {
 	t.Helper()
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	task.Title, task.FollowUp = "Follow up the review of work", "t0"
-	m.save(task, "")
 	toMerging(t, m, task, p)
 	return m, task, p, f
 }
@@ -52,9 +51,9 @@ func expectMerged(t *testing.T, m *Module, task *Task, p core.Project, f *core.L
 	}
 }
 
-// A person's hold stops the Hive's own follow-up at the last step, a ready PR
+// A person's hold stops the Hive's own work at the last step, a ready PR
 // that waits, and it merges once the hold is lifted.
-func TestHoldStopsAFollowUpUntilLifted(t *testing.T) {
+func TestHoldStopsAMergeUntilLifted(t *testing.T) {
 	m, task, p, f := heldRig(t)
 	if _, err := m.SetHold(MergeHold{Project: p.Name, Why: "nothing else until H0 runs the next release", By: "person"}); err != nil {
 		t.Fatal(err)
@@ -123,5 +122,26 @@ func TestLeadHoldNeedsThePersonsWords(t *testing.T) {
 	}
 	if _, ok := m.Hold(p.Name); ok {
 		t.Fatal("not lifted")
+	}
+}
+
+// A release read for one hold doesn't lift a hold set since.
+func TestReleaseLiftsOnlyTheHoldItRead(t *testing.T) {
+	m, _, p, f := heldRig(t)
+	f.CreateRelease(p.Repo, "v0.1.7", "", "")
+	old, err := m.SetHold(MergeHold{Project: p.Name, Why: "until the next release", Until: UntilRelease, By: "person"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.CreateRelease(p.Repo, "v0.1.8", "", "")
+	time.Sleep(time.Millisecond) // a later At on a coarse clock
+	if _, err := m.SetHold(MergeHold{Project: p.Name, Why: "hold everything", By: "person"}); err != nil {
+		t.Fatal(err)
+	}
+	if m.releasedSince(old) {
+		t.Fatal("a release out for the old hold let the newer one's merges through")
+	}
+	if h, ok := m.Hold(p.Name); !ok || h.Until != "" {
+		t.Fatalf("the newer hold was lifted: %+v %v", h, ok)
 	}
 }

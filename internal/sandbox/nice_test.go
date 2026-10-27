@@ -32,6 +32,10 @@ func TestNicedPrefixesArgv(t *testing.T) {
 	if got := Niced([]string{"no-such-program-here"}, 10); !slices.Equal(got, []string{"no-such-program-here"}) {
 		t.Errorf("a command that doesn't resolve: %q, want as it is", got)
 	}
+	rel := []string{"." + string(filepath.Separator) + "sh", "-c", "true"}
+	if got := Niced(rel, 10); !slices.Equal(got, rel) {
+		t.Errorf("a relative path: %q, want as it is, for exec to find from the command's directory", got)
+	}
 }
 
 // The command a niced argv names is the one the daemon's own PATH finds,

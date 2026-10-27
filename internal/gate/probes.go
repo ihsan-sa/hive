@@ -111,7 +111,7 @@ func probeE2E(cfg *Config, c *Child) Result {
 }
 
 // failLine is go test's line for a failing test. A name goes into the
-// verdict, and so into a lesson, so only one shaped like a Go test's counts:
+// verdict a worker reads, so only one shaped like a Go test's counts:
 // the output passed through the side's sandbox.
 var failLine = regexp.MustCompile(`^\s*--- FAIL: (Test[A-Za-z0-9_]{0,80}(?:/[A-Za-z0-9_#.+=-]{1,80}){0,3}) \(`)
 
@@ -195,7 +195,7 @@ func probeBenchmark(cfg *Config, c *Child) Result {
 	same := []string{"score", "asks_finished"}
 	return Result{Pass: err == nil, Detail: m[1], Metrics: []Metric{
 		{Name: "score", Value: *b.Score, Higher: true}, {Name: "asks_finished", Value: *b.Finished, Higher: true},
-		{Name: "seconds", Value: *b.Seconds, Given: same},
+		{Name: "seconds", Value: *b.Seconds, Given: same, Time: true},
 		{Name: "commits_landed", Value: *b.Commits, Higher: true, Info: true},
 		{Name: "asks_done_reported", Value: b.Done, Higher: true, Info: true}, {Name: "cost_usd_reported", Value: b.Cost, Info: true},
 		{Name: "worker_messages_reported", Value: b.Messages, Higher: true, Info: true}}}

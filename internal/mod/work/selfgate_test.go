@@ -107,8 +107,8 @@ func TestSelfGateJudgesTheHeadWithMainIn(t *testing.T) {
 	}
 }
 
-// A rollback goes back to the worker with the report, the lesson to record
-// and a fresh main.bundle, and the PR stays open.
+// A rollback goes back to the worker with the report and a fresh
+// main.bundle, and the PR stays open; it asks for no line in lessons.md.
 func TestSelfGateRollbackSendsBack(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
 	gateOnce(t, m, task, p)
@@ -124,13 +124,16 @@ func TestSelfGateRollbackSendsBack(t *testing.T) {
 	if msg := queued(m, task.Worker); !strings.Contains(msg, "main.bundle holds main at") {
 		t.Fatalf("the rollback went back without main.bundle:\n%s", msg)
 	}
+	if strings.Contains(queued(m, task.Worker)+task.Findings, "lessons.md") {
+		t.Fatal("a rollback asks its worker for a line in lessons.md")
+	}
 	if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); !strings.Contains(c, "Recursive gate: ROLLED BACK") {
 		t.Fatalf("the PR doesn't say it was rolled back:\n%s", c)
 	}
 }
 
 // A head the gate can't merge with main goes back to its worker to merge
-// main: not a rollback, no lesson, no alert, and it holds no other change.
+// main: not a rollback, no alert, and it holds no other change.
 func TestSelfGateConflictSendsBackToMerge(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
 	inner := m.Gate
@@ -809,24 +812,6 @@ func TestBriefAim(t *testing.T) {
 	}
 }
 
-// A rollback's lesson the gate wrote on this machine reaches the next brief
-// until main's lessons name the same commit.
-func TestGateLessonsReachTheBrief(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "lessons.md"), []byte("# Lessons\n\n- The gate rolled back abc1234 (run gate-1): not better\n"), 0o644)
-	main, _ := m.C.Effects.Sync(p)
-	if b := m.renderBrief(task, p, main); !strings.Contains(b, "> - The gate rolled back abc1234") {
-		t.Fatalf("the brief misses the gate's lesson:\n%s", b)
-	}
-	pushMain(t, f, map[string]string{".hive/lessons.md": "# Lessons\n\n- 2026-10-24: the recursive gate rolled back abc1234 (work): not better\n"})
-	main, _ = m.C.Effects.Sync(p)
-	if b := m.renderBrief(task, p, main); strings.Count(b, "rolled back abc1234") != 1 {
-		t.Fatalf("want the lesson once, from main:\n%s", b)
-	}
-}
-
 // The reader of a change to the Hive declared a fix is asked to flag one
 // aimed at a gain; a gain, an unclear change (taken as a gain), a revert or
 // another project's change isn't.
@@ -986,5 +971,64 @@ func TestMainMovingKeepsTheGateRunning(t *testing.T) {
 	m.Wait()
 	if run.dropped || cancelled || len(*jobs) != 0 || task.Stage != StageMerging || !strings.Contains(task.Reason, "main has moved") {
 		t.Fatalf("dropped %v cancelled %v, %d runs, stage %q, reason %q: want the run going on and the task waiting on it", run.dropped, cancelled, len(*jobs), task.Stage, task.Reason)
+	}
+}
+
+// A task whose head moves (a merge of main, a fix sent back) ends its
+// gate's run on the old head as it is saved, freeing the slot for the gains
+// queued behind it instead of holding it until the new head reaches the
+// gate. A run on the head it keeps goes on.
+func TestNewHeadFreesItsOldGateAtOnce(t *testing.T) {
+	m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	cancelled := 0
+	same := &gateRun{key: p.Name + "@" + task.SHA + "@main", task: task.ID, head: task.SHA, main: "main", cancel: func() { cancelled++ }}
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{same.key: same}
+	m.mu.Unlock()
+	m.save(task, "looked again")
+	if same.dropped || cancelled != 0 {
+		t.Fatalf("a run on the task's own head was ended")
+	}
+	task.SHA, task.Stage = "newhead", StageTesting
+	m.save(task, "pushed newhead")
+	if !same.dropped || cancelled != 1 || !strings.Contains(task.Log[len(task.Log)-1].Text, "earlier head ends") {
+		t.Fatalf("dropped %v, cancelled %d, log %q: want the old head's run ended and said", same.dropped, cancelled, task.Log[len(task.Log)-1].Text)
+	}
+}
+
+// A task that has merged, finished or been stopped ends its gate's run even
+// on its own head: no verdict on it lands any more.
+func TestEndedTaskFreesItsGateAtOnce(t *testing.T) {
+	for _, stage := range []string{StageMerged, StageDone, StageStopped} {
+		m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+		cancelled := 0
+		run := &gateRun{key: p.Name + "@" + task.SHA + "@main", task: task.ID, head: task.SHA, main: "main", cancel: func() { cancelled++ }}
+		m.mu.Lock()
+		m.gating = map[string]*gateRun{run.key: run}
+		m.mu.Unlock()
+		task.Stage = stage
+		m.save(task, "ended")
+		if !run.dropped || cancelled != 1 {
+			t.Fatalf("%s: dropped %v, cancelled %d: want the run on its own head ended", stage, run.dropped, cancelled)
+		}
+	}
+}
+
+// save must be handed the live task: a step saving a copy taken before a
+// later save (which may carry a head the task has since left) doesn't end
+// the run on the head the task is on now.
+func TestStaleCopyKeepsTheLiveHeadsGate(t *testing.T) {
+	m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	old := *task // a step's copy, taken on the old head
+	task.SHA = "newhead"
+	m.save(task, "pushed newhead")
+	cancelled := 0
+	run := &gateRun{key: p.Name + "@newhead@main", task: task.ID, head: "newhead", main: "main", cancel: func() { cancelled++ }}
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{run.key: run}
+	m.mu.Unlock()
+	m.save(&old, "a slow step's note")
+	if run.dropped || cancelled != 0 {
+		t.Fatalf("a stale copy on the old head ended the gate's run on the live head")
 	}
 }
