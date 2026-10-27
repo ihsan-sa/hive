@@ -96,6 +96,7 @@ type Run struct {
 	Head        string          `json:"head,omitempty"`  // its checkout's HEAD log (size, time) at its last turn's end
 	Still       int             `json:"still,omitempty"` // turns in a row that ended with that log unchanged
 	Login       string          `json:"login,omitempty"` // the login its latest turn went on
+	Where       string          `json:"where,omitempty"` // the runner its latest turn went to; empty is this machine
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
 	StopAsked   bool            `json:"stop_asked,omitempty"`
@@ -409,6 +410,10 @@ type Runs struct {
 	// Route is the picks a persistent run's next turn follows, so a lead
 	// follows a changed setting; empty keeps the run's own and its Route.
 	Route func(Run) []Pick
+	// Executor hands a turn this machine is too strained to start to a
+	// module that runs it elsewhere: the sandbox to start it in and the
+	// runner that has room, or nil when no module has room now.
+	Executor func() (sandbox.Sandbox, string)
 
 	mu      sync.Mutex
 	runs    map[string]*Run
@@ -615,6 +620,7 @@ type turnStarted struct {
 	Model     string      `json:"model,omitempty"`
 	Harness   string      `json:"harness,omitempty"`
 	Login     string      `json:"login,omitempty"`
+	Where     string      `json:"where,omitempty"` // the executor module's runner it went to; empty is this machine
 }
 
 type turnEnded struct {
@@ -758,7 +764,7 @@ func (rs *Runs) apply(e Event) {
 	case "run.turn_started":
 		var t turnStarted
 		e.Decode(&t)
-		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login
+		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login, r.Where = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login, t.Where
 		if t.Session != "" {
 			r.Session = t.Session
 		}
@@ -2081,7 +2087,15 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		// only the floor under which its turn could not run at all.
 		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
 	}
-	if why := Strained(floor, memMax, cpuMax); why != "" {
+	// A turn this machine is too strained for goes to an executor module
+	// with room, or waits.
+	var elsewhere sandbox.Sandbox
+	where := ""
+	why := Strained(floor, memMax, cpuMax)
+	if why != "" {
+		elsewhere, where = rs.executor()
+	}
+	if why != "" && elsewhere == nil {
 		// The hold keeps the run's status, so a parked run keeps its backoff
 		// and a nudged one its count; the live figures after " (" change
 		// every tick, so only a new kind of hold is journalled.
@@ -2097,6 +2111,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			rs.append("run.status", runNote{ID: r.ID, Status: StatusQueued, Reason: err.Error()})
 		}
 		return
+	}
+	if elsewhere != nil {
+		sb = elsewhere
 	}
 	// A run whose own harness and model are at their limit moves to the
 	// first pick with room; one changing harness, or open model, can't
@@ -2231,7 +2248,26 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	started = true
 	rs.claimed(r.ID, turn, p)
-	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness})
+	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness, Where: where})
+}
+
+// Elsewhere says whether an executor module has room for a turn now.
+func (rs *Runs) Elsewhere() bool {
+	ex, _ := rs.executor()
+	return ex != nil
+}
+
+// executor returns an executor module with room for a turn this machine is
+// too strained to start, and the runner it named; nil when there is none or
+// the local sandbox isn't one whose spec another machine can run.
+func (rs *Runs) executor() (sandbox.Sandbox, string) {
+	if rs.Executor == nil {
+		return nil, ""
+	}
+	if sb, err := rs.sandbox(); err != nil || !sb.Isolated() {
+		return nil, ""
+	}
+	return rs.Executor()
 }
 
 // RunPath is where a run's agent sees its run dir ($HIVE_RUN).
