@@ -355,7 +355,7 @@ func restartWith(t *testing.T, sup supervision, outlive bool) (s *server, early,
 	if _, err := c.Runs.Start(core.RunSpec{ID: "live", Harness: "fake"}); err != nil {
 		t.Fatal(err)
 	}
-	turn, err := proc.StartDetached([]string{"sleep", "60"}, os.Environ(), dir, "", filepath.Join(dir, "out"))
+	turn, err := proc.StartDetached([]string{"sleep", "3600"}, os.Environ(), dir, "", filepath.Join(dir, "out"))
 	if err != nil {
 		t.Fatal(err)
 	}
