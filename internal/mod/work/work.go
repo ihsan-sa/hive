@@ -111,7 +111,7 @@ type Task struct {
 	RevertOf   string            `json:"revert_of,omitempty"`  // task id
 	RevertSHA  string            `json:"revert_sha,omitempty"` // the merge being reverted
 	Lesson     string            `json:"lesson,omitempty"`
-	Advice     []string          `json:"advice,omitempty"`       // a land's reviewer advice, filed as one follow-up once merged
+	Advice     []string          `json:"advice,omitempty"`       // the defects a land's reviewer marked, filed as one follow-up once merged
 	FollowUp   string            `json:"follow_up_of,omitempty"` // the task whose review advice this follows up
 	Inputs     map[string]string `json:"inputs,omitempty"`       // files its worker reads in $HIVE_RUN, kept off the issue
 	// Model makes the task a trial of that model: its worker runs on it
@@ -2062,7 +2062,7 @@ func passFail(ok bool) string {
 }
 
 // VerdictSchema is the reviewer's structured answer.
-const VerdictSchema = `{"type":"object","properties":{"verdict":{"type":"string","enum":["land","fix"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"issue":{"type":"string"}},"required":["issue"]}},"advice":{"type":"array","items":{"type":"string"}},"token":{"type":"string"}},"required":["verdict","summary","token"]}`
+const VerdictSchema = `{"type":"object","properties":{"verdict":{"type":"string","enum":["land","fix"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"issue":{"type":"string"}},"required":["issue"]}},"advice":{"type":"array","items":{"type":"string"}},"defects":{"type":"array","items":{"type":"string"}},"token":{"type":"string"}},"required":["verdict","summary","token"]}`
 
 // reviewToken is copied from brief.md into the verdict, so a land shows the
 // reviewer read its inputs.
@@ -2155,15 +2155,19 @@ func (m *Module) review(t *Task, p core.Project) error {
 		}
 		fmt.Fprintf(&fb, "\n- `%s` %s", loc, f.Issue)
 	}
+	for _, d := range v.Defects {
+		fmt.Fprintf(&fb, "\n- Defect: %s", d)
+	}
 	for _, a := range v.Advice {
 		fmt.Fprintf(&fb, "\n- Advice: %s", a)
 	}
 	m.comment(p.Repo, t.PR.Number, fb.String())
 	if v.Verdict == "land" {
-		// Advice with a land doesn't hold the merge; it is kept, from every read,
-		// and filed as one follow-up once the change merges. A follow-up's own
-		// advice stays on its pull request, so the chain stops there.
-		keepAdvice(t, v.Advice)
+		// A land's advice stays on the pull request. Only what the reviewer
+		// marks a defect is kept, from every read, and filed as one follow-up
+		// once the change merges; a follow-up's own defects stay on its pull
+		// request, so the chain stops there.
+		keepDefects(t, v.Defects)
 		// Back through test(), which merges or asks a second, separate reader for a high class.
 		t.Stage = StageTesting
 		m.save(t, "reviewer: land")
@@ -2185,13 +2189,14 @@ func aimCheck(t *Task, p core.Project) string {
 	return "\n\n## The aim\n\nThis change to the Hive itself is declared a fix (" + core.Clip(t.AimWhy, 300) + "), so it merges without the recursive gate, and a score dip after it doesn't revert it on its own. If it fixes no failure the change itself shows, or is really aimed at a measurable gain (the brief names a target to beat, or the diff tunes the benchmark, the score or the gate to move a number), that is a finding: the worker must declare it with `hive agent aim --aim gain --why \"...\"` so the gate judges it. A fix that only touches those files to repair them is still a fix."
 }
 
-// keepAdvice adds a land's advice to the task once per item, unless the task
-// is itself a follow-up.
-func keepAdvice(t *Task, advice []string) {
+// keepDefects adds the defects a land marks to the task once per item,
+// unless the task is itself a follow-up. Plain advice is never kept: each
+// follow-up costs a worker, a full check and a review.
+func keepDefects(t *Task, defects []string) {
 	if t.FollowUp != "" {
 		return
 	}
-	for _, a := range advice {
+	for _, a := range defects {
 		if a = strings.TrimSpace(a); a != "" && !slices.Contains(t.Advice, a) {
 			t.Advice = append(t.Advice, a)
 		}
@@ -2212,7 +2217,8 @@ func (m *Module) reviewRules(p core.Project, main string) string {
 	return b.String()
 }
 
-// followUp files a merged task's review advice as one follow-up brief. The
+// followUp files the defects a merged task's reviewers marked as one
+// follow-up brief. The
 // task is saved merged before this runs and done after, so a restart in
 // between finds the brief already filed and doesn't file it again. It is
 // filed as a fix of what the reviewer found: it hardens a change that already
@@ -2230,7 +2236,7 @@ func (m *Module) followUp(t *Task, p core.Project) error {
 		Aim: AimFix, Why: core.Clip("the review of "+t.Label()+" found: "+strings.Join(t.Advice, "; "), 300),
 		Title: "Follow up the review of " + core.Clip(t.Label(), 100),
 		Done:  "Each item below is done, or judged not worth doing with the reason in your account.",
-		Known: "The reviewer landed " + url + ", now merged, with this advice:\n\n- " + strings.Join(t.Advice, "\n- ")})
+		Known: "The reviewer landed " + url + ", now merged, marking these defects:\n\n- " + strings.Join(t.Advice, "\n- ")})
 	return err
 }
 
@@ -3364,7 +3370,7 @@ func (m *Module) seatRead(t *Task, p core.Project, ch core.Change, main, seat st
 	}
 	m.comment(p.Repo, t.PR.Number, fmt.Sprintf("**Security read (%s) of %s: %s**\n\n%s", seat, core.Short(v.SHA), v.Verdict, verdictText(v)))
 	if v.Verdict == "land" {
-		keepAdvice(t, v.Advice)
+		keepDefects(t, v.Defects)
 	}
 	m.save(t, "security seat "+seat+": "+v.Verdict)
 	return true, nil
@@ -3473,6 +3479,12 @@ func verdictText(v core.Verdict) string {
 			loc = fmt.Sprintf("%s:%d", f.File, f.Line)
 		}
 		fmt.Fprintf(&b, "\n- `%s` %s", loc, f.Issue)
+	}
+	for _, d := range v.Defects {
+		fmt.Fprintf(&b, "\n- Defect: %s", d)
+	}
+	for _, a := range v.Advice {
+		fmt.Fprintf(&b, "\n- Advice: %s", a)
 	}
 	return b.String()
 }

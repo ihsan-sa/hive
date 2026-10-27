@@ -798,8 +798,8 @@ func TestReviewRulesFromMain(t *testing.T) {
 	}
 }
 
-// Advice from a land is filed once, when the task merges: a step repeated
-// after a restart files no second brief, a follow-up's own advice files none,
+// The defects a land marks are filed once, when the task merges: a step repeated
+// after a restart files no second brief, a follow-up's own defects file none,
 // on a scored project the follow-up keeps its done line, and it is taken as a
 // fix of what the review found, not a gain for the gate.
 func TestFollowUpOnceAfterMerge(t *testing.T) {
@@ -823,11 +823,11 @@ func TestFollowUpOnceAfterMerge(t *testing.T) {
 	if d := doneFor(&fu, true); !strings.Contains(d, "judged not worth doing") {
 		t.Fatalf("the follow-up lost its done line: %q", d)
 	}
-	keepAdvice(&fu, []string{"and again"})
+	keepDefects(&fu, []string{"and again"})
 	if len(fu.Advice) != 0 {
 		t.Fatalf("a follow-up kept advice, so the chain goes on: %v", fu.Advice)
 	}
-	keepAdvice(tk, []string{" name it better ", "", "test it"}) // a second read repeats one item
+	keepDefects(tk, []string{" name it better ", "", "test it"}) // a second read repeats one item
 	if strings.Join(tk.Advice, "|") != "name it better|test it" {
 		t.Fatalf("advice: %q", tk.Advice)
 	}

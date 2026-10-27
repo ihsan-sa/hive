@@ -117,7 +117,8 @@ type Verdict struct {
 	Verdict  string    `json:"verdict"` // land | fix
 	Summary  string    `json:"summary"`
 	Findings []Finding `json:"findings,omitempty"`
-	Advice   []string  `json:"advice,omitempty"` // with a land: worth doing later, not a blocker
+	Advice   []string  `json:"advice,omitempty"`  // with a land: worth doing later, not a blocker; stays on the PR
+	Defects  []string  `json:"defects,omitempty"` // with a land: a real defect left that shouldn't hold the merge; filed as a follow-up
 	// Diff names the change's own diff the reviewer read (DiffID), so the read
 	// carries to any head with the same own diff, and to no other.
 	Diff string `json:"diff,omitempty"`

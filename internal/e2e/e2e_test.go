@@ -747,9 +747,10 @@ func TestCheckpointsBankEachGain(t *testing.T) {
 }
 
 // A review reads the project's docs/REVIEW.md, goals and lessons from main,
-// and advice given with a land becomes one follow-up brief once it merges, not
-// a blocker. The fake gives advice on the follow-up's review too, which files
-// nothing more, so the chain stops at one.
+// and a defect marked with a land becomes one follow-up brief once it merges,
+// not a blocker, while plain advice is filed as nothing. The fake marks a
+// defect on the follow-up's review too, which files nothing more, so the chain
+// stops at one.
 func TestReviewReadsTheRules(t *testing.T) {
 	t.Parallel()
 	h := start(t)
@@ -772,7 +773,7 @@ func TestReviewReadsTheRules(t *testing.T) {
 	follow := "Follow up the review of add a helper"
 	st = h.wait("the advice to land as a brief", 3*minute, taskStage("rules", follow, work.StageDone))
 	fu, _ := task(st, "rules", follow)
-	if fu.From != tk.Reviewer || fu.FollowUp != tk.ID || !strings.Contains(fu.Known, "FAKE advice") {
+	if fu.From != tk.Reviewer || fu.FollowUp != tk.ID || !strings.Contains(fu.Known, "FAKE defect") || strings.Contains(fu.Known, "FAKE advice") {
 		t.Fatalf("follow-up: %+v", fu)
 	}
 	n := 0
