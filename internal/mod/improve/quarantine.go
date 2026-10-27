@@ -105,40 +105,79 @@ func (m *Module) applyQuarantine(e core.Event) {
 // or on main, the same evidence as the forge's, and often the first, since a
 // busy machine shows a timing flake before CI does. A check on any other
 // commit (a gate's or step-back's candidate) is no sighting; m.mu is held.
+//
+// Main is a merge the Hive made in the last flakeWindow (m.merged): a red on
+// a commit the person pushed is no sighting. A red there counts only once
+// what failed passed when run again on the same commit (a "retest"): one that
+// stays red is a merge that broke the test, which a revert or a fix task
+// answers, and quarantining it would excuse that test's reds on every other
+// PR. Main just before a merge ("before") is never retested, so never counts.
 func (m *Module) sightLocal(e core.Event) {
 	var c core.Check
-	if e.Decode(&c) != nil || c.OK || c.CantRun != "" || time.Since(c.At) > quarantineWindow {
+	if e.Decode(&c) != nil || c.CantRun != "" || time.Since(c.At) > quarantineWindow {
 		return
 	}
-	if c.Kind != "test" && c.Kind != "retest" && c.Kind != "before" {
+	if c.Kind != "test" && c.Kind != "retest" {
 		return
 	}
-	keys := c.Keys
-	if keys == nil && len(c.Failed) > 0 {
-		keys, _ = core.FailedTestKeys(c.FullOutput()) // recorded before checks named packages
-	}
-	keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return !strings.Contains(k, "::") })
-	if len(keys) == 0 {
+	_, main := m.merged[c.SHA]
+	if main {
+		m.sightMain(c)
 		return
 	}
-	s := Sighting{At: c.At, SHA: c.SHA, Check: "local " + c.Kind}
-	_, s.Main = m.merged[c.SHA]
-	s.Main = s.Main || c.Kind == "before" // main just before a merge
-	if !s.Main {
-		var ids []string
-		for id, hs := range m.heads {
-			if slices.Contains(hs, c.SHA) {
-				ids = append(ids, id)
+	// Only the keys the check recorded: reading an older record's log here
+	// would hold m.mu over a disk read.
+	keys := slices.DeleteFunc(slices.Clone(c.Keys), func(k string) bool { return !strings.Contains(k, "::") })
+	if c.OK || len(keys) == 0 {
+		return
+	}
+	// Two tasks with the same head (a branch caught up to another's) give
+	// it to the first by id; outside still sees it as the other's own, as
+	// it checks every head a task had.
+	var ids []string
+	for id, hs := range m.heads {
+		if slices.Contains(hs, c.SHA) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	slices.Sort(ids)
+	m.addSightings(c.Project, keys, Sighting{At: c.At, SHA: c.SHA, Task: ids[0], Check: "local " + c.Kind})
+}
+
+// sightMain holds a red test check on a merge until its retest answers: a
+// pass makes each test that failed a sighting on main, passed when run
+// again; a red retest drops it. m.mu is held.
+func (m *Module) sightMain(c core.Check) {
+	k := c.Project + "\x00" + c.SHA
+	if c.Kind == "test" {
+		if !c.OK && len(c.Keys) > 0 {
+			for sk, r := range m.mainReds {
+				if time.Since(r.At) > quarantineWindow {
+					delete(m.mainReds, sk)
+				}
 			}
+			m.mainReds[k] = core.Check{At: c.At, Keys: c.Keys}
 		}
-		if len(ids) == 0 {
-			return
-		}
-		slices.Sort(ids)
-		s.Task = ids[0]
+		return
 	}
+	r, ok := m.mainReds[k]
+	if !ok || c.At.Before(r.At) {
+		return
+	}
+	delete(m.mainReds, k)
+	if c.OK {
+		keys := slices.DeleteFunc(slices.Clone(r.Keys), func(k string) bool { return !strings.Contains(k, "::") })
+		m.addSightings(c.Project, keys, Sighting{At: r.At, SHA: c.SHA, Check: "local test", Main: true, Rerun: true})
+	}
+}
+
+// addSightings gives each of keys sighting s, once per commit and check; m.mu is held.
+func (m *Module) addSightings(project string, keys []string, s Sighting) {
 	for _, test := range keys {
-		k := flakeKey(c.Project, test)
+		k := flakeKey(project, test)
 		if slices.ContainsFunc(m.sighted[k], func(o Sighting) bool { return o.SHA == s.SHA && o.Check == s.Check }) {
 			continue
 		}

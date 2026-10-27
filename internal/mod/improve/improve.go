@@ -82,7 +82,8 @@ type Module struct {
 	fails     map[string][]core.Check                                                                 // project -> recent red test checks that name their failing tests
 	heads     map[string][]string                                                                     // task id -> every head it had
 	merged    map[string]time.Time                                                                    // merge sha -> when it merged
-	sighted   map[string][]Sighting                                                                   // project\x00test -> its recent reds in the forge's checks (quarantine.go)
+	sighted   map[string][]Sighting                                                                   // project\x00test -> its recent reds in the forge's checks and the Hive's own test checks (quarantine.go)
+	mainReds  map[string]core.Check                                                                   // project\x00merge sha -> its red local test check, until a retest answers (quarantine.go)
 	fixes     map[string]string                                                                       // project\x00test -> the task filed to fix it
 	lifted    map[string]time.Time                                                                    // project\x00test -> when its fix merged
 	fixMerged map[string]bool                                                                         // fix tasks whose merge lifted their test
@@ -102,7 +103,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, fixMerged: map[string]bool{}, kin: map[string]string{}, judging: map[string]judgingMerge{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, mainReds: map[string]core.Check{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, fixMerged: map[string]bool{}, kin: map[string]string{}, judging: map[string]judgingMerge{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()

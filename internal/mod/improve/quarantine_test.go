@@ -163,26 +163,28 @@ func TestQuarantineNotOnItsOwnEvidence(t *testing.T) {
 }
 
 // The Hive's own test check is evidence too: its reds on two unrelated
-// tasks' heads, or one on main, quarantine a test as the forge's do. A red
-// on a commit that is neither (a gate's candidate) is no sighting, and a
-// record from before checks named packages is read from its output.
+// tasks' heads, or a flake on main, quarantine a test as the forge's do. A
+// red on a commit that is neither (a gate's candidate) is no sighting. On
+// main a red counts only once its retest passed: one that stays red is a
+// merge that broke the test, not a flake, and main just before a merge is
+// never retested.
 func TestQuarantineFromLocalChecks(t *testing.T) {
 	m := rig(t)
-	out := "--- FAIL: TestTick (0.2s)\nFAIL\nFAIL\tgithub.com/x/hive/internal/daemon\t3.1s\nok  \tgithub.com/x/hive/internal/core\t1.0s\n"
 	key := "github.com/x/hive/internal/daemon::TestTick"
-	checked := func(sha, kind string, keys ...string) {
-		m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: sha, Kind: kind, Output: out, Failed: []string{"TestTick"}, Keys: keys, At: time.Now().UTC()})
+	checked := func(sha, kind string, ok bool, keys ...string) {
+		m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: sha, Kind: kind, OK: ok, Failed: []string{"TestTick"}, Keys: keys, At: time.Now().UTC()})
 	}
 	for _, id := range []string{"t1", "t2"} {
 		m.C.J.MustAppend("task.saved", work.Task{ID: id, Project: "hive", Title: "work " + id, SHA: "head" + id})
 	}
-	checked("headt1", "test", key)
-	checked("headt1", "retest", key)
-	checked("candidate", "test", key)
+	checked("headt1", "test", false, key)
+	checked("headt1", "retest", false, key)
+	checked("candidate", "test", false, key)
+	checked("headt2", "test", false) // no test placed in its package: no key to sight
 	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
 		t.Fatalf("one task's and a candidate's reds quarantined %v", q)
 	}
-	checked("headt2", "test") // recorded before checks named packages
+	checked("headt2", "test", false, key)
 	q := m.Quarantine("hive")
 	if len(q) != 1 || q[0].Test != key || !strings.Contains(q[0].Why, "failed on 2 unrelated branches (tasks t1, t2)") || q[0].Evidence[0].Check != "local test" {
 		t.Fatalf("quarantine %+v", q)
@@ -192,14 +194,56 @@ func TestQuarantineFromLocalChecks(t *testing.T) {
 	}
 
 	m.C.J.MustAppend("effect.merged", map[string]string{"project": "hive", "merge_sha": "main1"})
-	other := "github.com/x/hive/internal/core::TestOther"
-	checked("main1", "test", other)
-	if !slices.Contains(m.QuarantinedTests("hive", "t1"), other) {
-		t.Fatal("a local red on main not quarantined")
+	m.C.J.MustAppend("effect.merged", map[string]string{"project": "hive", "merge_sha": "main2"})
+	broken := "github.com/x/hive/internal/core::TestBroken"
+	checked("main1", "test", false, broken)
+	checked("main1", "before", false, broken)
+	if slices.Contains(m.QuarantinedTests("hive", "t1"), broken) {
+		t.Fatal("a local red on main quarantined before its retest answered")
+	}
+	checked("main1", "retest", false, broken)
+	checked("main1", "retest", true) // a later pass is no answer to a red already dropped
+	if slices.Contains(m.QuarantinedTests("hive", "t1"), broken) {
+		t.Fatal("a merge that broke a test (red again on retest) quarantined it")
+	}
+	flaky := "github.com/x/hive/internal/core::TestOther"
+	checked("main2", "test", false, flaky)
+	checked("main2", "retest", true)
+	if !slices.Contains(m.QuarantinedTests("hive", "t1"), flaky) {
+		t.Fatal("a local flake on main not quarantined")
 	}
 	m.fileQuarantined()
 	fix := m.Work.List(func(t work.Task) bool { return t.Title == flakyTitle+key })
 	if len(fix) != 1 || !strings.Contains(fix[0].Known, "task t1 at headt1, check local test") {
 		t.Fatalf("fix tasks %+v", fix)
+	}
+	fix = m.Work.List(func(t work.Task) bool { return t.Title == flakyTitle+flaky })
+	if len(fix) != 1 || !strings.Contains(fix[0].Known, "main at main2, check local test, passed when run again") {
+		t.Fatalf("fix tasks %+v", fix)
+	}
+}
+
+// Two tasks with the same head (one caught up to the other's branch): a
+// local red there is sighted for the first by id, and is still the other's
+// own, so neither is excused on it, nor do they make two branches.
+func TestLocalSightingOnASharedHead(t *testing.T) {
+	m := rig(t)
+	key := "github.com/x/hive/internal/daemon::TestTick"
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t1", Project: "hive", Title: "work t1", SHA: "shared"})
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t2", Project: "hive", Title: "work t2", SHA: "shared"})
+	m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "shared", Kind: "test", Failed: []string{"TestTick"}, Keys: []string{key}, At: time.Now().UTC()})
+	m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "shared", Kind: "retest", Failed: []string{"TestTick"}, Keys: []string{key}, At: time.Now().UTC()})
+	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
+		t.Fatalf("one shared head's reds quarantined %v", q)
+	}
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t3", Project: "hive", Title: "work t3", SHA: "head3"})
+	m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "head3", Kind: "test", Failed: []string{"TestTick"}, Keys: []string{key}, At: time.Now().UTC()})
+	for _, task := range []string{"t1", "t2", "t3"} {
+		if q := m.QuarantinedTests("hive", task); len(q) != 0 {
+			t.Fatalf("%s excused on reds that are its own or one other branch's: %v", task, q)
+		}
+	}
+	if q := m.Quarantine("hive"); len(q) != 1 || q[0].Evidence[0].Task != "t1" {
+		t.Fatalf("quarantine %+v", q)
 	}
 }
