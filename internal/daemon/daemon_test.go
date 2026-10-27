@@ -367,10 +367,13 @@ func restartWith(t *testing.T, sup supervision, outlive bool) (s *server, early,
 	s = &server{a: &app.App{C: c}, info: api.DaemonInfo{PID: os.Getpid(), Token: "t"}, cancel: func() { stopped.Store(true) }}
 	done := make(chan struct{})
 	go func() { s.restart(); close(done) }()
+	// Each journal append syncs to disk, which on a check machine busy with
+	// other packages' tests took over 5s for the few the restart writes; the
+	// limit only catches a restart that hangs.
 	finished := func() {
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(time.Minute):
 			t.Fatal("the restart never finished")
 		}
 	}
