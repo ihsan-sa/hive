@@ -1,10 +1,13 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -271,9 +274,16 @@ func TestOverlappingTicksStepEachRunOnce(t *testing.T) {
 	if l, _ = c.Runs.Get("lead"); l.Status != StatusRunning {
 		t.Fatalf("lead %s, want running", l.Status)
 	}
-	// The lead's next steps drain an op that takes longer than two ticks.
-	c.Runs.ops.Register(Op{Name: "slow", Fn: func(Run, json.RawMessage) (any, error) { time.Sleep(1500 * time.Millisecond); return nil, nil }})
+	// The lead's next steps drain an op held open until three ticks have
+	// come and gone behind it.
+	// Each op takes its gate from gates, so the op's goroutine is handed the
+	// one slowStep made, never reading a variable the test writes.
+	gates := make(chan chan struct{}, 1)
+	var gate chan struct{}
+	c.Runs.ops.Register(Op{Name: "slow", Fn: func(Run, json.RawMessage) (any, error) { <-<-gates; return nil, nil }})
 	slowStep := func(n string) {
+		gate = make(chan struct{})
+		gates <- gate
 		os.WriteFile(filepath.Join(c.WS.RunBox("lead"), "outbox", n+".json"), []byte(`{"id":"`+n+`","op":"slow"}`), 0o644)
 	}
 	count := func(kind, id string) int {
@@ -285,24 +295,28 @@ func TestOverlappingTicksStepEachRunOnce(t *testing.T) {
 		})
 		return n
 	}
-	// Every tick's late step has run once no pass waits behind the leads
-	// and no step or launch is still going; a fixed sleep for that fails on
-	// a loaded machine, where a launch can outlast it.
-	settled := func() bool {
-		c.Runs.mu.Lock()
-		defer c.Runs.mu.Unlock()
-		return !c.Runs.passing && len(c.Runs.busy) == 0 && c.Runs.launching == 0
+	// settled: no pass over the other runs waits, and no step or launch is
+	// still going; a fixed sleep for that fails on a loaded machine, where a
+	// launch can outlast it.
+	settled := func() {
+		t.Helper()
+		for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+			c.Runs.mu.Lock()
+			done := !c.Runs.passing && len(c.Runs.busy) == 0 && c.Runs.launching == 0
+			c.Runs.mu.Unlock()
+			if done {
+				return
+			}
+		}
+		t.Fatal("the ticks' steps are still going after 30s")
 	}
 	ticks := func() {
 		for i := 0; i < 3; i++ {
 			c.Runs.Tick(cfg)
-			time.Sleep(600 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
 		}
-		for end := time.Now().Add(30 * time.Second); !settled(); time.Sleep(50 * time.Millisecond) {
-			if time.Now().After(end) {
-				t.Fatal("the ticks' steps are still going after 30s")
-			}
-		}
+		close(gate)
+		settled()
 	}
 	if _, err := c.Runs.Start(RunSpec{ID: "worker", Role: "worker", Harness: "fake"}); err != nil {
 		t.Fatal(err)
@@ -331,12 +345,62 @@ func TestOverlappingTicksStepEachRunOnce(t *testing.T) {
 	if w, _ := c.Runs.Get("worker"); w.Status == StatusRunning {
 		t.Fatalf("the worker's turn never ended: %s %q", w.Status, w.Reason)
 	}
-	for end := time.Now().Add(30 * time.Second); !settled() && time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
-	}
+	settled()
 	if n := count("run.turn_ended", "worker"); n != 1 {
 		t.Errorf("the worker's turn ended %d times across overlapping ticks, want 1", n)
 	}
 }
+
+// A lead's step that hangs holds the other runs up only for one wait, and
+// daemon.log names it once a stall: a later tick can't claim the hung lead,
+// so its pass has nothing to wait for and doesn't say it again.
+func TestHungLeadStepIsSaidOnce(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	c.Runs.leadWait = 100 * time.Millisecond
+	var logged bytes.Buffer
+	var logMu sync.Mutex
+	log.SetOutput(writerFunc(func(p []byte) (int, error) { logMu.Lock(); defer logMu.Unlock(); return logged.Write(p) }))
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	said := func() int {
+		logMu.Lock()
+		defer logMu.Unlock()
+		return strings.Count(logged.String(), "a lead's step is still going after")
+	}
+	if _, err := c.Runs.Start(RunSpec{ID: "lead", Role: "lead", Harness: "fake", Persistent: true}); err != nil {
+		t.Fatal(err)
+	}
+	l, _ := c.Runs.Get("lead")
+	c.Runs.launch(l, cfg)
+	gate := make(chan struct{})
+	t.Cleanup(func() { close(gate) }) // before the turns end (cleanups run last first)
+	c.Runs.ops.Register(Op{Name: "hang", Fn: func(Run, json.RawMessage) (any, error) { <-gate; return nil, nil }})
+	os.WriteFile(filepath.Join(c.WS.RunBox("lead"), "outbox", "hang.json"), []byte(`{"id":"hang","op":"hang"}`), 0o644)
+	if _, err := c.Runs.Start(RunSpec{ID: "worker", Role: "worker", Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		c.Runs.Tick(cfg)
+		if w, _ := c.Runs.Get("worker"); w.Turn == 1 && said() > 0 {
+			break
+		}
+	}
+	if w, _ := c.Runs.Get("worker"); w.Turn != 1 {
+		t.Fatalf("the worker's turn didn't start behind a hung lead step: %s turn %d", w.Status, w.Turn)
+	}
+	for i := 0; i < 5; i++ { // five more ticks while the same step hangs
+		c.Runs.Tick(cfg)
+		time.Sleep(150 * time.Millisecond)
+	}
+	if n := said(); n != 1 {
+		t.Errorf("the hung lead's step was said %d times in daemon.log, want once:\n%s", n, logged.String())
+	}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 // A machine with none of the readings (no /proc, as on macOS or Windows) is
 // watched by none of them, whatever the limits say; a reading counts only

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -412,5 +413,52 @@ func TestLimitWhoseResetPassedWaitsAMinute(t *testing.T) {
 	}
 	if got, _ := rs.Get("r1"); got.Status != StatusParked || time.Until(got.ParkedUntil) > 2*time.Minute {
 		t.Fatalf("run is %q until %v, want a minute at most", got.Status, got.ParkedUntil)
+	}
+}
+
+// A harness that keeps naming the same passed reset doesn't retry every
+// minute: each such limit in a row parks the login twice as long, up to the
+// hour (#1018).
+func TestRepeatedPassedResetBacksOff(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { j.Close() })
+	rs := NewRuns(ws, j, nil, NewTokens(ws), func() []string { return nil })
+	r, err := rs.Start(RunSpec{ID: "r1", Harness: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(ws.RunPrivate("r1"), 0o700)
+	reset := time.Now().Add(-5 * time.Second)
+	limit := func() time.Duration {
+		home, err := rs.freshCodexHome(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.TurnStarted = time.Now().Add(-time.Minute)
+		os.MkdirAll(filepath.Dir(ws.TurnOut("r1", r.Turn)), 0o700)
+		os.WriteFile(ws.TurnOut("r1", r.Turn), []byte(`{"type":"thread.started","thread_id":"th1"}
+{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again later."}}
+`), 0o600)
+		day := filepath.Join(home, "sessions", "2026", "10", "25")
+		os.MkdirAll(day, 0o700)
+		os.WriteFile(filepath.Join(day, "rollout-2026-10-25T10-00-00-th1.jsonl"), []byte(fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":100,"window_minutes":300,"resets_at":%d}}}}`+"\n",
+			time.Now().UTC().Format(time.RFC3339Nano), reset.Unix())), 0o600)
+		rs.endTurn(r)
+		return time.Until(rs.plans["codex"].Limit.ResetsAt)
+	}
+	for i, want := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 16 * time.Minute, 32 * time.Minute, time.Hour, time.Hour} {
+		if got := limit(); got <= want-10*time.Second || got > want {
+			t.Fatalf("limit %d parked %v, want %v", i+1, got, want)
+		}
+	}
+	// A reading that isn't a passed reset (here a limit with its reset
+	// ahead) starts the count again.
+	rs.append("plan.usage", Plan{Harness: "codex", Limit: harness.RateLimit{Status: "rejected", ResetsAt: time.Now().Add(time.Second)}, At: time.Now().UTC()})
+	if got := limit(); got > time.Minute {
+		t.Fatalf("after a fresh reading parked %v, want a minute", got)
 	}
 }
