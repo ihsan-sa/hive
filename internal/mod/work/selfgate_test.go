@@ -107,8 +107,8 @@ func TestSelfGateJudgesTheHeadWithMainIn(t *testing.T) {
 	}
 }
 
-// A rollback goes back to the worker with the report, the lesson to record
-// and a fresh main.bundle, and the PR stays open.
+// A rollback goes back to the worker with the report and a fresh
+// main.bundle, and the PR stays open; it asks for no line in lessons.md.
 func TestSelfGateRollbackSendsBack(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
 	gateOnce(t, m, task, p)
@@ -124,13 +124,16 @@ func TestSelfGateRollbackSendsBack(t *testing.T) {
 	if msg := queued(m, task.Worker); !strings.Contains(msg, "main.bundle holds main at") {
 		t.Fatalf("the rollback went back without main.bundle:\n%s", msg)
 	}
+	if strings.Contains(queued(m, task.Worker)+task.Findings, "lessons.md") {
+		t.Fatal("a rollback asks its worker for a line in lessons.md")
+	}
 	if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); !strings.Contains(c, "Recursive gate: ROLLED BACK") {
 		t.Fatalf("the PR doesn't say it was rolled back:\n%s", c)
 	}
 }
 
 // A head the gate can't merge with main goes back to its worker to merge
-// main: not a rollback, no lesson, no alert, and it holds no other change.
+// main: not a rollback, no alert, and it holds no other change.
 func TestSelfGateConflictSendsBackToMerge(t *testing.T) {
 	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateCantRun)
 	inner := m.Gate
@@ -806,24 +809,6 @@ func TestBriefAim(t *testing.T) {
 	}
 	if b := m.renderBrief(&u, p, main); !strings.Contains(b, "Aim: a gain, as nothing says it is a fix") {
 		t.Fatalf("the brief doesn't say it is taken as a gain:\n%s", b)
-	}
-}
-
-// A rollback's lesson the gate wrote on this machine reaches the next brief
-// until main's lessons name the same commit.
-func TestGateLessonsReachTheBrief(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "lessons.md"), []byte("# Lessons\n\n- The gate rolled back abc1234 (run gate-1): not better\n"), 0o644)
-	main, _ := m.C.Effects.Sync(p)
-	if b := m.renderBrief(task, p, main); !strings.Contains(b, "> - The gate rolled back abc1234") {
-		t.Fatalf("the brief misses the gate's lesson:\n%s", b)
-	}
-	pushMain(t, f, map[string]string{".hive/lessons.md": "# Lessons\n\n- 2026-10-24: the recursive gate rolled back abc1234 (work): not better\n"})
-	main, _ = m.C.Effects.Sync(p)
-	if b := m.renderBrief(task, p, main); strings.Count(b, "rolled back abc1234") != 1 {
-		t.Fatalf("want the lesson once, from main:\n%s", b)
 	}
 }
 

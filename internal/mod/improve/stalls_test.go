@@ -30,7 +30,8 @@ func TestStallLimit(t *testing.T) {
 
 // Tasks held on the same named wait (main is red) are one stall: the lead
 // hears about the cause once, not once per task. A task stuck with no named
-// wait is still handed off on its own.
+// wait is still judged on its own: the watcher retries it from its branch's
+// head first (TestStuckTaskIsRetriedOnceBeforeTheLead).
 func TestSharedWaitIsOneHandoff(t *testing.T) {
 	m := rig(t)
 	red := "waiting on main: its own tests fail at a6c44d9d, so this failure isn't the worker's"
@@ -52,13 +53,51 @@ func TestSharedWaitIsOneHandoff(t *testing.T) {
 			told[s.Key]++
 		}
 	}
-	if len(told) != 2 || told["task:t4"] != 1 || told[waitKey("p", work.StageMerging, "waiting on main")] != 1 {
-		t.Fatalf("handoffs = %v, want one for the red-main cause and one for t4", told)
+	if len(told) != 1 || told[waitKey("p", work.StageMerging, "waiting on main")] != 1 {
+		t.Fatalf("handoffs = %v, want one for the red-main cause and t4 retried", told)
 	}
 	for _, s := range m.Stalls() {
 		if strings.HasPrefix(s.Key, "wait:") && !strings.HasPrefix(s.What, "4 tasks (") {
 			t.Errorf("the cause's stall reads %q, want it to name its 4 tasks", s.What)
 		}
+	}
+}
+
+// A task stuck on its way to the merge is retried from its branch's head by
+// the watcher itself, as the lead's recheck would, and kept out of the
+// stage's history; only if it sticks again, in any stage, does the lead hear.
+func TestStuckTaskIsRetriedOnceBeforeTheLead(t *testing.T) {
+	m := rig(t)
+	stick := func(stage string) {
+		m.mu.Lock()
+		m.spells["t0"] = spell{stage: stage, since: time.Now().Add(-2 * time.Hour)}
+		m.mu.Unlock()
+	}
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: work.StageTesting})
+	stick(work.StageTesting)
+	m.Watch()
+	if tk, _ := m.Work.Get("t0"); tk.Stage != work.StageLanding || !strings.Contains(tk.Log[len(tk.Log)-1].Text, "the stall watcher") {
+		t.Fatalf("task after the first watch: %s %+v, want it retried into landing by the watcher", tk.Stage, tk.Log)
+	}
+	s := m.Stalls()
+	if len(s) != 1 || s[0].Told || !s[0].Rechecked {
+		t.Fatalf("stalls = %+v, want one retried and not handed off", s)
+	}
+	m.mu.Lock()
+	n := len(m.took[work.StageTesting])
+	m.mu.Unlock()
+	if n != 0 {
+		t.Errorf("testing history has %d spells, want the retried one left out", n)
+	}
+	stick(work.StageLanding)
+	m.Watch() // it moved on from testing
+	m.Watch()
+	s = m.Stalls()
+	if len(s) != 1 || !s[0].Told || s[0].Stage != work.StageLanding || !strings.Contains(s[0].Did, "once already") {
+		t.Fatalf("stalls = %+v, want it handed to the lead once stuck again", s)
+	}
+	if tk, _ := m.Work.Get("t0"); tk.Stage != work.StageLanding || strings.Count(fmt.Sprint(tk.Log), "the stall watcher") != 1 {
+		t.Errorf("task after it stuck again: %s %+v, want it retried only once", tk.Stage, tk.Log)
 	}
 }
 
