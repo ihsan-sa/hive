@@ -46,30 +46,48 @@ const (
 type Module struct {
 	C *core.Core
 
-	mu     sync.Mutex
-	items  map[string]*Item
-	landed map[string]bool // tasks merged or done, from task.saved
+	mu       sync.Mutex
+	items    map[string]*Item
+	known    map[string]bool // every task id task.saved has named
+	landed   map[string]bool // tasks merged or done, and not reverted since
+	reverted map[string]bool // tasks a merged revert has undone
 }
 
-// lands reads whether a task.saved event is a task that landed.
-func lands(e core.Event) (string, bool) {
-	var t struct{ ID, Stage string }
-	if e.Decode(&t) != nil || t.ID == "" {
-		return "", false
+// taskOf reads a task.saved event: its task, whether it landed, and the task
+// it reverts if it is a revert.
+func taskOf(e core.Event) (id string, landed bool, revertOf string) {
+	var t struct {
+		ID, Stage, Kind string
+		RevertOf        string `json:"revert_of"`
 	}
-	return t.ID, t.Stage == "merged" || t.Stage == "done"
+	if e.Decode(&t) != nil || t.ID == "" {
+		return "", false, ""
+	}
+	landed = t.Stage == "merged" || t.Stage == "done"
+	if t.Kind == "revert" && landed {
+		revertOf = t.RevertOf
+	}
+	return t.ID, landed, revertOf
 }
 
 // New loads the record and registers the feedback op.
 func New(c *core.Core) *Module {
-	m := &Module{C: c, items: map[string]*Item{}, landed: map[string]bool{}}
+	m := &Module{C: c, items: map[string]*Item{}, known: map[string]bool{}, landed: map[string]bool{}, reverted: map[string]bool{}}
 	apply := func(e core.Event) {
 		if e.Kind == "task.saved" {
-			if id, ok := lands(e); ok {
-				m.mu.Lock()
-				m.landed[id] = true
-				m.mu.Unlock()
+			id, landed, revertOf := taskOf(e)
+			if id == "" {
+				return
 			}
+			m.mu.Lock()
+			m.known[id] = true
+			if landed && !m.reverted[id] {
+				m.landed[id] = true
+			}
+			if revertOf != "" {
+				m.reverted[revertOf], m.landed[revertOf] = true, false
+			}
+			m.mu.Unlock()
 			return
 		}
 		if e.Kind != "feedback.saved" {
@@ -85,13 +103,22 @@ func New(c *core.Core) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
-	c.J.Subscribe(func(e core.Event) { // a fix that lands closes what it fixed
+	c.J.Subscribe(func(e core.Event) { // a fix that lands closes what it fixed; its revert reopens it
 		if e.Kind != "task.saved" {
 			return
 		}
-		if id, ok := lands(e); ok {
+		id, landed, revertOf := taskOf(e)
+		if landed && m.isLanded(id) {
 			for _, it := range m.List(func(it Item) bool { return it.Status == Open && it.Task == id }) {
-				m.Close(it.ID, "fixed by task "+id)
+				m.Close(it.ID, fixedBy+id)
+			}
+		}
+		if revertOf != "" {
+			for _, it := range m.List(func(it Item) bool { return it.Status == Closed && it.Task == revertOf && it.Note == fixedBy+revertOf }) {
+				m.save(it.ID, func(it *Item) error {
+					it.Status, it.Seen, it.Task, it.Note = Open, false, "", "task "+revertOf+" fixed it but was reverted by task "+id
+					return nil
+				})
 			}
 		}
 	})
@@ -205,7 +232,8 @@ func (m *Module) Reopen(id string) (Item, error) {
 
 // Fix links an open item to the task that fixes it, for run r: a run with a
 // project may link that project's feedback and the Hive's own. An item whose
-// task has already landed closes at once.
+// task has already landed closes at once. The task must be one the journal
+// knows and not reverted, so a typo can't leave a mark that never resolves.
 func (m *Module) Fix(r core.Run, id, task string) (Item, error) {
 	id, task = strings.TrimSpace(id), strings.TrimSpace(task)
 	if id == "" || task == "" {
@@ -215,18 +243,32 @@ func (m *Module) Fix(r core.Run, id, task string) (Item, error) {
 		return Item{}, core.ErrNotFound
 	}
 	m.mu.Lock()
-	landed := m.landed[task]
+	known, landed, reverted := m.known[task], m.landed[task], m.reverted[task]
 	m.mu.Unlock()
+	if !known {
+		return Item{}, fmt.Errorf("no task %s in the journal: name the fix's task id as hive agent brief or status gives it", task)
+	}
+	if reverted {
+		return Item{}, fmt.Errorf("task %s was reverted, so it fixes nothing: name the task that fixes it now", task)
+	}
 	return m.save(id, func(it *Item) error {
 		if it.Status != Open {
 			return fmt.Errorf("%s is no longer open (%s)", it.ID, it.Status)
 		}
 		it.Task = task
 		if landed {
-			it.Status, it.Note = Closed, "fixed by task "+task
+			it.Status, it.Note = Closed, fixedBy+task
 		}
 		return nil
 	})
+}
+
+const fixedBy = "fixed by task "
+
+func (m *Module) isLanded(task string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.landed[task]
 }
 
 // Passed records that the person handed an item to a lead's chat.
@@ -281,6 +323,8 @@ func (m *Module) Digest(mine func(project string) bool) string {
 		fix := ""
 		if it.Task != "" {
 			fix = " [fix filed: task " + it.Task + ", not landed yet]"
+		} else if it.Note != "" {
+			fix = " [" + it.Note + "]"
 		}
 		fmt.Fprintf(&b, "- %s %s %s %s (%s)%s%s: %s\n", it.ID, it.At.Format("01-02 15:04"), where, it.Role, it.Run, about, fix, core.Clip(it.Text, 600))
 	}
