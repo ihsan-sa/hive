@@ -995,3 +995,40 @@ func TestNewHeadFreesItsOldGateAtOnce(t *testing.T) {
 		t.Fatalf("dropped %v, cancelled %d, log %q: want the old head's run ended and said", same.dropped, cancelled, task.Log[len(task.Log)-1].Text)
 	}
 }
+
+// A task that has merged, finished or been stopped ends its gate's run even
+// on its own head: no verdict on it lands any more.
+func TestEndedTaskFreesItsGateAtOnce(t *testing.T) {
+	for _, stage := range []string{StageMerged, StageDone, StageStopped} {
+		m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+		cancelled := 0
+		run := &gateRun{key: p.Name + "@" + task.SHA + "@main", task: task.ID, head: task.SHA, main: "main", cancel: func() { cancelled++ }}
+		m.mu.Lock()
+		m.gating = map[string]*gateRun{run.key: run}
+		m.mu.Unlock()
+		task.Stage = stage
+		m.save(task, "ended")
+		if !run.dropped || cancelled != 1 {
+			t.Fatalf("%s: dropped %v, cancelled %d: want the run on its own head ended", stage, run.dropped, cancelled)
+		}
+	}
+}
+
+// save must be handed the live task: a step saving a copy taken before a
+// later save (which may carry a head the task has since left) doesn't end
+// the run on the head the task is on now.
+func TestStaleCopyKeepsTheLiveHeadsGate(t *testing.T) {
+	m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	old := *task // a step's copy, taken on the old head
+	task.SHA = "newhead"
+	m.save(task, "pushed newhead")
+	cancelled := 0
+	run := &gateRun{key: p.Name + "@newhead@main", task: task.ID, head: "newhead", main: "main", cancel: func() { cancelled++ }}
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{run.key: run}
+	m.mu.Unlock()
+	m.save(&old, "a slow step's note")
+	if run.dropped || cancelled != 0 {
+		t.Fatalf("a stale copy on the old head ended the gate's run on the live head")
+	}
+}

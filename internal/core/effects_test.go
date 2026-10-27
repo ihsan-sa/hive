@@ -935,20 +935,20 @@ func TestRequiredChecks(t *testing.T) {
 	}
 }
 
-// Two changes that each add to docs/log.md and docs/status.md merge into main
-// one after the other: the repository's own .gitattributes marks them
-// merge=union, so bringing the second branch up to date keeps both entries
-// instead of sending it back as a conflict. Without those lines the same merge
-// conflicts. docs/architecture.md is edited in place and isn't union, which
-// the .gitattributes check below holds.
+// Two changes that each add to docs/log.md merge into main one after the
+// other: the repository's own .gitattributes marks it merge=union, so bringing
+// the second branch up to date keeps both entries instead of sending it back
+// as a conflict. Without that line the same merge conflicts.
+// docs/architecture.md and docs/status.md are edited in place and aren't
+// union, which the .gitattributes check below holds.
 func TestAdditiveDocsMergeWithoutConflict(t *testing.T) {
 	attrs, err := os.ReadFile(filepath.Join("..", "..", ".gitattributes"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	docs := []string{"docs/log.md", "docs/status.md"}
-	if !strings.Contains(string(attrs), "docs/log.md merge=union") || !strings.Contains(string(attrs), "docs/status.md merge=union") || strings.Contains(string(attrs), "docs/architecture.md merge=union") {
-		t.Fatalf(".gitattributes should mark log.md and status.md union and leave architecture.md alone:\n%s", attrs)
+	docs := []string{"docs/log.md"}
+	if !strings.Contains(string(attrs), "docs/log.md merge=union") || strings.Contains(string(attrs), "docs/status.md merge=union") || strings.Contains(string(attrs), "docs/architecture.md merge=union") {
+		t.Fatalf(".gitattributes should mark log.md union and leave status.md and architecture.md alone:\n%s", attrs)
 	}
 	for _, union := range []bool{true, false} {
 		t.Run(fmt.Sprint("union=", union), func(t *testing.T) {
@@ -1446,17 +1446,38 @@ func TestTestedMerge(t *testing.T) {
 	if gh, gb := TestedMerge("##[group]Run actions/checkout@v4\nHEAD is now at 1234567 Merge " + h + " into " + b + "\n"); gh != h || gb != b {
 		t.Fatalf("got %q %q", gh, gb)
 	}
+	// As a real downloaded job log has it (run 40141753912, Windows): a
+	// byte-order mark, a timestamp on every line, CRLF endings.
+	real := "\uFEFF2026-10-24T23:12:18.1234567Z ##[group]Run actions/checkout@v4\r\n" +
+		"2026-10-24T23:12:19.5680109Z HEAD is now at c3650dd Merge a9ae9886b8972d54993c619d40dc8a4b4c9fa7d1 into 3b7c51c4d6c9d51c55bf4c3efbb20480f592375b\r\n"
+	if gh, gb := TestedMerge(real); gh != "a9ae9886b8972d54993c619d40dc8a4b4c9fa7d1" || gb != "3b7c51c4d6c9d51c55bf4c3efbb20480f592375b" {
+		t.Fatalf("real log: got %q %q", gh, gb)
+	}
 	if gh, gb := TestedMerge("HEAD is now at 1234567 a push\n"); gh != "" || gb != "" {
 		t.Fatalf("got %q %q", gh, gb)
 	}
 }
 
-// A branch that merged main after its checkpoint landed (#880) is brought up
-// to date, not sent back as conflicting: from the checkpoint, both sides would
-// carry main's later change to a line the branch then changed again.
-func TestUpdateBranchAfterMergingMain(t *testing.T) {
+// updateFixture is a project with one worker's checkout on it, for
+// UpdateBranch: commit takes what the worker committed out, land squashes a
+// commit onto main as a checkpoint or another change, and mergeMain merges
+// main into the worker's checkout as it does from main.bundle.
+type updateFixture struct {
+	t     *testing.T
+	c     *Core
+	f     *Local
+	p     Project
+	dir   string
+	run   Run
+	start string
+	n     int
+}
+
+func newUpdateFixture(t *testing.T, files map[string]string) *updateFixture {
 	c, f := testHive(t)
-	seedRepo(t, f, "me/upd", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n", "main.go": "package main\n\nvar x = 1\n"})
+	seed := map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"}
+	maps.Copy(seed, files)
+	seedRepo(t, f, "me/upd", seed)
 	p, err := c.Projects.Add(Project{Name: "upd", Repo: "me/upd"})
 	if err != nil {
 		t.Fatal(err)
@@ -1470,58 +1491,174 @@ func TestUpdateBranchAfterMergingMain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	commit := func(file, body string) string {
-		os.WriteFile(filepath.Join(dir, file), []byte(body), 0o644)
-		mustGit(t, dir, "add", "-A")
-		mustGit(t, dir, "commit", "-q", "-m", file)
-		sha, err := c.Effects.Extract(p, r, start)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return sha
-	}
-	land := func(name, sha string) string {
-		if err := c.Effects.Push(p, name, sha); err != nil {
-			t.Fatal(err)
-		}
-		pr, err := f.CreatePR(p.Repo, name, "main", name, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.MergePR(p.Repo, pr.Number, sha, name); err != nil {
-			t.Fatal(err)
-		}
-		main, _ := c.Effects.Sync(p)
-		return main
-	}
-	checkpoint := commit("a.go", "package main\n")
-	main := land("hive/w1", checkpoint)
-	// Another change lands on main: x becomes 2.
-	other, err := c.Effects.NewCheckout(p, "w2", main)
+	return &updateFixture{t: t, c: c, f: f, p: p, dir: dir, run: r, start: start}
+}
+
+// commit writes file in the worker's checkout, commits everything (a merge
+// in progress too) and takes it out.
+func (u *updateFixture) commit(file, body string) string {
+	u.t.Helper()
+	os.WriteFile(filepath.Join(u.dir, file), []byte(body), 0o644)
+	mustGit(u.t, u.dir, "add", "-A")
+	mustGit(u.t, u.dir, "commit", "-q", "--no-edit", "-m", file)
+	sha, err := u.c.Effects.Extract(u.p, u.run, u.start)
 	if err != nil {
-		t.Fatal(err)
+		u.t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(other, "main.go"), []byte("package main\n\nvar x = 2\n"), 0o644)
-	mustGit(t, other, "commit", "-q", "-am", "x=2")
-	r2, _ := c.Runs.Start(RunSpec{ID: "w2", Role: "worker", Project: p.Name, Checkout: other, Harness: "fake"})
-	o, err := c.Effects.Extract(p, r2, main)
+	return sha
+}
+
+// land squashes sha onto main and returns main's new head.
+func (u *updateFixture) land(sha string) string {
+	u.t.Helper()
+	u.n++
+	name := fmt.Sprintf("hive/land%d", u.n)
+	if err := u.c.Effects.Push(u.p, name, sha); err != nil {
+		u.t.Fatal(err)
+	}
+	pr, err := u.f.CreatePR(u.p.Repo, name, "main", name, "")
 	if err != nil {
-		t.Fatal(err)
+		u.t.Fatal(err)
 	}
-	main = land("hive/w2", o)
-	// The worker merges main, then changes x again on top of it.
-	bundle := filepath.Join(t.TempDir(), "main.bundle")
-	if _, err := c.Effects.MainBundle(p, bundle); err != nil {
-		t.Fatal(err)
+	if _, err := u.f.MergePR(u.p.Repo, pr.Number, sha, name); err != nil {
+		u.t.Fatal(err)
 	}
-	mustGit(t, dir, "fetch", "-q", bundle, "main")
-	mustGit(t, dir, "merge", "-q", "--no-edit", "FETCH_HEAD")
-	head := commit("main.go", "package main\n\nvar x = 3\n")
-	next, err := c.Effects.UpdateBranch(p, head, main, checkpoint)
+	main, _ := u.c.Effects.Sync(u.p)
+	return main
+}
+
+// other lands another worker's change to file on main.
+func (u *updateFixture) other(main, file, body string) string {
+	u.t.Helper()
+	u.n++
+	id := fmt.Sprintf("w%d", u.n+1)
+	dir, err := u.c.Effects.NewCheckout(u.p, id, main)
+	if err != nil {
+		u.t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, file), []byte(body), 0o644)
+	mustGit(u.t, dir, "commit", "-q", "-am", file)
+	r, _ := u.c.Runs.Start(RunSpec{ID: id, Role: "worker", Project: u.p.Name, Checkout: dir, Harness: "fake"})
+	o, err := u.c.Effects.Extract(u.p, r, main)
+	if err != nil {
+		u.t.Fatal(err)
+	}
+	return u.land(o)
+}
+
+// mergeMain merges main into the worker's checkout, reporting whether git
+// stopped on a conflict for the worker to resolve and commit.
+func (u *updateFixture) mergeMain() (conflicted bool) {
+	u.t.Helper()
+	bundle := filepath.Join(u.t.TempDir(), "main.bundle")
+	if _, err := u.c.Effects.MainBundle(u.p, bundle); err != nil {
+		u.t.Fatal(err)
+	}
+	mustGit(u.t, u.dir, "fetch", "-q", bundle, "main")
+	_, err := Git(u.dir, "merge", "-q", "--no-edit", "FETCH_HEAD")
+	return err != nil
+}
+
+func (u *updateFixture) mainFile(sha, file string) string {
+	u.t.Helper()
+	return strings.TrimSpace(mustGit(u.t, u.c.WS.Project(u.p.Name), "show", sha+":"+file))
+}
+
+// A branch that merged main after its checkpoint landed (#880) is brought up
+// to date, not sent back as conflicting: from the checkpoint, both sides would
+// carry main's later change to a line the branch then changed again.
+func TestUpdateBranchAfterMergingMain(t *testing.T) {
+	u := newUpdateFixture(t, map[string]string{"main.go": "package main\n\nvar x = 1\n"})
+	checkpoint := u.commit("a.go", "package main\n")
+	main := u.land(checkpoint)
+	main = u.other(main, "main.go", "package main\n\nvar x = 2\n")
+	u.mergeMain()
+	head := u.commit("main.go", "package main\n\nvar x = 3\n")
+	next, err := u.c.Effects.UpdateBranch(u.p, head, main, checkpoint)
 	if err != nil {
 		t.Fatalf("a branch holding main should update from its checkpoint: %v", err)
 	}
-	if got := mustGit(t, c.WS.Project(p.Name), "show", next+":main.go"); !strings.Contains(got, "x = 3") {
+	if got := u.mainFile(next, "main.go"); !strings.Contains(got, "x = 3") {
 		t.Fatalf("the update should keep the branch's edit:\n%s", got)
+	}
+}
+
+// A banked branch that never merged main takes the checkpoint's merge-base:
+// only what came after the checkpoint is laid onto main. A plain merge, from
+// the branch's start, would see the checkpoint's line changed on both sides
+// (squashed on main, then again on the branch) and conflict.
+func TestUpdateBranchFromCheckpoint(t *testing.T) {
+	u := newUpdateFixture(t, map[string]string{"main.go": "package main\n\nvar x = 1\n", "b.go": "package main\n"})
+	checkpoint := u.commit("main.go", "package main\n\nvar x = 5\n")
+	main := u.land(checkpoint)
+	main = u.other(main, "b.go", "package main\n\nvar b = 1\n")
+	head := u.commit("main.go", "package main\n\nvar x = 6\n")
+	next, err := u.c.Effects.UpdateBranch(u.p, head, main, checkpoint)
+	if err != nil {
+		t.Fatalf("a branch past its checkpoint should update from it: %v", err)
+	}
+	if got := u.mainFile(next, "main.go"); !strings.Contains(got, "x = 6") {
+		t.Fatalf("the update should keep the branch's edit after its checkpoint:\n%s", got)
+	}
+	if got := u.mainFile(next, "b.go"); !strings.Contains(got, "b = 1") {
+		t.Fatalf("the update should carry main's other change:\n%s", got)
+	}
+	// Pin that the plain merge would not have done: without the checkpoint
+	// the same branch conflicts.
+	if _, err := u.c.Effects.UpdateBranch(u.p, head, main, ""); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a plain merge of the same branch should conflict, got %v", err)
+	}
+}
+
+// The limit of #971: a branch that merged a main from after its checkpoint
+// but before the checkpoint's squash landed. It updates plainly, from that
+// main. Editing main's lines again is clean; editing the checkpoint's own
+// lines again conflicts: from that ancestor both sides changed them, the
+// squash on main and the edit on the branch. Merging main once more,
+// resolving it in the checkout as git asks, clears it.
+func TestUpdateBranchMergedMainBeforeCheckpointLanded(t *testing.T) {
+	pad := strings.Repeat("// -\n", 6)
+	file := func(x, y int) string {
+		return fmt.Sprintf("package main\n\nvar x = %d\n%svar y = %d", x, pad, y)
+	}
+	u := newUpdateFixture(t, map[string]string{"main.go": file(1, 1)})
+	checkpoint := u.commit("main.go", file(5, 1))
+	// Main moves on before the checkpoint lands, and the worker merges it.
+	u.other(u.start, "main.go", file(1, 2))
+	if u.mergeMain() {
+		t.Fatal("merging main's other line should be clean")
+	}
+	main := u.land(checkpoint)
+	if got := u.mainFile(main, "main.go"); got != file(5, 2) {
+		t.Fatalf("main should hold both changes:\n%s", got)
+	}
+
+	// Editing main's line again is clean.
+	head := u.commit("main.go", file(5, 3))
+	next, err := u.c.Effects.UpdateBranch(u.p, head, main, checkpoint)
+	if err != nil {
+		t.Fatalf("an edit of main's line should update: %v", err)
+	}
+	if got := u.mainFile(next, "main.go"); got != file(5, 3) {
+		t.Fatalf("the update should keep the branch's edit:\n%s", got)
+	}
+
+	// Editing the checkpoint's line again conflicts.
+	head = u.commit("main.go", file(6, 3))
+	if _, err := u.c.Effects.UpdateBranch(u.p, head, main, checkpoint); !errors.Is(err, ErrConflict) {
+		t.Fatalf("an edit of the checkpoint's line should be sent back as conflicting, got %v", err)
+	}
+
+	// The worker merges main again and resolves it; then it updates.
+	if !u.mergeMain() {
+		t.Fatal("merging main should stop on the checkpoint's line")
+	}
+	head = u.commit("main.go", file(6, 3))
+	next, err = u.c.Effects.UpdateBranch(u.p, head, main, checkpoint)
+	if err != nil {
+		t.Fatalf("after merging main again the branch should update: %v", err)
+	}
+	if got := u.mainFile(next, "main.go"); got != file(6, 3) {
+		t.Fatalf("the update should keep the resolution:\n%s", got)
 	}
 }
