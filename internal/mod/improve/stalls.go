@@ -290,7 +290,7 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 	m.C.J.MustAppend("stall.saved", *s)
 	text := m.alertStall(*s)
 	if s.Told {
-		m.Chat.Notify(chat, thread, "Stuck: "+text+retryHint(s.Key))
+		m.Chat.Notify(chat, thread, "Stuck: "+text+retryHint(s.Key, s.Stage))
 	}
 }
 
@@ -302,8 +302,8 @@ func (m *Module) recheck(s *Stall, refused *error) bool {
 	if !ok || s.Rechecked {
 		return false
 	}
-	if t, ok := m.Work.Get(id); !ok || t.Stage != s.Stage || t.Terminal() || t.Stage == work.StageWorking {
-		return false // moved on since the watch began, or a worker's own, which only a run restart helps
+	if t, ok := m.Work.Get(id); !ok || t.Stage != s.Stage || !retries(t.Stage) {
+		return false // moved on since the watch began, or a stage recheck refuses (a worker's own, merged)
 	}
 	// Its stall is on hand before the task leaves the stage, so the spell
 	// the watcher acted on stays out of the stage's history (actedOn).
@@ -320,9 +320,28 @@ func (m *Module) recheck(s *Stall, refused *error) bool {
 	return true
 }
 
-// retryHint names, for the lead, the op that takes a stuck task back to
-// landing from its branch's head; a stuck run has none.
-func retryHint(key string) string {
+// retries says whether the lead's recheck takes a task in stage back to
+// landing from its branch's head: one on its way to the merge, blocked or
+// stopped. Recheck refuses the rest.
+func retries(stage string) bool {
+	switch stage {
+	case work.StageLanding, work.StageTesting, work.StageReviewing, work.StageMerging, work.StageBlocked, work.StageStopped:
+		return true
+	}
+	return false
+}
+
+// retryHint names, for the lead, the op that takes a stuck task in stage back
+// to landing from its branch's head, where there is one; a stuck run has
+// none. A merged task is on main already: recheck and landed refuse it, and
+// only the Hive's own next step takes it to done.
+func retryHint(key, stage string) string {
+	if stage == work.StageMerged {
+		return "; it is on main already, so recheck and landed refuse it: only the Hive's own next step takes it to done, and one held there is the Hive's fault to file"
+	}
+	if !retries(stage) {
+		return ""
+	}
 	if id, ok := strings.CutPrefix(key, "task:"); ok {
 		return "; `hive agent recheck --task " + id + "` retries it from its branch's head"
 	}

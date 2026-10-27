@@ -173,13 +173,37 @@ func TestHandedOffWaitStaysOutOfHistory(t *testing.T) {
 
 // The lead told a task is stuck is told the op that retries it.
 func TestRetryHint(t *testing.T) {
-	if h := retryHint("task:abc"); !strings.Contains(h, "hive agent recheck --task abc") {
+	if h := retryHint("task:abc", work.StageTesting); !strings.Contains(h, "hive agent recheck --task abc") {
 		t.Fatalf("task hint: %q", h)
 	}
-	if h := retryHint("run:w1"); h != "" {
+	if h := retryHint("run:w1", "worker"); h != "" {
 		t.Fatalf("a run has no recheck: %q", h)
 	}
-	if h := retryHint("checks@2125f74e"); !strings.Contains(h, "recheck --task <id>") {
+	if h := retryHint("wait:p:testing:checks", work.StageTesting); !strings.Contains(h, "recheck --task <id>") {
 		t.Fatalf("shared wait hint: %q", h)
+	}
+	// Recheck refuses a merged task, so the hint doesn't offer it.
+	if h := retryHint("task:abc", work.StageMerged); strings.Contains(h, "hive agent recheck") || !strings.Contains(h, "on main already") {
+		t.Fatalf("merged hint: %q", h)
+	}
+	if h := retryHint("task:abc", work.StageNew); h != "" {
+		t.Fatalf("a new task has no recheck: %q", h)
+	}
+}
+
+// A merge's step hands its task to be measured and returns at once, however
+// full the queue is, so the task goes on to done on the next tick rather than
+// sitting in merged while measures back up.
+func TestEnqueueDoesNotHoldTheMerge(t *testing.T) {
+	m := &Module{queue: make(chan work.Task)} // nobody reads it: as full as it gets
+	done := make(chan struct{})
+	go func() { m.enqueue(work.Task{ID: "t1"}); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("enqueue blocked on a full queue")
+	}
+	if got := <-m.queue; got.ID != "t1" {
+		t.Fatalf("queued %q, want t1", got.ID)
 	}
 }
