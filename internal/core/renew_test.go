@@ -518,7 +518,7 @@ func TestRenewParkIsBoundedAndReplaysAsLive(t *testing.T) {
 	j, _ := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
 	defer j.Close()
 	rs := NewRuns(k.tk.ws, j, nil, parkedTokens{k.tk}, func() []string { return nil })
-	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false); err != nil || l.Key() != "claude" {
+	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err != nil || l.Key() != "claude" {
 		t.Fatalf("the parked login is passed over for the other: %v %v", l.Key(), err)
 	}
 }

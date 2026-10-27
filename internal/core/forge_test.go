@@ -160,3 +160,49 @@ func TestGitHubEnsureRepoVisibility(t *testing.T) {
 		t.Fatalf("calls: %q", calls)
 	}
 }
+
+// The squash body credits nobody but the Hive: no commit's Co-authored-by
+// trailer, in any case, reaches main, and the rest of each message does.
+func TestSquashBodyDropsCoAuthors(t *testing.T) {
+	got := SquashBody([]string{
+		"* Fix the thing\n\nWhy it broke.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+		"* Follow up\n\nco-authored-by: Hive worker <hive@localhost>\n",
+		"Co-authored-by: Someone <s@example.com>",
+	})
+	if want := "* Fix the thing\n\nWhy it broke.\n\n* Follow up"; got != want {
+		t.Fatalf("squash body %q, want %q", got, want)
+	}
+}
+
+// GitHub's merge is given its body, so its default (which turns commit
+// authors and trailers into co-authors) never reaches main.
+func TestGitHubMergeBodyHasNoCoAuthor(t *testing.T) {
+	merged := false
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		a := strings.Join(args, " ")
+		switch {
+		case strings.Contains(a, "--json commits"):
+			return `{"commits":[{"messageHeadline":"Fix","messageBody":"Why.\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>"}]}`, "", nil
+		case strings.HasPrefix(a, "pr merge"):
+			merged = true
+		case strings.HasPrefix(a, "pr view"):
+			if merged {
+				return `{"number":3,"state":"MERGED","headRefOid":"abc","mergeCommit":{"oid":"def"}}`, "", nil
+			}
+			return `{"number":3,"state":"OPEN","headRefOid":"abc"}`, "", nil
+		}
+		return "", "", nil
+	})
+	if m, err := (GitHub{}).MergePR("o/r", 3, "abc", "Fix (#3)"); err != nil || m != "def" {
+		t.Fatalf("merge %q %v", m, err)
+	}
+	for _, c := range *calls {
+		if c[0] == "pr" && c[1] == "merge" {
+			if i := slices.Index(c, "--body"); i < 0 || c[i+1] != "Why." {
+				t.Fatalf("merge args %q", c)
+			}
+			return
+		}
+	}
+	t.Fatal("no merge")
+}

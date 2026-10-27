@@ -404,10 +404,10 @@ func judgeUnit(cand, ctrl *Child, errs map[*Child]error, mod string) (UnitReport
 
 // unsafeName is what failureNames keeps out of a package or test name: only the
 // characters Go allows in them, so the candidate's output carries no prose
-// into a lesson.
+// into the verdict a worker reads.
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9_./#()\-]`)
 
-// failureNames is a short list of failures, safe for a lesson: package (the
+// failureNames is a short list of failures, safe for a verdict: package (the
 // module's prefix cut) and test, at most five.
 func failureNames(fs []TestFailure, mod string) string {
 	var names []string
