@@ -244,16 +244,13 @@ func (m *Module) checkSlots() int {
 	return cmp.Or(m.checks.get(), m.C.WS.LoadConfig().MaxChecks, core.DefaultMaxChecks())
 }
 
-// Check ranks: main's own measurement goes first, then a check of a task
-// queued briefs wait on, then a fix's, then the rest in the order they
-// asked. The worker on #601 finished with ~20 briefs waiting on it to land,
-// and its check sat ~30 minutes behind 31 others (issue #838); main's score
-// and size of 282991d7 waited 2h16m behind PR checks, and keep/revert, the
-// release and the next baseline with them (issue #1078).
+// Check ranks: main's own measurement goes first, then a fix's, then the
+// rest in the order they asked. Main's score and size of 282991d7 waited
+// 2h16m behind PR checks, and keep/revert, the release and the next baseline
+// with them (issue #1078).
 const (
-	rankFix   = 1
-	rankFrees = 2
-	rankMain  = 3
+	rankFix  = 1
+	rankMain = 2
 )
 
 // MeasuringMain marks sha as main's commit being measured on project until
@@ -282,8 +279,6 @@ func RankWhy(r int) string {
 	switch {
 	case r >= rankMain:
 		return "measures main"
-	case r == rankFrees:
-		return "frees queued briefs"
 	case r == rankFix:
 		return "a fix"
 	}
@@ -298,23 +293,13 @@ func (m *Module) checkRank(project, sha, _ string) int {
 	if m.measuring[project+"@"+sha] > 0 {
 		return rankMain
 	}
-	var mine *Task
 	for _, t := range m.tasks {
 		if t.Project == project && t.SHA == sha && !t.Terminal() {
-			mine = t
-			break
+			if t.Fix() {
+				return rankFix
+			}
+			return 0
 		}
-	}
-	if mine == nil {
-		return 0
-	}
-	for _, t := range m.tasks {
-		if t.Queued() && holder(t.Reason) == mine.ID {
-			return rankFrees
-		}
-	}
-	if mine.Fix() {
-		return rankFix
 	}
 	return 0
 }
