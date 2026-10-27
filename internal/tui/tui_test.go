@@ -1460,6 +1460,11 @@ func TestSentMessageShowsOnce(t *testing.T) {
 	if n := len(m.msgs["lead"]); n != len(old)+1 {
 		t.Fatalf("a failed read wiped the chat: %d messages", n)
 	}
+	m.Update(chatMsg{"lead", append(append([]chat.Message(nil), old...), sent), nil})
+	m.Update(chatMsg{"lead", old[:1], nil}) // the chat was reset after a read held the sent message
+	if n := len(m.msgs["lead"]); n != 1 {
+		t.Fatalf("a reset chat kept stale messages: %d messages, want 1", n)
+	}
 }
 
 // A reply the thread already has shows once, not again as sending.
@@ -1487,5 +1492,25 @@ func TestAnotherThreadOpensAtItsNewest(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.thread != "1" || m.thScroll != 0 {
 		t.Fatalf("thread %q scroll %d", m.thread, m.thScroll)
+	}
+}
+
+// End and Home from a terminal in application-cursor mode (ESC O F, ESC O H,
+// which bubbletea reads as alt+O then F or H) work like plain End and Home.
+func TestApplicationCursorEndAndHome(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	ss3 := func(r rune) {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}, Alt: true})
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	ss3('H')
+	if strings.Contains(m.View(), "pull/3") {
+		t.Fatal("ESC O H didn't go to the oldest")
+	}
+	ss3('F')
+	if v := m.View(); !strings.Contains(v, "pull/3") || m.composing {
+		t.Fatalf("ESC O F didn't go to the newest, or typed into a box:\n%s", v)
 	}
 }
