@@ -98,7 +98,10 @@ type Task struct {
 	// MergedOK is "head+main" for the last head whose tests passed merged
 	// with that main (mergedTests), so it merges as it is without testing again.
 	MergedOK string `json:"merged_ok,omitempty"`
-	Reviews  int    `json:"reviews"`
+	// MergedTest is the merge of the head with main whose tests are queued
+	// or running (mergedTests), while the task waits in merging for them.
+	MergedTest string `json:"merged_test,omitempty"`
+	Reviews    int    `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
 	// own diff, keyed by "diffID#seat". When the diff changes, the old
 	// tries are left behind and the seat starts fresh on the new diff.
@@ -343,7 +346,10 @@ type Module struct {
 	// mainTips holds each project's main for one admit pass (queue.go).
 	mainTips map[string]string
 	filing   sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
-	steps    sync.WaitGroup // the steps Tick started that are still going
+	steps    sync.WaitGroup // the steps Tick started, and the checks they queued, still going
+	// mergeRuns holds the merged-with-main tests running behind a step, by
+	// project@head+main, until a step takes the result (testMerged).
+	mergeRuns map[string]*mergeRun
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -2597,18 +2603,28 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	if t.MergedOK == key {
 		return false, nil
 	}
-	merged, err := m.C.Effects.UpdateBranch(p, t.SHA, main, "")
-	if errors.Is(err, core.ErrConflict) {
-		return m.catchUp(t, p, main, "main moved and the PR's merge with it conflicts")
-	}
-	if err != nil {
-		return true, err
-	}
-	if _, err := m.C.Sandbox(); err != nil {
-		return true, err
-	}
 	cfg := m.C.Effects.Config(p, main)
-	c := m.C.Effects.RunCheck(p, merged, "test", cfg.Test)
+	r, queued := m.mergeRun(p.Name + "@" + key)
+	if !queued {
+		merged, err := m.C.Effects.UpdateBranch(p, t.SHA, main, "")
+		if errors.Is(err, core.ErrConflict) {
+			return m.catchUp(t, p, main, "main moved and the PR's merge with it conflicts")
+		}
+		if err != nil {
+			return true, err
+		}
+		if _, err := m.C.Sandbox(); err != nil {
+			return true, err
+		}
+		r = m.testMerged(t, p, p.Name+"@"+key, merged, cfg.Test)
+	}
+	if !r.done {
+		t.MergedTest = r.sha
+		m.hold(t, p, "testing its head merged with main at "+core.Short(main)+" (as "+core.Short(r.sha)+") before it merges")
+		return true, nil
+	}
+	t.MergedTest = ""
+	c, merged := r.c, r.sha
 	if c.CantRun != "" {
 		return true, m.cantRun(t, p, c)
 	}
@@ -2627,6 +2643,56 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	t.MergedOK = key
 	m.save(t, "its tests pass merged with main at "+core.Short(main)+" (as "+core.Short(merged)+"), so it merges as it is")
 	return false, nil
+}
+
+// mergeRun is a merged-with-main test running behind a step: sha is the
+// merge it tests, c its check once done.
+type mergeRun struct {
+	sha  string
+	done bool
+	c    core.Check
+}
+
+// mergeRun returns a copy of the merged test queued under key, if any, and
+// forgets one that is done: its step takes the result. A can't-run is no
+// verdict, so the step after makes a new merge and runs it again.
+func (m *Module) mergeRun(key string) (mergeRun, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.mergeRuns[key]
+	if !ok {
+		return mergeRun{}, false
+	}
+	if r.done {
+		delete(m.mergeRuns, key)
+	}
+	return *r, true
+}
+
+// testMerged queues the test of sha, t's head merged with main, behind the
+// step. The step never waits for a check slot itself: behind a backlog of
+// checks, 73 merge steps sat in Slots.Acquire for up to an hour, each holding
+// its task, so merges fell to a few an hour (issue #1699). The task waits in
+// merging and is looked at on the next tick once the check ends. Merging
+// again makes a new commit, so the run is keyed by head and main.
+func (m *Module) testMerged(t *Task, p core.Project, key, sha, command string) mergeRun {
+	r := &mergeRun{sha: sha}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mergeRuns == nil {
+		m.mergeRuns = map[string]*mergeRun{}
+	}
+	m.mergeRuns[key] = r
+	m.steps.Add(1)
+	go func(id string) {
+		defer m.steps.Done()
+		c := m.C.Effects.RunCheck(p, sha, "test", command)
+		m.mu.Lock()
+		r.c, r.done = c, true
+		delete(m.later, id)
+		m.mu.Unlock()
+	}(t.ID)
+	return *r
 }
 
 // hold keeps t where it is for why, saying so on the PR once per HoldKey: the

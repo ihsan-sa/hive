@@ -30,6 +30,13 @@ func mergeOnce(t *testing.T, m *Module, task *Task, p core.Project) {
 	if err := m.merge(task, p); err != nil {
 		t.Fatal(err)
 	}
+	if task.MergedTest != "" { // its merge with main is tested behind the step
+		m.Wait()
+		m.later = map[string]time.Time{}
+		if err := m.merge(task, p); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func prState(t *testing.T, f *core.Local, n int) string {
@@ -370,6 +377,41 @@ func TestMergedWithMainGreenMergesAsItIs(t *testing.T) {
 	pushMain(t, f, map[string]string{"other.txt": "z"})
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerged || task.SHA != head || task.MergedOK == "" {
+		t.Fatalf("stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
+	}
+}
+
+// The merge step never waits for a check slot: with every slot taken, the
+// test of the PR merged with main is queued, the step returns and the task
+// waits in merging; once a slot frees and the test passes, it merges.
+func TestMergedTestsNeverBlockTheStep(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	head := task.SHA
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	m.C.Effects.Slots.Resize(func() int { return 1 })
+	release := m.C.Effects.Slots.Acquire(p.Name, "other", "test")
+	done := make(chan error, 1)
+	go func() { done <- m.merge(task, p) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Minute):
+		release()
+		t.Fatal("the merge step waited for a check slot")
+	}
+	if task.Stage != StageMerging || task.MergedTest == "" || !strings.HasPrefix(task.Reason, "testing its head merged with main") {
+		t.Fatalf("stage %q, merged test %q, reason %q", task.Stage, task.MergedTest, task.Reason)
+	}
+	if err := m.merge(task, p); err != nil || task.Stage != StageMerging { // still queued: a second step doesn't queue it twice
+		t.Fatalf("stage %q, reason %q, err %v", task.Stage, task.Reason, err)
+	}
+	release()
+	m.Wait()
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.SHA != head || task.MergedOK == "" || task.MergedTest != "" {
 		t.Fatalf("stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
 	}
 }
