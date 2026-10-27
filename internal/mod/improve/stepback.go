@@ -1,6 +1,8 @@
 package improve
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,9 +51,11 @@ type StepBack struct {
 	Budget  float64   `json:"budget,omitempty"` // what the Hive spent on the project since the last step-back
 	Score   *float64  `json:"score,omitempty"`
 	NoScore bool      `json:"no_score,omitempty"` // judged without a score to beat: no experiment runs
+	Unspent bool      `json:"unspent,omitempty"`  // judged with nothing spent to hold an experiment to: no experiment runs
+	Goals   string    `json:"goals,omitempty"`    // the digest of the goals it judged
 	Status  string    `json:"status"`             // thinking | experimenting | scoring | won | lost | none | judged | failed
 	Note    string    `json:"note,omitempty"`
-	Report  string    `json:"report,omitempty"` // its judgement`
+	Report  string    `json:"report,omitempty"` // its judgement
 	Fault   string    `json:"fault,omitempty"`  // the task or person's ask it filed
 	Started time.Time `json:"started"`
 	Ended   time.Time `json:"ended,omitempty"`
@@ -90,17 +94,44 @@ func (m *Module) start(p core.Project) (Measurement, bool) {
 }
 
 // RotateStepBacks starts a step-back on each project where the Hive merged
-// something since its last one (the improve.stepback schedule).
+// something since its last one, or whose goals no step-back has judged yet
+// (the improve.stepback schedule): judging the goals needs nothing spent.
 func (m *Module) RotateStepBacks() string {
 	var started []string
 	for _, p := range m.C.Projects.List() {
 		last := m.lastStepBack(p.Name)
 		merged := slices.ContainsFunc(m.Scores(p.Name), func(x Measurement) bool { return x.Task != "" && !x.NoResult && x.At.After(last) })
-		if merged && m.StartStepBack(p, "it is the regular step-back") == nil {
+		why := "it is the regular step-back"
+		if !merged {
+			if _, digest, _, err := m.goals(p); err != nil || m.judged(p.Name, digest) {
+				continue
+			}
+			why = "its goals have not been judged as they stand"
+		}
+		if m.StartStepBack(p, why) == nil {
 			started = append(started, p.Name)
 		}
 	}
 	return "stepped back on: " + strings.Join(started, ", ")
+}
+
+// goals is main of p and the digest and text of its goals there (the
+// project's own, before it has a goals file).
+func (m *Module) goals(p core.Project) (main, digest, text string, err error) {
+	if main, err = m.C.Effects.Sync(p); err != nil {
+		return "", "", "", err
+	}
+	text = strings.TrimSpace(m.C.Effects.ReadFile(p, main, ".hive/goals.md"))
+	if text == "" {
+		text = strings.TrimSpace(p.Goals)
+	}
+	sum := sha256.Sum256([]byte(text))
+	return main, hex.EncodeToString(sum[:8]), text, nil
+}
+
+// judged says a step-back on project already judged goals with this digest.
+func (m *Module) judged(project, digest string) bool {
+	return slices.ContainsFunc(m.StepBacks(project), func(s StepBack) bool { return s.Goals == digest && s.Report != "" })
 }
 
 func (m *Module) lastStepBack(project string) time.Time {
@@ -159,15 +190,21 @@ func (m *Module) StartStepBack(p core.Project, why string) error {
 	}
 	st, scored := m.start(p)
 	s.NoScore = !scored
-	if s.Budget <= 0 {
-		s.Status, s.Note, s.Ended = "none", "the Hive has spent nothing on it since the last step-back, so there is nothing new to judge or spend", time.Now().UTC()
-		m.alert(p.Name, "the step-back on "+p.Name+" did not run: "+s.Note)
-		m.saveStepBack(s)
-		return nil
-	}
-	main, err := m.C.Effects.Sync(p)
+	main, digest, goals, err := m.goals(p)
 	if err != nil {
 		return m.fail(s, "could not fetch the project: "+err.Error())
+	}
+	s.Goals = digest
+	if s.Budget <= 0 {
+		// Nothing spent leaves nothing new to measure or to hold an
+		// experiment to, but goals no step-back has judged still get judged.
+		if m.judged(p.Name, digest) {
+			s.Status, s.Note, s.Ended = "none", "the Hive has spent nothing on it since the last step-back, and its goals were judged as they stand, so there is nothing new to judge or spend", time.Now().UTC()
+			m.alert(p.Name, "the step-back on "+p.Name+" did not run: "+s.Note)
+			m.saveStepBack(s)
+			return nil
+		}
+		s.Unspent = true
 	}
 	s.From = main
 	if scored {
@@ -185,8 +222,11 @@ The records are in $HIVE_RUN/digest.md, the project at main is your working dire
 
 First, judge, and needing no number to do it: read the goals critically. Are they the right goals, and specific enough to tell done from not done? Does the work the Hive did since the last step-back (what merged, what is queued, what it spent) serve them, or has it drifted into what is easy to file? Is the design the simplest that would do, or has it grown parts that hold the loop back? Say plainly what you would stop, start and change. Write that judgement to $HIVE_BOX/judgement.md, short and concrete: the Hive keeps it on the record and posts its opening in the project's chat for the person. Each change worth making goes in as a brief (hive agent brief), one per change, citing what you saw; a goal you would reconsider goes to the person (hive agent message --to person), since .hive/goals.md is theirs to change.
 
-`, p.Name, why, p.Goals)
-	if scored {
+`, p.Name, why, goals)
+	switch {
+	case s.Unspent:
+		brief += "The Hive has spent nothing on the project since the last step-back, so no experiment runs this time: the judgement is the whole pass.\n\n"
+	case scored:
 		cfg := m.C.Effects.Config(p, st.SHA)
 		h, model := m.Agents.Model("worker", p.Name)
 		better := "higher"
@@ -196,7 +236,7 @@ First, judge, and needing no number to do it: read the goals critically. Are the
 		brief += fmt.Sprintf(`Then ask what the simplest setup is that might beat it. Its score (%s is better) started at %g, and the best the Hive has kept is %g. If a setup is worth testing, write it to $HIVE_BOX/experiment.json as {"why": "...", "system": "...", "asks": ["..."], "model": "..."}. The Hive runs it once in a fresh copy of the project at its start, in a worker's sandbox: one %s session, "system" appended to the harness's own system prompt (empty for none), the "asks" sent in turn in that session, on "model" (empty for %s). Nothing else is added, and it can only report on its own copy. It may spend $%.2f, what the Hive has spent on this project since the last step-back. The copy is then scored with the project's score command, and if it beats %g the Hive files a fault against its own setup with both scores.
 
 `, better, *st.Score, s.Best, h, model, s.Budget, s.Best)
-	} else {
+	default:
 		brief += "The project has no kept score under its current score command, so no experiment runs this time: the judgement is the whole pass. If the missing number is itself what holds the project back, say so and brief what would give it one.\n\n"
 	}
 	brief += `If what holds the loop back is in its queue (off-loop work ahead of a fix, blocked work whose cause is fixed, a task that landed but sits in a stage), steer it yourself with queue, recheck, rerun-checks or landed, as the orientation says; don't route it through the lead.
@@ -265,8 +305,11 @@ func (m *Module) advance(s StepBack) {
 	case "thinking":
 		s.Report = m.judgement(s, r)
 		raw, err := core.SafeRead(filepath.Join(m.C.WS.RunBox(r.ID), "experiment.json"), 1<<20)
-		if s.NoScore {
+		if s.NoScore || s.Unspent {
 			s.Status, s.Note, s.Ended = "judged", "it judged the project; with no score to beat, no experiment runs", time.Now().UTC()
+			if s.Unspent {
+				s.Note = "it judged the project; with nothing spent since the last step-back, no experiment runs"
+			}
 			m.saveStepBack(s)
 			return
 		}
