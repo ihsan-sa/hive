@@ -63,8 +63,23 @@ type Module struct {
 	trials map[string]Trial // recorded, by task
 	order  map[string]int   // each recorded trial's place in the journal, by task
 	// demoted is each project's worker picks whose runs keep ending without
-	// a merge, by demoteKey, with why: Tick works it out from the tasks.
+	// a merge, by demoteKey, with why: Tick works it out from the tasks, only
+	// when a task or worker changed (stale) or a demotion's week ran out
+	// (until), since the work is a pass over every run and ended task.
 	demoted map[string]string
+	stale   bool
+	until   time.Time
+	// told is the demotions the journal last recorded as started
+	// (model.demoted) and not ended since (model.restored), by demoteKey.
+	told map[string]bool
+}
+
+// Demotion is a model.demoted or model.restored event: Pick stopped, or
+// went back to, being Project's first worker pick, and Why.
+type Demotion struct {
+	Project string `json:"project"`
+	Pick    string `json:"pick"`
+	Why     string `json:"why"`
 }
 
 // demoteAfter is the ended tasks in a row, each blocked, a pick's workers
@@ -125,9 +140,24 @@ func downOf(downs []core.Down, p core.Pick) (core.Down, bool) {
 
 // New registers the ops and the person's answer to a check seat's route.
 func New(c *core.Core, w *work.Module) *Module {
-	m := &Module{C: c, Work: w, trials: map[string]Trial{}, order: map[string]int{}, demoted: map[string]string{}, Probe: Probe}
+	m := &Module{C: c, Work: w, trials: map[string]Trial{}, order: map[string]int{}, demoted: map[string]string{}, told: map[string]bool{}, Probe: Probe}
 	apply := func(e core.Event) {
-		if e.Kind != "model.trial" {
+		switch e.Kind {
+		case "task.saved", "run.created", "run.turn_started": // what tickDemoted reads
+			m.mu.Lock()
+			m.stale = true
+			m.mu.Unlock()
+			return
+		case "model.demoted", "model.restored":
+			var d Demotion
+			if e.Decode(&d) == nil {
+				m.mu.Lock()
+				m.told[d.Project+"\x00"+d.Pick] = e.Kind == "model.demoted"
+				m.mu.Unlock()
+			}
+			return
+		case "model.trial":
+		default:
 			return
 		}
 		var t Trial
@@ -140,6 +170,7 @@ func New(c *core.Core, w *work.Module) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
+	m.stale = true
 	m.tickDemoted() // so a restart routes as before it, not only from the first tick
 	ops := c.Runs.Ops()
 	ops.Register(core.Op{Name: "route", Roles: []string{"lead"}, Help: `{"role": "lead|worker|reviewer|security|warden|tribunal|sweep|fallback", "models": "a,b,c" (in fallback order; empty clears it), "project": "(optional) only this project"} -> sets the models that role runs on in config.json; a check seat (reviewer, security, warden, tribunal) changes only once the person says yes`, Fn: m.opRoute})
@@ -397,8 +428,16 @@ func (m *Module) Tick() {
 // project: of the ended tasks (not trials) whose first worker started on a
 // pick, the latest demoteAfter or more ended blocked with no merge or done
 // after them, the latest within demoteFor. A task the person or the Hive
-// stopped doesn't count either way.
+// stopped doesn't count either way. Each demotion that starts or ends is
+// journalled, so the person sees it happen.
 func (m *Module) tickDemoted() {
+	m.mu.Lock()
+	due := m.stale || (!m.until.IsZero() && !time.Now().Before(m.until))
+	m.stale = false
+	m.mu.Unlock()
+	if !due {
+		return
+	}
 	first := map[string]core.Run{} // each task's first worker
 	for _, r := range m.C.Runs.List(func(r *core.Run) bool { return r.Role == "worker" && r.Task != "" }) {
 		if f, ok := first[r.Task]; !ok || r.Created.Before(f.Created) {
@@ -431,14 +470,46 @@ func (m *Module) tickDemoted() {
 		s.ids = append(s.ids, t.ID)
 	}
 	demoted := map[string]string{}
+	var until time.Time
 	for key, s := range streak {
-		if s.n >= demoteAfter && time.Since(s.last) < demoteFor {
+		if end := s.last.Add(demoteFor); s.n >= demoteAfter && time.Now().Before(end) {
 			demoted[key] = fmt.Sprintf("its last %d worker tasks here ended blocked without a merge (%s)", s.n, strings.Join(s.ids[max(0, len(s.ids)-3):], ", "))
+			if until.IsZero() || end.Before(until) {
+				until = end
+			}
 		}
 	}
 	m.mu.Lock()
-	m.demoted = demoted
+	m.demoted, m.until = demoted, until
+	var started, ended []string
+	for key := range demoted {
+		if !m.told[key] {
+			started = append(started, key)
+		}
+	}
+	for key, on := range m.told {
+		if _, still := demoted[key]; on && !still {
+			ended = append(ended, key)
+		}
+	}
 	m.mu.Unlock()
+	// Journalled outside the lock: the events come back through apply.
+	slices.Sort(started)
+	slices.Sort(ended)
+	for _, key := range started {
+		project, pick, _ := strings.Cut(key, "\x00")
+		m.C.J.MustAppend("model.demoted", Demotion{Project: project, Pick: pick, Why: demoted[key]})
+	}
+	for _, key := range ended {
+		project, pick, _ := strings.Cut(key, "\x00")
+		why := "a worker task on it here ended merged or done"
+		if s := streak[key]; s != nil && s.n >= demoteAfter {
+			why = fmt.Sprintf("its last blocked task here ended over %d days ago, so the person's order gets another try", int(demoteFor.Hours()/24))
+		} else if s != nil {
+			why = "its blocked tasks here were reopened or stopped"
+		}
+		m.C.J.MustAppend("model.restored", Demotion{Project: project, Pick: pick, Why: why})
+	}
 }
 
 // startPick is the pick a worker's first turn went on: its route's first,

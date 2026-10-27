@@ -345,4 +345,55 @@ func TestAModelThatKeepsEndingBlockedStopsBeingFirst(t *testing.T) {
 	if got := first("lab"); got != "open:qwen" {
 		t.Fatalf("a merge didn't put the model back in front: %s", got)
 	}
+	// The start and the end were each journalled once, though two modules
+	// watched them.
+	var told []string
+	a.C.J.Replay(func(e core.Event) {
+		var d models.Demotion
+		if (e.Kind == "model.demoted" || e.Kind == "model.restored") && e.Decode(&d) == nil {
+			told = append(told, e.Kind+" "+d.Project+" "+d.Pick+": "+d.Why)
+		}
+	})
+	if len(told) != 2 || !strings.HasPrefix(told[0], "model.demoted lab open:qwen: its last 2 worker tasks") ||
+		told[1] != "model.restored lab open:qwen: a worker task on it here ended merged or done" {
+		t.Fatalf("journalled %q", told)
+	}
+}
+
+// A demotion ends on its own a week after its latest blocked task, and the
+// journal says so.
+func TestADemotionRunsOut(t *testing.T) {
+	a, lead := hiveWithModels(t)
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "qwen,fake:opus"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2 {
+		tk, err := a.Work.File(work.Brief{Project: "lab", Title: fmt.Sprintf("task %d", i), From: lead.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.C.J.MustAppend("run.created", core.RunSpec{ID: "w-" + tk.ID, Role: "worker", Task: tk.ID, Project: "lab", Harness: "open", Model: "qwen"})
+		tk.Stage, tk.Updated = work.StageBlocked, time.Now().Add(-7*24*time.Hour+time.Duration(i+1)*time.Second)
+		a.C.J.MustAppend("task.saved", tk)
+	}
+	a.Models.Tick()
+	qwen := core.Pick{Harness: "open", Model: "qwen"}
+	if a.Models.Demoted("lab", qwen) == "" {
+		t.Fatal("not demoted")
+	}
+	time.Sleep(2500 * time.Millisecond) // no event comes: the week running out alone ends it
+	a.Models.Tick()
+	if why := a.Models.Demoted("lab", qwen); why != "" {
+		t.Fatalf("still demoted: %s", why)
+	}
+	var restored []models.Demotion
+	a.C.J.Replay(func(e core.Event) {
+		var d models.Demotion
+		if e.Kind == "model.restored" && e.Decode(&d) == nil {
+			restored = append(restored, d)
+		}
+	})
+	if len(restored) != 1 || !strings.Contains(restored[0].Why, "over 7 days ago") {
+		t.Fatalf("restored %+v", restored)
+	}
 }

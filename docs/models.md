@@ -221,7 +221,13 @@ ended blocked, the latest within a week, new workers there start on the rest
 of the route and it goes last, still a fallback. A merge or done on it puts
 it back in front, and a week after its latest such ending the person's order
 gets another try. `hive agent models` lists each one and the tasks behind it
-(`demoted`). The person's route in config.json is unchanged.
+(`demoted`), and the journal records each start (`model.demoted`) and end
+(`model.restored`, with why: a merge, a reopen, or the week running out).
+The tick works this out again only after a task or worker event, or when a
+demotion's week runs out, not on every tick. Blocks that are the
+environment's fault (a red main, a warden's no) still count, as a blocked
+task's reason is free text with no kind to filter on. The person's route in
+config.json is unchanged.
 
 ### A model that can't answer
 
