@@ -213,6 +213,7 @@ func (a *App) Run(ctx context.Context) {
 func (a *App) run(ctx context.Context, tick func()) {
 	wake := make(chan struct{}, 1)
 	go a.C.Runs.WatchRequests(ctx, 50*time.Millisecond, func() { nudge(wake) })
+	a.Work.Wake = func() { nudge(wake) }
 	loop(ctx, a.C.J, wake, tick)
 }
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1763,5 +1764,30 @@ func TestLeavingTheMergeLineWakesTheNext(t *testing.T) {
 	}
 	if !m.later[aside.ID].Equal(later) || !m.later[other.ID].Equal(later) {
 		t.Error("a task held for something else, or in another project, lost its wait")
+	}
+}
+
+// A test run behind a step asks the loop for a tick once its result is
+// recorded, not only when its journal event lands before that: the tick the
+// event wakes could find the task still waiting and leave it for the second.
+func TestATestRunWakesTheLoopOnceRecorded(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	var woke atomic.Int32
+	var recorded atomic.Bool
+	m.Wake = func() {
+		m.mu.Lock()
+		r := m.testRuns[task.ID]
+		recorded.Store(r != nil && r.done)
+		_, held := m.later[task.ID]
+		m.mu.Unlock()
+		if held {
+			recorded.Store(false)
+		}
+		woke.Add(1)
+	}
+	m.testHead(task, p, "true")
+	m.Wait()
+	if woke.Load() != 1 || !recorded.Load() {
+		t.Fatalf("woke %d times, result recorded and task free then: %v", woke.Load(), recorded.Load())
 	}
 }

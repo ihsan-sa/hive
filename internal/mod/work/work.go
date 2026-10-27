@@ -313,6 +313,12 @@ type Module struct {
 	// unset, such a change can't be judged and waits.
 	Gate func(ctx context.Context, j GateJob) core.GateResult
 
+	// Wake asks the daemon's loop for a tick soon (app.go); unset, nothing
+	// asks. A check run behind a step calls it once its result is recorded:
+	// the check's journal event wakes a tick, but that tick can come before
+	// the result is and leave the task for the second's tick.
+	Wake func()
+
 	mu    sync.Mutex
 	tasks map[string]*Task
 	// retesting is held while main's red tests run once more (mainTests).
@@ -2825,8 +2831,16 @@ func (m *Module) testMerged(t *Task, p core.Project, key, main, sha, command str
 		}
 		delete(m.later, id)
 		m.mu.Unlock()
+		m.wake()
 	}(t.ID)
 	return *r
+}
+
+// wake calls Wake, when it is set.
+func (m *Module) wake() {
+	if m.Wake != nil {
+		m.Wake()
+	}
 }
 
 // dropMergeRunLocked forgets the merged test of a task that left merging:

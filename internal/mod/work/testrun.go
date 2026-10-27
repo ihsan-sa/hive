@@ -73,6 +73,7 @@ func (m *Module) testHead(t *Task, p core.Project, command string) {
 		}
 		delete(m.later, id)
 		m.mu.Unlock()
+		m.wake()
 	}(t.ID, t.SHA)
 }
 
