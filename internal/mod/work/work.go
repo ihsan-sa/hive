@@ -78,7 +78,7 @@ type Task struct {
 	Order     int        `json:"order,omitempty"`     // its place in the queue the lead set; 0 goes after, as filed
 	Held      bool       `json:"held,omitempty"`      // an agent holds it in the queue
 	HeldBy    string     `json:"held_by,omitempty"`   // the run that holds it
-	Now       bool       `json:"now,omitempty"`       // the lead starts it first, past an overlap hold (queue now)
+	Now       bool       `json:"now,omitempty"`       // the lead put it first in line (queue now)
 	Recheck   bool       `json:"recheck,omitempty"`   // landed again on the same commit, so its test runs again
 	Retested  string     `json:"retested,omitempty"`  // the head whose red tests ran once more while main's passed
 	ByPerson  bool       `json:"by_person,omitempty"` // the person stopped it or left it open, so the lead can't bring it back
@@ -159,21 +159,16 @@ type Task struct {
 	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
 	// DraftRevived: it was brought back once after stopping on a draft merge
 	// (reviveDrafts), so stopping on one again leaves it for the lead.
-	DraftRevived bool `json:"draft_revived,omitempty"`
-	// FilesSince is when a queued brief began waiting, tick after tick, on
-	// other briefs' files (queue.go); FilesTold says the lead was told it
-	// has waited long, once per wait.
-	FilesSince time.Time `json:"files_since,omitempty"`
-	FilesTold  bool      `json:"files_told,omitempty"`
-	Failures   int       `json:"failures"`
-	Kills      int       `json:"kills,omitempty"`      // steps in a row killed by their timeout (killCap)
-	CloseFail  int       `json:"close_fail,omitempty"` // failed tries to close the issue
-	Attempt    int       `json:"attempt"`              // fresh workers handed this task
-	Retry      time.Time `json:"retry,omitempty"`
-	IssueOpen  bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
-	Noted      string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
-	NotedDiff  string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
-	HoldSaid   string    `json:"hold_said,omitempty"`  // the HoldKey of the hold the PR was last told of
+	DraftRevived bool      `json:"draft_revived,omitempty"`
+	Failures     int       `json:"failures"`
+	Kills        int       `json:"kills,omitempty"`      // steps in a row killed by their timeout (killCap)
+	CloseFail    int       `json:"close_fail,omitempty"` // failed tries to close the issue
+	Attempt      int       `json:"attempt"`              // fresh workers handed this task
+	Retry        time.Time `json:"retry,omitempty"`
+	IssueOpen    bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
+	Noted        string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
+	NotedDiff    string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
+	HoldSaid     string    `json:"hold_said,omitempty"`  // the HoldKey of the hold the PR was last told of
 	// CantRuns counts the tries in a row its own tests couldn't start (a
 	// missing tool); past CantRunTries the hold goes to the person and counts
 	// as red. CantRunSaid is the PR told of a can't-run, once per PR.
@@ -318,7 +313,8 @@ type Module struct {
 	// retesting is held while main's red tests run once more (mainTests).
 	retesting sync.Mutex
 	busy      map[string]bool
-	aims      map[string]aimAsk // aims asked while a step held the task, set as it ends
+	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
+	aims      map[string]aimAsk    // aims asked while a step held the task, set as it ends
 	// steered is when the person's stop, retry or recheck (steer) last saved
 	// each task: a step whose copy is older saves nothing after it, nor
 	// merges, so it can't undo what they asked. It grows by one key per task
@@ -330,18 +326,8 @@ type Module struct {
 	// workers, checks and gates are the limits the pace sets (pace.go,
 	// selfgate.go).
 	workers, checks, gates pace
-	// areaCache holds the paths each brief names (queue.go).
-	areaCache map[string]areaEntry
-	// editCache holds whether a worker's checkout has changed a file (queue.go).
-	editCache map[string]editEntry
-	// defCache holds the names each clone file defines (queue.go).
-	defCache map[string]defEntry
-	// baseTrees holds the files of the bases working tasks started on (queue.go).
-	baseTrees map[string]map[string]string
-	// mainTips holds each project's main for one admit pass (queue.go).
-	mainTips map[string]string
-	filing   sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
-	steps    sync.WaitGroup // the steps Tick started, and the checks they queued, still going
+	filing                 sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
+	steps                  sync.WaitGroup // the steps Tick started, and the checks they queued, still going
 	// mergeRuns holds each task's merged-with-main test running behind a
 	// step, at most one, until a step takes the result (testMerged).
 	mergeRuns map[string]*mergeRun
@@ -362,6 +348,9 @@ type Module struct {
 	// read) is next looked at; kept in memory, so a restart looks at once.
 	// Guarded by mu: due reads it with mu held, hold takes mu itself.
 	later map[string]time.Time
+	// testRuns holds each task's test of its head running behind a step, at
+	// most one, until a step takes the result (testrun.go). Guarded by mu.
+	testRuns map[string]*testRun
 	// prPolled is when each task waiting for the person last had its pull
 	// request looked up, so a close there is seen without a call every tick.
 	prPolled map[string]time.Time
@@ -374,9 +363,11 @@ type Module struct {
 	probe   time.Time
 	probing bool
 	online  time.Time
-	// limit is when GitHub's pause on writes ends, and limitText why.
+	// limit is when GitHub's pause on writes (or, limitAll, on every call)
+	// ends, and limitText why.
 	limit     time.Time
 	limitText string
+	limitAll  bool
 	// slow is when a call was last killed by its timeout (settle).
 	slow time.Time
 	// refusedAsked is when the checks of each task stopped on a checks
@@ -400,7 +391,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, defCache: map[string]defEntry{}, baseTrees: map[string]map[string]string{}, mainTips: map[string]string{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	m.checks.loadCuts, m.gates.loadCuts = true, true // their builds and child Hives make the load
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
@@ -441,7 +432,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: []string{"worker", "lead"}, Help: `{"task","aim":"fix"|"gain","why"} (a worker's own task by default) -> sets whether the task is a fix of the failure why names, which merges on its tests, checks and reads and isn't reverted for a score dip alone, or a gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: steerers, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
 	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: steerers, Help: `{"task"} (a worker's own task by default; a worker may name any task on its project, the lead and a sweep must name one) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
-	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: steerers, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed; one waiting 4h or more goes ahead of the order, oldest first), hold keeps one waiting until released, now starts those first even past a brief on the same files (why says so, on the record), for a fix the one it waits on needs. A started worker is never stopped here (a quiet one is, with stop)`, Fn: m.opQueue})
+	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: steerers, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed; one waiting 4h or more goes ahead of the order, oldest first), hold keeps one waiting until released, now puts those first of all (why says so, on the record), for a fix the rest need. A started worker is never stopped here (a quiet one is, with stop)`, Fn: m.opQueue})
 	c.Runs.Ops().Register(core.Op{Name: "stop", Roles: steerers, Help: `{"task","why","fresh":bool} -> ends a working task's quiet worker (one that keeps ending turns without finishing) as blocked, so it holds no run for a day; why goes on the record. The task goes blocked, yours to bring back with recheck; with fresh it is queued at once for a fresh worker on the same branch with the first one's notes. A worker taking turns, waiting or parked isn't stopped`, Fn: m.opStop})
 	c.Runs.Ops().Register(core.Op{Name: "landed", Roles: steerers, Help: `{"task","why","merge"} -> ends a task in any stage as merged when its PR is merged on the forge or its commits are on main (merge names the main commit when they were squashed there), so the briefs waiting on it start; refused while its PR is open and its work isn't on main`, Fn: m.opLanded})
 	c.Runs.Ops().Register(core.Op{Name: "amend", Roles: steerers, Help: `{"task","title","done","known","why"} -> changes a brief no worker has started on yet (filed or queued) in place: each of title, done and known given replaces the old one, and its open issue gets the brief as amended; its filer's own, or (the lead) any but the person's. A wider ask goes here rather than in a new brief beside it`, Fn: m.opAmend})
@@ -454,7 +445,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
-	c.Effects.Slots.Prioritize(m.checkRank)
+	c.Effects.Slots.Prioritize(m.checkRank, rankMain)
 	return m
 }
 
@@ -505,6 +496,9 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	}
 	if steer {
 		m.steered[t.ID] = t.Updated
+	}
+	if was == StageTesting && t.Stage != StageTesting {
+		m.dropTestRunLocked(t.ID)
 	}
 	// A gate run on a head the task has left (a merge of main, a fix sent
 	// back) or a task that ended judges nothing that lands: it ends now and
@@ -858,6 +852,7 @@ func (m *Module) Tick() {
 	m.revive()
 	m.reviveDrafts()
 	m.paceChecks()
+	m.reapStuck()
 	tasks := m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) })
 	start, wait := m.admit(tasks)
 	for _, t := range tasks {
@@ -871,28 +866,70 @@ func (m *Module) Tick() {
 			continue
 		}
 		m.busy[t.ID] = true
+		began := time.Now()
+		if m.stepAt == nil {
+			m.stepAt = map[string]time.Time{}
+		}
+		m.stepAt[t.ID] = began
 		m.steps.Add(1)
 		m.mu.Unlock()
 		go func(t Task) {
 			defer m.steps.Done()
-			defer m.release(t.ID)
+			defer m.endStep(t.ID, began)
 			m.settle(&t, m.step(&t))
 		}(t)
 	}
 }
 
-// waits records why a queued task waits, when that is new. A machine hold's
-// live figures after " (" change every tick, so only a new kind is saved. A
-// brief that has waited on other briefs' files since filesTell ago, passed
-// meanwhile by later briefs on its other files, is told to the lead once.
-func (m *Module) waits(t Task, why string) {
-	since := time.Time{}
-	if onFiles(why) {
-		since = cmp.Or(t.FilesSince, time.Now().UTC())
+// endStep frees t's task when the step that began at began ends, unless
+// reapStuck let it go and a newer step may hold the task.
+func (m *Module) endStep(id string, began time.Time) {
+	m.mu.Lock()
+	mine := m.stepAt[id].Equal(began)
+	if mine {
+		delete(m.stepAt, id)
 	}
-	tell := !since.IsZero() && !t.FilesTold && time.Since(since) >= filesTell
+	m.mu.Unlock()
+	if mine {
+		m.release(id)
+	}
+}
+
+// stepLimit is how long one step may hold a task before Tick lets it go: a
+// step hung on a call that never returns would otherwise leave the task
+// "has a step running right now" for good, refusing every recheck. It sits
+// well above the longest healthy step, which can wait for a check slot, then
+// run a sandboxed check of up to 30 minutes, twice on a retry.
+var stepLimit = 3 * time.Hour
+
+// reapStuck frees the tasks whose Tick step has run past stepLimit, so the
+// next tick steps them again. The reap is a steer save, journalled with the
+// stage the step was in: the old step's later saves are dropped as from a
+// copy before the steer, and overtaken() stops it. If it ever returns, it
+// leaves the new holder's mark alone (see Tick).
+func (m *Module) reapStuck() {
+	m.mu.Lock()
+	var stuck []string
+	for id, at := range m.stepAt {
+		if time.Since(at) > stepLimit {
+			stuck = append(stuck, id)
+			delete(m.stepAt, id)
+			delete(m.busy, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range stuck {
+		if t, ok := m.Get(id); ok {
+			m.steer(&t, fmt.Sprintf("its step in %s ran past %s and was let go; it steps again", t.Stage, stepLimit))
+		}
+	}
+}
+
+// waits records why a queued task waits, when that is new. A machine hold's
+// live figures after " (" change every tick, so only a new kind is saved.
+func (m *Module) waits(t Task, why string) {
 	kind, _, _ := strings.Cut(why, " (")
-	if t.Stage == StageQueued && since.Equal(t.FilesSince) && !tell && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+	if t.Stage == StageQueued && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
 		return
 	}
 	m.mu.Lock()
@@ -902,18 +939,9 @@ func (m *Module) waits(t Task, why string) {
 	}
 	m.busy[t.ID] = true
 	m.mu.Unlock()
-	t.Stage, t.Reason, t.FilesSince = StageQueued, why, since
-	t.FilesTold = t.FilesTold && !since.IsZero() || tell
-	note := ""
-	if tell {
-		note = "told the lead it has waited on other briefs' files since " + since.Format("2006-01-02 15:04Z")
-	}
-	m.save(&t, note)
+	t.Stage, t.Reason = StageQueued, why
+	m.save(&t, "")
 	m.release(t.ID)
-	if tell {
-		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited on other briefs' files since %s, while later briefs on its other files went ahead; now %s. `queue --now %s --why ...` starts it past them, or hold the ones on its files.",
-			t.Label(), t.ID, since.Format("2006-01-02 15:04Z"), why, t.ID))
-	}
 }
 
 // Wait returns once every step Tick started has ended, so a test's folders
@@ -1041,6 +1069,9 @@ func (m *Module) Offline() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.offline == "" && time.Now().Before(m.limit) {
+		if m.limitAll {
+			return "the login's GitHub API quota is spent or nearly, so the Hive's calls wait until " + m.limit.UTC().Format("15:04Z")
+		}
 		return "GitHub asked the Hive to slow down, so its writes wait until " + m.limit.UTC().Format("15:04Z")
 	}
 	return m.offline
@@ -1051,7 +1082,7 @@ func (m *Module) limited(rl *core.RateLimited) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if rl.Until.After(m.limit) {
-		m.limit, m.limitText = rl.Until, rl.Text
+		m.limit, m.limitText, m.limitAll = rl.Until, rl.Text, rl.All
 	}
 }
 
@@ -1300,7 +1331,6 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 		t.Branch = "hive/" + t.ID
 	}
 	t.Worker, t.Stage, t.Failures, t.Reason, t.Now = id, StageWorking, 0, "", false
-	t.FilesSince, t.FilesTold = time.Time{}, false
 	m.save(t, "worker "+id+" started")
 	return nil
 }
@@ -1712,12 +1742,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err
 	}
 	cfg := m.C.Effects.Config(p, main)
-	c, ok := m.C.Effects.GetCheck(p.Name, t.SHA, "test")
-	if !ok || t.Recheck {
-		if _, err := m.C.Sandbox(); err != nil {
-			return err
-		}
-		c, t.Recheck = m.C.Effects.RunCheck(p, t.SHA, "test", cfg.Test), false
+	c, ok, err := m.headTest(t, p, cfg.Test)
+	if !ok || err != nil {
+		return err // queued or running behind the step: it waits in testing
 	}
 	if c.CantRun != "" {
 		if t.Checkpoint != "" {
@@ -1971,8 +1998,12 @@ func (m *Module) failsAgain(p core.Project, sha, command string, c core.Check) b
 // A red main runs what failed once more (Retest) before it holds anything:
 // passing then, it was a flake of a slow or busy machine, filed to fix, and
 // main counts as green. The answer is the newest "retest" check on main.
+// Every red change on main waits on it, so its checks go ahead of the line.
 func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
 	c, ok := m.C.Effects.GetCheck(p.Name, main, "test")
+	if !ok || !c.OK && c.CantRun == "" && m.Retest != nil {
+		defer m.MeasuringMain(p.Name, main)()
+	}
 	if !ok {
 		if _, err := m.C.Sandbox(); err != nil {
 			return core.Check{}, err
@@ -2578,6 +2609,11 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 		queued = false
 	}
 	if !queued {
+		if ahead := m.mergeFront(t, p); ahead != nil {
+			t.MergedTest = ""
+			m.hold(t, p, fmt.Sprintf("%s: #%d (%s) tests merged with main first (main at %s)", MergeLineWait, ahead.PR.Number, core.Clip(ahead.Label(), 80), core.Short(main)))
+			return true, nil
+		}
 		merged, err := m.C.Effects.UpdateBranch(p, t.SHA, main, "")
 		if errors.Is(err, core.ErrConflict) {
 			return m.catchUp(t, p, main, "main moved and the PR's merge with it conflicts")
@@ -2592,7 +2628,7 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	}
 	if !r.done {
 		t.MergedTest = r.sha
-		m.hold(t, p, "testing its head merged with main at "+core.Short(r.main)+" (as "+core.Short(r.sha)+") before it merges")
+		m.hold(t, p, mergedTestWait+" at "+core.Short(r.main)+" (as "+core.Short(r.sha)+") before it merges")
 		return true, nil
 	}
 	t.MergedTest = ""
@@ -2615,6 +2651,55 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	t.MergedOK = key
 	m.save(t, "its tests pass merged with main at "+core.Short(main)+" (as "+core.Short(merged)+"), so it merges as it is")
 	return false, nil
+}
+
+// MergeLineWait opens the reason of a task waiting its turn to test merged
+// with main.
+const MergeLineWait = "waiting its turn in the merge line"
+
+// mergedTestWait opens the reason of a task whose merged test is queued or
+// running.
+const mergedTestWait = "testing its head merged with main"
+
+// mergeFront returns the task ahead of t in its project's merge line, or nil
+// when t is at its front. Only the front tests its head merged with main
+// (issue #1727): every main merge made all of them stale at once, so 46
+// tasks each queued a full test per merge while checks ran one or two at a
+// time, and none caught up. Main is measured after every merge and a worse
+// score reverted, so the line only has to catch a clash between neighbours,
+// and the front of a first-in, first-out line sees every merge before it.
+// The line is the project's merging tasks waiting at this step: the one
+// whose test is in flight is the front, else reverts first, then the oldest
+// PR. A task held for anything else stands aside and joins again when it
+// comes back.
+func (m *Module) mergeFront(t *Task, p core.Project) *Task {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	before := func(a, b *Task) bool {
+		if ra, rb := a.Kind == "revert", b.Kind == "revert"; ra != rb {
+			return ra
+		}
+		if a.PR.Number != b.PR.Number {
+			return a.PR.Number < b.PR.Number
+		}
+		return a.ID < b.ID
+	}
+	var front *Task
+	for _, u := range m.tasks {
+		if u.ID == t.ID || u.Project != p.Name || u.Stage != StageMerging {
+			continue
+		}
+		if r, ok := m.mergeRuns[u.ID]; ok && !r.done && !r.gone {
+			return u
+		}
+		if !strings.HasPrefix(u.Reason, mergedTestWait) && !strings.HasPrefix(u.Reason, MergeLineWait) {
+			continue
+		}
+		if before(u, t) && (front == nil || before(u, front)) {
+			front = u
+		}
+	}
+	return front
 }
 
 // mergeRun is a task's merged-with-main test running behind a step: key is
