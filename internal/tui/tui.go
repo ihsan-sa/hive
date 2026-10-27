@@ -133,11 +133,20 @@ type model struct {
 	burstN   int
 	burstT0  time.Time // when the held burst's first key came
 	burstT1  time.Time // and its last
+	saves    int       // settings saves sent
+	saved    int       // and done, refused or not: see saveConfig
 }
 
 type stateMsg struct {
-	st  api.State
-	err error
+	st    api.State
+	err   error
+	saved int // the settings saves done when the poll went out
+}
+
+// savedMsg: settings save n is done, refused or not; flash says which.
+type savedMsg struct {
+	n     int
+	flash flashMsg
 }
 type chatMsg struct {
 	id   string
@@ -154,6 +163,7 @@ type tickMsg time.Time
 type outMsg struct {
 	n                  int
 	chat, thread, text string
+	had                int // the thread's messages from the person with this text when it was sent
 }
 type sentMsg struct {
 	out outMsg
@@ -213,9 +223,10 @@ func tick() tea.Cmd {
 }
 
 func (m *model) fetchState() tea.Cmd {
+	saved := m.saved
 	return func() tea.Msg {
 		st, err := m.c.State()
-		return stateMsg{st, err}
+		return stateMsg{st, err, saved}
 	}
 }
 
@@ -374,6 +385,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = "the Hive isn't answering: " + msg.err.Error()
 		} else {
 			first := !m.loaded
+			if msg.saved < m.saves { // sent before a save landed: its settings are the old ones
+				msg.st.Config = m.st.Config
+			}
 			m.err, m.st, m.loaded = "", msg.st, true
 			if u := msg.st.Updated; u != nil && u.Seq > m.seen {
 				m.notice, m.seen = u, u.Seq
@@ -403,6 +417,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sinceMsg:
 		m.since = msg
 		m.showSince = len(msg) > 0
+	case savedMsg:
+		m.saved = max(m.saved, msg.n)
+		m.setFlash(string(msg.flash))
+		return m, m.fetchState()
 	case flashMsg:
 		m.setFlash(string(msg))
 		return m, m.fetchState()
@@ -787,10 +805,23 @@ func withMsg(msgs []chat.Message, msg chat.Message) []chat.Message {
 	return append(msgs, msg)
 }
 
+// echoes counts the person's messages in o's thread that read as o, so a
+// read that already has it hides its "sending…" line.
+func (m *model) echoes(o outMsg) int {
+	n := 0
+	for _, x := range m.msgs[o.chat] {
+		if x.Thread == o.thread && x.From == "person" && x.Text == o.text {
+			n++
+		}
+	}
+	return n
+}
+
 // send posts at once; a reply shows as sending until the Hive answers.
 func (m *model) send(text string) tea.Cmd {
 	m.sent++
 	o := outMsg{n: m.sent, chat: m.chat, thread: m.reply, text: text}
+	o.had = m.echoes(o)
 	files := m.files
 	m.files, m.composeN = nil, m.composeN+1 // a clipboard read still running was for the sent message
 	m.drafts[o.chat+"\x00"+o.thread] = ""

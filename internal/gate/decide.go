@@ -8,6 +8,7 @@ package gate
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -22,6 +23,11 @@ type Metric struct {
 	// for this one to be judged: time counts only between sides that did the
 	// same work, so doing less never wins it.
 	Given []string `json:"given,omitempty"`
+	// Time marks a duration. It is compared on a log scale, since a run's
+	// time is skewed (one stalled rep can take five times the others), and
+	// with at least minSeparate reps a side it moves when every candidate rep
+	// beats every control rep, however far apart the control's reps lie.
+	Time bool `json:"time,omitempty"`
 }
 
 // Result is one run of one probe on one side.
@@ -90,7 +96,7 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 		pass, n int
 		failed  map[string]int // test name: the runs it failed in
 	}
-	given := map[key][]string{}
+	given, timed := map[key][]string{}, map[key]bool{}
 	count := func(rs []Result) (map[string]*tally, map[key][]float64, map[key]bool) {
 		t, m, hi := map[string]*tally{}, map[key][]float64{}, map[key]bool{}
 		for _, r := range rs {
@@ -117,6 +123,9 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 				hi[k] = x.Higher
 				if len(x.Given) > 0 {
 					given[k] = x.Given
+				}
+				if x.Time {
+					timed[k] = true
 				}
 			}
 		}
@@ -191,11 +200,27 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 			diff = -diff
 		}
 		margin := math.Max(o.Floor*math.Abs(mean(b)), 2*math.Sqrt(sd(a)*sd(a)/float64(len(a))+sd(b)*sd(b)/float64(len(b))))
-		text := fmt.Sprintf("%s %s: candidate %.4g, control %.4g (noise ±%.3g, n=%d/%d)", k.probe, k.metric, mean(a), mean(b), margin, len(a), len(b))
+		noise, apart := fmt.Sprintf("±%.3g", margin), false
+		if la, lb, ok := logs(a), logs(b), timed[k]; ok && la != nil && lb != nil {
+			// On a log scale the floor is a share of the control's time and
+			// the noise a ratio, so a slow outlier can't swamp the spread.
+			diff = mean(la) - mean(lb)
+			if !chi[k] {
+				diff = -diff
+			}
+			margin = math.Max(math.Log1p(o.Floor), 2*math.Sqrt(sd(la)*sd(la)/float64(len(la))+sd(lb)*sd(lb)/float64(len(lb))))
+			noise = fmt.Sprintf("×%.3g", math.Exp(margin))
+			// Every rep of one side beating every rep of the other is 1 in
+			// 20 by chance at 3 a side, whatever the spread.
+			if apart = math.Abs(diff) > math.Log1p(o.Floor) && separate(a, b); apart {
+				noise += ", no rep overlaps"
+			}
+		}
+		text := fmt.Sprintf("%s %s: candidate %.4g, control %.4g (noise %s, n=%d/%d)", k.probe, k.metric, mean(a), mean(b), noise, len(a), len(b))
 		switch {
-		case diff > margin:
+		case diff > margin || apart && diff > 0:
 			v.Gains = append(v.Gains, text)
-		case diff < -margin:
+		case diff < -margin || apart && diff < 0:
 			v.Regressions = append(v.Regressions, text)
 		}
 	}
@@ -215,6 +240,31 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 		v.Reason = "not better than the current Hive: nothing moved beyond the noise"
 	}
 	return v
+}
+
+// minSeparate is how many reps a side a timing metric needs before no
+// overlap between the sides counts as a move on its own.
+const minSeparate = 3
+
+// separate says whether, with minSeparate reps a side or more, every value
+// of one side lies above every value of the other.
+func separate(a, b []float64) bool {
+	if len(a) < minSeparate || len(b) < minSeparate {
+		return false
+	}
+	return slices.Max(a) < slices.Min(b) || slices.Min(a) > slices.Max(b)
+}
+
+// logs is v on a log scale, or nil when a value isn't positive.
+func logs(v []float64) []float64 {
+	l := make([]float64, len(v))
+	for i, x := range v {
+		if x <= 0 {
+			return nil
+		}
+		l[i] = math.Log(x)
+	}
+	return l
 }
 
 // failing names the tests that failed in each side's runs of a probe, most
