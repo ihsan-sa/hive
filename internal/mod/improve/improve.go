@@ -167,7 +167,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
-	w.OnMerged = func(t work.Task) { m.queue <- t }
+	w.OnMerged = m.enqueue
 	w.Retest = m.retest
 	work.BestScore = m.Best
 	work.Measured = m.measured
@@ -615,6 +615,18 @@ func (m *Module) introduced(p core.Project, sha string, cant core.Check) bool {
 	return now != before && names(now) && !names(before)
 }
 
+// enqueue queues a merge to be measured without waiting for room: it is
+// called from a task's merge step, and a full queue (a restart's Recover
+// finding many unmeasured merges, a slow measure) held the step, so its
+// task sat in merged and never reached done. In order while there is room.
+func (m *Module) enqueue(t work.Task) {
+	select {
+	case m.queue <- t:
+	default:
+		go func() { m.queue <- t }()
+	}
+}
+
 func (m *Module) measureLoop() {
 	for t := range m.queue {
 		m.afterMerge(t)
@@ -631,12 +643,12 @@ func (m *Module) Recover() {
 			if b.MergeSHA != t.MergeSHA && !m.measured(t.Project, b.MergeSHA) {
 				c := t
 				c.MergeSHA = b.MergeSHA
-				m.queue <- c
+				m.enqueue(c)
 			}
 		}
 		if !m.measured(t.Project, t.MergeSHA) {
 			m.holdForJudge(t)
-			m.queue <- t
+			m.enqueue(t)
 		}
 	}
 }

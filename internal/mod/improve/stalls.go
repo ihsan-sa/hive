@@ -171,7 +171,11 @@ func (m *Module) Watch() {
 	}
 	waits := map[string]*group{}
 	var causes []string
-	for _, t := range m.Work.List(func(t work.Task) bool { return !t.Terminal() && t.Stage != work.StagePerson }) {
+	// A merged task's change is on main: what is left (its follow-up brief,
+	// then done) is the Hive's bookkeeping, which a recheck can't retry.
+	for _, t := range m.Work.List(func(t work.Task) bool {
+		return !t.Terminal() && t.Stage != work.StagePerson && t.Stage != work.StageMerged
+	}) {
 		now["task:"+t.ID] = t.Stage
 		// The recursive gate runs on its own clock, as many at once as the machine carries.
 		if t.Queued() || strings.HasPrefix(t.Reason, work.GateWait) || slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == checked(t) }) {
