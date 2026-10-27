@@ -3,6 +3,7 @@ package improve
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -15,6 +16,27 @@ import (
 // quarantineWindow is how far back a forge failure counts toward a test's
 // quarantine.
 var quarantineWindow = 24 * time.Hour
+
+// maxSightedPerRun is the most tests one red run is taken as sightings of.
+// A flake takes down a test or two; a run that fails more was broken by its
+// environment (its folder gone, a full disk) or by the change itself, and
+// reading it as that many flakes would quarantine every test it took down,
+// hiding real regressions, and file a fix brief for each.
+const maxSightedPerRun = 10
+
+// brokenRunSigns are output lines that say a run's environment was broken,
+// not its tests: no test it failed is a sighting.
+var brokenRunSigns = []string{
+	"getcwd() failed",
+	"cannot determine current directory",
+	"must be run in a work tree",
+}
+
+// brokenRun reports whether output shows a run broken by its environment.
+func brokenRun(output string) bool {
+	low := strings.ToLower(output)
+	return slices.ContainsFunc(brokenRunSigns, func(s string) bool { return strings.Contains(low, strings.ToLower(s)) })
+}
 
 // flakyTitle starts the title of the task that fixes a flaky test.
 const flakyTitle = "Fix the flaky "
@@ -61,7 +83,14 @@ func (m *Module) applyQuarantine(e core.Event) {
 			Main                                   bool
 			Tests                                  []string
 		}
-		if e.Decode(&x) != nil || time.Since(e.At) > quarantineWindow {
+		if e.Decode(&x) != nil {
+			return
+		}
+		if len(x.Tests) > maxSightedPerRun {
+			m.unsight(x.Project, x.Tests)
+			return
+		}
+		if time.Since(e.At) > quarantineWindow {
 			return
 		}
 		for _, test := range x.Tests {
@@ -104,10 +133,12 @@ func (m *Module) applyQuarantine(e core.Event) {
 // sightLocal takes in a red of the Hive's own test check: on a task's head
 // or on main, the same evidence as the forge's, and often the first, since a
 // busy machine shows a timing flake before CI does. A check on any other
-// commit (a gate's or step-back's candidate) is no sighting; m.mu is held.
+// commit (a gate's or step-back's candidate) is no sighting, nor is a run
+// broken by its environment or one failing more than maxSightedPerRun
+// tests; m.mu is held.
 func (m *Module) sightLocal(e core.Event) {
 	var c core.Check
-	if e.Decode(&c) != nil || c.OK || c.CantRun != "" || time.Since(c.At) > quarantineWindow {
+	if e.Decode(&c) != nil || c.OK || c.CantRun != "" {
 		return
 	}
 	if c.Kind != "test" && c.Kind != "retest" && c.Kind != "before" {
@@ -119,6 +150,16 @@ func (m *Module) sightLocal(e core.Event) {
 	}
 	keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return !strings.Contains(k, "::") })
 	if len(keys) == 0 {
+		return
+	}
+	// An older record is read only for what it says of the run, so a
+	// replay doesn't read every red's full log.
+	recent := time.Since(c.At) <= quarantineWindow
+	if len(keys) > maxSightedPerRun || brokenRun(c.Output) || (recent && brokenRun(c.FullOutput())) {
+		m.unsight(c.Project, keys)
+		return
+	}
+	if !recent {
 		return
 	}
 	s := Sighting{At: c.At, SHA: c.SHA, Check: "local " + c.Kind}
@@ -143,6 +184,14 @@ func (m *Module) sightLocal(e core.Event) {
 			continue
 		}
 		m.sighted[k] = append(m.sighted[k], s)
+	}
+}
+
+// unsight notes project's tests taken down by a run that is no sighting, so
+// a waiting fix brief filed on such a run is taken back; m.mu is held.
+func (m *Module) unsight(project string, tests []string) {
+	for _, t := range tests {
+		m.unsighted[flakeKey(project, t)] = true
 	}
 }
 
@@ -241,9 +290,14 @@ func (m *Module) QuarantinedTests(project, task string) []string {
 	return names
 }
 
-// fileQuarantined gives each quarantined test with no open fix task one.
+// fileQuarantined gives each quarantined test with no open fix task one,
+// and takes back a waiting one whose test is no longer quarantined and was
+// taken down by a run that is no sighting (brokenRun): its quarantine came
+// from reading a broken run as flakes.
 func (m *Module) fileQuarantined() {
-	for _, f := range m.Quarantine("") {
+	q := m.Quarantine("")
+	m.withdrawUnsighted(q)
+	for _, f := range q {
 		if t, ok := m.Work.Get(f.Task); ok && f.Task != "" && !t.Terminal() {
 			continue
 		}
@@ -273,5 +327,30 @@ func (m *Module) fileQuarantined() {
 		m.Work.File(work.Brief{Project: f.Project, From: "improve", Title: title,
 			Done:  "The test passes every time on every platform the forge's checks run: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails. Once this merges the quarantine on it is lifted, so its next red sends a PR back again.",
 			Known: "The test is quarantined (a known flake): a forge check failing only it doesn't send a PR back. It " + f.Why + ". Where it failed:\n" + strings.Join(ev, "\n")})
+	}
+}
+
+// withdrawUnsighted takes back improve's waiting fix briefs for tests not in
+// q that a run read as no sighting took down.
+func (m *Module) withdrawUnsighted(q []Flake) {
+	m.mu.Lock()
+	unsighted := maps.Clone(m.unsighted)
+	m.mu.Unlock()
+	if len(unsighted) == 0 {
+		return
+	}
+	held := map[string]bool{}
+	for _, f := range q {
+		held[flakeKey(f.Project, f.Test)] = true
+	}
+	for _, t := range m.Work.List(func(t work.Task) bool {
+		return t.From == "improve" && strings.HasPrefix(t.Title, flakyTitle) && (t.Stage == work.StageNew || t.Queued())
+	}) {
+		k := flakeKey(t.Project, strings.TrimPrefix(t.Title, flakyTitle))
+		if !unsighted[k] || held[k] {
+			continue
+		}
+		why := "its quarantine came from a check run broken by its environment or failing more than " + fmt.Sprint(maxSightedPerRun) + " tests at once, which is no evidence the test is flaky; the test is no longer quarantined"
+		m.Work.Withdraw(core.Run{ID: "improve", Project: t.Project}, t.ID, "", why) // a worker that just started keeps it
 	}
 }
