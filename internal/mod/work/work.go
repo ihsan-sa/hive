@@ -2402,7 +2402,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if wait, err := m.sameHead(t, p, pr.HeadSHA); wait || err != nil {
 		return err
 	}
-	if wait, err := m.upToDate(t, p, main); wait || err != nil {
+	if wait, err := m.upToDate(t, p, main, pr); wait || err != nil {
 		return err
 	}
 	// The security read first: it takes longest, so its line goes on the PR
@@ -2651,18 +2651,15 @@ func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 // Only a conflict, or the forge's rule that the branch be up to date with
 // main, brings main in; on a self project the recursive gate merges main in
 // its own clone, so it judges what would land without moving the branch (see
-// recursiveGate). While the forge is still working it out, t waits. Two
+// recursiveGate). pr is the merge step's own read of the PR, not read
+// again. While the forge is still working it out, t waits. Two
 // changes that each pass alone can still break main together; improve
 // measures main after every merge and reverts a red one. Testing each head
 // merged with main first made a merge line every project's merges queued in
 // one at a time: some 50 tasks waited hours there (docs/log.md, 2026-10-27).
-func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
+func (m *Module) upToDate(t *Task, p core.Project, main string, pr core.PR) (bool, error) {
 	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
 		return false, nil
-	}
-	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
-	if err != nil {
-		return true, err
 	}
 	switch {
 	case pr.Mergeable == "CONFLICTING":
