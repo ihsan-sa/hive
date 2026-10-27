@@ -215,16 +215,24 @@ func (m *Module) sightLocal(e core.Event) {
 	}
 }
 
+// wholeTree marks in unsighted a test of the whole tree, whose every red is
+// no sighting.
+const wholeTree = ""
+
 // unsight notes project's tests taken down at sha by a run that is no
 // sighting, so a waiting fix brief filed only on such runs is taken back;
 // m.mu is held.
 func (m *Module) unsight(project, sha string, tests []string) {
+	sha = core.Short(sha)
+	if sha == wholeTree {
+		return // no commit to weigh a brief's evidence against
+	}
 	for _, t := range tests {
 		k := flakeKey(project, t)
 		if m.unsighted[k] == nil {
 			m.unsighted[k] = map[string]bool{}
 		}
-		m.unsighted[k][core.Short(sha)] = true
+		m.unsighted[k][sha] = true
 	}
 }
 
@@ -245,6 +253,13 @@ func (m *Module) outside(s Sighting, task string) bool {
 // sightings make one; m.mu is held.
 func (m *Module) flake(k, task string) (Flake, bool) {
 	project, test, _ := strings.Cut(k, "\x00")
+	if core.WholeTree(test, m.module(project)) {
+		// Its reds are the tree's content (a branch's unformatted file), so
+		// two branches failing it is no flake; nor is it ever excused.
+		delete(m.sighted, k)
+		m.unsighted[k] = map[string]bool{wholeTree: true}
+		return Flake{}, false
+	}
 	var ev []Sighting
 	for _, s := range m.sighted[k] {
 		if time.Since(s.At) < quarantineWindow && s.At.After(m.lifted[k]) {
@@ -288,6 +303,17 @@ func (m *Module) flake(k, task string) (Flake, bool) {
 // project and test, each with its fix task.
 func (m *Module) Quarantine(project string) []Flake { return m.quarantine(project, "") }
 
+// module is project's Go module path, read from main's go.mod once; m.mu
+// is held.
+func (m *Module) module(project string) string {
+	mod, ok := m.modules[project]
+	if !ok {
+		mod = core.GoModule(m.C.Effects.ReadFile(core.Project{Name: project}, "HEAD", "go.mod"))
+		m.modules[project] = mod
+	}
+	return mod
+}
+
 // quarantine is Quarantine on evidence from outside task.
 func (m *Module) quarantine(project, task string) []Flake {
 	m.mu.Lock()
@@ -325,8 +351,9 @@ func (m *Module) QuarantinedTests(project, task string) []string {
 
 // fileQuarantined gives each quarantined test with no open fix task one,
 // and takes back a waiting one whose test is no longer quarantined and whose
-// every sighting was a run that is no sighting (brokenRun): its quarantine
-// came from reading broken runs as flakes.
+// every sighting was a run that is no sighting (brokenRun), or that reads
+// the whole tree (core.WholeTree): its quarantine came from reading those as
+// flakes.
 func (m *Module) fileQuarantined() {
 	q := m.Quarantine("")
 	m.withdrawUnsighted(q)
@@ -389,10 +416,11 @@ func (m *Module) withdrawUnsighted(q []Flake) {
 	}) {
 		k := flakeKey(t.Project, strings.TrimPrefix(t.Title, flakyTitle))
 		ev := briefSHAs.FindAllStringSubmatch(t.Known, -1)
-		if unsighted[k] == nil || held[k] || len(ev) == 0 || slices.ContainsFunc(ev, func(e []string) bool { return !unsighted[k][e[1]] }) {
+		broken := len(ev) > 0 && !slices.ContainsFunc(ev, func(e []string) bool { return !unsighted[k][e[1]] })
+		if held[k] || !unsighted[k][wholeTree] && !broken {
 			continue
 		}
-		why := "its quarantine came from a check run broken by its environment or failing more than " + fmt.Sprint(maxSightedPerRun) + " tests at once, which is no evidence the test is flaky; the test is no longer quarantined"
+		why := "its quarantine came from a check run broken by its environment or failing more than " + fmt.Sprint(maxSightedPerRun) + " tests at once, or it is a test of the whole tree whose reds are a branch's own content, which is no evidence the test is flaky; the test is no longer quarantined"
 		m.Work.Withdraw(core.Run{ID: "improve", Project: t.Project}, t.ID, "", why) // a worker that just started keeps it
 	}
 }
