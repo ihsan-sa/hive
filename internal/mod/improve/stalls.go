@@ -318,8 +318,8 @@ func (m *Module) recheck(s *Stall, refused *error) bool {
 	if !ok || s.Rechecked {
 		return false
 	}
-	if t, ok := m.Work.Get(id); !ok || t.Stage != s.Stage || t.Terminal() || t.Stage == work.StageWorking {
-		return false // moved on since the watch began, or a worker's own, which only a run restart helps
+	if t, ok := m.Work.Get(id); !ok || t.Stage != s.Stage || !work.InFlight(t.Stage) {
+		return false // moved on since the watch began, or in a stage a retry doesn't take (a worker's own, which only a run restart helps; merged)
 	}
 	// Its stall is on hand before the task leaves the stage, so the spell
 	// the watcher acted on stays out of the stage's history (actedOn).
