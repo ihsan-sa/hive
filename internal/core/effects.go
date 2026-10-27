@@ -1430,6 +1430,9 @@ type MergeRequest struct {
 	// once every read is checked. One made a draft after that look isn't
 	// (the lead's pr_draft, say): MergePR refuses it with ErrDraft.
 	Draft bool
+	// Stale, when set, is asked last, just before the forge merges: true
+	// (the person stopped the task while the merge was weighed) refuses it.
+	Stale func() bool
 }
 
 // Merge merges the PR only at sha, and only when the host's own records show
@@ -1505,6 +1508,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	}
 	if st != CheckPass {
 		return "", refuse("%s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
+	}
+	if m.Stale != nil && m.Stale() {
+		return "", refuse("#%d: its task was stopped or brought back while the merge was weighed", m.PR)
 	}
 	// Every read above is the Hive's own and bound to sha, and nobody outside
 	// the Hive reads its PRs, so a draft it cleared is its to ready.
