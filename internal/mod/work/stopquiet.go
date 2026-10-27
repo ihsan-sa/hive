@@ -11,8 +11,8 @@ import (
 
 // opStop ends a quiet worker's run, so a task whose worker keeps ending turns
 // without finishing doesn't sit working (holding its run and its task) for a
-// day until the person stops it. Only a quiet run: one taking turns, waiting on
-// an answer or parked is left alone. The run ends blocked, so its task goes
+// day until the person stops it. Only a quiet or parked run: one taking turns or waiting on
+// an answer is left alone. The run ends blocked, so its task goes
 // blocked on the next tick and is the steerer's to bring back with recheck
 // (its commits checked, or back sent to its worker); with fresh it goes at
 // once to a fresh worker on the same branch with the first one's notes. A
@@ -45,8 +45,8 @@ func (m *Module) opStop(r core.Run, args json.RawMessage) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("task %s's worker %s has no record", t.ID, t.Worker)
 	}
-	if w.Status != core.StatusQuiet {
-		return nil, fmt.Errorf("worker %s is %s, not quiet; only a run that keeps ending turns without finishing is stopped this way (message it, or wait)", w.ID, w.Status)
+	if w.Status != core.StatusQuiet && w.Status != core.StatusParked {
+		return nil, fmt.Errorf("worker %s is %s, not quiet or parked; only a run that keeps ending turns without finishing, or sits parked, is stopped this way (message it, or wait)", w.ID, w.Status)
 	}
 	why := core.Clip(core.StoppedQuiet+r.ID+": "+a.Why, 300)
 	if err := m.C.Runs.EndQuiet(w.ID, why); err != nil {
