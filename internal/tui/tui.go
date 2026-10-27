@@ -956,7 +956,7 @@ func (m *model) keys() []string {
 	case m.editing:
 		return []string{"enter", "save", "esc", "cancel"}
 	case m.focus == 0:
-		return []string{"↑↓", "move", "enter", "open", "space", "collapse", "e E", "open or close a level", "tab", "switch pane", "q", "quit"}
+		return []string{"↑↓", "move", "enter", "open", "space", "collapse", "tab", "switch pane", "e E", "a level", "q", "quit"}
 	case m.section == secChats && m.takeover():
 		return []string{"enter", "send", "ctrl+j", "newline", "esc", "back to chat", imageKey, "image", "↑ pgup", "scroll", "ctrl+end", "newest"}
 	case m.section == secChats && m.focus == 2:
@@ -966,7 +966,7 @@ func (m *model) keys() []string {
 	case m.section == secChats && m.thread != "":
 		return []string{"↑↓", "thread", "→", "to the open thread", "end", "newest", "pgup pgdn", "scroll", "space", "collapse", "e E", "all", "n", "new thread"}
 	case m.section == secChats:
-		return []string{"↑↓", "thread", "enter", "open", "end", "newest", "n", "new thread", "space", "collapse", "e E", "all", "tab", "pane"}
+		return []string{"↑↓", "thread", "enter", "open", "end", "newest", "n", "new thread", "space", "collapse", "tab", "pane", "e E", "all"}
 	case len(m.stack) > 0 && m.stack[len(m.stack)-1].kind == "module":
 		return []string{"↑↓", "project", "space", "grant or remove", "r", "review again", "esc", "back", "q", "quit"}
 	case len(m.stack) > 0:
