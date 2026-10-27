@@ -1473,7 +1473,9 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 
 // Checkpoint score runs per task: at most scoreCap in any scoreWindow, and
 // scoreGap apart, so a worker committing over and over can't keep the
-// machine scoring its commits; its finish still lands as usual.
+// machine scoring its commits; its finish still lands as usual. A merged
+// checkpoint starts the count over, so a worker banking gain after gain is
+// never held.
 const (
 	scoreGap    = 10 * time.Minute
 	scoreCap    = 6
@@ -2400,6 +2402,7 @@ func (m *Module) merged(t *Task, merged, note string) {
 		t.Base, t.Checkpoint, t.Stage = t.Checkpoint, "", StageWorking
 		t.Banked++
 		t.Banks = append(t.Banks, Bank{PR: t.PR, MergeSHA: merged}) // a revert of this merge names its PR
+		t.Scored = nil                                              // runs that banked a gain weren't wasted: the rate limit starts over
 		t.Branch, t.PR = fmt.Sprintf("hive/%s-%d", t.ID, t.Banked), core.PR{}
 		m.save(t, "checkpoint "+note+"; the worker keeps going")
 		m.C.Runs.Send(t.Worker, fmt.Sprintf("Your commit %s is on main as a checkpoint: %s. Keep going on top of it on your branch, and leave that commit as it is (no amend, reset or rebase past it): the Hive lays what you commit after it onto main, so you needn't fetch main.", core.Short(t.Base), note))

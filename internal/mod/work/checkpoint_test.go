@@ -290,3 +290,14 @@ func TestCheckpointScoreRunsRateLimited(t *testing.T) {
 		t.Fatalf("one commit scored twice: %v", task.Scored)
 	}
 }
+
+// A merged checkpoint starts the rate limit over: the worker's next gain is
+// weighed at once, as the e2e's two checkpoints in a row need.
+func TestMergedCheckpointResetsScoreLimit(t *testing.T) {
+	m, task, _ := checkpointRig(t, 5, "7")
+	task.Scored, task.Checkpoint = []time.Time{time.Now()}, "abc"
+	m.merged(task, "def", "merged")
+	if len(task.Scored) != 0 {
+		t.Fatalf("scored %v after a merged checkpoint", task.Scored)
+	}
+}
