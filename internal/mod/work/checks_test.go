@@ -335,6 +335,45 @@ func TestMergeAsItIsWhenClean(t *testing.T) {
 	}
 }
 
+// Two changes that each merge cleanly and pass alone can break main together:
+// the PR's tests run merged with main before it merges as it is, and a red
+// merge where main is green goes back through testing to the worker rather
+// than onto main.
+func TestMergedWithMainTestedFirst(t *testing.T) {
+	both := map[string]string{".hive/project.json": `{"test": "! { test -f half1.txt && test -f half2.txt; }"}`}
+	m, task, p, f := gateRigSeeded(t, false, both, map[string]string{"half1.txt": "x"})
+	toMerging(t, m, task, p)
+	head := task.SHA
+	pushMain(t, f, map[string]string{"half2.txt": "y"})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageTesting || task.SHA == head || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
+	}
+	if c, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); !ok || c.OK {
+		t.Fatalf("the merge with main should be tested red: %+v", c)
+	}
+	for i := 0; i < 2 && task.Stage == StageTesting; i++ { // a red runs once more before it counts
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task.Stage != StageWorking {
+		t.Fatalf("the red merge should go back to the worker: stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
+// A clean merge whose tests pass merges as it is, tested once per head and main.
+func TestMergedWithMainGreenMergesAsItIs(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	head := task.SHA
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.SHA != head || task.MergedOK == "" {
+		t.Fatalf("stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
+	}
+}
+
 // unknownForge is a forge still working out whether a PR merges cleanly.
 type unknownForge struct{ *core.Local }
 
@@ -1449,6 +1488,29 @@ func TestMergeForgeCheckBundleFailureIsRecorded(t *testing.T) {
 		}
 	}
 	t.Fatal("no task.bundle_failed event")
+}
+
+// The findings a red check sends back name the main the checks ran with, as
+// forge-failures.md does, not only main at report time.
+func TestForgeFindingsNameTheTestedMain(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	rerunSpent(task)
+	tested, _ := m.C.Effects.Sync(p)
+	pushMain(t, f, map[string]string{"fix.txt": "the fix, landed after the checks ran"})
+	main, _ := m.C.Effects.Sync(p)
+	f.SetCheckLog(p.Repo, "head/mac", "HEAD is now at a9ae988 Merge "+task.SHA+" into "+tested+"\n--- FAIL: TestX (0.1s)\n##[error]Process completed with exit code 1.\n")
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckFail}, core.CheckRun{Name: "test (macos-latest)", State: core.CheckFail, Detail: "failure", URL: "head/mac"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckFail}, core.CheckRun{Name: "test (macos-latest)", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	for _, want := range []string{forgeFailed + core.Short(task.SHA) + " (run merged with main at " + core.Short(tested) + "; main has moved to " + core.Short(main) + " since)", "test (ubuntu-latest) fail on main at " + core.Short(main) + " too"} {
+		if !strings.Contains(task.Findings, want) {
+			t.Fatalf("no %q in findings %q", want, task.Findings)
+		}
+	}
 }
 
 // The report names the main the checks' log says they ran with, not main at
