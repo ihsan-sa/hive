@@ -289,3 +289,27 @@ func TestQuarantineSkipsBrokenRuns(t *testing.T) {
 		t.Fatalf("a brief for a test no broken run took down was taken back: %s", got.Reason)
 	}
 }
+
+// A test in the module's root package reads the whole tree (gofmt, the
+// core's size): two branches each with an unformatted file fail it, and
+// that is their content, not a flake. It is never quarantined, and a
+// waiting fix brief filed for it is taken back.
+func TestQuarantineSkipsWholeTreeTests(t *testing.T) {
+	m := rig(t)
+	m.modules["hive"] = "github.com/x/hive"
+	key := "github.com/x/hive::TestGofmt"
+	out := "--- FAIL: TestGofmt (0.3s)\n    gofmt_test.go:37: internal/mod/work/work.go is not gofmt-clean\nFAIL\nFAIL\tgithub.com/x/hive\t0.5s\n"
+	for _, id := range []string{"t1", "t2"} {
+		m.C.J.MustAppend("task.saved", work.Task{ID: id, Project: "hive", Title: "work " + id, SHA: "head" + id})
+		m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "head" + id, Kind: "test", Output: out, Failed: []string{"TestGofmt"}, Keys: []string{key}, At: time.Now().UTC()})
+		sight(m, id, "https://ci/"+id, key)
+	}
+	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
+		t.Fatalf("a whole-tree test quarantined: %v", q)
+	}
+	stale, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + key, Done: "d", Known: "k"})
+	m.fileQuarantined()
+	if got, _ := m.Work.Get(stale.ID); !got.Withdrawn() {
+		t.Fatalf("the brief for a whole-tree test is %s, want withdrawn", got.Stage)
+	}
+}
