@@ -1144,6 +1144,7 @@ func TestReapStuckLeavesAStepWithinItsLimit(t *testing.T) {
 	if !m.busy[task.ID] || len(m.stepAt) != 1 {
 		t.Fatal("a step within its limit was let go")
 	}
+}
 
 func mustRun(t *testing.T, m *Module, id string) core.Run {
 	t.Helper()
