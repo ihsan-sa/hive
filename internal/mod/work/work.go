@@ -528,6 +528,9 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	if was == StageMerging && t.Stage != StageMerging {
 		m.dropMergeRunLocked(t.ID)
 	}
+	if was == StageMerging && !inMergeLine(t) {
+		m.wakeMergeLineLocked(t.Project)
+	}
 	if was != t.Stage {
 		m.leaveBehindLocked(t.ID)
 	}
@@ -2771,6 +2774,24 @@ func (m *Module) mergeFront(t *Task, p core.Project) *Task {
 		}
 	}
 	return front
+}
+
+// inMergeLine says whether t waits at the merged-with-main step: testing
+// there or waiting its turn.
+func inMergeLine(t *Task) bool {
+	return t.Stage == StageMerging && (strings.HasPrefix(t.Reason, mergedTestWait) || strings.HasPrefix(t.Reason, MergeLineWait))
+}
+
+// wakeMergeLineLocked has the tasks waiting their turn in project's merge
+// line looked at again at once, as one leaves it (merged, sent back, held
+// for something else): the next in line is its front now, and otherwise
+// sleeps out its hold (a minute) before it starts. The caller holds m.mu.
+func (m *Module) wakeMergeLineLocked(project string) {
+	for id, u := range m.tasks {
+		if u.Project == project && u.Stage == StageMerging && strings.HasPrefix(u.Reason, MergeLineWait) {
+			delete(m.later, id)
+		}
+	}
 }
 
 // mergeRun is a task's merged-with-main test running behind a step: key is

@@ -145,3 +145,31 @@ func TestTestStepQueuesMainAndRetest(t *testing.T) {
 		t.Fatalf("taken checks left behind: %d", len(m.behind))
 	}
 }
+
+// A task waiting its turn in the merge line is looked at again at once when
+// the one ahead leaves the line, not when its minute's hold runs out.
+func TestMergeLineWakesWhenTheFrontLeaves(t *testing.T) {
+	m, front, _, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	front.Stage, front.Reason = StageMerging, mergedTestWait+" at abc"
+	m.save(front, "")
+	next := &Task{ID: "t2", Project: front.Project, Title: "next", Kind: "work", Stage: StageMerging, Reason: MergeLineWait + ": #1 first"}
+	m.save(next, "")
+	m.mu.Lock()
+	m.later[next.ID] = time.Now().Add(time.Minute)
+	m.mu.Unlock()
+	front.Reason = MergeLineWait + ": #0 first" // still in the line: no wake
+	m.save(front, "")
+	m.mu.Lock()
+	_, held := m.later[next.ID]
+	m.mu.Unlock()
+	if !held {
+		t.Fatal("woken while the front stayed in the line")
+	}
+	front.Stage, front.Reason = StageMerged, ""
+	m.save(front, "merged")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, held := m.later[next.ID]; held {
+		t.Fatal("the next in line sleeps out its hold after the front merged")
+	}
+}
