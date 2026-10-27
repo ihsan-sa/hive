@@ -83,7 +83,7 @@ type Effects struct {
 	gateMains map[string]GateResult   // project@main -> the newest can't-run there not tied to its head (GateAtMain)
 	standing  map[string]bool         // project@head@verdict's main@main -> whether that verdict still stands there (StandingGate)
 	judged    map[string]Judgement    // project@sha@main -> the judge's newest call (judge.go)
-	homes     map[string]bool         // running checks' homes (disk.go)
+	homes     map[string]bool         // folders in use that Prune leaves: running checks' homes and clean checkouts (disk.go)
 	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
 	buildMu   sync.RWMutex            // the same for the projects' build caches
 	disk      DiskUse                 // the last measurement of the Hive's disk use
@@ -530,7 +530,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.Output = "could not make a clean checkout: " + err.Error()
 		return c
 	}
-	defer os.RemoveAll(dir)
+	defer e.dropCheckout(dir)
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
@@ -572,7 +572,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 			c.Output = "could not make a clean checkout: " + cerr.Error()
 			return c
 		}
-		defer os.RemoveAll(again)
+		defer e.dropCheckout(again)
 		if len(build.mounts) > 0 {
 			stableTimes(again) // as goBuild made the first checkout's, for the shared build cache
 		}
@@ -875,6 +875,7 @@ func guardProgram(command string) string {
 // cleanCheckout clones the host clone fresh and checks out sha.
 func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
 	dir := filepath.Join(e.ws.Gates(), p.Name, fmt.Sprintf("%s-%s-%s", short(sha), kind, NewID()[14:]))
+	e.markLive(dir, true)
 	unlock := e.lock(p.Name)
 	_, err := GitT(10*time.Minute, "", "clone", "-q", "--no-local", "--no-hardlinks", "--no-checkout", e.ws.Project(p.Name), dir)
 	if err == nil {
@@ -885,10 +886,19 @@ func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
 		_, err = Git(dir, "checkout", "-q", "--detach", sha)
 	}
 	if err != nil {
-		os.RemoveAll(dir)
+		e.dropCheckout(dir)
 		return "", err
 	}
 	return dir, nil
+}
+
+// dropCheckout removes a clean checkout and its live mark. It is marked from
+// before its clone, so Prune never takes a running check's tree for a crash's
+// leftover: goBuild dates its folders to 2001 (stableTimes), past staleAfter
+// the moment the check starts.
+func (e *Effects) dropCheckout(dir string) {
+	os.RemoveAll(dir)
+	e.markLive(dir, false)
 }
 
 // runSandboxed runs a shell command in the sandbox and returns its exit code
@@ -2259,7 +2269,7 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
+	defer e.dropCheckout(dir)
 	if _, err := Git(dir, "fetch", "-q", "origin", mainSHA); err != nil {
 		return "", err
 	}
@@ -2376,7 +2386,7 @@ func (e *Effects) Revert(p Project, mainSHA, mergeSHA, lesson string) (string, e
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
+	defer e.dropCheckout(dir)
 	if _, err := Git(dir, "revert", "--no-edit", mergeSHA); err != nil {
 		Git(dir, "revert", "--abort")
 		return "", fmt.Errorf("revert of %s does not apply cleanly: %v", short(mergeSHA), err)
@@ -2407,7 +2417,7 @@ func (e *Effects) Setup(p Project, base string, files map[string]string, message
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
+	defer e.dropCheckout(dir)
 	for path, content := range files {
 		full := filepath.Join(dir, filepath.FromSlash(path))
 		os.MkdirAll(filepath.Dir(full), 0o755)
