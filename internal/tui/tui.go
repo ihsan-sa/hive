@@ -129,6 +129,7 @@ type model struct {
 	sel       selection // a mouse drag in progress
 
 	keyBurst bool         // pastes arrive as keys (a Windows console): see burst.go
+	altO     bool         // an alt+O that may start ESC O F (End) or ESC O H (Home): see ss3
 	burst    []tea.KeyMsg // keys held while they may be a paste
 	burstN   int
 	burstT0  time.Time // when the held burst's first key came
@@ -163,7 +164,7 @@ type tickMsg time.Time
 type outMsg struct {
 	n                  int
 	chat, thread, text string
-	had                int // the thread's messages from the person with this text when it was sent
+	had                int // the thread's messages from the person with this text when it was sent, and its sends still out
 }
 type sentMsg struct {
 	out outMsg
@@ -439,10 +440,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.files = append(m.files, msg.f)
 		}
 	case tea.KeyMsg:
-		if m.keyBurst {
-			return m.burstKey(msg)
+		keys, cmds := m.ss3(msg), []tea.Cmd(nil)
+		for _, k := range keys {
+			var cmd tea.Cmd
+			if m.keyBurst {
+				_, cmd = m.burstKey(k)
+			} else {
+				_, cmd = m.key(k)
+			}
+			cmds = append(cmds, cmd)
 		}
-		return m.key(msg)
+		return m, tea.Batch(cmds...)
 	case burstMsg:
 		if int(msg) == m.burstN {
 			return m, m.flushBurst()
@@ -458,6 +466,25 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.wheel(m.paneUnder(msg.X), s)
 	}
 	return m, nil
+}
+
+// ss3 folds End and Home sent as ESC O F and ESC O H (a terminal in
+// application cursor mode) back together: bubbletea reads them as alt+O and
+// then F or H. An alt+O waits for the next key, and goes ahead of it when that
+// isn't F or H.
+func (m *model) ss3(k tea.KeyMsg) []tea.KeyMsg {
+	if m.altO {
+		m.altO = false
+		if k.Type == tea.KeyRunes && !k.Alt && len(k.Runes) == 1 && (k.Runes[0] == 'F' || k.Runes[0] == 'H') {
+			return []tea.KeyMsg{{Type: map[rune]tea.KeyType{'F': tea.KeyEnd, 'H': tea.KeyHome}[k.Runes[0]]}}
+		}
+		return []tea.KeyMsg{{Type: tea.KeyRunes, Runes: []rune{'O'}, Alt: true}, k}
+	}
+	if k.Type == tea.KeyRunes && k.Alt && len(k.Runes) == 1 && k.Runes[0] == 'O' {
+		m.altO = true
+		return nil
+	}
+	return []tea.KeyMsg{k}
 }
 
 // paneUnder is the pane under column x (0 sidebar, 1 main, 2 thread), so the
@@ -822,6 +849,11 @@ func (m *model) send(text string) tea.Cmd {
 	m.sent++
 	o := outMsg{n: m.sent, chat: m.chat, thread: m.reply, text: text}
 	o.had = m.echoes(o)
+	for _, p := range m.outbox { // the same text sent twice before a read: one echo hides only the first
+		if p.chat == o.chat && p.thread == o.thread && p.text == o.text {
+			o.had++
+		}
+	}
 	files := m.files
 	m.files, m.composeN = nil, m.composeN+1 // a clipboard read still running was for the sent message
 	m.drafts[o.chat+"\x00"+o.thread] = ""

@@ -1489,3 +1489,45 @@ func TestAnotherThreadOpensAtItsNewest(t *testing.T) {
 		t.Fatalf("thread %q scroll %d", m.thread, m.thScroll)
 	}
 }
+
+// A terminal in application cursor mode sends End as ESC O F and Home as
+// ESC O H, which bubbletea reads as alt+O then F or H: both still jump, and an
+// alt+O followed by anything else goes through as typed.
+func TestEndAsEscOF(t *testing.T) {
+	altO := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}, Alt: true}
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(altO)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'H'}})
+	if strings.Contains(m.View(), "pull/3") {
+		t.Fatal("ESC O H didn't go to the top")
+	}
+	m.Update(altO)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	if v := m.View(); !strings.Contains(v, "pull/3") || m.composing {
+		t.Fatalf("ESC O F didn't come back to the newest:\n%s", v)
+	}
+	if ks := m.ss3(altO); ks != nil {
+		t.Fatalf("alt+O went ahead before the next key: %v", ks)
+	}
+	if ks := m.ss3(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}); len(ks) != 2 || ks[0].String() != "alt+O" || ks[1].String() != "x" {
+		t.Fatalf("alt+O then x came out as %v", ks)
+	}
+}
+
+// The same text sent twice before a read: the read holding the first hides
+// only its sending line.
+func TestSameTextSentTwice(t *testing.T) {
+	m := testModel(80, 30)
+	m.thread, m.focus = "1", 2
+	m.focusBox("1")
+	for range 2 {
+		m.input.SetValue("ok")
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	m.Update(chatMsg{id: "lead", msgs: append(append([]chat.Message(nil), m.msgs["lead"]...), chat.Message{ID: "9", Thread: "1", From: "person", Text: "ok", At: time.Now()})})
+	if n := strings.Count(m.View(), "sending"); n != 1 {
+		t.Fatalf("%d sending lines, want 1", n)
+	}
+}
