@@ -99,11 +99,11 @@ func TestQuarantine(t *testing.T) {
 	}
 }
 
-// A task and its own follow-up, or two tasks on the same head, are one
+// A task and its own revert, or two tasks on the same head, are one
 // change: their reds aren't two unrelated branches.
 func TestQuarantineNeedsUnrelatedBranches(t *testing.T) {
 	m := rig(t)
-	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "follow up", FollowUp: "t1"})
+	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "revert", RevertOf: "t1"})
 	sight(m, "t1", "https://ci/1", "TestX")
 	sight(m, "f1", "https://ci/2", "TestX")
 	m.C.J.MustAppend("forge.tests_failed", map[string]any{"project": "hive", "task": "t2", "sha": "abct1", "check": "c", "url": "https://ci/3", "tests": []string{"TestX"}})
@@ -140,10 +140,10 @@ func TestQuarantineAgesOut(t *testing.T) {
 }
 
 // A PR is excused only on evidence from outside its task: its own reds, its
-// re-runs' passes and its follow-ups' reds don't count for it.
+// re-runs' passes and its reverts' reds don't count for it.
 func TestQuarantineNotOnItsOwnEvidence(t *testing.T) {
 	m := rig(t)
-	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "follow up", FollowUp: "t1"})
+	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "revert", RevertOf: "t1"})
 	sight(m, "t1", "https://ci/1", "pkg::TestX")
 	m.C.J.MustAppend("forge.flaked", map[string]any{"project": "hive", "task": "t1", "sha": "abct1", "checks": []string{"test"}, "tests": []string{"pkg::TestX"}})
 	sight(m, "f1", "https://ci/2", "pkg::TestX")
