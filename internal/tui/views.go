@@ -22,6 +22,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 )
 
 func visibleWidth(s string) int { return ansi.StringWidth(s) }
@@ -169,7 +170,7 @@ func (m *model) dashRows() []row {
 	if add(row{key: "plans", text: "plan usage", expand: len(m.st.Plans) > 0, def: true}) {
 		now := time.Now()
 		for _, p := range m.st.Plans {
-			line := fmt.Sprintf("%s  %s", text.Visible(core.LoginLabel(m.st.LoginNames, p.Key())), standing(p, now))
+			line := fmt.Sprintf("%s  %s", text.Visible(setup.LoginLabel(m.st.LoginNames, p.Key())), standing(p, now))
 			for _, w := range p.Limit.WindowUses(now) {
 				line += "  " + windowShort(w, now, true)
 			}
@@ -1535,7 +1536,7 @@ func loginLine(l core.LoginState, names map[string]string) string {
 	if !l.Renewed.IsZero() {
 		renewed = "renewed " + l.Renewed.Local().Format("Mon 15:04")
 	}
-	line := fmt.Sprintf("%s  %s  %s", text.Visible(core.LoginLabel(names, l.Login)), exp, stDim.Render(renewed))
+	line := fmt.Sprintf("%s  %s  %s", text.Visible(setup.LoginLabel(names, l.Login)), exp, stDim.Render(renewed))
 	if l.Limited.After(time.Now()) {
 		line += "  " + stWarn.Render("at its usage limit") + " until " + l.Limited.Local().Format("Mon 15:04") + stDim.Render(": renews after it resets")
 	}

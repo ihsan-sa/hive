@@ -288,7 +288,15 @@ func run(args []string) int {
 			return 0
 		}
 		if len(args) > 0 && args[0] == "name" {
-			return cmdLoginName(args[1:])
+			ws, err := workspace()
+			if err == nil {
+				err = setup.NameLogin(ws, args[1:], os.Stdout)
+			}
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			return 0
 		}
 		if err := setup.Login(len(args) > 0 && args[0] == "--all"); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -1097,60 +1105,6 @@ func kbArgs(args []string) (query, limit string) {
 	return strings.Join(words, " "), limit
 }
 
-// cmdLoginName names or renames a login (hive login name <login> <name>), or
-// lists the logins with their names. A login is picked by its key (claude,
-// codex, claude:<folder>), its folder's name or the name it has now; an empty
-// name clears it, so it shows by its key again.
-func cmdLoginName(args []string) int {
-	ws, err := workspace()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	names := ws.LoginNames()
-	var all []core.Login
-	tok := core.NewTokens(ws)
-	for _, h := range []string{"claude", "codex"} {
-		all = append(all, tok.Logins(h)...)
-	}
-	if len(args) == 0 {
-		for _, l := range all {
-			if n := names[l.Key()]; n != "" {
-				fmt.Printf("%s  %s\n", l.Key(), text.Visible(n))
-			} else {
-				fmt.Printf("%s  (no name)\n", l.Key())
-			}
-		}
-		return 0
-	}
-	if len(args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: hive login name <login> <name>   (\"\" clears the name)")
-		return 2
-	}
-	key, err := core.FindLogin(all, names, args[0])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	name := strings.TrimSpace(args[1])
-	for k, n := range names {
-		if n == name && k != key && name != "" {
-			fmt.Fprintf(os.Stderr, "%s is already the name of %s\n", name, k)
-			return 1
-		}
-	}
-	if err := ws.SetLoginName(key, name); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	if name == "" {
-		fmt.Printf("The %s login has no name now.\n", key)
-	} else {
-		fmt.Printf("The %s login is named %s now.\n", key, text.Visible(name))
-	}
-	return 0
-}
-
 // planLine is a plan's usage for hive status, in plain words: how near its
 // limit the login is (under the name the person gave it, if any), then each
 // window's share and when it resets, with the zone and how far off. A window
@@ -1158,7 +1112,7 @@ func cmdLoginName(args []string) int {
 // off as current. Names from the usage
 // feed are escaped, so none can rewrite the screen.
 func planLine(p core.Plan, names map[string]string, now time.Time) string {
-	s := fmt.Sprintf("plan %s: %s", text.Visible(core.LoginLabel(names, p.Key())), text.Visible(p.Standing(now)))
+	s := fmt.Sprintf("plan %s: %s", text.Visible(setup.LoginLabel(names, p.Key())), text.Visible(p.Standing(now)))
 	for _, w := range p.Limit.WindowUses(now) {
 		name, at := text.Visible(w.Name), w.ResetsAt.Local().Format("Mon 15:04 MST")
 		switch {
