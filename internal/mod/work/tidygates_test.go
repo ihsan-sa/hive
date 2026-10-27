@@ -9,7 +9,7 @@ import (
 )
 
 // The clean job reaps every recursive gate run a dead gate left, never the
-// one in flight.
+// one in flight, and removes the stale lessons.md gates once kept.
 func TestTidyGatesSkipsTheRunInFlight(t *testing.T) {
 	m, _, _, p := noCommitRig(t, 0)
 	dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
@@ -25,5 +25,8 @@ func TestTidyGatesSkipsTheRunInFlight(t *testing.T) {
 	m.TidyGates(func(out string) int { reaped = append(reaped, out); return 0 })
 	if !slices.Equal(reaped, []string{dead}) {
 		t.Fatalf("reaped %v, want only %s", reaped, dead)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "lessons.md")); !os.IsNotExist(err) {
+		t.Fatalf("the stale lessons.md is still there: %v", err)
 	}
 }

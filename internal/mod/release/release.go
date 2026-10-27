@@ -971,9 +971,13 @@ func (m *Module) ciState(project string) (last ciWait) {
 
 // retryWaiting tries again the newest kept merge of each self project whose
 // release waits on main's checks or found them failed (a re-run may pass),
-// or the newest merge after it whose checks passed (greenAfter); one still
-// waiting after lateAfter is raised once. Then it tries a commit refused as
-// no merge the Hive made at the merge since (retryUnmerged).
+// or the newest kept merge after it whose checks passed (greenAfter); one
+// still waiting after lateAfter is raised once. A descendant chosen this way
+// that is then held (an unread or root merge) or blocked by its scan still
+// journals release.ci_passed, which ends the original's wait: the hold's or
+// the scan's alert speaks for it from then on.
+// Then it tries a commit refused as no merge the Hive made at the kept
+// merge since (retryUnmerged).
 func (m *Module) retryWaiting() {
 	if m.said == nil {
 		m.said = map[string]bool{}
@@ -1005,45 +1009,69 @@ func (m *Module) retryWaiting() {
 }
 
 // unmerged is the kept commit a project's release last refused as no merge
-// the Hive made, and the newest Hive merge journaled after that refusal; both
-// are "" once a release was cut or main's checks were read for one since.
+// the Hive made, and the newest kept Hive merge journaled after that refusal
+// (the commit itself, once its effect.merged comes late); both are "" once a
+// release was cut or main's checks were read for one since.
 func (m *Module) unmerged(project string) (sha, next string) {
+	var later []string
+	kept := map[string]bool{}
 	m.C.J.Replay(func(e core.Event) {
 		var x struct {
 			Project, SHA string
 			MergeSHA     string `json:"merge_sha"`
+			Kept, Red    bool
+			NoResult     bool `json:"no_result"`
 		}
 		if e.Decode(&x) != nil || x.Project != project {
 			return
 		}
 		switch {
 		case e.Kind == "release.unmerged":
-			sha, next = x.SHA, ""
+			sha, later = x.SHA, nil
 		case e.Kind == "hive.released" || strings.HasPrefix(e.Kind, "release.ci_"):
-			sha, next = "", ""
+			sha, later = "", nil
+		case e.Kind == "score.measured" && !x.NoResult:
+			kept[x.SHA] = x.Kept
+		case e.Kind == "score.covered":
+			kept[x.SHA] = !x.Red
 		case e.Kind == "effect.merged" && sha != "" && x.MergeSHA != "":
-			next = x.MergeSHA
+			later = append(later, x.MergeSHA)
 		}
 	})
-	return sha, next
+	kept[sha] = sha != "" // AfterKept refused it, so improve kept it
+	for i := len(later) - 1; i >= 0; i-- {
+		if kept[later[i]] {
+			return sha, later[i]
+		}
+	}
+	return sha, ""
 }
 
 // retryUnmerged tries again each self project whose kept commit was refused
 // as no merge the Hive made (a merge whose forge call failed though it went
-// through, say), at the newest Hive merge since: it contains that commit, and
-// went through the same tests, checks and reads to merge. Each is tried once;
-// main's checks there are then waited on as any kept merge's are.
+// through, say), at the newest kept Hive merge since whose history holds it.
+// Each is tried once; main's checks there are then waited on as any kept
+// merge's are.
 func (m *Module) retryUnmerged() {
 	for _, p := range m.C.Projects.List() {
 		if !p.Self {
 			continue
 		}
-		_, next := m.unmerged(p.Name)
+		sha, next := m.unmerged(p.Name)
 		key := p.Name + "@unmerged:" + next
 		if next == "" || m.said[key] {
 			continue
 		}
 		m.said[key] = true
+		contains := m.Contains
+		if contains == nil {
+			contains = m.contains
+		}
+		if next != sha {
+			if in, err := contains(p, sha, next); err != nil || !in {
+				continue
+			}
+		}
 		func() {
 			defer m.lock(p.Name)()
 			m.afterKept(p.Name, next)
@@ -1055,37 +1083,75 @@ func (m *Module) retryUnmerged() {
 // greenAfter reads the checks of.
 const greenAfterN = 10
 
-// greenAfter is the newest of the project's merges after sha whose checks
-// passed on main, or "" when none did. A commit whose ci run GitHub cancelled
-// (one queued run replaces another) has no checks and would wait forever, and
-// one that failed may be fixed after it: a green descendant carries it into a
-// release. It only reads the checks, journaling nothing; afterKept does.
+// greenAfter is the newest of the project's kept merges after sha whose
+// checks passed on main and whose history holds sha, or "" when none does. A
+// commit whose ci run GitHub cancelled (one queued run replaces another) has
+// no checks and would wait forever, and one that failed may be fixed after
+// it: a green descendant carries it into a release. Only a merge improve kept
+// (its own score.measured, or a later kept one covering it) is chosen, so an
+// install following pre-releases never runs a merge measured red or worse,
+// or one not judged yet, which its own AfterKept releases once kept. It only
+// reads, journaling nothing; afterKept reads main's checks at the chosen
+// commit again and journals them.
 func (m *Module) greenAfter(p core.Project, sha string) string {
 	var later []string
+	kept := map[string]bool{}
 	m.C.J.Replay(func(e core.Event) {
 		var x struct {
 			Project  string
+			SHA      string
 			MergeSHA string `json:"merge_sha"`
+			Kept     bool
+			Red      bool
+			NoResult bool `json:"no_result"`
 		}
-		if e.Kind != "effect.merged" || e.Decode(&x) != nil || x.Project != p.Name || x.MergeSHA == "" {
+		if e.Decode(&x) != nil || x.Project != p.Name {
 			return
 		}
-		if x.MergeSHA == sha {
-			later = []string{} // only the merges after the newest sighting count
-			return
-		}
-		if later != nil {
-			later = append(later, x.MergeSHA)
+		switch e.Kind {
+		case "score.measured":
+			if !x.NoResult {
+				kept[x.SHA] = x.Kept // the newest measure of a commit stands
+			}
+		case "score.covered":
+			kept[x.SHA] = !x.Red
+		case "effect.merged":
+			if x.MergeSHA == "" {
+				return
+			}
+			if x.MergeSHA == sha {
+				later = []string{} // only the merges after the newest sighting count
+				return
+			}
+			if later != nil {
+				later = append(later, x.MergeSHA)
+			}
 		}
 	})
+	contains := m.Contains
+	if contains == nil {
+		contains = m.contains
+	}
 	for i, n := len(later)-1, 0; i >= 0 && n < greenAfterN; i, n = i-1, n+1 {
+		if !kept[later[i]] {
+			continue
+		}
 		runs, err := m.C.Effects.Forge.Checks(p.Repo, later[i])
 		if err != nil {
 			continue
 		}
-		if state, _ := core.ChecksState(runs, m.C.Effects.RequiredChecks(p, later[i])); state == core.CheckPass {
-			return later[i]
+		if state, _ := core.ChecksState(runs, m.C.Effects.RequiredChecks(p, later[i])); state != core.CheckPass {
+			continue
 		}
+		// The journal's order of merges stands in for main's history; the
+		// history itself says so, and one that can't be read is passed over.
+		if in, err := contains(p, sha, later[i]); err != nil || !in {
+			if err != nil {
+				log.Printf("release: %s: can't tell whether %s contains %s: %v", p.Name, core.Short(later[i]), core.Short(sha), err)
+			}
+			continue
+		}
+		return later[i]
 	}
 	return ""
 }

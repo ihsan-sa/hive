@@ -240,10 +240,13 @@ func noTool(s clipSetup) error {
 func clipboardImage() (chat.File, error) {
 	setup := thisSetup()
 	err := noTool(setup)
+	var ran []string
 	for _, t := range clipTools(setup) {
-		if _, e := exec.LookPath(t.argv[0]); e != nil {
+		path, e := exec.LookPath(t.argv[0])
+		if e != nil || sameTool(ran, path) {
 			continue
 		}
+		ran = append(ran, path)
 		err = errNoImage
 		var stderr bytes.Buffer
 		cmd := exec.Command(t.argv[0], t.argv[1:]...)
@@ -259,6 +262,22 @@ func clipboardImage() (chat.File, error) {
 		}
 	}
 	return chat.File{}, err
+}
+
+// sameTool: path is a tool already run. From WSL's default PATH,
+// powershell.exe is winPowerShell (as /mnt/c/WINDOWS/..., C: ignoring case),
+// slow to start, so an empty clipboard doesn't run it twice.
+func sameTool(ran []string, path string) bool {
+	fi, err := os.Stat(path)
+	for _, r := range ran {
+		if strings.EqualFold(r, path) {
+			return true
+		}
+		if ri, e := os.Stat(r); err == nil && e == nil && os.SameFile(ri, fi) {
+			return true
+		}
+	}
+	return false
 }
 
 // toolFailed is errNoImage with why the clipboard tool failed.
