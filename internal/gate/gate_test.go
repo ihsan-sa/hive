@@ -141,6 +141,37 @@ func TestDecideNoise(t *testing.T) {
 	}
 }
 
+// A time moves when every candidate rep beats every control rep, compared on
+// a log scale, however scattered the slower side (#1354: 8.2/7.7/8.6 s
+// against 55.3/11.4/23.7 s was called nothing moved).
+func TestDecideTime(t *testing.T) {
+	mk := func(vs ...float64) []Result {
+		var rs []Result
+		for _, v := range vs {
+			rs = append(rs, res("benchmark", true, Metric{Name: "seconds", Value: v, Time: true}))
+		}
+		return rs
+	}
+	if v := Decide(mk(8.2, 7.7, 8.6), mk(55.3, 11.4, 23.7), Options{}); !v.Keep || !strings.Contains(v.Reason, "no rep overlaps") {
+		t.Errorf("faster in every rep not kept: %v", v)
+	}
+	if v := Decide(mk(55.3, 11.4, 23.7), mk(8.2, 7.7, 8.6), Options{}); len(v.Regressions) != 1 {
+		t.Errorf("slower in every rep not a regression: %v", v)
+	}
+	// With fewer than 3 a side no overlap alone decides nothing.
+	if v := Decide(mk(8, 30), mk(31, 90), Options{}); v.Keep {
+		t.Errorf("2 a side kept on no overlap: %v", v)
+	}
+	// Apart but within the floor is nothing.
+	if v := Decide(mk(10, 10.01, 10.02), mk(10.03, 10.04, 10.05), Options{}); v.Keep || len(v.Regressions) > 0 {
+		t.Errorf("a 0.3%% move counted: %v", v)
+	}
+	// Overlapping reps fall back to the noise.
+	if v := Decide(mk(8, 13, 10.5), mk(10, 7, 13), Options{}); v.Keep || len(v.Regressions) > 0 {
+		t.Errorf("scattered times counted: %v", v)
+	}
+}
+
 func fakeBin(t *testing.T, dir, name, version string, ok bool) string {
 	p := filepath.Join(dir, name)
 	body := "#!/bin/sh\necho " + version + "\n"
@@ -895,7 +926,9 @@ func TestOutOfTimeIsAloneOnlyWhenTheCandidateIsSlower(t *testing.T) {
 	if rep := run("both-slow", 300*time.Millisecond, 300*time.Millisecond, 100*time.Millisecond); rep.Alone {
 		t.Errorf("out of time before the control's turn, both slow: alone (%s)", rep.Error)
 	}
-	if rep := run("cand-slow", 600*time.Millisecond, 10*time.Millisecond, 800*time.Millisecond); !rep.Alone {
+	// A second's slack for start-up before the control's turn: a loaded
+	// runner used up 200ms of it.
+	if rep := run("cand-slow", 2*time.Second, 10*time.Millisecond, 3*time.Second); !rep.Alone {
 		t.Errorf("out of time with the candidate the slower side: not alone (%s)", rep.Error)
 	}
 }

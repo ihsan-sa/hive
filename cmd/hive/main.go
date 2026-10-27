@@ -30,6 +30,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/runner"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
 	"github.com/ihsan-sa/hive-standalone-build/internal/openagent"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
@@ -50,7 +51,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive refuse <id> [note]  say no to it (its last option)
   hive read <task|#pr> <sha> land|fix --by perms|architect [note]
                            record the box's perms seat's or architect's read of that head
-  hive hold <project> [why]  hold every merge on it, follow-ups included [--only 12,15] [--until release]
+  hive hold <project> [why]  hold every merge on it, the Hive's own included [--only 12,15] [--until release]
   hive hold <project> --lift [why]  lift the hold
   hive login               log in to Claude Code and GitHub with their own logins
   hive login add <name>    add another Claude login to spread runs over; add "codex" for Codex
@@ -332,6 +333,16 @@ func run(args []string) int {
 		return cmdRemote(args)
 	case "remote-info": // run over ssh by `hive remote`
 		return cmdRemoteInfo(args, os.Stdin, os.Stdout)
+	}
+	// A module whose manifest asks for it has a command of its own.
+	if ws, ok := core.FindWorkspace(); ok && cmd != "" {
+		code, err := runner.Command(ws, cmd, args)
+		if err != runner.ErrNoCommand {
+			if err != nil {
+				fmt.Fprintln(os.Stderr, core.Cmd+":", err)
+			}
+			return code
+		}
 	}
 	fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usageText())
 	return 2

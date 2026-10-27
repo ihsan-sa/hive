@@ -96,6 +96,7 @@ type Run struct {
 	Head        string          `json:"head,omitempty"`  // its checkout's HEAD log (size, time) at its last turn's end
 	Still       int             `json:"still,omitempty"` // turns in a row that ended with that log unchanged
 	Login       string          `json:"login,omitempty"` // the login its latest turn went on
+	Where       string          `json:"where,omitempty"` // the runner its latest turn went to; empty is this machine
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
 	StopAsked   bool            `json:"stop_asked,omitempty"`
@@ -409,6 +410,10 @@ type Runs struct {
 	// Route is the picks a persistent run's next turn follows, so a lead
 	// follows a changed setting; empty keeps the run's own and its Route.
 	Route func(Run) []Pick
+	// Executor hands a turn this machine is too strained to start to a
+	// module that runs it elsewhere: the sandbox to start it in and the
+	// runner that has room, or nil when no module has room now.
+	Executor func() (sandbox.Sandbox, string)
 
 	mu      sync.Mutex
 	runs    map[string]*Run
@@ -615,6 +620,7 @@ type turnStarted struct {
 	Model     string      `json:"model,omitempty"`
 	Harness   string      `json:"harness,omitempty"`
 	Login     string      `json:"login,omitempty"`
+	Where     string      `json:"where,omitempty"` // the executor module's runner it went to; empty is this machine
 }
 
 type turnEnded struct {
@@ -758,7 +764,7 @@ func (rs *Runs) apply(e Event) {
 	case "run.turn_started":
 		var t turnStarted
 		e.Decode(&t)
-		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login
+		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login, r.Where = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login, t.Where
 		if t.Session != "" {
 			r.Session = t.Session
 		}
@@ -1218,15 +1224,27 @@ func (rs *Runs) picks(r Run) (picks, unproven []Pick) {
 			picks = route
 		}
 	}
-	for _, p := range r.RunSpec.Route {
+	specRoute := r.RunSpec.Route
+	if rs.Route != nil && !r.Persistent && len(specRoute) > 0 {
+		// A route fixed at its start that can't answer any more (its first
+		// pick is down) gives way to the settings' route as it is now, so a
+		// run parked on a rejected model follows the route changed since.
+		if _, down := rs.downFor(specRoute[0]); down {
+			if route := rs.Route(r); len(route) > 0 {
+				specRoute = route
+				picks = append(picks, route...)
+			}
+		}
+	}
+	for _, p := range specRoute {
 		if !slices.ContainsFunc(picks, p.Same) {
 			picks = append(picks, p)
 		}
 	}
 	if r.Finishes() {
 		first := own
-		if len(r.RunSpec.Route) > 0 {
-			first = r.RunSpec.Route[0]
+		if len(specRoute) > 0 {
+			first = specRoute[0]
 		}
 		rs.mu.Lock()
 		picks = slices.DeleteFunc(picks, func(p Pick) bool {
@@ -1305,17 +1323,18 @@ func (rs *Runs) wake(id string) {
 // Reopen lets a finished run take more turns (fix rounds go back to the same worker).
 // A Codex run whose token folder still won't delete stays blocked for it.
 // The same text again while a turn runs on it, handed or waiting, is
-// already being worked on: it takes no further turn (issue #1157).
+// already being worked on: it takes no further turn (issue #1157), unless
+// the run was asked to stop, which the caller still hears.
 func (rs *Runs) Reopen(id, text string) error {
 	r, ok := rs.Get(id)
 	if !ok {
 		return ErrNotFound
 	}
-	if r.Status == StatusRunning && (slices.Contains(r.Given, text) || slices.Contains(r.Pending, text)) {
-		return nil
-	}
 	if r.Status == StatusStopped || r.StopAsked {
 		return fmt.Errorf("run %s was stopped on purpose (%s); it stays stopped", id, r.Reason)
+	}
+	if r.Status == StatusRunning && (slices.Contains(r.Given, text) || slices.Contains(r.Pending, text)) {
+		return nil
 	}
 	if err := rs.tokenStuck(r); err != nil {
 		return err
@@ -1360,8 +1379,8 @@ func (rs *Runs) SetStatus(id, status, reason string) {
 // StoppedQuiet opens the reason of a quiet run an agent ended with EndQuiet.
 const StoppedQuiet = "stopped while quiet by "
 
-// EndQuiet ends a quiet run blocked with reason (StoppedQuiet first), only if
-// it is still quiet and no turn of it is starting: a message that woke it
+// EndQuiet ends a quiet or parked run blocked with reason (StoppedQuiet
+// first), only if it is still so and no turn of it is starting: a message that woke it
 // since the caller looked keeps it going. A message later doesn't wake it;
 // Reopen still does.
 func (rs *Runs) EndQuiet(id, reason string) error {
@@ -1371,9 +1390,9 @@ func (rs *Runs) EndQuiet(id, reason string) error {
 	case cur == nil:
 		rs.mu.Unlock()
 		return ErrNotFound
-	case cur.Status != StatusQuiet || rs.starting[id]:
+	case (cur.Status != StatusQuiet && cur.Status != StatusParked) || rs.starting[id]:
 		rs.mu.Unlock()
-		return fmt.Errorf("run %s is %s, not quiet", id, cur.Status)
+		return fmt.Errorf("run %s is %s, not quiet or parked", id, cur.Status)
 	}
 	if rs.starting == nil {
 		rs.starting = map[string]bool{}
@@ -2069,7 +2088,15 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		// only the floor under which its turn could not run at all.
 		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
 	}
-	if why := Strained(floor, memMax, cpuMax); why != "" {
+	// A turn this machine is too strained for goes to an executor module
+	// with room, or waits.
+	var elsewhere sandbox.Sandbox
+	where := ""
+	why := Strained(floor, memMax, cpuMax)
+	if why != "" {
+		elsewhere, where = rs.executor()
+	}
+	if why != "" && elsewhere == nil {
 		// The hold keeps the run's status, so a parked run keeps its backoff
 		// and a nudged one its count; the live figures after " (" change
 		// every tick, so only a new kind of hold is journalled.
@@ -2085,6 +2112,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			rs.append("run.status", runNote{ID: r.ID, Status: StatusQueued, Reason: err.Error()})
 		}
 		return
+	}
+	if elsewhere != nil {
+		sb = elsewhere
 	}
 	// A run whose own harness and model are at their limit moves to the
 	// first pick with room; one changing harness, or open model, can't
@@ -2219,7 +2249,26 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	started = true
 	rs.claimed(r.ID, turn, p)
-	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness})
+	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness, Where: where})
+}
+
+// Elsewhere says whether an executor module has room for a turn now.
+func (rs *Runs) Elsewhere() bool {
+	ex, _ := rs.executor()
+	return ex != nil
+}
+
+// executor returns an executor module with room for a turn this machine is
+// too strained to start, and the runner it named; nil when there is none or
+// the local sandbox isn't one whose spec another machine can run.
+func (rs *Runs) executor() (sandbox.Sandbox, string) {
+	if rs.Executor == nil {
+		return nil, ""
+	}
+	if sb, err := rs.sandbox(); err != nil || !sb.Isolated() {
+		return nil, ""
+	}
+	return rs.Executor()
 }
 
 // RunPath is where a run's agent sees its run dir ($HIVE_RUN).

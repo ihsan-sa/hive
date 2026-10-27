@@ -144,6 +144,14 @@ func (e *Effects) untouched(p Project, g GateResult, main string) (bool, error) 
 	return !hit, err
 }
 
+// MainLeaves says whether main's commits from..to touch none of head's own
+// files (against from) nor what the gate measures with: the same test as a
+// gate verdict's standing, for a merged test that passed at from (the work
+// module's merge line).
+func (e *Effects) MainLeaves(p Project, head, from, to string) bool {
+	return e.gateStands(p, GateResult{Head: head, Main: from}, to)
+}
+
 // Unseats reports whether merging head into main would end g's standing
 // there: head changes a file g's own change does, or one of what the gate
 // measures with. A merge that leaves both alone keeps the verdict, so only

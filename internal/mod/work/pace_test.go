@@ -1,8 +1,8 @@
 package work
 
 import (
-	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -255,7 +255,7 @@ func TestPaceHasASafetyCeiling(t *testing.T) {
 }
 
 // The workers' pace grows only for a brief that waits on the limit itself:
-// one waiting on another's files would leave the new slot empty. When it
+// a held one would leave the new slot empty. When it
 // does grow, the brief starts in the same tick.
 func TestPaceGrowsOnlyForBriefsTheLimitHolds(t *testing.T) {
 	m := queueRig(t)
@@ -275,13 +275,16 @@ func TestPaceGrowsOnlyForBriefsTheLimitHolds(t *testing.T) {
 	a := file(t, m, "cap the checks", "Checks run via internal/core/effects.go.")
 	tick(m)
 	b := file(t, m, "hold strained turns", "Also in internal/core/effects.go, launch.")
+	held := stageOf(t, m, b)
+	held.Held, held.HeldBy = true, "lead"
+	m.save(&held, "held")
 	set(1)
 	tick(m)
-	if got := stageOf(t, m, b); got.Stage != StageQueued || !strings.Contains(got.Reason, "both touch") {
-		t.Fatalf("overlapping brief: stage %q reason %q", got.Stage, got.Reason)
+	if got := stageOf(t, m, b); got.Stage != StageQueued || !strings.Contains(got.Reason, "held by") {
+		t.Fatalf("held brief: stage %q reason %q", got.Stage, got.Reason)
 	}
 	if l := m.workers.get(); l != 1 {
-		t.Fatalf("grew for a brief that waits on another's files: %d", l)
+		t.Fatalf("grew for a held brief: %d", l)
 	}
 	c := file(t, m, "show the queue", "On the dashboard, internal/tui/views.go.")
 	set(1)
@@ -334,9 +337,9 @@ func TestSteady(t *testing.T) {
 	}
 }
 
-// A check of a task queued briefs wait on ranks first, a fix's next, and the
-// rest, or a sha no task holds, not at all (issue #838).
-func TestCheckRankFreesThenFixes(t *testing.T) {
+// A fix's check ranks first, and the rest, or a sha no task holds, not at
+// all.
+func TestCheckRankFixes(t *testing.T) {
 	m, _, _ := helperRig(t)
 	put := func(tk Task) {
 		m.mu.Lock()
@@ -347,15 +350,71 @@ func TestCheckRankFreesThenFixes(t *testing.T) {
 	put(Task{ID: "fix", Project: "p", SHA: "s2", Stage: StageTesting, Aim: AimFix})
 	put(Task{ID: "gain", Project: "p", SHA: "s3", Stage: StageTesting})
 	put(Task{ID: "done", Project: "p", SHA: "s4", Stage: StageDone})
-	put(Task{ID: "waiter", Project: "p", Stage: StageQueued, Reason: fmt.Sprintf("waiting for %q (task %s) to land: both touch a.go", "holds", "blocker")})
-	put(Task{ID: "waiter2", Project: "p", Stage: StageQueued, Reason: fmt.Sprintf("waiting for %q (task %s) to land: both touch a.go", "x", "done")})
-	for sha, want := range map[string]int{"s1": rankFrees, "s2": rankFix, "s3": 0, "s4": 0, "nobody": 0} {
+	for sha, want := range map[string]int{"s1": 0, "s2": rankFix, "s3": 0, "s4": 0, "nobody": 0} {
 		if got := m.checkRank("p", sha, "test"); got != want {
 			t.Errorf("rank of %s: %d, want %d", sha, got, want)
 		}
 	}
-	if got := m.checkRank("other", "s1", "test"); got != 0 {
+	if got := m.checkRank("other", "s2", "test"); got != 0 {
 		t.Errorf("another project's sha ranked %d", got)
+	}
+}
+
+// The merge line's front tests its head merged with main, a sha no task
+// holds as its head: it goes ahead of every task's own check, behind main's
+// measurement, and drops back once done or gone (issue #1766).
+func TestCheckRankMergeFront(t *testing.T) {
+	m, _, _ := helperRig(t)
+	m.mu.Lock()
+	m.tasks["front"] = &Task{ID: "front", Project: "p", SHA: "head", Stage: StageMerging}
+	m.tasks["fix"] = &Task{ID: "fix", Project: "p", SHA: "s1", Stage: StageTesting, Aim: AimFix}
+	m.mergeRuns = map[string]*mergeRun{"front": {key: "head+main1", main: "main1", sha: "merged"}}
+	m.mu.Unlock()
+	if got := m.checkRank("p", "merged", "test"); got != rankMerge || got <= m.checkRank("p", "s1", "test") {
+		t.Errorf("the front's merged test ranked %d, a fix's check %d", got, m.checkRank("p", "s1", "test"))
+	}
+	if RankWhy(rankMerge) == "" {
+		t.Error("the merge front's rank says nothing")
+	}
+	if got := m.checkRank("other", "merged", "test"); got != 0 {
+		t.Errorf("another project's merge ranked %d", got)
+	}
+	done := m.MeasuringMain("p", "main2")
+	if got := m.checkRank("p", "main2", "score"); got <= rankMerge {
+		t.Errorf("main's measurement ranked %d, not ahead of the merge front", got)
+	}
+	done()
+	m.mu.Lock()
+	m.mergeRuns["front"].done = true
+	m.mu.Unlock()
+	if got := m.checkRank("p", "merged", "test"); got != 0 {
+		t.Errorf("a finished merged test still ranked %d", got)
+	}
+}
+
+// Main's own measurement goes ahead of every task's check while it runs,
+// and keeps its place once done (issue #1078).
+func TestCheckRankMainFirst(t *testing.T) {
+	m, _, _ := helperRig(t)
+	m.mu.Lock()
+	m.tasks["fix"] = &Task{ID: "fix", Project: "p", SHA: "s1", Stage: StageTesting, Aim: AimFix}
+	m.mu.Unlock()
+	done := m.MeasuringMain("p", "main1")
+	again := m.MeasuringMain("p", "main1")
+	if got := m.checkRank("p", "main1", "size"); got != rankMain || got <= m.checkRank("p", "s1", "test") {
+		t.Errorf("main's measurement ranked %d, a fix's check %d", got, m.checkRank("p", "s1", "test"))
+	}
+	if got := m.checkRank("other", "main1", "score"); got != 0 {
+		t.Errorf("another project's sha ranked %d", got)
+	}
+	done()
+	done()
+	if got := m.checkRank("p", "main1", "score"); got != rankMain {
+		t.Errorf("one of two measurements done: ranked %d", got)
+	}
+	again()
+	if got := m.checkRank("p", "main1", "score"); got != 0 {
+		t.Errorf("measured: still ranked %d", got)
 	}
 }
 
@@ -503,5 +562,67 @@ func TestPaceComesBackToTheStartUnderLoadAlone(t *testing.T) {
 	fresh := pace{limit: 4, start: 4, at: now, loadCuts: true}
 	if l := fresh.next(now.Add(paceStep), 4, true, load, true, 4, 0); l != 3 {
 		t.Fatalf("checks at their start under load alone: %d, want 3", l)
+	}
+}
+
+// Driven through the check slots: a rank-0 check already waiting in a full
+// line starts next once MeasuringMain marks its sha, ahead of one that asked
+// before it (issue #1713).
+func TestMeasuringMainMovesAWaiterUp(t *testing.T) {
+	m, _, _ := helperRig(t)
+	slots := m.C.Effects.Slots
+	slots.Resize(func() int { return 1 })
+	hold := slots.Acquire("p", "running", "test")
+	started := make(chan string, 4)
+	for _, sha := range []string{"pr", "main1"} {
+		go func() {
+			rel := slots.Acquire("p", sha, "score")
+			started <- sha
+			rel()
+		}()
+		for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+			_, w := slots.State()
+			if slices.ContainsFunc(w, func(u core.SlotUse) bool { return u.SHA == sha }) {
+				break
+			}
+			if time.Now().After(end) {
+				t.Fatalf("%s never queued", sha)
+			}
+		}
+	}
+	if _, w := slots.State(); w[0].SHA != "pr" || w[1].Rank != 0 {
+		t.Fatalf("before the mark, waiting %+v", w)
+	}
+	done := m.MeasuringMain("p", "main1")
+	defer done()
+	if _, w := slots.State(); w[0].SHA != "main1" || w[0].Rank != rankMain {
+		t.Fatalf("after the mark, waiting %+v", w)
+	}
+	hold()
+	if a, b := <-started, <-started; a != "main1" || b != "pr" {
+		t.Fatalf("started %s then %s", a, b)
+	}
+}
+
+// Main's own red tests run again ranked as main's measurement: every red
+// change on that main waits on the answer.
+func TestMainTestsRetestRanksAsMain(t *testing.T) {
+	m, forge, p := helperRig(t)
+	out, _ := core.Git(forge.RepoPath("me/p"), "rev-parse", "main")
+	main := strings.TrimSpace(out)
+	rank := -1
+	m.Retest = func(p core.Project, sha, _ string, _ core.Check, _ bool) bool {
+		rank = m.checkRank(p.Name, sha, "retest")
+		return true
+	}
+	c, err := m.mainTests(p, main, "exit 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.OK || rank != rankMain {
+		t.Fatalf("ok %v, retest ranked %d", c.OK, rank)
+	}
+	if got := m.checkRank(p.Name, main, "test"); got != 0 {
+		t.Fatalf("answered: still ranked %d", got)
 	}
 }
