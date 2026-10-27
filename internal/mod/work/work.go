@@ -532,9 +532,6 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	if was == StageMerging && t.Stage != StageMerging {
 		m.dropMergeRunLocked(t.ID)
 	}
-	if was == StageMerging && !inMergeLine(t) {
-		m.nextInLineLocked(t)
-	}
 	m.mu.Unlock()
 	if note != "" {
 		t.Log = append(t.Log, Entry{At: t.Updated, Text: note})
@@ -2721,23 +2718,6 @@ const MergeLineWait = "waiting its turn in the merge line"
 // mergedTestWait opens the reason of a task whose merged test is queued or
 // running.
 const mergedTestWait = "testing its head merged with main"
-
-// inMergeLine says t is in its project's merge line (see mergeFront).
-func inMergeLine(t *Task) bool {
-	return t.Stage == StageMerging && (strings.HasPrefix(t.Reason, mergedTestWait) || strings.HasPrefix(t.Reason, MergeLineWait))
-}
-
-// nextInLineLocked lets the tasks waiting their turn behind t, which has
-// left its project's merge line (merged, or held for something else), look
-// again at once rather than a holdGap after they were held. The caller
-// holds m.mu.
-func (m *Module) nextInLineLocked(t *Task) {
-	for _, u := range m.tasks {
-		if u.ID != t.ID && u.Project == t.Project && u.Stage == StageMerging && strings.HasPrefix(u.Reason, MergeLineWait) {
-			delete(m.later, u.ID)
-		}
-	}
-}
 
 // mergeFront returns the task ahead of t in its project's merge line, or nil
 // when t is at its front. Only the front tests its head merged with main
