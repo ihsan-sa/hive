@@ -182,28 +182,43 @@ func TestRetryHint(t *testing.T) {
 	if h := retryHint("wait:p:testing:checks", work.StageTesting); !strings.Contains(h, "recheck --task <id>") {
 		t.Fatalf("shared wait hint: %q", h)
 	}
-	// Recheck refuses a merged task, so the hint doesn't offer it.
-	if h := retryHint("task:abc", work.StageMerged); strings.Contains(h, "hive agent recheck") || !strings.Contains(h, "on main already") {
-		t.Fatalf("merged hint: %q", h)
-	}
 	if h := retryHint("task:abc", work.StageNew); h != "" {
 		t.Fatalf("a new task has no recheck: %q", h)
 	}
 }
 
-// A merge's step hands its task to be measured and returns at once, however
-// full the queue is, so the task goes on to done on the next tick rather than
-// sitting in merged while measures back up.
-func TestEnqueueDoesNotHoldTheMerge(t *testing.T) {
-	m := &Module{queue: make(chan work.Task)} // nobody reads it: as full as it gets
+// A merged task's change is on main: the watcher leaves it be, however long
+// it sits there, as a recheck of it is refused ("task is merged").
+func TestMergedTaskIsNotAStall(t *testing.T) {
+	m := rig(t)
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: work.StageMerged, MergeSHA: "abc"})
+	m.mu.Lock()
+	m.spells["t0"] = spell{stage: work.StageMerged, since: time.Now().Add(-2 * time.Hour)}
+	m.mu.Unlock()
+	m.Watch()
+	m.Watch()
+	if s := m.Stalls(); len(s) != 0 {
+		t.Fatalf("stalls = %+v, want none for a merged task", s)
+	}
+}
+
+// A merge step hands its merge to be measured without waiting for room in
+// the queue: a full one held the step, so the task sat in merged for good.
+func TestEnqueueDoesNotWaitForRoom(t *testing.T) {
+	m := &Module{queue: make(chan work.Task)} // nothing reads it: as full as it gets
 	done := make(chan struct{})
-	go func() { m.enqueue(work.Task{ID: "t1"}); close(done) }()
+	go func() { m.enqueue(work.Task{ID: "t0"}); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("enqueue blocked on a full queue")
+		t.Fatal("enqueue waited for room in a full queue")
 	}
-	if got := <-m.queue; got.ID != "t1" {
-		t.Fatalf("queued %q, want t1", got.ID)
+	select {
+	case got := <-m.queue:
+		if got.ID != "t0" {
+			t.Fatalf("queued %+v, want t0", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the merge never reached the queue")
 	}
 }
