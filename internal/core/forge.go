@@ -63,6 +63,9 @@ type Forge interface {
 	IsEmpty(repo string) (bool, error)
 	DefaultBranch(repo string) string
 	CreateIssue(repo, title, body, marker string) (Issue, error)
+	// EditIssue replaces an issue's title and body (a body keeps its marker
+	// only if the caller writes it in again).
+	EditIssue(repo string, number int, title, body string) error
 	Comment(repo string, number int, body string) error
 	// StatusComment keeps one comment per issue or PR that carries marker:
 	// the first call posts it, later calls edit it in place.
@@ -505,6 +508,11 @@ func (GitHub) CreateIssue(repo, title, body, marker string) (Issue, error) {
 		return Issue{}, err
 	}
 	return Issue{numberFromURL(url), url}, nil
+}
+
+func (GitHub) EditIssue(repo string, number int, title, body string) error {
+	_, err := gh(repo, "issue", "edit", strconv.Itoa(number), "-R", repo, "--title", title, "--body", body)
+	return err
 }
 
 func (GitHub) Comment(repo string, number int, body string) error {

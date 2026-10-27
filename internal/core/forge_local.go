@@ -168,6 +168,30 @@ func (l *Local) CreateIssue(repo, title, body, marker string) (Issue, error) {
 	return Issue{n, fmt.Sprintf("local://%s/issues/%d", repo, n)}, nil
 }
 
+func (l *Local) EditIssue(repo string, number int, title, body string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	for i := range s.Issues[repo] {
+		if s.Issues[repo][i].Number == number {
+			s.Issues[repo][i].Title, s.Issues[repo][i].Body = title, body
+			l.save(s)
+			return nil
+		}
+	}
+	return fmt.Errorf("no issue #%d in %s", number, repo)
+}
+
+// Issue returns an issue's title and body (tests read them).
+func (l *Local) Issue(repo string, number int) (title, body string) {
+	for _, i := range l.load().Issues[repo] {
+		if i.Number == number {
+			return i.Title, i.Body
+		}
+	}
+	return "", ""
+}
+
 func (l *Local) Comment(repo string, number int, body string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
