@@ -1750,7 +1750,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 			return err
 		}
 		if mc.CantRun != "" {
-			return m.cantRun(t, p, mc)
+			return m.cantRunOn(t, p, mc, "main at "+core.Short(main))
 		}
 		switch {
 		case !mc.OK && !core.NoWorse(c, mc):
@@ -1829,6 +1829,12 @@ const CantRunTries = 6
 // changes. After CantRunTries of its own tests in a row it is red: it is
 // stopped, never merged on it, and the person is asked for the tool.
 func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
+	return m.cantRunOn(t, p, c, core.Short(t.SHA))
+}
+
+// cantRunOn is cantRun for a check of what on names (the PR's head, its merge
+// with main, main), which the PR's comment says was tested.
+func (m *Module) cantRunOn(t *Task, p core.Project, c core.Check, on string) error {
 	if t.CantRuns >= CantRunTries {
 		return m.cantRunRed(t, p, c)
 	}
@@ -1846,7 +1852,7 @@ func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
 	m.save(t, reason)
 	m.raiseCantRun(p, c)
 	if say {
-		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
+		m.comment(p.Repo, t.PR.Number, "Tests on "+on+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
 	}
 	return nil
 }
@@ -2368,6 +2374,12 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		m.hold(t, p, why)
 		return nil
 	}
+	// The merge with main is tested just before the merge, once every
+	// cheaper hold has cleared: a task still waiting on a read, the forge
+	// or the gate would otherwise run the whole suite each time main moves.
+	if wait, err := m.mergedTests(t, p, main); wait || err != nil {
+		return err
+	}
 	if !m.enterMerge() { // the Hive is about to restart into an update
 		m.mu.Lock()
 		m.later[t.ID] = time.Now().Add(holdGap)
@@ -2543,11 +2555,11 @@ func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 }
 
 // upToDate decides whether t's branch must take main in before it merges.
-// It merges as it is while the forge says it merges cleanly and its tests
-// pass merged with main (mergedTests): every main merge would otherwise move
-// the head past its reads and restart its checks. Here only a conflict, the
-// forge's rule that the branch be up to date with main, or a red merge with
-// main brings main in; on a self project the recursive gate merges main in
+// It merges as it is while the forge says it merges cleanly and, last of
+// all, its tests pass merged with main (mergedTests): every main merge would
+// otherwise move the head past its reads and restart its checks. Only a
+// conflict, the forge's rule that the branch be up to date with main, or a
+// red merge with main brings main in; on a self project the recursive gate merges main in
 // its own clone, so it judges what would land without moving the branch (see
 // recursiveGate). While the forge is still working it out, t waits.
 func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
@@ -2573,7 +2585,7 @@ func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 		m.hold(t, p, "waiting for the forge to work out whether PR #"+fmt.Sprint(t.PR.Number)+" merges cleanly with main (mergeable "+state+", main at "+core.Short(main)+")")
 		return true, nil
 	}
-	return m.mergedTests(t, p, main)
+	return false, nil
 }
 
 // mergedTests runs the project's tests on t's head merged with main, once
@@ -2586,9 +2598,21 @@ func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 // again, which sends the failure to the worker. A test that can't run waits
 // and is raised as any can't-run is; a merge git can't make here is left to
 // catchUp, which sends a conflict back.
+//
+// It is skipped where it can't catch anything or something else does: a
+// branch that has main, a prose-only change (core.ProseOnly), which can't
+// break the build, and a gain to the Hive itself, whose recursive gate
+// already tested its merge with main in its own clone. Each run is journaled
+// (task.merged_tested), so its load on the sandbox per merge can be counted.
 func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error) {
 	key := t.SHA + "+" + main
-	if t.MergedOK == key {
+	if t.MergedOK == key || (p.Self && t.Gain()) {
+		return false, nil
+	}
+	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
+		return false, nil
+	}
+	if m.textChange(t, p, main) {
 		return false, nil
 	}
 	merged, err := m.C.Effects.UpdateBranch(p, t.SHA, main, "")
@@ -2603,8 +2627,14 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	}
 	cfg := m.C.Effects.Config(p, main)
 	c := m.C.Effects.RunCheck(p, merged, "test", cfg.Test)
+	m.C.J.MustAppend("task.merged_tested", map[string]any{"project": p.Name, "task": t.ID, "sha": t.SHA, "main": main, "merged": merged, "ok": c.OK, "cant_run": c.CantRun})
 	if c.CantRun != "" {
-		return true, m.cantRun(t, p, c)
+		return true, m.cantRunOn(t, p, c, core.Short(t.SHA)+" merged with main at "+core.Short(main)+" (as "+core.Short(merged)+")")
+	}
+	m.RanCheck(p.Name, "test")
+	m.CloseCantRunAsk(p.Name, "cant-run:"+t.ID, "its tests run now")
+	if strings.HasPrefix(t.Reason, "the tests can't run") {
+		t.Reason = "" // the tool is there now
 	}
 	if !c.OK {
 		mc, err := m.mainTests(p, main, cfg.Test)
@@ -2612,7 +2642,7 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 			return true, err
 		}
 		if mc.CantRun != "" {
-			return true, m.cantRun(t, p, mc)
+			return true, m.cantRunOn(t, p, mc, "main at "+core.Short(main))
 		}
 		if mc.OK || !core.NoWorse(c, mc) {
 			return true, m.takeMain(t, p, merged, "main moved and the tests fail on the PR merged with main at "+core.Short(main)+", though each passed alone")

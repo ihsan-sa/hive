@@ -374,6 +374,64 @@ func TestMergedWithMainGreenMergesAsItIs(t *testing.T) {
 	}
 }
 
+// mergedRuns counts the journal's runs of a task's tests merged with main.
+func mergedRuns(m *Module) (n int) {
+	m.C.J.Replay(func(e core.Event) {
+		if e.Kind == "task.merged_tested" {
+			n++
+		}
+	})
+	return n
+}
+
+// A merge with main whose tests can't run waits, and the PR hears it was the
+// merge, not the head, that couldn't run. Once the merge's tests run, the
+// can't-run alert and reason clear there, not only in a later test().
+func TestMergedWithMainCantRunClearsOnceRun(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	head := task.SHA
+	pushMain(t, f, map[string]string{"NEEDTOOL": "x"})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.HasPrefix(task.Reason, "the tests can't run") {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	said := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n")
+	if !strings.Contains(said, "Tests on "+core.Short(head)+" merged with main at ") || !strings.Contains(said, "can't run: hive-gate-tool-xyz") {
+		t.Fatalf("the PR should hear its merge with main couldn't run: %q", said)
+	}
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "hive-gate-tool-xyz"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	m.mu.Lock()
+	_, open := m.cantRunOpen[p.Name]
+	m.mu.Unlock()
+	if open || task.Stage != StageMerged || task.SHA != head {
+		t.Fatalf("alert open %v, stage %q at %s, reason %q", open, task.Stage, core.Short(task.SHA), task.Reason)
+	}
+	if n := mergedRuns(m); n != 2 {
+		t.Fatalf("%d merged test runs journaled, want 2", n)
+	}
+}
+
+// Prose can't break the build: a prose-only PR behind main merges as it is
+// without running the tests merged with main.
+func TestProseOnlySkipsMergedTests(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"notes.md": "# notes\n"})
+	toMerging(t, m, task, p)
+	head := task.SHA
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.SHA != head {
+		t.Fatalf("stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
+	}
+	if n := mergedRuns(m); n != 0 {
+		t.Fatalf("%d merged test runs for a prose-only change, want 0", n)
+	}
+}
+
 // unknownForge is a forge still working out whether a PR merges cleanly.
 type unknownForge struct{ *core.Local }
 
