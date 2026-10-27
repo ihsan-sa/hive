@@ -1305,17 +1305,18 @@ func (rs *Runs) wake(id string) {
 // Reopen lets a finished run take more turns (fix rounds go back to the same worker).
 // A Codex run whose token folder still won't delete stays blocked for it.
 // The same text again while a turn runs on it, handed or waiting, is
-// already being worked on: it takes no further turn (issue #1157).
+// already being worked on: it takes no further turn (issue #1157), unless
+// the run was asked to stop, which the caller still hears.
 func (rs *Runs) Reopen(id, text string) error {
 	r, ok := rs.Get(id)
 	if !ok {
 		return ErrNotFound
 	}
-	if r.Status == StatusRunning && (slices.Contains(r.Given, text) || slices.Contains(r.Pending, text)) {
-		return nil
-	}
 	if r.Status == StatusStopped || r.StopAsked {
 		return fmt.Errorf("run %s was stopped on purpose (%s); it stays stopped", id, r.Reason)
+	}
+	if r.Status == StatusRunning && (slices.Contains(r.Given, text) || slices.Contains(r.Pending, text)) {
+		return nil
 	}
 	if err := rs.tokenStuck(r); err != nil {
 		return err
