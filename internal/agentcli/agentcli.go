@@ -206,6 +206,9 @@ with your run id.
                                                  checked again from its head; --back sends its worker that
   landed    --task id --why "..." [--merge sha]  end a task whose PR merged on the forge or whose
                                                  work is on main, so the briefs waiting on it start
+  amend     --task id [--title ...] [--done ...] [--known ...] [--why ...]   change a brief no worker
+                                                 has started on, in place (yours; the lead: any but the person's)
+  withdraw  --task id --why "..." [--into id]   take back such a brief: it stops, its issue closes
   stop      --task id --why "..." [--fresh]   end a working task's quiet worker (one that keeps ending
                                                  turns without finishing) as blocked; bring the task back
                                                  with recheck, or --fresh hands it to a new worker at once
