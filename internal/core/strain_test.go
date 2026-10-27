@@ -276,10 +276,14 @@ func TestOverlappingTicksStepEachRunOnce(t *testing.T) {
 	}
 	// The lead's next steps drain an op held open until three ticks have
 	// come and gone behind it.
+	// Each op takes its gate from gates, so the op's goroutine is handed the
+	// one slowStep made, never reading a variable the test writes.
+	gates := make(chan chan struct{}, 1)
 	var gate chan struct{}
-	c.Runs.ops.Register(Op{Name: "slow", Fn: func(Run, json.RawMessage) (any, error) { <-gate; return nil, nil }})
+	c.Runs.ops.Register(Op{Name: "slow", Fn: func(Run, json.RawMessage) (any, error) { <-<-gates; return nil, nil }})
 	slowStep := func(n string) {
 		gate = make(chan struct{})
+		gates <- gate
 		os.WriteFile(filepath.Join(c.WS.RunBox("lead"), "outbox", n+".json"), []byte(`{"id":"`+n+`","op":"slow"}`), 0o644)
 	}
 	count := func(kind, id string) int {
