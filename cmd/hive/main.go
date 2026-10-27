@@ -504,6 +504,8 @@ func cmdOpen() int {
 	if !setup.AutostartEnabled() {
 		setup.EnableAutostart(ws.Root)
 	}
+	// Opening looks for an update; a daemon older than this ask has none.
+	c.Do("POST", "/api/opened", nil, nil)
 	if err := tui.Run(c, ws); err != nil {
 		fmt.Fprintln(os.Stderr, core.Cmd+":", err)
 		return 1

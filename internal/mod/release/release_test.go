@@ -1531,3 +1531,35 @@ func TestReleaseFallsForwardPastACancelledRun(t *testing.T) {
 		t.Fatalf("released again: %v", n.got)
 	}
 }
+
+// Opening the control center installs a newer release at once, and opening it
+// again soon after doesn't look again; with auto-update off it never looks.
+func TestOpeningUpdates(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	m, exe := releaseAt(t, "v0.1.2", "me/hive")
+	cfg := m.C.WS.LoadConfig()
+	cfg.AutoUpdate = false
+	m.C.WS.SaveConfig(cfg)
+	if m.Opened() {
+		t.Fatal("looked with auto-update off")
+	}
+	cfg.AutoUpdate = true
+	m.C.WS.SaveConfig(cfg)
+	if !m.Opened() {
+		t.Fatal("opening didn't look")
+	}
+	if m.Opened() {
+		t.Fatal("opening again looked again")
+	}
+	for end := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		m.updating.Lock() // the look is done
+		raw, _ := os.ReadFile(exe)
+		m.updating.Unlock()
+		if string(raw) == "new" {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatalf("binary %q after opening", raw)
+		}
+	}
+}

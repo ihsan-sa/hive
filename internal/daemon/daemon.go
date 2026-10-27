@@ -916,6 +916,9 @@ func (s *server) routes() http.Handler {
 		}
 		return a.Release.Update(b.Release)
 	})
+	h("/api/opened", func(*http.Request) (any, error) {
+		return a.Release.Opened(), nil
+	})
 	h("/api/shutdown", func(*http.Request) (any, error) {
 		go func() { time.Sleep(100 * time.Millisecond); s.cancel() }()
 		return "stopping", nil

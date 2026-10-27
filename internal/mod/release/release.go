@@ -83,9 +83,11 @@ type Module struct {
 	// skipped counts the looks in a row an update passed over because a
 	// merge ran past mergeWait.
 	skipped int
-	// updating is held while an update runs: AutoUpdate, from its schedule
-	// or follow, or `hive update`.
+	// updating is held while an update runs: AutoUpdate, from its schedule,
+	// follow or Opened, or `hive update`.
 	updating sync.Mutex
+	// opened is when Opened last started a look.
+	opened time.Time
 }
 
 // Site serves the releases: GitHub over plain HTTPS, so updating needs no
@@ -556,6 +558,35 @@ func (m *Module) AutoUpdate() (string, error) {
 		msg += "; " + strings.Join(waits, "; ")
 	}
 	return msg, err
+}
+
+// openedEvery is how long a look Opened started stands for the next opening:
+// opening the control center again and again never spends GitHub's quota.
+var openedEvery = 10 * time.Minute
+
+// Opened is the person opening the control center: AutoUpdate runs at once,
+// in the background, so a Hive opened after a release is on it within the
+// minute and not at the next schedule; the control center reconnects to the
+// restarted daemon. It says whether it started a look: not within openedEvery
+// of the last, and not over an update that hasn't settled, which would leave
+// a failed restart nothing to roll back to.
+func (m *Module) Opened() bool {
+	if cfg := m.C.WS.LoadConfig(); !cfg.AutoUpdate || cfg.ReleasePin != "" {
+		return false
+	}
+	if p, ok := readPending(m.C.WS); ok && p.To == core.Version && p.RolledBack == "" {
+		return false
+	}
+	m.pmu.Lock()
+	due := time.Since(m.opened) >= openedEvery
+	if due {
+		m.opened = time.Now()
+	}
+	m.pmu.Unlock()
+	if due {
+		go m.AutoUpdate()
+	}
+	return due
 }
 
 // Rename moves an install still called hive-v0 to hive, when this daemon
