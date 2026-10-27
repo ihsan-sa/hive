@@ -293,8 +293,9 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	if slices.ContainsFunc(keys, func(k string) bool { return strings.HasSuffix(k, " !") }) {
 		cmd = test
 	}
-	defer m.Work.MeasuringMain(p.Name, parent)() // main's measuring waits on it
+	done := m.Work.MeasuringMain(p.Name, parent) // keep/revert waits on it
 	bc := m.C.Effects.RunCheck(p, parent, "before", cmd)
+	done()
 	if bc.CantRun != "" || bc.OK {
 		return ""
 	}
