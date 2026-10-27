@@ -246,6 +246,47 @@ func TestPinPausesAutoUpdate(t *testing.T) {
 	}
 }
 
+// --release to the newest release, or to a pre-release past it, moves the
+// Hive forward and leaves auto-update on, clearing a pin it had: only a step
+// back pins (issue #1795, where each hand update to a pre-release left the
+// Hive pinned with auto-update off).
+func TestUpdateForwardDoesntPin(t *testing.T) {
+	serveAll(t, "v0.1.3", map[string]map[string]string{"v0.1.3": build("new"), "v0.1.4": build("pre")}, false)
+	for _, tag := range []string{"v0.1.3", "v0.1.4"} {
+		m, exe := releaseAt(t, "v0.1.2", "me/hive")
+		cfg := m.C.WS.LoadConfig()
+		cfg.AutoUpdate, cfg.PinnedAuto, cfg.ReleasePin = false, true, "v0.1.2"
+		m.C.WS.SaveConfig(cfg)
+		msg, err := m.Update(tag)
+		if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "updated to "+tag+"\n") || string(raw) == "old" {
+			t.Fatalf("%s: %q, %v, binary %q", tag, msg, err, raw)
+		}
+		if cfg := m.C.WS.LoadConfig(); cfg.ReleasePin != "" || !cfg.AutoUpdate || cfg.PinnedAuto {
+			t.Fatalf("%s: pin %q, auto_update %v, pinned_auto %v", tag, cfg.ReleasePin, cfg.AutoUpdate, cfg.PinnedAuto)
+		}
+	}
+}
+
+// A pin an update forward left before it stopped pinning (auto-update was on
+// before it) is lifted at the next auto-update; a step back stays pinned.
+func TestForwardPinLifted(t *testing.T) {
+	serveAll(t, "v0.1.3", map[string]map[string]string{"v0.1.3": build("new")}, false)
+	for pin, lifted := range map[string]bool{"v0.1.4": true, "v0.1.3": true, "v0.1.2": false} {
+		m, _ := releaseAt(t, pin, "me/hive")
+		cfg := m.C.WS.LoadConfig()
+		cfg.AutoUpdate, cfg.PinnedAuto, cfg.ReleasePin = false, true, pin
+		m.C.WS.SaveConfig(cfg)
+		msg, err := m.AutoUpdate()
+		if err != nil {
+			t.Fatalf("%s: %v", pin, err)
+		}
+		cfg = m.C.WS.LoadConfig()
+		if lifted != (cfg.ReleasePin == "" && cfg.AutoUpdate) {
+			t.Fatalf("%s: %q; pin %q, auto_update %v, want lifted %v", pin, msg, cfg.ReleasePin, cfg.AutoUpdate, lifted)
+		}
+	}
+}
+
 // A pinned Hive doesn't update itself past its pin and says, once, that a
 // newer release is out; `hive update` clears the pin and installs the newest.
 func TestPinHoldsUntilCleared(t *testing.T) {

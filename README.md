@@ -54,7 +54,7 @@ The model workers use, the lead's and the reviewer's are under **Settings** in t
     hive improve          run an improvement sweep now
     hive doctor           check the install and sandbox
     hive update           newest release
-    hive update --release v0.1.2   that release, older ones too; it stays there with auto-update off until `hive update`
+    hive update --release v0.1.2   that release; one older than the latest stays there with auto-update off until `hive update`
     hive shutdown         stop it (agents finish their turn; `hive` starts it again)
 
 The Hive keeps running in the background and starts with the machine. Closing the control center never stops work.

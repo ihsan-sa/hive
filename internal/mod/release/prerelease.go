@@ -80,7 +80,9 @@ func (m *Module) follow() {
 	if !due {
 		return
 	}
-	if cfg := m.C.WS.LoadConfig(); !cfg.AutoUpdate || cfg.ReleasePin != "" || m.Channel() != Prerelease {
+	// A pin auto-update was on before is looked at too: AutoUpdate lifts one
+	// that an update forward left.
+	if cfg := m.C.WS.LoadConfig(); !(cfg.AutoUpdate && cfg.ReleasePin == "" || cfg.PinnedAuto && cfg.ReleasePin == core.Version) || m.Channel() != Prerelease {
 		return
 	}
 	// An update not yet settled waits: installing over it would leave a

@@ -322,9 +322,9 @@ func hasBinary(repo, tag string) error {
 	return err
 }
 
-// Update installs a release over this binary: tag, which pins the Hive there
-// and may be older, or with "" or "latest" the newest that Check finds, which
-// clears any pin. Live runs are separate processes and the daemon reattaches
+// Update installs a release over this binary: tag, which may be older and
+// then pins the Hive there, or with "" or "latest" the newest that Check
+// finds. Anything but a pinned step back clears any pin. Live runs are separate processes and the daemon reattaches
 // to them after it restarts, so live work carries across.
 func (m *Module) Update(tag string) (string, error) {
 	if !m.updating.TryLock() {
@@ -345,14 +345,15 @@ func (m *Module) update(tag string) (string, error) {
 		return "this is a source build (" + core.Version + "); it doesn't update itself", nil
 	}
 	cfg := m.C.WS.LoadConfig()
-	repo, pin := cfg.ReleaseRepo, tag != "" && tag != "latest"
-	if !pin {
+	repo, chosen := cfg.ReleaseRepo, tag != "" && tag != "latest"
+	pin := chosen && !onward(repo, tag)
+	if !chosen {
 		var err error
 		if repo, tag, _, err = m.Check(); err != nil {
 			return "", err
 		}
 	}
-	if !pin && !modules.Newer(core.Version, tag) || pin && tag == core.Version {
+	if !chosen && !modules.Newer(core.Version, tag) || chosen && tag == core.Version {
 		msg := "already on " + core.Version
 		if pin {
 			msg += ", pinned there"
@@ -362,7 +363,7 @@ func (m *Module) update(tag string) (string, error) {
 	m.pmu.Lock()
 	m.tried = tag
 	m.pmu.Unlock()
-	if !pin && m.rolledBack(tag) {
+	if !chosen && m.rolledBack(tag) {
 		return tag + " was rolled back after it failed to start here; `" + core.Cmd + " update " + tag + "` tries it again", nil
 	}
 	tmp, err := os.MkdirTemp("", "hive-update-")
@@ -490,6 +491,16 @@ func (m *Module) update(tag string) (string, error) {
 	return msg + "\n\n" + notes, nil
 }
 
+// onward reports whether a tag chosen with --release moves the Hive forward:
+// no older than this one or than repo's latest release. Such a tag (the
+// newest, or a pre-release past it) is installed with auto-update left as it
+// is, so the Hive goes on following; only a step back pins. When the latest
+// can't be read, the chosen tag pins, as before.
+func onward(repo, tag string) bool {
+	newest, err := latest(repo)
+	return err == nil && !modules.Newer(tag, newest) && !modules.Newer(tag, core.Version)
+}
+
 // pin keeps the Hive on tag, or with on false follows the newest release.
 // Pinning turns auto_update off, because releases older than the pin itself
 // read only that and would update straight back to the newest; clearing the
@@ -533,6 +544,15 @@ func (m *Module) AutoUpdate() (string, error) {
 	}
 	defer m.updating.Unlock()
 	cfg := m.C.WS.LoadConfig()
+	if cfg.ReleasePin != "" && cfg.PinnedAuto && cfg.ReleasePin == core.Version && onward(cfg.ReleaseRepo, cfg.ReleasePin) {
+		// A pin an update forward left, before such an update stopped
+		// pinning: auto-update was on, so it goes back on.
+		if err := m.pin(cfg, "", false); err != nil {
+			return "", err
+		}
+		m.C.J.MustAppend("release.unpinned", map[string]string{"pin": cfg.ReleasePin, "text": "the pin on " + cfg.ReleasePin + " was an update forward, not a step back; auto-update is on again"})
+		cfg = m.C.WS.LoadConfig()
+	}
 	if cfg.ReleasePin != "" && (cfg.AutoUpdate || cfg.PinnedAuto) {
 		tag, err := latest(cfg.ReleaseRepo)
 		if err != nil || !modules.Newer(cfg.ReleasePin, tag) {
