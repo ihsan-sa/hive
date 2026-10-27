@@ -310,13 +310,13 @@ func (m *Module) dropGateLocked(id, keep string) bool {
 }
 
 // dropStaleGatesLocked ends t's runs in flight on a head other than its
-// own, or all of them once it has merged, finished or been stopped. m.mu
-// is held.
-func (m *Module) dropStaleGatesLocked(t *Task) bool {
+// own (or live, the head last saved, when t may be an older copy), or all
+// of them once it has merged, finished or been stopped. m.mu is held.
+func (m *Module) dropStaleGatesLocked(t *Task, live string) bool {
 	ended := t.Stage == StageMerged || t.Stage == StageDone || t.Stage == StageStopped
 	dropped := false
 	for _, r := range m.gating {
-		if r.task != t.ID || r.dropped || r.head == "" || (r.head == t.SHA && !ended) {
+		if r.task != t.ID || r.dropped || r.head == "" || ((r.head == t.SHA || r.head == live) && !ended) {
 			continue
 		}
 		r.dropped, dropped = true, true
@@ -553,13 +553,15 @@ func GateWord(outcome string) string {
 // killed past its time) left its children and its bulk (checkouts, homes,
 // Go caches) there, and only a later Reap of that folder ends them. The
 // folders are listed under the lock that names a new run's folder, so a
-// gate that starts meanwhile is never among them. It returns how many
-// processes reap ended.
+// gate that starts meanwhile is never among them. It also removes the
+// lessons.md gates once kept there, which nothing reads since a rollback
+// stopped writing lessons. It returns how many processes reap ended.
 func (m *Module) TidyGates(reap func(out string) int) int {
 	m.mu.Lock()
 	var outs []string
 	for _, p := range m.C.Projects.List() {
 		dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
+		os.Remove(filepath.Join(dir, "lessons.md"))
 		ents, _ := os.ReadDir(dir)
 		for _, e := range ents {
 			if out := filepath.Join(dir, e.Name()); e.IsDir() && !m.gateLive(out) {
