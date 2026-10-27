@@ -169,7 +169,7 @@ func (m *model) dashRows() []row {
 	if add(row{key: "plans", text: "plan usage", expand: len(m.st.Plans) > 0, def: true}) {
 		now := time.Now()
 		for _, p := range m.st.Plans {
-			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), standing(p, now))
+			line := fmt.Sprintf("%s  %s", text.Visible(core.LoginLabel(m.st.LoginNames, p.Key())), standing(p, now))
 			for _, w := range p.Limit.WindowUses(now) {
 				line += "  " + windowShort(w, now, true)
 			}
@@ -185,7 +185,7 @@ func (m *model) dashRows() []row {
 	}
 	if add(row{key: "logins", text: "logins", expand: len(m.st.Logins) > 0, def: true}) {
 		for _, l := range m.st.Logins {
-			add(row{key: "login:" + l.Login, depth: 1, text: loginLine(l)})
+			add(row{key: "login:" + l.Login, depth: 1, text: loginLine(l, m.st.LoginNames)})
 		}
 	}
 	add(row{key: "waiting", text: fmt.Sprintf("waiting on you (%d)", len(m.st.Asks)), jump: secWaiting})
@@ -1521,7 +1521,7 @@ func (m *model) viewSettings() []string {
 func fmtNum(f float64) string { return strconv.FormatFloat(f, 'g', 6, 64) }
 
 // loginLine is a login's expiry and last renewal, and why it can't renew.
-func loginLine(l core.LoginState) string {
+func loginLine(l core.LoginState, names map[string]string) string {
 	exp := "expires " + l.Expires.Local().Format("Mon 15:04")
 	if l.Expires.IsZero() {
 		exp = "expiry unknown"
@@ -1532,7 +1532,7 @@ func loginLine(l core.LoginState) string {
 	if !l.Renewed.IsZero() {
 		renewed = "renewed " + l.Renewed.Local().Format("Mon 15:04")
 	}
-	line := fmt.Sprintf("%s  %s  %s", text.Visible(l.Login), exp, stDim.Render(renewed))
+	line := fmt.Sprintf("%s  %s  %s", text.Visible(core.LoginLabel(names, l.Login)), exp, stDim.Render(renewed))
 	if l.Limited.After(time.Now()) {
 		line += "  " + stWarn.Render("at its usage limit") + " until " + l.Limited.Local().Format("Mon 15:04") + stDim.Render(": renews after it resets")
 	}

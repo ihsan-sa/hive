@@ -61,6 +61,66 @@ func (l Login) Key() string {
 	return l.Harness + ":" + l.Name
 }
 
+// LoginNames are the names the person gave logins (`hive login name`), by
+// Key. A name is only what the person sees: records, usage and the folder
+// keep the key, so renaming a login loses none of its history, and the
+// machine's own login, which has no folder, can be named too.
+func (w Workspace) LoginNames() map[string]string {
+	names := map[string]string{}
+	b, _ := os.ReadFile(filepath.Join(w.Hive(), "logins", "names.json"))
+	json.Unmarshal(b, &names)
+	return names
+}
+
+// SetLoginName names the login with key; an empty name clears it.
+func (w Workspace) SetLoginName(key, name string) error {
+	names := w.LoginNames()
+	if name == "" {
+		delete(names, key)
+	} else {
+		names[key] = name
+	}
+	b, err := json.MarshalIndent(names, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(w.Hive(), "logins")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return WriteFileAtomic(filepath.Join(dir, "names.json"), b, 0o600)
+}
+
+// LoginLabel is how the person sees the login with key: the name they gave
+// it, or the key.
+func LoginLabel(names map[string]string, key string) string {
+	if n := names[key]; n != "" {
+		return n
+	}
+	return key
+}
+
+// FindLogin picks from logins the one the person means by s: its key
+// (claude, claude:<folder>), its folder's name or the name it has now.
+func FindLogin(logins []Login, names map[string]string, s string) (string, error) {
+	var keys []string
+	for _, l := range logins {
+		if s == "" {
+			break
+		}
+		if s == l.Key() || s == l.Name || s == names[l.Key()] {
+			keys = append(keys, l.Key())
+		}
+	}
+	switch len(keys) {
+	case 0:
+		return "", fmt.Errorf("no login is %q; `%s login name` lists them", s, Cmd)
+	case 1:
+		return keys[0], nil
+	}
+	return "", fmt.Errorf("%q could be %s; name it by one of those", s, strings.Join(keys, " or "))
+}
+
 // LoginDirEnv is the variable that points a harness at a config folder of its own.
 var LoginDirEnv = map[string]string{"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"}
 
@@ -736,7 +796,7 @@ func (t *Tokens) done(l Login, exp time.Time, err error, how int) {
 		j.MustAppend("login.renewed", map[string]any{"login": key, "expires": c.Expires, "by": "hand"})
 	}
 	if first {
-		title := fmt.Sprintf("The %s login can't renew itself; it %s", key, runsOut(c.Expires, now))
+		title := fmt.Sprintf("The %s login can't renew itself; it %s", LoginLabel(t.ws.LoginNames(), key), runsOut(c.Expires, now))
 		j.MustAppend("alert.raised", map[string]string{"kind": "login", "ref": "login:" + key, "text": title + ": " + c.Error})
 		if p != nil {
 			p.Ask(Ask{Kind: "login", Ref: key, Options: []string{"done"}, Title: title,
@@ -748,7 +808,7 @@ func (t *Tokens) done(l Login, exp time.Time, err error, how int) {
 		if how == renewedByHand {
 			text, why = "The %s login was renewed outside the Hive; it %s", "renewed outside the Hive"
 		}
-		j.MustAppend("alert.raised", map[string]string{"kind": "login", "ref": "login:" + key, "text": fmt.Sprintf(text, key, runsOut(c.Expires, now))})
+		j.MustAppend("alert.raised", map[string]string{"kind": "login", "ref": "login:" + key, "text": fmt.Sprintf(text, LoginLabel(t.ws.LoginNames(), key), runsOut(c.Expires, now))})
 		if p != nil {
 			for _, a := range p.Open() {
 				if a.Kind == "login" && a.Ref == key {
@@ -793,7 +853,7 @@ func (t *Tokens) parked(l Login, exp time.Time, lim *limitedError, now time.Time
 	}
 	j.MustAppend("login.limited", map[string]any{"login": key, "expires": c.Expires, "until": until, "said": lim.said})
 	if told { // the failure's alert gives way
-		j.MustAppend("alert.raised", map[string]string{"kind": "login", "ref": "login:" + key, "text": fmt.Sprintf("The %s login is at its usage limit until %s; it renews after the reset", key, until.Local().Format("Mon 15:04"))})
+		j.MustAppend("alert.raised", map[string]string{"kind": "login", "ref": "login:" + key, "text": fmt.Sprintf("The %s login is at its usage limit until %s; it renews after the reset", LoginLabel(t.ws.LoginNames(), key), until.Local().Format("Mon 15:04"))})
 	}
 	if p != nil {
 		for _, a := range p.Open() {

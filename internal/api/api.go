@@ -52,8 +52,9 @@ type State struct {
 	Projects   []ProjectView      `json:"projects"`
 	Runs       []core.Run         `json:"runs"`
 	Plans      []core.Plan        `json:"plans"`
-	Down       []core.Down        `json:"down,omitempty"` // models that can't answer, which runs skip, each with its last answer
-	Logins     []core.LoginState  `json:"logins"`         // each login's expiry and last renewal
+	Down       []core.Down        `json:"down,omitempty"`        // models that can't answer, which runs skip, each with its last answer
+	Logins     []core.LoginState  `json:"logins"`                // each login's expiry and last renewal
+	LoginNames map[string]string  `json:"login_names,omitempty"` // the names the person gave logins, by key (core.LoginLabel)
 	Sweeps     []improve.Sweep    `json:"sweeps"`
 	StepBacks  []improve.StepBack `json:"stepbacks"`
 	Asks       []core.Ask         `json:"asks"`
