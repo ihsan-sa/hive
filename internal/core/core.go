@@ -74,10 +74,14 @@ func (c *Core) Sandbox() (sandbox.Sandbox, error) {
 	return c.sb, c.sbErr
 }
 
-// ResetSandbox forgets the cached sandbox choice (after settings change).
-func (c *Core) ResetSandbox() {
+// ResetSandbox forgets the cached sandbox choice (after settings change), or
+// with all false only a failed one, so a sandbox fixed since (bwrap installed)
+// is probed again without waiting out the two minutes.
+func (c *Core) ResetSandbox(all bool) {
 	c.sbMu.Lock()
-	c.sbMode = ""
+	if all || c.sbErr != nil {
+		c.sbMode = ""
+	}
 	c.sbMu.Unlock()
 }
 
