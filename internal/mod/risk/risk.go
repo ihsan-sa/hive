@@ -152,7 +152,7 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 				if msg.To == "parent" {
 					msg.To = r.Parent
 				}
-				if _, ok := c.Runs.Find(msg.To); ok {
+				if t, ok := c.Runs.Find(msg.To); ok && c.Runs.Takes(t.ID) == nil { // one kept for an ended run gets no reply
 					c.Runs.Wait(r.ID, "a reply from "+msg.To)
 				}
 			}

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,5 +174,40 @@ func TestSettledWaitsForTheLastLines(t *testing.T) {
 	settled(path, 50*time.Millisecond, 200*time.Millisecond)
 	if d := time.Since(start); d >= 150*time.Millisecond {
 		t.Fatalf("a still file took %s to settle; want about 50ms", d)
+	}
+}
+
+// A message to a run that has ended is kept for it, for when its task sends
+// it back, and the sender is told it went to no one live; one that was
+// stopped is refused. The phonebook lists the ended run with its status.
+func TestMessageToAnEndedRunIsKeptAndSaid(t *testing.T) {
+	c, _ := testHive(t)
+	w, err := c.Runs.Start(RunSpec{ID: "w-ended", Role: "worker", Harness: "fake", Task: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.J.MustAppend("run.status", map[string]any{"id": w.ID, "status": StatusDone})
+	from := Run{RunSpec: RunSpec{ID: "lead-1", Role: "lead"}}
+	out, err := c.Runs.Ops().Call(from, "message", json.RawMessage(`{"to":"w-ended","text":"one more thing"}`))
+	if err != nil || !strings.Contains(fmt.Sprint(out), "has ended (done)") {
+		t.Fatalf("the sender wasn't told the run ended: %v %v", out, err)
+	}
+	if got, _ := c.Runs.Get(w.ID); len(got.Pending) != 1 || !strings.Contains(got.Pending[0], "one more thing") || got.Status != StatusDone {
+		t.Fatalf("the message wasn't kept for the ended run, or woke it: %+v", got)
+	}
+	if err := c.Runs.Reopen(w.ID, "sent back"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := c.Runs.Get(w.ID); len(got.Pending) != 2 {
+		t.Fatalf("a reopen lost the kept message: %q", got.Pending)
+	}
+	list, _ := c.Runs.Ops().Call(from, "agents", nil)
+	if b, _ := json.Marshal(list); !strings.Contains(string(b), `"task":"t1"`) {
+		t.Errorf("the phonebook lacks the run and its task: %s", b)
+	}
+	s, _ := c.Runs.Start(RunSpec{ID: "w-stopped", Role: "worker", Harness: "fake"})
+	c.J.MustAppend("run.status", map[string]any{"id": s.ID, "status": StatusStopped})
+	if _, err := c.Runs.Ops().Call(from, "message", json.RawMessage(`{"to":"w-stopped","text":"x"}`)); err == nil {
+		t.Error("a message to a stopped run was taken")
 	}
 }

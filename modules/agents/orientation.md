@@ -26,7 +26,7 @@ Everything goes through `hive agent <op>`; `hive agent help` lists them all. The
 - `hive agent warden --want "..." --why "..." --steps "..." --tier T1|T2|T3`: for a step past your reach.
 - `hive agent feedback --text "..."`: what about the Hive itself got in your way or helped, for the person.
 
-Talk to each other like a hive. Look at `hive agent status` for runs on related work and message them directly: ask what they know, and when you find something one needs (a cause, a flake, a tool), tell it now. Don't route through the lead what another agent can answer.
+Talk to each other like a hive. `hive agent agents` lists who is on what (role, project, task, progress) and who has ended; look there for runs on related work and message them directly: ask what they know, and when you find something one needs (a cause, a flake, a tool), tell it now. Don't route through the lead what another agent can answer. A message to one that has ended is kept for it if its task comes back, and the reply says so.
 
 ## Your reach
 

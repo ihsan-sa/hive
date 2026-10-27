@@ -20,6 +20,8 @@ type feedRow struct {
 	text              string
 	chat, msg, thread string // a chat message; its text is looked up when drawn
 	task              string
+	run               string // a message between agents: opens the run it went to
+	roles             [2]string
 	ask               bool
 	told              *core.Ask // done for the person: opens to what ran, why and its output
 }
@@ -76,6 +78,19 @@ func (m *model) addEvents(evs []core.Event) tea.Cmd {
 				to = runLabel(w)
 			}
 			r.from, r.to, r.project, r.text, r.task = "lead", to, t.Project, t.Stage+": "+t.Label(), t.ID
+		case "msg.sent":
+			var p struct{ From, To, Text, Ended string }
+			e.Decode(&p)
+			r.from, r.to, r.text, r.run = p.From, p.To, p.Text, p.To
+			if f, ok := m.run(p.From); ok {
+				r.from, r.roles[0], r.project = runLabel(f), f.Role, f.Project
+			}
+			if t, ok := m.run(p.To); ok {
+				r.to, r.roles[1], r.project = runLabel(t), t.Role, or(r.project, t.Project)
+			}
+			if p.Ended != "" {
+				r.text = "(ended, kept for it) " + r.text
+			}
 		case "person.asked":
 			var a core.Ask
 			e.Decode(&a)
@@ -191,6 +206,8 @@ func (m *model) keyDash(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmd, m.focusBox(r.thread))
 		case r.task != "":
 			return m, m.push(detail{kind: "task", id: r.task, title: core.Clip(r.text, 40)})
+		case r.run != "":
+			return m, m.push(detail{kind: "run", id: r.run, title: r.to})
 		case r.told != nil:
 			return m, m.push(toldDetail(*r.told))
 		case r.ask:
@@ -240,6 +257,8 @@ func (m *model) viewFeed() []string {
 		switch {
 		case i == sel && m.focus == 1: // one reversed run, so no colour inside it
 			line = stSel.Render(pad(row(r.from, r.to, m.feedText(r)), w))
+		case r.run != "": // agents talking to each other, each in its role's colour
+			line = row(speaker(or(r.roles[0], r.from)).Render(r.from), speaker(or(r.roles[1], r.to)).Render(r.to), m.feedText(r))
 		case r.from != "you" && r.to != "you":
 			line = stDim.Render(row(r.from, r.to, m.feedText(r)))
 		default: // with the person: who speaks keeps their chat colour, and an ask is amber

@@ -172,7 +172,7 @@ A value of @path reads that file. Common ops:
   finish    --status done|blocked --account "..." [--tested ...] [--unsure ...]
   message   --to <id|name|parent|person|lead> --text "..."
   inbox                                          messages waiting for you
-  agents                                         who is running
+  agents                                         who is on what: live agents, and those ended lately
   spawn     --role worker --brief "..." [--project p]   a helper; its account returns to you
   brief     --title "..." --done "what done looks like" [--known "..."] [--project p] [--aim fix --why "the failure"] [--apart]
                                                  file an ask: it becomes an issue, a worker, a PR; a fix with

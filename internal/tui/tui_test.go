@@ -418,6 +418,30 @@ func TestFeedRefreshesHeldChats(t *testing.T) {
 	}
 }
 
+// Agents messaging each other show in the feed, named as the sidebar names
+// them, and one sent to an ended run says so; Enter opens the run it went to.
+func TestFeedShowsAgentMessages(t *testing.T) {
+	m := testModel(120, 40)
+	m.pick(sideRow{sec: secDash})
+	sent := func(seq int64, from, to, text, ended string) core.Event {
+		data, _ := json.Marshal(map[string]string{"from": from, "to": to, "text": text, "ended": ended})
+		return core.Event{Seq: seq, At: time.Now(), Kind: "msg.sent", Data: data}
+	}
+	m.addEvents([]core.Event{sent(1, "lead-x", "w-t1", "how is the parser going?", ""), sent(2, "w-t1", "w-old", "did you see the flake?", "done")})
+	v := plain(m.View())
+	for _, want := range []string{"lead-x → worker w-t1", "how is the parser going?", "worker w-t1 → w-old", "(ended, kept for it) did you"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("feed lacks %q:\n%s", want, v)
+		}
+	}
+	m.focus = 1
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.stack) == 0 || m.stack[len(m.stack)-1].kind != "run" || m.stack[len(m.stack)-1].id != "w-t1" {
+		t.Errorf("enter on a message didn't open the run it went to: %+v", m.stack)
+	}
+}
+
 // A thread that takes over the screen, on a resize or on coming back to its
 // chat, gets the keys, and Escape closes it.
 func TestTakeoverTakesTheFocus(t *testing.T) {

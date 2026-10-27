@@ -349,10 +349,13 @@ func (o *Ops) registerCore() {
 		o.rs.Wait(r.ID, "helper "+child.ID)
 		return map[string]string{"id": child.ID, "note": "started; its account will arrive as a message (end your turn to wait)"}, nil
 	}})
-	o.Register(Op{Name: "agents", Help: `{} -> live agents you can message`, Fn: func(r Run, _ json.RawMessage) (any, error) {
+	o.Register(Op{Name: "agents", Help: `{} -> agents you can message: the live ones, and those ended in the last 6 hours (status done or blocked: a message waits for a reopen)`, Fn: func(r Run, _ json.RawMessage) (any, error) {
 		var out []map[string]string
-		for _, x := range o.rs.List(func(x *Run) bool { return !x.Terminal() && o.rs.Walled(r, x.Project) == nil }) {
-			out = append(out, map[string]string{"id": x.ID, "name": x.Name, "role": x.Role, "project": x.Project, "status": x.Status, "progress": x.Progress})
+		since := time.Now().Add(-6 * time.Hour)
+		for _, x := range o.rs.List(func(x *Run) bool {
+			return (!x.Terminal() || x.Updated.After(since)) && o.rs.Walled(r, x.Project) == nil
+		}) {
+			out = append(out, map[string]string{"id": x.ID, "name": x.Name, "role": x.Role, "project": x.Project, "task": x.Task, "status": x.Status, "progress": x.Progress})
 		}
 		return out, nil
 	}})
@@ -385,7 +388,15 @@ func (o *Ops) Deliver(from Run, to, text string) (any, error) {
 	}
 	msg := fmt.Sprintf("[message from %s (%s) at %s]\n%s", label, from.ID, time.Now().Format("15:04"), text)
 	if err := o.rs.Send(target.ID, msg); err != nil {
-		return nil, err
+		if !target.Terminal() || target.Status == StatusStopped {
+			return nil, err
+		}
+		// An ended run keeps it for when its task sends it back (a fix
+		// round, recheck --back reopens the same run), and the sender is
+		// told plainly it went nowhere live.
+		o.rs.append("run.queued", runNote{ID: target.ID, Text: msg})
+		o.rs.append("msg.sent", map[string]string{"from": from.ID, "to": target.ID, "text": Clip(text, 2000), "ended": target.Status})
+		return fmt.Sprintf("not read yet: %s has ended (%s). It's kept, and it reads it only if its run is reopened (its task sent back); for an answer now, message whoever holds its task (op agents lists who is on what).", target.ID, target.Status), nil
 	}
 	o.rs.append("msg.sent", map[string]string{"from": from.ID, "to": target.ID, "text": Clip(text, 2000)})
 	return "delivered", nil
