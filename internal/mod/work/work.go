@@ -2388,6 +2388,11 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	// merging, each reading its PR twice a minute, GitHub's API limit ran
 	// out. Its PR is read whole once it is at the front, where a close, a
 	// draft or a moved head is caught before anything merges.
+	// A gain whose head the recursive gate rolled back leaves the line at
+	// once, wherever it stands in it (issue #1799).
+	if back, err := m.gainRolledBack(t, p); back || err != nil {
+		return err
+	}
 	if strings.HasPrefix(t.Reason, MergeLineWait) && m.batchPassed(t, "") == "" {
 		if ahead := m.mergeFront(t, p); ahead != nil {
 			main, _ := core.Git(m.C.WS.Project(p.Name), "rev-parse", "--verify", "-q", "refs/remotes/origin/"+p.Branch)

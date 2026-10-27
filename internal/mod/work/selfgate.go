@@ -177,6 +177,41 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	return true, nil
 }
 
+// gainRolledBack sends t back to its worker once the recursive gate has
+// rolled its head back, against whatever main it ran on, and its judge
+// agrees; the bool says it went back or waits for that judge. Left to
+// recursiveGate, a rollback counted only while main's commits since missed
+// the change's files: #836's, at 16:45Z on 10-27, stood at no later main,
+// so the task stayed at the merge line's front for hours, testing at each
+// new main to be gated again, with 16 PRs behind it and no verdict in its
+// log (issue #1799). Its worker merges main and finishes again, a new head
+// the gate judges anew.
+func (m *Module) gainRolledBack(t *Task, p core.Project) (bool, error) {
+	if !p.Self || !t.Gain() || t.SHA == "" {
+		return false, nil
+	}
+	g, ok := m.C.Effects.LatestGate(p.Name, t.SHA)
+	if !ok {
+		return false, nil
+	}
+	if g.Outcome != core.GateRollback {
+		// A keep the judge turned down is a rollback too; a keep standing at
+		// this main is recursiveGate's.
+		if j, ok := m.C.Effects.Judgement(p.Name, g.Head, g.Main); !ok || !j.At.After(g.At) || j.Verdict != core.GateRollback {
+			return false, nil
+		}
+	}
+	m.tellGate(t, p, g)
+	keep, wait, err := m.judgeGate(t, p, g)
+	switch {
+	case wait || err != nil:
+		return true, err
+	case keep:
+		return false, nil // the judge kept it: on through the line, gated at this main
+	}
+	return true, m.gateBack(t, p, g)
+}
+
 // How many gates run at once is a pace, as workers and checks are
 // (pace.go), but slower and guarded: a gate is two Hives, the e2e suite, the
 // benchmark and a grandchild, so the limit starts at two (one where the

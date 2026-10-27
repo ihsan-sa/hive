@@ -1032,3 +1032,37 @@ func TestStaleCopyKeepsTheLiveHeadsGate(t *testing.T) {
 		t.Fatalf("a stale copy on the old head ended the gate's run on the live head")
 	}
 }
+
+// A gain the gate rolled back against a main that has since moved goes back
+// to its worker from wherever it stands in the merge line, with the verdict
+// in its log, and isn't tested or gated again at the new main (issue #1799:
+// #836 held the line's front for hours on a rollback that stood at no later
+// main).
+func TestSelfGateRollbackAtAnOlderMainLeavesTheLine(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	old, _ := m.C.Effects.Sync(p)
+	if err := m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Head: task.SHA, Main: old, Outcome: core.GateRollback, Reason: "nothing moved beyond the noise"}); err != nil {
+		t.Fatal(err)
+	}
+	pushMain(t, f, map[string]string{"tests/x.sh": "x"}) // what the gate measures with: the verdict no longer stands
+	main, _ := m.C.Effects.Sync(p)
+	if _, ok := m.C.Effects.StandingGate(p, task.SHA, main); ok {
+		t.Fatal("the rollback stands at the new main: the test proves nothing")
+	}
+	front := &Task{ID: "t-front", Project: p.Name, Kind: "work", Stage: StageMerging, SHA: "feedface", PR: core.PR{Number: task.PR.Number - 1}, Reason: MergeLineWait + ": front"}
+	m.mu.Lock()
+	m.tasks[front.ID] = front
+	m.mu.Unlock()
+	task.Reason = MergeLineWait + ": behind #" + fmt.Sprint(front.PR.Number)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || !strings.Contains(task.Findings, gateRolledBack) || !strings.Contains(task.Findings, "nothing moved beyond the noise") {
+		t.Fatalf("stage %q, reason %q, findings %q: want sent back on its rollback", task.Stage, task.Reason, task.Findings)
+	}
+	if len(*jobs) != 0 || task.MergedTest != "" || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("%d gate runs, merged test %q, PR %s: want neither gated nor tested again, and open", len(*jobs), task.MergedTest, prState(t, f, task.PR.Number))
+	}
+	logged := slices.ContainsFunc(task.Log, func(e Entry) bool { return strings.Contains(e.Text, "the recursive gate: ROLLED BACK") })
+	if !logged || task.Gate == nil || task.Gate.Main != old {
+		t.Fatalf("the task's log doesn't carry the verdict: gate %+v, log %+v", task.Gate, task.Log)
+	}
+}

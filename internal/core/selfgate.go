@@ -76,6 +76,22 @@ func (e *Effects) GateResult(project, head, main string) (GateResult, bool) {
 	return g, ok
 }
 
+// LatestGate is the newest keep or rollback on head, against whatever main
+// it ran on. A rollback there sends the change back to its worker even
+// after main moved past that main: a gain the gate measured and found
+// wanting isn't measured again on the next main as if never judged.
+func (e *Effects) LatestGate(project, head string) (GateResult, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var last GateResult
+	for _, g := range e.gates {
+		if g.Project == project && g.Head == head && g.Outcome != GateCantRun && g.At.After(last.At) {
+			last = g
+		}
+	}
+	return last, !last.At.IsZero()
+}
+
 // gateMeasures are what gives a gate verdict its meaning besides the
 // candidate itself: the gate's own code, the score's, the project's settings
 // and the tests, among them main's whole e2e suite, which grades both sides.
