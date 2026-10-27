@@ -34,7 +34,13 @@ var gateExe = os.Executable
 // --allow-bare: without bubblewrap the gate can't run, and the change waits.
 // Under the fake harness (dev runs and the e2e) nothing real is built, so the
 // change is kept as judged by a stand-in, and the report says so.
-func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateResult {
+//
+// The real task (gateTask) spends plan usage under the machine's own Claude
+// login outside the daemon's runs, so nothing else counts it toward the
+// person's stops: plans, the daemon's latest usage per login, is the guard,
+// and a gate started while that login is parked at a stop or its limit runs
+// no task (taskAllowed).
+func runGate(ws core.Workspace, plans func() []core.Plan) func(context.Context, work.GateJob) core.GateResult {
 	return func(ctx context.Context, j work.GateJob) core.GateResult {
 		if ws.LoadConfig().Harness == "fake" {
 			return core.GateResult{Outcome: core.GateKeep, Reason: "the fake harness does no real work, so a stand-in keeps it", Sandbox: "fake"}
@@ -51,7 +57,7 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 			args = append(args, "--allow-tie")
 		}
 		args = append(args, orgArgs(j)...)
-		if task := gateTask(ws, j.Head); task != "" {
+		if task := gateTask(ws, j.Head); task != "" && taskAllowed(plans, time.Now()) {
 			args = append(args, "--task", task, "--task-model", cmp.Or(ws.LoadConfig().Model, "opus"))
 		}
 		// The gate and all it starts (builds, child Hives, the e2e suite) run
@@ -80,6 +86,22 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 // hidden tests (its README, Tasks). They are not held out, so they never
 // count in hive-eval's own result; here they show a change on real work.
 var evalProject = "hive-eval"
+
+// taskAllowed says the machine's own Claude login may spend on the gate's
+// real task: it isn't parked at its usage limit or at a stop short of it
+// (core.WeeklyStop less the checks' reserve, core.FiveHourStop), which leave
+// the rest of the window to the person. A login with no reading yet may.
+func taskAllowed(plans func() []core.Plan, now time.Time) bool {
+	if plans == nil {
+		return true
+	}
+	for _, p := range plans() {
+		if p.Key() == "claude" && p.Parked(now) {
+			return false
+		}
+	}
+	return true
+}
 
 // gateTask is the dev task the gate has each side of j do on the real model:
 // one per gate, the same for every run on one head (so a rerun is judged on

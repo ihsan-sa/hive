@@ -14,6 +14,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
@@ -41,7 +42,7 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 	t.Cleanup(func() { gateExe, core.OwnerTokens["hive-rsi-lab"] = old, oldOrg })
 	args := filepath.Join(dir, "args")
 	t.Setenv("GATE_ARGS", args)
-	run := runGate(ws)
+	run := runGate(ws, nil)
 	// The test process stands for the daemon: the gate must run under it.
 	own, nice := ownNice(t)
 	for i, tc := range []struct {
@@ -207,5 +208,58 @@ func TestGateTaskIsADevTask(t *testing.T) {
 	}
 	if len(seen) != 3 {
 		t.Errorf("heads took only %v of the three tasks", seen)
+	}
+}
+
+// The real task spends the machine's own Claude login outside the daemon's
+// runs, so a gate started while that login is parked at a stop (the week's
+// less the checks' reserve, the five-hour window's) or its limit gets no task:
+// the rest of the window is the person's.
+func TestParkedPlanGetsNoTask(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a shell stand-in for hive gate")
+	}
+	dir := t.TempDir()
+	ws := core.Workspace{Root: filepath.Join(dir, "hive")}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ws.LoadConfig()
+	cfg.Harness = "claude"
+	ws.SaveConfig(cfg)
+	dev := filepath.Join(ws.Project(evalProject), "tasks", "dev", "a")
+	os.MkdirAll(dev, 0o755)
+	os.WriteFile(filepath.Join(dev, "task.json"), []byte("{}"), 0o644)
+	script := filepath.Join(dir, "hive-gate.sh")
+	os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" > \"$GATE_ARGS\"\nexit 3\n"), 0o755)
+	old, oldOrg := gateExe, core.OwnerTokens["hive-rsi-lab"]
+	gateExe = func() (string, error) { return script, nil }
+	core.OwnerTokens["hive-rsi-lab"] = filepath.Join(dir, "no-such.token")
+	t.Cleanup(func() { gateExe, core.OwnerTokens["hive-rsi-lab"] = old, oldOrg })
+	args := filepath.Join(dir, "args")
+	t.Setenv("GATE_ARGS", args)
+	soon := time.Now().Add(2 * time.Hour)
+	plan := func(window string, used float64) core.Plan {
+		return core.Plan{Harness: "claude", At: time.Now(), Limit: harness.RateLimit{Status: "allowed", Windows: map[string]harness.Window{window: {Utilization: used, ResetsAt: soon}}}}
+	}
+	for i, tc := range []struct {
+		name  string
+		plans []core.Plan
+		task  bool
+	}{
+		{"no reading yet", nil, true},
+		{"room in both windows", []core.Plan{plan("seven_day", 0.5)}, true},
+		{"another login parked", []core.Plan{{Harness: "claude", Login: "claude:other", Limit: harness.RateLimit{Status: "rejected", ResetsAt: soon}}}, true},
+		{"the week at its stop", []core.Plan{plan("seven_day", core.WeeklyStop-core.CheckReserve)}, false},
+		{"the five-hour window at its stop", []core.Plan{plan("five_hour", core.FiveHourStop)}, false},
+		{"at its limit", []core.Plan{{Harness: "claude", Limit: harness.RateLimit{Status: "rejected", ResetsAt: soon}}}, false},
+	} {
+		run := runGate(ws, func() []core.Plan { return tc.plans })
+		run(context.Background(), work.GateJob{Project: core.Project{Name: "hive", Self: true}, Repo: "/repo", Head: "h", Main: "m",
+			Out: filepath.Join(dir, "runs", strconv.Itoa(i)), Timeout: time.Hour})
+		raw, _ := os.ReadFile(args)
+		if got := strings.Contains(string(raw), "--task "+dev); got != tc.task {
+			t.Errorf("%s: task passed %v, want %v (%s)", tc.name, got, tc.task, raw)
+		}
 	}
 }

@@ -957,3 +957,34 @@ func TestMoreRepsOnlyWhenTheFirstDiffers(t *testing.T) {
 		t.Errorf("a first rep that differs: %d/%d reps, %+v", len(rep.Candidate), len(rep.Control), rep.Verdict)
 	}
 }
+
+// The real task spends plan usage, so its further reps run only when the task
+// itself differed in the first, not when another probe did.
+func TestTaskRepeatsOnlyWhenItDiffers(t *testing.T) {
+	unixOnly(t)
+	dir := t.TempDir()
+	cand, ctrl := fakeBin(t, dir, "cand", "v2", true), fakeBin(t, dir, "ctrl", "v1", true)
+	run := func(name string, task map[string]float64) Report {
+		t.Helper()
+		other := func(cfg *Config, c *Child) Result {
+			v := map[string]float64{"candidate": 50, "control": 100}[c.Name]
+			return Result{Pass: true, Metrics: []Metric{{Name: "seconds", Value: v}}}
+		}
+		tp := func(cfg *Config, c *Child) Result {
+			return Result{Pass: true, Metrics: []Metric{{Name: "hidden_tests_passed", Value: task[c.Name], Higher: true}}}
+		}
+		rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, name, "run"), Reps: 3, Sandbox: "bare", AllowBare: true,
+			Probes: []string{"p", "task"}, Probe: map[string]ProbeFunc{"p": other, "task": tp}})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return rep
+	}
+	count := func(rs []Result, probe string) int { return len(only(rs, probe)) }
+	if rep := run("tie", map[string]float64{"candidate": 1, "control": 1}); count(rep.Candidate, "task") != 1 || count(rep.Control, "task") != 1 || count(rep.Candidate, "p") != 3 {
+		t.Errorf("a task that tied ran %d/%d times while the other probe ran %d", count(rep.Candidate, "task"), count(rep.Control, "task"), count(rep.Candidate, "p"))
+	}
+	if rep := run("differs", map[string]float64{"candidate": 1, "control": 0}); count(rep.Candidate, "task") != 3 || count(rep.Control, "task") != 3 {
+		t.Errorf("a task that differed ran %d/%d times", count(rep.Candidate, "task"), count(rep.Control, "task"))
+	}
+}

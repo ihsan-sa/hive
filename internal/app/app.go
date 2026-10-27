@@ -80,7 +80,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	forgeread.New(c)
 	a.Work.Steps = a.Risk.Steps
 	a.Work.Weigh = a.Risk.Weigh
-	a.Work.Gate = runGate(ws)
+	a.Work.Gate = runGate(ws, c.Runs.Plans)
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
 	a.Models = models.New(c, a.Work)

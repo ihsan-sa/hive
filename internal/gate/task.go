@@ -248,7 +248,11 @@ func claudeTool() (bin, show string, err error) {
 // package's own test of the plumbing, which runs the fake.
 var taskHarness = "claude"
 
-// claudeAccess reads the machine's Claude login (stubbed in tests).
+// claudeAccess reads the machine's Claude login (stubbed in tests). The
+// task's turns run under it outside the daemon's runs, so the daemon's plan
+// records don't count them: the daemon is the guard, and passes no --task
+// while that login is parked at a stop or its limit (taskAllowed in
+// internal/app/selfgate.go). Here only its expiry is checked.
 var claudeAccess = func() (string, time.Time, error) { return core.ClaudeAccess("") }
 
 // probeTask has the side's Hive do the gate's real task: a fresh workspace

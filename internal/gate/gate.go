@@ -408,15 +408,25 @@ func Run(cfg Config) (rep Report, err error) {
 	// benchmark on each side.
 	deadline := time.Now().Add(cfg.Timeout)
 	opts := cfg.Options
+	again := map[string]bool{} // probes left out of the further reps
 	for rep0 := 0; rep0 < cfg.Reps; rep0++ {
 		if rep0 == 1 {
-			if one := firstRepOptions(opts); !differs(Decide(rep.Candidate, rep.Control, one)) {
+			one := firstRepOptions(opts)
+			if !differs(Decide(rep.Candidate, rep.Control, one)) {
 				cfg.log("rep 1 moved nothing beyond a single run's noise: no more reps")
 				opts = one
 				break
 			}
+			// The real task spends plan usage: it runs again only when it
+			// differed itself, not on another probe's difference.
+			if !differs(Decide(only(rep.Candidate, "task"), only(rep.Control, "task"), one)) {
+				again["task"] = true
+			}
 		}
 		for _, name := range cfg.Probes {
+			if again[name] {
+				continue
+			}
 			p, ok := cfg.Probe[name]
 			if !ok {
 				p, ok = builtin[name]
@@ -463,6 +473,17 @@ func Run(cfg Config) (rep Report, err error) {
 		rep.Verdict.Reason += "; failing on both sides, so the environment's and not counted: " + failureNames(rep.Unit.Shared, modulePath(cand.Src))
 	}
 	return rep, nil
+}
+
+// only is the results of one probe.
+func only(rs []Result, probe string) []Result {
+	var out []Result
+	for _, r := range rs {
+		if r.Probe == probe {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // singleRunNoise is how much one run alone varies (a benchmark's time by
