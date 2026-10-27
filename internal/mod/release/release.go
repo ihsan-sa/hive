@@ -324,10 +324,11 @@ func hasBinary(repo, tag string) error {
 	return err
 }
 
-// Update installs a release over this binary: tag, which may be older and
-// then pins the Hive there, or with "" or "latest" the newest that Check
-// finds. Anything but a pinned step back clears any pin. Live runs are separate processes and the daemon reattaches
-// to them after it restarts, so live work carries across.
+// Update installs a release over this binary: tag, which pins the Hive there
+// when it is a step back (see onward), or with "" or "latest" the newest that
+// Check finds. Anything but a pinned step back clears any pin. Live runs are
+// separate processes and the daemon reattaches to them after it restarts, so
+// live work carries across.
 func (m *Module) Update(tag string) (string, error) {
 	if !m.updating.TryLock() {
 		return busy, nil
@@ -348,7 +349,7 @@ func (m *Module) update(tag string) (string, error) {
 	}
 	cfg := m.C.WS.LoadConfig()
 	repo, chosen := cfg.ReleaseRepo, tag != "" && tag != "latest"
-	pin := chosen && !onward(repo, tag)
+	pin := chosen && !m.onward(cfg, tag)
 	if !chosen {
 		var err error
 		if repo, tag, _, err = m.Check(); err != nil {
@@ -494,13 +495,22 @@ func (m *Module) update(tag string) (string, error) {
 }
 
 // onward reports whether a tag chosen with --release moves the Hive forward:
-// no older than this one or than repo's latest release. Such a tag (the
-// newest, or a pre-release past it) is installed with auto-update left as it
-// is, so the Hive goes on following; only a step back pins. When the latest
-// can't be read, the chosen tag pins, as before.
-func onward(repo, tag string) bool {
-	newest, err := latest(repo)
-	return err == nil && !modules.Newer(tag, newest) && !modules.Newer(tag, core.Version)
+// no older than this one, nor than what auto-update would take now on the
+// Hive's channel (on pre-releases, the newest safe here, else the latest
+// release). Such a tag is installed with auto-update left as it is, so the
+// Hive goes on following; anything older is a step back and pins, also one
+// forward from an earlier step back that is still behind what the channel
+// would install. When the look fails, only an unpinned Hive's tag no older
+// than the latest release counts as onward, so a step back stays pinned.
+func (m *Module) onward(cfg core.Config, tag string) bool {
+	if modules.Newer(tag, core.Version) {
+		return false
+	}
+	if _, want, _, err := m.Check(); err == nil && want != "" {
+		return !modules.Newer(tag, want)
+	}
+	newest, err := latest(cfg.ReleaseRepo)
+	return cfg.ReleasePin == "" && err == nil && !modules.Newer(tag, newest)
 }
 
 // pin keeps the Hive on tag, or with on false follows the newest release.

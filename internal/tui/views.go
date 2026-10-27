@@ -1057,7 +1057,7 @@ func (m *model) settings() []setting {
 		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel", choices: []string{"default", "latest", "pre-release"}},
 		{group: "General", label: "release", value: m.st.Version + ", " + pinText(c.ReleasePin), action: func() tea.Cmd {
 			return func() tea.Msg {
-				return flashMsg("`" + core.Cmd + " update --release <tag>` installs a release, pinning one older than the latest")
+				return flashMsg("`" + core.Cmd + " update --release <tag>` installs a release, pinning one behind the newest")
 			}
 		}},
 		{group: "General", label: "share reports", value: share, key: "share"},
