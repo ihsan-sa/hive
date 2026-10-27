@@ -670,6 +670,9 @@ func (m *Module) opAim(r core.Run, args json.RawMessage) (any, error) {
 			// A step can run for many minutes (a gate, a judge); the aim is
 			// set as it ends rather than refused, and a fix stops the gate now.
 			ask.dropped = aim == AimFix && m.dropGate(t.ID)
+			if aimStepEnds != nil {
+				aimStepEnds(m, t.ID)
+			}
 			m.mu.Lock()
 			m.aims[t.ID] = ask
 			free := !m.busy[t.ID] // the step ended before the ask was stored, so no release will set it
@@ -693,6 +696,10 @@ func (m *Module) opAim(r core.Run, args json.RawMessage) (any, error) {
 	}
 	return map[string]string{"task": t.ID, "aim": t.AimWord()}, nil
 }
+
+// aimStepEnds, when a test sets it, runs as opAim gives up waiting on a
+// step, before it stores the ask: where a step that ends then is missed.
+var aimStepEnds func(m *Module, id string)
 
 // aimAsk is an aim asked for a task, set when no step holds it.
 type aimAsk struct {

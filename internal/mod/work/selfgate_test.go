@@ -743,6 +743,28 @@ func TestAimWhileAStepRuns(t *testing.T) {
 	}
 }
 
+// A step that ends after opAim gave up waiting on it, but before the ask
+// was stored, released the task with no ask to set: the aim is set at once,
+// not left for a step that may never run (a held or ended task).
+func TestAimAsTheStepEnds(t *testing.T) {
+	m, task, _, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.mu.Unlock()
+	defer func() { aimStepEnds = nil }()
+	aimStepEnds = func(m *Module, id string) { m.release(id) }
+	out, err := m.opAim(core.Run{ID: "lead-1", Role: "lead"}, []byte(`{"task":"`+task.ID+`","aim":"fix","why":"a plain fix"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	busy, asked := m.busy[task.ID], len(m.aims)
+	m.mu.Unlock()
+	if got, _ := m.Get(task.ID); got.Gain() || got.AimWhy != "a plain fix" || busy || asked != 0 || out.(map[string]string)["note"] != "" {
+		t.Fatalf("aim %q (%q), busy %v, %d asks waiting, reply %+v: want the fix set now and the task free", got.Aim, got.AimWhy, busy, asked, out)
+	}
+}
+
 // A worker whose gain the gate rolled back can't make it a fix on its own
 // word, which would let a change move its own bar; the lead can.
 func TestWorkerCantUnaimARolledBackGain(t *testing.T) {
