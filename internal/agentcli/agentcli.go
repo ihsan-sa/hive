@@ -218,4 +218,6 @@ with your run id.
                                                  task (or --project p --pr N in place of --task)
   models                                         named models, each role's route, what each agent runs on, trials
   route     --role worker --models "a,b" [--project p]   the models a role runs on, in fallback order
-  trial     --model m --project test --title "..." --done "..."   one brief's worker on that model alone`
+  trial     --model m --project test --title "..." --done "..."   one brief's worker on that model alone
+In $HIVE_STATE, logins/ and private/ (the daemon's token, every agent's home) are covered, and so are an
+isolated project's records (and the journal, while any project is isolated): hidden there, not missing.`

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -54,7 +55,9 @@ func TestATickThatAlwaysJournalsCantSpin(t *testing.T) {
 // TestEventsFromElsewhereArentCapped: a tick that doesn't journal is woken by
 // every nudge from elsewhere, past wakeBurst in a second, so a stream of
 // verdicts and requests doesn't wait out the second. The nudges go on the wake
-// channel, not the journal, so a slow fsync on a busy machine can't starve it.
+// channel, not the journal, so a slow fsync on a busy machine can't starve it;
+// each tick sends the next, so no sleeping goroutine has to keep pace either:
+// the loop's own wakeGap leaves about 40 ticks a second, four times the bar.
 func TestEventsFromElsewhereArentCapped(t *testing.T) {
 	j, err := core.OpenJournal(filepath.Join(t.TempDir(), "events.jsonl"))
 	if err != nil {
@@ -64,15 +67,27 @@ func TestEventsFromElsewhereArentCapped(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 950*time.Millisecond)
 	defer cancel()
 	wake := make(chan struct{}, 1)
-	go func() {
-		for ctx.Err() == nil {
-			nudge(wake)
-			time.Sleep(10 * time.Millisecond)
-		}
-	}()
 	var n atomic.Int32
-	loop(ctx, j, wake, func() { n.Add(1) })
+	loop(ctx, j, wake, func() { n.Add(1); nudge(wake) })
 	if got := int(n.Load()); got <= wakeBurst+1 {
-		t.Fatalf("%d ticks in 0.95s with a nudge from elsewhere every 10ms; want more than %d", got, wakeBurst+1)
+		t.Fatalf("%d ticks in 0.95s with a nudge from elsewhere during each; want more than %d", got, wakeBurst+1)
+	}
+}
+
+// TestARequestBringsTheNextTickForward: Run's loop is woken by a request
+// landing in a run's outbox, not only by the journal, so a finish or a message
+// doesn't wait out the second.
+func TestARequestBringsTheNextTickForward(t *testing.T) {
+	a, w := appWithWarden(t, false)
+	defer a.Close()
+	a.C.J.MustAppend("run.status", map[string]string{"id": w.ID, "status": core.StatusIdle})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ticks := make(chan time.Time, 64)
+	go a.run(ctx, func() { ticks <- time.Now() })
+	start := <-ticks // the first tick is at once; the second's next is 1s on
+	os.WriteFile(filepath.Join(a.C.WS.RunBox(w.ID), "outbox", "r1.json"), []byte(`{"op":"progress"}`), 0o600)
+	if got := (<-ticks).Sub(start); got > 700*time.Millisecond {
+		t.Fatalf("the tick after a request came %s after the first; want well before the second's", got)
 	}
 }
