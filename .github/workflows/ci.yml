@@ -20,6 +20,8 @@ concurrency:
   # one pending run per group and cancels the older pending one when a third arrives,
   # whatever cancel-in-progress says, so a shared group left most of main's pushes with no
   # result (issue #1057) and a release waiting on one waited forever.
+  # Two manual (or release) runs on one commit still share a group, so a third replaces the
+  # pending one: harmless, since they test the same code.
   group: ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 # Read-only whatever the repository's default is: no job here writes to it.

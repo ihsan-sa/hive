@@ -634,7 +634,7 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 	if p.Draft {
 		return "", fmt.Errorf("PR #%d: %w", number, ErrDraft)
 	}
-	if _, err := gh(repo, "pr", "merge", strconv.Itoa(number), "-R", repo, "--squash", "--match-head-commit", sha, "--subject", subject); err != nil {
+	if _, err := gh(repo, "pr", "merge", strconv.Itoa(number), "-R", repo, "--squash", "--match-head-commit", sha, "--subject", subject, "--body", g.squashBody(repo, number)); err != nil {
 		if draftRefused.MatchString(err.Error()) { // made a draft since the look above
 			return "", fmt.Errorf("PR #%d: %w (%v)", number, ErrDraft, err)
 		}
@@ -648,6 +648,49 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 		time.Sleep(2 * time.Second)
 	}
 	return "", errors.New("merge reported success but the PR is not merged yet")
+}
+
+// squashBody is the squash commit's body: the PR's commit messages, as
+// GitHub's own default would give them, less every Co-authored-by trailer.
+// Left to GitHub, the default turns each commit author and trailer into one,
+// and an agent's "Co-Authored-By: Claude <noreply@anthropic.com>" lists the
+// "claude" account as a contributor to the project.
+func (GitHub) squashBody(repo string, number int) string {
+	out, err := gh(repo, "pr", "view", strconv.Itoa(number), "-R", repo, "--json", "commits")
+	if err != nil {
+		return ""
+	}
+	var v struct {
+		Commits []struct {
+			Headline string `json:"messageHeadline"`
+			Body     string `json:"messageBody"`
+		} `json:"commits"`
+	}
+	if json.Unmarshal([]byte(out), &v) != nil {
+		return ""
+	}
+	if len(v.Commits) == 1 {
+		return SquashBody([]string{v.Commits[0].Body})
+	}
+	var parts []string
+	for _, c := range v.Commits {
+		parts = append(parts, "* "+c.Headline+"\n\n"+c.Body)
+	}
+	return SquashBody(parts)
+}
+
+var coAuthor = regexp.MustCompile(`(?im)^co-authored-by:.*$\n?`)
+
+// SquashBody joins commit messages into a squash body with no
+// Co-authored-by trailer, so nobody but the Hive is credited.
+func SquashBody(messages []string) string {
+	var parts []string
+	for _, m := range messages {
+		if m = strings.TrimSpace(coAuthor.ReplaceAllString(m, "")); m != "" {
+			parts = append(parts, m)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // ReadyPR marks a draft ready for review with the token for repo's owner,

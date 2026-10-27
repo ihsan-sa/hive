@@ -882,7 +882,8 @@ func TestOutOfTimeIsAloneOnlyWhenTheCandidateIsSlower(t *testing.T) {
 		t.Helper()
 		slow := func(cfg *Config, c *Child) Result {
 			time.Sleep(map[string]time.Duration{"candidate": candWait, "control": ctrlWait}[c.Name])
-			return Result{Pass: true}
+			// The sides differ, so the run goes past its first rep.
+			return Result{Pass: true, Metrics: []Metric{{Name: "n", Value: map[string]float64{"candidate": 1, "control": 2}[c.Name], Higher: true}}}
 		}
 		rep, _ := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, name, "run"), Reps: 3, Sandbox: "bare", AllowBare: true,
 			Probes: []string{"slow"}, Probe: map[string]ProbeFunc{"slow": slow}, Timeout: timeout})
@@ -902,7 +903,8 @@ func TestOutOfTimeIsAloneOnlyWhenTheCandidateIsSlower(t *testing.T) {
 // A close call is run again before the gate decides: a candidate flake that
 // stays one run apart over six runs is a tie, and a test that fails one time
 // in three on the candidate shows as two runs apart and is a regression.
-// Probes that were not close are not run again.
+// Probes that were not close are not run again, and a first rep that moved
+// nothing has no close call.
 func TestCloseCallsRunAgain(t *testing.T) {
 	unixOnly(t)
 	dir := t.TempDir()
@@ -944,7 +946,7 @@ func TestCloseCallsRunAgain(t *testing.T) {
 	if rep.Verdict.Keep || rep.Extra["e2e"] != 1 || !strings.Contains(rep.Verdict.Reason, "e2e passes 2/4, the control 4/4") {
 		t.Errorf("one failure in three: extra %v, %+v", rep.Extra, rep.Verdict)
 	}
-	if rep := run("steady", nil); len(rep.Extra) > 0 || count(rep.Candidate, "e2e") != 3 {
+	if rep := run("steady", nil); len(rep.Extra) > 0 || count(rep.Candidate, "e2e") != 1 { // a first rep that moved nothing stops the run
 		t.Errorf("a probe that was not close ran again: %v", rep.Extra)
 	}
 }
@@ -967,5 +969,32 @@ func TestCloseCalls(t *testing.T) {
 		if got := len(CloseCalls(c.cand, c.ctrl)) > 0; got != c.close {
 			t.Errorf("CloseCalls(%v, %v) close %v, want %v", c.cand, c.ctrl, got, c.close)
 		}
+	}
+}
+
+// The gate runs one rep a side, and the rest only when the first differs:
+// a tie beyond nothing but a single run's noise stops there.
+func TestMoreRepsOnlyWhenTheFirstDiffers(t *testing.T) {
+	unixOnly(t)
+	dir := t.TempDir()
+	cand, ctrl := fakeBin(t, dir, "cand", "v2", true), fakeBin(t, dir, "ctrl", "v1", true)
+	run := func(name string, cs, ks float64) Report {
+		t.Helper()
+		p := func(cfg *Config, c *Child) Result {
+			v := map[string]float64{"candidate": cs, "control": ks}[c.Name]
+			return Result{Pass: true, Metrics: []Metric{{Name: "seconds", Value: v}}}
+		}
+		rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, name, "run"), Reps: 3, Sandbox: "bare", AllowBare: true,
+			Probes: []string{"p"}, Probe: map[string]ProbeFunc{"p": p}})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return rep
+	}
+	if rep := run("same", 100, 105); len(rep.Candidate) != 1 || len(rep.Control) != 1 || rep.Verdict.Keep || !strings.Contains(rep.Verdict.Reason, "nothing moved") {
+		t.Errorf("a first rep within a single run's noise: %d/%d reps, %+v", len(rep.Candidate), len(rep.Control), rep.Verdict)
+	}
+	if rep := run("faster", 50, 100); len(rep.Candidate) != 3 || len(rep.Control) != 3 || !rep.Verdict.Keep {
+		t.Errorf("a first rep that differs: %d/%d reps, %+v", len(rep.Candidate), len(rep.Control), rep.Verdict)
 	}
 }
