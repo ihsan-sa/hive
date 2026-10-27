@@ -179,3 +179,33 @@ func TestGateOrgNoteReachesTheResult(t *testing.T) {
 		t.Fatalf("note %q", g.Note)
 	}
 }
+
+// The gate weighs one of hive-eval's dev tasks, the same one for every run on
+// a head, and none where this machine has no hive-eval project.
+func TestGateTaskIsADevTask(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	if got := gateTask(ws, "abc"); got != "" {
+		t.Fatalf("no hive-eval project, yet task %q", got)
+	}
+	dev := filepath.Join(ws.Project(evalProject), "tasks", "dev")
+	for _, n := range []string{"a", "b", "c"} {
+		os.MkdirAll(filepath.Join(dev, n), 0o755)
+		os.WriteFile(filepath.Join(dev, n, "task.json"), []byte("{}"), 0o644)
+	}
+	os.MkdirAll(filepath.Join(dev, "no-task-json"), 0o755)
+	seen := map[string]bool{}
+	for i := 0; i < 40; i++ {
+		head := strconv.Itoa(i)
+		got := gateTask(ws, head)
+		if got != gateTask(ws, head) {
+			t.Fatal("one head, two tasks")
+		}
+		if filepath.Dir(got) != dev || filepath.Base(got) == "no-task-json" {
+			t.Fatalf("task %q", got)
+		}
+		seen[filepath.Base(got)] = true
+	}
+	if len(seen) != 3 {
+		t.Errorf("heads took only %v of the three tasks", seen)
+	}
+}

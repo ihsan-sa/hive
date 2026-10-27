@@ -20,7 +20,8 @@ import (
 type ProbeFunc func(cfg *Config, c *Child) Result
 
 // DefaultProbes is the work every candidate does, in order: cheapest first.
-var DefaultProbes = []string{"daemon", "org", "e2e", "benchmark", "recurse"}
+// The task probe runs only when the gate is given a task.
+var DefaultProbes = []string{"daemon", "org", "e2e", "benchmark", "recurse", "task"}
 
 var builtin = map[string]ProbeFunc{
 	"daemon":    probeDaemon,
@@ -28,6 +29,7 @@ var builtin = map[string]ProbeFunc{
 	"e2e":       probeE2E,
 	"benchmark": probeBenchmark,
 	"recurse":   probeRecurse,
+	"task":      probeTask,
 }
 
 // probeDaemon starts the child's daemon on its fresh workspace, with the fake

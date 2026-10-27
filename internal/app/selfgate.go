@@ -1,10 +1,12 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,6 +51,9 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 			args = append(args, "--allow-tie")
 		}
 		args = append(args, orgArgs(j)...)
+		if task := gateTask(ws, j.Head); task != "" {
+			args = append(args, "--task", task, "--task-model", cmp.Or(ws.LoadConfig().Model, "opus"))
+		}
 		// The gate and all it starts (builds, child Hives, the e2e suite) run
 		// under every lead's priority, as a check does.
 		argv := sandbox.Niced(append([]string{exe}, args...), core.CheckNice)
@@ -68,6 +73,33 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 		}
 		return readReport(j, runErr, ctx.Err())
 	}
+}
+
+// evalProject is the project whose dev tasks the gate weighs real work on:
+// hive-eval's tasks/dev, each a repository at a pinned commit, an issue and
+// hidden tests (its README, Tasks). They are not held out, so they never
+// count in hive-eval's own result; here they show a change on real work.
+var evalProject = "hive-eval"
+
+// gateTask is the dev task the gate has each side of j do on the real model:
+// one per gate, the same for every run on one head (so a rerun is judged on
+// the same work), and the dev tasks in turn across heads. "" when this
+// machine has no hive-eval project or no dev task in it.
+func gateTask(ws core.Workspace, head string) string {
+	root := filepath.Join(ws.Project(evalProject), "tasks", "dev")
+	ents, _ := os.ReadDir(root)
+	var tasks []string
+	for _, e := range ents {
+		if e.IsDir() && core.Exists(filepath.Join(root, e.Name(), "task.json")) {
+			tasks = append(tasks, filepath.Join(root, e.Name()))
+		}
+	}
+	if len(tasks) == 0 {
+		return ""
+	}
+	h := fnv.New32a()
+	h.Write([]byte(head))
+	return tasks[int(h.Sum32()%uint32(len(tasks)))]
 }
 
 // orgArgs are the gate's org flags: the test org when its token is here,

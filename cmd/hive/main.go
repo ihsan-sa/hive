@@ -194,6 +194,8 @@ func run(args []string) int {
 			return 2
 		}
 		return gate.Connect(args[0], args[1])
+	case "gate-task": // inside a gate's sandbox: drive the side's Hive through the gate's real task
+		return cmdGateTask(args)
 	case "gate":
 		return cmdGate(args)
 	case "improve":

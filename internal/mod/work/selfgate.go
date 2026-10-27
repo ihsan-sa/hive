@@ -42,8 +42,10 @@ type GateJob struct {
 // watcher leaves it alone, since the gate is bounded by its own clock.
 const GateWait = "waiting for the recursive gate"
 
-// GateTimeout bounds one gate run; the daemon kills it a little after.
-var GateTimeout = 2 * time.Hour
+// GateTimeout bounds one gate run; the daemon kills it a little after. A run
+// is about 40 minutes of fake-harness probes, and the real task (up to its
+// 20 minutes a side, again in each further rep) comes on top.
+var GateTimeout = 3 * time.Hour
 
 // gateRetry is how long a gate that couldn't run waits before it tries again;
 // gateRetrySoon, when the cause may pass (the machine's load, a probe that

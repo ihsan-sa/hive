@@ -183,6 +183,11 @@ type claudeCreds struct {
 	} `json:"claudeAiOauth"`
 }
 
+// ClaudeAccess is the access token of the Claude login in dir (Claude Code's
+// own when empty) and when it expires: what the recursive gate hands the
+// sides that run a real task.
+func ClaudeAccess(dir string) (string, time.Time, error) { return readClaudeAccess(dir) }
+
 // readClaudeAccess reads only the access token and its expiry from Claude
 // Code's own credential store, or from an added login's folder dir. It is
 // never logged, printed or stored.

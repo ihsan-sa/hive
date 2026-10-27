@@ -17,7 +17,8 @@ import (
 )
 
 const gateUsage = `usage: hive gate --repo <git> --head <sha> --base <sha> [--org Hive-RSI-Lab | --local-org <dir>] [--child-token-file f [--reach-checked]]
-                 [--eval <sha, default base>] [--reps 3] [--bench 4] [--probes daemon,org,e2e,benchmark,recurse] [--depth 1]
+                 [--eval <sha, default base>] [--reps 3] [--bench 4] [--probes daemon,org,e2e,benchmark,recurse,task] [--depth 1]
+                 [--task <hive-eval task folder> [--task-wall 20m] [--task-model opus]]  (each side does it on the real model)
                  [--allow-tie] [--timeout 2h] [--install <path>]  (installs only after a keep from bubblewrap-isolated children) [--out <dir>]
                  [--allow-bare]  (where bubblewrap cannot make namespaces; never with --org, never installed)
        hive gate --self-test [--out <dir>]      the gate on a trivial change, inside a child
@@ -58,11 +59,13 @@ func cmdGate(args []string) int {
 	tie, self, bare := fs.Bool("allow-tie", false, ""), fs.Bool("self-test", false, ""), fs.Bool("allow-bare", false, "")
 	reachChecked := fs.Bool("reach-checked", false, "") // the daemon passed CheckReach on these tokens within the hour
 	timeout := fs.Duration("timeout", 0, "")
+	task, taskWall, taskModel := fs.String("task", "", ""), fs.Duration("task-wall", 0, ""), fs.String("task-model", "", "")
 	if fs.Parse(args) != nil {
 		fmt.Fprintln(os.Stderr, gateUsage)
 		return 2
 	}
 	cfg := gate.Config{Repo: *repo, Head: *head, Base: *base, Eval: *eval, Out: *out, Reps: *reps, Bench: *bench, Depth: *depth, AllowBare: *bare, Timeout: *timeout,
+		Task: *task, TaskWall: *taskWall, TaskModel: *taskModel,
 		Options: gate.Options{AllowTie: *tie}, Log: func(s string) { fmt.Fprintln(os.Stderr, "gate:", s) }}
 	if *probes != "" {
 		cfg.Probes = strings.Split(*probes, ",")

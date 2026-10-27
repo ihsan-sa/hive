@@ -40,7 +40,12 @@ type Config struct {
 	Log        func(string)
 	Probe      map[string]ProbeFunc // extra probes, by name
 	KeepFiles  bool
-	Self       string // the gate's own binary, which runs gate-fwd and gate-check in the sandboxes (default this executable)
+	Self       string        // the gate's own binary, which runs gate-fwd, gate-check and gate-task in the sandboxes (default this executable)
+	Task       string        // a hive-eval task folder (task.json, hidden/) each side does on the real model: the task probe (task.go); empty skips it
+	TaskWall   time.Duration // how long each side has for it (default DefaultTaskWall)
+	TaskModel  string        // the model the sides' agents run it on (default opus)
+
+	task *taskRun // the task and its seed, prepared once per run
 }
 
 // MaxDepth is how many levels deep gates may nest; a child gating a
