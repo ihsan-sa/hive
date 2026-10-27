@@ -1442,11 +1442,14 @@ func (m *model) saveSetting(v string) tea.Cmd {
 	return m.saveConfig(c, "saved")
 }
 
-// saveConfig shows the new settings at once and posts them. The flash that
-// follows fetches state, which puts the daemon's back if it refused them.
+// saveConfig shows the new settings at once and posts them. A state poll
+// sent before the save lands keeps them, so they don't flick back; the one
+// after it puts the daemon's back if it refused them.
 func (m *model) saveConfig(c core.Config, ok string) tea.Cmd {
 	m.st.Config = c
-	return m.post("/api/config", c, ok)
+	m.saves++
+	n, post := m.saves, m.post("/api/config", c, ok)
+	return func() tea.Msg { return savedMsg{n, post().(flashMsg)} }
 }
 
 // settingCols is the width of the settings' label column, 28 cells or less

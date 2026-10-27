@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -205,5 +207,28 @@ func TestClientFollowsANewTokenOnTheSamePort(t *testing.T) {
 	write(DaemonInfo{PID: 3, Port: port, Token: "other"})
 	if err := c.Do("GET", "/api/state", nil, nil); err != nil {
 		t.Fatalf("the client lost the daemon it reached: %v", err)
+	}
+}
+
+// A 401 the new token can't fix still says the daemon's reason.
+func TestUnauthorizedKeepsTheDaemonsReason(t *testing.T) {
+	ws, write := workspace(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"this token is for another workspace"}`, http.StatusUnauthorized)
+	})}
+	go srv.Serve(ln)
+	defer srv.Close()
+	write(DaemonInfo{PID: 1, Port: ln.Addr().(*net.TCPAddr).Port, Token: "t"})
+	c, err := Dial(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Do("GET", "/api/state", nil, nil)
+	if !errors.Is(err, errUnauthorized) || !strings.Contains(err.Error(), "another workspace") {
+		t.Fatalf("Do = %v", err)
 	}
 }

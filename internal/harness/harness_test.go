@@ -270,3 +270,21 @@ func TestWindowWithoutResetHasNone(t *testing.T) {
 		t.Fatalf("got %+v", evs)
 	}
 }
+
+// The same for Codex: a rollout window with no reset has none, and one that
+// gives resets_in_seconds (older Codex) resets that long from now.
+func TestCodexWindowWithoutResetHasNone(t *testing.T) {
+	start := time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
+	none := []byte(`{"timestamp":"2026-10-24T10:01:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":100,"window_minutes":300}}}}`)
+	if rl, _ := (Codex{}).Usage(none, start); rl == nil || rl.Status != "rejected" || !rl.ResetsAt.IsZero() || !rl.Windows["five_hour"].ResetsAt.IsZero() {
+		t.Fatalf("no reset: %+v", rl)
+	}
+	in := []byte(`{"timestamp":"2026-10-24T10:01:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":40,"window_minutes":300,"resets_in_seconds":600}}}}`)
+	rl, _ := Codex{}.Usage(in, start)
+	if rl == nil {
+		t.Fatal("no reading")
+	}
+	if d := time.Until(rl.ResetsAt); d < 590*time.Second || d > 600*time.Second {
+		t.Fatalf("resets in %v, want ten minutes: %+v", d, rl)
+	}
+}
