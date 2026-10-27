@@ -508,7 +508,7 @@ func TestLocalQuarantineKeepsRealFailures(t *testing.T) {
 		"build":       {e2eLog("TestStalls") + "FAIL\texample.com/p/win [build failed]\n", map[string]string{"feature.txt": "y"}},
 	} {
 		m, task, p, _ := localFlakeRig(t, tc.log, tc.files, e2eKey+"TestStalls")
-		if err := m.test(task, p); err != nil {
+		if err := testStep(m, task, p); err != nil {
 			t.Fatal(err)
 		}
 		if task.Stage == StageMerging || task.Stage == StageReviewing || logHas(task, "known flakes") {
