@@ -95,7 +95,10 @@ type Task struct {
 	// head that contains it resolved that conflict, so the next is main
 	// moving again and the count starts over: only unresolved ones add up.
 	ConflictMain string `json:"conflict_main,omitempty"`
-	Reviews      int    `json:"reviews"`
+	// MergedOK is "head+main" for the last head whose tests passed merged
+	// with that main (mergedTests), so it merges as it is without testing again.
+	MergedOK string `json:"merged_ok,omitempty"`
+	Reviews  int    `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
 	// own diff, keyed by "diffID#seat". When the diff changes, the old
 	// tries are left behind and the seat starts fresh on the new diff.
@@ -318,6 +321,14 @@ type Module struct {
 	retesting sync.Mutex
 	busy      map[string]bool
 	aims      map[string]aimAsk // aims asked while a step held the task, set as it ends
+	// steered is when the person's stop, retry or recheck (steer) last saved
+	// each task: a step whose copy is older saves nothing after it, nor
+	// merges, so it can't undo what they asked. It grows by one key per task
+	// steered and isn't pruned; that's small.
+	steered map[string]time.Time
+	// holding keeps a hold being set and a lift on its release apart, so a
+	// lift ends only the hold whose release it read (releasedSince).
+	holding sync.Mutex
 	// workers, checks and gates are the limits the pace sets (pace.go,
 	// selfgate.go).
 	workers, checks, gates pace
@@ -388,7 +399,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, defCache: map[string]defEntry{}, baseTrees: map[string]map[string]string{}, mainTips: map[string]string{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, defCache: map[string]defEntry{}, baseTrees: map[string]map[string]string{}, mainTips: map[string]string{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -443,20 +454,49 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	return m
 }
 
-func (m *Module) save(t *Task, note string) {
-	t.Updated = time.Now().UTC()
-	if t.Stage != StageMerging { // a draft's wait counts only while it stays in merging
-		t.DraftSince, t.DraftTold = time.Time{}, false
-	}
+func (m *Module) save(t *Task, note string) { m.store(t, note, false) }
+
+// steer saves a change from outside any step, the person's stop, retry or
+// recheck, over whatever a step running on the task holds: that step's
+// older copy is saved no more (store), so the change stands.
+func (m *Module) steer(t *Task, note string) { m.store(t, note, true) }
+
+// overtaken reports whether t is a copy from before the task was last
+// steered, which a step mustn't act on any further.
+func (m *Module) overtaken(t *Task) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.steered[t.ID]
+	return ok && t.Updated.Before(s)
+}
+
+// store saves t, or, when t is a copy from before the task was steered and
+// this save isn't a steer itself, drops it, reporting whether it saved.
+func (m *Module) store(t *Task, note string, steer bool) bool {
+	now := time.Now().UTC()
 	// Windows' clock ticks coarsely, so a save in the tick GitHub came back
 	// would read as before it and wake at once: keep it strictly after.
 	m.mu.Lock()
+	if s, ok := m.steered[t.ID]; ok && !steer && t.Updated.Before(s) {
+		m.mu.Unlock()
+		return false
+	}
+	t.Updated = now
+	if t.Stage != StageMerging { // a draft's wait counts only while it stays in merging
+		t.DraftSince, t.DraftTold = time.Time{}, false
+	}
 	if !t.Updated.After(m.online) {
 		t.Updated = m.online.Add(time.Nanosecond)
 	}
 	var was string
 	if prev := m.tasks[t.ID]; prev != nil {
 		was = prev.Stage
+		if steer && !t.Updated.After(prev.Updated) { // after every copy a step holds
+			t.Updated = prev.Updated.Add(time.Nanosecond)
+		}
+	}
+	if steer {
+		m.steered[t.ID] = t.Updated
 	}
 	// A gate run on a head the task has left (a merge of main, a fix sent
 	// back) or a task that ended judges nothing that lands: it ends now and
@@ -479,6 +519,15 @@ func (m *Module) save(t *Task, note string) {
 		m.steps.Add(1)
 		go func(t Task) { defer m.steps.Done(); m.ended(t) }(*t) // a large tree mustn't hold the save
 	}
+	return true
+}
+
+// fresh reports whether t is the task as last saved, so a step may start on
+// it; a save since List took it (a hold, a stop) is read on the next tick.
+// The caller holds m.mu.
+func (m *Module) fresh(t Task) bool {
+	cur := m.tasks[t.ID]
+	return cur != nil && cur.Updated.Equal(t.Updated)
 }
 
 // Get returns a task.
@@ -790,7 +839,7 @@ func (m *Module) Tick() {
 			continue
 		}
 		m.mu.Lock()
-		if !m.due(t) || m.busy[t.ID] || (t.Queued() && !start[t.ID]) {
+		if !m.due(t) || m.busy[t.ID] || !m.fresh(t) || (t.Queued() && !start[t.ID]) {
 			m.mu.Unlock()
 			continue
 		}
@@ -820,7 +869,7 @@ func (m *Module) waits(t Task, why string) {
 		return
 	}
 	m.mu.Lock()
-	if m.busy[t.ID] {
+	if m.busy[t.ID] || !m.fresh(t) { // a queue hold saved since List took t is kept
 		m.mu.Unlock()
 		return
 	}
@@ -1678,6 +1727,20 @@ func (m *Module) test(t *Task, p core.Project) error {
 	if err := m.noteTests(t, p, main, c); err != nil {
 		return err
 	}
+	if !c.OK && len(m.C.Effects.Quarantine(p.Name, t.ID)) > 0 {
+		// Known flakes count against no head, as on the forge's checks:
+		// Effects.Merge rules the same on this run.
+		ch, err := m.C.Effects.Classify(p, main, t.SHA)
+		if err != nil {
+			return err
+		}
+		if flaky := m.C.Effects.ExcusedLocal(p, main, t.ID, ch.Files, c); len(flaky) > 0 {
+			c.OK = true
+			if note := "known flakes: its tests fail on " + core.Short(t.SHA) + " only in quarantined tests (" + core.Clip(strings.Join(flaky, ", "), 300) + "), so they don't count against it"; !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
+				m.save(t, note)
+			}
+		}
+	}
 	if !c.OK && t.Checkpoint != "" {
 		return m.dropCheckpoint(t, p, "the tests failed on "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 1500))
 	}
@@ -1958,12 +2021,17 @@ func (m *Module) catchUp(t *Task, p core.Project, main, why string) (bool, error
 	if err != nil {
 		return true, err
 	}
+	return true, m.takeMain(t, p, next, why)
+}
+
+// takeMain pushes next, t's head with main merged in, to its branch and tests it again.
+func (m *Module) takeMain(t *Task, p core.Project, next, why string) error {
 	if err := m.C.Effects.Push(p, t.Branch, next); err != nil {
-		return true, err
+		return err
 	}
 	t.SHA, t.Stage, t.Reason = next, StageTesting, ""
 	m.save(t, why+"; branch brought up to date at "+core.Short(next)+", testing again")
-	return true, nil
+	return nil
 }
 
 // mergeAsk asks the person to merge a change to protected files, carrying the
@@ -2303,6 +2371,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return nil
 	}
 	defer m.leaveMerge()
+	if m.overtaken(t) { // the person stopped or brought it back while this step ran
+		return nil
+	}
 	// The draft flag is this look's: a PR made a draft since (the lead's
 	// pr_draft) isn't readied, and MergePR refuses it with ErrDraft.
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Gain: t.Gain(), Task: t.ID, Draft: pr.Draft})
@@ -2468,12 +2539,13 @@ func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 }
 
 // upToDate decides whether t's branch must take main in before it merges.
-// It merges as it is while the forge says it merges cleanly: every main merge
-// moves the head past its reads and restarts its checks. Here only a conflict,
-// or the forge's rule that the branch be up to date with main, brings main in;
-// on a self project the recursive gate merges main in its own clone, so it
-// judges what would land without moving the branch (see recursiveGate). While
-// the forge is still working it out, t waits.
+// It merges as it is while the forge says it merges cleanly and its tests
+// pass merged with main (mergedTests): every main merge would otherwise move
+// the head past its reads and restart its checks. Here only a conflict, the
+// forge's rule that the branch be up to date with main, or a red merge with
+// main brings main in; on a self project the recursive gate merges main in
+// its own clone, so it judges what would land without moving the branch (see
+// recursiveGate). While the forge is still working it out, t waits.
 func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
 		return false, nil
@@ -2497,6 +2569,53 @@ func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 		m.hold(t, p, "waiting for the forge to work out whether PR #"+fmt.Sprint(t.PR.Number)+" merges cleanly with main (mergeable "+state+", main at "+core.Short(main)+")")
 		return true, nil
 	}
+	return m.mergedTests(t, p, main)
+}
+
+// mergedTests runs the project's tests on t's head merged with main, once
+// for each head and main, before a branch whose base is behind main merges
+// as it is. Two changes that each merge cleanly and pass on their own can
+// still break main together (one calls what the other renamed): the forge
+// sees no conflict and each one's checks ran without the other. A merge
+// that passes, or fails only where main fails too, lets t merge as it is;
+// one that is red where main is green is pushed to the branch and tested
+// again, which sends the failure to the worker. A test that can't run waits
+// and is raised as any can't-run is; a merge git can't make here is left to
+// catchUp, which sends a conflict back.
+func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error) {
+	key := t.SHA + "+" + main
+	if t.MergedOK == key {
+		return false, nil
+	}
+	merged, err := m.C.Effects.UpdateBranch(p, t.SHA, main, "")
+	if errors.Is(err, core.ErrConflict) {
+		return m.catchUp(t, p, main, "main moved and the PR's merge with it conflicts")
+	}
+	if err != nil {
+		return true, err
+	}
+	if _, err := m.C.Sandbox(); err != nil {
+		return true, err
+	}
+	cfg := m.C.Effects.Config(p, main)
+	c := m.C.Effects.RunCheck(p, merged, "test", cfg.Test)
+	if c.CantRun != "" {
+		return true, m.cantRun(t, p, c)
+	}
+	if !c.OK {
+		mc, err := m.mainTests(p, main, cfg.Test)
+		if err != nil {
+			return true, err
+		}
+		if mc.CantRun != "" {
+			return true, m.cantRun(t, p, mc)
+		}
+		if mc.OK || !core.NoWorse(c, mc) {
+			return true, m.takeMain(t, p, merged, "main moved and the tests fail on the PR merged with main at "+core.Short(main)+", though each passed alone")
+		}
+	}
+	t.MergedOK = key
+	m.save(t, "its tests pass merged with main at "+core.Short(main)+" (as "+core.Short(merged)+"), so it merges as it is")
 	return false, nil
 }
 
@@ -2621,7 +2740,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	if len(shared) > 0 {
 		both := strings.Join(shared, ", ")
 		m.raiseOnce(p, main+"/checks", "the forge's checks "+both+" fail on main in "+p.Name+" at "+core.Short(main))
-		onMain = " (" + both + " fail on main at " + core.Short(main) + " too, so they don't count against it)"
+		onMain = " (" + both + " fail on main at " + mainAt(shared, at, main) + " too, so they don't count against it)"
 	}
 	switch st {
 	case core.CheckPending:
@@ -2681,7 +2800,13 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		if t.Reruns[t.SHA] < rerunsPerHead {
 			hint = "\n\nIf the log shows a flake rather than your change, `hive agent rerun-checks` runs the failed jobs again and finishing again without a commit waits for them."
 		}
-		findings := forgeFailed + core.Short(t.SHA) + ": " + checkDetail(which) + onMain
+		findings := forgeFailed + core.Short(t.SHA)
+		if tested := m.testedBase(t, p, which); tested != "" && tested != main {
+			// The commit the worker reads first names the main the checks
+			// ran with, as forge-failures.md does, not main now.
+			findings += " (run merged with main at " + core.Short(tested) + "; main has moved to " + core.Short(main) + " since)"
+		}
+		findings += ": " + checkDetail(which) + onMain
 		detail := m.forgeFailures(t, p, main, which, mainRuns, at)
 		return true, m.sendBackWith(t, p, findings+hint, detail, true) // forgeFailures wrote main.bundle
 	}
@@ -2907,13 +3032,10 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 	// a fix that landed since is in main but wasn't in what they ran.
 	fails := make([]core.CheckFailure, len(failed))
 	reads := make([]bool, len(failed))
-	tested := ""
 	for i, r := range failed {
 		fails[i], reads[i] = m.C.Effects.CheckFailure(p.Repo, r)
-		if f := fails[i]; tested == "" && f.Base != "" && f.Head == t.SHA {
-			tested = f.Base
-		}
 	}
+	tested := m.testedBase(t, p, failed)
 	both("# The forge's failed checks on %s\n\n", core.Short(t.SHA))
 	switch {
 	case tested == "":
@@ -2969,6 +3091,31 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		fmt.Fprintf(&short, "\nThe end of each failed step's log is in $HIVE_RUN/%s, kept there for later rounds.\n", forgeFailuresFile)
 	}
 	return short.String()
+}
+
+// testedBase is the main the forge merged t's head with before running the
+// failed checks, as their logs say (core.TestedMerge), or "" when none says.
+// Logs are read once (Effects.CheckFailure keeps them), so asking again is
+// cheap.
+func (m *Module) testedBase(t *Task, p core.Project, failed []core.CheckRun) string {
+	for _, r := range failed {
+		if f, ok := m.C.Effects.CheckFailure(p.Repo, r); ok && f.Base != "" && f.Head == t.SHA {
+			return f.Base
+		}
+	}
+	return ""
+}
+
+// mainAt names the main commits whose runs of checks failed: at[name] when
+// main's newest finished run of it is older than main, main otherwise.
+func mainAt(checks []string, at map[string]string, main string) string {
+	var shas []string
+	for _, c := range checks {
+		if sha := core.Short(cmp.Or(at[c], main)); !slices.Contains(shas, sha) {
+			shas = append(shas, sha)
+		}
+	}
+	return strings.Join(shas, ", ")
 }
 
 // bundleForChecks writes main as the forge's checks saw it to the worker's
@@ -3522,7 +3669,7 @@ func (m *Module) Stop(id, reason string) error {
 		m.C.Runs.Stop(t.Worker, reason)
 	}
 	t.Stage, t.Reason, t.ByPerson = StageStopped, reason, true
-	m.save(&t, "stopped: "+reason)
+	m.steer(&t, "stopped: "+reason)
 	return nil
 }
 
@@ -3572,11 +3719,11 @@ func (m *Module) Recheck(id, back, by string) error {
 			return err
 		}
 		t.Stage = StageWorking
-		m.save(&t, "sent back to its worker by "+by+": "+core.Clip(back, 200))
+		m.steer(&t, "sent back to its worker by "+by+": "+core.Clip(back, 200))
 		return nil
 	}
 	t.Stage = StageLanding
-	m.save(&t, "checks run again on its commits, asked by "+by)
+	m.steer(&t, "checks run again on its commits, asked by "+by)
 	return nil
 }
 
@@ -3698,7 +3845,7 @@ func (m *Module) Retry(id string) error {
 	t.Stage, t.Worker, t.Reason, t.Failures, t.Round = StageQueued, "", "", 0, 0
 	t.ForgeLog = ""    // a file in the stopped worker's run, which the fresh one can't read
 	t.ByPerson = false // the person brought it back; the lead may handle it from here
-	m.save(&t, "handed to a fresh worker")
+	m.steer(&t, "handed to a fresh worker")
 	return nil
 }
 
