@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,6 +19,23 @@ import (
 // JudgeTries is how many unusable answers a judge may give before the numbers
 // decide alone.
 const JudgeTries = 3
+
+// JudgeParkWait is the longest a clear keep (clearKeep) waits on a parked
+// judge: a judge that has stayed parked this long (at a usage limit, on a
+// model that can't answer) is stopped and the numbers decide, since a gain
+// measured beyond the gate's noise with no regression needs no judge to
+// merge. On 10-26 #868's keep waited 8 hours on a judge parked at every
+// login's limit while main stood still for 12 (issue #983). Any other
+// verdict still waits: the judge may keep what the numbers missed, or roll
+// back a keep won on the control's flake. A var so a test needn't wait.
+var JudgeParkWait = 30 * time.Minute
+
+// clearKeep says whether g is a keep the numbers make clear: its gain is a
+// metric measured beyond the noise (the gate names it with its noise), not a
+// pass rate the control's flake could have given it, nor a tie.
+func clearKeep(g core.GateResult) bool {
+	return g.Outcome == core.GateKeep && strings.Contains(g.Reason, "(noise ±")
+}
 
 // JudgeWait is how long one judge run may take before it is stopped and
 // counts as a try with no usable answer.
@@ -89,7 +105,8 @@ func ReadJudgement(r core.Run) (verdict, summary string, ok bool) {
 // judgeGate is the judge's call on a gate verdict that measured both sides:
 // keep says it merges, wait that the task is held for the judge. A verdict
 // that measured nothing (the candidate failed on its own first) stands as is,
-// as do the numbers once the judge gave no usable answer JudgeTries times.
+// as do the numbers once the judge gave no usable answer JudgeTries times,
+// and a clear keep whose judge has been parked JudgeParkWait.
 func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wait bool, err error) {
 	numbers := g.Outcome == core.GateKeep
 	if !g.Measured {
@@ -115,7 +132,6 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 			}
 			t.JudgeTries[key] = JudgeTries
 			m.save(t, "the gate's numbers decide unjudged: "+why)
-			m.gateLesson(p, g, "")
 			return false, false, nil
 		}
 		w, _ := m.C.Runs.Get(t.Worker)
@@ -128,6 +144,18 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 		}
 		m.hold(t, p, fmt.Sprintf("%s: the gate said %s on %s, and its judge (%s) is weighing that with the change", GateWait, GateWord(g.Outcome), core.Short(g.Head), spec.Model))
 		return false, true, nil
+	}
+	if !r.Terminal() && clearKeep(g) && r.Status == core.StatusParked && !r.ParkedSince.IsZero() && time.Since(r.ParkedSince) >= JudgeParkWait {
+		m.C.Runs.Stop(r.ID, "the gate's clear keep merges on its numbers rather than wait for this judge")
+		if t.JudgeTries == nil {
+			t.JudgeTries = map[string]int{}
+		}
+		t.JudgeTries[key] = JudgeTries
+		why := fmt.Sprintf("the judge (%s) has been parked since %s (%s), so the gate's clear keep merges on its numbers", r.Model, r.ParkedSince.UTC().Format("15:04Z"), core.Clip(r.Reason, 200))
+		// Said on the PR, so a later read knows no judge weighed this keep.
+		m.comment(p.Repo, t.PR.Number, fmt.Sprintf("**Judge bypassed:** %s against main at %s merges unjudged: %s. The gate said: %s", core.Short(g.Head), core.Short(g.Main), why, g.Reason))
+		m.save(t, why)
+		return true, false, nil
 	}
 	verdict, summary, ok := "", "", false
 	switch {
@@ -148,9 +176,6 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 		t.JudgeTries[key]++
 		if t.JudgeTries[key] >= JudgeTries {
 			m.save(t, fmt.Sprintf("the judge gave no usable answer %d times, so the gate's numbers decide: %s", JudgeTries, GateWord(g.Outcome)))
-			if !numbers {
-				m.gateLesson(p, g, "") // the gate left it to the judge (--judged)
-			}
 			return numbers, false, nil
 		}
 		m.save(t, "the judge gave no usable answer; asking again")
@@ -163,36 +188,5 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 	word := map[string]string{core.GateKeep: "KEEP", core.GateRollback: "ROLL BACK"}
 	m.comment(p.Repo, t.PR.Number, fmt.Sprintf("**Judge (%s): %s** %s against main at %s; the gate's numbers said %s.\n\n%s", r.Model, word[verdict], core.Short(g.Head), core.Short(g.Main), GateWord(g.Outcome), summary))
 	m.save(t, fmt.Sprintf("the judge (%s): %s; the gate's numbers said %s", r.Model, word[verdict], GateWord(g.Outcome)))
-	if verdict == core.GateRollback {
-		// The gate leaves a measured rollback's lesson to the judge (--judged).
-		m.gateLesson(p, g, r.Model)
-	}
 	return verdict == core.GateKeep, false, nil
-}
-
-// gateLesson writes a measured rollback's line to the recursive gate's
-// lessons, which the gate left to the judge (--judged): judge names the
-// model that rolled it back, "" when the numbers decided. The line is the
-// gate's own words, never the judge's: its summary read the candidate's diff.
-func (m *Module) gateLesson(p core.Project, g core.GateResult, judge string) {
-	lessons := filepath.Join(m.C.WS.Gates(), p.Name, "recursive", "lessons.md")
-	raw, _ := os.ReadFile(lessons)
-	s := string(raw)
-	if strings.TrimSpace(s) == "" {
-		s = "# Lessons\n\nWhat was tried and why it didn't stay. Read before working here.\n\n"
-	}
-	if !strings.HasSuffix(s, "\n") {
-		s += "\n"
-	}
-	day := time.Now().UTC().Format("2006-01-02")
-	switch {
-	case judge == "":
-		s += fmt.Sprintf("- The gate rolled back %s (%s): %s\n", core.Short(g.Head), day, g.Reason)
-	case g.Outcome == core.GateKeep:
-		s += fmt.Sprintf("- %s was kept by the gate's numbers and rolled back by its judge (%s, %s); the numbers said: %s\n", core.Short(g.Head), judge, day, g.Reason)
-	default:
-		s += fmt.Sprintf("- The gate rolled back %s (%s), as its judge decided: %s\n", core.Short(g.Head), day, g.Reason)
-	}
-	os.MkdirAll(filepath.Dir(lessons), 0o755)
-	os.WriteFile(lessons, []byte(s), 0o644)
 }
