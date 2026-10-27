@@ -139,19 +139,41 @@ func (e *Effects) untouched(p Project, g GateResult, main string) (bool, error) 
 	} else if base != g.Main {
 		return false, nil // main was rewritten, or the verdict's main is newer
 	}
-	files := func(from, to string) ([]string, error) {
-		out, err := Git(dir, "-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", from, to)
-		return slices.DeleteFunc(strings.Split(out, "\x00"), func(f string) bool { return f == "" }), err
+	moved, err := gitFiles(dir, g.Main, main)
+	if err != nil {
+		return false, err
 	}
+	hit, err := e.touches(p, g, main, moved)
+	return !hit, err
+}
+
+// Unseats reports whether merging head into main would end g's standing
+// there: head changes a file g's own change does, or one of what the gate
+// measures with. A merge that leaves both alone keeps the verdict, so only
+// such a merge need wait behind a measured keep (the work module's
+// keptFirst).
+func (e *Effects) Unseats(p Project, g GateResult, main, head string) (bool, error) {
+	dir := e.ws.Project(p.Name)
+	base, err := Git(dir, "merge-base", main, head)
+	if err != nil {
+		return false, err
+	}
+	moved, err := gitFiles(dir, base, head)
+	if err != nil {
+		return false, err
+	}
+	return e.touches(p, g, main, moved)
+}
+
+// touches says whether any of moved is one of g's own files or under what
+// the gate measures with at main.
+func (e *Effects) touches(p Project, g GateResult, main string, moved []string) (bool, error) {
+	dir := e.ws.Project(p.Name)
 	cbase, err := Git(dir, "merge-base", g.Main, g.Head)
 	if err != nil {
 		return false, err
 	}
-	own, err := files(cbase, g.Head)
-	if err != nil {
-		return false, err
-	}
-	moved, err := files(g.Main, main)
+	own, err := gitFiles(dir, cbase, g.Head)
 	if err != nil {
 		return false, err
 	}
@@ -161,8 +183,14 @@ func (e *Effects) untouched(p Project, g GateResult, main string) (bool, error) 
 	}
 	for _, f := range moved {
 		if under(f, guard) || slices.Contains(own, f) {
-			return false, nil
+			return true, nil
 		}
 	}
-	return true, nil
+	return false, nil
+}
+
+// gitFiles are the files that differ between from and to in dir.
+func gitFiles(dir, from, to string) ([]string, error) {
+	out, err := Git(dir, "-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", from, to)
+	return slices.DeleteFunc(strings.Split(out, "\x00"), func(f string) bool { return f == "" }), err
 }
