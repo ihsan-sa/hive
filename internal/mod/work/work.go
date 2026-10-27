@@ -459,7 +459,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
-	c.Effects.Slots.Prioritize(m.checkRank)
+	c.Effects.Slots.Prioritize(m.checkRank, rankMain)
 	return m
 }
 
@@ -1980,8 +1980,12 @@ func (m *Module) failsAgain(p core.Project, sha, command string, c core.Check) b
 // A red main runs what failed once more (Retest) before it holds anything:
 // passing then, it was a flake of a slow or busy machine, filed to fix, and
 // main counts as green. The answer is the newest "retest" check on main.
+// Every red change on main waits on it, so its checks go ahead of the line.
 func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
 	c, ok := m.C.Effects.GetCheck(p.Name, main, "test")
+	if !ok || !c.OK && c.CantRun == "" && m.Retest != nil {
+		defer m.MeasuringMain(p.Name, main)()
+	}
 	if !ok {
 		if _, err := m.C.Sandbox(); err != nil {
 			return core.Check{}, err
