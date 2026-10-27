@@ -982,3 +982,34 @@ func TestMergedOnForgeWhileHeld(t *testing.T) {
 		t.Fatal("the brief behind it didn't start")
 	}
 }
+
+// The person's stop stands over a step running on an older copy of the task:
+// the step's later saves are dropped and it doesn't merge, and a tick doesn't
+// start a step on a copy taken before a save.
+func TestStopStandsOverARunningStep(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage = StageMerging
+	m.save(task, "on to the merge")
+	step, _ := m.Get(task.ID) // the tick's copy
+	if err := m.Stop(task.ID, "stopped by the person"); err != nil {
+		t.Fatal(err)
+	}
+	if !m.overtaken(&step) {
+		t.Fatal("a copy from before the stop isn't seen as overtaken")
+	}
+	step.Stage = StageLanding
+	m.save(&step, "the step's older copy")
+	if got, _ := m.Get(task.ID); got.Stage != StageStopped || !got.ByPerson {
+		t.Fatalf("the step saved over the person's stop: %+v", got)
+	}
+	cur, _ := m.Get(task.ID)
+	if m.overtaken(&cur) {
+		t.Fatal("a copy taken after the stop is overtaken")
+	}
+	m.mu.Lock()
+	ok := m.fresh(step)
+	m.mu.Unlock()
+	if ok {
+		t.Fatal("a copy from before a save reads as fresh")
+	}
+}

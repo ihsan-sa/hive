@@ -313,6 +313,14 @@ type Module struct {
 	retesting sync.Mutex
 	busy      map[string]bool
 	aims      map[string]aimAsk // aims asked while a step held the task, set as it ends
+	// steered is when the person's stop, retry or recheck (steer) last saved
+	// each task: a step whose copy is older saves nothing after it, nor
+	// merges, so it can't undo what they asked. It grows by one key per task
+	// steered and isn't pruned; that's small.
+	steered map[string]time.Time
+	// holding keeps a hold being set and a lift on its release apart, so a
+	// lift ends only the hold whose release it read (releasedSince).
+	holding sync.Mutex
 	// workers, checks and gates are the limits the pace sets (pace.go,
 	// selfgate.go).
 	workers, checks, gates pace
@@ -370,7 +378,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -425,20 +433,55 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	return m
 }
 
-func (m *Module) save(t *Task, note string) {
-	t.Updated = time.Now().UTC()
-	if t.Stage != StageMerging { // a draft's wait counts only while it stays in merging
-		t.DraftSince, t.DraftTold = time.Time{}, false
-	}
+func (m *Module) save(t *Task, note string) { m.store(t, note, false) }
+
+// steer saves a change from outside any step, the person's stop, retry or
+// recheck, over whatever a step running on the task holds: that step's
+// older copy is saved no more (store), so the change stands.
+func (m *Module) steer(t *Task, note string) { m.store(t, note, true) }
+
+// overtaken reports whether t is a copy from before the task was last
+// steered, which a step mustn't act on any further.
+func (m *Module) overtaken(t *Task) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.steered[t.ID]
+	return ok && t.Updated.Before(s)
+}
+
+// store saves t, or, when t is a copy from before the task was steered and
+// this save isn't a steer itself, drops it, reporting whether it saved.
+func (m *Module) store(t *Task, note string, steer bool) bool {
+	now := time.Now().UTC()
 	// Windows' clock ticks coarsely, so a save in the tick GitHub came back
 	// would read as before it and wake at once: keep it strictly after.
 	m.mu.Lock()
+	if s, ok := m.steered[t.ID]; ok && !steer && t.Updated.Before(s) {
+		m.mu.Unlock()
+		return false
+	}
+	t.Updated = now
+	if t.Stage != StageMerging { // a draft's wait counts only while it stays in merging
+		t.DraftSince, t.DraftTold = time.Time{}, false
+	}
 	if !t.Updated.After(m.online) {
 		t.Updated = m.online.Add(time.Nanosecond)
 	}
 	var was string
 	if prev := m.tasks[t.ID]; prev != nil {
 		was = prev.Stage
+		if steer && !t.Updated.After(prev.Updated) { // after every copy a step holds
+			t.Updated = prev.Updated.Add(time.Nanosecond)
+		}
+	}
+	if steer {
+		m.steered[t.ID] = t.Updated
+	}
+	// A gate run on a head the task has left (a merge of main, a fix sent
+	// back) or a task that ended judges nothing that lands: it ends now and
+	// frees its slot, not once the new head reaches the gate hours later.
+	if m.dropStaleGatesLocked(t) {
+		note = strings.TrimPrefix(note+"; the recursive gate's run on its earlier head ends, freeing its slot", "; ")
 	}
 	m.mu.Unlock()
 	if note != "" {
@@ -455,6 +498,15 @@ func (m *Module) save(t *Task, note string) {
 		m.steps.Add(1)
 		go func(t Task) { defer m.steps.Done(); m.ended(t) }(*t) // a large tree mustn't hold the save
 	}
+	return true
+}
+
+// fresh reports whether t is the task as last saved, so a step may start on
+// it; a save since List took it (a hold, a stop) is read on the next tick.
+// The caller holds m.mu.
+func (m *Module) fresh(t Task) bool {
+	cur := m.tasks[t.ID]
+	return cur != nil && cur.Updated.Equal(t.Updated)
 }
 
 // Get returns a task.
@@ -766,7 +818,7 @@ func (m *Module) Tick() {
 			continue
 		}
 		m.mu.Lock()
-		if !m.due(t) || m.busy[t.ID] || (t.Queued() && !start[t.ID]) {
+		if !m.due(t) || m.busy[t.ID] || !m.fresh(t) || (t.Queued() && !start[t.ID]) {
 			m.mu.Unlock()
 			continue
 		}
@@ -789,7 +841,7 @@ func (m *Module) waits(t Task, why string) {
 		return
 	}
 	m.mu.Lock()
-	if m.busy[t.ID] {
+	if m.busy[t.ID] || !m.fresh(t) { // a queue hold saved since List took t is kept
 		m.mu.Unlock()
 		return
 	}
@@ -1236,7 +1288,6 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 				items = append(items, l)
 			}
 		}
-		items = append(items, m.gateLessons(p, lessons)...)
 		if len(items) > 12 {
 			items = items[len(items)-12:]
 		}
@@ -2263,6 +2314,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return nil
 	}
 	defer m.leaveMerge()
+	if m.overtaken(t) { // the person stopped or brought it back while this step ran
+		return nil
+	}
 	// The draft flag is this look's: a PR made a draft since (the lead's
 	// pr_draft) isn't readied, and MergePR refuses it with ErrDraft.
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Gain: t.Gain(), Task: t.ID, Draft: pr.Draft})
@@ -3482,7 +3536,7 @@ func (m *Module) Stop(id, reason string) error {
 		m.C.Runs.Stop(t.Worker, reason)
 	}
 	t.Stage, t.Reason, t.ByPerson = StageStopped, reason, true
-	m.save(&t, "stopped: "+reason)
+	m.steer(&t, "stopped: "+reason)
 	return nil
 }
 
@@ -3532,11 +3586,11 @@ func (m *Module) Recheck(id, back, by string) error {
 			return err
 		}
 		t.Stage = StageWorking
-		m.save(&t, "sent back to its worker by "+by+": "+core.Clip(back, 200))
+		m.steer(&t, "sent back to its worker by "+by+": "+core.Clip(back, 200))
 		return nil
 	}
 	t.Stage = StageLanding
-	m.save(&t, "checks run again on its commits, asked by "+by)
+	m.steer(&t, "checks run again on its commits, asked by "+by)
 	return nil
 }
 
@@ -3658,7 +3712,7 @@ func (m *Module) Retry(id string) error {
 	t.Stage, t.Worker, t.Reason, t.Failures, t.Round = StageQueued, "", "", 0, 0
 	t.ForgeLog = ""    // a file in the stopped worker's run, which the fresh one can't read
 	t.ByPerson = false // the person brought it back; the lead may handle it from here
-	m.save(&t, "handed to a fresh worker")
+	m.steer(&t, "handed to a fresh worker")
 	return nil
 }
 
