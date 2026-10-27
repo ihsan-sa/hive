@@ -3703,7 +3703,7 @@ func (m *Module) Recheck(id, back, by string) error {
 	if !ok {
 		return core.ErrNotFound
 	}
-	if inFlight(t.Stage) {
+	if InFlight(t.Stage) {
 		return m.retryInFlight(id, back, by)
 	}
 	if t.Stage != StageBlocked && t.Stage != StageStopped {
@@ -3743,9 +3743,9 @@ func (m *Module) goNow(t *Task) {
 	m.mu.Unlock()
 }
 
-// inFlight reports whether a task in stage is on its way from its worker's
+// InFlight reports whether a task in stage is on its way from its worker's
 // finish to the merge, where a wait (on a stale head's checks, say) can hold it.
-func inFlight(stage string) bool {
+func InFlight(stage string) bool {
 	return stage == StageLanding || stage == StageTesting || stage == StageReviewing || stage == StageMerging
 }
 
@@ -3766,7 +3766,7 @@ func (m *Module) retryInFlight(id, back, by string) error {
 	}
 	defer m.release(id)
 	t, _ := m.Get(id) // as the last step left it
-	if !inFlight(t.Stage) {
+	if !InFlight(t.Stage) {
 		return fmt.Errorf("task %s moved on to %s; look again", id, t.Stage)
 	}
 	was := t.Stage
@@ -3781,6 +3781,12 @@ func (m *Module) retryInFlight(id, back, by string) error {
 		return m.dropCheckpoint(&t, p, "the lead retried it from "+was)
 	}
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts = "", 0, 0, 0, 0
+	if r, ok := m.C.Runs.Get(t.Reviewer); ok && was == StageReviewing && !r.Terminal() {
+		// A reader stuck on the task would otherwise keep its slot, and the
+		// next read of the same head would wait on it again by its id.
+		m.C.Runs.Stop(r.ID, "its task was retried from reviewing by "+by)
+		t.Reviews = 1
+	}
 	m.goNow(&t)
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {

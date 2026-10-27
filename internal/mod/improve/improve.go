@@ -165,7 +165,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
-	w.OnMerged = func(t work.Task) { m.queue <- t }
+	w.OnMerged = m.enqueue
 	w.Retest = m.retest
 	work.BestScore = m.Best
 	work.Measured = m.measured
@@ -611,6 +611,18 @@ func (m *Module) introduced(p core.Project, sha string, cant core.Check) bool {
 	}
 	now, before := command(sha), command(strings.TrimSpace(parent))
 	return now != before && names(now) && !names(before)
+}
+
+// enqueue queues a merge to be measured, in order while there's room; once
+// the queue is full (measuring held up behind a long check line) the merge
+// waits on its own, so the task's step that merged it isn't held with it and
+// the task goes on from merged to done.
+func (m *Module) enqueue(t work.Task) {
+	select {
+	case m.queue <- t:
+	default:
+		go func() { m.queue <- t }()
+	}
 }
 
 func (m *Module) measureLoop() {

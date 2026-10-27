@@ -183,3 +183,39 @@ func TestRetryHint(t *testing.T) {
 		t.Fatalf("shared wait hint: %q", h)
 	}
 }
+
+// A task stuck in merged is no retry's to take: the watcher hands it to the
+// lead without trying one, so the alert doesn't read as a refused retry.
+func TestStuckMergedTaskIsNotRetried(t *testing.T) {
+	m := rig(t)
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: work.StageMerged})
+	m.mu.Lock()
+	m.spells["t0"] = spell{stage: work.StageMerged, since: time.Now().Add(-2 * time.Hour)}
+	m.mu.Unlock()
+	m.Watch()
+	s := m.Stalls()
+	if len(s) != 1 || !s[0].Told || s[0].Rechecked || strings.Contains(s[0].Did, "refused") {
+		t.Fatalf("stalls = %+v, want it handed to the lead with no retry tried", s)
+	}
+}
+
+// A merge waits to be measured without holding its task's step: with the
+// measure queue full (measuring held up behind a long check line), OnMerged
+// returns, and the merge still reaches the queue, in turn.
+func TestOnMergedDoesNotBlockOnAFullMeasureQueue(t *testing.T) {
+	m := &Module{queue: make(chan work.Task, 1)} // no reader: measuring is held up
+	done := make(chan bool)
+	go func() {
+		m.enqueue(work.Task{ID: "a"})
+		m.enqueue(work.Task{ID: "b"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnMerged blocked on a full measure queue")
+	}
+	if a, b := <-m.queue, <-m.queue; a.ID != "a" || b.ID != "b" {
+		t.Fatalf("queued %s then %s, want a then b", a.ID, b.ID)
+	}
+}

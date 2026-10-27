@@ -506,6 +506,24 @@ func TestPersonStoppedWorkerHolds(t *testing.T) {
 }
 
 // A lead can't recheck a task in a project walled off from it.
+// A task retried from reviewing has its reader stopped, so a hung one
+// doesn't keep its slot, and the next read is a new run, not the stopped one.
+func TestRecheckFromReviewingStopsTheReader(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage, task.SHA, task.Reviewer = StageReviewing, "2125f74e", "r-hung"
+	m.C.J.MustAppend("run.created", core.RunSpec{ID: "r-hung", Role: "reviewer", Project: task.Project, Harness: "fake"})
+	m.save(task, "reviewer r-hung reading 2125f74e")
+	if err := m.Recheck(task.ID, "", "the stall watcher"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := m.C.Runs.Get("r-hung"); !r.Terminal() {
+		t.Fatalf("the hung reader is still %s after the retry", r.Status)
+	}
+	if got, _ := m.Get(task.ID); got.Stage != StageLanding || got.Reviews != 1 {
+		t.Fatalf("after the retry: %s with %d reviews, want landing with the stopped read counted", got.Stage, got.Reviews)
+	}
+}
+
 func TestRecheckWalled(t *testing.T) {
 	m, _, _, _ := noCommitRig(t, 0)
 	m.C.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
