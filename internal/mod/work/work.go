@@ -1238,11 +1238,16 @@ func orNone(s string) string {
 	return s
 }
 
-func (m *Module) startWorker(t *Task, p core.Project) error {
-	id := "w-" + t.ID
+// workerID is the run startWorker starts for t's attempt.
+func workerID(t Task) string {
 	if t.Attempt > 0 {
-		id = fmt.Sprintf("w-%s-%d", t.ID, t.Attempt+1)
+		return fmt.Sprintf("w-%s-%d", t.ID, t.Attempt+1)
 	}
+	return "w-" + t.ID
+}
+
+func (m *Module) startWorker(t *Task, p core.Project) error {
+	id := workerID(*t)
 	if _, ok := m.C.Runs.Get(id); !ok {
 		base, err := m.C.Effects.Sync(p)
 		if err != nil {
@@ -1269,8 +1274,15 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 			}
 			spec.Harness, spec.Model, spec.Route = pick.Harness, pick.Model, nil
 		}
+		if m.overtaken(t) { // stopped while the checkout was made
+			return nil
+		}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
+		}
+		if m.overtaken(t) { // stopped as it started: Stop's copy didn't name this run
+			m.C.Runs.Stop(id, "its task was stopped as its worker started")
+			return nil
 		}
 		t.Base = base
 	}
@@ -1607,6 +1619,9 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 		}
 		sha = next
 	}
+	if m.overtaken(t) {
+		return nil
+	}
 	if err := m.C.Effects.Push(p, t.Branch, sha); err != nil {
 		return err
 	}
@@ -1909,7 +1924,7 @@ func (m *Module) RanCheck(project, kind string) {
 // no comment. A comment GitHub's rate limit refused holds the task until it
 // can be posted; any other failure is let go.
 func (m *Module) noteTests(t *Task, p core.Project, main string, c core.Check) error {
-	if t.PR.Number == 0 || t.Noted == t.SHA {
+	if t.PR.Number == 0 || t.Noted == t.SHA || m.overtaken(t) {
 		return nil
 	}
 	diff := m.ownDiff(p, main, t.SHA)
@@ -2026,6 +2041,9 @@ func (m *Module) catchUp(t *Task, p core.Project, main, why string) (bool, error
 
 // takeMain pushes next, t's head with main merged in, to its branch and tests it again.
 func (m *Module) takeMain(t *Task, p core.Project, next, why string) error {
+	if m.overtaken(t) {
+		return nil
+	}
 	if err := m.C.Effects.Push(p, t.Branch, next); err != nil {
 		return err
 	}
@@ -2380,7 +2398,13 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	}
 	// The draft flag is this look's: a PR made a draft since (the lead's
 	// pr_draft) isn't readied, and MergePR refuses it with ErrDraft.
-	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Gain: t.Gain(), Task: t.ID, Draft: pr.Draft})
+	// The checks above take a while, so the stop is asked again last of all;
+	// one landing while the forge merges can't be refused (architecture.md).
+	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Gain: t.Gain(), Task: t.ID, Draft: pr.Draft,
+		Stale: func() bool { return m.overtaken(t) }})
+	if err != nil && m.overtaken(t) {
+		return nil
+	}
 	if errors.Is(err, core.ErrDraft) { // made a draft again between the look and the merge
 		return m.waitDraft(t, pr)
 	}
@@ -2439,7 +2463,9 @@ func (m *Module) merged(t *Task, merged, note string) {
 		}
 		return
 	}
-	m.save(t, note)
+	// The merge is done on the forge: a stop that came while it went
+	// through doesn't hide it.
+	m.store(t, note, m.overtaken(t))
 	if t.Kind == "revert" {
 		m.notify(t, fmt.Sprintf("Reverted: %s. %s", strings.TrimPrefix(t.Label(), "Revert: "), t.Lesson))
 	} else {
@@ -2635,7 +2661,9 @@ func (m *Module) hold(t *Task, p core.Project, why string) {
 		return
 	}
 	t.Reason = why
-	m.save(t, why)
+	if !m.store(t, why, false) { // stopped meanwhile: no hold to tell the PR of
+		return
+	}
 	if key := HoldKey(why); key != t.HoldSaid {
 		t.HoldSaid = key
 		m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, "Holding the merge: "+why+".")
@@ -3674,6 +3702,13 @@ func (m *Module) Stop(id, reason string) error {
 	}
 	t.Stage, t.Reason, t.ByPerson = StageStopped, reason, true
 	m.steer(&t, "stopped: "+reason)
+	// A step starting its worker as this stop came may have started one
+	// t didn't name yet; once steered, the step stops any it starts later.
+	if id := workerID(t); id != t.Worker {
+		if r, ok := m.C.Runs.Get(id); ok && !r.Terminal() {
+			m.C.Runs.Stop(id, reason)
+		}
+	}
 	return nil
 }
 
