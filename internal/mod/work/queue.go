@@ -156,6 +156,11 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	}
 	m.inLine(line)
 	strain, _ := machine(cfg)
+	// Finishing beats starting: while checks wait for a slot, the machine
+	// is theirs. A new worker would load it further and pull the checks'
+	// limit back (88 checks waited, 44 tasks sat in testing for hours).
+	_, checksWait := m.C.Effects.Slots.State()
+	checksHold := len(checksWait) > 0
 	// planOK says the plan has room for a quick brief past the pace: read
 	// once, on need.
 	var planOK *bool
@@ -195,6 +200,8 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				continue // one that waits on another holds no one back, so waits never chain
 			case working >= limit && (!quick || quickWorking > 0 || !plan()):
 				wait[t.ID], capped = full, true
+			case checksHold && !t.Now:
+				wait[t.ID] = "waiting: checks wait for the machine"
 			case loadHolds(strain, working, cmp.Or(cfg.MaxWorkers, defaultWorkers)):
 				wait[t.ID] = "waiting: " + steady(strain)
 			default:
@@ -213,7 +220,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	limit := m.paceWorkers(cfg, working, false)
 	start, wait, capped := decide(limit)
 	if capped {
-		if l := m.paceWorkers(cfg, working, true); l != limit {
+		if l := m.paceWorkers(cfg, working, !checksHold); l != limit {
 			start, wait, _ = decide(l)
 		}
 	}
