@@ -1531,3 +1531,34 @@ func TestReleaseFallsForwardPastACancelledRun(t *testing.T) {
 		t.Fatalf("released again: %v", n.got)
 	}
 }
+
+// ed8e06d8 was kept but had no effect.merged (its merge's gh call failed
+// though the merge went through), so its release was refused and nothing
+// tried again until main was measured hours later: the newest Hive merge
+// since is tried on Tick, once, and released when its checks pass.
+func TestRefusedUnmergedTriesTheNextMerge(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	for range 2 {
+		m.AfterKept("hive", "m2")
+	}
+	m.retryWaiting()
+	if len(n.got) != 0 || journaledN(m, "release.unmerged") != 1 || !strings.Contains(alertText(m), "no release at m2: it is not a merge") {
+		t.Fatalf("the refusal: releases %v, %d release.unmerged, alert %q", n.got, journaledN(m, "release.unmerged"), alertText(m))
+	}
+	merged(3, "a3", "m3")
+	land("a3", "r3")
+	n.SetChecks("me/hive", "m3", core.CheckRun{Name: "test", State: core.CheckPass})
+	m.retryWaiting()
+	if len(n.got) != 1 || !strings.Contains(n.got["v0.0.1"], "#3 at a3") || !strings.Contains(n.got["v0.0.1"], "#1 at a1") {
+		t.Fatalf("the next merge wasn't released: %v", n.got)
+	}
+	m.retryWaiting()
+	if len(n.got) != 1 {
+		t.Fatalf("released again: %v", n.got)
+	}
+	if sha, next := m.unmerged("hive"); sha != "" || next != "" {
+		t.Fatalf("the refusal still waits after a release: %q %q", sha, next)
+	}
+}
