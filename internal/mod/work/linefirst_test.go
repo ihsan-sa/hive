@@ -122,19 +122,6 @@ func TestLineFirst(t *testing.T) {
 		t.Fatalf("a revert waited: %q", why)
 	}
 	task.Kind = "work"
-	task.Aim = AimFix // a fix doesn't wait out a gain's gate (issue #1825)
-	if why := m.lineFirst(task, p, main); why != "" {
-		t.Fatalf("a fix waited behind a gain in its gate: %q", why)
-	}
-	front.Reason = "its merged test passed" // past its gate: the fix waits
-	if why := m.lineFirst(task, p, main); !strings.HasPrefix(why, LineFirstWait) {
-		t.Fatalf("a fix behind a gain past its gate: %q", why)
-	}
-	front.Aim, front.Reason = AimFix, GateWait+" on it" // a fix in front holds it too
-	if why := m.lineFirst(task, p, main); !strings.HasPrefix(why, LineFirstWait) {
-		t.Fatalf("a fix behind a fix: %q", why)
-	}
-	front.Aim, task.Aim = "", ""
 	m.batches = map[string][]*mergeBatch{p.Name: {{front: front.ID, head: front.SHA, tip: main, ok: true, heads: map[string]string{task.ID: task.SHA}}}}
 	if why := m.lineFirst(task, p, main); why != "" {
 		t.Fatalf("a member of the front's own batch waited: %q", why)
@@ -164,5 +151,32 @@ func TestBatchFrontFollowsItsTip(t *testing.T) {
 	front.SHA = "moved"
 	if m.batchPassed(front, "m2") != "" {
 		t.Fatal("a new head kept the batch's pass")
+	}
+}
+
+// A front holds the line only if it can merge on what it has now (issue
+// #1825): a gain still in its recursive gate holds back nothing, and a fix
+// whose tests passed that touches its files merges without waiting for the
+// gate; once the gate kept the gain, it goes first again.
+func TestGainInItsGateHoldsNothingBack(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	task.Aim, task.AimWhy = AimFix, "TestX fails"
+	main, _ := m.C.Effects.Sync(p)
+	gain := lineMember(t, m, f, p, "t-gain", task.PR.Number-1, map[string]string{"feature.go": "package q\n"})
+	gain.Aim, gain.MergedOK, gain.MergedAt = AimGain, gain.SHA+"+"+main, time.Now()
+	gain.Reason = fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(gain.SHA), core.Short(main), time.Now().UTC().Format("15:04Z"), GateTimeout)
+	if why := m.lineFirst(task, p, main); why != "" {
+		t.Fatalf("a fix waited behind a gain in its gate: %q", why)
+	}
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Head: gain.SHA, Main: main, Outcome: core.GateKeep, Reason: "better", At: time.Now()})
+	if why := m.lineFirst(task, p, main); !strings.HasPrefix(why, LineFirstWait) {
+		t.Fatalf("a fix behind a gain the gate kept: %q", why)
+	}
+	gain.SHA = "0ther" // a new head, not gated yet
+	gain.MergedOK = gain.SHA + "+" + main
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if len(*jobs) != 0 || task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("%d gate runs, stage %q, reason %q: want the fix merged ahead of the gain", len(*jobs), task.Stage, task.Reason)
 	}
 }

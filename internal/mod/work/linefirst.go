@@ -17,12 +17,12 @@ import (
 // it; one that leaves it standing goes on, as does one its batch tested.
 // Reverts don't wait, nor a measured keep (keptFirst orders those), and a
 // pass holds the others at most lineFirstFor from its test, so a front that
-// never gets through doesn't stop a project's merges. Nor does a fix wait
-// behind a gain still waiting for or in its recursive gate (issue #1825):
-// a gate takes up to GateTimeout a slot, slots shrink under load, and some
-// twenty fixes whose tests passed sat behind one unmeasured gain. Main is
-// measured after the fix merges, and the gain's verdict still counts while
-// main's commits miss its files and the gate's.
+// never gets through doesn't stop a project's merges. A front holds the
+// others only if it can merge on what it has now (issue #1825): a fix, or a
+// gain the gate already kept. A gate takes up to GateTimeout and its slots
+// shrink under load, so some twenty passed fixes sat behind one gain still
+// in its gate. They go ahead, and the gain's verdict counts as main moves
+// while main's commits miss its files and the gate's, else it gates again.
 var lineFirstFor = 6 * time.Hour
 
 // LineFirstWait opens the reason of a task waiting behind an older PR's
@@ -49,10 +49,7 @@ func (m *Module) lineFirst(t *Task, p core.Project, main string) string {
 		if !ok || was != u.SHA || time.Since(u.MergedAt) > lineFirstFor || m.inBatchLocked(t, u, main) {
 			continue
 		}
-		if t.Fix() && u.Gain() && strings.HasPrefix(u.Reason, GateWait) {
-			continue // a fix doesn't wait out a gain's gate
-		}
-		ahead = append(ahead, front{&Task{ID: u.ID, Kind: u.Kind, PR: u.PR, SHA: u.SHA, Title: u.Title, MergedAt: u.MergedAt}, at})
+		ahead = append(ahead, front{&Task{ID: u.ID, Kind: u.Kind, Aim: u.Aim, PR: u.PR, SHA: u.SHA, Title: u.Title, MergedAt: u.MergedAt}, at})
 	}
 	m.mu.Unlock()
 	if len(ahead) == 0 {
@@ -64,6 +61,9 @@ func (m *Module) lineFirst(t *Task, p core.Project, main string) string {
 	var first *front
 	for i := range ahead {
 		f := &ahead[i]
+		if !m.canMerge(f.task, p, main) {
+			continue // a gain still queued for or in its gate holds nothing back
+		}
 		if f.was != main && !m.C.Effects.MainLeaves(p, f.task.SHA, f.was, main) {
 			continue // its pass no longer stands: this merge can't end it
 		}
@@ -80,6 +80,13 @@ func (m *Module) lineFirst(t *Task, p core.Project, main string) string {
 	}
 	return fmt.Sprintf("%s: #%d (%s) passed its tests merged with main, and this merge would change its files or what the gate measures with, so it merges first (or until %s)",
 		LineFirstWait, first.task.PR.Number, core.Clip(first.task.Label(), 80), first.task.MergedAt.Add(lineFirstFor).Format("15:04Z"))
+}
+
+// canMerge says whether u, a front in the line, can merge at main on what
+// it has now: the gate's rule in Effects.Merge for a gain on the Hive's own
+// repository.
+func (m *Module) canMerge(u *Task, p core.Project, main string) bool {
+	return !p.Self || !u.Gain() || m.C.Effects.Kept(p, u.SHA, main) || m.C.Effects.Approved("gate", p.Name, u.SHA+"@"+main)
 }
 
 // inBatchLocked says whether t's head was in u's passed batch at main: its
