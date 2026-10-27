@@ -1875,15 +1875,15 @@ func TestStepBack(t *testing.T) {
 	if s := sb["none"]; s.Status != "none" || s.Exp != "" || !strings.Contains(s.Note, "designed no experiment") {
 		t.Fatalf("a step-back that designs nothing runs nothing: %+v\n%s", s, onProject(st, "none"))
 	}
-	if s, ran := sb["zero"], runs[sb["zero"].Run].ID != ""; s.Status != "none" || ran || !strings.Contains(s.Note, "spent nothing") {
-		t.Fatalf("a step-back with nothing to spend must not run: %+v\n%s", s, onProject(st, "zero"))
+	if s, ran := sb["zero"], runs[sb["zero"].Run].ID != ""; s.Status != "judged" || !s.Unspent || !ran || s.Exp != "" || !strings.Contains(s.Report, "FAKE judgement") {
+		t.Fatalf("a step-back with nothing to spend must judge goals not yet judged and run no experiment: %+v\n%s", s, onProject(st, "zero"))
 	}
 	alerts := map[string]int{}
 	for _, a := range st.Alerts {
 		alerts[a.Ref]++
 	}
 	for _, name := range names {
-		if want := map[bool]int{true: 1}[name == "fail" || name == "rig" || name == "zero"]; alerts["stepback:"+name] != want {
+		if want := map[bool]int{true: 1}[name == "fail" || name == "rig"]; alerts["stepback:"+name] != want {
 			t.Fatalf("want %d step-back alert on %s, got %d: %+v", want, name, alerts["stepback:"+name], st.Alerts)
 		}
 	}
@@ -1895,6 +1895,58 @@ func TestStepBack(t *testing.T) {
 	if score, _ := core.Git(h.ws.Project("win"), "show", "origin/main:score.txt"); strings.TrimSpace(score) != "5" {
 		t.Fatalf("the experiment reached the project's own tree: score.txt on main is %q", score)
 	}
+}
+
+// A project with no score is still judged on the daemon's own step-back
+// schedule: the job finds the merge, the step-back ends judged with no
+// experiment, its judgement is said in the project's chat, and the project's
+// lead, started after it was said, is told it.
+func TestScheduledStepBackJudgesWithoutAScore(t *testing.T) {
+	t.Parallel()
+	h := start(t)
+	h.seed("me/plain", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n\nKeep it plain.\n"})
+	h.post("/api/project", map[string]any{"name": "plain", "repo": "me/plain", "goals": "Keep it plain."}, nil)
+	h.post("/api/ask", map[string]string{"project": "plain", "title": "tidy plain", "known": "a change with no score to move FAKE:paid"}, nil)
+	h.wait("the merge to be measured", 4*minute, func(st api.State) bool {
+		for _, pv := range st.Projects {
+			for _, x := range pv.Scores {
+				if pv.Name == "plain" && x.Task != "" && !x.NoResult {
+					return true
+				}
+			}
+		}
+		return false
+	})
+	h.post("/api/job", map[string]string{"name": "improve.stepback"}, nil)
+	st := h.wait("the step-back to judge", 2*minute, func(st api.State) bool {
+		for _, s := range st.StepBacks {
+			if s.Project == "plain" && !s.Ended.IsZero() {
+				return true
+			}
+		}
+		return false
+	})
+	for _, s := range st.StepBacks {
+		if s.Project == "plain" && (s.Status != "judged" || !s.NoScore || s.Exp != "" || !strings.Contains(s.Report, "FAKE judgement") || s.Why != "it is the regular step-back") {
+			t.Fatalf("the scheduled step-back on a project with no score must end judged: %+v\n%s", s, onProject(st, "plain"))
+		}
+	}
+	said := false
+	for _, m := range h.messages("project:plain") {
+		said = said || (m.From == "hive" && strings.Contains(m.Text, "FAKE judgement"))
+	}
+	if !said {
+		t.Fatalf("the judgement was not said in the project's chat: %+v", h.messages("project:plain"))
+	}
+	h.post("/api/chat", map[string]string{"chat": "project:plain", "text": "how does it look?"}, nil)
+	h.wait("the project's lead to hear the judgement", minute, func(st api.State) bool {
+		for _, r := range st.Runs {
+			if r.Role == "lead" && r.Project == "plain" && strings.Contains(r.Brief, "FAKE judgement") {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // onProject is what the Hive did on project, for a failure to show: its

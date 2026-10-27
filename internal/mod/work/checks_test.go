@@ -30,6 +30,13 @@ func mergeOnce(t *testing.T, m *Module, task *Task, p core.Project) {
 	if err := m.merge(task, p); err != nil {
 		t.Fatal(err)
 	}
+	if task.MergedTest != "" { // its merge with main is tested behind the step
+		m.Wait()
+		m.later = map[string]time.Time{}
+		if err := m.merge(task, p); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func prState(t *testing.T, f *core.Local, n int) string {
@@ -81,6 +88,14 @@ func TestMergeForgeCheckFails(t *testing.T) {
 	toMerging(t, m, task, p)
 	red := []core.CheckRun{{Name: "test (macos-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/1"}, {Name: "sandboxed-e2e", State: core.CheckPending}}
 	f.SetChecks(p.Repo, task.SHA, red...)
+	mergeOnce(t, m, task, p)
+	// The forge re-runs nothing while sandboxed-e2e still runs: it waits.
+	if task.Stage != StageMerging || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 0 || !strings.Contains(task.Reason, "still running") {
+		t.Fatalf("stage %q, round %d, reruns %v, reason %q", task.Stage, task.Round, task.Reruns, task.Reason)
+	}
+	red[1].State = core.CheckPass
+	f.SetChecks(p.Repo, task.SHA, red...)
+	m.later = map[string]time.Time{}
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerging || task.Round != 0 || task.Reruns[task.SHA] != 1 || f.Reruns(p.Repo, task.SHA) != 1 || !strings.Contains(task.Reason, "re-run") {
 		t.Fatalf("stage %q, round %d, reruns %v, reason %q", task.Stage, task.Round, task.Reruns, task.Reason)
@@ -371,6 +386,93 @@ func TestMergedWithMainGreenMergesAsItIs(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerged || task.SHA != head || task.MergedOK == "" {
 		t.Fatalf("stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
+	}
+}
+
+// The merge step never waits for a check slot: with every slot taken, the
+// test of the PR merged with main is queued, the step returns and the task
+// waits in merging; once a slot frees and the test passes, it merges.
+func TestMergedTestsNeverBlockTheStep(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	head := task.SHA
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	m.C.Effects.Slots.Resize(func() int { return 1 })
+	release := m.C.Effects.Slots.Acquire(p.Name, "other", "test")
+	done := make(chan error, 1)
+	go func() { done <- m.merge(task, p) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Minute):
+		release()
+		t.Fatal("the merge step waited for a check slot")
+	}
+	if task.Stage != StageMerging || task.MergedTest == "" || !strings.HasPrefix(task.Reason, "testing its head merged with main") {
+		t.Fatalf("stage %q, merged test %q, reason %q", task.Stage, task.MergedTest, task.Reason)
+	}
+	if err := m.merge(task, p); err != nil || task.Stage != StageMerging { // still queued: a second step doesn't queue it twice
+		t.Fatalf("stage %q, reason %q, err %v", task.Stage, task.Reason, err)
+	}
+	release()
+	m.Wait()
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.SHA != head || task.MergedOK == "" || task.MergedTest != "" {
+		t.Fatalf("stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
+	}
+}
+
+// Main moving while a merged test waits for a slot queues no second one: the
+// task waits that one out, then tests its merge with the new main and merges.
+func TestMergedTestOnePerTaskAsMainMoves(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	m.C.Effects.Slots.Resize(func() int { return 1 })
+	release := m.C.Effects.Slots.Acquire(p.Name, "other", "test")
+	mergeOnce := func() {
+		done := make(chan error, 1)
+		go func() { done <- m.merge(task, p) }()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Minute):
+			release()
+			t.Fatal("the merge step waited for a check slot")
+		}
+	}
+	mergeOnce()
+	first := task.MergedTest
+	pushMain(t, f, map[string]string{"third.txt": "w"})
+	mergeOnce()
+	if task.Stage != StageMerging || task.MergedTest != first {
+		t.Fatalf("stage %q, merged test %q (first %q), reason %q", task.Stage, task.MergedTest, first, task.Reason)
+	}
+	if _, waiting := m.C.Effects.Slots.State(); len(waiting) != 1 {
+		t.Fatalf("one merged test should wait for a slot, not %d: %+v", len(waiting), waiting)
+	}
+	moved, _ := m.C.Effects.Sync(p)
+	release()
+	for i := 0; i < 4 && task.Stage == StageMerging; i++ {
+		m.Wait()
+		if err := m.merge(task, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task.Stage != StageMerged || task.MergedTest != "" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	if !strings.HasSuffix(task.MergedOK, "+"+moved) {
+		t.Fatalf("merged on a test of an old main: %q, main was %s", task.MergedOK, core.Short(moved))
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.mergeRuns) != 0 {
+		t.Fatalf("finished merged tests left behind: %d", len(m.mergeRuns))
 	}
 }
 
@@ -988,6 +1090,73 @@ func TestMergeRefusedRedHolds(t *testing.T) {
 	}
 }
 
+// timedOutForge merges but answers with an error, as GitHub's 504 did.
+type timedOutForge struct{ *core.Local }
+
+func (f timedOutForge) MergePR(repo string, number int, sha, subject string) (string, error) {
+	if _, err := f.Local.MergePR(repo, number, sha, subject); err != nil {
+		return "", err
+	}
+	return "", errors.New("gh pr merge: HTTP 504: Gateway Timeout")
+}
+
+// mergedEvents are the journal's effect.merged events for pr.
+func mergedEvents(m *Module, pr int) (shas []string) {
+	m.C.J.Replay(func(e core.Event) {
+		var x struct {
+			PR       int    `json:"pr"`
+			MergeSHA string `json:"merge_sha"`
+		}
+		if e.Kind == "effect.merged" && e.Decode(&x) == nil && x.PR == pr {
+			shas = append(shas, x.MergeSHA)
+		}
+	})
+	return shas
+}
+
+// A merge whose forge call errored but went through is the Hive's merge all
+// the same: the next look finds it merged at the head the Hive was merging
+// and journals its effect.merged once, so a release can cut at it.
+func TestMergeThatErroredButWentThrough(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	m.C.Effects.Forge = timedOutForge{f}
+	if err := m.merge(task, p); err == nil || task.Stage != StageMerging {
+		t.Fatalf("err %v, stage %q", err, task.Stage)
+	}
+	if got := mergedEvents(m, task.PR.Number); len(got) != 0 {
+		t.Fatalf("effect.merged before the merge was seen: %q", got)
+	}
+	m.C.Effects.Forge = f
+	mergeOnce(t, m, task, p)
+	pr, _ := f.GetPR(p.Repo, task.PR.Number)
+	if task.Stage != StageMerged || task.MergeSHA != pr.MergeSHA || logged(task, "outside the Hive") || !logged(task, "it went through") {
+		t.Fatalf("stage %q, merge %q, log %v", task.Stage, task.MergeSHA, task.Log)
+	}
+	m.closedPR(task, p, pr) // a second look journals nothing more
+	if got := mergedEvents(m, task.PR.Number); len(got) != 1 || got[0] != pr.MergeSHA {
+		t.Fatalf("effect.merged %q, want one at %s", got, pr.MergeSHA)
+	}
+}
+
+// One the Hive's merge errored on but someone merged at another head is
+// theirs: it stays outside the Hive and journals no effect.merged.
+func TestMergeErroredThenMergedElsewhere(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	m.C.Effects.Forge = refusingForge{f}
+	if err := m.merge(task, p); err == nil {
+		t.Fatal("the refused merge said nothing")
+	}
+	m.C.Effects.Forge = f
+	pr, _ := f.GetPR(p.Repo, task.PR.Number)
+	pr.State, pr.MergeSHA, pr.HeadSHA = "MERGED", "abc123", "def456"
+	m.closedPR(task, p, pr)
+	if !logged(task, "outside the Hive") || len(mergedEvents(m, task.PR.Number)) != 0 {
+		t.Fatalf("log %v, effect.merged %q", task.Log, mergedEvents(m, task.PR.Number))
+	}
+}
+
 // queued is the newest message queued for run, as the worker reads it.
 func queued(m *Module, run string) (text string) {
 	m.C.J.Replay(func(e core.Event) {
@@ -1449,6 +1618,29 @@ func TestMergeForgeCheckBundleFailureIsRecorded(t *testing.T) {
 		}
 	}
 	t.Fatal("no task.bundle_failed event")
+}
+
+// The findings a red check sends back name the main the checks ran with, as
+// forge-failures.md does, not only main at report time.
+func TestForgeFindingsNameTheTestedMain(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	rerunSpent(task)
+	tested, _ := m.C.Effects.Sync(p)
+	pushMain(t, f, map[string]string{"fix.txt": "the fix, landed after the checks ran"})
+	main, _ := m.C.Effects.Sync(p)
+	f.SetCheckLog(p.Repo, "head/mac", "HEAD is now at a9ae988 Merge "+task.SHA+" into "+tested+"\n--- FAIL: TestX (0.1s)\n##[error]Process completed with exit code 1.\n")
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckFail}, core.CheckRun{Name: "test (macos-latest)", State: core.CheckFail, Detail: "failure", URL: "head/mac"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckFail}, core.CheckRun{Name: "test (macos-latest)", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	for _, want := range []string{forgeFailed + core.Short(task.SHA) + " (run merged with main at " + core.Short(tested) + "; main has moved to " + core.Short(main) + " since)", "test (ubuntu-latest) fail on main at " + core.Short(main) + " too"} {
+		if !strings.Contains(task.Findings, want) {
+			t.Fatalf("no %q in findings %q", want, task.Findings)
+		}
+	}
 }
 
 // The report names the main the checks' log says they ran with, not main at
