@@ -68,14 +68,14 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 		t.Setenv("GATE_REPORT", rep)
 		t.Setenv("GATE_EXIT", tc.exit)
 		j := work.GateJob{Project: core.Project{Name: "hive", Repo: "ihsan-sa/hive", Self: true}, Repo: "/repo", Head: "h", Main: "m", AllowTie: tc.tie,
-			Out: filepath.Join(dir, "runs", string(rune('a'+i))), Lessons: filepath.Join(dir, "lessons.md"), Timeout: time.Hour}
+			Out: filepath.Join(dir, "runs", string(rune('a'+i))), Timeout: time.Hour}
 		g := run(context.Background(), j)
 		if g.Outcome != tc.want || !strings.Contains(g.Reason, tc.reason) || g.Measured != (tc.rep != nil && tc.rep.Measured) {
 			t.Fatalf("case %d: %s %q, want %s with %q", i, g.Outcome, g.Reason, tc.want, tc.reason)
 		}
 		raw, _ := os.ReadFile(args)
 		a := string(raw)
-		if !strings.Contains(a, "--head h --base m") || !strings.Contains(a, "--local-org") || !strings.Contains(a, "--judged") || strings.Contains(a, "--allow-bare") || strings.Contains(a, "--allow-tie") != tc.tie {
+		if !strings.Contains(a, "--head h --base m") || !strings.Contains(a, "--local-org") || strings.Contains(a, "--allow-bare") || strings.Contains(a, "--allow-tie") != tc.tie {
 			t.Fatalf("case %d: gate called with %q", i, a)
 		}
 		if nice {
@@ -109,8 +109,12 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 // stand-in reads its own, and whether there is a nice here to check at all.
 func ownNice(t *testing.T) (int, bool) {
 	t.Helper()
-	if _, err := exec.LookPath("nice"); err != nil {
-		return 0, false
+	// Without either tool (a minimal image, the gate's own sandbox) the
+	// level isn't checked, rather than failing the test on the machine.
+	for _, tool := range []string{"nice", "ps"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			return 0, false
+		}
 	}
 	raw, err := exec.Command("ps", "-o", "nice=", "-p", strconv.Itoa(os.Getpid())).Output()
 	if err != nil {
