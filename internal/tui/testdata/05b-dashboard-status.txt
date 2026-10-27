@@ -33,4 +33,4 @@
                       │     writer  running  claude:  turn 0  $0.00  0k ctx    -
                       │     reviewer  running  claude:  turn 0  $0.00  0k ctx    -
 ──────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────
- ↑↓ move   enter open   ← collapse   s feed   tab sidebar
+ ↑↓ move   enter open   ← collapse   e E a level   s feed   tab sidebar

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -139,6 +140,46 @@ func (o *Ops) Drain(r Run) {
 			resp.OK = true
 		}
 		writeResponse(filepath.Join(box, "inbox"), reqID, resp)
+	}
+}
+
+// WatchRequests looks in the outboxes of the runs a tick drains every poll
+// until ctx ends, and calls wake once for each request it hasn't seen, so a
+// finish or a message is handled at once instead of on the second's tick.
+// It only reads names: each run still drains its own outbox on its step.
+func (rs *Runs) WatchRequests(ctx context.Context, poll time.Duration, wake func()) {
+	seen := map[string]bool{}
+	for {
+		now := map[string]bool{}
+		fresh := false
+		for _, r := range rs.List(func(r *Run) bool {
+			return r.Status == StatusRunning || r.Status == StatusIdle || r.Status == StatusQuiet
+		}) {
+			dir := filepath.Join(rs.ws.RunBox(r.ID), "outbox")
+			if !isRealDir(dir) {
+				continue
+			}
+			entries, _ := os.ReadDir(dir)
+			for _, e := range entries {
+				if !strings.HasSuffix(e.Name(), ".json") {
+					continue
+				}
+				k := r.ID + "/" + e.Name()
+				now[k] = true
+				if !seen[k] {
+					fresh = true
+				}
+			}
+		}
+		seen = now
+		if fresh {
+			wake()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(poll):
+		}
 	}
 }
 
