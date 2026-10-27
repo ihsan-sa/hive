@@ -1869,6 +1869,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err
 	}
 	t.setDiff(ch.DiffID)
+	read, _ := m.C.Effects.ReadHead(p, main, t.SHA, ch)
 	switch {
 	case len(ch.Protected) > 0 && !m.C.Effects.Approved("merge", p.Name, t.SHA):
 		t.Stage = StagePerson
@@ -1884,9 +1885,15 @@ func (m *Module) test(t *Task, p core.Project) error {
 		if who == "person" {
 			m.notify(t, approveNotice(t.Label(), ch.Protected, t.PR.URL))
 		}
-	case ch.Small || m.C.Effects.Reviewed(p, ch, t.SHA):
+	case ch.Small:
 		t.Stage = StageMerging
-		m.save(t, "tests passed; "+map[bool]string{true: "small change, no read needed", false: "already read"}[ch.Small])
+		m.save(t, "tests passed; small change, no read needed")
+	case m.C.Effects.Reviewed(p, ch, t.SHA):
+		t.Stage = StageMerging
+		m.save(t, "tests passed; already read")
+	case read != t.SHA:
+		t.Stage = StageMerging
+		m.save(t, "tests passed; only main merged in since "+core.Short(read)+" was read, so its reads carry")
 	default:
 		t.Stage = StageReviewing
 		m.save(t, "tests passed; asking for a read")
@@ -3473,6 +3480,9 @@ func (m *Module) securityRead(t *Task, p core.Project, main string) (bool, error
 	t.setDiff(ch.DiffID)
 	if len(ch.Security) == 0 {
 		return false, nil
+	}
+	if read, _ := m.C.Effects.ReadHead(p, main, t.SHA, ch); read != t.SHA {
+		return false, nil // only main merged in since a head that passed every read
 	}
 	if o, ok := m.C.Effects.OutsideRead(p.Name, ch.DiffID); ok {
 		if o.Verdict == "land" {

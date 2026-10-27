@@ -1464,10 +1464,11 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if len(ch.Protected) > 0 && !e.Approved("merge", p.Name, m.SHA) {
 		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
 	}
-	if !ch.Small && !e.readOK(p, ch, m.SHA) {
-		return "", refuse("%s: no land verdict bound to that exact commit", short(m.SHA))
+	read, rch := e.ReadHead(p, m.Main, m.SHA, ch)
+	if !rch.Small && !e.readOK(p, rch, read) {
+		return "", refuse("%s: no land verdict bound to that exact commit, or to the head it brought up to date", short(m.SHA))
 	}
-	if !e.SecurityOK(p.Name, ch) {
+	if !e.SecurityOK(p.Name, rch) {
 		need := "the Hive's security seat"
 		if len(ch.SecurityRoot) > 0 {
 			need += " and a majority of its panel"
@@ -1512,7 +1513,11 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 			return "", err
 		}
 	}
-	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "root": ch.Root, "diff": ch.DiffID}
+	// diff names the own diff its reads were of, so a release finds them.
+	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "root": ch.Root, "diff": rch.DiffID}
+	if read != m.SHA {
+		ev["read"] = read // the head it brought up to date, whose reads it merged on
+	}
 	if len(excused) > 0 {
 		ev["quarantined"] = excused // red only on known flakes
 	}
@@ -2283,8 +2288,9 @@ func CheckNames(runs []CheckRun) string {
 
 // readOK reports whether sha has the reads it needs. A read is of a change's
 // own diff, so it carries to a later head of it (main merged in) only while
-// that head's own diff is the same, and a conflict resolution or anything
-// else that changes the change's own files needs a new read.
+// that head's own diff is the same, or the head is the host's clean update
+// of it (ReadHead); a conflict resolution or anything else that changes the
+// change's own files needs a new read.
 func (e *Effects) readOK(p Project, ch Change, sha string) bool {
 	project := p.Name
 	if p.Self || len(ch.High) > 0 {
@@ -2306,14 +2312,59 @@ func (e *Effects) readOK(p Project, ch Change, sha string) bool {
 // Reviewed reports whether sha, classified as ch, has the reads it needs to merge.
 func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.readOK(p, ch, sha) }
 
+// ReadHead is the head whose reads sha merges on, and its change against
+// main. It is sha itself unless sha is the host's own update of a head (main
+// merged in by UpdateBranch, which stops on any conflict, so nobody resolved
+// anything) with no read of its own, and that head, or one it updated in
+// turn, has every read it needs: then that head. Main moving shifts the
+// context lines a DiffID counts, so without this a clean merge of main is
+// read again in full. A merge a worker made is never host-made, so its
+// conflict resolution is always read.
+func (e *Effects) ReadHead(p Project, main, sha string, ch Change) (string, Change) {
+	at, atCh := sha, ch
+	for range 32 {
+		if at != sha && (atCh.Small || e.readOK(p, atCh, at)) && e.SecurityOK(p.Name, atCh) {
+			return at, atCh
+		}
+		if e.ownRead(p.Name, at, atCh.DiffID) {
+			break
+		}
+		h, ok := e.HostMade(p.Name, at)
+		if !ok || h.Kind != "update" || h.Reviewed == "" {
+			break
+		}
+		// Against main the updated head's merge base is the one it had, so
+		// this is the own diff its reviewers were given.
+		prev, err := e.Classify(p, main, h.Reviewed)
+		if err != nil {
+			break
+		}
+		at, atCh = h.Reviewed, prev
+	}
+	return sha, ch
+}
+
+// ownRead reports whether any read, ordinary, security or outside, was given
+// of sha or its own diff.
+func (e *Effects) ownRead(project, sha, diff string) bool {
+	if _, ok := e.verdict(project, sha, diff); ok {
+		return true
+	}
+	if diff == "" {
+		return false
+	}
+	_, outside := e.OutsideRead(project, diff)
+	return outside || len(e.SecurityReads(project, diff)) > 0
+}
+
 // UpdateBranch merges main into the reviewed commit in a clean host checkout.
-// The result is host-made; the read of the reviewed commit carries while the
-// change's own diff stays the same, and it is tested again before it can
-// merge. A base names the commit the merge is taken from instead of the
-// common ancestor: the branch's own commit that
-// main already holds as a squashed checkpoint, so only what came after it is
-// laid onto main. A branch that has merged main since that checkpoint is
-// merged plainly, from its newer common ancestor with main.
+// The result is host-made; the read of the reviewed commit carries to it
+// (ReadHead), and it is tested again before it can merge. A base names the
+// commit the merge is taken from instead of the common ancestor: the
+// branch's own commit that main already holds as a squashed checkpoint, so
+// only what came after it is laid onto main. A branch that has merged main
+// since that checkpoint is merged plainly, from its newer common ancestor
+// with main.
 //
 // Attributes (merge=union and the rest) are read from main, not the branch:
 // a branch cut before main marked a file union merges it as main does, and a

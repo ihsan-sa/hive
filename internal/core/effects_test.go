@@ -586,6 +586,9 @@ func TestReadsFollowTheOwnDiff(t *testing.T) {
 		if c.Effects.Reviewed(pp, ch3, resolved) {
 			t.Fatalf("self=%v: the read carried to a head whose own diff changed", pp.Self)
 		}
+		if h, _ := c.Effects.ReadHead(pp, main3, resolved, ch3); h != resolved {
+			t.Fatalf("self=%v: a merge resolved by hand took the read of %s", pp.Self, Short(h))
+		}
 	}
 	read("r8b", resolved, ch3)
 	if !c.Effects.Reviewed(self, ch3, resolved) {
@@ -1629,5 +1632,113 @@ func TestUpdateBranchMergedMainBeforeCheckpointLanded(t *testing.T) {
 	}
 	if got := u.mainFile(next, "main.go"); got != file(6, 3) {
 		t.Fatalf("the update should keep the resolution:\n%s", got)
+	}
+}
+
+// The host's own merge of main into a read head keeps its read even when main
+// moved lines near the change, so the own diff's context (and DiffID) shifts;
+// back through a chain of such merges too, and not past a read of its own.
+func TestReadCarriesToTheHostsCleanUpdate(t *testing.T) {
+	c, f, p, _ := setupProject(t)
+	t.Cleanup(func() {
+		for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+			if len(c.Runs.List(func(r *Run) bool { return r.Status == StatusRunning })) == 0 {
+				return
+			}
+		}
+	})
+	self := p
+	self.Self = true
+	read := func(id, sha, verdict string, ch Change) {
+		t.Helper()
+		c.Runs.Start(RunSpec{ID: id, Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha, "diff.patch": ch.Diff}})
+		if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: id, Verdict: verdict}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tmp := t.TempDir()
+	mustGit(t, "", "clone", "-q", f.RepoPath(p.Repo), tmp)
+	mustGit(t, tmp, "config", "user.email", "t@t")
+	mustGit(t, tmp, "config", "user.name", "t")
+	lines := func(five, eight string) string {
+		return "package demo\n\n// 3\n// 4\n// " + five + "\n// 6\n// 7\n// " + eight + "\n// 9\n// 10\n"
+	}
+	mainMoves := func(file, content string) string {
+		t.Helper()
+		os.WriteFile(filepath.Join(tmp, file), []byte(content), 0o644)
+		mustGit(t, tmp, "add", "-A")
+		mustGit(t, tmp, "commit", "-q", "-m", "main moves")
+		mustGit(t, tmp, "push", "-q", "origin", "HEAD:main")
+		m, _ := c.Effects.Sync(p)
+		return m
+	}
+	main := mainMoves("lines.go", lines("5", "8"))
+	r, _ := commitInCheckout(t, c, p, "w9", main, "lines.go", lines("five", "8"))
+	sha, _ := c.Effects.Extract(p, r, main)
+	ch, _ := c.Effects.Classify(p, main, sha)
+	read("r9", sha, "land", ch)
+
+	main = mainMoves("lines.go", lines("5", "eight"))
+	update, err := c.Effects.UpdateBranch(p, sha, main, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch2, _ := c.Effects.Classify(p, main, update)
+	if ch2.DiffID == ch.DiffID {
+		t.Fatal("main's change within the context lines should shift the own diff")
+	}
+	for _, pp := range []Project{p, self} {
+		if c.Effects.Reviewed(pp, ch2, update) {
+			t.Fatalf("self=%v: the own diff changed, so the read shouldn't hold on it alone", pp.Self)
+		}
+		if h, hch := c.Effects.ReadHead(pp, main, update, ch2); h != sha || hch.DiffID != ch.DiffID || !c.Effects.Reviewed(pp, hch, h) {
+			t.Fatalf("self=%v: the host's clean update should take the read of %s, got %s", pp.Self, Short(sha), Short(h))
+		}
+	}
+
+	// It merges on that read, and its merge record names the head read.
+	if err := c.Effects.Push(p, "hive/t9", update); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := f.CreatePR(p.Repo, "hive/t9", "main", "lines", "body")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Effects.RunCheck(p, update, "test", "true")
+	f.SetChecks(p.Repo, update, CheckRun{Name: "test", State: CheckPass})
+
+	// Main moves again: a second clean update reaches back through the first.
+	main = mainMoves("other.go", "package demo\n")
+	update2, err := c.Effects.UpdateBranch(p, update, main, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch3, _ := c.Effects.Classify(p, main, update2)
+	if h, _ := c.Effects.ReadHead(self, main, update2, ch3); h != sha {
+		t.Fatalf("two clean updates on: read head %s, want %s", Short(h), Short(sha))
+	}
+	if err := c.Effects.Push(p, "hive/t9", update2); err != nil {
+		t.Fatal(err)
+	}
+	c.Effects.RunCheck(p, update2, "test", "true")
+	f.SetChecks(p.Repo, update2, CheckRun{Name: "test", State: CheckPass})
+	if _, err := c.Effects.Merge(MergeRequest{Project: p, PR: pr.Number, SHA: update2, Main: main, Subject: "lines"}); err != nil {
+		t.Fatalf("the clean update should merge on its read head's land: %v", err)
+	}
+	var rec map[string]any
+	c.J.Replay(func(e Event) {
+		if e.Kind == "effect.merged" {
+			e.Decode(&rec)
+		}
+	})
+	if rec["read"] != sha || rec["diff"] != ch.DiffID {
+		t.Fatalf("the merge record should name the head read and its diff: %v", rec)
+	}
+
+	// A read of the update's own diff decides for it: a fix there isn't
+	// outweighed by the land further back.
+	read("r9b", update2, "fix", ch3)
+	if h, _ := c.Effects.ReadHead(self, main, update2, ch3); h != update2 {
+		t.Fatalf("a fix on the update's own diff should stop the carry, got %s", Short(h))
 	}
 }
