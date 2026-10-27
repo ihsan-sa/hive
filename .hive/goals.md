@@ -55,6 +55,20 @@ It has its own project, hive-eval, whose `.hive/goals.md` holds the same ask. It
 
 Where it stands (2026-10-26): hive-eval exists with its goals and a README; no pilot has run yet.
 
+## Where it leads: something new built every day
+
+The person, via autobox (2026-10-26, 21:59 local): "one interesting thing would be getting the hive working, showing RSI on itself, and then everyday building something new and posting it and saying built with The Hive, hive.ihsan.cc". And, the same minute: "well priority is having the core of the hive working well so we can actually build projects"; each project is "a build and also continued maintenance etc".
+
+This is what the core work above is for, not a task for now. In order:
+
+1. The core works well: agents collaborating on one goal (21:56), the loop closed (first milestone).
+2. RSI shown on itself: the Hive measurably improves itself (first milestone, then the real-evaluation milestone).
+3. Then, every day, the Hive builds something new as a project of its own, keeps maintaining what it built, and each one says "Built with The Hive, hive.ihsan.cc".
+
+Posting anything publicly in the person's name stays the person's: the Hive can make the thing and draft the post, never send it (autobox: "Posting in his name stays his").
+
+Where it stands (2026-10-27): not started, by design; the first milestone comes first.
+
 ## Security reads
 
 The interim rule ("Changes to the sandbox, self-update or login get one read from the box's perms seat or its architect before landing") was lifted on 2026-10-24, once a tribunal panel had formed under bubblewrap (#168). The person: "why is perms reading everything. You should be doing stuff with wardens and tribunals, perms and autobox are only supposed to steer you" ... "if you go off track".
