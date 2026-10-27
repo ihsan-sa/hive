@@ -102,6 +102,16 @@ func TestRunHomesGo(t *testing.T) {
 	wMods := put("w-t1", "go/pkg/mod/m/f.go")
 	os.Chmod(filepath.Dir(wMods), 0o555)
 	rCache := put("rv1", ".cache/go-build/x")
+	// An ended run whose ~/go links out of its home: the folder it points at stays.
+	start("w-link", "worker", core.StatusDone)
+	outside := filepath.Join(t.TempDir(), "project")
+	outPkg := filepath.Join(outside, "pkg", "keep.go")
+	os.MkdirAll(filepath.Dir(outPkg), 0o755)
+	os.WriteFile(outPkg, []byte("package keep"), 0o644)
+	os.MkdirAll(ws.RunHome("w-link"), 0o755)
+	if err := os.Symlink(outside, filepath.Join(ws.RunHome("w-link"), "go")); err != nil {
+		t.Fatal(err)
+	}
 	orphan := filepath.Join(ws.Private(), "runs", "gone-run")
 	os.MkdirAll(orphan, 0o755)
 	old := time.Now().Add(-48 * time.Hour)
@@ -114,7 +124,7 @@ func TestRunHomesGo(t *testing.T) {
 		}
 	}
 	m.pruneRunHomes(time.Now().Add(2 * time.Hour))
-	for f, want := range map[string]bool{wCache: false, wMods: false, wSession: true, rCache: true} {
+	for f, want := range map[string]bool{wCache: false, wMods: false, wSession: true, rCache: true, outPkg: true} {
 		if core.Exists(f) != want {
 			t.Fatalf("an hour idle: %s exists %v, want %v", f, !want, want)
 		}

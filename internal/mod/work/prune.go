@@ -124,9 +124,13 @@ func (m *Module) pruneRunHomes(now time.Time) string {
 			continue
 		}
 		for _, c := range homeCaches {
-			p := filepath.Join(m.C.WS.RunHome(id), c)
-			if fi, err := os.Lstat(p); err != nil || !fi.IsDir() {
+			p, ok := realDirUnder(m.C.WS.RunHome(id), c)
+			if !ok {
 				continue
+			}
+			// A run reopened since the check above keeps its caches.
+			if r, ok := m.C.Runs.Get(id); !ok || !r.Terminal() {
+				break
 			}
 			size := core.Size(p)
 			if core.RemoveTree(p) == nil {
@@ -148,4 +152,19 @@ func (m *Module) ended(t Task) {
 			m.C.Effects.RemoveCheckout(t.Project, r.ID)
 		}
 	}
+}
+
+// realDirUnder is home/rel when it and every folder from home down to it is
+// a real folder, not a symlink: the home is the agent's to write, and the
+// daemon removing a cache there must not follow a link it planted (`~/go`
+// pointing at a project would take that project's pkg/).
+func realDirUnder(home, rel string) (string, bool) {
+	p := home
+	for _, part := range append([]string{""}, strings.Split(filepath.ToSlash(rel), "/")...) {
+		p = filepath.Join(p, part)
+		if fi, err := os.Lstat(p); err != nil || !fi.IsDir() {
+			return "", false
+		}
+	}
+	return p, true
 }
