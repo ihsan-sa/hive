@@ -1146,7 +1146,10 @@ func TestPersonDoneSettlesAScriptlessAsk(t *testing.T) {
 			if a.Answer != want {
 				t.Fatalf("%s: handler got %+v, want %s", answer, a, want)
 			}
-		case <-time.After(4 * time.Second):
+		case <-time.After(time.Minute):
+			// The answer reaches the merge handler through two handler
+			// goroutines, which took longer than 4s on a loaded check
+			// machine, so it waits as long as eventually.
 			t.Fatalf("%s: the merge ask was never answered", answer)
 		}
 	}
