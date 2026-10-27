@@ -359,6 +359,33 @@ func TestCheckRankFreesThenFixes(t *testing.T) {
 	}
 }
 
+// Main's own measurement goes ahead of every task's check while it runs,
+// and keeps its place once done (issue #1078).
+func TestCheckRankMainFirst(t *testing.T) {
+	m, _, _ := helperRig(t)
+	m.mu.Lock()
+	m.tasks["blocker"] = &Task{ID: "blocker", Project: "p", SHA: "s1", Stage: StageTesting}
+	m.tasks["waiter"] = &Task{ID: "waiter", Project: "p", Stage: StageQueued, Reason: fmt.Sprintf("waiting for %q (task %s) to land: both touch a.go", "x", "blocker")}
+	m.mu.Unlock()
+	done := m.MeasuringMain("p", "main1")
+	again := m.MeasuringMain("p", "main1")
+	if got := m.checkRank("p", "main1", "size"); got != rankMain || got <= m.checkRank("p", "s1", "test") {
+		t.Errorf("main's measurement ranked %d, a freeing check %d", got, m.checkRank("p", "s1", "test"))
+	}
+	if got := m.checkRank("other", "main1", "score"); got != 0 {
+		t.Errorf("another project's sha ranked %d", got)
+	}
+	done()
+	done()
+	if got := m.checkRank("p", "main1", "score"); got != rankMain {
+		t.Errorf("one of two measurements done: ranked %d", got)
+	}
+	again()
+	if got := m.checkRank("p", "main1", "score"); got != 0 {
+		t.Errorf("measured: still ranked %d", got)
+	}
+}
+
 // Load alone holds no worker from starting up to the pace's start, only past
 // it; any other strain holds every start.
 func TestLoadHoldsOnlyPastTheStart(t *testing.T) {
