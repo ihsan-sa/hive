@@ -88,10 +88,16 @@ func TestAnswerAsEndTurnRecordsWakesIt(t *testing.T) {
 }
 
 // A run reopened while its turn runs stays running (issue #1022); if it
-// then finishes done on what it was told before, its turn ends idle and the
-// next turn hands it the message, its earlier finish cleared.
+// then finishes on what it was told before, its turn ends idle and the next
+// turn hands it the message, its earlier finish cleared. That holds for a
+// blocked finish too: the message may be what unblocks it, and it hasn't
+// read it yet.
 func TestAFinishAfterAMidTurnReopenTakesAnotherTurn(t *testing.T) {
-	for _, mid := range []bool{true, false} {
+	for _, tc := range []struct {
+		mid    bool
+		status string
+	}{{true, "done"}, {false, "done"}, {true, "blocked"}} {
+		mid := tc.mid
 		c, _ := testHive(t)
 		c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker"})
 		c.J.MustAppend("run.turn_started", turnStarted{ID: "w1", Turn: 1})
@@ -100,7 +106,7 @@ func TestAFinishAfterAMidTurnReopenTakesAnotherTurn(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		c.J.MustAppend("run.finish", map[string]any{"id": "w1", "finish": Finish{Status: "done", Account: "fixed"}})
+		c.J.MustAppend("run.finish", map[string]any{"id": "w1", "finish": Finish{Status: tc.status, Account: "fixed"}})
 		r, _ := c.Runs.Get("w1")
 		out := c.WS.TurnOut("w1", 1)
 		os.MkdirAll(filepath.Dir(out), 0o755)
@@ -114,7 +120,44 @@ func TestAFinishAfterAMidTurnReopenTakesAnotherTurn(t *testing.T) {
 			continue
 		}
 		if got.Status != StatusIdle || got.Finish != nil || got.Reopened || len(got.Pending) != 1 {
-			t.Fatalf("the run is %q (%q), finish %v, reopened %v, %d pending; want idle, no finish, the message waiting", got.Status, got.Reason, got.Finish, got.Reopened, len(got.Pending))
+			t.Fatalf("finished %s: the run is %q (%q), finish %v, reopened %v, %d pending; want idle, no finish, the message waiting", tc.status, got.Status, got.Reason, got.Finish, got.Reopened, len(got.Pending))
+		}
+	}
+}
+
+// The same prompt sent twice (a conflict found by two steps, a review read
+// twice) while the turn it started still runs is being worked on already:
+// the turn finishing on it ends the run, with no second turn on the same
+// prompt (issue #1157). Another text mid-turn still takes one.
+func TestTheSamePromptTwiceMidTurnTakesNoSecondTurn(t *testing.T) {
+	for _, tc := range []struct {
+		second string
+		want   string
+	}{{"main moved", StatusDone}, {"fix round", StatusIdle}} {
+		c, _ := testHive(t)
+		c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker"})
+		if err := c.Runs.Reopen("w1", "main moved"); err != nil {
+			t.Fatal(err)
+		}
+		c.J.MustAppend("run.turn_started", turnStarted{ID: "w1", Turn: 1, Delivered: 1})
+		if err := c.Runs.Reopen("w1", tc.second); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Runs.Reopen("w1", tc.second); err != nil {
+			t.Fatal(err)
+		}
+		c.J.MustAppend("run.finish", map[string]any{"id": "w1", "finish": Finish{Status: "done", Account: "merged main"}})
+		r, _ := c.Runs.Get("w1")
+		out := c.WS.TurnOut("w1", 1)
+		os.MkdirAll(filepath.Dir(out), 0o755)
+		os.WriteFile(out, []byte(`{"type":"result","subtype":"success","result":"done","session_id":"s1"}`+"\n"), 0o600)
+		c.Runs.endTurn(r)
+		got, _ := c.Runs.Get("w1")
+		if got.Status != tc.want {
+			t.Errorf("%q sent mid-turn: the run is %q (%q) with %d pending, want %s", tc.second, got.Status, got.Reason, len(got.Pending), tc.want)
+		}
+		if tc.want == StatusIdle && len(got.Pending) != 1 {
+			t.Errorf("%q sent twice mid-turn: %d pending, want it once", tc.second, len(got.Pending))
 		}
 	}
 }

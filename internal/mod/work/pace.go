@@ -22,12 +22,15 @@ import (
 // ahead of its five-hour or weekly window, it pulls back to three quarters
 // of what is running, or to its start when nothing runs (the strain isn't
 // the Hive's, and from 1 it would take minutes to climb back). Load alone
-// never pulls it under its start: on 10-25 a load of 27-46 on 20 cores came
-// from child Hives and builds beside 2-3 live turns, and cutting the workers
-// to 1 or 2 hardly moved it while 51 tasks waited. Nor does load alone hold
+// never pulls the workers under their start, and brings them back up to it
+// a growStep after any other strain clears: on 10-25 a load of 27-46 on 20
+// cores came from child Hives and builds beside 2-3 live turns, and cutting
+// the workers to 1 or 2 hardly moved it while 51 tasks waited. Nor does load alone hold
 // a worker from starting while fewer than the start work (loadHolds), and it
 // doesn't hide a spent or ahead plan, which still pulls the workers under
-// it. Nothing running is stopped; past the limit, work waits in order. It
+// it. Checks and gates do go under their start for load alone (loadCuts):
+// theirs are the builds and child Hives that load the machine. Nothing
+// running is stopped; past the limit, work waits in order. It
 // pulls back at most once a step, so the readings (load is a 1-minute
 // average) catch up with the last change before the next, and grows more
 // slowly than it pulls back, so a load hovering round its limit doesn't
@@ -68,12 +71,17 @@ type pace struct {
 	why   string
 	step  time.Duration // the least time between two changes; 0 is paceStep
 	shown time.Time     // when a strain was last seen
+	hard  time.Time     // when a strain other than load alone was last seen
+	// loadCuts lets load alone pull the limit under its start, as for
+	// checks and gates: their builds and child Hives are what load the
+	// machine, unlike the workers' turns.
+	loadCuts bool
 }
 
 // onlyLoad says whether strain is the load per core alone (core.Loaded's
 // reason), which doesn't pull a limit under its start, nor hold a worker
 // from starting under it (loadHolds).
-func onlyLoad(strain string) bool { return strings.HasPrefix(strain, "machine loaded") }
+func onlyLoad(strain string) bool { return strings.HasPrefix(strain, core.LoadedReason) }
 
 // next moves the limit for running things with waiting ones wanting more,
 // strain saying what strains the machine or plan ("" for nothing), watching
@@ -92,11 +100,22 @@ func (p *pace) next(now time.Time, running int, waiting bool, strain string, wat
 	switch {
 	case strain != "":
 		p.shown = now
+		soft := onlyLoad(strain) && !p.loadCuts
+		if !soft {
+			p.hard = now
+		}
 		if now.Sub(p.at) < step {
 			break
 		}
+		if soft && p.limit < start && now.Sub(p.at) >= max(step, growStep) && now.Sub(p.hard) >= max(step, growStep) {
+			// Pulled under its start by another strain or the plan, it
+			// comes back once only load is left: load alone would otherwise
+			// keep it there, as each minute of it blocks growth.
+			p.limit, p.at, p.why = start, now, "back to the start: only load strains"
+			break
+		}
 		floor := 1
-		if onlyLoad(strain) {
+		if soft {
 			floor = start
 		}
 		l := max(floor, min(p.limit, running)*3/4)
@@ -226,6 +245,18 @@ const (
 	rankFix   = 1
 	rankFrees = 2
 )
+
+// RankWhy says why a waiting check of rank r goes ahead of the line, or ""
+// for one that keeps its place, for the dashboard and the status op.
+func RankWhy(r int) string {
+	switch {
+	case r >= rankFrees:
+		return "frees queued briefs"
+	case r == rankFix:
+		return "a fix"
+	}
+	return ""
+}
 
 // checkRank ranks a check of sha on project by the task whose head it is.
 func (m *Module) checkRank(project, sha, _ string) int {

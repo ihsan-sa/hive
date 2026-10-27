@@ -14,7 +14,7 @@ import (
 // that clone's head, both built by the gate (exact sha, stamped version, vet
 // and short tests in the sandbox), judged by the base's own suite compiled by
 // the gate, and kept with ties allowed. The rollback run hands the gate a
-// broken prebuilt candidate, which is rolled back with its lesson written.
+// broken prebuilt candidate, which is rolled back.
 // Both leave the org empty. The probes are the real ones: the daemon, the org
 // round trip, the benchmark (inside each side's sandbox, its sealed check
 // beside it, the meter as the only way out) and recurse. ci's bubblewrap
@@ -73,12 +73,11 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 	git("-C", repo, "commit", "-qm", "the base moves on")
 	base := git("-C", repo, "rev-parse", "HEAD")
 
-	run := func(name string, cfg Config, tie bool) (Report, string) {
+	run := func(name string, cfg Config, tie bool) Report {
 		t.Helper()
-		lessons := filepath.Join(dir, name, ".hive", "lessons.md")
 		org := filepath.Join(dir, name, "org")
 		cfg.Self, cfg.Out, cfg.Sandbox, cfg.Reps, cfg.Depth, cfg.Bench = hive, filepath.Join(dir, name, "run"), "bwrap", 1, 1, 1
-		cfg.Org, cfg.Lessons, cfg.Timeout = Local{Dir: org}, lessons, 30*time.Minute
+		cfg.Org, cfg.Timeout = Local{Dir: org}, 30*time.Minute
 		cfg.Log = func(s string) { t.Log(name + ": " + s) }
 		// The two sides of the keep run differ by a docs line: their time and
 		// bytes vary a few percent run to run, so the floor is wide enough
@@ -103,13 +102,12 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 		if ents, _ := os.ReadDir(org); len(ents) != 0 {
 			t.Errorf("%s: repositories left in the org: %v", name, ents)
 		}
-		raw, _ := os.ReadFile(lessons)
-		return rep, string(raw)
+		return rep
 	}
 
-	rep, lessons := run("keep", Config{Repo: repo, Head: head, Base: base}, true)
-	if !rep.Verdict.Keep || lessons != "" {
-		t.Errorf("the trivial candidate: %+v, lessons %q", rep.Verdict, lessons)
+	rep := run("keep", Config{Repo: repo, Head: head, Base: base}, true)
+	if !rep.Verdict.Keep {
+		t.Errorf("the trivial candidate: %+v", rep.Verdict)
 	}
 	if rep.Merged == "" || rep.Merged == head {
 		t.Errorf("the candidate was built at %s, not its head %s merged with the base", short(rep.Merged), short(head))
@@ -131,25 +129,20 @@ func TestBwrapGateKeepsAndRollsBack(t *testing.T) {
 			t.Errorf("the meter's count is missing from the benchmark: %+v", r.Metrics)
 		}
 	}
-	rep, lessons = run("rollback", Config{CandBin: broken, CtrlBin: hive, Probe: map[string]ProbeFunc{"bench": bench}}, false)
-	if rep.Verdict.Keep || !strings.Contains(lessons, "rolled back") || !strings.Contains(strings.Join(rep.Verdict.Regressions, "|"), "daemon passes 0/1") {
-		t.Errorf("the broken candidate: %+v, lessons %q", rep.Verdict, lessons)
+	rep = run("rollback", Config{CandBin: broken, CtrlBin: hive, Probe: map[string]ProbeFunc{"bench": bench}}, false)
+	if rep.Verdict.Keep || rep.CantRun || !strings.Contains(strings.Join(rep.Verdict.Regressions, "|"), "daemon passes 0/1") {
+		t.Errorf("the broken candidate: %+v", rep.Verdict)
 	}
 
 	// Could not run, under bubblewrap: a probe broken on both sides was never
-	// measured, so the run is neither a keep nor the candidate's rollback,
-	// and no lesson is written.
-	both := filepath.Join(dir, "cantrun", ".hive", "lessons.md")
-	rep, err = Run(Config{CandBin: hive, CtrlBin: hive, Self: hive, Out: filepath.Join(dir, "cantrun", "run"), Sandbox: "bwrap", Reps: 1, Lessons: both,
+	// measured, so the run is neither a keep nor the candidate's rollback.
+	rep, err = Run(Config{CandBin: hive, CtrlBin: hive, Self: hive, Out: filepath.Join(dir, "cantrun", "run"), Sandbox: "bwrap", Reps: 1,
 		Probes: []string{"broken"}, Probe: map[string]ProbeFunc{"broken": func(cfg *Config, c *Child) Result {
 			out, err := c.Exec(time.Minute, c.Root, "sh", "-c", "exit 7")
 			return Result{Pass: err == nil, Detail: out}
 		}}})
 	if err != nil || !rep.CantRun || rep.Verdict.Keep || rep.Sandbox != "bwrap" {
 		t.Errorf("a probe broken on both sides under bubblewrap: %v %+v", err, rep)
-	}
-	if _, err := os.Stat(both); err == nil {
-		t.Error("a run that could not measure wrote a lesson")
 	}
 }
 

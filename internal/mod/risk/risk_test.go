@@ -211,6 +211,7 @@ func TestWardenEndsWithoutDeciding(t *testing.T) {
 		if status == "late" {
 			defer func(d time.Duration) { WardenTimeout = d }(WardenTimeout)
 			WardenTimeout = 0
+			g.c.Runs.SetStatus(req.Warden, core.StatusIdle, "")
 		} else {
 			g.c.Runs.SetStatus(req.Warden, status, "")
 		}
@@ -1273,5 +1274,86 @@ func TestLongAskFormsAPanel(t *testing.T) {
 	g.vote(req, "approve", "approve", "decline")
 	if got := g.settle(req.ID, "tribunal", "approved", "running"); got.State != "done" || !core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
 		t.Fatalf("the panel reached no verdict that ran: %+v", got)
+	}
+}
+
+// A warden parked on a usage limit, or queued for a slot, can't weigh, so its
+// time doesn't run out: the request waits for it rather than going to the
+// person unweighed. Once it can take turns, the clock runs again.
+func TestParkedWardenIsNotTimedOut(t *testing.T) {
+	defer func(d time.Duration) { WardenTimeout = d }(WardenTimeout)
+	for _, status := range []string{core.StatusParked, core.StatusQueued} {
+		g := newRig(t, 2)
+		req := g.request("install a tool", "x", "T2")
+		g.c.Runs.SetStatus(req.Warden, status, "every claude login is at its usage limit")
+		WardenTimeout = 0
+		g.m.Tick()
+		if got, _ := g.m.get(req.ID); got.State != "weighing" || got.Ask != "" {
+			t.Fatalf("a %s warden was timed out: %+v", status, got)
+		}
+		if w := g.run(req.Warden); w.Terminal() {
+			t.Fatalf("the %s warden was stopped", status)
+		}
+		g.c.Runs.SetStatus(req.Warden, core.StatusIdle, "")
+		g.m.Tick()
+		if got, _ := g.m.get(req.ID); got.State != "asked" {
+			t.Fatalf("a warden that can take turns, past its time, held after a %s spell: %+v", status, got)
+		}
+	}
+}
+
+func TestWardenClockStartsAtItsTurn(t *testing.T) {
+	now := time.Now()
+	req := Request{Updated: now.Add(-2 * WardenTimeout)}
+	w := core.Run{Status: core.StatusRunning, TurnStarted: now.Add(-WardenTimeout / 2)}
+	if wardenLate(req, w, true, time.Time{}) {
+		t.Fatal("a warden whose first turn began after a long park was timed out from the request")
+	}
+	if !wardenLate(req, core.Run{Status: core.StatusRunning}, true, time.Time{}) || !wardenLate(req, core.Run{}, false, time.Time{}) {
+		t.Fatal("a warden past its time was not late")
+	}
+	// Out of a park with no new turn yet (its last turn long ago): its time
+	// counts from when it was last seen held.
+	idle := core.Run{Status: core.StatusIdle, TurnStarted: now.Add(-3 * WardenTimeout)}
+	if wardenLate(req, idle, true, now.Add(-time.Minute)) {
+		t.Fatal("a warden just out of a park was timed out from its old turn")
+	}
+}
+
+// However it waits, a warden holds a request no longer than WardenHoldMax in
+// all: one parked for days on a weekly limit, or woken again and again, hands
+// it to the person, and while it is parked the lead's requests view says so.
+func TestWardenHoldsARequestADayAtMost(t *testing.T) {
+	now := time.Now()
+	old := Request{Created: now.Add(-WardenHoldMax - time.Minute), Updated: now}
+	for _, w := range []core.Run{{Status: core.StatusParked}, {Status: core.StatusQueued}, {Status: core.StatusRunning, TurnStarted: now}} {
+		if !wardenLate(old, w, true, now) {
+			t.Fatalf("a %s warden held a request past WardenHoldMax", w.Status)
+		}
+	}
+	if wardenLate(Request{Updated: now.Add(-2 * WardenTimeout)}, core.Run{Status: core.StatusParked}, true, time.Time{}) {
+		t.Fatal("a request with no Created time was timed out as a day old")
+	}
+
+	g := newRig(t, 2)
+	req := g.request("install a tool", "x", "T2")
+	g.c.Runs.SetStatus(req.Warden, core.StatusParked, "every claude login is at its weekly limit")
+	g.m.Tick()
+	out, err := g.m.opRequests(core.Run{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := json.Marshal(out); !strings.Contains(string(b), "its warden is parked") {
+		t.Fatalf("the requests view doesn't say the warden is parked: %s", b)
+	}
+	defer func(d time.Duration) { WardenHoldMax = d }(WardenHoldMax)
+	WardenHoldMax = 0
+	g.m.Tick()
+	got, _ := g.m.get(req.ID)
+	if got.State != "asked" || !strings.Contains(got.Reason, "held the request") {
+		t.Fatalf("a warden parked past WardenHoldMax still holds its request: %+v", got)
+	}
+	if w := g.run(req.Warden); !w.Terminal() {
+		t.Fatal("the warden past WardenHoldMax was not stopped")
 	}
 }
