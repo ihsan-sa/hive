@@ -268,12 +268,15 @@ func (c *Client) do(info DaemonInfo, method, path string, body, out any) error {
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode == http.StatusUnauthorized {
-		return errUnauthorized
-	}
 	if resp.StatusCode >= 300 {
 		var e struct{ Error string }
-		if json.Unmarshal(raw, &e) == nil && e.Error != "" {
+		json.Unmarshal(raw, &e)
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized && (e.Error == "" || e.Error == errUnauthorized.Error()):
+			return errUnauthorized
+		case resp.StatusCode == http.StatusUnauthorized: // Do's retry still sees it; the person reads why
+			return fmt.Errorf("%w: %s", errUnauthorized, e.Error)
+		case e.Error != "":
 			return errors.New(e.Error)
 		}
 		return fmt.Errorf("%s %s: %s", method, path, resp.Status)
