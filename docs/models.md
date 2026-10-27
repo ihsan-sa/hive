@@ -213,6 +213,16 @@ yet"), so a trial there lets it fall back. A worker gone quiet moves to a
 proven pick only when it is next woken. A lead follows the settings' route at every turn. The dashboard's agent
 lines and `hive agent models` say which `harness:model` each agent runs on.
 
+A pick whose workers on a project keep ending without a merge stops being
+that project's first worker pick (`Agents.Demote`, from the models module's
+tick): when the last two or more ended tasks there (merged, done or blocked;
+trials and stopped tasks don't count) whose first worker started on it all
+ended blocked, the latest within a week, new workers there start on the rest
+of the route and it goes last, still a fallback. A merge or done on it puts
+it back in front, and a week after its latest such ending the person's order
+gets another try. `hive agent models` lists each one and the tasks behind it
+(`demoted`). The person's route in config.json is unchanged.
+
 ### A model that can't answer
 
 A pick whose turn ends in an error that isn't a usage limit, and that says

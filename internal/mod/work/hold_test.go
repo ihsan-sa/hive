@@ -3,6 +3,7 @@ package work
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -132,5 +133,26 @@ func TestLeadHoldNeedsThePersonsWords(t *testing.T) {
 	worker := core.Run{ID: "w-p", Role: "worker", Project: "p"}
 	if _, err := m.opHold(worker, []byte(`{"project":"p","why":"person: hold merges"}`)); err != nil {
 		t.Fatalf("a worker on p couldn't hold p on the person's word: %v", err)
+	}
+}
+
+// A release read for one hold doesn't lift a hold set since.
+func TestReleaseLiftsOnlyTheHoldItRead(t *testing.T) {
+	m, _, p, f := heldRig(t)
+	f.CreateRelease(p.Repo, "v0.1.7", "", "")
+	old, err := m.SetHold(MergeHold{Project: p.Name, Why: "until the next release", Until: UntilRelease, By: "person"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.CreateRelease(p.Repo, "v0.1.8", "", "")
+	time.Sleep(time.Millisecond) // a later At on a coarse clock
+	if _, err := m.SetHold(MergeHold{Project: p.Name, Why: "hold everything", By: "person"}); err != nil {
+		t.Fatal(err)
+	}
+	if m.releasedSince(old) {
+		t.Fatal("a release out for the old hold let the newer one's merges through")
+	}
+	if h, ok := m.Hold(p.Name); !ok || h.Until != "" {
+		t.Fatalf("the newer hold was lifted: %+v %v", h, ok)
 	}
 }
