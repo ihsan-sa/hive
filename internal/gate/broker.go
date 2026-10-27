@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -21,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -255,7 +257,11 @@ func (b *Broker) handle(host string, w http.ResponseWriter, r *http.Request) {
 	var why string
 	switch host {
 	case "api.github.com", "uploads.github.com":
-		if host == "api.github.com" && r.URL.Path == "/graphql" && r.Method == http.MethodPost {
+		if host == "api.github.com" && r.URL.Path == "/graphql" && r.URL.RawQuery != "" {
+			why = "GraphQL with a query string (gh sends none)"
+		} else if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); host == "api.github.com" && r.URL.Path == "/graphql" && r.Method == http.MethodPost && (mt != "application/json" || r.Header.Get("Content-Encoding") != "") {
+			why = "GraphQL as anything but plain JSON"
+		} else if host == "api.github.com" && r.URL.Path == "/graphql" && r.Method == http.MethodPost {
 			body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20+1))
 			if err != nil || len(body) > 1<<20 {
 				b.refuse(w, r, "a GraphQL request too large to read")
@@ -513,12 +519,33 @@ func (b *Broker) gitOK(path string) string {
 // (an author, an owner, another repository, a cross-reference) may select
 // only scalars, so nothing in another repository is ever read through one.
 func (b *Broker) graphqlOK(body []byte) string {
-	var req struct {
-		Query     string                     `json:"query"`
-		Variables map[string]json.RawMessage `json:"variables"`
+	// GitHub reads the exact keys; Go's decoder would match "Query" too and
+	// keep the last of two, so the body is read key by key, and a key that
+	// isn't exactly one of these three, or comes twice anywhere in the
+	// body, is refused.
+	if err := strictJSON(body); err != nil {
+		return "a GraphQL request the broker won't read: " + err.Error()
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
 		return "a GraphQL request the broker can't read"
+	}
+	for k := range top {
+		if k != "query" && k != "variables" && k != "operationName" {
+			return "a GraphQL request with a key " + strconv.Quote(k)
+		}
+	}
+	var req struct {
+		Query     string
+		Variables map[string]json.RawMessage
+	}
+	if err := json.Unmarshal(top["query"], &req.Query); err != nil {
+		return "a GraphQL request with no query"
+	}
+	if v, ok := top["variables"]; ok {
+		if err := json.Unmarshal(v, &req.Variables); err != nil {
+			return "GraphQL variables the broker can't read"
+		}
 	}
 	doc, err := parseGraphQL(req.Query)
 	if err != nil {
@@ -671,17 +698,84 @@ func (g *gqlCheck) within(sels []gqlSel, depth int) error {
 var names = map[string]bool{"owner": true, "defaultBranchRef": true, "parent": true, "organization": true, "project": true, "column": true,
 	"nodes": true, "edges": true, "node": true, "pageInfo": true}
 
+// people are the fields that reach a person (the token acts as the
+// person, and authors, mergers and reviewers are mostly them): below one,
+// only personScalars, the names gh shows, never the rest of a profile.
+var people = map[string]bool{"author": true, "editor": true, "actor": true, "mergedBy": true, "enabledBy": true, "requestedReviewer": true,
+	"user": true, "users": true, "assignees": true, "participants": true, "viewer": true}
+
+var personScalars = map[string]bool{"login": true, "id": true, "name": true, "slug": true, "__typename": true, "totalCount": true,
+	"hasNextPage": true, "endCursor": true}
+
 // leaves allows s only scalars below it, and names.
-func (g *gqlCheck) leaves(s gqlSel, depth int) error {
+func (g *gqlCheck) leaves(s gqlSel, depth int) error { return g.leavesOf(s, depth, false) }
+
+func (g *gqlCheck) leavesOf(s gqlSel, depth int, person bool) error {
+	person = person || people[s.Field]
 	return g.each(s.Children, depth+1, func(k gqlSel, d int) error {
 		if !k.Has {
+			if person && !personScalars[k.Field] {
+				return fmt.Errorf("%s gives a person's login and name, not %s", s.Field, k.Field)
+			}
 			return nil
 		}
 		if names[k.Field] && d < 10 {
-			return g.leaves(k, d)
+			return g.leavesOf(k, d, person)
 		}
 		return fmt.Errorf("%s may select only scalars, not %s", s.Field, k.Field)
 	})
+}
+
+// strictJSON refuses a body that isn't one JSON value, or that has a key
+// twice in any object.
+func strictJSON(body []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if err := strictValue(dec, 0); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return fmt.Errorf("more after the request")
+	}
+	return nil
+}
+
+func strictValue(dec *json.Decoder, depth int) error {
+	if depth > 64 {
+		return fmt.Errorf("nested too deep")
+	}
+	t, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	switch t {
+	case json.Delim('{'):
+		seen := map[string]bool{}
+		for dec.More() {
+			k, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			key := k.(string)
+			if seen[key] {
+				return fmt.Errorf("the key %q twice", key)
+			}
+			seen[key] = true
+			if err := strictValue(dec, depth+1); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token()
+		return err
+	case json.Delim('['):
+		for dec.More() {
+			if err := strictValue(dec, depth+1); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token()
+		return err
+	}
+	return nil
 }
 
 // str is the string a value holds, literal or through a variable.

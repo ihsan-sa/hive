@@ -460,3 +460,67 @@ func orNull(s string) string {
 	}
 	return s
 }
+
+// GitHub reads a GraphQL request's exact keys from a JSON body: a second key
+// that Go's decoder would match instead ("Query", a duplicate), a query
+// string, or a body that isn't plain JSON is refused before GitHub sees it.
+func TestBrokerGraphQLBodyReadsAsGitHubDoes(t *testing.T) {
+	f := newFakeGitHub(t)
+	f.answer = gitHubAnswers
+	b := testBroker(t, f, "gate-x-candidate")
+	b.nodes["PR_1"], b.nodes["PR_other"] = "Hive-RSI-Lab/gate-x-candidate", "Hive-RSI-Lab/hive"
+	m, err := StartMeter(filepath.Join(shortTmp(), "bq.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	m.SetBroker(b)
+	proxy, _ := url.Parse("http://" + m.Addr)
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(b.CAPEM())
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy), TLSClientConfig: &tls.Config{RootCAs: pool}}}
+	post := func(u, ctype, body string) int {
+		req, _ := http.NewRequest("POST", u, strings.NewReader(body))
+		req.Header.Set("Content-Type", ctype)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	const merge = `"mutation($i:ID!){mergePullRequest(input:{pullRequestId:$i}){clientMutationId}}"`
+	const api = "https://api.github.com/graphql"
+	if code := post(api, "application/json", `{"query":`+merge+`,"variables":{"i":"PR_1"}}`); code != 200 {
+		t.Fatalf("the side's own merge: %d", code)
+	}
+	before := len(f.requests())
+	for _, c := range []struct{ url, ctype, body string }{
+		{api, "application/json", `{"query":"mutation{deleteRef(input:{refId:\"REF_other\"}){clientMutationId}}","Query":"{ rateLimit { limit } }"}`},
+		{api, "application/json", `{"query":` + merge + `,"variables":{"i":"PR_other"},"Variables":{"i":"PR_1"}}`},
+		{api, "application/json", `{"query":` + merge + `,"variables":{"i":"PR_other","i":"PR_1"}}`},
+		{api, "application/json", `{"query":"{ rateLimit { limit } }","query":"mutation{deleteRef(input:{refId:\"REF_other\"}){clientMutationId}}"}`},
+		{api, "application/json", `{"query":"{ rateLimit { limit } }","extensions":{}}`},
+		{api, "application/json", `{"query":"{ rateLimit { limit } }"} {"query":"x"}`},
+		{api + "?query=mutation%7BdeleteRef%7D", "application/json", `{"query":"{ rateLimit { limit } }"}`},
+		{api, "application/x-www-form-urlencoded", `query=mutation`},
+	} {
+		if code := post(c.url, c.ctype, c.body); code != 403 {
+			t.Errorf("%s %s: %d, not refused", c.url, c.body, code)
+		}
+	}
+	if got := f.requests()[before:]; len(got) != 0 {
+		t.Errorf("refused requests reached GitHub: %q", got)
+	}
+	// A person reached below the repository is their login and name only.
+	for q, ok := range map[string]bool{
+		`{ repository(owner:"Hive-RSI-Lab",name:"gate-x-candidate"){ pullRequest(number:1){ author { login ... on User { id name } } } } }`: true,
+		`{ repository(owner:"Hive-RSI-Lab",name:"gate-x-candidate"){ pullRequest(number:1){ author { ... on User { email } } } } }`:         false,
+		`{ repository(owner:"Hive-RSI-Lab",name:"gate-x-candidate"){ pullRequest(number:1){ assignees(first:5){ nodes { bio } } } } }`:      false,
+	} {
+		body, _ := json.Marshal(map[string]string{"query": q})
+		if why := b.graphqlOK(body); (why == "") != ok {
+			t.Errorf("%s: allowed %v (%s)", q, why == "", why)
+		}
+	}
+}
