@@ -87,16 +87,14 @@ func (g *rig) decide(req Request, args map[string]string) error {
 	return err
 }
 
-// settle waits for a request to leave the given states.
+// settle waits for a request to leave the given states. The answer handler
+// and the step's script run on their own goroutines, and on a loaded check
+// machine they took longer than 4s, so it waits as long as eventually.
 func (g *rig) settle(id string, from ...string) Request {
-	for i := 0; i < 200; i++ {
-		r, _ := g.m.get(id)
-		if !contains(from, r.State) {
-			return r
-		}
-		time.Sleep(20 * time.Millisecond)
+	var r Request
+	if eventually(func() bool { r, _ = g.m.get(id); return !contains(from, r.State) }) {
+		return r
 	}
-	r, _ := g.m.get(id)
 	g.t.Fatalf("request %s stuck in %s", id, r.State)
 	return r
 }
@@ -110,7 +108,6 @@ func contains(l []string, s string) bool {
 	return false
 }
 
-// eventually polls ok for up to four seconds.
 // eventually waits up to a minute for ok: a module's install clones and
 // builds, which on a slow, throttled machine took longer than 4s.
 func eventually(ok func() bool) bool {
@@ -1306,10 +1303,54 @@ func TestWardenClockStartsAtItsTurn(t *testing.T) {
 	now := time.Now()
 	req := Request{Updated: now.Add(-2 * WardenTimeout)}
 	w := core.Run{Status: core.StatusRunning, TurnStarted: now.Add(-WardenTimeout / 2)}
-	if wardenLate(req, w, true) {
+	if wardenLate(req, w, true, time.Time{}) {
 		t.Fatal("a warden whose first turn began after a long park was timed out from the request")
 	}
-	if !wardenLate(req, core.Run{Status: core.StatusRunning}, true) || !wardenLate(req, core.Run{}, false) {
+	if !wardenLate(req, core.Run{Status: core.StatusRunning}, true, time.Time{}) || !wardenLate(req, core.Run{}, false, time.Time{}) {
 		t.Fatal("a warden past its time was not late")
+	}
+	// Out of a park with no new turn yet (its last turn long ago): its time
+	// counts from when it was last seen held.
+	idle := core.Run{Status: core.StatusIdle, TurnStarted: now.Add(-3 * WardenTimeout)}
+	if wardenLate(req, idle, true, now.Add(-time.Minute)) {
+		t.Fatal("a warden just out of a park was timed out from its old turn")
+	}
+}
+
+// However it waits, a warden holds a request no longer than WardenHoldMax in
+// all: one parked for days on a weekly limit, or woken again and again, hands
+// it to the person, and while it is parked the lead's requests view says so.
+func TestWardenHoldsARequestADayAtMost(t *testing.T) {
+	now := time.Now()
+	old := Request{Created: now.Add(-WardenHoldMax - time.Minute), Updated: now}
+	for _, w := range []core.Run{{Status: core.StatusParked}, {Status: core.StatusQueued}, {Status: core.StatusRunning, TurnStarted: now}} {
+		if !wardenLate(old, w, true, now) {
+			t.Fatalf("a %s warden held a request past WardenHoldMax", w.Status)
+		}
+	}
+	if wardenLate(Request{Updated: now.Add(-2 * WardenTimeout)}, core.Run{Status: core.StatusParked}, true, time.Time{}) {
+		t.Fatal("a request with no Created time was timed out as a day old")
+	}
+
+	g := newRig(t, 2)
+	req := g.request("install a tool", "x", "T2")
+	g.c.Runs.SetStatus(req.Warden, core.StatusParked, "every claude login is at its weekly limit")
+	g.m.Tick()
+	out, err := g.m.opRequests(core.Run{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := json.Marshal(out); !strings.Contains(string(b), "its warden is parked") {
+		t.Fatalf("the requests view doesn't say the warden is parked: %s", b)
+	}
+	defer func(d time.Duration) { WardenHoldMax = d }(WardenHoldMax)
+	WardenHoldMax = 0
+	g.m.Tick()
+	got, _ := g.m.get(req.ID)
+	if got.State != "asked" || !strings.Contains(got.Reason, "held the request") {
+		t.Fatalf("a warden parked past WardenHoldMax still holds its request: %+v", got)
+	}
+	if w := g.run(req.Warden); !w.Terminal() {
+		t.Fatal("the warden past WardenHoldMax was not stopped")
 	}
 }

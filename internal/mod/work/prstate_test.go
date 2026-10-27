@@ -199,6 +199,7 @@ func TestReadyBringsBackATaskStoppedOverItsDraft(t *testing.T) {
 		t.Fatalf("stage %q, reason %q", got.Stage, got.Reason)
 	}
 
+	*task, _ = m.Get("t1") // the recheck's save stands over an older copy
 	task.Stage, task.Reason, task.ByPerson = StageStopped, "left open: draft for now", true
 	m.save(task, "")
 	forge.SetDraft(p.Repo, task.PR.Number, true)
