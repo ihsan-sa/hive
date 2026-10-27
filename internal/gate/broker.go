@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -54,7 +55,20 @@ type Broker struct {
 	client  *http.Client
 	proxies map[string]*httputil.ReverseProxy
 	Log     func(format string, args ...any) // each refusal, when set
+
+	// What the side asked: calls let through, refused, and the ones that
+	// read a commit's checks (Tally).
+	passed, refused, checks atomic.Int64
 }
+
+// Tally is how many calls the broker let through, refused, and let through
+// to read a commit's checks, so far.
+func (b *Broker) Tally() (passed, refused, checks int64) {
+	return b.passed.Load(), b.refused.Load(), b.checks.Load()
+}
+
+// checkRead is a REST or GraphQL read of a commit's checks or statuses.
+var checkRead = regexp.MustCompile(`/check-runs|/check-suites|/commits/[^/]+/status|statusCheckRollup|checkSuites|checkRuns`)
 
 // brokerHosts are GitHub's hosts the broker answers for the side.
 var brokerHosts = []string{"api.github.com", "github.com", "uploads.github.com"}
@@ -235,6 +249,7 @@ func (l *oneConn) Close() error   { l.once.Do(func() { close(l.done) }); return 
 func (l *oneConn) Addr() net.Addr { return l.c.LocalAddr() }
 
 func (b *Broker) refuse(w http.ResponseWriter, r *http.Request, why string) {
+	b.refused.Add(1)
 	if b.Log != nil {
 		b.Log("broker refused %s %s%s: %s", r.Method, r.Host, r.URL.Path, why)
 	}
@@ -252,7 +267,7 @@ func (b *Broker) handle(host string, w http.ResponseWriter, r *http.Request) {
 		b.refuse(w, r, "the request names another host than its connection")
 		return
 	}
-	var why string
+	var why, gql string
 	switch host {
 	case "api.github.com", "uploads.github.com":
 		if host == "api.github.com" && r.URL.Path == "/graphql" && r.Method == http.MethodPost {
@@ -263,6 +278,7 @@ func (b *Broker) handle(host string, w http.ResponseWriter, r *http.Request) {
 			}
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.ContentLength = int64(len(body))
+			gql = string(body)
 			if why = b.graphqlOK(body); why != "" && b.Log != nil {
 				b.Log("broker refused GraphQL: %s", body)
 			}
@@ -277,6 +293,10 @@ func (b *Broker) handle(host string, w http.ResponseWriter, r *http.Request) {
 	if why != "" {
 		b.refuse(w, r, why)
 		return
+	}
+	b.passed.Add(1)
+	if r.Method == http.MethodGet && checkRead.MatchString(r.URL.Path) || gql != "" && checkRead.MatchString(gql) {
+		b.checks.Add(1)
 	}
 	b.proxy(host).ServeHTTP(w, r)
 }

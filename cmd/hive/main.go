@@ -193,6 +193,8 @@ func run(args []string) int {
 			return 2
 		}
 		return gate.Connect(args[0], args[1])
+	case "gate-drive": // inside a gate's sandbox: drive the child's daemon to one merged PR on GitHub
+		return gate.Drive(args)
 	case "gate-broker": // outside a box of sub-Hives: their GitHub, their own repositories alone
 		return gate.BrokerMain(args)
 	case "gate":

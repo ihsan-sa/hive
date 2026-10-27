@@ -83,7 +83,8 @@ func sideEnv(t *testing.T, m *Meter, b *Broker) []string {
 		t.Fatal(err)
 	}
 	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "XDG_CONFIG_HOME=" + filepath.Join(dir, ".config"),
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GH_NO_UPDATE_NOTIFIER=1", "GH_HOST=github.com"}
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GH_NO_UPDATE_NOTIFIER=1", "GH_HOST=github.com",
+		"TMPDIR=" + dir} // gh caches API answers under $TMPDIR for a day: not across runs
 	env = append(env, m.Env(false)...)
 	return append(env, TrustEnv(trust)...)
 }
@@ -111,8 +112,16 @@ func gitHubAnswers(r *http.Request, body []byte) (int, string) {
 			return 200, `{"data":{"node":null}}`
 		}
 		return 200, `{"data":{"node":{"__typename":"PullRequest","repository":{"nameWithOwner":"` + where + `"}}}}`
-	case strings.Contains(q.Query, "__type"):
-		return 200, `{"data":{"PullRequest":{"fields":[{"name":"id"}]},"StatusCheckRollupContextConnection":{"fields":[]},"WorkflowRun":{"fields":[]}}}`
+	case strings.Contains(q.Query, "__type("):
+		// gh's feature check asks for some of these types per query, and
+		// refuses an answer with one it didn't ask for.
+		var types []string
+		for _, ty := range []string{"PullRequest", "StatusCheckRollupContextConnection", "WorkflowRun"} {
+			if strings.Contains(q.Query, ty+": __type(") {
+				types = append(types, `"`+ty+`":{"fields":[{"name":"id"}]}`)
+			}
+		}
+		return 200, `{"data":{` + strings.Join(types, ",") + `}}`
 	case strings.Contains(q.Query, "RepositoryInfo"):
 		return 200, `{"data":{"repository":{"id":"R_cand","name":"gate-x-candidate","owner":{"login":"Hive-RSI-Lab"},"viewerPermission":"ADMIN","defaultBranchRef":{"name":"main"},"parent":null,"mergeCommitAllowed":true,"squashMergeAllowed":true,"rebaseMergeAllowed":true}}}`
 	case strings.Contains(q.Query, "createPullRequest"):
@@ -411,5 +420,26 @@ func TestServeBroker(t *testing.T) {
 	}
 	if got := f.requests(); len(got) != 1 || !strings.HasSuffix(got[0], "Bearer org-secret") {
 		t.Errorf("GitHub saw %q", got)
+	}
+}
+
+// The broker counts what a side asked of it: the calls it let through, those
+// that read a commit's checks (REST or GraphQL), and those it refused.
+func TestBrokerTally(t *testing.T) {
+	f := newFakeGitHub(t)
+	f.answer = gitHubAnswers
+	b := testBroker(t, f, "gate-x-candidate")
+	const repo = "/repos/Hive-RSI-Lab/gate-x-candidate"
+	for _, c := range []struct{ method, path, body string }{
+		{"GET", repo, ""},
+		{"GET", repo + "/commits/abc/check-runs", ""},
+		{"POST", "/graphql", `{"query":"query{repository(owner:\"Hive-RSI-Lab\",name:\"gate-x-candidate\"){pullRequest(number:3){statusCheckRollup{state}}}}"}`},
+		{"GET", "/repos/Hive-RSI-Lab/hive/commits/abc/check-runs", ""},
+	} {
+		r := httptest.NewRequest(c.method, "https://api.github.com"+c.path, strings.NewReader(c.body))
+		b.handle("api.github.com", httptest.NewRecorder(), r)
+	}
+	if passed, refused, checks := b.Tally(); passed != 3 || refused != 1 || checks != 2 {
+		t.Fatalf("tally: passed %d refused %d checks %d, want 3 1 2", passed, refused, checks)
 	}
 }

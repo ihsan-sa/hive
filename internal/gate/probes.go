@@ -20,10 +20,13 @@ import (
 type ProbeFunc func(cfg *Config, c *Child) Result
 
 // DefaultProbes is the work every candidate does, in order: cheapest first.
-var DefaultProbes = []string{"daemon", "org", "e2e", "benchmark", "recurse"}
+// The github probe comes before org, whose push would leave the repository
+// with history before the demo could set it up.
+var DefaultProbes = []string{"daemon", "github", "org", "e2e", "benchmark", "recurse"}
 
 var builtin = map[string]ProbeFunc{
 	"daemon":    probeDaemon,
+	"github":    probeGitHub,
 	"org":       probeOrg,
 	"e2e":       probeE2E,
 	"benchmark": probeBenchmark,
