@@ -222,6 +222,30 @@ func TestScoreWithNoPathsWarns(t *testing.T) {
 	}
 }
 
+// Behind, improve measures the newest merge first; an older one waiting with
+// it is then covered by that measurement, not measured on its own.
+func TestBehindMeasuresTheNewestMain(t *testing.T) {
+	m, merge := scored(t)
+	old := merge(map[string]string{"a.txt": "a\n"}).SHA
+	m.mu.Lock()
+	m.scores["p"] = m.scores["p"][:1] // as if the merge at old were still waiting
+	m.mu.Unlock()
+	newest := merge(map[string]string{"n.txt": "6\n"}, work.Task{ID: "t2"}).SHA
+	m.mu.Lock()
+	m.scores["p"] = m.scores["p"][:1]
+	m.mu.Unlock()
+	batch := m.newestFirst([]work.Task{{ID: "t1", Project: "p", MergeSHA: old}, {ID: "t2", Project: "p", MergeSHA: newest}})
+	if batch[0].MergeSHA != newest || batch[1].MergeSHA != old {
+		t.Fatalf("the newest merge must come first: %+v", batch)
+	}
+	for _, t := range batch {
+		m.afterMerge(t)
+	}
+	if ms := m.Scores("p"); len(ms) != 2 || ms[1].SHA != newest || !m.measured("p", old) {
+		t.Fatalf("the newest is measured and the older covered by it: %+v", ms)
+	}
+}
+
 // A score that moves with the machine's load is judged against main measured
 // in the same moment (issue #1343): a merge that reads under a best taken
 // under a lighter load is kept when main where the best was read scores the
