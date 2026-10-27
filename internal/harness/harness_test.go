@@ -82,6 +82,11 @@ func TestClaudeArgs(t *testing.T) {
 	if b := (Claude{}).Args(Turn{SessionID: "u", Resume: true}); !contains(join(b), "--resume u") {
 		t.Fatalf("resume args: %v", b)
 	}
+	// No "Co-Authored-By: Claude" trailer in an agent's commits or PRs: GitHub
+	// shows it as the "claude" contributor.
+	if !contains(joined, `--settings {"attribution":{"commit":"","pr":""},"includeCoAuthoredBy":false}`) {
+		t.Fatalf("attribution not turned off: %q", joined)
+	}
 }
 
 func join(a []string) string {
@@ -194,7 +199,7 @@ func TestOpenClaude(t *testing.T) {
 	args := OpenClaude{}.Args(Turn{SessionID: "s", Model: "deepseek-chat", MaxBudgetUSD: 2, KeyCommand: "hive open-key /k", Endpoint: "https://api.deepseek.com/anthropic/"})
 	a := strings.Join(args, " ")
 	if strings.Contains(a, "--max-budget-usd") || !strings.Contains(a, "--model deepseek-chat") ||
-		!strings.Contains(a, `--settings {"apiKeyHelper":"hive open-key /k","disableAllHooks":true,"env":{"ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic"}}`) {
+		!strings.Contains(a, `--settings {"apiKeyHelper":"hive open-key /k","attribution":{"commit":"","pr":""},"disableAllHooks":true,"env":{"ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic"},"includeCoAuthoredBy":false}`) {
 		t.Errorf("args %s", a)
 	}
 	// No settings file loads, so a hook or env in the checkout's
@@ -263,5 +268,23 @@ func TestWindowWithoutResetHasNone(t *testing.T) {
 	evs := Claude{}.Parse([]byte(`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","unifiedWindows":{"seven_day":{"utilization":0.3}}}}`))
 	if len(evs) != 1 || evs[0].RateLimit == nil || !evs[0].RateLimit.Windows["seven_day"].ResetsAt.IsZero() {
 		t.Fatalf("got %+v", evs)
+	}
+}
+
+// The same for Codex: a rollout window with no reset has none, and one that
+// gives resets_in_seconds (older Codex) resets that long from now.
+func TestCodexWindowWithoutResetHasNone(t *testing.T) {
+	start := time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
+	none := []byte(`{"timestamp":"2026-10-24T10:01:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":100,"window_minutes":300}}}}`)
+	if rl, _ := (Codex{}).Usage(none, start); rl == nil || rl.Status != "rejected" || !rl.ResetsAt.IsZero() || !rl.Windows["five_hour"].ResetsAt.IsZero() {
+		t.Fatalf("no reset: %+v", rl)
+	}
+	in := []byte(`{"timestamp":"2026-10-24T10:01:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":40,"window_minutes":300,"resets_in_seconds":600}}}}`)
+	rl, _ := Codex{}.Usage(in, start)
+	if rl == nil {
+		t.Fatal("no reading")
+	}
+	if d := time.Until(rl.ResetsAt); d < 590*time.Second || d > 600*time.Second {
+		t.Fatalf("resets in %v, want ten minutes: %+v", d, rl)
 	}
 }
