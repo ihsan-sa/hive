@@ -321,7 +321,7 @@ type Module struct {
 	retesting sync.Mutex
 	busy      map[string]bool
 	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
-	aims      map[string]aimAsk // aims asked while a step held the task, set as it ends
+	aims      map[string]aimAsk    // aims asked while a step held the task, set as it ends
 	// steered is when the person's stop, retry or recheck (steer) last saved
 	// each task: a step whose copy is older saves nothing after it, nor
 	// merges, so it can't undo what they asked. It grows by one key per task
