@@ -30,6 +30,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/runner"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
 	"github.com/ihsan-sa/hive-standalone-build/internal/openagent"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
@@ -332,6 +333,16 @@ func run(args []string) int {
 		return cmdRemote(args)
 	case "remote-info": // run over ssh by `hive remote`
 		return cmdRemoteInfo(args, os.Stdin, os.Stdout)
+	}
+	// A module whose manifest asks for it has a command of its own.
+	if ws, ok := core.FindWorkspace(); ok && cmd != "" {
+		code, err := runner.Command(ws, cmd, args)
+		if err != runner.ErrNoCommand {
+			if err != nil {
+				fmt.Fprintln(os.Stderr, core.Cmd+":", err)
+			}
+			return code
+		}
 	}
 	fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usageText())
 	return 2

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 // keeps the body of each pull request it opens.
 type flakyForge struct {
 	*core.Local
+	mu     sync.Mutex // steps of different tasks call it at once
 	fail   int
 	down   bool
 	users  int
@@ -61,6 +64,8 @@ func (f *flakyForge) User() (string, error) {
 }
 
 func (f *flakyForge) CloseIssue(repo string, number int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.fail > 0 {
 		f.fail--
 		return errors.New("HTTP 503")
@@ -487,6 +492,24 @@ func TestPersonStoppedWorkerHolds(t *testing.T) {
 }
 
 // A lead can't recheck a task in a project walled off from it.
+// A task retried from reviewing has its reader stopped, so a hung one
+// doesn't keep its slot, and the next read is a new run, not the stopped one.
+func TestRecheckFromReviewingStopsTheReader(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage, task.SHA, task.Reviewer = StageReviewing, "2125f74e", "r-hung"
+	m.C.J.MustAppend("run.created", core.RunSpec{ID: "r-hung", Role: "reviewer", Project: task.Project, Harness: "fake"})
+	m.save(task, "reviewer r-hung reading 2125f74e")
+	if err := m.Recheck(task.ID, "", "the stall watcher"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := m.C.Runs.Get("r-hung"); !r.Terminal() {
+		t.Fatalf("the hung reader is still %s after the retry", r.Status)
+	}
+	if got, _ := m.Get(task.ID); got.Stage != StageLanding || got.Reviews != 1 {
+		t.Fatalf("after the retry: %s with %d reviews, want landing with the stopped read counted", got.Stage, got.Reviews)
+	}
+}
+
 func TestRecheckWalled(t *testing.T) {
 	m, _, _, _ := noCommitRig(t, 0)
 	m.C.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
@@ -915,18 +938,20 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	}
 }
 
-// queue now starts a brief past the one it waits on, only with a reason, put
-// on its record; the max_workers cap still holds it.
-func TestQueueNowPastOverlap(t *testing.T) {
+// queue now puts a brief first in line, only with a reason, put on its
+// record; the max_workers cap still holds it.
+func TestQueueNowGoesFirst(t *testing.T) {
 	m := queueRig(t)
 	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
 	stuck := file(t, m, "the stuck one", "In internal/core/effects.go.")
+	other := file(t, m, "an earlier idea", "")
 	fix := file(t, m, "the queue fix", "In internal/core/effects.go too.")
-	stuck.Stage, fix.Stage = StageWorking, StageQueued
+	stuck.Stage, other.Stage, fix.Stage = StageWorking, StageQueued, StageQueued
 	m.save(&stuck, "")
+	m.save(&other, "")
 	m.save(&fix, "")
-	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], stuck.ID) {
-		t.Fatalf("the fix doesn't wait on the stuck one: %q", wait[fix.ID])
+	if start, wait := m.admit(m.List(nil)); !start[other.ID] || start[fix.ID] {
+		t.Fatalf("the earlier brief didn't take the slot: %q", wait[fix.ID])
 	}
 	if _, err := m.C.Runs.Ops().Call(lead, "queue", json.RawMessage(`{"now":"`+fix.ID+`"}`)); err == nil {
 		t.Fatal("started one now with no reason")
@@ -938,7 +963,7 @@ func TestQueueNowPastOverlap(t *testing.T) {
 	if !got.Now || !logged(&got, "it fixes what holds the queue") {
 		t.Fatalf("now %v, log %v", got.Now, got.Log)
 	}
-	if start, wait := m.admit(m.List(nil)); !start[fix.ID] {
+	if start, wait := m.admit(m.List(nil)); !start[fix.ID] || start[other.ID] {
 		t.Fatalf("the fix still waits: %q", wait[fix.ID])
 	}
 	cfg := m.C.WS.LoadConfig()
@@ -1084,4 +1109,36 @@ func mustRun(t *testing.T, m *Module, id string) core.Run {
 		t.Fatalf("no run %s", id)
 	}
 	return r
+}
+
+// A parent looping on spawn gets no second helper for the same brief, live or
+// just finished, and says which sibling has it; a different brief still goes,
+// up to maxLiveHelpers live at once.
+func TestSpawnRefusesARepeatedHelper(t *testing.T) {
+	m, _, _ := helperRig(t)
+	parent := core.Run{RunSpec: core.RunSpec{ID: "parent", Role: "worker"}}
+	first, err := m.Spawn(parent, "worker", "p", "Run the word counter task (wc) to completion\nand report", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Spawn(parent, "worker", "p", "  run the word counter task (WC)   to completion\nand report back with numbers", "")
+	if err == nil || !strings.Contains(err.Error(), first.ID) {
+		t.Fatalf("a repeat of a live helper: err %v, want one naming %s", err, first.ID)
+	}
+	m.C.Runs.Stop(first.ID, "test")
+	if _, err = m.Spawn(parent, "worker", "p", "Run the word counter task (wc) to completion\nand report", ""); err == nil || !strings.Contains(err.Error(), "finished") {
+		t.Fatalf("a repeat of a just-finished helper: err %v", err)
+	}
+	if _, err = m.Spawn(core.Run{RunSpec: core.RunSpec{ID: "other", Role: "worker"}}, "worker", "p", "Run the word counter task (wc) to completion\nand report", ""); err != nil {
+		t.Fatalf("another parent's helper with the same brief: %v", err)
+	}
+	for i := 0; i < maxLiveHelpers; i++ {
+		_, err = m.Spawn(parent, "worker", "p", "helper part "+strconv.Itoa(i), "")
+		if err != nil {
+			t.Fatalf("helper %d: %v", i, err)
+		}
+	}
+	if _, err = m.Spawn(parent, "worker", "p", "one more part", ""); err == nil || !strings.Contains(err.Error(), "helpers live") {
+		t.Fatalf("a helper past the cap: err %v", err)
+	}
 }

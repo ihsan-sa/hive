@@ -411,7 +411,7 @@ func TestChecksRefusedWithoutWorkflows(t *testing.T) {
 					return `[{"name":"ci.yml"}]`, "", nil
 				}
 				return "", "gh: Not Found (HTTP 404)", errors.New("exit status 1")
-			case strings.Contains(args[2], "check-runs"), strings.Contains(args[2], "check-suites"):
+			case strings.Contains(args[2], "check-runs"), strings.Contains(args[2], "check-suites"), strings.Contains(args[2], "actions/runs"):
 				return "", refused, errors.New("exit status 1")
 			}
 			return "", "", nil
@@ -419,7 +419,7 @@ func TestChecksRefusedWithoutWorkflows(t *testing.T) {
 		runs, err := GitHub{}.Checks("o/r", "abc")
 		if workflows {
 			// The stopped task's reason is this text, which revive matches.
-			want := "gh api repos/o/r/commits/abc/check-runs?per_page=100: " + refused
+			want := "gh api repos/o/r/actions/runs?head_sha=abc&per_page=100: " + refused
 			if err == nil || err.Error() != want || !ChecksRefused(err.Error()) {
 				t.Errorf("with workflows: runs %+v, err %v", runs, err)
 			}
@@ -455,6 +455,67 @@ func TestChecksRefusedWithoutWorkflows(t *testing.T) {
 	}
 }
 
+// A fine-grained token, refused the Checks API, reads the head's CI through
+// its Actions runs and their jobs, and its commit statuses: a failed job
+// fails the head, a job keeps its URL so its log can be read, a run with no
+// jobs listed yet holds it, and a head with workflows whose runs aren't
+// listed yet is held a while, not passed. The replies are the shapes
+// GitHub's actions/runs and runs/{id}/jobs calls return.
+func TestChecksThroughActions(t *testing.T) {
+	refused := "gh: Resource not accessible by personal access token (HTTP 403)"
+	var listed bool
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		p := strings.Join(args, " ")
+		switch {
+		case strings.Contains(p, "check-runs"), strings.Contains(p, "check-suites"):
+			return "", refused, errors.New("exit status 1")
+		case strings.Contains(p, "contents/.github/workflows"):
+			return `[{"name":"ci.yml"}]`, "", nil
+		case strings.Contains(p, "actions/runs/1/jobs"):
+			return `{"id":11,"name":"test","status":"completed","conclusion":"success","started_at":"2026-10-27T10:00:00Z","html_url":"https://github.com/o/r/actions/runs/1/job/11"}` + "\n" +
+				`{"id":12,"name":"vet","status":"completed","conclusion":"failure","started_at":"2026-10-27T10:00:00Z","html_url":"https://github.com/o/r/actions/runs/1/job/12"}`, "", nil
+		case strings.Contains(p, "actions/runs/2/jobs"):
+			return "", "", nil
+		case strings.Contains(p, "actions/runs?head_sha="):
+			if !listed {
+				return "", "", nil
+			}
+			return `{"id":1,"name":"ci","status":"completed","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/1"}` + "\n" +
+				`{"id":2,"name":"lint","status":"queued","run_started_at":"2026-10-27T10:00:00Z","html_url":"https://github.com/o/r/actions/runs/2"}`, "", nil
+		case strings.Contains(p, "/status"):
+			return `{"context":"ci/legacy","state":"success","description":"ok","target_url":"https://ci.example/1"}`, "", nil
+		}
+		return "", "", nil
+	})
+	runs, err := GitHub{}.Checks("o/r", "def")
+	if st, which := ChecksState(runs, nil); err != nil || st != CheckPending || len(which) != 1 || which[0].Name != "github-actions" {
+		t.Fatalf("a head with workflows and no runs yet: %s %+v, err %v", st, runs, err)
+	}
+	listed = true
+	runs, err = GitHub{}.Checks("o/r", "def")
+	if err != nil || len(runs) != 4 {
+		t.Fatalf("runs %+v, err %v", runs, err)
+	}
+	got := map[string]CheckRun{}
+	for _, r := range runs {
+		got[r.Name] = r
+	}
+	if got["test"].State != CheckPass || got["vet"].State != CheckFail || got["lint"].State != CheckCantStart || got["ci/legacy"].State != CheckPass {
+		t.Errorf("checks read %+v", got)
+	}
+	if m := ghJobURL.FindStringSubmatch(got["vet"].URL); m == nil || m[1] != "12" {
+		t.Errorf("the failed job's URL %q names no job", got["vet"].URL)
+	}
+	if st, _ := ChecksState(runs, nil); st != CheckFail {
+		t.Errorf("a failed job reads %s", st)
+	}
+	for _, c := range *calls {
+		if strings.Contains(strings.Join(c, " "), "check-suites") {
+			t.Errorf("asked for suites the token may not read: %q", c)
+		}
+	}
+}
+
 // A rate limit's 403 on the checks is no refusal: it isn't read as no checks
 // and spends no call on the workflows.
 func TestChecksRateLimitIsNoRefusal(t *testing.T) {
@@ -485,6 +546,7 @@ func TestChecksRefusedReasons(t *testing.T) {
 		"gh api repos/Hive-RSI-Lab/hive-dispatch/commits/23925cb03db4544ed170451a28aa905c00d66783/check-runs" + tail,
 		"gh api repos/Hive-RSI-Lab/hive-trials/commits/e5789b39d9d40ee34abf3b53886ee38529028feb/check-runs" + tail,
 		"gh api repos/Hive-RSI-Lab/hive-trials/commits/fa2ec42bff45ca0e5d059e4a6429e8c0495ebd36/check-runs" + tail,
+		"gh api repos/o/r/actions/runs?head_sha=abc&per_page=100: gh: Resource not accessible by personal access token (HTTP 403)",
 	} {
 		if !ChecksRefused(r) {
 			t.Errorf("not read as a checks refusal: %s", r)

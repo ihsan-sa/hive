@@ -2,6 +2,7 @@ package improve
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,8 +82,8 @@ func won(t *testing.T, m *Module, isolated bool) (core.Run, string) {
 	}
 	said(t, m, "w1", "p", "SECRET-HIVE ran make")
 	exp := said(t, m, "stepback-1-exp", "p", "SECRET-SETUP ran make")
-	nine := 9.0
-	s := StepBack{ID: "stepback-1", Run: "stepback-1", Project: "p", Score: &nine, Best: 5, Setup: &Setup{Why: "SECRET-WHY", Asks: []string{"SECRET-ASK"}}}
+	nine, five := 9.0, 5.0
+	s := StepBack{ID: "stepback-1", Run: "stepback-1", Project: "p", Score: &nine, Control: &five, Main: "abc1234", Best: 3, Setup: &Setup{Why: "SECRET-WHY", Asks: []string{"SECRET-ASK"}}}
 	return exp, m.fileFault(s, p, exp, "", core.Score{Direction: "SECRET-DIR"})
 }
 
@@ -138,8 +139,8 @@ func TestSelfFaultHandsOverTheCommits(t *testing.T) {
 	sha, _ := core.Git(dir, "rev-parse", "HEAD")
 	core.Git(dir, "reset", "-q", "--hard", from)
 	exp := said(t, m, "stepback-2-exp", "hive", "ran make")
-	nine := 9.0
-	s := StepBack{ID: "stepback-2", Run: "stepback-2", Project: "hive", From: from, Score: &nine, Best: 5, Setup: &Setup{Asks: []string{"win"}}}
+	nine, five := 9.0, 5.0
+	s := StepBack{ID: "stepback-2", Run: "stepback-2", Project: "hive", From: from, Score: &nine, Control: &five, Main: from, Best: 5, Setup: &Setup{Asks: []string{"win"}}}
 	id := m.fileFault(s, p, exp, sha, core.Score{})
 	task := m.Work.List(func(t work.Task) bool { return t.ID == id })[0]
 	if !strings.Contains(task.Known, "1 commit(s)") || !strings.Contains(task.Known, "git am -3") || !strings.Contains(task.Done, "forward-ported onto main") {
@@ -246,6 +247,70 @@ func TestExperimentNeedsABudget(t *testing.T) {
 	}
 	if _, ok := m.C.Runs.Get("stepback-1-exp"); ok {
 		t.Fatal("the experiment started with no budget")
+	}
+}
+
+// The step-back scores its experiment beside main, not against the best it
+// stored when it began: a setup that beats the stale best but not main as
+// it stands loses, and one that beats main wins.
+func TestStepBackComparesWithMainScoredBesideIt(t *testing.T) {
+	m, merge := scored(t)
+	from := m.Scores("p")[0].SHA
+	merge(map[string]string{"n.txt": "8\n"})
+	p, _ := m.C.Projects.Get("p")
+	for i, c := range []struct {
+		n, status string
+	}{{"7", "lost"}, {"12", "won"}} {
+		id := fmt.Sprintf("stepback-%d-exp", i)
+		dir, err := m.C.Effects.NewCheckout(p, id, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(dir, "n.txt"), []byte(c.n+"\n"), 0o644)
+		m.C.J.MustAppend("run.created", core.RunSpec{ID: id, Role: "worker", Project: "p", Harness: "fake", Checkout: dir})
+		r, _ := m.C.Runs.Get(id)
+		sb := StepBack{ID: fmt.Sprintf("stepback-%d", i), Run: fmt.Sprintf("stepback-%d", i), Exp: id, Project: "p", From: from, Best: 5,
+			Status: "scoring", Setup: &Setup{Asks: []string{"go"}}}
+		m.score(sb, r)
+		var got StepBack
+		for _, x := range m.StepBacks("p") { // StepBacks keeps no order
+			if x.ID == sb.ID {
+				got = x
+			}
+		}
+		if got.Status != c.status || got.Control == nil || *got.Control != 8 || !strings.Contains(got.Note, "main's 8") {
+			t.Fatalf("a setup scoring %s against main's 8 (stale best 5) must have %s: %+v", c.n, c.status, got)
+		}
+	}
+}
+
+// While main's score is one improve hasn't measured, a step-back judges
+// only: a setup from the start couldn't be compared with main.
+func TestStepBackWaitsForTheNewScore(t *testing.T) {
+	m, _ := scored(t)
+	forge := m.C.Effects.Forge.(*core.Local)
+	src := t.TempDir()
+	for _, args := range [][]string{{"clone", "-q", forge.RepoPath("me/p"), src}} {
+		if out, err := core.Git("", args...); err != nil {
+			t.Fatal(out, err)
+		}
+	}
+	os.WriteFile(filepath.Join(src, "score.sh"), []byte("echo 100\n"), 0o644)
+	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "new score"}, {"push", "-q", "origin", "HEAD:main"}} {
+		if out, err := core.Git(src, args...); err != nil {
+			t.Fatal(out, err)
+		}
+	}
+	said(t, m, "w1", "p", "spent")
+	m.C.J.MustAppend("run.turn_ended", map[string]any{"id": "w1", "turn": 1, "status": core.StatusDone, "result": map[string]any{"cost_usd": 1.0}})
+	p, _ := m.C.Projects.Get("p")
+	m.StartStepBack(p, "test")
+	sbs := m.StepBacks("p")
+	if len(sbs) != 1 || sbs[0].Status != "thinking" || !sbs[0].NoScore {
+		t.Fatalf("a step-back across a score change must judge only: %+v", sbs)
+	}
+	if r, _ := m.C.Runs.Get(sbs[0].Run); strings.Contains(r.Brief, "experiment.json") {
+		t.Fatalf("a step-back across a score change was asked for an experiment:\n%s", r.Brief)
 	}
 }
 
