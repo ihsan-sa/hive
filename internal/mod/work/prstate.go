@@ -157,6 +157,12 @@ func (m *Module) MarkDraft(id, by, why string) (string, error) {
 	t.DraftWhy = core.Clip(why, 200)
 	note := fmt.Sprintf("PR #%d marked a draft by %s: %s", pr.Number, by, core.Clip(why, 300))
 	m.save(&t, note)
+	if t.Stage == StageMerging { // it leaves the merge line (mergeFront): the next one moves up now
+		m.mu.Lock()
+		delete(m.later, id)
+		m.wakeMergeLineLocked(t.Project)
+		m.mu.Unlock()
+	}
 	return note + "; its merge waits until it is marked ready (pr_ready)", nil
 }
 

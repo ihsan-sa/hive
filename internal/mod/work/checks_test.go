@@ -1799,3 +1799,33 @@ func TestMergeLineWakesWhenFrontLeaves(t *testing.T) {
 		t.Fatalf("front merged: waiter still held %v, other task woken %v", w, !o)
 	}
 }
+
+// A PR the lead holds as a draft never stands at the front of the merge
+// line (issue #1784): drafted while it waited its turn, it kept its place
+// without reading its PR, and nine tasks waited behind it for hours. The
+// next task tests merged with main and merges past it, even while the
+// draft's own merged test is still in flight.
+func TestMergeLineSkipsDraft(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	draft := &Task{ID: "t-draft", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number - 1}, Reason: MergeLineWait + ": earlier", DraftWhy: "held to shorten the line"}
+	m.mu.Lock()
+	m.tasks[draft.ID] = draft
+	if m.mergeRuns == nil {
+		m.mergeRuns = map[string]*mergeRun{}
+	}
+	m.mergeRuns[draft.ID] = &mergeRun{key: "x"}
+	m.mu.Unlock()
+	if ahead := m.mergeFront(task, p); ahead != nil {
+		t.Fatalf("a held draft is the line's front: %s", ahead.ID)
+	}
+	if ahead := m.mergeFront(draft, p); ahead != nil {
+		t.Fatalf("the held draft waits behind %s", ahead.ID)
+	}
+	task.Reason = MergeLineWait + ": behind the draft"
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("behind a held draft: stage %q, reason %q", task.Stage, task.Reason)
+	}
+}

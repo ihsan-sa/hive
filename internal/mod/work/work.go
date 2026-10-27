@@ -2356,7 +2356,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	// merging, each reading its PR twice a minute, GitHub's API limit ran
 	// out. Its PR is read whole once it is at the front, where a close, a
 	// draft or a moved head is caught before anything merges.
-	if strings.HasPrefix(t.Reason, MergeLineWait) {
+	// One the lead holds as a draft has no place in the line: it reads its
+	// PR, at most every few minutes (waitDraft), to see whether it is ready.
+	if strings.HasPrefix(t.Reason, MergeLineWait) && t.DraftWhy == "" {
 		if ahead := m.mergeFront(t, p); ahead != nil {
 			main, _ := core.Git(m.C.WS.Project(p.Name), "rev-parse", "--verify", "-q", "refs/remotes/origin/"+p.Branch)
 			m.hold(t, p, lineWait(ahead, main))
@@ -2387,7 +2389,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if pr.Draft && (pr.HeadSHA != t.SHA || t.DraftWhy != "") {
 		return m.waitDraft(t, pr)
 	}
-	if !t.DraftSince.IsZero() {
+	if !t.DraftSince.IsZero() || t.DraftWhy != "" {
 		t.Reason, t.DraftSince, t.DraftTold, t.DraftWhy = "", time.Time{}, false, ""
 		m.save(t, "its head is the commit read and the lead holds no draft; on through the gate")
 	}
@@ -2531,6 +2533,11 @@ func (m *Module) waitDraft(t *Task, pr core.PR) error {
 		t.DraftSince = time.Now().UTC()
 	}
 	if t.Reason != reason {
+		if inMergeLine(t.Reason) {
+			m.mu.Lock()
+			m.wakeMergeLineLocked(t.Project) // it stands aside: the next one moves up
+			m.mu.Unlock()
+		}
 		t.Reason = reason
 		m.save(t, reason)
 	}
@@ -2725,7 +2732,9 @@ const mergedTestWait = "testing its head merged with main"
 // The line is the project's merging tasks waiting at this step: the one
 // whose test is in flight is the front, else reverts first, then the oldest
 // PR. A task held for anything else stands aside and joins again when it
-// comes back.
+// comes back, and so does one the lead holds as a draft (pr_draft), even
+// with its reason still a place in the line or a test in flight: a drafted
+// PR left at the front held nine tasks behind it (issue #1784).
 func (m *Module) mergeFront(t *Task, p core.Project) *Task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -2740,7 +2749,7 @@ func (m *Module) mergeFront(t *Task, p core.Project) *Task {
 	}
 	var front *Task
 	for _, u := range m.tasks {
-		if u.ID == t.ID || u.Project != p.Name || u.Stage != StageMerging {
+		if u.ID == t.ID || u.Project != p.Name || u.Stage != StageMerging || u.DraftWhy != "" {
 			continue
 		}
 		if r, ok := m.mergeRuns[u.ID]; ok && !r.done && !r.gone {
