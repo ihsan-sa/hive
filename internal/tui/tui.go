@@ -92,7 +92,6 @@ type model struct {
 	reply     string            // thread being replied to; "" = new thread
 	drafts    map[string]string // by chat and target
 	outbox    []outMsg          // sent, not yet answered
-	mine      map[string]bool   // sent and answered, by message id, until a fetch of its chat has it
 
 	// dashboard: the live feed, or the status tree
 	feed     []feedRow
@@ -143,6 +142,7 @@ type stateMsg struct {
 type chatMsg struct {
 	id   string
 	msgs []chat.Message
+	err  error // the Hive didn't answer: what's on screen stays
 }
 type runMsg struct{ d api.RunDetail }
 type taskMsg struct{ t work.Task }
@@ -199,7 +199,7 @@ func newModel(c *api.Client, ws core.Workspace) *model {
 	in.FocusedStyle.Placeholder, in.BlurredStyle.Placeholder = stDim, stDim
 	in.KeyMap.InsertNewline.SetKeys("ctrl+j", "alt+enter")
 	return &model{c: c, ws: ws, remote: c != nil && c.Remote(), open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
-		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, drafts: map[string]string{}, mine: map[string]bool{}, places: map[string]place{}, stages: map[string]string{}, input: in, threadSel: -1, feedSel: -1}
+		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, drafts: map[string]string{}, places: map[string]place{}, stages: map[string]string{}, input: in, threadSel: -1, feedSel: -1}
 }
 
 // sidePane: a pane is open beside the main one.
@@ -226,8 +226,8 @@ func (m *model) fetchChat(id string) tea.Cmd {
 	}
 	return func() tea.Msg {
 		var msgs []chat.Message
-		m.c.Do("GET", "/api/chat?id="+id, nil, &msgs)
-		return chatMsg{id, msgs}
+		err := m.c.Do("GET", "/api/chat?id="+id, nil, &msgs)
+		return chatMsg{id, msgs, err}
 	}
 }
 
@@ -367,12 +367,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash("✗ not sent · " + msg.err.Error())
 			return m, nil
 		}
-		// A fetch can come back with the message before the post answers, or
-		// have left before it landed: it shows once, and stays.
-		if !hasMsg(m.msgs[msg.out.chat], msg.msg.ID) {
-			m.msgs[msg.out.chat] = append(m.msgs[msg.out.chat], msg.msg) // a new thread stays in the channel; the person opens it
-			m.mine[msg.msg.ID] = true
-		}
+		m.msgs[msg.out.chat] = withMsg(m.msgs[msg.out.chat], msg.msg) // a new thread stays in the channel; the person opens it
 	case tickMsg:
 		return m, tea.Batch(m.fetchState(), m.fetchChat(m.currentChatID()), m.fetchDetail(), m.fetchFeed(), tick())
 	case stateMsg:
@@ -393,7 +388,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case feedMsg:
 		return m, m.addEvents(msg)
 	case chatMsg:
-		m.msgs[msg.id] = m.keepMine(msg.msgs, m.msgs[msg.id])
+		if msg.err == nil {
+			m.msgs[msg.id] = merge(msg.msgs, m.msgs[msg.id])
+		}
 	case runMsg:
 		m.runs[msg.d.Run.ID] = msg.d
 	case taskMsg:
@@ -530,9 +527,6 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if s == "tab" || s == "shift+tab" {
 		return m, m.cycle(s == "tab")
 	}
-	if m.section == secChats && m.chat != "" && len(m.stack) == 0 && m.jump(s) {
-		return m, nil
-	}
 	if m.composing {
 		return m.keyInput(k)
 	}
@@ -662,26 +656,6 @@ func (m *model) keyDetail(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// jump takes End and Ctrl+End to the newest message, Home and Ctrl+Home to
-// the first, in the thread with the keys or else the channel, wherever the
-// focus is in a chat; a box with text in it keeps End and Home for its line.
-func (m *model) jump(s string) bool {
-	plain := s == "end" || s == "home"
-	if !plain && s != "ctrl+end" && s != "ctrl+home" || plain && m.composing && m.input.Value() != "" || m.editing {
-		return false
-	}
-	off := 0
-	if strings.HasSuffix(s, "home") {
-		off = 1 << 20 // drawing clamps it to the first line
-	}
-	if m.focus == 2 || m.takeover() {
-		m.thScroll = off
-	} else {
-		m.chScroll, m.chFree = off, true
-	}
-	return true
-}
-
 func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch s := k.String(); s {
 	case "esc":
@@ -708,24 +682,30 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.threadSel, m.chFree = len(threads(m.msgs[m.chat]))-1, false
 			return m, nil
 		}
-		fallthrough
-	case "down":
-		// The reply box is a line or two; past its edge the arrows scroll
-		// the thread above it.
-		up := s == "up"
-		if !m.editing && m.reply != "" && (up && m.input.Line() == 0 || !up && m.input.Line() == m.input.LineCount()-1 && m.thScroll > 0) {
-			m.thScroll = scroll(m.thScroll, map[bool]string{true: "wheelup", false: "wheeldown"}[up], m.h-4)
+		if !m.editing && m.input.Value() == "" { // an empty reply box scrolls its thread
+			m.thScroll = scroll(m.thScroll, "wheelup", m.h-4)
 			return m, nil
 		}
-	case "pgup", "pgdown":
+	case "pgup", "pgdown", "ctrl+end", "ctrl+home", "end", "home", "down":
+		// The box scrolls what's above it: always by page or to either end,
+		// and by arrow or end key while it's empty, which a cursor can't use.
+		empty := m.input.Value() == ""
+		if m.editing || !empty && (s == "end" || s == "home" || s == "down") {
+			break
+		}
+		key := map[string]string{"ctrl+end": "end", "ctrl+home": "home", "down": "wheeldown"}[s]
+		if key == "" {
+			key = s
+		}
 		if m.reply != "" {
-			m.thScroll = scroll(m.thScroll, s, m.h-4)
+			m.thScroll = scroll(m.thScroll, key, m.h-4)
 			return m, nil
 		}
-		if !m.editing { // the new-thread box scrolls the channel above it
-			m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
-			return m, nil
+		m.chScroll, m.chFree = scroll(m.chScroll, key, m.h-4), true
+		if key == "end" {
+			m.threadSel = -1
 		}
+		return m, nil
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		m.input.SetValue("")
@@ -781,6 +761,45 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// merge is a chat as read, plus what's on screen that the read is too old to
+// hold: a message just sent, whose answer came back before a read started
+// earlier, stays rather than vanishing until the next read.
+func merge(read, shown []chat.Message) []chat.Message {
+	var last time.Time
+	if len(read) > 0 {
+		last = read[len(read)-1].At
+	}
+	for _, msg := range shown {
+		if msg.At.After(last) {
+			read = withMsg(read, msg)
+		}
+	}
+	return read
+}
+
+// withMsg adds a message once: a read that already holds a sent message
+// doesn't show it twice.
+func withMsg(msgs []chat.Message, msg chat.Message) []chat.Message {
+	for _, x := range msgs {
+		if x.ID == msg.ID {
+			return msgs
+		}
+	}
+	return append(msgs, msg)
+}
+
+// echoes counts the person's messages in o's thread that read as o, so a
+// read that already has it hides its "sending…" line.
+func (m *model) echoes(o outMsg) int {
+	n := 0
+	for _, x := range m.msgs[o.chat] {
+		if x.Thread == o.thread && x.From == "person" && x.Text == o.text {
+			n++
+		}
+	}
+	return n
+}
+
 // send posts at once; a reply shows as sending until the Hive answers.
 func (m *model) send(text string) tea.Cmd {
 	m.sent++
@@ -797,43 +816,6 @@ func (m *model) send(text string) tea.Cmd {
 		err := m.c.Do("POST", "/api/chat", map[string]any{"chat": o.chat, "thread": o.thread, "text": text, "files": files}, &msg)
 		return sentMsg{o, msg, err}
 	}
-}
-
-func hasMsg(msgs []chat.Message, id string) bool {
-	for _, x := range msgs {
-		if x.ID == id {
-			return true
-		}
-	}
-	return false
-}
-
-// keepMine is a fetched chat with the person's own messages it doesn't have
-// yet: a fetch that left before a post landed doesn't take it off screen.
-func (m *model) keepMine(fetched, shown []chat.Message) []chat.Message {
-	for _, x := range shown {
-		if !m.mine[x.ID] {
-			continue
-		}
-		if hasMsg(fetched, x.ID) {
-			delete(m.mine, x.ID)
-		} else {
-			fetched = append(fetched, x)
-		}
-	}
-	return fetched
-}
-
-// echoes counts the person's messages in o's thread that read as o, so a
-// fetch that already has it hides its "sending…" line.
-func (m *model) echoes(o outMsg) int {
-	n := 0
-	for _, x := range m.msgs[o.chat] {
-		if x.Thread == o.thread && x.From == "person" && x.Text == o.text {
-			n++
-		}
-	}
-	return n
 }
 
 func flash(s string) tea.Cmd { return func() tea.Msg { return flashMsg(s) } }
@@ -1000,15 +982,15 @@ func (m *model) keys() []string {
 	case m.focus == 0:
 		return []string{"↑↓", "move", "enter", "open", "space", "collapse", "tab", "switch pane", "q", "quit"}
 	case m.section == secChats && m.takeover():
-		return []string{"enter", "send", "esc", "back to chat", "↑ pgup", "scroll", "end", "newest", "ctrl+j", "newline", imageKey, "image"}
+		return []string{"enter", "send", "ctrl+j", "newline", "esc", "back to chat", m.bottomKey(), "newest", imageKey, "image", "pgup pgdn", "scroll"}
 	case m.section == secChats && m.focus == 2:
-		return []string{"enter", "send", "ctrl+j", "newline", "esc", "close thread", "↑ pgup", "scroll", "end", "newest", "← tab", "to the channel", imageKey, "image"}
+		return []string{"enter", "send", "ctrl+j", "newline", "esc", "close thread", "← tab", "to the channel", "pgup pgdn", "scroll", m.bottomKey(), "newest", imageKey, "image"}
 	case m.section == secChats && m.composing:
-		return []string{"enter", "start thread", "ctrl+j", "newline", "esc", "leave box", "↑", "pick a thread", "end", "newest", "tab", "switch pane", imageKey, "image"}
+		return []string{"enter", "start thread", "ctrl+j", "newline", "esc", "leave box", "↑", "pick a thread", m.bottomKey(), "newest", "tab", "switch pane", imageKey, "image"}
 	case m.section == secChats && m.thread != "":
 		return []string{"↑↓", "thread", "→", "to the open thread", "pgup pgdn", "scroll", "end", "newest", "space", "collapse", "n", "new thread"}
 	case m.section == secChats:
-		return []string{"↑↓", "thread", "enter", "open", "end", "newest", "n", "new thread", "space", "collapse", "tab", "pane"}
+		return []string{"↑↓", "thread", "enter", "open", "n", "new thread", "end", "newest", "space", "collapse", "tab", "pane"}
 	case len(m.stack) > 0 && m.stack[len(m.stack)-1].kind == "module":
 		return []string{"↑↓", "project", "space", "grant or remove", "r", "review again", "esc", "back", "q", "quit"}
 	case len(m.stack) > 0:
@@ -1057,8 +1039,8 @@ func helpLines() []string {
 		"/                 in Knowledge, search the knowledge base",
 		"ctrl+j            new line in a box",
 		fmt.Sprintf("%-18sin a box, attach the clipboard's image; paste or drop a file's path to attach it", imageKey),
-		"pgup pgdn, wheel  scroll; the wheel scrolls the pane under it, ↑ in a thread's box scrolls the thread",
-		"home end          the top or the end; in a chat, end (or ctrl+end, or G) is the newest message",
+		"pgup pgdn, wheel  scroll; the wheel scrolls the pane under it",
+		"home end, g G     the top or the newest; in a box, ctrl+home ctrl+end",
 		"q                 quit the control center; the Hive keeps working",
 		"", stDim.Render("any key to close")}
 }

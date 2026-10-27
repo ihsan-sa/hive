@@ -15,10 +15,10 @@
    approved the API. One question: keep the old import path as an alias for a
    release, or break it now?
 
-
   ╭─ reply · lead ────────────────────────────────────────────────────────────╮
   │ › Keep the alias for one release, then remove it in 0.9.                  │
   ╰───────────────────────────────────────────────────────────────────────────╯
+
 
 ────────────────────────────────────────────────────────────────────────────────
  ✗ not sent · connection lost

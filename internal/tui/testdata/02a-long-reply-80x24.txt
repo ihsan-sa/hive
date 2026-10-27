@@ -1,5 +1,6 @@
  ‹ textkit-2 › lead  › thread                                          esc back
 ────────────────────────────────────────────────────────────────────────────────
+
    2 replies ─────────────────────────────────────────────────────────────────
 
    lead  20:23
@@ -11,7 +12,6 @@
    approved the API. One question: keep the old import path as an alias for a
    release, or break it now?
 
-
   ╭─ reply · lead ────────────────────────────────────────────────────────────╮
   │ › Keep the alias for one release, then remove it in 0.9.                  │
   │                                                                           │
@@ -21,4 +21,4 @@
   │   - ask reviewer to check the docs examples import from the new path      │
   ╰───────────────────────────────────────────────────────────────────────────╯
 ────────────────────────────────────────────────────────────────────────────────
- enter send   esc back to chat   ↑ pgup scroll   end newest   ctrl+j newline
+ enter send   ctrl+j newline   esc back to chat   ctrl+end newest   alt+v image

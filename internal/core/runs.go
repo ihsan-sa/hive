@@ -211,6 +211,9 @@ type Plan struct {
 	Login   string            `json:"login,omitempty"` // Login.Key; empty is the machine's own
 	Limit   harness.RateLimit `json:"limit"`
 	At      time.Time         `json:"at"`
+	// Wait is the park a limit whose named reset had already passed got;
+	// the next such limit in a row doubles it, up to the hour.
+	Wait time.Duration `json:"wait,omitempty"`
 }
 
 // Key names the plan's login.
@@ -1665,12 +1668,15 @@ func (rs *Runs) endTurn(r Run) {
 		rs.append("run.egress_refused", ev)
 	}
 	limited := tl.Result != nil && tl.Result.Limited || (tl.Limit != nil && tl.Limit.Status == "rejected" && (tl.Result == nil || tl.Result.IsError))
+	var wait time.Duration
 	if limited {
 		// Park the login until its reset (an hour when the harness didn't
 		// say). A reset it named that has passed by the turn's end is a
 		// limit that is over, not one with no reset: it waits a minute, so a
 		// harness repeating a stale reset doesn't spin, not the hour that
 		// parked the fake agent's three-second limit on a slow runner (PR #800).
+		// One that keeps repeating it waits twice as long each time, up to
+		// the hour (#1018).
 		l := harness.RateLimit{}
 		if tl.Limit != nil {
 			l = *tl.Limit
@@ -1679,7 +1685,13 @@ func (rs *Runs) endTurn(r Run) {
 		if l.ResetsAt.IsZero() {
 			l.ResetsAt = time.Now().Add(time.Hour)
 		} else if !l.ResetsAt.After(time.Now()) {
-			l.ResetsAt = time.Now().Add(time.Minute)
+			wait = time.Minute
+			rs.mu.Lock()
+			if prev := rs.plans[Plan{Harness: HarnessName(r.Harness), Login: r.Login}.Key()]; prev.Wait > 0 && prev.Limit.Status == "rejected" {
+				wait = min(2*prev.Wait, time.Hour)
+			}
+			rs.mu.Unlock()
+			l.ResetsAt = time.Now().Add(wait)
 		}
 		tl.Limit = &l
 	}
@@ -1691,7 +1703,7 @@ func (rs *Runs) endTurn(r Run) {
 		tl.Result = &res
 	}
 	if tl.Limit != nil {
-		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
+		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC(), Wait: wait})
 	}
 	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Session: tl.Session, Context: tl.Context, Result: tl.Result, Head: headMark(r.Checkout)}
 	var dropErr error

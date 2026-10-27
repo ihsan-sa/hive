@@ -11,13 +11,14 @@
  ▾ textkit-2          │
  › lead               │
    writer             │
-   reviewer        ●  │   you  19:58
- ▾ hive-web           │   Hello?
-   lead            ●  │   ▸ 1 reply  last 19:58
-   worker-2           │
-   reviewer           │   you  20:22
-   tribunal           │   The parser and the renderer are tangled together. Can you split the parser into its own
- ▸ website            │   package so reviewer can check it on its own?
+   reviewer        ●  │
+ ▾ hive-web           │   you  19:58
+   lead            ●  │   Hello?
+   worker-2           │   ▸ 1 reply  last 19:58
+   reviewer           │
+   tribunal           │   you  20:22
+ ▸ website            │   The parser and the renderer are tangled together. Can you split the parser into its own
+                      │   package so reviewer can check it on its own?
                       │   ▸ 2 replies  last 20:31
                       │
                       │   you  20:40
@@ -26,11 +27,10 @@
                       │     lead  20:41
                       │     It passes. I fixed two broken links in guide/install.md on the same branch.
                       │
-                      │
                       │   3 waiting on you · → then a to answer
                       │  ╭─ new thread · lead ────────────────────────────────────────────────────────────────────────╮
                       │  │ › Plan the 0.9 release: what's left, what's risky, and who's doing what. Short list,       │
                       │  │   please.                                                                                  │
                       │  ╰────────────────────────────────────────────────────────────────────────────────────────────╯
 ──────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────
- enter start thread   ctrl+j newline   esc leave box   ↑ pick a thread   end newest   tab switch pane   alt+v image
+ enter start thread   ctrl+j newline   esc leave box   ↑ pick a thread   ctrl+end newest   tab switch pane   alt+v image
