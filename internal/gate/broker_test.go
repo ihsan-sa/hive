@@ -443,3 +443,63 @@ func TestBrokerTally(t *testing.T) {
 		t.Fatalf("tally: passed %d refused %d checks %d, want 3 1 2", passed, refused, checks)
 	}
 }
+
+// Every gh call the Hive's GitHub forge makes on a project (core.GitHub: the
+// repository, issues, comments, branches) is one the broker lets through for
+// the side's own repository, so a child Hive's daemon works there. Whether
+// gh likes the fake's answer is not the point: nothing may be refused.
+func TestBrokerLetsTheForgesCallsThrough(t *testing.T) {
+	if _, err := exec.LookPath("gh"); err != nil {
+		t.Skip("no gh")
+	}
+	f := newFakeGitHub(t)
+	f.answer = gitHubAnswers
+	b := testBroker(t, f, "gate-x-candidate")
+	var mu sync.Mutex
+	var refused []string
+	b.Log = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		refused = append(refused, fmt.Sprintf(format, args...))
+	}
+	m, err := StartMeter(filepath.Join(shortTmp(), "bf.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	m.SetBroker(b)
+	env := sideEnv(t, m, b)
+	const repo = "Hive-RSI-Lab/gate-x-candidate"
+	for _, args := range [][]string{
+		{"api", "user", "-q", ".login"},
+		{"repo", "view", repo, "--json", "name"},
+		{"repo", "view", repo, "--json", "isEmpty", "-q", ".isEmpty"},
+		{"repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"},
+		{"issue", "list", "-R", repo, "--state", "all", "--limit", "100", "--json", "number,url,body"},
+		{"issue", "create", "-R", repo, "--title", "t", "--body", "b"},
+		{"issue", "comment", "1", "-R", repo, "--body", "b"},
+		{"issue", "close", "1", "-R", repo},
+		{"api", "--paginate", "repos/" + repo + "/issues/1/comments"},
+		{"api", "-X", "PATCH", "repos/" + repo + "/issues/comments/5", "-f", "body=b"},
+		{"api", "-X", "DELETE", "repos/" + repo + "/git/refs/heads/b"},
+	} {
+		cmd := exec.Command("gh", args...)
+		cmd.Env = env
+		out, _ := cmd.CombinedOutput()
+		if strings.Contains(string(out), "broker reaches only") {
+			t.Errorf("gh %s refused: %s", strings.Join(args, " "), out)
+		}
+	}
+	if len(refused) > 0 {
+		t.Errorf("the broker refused the forge's calls: %q", refused)
+	}
+	if got := strings.Join(f.requests(), "\n"); !strings.Contains(got, "/issues/comments/5") || !strings.Contains(got, "/git/refs/heads/b") {
+		t.Errorf("the forge's calls never reached GitHub:\n%s", got)
+	}
+	// git's credential helper is gh's, which answers from GH_TOKEN alone.
+	cmd := exec.Command("gh", "auth", "git-credential", "get")
+	cmd.Env, cmd.Stdin = env, strings.NewReader("protocol=https\nhost=github.com\n\n")
+	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "password="+brokerPlaceholder) {
+		t.Errorf("gh auth git-credential: %v %s", err, out)
+	}
+}
