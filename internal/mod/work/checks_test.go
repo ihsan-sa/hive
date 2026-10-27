@@ -3,6 +3,7 @@ package work
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1687,4 +1688,50 @@ func testStep(m *Module, task *Task, p core.Project) error {
 	delete(m.later, task.ID)
 	m.mu.Unlock()
 	return m.test(task, p)
+}
+
+// Only the front of a project's merge line tests merged with main (issue
+// #1727): a task behind an older PR waiting at the same step queues no test
+// and runs no merge, and one behind a test already in flight waits it out
+// however new its PR; once the line ahead clears, it tests and merges.
+func TestMergeLineOnlyFrontTests(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	head := task.SHA
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	older := &Task{ID: "t-older", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number - 1}, Reason: MergeLineWait + ": earlier"}
+	newer := &Task{ID: "t-newer", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number + 1}, Reason: mergedTestWait + " at x"}
+	elsewhere := &Task{ID: "t-held", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number - 2}, Reason: "waiting for the forge's checks"}
+	m.mu.Lock()
+	m.tasks[older.ID], m.tasks[newer.ID], m.tasks[elsewhere.ID] = older, newer, elsewhere
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.MergedTest != "" || !strings.HasPrefix(task.Reason, MergeLineWait) || !strings.Contains(task.Reason, fmt.Sprintf("#%d", older.PR.Number)) {
+		t.Fatalf("behind an older PR: stage %q, merged test %q, reason %q", task.Stage, task.MergedTest, task.Reason)
+	}
+	m.mu.Lock()
+	queued := len(m.mergeRuns)
+	older.Stage = StageMerged
+	if m.mergeRuns == nil {
+		m.mergeRuns = map[string]*mergeRun{}
+	}
+	m.mergeRuns[newer.ID] = &mergeRun{key: "x"} // a newer PR's test already in flight
+	m.mu.Unlock()
+	if queued != 0 {
+		t.Fatalf("a task behind the front queued a merged test")
+	}
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, fmt.Sprintf("#%d", newer.PR.Number)) {
+		t.Fatalf("behind a test in flight: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	m.mu.Lock()
+	m.mergeRuns[newer.ID].done = true
+	newer.Stage = StageMerged
+	m.mu.Unlock()
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.SHA != head || task.MergedOK == "" {
+		t.Fatalf("at the front: stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
+	}
 }

@@ -13,9 +13,9 @@ import (
 // stubGH replaces gh with reply for one test and records each call's args.
 func stubGH(t *testing.T, reply func(args []string) (string, string, error)) *[][]string {
 	t.Helper()
-	run, p := ghRun, ghPause
-	t.Cleanup(func() { ghRun, ghPause = run, p })
-	ghPause = &pause{}
+	run, p, q := ghRun, ghPause, ghQuota
+	t.Cleanup(func() { ghRun, ghPause, ghQuota = run, p, q })
+	ghPause, ghQuota = &pause{}, &quota{}
 	logins.Clear()
 	clear(workflowless.m)
 	var calls [][]string
@@ -71,6 +71,7 @@ func TestRateLimitRead(t *testing.T) {
 		"You have exceeded a secondary rate limit. Please wait a few minutes. (HTTP 403)":    true,
 		"HTTP 429: Too Many Requests (https://api.github.com/...)\nRetry-After: 30":          true,
 		"HTTP 403: API rate limit exceeded for user ID 1.":                                   true,
+		"gh pr view 936: GraphQL: API rate limit already exceeded for user ID 77406516.":     true,
 		"HTTP 403: Resource not accessible by integration":                                   false,
 		"GraphQL: Head sha can't be blank (createPullRequest)":                               false,
 		"dial tcp: lookup api.github.com: no such host":                                      false,
@@ -81,6 +82,75 @@ func TestRateLimitRead(t *testing.T) {
 	}
 	if d, _ := rateLimit("HTTP 429\nRetry-After: 30"); d != 30*time.Second {
 		t.Errorf("retry-after read as %v", d)
+	}
+}
+
+// The hour's quota spent (PR #936: GraphQL's "already exceeded" on a pr view)
+// holds every call on the login, reads too, without sending them, until the
+// reset rate_limit names for the spent quota; rate_limit itself still goes,
+// since GitHub doesn't count it. A secondary limit is no spent quota.
+func TestSpentQuotaHoldsEveryCall(t *testing.T) {
+	reset := time.Now().Add(40 * time.Minute).Unix()
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		if args[1] == "rate_limit" {
+			return fmt.Sprintf("4900 5000 %d\n0 5000 %d\n", reset-600, reset), "", nil
+		}
+		return "", "GraphQL: API rate limit already exceeded for user ID 77406516.", errors.New("exit status 1")
+	})
+	_, err := (GitHub{}).GetPR("o/r", 936)
+	var rl *RateLimited
+	if !errors.As(err, &rl) || !rl.All || rl.Until.Unix() != reset+1 {
+		t.Fatalf("spent quota read as %v", err)
+	}
+	n := len(*calls)
+	for _, call := range []func() error{
+		func() error { _, err := (GitHub{}).GetPR("o/r", 936); return err },
+		func() error { _, err := (GitHub{}).Checks("o/r", "abc"); return err },
+		func() error { return (GitHub{}).Comment("o/r", 936, "hi") },
+	} {
+		if err := call(); !errors.As(err, &rl) || !rl.All {
+			t.Fatalf("a call while the quota is spent: %v", err)
+		}
+	}
+	if len(*calls) != n {
+		t.Fatalf("calls sent while the quota is spent: %q", (*calls)[n:])
+	}
+	if _, err := (GitHub{}).RateReset("o/r"); err != nil || len(*calls) != n+1 {
+		t.Fatalf("rate_limit held: %v", err)
+	}
+	if spentQuota("You have exceeded a secondary rate limit (HTTP 403)") || spentQuota("was submitted too quickly") {
+		t.Fatal("a secondary limit read as the quota spent")
+	}
+}
+
+// The Hive looks at what is left of the login's quotas at most once every
+// q.every, and once either is under a tenth, every call waits for its reset,
+// leaving the rest to the person; with plenty left calls go on.
+func TestQuotaReserveHoldsAhead(t *testing.T) {
+	left := "4000"
+	reset := time.Now().Add(20 * time.Minute).Unix()
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		if args[1] == "rate_limit" {
+			return fmt.Sprintf("%s 5000 %d\n4000 5000 %d\n", left, reset, reset), "", nil
+		}
+		return `{"number":7}`, "", nil
+	})
+	ghQuota.every = time.Minute
+	if _, err := (GitHub{}).APIGet("o/r", "repos/o/r/pulls/7"); err != nil || len(*calls) != 2 {
+		t.Fatalf("with plenty left: %v, calls %q", err, *calls)
+	}
+	left = "499"
+	if _, err := (GitHub{}).APIGet("o/r", "repos/o/r/pulls/7"); err != nil || len(*calls) != 3 {
+		t.Fatalf("looked again within the minute: %v, calls %q", err, *calls)
+	}
+	ghQuota.held[""].looked = time.Time{}
+	_, err := (GitHub{}).APIGet("o/r", "repos/o/r/pulls/7")
+	var rl *RateLimited
+	if !errors.As(err, &rl) || !rl.All || rl.Until.Unix() != reset+1 || !strings.Contains(err.Error(), "499 of the login's 5000 REST calls") {
+		t.Fatalf("under the reserve: %v", err)
+	}
+	if len(*calls) != 4 || (*calls)[3][1] != "rate_limit" {
+		t.Fatalf("a call sent under the reserve: %q", *calls)
 	}
 }
 

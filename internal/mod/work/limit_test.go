@@ -283,3 +283,29 @@ func TestOnlyTimeoutKillsAreSlow(t *testing.T) {
 		t.Fatalf("a test's timeout: failures %d, kills %d", task.Failures, task.Kills)
 	}
 }
+
+// The login's quota spent (PR #936's "API rate limit already exceeded" on a
+// pr view) holds a task without a failure and the dashboard says every call
+// waits; a task it stopped before comes back once the hold is over.
+func TestSpentQuotaWaitsAndComesBack(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	until := time.Now().Add(30 * time.Minute)
+	m.settle(task, &core.RateLimited{Until: until, Text: "GraphQL: API rate limit already exceeded for user ID 77406516.", All: true})
+	if task.Failures != 0 || !task.Retry.Equal(until) {
+		t.Fatalf("failures %d, retry %v", task.Failures, task.Retry)
+	}
+	if o := m.Offline(); !strings.Contains(o, "the Hive's calls wait until") {
+		t.Fatalf("dashboard says %q", o)
+	}
+	stopped := &Task{ID: "t2", Project: "p", Kind: "work", Stage: StageStopped, Reason: gaveUpOnErrors + "gh pr view 936: GraphQL: API rate limit already exceeded for user ID 77406516."}
+	m.save(stopped, "stopped")
+	m.revive()
+	if got, _ := m.Get("t2"); got.Stage != StageStopped {
+		t.Fatalf("brought back during the hold: %q", got.Stage)
+	}
+	m.limit = time.Time{}
+	m.revive()
+	if got, _ := m.Get("t2"); got.Stage != StageLanding {
+		t.Fatalf("not brought back: %q %q", got.Stage, got.Reason)
+	}
+}
