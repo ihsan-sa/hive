@@ -43,6 +43,12 @@ var ExecTimeout = 10 * time.Minute
 // WardenTimeout is how long a warden may weigh before the request goes to the person.
 var WardenTimeout = 30 * time.Minute
 
+// WardenHoldMax bounds how long a request may sit with its warden in all,
+// parked, queued and weighing together: past it the request goes to the
+// person, so a warden parked on a weekly limit, stuck in a retry loop or woken
+// again and again can't hold an approval out of sight for days.
+var WardenHoldMax = 24 * time.Hour
+
 // Request is an agent's ask for something past its reach.
 type Request struct {
 	ID       string    `json:"id"`
@@ -99,7 +105,8 @@ type Module struct {
 	act  sync.Mutex // serialises decisions on requests
 	mu   sync.Mutex
 	reqs map[string]*Request
-	busy map[string]bool // steps running in this process
+	busy map[string]bool      // steps running in this process
+	held map[string]time.Time // requests whose warden Tick last saw parked or queued, and when; guarded by act
 
 	reopen func(id, text string) error // the core's Reopen; a test swaps it
 }
@@ -210,6 +217,9 @@ func (m *Module) opRequests(core.Run, json.RawMessage) (any, error) {
 		v := view{r.ID, r.Origin, core.Clip(r.Want, 200), core.Clip(r.Why, 300), r.State, r.Warden, r.Decision, core.Clip(r.Reason, 300), r.Outcome, "", r.Updated}
 		if a, ok := m.C.Person.Get(r.Ask); ok && a.Answer == "" {
 			v.Answer = fmt.Sprintf("waiting on the person: Waiting in the control center, or %s approve %s / %s refuse %s", core.Cmd, a.ID, core.Cmd, a.ID)
+		}
+		if w, ok := m.C.Runs.Get(r.Warden); ok && r.State == "weighing" && (w.Status == core.StatusParked || w.Status == core.StatusQueued) {
+			v.Answer = fmt.Sprintf("its warden is %s (%s), so the request waits; it goes to the person %.0f hours after it was asked", w.Status, core.Clip(w.Reason, 160), WardenHoldMax.Hours())
 		}
 		out = append(out, v)
 	}
@@ -641,12 +651,22 @@ func (m *Module) Tick() {
 		switch req.State {
 		case "weighing":
 			w, ok := m.C.Runs.Get(req.Warden)
-			late := wardenLate(req, w, ok)
+			if ok && (w.Status == core.StatusParked || w.Status == core.StatusQueued) {
+				if m.held == nil {
+					m.held = map[string]time.Time{}
+				}
+				m.held[req.ID] = time.Now()
+			}
+			late := wardenLate(req, w, ok, m.held[req.ID])
 			if late || ok && (w.Terminal() || w.Status == core.StatusQuiet) {
+				delete(m.held, req.ID)
 				req.Reason = "It ended without deciding."
 				if late {
 					m.C.Runs.Stop(req.Warden, "out of time to weigh the request")
 					req.Reason = "It ran out of time to decide."
+					if !req.Created.IsZero() && time.Since(req.Created) > WardenHoldMax {
+						req.Reason = fmt.Sprintf("It held the request for over %.0f hours without deciding (last %s: %s).", WardenHoldMax.Hours(), w.Status, core.Clip(w.Reason, 200))
+					}
 				}
 				if req.Settles != nil {
 					req.State, req.Outcome = "failed", "the warden ended without deciding"
@@ -705,16 +725,24 @@ func (m *Module) Tick() {
 
 // wardenLate says whether a warden has had its WardenTimeout to weigh. The
 // clock runs only while the warden can take turns: one parked on a usage
-// limit or still queued for a slot isn't late, and it restarts at the turn
-// that ends the wait, so a warden that never ran is never timed out to the
-// person.
-func wardenLate(req Request, w core.Run, ok bool) bool {
+// limit or still queued for a slot isn't late, and it restarts at the latest
+// of the request, the warden's latest turn and the last time it was seen
+// held (so a warden that leaves a park some way other than a new turn gets
+// its full time too). Whatever its state, a request older than WardenHoldMax
+// is late, which bounds a long park and a warden woken many times alike.
+func wardenLate(req Request, w core.Run, ok bool, held time.Time) bool {
+	if !req.Created.IsZero() && time.Since(req.Created) > WardenHoldMax {
+		return true
+	}
 	if ok && (w.Status == core.StatusParked || w.Status == core.StatusQueued) {
 		return false
 	}
 	from := req.Updated
 	if ok && w.TurnStarted.After(from) {
 		from = w.TurnStarted
+	}
+	if held.After(from) {
+		from = held
 	}
 	return time.Since(from) > WardenTimeout
 }
