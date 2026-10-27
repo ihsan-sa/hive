@@ -184,6 +184,7 @@ func failed(m *model) {
 // TestDesignFrames renders each screen at a fixed size and compares the text
 // with testdata, which is the design's frame plus the deviations the PR lists.
 func TestDesignFrames(t *testing.T) {
+	var shots []designShot
 	for _, c := range []struct {
 		name string
 		w, h int
@@ -221,12 +222,16 @@ func TestDesignFrames(t *testing.T) {
 		m := designModel(c.w, c.h)
 		c.set(m)
 		// The frames show Unix paths; Windows joins the same paths with its own separator.
-		got := plain(m.View())
-		for _, p := range []string{core.Workspace{}.KB(), filepath.Join("/home/you/hive", ".hive", "config.json")} {
-			got = strings.ReplaceAll(got, p, filepath.ToSlash(p))
+		unix := func(s string) string {
+			for _, p := range []string{core.Workspace{}.KB(), filepath.Join("/home/you/hive", ".hive", "config.json")} {
+				s = strings.ReplaceAll(s, p, filepath.ToSlash(p))
+			}
+			return s
 		}
+		got := unix(plain(m.View()))
 		got = strings.ReplaceAll(got, imageKey+" image", "alt+v image") // ctrl+v on macOS
-		if c.name == "02b-sending" || c.name == "02c-sent" {            // the frame is the thread pane alone
+		shots = append(shots, colourShot(c.name, c.w, c.h, m, unix))
+		if c.name == "02b-sending" || c.name == "02c-sent" { // the frame is the thread pane alone
 			got = column(got, 72, 48, 16)
 		}
 		if os.Getenv("HIVE_UPDATE_FRAMES") != "" { // rewrite the frames; list the change in the PR
@@ -241,6 +246,7 @@ func TestDesignFrames(t *testing.T) {
 			t.Errorf("%s differs from its frame (-want +got):\n%s", c.name, d)
 		}
 	}
+	checkDesignPackage(t, shots)
 }
 
 // plain drops styling and trailing blanks, so the text frame alone compares.
