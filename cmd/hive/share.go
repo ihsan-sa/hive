@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -148,6 +149,10 @@ func bundleRef(body []byte) string {
 // loginDirs are the old places of a run's login tokens, which never leave.
 var loginDirs = []string{"runs/*/home", "runs/*/host/codex*"}
 
+// leftOutFiles never leave either: a run's leftover sandbox specs, which can
+// carry a token (internal/sandbox writeTempSpec).
+var leftOutFiles = []string{"runs/*/host/*.sandbox.json"}
+
 // shareParts finds every regular file of the shared set and the runs.
 func shareParts(ws core.Workspace) []part {
 	var parts []part
@@ -158,6 +163,11 @@ func shareParts(ws core.Workspace) []part {
 			for _, pat := range loginDirs {
 				if ok, _ := path.Match(pat, rel); ok && d != nil && d.IsDir() {
 					return fs.SkipDir
+				}
+			}
+			for _, pat := range leftOutFiles {
+				if ok, _ := path.Match(pat, rel); ok {
+					return nil
 				}
 			}
 			if err == nil && d.Type().IsRegular() {
@@ -274,12 +284,19 @@ func readNoFollow(root *os.Root, rel string) ([]byte, error) {
 	if err != nil || !before.Mode().IsRegular() {
 		return nil, errors.New("not a regular file")
 	}
-	f, err := dir.Open(name)
+	return readSame(dir, name, before)
+}
+
+// readSame reads name in dir only if it is still the file before describes.
+func readSame(dir *os.Root, name string, before os.FileInfo) ([]byte, error) {
+	// O_NONBLOCK, so a FIFO swapped in after the check can't hold the open
+	// waiting for a writer; the check below then refuses it.
+	f, err := dir.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	if after, err := f.Stat(); err != nil || !os.SameFile(before, after) {
+	if after, err := f.Stat(); err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) {
 		return nil, errors.New("file changed while reading")
 	}
 	return io.ReadAll(f)

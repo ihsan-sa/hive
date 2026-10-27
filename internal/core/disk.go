@@ -564,17 +564,8 @@ func (e *Effects) RemoveCheckout(project, id string) error {
 	// Marked live, Prune leaves it to this call; one a crash left goes there.
 	os.MkdirAll(e.ws.Cache(), 0o755)
 	aside := filepath.Join(e.ws.Cache(), "removing-"+NewID())
-	e.mu.Lock()
-	if e.homes == nil {
-		e.homes = map[string]bool{}
-	}
-	e.homes[aside] = true
-	e.mu.Unlock()
-	defer func() {
-		e.mu.Lock()
-		delete(e.homes, aside)
-		e.mu.Unlock()
-	}()
+	e.markLive(aside, true)
+	defer e.markLive(aside, false)
 	unlock := e.lock(project)
 	err := os.Rename(dir, aside)
 	if err != nil {
@@ -589,6 +580,20 @@ func (e *Effects) RemoveCheckout(project, id string) error {
 	}
 	e.j.MustAppend("effect.checkout_removed", map[string]string{"project": project, "id": id})
 	return nil
+}
+
+// markLive marks a folder Prune must leave alone, or clears the mark.
+func (e *Effects) markLive(p string, on bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.homes == nil {
+		e.homes = map[string]bool{}
+	}
+	if on {
+		e.homes[p] = true
+	} else {
+		delete(e.homes, p)
+	}
 }
 
 // Prune removes what checks left behind: homes of checks no longer running,
@@ -653,7 +658,7 @@ func (e *Effects) Prune() string {
 	for _, pr := range projects {
 		dirs, _ := os.ReadDir(filepath.Join(e.ws.Gates(), pr.Name()))
 		for _, d := range dirs {
-			if p := filepath.Join(e.ws.Gates(), pr.Name(), d.Name()); d.IsDir() && d.Name() != "recursive" && old(p, staleAfter) {
+			if p := filepath.Join(e.ws.Gates(), pr.Name(), d.Name()); d.IsDir() && d.Name() != "recursive" && !live(p) && old(p, staleAfter) {
 				drop(p)
 			}
 		}

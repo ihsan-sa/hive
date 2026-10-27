@@ -188,7 +188,8 @@ func checkStartHarness(ws core.Workspace) error {
 // sandboxChanged: a saved setting picks the sandbox again only when it names
 // a different one. Probing it (bwrap here, several wsl.exe calls on Windows)
 // takes seconds and holds up every state poll, so doing it on each setting
-// made the Settings view slow to answer.
+// made the Settings view slow to answer. A sandbox that failed is probed
+// again on any save, as saving was how a person retried one they had fixed.
 func sandboxChanged(old, c core.Config) bool {
 	return old.Sandbox != c.Sandbox || old.WSLDistro != c.WSLDistro
 }
@@ -857,9 +858,7 @@ func (s *server) routes() http.Handler {
 			return nil, err
 		}
 		models.Record(a.C.J, cur, c, "person (Settings)")
-		if sandboxChanged(cur, c) {
-			a.C.ResetSandbox()
-		}
+		a.C.ResetSandbox(sandboxChanged(cur, c))
 		return c, nil
 	})
 	h("/api/module/access", func(r *http.Request) (any, error) {

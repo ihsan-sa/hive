@@ -219,8 +219,21 @@ func (m *Module) postJoins(t *Task, p core.Project) {
 }
 
 // notify tells t's thread, and the thread of each lead whose brief joined
-// it, how t went.
+// it, how t went. A helper's spawner hears it too: a lead through its thread,
+// any other agent still running as a message, since a worker that split its
+// work among helpers has no thread of its own to read.
 func (m *Module) notify(t *Task, text string) {
+	if t.Kind == "helper" {
+		if r, ok := m.C.Runs.Get(t.From); ok && r.Role != "lead" && (!r.Terminal() || r.Persistent) {
+			m.C.Runs.Send(r.ID, fmt.Sprintf("[your helper's task %s] %s", t.ID, text))
+		}
+	}
+	m.notifyThreads(t, text)
+}
+
+// notifyThreads is notify without the message to a helper's spawner, for news
+// the spawner already has.
+func (m *Module) notifyThreads(t *Task, text string) {
 	m.Chat.Notify(t.Chat, t.Thread, text)
 	seen := map[[2]string]bool{{t.Chat, t.Thread}: true}
 	for _, j := range t.Joins {

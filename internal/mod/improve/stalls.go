@@ -54,6 +54,18 @@ func waitCause(reason string) string {
 	return work.HoldKey(reason)
 }
 
+// checked is the commit whose test t waits on in its stage: its head in
+// testing, its head merged with main in merging (work.mergedTests).
+func checked(t work.Task) string {
+	switch {
+	case t.Stage == work.StageTesting:
+		return t.SHA
+	case t.Stage == work.StageMerging && t.MergedTest != "":
+		return t.MergedTest
+	}
+	return ""
+}
+
 // waitKey is the stall key of the wait a task in project and stage shares.
 func waitKey(project, stage, cause string) string {
 	return "wait:" + project + ":" + stage + ":" + cause
@@ -159,10 +171,14 @@ func (m *Module) Watch() {
 	}
 	waits := map[string]*group{}
 	var causes []string
-	for _, t := range m.Work.List(func(t work.Task) bool { return !t.Terminal() && t.Stage != work.StagePerson }) {
+	// A merged task's change is on main: what is left (its follow-up brief,
+	// then done) is the Hive's bookkeeping, which a recheck can't retry.
+	for _, t := range m.Work.List(func(t work.Task) bool {
+		return !t.Terminal() && t.Stage != work.StagePerson && t.Stage != work.StageMerged
+	}) {
 		now["task:"+t.ID] = t.Stage
 		// The recursive gate runs on its own clock, as many at once as the machine carries.
-		if t.Queued() || strings.HasPrefix(t.Reason, work.GateWait) || t.Stage == work.StageTesting && slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }) {
+		if t.Queued() || strings.HasPrefix(t.Reason, work.GateWait) || slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == checked(t) }) {
 			continue
 		}
 		if c := waitCause(t.Reason); c != "" && t.Stage != work.StageWorking && t.Stage != work.StageReviewing { // a run's own hang is still its own
@@ -190,9 +206,9 @@ func (m *Module) Watch() {
 		m.mu.Lock()
 		sp, took := m.spells[t.ID], append([]float64(nil), m.took[t.Stage]...)
 		m.mu.Unlock()
-		if t.Stage == work.StageTesting {
+		if sha := checked(t); sha != "" {
 			for _, u := range running {
-				if u.Project == t.Project && u.SHA == t.SHA {
+				if u.Project == t.Project && u.SHA == sha {
 					sp.since = latest(sp.since, u.Since)
 				}
 			}
