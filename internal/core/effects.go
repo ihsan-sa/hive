@@ -133,8 +133,9 @@ type Verdict struct {
 const SeatSecurity = "security"
 
 // PanelSeats is how many sit on the panel that also reads a change to a root
-// path on the security list (what runs with elevated rights); a majority of
-// their lands passes it.
+// path on the security list (what runs with elevated rights). Every seat's
+// verdict is counted: it passes once all of them have read and a majority
+// said land, never on an early majority with a seat still reading.
 const PanelSeats = 3
 
 // PanelSeat names the panel's seat i.
@@ -1086,7 +1087,7 @@ func PanelTally(reads map[string]Verdict) (lands, fixes int) {
 // security read it needs: an outside read (the box's perms seat or
 // architect) decides when there is one, a fix from either outweighing a
 // land; otherwise the Hive's own security seat said land on its own diff,
-// and for a root path a majority of the panel did too.
+// and for a root path the whole panel read it and a majority said land.
 func (e *Effects) SecurityOK(project string, ch Change) bool {
 	if len(ch.Security) == 0 {
 		return true
@@ -1101,8 +1102,8 @@ func (e *Effects) SecurityOK(project string, ch Change) bool {
 	if reads[SeatSecurity].Verdict != "land" {
 		return false
 	}
-	lands, _ := PanelTally(reads)
-	return len(ch.SecurityRoot) == 0 || lands > PanelSeats/2
+	lands, fixes := PanelTally(reads)
+	return len(ch.SecurityRoot) == 0 || (lands+fixes == PanelSeats && lands > PanelSeats/2)
 }
 
 // OwnDiff is the diff from base (a change's merge base with main) to sha, as

@@ -734,9 +734,9 @@ func TestRootPanelMovedDiff(t *testing.T) {
 	m, task, p, f := rootPanelRig(t)
 	seatSays(t, m, task, core.PanelSeat(0), "land")
 	seatSays(t, m, task, core.PanelSeat(1), "land")
+	seatSays(t, m, task, core.PanelSeat(2), "fix")
 	first := task.Diff
-	mergeOnce(t, m, task, p) // records one land
-	mergeOnce(t, m, task, p) // and the other
+	mergeOnce(t, m, task, p) // records the three reads
 	if task.Stage != StageMerging || !m.C.Effects.SecurityOK(p.Name, core.Change{Security: []string{"ops/deploy.sh"}, SecurityRoot: []string{"ops/deploy.sh"}, DiffID: first}) {
 		t.Fatalf("the first diff didn't pass on its seat and panel majority: stage %q", task.Stage)
 	}
@@ -765,12 +765,51 @@ func TestRootPanelMovedDiff(t *testing.T) {
 		t.Fatalf("the new diff merged without its own panel: stage %q, reason %q", task.Stage, task.Reason)
 	}
 	seatSays(t, m, task, core.PanelSeat(0), "land")
+	seatSays(t, m, task, core.PanelSeat(1), "land")
 	seatSays(t, m, task, core.PanelSeat(2), "land")
 	for i := 0; i < 4 && task.Stage == StageMerging; i++ {
 		mergeOnce(t, m, task, p)
 	}
 	if task.Stage != StageMerged {
 		t.Fatalf("stage %q, reason %q after the new diff's panel majority", task.Stage, task.Reason)
+	}
+}
+
+// Every panel seat's verdict is counted: two lands don't merge while the third
+// seat is still reading, and the seat that ended first is recorded with the
+// others, not passed over by the majority behind it.
+func TestRootPanelWaitsForEverySeat(t *testing.T) {
+	m, task, p, f := rootPanelRig(t)
+	seatSays(t, m, task, core.PanelSeat(0), "land")
+	seatSays(t, m, task, core.PanelSeat(1), "land")
+	for i := 0; i < 3; i++ {
+		mergeOnce(t, m, task, p)
+	}
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "panel") || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("merged on two lands with a seat still reading: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	seatSays(t, m, task, core.PanelSeat(2), "fix")
+	for i := 0; i < 3 && task.Stage == StageMerging; i++ {
+		mergeOnce(t, m, task, p)
+	}
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q after the whole panel read", task.Stage, task.Reason)
+	}
+	if reads := m.C.Effects.SecurityReads(p.Name, task.Diff); reads[core.PanelSeat(2)].Verdict != "fix" {
+		t.Fatalf("the third seat's verdict wasn't counted: %+v", reads)
+	}
+}
+
+// A seat that ends first is recorded in the same pass as the others that have
+// ended, not left behind the first one's turn.
+func TestRootPanelRecordsEveryEndedSeat(t *testing.T) {
+	m, task, p, _ := rootPanelRig(t)
+	seatSays(t, m, task, core.PanelSeat(2), "land")
+	seatSays(t, m, task, core.PanelSeat(0), "land")
+	seatSays(t, m, task, core.PanelSeat(1), "land")
+	mergeOnce(t, m, task, p)
+	if reads := m.C.Effects.SecurityReads(p.Name, task.Diff); len(reads) != 1+core.PanelSeats {
+		t.Fatalf("one pass recorded %d of the seats' reads: %+v", len(reads), reads)
 	}
 }
 

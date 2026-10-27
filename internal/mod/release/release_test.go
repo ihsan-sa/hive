@@ -470,6 +470,11 @@ func TestRootReleaseOnTheHivesReads(t *testing.T) {
 	}
 	seated(m, "a2", "d2", core.PanelSeat(1), "land")
 	m.AfterKept("hive", "m2")
+	if len(n.got) != 0 {
+		t.Fatalf("two lands with a panel seat still reading released a root change: %v", n.got)
+	}
+	seated(m, "a2", "d2", core.PanelSeat(2), "fix")
+	m.AfterKept("hive", "m2")
 	body := n.got["v0.0.1"]
 	if !strings.Contains(body, "install/root.sh) passed the security seat") || strings.Contains(body, "The person released it") {
 		t.Fatalf("the release should say the Hive's reads passed its root paths: %q", body)
@@ -541,7 +546,7 @@ func TestRootReadCoversTheWholeDiff(t *testing.T) {
 	m, n, _, land := selfHive(t)
 	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh", ".github/CODEOWNERS"}, "diff": "d2"})
 	land("a2", "r2")
-	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1)} {
+	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
 		seated(m, "a2", "d2", seat, "land")
 	}
 	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 3, "sha": "a3", "merge_sha": "m3", "root": []string{".github/CODEOWNERS"}, "diff": "d3"})
