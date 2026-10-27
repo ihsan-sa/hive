@@ -144,3 +144,41 @@ func TestObserve(t *testing.T) {
 		t.Errorf("an arm's peaks aren't in the table:\n%s", tab)
 	}
 }
+
+// TestOverlaps: worker runs alive at once make a pair, whether the Hive
+// introduced them or not; a message between them makes it one that talked,
+// and one back an answered one. A worker that ended before another started
+// pairs with no one.
+func TestOverlaps(t *testing.T) {
+	journal := strings.Join([]string{
+		`{"at":"2026-10-25T01:00:00Z","kind":"run.created","data":{"id":"w-a","role":"worker"}}`,
+		`{"at":"2026-10-25T01:01:00Z","kind":"run.created","data":{"id":"w-b","role":"worker"}}`,
+		`{"at":"2026-10-25T01:01:01Z","kind":"work.met","data":{"task":"t-b","run":"w-b","with":[{"task":"t-a","run":"w-a","files":["x.go"]}]}}`,
+		`{"at":"2026-10-25T01:02:00Z","kind":"msg.sent","data":{"from":"w-b","to":"w-a","text":"I change run"}}`,
+		`{"at":"2026-10-25T01:03:00Z","kind":"msg.sent","data":{"from":"w-a","to":"w-b","text":"I change execute"}}`,
+		`{"at":"2026-10-25T01:03:30Z","kind":"msg.sent","data":{"from":"w-a","to":"w-b","text":"and its test"}}`,
+		`{"at":"2026-10-25T01:04:00Z","kind":"run.created","data":{"id":"w-c","role":"worker"}}`,
+		`{"at":"2026-10-25T01:05:00Z","kind":"msg.sent","data":{"from":"w-c","to":"w-a","text":"hi"}}`,
+		`{"at":"2026-10-25T01:10:00Z","kind":"run.turn_ended","data":{"id":"w-a"}}`,
+		`{"at":"2026-10-25T01:11:00Z","kind":"run.finish","data":{"id":"w-b","finish":{"status":"done"}}}`,
+		`{"at":"2026-10-25T01:12:00Z","kind":"run.turn_ended","data":{"id":"w-c"}}`,
+		`{"at":"2026-10-25T02:00:00Z","kind":"run.created","data":{"id":"w-d","role":"worker"}}`,
+		`{"at":"2026-10-25T02:05:00Z","kind":"run.turn_ended","data":{"id":"w-d"}}`,
+	}, "\n")
+	rep, err := Observe(strings.NewReader(journal), time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a-b, a-c and b-c overlap; d is alone. a-b met, talked (3) and answered;
+	// a-c talked (1); b-c didn't.
+	if rep.Overlaps != 3 || rep.Met != 1 || rep.PairMsgs != 4 || rep.Talked != 2 || rep.Answered != 1 {
+		t.Errorf("overlaps %d, met %d, pair msgs %d, talked %d, answered %d; want 3, 1, 4, 2, 1", rep.Overlaps, rep.Met, rep.PairMsgs, rep.Talked, rep.Answered)
+	}
+	if tab := Table([]Report{rep}); !strings.Contains(tab, "| 4 | 4 | 3 | 1 | 4 | 2 | 1 |") {
+		t.Errorf("the pairs aren't in the table:\n%s", tab)
+	}
+	// The window keeps the pairs alive in it: from 01:30, only d.
+	if rep, _ := Observe(strings.NewReader(journal), time.Date(2026, 10, 25, 1, 30, 0, 0, time.UTC), time.Time{}); rep.Overlaps != 0 {
+		t.Errorf("from 01:30 %d pairs overlap, want 0", rep.Overlaps)
+	}
+}

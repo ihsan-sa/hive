@@ -24,11 +24,26 @@ import (
 // gate's unequal TMPDIRs) landed as 4425272 before the arms ran on real agents.
 const softTask = "An approved warden step can say it needs longer than 10 minutes. internal/mod/risk/risk.go:41: ExecTimeout = 10m applies to every approved step, and a host gate baseline (6 reps, 1-2h) was killed by it and reported only 'signal: killed'. Done: an approved script may carry a line '# hive-timeout: <Go duration>'; the line is weighed and pinned with the script's text, and capped at 4h. Without it a step still gets ExecTimeout (10m). A step that times out reports 'timed out after X' instead of a bare 'signal: killed'. docs/risk.md says so. Tests: the timeout line's parsing and a script that outlives the default."
 
+// softPair is the overlap arm's two tasks (HIVE_SOFT_OVERLAP=1): two open
+// fixes that name one file, internal/mod/risk/risk.go, each naming its own
+// function in it (`run`, `execute`), so the queue starts them side by side
+// rather than holding the second for the first's file (work.apart), with and
+// without the introductions of #1723. Both change what a finished step
+// reports, which `execute` writes from what `run` returns: what one changes
+// the other meets, so there is something to tell.
+var softPair = []string{
+	"An approved warden step can say it needs longer than 10 minutes. In internal/mod/risk/risk.go, `run` applies ExecTimeout (10m) to every approved step, and a host gate baseline (6 reps, 1-2h) was killed by it and reported only 'signal: killed'. Done: an approved script may carry a line '# hive-timeout: <Go duration>', pinned with the script's text and capped at 4h; without it a step still gets 10m; a step that times out reports 'timed out after X' instead of a bare 'signal: killed'. Tests: the line's parsing and a script that outlives the default.",
+	"A failed warden step's output loses its error. In internal/mod/risk/risk.go, `execute` keeps the first 4000 bytes of what a step printed (core.Clip(out, 4000)), so for a long step that fails the person sees its start and not the error at its end. Done: the kept output is the head and the tail (about 2000 bytes each) with a line saying how many bytes were cut between; output under the limit is kept whole. Tests: a long output keeps both ends and the cut line; a short one is unchanged.",
+}
+
 // TestSoftLayer is the soft-layer experiment (docs/soft-layer.md): for each
 // arm (HIVE_SOFT=all, or a comma list of softlayer.Variants), a sub-Hive in
 // the state of this one (its source as the project, with its goals and
 // lessons, and HIVE_SOFT_KB's notes as its knowledge base), its agents module
 // replaced by the arm's prompts, given one real task in the lead's chat.
+// With HIVE_SOFT_OVERLAP=1 each arm instead gets softPair, two tasks naming
+// one file, with two workers at once: the arm that can show peer talk, run
+// before and after a change to how overlapping workers meet (#1723).
 // Each is then observed from its journal: who ran, who talked to whom, what
 // they asked for, and whether the task landed. It judges nothing and fails
 // only if an arm can't be set up; the table is the result.
@@ -58,9 +73,12 @@ func TestSoftLayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task := envOr("HIVE_SOFT_TASK", softTask)
+	tasks := []string{envOr("HIVE_SOFT_TASK", softTask)}
+	if os.Getenv("HIVE_SOFT_OVERLAP") == "1" {
+		tasks = softPair
+	}
 	if os.Getenv("HIVE_SOFT_STATE") == "demo" {
-		task = benchAsks[0]
+		tasks = benchAsks[:len(tasks)]
 	}
 	wait := 15 * minute
 	if os.Getenv("HIVE_E2E_HARNESS") != "" {
@@ -97,7 +115,7 @@ func TestSoftLayer(t *testing.T) {
 				// Registered first, so it runs last: after the arm's daemon
 				// and what it left are ended and its folder removed.
 				t.Cleanup(func() { slots <- slot })
-				reps[i] = softArm(t, arm, slot, string(essay), task, wait, filepath.Join(out, arm.Name))
+				reps[i] = softArm(t, arm, slot, string(essay), tasks, wait, filepath.Join(out, arm.Name))
 			})
 		}
 	})
@@ -107,7 +125,7 @@ func TestSoftLayer(t *testing.T) {
 		// one arm's processes from the other's.
 		both = " With two arms at a time, an arm's peak MB includes the other arm's processes while both ran."
 	}
-	table := fmt.Sprintf("Task: %s\n\nHarness: %s; each arm waited up to %s, %d at a time on %d CPUs each.%s%s\n\n%s", task, envOr("HIVE_E2E_HARNESS", "fake"), wait, at, softCPUs, both, cgroupPeak(), softlayer.Table(reps))
+	table := fmt.Sprintf("Tasks, %d workers at once: %s\n\nHarness: %s; each arm waited up to %s, %d at a time on %d CPUs each.%s%s\n\n%s", len(tasks), strings.Join(tasks, "\n\n"), envOr("HIVE_E2E_HARNESS", "fake"), wait, at, softCPUs, both, cgroupPeak(), softlayer.Table(reps))
 	if err := os.WriteFile(filepath.Join(out, "table.md"), []byte(table), 0o644); err != nil {
 		t.Errorf("keeping the table: %v", err)
 	}
@@ -126,16 +144,18 @@ func envOr(k, def string) string {
 const softCPUs = 4
 
 // softArm runs one arm, on the slot-th group of softCPUs CPUs, and keeps its
-// journal, chats and report in keep.
-func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, wait time.Duration, keep string) softlayer.Report {
-	// The caps: one worker and one check at a time, set as the person's
-	// ceilings so the pace can't raise them, and builds of two packages at
-	// once where a check gets the daemon's environment (a bare sandbox).
+// journal, chats and report in keep. Each task is its own message in the
+// lead's chat, and the arm ends when all of them landed.
+func softArm(t *testing.T, arm softlayer.Variant, slot int, essay string, tasks []string, wait time.Duration, keep string) softlayer.Report {
+	// The caps: a worker per task (one, or two for the overlap pair) and one
+	// check at a time, set as the person's ceilings so the pace can't raise
+	// them, and builds of two packages at once where a check gets the
+	// daemon's environment (a bare sandbox).
 	h := startOn(t, softCPUs, slot, bin, func(c *core.Config) {
 		if os.Getenv("HIVE_SOFT_WARDENS") != "1" {
 			c.Autonomy = 1
 		}
-		c.MaxWorkers, c.MaxChecks, c.MaxGates, c.Ceilings = 1, 1, 1, true
+		c.MaxWorkers, c.MaxChecks, c.MaxGates, c.Ceilings = len(tasks), 1, 1, true
 	}, "GOFLAGS=-p=2", fmt.Sprintf("GOMAXPROCS=%d", softCPUs))
 	if err := arm.Install(h.ws.Modules(), essay); err != nil {
 		t.Fatal(err)
@@ -143,17 +163,19 @@ func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, 
 	if kb := os.Getenv("HIVE_SOFT_KB"); kb != "" {
 		copyNotes(t, kb, h.ws.KB())
 	}
-	project, ask := "hive", "In hive: "+task
+	project, prefix := "hive", "In hive: "
 	if os.Getenv("HIVE_SOFT_STATE") == "demo" { // a quick look at the pipeline, on the demo project
 		var p core.Project
 		h.post("/api/project", map[string]any{"demo": true}, &p)
-		project, ask = p.Name, task
+		project, prefix = p.Name, ""
 	} else {
 		seedSource(t, h, "me/hive")
 		h.post("/api/project", map[string]any{"name": "hive", "repo": "me/hive"}, nil)
 	}
 	began := time.Now().UTC()
-	h.post("/api/chat", map[string]string{"chat": "lead", "text": ask}, nil)
+	for _, task := range tasks {
+		h.post("/api/chat", map[string]string{"chat": "lead", "text": prefix + task}, nil)
+	}
 	stopWatch := watchPeaks()
 
 	outcome := ""
@@ -166,8 +188,12 @@ func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, 
 			outcome = "the sub-Hive's daemon stopped answering after " + time.Since(began).Round(time.Second).String() + ": " + err.Error()
 			break
 		}
-		if tk, ok := askLanded(st, project); ok {
-			outcome = "landed " + shortSHA(tk.MergeSHA) + " after " + time.Since(began).Round(time.Second).String()
+		if landed := asksLanded(st, project); len(landed) >= len(tasks) {
+			var shas []string
+			for _, tk := range landed {
+				shas = append(shas, shortSHA(tk.MergeSHA))
+			}
+			outcome = "landed " + strings.Join(shas, ", ") + " after " + time.Since(began).Round(time.Second).String()
 		} else if time.Now().After(deadline) {
 			outcome = "not landed: " + stages(st, project)
 		}
@@ -220,19 +246,20 @@ func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, 
 	return rep
 }
 
-// askLanded finds the asked task merged: one the lead filed from its chat.
-// Another merge (a fix the project's lead filed for a red main, say) is
+// asksLanded finds the asked tasks merged: those the lead filed from its
+// chat. Another merge (a fix the project's lead filed for a red main, say) is
 // counted in the report's merges but doesn't end the arm: in the second real
 // run (2026-10-25) both arms "landed" that way while the ask still waited.
-func askLanded(st api.State, project string) (work.Task, bool) {
+func asksLanded(st api.State, project string) []work.Task {
+	var out []work.Task
 	for _, p := range st.Projects {
 		for _, t := range p.Tasks {
 			if p.Name == project && t.Chat == "lead" && t.Stage == work.StageDone && t.MergeSHA != "" && !strings.HasPrefix(t.Title, "Revert") {
-				return t, true
+				out = append(out, t)
 			}
 		}
 	}
-	return work.Task{}, false
+	return out
 }
 
 // armTookEffect: the system prompt of every run the sub-Hive made starts

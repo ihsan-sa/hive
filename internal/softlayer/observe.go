@@ -25,7 +25,18 @@ type Report struct {
 	// Peer is a message from one worker run to another: the lateral talk the
 	// person asked to see ("2 of them worker to worker"). A sweep's or
 	// reviewer's message to a worker is in Pairs, not here.
-	Peer     int            `json:"peer"`
+	Peer int `json:"peer"`
+	// The pairs of worker runs alive at once in the window (each from its
+	// creation to its last turn or finish), which of them the Hive
+	// introduced (work.met), and which talked: a message between the two,
+	// and answered, one each way. Peer messages per overlapping pair, and
+	// the share answered, is the measure docs/research/collaboration.md
+	// asks for; a lone worker can't show it.
+	Overlaps int            `json:"overlaps"`
+	Met      int            `json:"met"`
+	PairMsgs int            `json:"pair_msgs"`
+	Talked   int            `json:"talked"`
+	Answered int            `json:"answered"`
 	Briefs   int            `json:"briefs"`  // work an agent filed
 	Helpers  int            `json:"helpers"` // helpers an agent spawned
 	Asks     int            `json:"asks"`    // requests past an agent's reach (warden, tribunal, person)
@@ -57,6 +68,9 @@ func Observe(r io.Reader, since, until time.Time) (Report, error) {
 	rep := Report{Runs: map[string]int{}, Pairs: map[string]int{}, Finished: map[string]int{}}
 	roles := map[string]string{} // run id → role, from every run.created, even before since
 	seen := map[string]bool{}    // tasks, requests and feedback already filed
+	spans := map[string]*span{}  // worker run id → when it was alive
+	said := map[[2]string]int{}  // [from, to] worker runs → messages
+	met := map[[2]string]bool{}  // pairs the Hive introduced, in order
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
 	for sc.Scan() {
@@ -70,6 +84,12 @@ func Observe(r io.Reader, since, until time.Time) (Report, error) {
 		str := func(k string) string { s, _ := d[k].(string); return s }
 		if e.Kind == "run.created" {
 			roles[str("id")] = str("role")
+			if str("role") == "worker" {
+				spans[str("id")] = &span{e.At, e.At}
+			}
+		}
+		if sp := spans[str("id")]; sp != nil && (e.Kind == "run.turn_ended" || e.Kind == "run.finish") && e.At.After(sp.to) {
+			sp.to = e.At
 		}
 		// The first time the journal names a task, request or feedback is its
 		// filing; later saves of it are not new, even inside the window.
@@ -98,6 +118,15 @@ func Observe(r io.Reader, since, until time.Time) (Report, error) {
 			rep.Pairs[from+"→"+to]++
 			if from == "worker" && to == "worker" {
 				rep.Peer++
+				said[[2]string{str("from"), str("to")}]++
+			}
+		case "work.met":
+			with, _ := d["with"].([]any)
+			for _, w := range with {
+				o, _ := w.(map[string]any)
+				if r, _ := o["run"].(string); r != "" {
+					met[pair(str("run"), r)] = true
+				}
 			}
 		case "task.saved":
 			if _, ok := roles[str("from")]; !first || !ok {
@@ -132,7 +161,46 @@ func Observe(r io.Reader, since, until time.Time) (Report, error) {
 			rep.Reverted++
 		}
 	}
+	ids := make([]string, 0, len(spans))
+	for id, sp := range spans {
+		if (since.IsZero() || !sp.to.Before(since)) && (until.IsZero() || sp.from.Before(until)) {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for i, a := range ids {
+		for _, b := range ids[i+1:] {
+			if !spans[a].from.Before(spans[b].to) || !spans[b].from.Before(spans[a].to) {
+				continue
+			}
+			ab, ba := said[[2]string{a, b}], said[[2]string{b, a}]
+			rep.Overlaps++
+			rep.PairMsgs += ab + ba
+			if met[pair(a, b)] {
+				rep.Met++
+			}
+			if ab+ba > 0 {
+				rep.Talked++
+			}
+			if ab > 0 && ba > 0 {
+				rep.Answered++
+			}
+		}
+	}
 	return rep, sc.Err()
+}
+
+// span is when a worker run was alive: from its creation to its last turn
+// or finish. A run waiting on its tests or review between turns is still
+// alive: a message wakes it.
+type span struct{ from, to time.Time }
+
+// pair is a and b in order, so either side's introduction names one pair.
+func pair(a, b string) [2]string {
+	if b < a {
+		a, b = b, a
+	}
+	return [2]string{a, b}
 }
 
 func firstKey(kind, id string) string {
@@ -182,8 +250,8 @@ func sorted(m map[string]int) string {
 // Table is the reports side by side, one row per arm, in Markdown.
 func Table(reps []Report) string {
 	var b strings.Builder
-	b.WriteString("| arm | outcome | minutes | runs | turns | messages | peer | briefs | helpers | asks | finished | notes | feedback | merged | peak MB | peak load |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| arm | outcome | minutes | runs | turns | messages | peer | overlaps | met | pair msgs | talked | answered | briefs | helpers | asks | finished | notes | feedback | merged | peak MB | peak load |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, r := range reps {
 		runs := 0
 		for _, n := range r.Runs {
@@ -193,8 +261,8 @@ func Table(reps []Report) string {
 		if name == "" {
 			name = "-"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %.0f | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s |\n", name, orDash(r.Outcome),
-			r.To.Sub(r.From).Minutes(), runs, r.Turns, r.Messages, r.Peer, r.Briefs, r.Helpers, r.Asks, sorted(r.Finished), r.Notes, r.Feedback, r.Merged,
+		fmt.Fprintf(&b, "| %s | %s | %.0f | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s |\n", name, orDash(r.Outcome),
+			r.To.Sub(r.From).Minutes(), runs, r.Turns, r.Messages, r.Peer, r.Overlaps, r.Met, r.PairMsgs, r.Talked, r.Answered, r.Briefs, r.Helpers, r.Asks, sorted(r.Finished), r.Notes, r.Feedback, r.Merged,
 			peak(r.PeakMB > 0, "%d", r.PeakMB), peak(r.PeakLoad > 0, "%.1f", r.PeakLoad))
 	}
 	b.WriteString("\nWho talked to whom, and which roles ran:\n\n")

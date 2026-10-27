@@ -43,6 +43,21 @@ systemd-run --user --scope -p MemoryHigh=2500M -p MemoryMax=3G -p MemorySwapMax=
   go test ./internal/e2e -run 'TestSoftLayer$' -timeout 4h -v
 ```
 
+## The overlap arm: two workers on one file
+
+Every arm above had one worker and one task, so none could show peer talk (0 worker-to-worker messages in every arm of real2 to real4). The review of the collaboration research (#1361, [research/collaboration.md](research/collaboration.md), "How to tell if it worked") asked for the arm that can: `max_workers` 2, two briefs naming the same file, run once before the change to how overlapping workers meet (#1723: an introduction when a neighbour starts, the conflict message naming who moved main, finish's neighbour list) and once after. Task 261027-093711-f1a525d0df, issue #1724.
+
+`HIVE_SOFT_OVERLAP=1` gives each arm `softPair` in place of the one task: two open fixes in `internal/mod/risk/risk.go`, each its own message in the lead's chat. The first is the default task (a `# hive-timeout:` line, naming `run`). The second keeps a failed step's head and tail output, naming `execute`. Each names its own function in the file, so the queue starts them side by side (`apart`) rather than holding the second until the first lands. Both arms overlap in time, and the only difference between them is what #1723 tells the two workers. Both change what a finished step reports (`execute` writes what `run` returns), so the workers do have something to tell each other. The sub-Hive gets a worker per task (`max_workers` 2), still one check and one gate at a time, and the arm ends when both asks have landed. Before and after are the same test run from two sources: main with this test, and that merged with #1723's branch. The binary and the seeded project both come from the checkout the test runs in.
+
+The table's pair columns, from `softlayer.Observe`, give the measure the research asks for: **overlaps**, the pairs of worker runs alive at once (each from its creation to its last turn or finish), **met**, those the Hive introduced (`work.met`, only after #1723), **pair msgs**, the messages between the two runs of an overlapping pair, **talked**, pairs with at least one, and **answered**, pairs with one each way. Peer messages per overlapping pair, and the share answered, is the number to compare; the total message count is not.
+
+```
+systemd-run --user --scope -p MemoryHigh=3500M -p MemoryMax=4G -p MemorySwapMax=0 -p CPUWeight=20 -p IOWeight=20 \
+  env HIVE_SOFT=standard HIVE_SOFT_OVERLAP=1 HIVE_E2E_HARNESS=claude HIVE_SOFT_OUT=<out> go test ./internal/e2e -run 'TestSoftLayer$' -timeout 4h -v
+```
+
+Two workers, a lead and a reviewer can run at once, so the ceiling is 4 GiB, up from 3G. That is the most `unbounded` allows.
+
 ## Fitting the machine
 
 The first real run (2026-10-25, issue #771) started all seven arms side by side, each sub-Hive with no ceilings and its checks building on every core: about 28 builds and test runs at once, load ~600 on 20 cores, disks saturated, the Hive's 8 GB share full and swapping, until Autobox froze and then stopped it (and the lead's login check was killed while it was frozen). So now:
