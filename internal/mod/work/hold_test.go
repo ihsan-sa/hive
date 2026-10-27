@@ -104,7 +104,8 @@ func TestHoldUntilTheNextRelease(t *testing.T) {
 	}
 }
 
-// Any agent sets a hold only with the person's words, and only on its own project.
+// Any agent sets a hold only with the person's words, and only on its own
+// project; a hold the person set themselves only they lift or change.
 func TestHoldNeedsThePersonsWords(t *testing.T) {
 	m, _, p, _ := heldRig(t)
 	lead := core.Run{ID: "lead-1", Role: "lead"}
@@ -131,6 +132,20 @@ func TestHoldNeedsThePersonsWords(t *testing.T) {
 	worker := core.Run{ID: "w-p", Role: "worker", Project: "p"}
 	if _, err := m.opHold(worker, []byte(`{"project":"p","why":"person: hold merges"}`)); err != nil {
 		t.Fatalf("a worker on p couldn't hold p on the person's word: %v", err)
+	}
+	if _, err := m.opHold(worker, []byte(`{"project":"p","why":"person: lift it","lift":"true"}`)); err != nil {
+		t.Fatalf("an agent's own hold isn't liftable by an agent: %v", err)
+	}
+	if _, err := m.SetHold(MergeHold{Project: p.Name, Why: "nothing until the next release", By: "person"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, ask := range []string{`{"project":"p","why":"person: lift it","lift":"true"}`, `{"project":"p","why":"person: only #3","only":"#3"}`} {
+		if _, err := m.opHold(worker, []byte(ask)); err == nil || !strings.Contains(err.Error(), "set by the person") {
+			t.Fatalf("a worker changed the person's own hold with %s: %v", ask, err)
+		}
+	}
+	if h, ok := m.Hold(p.Name); !ok || h.By != "person" || len(h.Only) != 0 {
+		t.Fatalf("the person's hold moved: %+v %v", h, ok)
 	}
 }
 

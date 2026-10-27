@@ -250,6 +250,12 @@ func (m *Module) opHold(r core.Run, args json.RawMessage) (any, error) {
 	if strings.TrimSpace(a.Why) == "" {
 		return nil, errors.New("why: quote the person's words that ask for this")
 	}
+	// A hold the person set themselves is theirs to end: no agent's word
+	// that they said so lifts or replaces it, as text an agent read could
+	// say anything.
+	if h, ok := m.Hold(a.Project); ok && h.By == "person" {
+		return nil, fmt.Errorf("the hold on %s was set by the person, so only they lift or change it (hive hold %s --lift, or hive hold with the new terms); tell them what you'd change and why", a.Project, a.Project)
+	}
 	if lift {
 		if err := m.LiftHold(a.Project, r.ID, a.Why); err != nil {
 			return nil, err
