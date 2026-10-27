@@ -25,7 +25,7 @@ type Config struct {
 	CtrlBin    string   // a prebuilt control binary
 	Out        string   // where the run's files and report go
 	Probes     []string // which probes to run (default all)
-	Reps       int      // repeats of every probe on each side, interleaved (default 3)
+	Reps       int      // most repeats of every probe on each side, interleaved (default 3); past the first only when it differs
 	Bench      int      // asks in the benchmark (default 4, the whole set)
 	Org        Org      // the fresh test repository's host; nil runs without one
 	OrgToken   string   // the org token the gate itself uses to make and delete test repositories; children never hold it
@@ -402,8 +402,19 @@ func Run(cfg Config) (rep Report, err error) {
 	}
 
 	// The same work on both, interleaved, so the day's weather hits both.
+	// One rep a side first; the rest only when it shows a difference, since
+	// most runs move nothing and each rep is a build's worth of e2e and
+	// benchmark on each side.
 	deadline := time.Now().Add(cfg.Timeout)
+	opts := cfg.Options
 	for rep0 := 0; rep0 < cfg.Reps; rep0++ {
+		if rep0 == 1 {
+			if one := firstRepOptions(opts); !differs(Decide(rep.Candidate, rep.Control, one)) {
+				cfg.log("rep 1 moved nothing beyond a single run's noise: no more reps")
+				opts = one
+				break
+			}
+		}
 		for _, name := range cfg.Probes {
 			p, ok := cfg.Probe[name]
 			if !ok {
@@ -442,7 +453,6 @@ func Run(cfg Config) (rep Report, err error) {
 	if got, e := FileSHA(cand.Bin); e != nil || got != rep.CandSHA256 {
 		return rep, &candidateFault{"changed its own binary during the run", fmt.Errorf("the candidate's binary changed during the run")}
 	}
-	opts := cfg.Options
 	for _, f := range rep.Fixes.Fixes {
 		opts.Fixed = append(opts.Fixed, f.String())
 	}
@@ -452,6 +462,24 @@ func Run(cfg Config) (rep Report, err error) {
 		rep.Verdict.Reason += "; failing on both sides, so the environment's and not counted: " + failureNames(rep.Unit.Shared, modulePath(cand.Src))
 	}
 	return rep, nil
+}
+
+// singleRunNoise is how much one run alone varies (a benchmark's time by
+// about a tenth): with one rep a side there is no spread to measure, so a
+// smaller move is not worth more reps, nor a verdict.
+const singleRunNoise = 0.10
+
+func firstRepOptions(o Options) Options {
+	o.Floor = max(o.Floor, singleRunNoise)
+	o.Fixed = nil // the candidate's own fixes are a gain whatever the probes say
+	return o
+}
+
+// differs says the first rep showed something more reps must confirm or
+// measure: a gain, a regression, a different failure, or a probe that failed
+// on both sides.
+func differs(v Verdict) bool {
+	return len(v.Gains)+len(v.Regressions)+len(v.Differs)+len(v.Unmeasured) > 0
 }
 
 // slowerAlone says the candidate took more time than the control over the
