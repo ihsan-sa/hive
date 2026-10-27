@@ -348,8 +348,10 @@ func (m *Module) fileQuarantined() {
 	}
 }
 
-// withdrawUnsighted takes back improve's waiting fix briefs for tests not in
-// q that a run read as no sighting took down.
+// withdrawUnsighted takes back improve's fix briefs for tests not in q that
+// a run read as no sighting took down: a waiting one is withdrawn, and one a
+// worker already started is retracted, its worker stopped, so it holds no
+// worker slot on a test that was never flaky.
 func (m *Module) withdrawUnsighted(q []Flake) {
 	m.mu.Lock()
 	unsighted := maps.Clone(m.unsighted)
@@ -357,18 +359,24 @@ func (m *Module) withdrawUnsighted(q []Flake) {
 	if len(unsighted) == 0 {
 		return
 	}
+	settled := []string{work.StageStopped, work.StageDone, work.StageMerged, work.StageMerging, work.StageReverting}
 	held := map[string]bool{}
 	for _, f := range q {
 		held[flakeKey(f.Project, f.Test)] = true
 	}
 	for _, t := range m.Work.List(func(t work.Task) bool {
-		return t.From == "improve" && strings.HasPrefix(t.Title, flakyTitle) && (t.Stage == work.StageNew || t.Queued())
+		return t.From == "improve" && strings.HasPrefix(t.Title, flakyTitle) && !slices.Contains(settled, t.Stage)
 	}) {
 		k := flakeKey(t.Project, strings.TrimPrefix(t.Title, flakyTitle))
 		if !unsighted[k] || held[k] {
 			continue
 		}
 		why := "its quarantine came from a check run broken by its environment or failing more than " + fmt.Sprint(maxSightedPerRun) + " tests at once, or it is a test of the whole tree whose reds are a branch's own content, which is no evidence the test is flaky; the test is no longer quarantined"
-		m.Work.Withdraw(core.Run{ID: "improve", Project: t.Project}, t.ID, "", why) // a worker that just started keeps it
+		r := core.Run{ID: "improve", Project: t.Project}
+		if t.Stage == work.StageNew || t.Queued() {
+			m.Work.Withdraw(r, t.ID, "", why) // a worker that just started keeps it until the next pass
+			continue
+		}
+		m.Work.Retract(r, t.ID, why) // refused once it is on its way to merge or past it
 	}
 }
