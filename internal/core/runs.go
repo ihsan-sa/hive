@@ -96,6 +96,7 @@ type Run struct {
 	Head        string          `json:"head,omitempty"`  // its checkout's HEAD log (size, time) at its last turn's end
 	Still       int             `json:"still,omitempty"` // turns in a row that ended with that log unchanged
 	Login       string          `json:"login,omitempty"` // the login its latest turn went on
+	Where       string          `json:"where,omitempty"` // the runner its latest turn went to; empty is this machine
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
 	StopAsked   bool            `json:"stop_asked,omitempty"`
@@ -212,6 +213,10 @@ type Plan struct {
 	Login   string            `json:"login,omitempty"` // Login.Key; empty is the machine's own
 	Limit   harness.RateLimit `json:"limit"`
 	At      time.Time         `json:"at"`
+	// Lifted says its five-hour stop doesn't hold: another login of its pick
+	// keeps the person's tenth (lift). Set only on the copies Runs hands out
+	// (Plans carries it to the control center), never on a journaled one.
+	Lifted bool `json:"lifted,omitempty"`
 	// Wait is the park a limit whose named reset had already passed got;
 	// the next such limit in a row doubles it, up to the hour.
 	Wait time.Duration `json:"wait,omitempty"`
@@ -231,9 +236,10 @@ func (p Plan) Key() string {
 // than spend the last of it.
 const WeeklyStop = 0.95
 
-// FiveHourStop is the same for the five-hour window: the person asked
-// (10-26) that the Hive leave the last tenth of it to them, to keep working
-// with the plan themselves while the Hive waits for the reset.
+// FiveHourStop is the same for the five-hour window, for one login of a
+// pick while the others run to their limit (lift): the person asked (10-26) to stop at "90% of
+// the only 5h limit avail" and leave the last tenth to them, to keep
+// working with the plan themselves while the Hive waits for the reset.
 const FiveHourStop = 0.90
 
 // CheckReserve is the share of a week below WeeklyStop kept for the checks
@@ -251,13 +257,15 @@ const CheckReserve = 0.05
 func Reserved(role string) bool { return role == "lead" || slices.Contains(CheckRoles, role) }
 
 // stops are the windows a login stops at short of its limit, and where; the
-// week's (WeeklyStop) less CheckReserve for a run that isn't Reserved.
+// week's (WeeklyStop) less CheckReserve for a run that isn't Reserved; one
+// that may be lifted holds only for the last login with room (lift).
 var stops = []struct {
-	window  string
-	at      float64
-	reserve float64
-	name    string
-}{{"seven_day", WeeklyStop, CheckReserve, "week"}, {"five_hour", FiveHourStop, 0, "five-hour window"}}
+	window   string
+	at       float64
+	reserve  float64
+	name     string
+	liftable bool
+}{{"seven_day", WeeklyStop, CheckReserve, "week", false}, {"five_hour", FiveHourStop, 0, "five-hour window", true}}
 
 // Parked reports whether the plan is at its usage limit, or at one of its
 // stops (WeeklyStop less CheckReserve, FiveHourStop) for a run that isn't
@@ -287,6 +295,9 @@ func (p Plan) stopped(now time.Time, reserve bool) (harness.Window, string, bool
 	var out harness.Window
 	var name string
 	for _, s := range stops {
+		if s.liftable && p.Lifted {
+			continue
+		}
 		at := s.at
 		if !reserve {
 			at -= s.reserve
@@ -409,6 +420,10 @@ type Runs struct {
 	// Route is the picks a persistent run's next turn follows, so a lead
 	// follows a changed setting; empty keeps the run's own and its Route.
 	Route func(Run) []Pick
+	// Executor hands a turn this machine is too strained to start to a
+	// module that runs it elsewhere: the sandbox to start it in and the
+	// runner that has room, or nil when no module has room now.
+	Executor func() (sandbox.Sandbox, string)
 
 	mu      sync.Mutex
 	runs    map[string]*Run
@@ -615,6 +630,7 @@ type turnStarted struct {
 	Model     string      `json:"model,omitempty"`
 	Harness   string      `json:"harness,omitempty"`
 	Login     string      `json:"login,omitempty"`
+	Where     string      `json:"where,omitempty"` // the executor module's runner it went to; empty is this machine
 }
 
 type turnEnded struct {
@@ -723,6 +739,7 @@ func (rs *Runs) apply(e Event) {
 	case "plan.usage":
 		var p Plan
 		e.Decode(&p)
+		p.Lifted = false // lift sets it on copies, never here
 		// Readings journaled before the parse fix carry 0 at the top level
 		// and the real number only under the window.
 		if w, ok := p.Limit.Windows[p.Limit.Window]; ok && p.Limit.Utilization == 0 {
@@ -758,7 +775,7 @@ func (rs *Runs) apply(e Event) {
 	case "run.turn_started":
 		var t turnStarted
 		e.Decode(&t)
-		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login
+		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login, r.Where = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login, t.Where
 		if t.Session != "" {
 			r.Session = t.Session
 		}
@@ -1047,14 +1064,64 @@ func (rs *Runs) List(fn func(*Run) bool) []Run {
 
 // Plans returns the latest usage per login.
 func (rs *Runs) Plans() []Plan {
+	now := time.Now()
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	var out []Plan
+	picks := map[string][]Plan{}
 	for _, p := range rs.plans {
-		out = append(out, p)
+		pick := HarnessName(p.Harness)
+		if pick == "open" { // each model is its own pick
+			pick = p.Key()
+		}
+		picks[pick] = append(picks[pick], p)
+	}
+	rs.mu.Unlock()
+	var out []Plan
+	for _, ps := range picks {
+		var ks []string
+		for _, p := range ps {
+			ks = append(ks, p.Key())
+		}
+		out = append(out, lift(ps, now, false, rs.limited(ks, now))...)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key() < out[j].Key() })
 	return out
+}
+
+// lift sets Lifted on every one of plans, the logins of one pick, but the
+// one with the most of its five hours left (the first by Key on a tie) of
+// those with room short of the stops that lift, for a run that may spend
+// the reserve (Reserved) or not; one limited (Runs.limited) has no room. So
+// the others run to their limit while that one stops at FiveHourStop and
+// keeps its tenth for the person.
+func lift(plans []Plan, now time.Time, reserve bool, limited map[string]time.Time) []Plan {
+	keep, left := -1, 0.0
+	for i, p := range plans {
+		p.Lifted = true
+		if limited[p.Key()].After(now) || !p.parkedFor(now, reserve).IsZero() {
+			continue
+		}
+		w, _ := p.window("five_hour", now)
+		if l := 1 - w.Utilization; keep < 0 || l > left || l == left && p.Key() < plans[keep].Key() {
+			keep, left = i, l
+		}
+	}
+	for i := range plans {
+		plans[i].Lifted = i != keep
+	}
+	return plans
+}
+
+// plansOf are the plans of logins, lifted (lift); rs.mu is held.
+func (rs *Runs) plansOf(logins []Login, now time.Time, reserve bool, limited map[string]time.Time) []Plan {
+	var out []Plan
+	for _, l := range logins {
+		p, ok := rs.plans[l.Key()]
+		if !ok {
+			p = Plan{Harness: l.Harness, Login: l.Key()}
+		}
+		out = append(out, p)
+	}
+	return lift(out, now, reserve, limited)
 }
 
 // pickLogin chooses the login for a run's next turn: of those not parked at
@@ -1065,18 +1132,12 @@ func (rs *Runs) Plans() []Plan {
 func (rs *Runs) pickLogin(h, model, home string, bare, reserve bool) (Login, []string, error) {
 	logins := rs.logins(h, model)
 	now := time.Now()
-	// A renewal turned away by the login's usage limit parks it too: a turn
-	// on it would only be turned away the same.
-	renewing, _ := rs.tokens.(interface{ LimitedUntil(string) time.Time })
-	limited := map[string]bool{}
-	for _, l := range logins {
-		limited[l.Key()] = renewing != nil && renewing.LimitedUntil(l.Key()).After(now)
-	}
+	limited := rs.limited(keys(logins), now)
 	rs.mu.Lock()
 	use := func(l Login) float64 { return rs.plans[l.Key()].Used(now) }
 	var open []Login
-	for _, l := range logins {
-		if !limited[l.Key()] && rs.plans[l.Key()].parkedFor(now, reserve).IsZero() {
+	for i, p := range rs.plansOf(logins, now, reserve, limited) {
+		if l := logins[i]; !limited[l.Key()].After(now) && p.parkedFor(now, reserve).IsZero() {
 			open = append(open, l)
 		}
 	}
@@ -1103,6 +1164,21 @@ func (rs *Runs) pickLogin(h, model, home string, bare, reserve bool) (Login, []s
 	return Login{}, nil, err
 }
 
+// limited is when each of the logins keys names whose renewal was turned
+// away by its usage limit takes turns again: that parks it too, as a turn
+// on it would only be turned away the same. Not under rs.mu.
+func (rs *Runs) limited(keys []string, now time.Time) map[string]time.Time {
+	out := map[string]time.Time{}
+	if renewing, ok := rs.tokens.(interface{ LimitedUntil(string) time.Time }); ok {
+		for _, k := range keys {
+			if at := renewing.LimitedUntil(k); at.After(now) {
+				out[k] = at
+			}
+		}
+	}
+	return out
+}
+
 // keys names the logins.
 func keys(ls []Login) []string {
 	var out []string
@@ -1118,14 +1194,15 @@ func keys(ls []Login) []string {
 func (rs *Runs) Headroom(p Pick) float64 {
 	logins := rs.logins(p.Harness, p.Model)
 	now := time.Now()
+	limited := rs.limited(keys(logins), now)
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	room := 0.0
 	if len(logins) == 0 {
 		room = 1
 	}
-	for _, l := range logins {
-		if pl := rs.plans[l.Key()]; !pl.Parked(now) {
+	for _, pl := range rs.plansOf(logins, now, false, limited) {
+		if !pl.Parked(now) && !limited[pl.Key()].After(now) {
 			room = max(room, 1-pl.Used(now))
 		}
 	}
@@ -1138,11 +1215,12 @@ func (rs *Runs) Headroom(p Pick) float64 {
 func (rs *Runs) Ahead(p Pick) float64 {
 	logins := rs.logins(p.Harness, p.Model)
 	now := time.Now()
+	limited := rs.limited(keys(logins), now)
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	ahead := -1.0
-	for _, l := range logins {
-		if pl := rs.plans[l.Key()]; !pl.Parked(now) && (ahead < 0 || pl.Ahead(now) < ahead) {
+	for _, pl := range rs.plansOf(logins, now, false, limited) {
+		if !pl.Parked(now) && !limited[pl.Key()].After(now) && (ahead < 0 || pl.Ahead(now) < ahead) {
 			ahead = pl.Ahead(now)
 		}
 	}
@@ -1163,11 +1241,16 @@ func (rs *Runs) logins(h, model string) []Login {
 // its retry too. A check (Reserved) has room up to WeeklyStop.
 func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	now := time.Now()
+	logins := rs.logins(h, model)
+	limited := rs.limited(keys(logins), now)
 	var at time.Time
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	for _, l := range rs.logins(h, model) {
-		until := rs.plans[l.Key()].parkedFor(now, reserve)
+	for _, p := range rs.plansOf(logins, now, reserve, limited) {
+		until := p.parkedFor(now, reserve)
+		if l := limited[p.Key()]; l.After(until) {
+			until = l
+		}
 		if until.IsZero() {
 			at = now
 			break
@@ -1218,15 +1301,27 @@ func (rs *Runs) picks(r Run) (picks, unproven []Pick) {
 			picks = route
 		}
 	}
-	for _, p := range r.RunSpec.Route {
+	specRoute := r.RunSpec.Route
+	if rs.Route != nil && !r.Persistent && len(specRoute) > 0 {
+		// A route fixed at its start that can't answer any more (its first
+		// pick is down) gives way to the settings' route as it is now, so a
+		// run parked on a rejected model follows the route changed since.
+		if _, down := rs.downFor(specRoute[0]); down {
+			if route := rs.Route(r); len(route) > 0 {
+				specRoute = route
+				picks = append(picks, route...)
+			}
+		}
+	}
+	for _, p := range specRoute {
 		if !slices.ContainsFunc(picks, p.Same) {
 			picks = append(picks, p)
 		}
 	}
 	if r.Finishes() {
 		first := own
-		if len(r.RunSpec.Route) > 0 {
-			first = r.RunSpec.Route[0]
+		if len(specRoute) > 0 {
+			first = specRoute[0]
 		}
 		rs.mu.Lock()
 		picks = slices.DeleteFunc(picks, func(p Pick) bool {
@@ -1305,17 +1400,18 @@ func (rs *Runs) wake(id string) {
 // Reopen lets a finished run take more turns (fix rounds go back to the same worker).
 // A Codex run whose token folder still won't delete stays blocked for it.
 // The same text again while a turn runs on it, handed or waiting, is
-// already being worked on: it takes no further turn (issue #1157).
+// already being worked on: it takes no further turn (issue #1157), unless
+// the run was asked to stop, which the caller still hears.
 func (rs *Runs) Reopen(id, text string) error {
 	r, ok := rs.Get(id)
 	if !ok {
 		return ErrNotFound
 	}
-	if r.Status == StatusRunning && (slices.Contains(r.Given, text) || slices.Contains(r.Pending, text)) {
-		return nil
-	}
 	if r.Status == StatusStopped || r.StopAsked {
 		return fmt.Errorf("run %s was stopped on purpose (%s); it stays stopped", id, r.Reason)
+	}
+	if r.Status == StatusRunning && (slices.Contains(r.Given, text) || slices.Contains(r.Pending, text)) {
+		return nil
 	}
 	if err := rs.tokenStuck(r); err != nil {
 		return err
@@ -1360,8 +1456,8 @@ func (rs *Runs) SetStatus(id, status, reason string) {
 // StoppedQuiet opens the reason of a quiet run an agent ended with EndQuiet.
 const StoppedQuiet = "stopped while quiet by "
 
-// EndQuiet ends a quiet run blocked with reason (StoppedQuiet first), only if
-// it is still quiet and no turn of it is starting: a message that woke it
+// EndQuiet ends a quiet or parked run blocked with reason (StoppedQuiet
+// first), only if it is still so and no turn of it is starting: a message that woke it
 // since the caller looked keeps it going. A message later doesn't wake it;
 // Reopen still does.
 func (rs *Runs) EndQuiet(id, reason string) error {
@@ -1371,9 +1467,9 @@ func (rs *Runs) EndQuiet(id, reason string) error {
 	case cur == nil:
 		rs.mu.Unlock()
 		return ErrNotFound
-	case cur.Status != StatusQuiet || rs.starting[id]:
+	case (cur.Status != StatusQuiet && cur.Status != StatusParked) || rs.starting[id]:
 		rs.mu.Unlock()
-		return fmt.Errorf("run %s is %s, not quiet", id, cur.Status)
+		return fmt.Errorf("run %s is %s, not quiet or parked", id, cur.Status)
 	}
 	if rs.starting == nil {
 		rs.starting = map[string]bool{}
@@ -2069,7 +2165,15 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		// only the floor under which its turn could not run at all.
 		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
 	}
-	if why := Strained(floor, memMax, cpuMax); why != "" {
+	// A turn this machine is too strained for goes to an executor module
+	// with room, or waits.
+	var elsewhere sandbox.Sandbox
+	where := ""
+	why := Strained(floor, memMax, cpuMax)
+	if why != "" {
+		elsewhere, where = rs.executor()
+	}
+	if why != "" && elsewhere == nil {
 		// The hold keeps the run's status, so a parked run keeps its backoff
 		// and a nudged one its count; the live figures after " (" change
 		// every tick, so only a new kind of hold is journalled.
@@ -2085,6 +2189,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			rs.append("run.status", runNote{ID: r.ID, Status: StatusQueued, Reason: err.Error()})
 		}
 		return
+	}
+	if elsewhere != nil {
+		sb = elsewhere
 	}
 	// A run whose own harness and model are at their limit moves to the
 	// first pick with room; one changing harness, or open model, can't
@@ -2219,7 +2326,26 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	started = true
 	rs.claimed(r.ID, turn, p)
-	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness})
+	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness, Where: where})
+}
+
+// Elsewhere says whether an executor module has room for a turn now.
+func (rs *Runs) Elsewhere() bool {
+	ex, _ := rs.executor()
+	return ex != nil
+}
+
+// executor returns an executor module with room for a turn this machine is
+// too strained to start, and the runner it named; nil when there is none or
+// the local sandbox isn't one whose spec another machine can run.
+func (rs *Runs) executor() (sandbox.Sandbox, string) {
+	if rs.Executor == nil {
+		return nil, ""
+	}
+	if sb, err := rs.sandbox(); err != nil || !sb.Isolated() {
+		return nil, ""
+	}
+	return rs.Executor()
 }
 
 // RunPath is where a run's agent sees its run dir ($HIVE_RUN).

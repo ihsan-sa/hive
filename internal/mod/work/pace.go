@@ -237,15 +237,17 @@ func (m *Module) checkSlots() int {
 	return cmp.Or(m.checks.get(), m.C.WS.LoadConfig().MaxChecks, core.DefaultMaxChecks())
 }
 
-// Check ranks: main's own measurement goes first, then a check of a task
-// queued briefs wait on, then a fix's, then the rest in the order they
-// asked. The worker on #601 finished with ~20 briefs waiting on it to land,
-// and its check sat ~30 minutes behind 31 others (issue #838); main's score
-// and size of 282991d7 waited 2h16m behind PR checks, and keep/revert, the
-// release and the next baseline with them (issue #1078).
+// Check ranks: main's own measurement goes first, then the merge line's
+// front testing its head merged with main, then a fix's, then the rest in
+// the order they asked. Main's score and size of 282991d7 waited 2h16m
+// behind PR checks, and keep/revert, the release and the next baseline with
+// them (issue #1078). Every merge to a project goes through its one
+// merged-with-main test at a time, so that test's wait is the loop's merge
+// latency: it ran on the merge, not the task's head, ranked 0 and waited
+// behind every fix's test (issue #1766).
 const (
 	rankFix   = 1
-	rankFrees = 2
+	rankMerge = 2
 	rankMain  = 3
 )
 
@@ -275,39 +277,34 @@ func RankWhy(r int) string {
 	switch {
 	case r >= rankMain:
 		return "measures main"
-	case r == rankFrees:
-		return "frees queued briefs"
+	case r == rankMerge:
+		return "front of the merge line"
 	case r == rankFix:
 		return "a fix"
 	}
 	return ""
 }
 
-// checkRank ranks a check of sha on project: main's being measured, or by
-// the task whose head it is.
+// checkRank ranks a check of sha on project: main's being measured, a
+// task's head merged with main, or by the task whose head it is.
 func (m *Module) checkRank(project, sha, _ string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.measuring[project+"@"+sha] > 0 {
 		return rankMain
 	}
-	var mine *Task
+	for id, r := range m.mergeRuns {
+		if t := m.tasks[id]; t != nil && t.Project == project && r.sha == sha && !r.done && !r.gone {
+			return rankMerge
+		}
+	}
 	for _, t := range m.tasks {
 		if t.Project == project && t.SHA == sha && !t.Terminal() {
-			mine = t
-			break
+			if t.Fix() {
+				return rankFix
+			}
+			return 0
 		}
-	}
-	if mine == nil {
-		return 0
-	}
-	for _, t := range m.tasks {
-		if t.Queued() && holder(t.Reason) == mine.ID {
-			return rankFrees
-		}
-	}
-	if mine.Fix() {
-		return rankFix
 	}
 	return 0
 }

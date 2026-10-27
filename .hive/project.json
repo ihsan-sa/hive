@@ -1,4 +1,4 @@
 {
-  "test": "go vet ./... && go test -short ./...",
+  "test": "go vet ./... && go test -short -timeout 25m ./...",
   "score": {"command": "for t in git python3; do command -v \"$t\" >/dev/null || { \"$t\"; exit 127; }; done; go run ./cmd/hive-score", "direction": "higher", "tolerance": 3, "paths": ["cmd/hive-score/", "internal/e2e/benchmark_test.go", "internal/demo/"]}
 }

@@ -87,16 +87,14 @@ func (g *rig) decide(req Request, args map[string]string) error {
 	return err
 }
 
-// settle waits for a request to leave the given states.
+// settle waits for a request to leave the given states. The answer handler
+// and the step's script run on their own goroutines, and on a loaded check
+// machine they took longer than 4s, so it waits as long as eventually.
 func (g *rig) settle(id string, from ...string) Request {
-	for i := 0; i < 200; i++ {
-		r, _ := g.m.get(id)
-		if !contains(from, r.State) {
-			return r
-		}
-		time.Sleep(20 * time.Millisecond)
+	var r Request
+	if eventually(func() bool { r, _ = g.m.get(id); return !contains(from, r.State) }) {
+		return r
 	}
-	r, _ := g.m.get(id)
 	g.t.Fatalf("request %s stuck in %s", id, r.State)
 	return r
 }
@@ -110,7 +108,6 @@ func contains(l []string, s string) bool {
 	return false
 }
 
-// eventually polls ok for up to four seconds.
 // eventually waits up to a minute for ok: a module's install clones and
 // builds, which on a slow, throttled machine took longer than 4s.
 func eventually(ok func() bool) bool {
@@ -122,15 +119,20 @@ func eventually(ok func() bool) bool {
 	return ok()
 }
 
+// told waits for the worker to be told text; toldNow says whether it has
+// been already, for a word that must not come (waiting on it would take the
+// whole minute).
 func (g *rig) told(text string) bool {
-	return eventually(func() bool {
-		for _, p := range g.run(g.worker.ID).Pending {
-			if strings.Contains(p, text) {
-				return true
-			}
+	return eventually(func() bool { return g.toldNow(text) })
+}
+
+func (g *rig) toldNow(text string) bool {
+	for _, p := range g.run(g.worker.ID).Pending {
+		if strings.Contains(p, text) {
+			return true
 		}
-		return false
-	})
+	}
+	return false
 }
 
 // vote ends each panelist's turn with its structured vote, as a real
@@ -311,7 +313,7 @@ func TestSudoWantingAPasswordAtRunGoesToThePerson(t *testing.T) {
 		}
 		ran := core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof"))
 		if got.State != "asked" || !strings.HasPrefix(a.Title, "Needs your password") || strings.Join(a.Options, "|") != "done|declined" ||
-			!strings.Contains(a.Detail, "may have run, before sudo or after") || !strings.Contains(a.Detail, "What it printed:\nbefore") || !ran || !g.told("waits on them") || g.told("done") {
+			!strings.Contains(a.Detail, "may have run, before sudo or after") || !strings.Contains(a.Detail, "What it printed:\nbefore") || !ran || !g.told("waits on them") || g.toldNow("done") {
 			t.Fatalf("%+v %+v ran=%v", got, a, ran)
 		}
 	}
@@ -1092,7 +1094,7 @@ func TestPersonAnswersASettledAsk(t *testing.T) {
 				if a.Answer != want || a.Note != "my call" {
 					t.Fatalf("%s, %s: handler got %+v", route, answer, a)
 				}
-			case <-time.After(4 * time.Second):
+			case <-time.After(time.Minute): // four fsynced appends and two goroutines; a loaded gate took over 4s
 				t.Fatalf("%s, %s: the merge ask was never answered", route, answer)
 			}
 			if told := g.c.Person.Told(5); len(told) > 0 {
@@ -1149,7 +1151,7 @@ func TestPersonDoneSettlesAScriptlessAsk(t *testing.T) {
 			if a.Answer != want {
 				t.Fatalf("%s: handler got %+v, want %s", answer, a, want)
 			}
-		case <-time.After(4 * time.Second):
+		case <-time.After(time.Minute): // four fsynced appends and two goroutines; a loaded gate took over 4s
 			t.Fatalf("%s: the merge ask was never answered", answer)
 		}
 	}
