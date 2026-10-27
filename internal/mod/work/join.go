@@ -99,6 +99,10 @@ type Join struct {
 	Added  string    `json:"added"`
 	Chat   string    `json:"chat,omitempty"`
 	Thread string    `json:"thread,omitempty"`
+	// Task and Issue are set when the ask was a task of its own batched into
+	// this one (batch.go).
+	Task  string `json:"task,omitempty"`
+	Issue int    `json:"issue,omitempty"`
 }
 
 // JoinedBy reports whether a brief run filed joined t. Tasks joined before
@@ -159,26 +163,11 @@ func (m *Module) join(b Brief, own string, lead bool) (Task, string, bool) {
 			m.release(o.ID)
 			continue
 		}
-		added := fmt.Sprintf("Also asked by %s (%s; joined here since %s): %s", b.From, time.Now().UTC().Format("15:04Z"), why, core.Clip(b.Title, 300))
-		line := added
-		if b.Done != "" {
-			added += "\nDone looks like: " + core.Clip(b.Done, 1500)
-		}
-		if b.Known != "" {
-			added += "\nKnown: " + core.Clip(b.Known, 3000)
-		}
-		if len(t.Joins) >= fullJoins {
-			line += " (its whole ask is on the task's issue)"
-		} else {
-			line = added
-		}
-		j := Join{From: b.From, At: time.Now().UTC(), Why: why, Added: added}
+		j := Join{From: b.From, Why: why}
 		if lead {
 			j.Chat, j.Thread = b.Chat, b.Thread
 		}
-		t.Known = strings.TrimSpace(t.Known + "\n\n" + line)
-		t.Joined = append(t.Joined, core.Clip(b.Title, 300)+"\n"+core.Clip(b.Done, 1500))
-		t.Joins = append(t.Joins, j)
+		added := m.addJoin(&t, j, b.Title, b.Done, b.Known, "joined here since "+why)
 		m.save(&t, fmt.Sprintf("%s%s: %s", joinedNote, b.From, why))
 		if t.Stage == StageWorking && t.Worker != "" {
 			m.C.Runs.Send(t.Worker, "Another brief was filed for the same ask as your task, so it joins yours rather than starting a second worker. Cover it too, or say in your account what you left out:\n\n"+added)
@@ -187,6 +176,29 @@ func (m *Module) join(b Brief, own string, lead bool) (Task, string, bool) {
 		return t, why, true
 	}
 	return Task{}, "", false
+}
+
+// addJoin adds an ask (title, done, known) to t as j, how, for the brief
+// and the issue, and returns the text added. The caller saves t.
+func (m *Module) addJoin(t *Task, j Join, title, done, known, how string) string {
+	added := fmt.Sprintf("Also asked by %s (%s; %s): %s", j.From, time.Now().UTC().Format("15:04Z"), how, core.Clip(title, 300))
+	line := added
+	if done != "" {
+		added += "\nDone looks like: " + core.Clip(done, 1500)
+	}
+	if known != "" {
+		added += "\nKnown: " + core.Clip(known, 3000)
+	}
+	if len(t.Joins) >= fullJoins {
+		line += " (its whole ask is on the task's issue)"
+	} else {
+		line = added
+	}
+	j.At, j.Added = time.Now().UTC(), added
+	t.Known = strings.TrimSpace(t.Known + "\n\n" + line)
+	t.Joined = append(t.Joined, core.Clip(title, 300)+"\n"+core.Clip(done, 1500))
+	t.Joins = append(t.Joins, j)
+	return added
 }
 
 // workerEnded says t's worker has finished its run, so a brief joining it now
