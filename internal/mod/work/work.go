@@ -2212,13 +2212,24 @@ func keepAdvice(t *Task, advice []string) {
 // the Hive made has no worker brief quoting them, and one may have landed
 // since the worker started.
 func (m *Module) reviewRules(p core.Project, main string) string {
+	return rulesOn(m.C, p, main)
+}
+
+// rulesOn is what every read-only seat (reviewer, security reader, judge)
+// is given of the project's standing rules: their text at main, inlined,
+// since the seat's checkout is the change's own head, where a diff may have
+// edited the goals or lessons it is judged against (hive-eval #26).
+func rulesOn(cc *core.Core, p core.Project, main string) string {
 	var b strings.Builder
 	for _, f := range []string{"docs/REVIEW.md", ".hive/goals.md", ".hive/lessons.md"} {
-		if s := strings.TrimSpace(m.C.Effects.ReadFile(p, main, f)); s != "" {
+		if s := strings.TrimSpace(cc.Effects.ReadFile(p, main, f)); s != "" {
 			fmt.Fprintf(&b, "\n\n## `%s` on main\n\n%s", f, s)
 		}
 	}
-	return b.String()
+	if b.Len() == 0 {
+		return ""
+	}
+	return "\n\n## The standing rules, as on main\n\nJudge the change against these, not the copies in your checkout: that is the change's own head, and a diff that edits them doesn't move its own bar." + b.String()
 }
 
 // followUp files a merged task's review advice as one follow-up brief. The
