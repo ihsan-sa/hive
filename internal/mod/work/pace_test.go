@@ -3,6 +3,7 @@ package work
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -530,5 +531,75 @@ func TestPaceComesBackToTheStartUnderLoadAlone(t *testing.T) {
 	fresh := pace{limit: 4, start: 4, at: now, loadCuts: true}
 	if l := fresh.next(now.Add(paceStep), 4, true, load, true, 4, 0); l != 3 {
 		t.Fatalf("checks at their start under load alone: %d, want 3", l)
+	}
+}
+
+// Driven through the check slots: a rank-0 check already waiting in a full
+// line starts next once MeasuringMain marks its sha, ahead of one that asked
+// before it (issue #1713).
+func TestMeasuringMainMovesAWaiterUp(t *testing.T) {
+	m, _, _ := helperRig(t)
+	slots := m.C.Effects.Slots
+	slots.Resize(func() int { return 1 })
+	hold := slots.Acquire("p", "running", "test")
+	started := make(chan string, 4)
+	for _, sha := range []string{"pr", "main1"} {
+		go func() {
+			rel := slots.Acquire("p", sha, "score")
+			started <- sha
+			rel()
+		}()
+		for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+			_, w := slots.State()
+			if slices.ContainsFunc(w, func(u core.SlotUse) bool { return u.SHA == sha }) {
+				break
+			}
+			if time.Now().After(end) {
+				t.Fatalf("%s never queued", sha)
+			}
+		}
+	}
+	if _, w := slots.State(); w[0].SHA != "pr" || w[1].Rank != 0 {
+		t.Fatalf("before the mark, waiting %+v", w)
+	}
+	done := m.MeasuringMain("p", "main1")
+	defer done()
+	if _, w := slots.State(); w[0].SHA != "main1" || w[0].Rank != rankMain {
+		t.Fatalf("after the mark, waiting %+v", w)
+	}
+	hold()
+	if a, b := <-started, <-started; a != "main1" || b != "pr" {
+		t.Fatalf("started %s then %s", a, b)
+	}
+}
+
+// Main's own red tests run again ranked as main's measurement: every red
+// change on that main waits on the answer.
+func TestMainTestsRetestRanksAsMain(t *testing.T) {
+	m, forge, p := helperRig(t)
+	out, _ := core.Git(forge.RepoPath("me/p"), "rev-parse", "main")
+	main := strings.TrimSpace(out)
+	rank := -1
+	m.Retest = func(p core.Project, sha, _ string, _ core.Check, _ bool) bool {
+		rank = m.checkRank(p.Name, sha, "retest")
+		return true
+	}
+	task := &Task{ID: "t1", Project: p.Name}
+	var c core.Check
+	for i, ok := 0, false; !ok; i++ { // main's test, then its retest, run behind the step
+		if i == 5 {
+			t.Fatal("main's tests still pending after 5 steps")
+		}
+		var err error
+		if c, ok, err = m.mainTests(task, p, main, "exit 1"); err != nil {
+			t.Fatal(err)
+		}
+		m.Wait()
+	}
+	if !c.OK || rank != rankMain {
+		t.Fatalf("ok %v, retest ranked %d", c.OK, rank)
+	}
+	if got := m.checkRank(p.Name, main, "test"); got != 0 {
+		t.Fatalf("answered: still ranked %d", got)
 	}
 }

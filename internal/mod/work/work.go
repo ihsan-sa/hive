@@ -313,10 +313,11 @@ type Module struct {
 	// unset, such a change can't be judged and waits.
 	Gate func(ctx context.Context, j GateJob) core.GateResult
 
-	mu    sync.Mutex
-	tasks map[string]*Task
-	busy  map[string]bool
-	aims  map[string]aimAsk // aims asked while a step held the task, set as it ends
+	mu     sync.Mutex
+	tasks  map[string]*Task
+	busy   map[string]bool
+	stepAt map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
+	aims   map[string]aimAsk    // aims asked while a step held the task, set as it ends
 	// steered is when the person's stop, retry or recheck (steer) last saved
 	// each task: a step whose copy is older saves nothing after it, nor
 	// merges, so it can't undo what they asked. It grows by one key per task
@@ -379,9 +380,11 @@ type Module struct {
 	probe   time.Time
 	probing bool
 	online  time.Time
-	// limit is when GitHub's pause on writes ends, and limitText why.
+	// limit is when GitHub's pause on writes (or, limitAll, on every call)
+	// ends, and limitText why.
 	limit     time.Time
 	limitText string
+	limitAll  bool
 	// slow is when a call was last killed by its timeout (settle).
 	slow time.Time
 	// refusedAsked is when the checks of each task stopped on a checks
@@ -459,7 +462,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
-	c.Effects.Slots.Prioritize(m.checkRank)
+	c.Effects.Slots.Prioritize(m.checkRank, rankMain)
 	return m
 }
 
@@ -852,6 +855,7 @@ func (m *Module) Tick() {
 	m.revive()
 	m.reviveDrafts()
 	m.paceChecks()
+	m.reapStuck()
 	tasks := m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) })
 	start, wait := m.admit(tasks)
 	for _, t := range tasks {
@@ -865,13 +869,62 @@ func (m *Module) Tick() {
 			continue
 		}
 		m.busy[t.ID] = true
+		began := time.Now()
+		if m.stepAt == nil {
+			m.stepAt = map[string]time.Time{}
+		}
+		m.stepAt[t.ID] = began
 		m.steps.Add(1)
 		m.mu.Unlock()
 		go func(t Task) {
 			defer m.steps.Done()
-			defer m.release(t.ID)
+			defer m.endStep(t.ID, began)
 			m.settle(&t, m.step(&t))
 		}(t)
+	}
+}
+
+// endStep frees t's task when the step that began at began ends, unless
+// reapStuck let it go and a newer step may hold the task.
+func (m *Module) endStep(id string, began time.Time) {
+	m.mu.Lock()
+	mine := m.stepAt[id].Equal(began)
+	if mine {
+		delete(m.stepAt, id)
+	}
+	m.mu.Unlock()
+	if mine {
+		m.release(id)
+	}
+}
+
+// stepLimit is how long one step may hold a task before Tick lets it go: a
+// step hung on a call that never returns would otherwise leave the task
+// "has a step running right now" for good, refusing every recheck. It sits
+// well above the longest healthy step, which can wait for a check slot, then
+// run a sandboxed check of up to 30 minutes, twice on a retry.
+var stepLimit = 3 * time.Hour
+
+// reapStuck frees the tasks whose Tick step has run past stepLimit, so the
+// next tick steps them again. The reap is a steer save, journalled with the
+// stage the step was in: the old step's later saves are dropped as from a
+// copy before the steer, and overtaken() stops it. If it ever returns, it
+// leaves the new holder's mark alone (see Tick).
+func (m *Module) reapStuck() {
+	m.mu.Lock()
+	var stuck []string
+	for id, at := range m.stepAt {
+		if time.Since(at) > stepLimit {
+			stuck = append(stuck, id)
+			delete(m.stepAt, id)
+			delete(m.busy, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range stuck {
+		if t, ok := m.Get(id); ok {
+			m.steer(&t, fmt.Sprintf("its step in %s ran past %s and was let go; it steps again", t.Stage, stepLimit))
+		}
 	}
 }
 
@@ -1037,6 +1090,9 @@ func (m *Module) Offline() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.offline == "" && time.Now().Before(m.limit) {
+		if m.limitAll {
+			return "the login's GitHub API quota is spent or nearly, so the Hive's calls wait until " + m.limit.UTC().Format("15:04Z")
+		}
 		return "GitHub asked the Hive to slow down, so its writes wait until " + m.limit.UTC().Format("15:04Z")
 	}
 	return m.offline
@@ -1047,7 +1103,7 @@ func (m *Module) limited(rl *core.RateLimited) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if rl.Until.After(m.limit) {
-		m.limit, m.limitText = rl.Until, rl.Text
+		m.limit, m.limitText, m.limitAll = rl.Until, rl.Text, rl.All
 	}
 }
 
@@ -1997,8 +2053,9 @@ func (m *Module) failsAgain(t *Task, p core.Project, command string, c core.Chec
 // passing then, it was a flake of a slow or busy machine, filed to fix, and
 // main counts as green. The answer is the newest "retest" check on main.
 //
-// Either run is queued behind t's step, once however many tasks ask: until
-// it ends, ok is false and t waits where it is.
+// Every red change on main waits on it, so its checks go ahead of the line.
+// Either run is queued behind t's step, once however many tasks ask: until it
+// ends, ok is false and t waits where it is.
 func (m *Module) mainTests(t *Task, p core.Project, main, command string) (c core.Check, ok bool, err error) {
 	key, rekey := "main:"+p.Name+":"+main, "main-retest:"+p.Name+":"+main
 	if c, ok := m.takeBehind(rekey); ok {
@@ -2012,6 +2069,7 @@ func (m *Module) mainTests(t *Task, p core.Project, main, command string) (c cor
 			return core.Check{}, false, err
 		}
 		if c, ok = m.runBehind(t.ID, key, main, func() core.Check {
+			defer m.MeasuringMain(p.Name, main)()
 			return m.C.Effects.RunCheck(p, main, "test", command)
 		}); !ok {
 			return core.Check{}, false, nil
@@ -2029,6 +2087,7 @@ func (m *Module) mainTests(t *Task, p core.Project, main, command string) (c cor
 	}
 	red := c
 	if c, ok = m.runBehind(t.ID, rekey, main, func() core.Check {
+		defer m.MeasuringMain(p.Name, main)()
 		red.OK = m.Retest(p, main, command, red, true)
 		return red
 	}); !ok {
