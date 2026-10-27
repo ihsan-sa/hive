@@ -553,13 +553,15 @@ func GateWord(outcome string) string {
 // killed past its time) left its children and its bulk (checkouts, homes,
 // Go caches) there, and only a later Reap of that folder ends them. The
 // folders are listed under the lock that names a new run's folder, so a
-// gate that starts meanwhile is never among them. It returns how many
-// processes reap ended.
+// gate that starts meanwhile is never among them. It also removes the
+// lessons.md gates once kept there, which nothing reads since a rollback
+// stopped writing lessons. It returns how many processes reap ended.
 func (m *Module) TidyGates(reap func(out string) int) int {
 	m.mu.Lock()
 	var outs []string
 	for _, p := range m.C.Projects.List() {
 		dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
+		os.Remove(filepath.Join(dir, "lessons.md"))
 		ents, _ := os.ReadDir(dir)
 		for _, e := range ents {
 			if out := filepath.Join(dir, e.Name()); e.IsDir() && !m.gateLive(out) {
