@@ -87,11 +87,11 @@ func testComments(f *core.Local, pr int) (n int) {
 // diff and the result as they were posts none, and a changed result does.
 func TestOneTestCommentPerHead(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	task.Stage, task.Recheck = StageTesting, true // tested again on the same head
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if n := testComments(forge, task.PR.Number); n != 1 {
@@ -103,7 +103,7 @@ func TestOneTestCommentPerHead(t *testing.T) {
 	if ok, err := m.catchUp(task, p, main, "main moved"); !ok || err != nil || task.SHA == old {
 		t.Fatalf("catch-up: %v %v", ok, err)
 	}
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if n := testComments(forge, task.PR.Number); n != 1 {
@@ -113,14 +113,14 @@ func TestOneTestCommentPerHead(t *testing.T) {
 
 func TestChangedResultComments(t *testing.T) {
 	m, task, p, forge := gateRig(t, true, map[string]string{"feature.txt": "y"})
-	if err := m.test(task, p); err != nil { // fails with main
+	if err := testStep(m, task, p); err != nil { // fails with main
 		t.Fatal(err)
 	}
 	pushMain(t, forge, map[string]string{"BROKEN": ""})
-	if err := m.test(task, p); err != nil { // main green: caught up
+	if err := testStep(m, task, p); err != nil { // main green: caught up
 		t.Fatal(err)
 	}
-	if err := m.test(task, p); err != nil { // passes now
+	if err := testStep(m, task, p); err != nil { // passes now
 		t.Fatal(err)
 	}
 	if n := testComments(forge, task.PR.Number); n != 2 {
