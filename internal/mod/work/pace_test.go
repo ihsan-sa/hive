@@ -1,7 +1,6 @@
 package work
 
 import (
-	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -256,7 +255,7 @@ func TestPaceHasASafetyCeiling(t *testing.T) {
 }
 
 // The workers' pace grows only for a brief that waits on the limit itself:
-// one waiting on another's files would leave the new slot empty. When it
+// a held one would leave the new slot empty. When it
 // does grow, the brief starts in the same tick.
 func TestPaceGrowsOnlyForBriefsTheLimitHolds(t *testing.T) {
 	m := queueRig(t)
@@ -276,13 +275,16 @@ func TestPaceGrowsOnlyForBriefsTheLimitHolds(t *testing.T) {
 	a := file(t, m, "cap the checks", "Checks run via internal/core/effects.go.")
 	tick(m)
 	b := file(t, m, "hold strained turns", "Also in internal/core/effects.go, launch.")
+	held := stageOf(t, m, b)
+	held.Held, held.HeldBy = true, "lead"
+	m.save(&held, "held")
 	set(1)
 	tick(m)
-	if got := stageOf(t, m, b); got.Stage != StageQueued || !strings.Contains(got.Reason, "both touch") {
-		t.Fatalf("overlapping brief: stage %q reason %q", got.Stage, got.Reason)
+	if got := stageOf(t, m, b); got.Stage != StageQueued || !strings.Contains(got.Reason, "held by") {
+		t.Fatalf("held brief: stage %q reason %q", got.Stage, got.Reason)
 	}
 	if l := m.workers.get(); l != 1 {
-		t.Fatalf("grew for a brief that waits on another's files: %d", l)
+		t.Fatalf("grew for a held brief: %d", l)
 	}
 	c := file(t, m, "show the queue", "On the dashboard, internal/tui/views.go.")
 	set(1)
@@ -335,9 +337,9 @@ func TestSteady(t *testing.T) {
 	}
 }
 
-// A check of a task queued briefs wait on ranks first, a fix's next, and the
-// rest, or a sha no task holds, not at all (issue #838).
-func TestCheckRankFreesThenFixes(t *testing.T) {
+// A fix's check ranks first, and the rest, or a sha no task holds, not at
+// all.
+func TestCheckRankFixes(t *testing.T) {
 	m, _, _ := helperRig(t)
 	put := func(tk Task) {
 		m.mu.Lock()
@@ -348,14 +350,12 @@ func TestCheckRankFreesThenFixes(t *testing.T) {
 	put(Task{ID: "fix", Project: "p", SHA: "s2", Stage: StageTesting, Aim: AimFix})
 	put(Task{ID: "gain", Project: "p", SHA: "s3", Stage: StageTesting})
 	put(Task{ID: "done", Project: "p", SHA: "s4", Stage: StageDone})
-	put(Task{ID: "waiter", Project: "p", Stage: StageQueued, Reason: fmt.Sprintf("waiting for %q (task %s) to land: both touch a.go", "holds", "blocker")})
-	put(Task{ID: "waiter2", Project: "p", Stage: StageQueued, Reason: fmt.Sprintf("waiting for %q (task %s) to land: both touch a.go", "x", "done")})
-	for sha, want := range map[string]int{"s1": rankFrees, "s2": rankFix, "s3": 0, "s4": 0, "nobody": 0} {
+	for sha, want := range map[string]int{"s1": 0, "s2": rankFix, "s3": 0, "s4": 0, "nobody": 0} {
 		if got := m.checkRank("p", sha, "test"); got != want {
 			t.Errorf("rank of %s: %d, want %d", sha, got, want)
 		}
 	}
-	if got := m.checkRank("other", "s1", "test"); got != 0 {
+	if got := m.checkRank("other", "s2", "test"); got != 0 {
 		t.Errorf("another project's sha ranked %d", got)
 	}
 }
@@ -365,13 +365,12 @@ func TestCheckRankFreesThenFixes(t *testing.T) {
 func TestCheckRankMainFirst(t *testing.T) {
 	m, _, _ := helperRig(t)
 	m.mu.Lock()
-	m.tasks["blocker"] = &Task{ID: "blocker", Project: "p", SHA: "s1", Stage: StageTesting}
-	m.tasks["waiter"] = &Task{ID: "waiter", Project: "p", Stage: StageQueued, Reason: fmt.Sprintf("waiting for %q (task %s) to land: both touch a.go", "x", "blocker")}
+	m.tasks["fix"] = &Task{ID: "fix", Project: "p", SHA: "s1", Stage: StageTesting, Aim: AimFix}
 	m.mu.Unlock()
 	done := m.MeasuringMain("p", "main1")
 	again := m.MeasuringMain("p", "main1")
 	if got := m.checkRank("p", "main1", "size"); got != rankMain || got <= m.checkRank("p", "s1", "test") {
-		t.Errorf("main's measurement ranked %d, a freeing check %d", got, m.checkRank("p", "s1", "test"))
+		t.Errorf("main's measurement ranked %d, a fix's check %d", got, m.checkRank("p", "s1", "test"))
 	}
 	if got := m.checkRank("other", "main1", "score"); got != 0 {
 		t.Errorf("another project's sha ranked %d", got)
