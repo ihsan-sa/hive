@@ -1451,6 +1451,29 @@ func TestMergeForgeCheckBundleFailureIsRecorded(t *testing.T) {
 	t.Fatal("no task.bundle_failed event")
 }
 
+// The findings a red check sends back name the main the checks ran with, as
+// forge-failures.md does, not only main at report time.
+func TestForgeFindingsNameTheTestedMain(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	rerunSpent(task)
+	tested, _ := m.C.Effects.Sync(p)
+	pushMain(t, f, map[string]string{"fix.txt": "the fix, landed after the checks ran"})
+	main, _ := m.C.Effects.Sync(p)
+	f.SetCheckLog(p.Repo, "head/mac", "HEAD is now at a9ae988 Merge "+task.SHA+" into "+tested+"\n--- FAIL: TestX (0.1s)\n##[error]Process completed with exit code 1.\n")
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckFail}, core.CheckRun{Name: "test (macos-latest)", State: core.CheckFail, Detail: "failure", URL: "head/mac"})
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckFail}, core.CheckRun{Name: "test (macos-latest)", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	for _, want := range []string{forgeFailed + core.Short(task.SHA) + " (run merged with main at " + core.Short(tested) + "; main has moved to " + core.Short(main) + " since)", "test (ubuntu-latest) fail on main at " + core.Short(main) + " too"} {
+		if !strings.Contains(task.Findings, want) {
+			t.Fatalf("no %q in findings %q", want, task.Findings)
+		}
+	}
+}
+
 // The report names the main the checks' log says they ran with, not main at
 // report time: a test failing on an older main may be fixed on main now.
 func TestForgeFailuresNamesTheTestedMain(t *testing.T) {
