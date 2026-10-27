@@ -331,6 +331,9 @@ type Module struct {
 	// mergeRuns holds each task's merged-with-main test running behind a
 	// step, at most one, until a step takes the result (testMerged).
 	mergeRuns map[string]*mergeRun
+	// batches holds each project's merge batches still at main: the PRs a
+	// front's merged test took in with it (takeLine).
+	batches map[string][]*mergeBatch
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -2355,7 +2358,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	// merging, each reading its PR twice a minute, GitHub's API limit ran
 	// out. Its PR is read whole once it is at the front, where a close, a
 	// draft or a moved head is caught before anything merges.
-	if strings.HasPrefix(t.Reason, MergeLineWait) {
+	if strings.HasPrefix(t.Reason, MergeLineWait) && m.batchPassed(t, "") == "" {
 		if ahead := m.mergeFront(t, p); ahead != nil {
 			main, _ := core.Git(m.C.WS.Project(p.Name), "rev-parse", "--verify", "-q", "refs/remotes/origin/"+p.Branch)
 			m.hold(t, p, lineWait(ahead, main))
@@ -2473,6 +2476,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if err != nil {
 		return err
 	}
+	m.batchMerged(t, main, merged)
 	m.merged(t, merged, "merged as "+core.Short(merged))
 	return nil
 }
@@ -2647,6 +2651,11 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	if t.MergedOK == key {
 		return false, nil
 	}
+	if front := m.batchPassed(t, main); front != "" {
+		t.MergedOK = key
+		m.save(t, "its tests pass merged with main at "+core.Short(main)+" in the batch "+front+" tested, so it merges as it is")
+		return false, nil
+	}
 	cfg := m.C.Effects.Config(p, main)
 	// One merged test per task at a time: one queued for an earlier head or
 	// main is waited out, not joined by another, so main moving while the
@@ -2672,7 +2681,12 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 		if _, err := m.C.Sandbox(); err != nil {
 			return true, err
 		}
+		merged, batch := m.takeLine(t, p, main, merged)
 		r = m.testMerged(t, p, key, main, merged, cfg.Test)
+		m.addBatch(p.Name, main, &mergeBatch{front: t.ID, label: fmt.Sprintf("#%d", t.PR.Number), tip: main, heads: batch})
+		if len(batch) > 0 {
+			m.save(t, fmt.Sprintf("testing its head merged with main at %s together with the %d PRs waiting behind it", core.Short(main), len(batch)))
+		}
 	}
 	if !r.done {
 		t.MergedTest = r.sha
@@ -2681,6 +2695,22 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	}
 	t.MergedTest = ""
 	c, merged := r.c, r.sha
+	if b := m.batchOf(t, main); b != nil && len(b.heads) > 0 {
+		if !c.OK && c.CantRun == "" {
+			// Red with the line merged in: the front is tested alone, and
+			// the rest wait for the next front's batch.
+			m.mu.Lock()
+			b.failed = true
+			m.mu.Unlock()
+			m.save(t, "its batch's tests fail merged with main at "+core.Short(main)+" (as "+core.Short(merged)+"); testing it alone")
+			return m.mergedTests(t, p, main)
+		}
+		if c.OK {
+			m.mu.Lock()
+			b.ok = true
+			m.mu.Unlock()
+		}
+	}
 	if c.CantRun != "" {
 		return true, m.cantRun(t, p, c)
 	}
@@ -2714,6 +2744,128 @@ func lineWait(ahead *Task, main string) string {
 // running.
 const mergedTestWait = "testing its head merged with main"
 
+// maxBatch is how many PRs behind the front its merged test takes in at most.
+const maxBatch = 16
+
+// mergeBatch is the PRs a front's merged test took in with it (issue #1771):
+// heads holds each one's task and the head merged in, tip the main it holds
+// now (the one tested, moved on by each of the batch's own merges), ok that
+// the test passed and failed that it didn't, so the front tests alone.
+type mergeBatch struct {
+	front, label, tip string
+	heads             map[string]string
+	ok, failed        bool
+}
+
+// takeLine merges into merged, t's head merged with main, every PR waiting
+// behind t in the line, in line order and up to maxBatch, and returns the
+// result and the heads it took in (issue #1771): one test then lets them
+// all through on green, where a test for each restarted on every merge
+// and 72 tasks waited behind one. A PR that conflicts with the batch is
+// left out to test later. A batch that failed for this front and main
+// takes in nothing: the front is tested alone.
+func (m *Module) takeLine(t *Task, p core.Project, main, merged string) (string, map[string]string) {
+	m.mu.Lock()
+	for _, b := range m.batches[p.Name] {
+		if b.front == t.ID && b.tip == main && b.failed {
+			m.mu.Unlock()
+			return merged, nil
+		}
+	}
+	var line []*Task
+	for _, u := range m.tasks {
+		if u.ID != t.ID && u.Project == p.Name && u.Stage == StageMerging && u.SHA != "" && strings.HasPrefix(u.Reason, MergeLineWait) {
+			line = append(line, &Task{ID: u.ID, Kind: u.Kind, PR: u.PR, SHA: u.SHA})
+		}
+	}
+	m.mu.Unlock()
+	sort.Slice(line, func(i, j int) bool { return lineBefore(line[i], line[j]) })
+	heads := map[string]string{}
+	for _, u := range line {
+		if len(heads) == maxBatch {
+			break
+		}
+		next, err := m.C.Effects.UpdateBranch(p, u.SHA, merged, "")
+		if err != nil {
+			continue
+		}
+		merged, heads[u.ID] = next, u.SHA
+	}
+	return merged, heads
+}
+
+// addBatch records b, a batch at main, and forgets project's batches whose
+// tip main has left: a passed batch whose PRs are still clearing the rest of
+// the gate stays beside the next front's.
+func (m *Module) addBatch(project, main string, b *mergeBatch) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.batches == nil {
+		m.batches = map[string][]*mergeBatch{}
+	}
+	keep := []*mergeBatch{b}
+	for _, o := range m.batches[project] {
+		if o.tip == main && o.front != b.front {
+			keep = append(keep, o)
+		}
+	}
+	m.batches[project] = keep
+}
+
+// batchOf returns the batch t's merged test at main is testing as its
+// front, if any.
+func (m *Module) batchOf(t *Task, main string) *mergeBatch {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.batches[t.Project] {
+		if b.front == t.ID && b.tip == main && !b.failed {
+			return b
+		}
+	}
+	return nil
+}
+
+// batchPassed names the front whose batch passed with t's head in it, merged
+// with what main holds now: the main it tested, plus only the batch's own
+// merges since. Empty when there is none; with main "", any passed batch
+// holding t's head counts, so a step waiting in the line goes on to read its
+// PR and sync main.
+func (m *Module) batchPassed(t *Task, main string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.batches[t.Project] {
+		if b.ok && (main == "" || b.tip == main) && t.SHA != "" && b.heads[t.ID] == t.SHA {
+			return b.label
+		}
+	}
+	return ""
+}
+
+// batchMerged moves a passed batch's tip on when one of its own PRs merges
+// onto it; a merge onto any other main leaves the tip behind, and the
+// batch's rest wait in the line again.
+func (m *Module) batchMerged(t *Task, main, merged string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.batches[t.Project] {
+		if _, in := b.heads[t.ID]; b.ok && b.tip == main && (in || b.front == t.ID) {
+			b.tip = merged
+			delete(b.heads, t.ID)
+		}
+	}
+}
+
+// lineBefore orders the merge line: reverts first, then the oldest PR.
+func lineBefore(a, b *Task) bool {
+	if ra, rb := a.Kind == "revert", b.Kind == "revert"; ra != rb {
+		return ra
+	}
+	if a.PR.Number != b.PR.Number {
+		return a.PR.Number < b.PR.Number
+	}
+	return a.ID < b.ID
+}
+
 // mergeFront returns the task ahead of t in its project's merge line, or nil
 // when t is at its front. Only the front tests its head merged with main
 // (issue #1727): every main merge made all of them stale at once, so 46
@@ -2728,15 +2880,6 @@ const mergedTestWait = "testing its head merged with main"
 func (m *Module) mergeFront(t *Task, p core.Project) *Task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	before := func(a, b *Task) bool {
-		if ra, rb := a.Kind == "revert", b.Kind == "revert"; ra != rb {
-			return ra
-		}
-		if a.PR.Number != b.PR.Number {
-			return a.PR.Number < b.PR.Number
-		}
-		return a.ID < b.ID
-	}
 	var front *Task
 	for _, u := range m.tasks {
 		if u.ID == t.ID || u.Project != p.Name || u.Stage != StageMerging {
@@ -2748,7 +2891,7 @@ func (m *Module) mergeFront(t *Task, p core.Project) *Task {
 		if !strings.HasPrefix(u.Reason, mergedTestWait) && !strings.HasPrefix(u.Reason, MergeLineWait) {
 			continue
 		}
-		if before(u, t) && (front == nil || before(u, front)) {
+		if lineBefore(u, t) && (front == nil || lineBefore(u, front)) {
 			front = u
 		}
 	}
