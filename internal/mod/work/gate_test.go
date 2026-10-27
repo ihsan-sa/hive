@@ -325,6 +325,27 @@ func TestGateNoWorseThanRedMainMerges(t *testing.T) {
 	}
 }
 
+// A change no worse than a red main, where main has since been fixed: its
+// merge with main passes, but its own red is now its own. Main's new commit
+// had no test run recorded, so the merge records one and brings the change
+// up to date to be tested again, rather than refused toward giving up.
+func TestGateNoWorseMainFixedSinceTestsAgain(t *testing.T) {
+	const red = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\nexit 1\n"
+	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": red}
+	m, task, p, f := gateRigSeeded(t, false, onMain, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	pushMain(t, f, map[string]string{"t.sh": "exit 0\n"})
+	head := task.SHA
+	mergeOnce(t, m, task, p)
+	main, _ := m.C.Effects.Sync(p)
+	if mc, ok := m.C.Effects.GetCheck(p.Name, main, "test"); !ok || !mc.OK {
+		t.Fatalf("main's run at its new commit wasn't recorded: %v %+v", ok, mc)
+	}
+	if task.Stage != StageTesting || task.SHA == head || prState(t, f, task.PR.Number) == "MERGED" {
+		t.Fatalf("stage %q, head moved %v, reason %q", task.Stage, task.SHA != head, task.Reason)
+	}
+}
+
 // A merge the gate refuses says what refused it, not the reason of a hold it
 // already passed (a security read, say).
 func TestMergeRefusalReplacesStaleReason(t *testing.T) {
