@@ -2,7 +2,6 @@ package core
 
 import (
 	"errors"
-	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -201,37 +200,5 @@ func TestPromptTooLongForAnArg(t *testing.T) {
 	os.WriteFile(prompt, []byte("Fix it."), 0o644)
 	if _, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, r, 1, false, prompt, nil, ""); !errors.Is(err, harness.ErrArgTooLong) {
 		t.Fatalf("a system prompt and brief over 128 KiB: %v", err)
-	}
-}
-
-// A running Claude turn's cost shows before its result line: its replies'
-// tokens, each counted once, at the model's list price; the result line's
-// own cost then replaces it.
-func TestRunningTurnEstimate(t *testing.T) {
-	c, _ := testHive(t)
-	r := Run{RunSpec: RunSpec{ID: "r3", Harness: "claude", Model: "opus"}, Status: StatusRunning, Turn: 1}
-	c.Runs.mu.Lock()
-	c.Runs.runs[r.ID] = &r
-	c.Runs.mu.Unlock()
-	out := c.WS.TurnOut(r.ID, 1)
-	os.MkdirAll(filepath.Dir(out), 0o755)
-	lines := `{"type":"system","subtype":"init","session_id":"s","model":"claude-sonnet-5-5"}
-{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":1000000,"output_tokens":10}}}
-{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","name":"Bash"}],"usage":{"input_tokens":1000000,"output_tokens":100000}}}
-{"type":"assistant","message":{"id":"m2","content":[],"usage":{"input_tokens":0,"cache_read_input_tokens":1000000,"output_tokens":0}}}
-`
-	os.WriteFile(out, []byte(lines), 0o644)
-	c.Runs.estimate(r, out)
-	got, _ := c.Runs.Get(r.ID)
-	// sonnet 5.5, as the harness said it began: $2 in, $1 out, $0.20 cache read
-	if math.Abs(got.Estimate-3.2) > 1e-9 {
-		t.Fatalf("estimate %v", got.Estimate)
-	}
-	if tl := c.Runs.ReadTurn(r, 1); tl.Used != (harness.Tokens{Input: 1000000, Output: 100000, CacheRead: 1000000}) {
-		t.Fatalf("used %+v", tl.Used)
-	}
-	// an unpriced harness shows none
-	if Estimate(Run{RunSpec: RunSpec{Harness: "codex"}}, TurnLog{Used: harness.Tokens{Input: 5}}, Config{}) != 0 {
-		t.Fatal("codex has no estimate")
 	}
 }

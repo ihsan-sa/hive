@@ -6,6 +6,7 @@
 package stats
 
 import (
+	"maps"
 	"sync"
 	"time"
 
@@ -78,6 +79,9 @@ type View struct {
 	Hour  Activity `json:"hour"`
 	Day   Activity `json:"day"` // the last 24 hours
 	All   AllTime  `json:"all"`
+	// Live is what each running turn has spent so far, estimated from its
+	// replies' tokens (Live), by run; the run's Cost doesn't hold it yet.
+	Live map[string]float64 `json:"live,omitempty"`
 }
 
 // The kinds of a recent point.
@@ -100,6 +104,7 @@ type run struct {
 	session              string
 	spend                core.SessionSpend
 	turnAt               time.Time // the open turn's start
+	turn                 int       // the open turn
 	ended                bool
 }
 
@@ -109,17 +114,18 @@ type Tally struct {
 
 	mu       sync.Mutex
 	runs     map[string]*run
-	stages   map[string]string // task -> its last stage
-	released map[string]bool   // project + tag
-	days     map[string]*Spend // "2006-01-02" in Loc
-	months   map[string]*Spend // "2006-01" in UTC
-	recent   []point           // the last 24 hours before the newest event
+	stages   map[string]string  // task -> its last stage
+	released map[string]bool    // project + tag
+	days     map[string]*Spend  // "2006-01-02" in Loc
+	months   map[string]*Spend  // "2006-01" in UTC
+	recent   []point            // the last 24 hours before the newest event
+	lives    map[string]float64 // running turns' estimated spend so far, by run (Live)
 	all      AllTime
 }
 
 // NewTally is an empty tally.
 func NewTally() *Tally {
-	return &Tally{runs: map[string]*run{}, stages: map[string]string{}, released: map[string]bool{},
+	return &Tally{runs: map[string]*run{}, stages: map[string]string{}, released: map[string]bool{}, lives: map[string]float64{},
 		days: map[string]*Spend{}, months: map[string]*Spend{}, all: AllTime{Runs: map[string]int{}, Models: map[string]Model{}}}
 }
 
@@ -155,10 +161,14 @@ func (t *Tally) Apply(e core.Event) {
 		t.all.Runs[s.Role]++
 		t.point(e.At, kStarted)
 	case "run.turn_started":
-		var s struct{ ID, Session, Model string }
+		var s struct {
+			ID, Session, Model string
+			Turn               int
+		}
 		e.Decode(&s)
 		if r := t.runs[s.ID]; r != nil {
-			r.turnAt = e.At
+			r.turnAt, r.turn = e.At, s.Turn
+			delete(t.lives, s.ID)
 			if s.Session != "" {
 				r.session = s.Session
 			}
@@ -183,6 +193,7 @@ func (t *Tally) Apply(e core.Event) {
 			t.all.AgentHours += e.At.Sub(r.turnAt).Hours()
 			r.turnAt = time.Time{}
 		}
+		delete(t.lives, s.ID)
 		t.all.Turns++
 		t.point(e.At, kTurn)
 		mu := t.all.Models[r.model]
@@ -248,6 +259,16 @@ func (t *Tally) Apply(e core.Event) {
 	}
 }
 
+// live sets what a run's open turn has spent so far; an estimate of a turn
+// that has since ended, or another turn's, is dropped.
+func (t *Tally) live(id string, turn int, usd float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if r := t.runs[id]; r != nil && !r.turnAt.IsZero() && r.turn == turn {
+		t.lives[id] = usd
+	}
+}
+
 func (t *Tally) spend(m map[string]*Spend, key string, r *run, usd float64) {
 	s := m[key]
 	if s == nil {
@@ -300,6 +321,9 @@ func (t *Tally) View(now time.Time) View {
 	}
 	if s := t.months[now.UTC().Format("2006-01")]; s != nil {
 		v.Month = s.clone()
+	}
+	if len(t.lives) > 0 {
+		v.Live = maps.Clone(t.lives)
 	}
 	hour, day := now.Add(-time.Hour), now.Add(-24*time.Hour)
 	for _, p := range t.recent {

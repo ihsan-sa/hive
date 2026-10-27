@@ -294,10 +294,11 @@ func (m *model) taskLine(t work.Task) string {
 }
 
 // spent is what a run has cost; a running turn's replies so far are added
-// as an estimate, marked ~, until its result line says what it cost.
-func spent(r core.Run) string {
-	if r.Status == core.StatusRunning && r.Estimate > 0 {
-		return fmt.Sprintf("~$%.2f", r.Cost+r.Estimate)
+// as the stats module's estimate, marked ~, until its result line says what
+// it cost.
+func (m *model) spent(r core.Run) string {
+	if est := m.st.Stats; r.Status == core.StatusRunning && est != nil && est.Live[r.ID] > 0 {
+		return fmt.Sprintf("~$%.2f", r.Cost+est.Live[r.ID])
 	}
 	return fmt.Sprintf("$%.2f", r.Cost)
 }
@@ -317,7 +318,7 @@ func (m *model) runLine(r core.Run) string {
 	if r.Finish != nil && r.Finish.Printed {
 		extra = "(finish printed, the Hive ran it) " + extra
 	}
-	return fmt.Sprintf("%s  %s  %s  turn %d  %s  %dk ctx  %s  %s", runLabel(r), status, text.Visible(core.HarnessName(r.Harness)+":"+r.Model), r.Turn, spent(r), r.Context/1000, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
+	return fmt.Sprintf("%s  %s  %s  turn %d  %s  %dk ctx  %s  %s", runLabel(r), status, text.Visible(core.HarnessName(r.Harness)+":"+r.Model), r.Turn, m.spent(r), r.Context/1000, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
 }
 
 // sizeLine is the newest measured size (for the Hive, its core's: docs/core.md)
@@ -615,7 +616,7 @@ func (m *model) viewDetail(d *detail) []string {
 		kv("status", r.Status+"  "+r.Reason)
 		kv("project", r.Project+"  task "+r.Task)
 		kv("model", r.Harness+" "+r.Model)
-		kv("turns", fmt.Sprintf("%d  cost %s  started %s", r.Turn, spent(r), r.Created.Local().Format("Mon 15:04")))
+		kv("turns", fmt.Sprintf("%d  cost %s  started %s", r.Turn, m.spent(r), r.Created.Local().Format("Mon 15:04")))
 		kv("context", fmt.Sprintf("%dk tokens", r.Context/1000))
 		if r.Progress != "" {
 			kv("progress", r.Progress+"  "+ago(r.ProgressAt))
