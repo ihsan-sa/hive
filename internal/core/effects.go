@@ -77,17 +77,18 @@ type Effects struct {
 	hostMade  map[string]HostCommit
 	pushes    map[string][]string // project@branch -> each commit pushed to it, oldest first
 	approvals map[string]bool
-	failing   map[string]CheckFailure // repo url -> what a failed check's log says
-	steps     map[string][]JobStep    // repo url -> a finished check's steps
-	gates     map[string]GateResult   // project@head@main -> the recursive gate's verdict (selfgate.go)
-	gateMains map[string]GateResult   // project@main -> the newest can't-run there not tied to its head (GateAtMain)
-	standing  map[string]bool         // project@head@verdict's main@main -> whether that verdict still stands there (StandingGate)
-	judged    map[string]Judgement    // project@sha@main -> the judge's newest call (judge.go)
-	homes     map[string]bool         // running checks' homes (disk.go)
-	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
-	buildMu   sync.RWMutex            // the same for the projects' build caches
-	disk      DiskUse                 // the last measurement of the Hive's disk use
-	diskFull  bool                    // a check couldn't run for room, and the alert is out
+	failing   map[string]CheckFailure   // repo url -> what a failed check's log says
+	steps     map[string][]JobStep      // repo url -> a finished check's steps
+	gates     map[string]GateResult     // project@head@main -> the recursive gate's verdict (selfgate.go)
+	gateMains map[string]GateResult     // project@main -> the newest can't-run there not tied to its head (GateAtMain)
+	standing  map[string]bool           // project@head@verdict's main@main -> whether that verdict still stands there (StandingGate)
+	judged    map[string]Judgement      // project@sha@main -> the judge's newest call (judge.go)
+	errored   map[string]map[string]any // project#pr@sha -> the effect.merged a merge the forge answered with an error would have journaled
+	homes     map[string]bool           // folders in use that Prune leaves: running checks' homes and clean checkouts (disk.go)
+	modMu     sync.RWMutex              // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
+	buildMu   sync.RWMutex              // the same for the projects' build caches
+	disk      DiskUse                   // the last measurement of the Hive's disk use
+	diskFull  bool                      // a check couldn't run for room, and the alert is out
 
 	// OnDiskFull runs once when checks first can't run for room (the clean job).
 	OnDiskFull func()
@@ -117,7 +118,7 @@ type Verdict struct {
 	Verdict  string    `json:"verdict"` // land | fix
 	Summary  string    `json:"summary"`
 	Findings []Finding `json:"findings,omitempty"`
-	Advice   []string  `json:"advice,omitempty"` // with a land: worth doing later, not a blocker
+	Advice   []string  `json:"advice,omitempty"` // with a land: worth doing later, not a blocker; it stays on the PR
 	// Diff names the change's own diff the reviewer read (DiffID), so the read
 	// carries to any head with the same own diff, and to no other.
 	Diff string `json:"diff,omitempty"`
@@ -175,7 +176,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs, sweep: sandbox.Sweep,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}, standing: map[string]bool{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}, standing: map[string]bool{}, errored: map[string]map[string]any{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -267,6 +268,15 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var j Judgement
 			ev.Decode(&j)
 			e.judged[j.Project+"@"+j.SHA+"@"+j.Main] = j
+		case "effect.merge_errored", "effect.merged":
+			var x map[string]any
+			ev.Decode(&x)
+			k := fmt.Sprintf("%v#%v@%v", x["project"], x["pr"], x["sha"])
+			if ev.Kind == "effect.merged" {
+				delete(e.errored, k)
+			} else {
+				e.errored[k] = x
+			}
 		}
 	}
 	j.Replay(apply)
@@ -535,7 +545,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.Output = "could not make a clean checkout: " + err.Error()
 		return c
 	}
-	defer os.RemoveAll(dir)
+	defer e.dropCheckout(dir)
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
@@ -577,7 +587,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 			c.Output = "could not make a clean checkout: " + cerr.Error()
 			return c
 		}
-		defer os.RemoveAll(again)
+		defer e.dropCheckout(again)
 		if len(build.mounts) > 0 {
 			stableTimes(again) // as goBuild made the first checkout's, for the shared build cache
 		}
@@ -880,6 +890,7 @@ func guardProgram(command string) string {
 // cleanCheckout clones the host clone fresh and checks out sha.
 func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
 	dir := filepath.Join(e.ws.Gates(), p.Name, fmt.Sprintf("%s-%s-%s", short(sha), kind, NewID()[14:]))
+	e.markLive(dir, true)
 	unlock := e.lock(p.Name)
 	_, err := GitT(10*time.Minute, "", "clone", "-q", "--no-local", "--no-hardlinks", "--no-checkout", e.ws.Project(p.Name), dir)
 	if err == nil {
@@ -890,10 +901,19 @@ func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
 		_, err = Git(dir, "checkout", "-q", "--detach", sha)
 	}
 	if err != nil {
-		os.RemoveAll(dir)
+		e.dropCheckout(dir)
 		return "", err
 	}
 	return dir, nil
+}
+
+// dropCheckout removes a clean checkout and its live mark. It is marked from
+// before its clone, so Prune never takes a running check's tree for a crash's
+// leftover: goBuild dates its folders to 2001 (stableTimes), past staleAfter
+// the moment the check starts.
+func (e *Effects) dropCheckout(dir string) {
+	os.RemoveAll(dir)
+	e.markLive(dir, false)
 }
 
 // runSandboxed runs a shell command in the sandbox and returns its exit code
@@ -1497,14 +1517,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 			return "", err
 		}
 	}
-	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
-	if red := append(slices.Concat(shared, prose), warned...); err != nil && len(red) > 0 && protectionRefused.MatchString(err.Error()) {
-		return "", &RefusedRed{Checks: red, Warned: warned, Err: err}
-	}
-	if err != nil {
-		return "", err
-	}
-	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID}
+	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "root": ch.Root, "diff": ch.DiffID}
 	if len(excused) > 0 {
 		ev["quarantined"] = excused // red only on known flakes
 	}
@@ -1525,8 +1538,48 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if len(prose) > 0 {
 		ev["red_on_prose"] = prose // a change to prose alone, which can't break them
 	}
+	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
+	if red := append(slices.Concat(shared, prose), warned...); err != nil && len(red) > 0 && protectionRefused.MatchString(err.Error()) {
+		return "", &RefusedRed{Checks: red, Warned: warned, Err: err}
+	}
+	if err != nil {
+		if !errors.Is(err, ErrDraft) {
+			// A forge that timed out may have merged all the same: the
+			// effect.merged it would have had waits here for the work
+			// module to find the PR merged at sha (MergedAfterError).
+			tried := maps.Clone(ev)
+			tried["error"] = Clip(err.Error(), 300)
+			e.j.MustAppend("effect.merge_errored", tried)
+		}
+		return "", err
+	}
+	ev["merge_sha"] = merged
 	e.j.MustAppend("effect.merged", ev)
 	return merged, nil
+}
+
+// MergedAfterError journals the effect.merged of a merge whose forge call
+// errored (a 504, say) but went through: pr is merged at the very head the
+// Hive was merging, past every gate above, so it is the Hive's merge and a
+// release can cut at it. It says whether pr was such a merge; one someone
+// else merged, or at another head, isn't.
+func (e *Effects) MergedAfterError(p Project, pr PR) bool {
+	if pr.State != "MERGED" || pr.MergeSHA == "" {
+		return false
+	}
+	k := fmt.Sprintf("%s#%d@%s", p.Name, pr.Number, pr.HeadSHA)
+	e.mu.Lock()
+	tried, ok := e.errored[k]
+	delete(e.errored, k) // journaled once, however many ticks look
+	e.mu.Unlock()
+	if !ok {
+		return false
+	}
+	ev := maps.Clone(tried)
+	ev["after_error"], ev["merge_sha"] = ev["error"], pr.MergeSHA
+	delete(ev, "error")
+	e.j.MustAppend("effect.merged", ev)
+	return true
 }
 
 // ReadyPR takes the PR out of draft, only while its head is still sha; the
@@ -1849,6 +1902,22 @@ func KeyDir(key, module string) (string, bool) {
 
 var goModule = regexp.MustCompile(`(?m)^module\s+"?([^\s"]+)`)
 
+// GoModule is the module path a go.mod's text declares, or "".
+func GoModule(gomod string) string {
+	if m := goModule.FindStringSubmatch(gomod); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// WholeTree reports whether a test key is in module's root package, whose
+// tests (gofmt, the core's size) read the whole tree: any change touches
+// them, and their reds are the tree's content, never chance.
+func WholeTree(key, module string) bool {
+	where, _, _ := strings.Cut(key, "::")
+	return module != "" && where == module
+}
+
 // Excused is Excuse for task's PR on p at head: the quarantine as evidence
 // from outside task shows it, and files the head changes against main, a
 // test whose package they touch (or whose package can't be placed) never
@@ -1862,15 +1931,13 @@ func (e *Effects) Excused(p Project, main, task string, files []string, runs, ma
 }
 
 // touched reports whether a test key's package is one files (a head's
-// changes against main) touch, or can't be placed.
+// changes against main) touch, can't be placed, or is the module's root,
+// whose tests read the whole tree (WholeTree).
 func (e *Effects) touched(p Project, main string, files []string) func(key string) bool {
-	module := ""
-	if m := goModule.FindStringSubmatch(e.ReadFile(p, main, "go.mod")); m != nil {
-		module = m[1]
-	}
+	module := GoModule(e.ReadFile(p, main, "go.mod"))
 	return func(key string) bool {
 		dir, ok := KeyDir(key, module)
-		return !ok || slices.ContainsFunc(files, func(f string) bool { return path.Dir(f) == dir })
+		return !ok || WholeTree(key, module) || slices.ContainsFunc(files, func(f string) bool { return path.Dir(f) == dir })
 	}
 }
 
@@ -2264,7 +2331,7 @@ func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, er
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
+	defer e.dropCheckout(dir)
 	if _, err := Git(dir, "fetch", "-q", "origin", mainSHA); err != nil {
 		return "", err
 	}
@@ -2381,7 +2448,7 @@ func (e *Effects) Revert(p Project, mainSHA, mergeSHA, lesson string) (string, e
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
+	defer e.dropCheckout(dir)
 	if _, err := Git(dir, "revert", "--no-edit", mergeSHA); err != nil {
 		Git(dir, "revert", "--abort")
 		return "", fmt.Errorf("revert of %s does not apply cleanly: %v", short(mergeSHA), err)
@@ -2412,7 +2479,7 @@ func (e *Effects) Setup(p Project, base string, files map[string]string, message
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
+	defer e.dropCheckout(dir)
 	for path, content := range files {
 		full := filepath.Join(dir, filepath.FromSlash(path))
 		os.MkdirAll(filepath.Dir(full), 0o755)

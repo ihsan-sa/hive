@@ -88,6 +88,9 @@ func (m *Module) RerunChecks(id, by string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if going := stillRunning(runs); n == 0 && len(going) > 0 {
+		return "", fmt.Errorf("the forge's checks %s on %s are still running, and the forge re-runs no job of a run still going: once they finish, the failed ones (%s) are run again once on their own before they go back, so wait for that rather than finish again", core.CheckNames(going), core.Short(t.SHA), core.CheckNames(failed))
+	}
 	if n == 0 {
 		return "", fmt.Errorf("the forge has no finished failed run on %s to re-run: one may still be going, or never started (%s), which a re-run doesn't fix; a startup failure is often the workflow file itself, and one awaiting approval is the repo owner's to approve", core.Short(t.SHA), core.CheckNames(failed))
 	}

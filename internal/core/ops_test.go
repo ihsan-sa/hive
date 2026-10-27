@@ -169,14 +169,18 @@ func TestANewRequestWakesTheLoopOnce(t *testing.T) {
 		t.Fatalf("an empty outbox woke the loop %d times", n)
 	}
 	os.WriteFile(filepath.Join(outbox, "r1.json"), []byte(`{"op":"progress"}`), 0o600)
-	time.Sleep(60 * time.Millisecond)
+	for end := time.Now().Add(5 * time.Second); woken.Load() == 0 && time.Now().Before(end); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond) // ten more looks at the same request
 	if n := woken.Load(); n != 1 {
 		t.Fatalf("one request woke the loop %d times; want once", n)
 	}
 }
 
 // settled waits for the last lines of a file still being written, and ends
-// soon once it stops growing.
+// soon once it stops growing. The quiet is ten of the writer's gaps and the
+// bounds are wide: a loaded gate machine once held the writer past 50ms.
 func TestSettledWaitsForTheLastLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out.jsonl")
 	os.WriteFile(path, []byte("a\n"), 0o600)
@@ -189,13 +193,13 @@ func TestSettledWaitsForTheLastLines(t *testing.T) {
 		}
 	}()
 	start := time.Now()
-	settled(path, 50*time.Millisecond, time.Second)
+	settled(path, 200*time.Millisecond, 5*time.Second)
 	if raw, _ := os.ReadFile(path); strings.Count(string(raw), "line") != 4 {
 		t.Fatalf("settled after %s with %q; want all four lines", time.Since(start), raw)
 	}
 	start = time.Now()
-	settled(path, 50*time.Millisecond, 200*time.Millisecond)
-	if d := time.Since(start); d >= 150*time.Millisecond {
+	settled(path, 50*time.Millisecond, 5*time.Second)
+	if d := time.Since(start); d >= 2*time.Second {
 		t.Fatalf("a still file took %s to settle; want about 50ms", d)
 	}
 }
