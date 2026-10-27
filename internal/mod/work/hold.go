@@ -13,8 +13,8 @@ import (
 )
 
 // A merge hold is the person's stop on a project's merges: while it is on,
-// the merge step lands nothing outside it (the Hive's own follow-ups,
-// reverts and checkpoints included). Held work still goes through its tests,
+// the merge step lands nothing outside it (the Hive's own reverts
+// and checkpoints included). Held work still goes through its tests,
 // reads and checks, and waits as a ready pull request at the last step. The
 // person sets it (hive hold), or any agent on the person's word; it ends when
 // one of them lifts it or its condition is met. core.Effects.Merge refuses a
