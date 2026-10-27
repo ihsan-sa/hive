@@ -112,7 +112,7 @@ func TestFixWinsOverAScoreDip(t *testing.T) {
 		t.Fatal("the look into a dip names no failure, so it is taken as a gain")
 	}
 	p, _ := m.C.Projects.Get("p")
-	m.lookIntoDip(p, work.Task{ID: "fix-1", Title: fix.Title, MergeSHA: ms.SHA}, "again")
+	m.lookIntoDip(p, work.Task{ID: "fix-1", Title: fix.Title, MergeSHA: ms.SHA}, "again", 5)
 	if len(looks()) != 1 {
 		t.Fatal("the same dip was looked into twice")
 	}
@@ -125,6 +125,44 @@ func TestFixWinsOverAScoreDip(t *testing.T) {
 	}
 	if b, _ := m.Best("p"); b != 3 {
 		t.Fatalf("best %v, want the fix's 3", b)
+	}
+}
+
+// A dip while an earlier one is still looked into files no second look:
+// the open one takes it as context (three of four looks on 2026-10-27
+// re-found one cause). A dip gone from main by the time it is read, main past
+// the merge scoring back within tolerance, files none either.
+func TestNoSecondLookIntoAKnownOrGoneDip(t *testing.T) {
+	m, merge := scored(t)
+	looks := func() []work.Task {
+		return m.Work.List(func(x work.Task) bool { return strings.HasPrefix(x.Title, dipLook) })
+	}
+	fix := func(id string) work.Task {
+		return work.Task{ID: id, Title: "Fix " + id, Aim: work.AimFix, AimWhy: id + " fails"}
+	}
+	first := merge(map[string]string{"n.txt": "3\n"}, fix("fix-1"))
+	if len(looks()) != 1 {
+		t.Fatalf("want one look into the first dip: %+v", looks())
+	}
+	second := merge(map[string]string{"n.txt": "1\n"}, fix("fix-2"))
+	l := looks()
+	if len(l) != 1 || !strings.Contains(l[0].Known, "dipped again after "+core.Short(second.SHA)) || !strings.Contains(second.Note, "takes this one too") {
+		t.Fatalf("a dip while the first look is open should join it, not file a second: %+v\n%s", l, second.Note)
+	}
+
+	// The look ends; main recovers past a merge whose dip is read late.
+	m.Work.Stop(l[0].ID, "done")
+	merge(map[string]string{"n.txt": "5\n"})
+	p, _ := m.C.Projects.Get("p")
+	fix3 := fix("fix-3")
+	fix3.MergeSHA = first.SHA
+	if got := m.lookIntoDip(p, fix3, "late", 3); !strings.Contains(got, "gone from main") || len(looks()) != 1 {
+		t.Fatalf("a dip main has since left behind filed a look: %q %+v", got, looks())
+	}
+	// Still there at main's head: a new look.
+	m.lookIntoDip(p, fix3, "late", 9)
+	if len(looks()) != 2 {
+		t.Fatalf("a dip still on main got no look: %+v", looks())
 	}
 }
 
