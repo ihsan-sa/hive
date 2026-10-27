@@ -44,6 +44,7 @@ func TestDecide(t *testing.T) {
 		{"faster at the same work is a gain", []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 50, Given: []string{"score"}})}, []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 100, Given: []string{"score"}})}, Options{}, true, "seconds"},
 		{"a judged metric the candidate drops is a regression", []Result{res("bench", true, score(6))}, []Result{res("bench", true, score(6), secs(100))}, Options{AllowTie: true}, false, "does not"},
 		{"a metric whose direction the sides disagree on is a regression", []Result{res("bench", true, score(6), Metric{Name: "seconds", Value: 500, Higher: true})}, []Result{res("bench", true, score(6), secs(100))}, Options{}, false, "higher"},
+		{"a metric whose direction a side's runs disagree on is a regression", []Result{res("bench", true, score(6), secs(100)), res("bench", true, score(6), Metric{Name: "seconds", Value: 100, Higher: true})}, []Result{res("bench", true, score(6), secs(100)), res("bench", true, score(6), secs(100))}, Options{}, false, "disagree"},
 		{"an info metric the candidate drops is not judged", []Result{res("bench", true, score(8))}, []Result{res("bench", true, score(6), Metric{Name: "note", Value: 1, Info: true})}, Options{}, true, "better"},
 		{"cheaper at the same work is a gain", []Result{res("bench", true, score(6), Metric{Name: "egress_bytes", Value: 5e5, Given: []string{"score"}})}, []Result{res("bench", true, score(6), Metric{Name: "egress_bytes", Value: 1e6, Given: []string{"score"}})}, Options{}, true, "egress_bytes"},
 		{"a side's own word is not judged", []Result{res("bench", true, Metric{Name: "cost", Value: 1, Info: true})}, []Result{res("bench", true, Metric{Name: "cost", Value: 9, Info: true})}, Options{}, false, "not better"},
@@ -885,7 +886,8 @@ func TestOutOfTimeIsAloneOnlyWhenTheCandidateIsSlower(t *testing.T) {
 		t.Helper()
 		slow := func(cfg *Config, c *Child) Result {
 			time.Sleep(map[string]time.Duration{"candidate": candWait, "control": ctrlWait}[c.Name])
-			return Result{Pass: true}
+			// The sides differ, so the run goes past its first rep.
+			return Result{Pass: true, Metrics: []Metric{{Name: "n", Value: map[string]float64{"candidate": 1, "control": 2}[c.Name], Higher: true}}}
 		}
 		rep, _ := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, name, "run"), Reps: 3, Sandbox: "bare", AllowBare: true,
 			Probes: []string{"slow"}, Probe: map[string]ProbeFunc{"slow": slow}, Timeout: timeout})
@@ -899,5 +901,32 @@ func TestOutOfTimeIsAloneOnlyWhenTheCandidateIsSlower(t *testing.T) {
 	}
 	if rep := run("cand-slow", 600*time.Millisecond, 10*time.Millisecond, 800*time.Millisecond); !rep.Alone {
 		t.Errorf("out of time with the candidate the slower side: not alone (%s)", rep.Error)
+	}
+}
+
+// The gate runs one rep a side, and the rest only when the first differs:
+// a tie beyond nothing but a single run's noise stops there.
+func TestMoreRepsOnlyWhenTheFirstDiffers(t *testing.T) {
+	unixOnly(t)
+	dir := t.TempDir()
+	cand, ctrl := fakeBin(t, dir, "cand", "v2", true), fakeBin(t, dir, "ctrl", "v1", true)
+	run := func(name string, cs, ks float64) Report {
+		t.Helper()
+		p := func(cfg *Config, c *Child) Result {
+			v := map[string]float64{"candidate": cs, "control": ks}[c.Name]
+			return Result{Pass: true, Metrics: []Metric{{Name: "seconds", Value: v}}}
+		}
+		rep, err := Run(Config{CandBin: cand, CtrlBin: ctrl, Out: filepath.Join(dir, name, "run"), Reps: 3, Sandbox: "bare", AllowBare: true,
+			Probes: []string{"p"}, Probe: map[string]ProbeFunc{"p": p}})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return rep
+	}
+	if rep := run("same", 100, 105); len(rep.Candidate) != 1 || len(rep.Control) != 1 || rep.Verdict.Keep || !strings.Contains(rep.Verdict.Reason, "nothing moved") {
+		t.Errorf("a first rep within a single run's noise: %d/%d reps, %+v", len(rep.Candidate), len(rep.Control), rep.Verdict)
+	}
+	if rep := run("faster", 50, 100); len(rep.Candidate) != 3 || len(rep.Control) != 3 || !rep.Verdict.Keep {
+		t.Errorf("a first rep that differs: %d/%d reps, %+v", len(rep.Candidate), len(rep.Control), rep.Verdict)
 	}
 }

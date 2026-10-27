@@ -72,4 +72,6 @@ gains ← →, Home/End and "the wheel scrolls the pane under it".
 2. Should a collapsed group remember being collapsed across restarts (in
    `ui.json` with the seen sequence)? Today every group opens again.
 3. Should ended agents' chats (`(ended)`) fold away under their own row once
-   a project has many, rather than listing each one?
+   a project has many, rather than listing each one? Answered by #223: they
+   fold under `ended (n)` and leave the sidebar after 24 hours (docs/log.md,
+   2026-10-26).

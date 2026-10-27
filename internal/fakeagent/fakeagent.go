@@ -136,6 +136,7 @@ func Main(argv []string) int {
 		}
 		text = "swept"
 	case "stepback":
+		os.WriteFile(filepath.Join(os.Getenv("HIVE_BOX"), "judgement.md"), []byte("FAKE judgement: the goals hold\n"), 0o644)
 		// The goal steers the setup it designs; with no key it designs none.
 		for key, asks := range map[string][]string{"FAKE:stepbackwin": {"FAKE:raisescore"}, "FAKE:stepbacklose": {"FAKE:lowerscore"}, "FAKE:stepbackfail": {"FAKE:block"},
 			"FAKE:stepbackrig": {"FAKE:raisescore"}, "FAKE:stepbackspend": {"FAKE:spendall", "FAKE:raisescore"}} {

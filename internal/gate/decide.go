@@ -91,6 +91,7 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 		failed  map[string]int // test name: the runs it failed in
 	}
 	given := map[key][]string{}
+	mixed := map[key]bool{} // a side's own runs disagree on which way is better
 	count := func(rs []Result) (map[string]*tally, map[key][]float64, map[key]bool) {
 		t, m, hi := map[string]*tally{}, map[key][]float64{}, map[key]bool{}
 		for _, r := range rs {
@@ -113,6 +114,9 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 					continue
 				}
 				k := key{r.Probe, x.Name}
+				if prev, ok := hi[k]; ok && prev != x.Higher {
+					mixed[k] = true
+				}
 				m[k] = append(m[k], x.Value)
 				hi[k] = x.Higher
 				if len(x.Given) > 0 {
@@ -179,6 +183,10 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 	var mk []key
 	for k := range cm {
 		if _, ok := km[k]; !ok {
+			continue
+		}
+		if mixed[k] {
+			v.Regressions = append(v.Regressions, fmt.Sprintf("%s %s: the runs disagree on whether higher is better", k.probe, k.metric))
 			continue
 		}
 		if chi[k] != khi[k] {
