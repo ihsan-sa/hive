@@ -472,7 +472,9 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.focusBox(m.thread)
 		}
 		if m.threadSel >= 0 && m.threadSel < len(ts) {
-			m.thread = ts[m.threadSel].id
+			if m.thread != ts[m.threadSel].id {
+				m.thread, m.thScroll = ts[m.threadSel].id, 0 // another thread opens at its newest
+			}
 			m.focus = 2
 			return m, m.focusBox(m.thread)
 		}
@@ -737,10 +739,10 @@ func (m *model) viewThread(w int) pane {
 	tw := w - 5
 	var lines []string
 	add := func(ls ...string) { lines = append(lines, indent(ls, "   ")...) }
-	pending := 0
+	var pending []outMsg // sent, and not yet in the thread
 	for _, o := range m.outbox {
-		if o.chat == m.chat && o.thread == m.thread {
-			pending++
+		if o.chat == m.chat && o.thread == m.thread && m.echoes(o) <= o.had {
+			pending = append(pending, o)
 		}
 	}
 	for i, msg := range t.msgs {
@@ -748,17 +750,15 @@ func (m *model) viewThread(w int) pane {
 		add(m.body(msg.Text, tw)...)
 		add("")
 		if i == 0 {
-			n := len(t.msgs) - 1 + pending
+			n := len(t.msgs) - 1 + len(pending)
 			r := fmt.Sprintf("%d %s ", n, plural(n, "reply", "replies"))
 			add(stDim.Render(r+strings.Repeat("─", max(0, tw-len(r)))), "")
 		}
 	}
-	for _, o := range m.outbox {
-		if o.chat == m.chat && o.thread == m.thread {
-			add(stBoldF.Render("you") + "  " + stDim.Render("◌ sending…"))
-			add(indent(m.body(o.text, tw), "")...)
-			add("")
-		}
+	for _, o := range pending {
+		add(stBoldF.Render("you") + "  " + stDim.Render("◌ sending…"))
+		add(indent(m.body(o.text, tw), "")...)
+		add("")
 	}
 	_, name := m.where()
 	bx := m.compose("reply · "+name, "Reply to this thread…", m.thread, w-3)

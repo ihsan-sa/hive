@@ -94,7 +94,7 @@ func TestStrainHoldKeepsBackoffAndNudges(t *testing.T) {
 func TestLoaded(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "loadavg"), []byte("181.20 104.00 90.00 30/6000 1234\n"), 0o644)
-	if got := loaded(dir, 20, 1); !strings.Contains(got, "load 181 on 20 cores") {
+	if got := loaded(dir, 20, 1); !strings.Contains(got, "load 181 on 20 cores") || !strings.HasPrefix(got, LoadedReason) {
 		t.Errorf("load 181 on 20 cores: %q", got)
 	}
 	if got := loaded(dir, 200, 1); got != "" {
