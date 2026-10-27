@@ -915,18 +915,20 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	}
 }
 
-// queue now starts a brief past the one it waits on, only with a reason, put
-// on its record; the max_workers cap still holds it.
-func TestQueueNowPastOverlap(t *testing.T) {
+// queue now puts a brief first in line, only with a reason, put on its
+// record; the max_workers cap still holds it.
+func TestQueueNowGoesFirst(t *testing.T) {
 	m := queueRig(t)
 	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
 	stuck := file(t, m, "the stuck one", "In internal/core/effects.go.")
+	other := file(t, m, "an earlier idea", "")
 	fix := file(t, m, "the queue fix", "In internal/core/effects.go too.")
-	stuck.Stage, fix.Stage = StageWorking, StageQueued
+	stuck.Stage, other.Stage, fix.Stage = StageWorking, StageQueued, StageQueued
 	m.save(&stuck, "")
+	m.save(&other, "")
 	m.save(&fix, "")
-	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], stuck.ID) {
-		t.Fatalf("the fix doesn't wait on the stuck one: %q", wait[fix.ID])
+	if start, wait := m.admit(m.List(nil)); !start[other.ID] || start[fix.ID] {
+		t.Fatalf("the earlier brief didn't take the slot: %q", wait[fix.ID])
 	}
 	if _, err := m.C.Runs.Ops().Call(lead, "queue", json.RawMessage(`{"now":"`+fix.ID+`"}`)); err == nil {
 		t.Fatal("started one now with no reason")
@@ -938,7 +940,7 @@ func TestQueueNowPastOverlap(t *testing.T) {
 	if !got.Now || !logged(&got, "it fixes what holds the queue") {
 		t.Fatalf("now %v, log %v", got.Now, got.Log)
 	}
-	if start, wait := m.admit(m.List(nil)); !start[fix.ID] {
+	if start, wait := m.admit(m.List(nil)); !start[fix.ID] || start[other.ID] {
 		t.Fatalf("the fix still waits: %q", wait[fix.ID])
 	}
 	cfg := m.C.WS.LoadConfig()
@@ -1021,6 +1023,59 @@ func TestStopStandsOverARunningStep(t *testing.T) {
 	m.mu.Unlock()
 	if ok {
 		t.Fatal("a copy from before a save reads as fresh")
+	}
+}
+
+// A step past its limit is let go with a journalled steer: its later saves
+// are dropped, and its late end leaves the step that took over holding the task.
+func TestReapStuckLetsAStepGoAndKeepsTheNewOne(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage = StageMerging
+	m.save(task, "on to the merge")
+	old := time.Now().Add(-2 * stepLimit)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt = map[string]time.Time{task.ID: old}
+	m.mu.Unlock()
+	stale, _ := m.Get(task.ID)
+	m.reapStuck()
+	if m.busy[task.ID] || !m.overtaken(&stale) {
+		t.Fatalf("busy %v, overtaken %v: want freed and the old copy overtaken", m.busy[task.ID], m.overtaken(&stale))
+	}
+	got, _ := m.Get(task.ID)
+	if !logged(&got, "ran past") {
+		t.Fatalf("the reap isn't in the task's log: %v", got.Log)
+	}
+	stale.Stage = StageLanding
+	m.save(&stale, "the hung step's late save")
+	if got, _ := m.Get(task.ID); got.Stage != StageMerging {
+		t.Fatalf("the hung step saved over the task: %q", got.Stage)
+	}
+	// A newer step takes the task; the hung one ending frees nothing.
+	began := time.Now()
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt[task.ID] = began
+	m.mu.Unlock()
+	m.endStep(task.ID, old)
+	if !m.busy[task.ID] {
+		t.Fatal("the hung step's end freed the newer step's mark")
+	}
+	m.endStep(task.ID, began)
+	if m.busy[task.ID] {
+		t.Fatal("the current step's end left the task held")
+	}
+}
+
+func TestReapStuckLeavesAStepWithinItsLimit(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt = map[string]time.Time{task.ID: time.Now()}
+	m.mu.Unlock()
+	m.reapStuck()
+	if !m.busy[task.ID] || len(m.stepAt) != 1 {
+		t.Fatal("a step within its limit was let go")
 	}
 }
 
