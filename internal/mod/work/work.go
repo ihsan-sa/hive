@@ -118,10 +118,13 @@ type Task struct {
 	// it keeps working; once merged, Base moves to it and Banked counts it.
 	Checkpoint string `json:"checkpoint,omitempty"`
 	Banked     int    `json:"banked,omitempty"`
-	Banks      []Bank `json:"banks,omitempty"`   // each merged checkpoint, oldest first
-	Seen       string `json:"seen,omitempty"`    // the worker checkout's reflog when last looked at
-	Tried      string `json:"tried,omitempty"`   // the newest commit already weighed as a checkpoint
-	NoBank     string `json:"no_bank,omitempty"` // why no more checkpoints are opened for this task
+	Banks      []Bank `json:"banks,omitempty"` // each merged checkpoint, oldest first
+	Seen       string `json:"seen,omitempty"`  // the worker checkout's reflog when last looked at
+	Tried      string `json:"tried,omitempty"` // the newest commit already weighed as a checkpoint
+	// Scored holds when the task's checkpoint score runs started, within
+	// scoreWindow: what rate-limits them (scoreLimit).
+	Scored []time.Time `json:"scored,omitempty"`
+	NoBank string      `json:"no_bank,omitempty"` // why no more checkpoints are opened for this task
 	// Reruns counts the re-runs of the forge's failed checks asked on each
 	// head (rerun-checks), capped at rerunsPerHead; RerunAt is the newest.
 	Reruns  map[string]int `json:"reruns,omitempty"`
@@ -1401,6 +1404,15 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	if m.C.Effects.Slots.Busy() {
 		return nil
 	}
+	// A worker that commits in a burst would start a score run on every
+	// commit: the runs are rate-limited per task, and the newest commit is
+	// weighed once the limit allows (Seen stays, so it is looked at again).
+	if until, why := scoreLimit(t.Scored, time.Now()); why != "" {
+		if note := fmt.Sprintf("the worker's newest commit waits until %s to be weighed as a checkpoint: %s", until.UTC().Format("15:04"), why); len(t.Log) == 0 || t.Log[len(t.Log)-1].Text != note {
+			m.save(t, note)
+		}
+		return nil
+	}
 	sha, err := m.C.Effects.Extract(p, r, t.Base)
 	switch {
 	case errors.Is(err, core.ErrNoChanges):
@@ -1437,6 +1449,14 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	}
 	c, ok := m.C.Effects.GetCheck(p.Name, sha, "score")
 	if !ok {
+		now := time.Now().UTC()
+		kept := t.Scored[:0]
+		for _, at := range t.Scored {
+			if now.Sub(at) < scoreWindow {
+				kept = append(kept, at)
+			}
+		}
+		t.Scored = append(kept, now)
 		c = m.C.Effects.RunCheck(p, sha, "score", sc.Command)
 	}
 	if c.Score == nil {
@@ -1449,6 +1469,33 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	}
 	t.Checkpoint = sha
 	return m.open(t, p, sha, fmt.Sprintf("A checkpoint of #%d while its worker keeps going: %s scores %g, above the best kept %g.", t.Issue.Number, core.Short(sha), *c.Score, best))
+}
+
+// Checkpoint score runs per task: at most scoreCap in any scoreWindow, and
+// scoreGap apart, so a worker committing over and over can't keep the
+// machine scoring its commits; its finish still lands as usual.
+const (
+	scoreGap    = 10 * time.Minute
+	scoreCap    = 6
+	scoreWindow = 6 * time.Hour
+)
+
+// scoreLimit says whether a task whose checkpoint score runs started at
+// scored may start another at now: if not, when it may and why.
+func scoreLimit(scored []time.Time, now time.Time) (time.Time, string) {
+	var recent []time.Time
+	for _, at := range scored {
+		if now.Sub(at) < scoreWindow {
+			recent = append(recent, at)
+		}
+	}
+	if len(recent) >= scoreCap {
+		return recent[len(recent)-scoreCap].Add(scoreWindow), fmt.Sprintf("%d score runs on its commits in %s already", len(recent), scoreWindow)
+	}
+	if n := len(recent); n > 0 && now.Sub(recent[n-1]) < scoreGap {
+		return recent[n-1].Add(scoreGap), fmt.Sprintf("its last score run started under %s ago", scoreGap)
+	}
+	return time.Time{}, ""
 }
 
 // rewound tells a worker its branch left a commit already merged as a checkpoint.

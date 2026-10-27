@@ -229,3 +229,64 @@ func TestCheckpointWaitsOutFullSlots(t *testing.T) {
 		t.Fatalf("not weighed once a slot was free: %v", task.Log)
 	}
 }
+
+// A worker committing in a burst gets one checkpoint score run per scoreGap
+// and scoreCap per scoreWindow; the commit past the limit waits, saying why.
+func TestScoreLimit(t *testing.T) {
+	now := time.Now()
+	if _, why := scoreLimit(nil, now); why != "" {
+		t.Fatalf("no runs yet, limited: %s", why)
+	}
+	until, why := scoreLimit([]time.Time{now.Add(-time.Minute)}, now)
+	if why == "" || !until.Equal(now.Add(scoreGap-time.Minute)) {
+		t.Fatalf("a run a minute ago: until %v, %q", until, why)
+	}
+	if _, why := scoreLimit([]time.Time{now.Add(-scoreGap)}, now); why != "" {
+		t.Fatalf("a run scoreGap ago, limited: %s", why)
+	}
+	var burst []time.Time
+	for i := scoreCap; i > 0; i-- {
+		burst = append(burst, now.Add(-time.Duration(i)*scoreGap))
+	}
+	until, why = scoreLimit(burst, now)
+	if !strings.Contains(why, "score runs on its commits") || !until.Equal(burst[0].Add(scoreWindow)) {
+		t.Fatalf("%d runs in the window: until %v, %q", scoreCap, until, why)
+	}
+	if _, why := scoreLimit(append([]time.Time{now.Add(-scoreWindow)}, burst[1:]...), now); why != "" {
+		t.Fatalf("a run out of the window still counted: %s", why)
+	}
+}
+
+// A new commit right after a score run waits out the gap without being
+// taken out or scored; once the gap is past it is weighed, and the same
+// commit seen again is never scored twice.
+func TestCheckpointScoreRunsRateLimited(t *testing.T) {
+	m, task, p := checkpointRig(t, 5, "5")
+	if err := m.checkWorker(task, p); err != nil || len(task.Scored) != 1 {
+		t.Fatalf("scored %v, err %v", task.Scored, err)
+	}
+	tried := task.Tried
+	task.Seen, task.Tried = "", "" // a new commit
+	for range 2 {
+		if err := m.checkWorker(task, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n := 0
+	for _, e := range task.Log {
+		if strings.Contains(e.Text, "waits until") {
+			n++
+		}
+	}
+	if n != 1 || task.Seen != "" || task.Tried != "" || len(task.Scored) != 1 {
+		t.Fatalf("not held once: %d notes, seen %q, tried %q, scored %v", n, task.Seen, task.Tried, task.Scored)
+	}
+	task.Scored[0] = task.Scored[0].Add(-scoreGap)
+	if err := m.checkWorker(task, p); err != nil || task.Tried != tried {
+		t.Fatalf("not weighed past the gap: tried %q, err %v", task.Tried, err)
+	}
+	// Its score was already on record, so no second run started.
+	if len(task.Scored) != 1 {
+		t.Fatalf("one commit scored twice: %v", task.Scored)
+	}
+}
