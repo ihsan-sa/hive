@@ -3752,7 +3752,7 @@ func (m *Module) workerStopped(t Task) bool {
 
 // steerers are the roles that keep the loop moving: every agent owns it, so
 // a worker, sweep or step-back orders and holds the queue, checks blocked work
-// again and ends a landed task as the lead does, each on the record by its run
+// again, stops a quiet worker and ends a landed task as the lead does, each on the record by its run
 // id. A step-back diagnoses a stalled loop and acts on what it finds rather
 // than routing the fix through a lead that may not answer for a while.
 var steerers = []string{"lead", "worker", "sweep", "stepback"}
