@@ -1055,10 +1055,55 @@ func TestStopStandsOverARunningStep(t *testing.T) {
 	}
 }
 
-func TestReapStuckFreesAStepPastItsLimit(t *testing.T) {
-	m := &Module{busy: map[string]bool{"a": true, "b": true}, stepAt: map[string]time.Time{"a": time.Now().Add(-2 * stepLimit), "b": time.Now()}}
+// A step past its limit is let go with a journalled steer: its later saves
+// are dropped, and its late end leaves the step that took over holding the task.
+func TestReapStuckLetsAStepGoAndKeepsTheNewOne(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage = StageMerging
+	m.save(task, "on to the merge")
+	old := time.Now().Add(-2 * stepLimit)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt = map[string]time.Time{task.ID: old}
+	m.mu.Unlock()
+	stale, _ := m.Get(task.ID)
 	m.reapStuck()
-	if m.busy["a"] || !m.busy["b"] || len(m.stepAt) != 1 {
-		t.Fatalf("busy %v stepAt %v: want only the long step freed", m.busy, m.stepAt)
+	if m.busy[task.ID] || !m.overtaken(&stale) {
+		t.Fatalf("busy %v, overtaken %v: want freed and the old copy overtaken", m.busy[task.ID], m.overtaken(&stale))
+	}
+	got, _ := m.Get(task.ID)
+	if !logged(&got, "ran past") {
+		t.Fatalf("the reap isn't in the task's log: %v", got.Log)
+	}
+	stale.Stage = StageLanding
+	m.save(&stale, "the hung step's late save")
+	if got, _ := m.Get(task.ID); got.Stage != StageMerging {
+		t.Fatalf("the hung step saved over the task: %q", got.Stage)
+	}
+	// A newer step takes the task; the hung one ending frees nothing.
+	began := time.Now()
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt[task.ID] = began
+	m.mu.Unlock()
+	m.endStep(task.ID, old)
+	if !m.busy[task.ID] {
+		t.Fatal("the hung step's end freed the newer step's mark")
+	}
+	m.endStep(task.ID, began)
+	if m.busy[task.ID] {
+		t.Fatal("the current step's end left the task held")
+	}
+}
+
+func TestReapStuckLeavesAStepWithinItsLimit(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt = map[string]time.Time{task.ID: time.Now()}
+	m.mu.Unlock()
+	m.reapStuck()
+	if !m.busy[task.ID] || len(m.stepAt) != 1 {
+		t.Fatal("a step within its limit was let go")
 	}
 }

@@ -861,29 +861,37 @@ func (m *Module) Tick() {
 		m.mu.Unlock()
 		go func(t Task) {
 			defer m.steps.Done()
-			defer func() {
-				m.mu.Lock()
-				mine := m.stepAt[t.ID].Equal(began) // else reapStuck let it go, and a newer step may hold the task
-				if mine {
-					delete(m.stepAt, t.ID)
-				}
-				m.mu.Unlock()
-				if mine {
-					m.release(t.ID)
-				}
-			}()
+			defer m.endStep(t.ID, began)
 			m.settle(&t, m.step(&t))
 		}(t)
 	}
 }
 
+// endStep frees t's task when the step that began at began ends, unless
+// reapStuck let it go and a newer step may hold the task.
+func (m *Module) endStep(id string, began time.Time) {
+	m.mu.Lock()
+	mine := m.stepAt[id].Equal(began)
+	if mine {
+		delete(m.stepAt, id)
+	}
+	m.mu.Unlock()
+	if mine {
+		m.release(id)
+	}
+}
+
 // stepLimit is how long one step may hold a task before Tick lets it go: a
 // step hung on a call that never returns would otherwise leave the task
-// "has a step running right now" for good, refusing every recheck.
-var stepLimit = 30 * time.Minute
+// "has a step running right now" for good, refusing every recheck. It sits
+// well above the longest healthy step, which can wait for a check slot, then
+// run a sandboxed check of up to 30 minutes, twice on a retry.
+var stepLimit = 3 * time.Hour
 
 // reapStuck frees the tasks whose Tick step has run past stepLimit, so the
-// next tick steps them again. The hung step's goroutine, if it ever returns,
+// next tick steps them again. The reap is a steer save, journalled with the
+// stage the step was in: the old step's later saves are dropped as from a
+// copy before the steer, and overtaken() stops it. If it ever returns, it
 // leaves the new holder's mark alone (see Tick).
 func (m *Module) reapStuck() {
 	m.mu.Lock()
@@ -897,7 +905,9 @@ func (m *Module) reapStuck() {
 	}
 	m.mu.Unlock()
 	for _, id := range stuck {
-		fmt.Fprintf(os.Stderr, "work: step on task %s ran past %s; let go so it steps again\n", id, stepLimit)
+		if t, ok := m.Get(id); ok {
+			m.steer(&t, fmt.Sprintf("its step in %s ran past %s and was let go; it steps again", t.Stage, stepLimit))
+		}
 	}
 }
 
