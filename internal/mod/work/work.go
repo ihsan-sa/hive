@@ -95,7 +95,10 @@ type Task struct {
 	// head that contains it resolved that conflict, so the next is main
 	// moving again and the count starts over: only unresolved ones add up.
 	ConflictMain string `json:"conflict_main,omitempty"`
-	Reviews      int    `json:"reviews"`
+	// MergedOK is "head+main" for the last head whose tests passed merged
+	// with that main (mergedTests), so it merges as it is without testing again.
+	MergedOK string `json:"merged_ok,omitempty"`
+	Reviews  int    `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
 	// own diff, keyed by "diffID#seat". When the diff changes, the old
 	// tries are left behind and the seat starts fresh on the new diff.
@@ -2001,12 +2004,17 @@ func (m *Module) catchUp(t *Task, p core.Project, main, why string) (bool, error
 	if err != nil {
 		return true, err
 	}
+	return true, m.takeMain(t, p, next, why)
+}
+
+// takeMain pushes next, t's head with main merged in, to its branch and tests it again.
+func (m *Module) takeMain(t *Task, p core.Project, next, why string) error {
 	if err := m.C.Effects.Push(p, t.Branch, next); err != nil {
-		return true, err
+		return err
 	}
 	t.SHA, t.Stage, t.Reason = next, StageTesting, ""
 	m.save(t, why+"; branch brought up to date at "+core.Short(next)+", testing again")
-	return true, nil
+	return nil
 }
 
 // mergeAsk asks the person to merge a change to protected files, carrying the
@@ -2514,12 +2522,13 @@ func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 }
 
 // upToDate decides whether t's branch must take main in before it merges.
-// It merges as it is while the forge says it merges cleanly: every main merge
-// moves the head past its reads and restarts its checks. Here only a conflict,
-// or the forge's rule that the branch be up to date with main, brings main in;
-// on a self project the recursive gate merges main in its own clone, so it
-// judges what would land without moving the branch (see recursiveGate). While
-// the forge is still working it out, t waits.
+// It merges as it is while the forge says it merges cleanly and its tests
+// pass merged with main (mergedTests): every main merge would otherwise move
+// the head past its reads and restart its checks. Here only a conflict, the
+// forge's rule that the branch be up to date with main, or a red merge with
+// main brings main in; on a self project the recursive gate merges main in
+// its own clone, so it judges what would land without moving the branch (see
+// recursiveGate). While the forge is still working it out, t waits.
 func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
 		return false, nil
@@ -2543,6 +2552,53 @@ func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 		m.hold(t, p, "waiting for the forge to work out whether PR #"+fmt.Sprint(t.PR.Number)+" merges cleanly with main (mergeable "+state+", main at "+core.Short(main)+")")
 		return true, nil
 	}
+	return m.mergedTests(t, p, main)
+}
+
+// mergedTests runs the project's tests on t's head merged with main, once
+// for each head and main, before a branch whose base is behind main merges
+// as it is. Two changes that each merge cleanly and pass on their own can
+// still break main together (one calls what the other renamed): the forge
+// sees no conflict and each one's checks ran without the other. A merge
+// that passes, or fails only where main fails too, lets t merge as it is;
+// one that is red where main is green is pushed to the branch and tested
+// again, which sends the failure to the worker. A test that can't run waits
+// and is raised as any can't-run is; a merge git can't make here is left to
+// catchUp, which sends a conflict back.
+func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error) {
+	key := t.SHA + "+" + main
+	if t.MergedOK == key {
+		return false, nil
+	}
+	merged, err := m.C.Effects.UpdateBranch(p, t.SHA, main, "")
+	if errors.Is(err, core.ErrConflict) {
+		return m.catchUp(t, p, main, "main moved and the PR's merge with it conflicts")
+	}
+	if err != nil {
+		return true, err
+	}
+	if _, err := m.C.Sandbox(); err != nil {
+		return true, err
+	}
+	cfg := m.C.Effects.Config(p, main)
+	c := m.C.Effects.RunCheck(p, merged, "test", cfg.Test)
+	if c.CantRun != "" {
+		return true, m.cantRun(t, p, c)
+	}
+	if !c.OK {
+		mc, err := m.mainTests(p, main, cfg.Test)
+		if err != nil {
+			return true, err
+		}
+		if mc.CantRun != "" {
+			return true, m.cantRun(t, p, mc)
+		}
+		if mc.OK || !core.NoWorse(c, mc) {
+			return true, m.takeMain(t, p, merged, "main moved and the tests fail on the PR merged with main at "+core.Short(main)+", though each passed alone")
+		}
+	}
+	t.MergedOK = key
+	m.save(t, "its tests pass merged with main at "+core.Short(main)+" (as "+core.Short(merged)+"), so it merges as it is")
 	return false, nil
 }
 
