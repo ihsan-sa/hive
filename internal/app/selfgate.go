@@ -13,6 +13,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
@@ -67,6 +68,16 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 			gate.Reap(j.Out)
 		}
 		return readReport(j, runErr, ctx.Err())
+	}
+}
+
+// runCanary runs the release train's canary as a gate run: the candidate
+// release's commit against the running release's, both child Hives on the
+// same real work. Ties are kept, since a release must break nothing rather
+// than show a gain; only a keep moves the Hive.
+func runCanary(ws core.Workspace, run func(context.Context, work.GateJob) core.GateResult) func(context.Context, release.CanaryJob) core.GateResult {
+	return func(ctx context.Context, j release.CanaryJob) core.GateResult {
+		return run(ctx, work.GateJob{Project: j.Project, Repo: ws.Project(j.Project.Name), Head: j.Head, Main: j.Base, AllowTie: true, Out: j.Out, Timeout: j.Timeout})
 	}
 }
 
