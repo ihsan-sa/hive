@@ -25,8 +25,12 @@ type Seatbelt struct{}
 
 var seatbelt = &Seatbelt{}
 
+// sandboxExec is macOS's own, at its fixed path, never one an earlier
+// directory on the daemon's PATH (/usr/local/bin, /opt/homebrew/bin) holds.
+const sandboxExec = "/usr/bin/sandbox-exec"
+
 func platform(Options) Sandbox {
-	if _, err := exec.LookPath("sandbox-exec"); err != nil {
+	if _, err := exec.LookPath(sandboxExec); err != nil {
 		return nil
 	}
 	return seatbelt
@@ -72,7 +76,7 @@ func (s *Seatbelt) Start(sp Spec) (Proc, error) {
 		return Proc{}, err
 	}
 	env := withPathPrefix(append(SeatbeltEnv(sp, port), "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), pathDirs(sp))
-	argv := Niced(append([]string{"sandbox-exec", "-f", pf}, sp.Argv...), sp.Nice)
+	argv := Niced(append([]string{sandboxExec, "-f", pf}, sp.Argv...), sp.Nice)
 	p, err := proc.StartDetached(argv, env, sp.Cwd, sp.Stdin, sp.Stdout)
 	if err != nil {
 		e.Close()
@@ -139,5 +143,5 @@ func (s *Seatbelt) Run(sp Spec, timeout time.Duration) (int, error) {
 		return -1, err
 	}
 	env := withPathPrefix(append(SeatbeltEnv(sp, port), "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), pathDirs(sp))
-	return runSync(Niced(append([]string{"sandbox-exec", "-f", pf}, sp.Argv...), sp.Nice), env, sp.Cwd, sp.Stdin, sp.Stdout, timeout)
+	return runSync(Niced(append([]string{sandboxExec, "-f", pf}, sp.Argv...), sp.Nice), env, sp.Cwd, sp.Stdin, sp.Stdout, timeout)
 }
