@@ -8,29 +8,29 @@
    Modules            │                                                │
    Settings           │                                                │   2 replies ─────────────────────────────────
                       │                                                │
- ▾ textkit-2          │   you  19:58                                   │   lead  20:23
- › lead               │   Hello?                                       │   On it. I'll hand the split to writer and
-   writer             │   ▸ 1 reply  last 19:58                        │   ask reviewer to check the public API before
-   reviewer        ●  │                                                │   anything merges.
- ▾ hive-web           │ ▌ you  20:22                                   │
-   lead            ●  │ ▌ The parser and the renderer are tangled      │   lead  20:31
-   worker-2           │ ▌ together. Can you split the parser into its  │   Done. parser/ is its own package now, with
-   reviewer           │ ▌ own package so reviewer can check it on its  │   14 tests passing, and reviewer approved the
-   tribunal           │ ▌ own?                                         │   API. One question: keep the old import path
- ▸ website            │ ▌ ▸ 2 replies  open →                          │   as an alias for a release, or break it now?
-                      │                                                │
-                      │   you  20:40                                   │  ╭─ reply · lead ────────────────────────────╮
-                      │   Also check whether the docs build still      │  │ › Keep the alias for one release, then    │
-                      │   passes.                                      │  │   remove it in 0.9.                       │
-                      │   ▾ 1 reply                                    │  │                                           │
-                      │     lead  20:41                                │  │   Before you merge:                       │
-                      │     It passes. I fixed two broken links in     │  │   - add a deprecation notice to the alias │
-                      │     guide/install.md on the same branch.       │  │   - note it in CHANGELOG under Breaking   │
-                      │                                                │  │   - ask reviewer to check the docs        │
+ ▾ textkit-2          │                                                │   lead  20:23
+ › lead               │   you  19:58                                   │   On it. I'll hand the split to writer and
+   writer             │   Hello?                                       │   ask reviewer to check the public API before
+   reviewer        ●  │   ▸ 1 reply  last 19:58                        │   anything merges.
+ ▾ hive-web           │                                                │
+   lead            ●  │ ▌ you  20:22                                   │   lead  20:31
+   worker-2           │ ▌ The parser and the renderer are tangled      │   Done. parser/ is its own package now, with
+   reviewer           │ ▌ together. Can you split the parser into its  │   14 tests passing, and reviewer approved the
+   tribunal           │ ▌ own package so reviewer can check it on its  │   API. One question: keep the old import path
+ ▸ website            │ ▌ own?                                         │   as an alias for a release, or break it now?
+                      │ ▌ ▸ 2 replies  open →                          │
+                      │                                                │  ╭─ reply · lead ────────────────────────────╮
+                      │   you  20:40                                   │  │ › Keep the alias for one release, then    │
+                      │   Also check whether the docs build still      │  │   remove it in 0.9.                       │
+                      │   passes.                                      │  │                                           │
+                      │   ▾ 1 reply                                    │  │   Before you merge:                       │
+                      │     lead  20:41                                │  │   - add a deprecation notice to the alias │
+                      │     It passes. I fixed two broken links in     │  │   - note it in CHANGELOG under Breaking   │
+                      │     guide/install.md on the same branch.       │  │   - ask reviewer to check the docs        │
                       │                                                │  │   examples import from the new path       │
                       │   3 waiting on you · → then a to answer        │  ╰───────────────────────────────────────────╯
                       │  ╭─ new thread · lead ───────────────────────╮ │
                       │  │ › Write to the lead of textkit-2…         │ │
                       │  ╰───────────────────────────────────────────╯ │
 ──────────────────────┴────────────────────────────────────────────────┴────────────────────────────────────────────────
- enter send   ctrl+j newline   esc close thread   ↑ pgup scroll   ← tab to the channel   ctrl+end newest   alt+v image
+ enter send   ctrl+j newline   esc close thread   ← tab to the channel   pgup pgdn scroll   ctrl+end newest

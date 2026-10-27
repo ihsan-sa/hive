@@ -21,4 +21,4 @@
   │ › Reply to this thread…                                                   │
   ╰───────────────────────────────────────────────────────────────────────────╯
 ────────────────────────────────────────────────────────────────────────────────
- enter send   ctrl+j newline   esc back to chat   alt+v image   ↑ pgup scroll
+ enter send   ctrl+j newline   esc back to chat   end newest   alt+v image

@@ -45,6 +45,13 @@ wrong for the person, what changed, and what is left for them to decide.
   puts the cursor on the group. A run listed twice in the tree (under its task
   and under agents) keeps the copy nearer the cursor.
 
+**One key opens a level, its shift closes one (issue #384).**
+- e opens every node on the shallowest level of the status tree that has a
+  closed one, so each press shows one level more; E (shift+e) closes the
+  deepest open level. In the sidebar it is the project groups, then their
+  ended-agent folds; in a channel, which has the one level, every thread's
+  replies at once.
+
 **Groups don't lose chats.**
 - An agent whose project isn't in the state (removed, or not loaded yet) gets
   a group under its project's name instead of vanishing from the sidebar.
@@ -72,30 +79,6 @@ gains ← →, Home/End and "the wheel scrolls the pane under it".
 2. Should a collapsed group remember being collapsed across restarts (in
    `ui.json` with the seen sequence)? Today every group opens again.
 3. Should ended agents' chats (`(ended)`) fold away under their own row once
-   a project has many, rather than listing each one?
-
-## Follow-up: issue #384
-
-The person's reports from the control center, and what each now does:
-
-- **"It's not possible to scroll up in a thread."** The thread's reply box has
-  the keys, so ↑ went into an empty box and did nothing. With nothing typed, ↑
-  and ↓ now scroll the thread three lines a press (as a wheel notch), PgUp and
-  PgDn a page, and Home and End jump; with a draft they move in it as before.
-- **"A shortcut to go back to the bottom of a channel."** End (or G) in the
-  channel goes to the newest message and drops the pick, so nothing pulls the
-  view back up and it never opens a thread; ctrl+end does the same from any
-  box, a draft kept. End and newest are on the hint line.
-- **"Sends two messages at once, then the second disappears."** The refresh
-  every 1.5 seconds could bring a message back before the post that sent it
-  answered; the answer then added it a second time, until the next refresh.
-  Now a message is added once, a refresh that left before the post can't drop
-  it, and a reply a refresh already brought no longer also shows as sending.
-- **"The last text is right above the box."** Content cut to keep a long
-  picked thread in view ran into the box. Two blank rows now always part a
-  channel from its box, one a thread from its box.
-- **Expand or collapse by level.** e opens one level more of the page and E
-  (shift+e) closes one: the status tree level by level (every node on the
-  shallowest level with a closed one), a channel's threads all at once (it has
-  the one level), the sidebar's project groups and then their ended-agent
-  folds.
+   a project has many, rather than listing each one? Answered by #223: they
+   fold under `ended (n)` and leave the sidebar after 24 hours (docs/log.md,
+   2026-10-26).
