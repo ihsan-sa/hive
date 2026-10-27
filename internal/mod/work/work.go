@@ -477,6 +477,7 @@ func (m *Module) overtaken(t *Task) bool {
 // this save isn't a steer itself, drops it, reporting whether it saved.
 func (m *Module) store(t *Task, note string, steer bool) bool {
 	now := time.Now().UTC()
+	loaded := t.Updated // when the copy was last saved, before it is stamped now
 	// Windows' clock ticks coarsely, so a save in the tick GitHub came back
 	// would read as before it and wake at once: keep it strictly after.
 	m.mu.Lock()
@@ -491,9 +492,12 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	if !t.Updated.After(m.online) {
 		t.Updated = m.online.Add(time.Nanosecond)
 	}
-	var was string
+	var was, live string
 	if prev := m.tasks[t.ID]; prev != nil {
 		was = prev.Stage
+		if loaded.Before(prev.Updated) { // a copy older than the last save: its head may be one the task has left
+			live = prev.SHA
+		}
 		if steer && !t.Updated.After(prev.Updated) { // after every copy a step holds
 			t.Updated = prev.Updated.Add(time.Nanosecond)
 		}
@@ -504,7 +508,9 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	// A gate run on a head the task has left (a merge of main, a fix sent
 	// back) or a task that ended judges nothing that lands: it ends now and
 	// frees its slot, not once the new head reaches the gate hours later.
-	if m.dropStaleGatesLocked(t) {
+	// A step saving a copy older than the last save may carry a head the
+	// task has since left, so the run on the live task's head is kept too.
+	if m.dropStaleGatesLocked(t, live) {
 		note = strings.TrimPrefix(note+"; the recursive gate's run on its earlier head ends, freeing its slot", "; ")
 	}
 	m.mu.Unlock()
@@ -3606,7 +3612,11 @@ func (m *Module) closedPR(t *Task, p core.Project, pr core.PR) (bool, error) {
 		if pr.MergeSHA == "" { // the forge hasn't said where yet: look next tick
 			return true, nil
 		}
-		m.merged(t, pr.MergeSHA, fmt.Sprintf("merged on the forge outside the Hive (PR #%d) as %s", pr.Number, core.Short(pr.MergeSHA)))
+		note := fmt.Sprintf("merged on the forge outside the Hive (PR #%d) as %s", pr.Number, core.Short(pr.MergeSHA))
+		if m.C.Effects.MergedAfterError(p, pr) {
+			note = fmt.Sprintf("merged as %s: the forge answered the Hive's merge with an error, but it went through", core.Short(pr.MergeSHA))
+		}
+		m.merged(t, pr.MergeSHA, note)
 		return true, nil
 	}
 	if pr.State != "CLOSED" {
