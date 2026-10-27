@@ -64,3 +64,37 @@ func TestShareNeverHangsOnASwappedFIFO(t *testing.T) {
 		t.Fatal("share hung opening a FIFO")
 	}
 }
+
+// The same swap without the race: a FIFO put in place after the check is
+// refused at once, never waited on for a writer.
+func TestReadSameRefusesAFIFOWithoutWaiting(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "out.log"), []byte("plain"), 0o644)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	before, err := root.Lstat("out.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(dir, "out.log"))
+	if err := syscall.Mkfifo(filepath.Join(dir, "out.log"), 0o644); err != nil {
+		t.Skip("no FIFOs here:", err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := readSame(root, "out.log", before); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("read a FIFO swapped in after the check")
+		}
+	case <-time.After(5 * time.Second):
+		// unblock the hung open so the test can end
+		if f, err := os.OpenFile(filepath.Join(dir, "out.log"), os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+			f.Close()
+		}
+		t.Fatal("opening a FIFO waited for a writer")
+	}
+}
