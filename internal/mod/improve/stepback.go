@@ -166,7 +166,7 @@ func (m *Module) plateau(project string) int {
 		if !x.Kept || x.Best == nil {
 			continue
 		}
-		if best == nil || *x.Best != *best {
+		if x.moved(best) {
 			n = 0
 		} else if t, ok := m.Work.Get(x.Task); ok && t.Created.After(since) {
 			n++

@@ -306,3 +306,6 @@
 
 ## 2026-10-27 The Hive's test command gives a package 25 minutes (issue #1823)
 - Decision: `.hive/project.json`'s test runs `go test -short -timeout 25m ./...` | Why: internal/mod/work's tests take 60s on an idle check machine and 150-570s under load, and hit go test's default 10m package timeout (checks de2d3737 twice, 0e1bc35d, ebd57d70) with a different test running each time: load, not a hang | Tradeoff: a real hang now shows after 25m, not 10m; still under the check runner's 30m bound on the whole command, so the timeout's panic and goroutine dump still name the stuck test.
+
+## 2026-10-27 A merge is kept or reverted beside its parent, scored in the same sitting (issue #1808)
+- Decision: after every scored merge improve scores the newest kept main right after it and keeps or reverts on the two (`Measurement.Against`), as the step-back scores its control (f6d375f); the stored best is the comparison only when the parent gives no number. Only a gain beside the parent (`Measurement.Gain`) counts as the score moving for the plateau and the judged drift. | Why: main at nearly the same code read 203-251 over two hours against a tolerance of 3; a best read light reverted merges that didn't fall, and one read heavy or set low by a fix kept through a dip (136.67) waved real falls through. Cost: one more score run per scored merge.

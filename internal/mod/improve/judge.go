@@ -209,7 +209,7 @@ func judgedDrift(hist []Measurement) (n int, drop, before float64) {
 				before = *last
 			}
 			n, drop = n+1, drop+(*last-*x.Best)
-		case last == nil || *x.Best != *last:
+		case x.moved(last):
 			n, drop = 0, 0 // a new best of the score's own
 		}
 		b := *x.Best
