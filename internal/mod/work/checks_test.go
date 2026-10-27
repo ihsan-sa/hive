@@ -1027,6 +1027,73 @@ func TestMergeRefusedRedHolds(t *testing.T) {
 	}
 }
 
+// timedOutForge merges but answers with an error, as GitHub's 504 did.
+type timedOutForge struct{ *core.Local }
+
+func (f timedOutForge) MergePR(repo string, number int, sha, subject string) (string, error) {
+	if _, err := f.Local.MergePR(repo, number, sha, subject); err != nil {
+		return "", err
+	}
+	return "", errors.New("gh pr merge: HTTP 504: Gateway Timeout")
+}
+
+// mergedEvents are the journal's effect.merged events for pr.
+func mergedEvents(m *Module, pr int) (shas []string) {
+	m.C.J.Replay(func(e core.Event) {
+		var x struct {
+			PR       int    `json:"pr"`
+			MergeSHA string `json:"merge_sha"`
+		}
+		if e.Kind == "effect.merged" && e.Decode(&x) == nil && x.PR == pr {
+			shas = append(shas, x.MergeSHA)
+		}
+	})
+	return shas
+}
+
+// A merge whose forge call errored but went through is the Hive's merge all
+// the same: the next look finds it merged at the head the Hive was merging
+// and journals its effect.merged once, so a release can cut at it.
+func TestMergeThatErroredButWentThrough(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	m.C.Effects.Forge = timedOutForge{f}
+	if err := m.merge(task, p); err == nil || task.Stage != StageMerging {
+		t.Fatalf("err %v, stage %q", err, task.Stage)
+	}
+	if got := mergedEvents(m, task.PR.Number); len(got) != 0 {
+		t.Fatalf("effect.merged before the merge was seen: %q", got)
+	}
+	m.C.Effects.Forge = f
+	mergeOnce(t, m, task, p)
+	pr, _ := f.GetPR(p.Repo, task.PR.Number)
+	if task.Stage != StageMerged || task.MergeSHA != pr.MergeSHA || logged(task, "outside the Hive") || !logged(task, "it went through") {
+		t.Fatalf("stage %q, merge %q, log %v", task.Stage, task.MergeSHA, task.Log)
+	}
+	m.closedPR(task, p, pr) // a second look journals nothing more
+	if got := mergedEvents(m, task.PR.Number); len(got) != 1 || got[0] != pr.MergeSHA {
+		t.Fatalf("effect.merged %q, want one at %s", got, pr.MergeSHA)
+	}
+}
+
+// One the Hive's merge errored on but someone merged at another head is
+// theirs: it stays outside the Hive and journals no effect.merged.
+func TestMergeErroredThenMergedElsewhere(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	m.C.Effects.Forge = refusingForge{f}
+	if err := m.merge(task, p); err == nil {
+		t.Fatal("the refused merge said nothing")
+	}
+	m.C.Effects.Forge = f
+	pr, _ := f.GetPR(p.Repo, task.PR.Number)
+	pr.State, pr.MergeSHA, pr.HeadSHA = "MERGED", "abc123", "def456"
+	m.closedPR(task, p, pr)
+	if !logged(task, "outside the Hive") || len(mergedEvents(m, task.PR.Number)) != 0 {
+		t.Fatalf("log %v, effect.merged %q", task.Log, mergedEvents(m, task.PR.Number))
+	}
+}
+
 // queued is the newest message queued for run, as the worker reads it.
 func queued(m *Module, run string) (text string) {
 	m.C.J.Replay(func(e core.Event) {

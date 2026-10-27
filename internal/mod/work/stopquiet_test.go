@@ -69,3 +69,45 @@ func TestLeadStopsAQuietWorker(t *testing.T) {
 		t.Fatalf("not handed on: %s worker %q known %q", got.Stage, got.Worker, got.Known)
 	}
 }
+
+// The point of #846 through a tick: a quiet worker's alert names the stop op,
+// and once the lead stops it with fresh the task gets a new worker on the
+// next tick, under max_workers 1, instead of waiting a day on the quiet one.
+func TestAStoppedQuietWorkerIsReplacedOnTheNextTick(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	p, _ := m.C.Projects.Get("p")
+	task := file(t, m, "the stuck one", "In internal/core/effects.go.")
+	tick(m)
+	got, _ := m.Get(task.ID)
+	if got.Stage != StageWorking || got.Worker == "" {
+		t.Fatalf("not started: %s %q", got.Stage, got.Reason)
+	}
+	first := got.Worker
+	m.C.Runs.SetStatus(first, core.StatusQuiet, "keeps ending turns without finishing")
+	if err := m.checkWorker(&got, p); err != nil {
+		t.Fatal(err)
+	}
+	var alert string
+	for _, e := range m.C.J.Since(0) {
+		if e.Kind == "alert.raised" && strings.Contains(string(e.Data), `"quiet"`) {
+			alert = string(e.Data)
+		}
+	}
+	if !strings.Contains(alert, "hive agent stop --task "+task.ID) {
+		t.Fatalf("the quiet alert doesn't name the stop op: %s", alert)
+	}
+	if _, err := callOp(m, leadRun, "stop", `{"task":"`+task.ID+`","why":"quiet for hours","fresh":true}`); err != nil {
+		t.Fatal(err)
+	}
+	tick(m)
+	got, _ = m.Get(task.ID)
+	if got.Stage != StageWorking || got.Worker == "" || got.Worker == first {
+		t.Fatalf("no fresh worker after the stop: %s worker %q (first %s) %q", got.Stage, got.Worker, first, got.Reason)
+	}
+	if r, _ := m.C.Runs.Get(got.Worker); r.Terminal() || r.Status == core.StatusQuiet {
+		t.Fatalf("the fresh worker isn't going: %s %q", r.Status, r.Reason)
+	}
+}
