@@ -1276,6 +1276,23 @@ func (rs *Runs) Send(id, text string) error {
 	return nil
 }
 
+// Leave queues a message for a run that has ended. Reopen hands it the
+// waiting messages first, so it reads it when its task sends it back (a
+// review's findings, a recheck); one that ended blocked is woken for it now,
+// as it may hold what it was blocked on. A run stopped on purpose takes none.
+func (rs *Runs) Leave(id, text string) error {
+	r, ok := rs.Get(id)
+	if !ok {
+		return ErrNotFound
+	}
+	if r.Status == StatusStopped || r.StopAsked {
+		return fmt.Errorf("run %s was stopped on purpose (%s); it takes no messages", id, r.Reason)
+	}
+	rs.append("run.queued", runNote{ID: id, Text: text})
+	rs.wake(id)
+	return nil
+}
+
 // wake gives a run that ended blocked with a message waiting (often the
 // answer it was blocked on) the turn for it, rather than leaving it on a run
 // that takes no turns. One blocked for its Codex token stays blocked.

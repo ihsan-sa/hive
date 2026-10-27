@@ -60,3 +60,39 @@ func TestDigestCarriesFeedback(t *testing.T) {
 		t.Fatal("new feedback alone doesn't count as something new for a sweep")
 	}
 }
+
+// The digest says who talked to whom since the last sweep, by role, and what
+// was said, so a sweep can see messaging as it sees the rest of the record.
+func TestDigestCarriesAgentsTalking(t *testing.T) {
+	dir := t.TempDir()
+	c, err := core.Open(core.Workspace{Root: filepath.Join(dir, "hive")}, &core.Local{Dir: filepath.Join(dir, "forge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	a := &agents.Agents{C: c}
+	ch := chat.New(c, a)
+	m := New(c, a, work.New(c, a, ch), ch)
+	if d := m.Digest(0, ""); !strings.Contains(d, "## Messages between agents\n\nNone") {
+		t.Fatalf("a quiet digest should say none:\n%s", d)
+	}
+	for _, s := range []core.RunSpec{{ID: "w1", Role: "worker", Harness: "fake"}, {ID: "lead1", Role: "lead", Harness: "fake"}} {
+		if _, err := c.Runs.Start(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := c.J.Seq()
+	c.J.MustAppend("msg.sent", map[string]string{"from": "w1", "to": "lead1", "text": "blocked on a flake"})
+	since := c.J.Seq()
+	c.J.MustAppend("msg.sent", map[string]string{"from": "w1", "to": "lead1", "text": "the flake is\nTestMeter"})
+	c.J.MustAppend("msg.sent", map[string]string{"from": "lead1", "to": "w1", "text": "thanks"})
+	d := m.Digest(since, "")
+	for _, want := range []string{"2 since the last sweep (a day at most): lead → worker 1, worker → lead 1.", "w1 → lead1: the flake is TestMeter"} {
+		if !strings.Contains(d, want) {
+			t.Fatalf("digest lacks %q:\n%s", want, d)
+		}
+	}
+	if strings.Contains(d, "blocked on a flake") || !strings.Contains(m.Digest(old, ""), "blocked on a flake") {
+		t.Fatal("the digest should hold the messages since the sweep it's for, no earlier")
+	}
+}

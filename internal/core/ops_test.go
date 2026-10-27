@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,5 +174,64 @@ func TestSettledWaitsForTheLastLines(t *testing.T) {
 	settled(path, 50*time.Millisecond, 200*time.Millisecond)
 	if d := time.Since(start); d >= 150*time.Millisecond {
 		t.Fatalf("a still file took %s to settle; want about 50ms", d)
+	}
+}
+
+// A message to a run that has ended isn't refused: a done run keeps it for
+// the turn its task sends it back for, one that ended blocked is woken for
+// it, and only a run stopped on purpose turns it away. Each is on the record.
+func TestDeliverToAnEndedRun(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, nil, func() []string { return nil })
+	for _, id := range []string{"done", "blocked", "stopped"} {
+		if _, err := rs.Start(RunSpec{ID: id, Harness: "fake", Brief: "# Brief: Fix the feed\n\nmore"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rs.SetStatus("done", StatusDone, "")
+	rs.SetStatus("blocked", StatusBlocked, "asked a warden")
+	rs.SetStatus("stopped", StatusStopped, "the person stopped it")
+	lead := Run{RunSpec: RunSpec{ID: "lead", Role: "lead"}}
+
+	note, err := rs.ops.Deliver(lead, "done", "one more thing")
+	if err != nil || !strings.Contains(fmt.Sprint(note), "next turn") {
+		t.Fatalf("to a done run: %v, %v", note, err)
+	}
+	if r, _ := rs.Get("done"); r.Status != StatusDone || len(r.Pending) != 1 {
+		t.Fatalf("a done run: %s with %d pending; want done, the message kept", r.Status, len(r.Pending))
+	}
+	if err := rs.Reopen("done", "findings"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := rs.Get("done"); len(r.Pending) != 2 || !strings.Contains(r.Pending[0], "one more thing") {
+		t.Fatalf("reopened, it should read the message first: %q", r.Pending)
+	}
+
+	if _, err := rs.ops.Deliver(lead, "blocked", "the answer"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := rs.Get("blocked"); r.Status != StatusIdle || len(r.Pending) != 1 {
+		t.Fatalf("a blocked run: %s with %d pending; want woken with the message", r.Status, len(r.Pending))
+	}
+
+	if _, err := rs.ops.Deliver(lead, "stopped", "hello"); err == nil || !strings.Contains(err.Error(), "stopped on purpose") {
+		t.Fatalf("to a stopped run: %v", err)
+	}
+	sent := 0
+	j.Replay(func(e Event) {
+		if e.Kind == "msg.sent" {
+			sent++
+		}
+	})
+	if sent != 2 {
+		t.Fatalf("%d msg.sent on the record, want 2", sent)
+	}
+	if got := briefTitle("# Brief: Fix the feed\n\nmore"); got != "Fix the feed" {
+		t.Fatalf("briefTitle: %q", got)
 	}
 }

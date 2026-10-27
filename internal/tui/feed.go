@@ -21,7 +21,9 @@ type feedRow struct {
 	chat, msg, thread string // a chat message; its text is looked up when drawn
 	task              string
 	ask               bool
-	told              *core.Ask // done for the person: opens to what ran, why and its output
+	said              bool // one agent's message to another
+
+	told *core.Ask // done for the person: opens to what ran, why and its output
 }
 
 type feedMsg []core.Event
@@ -49,8 +51,11 @@ func (m *model) addEvents(evs []core.Event) tea.Cmd {
 		r := feedRow{at: e.At}
 		switch e.Kind {
 		case "chat.posted":
-			var p struct{ Chat, ID, Thread, From string }
+			var p struct{ Chat, ID, Thread, From, Name string }
 			e.Decode(&p)
+			if p.From != "person" && p.From != "hive" && strings.Contains(p.Name, " → ") {
+				continue // an agent's message copied into an agent chat: its msg.sent row shows it
+			}
 			name, project := m.chatName(p.Chat)
 			r.chat, r.msg, r.thread, r.project = p.Chat, p.ID, or(p.Thread, p.ID), project
 			r.from, r.to = name, "you"
@@ -64,6 +69,12 @@ func (m *model) addEvents(evs []core.Event) tea.Cmd {
 				fetching[p.Chat] = true
 				fetch = append(fetch, m.fetchChat(p.Chat))
 			}
+		case "msg.sent":
+			var s struct{ From, To, Text string }
+			e.Decode(&s)
+			from, fp := m.runName(s.From)
+			to, tp := m.runName(s.To)
+			r.from, r.to, r.project, r.text, r.said = from, to, or(fp, tp), s.Text, true
 		case "task.saved":
 			var t work.Task
 			e.Decode(&t)
@@ -131,6 +142,19 @@ func (m *model) chatName(id string) (name, project string) {
 	return id, ""
 }
 
+// runName labels a run in the feed as the sidebar does, with its project; a
+// run the state no longer lists is named by its role and id.
+func (m *model) runName(id string) (name, project string) {
+	if r, ok := m.run(id); ok {
+		return runLabel(r), r.Project
+	}
+	role, _, _ := strings.Cut(id, "-")
+	if role == "w" {
+		role = "worker"
+	}
+	return runLabel(core.Run{RunSpec: core.RunSpec{ID: id, Role: role}}), ""
+}
+
 // feedRows is the feed as followed: following applies when drawn, never to the buffer.
 func (m *model) feedRows() []feedRow {
 	var out []feedRow
@@ -193,6 +217,9 @@ func (m *model) keyDash(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.push(detail{kind: "task", id: r.task, title: core.Clip(r.text, 40)})
 		case r.told != nil:
 			return m, m.push(toldDetail(*r.told))
+		case r.said:
+			text := r.from + " → " + r.to + "\n" + r.at.Local().Format("Mon 15:04") + "\n\n" + r.text
+			return m, m.push(detail{kind: "text", id: fmt.Sprintf("said:%d", r.at.UnixNano()), title: "message", text: shown(text)})
 		case r.ask:
 			m.pick(sideRow{sec: secWaiting})
 		}
@@ -225,8 +252,14 @@ func (m *model) viewFeed() []string {
 	if w < 90 {
 		pw = 0
 	}
-	lines = append(lines, "  "+stDim.Render(fmt.Sprintf("%-10s%-24s%s%s", "time", "from → to", pad(clip("project", pw), pw), "message")), "")
 	rows := m.feedRows()
+	cw := 24 // from → to, wider for two agents' names where there's room
+	for _, r := range rows {
+		if w >= 90 && lipgloss.Width(r.from+" → "+r.to) > cw-2 {
+			cw = 30
+		}
+	}
+	lines = append(lines, "  "+stDim.Render(fmt.Sprintf("%-10s%s%s%s", "time", pad("from → to", cw), pad(clip("project", pw), pw), "message")), "")
 	sel := m.feedCursor(len(rows))
 	room := m.bodyHeight() - len(lines)
 	start := max(0, min(len(rows)-room, sel-room/2))
@@ -234,12 +267,14 @@ func (m *model) viewFeed() []string {
 	for i := start; i < len(rows) && len(feed) < room; i++ {
 		r := rows[i]
 		row := func(from, to, text string) string {
-			return clip(fmt.Sprintf("%-10s%s%s", r.at.Local().Format("15:04:05"), pad(clip(from+" → "+to, 22), 24), pad(clip(r.project, pw-2), pw))+text, w)
+			return clip(fmt.Sprintf("%-10s%s%s", r.at.Local().Format("15:04:05"), pad(clip(from+" → "+to, cw-2), cw), pad(clip(r.project, pw-2), pw))+text, w)
 		}
 		var line string
 		switch {
 		case i == sel && m.focus == 1: // one reversed run, so no colour inside it
 			line = stSel.Render(pad(row(r.from, r.to, m.feedText(r)), w))
+		case r.said: // agents talking: each speaks in its own colour
+			line = row(nameStyle(r.from).Render(r.from), nameStyle(r.to).Render(r.to), m.feedText(r))
 		case r.from != "you" && r.to != "you":
 			line = stDim.Render(row(r.from, r.to, m.feedText(r)))
 		default: // with the person: who speaks keeps their chat colour, and an ask is amber

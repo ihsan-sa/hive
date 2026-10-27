@@ -276,7 +276,7 @@ func (o *Ops) SetSpawner(s Spawner) { o.spawner = s }
 func (o *Ops) AddRouter(r Router) { o.routers = append(o.routers, r) }
 
 func (o *Ops) registerCore() {
-	o.Register(Op{Name: "message", Help: `{"to": "<run id | name | parent | person>", "text": "..."}`, Fn: func(r Run, a json.RawMessage) (any, error) {
+	o.Register(Op{Name: "message", Help: `{"to": "<run id | name | parent | person>", "text": "..."} (a run that has ended reads it on its next turn)`, Fn: func(r Run, a json.RawMessage) (any, error) {
 		var m struct{ To, Text string }
 		if err := Bind(a, &m); err != nil {
 			return nil, err
@@ -352,10 +352,21 @@ func (o *Ops) registerCore() {
 	o.Register(Op{Name: "agents", Help: `{} -> live agents you can message`, Fn: func(r Run, _ json.RawMessage) (any, error) {
 		var out []map[string]string
 		for _, x := range o.rs.List(func(x *Run) bool { return !x.Terminal() && o.rs.Walled(r, x.Project) == nil }) {
-			out = append(out, map[string]string{"id": x.ID, "name": x.Name, "role": x.Role, "project": x.Project, "status": x.Status, "progress": x.Progress})
+			out = append(out, map[string]string{"id": x.ID, "name": x.Name, "role": x.Role, "project": x.Project, "status": x.Status, "progress": x.Progress, "task": x.Task, "doing": briefTitle(x.Brief)})
 		}
 		return out, nil
 	}})
+}
+
+// briefTitle is the first line of a brief, its "# Brief: " heading cut, so
+// an agent can see what another is doing without reading its brief.
+func briefTitle(brief string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(brief), "\n")
+	line = strings.TrimLeft(line, "# ")
+	if _, t, ok := strings.Cut(line, ": "); ok && strings.HasPrefix(line, "Brief") {
+		line = t
+	}
+	return Clip(line, 120)
 }
 
 // Deliver routes a message from r to an address.
@@ -384,9 +395,18 @@ func (o *Ops) Deliver(from Run, to, text string) (any, error) {
 		label = from.Role + " " + from.ID
 	}
 	msg := fmt.Sprintf("[message from %s (%s) at %s]\n%s", label, from.ID, time.Now().Format("15:04"), text)
-	if err := o.rs.Send(target.ID, msg); err != nil {
+	note := "delivered"
+	if target.Terminal() && !target.Persistent {
+		if err := o.rs.Leave(target.ID, msg); err != nil {
+			return nil, err
+		}
+		note = fmt.Sprintf("%s has ended (%s), so your message waits for its next turn: it reads it first if its task sends it back (a review's findings, recheck --back)", target.ID, target.Status)
+		if target.Status == StatusBlocked {
+			note = fmt.Sprintf("%s had ended blocked; your message wakes it for a turn", target.ID)
+		}
+	} else if err := o.rs.Send(target.ID, msg); err != nil {
 		return nil, err
 	}
 	o.rs.append("msg.sent", map[string]string{"from": from.ID, "to": target.ID, "text": Clip(text, 2000)})
-	return "delivered", nil
+	return note, nil
 }

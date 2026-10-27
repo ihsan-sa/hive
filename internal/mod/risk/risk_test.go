@@ -563,7 +563,8 @@ func TestTribunalMajorityStillAsksForMoney(t *testing.T) {
 
 // A warden that messages the requester waits for the reply: its turn ends
 // idle, not quiet, and the request stays weighing. A message that fails to
-// send (to no agent, or to one that has ended) leaves the warden free to decide.
+// send (to no agent), or waits for a run that has ended, leaves the warden
+// free to decide.
 func TestWardenAskingTheRequesterWaits(t *testing.T) {
 	g := newRig(t, 2)
 	req := g.request("install a tool", "x", "T2")
@@ -576,7 +577,7 @@ func TestWardenAskingTheRequesterWaits(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.c.J.MustAppend("run.status", map[string]any{"id": ended.ID, "status": core.StatusDone})
-	if _, err := g.call(g.run(req.Warden), "message", map[string]string{"to": ended.ID, "text": "hello?"}); err == nil || g.run(req.Warden).Waiting != "" {
+	if _, err := g.call(g.run(req.Warden), "message", map[string]string{"to": ended.ID, "text": "hello?"}); err != nil || g.run(req.Warden).Waiting != "" {
 		t.Fatalf("a send to an ended run left the warden waiting: %v", err)
 	}
 	if _, err := g.call(g.run(req.Warden), "message", map[string]string{"to": g.worker.ID, "text": "which version?"}); err != nil {

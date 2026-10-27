@@ -136,7 +136,8 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 	c.Person.Handle("module", m.onModule)
 	// A warden that asks an agent ends its turn to wait for the reply, so it
 	// idles rather than going quiet, which Tick would read as failing. It
-	// waits only once the message is sent, so a failed send never leaves it
+	// waits only once the message is sent to a run that can answer, so a
+	// failed send, or one left for a run that has ended, never leaves it
 	// waiting on a reply that won't come. The "message" op comes from core and
 	// Register replaces by name, so this must run after core registers it; a
 	// test on the app's wiring (internal/app) pins the order.
@@ -152,7 +153,7 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 				if msg.To == "parent" {
 					msg.To = r.Parent
 				}
-				if _, ok := c.Runs.Find(msg.To); ok {
+				if t, ok := c.Runs.Find(msg.To); ok && (!t.Terminal() || t.Persistent) {
 					c.Runs.Wait(r.ID, "a reply from "+msg.To)
 				}
 			}

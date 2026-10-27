@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -1092,6 +1093,7 @@ func (m *Module) Digest(since int64, only string) string {
 			b.WriteString("## Agents' feedback on the Hive, still open\n\n" + fb + "\n")
 		}
 	}
+	b.WriteString(m.talk(since, mine))
 	b.WriteString("## Recent chat\n\n")
 	for _, ch := range m.Chat.Chats() {
 		if !mine(ch.Project) {
@@ -1106,6 +1108,48 @@ func (m *Module) Digest(since int64, only string) string {
 		}
 	}
 	return b.String()
+}
+
+// talk is what agents said to each other since the last sweep (a day at
+// most): how many messages went between which roles, then the latest of
+// them, so a sweep sees who talks, who doesn't, and what was asked.
+func (m *Module) talk(since int64, mine func(string) bool) string {
+	role := func(id string) (string, string) {
+		if r, ok := m.C.Runs.Get(id); ok {
+			return r.Role, r.Project
+		}
+		return "agent", ""
+	}
+	from := time.Now().Add(-24 * time.Hour)
+	pairs := map[string]int{}
+	var lines []string
+	m.C.J.Replay(func(e core.Event) {
+		if e.Seq <= since || e.Kind != "msg.sent" || e.At.Before(from) {
+			return
+		}
+		var s struct{ From, To, Text string }
+		e.Decode(&s)
+		fr, fp := role(s.From)
+		tr, tp := role(s.To)
+		if !mine(fp) && !mine(tp) {
+			return
+		}
+		pairs[fr+" → "+tr]++
+		lines = append(lines, fmt.Sprintf("- %s %s → %s: %s", e.At.Format("01-02 15:04"), s.From, s.To, core.Clip(strings.Join(strings.Fields(s.Text), " "), 240)))
+	})
+	b := "## Messages between agents\n\n"
+	if len(lines) == 0 {
+		return b + "None since the last sweep (a day at most).\n\n"
+	}
+	keys := slices.Sorted(maps.Keys(pairs))
+	for i, k := range keys {
+		keys[i] = fmt.Sprintf("%s %d", k, pairs[k])
+	}
+	b += fmt.Sprintf("%d since the last sweep (a day at most): %s.\n", len(lines), strings.Join(keys, ", "))
+	if len(lines) > 20 {
+		lines = lines[len(lines)-20:]
+	}
+	return b + strings.Join(lines, "\n") + "\n\n"
 }
 
 // baselineAlert gives the text and dedup key of a start with no number. A

@@ -1337,3 +1337,34 @@ func TestSizeLine(t *testing.T) {
 		t.Fatal("no size measured should show no line")
 	}
 }
+
+// Agents' messages to each other show in the feed, sender and receiver by
+// name, a run the state no longer lists by its role; the copy the chat module
+// makes in an agent's chat doesn't show twice, and Enter opens the message.
+func TestFeedShowsAgentsTalking(t *testing.T) {
+	m := testModel(120, 40)
+	m.pick(sideRow{sec: secDash})
+	ev := func(seq int64, kind string, data map[string]string) core.Event {
+		b, _ := json.Marshal(data)
+		return core.Event{Seq: seq, At: time.Now(), Kind: kind, Data: b}
+	}
+	m.addEvents([]core.Event{
+		ev(1, "msg.sent", map[string]string{"from": "w-t1", "to": "w-261024-144507-9106b80488", "text": "the flake is in TestMeter"}),
+		ev(2, "chat.posted", map[string]string{"chat": "agent:w-t1", "id": "c1", "from": "w-t1", "name": "w-t1 → w-261024-144507-9106b80488"}),
+		ev(3, "msg.sent", map[string]string{"from": "sweep-261027-004706-0abbb2bb96", "to": "lead-project-hive-6fea3b9e95", "text": "released your hold"}),
+	})
+	if len(m.feed) != 2 {
+		t.Fatalf("want two rows, the chat copy left out: %+v", m.feed)
+	}
+	v := plain(m.View())
+	for _, want := range []string{"worker w-t1 → worker 9106b", "the flake is in TestMeter", "sweep 0abbb → lead 6fea3", "released your hold"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("feed lacks %q:\n%s", want, v)
+		}
+	}
+	m.focus = 1
+	m.keyDash(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.stack) != 1 || !strings.Contains(m.stack[0].text, "released your hold") {
+		t.Fatalf("Enter on the newest message opened %+v", m.stack)
+	}
+}
