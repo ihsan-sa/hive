@@ -107,7 +107,7 @@ func TestHoldUntilTheNextRelease(t *testing.T) {
 }
 
 // Any agent sets a hold only with the person's words, and only on its own project.
-func TestLeadHoldNeedsThePersonsWords(t *testing.T) {
+func TestHoldNeedsThePersonsWords(t *testing.T) {
 	m, _, p, _ := heldRig(t)
 	lead := core.Run{ID: "lead-1", Role: "lead"}
 	if _, err := m.opHold(lead, []byte(`{"project":"p"}`)); err == nil {
