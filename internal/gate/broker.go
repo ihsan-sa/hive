@@ -278,6 +278,10 @@ func (b *Broker) handle(host string, w http.ResponseWriter, r *http.Request) {
 		b.refuse(w, r, why)
 		return
 	}
+	if host == "api.github.com" && r.URL.Path == "/user" {
+		b.user(w)
+		return
+	}
 	b.proxy(host).ServeHTTP(w, r)
 }
 
@@ -616,7 +620,15 @@ func (g *gqlCheck) top(s gqlSel, _ int) error {
 			return err
 		}
 		return g.within(s.Children, 0)
-	case "viewer", "rateLimit", "__typename":
+	case "viewer":
+		// The token acts as the person: their login, never their profile.
+		return g.each(s.Children, 1, func(k gqlSel, _ int) error {
+			if k.Field != "login" && k.Field != "id" && k.Field != "__typename" {
+				return fmt.Errorf("the viewer is its login and id only, not %s", k.Field)
+			}
+			return nil
+		})
+	case "rateLimit", "__typename":
 		return g.leaves(s, 0)
 	case "__type", "__schema":
 		return nil // the schema is public and holds no one's data
@@ -693,8 +705,14 @@ func (g *gqlCheck) ids(v gqlValue, key string, depth int) error {
 		return fmt.Errorf("an input nested too deep")
 	}
 	if v.Var != "" {
+		// A variable the request doesn't send would be its default, which
+		// the broker doesn't read: refused, not passed unchecked.
+		sent, ok := g.vars[v.Var]
+		if !ok {
+			return fmt.Errorf("variable $%s is not sent", v.Var)
+		}
 		var raw any
-		if err := json.Unmarshal(g.vars[v.Var], &raw); err != nil && len(g.vars[v.Var]) > 0 {
+		if err := json.Unmarshal(sent, &raw); err != nil {
 			return err
 		}
 		return g.idsJSON(raw, key, depth)
@@ -863,4 +881,21 @@ func (c *Child) useBroker(cfg *Config, g GitHub, name string) error {
 		return fmt.Errorf("%s can't reach %s through the broker: %v: %s", c.Name, name, err, tail(out, 300))
 	}
 	return nil
+}
+
+// user answers GET /user with the login the token acts as and nothing more
+// of the person's profile.
+func (b *Broker) user(w http.ResponseWriter) {
+	var u struct {
+		Login  string `json:"login"`
+		ID     int64  `json:"id"`
+		NodeID string `json:"node_id"`
+		Type   string `json:"type"`
+	}
+	if err := b.api(http.MethodGet, "/user", nil, &u); err != nil {
+		http.Error(w, "the broker could not ask GitHub: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(u)
 }

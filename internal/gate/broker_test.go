@@ -420,3 +420,43 @@ func TestServeBroker(t *testing.T) {
 		t.Errorf("GitHub saw %q", got)
 	}
 }
+
+// The ways a GraphQL request could read one way to the broker and another to
+// GitHub are refused: a variable left to its default (which the broker
+// doesn't read), a block string (whose escaped """ ends it for one reader
+// only), an escape GraphQL doesn't have. The viewer is a login, not a profile.
+func TestBrokerGraphQLReadsAsGitHubDoes(t *testing.T) {
+	b, err := NewBroker("Hive-RSI-Lab", "org-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Allow("gate-x-candidate")
+	b.ids["R_cand"] = "gate-x-candidate"
+	b.nodes["R_cand"], b.nodes["PR_1"], b.nodes["PR_other"] = "Hive-RSI-Lab/gate-x-candidate", "Hive-RSI-Lab/gate-x-candidate", "Hive-RSI-Lab/hive"
+	for _, c := range []struct {
+		query, vars string
+		ok          bool
+	}{
+		{`mutation($i: ID = "PR_other"){mergePullRequest(input:{pullRequestId:$i}){clientMutationId}}`, ``, false},
+		{`mutation($in: CreateCommitOnBranchInput = {branch:{repositoryNameWithOwner:"Hive-RSI-Lab/hive",branchName:"main"}}){createCommitOnBranch(input:$in){clientMutationId}}`, ``, false},
+		{`mutation($i: ID = "PR_other"){mergePullRequest(input:{pullRequestId:$i}){clientMutationId}}`, `{"i":"PR_1"}`, true},
+		{`mutation{a: addComment(input:{subjectId:"PR_1",body:"""x \""" y"""}){clientMutationId} b: addComment(input:{subjectId:"PR_1",body:"""z"""}){clientMutationId}}`, ``, false},
+		{`mutation{a: addComment(input:{subjectId:"PR_1",body:"x \q"}){clientMutationId}}`, ``, false},
+		{`{ repository(owner:"Hive-RSI-Lab",name:"gate-x-candidate"){ id } }`, ``, true},
+		{`{ viewer { login id } }`, ``, true},
+		{`{ viewer { email } }`, ``, false},
+		{"{ viewer\u00a0{ login } }", ``, false}, // whitespace GraphQL doesn't have
+	} {
+		body, _ := json.Marshal(map[string]any{"query": c.query, "variables": json.RawMessage(orNull(c.vars))})
+		if why := b.graphqlOK(body); (why == "") != c.ok {
+			t.Errorf("%s %s: allowed %v (%s)", c.query, c.vars, why == "", why)
+		}
+	}
+}
+
+func orNull(s string) string {
+	if s == "" {
+		return "null"
+	}
+	return s
+}

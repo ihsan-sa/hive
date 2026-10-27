@@ -296,7 +296,7 @@ func gqlLex(src string) ([]string, error) {
 	for i := 0; i < len(r); {
 		c := r[i]
 		switch {
-		case c == ',' || unicode.IsSpace(c) || c == '\uFEFF':
+		case c == ',' || c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\uFEFF': // GraphQL's whitespace, no more
 			i++
 		case c == '#':
 			for i < len(r) && r[i] != '\n' && r[i] != '\r' {
@@ -313,27 +313,30 @@ func gqlLex(src string) ([]string, error) {
 			toks = append(toks, string(c))
 			i++
 		case c == '"':
-			if i+2 < len(r) && r[i+1] == '"' && r[i+2] == '"' { // block string
-				end := strings.Index(string(r[i+3:]), `"""`)
-				if end < 0 {
-					return nil, fmt.Errorf("graphql: an unclosed block string")
-				}
-				body := string(r[i+3:])[:end]
-				toks = append(toks, `"`+body)
-				i += 3 + len([]rune(body)) + 3
-				continue
+			if i+2 < len(r) && r[i+1] == '"' && r[i+2] == '"' {
+				// A block string's escapes and ends are where a reader and
+				// GitHub could split one document two ways; gh sends none.
+				return nil, fmt.Errorf("graphql: a block string")
 			}
 			var b strings.Builder
 			j := i + 1
 			for ; j < len(r) && r[j] != '"'; j++ {
-				if r[j] == '\n' {
+				if r[j] == '\n' || r[j] == '\r' {
 					return nil, fmt.Errorf("graphql: a string across lines")
 				}
 				if r[j] == '\\' && j+1 < len(r) {
 					j++
 					switch r[j] {
+					case '"', '\\', '/':
+						b.WriteRune(r[j])
+					case 'b':
+						b.WriteRune('\b')
+					case 'f':
+						b.WriteRune('\f')
 					case 'n':
 						b.WriteRune('\n')
+					case 'r':
+						b.WriteRune('\r')
 					case 't':
 						b.WriteRune('\t')
 					case 'u':
@@ -351,7 +354,7 @@ func gqlLex(src string) ([]string, error) {
 						b.WriteRune(n)
 						j += 4
 					default:
-						b.WriteRune(r[j])
+						return nil, fmt.Errorf("graphql: an escape GraphQL doesn't have (\\%c)", r[j])
 					}
 					continue
 				}
