@@ -957,3 +957,50 @@ func TestSendBackBundlesMain(t *testing.T) {
 		t.Fatalf("bundle heads %q, want main %s", out, main)
 	}
 }
+
+// The lead closes a PR whose task's tests wait in the check line, even while
+// a step holds the task (it used to be refused as busy for as long as the
+// step took): the wait leaves the line, the check never runs, and the
+// step's copy isn't saved over the close.
+func TestLeadClosesPRWaitingInCheckLine(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	task.Stage = StageTesting
+	m.save(task, "")
+	m.C.Effects.Slots.Resize(func() int { return 1 })
+	hold := m.C.Effects.Slots.Acquire(p.Name, "someone-else", "test")
+	defer hold()
+	if err := m.test(task, p); err != nil { // queues its test behind the step
+		t.Fatal(err)
+	}
+	for end := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, w := m.C.Effects.Slots.State(); len(w) == 1 {
+			break
+		}
+		if time.Now().After(end) {
+			t.Fatal("the test check never joined the line")
+		}
+	}
+	m.mu.Lock()
+	m.busy[task.ID] = true // a step holds it, as Tick does
+	m.mu.Unlock()
+	stepCopy := *task
+	start := time.Now()
+	if _, err := m.ClosePR(task.ID, "lead", "a duplicate", false); err != nil {
+		t.Fatalf("close refused while a step holds the task: %v", err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("close took %v", d)
+	}
+	m.save(&stepCopy, "the step's older copy") // dropped: the close was steered over it
+	m.release(task.ID)
+	if _, w := m.C.Effects.Slots.State(); len(w) != 0 {
+		t.Fatalf("the closed PR's check still waits in the line: %v", w)
+	}
+	m.steps.Wait()
+	if _, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); ok {
+		t.Fatal("the closed PR's tests ran")
+	}
+	if got, _ := m.Get(task.ID); got.Stage != StageStopped || !strings.HasPrefix(got.Reason, closedByLead) {
+		t.Fatalf("stage %q, reason %q", got.Stage, got.Reason)
+	}
+}

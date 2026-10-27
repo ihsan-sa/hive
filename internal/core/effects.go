@@ -535,7 +535,12 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.Output = err.Error()
 		return c // not recorded: no sandbox is not a verdict on the commit
 	}
-	defer e.Slots.Acquire(p.Name, sha, kind)()
+	release, ok := e.Slots.Take(p.Name, sha, kind)
+	if !ok {
+		c.Output = "dropped from the check line before it started"
+		return c // not recorded: nobody wants its verdict any more
+	}
+	defer release()
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
 		c.Output = "could not make a clean checkout: " + err.Error()
