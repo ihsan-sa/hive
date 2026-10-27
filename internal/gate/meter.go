@@ -46,7 +46,7 @@ const ProxyPort = 3128
 func StartMeter(sock string) (*Meter, error) {
 	m := &Meter{Sock: sock, lookup: net.LookupIP, own: sandbox.OwnAddrs}
 	m.public = func(ctx context.Context, host string) ([]net.IP, error) {
-		return sandbox.PublicDNS(ctx, host, m.upstream)
+		return publicDNS(ctx, host, m.upstream)
 	}
 	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
 		if v := os.Getenv(k); v != "" {
@@ -175,7 +175,8 @@ func (m *Meter) dial(hostport string) (net.Conn, error) {
 		ips, err = m.public(ctx, host)
 		cancel()
 		if err != nil {
-			return nil, fmt.Errorf("the meter can't resolve %s here, and %v", host, err)
+			return nil, fmt.Errorf("the meter can't resolve %s here, and %v "+
+				"(public DNS over HTTPS, dns.google or cloudflare-dns.com, must be reachable through the gate's proxy)", host, err)
 		}
 		if len(ips) == 0 {
 			return nil, fmt.Errorf("the meter can't resolve %s here, nor in public DNS", host)
