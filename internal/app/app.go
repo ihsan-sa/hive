@@ -85,6 +85,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Release = release.New(c)
 	a.Models = models.New(c, a.Work)
 	a.Agents.Skip = a.Models.Benched
+	a.Agents.Demote = a.Models.Demoted
 	a.Improve.OnKept = a.Release.AfterKept
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
 	for _, tick := range []func(){stats.SpendNotice{C: c}.Tick, a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.moduleJobs, a.Runner.Tick, a.Models.Tick} {
@@ -204,9 +205,15 @@ const (
 func (a *App) Run(ctx context.Context) {
 	a.Improve.Recover()
 	go a.C.WatchLogins(ctx, time.Minute)
+	a.run(ctx, a.Tick)
+}
+
+// run is Run's loop with its wake sources: the journal, and a new request in
+// a run's outbox.
+func (a *App) run(ctx context.Context, tick func()) {
 	wake := make(chan struct{}, 1)
 	go a.C.Runs.WatchRequests(ctx, 50*time.Millisecond, func() { nudge(wake) })
-	loop(ctx, a.C.J, wake, a.Tick)
+	loop(ctx, a.C.J, wake, tick)
 }
 
 // nudge wakes the loop, once however many nudges come before it looks.

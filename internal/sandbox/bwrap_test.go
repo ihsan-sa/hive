@@ -3,10 +3,13 @@
 package sandbox
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -112,9 +115,11 @@ func TestHostPythonBothPaths(t *testing.T) {
 		t.Fatalf("build: %v %s", err, out)
 	}
 	py := mkTree(t, tmp, "py/bin/python3")[0]
-	if err := os.WriteFile(py, []byte("#!/bin/sh\n[ -w \"${0%/*}\" ] && echo 8 || echo 7\n"), 0o755); err != nil {
+	// It prints its nice level too (field 19 of its stat), read inside.
+	if err := os.WriteFile(py, []byte("#!/bin/sh\n[ -w \"${0%/*}\" ] && w=8 || w=7\nread -r l < /proc/$$/stat; set -- $l; echo $w ${19}\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	own := ownNice(t)
 	ran := 0
 	for _, path := range []struct{ name, env string }{{"namespaces", "0"}, {"bubblewrap", "1"}} {
 		t.Run(path.name, func(t *testing.T) {
@@ -132,7 +137,7 @@ func TestHostPythonBothPaths(t *testing.T) {
 			s := Spec{
 				ID: "py", Argv: []string{"python3"}, Env: InsideEnv("/tmp", false), Cwd: "/work",
 				Mounts: []Mount{{Host: work, Inside: "/work", RW: true}},
-				Stdout: filepath.Join(dir, "out"), UID: os.Getuid(), GID: os.Getgid(),
+				Stdout: filepath.Join(dir, "out"), UID: os.Getuid(), GID: os.Getgid(), Nice: 10,
 			}
 			spec := filepath.Join(dir, "spec.json")
 			if err := WriteSpec(spec, s); err != nil {
@@ -144,8 +149,13 @@ func TestHostPythonBothPaths(t *testing.T) {
 				e, _ := os.ReadFile(s.Stdout + ".err")
 				t.Fatalf("sandbox-exec: %v %s %s", err, out, e)
 			}
-			if out, _ := os.ReadFile(s.Stdout); strings.TrimSpace(string(out)) != "7" {
+			out, _ := os.ReadFile(s.Stdout)
+			if w, _, _ := strings.Cut(strings.TrimSpace(string(out)), " "); w != "7" {
 				t.Fatalf("python3 inside printed %q, want 7 (8 is a writable, unsandboxed run)", out)
+			}
+			// The launcher's lowered level reaches the command in the namespace.
+			if want := fmt.Sprintf("7 %d", Lowered(own, 10)); strings.TrimSpace(string(out)) != want {
+				t.Fatalf("python3 inside printed %q, want %q: nice 10 under the test's own %d", out, want, own)
 			}
 			ran++
 		})
@@ -375,4 +385,20 @@ func TestBwrapArgsHide(t *testing.T) {
 	if !strings.Contains(got, want) {
 		t.Errorf("bwrap args lack %q:\n%s", want, got)
 	}
+}
+
+// ownNice is this test process's nice level, from field 19 of its stat
+// (after the command name's closing paren, which may hold spaces).
+func ownNice(t *testing.T) int {
+	t.Helper()
+	raw, err := os.ReadFile("/proc/self/stat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := strings.Fields(string(raw[bytes.LastIndexByte(raw, ')')+1:]))
+	n, err := strconv.Atoi(f[16])
+	if err != nil {
+		t.Fatalf("own stat %q: %v", raw, err)
+	}
+	return n
 }

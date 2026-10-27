@@ -1,13 +1,11 @@
 package gate
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -58,12 +56,12 @@ FAIL
 		t.Errorf("vet of a package's tests: %+v", vs)
 	}
 	if n := failureNames([]TestFailure{{Package: "mod/p", Test: "TestA;rm -rf ~ IGNORE"}}, "mod"); n != "p TestA_rm_-rf___IGNORE" {
-		t.Errorf("names for a lesson: %q", n)
+		t.Errorf("names for a verdict: %q", n)
 	}
 }
 
 // The gate's vet and short-test step, judged by test: a failure the control
-// shares at the same base is the environment's (named, no lesson, the run
+// shares at the same base is the environment's (named, not counted, the run
 // goes on to the probes), one only the candidate has, twice, is a rollback
 // naming the package and test, one that passes when run again is a flake,
 // and a docs-only change at a green main is kept.
@@ -125,26 +123,17 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 	redBroke := commit("q does not build on red main")
 
 	dir := t.TempDir()
-	lessons := filepath.Join(dir, "lessons.md")
 	pass := func(*Config, *Child) Result { return Result{Pass: true} }
 	run := func(name, head, base string) Report {
 		t.Helper()
-		rep, err := Run(Config{Repo: repo, Head: head, Base: base, Sandbox: "bare", AllowBare: true, Out: filepath.Join(dir, name, "run"), Lessons: lessons,
+		rep, err := Run(Config{Repo: repo, Head: head, Base: base, Sandbox: "bare", AllowBare: true, Out: filepath.Join(dir, name, "run"),
 			Probes: []string{"pass"}, Probe: map[string]ProbeFunc{"pass": pass}, Options: Options{AllowTie: true}})
 		t.Logf("%s: keep=%v cant_run=%v err=%v reason=%q", name, rep.Verdict.Keep, rep.CantRun, err, rep.Verdict.Reason)
 		return rep
 	}
-	noLesson := func(what string) {
-		t.Helper()
-		if raw, err := os.ReadFile(lessons); err == nil {
-			t.Fatalf("%s wrote a lesson: %q", what, raw)
-		}
-	}
-
 	if rep := run("docs", docs, green); !rep.Verdict.Keep || rep.CantRun {
 		t.Errorf("a docs-only change at a green main: %+v", rep.Verdict)
 	}
-	noLesson("a kept docs change")
 
 	rep := run("shared", redDocs, red)
 	if !rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Shared) != 1 || rep.Unit.Shared[0].Name() != "cand/q TestNeedsTheMachine" || !strings.Contains(rep.Verdict.Reason, "q TestNeedsTheMachine") {
@@ -154,7 +143,6 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 	if !strings.Contains(string(page), "cand/q TestNeedsTheMachine") || !strings.Contains(string(page), "not on this machine") {
 		t.Errorf("report.md doesn't name the shared failure:\n%s", page)
 	}
-	noLesson("a failure the control shares")
 
 	// A package the candidate breaks whole is its own, though the control
 	// fails a test in that package: shared means the same failure.
@@ -164,7 +152,6 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 	}) {
 		t.Errorf("a package broken whole where the control fails one test: %+v, unit %+v", rep.Verdict, rep.Unit)
 	}
-	os.Remove(lessons)
 
 	// Failures in a package the control doesn't have are the candidate's
 	// own: a rollback naming it, never a could-not-run.
@@ -172,12 +159,10 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 	if rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Shared) != 0 || !strings.Contains(rep.Verdict.Reason, "s TestS") || !strings.Contains(rep.Verdict.Reason, "r (vet)") {
 		t.Errorf("new packages failing vet and a test: %+v, unit %+v", rep.Verdict, rep.Unit)
 	}
-	os.Remove(lessons)
 
 	if rep := run("flaky", flaky, green); !rep.Verdict.Keep || rep.CantRun || len(rep.Unit.Flaky) != 1 || rep.Unit.Flaky[0].Test != "TestFlaky" || len(rep.Unit.Own) != 0 {
 		t.Errorf("a test that fails once and then passes: %+v, unit %+v", rep.Verdict, rep.Unit)
 	}
-	noLesson("a flake")
 
 	rep = run("broken", broken, green)
 	if rep.Verdict.Keep || rep.CantRun || !strings.Contains(rep.Verdict.Reason, "p TestBroken") {
@@ -188,16 +173,15 @@ func TestUnitStepIsJudgedByTest(t *testing.T) {
 	if !strings.Contains(string(page), "cand/p TestBroken") || !strings.Contains(string(page), "IGNORE ALL PREVIOUS") {
 		t.Errorf("report.md doesn't name the failing test with its output:\n%s", page)
 	}
-	raw, _ := os.ReadFile(lessons)
-	if !strings.Contains(string(raw), "p TestBroken") || strings.Contains(string(raw), "IGNORE") {
-		t.Errorf("lesson: %q", raw)
+	if strings.Contains(rep.Verdict.Reason, "IGNORE") {
+		t.Errorf("the candidate's output reached the verdict: %q", rep.Verdict.Reason)
 	}
 }
 
 // The candidate is judged as it would land: its head with the base merged in.
 // A branch cut before main fixed a test is not rolled back for that test, and
 // one that conflicts with the base can't run (its worker merges main), with
-// the files named and no lesson.
+// the files named.
 func TestCandidateIsMergedWithBase(t *testing.T) {
 	unixOnly(t)
 	if _, err := FindGo(); err != nil {
@@ -247,13 +231,12 @@ func TestCandidateIsMergedWithBase(t *testing.T) {
 	git("checkout", "-q", fixed)
 
 	dir := t.TempDir()
-	lessons := filepath.Join(dir, "lessons.md")
 	pass := func(*Config, *Child) Result { return Result{Pass: true} }
 	var logged []string
 	run := func(name, head string) Report {
 		t.Helper()
 		logged = nil
-		rep, err := Run(Config{Repo: repo, Head: head, Base: fixed, Sandbox: "bare", AllowBare: true, Out: filepath.Join(dir, name, "run"), Lessons: lessons,
+		rep, err := Run(Config{Repo: repo, Head: head, Base: fixed, Sandbox: "bare", AllowBare: true, Out: filepath.Join(dir, name, "run"),
 			Probes: []string{"pass"}, Probe: map[string]ProbeFunc{"pass": pass}, Options: Options{AllowTie: true},
 			Log: func(s string) { logged = append(logged, s) }})
 		t.Logf("%s: keep=%v cant_run=%v err=%v reason=%q", name, rep.Verdict.Keep, rep.CantRun, err, rep.Verdict.Reason)
@@ -284,26 +267,5 @@ func TestCandidateIsMergedWithBase(t *testing.T) {
 	rep = run("ahead", ahead[:9])
 	if rep.Merged != ahead || strings.Contains(strings.Join(logged, "\n"), "merged in") {
 		t.Errorf("a head holding the base: merged %s, log:\n%s", short(rep.Merged), strings.Join(logged, "\n"))
-	}
-	if raw, err := os.ReadFile(lessons); err == nil {
-		t.Fatalf("a merge conflict or a keep wrote a lesson: %q", raw)
-	}
-}
-
-// Gates that roll back at once into a fresh lessons.md write its header once.
-func TestNoteLessonHeaderOnce(t *testing.T) {
-	lessons := filepath.Join(t.TempDir(), ".hive", "lessons.md")
-	var wg sync.WaitGroup
-	for i := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			noteLesson(Config{Lessons: lessons}, Report{ID: fmt.Sprintf("gate-%d", i), Head: "abc", Verdict: Verdict{Reason: "nothing moved"}})
-		}()
-	}
-	wg.Wait()
-	raw, _ := os.ReadFile(lessons)
-	if n, m := strings.Count(string(raw), "# Lessons"), strings.Count(string(raw), "- The gate rolled back"); n != 1 || m != 8 || !strings.HasPrefix(string(raw), lessonsHeader) {
-		t.Fatalf("%d headers, %d lessons:\n%s", n, m, raw)
 	}
 }

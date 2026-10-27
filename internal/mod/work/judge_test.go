@@ -2,10 +2,9 @@ package work
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
@@ -67,13 +66,10 @@ func TestJudgeKeepsOverTheNumbers(t *testing.T) {
 	if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); !strings.Contains(c, "Judge (") || !strings.Contains(c, "judge says keep") {
 		t.Fatalf("the PR doesn't carry the judgement:\n%s", c)
 	}
-	if raw, _ := os.ReadFile(filepath.Join(m.C.WS.Gates(), p.Name, "recursive", "lessons.md")); strings.Contains(string(raw), core.Short(task.SHA)) {
-		t.Fatalf("a kept change has a rollback lesson: %s", raw)
-	}
 }
 
 // A measured keep the judge rolls back goes back to the worker with the
-// judge's reasons, its lesson written, and the merge step refuses it.
+// judge's reasons, and the merge step refuses it.
 func TestJudgeRollsBackOverTheNumbers(t *testing.T) {
 	m, task, p, f := measuredRig(t, core.GateKeep)
 	main, _ := m.C.Effects.Sync(p)
@@ -86,9 +82,6 @@ func TestJudgeRollsBackOverTheNumbers(t *testing.T) {
 	}
 	if task.Stage != StageWorking || !strings.Contains(task.Findings, "judge says rollback") || !strings.Contains(task.Findings, "kept by the numbers, rolled back by its judge") || prState(t, f, task.PR.Number) != "OPEN" {
 		t.Fatalf("stage %q, findings %q: want sent back with the judge's reasons", task.Stage, task.Findings)
-	}
-	if raw, _ := os.ReadFile(filepath.Join(m.C.WS.Gates(), p.Name, "recursive", "lessons.md")); !strings.Contains(string(raw), core.Short(head)+" was kept by the gate's numbers and rolled back by its judge") || strings.Contains(string(raw), "judge says") {
-		t.Fatalf("lesson: %q", raw)
 	}
 }
 
@@ -129,21 +122,15 @@ func TestJudgeWeighsOnlyMeasuredVerdicts(t *testing.T) {
 
 // A measured rollback whose judge hangs, then gives nothing usable, stands
 // as the numbers said once JudgeTries runs are spent: the hung run is
-// stopped and counts as a try, and the gate's lesson is written, since the
-// gate left it to the judge.
-func TestJudgeWithNoAnswerLeavesTheLesson(t *testing.T) {
+// stopped and counts as a try.
+func TestJudgeWithNoAnswerLeavesTheNumbers(t *testing.T) {
 	m, task, p, _ := measuredRig(t, core.GateRollback)
 	main, _ := m.C.Effects.Sync(p)
-	head := task.SHA
 	gateOnce(t, m, task, p)
-	lessons := filepath.Join(m.C.WS.Gates(), p.Name, "recursive", "lessons.md")
 	for i := 0; i < JudgeTries; i++ {
 		id := "j-" + task.ID + "-" + core.Short(task.SHA) + "-" + core.Short(main) + "-" + string(rune('0'+i))
 		if _, ok := m.C.Runs.Get(id); !ok {
 			t.Fatalf("try %d: no judge run %s", i, id)
-		}
-		if raw, _ := os.ReadFile(lessons); strings.Contains(string(raw), core.Short(head)) {
-			t.Fatalf("try %d: a lesson before the numbers decided: %s", i, raw)
 		}
 		if i == 0 {
 			old := JudgeWait
@@ -170,9 +157,6 @@ func TestJudgeWithNoAnswerLeavesTheLesson(t *testing.T) {
 	if task.Stage != StageWorking {
 		t.Fatalf("stage %q, reason %q: want the numbers' rollback once the judge gave nothing usable", task.Stage, task.Reason)
 	}
-	if raw, _ := os.ReadFile(lessons); !strings.Contains(string(raw), "The gate rolled back "+core.Short(head)) || strings.Count(string(raw), core.Short(head)) != 1 {
-		t.Fatalf("lesson: %q", raw)
-	}
 }
 
 // A measured rollback of a change to security-listed files stands as the
@@ -186,9 +170,6 @@ func TestJudgeDoesNotOverrideASecurityRollback(t *testing.T) {
 	gateOnce(t, m, task, p)
 	if n := len(m.C.Runs.List(func(r *core.Run) bool { return r.Role == core.JudgeRole })); n != 0 || task.Stage != StageWorking {
 		t.Fatalf("%d judge runs, stage %q (%s): a security-listed rollback goes straight back", n, task.Stage, task.Reason)
-	}
-	if raw, _ := os.ReadFile(filepath.Join(m.C.WS.Gates(), p.Name, "recursive", "lessons.md")); !strings.Contains(string(raw), "The gate rolled back "+core.Short(task.SHA)) {
-		t.Fatalf("lesson: %q", raw)
 	}
 }
 
@@ -243,6 +224,69 @@ func TestACarriedVerdictIsJudgedAtItsOwnMain(t *testing.T) {
 		}
 		if verdict == core.GateRollback && (task.Stage != StageWorking || !strings.Contains(task.Findings, "judge says rollback") || prState(t, f, task.PR.Number) != "OPEN") {
 			t.Fatalf("stage %q, findings %q: want the carried rollback sent back", task.Stage, task.Findings)
+		}
+	}
+}
+
+// A clear keep, a metric gain beyond the gate's noise, doesn't wait on a
+// judge that has been parked JudgeParkWait (issue #983): the judge is
+// stopped, the numbers merge it, and the PR says no judge weighed it. A
+// rollback, or a keep won on a pass rate the control's flake could have
+// given it, still waits for its judge.
+func TestAParkedJudgeDoesntHoldAKeep(t *testing.T) {
+	for _, c := range []struct{ outcome, reason string }{
+		{core.GateKeep, "better than the current Hive with no regression: benchmark seconds: candidate 5.468, control 11.55 (noise ±2.54, n=3/3)"},
+		{core.GateKeep, "better than the current Hive with no regression: e2e passes 3/3, the control 1/3"},
+		{core.GateRollback, "worse than the current Hive: e2e passes 1/3, the control 3/3"},
+	} {
+		outcome, clear := c.outcome, strings.Contains(c.reason, "noise")
+		m, task, p, f := measuredRig(t, outcome)
+		inner := m.Gate
+		m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
+			g := inner(ctx, j)
+			g.Reason = c.reason
+			return g
+		}
+		main, _ := m.C.Effects.Sync(p)
+		gateOnce(t, m, task, p)
+		id := "j-" + task.ID + "-" + core.Short(task.SHA) + "-" + core.Short(main) + "-0"
+		if _, ok := m.C.Runs.Get(id); !ok {
+			t.Fatalf("%s: no judge run %s", outcome, id)
+		}
+		m.C.J.MustAppend("run.status", map[string]any{"id": id, "status": core.StatusParked, "reason": "login for claude: every claude login is at its usage limit", "until": time.Now().Add(8 * time.Hour)})
+		again := func() {
+			m.mu.Lock()
+			delete(m.later, task.ID)
+			m.mu.Unlock()
+			mergeOnce(t, m, task, p)
+		}
+		// Parked just now: it waits, however long the park says it lasts.
+		again()
+		if r, _ := m.C.Runs.Get(id); task.Stage != StageMerging || r.Terminal() {
+			t.Fatalf("%s: a judge parked a moment ago: stage %q, reason %q, judge %s", outcome, task.Stage, task.Reason, r.Status)
+		}
+		// Parked JudgeParkWait now.
+		wait := JudgeParkWait
+		JudgeParkWait = 0
+		again()
+		JudgeParkWait = wait
+		r, _ := m.C.Runs.Get(id)
+		if !clear {
+			// A rollback, or a keep won on a pass rate the control's flake
+			// could have given it, waits for its judge.
+			if task.Stage != StageMerging || !strings.Contains(task.Reason, "judge") || r.Terminal() {
+				t.Fatalf("%s with its judge parked: stage %q, reason %q, judge %s", c.reason, task.Stage, task.Reason, r.Status)
+			}
+			continue
+		}
+		if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+			t.Fatalf("a keep with its judge parked: stage %q, reason %q", task.Stage, task.Reason)
+		}
+		if r.Status != core.StatusStopped {
+			t.Fatalf("the parked judge is %s, want stopped", r.Status)
+		}
+		if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); !strings.Contains(c, "Judge bypassed") {
+			t.Fatalf("the PR doesn't say no judge weighed the keep:\n%s", c)
 		}
 	}
 }

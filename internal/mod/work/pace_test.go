@@ -3,6 +3,7 @@ package work
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -359,6 +360,33 @@ func TestCheckRankFreesThenFixes(t *testing.T) {
 	}
 }
 
+// Main's own measurement goes ahead of every task's check while it runs,
+// and keeps its place once done (issue #1078).
+func TestCheckRankMainFirst(t *testing.T) {
+	m, _, _ := helperRig(t)
+	m.mu.Lock()
+	m.tasks["blocker"] = &Task{ID: "blocker", Project: "p", SHA: "s1", Stage: StageTesting}
+	m.tasks["waiter"] = &Task{ID: "waiter", Project: "p", Stage: StageQueued, Reason: fmt.Sprintf("waiting for %q (task %s) to land: both touch a.go", "x", "blocker")}
+	m.mu.Unlock()
+	done := m.MeasuringMain("p", "main1")
+	again := m.MeasuringMain("p", "main1")
+	if got := m.checkRank("p", "main1", "size"); got != rankMain || got <= m.checkRank("p", "s1", "test") {
+		t.Errorf("main's measurement ranked %d, a freeing check %d", got, m.checkRank("p", "s1", "test"))
+	}
+	if got := m.checkRank("other", "main1", "score"); got != 0 {
+		t.Errorf("another project's sha ranked %d", got)
+	}
+	done()
+	done()
+	if got := m.checkRank("p", "main1", "score"); got != rankMain {
+		t.Errorf("one of two measurements done: ranked %d", got)
+	}
+	again()
+	if got := m.checkRank("p", "main1", "score"); got != 0 {
+		t.Errorf("measured: still ranked %d", got)
+	}
+}
+
 // Load alone holds no worker from starting up to the pace's start, only past
 // it; any other strain holds every start.
 func TestLoadHoldsOnlyPastTheStart(t *testing.T) {
@@ -462,5 +490,108 @@ func TestPacePullsBackAheadOfTheWeek(t *testing.T) {
 	read(0.75, 6*24*time.Hour)
 	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of the clock") {
 		t.Fatalf("a week 75%% spent in its first day: %q", why)
+	}
+}
+
+// Pulled under its start by CPU pressure, the workers' pace comes back to
+// its start a growStep after only load is left, as load alone would block
+// its growth for good; the checks' pace, whose builds make the load, may
+// stay under it.
+func TestPaceComesBackToTheStartUnderLoadAlone(t *testing.T) {
+	const load = "machine loaded (load 30 on 20 cores, limit 1.5 per core)"
+	now := time.Date(2026, 10, 26, 17, 0, 0, 0, time.UTC)
+	workers, checks := pace{}, pace{loadCuts: true}
+	for _, p := range []*pace{&workers, &checks} {
+		p.next(now, 4, true, "", true, 4, 0)
+		for i := range 4 {
+			p.next(now.Add(time.Duration(i+1)*paceStep), p.limit, true, "machine under cpu pressure (80.00%, limit 40%)", true, 4, 0)
+		}
+		if p.limit != 1 {
+			t.Fatalf("under cpu pressure: %d, want 1", p.limit)
+		}
+	}
+	at := now.Add(4 * paceStep)
+	for i := range 30 { // half an hour of load alone, a reading a minute
+		at = at.Add(paceStep)
+		w := workers.next(at, workers.limit, true, load, true, 4, 0)
+		c := checks.next(at, checks.limit, true, load, true, 4, 0)
+		if c != 1 {
+			t.Fatalf("minute %d: the checks' pace moved under load alone: %d", i, c)
+		}
+		if i < 4 && w != 1 {
+			t.Fatalf("minute %d: back within a growStep of the cpu pressure: %d", i, w)
+		}
+	}
+	if workers.limit != 4 || !strings.Contains(workers.String(), "back to the start") {
+		t.Fatalf("after load alone: %s, want back at its start 4", workers.String())
+	}
+	if l := checks.next(at.Add(paceStep), 4, true, load, true, 4, 0); l != 1 {
+		t.Fatalf("checks under load alone: %d, want 1", l)
+	}
+	fresh := pace{limit: 4, start: 4, at: now, loadCuts: true}
+	if l := fresh.next(now.Add(paceStep), 4, true, load, true, 4, 0); l != 3 {
+		t.Fatalf("checks at their start under load alone: %d, want 3", l)
+	}
+}
+
+// Driven through the check slots: a rank-0 check already waiting in a full
+// line starts next once MeasuringMain marks its sha, ahead of one that asked
+// before it (issue #1713).
+func TestMeasuringMainMovesAWaiterUp(t *testing.T) {
+	m, _, _ := helperRig(t)
+	slots := m.C.Effects.Slots
+	slots.Resize(func() int { return 1 })
+	hold := slots.Acquire("p", "running", "test")
+	started := make(chan string, 4)
+	for _, sha := range []string{"pr", "main1"} {
+		go func() {
+			rel := slots.Acquire("p", sha, "score")
+			started <- sha
+			rel()
+		}()
+		for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+			_, w := slots.State()
+			if slices.ContainsFunc(w, func(u core.SlotUse) bool { return u.SHA == sha }) {
+				break
+			}
+			if time.Now().After(end) {
+				t.Fatalf("%s never queued", sha)
+			}
+		}
+	}
+	if _, w := slots.State(); w[0].SHA != "pr" || w[1].Rank != 0 {
+		t.Fatalf("before the mark, waiting %+v", w)
+	}
+	done := m.MeasuringMain("p", "main1")
+	defer done()
+	if _, w := slots.State(); w[0].SHA != "main1" || w[0].Rank != rankMain {
+		t.Fatalf("after the mark, waiting %+v", w)
+	}
+	hold()
+	if a, b := <-started, <-started; a != "main1" || b != "pr" {
+		t.Fatalf("started %s then %s", a, b)
+	}
+}
+
+// Main's own red tests run again ranked as main's measurement: every red
+// change on that main waits on the answer.
+func TestMainTestsRetestRanksAsMain(t *testing.T) {
+	m, forge, p := helperRig(t)
+	out, _ := core.Git(forge.RepoPath("me/p"), "rev-parse", "main")
+	main := strings.TrimSpace(out)
+	rank := -1
+	m.Retest = func(p core.Project, sha, _ string, _ core.Check, _ bool) bool {
+		rank = m.checkRank(p.Name, sha, "retest")
+		return true
+	}
+	c, err := m.mainTests(p, main, "exit 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.OK || rank != rankMain {
+		t.Fatalf("ok %v, retest ranked %d", c.OK, rank)
+	}
+	if got := m.checkRank(p.Name, main, "test"); got != 0 {
+		t.Fatalf("answered: still ranked %d", got)
 	}
 }
