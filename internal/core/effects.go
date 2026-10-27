@@ -822,6 +822,19 @@ func NoWorse(c, mc Check) bool {
 	return true
 }
 
+// MainTests is main's recorded test run at sha as both gates read it (the
+// work module's testing stage and Merge): a red run that a "retest" since
+// passed was a flake of a busy machine, and main counts as green there.
+func (e *Effects) MainTests(project, sha string) (Check, bool) {
+	c, ok := e.GetCheck(project, sha, "test")
+	if ok && !c.OK && c.CantRun == "" {
+		if rc, rok := e.GetCheck(project, sha, "retest"); rok && !rc.At.Before(c.At) && rc.CantRun == "" {
+			c.OK = rc.OK
+		}
+	}
+	return c, ok
+}
+
 // scoreOf reads the score from a score command's output: the last word of
 // the last line ("score: 42"), or failing that the one line that is a number
 // alone, so a bench can print its result and then per-run detail. Two such
@@ -1429,8 +1442,23 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		// Red only where main's own run at m.Main is red too: no worse than
 		// main, as the work module's testing stage let it on, so the fix for
 		// a red main can land.
-		if mc, ok := e.GetCheck(p.Name, m.Main, "test"); !ok || mc.OK || !NoWorse(c, mc) {
-			return "", refuse("%s: its test run is red beyond what main's own run at %s fails too (or main's has no record)", short(m.SHA), short(m.Main))
+		mc, ok := e.MainTests(p.Name, m.Main)
+		switch {
+		case !ok:
+			return "", refuse("%s: its test run is red, and main has no recorded test run at %s to say whether it is red there too", short(m.SHA), short(m.Main))
+		case mc.OK:
+			return "", refuse("%s: its test run is red where main's own passes at %s", short(m.SHA), short(m.Main))
+		case !NoWorse(c, mc):
+			mains, beyond := RedKeys(mc.FullOutput()), []string{}
+			for _, k := range RedKeys(c.FullOutput()) {
+				if !slices.Contains(mains, k) {
+					beyond = append(beyond, k)
+				}
+			}
+			if len(beyond) == 0 {
+				beyond = []string{"a failure no test name accounts for"}
+			}
+			return "", refuse("%s: its test run fails beyond what main's own run at %s fails too (%s)", short(m.SHA), short(m.Main), Clip(strings.Join(beyond, ", "), 300))
 		}
 	}
 	ch, err := e.Classify(p, m.Main, m.SHA)

@@ -1939,7 +1939,8 @@ func (m *Module) failsAgain(p core.Project, sha, command string, c core.Check) b
 //
 // A red main runs what failed once more (Retest) before it holds anything:
 // passing then, it was a flake of a slow or busy machine, filed to fix, and
-// main counts as green. The answer is the newest "retest" check on main.
+// main counts as green. The answer is the newest "retest" check on main,
+// the same rule Effects.MainTests reads it by at the merge.
 func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
 	c, ok := m.C.Effects.GetCheck(p.Name, main, "test")
 	if !ok {
@@ -2343,6 +2344,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if wait, err := m.recursiveGate(t, p, main); wait || err != nil {
 		return err
 	}
+	if wait, err := m.mainRecorded(t, p, main); wait || err != nil {
+		return err
+	}
 	if why := m.MergeHeld(p.Name, t.PR.Number); why != "" {
 		m.hold(t, p, why)
 		return nil
@@ -2398,6 +2402,33 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	}
 	m.merged(t, merged, "merged as "+core.Short(merged))
 	return nil
+}
+
+// mainRecorded makes sure main has a test run recorded at main before a
+// change whose own run is red, no worse than main's, goes to Effects.Merge,
+// which judges it against that record. Main may have moved since the testing
+// stage, and its new commit's run may not be recorded yet (the post-merge
+// measurement takes it in its own time): without this the merge would be
+// refused, and each refusal counts toward giving up. mainTests runs main's
+// tests, and retests a red main, as the testing stage does. A main no longer
+// red the way the change is (it was fixed, say) brings the change up to date
+// to be tested again, rather than refused until it gives up.
+func (m *Module) mainRecorded(t *Task, p core.Project, main string) (bool, error) {
+	c, ok := m.C.Effects.GetCheck(p.Name, t.SHA, "test")
+	if !ok || c.OK {
+		return false, nil
+	}
+	mc, err := m.mainTests(p, main, m.C.Effects.Config(p, main).Test)
+	if err != nil {
+		return true, err
+	}
+	if mc.CantRun != "" {
+		return true, m.cantRun(t, p, mc)
+	}
+	if mc.OK || !core.NoWorse(c, mc) {
+		return m.catchUp(t, p, main, "its tests are red on "+core.Short(t.SHA)+", and main's at "+core.Short(main)+" no longer fail the same way")
+	}
+	return false, nil
 }
 
 // merged records t's merge as merged, by the Hive or on the forge: a
