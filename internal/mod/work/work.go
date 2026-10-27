@@ -337,6 +337,11 @@ type Module struct {
 	// batches holds each project's merge batches still at main: the PRs a
 	// front's merged test took in with it (takeLine).
 	batches map[string][]*mergeBatch
+	// suspects holds, by task ID, the head of each PR that was in a red
+	// batch whose front then passed alone: one of them broke it, so each
+	// tests alone and none is taken into a batch until its own test ends
+	// (issue #1810).
+	suspects map[string]string
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -2769,9 +2774,10 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 		if _, err := m.C.Sandbox(); err != nil {
 			return true, err
 		}
+		split := m.failedHeads(t, main)
 		merged, batch := m.takeLine(t, p, main, merged)
 		r = m.testMerged(t, p, key, main, merged, cfg.Test)
-		m.addBatch(p.Name, main, &mergeBatch{front: t.ID, head: t.SHA, label: fmt.Sprintf("#%d", t.PR.Number), tip: main, heads: batch})
+		m.addBatch(p.Name, main, &mergeBatch{front: t.ID, head: t.SHA, label: fmt.Sprintf("#%d", t.PR.Number), tip: main, heads: batch, split: split})
 		if len(batch) > 0 {
 			m.save(t, fmt.Sprintf("testing its head merged with main at %s together with the %d PRs waiting behind it", core.Short(main), len(batch)))
 		}
@@ -2798,6 +2804,26 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 			b.ok = true
 			m.mu.Unlock()
 		}
+	}
+	if c.CantRun == "" {
+		b := m.batchOf(t, main)
+		m.mu.Lock()
+		if m.suspects[t.ID] == t.SHA {
+			delete(m.suspects, t.ID) // tested alone: its own verdict stands
+		}
+		if c.OK && b != nil && len(b.split) > 0 {
+			// The front passes alone after its batch went red: the
+			// failure is among the PRs it took in, split out of the
+			// next batch rather than poisoning it.
+			if m.suspects == nil {
+				m.suspects = map[string]string{}
+			}
+			for id, sha := range b.split {
+				m.suspects[id] = sha
+			}
+			b.split = nil
+		}
+		m.mu.Unlock()
 	}
 	if c.CantRun != "" {
 		return true, m.cantRun(t, p, c)
@@ -2844,6 +2870,9 @@ type mergeBatch struct {
 	front, head, label, tip string
 	heads                   map[string]string
 	ok, failed              bool
+	// split holds, on a front tested alone after its batch went red, that
+	// batch's heads: suspects if the front passes alone.
+	split map[string]string
 }
 
 // takeLine merges into merged, t's head merged with main, every PR waiting
@@ -2852,9 +2881,15 @@ type mergeBatch struct {
 // all through on green, where a test for each restarted on every merge
 // and 72 tasks waited behind one. A PR that conflicts with the batch is
 // left out to test later. A batch that failed for this front and main
-// takes in nothing: the front is tested alone.
+// takes in nothing: the front is tested alone. A suspect, a PR from a red
+// batch whose front passed alone, is neither taken in nor takes any in
+// (issue #1810): one broken PR otherwise went red in every batch after.
 func (m *Module) takeLine(t *Task, p core.Project, main, merged string) (string, map[string]string) {
 	m.mu.Lock()
+	if m.suspects[t.ID] == t.SHA {
+		m.mu.Unlock()
+		return merged, nil
+	}
 	for _, b := range m.batches[p.Name] {
 		if b.front == t.ID && b.tip == main && b.failed {
 			m.mu.Unlock()
@@ -2863,7 +2898,7 @@ func (m *Module) takeLine(t *Task, p core.Project, main, merged string) (string,
 	}
 	var line []*Task
 	for _, u := range m.tasks {
-		if u.ID != t.ID && u.Project == p.Name && u.Stage == StageMerging && u.SHA != "" && strings.HasPrefix(u.Reason, MergeLineWait) {
+		if u.ID != t.ID && u.Project == p.Name && u.Stage == StageMerging && u.SHA != "" && strings.HasPrefix(u.Reason, MergeLineWait) && m.suspects[u.ID] != u.SHA {
 			line = append(line, &Task{ID: u.ID, Kind: u.Kind, PR: u.PR, SHA: u.SHA})
 		}
 	}
@@ -2899,6 +2934,18 @@ func (m *Module) addBatch(project, main string, b *mergeBatch) {
 		}
 	}
 	m.batches[project] = keep
+}
+
+// failedHeads returns the heads of t's batch at main that failed, if any.
+func (m *Module) failedHeads(t *Task, main string) map[string]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.batches[t.Project] {
+		if b.front == t.ID && b.tip == main && b.failed {
+			return b.heads
+		}
+	}
+	return nil
 }
 
 // batchOf returns the batch t's merged test at main is testing as its

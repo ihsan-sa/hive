@@ -1874,6 +1874,47 @@ func TestMergeLineBatchFailsFrontAlone(t *testing.T) {
 	if m.batchPassed(bad, main) != "" || m.batchPassed(bad, "") != "" {
 		t.Fatal("a member of a red batch counts as passed")
 	}
+	// The front passed alone, so the red was bad's: it is split out of the
+	// next batch, and tests alone (issue #1810).
+	good := lineMember(t, m, f, p, "t-good", task.PR.Number+2, map[string]string{"good.txt": "g"})
+	if _, heads := m.takeLine(good, p, main, main); len(heads) != 0 {
+		t.Fatalf("the next front took the red batch's PR in again: %v", heads)
+	}
+	if _, heads := m.takeLine(bad, p, main, main); len(heads) != 0 {
+		t.Fatalf("a suspect front took PRs in with it: %v", heads)
+	}
+	other := lineMember(t, m, f, p, "t-other", task.PR.Number+3, map[string]string{"other2.txt": "o"})
+	if _, heads := m.takeLine(other, p, main, main); heads[good.ID] != good.SHA {
+		t.Fatalf("a PR outside the red batch wasn't taken in: %v", heads)
+	}
+}
+
+// A front red alone after its red batch is the batch's failure: the PRs it
+// took in are not suspects, and the next front takes them in again.
+func TestMergeLineBatchFrontRedClearsTheRest(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, err := m.C.Effects.Sync(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fine := lineMember(t, m, f, p, "t-fine", task.PR.Number+1, map[string]string{"a.txt": "a"})
+	// The front's test alone, after its batch with fine went red, is red too.
+	key := task.SHA + "+" + main
+	m.mu.Lock()
+	m.mergeRuns = map[string]*mergeRun{task.ID: {key: key, main: main, sha: task.SHA, done: true, c: core.Check{OK: false}}}
+	m.mu.Unlock()
+	m.addBatch(p.Name, main, &mergeBatch{front: task.ID, head: task.SHA, tip: main, split: map[string]string{fine.ID: fine.SHA}})
+	if _, err := m.mergedTests(task, p, main); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.suspects) != 0 {
+		t.Fatalf("a front red alone made suspects of its batch: %v", m.suspects)
+	}
+	next := lineMember(t, m, f, p, "t-next", task.PR.Number+2, map[string]string{"b.txt": "b"})
+	if _, heads := m.takeLine(next, p, main, main); heads[fine.ID] != fine.SHA {
+		t.Fatalf("the batch's PR wasn't taken in again: %v", heads)
+	}
 }
 
 // A task waiting its turn in the merge line looks again as soon as the front
