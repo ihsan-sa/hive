@@ -11,12 +11,14 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
 // The queue: a filed brief waits as queued until a worker can take it. Briefs
-// start in the order they were filed, or the order the lead set, and only as
+// start in the order they were filed, or the order the lead set (a brief
+// waiting past overdue goes ahead of that order), and only as
 // many work at once as the pace allows (pace.go, under max_workers) while the
 // machine isn't loaded: the brake is the machine. Two briefs on the same
 // files start side by side: a conflict is settled at merge, where the one
@@ -38,7 +40,8 @@ import (
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
 
 // inLine sorts waiting tasks: those the lead started now first, then quick
-// ones, then those the lead ordered, in its order, then the rest as filed.
+// ones, then those filed overdue ago, oldest first, then those the lead
+// ordered, in its order, then the rest as filed.
 func (m *Module) inLine(q []Task) {
 	quick := map[string]bool{}
 	for _, t := range q {
@@ -52,6 +55,12 @@ func (m *Module) inLine(q []Task) {
 		if quick[a.ID] != quick[b.ID] {
 			return quick[a.ID]
 		}
+		if a.Overdue() != b.Overdue() {
+			return a.Overdue()
+		}
+		if a.Overdue() {
+			return a.Created.Before(b.Created)
+		}
 		if (a.Order > 0) != (b.Order > 0) {
 			return a.Order > 0
 		}
@@ -60,6 +69,19 @@ func (m *Module) inLine(q []Task) {
 		}
 		return a.Created.Before(b.Created)
 	})
+}
+
+// overdue is how long a brief waits before it goes ahead of the lead's order:
+// one the lead neither ordered nor started now moved only when nothing newer
+// was ordered, and with the lead ordering about 19 and starting 10 a day,
+// task 065256 waited 10h20m, passed by 30 newer briefs "to go first", and the
+// check-homes fix 080252 waited 9h until /tmp filled the machine's memory.
+// The lead still starts one ahead of it now, or holds it.
+var overdue = 4 * time.Hour
+
+// Overdue reports whether t has waited in the queue since overdue ago.
+func (t Task) Overdue() bool {
+	return t.Queued() && !t.Created.IsZero() && time.Since(t.Created) >= overdue
 }
 
 // quick reports whether t's brief only changes module prompts: it names at
@@ -130,6 +152,11 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	}
 	m.inLine(line)
 	strain, _ := machine(cfg)
+	// Finishing beats starting: while checks wait for a slot, the machine
+	// is theirs. A new worker would load it further and pull the checks'
+	// limit back (88 checks waited, 44 tasks sat in testing for hours).
+	_, checksWait := m.C.Effects.Slots.State()
+	checksHold := len(checksWait) > 0
 	// planOK says the plan has room for a quick brief past the pace: read
 	// once, on need.
 	var planOK *bool
@@ -161,6 +188,8 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
 			case working >= limit && (!quick || quickWorking > 0 || !plan()):
 				wait[t.ID], capped = full, true
+			case checksHold && !t.Now:
+				wait[t.ID] = "waiting: checks wait for the machine"
 			case loadHolds(strain, working, cmp.Or(cfg.MaxWorkers, defaultWorkers)):
 				wait[t.ID] = "waiting: " + steady(strain)
 			default:
@@ -178,7 +207,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	limit := m.paceWorkers(cfg, working, false)
 	start, wait, capped := decide(limit)
 	if capped {
-		if l := m.paceWorkers(cfg, working, true); l != limit {
+		if l := m.paceWorkers(cfg, working, !checksHold); l != limit {
 			start, wait, _ = decide(l)
 		}
 	}
@@ -402,7 +431,16 @@ func (m *Module) Queue(r core.Run) []string {
 	m.inLine(line)
 	out := []string{}
 	for i, t := range line {
-		out = append(out, fmt.Sprintf("%d. %s %q (%s)%s", i+1, t.ID, t.Label(), t.Project, suffixed(t.Reason)))
+		why := t.Reason
+		if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
+			// The lead sees the long waits, and which go ahead of its order.
+			age := fmt.Sprintf("waited %s", d.Round(time.Minute))
+			if t.Overdue() && !t.Now {
+				age += ", overdue: ahead of the lead's order"
+			}
+			why = strings.TrimSuffix(age+"; "+why, "; ")
+		}
+		out = append(out, fmt.Sprintf("%d. %s %q (%s)%s", i+1, t.ID, t.Label(), t.Project, suffixed(why)))
 	}
 	return out
 }

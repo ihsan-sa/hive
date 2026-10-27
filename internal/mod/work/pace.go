@@ -237,23 +237,55 @@ func (m *Module) checkSlots() int {
 	return cmp.Or(m.checks.get(), m.C.WS.LoadConfig().MaxChecks, core.DefaultMaxChecks())
 }
 
-// Check ranks: a fix's check goes first, then the rest in the order they
-// asked.
-const rankFix = 1
+// Check ranks: main's own measurement goes first, then a fix's, then the
+// rest in the order they asked. Main's score and size of 282991d7 waited
+// 2h16m behind PR checks, and keep/revert, the release and the next baseline
+// with them (issue #1078).
+const (
+	rankFix  = 1
+	rankMain = 2
+)
+
+// MeasuringMain marks sha as main's commit being measured on project until
+// the returned done is called: its checks go ahead of the line.
+func (m *Module) MeasuringMain(project, sha string) (done func()) {
+	key := project + "@" + sha
+	m.mu.Lock()
+	m.measuring[key]++
+	m.mu.Unlock()
+	m.C.Effects.Slots.Fill()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if m.measuring[key]--; m.measuring[key] <= 0 {
+				delete(m.measuring, key)
+			}
+		})
+	}
+}
 
 // RankWhy says why a waiting check of rank r goes ahead of the line, or ""
 // for one that keeps its place, for the dashboard and the status op.
 func RankWhy(r int) string {
-	if r >= rankFix {
+	switch {
+	case r >= rankMain:
+		return "measures main"
+	case r == rankFix:
 		return "a fix"
 	}
 	return ""
 }
 
-// checkRank ranks a check of sha on project by the task whose head it is.
+// checkRank ranks a check of sha on project: main's being measured, or by
+// the task whose head it is.
 func (m *Module) checkRank(project, sha, _ string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.measuring[project+"@"+sha] > 0 {
+		return rankMain
+	}
 	for _, t := range m.tasks {
 		if t.Project == project && t.SHA == sha && !t.Terminal() {
 			if t.Fix() {

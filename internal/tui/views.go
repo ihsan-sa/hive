@@ -409,6 +409,8 @@ func (m *model) keyTree(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if r.expand {
 			m.open[r.key] = !m.nodeOpen(r.key, r.def)
 		}
+	case "e", "E":
+		m.foldLevel(rows, k.String() == "e")
 	case "right", "l", "enter":
 		switch {
 		case r.jump >= 0:
@@ -433,6 +435,23 @@ func (m *model) keyTree(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// foldLevel opens the shallowest level of the tree that has a closed node,
+// every node on it at once, so each press shows one level more; closing
+// shuts the deepest open level, so the shifted key walks back.
+func (m *model) foldLevel(rows []row, open bool) {
+	level := -1
+	for _, r := range rows {
+		if r.expand && m.nodeOpen(r.key, r.def) != open && (level < 0 || open == (r.depth < level)) {
+			level = r.depth
+		}
+	}
+	for _, r := range rows {
+		if r.expand && r.depth == level {
+			m.open[r.key] = open
+		}
+	}
 }
 
 // treeAt finds the status cursor's row by its key, as sideAt does: work

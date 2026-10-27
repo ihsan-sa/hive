@@ -378,9 +378,37 @@ func TestQuietWorkerHoldsNoOne(t *testing.T) {
 	}
 }
 
-// A brief that waits on one worker keeps saying so when another that also
-// touches its files starts ahead of it: the reason, and the saved task, stay
-// as they were until the first lets go (task 232db4fc42 swapped between
-// holders on runs.go and work.go every few minutes for an hour, issue #676).
-// A holder's label that itself reads like a wait reason doesn't name a task:
-// the holder is the one after the quoted label.
+// A brief that has waited past overdue goes ahead of newer ones the lead
+// ordered, oldest first, and the queue shows how long it has waited (task 065256 waited 10h20m,
+// passed by 30 newer briefs "to go first").
+func TestQueueOverdueGoesAheadOfTheOrder(t *testing.T) {
+	m := queueRig(t) // max_workers 2
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
+	old := file(t, m, "the lead closes PRs", "In internal/core/effects.go.")
+	older := file(t, m, "bound the check homes", "In internal/tui/views.go.")
+	newer := file(t, m, "word the PR states", "Also internal/core/effects.go.")
+	fresh := file(t, m, "a fresh idea", "")
+	for task, ago := range map[*Task]time.Duration{&old: 10 * time.Hour, &older: 11 * time.Hour, &newer: time.Hour} {
+		task.Created, task.Stage = time.Now().Add(-ago), StageQueued
+		m.save(task, "")
+	}
+	fresh.Stage = StageQueued
+	m.save(&fresh, "")
+	if _, err := m.opQueue(lead, json.RawMessage(`{"order":["`+fresh.ID+`","`+newer.ID+`"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	q := m.Queue(lead)
+	if len(q) != 4 || !strings.Contains(q[0], older.ID) || !strings.Contains(q[1], old.ID) || !strings.Contains(q[2], fresh.ID) || !strings.Contains(q[3], newer.ID) {
+		t.Fatalf("queue: %q", q)
+	}
+	if !strings.Contains(q[1], "waited 10h0m0s, overdue: ahead of the lead's order") || strings.Contains(q[3], "overdue") || !strings.Contains(q[3], "waited 1h0m0s") || strings.Contains(q[2], "waited") {
+		t.Fatalf("queue does not show the waits: %q", q)
+	}
+	start, wait := m.admit(m.List(nil))
+	if !start[older.ID] || !start[old.ID] {
+		t.Fatalf("the overdue briefs wait: %q, %q", wait[older.ID], wait[old.ID])
+	}
+	if !strings.Contains(wait[newer.ID], "waiting for a worker") {
+		t.Fatalf("the newer brief: %q, want it to wait for a worker", wait[newer.ID])
+	}
+}
