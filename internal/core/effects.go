@@ -1897,6 +1897,22 @@ func KeyDir(key, module string) (string, bool) {
 
 var goModule = regexp.MustCompile(`(?m)^module\s+"?([^\s"]+)`)
 
+// GoModule is the module path a go.mod's text declares, or "".
+func GoModule(gomod string) string {
+	if m := goModule.FindStringSubmatch(gomod); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// WholeTree reports whether a test key is in module's root package, whose
+// tests (gofmt, the core's size) read the whole tree: any change touches
+// them, and their reds are the tree's content, never chance.
+func WholeTree(key, module string) bool {
+	where, _, _ := strings.Cut(key, "::")
+	return module != "" && where == module
+}
+
 // Excused is Excuse for task's PR on p at head: the quarantine as evidence
 // from outside task shows it, and files the head changes against main, a
 // test whose package they touch (or whose package can't be placed) never
@@ -1910,15 +1926,13 @@ func (e *Effects) Excused(p Project, main, task string, files []string, runs, ma
 }
 
 // touched reports whether a test key's package is one files (a head's
-// changes against main) touch, or can't be placed.
+// changes against main) touch, can't be placed, or is the module's root,
+// whose tests read the whole tree (WholeTree).
 func (e *Effects) touched(p Project, main string, files []string) func(key string) bool {
-	module := ""
-	if m := goModule.FindStringSubmatch(e.ReadFile(p, main, "go.mod")); m != nil {
-		module = m[1]
-	}
+	module := GoModule(e.ReadFile(p, main, "go.mod"))
 	return func(key string) bool {
 		dir, ok := KeyDir(key, module)
-		return !ok || slices.ContainsFunc(files, func(f string) bool { return path.Dir(f) == dir })
+		return !ok || WholeTree(key, module) || slices.ContainsFunc(files, func(f string) bool { return path.Dir(f) == dir })
 	}
 }
 
