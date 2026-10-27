@@ -341,8 +341,9 @@ func colourSGR(view string) string {
 	return ""
 }
 
-// Chats colour the person and each agent apart, on dark and light terminals,
-// what waits on the person shows amber, and NO_COLOR leaves no colour at all.
+// Chats colour the person, the Hive itself and each agent apart, on dark and
+// light terminals, what waits on the person shows amber, and NO_COLOR leaves
+// no colour at all.
 func TestColourHints(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(termenv.Ascii)
@@ -350,12 +351,16 @@ func TestColourHints(t *testing.T) {
 	you := chat.Message{From: "person", Name: "you"}
 	lead := chat.Message{From: "lead-1", Name: "lead"}
 	writer := chat.Message{From: "w-1", Name: "writer"}
+	hive := chat.Message{From: "hive", Name: "hive"}
 	shade := map[bool]string{}
 	for _, dark := range []bool{true, false} {
 		lipgloss.SetHasDarkBackground(dark)
 		y, l, w := who(you), who(lead), who(writer)
 		if colourSGR(y) == "" || colourSGR(l) == "" || y == l || l == w || ansi.Strip(y) != "you" {
 			t.Fatalf("dark %v: you %q, lead %q, writer %q: want three colours", dark, y, l, w)
+		}
+		if h := who(hive); colourSGR(h) == "" || h == l || h == y || ansi.Strip(h) != "hive" {
+			t.Fatalf("dark %v: the Hive's own messages %q don't stand apart from the lead's %q", dark, h, l)
 		}
 		shade[dark] = l
 	}

@@ -8,8 +8,9 @@ import (
 
 // Styling is bold, faint and reverse, with hints of colour: red for what
 // failed, green for what runs or was kept, amber for what waits on the
-// person, blue for the person, and a hue per agent in chats. Each colour has
-// a dark and a light terminal's shade; NO_COLOR drops every hue (noHue).
+// person, blue for the person, honey for the Hive's own messages, and a hue
+// per agent in chats. Each colour has a dark and a light terminal's shade;
+// NO_COLOR drops every hue (noHue).
 var (
 	stTitle = lipgloss.NewStyle().Bold(true)
 	stDim   = lipgloss.NewStyle().Faint(true)
@@ -17,6 +18,7 @@ var (
 	stSel   = lipgloss.NewStyle().Reverse(true)
 
 	stBad, stGood, stWarn, stAccent, stYou lipgloss.Style
+	stHive                                 lipgloss.Style   // messages from the Hive itself, not an agent
 	stAgents                               []lipgloss.Style // speakers other than the person, by name
 )
 
@@ -31,6 +33,7 @@ func init() { setHue(true) }
 func setHue(on bool) {
 	if !on {
 		stBad, stGood, stWarn, stAccent, stYou = stTitle, lipgloss.NewStyle(), stTitle, stTitle, stTitle
+		stHive = stTitle
 		stAgents = []lipgloss.Style{stTitle}
 		stCode, stLink = lipgloss.NewStyle(), lipgloss.NewStyle().Underline(true)
 		return
@@ -40,6 +43,7 @@ func setHue(on bool) {
 	stWarn = hue("#DAAA3F", "#9A6700")
 	stAccent = hue("#39C5CF", "#1B7C83")
 	stYou = hue("#6CB6FF", "#0969DA").Bold(true)
+	stHive = hue("#E8C547", "#8A6D00").Bold(true)
 	stAgents = []lipgloss.Style{
 		hue("#DCBDFB", "#8250DF").Bold(true), // the lead's: every lead hashes here
 		hue("#F69D50", "#BC4C00").Bold(true),

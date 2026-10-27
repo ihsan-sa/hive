@@ -782,7 +782,7 @@ func who(msg chat.Message) string {
 	case "person":
 		return stYou.Render("you")
 	case "hive":
-		return stTitle.Render("hive")
+		return stHive.Render("hive")
 	}
 	name := msg.Name
 	if name == "" {
