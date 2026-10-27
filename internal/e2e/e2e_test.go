@@ -934,10 +934,14 @@ func TestStalls(t *testing.T) {
 	h.ws.SaveConfig(cfg)
 	h.seed("me/stall", map[string]string{".hive/project.json": `{"test": "if [ -f STALL ]; then sleep 60; fi"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "stall", "repo": "me/stall"}, nil)
-	// History: a worker here has taken about 13 seconds (11 asleep; the loop
-	// ticks soon after each step, so little else), so the limit is about 39
-	// without moving, well over the slow worker's 22 on a slow runner.
-	for title, known := range map[string]string{"history one": "FAKE:slowworker:11", "history two": ""} {
+	// History: a worker here has taken about 22 seconds (20 asleep; the loop
+	// ticks soon after each step, so little else), so the limit is about 66
+	// without moving. The slow worker's clock starts at its last output, just
+	// before its 22 asleep, but whatever it does after waking (commit, finish)
+	// runs while three other tasks and the package's parallel tests load the
+	// runner, so it needs the room: at 11 asleep the limit was about 39, and
+	// CI has flagged it against limits from 33 up.
+	for title, known := range map[string]string{"history one": "FAKE:slowworker:20", "history two": ""} {
 		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
 		h.wait(title+" to land", 3*minute, taskStage("stall", title, work.StageDone))
 	}
@@ -949,8 +953,10 @@ func TestStalls(t *testing.T) {
 	for title, known := range asks {
 		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
 	}
+	// The hung check runs its minute-long test up to three times (its head,
+	// the watcher's retry from its head, then merged with main).
 	for title := range asks {
-		h.wait(title+" to land", 4*minute, taskStage("stall", title, work.StageDone))
+		h.wait(title+" to land", 6*minute, taskStage("stall", title, work.StageDone))
 	}
 	hung := map[string]string{"hung worker": "restarted its turn", "hung reviewer": "restarted its turn", "hung check": "handed it to the lead"}
 	stalls := func(st api.State) map[string][]string {
