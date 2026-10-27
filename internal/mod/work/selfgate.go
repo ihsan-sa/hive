@@ -310,13 +310,13 @@ func (m *Module) dropGateLocked(id, keep string) bool {
 }
 
 // dropStaleGatesLocked ends t's runs in flight on a head other than its
-// own, or all of them once it has merged, finished or been stopped. m.mu
-// is held.
-func (m *Module) dropStaleGatesLocked(t *Task) bool {
+// own (or live, the head last saved, when t may be an older copy), or all
+// of them once it has merged, finished or been stopped. m.mu is held.
+func (m *Module) dropStaleGatesLocked(t *Task, live string) bool {
 	ended := t.Stage == StageMerged || t.Stage == StageDone || t.Stage == StageStopped
 	dropped := false
 	for _, r := range m.gating {
-		if r.task != t.ID || r.dropped || r.head == "" || (r.head == t.SHA && !ended) {
+		if r.task != t.ID || r.dropped || r.head == "" || ((r.head == t.SHA || r.head == live) && !ended) {
 			continue
 		}
 		r.dropped, dropped = true, true
