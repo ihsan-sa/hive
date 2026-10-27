@@ -1700,6 +1700,20 @@ func (m *Module) test(t *Task, p core.Project) error {
 	if err := m.noteTests(t, p, main, c); err != nil {
 		return err
 	}
+	if !c.OK && len(m.C.Effects.Quarantine(p.Name, t.ID)) > 0 {
+		// Known flakes count against no head, as on the forge's checks:
+		// Effects.Merge rules the same on this run.
+		ch, err := m.C.Effects.Classify(p, main, t.SHA)
+		if err != nil {
+			return err
+		}
+		if flaky := m.C.Effects.ExcusedLocal(p, main, t.ID, ch.Files, c); len(flaky) > 0 {
+			c.OK = true
+			if note := "known flakes: its tests fail on " + core.Short(t.SHA) + " only in quarantined tests (" + core.Clip(strings.Join(flaky, ", "), 300) + "), so they don't count against it"; !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
+				m.save(t, note)
+			}
+		}
+	}
 	if !c.OK && t.Checkpoint != "" {
 		return m.dropCheckpoint(t, p, "the tests failed on "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 1500))
 	}
@@ -2662,7 +2676,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	if len(shared) > 0 {
 		both := strings.Join(shared, ", ")
 		m.raiseOnce(p, main+"/checks", "the forge's checks "+both+" fail on main in "+p.Name+" at "+core.Short(main))
-		onMain = " (" + both + " fail on main at " + core.Short(main) + " too, so they don't count against it)"
+		onMain = " (" + both + " fail on main at " + mainAt(shared, at, main) + " too, so they don't count against it)"
 	}
 	switch st {
 	case core.CheckPending:
@@ -2722,7 +2736,13 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		if t.Reruns[t.SHA] < rerunsPerHead {
 			hint = "\n\nIf the log shows a flake rather than your change, `hive agent rerun-checks` runs the failed jobs again and finishing again without a commit waits for them."
 		}
-		findings := forgeFailed + core.Short(t.SHA) + ": " + checkDetail(which) + onMain
+		findings := forgeFailed + core.Short(t.SHA)
+		if tested := m.testedBase(t, p, which); tested != "" && tested != main {
+			// The commit the worker reads first names the main the checks
+			// ran with, as forge-failures.md does, not main now.
+			findings += " (run merged with main at " + core.Short(tested) + "; main has moved to " + core.Short(main) + " since)"
+		}
+		findings += ": " + checkDetail(which) + onMain
 		detail := m.forgeFailures(t, p, main, which, mainRuns, at)
 		return true, m.sendBackWith(t, p, findings+hint, detail, true) // forgeFailures wrote main.bundle
 	}
@@ -2948,13 +2968,10 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 	// a fix that landed since is in main but wasn't in what they ran.
 	fails := make([]core.CheckFailure, len(failed))
 	reads := make([]bool, len(failed))
-	tested := ""
 	for i, r := range failed {
 		fails[i], reads[i] = m.C.Effects.CheckFailure(p.Repo, r)
-		if f := fails[i]; tested == "" && f.Base != "" && f.Head == t.SHA {
-			tested = f.Base
-		}
 	}
+	tested := m.testedBase(t, p, failed)
 	both("# The forge's failed checks on %s\n\n", core.Short(t.SHA))
 	switch {
 	case tested == "":
@@ -3010,6 +3027,31 @@ func (m *Module) forgeFailures(t *Task, p core.Project, main string, failed, mai
 		fmt.Fprintf(&short, "\nThe end of each failed step's log is in $HIVE_RUN/%s, kept there for later rounds.\n", forgeFailuresFile)
 	}
 	return short.String()
+}
+
+// testedBase is the main the forge merged t's head with before running the
+// failed checks, as their logs say (core.TestedMerge), or "" when none says.
+// Logs are read once (Effects.CheckFailure keeps them), so asking again is
+// cheap.
+func (m *Module) testedBase(t *Task, p core.Project, failed []core.CheckRun) string {
+	for _, r := range failed {
+		if f, ok := m.C.Effects.CheckFailure(p.Repo, r); ok && f.Base != "" && f.Head == t.SHA {
+			return f.Base
+		}
+	}
+	return ""
+}
+
+// mainAt names the main commits whose runs of checks failed: at[name] when
+// main's newest finished run of it is older than main, main otherwise.
+func mainAt(checks []string, at map[string]string, main string) string {
+	var shas []string
+	for _, c := range checks {
+		if sha := core.Short(cmp.Or(at[c], main)); !slices.Contains(shas, sha) {
+			shas = append(shas, sha)
+		}
+	}
+	return strings.Join(shas, ", ")
 }
 
 // bundleForChecks writes main as the forge's checks saw it to the worker's
