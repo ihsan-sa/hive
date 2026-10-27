@@ -160,6 +160,9 @@ func ToolBins(folder string, join func(...string) string) []string {
 // pathDirs are what a command on the host's own paths (bare, Seatbelt) gets
 // on PATH: the bin dirs of a mounted tools folder, then the exposed tools'
 // dirs, so an installed runtime wins over an older one beside hive on the host.
+// An agent can write to those dirs, so no host-side launcher may look its
+// argv[0] up on this PATH: it is resolved first, in the daemon's own
+// environment (Niced), or a program planted there would run on the host.
 func pathDirs(s Spec) []string {
 	var dirs []string
 	for _, m := range s.Mounts {

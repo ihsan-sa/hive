@@ -31,7 +31,12 @@ func TestLowerPriorityHoldsForTheFork(t *testing.T) {
 			return n
 		}
 		own := read()
-		lowerPriority(10)
+		if err := lowerPriority(0); err != nil || read() != own {
+			t.Fatalf("nice 0 moved the level from %d (%v); it leaves it as it is", own, err)
+		}
+		if err := lowerPriority(10); err != nil {
+			t.Fatal(err)
+		}
 		if got, want := read(), Lowered(own, 10); got != want {
 			t.Fatalf("forked at nice %d under %d, want %d", got, own, want)
 		}
