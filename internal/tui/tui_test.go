@@ -1339,6 +1339,27 @@ func TestSizeLine(t *testing.T) {
 	}
 }
 
+// A state poll sent before a settings save lands doesn't put the old value
+// back; one sent after it does, if the daemon refused the save.
+func TestASavedSettingDoesntFlickBack(t *testing.T) {
+	m := testModel(100, 30)
+	old := m.st.Config
+	c := old
+	c.ReviewRounds = old.ReviewRounds + 1
+	m.fetchState() // a poll in flight, its saved count taken before the save
+	stale := stateMsg{st: sample(), saved: m.saved}
+	m.saveConfig(c, "saved")
+	m.Update(stale)
+	if m.st.Config.ReviewRounds != c.ReviewRounds {
+		t.Fatalf("a poll from before the save showed review rounds %d", m.st.Config.ReviewRounds)
+	}
+	m.Update(savedMsg{n: m.saves, flash: "error: refused"})
+	m.Update(stateMsg{st: sample(), saved: m.saved})
+	if m.st.Config.ReviewRounds != old.ReviewRounds {
+		t.Fatal("the daemon's settings didn't come back after a refused save")
+	}
+}
+
 // A long thread scrolls from its reply box: the wheel, PgUp, and ↑ while the
 // box is empty; End and Ctrl+End come back to the newest reply, and a row
 // above the box says when newer lines are below.
@@ -1438,5 +1459,58 @@ func TestSentMessageShowsOnce(t *testing.T) {
 	m.Update(chatMsg{"lead", nil, errors.New("connection refused")})
 	if n := len(m.msgs["lead"]); n != len(old)+1 {
 		t.Fatalf("a failed read wiped the chat: %d messages", n)
+	}
+	m.Update(chatMsg{"lead", append(append([]chat.Message(nil), old...), sent), nil})
+	m.Update(chatMsg{"lead", old[:1], nil}) // the chat was reset after a read held the sent message
+	if n := len(m.msgs["lead"]); n != 1 {
+		t.Fatalf("a reset chat kept stale messages: %d messages, want 1", n)
+	}
+}
+
+// A reply the thread already has shows once, not again as sending.
+func TestSendingLineGoesWhenTheReplyIsIn(t *testing.T) {
+	m := testModel(80, 24)
+	m.thread, m.focus = "1", 2
+	m.focusBox("1")
+	m.input.SetValue("on it")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m.View(), "sending") {
+		t.Fatal("no sending line")
+	}
+	m.Update(chatMsg{id: "lead", msgs: append(append([]chat.Message(nil), m.msgs["lead"]...), chat.Message{ID: "9", Thread: "1", From: "person", Text: "on it", At: time.Now()})})
+	if strings.Contains(m.View(), "sending") {
+		t.Fatal("the reply shows twice: in the thread and as sending")
+	}
+}
+
+// Opening another thread starts it at its newest, not where the last was scrolled.
+func TestAnotherThreadOpensAtItsNewest(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.thread, m.thScroll, m.threadSel = "0", 50, 1
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.thread != "1" || m.thScroll != 0 {
+		t.Fatalf("thread %q scroll %d", m.thread, m.thScroll)
+	}
+}
+
+// End and Home from a terminal in application-cursor mode (ESC O F, ESC O H,
+// which bubbletea reads as alt+O then F or H) work like plain End and Home.
+func TestApplicationCursorEndAndHome(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	ss3 := func(r rune) {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}, Alt: true})
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	ss3('H')
+	if strings.Contains(m.View(), "pull/3") {
+		t.Fatal("ESC O H didn't go to the oldest")
+	}
+	ss3('F')
+	if v := m.View(); !strings.Contains(v, "pull/3") || m.composing {
+		t.Fatalf("ESC O F didn't go to the newest, or typed into a box:\n%s", v)
 	}
 }

@@ -98,7 +98,10 @@ type Task struct {
 	// MergedOK is "head+main" for the last head whose tests passed merged
 	// with that main (mergedTests), so it merges as it is without testing again.
 	MergedOK string `json:"merged_ok,omitempty"`
-	Reviews  int    `json:"reviews"`
+	// MergedTest is the merge of the head with main whose tests are queued
+	// or running (mergedTests), while the task waits in merging for them.
+	MergedTest string `json:"merged_test,omitempty"`
+	Reviews    int    `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
 	// own diff, keyed by "diffID#seat". When the diff changes, the old
 	// tries are left behind and the seat starts fresh on the new diff.
@@ -343,7 +346,10 @@ type Module struct {
 	// mainTips holds each project's main for one admit pass (queue.go).
 	mainTips map[string]string
 	filing   sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
-	steps    sync.WaitGroup // the steps Tick started that are still going
+	steps    sync.WaitGroup // the steps Tick started, and the checks they queued, still going
+	// mergeRuns holds each task's merged-with-main test running behind a
+	// step, at most one, until a step takes the result (testMerged).
+	mergeRuns map[string]*mergeRun
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -437,7 +443,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: []string{"worker", "lead"}, Help: `{"task","aim":"fix"|"gain","why"} (a worker's own task by default) -> sets whether the task is a fix of the failure why names, which merges on its tests, checks and reads and isn't reverted for a score dip alone, or a gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: steerers, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
 	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: steerers, Help: `{"task"} (a worker's own task by default; a worker may name any task on its project, the lead and a sweep must name one) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
-	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: steerers, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed), hold keeps one waiting until released, now starts those first even past a brief on the same files (why says so, on the record), for a fix the one it waits on needs. A started worker is never stopped here (a quiet one is, with stop)`, Fn: m.opQueue})
+	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: steerers, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed; one waiting 4h or more goes ahead of the order, oldest first), hold keeps one waiting until released, now starts those first even past a brief on the same files (why says so, on the record), for a fix the one it waits on needs. A started worker is never stopped here (a quiet one is, with stop)`, Fn: m.opQueue})
 	c.Runs.Ops().Register(core.Op{Name: "stop", Roles: steerers, Help: `{"task","why","fresh":bool} -> ends a working task's quiet worker (one that keeps ending turns without finishing) as blocked, so it holds no run for a day; why goes on the record. The task goes blocked, yours to bring back with recheck; with fresh it is queued at once for a fresh worker on the same branch with the first one's notes. A worker taking turns, waiting or parked isn't stopped`, Fn: m.opStop})
 	c.Runs.Ops().Register(core.Op{Name: "landed", Roles: steerers, Help: `{"task","why","merge"} -> ends a task in any stage as merged when its PR is merged on the forge or its commits are on main (merge names the main commit when they were squashed there), so the briefs waiting on it start; refused while its PR is open and its work isn't on main`, Fn: m.opLanded})
 	c.Runs.Ops().Register(core.Op{Name: "amend", Roles: steerers, Help: `{"task","title","done","known","why"} -> changes a brief no worker has started on yet (filed or queued) in place: each of title, done and known given replaces the old one, and its open issue gets the brief as amended; its filer's own, or (the lead) any but the person's. A wider ask goes here rather than in a new brief beside it`, Fn: m.opAmend})
@@ -474,6 +480,7 @@ func (m *Module) overtaken(t *Task) bool {
 // this save isn't a steer itself, drops it, reporting whether it saved.
 func (m *Module) store(t *Task, note string, steer bool) bool {
 	now := time.Now().UTC()
+	loaded := t.Updated // when the copy was last saved, before it is stamped now
 	// Windows' clock ticks coarsely, so a save in the tick GitHub came back
 	// would read as before it and wake at once: keep it strictly after.
 	m.mu.Lock()
@@ -488,9 +495,12 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	if !t.Updated.After(m.online) {
 		t.Updated = m.online.Add(time.Nanosecond)
 	}
-	var was string
+	var was, live string
 	if prev := m.tasks[t.ID]; prev != nil {
 		was = prev.Stage
+		if loaded.Before(prev.Updated) { // a copy older than the last save: its head may be one the task has left
+			live = prev.SHA
+		}
 		if steer && !t.Updated.After(prev.Updated) { // after every copy a step holds
 			t.Updated = prev.Updated.Add(time.Nanosecond)
 		}
@@ -501,8 +511,13 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	// A gate run on a head the task has left (a merge of main, a fix sent
 	// back) or a task that ended judges nothing that lands: it ends now and
 	// frees its slot, not once the new head reaches the gate hours later.
-	if m.dropStaleGatesLocked(t) {
+	// A step saving a copy older than the last save may carry a head the
+	// task has since left, so the run on the live task's head is kept too.
+	if m.dropStaleGatesLocked(t, live) {
 		note = strings.TrimPrefix(note+"; the recursive gate's run on its earlier head ends, freeing its slot", "; ")
+	}
+	if was == StageMerging && t.Stage != StageMerging {
+		m.dropMergeRunLocked(t.ID)
 	}
 	m.mu.Unlock()
 	if note != "" {
@@ -1405,7 +1420,12 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 			m.comment(p.Repo, t.Issue.Number, "The worker stopped:\n\n"+t.Reason)
 		}
 		m.C.J.MustAppend("kb.note", map[string]string{"title": "Blocked: " + t.Label(), "text": t.Reason, "project": t.Project, "run": r.ID})
-		m.notify(t, fmt.Sprintf("Blocked: %q (task %s). %s", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(t.Reason, 400)))
+		say := fmt.Sprintf("Blocked: %q (task %s). %s", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(t.Reason, 400))
+		if t.Kind == "helper" && r.Parent == t.From && r.Finish != nil && r.Finish.Status == core.StatusBlocked {
+			m.notifyThreads(t, say) // its own finish account already went to its spawner
+		} else {
+			m.notify(t, say)
+		}
 	case core.StatusStopped:
 		// Only a stop from outside the pipeline (the control center) ends a
 		// worker's run, so the task is the person's to bring back.
@@ -2591,18 +2611,35 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	if t.MergedOK == key {
 		return false, nil
 	}
-	merged, err := m.C.Effects.UpdateBranch(p, t.SHA, main, "")
-	if errors.Is(err, core.ErrConflict) {
-		return m.catchUp(t, p, main, "main moved and the PR's merge with it conflicts")
-	}
-	if err != nil {
-		return true, err
-	}
-	if _, err := m.C.Sandbox(); err != nil {
-		return true, err
-	}
 	cfg := m.C.Effects.Config(p, main)
-	c := m.C.Effects.RunCheck(p, merged, "test", cfg.Test)
+	// One merged test per task at a time: one queued for an earlier head or
+	// main is waited out, not joined by another, so main moving while the
+	// checks are backed up adds nothing to the backlog; its stale result is
+	// dropped and the current merge queued.
+	r, queued := m.mergeRun(t.ID)
+	if queued && r.done && r.key != key {
+		queued = false
+	}
+	if !queued {
+		merged, err := m.C.Effects.UpdateBranch(p, t.SHA, main, "")
+		if errors.Is(err, core.ErrConflict) {
+			return m.catchUp(t, p, main, "main moved and the PR's merge with it conflicts")
+		}
+		if err != nil {
+			return true, err
+		}
+		if _, err := m.C.Sandbox(); err != nil {
+			return true, err
+		}
+		r = m.testMerged(t, p, key, main, merged, cfg.Test)
+	}
+	if !r.done {
+		t.MergedTest = r.sha
+		m.hold(t, p, "testing its head merged with main at "+core.Short(r.main)+" (as "+core.Short(r.sha)+") before it merges")
+		return true, nil
+	}
+	t.MergedTest = ""
+	c, merged := r.c, r.sha
 	if c.CantRun != "" {
 		return true, m.cantRun(t, p, c)
 	}
@@ -2621,6 +2658,72 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	t.MergedOK = key
 	m.save(t, "its tests pass merged with main at "+core.Short(main)+" (as "+core.Short(merged)+"), so it merges as it is")
 	return false, nil
+}
+
+// mergeRun is a task's merged-with-main test running behind a step: key is
+// the head+main it tests, sha the merge, c its check once done. gone says
+// the task left merging while it ran, so it is forgotten when it ends.
+type mergeRun struct {
+	key, main, sha string
+	done, gone     bool
+	c              core.Check
+}
+
+// mergeRun returns a copy of the merged test queued for task id, if any, and
+// forgets one that is done: its step takes the result, or queues a new one
+// for a head or main that moved. A can't-run is no verdict, so the step
+// after makes a new merge and runs it again.
+func (m *Module) mergeRun(id string) (mergeRun, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.mergeRuns[id]
+	if !ok {
+		return mergeRun{}, false
+	}
+	if r.done {
+		delete(m.mergeRuns, id)
+	}
+	return *r, true
+}
+
+// testMerged queues the test of sha, t's head merged with main (key is
+// head+main), behind the step. The step never waits for a check slot itself:
+// behind a backlog of checks, 73 merge steps sat in Slots.Acquire for up to
+// an hour, each holding its task, so merges fell to a few an hour (issue
+// #1699). The task waits in merging and is looked at on the next tick once
+// the check ends.
+func (m *Module) testMerged(t *Task, p core.Project, key, main, sha, command string) mergeRun {
+	r := &mergeRun{key: key, main: main, sha: sha}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mergeRuns == nil {
+		m.mergeRuns = map[string]*mergeRun{}
+	}
+	m.mergeRuns[t.ID] = r
+	m.steps.Add(1)
+	go func(id string) {
+		defer m.steps.Done()
+		c := m.C.Effects.RunCheck(p, sha, "test", command)
+		m.mu.Lock()
+		r.c, r.done = c, true
+		if r.gone && m.mergeRuns[id] == r {
+			delete(m.mergeRuns, id)
+		}
+		delete(m.later, id)
+		m.mu.Unlock()
+	}(t.ID)
+	return *r
+}
+
+// dropMergeRunLocked forgets the merged test of a task that left merging:
+// at once if it is done, when it ends if not. The caller holds m.mu.
+func (m *Module) dropMergeRunLocked(id string) {
+	if r, ok := m.mergeRuns[id]; ok {
+		if r.done {
+			delete(m.mergeRuns, id)
+		}
+		r.gone = true
+	}
 }
 
 // hold keeps t where it is for why, saying so on the PR once per HoldKey: the
@@ -2796,6 +2899,13 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 				m.retried(t, which, keys)
 				m.save(t, "re-ran the forge's failed checks "+names+" on "+core.Short(t.SHA)+" once before sending them back, in case they are flakes")
 				m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+names+"), run again once before a red goes back")
+				return true, nil
+			}
+			// The forge re-runs no job of a workflow run still going: the
+			// red waits for the rest to finish and is re-run then, rather
+			// than cost a round as if it had had its once more.
+			if going := stillRunning(raw); len(going) > 0 {
+				m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+" still running ("+core.CheckNames(going)+") to finish, so the red ones ("+names+") can be run again once before they go back")
 				return true, nil
 			}
 		}
@@ -3013,6 +3123,17 @@ func stillOnMain(failed, mainRuns []core.CheckRun) []core.CheckRun {
 		}
 	}
 	return still
+}
+
+// stillRunning are the checks on a head the forge lists as still going.
+func stillRunning(runs []core.CheckRun) []core.CheckRun {
+	var going []core.CheckRun
+	for _, r := range runs {
+		if r.State == core.CheckPending {
+			going = append(going, r)
+		}
+	}
+	return going
 }
 
 // forgeFailuresFile is where a red forge check's findings are kept in the
@@ -3556,7 +3677,11 @@ func (m *Module) closedPR(t *Task, p core.Project, pr core.PR) (bool, error) {
 		if pr.MergeSHA == "" { // the forge hasn't said where yet: look next tick
 			return true, nil
 		}
-		m.merged(t, pr.MergeSHA, fmt.Sprintf("merged on the forge outside the Hive (PR #%d) as %s", pr.Number, core.Short(pr.MergeSHA)))
+		note := fmt.Sprintf("merged on the forge outside the Hive (PR #%d) as %s", pr.Number, core.Short(pr.MergeSHA))
+		if m.C.Effects.MergedAfterError(p, pr) {
+			note = fmt.Sprintf("merged as %s: the forge answered the Hive's merge with an error, but it went through", core.Short(pr.MergeSHA))
+		}
+		m.merged(t, pr.MergeSHA, note)
 		return true, nil
 	}
 	if pr.State != "CLOSED" {
