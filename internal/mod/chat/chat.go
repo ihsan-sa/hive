@@ -442,7 +442,11 @@ func (m *Module) ToLead(chatID, thread, text string) {
 	}
 }
 
-var threadRe = regexp.MustCompile(`thread ([0-9a-z-]+)`)
+// threadRe reads the thread off the headers the chat module writes ("[chat c ·
+// thread t · ...]", "[notification · thread t]"), not off any "thread x" in
+// the text after them: a person's words, or the problems board after a
+// lead's first prompt.
+var threadRe = regexp.MustCompile(`\[(?:chat [^\]\s]+ · |notification · )thread ([0-9a-z-]+)`)
 
 // CurrentThread is the chat thread a lead is working in this turn.
 func (m *Module) CurrentThread(r core.Run) (chatID, thread string) {

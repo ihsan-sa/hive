@@ -40,6 +40,10 @@ type Module struct {
 	mu     sync.Mutex
 	filing string        // running filer
 	Seeded time.Duration // how long the last SeedSelf took
+	// First, when set, is what a search shows before the knowledge base's
+	// own matches: the problems board's items and the recent tasks like the
+	// query, so who met it and who works on it now come first.
+	First func(r core.Run, query string) string
 }
 
 // New registers ops and makes sure the store is a repository.
@@ -88,7 +92,13 @@ func New(c *core.Core, a *agents.Agents) *Module {
 				hide = append(hide, "isolated/"+p.Name, "record")
 			}
 		}
-		return Find(c.WS.KB(), q.Query, strings.Trim(string(q.Limit), `"`), hide...), nil
+		found := Find(c.WS.KB(), q.Query, strings.Trim(string(q.Limit), `"`), hide...)
+		if m.First != nil {
+			if first := m.First(r, q.Query); first != "" {
+				found = first + "\n## In the knowledge base\n\n" + found
+			}
+		}
+		return found, nil
 	}})
 	m.startRecord()
 	c.J.Subscribe(func(e core.Event) {

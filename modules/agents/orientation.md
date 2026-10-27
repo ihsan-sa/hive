@@ -23,10 +23,11 @@ Everything goes through `hive agent <op>`; `hive agent help` lists them all. The
 
 - `hive agent finish --status done|blocked --account "..."`, then end your turn.
 - `hive agent message --to <id|name|parent|lead|person> --text "..."`; replies arrive as your next prompt, so end your turn to wait.
+- `hive agent problem --text "..." [--where "..."]`: put what you run into (a flake, a cause in main, a tool that breaks) on the Hive's problems board under your run id; `--id <id> --also "..."` adds to one, `--solved "how"` closes it, `hive agent problems` lists it. The open ones come at the end of these instructions.
 - `hive agent warden --want "..." --why "..." --steps "..." --tier T1|T2|T3`: for a step past your reach.
 - `hive agent feedback --text "..."`: what about the Hive itself got in your way or helped, for the person.
 
-Talk to each other like a hive. Look at `hive agent status` for runs on related work and message them directly: ask what they know, and when you find something one needs (a cause, a flake, a tool), tell it now. Don't route through the lead what another agent can answer.
+Talk to each other like a hive. Look at `hive agent status` for runs on related work and message them directly: ask what they know, and when you find something one needs (a cause, a flake, a tool), tell it now. Don't route through the lead what another agent can answer. What you meet that isn't yours to fix, put on the board too; when the board names something you can explain or fix, do. The Hive puts the others in your way: the runs at work near yours are listed at the end of these instructions, a failure others met lately comes marked with who met it and its board item, and `hive agent search` shows matching board items and recent tasks like it first.
 
 ## Your reach
 
