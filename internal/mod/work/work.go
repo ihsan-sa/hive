@@ -1724,6 +1724,20 @@ func (m *Module) test(t *Task, p core.Project) error {
 	if err := m.noteTests(t, p, main, c); err != nil {
 		return err
 	}
+	if !c.OK && len(m.C.Effects.Quarantine(p.Name, t.ID)) > 0 {
+		// Known flakes count against no head, as on the forge's checks:
+		// Effects.Merge rules the same on this run.
+		ch, err := m.C.Effects.Classify(p, main, t.SHA)
+		if err != nil {
+			return err
+		}
+		if flaky := m.C.Effects.ExcusedLocal(p, main, t.ID, ch.Files, c); len(flaky) > 0 {
+			c.OK = true
+			if note := "known flakes: its tests fail on " + core.Short(t.SHA) + " only in quarantined tests (" + core.Clip(strings.Join(flaky, ", "), 300) + "), so they don't count against it"; !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
+				m.save(t, note)
+			}
+		}
+	}
 	if !c.OK && t.Checkpoint != "" {
 		return m.dropCheckpoint(t, p, "the tests failed on "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 1500))
 	}
