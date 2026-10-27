@@ -24,6 +24,7 @@ import (
 type Egress struct {
 	ln      net.Listener
 	lookup  func(ctx context.Context, host string) ([]net.IPAddr, error) // net.DefaultResolver's; a test's own
+	own     func() []net.IP                                              // this machine's addresses: OwnAddrs; a test's own
 	allow   []string
 	local   []string // granted loopback ip:port, canonical
 	mu      sync.Mutex
@@ -40,7 +41,7 @@ const (
 // lets every public host through; local is the granted loopback ip:port
 // (LocalGrant's); refused, if set, gets each refusal and its reason.
 func ServeEgress(ln net.Listener, allow, local []string, refused io.Writer) *Egress {
-	e := &Egress{ln: ln, lookup: net.DefaultResolver.LookupIPAddr, allow: allow, local: local, refused: refused}
+	e := &Egress{ln: ln, lookup: net.DefaultResolver.LookupIPAddr, own: OwnAddrs, allow: allow, local: local, refused: refused}
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -137,11 +138,11 @@ func (e *Egress) dial(hostport string) (net.Conn, error) {
 		}
 		return nil, fmt.Errorf("%s is granted but nothing answers there: %v", hostport, lastErr)
 	}
-	// A local address named outright is refused as local, list or not, so
-	// the record says what would open it.
-	if ip := net.ParseIP(host); strings.EqualFold(host, "localhost") || ip != nil && !Public(ip) {
+	// A local address or name named outright is refused as local, list or
+	// not, so the record says what would open it.
+	if ip := net.ParseIP(host); ip != nil && Refused(ip, e.own()) != "" || LocalName(host) != "" {
 		e.refuse(hostport, RefusedLocal)
-		return nil, localErr(host, hostport)
+		return nil, localErr(host, port)
 	}
 	if !Allowed(e.allow, host) {
 		e.refuse(hostport, RefusedUnlisted)
@@ -153,10 +154,11 @@ func (e *Egress) dial(hostport string) (net.Conn, error) {
 	if err != nil || len(ips) == 0 {
 		return nil, fmt.Errorf("cannot resolve %s", host)
 	}
+	mine := e.own()
 	for _, ip := range ips {
-		if !Public(ip.IP) {
+		if Refused(ip.IP, mine) != "" {
 			e.refuse(hostport, RefusedLocal)
-			return nil, localErr(fmt.Sprintf("%s (%s)", host, ip.IP), net.JoinHostPort(ip.IP.String(), port))
+			return nil, localErr(fmt.Sprintf("%s (%s)", host, ip.IP), port)
 		}
 	}
 	var lastErr error
@@ -170,11 +172,13 @@ func (e *Egress) dial(hostport string) (net.Conn, error) {
 	return nil, lastErr
 }
 
-// localErr is the refusal of a local or private destination, with the way a
-// service on this machine opens.
-func localErr(dest, grant string) error {
+// localErr is the refusal of a local or private destination (this machine by
+// any of its addresses or names, a private network, a local name), with the
+// way a service on this machine opens: a grant of its loopback port.
+func localErr(dest, port string) error {
 	return fmt.Errorf("destination %s is local or private; sandboxes reach the network outbound only. "+
-		"A service on this machine opens to agents only on the person's grant: ask a warden for `hive egress grant %s`", dest, grant)
+		"A service on this machine opens to agents only on the person's grant: ask a warden for `hive egress grant %s`",
+		dest, net.JoinHostPort("127.0.0.1", port))
 }
 
 func (e *Egress) refuse(hostport, why string) {
@@ -250,8 +254,9 @@ var blocked = func() []*net.IPNet {
 	var out []*net.IPNet
 	for _, c := range []string{
 		"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
-		"172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/4", "240.0.0.0/4",
-		"::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8", "64:ff9b:1::/48",
+		"172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24",
+		"203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
+		"::/96", "fc00::/7", "fe80::/10", "ff00::/8", "64:ff9b:1::/48", "100::/64", "2001:db8::/32",
 	} {
 		_, n, _ := net.ParseCIDR(c)
 		out = append(out, n)
@@ -259,17 +264,51 @@ var blocked = func() []*net.IPNet {
 	return out
 }()
 
-// Public reports whether ip is a routable public address.
+var nat64, sixToFour, teredo = cidr("64:ff9b::/96"), cidr("2002::/16"), cidr("2001::/32")
+
+func cidr(c string) *net.IPNet { _, n, _ := net.ParseCIDR(c); return n }
+
+// Public reports whether ip is a routable public address. An IPv6 address
+// that carries an IPv4 one (NAT64, 6to4, Teredo) is public only if that is.
 func Public(ip net.IP) bool {
 	if v4 := ip.To4(); v4 != nil {
 		ip = v4
+	}
+	if ip == nil {
+		return false
 	}
 	for _, n := range blocked {
 		if n.Contains(ip) {
 			return false
 		}
 	}
+	for _, v4 := range embedded(ip) {
+		if !Public(v4) {
+			return false
+		}
+	}
 	return true
+}
+
+// embedded is the IPv4 addresses an IPv6 one carries: NAT64's, 6to4's, and
+// Teredo's server and client.
+func embedded(ip net.IP) []net.IP {
+	if ip.To4() != nil || len(ip) != net.IPv6len {
+		return nil
+	}
+	switch {
+	case nat64.Contains(ip):
+		return []net.IP{net.IP(ip[12:16])}
+	case sixToFour.Contains(ip):
+		return []net.IP{net.IP(ip[2:6])}
+	case teredo.Contains(ip):
+		c := make(net.IP, 4)
+		for i := range c {
+			c[i] = ip[12+i] ^ 0xff
+		}
+		return []net.IP{net.IP(ip[4:8]), c}
+	}
+	return nil
 }
 
 // forwardLocal listens inside the sandbox on each granted local address and
