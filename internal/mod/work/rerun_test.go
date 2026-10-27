@@ -107,6 +107,36 @@ func TestRerunFailedForgeChecks(t *testing.T) {
 	}
 }
 
+// A red job whose workflow run has other jobs still going isn't re-run (the
+// forge refuses), nor sent back as if it had been: the task waits for the run
+// to finish, then the red is re-run once before it costs a round, and
+// rerun-checks says what is still running.
+func TestRedRerunWaitsForItsRunToFinish(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	m.save(task, "")
+	red := core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/attempt1"}
+	going := core.CheckRun{Name: "test (macos-latest)", State: core.CheckPending}
+	f.SetChecks(p.Repo, task.SHA, red, going)
+	main, _ := m.C.Effects.Sync(p)
+	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "test (macos-latest)", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 0 || !strings.Contains(task.Reason, "still running (test (macos-latest))") {
+		t.Fatalf("red beside a running job: stage %q, round %d, %d re-runs, reason %q", task.Stage, task.Round, f.Reruns(p.Repo, task.SHA), task.Reason)
+	}
+	if _, err := m.RerunChecks(task.ID, "w1"); err == nil || !strings.Contains(err.Error(), "test (macos-latest) on "+core.Short(task.SHA)+" are still running") {
+		t.Fatalf("rerun-checks beside a running job: %v", err)
+	}
+	// The run finishes: the red is re-run once, still costing no round.
+	going.State = core.CheckPass
+	f.SetChecks(p.Repo, task.SHA, red, going)
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 1 || !strings.Contains(task.Reason, "run again once before a red goes back") {
+		t.Fatalf("after the run finished: stage %q, round %d, %d re-runs, reason %q", task.Stage, task.Round, f.Reruns(p.Repo, task.SHA), task.Reason)
+	}
+}
+
 // Once the grace after a re-run is over, a failure on that head goes back to
 // the worker as any red check does, without the hint once the cap is reached.
 func TestRerunFailureAfterGraceGoesBack(t *testing.T) {
