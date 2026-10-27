@@ -207,7 +207,7 @@ func TestAnthropicModelTurn(t *testing.T) {
 	}
 	argv, env := strings.Join(spec.Argv, " "), strings.Join(spec.Env, "\n")
 	if spec.Argv[0] != "claude" || !strings.Contains(argv, "--model kimi-k2-0905-preview") ||
-		!strings.Contains(argv, `--settings {"apiKeyHelper":"'hive' open-key '/hive/home/.hive-open/key'","disableAllHooks":true`) {
+		!strings.Contains(argv, `--settings {"apiKeyHelper":"'hive' open-key '/hive/home/.hive-open/key'","attribution":{"commit":"","pr":""},"disableAllHooks":true`) {
 		t.Errorf("argv %q", spec.Argv)
 	}
 	for _, want := range []string{"ANTHROPIC_BASE_URL=https://api.moonshot.ai/anthropic", "ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2-0905-preview",
