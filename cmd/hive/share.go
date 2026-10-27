@@ -296,7 +296,7 @@ func readSame(dir *os.Root, name string, before os.FileInfo) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	if after, err := f.Stat(); err != nil || !os.SameFile(before, after) {
+	if after, err := f.Stat(); err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) {
 		return nil, errors.New("file changed while reading")
 	}
 	return io.ReadAll(f)
