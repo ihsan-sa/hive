@@ -308,7 +308,7 @@ func (m *model) runLine(r core.Run) string {
 	if r.Finish != nil && r.Finish.Printed {
 		extra = "(finish printed, the Hive ran it) " + extra
 	}
-	return fmt.Sprintf("%s  %s  %s  turn %d  $%.2f  %dk ctx  %s  %s", runLabel(r), status, text.Visible(core.HarnessName(r.Harness)+":"+r.Model), r.Turn, r.Cost, r.Context/1000, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
+	return fmt.Sprintf("%s  %s  %s  turn %d  $%.2f  %dk ctx  %s  %s", roleStyle(r.Role).Render(runLabel(r)), status, text.Visible(core.HarnessName(r.Harness)+":"+r.Model), r.Turn, r.Cost, r.Context/1000, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
 }
 
 // sizeLine is the newest measured size (for the Hive, its core's: docs/core.md)

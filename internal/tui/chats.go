@@ -23,6 +23,7 @@ type sideRow struct {
 	group  bool
 	fold   bool   // a fold inside a group, closed until opened: ended agents
 	under  string // the fold this row sits in
+	role   string // the agent's role, for its colour
 }
 
 // sideRows lists the sections, then one chat per project lead and per agent,
@@ -60,16 +61,39 @@ func (m *model) rows(all bool) []sideRow {
 		var out []sideRow
 		for _, r := range byProject[p] {
 			seen["agent:"+r.ID] = true
-			out = append(out, sideRow{key: "agent:" + r.ID, label: runLabel(r), chatID: "agent:" + r.ID})
+			out = append(out, sideRow{key: "agent:" + r.ID, label: runLabel(r), chatID: "agent:" + r.ID, role: r.Role})
 		}
-		// Agent chats with history whose run has ended stay reachable, out of
-		// the way: in a fold of their own, and only for a day.
+		// Agents whose run has ended stay reachable, out of the way: in a
+		// fold of their own, newest first, and only for a day. Those are the
+		// chats with history and the runs that just ended without one, so a
+		// warden or tribunal seat that weighed a request for a minute is
+		// still there to see.
 		fold := "ended:" + p
-		var ended []sideRow
+		type endedRow struct {
+			row sideRow
+			at  time.Time
+		}
+		var gone []endedRow
 		for _, c := range m.st.Chats {
 			if c.Kind == "agent" && c.Project == p && !seen[c.ID] && (all || time.Since(m.endedAt(c)) < endedFor) {
-				ended = append(ended, sideRow{key: c.ID, label: "  " + c.Title, chatID: c.ID, under: fold})
+				seen[c.ID] = true
+				role := roleOfName(c.Title)
+				if r, ok := m.run(strings.TrimPrefix(c.ID, "agent:")); ok {
+					role = r.Role
+				}
+				gone = append(gone, endedRow{sideRow{key: c.ID, label: "  " + c.Title, chatID: c.ID, under: fold, role: role}, m.endedAt(c)})
 			}
+		}
+		for _, r := range m.st.Runs {
+			if id := "agent:" + r.ID; r.Terminal() && r.Role != "lead" && r.Project == p && !seen[id] && (all || time.Since(r.Updated) < endedFor) {
+				seen[id] = true
+				gone = append(gone, endedRow{sideRow{key: id, label: "  " + runLabel(r), chatID: id, under: fold, role: r.Role}, r.Updated})
+			}
+		}
+		sort.SliceStable(gone, func(i, j int) bool { return gone[i].at.After(gone[j].at) })
+		var ended []sideRow
+		for _, g := range gone {
+			ended = append(ended, g.row)
 		}
 		if len(ended) > 0 {
 			out = append(out, sideRow{key: fold, label: fmt.Sprintf("ended (%d)", len(ended)), fold: true})
@@ -79,7 +103,7 @@ func (m *model) rows(all bool) []sideRow {
 	known := map[string]bool{"": true}
 	for _, p := range m.st.Projects {
 		known[p.Name] = true
-		group("p:"+p.Name, groupLabel(p.Name), append([]sideRow{{key: "project:" + p.Name, label: "lead", chatID: "project:" + p.Name}}, agents(p.Name)...))
+		group("p:"+p.Name, groupLabel(p.Name), append([]sideRow{{key: "project:" + p.Name, label: "lead", chatID: "project:" + p.Name, role: "lead"}}, agents(p.Name)...))
 	}
 	// Agents of a project the state no longer lists (removed, or not yet
 	// loaded) keep a group of their own rather than dropping out of sight.
@@ -100,7 +124,7 @@ func (m *model) rows(all bool) []sideRow {
 	var hive []sideRow
 	for _, c := range m.st.Chats {
 		if c.Kind == "lead" {
-			hive = append(hive, sideRow{key: c.ID, label: "lead", chatID: c.ID})
+			hive = append(hive, sideRow{key: c.ID, label: "lead", chatID: c.ID, role: "lead"})
 		}
 	}
 	if hive = append(hive, agents("")...); len(hive) > 0 {
@@ -194,13 +218,15 @@ func (m *model) viewSidebar(w int) pane {
 			if m.closed[r.key] && news[r.key] > 0 {
 				count = stAccent.Render("●")
 			}
-		case r.chatID != "":
+		case r.chatID != "": // in its role's colour, bold when unread or open
+			st := roleStyle(r.role).Bold(false)
 			if unread[r.chatID] > 0 {
-				name, count = stTitle.Render(name), stAccent.Render("●")
+				st, count = st.Bold(true), stAccent.Render("●")
 			}
 			if m.section == secChats && r.chatID == m.chat {
-				mark, name = "› ", stTitle.Render(r.label)
+				mark, st = "› ", st.Bold(true)
 			}
+			name = st.Render(r.label)
 		}
 		line := " " + mark + name
 		if count != "" {
@@ -599,7 +625,7 @@ func (m *model) viewChannel(w int) pane {
 			}
 		}
 		first := t.msgs[0]
-		add(msgHead(first))
+		add(m.msgHead(first))
 		add(m.body(first.Text, tw)...)
 		n := len(t.msgs) - 1
 		replies := fmt.Sprintf("%d %s", n, plural(n, "reply", "replies"))
@@ -612,7 +638,7 @@ func (m *model) viewChannel(w int) pane {
 				add(stDim.Render("▾ " + replies))
 			}
 			for _, r := range t.msgs[1:] {
-				add("  " + msgHead(r))
+				add("  " + m.msgHead(r))
 				add(indent(m.body(r.Text, tw-2), "  ")...)
 			}
 		case sel:
@@ -712,7 +738,7 @@ func (m *model) viewThread(w int) pane {
 		}
 	}
 	for i, msg := range t.msgs {
-		add(msgHead(msg))
+		add(m.msgHead(msg))
 		add(m.body(msg.Text, tw)...)
 		add("")
 		if i == 0 {
@@ -773,11 +799,12 @@ func (m *model) composeLabel(label string) string {
 // body renders a message's markdown to width w.
 func (m *model) body(text string, w int) []string { return markdown(text, w) }
 
-func msgHead(msg chat.Message) string {
-	return who(msg) + "  " + stDim.Render(msg.At.Local().Format("15:04"))
+func (m *model) msgHead(msg chat.Message) string {
+	return m.who(msg) + "  " + stDim.Render(msg.At.Local().Format("15:04"))
 }
 
-func who(msg chat.Message) string {
+// who names a message's sender in the colour of its role.
+func (m *model) who(msg chat.Message) string {
 	switch msg.From {
 	case "person":
 		return stYou.Render("you")
@@ -788,7 +815,10 @@ func who(msg chat.Message) string {
 	if name == "" {
 		name = msg.From
 	}
-	return speaker(name).Render(name)
+	if r, ok := m.run(msg.From); ok {
+		return roleStyle(r.Role).Render(name)
+	}
+	return nameStyle(name).Render(name)
 }
 
 func plural(n int, one, many string) string {

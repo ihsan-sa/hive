@@ -353,7 +353,8 @@ func TestColourHints(t *testing.T) {
 	shade := map[bool]string{}
 	for _, dark := range []bool{true, false} {
 		lipgloss.SetHasDarkBackground(dark)
-		y, l, w := who(you), who(lead), who(writer)
+		m := &model{}
+		y, l, w := m.who(you), m.who(lead), m.who(writer)
 		if colourSGR(y) == "" || colourSGR(l) == "" || y == l || l == w || ansi.Strip(y) != "you" {
 			t.Fatalf("dark %v: you %q, lead %q, writer %q: want three colours", dark, y, l, w)
 		}
@@ -479,5 +480,48 @@ func TestChatKeepsItsThread(t *testing.T) {
 	m.pick(sideRow{sec: -1, chatID: "project:textkit-2"})
 	if m.thread != "m3" || m.chScroll != scrolled || !m.sidePane() {
 		t.Fatalf("back: thread %q, scroll %d (was %d)", m.thread, m.chScroll, scrolled)
+	}
+}
+
+// A warden and a tribunal seat that ended minutes ago, with no chat of their
+// own, still show in their project's ended fold, newest first.
+func TestEndedRunsInTheFold(t *testing.T) {
+	m := designModel(80, 24)
+	endedAgents(m)
+	now := time.Now()
+	m.st.Runs = append(m.st.Runs,
+		core.Run{ID: "w-req-aaaaaa", Role: "warden", Project: "textkit-2", Status: core.StatusDone, Updated: now.Add(-time.Minute)},
+		core.Run{ID: "t-req-bbbbbb", Role: "tribunal", Project: "textkit-2", Status: core.StatusDone, Updated: now.Add(-2 * time.Hour)},
+		core.Run{ID: "w-req-cccccc", Role: "warden", Project: "textkit-2", Status: core.StatusDone, Updated: now.Add(-72 * time.Hour)})
+	m.open["ended:textkit-2"] = true
+	var got []string
+	for _, r := range m.sideRows() {
+		if r.under == "ended:textkit-2" || r.fold {
+			got = append(got, strings.TrimSpace(r.label)+"/"+r.role)
+		}
+	}
+	if s := strings.Join(got, "|"); s != "ended (4)/|warden aaaaa/warden|worker-3/|tribunal bbbbb/tribunal|worker-4/" {
+		t.Fatalf("ended fold: %s", s)
+	}
+}
+
+// Agents show in their role's colour wherever they appear: a chat message,
+// the feed and the sidebar, so two workers match and a warden stands apart.
+func TestColourByRole(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	m := &model{}
+	m.st.Runs = []core.Run{{ID: "w-1", Role: "worker", Name: "alpha"}, {ID: "w-2", Role: "worker", Name: "beta"}, {ID: "w-req", Role: "warden"}}
+	a, b, wd := m.who(chat.Message{From: "w-1", Name: "alpha"}), m.who(chat.Message{From: "w-2", Name: "beta"}), m.who(chat.Message{From: "w-req", Name: "warden x"})
+	if colourSGR(a) == "" || colourSGR(a) != colourSGR(b) || colourSGR(a) == colourSGR(wd) {
+		t.Fatalf("worker %q, worker %q, warden %q: want the workers alike and the warden apart", a, b, wd)
+	}
+	if colourSGR(nameStyle("warden 3f2a1").Render("x")) != colourSGR(wd) || colourSGR(nameStyle("lead").Render("x")) != colourSGR(roleStyle("lead").Render("x")) {
+		t.Fatal("the feed doesn't colour a name by the role it names")
+	}
+	for _, r := range roles {
+		if !strings.Contains(roleLegend(), roleStyle(r).Render(r)) {
+			t.Fatalf("the help's legend misses %s", r)
+		}
 	}
 }

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -8,7 +9,8 @@ import (
 
 // Styling is bold, faint and reverse, with hints of colour: red for what
 // failed, green for what runs or was kept, amber for what waits on the
-// person, blue for the person, and a hue per agent in chats. Each colour has
+// person, blue for the person, and a hue per role (lead, worker, reviewer,
+// warden, tribunal, judge) wherever an agent shows. Each colour has
 // a dark and a light terminal's shade; NO_COLOR drops every hue (noHue).
 var (
 	stTitle = lipgloss.NewStyle().Bold(true)
@@ -18,6 +20,7 @@ var (
 
 	stBad, stGood, stWarn, stAccent, stYou lipgloss.Style
 	stAgents                               []lipgloss.Style // speakers other than the person, by name
+	stRoles                                map[string]lipgloss.Style
 )
 
 func hue(dark, light string) lipgloss.Style {
@@ -31,7 +34,7 @@ func init() { setHue(true) }
 func setHue(on bool) {
 	if !on {
 		stBad, stGood, stWarn, stAccent, stYou = stTitle, lipgloss.NewStyle(), stTitle, stTitle, stTitle
-		stAgents = []lipgloss.Style{stTitle}
+		stAgents, stRoles = []lipgloss.Style{stTitle}, nil
 		stCode, stLink = lipgloss.NewStyle(), lipgloss.NewStyle().Underline(true)
 		return
 	}
@@ -46,6 +49,15 @@ func setHue(on bool) {
 		hue("#56D4DD", "#1B7C83").Bold(true),
 		hue("#FC8DC7", "#BF3989").Bold(true),
 		hue("#8DDB8C", "#2A7A3B").Bold(true),
+	}
+	stRoles = map[string]lipgloss.Style{
+		"lead":     stAgents[0],
+		"worker":   stAgents[1],
+		"reviewer": stAgents[2],
+		"security": stAgents[2],
+		"warden":   stAgents[3],
+		"tribunal": stAgents[4],
+		"judge":    hue("#ADBAC7", "#57606A").Bold(true),
 	}
 	stCode = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	stLink = lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Underline(true)
@@ -62,6 +74,29 @@ func speaker(name string) lipgloss.Style {
 		h = h*31 + int(r)
 	}
 	return stAgents[1+(h&0x7fffffff)%(len(stAgents)-1)]
+}
+
+// roles lists the roles with a colour of their own, in the help's order.
+var roles = []string{"lead", "worker", "reviewer", "warden", "tribunal", "judge"}
+
+// roleStyle is the colour every agent of a role speaks and shows in, so a
+// warden reads as a warden wherever it appears; the Hive's housekeeping
+// (sweeps, filers, step-backs) stays plain bold.
+func roleStyle(role string) lipgloss.Style {
+	if s, ok := stRoles[role]; ok {
+		return s
+	}
+	return stTitle
+}
+
+// roleOfName is the role a label names, as runLabel writes one ("warden
+// 3f2a1"), or "".
+func roleOfName(name string) string {
+	first, _, _ := strings.Cut(name, " ")
+	if slices.Contains(roles, first) || first == "security" {
+		return first
+	}
+	return ""
 }
 
 // pane is one column of the screen: a header row and a body.

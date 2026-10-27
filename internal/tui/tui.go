@@ -983,7 +983,18 @@ func helpLines() []string {
 		"pgup pgdn, wheel  scroll; the wheel scrolls the pane under it",
 		"home end          the top or the end",
 		"q                 quit the control center; the Hive keeps working",
+		"", stTitle.Render("Colours"), "",
+		roleLegend(),
 		"", stDim.Render("any key to close")}
+}
+
+// roleLegend shows each role in the colour its agents take everywhere.
+func roleLegend() string {
+	parts := []string{stYou.Render("you")}
+	for _, r := range roles {
+		parts = append(parts, roleStyle(r).Render(r))
+	}
+	return strings.Join(parts, "  ")
 }
 
 // clip keeps a line within the screen width.

@@ -307,13 +307,17 @@ func or(s, def string) string {
 	return s
 }
 
-// nameStyle is how a name shows in the feed: the colour it speaks in.
+// nameStyle is how a name shows in the feed: its role's colour when it
+// names one ("lead", "warden 3f2a1"), else one picked by the name.
 func nameStyle(name string) lipgloss.Style {
 	switch name {
 	case "you":
 		return stYou
-	case "hive", "worker":
+	case "hive":
 		return stTitle
+	}
+	if role := roleOfName(name); role != "" {
+		return roleStyle(role)
 	}
 	return speaker(name)
 }
