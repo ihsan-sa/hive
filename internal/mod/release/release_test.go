@@ -1636,3 +1636,57 @@ func TestReleaseFallForwardHeldEndsTheWait(t *testing.T) {
 		t.Fatalf("a wait the hold ended was retried: %v", n.got)
 	}
 }
+
+// An automatic update waits for the recursive gates running, since the
+// restart ends them, and holds new ones back meanwhile; once they end it
+// installs. `hive update` doesn't wait.
+func TestAutoUpdateWaitsForRunningGates(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	m, exe := releaseAt(t, "v0.1.2", "me/hive")
+	running := 1
+	var held time.Time
+	m.Gates = func() (int, time.Time) { return running, time.Now().Add(-time.Hour) }
+	m.HoldGates = func(until time.Time) { held = until }
+	for i := 0; i < 2; i++ {
+		if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "waiting: 1 recursive gate(s) running") {
+			t.Fatalf("look %d: %q, %v", i, msg, err)
+		}
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "old" || !held.After(time.Now()) {
+		t.Fatalf("binary %q, new gates held until %v, while a gate ran", raw, held)
+	}
+	if n := journaledN(m, "hive.update_held"); n != 1 {
+		t.Fatalf("%d holds on the record, want the first look's alone", n)
+	}
+	running = 0
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") {
+		t.Fatalf("after the gates: %q, %v", msg, err)
+	}
+
+	m, _ = releaseAt(t, "v0.1.2", "me/hive")
+	m.Gates = func() (int, time.Time) { return 1, time.Now() }
+	if msg, err := m.Update(""); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") {
+		t.Fatalf("hive update waited: %q, %v", msg, err)
+	}
+}
+
+// Gates running past gateWaitMax from the first look don't keep the Hive
+// behind: the update installs anyway, and the record says so.
+func TestAutoUpdateGoesAheadPastLongGates(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	m, exe := releaseAt(t, "v0.1.2", "me/hive")
+	m.Gates = func() (int, time.Time) { return 1, time.Now() }
+	if msg, _ := m.AutoUpdate(); !strings.HasPrefix(msg, "waiting:") {
+		t.Fatalf("first look: %q", msg)
+	}
+	m.gatesSince = m.gatesSince.Add(-gateWaitMax)
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") {
+		t.Fatalf("past the wait: %q, %v", msg, err)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "new" {
+		t.Fatalf("binary %q", raw)
+	}
+	if n := journaledN(m, "hive.update_held"); n != 2 {
+		t.Fatalf("%d holds on the record, want the wait and the forced install", n)
+	}
+}

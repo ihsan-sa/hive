@@ -45,6 +45,14 @@ type Module struct {
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
 	PauseMerges func(wait time.Duration) (resume func(), ok bool)
+	// Gates says how many recursive gates run and since when the oldest
+	// has, and HoldGates keeps new ones from starting until a time (the
+	// work module): an automatic update waits for the running ones, since
+	// the restart ends them and up to two hours of their work.
+	Gates     func() (running int, oldest time.Time)
+	HoldGates func(until time.Time)
+	// gatesSince is when the update first waited for running gates.
+	gatesSince time.Time
 	// Scan checks what a release at sha publishes before it is cut; nil is
 	// the identity and secret scan of the files on the commit's public list.
 	Scan func(p core.Project, sha string) error
@@ -331,13 +339,13 @@ func (m *Module) Update(tag string) (string, error) {
 		return busy, nil
 	}
 	defer m.updating.Unlock()
-	return m.update(tag)
+	return m.update(tag, false)
 }
 
 // busy is what an update says while another is being checked.
 const busy = "an update is already being checked; try again in a minute"
 
-func (m *Module) update(tag string) (string, error) {
+func (m *Module) update(tag string, auto bool) (string, error) {
 	m.pmu.Lock()
 	m.tried = tag
 	m.pmu.Unlock()
@@ -364,6 +372,9 @@ func (m *Module) update(tag string) (string, error) {
 	m.pmu.Unlock()
 	if !pin && m.rolledBack(tag) {
 		return tag + " was rolled back after it failed to start here; `" + core.Cmd + " update " + tag + "` tries it again", nil
+	}
+	if msg := m.waitGates(tag, auto); msg != "" {
+		return msg, nil
 	}
 	tmp, err := os.MkdirTemp("", "hive-update-")
 	if err != nil {
@@ -518,6 +529,52 @@ var mergeWait = 2 * time.Minute
 // past mergeWait before it installs anyway.
 const maxSkips = 3
 
+// gateWaitMax is the most an automatic update waits for the recursive gates
+// running when it first looked: a gate's own limit and its grace, so a run
+// that started just before ends, and a hung one doesn't keep the Hive behind.
+var gateWaitMax = 2*time.Hour + 15*time.Minute
+
+// gateHold is how long each look that waits for gates keeps new ones from
+// starting; the next look renews it, so an update gone from the channel
+// holds no gate back for long.
+const gateHold = 15 * time.Minute
+
+// waitGates says why an automatic update to tag waits, or "": while
+// recursive gates run, it waits for them to end and starts no new ones,
+// for at most gateWaitMax from its first look; then it installs anyway. A
+// restart ends every gate in flight, and before this one each pre-release
+// threw away whatever the gates running had done. `hive update` doesn't wait.
+func (m *Module) waitGates(tag string, auto bool) string {
+	n := 0
+	var oldest time.Time
+	if auto && m.Gates != nil {
+		n, oldest = m.Gates()
+	}
+	if n == 0 {
+		m.gatesSince = time.Time{}
+		return ""
+	}
+	now := time.Now().UTC()
+	first := m.gatesSince.IsZero()
+	if first {
+		m.gatesSince = now
+	}
+	by := m.gatesSince.Add(gateWaitMax)
+	text := fmt.Sprintf("%d recursive gate(s) running, the oldest since %s", n, oldest.UTC().Format("15:04Z"))
+	if !now.Before(by) {
+		m.gatesSince = time.Time{}
+		m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "gates": n, "forced": true, "text": text + fmt.Sprintf("; waited %s, installing anyway", gateWaitMax)})
+		return ""
+	}
+	if m.HoldGates != nil {
+		m.HoldGates(now.Add(gateHold))
+	}
+	if first {
+		m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "gates": n, "text": text + "; no new gate starts until it installs"})
+	}
+	return "waiting: " + text + "; " + tag + " installs when they end, or at " + by.Format("15:04Z") + " at the latest"
+}
+
 // restartGrace is how long merges stay paused after an update installs,
 // waiting for its restart.
 var restartGrace = 30 * time.Minute
@@ -548,7 +605,7 @@ func (m *Module) AutoUpdate() (string, error) {
 	if !cfg.AutoUpdate || cfg.ReleasePin != "" {
 		return "auto-update is off", nil
 	}
-	msg, err := m.update("")
+	msg, err := m.update("", true)
 	m.pmu.Lock()
 	waits := m.waits
 	m.pmu.Unlock()
