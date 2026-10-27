@@ -25,32 +25,32 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
    Modules            <span class="f">│</span>                                                <span class="f">│</span>                                                
    Settings           <span class="f">│</span>                                                <span class="f">│</span>   <span class="f">2 replies ─────────────────────────────────</span>  
                       <span class="f">│</span>                                                <span class="f">│</span>                                                
- <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">19:58</span>                                   <span class="f">│</span>   <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:23</span>                                  
- › <span class="b">lead</span>               <span class="f">│</span>   Hello?                                       <span class="f">│</span>   On it. I&#39;ll hand the split to writer and     
-   writer             <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                        <span class="f">│</span>   ask reviewer to check the public API before  
-   <span class="b">reviewer</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>                                                <span class="f">│</span>   anything merges.                             
- <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:22</span>                                   <span class="f">│</span>                                                
-   <span class="b">lead</span>            <span style="color:#38C5CF">●</span>  <span class="f">│</span> <span class="b">▌</span> The parser and the renderer are tangled      <span class="f">│</span>   <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:31</span>                                  
-   worker-2           <span class="f">│</span> <span class="b">▌</span> together. Can you split the parser into its  <span class="f">│</span>   Done. parser/ is its own package now, with   
-   reviewer           <span class="f">│</span> <span class="b">▌</span> own package so reviewer can check it on its  <span class="f">│</span>   14 tests passing, and reviewer approved the  
-   tribunal           <span class="f">│</span> <span class="b">▌</span> own?                                         <span class="f">│</span>   API. One question: keep the old import path  
- <span class="f">▸ </span><span class="f">website</span>            <span class="f">│</span> <span class="b">▌</span> <span class="b">▸ 2 replies</span>  <span class="f">open →</span>                          <span class="f">│</span>   as an alias for a release, or break it now?  
-                      <span class="f">│</span>                                                <span class="f">│</span>                                                
-                      <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
-                      <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>  │ › Keep the alias for one release, then    │ 
-                      <span class="f">│</span>   passes.                                      <span class="f">│</span>  │   remove it in 0.9.<span style="color:#0d1117;background:#e6edf3"> </span>                      │ 
-                      <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                    <span class="f">│</span>  ╰───────────────────────────────────────────╯ 
+ <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>                                                <span class="f">│</span>   <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:23</span>                                  
+ › <span class="b">lead</span>               <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">19:58</span>                                   <span class="f">│</span>   On it. I&#39;ll hand the split to writer and     
+   writer             <span class="f">│</span>   Hello?                                       <span class="f">│</span>   ask reviewer to check the public API before  
+   <span class="b">reviewer</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                        <span class="f">│</span>   anything merges.                             
+ <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>                                                <span class="f">│</span>                                                
+   <span class="b">lead</span>            <span style="color:#38C5CF">●</span>  <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:22</span>                                   <span class="f">│</span>   <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:31</span>                                  
+   worker-2           <span class="f">│</span> <span class="b">▌</span> The parser and the renderer are tangled      <span class="f">│</span>   Done. parser/ is its own package now, with   
+   reviewer           <span class="f">│</span> <span class="b">▌</span> together. Can you split the parser into its  <span class="f">│</span>   14 tests passing, and reviewer approved the  
+   tribunal           <span class="f">│</span> <span class="b">▌</span> own package so reviewer can check it on its  <span class="f">│</span>   API. One question: keep the old import path  
+ <span class="f">▸ </span><span class="f">website</span>            <span class="f">│</span> <span class="b">▌</span> own?                                         <span class="f">│</span>   as an alias for a release, or break it now?  
+                      <span class="f">│</span> <span class="b">▌</span> <span class="b">▸ 2 replies</span>  <span class="f">open →</span>                          <span class="f">│</span>                                                
+                      <span class="f">│</span>                                                <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
+                      <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>  │ › Keep the alias for one release, then    │ 
+                      <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>  │   remove it in 0.9.<span style="color:#0d1117;background:#e6edf3"> </span>                      │ 
+                      <span class="f">│</span>   passes.                                      <span class="f">│</span>  ╰───────────────────────────────────────────╯ 
+                      <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                    <span class="f">│</span>                                                
                       <span class="f">│</span>     <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:41</span>                                <span class="f">│</span>                                                
                       <span class="f">│</span>     It passes. I fixed two broken links in     <span class="f">│</span>                                                
                       <span class="f">│</span>     guide/install.md on the same branch.       <span class="f">│</span>                                                
-                      <span class="f">│</span>                                                <span class="f">│</span>                                                
                       <span class="f">│</span>                                                <span class="f">│</span>                                                
                       <span class="f">│</span>   <span style="color:#DAAA3F">3 waiting on you · → then a to answer</span>        <span class="f">│</span>                                                
                       <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ───────────────────────╮</span> <span class="f">│</span>                                                
                       <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>        <span class="f"> │</span> <span class="f">│</span>                                                
                       <span class="f">│</span>  <span class="f">╰───────────────────────────────────────────╯</span> <span class="f">│</span>                                                
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">ctrl+end</span> <span class="f">newest</span></pre>
 <pre class="light"><span class="b"> hive</span>                 <span class="f">│</span>   textkit-2 › lead  <span class="f"></span><span class="f" style="color:#2A793B">working</span>                    <span class="f">│</span>   <span class="b">Thread</span>  <span class="f">textkit-2 › lead</span>           <span class="f">esc close</span> 
 <span class="f">──────────────────────</span><span class="f">┼</span><span class="f">────────────────────────────────────────────────</span><span class="f">┼</span><span class="f">────────────────────────────────────────────────</span>
  › <span class="b">Chats</span>              <span class="f">│</span>                                                <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                   
@@ -61,32 +61,32 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
    Modules            <span class="f">│</span>                                                <span class="f">│</span>                                                
    Settings           <span class="f">│</span>                                                <span class="f">│</span>   <span class="f">2 replies ─────────────────────────────────</span>  
                       <span class="f">│</span>                                                <span class="f">│</span>                                                
- <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">19:58</span>                                   <span class="f">│</span>   <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:23</span>                                  
- › <span class="b">lead</span>               <span class="f">│</span>   Hello?                                       <span class="f">│</span>   On it. I&#39;ll hand the split to writer and     
-   writer             <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                        <span class="f">│</span>   ask reviewer to check the public API before  
-   <span class="b">reviewer</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>                                                <span class="f">│</span>   anything merges.                             
- <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                   <span class="f">│</span>                                                
-   <span class="b">lead</span>            <span style="color:#1B7C83">●</span>  <span class="f">│</span> <span class="b">▌</span> The parser and the renderer are tangled      <span class="f">│</span>   <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:31</span>                                  
-   worker-2           <span class="f">│</span> <span class="b">▌</span> together. Can you split the parser into its  <span class="f">│</span>   Done. parser/ is its own package now, with   
-   reviewer           <span class="f">│</span> <span class="b">▌</span> own package so reviewer can check it on its  <span class="f">│</span>   14 tests passing, and reviewer approved the  
-   tribunal           <span class="f">│</span> <span class="b">▌</span> own?                                         <span class="f">│</span>   API. One question: keep the old import path  
- <span class="f">▸ </span><span class="f">website</span>            <span class="f">│</span> <span class="b">▌</span> <span class="b">▸ 2 replies</span>  <span class="f">open →</span>                          <span class="f">│</span>   as an alias for a release, or break it now?  
-                      <span class="f">│</span>                                                <span class="f">│</span>                                                
-                      <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
-                      <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>  │ › Keep the alias for one release, then    │ 
-                      <span class="f">│</span>   passes.                                      <span class="f">│</span>  │   remove it in 0.9.<span style="color:#ffffff;background:#1f2328"> </span>                      │ 
-                      <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                    <span class="f">│</span>  ╰───────────────────────────────────────────╯ 
+ <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>                                                <span class="f">│</span>   <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:23</span>                                  
+ › <span class="b">lead</span>               <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">19:58</span>                                   <span class="f">│</span>   On it. I&#39;ll hand the split to writer and     
+   writer             <span class="f">│</span>   Hello?                                       <span class="f">│</span>   ask reviewer to check the public API before  
+   <span class="b">reviewer</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                        <span class="f">│</span>   anything merges.                             
+ <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>                                                <span class="f">│</span>                                                
+   <span class="b">lead</span>            <span style="color:#1B7C83">●</span>  <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                   <span class="f">│</span>   <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:31</span>                                  
+   worker-2           <span class="f">│</span> <span class="b">▌</span> The parser and the renderer are tangled      <span class="f">│</span>   Done. parser/ is its own package now, with   
+   reviewer           <span class="f">│</span> <span class="b">▌</span> together. Can you split the parser into its  <span class="f">│</span>   14 tests passing, and reviewer approved the  
+   tribunal           <span class="f">│</span> <span class="b">▌</span> own package so reviewer can check it on its  <span class="f">│</span>   API. One question: keep the old import path  
+ <span class="f">▸ </span><span class="f">website</span>            <span class="f">│</span> <span class="b">▌</span> own?                                         <span class="f">│</span>   as an alias for a release, or break it now?  
+                      <span class="f">│</span> <span class="b">▌</span> <span class="b">▸ 2 replies</span>  <span class="f">open →</span>                          <span class="f">│</span>                                                
+                      <span class="f">│</span>                                                <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
+                      <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>  │ › Keep the alias for one release, then    │ 
+                      <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>  │   remove it in 0.9.<span style="color:#ffffff;background:#1f2328"> </span>                      │ 
+                      <span class="f">│</span>   passes.                                      <span class="f">│</span>  ╰───────────────────────────────────────────╯ 
+                      <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                    <span class="f">│</span>                                                
                       <span class="f">│</span>     <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:41</span>                                <span class="f">│</span>                                                
                       <span class="f">│</span>     It passes. I fixed two broken links in     <span class="f">│</span>                                                
                       <span class="f">│</span>     guide/install.md on the same branch.       <span class="f">│</span>                                                
-                      <span class="f">│</span>                                                <span class="f">│</span>                                                
                       <span class="f">│</span>                                                <span class="f">│</span>                                                
                       <span class="f">│</span>   <span style="color:#9A6700">3 waiting on you · → then a to answer</span>        <span class="f">│</span>                                                
                       <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ───────────────────────╮</span> <span class="f">│</span>                                                
                       <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>        <span class="f"> │</span> <span class="f">│</span>                                                
                       <span class="f">│</span>  <span class="f">╰───────────────────────────────────────────╯</span> <span class="f">│</span>                                                
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">ctrl+end</span> <span class="f">newest</span></pre>
 </div>
 <h2 id="03-new-thread">03-new-thread · 120×36</h2>
 <div class="pair">
@@ -103,13 +103,14 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
  <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>                                                                                                 
  › <span class="b">lead</span>               <span class="f">│</span>                                                                                                 
    writer             <span class="f">│</span>                                                                                                 
-   <span class="b">reviewer</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">19:58</span>                                                                                    
- <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>   Hello?                                                                                        
-   <span class="b">lead</span>            <span style="color:#38C5CF">●</span>  <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                                                         
-   worker-2           <span class="f">│</span>                                                                                                 
-   reviewer           <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:22</span>                                                                                    
-   tribunal           <span class="f">│</span>   The parser and the renderer are tangled together. Can you split the parser into its own       
- <span class="f">▸ </span><span class="f">website</span>            <span class="f">│</span>   package so reviewer can check it on its own?                                                  
+   <span class="b">reviewer</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>                                                                                                 
+ <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">19:58</span>                                                                                    
+   <span class="b">lead</span>            <span style="color:#38C5CF">●</span>  <span class="f">│</span>   Hello?                                                                                        
+   worker-2           <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                                                         
+   reviewer           <span class="f">│</span>                                                                                                 
+   tribunal           <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:22</span>                                                                                    
+ <span class="f">▸ </span><span class="f">website</span>            <span class="f">│</span>   The parser and the renderer are tangled together. Can you split the parser into its own       
+                      <span class="f">│</span>   package so reviewer can check it on its own?                                                  
                       <span class="f">│</span>   <span class="f">▸ 2 replies  last 20:31</span>                                                                       
                       <span class="f">│</span>                                                                                                 
                       <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                                                                    
@@ -118,14 +119,13 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
                       <span class="f">│</span>     <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:41</span>                                                                                 
                       <span class="f">│</span>     It passes. I fixed two broken links in guide/install.md on the same branch.                 
                       <span class="f">│</span>                                                                                                 
-                      <span class="f">│</span>                                                                                                 
                       <span class="f">│</span>   <span style="color:#DAAA3F">3 waiting on you · → then a to answer</span>                                                         
                       <span class="f">│</span>  ╭─ <span class="b">new thread · lead</span> ────────────────────────────────────────────────────────────────────────╮ 
                       <span class="f">│</span>  │ › Plan the 0.9 release: what&#39;s left, what&#39;s risky, and who&#39;s doing what. Short list,       │ 
                       <span class="f">│</span>  │   please.<span style="color:#0d1117;background:#e6edf3"> </span>                                                                                 │ 
                       <span class="f">│</span>  ╰────────────────────────────────────────────────────────────────────────────────────────────╯ 
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">─────────────────────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">start thread</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">leave box</span>   <span class="b">↑</span> <span class="f">pick a thread</span>   <span class="b">tab</span> <span class="f">switch pane</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">start thread</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">leave box</span>   <span class="b">↑</span> <span class="f">pick a thread</span>   <span class="b">ctrl+end</span> <span class="f">newest</span>   <span class="b">tab</span> <span class="f">switch pane</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 <pre class="light"><span class="b"> hive</span>                 <span class="f">│</span>   <span class="b">textkit-2 › lead</span>  <span class="f"></span><span class="f" style="color:#2A793B">working</span>                                                                     
 <span class="f">──────────────────────</span><span class="f">┼</span><span class="f">─────────────────────────────────────────────────────────────────────────────────────────────────</span>
  › <span class="b">Chats</span>              <span class="f">│</span>                                                                                                 
@@ -139,13 +139,14 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
  <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>                                                                                                 
  › <span class="b">lead</span>               <span class="f">│</span>                                                                                                 
    writer             <span class="f">│</span>                                                                                                 
-   <span class="b">reviewer</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">19:58</span>                                                                                    
- <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>   Hello?                                                                                        
-   <span class="b">lead</span>            <span style="color:#1B7C83">●</span>  <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                                                         
-   worker-2           <span class="f">│</span>                                                                                                 
-   reviewer           <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                                                                    
-   tribunal           <span class="f">│</span>   The parser and the renderer are tangled together. Can you split the parser into its own       
- <span class="f">▸ </span><span class="f">website</span>            <span class="f">│</span>   package so reviewer can check it on its own?                                                  
+   <span class="b">reviewer</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>                                                                                                 
+ <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">19:58</span>                                                                                    
+   <span class="b">lead</span>            <span style="color:#1B7C83">●</span>  <span class="f">│</span>   Hello?                                                                                        
+   worker-2           <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                                                         
+   reviewer           <span class="f">│</span>                                                                                                 
+   tribunal           <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                                                                    
+ <span class="f">▸ </span><span class="f">website</span>            <span class="f">│</span>   The parser and the renderer are tangled together. Can you split the parser into its own       
+                      <span class="f">│</span>   package so reviewer can check it on its own?                                                  
                       <span class="f">│</span>   <span class="f">▸ 2 replies  last 20:31</span>                                                                       
                       <span class="f">│</span>                                                                                                 
                       <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                                                                    
@@ -154,33 +155,32 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
                       <span class="f">│</span>     <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:41</span>                                                                                 
                       <span class="f">│</span>     It passes. I fixed two broken links in guide/install.md on the same branch.                 
                       <span class="f">│</span>                                                                                                 
-                      <span class="f">│</span>                                                                                                 
                       <span class="f">│</span>   <span style="color:#9A6700">3 waiting on you · → then a to answer</span>                                                         
                       <span class="f">│</span>  ╭─ <span class="b">new thread · lead</span> ────────────────────────────────────────────────────────────────────────╮ 
                       <span class="f">│</span>  │ › Plan the 0.9 release: what&#39;s left, what&#39;s risky, and who&#39;s doing what. Short list,       │ 
                       <span class="f">│</span>  │   please.<span style="color:#ffffff;background:#1f2328"> </span>                                                                                 │ 
                       <span class="f">│</span>  ╰────────────────────────────────────────────────────────────────────────────────────────────╯ 
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">─────────────────────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">start thread</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">leave box</span>   <span class="b">↑</span> <span class="f">pick a thread</span>   <span class="b">tab</span> <span class="f">switch pane</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">start thread</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">leave box</span>   <span class="b">↑</span> <span class="f">pick a thread</span>   <span class="b">ctrl+end</span> <span class="f">newest</span>   <span class="b">tab</span> <span class="f">switch pane</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 </div>
 <h2 id="03-new-thread-80x24">03-new-thread-80x24 · 80×24</h2>
 <div class="pair">
 <pre class="dark"><span class="b"> hive</span>             <span class="f">│</span>   <span class="b">textkit-2 › lead</span>  <span class="f"></span><span class="f" style="color:#57AB59">working</span>                                 
 <span class="f">──────────────────</span><span class="f">┼</span><span class="f">─────────────────────────────────────────────────────────────</span>
- › <span class="b">Chats</span>          <span class="f">│</span>                                                             
-   Dashboard      <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:22</span>                                                
-   Waiting     <span class="b" style="color:#DAAA3F">3</span>  <span class="f">│</span>   The parser and the renderer are tangled together. Can     
-   Feedback    <span class="b">1</span>  <span class="f">│</span>   you split the parser into its own package so reviewer     
-   Knowledge      <span class="f">│</span>   can check it on its own?                                  
-   Modules        <span class="f">│</span>   <span class="f">▸ 2 replies  last 20:31</span>                                   
-   Settings       <span class="f">│</span>                                                             
-                  <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                                
- <span class="f">▾ </span><span class="f">textkit-2</span>      <span class="f">│</span>   Also check whether the docs build still passes.           
- › <span class="b">lead</span>           <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                                 
-   writer         <span class="f">│</span>     <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:41</span>                                             
-   <span class="b">reviewer</span>    <span style="color:#38C5CF">●</span>  <span class="f">│</span>     It passes. I fixed two broken links in                  
- <span class="f">▾ </span><span class="f">hive-web</span>       <span class="f">│</span>     guide/install.md on the same branch.                    
-   <span class="b">lead</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>                                                             
+ › <span class="b">Chats</span>          <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                     
+   Dashboard      <span class="f">│</span>                                                             
+   Waiting     <span class="b" style="color:#DAAA3F">3</span>  <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:22</span>                                                
+   Feedback    <span class="b">1</span>  <span class="f">│</span>   The parser and the renderer are tangled together. Can     
+   Knowledge      <span class="f">│</span>   you split the parser into its own package so reviewer     
+   Modules        <span class="f">│</span>   can check it on its own?                                  
+   Settings       <span class="f">│</span>   <span class="f">▸ 2 replies  last 20:31</span>                                   
+                  <span class="f">│</span>                                                             
+ <span class="f">▾ </span><span class="f">textkit-2</span>      <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                                
+ › <span class="b">lead</span>           <span class="f">│</span>   Also check whether the docs build still passes.           
+   writer         <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                                 
+   <span class="b">reviewer</span>    <span style="color:#38C5CF">●</span>  <span class="f">│</span>     <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:41</span>                                             
+ <span class="f">▾ </span><span class="f">hive-web</span>       <span class="f">│</span>     It passes. I fixed two broken links in                  
+   <span class="b">lead</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>     guide/install.md on the same branch.                    
    worker-2       <span class="f">│</span>                                                             
    reviewer       <span class="f">│</span>   <span style="color:#DAAA3F">3 waiting on you · → then a to answer</span>                     
    tribunal       <span class="f">│</span>  ╭─ <span class="b">new thread · lead</span> ────────────────────────────────────╮ 
@@ -191,20 +191,20 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
  <span class="b">enter</span> <span class="f">start thread</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">leave box</span>   <span class="b">↑</span> <span class="f">pick a thread</span></pre>
 <pre class="light"><span class="b"> hive</span>             <span class="f">│</span>   <span class="b">textkit-2 › lead</span>  <span class="f"></span><span class="f" style="color:#2A793B">working</span>                                 
 <span class="f">──────────────────</span><span class="f">┼</span><span class="f">─────────────────────────────────────────────────────────────</span>
- › <span class="b">Chats</span>          <span class="f">│</span>                                                             
-   Dashboard      <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                                
-   Waiting     <span class="b" style="color:#9A6700">3</span>  <span class="f">│</span>   The parser and the renderer are tangled together. Can     
-   Feedback    <span class="b">1</span>  <span class="f">│</span>   you split the parser into its own package so reviewer     
-   Knowledge      <span class="f">│</span>   can check it on its own?                                  
-   Modules        <span class="f">│</span>   <span class="f">▸ 2 replies  last 20:31</span>                                   
-   Settings       <span class="f">│</span>                                                             
-                  <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                                
- <span class="f">▾ </span><span class="f">textkit-2</span>      <span class="f">│</span>   Also check whether the docs build still passes.           
- › <span class="b">lead</span>           <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                                 
-   writer         <span class="f">│</span>     <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:41</span>                                             
-   <span class="b">reviewer</span>    <span style="color:#1B7C83">●</span>  <span class="f">│</span>     It passes. I fixed two broken links in                  
- <span class="f">▾ </span><span class="f">hive-web</span>       <span class="f">│</span>     guide/install.md on the same branch.                    
-   <span class="b">lead</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>                                                             
+ › <span class="b">Chats</span>          <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                     
+   Dashboard      <span class="f">│</span>                                                             
+   Waiting     <span class="b" style="color:#9A6700">3</span>  <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                                
+   Feedback    <span class="b">1</span>  <span class="f">│</span>   The parser and the renderer are tangled together. Can     
+   Knowledge      <span class="f">│</span>   you split the parser into its own package so reviewer     
+   Modules        <span class="f">│</span>   can check it on its own?                                  
+   Settings       <span class="f">│</span>   <span class="f">▸ 2 replies  last 20:31</span>                                   
+                  <span class="f">│</span>                                                             
+ <span class="f">▾ </span><span class="f">textkit-2</span>      <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                                
+ › <span class="b">lead</span>           <span class="f">│</span>   Also check whether the docs build still passes.           
+   writer         <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                                 
+   <span class="b">reviewer</span>    <span style="color:#1B7C83">●</span>  <span class="f">│</span>     <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:41</span>                                             
+ <span class="f">▾ </span><span class="f">hive-web</span>       <span class="f">│</span>     It passes. I fixed two broken links in                  
+   <span class="b">lead</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>     guide/install.md on the same branch.                    
    worker-2       <span class="f">│</span>                                                             
    reviewer       <span class="f">│</span>   <span style="color:#9A6700">3 waiting on you · → then a to answer</span>                     
    tribunal       <span class="f">│</span>  ╭─ <span class="b">new thread · lead</span> ────────────────────────────────────╮ 
@@ -226,32 +226,32 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
    Modules            <span class="f">│</span>                                                <span class="f">│</span>                                                
    Settings           <span class="f">│</span>                                                <span class="f">│</span>   <span class="f">2 replies ─────────────────────────────────</span>  
                       <span class="f">│</span>                                                <span class="f">│</span>                                                
- <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">19:58</span>                                   <span class="f">│</span>   <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:23</span>                                  
- › <span class="b">lead</span>               <span class="f">│</span>   Hello?                                       <span class="f">│</span>   On it. I&#39;ll hand the split to writer and     
-   writer             <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                        <span class="f">│</span>   ask reviewer to check the public API before  
-   <span class="b">reviewer</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>                                                <span class="f">│</span>   anything merges.                             
- <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:22</span>                                   <span class="f">│</span>                                                
-   <span class="b">lead</span>            <span style="color:#38C5CF">●</span>  <span class="f">│</span> <span class="b">▌</span> The parser and the renderer are tangled      <span class="f">│</span>   <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:31</span>                                  
-   worker-2           <span class="f">│</span> <span class="b">▌</span> together. Can you split the parser into its  <span class="f">│</span>   Done. parser/ is its own package now, with   
-   reviewer           <span class="f">│</span> <span class="b">▌</span> own package so reviewer can check it on its  <span class="f">│</span>   14 tests passing, and reviewer approved the  
-   tribunal           <span class="f">│</span> <span class="b">▌</span> own?                                         <span class="f">│</span>   API. One question: keep the old import path  
- <span class="f">▸ </span><span class="f">website</span>            <span class="f">│</span> <span class="b">▌</span> <span class="b">▸ 2 replies</span>  <span class="f">open →</span>                          <span class="f">│</span>   as an alias for a release, or break it now?  
-                      <span class="f">│</span>                                                <span class="f">│</span>                                                
-                      <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
-                      <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>  │ › Keep the alias for one release, then    │ 
-                      <span class="f">│</span>   passes.                                      <span class="f">│</span>  │   remove it in 0.9.                       │ 
-                      <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                    <span class="f">│</span>  │                                           │ 
-                      <span class="f">│</span>     <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:41</span>                                <span class="f">│</span>  │   Before you merge:                       │ 
-                      <span class="f">│</span>     It passes. I fixed two broken links in     <span class="f">│</span>  │   - add a deprecation notice to the alias │ 
-                      <span class="f">│</span>     guide/install.md on the same branch.       <span class="f">│</span>  │   - note it in CHANGELOG under Breaking   │ 
-                      <span class="f">│</span>                                                <span class="f">│</span>  │   - ask reviewer to check the docs        │ 
+ <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>                                                <span class="f">│</span>   <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:23</span>                                  
+ › <span class="b">lead</span>               <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">19:58</span>                                   <span class="f">│</span>   On it. I&#39;ll hand the split to writer and     
+   writer             <span class="f">│</span>   Hello?                                       <span class="f">│</span>   ask reviewer to check the public API before  
+   <span class="b">reviewer</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                        <span class="f">│</span>   anything merges.                             
+ <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>                                                <span class="f">│</span>                                                
+   <span class="b">lead</span>            <span style="color:#38C5CF">●</span>  <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:22</span>                                   <span class="f">│</span>   <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:31</span>                                  
+   worker-2           <span class="f">│</span> <span class="b">▌</span> The parser and the renderer are tangled      <span class="f">│</span>   Done. parser/ is its own package now, with   
+   reviewer           <span class="f">│</span> <span class="b">▌</span> together. Can you split the parser into its  <span class="f">│</span>   14 tests passing, and reviewer approved the  
+   tribunal           <span class="f">│</span> <span class="b">▌</span> own package so reviewer can check it on its  <span class="f">│</span>   API. One question: keep the old import path  
+ <span class="f">▸ </span><span class="f">website</span>            <span class="f">│</span> <span class="b">▌</span> own?                                         <span class="f">│</span>   as an alias for a release, or break it now?  
+                      <span class="f">│</span> <span class="b">▌</span> <span class="b">▸ 2 replies</span>  <span class="f">open →</span>                          <span class="f">│</span>                                                
+                      <span class="f">│</span>                                                <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
+                      <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>  │ › Keep the alias for one release, then    │ 
+                      <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>  │   remove it in 0.9.                       │ 
+                      <span class="f">│</span>   passes.                                      <span class="f">│</span>  │                                           │ 
+                      <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                    <span class="f">│</span>  │   Before you merge:                       │ 
+                      <span class="f">│</span>     <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:41</span>                                <span class="f">│</span>  │   - add a deprecation notice to the alias │ 
+                      <span class="f">│</span>     It passes. I fixed two broken links in     <span class="f">│</span>  │   - note it in CHANGELOG under Breaking   │ 
+                      <span class="f">│</span>     guide/install.md on the same branch.       <span class="f">│</span>  │   - ask reviewer to check the docs        │ 
                       <span class="f">│</span>                                                <span class="f">│</span>  │   examples import from the new path<span style="color:#0d1117;background:#e6edf3"> </span>      │ 
                       <span class="f">│</span>   <span style="color:#DAAA3F">3 waiting on you · → then a to answer</span>        <span class="f">│</span>  ╰───────────────────────────────────────────╯ 
                       <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ───────────────────────╮</span> <span class="f">│</span>                                                
                       <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>        <span class="f"> │</span> <span class="f">│</span>                                                
                       <span class="f">│</span>  <span class="f">╰───────────────────────────────────────────╯</span> <span class="f">│</span>                                                
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">ctrl+end</span> <span class="f">newest</span></pre>
 <pre class="light"><span class="b"> hive</span>                 <span class="f">│</span>   textkit-2 › lead  <span class="f"></span><span class="f" style="color:#2A793B">working</span>                    <span class="f">│</span>   <span class="b">Thread</span>  <span class="f">textkit-2 › lead</span>           <span class="f">esc close</span> 
 <span class="f">──────────────────────</span><span class="f">┼</span><span class="f">────────────────────────────────────────────────</span><span class="f">┼</span><span class="f">────────────────────────────────────────────────</span>
  › <span class="b">Chats</span>              <span class="f">│</span>                                                <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                   
@@ -262,32 +262,32 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
    Modules            <span class="f">│</span>                                                <span class="f">│</span>                                                
    Settings           <span class="f">│</span>                                                <span class="f">│</span>   <span class="f">2 replies ─────────────────────────────────</span>  
                       <span class="f">│</span>                                                <span class="f">│</span>                                                
- <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">19:58</span>                                   <span class="f">│</span>   <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:23</span>                                  
- › <span class="b">lead</span>               <span class="f">│</span>   Hello?                                       <span class="f">│</span>   On it. I&#39;ll hand the split to writer and     
-   writer             <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                        <span class="f">│</span>   ask reviewer to check the public API before  
-   <span class="b">reviewer</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>                                                <span class="f">│</span>   anything merges.                             
- <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                   <span class="f">│</span>                                                
-   <span class="b">lead</span>            <span style="color:#1B7C83">●</span>  <span class="f">│</span> <span class="b">▌</span> The parser and the renderer are tangled      <span class="f">│</span>   <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:31</span>                                  
-   worker-2           <span class="f">│</span> <span class="b">▌</span> together. Can you split the parser into its  <span class="f">│</span>   Done. parser/ is its own package now, with   
-   reviewer           <span class="f">│</span> <span class="b">▌</span> own package so reviewer can check it on its  <span class="f">│</span>   14 tests passing, and reviewer approved the  
-   tribunal           <span class="f">│</span> <span class="b">▌</span> own?                                         <span class="f">│</span>   API. One question: keep the old import path  
- <span class="f">▸ </span><span class="f">website</span>            <span class="f">│</span> <span class="b">▌</span> <span class="b">▸ 2 replies</span>  <span class="f">open →</span>                          <span class="f">│</span>   as an alias for a release, or break it now?  
-                      <span class="f">│</span>                                                <span class="f">│</span>                                                
-                      <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
-                      <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>  │ › Keep the alias for one release, then    │ 
-                      <span class="f">│</span>   passes.                                      <span class="f">│</span>  │   remove it in 0.9.                       │ 
-                      <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                    <span class="f">│</span>  │                                           │ 
-                      <span class="f">│</span>     <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:41</span>                                <span class="f">│</span>  │   Before you merge:                       │ 
-                      <span class="f">│</span>     It passes. I fixed two broken links in     <span class="f">│</span>  │   - add a deprecation notice to the alias │ 
-                      <span class="f">│</span>     guide/install.md on the same branch.       <span class="f">│</span>  │   - note it in CHANGELOG under Breaking   │ 
-                      <span class="f">│</span>                                                <span class="f">│</span>  │   - ask reviewer to check the docs        │ 
+ <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>                                                <span class="f">│</span>   <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:23</span>                                  
+ › <span class="b">lead</span>               <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">19:58</span>                                   <span class="f">│</span>   On it. I&#39;ll hand the split to writer and     
+   writer             <span class="f">│</span>   Hello?                                       <span class="f">│</span>   ask reviewer to check the public API before  
+   <span class="b">reviewer</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                        <span class="f">│</span>   anything merges.                             
+ <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>                                                <span class="f">│</span>                                                
+   <span class="b">lead</span>            <span style="color:#1B7C83">●</span>  <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                   <span class="f">│</span>   <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:31</span>                                  
+   worker-2           <span class="f">│</span> <span class="b">▌</span> The parser and the renderer are tangled      <span class="f">│</span>   Done. parser/ is its own package now, with   
+   reviewer           <span class="f">│</span> <span class="b">▌</span> together. Can you split the parser into its  <span class="f">│</span>   14 tests passing, and reviewer approved the  
+   tribunal           <span class="f">│</span> <span class="b">▌</span> own package so reviewer can check it on its  <span class="f">│</span>   API. One question: keep the old import path  
+ <span class="f">▸ </span><span class="f">website</span>            <span class="f">│</span> <span class="b">▌</span> own?                                         <span class="f">│</span>   as an alias for a release, or break it now?  
+                      <span class="f">│</span> <span class="b">▌</span> <span class="b">▸ 2 replies</span>  <span class="f">open →</span>                          <span class="f">│</span>                                                
+                      <span class="f">│</span>                                                <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
+                      <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>  │ › Keep the alias for one release, then    │ 
+                      <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>  │   remove it in 0.9.                       │ 
+                      <span class="f">│</span>   passes.                                      <span class="f">│</span>  │                                           │ 
+                      <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                    <span class="f">│</span>  │   Before you merge:                       │ 
+                      <span class="f">│</span>     <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:41</span>                                <span class="f">│</span>  │   - add a deprecation notice to the alias │ 
+                      <span class="f">│</span>     It passes. I fixed two broken links in     <span class="f">│</span>  │   - note it in CHANGELOG under Breaking   │ 
+                      <span class="f">│</span>     guide/install.md on the same branch.       <span class="f">│</span>  │   - ask reviewer to check the docs        │ 
                       <span class="f">│</span>                                                <span class="f">│</span>  │   examples import from the new path<span style="color:#ffffff;background:#1f2328"> </span>      │ 
                       <span class="f">│</span>   <span style="color:#9A6700">3 waiting on you · → then a to answer</span>        <span class="f">│</span>  ╰───────────────────────────────────────────╯ 
                       <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ───────────────────────╮</span> <span class="f">│</span>                                                
                       <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>        <span class="f"> │</span> <span class="f">│</span>                                                
                       <span class="f">│</span>  <span class="f">╰───────────────────────────────────────────╯</span> <span class="f">│</span>                                                
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">ctrl+end</span> <span class="f">newest</span></pre>
 </div>
 <h2 id="02a-long-reply-80x24">02a-long-reply-80x24 · 80×24</h2>
 <div class="pair">
@@ -314,7 +314,7 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
   │   - ask reviewer to check the docs examples import from the new path<span style="color:#0d1117;background:#e6edf3"> </span>     │ 
   ╰───────────────────────────────────────────────────────────────────────────╯ 
 <span class="f">────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">ctrl+end</span> <span class="f">newest</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 <pre class="light"> ‹ textkit-2 › lead  › thread                                          <span class="f">esc back</span> 
 <span class="f">────────────────────────────────────────────────────────────────────────────────</span>
                                                                                 
@@ -338,7 +338,7 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
   │   - ask reviewer to check the docs examples import from the new path<span style="color:#ffffff;background:#1f2328"> </span>     │ 
   ╰───────────────────────────────────────────────────────────────────────────╯ 
 <span class="f">────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">ctrl+end</span> <span class="f">newest</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 </div>
 <h2 id="02b-sending">02b-sending · 120×18</h2>
 <div class="pair">
@@ -353,13 +353,13 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
    Settings           <span class="f">│</span>                                                <span class="f">│</span>                                                
                       <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>   <span class="b f">you</span>  <span class="f">◌ sending…</span>                              
  <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>   Keep the alias for one release, then remove  
- › <span class="b">lead</span>               <span class="f">│</span>   passes.                                      <span class="f">│</span>   it in 0.9.                                   
+ › <span class="b">lead</span>               <span class="f">│</span>   <span class="f">↓ newer below</span>                                <span class="f">│</span>   it in 0.9.                                   
    writer             <span class="f">│</span>   <span style="color:#DAAA3F">3 waiting on you · → then a to answer</span>        <span class="f">│</span>                                                
    <span class="b">reviewer</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ───────────────────────╮</span> <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
  <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>        <span class="f"> │</span> <span class="f">│</span>  │ › <span style="color:#0d1117;background:#e6edf3">R</span><span class="f">eply to this thread…</span>                   │ 
    <span class="b">lead</span>            <span style="color:#38C5CF">●</span>  <span class="f">│</span>  <span class="f">╰───────────────────────────────────────────╯</span> <span class="f">│</span>  ╰───────────────────────────────────────────╯ 
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 <pre class="light"><span class="b"> hive</span>                 <span class="f">│</span>   textkit-2 › lead  <span class="f"></span><span class="f" style="color:#2A793B">working</span>                    <span class="f">│</span>   <span class="b">Thread</span>  <span class="f">textkit-2 › lead</span>           <span class="f">esc close</span> 
 <span class="f">──────────────────────</span><span class="f">┼</span><span class="f">────────────────────────────────────────────────</span><span class="f">┼</span><span class="f">────────────────────────────────────────────────</span>
  › <span class="b">Chats</span>              <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                   <span class="f">│</span>                                                
@@ -371,13 +371,13 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
    Settings           <span class="f">│</span>                                                <span class="f">│</span>                                                
                       <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>   <span class="b f">you</span>  <span class="f">◌ sending…</span>                              
  <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>   Keep the alias for one release, then remove  
- › <span class="b">lead</span>               <span class="f">│</span>   passes.                                      <span class="f">│</span>   it in 0.9.                                   
+ › <span class="b">lead</span>               <span class="f">│</span>   <span class="f">↓ newer below</span>                                <span class="f">│</span>   it in 0.9.                                   
    writer             <span class="f">│</span>   <span style="color:#9A6700">3 waiting on you · → then a to answer</span>        <span class="f">│</span>                                                
    <span class="b">reviewer</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ───────────────────────╮</span> <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
  <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>        <span class="f"> │</span> <span class="f">│</span>  │ › <span style="color:#ffffff;background:#1f2328">R</span><span class="f">eply to this thread…</span>                   │ 
    <span class="b">lead</span>            <span style="color:#1B7C83">●</span>  <span class="f">│</span>  <span class="f">╰───────────────────────────────────────────╯</span> <span class="f">│</span>  ╰───────────────────────────────────────────╯ 
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 </div>
 <h2 id="02b-sending-80x24">02b-sending-80x24 · 80×24</h2>
 <div class="pair">
@@ -404,7 +404,7 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
   │ › <span style="color:#0d1117;background:#e6edf3">R</span><span class="f">eply to this thread…</span>                                                   │ 
   ╰───────────────────────────────────────────────────────────────────────────╯ 
 <span class="f">────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 <pre class="light"> ‹ textkit-2 › lead  › thread                                          <span class="f">esc back</span> 
 <span class="f">────────────────────────────────────────────────────────────────────────────────</span>
    The parser and the renderer are tangled together. Can you split the parser   
@@ -428,7 +428,7 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
   │ › <span style="color:#ffffff;background:#1f2328">R</span><span class="f">eply to this thread…</span>                                                   │ 
   ╰───────────────────────────────────────────────────────────────────────────╯ 
 <span class="f">────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 </div>
 <h2 id="02c-sent">02c-sent · 120×18</h2>
 <div class="pair">
@@ -443,13 +443,13 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
    Settings           <span class="f">│</span>                                                <span class="f">│</span>                                                
                       <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:44</span>                                   
  <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>   Keep the alias for one release, then remove  
- › <span class="b">lead</span>               <span class="f">│</span>   passes.                                      <span class="f">│</span>   it in 0.9.                                   
+ › <span class="b">lead</span>               <span class="f">│</span>   <span class="f">↓ newer below</span>                                <span class="f">│</span>   it in 0.9.                                   
    writer             <span class="f">│</span>   <span style="color:#DAAA3F">3 waiting on you · → then a to answer</span>        <span class="f">│</span>                                                
    <span class="b">reviewer</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ───────────────────────╮</span> <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
  <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>        <span class="f"> │</span> <span class="f">│</span>  │ › <span style="color:#0d1117;background:#e6edf3">R</span><span class="f">eply to this thread…</span>                   │ 
    <span class="b">lead</span>            <span style="color:#38C5CF">●</span>  <span class="f">│</span>  <span class="f">╰───────────────────────────────────────────╯</span> <span class="f">│</span>  ╰───────────────────────────────────────────╯ 
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 <pre class="light"><span class="b"> hive</span>                 <span class="f">│</span>   textkit-2 › lead  <span class="f"></span><span class="f" style="color:#2A793B">working</span>                    <span class="f">│</span>   <span class="b">Thread</span>  <span class="f">textkit-2 › lead</span>           <span class="f">esc close</span> 
 <span class="f">──────────────────────</span><span class="f">┼</span><span class="f">────────────────────────────────────────────────</span><span class="f">┼</span><span class="f">────────────────────────────────────────────────</span>
  › <span class="b">Chats</span>              <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                   <span class="f">│</span>                                                
@@ -461,13 +461,13 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
    Settings           <span class="f">│</span>                                                <span class="f">│</span>                                                
                       <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:44</span>                                   
  <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>   Keep the alias for one release, then remove  
- › <span class="b">lead</span>               <span class="f">│</span>   passes.                                      <span class="f">│</span>   it in 0.9.                                   
+ › <span class="b">lead</span>               <span class="f">│</span>   <span class="f">↓ newer below</span>                                <span class="f">│</span>   it in 0.9.                                   
    writer             <span class="f">│</span>   <span style="color:#9A6700">3 waiting on you · → then a to answer</span>        <span class="f">│</span>                                                
    <span class="b">reviewer</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ───────────────────────╮</span> <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
  <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>        <span class="f"> │</span> <span class="f">│</span>  │ › <span style="color:#ffffff;background:#1f2328">R</span><span class="f">eply to this thread…</span>                   │ 
    <span class="b">lead</span>            <span style="color:#1B7C83">●</span>  <span class="f">│</span>  <span class="f">╰───────────────────────────────────────────╯</span> <span class="f">│</span>  ╰───────────────────────────────────────────╯ 
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span><span class="f">┴</span><span class="f">────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">close thread</span>   <span class="b">← tab</span> <span class="f">to the channel</span>   <span class="b">pgup pgdn</span> <span class="f">scroll</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 </div>
 <h2 id="02c-sent-80x24">02c-sent-80x24 · 80×24</h2>
 <div class="pair">
@@ -494,7 +494,7 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
   │ › <span style="color:#0d1117;background:#e6edf3">R</span><span class="f">eply to this thread…</span>                                                   │ 
   ╰───────────────────────────────────────────────────────────────────────────╯ 
 <span class="f">────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 <pre class="light"> ‹ textkit-2 › lead  › thread                                          <span class="f">esc back</span> 
 <span class="f">────────────────────────────────────────────────────────────────────────────────</span>
    The parser and the renderer are tangled together. Can you split the parser   
@@ -518,7 +518,7 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
   │ › <span style="color:#ffffff;background:#1f2328">R</span><span class="f">eply to this thread…</span>                                                   │ 
   ╰───────────────────────────────────────────────────────────────────────────╯ 
 <span class="f">────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 </div>
 <h2 id="02d-failed">02d-failed · 120×18</h2>
 <div class="pair">
@@ -533,7 +533,7 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
    Settings           <span class="f">│</span>                                                <span class="f">│</span>   14 tests passing, and reviewer approved the  
                       <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>   API. One question: keep the old import path  
  <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>   as an alias for a release, or break it now?  
- › <span class="b">lead</span>               <span class="f">│</span>   passes.                                      <span class="f">│</span>                                                
+ › <span class="b">lead</span>               <span class="f">│</span>   <span class="f">↓ newer below</span>                                <span class="f">│</span>                                                
    writer             <span class="f">│</span>   <span style="color:#DAAA3F">3 waiting on you · → then a to answer</span>        <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
    <span class="b">reviewer</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ───────────────────────╮</span> <span class="f">│</span>  │ › Keep the alias for one release, then    │ 
  <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>        <span class="f"> │</span> <span class="f">│</span>  │   remove it in 0.9.<span style="color:#0d1117;background:#e6edf3"> </span>                      │ 
@@ -551,7 +551,7 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
    Settings           <span class="f">│</span>                                                <span class="f">│</span>   14 tests passing, and reviewer approved the  
                       <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                   <span class="f">│</span>   API. One question: keep the old import path  
  <span class="f">▾ </span><span class="f">textkit-2</span>          <span class="f">│</span>   Also check whether the docs build still      <span class="f">│</span>   as an alias for a release, or break it now?  
- › <span class="b">lead</span>               <span class="f">│</span>   passes.                                      <span class="f">│</span>                                                
+ › <span class="b">lead</span>               <span class="f">│</span>   <span class="f">↓ newer below</span>                                <span class="f">│</span>                                                
    writer             <span class="f">│</span>   <span style="color:#9A6700">3 waiting on you · → then a to answer</span>        <span class="f">│</span>  ╭─ <span class="b">reply · lead</span> ────────────────────────────╮ 
    <span class="b">reviewer</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ───────────────────────╮</span> <span class="f">│</span>  │ › Keep the alias for one release, then    │ 
  <span class="f">▾ </span><span class="f">hive-web</span>           <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>        <span class="f"> │</span> <span class="f">│</span>  │   remove it in 0.9.<span style="color:#ffffff;background:#1f2328"> </span>                      │ 
@@ -614,52 +614,52 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
 <div class="pair">
 <pre class="dark"><span class="b"> hive</span>             <span class="f">│</span>   <span class="b">textkit-2 › lead</span>  <span class="f"></span><span class="f" style="color:#57AB59">working</span>                                 
 <span class="f">──────────────────</span><span class="f">┼</span><span class="f">─────────────────────────────────────────────────────────────</span>
- › <span class="b">Chats</span>          <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                     
-   Dashboard      <span class="f">│</span>                                                             
-   Waiting     <span class="b" style="color:#DAAA3F">3</span>  <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:22</span>                                                
-   Feedback    <span class="b">1</span>  <span class="f">│</span> <span class="b">▌</span> The parser and the renderer are tangled together. Can     
-   Knowledge      <span class="f">│</span> <span class="b">▌</span> you split the parser into its own package so reviewer     
-   Modules        <span class="f">│</span> <span class="b">▌</span> can check it on its own?                                  
-   Settings       <span class="f">│</span> <span class="b">▌</span> <span class="b">▸ 2 replies</span>  <span class="f">open →</span>                                       
-                  <span class="f">│</span>                                                             
- <span class="f">▾ </span><span class="f">textkit-2</span>      <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                                
- › <span class="b">lead</span>           <span class="f">│</span>   Also check whether the docs build still passes.           
-   writer         <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                                 
-   <span class="b">reviewer</span>    <span style="color:#38C5CF">●</span>  <span class="f">│</span>     <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:41</span>                                             
- <span class="f">▾ </span><span class="f">hive-web</span>       <span class="f">│</span>     It passes. I fixed two broken links in                  
-   <span class="b">lead</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>     guide/install.md on the same branch.                    
-   worker-2       <span class="f">│</span>                                                             
+ › <span class="b">Chats</span>          <span class="f">│</span>   Hello?                                                    
+   Dashboard      <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                     
+   Waiting     <span class="b" style="color:#DAAA3F">3</span>  <span class="f">│</span>                                                             
+   Feedback    <span class="b">1</span>  <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:22</span>                                                
+   Knowledge      <span class="f">│</span> <span class="b">▌</span> The parser and the renderer are tangled together. Can     
+   Modules        <span class="f">│</span> <span class="b">▌</span> you split the parser into its own package so reviewer     
+   Settings       <span class="f">│</span> <span class="b">▌</span> can check it on its own?                                  
+                  <span class="f">│</span> <span class="b">▌</span> <span class="b">▸ 2 replies</span>  <span class="f">open →</span>                                       
+ <span class="f">▾ </span><span class="f">textkit-2</span>      <span class="f">│</span>                                                             
+ › <span class="b">lead</span>           <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                                
+   writer         <span class="f">│</span>   Also check whether the docs build still passes.           
+   <span class="b">reviewer</span>    <span style="color:#38C5CF">●</span>  <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                                 
+ <span class="f">▾ </span><span class="f">hive-web</span>       <span class="f">│</span>     <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:41</span>                                             
+   <span class="b">lead</span>        <span style="color:#38C5CF">●</span>  <span class="f">│</span>     It passes. I fixed two broken links in                  
+   worker-2       <span class="f">│</span>     guide/install.md on the same branch.                    
    reviewer       <span class="f">│</span>                                                             
    tribunal       <span class="f">│</span>   <span style="color:#DAAA3F">3 waiting on you · a to answer</span>                            
  <span class="f">▸ </span><span class="f">website</span>        <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ────────────────────────────────────╮</span> 
                   <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>                     <span class="f"> │</span> 
                   <span class="f">│</span>  <span class="f">╰────────────────────────────────────────────────────────╯</span> 
 <span class="f">──────────────────</span><span class="f">┴</span><span class="f">─────────────────────────────────────────────────────────────</span>
- <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
+ <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
 <pre class="light"><span class="b"> hive</span>             <span class="f">│</span>   <span class="b">textkit-2 › lead</span>  <span class="f"></span><span class="f" style="color:#2A793B">working</span>                                 
 <span class="f">──────────────────</span><span class="f">┼</span><span class="f">─────────────────────────────────────────────────────────────</span>
- › <span class="b">Chats</span>          <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                     
-   Dashboard      <span class="f">│</span>                                                             
-   Waiting     <span class="b" style="color:#9A6700">3</span>  <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                                
-   Feedback    <span class="b">1</span>  <span class="f">│</span> <span class="b">▌</span> The parser and the renderer are tangled together. Can     
-   Knowledge      <span class="f">│</span> <span class="b">▌</span> you split the parser into its own package so reviewer     
-   Modules        <span class="f">│</span> <span class="b">▌</span> can check it on its own?                                  
-   Settings       <span class="f">│</span> <span class="b">▌</span> <span class="b">▸ 2 replies</span>  <span class="f">open →</span>                                       
-                  <span class="f">│</span>                                                             
- <span class="f">▾ </span><span class="f">textkit-2</span>      <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                                
- › <span class="b">lead</span>           <span class="f">│</span>   Also check whether the docs build still passes.           
-   writer         <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                                 
-   <span class="b">reviewer</span>    <span style="color:#1B7C83">●</span>  <span class="f">│</span>     <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:41</span>                                             
- <span class="f">▾ </span><span class="f">hive-web</span>       <span class="f">│</span>     It passes. I fixed two broken links in                  
-   <span class="b">lead</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>     guide/install.md on the same branch.                    
-   worker-2       <span class="f">│</span>                                                             
+ › <span class="b">Chats</span>          <span class="f">│</span>   Hello?                                                    
+   Dashboard      <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                     
+   Waiting     <span class="b" style="color:#9A6700">3</span>  <span class="f">│</span>                                                             
+   Feedback    <span class="b">1</span>  <span class="f">│</span> <span class="b">▌</span> <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                                
+   Knowledge      <span class="f">│</span> <span class="b">▌</span> The parser and the renderer are tangled together. Can     
+   Modules        <span class="f">│</span> <span class="b">▌</span> you split the parser into its own package so reviewer     
+   Settings       <span class="f">│</span> <span class="b">▌</span> can check it on its own?                                  
+                  <span class="f">│</span> <span class="b">▌</span> <span class="b">▸ 2 replies</span>  <span class="f">open →</span>                                       
+ <span class="f">▾ </span><span class="f">textkit-2</span>      <span class="f">│</span>                                                             
+ › <span class="b">lead</span>           <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                                
+   writer         <span class="f">│</span>   Also check whether the docs build still passes.           
+   <span class="b">reviewer</span>    <span style="color:#1B7C83">●</span>  <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                                 
+ <span class="f">▾ </span><span class="f">hive-web</span>       <span class="f">│</span>     <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:41</span>                                             
+   <span class="b">lead</span>        <span style="color:#1B7C83">●</span>  <span class="f">│</span>     It passes. I fixed two broken links in                  
+   worker-2       <span class="f">│</span>     guide/install.md on the same branch.                    
    reviewer       <span class="f">│</span>                                                             
    tribunal       <span class="f">│</span>   <span style="color:#9A6700">3 waiting on you · a to answer</span>                            
  <span class="f">▸ </span><span class="f">website</span>        <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ────────────────────────────────────╮</span> 
                   <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>                     <span class="f"> │</span> 
                   <span class="f">│</span>  <span class="f">╰────────────────────────────────────────────────────────╯</span> 
 <span class="f">──────────────────</span><span class="f">┴</span><span class="f">─────────────────────────────────────────────────────────────</span>
- <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
+ <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
 </div>
 <h2 id="05a-dashboard-all">05a-dashboard-all · 120×36</h2>
 <div class="pair">
@@ -824,7 +824,7 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
                       <span class="f">│</span>     writer  <span style="color:#57AB59">running</span>  claude:  turn 0  $0.00  0k ctx  <span class="f"></span>  <span class="f">-</span>                                        
                       <span class="f">│</span>     reviewer  <span style="color:#57AB59">running</span>  claude:  turn 0  $0.00  0k ctx  <span class="f"></span>  <span class="f">-</span>                                      
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">─────────────────────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">↑↓</span> <span class="f">move</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">←</span> <span class="f">collapse</span>   <span class="b">s</span> <span class="f">feed</span>   <span class="b">tab</span> <span class="f">sidebar</span></pre>
+ <span class="b">↑↓</span> <span class="f">move</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">←</span> <span class="f">collapse</span>   <span class="b">e E</span> <span class="f">a level</span>   <span class="b">s</span> <span class="f">feed</span>   <span class="b">tab</span> <span class="f">sidebar</span></pre>
 <pre class="light"><span class="b"> hive</span>                 <span class="f">│</span>   <span class="b">Dashboard › status</span>                                                                            
 <span class="f">──────────────────────</span><span class="f">┼</span><span class="f">─────────────────────────────────────────────────────────────────────────────────────────────────</span>
    Chats              <span class="f">│</span> <span style="color:#ffffff;background:#1f2328">▾ spend  today $4.50 · month $61.20</span>                                                             
@@ -860,7 +860,7 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
                       <span class="f">│</span>     writer  <span style="color:#2A793B">running</span>  claude:  turn 0  $0.00  0k ctx  <span class="f"></span>  <span class="f">-</span>                                        
                       <span class="f">│</span>     reviewer  <span style="color:#2A793B">running</span>  claude:  turn 0  $0.00  0k ctx  <span class="f"></span>  <span class="f">-</span>                                      
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">─────────────────────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">↑↓</span> <span class="f">move</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">←</span> <span class="f">collapse</span>   <span class="b">s</span> <span class="f">feed</span>   <span class="b">tab</span> <span class="f">sidebar</span></pre>
+ <span class="b">↑↓</span> <span class="f">move</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">←</span> <span class="f">collapse</span>   <span class="b">e E</span> <span class="f">a level</span>   <span class="b">s</span> <span class="f">feed</span>   <span class="b">tab</span> <span class="f">sidebar</span></pre>
 </div>
 <h2 id="06a-waiting-80x24">06a-waiting-80x24 · 80×24</h2>
 <div class="pair">
@@ -1466,7 +1466,7 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
                                                                                 
                                                                                 
 <span class="f">────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">ctrl+end</span> <span class="f">newest</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 <pre class="light"> ‹ textkit-2 › lead  › thread                                          <span class="f">esc back</span> 
 <span class="f">────────────────────────────────────────────────────────────────────────────────</span>
    <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                                                   
@@ -1490,58 +1490,58 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
                                                                                 
                                                                                 
 <span class="f">────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
+ <span class="b">enter</span> <span class="f">send</span>   <span class="b">ctrl+j</span> <span class="f">newline</span>   <span class="b">esc</span> <span class="f">back to chat</span>   <span class="b">ctrl+end</span> <span class="f">newest</span>   <span class="b">alt+v</span> <span class="f">image</span></pre>
 </div>
 <h2 id="08-ended-agents-80x24">08-ended-agents-80x24 · 80×24</h2>
 <div class="pair">
 <pre class="dark"><span class="b"> hive</span>             <span class="f">│</span>   <span class="b">textkit-2 › lead</span>  <span class="f"></span><span class="f" style="color:#57AB59">working</span>                                 
 <span class="f">──────────────────</span><span class="f">┼</span><span class="f">─────────────────────────────────────────────────────────────</span>
- › <span class="b">Chats</span>          <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                     
-   Dashboard      <span class="f">│</span>                                                             
-   Waiting     <span class="b" style="color:#DAAA3F">3</span>  <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:22</span>                                                
-   Feedback    <span class="b">1</span>  <span class="f">│</span>   The parser and the renderer are tangled together. Can     
-   Knowledge      <span class="f">│</span>   you split the parser into its own package so reviewer     
-   Modules        <span class="f">│</span>   can check it on its own?                                  
-   Settings       <span class="f">│</span>   <span class="f">▸ 2 replies  last 20:31</span>                                   
-                  <span class="f">│</span>                                                             
- <span class="f">▾ </span><span class="f">textkit-2</span>      <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                                
- › <span class="b">lead</span>           <span class="f">│</span>   Also check whether the docs build still passes.           
-   writer         <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                                 
-   <span class="b">reviewer</span>    <span style="color:#38C5CF">●</span>  <span class="f">│</span>     <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:41</span>                                             
- <span class="f">  ▸ </span><span class="f">ended (2)</span>    <span class="f">│</span>     It passes. I fixed two broken links in                  
- <span class="f">▸ </span><span class="f">hive-web</span>    <span style="color:#38C5CF">●</span>  <span class="f">│</span>     guide/install.md on the same branch.                    
- <span class="f">▸ </span><span class="f">website</span>        <span class="f">│</span>                                                             
+ › <span class="b">Chats</span>          <span class="f">│</span>   Hello?                                                    
+   Dashboard      <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                     
+   Waiting     <span class="b" style="color:#DAAA3F">3</span>  <span class="f">│</span>                                                             
+   Feedback    <span class="b">1</span>  <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:22</span>                                                
+   Knowledge      <span class="f">│</span>   The parser and the renderer are tangled together. Can     
+   Modules        <span class="f">│</span>   you split the parser into its own package so reviewer     
+   Settings       <span class="f">│</span>   can check it on its own?                                  
+                  <span class="f">│</span>   <span class="f">▸ 2 replies  last 20:31</span>                                   
+ <span class="f">▾ </span><span class="f">textkit-2</span>      <span class="f">│</span>                                                             
+ › <span class="b">lead</span>           <span class="f">│</span>   <span class="b" style="color:#6CB6FF">you</span>  <span class="f">20:40</span>                                                
+   writer         <span class="f">│</span>   Also check whether the docs build still passes.           
+   <span class="b">reviewer</span>    <span style="color:#38C5CF">●</span>  <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                                 
+ <span class="f">  ▸ </span><span class="f">ended (2)</span>    <span class="f">│</span>     <span class="b" style="color:#DCBDFB">lead</span>  <span class="f">20:41</span>                                             
+ <span class="f">▸ </span><span class="f">hive-web</span>    <span style="color:#38C5CF">●</span>  <span class="f">│</span>     It passes. I fixed two broken links in                  
+ <span class="f">▸ </span><span class="f">website</span>        <span class="f">│</span>     guide/install.md on the same branch.                    
                   <span class="f">│</span>                                                             
                   <span class="f">│</span>   <span style="color:#DAAA3F">3 waiting on you · a to answer</span>                            
                   <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ────────────────────────────────────╮</span> 
                   <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>                     <span class="f"> │</span> 
                   <span class="f">│</span>  <span class="f">╰────────────────────────────────────────────────────────╯</span> 
 <span class="f">──────────────────</span><span class="f">┴</span><span class="f">─────────────────────────────────────────────────────────────</span>
- <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
+ <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
 <pre class="light"><span class="b"> hive</span>             <span class="f">│</span>   <span class="b">textkit-2 › lead</span>  <span class="f"></span><span class="f" style="color:#2A793B">working</span>                                 
 <span class="f">──────────────────</span><span class="f">┼</span><span class="f">─────────────────────────────────────────────────────────────</span>
- › <span class="b">Chats</span>          <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                     
-   Dashboard      <span class="f">│</span>                                                             
-   Waiting     <span class="b" style="color:#9A6700">3</span>  <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                                
-   Feedback    <span class="b">1</span>  <span class="f">│</span>   The parser and the renderer are tangled together. Can     
-   Knowledge      <span class="f">│</span>   you split the parser into its own package so reviewer     
-   Modules        <span class="f">│</span>   can check it on its own?                                  
-   Settings       <span class="f">│</span>   <span class="f">▸ 2 replies  last 20:31</span>                                   
-                  <span class="f">│</span>                                                             
- <span class="f">▾ </span><span class="f">textkit-2</span>      <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                                
- › <span class="b">lead</span>           <span class="f">│</span>   Also check whether the docs build still passes.           
-   writer         <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                                 
-   <span class="b">reviewer</span>    <span style="color:#1B7C83">●</span>  <span class="f">│</span>     <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:41</span>                                             
- <span class="f">  ▸ </span><span class="f">ended (2)</span>    <span class="f">│</span>     It passes. I fixed two broken links in                  
- <span class="f">▸ </span><span class="f">hive-web</span>    <span style="color:#1B7C83">●</span>  <span class="f">│</span>     guide/install.md on the same branch.                    
- <span class="f">▸ </span><span class="f">website</span>        <span class="f">│</span>                                                             
+ › <span class="b">Chats</span>          <span class="f">│</span>   Hello?                                                    
+   Dashboard      <span class="f">│</span>   <span class="f">▸ 1 reply  last 19:58</span>                                     
+   Waiting     <span class="b" style="color:#9A6700">3</span>  <span class="f">│</span>                                                             
+   Feedback    <span class="b">1</span>  <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:22</span>                                                
+   Knowledge      <span class="f">│</span>   The parser and the renderer are tangled together. Can     
+   Modules        <span class="f">│</span>   you split the parser into its own package so reviewer     
+   Settings       <span class="f">│</span>   can check it on its own?                                  
+                  <span class="f">│</span>   <span class="f">▸ 2 replies  last 20:31</span>                                   
+ <span class="f">▾ </span><span class="f">textkit-2</span>      <span class="f">│</span>                                                             
+ › <span class="b">lead</span>           <span class="f">│</span>   <span class="b" style="color:#0969DA">you</span>  <span class="f">20:40</span>                                                
+   writer         <span class="f">│</span>   Also check whether the docs build still passes.           
+   <span class="b">reviewer</span>    <span style="color:#1B7C83">●</span>  <span class="f">│</span>   <span class="f">▾ 1 reply</span>                                                 
+ <span class="f">  ▸ </span><span class="f">ended (2)</span>    <span class="f">│</span>     <span class="b" style="color:#8250DF">lead</span>  <span class="f">20:41</span>                                             
+ <span class="f">▸ </span><span class="f">hive-web</span>    <span style="color:#1B7C83">●</span>  <span class="f">│</span>     It passes. I fixed two broken links in                  
+ <span class="f">▸ </span><span class="f">website</span>        <span class="f">│</span>     guide/install.md on the same branch.                    
                   <span class="f">│</span>                                                             
                   <span class="f">│</span>   <span style="color:#9A6700">3 waiting on you · a to answer</span>                            
                   <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ────────────────────────────────────╮</span> 
                   <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of textkit-2…</span>                     <span class="f"> │</span> 
                   <span class="f">│</span>  <span class="f">╰────────────────────────────────────────────────────────╯</span> 
 <span class="f">──────────────────</span><span class="f">┴</span><span class="f">─────────────────────────────────────────────────────────────</span>
- <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
+ <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
 </div>
 <h2 id="07a-two-hives">07a-two-hives · 120×36</h2>
 <div class="pair">
@@ -1572,15 +1572,15 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
                       <span class="f">│</span>                                                                                                 
                       <span class="f">│</span>                                                                                                 
                       <span class="f">│</span>                                                                                                 
-                      <span class="f">│</span>   <span class="f">This is the Hive-wide lead, for every project and the Hive itself. Press n to write.</span>          
                       <span class="f">│</span>                                                                                                 
+                      <span class="f">│</span>   <span class="f">This is the Hive-wide lead, for every project and the Hive itself. Press n to write.</span>          
                       <span class="f">│</span>                                                                                                 
                       <span class="f">│</span>   <span style="color:#DAAA3F">3 waiting on you · a to answer</span>                                                                
                       <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ────────────────────────────────────────────────────────────────────────╮</span> 
                       <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the Hive-wide lead, for every project and the Hive itself…</span>                     <span class="f"> │</span> 
                       <span class="f">│</span>  <span class="f">╰────────────────────────────────────────────────────────────────────────────────────────────╯</span> 
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">─────────────────────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
+ <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span>   <span class="b">e E</span> <span class="f">all</span></pre>
 <pre class="light"><span class="b"> hive</span>                 <span class="f">│</span>   <span class="b">Hive-wide › lead</span>  <span class="f">idle</span>                                                                        
 <span class="f">──────────────────────</span><span class="f">┼</span><span class="f">─────────────────────────────────────────────────────────────────────────────────────────────────</span>
  › <span class="b">Chats</span>              <span class="f">│</span>                                                                                                 
@@ -1608,15 +1608,15 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
                       <span class="f">│</span>                                                                                                 
                       <span class="f">│</span>                                                                                                 
                       <span class="f">│</span>                                                                                                 
-                      <span class="f">│</span>   <span class="f">This is the Hive-wide lead, for every project and the Hive itself. Press n to write.</span>          
                       <span class="f">│</span>                                                                                                 
+                      <span class="f">│</span>   <span class="f">This is the Hive-wide lead, for every project and the Hive itself. Press n to write.</span>          
                       <span class="f">│</span>                                                                                                 
                       <span class="f">│</span>   <span style="color:#9A6700">3 waiting on you · a to answer</span>                                                                
                       <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ────────────────────────────────────────────────────────────────────────╮</span> 
                       <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the Hive-wide lead, for every project and the Hive itself…</span>                     <span class="f"> │</span> 
                       <span class="f">│</span>  <span class="f">╰────────────────────────────────────────────────────────────────────────────────────────────╯</span> 
 <span class="f">──────────────────────</span><span class="f">┴</span><span class="f">─────────────────────────────────────────────────────────────────────────────────────────────────</span>
- <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
+ <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span>   <span class="b">e E</span> <span class="f">all</span></pre>
 </div>
 <h2 id="07b-two-hives-80x24">07b-two-hives-80x24 · 80×24</h2>
 <div class="pair">
@@ -1634,16 +1634,16 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
  <span class="f">▸ </span><span class="f">hive-web</span>    <span style="color:#38C5CF">●</span>  <span class="f">│</span>                                                             
  <span class="f">▸ </span><span class="f">website</span>        <span class="f">│</span>                                                             
  <span class="f">▾ </span><span class="f">hive</span>           <span class="f">│</span>                                                             
- › <span class="b">lead</span>           <span class="f">│</span>   <span class="f">This is the lead of hive, for this project only. Press n</span>  
- <span class="f">▾ </span><span class="f">Hive-wide</span>      <span class="f">│</span>   <span class="f">to write.</span>                                                 
-   lead           <span class="f">│</span>                                                             
+ › <span class="b">lead</span>           <span class="f">│</span>                                                             
+ <span class="f">▾ </span><span class="f">Hive-wide</span>      <span class="f">│</span>   <span class="f">This is the lead of hive, for this project only. Press n</span>  
+   lead           <span class="f">│</span>   <span class="f">to write.</span>                                                 
                   <span class="f">│</span>                                                             
                   <span class="f">│</span>   <span style="color:#DAAA3F">3 waiting on you · a to answer</span>                            
                   <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ────────────────────────────────────╮</span> 
                   <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of hive, for this project only…</span>   <span class="f"> │</span> 
                   <span class="f">│</span>  <span class="f">╰────────────────────────────────────────────────────────╯</span> 
 <span class="f">──────────────────</span><span class="f">┴</span><span class="f">─────────────────────────────────────────────────────────────</span>
- <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
+ <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
 <pre class="light"><span class="b"> hive</span>             <span class="f">│</span>   <span class="b">hive › lead</span>  <span class="f">idle</span>                                         
 <span class="f">──────────────────</span><span class="f">┼</span><span class="f">─────────────────────────────────────────────────────────────</span>
  › <span class="b">Chats</span>          <span class="f">│</span>                                                             
@@ -1658,15 +1658,15 @@ pre { font: 13px/1.25 "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; p
  <span class="f">▸ </span><span class="f">hive-web</span>    <span style="color:#1B7C83">●</span>  <span class="f">│</span>                                                             
  <span class="f">▸ </span><span class="f">website</span>        <span class="f">│</span>                                                             
  <span class="f">▾ </span><span class="f">hive</span>           <span class="f">│</span>                                                             
- › <span class="b">lead</span>           <span class="f">│</span>   <span class="f">This is the lead of hive, for this project only. Press n</span>  
- <span class="f">▾ </span><span class="f">Hive-wide</span>      <span class="f">│</span>   <span class="f">to write.</span>                                                 
-   lead           <span class="f">│</span>                                                             
+ › <span class="b">lead</span>           <span class="f">│</span>                                                             
+ <span class="f">▾ </span><span class="f">Hive-wide</span>      <span class="f">│</span>   <span class="f">This is the lead of hive, for this project only. Press n</span>  
+   lead           <span class="f">│</span>   <span class="f">to write.</span>                                                 
                   <span class="f">│</span>                                                             
                   <span class="f">│</span>   <span style="color:#9A6700">3 waiting on you · a to answer</span>                            
                   <span class="f">│</span>  <span class="f">╭─ </span><span class="f">new thread · lead</span><span class="f"> ────────────────────────────────────╮</span> 
                   <span class="f">│</span>  <span class="f">│ </span><span class="f">› Write to the lead of hive, for this project only…</span>   <span class="f"> │</span> 
                   <span class="f">│</span>  <span class="f">╰────────────────────────────────────────────────────────╯</span> 
 <span class="f">──────────────────</span><span class="f">┴</span><span class="f">─────────────────────────────────────────────────────────────</span>
- <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
+ <span class="b">↑↓</span> <span class="f">thread</span>   <span class="b">enter</span> <span class="f">open</span>   <span class="b">n</span> <span class="f">new thread</span>   <span class="b">end</span> <span class="f">newest</span>   <span class="b">space</span> <span class="f">collapse</span>   <span class="b">tab</span> <span class="f">pane</span></pre>
 </div>
 </body></html>
