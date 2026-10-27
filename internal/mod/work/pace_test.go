@@ -476,10 +476,10 @@ func TestPaceComesBackToTheStartUnderLoadAlone(t *testing.T) {
 	for _, p := range []*pace{&workers, &checks} {
 		p.next(now, 4, true, "", true, 4, 0)
 		for i := range 4 {
-			p.next(now.Add(time.Duration(i+1)*paceStep), p.limit, true, "machine under cpu pressure (80.00%, limit 40%)", true, 4, 0)
+			p.next(now.Add(time.Duration(i+1)*paceStep), p.limit, true, "machine under memory pressure (80.00%, limit 40%)", true, 4, 0)
 		}
 		if p.limit != 1 {
-			t.Fatalf("under cpu pressure: %d, want 1", p.limit)
+			t.Fatalf("under memory pressure: %d, want 1", p.limit)
 		}
 	}
 	at := now.Add(4 * paceStep)
@@ -491,7 +491,7 @@ func TestPaceComesBackToTheStartUnderLoadAlone(t *testing.T) {
 			t.Fatalf("minute %d: the checks' pace moved under load alone: %d", i, c)
 		}
 		if i < 4 && w != 1 {
-			t.Fatalf("minute %d: back within a growStep of the cpu pressure: %d", i, w)
+			t.Fatalf("minute %d: back within a growStep of the memory pressure: %d", i, w)
 		}
 	}
 	if workers.limit != 4 || !strings.Contains(workers.String(), "back to the start") {
@@ -503,5 +503,41 @@ func TestPaceComesBackToTheStartUnderLoadAlone(t *testing.T) {
 	fresh := pace{limit: 4, start: 4, at: now, loadCuts: true}
 	if l := fresh.next(now.Add(paceStep), 4, true, load, true, 4, 0); l != 3 {
 		t.Fatalf("checks at their start under load alone: %d, want 3", l)
+	}
+}
+
+// CPU pressure hovering at its limit, as from 10-26 17:00Z (40-45% on a
+// limit of 40 for eight hours), is load by another reading: it neither pulls
+// the workers under their start nor holds one from starting under it, and
+// they settle there; the checks' pace still cuts on it.
+func TestPaceTreatsCPUPressureLikeLoad(t *testing.T) {
+	workers, checks := pace{limit: 6, start: 4}, pace{limit: 4, start: 4, loadCuts: true}
+	now := time.Date(2026, 10, 26, 17, 0, 0, 0, time.UTC)
+	workers.at, checks.at = now.Add(-growStep), now.Add(-growStep)
+	changes, last := 0, workers.limit
+	for i := range 480 { // eight hours, a reading a minute
+		now = now.Add(paceStep)
+		strain := ""
+		if i%3 != 2 {
+			strain = fmt.Sprintf("machine under cpu pressure (%d.00%%, limit 40%%)", 41+i%5)
+		}
+		l := workers.next(now, workers.limit, true, strain, true, 4, 0)
+		if l < 4 {
+			t.Fatalf("minute %d: cpu pressure alone pulled the workers under their start: %d", i, l)
+		}
+		if l != last {
+			changes, last = changes+1, l
+		}
+		checks.next(now, checks.limit, true, strain, true, 4, 0)
+	}
+	if last != 4 || changes > 2 {
+		t.Fatalf("workers settled at %d after %d changes, want 4 after at most 2", last, changes)
+	}
+	if checks.limit != 1 {
+		t.Fatalf("checks under cpu pressure: %d, want 1", checks.limit)
+	}
+	cpu := "machine under cpu pressure (44.00%, limit 40%)"
+	if loadHolds(cpu, 3, 4) || !loadHolds(cpu, 4, 4) {
+		t.Fatalf("cpu pressure alone should hold a worker only at the start")
 	}
 }

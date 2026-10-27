@@ -33,11 +33,16 @@ func strained(proc string, memFloorMB int, memPressureMax, cpuPressureMax float6
 			continue
 		}
 		if p, ok := procField(proc+"/pressure/"+c.what, "avg10="); ok && p > c.max {
-			return fmt.Sprintf("machine under %s pressure (%.2f%%, limit %g%%)", c.what, p, c.max)
+			return fmt.Sprintf("machine under %s pressure (%.2f%%, limit %g%%)", c.what, p, c.max) // CPUPressedReason for cpu
 		}
 	}
 	return ""
 }
+
+// CPUPressedReason starts the reason Strained gives for CPU pressure alone
+// (memory is read first), so a caller can treat it like load: both mostly
+// come from the same builds and child Hives.
+const CPUPressedReason = "machine under cpu pressure"
 
 // Watched says whether any reading a limit turns on (Strained's and
 // Loaded's) exists on this machine: where none does (no /proc, as on macOS

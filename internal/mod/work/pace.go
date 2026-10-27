@@ -22,6 +22,7 @@ import (
 // ahead of its five-hour or weekly window, it pulls back to three quarters
 // of what is running, or to its start when nothing runs (the strain isn't
 // the Hive's, and from 1 it would take minutes to climb back). Load alone
+// (or CPU pressure alone, which comes from the same: onlyLoad)
 // never pulls the workers under their start, and brings them back up to it
 // a growStep after any other strain clears: on 10-25 a load of 27-46 on 20
 // cores came from child Hives and builds beside 2-3 live turns, and cutting
@@ -78,10 +79,16 @@ type pace struct {
 	loadCuts bool
 }
 
-// onlyLoad says whether strain is the load per core alone (core.Loaded's
-// reason), which doesn't pull a limit under its start, nor hold a worker
-// from starting under it (loadHolds).
-func onlyLoad(strain string) bool { return strings.HasPrefix(strain, core.LoadedReason) }
+// onlyLoad says whether strain is the load per core or CPU pressure alone
+// (core.Loaded's reason, or core.Strained's for CPU, which it gives only with
+// memory clear), which doesn't pull a limit under its start, nor hold a
+// worker from starting under it (loadHolds). CPU pressure counts as load: it
+// mostly comes from the same child Hives and builds, and from 10-26 17:00Z
+// it hovered at its limit (40-45% on 40, 60-62% on 60) and swung the workers
+// 1,2,1,2,3,2,1 for eight hours. A turn still waits on it to start (Runs).
+func onlyLoad(strain string) bool {
+	return strings.HasPrefix(strain, core.LoadedReason) || strings.HasPrefix(strain, core.CPUPressedReason)
+}
 
 // next moves the limit for running things with waiting ones wanting more,
 // strain saying what strains the machine or plan ("" for nothing), watching
