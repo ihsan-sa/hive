@@ -89,6 +89,14 @@ func TestMergeForgeCheckFails(t *testing.T) {
 	red := []core.CheckRun{{Name: "test (macos-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/1"}, {Name: "sandboxed-e2e", State: core.CheckPending}}
 	f.SetChecks(p.Repo, task.SHA, red...)
 	mergeOnce(t, m, task, p)
+	// The forge re-runs nothing while sandboxed-e2e still runs: it waits.
+	if task.Stage != StageMerging || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 0 || !strings.Contains(task.Reason, "still running") {
+		t.Fatalf("stage %q, round %d, reruns %v, reason %q", task.Stage, task.Round, task.Reruns, task.Reason)
+	}
+	red[1].State = core.CheckPass
+	f.SetChecks(p.Repo, task.SHA, red...)
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerging || task.Round != 0 || task.Reruns[task.SHA] != 1 || f.Reruns(p.Repo, task.SHA) != 1 || !strings.Contains(task.Reason, "re-run") {
 		t.Fatalf("stage %q, round %d, reruns %v, reason %q", task.Stage, task.Round, task.Reruns, task.Reason)
 	}

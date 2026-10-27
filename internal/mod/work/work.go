@@ -2896,6 +2896,13 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 				m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+names+"), run again once before a red goes back")
 				return true, nil
 			}
+			// The forge re-runs no job of a workflow run still going: the
+			// red waits for the rest to finish and is re-run then, rather
+			// than cost a round as if it had had its once more.
+			if going := stillRunning(raw); len(going) > 0 {
+				m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+" still running ("+core.CheckNames(going)+") to finish, so the red ones ("+names+") can be run again once before they go back")
+				return true, nil
+			}
 		}
 		t.Reason = ""
 		hint := ""
@@ -3111,6 +3118,17 @@ func stillOnMain(failed, mainRuns []core.CheckRun) []core.CheckRun {
 		}
 	}
 	return still
+}
+
+// stillRunning are the checks on a head the forge lists as still going.
+func stillRunning(runs []core.CheckRun) []core.CheckRun {
+	var going []core.CheckRun
+	for _, r := range runs {
+		if r.State == core.CheckPending {
+			going = append(going, r)
+		}
+	}
+	return going
 }
 
 // forgeFailuresFile is where a red forge check's findings are kept in the
