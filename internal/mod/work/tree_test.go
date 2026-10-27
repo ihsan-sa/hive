@@ -29,7 +29,7 @@ func branchesOf(m *Module, id string) []Task {
 
 // A rollback for the change's own fallout goes back to its worker and also
 // branches a sibling from the rolled-back head, once per head; the branch's
-// worker starts from that head, and the two don't wait on each other's files.
+// worker starts from that head.
 func TestTreeBranchesOnFallout(t *testing.T) {
 	m, task, p := treeRig(t, "worse than the current Hive: e2e passes 0/3, the control 3/3")
 	head := task.SHA
@@ -49,9 +49,6 @@ func TestTreeBranchesOnFallout(t *testing.T) {
 	m.branchOut(task, p, core.GateResult{Head: head, Reason: "worse than the current Hive: x"}, "")
 	if n := len(branchesOf(m, task.ID)); n != 1 {
 		t.Fatalf("%d branches after the same head again, want 1", n)
-	}
-	if o, _ := m.overlap(b, []Task{*task}, ""); o != nil {
-		t.Fatalf("the branch waits on its parent's files: %s", o.ID)
 	}
 	for b.Stage == StageNew || b.Queued() {
 		if err := m.step(&b); err != nil {
