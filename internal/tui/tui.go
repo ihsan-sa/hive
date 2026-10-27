@@ -1031,7 +1031,7 @@ func (m *model) keys() []string {
 	case m.editing:
 		return []string{"enter", "save", "esc", "cancel"}
 	case m.focus == 0:
-		return []string{"↑↓", "move", "enter", "open", "space", "collapse", "tab", "switch pane", "q", "quit"}
+		return []string{"↑↓", "move", "enter", "open", "space", "collapse", "tab", "switch pane", "e E", "a level", "q", "quit"}
 	case m.section == secChats && m.takeover():
 		return []string{"enter", "send", "ctrl+j", "newline", "esc", "back to chat", m.bottomKey(), "newest", imageKey, "image", "pgup pgdn", "scroll"}
 	case m.section == secChats && m.focus == 2:
@@ -1039,16 +1039,16 @@ func (m *model) keys() []string {
 	case m.section == secChats && m.composing:
 		return []string{"enter", "start thread", "ctrl+j", "newline", "esc", "leave box", "↑", "pick a thread", m.bottomKey(), "newest", "tab", "switch pane", imageKey, "image"}
 	case m.section == secChats && m.thread != "":
-		return []string{"↑↓", "thread", "→", "to the open thread", "pgup pgdn", "scroll", "end", "newest", "space", "collapse", "n", "new thread"}
+		return []string{"↑↓", "thread", "→", "to the open thread", "pgup pgdn", "scroll", "end", "newest", "space", "collapse", "n", "new thread", "e E", "all"}
 	case m.section == secChats:
-		return []string{"↑↓", "thread", "enter", "open", "n", "new thread", "end", "newest", "space", "collapse", "tab", "pane"}
+		return []string{"↑↓", "thread", "enter", "open", "n", "new thread", "end", "newest", "space", "collapse", "tab", "pane", "e E", "all"}
 	case len(m.stack) > 0 && m.stack[len(m.stack)-1].kind == "module":
 		return []string{"↑↓", "project", "space", "grant or remove", "r", "review again", "esc", "back", "q", "quit"}
 	case len(m.stack) > 0:
 		return []string{"↑↓", "scroll", "esc", "back", "tab", "sidebar", "q", "quit"}
 	case m.section == secDash:
 		if m.dashTree {
-			return []string{"↑↓", "move", "enter", "open", "←", "collapse", "s", "feed", "tab", "sidebar"}
+			return []string{"↑↓", "move", "enter", "open", "←", "collapse", "e E", "a level", "s", "feed", "tab", "sidebar"}
 		}
 		return []string{"enter", "open thread", "f", "follow", "m", "only me", "s", "status", "tab", "sidebar"}
 	case m.section == secWaiting && m.waitSel < len(m.st.Asks) && m.st.Asks[m.waitSel].Diff != "":
@@ -1082,6 +1082,7 @@ func helpLines() []string {
 		"enter             open; in a box, send",
 		"esc               leave a box, close a thread, one level up",
 		"space             expand or collapse",
+		"e / E (shift+e)   expand a level more, or collapse one: the sidebar, status, a channel's threads",
 		"← →               in the sidebar and status, back up a level or go deeper",
 		"n                 new thread",
 		"a                 in a chat, answer what's waiting on you",
