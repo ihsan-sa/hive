@@ -97,7 +97,10 @@ type Task struct {
 	ConflictMain string `json:"conflict_main,omitempty"`
 	// MergedOK is "head+main" for the last head whose tests passed merged
 	// with that main (mergedTests), so it merges as it is without testing again.
-	MergedOK string `json:"merged_ok,omitempty"`
+	// It follows main while main's commits miss the head's files and what the
+	// gate measures with; MergedAt is when the test itself passed.
+	MergedOK string    `json:"merged_ok,omitempty"`
+	MergedAt time.Time `json:"merged_at,omitzero"`
 	// MergedTest is the merge of the head with main whose tests are queued
 	// or running (mergedTests), while the task waits in merging for them.
 	MergedTest string `json:"merged_test,omitempty"`
@@ -2457,6 +2460,10 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		m.hold(t, p, why)
 		return nil
 	}
+	if why := m.lineFirst(t, p, main); why != "" {
+		m.hold(t, p, why)
+		return nil
+	}
 	if !m.enterMerge() { // the Hive is about to restart into an update
 		m.mu.Lock()
 		m.later[t.ID] = time.Now().Add(holdGap)
@@ -2723,8 +2730,17 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	if t.MergedOK == key {
 		return false, nil
 	}
-	if front := m.batchPassed(t, main); front != "" {
+	// A pass at an older main still stands while main's commits since touch
+	// none of the head's files nor the score, gate or tests (as a gate
+	// verdict does, #917): else every merge elsewhere sent the front back to
+	// test, and main moved again before its gate slot freed (issue #1794).
+	if was, at, ok := strings.Cut(t.MergedOK, "+"); ok && was == t.SHA && m.C.Effects.MainLeaves(p, t.SHA, at, main) {
 		t.MergedOK = key
+		m.save(t, "its tests passed merged with main at "+core.Short(at)+", and main's commits since, to "+core.Short(main)+", touch none of its files nor what the gate measures with, so that pass stands")
+		return false, nil
+	}
+	if front := m.batchPassed(t, main); front != "" {
+		t.MergedOK, t.MergedAt = key, time.Now().UTC()
 		m.save(t, "its tests pass merged with main at "+core.Short(main)+" in the batch "+front+" tested, so it merges as it is")
 		return false, nil
 	}
@@ -2755,7 +2771,7 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 		}
 		merged, batch := m.takeLine(t, p, main, merged)
 		r = m.testMerged(t, p, key, main, merged, cfg.Test)
-		m.addBatch(p.Name, main, &mergeBatch{front: t.ID, label: fmt.Sprintf("#%d", t.PR.Number), tip: main, heads: batch})
+		m.addBatch(p.Name, main, &mergeBatch{front: t.ID, head: t.SHA, label: fmt.Sprintf("#%d", t.PR.Number), tip: main, heads: batch})
 		if len(batch) > 0 {
 			m.save(t, fmt.Sprintf("testing its head merged with main at %s together with the %d PRs waiting behind it", core.Short(main), len(batch)))
 		}
@@ -2798,7 +2814,7 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 			return true, m.takeMain(t, p, merged, "main moved and the tests fail on the PR merged with main at "+core.Short(main)+", though each passed alone")
 		}
 	}
-	t.MergedOK = key
+	t.MergedOK, t.MergedAt = key, time.Now().UTC()
 	m.save(t, "its tests pass merged with main at "+core.Short(main)+" (as "+core.Short(merged)+"), so it merges as it is")
 	return false, nil
 }
@@ -2820,13 +2836,14 @@ const mergedTestWait = "testing its head merged with main"
 const maxBatch = 16
 
 // mergeBatch is the PRs a front's merged test took in with it (issue #1771):
-// heads holds each one's task and the head merged in, tip the main it holds
-// now (the one tested, moved on by each of the batch's own merges), ok that
-// the test passed and failed that it didn't, so the front tests alone.
+// heads holds each one's task and the head merged in, head the front's own,
+// tip the main it holds now (the one tested, moved on by each of the batch's
+// own merges), ok that the test passed and failed that it didn't, so the
+// front tests alone.
 type mergeBatch struct {
-	front, label, tip string
-	heads             map[string]string
-	ok, failed        bool
+	front, head, label, tip string
+	heads                   map[string]string
+	ok, failed              bool
 }
 
 // takeLine merges into merged, t's head merged with main, every PR waiting
@@ -2901,12 +2918,14 @@ func (m *Module) batchOf(t *Task, main string) *mergeBatch {
 // with what main holds now: the main it tested, plus only the batch's own
 // merges since. Empty when there is none; with main "", any passed batch
 // holding t's head counts, so a step waiting in the line goes on to read its
-// PR and sync main.
+// PR and sync main. The front's own pass follows the tip too: the fixes
+// behind it merging first, while it waits for its gate, don't send it back
+// to test what its batch already tested (issue #1794).
 func (m *Module) batchPassed(t *Task, main string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, b := range m.batches[t.Project] {
-		if b.ok && (main == "" || b.tip == main) && t.SHA != "" && b.heads[t.ID] == t.SHA {
+		if b.ok && (main == "" || b.tip == main) && t.SHA != "" && (b.heads[t.ID] == t.SHA || b.front == t.ID && b.head == t.SHA) {
 			return b.label
 		}
 	}
@@ -3069,6 +3088,11 @@ func (m *Module) hold(t *Task, p core.Project, why string) {
 	if inMergeLine(t.Reason) && !inMergeLine(why) {
 		m.mu.Lock()
 		m.wakeMergeLineLocked(t.Project) // it stands aside: the next one moves up
+		m.mu.Unlock()
+	}
+	if strings.HasPrefix(t.Reason, gateSlotWait) && !strings.HasPrefix(why, gateSlotWait) {
+		m.mu.Lock()
+		m.wakeGateSlotLocked(t.Project) // it took a slot or left: the next one looks
 		m.mu.Unlock()
 	}
 	t.Reason = why
