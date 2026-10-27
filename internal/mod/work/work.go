@@ -318,7 +318,8 @@ type Module struct {
 	// retesting is held while main's red tests run once more (mainTests).
 	retesting sync.Mutex
 	busy      map[string]bool
-	aims      map[string]aimAsk // aims asked while a step held the task, set as it ends
+	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
+	aims      map[string]aimAsk    // aims asked while a step held the task, set as it ends
 	// steered is when the person's stop, retry or recheck (steer) last saved
 	// each task: a step whose copy is older saves nothing after it, nor
 	// merges, so it can't undo what they asked. It grows by one key per task
@@ -849,6 +850,7 @@ func (m *Module) Tick() {
 	m.revive()
 	m.reviveDrafts()
 	m.paceChecks()
+	m.reapStuck()
 	tasks := m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) })
 	start, wait := m.admit(tasks)
 	for _, t := range tasks {
@@ -862,13 +864,62 @@ func (m *Module) Tick() {
 			continue
 		}
 		m.busy[t.ID] = true
+		began := time.Now()
+		if m.stepAt == nil {
+			m.stepAt = map[string]time.Time{}
+		}
+		m.stepAt[t.ID] = began
 		m.steps.Add(1)
 		m.mu.Unlock()
 		go func(t Task) {
 			defer m.steps.Done()
-			defer m.release(t.ID)
+			defer m.endStep(t.ID, began)
 			m.settle(&t, m.step(&t))
 		}(t)
+	}
+}
+
+// endStep frees t's task when the step that began at began ends, unless
+// reapStuck let it go and a newer step may hold the task.
+func (m *Module) endStep(id string, began time.Time) {
+	m.mu.Lock()
+	mine := m.stepAt[id].Equal(began)
+	if mine {
+		delete(m.stepAt, id)
+	}
+	m.mu.Unlock()
+	if mine {
+		m.release(id)
+	}
+}
+
+// stepLimit is how long one step may hold a task before Tick lets it go: a
+// step hung on a call that never returns would otherwise leave the task
+// "has a step running right now" for good, refusing every recheck. It sits
+// well above the longest healthy step, which can wait for a check slot, then
+// run a sandboxed check of up to 30 minutes, twice on a retry.
+var stepLimit = 3 * time.Hour
+
+// reapStuck frees the tasks whose Tick step has run past stepLimit, so the
+// next tick steps them again. The reap is a steer save, journalled with the
+// stage the step was in: the old step's later saves are dropped as from a
+// copy before the steer, and overtaken() stops it. If it ever returns, it
+// leaves the new holder's mark alone (see Tick).
+func (m *Module) reapStuck() {
+	m.mu.Lock()
+	var stuck []string
+	for id, at := range m.stepAt {
+		if time.Since(at) > stepLimit {
+			stuck = append(stuck, id)
+			delete(m.stepAt, id)
+			delete(m.busy, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range stuck {
+		if t, ok := m.Get(id); ok {
+			m.steer(&t, fmt.Sprintf("its step in %s ran past %s and was let go; it steps again", t.Stage, stepLimit))
+		}
 	}
 }
 
