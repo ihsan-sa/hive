@@ -85,7 +85,7 @@ func TestMergeAdoptedHeadReadOnlyIfTheDiffChanged(t *testing.T) {
 		if task.SHA != next {
 			t.Fatalf("not adopted: %s", task.Reason)
 		}
-		if err := m.test(task, p); err != nil {
+		if err := testStep(m, task, p); err != nil {
 			t.Fatal(err)
 		}
 		if want := map[bool]string{false: StageMerging, true: StageReviewing}[newDiff]; task.Stage != want {

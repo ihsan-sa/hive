@@ -54,7 +54,7 @@ func TestCheckpointHandbackLeavesWorker(t *testing.T) {
 	if task.Stage != StageTesting || task.Checkpoint == "" || task.PR.Number == 0 {
 		t.Fatalf("stage %q, checkpoint %q, PR %d, log %v", task.Stage, task.Checkpoint, task.PR.Number, task.Log)
 	}
-	if err := m.test(task, p); err != nil || task.Stage != StageReviewing {
+	if err := testStep(m, task, p); err != nil || task.Stage != StageReviewing {
 		t.Fatalf("stage %q, err %v", task.Stage, err)
 	}
 	id := "r-t1-" + core.Short(task.SHA) + "-0"
