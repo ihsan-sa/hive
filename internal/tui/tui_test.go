@@ -1337,3 +1337,40 @@ func TestSizeLine(t *testing.T) {
 		t.Fatal("no size measured should show no line")
 	}
 }
+
+// A sent message shows once, whichever of its answer and a fetch of the chat
+// comes first, and a fetch that left before it was posted doesn't hide it.
+func TestSentMessageShowsOnceAndStays(t *testing.T) {
+	count := func(m *model, id string) int {
+		n := 0
+		for _, x := range m.msgs["lead"] {
+			if x.ID == id {
+				n++
+			}
+		}
+		return n
+	}
+	sent := chat.Message{ID: "s1", Chat: "lead", Thread: "s1", From: "person", Name: "you", Text: "hi", At: time.Now()}
+
+	// The fetch holding it lands first, then the post's answer.
+	m := testModel(80, 24)
+	before := append([]chat.Message(nil), m.msgs["lead"]...)
+	m.Update(chatMsg{"lead", append(append([]chat.Message(nil), before...), sent)})
+	m.Update(sentMsg{out: outMsg{n: 1, chat: "lead", text: "hi"}, msg: sent})
+	if n := count(m, "s1"); n != 1 {
+		t.Fatalf("fetch then answer: shown %d times", n)
+	}
+
+	// The answer first, then a fetch that left before the post.
+	m = testModel(80, 24)
+	m.Update(sentMsg{out: outMsg{n: 1, chat: "lead", text: "hi"}, msg: sent})
+	m.Update(chatMsg{"lead", append([]chat.Message(nil), before...)})
+	if n := count(m, "s1"); n != 1 {
+		t.Fatalf("a stale fetch: shown %d times", n)
+	}
+	// The next fetch holds it: still once, and no longer kept apart.
+	m.Update(chatMsg{"lead", append(append([]chat.Message(nil), before...), sent)})
+	if n := count(m, "s1"); n != 1 || len(m.posted) != 0 {
+		t.Fatalf("a fresh fetch: shown %d times, %d kept apart", n, len(m.posted))
+	}
+}

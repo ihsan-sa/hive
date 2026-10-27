@@ -92,6 +92,7 @@ type model struct {
 	reply     string            // thread being replied to; "" = new thread
 	drafts    map[string]string // by chat and target
 	outbox    []outMsg          // sent, not yet answered
+	posted    []chat.Message    // answered, not yet in a fetch of their chat
 
 	// dashboard: the live feed, or the status tree
 	feed     []feedRow
@@ -224,7 +225,9 @@ func (m *model) fetchChat(id string) tea.Cmd {
 	}
 	return func() tea.Msg {
 		var msgs []chat.Message
-		m.c.Do("GET", "/api/chat?id="+id, nil, &msgs)
+		if m.c.Do("GET", "/api/chat?id="+id, nil, &msgs) != nil {
+			return nil // a failed fetch keeps what is shown
+		}
 		return chatMsg{id, msgs}
 	}
 }
@@ -365,7 +368,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash("✗ not sent · " + msg.err.Error())
 			return m, nil
 		}
-		m.msgs[msg.out.chat] = append(m.msgs[msg.out.chat], msg.msg) // a new thread stays in the channel; the person opens it
+		// A new thread stays in the channel; the person opens it. A fetch may
+		// already hold the message, or may have left before it was posted.
+		msg.msg.Chat = msg.out.chat
+		m.posted = append(m.posted, msg.msg)
+		m.msgs[msg.out.chat] = m.withPosted(msg.out.chat, m.msgs[msg.out.chat])
 	case tickMsg:
 		return m, tea.Batch(m.fetchState(), m.fetchChat(m.currentChatID()), m.fetchDetail(), m.fetchFeed(), tick())
 	case stateMsg:
@@ -386,7 +393,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case feedMsg:
 		return m, m.addEvents(msg)
 	case chatMsg:
-		m.msgs[msg.id] = msg.msgs
+		m.msgs[msg.id] = m.withPosted(msg.id, msg.msgs)
 	case runMsg:
 		m.runs[msg.d.Run.ID] = msg.d
 	case taskMsg:
@@ -740,6 +747,29 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
 	return m, cmd
+}
+
+// withPosted is a chat's messages with what the person posted there and a
+// fetch hasn't returned yet: each shows once, whichever answer comes first.
+// One the fetch holds is no longer kept apart.
+func (m *model) withPosted(id string, msgs []chat.Message) []chat.Message {
+	have := map[string]bool{}
+	for _, x := range msgs {
+		have[x.ID] = true
+	}
+	keep := m.posted[:0]
+	for _, p := range m.posted {
+		switch {
+		case p.Chat != id:
+			keep = append(keep, p)
+		case !have[p.ID]:
+			msgs = append(msgs, p)
+			have[p.ID] = true
+			keep = append(keep, p)
+		}
+	}
+	m.posted = keep
+	return msgs
 }
 
 // send posts at once; a reply shows as sending until the Hive answers.
