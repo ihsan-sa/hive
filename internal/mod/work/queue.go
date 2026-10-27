@@ -22,7 +22,8 @@ import (
 )
 
 // The queue: a filed brief waits as queued until a worker can take it. Briefs
-// start in the order they were filed, or the order the lead set, and only as
+// start in the order they were filed, or the order the lead set (a brief
+// waiting past overdue goes ahead of that order), and only as
 // many work at once as the pace allows (pace.go, under max_workers) while the
 // machine isn't loaded: the brake is the machine. A brief that names a file
 // another brief names (one a worker is on, or ahead of it in line), or one
@@ -51,7 +52,8 @@ import (
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
 
 // inLine sorts waiting tasks: those the lead started now first, then quick
-// ones, then those the lead ordered, in its order, then the rest as filed.
+// ones, then those filed overdue ago, oldest first, then those the lead
+// ordered, in its order, then the rest as filed.
 func (m *Module) inLine(q []Task) {
 	quick := map[string]bool{}
 	for _, t := range q {
@@ -65,6 +67,12 @@ func (m *Module) inLine(q []Task) {
 		if quick[a.ID] != quick[b.ID] {
 			return quick[a.ID]
 		}
+		if a.Overdue() != b.Overdue() {
+			return a.Overdue()
+		}
+		if a.Overdue() {
+			return a.Created.Before(b.Created)
+		}
 		if (a.Order > 0) != (b.Order > 0) {
 			return a.Order > 0
 		}
@@ -73,6 +81,20 @@ func (m *Module) inLine(q []Task) {
 		}
 		return a.Created.Before(b.Created)
 	})
+}
+
+// overdue is how long a brief waits before it goes ahead of the lead's order:
+// one the lead neither ordered nor started now moved only when nothing newer
+// was ordered, and with the lead ordering about 19 and starting 10 a day,
+// task 065256 waited 10h20m, passed by 30 newer briefs "to go first", and the
+// check-homes fix 080252 waited 9h until /tmp filled the machine's memory.
+// Once overdue, newer briefs on its files wait on it instead. The lead still
+// starts one past it now, or holds it.
+var overdue = 4 * time.Hour
+
+// Overdue reports whether t has waited in the queue since overdue ago.
+func (t Task) Overdue() bool {
+	return t.Queued() && !t.Created.IsZero() && time.Since(t.Created) >= overdue
 }
 
 // quick reports whether t's brief only changes module prompts: it names at
@@ -904,6 +926,14 @@ func (m *Module) Queue(r core.Run) []string {
 		why := t.Reason
 		if d := t.FilesWait(); d >= time.Hour {
 			why = fmt.Sprintf("on other briefs' files for %s, %s", d.Round(time.Minute), why)
+		}
+		if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
+			// The lead sees the long waits, and which go ahead of its order.
+			age := fmt.Sprintf("waited %s", d.Round(time.Minute))
+			if t.Overdue() && !t.Now {
+				age += ", overdue: ahead of the lead's order"
+			}
+			why = strings.TrimSuffix(age+"; "+why, "; ")
 		}
 		out = append(out, fmt.Sprintf("%d. %s %q (%s)%s", i+1, t.ID, t.Label(), t.Project, suffixed(why)))
 	}

@@ -223,17 +223,26 @@ func (m *Module) postJoins(t *Task, p core.Project) {
 // it, how t went. A helper's spawner hears it too: a lead through its thread,
 // any other agent still running as a message, since a worker that split its
 // work among helpers has no thread of its own to read.
-func (m *Module) notify(t *Task, text string) { m.tell(t, text, m.Chat.Notify) }
+func (m *Module) notify(t *Task, text string) {
+	m.toSpawner(t, text)
+	m.notifyThreads(t, text)
+}
+
+// notifyThreads is notify without the message to a helper's spawner, for news
+// the spawner already has.
+func (m *Module) notifyThreads(t *Task, text string) { m.tell(t, text, m.Chat.Notify) }
 
 // post puts how t went in the same threads without waking their leads, for
-// an outcome that needs nothing of them (a merge). A merge of a module built
-// as a project of its own and not yet installed still wakes them: the lead
-// installs it (install_module --project, lead.md).
+// an outcome that needs nothing of them (a merge); a helper's spawner still
+// hears it. A merge of a module built as a project of its own and not yet
+// installed still wakes them: the lead installs it (install_module
+// --project, lead.md).
 func (m *Module) post(t *Task, text string) {
 	if m.moduleToInstall(t) {
 		m.notify(t, text)
 		return
 	}
+	m.toSpawner(t, text)
 	m.tell(t, text, func(c, th, s string) { m.Chat.Record(c, th, s) })
 }
 
@@ -247,13 +256,18 @@ func (m *Module) moduleToInstall(t *Task) bool {
 	return err == nil
 }
 
-func (m *Module) tell(t *Task, text string, send func(chat, thread, text string)) {
-	send(t.Chat, t.Thread, text)
+// toSpawner tells a helper's spawner, when it isn't a lead and still runs.
+func (m *Module) toSpawner(t *Task, text string) {
 	if t.Kind == "helper" {
 		if r, ok := m.C.Runs.Get(t.From); ok && r.Role != "lead" && (!r.Terminal() || r.Persistent) {
 			m.C.Runs.Send(r.ID, fmt.Sprintf("[your helper's task %s] %s", t.ID, text))
 		}
 	}
+}
+
+// tell sends text to t's thread and each joined lead's thread once.
+func (m *Module) tell(t *Task, text string, send func(chat, thread, text string)) {
+	send(t.Chat, t.Thread, text)
 	seen := map[[2]string]bool{{t.Chat, t.Thread}: true}
 	for _, j := range t.Joins {
 		if k := [2]string{j.Chat, j.Thread}; j.Thread != "" && !seen[k] {
