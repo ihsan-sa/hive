@@ -1426,7 +1426,9 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 		}
 		b.WriteString(" Every merge is measured; after a clear fix a lower score files a brief to look into it, and otherwise it is reverted unless a judge, weighing it with the change, keeps it, so say in your account what the change is for.\n")
 	}
-	if cfg.Score != nil && t.From != "hive" { // as checkpoint() skips the Hive's own setup brief
+	if cfg.Score != nil && t.From != "hive" && p.Self && t.Gain() {
+		b.WriteString("- Commit as you go: a change aimed at a gain isn't merged as checkpoints; the recursive gate judges its whole diff once you finish.\n")
+	} else if cfg.Score != nil && t.From != "hive" { // as checkpoint() skips the Hive's own setup brief
 		b.WriteString("- Commit each gain as you make it: a commit that beats the best kept score is tested, read and merged into main as a checkpoint while you keep working on top of it.\n")
 	}
 	{
@@ -1545,7 +1547,20 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 // change to the checkout's reflog, read without running git there. Once the
 // worker has finished and been sent back, its next finish lands instead.
 func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
-	if _, scored := m.bestScore(p.Name); !scored || t.From == "hive" || t.NoBank != "" || t.Round > 0 || t.Conflicts > 0 { // the Hive's own setup brief keeps its done line (doneFor)
+	if _, scored := m.bestScore(p.Name); !scored || t.From == "hive" { // the Hive's own setup brief keeps its done line (doneFor)
+		return nil
+	}
+	if p.Self && t.Gain() {
+		if t.NoBank == "" {
+			t.NoBank = noBankGain
+			m.save(t, "no checkpoints: "+noBankGain)
+		}
+		return nil
+	}
+	if t.NoBank == noBankGain {
+		t.NoBank = "" // its aim became a fix
+	}
+	if t.NoBank != "" || t.Round > 0 || t.Conflicts > 0 {
 		return nil
 	}
 	sc := m.C.Effects.Config(p, "HEAD").Score
@@ -1618,6 +1633,10 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	t.Checkpoint = sha
 	return m.open(t, p, sha, fmt.Sprintf("A checkpoint of #%d while its worker keeps going: %s scores %g, above the best kept %g.", t.Issue.Number, core.Short(sha), *c.Score, best))
 }
+
+// noBankGain is why a change to the Hive aimed at a gain is never merged in
+// parts: the recursive gate judges its whole diff, once its worker finishes.
+const noBankGain = "it aims at a gain, which merges only whole, on the recursive gate's keep once its worker finishes"
 
 // rewound tells a worker its branch left a commit already merged as a checkpoint.
 func rewound(base string) string {
