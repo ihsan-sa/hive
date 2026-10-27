@@ -477,6 +477,17 @@ func TestMergedTestOnePerTaskAsMainMoves(t *testing.T) {
 	}
 }
 
+// countingForge counts the PRs read through it.
+type countingForge struct {
+	*core.Local
+	n int
+}
+
+func (c *countingForge) GetPR(repo string, n int) (core.PR, error) {
+	c.n++
+	return c.Local.GetPR(repo, n)
+}
+
 // unknownForge is a forge still working out whether a PR merges cleanly.
 type unknownForge struct{ *core.Local }
 
@@ -1709,6 +1720,16 @@ func TestMergeLineOnlyFrontTests(t *testing.T) {
 	if task.Stage != StageMerging || task.MergedTest != "" || !strings.HasPrefix(task.Reason, MergeLineWait) || !strings.Contains(task.Reason, fmt.Sprintf("#%d", older.PR.Number)) {
 		t.Fatalf("behind an older PR: stage %q, merged test %q, reason %q", task.Stage, task.MergedTest, task.Reason)
 	}
+	// Waiting its turn, a step reads no PR (issue #1749).
+	reads := &countingForge{Local: f}
+	m.C.Effects.Forge = reads
+	waiting := task.Reason
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if reads.n != 0 || task.Reason != waiting {
+		t.Fatalf("a task waiting its turn read its PR %d times; reason %q", reads.n, task.Reason)
+	}
+	m.C.Effects.Forge = f
 	m.mu.Lock()
 	queued := len(m.mergeRuns)
 	older.Stage = StageMerged

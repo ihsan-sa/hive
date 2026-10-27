@@ -2299,6 +2299,18 @@ func (m *Module) writeMainBundle(t *Task, p core.Project) (string, error) {
 }
 
 func (m *Module) merge(t *Task, p core.Project) error {
+	// A task waiting its turn in the merge line makes no forge call, not even
+	// a fetch, until it reaches the front (issue #1749): with 82 tasks in
+	// merging, each reading its PR twice a minute, GitHub's API limit ran
+	// out. Its PR is read whole once it is at the front, where a close, a
+	// draft or a moved head is caught before anything merges.
+	if strings.HasPrefix(t.Reason, MergeLineWait) {
+		if ahead := m.mergeFront(t, p); ahead != nil {
+			main, _ := core.Git(m.C.WS.Project(p.Name), "rev-parse", "--verify", "-q", "refs/remotes/origin/"+p.Branch)
+			m.hold(t, p, lineWait(ahead, main))
+			return nil
+		}
+	}
 	// A draft goes through the same gate as any PR: nobody outside the Hive
 	// reads its PRs, so the merge readies it once every read cleared its head
 	// (core.Effects.Merge). One whose head moved past the commit the Hive read
@@ -2596,7 +2608,7 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	if !queued {
 		if ahead := m.mergeFront(t, p); ahead != nil {
 			t.MergedTest = ""
-			m.hold(t, p, fmt.Sprintf("%s: #%d (%s) tests merged with main first (main at %s)", MergeLineWait, ahead.PR.Number, core.Clip(ahead.Label(), 80), core.Short(main)))
+			m.hold(t, p, lineWait(ahead, main))
 			return true, nil
 		}
 		merged, err := m.C.Effects.UpdateBranch(p, t.SHA, main, "")
@@ -2641,6 +2653,11 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 // MergeLineWait opens the reason of a task waiting its turn to test merged
 // with main.
 const MergeLineWait = "waiting its turn in the merge line"
+
+// lineWait is the reason of a task waiting behind ahead in the merge line.
+func lineWait(ahead *Task, main string) string {
+	return fmt.Sprintf("%s: #%d (%s) tests merged with main first (main at %s)", MergeLineWait, ahead.PR.Number, core.Clip(ahead.Label(), 80), core.Short(main))
+}
 
 // mergedTestWait opens the reason of a task whose merged test is queued or
 // running.
