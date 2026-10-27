@@ -21,4 +21,4 @@
                   │  │ › Write to the lead of hive, for this project only…    │
                   │  ╰────────────────────────────────────────────────────────╯
 ──────────────────┴─────────────────────────────────────────────────────────────
- ↑↓ thread   enter open   n new thread   space collapse   tab pane
+ ↑↓ thread   enter open   end newest   n new thread   space collapse   tab pane

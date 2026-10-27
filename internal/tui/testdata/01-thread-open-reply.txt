@@ -19,11 +19,11 @@
    tribunal           │ ▌ own?                                         │   API. One question: keep the old import path
  ▸ website            │ ▌ ▸ 2 replies  open →                          │   as an alias for a release, or break it now?
                       │                                                │
-                      │   you  20:40                                   │  ╭─ reply · lead ────────────────────────────╮
-                      │   Also check whether the docs build still      │  │ › Keep the alias for one release, then    │
-                      │   passes.                                      │  │   remove it in 0.9.                       │
-                      │   ▾ 1 reply                                    │  ╰───────────────────────────────────────────╯
-                      │     lead  20:41                                │
+                      │   you  20:40                                   │
+                      │   Also check whether the docs build still      │  ╭─ reply · lead ────────────────────────────╮
+                      │   passes.                                      │  │ › Keep the alias for one release, then    │
+                      │   ▾ 1 reply                                    │  │   remove it in 0.9.                       │
+                      │     lead  20:41                                │  ╰───────────────────────────────────────────╯
                       │     It passes. I fixed two broken links in     │
                       │     guide/install.md on the same branch.       │
                       │                                                │
@@ -33,4 +33,4 @@
                       │  │ › Write to the lead of textkit-2…         │ │
                       │  ╰───────────────────────────────────────────╯ │
 ──────────────────────┴────────────────────────────────────────────────┴────────────────────────────────────────────────
- enter send   ctrl+j newline   esc close thread   ← tab to the channel   pgup pgdn scroll   alt+v image
+ enter send   ctrl+j newline   esc close thread   ↑ pgup scroll   end newest   ← tab to the channel   alt+v image

@@ -1,15 +1,15 @@
  hive                 │   textkit-2 › lead  working                    │   Thread  textkit-2 › lead           esc close
 ──────────────────────┼────────────────────────────────────────────────┼────────────────────────────────────────────────
- › Chats              │ ▌ you  20:22                                   │   On it. I'll hand the split to writer and
-   Dashboard          │ ▌ The parser and the renderer are tangled      │   ask reviewer to check the public API before
-   Waiting         3  │ ▌ together. Can you split the parser into its  │   anything merges.
-   Feedback        1  │ ▌ own package so reviewer can check it on its  │
-   Knowledge          │ ▌ own?                                         │   lead  20:31
-   Modules            │ ▌ ▸ 2 replies  open →                          │   Done. parser/ is its own package now, with
-   Settings           │                                                │   14 tests passing, and reviewer approved the
-                      │   you  20:40                                   │   API. One question: keep the old import path
- ▾ textkit-2          │   Also check whether the docs build still      │   as an alias for a release, or break it now?
- › lead               │   passes.                                      │
+ › Chats              │ ▌ you  20:22                                   │   ask reviewer to check the public API before
+   Dashboard          │ ▌ The parser and the renderer are tangled      │   anything merges.
+   Waiting         3  │ ▌ together. Can you split the parser into its  │
+   Feedback        1  │ ▌ own package so reviewer can check it on its  │   lead  20:31
+   Knowledge          │ ▌ own?                                         │   Done. parser/ is its own package now, with
+   Modules            │ ▌ ▸ 2 replies  open →                          │   14 tests passing, and reviewer approved the
+   Settings           │                                                │   API. One question: keep the old import path
+                      │   you  20:40                                   │   as an alias for a release, or break it now?
+ ▾ textkit-2          │   Also check whether the docs build still      │
+ › lead               │                                                │
    writer             │   3 waiting on you · → then a to answer        │  ╭─ reply · lead ────────────────────────────╮
    reviewer        ●  │  ╭─ new thread · lead ───────────────────────╮ │  │ › Keep the alias for one release, then    │
  ▾ hive-web           │  │ › Write to the lead of textkit-2…         │ │  │   remove it in 0.9.                       │

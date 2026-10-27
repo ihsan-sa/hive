@@ -1337,3 +1337,142 @@ func TestSizeLine(t *testing.T) {
 		t.Fatal("no size measured should show no line")
 	}
 }
+
+// A fetch that comes back with a sent message before the post answers shows
+// it once, and a fetch that left before it landed doesn't take it away.
+func TestSentMessageShowsOnce(t *testing.T) {
+	m := testModel(80, 24)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	sent := chat.Message{ID: "9", Thread: "9", From: "person", Name: "you", Text: "hi", At: time.Now()}
+	old := append([]chat.Message(nil), m.msgs["lead"]...)
+	m.Update(chatMsg{"lead", append(append([]chat.Message(nil), old...), sent)})
+	m.Update(sentMsg{out: outMsg{chat: "lead", text: "hi"}, msg: sent})
+	count := func() (n int) {
+		for _, x := range m.msgs["lead"] {
+			if x.ID == "9" {
+				n++
+			}
+		}
+		return n
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("the message shows %d times after a fetch beat the post", n)
+	}
+	m = testModel(80, 24)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(sentMsg{out: outMsg{chat: "lead", text: "hi"}, msg: sent})
+	m.Update(chatMsg{"lead", old}) // left before the post landed
+	if n := count(); n != 1 {
+		t.Fatalf("a stale fetch left the message %d times", n)
+	}
+	m.Update(chatMsg{"lead", append(append([]chat.Message(nil), old...), sent)})
+	m.Update(chatMsg{"lead", append(append([]chat.Message(nil), old...), sent)})
+	if n := count(); n != 1 || m.mine["9"] {
+		t.Fatalf("after fetches that have it: %d times, still held %v", n, m.mine["9"])
+	}
+}
+
+// A reply the thread already has shows once, not again as sending.
+func TestSendingLineGoesWhenTheReplyIsIn(t *testing.T) {
+	m := testModel(80, 24)
+	m.thread, m.focus = "1", 2
+	m.focusBox("1")
+	m.input.SetValue("on it")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m.View(), "sending") {
+		t.Fatal("no sending line")
+	}
+	m.Update(chatMsg{"lead", append(append([]chat.Message(nil), m.msgs["lead"]...), chat.Message{ID: "9", Thread: "1", From: "person", Text: "on it", At: time.Now()})})
+	if strings.Contains(m.View(), "sending") {
+		t.Fatal("the reply shows twice: in the thread and as sending")
+	}
+}
+
+// End goes to the newest message wherever the keys are in a chat, and
+// never opens a thread.
+func TestEndGoesToTheNewest(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp}) // a thread picked, the channel focused
+	m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	m.View()
+	if m.chScroll == 0 {
+		t.Fatal("Home did not scroll up")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if v := m.View(); m.thread != "" || m.chScroll != 0 || !strings.Contains(v, "pull/3") {
+		t.Fatalf("End: thread %q scroll %d\n%s", m.thread, m.chScroll, v)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+	if m.chScroll != 0 || m.thread != "" {
+		t.Fatal("G did not go to the newest")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")}) // in the box
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if m.chScroll != 0 || !m.composing {
+		t.Fatalf("End from the empty box: scroll %d", m.chScroll)
+	}
+	m.input.SetValue("draft")
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if m.chScroll == 0 {
+		t.Fatal("End with text in the box should stay the box's")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlEnd})
+	if m.chScroll != 0 || m.input.Value() != "draft" {
+		t.Fatalf("ctrl+end from the box: scroll %d, draft %q", m.chScroll, m.input.Value())
+	}
+}
+
+// In a thread, ↑ from its box scrolls the thread up, ↓ back, End to the newest.
+func TestThreadScrollsFromItsBox(t *testing.T) {
+	m := testModel(80, 20)
+	for i := 0; i < 20; i++ {
+		m.msgs["lead"] = append(m.msgs["lead"], chat.Message{ID: fmt.Sprint("r", i), Thread: "1", From: "lead-x", Name: "lead", Text: fmt.Sprint("reply ", i), At: time.Now()})
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.thread != "1" || !m.composing {
+		t.Fatalf("thread %q not open with its box", m.thread)
+	}
+	if !strings.Contains(m.View(), "reply 19") {
+		t.Fatal("the thread did not open at its newest")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if v := m.View(); m.thScroll == 0 || strings.Contains(v, "reply 19") {
+		t.Fatalf("↑ did not scroll the thread: %d", m.thScroll)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.thScroll != 3 {
+		t.Fatalf("↓ did not scroll back: %d", m.thScroll)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if !strings.Contains(m.View(), "reply 19") || m.thScroll != 0 {
+		t.Fatal("End did not go to the thread's newest")
+	}
+}
+
+// The thread kept in view still has a blank row between it and the box.
+func TestRoomAboveTheBox(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	lines := strings.Split(ansi.Strip(m.View()), "\n")
+	for i, l := range lines {
+		if strings.Contains(l, "waiting on you") || strings.Contains(l, "╭─") {
+			if _, main, _ := strings.Cut(lines[i-1], "│"); strings.TrimSpace(main) != "" {
+				t.Fatalf("no room above the box:\n%s", strings.Join(lines, "\n"))
+			}
+			return
+		}
+	}
+	t.Fatal("no box")
+}

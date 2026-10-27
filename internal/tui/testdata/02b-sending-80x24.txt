@@ -1,6 +1,5 @@
  ‹ textkit-2 › lead  › thread                                          esc back
 ────────────────────────────────────────────────────────────────────────────────
-   The parser and the renderer are tangled together. Can you split the parser
    into its own package so reviewer can check it on its own?
 
    3 replies ─────────────────────────────────────────────────────────────────
@@ -17,8 +16,9 @@
    you  ◌ sending…
    Keep the alias for one release, then remove it in 0.9.
 
+
   ╭─ reply · lead ────────────────────────────────────────────────────────────╮
   │ › Reply to this thread…                                                   │
   ╰───────────────────────────────────────────────────────────────────────────╯
 ────────────────────────────────────────────────────────────────────────────────
- enter send   ctrl+j newline   esc back to chat   alt+v image
+ enter send   esc back to chat   ↑ pgup scroll   end newest   ctrl+j newline

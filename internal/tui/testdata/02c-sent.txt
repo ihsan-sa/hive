@@ -1,6 +1,5 @@
    Thread  textkit-2 › lead           esc close
 ────────────────────────────────────────────────
-
    lead  20:31
    Done. parser/ is its own package now, with
    14 tests passing, and reviewer approved the
@@ -10,6 +9,7 @@
    you  20:44
    Keep the alias for one release, then remove
    it in 0.9.
+
 
   ╭─ reply · lead ────────────────────────────╮
   │ › Reply to this thread…                   │

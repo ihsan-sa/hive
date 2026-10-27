@@ -472,7 +472,9 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.focusBox(m.thread)
 		}
 		if m.threadSel >= 0 && m.threadSel < len(ts) {
-			m.thread = ts[m.threadSel].id
+			if m.thread != ts[m.threadSel].id {
+				m.thread, m.thScroll = ts[m.threadSel].id, 0 // another thread opens at its newest
+			}
 			m.focus = 2
 			return m, m.focusBox(m.thread)
 		}
@@ -484,8 +486,10 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "esc", "left", "h":
 		m.focus = 0
-	case "pgup", "pgdown", "home", "end":
+	case "pgup", "pgdown":
 		m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
+	case "G", "g": // as End and Home
+		m.jump(map[string]string{"G": "end", "g": "home"}[s])
 	case "n", "i":
 		return m, m.focusBox("")
 	case "a":
@@ -528,8 +532,6 @@ func scroll(off int, key string, page int) int {
 		return off + map[string]int{"pgup": page - 2, "wheelup": 3}[key]
 	case "pgdown", "wheeldown":
 		return max(0, off-map[string]int{"pgdown": page - 2, "wheeldown": 3}[key])
-	case "home":
-		return 1 << 20
 	}
 	return 0
 }
@@ -620,10 +622,10 @@ func (m *model) viewChannel(w int) pane {
 		default:
 			add(stDim.Render(fmt.Sprintf("▸ %s  last %s", replies, t.msgs[n].At.Local().Format("15:04"))))
 		}
-		if sel {
+		lines = append(lines, "")
+		if sel { // with the row under it, so the box never sits right on it
 			selEnd = len(lines)
 		}
-		lines = append(lines, "")
 	}
 	if len(ts) == 0 {
 		hint := "This is " + chatHint(c, false) + ". Press n to write."
@@ -680,7 +682,11 @@ func stack(lines, bx []string, h int, off *int, s0, s1 int, bottom bool) []strin
 		}
 		*off = len(lines) - end
 	}
-	return append(lines[end-room:end], bx...)
+	shown := append([]string(nil), lines[end-room:end]...)
+	if room > 1 && strings.TrimSpace(ansi.Strip(shown[room-1])) != "" { // a row clear of the box, wherever it's scrolled to
+		shown = append(shown[:room-1], "")
+	}
+	return append(shown, bx...)
 }
 
 func (m *model) viewThread(w int) pane {
@@ -705,10 +711,10 @@ func (m *model) viewThread(w int) pane {
 	tw := w - 5
 	var lines []string
 	add := func(ls ...string) { lines = append(lines, indent(ls, "   ")...) }
-	pending := 0
+	var pending []outMsg // sent, and not yet in the thread
 	for _, o := range m.outbox {
-		if o.chat == m.chat && o.thread == m.thread {
-			pending++
+		if o.chat == m.chat && o.thread == m.thread && m.echoes(o) <= o.had {
+			pending = append(pending, o)
 		}
 	}
 	for i, msg := range t.msgs {
@@ -716,21 +722,19 @@ func (m *model) viewThread(w int) pane {
 		add(m.body(msg.Text, tw)...)
 		add("")
 		if i == 0 {
-			n := len(t.msgs) - 1 + pending
+			n := len(t.msgs) - 1 + len(pending)
 			r := fmt.Sprintf("%d %s ", n, plural(n, "reply", "replies"))
 			add(stDim.Render(r+strings.Repeat("─", max(0, tw-len(r)))), "")
 		}
 	}
-	for _, o := range m.outbox {
-		if o.chat == m.chat && o.thread == m.thread {
-			add(stBoldF.Render("you") + "  " + stDim.Render("◌ sending…"))
-			add(indent(m.body(o.text, tw), "")...)
-			add("")
-		}
+	for _, o := range pending {
+		add(stBoldF.Render("you") + "  " + stDim.Render("◌ sending…"))
+		add(indent(m.body(o.text, tw), "")...)
+		add("")
 	}
 	_, name := m.where()
 	bx := m.compose("reply · "+name, "Reply to this thread…", m.thread, w-3)
-	p.body = stack(lines, bx, m.h-4, &m.thScroll, 0, 0, false)
+	p.body = stack(append(lines, ""), bx, m.h-4, &m.thScroll, 0, 0, false) // two rows clear of the box, as the channel
 	return p
 }
 
