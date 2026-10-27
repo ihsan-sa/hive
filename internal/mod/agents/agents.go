@@ -21,6 +21,10 @@ type Agents struct {
 	// Skip, when set, benches a pick from every route (a model whose trial
 	// didn't finish).
 	Skip func(core.Pick) bool
+	// Demote, when set, says why a worker pick goes after the rest of a
+	// project's route ("" when it doesn't): its runs there keep ending
+	// without a merge.
+	Demote func(project string, p core.Pick) string
 }
 
 // System is the appended system prompt for a role: orientation, the role,
@@ -53,14 +57,25 @@ func (a *Agents) Model(role, project string) (harness, model string) {
 }
 
 // Route is the picks a run of role in project goes on, in fallback order,
-// less those Skip benches while any other is left.
+// less those Skip benches while any other is left; a worker's picks Demote
+// names go after the rest, still there to fall back to.
 func (a *Agents) Route(role, project string) []core.Pick {
 	route := a.C.WS.LoadConfig().Route(role, project)
-	if a.Skip == nil {
-		return route
+	if a.Skip != nil {
+		if kept := slices.DeleteFunc(slices.Clone(route), a.Skip); len(kept) > 0 {
+			route = kept
+		}
 	}
-	if kept := slices.DeleteFunc(slices.Clone(route), a.Skip); len(kept) > 0 {
-		return kept
+	if a.Demote != nil && role == "worker" {
+		var ahead, after []core.Pick
+		for _, p := range route {
+			if a.Demote(project, p) != "" {
+				after = append(after, p)
+			} else {
+				ahead = append(ahead, p)
+			}
+		}
+		route = append(ahead, after...)
 	}
 	return route
 }

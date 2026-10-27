@@ -75,7 +75,7 @@ Each is filed as its own brief, named after it. The ones on top save the most an
 5. **Gate rollbacks don't write lessons.** ~250 words off every brief and review; the gate's own record keeps them. (task 261026-170807-de44f58af1)
 6. **The gate runs one rep a side, and more only when the first differs.** About two thirds of 31 machine-hours, and of the strain that holds workers. (task 261026-170819-6159251230) Done: `gate.Run` screens the first rep with `Decide` at a tenth's noise floor.
 7. **The stall watcher retries a stuck task itself before telling the lead.** (task 261026-170820-936f322d78)
-8. **The orientation says only what an agent can't find out.** 1272 words to about 500, measured on the soft-layer arms. (task 261026-170821-0fd5179b1a)
+8. **The orientation says only what an agent can't find out.** 1272 words to about 500, measured on the soft-layer arms. (task 261026-170821-0fd5179b1a; done: 1339 to 686 by `wc -w`, the command details left to `hive agent help`, not yet measured on the arms)
 9. **The lead's prompt drops the procedure its tools already explain.** After 2, 3 and 6. (task 261026-170821-4e9b2fd137)
 
 Not filed, for the person: whether a prose or prompt change taken as a gain needs the gate at all. Of the gate's rollbacks most were "nothing moved beyond the noise", which a prompt change can't move on the fake harness; the goals say a gain must show itself at the gate, so it is theirs to change.
