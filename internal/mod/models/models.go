@@ -144,7 +144,7 @@ func New(c *core.Core, w *work.Module) *Module {
 	ops := c.Runs.Ops()
 	ops.Register(core.Op{Name: "route", Roles: core.Peers, Help: `{"role": "lead|worker|reviewer|security|warden|tribunal|sweep|fallback", "models": "a,b,c" (in fallback order; empty clears it), "project": "(optional) only this project"} -> sets the models that role runs on in config.json; a check seat (reviewer, security, warden, tribunal) changes only once the person says yes`, Fn: m.opRoute})
 	ops.Register(core.Op{Name: "models", Help: `{} -> the named models, the routes, which model each live agent runs on, and the trials and how they went`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.View(r), nil }})
-	ops.Register(core.Op{Name: "trial", Roles: core.Peers, Help: `{"model": "a named model or harness:model", "project": "a test project", "title": "...", "done": "..."} -> a brief whose worker runs on that model alone; the checks stay on their own models, and how it went is recorded (models op)`, Fn: m.opTrial})
+	ops.Register(core.Op{Name: "trial", Roles: core.Peers, Help: `{"model": "a named model or harness:model", "project": "a test project", "title": "...", "done": "..."} -> a brief whose worker runs on that model alone; the checks stay on their own models, and how it went is recorded (models op). An agent with a project files trials there only, not from a trial of its own, and not one already open on that model with that title`, Fn: m.opTrial})
 	c.Person.Handle("route", m.onPerson)
 	return m
 }
@@ -345,6 +345,18 @@ func (m *Module) opTrial(r core.Run, args json.RawMessage) (any, error) {
 	}
 	if err := m.C.Runs.Walled(r, b.Project); err != nil {
 		return nil, err
+	}
+	// Any agent files trials (a project made to try models on may have its
+	// rounds run by a worker); a trial's own worker files none, so trials
+	// don't breed trials, and one already open isn't filed twice.
+	if own, ok := m.Work.Get(r.Task); ok && r.Task != "" && own.Model != "" {
+		return nil, errors.New("a trial's own worker files no trials: finish this one, and say in the account what to try next")
+	}
+	title := strings.TrimSpace(b.Title)
+	if open := m.Work.List(func(t work.Task) bool {
+		return t.Model == b.Model && t.Project == b.Project && t.Title == title && !t.Terminal() && t.Stage != work.StageMerged
+	}); len(open) > 0 {
+		return nil, fmt.Errorf("task %s is already a trial of %s titled %q; it is recorded in the models op once it ends", open[0].ID, b.Model, title)
 	}
 	cfg := m.C.WS.LoadConfig()
 	pick, err := cfg.Pick(b.Model)
