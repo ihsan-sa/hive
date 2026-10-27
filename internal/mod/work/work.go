@@ -1069,6 +1069,16 @@ func (m *Module) status(t *Task, p core.Project, number int, text string) {
 // findings, which a worker's code can fill with anything.
 const gaveUpOnErrors = "gave up after repeated errors: "
 
+// HiveTrouble is why t stopped on the Hive's own trouble ("" when it
+// didn't): the pipeline gave up on its steps' errors (a forge refusing the
+// token, calls killed by their timeout), not on the worker's work.
+func HiveTrouble(t Task) string {
+	if t.Stage != StageStopped || t.ByPerson || !strings.HasPrefix(t.Reason, "gave up after ") {
+		return ""
+	}
+	return t.Reason
+}
+
 // revive brings back the tasks GitHub's rate limit stopped, from before it
 // was waited out, once the pause is over, and those stopped on calls killed
 // by their timeout, once no call has been for a while. Only a stop on

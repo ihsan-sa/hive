@@ -214,6 +214,73 @@ func TestATrialThatDoesntFinishBenchesTheModel(t *testing.T) {
 	}
 }
 
+// A trial that stopped on the Hive's own trouble says nothing of the model:
+// it is shown apart and doesn't bench it, and once the task comes back and
+// ends, that end is recorded in its place.
+func TestATrialStoppedOnTheHivesTroubleIsntCounted(t *testing.T) {
+	a, lead := hiveWithModels(t)
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "qwen,fake:opus"}); err != nil {
+		t.Fatal(err)
+	}
+	end := func(id, stage, reason string) {
+		t.Helper()
+		tk, _ := a.Work.Get(id)
+		tk.Stage, tk.Reason = stage, reason
+		a.C.J.MustAppend("task.saved", tk)
+		a.Models.Tick()
+	}
+	file := func() string {
+		t.Helper()
+		res, err := call(t, a, lead, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "add a README"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.(map[string]string)["task"]
+	}
+	first := file()
+	end(first, work.StageBlocked, core.NoFinish+": it was nudged twice")
+	second := file()
+	end(second, work.StageStopped, "gave up after repeated errors: gh api .../check-runs: Resource not accessible by personal access token (HTTP 403)")
+	view := a.Models.View(lead)
+	if n := len(view["trials"].([]models.Trial)); n != 1 {
+		t.Fatalf("%d trials counted; view %v", n, view)
+	}
+	if u := view["trials_not_counted"].([]models.Trial); len(u) != 1 || u[0].Task != second || u[0].Hive == "" {
+		t.Fatalf("not counted: %+v", u)
+	}
+	if h, _ := a.Agents.Model("worker", "lab"); h != "fake" {
+		t.Fatal("a trial stopped on the Hive's trouble cleared the model's bench")
+	}
+	// The Hive brings it back, and it merges: that is the model's result.
+	end(second, work.StageMerged, "")
+	view = a.Models.View(lead)
+	if tr := view["trials"].([]models.Trial); len(tr) != 2 || len(view["trials_not_counted"].([]models.Trial)) != 0 {
+		t.Fatalf("after it came back: %v", view)
+	}
+	if h, _ := a.Agents.Model("worker", "lab"); h != "open" {
+		t.Fatal("the merged trial didn't clear the model's bench")
+	}
+	a.Models.Tick()
+	n := 0
+	a.C.J.Replay(func(e core.Event) {
+		if e.Kind == "model.trial" {
+			n++
+		}
+	})
+	if n != 3 {
+		t.Fatalf("%d records, want 3", n)
+	}
+}
+
+// A trial recorded before the Hive's trouble was told apart is read as such.
+func TestAnOldTrialStoppedOnTheHivesTroubleIsntCounted(t *testing.T) {
+	a, lead := hiveWithModels(t)
+	a.C.J.MustAppend("model.trial", models.Trial{Task: "x", Model: "qwen", Project: "lab", Outcome: work.StageStopped, Reason: "gave up after repeated errors: HTTP 403"})
+	if v := a.Models.View(lead); len(v["trials"].([]models.Trial)) != 0 || len(v["trials_not_counted"].([]models.Trial)) != 1 {
+		t.Fatalf("view %v", v)
+	}
+}
+
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	for i := 0; i < 200; i++ {
