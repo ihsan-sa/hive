@@ -184,6 +184,22 @@ func TestRetryHint(t *testing.T) {
 	}
 }
 
+// A merge held behind a kept gain waits that keep's own bound, as one held
+// on the recursive gate does: hours of it are no stall to raise.
+func TestAMergeBehindAKeptGainIsNoStall(t *testing.T) {
+	m := rig(t)
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: work.StageMerging, Reason: work.KeptFirstWait + ": #99 (faster) was kept on abc against main at def, and this merge would change what that verdict measured; it merges first (or until 10:00Z)"})
+	m.mu.Lock()
+	sp := m.spells["t0"]
+	sp.since, sp.waitSince = time.Now().Add(-5*time.Hour), time.Now().Add(-5*time.Hour)
+	m.spells["t0"] = sp
+	m.mu.Unlock()
+	m.Watch()
+	if s := m.Stalls(); len(s) != 0 {
+		t.Fatalf("stalls = %+v, want none for a merge behind a kept gain", s)
+	}
+}
+
 // A merged task's change is on main: the watcher leaves it be past the
 // other stages' limit, as a recheck of it is refused ("task is merged").
 func TestMergedTaskIsNotAStall(t *testing.T) {

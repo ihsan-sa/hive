@@ -782,7 +782,7 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 func (GitHub) squashBody(repo string, number int) string {
 	out, err := gh(repo, "pr", "view", strconv.Itoa(number), "-R", repo, "--json", "commits")
 	if err != nil {
-		return ""
+		return SquashBody(nil)
 	}
 	var v struct {
 		Commits []struct {
@@ -791,7 +791,7 @@ func (GitHub) squashBody(repo string, number int) string {
 		} `json:"commits"`
 	}
 	if json.Unmarshal([]byte(out), &v) != nil {
-		return ""
+		return SquashBody(nil)
 	}
 	if len(v.Commits) == 1 {
 		return SquashBody([]string{v.Commits[0].Body})
@@ -805,8 +805,18 @@ func (GitHub) squashBody(repo string, number int) string {
 
 var coAuthor = regexp.MustCompile(`(?im)^co-authored-by:.*$\n?`)
 
+// squashBodyMax keeps the body, one argv string to gh, well under Linux's
+// 128 KiB cap on a single argument (MAX_ARG_STRLEN).
+const squashBodyMax = 64 << 10
+
+// noSquashBody stands in for a body with nothing left in it: gh skips an
+// empty --body and GitHub writes its default, co-author lines and all.
+const noSquashBody = "Merged by the Hive."
+
 // SquashBody joins commit messages into a squash body with no
-// Co-authored-by trailer, so nobody but the Hive is credited.
+// Co-authored-by trailer, so nobody but the Hive is credited. It is never
+// empty, and past squashBodyMax it keeps each message's first line only,
+// then cuts at a line.
 func SquashBody(messages []string) string {
 	var parts []string
 	for _, m := range messages {
@@ -814,7 +824,24 @@ func SquashBody(messages []string) string {
 			parts = append(parts, m)
 		}
 	}
-	return strings.Join(parts, "\n\n")
+	body := strings.Join(parts, "\n\n")
+	if body == "" {
+		return noSquashBody
+	}
+	if len(body) <= squashBodyMax {
+		return body
+	}
+	for i, p := range parts {
+		parts[i], _, _ = strings.Cut(p, "\n")
+	}
+	if body = strings.Join(parts, "\n"); len(body) > squashBodyMax {
+		body = body[:squashBodyMax]
+		if i := strings.LastIndex(body, "\n"); i > 0 {
+			body = body[:i]
+		}
+		body = strings.ToValidUTF8(body, "")
+	}
+	return body + "\n\n(trimmed: the full messages are on the pull request)"
 }
 
 // ReadyPR marks a draft ready for review with the token for repo's owner,
@@ -904,12 +931,20 @@ const queuedTooLong = time.Hour
 // with no runs yet counts as pending, so a just-pushed head whose jobs aren't
 // listed yet doesn't read as having none.
 //
-// A token that may not read checks (a 403) on a head with no workflows reads
-// as no checks: there is no CI there to wait for, so the change goes on by
-// the Hive's own tests, as on a project with no forge checks at all.
+// A token that may not use the Checks API (a fine-grained token: GitHub
+// offers it no checks permission, so check-runs and check-suites answer 403)
+// reads the head's Actions runs and their jobs instead, which carry the same
+// names, states and job URLs, and its commit statuses as before. A token that
+// may read none of them (a 403) on a head with no workflows reads as no
+// checks: there is no CI there to wait for, so the change goes on by the
+// Hive's own tests, as on a project with no forge checks at all.
 func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 	none := ciless(repo, sha)
 	runs, err := ghPages[ghCheckRun](repo, "repos/"+repo+"/commits/"+sha+"/check-runs", "check_runs")
+	actions := refused(err)
+	if actions {
+		runs, err = actionsJobs(repo, sha)
+	}
 	if err = none(err); err != nil {
 		return nil, err
 	}
@@ -946,6 +981,9 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 		}
 		list = append(list, CheckRun{Name: s.Context, State: state, Detail: s.Description, URL: s.TargetURL})
 	}
+	if actions { // the suites are the Checks API's too; actionsJobs holds a new head
+		return list, nil
+	}
 	suites, err := ghPages[ghSuite](repo, "repos/"+repo+"/commits/"+sha+"/check-suites", "check_suites")
 	if err = none(err); err != nil {
 		return nil, err
@@ -958,10 +996,74 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 	return list, nil
 }
 
+// refused reports whether err is the forge refusing the token a read (HTTP
+// 403); a rate limit's 403 is no refusal.
+func refused(err error) bool {
+	var rl *RateLimited
+	return err != nil && !errors.As(err, &rl) && strings.Contains(err.Error(), "HTTP 403")
+}
+
+// actionsJobs reads sha's checks through the Actions API, which a
+// fine-grained token may use: each workflow run on the head and the jobs of
+// its latest attempt, read as check runs (a job is one: the same id, name,
+// status, conclusion, start and job URL). A run with no jobs listed stands
+// for itself: one queued or just started holds the merge, one that ended
+// without jobs (a startup failure) reads by its conclusion. A head with
+// workflows and no runs listed yet is held for suiteGrace from when it was
+// first read so, as a young Actions suite holds it on the Checks API: GitHub
+// lists a just-pushed head's runs a little after the push.
+func actionsJobs(repo, sha string) ([]ghCheckRun, error) {
+	wruns, err := ghPages[struct {
+		ghCheckRun
+		RunStartedAt time.Time `json:"run_started_at"`
+	}](repo, "repos/"+repo+"/actions/runs?head_sha="+sha, "workflow_runs")
+	if err != nil {
+		return nil, err
+	}
+	var list []ghCheckRun
+	for _, r := range wruns {
+		jobs, err := ghPages[ghCheckRun](repo, fmt.Sprintf("repos/%s/actions/runs/%d/jobs", repo, r.ID), "jobs")
+		if err != nil {
+			return nil, err
+		}
+		if len(jobs) == 0 {
+			run := r.ghCheckRun
+			run.StartedAt = r.RunStartedAt
+			jobs = append(jobs, run)
+		}
+		list = append(list, jobs...)
+	}
+	if len(list) == 0 && !noWorkflows(repo, sha) {
+		key := repo + "@" + sha
+		runless.Lock()
+		first, seen := runless.m[key]
+		if !seen {
+			if len(runless.m) >= 1024 {
+				clear(runless.m)
+			}
+			first = time.Now()
+			runless.m[key] = first
+		}
+		runless.Unlock()
+		if time.Since(first) < suiteGrace {
+			list = append(list, ghCheckRun{Name: "github-actions", Status: "queued, no runs listed yet"})
+		}
+	}
+	return list, nil
+}
+
+// runless remembers, by repo@sha, when a head with workflows was first read
+// with no Actions runs listed.
+var runless = struct {
+	sync.Mutex
+	m map[string]time.Time
+}{m: map[string]time.Time{}}
+
 // checksRefused is a forge refusing the token a read of a head's checks, as
 // gh words it: "gh api repos/o/r/commits/<sha>/check-runs?per_page=100: gh:
-// Resource not accessible by personal access token (HTTP 403)".
-var checksRefused = regexp.MustCompile(`^gh api repos/\S+/commits/[0-9a-f]+/(check-runs|check-suites|status)\S*: .*\(HTTP 403\)$`)
+// Resource not accessible by personal access token (HTTP 403)", or the same
+// of the Actions runs read in their place.
+var checksRefused = regexp.MustCompile(`^gh api repos/\S+/(commits/[0-9a-f]+/(check-runs|check-suites|status)|actions/runs)\S*: .*\(HTTP 403\)$`)
 
 // ChecksRefused reports whether err's text is GitHub.Checks refused the
 // token's read of a head's checks.
@@ -979,8 +1081,7 @@ func ChecksRefused(text string) bool { return checksRefused.MatchString(text) }
 // reads as having no checks (docs/risk.md).
 func ciless(repo, sha string) func(error) error {
 	return func(err error) error {
-		var rl *RateLimited
-		if err == nil || errors.As(err, &rl) || !strings.Contains(err.Error(), "HTTP 403") {
+		if !refused(err) {
 			return err
 		}
 		if noWorkflows(repo, sha) {
