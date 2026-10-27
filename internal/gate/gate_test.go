@@ -51,6 +51,13 @@ func TestDecide(t *testing.T) {
 			t.Errorf("%s: keep=%v %q gains=%v regs=%v", c.name, v.Keep, v.Reason, v.Gains, v.Regressions)
 		}
 	}
+	// MetricGain marks a metric beyond the noise, not a pass rate's gain.
+	if v := Decide([]Result{res("e2e", true), res("bench", true, score(8))}, []Result{res("e2e", false), res("bench", true, score(5))}, Options{}); !v.MetricGain {
+		t.Errorf("a score gain beside a pass rate's: %+v", v)
+	}
+	if v := Decide([]Result{res("e2e", true)}, []Result{res("e2e", false)}, Options{}); !v.Keep || v.MetricGain {
+		t.Errorf("a pass rate's gain alone: %+v", v)
+	}
 }
 
 // A failing e2e probe names its tests and what each said first, and the

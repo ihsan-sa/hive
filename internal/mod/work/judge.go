@@ -30,11 +30,34 @@ const JudgeTries = 3
 // back a keep won on the control's flake. A var so a test needn't wait.
 var JudgeParkWait = 30 * time.Minute
 
-// clearKeep says whether g is a keep the numbers make clear: its gain is a
-// metric measured beyond the noise (the gate names it with its noise), not a
-// pass rate the control's flake could have given it, nor a tie.
+// clearKeep says whether g is a keep the numbers make clear: its gains
+// include a metric measured beyond the noise (GateResult.MetricGain), not
+// only a pass rate the control's flake could have given it, nor a tie.
 func clearKeep(g core.GateResult) bool {
-	return g.Outcome == core.GateKeep && strings.Contains(g.Reason, "(noise ±")
+	return g.Outcome == core.GateKeep && g.MetricGain
+}
+
+// judgedPaths are the code that decides and measures a keep: the gate's, the
+// judge's and the score's. A change to them, like one to security-listed
+// files, keeps its judge however long it is parked (alwaysJudged), since the
+// numbers that would merge it are the ones it may have changed.
+var judgedPaths = append([]string{"internal/mod/work/judge", "internal/core/judge", "internal/mod/improve/", "cmd/hive-score/", "internal/score/", "tests/"}, gateFixPaths...)
+
+// alwaysJudged says why ch's clear keep still waits for a parked judge, or
+// "": it touches security-listed files, or the code in judgedPaths. A judge
+// can only roll back such a keep, and it costs little to wait for one.
+func alwaysJudged(ch core.Change) string {
+	if len(ch.Security) > 0 {
+		return "it touches security-listed files (" + core.Clip(strings.Join(ch.Security, ", "), 200) + ")"
+	}
+	for _, f := range ch.Files {
+		for _, pre := range judgedPaths {
+			if strings.HasPrefix(f, pre) {
+				return "it changes the code that gates, judges or scores a change (" + f + ")"
+			}
+		}
+	}
+	return ""
 }
 
 // JudgeWait is how long one judge run may take before it is stopped and
@@ -145,7 +168,7 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 		m.hold(t, p, fmt.Sprintf("%s: the gate said %s on %s, and its judge (%s) is weighing that with the change", GateWait, GateWord(g.Outcome), core.Short(g.Head), spec.Model))
 		return false, true, nil
 	}
-	if !r.Terminal() && clearKeep(g) && r.Status == core.StatusParked && !r.ParkedSince.IsZero() && time.Since(r.ParkedSince) >= JudgeParkWait {
+	if !r.Terminal() && clearKeep(g) && r.Status == core.StatusParked && !r.ParkedSince.IsZero() && time.Since(r.ParkedSince) >= JudgeParkWait && m.mayBypass(p, g) {
 		m.C.Runs.Stop(r.ID, "the gate's clear keep merges on its numbers rather than wait for this judge")
 		if t.JudgeTries == nil {
 			t.JudgeTries = map[string]int{}
@@ -189,4 +212,11 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 	m.comment(p.Repo, t.PR.Number, fmt.Sprintf("**Judge (%s): %s** %s against main at %s; the gate's numbers said %s.\n\n%s", r.Model, word[verdict], core.Short(g.Head), core.Short(g.Main), GateWord(g.Outcome), summary))
 	m.save(t, fmt.Sprintf("the judge (%s): %s; the gate's numbers said %s", r.Model, word[verdict], GateWord(g.Outcome)))
 	return verdict == core.GateKeep, false, nil
+}
+
+// mayBypass says whether g's clear keep may merge without its parked judge:
+// not when the change is alwaysJudged, or can't be told apart from one.
+func (m *Module) mayBypass(p core.Project, g core.GateResult) bool {
+	ch, err := m.C.Effects.Classify(p, g.Main, g.Head)
+	return err == nil && alwaysJudged(ch) == ""
 }

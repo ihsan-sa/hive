@@ -54,6 +54,9 @@ type Verdict struct {
 	// Differs names probes that pass as often on both sides but fail
 	// different tests: not judged, shown so a new failure isn't hidden by a tie.
 	Differs []string `json:"differs,omitempty"`
+	// MetricGain says a metric moved beyond the noise for the better: a gain
+	// a flaky control run can't give, unlike a pass rate's.
+	MetricGain bool `json:"metric_gain,omitempty"`
 }
 
 func mean(v []float64) float64 {
@@ -194,7 +197,7 @@ func Decide(cand, ctrl []Result, o Options) Verdict {
 		text := fmt.Sprintf("%s %s: candidate %.4g, control %.4g (noise ±%.3g, n=%d/%d)", k.probe, k.metric, mean(a), mean(b), margin, len(a), len(b))
 		switch {
 		case diff > margin:
-			v.Gains = append(v.Gains, text)
+			v.Gains, v.MetricGain = append(v.Gains, text), true
 		case diff < -margin:
 			v.Regressions = append(v.Regressions, text)
 		}

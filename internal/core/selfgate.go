@@ -36,8 +36,11 @@ type GateResult struct {
 	// Measured says the outcome came from comparing both sides' results, so
 	// the judge weighs it (judge.go); a candidate that failed before it was
 	// measured (it doesn't build, fails its own tests) is rolled back as is.
-	Measured bool      `json:"measured,omitempty"`
-	At       time.Time `json:"at"`
+	Measured bool `json:"measured,omitempty"`
+	// MetricGain says a keep's gains include a metric beyond the noise
+	// (gate.Verdict.MetricGain), so a parked judge needn't hold it (clearKeep).
+	MetricGain bool      `json:"metric_gain,omitempty"`
+	At         time.Time `json:"at"`
 }
 
 // RecordGate records a gate run's verdict. Only the daemon calls it, from the

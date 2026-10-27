@@ -232,19 +232,28 @@ func TestACarriedVerdictIsJudgedAtItsOwnMain(t *testing.T) {
 // judge that has been parked JudgeParkWait (issue #983): the judge is
 // stopped, the numbers merge it, and the PR says no judge weighed it. A
 // rollback, or a keep won on a pass rate the control's flake could have
-// given it, still waits for its judge.
+// given it, still waits for its judge, as does a clear keep of a change to
+// the code that gates, judges or scores a change (alwaysJudged).
 func TestAParkedJudgeDoesntHoldAKeep(t *testing.T) {
-	for _, c := range []struct{ outcome, reason string }{
-		{core.GateKeep, "better than the current Hive with no regression: benchmark seconds: candidate 5.468, control 11.55 (noise ±2.54, n=3/3)"},
-		{core.GateKeep, "better than the current Hive with no regression: e2e passes 3/3, the control 1/3"},
-		{core.GateRollback, "worse than the current Hive: e2e passes 1/3, the control 3/3"},
+	const gain = "better than the current Hive with no regression: benchmark seconds: candidate 5.468, control 11.55 (noise ±2.54, n=3/3)"
+	for _, c := range []struct {
+		outcome, reason, file string
+		metric, clear         bool
+	}{
+		{core.GateKeep, gain, "feature.go", true, true},
+		// The structured flag decides, not the reason's wording.
+		{core.GateKeep, "better than the current Hive with no regression: e2e passes 3/3, the control 1/3; benchmark seconds faster", "feature.go", true, true},
+		{core.GateKeep, "better than the current Hive with no regression: e2e passes 3/3, the control 1/3", "feature.go", false, false},
+		{core.GateRollback, "worse than the current Hive: e2e passes 1/3, the control 3/3", "feature.go", false, false},
+		{core.GateKeep, gain, "internal/gate/decide.go", true, false},
+		{core.GateKeep, gain, "internal/mod/work/judge.go", true, false},
 	} {
-		outcome, clear := c.outcome, strings.Contains(c.reason, "noise")
-		m, task, p, f := measuredRig(t, outcome)
+		outcome, clear := c.outcome, c.clear
+		m, task, p, f := measuredRigSeeded(t, nil, map[string]string{c.file: "package p\n"}, outcome)
 		inner := m.Gate
 		m.Gate = func(ctx context.Context, j GateJob) core.GateResult {
 			g := inner(ctx, j)
-			g.Reason = c.reason
+			g.Reason, g.MetricGain = c.reason, c.metric
 			return g
 		}
 		main, _ := m.C.Effects.Sync(p)
@@ -272,8 +281,9 @@ func TestAParkedJudgeDoesntHoldAKeep(t *testing.T) {
 		JudgeParkWait = wait
 		r, _ := m.C.Runs.Get(id)
 		if !clear {
-			// A rollback, or a keep won on a pass rate the control's flake
-			// could have given it, waits for its judge.
+			// A rollback, a keep won on a pass rate the control's flake
+			// could have given it, or one of the gate's or judge's code,
+			// waits for its judge.
 			if task.Stage != StageMerging || !strings.Contains(task.Reason, "judge") || r.Terminal() {
 				t.Fatalf("%s with its judge parked: stage %q, reason %q, judge %s", c.reason, task.Stage, task.Reason, r.Status)
 			}
@@ -288,5 +298,19 @@ func TestAParkedJudgeDoesntHoldAKeep(t *testing.T) {
 		if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); !strings.Contains(c, "Judge bypassed") {
 			t.Fatalf("the PR doesn't say no judge weighed the keep:\n%s", c)
 		}
+	}
+}
+
+// A change to security-listed files keeps its judge however long it is
+// parked: a judge can only roll back its keep (docs/judge.md).
+func TestASecurityKeepIsAlwaysJudged(t *testing.T) {
+	if why := alwaysJudged(core.Change{Files: []string{"internal/sandbox/bwrap.go"}, Security: []string{"internal/sandbox/bwrap.go"}}); !strings.Contains(why, "security-listed") {
+		t.Fatalf("a security-listed change: %q", why)
+	}
+	if why := alwaysJudged(core.Change{Files: []string{"cmd/hive-score/main.go"}}); why == "" {
+		t.Fatal("a change to the score is bypassed")
+	}
+	if why := alwaysJudged(core.Change{Files: []string{"internal/mod/work/work.go", "docs/judge.md"}}); why != "" {
+		t.Fatalf("an ordinary change: %q", why)
 	}
 }
