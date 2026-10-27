@@ -124,3 +124,40 @@ func TestAFinishAfterAMidTurnReopenTakesAnotherTurn(t *testing.T) {
 		}
 	}
 }
+
+// The same prompt sent twice (a conflict found by two steps, a review read
+// twice) while the turn it started still runs is being worked on already:
+// the turn finishing on it ends the run, with no second turn on the same
+// prompt (issue #1157). Another text mid-turn still takes one.
+func TestTheSamePromptTwiceMidTurnTakesNoSecondTurn(t *testing.T) {
+	for _, tc := range []struct {
+		second string
+		want   string
+	}{{"main moved", StatusDone}, {"fix round", StatusIdle}} {
+		c, _ := testHive(t)
+		c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker"})
+		if err := c.Runs.Reopen("w1", "main moved"); err != nil {
+			t.Fatal(err)
+		}
+		c.J.MustAppend("run.turn_started", turnStarted{ID: "w1", Turn: 1, Delivered: 1})
+		if err := c.Runs.Reopen("w1", tc.second); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Runs.Reopen("w1", tc.second); err != nil {
+			t.Fatal(err)
+		}
+		c.J.MustAppend("run.finish", map[string]any{"id": "w1", "finish": Finish{Status: "done", Account: "merged main"}})
+		r, _ := c.Runs.Get("w1")
+		out := c.WS.TurnOut("w1", 1)
+		os.MkdirAll(filepath.Dir(out), 0o755)
+		os.WriteFile(out, []byte(`{"type":"result","subtype":"success","result":"done","session_id":"s1"}`+"\n"), 0o600)
+		c.Runs.endTurn(r)
+		got, _ := c.Runs.Get("w1")
+		if got.Status != tc.want {
+			t.Errorf("%q sent mid-turn: the run is %q (%q) with %d pending, want %s", tc.second, got.Status, got.Reason, len(got.Pending), tc.want)
+		}
+		if tc.want == StatusIdle && len(got.Pending) != 1 {
+			t.Errorf("%q sent twice mid-turn: %d pending, want it once", tc.second, len(got.Pending))
+		}
+	}
+}

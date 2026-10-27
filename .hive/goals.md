@@ -14,23 +14,6 @@ Soft layers are a big part of that loop (23:21): sub-Hives in this Hive's state,
 
 You land a change you proposed yourself, which beats your benchmark, with nobody in between. Then you release it and update your own install to that release.
 
-## Then the real-evaluation milestone
-
-From the person, via the box session (2026-10-25 19:27 local), with a ChatGPT review of what labs working on recursive self-improvement would look for: "one convincing result showing that its self-improvement produces better performance on real work."
-
-The milestone: show, on held-out real work, that the Hive after its own improvement does better than it did before improving and better than plain Claude Code.
-
-- Three arms: plain Claude Code, a frozen Hive (self-improvement off), and the Hive after autonomous improvement.
-- The same tasks, model version, tools and total inference budget for each.
-- Measured from outside: verified completion, total cost (reviewers, failed attempts and retries included), elapsed time, and human interventions.
-- A small pilot first, then 30-50 substantial tasks across several repositories, with repeated runs.
-- The held-out tasks stay apart from anything the Hive's own improvement loop sees (its benchmark, gate, e2e and score).
-- A short, reproducible report: exact commits, failures, and which changes the agents found versus what the person did.
-
-It has its own project, hive-eval, whose `.hive/goals.md` holds the same ask. It measures the loop above rather than replacing it: the first milestone comes first, and changes to the Hive that this one needs (a frozen mode, budget accounting, counting interventions) count as work for this project.
-
-Where it stands (2026-10-26): hive-eval exists with its goals and a README; no pilot has run yet.
-
 ## First change (done)
 
 Done: #114 (a token per repo owner) merged, and has been live on this machine since v0.1.17. H0 now runs v0.1.57 (since 2026-10-24 14:25Z) and follows pre-releases by itself (#237, #322); releases/latest is v0.1.55. Releases go out unsigned for now, by the person's choice. The ask as written:
@@ -54,6 +37,37 @@ Where it stands (2026-10-25 ~20:00Z): the gate runs on every change to the Hive 
 - What stands between that and the milestone is the release: H0 runs v0.1.110; v0.1.111 failed its update test, and from v0.1.112 every cut has stopped at the release scan, which refuses to pass until the person gives its handle list (HIVE_SCAN_HANDLES).
 - The org leg: the test org is Hive-RSI-Lab, which owns the fork Hive-RSI-Lab/hive that the gate's reach check must handle. /home/hive/h0-gate.token is gone; test runs make their own private repos in Hive-RSI-Lab instead (see Standing asks).
 - Alongside: Codex can be picked per role (#398); the optional modules have their own projects (dispatch: Hive-RSI-Lab/hive-dispatch, deck: Hive-RSI-Lab/hive-deck, trials: Hive-RSI-Lab/hive-trials); the Claude login renews itself (#323).
+
+## Then the real-evaluation milestone
+
+From the person, via the box session (2026-10-25 19:27 local), with a ChatGPT review of what labs working on recursive self-improvement would look for: "one convincing result showing that its self-improvement produces better performance on real work."
+
+The milestone: show, on held-out real work, that the Hive after its own improvement does better than it did before improving and better than plain Claude Code.
+
+- Three arms: plain Claude Code, a frozen Hive (self-improvement off), and the Hive after autonomous improvement.
+- The same tasks, model version, tools and total inference budget for each.
+- Measured from outside: verified completion, total cost (reviewers, failed attempts and retries included), elapsed time, and human interventions.
+- A small pilot first, then 30-50 substantial tasks across several repositories, with repeated runs.
+- The held-out tasks stay apart from anything the Hive's own improvement loop sees (its benchmark, gate, e2e and score).
+- A short, reproducible report: exact commits, failures, and which changes the agents found versus what the person did.
+
+It has its own project, hive-eval, whose `.hive/goals.md` holds the same ask. It measures the loop above rather than replacing it: the first milestone comes first, and changes to the Hive that this one needs (a frozen mode, budget accounting, counting interventions) count as work for this project.
+
+Where it stands (2026-10-26): hive-eval exists with its goals and a README; no pilot has run yet.
+
+## Where it leads: something new built every day
+
+The person, via autobox (2026-10-26, 21:59 local): "one interesting thing would be getting the hive working, showing RSI on itself, and then everyday building something new and posting it and saying built with The Hive, hive.ihsan.cc". And, the same minute: "well priority is having the core of the hive working well so we can actually build projects"; each project is "a build and also continued maintenance etc".
+
+This is what the core work above is for, not a task for now. In order:
+
+1. The core works well: agents collaborating on one goal (21:56), the loop closed (first milestone).
+2. RSI shown on itself: the Hive measurably improves itself (first milestone, then the real-evaluation milestone).
+3. Then, every day, the Hive builds something new as a project of its own, keeps maintaining what it built, and each one says "Built with The Hive, hive.ihsan.cc".
+
+Posting anything publicly in the person's name stays the person's: the Hive can make the thing and draft the post, never send it (autobox: "Posting in his name stays his").
+
+Where it stands (2026-10-27): not started, by design; the first milestone comes first.
 
 ## Security reads
 

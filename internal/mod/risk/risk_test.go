@@ -1306,10 +1306,54 @@ func TestWardenClockStartsAtItsTurn(t *testing.T) {
 	now := time.Now()
 	req := Request{Updated: now.Add(-2 * WardenTimeout)}
 	w := core.Run{Status: core.StatusRunning, TurnStarted: now.Add(-WardenTimeout / 2)}
-	if wardenLate(req, w, true) {
+	if wardenLate(req, w, true, time.Time{}) {
 		t.Fatal("a warden whose first turn began after a long park was timed out from the request")
 	}
-	if !wardenLate(req, core.Run{Status: core.StatusRunning}, true) || !wardenLate(req, core.Run{}, false) {
+	if !wardenLate(req, core.Run{Status: core.StatusRunning}, true, time.Time{}) || !wardenLate(req, core.Run{}, false, time.Time{}) {
 		t.Fatal("a warden past its time was not late")
+	}
+	// Out of a park with no new turn yet (its last turn long ago): its time
+	// counts from when it was last seen held.
+	idle := core.Run{Status: core.StatusIdle, TurnStarted: now.Add(-3 * WardenTimeout)}
+	if wardenLate(req, idle, true, now.Add(-time.Minute)) {
+		t.Fatal("a warden just out of a park was timed out from its old turn")
+	}
+}
+
+// However it waits, a warden holds a request no longer than WardenHoldMax in
+// all: one parked for days on a weekly limit, or woken again and again, hands
+// it to the person, and while it is parked the lead's requests view says so.
+func TestWardenHoldsARequestADayAtMost(t *testing.T) {
+	now := time.Now()
+	old := Request{Created: now.Add(-WardenHoldMax - time.Minute), Updated: now}
+	for _, w := range []core.Run{{Status: core.StatusParked}, {Status: core.StatusQueued}, {Status: core.StatusRunning, TurnStarted: now}} {
+		if !wardenLate(old, w, true, now) {
+			t.Fatalf("a %s warden held a request past WardenHoldMax", w.Status)
+		}
+	}
+	if wardenLate(Request{Updated: now.Add(-2 * WardenTimeout)}, core.Run{Status: core.StatusParked}, true, time.Time{}) {
+		t.Fatal("a request with no Created time was timed out as a day old")
+	}
+
+	g := newRig(t, 2)
+	req := g.request("install a tool", "x", "T2")
+	g.c.Runs.SetStatus(req.Warden, core.StatusParked, "every claude login is at its weekly limit")
+	g.m.Tick()
+	out, err := g.m.opRequests(core.Run{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := json.Marshal(out); !strings.Contains(string(b), "its warden is parked") {
+		t.Fatalf("the requests view doesn't say the warden is parked: %s", b)
+	}
+	defer func(d time.Duration) { WardenHoldMax = d }(WardenHoldMax)
+	WardenHoldMax = 0
+	g.m.Tick()
+	got, _ := g.m.get(req.ID)
+	if got.State != "asked" || !strings.Contains(got.Reason, "held the request") {
+		t.Fatalf("a warden parked past WardenHoldMax still holds its request: %+v", got)
+	}
+	if w := g.run(req.Warden); !w.Terminal() {
+		t.Fatal("the warden past WardenHoldMax was not stopped")
 	}
 }
