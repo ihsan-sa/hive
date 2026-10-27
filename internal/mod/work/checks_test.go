@@ -1735,3 +1735,33 @@ func TestMergeLineOnlyFrontTests(t *testing.T) {
 		t.Fatalf("at the front: stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
 	}
 }
+
+// A task that leaves the merge line lets the ones waiting their turn behind
+// it look again at once, not a holdGap after they were held; one held for
+// something else, or in another project, keeps its wait.
+func TestLeavingTheMergeLineWakesTheNext(t *testing.T) {
+	m, _, _, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	front := &Task{ID: "t-front", Project: "p", Stage: StageMerging, Reason: mergedTestWait + " at x"}
+	next := &Task{ID: "t-next", Project: "p", Stage: StageMerging, Reason: MergeLineWait + ": #1 first"}
+	aside := &Task{ID: "t-aside", Project: "p", Stage: StageMerging, Reason: "waiting for the forge's checks"}
+	other := &Task{ID: "t-other", Project: "q", Stage: StageMerging, Reason: MergeLineWait + ": #9 first"}
+	later := time.Now().Add(time.Hour)
+	m.mu.Lock()
+	for _, u := range []*Task{front, next, aside, other} {
+		m.tasks[u.ID] = u
+		m.later[u.ID] = later
+	}
+	m.mu.Unlock()
+	f := *front
+	f.Reason = ""
+	f.Stage = StageMerged
+	m.save(&f, "merged")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.later[next.ID]; ok {
+		t.Error("the task next in line still waits after the front merged")
+	}
+	if !m.later[aside.ID].Equal(later) || !m.later[other.ID].Equal(later) {
+		t.Error("a task held for something else, or in another project, lost its wait")
+	}
+}
