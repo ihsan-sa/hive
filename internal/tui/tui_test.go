@@ -1495,6 +1495,22 @@ func TestAnotherThreadOpensAtItsNewest(t *testing.T) {
 	}
 }
 
+// The same text sent twice before a read: the read holding the first hides
+// only its sending line.
+func TestSameTextSentTwice(t *testing.T) {
+	m := testModel(80, 30)
+	m.thread, m.focus = "1", 2
+	m.focusBox("1")
+	for range 2 {
+		m.input.SetValue("ok")
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	m.Update(chatMsg{id: "lead", msgs: append(append([]chat.Message(nil), m.msgs["lead"]...), chat.Message{ID: "9", Thread: "1", From: "person", Text: "ok", At: time.Now()})})
+	if n := strings.Count(m.View(), "sending"); n != 1 {
+		t.Fatalf("%d sending lines, want 1", n)
+	}
+}
+
 // End and Home from a terminal in application-cursor mode (ESC O F, ESC O H,
 // which bubbletea reads as alt+O then F or H) work like plain End and Home.
 func TestApplicationCursorEndAndHome(t *testing.T) {
