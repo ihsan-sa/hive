@@ -92,6 +92,8 @@ type model struct {
 	reply     string            // thread being replied to; "" = new thread
 	drafts    map[string]string // by chat and target
 	outbox    []outMsg          // sent, not yet answered
+	unread    map[string]bool   // IDs this session sent that no read has held yet
+	afterAltO bool              // an alt+O came in: End or Home in application-cursor mode may follow
 
 	// dashboard: the live feed, or the status tree
 	feed     []feedRow
@@ -208,7 +210,7 @@ func newModel(c *api.Client, ws core.Workspace) *model {
 	in.FocusedStyle.Placeholder, in.BlurredStyle.Placeholder = stDim, stDim
 	in.KeyMap.InsertNewline.SetKeys("ctrl+j", "alt+enter")
 	return &model{c: c, ws: ws, remote: c != nil && c.Remote(), open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
-		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, drafts: map[string]string{}, places: map[string]place{}, stages: map[string]string{}, input: in, threadSel: -1, feedSel: -1}
+		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, drafts: map[string]string{}, unread: map[string]bool{}, places: map[string]place{}, stages: map[string]string{}, input: in, threadSel: -1, feedSel: -1}
 }
 
 // sidePane: a pane is open beside the main one.
@@ -377,6 +379,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash("✗ not sent · " + msg.err.Error())
 			return m, nil
 		}
+		m.unread[msg.msg.ID] = true
 		m.msgs[msg.out.chat] = withMsg(m.msgs[msg.out.chat], msg.msg) // a new thread stays in the channel; the person opens it
 	case tickMsg:
 		return m, tea.Batch(m.fetchState(), m.fetchChat(m.currentChatID()), m.fetchDetail(), m.fetchFeed(), tick())
@@ -402,7 +405,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.addEvents(msg)
 	case chatMsg:
 		if msg.err == nil {
-			m.msgs[msg.id] = merge(msg.msgs, m.msgs[msg.id])
+			m.msgs[msg.id] = merge(msg.msgs, m.msgs[msg.id], m.unread)
 		}
 	case runMsg:
 		m.runs[msg.d.Run.ID] = msg.d
@@ -439,6 +442,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.files = append(m.files, msg.f)
 		}
 	case tea.KeyMsg:
+		var ok bool
+		if msg, ok = m.ss3(msg); !ok {
+			return m, nil
+		}
 		if m.keyBurst {
 			return m.burstKey(msg)
 		}
@@ -778,16 +785,43 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// merge is a chat as read, plus what's on screen that the read is too old to
-// hold: a message just sent, whose answer came back before a read started
-// earlier, stays rather than vanishing until the next read.
-func merge(read, shown []chat.Message) []chat.Message {
+// ss3 reads End and Home as a terminal in application-cursor mode sends them
+// (ESC O F, ESC O H), which bubbletea v1.3.10 splits into alt+O then F or H.
+// It holds an alt+O back for the key after it; false means nothing to do yet.
+func (m *model) ss3(k tea.KeyMsg) (tea.KeyMsg, bool) {
+	if m.afterAltO {
+		m.afterAltO = false
+		if k.Type == tea.KeyRunes && !k.Alt && len(k.Runes) == 1 {
+			switch k.Runes[0] {
+			case 'F':
+				return tea.KeyMsg{Type: tea.KeyEnd}, true
+			case 'H':
+				return tea.KeyMsg{Type: tea.KeyHome}, true
+			}
+		}
+	}
+	if k.Type == tea.KeyRunes && k.Alt && string(k.Runes) == "O" {
+		m.afterAltO = true
+		return k, false
+	}
+	return k, true
+}
+
+// merge is a chat as read, plus a message this session sent that the read is
+// too old to hold: one whose answer came back before a read started earlier
+// stays rather than vanishing until the next read. Only those stay: once a
+// read has held a sent message, a later read without it (a chat reset or
+// archived) is believed, and nothing else on screen outlives the read.
+func merge(read, shown []chat.Message, unread map[string]bool) []chat.Message {
+	for _, msg := range read {
+		delete(unread, msg.ID)
+	}
 	var last time.Time
 	if len(read) > 0 {
 		last = read[len(read)-1].At
 	}
 	for _, msg := range shown {
-		if msg.At.After(last) {
+		if unread[msg.ID] && msg.At.After(last) {
 			read = withMsg(read, msg)
 		}
 	}
@@ -997,7 +1031,7 @@ func (m *model) keys() []string {
 	case m.editing:
 		return []string{"enter", "save", "esc", "cancel"}
 	case m.focus == 0:
-		return []string{"↑↓", "move", "enter", "open", "space", "collapse", "tab", "switch pane", "q", "quit"}
+		return []string{"↑↓", "move", "enter", "open", "space", "collapse", "tab", "switch pane", "e E", "a level", "q", "quit"}
 	case m.section == secChats && m.takeover():
 		return []string{"enter", "send", "ctrl+j", "newline", "esc", "back to chat", m.bottomKey(), "newest", imageKey, "image", "pgup pgdn", "scroll"}
 	case m.section == secChats && m.focus == 2:
@@ -1005,16 +1039,16 @@ func (m *model) keys() []string {
 	case m.section == secChats && m.composing:
 		return []string{"enter", "start thread", "ctrl+j", "newline", "esc", "leave box", "↑", "pick a thread", m.bottomKey(), "newest", "tab", "switch pane", imageKey, "image"}
 	case m.section == secChats && m.thread != "":
-		return []string{"↑↓", "thread", "→", "to the open thread", "pgup pgdn", "scroll", "end", "newest", "space", "collapse", "n", "new thread"}
+		return []string{"↑↓", "thread", "→", "to the open thread", "pgup pgdn", "scroll", "end", "newest", "space", "collapse", "n", "new thread", "e E", "all"}
 	case m.section == secChats:
-		return []string{"↑↓", "thread", "enter", "open", "n", "new thread", "end", "newest", "space", "collapse", "tab", "pane"}
+		return []string{"↑↓", "thread", "enter", "open", "n", "new thread", "end", "newest", "space", "collapse", "tab", "pane", "e E", "all"}
 	case len(m.stack) > 0 && m.stack[len(m.stack)-1].kind == "module":
 		return []string{"↑↓", "project", "space", "grant or remove", "r", "review again", "esc", "back", "q", "quit"}
 	case len(m.stack) > 0:
 		return []string{"↑↓", "scroll", "esc", "back", "tab", "sidebar", "q", "quit"}
 	case m.section == secDash:
 		if m.dashTree {
-			return []string{"↑↓", "move", "enter", "open", "←", "collapse", "s", "feed", "tab", "sidebar"}
+			return []string{"↑↓", "move", "enter", "open", "←", "collapse", "e E", "a level", "s", "feed", "tab", "sidebar"}
 		}
 		return []string{"enter", "open thread", "f", "follow", "m", "only me", "s", "status", "tab", "sidebar"}
 	case m.section == secWaiting && m.waitSel < len(m.st.Asks) && m.st.Asks[m.waitSel].Diff != "":
@@ -1048,6 +1082,7 @@ func helpLines() []string {
 		"enter             open; in a box, send",
 		"esc               leave a box, close a thread, one level up",
 		"space             expand or collapse",
+		"e / E (shift+e)   expand a level more, or collapse one: the sidebar, status, a channel's threads",
 		"← →               in the sidebar and status, back up a level or go deeper",
 		"n                 new thread",
 		"a                 in a chat, answer what's waiting on you",

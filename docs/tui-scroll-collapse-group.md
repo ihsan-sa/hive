@@ -45,6 +45,13 @@ wrong for the person, what changed, and what is left for them to decide.
   puts the cursor on the group. A run listed twice in the tree (under its task
   and under agents) keeps the copy nearer the cursor.
 
+**One key opens a level, its shift closes one (issue #384).**
+- e opens every node on the shallowest level of the status tree that has a
+  closed one, so each press shows one level more; E (shift+e) closes the
+  deepest open level. In the sidebar it is the project groups, then their
+  ended-agent folds; in a channel, which has the one level, every thread's
+  replies at once.
+
 **Groups don't lose chats.**
 - An agent whose project isn't in the state (removed, or not loaded yet) gets
   a group under its project's name instead of vanishing from the sidebar.
