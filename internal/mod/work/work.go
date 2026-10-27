@@ -1277,7 +1277,7 @@ func marker(id string) string { return "<!-- hive-task:" + id + " -->" }
 
 func (m *Module) step(t *Task) error {
 	p, err := m.project(t)
-	if err != nil && t.Stage == StageDone {
+	if err != nil && (t.Stage == StageDone || t.Withdrawn()) {
 		t.IssueOpen = false
 		m.save(t, fmt.Sprintf("%v, so issue #%d is left open", err, t.Issue.Number))
 		return nil

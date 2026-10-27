@@ -313,15 +313,21 @@ func nextCheck(m *Module) time.Duration {
 	return time.Until(m.probe).Round(time.Second)
 }
 
-// A done task whose project is gone drops its pending close and stays done.
+// A done or withdrawn task whose project is gone drops its pending close and
+// stays where it is.
 func TestDoneProjectGone(t *testing.T) {
-	m, _, task, _ := noCommitRig(t, 0)
-	task.Stage, task.IssueOpen, task.Project = StageDone, true, "gone"
-	if err := m.step(task); err != nil {
-		t.Fatal(err)
-	}
-	if task.Stage != StageDone || task.IssueOpen || !logged(task, "project gone is gone, so issue #7 is left open") {
-		t.Fatalf("stage %q, issue open %v, log %v", task.Stage, task.IssueOpen, task.Log)
+	for _, stage := range []string{StageDone, StageStopped} {
+		m, _, task, _ := noCommitRig(t, 0)
+		task.Stage, task.IssueOpen, task.Project = stage, true, "gone"
+		if stage == StageStopped {
+			task.Reason = withdrawn + "lead-1: folded into another"
+		}
+		if err := m.step(task); err != nil {
+			t.Fatalf("%s: %v", stage, err)
+		}
+		if task.Stage != stage || task.IssueOpen || !logged(task, "project gone is gone, so issue #7 is left open") {
+			t.Fatalf("stage %q, issue open %v, log %v", task.Stage, task.IssueOpen, task.Log)
+		}
 	}
 }
 
