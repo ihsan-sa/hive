@@ -1704,6 +1704,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 			return err
 		}
 		c, t.Recheck = m.C.Effects.RunCheck(p, t.SHA, "test", cfg.Test), false
+		if m.overtaken(t) { // closed or stopped while it waited in the check line
+			return nil
+		}
 	}
 	if c.CantRun != "" {
 		if t.Checkpoint != "" {

@@ -195,3 +195,36 @@ func TestSlotsPatienceStopsPassingOver(t *testing.T) {
 		t.Fatalf("started %s then %s", a, b)
 	}
 }
+
+// A dropped waiter leaves the line at once without a slot, and the next one
+// starts in its place.
+func TestSlotsDrop(t *testing.T) {
+	s := NewSlots(func() int { return 1 })
+	hold := s.Acquire("p", "first", "test")
+	dropped := make(chan bool, 1)
+	go func() { _, ok := s.Take("p", "closed", "test"); dropped <- ok }()
+	for {
+		if _, w := s.State(); len(w) == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if n := s.Drop("p", "closed"); n != 1 {
+		t.Fatalf("dropped %d, want 1", n)
+	}
+	select {
+	case ok := <-dropped:
+		if ok {
+			t.Fatal("a dropped wait got a slot")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a dropped wait still waits")
+	}
+	if run, w := s.State(); len(run) != 1 || len(w) != 0 {
+		t.Fatalf("running %v, waiting %v", run, w)
+	}
+	hold()
+	if s.Busy() {
+		t.Fatal("busy after the holder released")
+	}
+}
