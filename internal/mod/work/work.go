@@ -1744,7 +1744,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 		}
 	}
 	if !c.OK && t.Checkpoint != "" {
-		return m.dropCheckpoint(t, p, "the tests failed on "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 1500))
+		return m.dropCheckpoint(t, p, "the tests failed on "+core.Short(t.SHA)+":\n\n"+core.ClipEnds(c.Output, 1500))
 	}
 	if !c.OK {
 		mc, err := m.mainTests(p, main, cfg.Test)
@@ -1772,7 +1772,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 				return err
 			}
 			if t.Retested != t.SHA && m.failsAgain(p, t.SHA, cfg.Test, c) {
-				return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+", and again when only the failing tests ran once more:\n\n"+core.Clip(c.Output, 3000))
+				return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+", and again when only the failing tests ran once more:\n\n"+core.ClipEnds(c.Output, 3000))
 			}
 			if t.Retested != t.SHA {
 				// A slow, busy machine fails a test CI passes: what failed
@@ -1786,7 +1786,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 				m.save(t, "its tests failed on "+core.Short(t.SHA)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 300)+") while main's pass, so they run once more before it counts")
 				return nil
 			}
-			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
+			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.ClipEnds(c.Output, 3000))
 		}
 	}
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
@@ -1848,7 +1848,7 @@ func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
 	m.save(t, reason)
 	m.raiseCantRun(p, c)
 	if say {
-		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
+		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.ClipEnds(c.Output, 1500)+"\n```")
 	}
 	return nil
 }
@@ -1917,7 +1917,7 @@ func (m *Module) noteTests(t *Task, p core.Project, main string, c core.Check) e
 	diff := m.ownDiff(p, main, t.SHA)
 	key := diff + " " + passFail(c.OK)
 	if diff == "" || key != t.NotedDiff {
-		err := m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("Tests on %s: **%s**\n\n```\n%s\n```", core.Short(t.SHA), passFail(c.OK), core.Clip(c.Output, 1500)))
+		err := m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("Tests on %s: **%s**\n\n```\n%s\n```", core.Short(t.SHA), passFail(c.OK), core.ClipEnds(c.Output, 1500)))
 		if rl := (*core.RateLimited)(nil); errors.As(err, &rl) {
 			return err
 		}
@@ -2110,7 +2110,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 		brief := fmt.Sprintf("Review %s of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", round, t.ID, t.Label())
 		spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
-		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": c.Output,
+		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": core.ClipEnds(c.FullOutput(), 16000),
 			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account + m.reviewRules(p, main)}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
@@ -3500,7 +3500,7 @@ func (m *Module) startSeat(t *Task, p core.Project, ch core.Change, main, seat, 
 	h, model, route := m.seatModel(p, seat)
 	spec.Harness, spec.Model, spec.Route = h, model, route
 	spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
-	spec.Inputs = map[string]string{"sha": t.SHA, "seat": seat, "diff.patch": ch.Diff, "tests.txt": c.Output,
+	spec.Inputs = map[string]string{"sha": t.SHA, "seat": seat, "diff.patch": ch.Diff, "tests.txt": core.ClipEnds(c.FullOutput(), 16000),
 		"brief.md": "Review token: " + reviewToken(id) + "\n\n" + securityRules(ch) + "\n\n## The change\n\n" + account + m.reviewRules(p, main)}
 	if _, err := m.C.Runs.Start(spec); err != nil {
 		return err

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
@@ -518,7 +519,7 @@ func (e *Effects) Push(p Project, branch, sha string) error {
 func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	c := Check{Project: p.Name, SHA: sha, Kind: kind, At: time.Now().UTC()}
 	record := func() Check {
-		c.Output = Clip(c.Output, 4000)
+		c.Output = ClipEnds(c.Output, 4000)
 		e.j.MustAppend("effect.checked", c)
 		return c
 	}
@@ -634,7 +635,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	if kind == "score" && c.OK {
 		v, perr := scoreOf(out)
 		if perr != nil {
-			c.OK, c.Output = false, "score command printed no number at the end or on one line of its own: "+Clip(out, 500)
+			c.OK, c.Output = false, "score command printed no number at the end or on one line of its own: "+ClipEnds(out, 500)
 		} else {
 			c.Score = &v
 		}
@@ -799,6 +800,26 @@ func StopKeys(out string) []string {
 		}
 	}
 	return keys
+}
+
+// ClipEnds shortens s to about n runes, keeping its lines and both ends: a
+// check prints what it ran first and its verdict (the failures, the summary,
+// ok or FAIL) last, so a quarter of the room goes to the head and the rest to
+// the tail, each cut at a line where one is near.
+func ClipEnds(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	head, tail := string(r[:n/4]), string(r[len(r)-(n-n/4):])
+	if i := strings.LastIndexByte(head, '\n'); i > len(head)/2 {
+		head = head[:i]
+	}
+	if i := strings.IndexByte(tail, '\n'); i >= 0 && i < len(tail)/2 {
+		tail = tail[i+1:]
+	}
+	cut := len(r) - utf8.RuneCountInString(head) - utf8.RuneCountInString(tail)
+	return head + fmt.Sprintf("\n… %d characters cut …\n", cut) + tail
 }
 
 // FullOutput is a check's whole output: its log on the host when it can be
