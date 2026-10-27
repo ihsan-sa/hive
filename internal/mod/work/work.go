@@ -377,9 +377,11 @@ type Module struct {
 	probe   time.Time
 	probing bool
 	online  time.Time
-	// limit is when GitHub's pause on writes ends, and limitText why.
+	// limit is when GitHub's pause on writes (or, limitAll, on every call)
+	// ends, and limitText why.
 	limit     time.Time
 	limitText string
+	limitAll  bool
 	// slow is when a call was last killed by its timeout (settle).
 	slow time.Time
 	// refusedAsked is when the checks of each task stopped on a checks
@@ -457,7 +459,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
-	c.Effects.Slots.Prioritize(m.checkRank)
+	c.Effects.Slots.Prioritize(m.checkRank, rankMain)
 	return m
 }
 
@@ -1032,6 +1034,9 @@ func (m *Module) Offline() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.offline == "" && time.Now().Before(m.limit) {
+		if m.limitAll {
+			return "the login's GitHub API quota is spent or nearly, so the Hive's calls wait until " + m.limit.UTC().Format("15:04Z")
+		}
 		return "GitHub asked the Hive to slow down, so its writes wait until " + m.limit.UTC().Format("15:04Z")
 	}
 	return m.offline
@@ -1042,7 +1047,7 @@ func (m *Module) limited(rl *core.RateLimited) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if rl.Until.After(m.limit) {
-		m.limit, m.limitText = rl.Until, rl.Text
+		m.limit, m.limitText, m.limitAll = rl.Until, rl.Text, rl.All
 	}
 }
 
@@ -1959,8 +1964,12 @@ func (m *Module) failsAgain(p core.Project, sha, command string, c core.Check) b
 // A red main runs what failed once more (Retest) before it holds anything:
 // passing then, it was a flake of a slow or busy machine, filed to fix, and
 // main counts as green. The answer is the newest "retest" check on main.
+// Every red change on main waits on it, so its checks go ahead of the line.
 func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
 	c, ok := m.C.Effects.GetCheck(p.Name, main, "test")
+	if !ok || !c.OK && c.CantRun == "" && m.Retest != nil {
+		defer m.MeasuringMain(p.Name, main)()
+	}
 	if !ok {
 		if _, err := m.C.Sandbox(); err != nil {
 			return core.Check{}, err
@@ -2566,6 +2575,11 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 		queued = false
 	}
 	if !queued {
+		if ahead := m.mergeFront(t, p); ahead != nil {
+			t.MergedTest = ""
+			m.hold(t, p, fmt.Sprintf("%s: #%d (%s) tests merged with main first (main at %s)", MergeLineWait, ahead.PR.Number, core.Clip(ahead.Label(), 80), core.Short(main)))
+			return true, nil
+		}
 		merged, err := m.C.Effects.UpdateBranch(p, t.SHA, main, "")
 		if errors.Is(err, core.ErrConflict) {
 			return m.catchUp(t, p, main, "main moved and the PR's merge with it conflicts")
@@ -2580,7 +2594,7 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	}
 	if !r.done {
 		t.MergedTest = r.sha
-		m.hold(t, p, "testing its head merged with main at "+core.Short(r.main)+" (as "+core.Short(r.sha)+") before it merges")
+		m.hold(t, p, mergedTestWait+" at "+core.Short(r.main)+" (as "+core.Short(r.sha)+") before it merges")
 		return true, nil
 	}
 	t.MergedTest = ""
@@ -2603,6 +2617,55 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	t.MergedOK = key
 	m.save(t, "its tests pass merged with main at "+core.Short(main)+" (as "+core.Short(merged)+"), so it merges as it is")
 	return false, nil
+}
+
+// MergeLineWait opens the reason of a task waiting its turn to test merged
+// with main.
+const MergeLineWait = "waiting its turn in the merge line"
+
+// mergedTestWait opens the reason of a task whose merged test is queued or
+// running.
+const mergedTestWait = "testing its head merged with main"
+
+// mergeFront returns the task ahead of t in its project's merge line, or nil
+// when t is at its front. Only the front tests its head merged with main
+// (issue #1727): every main merge made all of them stale at once, so 46
+// tasks each queued a full test per merge while checks ran one or two at a
+// time, and none caught up. Main is measured after every merge and a worse
+// score reverted, so the line only has to catch a clash between neighbours,
+// and the front of a first-in, first-out line sees every merge before it.
+// The line is the project's merging tasks waiting at this step: the one
+// whose test is in flight is the front, else reverts first, then the oldest
+// PR. A task held for anything else stands aside and joins again when it
+// comes back.
+func (m *Module) mergeFront(t *Task, p core.Project) *Task {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	before := func(a, b *Task) bool {
+		if ra, rb := a.Kind == "revert", b.Kind == "revert"; ra != rb {
+			return ra
+		}
+		if a.PR.Number != b.PR.Number {
+			return a.PR.Number < b.PR.Number
+		}
+		return a.ID < b.ID
+	}
+	var front *Task
+	for _, u := range m.tasks {
+		if u.ID == t.ID || u.Project != p.Name || u.Stage != StageMerging {
+			continue
+		}
+		if r, ok := m.mergeRuns[u.ID]; ok && !r.done && !r.gone {
+			return u
+		}
+		if !strings.HasPrefix(u.Reason, mergedTestWait) && !strings.HasPrefix(u.Reason, MergeLineWait) {
+			continue
+		}
+		if before(u, t) && (front == nil || before(u, front)) {
+			front = u
+		}
+	}
+	return front
 }
 
 // mergeRun is a task's merged-with-main test running behind a step: key is
