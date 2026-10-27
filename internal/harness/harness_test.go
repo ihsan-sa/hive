@@ -82,6 +82,11 @@ func TestClaudeArgs(t *testing.T) {
 	if b := (Claude{}).Args(Turn{SessionID: "u", Resume: true}); !contains(join(b), "--resume u") {
 		t.Fatalf("resume args: %v", b)
 	}
+	// No "Co-Authored-By: Claude" trailer in an agent's commits or PRs: GitHub
+	// shows it as the "claude" contributor.
+	if !contains(joined, `--settings {"attribution":{"commit":"","pr":""},"includeCoAuthoredBy":false}`) {
+		t.Fatalf("attribution not turned off: %q", joined)
+	}
 }
 
 func join(a []string) string {
@@ -194,7 +199,7 @@ func TestOpenClaude(t *testing.T) {
 	args := OpenClaude{}.Args(Turn{SessionID: "s", Model: "deepseek-chat", MaxBudgetUSD: 2, KeyCommand: "hive open-key /k", Endpoint: "https://api.deepseek.com/anthropic/"})
 	a := strings.Join(args, " ")
 	if strings.Contains(a, "--max-budget-usd") || !strings.Contains(a, "--model deepseek-chat") ||
-		!strings.Contains(a, `--settings {"apiKeyHelper":"hive open-key /k","disableAllHooks":true,"env":{"ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic"}}`) {
+		!strings.Contains(a, `--settings {"apiKeyHelper":"hive open-key /k","attribution":{"commit":"","pr":""},"disableAllHooks":true,"env":{"ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic"},"includeCoAuthoredBy":false}`) {
 		t.Errorf("args %s", a)
 	}
 	// No settings file loads, so a hook or env in the checkout's

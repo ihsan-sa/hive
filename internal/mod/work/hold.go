@@ -112,7 +112,9 @@ func (m *Module) SetHold(h MergeHold) (MergeHold, error) {
 		return h, fmt.Errorf("until is %q or empty (until lifted), not %q", UntilRelease, h.Until)
 	}
 	h.At = time.Now().UTC()
+	m.holding.Lock()
 	m.C.J.MustAppend("merge.held", h)
+	m.holding.Unlock()
 	m.lookAgain(h.Project) // a changed hold may let one through
 	return h, nil
 }
@@ -189,8 +191,14 @@ func (m *Module) releasedSince(h MergeHold) bool {
 		if err != nil || r.Tag == "" || r.Tag == tag {
 			continue
 		}
-		m.lift(h.Project, "the Hive", fmt.Sprintf("release %s is out on %s, which the hold waited for", r.Tag, repo))
-		return true
+		// The forge was asked about h; a hold set since waits for its own release.
+		m.holding.Lock()
+		now, ok := m.Hold(h.Project)
+		if ok && now.At.Equal(h.At) {
+			m.lift(h.Project, "the Hive", fmt.Sprintf("release %s is out on %s, which the hold waited for", r.Tag, repo))
+		}
+		m.holding.Unlock()
+		return ok && now.At.Equal(h.At)
 	}
 	return false
 }

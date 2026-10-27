@@ -1496,3 +1496,38 @@ func TestContainsReadsTheClone(t *testing.T) {
 		t.Errorf("a tag commit shaped like an option reached git: %v", err)
 	}
 }
+
+// A kept merge whose ci run GitHub cancelled has no checks and never gets
+// any: Tick's retry falls forward to the newest later merge whose checks
+// passed, and the release covers both.
+func TestReleaseFallsForwardPastACancelledRun(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	// Its run was cancelled with no check runs, which reads as pending.
+	n.SetChecks("me/hive", "m1", core.CheckRun{Name: "test", State: core.CheckPending})
+	m.AfterKept("hive", "m1")
+	if len(n.got) != 0 || journaledN(m, "release.ci_waiting") != 1 {
+		t.Fatalf("a commit with no checks was released: %v", n.got)
+	}
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	merged(3, "a3", "m3")
+	land("a3", "r3")
+	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPending})
+	n.SetChecks("me/hive", "m3", core.CheckRun{Name: "test", State: core.CheckPending})
+	m.retryWaiting()
+	if len(n.got) != 0 {
+		t.Fatalf("released with no green descendant: %v", n.got)
+	}
+	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPass})
+	m.retryWaiting()
+	body, ok := n.got["v0.0.1"]
+	if len(n.got) != 1 || !ok || !strings.Contains(body, "#1 at a1") || !strings.Contains(body, "#2 at a2") || strings.Contains(body, "#3 at a3") {
+		t.Fatalf("didn't fall forward to m2: %v", n.got)
+	}
+	m.retryWaiting()
+	if len(n.got) != 1 {
+		t.Fatalf("released again: %v", n.got)
+	}
+}
