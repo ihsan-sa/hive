@@ -2556,6 +2556,13 @@ func (m *Module) merged(t *Task, merged, note string) {
 // holdGap is how long a held task waits before the gate looks again.
 var holdGap = time.Minute
 
+// gateLook is how long a task waiting on the recursive gate waits before it
+// looks again: a gate takes up to GateTimeout, and its end, or a freed slot,
+// wakes the task at once (selfgate.go), so each look between only reads the
+// PR from GitHub again (issue #1749: per-PR reads every minute ran out its
+// API limit).
+var gateLook = 10 * time.Minute
+
 const draftWait = "waiting as a draft"
 
 // draftTell is how long a draft waits before the lead hears of it, once.
@@ -2696,8 +2703,12 @@ func lineBefore(a, b *Task) bool {
 // A wait that lasts is the stall watcher's to raise (improve). It takes m.mu,
 // so it is never called with m.mu held.
 func (m *Module) hold(t *Task, p core.Project, why string) {
+	gap := holdGap
+	if strings.HasPrefix(why, GateWait) {
+		gap = gateLook
+	}
 	m.mu.Lock()
-	m.later[t.ID] = time.Now().Add(holdGap)
+	m.later[t.ID] = time.Now().Add(gap)
 	m.mu.Unlock()
 	if t.Reason == why {
 		return
