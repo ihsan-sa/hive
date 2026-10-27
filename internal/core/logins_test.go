@@ -519,3 +519,70 @@ func TestFiveHourStopKeepsOneLoginsTenth(t *testing.T) {
 		t.Fatalf("five hours used %v: want one login at its limit and the other kept at 90%%", used)
 	}
 }
+
+// A login lifted past 90% of its five hours shows as taking turns in the
+// control center, which reads Plans through JSON (api.State), and one whose
+// renewal was turned away keeps no tenth: Plans, pickLogin, Headroom and
+// freeAt keep the stop on the other.
+func TestPlansShowTheLoginKeptAtFiveHours(t *testing.T) {
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	tokens := &renewLimited{}
+	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, tokens, func() []string { return nil })
+	now := time.Now()
+	five := now.Add(time.Hour)
+	read := func(login string, used float64) {
+		rs.append("plan.usage", Plan{Harness: "claude", Login: login, Limit: harness.RateLimit{Status: "allowed", ResetsAt: five, Window: "five_hour",
+			Windows: map[string]harness.Window{"five_hour": {Utilization: used, ResetsAt: five}}}})
+	}
+	shown := func() map[string]string {
+		b, err := json.Marshal(rs.Plans())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ps []Plan
+		if err := json.Unmarshal(b, &ps); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]string{}
+		for _, p := range ps {
+			out[p.Key()] = p.Standing(now)
+		}
+		return out
+	}
+	read("claude", 0.92)
+	read("claude:work", 0.5)
+	if s := shown()["claude"]; strings.Contains(s, "paused") {
+		t.Fatalf("a lifted login past 90%% shows %q", s)
+	}
+	tokens.until = now.Add(30 * time.Minute)
+	if s := shown()["claude"]; !strings.Contains(s, "paused at 90%") {
+		t.Fatalf("with the other login turned away on renewal, the machine's shows %q", s)
+	}
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err == nil {
+		t.Fatal("a turn went on with one login turned away on renewal and the other at 90% of its five hours")
+	}
+	if h := rs.Headroom(Pick{Harness: "claude", Model: "opus"}); h != 0 {
+		t.Fatalf("headroom %v, want none", h)
+	}
+	if at := rs.freeAt("claude", "opus", false); at.Before(tokens.until) || at.After(tokens.until.Add(time.Minute)) {
+		t.Fatalf("free at %v, want the renewal's %v", at, tokens.until)
+	}
+}
+
+// renewLimited is twoLogins whose second login's renewal was turned away
+// until until.
+type renewLimited struct {
+	twoLogins
+	until time.Time
+}
+
+func (r *renewLimited) LimitedUntil(key string) time.Time {
+	if key == "claude:work" {
+		return r.until
+	}
+	return time.Time{}
+}

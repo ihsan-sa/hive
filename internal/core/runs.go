@@ -213,8 +213,9 @@ type Plan struct {
 	Limit   harness.RateLimit `json:"limit"`
 	At      time.Time         `json:"at"`
 	// Lifted says its five-hour stop doesn't hold: another login of its pick
-	// keeps the person's tenth (lift); never journaled.
-	Lifted bool `json:"-"`
+	// keeps the person's tenth (lift). Set only on the copies Runs hands out
+	// (Plans carries it to the control center), never on a journaled one.
+	Lifted bool `json:"lifted,omitempty"`
 	// Wait is the park a limit whose named reset had already passed got;
 	// the next such limit in a row doubles it, up to the hour.
 	Wait time.Duration `json:"wait,omitempty"`
@@ -732,6 +733,7 @@ func (rs *Runs) apply(e Event) {
 	case "plan.usage":
 		var p Plan
 		e.Decode(&p)
+		p.Lifted = false // lift sets it on copies, never here
 		// Readings journaled before the parse fix carry 0 at the top level
 		// and the real number only under the window.
 		if w, ok := p.Limit.Windows[p.Limit.Window]; ok && p.Limit.Utilization == 0 {
@@ -1067,16 +1069,13 @@ func (rs *Runs) Plans() []Plan {
 		picks[pick] = append(picks[pick], p)
 	}
 	rs.mu.Unlock()
-	// The same logins turned away on renewal as pickLogin's, so the one
-	// shown keeping its five hours' tenth is the one it keeps.
-	renewing, _ := rs.tokens.(interface{ LimitedUntil(string) time.Time })
-	limited := map[string]bool{}
 	var out []Plan
 	for _, ps := range picks {
+		var ks []string
 		for _, p := range ps {
-			limited[p.Key()] = renewing != nil && renewing.LimitedUntil(p.Key()).After(now)
+			ks = append(ks, p.Key())
 		}
-		out = append(out, lift(ps, now, false, limited)...)
+		out = append(out, lift(ps, now, false, rs.limited(ks, now))...)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key() < out[j].Key() })
 	return out
@@ -1085,14 +1084,14 @@ func (rs *Runs) Plans() []Plan {
 // lift sets Lifted on every one of plans, the logins of one pick, but the
 // one with the most of its five hours left (the first by Key on a tie) of
 // those with room short of the stops that lift, for a run that may spend
-// the reserve (Reserved) or not; one limited (its renewal turned away, by
-// Key) has no room. So the others run to their limit while that one stops
-// at FiveHourStop and keeps its tenth for the person.
-func lift(plans []Plan, now time.Time, reserve bool, limited map[string]bool) []Plan {
+// the reserve (Reserved) or not; one limited (Runs.limited) has no room. So
+// the others run to their limit while that one stops at FiveHourStop and
+// keeps its tenth for the person.
+func lift(plans []Plan, now time.Time, reserve bool, limited map[string]time.Time) []Plan {
 	keep, left := -1, 0.0
 	for i, p := range plans {
 		p.Lifted = true
-		if limited[p.Key()] || !p.parkedFor(now, reserve).IsZero() {
+		if limited[p.Key()].After(now) || !p.parkedFor(now, reserve).IsZero() {
 			continue
 		}
 		w, _ := p.window("five_hour", now)
@@ -1107,7 +1106,7 @@ func lift(plans []Plan, now time.Time, reserve bool, limited map[string]bool) []
 }
 
 // plansOf are the plans of logins, lifted (lift); rs.mu is held.
-func (rs *Runs) plansOf(logins []Login, now time.Time, reserve bool, limited map[string]bool) []Plan {
+func (rs *Runs) plansOf(logins []Login, now time.Time, reserve bool, limited map[string]time.Time) []Plan {
 	var out []Plan
 	for _, l := range logins {
 		p, ok := rs.plans[l.Key()]
@@ -1127,18 +1126,12 @@ func (rs *Runs) plansOf(logins []Login, now time.Time, reserve bool, limited map
 func (rs *Runs) pickLogin(h, model, home string, bare, reserve bool) (Login, []string, error) {
 	logins := rs.logins(h, model)
 	now := time.Now()
-	// A renewal turned away by the login's usage limit parks it too: a turn
-	// on it would only be turned away the same.
-	renewing, _ := rs.tokens.(interface{ LimitedUntil(string) time.Time })
-	limited := map[string]bool{}
-	for _, l := range logins {
-		limited[l.Key()] = renewing != nil && renewing.LimitedUntil(l.Key()).After(now)
-	}
+	limited := rs.limited(keys(logins), now)
 	rs.mu.Lock()
 	use := func(l Login) float64 { return rs.plans[l.Key()].Used(now) }
 	var open []Login
 	for i, p := range rs.plansOf(logins, now, reserve, limited) {
-		if l := logins[i]; !limited[l.Key()] && p.parkedFor(now, reserve).IsZero() {
+		if l := logins[i]; !limited[l.Key()].After(now) && p.parkedFor(now, reserve).IsZero() {
 			open = append(open, l)
 		}
 	}
@@ -1165,6 +1158,21 @@ func (rs *Runs) pickLogin(h, model, home string, bare, reserve bool) (Login, []s
 	return Login{}, nil, err
 }
 
+// limited is when each of the logins keys names whose renewal was turned
+// away by its usage limit takes turns again: that parks it too, as a turn
+// on it would only be turned away the same. Not under rs.mu.
+func (rs *Runs) limited(keys []string, now time.Time) map[string]time.Time {
+	out := map[string]time.Time{}
+	if renewing, ok := rs.tokens.(interface{ LimitedUntil(string) time.Time }); ok {
+		for _, k := range keys {
+			if at := renewing.LimitedUntil(k); at.After(now) {
+				out[k] = at
+			}
+		}
+	}
+	return out
+}
+
 // keys names the logins.
 func keys(ls []Login) []string {
 	var out []string
@@ -1180,14 +1188,15 @@ func keys(ls []Login) []string {
 func (rs *Runs) Headroom(p Pick) float64 {
 	logins := rs.logins(p.Harness, p.Model)
 	now := time.Now()
+	limited := rs.limited(keys(logins), now)
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	room := 0.0
 	if len(logins) == 0 {
 		room = 1
 	}
-	for _, pl := range rs.plansOf(logins, now, false, nil) {
-		if !pl.Parked(now) {
+	for _, pl := range rs.plansOf(logins, now, false, limited) {
+		if !pl.Parked(now) && !limited[pl.Key()].After(now) {
 			room = max(room, 1-pl.Used(now))
 		}
 	}
@@ -1200,11 +1209,12 @@ func (rs *Runs) Headroom(p Pick) float64 {
 func (rs *Runs) Ahead(p Pick) float64 {
 	logins := rs.logins(p.Harness, p.Model)
 	now := time.Now()
+	limited := rs.limited(keys(logins), now)
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	ahead := -1.0
-	for _, pl := range rs.plansOf(logins, now, false, nil) {
-		if !pl.Parked(now) && (ahead < 0 || pl.Ahead(now) < ahead) {
+	for _, pl := range rs.plansOf(logins, now, false, limited) {
+		if !pl.Parked(now) && !limited[pl.Key()].After(now) && (ahead < 0 || pl.Ahead(now) < ahead) {
 			ahead = pl.Ahead(now)
 		}
 	}
@@ -1225,11 +1235,16 @@ func (rs *Runs) logins(h, model string) []Login {
 // its retry too. A check (Reserved) has room up to WeeklyStop.
 func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	now := time.Now()
+	logins := rs.logins(h, model)
+	limited := rs.limited(keys(logins), now)
 	var at time.Time
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	for _, p := range rs.plansOf(rs.logins(h, model), now, reserve, nil) {
+	for _, p := range rs.plansOf(logins, now, reserve, limited) {
 		until := p.parkedFor(now, reserve)
+		if l := limited[p.Key()]; l.After(until) {
+			until = l
+		}
 		if until.IsZero() {
 			at = now
 			break
