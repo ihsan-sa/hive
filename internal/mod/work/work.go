@@ -98,7 +98,10 @@ type Task struct {
 	// MergedOK is "head+main" for the last head whose tests passed merged
 	// with that main (mergedTests), so it merges as it is without testing again.
 	MergedOK string `json:"merged_ok,omitempty"`
-	Reviews  int    `json:"reviews"`
+	// MergedTest is the merge of the head with main whose tests are queued
+	// or running (mergedTests), while the task waits in merging for them.
+	MergedTest string `json:"merged_test,omitempty"`
+	Reviews    int    `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
 	// own diff, keyed by "diffID#seat". When the diff changes, the old
 	// tries are left behind and the seat starts fresh on the new diff.
@@ -343,7 +346,10 @@ type Module struct {
 	// mainTips holds each project's main for one admit pass (queue.go).
 	mainTips map[string]string
 	filing   sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
-	steps    sync.WaitGroup // the steps Tick started that are still going
+	steps    sync.WaitGroup // the steps Tick started, and the checks they queued, still going
+	// mergeRuns holds each task's merged-with-main test running behind a
+	// step, at most one, until a step takes the result (testMerged).
+	mergeRuns map[string]*mergeRun
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -509,6 +515,9 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	// task has since left, so the run on the live task's head is kept too.
 	if m.dropStaleGatesLocked(t, live) {
 		note = strings.TrimPrefix(note+"; the recursive gate's run on its earlier head ends, freeing its slot", "; ")
+	}
+	if was == StageMerging && t.Stage != StageMerging {
+		m.dropMergeRunLocked(t.ID)
 	}
 	m.mu.Unlock()
 	if note != "" {
@@ -2597,18 +2606,35 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	if t.MergedOK == key {
 		return false, nil
 	}
-	merged, err := m.C.Effects.UpdateBranch(p, t.SHA, main, "")
-	if errors.Is(err, core.ErrConflict) {
-		return m.catchUp(t, p, main, "main moved and the PR's merge with it conflicts")
-	}
-	if err != nil {
-		return true, err
-	}
-	if _, err := m.C.Sandbox(); err != nil {
-		return true, err
-	}
 	cfg := m.C.Effects.Config(p, main)
-	c := m.C.Effects.RunCheck(p, merged, "test", cfg.Test)
+	// One merged test per task at a time: one queued for an earlier head or
+	// main is waited out, not joined by another, so main moving while the
+	// checks are backed up adds nothing to the backlog; its stale result is
+	// dropped and the current merge queued.
+	r, queued := m.mergeRun(t.ID)
+	if queued && r.done && r.key != key {
+		queued = false
+	}
+	if !queued {
+		merged, err := m.C.Effects.UpdateBranch(p, t.SHA, main, "")
+		if errors.Is(err, core.ErrConflict) {
+			return m.catchUp(t, p, main, "main moved and the PR's merge with it conflicts")
+		}
+		if err != nil {
+			return true, err
+		}
+		if _, err := m.C.Sandbox(); err != nil {
+			return true, err
+		}
+		r = m.testMerged(t, p, key, main, merged, cfg.Test)
+	}
+	if !r.done {
+		t.MergedTest = r.sha
+		m.hold(t, p, "testing its head merged with main at "+core.Short(r.main)+" (as "+core.Short(r.sha)+") before it merges")
+		return true, nil
+	}
+	t.MergedTest = ""
+	c, merged := r.c, r.sha
 	if c.CantRun != "" {
 		return true, m.cantRun(t, p, c)
 	}
@@ -2627,6 +2653,72 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	t.MergedOK = key
 	m.save(t, "its tests pass merged with main at "+core.Short(main)+" (as "+core.Short(merged)+"), so it merges as it is")
 	return false, nil
+}
+
+// mergeRun is a task's merged-with-main test running behind a step: key is
+// the head+main it tests, sha the merge, c its check once done. gone says
+// the task left merging while it ran, so it is forgotten when it ends.
+type mergeRun struct {
+	key, main, sha string
+	done, gone     bool
+	c              core.Check
+}
+
+// mergeRun returns a copy of the merged test queued for task id, if any, and
+// forgets one that is done: its step takes the result, or queues a new one
+// for a head or main that moved. A can't-run is no verdict, so the step
+// after makes a new merge and runs it again.
+func (m *Module) mergeRun(id string) (mergeRun, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.mergeRuns[id]
+	if !ok {
+		return mergeRun{}, false
+	}
+	if r.done {
+		delete(m.mergeRuns, id)
+	}
+	return *r, true
+}
+
+// testMerged queues the test of sha, t's head merged with main (key is
+// head+main), behind the step. The step never waits for a check slot itself:
+// behind a backlog of checks, 73 merge steps sat in Slots.Acquire for up to
+// an hour, each holding its task, so merges fell to a few an hour (issue
+// #1699). The task waits in merging and is looked at on the next tick once
+// the check ends.
+func (m *Module) testMerged(t *Task, p core.Project, key, main, sha, command string) mergeRun {
+	r := &mergeRun{key: key, main: main, sha: sha}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mergeRuns == nil {
+		m.mergeRuns = map[string]*mergeRun{}
+	}
+	m.mergeRuns[t.ID] = r
+	m.steps.Add(1)
+	go func(id string) {
+		defer m.steps.Done()
+		c := m.C.Effects.RunCheck(p, sha, "test", command)
+		m.mu.Lock()
+		r.c, r.done = c, true
+		if r.gone && m.mergeRuns[id] == r {
+			delete(m.mergeRuns, id)
+		}
+		delete(m.later, id)
+		m.mu.Unlock()
+	}(t.ID)
+	return *r
+}
+
+// dropMergeRunLocked forgets the merged test of a task that left merging:
+// at once if it is done, when it ends if not. The caller holds m.mu.
+func (m *Module) dropMergeRunLocked(id string) {
+	if r, ok := m.mergeRuns[id]; ok {
+		if r.done {
+			delete(m.mergeRuns, id)
+		}
+		r.gone = true
+	}
 }
 
 // hold keeps t where it is for why, saying so on the PR once per HoldKey: the
