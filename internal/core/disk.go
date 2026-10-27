@@ -490,6 +490,23 @@ func (e *Effects) newHome() (string, func()) {
 	}
 }
 
+// hold marks path live, so Prune leaves it, until the returned func removes
+// it.
+func (e *Effects) hold(path string) func() {
+	e.mu.Lock()
+	if e.homes == nil {
+		e.homes = map[string]bool{}
+	}
+	e.homes[path] = true
+	e.mu.Unlock()
+	return func() {
+		RemoveTree(path)
+		e.mu.Lock()
+		delete(e.homes, path)
+		e.mu.Unlock()
+	}
+}
+
 // watchHome ends the check (by its stop file) once its home passes capB.
 // The returned func stops watching and says whether the cap was hit.
 func watchHome(home string, capB int64) func() bool {
@@ -653,7 +670,7 @@ func (e *Effects) Prune() string {
 	for _, pr := range projects {
 		dirs, _ := os.ReadDir(filepath.Join(e.ws.Gates(), pr.Name()))
 		for _, d := range dirs {
-			if p := filepath.Join(e.ws.Gates(), pr.Name(), d.Name()); d.IsDir() && d.Name() != "recursive" && old(p, staleAfter) {
+			if p := filepath.Join(e.ws.Gates(), pr.Name(), d.Name()); d.IsDir() && d.Name() != "recursive" && !live(p) && old(p, staleAfter) {
 				drop(p)
 			}
 		}

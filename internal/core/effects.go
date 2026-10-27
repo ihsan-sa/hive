@@ -83,7 +83,7 @@ type Effects struct {
 	gateMains map[string]GateResult   // project@main -> the newest can't-run there not tied to its head (GateAtMain)
 	standing  map[string]bool         // project@head@verdict's main@main -> whether that verdict still stands there (StandingGate)
 	judged    map[string]Judgement    // project@sha@main -> the judge's newest call (judge.go)
-	homes     map[string]bool         // running checks' homes (disk.go)
+	homes     map[string]bool         // running checks' homes and checkouts, and checkouts being removed: what Prune leaves (disk.go)
 	modMu     sync.RWMutex            // read-held while a check fetches into or reads the module cache; Prune empties it only under the write lock
 	buildMu   sync.RWMutex            // the same for the projects' build caches
 	disk      DiskUse                 // the last measurement of the Hive's disk use
@@ -525,12 +525,12 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		return c // not recorded: no sandbox is not a verdict on the commit
 	}
 	defer e.Slots.Acquire(p.Name, sha, kind)()
-	dir, err := e.cleanCheckout(p, sha, kind)
+	dir, gone, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
 		c.Output = "could not make a clean checkout: " + err.Error()
 		return c
 	}
-	defer os.RemoveAll(dir)
+	defer gone()
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
@@ -566,13 +566,13 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 			os.WriteFile(mods.marker+ownModules, nil, 0o644)
 			mods.note = "the check needs a module go.sum doesn't name; run again fetching its own"
 		}
-		again, cerr := e.cleanCheckout(p, sha, kind)
+		again, goneAgain, cerr := e.cleanCheckout(p, sha, kind)
 		if cerr != nil {
 			build.done()
 			c.Output = "could not make a clean checkout: " + cerr.Error()
 			return c
 		}
-		defer os.RemoveAll(again)
+		defer goneAgain()
 		if len(build.mounts) > 0 {
 			stableTimes(again) // as goBuild made the first checkout's, for the shared build cache
 		}
@@ -872,9 +872,12 @@ func guardProgram(command string) string {
 	return s[1] + ` [ -n "$` + s[2] + `" ] || { echo "hive: missing program: ` + missing + `" >&2; exit 127; };` + command[len(s[1]):]
 }
 
-// cleanCheckout clones the host clone fresh and checks out sha.
-func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
+// cleanCheckout clones the host clone fresh and checks out sha. The checkout
+// is marked live until the returned func removes it: Prune can't go by its
+// age, since stableTimes dates it years back (issue #1265).
+func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, func(), error) {
 	dir := filepath.Join(e.ws.Gates(), p.Name, fmt.Sprintf("%s-%s-%s", short(sha), kind, NewID()[14:]))
+	done := e.hold(dir)
 	unlock := e.lock(p.Name)
 	_, err := GitT(10*time.Minute, "", "clone", "-q", "--no-local", "--no-hardlinks", "--no-checkout", e.ws.Project(p.Name), dir)
 	if err == nil {
@@ -885,10 +888,10 @@ func (e *Effects) cleanCheckout(p Project, sha, kind string) (string, error) {
 		_, err = Git(dir, "checkout", "-q", "--detach", sha)
 	}
 	if err != nil {
-		os.RemoveAll(dir)
-		return "", err
+		done()
+		return "", nil, err
 	}
-	return dir, nil
+	return dir, done, nil
 }
 
 // runSandboxed runs a shell command in the sandbox and returns its exit code
@@ -2255,11 +2258,11 @@ func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.rea
 // it is sent back as a conflict too (a *DoubledError), since union keeps
 // both sides of an overlap and only the worker knows which to keep.
 func (e *Effects) UpdateBranch(p Project, sha, mainSHA, base string) (string, error) {
-	dir, err := e.cleanCheckout(p, sha, "update")
+	dir, gone, err := e.cleanCheckout(p, sha, "update")
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
+	defer gone()
 	if _, err := Git(dir, "fetch", "-q", "origin", mainSHA); err != nil {
 		return "", err
 	}
@@ -2372,11 +2375,11 @@ func doubled(dir, attr, ours, theirs string) []string {
 // Revert makes a commit on top of main that reverts mergeSHA and records the
 // lesson where the next worker reads it.
 func (e *Effects) Revert(p Project, mainSHA, mergeSHA, lesson string) (string, error) {
-	dir, err := e.cleanCheckout(p, mainSHA, "revert")
+	dir, gone, err := e.cleanCheckout(p, mainSHA, "revert")
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
+	defer gone()
 	if _, err := Git(dir, "revert", "--no-edit", mergeSHA); err != nil {
 		Git(dir, "revert", "--abort")
 		return "", fmt.Errorf("revert of %s does not apply cleanly: %v", short(mergeSHA), err)
@@ -2396,18 +2399,23 @@ func (e *Effects) Revert(p Project, mainSHA, mergeSHA, lesson string) (string, e
 func (e *Effects) Setup(p Project, base string, files map[string]string, message string) (string, error) {
 	dir := filepath.Join(e.ws.Gates(), p.Name, "setup-"+NewID()[14:])
 	var err error
+	var gone func()
 	if base != "" {
-		dir, err = e.cleanCheckout(p, base, "setup")
+		dir, gone, err = e.cleanCheckout(p, base, "setup")
 	} else {
+		gone = e.hold(dir)
 		err = os.MkdirAll(dir, 0o755)
 		if err == nil {
 			_, err = Git(dir, "init", "-q", "-b", p.Branch)
+		}
+		if err != nil {
+			gone()
 		}
 	}
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
+	defer gone()
 	for path, content := range files {
 		full := filepath.Join(dir, filepath.FromSlash(path))
 		os.MkdirAll(filepath.Dir(full), 0o755)

@@ -202,6 +202,38 @@ func TestPruneRemovesLeftovers(t *testing.T) {
 	}
 }
 
+// A check's clean checkout stays while the check runs, though stableTimes
+// dates it years back; it goes when the check is done (issue #1265).
+func TestPruneLeavesARunningChecksCheckout(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	t.Setenv("TMPDIR", t.TempDir())
+	e := c.Effects
+	e.sweep = func() int { return 0 }
+	dir, gone, err := e.cleanCheckout(p, main, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stableTimes(dir); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(dir); time.Since(fi.ModTime()) < staleAfter {
+		t.Fatalf("stableTimes left the checkout at %v, so this test proves nothing", fi.ModTime())
+	}
+	e.Prune()
+	if !Exists(filepath.Join(dir, ".git")) {
+		t.Fatal("Prune removed a running check's checkout")
+	}
+	gone()
+	if Exists(dir) {
+		t.Fatal("the checkout outlived its check")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.homes[dir] {
+		t.Fatal("a removed checkout is still marked live")
+	}
+}
+
 func TestBytes(t *testing.T) {
 	for n, want := range map[int64]string{0: "0 B", 1023: "1023 B", 1536: "1.5 KB", 3 << 30: "3.0 GB"} {
 		if got := Bytes(n); got != want {
@@ -529,11 +561,11 @@ func TestOnlyMainWritesTheBuildCache(t *testing.T) {
 	}
 	c, _, p, main := setupProject(t)
 	checkout := func() string {
-		dir, err := c.Effects.cleanCheckout(p, main, "test")
+		dir, gone, err := c.Effects.cleanCheckout(p, main, "test")
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { os.RemoveAll(dir) })
+		t.Cleanup(gone)
 		return dir
 	}
 	dir := checkout()
