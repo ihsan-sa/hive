@@ -656,7 +656,7 @@ func (g *gqlCheck) top(s gqlSel, _ int) error {
 			return nil
 		})
 	case "rateLimit", "__typename":
-		return g.leaves(s, 0)
+		return g.scalars(s, 0)
 	case "__type", "__schema":
 		return nil // the schema is public and holds no one's data
 	}
@@ -691,38 +691,49 @@ func (g *gqlCheck) within(sels []gqlSel, depth int) error {
 	})
 }
 
-// names are the fields a leaving field may still open, each to scalars (or
-// to names) only: who owns it, what its default branch is called, what it
-// was forked from, the people in a list. gh reads them to know a repository
-// and a pull request's people; what they hold is names, never content.
+// names are the fields a leaving field may still open: who owns it, what
+// its default branch is called, what it was forked from, the items of a
+// list. gh reads them to know a repository and a pull request's people.
 var names = map[string]bool{"owner": true, "defaultBranchRef": true, "parent": true, "organization": true, "project": true, "column": true,
 	"nodes": true, "edges": true, "node": true, "pageInfo": true}
 
-// people are the fields that reach a person (the token acts as the
-// person, and authors, mergers and reviewers are mostly them): below one,
-// only personScalars, the names gh shows, never the rest of a profile.
-var people = map[string]bool{"author": true, "editor": true, "actor": true, "mergedBy": true, "enabledBy": true, "requestedReviewer": true,
-	"user": true, "users": true, "assignees": true, "participants": true, "viewer": true}
+// nameScalars are all a leaving field, or anything below one, may select:
+// names, ids and counts, never content. A leaving field can reach another
+// repository (an issue a pull request closes, a sub-issue's parent, a
+// cross-reference) or a person (an author, a reviewer, an assignable user),
+// so what's below one is read as if it were elsewhere, whatever it is.
+var nameScalars = map[string]bool{"id": true, "login": true, "name": true, "nameWithOwner": true, "slug": true, "__typename": true,
+	"totalCount": true, "hasNextPage": true, "hasPreviousPage": true, "endCursor": true, "startCursor": true}
 
-var personScalars = map[string]bool{"login": true, "id": true, "name": true, "slug": true, "__typename": true, "totalCount": true,
-	"hasNextPage": true, "endCursor": true}
+// repoScalars are what gh reads of a repository's parent (RepositoryInfo,
+// for pr create) besides its name. The side's repositories are fresh and
+// can't be forked into, so there is none.
+var repoScalars = map[string]bool{"description": true, "hasIssuesEnabled": true, "hasWikiEnabled": true, "viewerPermission": true}
 
-// leaves allows s only scalars below it, and names.
-func (g *gqlCheck) leaves(s gqlSel, depth int) error { return g.leavesOf(s, depth, false) }
-
-func (g *gqlCheck) leavesOf(s gqlSel, depth int, person bool) error {
-	person = person || people[s.Field]
+// leaves allows s, which leaves the repository, only nameScalars below it,
+// through names.
+func (g *gqlCheck) leaves(s gqlSel, depth int) error {
 	return g.each(s.Children, depth+1, func(k gqlSel, d int) error {
 		if !k.Has {
-			if person && !personScalars[k.Field] {
-				return fmt.Errorf("%s gives a person's login and name, not %s", s.Field, k.Field)
+			if !nameScalars[k.Field] && !(s.Field == "parent" && repoScalars[k.Field]) {
+				return fmt.Errorf("%s gives names and ids only, not %s", s.Field, k.Field)
 			}
 			return nil
 		}
 		if names[k.Field] && d < 10 {
-			return g.leavesOf(k, d, person)
+			return g.leaves(k, d)
 		}
-		return fmt.Errorf("%s may select only scalars, not %s", s.Field, k.Field)
+		return fmt.Errorf("%s may select only names, not %s", s.Field, k.Field)
+	})
+}
+
+// scalars allows s only scalars below it (the rate limit: no one's data).
+func (g *gqlCheck) scalars(s gqlSel, depth int) error {
+	return g.each(s.Children, depth+1, func(k gqlSel, _ int) error {
+		if k.Has {
+			return fmt.Errorf("%s may select only scalars, not %s", s.Field, k.Field)
+		}
+		return nil
 	})
 }
 

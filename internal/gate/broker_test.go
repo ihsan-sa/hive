@@ -524,3 +524,33 @@ func TestBrokerGraphQLBodyReadsAsGitHubDoes(t *testing.T) {
 		}
 	}
 }
+
+// Below a field that leaves the repository only names, ids and counts are
+// read, whatever the field: an issue in another repository that the side's
+// pull request closes, a sub-issue's parent, a person through any list.
+func TestBrokerReadsNoContentBeyondTheRepository(t *testing.T) {
+	b, err := NewBroker("Hive-RSI-Lab", "org-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Allow("gate-x-candidate")
+	const r = `repository(owner:"Hive-RSI-Lab",name:"gate-x-candidate")`
+	for q, ok := range map[string]bool{
+		`{ ` + r + `{ pullRequest(number:1){ closingIssuesReferences(first:10){ nodes { body } } } } }`:           false,
+		`{ ` + r + `{ pullRequest(number:1){ closingIssuesReferences(first:10){ edges { node { title } } } } } }`: false,
+		`{ ` + r + `{ pullRequest(number:1){ closingIssuesReferences(first:10){ totalCount nodes { id } } } } }`:  true,
+		`{ ` + r + `{ issue(number:1){ parent { title body } } } }`:                                               false,
+		`{ ` + r + `{ issue(number:1){ subIssues(first:5){ nodes { body } } } } }`:                                false,
+		`{ ` + r + `{ assignableUsers(first:5){ nodes { email bio company } } } }`:                                false,
+		`{ ` + r + `{ mentionableUsers(first:5){ nodes { login name } } } }`:                                      true,
+		`{ ` + r + `{ headRepository: parent { description owner { login } } } }`:                                 true,
+		`{ ` + r + `{ pullRequest(number:1){ headRepository { description } } } }`:                                false,
+		`mutation { addSubIssue(input:{issueId:"I_1", subIssueId:"I_2"}){ clientMutationId } }`:                   false,
+		`{ rateLimit { limit cost remaining resetAt } }`:                                                          true,
+	} {
+		body, _ := json.Marshal(map[string]string{"query": q})
+		if why := b.graphqlOK(body); (why == "") != ok {
+			t.Errorf("%s: allowed %v (%s)", q, why == "", why)
+		}
+	}
+}
