@@ -3,6 +3,7 @@ package work
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,7 +18,7 @@ import (
 // toMerging takes a rig's task through its tests to the merge.
 func toMerging(t *testing.T, m *Module, task *Task, p core.Project) {
 	t.Helper()
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Stage != StageMerging {
@@ -29,6 +30,13 @@ func mergeOnce(t *testing.T, m *Module, task *Task, p core.Project) {
 	t.Helper()
 	if err := m.merge(task, p); err != nil {
 		t.Fatal(err)
+	}
+	if task.MergedTest != "" { // its merge with main is tested behind the step
+		m.Wait()
+		m.later = map[string]time.Time{}
+		if err := m.merge(task, p); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -81,6 +89,14 @@ func TestMergeForgeCheckFails(t *testing.T) {
 	toMerging(t, m, task, p)
 	red := []core.CheckRun{{Name: "test (macos-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/1"}, {Name: "sandboxed-e2e", State: core.CheckPending}}
 	f.SetChecks(p.Repo, task.SHA, red...)
+	mergeOnce(t, m, task, p)
+	// The forge re-runs nothing while sandboxed-e2e still runs: it waits.
+	if task.Stage != StageMerging || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 0 || !strings.Contains(task.Reason, "still running") {
+		t.Fatalf("stage %q, round %d, reruns %v, reason %q", task.Stage, task.Round, task.Reruns, task.Reason)
+	}
+	red[1].State = core.CheckPass
+	f.SetChecks(p.Repo, task.SHA, red...)
+	m.later = map[string]time.Time{}
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerging || task.Round != 0 || task.Reruns[task.SHA] != 1 || f.Reruns(p.Repo, task.SHA) != 1 || !strings.Contains(task.Reason, "re-run") {
 		t.Fatalf("stage %q, round %d, reruns %v, reason %q", task.Stage, task.Round, task.Reruns, task.Reason)
@@ -353,7 +369,7 @@ func TestMergedWithMainTestedFirst(t *testing.T) {
 		t.Fatalf("the merge with main should be tested red: %+v", c)
 	}
 	for i := 0; i < 2 && task.Stage == StageTesting; i++ { // a red runs once more before it counts
-		if err := m.test(task, p); err != nil {
+		if err := testStep(m, task, p); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -371,6 +387,93 @@ func TestMergedWithMainGreenMergesAsItIs(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerged || task.SHA != head || task.MergedOK == "" {
 		t.Fatalf("stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
+	}
+}
+
+// The merge step never waits for a check slot: with every slot taken, the
+// test of the PR merged with main is queued, the step returns and the task
+// waits in merging; once a slot frees and the test passes, it merges.
+func TestMergedTestsNeverBlockTheStep(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	head := task.SHA
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	m.C.Effects.Slots.Resize(func() int { return 1 })
+	release := m.C.Effects.Slots.Acquire(p.Name, "other", "test")
+	done := make(chan error, 1)
+	go func() { done <- m.merge(task, p) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Minute):
+		release()
+		t.Fatal("the merge step waited for a check slot")
+	}
+	if task.Stage != StageMerging || task.MergedTest == "" || !strings.HasPrefix(task.Reason, "testing its head merged with main") {
+		t.Fatalf("stage %q, merged test %q, reason %q", task.Stage, task.MergedTest, task.Reason)
+	}
+	if err := m.merge(task, p); err != nil || task.Stage != StageMerging { // still queued: a second step doesn't queue it twice
+		t.Fatalf("stage %q, reason %q, err %v", task.Stage, task.Reason, err)
+	}
+	release()
+	m.Wait()
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.SHA != head || task.MergedOK == "" || task.MergedTest != "" {
+		t.Fatalf("stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
+	}
+}
+
+// Main moving while a merged test waits for a slot queues no second one: the
+// task waits that one out, then tests its merge with the new main and merges.
+func TestMergedTestOnePerTaskAsMainMoves(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	m.C.Effects.Slots.Resize(func() int { return 1 })
+	release := m.C.Effects.Slots.Acquire(p.Name, "other", "test")
+	mergeOnce := func() {
+		done := make(chan error, 1)
+		go func() { done <- m.merge(task, p) }()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Minute):
+			release()
+			t.Fatal("the merge step waited for a check slot")
+		}
+	}
+	mergeOnce()
+	first := task.MergedTest
+	pushMain(t, f, map[string]string{"third.txt": "w"})
+	mergeOnce()
+	if task.Stage != StageMerging || task.MergedTest != first {
+		t.Fatalf("stage %q, merged test %q (first %q), reason %q", task.Stage, task.MergedTest, first, task.Reason)
+	}
+	if _, waiting := m.C.Effects.Slots.State(); len(waiting) != 1 {
+		t.Fatalf("one merged test should wait for a slot, not %d: %+v", len(waiting), waiting)
+	}
+	moved, _ := m.C.Effects.Sync(p)
+	release()
+	for i := 0; i < 4 && task.Stage == StageMerging; i++ {
+		m.Wait()
+		if err := m.merge(task, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task.Stage != StageMerged || task.MergedTest != "" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	if !strings.HasSuffix(task.MergedOK, "+"+moved) {
+		t.Fatalf("merged on a test of an old main: %q, main was %s", task.MergedOK, core.Short(moved))
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.mergeRuns) != 0 {
+		t.Fatalf("finished merged tests left behind: %d", len(m.mergeRuns))
 	}
 }
 
@@ -1565,5 +1668,70 @@ func TestForgeFailuresNamesTheTestedMain(t *testing.T) {
 	msg = m.forgeFailures(task, p, main, []core.CheckRun{{Name: "test", State: core.CheckFail, URL: "head/test2"}}, nil, nil)
 	if !strings.Contains(msg, "Main is at "+core.Short(main)+" now; the checks' logs don't say") {
 		t.Fatalf("message:\n%s", msg)
+	}
+}
+
+// testStep runs the test step and, when it queued the head's check behind
+// it, waits for the check and runs the step again to take the result.
+func testStep(m *Module, task *Task, p core.Project) error {
+	if err := m.test(task, p); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	_, queued := m.testRuns[task.ID]
+	m.mu.Unlock()
+	if !queued {
+		return nil
+	}
+	m.Wait()
+	m.mu.Lock()
+	delete(m.later, task.ID)
+	m.mu.Unlock()
+	return m.test(task, p)
+}
+
+// Only the front of a project's merge line tests merged with main (issue
+// #1727): a task behind an older PR waiting at the same step queues no test
+// and runs no merge, and one behind a test already in flight waits it out
+// however new its PR; once the line ahead clears, it tests and merges.
+func TestMergeLineOnlyFrontTests(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	head := task.SHA
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	older := &Task{ID: "t-older", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number - 1}, Reason: MergeLineWait + ": earlier"}
+	newer := &Task{ID: "t-newer", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number + 1}, Reason: mergedTestWait + " at x"}
+	elsewhere := &Task{ID: "t-held", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number - 2}, Reason: "waiting for the forge's checks"}
+	m.mu.Lock()
+	m.tasks[older.ID], m.tasks[newer.ID], m.tasks[elsewhere.ID] = older, newer, elsewhere
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.MergedTest != "" || !strings.HasPrefix(task.Reason, MergeLineWait) || !strings.Contains(task.Reason, fmt.Sprintf("#%d", older.PR.Number)) {
+		t.Fatalf("behind an older PR: stage %q, merged test %q, reason %q", task.Stage, task.MergedTest, task.Reason)
+	}
+	m.mu.Lock()
+	queued := len(m.mergeRuns)
+	older.Stage = StageMerged
+	if m.mergeRuns == nil {
+		m.mergeRuns = map[string]*mergeRun{}
+	}
+	m.mergeRuns[newer.ID] = &mergeRun{key: "x"} // a newer PR's test already in flight
+	m.mu.Unlock()
+	if queued != 0 {
+		t.Fatalf("a task behind the front queued a merged test")
+	}
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, fmt.Sprintf("#%d", newer.PR.Number)) {
+		t.Fatalf("behind a test in flight: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	m.mu.Lock()
+	m.mergeRuns[newer.ID].done = true
+	newer.Stage = StageMerged
+	m.mu.Unlock()
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.SHA != head || task.MergedOK == "" {
+		t.Fatalf("at the front: stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
 	}
 }
