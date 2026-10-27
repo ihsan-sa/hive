@@ -776,6 +776,9 @@ func (m *Module) thread(r core.Run) (string, string) {
 // hears how that went. It starts that run itself. Reviewers and helpers with no
 // project go to the agents module, and the spawn op starts those.
 func (m *Module) Spawn(parent core.Run, role, project, brief, model string) (core.RunSpec, error) {
+	if err := m.repeats(parent, brief); err != nil {
+		return core.RunSpec{}, err
+	}
 	p, ok := m.C.Projects.Get(project)
 	if role != "worker" || !ok {
 		return m.Agents.Spawner(parent, role, project, brief, model)
@@ -807,6 +810,54 @@ func (m *Module) Spawn(parent core.Run, role, project, brief, model string) (cor
 	}
 	m.save(t, "helper of "+parent.ID+": worker "+t.Worker)
 	return s, nil
+}
+
+// A parent may have at most maxLiveHelpers helpers live at once, and may not
+// spawn one whose brief repeats a helper it has live or that finished within
+// helperRepeatWindow: a model looping on spawn otherwise takes a worker slot
+// and a checkout per turn for the same work.
+const (
+	maxLiveHelpers     = 4
+	helperRepeatWindow = 30 * time.Minute
+)
+
+// helperNote starts the line Spawn adds to a helper's brief, so a sibling's
+// brief is compared as its parent wrote it.
+const helperNote = "\n\n(You are a helper spawned by "
+
+// repeats refuses a spawn that repeats a sibling's brief or would put parent
+// over its live helpers, and says which sibling.
+func (m *Module) repeats(parent core.Run, brief string) error {
+	key, head := briefKey(brief)
+	live := 0
+	for _, x := range m.C.Runs.List(func(x *core.Run) bool { return x.Parent == parent.ID }) {
+		if !x.Terminal() {
+			live++
+		} else if time.Since(x.Updated) > helperRepeatWindow {
+			continue
+		}
+		own, _, _ := strings.Cut(x.Brief, helperNote)
+		k, h := briefKey(own)
+		if key != "" && (k == key || (len(head) >= 24 && h == head)) {
+			state := "still running"
+			if x.Terminal() {
+				state = "finished " + time.Since(x.Updated).Round(time.Minute).String() + " ago (" + x.Status + "); its account came to you as a message"
+			}
+			return fmt.Errorf("you already spawned helper %s for this (%s): %q; wait for its account, or message it, instead of spawning another", x.ID, state, core.Clip(h, 80))
+		}
+	}
+	if live >= maxLiveHelpers {
+		return fmt.Errorf("you already have %d helpers live, the most a run may have at once; wait for their accounts (end your turn) before spawning another", live)
+	}
+	return nil
+}
+
+// briefKey is a brief with case and spacing folded, and its first line folded
+// the same way: two briefs alike in these ask for the same work.
+func briefKey(brief string) (key, head string) {
+	fold := func(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+	first, _, _ := strings.Cut(strings.TrimSpace(brief), "\n")
+	return fold(brief), fold(first)
 }
 
 func (m *Module) taskOf(runID string) (Task, bool) {
