@@ -377,9 +377,11 @@ type Module struct {
 	probe   time.Time
 	probing bool
 	online  time.Time
-	// limit is when GitHub's pause on writes ends, and limitText why.
+	// limit is when GitHub's pause on writes (or, limitAll, on every call)
+	// ends, and limitText why.
 	limit     time.Time
 	limitText string
+	limitAll  bool
 	// slow is when a call was last killed by its timeout (settle).
 	slow time.Time
 	// refusedAsked is when the checks of each task stopped on a checks
@@ -1032,6 +1034,9 @@ func (m *Module) Offline() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.offline == "" && time.Now().Before(m.limit) {
+		if m.limitAll {
+			return "the login's GitHub API quota is spent or nearly, so the Hive's calls wait until " + m.limit.UTC().Format("15:04Z")
+		}
 		return "GitHub asked the Hive to slow down, so its writes wait until " + m.limit.UTC().Format("15:04Z")
 	}
 	return m.offline
@@ -1042,7 +1047,7 @@ func (m *Module) limited(rl *core.RateLimited) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if rl.Until.After(m.limit) {
-		m.limit, m.limitText = rl.Until, rl.Text
+		m.limit, m.limitText, m.limitAll = rl.Until, rl.Text, rl.All
 	}
 }
 
