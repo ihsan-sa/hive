@@ -1054,3 +1054,11 @@ func TestStopStandsOverARunningStep(t *testing.T) {
 		t.Fatal("a copy from before a save reads as fresh")
 	}
 }
+
+func TestReapStuckFreesAStepPastItsLimit(t *testing.T) {
+	m := &Module{busy: map[string]bool{"a": true, "b": true}, stepAt: map[string]time.Time{"a": time.Now().Add(-2 * stepLimit), "b": time.Now()}}
+	m.reapStuck()
+	if m.busy["a"] || !m.busy["b"] || len(m.stepAt) != 1 {
+		t.Fatalf("busy %v stepAt %v: want only the long step freed", m.busy, m.stepAt)
+	}
+}
