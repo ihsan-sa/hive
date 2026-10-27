@@ -408,10 +408,10 @@ func TestWeeklyStopParksALogin(t *testing.T) {
 }
 
 // At 90% of its five-hour window a login takes no turns until that window
-// resets (the person, 10-26: the rest is theirs, to work with the plan
-// themselves): the other login takes them, with both there a turn waits for
-// the first five-hour reset, and a late reading from before the stop doesn't
-// lift it.
+// resets once no other login has room (the person, 10-26: "90% of the only
+// 5h limit avail", the rest theirs, to work with the plan themselves): while
+// another has room it runs on, with both there a turn waits for the first
+// five-hour reset, and a late reading from before the stop doesn't lift it.
 func TestFiveHourStopParksALogin(t *testing.T) {
 	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
 	if err != nil {
@@ -439,18 +439,20 @@ func TestFiveHourStopParksALogin(t *testing.T) {
 	if plan("claude").Parked(now) {
 		t.Fatal("a login at 89% of its five hours is parked")
 	}
-	read("claude", 0.90, five)
+	read("claude", 0.92, five)
+	if plan("claude").Parked(now) || strings.Contains(plan("claude").Standing(now), "paused") {
+		t.Fatalf("a login at 92%% of its five hours is parked while another has room: %q", plan("claude").Standing(now))
+	}
+	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err != nil || l.Key() != "claude:work" {
+		t.Fatalf("with the machine's login at 92%% of its five hours, picked %s (%v), want the least used", l.Key(), err)
+	}
+	if h := rs.Headroom(Pick{Harness: "claude", Model: "opus"}); h < 0.49 || h > 0.51 {
+		t.Fatalf("headroom %v, want the other login's 0.5", h)
+	}
+	read("claude:work", 0.93, five.Add(time.Hour))
 	if s := plan("claude").Standing(now); s != "paused at 90% of its five-hour window until it resets" {
 		t.Fatalf("standing %q", s)
 	}
-	if l, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err != nil || l.Key() != "claude:work" {
-		t.Fatalf("with the machine's login at 90%% of its five hours, picked %s (%v)", l.Key(), err)
-	}
-	read("claude", 0.85, five)
-	if !plan("claude").Parked(now) {
-		t.Fatal("a stale reading from before the stop lifted it")
-	}
-	read("claude:work", 0.93, five.Add(time.Hour))
 	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err == nil || !strings.Contains(err.Error(), "90% of its five-hour one") {
 		t.Fatalf("with every login at 90%% of its five hours: %v", err)
 	}
@@ -458,8 +460,20 @@ func TestFiveHourStopParksALogin(t *testing.T) {
 	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, true); err == nil {
 		t.Fatal("a check took a login at 90% of its five hours")
 	}
+	if h := rs.Headroom(Pick{Harness: "claude", Model: "opus"}); h != 0 {
+		t.Fatalf("headroom %v with every login at its stop", h)
+	}
 	if at := rs.freeAt("claude", "opus", false); at.Before(five) || at.After(five.Add(time.Minute)) {
 		t.Fatalf("free at %v, want the five-hour reset %v", at, five)
+	}
+	read("claude", 0.85, five)
+	if !plan("claude").Parked(now) {
+		t.Fatal("a stale reading from before the stop lifted it")
+	}
+	// One login at its limit leaves the other the only one with room: it stops at 90%.
+	read("claude:work", 1, five.Add(time.Hour))
+	if !plan("claude").Parked(now) {
+		t.Fatal("the last login with room ran past 90% of its five hours")
 	}
 	if plan("claude").Parked(five.Add(time.Second)) {
 		t.Fatal("the login stays parked after its five hours reset")

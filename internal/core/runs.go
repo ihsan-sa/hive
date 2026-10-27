@@ -211,6 +211,9 @@ type Plan struct {
 	Login   string            `json:"login,omitempty"` // Login.Key; empty is the machine's own
 	Limit   harness.RateLimit `json:"limit"`
 	At      time.Time         `json:"at"`
+	// Lifted says another login of its pick has room under every stop, so
+	// its five-hour stop doesn't hold (lift); never journaled.
+	Lifted bool `json:"-"`
 }
 
 // Key names the plan's login.
@@ -227,9 +230,10 @@ func (p Plan) Key() string {
 // than spend the last of it.
 const WeeklyStop = 0.95
 
-// FiveHourStop is the same for the five-hour window: the person asked
-// (10-26) that the Hive leave the last tenth of it to them, to keep working
-// with the plan themselves while the Hive waits for the reset.
+// FiveHourStop is the same for the five-hour window, once no other login
+// of the pick has room (lift): the person asked (10-26) to stop at "90% of
+// the only 5h limit avail" and leave the last tenth to them, to keep
+// working with the plan themselves while the Hive waits for the reset.
 const FiveHourStop = 0.90
 
 // CheckReserve is the share of a week below WeeklyStop kept for the checks
@@ -247,13 +251,15 @@ const CheckReserve = 0.05
 func Reserved(role string) bool { return role == "lead" || slices.Contains(CheckRoles, role) }
 
 // stops are the windows a login stops at short of its limit, and where; the
-// week's (WeeklyStop) less CheckReserve for a run that isn't Reserved.
+// week's (WeeklyStop) less CheckReserve for a run that isn't Reserved; one
+// that may be lifted holds only for the last login with room (lift).
 var stops = []struct {
-	window  string
-	at      float64
-	reserve float64
-	name    string
-}{{"seven_day", WeeklyStop, CheckReserve, "week"}, {"five_hour", FiveHourStop, 0, "five-hour window"}}
+	window   string
+	at       float64
+	reserve  float64
+	name     string
+	liftable bool
+}{{"seven_day", WeeklyStop, CheckReserve, "week", false}, {"five_hour", FiveHourStop, 0, "five-hour window", true}}
 
 // Parked reports whether the plan is at its usage limit, or at one of its
 // stops (WeeklyStop less CheckReserve, FiveHourStop) for a run that isn't
@@ -283,6 +289,9 @@ func (p Plan) stopped(now time.Time, reserve bool) (harness.Window, string, bool
 	var out harness.Window
 	var name string
 	for _, s := range stops {
+		if s.liftable && p.Lifted {
+			continue
+		}
 		at := s.at
 		if !reserve {
 			at -= s.reserve
@@ -1041,12 +1050,47 @@ func (rs *Runs) List(fn func(*Run) bool) []Run {
 func (rs *Runs) Plans() []Plan {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	var out []Plan
+	picks := map[string][]Plan{}
 	for _, p := range rs.plans {
-		out = append(out, p)
+		pick := HarnessName(p.Harness)
+		if pick == "open" { // each model is its own pick
+			pick = p.Key()
+		}
+		picks[pick] = append(picks[pick], p)
+	}
+	var out []Plan
+	for _, ps := range picks {
+		out = append(out, lift(ps, time.Now(), false)...)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key() < out[j].Key() })
 	return out
+}
+
+// lift sets Lifted on each of plans, the logins of one pick, that another
+// has room beside under every stop, for a run that may spend the reserve
+// (Reserved) or not: the five-hour stop holds only for the last login with
+// room, so while several have it each is spent to its limit, and the last
+// keeps its tenth for the person.
+func lift(plans []Plan, now time.Time, reserve bool) []Plan {
+	open := 0
+	for _, p := range plans {
+		if p.parkedFor(now, reserve).IsZero() {
+			open++
+		}
+	}
+	for i, p := range plans {
+		plans[i].Lifted = open > 1 || open == 1 && !p.parkedFor(now, reserve).IsZero()
+	}
+	return plans
+}
+
+// plansOf are the plans of logins, lifted (lift); rs.mu is held.
+func (rs *Runs) plansOf(logins []Login, now time.Time, reserve bool) []Plan {
+	var out []Plan
+	for _, l := range logins {
+		out = append(out, rs.plans[l.Key()])
+	}
+	return lift(out, now, reserve)
 }
 
 // pickLogin chooses the login for a run's next turn: of those not parked at
@@ -1067,8 +1111,8 @@ func (rs *Runs) pickLogin(h, model, home string, bare, reserve bool) (Login, []s
 	rs.mu.Lock()
 	use := func(l Login) float64 { return rs.plans[l.Key()].Used(now) }
 	var open []Login
-	for _, l := range logins {
-		if !limited[l.Key()] && rs.plans[l.Key()].parkedFor(now, reserve).IsZero() {
+	for i, p := range rs.plansOf(logins, now, reserve) {
+		if l := logins[i]; !limited[l.Key()] && p.parkedFor(now, reserve).IsZero() {
 			open = append(open, l)
 		}
 	}
@@ -1116,8 +1160,8 @@ func (rs *Runs) Headroom(p Pick) float64 {
 	if len(logins) == 0 {
 		room = 1
 	}
-	for _, l := range logins {
-		if pl := rs.plans[l.Key()]; !pl.Parked(now) {
+	for _, pl := range rs.plansOf(logins, now, false) {
+		if !pl.Parked(now) {
 			room = max(room, 1-pl.Used(now))
 		}
 	}
@@ -1133,8 +1177,8 @@ func (rs *Runs) Ahead(p Pick) float64 {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	ahead := -1.0
-	for _, l := range logins {
-		if pl := rs.plans[l.Key()]; !pl.Parked(now) && (ahead < 0 || pl.Ahead(now) < ahead) {
+	for _, pl := range rs.plansOf(logins, now, false) {
+		if !pl.Parked(now) && (ahead < 0 || pl.Ahead(now) < ahead) {
 			ahead = pl.Ahead(now)
 		}
 	}
@@ -1158,8 +1202,8 @@ func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	var at time.Time
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	for _, l := range rs.logins(h, model) {
-		until := rs.plans[l.Key()].parkedFor(now, reserve)
+	for _, p := range rs.plansOf(rs.logins(h, model), now, reserve) {
+		until := p.parkedFor(now, reserve)
 		if until.IsZero() {
 			at = now
 			break
