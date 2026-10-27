@@ -56,6 +56,8 @@ type Module struct {
 	Contains func(p core.Project, sha, tagSHA string) (bool, error)
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
+	// liftLooked is set once AutoUpdate has looked for a pin to lift.
+	liftLooked bool
 	// said holds project@tag for each pre-release whose wait or failed
 	// publish Publish has already raised in this life of the daemon.
 	said map[string]bool
@@ -533,6 +535,32 @@ const maxSkips = 3
 // waiting for its restart.
 var restartGrace = 30 * time.Minute
 
+// liftForwardPin lifts a pin that an update forward left, from before such an
+// update stopped pinning (issue #1795), when auto-update was on before it: the
+// update that brought this release in, as the journal has it, came from an
+// older one. A step back, to an older release, stays pinned. It runs once a
+// daemon, from the scheduled job at start; pins made since are all step backs.
+func (m *Module) liftForwardPin(cfg core.Config) (bool, error) {
+	if cfg.ReleasePin == "" || !cfg.PinnedAuto || cfg.ReleasePin != core.Version {
+		return false, nil
+	}
+	from := ""
+	m.C.J.Replay(func(e core.Event) {
+		var x struct{ From, To string }
+		if e.Kind == "hive.updated" && e.Decode(&x) == nil && x.To == cfg.ReleasePin {
+			from = x.From
+		}
+	})
+	if from == "" || !modules.Newer(from, cfg.ReleasePin) {
+		return false, nil
+	}
+	if err := m.pin(cfg, "", false); err != nil {
+		return false, err
+	}
+	m.C.J.MustAppend("release.unpinned", map[string]string{"pin": cfg.ReleasePin, "text": "the pin on " + cfg.ReleasePin + " was an update forward from " + from + ", not a step back; auto-update is on again"})
+	return true, nil
+}
+
 // AutoUpdate is the scheduled job: update when allowed, pausing merges for
 // the swap rather than waiting for a Hive with none in merging, which a busy
 // one never is. A pinned Hive that was updating itself stays put and says once
@@ -544,14 +572,13 @@ func (m *Module) AutoUpdate() (string, error) {
 	}
 	defer m.updating.Unlock()
 	cfg := m.C.WS.LoadConfig()
-	if cfg.ReleasePin != "" && cfg.PinnedAuto && cfg.ReleasePin == core.Version && onward(cfg.ReleaseRepo, cfg.ReleasePin) {
-		// A pin an update forward left, before such an update stopped
-		// pinning: auto-update was on, so it goes back on.
-		if err := m.pin(cfg, "", false); err != nil {
+	if !m.liftLooked {
+		m.liftLooked = true
+		if lifted, err := m.liftForwardPin(cfg); err != nil {
 			return "", err
+		} else if lifted {
+			cfg = m.C.WS.LoadConfig()
 		}
-		m.C.J.MustAppend("release.unpinned", map[string]string{"pin": cfg.ReleasePin, "text": "the pin on " + cfg.ReleasePin + " was an update forward, not a step back; auto-update is on again"})
-		cfg = m.C.WS.LoadConfig()
 	}
 	if cfg.ReleasePin != "" && (cfg.AutoUpdate || cfg.PinnedAuto) {
 		tag, err := latest(cfg.ReleaseRepo)

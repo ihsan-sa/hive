@@ -268,21 +268,32 @@ func TestUpdateForwardDoesntPin(t *testing.T) {
 }
 
 // A pin an update forward left before it stopped pinning (auto-update was on
-// before it) is lifted at the next auto-update; a step back stays pinned.
+// before it) is lifted at the daemon's first auto-update, as the journalled
+// update that brought the release in shows; a step back stays pinned, also
+// one to a pre-release past the latest full release, and so does a pin no
+// journalled update explains.
 func TestForwardPinLifted(t *testing.T) {
-	serveAll(t, "v0.1.3", map[string]map[string]string{"v0.1.3": build("new")}, false)
-	for pin, lifted := range map[string]bool{"v0.1.4": true, "v0.1.3": true, "v0.1.2": false} {
-		m, _ := releaseAt(t, pin, "me/hive")
+	serveAll(t, "v0.1.3", map[string]map[string]string{"v0.1.3": build("new"), "v0.1.5": build("broken")}, false)
+	for _, c := range []struct {
+		from, pin string
+		lifted    bool
+	}{{"v0.1.2", "v0.1.4", true}, {"v0.1.2", "v0.1.3", true}, {"v0.1.5", "v0.1.4", false}, {"v0.1.3", "v0.1.2", false}, {"", "v0.1.4", false}} {
+		m, exe := releaseAt(t, c.pin, "me/hive")
 		cfg := m.C.WS.LoadConfig()
-		cfg.AutoUpdate, cfg.PinnedAuto, cfg.ReleasePin = false, true, pin
+		cfg.AutoUpdate, cfg.PinnedAuto, cfg.ReleasePin = false, true, c.pin
 		m.C.WS.SaveConfig(cfg)
-		msg, err := m.AutoUpdate()
-		if err != nil {
-			t.Fatalf("%s: %v", pin, err)
+		if c.from != "" {
+			m.C.J.MustAppend("hive.updated", map[string]any{"from": c.from, "to": c.pin})
 		}
-		cfg = m.C.WS.LoadConfig()
-		if lifted != (cfg.ReleasePin == "" && cfg.AutoUpdate) {
-			t.Fatalf("%s: %q; pin %q, auto_update %v, want lifted %v", pin, msg, cfg.ReleasePin, cfg.AutoUpdate, lifted)
+		for range 2 {
+			msg, err := m.AutoUpdate()
+			if err != nil {
+				t.Fatalf("%s from %s: %v", c.pin, c.from, err)
+			}
+			cfg = m.C.WS.LoadConfig()
+			if raw, _ := os.ReadFile(exe); c.lifted != (cfg.ReleasePin == "" && cfg.AutoUpdate) || string(raw) != "old" {
+				t.Fatalf("%s from %s: %q; pin %q, auto_update %v, binary %q, want lifted %v", c.pin, c.from, msg, cfg.ReleasePin, cfg.AutoUpdate, raw, c.lifted)
+			}
 		}
 	}
 }
