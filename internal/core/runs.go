@@ -1218,15 +1218,27 @@ func (rs *Runs) picks(r Run) (picks, unproven []Pick) {
 			picks = route
 		}
 	}
-	for _, p := range r.RunSpec.Route {
+	specRoute := r.RunSpec.Route
+	if rs.Route != nil && !r.Persistent && len(specRoute) > 0 {
+		// A route fixed at its start that can't answer any more (its first
+		// pick is down) gives way to the settings' route as it is now, so a
+		// run parked on a rejected model follows the route changed since.
+		if _, down := rs.downFor(specRoute[0]); down {
+			if route := rs.Route(r); len(route) > 0 {
+				specRoute = route
+				picks = append(picks, route...)
+			}
+		}
+	}
+	for _, p := range specRoute {
 		if !slices.ContainsFunc(picks, p.Same) {
 			picks = append(picks, p)
 		}
 	}
 	if r.Finishes() {
 		first := own
-		if len(r.RunSpec.Route) > 0 {
-			first = r.RunSpec.Route[0]
+		if len(specRoute) > 0 {
+			first = specRoute[0]
 		}
 		rs.mu.Lock()
 		picks = slices.DeleteFunc(picks, func(p Pick) bool {
@@ -1360,8 +1372,8 @@ func (rs *Runs) SetStatus(id, status, reason string) {
 // StoppedQuiet opens the reason of a quiet run an agent ended with EndQuiet.
 const StoppedQuiet = "stopped while quiet by "
 
-// EndQuiet ends a quiet run blocked with reason (StoppedQuiet first), only if
-// it is still quiet and no turn of it is starting: a message that woke it
+// EndQuiet ends a quiet or parked run blocked with reason (StoppedQuiet
+// first), only if it is still so and no turn of it is starting: a message that woke it
 // since the caller looked keeps it going. A message later doesn't wake it;
 // Reopen still does.
 func (rs *Runs) EndQuiet(id, reason string) error {
@@ -1371,9 +1383,9 @@ func (rs *Runs) EndQuiet(id, reason string) error {
 	case cur == nil:
 		rs.mu.Unlock()
 		return ErrNotFound
-	case cur.Status != StatusQuiet || rs.starting[id]:
+	case (cur.Status != StatusQuiet && cur.Status != StatusParked) || rs.starting[id]:
 		rs.mu.Unlock()
-		return fmt.Errorf("run %s is %s, not quiet", id, cur.Status)
+		return fmt.Errorf("run %s is %s, not quiet or parked", id, cur.Status)
 	}
 	if rs.starting == nil {
 		rs.starting = map[string]bool{}
