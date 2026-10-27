@@ -922,7 +922,23 @@ func TestMoreRepsOnlyWhenTheFirstDiffers(t *testing.T) {
 	if rep := run("same", 100, 105); len(rep.Candidate) != 1 || len(rep.Control) != 1 || rep.Verdict.Keep || !strings.Contains(rep.Verdict.Reason, "nothing moved") {
 		t.Errorf("a first rep within a single run's noise: %d/%d reps, %+v", len(rep.Candidate), len(rep.Control), rep.Verdict)
 	}
-	if rep := run("faster", 50, 100); len(rep.Candidate) != 3 || len(rep.Control) != 3 || !rep.Verdict.Keep {
+	if rep := run("same", 100, 105); !strings.Contains(rep.Verdict.Reason, "one rep a side, judged at a single run's noise (10%)") {
+		t.Errorf("a verdict on one rep doesn't say so: %q", rep.Verdict.Reason)
+	}
+	if rep := run("faster", 50, 100); len(rep.Candidate) != 3 || len(rep.Control) != 3 || !rep.Verdict.Keep || strings.Contains(rep.Verdict.Reason, "one rep") {
 		t.Errorf("a first rep that differs: %d/%d reps, %+v", len(rep.Candidate), len(rep.Control), rep.Verdict)
+	}
+	// A candidate kept on its own fix runs every rep, so a regression under
+	// a single run's noise is still looked for at the full floor.
+	seconds := func(v float64) []Result {
+		return []Result{{Probe: "p", Rep: 1, Pass: true, Metrics: []Metric{{Name: "seconds", Value: v}}}}
+	}
+	same := Report{Candidate: seconds(106), Control: seconds(100)}
+	if _, stop := stopAfterOne(same, Options{Floor: 0.02}); !stop {
+		t.Error("a first rep within a single run's noise and no fix runs more reps")
+	}
+	same.Fixes.Fixes = []Fix{{Package: "p", Test: "TestBug"}}
+	if _, stop := stopAfterOne(same, Options{Floor: 0.02}); stop {
+		t.Error("a candidate with a fix of its own stopped after rep 1")
 	}
 }

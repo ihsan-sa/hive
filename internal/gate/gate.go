@@ -400,14 +400,17 @@ func Run(cfg Config) (rep Report, err error) {
 	// The same work on both, interleaved, so the day's weather hits both.
 	// One rep a side first; the rest only when it shows a difference, since
 	// most runs move nothing and each rep is a build's worth of e2e and
-	// benchmark on each side.
+	// benchmark on each side. A candidate with fixes of its own runs them
+	// all: it would be kept on the fix alone, so a regression under a single
+	// run's noise must still be looked for at the full floor.
 	deadline := time.Now().Add(cfg.Timeout)
 	opts := cfg.Options
+	oneRep := false
 	for rep0 := 0; rep0 < cfg.Reps; rep0++ {
 		if rep0 == 1 {
-			if one := firstRepOptions(opts); !differs(Decide(rep.Candidate, rep.Control, one)) {
+			if one, stop := stopAfterOne(rep, opts); stop {
 				cfg.log("rep 1 moved nothing beyond a single run's noise: no more reps")
-				opts = one
+				opts, oneRep = one, true
 				break
 			}
 		}
@@ -454,6 +457,10 @@ func Run(cfg Config) (rep Report, err error) {
 	}
 	rep.Verdict = Decide(rep.Candidate, rep.Control, opts)
 	rep.Measured = true
+	if oneRep {
+		// So a judge reading "nothing moved" knows how coarse a look it was.
+		rep.Verdict.Reason += fmt.Sprintf("; one rep a side, judged at a single run's noise (%.0f%%), since rep 1 moved nothing beyond it", opts.Floor*100)
+	}
 	if len(rep.Unit.Shared) > 0 {
 		rep.Verdict.Reason += "; failing on both sides, so the environment's and not counted: " + failureNames(rep.Unit.Shared, modulePath(cand.Src))
 	}
@@ -465,10 +472,13 @@ func Run(cfg Config) (rep Report, err error) {
 // smaller move is not worth more reps, nor a verdict.
 const singleRunNoise = 0.10
 
-func firstRepOptions(o Options) Options {
+// stopAfterOne says whether the probes end after rep 1, and the options
+// the verdict is then decided on. A candidate with fixes of its own never
+// stops there: it would be kept on the fix alone.
+func stopAfterOne(rep Report, o Options) (Options, bool) {
 	o.Floor = max(o.Floor, singleRunNoise)
 	o.Fixed = nil // the candidate's own fixes are a gain whatever the probes say
-	return o
+	return o, len(rep.Fixes.Fixes) == 0 && !differs(Decide(rep.Candidate, rep.Control, o))
 }
 
 // differs says the first rep showed something more reps must confirm or
