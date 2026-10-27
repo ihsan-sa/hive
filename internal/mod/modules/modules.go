@@ -32,6 +32,9 @@ type Manifest struct {
 	// are what it serves, each a fixed slice of the control API (see runner).
 	Exec  []string `json:"exec,omitempty"`
 	Hooks []string `json:"hooks,omitempty"`
+	// Command gives the module `hive <name> <args...>`: its program run with
+	// args, attached to the terminal (see runner.Command).
+	Command bool `json:"command,omitempty"`
 	// Schedule names jobs the program serves, each with its default
 	// schedule ("every 4h"); config.json's schedules override it. When one
 	// is due the system journals module.scheduled, which the program reads.
