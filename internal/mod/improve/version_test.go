@@ -150,18 +150,33 @@ func TestNoSecondLookIntoAKnownOrGoneDip(t *testing.T) {
 		t.Fatalf("a dip while the first look is open should join it, not file a second: %+v\n%s", l, second.Note)
 	}
 
-	// The look ends; main recovers past a merge whose dip is read late.
-	m.Work.Stop(l[0].ID, "done")
+	// Past its worker (in review), the look takes nothing it would leave
+	// unread: the next dip gets a look of its own.
+	reviewing := l[0]
+	reviewing.Stage = work.StageReviewing
+	m.C.J.MustAppend("task.saved", reviewing)
+	third := merge(map[string]string{"n.txt": "0\n"}, fix("fix-4"))
+	if l := looks(); len(l) != 2 || strings.Contains(reviewing.Known, core.Short(third.SHA)) {
+		t.Fatalf("a dip while the open look is in review should get its own look: %+v\n%s", l, third.Note)
+	}
+	if tk, _ := m.Work.Get(reviewing.ID); strings.Contains(tk.Known, core.Short(third.SHA)) {
+		t.Fatalf("a look in review took a dip no one will read: %s", tk.Known)
+	}
+
+	// The looks end; main recovers past a merge whose dip is read late.
+	for _, o := range looks() {
+		m.Work.Stop(o.ID, "done")
+	}
 	merge(map[string]string{"n.txt": "5\n"})
 	p, _ := m.C.Projects.Get("p")
 	fix3 := fix("fix-3")
 	fix3.MergeSHA = first.SHA
-	if got := m.lookIntoDip(p, fix3, "late", 3); !strings.Contains(got, "gone from main") || len(looks()) != 1 {
+	if got := m.lookIntoDip(p, fix3, "late", 3); !strings.Contains(got, "gone from main") || len(looks()) != 2 {
 		t.Fatalf("a dip main has since left behind filed a look: %q %+v", got, looks())
 	}
 	// Still there at main's head: a new look.
 	m.lookIntoDip(p, fix3, "late", 9)
-	if len(looks()) != 2 {
+	if len(looks()) != 3 {
 		t.Fatalf("a dip still on main got no look: %+v", looks())
 	}
 }

@@ -256,22 +256,25 @@ func (m *Module) notifyThreads(t *Task, text string) {
 	}
 }
 
-// AddKnown adds text to open task id's Known, from a module rather than a
-// brief (improve's dip while an earlier one is looked into), and tells its
-// worker when one is on it. It is false when the task is gone, finished, or
-// held by a step past a few seconds.
+// AddKnown adds text to task id's Known, from a module rather than a brief
+// (improve's dip while an earlier one is looked into), and tells its worker
+// when one is on it. Only a task a worker will still read takes it: new,
+// queued, or working with its worker live. It is false otherwise (gone,
+// finished, past its worker in landing, review or merge, where no one would
+// read it), or when a step holds it past a few seconds.
 func (m *Module) AddKnown(id, from, text string) (Task, bool) {
 	if !m.claimWithin(id, 4*time.Second) {
 		return Task{}, false
 	}
 	defer m.release(id)
 	t, ok := m.Get(id)
-	if !ok || t.Terminal() {
+	readable := t.Stage == StageNew || t.Queued() || (t.Stage == StageWorking && !m.workerEnded(t))
+	if !ok || !readable {
 		return Task{}, false
 	}
 	t.Known = strings.TrimSpace(t.Known + "\n\n" + text)
 	m.save(&t, "context added by "+from)
-	if t.Stage == StageWorking && t.Worker != "" && !m.workerEnded(t) {
+	if t.Stage == StageWorking && t.Worker != "" {
 		m.C.Runs.Send(t.Worker, "More for your task, from "+from+":\n\n"+text)
 	}
 	return t, true

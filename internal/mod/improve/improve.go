@@ -953,10 +953,12 @@ func (m *Module) lookIntoDip(p core.Project, t work.Task, reason string, before 
 	if len(m.Work.List(func(x work.Task) bool { return x.Project == p.Name && x.Title == title })) > 0 {
 		return "a brief looks into the dip"
 	}
-	// A look still open, its fix not yet merged, takes this dip as more of
-	// what it looks into: a second worker would only find the same cause.
+	// A look a worker will still read (AddKnown: new, queued, or working
+	// with its worker live) takes this dip as more of what it looks into: a
+	// second worker would only find the same cause. One past its worker, in
+	// review or merge, takes nothing, and this dip gets its own look.
 	open := m.Work.List(func(x work.Task) bool {
-		return x.Project == p.Name && x.From == "improve" && strings.HasPrefix(x.Title, dipLook) && !x.Terminal() && x.MergeSHA == ""
+		return x.Project == p.Name && x.From == "improve" && strings.HasPrefix(x.Title, dipLook) && !x.Terminal()
 	})
 	slices.Reverse(open) // oldest first
 	for _, o := range open {
