@@ -33,7 +33,12 @@ type Meter struct {
 	bytes    atomic.Int64
 	local    bool // tests only: reach this machine
 	wg       sync.WaitGroup
+	broker   atomic.Pointer[Broker] // answers for GitHub, when the side has its own repositories there
 }
+
+// SetBroker makes b the side's GitHub (nil: GitHub is tunnelled like any
+// other host).
+func (m *Meter) SetBroker(b *Broker) { m.broker.Store(b) }
 
 // ProxyPort is where the forwarder listens inside a sandbox's own network.
 const ProxyPort = 3128
@@ -109,6 +114,13 @@ func (m *Meter) handle(c net.Conn) {
 		io.WriteString(c, "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
 		return
 	}
+	if b := m.broker.Load(); b != nil && b.Intercepts(req.Host) {
+		// GitHub is the broker's: the side's own repositories, nothing else.
+		c.SetReadDeadline(time.Time{})
+		io.WriteString(c, "HTTP/1.1 200 Connection established\r\n\r\n")
+		b.Serve(&countedConn{Conn: c, r: br, n: &m.bytes})
+		return
+	}
 	up, err := m.dial(req.Host)
 	if err != nil {
 		fmt.Fprintf(c, "HTTP/1.1 403 Forbidden\r\nContent-Length: %d\r\n\r\n%s", len(err.Error()), err.Error())
@@ -136,6 +148,26 @@ func (m *Meter) handle(c net.Conn) {
 	go count(c, up)
 	<-done
 	<-done
+}
+
+// countedConn counts what a side's connection carries both ways, reading
+// first what the meter had buffered.
+type countedConn struct {
+	net.Conn
+	r io.Reader
+	n *atomic.Int64
+}
+
+func (c *countedConn) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	return n, err
+}
+
+func (c *countedConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.n.Add(int64(n))
+	return n, err
 }
 
 // dial reaches hostport, directly or through the gate's own proxy, refusing

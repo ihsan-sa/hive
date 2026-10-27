@@ -364,6 +364,9 @@ func Run(cfg Config) (rep Report, err error) {
 					if out, err := c.Exec(2*time.Minute, c.Root, "git", "ls-remote", c.RepoURL); err != nil {
 						return fmt.Errorf("%s can't reach %s with its deploy key: %v: %s", c.Name, name, err, tail(out, 300))
 					}
+					if err = c.useBroker(&cfg, g, name); err != nil {
+						return err
+					}
 				}
 				if !strings.Contains(c.RepoURL, "://") {
 					// A local org's repository is a folder: the child sees it
@@ -385,7 +388,8 @@ func Run(cfg Config) (rep Report, err error) {
 			cfg.log("%s", rep.OrgNote)
 			cleanup()
 			for _, c := range []*Child{cand, ctrl} {
-				c.Repo, c.RepoURL, c.Key, c.Token = "", "", "", ""
+				c.Repo, c.RepoURL, c.Key, c.Token, c.Trust = "", "", "", "", ""
+				c.Meter.SetBroker(nil)
 			}
 			cfg.Org = Local{Dir: filepath.Join(cfg.Out, "org")}
 			if err = os.MkdirAll(filepath.Join(cfg.Out, "org"), 0o755); err != nil {
