@@ -1410,6 +1410,13 @@ func TestTestedMerge(t *testing.T) {
 	if gh, gb := TestedMerge("##[group]Run actions/checkout@v4\nHEAD is now at 1234567 Merge " + h + " into " + b + "\n"); gh != h || gb != b {
 		t.Fatalf("got %q %q", gh, gb)
 	}
+	// As a real downloaded job log has it (run 40141753912, Windows): a
+	// byte-order mark, a timestamp on every line, CRLF endings.
+	real := "\uFEFF2026-10-24T23:12:18.1234567Z ##[group]Run actions/checkout@v4\r\n" +
+		"2026-10-24T23:12:19.5680109Z HEAD is now at c3650dd Merge a9ae9886b8972d54993c619d40dc8a4b4c9fa7d1 into 3b7c51c4d6c9d51c55bf4c3efbb20480f592375b\r\n"
+	if gh, gb := TestedMerge(real); gh != "a9ae9886b8972d54993c619d40dc8a4b4c9fa7d1" || gb != "3b7c51c4d6c9d51c55bf4c3efbb20480f592375b" {
+		t.Fatalf("real log: got %q %q", gh, gb)
+	}
 	if gh, gb := TestedMerge("HEAD is now at 1234567 a push\n"); gh != "" || gb != "" {
 		t.Fatalf("got %q %q", gh, gb)
 	}
