@@ -346,6 +346,7 @@ type Module struct {
 	// mainTips holds each project's main for one admit pass (queue.go).
 	mainTips map[string]string
 	filing   sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
+	meeting  sync.Mutex     // one started worker meets its neighbours at a time (meet.go)
 	steps    sync.WaitGroup // the steps Tick started, and the checks they queued, still going
 	// mergeRuns holds each task's merged-with-main test running behind a
 	// step, at most one, until a step takes the result (testMerged).
@@ -460,6 +461,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
 	c.Effects.Slots.Prioritize(m.checkRank)
+	m.wrapFinish()
 	return m
 }
 
@@ -1261,6 +1263,7 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 	if t.Attempt > 0 {
 		id = fmt.Sprintf("w-%s-%d", t.ID, t.Attempt+1)
 	}
+	brief := "" // set when this call starts the run, so a restart meets no one twice
 	if _, ok := m.C.Runs.Get(id); !ok {
 		base, err := m.C.Effects.Sync(p)
 		if err != nil {
@@ -1278,7 +1281,8 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 		if err != nil {
 			return err
 		}
-		spec := m.Agents.Spec(id, "worker", p.Name, dir, m.renderBrief(t, p, base))
+		brief = m.renderBrief(t, p, base)
+		spec := m.Agents.Spec(id, "worker", p.Name, dir, brief)
 		spec.Task, spec.Inputs = t.ID, t.Inputs
 		if t.Model != "" {
 			pick, err := m.C.WS.LoadConfig().Pick(t.Model)
@@ -1298,6 +1302,9 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 	t.Worker, t.Stage, t.Failures, t.Reason, t.Now = id, StageWorking, 0, "", false
 	t.FilesSince, t.FilesTold = time.Time{}, false
 	m.save(t, "worker "+id+" started")
+	if brief != "" {
+		m.meet(t, brief)
+	}
 	return nil
 }
 
@@ -1316,6 +1323,7 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	fmt.Fprintf(&b, "# Brief: %s\n\nTask %s · project %s · issue #%d\n\n", t.Label(), t.ID, p.Name, t.Issue.Number)
 	fmt.Fprintf(&b, "## The ask\n\n%s\n\n", t.Title)
 	fmt.Fprintf(&b, "## What done looks like\n\n%s\n\n## What's already known\n\n%s\n\n", doneFor(t, cfg.Score != nil), orNone(t.Known))
+	b.WriteString(besideText(m.neighbours(*t)))
 	b.WriteString("## The project\n\n")
 	b.WriteString("- Goals: `.hive/goals.md`. Read it; report against it.\n")
 	fmt.Fprintf(&b, "- Tests: `%s`\n", orNone(cfg.Test))
@@ -3727,6 +3735,7 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 		msg = "Main moved, and the recursive gate, merging it into your branch to judge the change as it would land, found conflicts in:\n\n- " +
 			strings.Join(g.files, "\n- ") + "\n\nFetch main with " + fetchMain + ", merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
 	}
+	msg += m.movedBy(p, cmp.Or(head, t.SHA), t.ConflictMain)
 	if err := m.C.Runs.Reopen(t.Worker, msg); err != nil {
 		return err
 	}
