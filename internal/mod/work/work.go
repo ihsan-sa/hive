@@ -3402,7 +3402,11 @@ func (m *Module) closedPR(t *Task, p core.Project, pr core.PR) (bool, error) {
 		if pr.MergeSHA == "" { // the forge hasn't said where yet: look next tick
 			return true, nil
 		}
-		m.merged(t, pr.MergeSHA, fmt.Sprintf("merged on the forge outside the Hive (PR #%d) as %s", pr.Number, core.Short(pr.MergeSHA)))
+		note := fmt.Sprintf("merged on the forge outside the Hive (PR #%d) as %s", pr.Number, core.Short(pr.MergeSHA))
+		if m.C.Effects.MergedAfterError(p, pr) {
+			note = fmt.Sprintf("merged as %s: the forge answered the Hive's merge with an error, but it went through", core.Short(pr.MergeSHA))
+		}
+		m.merged(t, pr.MergeSHA, note)
 		return true, nil
 	}
 	if pr.State != "CLOSED" {
