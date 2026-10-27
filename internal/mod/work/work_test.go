@@ -622,6 +622,87 @@ func TestHelperCommitsGetTheirOwnPR(t *testing.T) {
 	}
 }
 
+// A helper that finishes done with commits goes on like any task, to a pull
+// request in testing, and the worker that spawned it hears how its task went
+// as a message, as it has no thread of its own; a lead hears in its thread.
+func TestHelperLandsAndItsSpawnerHears(t *testing.T) {
+	m, forge, p := helperRig(t)
+	parent, err := m.C.Runs.Start(m.Agents.Spec("w-parent", "worker", "p", t.TempDir(), "split the work"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := m.Spawn(parent, "worker", "p", "write the helper part", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(spec.Checkout, "helper.txt"), []byte("helped\n"), 0o644)
+	mustGit(t, spec.Checkout, "add", "-A")
+	mustGit(t, spec.Checkout, "commit", "-q", "-m", "helper work")
+	m.C.Runs.SetStatus(spec.ID, core.StatusDone, "")
+	for _, want := range []string{StageLanding, StageTesting} {
+		task, _ := m.Get(spec.Task)
+		if err := m.step(&task); err != nil {
+			t.Fatal(err)
+		}
+		if task.Stage != want {
+			t.Fatalf("stage %q, want %q: %v", task.Stage, want, task.Log)
+		}
+	}
+	task, _ := m.Get(spec.Task)
+	if pr, found, _ := forge.FindPR("me/p", task.Branch); !found || pr.HeadSHA != task.SHA {
+		t.Fatalf("no pull request for the helper's commit: %+v", pr)
+	}
+	before := len(mustRun(t, m, parent.ID).Pending) // the helper's finish account
+	toMerging(t, m, &task, p)
+	mergeOnce(t, m, &task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q; want merged", task.Stage, task.Reason)
+	}
+	r := mustRun(t, m, parent.ID)
+	if len(r.Pending) != before+1 || !strings.Contains(r.Pending[before], "Merged: write the helper part") || !strings.Contains(r.Pending[before], task.ID) {
+		t.Fatalf("the spawner wasn't told: %+v", r.Pending)
+	}
+	lead := &Task{ID: "t-lead", Kind: "helper", From: "lead"}
+	m.C.Runs.Start(core.RunSpec{ID: "lead", Role: "lead", Persistent: true, Checkout: t.TempDir()})
+	m.notify(lead, "Merged: the lead's helper")
+	if r, _ := m.C.Runs.Get("lead"); len(r.Pending) != 0 {
+		t.Fatalf("a lead was messaged besides its thread: %+v", r.Pending)
+	}
+}
+
+// A helper that finishes blocked tells its spawner once, by its own finish
+// account; the task's "Blocked:" line goes to the threads, not again to it.
+// One the Hive ended, which sent no account, is told by that line.
+func TestBlockedHelperTellsItsSpawnerOnce(t *testing.T) {
+	for _, finished := range []bool{true, false} {
+		m, _, _ := helperRig(t)
+		parent, err := m.C.Runs.Start(m.Agents.Spec("w-parent", "worker", "p", t.TempDir(), "split the work"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec, err := m.Spawn(parent, "worker", "p", "write the helper part", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if finished {
+			m.C.J.MustAppend("run.finish", map[string]any{"id": spec.ID, "finish": core.Finish{Status: core.StatusBlocked, Account: "can't reach the API"}})
+		}
+		m.C.Runs.SetStatus(spec.ID, core.StatusBlocked, "can't reach the API")
+		before := len(mustRun(t, m, parent.ID).Pending)
+		task, _ := m.Get(spec.Task)
+		if err := m.step(&task); err != nil {
+			t.Fatal(err)
+		}
+		if task.Stage != StageBlocked {
+			t.Fatalf("stage %q, want blocked: %v", task.Stage, task.Log)
+		}
+		heard := mustRun(t, m, parent.ID).Pending[before:]
+		if want := map[bool]int{true: 0, false: 1}[finished]; len(heard) != want {
+			t.Fatalf("finished by itself %v: the spawner heard %+v, want %d messages", finished, heard, want)
+		}
+	}
+}
+
 // A helper with no commits ends its task done, with nothing said on the forge:
 // its account already went to the agent that spawned it.
 func TestHelperNoCommitsIsDone(t *testing.T) {
@@ -979,4 +1060,44 @@ func TestMergedOnForgeWhileHeld(t *testing.T) {
 	if start, _ := m.admit(m.List(nil)); !start[waiting.ID] {
 		t.Fatal("the brief behind it didn't start")
 	}
+}
+
+// The person's stop stands over a step running on an older copy of the task:
+// the step's later saves are dropped and it doesn't merge, and a tick doesn't
+// start a step on a copy taken before a save.
+func TestStopStandsOverARunningStep(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage = StageMerging
+	m.save(task, "on to the merge")
+	step, _ := m.Get(task.ID) // the tick's copy
+	if err := m.Stop(task.ID, "stopped by the person"); err != nil {
+		t.Fatal(err)
+	}
+	if !m.overtaken(&step) {
+		t.Fatal("a copy from before the stop isn't seen as overtaken")
+	}
+	step.Stage = StageLanding
+	m.save(&step, "the step's older copy")
+	if got, _ := m.Get(task.ID); got.Stage != StageStopped || !got.ByPerson {
+		t.Fatalf("the step saved over the person's stop: %+v", got)
+	}
+	cur, _ := m.Get(task.ID)
+	if m.overtaken(&cur) {
+		t.Fatal("a copy taken after the stop is overtaken")
+	}
+	m.mu.Lock()
+	ok := m.fresh(step)
+	m.mu.Unlock()
+	if ok {
+		t.Fatal("a copy from before a save reads as fresh")
+	}
+}
+
+func mustRun(t *testing.T, m *Module, id string) core.Run {
+	t.Helper()
+	r, ok := m.C.Runs.Get(id)
+	if !ok {
+		t.Fatalf("no run %s", id)
+	}
+	return r
 }

@@ -208,7 +208,20 @@ func (Claude) Args(t Turn) []string {
 	if t.MaxBudgetUSD > 0 {
 		a = append(a, "--max-budget-usd", fmt.Sprintf("%.2f", t.MaxBudgetUSD))
 	}
-	return a
+	return append(a, "--settings", claudeSettings(nil))
+}
+
+// claudeSettings is the --settings value every Claude Code turn runs with,
+// extra merged in. Claude Code's own attribution is off: its
+// "Co-Authored-By: Claude <noreply@anthropic.com>" trailer is what GitHub
+// shows as the "claude" contributor, and the Hive's work is the Hive's.
+func claudeSettings(extra map[string]any) string {
+	set := map[string]any{"attribution": map[string]string{"commit": "", "pr": ""}, "includeCoAuthoredBy": false}
+	for k, v := range extra {
+		set[k] = v
+	}
+	s, _ := json.Marshal(set)
+	return string(s)
 }
 
 func (Claude) Env(t Turn) []string {
@@ -336,6 +349,18 @@ func LooksLimited(s string) bool {
 	return strings.Contains(s, "usage limit") || strings.Contains(s, "hit your limit") ||
 		(strings.Contains(s, "limit") && strings.Contains(s, "reset"))
 }
+
+// SaysLimited is the stricter LooksLimited, for where a miss is only a
+// failure asked about but a false match hides one: s names a usage, weekly or
+// hour limit, or a limit with when it resets ("resets 3pm"), not merely both
+// words somewhere.
+func SaysLimited(s string) bool {
+	l := strings.ToLower(s)
+	return strings.Contains(l, "usage limit") || namedLimit.MatchString(l) ||
+		strings.Contains(l, "limit") && limitReset.MatchString(l)
+}
+
+var namedLimit = regexp.MustCompile(`hit your (?:\w+ )?limit|(?:weekly|hour|session|opus|sonnet) limit`)
 
 // limitReset finds when a usage-limit message says the limit resets:
 // "resets Oct 26, 1pm (America/New_York)", "resets 3:30pm", "resets Oct 28, 12am".

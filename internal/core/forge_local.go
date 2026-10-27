@@ -293,7 +293,7 @@ func (l *Local) SetDraft(repo string, number int, draft bool) error {
 }
 
 // ReadyPR takes a draft out of draft while its head is still sha.
-func (l *Local) ReadyPR(repo string, number int, sha string) error {
+func (l *Local) ReadyPR(repo string, number int, sha string) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	s := l.load()
@@ -303,19 +303,20 @@ func (l *Local) ReadyPR(repo string, number int, sha string) error {
 			continue
 		}
 		if p.State != "OPEN" {
-			return fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
+			return false, fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
 		}
 		l.refresh(repo, p)
 		if p.HeadSHA != sha {
-			return fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+			return false, fmt.Errorf("PR #%d head is %s, not the checked commit %s: %w", number, short(p.HeadSHA), short(sha), ErrHeadMoved)
 		}
-		if p.Draft {
-			p.Draft = false
-			l.save(s)
+		if !p.Draft {
+			return false, nil
 		}
-		return nil
+		p.Draft = false
+		l.save(s)
+		return true, nil
 	}
-	return ErrNotFound
+	return false, ErrNotFound
 }
 
 // LocalMergeMessage is the local forge's squash message for PR number at
@@ -560,12 +561,16 @@ func (l *Local) SetCheckSteps(repo, url string, steps ...JobStep) {
 // RerunFailed sets each failed or cancelled check on repo@sha back to
 // pending, as a CI starting them again would, and counts it in Reruns. Like
 // GitHub, it leaves a check that never started (a startup failure, one
-// awaiting approval) alone.
+// awaiting approval) alone, and re-runs nothing while a check on the head is
+// still going: a head's checks here are one workflow run.
 func (l *Local) RerunFailed(repo, sha string) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	s := l.load()
 	n := 0
+	if slices.ContainsFunc(s.Checks[repo+"@"+sha], func(c CheckRun) bool { return c.State == CheckPending }) {
+		return 0, nil // as GitHub: no job of a run still going is re-run
+	}
 	for i, c := range s.Checks[repo+"@"+sha] {
 		if c.State == CheckFail || c.State == CheckCantStart && c.Detail == "cancelled" {
 			s.Checks[repo+"@"+sha][i].State, s.Checks[repo+"@"+sha][i].Detail = CheckPending, "re-run"

@@ -2,6 +2,7 @@ package work
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -317,6 +318,22 @@ func TestPacePullsBackAheadOfTheWindow(t *testing.T) {
 	}
 }
 
+// steady keeps a strain's words up to its first reading: one with no
+// readings is kept whole, and nested parentheses go with the first.
+func TestSteady(t *testing.T) {
+	for in, want := range map[string]string{
+		"":               "",
+		"machine loaded": "machine loaded",
+		"machine loaded (load 40 on 20 cores, limit 1 per core)":        "machine loaded",
+		"machine low on memory (900 MB free (of 16 GB), floor 4096 MB)": "machine low on memory",
+		"machine loaded(no space)":                                      "machine loaded(no space)",
+	} {
+		if got := steady(in); got != want {
+			t.Errorf("steady(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // A check of a task queued briefs wait on ranks first, a fix's next, and the
 // rest, or a sha no task holds, not at all (issue #838).
 func TestCheckRankFreesThenFixes(t *testing.T) {
@@ -342,6 +359,33 @@ func TestCheckRankFreesThenFixes(t *testing.T) {
 	}
 }
 
+// Main's own measurement goes ahead of every task's check while it runs,
+// and keeps its place once done (issue #1078).
+func TestCheckRankMainFirst(t *testing.T) {
+	m, _, _ := helperRig(t)
+	m.mu.Lock()
+	m.tasks["blocker"] = &Task{ID: "blocker", Project: "p", SHA: "s1", Stage: StageTesting}
+	m.tasks["waiter"] = &Task{ID: "waiter", Project: "p", Stage: StageQueued, Reason: fmt.Sprintf("waiting for %q (task %s) to land: both touch a.go", "x", "blocker")}
+	m.mu.Unlock()
+	done := m.MeasuringMain("p", "main1")
+	again := m.MeasuringMain("p", "main1")
+	if got := m.checkRank("p", "main1", "size"); got != rankMain || got <= m.checkRank("p", "s1", "test") {
+		t.Errorf("main's measurement ranked %d, a freeing check %d", got, m.checkRank("p", "s1", "test"))
+	}
+	if got := m.checkRank("other", "main1", "score"); got != 0 {
+		t.Errorf("another project's sha ranked %d", got)
+	}
+	done()
+	done()
+	if got := m.checkRank("p", "main1", "score"); got != rankMain {
+		t.Errorf("one of two measurements done: ranked %d", got)
+	}
+	again()
+	if got := m.checkRank("p", "main1", "score"); got != 0 {
+		t.Errorf("measured: still ranked %d", got)
+	}
+}
+
 // Load alone holds no worker from starting up to the pace's start, only past
 // it; any other strain holds every start.
 func TestLoadHoldsOnlyPastTheStart(t *testing.T) {
@@ -353,6 +397,53 @@ func TestLoadHoldsOnlyPastTheStart(t *testing.T) {
 	}{{"", 9, false}, {load, 0, false}, {load, 3, false}, {load, 4, true}, {mem, 0, true}} {
 		if got := loadHolds(c.strain, c.working, 4); got != c.want {
 			t.Errorf("%q with %d at work: holds %v, want %v", c.strain, c.working, got, c.want)
+		}
+	}
+}
+
+// A gate's wait reason, saved with its task, stays the same as the gates'
+// limit and the machine's readings move: neither is in it.
+func TestGateRoomReasonHoldsAsTheLimitMoves(t *testing.T) {
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	strain := ""
+	gateMachine = func(core.Config) (string, bool) { return strain, true }
+	dir := t.TempDir()
+	j, err := core.OpenJournal(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	m := &Module{C: &core.Core{J: j, WS: core.Workspace{Root: filepath.Join(dir, "hive")}}}
+	maxGates(m, 5) // the ceiling and start, whatever the host's cores
+	limit := func(l int) {
+		m.gates.mu.Lock()
+		m.gates.limit, m.gates.start, m.gates.at = l, 5, time.Now()
+		m.gates.mu.Unlock()
+	}
+	full := ""
+	for _, l := range []int{1, 2, 3} {
+		limit(l)
+		got := m.gateRoom(l)
+		if full == "" {
+			full = got
+		}
+		if got == "" || got != full {
+			t.Fatalf("limit %d: reason %q, want %q at every limit", l, got, full)
+		}
+	}
+	strained := ""
+	for i, s := range []string{
+		"machine loaded (load 40 on 20 cores, limit 1 per core)",
+		"machine loaded (load 52 on 20 cores, limit 1 per core)",
+	} {
+		strain = s
+		limit(3 + i)
+		got := m.gateRoom(1)
+		if strained == "" {
+			strained = got
+		}
+		if got != "no room for another: machine loaded" || got != strained {
+			t.Fatalf("strain %q at limit %d: reason %q", s, 3+i, got)
 		}
 	}
 }
@@ -398,5 +489,46 @@ func TestPacePullsBackAheadOfTheWeek(t *testing.T) {
 	read(0.75, 6*24*time.Hour)
 	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of the clock") {
 		t.Fatalf("a week 75%% spent in its first day: %q", why)
+	}
+}
+
+// Pulled under its start by CPU pressure, the workers' pace comes back to
+// its start a growStep after only load is left, as load alone would block
+// its growth for good; the checks' pace, whose builds make the load, may
+// stay under it.
+func TestPaceComesBackToTheStartUnderLoadAlone(t *testing.T) {
+	const load = "machine loaded (load 30 on 20 cores, limit 1.5 per core)"
+	now := time.Date(2026, 10, 26, 17, 0, 0, 0, time.UTC)
+	workers, checks := pace{}, pace{loadCuts: true}
+	for _, p := range []*pace{&workers, &checks} {
+		p.next(now, 4, true, "", true, 4, 0)
+		for i := range 4 {
+			p.next(now.Add(time.Duration(i+1)*paceStep), p.limit, true, "machine under cpu pressure (80.00%, limit 40%)", true, 4, 0)
+		}
+		if p.limit != 1 {
+			t.Fatalf("under cpu pressure: %d, want 1", p.limit)
+		}
+	}
+	at := now.Add(4 * paceStep)
+	for i := range 30 { // half an hour of load alone, a reading a minute
+		at = at.Add(paceStep)
+		w := workers.next(at, workers.limit, true, load, true, 4, 0)
+		c := checks.next(at, checks.limit, true, load, true, 4, 0)
+		if c != 1 {
+			t.Fatalf("minute %d: the checks' pace moved under load alone: %d", i, c)
+		}
+		if i < 4 && w != 1 {
+			t.Fatalf("minute %d: back within a growStep of the cpu pressure: %d", i, w)
+		}
+	}
+	if workers.limit != 4 || !strings.Contains(workers.String(), "back to the start") {
+		t.Fatalf("after load alone: %s, want back at its start 4", workers.String())
+	}
+	if l := checks.next(at.Add(paceStep), 4, true, load, true, 4, 0); l != 1 {
+		t.Fatalf("checks under load alone: %d, want 1", l)
+	}
+	fresh := pace{limit: 4, start: 4, at: now, loadCuts: true}
+	if l := fresh.next(now.Add(paceStep), 4, true, load, true, 4, 0); l != 3 {
+		t.Fatalf("checks at their start under load alone: %d, want 3", l)
 	}
 }

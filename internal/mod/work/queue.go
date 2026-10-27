@@ -22,7 +22,8 @@ import (
 )
 
 // The queue: a filed brief waits as queued until a worker can take it. Briefs
-// start in the order they were filed, or the order the lead set, and only as
+// start in the order they were filed, or the order the lead set (a brief
+// waiting past overdue goes ahead of that order), and only as
 // many work at once as the pace allows (pace.go, under max_workers) while the
 // machine isn't loaded: the brake is the machine. A brief that names a file
 // another brief names (one a worker is on, or ahead of it in line), or one
@@ -51,7 +52,8 @@ import (
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
 
 // inLine sorts waiting tasks: those the lead started now first, then quick
-// ones, then those the lead ordered, in its order, then the rest as filed.
+// ones, then those filed overdue ago, oldest first, then those the lead
+// ordered, in its order, then the rest as filed.
 func (m *Module) inLine(q []Task) {
 	quick := map[string]bool{}
 	for _, t := range q {
@@ -65,6 +67,12 @@ func (m *Module) inLine(q []Task) {
 		if quick[a.ID] != quick[b.ID] {
 			return quick[a.ID]
 		}
+		if a.Overdue() != b.Overdue() {
+			return a.Overdue()
+		}
+		if a.Overdue() {
+			return a.Created.Before(b.Created)
+		}
 		if (a.Order > 0) != (b.Order > 0) {
 			return a.Order > 0
 		}
@@ -73,6 +81,20 @@ func (m *Module) inLine(q []Task) {
 		}
 		return a.Created.Before(b.Created)
 	})
+}
+
+// overdue is how long a brief waits before it goes ahead of the lead's order:
+// one the lead neither ordered nor started now moved only when nothing newer
+// was ordered, and with the lead ordering about 19 and starting 10 a day,
+// task 065256 waited 10h20m, passed by 30 newer briefs "to go first", and the
+// check-homes fix 080252 waited 9h until /tmp filled the machine's memory.
+// Once overdue, newer briefs on its files wait on it instead. The lead still
+// starts one past it now, or holds it.
+var overdue = 4 * time.Hour
+
+// Overdue reports whether t has waited in the queue since overdue ago.
+func (t Task) Overdue() bool {
+	return t.Queued() && !t.Created.IsZero() && time.Since(t.Created) >= overdue
 }
 
 // quick reports whether t's brief only changes module prompts: it names at
@@ -166,6 +188,11 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		}
 		return *roomOK
 	}
+	// Finishing beats starting: while checks wait for a slot, the machine
+	// is theirs. A new worker would load it further and pull the checks'
+	// limit back (88 checks waited, 44 tasks sat in testing for hours).
+	_, checksWait := m.C.Effects.Slots.State()
+	checksHold := len(checksWait) > 0
 	// planOK says the plan has room for a quick brief past the pace: read
 	// once, on need.
 	var planOK *bool
@@ -207,6 +234,8 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				continue // one that waits on another holds no one back, so waits never chain
 			case working >= limit && (!quick || quickWorking > 0 || !plan()):
 				wait[t.ID], capped = full, true
+			case checksHold && !t.Now:
+				wait[t.ID] = "waiting: checks wait for the machine"
 			case func() bool { held = hold(working); return held != "" }():
 				wait[t.ID] = "waiting: " + steady(held)
 			default:
@@ -225,7 +254,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	limit := m.paceWorkers(cfg, working, false)
 	start, wait, capped := decide(limit)
 	if capped {
-		if l := m.paceWorkers(cfg, working, true); l != limit {
+		if l := m.paceWorkers(cfg, working, !checksHold); l != limit {
 			start, wait, _ = decide(l)
 		}
 	}
@@ -362,7 +391,7 @@ func (m *Module) apart(t, o Task, p string) bool {
 	if len(defs) == 0 {
 		return false
 	}
-	mine, theirs := named(t, defs), named(o, defs)
+	mine, theirs := named(t, p, defs), named(o, p, defs)
 	if len(mine) == 0 || len(theirs) == 0 {
 		return false
 	}
@@ -375,20 +404,50 @@ func (m *Module) apart(t, o Task, p string) bool {
 }
 
 // named is the definitions in defs that t's brief names as words, outside
-// the paths it names (textkit/__init__.py names no __init__).
-func named(t Task, defs map[string]bool) map[string]bool {
+// the paths it names and bare names of files like p (textkit/__init__.py or
+// __init__.py names no __init__). A common word ("run", "New", "file") that p
+// happens to define counts only written as code, in backticks or called, so
+// two briefs that rework one part of a large file in prose don't start
+// together on a word that isn't the definition at all.
+func named(t Task, p string, defs map[string]bool) map[string]bool {
 	text := pathLike.ReplaceAllString(t.Title+"\n"+t.Done+"\n"+t.Known, " ")
+	if ext := path.Ext(p); ext != "" {
+		text = bareName.ReplaceAllStringFunc(text, func(n string) string {
+			if b := strings.TrimRight(n, "."); len(b) > len(ext) && strings.HasSuffix(b, ext) {
+				return " "
+			}
+			return n
+		})
+	}
 	out := map[string]bool{}
-	for _, w := range word.FindAllString(text, -1) {
-		if defs[w] {
-			out[w] = true
+	for _, i := range word.FindAllStringIndex(text, -1) {
+		w := text[i[0]:i[1]]
+		if !defs[w] {
+			continue
 		}
+		if common[strings.ToLower(w)] && !(i[0] > 0 && text[i[0]-1] == '`') && !(i[1] < len(text) && strings.ContainsRune("`(", rune(text[i[1]]))) {
+			continue
+		}
+		out[w] = true
 	}
 	return out
 }
 
+// common is words briefs use in prose that code often defines too.
+var common = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`a add all and any apply build call check clear close config copy count
+		data default do done error file files find get handle help init is item key len line list load
+		log main make map name new next open parse path print read reset run save send set show size
+		start state status step stop string text the time to type update use value wait with write`) {
+		common[w] = true
+	}
+}
+
 var (
-	word = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+	word     = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+	bareName = regexp.MustCompile(`[A-Za-z0-9_.\-]+`)
 	// definition is a line that defines a name in the common languages:
 	// def, class, func (with a Go receiver), function, fn, type and the like.
 	definition = regexp.MustCompile(`(?m)^[ \t]*(?:(?:export|pub(?:\([^)]*\))?|async|static|public|private|protected)[ \t]+)*(?:def|class|func|function|fn|type|struct|enum|trait|interface)[ \t]+(?:\([^)]*\)[ \t]*)?([A-Za-z_][A-Za-z0-9_]*)`)
@@ -911,6 +970,14 @@ func (m *Module) Queue(r core.Run) []string {
 		why := t.Reason
 		if d := t.FilesWait(); d >= time.Hour {
 			why = fmt.Sprintf("on other briefs' files for %s, %s", d.Round(time.Minute), why)
+		}
+		if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
+			// The lead sees the long waits, and which go ahead of its order.
+			age := fmt.Sprintf("waited %s", d.Round(time.Minute))
+			if t.Overdue() && !t.Now {
+				age += ", overdue: ahead of the lead's order"
+			}
+			why = strings.TrimSuffix(age+"; "+why, "; ")
 		}
 		out = append(out, fmt.Sprintf("%d. %s %q (%s)%s", i+1, t.ID, t.Label(), t.Project, suffixed(why)))
 	}

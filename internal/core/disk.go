@@ -441,7 +441,11 @@ func (e *Effects) prefetch(dir string) error {
 	// Telemetry off: in a fresh home go always takes its daily upload token
 	// and starts a detached child that can outlive it, still writing under
 	// tmp while RemoveTree empties it (issue #514).
-	env = append(env, goTelemetryOff(tmp)...)
+	off, err := goTelemetryOff(tmp)
+	if err != nil {
+		return fmt.Errorf("can't turn go's telemetry off: %v", err)
+	}
+	env = append(env, off...)
 	for _, k := range []string{"GOPROXY", "GOSUMDB", "GONOSUMDB", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
 		if v, ok := os.LookupEnv(k); ok {
 			env = append(env, k+"="+v)
@@ -560,17 +564,8 @@ func (e *Effects) RemoveCheckout(project, id string) error {
 	// Marked live, Prune leaves it to this call; one a crash left goes there.
 	os.MkdirAll(e.ws.Cache(), 0o755)
 	aside := filepath.Join(e.ws.Cache(), "removing-"+NewID())
-	e.mu.Lock()
-	if e.homes == nil {
-		e.homes = map[string]bool{}
-	}
-	e.homes[aside] = true
-	e.mu.Unlock()
-	defer func() {
-		e.mu.Lock()
-		delete(e.homes, aside)
-		e.mu.Unlock()
-	}()
+	e.markLive(aside, true)
+	defer e.markLive(aside, false)
 	unlock := e.lock(project)
 	err := os.Rename(dir, aside)
 	if err != nil {
@@ -585,6 +580,20 @@ func (e *Effects) RemoveCheckout(project, id string) error {
 	}
 	e.j.MustAppend("effect.checkout_removed", map[string]string{"project": project, "id": id})
 	return nil
+}
+
+// markLive marks a folder Prune must leave alone, or clears the mark.
+func (e *Effects) markLive(p string, on bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.homes == nil {
+		e.homes = map[string]bool{}
+	}
+	if on {
+		e.homes[p] = true
+	} else {
+		delete(e.homes, p)
+	}
 }
 
 // Prune removes what checks left behind: homes of checks no longer running,
@@ -649,7 +658,7 @@ func (e *Effects) Prune() string {
 	for _, pr := range projects {
 		dirs, _ := os.ReadDir(filepath.Join(e.ws.Gates(), pr.Name()))
 		for _, d := range dirs {
-			if p := filepath.Join(e.ws.Gates(), pr.Name(), d.Name()); d.IsDir() && d.Name() != "recursive" && old(p, staleAfter) {
+			if p := filepath.Join(e.ws.Gates(), pr.Name(), d.Name()); d.IsDir() && d.Name() != "recursive" && !live(p) && old(p, staleAfter) {
 				drop(p)
 			}
 		}
@@ -875,7 +884,7 @@ func (e *Effects) diskAlert(line string) {
 // on Linux (XDG_CONFIG_HOME, which the returned env pins whatever the
 // host's), Library/Application Support on macOS, AppData on Windows (the
 // env names it there too, as go reads only the variable).
-func goTelemetryOff(home string) []string {
+func goTelemetryOff(home string) ([]string, error) {
 	var cfg string
 	var env []string
 	switch runtime.GOOS {
@@ -889,9 +898,13 @@ func goTelemetryOff(home string) []string {
 		env = append(env, "XDG_CONFIG_HOME="+cfg)
 	}
 	dir := filepath.Join(cfg, "go", "telemetry")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "mode"), []byte("off"), 0o644)
-	return env
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mode"), []byte("off"), 0o644); err != nil {
+		return nil, err
+	}
+	return env, nil
 }
 
 // checkTmp points a check's TMPDIR at the temp folder in its home, on disk,
