@@ -455,19 +455,29 @@ func TestRateLimitedLookSaysSoAndWaitsForTheReset(t *testing.T) {
 			if !at.Equal(reset.Add(-followEvery)) {
 				t.Fatalf("the next look is due at %v, want the reset %v", at.Add(followEvery), reset)
 			}
-			m.followed1(m.AutoUpdate())
-			follows, alerts := 0, 0
-			m.C.J.Replay(func(e core.Event) {
-				switch e.Kind {
-				case "release.follow":
-					follows++
-					if !strings.Contains(string(e.Data), "rate limit") {
-						t.Errorf("journalled %s", e.Data)
+			count := func() (follows, alerts int) {
+				m.C.J.Replay(func(e core.Event) {
+					switch e.Kind {
+					case "release.follow":
+						follows++
+						if !strings.Contains(string(e.Data), "rate limit") {
+							t.Errorf("journalled %s", e.Data)
+						}
+					case "alert.raised":
+						alerts++
 					}
-				case "alert.raised":
-					alerts++
+				})
+				return
+			}
+			// The follow's goroutine sets the next look before it journals,
+			// so wait for its event, not only for the time.
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				if n, _ := count(); n > 0 {
+					break
 				}
-			})
+			}
+			m.followed1(m.AutoUpdate())
+			follows, alerts := count()
 			if follows != 1 || alerts != 0 {
 				t.Fatalf("a rate limit journalled %d times with %d alerts, want once and none", follows, alerts)
 			}

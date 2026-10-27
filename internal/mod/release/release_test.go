@@ -947,6 +947,9 @@ func TestFailedReleaseRunStopsTheCut(t *testing.T) {
 	if held != 1 {
 		t.Fatalf("%d release.held events", held)
 	}
+	if a := alerts(); len(a) != 2 {
+		t.Fatalf("each held merge raised the hold again: %q", a)
+	}
 
 	asks := m.C.Person.Open()
 	if len(asks) != 1 || asks[0].Kind != "release" || !strings.Contains(asks[0].Title, "has no binaries") {
@@ -970,6 +973,29 @@ func TestFailedReleaseRunStopsTheCut(t *testing.T) {
 
 // The person's "release" on the hold's ask cuts one though the newest
 // release's run failed and nothing it reads changed.
+// v0.1.111's release.failed came from a daemon that blamed update; the
+// corrected alert that names the release run still goes out once.
+func TestUnbuiltCorrectsAnOldUpdateBlame(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	m.C.J.MustAppend("release.failed", map[string]string{"project": "hive", "tag": "v0.0.1", "sha": "m1", "why": "update failure"})
+	n.SetReleaseRuns("me/hive", "m1", core.WorkflowRun{ID: 7, Name: "release", Status: "completed", Conclusion: "failure", URL: "https://ci/release"})
+	m.Publish()
+	m.Publish()
+	var said []string
+	m.C.J.Replay(func(e core.Event) {
+		var a struct{ Text string }
+		if e.Kind == "alert.raised" && e.Decode(&a) == nil {
+			said = append(said, a.Text)
+		}
+	})
+	if len(said) != 1 || !strings.Contains(said[0], "v0.0.1 has no binaries") {
+		t.Fatalf("alerts %q", said)
+	}
+}
+
 func TestPersonReleasesPastAFailedReleaseRun(t *testing.T) {
 	m, n, merged, land := selfHive(t)
 	merged(1, "a1", "m1")
@@ -1346,10 +1372,16 @@ func TestReleaseOnlyAtAGreenMain(t *testing.T) {
 	merged(2, "a2", "m2")
 	land("a2", "r2")
 	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPending})
+	listings := 0
+	n.listed = func() { listings++ }
 	m.AfterKept("hive", "m2")
 	m.retryWaiting()
+	n.listed = nil
 	if len(n.got) != 0 || len(m.C.Person.Open()) != 0 || journaledN(m, "release.ci_waiting") != 1 {
 		t.Fatalf("a running main was released or offered: %v %+v", n.got, m.C.Person.Open())
+	}
+	if listings != 0 {
+		t.Fatalf("a commit waiting on main's checks listed the tags %d times", listings)
 	}
 
 	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPass})
@@ -1459,5 +1491,43 @@ func TestContainsReadsTheClone(t *testing.T) {
 	}
 	if _, err := m.contains(p, old, strings.Repeat("ab", 20)); err == nil {
 		t.Error("a tag commit the clone can't fetch read as known")
+	}
+	if _, err := m.contains(p, old, "--upload-pack=touch x"); err == nil || !strings.Contains(err.Error(), "not a commit name") {
+		t.Errorf("a tag commit shaped like an option reached git: %v", err)
+	}
+}
+
+// A kept merge whose ci run GitHub cancelled has no checks and never gets
+// any: Tick's retry falls forward to the newest later merge whose checks
+// passed, and the release covers both.
+func TestReleaseFallsForwardPastACancelledRun(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	// Its run was cancelled with no check runs, which reads as pending.
+	n.SetChecks("me/hive", "m1", core.CheckRun{Name: "test", State: core.CheckPending})
+	m.AfterKept("hive", "m1")
+	if len(n.got) != 0 || journaledN(m, "release.ci_waiting") != 1 {
+		t.Fatalf("a commit with no checks was released: %v", n.got)
+	}
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	merged(3, "a3", "m3")
+	land("a3", "r3")
+	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPending})
+	n.SetChecks("me/hive", "m3", core.CheckRun{Name: "test", State: core.CheckPending})
+	m.retryWaiting()
+	if len(n.got) != 0 {
+		t.Fatalf("released with no green descendant: %v", n.got)
+	}
+	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPass})
+	m.retryWaiting()
+	body, ok := n.got["v0.0.1"]
+	if len(n.got) != 1 || !ok || !strings.Contains(body, "#1 at a1") || !strings.Contains(body, "#2 at a2") || strings.Contains(body, "#3 at a3") {
+		t.Fatalf("didn't fall forward to m2: %v", n.got)
+	}
+	m.retryWaiting()
+	if len(n.got) != 1 {
+		t.Fatalf("released again: %v", n.got)
 	}
 }

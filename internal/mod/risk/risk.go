@@ -640,7 +640,7 @@ func (m *Module) Tick() {
 		switch req.State {
 		case "weighing":
 			w, ok := m.C.Runs.Get(req.Warden)
-			late := time.Since(req.Updated) > WardenTimeout
+			late := wardenLate(req, w, ok)
 			if late || ok && (w.Terminal() || w.Status == core.StatusQuiet) {
 				req.Reason = "It ended without deciding."
 				if late {
@@ -700,6 +700,22 @@ func (m *Module) Tick() {
 			go m.execute(req.ID)
 		}
 	}
+}
+
+// wardenLate says whether a warden has had its WardenTimeout to weigh. The
+// clock runs only while the warden can take turns: one parked on a usage
+// limit or still queued for a slot isn't late, and it restarts at the turn
+// that ends the wait, so a warden that never ran is never timed out to the
+// person.
+func wardenLate(req Request, w core.Run, ok bool) bool {
+	if ok && (w.Status == core.StatusParked || w.Status == core.StatusQueued) {
+		return false
+	}
+	from := req.Updated
+	if ok && w.TurnStarted.After(from) {
+		from = w.TurnStarted
+	}
+	return time.Since(from) > WardenTimeout
 }
 
 // execute runs an approved step here, in the effects process, as exactly the
@@ -863,22 +879,25 @@ func (m *Module) onAnswer(a core.Ask) {
 	m.tell(req, text)
 }
 
-// SandboxRoots are where an agent's sandbox mounts its checkout and the
+// sandboxRoots are where an agent's sandbox mounts its checkout and the
 // Hive's folders; a path under one doesn't exist on the host.
-var SandboxRoots = []string{"/work", "/hive"}
+var sandboxRoots = []string{"/work", "/hive"}
 
 // inSandbox reports whether p is an agent's sandbox path. The daemon's own
 // temporary folder is the host's even when it sits under a root (a daemon
 // that itself runs in a sandbox, as the gate's and the score's e2e daemons
-// do, with TMPDIR under /hive).
+// do, with TMPDIR under /hive), but only when it is strictly deeper than the
+// root: a TMPDIR of /hive itself exempts nothing. The daemon's TMPDIR must
+// never be one an agent can write to, or an agent could offer a path there.
 func inSandbox(p string) bool {
-	if tmp := filepath.Clean(os.TempDir()); p == tmp || strings.HasPrefix(p, tmp+"/") {
-		return false
-	}
-	for _, r := range SandboxRoots {
-		if p == r || strings.HasPrefix(p, r+"/") {
-			return true
+	p = filepath.Clean(p)
+	tmp := filepath.Clean(os.TempDir())
+	for _, r := range sandboxRoots {
+		if p != r && !strings.HasPrefix(p, r+"/") {
+			continue
 		}
+		deeper := strings.HasPrefix(tmp, r+"/")
+		return !deeper || (p != tmp && !strings.HasPrefix(p, tmp+"/"))
 	}
 	return false
 }

@@ -105,6 +105,7 @@ type Check struct {
 	Tool    string    `json:"tool,omitempty"`     // with CantRun: the tool the shell couldn't find
 	Log     string    `json:"log,omitempty"`      // the full output on the host, when it ran
 	Failed  []string  `json:"failed,omitempty"`   // the failing tests it names, read before the output is clipped
+	Keys    []string  `json:"keys,omitempty"`     // those tests with their packages (FailedTestKeys), when each can be placed
 	At      time.Time `json:"at"`
 }
 
@@ -555,11 +556,30 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	}
 	mods.done()
 	if mods.marker != "" && code != 0 && strings.Contains(out, staleModules) {
-		// The shared cache lacks what its marker promised: that is the
-		// cache's fault, not the commit's, so drop the marker and run once
-		// fetching its own.
-		os.Remove(mods.marker)
-		mods.note = "the shared module cache lacked a module; run again without it"
+		// Offline, the check couldn't have a module: not the commit's fault,
+		// so it runs once more fetching its own, in a checkout the first run
+		// hasn't written to. If go.sum names the module the cache lacked
+		// what its marker promised, and the marker goes; if not, the check
+		// needs more than the cache can hold, and later checks of the same
+		// go.mod and go.sum skip it.
+		if cacheLacked(out, mods.sum) {
+			os.Remove(mods.marker)
+			mods.note = "the shared module cache lacked a module; run again without it"
+		} else {
+			os.WriteFile(mods.marker+ownModules, nil, 0o644)
+			mods.note = "the check needs a module go.sum doesn't name; run again fetching its own"
+		}
+		again, cerr := e.cleanCheckout(p, sha, kind)
+		if cerr != nil {
+			build.done()
+			c.Output = "could not make a clean checkout: " + cerr.Error()
+			return c
+		}
+		defer os.RemoveAll(again)
+		if len(build.mounts) > 0 {
+			stableTimes(again) // as goBuild made the first checkout's, for the shared build cache
+		}
+		mounts = []sandbox.Mount{{Host: again, Inside: "/work", RW: true}}
 		code, out, err = run(false)
 	}
 	build.done()
@@ -586,7 +606,11 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.CantRun, c.Tool = "can't run: "+tool+" is not installed where checks run", tool
 		return record()
 	}
-	if line := DiskFull(out); !c.OK && line != "" {
+	line := DiskFull(out)
+	if line == "" && !c.OK && (DiskUse{Room: e.room()}).Low() {
+		line = toolDiskFull(out)
+	}
+	if !c.OK && line != "" {
 		c.OK, c.CantRun = false, "can't run: the disk or a quota is full where checks run"
 		e.diskAlert(line)
 		return record()
@@ -596,6 +620,9 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	e.mu.Unlock()
 	if (kind == "test" || kind == "retest" || kind == "before") && !c.OK {
 		c.Failed = FailedTests(out)
+		if keys, ok := FailedTestKeys(out); ok {
+			c.Keys = keys
+		}
 	}
 	if kind == "score" && c.OK {
 		v, perr := scoreOf(out)
@@ -1397,6 +1424,10 @@ type MergeRequest struct {
 	Subject string
 	Gain    bool   // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
 	Task    string // the task whose PR it is: the quarantine excuses it only on evidence from outside it
+	// Draft is the PR's state at the caller's last look: a draft is readied
+	// once every read is checked. One made a draft after that look isn't
+	// (the lead's pr_draft, say): MergePR refuses it with ErrDraft.
+	Draft bool
 }
 
 // Merge merges the PR only at sha, and only when the host's own records show
@@ -1411,19 +1442,23 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if why := e.Stewardship(p, m.Main); why != "" {
 		return "", refuse("#%d: %s", m.PR, why)
 	}
+	ch, err := e.Classify(p, m.Main, m.SHA)
+	if err != nil {
+		return "", err
+	}
+	var flaky []string // a red local test run's known flakes, its only failures
 	if c, ok := e.GetCheck(p.Name, m.SHA, "test"); !ok {
 		return "", refuse("%s: no test run recorded for that exact commit", short(m.SHA))
 	} else if !c.OK {
 		// Red only where main's own run at m.Main is red too: no worse than
 		// main, as the work module's testing stage let it on, so the fix for
-		// a red main can land.
-		if mc, ok := e.GetCheck(p.Name, m.Main, "test"); !ok || mc.OK || !NoWorse(c, mc) {
-			return "", refuse("%s: its test run is red beyond what main's own run at %s fails too (or main's has no record)", short(m.SHA), short(m.Main))
+		// a red main can land. Or red only in quarantined tests, which count
+		// against no head, as the forge's checks below.
+		if flaky = e.ExcusedLocal(p, m.Main, m.Task, ch.Files, c); len(flaky) == 0 {
+			if mc, ok := e.GetCheck(p.Name, m.Main, "test"); !ok || mc.OK || !NoWorse(c, mc) {
+				return "", refuse("%s: its test run is red beyond what main's own run at %s fails too (or main's has no record)", short(m.SHA), short(m.Main))
+			}
 		}
-	}
-	ch, err := e.Classify(p, m.Main, m.SHA)
-	if err != nil {
-		return "", err
 	}
 	if len(ch.Protected) > 0 && !e.ApprovedDiff("merge", p.Name, m.SHA, ch.DiffID) {
 		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
@@ -1471,9 +1506,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	}
 	// Every read above is the Hive's own and bound to sha, and nobody outside
 	// the Hive reads its PRs, so a draft it cleared is its to ready.
-	if pr, err := e.Forge.GetPR(p.Repo, m.PR); err != nil {
-		return "", err
-	} else if pr.Draft {
+	if m.Draft {
 		if err := e.ReadyPR(p, m.PR, m.SHA); err != nil {
 			return "", err
 		}
@@ -1488,6 +1521,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "merge_sha": merged, "root": ch.Root, "diff": ch.DiffID}
 	if len(excused) > 0 {
 		ev["quarantined"] = excused // red only on known flakes
+	}
+	if len(flaky) > 0 {
+		ev["quarantined_local"] = flaky // its own test run red only on known flakes
 	}
 	if len(warned) > 0 {
 		ev["warned"] = warned
@@ -1507,13 +1543,14 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	return merged, nil
 }
 
-// ReadyPR takes the PR out of draft, only while its head is still sha.
+// ReadyPR takes the PR out of draft, only while its head is still sha; the
+// journal hears only when the forge changed something.
 func (e *Effects) ReadyPR(p Project, pr int, sha string) error {
-	if err := e.Forge.ReadyPR(p.Repo, pr, sha); err != nil {
-		return err
+	readied, err := e.Forge.ReadyPR(p.Repo, pr, sha)
+	if readied {
+		e.j.MustAppend("effect.readied", map[string]any{"project": p.Name, "pr": pr, "sha": sha})
 	}
-	e.j.MustAppend("effect.readied", map[string]any{"project": p.Name, "pr": pr, "sha": sha})
-	return nil
+	return err
 }
 
 // RefusedRed is the forge refusing a merge the Hive found no worse than main:
@@ -1835,15 +1872,47 @@ func (e *Effects) Excused(p Project, main, task string, files []string, runs, ma
 	if len(q) == 0 {
 		return runs, nil
 	}
+	return Excuse(runs, mainRuns, e.JobRead(p.Repo), q, e.touched(p, main, files))
+}
+
+// touched reports whether a test key's package is one files (a head's
+// changes against main) touch, or can't be placed.
+func (e *Effects) touched(p Project, main string, files []string) func(key string) bool {
 	module := ""
 	if m := goModule.FindStringSubmatch(e.ReadFile(p, main, "go.mod")); m != nil {
 		module = m[1]
 	}
-	touched := func(key string) bool {
+	return func(key string) bool {
 		dir, ok := KeyDir(key, module)
 		return !ok || slices.ContainsFunc(files, func(f string) bool { return path.Dir(f) == dir })
 	}
-	return Excuse(runs, mainRuns, e.JobRead(p.Repo), q, touched)
+}
+
+// ExcusedLocal is Excused for the Hive's own red test check c of task's head
+// on p: the quarantined tests it fails, when they are all it fails, or none.
+// As with the forge's, it is shown, never assumed: c's full log is read (not
+// its clipped output), places every failing test in its package, shows
+// nothing else failing (OnlyTests), and every one is quarantined on evidence
+// from outside task in a package files don't touch.
+func (e *Effects) ExcusedLocal(p Project, main, task string, files []string, c Check) []string {
+	if c.OK || c.CantRun != "" || c.Log == "" {
+		return nil
+	}
+	q := e.Quarantine(p.Name, task)
+	if len(q) == 0 {
+		return nil
+	}
+	b, err := SafeRead(c.Log, 8<<20)
+	if err != nil || len(b) == 0 {
+		return nil
+	}
+	log := string(b)
+	keys, placed := FailedTestKeys(log)
+	touched := e.touched(p, main, files)
+	if !placed || len(keys) == 0 || !OnlyTests(log) || slices.ContainsFunc(keys, func(k string) bool { return !slices.Contains(q, k) || touched(k) }) {
+		return nil
+	}
+	return keys
 }
 
 // JobRead reads repo's forge checks' logs and steps, each once.

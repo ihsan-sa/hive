@@ -395,3 +395,106 @@ func TestForgeQuarantineNotForItsOwnPackage(t *testing.T) {
 	redOnce(t, m, task, p, f, e2eLog("TestStalls"))
 	sentBack(t, f, task)
 }
+
+// A step-back steers the loop it diagnoses on its own project, as a worker or
+// sweep does, and not another project's; a reviewer doesn't steer at all.
+func TestStepbackSteersItsProject(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	task.Stage, task.Reason = StageBlocked, "a flake"
+	m.save(task, "")
+	reviewer := core.Run{RunSpec: core.RunSpec{ID: "r-1", Role: "reviewer", Project: p.Name}}
+	if _, err := m.C.Runs.Ops().Call(reviewer, "recheck", json.RawMessage(`{"task":"`+task.ID+`"}`)); err == nil || !strings.Contains(err.Error(), "not granted") {
+		t.Fatalf("recheck from a reviewer: %v", err)
+	}
+	elsewhere := core.Run{RunSpec: core.RunSpec{ID: "stepback-q", Role: "stepback", Project: "q"}}
+	if _, err := m.C.Runs.Ops().Call(elsewhere, "recheck", json.RawMessage(`{"task":"`+task.ID+`"}`)); err == nil || !strings.Contains(err.Error(), "you act only on your own (q)") {
+		t.Fatalf("recheck from a step-back on another project: %v", err)
+	}
+	sb := core.Run{RunSpec: core.RunSpec{ID: "stepback-p", Role: "stepback", Project: p.Name}}
+	if _, err := m.C.Runs.Ops().Call(sb, "queue", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("queue from a step-back: %v", err)
+	}
+	if _, err := m.C.Runs.Ops().Call(sb, "recheck", json.RawMessage(`{"task":"`+task.ID+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := m.Get(task.ID); got.Stage != StageLanding || !logHas(&got, "asked by stepback-p") {
+		t.Fatalf("a step-back's recheck on its project: stage %q, log %v", got.Stage, got.Log)
+	}
+}
+
+// localFlakeRig is flakeRig whose own test check prints the head's flaky.txt
+// file as its log and fails, with main green.
+func localFlakeRig(t *testing.T, log string, files map[string]string, quarantined ...string) (*Module, *Task, core.Project, *core.Local) {
+	t.Helper()
+	files["flaky.txt"] = log
+	m, task, p, f := gateRigSeeded(t, false, map[string]string{"go.mod": "module example.com/p\n", ".hive/project.json": `{"test": "test ! -f flaky.txt || { cat flaky.txt; exit 1; }"}`}, files)
+	m.C.Effects.Quarantined = func(project, id string) []string {
+		if project != p.Name || id != task.ID {
+			return nil
+		}
+		return quarantined
+	}
+	return m, task, p, f
+}
+
+// The Hive's own test check failing only quarantined tests doesn't send a PR
+// back or hold it: it goes on to merge, and Effects.Merge takes that red run.
+func TestLocalQuarantinedFailureIgnored(t *testing.T) {
+	m, task, p, f := localFlakeRig(t, e2eLog("TestAnEventBringsTheNextTickForward"), map[string]string{"feature.txt": "y"}, e2eKey+"TestAnEventBringsTheNextTickForward")
+	toMerging(t, m, task, p)
+	if c, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); !ok || c.OK {
+		t.Fatalf("the head's test run: %+v, want red", c)
+	}
+	if task.Round != 0 || !logHas(task, "known flakes: its tests fail on") {
+		t.Fatalf("round %d, log %v", task.Round, task.Log)
+	}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	var ev struct {
+		Local []string `json:"quarantined_local"`
+	}
+	for _, e := range m.C.J.Since(0) {
+		if e.Kind == "effect.merged" {
+			e.Decode(&ev)
+		}
+	}
+	if len(ev.Local) != 1 || ev.Local[0] != e2eKey+"TestAnEventBringsTheNextTickForward" {
+		t.Fatalf("merge event quarantined_local %v", ev.Local)
+	}
+}
+
+// A local red that fails a test outside the quarantine, or a quarantined one
+// in a package the change touches, still counts.
+func TestLocalQuarantineKeepsRealFailures(t *testing.T) {
+	for name, tc := range map[string]struct {
+		log   string
+		files map[string]string
+	}{
+		"other test":  {e2eLog("TestStalls", "TestMine"), map[string]string{"feature.txt": "y"}},
+		"own package": {e2eLog("TestStalls"), map[string]string{"e2e/testdata.txt": "y"}},
+		"build":       {e2eLog("TestStalls") + "FAIL\texample.com/p/win [build failed]\n", map[string]string{"feature.txt": "y"}},
+	} {
+		m, task, p, _ := localFlakeRig(t, tc.log, tc.files, e2eKey+"TestStalls")
+		if err := m.test(task, p); err != nil {
+			t.Fatal(err)
+		}
+		if task.Stage == StageMerging || task.Stage == StageReviewing || logHas(task, "known flakes") {
+			t.Fatalf("%s: stage %q, log %v", name, task.Stage, task.Log)
+		}
+		if _, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: task.PR.Number, SHA: task.SHA, Main: mustSync(t, m, p), Task: task.ID}); err == nil || !strings.Contains(err.Error(), "test run is red") {
+			t.Fatalf("%s: merge of a red head: %v", name, err)
+		}
+	}
+}
+
+func mustSync(t *testing.T, m *Module, p core.Project) string {
+	t.Helper()
+	main, err := m.C.Effects.Sync(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return main
+}

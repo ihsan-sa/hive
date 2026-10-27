@@ -85,6 +85,7 @@ func noCommitRig(t *testing.T, fail int) (*Module, *flakyForge, *Task, core.Proj
 	}
 	a := &agents.Agents{C: c}
 	m := New(c, a, chat.New(c, a))
+	t.Cleanup(m.Wait) // a task's checkouts go off the save's path
 	task := &Task{ID: "t1", Project: "p", Title: "restart the box", Kind: "work", Stage: StageLanding, Issue: core.Issue{Number: 7}}
 	return m, forge, task, p
 }
@@ -977,5 +978,36 @@ func TestMergedOnForgeWhileHeld(t *testing.T) {
 	}
 	if start, _ := m.admit(m.List(nil)); !start[waiting.ID] {
 		t.Fatal("the brief behind it didn't start")
+	}
+}
+
+// The person's stop stands over a step running on an older copy of the task:
+// the step's later saves are dropped and it doesn't merge, and a tick doesn't
+// start a step on a copy taken before a save.
+func TestStopStandsOverARunningStep(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage = StageMerging
+	m.save(task, "on to the merge")
+	step, _ := m.Get(task.ID) // the tick's copy
+	if err := m.Stop(task.ID, "stopped by the person"); err != nil {
+		t.Fatal(err)
+	}
+	if !m.overtaken(&step) {
+		t.Fatal("a copy from before the stop isn't seen as overtaken")
+	}
+	step.Stage = StageLanding
+	m.save(&step, "the step's older copy")
+	if got, _ := m.Get(task.ID); got.Stage != StageStopped || !got.ByPerson {
+		t.Fatalf("the step saved over the person's stop: %+v", got)
+	}
+	cur, _ := m.Get(task.ID)
+	if m.overtaken(&cur) {
+		t.Fatal("a copy taken after the stop is overtaken")
+	}
+	m.mu.Lock()
+	ok := m.fresh(step)
+	m.mu.Unlock()
+	if ok {
+		t.Fatal("a copy from before a save reads as fresh")
 	}
 }

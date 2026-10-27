@@ -44,7 +44,7 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 		if err := os.MkdirAll(j.Out, 0o755); err != nil {
 			return core.GateResult{Outcome: core.GateCantRun, Reason: err.Error()}
 		}
-		args := []string{"gate", "--repo", j.Repo, "--head", j.Head, "--base", j.Main, "--out", j.Out, "--lessons", j.Lessons, "--judged", "--timeout", j.Timeout.String()}
+		args := []string{"gate", "--repo", j.Repo, "--head", j.Head, "--base", j.Main, "--out", j.Out, "--timeout", j.Timeout.String()}
 		if j.AllowTie {
 			args = append(args, "--allow-tie")
 		}

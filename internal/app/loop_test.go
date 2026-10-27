@@ -21,7 +21,7 @@ func TestAnEventBringsTheNextTickForward(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ticks := make(chan time.Time, 16)
-	go loop(ctx, j, func() { ticks <- time.Now() })
+	go loop(ctx, j, make(chan struct{}, 1), func() { ticks <- time.Now() })
 	<-ticks // the first tick is at once
 	time.Sleep(100 * time.Millisecond)
 	// Timed from when the event is in the journal: Append fsyncs before it
@@ -44,9 +44,35 @@ func TestATickThatAlwaysJournalsCantSpin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
 	defer cancel()
 	var n atomic.Int32
-	loop(ctx, j, func() { n.Add(1); j.MustAppend("noisy", map[string]string{}) })
+	loop(ctx, j, make(chan struct{}, 1), func() { n.Add(1); j.MustAppend("noisy", map[string]string{}) })
 	// 2.5s: the first tick, two of the second's, and wakeBurst early ones after each.
 	if got, most := int(n.Load()), 3*(wakeBurst+1); got > most {
 		t.Fatalf("%d ticks in 2.5s from a tick that always journals; want at most %d", got, most)
+	}
+}
+
+// TestEventsFromElsewhereArentCapped: a tick that doesn't journal is woken by
+// every nudge from elsewhere, past wakeBurst in a second, so a stream of
+// verdicts and requests doesn't wait out the second. The nudges go on the wake
+// channel, not the journal, so a slow fsync on a busy machine can't starve it.
+func TestEventsFromElsewhereArentCapped(t *testing.T) {
+	j, err := core.OpenJournal(filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 950*time.Millisecond)
+	defer cancel()
+	wake := make(chan struct{}, 1)
+	go func() {
+		for ctx.Err() == nil {
+			nudge(wake)
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	var n atomic.Int32
+	loop(ctx, j, wake, func() { n.Add(1) })
+	if got := int(n.Load()); got <= wakeBurst+1 {
+		t.Fatalf("%d ticks in 0.95s with a nudge from elsewhere every 10ms; want more than %d", got, wakeBurst+1)
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -70,15 +71,19 @@ func Plan(in Input) Pass {
 	for _, s := range in.Shipped {
 		shipped[s] = true
 	}
-	orig := map[string]string{}
-	notes := map[string]*Note{}
-	for _, s := range in.Notes {
-		orig[s.Path] = s.Text
-		notes[s.Path] = parse(s.Path, s.Text)
-	}
 	hidden := map[string]bool{}
 	for _, h := range in.Hidden {
 		hidden[h] = true
+	}
+	orig := map[string]string{}
+	notes := map[string]*Note{}
+	for _, s := range in.Notes {
+		n := parse(s.Path, s.Text)
+		if hidden[n.get("project")] {
+			continue // written before its project was hidden: the kb module refuses a pass that rewrites it
+		}
+		orig[s.Path] = s.Text
+		notes[s.Path] = n
 	}
 
 	p.Merged = merge(notes, day)
@@ -394,4 +399,27 @@ func retire(notes map[string]*Note, st *State, day string) []Retire {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out
+}
+
+// unnamed drops the lines of a body the pass writes from the record that
+// name a hidden project (a sweep's report, a person's line in the lead chat,
+// a shared task's title that mentions one). The kb module refuses a pass
+// whose text names a hidden project it didn't before, the same way: as a
+// whole word, case and all.
+func unnamed(body string, hidden map[string]bool) string {
+	var res []*regexp.Regexp
+	for h := range hidden {
+		res = append(res, regexp.MustCompile(`\b`+regexp.QuoteMeta(h)+`\b`))
+	}
+	if len(res) == 0 {
+		return body
+	}
+	lines := strings.Split(body, "\n")
+	out := lines[:0]
+	for _, l := range lines {
+		if !slices.ContainsFunc(res, func(re *regexp.Regexp) bool { return re.MatchString(l) }) {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
 }

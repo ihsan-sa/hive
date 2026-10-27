@@ -32,15 +32,21 @@ type PR struct {
 	// MergeState is the forge's word on what else stands in the way; BEHIND
 	// means its rules want the branch brought up to date with its base.
 	MergeState string `json:"merge_state,omitempty"`
-	// Draft is a PR left for a read outside the Hive (the goals' perms read,
-	// say); it merges once marked ready. Body is what its read is said in.
+	// Draft is a PR that can't merge until marked ready: the Hive's merge
+	// readies a draft once its own reads clear the head, unless the lead holds
+	// it (pr_draft). Body is the PR's description.
 	Draft bool   `json:"draft,omitempty"`
 	Body  string `json:"-"`
 }
 
 // ErrDraft means the pull request is a draft, so it can't merge until it is
-// marked ready.
-var ErrDraft = errors.New("the pull request is a draft, left for a read")
+// marked ready. Its text is matched in stopped tasks' reasons; an older
+// wording, "left for a read", is matched there too (work.stoppedOnDraft).
+var ErrDraft = errors.New("the pull request is a draft, not yet marked ready")
+
+// ErrHeadMoved means the pull request's head is no longer the commit the
+// Hive read, so it isn't readied: the next look sees the new head.
+var ErrHeadMoved = errors.New("its head moved past the commit read")
 
 // Forge is where code, issues and pull requests live. GitHub through the gh
 // CLI is the real one; Local is a folder-backed stand-in for tests.
@@ -66,8 +72,9 @@ type Forge interface {
 	GetPR(repo string, number int) (PR, error)
 	MergePR(repo string, number int, sha, subject string) (string, error)
 	// ReadyPR takes a draft out of draft, only while its head is exactly
-	// sha; one already ready is left as it is.
-	ReadyPR(repo string, number int, sha string) error
+	// sha (else ErrHeadMoved); one already ready is left as it is, and
+	// readied says whether this call changed anything.
+	ReadyPR(repo string, number int, sha string) (readied bool, err error)
 	ClosePR(repo string, number int, comment string) error
 	// SetDraft marks an open pull request a draft or ready for review.
 	SetDraft(repo string, number int, draft bool) error
@@ -160,6 +167,10 @@ func (GitHub) Name() string { return "github" }
 var OwnerTokens = map[string]string{
 	"hive-rsi-lab": "/home/hive/h0-org.token",
 }
+
+// ForgeEnv is ghEnv for a module's git call to repo's remote in the host
+// clone, which never reaches a run.
+func ForgeEnv(repo string) []string { return ghEnv(repo) }
 
 // ghEnv is the environment that makes gh and git's gh credential helper use
 // the token configured for repo's owner, or nothing to keep gh's login. Under
@@ -623,7 +634,7 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 	if p.Draft {
 		return "", fmt.Errorf("PR #%d: %w", number, ErrDraft)
 	}
-	if _, err := gh(repo, "pr", "merge", strconv.Itoa(number), "-R", repo, "--squash", "--match-head-commit", sha, "--subject", subject); err != nil {
+	if _, err := gh(repo, "pr", "merge", strconv.Itoa(number), "-R", repo, "--squash", "--match-head-commit", sha, "--subject", subject, "--body", g.squashBody(repo, number)); err != nil {
 		if draftRefused.MatchString(err.Error()) { // made a draft since the look above
 			return "", fmt.Errorf("PR #%d: %w (%v)", number, ErrDraft, err)
 		}
@@ -639,26 +650,79 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 	return "", errors.New("merge reported success but the PR is not merged yet")
 }
 
+// squashBody is the squash commit's body: the PR's commit messages, as
+// GitHub's own default would give them, less every Co-authored-by trailer.
+// Left to GitHub, the default turns each commit author and trailer into one,
+// and an agent's "Co-Authored-By: Claude <noreply@anthropic.com>" lists the
+// "claude" account as a contributor to the project.
+func (GitHub) squashBody(repo string, number int) string {
+	out, err := gh(repo, "pr", "view", strconv.Itoa(number), "-R", repo, "--json", "commits")
+	if err != nil {
+		return ""
+	}
+	var v struct {
+		Commits []struct {
+			Headline string `json:"messageHeadline"`
+			Body     string `json:"messageBody"`
+		} `json:"commits"`
+	}
+	if json.Unmarshal([]byte(out), &v) != nil {
+		return ""
+	}
+	if len(v.Commits) == 1 {
+		return SquashBody([]string{v.Commits[0].Body})
+	}
+	var parts []string
+	for _, c := range v.Commits {
+		parts = append(parts, "* "+c.Headline+"\n\n"+c.Body)
+	}
+	return SquashBody(parts)
+}
+
+var coAuthor = regexp.MustCompile(`(?im)^co-authored-by:.*$\n?`)
+
+// SquashBody joins commit messages into a squash body with no
+// Co-authored-by trailer, so nobody but the Hive is credited.
+func SquashBody(messages []string) string {
+	var parts []string
+	for _, m := range messages {
+		if m = strings.TrimSpace(coAuthor.ReplaceAllString(m, "")); m != "" {
+			parts = append(parts, m)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 // ReadyPR marks a draft ready for review with the token for repo's owner,
-// refusing once its head moved past sha. The merge after it is bound to sha
-// by --match-head-commit, so a push between the look and the ready can't
-// merge what wasn't read.
-func (g GitHub) ReadyPR(repo string, number int, sha string) error {
+// refusing once its head moved past sha. gh can't bind `pr ready` to a head,
+// so the head is looked at again after: one that moved in between is made a
+// draft again and refused. The merge after it is bound to sha by
+// --match-head-commit either way, so a push in that gap can't merge what
+// wasn't read.
+func (g GitHub) ReadyPR(repo string, number int, sha string) (bool, error) {
 	p, err := g.GetPR(repo, number)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if p.State != "OPEN" {
-		return fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
+		return false, fmt.Errorf("PR #%d is %s, not open", number, strings.ToLower(p.State))
 	}
 	if p.HeadSHA != sha {
-		return fmt.Errorf("PR #%d head is %s, not the checked commit %s", number, short(p.HeadSHA), short(sha))
+		return false, fmt.Errorf("PR #%d head is %s, not the checked commit %s: %w", number, short(p.HeadSHA), short(sha), ErrHeadMoved)
 	}
 	if !p.Draft {
-		return nil
+		return false, nil
 	}
-	_, err = gh(repo, "pr", "ready", strconv.Itoa(number), "-R", repo)
-	return err
+	if _, err := gh(repo, "pr", "ready", strconv.Itoa(number), "-R", repo); err != nil {
+		return false, err
+	}
+	if p, err = g.GetPR(repo, number); err == nil && p.HeadSHA != sha {
+		if err := g.SetDraft(repo, number, true); err != nil {
+			return true, fmt.Errorf("PR #%d head moved to %s while it was readied at %s, and making it a draft again failed (%v): %w", number, short(p.HeadSHA), short(sha), err, ErrHeadMoved)
+		}
+		return false, fmt.Errorf("PR #%d head moved to %s while it was readied at %s, so it is a draft again: %w", number, short(p.HeadSHA), short(sha), ErrHeadMoved)
+	}
+	return true, nil
 }
 
 func (GitHub) ClosePR(repo string, number int, comment string) error {
@@ -781,23 +845,53 @@ func ChecksRefused(text string) bool { return checksRefused.MatchString(text) }
 
 // ciless returns a filter for the errors of reading sha's checks: a refusal
 // (HTTP 403) is dropped when sha has no .github/workflows (GitHub answers 404
-// for it), asked once and only on the first refusal; any other error stands.
+// for it), asked only on a refusal and remembered per head, since a commit's
+// tree never changes; any other error stands. A rate limit's 403 is no
+// refusal. A 404 can also mean a private repo the token can't see, but the
+// 403 on its checks already says the token sees the repo.
+//
+// A head with no workflows can still carry statuses or check runs from an
+// outside app (CircleCI, a GitHub App); a refusal hides those, so such a repo
+// reads as having no checks (docs/risk.md).
 func ciless(repo, sha string) func(error) error {
-	asked, none := false, false
 	return func(err error) error {
-		if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+		var rl *RateLimited
+		if err == nil || errors.As(err, &rl) || !strings.Contains(err.Error(), "HTTP 403") {
 			return err
 		}
-		if !asked {
-			asked = true
-			_, werr := gh(repo, "api", "repos/"+repo+"/contents/.github/workflows?ref="+sha)
-			none = werr != nil && strings.Contains(werr.Error(), "HTTP 404")
-		}
-		if none {
+		if noWorkflows(repo, sha) {
 			return nil
 		}
 		return err
 	}
+}
+
+// workflowless remembers, by repo@sha, whether a head was found to have no
+// .github/workflows; only a definite answer (a 404 or a listing) is kept.
+var workflowless = struct {
+	sync.Mutex
+	m map[string]bool
+}{m: map[string]bool{}}
+
+func noWorkflows(repo, sha string) bool {
+	key := repo + "@" + sha
+	workflowless.Lock()
+	none, known := workflowless.m[key]
+	workflowless.Unlock()
+	if known {
+		return none
+	}
+	_, err := gh(repo, "api", "repos/"+repo+"/contents/.github/workflows?ref="+sha)
+	none = err != nil && strings.Contains(err.Error(), "HTTP 404")
+	if err == nil || none {
+		workflowless.Lock()
+		if len(workflowless.m) >= 1024 {
+			clear(workflowless.m)
+		}
+		workflowless.m[key] = none
+		workflowless.Unlock()
+	}
+	return none
 }
 
 // ghPages reads every page of a GitHub list held under field of each page's
