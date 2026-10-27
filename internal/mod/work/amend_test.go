@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 )
 
 // The lead re-filed a wider copy of the person's report and held the old one
@@ -84,5 +85,60 @@ func TestAmendAndWithdrawAWaitingBrief(t *testing.T) {
 	}
 	if _, err := op(m.opWithdraw, lead, map[string]any{"task": first["task"], "why": "x"}); err == nil || !strings.Contains(err.Error(), "left the queue") {
 		t.Fatalf("a started task was withdrawn: %v", err)
+	}
+}
+
+// A withdrawal a lead, improve or a step-back made needs no lead's turn: it
+// goes in the thread and the record only. One by another filer still wakes
+// a lead, and the project's own lead rather than the main one when the
+// project has one; a change only the person approves still reaches the main
+// lead's chat, the one the person reads.
+func TestWithdrawnByALeadDoesNotWakeIt(t *testing.T) {
+	m := queueRig(t)
+	start := func(c chat.Chat) string {
+		r, err := m.C.Runs.Start(core.RunSpec{Role: "lead", Brief: "lead", Persistent: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Lead = r.ID
+		m.C.J.MustAppend("chat.updated", c)
+		return r.ID
+	}
+	main := start(chat.Chat{ID: "lead", Title: "lead", Kind: "lead"})
+	own := start(chat.Chat{ID: "project:p", Title: "p", Kind: "project", Project: "p"})
+	woke := func(run string) (n int) {
+		for _, e := range m.C.J.Since(0) {
+			var q struct{ ID, Text string }
+			if e.Kind == "run.queued" && e.Decode(&q) == nil && q.ID == run && strings.Contains(q.Text, "[notification") {
+				n++
+			}
+		}
+		return
+	}
+	lead := core.Run{RunSpec: core.RunSpec{ID: main, Role: "lead"}}
+	filer := core.Run{RunSpec: core.RunSpec{ID: "w-one", Role: "worker", Project: "p"}}
+	var ids []string
+	for _, r := range []core.Run{lead, {RunSpec: core.RunSpec{ID: "improve", Project: "p"}}, filer} {
+		task, err := m.File(Brief{Project: "p", Title: "change by " + r.ID, Done: "done", From: r.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		task.Held, task.HeldBy = true, main
+		m.save(&task, "held")
+		ids = append(ids, task.ID)
+		if _, err := m.Withdraw(r, task.ID, "", "not needed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, p := woke(main), woke(own); n != 0 || p != 1 {
+		t.Fatalf("withdrawals woke the main lead %d times and p's lead %d, want 0 and 1 (the worker's)", n, p)
+	}
+	if n := len(m.Chat.Messages("lead")); n != 3 {
+		t.Fatalf("the main chat has %d messages, want the 3 withdrawals in the feed", n)
+	}
+	task, _ := m.Get(ids[0])
+	m.askPerson(&task, approveNotice(task.Label(), []string{".hive/goals.md"}, ""))
+	if n := woke(main); n != 1 {
+		t.Fatalf("an approval woke the main lead %d times, want 1", n)
 	}
 }

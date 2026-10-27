@@ -241,8 +241,19 @@ func (m *Module) notify(t *Task, text string) {
 }
 
 // notifyThreads is notify without the message to a helper's spawner, for news
-// the spawner already has.
-func (m *Module) notifyThreads(t *Task, text string) { m.tell(t, text, m.Chat.Notify) }
+// the spawner already has. A project with a running lead of its own wakes
+// that lead rather than the main one (chat.LeadFor).
+func (m *Module) notifyThreads(t *Task, text string) {
+	m.tell(t, text, func(c, th, s string) { m.Chat.NotifyAbout(t.Project, c, th, s) })
+}
+
+// askPerson is notify for news that needs the person (a change only they
+// approve): it wakes the lead of the very chat it was filed in, the main
+// lead's included, since that is the chat the person reads.
+func (m *Module) askPerson(t *Task, text string) {
+	m.toSpawner(t, text)
+	m.tell(t, text, m.Chat.Notify)
+}
 
 // post puts how t went in the same threads without waking their leads, for
 // an outcome that needs nothing of them (a merge); a helper's spawner still

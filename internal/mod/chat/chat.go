@@ -419,6 +419,34 @@ func (m *Module) Notify(chatID, thread, text string) {
 	}
 }
 
+// NotifyAbout is Notify for news about work on project: it posts into
+// chatID's thread, and when that is the main lead's chat and project has a
+// running lead of its own, it wakes that lead in the main lead's place.
+func (m *Module) NotifyAbout(project, chatID, thread, text string) {
+	if m.Record(chatID, thread, text) {
+		m.ToLead(m.LeadFor(project, chatID), thread, text)
+	}
+}
+
+// LeadFor is the chat whose lead hears news about project posted in chatID:
+// a project with a running lead of its own hears its news there, not the
+// main lead.
+func (m *Module) LeadFor(project, chatID string) string {
+	if (chatID != "" && chatID != "lead") || project == "" {
+		return chatID
+	}
+	m.mu.Lock()
+	ch := m.chats["project:"+project]
+	m.mu.Unlock()
+	if ch == nil || ch.Lead == "" {
+		return chatID
+	}
+	if r, ok := m.C.Runs.Get(ch.Lead); !ok || r.Terminal() {
+		return chatID
+	}
+	return ch.ID
+}
+
 // Record puts an outcome that needs nothing into a thread without waking the
 // chat's lead: the feed and the record carry it. It says whether the chat
 // exists.
