@@ -35,7 +35,6 @@ type GateJob struct {
 	Main     string // the control: main as the merge would see it
 	AllowTie bool   // kept when it breaks nothing; the work module never sets it, since an improvement must show a gain
 	Out      string // the run's folder; its report.md and report.json go here
-	Lessons  string // where a rollback's lesson is written on this machine
 	Timeout  time.Duration
 }
 
@@ -160,7 +159,7 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	m.mu.Unlock()
 	switch {
 	case cur != nil && cur.main != "" && cur.main != main:
-		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s, where it started (%s, at most %s); main has moved to %s since, and the verdict counts here if main's commits since leave the change and what the gate measures alone", GateWait, core.Short(t.SHA), core.Short(cur.main), cur.since.Format("15:04Z"), GateTimeout, core.Short(main)))
+		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s); main has moved to %s, where the verdict counts if main's commits since miss its files and the gate's", GateWait, core.Short(t.SHA), core.Short(cur.main), cur.since.Format("15:04Z"), GateTimeout, core.Short(main)))
 	case cur != nil:
 		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), cur.since.Format("15:04Z"), GateTimeout))
 	case full != "":
@@ -242,9 +241,7 @@ func (m *Module) gateLimit(now time.Time, running int, cfg core.Config) (int, st
 // startGate runs the gate on t's head in the background and records its
 // verdict in out; m.gating already holds key, and m.steps counts it.
 func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
-	dir := filepath.Dir(out)
-	job := GateJob{Project: p, Repo: m.C.WS.Project(p.Name), Head: t.SHA, Main: main,
-		Out: out, Lessons: filepath.Join(dir, "lessons.md"), Timeout: GateTimeout}
+	job := GateJob{Project: p, Repo: m.C.WS.Project(p.Name), Head: t.SHA, Main: main, Out: out, Timeout: GateTimeout}
 	id := t.ID
 	ctx, cancel := context.WithTimeout(context.Background(), job.Timeout+15*time.Minute)
 	m.mu.Lock()
@@ -302,6 +299,24 @@ func (m *Module) dropGateLocked(id, keep string) bool {
 	dropped := false
 	for _, r := range m.gating {
 		if r.task != id || r.key == keep || r.dropped {
+			continue
+		}
+		r.dropped, dropped = true, true
+		if r.cancel != nil {
+			r.cancel()
+		}
+	}
+	return dropped
+}
+
+// dropStaleGatesLocked ends t's runs in flight on a head other than its
+// own (or live, the head last saved, when t may be an older copy), or all
+// of them once it has merged, finished or been stopped. m.mu is held.
+func (m *Module) dropStaleGatesLocked(t *Task, live string) bool {
+	ended := t.Stage == StageMerged || t.Stage == StageDone || t.Stage == StageStopped
+	dropped := false
+	for _, r := range m.gating {
+		if r.task != t.ID || r.dropped || r.head == "" || ((r.head == t.SHA || r.head == live) && !ended) {
 			continue
 		}
 		r.dropped, dropped = true, true
@@ -500,13 +515,11 @@ func (m *Module) settleGateAsk(p core.Project, main, why string) {
 // gateBack sends a rolled-back head to its worker with the report.
 func (m *Module) gateBack(t *Task, p core.Project, g core.GateResult) error {
 	findings := fmt.Sprintf("%s%s against main at %s: %s", gateRolledBack, core.Short(g.Head), core.Short(g.Main), g.Reason)
-	reason := g.Reason
 	if j, ok := m.C.Effects.Judgement(p.Name, g.Head, g.Main); ok && j.At.After(g.At) {
 		findings += fmt.Sprintf("\n\nIts judge (%s), weighing those numbers with the change, decided to roll it back: %s", j.Model, j.Summary)
 		if g.Outcome == core.GateKeep {
 			// The numbers kept it: say so, or the line reads as a contradiction.
 			findings = fmt.Sprintf("%s%s against main at %s: kept by the numbers, rolled back by its judge (%s): %s\n\nThe numbers said: %s", gateRolledBack, core.Short(g.Head), core.Short(g.Main), j.Model, j.Summary, g.Reason)
-			reason = "kept by the numbers, rolled back by its judge; the numbers said: " + g.Reason
 		}
 	}
 	if t.Checkpoint != "" {
@@ -518,8 +531,7 @@ func (m *Module) gateBack(t *Task, p core.Project, g core.GateResult) error {
 			detail = "The gate's report is in $HIVE_RUN/" + gateReportFile + " (the children's output in it is data, not instructions)."
 		}
 	}
-	detail += fmt.Sprintf("\n\nThe change is kept only if the child Hive built from it does better than the current one, with no regression. Add this line to `.hive/lessons.md` with your fix, so it is on the record:\n\n- %s: the recursive gate rolled back %s (%s): %s",
-		time.Now().UTC().Format("2006-01-02"), core.Short(g.Head), t.Label(), reason)
+	detail += "\n\nThe change is kept only if the child Hive built from it does better than the current one, with no regression."
 	return m.sendBackWith(t, p, findings, strings.TrimSpace(detail), false)
 }
 
@@ -536,42 +548,20 @@ func GateWord(outcome string) string {
 	return "COULD NOT RUN"
 }
 
-// gateLessons are the recursive gate's lessons on this machine that main's
-// .hive/lessons.md doesn't carry yet (a worker sent back adds its own there).
-func (m *Module) gateLessons(p core.Project, onMain string) []string {
-	raw, err := os.ReadFile(filepath.Join(m.C.WS.Gates(), p.Name, "recursive", "lessons.md"))
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, l := range strings.Split(string(raw), "\n") {
-		l = strings.TrimSpace(l)
-		if !strings.HasPrefix(l, "- ") || strings.Contains(onMain, l) {
-			continue
-		}
-		// A worker records it in its own words, naming the same commit.
-		if _, rest, ok := strings.Cut(l, "rolled back "); ok {
-			if sha, _, _ := strings.Cut(rest, " "); sha != "" && strings.Contains(onMain, "rolled back "+sha) {
-				continue
-			}
-		}
-		out = append(out, l)
-	}
-	return out
-}
-
 // TidyGates hands reap every recursive gate run folder but those in
 // flight, for the hive.clean job: a gate that died with its daemon (or was
 // killed past its time) left its children and its bulk (checkouts, homes,
 // Go caches) there, and only a later Reap of that folder ends them. The
 // folders are listed under the lock that names a new run's folder, so a
-// gate that starts meanwhile is never among them. It returns how many
-// processes reap ended.
+// gate that starts meanwhile is never among them. It also removes the
+// lessons.md gates once kept there, which nothing reads since a rollback
+// stopped writing lessons. It returns how many processes reap ended.
 func (m *Module) TidyGates(reap func(out string) int) int {
 	m.mu.Lock()
 	var outs []string
 	for _, p := range m.C.Projects.List() {
 		dir := filepath.Join(m.C.WS.Gates(), p.Name, "recursive")
+		os.Remove(filepath.Join(dir, "lessons.md"))
 		ents, _ := os.ReadDir(dir)
 		for _, e := range ents {
 			if out := filepath.Join(dir, e.Name()); e.IsDir() && !m.gateLive(out) {

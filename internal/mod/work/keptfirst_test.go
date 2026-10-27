@@ -1,0 +1,86 @@
+package work
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+)
+
+// keptBeside puts a second task at the merge in task's project, a gain whose
+// head changes files, kept by a measured gate against main at measured.
+func keptBeside(t *testing.T, m *Module, p core.Project, f *core.Local, main string, files map[string]string, measured time.Time) *Task {
+	t.Helper()
+	tmp := t.TempDir()
+	must(t, "", "clone", "-q", f.RepoPath(p.Repo), tmp)
+	for name, body := range files {
+		os.MkdirAll(filepath.Dir(filepath.Join(tmp, name)), 0o755)
+		os.WriteFile(filepath.Join(tmp, name), []byte(body), 0o644)
+	}
+	must(t, tmp, "add", "-A")
+	must(t, tmp, "commit", "-q", "-m", "kept")
+	must(t, tmp, "push", "-q", "origin", "HEAD:refs/heads/kept")
+	must(t, m.C.WS.Project(p.Name), "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*")
+	u := &Task{ID: "t-kept", Project: p.Name, Stage: StageMerging, Aim: AimGain, SHA: strings.TrimSpace(must(t, tmp, "rev-parse", "HEAD")), PR: core.PR{Number: 99}}
+	m.mu.Lock()
+	m.tasks[u.ID] = u
+	m.mu.Unlock()
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Head: u.SHA, Main: main, Outcome: core.GateKeep, Reason: "better", Measured: true, At: measured})
+	return u
+}
+
+// While a gain's measured keep stands at main, a merge that would change
+// what it measured waits behind it (issue #1021); once the keep is too old to
+// hold others, it merges.
+func TestAKeptGainMergesFirst(t *testing.T) {
+	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	task.Aim, task.AimWhy = AimFix, "TestX fails"
+	main, _ := m.C.Effects.Sync(p)
+	u := keptBeside(t, m, p, f, main, map[string]string{"feature.go": "package p // faster\n"}, time.Now())
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.HasPrefix(task.Reason, KeptFirstWait) || !strings.Contains(task.Reason, "#99") || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("stage %q, reason %q: want waiting behind the kept gain", task.Stage, task.Reason)
+	}
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Head: u.SHA, Main: main, Outcome: core.GateKeep, Reason: "better", Measured: true, At: time.Now().Add(-keptFirstFor - time.Minute)})
+	m.mu.Lock()
+	delete(m.later, task.ID)
+	m.mu.Unlock()
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q: want merged once the keep is stale", task.Stage, task.Reason)
+	}
+}
+
+// A merge that leaves a kept gain's files and the gate's measures alone
+// doesn't wait for it: the verdict still stands after it.
+func TestAMergeThatLeavesAKeepStandingGoesOn(t *testing.T) {
+	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	task.Aim, task.AimWhy = AimFix, "TestX fails"
+	main, _ := m.C.Effects.Sync(p)
+	keptBeside(t, m, p, f, main, map[string]string{"other.go": "package p // faster\n"}, time.Now())
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q: want merged beside a keep it leaves standing", task.Stage, task.Reason)
+	}
+}
+
+// Two keeps that would unseat each other: the one measured first merges, the
+// other waits, so neither waits forever.
+func TestTheFirstOfTwoKeepsGoesFirst(t *testing.T) {
+	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	main, _ := m.C.Effects.Sync(p)
+	keptBeside(t, m, p, f, main, map[string]string{"feature.go": "package p // faster\n"}, time.Now().Add(-time.Hour))
+	m.C.Effects.RecordGate(core.GateResult{Project: p.Name, Head: task.SHA, Main: main, Outcome: core.GateKeep, Reason: "better", Measured: true, At: time.Now()})
+	if why := m.keptFirst(task, p, main); !strings.HasPrefix(why, KeptFirstWait) {
+		t.Fatalf("%q: want the later keep waiting behind the earlier", why)
+	}
+	m.mu.Lock()
+	u := m.tasks["t-kept"]
+	m.mu.Unlock()
+	if why := m.keptFirst(u, p, main); why != "" {
+		t.Fatalf("the earlier keep waits too: %q", why)
+	}
+}

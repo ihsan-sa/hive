@@ -208,7 +208,20 @@ func (Claude) Args(t Turn) []string {
 	if t.MaxBudgetUSD > 0 {
 		a = append(a, "--max-budget-usd", fmt.Sprintf("%.2f", t.MaxBudgetUSD))
 	}
-	return a
+	return append(a, "--settings", claudeSettings(nil))
+}
+
+// claudeSettings is the --settings value every Claude Code turn runs with,
+// extra merged in. Claude Code's own attribution is off: its
+// "Co-Authored-By: Claude <noreply@anthropic.com>" trailer is what GitHub
+// shows as the "claude" contributor, and the Hive's work is the Hive's.
+func claudeSettings(extra map[string]any) string {
+	set := map[string]any{"attribution": map[string]string{"commit": "", "pr": ""}, "includeCoAuthoredBy": false}
+	for k, v := range extra {
+		set[k] = v
+	}
+	s, _ := json.Marshal(set)
+	return string(s)
 }
 
 func (Claude) Env(t Turn) []string {
