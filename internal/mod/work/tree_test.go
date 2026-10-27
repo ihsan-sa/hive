@@ -101,7 +101,11 @@ func TestTreeArchivesTheRest(t *testing.T) {
 	if task.Stage != StageStopped || !strings.HasPrefix(task.Reason, treeArchived) || !strings.Contains(task.Reason, b.ID) {
 		t.Fatalf("stage %q, reason %q: want the root archived for its merged branch", task.Stage, task.Reason)
 	}
-	if r, ok := m.C.Runs.Get(task.Worker); ok && (!r.Terminal() || r.Status == core.StatusStopped || r.StopAsked) {
+	r, ok := m.C.Runs.Get(task.Worker)
+	if !ok {
+		t.Fatalf("the archived node's worker %q has no record", task.Worker)
+	}
+	if !r.Terminal() || r.Status == core.StatusStopped || r.StopAsked {
 		t.Fatalf("the archived node's worker %s is %s (stop asked %v): want it ended blocked, not stopped as the person", r.ID, r.Status, r.StopAsked)
 	}
 	// Recheck brings an archived node back, out of its tree, so it isn't
