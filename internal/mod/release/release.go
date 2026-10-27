@@ -1342,20 +1342,28 @@ func (m *Module) failed(project, tag, sha, why, cause, gate string) (raise bool)
 
 // causeSaid says whether a release since the project's last published one
 // failed or was held on cause.
-func (m *Module) causeSaid(project, cause string) (said bool) {
+func (m *Module) causeSaid(project, cause string) bool {
+	said := map[string]bool{}
 	m.C.J.Replay(func(e core.Event) {
 		var x struct{ Project, Cause string }
-		if e.Decode(&x) != nil || x.Project != project {
-			return
-		}
-		switch e.Kind {
-		case "hive.published":
-			said = false
-		case "release.failed", "release.held":
-			said = said || cause != "" && x.Cause == cause
+		if e.Decode(&x) == nil && x.Project == project {
+			noteCause(said, e.Kind, x.Cause)
 		}
 	})
-	return said
+	return cause != "" && said[cause]
+}
+
+// noteCause keeps the causes a release failed or was held on since the last
+// published one, as the journal replays: causeSaid and unbuilt both read it.
+func noteCause(said map[string]bool, kind, cause string) {
+	switch kind {
+	case "hive.published":
+		clear(said)
+	case "release.failed", "release.held":
+		if cause != "" {
+			said[cause] = true
+		}
+	}
 }
 
 // gates says "passed" when every gate passed in the release runs at sha,
@@ -1468,7 +1476,7 @@ func reads(jobs []string, path string) bool {
 func (m *Module) unbuilt(p core.Project, sha string) string {
 	type rel struct{ Tag, SHA string }
 	var since []rel
-	held, said := map[string]bool{}, map[string]bool{} // said: the causes causeSaid finds
+	held, said := map[string]bool{}, map[string]bool{} // said: as noteCause keeps them
 	m.C.J.Replay(func(e core.Event) {
 		var x struct {
 			Project, Tag, SHA, Cause string
@@ -1477,6 +1485,7 @@ func (m *Module) unbuilt(p core.Project, sha string) string {
 		if e.Decode(&x) != nil || x.Project != p.Name {
 			return
 		}
+		noteCause(said, e.Kind, x.Cause)
 		switch e.Kind {
 		case "hive.released":
 			if !x.Prerelease {
@@ -1485,16 +1494,10 @@ func (m *Module) unbuilt(p core.Project, sha string) string {
 			since = append(since, rel{x.Tag, x.SHA})
 		case "hive.published":
 			since = slices.DeleteFunc(since, func(r rel) bool { return !modules.Newer(x.Tag, r.Tag) })
-			clear(said)
 		case "release.refused": // as Publish: a refused tag is never published
 			since = slices.DeleteFunc(since, func(r rel) bool { return r.Tag == x.Tag })
-		case "release.held", "release.failed":
-			if e.Kind == "release.held" {
-				held[x.Tag] = true
-			}
-			if x.Cause != "" {
-				said[x.Cause] = true
-			}
+		case "release.held":
+			held[x.Tag] = true
 		}
 	})
 	if len(since) == 0 || since[len(since)-1].SHA == sha {
