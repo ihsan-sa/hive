@@ -270,20 +270,27 @@ func TestUpdateForwardDoesntPin(t *testing.T) {
 // A pin an update forward left before it stopped pinning (auto-update was on
 // before it) is lifted at the daemon's first auto-update, as the journalled
 // update that brought the release in shows; a step back stays pinned, also
-// one to a pre-release past the latest full release, and so does a pin no
-// journalled update explains.
+// one to a pre-release past the latest full release or one this build made
+// forward from an earlier step back, and so does a pin no journalled update
+// explains.
 func TestForwardPinLifted(t *testing.T) {
 	serveAll(t, "v0.1.3", map[string]map[string]string{"v0.1.3": build("new"), "v0.1.5": build("broken")}, false)
 	for _, c := range []struct {
 		from, pin string
 		lifted    bool
-	}{{"v0.1.2", "v0.1.4", true}, {"v0.1.2", "v0.1.3", true}, {"v0.1.5", "v0.1.4", false}, {"v0.1.3", "v0.1.2", false}, {"", "v0.1.4", false}} {
+		pinned    bool // journalled by this build's update, which says whether it pinned
+	}{{"v0.1.2", "v0.1.4", true, false}, {"v0.1.2", "v0.1.3", true, false}, {"v0.1.5", "v0.1.4", false, false},
+		{"v0.1.3", "v0.1.2", false, false}, {"", "v0.1.4", false, false}, {"v0.1.1", "v0.1.2", false, true}} {
 		m, exe := releaseAt(t, c.pin, "me/hive")
 		cfg := m.C.WS.LoadConfig()
 		cfg.AutoUpdate, cfg.PinnedAuto, cfg.ReleasePin = false, true, c.pin
 		m.C.WS.SaveConfig(cfg)
 		if c.from != "" {
-			m.C.J.MustAppend("hive.updated", map[string]any{"from": c.from, "to": c.pin})
+			ev := map[string]any{"from": c.from, "to": c.pin}
+			if c.pinned {
+				ev["pinned"] = true
+			}
+			m.C.J.MustAppend("hive.updated", ev)
 		}
 		for range 2 {
 			msg, err := m.AutoUpdate()
@@ -295,6 +302,30 @@ func TestForwardPinLifted(t *testing.T) {
 				t.Fatalf("%s from %s: %q; pin %q, auto_update %v, binary %q, want lifted %v", c.pin, c.from, msg, cfg.ReleasePin, cfg.AutoUpdate, raw, c.lifted)
 			}
 		}
+	}
+}
+
+// A step back this build pins, even one forward from an earlier step back,
+// stays pinned through the restart's first auto-update.
+func TestStepBackPinSurvivesRestart(t *testing.T) {
+	serveAll(t, "v0.1.3", map[string]map[string]string{"v0.1.3": build("new"), "v0.1.2": build("bisect")}, false)
+	m, exe := releaseAt(t, "v0.1.1", "me/hive")
+	cfg := m.C.WS.LoadConfig()
+	cfg.AutoUpdate, cfg.PinnedAuto, cfg.ReleasePin = false, true, "v0.1.1"
+	m.C.WS.SaveConfig(cfg)
+	if msg, err := m.Update("v0.1.2"); err != nil || !strings.Contains(msg, "pinned") {
+		t.Fatalf("step to v0.1.2: %q, %v", msg, err)
+	}
+	core.Version = "v0.1.2" // the restart
+	restarted := &Module{C: m.C}
+	if msg, err := restarted.AutoUpdate(); err != nil || !strings.Contains(msg, "pinned to v0.1.2") {
+		t.Fatalf("auto-update after the restart: %q, %v", msg, err)
+	}
+	if cfg := m.C.WS.LoadConfig(); cfg.ReleasePin != "v0.1.2" || cfg.AutoUpdate {
+		t.Fatalf("pin %q, auto_update %v", cfg.ReleasePin, cfg.AutoUpdate)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "bisect" {
+		t.Fatalf("binary %q", raw)
 	}
 }
 

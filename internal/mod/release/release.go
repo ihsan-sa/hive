@@ -472,7 +472,7 @@ func (m *Module) update(tag string) (string, error) {
 	}
 	notes := Notes(m.C.Effects.Forge, repo, core.Version, tag)
 	unsigned := PublicKey == ""
-	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned})
+	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned, "pinned": pin})
 	installed = true
 	// Merges stay paused until the restart; one that never comes (a
 	// supervisor that doesn't restart, a failed start) lets them go on.
@@ -538,17 +538,25 @@ var restartGrace = 30 * time.Minute
 // liftForwardPin lifts a pin that an update forward left, from before such an
 // update stopped pinning (issue #1795), when auto-update was on before it: the
 // update that brought this release in, as the journal has it, came from an
-// older one. A step back, to an older release, stays pinned. It runs once a
-// daemon, from the scheduled job at start; pins made since are all step backs.
+// older one, and it was an update from before this build, which says in its
+// event whether it pinned: a pin this build made is a step back, even one
+// forward from an earlier step back, and stays. It runs once a daemon, from
+// the scheduled job at start.
 func (m *Module) liftForwardPin(cfg core.Config) (bool, error) {
 	if cfg.ReleasePin == "" || !cfg.PinnedAuto || cfg.ReleasePin != core.Version {
 		return false, nil
 	}
 	from := ""
 	m.C.J.Replay(func(e core.Event) {
-		var x struct{ From, To string }
+		var x struct {
+			From, To string
+			Pinned   *bool
+		}
 		if e.Kind == "hive.updated" && e.Decode(&x) == nil && x.To == cfg.ReleasePin {
 			from = x.From
+			if x.Pinned != nil {
+				from = "" // this build's own update: a pin it made stays
+			}
 		}
 	})
 	if from == "" || !modules.Newer(from, cfg.ReleasePin) {
