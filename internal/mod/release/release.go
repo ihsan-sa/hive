@@ -994,8 +994,11 @@ func (m *Module) ciState(project string) (last ciWait) {
 
 // retryWaiting tries again the newest kept merge of each self project whose
 // release waits on main's checks or found them failed (a re-run may pass),
-// or the newest merge after it whose checks passed (greenAfter); one still
-// waiting after lateAfter is raised once.
+// or the newest kept merge after it whose checks passed (greenAfter); one
+// still waiting after lateAfter is raised once. A descendant chosen this way
+// that is then held (an unread or root merge) or blocked by its scan still
+// journals release.ci_passed, which ends the original's wait: the hold's or
+// the scan's alert speaks for it from then on.
 func (m *Module) retryWaiting() {
 	if m.said == nil {
 		m.said = map[string]bool{}
@@ -1029,37 +1032,75 @@ func (m *Module) retryWaiting() {
 // greenAfter reads the checks of.
 const greenAfterN = 10
 
-// greenAfter is the newest of the project's merges after sha whose checks
-// passed on main, or "" when none did. A commit whose ci run GitHub cancelled
-// (one queued run replaces another) has no checks and would wait forever, and
-// one that failed may be fixed after it: a green descendant carries it into a
-// release. It only reads the checks, journaling nothing; afterKept does.
+// greenAfter is the newest of the project's kept merges after sha whose
+// checks passed on main and whose history holds sha, or "" when none does. A
+// commit whose ci run GitHub cancelled (one queued run replaces another) has
+// no checks and would wait forever, and one that failed may be fixed after
+// it: a green descendant carries it into a release. Only a merge improve kept
+// (its own score.measured, or a later kept one covering it) is chosen, so an
+// install following pre-releases never runs a merge measured red or worse,
+// or one not judged yet, which its own AfterKept releases once kept. It only
+// reads, journaling nothing; afterKept reads main's checks at the chosen
+// commit again and journals them.
 func (m *Module) greenAfter(p core.Project, sha string) string {
 	var later []string
+	kept := map[string]bool{}
 	m.C.J.Replay(func(e core.Event) {
 		var x struct {
 			Project  string
+			SHA      string
 			MergeSHA string `json:"merge_sha"`
+			Kept     bool
+			Red      bool
+			NoResult bool `json:"no_result"`
 		}
-		if e.Kind != "effect.merged" || e.Decode(&x) != nil || x.Project != p.Name || x.MergeSHA == "" {
+		if e.Decode(&x) != nil || x.Project != p.Name {
 			return
 		}
-		if x.MergeSHA == sha {
-			later = []string{} // only the merges after the newest sighting count
-			return
-		}
-		if later != nil {
-			later = append(later, x.MergeSHA)
+		switch e.Kind {
+		case "score.measured":
+			if !x.NoResult {
+				kept[x.SHA] = x.Kept // the newest measure of a commit stands
+			}
+		case "score.covered":
+			kept[x.SHA] = !x.Red
+		case "effect.merged":
+			if x.MergeSHA == "" {
+				return
+			}
+			if x.MergeSHA == sha {
+				later = []string{} // only the merges after the newest sighting count
+				return
+			}
+			if later != nil {
+				later = append(later, x.MergeSHA)
+			}
 		}
 	})
+	contains := m.Contains
+	if contains == nil {
+		contains = m.contains
+	}
 	for i, n := len(later)-1, 0; i >= 0 && n < greenAfterN; i, n = i-1, n+1 {
+		if !kept[later[i]] {
+			continue
+		}
 		runs, err := m.C.Effects.Forge.Checks(p.Repo, later[i])
 		if err != nil {
 			continue
 		}
-		if state, _ := core.ChecksState(runs, m.C.Effects.RequiredChecks(p, later[i])); state == core.CheckPass {
-			return later[i]
+		if state, _ := core.ChecksState(runs, m.C.Effects.RequiredChecks(p, later[i])); state != core.CheckPass {
+			continue
 		}
+		// The journal's order of merges stands in for main's history; the
+		// history itself says so, and one that can't be read is passed over.
+		if in, err := contains(p, sha, later[i]); err != nil || !in {
+			if err != nil {
+				log.Printf("release: %s: can't tell whether %s contains %s: %v", p.Name, core.Short(later[i]), core.Short(sha), err)
+			}
+			continue
+		}
+		return later[i]
 	}
 	return ""
 }
