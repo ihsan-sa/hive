@@ -1056,8 +1056,8 @@ func (rs *Runs) List(fn func(*Run) bool) []Run {
 
 // Plans returns the latest usage per login.
 func (rs *Runs) Plans() []Plan {
+	now := time.Now()
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 	picks := map[string][]Plan{}
 	for _, p := range rs.plans {
 		pick := HarnessName(p.Harness)
@@ -1066,9 +1066,17 @@ func (rs *Runs) Plans() []Plan {
 		}
 		picks[pick] = append(picks[pick], p)
 	}
+	rs.mu.Unlock()
+	// The same logins turned away on renewal as pickLogin's, so the one
+	// shown keeping its five hours' tenth is the one it keeps.
+	renewing, _ := rs.tokens.(interface{ LimitedUntil(string) time.Time })
+	limited := map[string]bool{}
 	var out []Plan
 	for _, ps := range picks {
-		out = append(out, lift(ps, time.Now(), false, nil)...)
+		for _, p := range ps {
+			limited[p.Key()] = renewing != nil && renewing.LimitedUntil(p.Key()).After(now)
+		}
+		out = append(out, lift(ps, now, false, limited)...)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key() < out[j].Key() })
 	return out
