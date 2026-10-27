@@ -17,7 +17,7 @@ import (
 // toMerging takes a rig's task through its tests to the merge.
 func toMerging(t *testing.T, m *Module, task *Task, p core.Project) {
 	t.Helper()
-	if err := m.test(task, p); err != nil {
+	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
 	if task.Stage != StageMerging {
@@ -353,7 +353,7 @@ func TestMergedWithMainTestedFirst(t *testing.T) {
 		t.Fatalf("the merge with main should be tested red: %+v", c)
 	}
 	for i := 0; i < 2 && task.Stage == StageTesting; i++ { // a red runs once more before it counts
-		if err := m.test(task, p); err != nil {
+		if err := testStep(m, task, p); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1566,4 +1566,23 @@ func TestForgeFailuresNamesTheTestedMain(t *testing.T) {
 	if !strings.Contains(msg, "Main is at "+core.Short(main)+" now; the checks' logs don't say") {
 		t.Fatalf("message:\n%s", msg)
 	}
+}
+
+// testStep runs the test step and, when it queued the head's check behind
+// it, waits for the check and runs the step again to take the result.
+func testStep(m *Module, task *Task, p core.Project) error {
+	if err := m.test(task, p); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	_, queued := m.testRuns[task.ID]
+	m.mu.Unlock()
+	if !queued {
+		return nil
+	}
+	m.Wait()
+	m.mu.Lock()
+	delete(m.later, task.ID)
+	m.mu.Unlock()
+	return m.test(task, p)
 }

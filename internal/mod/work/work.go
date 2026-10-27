@@ -343,7 +343,7 @@ type Module struct {
 	// mainTips holds each project's main for one admit pass (queue.go).
 	mainTips map[string]string
 	filing   sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
-	steps    sync.WaitGroup // the steps Tick started that are still going
+	steps    sync.WaitGroup // the steps Tick started, and the checks they queued, still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -358,6 +358,9 @@ type Module struct {
 	// read) is next looked at; kept in memory, so a restart looks at once.
 	// Guarded by mu: due reads it with mu held, hold takes mu itself.
 	later map[string]time.Time
+	// testRuns holds each task's test of its head running behind a step, at
+	// most one, until a step takes the result (testrun.go). Guarded by mu.
+	testRuns map[string]*testRun
 	// prPolled is when each task waiting for the person last had its pull
 	// request looked up, so a close there is seen without a call every tick.
 	prPolled map[string]time.Time
@@ -501,6 +504,9 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	}
 	if steer {
 		m.steered[t.ID] = t.Updated
+	}
+	if was == StageTesting && t.Stage != StageTesting {
+		m.dropTestRunLocked(t.ID)
 	}
 	// A gate run on a head the task has left (a merge of main, a fix sent
 	// back) or a task that ended judges nothing that lands: it ends now and
@@ -1704,12 +1710,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err
 	}
 	cfg := m.C.Effects.Config(p, main)
-	c, ok := m.C.Effects.GetCheck(p.Name, t.SHA, "test")
-	if !ok || t.Recheck {
-		if _, err := m.C.Sandbox(); err != nil {
-			return err
-		}
-		c, t.Recheck = m.C.Effects.RunCheck(p, t.SHA, "test", cfg.Test), false
+	c, ok, err := m.headTest(t, p, cfg.Test)
+	if !ok || err != nil {
+		return err // queued or running behind the step: it waits in testing
 	}
 	if c.CantRun != "" {
 		if t.Checkpoint != "" {
