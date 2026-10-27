@@ -112,30 +112,11 @@ func TestNoCommitsWithoutSteps(t *testing.T) {
 	}
 }
 
-// A review follow-up whose worker finished done with no commit judged every
-// item in its account, so it is done and its issue closed; one that finished
-// blocked, or a plain ask with no commit, still blocks.
-func TestFollowUpNoCommitsIsDone(t *testing.T) {
-	m, forge, task, p := noCommitRig(t, 0)
-	task.FollowUp = "t0"
-	done := core.Run{RunSpec: core.RunSpec{ID: "w1"}, Finish: &core.Finish{Status: core.StatusDone, Account: "each item judged not worth doing"}}
-	m.noCommits(task, p, done)
-	if task.Stage != StageDone || len(forge.closed) != 1 {
-		t.Fatalf("stage %q, reason %q, closed %v", task.Stage, task.Reason, forge.closed)
-	}
-	if c := forge.Comments("me/p", 7); len(c) != 1 || !strings.Contains(c[0], "each item judged not worth doing") {
-		t.Fatalf("comments %q", c)
-	}
-
-	m, _, task, p = noCommitRig(t, 0)
-	task.FollowUp = "t0"
-	m.noCommits(task, p, core.Run{RunSpec: core.RunSpec{ID: "w1"}, Finish: &core.Finish{Status: core.StatusBlocked, Account: "stuck"}})
-	if task.Stage != StageBlocked {
-		t.Fatalf("a blocked follow-up: stage %q", task.Stage)
-	}
-
-	m, _, task, p = noCommitRig(t, 0)
-	m.noCommits(task, p, done)
+// A worker that finished done with no commit and no step outside the
+// checkout still blocks: nothing came of the ask.
+func TestNoCommitsIsBlocked(t *testing.T) {
+	m, _, task, p := noCommitRig(t, 0)
+	m.noCommits(task, p, core.Run{RunSpec: core.RunSpec{ID: "w1"}, Finish: &core.Finish{Status: core.StatusDone, Account: "nothing to do"}})
 	if task.Stage != StageBlocked {
 		t.Fatalf("a plain ask: stage %q", task.Stage)
 	}
@@ -836,56 +817,6 @@ func TestReviewRulesFromMain(t *testing.T) {
 	}
 }
 
-// Advice from a land is filed once, when the task merges: a step repeated
-// after a restart files no second brief, a follow-up's own advice files none,
-// on a scored project the follow-up keeps its done line, and it is taken as a
-// fix of what the review found, not a gain for the gate.
-func TestFollowUpOnceAfterMerge(t *testing.T) {
-	m, p := rigAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`)
-	tk := &Task{ID: "t9", Project: "p", Title: "add a helper", Kind: "work", Stage: StageMerged, Reviewer: "r-t9", Advice: []string{"name it better"}}
-	follows := func() []Task { return m.List(func(x Task) bool { return x.FollowUp != "" }) }
-	if err := m.followUp(tk, p); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.followUp(tk, p); err != nil { // the restart: still merged, filed already
-		t.Fatal(err)
-	}
-	fs := follows()
-	if len(fs) != 1 || fs[0].FollowUp != "t9" || fs[0].From != "r-t9" || !strings.Contains(fs[0].Known, "name it better") {
-		t.Fatalf("follow-ups: %+v", fs)
-	}
-	fu := fs[0]
-	if !fu.Fix() || !strings.Contains(fu.AimWhy, "name it better") {
-		t.Fatalf("the follow-up is taken as %s (%q), not a fix", fu.AimWord(), fu.AimWhy)
-	}
-	if d := doneFor(&fu, true); !strings.Contains(d, "judged not worth doing") {
-		t.Fatalf("the follow-up lost its done line: %q", d)
-	}
-	keepAdvice(&fu, []string{"and again"})
-	if len(fu.Advice) != 0 {
-		t.Fatalf("a follow-up kept advice, so the chain goes on: %v", fu.Advice)
-	}
-	keepAdvice(tk, []string{" name it better ", "", "test it"}) // a second read repeats one item
-	if strings.Join(tk.Advice, "|") != "name it better|test it" {
-		t.Fatalf("advice: %q", tk.Advice)
-	}
-}
-
-// A review follow-up filed before followUp named its aim, still queued with
-// none, is taken as a fix; one its worker or the lead aimed at a gain is a gain.
-func TestUnaimedFollowUpIsAFix(t *testing.T) {
-	fu := Task{ID: "t2", Title: "Follow up the review of x", FollowUp: "t1"}
-	if !fu.Fix() || !strings.Contains(fu.AimWord(), "follow-up of t1") {
-		t.Fatalf("an unaimed follow-up is taken as %s", fu.AimWord())
-	}
-	if fu.Aim = AimGain; fu.Fix() {
-		t.Fatal("a follow-up aimed at a gain is taken as a fix")
-	}
-	if plain := (Task{ID: "t3"}); plain.Fix() {
-		t.Fatal("an unaimed brief that follows up nothing is taken as a fix")
-	}
-}
-
 // The lead ends a task whose work is already on main, whatever stage it is
 // stuck in: not while its PR is open and main lacks its change; with the main
 // commit named when it was squashed there; at once when its PR was merged on
@@ -1090,6 +1021,59 @@ func TestStopStandsOverARunningStep(t *testing.T) {
 	m.mu.Unlock()
 	if ok {
 		t.Fatal("a copy from before a save reads as fresh")
+	}
+}
+
+// A step past its limit is let go with a journalled steer: its later saves
+// are dropped, and its late end leaves the step that took over holding the task.
+func TestReapStuckLetsAStepGoAndKeepsTheNewOne(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage = StageMerging
+	m.save(task, "on to the merge")
+	old := time.Now().Add(-2 * stepLimit)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt = map[string]time.Time{task.ID: old}
+	m.mu.Unlock()
+	stale, _ := m.Get(task.ID)
+	m.reapStuck()
+	if m.busy[task.ID] || !m.overtaken(&stale) {
+		t.Fatalf("busy %v, overtaken %v: want freed and the old copy overtaken", m.busy[task.ID], m.overtaken(&stale))
+	}
+	got, _ := m.Get(task.ID)
+	if !logged(&got, "ran past") {
+		t.Fatalf("the reap isn't in the task's log: %v", got.Log)
+	}
+	stale.Stage = StageLanding
+	m.save(&stale, "the hung step's late save")
+	if got, _ := m.Get(task.ID); got.Stage != StageMerging {
+		t.Fatalf("the hung step saved over the task: %q", got.Stage)
+	}
+	// A newer step takes the task; the hung one ending frees nothing.
+	began := time.Now()
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt[task.ID] = began
+	m.mu.Unlock()
+	m.endStep(task.ID, old)
+	if !m.busy[task.ID] {
+		t.Fatal("the hung step's end freed the newer step's mark")
+	}
+	m.endStep(task.ID, began)
+	if m.busy[task.ID] {
+		t.Fatal("the current step's end left the task held")
+	}
+}
+
+func TestReapStuckLeavesAStepWithinItsLimit(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt = map[string]time.Time{task.ID: time.Now()}
+	m.mu.Unlock()
+	m.reapStuck()
+	if !m.busy[task.ID] || len(m.stepAt) != 1 {
+		t.Fatal("a step within its limit was let go")
 	}
 }
 

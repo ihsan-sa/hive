@@ -330,6 +330,7 @@ func (m *Module) scoreNow(p core.Project, sha string) (float64, bool) {
 	if cfg.Score == nil || sha == "" {
 		return 0, false
 	}
+	defer m.Work.MeasuringMain(p.Name, sha)() // the merge's keep/revert waits on it
 	sc := m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
 	if sc.CantRun != "" || !sc.OK || sc.Score == nil {
 		return 0, false
