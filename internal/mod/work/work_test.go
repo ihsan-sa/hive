@@ -607,7 +607,7 @@ func TestHelperCommitsGetTheirOwnPR(t *testing.T) {
 // request in testing, and the worker that spawned it hears how its task went
 // as a message, as it has no thread of its own; a lead hears in its thread.
 func TestHelperLandsAndItsSpawnerHears(t *testing.T) {
-	m, forge, _ := helperRig(t)
+	m, forge, p := helperRig(t)
 	parent, err := m.C.Runs.Start(m.Agents.Spec("w-parent", "worker", "p", t.TempDir(), "split the work"))
 	if err != nil {
 		t.Fatal(err)
@@ -633,9 +633,14 @@ func TestHelperLandsAndItsSpawnerHears(t *testing.T) {
 	if pr, found, _ := forge.FindPR("me/p", task.Branch); !found || pr.HeadSHA != task.SHA {
 		t.Fatalf("no pull request for the helper's commit: %+v", pr)
 	}
-	m.notify(&task, "Merged: write the helper part")
-	r, _ := m.C.Runs.Get(parent.ID)
-	if len(r.Pending) != 1 || !strings.Contains(r.Pending[0], "Merged: write the helper part") || !strings.Contains(r.Pending[0], task.ID) {
+	before := len(mustRun(t, m, parent.ID).Pending) // the helper's finish account
+	toMerging(t, m, &task, p)
+	mergeOnce(t, m, &task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q; want merged", task.Stage, task.Reason)
+	}
+	r := mustRun(t, m, parent.ID)
+	if len(r.Pending) != before+1 || !strings.Contains(r.Pending[before], "Merged: write the helper part") || !strings.Contains(r.Pending[before], task.ID) {
 		t.Fatalf("the spawner wasn't told: %+v", r.Pending)
 	}
 	lead := &Task{ID: "t-lead", Kind: "helper", From: "lead"}
@@ -643,6 +648,39 @@ func TestHelperLandsAndItsSpawnerHears(t *testing.T) {
 	m.notify(lead, "Merged: the lead's helper")
 	if r, _ := m.C.Runs.Get("lead"); len(r.Pending) != 0 {
 		t.Fatalf("a lead was messaged besides its thread: %+v", r.Pending)
+	}
+}
+
+// A helper that finishes blocked tells its spawner once, by its own finish
+// account; the task's "Blocked:" line goes to the threads, not again to it.
+// One the Hive ended, which sent no account, is told by that line.
+func TestBlockedHelperTellsItsSpawnerOnce(t *testing.T) {
+	for _, finished := range []bool{true, false} {
+		m, _, _ := helperRig(t)
+		parent, err := m.C.Runs.Start(m.Agents.Spec("w-parent", "worker", "p", t.TempDir(), "split the work"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec, err := m.Spawn(parent, "worker", "p", "write the helper part", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if finished {
+			m.C.J.MustAppend("run.finish", map[string]any{"id": spec.ID, "finish": core.Finish{Status: core.StatusBlocked, Account: "can't reach the API"}})
+		}
+		m.C.Runs.SetStatus(spec.ID, core.StatusBlocked, "can't reach the API")
+		before := len(mustRun(t, m, parent.ID).Pending)
+		task, _ := m.Get(spec.Task)
+		if err := m.step(&task); err != nil {
+			t.Fatal(err)
+		}
+		if task.Stage != StageBlocked {
+			t.Fatalf("stage %q, want blocked: %v", task.Stage, task.Log)
+		}
+		heard := mustRun(t, m, parent.ID).Pending[before:]
+		if want := map[bool]int{true: 0, false: 1}[finished]; len(heard) != want {
+			t.Fatalf("finished by itself %v: the spawner heard %+v, want %d messages", finished, heard, want)
+		}
 	}
 }
 
@@ -984,4 +1022,13 @@ func TestStopStandsOverARunningStep(t *testing.T) {
 	if ok {
 		t.Fatal("a copy from before a save reads as fresh")
 	}
+}
+
+func mustRun(t *testing.T, m *Module, id string) core.Run {
+	t.Helper()
+	r, ok := m.C.Runs.Get(id)
+	if !ok {
+		t.Fatalf("no run %s", id)
+	}
+	return r
 }
