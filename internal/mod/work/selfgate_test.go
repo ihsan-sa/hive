@@ -1066,3 +1066,40 @@ func TestSelfGateRollbackAtAnOlderMainLeavesTheLine(t *testing.T) {
 		t.Fatalf("the task's log doesn't carry the verdict: gate %+v, log %+v", task.Gate, task.Log)
 	}
 }
+
+// A measured rollback its judge kept is no rollback: when main moves past
+// where it stands and the gate can't run at the new main, the task waits on
+// that without the old verdict told again on every look (two PR comments a
+// minute until the retry, as the review of #1799 found).
+func TestAJudgeKeptRollbackIsNotToldAgain(t *testing.T) {
+	m, task, p, f := measuredRig(t, core.GateRollback)
+	old, _ := m.C.Effects.Sync(p)
+	gateOnce(t, m, task, p)
+	judgeSays(t, m, task, old, core.GateKeep)
+	m.Gate = func(context.Context, GateJob) core.GateResult {
+		return core.GateResult{Outcome: core.GateCantRun, Reason: "no bubblewrap"}
+	}
+	pushMain(t, f, map[string]string{"tests/x.sh": "x"})
+	told := func() int {
+		n := 0
+		for _, c := range f.Comments(p.Repo, task.PR.Number) {
+			if strings.Contains(c, "Recursive gate:") {
+				n++
+			}
+		}
+		return n
+	}
+	gateOnce(t, m, task, p)
+	before := told()
+	for range 4 {
+		m.later = map[string]time.Time{}
+		mergeOnce(t, m, task, p)
+		m.Wait()
+	}
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "can't run") {
+		t.Fatalf("stage %q, reason %q: want waiting on the gate that can't run", task.Stage, task.Reason)
+	}
+	if n := told(); n != before {
+		t.Fatalf("%d more gate comments over 4 looks: want the verdicts told once", n-before)
+	}
+}

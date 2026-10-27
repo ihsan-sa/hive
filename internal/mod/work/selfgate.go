@@ -194,12 +194,19 @@ func (m *Module) gainRolledBack(t *Task, p core.Project) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	if g.Outcome != core.GateRollback {
-		// A keep the judge turned down is a rollback too; a keep standing at
-		// this main is recursiveGate's.
-		if j, ok := m.C.Effects.Judgement(p.Name, g.Head, g.Main); !ok || !j.At.After(g.At) || j.Verdict != core.GateRollback {
-			return false, nil
-		}
+	// The judge's call on it decides: a keep it turned down is a rollback
+	// too, and a rollback it kept is no rollback. Neither a keep nor a kept
+	// rollback is told here: at a main where it no longer stands,
+	// recursiveGate tells the verdict there, and telling this one too
+	// flipped the task's verdict on every look, each a PR comment.
+	j, judged := m.C.Effects.Judgement(p.Name, g.Head, g.Main)
+	if judged = judged && j.At.After(g.At); judged && j.Verdict == core.GateKeep || !judged && g.Outcome != core.GateRollback {
+		return false, nil
+	}
+	// A person's landing of this head at this main stands as it does in
+	// recursiveGate.
+	if main, _ := core.Git(m.C.WS.Project(p.Name), "rev-parse", "--verify", "-q", "refs/remotes/origin/"+p.Branch); main != "" && m.C.Effects.Approved("gate", p.Name, t.SHA+"@"+main) {
+		return false, nil
 	}
 	m.tellGate(t, p, g)
 	keep, wait, err := m.judgeGate(t, p, g)
