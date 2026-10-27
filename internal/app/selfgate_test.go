@@ -109,8 +109,12 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 // stand-in reads its own, and whether there is a nice here to check at all.
 func ownNice(t *testing.T) (int, bool) {
 	t.Helper()
-	if _, err := exec.LookPath("nice"); err != nil {
-		return 0, false
+	// Without either tool (a minimal image, the gate's own sandbox) the
+	// level isn't checked, rather than failing the test on the machine.
+	for _, tool := range []string{"nice", "ps"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			return 0, false
+		}
 	}
 	raw, err := exec.Command("ps", "-o", "nice=", "-p", strconv.Itoa(os.Getpid())).Output()
 	if err != nil {
