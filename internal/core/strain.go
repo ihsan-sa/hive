@@ -71,6 +71,10 @@ func procField(path, key string) (float64, bool) {
 	return f, err == nil
 }
 
+// LoadedReason starts every reason Loaded gives, so a caller can tell load
+// alone from the other strains without matching its wording.
+const LoadedReason = "machine loaded"
+
 // Loaded says why the machine is too loaded to take on more work, or "": its
 // 1-minute load average per core is over max. Where /proc/loadavg doesn't
 // exist it never holds, and a max of 0 turns it off.
@@ -92,5 +96,5 @@ func loaded(proc string, cores int, max float64) string {
 	if err != nil || l/float64(cores) <= max {
 		return ""
 	}
-	return fmt.Sprintf("machine loaded (load %.0f on %d cores, limit %g per core)", l, cores, max)
+	return fmt.Sprintf("%s (load %.0f on %d cores, limit %g per core)", LoadedReason, l, cores, max)
 }
