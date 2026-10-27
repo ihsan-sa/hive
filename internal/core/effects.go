@@ -535,7 +535,12 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.Output = err.Error()
 		return c // not recorded: no sandbox is not a verdict on the commit
 	}
-	defer e.Slots.Acquire(p.Name, sha, kind)()
+	release, ok := e.Slots.Take(p.Name, sha, kind)
+	if !ok {
+		c.Output = "dropped from the check line before it started"
+		return c // not recorded: nobody wants its verdict any more
+	}
+	defer release()
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
 		c.Output = "could not make a clean checkout: " + err.Error()
@@ -831,6 +836,19 @@ func NoWorse(c, mc Check) bool {
 		}
 	}
 	return true
+}
+
+// MainTests is main's recorded test run at sha as both gates read it (the
+// work module's testing stage and Merge): a red run that a "retest" since
+// passed was a flake of a busy machine, and main counts as green there.
+func (e *Effects) MainTests(project, sha string) (Check, bool) {
+	c, ok := e.GetCheck(project, sha, "test")
+	if ok && !c.OK && c.CantRun == "" {
+		if rc, rok := e.GetCheck(project, sha, "retest"); rok && !rc.At.Before(c.At) && rc.CantRun == "" {
+			c.OK = rc.OK
+		}
+	}
+	return c, ok
 }
 
 // scoreOf reads the score from a score command's output: the last word of
@@ -1460,8 +1478,23 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		// a red main can land. Or red only in quarantined tests, which count
 		// against no head, as the forge's checks below.
 		if flaky = e.ExcusedLocal(p, m.Main, m.Task, ch.Files, c); len(flaky) == 0 {
-			if mc, ok := e.GetCheck(p.Name, m.Main, "test"); !ok || mc.OK || !NoWorse(c, mc) {
-				return "", refuse("%s: its test run is red beyond what main's own run at %s fails too (or main's has no record)", short(m.SHA), short(m.Main))
+			mc, ok := e.MainTests(p.Name, m.Main)
+			switch {
+			case !ok:
+				return "", refuse("%s: its test run is red, and main has no recorded test run at %s to say whether it is red there too", short(m.SHA), short(m.Main))
+			case mc.OK:
+				return "", refuse("%s: its test run is red where main's own passes at %s", short(m.SHA), short(m.Main))
+			case !NoWorse(c, mc):
+				mains, beyond := RedKeys(mc.FullOutput()), []string{}
+				for _, k := range RedKeys(c.FullOutput()) {
+					if !slices.Contains(mains, k) {
+						beyond = append(beyond, k)
+					}
+				}
+				if len(beyond) == 0 {
+					beyond = []string{"a failure no test name accounts for"}
+				}
+				return "", refuse("%s: its test run fails beyond what main's own run at %s fails too (%s)", short(m.SHA), short(m.Main), Clip(strings.Join(beyond, ", "), 300))
 			}
 		}
 	}

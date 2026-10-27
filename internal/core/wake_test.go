@@ -3,6 +3,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -159,5 +160,20 @@ func TestTheSamePromptTwiceMidTurnTakesNoSecondTurn(t *testing.T) {
 		if tc.want == StatusIdle && len(got.Pending) != 1 {
 			t.Errorf("%q sent twice mid-turn: %d pending, want it once", tc.second, len(got.Pending))
 		}
+	}
+}
+
+// A running run asked to stop still says it stays stopped when the prompt
+// it is working on is sent again: the dedupe doesn't hide the stop.
+func TestTheSamePromptToARunAskedToStopSaysItStaysStopped(t *testing.T) {
+	c, _ := testHive(t)
+	c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker"})
+	if err := c.Runs.Reopen("w1", "main moved"); err != nil {
+		t.Fatal(err)
+	}
+	c.J.MustAppend("run.turn_started", turnStarted{ID: "w1", Turn: 1, Delivered: 1})
+	c.J.MustAppend("run.stop", runNote{ID: "w1"})
+	if err := c.Runs.Reopen("w1", "main moved"); err == nil || !strings.Contains(err.Error(), "stays stopped") {
+		t.Errorf("the same prompt to a running run asked to stop: %v, want it stays stopped", err)
 	}
 }
