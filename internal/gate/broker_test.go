@@ -82,7 +82,7 @@ func sideEnv(t *testing.T, m *Meter, b *Broker) []string {
 	if err := b.WriteTrust(trust); err != nil {
 		t.Fatal(err)
 	}
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "XDG_CONFIG_HOME=" + filepath.Join(dir, ".config"),
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "TMPDIR=" + dir, // gh caches answers under TMPDIR "XDG_CONFIG_HOME=" + filepath.Join(dir, ".config"),
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GH_NO_UPDATE_NOTIFIER=1", "GH_HOST=github.com"}
 	env = append(env, m.Env(false)...)
 	return append(env, TrustEnv(trust)...)
@@ -111,8 +111,15 @@ func gitHubAnswers(r *http.Request, body []byte) (int, string) {
 			return 200, `{"data":{"node":null}}`
 		}
 		return 200, `{"data":{"node":{"__typename":"PullRequest","repository":{"nameWithOwner":"` + where + `"}}}}`
-	case strings.Contains(q.Query, "__type"):
-		return 200, `{"data":{"PullRequest":{"fields":[{"name":"id"}]},"StatusCheckRollupContextConnection":{"fields":[]},"WorkflowRun":{"fields":[]}}}`
+	case strings.Contains(q.Query, ": __type("):
+		// only the types asked for: gh refuses an answer with more
+		var types []string
+		for _, n := range []string{"PullRequest", "StatusCheckRollupContextConnection", "WorkflowRun"} {
+			if strings.Contains(q.Query, n+": __type") {
+				types = append(types, `"`+n+`":{"fields":[{"name":"id"}]}`)
+			}
+		}
+		return 200, `{"data":{` + strings.Join(types, ",") + `}}`
 	case strings.Contains(q.Query, "RepositoryInfo"):
 		return 200, `{"data":{"repository":{"id":"R_cand","name":"gate-x-candidate","owner":{"login":"Hive-RSI-Lab"},"viewerPermission":"ADMIN","defaultBranchRef":{"name":"main"},"parent":null,"mergeCommitAllowed":true,"squashMergeAllowed":true,"rebaseMergeAllowed":true}}}`
 	case strings.Contains(q.Query, "createPullRequest"):
