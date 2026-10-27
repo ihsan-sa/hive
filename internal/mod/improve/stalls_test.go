@@ -184,18 +184,43 @@ func TestRetryHint(t *testing.T) {
 	}
 }
 
-// A merged task's change is on main: the watcher leaves it be, however long
-// it sits there, as a recheck of it is refused ("task is merged").
+// A merged task's change is on main: the watcher leaves it be past the
+// other stages' limit, as a recheck of it is refused ("task is merged").
 func TestMergedTaskIsNotAStall(t *testing.T) {
 	m := rig(t)
 	m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: work.StageMerged, MergeSHA: "abc"})
 	m.mu.Lock()
-	m.spells["t0"] = spell{stage: work.StageMerged, since: time.Now().Add(-2 * time.Hour)}
+	m.spells["t0"] = spell{stage: work.StageMerged, since: time.Now().Add(-40 * time.Minute)}
 	m.mu.Unlock()
 	m.Watch()
 	m.Watch()
 	if s := m.Stalls(); len(s) != 0 {
 		t.Fatalf("stalls = %+v, want none for a merged task", s)
+	}
+}
+
+// One left in merged far past any normal time (a follow-up brief that never
+// files) goes to the lead once, in its own words: no recheck, nor its hint.
+func TestMergedTaskLeftLongGoesToTheLead(t *testing.T) {
+	m := rig(t)
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: work.StageMerged, MergeSHA: "abcdef0123"})
+	m.mu.Lock()
+	m.spells["t0"] = spell{stage: work.StageMerged, since: time.Now().Add(-2 * time.Hour)}
+	m.mu.Unlock()
+	m.Watch()
+	m.Watch()
+	saved := 0
+	for _, e := range m.C.J.Since(0) {
+		if e.Kind == "stall.saved" {
+			saved++
+		}
+	}
+	s := m.Stalls()
+	if saved != 1 || len(s) != 1 || !s[0].Told || s[0].Rechecked || !strings.Contains(s[0].Did, "follow-up") || strings.Contains(s[0].Did, "retried") {
+		t.Fatalf("stalls = %+v (%d saved), want one handoff to the lead naming the follow-up step", s, saved)
+	}
+	if tk, _ := m.Work.Get("t0"); tk.Stage != work.StageMerged {
+		t.Fatalf("stage = %s, want it left in merged", tk.Stage)
 	}
 }
 

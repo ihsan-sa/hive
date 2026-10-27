@@ -171,12 +171,12 @@ func (m *Module) Watch() {
 	}
 	waits := map[string]*group{}
 	var causes []string
-	// A merged task's change is on main: what is left (its follow-up brief,
-	// then done) is the Hive's bookkeeping, which a recheck can't retry.
-	for _, t := range m.Work.List(func(t work.Task) bool {
-		return !t.Terminal() && t.Stage != work.StagePerson && t.Stage != work.StageMerged
-	}) {
+	for _, t := range m.Work.List(func(t work.Task) bool { return !t.Terminal() && t.Stage != work.StagePerson }) {
 		now["task:"+t.ID] = t.Stage
+		if t.Stage == work.StageMerged {
+			m.judgeMerged(t, floor)
+			continue
+		}
 		// The recursive gate runs on its own clock, as many at once as the machine carries.
 		if t.Queued() || strings.HasPrefix(t.Reason, work.GateWait) || slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == checked(t) }) {
 			continue
@@ -308,6 +308,34 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 	if s.Told {
 		m.Chat.Notify(chat, thread, "Stuck: "+text+retryHint(s.Key))
 	}
+}
+
+// judgeMerged tells the lead, once, of a task left in merged far past the
+// stage's usual time. Its change is on main: what is left (its follow-up
+// brief, then done) is the Hive's bookkeeping, which neither a turn restart
+// nor a recheck can retry, so the watcher does neither and says so.
+func (m *Module) judgeMerged(t work.Task, floor time.Duration) {
+	key := "task:" + t.ID
+	m.mu.Lock()
+	sp, took, old := m.spells[t.ID], append([]float64(nil), m.took[work.StageMerged]...), m.stalls[key]
+	m.mu.Unlock()
+	if old != nil && old.Stage == work.StageMerged && old.Moved.IsZero() {
+		return // told already
+	}
+	since := sp.since
+	if sp.stage != work.StageMerged || since.IsZero() {
+		since = t.Updated
+	}
+	limit := StallLimit(took, 3*floor) // it takes a tick or two: this is far past that
+	if time.Since(since) < limit {
+		return
+	}
+	s := Stall{Key: key, What: fmt.Sprintf("%q", t.Label()), Project: t.Project, Stage: work.StageMerged, Since: since,
+		Limit: limit.Seconds(), Samples: len(took), Tries: 1, Told: true, At: time.Now().UTC()}
+	s.Did = "handed it to the lead at " + s.At.Local().Format("15:04") + ": its change is on main at " + core.Short(t.MergeSHA) +
+		", but the step that files its follow-up and takes it to done hasn't finished; a recheck can't retry a merged task, so look at what holds that step"
+	m.C.J.MustAppend("stall.saved", s)
+	m.Chat.Notify(t.Chat, t.Thread, "Stuck after merging: "+m.alertStall(s))
 }
 
 // recheck retries a stuck task from its branch's head, as the lead's
