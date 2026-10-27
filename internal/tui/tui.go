@@ -154,6 +154,7 @@ type tickMsg time.Time
 type outMsg struct {
 	n                  int
 	chat, thread, text string
+	had                int // the thread's messages from the person with this text when it was sent
 }
 type sentMsg struct {
 	out outMsg
@@ -787,10 +788,23 @@ func withMsg(msgs []chat.Message, msg chat.Message) []chat.Message {
 	return append(msgs, msg)
 }
 
+// echoes counts the person's messages in o's thread that read as o, so a
+// read that already has it hides its "sending…" line.
+func (m *model) echoes(o outMsg) int {
+	n := 0
+	for _, x := range m.msgs[o.chat] {
+		if x.Thread == o.thread && x.From == "person" && x.Text == o.text {
+			n++
+		}
+	}
+	return n
+}
+
 // send posts at once; a reply shows as sending until the Hive answers.
 func (m *model) send(text string) tea.Cmd {
 	m.sent++
 	o := outMsg{n: m.sent, chat: m.chat, thread: m.reply, text: text}
+	o.had = m.echoes(o)
 	files := m.files
 	m.files, m.composeN = nil, m.composeN+1 // a clipboard read still running was for the sent message
 	m.drafts[o.chat+"\x00"+o.thread] = ""

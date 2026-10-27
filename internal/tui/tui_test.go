@@ -1440,3 +1440,31 @@ func TestSentMessageShowsOnce(t *testing.T) {
 		t.Fatalf("a failed read wiped the chat: %d messages", n)
 	}
 }
+
+// A reply the thread already has shows once, not again as sending.
+func TestSendingLineGoesWhenTheReplyIsIn(t *testing.T) {
+	m := testModel(80, 24)
+	m.thread, m.focus = "1", 2
+	m.focusBox("1")
+	m.input.SetValue("on it")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m.View(), "sending") {
+		t.Fatal("no sending line")
+	}
+	m.Update(chatMsg{id: "lead", msgs: append(append([]chat.Message(nil), m.msgs["lead"]...), chat.Message{ID: "9", Thread: "1", From: "person", Text: "on it", At: time.Now()})})
+	if strings.Contains(m.View(), "sending") {
+		t.Fatal("the reply shows twice: in the thread and as sending")
+	}
+}
+
+// Opening another thread starts it at its newest, not where the last was scrolled.
+func TestAnotherThreadOpensAtItsNewest(t *testing.T) {
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.thread, m.thScroll, m.threadSel = "0", 50, 1
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.thread != "1" || m.thScroll != 0 {
+		t.Fatalf("thread %q scroll %d", m.thread, m.thScroll)
+	}
+}
