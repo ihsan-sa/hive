@@ -389,6 +389,7 @@ func (m *Module) baseline(p core.Project) {
 		m.mu.Unlock()
 		return
 	}
+	defer m.Work.MeasuringMain(p.Name, main)() // its checks go ahead of the PRs'
 	cfg := m.C.Effects.Config(p, main)
 	ok, score, note, cant := m.measure(p, main)
 	ms := Measurement{Project: p.Name, SHA: main, TestsOK: ok, Score: score, Note: "start: " + note, Version: m.version(p, main, cfg), NoResult: cant.CantRun != ""}
@@ -710,6 +711,7 @@ func (m *Module) afterMerge(t work.Task) {
 		m.C.J.MustAppend("score.covered", Covered{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, By: by.SHA, Red: !by.Kept})
 		return
 	}
+	defer m.Work.MeasuringMain(p.Name, t.MergeSHA)() // keep/revert, the release and the next baseline wait on it
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
 	ok, score, note, cant := m.measure(p, t.MergeSHA)
 	switch {

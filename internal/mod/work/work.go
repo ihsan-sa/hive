@@ -360,6 +360,9 @@ type Module struct {
 	// cantRunOpen holds, per project, the kind of check (test or score) its open
 	// "can't run" alert is about: raised once, cleared when that check runs.
 	cantRunOpen map[string]string
+	// measuring counts, per project@sha, the measurements of main running
+	// now (MeasuringMain), whose checks go first (pace.go).
+	measuring map[string]int
 	// later is when a held task (waiting on the forge's checks or an outside
 	// read) is next looked at; kept in memory, so a restart looks at once.
 	// Guarded by mu: due reads it with mu held, hold takes mu itself.
@@ -402,7 +405,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, defCache: map[string]defEntry{}, baseTrees: map[string]map[string]string{}, mainTips: map[string]string{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, areaCache: map[string]areaEntry{}, editCache: map[string]editEntry{}, defCache: map[string]defEntry{}, baseTrees: map[string]map[string]string{}, mainTips: map[string]string{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	m.checks.loadCuts, m.gates.loadCuts = true, true // their builds and child Hives make the load
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
