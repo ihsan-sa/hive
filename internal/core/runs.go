@@ -431,6 +431,7 @@ type Runs struct {
 	starting                 map[string]bool // runs with a launch in flight
 	deferred                 map[string]int  // ticks a run's launch has waited behind leads', in a row
 	passing                  bool            // a tick's pass over the other runs is waiting for the leads' steps
+	leadWait                 time.Duration   // how long the other runs wait for the leads' steps (0: 5s)
 	self                     proc.Handle     // this daemon, as a turn's claimant (claim.go)
 	backedOff                map[string]int  // the turn each run last backed off from for another daemon's claim, said once
 	turnLive                 map[string]int  // the turn each run last waited on its own last turn for, said once
@@ -1431,9 +1432,11 @@ func (rs *Runs) Tick(cfg Config) {
 		go func() { wg.Wait(); close(leads) }()
 		select {
 		case <-leads:
-		case <-time.After(5 * time.Second):
+		case <-time.After(rs.leadWaitOr()):
 			// The busy map keeps a run from being stepped twice, so this only
-			// says, in daemon.log, which lead's step is slow.
+			// says, in daemon.log, which lead's step is slow. It is said once
+			// a stall: a later tick can't claim the hung lead, so its pass
+			// has no lead to wait for and goes at once.
 			rs.mu.Lock()
 			var slow []string
 			for _, r := range live {
@@ -1442,7 +1445,7 @@ func (rs *Runs) Tick(cfg Config) {
 				}
 			}
 			rs.mu.Unlock()
-			log.Printf("runs: a lead's step is still going after 5s (%s); the other runs step now", strings.Join(slow, ", "))
+			log.Printf("runs: a lead's step is still going after %s (%s); the other runs step now", rs.leadWaitOr(), strings.Join(slow, ", "))
 		}
 		for _, r := range rs.List(func(r *Run) bool { return !r.Lead() && (!r.Terminal() || r.Status == StatusRunning) }) {
 			rs.stepAsync(r, cfg, nil)
@@ -1456,6 +1459,15 @@ func (rs *Runs) Tick(cfg Config) {
 		}
 		rs.mu.Unlock()
 	}()
+}
+
+// leadWaitOr is how long a tick's pass over the other runs waits for the
+// leads' steps before it goes ahead of a slow one.
+func (rs *Runs) leadWaitOr() time.Duration {
+	if rs.leadWait > 0 {
+		return rs.leadWait
+	}
+	return 5 * time.Second
 }
 
 // stepAsync steps a listed run in its own goroutine once it claims it
