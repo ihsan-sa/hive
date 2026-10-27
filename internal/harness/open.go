@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -88,17 +87,19 @@ func (OpenClaude) LoginCommand() []string { return nil }
 func (OpenClaude) Args(t Turn) []string {
 	t.MaxBudgetUSD = 0 // Claude Code would price the vendor's tokens as Claude's
 	a := Claude{}.Args(t)
-	for i := range a[:len(a)-1] {
-		if a[i] == "--setting-sources" {
-			a[i+1] = ""
-		}
-	}
 	set := map[string]any{"disableAllHooks": true, "env": map[string]string{"ANTHROPIC_BASE_URL": strings.TrimSuffix(t.Endpoint, "/")}}
 	if t.KeyCommand != "" {
 		set["apiKeyHelper"] = t.KeyCommand
 	}
-	s, _ := json.Marshal(set)
-	return append(a, "--settings", string(s))
+	for i := range a[:len(a)-1] {
+		switch a[i] {
+		case "--setting-sources":
+			a[i+1] = ""
+		case "--settings":
+			a[i+1] = claudeSettings(set)
+		}
+	}
+	return a
 }
 
 func (OpenClaude) Env(t Turn) []string {
