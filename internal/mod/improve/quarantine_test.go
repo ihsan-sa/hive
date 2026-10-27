@@ -212,14 +212,15 @@ func TestQuarantineSkipsBrokenRuns(t *testing.T) {
 	m := rig(t)
 	pkg := "github.com/x/hive/internal/core::"
 	key := pkg + "TestPrefetch"
-	gone := "--- FAIL: TestPrefetch (0.01s)\n    disk_test.go:318: go env: exit status 1 cannot determine current directory: getwd: no such file or directory\nFAIL\n"
+	gone := "--- FAIL: TestPrefetch (0.01s)\n    disk_test.go:318: go env: exit status 1 cannot determine current directory: getwd: no such file or directory\n" +
+		"--- FAIL: TestPrefetchB (0.01s)\n    disk_test.go:330: exit status 128: sh: 0: getcwd() failed: No such file or directory\nFAIL\n"
 	var many []string
 	for i := range 12 {
 		many = append(many, pkg+"TestMany"+string(rune('A'+i)))
 	}
 	for _, id := range []string{"t1", "t2"} {
 		m.C.J.MustAppend("task.saved", work.Task{ID: id, Project: "hive", Title: "work " + id, SHA: "head" + id})
-		m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "head" + id, Kind: "test", Output: gone, Failed: []string{"TestPrefetch"}, Keys: []string{key}, At: time.Now().UTC()})
+		m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "head" + id, Kind: "test", Output: gone, Failed: []string{"TestPrefetch", "TestPrefetchB"}, Keys: []string{key, pkg + "TestPrefetchB"}, At: time.Now().UTC()})
 		m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "head" + id, Kind: "retest", Output: "FAIL\n", Keys: many, At: time.Now().UTC()})
 		sight(m, id, "https://ci/"+id, "TestA", "TestB", "TestC", "TestD", "TestE", "TestF", "TestG", "TestH", "TestI", "TestJ", "TestK")
 	}
@@ -232,16 +233,39 @@ func TestQuarantineSkipsBrokenRuns(t *testing.T) {
 		t.Fatalf("a broken run on main quarantined %v", q)
 	}
 
-	stale, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + key, Done: "d", Known: "k"})
-	kept, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + pkg + "TestOther", Done: "d", Known: "k"})
+	// A test that failed once in a broken run is a real flake's when its
+	// brief names another red: TestPrefetchB's brief stays.
+	known := "Where it failed:\n- 10-27 01:00: task t1 at headt1, check local test\n- 10-27 01:05: task t2 at headt2, check local test"
+	stale, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + key, Done: "d", Known: known})
+	kept, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + pkg + "TestOther", Done: "d", Known: known})
+	real, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + pkg + "TestPrefetchB", Done: "d", Known: "- 10-26 01:00: task t1 at headt1, check local test\n- 10-26 03:00: task t9 at abcdef12, check ci"})
 	m.fileQuarantined()
-	if n := len(m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) })); n != 2 {
-		t.Fatalf("%d fix tasks, want only the two filed by hand", n)
+	if n := len(m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) })); n != 3 {
+		t.Fatalf("%d fix tasks, want only the three filed by hand", n)
+	}
+	if got, _ := m.Work.Get(real.ID); got.Terminal() {
+		t.Fatalf("a brief with a red outside broken runs was taken back: %s", got.Reason)
 	}
 	if got, _ := m.Work.Get(stale.ID); !got.Withdrawn() {
 		t.Fatalf("the brief filed on broken runs is %s (%s), want withdrawn", got.Stage, got.Reason)
 	}
 	if got, _ := m.Work.Get(kept.ID); got.Terminal() {
 		t.Fatalf("a brief for a test no broken run took down was taken back: %s", got.Reason)
+	}
+}
+
+// A sign of a broken environment in one test's failure block is that test
+// failing (a git test of the Hive's own may print it); outside any block, or
+// in two tests' blocks, it is the run's environment.
+func TestBrokenRunReadsWhereTheSignIs(t *testing.T) {
+	one := "--- FAIL: TestGitWorkTree (0.01s)\n    git_test.go:40: fatal: this operation must be run in a work tree\nFAIL\n"
+	if brokenRun(one) {
+		t.Fatal("one test's own git failure read as a broken run")
+	}
+	if !brokenRun("sh: 0: getcwd() failed: No such file or directory\n" + one) {
+		t.Fatal("a sign outside any test's block not read as a broken run")
+	}
+	if !brokenRun(one + "--- FAIL: TestOther (0.01s)\n    x_test.go:9: go env: cannot determine current directory\nFAIL\n") {
+		t.Fatal("a sign in two tests' blocks not read as a broken run")
 	}
 }
