@@ -85,13 +85,14 @@ type model struct {
 	closed    map[string]bool  // collapsed project groups
 	msgs      map[string][]chat.Message
 	input     textarea.Model
-	composing bool              // keys go to the text box
-	files     []chat.File       // attached to the message being written
-	composeN  int               // counts composes, so a clipboard read can't land in a later one
-	sent      int               // messages sent, to match answers
-	reply     string            // thread being replied to; "" = new thread
-	drafts    map[string]string // by chat and target
-	outbox    []outMsg          // sent, not yet answered
+	composing bool                      // keys go to the text box
+	files     []chat.File               // attached to the message being written
+	composeN  int                       // counts composes, so a clipboard read can't land in a later one
+	sent      int                       // messages sent, to match answers
+	reply     string                    // thread being replied to; "" = new thread
+	drafts    map[string]string         // by chat and target
+	outbox    []outMsg                  // sent, not yet answered
+	posted    map[string][]chat.Message // by chat: sent and answered, until a fetch of the chat has them
 
 	// dashboard: the live feed, or the status tree
 	feed     []feedRow
@@ -197,7 +198,7 @@ func newModel(c *api.Client, ws core.Workspace) *model {
 	in.FocusedStyle.Placeholder, in.BlurredStyle.Placeholder = stDim, stDim
 	in.KeyMap.InsertNewline.SetKeys("ctrl+j", "alt+enter")
 	return &model{c: c, ws: ws, remote: c != nil && c.Remote(), open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
-		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, drafts: map[string]string{}, places: map[string]place{}, stages: map[string]string{}, input: in, threadSel: -1, feedSel: -1}
+		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, drafts: map[string]string{}, posted: map[string][]chat.Message{}, places: map[string]place{}, stages: map[string]string{}, input: in, threadSel: -1, feedSel: -1}
 }
 
 // sidePane: a pane is open beside the main one.
@@ -224,7 +225,9 @@ func (m *model) fetchChat(id string) tea.Cmd {
 	}
 	return func() tea.Msg {
 		var msgs []chat.Message
-		m.c.Do("GET", "/api/chat?id="+id, nil, &msgs)
+		if err := m.c.Do("GET", "/api/chat?id="+id, nil, &msgs); err != nil {
+			return nil // a failed read leaves the chat as it was, not empty
+		}
 		return chatMsg{id, msgs}
 	}
 }
@@ -365,7 +368,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash("✗ not sent · " + msg.err.Error())
 			return m, nil
 		}
-		m.msgs[msg.out.chat] = append(m.msgs[msg.out.chat], msg.msg) // a new thread stays in the channel; the person opens it
+		c := msg.out.chat                   // a new thread stays in the channel; the person opens it
+		if !hasMsg(m.msgs[c], msg.msg.ID) { // a fetch that came first has it already
+			m.msgs[c] = append(m.msgs[c], msg.msg)
+			m.posted[c] = append(m.posted[c], msg.msg)
+		}
 	case tickMsg:
 		return m, tea.Batch(m.fetchState(), m.fetchChat(m.currentChatID()), m.fetchDetail(), m.fetchFeed(), tick())
 	case stateMsg:
@@ -386,7 +393,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case feedMsg:
 		return m, m.addEvents(msg)
 	case chatMsg:
-		m.msgs[msg.id] = msg.msgs
+		m.msgs[msg.id] = m.keepPosted(msg.id, msg.msgs)
 	case runMsg:
 		m.runs[msg.d.Run.ID] = msg.d
 	case taskMsg:
@@ -672,21 +679,30 @@ func (m *model) keyInput(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus = 1
 			return m, m.markRead()
 		}
-	case "up":
-		if !m.editing && m.reply == "" && m.input.Value() == "" { // pick a thread
+	case "up", "down":
+		if m.editing || m.input.Value() != "" {
+			break
+		}
+		if m.reply != "" { // an empty reply box scrolls its thread
+			m.thScroll = scroll(m.thScroll, map[string]string{"up": "wheelup", "down": "wheeldown"}[s], m.h-4)
+			return m, nil
+		}
+		if s == "up" { // pick a thread
 			m.blurBox()
 			m.threadSel, m.chFree = len(threads(m.msgs[m.chat]))-1, false
 			return m, nil
 		}
-	case "pgup", "pgdown":
+	case "pgup", "pgdown", "ctrl+home", "ctrl+end":
+		if m.editing {
+			break
+		}
 		if m.reply != "" {
 			m.thScroll = scroll(m.thScroll, s, m.h-4)
 			return m, nil
 		}
-		if !m.editing { // the new-thread box scrolls the channel above it
-			m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
-			return m, nil
-		}
+		// the new-thread box scrolls the channel above it
+		m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
+		return m, nil
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		m.input.SetValue("")
@@ -757,6 +773,31 @@ func (m *model) send(text string) tea.Cmd {
 		err := m.c.Do("POST", "/api/chat", map[string]any{"chat": o.chat, "thread": o.thread, "text": text, "files": files}, &msg)
 		return sentMsg{o, msg, err}
 	}
+}
+
+// keepPosted adds to a fetched chat what was posted to it after the fetch
+// was read, so a sent message never drops off the screen and comes back.
+func (m *model) keepPosted(id string, msgs []chat.Message) []chat.Message {
+	var later []chat.Message
+	for _, p := range m.posted[id] {
+		if !hasMsg(msgs, p.ID) {
+			later = append(later, p)
+			msgs = append(msgs, p)
+		}
+	}
+	if m.posted[id] = later; len(later) == 0 {
+		delete(m.posted, id)
+	}
+	return msgs
+}
+
+func hasMsg(msgs []chat.Message, id string) bool {
+	for _, x := range msgs {
+		if x.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func flash(s string) tea.Cmd { return func() tea.Msg { return flashMsg(s) } }
@@ -923,15 +964,15 @@ func (m *model) keys() []string {
 	case m.focus == 0:
 		return []string{"↑↓", "move", "enter", "open", "space", "collapse", "tab", "switch pane", "q", "quit"}
 	case m.section == secChats && m.takeover():
-		return []string{"enter", "send", "ctrl+j", "newline", "esc", "back to chat", imageKey, "image"}
+		return []string{"enter", "send", "↑↓", "scroll", "ctrl+j", "newline", "esc", "back to chat", imageKey, "image"}
 	case m.section == secChats && m.focus == 2:
-		return []string{"enter", "send", "ctrl+j", "newline", "esc", "close thread", "← tab", "to the channel", "pgup pgdn", "scroll", imageKey, "image"}
+		return []string{"enter", "send", "↑↓", "scroll", "ctrl+j", "newline", "esc", "close thread", "← tab", "to the channel", imageKey, "image"}
 	case m.section == secChats && m.composing:
-		return []string{"enter", "start thread", "ctrl+j", "newline", "esc", "leave box", "↑", "pick a thread", "tab", "switch pane", imageKey, "image"}
+		return []string{"enter", "start thread", "ctrl+j", "newline", "esc", "leave box", "↑", "pick a thread", "ctrl+end", "newest", "tab", "switch pane", imageKey, "image"}
 	case m.section == secChats && m.thread != "":
-		return []string{"↑↓", "thread", "→", "to the open thread", "pgup pgdn", "scroll", "space", "collapse", "n", "new thread"}
+		return []string{"↑↓", "thread", "→", "to the open thread", "end", "newest", "pgup pgdn", "scroll", "space", "collapse", "n", "new thread"}
 	case m.section == secChats:
-		return []string{"↑↓", "thread", "enter", "open", "n", "new thread", "space", "collapse", "tab", "pane"}
+		return []string{"↑↓", "thread", "enter", "open", "n", "new thread", "end", "newest", "space", "collapse", "tab", "pane"}
 	case len(m.stack) > 0 && m.stack[len(m.stack)-1].kind == "module":
 		return []string{"↑↓", "project", "space", "grant or remove", "r", "review again", "esc", "back", "q", "quit"}
 	case len(m.stack) > 0:
@@ -980,8 +1021,8 @@ func helpLines() []string {
 		"/                 in Knowledge, search the knowledge base",
 		"ctrl+j            new line in a box",
 		fmt.Sprintf("%-18sin a box, attach the clipboard's image; paste or drop a file's path to attach it", imageKey),
-		"pgup pgdn, wheel  scroll; the wheel scrolls the pane under it",
-		"home end          the top or the end",
+		"pgup pgdn, wheel  scroll; the wheel scrolls the pane under it; ↑ ↓ in an empty reply box",
+		"home end          the top or the end; ctrl+home ctrl+end from a box too",
 		"q                 quit the control center; the Hive keeps working",
 		"", stDim.Render("any key to close")}
 }

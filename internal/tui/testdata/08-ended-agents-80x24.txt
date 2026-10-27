@@ -21,4 +21,4 @@
                   │  │ › Write to the lead of textkit-2…                      │
                   │  ╰────────────────────────────────────────────────────────╯
 ──────────────────┴─────────────────────────────────────────────────────────────
- ↑↓ thread   enter open   n new thread   space collapse   tab pane
+ ↑↓ thread   enter open   n new thread   end newest   space collapse   tab pane

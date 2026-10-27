@@ -21,4 +21,4 @@
 
 
 ────────────────────────────────────────────────────────────────────────────────
- enter send   ctrl+j newline   esc back to chat   alt+v image
+ enter send   ↑↓ scroll   ctrl+j newline   esc back to chat   alt+v image

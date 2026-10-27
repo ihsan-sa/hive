@@ -1337,3 +1337,102 @@ func TestSizeLine(t *testing.T) {
 		t.Fatal("no size measured should show no line")
 	}
 }
+
+// An empty reply box's ↑↓ scroll its thread, ctrl+home and ctrl+end jump,
+// and a thread scrolled up says how to get back down.
+func TestThreadScrollsFromItsBox(t *testing.T) {
+	for _, w := range []int{80, 160} { // over the screen, and beside the channel
+		m := testModel(w, 20)
+		m.Update(tea.KeyMsg{Type: tea.KeyRight})
+		m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		m.Update(tea.KeyMsg{Type: tea.KeyUp})
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if m.focus != 2 || !m.composing || m.reply == "" {
+			t.Fatalf("%d: the reply box has no keys", w)
+		}
+		m.View()
+		m.Update(tea.KeyMsg{Type: tea.KeyUp})
+		if m.View(); m.thScroll != 3 {
+			t.Fatalf("%d: up in an empty box: scroll %d, want 3", w, m.thScroll)
+		}
+		if !strings.Contains(m.View(), "more below") {
+			t.Fatalf("%d: scrolled up with no word of what's below", w)
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		if m.thScroll != 0 || strings.Contains(m.View(), "more below") {
+			t.Fatalf("%d: down came back to %d", w, m.thScroll)
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyCtrlHome})
+		if v := m.View(); m.thScroll == 0 || !strings.Contains(v, "please do") {
+			t.Fatalf("%d: ctrl+home did not reach the thread's first message:\n%s", w, v)
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyCtrlEnd})
+		if m.thScroll != 0 {
+			t.Fatalf("%d: ctrl+end left scroll at %d", w, m.thScroll)
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+		m.Update(tea.KeyMsg{Type: tea.KeyUp})
+		if m.thScroll != 0 {
+			t.Fatalf("%d: up with text in the box scrolled the thread", w)
+		}
+	}
+}
+
+// End, G and ctrl+end take the channel to its newest message from the
+// channel or its box, and never open a thread.
+func TestChannelJumpsToTheBottom(t *testing.T) {
+	for _, k := range []tea.KeyMsg{{Type: tea.KeyEnd}, {Type: tea.KeyCtrlEnd}, {Type: tea.KeyRunes, Runes: []rune("G")}} {
+		m := testModel(80, 20)
+		m.Update(tea.KeyMsg{Type: tea.KeyRight})
+		m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		m.Update(tea.KeyMsg{Type: tea.KeyCtrlHome})
+		if v := m.View(); strings.Contains(v, "pull/3") || !strings.Contains(v, "more below") {
+			t.Fatalf("ctrl+home did not leave the end:\n%s", v)
+		}
+		m.Update(k)
+		if v := m.View(); !strings.Contains(v, "pull/3") || m.thread != "" || m.composing {
+			t.Fatalf("%s: not at the newest, or opened something (thread %q):\n%s", k, m.thread, v)
+		}
+	}
+	m := testModel(80, 20)
+	m.Update(tea.KeyMsg{Type: tea.KeyRight}) // the new-thread box
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlEnd})
+	if v := m.View(); !strings.Contains(v, "pull/3") || !m.composing {
+		t.Fatalf("ctrl+end from the box:\n%s", v)
+	}
+}
+
+// A sent message shows once, whether a fetch of the chat arrives before
+// the send's answer (and has it) or after it (and doesn't yet).
+func TestSentMessageShowsOnce(t *testing.T) {
+	sent := chat.Message{ID: "9", Thread: "9", From: "person", Name: "you", Text: "only once", At: time.Now()}
+	count := func(m *model) int {
+		n := 0
+		for _, x := range m.msgs["lead"] {
+			if x.ID == "9" {
+				n++
+			}
+		}
+		return n
+	}
+	m := testModel(80, 24)
+	before := append([]chat.Message{}, m.msgs["lead"]...)
+	m.Update(chatMsg{"lead", append(append([]chat.Message{}, before...), sent)}) // the fetch saw the post
+	m.Update(sentMsg{out: outMsg{chat: "lead", text: "only once"}, msg: sent})
+	if n := count(m); n != 1 {
+		t.Fatalf("fetch first: shown %d times", n)
+	}
+	m = testModel(80, 24)
+	m.Update(sentMsg{out: outMsg{chat: "lead", text: "only once"}, msg: sent})
+	m.Update(chatMsg{"lead", append([]chat.Message{}, before...)}) // read before the post landed
+	if n := count(m); n != 1 {
+		t.Fatalf("stale fetch after: shown %d times", n)
+	}
+	m.Update(chatMsg{"lead", append(append([]chat.Message{}, before...), sent)})
+	m.Update(chatMsg{"lead", append(append([]chat.Message{}, before...), sent)})
+	if n := count(m); n != 1 || len(m.posted) != 0 {
+		t.Fatalf("fetched: shown %d times, %d chats still held", n, len(m.posted))
+	}
+}

@@ -484,7 +484,7 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "esc", "left", "h":
 		m.focus = 0
-	case "pgup", "pgdown", "home", "end":
+	case "pgup", "pgdown", "home", "end", "ctrl+home", "ctrl+end", "g", "G":
 		m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
 	case "n", "i":
 		return m, m.focusBox("")
@@ -528,10 +528,10 @@ func scroll(off int, key string, page int) int {
 		return off + map[string]int{"pgup": page - 2, "wheelup": 3}[key]
 	case "pgdown", "wheeldown":
 		return max(0, off-map[string]int{"pgdown": page - 2, "wheeldown": 3}[key])
-	case "home":
+	case "home", "ctrl+home", "g":
 		return 1 << 20
 	}
-	return 0
+	return 0 // end: the newest line
 }
 
 // focusBox points the one text box at a target, a new thread in this chat
@@ -656,7 +656,8 @@ func (m *model) viewChannel(w int) pane {
 
 // stack puts a box under the content: right after it when both fit (or on
 // the last rows, bottom set), else on the last rows with the content scrolled
-// (off lines up from its end, kept so lines [s0,s1) show).
+// (off lines up from its end, kept so lines [s0,s1) show), its last row then
+// saying there is more below when it was scrolled by hand.
 func stack(lines, bx []string, h int, off *int, s0, s1 int, bottom bool) []string {
 	for i := range bx {
 		bx[i] = "  " + bx[i]
@@ -680,7 +681,11 @@ func stack(lines, bx []string, h int, off *int, s0, s1 int, bottom bool) []strin
 		}
 		*off = len(lines) - end
 	}
-	return append(lines[end-room:end], bx...)
+	shown := append([]string{}, lines[end-room:end]...)
+	if *off > 0 && s1 <= s0 && room > 1 { // scrolled up by hand: say there's more, and the way down
+		shown[room-1] = "   " + stDim.Render("↓ more below · ctrl+end")
+	}
+	return append(shown, bx...)
 }
 
 func (m *model) viewThread(w int) pane {
