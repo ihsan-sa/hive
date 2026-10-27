@@ -87,16 +87,14 @@ func (g *rig) decide(req Request, args map[string]string) error {
 	return err
 }
 
-// settle waits for a request to leave the given states.
+// settle waits for a request to leave the given states. The answer handler
+// and the step's script run on their own goroutines, and on a loaded check
+// machine they took longer than 4s, so it waits as long as eventually.
 func (g *rig) settle(id string, from ...string) Request {
-	for i := 0; i < 200; i++ {
-		r, _ := g.m.get(id)
-		if !contains(from, r.State) {
-			return r
-		}
-		time.Sleep(20 * time.Millisecond)
+	var r Request
+	if eventually(func() bool { r, _ = g.m.get(id); return !contains(from, r.State) }) {
+		return r
 	}
-	r, _ := g.m.get(id)
 	g.t.Fatalf("request %s stuck in %s", id, r.State)
 	return r
 }
@@ -110,7 +108,6 @@ func contains(l []string, s string) bool {
 	return false
 }
 
-// eventually polls ok for up to four seconds.
 // eventually waits up to a minute for ok: a module's install clones and
 // builds, which on a slow, throttled machine took longer than 4s.
 func eventually(ok func() bool) bool {

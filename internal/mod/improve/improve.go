@@ -36,11 +36,16 @@ type Measurement struct {
 	Kept    bool     `json:"kept"`
 	// NoResult says the check couldn't start (a tool it calls is missing), so
 	// this is neither kept nor a failure, and main is measured again later.
-	NoResult bool      `json:"no_result,omitempty"`
-	Best     *float64  `json:"best,omitempty"`    // best kept after this measure
-	Version  string    `json:"version,omitempty"` // the score's version (Effects.ScoreVersion); a new one starts a new baseline
-	Note     string    `json:"note"`
-	At       time.Time `json:"at"`
+	NoResult bool     `json:"no_result,omitempty"`
+	Best     *float64 `json:"best,omitempty"` // best kept after this measure
+	// Against is main where the best kept score was read, measured again
+	// right after this one when this one read past the tolerance below the
+	// best: under the same load, so a fall is judged against it (#1343).
+	Against    *float64  `json:"against,omitempty"`
+	AgainstSHA string    `json:"against_sha,omitempty"`
+	Version    string    `json:"version,omitempty"` // the score's version (Effects.ScoreVersion); a new one starts a new baseline
+	Note       string    `json:"note"`
+	At         time.Time `json:"at"`
 	// Size is what the project's size command printed ("name value" lines),
 	// for the Hive itself the core's size (docs/core.md): shown, never judged.
 	Size map[string]float64 `json:"size,omitempty"`
@@ -290,6 +295,47 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 		return true, nil, flaky + "score did not produce a number: " + core.Clip(sc.Output, 600), cant
 	}
 	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score), cant
+}
+
+// bestAt is the commit the best kept score was read at: the newest kept
+// measurement that scored it, itself or main measured again beside it. A
+// fall is judged there, not at the last kept merge, so small falls kept one
+// after another can't walk the baseline down.
+func (m *Module) bestAt(project string, best float64) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ms := m.scores[project]
+	for i := len(ms) - 1; i >= 0; i-- {
+		switch x := ms[i]; {
+		case !x.Kept:
+		case x.Score != nil && *x.Score == best:
+			return x.SHA
+		case x.Against != nil && *x.Against == best:
+			return x.AgainstSHA
+		}
+	}
+	for i := len(ms) - 1; i >= 0; i-- {
+		if ms[i].Kept && ms[i].Best != nil {
+			return ms[i].SHA
+		}
+	}
+	return ""
+}
+
+// scoreNow measures the score at sha, a commit already kept, again now, so
+// a merge's reading is compared with one taken under the same load. It is
+// false when there is no number, and the stored best stands.
+func (m *Module) scoreNow(p core.Project, sha string) (float64, bool) {
+	cfg := m.C.Effects.Config(p, sha)
+	if cfg.Score == nil || sha == "" {
+		return 0, false
+	}
+	defer m.Work.MeasuringMain(p.Name, sha)() // the merge's keep/revert waits on it
+	sc := m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
+	if sc.CantRun != "" || !sc.OK || sc.Score == nil {
+		return 0, false
+	}
+	return *sc.Score, true
 }
 
 // SelfSize is the Hive's own size command, run for a self project whose
@@ -765,6 +811,25 @@ func (m *Module) afterMerge(t work.Task) {
 	case cfg.Score != nil && score == nil:
 		worse, reason = true, "the score stopped producing a number"
 	case cfg.Score != nil && hasBest && !cfg.Score.WithinTolerance(*score, best):
+		// The score is speed, so it moves with the machine's load (issue
+		// #1343): the best may have been read under a lighter one. Main as
+		// it was kept, measured again now, says whether this merge fell.
+		at := m.bestAt(p.Name, best)
+		if now, ok := m.scoreNow(p, at); ok {
+			ms.Against, ms.AgainstSHA = &now, at
+			if cfg.Score.WithinTolerance(*score, now) {
+				b := cfg.Score.Best(*score, now)
+				ms.Kept, ms.Best = true, &b
+				ms.Note = fmt.Sprintf("kept: %g is under the best kept %g, but main where it was read (%s) scores %g measured now, so the fall is the machine's load; the baseline is %g from here; %s", *score, best, core.Short(at), now, b, note)
+				m.record(ms)
+				if m.OnKept != nil {
+					m.OnKept(p.Name, t.MergeSHA)
+				}
+				return
+			}
+			worse, dip, reason = true, true, fmt.Sprintf("the score fell to %g from %g, main where the best kept %g was read (%s) measured right after it (tolerance %g)", *score, now, best, core.Short(at), cfg.Score.Tolerance)
+			break
+		}
 		worse, dip, reason = true, true, fmt.Sprintf("the score fell to %g from the best kept %g (tolerance %g)", *score, best, cfg.Score.Tolerance)
 	}
 	if dip && t.Kind != "revert" && t.Fix() {
