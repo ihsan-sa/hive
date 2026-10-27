@@ -54,16 +54,19 @@ func waitCause(reason string) string {
 	return work.HoldKey(reason)
 }
 
-// checked is the commit whose test t waits on in its stage: its head in
-// testing, its head merged with main in merging (work.mergedTests).
-func checked(t work.Task) string {
+// checked is the commits whose checks t waits on in its stage: its head in
+// testing, its head merged with main in merging (work.mergedTests), and
+// whatever its steps queued behind themselves (work.Checking): a head it has
+// since left, main's own test, a retest.
+func (m *Module) checked(t work.Task) []string {
+	shas := m.Work.Checking(t.ID)
 	switch {
 	case t.Stage == work.StageTesting:
-		return t.SHA
+		shas = append(shas, t.SHA)
 	case t.Stage == work.StageMerging && t.MergedTest != "":
-		return t.MergedTest
+		shas = append(shas, t.MergedTest)
 	}
-	return ""
+	return shas
 }
 
 // waitKey is the stall key of the wait a task in project and stage shares.
@@ -178,7 +181,8 @@ func (m *Module) Watch() {
 	}) {
 		now["task:"+t.ID] = t.Stage
 		// The recursive gate runs on its own clock, as many at once as the machine carries.
-		if t.Queued() || strings.HasPrefix(t.Reason, work.GateWait) || slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == checked(t) }) {
+		shas := m.checked(t)
+		if t.Queued() || strings.HasPrefix(t.Reason, work.GateWait) || slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && slices.Contains(shas, u.SHA) }) {
 			continue
 		}
 		if c := waitCause(t.Reason); c != "" && t.Stage != work.StageWorking && t.Stage != work.StageReviewing { // a run's own hang is still its own
@@ -206,11 +210,9 @@ func (m *Module) Watch() {
 		m.mu.Lock()
 		sp, took := m.spells[t.ID], append([]float64(nil), m.took[t.Stage]...)
 		m.mu.Unlock()
-		if sha := checked(t); sha != "" {
-			for _, u := range running {
-				if u.Project == t.Project && u.SHA == sha {
-					sp.since = latest(sp.since, u.Since)
-				}
+		for _, u := range running {
+			if u.Project == t.Project && slices.Contains(shas, u.SHA) {
+				sp.since = latest(sp.since, u.Since)
 			}
 		}
 		m.judge(Stall{Key: "task:" + t.ID, What: fmt.Sprintf("%q", t.Label()), Project: t.Project, Stage: t.Stage, Since: sp.since}, run, t.Chat, t.Thread, took, floor)

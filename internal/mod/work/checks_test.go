@@ -31,13 +31,22 @@ func mergeOnce(t *testing.T, m *Module, task *Task, p core.Project) {
 	if err := m.merge(task, p); err != nil {
 		t.Fatal(err)
 	}
-	if task.MergedTest != "" { // its merge with main is tested behind the step
+	for range 10 { // its merge with main, and main's own test, run behind the step
+		m.mu.Lock()
+		pending := m.pendingLocked(task.ID)
+		m.mu.Unlock()
+		if !pending {
+			return
+		}
 		m.Wait()
+		m.mu.Lock()
 		m.later = map[string]time.Time{}
+		m.mu.Unlock()
 		if err := m.merge(task, p); err != nil {
 			t.Fatal(err)
 		}
 	}
+	t.Fatal("the merge step still waits on its checks after 10 steps")
 }
 
 func prState(t *testing.T, f *core.Local, n int) string {
@@ -1671,23 +1680,26 @@ func TestForgeFailuresNamesTheTestedMain(t *testing.T) {
 	}
 }
 
-// testStep runs the test step and, when it queued the head's check behind
-// it, waits for the check and runs the step again to take the result.
+// testStep runs the test step and, while it queued checks behind it (the
+// head's, main's, a retest), waits for them and runs the step again to take
+// the results.
 func testStep(m *Module, task *Task, p core.Project) error {
-	if err := m.test(task, p); err != nil {
-		return err
+	for range 10 {
+		if err := m.test(task, p); err != nil {
+			return err
+		}
+		m.mu.Lock()
+		pending := m.pendingLocked(task.ID)
+		m.mu.Unlock()
+		if !pending {
+			return nil
+		}
+		m.Wait()
+		m.mu.Lock()
+		delete(m.later, task.ID)
+		m.mu.Unlock()
 	}
-	m.mu.Lock()
-	_, queued := m.testRuns[task.ID]
-	m.mu.Unlock()
-	if !queued {
-		return nil
-	}
-	m.Wait()
-	m.mu.Lock()
-	delete(m.later, task.ID)
-	m.mu.Unlock()
-	return m.test(task, p)
+	return errors.New("the test step still waits on its checks after 10 steps")
 }
 
 // Only the front of a project's merge line tests merged with main (issue

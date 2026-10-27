@@ -86,3 +86,15 @@ func (m *Module) dropTestRunLocked(id string) {
 		r.gone = true
 	}
 }
+
+// keepTestRun puts back the test of t's head (c) a step took, when the step
+// then waits on another check (main's, a retest): the step after takes it
+// again rather than queue the head's test anew.
+func (m *Module) keepTestRun(t *Task, c core.Check) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.testRuns == nil {
+		m.testRuns = map[string]*testRun{}
+	}
+	m.testRuns[t.ID] = &testRun{sha: t.SHA, done: true, c: c}
+}

@@ -315,10 +315,8 @@ type Module struct {
 
 	mu    sync.Mutex
 	tasks map[string]*Task
-	// retesting is held while main's red tests run once more (mainTests).
-	retesting sync.Mutex
-	busy      map[string]bool
-	aims      map[string]aimAsk // aims asked while a step held the task, set as it ends
+	busy  map[string]bool
+	aims  map[string]aimAsk // aims asked while a step held the task, set as it ends
 	// steered is when the person's stop, retry or recheck (steer) last saved
 	// each task: a step whose copy is older saves nothing after it, nor
 	// merges, so it can't undo what they asked. It grows by one key per task
@@ -365,6 +363,10 @@ type Module struct {
 	// testRuns holds each task's test of its head running behind a step, at
 	// most one, until a step takes the result (testrun.go). Guarded by mu.
 	testRuns map[string]*testRun
+	// behind holds the other checks steps queued behind themselves (main's
+	// test, a retest), by key, until a waiter takes the result (behind.go).
+	// Guarded by mu.
+	behind map[string]*behindRun
 	// prPolled is when each task waiting for the person last had its pull
 	// request looked up, so a close there is seen without a call every tick.
 	prPolled map[string]time.Time
@@ -522,6 +524,9 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	}
 	if was == StageMerging && t.Stage != StageMerging {
 		m.dropMergeRunLocked(t.ID)
+	}
+	if was != t.Stage {
+		m.leaveBehindLocked(t.ID)
 	}
 	m.mu.Unlock()
 	if note != "" {
@@ -1692,6 +1697,22 @@ func (m *Module) closeIssue(t *Task, p core.Project) {
 }
 
 func (m *Module) test(t *Task, p core.Project) error {
+	m.mu.Lock()
+	pending := m.pendingLocked(t.ID)
+	if pending {
+		m.later[t.ID] = time.Now().Add(holdGap) // until it ends, which looks again at once
+	}
+	m.mu.Unlock()
+	if pending {
+		// Waiting out a check queued behind the step, which may sit behind
+		// a backlog for hours: the forge is asked whether the PR was closed
+		// every ten minutes, not every look.
+		if m.pollDue(t.ID) {
+			_, err := m.closedOnForge(t, p)
+			return err
+		}
+		return nil
+	}
 	if closed, err := m.closedOnForge(t, p); closed || err != nil {
 		return err
 	}
@@ -1747,8 +1768,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return m.dropCheckpoint(t, p, "the tests failed on "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 1500))
 	}
 	if !c.OK {
-		mc, err := m.mainTests(p, main, cfg.Test)
-		if err != nil {
+		mc, ok, err := m.mainTests(t, p, main, cfg.Test)
+		if !ok || err != nil {
+			m.keepTestRun(t, c) // taken again once main's answer is in
 			return err
 		}
 		if mc.CantRun != "" {
@@ -1771,8 +1793,15 @@ func (m *Module) test(t *Task, p core.Project) error {
 			if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
 				return err
 			}
-			if t.Retested != t.SHA && m.failsAgain(p, t.SHA, cfg.Test, c) {
-				return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+", and again when only the failing tests ran once more:\n\n"+core.Clip(c.Output, 3000))
+			if t.Retested != t.SHA {
+				fails, ok := m.failsAgain(t, p, cfg.Test, c)
+				if !ok {
+					m.keepTestRun(t, c) // taken again once the rerun ends
+					return nil
+				}
+				if fails {
+					return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+", and again when only the failing tests ran once more:\n\n"+core.Clip(c.Output, 3000))
+				}
 			}
 			if t.Retested != t.SHA {
 				// A slow, busy machine fails a test CI passes: what failed
@@ -1939,18 +1968,26 @@ func (m *Module) ownDiff(p core.Project, main, sha string) string {
 	return core.DiffID(core.OwnDiff(dir, base, sha))
 }
 
-// failsAgain runs only what failed in a red check of a change's head once
-// more (Retest) and says whether it failed again: a red that repeats is the
+// failsAgain runs only what failed in a red check of t's head once more
+// (Retest) and says whether it failed again: a red that repeats is the
 // change's, and goes back without a whole second run. A pass, or a rerun
 // that couldn't start, is no verdict: the whole check runs again, since what
 // failed is read from the commit's own output and merging rests on a green
-// run of the whole check.
-func (m *Module) failsAgain(p core.Project, sha, command string, c core.Check) bool {
-	if m.Retest == nil || m.Retest(p, sha, command, c, false) {
-		return false
+// run of the whole check. The rerun is queued behind the step: until it
+// ends, ok is false and t waits in testing.
+func (m *Module) failsAgain(t *Task, p core.Project, command string, c core.Check) (fails, ok bool) {
+	if m.Retest == nil {
+		return false, true
 	}
-	rc, ok := m.C.Effects.GetCheck(p.Name, sha, "retest")
-	return ok && !rc.OK && rc.CantRun == "" && !rc.At.Before(c.At)
+	sha := t.SHA
+	r, ok := m.runBehind(t.ID, "retest:"+t.ID+":"+sha, sha, func() core.Check {
+		if m.Retest(p, sha, command, c, false) {
+			return core.Check{OK: true}
+		}
+		rc, ok := m.C.Effects.GetCheck(p.Name, sha, "retest")
+		return core.Check{OK: !ok || rc.OK || rc.CantRun != "" || rc.At.Before(c.At)}
+	})
+	return ok && !r.OK, ok
 }
 
 // mainTests is main's own test result, measured once per main commit (the
@@ -1959,28 +1996,45 @@ func (m *Module) failsAgain(p core.Project, sha, command string, c core.Check) b
 // A red main runs what failed once more (Retest) before it holds anything:
 // passing then, it was a flake of a slow or busy machine, filed to fix, and
 // main counts as green. The answer is the newest "retest" check on main.
-func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
-	c, ok := m.C.Effects.GetCheck(p.Name, main, "test")
+//
+// Either run is queued behind t's step, once however many tasks ask: until
+// it ends, ok is false and t waits where it is.
+func (m *Module) mainTests(t *Task, p core.Project, main, command string) (c core.Check, ok bool, err error) {
+	key, rekey := "main:"+p.Name+":"+main, "main-retest:"+p.Name+":"+main
+	if c, ok := m.takeBehind(rekey); ok {
+		return c, true, nil
+	}
+	if c, ok = m.takeBehind(key); !ok {
+		c, ok = m.C.Effects.GetCheck(p.Name, main, "test")
+	}
 	if !ok {
 		if _, err := m.C.Sandbox(); err != nil {
-			return core.Check{}, err
+			return core.Check{}, false, err
 		}
-		c = m.C.Effects.RunCheck(p, main, "test", command)
+		if c, ok = m.runBehind(t.ID, key, main, func() core.Check {
+			return m.C.Effects.RunCheck(p, main, "test", command)
+		}); !ok {
+			return core.Check{}, false, nil
+		}
 	}
 	if c.OK || c.CantRun != "" || m.Retest == nil {
-		return c, nil
+		return c, true, nil
 	}
-	m.retesting.Lock() // one retest of main, however many changes ask
-	defer m.retesting.Unlock()
 	if rc, ok := m.C.Effects.GetCheck(p.Name, main, "retest"); ok && !rc.At.Before(c.At) && rc.CantRun == "" {
 		c.OK = rc.OK
-		return c, nil
+		return c, true, nil
 	}
 	if _, err := m.C.Sandbox(); err != nil {
-		return core.Check{}, err
+		return core.Check{}, false, err
 	}
-	c.OK = m.Retest(p, main, command, c, true)
-	return c, nil
+	red := c
+	if c, ok = m.runBehind(t.ID, rekey, main, func() core.Check {
+		red.OK = m.Retest(p, main, command, red, true)
+		return red
+	}); !ok {
+		return core.Check{}, false, nil
+	}
+	return c, true, nil
 }
 
 // waitOnMain holds a red change while main's own tests are red, since the
@@ -2594,8 +2648,9 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 		return true, m.cantRun(t, p, c)
 	}
 	if !c.OK {
-		mc, err := m.mainTests(p, main, cfg.Test)
-		if err != nil {
+		mc, ok, err := m.mainTests(t, p, main, cfg.Test)
+		if !ok || err != nil {
+			m.keepMergeRun(t.ID, r) // taken again once main's answer is in
 			return true, err
 		}
 		if mc.CantRun != "" {
@@ -2712,6 +2767,18 @@ func (m *Module) testMerged(t *Task, p core.Project, key, main, sha, command str
 		m.mu.Unlock()
 	}(t.ID)
 	return *r
+}
+
+// keepMergeRun puts back the merged test r a step took, when the step then
+// waits on main's own test: the step after takes it again rather than queue
+// the merge anew.
+func (m *Module) keepMergeRun(id string, r mergeRun) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mergeRuns == nil {
+		m.mergeRuns = map[string]*mergeRun{}
+	}
+	m.mergeRuns[id] = &r
 }
 
 // dropMergeRunLocked forgets the merged test of a task that left merging:

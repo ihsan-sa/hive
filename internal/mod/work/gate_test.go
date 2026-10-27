@@ -541,6 +541,7 @@ func TestStoppedOnDraftResumes(t *testing.T) {
 	}
 	for i := 0; i < 10 && got.Stage != StageMerged; i++ {
 		m.settle(&got, m.step(&got))
+		m.Wait() // the checks its steps queued behind them
 	}
 	if got.Stage != StageMerged || readied(m) != 1 {
 		t.Fatalf("stage %q, readied %d, log %v", got.Stage, readied(m), got.Log)
