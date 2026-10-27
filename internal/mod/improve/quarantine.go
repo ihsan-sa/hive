@@ -212,6 +212,13 @@ func (m *Module) outside(s Sighting, task string) bool {
 // sightings make one; m.mu is held.
 func (m *Module) flake(k, task string) (Flake, bool) {
 	project, test, _ := strings.Cut(k, "\x00")
+	if core.WholeTree(test, m.module(project)) {
+		// Its reds are the tree's content (a branch's unformatted file), so
+		// two branches failing it is no flake; nor is it ever excused.
+		delete(m.sighted, k)
+		m.unsighted[k] = true
+		return Flake{}, false
+	}
 	var ev []Sighting
 	for _, s := range m.sighted[k] {
 		if time.Since(s.At) < quarantineWindow && s.At.After(m.lifted[k]) {
@@ -255,6 +262,17 @@ func (m *Module) flake(k, task string) (Flake, bool) {
 // project and test, each with its fix task.
 func (m *Module) Quarantine(project string) []Flake { return m.quarantine(project, "") }
 
+// module is project's Go module path, read from main's go.mod once; m.mu
+// is held.
+func (m *Module) module(project string) string {
+	mod, ok := m.modules[project]
+	if !ok {
+		mod = core.GoModule(m.C.Effects.ReadFile(core.Project{Name: project}, "HEAD", "go.mod"))
+		m.modules[project] = mod
+	}
+	return mod
+}
+
 // quarantine is Quarantine on evidence from outside task.
 func (m *Module) quarantine(project, task string) []Flake {
 	m.mu.Lock()
@@ -292,8 +310,8 @@ func (m *Module) QuarantinedTests(project, task string) []string {
 
 // fileQuarantined gives each quarantined test with no open fix task one,
 // and takes back a waiting one whose test is no longer quarantined and was
-// taken down by a run that is no sighting (brokenRun): its quarantine came
-// from reading a broken run as flakes.
+// taken down by a run that is no sighting (brokenRun) or reads the whole
+// tree (core.WholeTree): its quarantine came from reading those as flakes.
 func (m *Module) fileQuarantined() {
 	q := m.Quarantine("")
 	m.withdrawUnsighted(q)
@@ -350,7 +368,7 @@ func (m *Module) withdrawUnsighted(q []Flake) {
 		if !unsighted[k] || held[k] {
 			continue
 		}
-		why := "its quarantine came from a check run broken by its environment or failing more than " + fmt.Sprint(maxSightedPerRun) + " tests at once, which is no evidence the test is flaky; the test is no longer quarantined"
+		why := "its quarantine came from a check run broken by its environment or failing more than " + fmt.Sprint(maxSightedPerRun) + " tests at once, or it is a test of the whole tree whose reds are a branch's own content, which is no evidence the test is flaky; the test is no longer quarantined"
 		m.Work.Withdraw(core.Run{ID: "improve", Project: t.Project}, t.ID, "", why) // a worker that just started keeps it
 	}
 }
