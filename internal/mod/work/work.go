@@ -497,8 +497,9 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 		t.Updated = m.online.Add(time.Nanosecond)
 	}
 	var was, live string
+	var lined bool // t was in its project's merge line
 	if prev := m.tasks[t.ID]; prev != nil {
-		was = prev.Stage
+		was, lined = prev.Stage, inMergeLine(prev)
 		if loaded.Before(prev.Updated) { // a copy older than the last save: its head may be one the task has left
 			live = prev.SHA
 		}
@@ -533,6 +534,9 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	m.C.J.MustAppend("task.saved", t)
 	if was == StageMerging && t.Stage != StageMerging {
 		m.closeGateAsks(*t)
+	}
+	if lined && !inMergeLine(t) {
+		m.wakeMergeLine(t.Project)
 	}
 	if t.Stage != was && (t.Stage == StageMerged || t.Stage == StageDone) {
 		m.steps.Add(1)
@@ -2618,6 +2622,26 @@ const MergeLineWait = "waiting its turn in the merge line"
 // running.
 const mergedTestWait = "testing its head merged with main"
 
+// inMergeLine reports whether t stands in its project's merge line: merging,
+// and waiting its turn or testing merged with main.
+func inMergeLine(t *Task) bool {
+	return t.Stage == StageMerging && (strings.HasPrefix(t.Reason, mergedTestWait) || strings.HasPrefix(t.Reason, MergeLineWait))
+}
+
+// wakeMergeLine has the tasks waiting their turn in project's merge line look
+// again on the next tick, once one ahead of them left it (merged, sent back,
+// held for something else): held for holdGap, the next in line otherwise sat
+// out a minute after every merge.
+func (m *Module) wakeMergeLine(project string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, u := range m.tasks {
+		if u.Project == project && u.Stage == StageMerging && strings.HasPrefix(u.Reason, MergeLineWait) {
+			delete(m.later, id)
+		}
+	}
+}
+
 // mergeFront returns the task ahead of t in its project's merge line, or nil
 // when t is at its front. Only the front tests its head merged with main
 // (issue #1727): every main merge made all of them stale at once, so 46
@@ -2649,7 +2673,7 @@ func (m *Module) mergeFront(t *Task, p core.Project) *Task {
 		if r, ok := m.mergeRuns[u.ID]; ok && !r.done && !r.gone {
 			return u
 		}
-		if !strings.HasPrefix(u.Reason, mergedTestWait) && !strings.HasPrefix(u.Reason, MergeLineWait) {
+		if !inMergeLine(u) {
 			continue
 		}
 		if before(u, t) && (front == nil || before(u, front)) {

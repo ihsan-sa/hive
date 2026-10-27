@@ -1735,3 +1735,32 @@ func TestMergeLineOnlyFrontTests(t *testing.T) {
 		t.Fatalf("at the front: stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
 	}
 }
+
+// A task waiting its turn in the merge line looks again as soon as the one
+// ahead leaves it, not a hold's minute later: the at-once benchmark's last
+// ask sat out 60s after every merge before it.
+func TestMergeLineWakesWhenTheFrontLeaves(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	front := &Task{ID: "t-front", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number - 1}, Reason: mergedTestWait + " at x"}
+	m.save(front, "")
+	mergeOnce(t, m, task, p)
+	if !strings.HasPrefix(task.Reason, MergeLineWait) {
+		t.Fatalf("behind the front: reason %q", task.Reason)
+	}
+	m.mu.Lock()
+	held := m.later[task.ID].After(time.Now())
+	m.mu.Unlock()
+	if !held {
+		t.Fatalf("a task waiting its turn isn't held")
+	}
+	front.Stage = StageWorking
+	m.save(front, "checkpoint merged")
+	m.mu.Lock()
+	_, held = m.later[task.ID]
+	m.mu.Unlock()
+	if held {
+		t.Fatalf("the front left the merge line and the next in it still waits out its hold")
+	}
+}
