@@ -207,3 +207,33 @@ func TestBehindMeasuresTheNewestMain(t *testing.T) {
 		t.Fatalf("the newest is measured and the older covered by it: %+v", ms)
 	}
 }
+
+// A score that moves with the machine's load is judged against main measured
+// in the same moment (issue #1343): a merge that reads under a best taken
+// under a lighter load is kept when main where the best was read scores the
+// same now, and the baseline moves to that; a fall under the same load still
+// goes to the judge, measured against where the best was read, so falls kept
+// one by one can't walk the baseline down.
+func TestFallIsJudgedAgainstMainMeasuredNow(t *testing.T) {
+	m, merge := scored(t)
+	load := filepath.Join(t.TempDir(), "load")
+	os.WriteFile(load, []byte("0\n"), 0o644)
+	if ms := merge(map[string]string{"score.sh": "expr $(cat n.txt) - $(cat " + load + ")\n", "n.txt": "10\n",
+		".hive/project.json": `{"test": "true", "score": {"command": "sh ./score.sh", "direction": "higher", "tolerance": 3}}`}); !ms.Kept || *ms.Best != 10 {
+		t.Fatalf("the new score's start: %+v", ms)
+	}
+	at := m.Scores("p")[len(m.Scores("p"))-1].SHA
+	os.WriteFile(load, []byte("4\n"), 0o644) // the machine got busier
+	ms := merge(map[string]string{"other.txt": "x\n"})
+	if !ms.Kept || ms.Best == nil || *ms.Best != 6 || ms.Against == nil || *ms.Against != 6 || ms.AgainstSHA != at || !strings.Contains(ms.Note, "load") {
+		t.Fatalf("a fall that was the load alone: %+v", ms)
+	}
+	second := ms.SHA // it scored the new baseline itself
+	if ms := merge(map[string]string{"other.txt": "y\n", "n.txt": "9\n"}); !ms.Kept || *ms.Best != 6 || ms.Against != nil {
+		t.Fatalf("a reading within the tolerance of the new baseline: %+v", ms)
+	}
+	ms = merge(map[string]string{"n.txt": "6\n"})
+	if ms.Kept || ms.AgainstSHA != second || !strings.Contains(ms.Note, "fell to 2 from 6") {
+		t.Fatalf("a real fall under the same load, against where the best was read: %+v", ms)
+	}
+}

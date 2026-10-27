@@ -351,3 +351,46 @@ func TestStepBackJudgesWithoutAScore(t *testing.T) {
 		t.Fatal("the judgement was not said in the project's chat")
 	}
 }
+
+// A step-back with nothing spent still judges goals no step-back has judged
+// as they stand, with no experiment; once judged, nothing new is spent and
+// nothing changed, it does not run. The schedule starts one on goals alone.
+func TestStepBackJudgesUnjudgedGoalsWithNothingSpent(t *testing.T) {
+	m := rig(t)
+	p, _ := m.C.Projects.Get("hive")
+	if got := m.RotateStepBacks(); !strings.Contains(got, "hive") {
+		t.Fatalf("goals never judged must get a step-back on the schedule: %q", got)
+	}
+	sbs := m.StepBacks("hive")
+	if len(sbs) != 1 || sbs[0].Status != "thinking" || !sbs[0].Unspent || sbs[0].Goals == "" || !strings.Contains(sbs[0].Why, "goals") {
+		t.Fatalf("want one judging step-back with nothing spent: %+v", sbs)
+	}
+	s := sbs[0]
+	r, _ := m.C.Runs.Get(s.Run)
+	if !strings.Contains(r.Brief, "judgement.md") || strings.Contains(r.Brief, "experiment.json") {
+		t.Fatalf("the brief must ask for a judgement and no experiment: %s", r.Brief)
+	}
+	os.MkdirAll(m.C.WS.RunBox(s.Run), 0o755)
+	os.WriteFile(filepath.Join(m.C.WS.RunBox(s.Run), "judgement.md"), []byte("JUDGED: the goals hold"), 0o644)
+	m.C.J.MustAppend("run.turn_ended", map[string]any{"id": s.Run, "turn": 1, "status": core.StatusDone})
+	m.advance(s)
+	if got := m.StepBacks("hive")[0]; got.Status != "judged" || got.Exp != "" || !strings.Contains(got.Note, "nothing spent") {
+		t.Fatalf("a step-back with nothing spent must end judged with no experiment: %+v", got)
+	}
+	if got := m.RotateStepBacks(); strings.Contains(got, "hive") {
+		t.Fatalf("goals judged as they stand, with nothing merged, need no new step-back: %q", got)
+	}
+	if err := m.StartStepBack(p, "its best score has not moved"); err != nil {
+		t.Fatal(err)
+	}
+	sbs = m.StepBacks("hive")
+	var last StepBack
+	for _, x := range sbs {
+		if x.ID != s.ID {
+			last = x
+		}
+	}
+	if len(sbs) != 2 || last.Status != "none" || !strings.Contains(last.Note, "spent nothing") {
+		t.Fatalf("with nothing spent and its goals judged, a step-back must not run: %+v", sbs)
+	}
+}
