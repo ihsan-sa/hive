@@ -25,14 +25,12 @@ type Config struct {
 	CtrlBin    string   // a prebuilt control binary
 	Out        string   // where the run's files and report go
 	Probes     []string // which probes to run (default all)
-	Reps       int      // repeats of every probe on each side, interleaved (default 3)
+	Reps       int      // most repeats of every probe on each side, interleaved (default 3); past the first only when it differs
 	Bench      int      // asks in the benchmark (default 4, the whole set)
 	Org        Org      // the fresh test repository's host; nil runs without one
 	OrgToken   string   // the org token the gate itself uses to make and delete test repositories; children never hold it
 	ChildToken string   // the contents-only token the children hold (empty: they hold none and the org probe is skipped)
 	ReachOK    bool     // the caller passed CheckReach on these tokens within the hour (the daemon), so the gate doesn't probe again
-	Lessons    string   // .hive/lessons.md to append to on a rollback
-	Judged     bool     // a judge decides a measured verdict after the run, and writes its lesson itself
 	Depth      int      // levels of gating the children may still do (capped at MaxDepth)
 	MaxRepos   int      // most org repositories one run may make (default 4)
 	Timeout    time.Duration
@@ -140,7 +138,7 @@ func Run(cfg Config) (rep Report, err error) {
 		switch {
 		case errors.As(err, &conflict):
 			// The change can't land as it stands: its worker merges main, and
-			// nothing was measured, so it is no rollback and no lesson.
+			// nothing was measured, so it is no rollback.
 			rep.Error, rep.CantRun, rep.Alone, rep.Conflicts = err.Error(), true, true, conflict.files
 			rep.Verdict = Verdict{Reason: err.Error()}
 		case errors.As(err, &fault):
@@ -150,7 +148,7 @@ func Run(cfg Config) (rep Report, err error) {
 		case err != nil:
 			// The gate could not run (no sandbox, no Go, Yama off, an old
 			// evaluator, the org, the clock): nothing was measured, so this
-			// is not the candidate's failure and no lesson is written.
+			// is not the candidate's failure.
 			rep.Error, rep.CantRun = err.Error(), true
 			rep.Alone = errors.As(err, new(alone))
 			rep.BaseFails = errors.As(err, new(base))
@@ -161,9 +159,6 @@ func Run(cfg Config) (rep Report, err error) {
 		}
 		rep.sign()
 		write(cfg, rep)
-		if !rep.Verdict.Keep && !rep.CantRun && !(cfg.Judged && rep.Measured) {
-			noteLesson(cfg, rep)
-		}
 	}()
 	if cfg.Sandbox, err = pickSandbox(cfg); err != nil {
 		return rep, err
@@ -407,8 +402,19 @@ func Run(cfg Config) (rep Report, err error) {
 	}
 
 	// The same work on both, interleaved, so the day's weather hits both.
+	// One rep a side first; the rest only when it shows a difference, since
+	// most runs move nothing and each rep is a build's worth of e2e and
+	// benchmark on each side.
 	deadline := time.Now().Add(cfg.Timeout)
+	opts := cfg.Options
 	for rep0 := 0; rep0 < cfg.Reps; rep0++ {
+		if rep0 == 1 {
+			if one := firstRepOptions(opts); !differs(Decide(rep.Candidate, rep.Control, one)) {
+				cfg.log("rep 1 moved nothing beyond a single run's noise: no more reps")
+				opts = one
+				break
+			}
+		}
 		for _, name := range cfg.Probes {
 			p, ok := cfg.Probe[name]
 			if !ok {
@@ -447,7 +453,6 @@ func Run(cfg Config) (rep Report, err error) {
 	if got, e := FileSHA(cand.Bin); e != nil || got != rep.CandSHA256 {
 		return rep, &candidateFault{"changed its own binary during the run", fmt.Errorf("the candidate's binary changed during the run")}
 	}
-	opts := cfg.Options
 	for _, f := range rep.Fixes.Fixes {
 		opts.Fixed = append(opts.Fixed, f.String())
 	}
@@ -457,6 +462,24 @@ func Run(cfg Config) (rep Report, err error) {
 		rep.Verdict.Reason += "; failing on both sides, so the environment's and not counted: " + failureNames(rep.Unit.Shared, modulePath(cand.Src))
 	}
 	return rep, nil
+}
+
+// singleRunNoise is how much one run alone varies (a benchmark's time by
+// about a tenth): with one rep a side there is no spread to measure, so a
+// smaller move is not worth more reps, nor a verdict.
+const singleRunNoise = 0.10
+
+func firstRepOptions(o Options) Options {
+	o.Floor = max(o.Floor, singleRunNoise)
+	o.Fixed = nil // the candidate's own fixes are a gain whatever the probes say
+	return o
+}
+
+// differs says the first rep showed something more reps must confirm or
+// measure: a gain, a regression, a different failure, or a probe that failed
+// on both sides.
+func differs(v Verdict) bool {
+	return len(v.Gains)+len(v.Regressions)+len(v.Differs)+len(v.Unmeasured) > 0
 }
 
 // slowerAlone says the candidate took more time than the control over the
@@ -805,7 +828,7 @@ func (a alone) Unwrap() error { return a.err }
 // candidateFault is a failure of the candidate itself before it was
 // measured (it does not build, fails its own checks, rewrote its binary):
 // a rollback. Every other error is the gate's: it could not run. why is a
-// fixed phrase; the candidate's own output never reaches a lesson.
+// fixed phrase; the candidate's own output never reaches the verdict.
 type candidateFault struct {
 	why string
 	err error
@@ -813,41 +836,3 @@ type candidateFault struct {
 
 func (f *candidateFault) Error() string { return f.err.Error() }
 func (f *candidateFault) Unwrap() error { return f.err }
-
-// noteLesson records a rollback where the next worker reads it. Gates run
-// side by side share the file, so the lesson is appended in one write, and a
-// fresh file comes in with its header whole (linked into place, which only
-// one gate can do), never as an empty file another gate also heads.
-func noteLesson(cfg Config, rep Report) {
-	if cfg.Lessons == "" {
-		return
-	}
-	os.MkdirAll(filepath.Dir(cfg.Lessons), 0o755)
-	if f, err := os.CreateTemp(filepath.Dir(cfg.Lessons), ".lessons-*"); err == nil {
-		_, werr := f.WriteString(lessonsHeader)
-		if f.Close() == nil && werr == nil {
-			os.Chmod(f.Name(), 0o644)
-			os.Link(f.Name(), cfg.Lessons) // fails where the file is there
-		}
-		os.Remove(f.Name())
-	}
-	raw, _ := os.ReadFile(cfg.Lessons)
-	s := ""
-	if strings.TrimSpace(string(raw)) == "" {
-		s = lessonsHeader // there but empty: an older gate's, or the person's
-	} else if !strings.HasSuffix(string(raw), "\n") {
-		s = "\n"
-	}
-	// Text from the candidate's own output never goes here: a lesson is read by
-	// the next worker as instructions.
-	reason := rep.Verdict.Reason // Decide's words, or a fixed candidateFault.why
-	s += fmt.Sprintf("- The gate rolled back %s (run %s): %s\n", short(rep.Head), rep.ID, reason)
-	f, err := os.OpenFile(cfg.Lessons, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
-	if err != nil {
-		return
-	}
-	f.WriteString(s)
-	f.Close()
-}
-
-const lessonsHeader = "# Lessons\n\nWhat was tried and why it didn't stay. Read before working here.\n\n"

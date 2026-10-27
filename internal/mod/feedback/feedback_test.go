@@ -131,3 +131,93 @@ func TestMessageQuotesTheFeedback(t *testing.T) {
 		}
 	}
 }
+
+// Feedback linked to its fix closes when that task lands, at once when it
+// already has, and leaves the sweep's digest; one still being fixed says so.
+func TestFeedbackClosesWhenItsFixLands(t *testing.T) {
+	c, m := open(t)
+	w := core.Run{RunSpec: core.RunSpec{ID: "w-1", Role: "worker", Project: "hive"}}
+	a, _ := m.Add(w, "", "double turns")
+	b, _ := m.Add(w, "", "main.bundle is stale")
+	o, _ := m.Add(core.Run{RunSpec: core.RunSpec{ID: "w-9", Role: "worker", Project: "other"}}, "", "elsewhere")
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-done", "stage": "done"})
+	sweep := core.Run{RunSpec: core.RunSpec{ID: "s-1", Role: "sweep"}}
+	if _, err := m.Fix(sweep, a.ID, ""); err == nil {
+		t.Fatal("a fix with no task was accepted")
+	}
+	if _, err := m.Fix(w, o.ID, "t-done"); err == nil {
+		t.Fatal("a run linked another project's feedback")
+	}
+	raw, _ := json.Marshal(map[string]string{"fixed": a.ID, "task": "t-done"})
+	if _, err := c.Runs.Ops().Call(sweep, "feedback", raw); err != nil {
+		t.Fatal(err)
+	}
+	if it, _ := m.Get(a.ID); it.Status != Closed || it.Task != "t-done" || !strings.Contains(it.Note, "t-done") {
+		t.Fatalf("an item whose fix had landed is %+v", it)
+	}
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-open", "stage": "queued"})
+	if _, err := m.Fix(sweep, b.ID, "t-open"); err != nil {
+		t.Fatal(err)
+	}
+	if d := m.Digest(func(string) bool { return true }); strings.Contains(d, "double turns") || !strings.Contains(d, b.ID) || !strings.Contains(d, "fix filed: task t-open") {
+		t.Fatalf("digest:\n%s", d)
+	}
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-open", "stage": "working"})
+	if it, _ := m.Get(b.ID); it.Status != Open {
+		t.Fatalf("closed before its fix landed: %+v", it)
+	}
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-open", "stage": "merged"})
+	if it, _ := m.Get(b.ID); it.Status != Closed || it.Note != "fixed by task t-open" {
+		t.Fatalf("after its fix merged: %+v", it)
+	}
+	if d := New(c).Digest(func(string) bool { return true }); strings.Contains(d, "stale") || !strings.Contains(d, "elsewhere") {
+		t.Fatalf("digest after a restart:\n%s", d)
+	}
+}
+
+// A task id the journal never saw is refused, so a typo leaves no mark that
+// never resolves; a fix that is reverted reopens what it closed, and a
+// reverted task can't be named as a fix.
+func TestFixNeedsALiveTaskAndItsRevertReopens(t *testing.T) {
+	c, m := open(t)
+	w := core.Run{RunSpec: core.RunSpec{ID: "w-1", Role: "worker", Project: "hive"}}
+	a, _ := m.Add(w, "", "double turns")
+	b, _ := m.Add(w, "", "stale bundle")
+	if _, err := m.Fix(w, a.ID, "t-typo"); err == nil || !strings.Contains(err.Error(), "no task t-typo") {
+		t.Fatalf("an unknown task was accepted: %v", err)
+	}
+	if it, _ := m.Get(a.ID); it.Task != "" {
+		t.Fatalf("a refused fix left its mark: %+v", it)
+	}
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-fix", "stage": "working"})
+	if _, err := m.Fix(w, a.ID, "t-fix"); err != nil {
+		t.Fatal(err)
+	}
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-fix", "stage": "merged"})
+	if it, _ := m.Get(a.ID); it.Status != Closed {
+		t.Fatalf("not closed when its fix merged: %+v", it)
+	}
+	m.Close(b.ID, "not worth it")
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-rev", "kind": "revert", "revert_of": "t-fix", "stage": "reverting"})
+	if it, _ := m.Get(a.ID); it.Status != Closed {
+		t.Fatalf("reopened before the revert merged: %+v", it)
+	}
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-rev", "kind": "revert", "revert_of": "t-fix", "stage": "merged"})
+	it, _ := m.Get(a.ID)
+	if it.Status != Open || it.Task != "" || !strings.Contains(it.Note, "reverted") {
+		t.Fatalf("after its fix was reverted: %+v", it)
+	}
+	if it, _ := m.Get(b.ID); it.Status != Closed {
+		t.Fatalf("the revert reopened an item the person closed: %+v", it)
+	}
+	if d := m.Digest(func(string) bool { return true }); !strings.Contains(d, "double turns") || !strings.Contains(d, "was reverted") {
+		t.Fatalf("digest:\n%s", d)
+	}
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-fix", "stage": "done"}) // a later save of the reverted task
+	if _, err := m.Fix(w, a.ID, "t-fix"); err == nil {
+		t.Fatal("a reverted task was accepted as a fix")
+	}
+	if d := New(c).Digest(func(string) bool { return true }); !strings.Contains(d, "double turns") {
+		t.Fatalf("digest after a restart:\n%s", d)
+	}
+}
