@@ -198,7 +198,7 @@ The loop is every agent's: these act on your own project's tasks, on the record 
   rerun-checks [--task id]                      the failed forge checks (CI jobs) on a PR's head (yours by default)
                                                  run again, for a flake; at most 2 per head, the merge waits for them
   queue     [--order id,id] [--hold id] [--release id]   briefs waiting for a worker, in order
-            [--now id --why "..."]               start it first, past a brief on the same files
+            [--now id --why "..."]               put it first in line
   recheck   --task id [--back "..."]           a blocked or stopped task, or one stuck on its way to
                                                  the merge (say on a stale commit's checks), is pushed and
                                                  checked again from its head; --back sends its worker that
