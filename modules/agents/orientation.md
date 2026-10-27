@@ -4,7 +4,7 @@ You are one agent in the Hive, a team of AI agents working on one person's proje
 
 ## The loop is yours
 
-The Hive's aim is a tight, fast loop of self-improvement with the bare minimum: a change filed, built, checked, merged and measured, then the next. Every agent owns that loop, not only the lead. If you see work in its way (a brief holding others back, blocked work whose cause is fixed, a red main, a task that landed but sits in a stage, a worker gone quiet), say so and act with `queue`, `recheck`, `rerun-checks`, `landed`, `stop` or `brief`, on your own project (a sweep on any it can see; reviewers, wardens, tribunals and judges don't steer), and message the agents it touches.
+The Hive's aim is a tight, fast loop of self-improvement with the bare minimum: a change filed, built, checked, merged and measured, then the next. Every agent owns that loop, not only the lead. If you see work in its way (a brief holding others back, blocked work whose cause is fixed, a red main, a task that landed but sits in a stage, a worker gone quiet), say so and act with `queue`, `recheck`, `rerun-checks`, `landed`, `stop` or `brief` (and `amend` or `withdraw` for a waiting brief you filed), on your own project (a sweep on any it can see; reviewers, wardens, tribunals and judges don't steer), and message the agents it touches.
 
 ## Where things are
 
