@@ -524,6 +524,7 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 	}
 	if was == StageMerging && t.Stage != StageMerging {
 		m.dropMergeRunLocked(t.ID)
+		m.wakeMergeLineLocked(t.Project)
 	}
 	m.mu.Unlock()
 	if note != "" {
@@ -2654,7 +2655,7 @@ func (m *Module) mergeFront(t *Task, p core.Project) *Task {
 		if r, ok := m.mergeRuns[u.ID]; ok && !r.done && !r.gone {
 			return u
 		}
-		if !strings.HasPrefix(u.Reason, mergedTestWait) && !strings.HasPrefix(u.Reason, MergeLineWait) {
+		if !inMergeLine(u.Reason) {
 			continue
 		}
 		if before(u, t) && (front == nil || before(u, front)) {
@@ -2662,6 +2663,25 @@ func (m *Module) mergeFront(t *Task, p core.Project) *Task {
 		}
 	}
 	return front
+}
+
+// inMergeLine says whether a hold's reason is a place in the merge line.
+func inMergeLine(why string) bool {
+	return strings.HasPrefix(why, mergedTestWait) || strings.HasPrefix(why, MergeLineWait)
+}
+
+// wakeMergeLineLocked has project's tasks waiting their turn in the merge
+// line look again on the next tick, not after holdGap: the front left the
+// line (merged, went back, stood aside), so the next one tests now. Left to
+// holdGap, each place in the line cost up to a minute, and four asks at once
+// took over a minute or past the benchmark's bound to land (issue #1745).
+// The caller holds m.mu.
+func (m *Module) wakeMergeLineLocked(project string) {
+	for _, u := range m.tasks {
+		if u.Project == project && u.Stage == StageMerging && strings.HasPrefix(u.Reason, MergeLineWait) {
+			delete(m.later, u.ID)
+		}
+	}
 }
 
 // mergeRun is a task's merged-with-main test running behind a step: key is
@@ -2740,6 +2760,11 @@ func (m *Module) hold(t *Task, p core.Project, why string) {
 	m.mu.Unlock()
 	if t.Reason == why {
 		return
+	}
+	if inMergeLine(t.Reason) && !inMergeLine(why) {
+		m.mu.Lock()
+		m.wakeMergeLineLocked(t.Project) // it stands aside: the next one moves up
+		m.mu.Unlock()
 	}
 	t.Reason = why
 	m.save(t, why)

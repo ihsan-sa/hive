@@ -1735,3 +1735,46 @@ func TestMergeLineOnlyFrontTests(t *testing.T) {
 		t.Fatalf("at the front: stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
 	}
 }
+
+// A task waiting its turn in the merge line looks again as soon as the front
+// leaves it, not a holdGap later (issue #1745): four asks at once otherwise
+// spent up to a minute per place in the line, and two places ran the
+// benchmark past its bound.
+func TestMergeLineWakesWhenFrontLeaves(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	waiter := &Task{ID: "t-waiter", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number + 1}, Reason: MergeLineWait + ": behind"}
+	other := &Task{ID: "t-other", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number + 2}, Reason: "waiting for the forge's checks"}
+	waiting := func() (bool, bool) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		_, w := m.later[waiter.ID]
+		_, o := m.later[other.ID]
+		return w, o
+	}
+	setup := func() {
+		m.mu.Lock()
+		m.tasks[waiter.ID], m.tasks[other.ID] = waiter, other
+		m.later[waiter.ID] = time.Now().Add(holdGap)
+		m.later[other.ID] = time.Now().Add(holdGap)
+		m.mu.Unlock()
+	}
+
+	setup()
+	m.hold(task, p, mergedTestWait+" at x")
+	if w, _ := waiting(); !w {
+		t.Fatalf("the front moving within the line woke the waiter")
+	}
+	m.hold(task, p, "waiting for the forge's checks on its head")
+	if w, o := waiting(); w || !o {
+		t.Fatalf("front stood aside: waiter still held %v, other task woken %v", w, !o)
+	}
+
+	setup()
+	task.Reason = mergedTestWait + " at x"
+	task.Stage = StageMerged
+	m.save(task, "merged")
+	if w, o := waiting(); w || !o {
+		t.Fatalf("front merged: waiter still held %v, other task woken %v", w, !o)
+	}
+}
