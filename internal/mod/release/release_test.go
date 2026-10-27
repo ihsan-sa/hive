@@ -1570,6 +1570,7 @@ func TestContainsReadsTheClone(t *testing.T) {
 // passed, and the release covers both.
 func TestReleaseFallsForwardPastACancelledRun(t *testing.T) {
 	m, n, merged, land := selfHive(t)
+	linear(m)
 	merged(1, "a1", "m1")
 	land("a1", "r1")
 	// Its run was cancelled with no check runs, which reads as pending.
@@ -1590,6 +1591,11 @@ func TestReleaseFallsForwardPastACancelledRun(t *testing.T) {
 	}
 	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPass})
 	m.retryWaiting()
+	if len(n.got) != 0 {
+		t.Fatalf("fell forward to a merge improve hasn't kept: %v", n.got)
+	}
+	keptAt(m, "m2", true)
+	m.retryWaiting()
 	body, ok := n.got["v0.0.1"]
 	if len(n.got) != 1 || !ok || !strings.Contains(body, "#1 at a1") || !strings.Contains(body, "#2 at a2") || strings.Contains(body, "#3 at a3") {
 		t.Fatalf("didn't fall forward to m2: %v", n.got)
@@ -1597,5 +1603,99 @@ func TestReleaseFallsForwardPastACancelledRun(t *testing.T) {
 	m.retryWaiting()
 	if len(n.got) != 1 {
 		t.Fatalf("released again: %v", n.got)
+	}
+}
+
+// linear stands in for main's history in a test: each merge journaled as
+// effect.merged has every earlier one in its history.
+func linear(m *Module) {
+	m.Contains = func(_ core.Project, sha, at string) (bool, error) {
+		order := map[string]int{}
+		m.C.J.Replay(func(e core.Event) {
+			var x struct {
+				MergeSHA string `json:"merge_sha"`
+			}
+			if e.Kind == "effect.merged" && e.Decode(&x) == nil {
+				order[x.MergeSHA] = len(order) + 1
+			}
+		})
+		return order[sha] > 0 && order[sha] <= order[at], nil
+	}
+}
+
+// keptAt journals improve's measure of sha, kept or not.
+func keptAt(m *Module, sha string, kept bool) {
+	m.C.J.MustAppend("score.measured", map[string]any{"project": "hive", "sha": sha, "tests_ok": kept, "kept": kept})
+}
+
+// The fall-forward never picks a merge improve measured worse, one only a
+// red measure covers, or one whose history doesn't hold the waiting commit;
+// a merge a kept one covers counts as kept.
+func TestReleaseFallsForwardOnlyToAKeptDescendant(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	linear(m)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	n.SetChecks("me/hive", "m1", core.CheckRun{Name: "test", State: core.CheckPending})
+	m.AfterKept("hive", "m1")
+	for i, sha := range []string{"m2", "m3", "m4"} {
+		merged(i+2, "a"+sha[1:], sha)
+		land("a"+sha[1:], "r"+sha[1:])
+		n.SetChecks("me/hive", sha, core.CheckRun{Name: "test", State: core.CheckPass})
+	}
+	keptAt(m, "m4", false) // measured worse: about to be reverted
+	m.C.J.MustAppend("score.covered", map[string]any{"project": "hive", "sha": "m3", "task": "t3", "by": "m4", "red": true})
+	m.retryWaiting()
+	if len(n.got) != 0 {
+		t.Fatalf("fell forward to a merge measured worse: %v", n.got)
+	}
+	inHistory := m.Contains
+	m.Contains = func(p core.Project, sha, at string) (bool, error) {
+		if at == "m2" {
+			return false, nil // m2 isn't on m1's line after all
+		}
+		return inHistory(p, sha, at)
+	}
+	m.C.J.MustAppend("score.covered", map[string]any{"project": "hive", "sha": "m2", "task": "t2", "by": "m5"})
+	m.retryWaiting()
+	if len(n.got) != 0 {
+		t.Fatalf("fell forward to a merge whose history lacks the waiting one: %v", n.got)
+	}
+	m.Contains = inHistory
+	m.retryWaiting()
+	if body := n.got["v0.0.1"]; len(n.got) != 1 || !strings.Contains(body, "#2 at a2") || strings.Contains(body, "#3 at a3") {
+		t.Fatalf("didn't fall forward to the covered m2: %v", n.got)
+	}
+}
+
+// A descendant the fall-forward picks that is then held (here a merge after
+// the waiting one went unread) journals release.ci_passed at it: the
+// original's wait ends, so retries stop and its late alert never fires, and
+// the hold's ask tells the person instead.
+func TestReleaseFallForwardHeldEndsTheWait(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	linear(m)
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	n.SetChecks("me/hive", "m1", core.CheckRun{Name: "test", State: core.CheckPending})
+	m.AfterKept("hive", "m1")
+	merged(2, "a2", "m2") // never read
+	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPass})
+	keptAt(m, "m2", true)
+	m.retryWaiting()
+	if len(n.got) != 0 {
+		t.Fatalf("released past an unread merge: %v", n.got)
+	}
+	if w := m.ciState("hive"); w.Kind != "release.ci_passed" || w.SHA != "m2" {
+		t.Fatalf("the descendant's checks didn't end the wait: %+v", w)
+	}
+	asks := m.C.Person.Open()
+	if len(asks) != 1 || asks[0].Kind != "release" || !strings.Contains(asks[0].Ref, "m2") {
+		t.Fatalf("the hold didn't ask the person: %+v", asks)
+	}
+	alerts := journaledN(m, "alert.raised")
+	m.retryWaiting()
+	if journaledN(m, "alert.raised") != alerts || len(n.got) != 0 {
+		t.Fatalf("a wait the hold ended was retried: %v", n.got)
 	}
 }

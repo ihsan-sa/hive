@@ -87,6 +87,7 @@ type Run struct {
 	Structured  json.RawMessage `json:"structured,omitempty"`
 	Finish      *Finish         `json:"finish,omitempty"`
 	Pending     []string        `json:"pending,omitempty"`
+	Given       []string        `json:"-"` // the messages its current or last turn was handed
 	ParkedUntil time.Time       `json:"parked_until,omitempty"`
 	ParkedSince time.Time       `json:"parked_since,omitempty"` // when it last went from another status to parked
 	Retries     int             `json:"retries"`
@@ -211,6 +212,9 @@ type Plan struct {
 	Login   string            `json:"login,omitempty"` // Login.Key; empty is the machine's own
 	Limit   harness.RateLimit `json:"limit"`
 	At      time.Time         `json:"at"`
+	// Wait is the park a limit whose named reset had already passed got;
+	// the next such limit in a row doubles it, up to the hour.
+	Wait time.Duration `json:"wait,omitempty"`
 }
 
 // Key names the plan's login.
@@ -428,6 +432,7 @@ type Runs struct {
 	starting                 map[string]bool // runs with a launch in flight
 	deferred                 map[string]int  // ticks a run's launch has waited behind leads', in a row
 	passing                  bool            // a tick's pass over the other runs is waiting for the leads' steps
+	leadWait                 time.Duration   // how long the other runs wait for the leads' steps (0: 5s)
 	self                     proc.Handle     // this daemon, as a turn's claimant (claim.go)
 	backedOff                map[string]int  // the turn each run last backed off from for another daemon's claim, said once
 	turnLive                 map[string]int  // the turn each run last waited on its own last turn for, said once
@@ -773,7 +778,9 @@ func (rs *Runs) apply(e Event) {
 		}
 		rs.ranOn[r.ID] = on
 		r.Waiting, r.Reopened = "", false
+		r.Given = nil
 		if t.Delivered <= len(r.Pending) {
+			r.Given = append(r.Given, r.Pending[:t.Delivered]...)
 			r.Pending = r.Pending[t.Delivered:]
 		}
 		r.ParkedUntil = time.Time{}
@@ -823,6 +830,7 @@ func (rs *Runs) apply(e Event) {
 		var n runNote
 		e.Decode(&n)
 		if n.N <= len(r.Pending) {
+			r.Given = append(r.Given, r.Pending[:n.N]...)
 			r.Pending = r.Pending[n.N:]
 		}
 	case "run.finish":
@@ -1210,15 +1218,27 @@ func (rs *Runs) picks(r Run) (picks, unproven []Pick) {
 			picks = route
 		}
 	}
-	for _, p := range r.RunSpec.Route {
+	specRoute := r.RunSpec.Route
+	if rs.Route != nil && !r.Persistent && len(specRoute) > 0 {
+		// A route fixed at its start that can't answer any more (its first
+		// pick is down) gives way to the settings' route as it is now, so a
+		// run parked on a rejected model follows the route changed since.
+		if _, down := rs.downFor(specRoute[0]); down {
+			if route := rs.Route(r); len(route) > 0 {
+				specRoute = route
+				picks = append(picks, route...)
+			}
+		}
+	}
+	for _, p := range specRoute {
 		if !slices.ContainsFunc(picks, p.Same) {
 			picks = append(picks, p)
 		}
 	}
 	if r.Finishes() {
 		first := own
-		if len(r.RunSpec.Route) > 0 {
-			first = r.RunSpec.Route[0]
+		if len(specRoute) > 0 {
+			first = specRoute[0]
 		}
 		rs.mu.Lock()
 		picks = slices.DeleteFunc(picks, func(p Pick) bool {
@@ -1296,10 +1316,15 @@ func (rs *Runs) wake(id string) {
 
 // Reopen lets a finished run take more turns (fix rounds go back to the same worker).
 // A Codex run whose token folder still won't delete stays blocked for it.
+// The same text again while a turn runs on it, handed or waiting, is
+// already being worked on: it takes no further turn (issue #1157).
 func (rs *Runs) Reopen(id, text string) error {
 	r, ok := rs.Get(id)
 	if !ok {
 		return ErrNotFound
+	}
+	if r.Status == StatusRunning && (slices.Contains(r.Given, text) || slices.Contains(r.Pending, text)) {
+		return nil
 	}
 	if r.Status == StatusStopped || r.StopAsked {
 		return fmt.Errorf("run %s was stopped on purpose (%s); it stays stopped", id, r.Reason)
@@ -1347,8 +1372,8 @@ func (rs *Runs) SetStatus(id, status, reason string) {
 // StoppedQuiet opens the reason of a quiet run an agent ended with EndQuiet.
 const StoppedQuiet = "stopped while quiet by "
 
-// EndQuiet ends a quiet run blocked with reason (StoppedQuiet first), only if
-// it is still quiet and no turn of it is starting: a message that woke it
+// EndQuiet ends a quiet or parked run blocked with reason (StoppedQuiet
+// first), only if it is still so and no turn of it is starting: a message that woke it
 // since the caller looked keeps it going. A message later doesn't wake it;
 // Reopen still does.
 func (rs *Runs) EndQuiet(id, reason string) error {
@@ -1358,9 +1383,9 @@ func (rs *Runs) EndQuiet(id, reason string) error {
 	case cur == nil:
 		rs.mu.Unlock()
 		return ErrNotFound
-	case cur.Status != StatusQuiet || rs.starting[id]:
+	case (cur.Status != StatusQuiet && cur.Status != StatusParked) || rs.starting[id]:
 		rs.mu.Unlock()
-		return fmt.Errorf("run %s is %s, not quiet", id, cur.Status)
+		return fmt.Errorf("run %s is %s, not quiet or parked", id, cur.Status)
 	}
 	if rs.starting == nil {
 		rs.starting = map[string]bool{}
@@ -1428,9 +1453,11 @@ func (rs *Runs) Tick(cfg Config) {
 		go func() { wg.Wait(); close(leads) }()
 		select {
 		case <-leads:
-		case <-time.After(5 * time.Second):
+		case <-time.After(rs.leadWaitOr()):
 			// The busy map keeps a run from being stepped twice, so this only
-			// says, in daemon.log, which lead's step is slow.
+			// says, in daemon.log, which lead's step is slow. It is said once
+			// a stall: a later tick can't claim the hung lead, so its pass
+			// has no lead to wait for and goes at once.
 			rs.mu.Lock()
 			var slow []string
 			for _, r := range live {
@@ -1439,7 +1466,7 @@ func (rs *Runs) Tick(cfg Config) {
 				}
 			}
 			rs.mu.Unlock()
-			log.Printf("runs: a lead's step is still going after 5s (%s); the other runs step now", strings.Join(slow, ", "))
+			log.Printf("runs: a lead's step is still going after %s (%s); the other runs step now", rs.leadWaitOr(), strings.Join(slow, ", "))
 		}
 		for _, r := range rs.List(func(r *Run) bool { return !r.Lead() && (!r.Terminal() || r.Status == StatusRunning) }) {
 			rs.stepAsync(r, cfg, nil)
@@ -1453,6 +1480,15 @@ func (rs *Runs) Tick(cfg Config) {
 		}
 		rs.mu.Unlock()
 	}()
+}
+
+// leadWaitOr is how long a tick's pass over the other runs waits for the
+// leads' steps before it goes ahead of a slow one.
+func (rs *Runs) leadWaitOr() time.Duration {
+	if rs.leadWait > 0 {
+		return rs.leadWait
+	}
+	return 5 * time.Second
 }
 
 // stepAsync steps a listed run in its own goroutine once it claims it
@@ -1665,12 +1701,15 @@ func (rs *Runs) endTurn(r Run) {
 		rs.append("run.egress_refused", ev)
 	}
 	limited := tl.Result != nil && tl.Result.Limited || (tl.Limit != nil && tl.Limit.Status == "rejected" && (tl.Result == nil || tl.Result.IsError))
+	var wait time.Duration
 	if limited {
 		// Park the login until its reset (an hour when the harness didn't
 		// say). A reset it named that has passed by the turn's end is a
 		// limit that is over, not one with no reset: it waits a minute, so a
 		// harness repeating a stale reset doesn't spin, not the hour that
 		// parked the fake agent's three-second limit on a slow runner (PR #800).
+		// One that keeps repeating it waits twice as long each time, up to
+		// the hour (#1018).
 		l := harness.RateLimit{}
 		if tl.Limit != nil {
 			l = *tl.Limit
@@ -1679,7 +1718,13 @@ func (rs *Runs) endTurn(r Run) {
 		if l.ResetsAt.IsZero() {
 			l.ResetsAt = time.Now().Add(time.Hour)
 		} else if !l.ResetsAt.After(time.Now()) {
-			l.ResetsAt = time.Now().Add(time.Minute)
+			wait = time.Minute
+			rs.mu.Lock()
+			if prev := rs.plans[Plan{Harness: HarnessName(r.Harness), Login: r.Login}.Key()]; prev.Wait > 0 && prev.Limit.Status == "rejected" {
+				wait = min(2*prev.Wait, time.Hour)
+			}
+			rs.mu.Unlock()
+			l.ResetsAt = time.Now().Add(wait)
 		}
 		tl.Limit = &l
 	}
@@ -1691,7 +1736,7 @@ func (rs *Runs) endTurn(r Run) {
 		tl.Result = &res
 	}
 	if tl.Limit != nil {
-		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC()})
+		rs.append("plan.usage", Plan{Harness: HarnessName(r.Harness), Login: r.Login, Limit: *tl.Limit, At: time.Now().UTC(), Wait: wait})
 	}
 	te := turnEnded{ID: r.ID, Turn: r.Turn, SessionLive: tl.SessionLive, Session: tl.Session, Context: tl.Context, Result: tl.Result, Head: headMark(r.Checkout)}
 	var dropErr error
@@ -1843,7 +1888,7 @@ func (rs *Runs) endTurn(r Run) {
 			account = fmt.Sprintf("status: %s\n%s\ntested: %s\nunsure: %s", cur.Finish.Status, cur.Finish.Account, cur.Finish.Tested, cur.Finish.Unsure)
 		}
 		if r.Task != "" && te.Status == StatusDone {
-			account += "\nwhere its commits go: their own pull request, task " + r.Task + "; the thread hears when it merges"
+			account += "\nwhere its commits go: their own pull request, task " + r.Task + "; you hear when it merges or stops"
 		}
 		if p, ok := rs.Get(r.Parent); ok && (!p.Terminal() || p.Persistent) {
 			rs.Send(p.ID, fmt.Sprintf("[%s %s finished]\n%s", r.Role, r.ID, account))

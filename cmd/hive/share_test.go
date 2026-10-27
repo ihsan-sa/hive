@@ -170,11 +170,11 @@ func TestShareNothingFitsSendsNothing(t *testing.T) {
 	}
 }
 
-// A run's old login folders never leave, while the rest of its host folder does.
+// A run's old login folders and leftover sandbox specs never leave, while the rest of its host folder does.
 func TestShareLeavesOutRunLogins(t *testing.T) {
 	ws := core.Workspace{Root: t.TempDir()}
 	for _, rel := range []string{"runs/r1/home/.claude/token", "runs/r1/host/codex/auth.json",
-		"runs/r1/host/codex-sessions/s.json", "runs/r1/host/turn-001.jsonl"} {
+		"runs/r1/host/codex-sessions/s.json", "runs/r1/host/turn-001.jsonl", "runs/r1/host/turn-001.jsonl.sandbox.json"} {
 		p := filepath.Join(ws.Hive(), filepath.FromSlash(rel))
 		os.MkdirAll(filepath.Dir(p), 0o755)
 		os.WriteFile(p, []byte("x"), 0o600)
