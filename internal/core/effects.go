@@ -1445,8 +1445,13 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		// main, as the work module's testing stage let it on, so the fix for
 		// a red main can land. Or red only in quarantined tests, which count
 		// against no head, as the forge's checks below.
-		if flaky = e.ExcusedLocal(p, m.Main, m.Task, ch.Files, c); len(flaky) == 0 {
+		// A log gone since the testing stage excused the run is run again.
+		var gone error
+		if flaky, gone = e.ExcusedLocal(p, m.Main, m.Task, func() ([]string, error) { return ch.Files, nil }, c); len(flaky) == 0 {
 			if mc, ok := e.GetCheck(p.Name, m.Main, "test"); !ok || mc.OK || !NoWorse(c, mc) {
+				if errors.Is(gone, ErrRetest) {
+					return "", fmt.Errorf("refusing to merge %s: %w", short(m.SHA), gone)
+				}
 				return "", refuse("%s: its test run is red beyond what main's own run at %s fails too (or main's has no record)", short(m.SHA), short(m.Main))
 			}
 		}
@@ -1884,27 +1889,42 @@ func (e *Effects) touched(p Project, main string, files []string) func(key strin
 // As with the forge's, it is shown, never assumed: c's full log is read (not
 // its clipped output), places every failing test in its package, shows
 // nothing else failing (OnlyTests), and every one is quarantined on evidence
-// from outside task in a package files don't touch.
-func (e *Effects) ExcusedLocal(p Project, main, task string, files []string, c Check) []string {
+// from outside task in a package files (the head's changes against main,
+// asked for only once every failing test is quarantined) don't touch. A log
+// gone from the host since the run is ErrRetest: only running it again shows.
+func (e *Effects) ExcusedLocal(p Project, main, task string, files func() ([]string, error), c Check) ([]string, error) {
 	if c.OK || c.CantRun != "" || c.Log == "" {
-		return nil
+		return nil, nil
 	}
 	q := e.Quarantine(p.Name, task)
 	if len(q) == 0 {
-		return nil
+		return nil, nil
 	}
 	b, err := SafeRead(c.Log, 8<<20)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrRetest
+	}
 	if err != nil || len(b) == 0 {
-		return nil
+		return nil, nil
 	}
 	log := string(b)
 	keys, placed := FailedTestKeys(log)
-	touched := e.touched(p, main, files)
-	if !placed || len(keys) == 0 || !OnlyTests(log) || slices.ContainsFunc(keys, func(k string) bool { return !slices.Contains(q, k) || touched(k) }) {
-		return nil
+	if !placed || len(keys) == 0 || slices.ContainsFunc(keys, func(k string) bool { return !slices.Contains(q, k) }) || !OnlyTests(log) {
+		return nil, nil
 	}
-	return keys
+	changed, err := files()
+	if err != nil {
+		return nil, err
+	}
+	if slices.ContainsFunc(keys, e.touched(p, main, changed)) {
+		return nil, nil
+	}
+	return keys, nil
 }
+
+// ErrRetest is a red test run whose log is gone from the host, so whether it
+// failed only known flakes can't be read: the run is made again.
+var ErrRetest = errors.New("its test run's log is gone, so it runs again")
 
 // JobRead reads repo's forge checks' logs and steps, each once.
 func (e *Effects) JobRead(repo string) JobRead {

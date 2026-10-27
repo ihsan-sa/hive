@@ -2,6 +2,7 @@ package work
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -497,4 +498,57 @@ func mustSync(t *testing.T, m *Module, p core.Project) string {
 		t.Fatal(err)
 	}
 	return main
+}
+
+// A local excusal is journaled on its own (tests.excused), once per commit,
+// so a change that hid a real failure behind a quarantined name can be found.
+// One whose log is gone by the merge is tested again, not refused toward a
+// stop.
+func TestLocalQuarantineLogGoneRetests(t *testing.T) {
+	key := e2eKey + "TestAnEventBringsTheNextTickForward"
+	m, task, p, f := localFlakeRig(t, e2eLog("TestAnEventBringsTheNextTickForward"), map[string]string{"feature.txt": "y"}, key)
+	toMerging(t, m, task, p)
+	c, _ := m.C.Effects.GetCheck(p.Name, task.SHA, "test")
+	if err := os.Remove(c.Log); err != nil {
+		t.Fatal(err)
+	}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageTesting || !task.Recheck || task.Failures != 0 {
+		t.Fatalf("a merge whose excused log is gone: stage %q, recheck %v, failures %d, reason %q", task.Stage, task.Recheck, task.Failures, task.Reason)
+	}
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
+	}
+	n := 0
+	for _, e := range m.C.J.Since(0) {
+		var ev struct {
+			SHA   string   `json:"sha"`
+			Tests []string `json:"tests"`
+		}
+		if e.Kind == "tests.excused" {
+			n++
+			e.Decode(&ev)
+			if ev.SHA != task.SHA || len(ev.Tests) != 1 || ev.Tests[0] != key {
+				t.Fatalf("tests.excused %+v", ev)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d tests.excused events, want 1", n)
+	}
+}
+
+// The head merged with main failing only quarantined tests merges as it is,
+// rather than being pushed and tested again.
+func TestMergedWithMainQuarantineExcused(t *testing.T) {
+	m, task, p, f := localFlakeRig(t, e2eLog("TestStalls"), map[string]string{"feature.txt": "y"}, e2eKey+"TestStalls")
+	toMerging(t, m, task, p)
+	head := task.SHA
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || task.SHA != head || !logHas(task, "its tests merged with main at") {
+		t.Fatalf("stage %q at %s (head %s), reason %q, log %v", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason, task.Log)
+	}
 }

@@ -1733,19 +1733,12 @@ func (m *Module) test(t *Task, p core.Project) error {
 	if err := m.noteTests(t, p, main, c); err != nil {
 		return err
 	}
-	if !c.OK && len(m.C.Effects.Quarantine(p.Name, t.ID)) > 0 {
-		// Known flakes count against no head, as on the forge's checks:
-		// Effects.Merge rules the same on this run.
-		ch, err := m.C.Effects.Classify(p, main, t.SHA)
-		if err != nil {
-			return err
-		}
-		if flaky := m.C.Effects.ExcusedLocal(p, main, t.ID, ch.Files, c); len(flaky) > 0 {
-			c.OK = true
-			if note := "known flakes: its tests fail on " + core.Short(t.SHA) + " only in quarantined tests (" + core.Clip(strings.Join(flaky, ", "), 300) + "), so they don't count against it"; !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
-				m.save(t, note)
-			}
-		}
+	// Known flakes count against no head, as on the forge's checks:
+	// Effects.Merge rules the same on this run.
+	if flaky, err := m.excused(t, p, main, t.SHA, c); err != nil {
+		return err
+	} else if len(flaky) > 0 {
+		c.OK = true
 	}
 	if !c.OK && t.Checkpoint != "" {
 		return m.dropCheckpoint(t, p, "the tests failed on "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 1500))
@@ -2390,6 +2383,13 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if errors.Is(err, core.ErrDraft) { // made a draft again between the look and the merge
 		return m.waitDraft(t, pr)
 	}
+	if errors.Is(err, core.ErrRetest) {
+		// The log the testing stage excused the red run on is gone: the run
+		// is made again there, rather than counting toward a stop.
+		t.Stage, t.Recheck = StageTesting, true
+		m.save(t, "testing again: "+core.Clip(err.Error(), 300))
+		return nil
+	}
 	if errors.Is(err, core.ErrHeadMoved) {
 		// A push since this look: no failure, the next look sees the new head.
 		m.save(t, "not readied: "+core.Clip(err.Error(), 300))
@@ -2612,6 +2612,11 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	if c.CantRun != "" {
 		return true, m.cantRun(t, p, c)
 	}
+	if flaky, err := m.excused(t, p, main, merged, c); err != nil {
+		return true, err
+	} else if len(flaky) > 0 {
+		c.OK = true
+	}
 	if !c.OK {
 		mc, err := m.mainTests(p, main, cfg.Test)
 		if err != nil {
@@ -2627,6 +2632,37 @@ func (m *Module) mergedTests(t *Task, p core.Project, main string) (bool, error)
 	t.MergedOK = key
 	m.save(t, "its tests pass merged with main at "+core.Short(main)+" (as "+core.Short(merged)+"), so it merges as it is")
 	return false, nil
+}
+
+// excused is the quarantined tests the red test check c of sha (t's head, or
+// it merged with main) fails, when they are all it fails (Effects.ExcusedLocal),
+// or none. Each excusal is noted on t and journaled once per commit
+// (tests.excused), so a change that hid a real failure behind a quarantined
+// name can be found after the fact.
+func (m *Module) excused(t *Task, p core.Project, main, sha string, c core.Check) ([]string, error) {
+	if c.OK {
+		return nil, nil
+	}
+	flaky, err := m.C.Effects.ExcusedLocal(p, main, t.ID, func() ([]string, error) {
+		ch, err := m.C.Effects.Classify(p, main, sha)
+		return ch.Files, err
+	}, c)
+	if len(flaky) == 0 || err != nil {
+		// A log gone is no verdict here: the red goes on as any red does.
+		if errors.Is(err, core.ErrRetest) {
+			err = nil
+		}
+		return nil, err
+	}
+	what := "its tests fail on " + core.Short(sha)
+	if sha != t.SHA {
+		what = "its tests merged with main at " + core.Short(main) + " fail"
+	}
+	if note := "known flakes: " + what + " only in quarantined tests (" + core.Clip(strings.Join(flaky, ", "), 300) + "), so they don't count against it"; !slices.ContainsFunc(t.Log, func(e Entry) bool { return e.Text == note }) {
+		m.save(t, note)
+		m.C.J.MustAppend("tests.excused", map[string]any{"project": p.Name, "task": t.ID, "sha": sha, "head": t.SHA, "main": main, "tests": flaky, "log": c.Log})
+	}
+	return flaky, nil
 }
 
 // hold keeps t where it is for why, saying so on the PR once per HoldKey: the
