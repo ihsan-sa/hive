@@ -98,6 +98,9 @@ type Task struct {
 	// MergedOK is "head+main" for the last head whose tests passed merged
 	// with that main (mergedTests), so it merges as it is without testing again.
 	MergedOK string `json:"merged_ok,omitempty"`
+	// UnknownSince is when the forge first couldn't say whether the PR
+	// merges cleanly; cleared once it can.
+	UnknownSince time.Time `json:"unknown_since,omitempty"`
 	Reviews  int    `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
 	// own diff, keyed by "diffID#seat". When the diff changes, the old
@@ -2570,6 +2573,14 @@ func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 	case pr.MergeState == "BEHIND":
 		return m.catchUp(t, p, main, "main moved and the forge wants the branch up to date")
 	case pr.Mergeable != "MERGEABLE":
+		if t.UnknownSince.IsZero() {
+			t.UnknownSince = time.Now()
+		} else if time.Since(t.UnknownSince) > unknownGrace {
+			// The forge's read is stuck: a push gives it a new head to work
+			// out, and the branch is tested with main in it.
+			t.UnknownSince = time.Time{}
+			return m.catchUp(t, p, main, "the forge could not say whether it merges with main")
+		}
 		// Said as a wait, so one that never resolves reaches the lead
 		// through the stall watcher like any other.
 		state := pr.Mergeable
@@ -2579,8 +2590,13 @@ func (m *Module) upToDate(t *Task, p core.Project, main string) (bool, error) {
 		m.hold(t, p, "waiting for the forge to work out whether PR #"+fmt.Sprint(t.PR.Number)+" merges cleanly with main (mergeable "+state+", main at "+core.Short(main)+")")
 		return true, nil
 	}
+	t.UnknownSince = time.Time{}
 	return m.mergedTests(t, p, main)
 }
+
+// unknownGrace is how long the forge may report mergeable UNKNOWN before the
+// branch is brought up to date to nudge it.
+const unknownGrace = 10 * time.Minute
 
 // mergedTests runs the project's tests on t's head merged with main, once
 // for each head and main, before a branch whose base is behind main merges

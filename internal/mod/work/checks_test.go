@@ -395,6 +395,20 @@ func TestMergeWaitsOnUnknownMergeable(t *testing.T) {
 	if task.Stage != StageMerging || !strings.HasPrefix(task.Reason, "waiting for the forge to work out") || !strings.Contains(task.Reason, "mergeable UNKNOWN") {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
+	task.UnknownSince = time.Now().Add(-time.Hour)
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageTesting {
+		t.Fatalf("stuck unknown should bring main in: stage %q, reason %q", task.Stage, task.Reason)
+	}
+}
+
+func TestMergeAfterUnknownResolves(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	pushMain(t, f, map[string]string{"other.txt": "z"})
+	m.C.Effects.Forge = unknownForge{f}
+	mergeOnce(t, m, task, p)
 	m.C.Effects.Forge = f
 	m.later = map[string]time.Time{}
 	mergeOnce(t, m, task, p)
