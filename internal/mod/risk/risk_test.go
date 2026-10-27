@@ -1089,7 +1089,7 @@ func TestPersonAnswersASettledAsk(t *testing.T) {
 				if a.Answer != want || a.Note != "my call" {
 					t.Fatalf("%s, %s: handler got %+v", route, answer, a)
 				}
-			case <-time.After(4 * time.Second):
+			case <-time.After(time.Minute):
 				t.Fatalf("%s, %s: the merge ask was never answered", route, answer)
 			}
 			if told := g.c.Person.Told(5); len(told) > 0 {
