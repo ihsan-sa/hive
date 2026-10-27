@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -171,6 +172,34 @@ func TestSquashBodyDropsCoAuthors(t *testing.T) {
 	})
 	if want := "* Fix the thing\n\nWhy it broke.\n\n* Follow up"; got != want {
 		t.Fatalf("squash body %q, want %q", got, want)
+	}
+}
+
+// A body with nothing left is still given, or gh would skip it and GitHub
+// write its default with the co-author lines; one past the argv cap is
+// trimmed to headlines.
+func TestSquashBodyNeverEmptyAndCapped(t *testing.T) {
+	if got := SquashBody([]string{"Co-authored-by: Claude <noreply@anthropic.com>"}); got != noSquashBody {
+		t.Fatalf("empty body %q", got)
+	}
+	if got := SquashBody(nil); got != noSquashBody {
+		t.Fatalf("no messages %q", got)
+	}
+	long := strings.Repeat("x", 1000) + "\n"
+	var msgs []string
+	for i := 0; i < 200; i++ {
+		msgs = append(msgs, fmt.Sprintf("* Commit %d\n\n%s", i, strings.Repeat(long, 5)))
+	}
+	got := SquashBody(msgs)
+	if len(got) > squashBodyMax+100 || !strings.HasPrefix(got, "* Commit 0\n* Commit 1\n") || strings.Contains(got, "xxx") {
+		t.Fatalf("long body %d bytes: %.80q", len(got), got)
+	}
+	var many []string
+	for i := 0; i < 20000; i++ {
+		many = append(many, fmt.Sprintf("* Commit %d", i))
+	}
+	if got := SquashBody(many); len(got) > squashBodyMax+100 || !strings.HasSuffix(got, "pull request)") {
+		t.Fatalf("many headlines %d bytes", len(got))
 	}
 }
 

@@ -360,6 +360,38 @@ func TestCheckRankFixes(t *testing.T) {
 	}
 }
 
+// The merge line's front tests its head merged with main, a sha no task
+// holds as its head: it goes ahead of every task's own check, behind main's
+// measurement, and drops back once done or gone (issue #1766).
+func TestCheckRankMergeFront(t *testing.T) {
+	m, _, _ := helperRig(t)
+	m.mu.Lock()
+	m.tasks["front"] = &Task{ID: "front", Project: "p", SHA: "head", Stage: StageMerging}
+	m.tasks["fix"] = &Task{ID: "fix", Project: "p", SHA: "s1", Stage: StageTesting, Aim: AimFix}
+	m.mergeRuns = map[string]*mergeRun{"front": {key: "head+main1", main: "main1", sha: "merged"}}
+	m.mu.Unlock()
+	if got := m.checkRank("p", "merged", "test"); got != rankMerge || got <= m.checkRank("p", "s1", "test") {
+		t.Errorf("the front's merged test ranked %d, a fix's check %d", got, m.checkRank("p", "s1", "test"))
+	}
+	if RankWhy(rankMerge) == "" {
+		t.Error("the merge front's rank says nothing")
+	}
+	if got := m.checkRank("other", "merged", "test"); got != 0 {
+		t.Errorf("another project's merge ranked %d", got)
+	}
+	done := m.MeasuringMain("p", "main2")
+	if got := m.checkRank("p", "main2", "score"); got <= rankMerge {
+		t.Errorf("main's measurement ranked %d, not ahead of the merge front", got)
+	}
+	done()
+	m.mu.Lock()
+	m.mergeRuns["front"].done = true
+	m.mu.Unlock()
+	if got := m.checkRank("p", "merged", "test"); got != 0 {
+		t.Errorf("a finished merged test still ranked %d", got)
+	}
+}
+
 // Main's own measurement goes ahead of every task's check while it runs,
 // and keeps its place once done (issue #1078).
 func TestCheckRankMainFirst(t *testing.T) {
