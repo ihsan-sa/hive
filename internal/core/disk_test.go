@@ -222,6 +222,27 @@ func TestMeasureDiskNamesHomes(t *testing.T) {
 	}
 }
 
+// A running check's clean checkout is never pruned, though goBuild dates its
+// folders to 2001: Prune took the tree from under a check's tests, which then
+// failed on "getcwd() failed" (#1058). Once the check is done it goes.
+func TestPruneLeavesARunningChecksCheckout(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	e := c.Effects
+	e.sweep = func() int { return 0 }
+	dir, err := e.cleanCheckout(p, main, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	if err := stableTimes(dir); err != nil {
+		t.Fatal(err)
+	}
+	e.Prune()
+	if !Exists(filepath.Join(dir, "README.md")) {
+		t.Fatal("Prune removed a running check's checkout")
+	}
+}
+
 func TestBytes(t *testing.T) {
 	for n, want := range map[int64]string{0: "0 B", 1023: "1023 B", 1536: "1.5 KB", 3 << 30: "3.0 GB"} {
 		if got := Bytes(n); got != want {

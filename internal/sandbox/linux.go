@@ -123,15 +123,18 @@ func Exec(specPath string) int {
 		return 125
 	}
 	os.Remove(specPath) // it may carry a short-lived token; don't leave it on disk
-	if s.Nice > 0 {
-		// This launcher, the init it starts and the command inherit it, so a
-		// check or a worker's turn yields the cpu to a lead's.
-		lowerPriority(s.Nice)
-	}
 	errf := os.Stderr
 	if s.Stdout != "" {
 		if f, err := proc.OpenOutput(s.Stdout + ".err"); err == nil {
 			errf = f
+		}
+	}
+	if s.Nice > 0 {
+		// This launcher, the init it starts and the command inherit it, so a
+		// check or a worker's turn yields the cpu to a lead's. Failing to is
+		// no reason not to run; it is said in the run's stderr log.
+		if err := lowerPriority(s.Nice); err != nil {
+			fmt.Fprintln(errf, "sandbox: running at the daemon's priority, not", s.Nice, "under it:", err)
 		}
 	}
 	fail := func(err error) int { fmt.Fprintln(errf, "sandbox:", err); return 125 }
@@ -841,15 +844,17 @@ func (Linux) Run(s Spec, timeout time.Duration) (int, error) {
 // thread first. The level adds to the daemon's own, as `nice -n` does for
 // the bare and Seatbelt sandboxes (the raw getpriority answers 20 minus the
 // nice level). Going lower needs no privilege, and failing to is no reason
-// not to run.
-func lowerPriority(by int) {
+// not to run. The thread stays locked for good, so this process (hive
+// sandbox-exec, one per command) must not go on to other work afterwards,
+// and the fork must stay on this goroutine.
+func lowerPriority(by int) error {
 	if by <= 0 {
-		return
+		return nil
 	}
 	runtime.LockOSThread()
 	cur := 0
 	if prio, err := unix.Getpriority(unix.PRIO_PROCESS, 0); err == nil {
 		cur = 20 - prio
 	}
-	unix.Setpriority(unix.PRIO_PROCESS, 0, Lowered(cur, by))
+	return unix.Setpriority(unix.PRIO_PROCESS, 0, Lowered(cur, by))
 }

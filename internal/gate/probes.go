@@ -111,7 +111,7 @@ func probeE2E(cfg *Config, c *Child) Result {
 }
 
 // failLine is go test's line for a failing test. A name goes into the
-// verdict, and so into a lesson, so only one shaped like a Go test's counts:
+// verdict a worker reads, so only one shaped like a Go test's counts:
 // the output passed through the side's sandbox.
 var failLine = regexp.MustCompile(`^\s*--- FAIL: (Test[A-Za-z0-9_]{0,80}(?:/[A-Za-z0-9_#.+=-]{1,80}){0,3}) \(`)
 
