@@ -568,19 +568,20 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		code, out, err = run(true)
 	}
 	mods.done()
-	if mods.marker != "" && code != 0 && strings.Contains(out, staleModules) {
+	if line := staleLine(out); mods.marker != "" && code != 0 && line != "" {
 		// Offline, the check couldn't have a module: not the commit's fault,
 		// so it runs once more fetching its own, in a checkout the first run
 		// hasn't written to. If go.sum names the module the cache lacked
-		// what its marker promised, and the marker goes; if not, the check
-		// needs more than the cache can hold, and later checks of the same
-		// go.mod and go.sum skip it.
-		if cacheLacked(out, mods.sum) {
+		// what its marker promised, and the marker goes; if not and the
+		// check then passes, it needs more than the cache can hold, and later
+		// checks of the same go.mod and go.sum skip it for a while. The note
+		// keeps the line, so which module it was can be read later.
+		lacked := cacheLacked(line, mods.sum)
+		if lacked {
 			os.Remove(mods.marker)
-			mods.note = "the shared module cache lacked a module; run again without it"
+			mods.note = "the shared module cache lacked a module; run again without it (" + line + ")"
 		} else {
-			os.WriteFile(mods.marker+ownModules, nil, 0o644)
-			mods.note = "the check needs a module go.sum doesn't name; run again fetching its own"
+			mods.note = "the check needs a module go.sum doesn't name; run again fetching its own (" + line + ")"
 		}
 		again, cerr := e.cleanCheckout(p, sha, kind)
 		if cerr != nil {
@@ -594,6 +595,9 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		}
 		mounts = []sandbox.Mount{{Host: again, Inside: "/work", RW: true}}
 		code, out, err = run(false)
+		if !lacked && code == 0 && err == nil {
+			os.WriteFile(mods.marker+ownModules, nil, 0o644)
+		}
 	}
 	build.done()
 	for _, n := range []string{build.note, mods.note} {
