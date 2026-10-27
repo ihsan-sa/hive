@@ -127,7 +127,7 @@ func TestStackSurvivesTinyWindows(t *testing.T) {
 	for h := -1; h <= 8; h++ {
 		for _, sel := range [][2]int{{0, 0}, {0, 2}, {3, 9}} {
 			off := 5
-			stack(lines, append([]string(nil), bx...), h, &off, sel[0], sel[1], true)
+			stack(lines, append([]string(nil), bx...), h, 2, &off, sel[0], sel[1], true)
 		}
 	}
 	for h := 1; h <= 8; h++ {

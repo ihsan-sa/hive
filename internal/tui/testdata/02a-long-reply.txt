@@ -33,4 +33,4 @@
                       │  │ › Write to the lead of textkit-2…         │ │
                       │  ╰───────────────────────────────────────────╯ │
 ──────────────────────┴────────────────────────────────────────────────┴────────────────────────────────────────────────
- enter send   ctrl+j newline   esc close thread   ← tab to the channel   pgup pgdn scroll   alt+v image
+ enter send   ctrl+j newline   esc close thread   ↑ pgup scroll   ← tab to the channel   ctrl+end newest   alt+v image

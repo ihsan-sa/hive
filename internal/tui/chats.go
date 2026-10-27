@@ -245,6 +245,9 @@ func (m *model) keySidebar(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch k.String() {
+	case "e", "E":
+		m.foldSidebar(k.String() == "e")
+		return m, nil
 	case " ", "enter":
 		if r.group {
 			m.closed[r.key] = !m.closed[r.key]
@@ -276,6 +279,51 @@ func (m *model) keySidebar(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.focus = 1
 	return m, m.markRead()
+}
+
+// foldSidebar opens the sidebar a level at a time, the project groups and
+// then the ended agents' folds in them, or closes it the same way back.
+func (m *model) foldSidebar(open bool) {
+	var groups, folds []string
+	for _, r := range m.rows(true) {
+		switch {
+		case r.group:
+			groups = append(groups, r.key)
+		case r.fold:
+			folds = append(folds, r.key)
+		}
+	}
+	shut := func(key string) bool { return m.closed[key] }
+	if open {
+		if anyOf(groups, shut) {
+			for _, g := range groups {
+				m.closed[g] = false
+			}
+			return
+		}
+		for _, f := range folds {
+			m.open[f] = true
+		}
+		return
+	}
+	if anyOf(folds, func(f string) bool { return m.open[f] }) {
+		for _, f := range folds {
+			m.open[f] = false
+		}
+		return
+	}
+	for _, g := range groups {
+		m.closed[g] = true
+	}
+}
+
+func anyOf(keys []string, f func(string) bool) bool {
+	for _, k := range keys {
+		if f(k) {
+			return true
+		}
+	}
+	return false
 }
 
 // sideAt finds the cursor's row by its key, since chats come and go above it
@@ -484,8 +532,10 @@ func (m *model) keyChannel(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "esc", "left", "h":
 		m.focus = 0
-	case "pgup", "pgdown", "home", "end":
-		m.chScroll, m.chFree = scroll(m.chScroll, s, m.h-4), true
+	case "pgup", "pgdown", "home", "end", "ctrl+home", "ctrl+end", "g", "G":
+		m.scrollChat(false, s)
+	case "e", "E": // one level more or less of every thread
+		m.foldThreads(ts, s == "e")
 	case "n", "i":
 		return m, m.focusBox("")
 	case "a":
@@ -521,17 +571,41 @@ func (m *model) toWaiting() tea.Cmd {
 	return m.pick(sideRow{sec: secWaiting})
 }
 
-// scroll moves an offset counted in lines up from the bottom.
+// scroll moves an offset counted in lines up from the bottom; End and the
+// keys like it go to the newest line.
 func scroll(off int, key string, page int) int {
 	switch key {
 	case "pgup", "wheelup":
 		return off + map[string]int{"pgup": page - 2, "wheelup": 3}[key]
 	case "pgdown", "wheeldown":
 		return max(0, off-map[string]int{"pgdown": page - 2, "wheeldown": 3}[key])
-	case "home":
+	case "home", "ctrl+home", "g":
 		return 1 << 20
 	}
 	return 0
+}
+
+// scrollChat scrolls the open thread's pane or the channel by a key. The
+// channel lets go of its pick, so nothing pulls it back; going to the end
+// drops the pick too, so the newest message is what shows and ↑ picks it.
+func (m *model) scrollChat(thread bool, key string) {
+	if thread {
+		m.thScroll = scroll(m.thScroll, key, m.h-4)
+		return
+	}
+	m.chScroll, m.chFree = scroll(m.chScroll, key, m.h-4), true
+	switch key {
+	case "end", "ctrl+end", "G":
+		m.threadSel = -1
+	}
+}
+
+// foldThreads opens every thread's replies, or closes them all: a channel
+// has the one level, so e and E (shift+e) are expand and collapse all.
+func (m *model) foldThreads(ts []thread, open bool) {
+	for _, t := range ts {
+		m.open["t:"+t.id] = open
+	}
 }
 
 // focusBox points the one text box at a target, a new thread in this chat
@@ -650,16 +724,25 @@ func (m *model) viewChannel(w int) pane {
 	if m.chFree { // scrolled by hand: the offset rules, not the selection
 		selStart, selEnd = 0, 0
 	}
-	p.body = stack(append(lines, ""), bx, m.h-4, &m.chScroll, selStart, selEnd, true)
+	p.body = stack(lines, bx, m.h-4, 2, &m.chScroll, selStart, selEnd, true)
 	return p
 }
 
 // stack puts a box under the content: right after it when both fit (or on
 // the last rows, bottom set), else on the last rows with the content scrolled
 // (off lines up from its end, kept so lines [s0,s1) show).
-func stack(lines, bx []string, h int, off *int, s0, s1 int, bottom bool) []string {
+// gap blank rows always part the content from the box, so its last line
+// never sits right on the box, however the content is cut.
+func stack(lines, bx []string, h, gap int, off *int, s0, s1 int, bottom bool) []string {
+	for len(lines) > 0 && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	s0, s1 = min(s0, len(lines)), min(s1, len(lines))
 	for i := range bx {
 		bx[i] = "  " + bx[i]
+	}
+	if gap = min(gap, h-len(bx)-1); gap > 0 {
+		bx = append(make([]string, gap), bx...)
 	}
 	room := max(0, h-len(bx))
 	if len(lines) <= room {
@@ -705,12 +788,8 @@ func (m *model) viewThread(w int) pane {
 	tw := w - 5
 	var lines []string
 	add := func(ls ...string) { lines = append(lines, indent(ls, "   ")...) }
-	pending := 0
-	for _, o := range m.outbox {
-		if o.chat == m.chat && o.thread == m.thread {
-			pending++
-		}
-	}
+	sending := m.sending(t.msgs)
+	pending := len(sending)
 	for i, msg := range t.msgs {
 		add(msgHead(msg))
 		add(m.body(msg.Text, tw)...)
@@ -721,17 +800,39 @@ func (m *model) viewThread(w int) pane {
 			add(stDim.Render(r+strings.Repeat("─", max(0, tw-len(r)))), "")
 		}
 	}
-	for _, o := range m.outbox {
-		if o.chat == m.chat && o.thread == m.thread {
-			add(stBoldF.Render("you") + "  " + stDim.Render("◌ sending…"))
-			add(indent(m.body(o.text, tw), "")...)
-			add("")
-		}
+	for _, o := range sending {
+		add(stBoldF.Render("you") + "  " + stDim.Render("◌ sending…"))
+		add(indent(m.body(o.text, tw), "")...)
+		add("")
 	}
 	_, name := m.where()
 	bx := m.compose("reply · "+name, "Reply to this thread…", m.thread, w-3)
-	p.body = stack(lines, bx, m.h-4, &m.thScroll, 0, 0, false)
+	p.body = stack(lines, bx, m.h-4, 1, &m.thScroll, 0, 0, false)
 	return p
+}
+
+// sending is what the open thread has in the outbox, less what a fetch has
+// already brought back while the post was still answering, which would show
+// twice and then once.
+func (m *model) sending(msgs []chat.Message) []outMsg {
+	got := map[string]bool{}
+	var out []outMsg
+	for _, o := range m.outbox {
+		if o.chat != m.chat || o.thread != m.thread {
+			continue
+		}
+		landed := false
+		for _, x := range msgs {
+			if !got[x.ID] && x.From == "person" && strings.HasPrefix(x.Text, o.text) && !x.At.Before(o.at.Add(-time.Minute)) {
+				got[x.ID], landed = true, true
+				break
+			}
+		}
+		if !landed {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // compose draws the box for one target: live when it has focus, else its
