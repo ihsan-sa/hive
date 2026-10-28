@@ -67,7 +67,7 @@ func CeilingMatch(texts ...string) (kind, phrase string) {
 // does: a money mention, a negated protection ("no firewall") and a negated
 // cap ("don't expose more than one port") always count. It only
 // routes; the script that would run still meets CeilingGuard,
-// which counts every mention.
+// which counts every mention outside a comment.
 func AskCeilingMatch(texts ...string) (kind, phrase string) {
 	return ceilingMatch(true, texts...)
 }
@@ -77,6 +77,29 @@ func ceilingMatch(skipRuledOut bool, texts ...string) (string, string) {
 	for _, k := range []string{"money", "credential", "open", "outward"} {
 		for _, m := range alwaysPersonRe[k].FindAllStringIndex(t, -1) {
 			if !skipRuledOut || !ruledOut(k, t[:m[0]], t[m[0]:m[1]], t[m[1]:]) {
+				return k, t[m[0]:m[1]]
+			}
+		}
+	}
+	return "", ""
+}
+
+// ScriptCeilingMatch is CeilingMatch for the script that would run: every
+// mention counts, except one on a whole-line shell comment that the comment
+// itself rules out ("# Scrubbed environment: no tokens"), since a comment
+// never runs. A mention on a line with code, or one a comment asks for
+// ("# rotate the token"), still counts.
+func ScriptCeilingMatch(texts ...string) (string, string) {
+	t := strings.Join(texts, "\n")
+	for _, k := range []string{"money", "credential", "open", "outward"} {
+		for _, m := range alwaysPersonRe[k].FindAllStringIndex(t, -1) {
+			start := strings.LastIndexByte(t[:m[0]], '\n') + 1
+			end := len(t)
+			if i := strings.IndexByte(t[m[1]:], '\n'); i >= 0 {
+				end = m[1] + i
+			}
+			body, ok := strings.CutPrefix(strings.TrimLeft(t[start:m[0]], " \t"), "#")
+			if !ok || !ruledOut(k, body, t[m[0]:m[1]], t[m[1]:end]) {
 				return k, t[m[0]:m[1]]
 			}
 		}
@@ -168,6 +191,12 @@ func AskCeiling(floor []string, texts ...string) string {
 	return ceiling(AskCeilingMatch, floor, texts...)
 }
 
+// ScriptCeiling is Ceiling for the exact script that would run: a mention a
+// comment rules out doesn't count (ScriptCeilingMatch).
+func ScriptCeiling(floor []string, script string) string {
+	return ceiling(ScriptCeilingMatch, floor, script)
+}
+
 func ceiling(match func(...string) (string, string), floor []string, texts ...string) string {
 	if k, p := match(texts...); k != "" {
 		return fmt.Sprintf("%s (%s: it says %q)", AlwaysPerson[k], k, p)
@@ -211,7 +240,7 @@ func Route(tier string, autonomy int, ceiling string) string {
 // would run: a step the ceiling or the person's floor names runs only on the
 // person's own yes, whatever a warden or panel decided.
 func CeilingGuard(script string, floor []string, personApproved bool) error {
-	if why := Ceiling(floor, script); why != "" && !personApproved {
+	if why := ScriptCeiling(floor, script); why != "" && !personApproved {
 		return fmt.Errorf("refused: this step %s, which is always the person's to decide", why)
 	}
 	return nil
