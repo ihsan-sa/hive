@@ -126,6 +126,8 @@ func gitHubAnswers(r *http.Request, body []byte) (int, string) {
 		return 200, `{"data":{"createPullRequest":{"pullRequest":` + pr + `}}}`
 	case strings.HasPrefix(strings.TrimSpace(q.Query), "mutation"):
 		return 200, `{"data":{}}`
+	case strings.Contains(q.Query, "projectItems("): // newer gh's pr view asks these apart
+		return 200, `{"data":{"repository":{"pullRequest":{"projectItems":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`
 	case strings.Contains(q.Query, "pullRequest("):
 		return 200, `{"data":{"repository":{"pullRequest":` + pr + `}}}`
 	}
