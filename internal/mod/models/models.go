@@ -74,6 +74,8 @@ type Module struct {
 	// demoted is each project's worker picks whose runs keep ending without
 	// a merge, by demoteKey, with why: Tick works it out from the tasks.
 	demoted map[string]string
+	// ledgers is how each project's ledger was last left (ledger.go).
+	ledgers map[string]ledgerSeen
 }
 
 // demoteAfter is the ended tasks in a row, each blocked, a pick's workers
@@ -134,7 +136,7 @@ func downOf(downs []core.Down, p core.Pick) (core.Down, bool) {
 
 // New registers the ops and the person's answer to a check seat's route.
 func New(c *core.Core, w *work.Module) *Module {
-	m := &Module{C: c, Work: w, trials: map[string]Trial{}, order: map[string]int{}, demoted: map[string]string{}, Probe: Probe}
+	m := &Module{C: c, Work: w, trials: map[string]Trial{}, order: map[string]int{}, demoted: map[string]string{}, ledgers: map[string]ledgerSeen{}, Probe: Probe}
 	apply := func(e core.Event) {
 		if e.Kind != "model.trial" {
 			return
@@ -427,6 +429,7 @@ func (m *Module) Tick() {
 		m.C.J.MustAppend("model.trial", tr)
 	}
 	m.tickDemoted()
+	m.tickLedgers()
 }
 
 // tickDemoted works out the picks whose workers keep ending blocked on a
@@ -514,14 +517,7 @@ func (m *Module) Benched(p core.Pick) bool {
 // View is what the models op shows.
 func (m *Module) View(r core.Run) map[string]any {
 	cfg := m.C.WS.LoadConfig()
-	named := map[string]string{}
-	for name, x := range cfg.Models {
-		s := x.Where()
-		if x.Key {
-			s += ", needs a key"
-		}
-		named[name] = s
-	}
+	named := named(cfg)
 	routes := map[string][]string{}
 	for _, role := range core.RouteRoles {
 		routes[role] = cfg.Shown(role, r.Project)
@@ -571,6 +567,19 @@ func (m *Module) View(r core.Run) map[string]any {
 	m.mu.Unlock()
 	slices.Sort(demoted)
 	return map[string]any{"models": named, "routes": routes, "agents": agents, "trials": trials, "trials_not_counted": uncounted, "trials_running": running, "unavailable": down, "demoted": demoted}
+}
+
+// named is each named model and where it is, as the models op shows them.
+func named(cfg core.Config) map[string]string {
+	out := map[string]string{}
+	for name, x := range cfg.Models {
+		s := x.Where()
+		if x.Key {
+			s += ", needs a key"
+		}
+		out[name] = s
+	}
+	return out
 }
 
 // downLine is a Down with when it is tried again and the fix.

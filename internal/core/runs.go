@@ -472,6 +472,9 @@ type Runs struct {
 	// module that runs it elsewhere: the sandbox to start it in and the
 	// runner that has room, or nil when no module has room now.
 	Executor func() (sandbox.Sandbox, string)
+	// CheckExecutor is the same for a check the check line would make wait,
+	// from a module that says it takes checks.
+	CheckExecutor func() (sandbox.Sandbox, string)
 	// Admit says why a run's next turn waits on a module, or "": the work
 	// module's pace for a worker sent back to its task (Returned).
 	Admit func(Run) string
@@ -2541,14 +2544,19 @@ func (rs *Runs) Elsewhere() bool {
 // executor returns an executor module with room for a turn this machine is
 // too strained to start (or an away run's), and the runner it named; nil when there is none or
 // the local sandbox isn't one whose spec another machine can run.
-func (rs *Runs) executor() (sandbox.Sandbox, string) {
-	if rs.Executor == nil {
+func (rs *Runs) executor() (sandbox.Sandbox, string) { return rs.handOver(rs.Executor) }
+
+// checkExecutor is executor for a check (CheckExecutor).
+func (rs *Runs) checkExecutor() (sandbox.Sandbox, string) { return rs.handOver(rs.CheckExecutor) }
+
+func (rs *Runs) handOver(ex func() (sandbox.Sandbox, string)) (sandbox.Sandbox, string) {
+	if ex == nil {
 		return nil, ""
 	}
 	if sb, err := rs.sandbox(); err != nil || !sb.Isolated() {
 		return nil, ""
 	}
-	return rs.Executor()
+	return ex()
 }
 
 // RunPath is where a run's agent sees its run dir ($HIVE_RUN).

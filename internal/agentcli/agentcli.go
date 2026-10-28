@@ -226,6 +226,9 @@ The loop is every agent's: these act on your own project's tasks, on the record 
   hold_merges --project p --why "their words" [--only N,M] [--until release] [--lift]   (lead) on the person's
                                                  word only: nothing merges but those PRs until lifted or released
   create_project --name n [--repo o/r] --description "..." --goals "..." [--sharing shared|private|isolated]   (lead)
+                                                 a bare name goes in repo_owner, else self_fork, else the gh login
+  retire_project --name n --why "..."            (lead) one made by mistake: setup never finished, or nothing
+                                                 in flight or merged; the repository is left as it is
   install_module --url <git url> | --project <module>   (lead) a warden weighs it; you hear back
   requests                                       each request past a sandbox and where it stands
 In $HIVE_STATE, logins/ and private/ (the daemon's token, every agent's home) are covered, and so are an
