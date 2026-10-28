@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -298,6 +299,11 @@ func (c Config) Check() error {
 	}
 	if err := c.checkRoutes(); err != nil {
 		return err
+	}
+	for _, name := range slices.Sorted(maps.Keys(c.Models)) {
+		if err := harness.OpenRouterPaid(c.Models[name].Endpoint, c.Models[name].Model); err != nil {
+			return fmt.Errorf("model %s: %v", name, err)
+		}
 	}
 	if _, ok := c.Models[c.Model]; HarnessName(c.Harness) == "open" && !ok {
 		return fmt.Errorf("the open harness runs a model named in models, and %q isn't one", c.Model)

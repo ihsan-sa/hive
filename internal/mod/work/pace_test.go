@@ -492,6 +492,27 @@ func TestPacePullsBackAheadOfTheWeek(t *testing.T) {
 	}
 }
 
+// The pull-back reads route by route: on 10-27 Claude's week went from 26%
+// to 65% at 14% of it passed, and it never fired, as a free model first on
+// another project's route reads on the clock (issue #1797).
+func TestPacePullsBackWithAFreeModelOnAnotherRoute(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	pick := cfg.Route("worker", "")[0]
+	cfg.Models = map[string]core.OpenModel{"gpt-oss": {Endpoint: "https://openrouter.ai/api/v1", Model: "openai/gpt-oss-120b:free", Key: true}}
+	cfg.Projects = map[string]core.ProjectSettings{"deck": {Routes: map[string][]string{"worker": {"open:gpt-oss", pick.Harness + ":" + pick.Model}}}}
+	week := time.Now().Add(6 * 24 * time.Hour)
+	m.C.J.MustAppend("plan.usage", core.Plan{Harness: pick.Harness, Limit: harness.RateLimit{Status: "allowed", ResetsAt: week, Window: "seven_day",
+		Windows: map[string]harness.Window{"seven_day": {Utilization: 0.6, ResetsAt: week}}}})
+	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of the clock") {
+		t.Fatalf("the workspace's route 45%% ahead, a free model on deck's: %q", why)
+	}
+	cfg.Routes = map[string][]string{"worker": {"open:gpt-oss"}}
+	if why := m.planSpent(cfg); why != "" {
+		t.Fatalf("every route has a free model: %q", why)
+	}
+}
+
 // Pulled under its start by CPU pressure, the workers' pace comes back to
 // its start a growStep after only load is left, as load alone would block
 // its growth for good; the checks' pace, whose builds make the load, may

@@ -165,7 +165,7 @@ type tickMsg time.Time
 type outMsg struct {
 	n                  int
 	chat, thread, text string
-	had                int // the thread's messages from the person with this text when it was sent
+	had                int // the thread's messages from the person with this text when it was sent, and its sends still out
 }
 type sentMsg struct {
 	out outMsg
@@ -856,6 +856,11 @@ func (m *model) send(text string) tea.Cmd {
 	m.sent++
 	o := outMsg{n: m.sent, chat: m.chat, thread: m.reply, text: text}
 	o.had = m.echoes(o)
+	for _, p := range m.outbox { // the same text sent twice before a read: one echo hides only the first
+		if p.chat == o.chat && p.thread == o.thread && p.text == o.text {
+			o.had++
+		}
+	}
 	files := m.files
 	m.files, m.composeN = nil, m.composeN+1 // a clipboard read still running was for the sent message
 	m.drafts[o.chat+"\x00"+o.thread] = ""

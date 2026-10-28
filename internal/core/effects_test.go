@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // testHive is a workspace with a local forge and bare (opted-in) runs.
@@ -128,7 +129,7 @@ func TestMergeNeedsCheckAndVerdictOnExactCommit(t *testing.T) {
 	if ch := c.Effects.RunCheck(p, sha, "test", red); ch.OK {
 		t.Fatal("a failing test run passed")
 	}
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "red beyond") {
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "main has no recorded test run at "+short(main)) {
 		t.Fatalf("merged on a red test run main doesn't share: %v", err)
 	}
 	if ch := c.Effects.RunCheck(p, sha, "test", c.Effects.Config(p, main).Test); !ch.OK {
@@ -178,6 +179,42 @@ func TestMergeNeedsCheckAndVerdictOnExactCommit(t *testing.T) {
 	}
 	if merged == "" {
 		t.Fatal("no merge commit")
+	}
+}
+
+// A red run merges only where main's own recorded run fails the same tests,
+// main read as the work module's testing stage reads it: a red main a later
+// retest passed is green, and the change's red is its own.
+func TestMergeRedNoWorseThanMain(t *testing.T) {
+	c, f, p, main := setupProject(t)
+	r, _ := commitInCheckout(t, c, p, "w1", main, "notes.md", "# notes\n")
+	sha, err := c.Effects.Extract(p, r, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Effects.Push(p, "hive/t1", sha)
+	pr, _ := f.CreatePR(p.Repo, "hive/t1", "main", "notes", "")
+	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main, Subject: "notes"}
+	fail := func(tests ...string) string {
+		s := ""
+		for _, n := range tests {
+			s += "echo '--- FAIL: " + n + " (0.01s)'; "
+		}
+		return s + "echo 'FAIL\tp/a\t0.01s'; exit 1"
+	}
+	c.Effects.RunCheck(p, main, "test", fail("TestClock"))
+	c.Effects.RunCheck(p, sha, "test", fail("TestClock", "TestNew"))
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "p/a TestNew") || strings.Contains(err.Error(), "TestClock") {
+		t.Fatalf("want a refusal naming only the failure main doesn't share: %v", err)
+	}
+	c.Effects.RunCheck(p, sha, "test", fail("TestClock"))
+	c.Effects.RunCheck(p, main, "retest", "true")
+	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "main's own passes") {
+		t.Fatalf("merged a red main's retest called a flake: %v", err)
+	}
+	c.Effects.RunCheck(p, main, "retest", "false")
+	if _, err := c.Effects.Merge(req); err != nil {
+		t.Fatalf("a red no worse than main's was refused: %v", err)
 	}
 }
 
@@ -1639,5 +1676,26 @@ func TestUpdateBranchMergedMainBeforeCheckpointLanded(t *testing.T) {
 	}
 	if got := u.mainFile(next, "main.go"); got != file(6, 3) {
 		t.Fatalf("the update should keep the resolution:\n%s", got)
+	}
+}
+
+func TestClipEndsKeepsTheSummary(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("=== RUN TestFirst\n")
+	for i := range 500 {
+		fmt.Fprintf(&b, "    noise line %d of a long test run\n", i)
+	}
+	b.WriteString("--- FAIL: TestLast (0.01s)\nFAIL\nFAIL\texample.com/pkg\t0.2s\nRan 312 tests in 4.1s\n")
+	got := ClipEnds(b.String(), 4000)
+	if n := utf8.RuneCountInString(got); n > 4100 {
+		t.Fatalf("clipped to %d runes, want about 4000", n)
+	}
+	for _, want := range []string{"=== RUN TestFirst\n", "--- FAIL: TestLast", "Ran 312 tests in 4.1s\n", "characters cut"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("clipped output lacks %q:\n%s", want, got)
+		}
+	}
+	if s := "short\noutput\n"; ClipEnds(s, 4000) != s {
+		t.Error("a short output should come back whole, newlines and all")
 	}
 }
