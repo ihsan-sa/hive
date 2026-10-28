@@ -310,6 +310,8 @@ type Module struct {
 	// retesting is held while main's red tests run once more (mainTests).
 	retesting sync.Mutex
 	busy      map[string]bool
+	away      map[string]bool      // queued tasks admit started past the pace for a runner, until their worker starts
+	elsewhere func() bool          // whether an executor module has room: core.Runs.Elsewhere, or a test's
 	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
 	aims      map[string]aimAsk    // aims asked while a step held the task, set as it ends
 	// steered is when the person's stop, retry or recheck (steer) last saved
@@ -1355,6 +1357,7 @@ func workerID(t Task) string {
 
 func (m *Module) startWorker(t *Task, p core.Project) error {
 	id := workerID(*t)
+	away := m.takeAway(t.ID)
 	if _, ok := m.C.Runs.Get(id); !ok {
 		base, err := m.C.Effects.Sync(p)
 		if err != nil {
@@ -1373,7 +1376,7 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 			return err
 		}
 		spec := m.Agents.Spec(id, "worker", p.Name, dir, m.renderBrief(t, p, base))
-		spec.Task, spec.Inputs = t.ID, t.Inputs
+		spec.Task, spec.Inputs, spec.Away = t.ID, t.Inputs, away
 		if t.Model != "" {
 			pick, err := m.C.WS.LoadConfig().Pick(t.Model)
 			if err != nil {
