@@ -2291,16 +2291,24 @@ func aimCheck(t *Task, p core.Project) string {
 	return "\n\n## The aim\n\nThis change to the Hive itself is declared a fix (" + core.Clip(t.AimWhy, 300) + "), so it merges without the recursive gate, and a score dip after it doesn't revert it on its own. If it fixes no failure the change itself shows, or is really aimed at a measurable gain (the brief names a target to beat, or the diff tunes the benchmark, the score or the gate to move a number), that is a finding: the worker must declare it with `hive agent aim --aim gain --why \"...\"` so the gate judges it. A fix that only touches those files to repair them is still a fix."
 }
 
-// reviewRules are the project's standing rules, read from main so a change
-// can't move the bar it is judged against. Lessons are among them: a revert
-// the Hive made has no worker brief quoting them, and one may have landed
-// since the worker started.
+// reviewRules are the project's standing rules: docs/REVIEW.md (the
+// person's intent for the product) in full, read from main so a change can't
+// move the bar it is judged against, and goals and lessons by path, since a
+// reader that can change nothing doesn't need all of them in every brief
+// (docs/research/forced.md); the worker's brief already quotes the lessons.
 func (m *Module) reviewRules(p core.Project, main string) string {
 	var b strings.Builder
-	for _, f := range []string{"docs/REVIEW.md", ".hive/goals.md", ".hive/lessons.md"} {
-		if s := strings.TrimSpace(m.C.Effects.ReadFile(p, main, f)); s != "" {
-			fmt.Fprintf(&b, "\n\n## `%s` on main\n\n%s", f, s)
+	if s := strings.TrimSpace(m.C.Effects.ReadFile(p, main, "docs/REVIEW.md")); s != "" {
+		fmt.Fprintf(&b, "\n\n## `docs/REVIEW.md` on main\n\n%s", s)
+	}
+	var paths []string
+	for _, f := range []string{".hive/goals.md", ".hive/lessons.md"} {
+		if strings.TrimSpace(m.C.Effects.ReadFile(p, main, f)) != "" {
+			paths = append(paths, "`"+f+"`")
 		}
+	}
+	if len(paths) > 0 {
+		fmt.Fprintf(&b, "\n\n## The project's standing rules\n\n%s are in your checkout (the diff shows any change this makes to them); read them where the change touches what they cover.", strings.Join(paths, " and "))
 	}
 	return b.String()
 }
