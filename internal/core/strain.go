@@ -3,18 +3,26 @@ package core
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 )
 
-// procRoot is where Linux's figures are read; a test points it at its own.
-var procRoot = "/proc"
+// procRoot and cgroupRoot are where Linux's figures are read; a test points
+// them at its own.
+var (
+	procRoot   = "/proc"
+	cgroupRoot = "/sys/fs/cgroup"
+)
 
 // Strained says why the machine is too strained to start a turn, or "". It
 // reads Linux's MemAvailable and memory and CPU pressure (PSI "some avg10",
 // the share of the last ten seconds some task stalled); where those files
-// don't exist it never holds. A limit of 0 turns its check off.
+// don't exist it never holds. A limit of 0 turns its check off. Memory
+// pressure that is a capped unit outside the Hive's own cgroup stalling at its
+// own cap doesn't hold (cappedElsewhere): that is the unit's limit, not the
+// machine's, and MemAvailable still holds on a real shortage.
 func Strained(memFloorMB int, memPressureMax, cpuPressureMax float64) string {
 	return strained(procRoot, memFloorMB, memPressureMax, cpuPressureMax)
 }
@@ -33,6 +41,9 @@ func strained(proc string, memFloorMB int, memPressureMax, cpuPressureMax float6
 			continue
 		}
 		if p, ok := procField(proc+"/pressure/"+c.what, "avg10="); ok && p > c.max {
+			if c.what == "memory" && cappedElsewhere(proc, cgroupRoot, c.max) != "" {
+				continue
+			}
 			return fmt.Sprintf("machine under %s pressure (%.2f%%, limit %g%%)", c.what, p, c.max)
 		}
 	}
@@ -69,6 +80,67 @@ func procField(path, key string) (float64, bool) {
 	_, rest, _ := strings.Cut(string(raw), key)
 	f, err := strconv.ParseFloat(strings.SplitN(strings.TrimSpace(rest), " ", 2)[0], 64)
 	return f, err == nil
+}
+
+// cappedElsewhere names a cgroup outside this process's own that explains
+// memory pressure over max, or "": one with memory.high or memory.max set,
+// using at least 90% of it, whose own "some avg10" is over max. It says ""
+// when this process's own cgroup is itself stalled over max, or when its
+// cgroup can't be read (cgroup v1, no /sys/fs/cgroup), so nothing is excused
+// that the Hive's own turns would feel.
+func cappedElsewhere(proc, root string, max float64) string {
+	self := ""
+	raw, _ := os.ReadFile(proc + "/self/cgroup")
+	for _, line := range strings.Split(string(raw), "\n") {
+		if p, ok := strings.CutPrefix(line, "0::"); ok {
+			self = filepath.Clean("/" + p)
+		}
+	}
+	if self == "" || self == "/" {
+		return ""
+	}
+	if p, ok := procField(root+self+"/memory.pressure", "avg10="); !ok || p > max {
+		return ""
+	}
+	found := ""
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil
+		}
+		rel := "/" + strings.TrimPrefix(strings.TrimPrefix(path, root), "/")
+		if rel != "/" && (rel == self || strings.HasPrefix(rel, self+"/")) {
+			return filepath.SkipDir // the Hive's own
+		}
+		if rel == "/" || strings.HasPrefix(self, rel+"/") {
+			return nil // holds the Hive: its pressure is the Hive's too
+		}
+		if strings.Count(rel, "/") > 6 {
+			return filepath.SkipDir
+		}
+		limit := cgroupNumber(path + "/memory.high")
+		if l := cgroupNumber(path + "/memory.max"); limit <= 0 || l > 0 && l < limit {
+			limit = l
+		}
+		if limit <= 0 || cgroupNumber(path+"/memory.current") < limit*0.9 {
+			return nil
+		}
+		if p, ok := procField(path+"/memory.pressure", "avg10="); ok && p > max {
+			found = rel
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
+// cgroupNumber reads a cgroup file holding one number, 0 for "max" or none.
+func cgroupNumber(path string) float64 {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	f, _ := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64)
+	return f
 }
 
 // LoadedReason starts every reason Loaded gives, so a caller can tell load
