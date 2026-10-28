@@ -44,11 +44,16 @@ type Trial struct {
 	Reason  string `json:"reason,omitempty"`
 	// NoFinish: its worker never called finish and was ended for it, so
 	// routing sends the model no work until a later trial of it finishes.
-	NoFinish bool    `json:"doesnt_finish,omitempty"`
-	Turns    int     `json:"turns"`
-	Rounds   int     `json:"review_rounds"`
-	Minutes  int     `json:"minutes"`
-	Cost     float64 `json:"cost"`
+	NoFinish bool `json:"doesnt_finish,omitempty"`
+	// Hive is why the trial ended on the Hive's own trouble, not the
+	// model's (the pipeline gave up on its own steps' errors), so it says
+	// nothing of how the model does: routing and the models op don't count
+	// it, and it is recorded again if the task comes back and ends.
+	Hive    string  `json:"hives_trouble,omitempty"`
+	Turns   int     `json:"turns"`
+	Rounds  int     `json:"review_rounds"`
+	Minutes int     `json:"minutes"`
+	Cost    float64 `json:"cost"`
 }
 
 // Module is the models module.
@@ -63,6 +68,7 @@ type Module struct {
 	mu     sync.Mutex
 	trials map[string]Trial // recorded, by task
 	order  map[string]int   // each recorded trial's place in the journal, by task
+	seq    int              // the last place given
 	// demoted is each project's worker picks whose runs keep ending without
 	// a merge, by demoteKey, with why: Tick works it out from the tasks.
 	demoted map[string]string
@@ -133,9 +139,13 @@ func New(c *core.Core, w *work.Module) *Module {
 		}
 		var t Trial
 		if e.Decode(&t) == nil {
+			if t.Hive == "" { // recorded before the Hive's trouble was told apart
+				t.Hive = work.HiveTrouble(work.Task{Stage: t.Outcome, Reason: t.Reason})
+			}
 			m.mu.Lock()
 			m.trials[t.Task] = t
-			m.order[t.Task] = len(m.order) + 1
+			m.seq++
+			m.order[t.Task] = m.seq
 			m.mu.Unlock()
 		}
 	}
@@ -383,7 +393,8 @@ func (m *Module) opTrial(r core.Run, args json.RawMessage) (any, error) {
 }
 
 // Tick tells the person once of each pick that can't answer, and records
-// each trial that has ended.
+// each trial that has ended: again when one that ended on the Hive's own
+// trouble came back and ended otherwise.
 func (m *Module) Tick() {
 	m.tellDown()
 	for _, t := range m.Work.List(func(t work.Task) bool { return t.Model != "" }) {
@@ -393,9 +404,9 @@ func (m *Module) Tick() {
 			continue
 		}
 		m.mu.Lock()
-		_, done := m.trials[t.ID]
+		was, done := m.trials[t.ID]
 		m.mu.Unlock()
-		if done {
+		if done && (was.Hive == "" || was.Outcome == t.Stage && was.Reason == t.Reason) {
 			continue
 		}
 		tr := Trial{Task: t.ID, Model: t.Model, Project: t.Project, Title: t.Title, Outcome: t.Stage, Reason: t.Reason, Rounds: t.Reviews,
@@ -407,6 +418,7 @@ func (m *Module) Tick() {
 			finished = finished || r.Finish != nil
 		}
 		tr.NoFinish = t.Stage == work.StageBlocked && strings.HasPrefix(t.Reason, core.NoFinish) && !finished
+		tr.Hive = work.HiveTrouble(t)
 		m.C.J.MustAppend("model.trial", tr)
 	}
 	m.tickDemoted()
@@ -479,7 +491,7 @@ func (m *Module) Demoted(project string, p core.Pick) string {
 }
 
 // Benched says whether routing skips p: the latest recorded trial of that
-// model didn't finish.
+// model didn't finish. One that ended on the Hive's own trouble doesn't count.
 func (m *Module) Benched(p core.Pick) bool {
 	cfg := m.C.WS.LoadConfig()
 	m.mu.Lock()
@@ -487,7 +499,7 @@ func (m *Module) Benched(p core.Pick) bool {
 	var last Trial
 	at := 0
 	for _, t := range m.trials {
-		if tp, err := cfg.Pick(t.Model); err == nil && tp.Same(p) && m.order[t.Task] > at {
+		if tp, err := cfg.Pick(t.Model); err == nil && tp.Same(p) && t.Hive == "" && m.order[t.Task] > at {
 			last, at = t, m.order[t.Task]
 		}
 	}
@@ -516,14 +528,20 @@ func (m *Module) View(r core.Run) map[string]any {
 		}
 	}
 	m.mu.Lock()
-	var trials []Trial
+	var trials, uncounted []Trial
 	for _, t := range m.trials {
-		if m.C.Runs.Walled(r, t.Project) == nil {
+		switch {
+		case m.C.Runs.Walled(r, t.Project) != nil:
+		case t.Hive != "":
+			uncounted = append(uncounted, t)
+		default:
 			trials = append(trials, t)
 		}
 	}
 	m.mu.Unlock()
-	slices.SortFunc(trials, func(a, b Trial) int { return strings.Compare(a.Task, b.Task) })
+	byTask := func(a, b Trial) int { return strings.Compare(a.Task, b.Task) }
+	slices.SortFunc(trials, byTask)
+	slices.SortFunc(uncounted, byTask)
 	var running []string
 	for _, t := range m.Work.List(func(t work.Task) bool { return t.Model != "" && m.C.Runs.Walled(r, t.Project) == nil }) {
 		m.mu.Lock()
@@ -547,7 +565,7 @@ func (m *Module) View(r core.Run) map[string]any {
 	}
 	m.mu.Unlock()
 	slices.Sort(demoted)
-	return map[string]any{"models": named, "routes": routes, "agents": agents, "trials": trials, "trials_running": running, "unavailable": down, "demoted": demoted}
+	return map[string]any{"models": named, "routes": routes, "agents": agents, "trials": trials, "trials_not_counted": uncounted, "trials_running": running, "unavailable": down, "demoted": demoted}
 }
 
 // downLine is a Down with when it is tried again and the fix.
