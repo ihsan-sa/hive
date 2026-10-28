@@ -357,3 +357,9 @@
 - Decision: improve keeps the merge sha of the fix that lifted a quarantine (`liftedBy`); after it, a red from the Hive's own test check on a commit that doesn't contain that merge (`git merge-base --is-ancestor`) is no sighting. Forge reds are unchanged: the forge tests the branch merged with main, so its head's ancestry doesn't say what ran.
 - Why: TestStaleModuleCacheRunsAgain's fix (30fea85) merged at 07:45:04Z; two older branches' local checks of their own heads, which still had the old test, went red seconds later, re-quarantined it and filed the same fix brief twice more (261028-085542, 261028-090108), each with nothing left to change.
 - Tradeoff: one git call per local red of a lifted test; when git can't tell (a commit not fetched), the red counts as before.
+
+## 2026-10-28: the train's day and running it again (issue #1924)
+
+- Decision: a canary verdict records `measured`; a rollback that wasn't measured (the candidate failed its own build, vet or tests in the canary) turns back its tag but doesn't spend the train's day, since the train only runs a pre-release whose checks passed here, so such a failure is the canary's environment. `hive agent train --why` (any role) journals `release.train_again`; verdicts before it neither spend the day nor turn their tag back, and the next look starts a canary on the newest safe pre-release.
+- Why: v0.1.147's canary failed two tests that couldn't make a folder in its read-only checkout (CI green) and held H0 on v0.1.146 for a day; nothing could start a canary but the train itself.
+- Tradeoff: verdicts from before this change carry no `measured`, so they read as unmeasured: v0.1.147's rollback no longer spends the day (meant). A candidate that really fails its own tests only here also skips the day's wait, at the cost of one more canary when the next pre-release is safe. Anyone may run the train again; it is refused while a canary runs, so at most one runs at a time.
